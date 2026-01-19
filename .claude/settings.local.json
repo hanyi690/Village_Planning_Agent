@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__langgraph-docs__brave_web_search",
+      "Bash(git add:*)"
+    ]
+  }
+}
