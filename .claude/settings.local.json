@@ -2,7 +2,21 @@
   "permissions": {
     "allow": [
       "mcp__langgraph-docs__brave_web_search",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(python:*)",
+      "Bash(pip show:*)",
+      "WebSearch",
+      "Bash(pip install:*)",
+      "Bash(git reset:*)",
+      "Bash(git push:*)",
+      "Bash(ping:*)",
+      "Bash(git config:*)",
+      "Bash(findstr:*)",
+      "Bash(git remote set-url:*)",
+      "mcp__filesystem__directory_tree",
+      "mcp__langchain-docs__brave_web_search",
+      "mcp__web-reader__webReader"
     ]
   }
 }

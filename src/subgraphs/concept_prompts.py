@@ -62,6 +62,7 @@ PLANNING_POSITIONING_PROMPT = """你是乡村规划专家中的**规划定位分
 
 **约束条件**: {constraints}
 
+
 **分析要点**：
 1. **区域定位**：
    - 在区域发展格局中的角色

@@ -265,7 +265,7 @@ def get_openai_llm(
 
 
 def get_zhipuai_llm(
-    model: str = "glm-4.7",
+    model: str = "glm-4-flash",
     temperature: float = 0.7,
     max_tokens: int = 2000,
     **kwargs

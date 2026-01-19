@@ -26,7 +26,7 @@ import operator
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..utils.logger import get_logger
-from .prompts import get_dimension_prompt, ANALYSIS_SUMMARY_PROMPT, list_dimensions
+from .analysis_prompts import get_dimension_prompt, ANALYSIS_SUMMARY_PROMPT, list_dimensions
 
 logger = get_logger(__name__)
 

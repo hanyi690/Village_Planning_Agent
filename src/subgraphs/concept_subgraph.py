@@ -87,7 +87,7 @@ def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
         state: 包含维度信息和输入数据的状态
 
     Returns:
-        该维度的分析结果
+        该维度的分析结果（包装在列表中以支持 operator.add 累加）
     """
     dimension_key = state["dimension_key"]
     dimension_name = state["dimension_name"]
@@ -113,18 +113,24 @@ def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
         concept_text = response.content
         logger.info(f"[子图-规划] 完成 {dimension_name}，生成 {len(concept_text)} 字符")
 
+        # 在 LangGraph 1.0.x 中，使用 operator.add 时需要返回列表
         return {
-            "dimension_key": dimension_key,
-            "dimension_name": dimension_name,
-            "concept_result": concept_text
+            "concept_analyses": [{
+                "dimension_key": dimension_key,
+                "dimension_name": dimension_name,
+                "concept_result": concept_text
+            }]
         }
 
     except Exception as e:
         logger.error(f"[子图-规划] {dimension_name} 执行失败: {str(e)}")
+        # 返回错误信息而非崩溃
         return {
-            "dimension_key": dimension_key,
-            "dimension_name": dimension_name,
-            "concept_result": f"[分析失败] {str(e)}"
+            "concept_analyses": [{
+                "dimension_key": dimension_key,
+                "dimension_name": dimension_name,
+                "concept_result": f"[分析失败] {str(e)}"
+            }]
         }
 
 
@@ -323,18 +329,21 @@ def create_concept_subgraph() -> StateGraph:
 
     # 添加节点
     builder.add_node("initialize", initialize_concept_analysis)
-    builder.add_node("map_dimensions", map_concept_dimensions)
     builder.add_node("analyze_concept_dimension", analyze_concept_dimension)
     builder.add_node("reduce_analyses", reduce_concept_analyses)
     builder.add_node("generate_final_concept", generate_final_concept)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
-    builder.add_edge("initialize", "map_dimensions")
 
     # 关键：使用条件边实现并行分发
-    # 在 LangGraph 1.0.x 中，Send 对象已包含目标节点信息，不需要第三个参数
-    builder.add_conditional_edges("map_dimensions", map_concept_dimensions)
+    # 在 LangGraph 1.0.x 中，Send 对象必须由路由函数返回，不能由节点返回
+    # 路由函数接收状态并返回 Send 对象列表
+    def route_to_concept_dimensions(state: ConceptState) -> List[Send]:
+        """路由函数：将状态分发到各维度的规划思路节点"""
+        return map_concept_dimensions(state)
+
+    builder.add_conditional_edges("initialize", route_to_concept_dimensions)
 
     builder.add_edge("analyze_concept_dimension", "reduce_analyses")
     builder.add_edge("reduce_analyses", "generate_final_concept")

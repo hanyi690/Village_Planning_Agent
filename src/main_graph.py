@@ -21,6 +21,7 @@ from .core.prompts import SYSTEM_PROMPT, PLANNING_CONCEPT_PROMPT
 from .utils.logger import get_logger
 from .subgraphs.analysis_subgraph import call_analysis_subgraph
 from .subgraphs.concept_subgraph import call_concept_subgraph
+from .subgraphs.detailed_plan_subgraph import call_detailed_plan_subgraph
 
 logger = get_logger(__name__)
 
@@ -165,43 +166,47 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
     """
     Layer 3: 详细规划
 
-    基于规划思路，生成详细的规划方案。
-    注意：这是简化版本，完整的实现应该使用多个专业子图。
+    调用详细规划子图进行10个专业维度的规划。
     """
     logger.info(f"[主图-Layer3] 开始生成详细规划，项目: {state['project_name']}")
 
-    # 暂时返回占位符
-    detail_plan = f"""
-# {state['project_name']} 详细规划方案
+    try:
+        # 调用详细规划子图
+        result = call_detailed_plan_subgraph(
+            project_name=state["project_name"],
+            analysis_report=state["analysis_report"],
+            planning_concept=state["planning_concept"],
+            task_description=state.get("task_description", "制定村庄详细规划"),
+            constraints=state.get("constraints", "无特殊约束"),
+            required_dimensions=state.get("required_dimensions"),  # 可选：指定维度
+            enable_human_review=state.get("need_human_review", False)
+        )
 
-## 规划思路概要
-{state['planning_concept'][:500]}...
+        if result["success"]:
+            logger.info(f"[主图-Layer3] 详细规划完成，报告长度: {len(result['detailed_plan_report'])} 字符")
+            logger.info(f"[主图-Layer3] 已完成维度: {result['completed_dimensions']}")
 
-## 详细规划内容
+            return {
+                "detailed_plan": result["detailed_plan_report"],
+                "layer_3_completed": True,
+                "current_layer": 4,
+                "messages": [AIMessage(content=f"详细规划已生成，包含 {len(result['completed_dimensions'])} 个专业维度。")]
+            }
+        else:
+            logger.error(f"[主图-Layer3] 详细规划失败: {result.get('error', '未知错误')}")
+            return {
+                "detailed_plan": f"详细规划失败: {result.get('error', '未知错误')}",
+                "layer_3_completed": False,
+                "messages": [AIMessage(content="详细规划生成失败，请检查输入数据或稍后重试。")]
+            }
 
-**注意**: 完整的详细规划功能正在开发中。
-
-当前版本提供规划思路框架。详细规划将包括：
-- 产业规划详细方案
-- 道路交通详细设计
-- 公共服务设施配置
-- 基础设施布局
-- 生态环境保护
-- 建筑风貌控制
-- 历史文化保护
-- 实施计划与投资估算
-
-请等待后续版本更新。
-"""
-
-    logger.info("[主图-Layer3] 详细规划占位符已生成")
-
-    return {
-        "detailed_plan": detail_plan,
-        "layer_3_completed": True,
-        "current_layer": 4,  # 标记为完成
-        "messages": [AIMessage(content="详细规划方案已生成（简化版本）")]
-    }
+    except Exception as e:
+        logger.error(f"[主图-Layer3] 执行异常: {str(e)}")
+        return {
+            "detailed_plan": f"执行异常: {str(e)}",
+            "layer_3_completed": False,
+            "messages": [AIMessage(content=f"详细规划过程中发生错误: {str(e)}")]
+        }
 
 
 # ==========================================

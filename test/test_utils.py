@@ -13,12 +13,13 @@ from typing import Any, Dict
 TEST_OUTPUT_DIR = Path(__file__).parent / "output"
 ANALYSIS_OUTPUT_DIR = TEST_OUTPUT_DIR / "analysis"
 CONCEPT_OUTPUT_DIR = TEST_OUTPUT_DIR / "concept"
+DETAILED_OUTPUT_DIR = TEST_OUTPUT_DIR / "detailed"
 SUMMARY_OUTPUT_DIR = TEST_OUTPUT_DIR / "summary"
 
 
 def ensure_output_dirs() -> None:
     """确保所有输出目录存在"""
-    for dir_path in [TEST_OUTPUT_DIR, ANALYSIS_OUTPUT_DIR, CONCEPT_OUTPUT_DIR, SUMMARY_OUTPUT_DIR]:
+    for dir_path in [TEST_OUTPUT_DIR, ANALYSIS_OUTPUT_DIR, CONCEPT_OUTPUT_DIR, DETAILED_OUTPUT_DIR, SUMMARY_OUTPUT_DIR]:
         dir_path.mkdir(parents=True, exist_ok=True)
 
 
