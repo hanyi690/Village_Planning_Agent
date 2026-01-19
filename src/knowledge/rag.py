@@ -12,7 +12,7 @@ from langchain_community.document_loaders import (
 )
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
-from langchain.embeddings import OpenAIEmbeddings, ChatOpenAI
+from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain.messages import Document
 import os
@@ -51,10 +51,11 @@ def get_embeddings():
     return _embeddings
 
 def get_llm():
-    """获取LLM实例"""
+    """获取LLM实例，使用统一的 LLM 工厂"""
     global _llm
     if _llm is None:
-        _llm = ChatOpenAI(model=LLM_MODEL, temperature=0.0, max_tokens=MAX_TOKENS)
+        from ..core.llm_factory import create_llm
+        _llm = create_llm(model=LLM_MODEL, temperature=0.0, max_tokens=MAX_TOKENS)
     return _llm
 
 def get_vectorstore(persist_directory: str = VECTOR_STORE_DIR):

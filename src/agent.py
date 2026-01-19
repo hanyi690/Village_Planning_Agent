@@ -158,68 +158,6 @@ def quick_planning(project_name: str, village_data: str, task: str = "制定村�
     return result.get("final_output", "规划失败")
 
 
-# ==========================================
-# 旧版接口（已弃用）
-# ==========================================
-
-def run_task(task: str, constraints: Dict = None, use_knowledge: bool = True) -> str:
-    """
-    旧版接口：执行单一任务（已弃用）
-
-    ⚠️ **已弃用**：请迁移到 `run_village_planning()` 以获得更好的性能和功能。
-
-    迁移指南：
-    ```python
-    # 旧版（已弃用）
-    result = run_task("制定村庄规划")
-
-    # 新版（推荐）
-    result = run_village_planning(
-        project_name="村庄",
-        village_data=village_data,
-        task_description="制定村庄规划"
-    )
-    ```
-
-    详见 MIGRATION_GUIDE.md
-
-    Args:
-        task: 任务描述
-        constraints: 约束条件（字典）
-        use_knowledge: 是否使用知识库
-
-    Returns:
-        str: 任务执行结果
-    """
-    # 发出迁移提示
-    warnings.warn(
-        "run_task() 已弃用，请迁移到 run_village_planning()。"
-        "详见 MIGRATION_GUIDE.md 了解迁移步骤。",
-        DeprecationWarning,
-        stacklevel=2
-    )
-
-    logger.warning(f"[Agent-旧版] 使用已弃用的接口: {task}")
-
-    # 简化版实现，仅返回提示信息
-    return (
-        "⚠️ run_task() 接口已弃用。\n\n"
-        "请使用新版接口 run_village_planning() 以获得：\n"
-        "  • 10个维度的专业分析\n"
-        "  • 7.5倍的性能提升\n"
-        "  • 更好的结果质量\n\n"
-        "快速迁移示例：\n"
-        "```python\n"
-        "from src.agent import run_village_planning\n"
-        "result = run_village_planning(\n"
-        "    project_name='村庄',\n"
-        "    village_data=village_data,\n"
-        "    task_description='制定村庄规划'\n"
-        ")\n"
-        "```\n\n"
-        "详见 MIGRATION_GUIDE.md"
-    )
-
 
 # ==========================================
 # 版本信息
@@ -235,9 +173,6 @@ __all__ = [
     "run_analysis_only",
     "quick_analysis",
     "quick_planning",
-
-    # 旧版接口（已弃用）
-    "run_task",
 
     # 版本信息
     "__version__",

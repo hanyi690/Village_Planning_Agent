@@ -12,14 +12,15 @@
 
 from typing import TypedDict, List, Dict, Any
 from typing_extensions import Annotated
-from langgraph.graph import StateGraph, END, START, Send
+from langgraph.graph import StateGraph, END, START
+from langgraph.types import Send
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 import operator
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..utils.logger import get_logger
-from .prompts import (
+from .concept_prompts import (
     RESOURCE_ENDOWMENT_PROMPT,
     PLANNING_POSITIONING_PROMPT,
     DEVELOPMENT_GOALS_PROMPT,
@@ -69,9 +70,9 @@ class ConceptDimensionState(TypedDict):
 # ==========================================
 
 def _get_llm():
-    """延迟导入 LLM"""
-    from langchain.chat_models import ChatOpenAI
-    return ChatOpenAI(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
+    """获取 LLM 实例，使用统一的 LLM 工厂"""
+    from ..core.llm_factory import create_llm
+    return create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
 
 
 # ==========================================
@@ -332,11 +333,8 @@ def create_concept_subgraph() -> StateGraph:
     builder.add_edge("initialize", "map_dimensions")
 
     # 关键：使用条件边实现并行分发
-    builder.add_conditional_edges(
-        "map_dimensions",
-        map_concept_dimensions,
-        ["analyze_concept_dimension"]
-    )
+    # 在 LangGraph 1.0.x 中，Send 对象已包含目标节点信息，不需要第三个参数
+    builder.add_conditional_edges("map_dimensions", map_concept_dimensions)
 
     builder.add_edge("analyze_concept_dimension", "reduce_analyses")
     builder.add_edge("reduce_analyses", "generate_final_concept")

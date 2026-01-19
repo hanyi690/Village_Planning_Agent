@@ -18,7 +18,8 @@
 
 from typing import TypedDict, List, Dict, Any, Literal
 from typing_extensions import Annotated
-from langgraph.graph import StateGraph, END, START, Send
+from langgraph.graph import StateGraph, END, START
+from langgraph.types import Send
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 import operator
@@ -63,9 +64,9 @@ class DimensionAnalysisState(TypedDict):
 # ==========================================
 
 def _get_llm():
-    """延迟导入 LLM，避免循环依赖"""
-    from langchain.chat_models import ChatOpenAI
-    return ChatOpenAI(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
+    """获取 LLM 实例，使用统一的 LLM 工厂"""
+    from ..core.llm_factory import create_llm
+    return create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
 
 
 # ==========================================
@@ -80,7 +81,7 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
         state: 包含维度信息和原始数据的状态
 
     Returns:
-        该维度的分析结果
+        该维度的分析结果（包装在列表中以支持 operator.add 累加）
     """
     dimension_key = state["dimension_key"]
     dimension_name = state["dimension_name"]
@@ -99,19 +100,24 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
         analysis_text = response.content
         logger.info(f"[子图-分析] 完成 {dimension_name}，生成 {len(analysis_text)} 字符")
 
+        # 在 LangGraph 1.0.x 中，使用 operator.add 时需要返回列表
         return {
-            "dimension_key": dimension_key,
-            "dimension_name": dimension_name,
-            "analysis_result": analysis_text
+            "analyses": [{
+                "dimension_key": dimension_key,
+                "dimension_name": dimension_name,
+                "analysis_result": analysis_text
+            }]
         }
 
     except Exception as e:
         logger.error(f"[子图-分析] {dimension_name} 执行失败: {str(e)}")
         # 返回错误信息而非崩溃
         return {
-            "dimension_key": dimension_key,
-            "dimension_name": dimension_name,
-            "analysis_result": f"[分析失败] {str(e)}"
+            "analyses": [{
+                "dimension_key": dimension_key,
+                "dimension_name": dimension_name,
+                "analysis_result": f"[分析失败] {str(e)}"
+            }]
         }
 
 
@@ -283,7 +289,6 @@ def create_analysis_subgraph() -> StateGraph:
 
     # 添加节点
     builder.add_node("initialize", initialize_analysis)
-    builder.add_node("map_dimensions", map_dimensions)
 
     # 为每个维度添加分析节点（使用相同的函数，但状态不同）
     # 注意：这里我们使用 LangGraph 的 Send 机制来实现并行
@@ -295,15 +300,15 @@ def create_analysis_subgraph() -> StateGraph:
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
-    builder.add_edge("initialize", "map_dimensions")
 
     # 关键：使用条件边实现并行分发
-    # map_dimensions 返回 Send 对象列表，每个 Send 会创建独立的并行分支
-    builder.add_conditional_edges(
-        "map_dimensions",
-        map_dimensions,  # 这个函数返回 List[Send]
-        ["analyze_dimension"]  # Send 的目标节点
-    )
+    # 在 LangGraph 1.0.x 中，Send 对象必须由路由函数返回，不能由节点返回
+    # 路由函数接收状态并返回 Send 对象列表
+    def route_to_dimensions(state: AnalysisState) -> List[Send]:
+        """路由函数：将状态分发到各维度的分析节点"""
+        return map_dimensions(state)
+
+    builder.add_conditional_edges("initialize", route_to_dimensions)
 
     builder.add_edge("analyze_dimension", "reduce_analyses")
     builder.add_edge("reduce_analyses", "generate_report")

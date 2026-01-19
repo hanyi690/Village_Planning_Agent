@@ -62,9 +62,9 @@ class VillagePlanningState(TypedDict):
 # ==========================================
 
 def _get_llm():
-    """延迟导入 LLM"""
-    from langchain.chat_models import ChatOpenAI
-    return ChatOpenAI(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
+    """获取 LLM 实例，使用统一的 LLM 工厂"""
+    from .core.llm_factory import create_llm
+    return create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
 
 
 # ==========================================
