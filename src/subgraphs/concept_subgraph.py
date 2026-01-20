@@ -8,6 +8,7 @@
 4. 规划策略分析
 
 使用 LangGraph 的 Send 机制实现 Map-Reduce 模式。
+支持部分状态传递优化，根据维度依赖关系筛选相关的现状分析信息。
 """
 
 from typing import TypedDict, List, Dict, Any
@@ -20,6 +21,7 @@ import operator
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..utils.logger import get_logger
+from ..utils.state_filter import filter_analysis_report_for_concept
 from .concept_prompts import (
     RESOURCE_ENDOWMENT_PROMPT,
     PLANNING_POSITIONING_PROMPT,
@@ -39,7 +41,8 @@ logger = get_logger(__name__)
 class ConceptState(TypedDict):
     """规划思路子图的状态"""
     # 输入数据
-    analysis_report: str         # 现状分析报告
+    analysis_report: str         # 现状分析报告（完整版，降级使用）
+    dimension_reports: Dict[str, str]  # 各维度现状分析报告字典（用于部分状态传递）
     project_name: str            # 项目名称
     task_description: str         # 规划任务描述
     constraints: str             # 约束条件
@@ -50,6 +53,7 @@ class ConceptState(TypedDict):
 
     # 输出数据
     final_concept: str           # 最终规划思路报告
+    concept_dimension_reports: Dict[str, str]  # 各维度独立报告（用于部分状态传递）
 
     # 消息历史
     messages: Annotated[List[BaseMessage], add_messages]
@@ -169,11 +173,16 @@ def map_concept_dimensions(state: ConceptState) -> List[Send]:
     Map 阶段：将4个维度映射为独立的分析任务
 
     使用 LangGraph 的 Send 机制，为每个维度创建独立的执行分支。
+    每个维度只接收相关的现状分析信息（部分状态传递优化）。
 
     Returns:
         Send 对象列表，每个 Send 指向 analyze_concept_dimension 节点并携带独立状态
     """
     logger.info(f"[子图-Map] 开始分发 {len(state['dimensions'])} 个规划维度")
+
+    # 获取完整的维度分析报告字典
+    full_dimension_reports = state.get("dimension_reports", {})
+    full_analysis_report = state.get("analysis_report", "")
 
     # 为每个维度创建 Send 对象
     sends = []
@@ -182,11 +191,18 @@ def map_concept_dimensions(state: ConceptState) -> List[Send]:
         dimensions_info = {d["key"]: d for d in list_concept_dimensions()}
         dimension_info = dimensions_info.get(dimension_key, {"name": dimension_key})
 
-        # 创建该维度的独立状态
+        # 【关键优化】筛选相关的现状分析
+        filtered_analysis = filter_analysis_report_for_concept(
+            concept_dimension=dimension_key,
+            full_analysis_reports=full_dimension_reports,
+            full_analysis_report=full_analysis_report
+        )
+
+        # 创建该维度的独立状态（使用筛选后的报告）
         dimension_state = {
             "dimension_key": dimension_key,
             "dimension_name": dimension_info["name"],
-            "analysis_report": state["analysis_report"],
+            "analysis_report": filtered_analysis,  # 使用筛选后的报告
             "task_description": state["task_description"],
             "constraints": state["constraints"],
             "concept_result": ""
@@ -195,29 +211,44 @@ def map_concept_dimensions(state: ConceptState) -> List[Send]:
         # 创建 Send 对象：发送到 analyze_concept_dimension 节点
         sends.append(Send("analyze_concept_dimension", dimension_state))
 
-    logger.info(f"[子图-Map] 创建了 {len(sends)} 个并行任务")
+    logger.info(f"[子图-Map] 创建了 {len(sends)} 个并行任务（已优化状态传递）")
     return sends
 
 
 def reduce_concept_analyses(state: ConceptState) -> Dict[str, Any]:
     """
     Reduce 阶段：汇总所有维度的分析结果
+
+    生成两种格式：
+    1. concept_dimension_reports: 字典形式，每个维度的独立报告（用于部分状态传递）
+    2. dimension_reports_text: 拼接的文本（用于综合报告生成）
     """
     logger.info(f"[子图-Reduce] 开始汇总 {len(state['concept_analyses'])} 个维度的分析结果")
 
     # 整理分析结果为结构化格式
-    dimension_reports = []
-    for analysis in state["concept_analyses"]:
-        dimension_reports.append(f"""
-## {analysis['dimension_name']}
+    dimension_reports_dict = {}
+    dimension_reports_text = []
 
-{analysis['concept_result']}
+    for analysis in state["concept_analyses"]:
+        dimension_key = analysis['dimension_key']
+        dimension_name = analysis['dimension_name']
+        concept_text = analysis['concept_result']
+
+        # 保存独立的维度报告（用于部分传输）
+        dimension_reports_dict[dimension_key] = concept_text
+
+        # 同时拼接用于综合报告
+        dimension_reports_text.append(f"""
+## {dimension_name}
+
+{concept_text}
 ---
 """)
 
-    logger.info("[子图-Reduce] 汇总完成，准备生成最终规划思路")
+    logger.info(f"[子图-Reduce] 汇总完成，生成了 {len(dimension_reports_dict)} 个维度报告")
     return {
-        "dimension_reports": "\n".join(dimension_reports)
+        "concept_dimension_reports": dimension_reports_dict,  # 新增：字典形式
+        "dimension_reports_text": "\n".join(dimension_reports_text)  # 用于综合报告
     }
 
 
@@ -234,10 +265,13 @@ def generate_final_concept(state: ConceptState) -> Dict[str, Any]:
     logger.info("[子图-汇总] 开始生成最终规划思路报告")
 
     try:
-        # 整理各维度分析为文本
-        dimension_reports_text = ""
-        for analysis in state["concept_analyses"]:
-            dimension_reports_text += f"\n### {analysis['dimension_name']}\n{analysis['concept_result']}\n"
+        # 使用 reduce 阶段生成的 dimension_reports_text
+        dimension_reports_text = state.get("dimension_reports_text", "")
+
+        # 如果 dimension_reports_text 为空，从 concept_analyses 重新构建
+        if not dimension_reports_text:
+            for analysis in state["concept_analyses"]:
+                dimension_reports_text += f"\n### {analysis['dimension_name']}\n{analysis['concept_result']}\n"
 
         # 构建汇总 Prompt
         summary_prompt = CONCEPT_SUMMARY_PROMPT.format(
@@ -364,6 +398,7 @@ def create_concept_subgraph() -> StateGraph:
 def call_concept_subgraph(
     project_name: str,
     analysis_report: str,
+    dimension_reports: Dict[str, str] = None,  # 新增：维度报告字典
     task_description: str = "制定村庄总体规划思路",
     constraints: str = "无特殊约束"
 ) -> Dict[str, Any]:
@@ -372,7 +407,8 @@ def call_concept_subgraph(
 
     Args:
         project_name: 项目/村庄名称
-        analysis_report: 现状分析报告
+        analysis_report: 现状分析报告（完整版）
+        dimension_reports: 各维度现状分析报告字典（用于部分状态传递）
         task_description: 规划任务描述
         constraints: 约束条件
 
@@ -387,12 +423,14 @@ def call_concept_subgraph(
     # 构建初始状态
     initial_state: ConceptState = {
         "analysis_report": analysis_report,
+        "dimension_reports": dimension_reports or {},  # 新增
         "project_name": project_name,
         "task_description": task_description,
         "constraints": constraints,
         "dimensions": [],
         "concept_analyses": [],
         "final_concept": "",
+        "concept_dimension_reports": {},  # 新增
         "messages": []
     }
 
@@ -401,9 +439,11 @@ def call_concept_subgraph(
         result = subgraph.invoke(initial_state)
 
         logger.info(f"[子图调用] 子图执行成功，报告长度: {len(result.get('final_concept', ''))} 字符")
+        logger.info(f"[子图调用] 维度报告数量: {len(result.get('concept_dimension_reports', {}))}")
 
         return {
             "concept_report": result["final_concept"],
+            "concept_dimension_reports": result.get("concept_dimension_reports", {}),  # 新增
             "success": True
         }
 
@@ -411,6 +451,7 @@ def call_concept_subgraph(
         logger.error(f"[子图调用] 子图执行失败: {str(e)}")
         return {
             "concept_report": f"规划思路分析失败: {str(e)}",
+            "concept_dimension_reports": {},  # 新增：失败时返回空字典
             "success": False
         }
 
@@ -434,12 +475,14 @@ if __name__ == "__main__":
 
     initial_state = {
         "analysis_report": test_analysis,
+        "dimension_reports": {},
         "project_name": "测试村",
         "task_description": "制定乡村振兴规划思路",
         "constraints": "生态优先，绿色发展",
         "dimensions": [],
         "concept_analyses": [],
         "final_concept": "",
+        "concept_dimension_reports": {},
         "messages": []
     }
 

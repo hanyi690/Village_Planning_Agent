@@ -46,6 +46,7 @@ class AnalysisState(TypedDict):
 
     # 输出数据
     final_report: str  # 最终综合分析报告
+    dimension_reports: Dict[str, str]  # 各维度独立报告（用于部分状态传递）
 
     # 消息历史（用于LLM交互）
     messages: Annotated[List[BaseMessage], add_messages]
@@ -161,22 +162,37 @@ def map_dimensions(state: AnalysisState) -> List[Send]:
 def reduce_analyses(state: AnalysisState) -> Dict[str, Any]:
     """
     Reduce 阶段：汇总所有维度的分析结果
+
+    生成两种格式：
+    1. dimension_reports: 字典形式，每个维度的独立报告（用于部分状态传递）
+    2. dimension_reports_text: 拼接的文本（用于综合报告生成）
     """
     logger.info(f"[子图-Reduce] 开始汇总 {len(state['analyses'])} 个维度的分析结果")
 
     # 整理分析结果为结构化格式
-    dimension_reports = []
-    for analysis in state["analyses"]:
-        dimension_reports.append(f"""
-## {analysis['dimension_name']}
+    dimension_reports_dict = {}
+    dimension_reports_text = []
 
-{analysis['analysis_result']}
+    for analysis in state["analyses"]:
+        dimension_key = analysis['dimension_key']
+        dimension_name = analysis['dimension_name']
+        analysis_text = analysis['analysis_result']
+
+        # 保存独立的维度报告（用于部分传输）
+        dimension_reports_dict[dimension_key] = analysis_text
+
+        # 同时拼接用于综合报告
+        dimension_reports_text.append(f"""
+## {dimension_name}
+
+{analysis_text}
 ---
 """)
 
-    logger.info("[子图-Reduce] 汇总完成，准备生成最终报告")
+    logger.info(f"[子图-Reduce] 汇总完成，生成了 {len(dimension_reports_dict)} 个维度报告")
     return {
-        "dimension_reports": "\n".join(dimension_reports)
+        "dimension_reports": dimension_reports_dict,  # 新增：字典形式
+        "dimension_reports_text": "\n".join(dimension_reports_text)  # 用于综合报告
     }
 
 
@@ -193,10 +209,13 @@ def generate_final_report(state: AnalysisState) -> Dict[str, Any]:
     logger.info("[子图-汇总] 开始生成最终综合报告")
 
     try:
-        # 整理各维度分析为文本
-        dimension_reports_text = ""
-        for analysis in state["analyses"]:
-            dimension_reports_text += f"\n### {analysis['dimension_name']}\n{analysis['analysis_result']}\n"
+        # 使用 reduce 阶段生成的 dimension_reports_text
+        dimension_reports_text = state.get("dimension_reports_text", "")
+
+        # 如果 dimension_reports_text 为空，从 analyses 重新构建
+        if not dimension_reports_text:
+            for analysis in state["analyses"]:
+                dimension_reports_text += f"\n### {analysis['dimension_name']}\n{analysis['analysis_result']}\n"
 
         # 构建汇总 Prompt
         summary_prompt = ANALYSIS_SUMMARY_PROMPT.format(
@@ -354,6 +373,7 @@ def call_analysis_subgraph(
         "subjects": [],
         "analyses": [],
         "final_report": "",
+        "dimension_reports": {},  # 新增：初始化维度报告字典
         "messages": []
     }
 
@@ -362,9 +382,11 @@ def call_analysis_subgraph(
         result = subgraph.invoke(initial_state)
 
         logger.info(f"[子图调用] 子图执行成功，报告长度: {len(result.get('final_report', ''))}")
+        logger.info(f"[子图调用] 维度报告数量: {len(result.get('dimension_reports', {}))}")
 
         return {
             "analysis_report": result.get("final_report", ""),
+            "dimension_reports": result.get("dimension_reports", {}),  # 新增：返回维度报告字典
             "success": True
         }
 
@@ -372,6 +394,7 @@ def call_analysis_subgraph(
         logger.error(f"[子图调用] 子图执行失败: {str(e)}")
         return {
             "analysis_report": f"现状分析失败: {str(e)}",
+            "dimension_reports": {},  # 新增：失败时返回空字典
             "success": False
         }
 
@@ -398,6 +421,7 @@ if __name__ == "__main__":
         "subjects": [],
         "analyses": [],
         "final_report": "",
+        "dimension_reports": {},
         "messages": []
     }
 

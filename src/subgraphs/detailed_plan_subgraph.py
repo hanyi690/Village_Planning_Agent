@@ -15,6 +15,7 @@
 
 使用 LangGraph 的 Send 机制实现 Map-Reduce 模式。
 支持人机交互反馈循环。
+支持部分状态传递优化，根据维度依赖关系筛选相关信息。
 """
 
 from typing import TypedDict, List, Dict, Any, Literal
@@ -28,6 +29,7 @@ from datetime import datetime
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..utils.logger import get_logger
+from ..utils.state_filter import filter_state_for_detailed_dimension
 from .detailed_plan_prompts import (
     INDUSTRY_PLANNING_PROMPT,
     MASTER_PLAN_PROMPT,
@@ -55,8 +57,10 @@ class DetailedPlanState(TypedDict):
     """详细规划子图的状态"""
     # 输入数据
     project_name: str
-    analysis_report: str           # 来自 Layer 1
-    planning_concept: str          # 来自 Layer 2
+    analysis_report: str           # 来自 Layer 1（完整版，降级使用）
+    dimension_reports: Dict[str, str]  # 各维度现状分析报告字典（用于部分状态传递）
+    planning_concept: str          # 来自 Layer 2（完整版，降级使用）
+    concept_dimension_reports: Dict[str, str]  # 各维度规划思路报告字典（用于部分状态传递）
     task_description: str
     constraints: str
 
@@ -239,16 +243,29 @@ def route_to_planning_agents(state: DetailedPlanState):
     # 多个维度，创建 Send 对象
     logger.info(f"[子图-L3-路由] 分发 {len(pending)} 个待规划维度")
 
+    # 获取完整的维度报告字典
+    full_dimension_reports = state.get("dimension_reports", {})
+    full_concept_dimension_reports = state.get("concept_dimension_reports", {})
+
     sends = []
     for dim in pending:
         dimension_info = {d["key"]: d for d in list_detailed_dimensions()}.get(dim, {"name": dim})
+
+        # 【关键优化】筛选相关的现状分析和规划思路
+        filtered_state = filter_state_for_detailed_dimension(
+            detailed_dimension=dim,
+            full_analysis_reports=full_dimension_reports,
+            full_analysis_report=state["analysis_report"],
+            full_concept_reports=full_concept_dimension_reports,
+            full_concept_report=state["planning_concept"]
+        )
 
         dimension_state = DetailedDimensionState({
             "dimension_key": dim,
             "dimension_name": dimension_info.get("name", dim),
             "project_name": state["project_name"],
-            "analysis_report": state["analysis_report"],
-            "planning_concept": state["planning_concept"],
+            "analysis_report": filtered_state["filtered_analysis"],  # 使用筛选后的报告
+            "planning_concept": filtered_state["filtered_concept"],   # 使用筛选后的报告
             "task_description": state.get("task_description", "制定详细规划"),
             "constraints": state.get("constraints", ""),
             "human_feedback": state.get("human_feedback", {}).get(dim, ""),
@@ -257,6 +274,7 @@ def route_to_planning_agents(state: DetailedPlanState):
 
         sends.append(Send("generate_dimension_plan", dimension_state))
 
+    logger.info(f"[子图-L3-路由] 创建了 {len(sends)} 个并行任务（已优化状态传递）")
     return sends
 
 
@@ -293,13 +311,26 @@ def generate_single_dimension(state: DetailedPlanState) -> Dict[str, Any]:
 
     logger.info(f"[子图-L3-单维度] 生成最后一个维度: {dimension_name} ({dimension_key})")
 
+    # 获取完整的维度报告字典
+    full_dimension_reports = state.get("dimension_reports", {})
+    full_concept_dimension_reports = state.get("concept_dimension_reports", {})
+
+    # 【关键优化】筛选相关的现状分析和规划思路
+    filtered_state = filter_state_for_detailed_dimension(
+        detailed_dimension=dimension_key,
+        full_analysis_reports=full_dimension_reports,
+        full_analysis_report=state["analysis_report"],
+        full_concept_reports=full_concept_dimension_reports,
+        full_concept_report=state["planning_concept"]
+    )
+
     # 构建维度状态
     dimension_state = DetailedDimensionState({
         "dimension_key": dimension_key,
         "dimension_name": dimension_name,
         "project_name": state["project_name"],
-        "analysis_report": state["analysis_report"],
-        "planning_concept": state["planning_concept"],
+        "analysis_report": filtered_state["filtered_analysis"],  # 使用筛选后的报告
+        "planning_concept": filtered_state["filtered_concept"],   # 使用筛选后的报告
         "task_description": state.get("task_description", "制定详细规划"),
         "constraints": state.get("constraints", ""),
         "human_feedback": state.get("human_feedback", {}).get(dimension_key, ""),
@@ -669,6 +700,8 @@ def call_detailed_plan_subgraph(
     project_name: str,
     analysis_report: str,
     planning_concept: str,
+    dimension_reports: Dict[str, str] = None,  # 新增：维度报告字典
+    concept_dimension_reports: Dict[str, str] = None,  # 新增：规划思路维度字典
     task_description: str = "制定村庄详细规划",
     constraints: str = "无特殊约束",
     required_dimensions: List[str] = None,
@@ -681,6 +714,8 @@ def call_detailed_plan_subgraph(
         project_name: 项目/村庄名称
         analysis_report: 现状分析报告（来自 Layer 1）
         planning_concept: 规划思路（来自 Layer 2）
+        dimension_reports: 各维度现状分析报告字典（用于部分状态传递）
+        concept_dimension_reports: 各维度规划思路报告字典（用于部分状态传递）
         task_description: 规划任务描述
         constraints: 约束条件
         required_dimensions: 指定生成的维度列表（None = 全部）
@@ -702,7 +737,9 @@ def call_detailed_plan_subgraph(
     initial_state: DetailedPlanState = {
         "project_name": project_name,
         "analysis_report": analysis_report,
+        "dimension_reports": dimension_reports or {},  # 新增
         "planning_concept": planning_concept,
+        "concept_dimension_reports": concept_dimension_reports or {},  # 新增
         "task_description": task_description,
         "constraints": constraints,
         "required_dimensions": required_dimensions,

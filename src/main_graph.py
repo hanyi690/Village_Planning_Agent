@@ -50,7 +50,9 @@ class VillagePlanningState(TypedDict):
 
     # 各层成果
     analysis_report: str           # 现状分析报告
+    dimension_reports: Dict[str, str]  # 各维度现状分析报告（用于部分状态传递）
     planning_concept: str          # 规划思路
+    concept_dimension_reports: Dict[str, str]  # 各维度规划思路报告（用于部分状态传递）
     detailed_plan: str             # 详细规划方案
     final_output: str              # 最终成果
 
@@ -91,6 +93,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
             logger.info(f"[主图-Layer1] 现状分析完成，报告长度: {len(result['analysis_report'])} 字符")
             return {
                 "analysis_report": result["analysis_report"],
+                "dimension_reports": result.get("dimension_reports", {}),  # 新增：传递维度报告
                 "layer_1_completed": True,
                 "current_layer": 2,
                 "messages": [AIMessage(content=f"现状分析完成，生成了 {len(result['analysis_report'])} 字符的综合报告。")]
@@ -99,6 +102,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
             logger.error(f"[主图-Layer1] 现状分析失败: {result['analysis_report']}")
             return {
                 "analysis_report": f"现状分析失败: {result['analysis_report']}",
+                "dimension_reports": {},  # 新增：失败时返回空字典
                 "layer_1_completed": False,
                 "messages": [AIMessage(content="现状分析失败，请检查输入数据或稍后重试。")]
             }
@@ -107,6 +111,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
         logger.error(f"[主图-Layer1] 执行异常: {str(e)}")
         return {
             "analysis_report": f"执行异常: {str(e)}",
+            "dimension_reports": {},  # 新增：异常时返回空字典
             "layer_1_completed": False,
             "messages": [AIMessage(content=f"现状分析过程中发生错误: {str(e)}")]
         }
@@ -125,10 +130,11 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
     logger.info(f"[主图-Layer2] 开始规划思路分析，项目: {state['project_name']}")
 
     try:
-        # 调用规划思路子图
+        # 调用规划思路子图（传递维度报告字典）
         result = call_concept_subgraph(
             project_name=state["project_name"],
             analysis_report=state["analysis_report"],
+            dimension_reports=state.get("dimension_reports", {}),  # 新增：传递维度报告
             task_description=state["task_description"],
             constraints=state.get("constraints", "无特殊约束")
         )
@@ -137,6 +143,7 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
             logger.info(f"[主图-Layer2] 规划思路完成，报告长度: {len(result['concept_report'])} 字符")
             return {
                 "planning_concept": result["concept_report"],
+                "concept_dimension_reports": result.get("concept_dimension_reports", {}),  # 新增：传递规划维度报告
                 "layer_2_completed": True,
                 "current_layer": 3,
                 "messages": [AIMessage(content=f"规划思路已生成，长度 {len(result['concept_report'])} 字符。")]
@@ -145,6 +152,7 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
             logger.error(f"[主图-Layer2] 规划思路失败: {result['concept_report']}")
             return {
                 "planning_concept": f"规划思路失败: {result['concept_report']}",
+                "concept_dimension_reports": {},  # 新增：失败时返回空字典
                 "layer_2_completed": False,
                 "messages": [AIMessage(content="规划思路生成失败，请检查输入数据或稍后重试。")]
             }
@@ -153,6 +161,7 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
         logger.error(f"[主图-Layer2] 执行异常: {str(e)}")
         return {
             "planning_concept": f"执行异常: {str(e)}",
+            "concept_dimension_reports": {},  # 新增：异常时返回空字典
             "layer_2_completed": False,
             "messages": [AIMessage(content=f"规划思路生成过程中发生错误: {str(e)}")]
         }
@@ -171,11 +180,13 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
     logger.info(f"[主图-Layer3] 开始生成详细规划，项目: {state['project_name']}")
 
     try:
-        # 调用详细规划子图
+        # 调用详细规划子图（传递维度报告字典）
         result = call_detailed_plan_subgraph(
             project_name=state["project_name"],
             analysis_report=state["analysis_report"],
             planning_concept=state["planning_concept"],
+            dimension_reports=state.get("dimension_reports", {}),  # 新增：传递维度报告
+            concept_dimension_reports=state.get("concept_dimension_reports", {}),  # 新增：传递规划维度报告
             task_description=state.get("task_description", "制定村庄详细规划"),
             constraints=state.get("constraints", "无特殊约束"),
             required_dimensions=state.get("required_dimensions"),  # 可选：指定维度
@@ -447,7 +458,9 @@ def run_village_planning(
         "need_human_review": need_human_review,
         "human_feedback": "",
         "analysis_report": "",
+        "dimension_reports": {},  # 新增：初始化维度报告字典
         "planning_concept": "",
+        "concept_dimension_reports": {},  # 新增：初始化规划维度字典
         "detailed_plan": "",
         "final_output": "",
         "messages": []

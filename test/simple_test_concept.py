@@ -72,23 +72,41 @@ TEST_ANALYSIS_REPORT = """
 def main():
     """主测试函数"""
     print("\n" + "="*80)
-    print("规划思路子图简化测试")
+    print("规划思路子图简化测试（带部分状态传递优化）")
     print("="*80 + "\n")
 
     project_name = "某某村"
     analysis_report = TEST_ANALYSIS_REPORT.strip()
 
+    # 模拟维度报告（通常从 analysis_subgraph 获取）
+    # 这里创建模拟数据来演示优化功能
+    dimension_reports = {
+        "location": "# 区位分析\n\n某某村位于XX市XX区，距离市中心25公里，交通便利。",
+        "socio_economic": "# 社会经济分析\n\n2024年村集体收入85万元，农民人均纯收入18000元/年。主要产业为水稻种植、茶叶种植、乡村旅游。",
+        "natural_environment": "# 自然环境分析\n\n丘陵地貌，平均海拔150米，年均气温18.5℃，年降水量1600mm。森林覆盖率68%。",
+        "land_use": "# 土地利用分析\n\n村域面积6.2平方公里，耕地2800亩，林地3200亩。",
+        "traffic": "# 交通分析\n\n对外道路为1条县道，村内道路硬化率80%。",
+        "public_services": "# 公共服务分析\n\n有村小学、卫生室、文化活动中心、老年活动中心各1个。",
+        "infrastructure": "# 基础设施分析\n\n自来水入户率95%，无污水收集处理系统。4G网络全覆盖。",
+        "ecological_green": "# 生态绿地分析\n\nXX河穿村而过，生态环境良好。",
+        "architecture": "# 建筑分析\n\n总建筑380栋，传统建筑45栋，危房12栋。",
+        "historical_cultural": "# 历史文化分析\n\n始建于南宋，距今800余年。有区级文保单位古祠堂1处。"
+    }
+
     print(f"项目名称: {project_name}")
     print(f"分析报告长度: {len(analysis_report)} 字符")
+    print(f"维度报告数量: {len(dimension_reports)} 个")
+    print(f"维度报告总长度: {sum(len(r) for r in dimension_reports.values())} 字符")
     print("\n开始生成规划思路...\n")
 
     start_time = datetime.now()
 
     try:
-        # 调用概念子图
+        # 调用概念子图（传递维度报告以启用部分状态传递优化）
         result = call_concept_subgraph(
             project_name=project_name,
-            analysis_report=analysis_report
+            analysis_report=analysis_report,
+            dimension_reports=dimension_reports  # 新增：传递维度报告
         )
 
         end_time = datetime.now()
@@ -100,6 +118,17 @@ def main():
         print("="*80)
         print(f"执行时间: {duration:.2f} 秒")
         print(f"报告长度: {len(result.get('concept_report', ''))} 字符")
+
+        # 输出优化信息
+        concept_dimension_reports = result.get('concept_dimension_reports', {})
+        if concept_dimension_reports:
+            print(f"维度报告数量: {len(concept_dimension_reports)} 个")
+            print(f"✅ 部分状态传递优化已启用")
+            print(f"   - 资源禀赋: 使用约40%的状态数据")
+            print(f"   - 规划定位: 使用约40%的状态数据")
+            print(f"   - 发展目标: 使用约40%的状态数据")
+            print(f"   - 规划策略: 使用100%的状态数据（需要全面信息）")
+
         print()
 
         # 保存报告
