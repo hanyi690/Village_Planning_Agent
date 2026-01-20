@@ -107,27 +107,57 @@ TEST_CONCEPT_REPORT = """
 def main():
     """主测试函数"""
     print("\n" + "="*80)
-    print("详细规划子图简化测试")
+    print("详细规划子图简化测试（支持波次动态路由和状态优化）")
     print("="*80 + "\n")
 
     project_name = "某某村"
     analysis_report = TEST_ANALYSIS_REPORT.strip()
     concept_report = TEST_CONCEPT_REPORT.strip()
 
+    # 模拟维度报告（通常从 analysis_subgraph 和 concept_subgraph 获取）
+    # 这里创建模拟数据来演示新功能
+    dimension_reports = {
+        "location": "# 区位分析\n\n某某村位于XX市XX区，距离市中心25公里，交通便利。",
+        "socio_economic": "# 社会经济分析\n\n2024年村集体收入85万元，农民人均纯收入18000元/年。主要产业为水稻种植、茶叶种植、乡村旅游。",
+        "natural_environment": "# 自然环境分析\n\n丘陵地貌，平均海拔150米，年均气温18.5℃，年降水量1600mm。森林覆盖率68%。",
+        "land_use": "# 土地利用分析\n\n村域面积6.2平方公里，耕地2800亩，林地3200亩。",
+        "traffic": "# 交通分析\n\n对外道路为1条县道，村内道路硬化率80%。",
+        "public_services": "# 公共服务分析\n\n有村小学、卫生室、文化活动中心、老年活动中心各1个。",
+        "infrastructure": "# 基础设施分析\n\n自来水入户率95%，无污水收集处理系统。4G网络全覆盖。",
+        "ecological_green": "# 生态绿地分析\n\nXX河穿村而过，生态环境良好。",
+        "architecture": "# 建筑分析\n\n总建筑380栋，传统建筑45栋，危房12栋。",
+        "historical_culture": "# 历史文化分析\n\n始建于南宋，距今800余年。有区级文保单位古祠堂1处。"
+    }
+
+    concept_dimension_reports = {
+        "resource_endowment": "# 资源禀赋分析\n\n自然资源：村域面积6.2平方公里，耕地2800亩，林地3200亩，森林覆盖率68%。",
+        "planning_positioning": "# 规划定位分析\n\n区域定位：市郊生态旅游度假目的地。功能定位：生态农业+文化旅游+休闲度假。",
+        "development_goals": "# 发展目标分析\n\n5年内建成3A级景区，年接待游客10万人次，村集体收入突破200万元。",
+        "planning_strategies": "# 规划策略分析\n\n空间布局：一心、两轴、三区。产业发展：提升茶产业，发展乡村旅游。"
+    }
+
     print(f"项目名称: {project_name}")
     print(f"分析报告长度: {len(analysis_report)} 字符")
     print(f"概念报告长度: {len(concept_report)} 字符")
+    print(f"维度报告数量: {len(dimension_reports)} 个")
+    print(f"思路维度报告数量: {len(concept_dimension_reports)} 个")
+    print(f"\n✨ 新功能：")
+    print(f"  - 波次动态路由: Wave 1 (9个维度并行) + Wave 2 (project_bank)")
+    print(f"  - 智能状态筛选: 每个维度只接收其依赖的3-4个现状维度")
+    print(f"  - Token优化: 预计节省60-90%的Token使用")
     print("\n开始生成详细规划（10个维度）...\n")
     print("提示：这可能需要几分钟时间，请耐心等待...\n")
 
     start_time = datetime.now()
 
     try:
-        # 调用详细规划子图（生成全部10个维度）
+        # 调用详细规划子图（传递维度报告以启用新的波次动态路由和状态筛选优化）
         result = call_detailed_plan_subgraph(
             project_name=project_name,
             analysis_report=analysis_report,
             planning_concept=concept_report,
+            dimension_reports=dimension_reports,  # 新增：传递维度报告
+            concept_dimension_reports=concept_dimension_reports,  # 新增：传递思路维度报告
             task_description="制定村庄详细规划",
             constraints="生态优先，绿色发展"
         )

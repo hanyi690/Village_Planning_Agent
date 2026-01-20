@@ -13,12 +13,17 @@
 9. 村庄风貌指引 (Landscape Planning)
 10. 建设项目库 (Project Bank)
 
-使用 LangGraph 的 Send 机制实现 Map-Reduce 模式。
+使用 LangGraph 的 Send 机制实现基于波次的动态并行调度。
 支持人机交互反馈循环。
 支持部分状态传递优化，根据维度依赖关系筛选相关信息。
+
+关键特性：
+- Wave 1: 9个独立维度完全并行执行
+- Wave 2: project_bank等待Wave 1完成后执行
+- 智能状态筛选：每个维度只接收其依赖的3-4个现状维度
 """
 
-from typing import TypedDict, List, Dict, Any, Literal
+from typing import TypedDict, List, Dict, Any, Literal, Union
 from typing_extensions import Annotated
 from langgraph.graph import StateGraph, END, START
 from langgraph.types import Send, interrupt
@@ -28,8 +33,16 @@ import operator
 from datetime import datetime
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
+from ..core.dimension_mapping import (
+    FULL_DEPENDENCY_CHAIN,
+    WAVE_CONFIG,
+    get_execution_wave,
+    get_dimensions_by_wave,
+    check_detailed_dependencies_ready,
+    DETAILED_DIMENSION_NAMES
+)
 from ..utils.logger import get_logger
-from ..utils.state_filter import filter_state_for_detailed_dimension
+from ..utils.state_filter import filter_state_for_detailed_dimension_v2
 from .detailed_plan_prompts import (
     INDUSTRY_PLANNING_PROMPT,
     MASTER_PLAN_PROMPT,
@@ -68,6 +81,12 @@ class DetailedPlanState(TypedDict):
     required_dimensions: List[str] # 需要生成的维度列表
     completed_dimensions: List[str] # 已完成的维度
     current_dimension: str         # 当前处理的维度
+
+    # 【新增】动态路由字段
+    current_wave: int              # 当前执行波次 (1 或 2)
+    total_waves: int               # 总波次数（固定为2）
+    completed_dimension_reports: Dict[str, str]  # 已完成维度的报告（project_bank需要）
+    token_usage_stats: Dict[str, dict]  # Token使用统计
 
     # 各维度规划结果（支持独立更新）
     industry_plan: str             # 产业规划
@@ -108,6 +127,9 @@ class DetailedDimensionState(TypedDict):
     constraints: str
     human_feedback: str            # 针对该维度的反馈意见
     dimension_result: str          # 规划结果
+    # 【新增】支持前序规划（project_bank需要）
+    completed_plans: Dict[str, str]  # 已完成的前序详细规划
+    dependency_chain: dict         # 完整依赖链信息
 
 
 # ==========================================
@@ -128,26 +150,11 @@ ALL_DIMENSIONS = [
     "project_bank"
 ]
 
-# 维度名称映射
-DIMENSION_NAMES = {
-    "industry": "产业规划",
-    "master_plan": "村庄总体规划",
-    "traffic": "道路交通规划",
-    "public_service": "公服设施规划",
-    "infrastructure": "基础设施规划",
-    "ecological": "生态绿地规划",
-    "disaster_prevention": "防震减灾规划",
-    "heritage": "历史文保规划",
-    "landscape": "村庄风貌指引",
-    "project_bank": "建设项目库"
-}
+# 维度名称映射（使用dimension_mapping中的定义）
+DIMENSION_NAMES = DETAILED_DIMENSION_NAMES
 
-# 维度依赖关系（某些维度依赖其他维度）
-DIMENSION_DEPENDENCIES = {
-    "project_bank": ["industry", "traffic", "public_service",
-                     "infrastructure", "ecological", "disaster_prevention",
-                     "heritage", "landscape"]
-}
+# 【新增】波次配置常量
+TOTAL_WAVES = 2
 
 
 # ==========================================
@@ -166,7 +173,7 @@ def _get_llm():
 
 def initialize_detailed_planning(state: DetailedPlanState) -> Dict[str, Any]:
     """
-    初始化详细规划流程，设置待规划的维度列表
+    初始化详细规划流程，设置待规划的维度列表和波次信息
     """
     logger.info(f"[子图-L3-初始化] 开始详细规划，项目: {state.get('project_name', '未命名')}")
 
@@ -176,96 +183,127 @@ def initialize_detailed_planning(state: DetailedPlanState) -> Dict[str, Any]:
     # 验证维度有效性
     valid_dimensions = [d for d in required if d in ALL_DIMENSIONS]
 
+    # 初始化波次执行
+    current_wave = 1
+    total_waves = TOTAL_WAVES
+
     logger.info(f"[子图-L3-初始化] 设置 {len(valid_dimensions)} 个规划维度")
+    logger.info(f"[子图-L3-初始化] 开始 Wave {current_wave}/{total_waves}")
 
     return {
         "required_dimensions": valid_dimensions,
         "completed_dimensions": [],
         "dimension_plans": [],
         "human_feedback": state.get("human_feedback", {}),
-        "revision_count": state.get("revision_count", {})
+        "revision_count": state.get("revision_count", {}),
+        "current_wave": current_wave,
+        "total_waves": total_waves,
+        "completed_dimension_reports": {},
+        "token_usage_stats": {}
     }
 
 
 # ==========================================
-# 路由节点 - 分发到各专业Agent
+# 路由节点 - 基于波次的动态路由
 # ==========================================
 
-def route_to_planning_agents(state: DetailedPlanState):
+def route_by_dependency_wave(state: DetailedPlanState) -> Union[List[Send], str]:
     """
-    路由到专业规划Agent（用于条件边）
+    基于依赖波次的动态路由函数
 
     逻辑：
-    1. 检查 required_dimensions
-    2. 过滤已完成的维度
-    3. 处理依赖关系（如项目库在最后）
-    4. 返回 Send 对象列表或节点名称
+    1. 检查当前波次（Wave 1 或 Wave 2）
+    2. 筛选出当前波次可执行的维度
+    3. 对于Wave 1：返回9个维度的Send对象（完全并行）
+    4. 对于Wave 2：检查project_bank的9个前序依赖是否完成
+    5. 返回路由决策
 
     Returns:
-        List[Send]: Send 对象列表（多个维度时）
-        str: 节点名称（"generate_single" 或 "generate_final"）
+        List[Send]: Send对象列表（并行执行多个维度）
+        str: 节点名称（"advance_wave", "generate_single", "generate_final"）
     """
-    required = state.get("required_dimensions", ALL_DIMENSIONS)
-    completed = state.get("completed_dimensions", [])
+    current_wave = state.get("current_wave", 1)
+    completed = set(state.get("completed_dimensions", []))
 
-    # 过滤已完成的维度
-    pending = [d for d in required if d not in completed]
+    logger.info(f"[子图-L3-波次路由] 当前Wave: {current_wave}/{state.get('total_waves', 2)}")
 
-    if not pending:
-        logger.info("[子图-L3-路由] 所有维度已完成")
-        return "generate_final"
+    if current_wave == 1:
+        # Wave 1: 9个维度完全并行执行
+        wave1_dims = get_dimensions_by_wave(1)
+        pending = [d for d in wave1_dims if d not in completed]
 
-    # 处理依赖关系：项目库需要在其他维度之后生成
-    if "project_bank" in pending:
-        # 检查依赖是否满足
-        dependencies = DIMENSION_DEPENDENCIES["project_bank"]
-        completed_dependencies = [d for d in dependencies if d in completed]
-
-        if len(completed_dependencies) < len(dependencies):
-            # 依赖未满足，暂时跳过项目库
-            pending.remove("project_bank")
-            logger.info("[子图-L3-路由] 项目库等待其他维度完成")
-
-            if not pending:
-                # 只有项目库待生成，但依赖未满足，强制生成
-                logger.info("[子图-L3-路由] 只有项目库待生成，强制生成")
-                pending = ["project_bank"]
+        if pending:
+            logger.info(f"[子图-L3-波次路由] Wave 1: {len(pending)} 个维度并行执行")
+            return create_parallel_tasks_with_state_filtering(state, pending)
         else:
-            # 依赖满足，确保项目库在最后
-            pending.remove("project_bank")
-            pending.append("project_bank")
+            # Wave 1 完成，推进到 Wave 2
+            logger.info("[子图-L3-波次路由] Wave 1 全部完成，推进到 Wave 2")
+            return "advance_wave"
 
-    # 如果只剩一个维度，直接返回节点名称
-    if len(pending) == 1:
-        logger.info(f"[子图-L3-路由] 仅剩 1 个维度 {pending[0]}，直接生成")
-        return "generate_single"
+    elif current_wave == 2:
+        # Wave 2: 只有 project_bank
+        if "project_bank" not in completed:
+            # 检查依赖是否满足
+            if check_detailed_dependencies_ready("project_bank", list(completed)):
+                logger.info("[子图-L3-波次路由] Wave 2: project_bank 依赖满足，开始执行")
+                return create_parallel_tasks_with_state_filtering(state, ["project_bank"])
+            else:
+                # 依赖未满足，强制推进（异常情况）
+                logger.warning("[子图-L3-波次路由] Wave 2: project_bank 依赖未满足，强制执行")
+                return create_parallel_tasks_with_state_filtering(state, ["project_bank"])
+        else:
+            # 所有维度完成
+            logger.info("[子图-L3-波次路由] 所有维度完成，进入汇总")
+            return "generate_final"
 
-    # 多个维度，创建 Send 对象
-    logger.info(f"[子图-L3-路由] 分发 {len(pending)} 个待规划维度")
+    # 默认进入汇总
+    return "generate_final"
 
-    # 获取完整的维度报告字典
+
+def create_parallel_tasks_with_state_filtering(
+    state: DetailedPlanState,
+    dimensions: List[str]
+) -> List[Send]:
+    """
+    创建并行任务，每个任务携带经过筛选的状态
+
+    关键优化：使用增强的state_filter v2，只传递必需的依赖信息
+
+    Args:
+        state: 主状态
+        dimensions: 要并行执行的维度列表
+
+    Returns:
+        Send对象列表
+    """
+    sends = []
+    completed_detailed = state.get("completed_dimension_reports", {})
+    token_usage_stats = state.get("token_usage_stats", {})
+
     full_dimension_reports = state.get("dimension_reports", {})
     full_concept_dimension_reports = state.get("concept_dimension_reports", {})
 
-    sends = []
-    for dim in pending:
-        dimension_info = {d["key"]: d for d in list_detailed_dimensions()}.get(dim, {"name": dim})
-
-        # 【关键优化】筛选相关的现状分析和规划思路
-        filtered_state = filter_state_for_detailed_dimension(
+    for dim in dimensions:
+        # 调用增强的筛选函数 v2
+        filtered = filter_state_for_detailed_dimension_v2(
             detailed_dimension=dim,
             full_analysis_reports=full_dimension_reports,
             full_analysis_report=state["analysis_report"],
             full_concept_reports=full_concept_dimension_reports,
-            full_concept_report=state["planning_concept"]
+            full_concept_report=state["planning_concept"],
+            completed_detailed_reports=completed_detailed
         )
 
+        # 构建维度状态
+        dimension_info = {d["key"]: d for d in list_detailed_dimensions()}.get(dim, {"name": dim})
         dimension_state = DetailedDimensionState({
             "dimension_key": dim,
             "dimension_name": dimension_info.get("name", dim),
             "project_name": state["project_name"],
-            "analysis_report": filtered_state["filtered_analysis"],  # 使用筛选后的报告
-            "planning_concept": filtered_state["filtered_concept"],   # 使用筛选后的报告
+            "analysis_report": filtered["filtered_analysis"],
+            "planning_concept": filtered["filtered_concepts"],
+            "completed_plans": filtered["filtered_detailed"],
+            "dependency_chain": filtered["dependency_chain"],
             "task_description": state.get("task_description", "制定详细规划"),
             "constraints": state.get("constraints", ""),
             "human_feedback": state.get("human_feedback", {}).get(dim, ""),
@@ -274,75 +312,30 @@ def route_to_planning_agents(state: DetailedPlanState):
 
         sends.append(Send("generate_dimension_plan", dimension_state))
 
-    logger.info(f"[子图-L3-路由] 创建了 {len(sends)} 个并行任务（已优化状态传递）")
+        # 记录Token统计
+        token_usage_stats[dim] = filtered["token_stats"]
+        logger.info(f"[状态筛选] {dim}: "
+                   f"节省 {filtered['token_stats']['reduction_percent']}% Token "
+                   f"({filtered['token_stats']['tokens_saved']} 字符)")
+
     return sends
+
+
+def advance_wave_node(state: DetailedPlanState) -> Dict[str, Any]:
+    """推进到下一个波次"""
+    current_wave = state.get("current_wave", 1)
+    next_wave = current_wave + 1
+
+    logger.info(f"[子图-L3-波次推进] Wave {current_wave} → Wave {next_wave}")
+
+    return {"current_wave": next_wave}
 
 
 # ==========================================
 # 单维度生成节点 - 处理最后一个维度
 # ==========================================
 
-def generate_single_dimension(state: DetailedPlanState) -> Dict[str, Any]:
-    """
-    生成单个维度的规划（用于最后一个待规划维度）
-
-    当只剩一个维度时，不使用 Send 机制，直接在此节点生成规划，
-    避免 LangGraph 状态错误。
-    """
-    required = state.get("required_dimensions", ALL_DIMENSIONS)
-    completed = state.get("completed_dimensions", [])
-    pending = [d for d in required if d not in completed]
-
-    if not pending:
-        logger.warning("[子图-L3-单维度] 没有找到待生成的维度")
-        return {}
-
-    # 处理依赖关系：项目库需要在其他维度之后生成
-    dimension_key = pending[0]
-    if dimension_key == "project_bank":
-        dependencies = DIMENSION_DEPENDENCIES["project_bank"]
-        completed_dependencies = [d for d in dependencies if d in completed]
-        if len(completed_dependencies) < len(dependencies):
-            logger.info("[子图-L3-单维度] 生成项目库（依赖自动满足）")
-
-    # 获取维度信息
-    dimension_info = {d["key"]: d for d in list_detailed_dimensions()}.get(dimension_key, {"name": dimension_key})
-    dimension_name = dimension_info.get("name", dimension_key)
-
-    logger.info(f"[子图-L3-单维度] 生成最后一个维度: {dimension_name} ({dimension_key})")
-
-    # 获取完整的维度报告字典
-    full_dimension_reports = state.get("dimension_reports", {})
-    full_concept_dimension_reports = state.get("concept_dimension_reports", {})
-
-    # 【关键优化】筛选相关的现状分析和规划思路
-    filtered_state = filter_state_for_detailed_dimension(
-        detailed_dimension=dimension_key,
-        full_analysis_reports=full_dimension_reports,
-        full_analysis_report=state["analysis_report"],
-        full_concept_reports=full_concept_dimension_reports,
-        full_concept_report=state["planning_concept"]
-    )
-
-    # 构建维度状态
-    dimension_state = DetailedDimensionState({
-        "dimension_key": dimension_key,
-        "dimension_name": dimension_name,
-        "project_name": state["project_name"],
-        "analysis_report": filtered_state["filtered_analysis"],  # 使用筛选后的报告
-        "planning_concept": filtered_state["filtered_concept"],   # 使用筛选后的报告
-        "task_description": state.get("task_description", "制定详细规划"),
-        "constraints": state.get("constraints", ""),
-        "human_feedback": state.get("human_feedback", {}).get(dimension_key, ""),
-        "dimension_result": ""
-    })
-
-    # 调用现有的生成逻辑
-    result = generate_dimension_plan(dimension_state)
-
-    logger.info(f"[子图-L3-单维度] 完成 {dimension_name}，生成 {len(result['dimension_plans'][0]['dimension_result'])} 字符")
-
-    return result
+# 注：该函数已废弃，波次路由版本使用纯并行执行，不再需要单维度生成节点
 
 
 # ==========================================
@@ -354,6 +347,7 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     生成单个维度的详细规划
 
     通用的专业Agent节点，根据维度调用对应的Prompt。
+    支持使用completed_plans（project_bank需要）。
     """
     dimension_key = state["dimension_key"]
     dimension_name = state["dimension_name"]
@@ -370,9 +364,15 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
 
         # 对于项目库，需要传入其他维度的规划摘要
         if dimension_key == "project_bank":
-            # 这里需要在主状态中获取其他维度的结果
-            # 暂时用占位符
-            dimension_plans_summary = "（其他维度规划将在执行时整合）"
+            completed_plans = state.get("completed_plans", {})
+            if completed_plans:
+                # 构建其他维度规划的摘要
+                dimension_plans_summary = "\n\n".join([
+                    f"## {DETAILED_DIMENSION_NAMES.get(dim, dim)}\n\n{plan[:1000]}..."
+                    for dim, plan in completed_plans.items()
+                ])
+            else:
+                dimension_plans_summary = "（其他维度规划将在执行时整合）"
         else:
             dimension_plans_summary = ""
 
@@ -454,12 +454,15 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
 def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
     """
     汇总所有维度的规划结果，更新主状态
+
+    同时更新 completed_dimension_reports，供后续维度（如project_bank）使用
     """
     logger.info(f"[子图-L3-Reduce] 汇总 {len(state['dimension_plans'])} 个维度的规划结果")
 
     # 更新各维度的规划到对应字段
     updates = {}
     completed = []
+    completed_reports = state.get("completed_dimension_reports", {})
 
     for plan in state["dimension_plans"]:
         dim_key = plan["dimension_key"]
@@ -470,8 +473,12 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
         updates[field_name] = dim_result
         completed.append(dim_key)
 
-    # 更新已完成列表
+        # 【新增】记录已完成维度的报告（供project_bank使用）
+        completed_reports[dim_key] = dim_result
+
+    # 更新已完成列表和已完成报告字典
     updates["completed_dimensions"] = completed
+    updates["completed_dimension_reports"] = completed_reports
 
     logger.info(f"[子图-L3-Reduce] 已完成维度: {', '.join(completed)}")
 
@@ -484,34 +491,28 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
 
 def check_all_dimensions_complete(state: DetailedPlanState) -> Literal["continue", "finalize"]:
     """
-    检查是否所有必需的维度都已完成
+    检查当前波次是否完成，决定是继续还是进入汇总
 
     Returns:
-        "continue": 继续生成剩余维度
+        "continue": 继续执行（路由到下一波次或最终节点）
         "finalize": 所有维度完成，进入汇总
     """
+    current_wave = state.get("current_wave", 1)
+    total_waves = state.get("total_waves", 2)
+
     required = set(state.get("required_dimensions", ALL_DIMENSIONS))
     completed = set(state.get("completed_dimensions", []))
 
-    # 考虑依赖关系
-    pending = required - completed
+    # 检查所有维度是否完成
+    all_done = required.issubset(completed)
 
-    # 处理项目库的特殊情况
-    if "project_bank" in pending:
-        dependencies = set(DIMENSION_DEPENDENCIES["project_bank"])
-        if dependencies.issubset(completed):
-            # 项目库依赖已满足，可以生成
-            pass
-        else:
-            # 项目库依赖未满足，暂时移除
-            pending.remove("project_bank")
-
-    if pending:
-        logger.info(f"[子图-L3-检查] 还有 {len(pending)} 个维度待生成")
-        return "continue"
-    else:
-        logger.info("[子图-L3-检查] 所有维度已完成，进入汇总")
+    if all_done:
+        logger.info(f"[子图-L3-检查] Wave {current_wave} 完成，所有维度已生成")
         return "finalize"
+
+    # 如果当前波次还有未完成的维度，继续路由
+    logger.info(f"[子图-L3-检查] Wave {current_wave} 还有 {len(required - completed)} 个维度待生成")
+    return "continue"
 
 
 # ==========================================
@@ -622,12 +623,12 @@ def generate_final_detailed_plan(state: DetailedPlanState) -> Dict[str, Any]:
 
 def create_detailed_plan_subgraph() -> StateGraph:
     """
-    创建详细规划子图
+    创建详细规划子图（基于波次的动态路由版本）
 
     Returns:
         编译后的 StateGraph 实例
     """
-    logger.info("[子图构建] 开始构建详细规划子图")
+    logger.info("[子图构建] 开始构建详细规划子图（波次动态路由版本）")
 
     # 创建状态图
     builder = StateGraph(DetailedPlanState)
@@ -635,51 +636,47 @@ def create_detailed_plan_subgraph() -> StateGraph:
     # 添加节点
     builder.add_node("initialize", initialize_detailed_planning)
     builder.add_node("generate_dimension_plan", generate_dimension_plan)
-    builder.add_node("generate_single", generate_single_dimension)  # 单维度生成节点
+    builder.add_node("advance_wave", advance_wave_node)  # 波次推进节点
     builder.add_node("reduce_plans", reduce_dimension_plans)
-    builder.add_node("check_complete", check_all_dimensions_complete)  # 条件路由函数
+    builder.add_node("check_complete", check_all_dimensions_complete)
     builder.add_node("human_review", human_review_dimension)
     builder.add_node("generate_final", generate_final_detailed_plan)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
 
-    # 初始化 -> 路由决策（直接使用路由函数）
+    # 初始化 -> 波次路由决策
     builder.add_conditional_edges(
         "initialize",
-        route_to_planning_agents,
-        ["generate_dimension_plan", "generate_single", "generate_final"]
+        route_by_dependency_wave,
+        ["generate_dimension_plan", "advance_wave", "generate_final"]
     )
 
     # Agent节点 -> Reduce
     builder.add_edge("generate_dimension_plan", "reduce_plans")
-
-    # 单维度节点 -> Reduce
-    builder.add_edge("generate_single", "reduce_plans")
 
     # Reduce -> 检查是否完成
     builder.add_conditional_edges(
         "reduce_plans",
         check_all_dimensions_complete,
         {
-            "continue": "route_next",  # 继续生成剩余维度
+            "continue": "route_next",  # 继续波次路由
             "finalize": "generate_final"  # 所有维度完成
         }
     )
 
-    # 添加路由节点（空节点，仅用于路由）
-    def route_next_node(state: DetailedPlanState) -> Dict[str, Any]:
-        """路由节点，不修改状态，仅用于触发条件边"""
-        return {}
+    # 添加路由节点（用于再次触发波次路由）
+    builder.add_node("route_next", lambda state: {})
 
-    builder.add_node("route_next", route_next_node)
-
-    # 路由决策（再次使用路由函数）
+    # 路由决策（再次使用波次路由函数）
     builder.add_conditional_edges(
         "route_next",
-        route_to_planning_agents,
-        ["generate_dimension_plan", "generate_single", "generate_final"]
+        route_by_dependency_wave,
+        ["generate_dimension_plan", "advance_wave", "generate_final"]
     )
+
+    # 波次推进 -> 再次路由
+    builder.add_edge("advance_wave", "route_next")
 
     # 最终节点 -> END
     builder.add_edge("generate_final", END)
@@ -687,7 +684,7 @@ def create_detailed_plan_subgraph() -> StateGraph:
     # 编译子图
     detailed_plan_subgraph = builder.compile()
 
-    logger.info("[子图构建] 详细规划子图构建完成")
+    logger.info("[子图构建] 详细规划子图构建完成（支持2波次动态路由）")
 
     return detailed_plan_subgraph
 
@@ -737,14 +734,19 @@ def call_detailed_plan_subgraph(
     initial_state: DetailedPlanState = {
         "project_name": project_name,
         "analysis_report": analysis_report,
-        "dimension_reports": dimension_reports or {},  # 新增
+        "dimension_reports": dimension_reports or {},
         "planning_concept": planning_concept,
-        "concept_dimension_reports": concept_dimension_reports or {},  # 新增
+        "concept_dimension_reports": concept_dimension_reports or {},
         "task_description": task_description,
         "constraints": constraints,
         "required_dimensions": required_dimensions,
         "completed_dimensions": [],
         "current_dimension": "",
+        # 【新增】波次路由相关字段
+        "current_wave": 1,
+        "total_waves": TOTAL_WAVES,
+        "completed_dimension_reports": {},
+        "token_usage_stats": {},
         "industry_plan": "",
         "master_plan": "",
         "traffic_plan": "",
