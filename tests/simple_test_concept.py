@@ -2,7 +2,7 @@
 概念子图简化测试 - 生成完整的规划思路报告
 
 使用方法：
-    python -m test.simple_test_concept
+    python -m tests.simple_test_concept
 """
 
 import sys
@@ -132,7 +132,7 @@ def main():
         print()
 
         # 保存报告
-        output_dir = Path("test/output/concept")
+        output_dir = Path("tests/output/concept")
         output_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

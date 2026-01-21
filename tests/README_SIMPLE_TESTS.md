@@ -13,10 +13,10 @@
 
 **运行**:
 ```bash
-python -m test.simple_test_analysis
+python -m tests.simple_test_analysis
 ```
 
-**输出**: `test/output/analysis/analysis_simple_<timestamp>.md`
+**输出**: `tests/output/analysis/analysis_simple_<timestamp>.md`
 
 **包含维度**:
 - 区位分析
@@ -41,10 +41,10 @@ python -m test.simple_test_analysis
 
 **运行**:
 ```bash
-python -m test.simple_test_concept
+python -m tests.simple_test_concept
 ```
 
-**输出**: `test/output/concept/concept_simple_<timestamp>.md`
+**输出**: `tests/output/concept/concept_simple_<timestamp>.md`
 
 **包含内容**:
 - 资源禀赋分析
@@ -63,10 +63,10 @@ python -m test.simple_test_concept
 
 **运行**:
 ```bash
-python -m test.simple_test_detailed_plan
+python -m tests.simple_test_detailed_plan
 ```
 
-**输出**: `test/output/detailed/detailed_simple_<timestamp>.md`
+**输出**: `tests/output/detailed/detailed_simple_<timestamp>.md`
 
 **包含维度**:
 1. 产业规划
@@ -106,7 +106,7 @@ python -m test.simple_test_detailed_plan
 报告长度: XXXX 字符
 完成的维度: XXX
 
-报告已保存到: test/output/<type>/<file>_<timestamp>.md
+报告已保存到: tests/output/<type>/<file>_<timestamp>.md
 
 ================================================================================
 完整报告预览（前3000字符）:
@@ -176,11 +176,11 @@ DEEPSEEK_API_BASE=https://api.deepseek.com/v1
 1. **配置 API keys** (编辑 `.env` 文件)
 2. **运行测试**:
    ```bash
-   python -m test.simple_test_analysis
-   python -m test.simple_test_concept
-   python -m test.simple_test_detailed_plan
+   python -m tests.simple_test_analysis
+   python -m tests.simple_test_concept
+   python -m tests.simple_test_detailed_plan
    ```
-3. **查看报告**: 在 `test/output/` 对应目录下查看生成的 Markdown 文件
+3. **查看报告**: 在 `tests/output/` 对应目录下查看生成的 Markdown 文件
 
 ---
 

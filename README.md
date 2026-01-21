@@ -7,10 +7,12 @@
 - **🏗️ 三层子图架构**：现状分析 → 规划思路 → 详细规划
 - **⚡ 波次动态路由**：Wave 1 (9个维度并行) + Wave 2 (依赖等待)，智能调度
 - **🎯 智能状态筛选**：每个维度只接收其依赖的3-4个现状维度，节省60-90% Token
+- **📁 多文件输入**：支持一次性加载多个数据文件，自动合并处理
 - **🚀 高性能并行**：10个维度并行分析，效率提升 7.5 倍
 - **🎨 专业规划**：涵盖产业、交通、公服、设施、生态、防灾、文保、风貌、项目库等10个维度
 - **🔧 简化配置**：标准 ZhipuAI SDK，开箱即用
 - **📊 完整输出**：生成专业的村庄规划报告
+- **🆕 交互模式**：支持Checkpoint持久化、人工审查、逐步执行、回退修复 ✨
 
 ---
 
@@ -67,6 +69,114 @@ python -m src.run_agent --mode concept \
     --project "某某村" \
     --data data/example_data.txt \
     --output concept.txt
+```
+
+**方式4：逐步执行模式** ✨ 新增
+
+在每个Layer完成后暂停，等待用户交互：
+
+```bash
+python -m src.run_agent --mode step \
+    --project "某某村" \
+    --data data/example_data.txt \
+    --step-level layer
+```
+
+可用暂停级别：
+- `layer`：在每层完成后暂停（默认）
+- `dimension`：在每个维度完成后暂停
+- `skill`：在每个skill完成后暂停
+
+**方式5：从Checkpoint恢复** ✨ 新增
+
+从指定的checkpoint恢复执行：
+
+```bash
+python -m src.run_agent --mode resume \
+    --project "某某村" \
+    --resume-from checkpoint_001_layer1_completed
+```
+
+**方式6：列出所有Checkpoint** ✨ 新增
+
+查看项目的所有checkpoint：
+
+```bash
+python -m src.run_agent --mode list-checkpoints --project "某某村"
+```
+
+---
+
+## 🆕 交互模式详解
+
+### 核心功能
+
+1. **Checkpoint持久化**
+   - 每个Layer完成后自动保存checkpoint
+   - 支持从任意checkpoint恢复执行
+   - 自动管理checkpoint索引和元数据
+
+2. **人工审查机制**
+   - 在关键节点暂停并展示报告
+   - 支持Approve/Reject/View/Rollback操作
+   - 输入详细的反馈意见
+
+3. **逐步执行模式**
+   - 在每层完成后暂停等待确认
+   - 交互式命令：next/status/checkpoints/rollback/help
+   - 查看当前执行进度和状态
+
+4. **回退机制**
+   - 回退到任意checkpoint
+   - 自动清理回退点之后的生成文件
+   - 安全的确认机制
+
+5. **智能修复**
+   - 基于反馈自动识别需要修复的维度
+   - 混合模式：系统识别 + 用户确认
+   - 调用相应skill执行修复
+
+### 交互式命令
+
+在逐步执行模式下可用：
+
+| 命令 | 说明 |
+|------|------|
+| `next` / `continue` | 继续执行下一步 |
+| `status` | 查看当前状态和进度 |
+| `checkpoints` | 列出所有checkpoint |
+| `rollback <id>` | 回退到指定checkpoint |
+| `review` | 审查当前报告 |
+| `help` | 显示帮助信息 |
+| `quit` | 退出程序 |
+
+### 人工审查选项
+
+| 选项 | 说明 |
+|------|------|
+| `[A]pprove` | 通过审查，继续执行 |
+| `[R]eject` | 驳回，需要修复 |
+| `[V]iew` | 查看完整内容 |
+| `[L]Rollback` | 回退到之前的checkpoint |
+| `[Q]uit` | 退出程序 |
+
+### 完整工作流示例
+
+```bash
+# 1. 启动逐步执行模式
+python -m src.run_agent --mode step --project "某某村" --data village_data.txt
+
+# 2. Layer 1完成后暂停
+>>> status          # 查看详细状态
+>>> review          # 审查现状分析报告
+>>> next            # 继续执行Layer 2
+
+# 3. Layer 2完成后
+>>> review          # 审查规划思路
+>>> next            # 继续执行Layer 3
+
+# 4. 如需回退
+>>> rollback checkpoint_001_layer1_completed
 ```
 
 ---
@@ -177,18 +287,30 @@ Village_Planning_Agent/
 │   │
 │   ├── core/                   # 核心模块
 │   │   ├── dimension_mapping.py      # 维度依赖映射（含波次配置）✨
-│   │   ├── dimension_skill.py        # Skills封装（可选）✨
+│   │   ├── dimension_skill.py        # Skills封装（含修复支持）✨
 │   │   ├── config.py                 # 配置
 │   │   ├── llm_factory.py            # LLM 工厂
 │   │   └── prompts.py                # 通用 Prompt
 │   │
+│   ├── checkpoint/             # ✨ Checkpoint模块（新增）
+│   │   ├── checkpoint_manager.py     # Checkpoint管理核心
+│   │   └── json_storage.py           # JSON存储实现
+│   │
+│   ├── interactive/            # ✨ 交互式UI模块（新增）
+│   │   ├── review_ui.py              # 人工审查界面
+│   │   └── cli.py                    # 交互式命令行界面
+│   │
+│   ├── revision/               # ✨ 修复模块（新增）
+│   │   └── revision_manager.py       # 修复管理器
+│   │
 │   ├── utils/                  # 工具函数
 │   │   ├── state_filter.py           # 状态筛选工具（含v2增强版）✨
+│   │   ├── output_manager.py         # 输出管理器
 │   │   └── logger.py                 # 日志工具
 │   │
-│   ├── main_graph.py           # 主图（三层流程协调）
+│   ├── main_graph.py           # 主图（三层流程协调 + 交互模式）✨
 │   ├── agent.py                # 入口（兼容层）
-│   ├── run_agent.py            # CLI 入口
+│   ├── run_agent.py            # CLI 入口（新增模式）✨
 │   ├── tools/                  # 工具模块
 │   └── knowledge/              # 知识库模块
 │
@@ -208,6 +330,7 @@ Village_Planning_Agent/
 │   ├── example_data.txt        # 示例村庄数据
 │   └── vectordb/               # 向量数据库
 │
+├── INTERACTIVE_MODE.md         # ✨ 交互模式使用指南（新增）
 ├── .env.example                # 环境变量示例
 ├── requirements.txt            # 依赖
 └── README.md                   # 本文件
@@ -216,6 +339,64 @@ Village_Planning_Agent/
 ---
 
 ## 📖 使用指南
+
+### 多文件输入支持 ✨ 新增
+
+支持通过逗号分隔多个数据文件，系统会自动合并内容：
+
+```bash
+# 单个文件（原有用法，完全兼容）
+python -m src.run_agent --mode full \
+    --project "某某村" \
+    --data village_data.txt
+
+# 多个文件（逗号分隔）
+python -m src.run_agent --mode full \
+    --project "幸福村" \
+    --data population.txt,infrastructure.pdf,economy.docx \
+    --output planning.txt
+
+# 现状分析 - 多文件
+python -m src.run_agent --mode analysis \
+    --project "前进村" \
+    --data baseline.txt,supplement.pdf \
+    --output analysis.txt
+```
+
+**支持的文件格式**：`txt`, `pdf`, `docx`, `md`, `pptx`, `xlsx` 等
+
+**数据合并格式**：
+```
+# 文件: population.txt
+
+人口数据内容...
+
+================================================================================
+
+# 文件: infrastructure.pdf
+
+基础设施内容...
+
+================================================================================
+
+# 文件: economy.docx
+
+经济数据内容...
+```
+
+**错误处理**：
+- 所有文件成功 → 正常执行
+- 部分文件失败 → 继续执行成功文件，警告失败文件
+- 所有文件失败 → 退出并显示详细错误
+
+**日志输出示例**：
+```
+[INFO] 检测到多个文件输入 (3 个文件)
+[INFO] 成功加载 3 个文件:
+[INFO]   ✓ population.txt (1000 字符)
+[INFO]   ✓ infrastructure.pdf (2000 字符)
+[INFO]   ✓ economy.docx (1500 字符)
+```
 
 ### Python API
 
@@ -455,6 +636,113 @@ LLM_MODEL=deepseek-reasoner
 ---
 
 ## 🔄 更新日志
+
+### v3.0.0 - 交互模式（2025-01）✨ 最新
+
+**重大更新**：实现完整的交互模式，支持Checkpoint持久化、人工审查、逐步执行、回退修复。
+
+#### ✨ 新增功能
+
+1. **Checkpoint持久化**
+   - 每个Layer完成后自动保存checkpoint
+   - 支持从任意checkpoint恢复执行
+   - JSON格式存储，自动管理索引
+   - 状态序列化/反序列化
+
+2. **人工审查机制**
+   - ReviewUI：完整的审查界面
+   - Approve/Reject/View/Rollback操作
+   - 用户反馈收集和处理
+   - 集成checkpoint列表
+
+3. **逐步执行模式**
+   - InteractiveCLI：交互式命令行界面
+   - 在每层完成后暂停
+   - 命令：next/status/checkpoints/rollback/review/help/quit
+   - 可配置暂停级别（layer/dimension/skill）
+
+4. **回退机制**
+   - 回退到任意checkpoint
+   - 自动清理回退点之后的文件
+   - Dry-run模式预览
+   - 安全确认机制
+
+5. **智能修复**
+   - RevisionManager：修复流程管理
+   - 基于关键词识别需要修复的维度
+   - 混合模式：系统识别 + 用户确认
+   - Skill的execute_with_feedback方法
+
+6. **新增命令行模式**
+   - `--mode step`：逐步执行模式
+   - `--mode resume`：从checkpoint恢复
+   - `--mode list-checkpoints`：列出所有checkpoint
+   - `--step-level`：配置暂停级别
+   - `--resume-from`：指定checkpoint ID
+
+#### 🔧 模块扩展
+
+**新增模块**：
+- `src/checkpoint/` - Checkpoint管理
+- `src/interactive/` - 交互式UI
+- `src/revision/` - 修复管理器
+
+**修改模块**：
+- `src/main_graph.py` - 添加pause_node、revision_node，更新状态定义
+- `src/core/dimension_skill.py` - 添加execute_with_feedback方法
+- `src/agent.py` - 添加step_mode和step_level参数
+- `src/run_agent.py` - 新增3种运行模式
+
+#### 📝 文档更新
+
+- 新增：`INTERACTIVE_MODE.md`（交互模式完整指南）
+- 更新：`README.md`（交互模式文档）
+
+#### 🎯 使用示例
+
+```bash
+# 逐步执行
+python -m src.run_agent --mode step --project "村" --data data.txt
+
+# 从checkpoint恢复
+python -m src.run_agent --mode resume --project "村" --resume-from cp_001
+
+# 列出checkpoint
+python -m src.run_agent --mode list-checkpoints --project "村"
+```
+
+---
+
+### v2.1.0 - 多文件输入支持（2025-01）
+
+**新增功能**：
+
+1. **多文件输入支持**
+   - 支持通过逗号分隔多个数据文件
+   - 自动合并多个文件内容
+   - 100% 向后兼容现有单文件用法
+   - 清晰的日志输出显示加载状态
+
+2. **增强的错误处理**
+   - 部分文件失败时继续执行
+   - 详细的错误提示
+   - 文件加载统计信息
+
+3. **支持的格式**
+   - `txt`, `pdf`, `docx`, `md`, `pptx`, `xlsx` 等多种格式
+   - 混合格式支持（如：`file1.txt,file2.pdf,file3.docx`）
+
+#### 使用示例
+
+```bash
+# 单文件（原有用法）
+python -m src.run_agent --mode full --project "村" --data file.txt
+
+# 多文件
+python -m src.run_agent --mode full --project "村" --data pop.txt,infr.pdf
+```
+
+---
 
 ### v2.0.0 - 波次动态路由优化（2025-01）
 

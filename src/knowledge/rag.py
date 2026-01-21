@@ -1,5 +1,13 @@
 from typing import List, Dict, Any, Optional, Union
-from langchain import hub
+try:
+    from langchain import hub
+except ImportError:
+    # langchain hub 已移至 langchainhub 包
+    try:
+        from langchainhub import hub
+    except ImportError:
+        hub = None
+        print("警告: 无法导入 langchain hub，RAG查询功能可能不可用。请安装: pip install langchainhub")
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import (
     WebBaseLoader,
@@ -14,7 +22,10 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain.messages import Document
+try:
+    from langchain_core.documents import Document
+except ImportError:
+    from langchain.schema import Document
 import os
 from pathlib import Path
 
@@ -87,13 +98,15 @@ def get_rag_chain():
     """获取RAG链"""
     global _rag_chain
     if _rag_chain is None:
+        if hub is None:
+            raise RuntimeError("langchain hub 不可用，请安装 langchainhub 包")
         # 从hub获取prompt模板
         prompt = hub.pull("rlm/rag-prompt")
-        
+
         # 构建RAG链
         _rag_chain = (
             {
-                "context": get_retriever() | format_docs, 
+                "context": get_retriever() | format_docs,
                 "question": RunnablePassthrough()
             }
             | prompt

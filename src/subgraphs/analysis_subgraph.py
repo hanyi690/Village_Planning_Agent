@@ -94,6 +94,12 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
         # 获取该维度的 Prompt
         prompt = get_dimension_prompt(dimension_key, raw_data)
 
+        # 【日志验证】打印传入的原始数据（前300字符），确认数据传递正确
+        logger.info(f"[子图-分析] {dimension_name} - 传入的原始数据 (前300字符):\n{raw_data[:300]}")
+
+        # 【日志验证】打印完整 Prompt（前500字符），确认数据被正确嵌入
+        logger.info(f"[子图-分析] {dimension_name} - 完整 Prompt (前500字符):\n{prompt[:500]}")
+
         # 调用 LLM
         llm = _get_llm()
         response = llm.invoke([HumanMessage(content=prompt)])

@@ -89,6 +89,65 @@ class DimensionSkill(ABC):
         """
         pass
 
+    def execute_with_feedback(
+        self,
+        state: Dict[str, Any],
+        feedback: str,
+        original_result: str,
+        revision_count: int = 0
+    ) -> str:
+        """
+        基于反馈重新执行skill（用于修复流程）
+
+        Args:
+            state: 当前状态字典
+            feedback: 人工反馈
+            original_result: 原始执行结果
+            revision_count: 修复次数（用于追踪修复轮数）
+
+        Returns:
+            修复后的结果字符串
+        """
+        logger.info(f"[{self.dimension_name}] 基于反馈重新执行 (第{revision_count + 1}次)")
+
+        # 构建修复prompt
+        revision_prompt = f"""
+请根据以下人工反馈，修复对应的规划内容：
+
+【原规划内容】
+{original_result[:2000]}
+
+【人工反馈】
+{feedback}
+
+【要求】
+1. 针对反馈意见进行修改
+2. 保持原有结构和格式
+3. 修改部分要明确标注
+4. 这是第{revision_count + 1}次修复
+5. 如果这是多次修复，请确保之前的问题都已解决
+
+请生成修复后的规划内容：
+"""
+
+        try:
+            from ..core.llm_factory import create_llm
+            from ..core.config import LLM_MODEL, MAX_TOKENS
+
+            llm = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
+
+            result = llm.invoke(revision_prompt)
+            revised_content = result.content
+
+            logger.info(f"[{self.dimension_name}] 修复完成，内容长度: {len(revised_content)}")
+
+            return revised_content
+
+        except Exception as e:
+            logger.error(f"[{self.dimension_name}] 修复失败: {e}")
+            # 返回原始结果
+            return original_result
+
     def validate_dependencies(self, completed_dimensions: List[str]) -> bool:
         """
         验证依赖是否满足

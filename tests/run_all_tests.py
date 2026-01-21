@@ -4,7 +4,7 @@ Village Planning Agent - 综合测试运行器
 运行所有测试模块并生成主汇总报告。
 
 使用方法：
-    python -m test.run_all_tests
+    python -m tests.run_all_tests
 """
 
 import sys
@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.logger import get_logger
-from test.test_utils import (
+from tests.test_utils import (
     ensure_output_dirs,
     get_timestamp,
     save_to_markdown,
@@ -36,7 +36,7 @@ def run_analysis_tests() -> dict:
     results = {}
 
     try:
-        from test.test_analysis_subgraph import run_all_tests_and_summary
+        from tests.test_analysis_subgraph import run_all_tests_and_summary
         results = run_all_tests_and_summary()
         print("✅ 现状分析子图测试完成")
     except Exception as e:
@@ -56,7 +56,7 @@ def run_concept_tests() -> dict:
     results = {}
 
     try:
-        from test.test_concept_subgraph import run_all_tests_and_summary
+        from tests.test_concept_subgraph import run_all_tests_and_summary
         results = run_all_tests_and_summary()
         print("✅ 规划思路子图测试完成")
     except Exception as e:

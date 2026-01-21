@@ -4,9 +4,9 @@
 用于测试和验证规划思路子图的功能。
 
 使用方法：
-    python -m test.test_concept_subgraph
-    python -m test.test_concept_subgraph --test direct
-    python -m test.test_concept_subgraph --test all --output custom/path
+    python -m tests.test_concept_subgraph
+    python -m tests.test_concept_subgraph --test direct
+    python -m tests.test_concept_subgraph --test all --output custom/path
 """
 
 import sys
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.subgraphs.concept_subgraph import create_concept_subgraph, call_concept_subgraph
 from src.utils.logger import get_logger
-from test.test_utils import (
+from tests.test_utils import (
     ensure_output_dirs,
     get_timestamp,
     save_to_markdown,

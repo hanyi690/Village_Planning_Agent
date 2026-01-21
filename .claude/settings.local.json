@@ -16,7 +16,18 @@
       "Bash(git remote set-url:*)",
       "mcp__filesystem__directory_tree",
       "mcp__langchain-docs__brave_web_search",
-      "mcp__web-reader__webReader"
+      "mcp__web-reader__webReader",
+      "Bash(dir:*)",
+      "Bash(git restore:*)",
+      "mcp__zread__search_doc",
+      "mcp__zread__read_file",
+      "Bash(find:*)",
+      "mcp__filesystem__create_directory",
+      "mcp__filesystem__list_directory",
+      "Bash(tree /F /A /F:projectVillage_Planning_Agent)",
+      "Bash(echo:*)",
+      "Bash(ls:*)",
+      "mcp__filesystem__write_file"
     ]
   }
 }
