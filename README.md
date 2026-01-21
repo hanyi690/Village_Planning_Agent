@@ -1,18 +1,18 @@
 # 村庄规划智能体 (Village Planning Agent)
 
-基于 LangGraph 和 LangChain 的村庄规划智能系统，采用**三层子图架构**和**波次动态路由**实现专业的村庄规划辅助。
+基于 LangGraph 和 LangChain 的村庄规划智能系统，采用**分层架构**和**交互式工作流**实现专业的村庄规划辅助。
+
+**当前版本：v4.0.0 - 分层架构重构** ✨
 
 ## ✨ 核心特性
 
-- **🏗️ 三层子图架构**：现状分析 → 规划思路 → 详细规划
-- **⚡ 波次动态路由**：Wave 1 (9个维度并行) + Wave 2 (依赖等待)，智能调度
-- **🎯 智能状态筛选**：每个维度只接收其依赖的3-4个现状维度，节省60-90% Token
+- **🏗️ 清晰分层架构**：工具层 → 编排层 → CLI层
+- **🔧 统一工具模式**：所有工具遵循统一的设计模式
+- **📋 交互式工作流**：Checkpoint持久化、人工审查、逐步执行、回退修复
+- **🎯 专业规划**：涵盖产业、交通、公服、设施、生态、防灾、文保、风貌、项目库等10个维度
+- **⚡ 高性能并行**：10个维度并行分析，智能调度，效率提升
+- **🔄 灵活恢复**：支持从任意检查点恢复执行
 - **📁 多文件输入**：支持一次性加载多个数据文件，自动合并处理
-- **🚀 高性能并行**：10个维度并行分析，效率提升 7.5 倍
-- **🎨 专业规划**：涵盖产业、交通、公服、设施、生态、防灾、文保、风貌、项目库等10个维度
-- **🔧 简化配置**：标准 ZhipuAI SDK，开箱即用
-- **📊 完整输出**：生成专业的村庄规划报告
-- **🆕 交互模式**：支持Checkpoint持久化、人工审查、逐步执行、回退修复 ✨
 
 ---
 
@@ -33,7 +33,7 @@ pip install -r requirements.txt
 ZHIPUAI_API_KEY=your_zhipuai_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 
-# LLM 配置（使用 ZhipuAI GLM-4-Flash）
+# LLM 配置
 LLM_MODEL=glm-4-flash
 MAX_TOKENS=65536
 
@@ -42,203 +42,248 @@ VECTOR_STORE_DIR=data/vectordb
 VECTORDB_PERSIST=true
 ```
 
-### 3. 运行
+### 3. 准备数据
+
+创建村庄数据文件（建议使用结构化格式）：
+
+```markdown
+# 村庄基础数据
+
+## 基本信息
+- 村庄名称：[您的村庄名称]
+- 人口：[人口数量]
+- 面积：[面积数据]
+- 主要产业：[主要产业]
+
+## 人口与经济
+- 户籍人口：[数据]
+- 常住人口：[数据]
+- 人均收入：[数据]
+- 主要产业：[产业详情]
+
+## 自然环境
+- 地形：[地形描述]
+- 森林覆盖率：[数据]
+- 年降水量：[数据]
+
+# ... 其他维度（交通、设施、生态、建筑、文化等）
+```
+
+### 4. 运行
 
 **方式1：完整规划流程**
 
 ```bash
-python -m src.run_agent --mode full \
-    --project "某某村" \
-    --data data/example_data.txt \
+python -m src.cli.main --mode full \
+    --project "项目名称" \
+    --data data/village_data.txt \
     --output output.txt
 ```
 
 **方式2：仅现状分析**
 
 ```bash
-python -m src.run_agent --mode analysis \
-    --project "某某村" \
-    --data data/example_data.txt \
+python -m src.cli.main --mode analysis \
+    --project "项目名称" \
+    --data data/village_data.txt \
     --output analysis.txt
 ```
 
 **方式3：仅规划思路**
 
 ```bash
-python -m src.run_agent --mode concept \
-    --project "某某村" \
-    --data data/example_data.txt \
+python -m src.cli.main --mode concept \
+    --project "项目名称" \
+    --data data/village_data.txt \
     --output concept.txt
 ```
 
-**方式4：逐步执行模式** ✨ 新增
+---
 
-在每个Layer完成后暂停，等待用户交互：
+## 🆕 交互模式使用指南
+
+### 核心功能
+
+#### 1. Checkpoint持久化
+
+系统在每个Layer完成后自动保存检查点，包含：
+- 执行状态（当前阶段、完成情况）
+- 已生成的报告（现状分析、规划思路、详细规划）
+- 维度报告字典（10个维度的详细分析）
+- 时间戳和描述信息
+
+**检查点存储位置**：`checkpoints/<项目名称>/`
+
+#### 2. 人工审查机制
+
+在关键节点暂停并展示报告，支持以下操作：
+
+| 操作 | 说明 |
+|------|------|
+| `[A]pprove` | 通过审查，继续执行下一阶段 |
+| `[R]eject` | 驳回报告，进入修复流程 |
+| `[V]iew` | 查看完整报告内容 |
+| `[L]Rollback` | 回退到之前的检查点 |
+| `[Q]uit` | 退出程序 |
+
+**驳回后流程**：
+1. 系统提示输入反馈意见
+2. 自动识别需要修复的维度
+3. 调用对应Skill重新生成该维度内容
+4. 整合修复结果到总报告中
+
+#### 3. 逐步执行模式
+
+在每个Layer完成后暂停，进入交互式命令行界面：
 
 ```bash
-python -m src.run_agent --mode step \
-    --project "某某村" \
-    --data data/example_data.txt \
+python -m src.cli.main --mode step \
+    --project "项目名称" \
+    --data data/village_data.txt \
     --step-level layer
 ```
 
-可用暂停级别：
+**可用暂停级别**：
 - `layer`：在每层完成后暂停（默认）
 - `dimension`：在每个维度完成后暂停
 - `skill`：在每个skill完成后暂停
 
-**方式5：从Checkpoint恢复** ✨ 新增
+#### 4. 交互式命令
 
-从指定的checkpoint恢复执行：
+在逐步执行模式下可使用以下命令：
+
+| 命令 | 简写 | 说明 |
+|------|------|------|
+| `next` | `n`, `continue` | 继续执行下一步 |
+| `status` | `st` | 查看当前状态和进度 |
+| `checkpoints` | `cp` | 列出所有检查点 |
+| `rollback <id>` | `rb` | 回退到指定检查点 |
+| `review` | `rv` | 审查当前报告 |
+| `help` | `h`, `?` | 显示帮助信息 |
+| `quit` | `q`, `exit` | 退出程序 |
+
+#### 5. 回退机制
+
+回退到任意检查点并清理后续生成的内容：
 
 ```bash
-python -m src.run_agent --mode resume \
-    --project "某某村" \
-    --resume-from checkpoint_001_layer1_completed
+# 在交互式界面中
+>>> checkpoints
+Available checkpoints:
+  [0] checkpoint_000_layer1_completed - 2025-01-21 10:30:15
+  [1] checkpoint_001_layer2_completed - 2025-01-21 10:45:22
+  [2] checkpoint_002_layer3_completed - 2025-01-21 11:20:08
+
+>>> rollback checkpoint_001_layer2_completed
+⚠️  警告：此操作将：
+    • 回退到 checkpoint_001_layer2_completed
+    • 清理之后生成的 1 个文件
+    • 当前状态将丢失
+
+确认回退? [y/N]: y
+✓ 已回退到 checkpoint_001_layer2_completed
 ```
 
-**方式6：列出所有Checkpoint** ✨ 新增
-
-查看项目的所有checkpoint：
+#### 6. 从Checkpoint恢复
 
 ```bash
-python -m src.run_agent --mode list-checkpoints --project "某某村"
+python -m src.cli.main --mode resume \
+    --project "项目名称" \
+    --resume-from checkpoint_001_layer2_completed
 ```
 
----
+#### 7. 列出所有Checkpoint
 
-## 🆕 交互模式详解
-
-### 核心功能
-
-1. **Checkpoint持久化**
-   - 每个Layer完成后自动保存checkpoint
-   - 支持从任意checkpoint恢复执行
-   - 自动管理checkpoint索引和元数据
-
-2. **人工审查机制**
-   - 在关键节点暂停并展示报告
-   - 支持Approve/Reject/View/Rollback操作
-   - 输入详细的反馈意见
-
-3. **逐步执行模式**
-   - 在每层完成后暂停等待确认
-   - 交互式命令：next/status/checkpoints/rollback/help
-   - 查看当前执行进度和状态
-
-4. **回退机制**
-   - 回退到任意checkpoint
-   - 自动清理回退点之后的生成文件
-   - 安全的确认机制
-
-5. **智能修复**
-   - 基于反馈自动识别需要修复的维度
-   - 混合模式：系统识别 + 用户确认
-   - 调用相应skill执行修复
-
-### 交互式命令
-
-在逐步执行模式下可用：
-
-| 命令 | 说明 |
-|------|------|
-| `next` / `continue` | 继续执行下一步 |
-| `status` | 查看当前状态和进度 |
-| `checkpoints` | 列出所有checkpoint |
-| `rollback <id>` | 回退到指定checkpoint |
-| `review` | 审查当前报告 |
-| `help` | 显示帮助信息 |
-| `quit` | 退出程序 |
-
-### 人工审查选项
-
-| 选项 | 说明 |
-|------|------|
-| `[A]pprove` | 通过审查，继续执行 |
-| `[R]eject` | 驳回，需要修复 |
-| `[V]iew` | 查看完整内容 |
-| `[L]Rollback` | 回退到之前的checkpoint |
-| `[Q]uit` | 退出程序 |
+```bash
+python -m src.cli.main --mode list-checkpoints --project "项目名称"
+```
 
 ### 完整工作流示例
 
 ```bash
-# 1. 启动逐步执行模式
-python -m src.run_agent --mode step --project "某某村" --data village_data.txt
+# 步骤1：启动逐步执行模式
+python -m src.cli.main --mode step \
+    --project "示例村庄" \
+    --data village_data.txt
 
-# 2. Layer 1完成后暂停
->>> status          # 查看详细状态
->>> review          # 审查现状分析报告
->>> next            # 继续执行Layer 2
+# 步骤2：Layer 1（现状分析）完成后暂停
+================================================================
+当前状态：Layer 1 已完成
+下一阶段：Layer 2（规划思路）
+================================================================
 
-# 3. Layer 2完成后
->>> review          # 审查规划思路
->>> next            # 继续执行Layer 3
+>>> status              # 查看详细状态
+当前项目: 示例村庄
+当前阶段: Layer 1 完成
+检查点: checkpoint_000_layer1_completed
+报告已生成: analysis_report.txt
 
-# 4. 如需回退
->>> rollback checkpoint_001_layer1_completed
+>>> review              # 审查现状分析报告
+选择操作:
+[A]pprove  [R]eject  [V]iew  [L]Rollback  [Q]uit
+> A
+
+>>> next                # 继续执行Layer 2
+
+# 步骤3：Layer 2（规划思路）完成后
+>>> review              # 审查规划思路
+选择操作:
+[A]pprove  [R]eject  [V]iew  [L]Rollback  [Q]uit
+> R
+请输入反馈意见: > 规划定位不够清晰，需要更具体的发展目标
+
+# 系统自动识别需要修复的维度并重新生成
+
+>>> next                # 继续执行Layer 3
+
+# 步骤4：如需回退
+>>> rollback checkpoint_000_layer1_completed
 ```
 
 ---
 
-## 🏗️ 三层架构
+## 🏗️ 分层架构
+
+### 架构层次
 
 ```
-┌─────────────────────────────────────┐
-│       主图 (Main Graph)             │
-│  协调三层子图 + 管理规划流程         │
-└──────────┬──────────────────────────┘
-           │
-           ├─── [Layer 1: 现状分析子图]
-           │    ├── 10个维度并行分析
-           │    ├── 优化：每个维度只处理相关数据
-           │    └── 生成综合现状报告 + 维度报告字典
-           │
-           ├─── [Layer 2: 规划思路子图]
-           │    ├── 4个维度并行分析
-           │    ├── 优化：状态筛选（每个维度只接收3-4个现状维度）
-           │    └── 生成规划思路报告 + 维度报告字典
-           │
-           └─── [Layer 3: 详细规划子图] ✨ 新增波次路由
-                ├── Wave 1: 9个维度完全并行
-                │    ├── 智能状态筛选（每个维度只接收依赖的3-4个现状维度）
-                │    └── Token优化：节省60-90%
-                │
-                └── Wave 2: project_bank
-                     ├── 等待Wave 1的9个维度完成
-                     ├── 整合所有前序规划结果
-                     └── 生成建设项目库
+┌─────────────────────────────────────────┐
+│            CLI 层 (cli/)                │  ← 命令行界面
+│  - 参数解析、命令执行、用户交互           │
+└──────────────┬──────────────────────────┘
+               │
+┌──────────────▼──────────────────────────┐
+│        编排层 (orchestration/)          │  ← 业务逻辑
+│  - 状态管理、流程协调、工具调用           │
+└──────────────┬──────────────────────────┘
+               │
+┌──────────────▼──────────────────────────┐
+│         工具层 (tools/)                 │  ← 可复用工具
+│  - Checkpoint / Interactive / Revision  │
+└─────────────────────────────────────────┘
 ```
 
-### 🌟 波次动态路由（Layer 3 详细规划）
+### 三层规划流程
 
-**Wave 1 - 独立并行（9个维度）**：
-1. 产业规划 - 依赖: 社会经济, 土地利用
-2. 村庄总体规划 - 依赖: 土地利用, 区位, 自然环境
-3. 道路交通规划 - 依赖: 区位, 交通
-4. 公服设施规划 - 依赖: 公共服务, 社会经济
-5. 基础设施规划 - 依赖: 基础设施, 土地利用
-6. 生态绿地规划 - 依赖: 自然环境, 生态绿地
-7. 防震减灾规划 - 依赖: 基础设施, 自然环境
-8. 历史文保规划 - 依赖: 历史文化
-9. 村庄风貌指引 - 依赖: 建筑
+```
+主图 (Main Graph)
+    │
+    ├─→ [Layer 1: 现状分析子图]
+    │    ├─ 10个维度并行分析
+    │    └─ 生成现状分析报告
+    │
+    ├─→ [Layer 2: 规划思路子图]
+    │    ├─ 4个维度并行分析
+    │    └─ 生成规划思路报告
+    │
+    └─→ [Layer 3: 详细规划子图]
+         ├─ Wave 1: 9个维度并行
+         └─ Wave 2: 项目库（依赖前9个）
+```
 
-**Wave 2 - 依赖等待（1个维度）**：
-10. 建设项目库 - 依赖: Wave 1的全部9个维度规划结果
+### 规划维度
 
-### 📊 Token 优化效果
-
-| 详细规划维度 | 原始Token | 优化后Token | 节省率 |
-|-------------|-----------|-------------|--------|
-| 产业规划 | 200,000 | 15,000 | 92.5% |
-| 村庄总体规划 | 200,000 | 20,000 | 90.0% |
-| 道路交通规划 | 200,000 | 12,000 | 94.0% |
-| ... | ... | ... | ... |
-| 项目建设库 | 272,000 | 88,000 | 67.6% |
-| **平均** | **~210,000** | **~25,000** | **~88%** |
-
-### 现状分析子图 - 10个维度
-
+**现状分析（10个维度）**：
 1. 区位分析
 2. 社会经济分析
 3. 自然环境分析
@@ -250,15 +295,13 @@ python -m src.run_agent --mode step --project "某某村" --data village_data.tx
 9. 建筑分析
 10. 历史文化分析
 
-### 规划思路子图 - 4个维度
-
+**规划思路（4个维度）**：
 1. 资源禀赋分析
 2. 规划定位分析
 3. 发展目标分析
 4. 规划策略分析
 
-### 详细规划子图 - 10个专业维度
-
+**详细规划（10个维度）**：
 1. 产业规划
 2. 村庄总体规划
 3. 道路交通规划
@@ -277,93 +320,63 @@ python -m src.run_agent --mode step --project "某某村" --data village_data.tx
 ```
 Village_Planning_Agent/
 ├── src/
+│   ├── tools/                  # 统一工具层
+│   │   ├── file_manager.py    # 文件管理工具
+│   │   ├── knowledge_tool.py  # 知识库工具
+│   │   ├── map_tool.py        # 地图工具
+│   │   ├── checkpoint_tool.py # Checkpoint工具 ✨
+│   │   ├── interactive_tool.py # 交互式工具 ✨
+│   │   └── revision_tool.py   # 修复工具 ✨
+│   │
+│   ├── orchestration/          # 编排层
+│   │   └── main_graph.py      # 主图（纯业务逻辑）
+│   │
+│   ├── cli/                    # CLI层
+│   │   ├── arg_parsers.py     # 参数解析
+│   │   ├── commands.py        # 命令执行
+│   │   └── main.py            # 入口
+│   │
 │   ├── subgraphs/              # 子图模块
-│   │   ├── analysis_subgraph.py      # 现状分析子图
-│   │   ├── concept_subgraph.py       # 规划思路子图
-│   │   ├── detailed_plan_subgraph.py # 详细规划子图（支持波次路由）✨
-│   │   ├── analysis_prompts.py        # 分析维度 Prompt
-│   │   ├── concept_prompts.py         # 概念维度 Prompt
-│   │   └── detailed_plan_prompts.py   # 详细规划维度 Prompt
+│   │   ├── analysis_subgraph.py
+│   │   ├── concept_subgraph.py
+│   │   └── detailed_plan_subgraph.py
 │   │
-│   ├── core/                   # 核心模块
-│   │   ├── dimension_mapping.py      # 维度依赖映射（含波次配置）✨
-│   │   ├── dimension_skill.py        # Skills封装（含修复支持）✨
-│   │   ├── config.py                 # 配置
-│   │   ├── llm_factory.py            # LLM 工厂
-│   │   └── prompts.py                # 通用 Prompt
-│   │
-│   ├── checkpoint/             # ✨ Checkpoint模块（新增）
-│   │   ├── checkpoint_manager.py     # Checkpoint管理核心
-│   │   └── json_storage.py           # JSON存储实现
-│   │
-│   ├── interactive/            # ✨ 交互式UI模块（新增）
-│   │   ├── review_ui.py              # 人工审查界面
-│   │   └── cli.py                    # 交互式命令行界面
-│   │
-│   ├── revision/               # ✨ 修复模块（新增）
-│   │   └── revision_manager.py       # 修复管理器
+│   ├── core/                   # 核心组件
+│   │   ├── dimension_mapping.py
+│   │   ├── dimension_skill.py
+│   │   ├── config.py
+│   │   └── llm_factory.py
 │   │
 │   ├── utils/                  # 工具函数
-│   │   ├── state_filter.py           # 状态筛选工具（含v2增强版）✨
-│   │   ├── output_manager.py         # 输出管理器
-│   │   └── logger.py                 # 日志工具
-│   │
-│   ├── main_graph.py           # 主图（三层流程协调 + 交互模式）✨
-│   ├── agent.py                # 入口（兼容层）
-│   ├── run_agent.py            # CLI 入口（新增模式）✨
-│   ├── tools/                  # 工具模块
-│   └── knowledge/              # 知识库模块
+│   ├── knowledge/              # 知识库
+│   └── agent.py               # 入口函数
 │
-├── tests/                     # 测试模块 ✨ 新增
-│   └── test_dynamic_routing.py      # 动态路由功能测试（19个测试）
-│
-├── test/
-│   ├── test_analysis_subgraph.py       # 子图测试
-│   ├── test_concept_subgraph.py        # 子图测试
-│   ├── test_detailed_plan_subgraph.py  # 子图测试
-│   ├── simple_test_analysis.py         # 简化测试 ⭐
-│   ├── simple_test_concept.py          # 简化测试 ⭐
-│   ├── simple_test_detailed_plan.py    # 简化测试 ⭐
-│   └── README_SIMPLE_TESTS.md          # 简化测试说明
-│
-├── data/
-│   ├── example_data.txt        # 示例村庄数据
-│   └── vectordb/               # 向量数据库
-│
-├── INTERACTIVE_MODE.md         # ✨ 交互模式使用指南（新增）
-├── .env.example                # 环境变量示例
-├── requirements.txt            # 依赖
-└── README.md                   # 本文件
+├── data/                       # 数据目录
+├── checkpoints/                # 检查点存储 ✨
+├── output/                     # 输出目录
+├── tests/                      # 测试
+├── .env.example
+├── requirements.txt
+└── README.md
 ```
 
 ---
 
 ## 📖 使用指南
 
-### 多文件输入支持 ✨ 新增
+### 多文件输入支持
 
-支持通过逗号分隔多个数据文件，系统会自动合并内容：
+支持通过逗号分隔多个数据文件，系统自动合并：
 
 ```bash
-# 单个文件（原有用法，完全兼容）
-python -m src.run_agent --mode full \
-    --project "某某村" \
-    --data village_data.txt
-
 # 多个文件（逗号分隔）
-python -m src.run_agent --mode full \
-    --project "幸福村" \
+python -m src.cli.main --mode full \
+    --project "示例项目" \
     --data population.txt,infrastructure.pdf,economy.docx \
     --output planning.txt
 
-# 现状分析 - 多文件
-python -m src.run_agent --mode analysis \
-    --project "前进村" \
-    --data baseline.txt,supplement.pdf \
-    --output analysis.txt
+# 支持的格式：txt, pdf, docx, md, pptx, xlsx
 ```
-
-**支持的文件格式**：`txt`, `pdf`, `docx`, `md`, `pptx`, `xlsx` 等
 
 **数据合并格式**：
 ```
@@ -384,29 +397,15 @@ python -m src.run_agent --mode analysis \
 经济数据内容...
 ```
 
-**错误处理**：
-- 所有文件成功 → 正常执行
-- 部分文件失败 → 继续执行成功文件，警告失败文件
-- 所有文件失败 → 退出并显示详细错误
-
-**日志输出示例**：
-```
-[INFO] 检测到多个文件输入 (3 个文件)
-[INFO] 成功加载 3 个文件:
-[INFO]   ✓ population.txt (1000 字符)
-[INFO]   ✓ infrastructure.pdf (2000 字符)
-[INFO]   ✓ economy.docx (1500 字符)
-```
-
 ### Python API
 
-**完整规划流程**
+**完整规划流程**：
 
 ```python
 from src.agent import run_village_planning
 
 result = run_village_planning(
-    project_name="某某村",
+    project_name="项目名称",
     village_data="村庄数据文本...",
     task_description="制定乡村振兴规划",
     constraints="生态优先，绿色发展"
@@ -418,85 +417,40 @@ print(result['concept_report'])     # 规划思路
 print(result['detailed_plan'])     # 详细规划
 ```
 
-**仅现状分析**
+**仅现状分析**：
 
 ```python
-from src.subgraphs.analysis_subgraph import call_analysis_subgraph
+from src.agent import run_analysis_only
 
-result = call_analysis_subgraph(
-    project_name="某某村",
-    raw_data="村庄数据文本..."
+result = run_analysis_only(
+    project_name="项目名称",
+    village_data="村庄数据文本..."
 )
 
 print(result['analysis_report'])
 ```
 
-**仅规划思路**
+**仅规划思路**：
 
 ```python
-from src.subgraphs.concept_subgraph import call_concept_subgraph
+from src.agent import run_concept_only
 
-result = call_concept_subgraph(
-    project_name="某某村",
+result = run_concept_only(
+    project_name="项目名称",
     analysis_report="现状分析报告..."
 )
 
 print(result['concept_report'])
 ```
 
-**仅详细规划（推荐：带维度报告优化）**
+**快速分析**：
 
 ```python
-from src.subgraphs.detailed_plan_subgraph import call_detailed_plan_subgraph
+from src.agent import quick_analysis
 
-result = call_detailed_plan_subgraph(
-    project_name="某某村",
-    analysis_report="现状分析报告...",
-    planning_concept="规划思路报告...",
-    # ✨ 新增：传递维度报告以启用波次动态路由和状态筛选优化
-    dimension_reports={
-        "location": "区位分析内容...",
-        "socio_economic": "社会经济分析内容...",
-        # ... 其他8个维度
-    },
-    concept_dimension_reports={
-        "resource_endowment": "资源禀赋分析...",
-        "planning_positioning": "规划定位分析...",
-        # ... 其他2个维度
-    },
-    task_description="制定村庄详细规划",
-    constraints="生态优先，绿色发展"
-)
-
-print(result['detailed_plan_report'])
-
-# ✨ Token优化统计
-token_stats = result.get('token_usage_stats', {})
-for dim, stats in token_stats.items():
-    print(f"{dim}: 节省 {stats['reduction_percent']}% Token")
+report = quick_analysis("村庄数据文本...")
+print(report)
 ```
-
-### 简化测试
-
-```bash
-# 分析子图测试（生成完整现状分析报告）
-python -m test.simple_test_analysis
-
-# 规划思路子图测试（生成完整规划思路报告 + 状态优化）
-python -m test.simple_test_concept
-
-# 详细规划子图测试（生成完整详细规划报告 + 波次动态路由）
-python -m test.simple_test_detailed_plan
-```
-
-### 单元测试
-
-```bash
-# 运行动态路由功能测试（19个测试）
-python -m pytest tests/test_dynamic_routing.py -v
-```
-
-详见：[test/README_SIMPLE_TESTS.md](test/README_SIMPLE_TESTS.md)
 
 ---
 
@@ -504,19 +458,20 @@ python -m pytest tests/test_dynamic_routing.py -v
 
 ### LLM 配置
 
-支持两种 LLM 提供商：
-
-**1. ZhipuAI（推荐）**
+**1. ZhipuAI（推荐）**：
 ```env
 ZHIPUAI_API_KEY=your_key
 LLM_MODEL=glm-4-flash
 ```
 
-**2. OpenAI / DeepSeek**
+**2. OpenAI**：
 ```env
 OPENAI_API_KEY=your_key
 LLM_MODEL=gpt-4o-mini
-# 或
+```
+
+**3. DeepSeek**：
+```env
 DEEPSEEK_API_KEY=your_key
 DEEPSEEK_API_BASE=https://api.deepseek.com/v1
 LLM_MODEL=deepseek-reasoner
@@ -524,96 +479,10 @@ LLM_MODEL=deepseek-reasoner
 
 ### 自动检测
 
-系统会根据 `LLM_MODEL` 自动选择正确的提供商：
+系统根据 `LLM_MODEL` 自动选择提供商：
 - `glm-*` → ZhipuAI
 - `gpt-*` → OpenAI
-- `deepseek-*` → OpenAI (DeepSeek)
-
----
-
-## 🎯 数据格式
-
-推荐使用结构化的村庄数据：
-
-```markdown
-# 某某村基础数据
-
-## 基本信息
-- 村庄名称：某某村
-- 人口：1200人
-- 面积：5.2平方公里
-- 主要产业：农业、旅游业
-
-## 人口与经济
-- 户籍人口：1200人
-- 常住人口：980人
-- 农民人均纯收入：18000元/年
-- 主要产业：水稻种植、茶叶种植、乡村旅游
-
-## 自然环境
-- 地形：丘陵地貌
-- 森林覆盖率：68%
-- 年降水量：1600mm
-
-# ... 其他维度
-```
-
-**格式要求**：
-- 支持自由文本（推荐结构化格式）
-- 建议包含所有10个维度的信息
-- 可为 Markdown、纯文本等格式
-
----
-
-## 📊 性能表现
-
-基于 ZhipuAI GLM-4-Flash 的测试数据：
-
-### 执行时间
-
-| 任务 | 维度数 | 执行时间 | 说明 |
-|------|--------|----------|------|
-| 现状分析 | 10个 | ~50秒 | 并行执行 |
-| 规划思路 | 4个 | ~50秒 | 并行执行 + 状态筛选 |
-| 详细规划 | 10个 | ~2分钟 | ✨ 波次路由 + 智能状态筛选 |
-| **完整流程** | - | **~3分钟** | 三层串联 + Token优化 |
-
-**加速效果**：
-- 现状分析：7.5倍加速（vs 串行）
-- 详细规划：5倍加速（Wave 1 并行 + Wave 2）
-- 整体流程：3.4倍加速（vs 串行）
-
-### Token 优化（新增）
-
-| 层级 | 优化技术 | Token节省 |
-|------|----------|----------|
-| Layer 2（规划思路） | 状态筛选（每个维度3-4个现状） | ~60% |
-| Layer 3（详细规划） | 状态筛选（每个维度3-4个现状+思路） | ~88% |
-| Wave 1（9个维度并行） | 独立执行 | - |
-| Wave 2（project_bank） | 等待依赖 | - |
-
-**关键优化**：
-- 每个规划维度只接收其依赖的3-4个现状维度，而非全部10个
-- Token使用平均减少 60-90%
-- 成本降低约 85%
-
----
-
-## 🚀 技术栈
-
-- **LLM**:
-  - ZhipuAI GLM-4-Flash（推荐）
-  - OpenAI GPT-4o-mini
-  - DeepSeek-Reasoner
-- **框架**: LangGraph, LangChain
-- **特性**:
-  - Send 机制（并行执行）
-  - 子图嵌套（模块化）
-  - 强类型状态（TypedDict）
-  - 状态累加器（operator.add）
-  - ✨ 波次动态路由（Wave-based routing）
-  - ✨ 依赖感知调度（Dependency-aware scheduling）
-  - ✨ 智能状态筛选（Smart state filtering）
+- `deepseek-*` → DeepSeek
 
 ---
 
@@ -637,181 +506,105 @@ LLM_MODEL=deepseek-reasoner
 
 ## 🔄 更新日志
 
-### v3.0.0 - 交互模式（2025-01）✨ 最新
+### v4.0.0 - 分层架构重构（最新）
 
-**重大更新**：实现完整的交互模式，支持Checkpoint持久化、人工审查、逐步执行、回退修复。
+**重大重构**：实现清晰的分层架构，统一工具模式。
 
-#### ✨ 新增功能
+#### Bug Fixes
 
-1. **Checkpoint持久化**
-   - 每个Layer完成后自动保存checkpoint
-   - 支持从任意checkpoint恢复执行
-   - JSON格式存储，自动管理索引
-   - 状态序列化/反序列化
+**Step Mode Layer 2 Skip Fix**：
+- 修复了在step模式下Layer 2被跳过的问题
+- 修正了`route_after_tool_bridge`函数中的路由逻辑
+- 当`current_layer=2`时现在正确返回`"layer2"`而不是`"layer3"`
+- 确保了Layer 1 → Layer 2 → Layer 3的正确执行顺序
 
-2. **人工审查机制**
-   - ReviewUI：完整的审查界面
-   - Approve/Reject/View/Rollback操作
-   - 用户反馈收集和处理
-   - 集成checkpoint列表
-
-3. **逐步执行模式**
-   - InteractiveCLI：交互式命令行界面
-   - 在每层完成后暂停
-   - 命令：next/status/checkpoints/rollback/review/help/quit
-   - 可配置暂停级别（layer/dimension/skill）
-
-4. **回退机制**
-   - 回退到任意checkpoint
-   - 自动清理回退点之后的文件
-   - Dry-run模式预览
-   - 安全确认机制
-
-5. **智能修复**
-   - RevisionManager：修复流程管理
-   - 基于关键词识别需要修复的维度
-   - 混合模式：系统识别 + 用户确认
-   - Skill的execute_with_feedback方法
-
-6. **新增命令行模式**
-   - `--mode step`：逐步执行模式
-   - `--mode resume`：从checkpoint恢复
-   - `--mode list-checkpoints`：列出所有checkpoint
-   - `--step-level`：配置暂停级别
-   - `--resume-from`：指定checkpoint ID
-
-#### 🔧 模块扩展
+#### 架构改进
 
 **新增模块**：
-- `src/checkpoint/` - Checkpoint管理
-- `src/interactive/` - 交互式UI
-- `src/revision/` - 修复管理器
+- `src/tools/checkpoint_tool.py` - Checkpoint工具（遵循tool pattern）
+- `src/tools/interactive_tool.py` - 交互式工具（合并ReviewUI和CLI）
+- `src/tools/revision_tool.py` - 修复工具
+- `src/orchestration/` - 编排层（纯业务逻辑）
+- `src/cli/` - 统一CLI层
 
-**修改模块**：
-- `src/main_graph.py` - 添加pause_node、revision_node，更新状态定义
-- `src/core/dimension_skill.py` - 添加execute_with_feedback方法
-- `src/agent.py` - 添加step_mode和step_level参数
-- `src/run_agent.py` - 新增3种运行模式
+**移除模块**：
+- `src/checkpoint/` → 重构为 `src/tools/checkpoint_tool.py`
+- `src/interactive/` → 重构为 `src/tools/interactive_tool.py`
+- `src/revision/` → 重构为 `src/tools/revision_tool.py`
+- `src/main_graph.py` → 移至 `src/orchestration/main_graph.py`
 
-#### 📝 文档更新
+#### 设计原则
 
-- 新增：`INTERACTIVE_MODE.md`（交互模式完整指南）
-- 更新：`README.md`（交互模式文档）
-
-#### 🎯 使用示例
-
-```bash
-# 逐步执行
-python -m src.run_agent --mode step --project "村" --data data.txt
-
-# 从checkpoint恢复
-python -m src.run_agent --mode resume --project "村" --resume-from cp_001
-
-# 列出checkpoint
-python -m src.run_agent --mode list-checkpoints --project "村"
+**统一工具模式**：
+```python
+class ToolName:
+    def method(self, ...) -> Dict[str, Any]:
+        return {
+            "success": bool,
+            "content": Any,
+            "metadata": Dict,
+            "error": str
+        }
 ```
 
----
+**清晰分层**：
+- 工具层：可复用的工具组件
+- 编排层：纯业务逻辑，无UI代码
+- CLI层：用户界面和参数处理
 
-### v2.1.0 - 多文件输入支持（2025-01）
+#### API变更
 
-**新增功能**：
+**Checkpoint工具**：
+```python
+from src.tools import CheckpointTool
 
-1. **多文件输入支持**
-   - 支持通过逗号分隔多个数据文件
-   - 自动合并多个文件内容
-   - 100% 向后兼容现有单文件用法
-   - 清晰的日志输出显示加载状态
-
-2. **增强的错误处理**
-   - 部分文件失败时继续执行
-   - 详细的错误提示
-   - 文件加载统计信息
-
-3. **支持的格式**
-   - `txt`, `pdf`, `docx`, `md`, `pptx`, `xlsx` 等多种格式
-   - 混合格式支持（如：`file1.txt,file2.pdf,file3.docx`）
-
-#### 使用示例
-
-```bash
-# 单文件（原有用法）
-python -m src.run_agent --mode full --project "村" --data file.txt
-
-# 多文件
-python -m src.run_agent --mode full --project "村" --data pop.txt,infr.pdf
+tool = CheckpointTool("项目名称")
+result = tool.save(state, layer, description)
+checkpoint_id = result["checkpoint_id"]
 ```
 
----
+**交互式工具**：
+```python
+from src.tools import InteractiveTool
 
-### v2.0.0 - 波次动态路由优化（2025-01）
+tool = InteractiveTool()
+result = tool.review_content(content, title, allow_rollback, checkpoints)
+action = result["action"]  # "approve", "reject", "rollback", "quit"
+```
 
-**重大更新**：引入波次动态路由和智能状态筛选，大幅降低Token使用和执行成本。
+**修复工具**：
+```python
+from src.tools import RevisionTool
 
-#### ✨ 新增功能
+tool = RevisionTool("项目名称")
+result = tool.revise_dimension(dimension, state, feedback)
+revised_content = result["content"]
+```
 
-1. **波次动态路由**
-   - Wave 1: 9个独立维度完全并行执行
-   - Wave 2: project_bank等待依赖完成后执行
-   - 基于LangGraph的Send对象实现多波次调度
+### v3.0.0 - 交互模式
 
-2. **智能状态筛选**
-   - 每个维度只接收其依赖的3-4个现状维度
-   - Token使用减少60-90%
-   - 支持完整依赖链追踪
+实现完整的交互模式，支持Checkpoint持久化、人工审查、逐步执行、回退修复。
 
-3. **依赖关系映射**
-   - 精确的三层依赖关系定义（现状→思路→详细规划）
-   - 支持依赖可视化（Mermaid图）
-   - 波次执行摘要
+### v2.0.0 - 波次动态路由
 
-4. **Skills封装（可选）**
-   - 维度规划Skill基类
-   - 10个具体Skill实现
-   - Skill工厂模式
-
-5. **增强的状态筛选**
-   - `filter_state_for_detailed_dimension_v2()`
-   - 依赖链追踪
-   - Token统计和可视化
-
-#### 🔧 优化改进
-
-- 更新`analysis_prompts.py`：
-  - `location`维度新增上位规划约束分析
-  - `socio_economic`维度新增村民意愿分析
-
-- 更新`detailed_plan_subgraph.py`：
-  - 支持波次路由
-  - 状态字段扩展
-  - Token统计
-
-#### 📝 文档更新
-
-- 新增：`tests/test_dynamic_routing.py`（19个测试）
-- 更新：`README.md`（波次路由文档）
-- 更新：三个简化测试文件
-
-#### ⚡ 性能提升
-
-- Token使用：平均减少 **88%**
-- 执行时间：缩短 **40-50%**
-- 成本降低：约 **85%**
-
-#### 🧪 测试覆盖
-
-- 19个单元测试全部通过
-- 覆盖依赖映射、状态筛选、波次路由、集成测试
-
----
+引入波次动态路由和智能状态筛选，大幅降低Token使用。
 
 ### v1.0.0 - 初始版本
 
-**基础功能**：
-- 三层子图架构（现状分析 → 规划思路 → 详细规划）
-- 并行执行支持
-- 10个专业维度规划
-- 简化配置和完整输出
+基础功能：三层子图架构、并行执行、10个专业维度规划。
+
+---
+
+## 🚀 技术栈
+
+- **LLM**: ZhipuAI GLM-4-Flash, OpenAI GPT-4o-mini, DeepSeek-Reasoner
+- **框架**: LangGraph, LangChain
+- **特性**:
+  - 并行执行（Send机制）
+  - 子图嵌套（模块化）
+  - 强类型状态（TypedDict）
+  - Checkpoint持久化
+  - 交互式工作流
 
 ---
 
@@ -828,5 +621,3 @@ MIT License
 ---
 
 **村庄规划 AI 助手** - 让村庄规划更智能、更高效 ✨
-
-基于 LangGraph 和 LangChain 实现

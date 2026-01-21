@@ -22,7 +22,7 @@ from pathlib import Path
 import warnings
 
 # 导入新版接口
-from .main_graph import run_village_planning as _run_main_graph
+from .orchestration.main_graph import run_village_planning as _run_main_graph
 from .subgraphs.analysis_subgraph import call_analysis_subgraph
 from .subgraphs.concept_subgraph import call_concept_subgraph
 from .tools.file_manager import VillageDataManager, read_village_data as _read_village_data
