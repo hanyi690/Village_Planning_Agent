@@ -2,7 +2,7 @@
 
 基于 LangGraph 和 LangChain 的村庄规划智能系统，采用**分层架构**和**交互式工作流**实现专业的村庄规划辅助。
 
-**当前版本：v4.0.0 - 分层架构重构** ✨
+**当前版本：v4.0.1 - Pause管理节点解耦** ✨
 
 ## ✨ 核心特性
 
@@ -339,23 +339,50 @@ other:
 
 
 【Step模式执行流程】
-用户输入"next" → tool_bridge → route_after_tool_bridge
+用户输入"next" → tool_bridge → route_after_tool_bridge → pause → route_after_pause
 
 Layer 1 完成后:
-    state: {current_layer: 2, layer_1_completed: True}
-    路由决策: current_layer==2 → 返回 "layer2" ✓
+    state: {current_layer: 2, layer_1_completed: True, step_mode: True}
+    路由决策: current_layer==2 → 返回 "pause" → pause_manager_node设置pause_after_step=True → 返回 "layer2" ✓
     结果: 执行 layer2_concept (Layer 2 规划思路)
 
 Layer 2 完成后:
-    state: {current_layer: 3, layer_2_completed: True}
-    路由决策: current_layer==3 → 返回 "layer3" ✓
+    state: {current_layer: 3, layer_2_completed: True, step_mode: True}
+    路由决策: current_layer==3 → 返回 "pause" → pause_manager_node设置pause_after_step=True → 返回 "layer3" ✓
     结果: 执行 layer3_detail (Layer 3 详细规划)
 
 
+【Pause管理节点 - 解耦设计】
+新增pause_manager_node()统一管理暂停状态，完全解耦暂停逻辑与业务逻辑：
+
+暂停流程:
+    START → pause (设置pause_after_step=True)
+         → route_after_pause → layer1_analysis
+         → route_after_layer1 → tool_bridge (暂停交互)
+         → route_after_tool_bridge → pause (重置pause_after_step=True)
+         → route_after_pause → layer2_concept
+         → route_after_layer2 → tool_bridge (暂停交互) ✓
+         → route_after_tool_bridge → pause (重置pause_after_step=True)
+         → route_after_pause → layer3_detail
+         → ...
+
+优势:
+    - 完全解耦：Layer执行函数不关心暂停逻辑
+    - 集中管理：所有暂停场景在一个地方管理
+    - 易于扩展：轻松支持人工审核、调试模式等新暂停场景
+    - 符合LangGraph理念：使用节点和边管理状态转换
+
+
 【Bug修复说明】
-修复前: current_layer==2 时错误返回 "layer3"，导致跳过 Layer 2
-修复后: current_layer==2 时正确返回 "layer2"，确保执行 Layer 2
-位置: src/orchestration/main_graph.py:772-790
+1. 修复Layer 2跳过问题 (v4.0.0)
+   修复前: current_layer==2 时错误返回 "layer3"，导致跳过 Layer 2
+   修复后: current_layer==2 时正确返回 "layer2"，确保执行 Layer 2
+   位置: src/orchestration/main_graph.py:772-790
+
+2. 修复Step模式暂停失效问题 (v4.0.1)
+   修复前: 用户输入next后pause_after_step被设置为False，导致Layer 2及后续不暂停
+   修复后: 新增pause管理节点，每次tool_bridge后重置pause_after_step=True
+   位置: src/orchestration/main_graph.py:691, 719, 788, 855
 ```
 
 ### 规划维度
@@ -744,7 +771,35 @@ LLM_MODEL=deepseek-reasoner
 
 ## 🔄 更新日志
 
-### v4.0.0 - 分层架构重构（最新）
+### v4.0.1 - Pause管理节点解耦
+
+**新功能**：添加pause管理节点，完全解耦暂停逻辑与业务逻辑。
+
+#### 新增功能
+
+**Pause管理节点**：
+- 新增 `pause_manager_node()` 函数统一管理暂停状态
+- 新增 `route_after_pause()` 函数处理pause节点后的路由
+- 在step模式下自动重置 `pause_after_step=True`
+- 支持未来扩展其他暂停场景（人工审核、调试模式等）
+
+#### Bug Fixes
+
+**Step模式暂停失效修复**：
+- 修复了在step模式下Layer 2完成后不暂停的问题
+- 当用户输入`next`后，pause_after_step会被pause管理节点重置为True
+- 确保每一层完成后都能正确暂停等待用户输入
+- 完全解耦：Layer执行函数不再需要关心暂停逻辑
+
+#### 技术改进
+
+**架构优化**：
+- 修改 `START` 边：从直接进入layer1改为先进入pause节点
+- 修改 `route_after_tool_bridge`：在step模式下路由到pause节点
+- 集中管理暂停逻辑，便于维护和扩展
+- 符合LangGraph设计理念：使用节点和边管理状态转换
+
+### v4.0.0 - 分层架构重构
 
 **重大重构**：实现清晰的分层架构，统一工具模式。
 

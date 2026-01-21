@@ -688,9 +688,54 @@ def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
         }
 
 
+def pause_manager_node(state: VillagePlanningState) -> Dict[str, Any]:
+    """
+    暂停管理节点：统一管理各种暂停场景
+
+    支持的暂停场景：
+    - step_mode: 逐步执行模式
+    - 人工审核: need_human_review (未来扩展)
+    - 其他暂停场景: 易于扩展
+
+    在step模式下，为下一层执行准备暂停状态，确保每一层完成后都能正确暂停。
+    """
+    # Step模式：设置暂停
+    if state.get("step_mode", False):
+        logger.info("[暂停管理] Step模式已启用，设置pause_after_step=True")
+        return {"pause_after_step": True}
+
+    # 未来扩展：其他暂停场景
+    # if state.get("need_human_review", False):
+    #     logger.info("[暂停管理] 人工审核模式，设置pause_after_step=True")
+    #     return {"pause_after_step": True}
+
+    return {}
+
+
 # ==========================================
 # 路由决策
 # ==========================================
+
+def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis", "layer2_concept", "layer3_detail"]:
+    """
+    pause节点后的路由：根据current_layer决定执行哪个layer
+
+    这个路由函数确保pause节点能够正确地将流程引导到当前应该执行的layer。
+    """
+    current_layer = state.get("current_layer", 1)
+    logger.info(f"[主图-路由] 从pause节点路由到Layer {current_layer}")
+
+    if current_layer == 1:
+        return "layer1_analysis"
+    elif current_layer == 2:
+        return "layer2_concept"
+    elif current_layer == 3:
+        return "layer3_detail"
+    else:
+        # 默认返回layer1
+        logger.warning(f"[主图-路由] 无效的current_layer: {current_layer}，默认路由到Layer 1")
+        return "layer1_analysis"
+
 
 def route_after_layer1(state: VillagePlanningState) -> Literal["tool_bridge", "layer2", "end"]:
     """Layer 1 完成后的路由决策"""
@@ -740,53 +785,66 @@ def route_after_layer3(state: VillagePlanningState) -> Literal["final", "end"]:
         return "end"
 
 
-def route_after_tool_bridge(state: VillagePlanningState) -> Literal["layer2", "layer3", "end"]:
-    """工具桥接节点后的路由决策"""
+def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "layer2_concept", "layer3_detail", "end"]:
+    """
+    工具桥接后的路由决策
+
+    决定从tool_bridge出来后：
+    - 如果step_mode开启：路由到pause节点（设置暂停状态）
+    - 否则：直接路由到对应的layer执行节点
+    """
     current_layer = state.get("current_layer", 1)
-    quit_requested = state.get("quit_requested", False)
-    trigger_rollback = state.get("trigger_rollback", False)
-    need_revision = state.get("need_revision", False)
-    layer_1_completed = state.get("layer_1_completed", False)
-    layer_2_completed = state.get("layer_2_completed", False)
 
-    logger.info(f"[主图-路由] tool_bridge后的路由决策: current_layer={current_layer}, quit_requested={quit_requested}, trigger_rollback={trigger_rollback}, need_revision={need_revision}, layer_1_completed={layer_1_completed}, layer_2_completed={layer_2_completed}")
-
-    # 检查是否有特殊标志
-    if quit_requested:
-        logger.info("[主图-路由] 检测到退出请求，流程结束")
+    # 检查退出标志
+    if state.get("quit_requested", False):
+        logger.info("[主图-路由] 用户请求退出，流程结束")
         return "end"
 
+    # 检查回退标志
     if state.get("trigger_rollback", False):
-        # 回退处理（实际回退在外部处理）
+        logger.info("[主图-路由] 触发回退，流程结束（由checkpoint_tool处理）")
         return "end"
 
+    # 检查修复标志
     if state.get("need_revision", False):
         # 修复后继续
         if current_layer == 1:
-            return "layer2"
+            if state.get("step_mode", False):
+                logger.info("[主图-路由] Step模式：tool_bridge → pause → layer2")
+                return "pause"
+            return "layer2_concept"
         elif current_layer == 2:
-            return "layer3"
+            if state.get("step_mode", False):
+                logger.info("[主图-路由] Step模式：tool_bridge → pause → layer3")
+                return "pause"
+            return "layer3_detail"
         else:
             return "end"
 
-    # 默认继续执行
+    # 根据current_layer和step_mode决定下一步
     if current_layer == 1:
-        return "layer2"
+        # Layer 1: 从tool_bridge回到layer 1（通常是回退后）或进入layer 2
+        if state.get("step_mode", False):
+            logger.info("[主图-路由] Step模式：tool_bridge → pause → layer2")
+            return "pause"
+        logger.info("[主图-路由] 直接进入Layer 2")
+        return "layer2_concept"
     elif current_layer == 2:
-        # Execute Layer 2 (only if Layer 1 is complete)
-        if layer_1_completed:
-            return "layer2"  # Execute layer2_concept node
-        else:
-            logger.warning("[主图-路由] Layer 1未完成，无法进入Layer 2")
-            return "end"
+        # Layer 2: 从tool_bridge继续到layer 2
+        if state.get("step_mode", False):
+            logger.info("[主图-路由] Step模式：tool_bridge → pause → layer2")
+            return "pause"
+        logger.info("[主图-路由] 直接进入Layer 2")
+        return "layer2_concept"
     elif current_layer == 3:
-        # Execute Layer 3 (only if Layer 2 is complete)
-        if layer_2_completed:
-            return "layer3"  # Execute layer3_detail node
-        else:
-            logger.warning("[主图-路由] Layer 2未完成，无法进入Layer 3")
-            return "end"
+        # Layer 3: 从tool_bridge继续到layer 3
+        if state.get("step_mode", False):
+            logger.info("[主图-路由] Step模式：tool_bridge → pause → layer3")
+            return "pause"
+        logger.info("[主图-路由] 直接进入Layer 3")
+        return "layer3_detail"
     else:
+        logger.info("[主图-路由] 流程结束")
         return "end"
 
 
@@ -806,6 +864,7 @@ def create_village_planning_graph() -> StateGraph:
     builder = StateGraph(VillagePlanningState)
 
     # 添加节点
+    builder.add_node("pause", pause_manager_node)
     builder.add_node("layer1_analysis", execute_layer1_analysis)
     builder.add_node("layer2_concept", execute_layer2_concept)
     builder.add_node("layer3_detail", execute_layer3_detail)
@@ -813,7 +872,19 @@ def create_village_planning_graph() -> StateGraph:
     builder.add_node("tool_bridge", tool_bridge_node)
 
     # 构建执行流程
-    builder.add_edge(START, "layer1_analysis")
+    # START -> pause (暂停管理节点设置初始暂停状态)
+    builder.add_edge(START, "pause")
+
+    # pause -> 根据current_layer路由到对应的layer
+    builder.add_conditional_edges(
+        "pause",
+        route_after_pause,
+        {
+            "layer1_analysis": "layer1_analysis",
+            "layer2_concept": "layer2_concept",
+            "layer3_detail": "layer3_detail"
+        }
+    )
 
     # Layer 1 -> tool_bridge/layer2/end
     builder.add_conditional_edges(
@@ -826,13 +897,15 @@ def create_village_planning_graph() -> StateGraph:
         }
     )
 
-    # tool_bridge -> layer2/layer3/end
+    # tool_bridge -> pause/layer2/layer3/end
+    # 在step模式下，tool_bridge会路由到pause节点以重置暂停状态
     builder.add_conditional_edges(
         "tool_bridge",
         route_after_tool_bridge,
         {
-            "layer2": "layer2_concept",
-            "layer3": "layer3_detail",
+            "pause": "pause",
+            "layer2_concept": "layer2_concept",
+            "layer3_detail": "layer3_detail",
             "end": END
         }
     )
