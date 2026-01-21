@@ -27,7 +27,8 @@
       "Bash(tree /F /A /F:projectVillage_Planning_Agent)",
       "Bash(echo:*)",
       "Bash(ls:*)",
-      "mcp__filesystem__write_file"
+      "mcp__filesystem__write_file",
+      "mcp__filesystem__read_multiple_files"
     ]
   }
 }
