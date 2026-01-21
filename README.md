@@ -281,6 +281,83 @@ python -m src.cli.main --mode step \
          └─ Wave 2: 项目库（依赖前9个）
 ```
 
+### 路由决策流程图
+
+系统在 `tool_bridge` 后根据当前状态自动路由到下一层：
+
+```
+                    route_after_tool_bridge()
+                                │
+                                ▼
+                    ┌───────────────────────┐
+                    │  检查 need_revision?   │
+                    └───────────┬───────────┘
+                                │
+                ┌───────────────┴───────────────┐
+                │ YES                           │ NO
+                ▼                               ▼
+        ┌───────────────┐           ┌───────────────────────┐
+        │  修复模式路由   │           │    正常执行路由        │
+        │ current_layer  │           │   current_layer 检查  │
+        └───────┬───────┘           └───────────┬───────────┘
+                │                               │
+    ┌───────────┼───────────┐       ┌───────────┼───────────┐
+    │           │           │       │           │           │
+    ▼           ▼           ▼       ▼           ▼           ▼
+  layer=1     layer=2     layer=3  layer=1     layer=2     layer=3
+    │           │           │       │           │           │
+    ▼           ▼           ▼       ▼           ▼           ▼
+ "layer2"    "layer3"     "end"   "layer2"    "layer2"    "layer3"
+ (修复后)    (修复后)    (结束)  (执行L2)   ✓(执行L2)   (执行L3)
+                                           (固定修复)
+
+
+【正常执行模式 - 详细路由逻辑】
+
+current_layer == 1:
+    └─→ 返回 "layer2"  [执行 layer2_concept 节点]
+
+current_layer == 2:
+    ├─ layer_1_completed == True?
+    │   ├─ YES → 返回 "layer2"  [执行 layer2_concept 节点] ✓
+    │   └─ NO  → 返回 "end"     [警告并结束]
+    │
+current_layer == 3:
+    ├─ layer_2_completed == True?
+    │   ├─ YES → 返回 "layer3"  [执行 layer3_detail 节点]
+    │   └─ NO  → 返回 "end"     [警告并结束]
+    │
+other:
+    └─→ 返回 "end"
+
+
+【关键理解】
+• current_layer = 2  表示"即将执行 Layer 2"，而不是"Layer 2已完成"
+• current_layer = 3  表示"即将执行 Layer 3"，而不是"Layer 3已完成"
+• layer_1_completed 表示"Layer 1 已完成"的标志
+• layer_2_completed 表示"Layer 2 已完成"的标志
+
+
+【Step模式执行流程】
+用户输入"next" → tool_bridge → route_after_tool_bridge
+
+Layer 1 完成后:
+    state: {current_layer: 2, layer_1_completed: True}
+    路由决策: current_layer==2 → 返回 "layer2" ✓
+    结果: 执行 layer2_concept (Layer 2 规划思路)
+
+Layer 2 完成后:
+    state: {current_layer: 3, layer_2_completed: True}
+    路由决策: current_layer==3 → 返回 "layer3" ✓
+    结果: 执行 layer3_detail (Layer 3 详细规划)
+
+
+【Bug修复说明】
+修复前: current_layer==2 时错误返回 "layer3"，导致跳过 Layer 2
+修复后: current_layer==2 时正确返回 "layer2"，确保执行 Layer 2
+位置: src/orchestration/main_graph.py:772-790
+```
+
 ### 规划维度
 
 **现状分析（10个维度）**：
