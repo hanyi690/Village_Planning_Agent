@@ -63,7 +63,8 @@ class ConceptDimensionState(TypedDict):
     """单个维度分析的状态（用于并行节点）"""
     dimension_key: str           # 维度标识
     dimension_name: str           # 维度名称
-    analysis_report: str         # 现状分析报告
+    analysis_report: str         # 现状分析报告（筛选后）
+    dimension_reports: Dict[str, str]  # 完整的各维度现状分析字典（用于规划器二次筛选）
     task_description: str         # 规划任务
     constraints: str             # 约束条件
     concept_result: str          # 分析结果
@@ -203,7 +204,8 @@ def map_concept_dimensions(state: ConceptState) -> List[Send]:
         dimension_state = {
             "dimension_key": dimension_key,
             "dimension_name": dimension_info["name"],
-            "analysis_report": filtered_analysis,  # 使用筛选后的报告
+            "analysis_report": filtered_analysis,  # 筛选后的报告（已优化）
+            "dimension_reports": full_dimension_reports,  # 完整字典（用于规划器二次筛选）
             "task_description": state["task_description"],
             "constraints": state["constraints"],
             "concept_result": ""

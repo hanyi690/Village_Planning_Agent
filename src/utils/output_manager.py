@@ -34,18 +34,20 @@ class OutputManager:
     # 时间戳格式：YYYYMMDD_HHMMSS
     TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
 
-    # 现状分析维度列表（10个）- 使用子图返回的实际键名
+    # 现状分析维度列表（12个）- 使用子图返回的实际键名
     ANALYSIS_DIMENSIONS = [
         "location",
         "socio_economic",
         "natural_environment",
         "land_use",
-        "infrastructure",
+        "traffic",
         "public_services",
+        "infrastructure",
         "ecological_green",
         "architecture",
         "historical_cultural",
-        "traffic"
+        "villager_wishes",
+        "superior_planning"
     ]
 
     # 规划思路维度列表（4个）
@@ -220,7 +222,9 @@ class OutputManager:
             "infrastructure": "07_基础设施分析",
             "ecological_green": "08_生态绿地分析",
             "architecture": "09_建筑分析",
-            "historical_cultural": "10_历史文化分析"
+            "historical_cultural": "10_历史文化分析",
+            "villager_wishes": "11_村民意愿与诉求分析",
+            "superior_planning": "12_上位规划与政策导向分析"
         }
 
         for dimension_key in self.ANALYSIS_DIMENSIONS:
