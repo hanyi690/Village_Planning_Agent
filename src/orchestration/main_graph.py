@@ -7,7 +7,7 @@
 3. Layer 3: 详细规划
 
 关键变更：
-- 使用新工具层（tools/）替代旧模块
+- 使用新的节点类（Layer节点和工具节点）
 - tool_bridge_node统一处理工具调用
 - 移除UI代码到工具层
 """
@@ -32,6 +32,16 @@ from ..subgraphs.detailed_plan_subgraph import call_detailed_plan_subgraph
 from ..tools.checkpoint_tool import CheckpointTool
 from ..tools.interactive_tool import InteractiveTool
 from ..tools.revision_tool import RevisionTool
+
+# 使用新的节点类
+from ..nodes import (
+    Layer1AnalysisNode,
+    Layer2ConceptNode,
+    Layer3DetailNode,
+    ToolBridgeNode,
+    PauseManagerNode
+)
+from ..nodes.tool_nodes import _run_human_review, _run_pause_interaction, _run_revision
 
 logger = get_logger(__name__)
 
@@ -310,17 +320,18 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
             logger.info(f"[主图-Layer3] 已完成维度: {result['completed_dimensions']}")
 
             # 收集各维度详细规划报告
+            # 键名不带前缀，与 OutputManager 期望的格式一致
             detailed_dimension_reports = {
-                "dimension_industry": result.get("industry_plan", ""),
-                "dimension_master_plan": result.get("master_plan", ""),
-                "dimension_traffic": result.get("traffic_plan", ""),
-                "dimension_public_service": result.get("public_service_plan", ""),
-                "dimension_infrastructure": result.get("infrastructure_plan", ""),
-                "dimension_ecological": result.get("ecological_plan", ""),
-                "dimension_disaster_prevention": result.get("disaster_prevention_plan", ""),
-                "dimension_heritage": result.get("heritage_plan", ""),
-                "dimension_landscape": result.get("landscape_plan", ""),
-                "dimension_project_bank": result.get("project_bank", ""),
+                "industry": result.get("industry_plan", ""),
+                "master_plan": result.get("master_plan", ""),
+                "traffic": result.get("traffic_plan", ""),
+                "public_service": result.get("public_service_plan", ""),
+                "infrastructure": result.get("infrastructure_plan", ""),
+                "ecological": result.get("ecological_plan", ""),
+                "disaster_prevention": result.get("disaster_prevention_plan", ""),
+                "heritage": result.get("heritage_plan", ""),
+                "landscape": result.get("landscape_plan", ""),
+                "project_bank": result.get("project_bank", ""),
             }
 
             # 保存 Layer 3 结果（使用 OutputManager）
@@ -648,30 +659,30 @@ def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
         revised_results = revise_result["revised_results"]
         detailed_dimension_reports = state.get("detailed_dimension_reports", {})
 
-        # 维度键名映射
-        dimension_key_map = {
-            "industry": "dimension_industry",
-            "master_plan": "dimension_master_plan",
-            "traffic": "dimension_traffic",
-            "public_service": "dimension_public_service",
-            "infrastructure": "dimension_infrastructure",
-            "ecological": "dimension_ecological",
-            "disaster_prevention": "dimension_disaster_prevention",
-            "heritage": "dimension_heritage",
-            "landscape": "dimension_landscape",
-            "project_bank": "dimension_project_bank"
+        # 维度键名映射 - 从子图的键名映射到状态中的键名
+        # 子图返回: "industry", "master_plan", 等（不带前缀）
+        # 状态中保存: 同样的键名（不带前缀）
+        # 维度名称到友好名称的映射（用于显示）
+        dimension_names = {
+            "industry": "产业规划",
+            "master_plan": "村域总体规划",
+            "traffic": "综合交通规划",
+            "public_service": "公共服务设施规划",
+            "infrastructure": "基础设施规划",
+            "ecological": "生态绿地系统规划",
+            "disaster_prevention": "防灾减灾规划",
+            "heritage": "历史文化保护规划",
+            "landscape": "村庄风貌规划",
+            "project_bank": "项目库"
         }
-
-        for dimension, revised_result in revised_results.items():
-            key = dimension_key_map.get(dimension)
-            if key:
-                detailed_dimension_reports[key] = revised_result
 
         # 重新组合综合报告
         updated_detailed_plan = state.get("detailed_plan", "")
-        for key, result in revised_results.items():
-            dimension_name = key.replace("dimension_", "")
-            updated_detailed_plan += f"\n\n## 修复后的{dimension_name}规划\n\n{result}"
+        for dimension, revised_result in revised_results.items():
+            dimension_name = dimension_names.get(dimension, dimension)
+            updated_detailed_plan += f"\n\n## 修复后的{dimension_name}\n\n{revised_result}"
+            # 同时更新状态中的维度报告
+            detailed_dimension_reports[dimension] = revised_result
 
         return {
             "detailed_dimension_reports": detailed_dimension_reports,
@@ -856,18 +867,27 @@ def create_village_planning_graph() -> StateGraph:
     """
     创建村庄规划主图
 
+    使用新的节点类实例替代旧的函数节点。
+
     Returns:
         编译后的 StateGraph 实例
     """
     logger.info("[主图构建] 开始构建村庄规划主图")
 
+    # 创建节点实例
+    pause_node = PauseManagerNode()
+    layer1_node = Layer1AnalysisNode()
+    layer2_node = Layer2ConceptNode()
+    layer3_node = Layer3DetailNode()
+    tool_bridge_node = ToolBridgeNode()
+
     builder = StateGraph(VillagePlanningState)
 
-    # 添加节点
-    builder.add_node("pause", pause_manager_node)
-    builder.add_node("layer1_analysis", execute_layer1_analysis)
-    builder.add_node("layer2_concept", execute_layer2_concept)
-    builder.add_node("layer3_detail", execute_layer3_detail)
+    # 添加节点（使用节点实例的__call__方法）
+    builder.add_node("pause", pause_node)
+    builder.add_node("layer1_analysis", layer1_node)
+    builder.add_node("layer2_concept", layer2_node)
+    builder.add_node("layer3_detail", layer3_node)
     builder.add_node("generate_final", generate_final_output)
     builder.add_node("tool_bridge", tool_bridge_node)
 
@@ -976,6 +996,24 @@ def run_village_planning(
     Returns:
         包含最终成果的字典
     """
+    from ..core.langsmith_integration import get_langsmith_manager
+
+    # 检查LangSmith状态
+    langsmith = get_langsmith_manager()
+    if langsmith.is_enabled():
+        logger.info(f"[主图-调用] LangSmith tracing已启用")
+        run_metadata = langsmith.create_run_metadata(
+            project_name=project_name,
+            extra_info={
+                "mode": "full" if not step_mode else "step",
+                "step_level": step_level if step_mode else None,
+                "human_review": need_human_review
+            }
+        )
+    else:
+        logger.info(f"[主图-调用] LangSmith tracing未启用")
+        run_metadata = None
+
     logger.info(f"[主图-调用] 开始执行村庄规划: {project_name}")
 
     # 智能检测village_data是文件路径还是直接数据

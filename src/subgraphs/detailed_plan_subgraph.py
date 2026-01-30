@@ -346,7 +346,7 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     """
     生成单个维度的详细规划
 
-    通用的专业Agent节点，根据维度调用对应的Prompt。
+    使用新的 DimensionPlanner 架构，充分利用现有的基础设施。
     支持使用completed_plans（project_bank需要）。
     """
     dimension_key = state["dimension_key"]
@@ -356,53 +356,36 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key})")
 
     try:
-        # 获取专业提示词
-        prompt_template = get_dimension_prompt(dimension_key)
+        # 【使用新架构】使用 DetailedPlannerFactory 创建规划器
+        from ..planners.detailed_planners import DetailedPlannerFactory
+        planner = DetailedPlannerFactory.create_planner(dimension_key)
 
-        if not prompt_template:
-            raise ValueError(f"未找到维度 {dimension_key} 的提示词")
+        # 【使用新架构】调用规划器的 execute 方法
+        # 注意：planner.execute 需要完整的状态字典
+        planner_state = {
+            "project_name": project_name,
+            "analysis_report": state["analysis_report"],
+            "planning_concept": state["planning_concept"],
+            "dimension_reports": state.get("dimension_reports", {}),
+            "concept_dimension_reports": state.get("concept_dimension_reports", {}),
+            "completed_plans": state.get("completed_plans", {}),
+            "task_description": state["task_description"],
+            "constraints": state["constraints"]
+        }
+        planner_result = planner.execute(planner_state)
 
-        # 对于项目库，需要传入其他维度的规划摘要
-        if dimension_key == "project_bank":
-            completed_plans = state.get("completed_plans", {})
-            if completed_plans:
-                # 构建其他维度规划的摘要
-                dimension_plans_summary = "\n\n".join([
-                    f"## {DETAILED_DIMENSION_NAMES.get(dim, dim)}\n\n{plan[:1000]}..."
-                    for dim, plan in completed_plans.items()
-                ])
-            else:
-                dimension_plans_summary = "（其他维度规划将在执行时整合）"
-        else:
-            dimension_plans_summary = ""
+        plan_content = planner_result["dimension_result"]
+        logger.info(f"[子图-L3-Agent] 完成 {dimension_name}，生成 {len(plan_content)} 字符")
 
-        # 构建完整提示词
-        prompt = prompt_template.format(
-            project_name=project_name,
-            analysis_report=state["analysis_report"][:4000],  # 限制长度避免token超限
-            planning_concept=state["planning_concept"][:3000],
-            task_description=state["task_description"],
-            constraints=state["constraints"],
-            dimension_plans=dimension_plans_summary
-        )
-
-        # 检查是否有反馈意见
+        # 检查是否有反馈意见（添加到结果中）
         if state.get("human_feedback"):
-            prompt += f"""
+            plan_content += f"""
 
-## 修改意见
-根据之前的反馈，请对规划进行以下修改：
+## 修改说明
+根据之前的反馈，已对规划进行以下修改：
 {state['human_feedback']}
 
-请基于以上修改意见重新生成/优化该维度的规划。
 """
-
-        # 调用 LLM
-        llm = _get_llm()
-        response = llm.invoke([HumanMessage(content=prompt)])
-
-        plan_content = response.content
-        logger.info(f"[子图-L3-Agent] 完成 {dimension_name}，生成 {len(plan_content)} 字符")
 
         # 添加元数据
         plan_with_metadata = f"""# {project_name} - {dimension_name}

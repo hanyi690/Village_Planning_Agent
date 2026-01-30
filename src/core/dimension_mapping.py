@@ -10,8 +10,10 @@
 # ==========================================
 
 ANALYSIS_DIMENSION_NAMES = {
-    "location": "区位与对外交通分析（含上位规划约束）",
-    "socio_economic": "社会经济分析（含人口结构、村民意愿）",
+    "location": "区位与对外交通分析",
+    "socio_economic": "社会经济分析",
+    "villager_wishes": "村民意愿与诉求分析",
+    "superior_planning": "上位规划与政策导向分析",
     "natural_environment": "自然环境与生态本底分析",
     "land_use": "土地利用与合规性分析",
     "traffic": "道路交通与街巷空间分析",
@@ -41,25 +43,25 @@ FULL_DEPENDENCY_CHAIN = {
         "depends_on_detailed": []
     },
     "master_plan": {
-        "layer1_analyses": ["land_use", "location", "natural_environment"],
+        "layer1_analyses": ["land_use", "location", "natural_environment", "superior_planning"],
         "layer2_concepts": ["planning_positioning", "planning_strategies"],
         "wave": 1,
         "depends_on_detailed": []
     },
     "traffic": {
-        "layer1_analyses": ["location", "traffic"],
+        "layer1_analyses": ["location", "traffic", "villager_wishes", "superior_planning"],
         "layer2_concepts": ["planning_strategies"],
         "wave": 1,
         "depends_on_detailed": []
     },
     "public_service": {
-        "layer1_analyses": ["public_services", "socio_economic"],
+        "layer1_analyses": ["public_services", "socio_economic", "villager_wishes"],
         "layer2_concepts": ["development_goals"],
         "wave": 1,
         "depends_on_detailed": []
     },
     "infrastructure": {
-        "layer1_analyses": ["infrastructure", "land_use"],
+        "layer1_analyses": ["infrastructure", "land_use", "villager_wishes"],
         "layer2_concepts": ["development_goals"],
         "wave": 1,
         "depends_on_detailed": []
@@ -89,7 +91,7 @@ FULL_DEPENDENCY_CHAIN = {
         "depends_on_detailed": []
     },
     "project_bank": {
-        "layer1_analyses": ["land_use", "socio_economic", "location"],
+        "layer1_analyses": ["land_use", "socio_economic", "location", "villager_wishes", "superior_planning"],
         "layer2_concepts": ["ALL"],  # 需要所有规划思路
         "wave": 2,
         "depends_on_detailed": [

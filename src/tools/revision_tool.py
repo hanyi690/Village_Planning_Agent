@@ -142,11 +142,11 @@ class RevisionTool:
         try:
             logger.info(f"[RevisionTool] 开始修复维度: {dimension} (第{revision_count + 1}次)")
 
-            # 使用skill进行修复
-            from ..core.dimension_skill import SkillFactory
-            skill = SkillFactory.create_skill(dimension)
+            # 使用planner进行修复
+            from ..planners.detailed_planners import DetailedPlannerFactory
+            planner = DetailedPlannerFactory.create_planner(dimension)
 
-            revised_result = skill.execute_with_feedback(
+            revised_result = planner.execute_with_feedback(
                 state=state,
                 feedback=feedback,
                 original_result=original_result,

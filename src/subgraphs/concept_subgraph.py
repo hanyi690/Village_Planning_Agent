@@ -87,6 +87,8 @@ def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
     """
     执行单个规划思路维度的分析
 
+    使用新的 ConceptPlanner 架构，充分利用现有的基础设施。
+
     Args:
         state: 包含维度信息和输入数据的状态
 
@@ -95,26 +97,25 @@ def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
     """
     dimension_key = state["dimension_key"]
     dimension_name = state["dimension_name"]
-    analysis_report = state["analysis_report"]
-    task_description = state["task_description"]
-    constraints = state["constraints"]
 
     logger.info(f"[子图-规划] 开始执行 {dimension_name} ({dimension_key})")
 
     try:
-        # 获取该维度的 Prompt
-        prompt = _get_dimension_prompt(
-            dimension_key,
-            analysis_report,
-            task_description,
-            constraints
-        )
+        # 【使用新架构】使用 ConceptPlannerFactory 创建规划器
+        from ..planners.concept_planners import ConceptPlannerFactory
+        planner = ConceptPlannerFactory.create_planner(dimension_key)
 
-        # 调用 LLM
-        llm = _get_llm()
-        response = llm.invoke([HumanMessage(content=prompt)])
+        # 【使用新架构】调用规划器的 execute 方法
+        # 注意：planner.execute 需要完整的状态字典，包含 analysis_report, task_description, constraints
+        planner_state = {
+            "analysis_report": state["analysis_report"],
+            "dimension_reports": state.get("dimension_reports", {}),  # 可选，用于筛选
+            "task_description": state["task_description"],
+            "constraints": state["constraints"]
+        }
+        planner_result = planner.execute(planner_state)
 
-        concept_text = response.content
+        concept_text = planner_result["concept_result"]
         logger.info(f"[子图-规划] 完成 {dimension_name}，生成 {len(concept_text)} 字符")
 
         # 在 LangGraph 1.0.x 中，使用 operator.add 时需要返回列表
@@ -261,6 +262,7 @@ def generate_final_concept(state: ConceptState) -> Dict[str, Any]:
     生成最终规划思路报告
 
     整合4个维度的分析结果，使用汇总 Prompt 生成连贯的报告。
+    支持LangSmith tracing。
     """
     logger.info("[子图-汇总] 开始生成最终规划思路报告")
 
@@ -280,11 +282,27 @@ def generate_final_concept(state: ConceptState) -> Dict[str, Any]:
             dimension_reports=dimension_reports_text
         )
 
-        # 调用 LLM 生成最终报告
-        llm = _get_llm()
-        response = llm.invoke([
-            HumanMessage(content=summary_prompt)
-        ])
+        # 调用 LLM 生成最终报告（支持LangSmith）
+        from ..core.llm_factory import create_llm
+        from ..core.langsmith_integration import get_langsmith_manager
+
+        # 创建LangSmith metadata
+        langsmith = get_langsmith_manager()
+        metadata = None
+        if langsmith.is_enabled():
+            metadata = langsmith.create_run_metadata(
+                project_name=state.get('project_name', '村庄'),
+                dimension="concept_summary",
+                layer=2
+            )
+
+        llm = create_llm(
+            model=LLM_MODEL,
+            temperature=0.7,
+            max_tokens=MAX_TOKENS,
+            metadata=metadata
+        )
+        response = llm.invoke([HumanMessage(content=summary_prompt)])
 
         final_concept = f"""# {state['project_name']} 规划思路报告
 

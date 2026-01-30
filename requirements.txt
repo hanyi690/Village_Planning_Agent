@@ -20,3 +20,6 @@ python-dotenv==1.0.0
 # Type checking
 pydantic==2.9.0
 typing-extensions==4.12.0
+
+# LangSmith tracing
+langsmith>=0.1.0

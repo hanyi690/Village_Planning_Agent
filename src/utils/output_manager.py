@@ -34,40 +34,40 @@ class OutputManager:
     # 时间戳格式：YYYYMMDD_HHMMSS
     TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
 
-    # 现状分析维度列表（10个）
+    # 现状分析维度列表（10个）- 使用子图返回的实际键名
     ANALYSIS_DIMENSIONS = [
-        "dimension_location",
-        "dimension_natural_conditions",
-        "dimension_socio_economic",
-        "dimension_land_use",
-        "dimension_infrastructure_status",
-        "dimension_public_service_status",
-        "dimension_historical_heritage",
-        "dimension_governance_status",
-        "dimension_development_constraints",
-        "dimension_development_potential"
+        "location",
+        "socio_economic",
+        "natural_environment",
+        "land_use",
+        "infrastructure",
+        "public_services",
+        "ecological_green",
+        "architecture",
+        "historical_cultural",
+        "traffic"
     ]
 
     # 规划思路维度列表（4个）
     CONCEPT_DIMENSIONS = [
-        "dimension_resource_endowment",
-        "dimension_planning_positioning",
-        "dimension_development_goals",
-        "dimension_planning_strategies"
+        "resource_endowment",
+        "planning_positioning",
+        "development_goals",
+        "planning_strategies"
     ]
 
     # 详细规划维度列表（10个）
     DETAILED_PLAN_DIMENSIONS = [
-        "dimension_industry",
-        "dimension_master_plan",
-        "dimension_traffic",
-        "dimension_public_service",
-        "dimension_infrastructure",
-        "dimension_ecological",
-        "dimension_disaster_prevention",
-        "dimension_heritage",
-        "dimension_landscape",
-        "dimension_project_bank"
+        "industry",
+        "master_plan",
+        "traffic",
+        "public_service",
+        "infrastructure",
+        "ecological",
+        "disaster_prevention",
+        "heritage",
+        "landscape",
+        "project_bank"
     ]
 
     def __init__(
@@ -209,9 +209,25 @@ class OutputManager:
             result["failed_count"] += 1
 
         # 保存各维度报告
+        # 维度键名到友好名称的映射
+        dimension_names = {
+            "location": "01_区位分析",
+            "socio_economic": "02_社会经济分析",
+            "natural_environment": "03_自然环境分析",
+            "land_use": "04_土地利用分析",
+            "traffic": "05_道路交通分析",
+            "public_services": "06_公共服务设施分析",
+            "infrastructure": "07_基础设施分析",
+            "ecological_green": "08_生态绿地分析",
+            "architecture": "09_建筑分析",
+            "historical_cultural": "10_历史文化分析"
+        }
+
         for dimension_key in self.ANALYSIS_DIMENSIONS:
             if dimension_key in dimension_reports:
-                dimension_path = self.layer1_dir / f"{dimension_key}.md"
+                # 使用友好的文件名
+                friendly_name = dimension_names.get(dimension_key, dimension_key)
+                dimension_path = self.layer1_dir / f"{friendly_name}.md"
                 if self._save_file(dimension_path, dimension_reports[dimension_key]):
                     result["dimension_report_paths"][dimension_key] = str(dimension_path)
                     result["saved_count"] += 1
@@ -255,9 +271,19 @@ class OutputManager:
             result["failed_count"] += 1
 
         # 保存各维度报告
+        # 维度键名到友好名称的映射
+        dimension_names = {
+            "resource_endowment": "01_资源禀赋分析",
+            "planning_positioning": "02_规划定位分析",
+            "development_goals": "03_发展目标分析",
+            "planning_strategies": "04_规划策略分析"
+        }
+
         for dimension_key in self.CONCEPT_DIMENSIONS:
             if dimension_key in dimension_reports:
-                dimension_path = self.layer2_dir / f"{dimension_key}.md"
+                # 使用友好的文件名
+                friendly_name = dimension_names.get(dimension_key, dimension_key)
+                dimension_path = self.layer2_dir / f"{friendly_name}.md"
                 if self._save_file(dimension_path, dimension_reports[dimension_key]):
                     result["dimension_report_paths"][dimension_key] = str(dimension_path)
                     result["saved_count"] += 1
@@ -301,9 +327,25 @@ class OutputManager:
             result["failed_count"] += 1
 
         # 保存各维度报告
+        # 维度键名到友好名称的映射
+        dimension_names = {
+            "industry": "01_产业规划",
+            "master_plan": "02_村域总体规划",
+            "traffic": "03_综合交通规划",
+            "public_service": "04_公共服务设施规划",
+            "infrastructure": "05_基础设施规划",
+            "ecological": "06_生态绿地系统规划",
+            "disaster_prevention": "07_防灾减灾规划",
+            "heritage": "08_历史文化保护规划",
+            "landscape": "09_村庄风貌规划",
+            "project_bank": "10_项目库"
+        }
+
         for dimension_key in self.DETAILED_PLAN_DIMENSIONS:
             if dimension_key in dimension_reports:
-                dimension_path = self.layer3_dir / f"{dimension_key}.md"
+                # 使用友好的文件名
+                friendly_name = dimension_names.get(dimension_key, dimension_key)
+                dimension_path = self.layer3_dir / f"{friendly_name}.md"
                 if self._save_file(dimension_path, dimension_reports[dimension_key]):
                     result["dimension_report_paths"][dimension_key] = str(dimension_path)
                     result["saved_count"] += 1

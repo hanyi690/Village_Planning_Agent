@@ -1,19 +1,21 @@
 """
 现状分析子图 (Analysis Subgraph)
 
-实现村庄现状分析的10个维度并行分析，使用 LangGraph 的 Send 机制实现 Map-Reduce 模式。
+实现村庄现状分析的12个维度并行分析，使用 LangGraph 的 Send 机制实现 Map-Reduce 模式。
 
-10个分析维度：
+12个分析维度：
 1. 区位分析
 2. 社会经济分析
-3. 自然环境分析
-4. 土地利用分析
-5. 道路交通分析
-6. 公共服务设施分析
-7. 基础设施分析
-8. 生态绿地分析
-9. 建筑分析
-10. 历史文化分析
+3. 村民意愿与诉求分析
+4. 上位规划与政策导向分析
+5. 自然环境分析
+6. 土地利用分析
+7. 道路交通分析
+8. 公共服务设施分析
+9. 基础设施分析
+10. 生态绿地分析
+11. 建筑分析
+12. 历史文化分析
 """
 
 from typing import TypedDict, List, Dict, Any, Literal
@@ -78,6 +80,8 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
     """
     执行单个维度的分析
 
+    使用新的 AnalysisPlanner 架构，充分利用现有的基础设施。
+
     Args:
         state: 包含维度信息和原始数据的状态
 
@@ -86,25 +90,20 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
     """
     dimension_key = state["dimension_key"]
     dimension_name = state["dimension_name"]
-    raw_data = state["raw_data"]
 
     logger.info(f"[子图-分析] 开始执行 {dimension_name} ({dimension_key})")
 
     try:
-        # 获取该维度的 Prompt
-        prompt = get_dimension_prompt(dimension_key, raw_data)
+        # 【使用新架构】使用 AnalysisPlannerFactory 创建规划器
+        from ..planners.analysis_planners import AnalysisPlannerFactory
+        planner = AnalysisPlannerFactory.create_planner(dimension_key)
 
-        # 【日志验证】打印传入的原始数据（前300字符），确认数据传递正确
-        logger.info(f"[子图-分析] {dimension_name} - 传入的原始数据 (前300字符):\n{raw_data[:300]}")
+        # 【使用新架构】调用规划器的 execute 方法
+        # 注意：planner.execute 需要完整的状态字典，包含 raw_data
+        planner_state = {"raw_data": state["raw_data"]}
+        planner_result = planner.execute(planner_state)
 
-        # 【日志验证】打印完整 Prompt（前500字符），确认数据被正确嵌入
-        logger.info(f"[子图-分析] {dimension_name} - 完整 Prompt (前500字符):\n{prompt[:500]}")
-
-        # 调用 LLM
-        llm = _get_llm()
-        response = llm.invoke([HumanMessage(content=prompt)])
-
-        analysis_text = response.content
+        analysis_text = planner_result["analysis_result"]
         logger.info(f"[子图-分析] 完成 {dimension_name}，生成 {len(analysis_text)} 字符")
 
         # 在 LangGraph 1.0.x 中，使用 operator.add 时需要返回列表
@@ -211,6 +210,7 @@ def generate_final_report(state: AnalysisState) -> Dict[str, Any]:
     生成最终的现状综合分析报告
 
     整合所有维度的分析结果，使用汇总 Prompt 生成连贯的报告。
+    支持LangSmith tracing。
     """
     logger.info("[子图-汇总] 开始生成最终综合报告")
 
@@ -228,11 +228,27 @@ def generate_final_report(state: AnalysisState) -> Dict[str, Any]:
             dimension_reports=dimension_reports_text
         )
 
-        # 调用 LLM 生成最终报告
-        llm = _get_llm()
-        response = llm.invoke([
-            HumanMessage(content=summary_prompt)
-        ])
+        # 调用 LLM 生成最终报告（支持LangSmith）
+        from ..core.llm_factory import create_llm
+        from ..core.langsmith_integration import get_langsmith_manager
+
+        # 创建LangSmith metadata
+        langsmith = get_langsmith_manager()
+        metadata = None
+        if langsmith.is_enabled():
+            metadata = langsmith.create_run_metadata(
+                project_name=state.get('project_name', '村庄'),
+                dimension="analysis_summary",
+                layer=1
+            )
+
+        llm = create_llm(
+            model=LLM_MODEL,
+            temperature=0.7,
+            max_tokens=MAX_TOKENS,
+            metadata=metadata
+        )
+        response = llm.invoke([HumanMessage(content=summary_prompt)])
 
         final_report = f"""# {state.get('project_name', '村庄')}现状综合分析报告
 
@@ -274,10 +290,12 @@ def initialize_analysis(state: AnalysisState) -> Dict[str, Any]:
     """
     logger.info(f"[子图-初始化] 开始现状分析，项目: {state.get('project_name', '未命名')}")
 
-    # 定义10个分析维度
+    # 定义12个分析维度
     all_dimensions = [
         "location",           # 区位分析
         "socio_economic",     # 社会经济分析
+        "villager_wishes",    # 村民意愿与诉求分析
+        "superior_planning",  # 上位规划与政策导向分析
         "natural_environment", # 自然环境分析
         "land_use",           # 土地利用分析
         "traffic",            # 道路交通分析
