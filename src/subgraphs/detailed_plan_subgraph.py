@@ -442,6 +442,21 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
     """
     logger.info(f"[子图-L3-Reduce] 汇总 {len(state['dimension_plans'])} 个维度的规划结果")
 
+    # 维度key到TypedDict字段名的映射
+    # 注意：master_plan 的字段名就是 master_plan，不是 master_plan_plan
+    DIMENSION_KEY_TO_FIELD = {
+        "industry": "industry_plan",
+        "master_plan": "master_plan",  # 特殊：不需要加 _plan 后缀
+        "traffic": "traffic_plan",
+        "public_service": "public_service_plan",
+        "infrastructure": "infrastructure_plan",
+        "ecological": "ecological_plan",
+        "disaster_prevention": "disaster_prevention_plan",
+        "heritage": "heritage_plan",
+        "landscape": "landscape_plan",
+        "project_bank": "project_bank"  # 特殊：不需要加 _plan 后缀
+    }
+
     # 更新各维度的规划到对应字段
     updates = {}
     completed = []
@@ -451,9 +466,10 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
         dim_key = plan["dimension_key"]
         dim_result = plan["dimension_result"]
 
-        # 更新对应字段
-        field_name = f"{dim_key}_plan"
+        # 使用映射获取正确的字段名
+        field_name = DIMENSION_KEY_TO_FIELD.get(dim_key, f"{dim_key}_plan")
         updates[field_name] = dim_result
+        logger.info(f"[子图-L3-Reduce] 设置 {field_name} = {len(dim_result)} 字符")
         completed.append(dim_key)
 
         # 【新增】记录已完成维度的报告（供project_bank使用）
@@ -464,6 +480,7 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
     updates["completed_dimension_reports"] = completed_reports
 
     logger.info(f"[子图-L3-Reduce] 已完成维度: {', '.join(completed)}")
+    logger.info(f"[子图-L3-Reduce] 更新的字段: {list(updates.keys())}")
 
     return updates
 
@@ -754,6 +771,15 @@ def call_detailed_plan_subgraph(
         result = subgraph.invoke(initial_state)
 
         logger.info(f"[子图调用] 子图执行成功，报告长度: {len(result.get('final_detailed_plan', ''))} 字符")
+
+        # 添加调试日志：提取各维度规划结果
+        logger.info(f"[子图调用] 提取各维度规划结果")
+        for dim_key in ["industry", "master_plan", "traffic", "public_service",
+                        "infrastructure", "ecological", "disaster_prevention",
+                        "heritage", "landscape"]:
+            field_name = f"{dim_key}_plan"
+            plan_content = result.get(field_name, "")
+            logger.info(f"[子图调用] {field_name}: {len(plan_content)} 字符")
 
         return {
             "detailed_plan_report": result["final_detailed_plan"],

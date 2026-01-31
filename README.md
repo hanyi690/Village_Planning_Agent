@@ -2,7 +2,7 @@
 
 基于 LangGraph 和 LangChain 的村庄规划智能系统，采用**分层架构**和**交互式工作流**实现专业的村庄规划辅助。
 
-**当前版本：v4.1.0 - LangSmith完整集成** ✨
+**当前版本：v4.1.1 - Bug修复** ✨
 
 ## ✨ 核心特性
 
@@ -908,6 +908,33 @@ LLM_MODEL=deepseek-reasoner
 ---
 
 ## 🔄 更新日志
+
+### v4.1.1 - Bug修复
+
+**Bug修复**：修复项目库（project_bank）生成失败的问题。
+
+#### Bug Fixes
+
+**项目库变量名不匹配修复**：
+- 修复了 `ProjectBankPlanner.build_prompt()` 方法中的变量名错误
+- 将 `detailed_plans=` 改为 `dimension_plans=` 以匹配模板变量
+- 解决了 `KeyError: 'dimension_plans'` 导致的项目库生成失败问题
+- 位置: `src/planners/detailed_planners.py:242`
+
+#### 问题分析
+
+**根本原因**：
+- 模板 `detailed_plan_prompts.py` 使用 `{dimension_plans}` 占位符
+- 代码使用 `detailed_plans=` 参数名传递变量
+- Python 的 `template.format()` 找不到匹配的变量，抛出 `KeyError`
+
+**影响范围**：
+- 完整规划流程中项目库（第10个详细规划维度）生成失败
+- 错误信息：`项目库生成失败[规划生成失败] 错误信息: 'dimension_plans'`
+
+**验证结果**：
+- 所有10个详细规划文件成功生成
+- 包括 `10_项目库.md` 在内的完整规划流程正常运行
 
 ### v4.0.1 - Pause管理节点解耦
 

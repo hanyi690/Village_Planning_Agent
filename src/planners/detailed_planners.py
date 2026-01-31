@@ -239,7 +239,7 @@ class ProjectBankPlanner(DimensionPlanner):
             analysis_report=filtered_state.get("filtered_analysis", ""),
             planning_concept=filtered_state.get("filtered_concepts", ""),
             constraints=filtered_state.get("_constraints", "无特殊约束"),
-            detailed_plans=detailed_plans_text or "（无前序详细规划）"
+            dimension_plans=detailed_plans_text or "（无前序详细规划）"
         )
 
     def _filter_state(self, state: Dict[str, Any]) -> Dict[str, Any]:

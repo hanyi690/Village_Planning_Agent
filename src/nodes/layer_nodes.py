@@ -134,8 +134,12 @@ class BaseLayerNode(BaseNode):
                     }
                     for result_key, dimension_key in dimension_key_map.items():
                         plan_content = result.get(result_key, "")
+                        # 添加调试日志
+                        logger.info(f"[{self.node_name}] 提取 {result_key}: {len(plan_content)} 字符 -> {dimension_key}")
                         if plan_content:
                             dimension_reports[dimension_key] = plan_content
+
+                    logger.info(f"[{self.node_name}] dimension_reports 包含的维度: {list(dimension_reports.keys())}")
 
                     save_result = output_manager.save_layer3_results(
                         combined_report=result.get("detailed_plan_report", ""),

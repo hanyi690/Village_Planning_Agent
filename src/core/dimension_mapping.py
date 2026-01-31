@@ -43,7 +43,7 @@ FULL_DEPENDENCY_CHAIN = {
         "depends_on_detailed": []
     },
     "master_plan": {
-        "layer1_analyses": ["land_use", "location", "natural_environment", "superior_planning"],
+        "layer1_analyses": ["land_use", "superior_planning", "socio_economic", "natural_environment"],
         "layer2_concepts": ["planning_positioning", "planning_strategies"],
         "wave": 1,
         "depends_on_detailed": []
@@ -172,8 +172,8 @@ CONCEPT_TO_DETAILED_MAPPING = {
     },
     "master_plan": {
         "required_concepts": ["planning_positioning", "planning_strategies"],
-        "required_analyses": ["ALL"],
-        "description": "总体规划需要全面的定位和策略信息"
+        "required_analyses": ["land_use", "superior_planning", "socio_economic", "natural_environment"],
+        "description": "总体规划需要土地利用、上位规划、社会经济和自然环境信息"
     },
     "traffic": {
         "required_concepts": ["planning_strategies"],
