@@ -3,5 +3,4 @@ __pycache__/
 .env
 nul
 test/output/*
-results/
 .claude/settings.local.json
