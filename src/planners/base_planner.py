@@ -104,20 +104,29 @@ class DimensionPlanner(ABC):
         """
         return get_full_dependency_chain(self.dimension_key)
 
-    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(
+        self,
+        state: Dict[str, Any],
+        use_adapters: bool = False,
+        adapter_types: list = None
+    ) -> Dict[str, Any]:
         """
         执行该维度的规划生成（默认实现）
 
         流程：
-        1. 使用 state_filter 筛选状态
-        2. 使用 build_prompt 构建 prompt
-        3. 使用 llm_factory 调用 LLM（支持LangSmith tracing）
-        4. 返回结果
+        1. 如果启用适配器，先调用适配器获取专业分析数据
+        2. 从黑板获取适配器结果
+        3. 使用 state_filter 筛选状态
+        4. 使用 build_prompt 构建 prompt（包含适配器上下文）
+        5. 使用 llm_factory 调用 LLM（支持LangSmith tracing）
+        6. 返回结果
 
         子类可以重写此方法以提供自定义逻辑。
 
         Args:
             state: 完整的状态字典
+            use_adapters: 是否使用适配器获取专业分析数据
+            adapter_types: 要使用的适配器类型列表 (如 ["gis", "network"])
 
         Returns:
             {
@@ -128,18 +137,29 @@ class DimensionPlanner(ABC):
         """
         logger.info(f"[Planner] 执行 {self.dimension_name}")
 
-        # 1. 筛选状态（使用现有 state_filter）
+        # 1. 如果启用适配器，先调用适配器
+        if use_adapters and adapter_types:
+            adapter_context = self._execute_adapters(state, adapter_types)
+        else:
+            adapter_context = {}
+
+        # 2. 筛选状态（使用现有 state_filter）
         filtered_state = self._filter_state(state)
 
-        # 2. 将额外的上下文信息添加到filtered_state（用于prompt构建）
+        # 3. 将额外的上下文信息添加到filtered_state（用于prompt构建）
         # 这样build_prompt可以访问project_name和constraints
         filtered_state["_project_name"] = state.get("project_name", "村庄")
         filtered_state["_constraints"] = state.get("constraints", "无特殊约束")
 
-        # 3. 构建 prompt
+        # 4. 整合适配器结果到过滤状态
+        if adapter_context:
+            filtered_state["_adapter_context"] = adapter_context
+            logger.info(f"[Planner] {self.dimension_name} 已整合适配器数据: {list(adapter_context.keys())}")
+
+        # 5. 构建 prompt
         prompt = self.build_prompt(filtered_state)
 
-        # 4. 调用 LLM（使用现有 llm_factory + LangSmith支持）
+        # 6. 调用 LLM（使用现有 llm_factory + LangSmith支持）
         try:
             # 创建LangSmith metadata（如果启用）
             try:
@@ -181,6 +201,101 @@ class DimensionPlanner(ABC):
                 "dimension_name": self.dimension_name,
                 "dimension_result": f"[执行失败] {str(e)}"
             }
+
+    def _execute_adapters(
+        self,
+        state: Dict[str, Any],
+        adapter_types: list
+    ) -> Dict[str, Any]:
+        """
+        执行适配器并从黑板获取结果
+
+        Args:
+            state: 当前状态字典
+            adapter_types: 要执行的适配器类型列表
+
+        Returns:
+            适配器上下文字典
+        """
+        from ..nodes.tool_nodes import ToolBridgeNode
+        from ..utils.blackboard_manager import get_blackboard
+
+        # 1. 设置状态标志并调用ToolBridgeNode执行适配器
+        tool_bridge = ToolBridgeNode()
+        adapter_context = {}
+
+        for adapter_type in adapter_types:
+            if adapter_type == "gis":
+                state["use_gis_adapter"] = True
+                state["gis_analysis_type"] = self._get_gis_analysis_type()
+            elif adapter_type == "network":
+                state["use_network_adapter"] = True
+                state["network_analysis_type"] = self._get_network_analysis_type()
+            elif adapter_type == "population":
+                state["use_population_adapter"] = True
+                state["population_prediction_type"] = "basic"
+                # 尝试从状态中获取人口数据
+                if "village_data" in state:
+                    # 简单解析人口数据
+                    import re
+                    match = re.search(r'人口[：:]\s*(\d+)', state["village_data"])
+                    if match:
+                        state["current_population"] = int(match.group(1))
+
+            # 调用 ToolBridgeNode 执行适配器
+            state_update = tool_bridge(state)
+            state.update(state_update)
+
+        # 2. 从黑板获取适配器结果
+        blackboard = state.get("blackboard")
+        if blackboard:
+            tool_results = blackboard.list_tool_results()
+            for tool_id, tool_result in tool_results.items():
+                if tool_result.success:
+                    adapter_context[f"adapter_{tool_id}"] = tool_result.result
+                    logger.debug(f"[Planner] 获取适配器结果: {tool_id}")
+        else:
+            # 降级：使用黑板管理器全局实例
+            try:
+                blackboard = get_blackboard()
+                tool_results = blackboard.list_tool_results()
+                for tool_id, tool_result in tool_results.items():
+                    if tool_result.success:
+                        adapter_context[f"adapter_{tool_id}"] = tool_result.result
+                        logger.debug(f"[Planner] 获取适配器结果（全局）: {tool_id}")
+            except Exception as e:
+                logger.warning(f"[Planner] 获取黑板结果失败: {e}")
+
+        return adapter_context
+
+    def _get_gis_analysis_type(self) -> str:
+        """
+        获取该维度需要的GIS分析类型
+
+        子类可以重写此方法以指定特定的GIS分析类型。
+        """
+        mapping = {
+            "industry": "land_use_analysis",
+            "ecological": "soil_analysis",
+            "infrastructure": "hydrology_analysis",
+            "master_plan": "land_use_analysis",
+            "landscape": "terrain_analysis",
+            "disaster_prevention": "flood_risk_analysis"
+        }
+        return mapping.get(self.dimension_key, "land_use_analysis")
+
+    def _get_network_analysis_type(self) -> str:
+        """
+        获取该维度需要的网络分析类型
+
+        子类可以重写此方法以指定特定的网络分析类型。
+        """
+        mapping = {
+            "traffic": "connectivity",
+            "infrastructure": "accessibility",
+            "public_service": "service_area"
+        }
+        return mapping.get(self.dimension_key, "connectivity")
 
     def _filter_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """

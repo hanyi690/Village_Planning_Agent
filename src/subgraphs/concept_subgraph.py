@@ -371,21 +371,34 @@ def initialize_concept_analysis(state: ConceptState) -> Dict[str, Any]:
 
 def create_concept_subgraph() -> StateGraph:
     """
-    创建规划思路子图
+    创建规划思路子图 - 使用封装节点
 
     Returns:
         编译后的 StateGraph 实例
     """
-    logger.info("[子图构建] 开始构建规划思路子图")
+    from ..nodes.subgraph_nodes import (
+        InitializeConceptNode,
+        AnalyzeConceptDimensionNode,
+        ReduceConceptsNode,
+        GenerateConceptReportNode
+    )
+
+    logger.info("[子图构建] 开始构建规划思路子图（使用封装节点）")
 
     # 创建状态图
     builder = StateGraph(ConceptState)
 
+    # 创建节点实例
+    initialize_node = InitializeConceptNode()
+    analyze_node = AnalyzeConceptDimensionNode()
+    reduce_node = ReduceConceptsNode()
+    report_node = GenerateConceptReportNode()
+
     # 添加节点
-    builder.add_node("initialize", initialize_concept_analysis)
-    builder.add_node("analyze_concept_dimension", analyze_concept_dimension)
-    builder.add_node("reduce_analyses", reduce_concept_analyses)
-    builder.add_node("generate_final_concept", generate_final_concept)
+    builder.add_node("initialize", initialize_node)
+    builder.add_node("analyze_concept_dimension", analyze_node)
+    builder.add_node("reduce_analyses", reduce_node)
+    builder.add_node("generate_final_concept", report_node)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
@@ -406,7 +419,7 @@ def create_concept_subgraph() -> StateGraph:
     # 编译子图
     concept_subgraph = builder.compile()
 
-    logger.info("[子图构建] 规划思路子图构建完成")
+    logger.info("[子图构建] 规划思路子图构建完成（使用封装节点）")
 
     return concept_subgraph
 

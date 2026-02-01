@@ -21,8 +21,12 @@ class ToolBridgeNode(BaseNode):
     工具桥接节点 - 统一管理所有工具调用
 
     使用现有的InteractiveTool、CheckpointTool、RevisionTool。
+    新增：支持适配器调用（GIS、Network、Population适配器）
 
     根据状态标志路由到相应的子工具节点：
+    - use_gis_adapter: GIS适配器分析
+    - use_network_adapter: 网络适配器分析
+    - use_population_adapter: 人口预测适配器
     - need_human_review: 人工审查
     - pause_after_step: 暂停
     - need_revision: 修复
@@ -34,10 +38,30 @@ class ToolBridgeNode(BaseNode):
         self.human_review_node = HumanReviewNode()
         self.pause_interaction_node = PauseInteractionNode()
         self.revision_node = RevisionNode()
+        # 新增：导入适配器工厂（延迟导入避免循环依赖）
+        self._adapter_factory = None
+
+    @property
+    def adapter_factory(self):
+        """延迟加载适配器工厂"""
+        if self._adapter_factory is None:
+            from ..tools.adapters import get_adapter_factory
+            self._adapter_factory = get_adapter_factory()
+        return self._adapter_factory
 
     def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """根据状态标志路由到相应的子工具节点"""
-        # 优先级：人工审查 > 暂停 > 修复
+        """根据状态标志路由到相应的处理逻辑"""
+        # 优先级：适配器调用 > 人工审查 > 暂停 > 修复
+
+        # 新增：检查是否需要调用适配器
+        if state.get("use_gis_adapter", False):
+            return self._run_gis_adapter(state)
+        elif state.get("use_network_adapter", False):
+            return self._run_network_adapter(state)
+        elif state.get("use_population_adapter", False):
+            return self._run_population_adapter(state)
+
+        # 现有逻辑
         if state.get("need_human_review", False):
             return self.human_review_node(state)
         elif state.get("pause_after_step", False):
@@ -47,6 +71,97 @@ class ToolBridgeNode(BaseNode):
         else:
             return {}  # 无操作
 
+    def _run_gis_adapter(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """运行GIS适配器"""
+        analysis_type = state.get("gis_analysis_type", "land_use_analysis")
+
+        result = self.adapter_factory.run_adapter(
+            "gis",
+            analysis_type=analysis_type,
+            village_data=state.get("village_data", {})
+        )
+
+        # 发布结果到黑板
+        blackboard = state.get("blackboard")
+        if blackboard:
+            blackboard.publish_tool_result(
+                tool_id=f"gis_{analysis_type}",
+                tool_name="GIS空间分析",
+                result=result.data,
+                metadata=result.metadata,
+                success=result.success,
+                error=result.error
+            )
+
+        from ..core.state_builder import StateBuilder
+        return StateBuilder()\
+            .set("use_gis_adapter", False)\
+            .set("last_adapter_result", result.to_dict())\
+            .add_message(f"GIS分析完成: {analysis_type}")\
+            .build()
+
+    def _run_network_adapter(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """运行网络分析适配器"""
+        analysis_type = state.get("network_analysis_type", "connectivity")
+        network_data = state.get("network_data", {})
+
+        result = self.adapter_factory.run_adapter(
+            "network",
+            analysis_type=analysis_type,
+            network_data=network_data
+        )
+
+        # 发布结果到黑板
+        blackboard = state.get("blackboard")
+        if blackboard:
+            blackboard.publish_tool_result(
+                tool_id=f"network_{analysis_type}",
+                tool_name="网络分析",
+                result=result.data,
+                metadata=result.metadata,
+                success=result.success,
+                error=result.error
+            )
+
+        from ..core.state_builder import StateBuilder
+        return StateBuilder()\
+            .set("use_network_adapter", False)\
+            .set("last_adapter_result", result.to_dict())\
+            .add_message(f"网络分析完成: {analysis_type}")\
+            .build()
+
+    def _run_population_adapter(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """运行人口预测适配器"""
+        prediction_type = state.get("population_prediction_type", "basic")
+        current_population = state.get("current_population", 0)
+        years = state.get("prediction_years", 10)
+
+        result = self.adapter_factory.run_adapter(
+            "population",
+            prediction_type=prediction_type,
+            current_population=current_population,
+            years=years
+        )
+
+        # 发布结果到黑板
+        blackboard = state.get("blackboard")
+        if blackboard:
+            blackboard.publish_tool_result(
+                tool_id=f"population_{prediction_type}",
+                tool_name="人口预测",
+                result=result.data,
+                metadata=result.metadata,
+                success=result.success,
+                error=result.error
+            )
+
+        from ..core.state_builder import StateBuilder
+        return StateBuilder()\
+            .set("use_population_adapter", False)\
+            .set("last_adapter_result", result.to_dict())\
+            .add_message(f"人口预测完成: {prediction_type}")\
+            .build()
+
 
 class HumanReviewNode(BaseNode):
     """人工审查工具节点 - 使用现有InteractiveTool"""
@@ -55,7 +170,11 @@ class HumanReviewNode(BaseNode):
         super().__init__("人工审查")
 
     def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """执行人工审查"""
+        """
+        执行人工审查 - 增强版：支持维度选择
+
+        对于详细规划阶段（Layer 3），传递可用维度列表以支持精确修复。
+        """
         # 获取当前内容
         current_layer = state.get("current_layer", 1)
         content_map = {
@@ -74,13 +193,31 @@ class HumanReviewNode(BaseNode):
             if list_result["success"]:
                 available_checkpoints = list_result["checkpoints"]
 
+        # 【新增】获取可用维度列表（仅Layer 3详细规划）
+        available_dimensions = None
+        if current_layer == 3:
+            # 详细规划阶段的10个专业维度
+            available_dimensions = [
+                "产业规划",
+                "村域总体规划",
+                "综合交通规划",
+                "公共服务设施规划",
+                "基础设施规划",
+                "生态绿地系统规划",
+                "防灾减灾规划",
+                "历史文化保护规划",
+                "村庄风貌规划",
+                "项目库"
+            ]
+
         # 执行人工审查（使用现有InteractiveTool）
         tool = InteractiveTool()
         result = tool.review_content(
             content=content,
             title=title,
             allow_rollback=True,
-            available_checkpoints=available_checkpoints
+            available_checkpoints=available_checkpoints,
+            available_dimensions=available_dimensions  # 【新增】传递可用维度
         )
 
         # 处理结果
@@ -92,12 +229,19 @@ class HumanReviewNode(BaseNode):
                 .add_message("人工审查通过")\
                 .build()
         elif action == "reject":
-            return StateBuilder()\
+            # 【新增】支持精确维度修复
+            builder = StateBuilder()\
                 .set("need_human_review", False)\
                 .set("human_feedback", result.get("feedback", ""))\
                 .set("need_revision", True)\
-                .add_message(f"人工审查驳回，反馈: {result.get('feedback', '')}")\
-                .build()
+                .add_message(f"人工审查驳回，反馈: {result.get('feedback', '')}")
+
+            # 如果用户选择了特定维度，设置到状态中
+            target_dimensions = result.get("target_dimensions")
+            if target_dimensions:
+                builder = builder.set("revision_target_dimensions", target_dimensions)
+
+            return builder.build()
         elif action == "rollback":
             return StateBuilder()\
                 .set("trigger_rollback", True)\
@@ -123,7 +267,13 @@ class RevisionNode(BaseNode):
         super().__init__("修复")
 
     def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """执行修复"""
+        """
+        执行修复 - 增强版：支持精确维度选择
+
+        支持两种模式：
+        1. 精确维度模式：使用用户选择的维度（target_dimensions）
+        2. 自动识别模式：使用关键词自动识别维度（原有机制）
+        """
         feedback = state.get("human_feedback", "")
         if not feedback:
             return StateBuilder().set("need_revision", False).build()
@@ -131,11 +281,22 @@ class RevisionNode(BaseNode):
         # 使用现有RevisionTool
         tool = RevisionTool()
 
-        # 1. 识别需要修复的维度
-        parse_result = tool.parse_feedback(feedback)
-        dimensions = parse_result["dimensions"] if parse_result["success"] else []
+        # 1. 获取需要修复的维度
+        # 【新增】支持用户精确指定维度
+        target_dimensions = state.get("revision_target_dimensions")
+
+        if target_dimensions:
+            # 使用用户指定的维度
+            dimensions = target_dimensions
+            logger.info(f"[修复] 使用用户指定的维度: {dimensions}")
+        else:
+            # 使用自动识别（现有机制）
+            parse_result = tool.parse_feedback(feedback)
+            dimensions = parse_result["dimensions"] if parse_result["success"] else []
+            logger.info(f"[修复] 自动识别的维度: {dimensions}")
 
         if not dimensions:
+            logger.warning("[修复] 没有识别到需要修复的维度")
             return StateBuilder().set("need_revision", False).build()
 
         # 2. 逐个修复维度（使用DimensionPlanner）

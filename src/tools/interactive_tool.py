@@ -81,7 +81,8 @@ class InteractiveTool:
         content: str,
         title: str,
         allow_rollback: bool = False,
-        available_checkpoints: Optional[List[Dict[str, Any]]] = None
+        available_checkpoints: Optional[List[Dict[str, Any]]] = None,
+        available_dimensions: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         审查内容
@@ -91,6 +92,7 @@ class InteractiveTool:
             title: 标题
             allow_rollback: 是否允许回退
             available_checkpoints: 可用的checkpoint列表
+            available_dimensions: 可用维度列表（用于维度级修复）
 
         Returns:
             结构化结果字典 {
@@ -98,6 +100,7 @@ class InteractiveTool:
                 "action": str,  # approve/reject/rollback/quit/cancel
                 "feedback": str,
                 "checkpoint_id": str,
+                "target_dimensions": List[str],  # 选择的维度（可选）
                 "error": str
             }
         """
@@ -135,13 +138,14 @@ class InteractiveTool:
                         "error": ""
                     }
                 elif choice in ['R', 'REJECT', '2']:
-                    result = self._handle_reject()
+                    result = self._handle_reject(available_dimensions)
                     self.review_history.append(result)
                     return {
                         "success": True,
                         "action": result["action"],
                         "feedback": result["feedback"],
                         "checkpoint_id": "",
+                        "target_dimensions": result.get("target_dimensions"),
                         "error": ""
                     }
                 elif choice in ['V', 'VIEW', '3']:
@@ -210,10 +214,57 @@ class InteractiveTool:
             "feedback": ""
         }
 
-    def _handle_reject(self) -> Dict[str, Any]:
-        """处理驳回操作"""
-        print("\n" + self._colorize("✗ 审查驳回，请提供修复意见。", self.COLOR_YELLOW))
+    def _handle_reject(self, available_dimensions: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        处理驳回操作 - 增强版：支持精确选择维度
 
+        Args:
+            available_dimensions: 可用维度列表（可选）
+
+        Returns:
+            结果字典，包含action, feedback, 和可选的target_dimensions
+        """
+        print("\n" + self._colorize("✗ 审查驳回，请选择需要修复的维度。", self.COLOR_YELLOW))
+
+        # 1. 显示可用维度
+        selected_dimensions = None
+        if available_dimensions:
+            print("\n可用维度:")
+            for i, dim in enumerate(available_dimensions, 1):
+                print(f"  {i}. {dim}")
+
+            # 2. 用户选择维度
+            while True:
+                choice = input("\n请选择需要修复的维度（多个用逗号分隔，如 1,3,5，按回车跳过）: ").strip()
+
+                if not choice:
+                    # 跳过维度选择，使用自动识别
+                    print(self._colorize("已跳过维度选择，将通过反馈关键词自动识别维度。", self.COLOR_YELLOW))
+                    selected_dimensions = None
+                    break
+
+                try:
+                    # 解析选择
+                    selected_indices = [int(x.strip()) for x in choice.split(',')]
+                    selected_dimensions = [
+                        available_dimensions[i-1]
+                        for i in selected_indices
+                        if 0 < i <= len(available_dimensions)
+                    ]
+
+                    if not selected_dimensions:
+                        print(self._colorize("无效的选择，请重试。", self.COLOR_RED))
+                        continue
+
+                    print(f"\n已选择的维度: {', '.join(selected_dimensions)}")
+                    break
+                except ValueError:
+                    print(self._colorize("输入格式错误，请使用数字，多个用逗号分隔。", self.COLOR_RED))
+        else:
+            # 没有提供维度列表，使用默认的自动识别
+            print(self._colorize("未提供维度列表，将通过反馈关键词自动识别维度。", self.COLOR_YELLOW))
+
+        # 3. 输入反馈
         while True:
             feedback = input("\n请输入反馈意见（按回车完成输入）: ").strip()
 
@@ -221,20 +272,28 @@ class InteractiveTool:
                 print(self._colorize("反馈不能为空，请重新输入。", self.COLOR_RED))
                 continue
 
-            # 确认反馈
-            print("\n您的反馈意见:")
+            # 4. 确认
+            print("\n修复配置:")
             print("-" * 80)
-            print(feedback)
+            if selected_dimensions:
+                print(f"目标维度: {', '.join(selected_dimensions)}")
+            else:
+                print(f"目标维度: 自动识别（通过反馈关键词）")
+            print(f"反馈意见: {feedback}")
             print("-" * 80)
 
-            confirm = input("\n确认提交反馈? (Y/N): ").strip().upper()
+            confirm = input("\n确认提交? (Y/N): ").strip().upper()
 
             if confirm == 'Y':
                 print("\n" + self._colorize("✓ 反馈已提交，将触发修复流程。", self.COLOR_GREEN))
-                return {
+                result = {
                     "action": "reject",
                     "feedback": feedback
                 }
+                # 添加目标维度字段
+                if selected_dimensions:
+                    result["target_dimensions"] = selected_dimensions
+                return result
 
     def _handle_view(self, content: str):
         """处理查看完整内容操作"""

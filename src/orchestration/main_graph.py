@@ -24,6 +24,7 @@ from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..core.prompts import SYSTEM_PROMPT, PLANNING_CONCEPT_PROMPT
 from ..utils.logger import get_logger
 from ..utils.output_manager import OutputManager
+from ..utils.blackboard_manager import get_blackboard
 from ..subgraphs.analysis_subgraph import call_analysis_subgraph
 from ..subgraphs.concept_subgraph import call_concept_subgraph
 from ..subgraphs.detailed_plan_subgraph import call_detailed_plan_subgraph
@@ -98,6 +99,15 @@ class VillagePlanningState(TypedDict):
 
     # 消息历史
     messages: Annotated[List[BaseMessage], add_messages]
+
+    # 【新增】黑板模式数据共享
+    blackboard: Dict[str, Any]  # 黑板数据共享
+    # 格式：
+    # {
+    #     "raw_data_references": Dict[str, Any],  # 原始档案引用
+    #     "tool_results": Dict[str, Any],         # 工具结果
+    #     "shared_insights": List[Dict[str, Any]] # 共享洞察
+    # }
 
 
 # ==========================================
@@ -298,6 +308,7 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
     Layer 3: 详细规划
 
     调用详细规划子图进行10个专业维度的规划。
+    新增：支持适配器配置。
     """
     logger.info(f"[主图-Layer3] 开始生成详细规划，项目: {state['project_name']}")
 
@@ -312,7 +323,11 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
             task_description=state.get("task_description", "制定村庄详细规划"),
             constraints=state.get("constraints", "无特殊约束"),
             required_dimensions=state.get("required_dimensions"),
-            enable_human_review=state.get("need_human_review", False)
+            enable_human_review=state.get("need_human_review", False),
+            # 新增：传递适配器配置
+            enable_adapters=state.get("enable_adapters", False),
+            adapter_config=state.get("adapter_config", {}),
+            village_data=state.get("village_data", "")
         )
 
         if result["success"]:
@@ -1074,7 +1089,22 @@ def run_village_planning(
         "quit_requested": False,
         "trigger_rollback": False,
         "rollback_target": "",
-        "messages": []
+        "messages": [],
+        # 新增：黑板管理器
+        "blackboard": get_blackboard(),
+        # 新增：适配器配置
+        "enable_adapters": False,  # 默认关闭适配器
+        "adapter_config": {
+            # 配置每个维度使用的适配器
+            "industry": ["gis"],  # 产业规划使用GIS分析
+            "ecological": ["gis"],  # 生态规划使用GIS分析
+            "traffic": ["network"],  # 交通规划使用网络分析
+            "infrastructure": ["gis", "network"],  # 基础设施使用多种适配器
+            "public_service": ["network"],  # 公共服务使用网络分析
+            "master_plan": ["gis"],  # 总体规划使用GIS分析
+            "landscape": ["gis"],  # 风貌规划使用GIS分析
+            "disaster_prevention": ["gis"]  # 防灾减灾使用GIS分析
+        }
     }
 
     # 初始化checkpoint工具（如果启用）

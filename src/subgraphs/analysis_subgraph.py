@@ -320,26 +320,34 @@ def initialize_analysis(state: AnalysisState) -> Dict[str, Any]:
 
 def create_analysis_subgraph() -> StateGraph:
     """
-    创建现状分析子图
+    创建现状分析子图 - 使用封装节点
 
     Returns:
         编译后的 StateGraph 实例
     """
-    logger.info("[子图构建] 开始构建现状分析子图")
+    from ..nodes.subgraph_nodes import (
+        InitializeAnalysisNode,
+        AnalyzeDimensionNode,
+        ReduceAnalysesNode,
+        GenerateAnalysisReportNode
+    )
+
+    logger.info("[子图构建] 开始构建现状分析子图（使用封装节点）")
 
     # 创建状态图
     builder = StateGraph(AnalysisState)
 
+    # 创建节点实例
+    initialize_node = InitializeAnalysisNode()
+    analyze_node = AnalyzeDimensionNode()
+    reduce_node = ReduceAnalysesNode()
+    report_node = GenerateAnalysisReportNode()
+
     # 添加节点
-    builder.add_node("initialize", initialize_analysis)
-
-    # 为每个维度添加分析节点（使用相同的函数，但状态不同）
-    # 注意：这里我们使用 LangGraph 的 Send 机制来实现并行
-    # Send 会在运行时动态创建多个实例
-    builder.add_node("analyze_dimension", analyze_dimension)
-
-    builder.add_node("reduce_analyses", reduce_analyses)
-    builder.add_node("generate_report", generate_final_report)
+    builder.add_node("initialize", initialize_node)
+    builder.add_node("analyze_dimension", analyze_node)
+    builder.add_node("reduce_analyses", reduce_node)
+    builder.add_node("generate_report", report_node)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
@@ -360,7 +368,7 @@ def create_analysis_subgraph() -> StateGraph:
     # 编译子图
     analysis_subgraph = builder.compile()
 
-    logger.info("[子图构建] 现状分析子图构建完成")
+    logger.info("[子图构建] 现状分析子图构建完成（使用封装节点）")
 
     return analysis_subgraph
 

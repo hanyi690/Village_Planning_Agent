@@ -76,6 +76,7 @@ class DetailedPlanState(TypedDict):
     concept_dimension_reports: Dict[str, str]  # 各维度规划思路报告字典（用于部分状态传递）
     task_description: str
     constraints: str
+    village_data: str              # 村庄原始数据（用于适配器）
 
     # 规划维度控制
     required_dimensions: List[str] # 需要生成的维度列表
@@ -87,6 +88,10 @@ class DetailedPlanState(TypedDict):
     total_waves: int               # 总波次数（固定为2）
     completed_dimension_reports: Dict[str, str]  # 已完成维度的报告（project_bank需要）
     token_usage_stats: Dict[str, dict]  # Token使用统计
+
+    # 【新增】适配器配置
+    enable_adapters: bool          # 是否启用适配器
+    adapter_config: Dict[str, List[str]]  # 各维度的适配器配置
 
     # 各维度规划结果（支持独立更新）
     industry_plan: str             # 产业规划
@@ -130,6 +135,12 @@ class DetailedDimensionState(TypedDict):
     # 【新增】支持前序规划（project_bank需要）
     completed_plans: Dict[str, str]  # 已完成的前序详细规划
     dependency_chain: dict         # 完整依赖链信息
+    # 【新增】适配器支持
+    enable_adapters: bool          # 是否启用适配器
+    adapter_config: Dict[str, List[str]]  # 适配器配置
+    village_data: str              # 村庄原始数据（用于适配器）
+    dimension_reports: Dict[str, str]  # 维度报告（用于状态筛选）
+    concept_dimension_reports: Dict[str, str]  # 规划思路维度报告
 
 
 # ==========================================
@@ -268,6 +279,7 @@ def create_parallel_tasks_with_state_filtering(
     创建并行任务，每个任务携带经过筛选的状态
 
     关键优化：使用增强的state_filter v2，只传递必需的依赖信息
+    新增：传递适配器配置到子任务
 
     Args:
         state: 主状态
@@ -307,7 +319,11 @@ def create_parallel_tasks_with_state_filtering(
             "task_description": state.get("task_description", "制定详细规划"),
             "constraints": state.get("constraints", ""),
             "human_feedback": state.get("human_feedback", {}).get(dim, ""),
-            "dimension_result": ""
+            "dimension_result": "",
+            # 新增：传递适配器配置
+            "enable_adapters": state.get("enable_adapters", False),
+            "adapter_config": state.get("adapter_config", {}),
+            "village_data": state.get("village_data", "")
         })
 
         sends.append(Send("generate_dimension_plan", dimension_state))
@@ -344,10 +360,11 @@ def advance_wave_node(state: DetailedPlanState) -> Dict[str, Any]:
 
 def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     """
-    生成单个维度的详细规划
+    生成单个维度的详细规划 - 增强版：支持适配器
 
     使用新的 DimensionPlanner 架构，充分利用现有的基础设施。
     支持使用completed_plans（project_bank需要）。
+    新增：支持适配器调用以获取专业分析数据。
     """
     dimension_key = state["dimension_key"]
     dimension_name = state["dimension_name"]
@@ -370,9 +387,25 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
             "concept_dimension_reports": state.get("concept_dimension_reports", {}),
             "completed_plans": state.get("completed_plans", {}),
             "task_description": state["task_description"],
-            "constraints": state["constraints"]
+            "constraints": state["constraints"],
+            "village_data": state.get("village_data", "")  # 新增：用于适配器
         }
-        planner_result = planner.execute(planner_state)
+
+        # 【新增】检查是否启用适配器
+        use_adapters = state.get("enable_adapters", False)
+        adapter_config = state.get("adapter_config", {})
+
+        # 获取该维度的适配器配置
+        adapter_types = adapter_config.get(dimension_key, [])
+
+        logger.info(f"[子图-L3-Agent] 适配器状态: use_adapters={use_adapters}, types={adapter_types}")
+
+        # 执行规划（带适配器支持）
+        planner_result = planner.execute(
+            state=planner_state,
+            use_adapters=use_adapters,
+            adapter_types=adapter_types
+        )
 
         plan_content = planner_result["dimension_result"]
         logger.info(f"[子图-L3-Agent] 完成 {dimension_name}，生成 {len(plan_content)} 字符")
@@ -623,24 +656,37 @@ def generate_final_detailed_plan(state: DetailedPlanState) -> Dict[str, Any]:
 
 def create_detailed_plan_subgraph() -> StateGraph:
     """
-    创建详细规划子图（基于波次的动态路由版本）
+    创建详细规划子图（基于波次的动态路由版本）- 使用封装节点
 
     Returns:
         编译后的 StateGraph 实例
     """
-    logger.info("[子图构建] 开始构建详细规划子图（波次动态路由版本）")
+    from ..nodes.subgraph_nodes import (
+        InitializeDetailedPlanningNode,
+        GenerateDimensionPlanNode,
+        ReduceDimensionReportsNode,
+        GenerateFinalDetailedPlanNode
+    )
+
+    logger.info("[子图构建] 开始构建详细规划子图（波次动态路由版本，使用封装节点）")
 
     # 创建状态图
     builder = StateGraph(DetailedPlanState)
 
+    # 创建节点实例
+    initialize_node = InitializeDetailedPlanningNode()
+    generate_node = GenerateDimensionPlanNode()
+    reduce_node = ReduceDimensionReportsNode()
+    report_node = GenerateFinalDetailedPlanNode()
+
     # 添加节点
-    builder.add_node("initialize", initialize_detailed_planning)
-    builder.add_node("generate_dimension_plan", generate_dimension_plan)
-    builder.add_node("advance_wave", advance_wave_node)  # 波次推进节点
-    builder.add_node("reduce_plans", reduce_dimension_plans)
+    builder.add_node("initialize", initialize_node)
+    builder.add_node("generate_dimension_plan", generate_node)
+    builder.add_node("advance_wave", advance_wave_node)  # 波次推进节点（保留函数形式）
+    builder.add_node("reduce_plans", reduce_node)
     builder.add_node("check_complete", check_all_dimensions_complete)
     builder.add_node("human_review", human_review_dimension)
-    builder.add_node("generate_final", generate_final_detailed_plan)
+    builder.add_node("generate_final", report_node)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
@@ -684,7 +730,7 @@ def create_detailed_plan_subgraph() -> StateGraph:
     # 编译子图
     detailed_plan_subgraph = builder.compile()
 
-    logger.info("[子图构建] 详细规划子图构建完成（支持2波次动态路由）")
+    logger.info("[子图构建] 详细规划子图构建完成（支持2波次动态路由，使用封装节点）")
 
     return detailed_plan_subgraph
 
@@ -702,7 +748,11 @@ def call_detailed_plan_subgraph(
     task_description: str = "制定村庄详细规划",
     constraints: str = "无特殊约束",
     required_dimensions: List[str] = None,
-    enable_human_review: bool = False
+    enable_human_review: bool = False,
+    # 新增：适配器配置参数
+    enable_adapters: bool = False,
+    adapter_config: Dict[str, List[str]] = None,
+    village_data: str = ""
 ) -> Dict[str, Any]:
     """
     调用详细规划子图的包装函数
@@ -717,6 +767,9 @@ def call_detailed_plan_subgraph(
         constraints: 约束条件
         required_dimensions: 指定生成的维度列表（None = 全部）
         enable_human_review: 是否启用人工审核
+        enable_adapters: 是否启用适配器
+        adapter_config: 适配器配置字典
+        village_data: 村庄原始数据
 
     Returns:
         包含最终详细规划报告的字典
@@ -730,6 +783,19 @@ def call_detailed_plan_subgraph(
     if required_dimensions is None:
         required_dimensions = ALL_DIMENSIONS
 
+    # 默认适配器配置
+    if adapter_config is None:
+        adapter_config = {
+            "industry": ["gis"],
+            "ecological": ["gis"],
+            "traffic": ["network"],
+            "infrastructure": ["gis", "network"],
+            "public_service": ["network"],
+            "master_plan": ["gis"],
+            "landscape": ["gis"],
+            "disaster_prevention": ["gis"]
+        }
+
     # 构建初始状态
     initial_state: DetailedPlanState = {
         "project_name": project_name,
@@ -739,6 +805,7 @@ def call_detailed_plan_subgraph(
         "concept_dimension_reports": concept_dimension_reports or {},
         "task_description": task_description,
         "constraints": constraints,
+        "village_data": village_data,
         "required_dimensions": required_dimensions,
         "completed_dimensions": [],
         "current_dimension": "",
@@ -747,6 +814,9 @@ def call_detailed_plan_subgraph(
         "total_waves": TOTAL_WAVES,
         "completed_dimension_reports": {},
         "token_usage_stats": {},
+        # 【新增】适配器配置
+        "enable_adapters": enable_adapters,
+        "adapter_config": adapter_config,
         "industry_plan": "",
         "master_plan": "",
         "traffic_plan": "",

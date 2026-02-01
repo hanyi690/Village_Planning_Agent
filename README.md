@@ -2,7 +2,7 @@
 
 基于 LangGraph 和 LangChain 的村庄规划智能系统，采用**分层架构**和**交互式工作流**实现专业的村庄规划辅助。
 
-**当前版本：v4.1.1**
+**当前版本：v4.2.0**
 
 ## ✨ 核心特性
 
@@ -495,6 +495,11 @@ Village_Planning_Agent/
 │   │   ├── concept_planners.py   # 4个规划思路规划器
 │   │   └── detailed_planners.py  # 10个详细规划规划器
 │   ├── tools/                  # 工具层
+│   │   ├── adapters/            # 专业工具适配器
+│   │   │   ├── base_adapter.py      # 适配器基类
+│   │   │   ├── gis_adapter.py       # GIS空间分析适配器
+│   │   │   ├── network_adapter.py   # 网络分析适配器
+│   │   │   └── population_adapter.py # 人口预测适配器
 │   │   ├── checkpoint_tool.py      # 检查点工具
 │   │   ├── interactive_tool.py     # 交互工具
 │   │   └── revision_tool.py        # 修复工具
@@ -506,6 +511,85 @@ Village_Planning_Agent/
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## 🔧 专业工具适配器
+
+系统提供专业工具适配器用于高级分析功能。适配器隔离了外部专业计算库的复杂性。
+
+### 适配器列表
+
+| 适配器 | 功能 | 外部依赖 |
+|--------|------|----------|
+| `GISAnalysisAdapter` | 土地利用、土壤、水文分析 | geopandas |
+| `NetworkAnalysisAdapter` | 路网连通度、可达性、中心性分析 | networkx |
+| `PopulationPredictionAdapter` | 人口预测、结构分析、劳动力分析 | 无（内置算法） |
+
+### 使用适配器
+
+适配器需要真实数据才能工作，不再提供模拟数据模式。
+
+**GIS 适配器示例**：
+
+```python
+from src.tools.adapters.gis_adapter import GISAnalysisAdapter
+
+# 创建适配器
+adapter = GISAnalysisAdapter()
+
+# 执行土地利用分析（需要真实数据）
+result = adapter.execute(
+    analysis_type="land_use_analysis",
+    geo_data_path="path/to/land_use.shp"
+)
+
+if result.success:
+    print(result.data)
+else:
+    print(f"错误: {result.error}")
+```
+
+**网络适配器示例**：
+
+```python
+from src.tools.adapters.network_adapter import NetworkAnalysisAdapter
+
+adapter = NetworkAnalysisAdapter()
+
+result = adapter.execute(
+    analysis_type="connectivity_metrics",
+    network_data={
+        "nodes": [{"id": "A"}, {"id": "B"}],
+        "edges": [{"source": "A", "target": "B", "weight": 1.0}]
+    }
+)
+```
+
+**人口适配器示例**：
+
+```python
+from src.tools.adapters.population_adapter import PopulationPredictionAdapter
+
+adapter = PopulationPredictionAdapter()
+
+result = adapter.execute(
+    analysis_type="population_forecast",
+    baseline_population=1000,
+    baseline_year=2024,
+    forecast_years=10,
+    growth_rate=0.5
+)
+```
+
+### 重要说明
+
+1. **需要真实数据**：适配器不再提供模拟数据，必须提供真实数据文件或参数
+2. **依赖安装**：使用适配器前需要安装相应的依赖库
+   - GIS 适配器：`pip install geopandas`
+   - 网络适配器：`pip install networkx`
+3. **清晰错误提示**：缺少依赖或数据时，适配器会返回明确的错误信息
+4. **MockAdapter 仅用于测试**：`MockAdapter` 类保留但明确标注为测试专用
 
 ---
 
@@ -562,6 +646,14 @@ LLM_MODEL=gpt-4o-mini
 ---
 
 ## 🔄 更新日志
+
+### v4.2.0 - 移除适配器模拟数据
+- 移除所有适配器中的模拟数据生成逻辑
+- GIS 适配器：移除 `fallback_to_mock` 配置和所有 `_analyze_*_mock` 方法
+- 网络适配器：移除 `fallback_to_mock` 配置和所有 `_analyze_*_mock` 方法
+- 人口适配器：移除 `fallback_to_simple` 配置和默认值逻辑
+- 添加明确的参数验证，缺少必需参数时返回清晰的错误提示
+- MockAdapter 保留但添加明确警告，标注为测试专用
 
 ### v4.1.1 - Bug修复
 - 修复项目库（project_bank）变量名不匹配问题

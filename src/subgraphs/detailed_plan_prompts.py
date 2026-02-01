@@ -96,6 +96,8 @@ MASTER_PLAN_PROMPT = """你是乡村规划专家中的**总体规划专家**。
 
 **约束条件**: {constraints}
 
+{professional_data_section}
+
 **规划要点**：
 
 ## 1. 规划范围与期限
@@ -172,6 +174,8 @@ TRAFFIC_PLANNING_PROMPT = """你是乡村规划专家中的**交通规划专家*
 
 **约束条件**: {constraints}
 
+{professional_data_section}
+
 **规划要点**：
 
 ## 1. 道路网规划
@@ -243,6 +247,8 @@ PUBLIC_SERVICE_PROMPT = """你是乡村规划专家中的**公共服务设施规
 {planning_concept}
 
 **约束条件**: {constraints}
+
+{professional_data_section}
 
 **规划要点**：
 
@@ -1274,8 +1280,23 @@ def list_detailed_dimensions():
     ]
 
 
-def get_dimension_prompt(dimension_key: str) -> str:
-    """获取指定维度的 Prompt"""
+def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_report: str = "",
+                          planning_concept: str = "", constraints: str = "",
+                          professional_data: dict = None) -> str:
+    """
+    获取指定维度的 Prompt
+
+    Args:
+        dimension_key: 维度键名
+        project_name: 项目名称
+        analysis_report: 现状分析报告
+        planning_concept: 规划思路
+        constraints: 约束条件
+        professional_data: 来自黑板的专业数据（可选）
+
+    Returns:
+        格式化后的 Prompt 字符串
+    """
     dimension_map = {
         "industry": INDUSTRY_PLANNING_PROMPT,
         "master_plan": MASTER_PLAN_PROMPT,
@@ -1288,7 +1309,120 @@ def get_dimension_prompt(dimension_key: str) -> str:
         "landscape": LANDSCAPE_PROMPT,
         "project_bank": PROJECT_BANK_PROMPT
     }
-    return dimension_map.get(dimension_key, "")
+
+    prompt_template = dimension_map.get(dimension_key, "")
+    if not prompt_template:
+        return ""
+
+    # 生成专业数据部分
+    professional_data_section = _generate_professional_data_section(dimension_key, professional_data)
+
+    return prompt_template.format(
+        project_name=project_name,
+        analysis_report=analysis_report,
+        planning_concept=planning_concept,
+        constraints=constraints,
+        professional_data_section=professional_data_section
+    )
+
+
+def _generate_professional_data_section(dimension_key: str, professional_data: dict = None) -> str:
+    """
+    生成专业数据部分的 Prompt 文本
+
+    Args:
+        dimension_key: 维度键名
+        professional_data: 来自黑板的专业数据
+
+    Returns:
+        专业数据部分的 Prompt 文本
+    """
+    if not professional_data:
+        return ""
+
+    sections = []
+
+    # 村庄总体规划维度的专业数据
+    if dimension_key == "master_plan":
+        # 土地利用分析数据
+        if professional_data.get("land_use_analysis"):
+            land_use = professional_data["land_use_analysis"]
+            land_types = land_use.get("land_use_types", [])
+            land_type_str = ', '.join([f"{lt['type']}占{lt['percentage']}%" for lt in land_types])
+            sections.append(f"""
+**【专业数据 - 土地利用分析】**：
+以下信息来自GIS空间分析，请在规划中参考：
+- 总面积：{land_use.get('total_area', 'N/A')} 平方公里
+- 主要用地类型：{land_type_str}
+- 土地利用效率：{land_use.get('land_use_efficiency', 'N/A')}
+- 开发强度：{land_use.get('development_intensity', 'N/A')}
+""")
+
+    # 道路交通规划维度的专业数据
+    elif dimension_key == "traffic":
+        # 路网连通度数据
+        if professional_data.get("connectivity_metrics"):
+            conn = professional_data["connectivity_metrics"]
+            sections.append(f"""
+**【专业数据 - 路网连通度分析】**：
+以下信息来自网络分析，请在规划中参考：
+- 路网密度：{conn.get('network_density', 'N/A')} 公里/平方公里
+- 连通性指数：{conn.get('connectivity_index', 'N/A')}
+- 可达性评分：{conn.get('accessibility_score', 'N/A')}
+- 平均路径长度：{conn.get('average_path_length', 'N/A')} 公里
+""")
+
+        # 可达性分析数据
+        if professional_data.get("accessibility_analysis"):
+            acc = professional_data["accessibility_analysis"]
+            service_areas = acc.get("service_areas", [])
+            service_area_str = ', '.join([f"{sa['center']}覆盖{sa['coverage_ratio']}%" for sa in service_areas])
+            sections.append(f"""
+**【专业数据 - 可达性分析】**：
+以下信息来自网络分析，请在规划中参考：
+- 服务区域覆盖：{service_area_str}
+""")
+
+    # 公共服务设施规划维度的专业数据
+    elif dimension_key == "public_service":
+        # 人口结构数据
+        if professional_data.get("population_structure"):
+            pop = professional_data["population_structure"]
+            sections.append(f"""
+**【专业数据 - 人口结构模型】**：
+以下信息来自人口预测分析，请在规划中参考：
+- 预测人口：{sum([a.get('population', 0) for a in pop.get('age_distribution', [])])} 人
+- 劳动年龄人口：{sum([a.get('population', 0) for a in pop.get('age_distribution', []) if '15-64' in a.get('age_group', '') or '25-64' in a.get('age_group', '')])} 人
+- 老龄人口比例：{next((a['percentage'] for a in pop.get('age_distribution', []) if '65' in a.get('age_group', '')), 'N/A')}%
+""")
+
+        # 劳动力供给数据
+        if professional_data.get("labor_force_analysis"):
+            labor = professional_data["labor_force_analysis"]
+            sections.append(f"""
+**【专业数据 - 劳动力供给分析】**：
+以下信息来自劳动力分析，请在规划中参考：
+- 劳动力规模：{labor.get('labor_force_size', 'N/A')} 人
+- 劳动力剩余：{labor.get('labor_surplus', 'N/A')} 人
+- 老龄化趋势：{labor.get('aging_trend', 'N/A')}
+""")
+
+    # 产业规划维度的专业数据
+    elif dimension_key == "industry":
+        # 劳动力供给数据
+        if professional_data.get("labor_force_analysis"):
+            labor = professional_data["labor_force_analysis"]
+            sections.append(f"""
+**【专业数据 - 劳动力供给分析】**：
+以下信息来自劳动力分析，请在规划中参考：
+- 劳动力规模：{labor.get('labor_force_size', 'N/A')} 人
+- 劳动力剩余：{labor.get('labor_surplus', 'N/A')} 人
+""")
+
+    if sections:
+        return "\n".join(sections)
+
+    return ""
 
 
 # ==========================================
