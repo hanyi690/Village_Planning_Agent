@@ -1,0 +1,68 @@
+# 规划结果输出目录
+results/
+
+# 测试目录
+tests/
+
+# 数据目录（包含向量数据库等）
+data/
+
+# Python 缓存文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Next.js 构建输出
+frontend/.next/
+frontend/out/
+
+# 依赖包目录
+frontend/node_modules/
+node_modules/
+
+# 环境变量文件（包含敏感信息）
+.env
+.env.local
+.env.*.local
+
+# IDE 配置目录
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 日志文件
+*.log
+logs/
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 测试覆盖率
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# 构建输出
+dist/
+build/
+*.egg-info/
+
+# Git 相关
+.git/
+.gitignore
+
+# 其他杂项
+nul
+=5.0.0
