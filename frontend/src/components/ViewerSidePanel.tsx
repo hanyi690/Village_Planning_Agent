@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { villageApi } from '@/lib/api';
 import MarkdownRenderer from './MarkdownRenderer';
 import CheckpointSelector from './CheckpointSelector';
+import CheckpointViewer from './CheckpointViewer';
 
 interface ViewerSidePanelProps {
   villageName: string;
@@ -34,6 +35,7 @@ export default function ViewerSidePanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCheckpointSelector, setShowCheckpointSelector] = useState(false);
+  const [showCheckpointViewer, setShowCheckpointViewer] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Load content
@@ -154,6 +156,17 @@ export default function ViewerSidePanel({
                 style={{ position: 'absolute', right: 0, top: '100%', zIndex: 1000, minWidth: '300px' }}
               >
                 <div className="p-2">
+                  <button
+                    className="dropdown-item"
+                    type="button"
+                    onClick={() => {
+                      setShowCheckpointSelector(false);
+                      setShowCheckpointViewer(true);
+                    }}
+                  >
+                    <i className="fas fa-list me-2"></i>
+                    查看所有检查点
+                  </button>
                   <CheckpointSelector
                     villageName={villageName}
                     session={session}
@@ -280,6 +293,49 @@ export default function ViewerSidePanel({
         <i className="fas fa-comments me-2"></i>
         与对话同步 - 当前显示 {LAYERS.find(l => l.id === activeTab)?.label}
       </div>
+
+      {/* Checkpoint Viewer Modal */}
+      {showCheckpointViewer && (
+        <div
+          className="checkpoint-viewer-modal"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            zIndex: 1100,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
+          }}
+          onClick={() => setShowCheckpointViewer(false)}
+        >
+          <div
+            className="checkpoint-viewer-content"
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '0.5rem',
+              width: '100%',
+              maxWidth: '1200px',
+              height: 'calc(100vh - 2rem)',
+              maxHeight: '800px',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.3)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <CheckpointViewer
+              villageName={villageName}
+              onClose={() => setShowCheckpointViewer(false)}
+              className="flex-fill"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Styles */}
       <style jsx global>{`

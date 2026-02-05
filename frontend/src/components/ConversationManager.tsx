@@ -6,6 +6,7 @@ import { convertSSEToMessage } from '@/types/message';
 import { taskApi } from '@/lib/api';
 import ChatInterface from './ChatInterface';
 import ViewerSidePanel from './ViewerSidePanel';
+import ReviewDrawer from './ReviewDrawer';
 
 interface ConversationManagerProps {
   conversationId: string;
@@ -34,6 +35,8 @@ export default function ConversationManager({ conversationId }: ConversationMana
 
   const [activeTab, setActiveTab] = useState<string>('layer_1_analysis');
   const [session, setSession] = useState<string | undefined>();
+  const [showReviewDrawer, setShowReviewDrawer] = useState(false);
+  const [isRevising, setIsRevising] = useState(false);
 
   // Auto-switch viewer tab based on current layer
   useEffect(() => {
@@ -69,9 +72,35 @@ export default function ConversationManager({ conversationId }: ConversationMana
       setActiveTab(layerId);
     }
 
-    // Auto-show viewer on pause
+    // Auto-show viewer on pause and show review button
     if (data.status === 'paused' || data.event_type === 'pause') {
       showViewer();
+      setShowReviewDrawer(true);
+    }
+
+    // Handle revision start/complete
+    if (data.status === 'revising' || data.event_type === 'revision_start') {
+      setIsRevising(true);
+      addMessage({
+        id: `msg-${Date.now()}`,
+        timestamp: new Date(),
+        role: 'system',
+        type: 'info',
+        content: '开始修复规划内容...',
+      });
+    }
+
+    if (data.status === 'reviewing' || data.event_type === 'revision_complete') {
+      setIsRevising(false);
+      addMessage({
+        id: `msg-${Date.now()}`,
+        timestamp: new Date(),
+        role: 'system',
+        type: 'success',
+        content: '修复完成！请审核修复后的内容。',
+        actions: [{ type: 'review', label: '查看修复结果' }],
+      });
+      setShowReviewDrawer(true);
     }
   }, [addMessage, setStatus, showViewer]);
 
@@ -115,6 +144,77 @@ export default function ConversationManager({ conversationId }: ConversationMana
   const handleViewerToggle = useCallback(() => {
     toggleViewer();
   }, [toggleViewer]);
+
+  // Review handlers
+  const handleApproveReview = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      await taskApi.approveReview(taskId);
+      addMessage({
+        id: `msg-${Date.now()}`,
+        timestamp: new Date(),
+        role: 'system',
+        type: 'success',
+        content: '已批准该层级规划，继续执行下一层...',
+      });
+      setShowReviewDrawer(false);
+    } catch (err: any) {
+      addMessage({
+        id: `msg-${Date.now()}`,
+        timestamp: new Date(),
+        role: 'system',
+        type: 'error',
+        content: `批准失败: ${err.message}`,
+      });
+    }
+  }, [taskId, addMessage]);
+
+  const handleRejectReview = useCallback(async (feedback: string, dimensions?: string[]) => {
+    if (!taskId) return;
+    try {
+      await taskApi.rejectReview(taskId, feedback, dimensions);
+      setIsRevising(true);
+      addMessage({
+        id: `msg-${Date.now()}`,
+        timestamp: new Date(),
+        role: 'system',
+        type: 'info',
+        content: `正在修复以下维度: ${dimensions?.join(', ') || '全部'}...`,
+      });
+      setShowReviewDrawer(false);
+    } catch (err: any) {
+      addMessage({
+        id: `msg-${Date.now()}`,
+        timestamp: new Date(),
+        role: 'system',
+        type: 'error',
+        content: `驳回失败: ${err.message}`,
+      });
+    }
+  }, [taskId, addMessage]);
+
+  const handleRollbackCheckpoint = useCallback(async (checkpointId: string) => {
+    if (!taskId) return;
+    try {
+      await taskApi.rollbackCheckpoint(taskId, checkpointId);
+      addMessage({
+        id: `msg-${Date.now()}`,
+        timestamp: new Date(),
+        role: 'system',
+        type: 'info',
+        content: `已回退到检查点: ${checkpointId}，从该检查点继续执行...`,
+      });
+      setShowReviewDrawer(false);
+    } catch (err: any) {
+      addMessage({
+        id: `msg-${Date.now()}`,
+        timestamp: new Date(),
+        role: 'system',
+        type: 'error',
+        content: `回退失败: ${err.message}`,
+      });
+    }
+  }, [taskId, addMessage]);
 
   // Memoized header badge
   const statusBadge = useMemo(() => {
@@ -228,6 +328,18 @@ export default function ConversationManager({ conversationId }: ConversationMana
         >
           <i className="fas fa-columns"></i>
         </button>
+      )}
+
+      {/* Review Drawer */}
+      {taskId && showReviewDrawer && (
+        <ReviewDrawer
+          isOpen={showReviewDrawer}
+          taskId={taskId}
+          onClose={() => setShowReviewDrawer(false)}
+          onApprove={handleApproveReview}
+          onReject={handleRejectReview}
+          onRollback={handleRollbackCheckpoint}
+        />
       )}
 
       {/* Animation Styles */}

@@ -393,3 +393,9 @@ export default function ReviewDrawer({
     </>
   );
 }
+
+/* Responsive Styles for Vertical Screens */
+// Inline styles are already handled in the component above
+// The drawer uses maxWidth: '90%' which provides mobile adaptation
+// On smaller screens, the drawer will adjust width automatically
+
