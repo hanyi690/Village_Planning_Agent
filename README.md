@@ -1,99 +1,213 @@
 # 村庄规划智能体 (Village Planning Agent)
 
-基于 LangGraph 和 LangChain 的智能村庄规划系统，提供 **Web 应用** 和 **CLI 工具** 两种使用方式，采用分层架构实现专业的村庄规划辅助。
+基于 LangGraph 和 LangChain 的智能村庄规划系统，提供 **Web 应用** 和 **CLI 工具** 两种使用方式，采用三层分层架构实现专业的村庄规划辅助。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2-green.svg)](https://github.com/langchain-ai/langgraph)
 
+---
+
 ## ✨ 核心特性
 
 ### 🌐 Web 应用
-- **现代化界面**：基于 Next.js + Bootstrap 的响应式 Web 界面
-- **实时进度**：SSE 流式传输，实时查看规划进度
-- **文件管理**：支持多文件上传、会话历史、检查点管理
-- **交互式审查**：支持人工审查、通过/驳回、回退修复
+
+- **现代化界面**: 基于 Next.js 14 + Bootstrap 5 的响应式 Web 界面
+- **实时进度**: SSE 流式传输，实时查看规划进度
+- **智能文件上传**: 支持多种编码自动检测（UTF-8/GBK/GB2312），解决中文乱码问题
+- **文件管理**: 支持多文件上传、会话历史、检查点管理
+- **交互式审查**: 支持人工审查、通过/驳回、回退修复
 
 ### 🏗️ 规划引擎
-- **分层架构**：三层子图（现状分析 → 规划思路 → 详细规划）
-- **并行分析**：12+4+10 个维度并行处理，高效执行
-- **智能恢复**：检查点持久化，支持从任意阶段恢复
-- **专业工具**：GIS 分析、网络分析、人口预测等专业适配器
+
+- **分层架构**: 三层子图（现状分析 → 规划思路 → 详细规划）
+- **并行分析**: 12+4+12 个维度并行处理，高效执行
+- **智能恢复**: 检查点持久化，支持从任意阶段恢复
+- **专业工具**: GIS 分析、网络分析、人口预测等专业适配器
 
 ### 🖥️ CLI 工具
-- **命令行接口**：支持完整规划和单层执行
-- **批处理**：适合批量处理多个规划任务
-- **灵活集成**：易于集成到其他系统中
+
+- **命令行接口**: 支持完整规划和单层执行
+- **批处理**: 适合批量处理多个规划任务
+- **灵活集成**: 易于集成到其他系统中
 
 ---
 
 ## 🚀 快速开始
 
-### Web 应用（推荐）
+### 环境要求
 
-**启动后端**：
+- Python 3.9+
+- Node.js 18+
+- LLM API Key (ZhipuAI / OpenAI / DeepSeek)
 
-```bash
-cd backend
-pip install -r requirements.txt
-python main.py
-# 后端运行在 http://localhost:8080
-```
+### 安装
 
-**启动前端**：
+**1. 克隆项目**
 
 ```bash
-cd frontend
-npm install
-npm run dev
-# 前端运行在 http://localhost:3000
+git clone https://github.com/yourusername/village-planning-agent.git
+cd village-planning-agent
 ```
 
-**配置环境变量**：
+**2. 配置环境变量**
 
 创建 `.env` 文件：
 
 ```env
-# API 配置
+# LLM 配置 (任选其一)
 ZHIPUAI_API_KEY=your_zhipuai_api_key_here
-OPENAI_API_KEY=your_openai_api_key_here
+# OPENAI_API_KEY=your_openai_api_key_here
 
-# LLM 配置
+# LLM 模型
 LLM_MODEL=glm-4-flash
 MAX_TOKENS=65536
+
+# LangSmith 追踪 (可选)
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=your_langsmith_api_key
+LANGCHAIN_PROJECT=village-planning-agent
 ```
+
+**3. 安装后端依赖**
+
+```bash
+# 安装核心依赖
+pip install -r requirements.txt
+
+# 如果使用 backend/requirements.txt，确保安装了文件解析库
+cd backend
+pip install -r requirements.txt
+cd ..
+```
+
+**4. 安装前端依赖**
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+### 启动应用
+
+**启动后端**:
+
+```bash
+cd backend
+python main.py
+```
+
+后端运行在 http://localhost:8080
+
+**启动前端** (新终端):
+
+```bash
+cd frontend
+npm run dev
+```
+
+前端运行在 http://localhost:3000
+
+**访问应用**: 打开浏览器访问 http://localhost:3000
+
+---
+
+## 📖 使用指南
+
+### Web 应用
+
+**1. 新建规划**
+
+- 点击"新建规划"按钮
+- 输入村庄名称和基础数据
+- 上传村庄现状数据文件（支持 .txt, .md, .docx, .pdf）
+  - **文本文件** (.txt, .md)：自动检测编码（UTF-8/GBK/GB2312）
+  - **Word文档** (.docx)：提取所有段落文本
+  - **PDF文档** (.pdf)：提取所有页面文本
+  - 显示解析后的编码类型和内容长度供确认
+- 选择需要分析的维度（可选）
+- 点击"开始规划"
+
+**2. 查看进度**
+
+- 实时查看规划进度
+- 查看各层完成状态
+- 浏览中间结果
+
+**3. 审查和修改**
+
+- 在关键节点进行人工审查
+- 批准继续或驳回修改
+- 回退到任意检查点
+
+**4. 查看报告**
+
+- 查看最终规划报告
+- 浏览各维度详细分析
+- 下载报告文件
+
+### 文件上传支持
+
+系统支持以下文件格式：
+
+| 格式 | 说明 | 解析方式 |
+|------|------|---------|
+| **.txt** | 纯文本文件 | 自动检测编码（UTF-8/GBK/GB2312） |
+| **.md** | Markdown 文件 | 自动检测编码（UTF-8/GBK/GB2312） |
+| **.docx** | Word 文档 | 提取所有段落文本，保留换行 |
+| **.pdf** | PDF 文档 | 提取所有页面文本，保留分页 |
+
+**文件大小限制**：最大 10MB
+
+**推荐做法**：
+- 文本文件推荐使用 UTF-8 编码
+- Word 和 PDF 文件会自动提取文本内容
+- 确保文件内容不是扫描图片（需要包含可提取的文本层）
+
+---
 
 ### CLI 工具
 
-**完整规划流程**：
+**完整规划流程**:
 
 ```bash
-pip install -r requirements.txt
-
-python -m src.cli.main --mode full \
-    --project "项目名称" \
+python -m src.cli.main \
+    --mode full \
+    --project "示例村庄" \
     --data data/village_data.txt \
     --output output.txt
 ```
 
-**单层执行**：
+**单层执行**:
 
 ```bash
 # 仅现状分析
-python -m src.cli.main --mode analysis --project "项目名称" --data data/village_data.txt
+python -m src.cli.main --mode analysis --project "示例村庄" --data data/village_data.txt
 
 # 仅规划思路
-python -m src.cli.main --mode concept --project "项目名称" --data data/village_data.txt
+python -m src.cli.main --mode concept --project "示例村庄" --data data/village_data.txt
 
-# 交互模式（逐步执行）
-python -m src.cli.main --mode step --project "项目名称" --data data/village_data.txt
+# 仅详细规划
+python -m src.cli.main --mode detailed --project "示例村庄" --data data/village_data.txt
 ```
 
-**从检查点恢复**：
+**交互模式（逐步执行）**:
 
 ```bash
-python -m src.cli.main --mode resume \
-    --project "项目名称" \
+python -m src.cli.main \
+    --mode step \
+    --project "示例村庄" \
+    --data data/village_data.txt \
+    --step-level layer
+```
+
+**从检查点恢复**:
+
+```bash
+python -m src.cli.main \
+    --mode resume \
+    --project "示例村庄" \
     --resume-from checkpoint_001_layer2_completed
 ```
 
@@ -103,68 +217,152 @@ python -m src.cli.main --mode resume \
 
 ### 三层规划架构
 
+**架构特点**：
+- ✅ **简化流程**：每层直接并行分析维度，无需汇总节点，提高执行效率
+- ✅ **细粒度存储**：检查点只保存维度报告，便于灵活组合和快速加载
+- ✅ **统一命名**：`analysis_dimension_reports`, `concept_dimension_reports`, `detailed_dimension_reports`（英文键名）
+- ✅ **智能状态筛选**：根据依赖关系自动筛选相关维度，优化 LLM 上下文
+
 ```
 村庄数据输入
     ↓
-┌─────────────────────────────────┐
-│  Layer 1: 现状分析 (12维度并行)  │
-│  - 区位交通、社会经济、村民意愿   │
-│  - 自然环境、土地利用、基础设施   │
-│  - 公共服务、历史文化、风貌等     │
-└─────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│  Layer 1: 现状分析 (12维度并行)                   │
+│  analyze_dimension (并行) → END                   │
+│  - 区位、社会经济、村民意愿、上位规划              │
+│  - 自然环境、土地利用、道路交通、公共服务          │
+│  - 基础设施、生态绿地、建筑、历史文化              │
+│  输出: analysis_dimension_reports (字典)           │
+└───────────────────────────────────────────────────┘
     ↓
-┌─────────────────────────────────┐
-│  Layer 2: 规划思路 (4维度并行)   │
-│  - 资源禀赋分析                  │
-│  - 规划定位分析                  │
-│  - 发展目标分析                  │
-│  - 规划策略分析                  │
-└─────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│  Layer 2: 规划思路 (4维度并行)                    │
+│  analyze_concept_dimension (并行) → END           │
+│  - 资源禀赋分析                                   │
+│  - 规划定位分析                                   │
+│  - 发展目标分析                                   │
+│  - 规划策略分析                                   │
+│  输出: concept_dimension_reports (字典)           │
+└───────────────────────────────────────────────────┘
     ↓
-┌─────────────────────────────────┐
-│  Layer 3: 详细规划 (10维度)      │
-│  Wave 1: 产业、交通、公服等9个   │
-│  Wave 2: 建设项目库汇总          │
-└─────────────────────────────────┘
+┌───────────────────────────────────────────────────┐
+│  Layer 3: 详细规划 (12维度，分波次执行)            │
+│  Wave 1: 产业、空间、土地等11个维度 (并行)        │
+│  Wave 2: 建设项目库 (依赖Wave 1结果)              │
+│  输出: detailed_dimension_reports (字典)          │
+└───────────────────────────────────────────────────┘
     ↓
-最终规划方案
+最终规划方案 (前端可灵活组合显示各维度内容)
 ```
+
+### 技术优势
+
+**1. 并行执行优化**
+
+**问题**: LangGraph 的 Send 机制为每个并行任务创建隔离状态，字典无法自动合并。
+
+**解决方案**:
+- 使用 `analyses` 列表（通过 `operator.add` 正确累积）
+- 在包装函数中将列表转换为使用英文键名的字典
+- 确保所有维度报告正确返回
+
+**实现代码**（analysis_subgraph.py:345-360）:
+```python
+# 从 analyses 列表中提取维度报告并转换为字典（使用英文键名）
+analyses = result.get("analyses", [])
+dimension_reports = {}
+for analysis in analyses:
+    dimension_key = analysis.get("dimension_key")  # 英文键名
+    analysis_result = analysis.get("analysis_result")
+    if dimension_key and analysis_result:
+        dimension_reports[dimension_key] = analysis_result
+```
+
+**2. 状态筛选优化**
+- 每个维度只接收其依赖的相关维度数据
+- 大幅减少 LLM token 消耗（可节省 40-60%）
+- 提高响应速度和分析质量
+
+**3. 并行执行效率**
+- 同层维度完全并行，无等待
+- Layer 1: 12个维度并行
+- Layer 2: 4个维度并行
+- Layer 3: Wave 1 并行 11个 + Wave 2 单独执行
+
+**4. 检查点机制**
+- 每层完成后自动保存检查点
+- 支持从任意层恢复执行
+- 精确记录维度级别的结果
+
+### 检查点数据结构
+
+所有层的检查点使用统一的字段命名规范：
+
+**重要说明**: 维度报告使用**英文键名**存储，显示时映射为**中文名称**。
+
+```json
+{
+  "checkpoint_id": "checkpoint_001_layer1_completed",
+  "state": {
+    // Layer 1 - 使用英文键名
+    "analysis_dimension_reports": {
+      "location": "区位分析内容...",
+      "socio_economic": "社会经济分析内容...",
+      "villager_wishes": "村民意愿分析内容...",
+      "superior_planning": "上位规划分析内容...",
+      "natural_environment": "自然环境分析内容...",
+      "land_use": "土地利用分析内容...",
+      "traffic": "道路交通分析内容...",
+      "public_services": "公共服务分析内容...",
+      "infrastructure": "基础设施分析内容...",
+      "ecological_green": "生态绿地分析内容...",
+      "architecture": "建筑分析内容...",
+      "historical_cultural": "历史文化分析内容..."
+    },
+
+    // Layer 2 - 使用英文键名
+    "concept_dimension_reports": {
+      "resource_endowment": "资源禀赋分析内容...",
+      "planning_positioning": "规划定位分析内容...",
+      "development_goals": "发展目标分析内容...",
+      "planning_strategies": "规划策略分析内容..."
+    },
+
+    // Layer 3 - 使用英文键名
+    "detailed_dimension_reports": {
+      "industry": "产业规划内容...",
+      "spatial_structure": "空间结构规划内容...",
+      "land_use_planning": "土地利用规划内容...",
+      "settlement_planning": "聚落体系规划内容...",
+      "traffic": "综合交通规划内容...",
+      "public_service": "公共服务设施规划内容...",
+      "infrastructure": "基础设施规划内容...",
+      "ecological": "生态保护与修复内容...",
+      "disaster_prevention": "防灾减灾规划内容...",
+      "heritage": "历史文化遗产保护内容...",
+      "landscape": "村庄风貌引导内容...",
+      "project_bank": "建设项目库内容..."
+    }
+  }
+}
+```
+
+**优势**：
+- 🎯 **细粒度控制**：前端可按需显示特定维度
+- 🔄 **灵活组合**：支持自定义维度组合展示
+- 💾 **高效存储**：避免冗余的综合报告
+- 🚀 **快速加载**：只加载需要的维度内容
+- 🌐 **国际化友好**：英文键名便于多语言支持
 
 ### 专业工具适配器
 
-| 适配器 | 功能 |
-|--------|------|
-| GIS 适配器 | 土地利用、土壤、水文空间分析 |
-| 网络适配器 | 路网连通度、可达性、中心性分析 |
-| 人口适配器 | 人口预测、结构分析、劳动力分析 |
+| 适配器     | 功能                                       | 状态  |
+| ---------- | ------------------------------------------ | ----- |
+| GIS 适配器 | 土地利用、土壤、水文空间分析               | 可选  |
+| 网络适配器 | 路网连通度、可达性、中心性分析              | 可选  |
+| 人口适配器 | 人口预测、结构分析、劳动力分析              | 可选  |
 
----
-
-## 📖 API 文档
-
-### Web API
-
-**规划相关 API** (`/api/planning`)
-
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| POST | `/start` | 启动新的规划任务 |
-| GET | `/stream/{id}` | SSE 流式获取任务状态 |
-| POST | `/resume` | 从检查点恢复执行 |
-| POST | `/review/{id}` | 审查操作（通过/驳回/回退） |
-| GET | `/checkpoints/{project}` | 列出所有检查点 |
-| DELETE | `/sessions/{id}` | 删除会话 |
-
-**村庄相关 API** (`/api/villages`)
-
-| 方法 | 端点 | 说明 |
-|------|------|------|
-| GET | `/` | 获取所有村庄列表 |
-| GET | `/{name}` | 获取村庄详情 |
-| GET | `/{name}/layers/{layer}` | 获取层级内容 |
-| GET | `/{name}/final-report` | 获取最终报告 |
-
-**API 文档**：启动后端后访问 `http://localhost:8080/docs`
+**注意**：专业适配器默认未启用，需要配置相关数据后才能使用。系统可在无专业数据的情况下正常运行，LLM 将基于文本数据进行分析。
 
 ---
 
@@ -175,231 +373,214 @@ Village_Planning_Agent/
 ├── backend/                    # FastAPI 后端
 │   ├── main.py                # 应用入口
 │   ├── api/                   # API 路由
-│   │   ├── orchestration.py  # 规划编排 API
-│   │   ├── villages.py        # 村庄管理 API
+│   │   ├── planning.py        # 规划执行 API
+│   │   ├── data.py            # 数据访问 API
 │   │   ├── sessions.py        # 会话管理 API
-│   │   └── files.py           # 文件上传 API
-│   └── services/              # 业务逻辑
+│   │   ├── files.py           # 文件上传 API
+│   │   ├── validate_config.py # 配置验证 API
+│   │   └── tool_manager.py    # 工具管理器 API
+│   ├── services/              # 业务逻辑层
+│   │   └── planning_service.py
+│   ├── utils/                 # 后端工具类
+│   │   ├── error_handler.py
+│   │   └── session_helper.py
+│   ├── schemas.py             # Pydantic 数据模型
+│   └── requirements.txt       # Python 依赖
 │
-├── frontend/                   # Next.js 前端
+├── frontend/                   # Next.js 14 前端
 │   ├── src/
-│   │   ├── app/               # 页面（App Router）
+│   │   ├── app/               # Next.js App Router
+│   │   │   ├── layout.tsx     # 根布局
 │   │   │   ├── page.tsx       # 首页
-│   │   │   ├── planning/      # 规划页面
-│   │   │   └── history/       # 历史记录
-│   │   └── components/        # React 组件
-│   └── package.json
+│   │   │   ├── globals.css    # 全局样式
+│   │   │   └── village/       # 村庄规划页面
+│   │   ├── components/        # React 组件
+│   │   │   ├── chat/          # 聊天界面组件
+│   │   │   ├── review/        # 审查功能组件
+│   │   │   ├── viewer/        # 报告查看组件
+│   │   │   ├── layout/        # 布局组件
+│   │   │   ├── FileUpload.tsx # 文件上传组件
+│   │   │   ├── DimensionSelector.tsx # 维度选择器
+│   │   │   └── VillageInputForm.tsx # 输入表单
+│   │   ├── contexts/          # React Context 状态管理
+│   │   │   └── UnifiedPlanningContext.tsx
+│   │   ├── hooks/             # 自定义 Hooks
+│   │   ├── lib/               # 工具库
+│   │   ├── config/            # 配置文件
+│   │   └── types/             # TypeScript 类型定义
+│   ├── .env.local             # 前端环境变量
+│   ├── package.json           # Node.js 依赖
+│   └── tsconfig.json          # TypeScript 配置
 │
-├── src/                        # 规划引擎核心
+├── src/                        # 核心规划引擎
 │   ├── orchestration/          # 编排层
-│   │   └── main_graph.py      # 主图
-│   ├── subgraphs/              # 子图
-│   │   ├── analysis_subgraph.py
-│   │   ├── concept_subgraph.py
-│   │   └── detailed_plan_subgraph.py
+│   │   └── main_graph.py      # LangGraph 主图
+│   ├── subgraphs/              # 三层子图
+│   │   ├── analysis_subgraph.py      # 现状分析子图
+│   │   ├── concept_subgraph.py       # 规划思路子图
+│   │   ├── detailed_plan_subgraph.py # 详细规划子图
+│   │   └── *_prompts.py       # 各层提示词
 │   ├── nodes/                  # 节点封装
+│   │   ├── subgraph_nodes.py  # 子图调用节点
+│   │   └── tool_nodes.py      # 工具调用节点
 │   ├── planners/               # 规划器
+│   │   ├── analysis_planners.py     # 现状分析规划器
+│   │   ├── concept_planners.py      # 规划思路规划器
+│   │   ├── detailed_planners.py     # 详细规划规划器
+│   │   └── unified_base_planner.py  # 统一基类
 │   ├── tools/                  # 工具层
-│   │   └── adapters/          # 专业适配器
-│   └── core/                   # 核心组件
-│
-└── results/                    # 规划结果存储
-```
-
----
-
-## 📂 项目结构
-
-```
-Village_Planning_Agent/
-├── src/
-│   ├── cli/                    # CLI命令行界面
-│   │   └── main.py             # 主入口
-│   ├── orchestration/          # 编排层
-│   │   └── main_graph.py       # 主图
-│   ├── subgraphs/              # 子图模块
-│   │   ├── analysis_subgraph.py    # 现状分析子图
-│   │   ├── concept_subgraph.py     # 规划思路子图
-│   │   └── detailed_plan_subgraph.py  # 详细规划子图
+│   │   ├── checkpoint_tool.py       # 检查点管理
+│   │   ├── interactive_tool.py      # 交互工具
+│   │   ├── web_review_tool.py       # Web审查工具
+│   │   └── adapters/               # 专业适配器
 │   ├── core/                   # 核心组件
-│   │   ├── dimension_mapping.py     # 维度依赖映射
-│   │   └── llm_factory.py          # LLM工厂
-│   ├── nodes/                  # 节点封装层 (v4.0.0新增)
-│   │   ├── base_node.py          # 节点基类
-│   │   ├── layer_nodes.py        # Layer节点: Layer1/2/3
-│   │   ├── tool_nodes.py         # 工具节点: ToolBridge, PauseManager
-│   │   └── final_nodes.py        # 最终输出节点
-│   ├── planners/               # 规划器封装层
-│   │   ├── base_planner.py       # 规划器基类
-│   │   ├── analysis_planners.py  # 12个现状分析规划器
-│   │   ├── concept_planners.py   # 4个规划思路规划器
-│   │   └── detailed_planners.py  # 10个详细规划规划器
-│   ├── tools/                  # 工具层
-│   │   ├── adapters/            # 专业工具适配器
-│   │   │   ├── base_adapter.py      # 适配器基类
-│   │   │   ├── gis_adapter.py       # GIS空间分析适配器
-│   │   │   ├── network_adapter.py   # 网络分析适配器
-│   │   │   └── population_adapter.py # 人口预测适配器
-│   │   ├── checkpoint_tool.py      # 检查点工具
-│   │   ├── interactive_tool.py     # 交互工具
-│   │   └── revision_tool.py        # 修复工具
-│   └── utils/                  # 工具函数
+│   │   ├── config.py          # 全局配置
+│   │   ├── llm_factory.py     # LLM 工厂
+│   │   ├── dimension_mapping.py    # 维度映射
+│   │   └── streaming.py       # 流式输出
+│   ├── utils/                  # 工具类
+│   │   ├── output_manager.py  # 输出管理
+│   │   ├── state_filter.py    # 状态筛选
+│   │   ├── text_formatter.py  # 文本格式化
+│   │   └── paths.py           # 路径管理
+│   └── cli/                    # CLI 工具
+│       └── main.py            # 命令行入口
+│
 ├── data/                       # 数据目录
-├── checkpoints/                # 检查点存储
-├── output/                     # 输出目录
-├── .env.example
-├── requirements.txt
-└── README.md
+│   └── vectordb/              # 向量数据库存储
+│
+├── results/                    # 结果输出目录
+│   └── [村庄名]/              # 各村庄规划结果
+│
+├── docs/                       # 详细文档
+│   ├── agent.md               # 核心智能体文档
+│   ├── backend.md             # 后端实现文档
+│   ├── frontend.md            # 前端实现文档
+│   ├── ARCHITECTURE_REFACTORING.md # 架构重构说明
+│   └── QUICK_REFERENCE.md     # 快速参考
+│
+├── .env                        # 环境变量配置
+├── requirements.txt           # Python 核心依赖
+├── CHANGELOG.md              # 变更日志
+├── SETUP_GUIDE.md            # 安装指南
+├── QUICK_START.md            # 快速开始
+└── README.md                 # 项目说明
 ```
 
 ---
 
-## 🔧 专业工具适配器
-
-系统提供专业工具适配器用于高级分析功能。适配器隔离了外部专业计算库的复杂性。
-
-### 适配器列表
-
-| 适配器 | 功能 | 外部依赖 |
-|--------|------|----------|
-| `GISAnalysisAdapter` | 土地利用、土壤、水文分析 | geopandas |
-| `NetworkAnalysisAdapter` | 路网连通度、可达性、中心性分析 | networkx |
-| `PopulationPredictionAdapter` | 人口预测、结构分析、劳动力分析 | 无（内置算法） |
-
-### 使用适配器
-
-适配器需要真实数据才能工作，不再提供模拟数据模式。
-
-**GIS 适配器示例**：
-
-```python
-from src.tools.adapters.gis_adapter import GISAnalysisAdapter
-
-# 创建适配器
-adapter = GISAnalysisAdapter()
-
-# 执行土地利用分析（需要真实数据）
-result = adapter.execute(
-    analysis_type="land_use_analysis",
-    geo_data_path="path/to/land_use.shp"
-)
-
-if result.success:
-    print(result.data)
-else:
-    print(f"错误: {result.error}")
-```
-
-**网络适配器示例**：
-
-```python
-from src.tools.adapters.network_adapter import NetworkAnalysisAdapter
-
-adapter = NetworkAnalysisAdapter()
-
-result = adapter.execute(
-    analysis_type="connectivity_metrics",
-    network_data={
-        "nodes": [{"id": "A"}, {"id": "B"}],
-        "edges": [{"source": "A", "target": "B", "weight": 1.0}]
-    }
-)
-```
-
-**人口适配器示例**：
-
-```python
-from src.tools.adapters.population_adapter import PopulationPredictionAdapter
-
-adapter = PopulationPredictionAdapter()
-
-result = adapter.execute(
-    analysis_type="population_forecast",
-    baseline_population=1000,
-    baseline_year=2024,
-    forecast_years=10,
-    growth_rate=0.5
-)
-```
-
-### 重要说明
-
-1. **需要真实数据**：适配器不再提供模拟数据，必须提供真实数据文件或参数
-2. **依赖安装**：使用适配器前需要安装相应的依赖库
-   - GIS 适配器：`pip install geopandas`
-   - 网络适配器：`pip install networkx`
-3. **清晰错误提示**：缺少依赖或数据时，适配器会返回明确的错误信息
-4. **MockAdapter 仅用于测试**：`MockAdapter` 类保留但明确标注为测试专用
-
----
-
-## ⚙️ 配置说明
+## 🔧 配置说明
 
 ### LLM 配置
 
-**ZhipuAI（推荐）**：
+**ZhipuAI (推荐)**:
+
 ```env
 ZHIPUAI_API_KEY=your_key
 LLM_MODEL=glm-4-flash
 ```
 
-**OpenAI**：
+**OpenAI**:
+
 ```env
 OPENAI_API_KEY=your_key
 LLM_MODEL=gpt-4o-mini
 ```
 
-**自动检测**：`glm-*` → ZhipuAI, `gpt-*` → OpenAI, `deepseek-*` → DeepSeek
+**自动检测**: `glm-*` → ZhipuAI, `gpt-*` → OpenAI, `deepseek-*` → DeepSeek
 
 ### 前端配置
 
-创建 `frontend/.env.local`：
+创建 `frontend/.env.local`:
+
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8080
 ```
 
 ---
 
+## 📚 文档
+
+详细实现文档请查看 `/docs` 目录：
+
+- **[架构重构说明](docs/ARCHITECTURE_REFACTORING.md)** - ⭐ 最新重构说明，删除汇总节点优化
+- **[变更日志](CHANGELOG.md)** - 📅 项目变更历史和版本规划
+- **[前端实现文档](docs/frontend.md)** - Next.js 应用架构、组件设计、状态管理
+- **[后端实现文档](docs/backend.md)** - FastAPI 架构、API 端点、服务层设计
+- **[核心智能体文档](docs/agent.md)** - LangGraph 架构、三层规划系统、节点设计、英文键名映射（已更新）
+- **[快速参考](docs/QUICK_REFERENCE.md)** - 常用命令、配置、API 快速查询
+
+**最新更新**:
+- ✅ 修复了 Layer 1 和 Layer 2 报告未显示的问题（状态转换检测）
+- ✅ 修复了 Layer1 现状分析字段缺失问题
+- ✅ 统一使用英文键名存储维度报告（如 `location`, `socio_economic`）
+- ✅ 删除了重复的 `dimension_reports` 字段
+- ✅ 修复了并行任务中维度报告无法正确合并的问题
+
+---
+
 ## ❓ 常见问题
 
+**Q: 上传的文件显示乱码怎么办？**
+
+A: 系统已支持自动编码检测（UTF-8/GBK/GB2312），如果仍有问题：
+- 确认文件内容确实是文本格式（非图片或扫描件）
+- 对于 .txt 和 .md 文件，尝试用记事本另存为 UTF-8 编码
+- 对于 .docx 和 .pdf 文件，确保包含可提取的文本（非扫描件）
+- 查看浏览器控制台和后端日志中的解析信息
+
+**Q: 支持哪些文件格式？**
+
+A: 系统支持以下格式：
+- **文本文件**: .txt, .md（自动编码检测）
+- **Word文档**: .docx（提取段落文本）
+- **PDF文档**: .pdf（提取页面文本）
+
+**Q: Word 或 PDF 文件上传后内容为空？**
+
+A: 可能的原因：
+- 文件是扫描件（图片格式），不包含可提取的文本
+- 文件受密码保护
+- 文件格式损坏。建议：转换为 .txt 格式后再上传
+
 **Q: LangSmith 追踪未生效**
+
 - 检查 `LANGCHAIN_TRACING_V2=true` 和 API Key 配置
 
 **Q: LLM 调用失败**
-- 检查 API Key 是否有效，检查网络连接和 API 额度
+
+- 检查 API Key 是否有效
+- 检查网络连接和 API 额度
 
 **Q: 前端无法连接后端**
+
 - 检查 `NEXT_PUBLIC_API_URL` 配置
 - 确认后端服务已启动（`http://localhost:8080/health`）
 
 **Q: Token 消耗过高**
+
 - 使用更高效的模型（如 `glm-4-flash`）
 - 系统已启用状态筛选优化
 
+**Q: 规划结果提示"数据未提供"**
+
+- 检查上传的文件内容是否正确解码（查看编码信息）
+- 确认文件内容长度足够（至少10个字符）
+- 查看浏览器控制台的调试日志
+
 ---
 
-## 🔄 更新日志
+## 🤝 贡献
 
-### v5.0.0 - Web 应用架构（当前）
-- ✅ 完整的 Web 应用系统（Next.js + FastAPI）
-- ✅ SSE 实时流式传输
-- ✅ 交互式审查和检查点管理
-- ✅ 简化的架构设计（移除重复状态管理）
-- ✅ 会话历史和文件管理
+欢迎提交 Issue 和 Pull Request！
 
-### v4.2.0 - 适配器优化
-- 移除适配器模拟数据，要求真实输入
-- 增强参数验证和错误提示
+**贡献指南**:
 
-### v4.0.0 - 分层架构重构
-- 实现工具层 → 编排层 → CLI 层
-- 统一工具模式
-
-### v3.0.0 - 交互模式
-- Checkpoint 持久化、人工审查、逐步执行、回退修复
-
-### v2.0.0 - 波次动态路由
-- 引入依赖链动态调度和智能状态筛选
+1. Fork 项目
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 提交 Pull Request
 
 ---
 
@@ -409,9 +590,12 @@ MIT License
 
 ---
 
-## 🤝 贡献
+## 🙏 致谢
 
-欢迎提交 Issue 和 Pull Request！
+- [LangGraph](https://github.com/langchain-ai/langgraph) - 强大的状态图框架
+- [LangChain](https://github.com/langchain-ai/langchain) - LLM 应用开发框架
+- [Next.js](https://nextjs.org/) - React 框架
+- [FastAPI](https://fastapi.tiangolo.com/) - 现代化 Python Web 框架
 
 ---
 
