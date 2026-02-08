@@ -6,16 +6,11 @@
  */
 
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect, useMemo } from 'react';
-import { Message, PlanningParams, Checkpoint, ReviewInteractionMessage } from '@/types/message';
+import { Message, PlanningParams, Checkpoint, ReviewInteractionMessage } from '@/types';
 import { VillageInputData } from '@/components/VillageInputForm';
 import { planningApi, dataApi, VillageInfo, VillageSession } from '@/lib/api';
 import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/lib/utils';
-
-const LAYER_ID_MAP: Record<number, 'layer_1_analysis' | 'layer_2_concept' | 'layer_3_detailed'> = {
-  1: 'layer_1_analysis',
-  2: 'layer_2_concept',
-  3: 'layer_3_detailed',
-} as const;
+import { LAYER_ID_MAP } from '@/lib/constants';
 
 type Status = 'idle' | 'collecting' | 'planning' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
 

@@ -1,67 +1,43 @@
 'use client';
 
+/**
+ * ChatPanel - Unified chat interface integrating messaging and progress display
+ */
+
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
-import { Message, ActionButton, FileMessage, ReviewInteractionMessage, isReviewInteractionMessage } from '@/types/message';
-import { isProgressMessage } from '@/types/message';
+import type {
+  Message,
+  ActionButton,
+  ReviewInteractionMessage,
+  FileMessage,
+} from '@/types';
+import {
+  isReviewInteractionMessage,
+  isProgressMessage,
+} from '@/types';
 import { planningApi, fileApi } from '@/lib/api';
+import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/lib/utils';
 import SegmentedControl from '@/components/ui/SegmentedControl';
-import { useTaskSSE } from '@/hooks/useTaskSSE';
+import { useTaskSSE, UseTaskSSECallbacks } from '@/hooks/useTaskSSE';
 import MessageList from './MessageList';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEdit, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
+import {
+  LAYER_OPTIONS,
+  LAYER_OPTIONS_ARRAY,
+  LAYER_LABEL_MAP,
+  LAYER_VALUE_MAP,
+  getLayerId,
+  MIN_FILE_CONTENT_LENGTH,
+  FILE_ACCEPT,
+  isInputDisabled,
+} from '@/lib/constants';
 
 interface ChatPanelProps {
   className?: string;
 }
 
-// Constants
-const DISABLE_INPUT_STATUSES = new Set(['planning', 'paused', 'revising'] as const);
-const MIN_FILE_CONTENT_LENGTH = 50;
-const FILE_ACCEPT = '.docx,.pdf,.txt,.md';
-const LAYER_OPTIONS = ['现状分析', '规划思路', '详细规划'];
-const LAYER_LABEL_MAP: Record<string, number> = {
-  '现状分析': 1,
-  '规划思路': 2,
-  '详细规划': 3,
-};
-const LAYER_VALUE_MAP: Record<number, string> = {
-  1: '现状分析',
-  2: '规划思路',
-  3: '详细规划',
-};
-
-// Helper functions
-function generateMessageId(): string {
-  return `msg-${Date.now()}`;
-}
-
-function createMessage<T extends Message>(partial: Partial<T>): T {
-  return {
-    id: generateMessageId(),
-    timestamp: new Date(),
-    ...partial,
-  } as T;
-}
-
-type PlanningStatus = 'idle' | 'collecting' | 'planning' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
-
-function isInputDisabled(status: PlanningStatus): boolean {
-  return DISABLE_INPUT_STATUSES.has(status as any);
-}
-
-function getLayerId(layer: number): 'layer_1_analysis' | 'layer_2_concept' | 'layer_3_detailed' | null {
-  const layerMap: Record<number, 'layer_1_analysis' | 'layer_2_concept' | 'layer_3_detailed'> = {
-    1: 'layer_1_analysis',
-    2: 'layer_2_concept',
-    3: 'layer_3_detailed',
-  };
-  return layerMap[layer] || null;
-}
-
-/**
- * ChatPanel - Unified chat interface integrating messaging and progress display
- */
 export default function ChatPanel({ className = '' }: ChatPanelProps) {
   const {
     messages,
@@ -91,9 +67,21 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   const [uploadedFileContent, setUploadedFileContent] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // SSE event handling - MOVED HERE before callbacks that use reconnectSSE
-  const { isConnected, error: sseError, reconnect: reconnectSSE } = useTaskSSE(taskId, {
-    onStatusUpdate: (data) => {
+  // Helper: Load checkpoints - defined before sseCallbacks
+  const loadCheckpoints = useCallback(async () => {
+    if (!taskId) return;
+    try {
+      const statusData = await planningApi.getTaskStatus(taskId);
+      const checkpointsList = statusData.checkpoints || [];
+      setCheckpoints(checkpointsList);
+    } catch (error: any) {
+      console.error('Failed to load checkpoints:', error);
+    }
+  }, [taskId, setCheckpoints]);
+
+  // SSE event handling
+  const sseCallbacks: UseTaskSSECallbacks = {
+    onStatusUpdate: useCallback((data: any) => {
       const lastProgressMsg = messages.findLast(m => m.type === 'progress');
 
       if (lastProgressMsg) {
@@ -104,51 +92,37 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         });
       } else {
         addMessage({
-          id: `msg-${Date.now()}`,
-          timestamp: new Date(),
-          role: 'assistant',
+          ...createBaseMessage('assistant'),
           type: 'progress',
           content: data.message || '正在执行...',
           progress: data.progress || 0,
           currentLayer: data.current_layer,
           taskId: taskId || undefined,
-        });
+        } as any);
       }
-    },
+    }, [messages, updateLastMessage, addMessage, taskId]),
 
-    onLayerCompleted: async (data) => {
+    onLayerCompleted: useCallback(async (data: any) => {
       const layer = data.layer_number;
       const reportContent = data.report_content;
       const dimensionReports = data.dimension_reports;
-
-      console.log('[ChatPanel] Layer completed:', { layer, hasReportContent: !!reportContent, hasDimensionReports: !!dimensionReports });
-
-      // Import parser
-      const { parseLayerReport, getReportStats } = await import('@/lib/layerReportParser');
-
-      // Parse dimensions from report
-      const dimensions = reportContent ? parseLayerReport(reportContent) : [];
-      const stats = reportContent ? getReportStats(reportContent) : null;
-
-      // Map layer number to layer ID
-      const layerIdMap: Record<number, 'layer_1_analysis' | 'layer_2_concept' | 'layer_3_detailed'> = {
-        1: 'layer_1_analysis',
-        2: 'layer_2_concept',
-        3: 'layer_3_detailed',
-      };
-
-      const layerId = layerIdMap[layer];
+      const layerId = getLayerId(layer);
 
       if (!layerId) {
         console.error('[ChatPanel] Invalid layer number:', layer);
         return;
       }
 
-      // Add completion message with parsed dimension info
+      console.log('[ChatPanel] Layer completed:', { layer, hasReportContent: !!reportContent });
+
+      // Import parser
+      const { parseLayerReport, getReportStats } = await import('@/lib/layerReportParser');
+      const dimensions = reportContent ? parseLayerReport(reportContent) : [];
+      const stats = reportContent ? getReportStats(reportContent) : null;
+
+      // Add completion message
       addMessage({
-        id: `msg-${Date.now()}`,
-        timestamp: new Date(),
-        role: 'assistant',
+        ...createBaseMessage('assistant'),
         type: 'layer_completed',
         layer,
         content: `✅ Layer ${layer} 已完成`,
@@ -159,7 +133,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
           dimension_names: stats?.dimensionNames || dimensions.map(d => d.name),
         },
         fullReportContent: reportContent,
-        dimensionReports: dimensionReports,
+        dimensionReports,
         actions: [
           { id: 'open_review', label: '查看详情', action: 'view', variant: 'primary' },
           { id: 'approve_quick', label: '快速批准', action: 'approve', variant: 'success' }
@@ -169,50 +143,23 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       setCurrentLayer(layer);
       setStatus('paused');
 
-      // Directly use SSE data for immediate display
-      if (reportContent || dimensionReports) {
-        console.log('[ChatPanel] Using SSE data for immediate display, layer:', layerId);
-
-        // Check if content was truncated
-        const isTruncated = reportContent?.includes('[报告内容过长，已截断');
-
-        console.log('[ChatPanel] Content displayed immediately from SSE', isTruncated ? '(truncated)' : '');
-        console.log('[ChatPanel] Parsed dimensions:', dimensions.length, 'dimensions found');
-
-        // Show warning if content was truncated
-        if (isTruncated) {
-          addMessage({
-            id: `msg-${Date.now()}`,
-            timestamp: new Date(),
-            role: 'system',
-            type: 'system',
-            level: 'warning',
-            content: `⚠️ 报告内容较大，SSE传输已截断。完整内容请点击"查看详情"后刷新。`,
-          });
-        }
-      } else {
+      // Handle truncated content warning
+      if (reportContent?.includes('[报告内容过长，已截断')) {
+        addMessage(createSystemMessage('⚠️ 报告内容较大，SSE传输已截断。完整内容请点击"查看详情"后刷新。', 'warning'));
+      } else if (!reportContent && !dimensionReports) {
         // Fallback: Load from API if SSE data is missing
-        console.warn('[ChatPanel] SSE event missing report content, falling back to API');
         try {
           await loadLayerContent(layerId);
         } catch (error) {
           console.error('[ChatPanel] Failed to load layer content:', error);
-          addMessage({
-            id: `msg-${Date.now()}`,
-            timestamp: new Date(),
-            role: 'system',
-            type: 'error',
-            content: `⚠️ 加载 Layer ${layer} 内容失败，请手动刷新`,
-          });
+          addMessage(createErrorMessage(`加载 Layer ${layer} 内容失败，请手动刷新`));
         }
       }
 
-      // Add review interaction message instead of opening panel
+      // Add review interaction message
       setTimeout(() => {
         addMessage({
-          id: `msg-${Date.now()}`,
-          timestamp: new Date(),
-          role: 'assistant',
+          ...createBaseMessage('assistant'),
           type: 'review_interaction',
           layer,
           content: `✅ Layer ${layer} 已完成，请审查后决定下一步操作`,
@@ -228,19 +175,15 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
           ],
         } as ReviewInteractionMessage);
 
-        // Load checkpoints for rollback functionality
         loadCheckpoints();
       }, 500);
-    },
+    }, [addMessage, setCurrentLayer, setStatus, loadLayerContent, loadCheckpoints]),
 
     onPause: (data) => {
       console.log('[ChatPanel] Task paused:', data);
       setStatus('paused');
-      // Add review interaction message when paused
       addMessage({
-        id: `msg-${Date.now()}`,
-        timestamp: new Date(),
-        role: 'assistant',
+        ...createBaseMessage('assistant'),
         type: 'review_interaction',
         layer: currentLayer || 1,
         content: '规划已暂停，请审查后决定下一步操作',
@@ -258,37 +201,28 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       loadCheckpoints();
     },
 
-    onComplete: (data) => {
+    onComplete: useCallback((data: any) => {
       console.log('[ChatPanel] Task completed:', data);
       setStatus('completed');
-
       addMessage({
-        id: `msg-${Date.now()}`,
-        timestamp: new Date(),
-        role: 'assistant',
+        ...createBaseMessage('assistant'),
         type: 'result',
         content: `🎉 规划任务已完成！\n\n村庄：${villageFormData?.projectName || '村庄'}`,
         villageName: villageFormData?.projectName || '村庄',
         sessionId: taskId || '',
         layers: ['Layer 1', 'Layer 2', 'Layer 3'],
         resultUrl: `/village/${taskId}`,
-      });
-    },
+      } as any);
+    }, [setStatus, villageFormData, taskId, addMessage]),
 
-    onError: (error) => {
+    onError: useCallback((error: string) => {
       console.error('[ChatPanel] Task error:', error);
       setStatus('failed');
+      addMessage(createErrorMessage(`执行失败: ${error}`));
+    }, [setStatus, addMessage]),
+  };
 
-      addMessage({
-        id: `msg-${Date.now()}`,
-        timestamp: new Date(),
-        role: 'system',
-        type: 'error',
-        content: `❌ 执行失败: ${error}`,
-        recoverable: true,
-      });
-    },
-  });
+  const { isConnected, error: sseError, reconnect: reconnectSSE } = useTaskSSE(taskId, sseCallbacks);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -300,13 +234,13 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
   // Check for pending review state
   const hasPendingReview = messages.some(m =>
-    isReviewInteractionMessage(m) && m.reviewState === 'pending'
+    isReviewInteractionMessage(m) && (m as ReviewInteractionMessage).reviewState === 'pending'
   );
 
   // Auto-update pendingReviewMessage when messages change
   useEffect(() => {
     const pendingMsg = messages.findLast(m =>
-      isReviewInteractionMessage(m) && m.reviewState === 'pending'
+      isReviewInteractionMessage(m) && (m as ReviewInteractionMessage).reviewState === 'pending'
     ) as ReviewInteractionMessage | undefined;
 
     if (pendingMsg && !pendingReviewMessage) {
@@ -316,46 +250,22 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     }
   }, [messages, pendingReviewMessage, setPendingReviewMessage]);
 
-  // Debug logging to monitor disabled state
-  useEffect(() => {
-    console.log('[ChatPanel] Input state changed:', {
-      inputDisabled,
-      isTyping,
-      isUploadingFile,
-      status,
-      hasPendingReview,
-      pendingReviewMessage: pendingReviewMessage?.layer,
-      inputDisabledReason: inputDisabled ? `Status: ${status}` : 'None',
-    });
-  }, [inputDisabled, isTyping, isUploadingFile, status, hasPendingReview, pendingReviewMessage]);
-
   // Review handlers
   const handleReviewApprove = useCallback(async () => {
     if (!taskId) return;
 
     try {
       const response = await planningApi.approveReview(taskId);
-
-      addMessage(createMessage({
-        role: 'system',
-        type: 'system',
-        content: '✅ 已批准，继续执行下一层...',
-      }));
-
+      addMessage(createSystemMessage('✅ 已批准，继续执行下一层...'));
       setShowReviewPanel(false);
       setStatus('planning');
 
-      // Reconnect SSE to receive subsequent events
       if (response.resumed) {
         console.log('[ChatPanel] Approve successful, reconnecting SSE...');
         reconnectSSE?.();
       }
     } catch (error: any) {
-      addMessage(createMessage({
-        role: 'system',
-        type: 'error',
-        content: `批准失败: ${error.message || '未知错误'}`,
-      }));
+      addMessage(createErrorMessage(`批准失败: ${error.message || '未知错误'}`));
     }
   }, [taskId, addMessage, setStatus, setShowReviewPanel, reconnectSSE]);
 
@@ -363,28 +273,17 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     if (!taskId) return;
 
     try {
-      addMessage(createMessage({
-        role: 'user',
+      addMessage({
+        ...createBaseMessage('user'),
         type: 'text',
         content: `📝 修改请求：${feedback}`,
-      }));
-
-      addMessage(createMessage({
-        role: 'system',
-        type: 'system',
-        content: '🔄 正在根据反馈修复规划内容...',
-      }));
-
+      });
+      addMessage(createSystemMessage('🔄 正在根据反馈修复规划内容...'));
       await planningApi.rejectReview(taskId, feedback, dimensions);
-
       setShowReviewPanel(false);
       setStatus('revising');
     } catch (error: any) {
-      addMessage(createMessage({
-        role: 'system',
-        type: 'error',
-        content: `驳回失败: ${error.message || '未知错误'}`,
-      }));
+      addMessage(createErrorMessage(`驳回失败: ${error.message || '未知错误'}`));
     }
   }, [taskId, addMessage, setStatus, setShowReviewPanel]);
 
@@ -395,34 +294,12 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
     try {
       await planningApi.rollbackCheckpoint(taskId, checkpointId);
-
-      addMessage(createMessage({
-        role: 'system',
-        type: 'system',
-        content: `↩️ 已回退到检查点: ${checkpointId}`,
-      }));
-
+      addMessage(createSystemMessage(`↩️ 已回退到检查点: ${checkpointId}`));
       setShowReviewPanel(false);
     } catch (error: any) {
-      addMessage(createMessage({
-        role: 'system',
-        type: 'error',
-        content: `回退失败: ${error.message || '未知错误'}`,
-      }));
+      addMessage(createErrorMessage(`回退失败: ${error.message || '未知错误'}`));
     }
   }, [taskId, addMessage, setShowReviewPanel]);
-
-  const loadCheckpoints = useCallback(async () => {
-    if (!taskId) return;
-
-    try {
-      const statusData = await planningApi.getTaskStatus(taskId);
-      const checkpointsList = statusData.checkpoints || [];
-      setCheckpoints(checkpointsList);
-    } catch (error: any) {
-      console.error('Failed to load checkpoints:', error);
-    }
-  }, [taskId, setCheckpoints]);
 
   // Handler: Start planning from form submission
   const handleStartPlanning = useCallback(async () => {
@@ -456,11 +333,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       });
     } catch (error: any) {
       console.error('[ChatPanel] Failed to start planning:', error);
-      addMessage(createMessage({
-        role: 'system',
-        type: 'error',
-        content: `启动规划失败: ${error.message || '未知错误'}`,
-      }));
+      addMessage(createErrorMessage(`启动规划失败: ${error.message || '未知错误'}`));
     } finally {
       setIsPlanning(false);
     }
@@ -486,11 +359,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       } as ReviewInteractionMessage);
 
       // Add system confirmation message
-      addMessage(createMessage({
-        role: 'system',
-        type: 'system',
-        content: '✅ 已批准，继续执行下一层...',
-      }));
+      addMessage(createSystemMessage('✅ 已批准，继续执行下一层...'));
 
       setShowReviewPanel(false);
       setStatus('planning');
@@ -501,11 +370,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         reconnectSSE?.();
       }
     } catch (error: any) {
-      addMessage(createMessage({
-        role: 'system',
-        type: 'error',
-        content: `批准失败: ${error.message || '未知错误'}`,
-      }));
+      addMessage(createErrorMessage(`批准失败: ${error.message || '未知错误'}`));
     }
   }, [taskId, addMessage, setStatus, setShowReviewPanel, reconnectSSE]);
 
@@ -528,20 +393,12 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         submissionDimensions: dimensions,
       } as ReviewInteractionMessage);
 
-      addMessage(createMessage({
-        role: 'system',
-        type: 'system',
-        content: '🔄 正在根据反馈修复规划内容...',
-      }));
+      addMessage(createSystemMessage('🔄 正在根据反馈修复规划内容...'));
 
       await planningApi.rejectReview(taskId, feedback, dimensions);
       setStatus('revising');
     } catch (error: any) {
-      addMessage(createMessage({
-        role: 'system',
-        type: 'error',
-        content: `驳回失败: ${error.message || '未知错误'}`,
-      }));
+      addMessage(createErrorMessage(`驳回失败: ${error.message || '未知错误'}`));
     }
   }, [taskId, addMessage, setStatus]);
 
@@ -563,17 +420,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
       await planningApi.rollbackCheckpoint(taskId, checkpointId);
 
-      addMessage(createMessage({
-        role: 'system',
-        type: 'system',
-        content: `↩️ 已回退到检查点: ${checkpointId}`,
-      }));
+      addMessage(createSystemMessage(`↩️ 已回退到检查点: ${checkpointId}`));
     } catch (error: any) {
-      addMessage(createMessage({
-        role: 'system',
-        type: 'error',
-        content: `回退失败: ${error.message || '未知错误'}`,
-      }));
+      addMessage(createErrorMessage(`回退失败: ${error.message || '未知错误'}`));
     }
   }, [taskId, addMessage]);
 
@@ -658,31 +507,23 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       // Store file content for later use when starting planning
       setUploadedFileContent(response.content);
 
-      addMessage(createMessage<FileMessage>({
-        role: 'user',
+      addMessage({
+        ...createBaseMessage('user'),
         type: 'file',
         filename: file.name,
         fileContent: response.content,
         fileSize: file.size,
         encoding: response.encoding,
-      }));
+      } as FileMessage);
 
       const encodingInfo = response.encoding ? `\n编码: ${response.encoding}` : '';
-      addMessage(createMessage({
-        role: 'assistant',
-        type: 'system',
-        content: `✅ 文件 "${file.name}" 已上传，点击 "开始规划" 按钮启动任务\n${encodingInfo}\n内容长度: ${response.content.length} 字符`,
-      }));
+      addMessage(createSystemMessage(`✅ 文件 "${file.name}" 已上传，点击 "开始规划" 按钮启动任务\n${encodingInfo}\n内容长度: ${response.content.length} 字符`));
 
       e.target.value = '';
 
     } catch (error: any) {
       console.error('[ChatPanel] Upload error:', error);
-      addMessage(createMessage({
-        role: 'system',
-        type: 'error',
-        content: `❌ 文件上传失败: ${error.message || '未知错误'}`,
-      }));
+      addMessage(createErrorMessage(`❌ 文件上传失败: ${error.message || '未知错误'}`));
     } finally {
       setIsUploadingFile(false);
       console.log('[ChatPanel] isUploadingFile set to false');
@@ -724,18 +565,13 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
               // Validate file content length
               if (uploadedContent.length < MIN_FILE_CONTENT_LENGTH) {
                 console.error('[ChatPanel] 文件内容过短');
-
-                addMessage({
-                  id: `msg-${Date.now()}`,
-                  timestamp: new Date(),
-                  role: 'system',
-                  type: 'system',
-                  level: 'error',
-                  content: '⚠️ 上传的文件内容过短！\n\n' +
-                           '要求：至少需要 50 个字符\n' +
-                           '当前：' + uploadedContent.length + ' 个字符\n\n' +
-                           '请确保文件包含完整的村庄现状数据。',
-                });
+                addMessage(createSystemMessage(
+                  '⚠️ 上传的文件内容过短！\n\n' +
+                  '要求：至少需要 50 个字符\n' +
+                  '当前：' + uploadedContent.length + ' 个字符\n\n' +
+                  '请确保文件包含完整的村庄现状数据。',
+                  'error'
+                ));
                 return;
               }
 
@@ -769,23 +605,14 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
               console.log('[ChatPanel] 规划启动成功');
             } catch (error: any) {
               console.error('[ChatPanel] 规划启动失败:', error);
-              addMessage({
-                id: `msg-${Date.now()}`,
-                timestamp: new Date(),
-                role: 'system',
-                type: 'system',
-                level: 'error',
-                content: `❌ 规划启动失败: ${error.message || '未知错误'}`,
-              });
+              addMessage(createErrorMessage(`❌ 规划启动失败: ${error.message || '未知错误'}`));
             }
         }
         else if (action.id === 'approve_quick') {
           await handleReviewApprove();
         } else {
           addMessage({
-            id: `msg-${Date.now()}`,
-            timestamp: new Date(),
-            role: 'user',
+            ...createBaseMessage('user'),
             type: 'text',
             content: '批准继续',
           });
@@ -794,9 +621,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
       case 'reject':
         addMessage({
-          id: `msg-${Date.now()}`,
-          timestamp: new Date(),
-          role: 'user',
+          ...createBaseMessage('user'),
           type: 'text',
           content: '请求修改',
         });
@@ -893,8 +718,8 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
           {/* Layer Segmented Control - shown during planning/paused */}
           {(status === 'planning' || status === 'paused') && (
             <SegmentedControl
-              options={LAYER_OPTIONS}
-              value={currentLayer ? LAYER_VALUE_MAP[currentLayer] : LAYER_OPTIONS[0]}
+              options={LAYER_OPTIONS_ARRAY}
+              value={currentLayer ? LAYER_VALUE_MAP[currentLayer] : LAYER_OPTIONS_ARRAY[0]}
               onChange={(layer) => setCurrentLayer(LAYER_LABEL_MAP[layer])}
               className="mb-4"
             />
@@ -965,7 +790,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             <div className="mb-2 px-3 py-1.5 bg-orange-50 border border-orange-200 rounded-lg flex items-center gap-2">
               <FontAwesomeIcon icon={faEdit} className="text-orange-500" />
               <span className="text-sm text-orange-700 font-medium">
-                审查模式：输入修改意见后按 Enter 发送驳回，或输入 "批准" 继续
+                审查模式：输入修改意见后按 Enter 发送驳回，或输入 &quot;批准&quot; 继续
               </span>
             </div>
           )}

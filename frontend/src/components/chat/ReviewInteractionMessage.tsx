@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ReviewInteractionMessage as ReviewInteractionMessageType } from '@/types/message';
+import { ReviewInteractionMessage as ReviewInteractionMessageType } from '@/types';
 import DimensionSelector from '../DimensionSelector';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import {
