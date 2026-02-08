@@ -7,10 +7,12 @@ Layer节点实现
 from abc import abstractmethod
 from typing import Dict, Any
 from pathlib import Path
+from datetime import datetime
 
 from .base_node import BaseNode
 from ..core.state_builder import StateBuilder
 from ..utils.logger import get_logger
+from ..utils.checkpoint_manager import get_checkpoint_manager
 
 logger = get_logger(__name__)
 
@@ -101,48 +103,66 @@ class BaseLayerNode(BaseNode):
         """
         checkpoint_id = ""
 
-        # OutputManager保存（使用现有工具）
-        output_manager = state.get("output_manager")
+        # 1. 准备数据（从子图返回值中正确提取）
+        dimension_reports_key = ""
+        combined_report = ""
+
+        if self.layer_number == 1:
+            # Layer1: 子图返回 analysis_dimension_reports
+            dimension_reports_key = "analysis_dimension_reports"
+            dimension_reports = result.get(dimension_reports_key, {})
+            # 生成综合报告
+            combined_report = self._generate_combined_report(
+                state.get("project_name", "项目"),
+                dimension_reports,
+                "现状分析"
+            )
+        elif self.layer_number == 2:
+            # Layer2: 子图返回 concept_dimension_reports
+            dimension_reports_key = "concept_dimension_reports"
+            dimension_reports = result.get(dimension_reports_key, {})
+            # 生成综合报告
+            combined_report = self._generate_combined_report(
+                state.get("project_name", "项目"),
+                dimension_reports,
+                "规划思路"
+            )
+        elif self.layer_number == 3:
+            # Layer3: 子图返回 detailed_dimension_reports
+            dimension_reports_key = "detailed_dimension_reports"
+            dimension_reports = result.get(dimension_reports_key, {})
+            # 生成综合报告
+            combined_report = self._generate_combined_report(
+                state.get("project_name", "项目"),
+                dimension_reports,
+                "详细规划"
+            )
+        else:
+            dimension_reports = {}
+            combined_report = ""
+
+        # 1.5 为维度报告添加标题（用于文件保存和SSE）
+        dimension_reports = self._add_titles_to_dimension_reports(dimension_reports)
+
+        # 2. OutputManager保存 - 从registry获取
+        from ..utils.output_manager_registry import get_output_manager_registry
+        registry = get_output_manager_registry()
+        output_manager = registry.get(state.get("session_id"))
         if output_manager and output_manager.use_default_structure:
             try:
-                # 根据不同层级调用不同的保存方法，使用正确的键名
                 if self.layer_number == 1:
                     save_result = output_manager.save_layer1_results(
-                        combined_report=result.get("analysis_report", ""),
-                        dimension_reports=result.get("dimension_reports", {})
+                        combined_report=combined_report,
+                        dimension_reports=dimension_reports
                     )
                 elif self.layer_number == 2:
                     save_result = output_manager.save_layer2_results(
-                        combined_report=result.get("concept_report", ""),
-                        dimension_reports=result.get("concept_dimension_reports", {})
+                        combined_report=combined_report,
+                        dimension_reports=dimension_reports
                     )
                 elif self.layer_number == 3:
-                    # Layer 3 子图返回 industry_plan, master_plan 等独立字段
-                    # 需要转换为 detailed_dimension_reports 字典
-                    dimension_reports = {}
-                    dimension_key_map = {
-                        "industry_plan": "industry",
-                        "master_plan": "master_plan",
-                        "traffic_plan": "traffic",
-                        "public_service_plan": "public_service",
-                        "infrastructure_plan": "infrastructure",
-                        "ecological_plan": "ecological",
-                        "disaster_prevention_plan": "disaster_prevention",
-                        "heritage_plan": "heritage",
-                        "landscape_plan": "landscape",
-                        "project_bank": "project_bank"
-                    }
-                    for result_key, dimension_key in dimension_key_map.items():
-                        plan_content = result.get(result_key, "")
-                        # 添加调试日志
-                        logger.info(f"[{self.node_name}] 提取 {result_key}: {len(plan_content)} 字符 -> {dimension_key}")
-                        if plan_content:
-                            dimension_reports[dimension_key] = plan_content
-
-                    logger.info(f"[{self.node_name}] dimension_reports 包含的维度: {list(dimension_reports.keys())}")
-
                     save_result = output_manager.save_layer3_results(
-                        combined_report=result.get("detailed_plan_report", ""),
+                        combined_report=combined_report,
                         dimension_reports=dimension_reports
                     )
                 else:
@@ -152,55 +172,129 @@ class BaseLayerNode(BaseNode):
             except Exception as e:
                 logger.warning(f"[{self.node_name}] OutputManager保存失败: {e}")
 
-        # Checkpoint保存（使用现有CheckpointTool）
+        # 3. Checkpoint保存（显式调用）
         if state.get("checkpoint_enabled", False):
-            checkpoint_manager = state.get("checkpoint_manager")
+            checkpoint_manager = get_checkpoint_manager(
+                project_name=state["project_name"],
+                timestamp=state.get("session_id")
+            )
             if checkpoint_manager and hasattr(checkpoint_manager, 'save'):
                 try:
-                    # 构建checkpoint状态
-                    checkpoint_state = self._build_checkpoint_state(state, result)
+                    # 3.1 构建checkpoint状态
+                    checkpoint_state = self._build_checkpoint_state(state, result, combined_report, dimension_reports)
 
+                    # 3.2 显式调用 CheckpointTool.save
                     save_result = checkpoint_manager.save(
                         state=checkpoint_state,
                         layer=self.layer_number,
-                        description=f"Layer {self.layer_number} 完成"
+                        description=f"Layer {self.layer_number} {self.layer_name}完成"
                     )
-                    checkpoint_id = save_result.get("checkpoint_id", "") if save_result.get("success") else ""
+
+                    # 3.3 提取checkpoint_id
+                    if save_result.get("success"):
+                        checkpoint_id = save_result.get("checkpoint_id", "")
+                        logger.info(f"[{self.node_name}] Checkpoint已保存: {checkpoint_id}")
+                    else:
+                        logger.warning(f"[{self.node_name}] Checkpoint保存失败: {save_result.get('error', '未知错误')}")
+
                 except Exception as e:
-                    logger.warning(f"[{self.node_name}] Checkpoint保存失败: {e}")
+                    logger.warning(f"[{self.node_name}] Checkpoint保存异常: {e}")
 
         return checkpoint_id
+
+    def _add_titles_to_dimension_reports(
+        self,
+        dimension_reports: Dict[str, str]
+    ) -> Dict[str, str]:
+        """
+        为每个维度报告添加中文Markdown标题
+
+        这个方法是幂等的（idempotent），多次调用不会产生重复标题。
+
+        Args:
+            dimension_reports: 原始维度报告字典
+
+        Returns:
+            带标题的维度报告字典
+        """
+        from ..core.dimension_mapping import (
+            ANALYSIS_DIMENSION_NAMES,
+            CONCEPT_DIMENSION_NAMES,
+            DETAILED_DIMENSION_NAMES
+        )
+
+        # 根据层级选择对应的名称映射
+        if self.layer_number == 1:
+            dimension_names_map = ANALYSIS_DIMENSION_NAMES
+        elif self.layer_number == 2:
+            dimension_names_map = CONCEPT_DIMENSION_NAMES
+        elif self.layer_number == 3:
+            dimension_names_map = DETAILED_DIMENSION_NAMES
+        else:
+            dimension_names_map = {}
+
+        # 为每个维度添加标题
+        titled_reports = {}
+        for dimension_key, content in dimension_reports.items():
+            # 检查是否已有标题（以"## "开头）
+            if content.startswith("## "):
+                # 已有标题，直接使用
+                titled_reports[dimension_key] = content
+            else:
+                # 没有标题，添加标题
+                chinese_title = dimension_names_map.get(dimension_key, dimension_key)
+                titled_reports[dimension_key] = f"## {chinese_title}\n\n{content}"
+
+        return titled_reports
 
     def _build_checkpoint_state(
         self,
         original_state: Dict[str, Any],
-        result: Dict[str, Any]
+        result: Dict[str, Any],
+        combined_report: str,
+        dimension_reports: Dict[str, str]
     ) -> Dict[str, Any]:
         """
-        构建用于checkpoint的状态（子类可重写）
+        构建用于checkpoint的状态
 
         Args:
             original_state: 原始状态
             result: 子图执行结果
+            combined_report: 综合报告
+            dimension_reports: 维度报告字典
 
         Returns:
             用于checkpoint的状态字典
         """
+        # 为维度报告添加标题（如果还没有标题）
+        # 检查是否已添加标题（通过检查第一个维度报告）
+        needs_titles = True
+        if dimension_reports:
+            first_content = next(iter(dimension_reports.values()), "")
+            if first_content.startswith("## "):
+                needs_titles = False
+
+        if needs_titles:
+            dimension_reports = self._add_titles_to_dimension_reports(dimension_reports)
+
+        # 基础状态
         checkpoint_state = {
             **original_state,
-            self.output_key: result.get("report", ""),
+            self.output_key: combined_report,
             f"layer_{self.layer_number}_completed": True,
             "current_layer": self.layer_number + 1
         }
 
-        # 添加维度报告
-        if "dimension_reports" in result:
-            if self.layer_number == 1:
-                checkpoint_state["dimension_reports"] = result.get("dimension_reports", {})
-            elif self.layer_number == 2:
-                checkpoint_state["concept_dimension_reports"] = result.get("dimension_reports", {})
-            elif self.layer_number == 3:
-                checkpoint_state["detailed_dimension_reports"] = result.get("dimension_reports", {})
+        # 根据层级添加维度报告（使用正确的字段名）
+        if self.layer_number == 1:
+            checkpoint_state["analysis_report"] = combined_report
+            checkpoint_state["analysis_dimension_reports"] = dimension_reports
+        elif self.layer_number == 2:
+            checkpoint_state["planning_concept"] = combined_report
+            checkpoint_state["concept_dimension_reports"] = dimension_reports
+        elif self.layer_number == 3:
+            checkpoint_state["detailed_plan"] = combined_report
+            checkpoint_state["detailed_dimension_reports"] = dimension_reports
 
         return checkpoint_state
 
@@ -240,19 +334,86 @@ class BaseLayerNode(BaseNode):
             .add_message(f"{self.node_name}执行失败，请检查输入数据或稍后重试。")\
             .build()
 
+    def _generate_combined_report(
+        self,
+        project_name: str,
+        dimension_reports: Dict[str, str],
+        layer_name: str
+    ) -> str:
+        """
+        生成简单的综合报告（拼接各维度报告）
+
+        Args:
+            project_name: 项目名称
+            dimension_reports: 维度报告字典（键名为英文）
+            layer_name: 层级名称
+
+        Returns:
+            拼接后的综合报告
+        """
+        report = f"# {project_name} - {layer_name}报告\n\n"
+        report += f"---\n**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+
+        # 获取维度名称映射（英文键 -> 中文名）
+        dimension_names_map = self._get_dimension_names_map()
+
+        # 使用标准顺序（而非字母顺序）
+        from ..utils.output_manager import OutputManager
+        standard_order = OutputManager._get_dimension_order(self.layer_number)
+
+        # 按标准顺序拼接，使用中文名称作为标题
+        for dimension_key in standard_order:
+            if dimension_key not in dimension_reports:
+                continue
+            content = dimension_reports[dimension_key]
+            display_name = dimension_names_map.get(dimension_key, dimension_key)
+
+            # 检测内容是否已包含"## 标题"，如果有则直接使用
+            # 这样可以避免在 _add_titles_to_dimension_reports 已添加标题的情况下重复添加
+            if content.startswith("## "):
+                # 已有标题，直接拼接（不添加额外的标题）
+                report += f"{content}\n\n"
+            else:
+                # 没有标题，添加标题
+                report += f"## {display_name}\n\n{content}\n\n"
+
+        return report
+
+    def _get_dimension_names_map(self) -> Dict[str, str]:
+        """
+        获取维度的英文名到中文名的映射
+
+        Returns:
+            英文键到中文名称的映射字典
+        """
+        if self.layer_number == 1:
+            from ..core.dimension_mapping import ANALYSIS_DIMENSION_NAMES
+            return ANALYSIS_DIMENSION_NAMES
+        elif self.layer_number == 2:
+            from ..core.dimension_mapping import CONCEPT_DIMENSION_NAMES
+            return CONCEPT_DIMENSION_NAMES
+        elif self.layer_number == 3:
+            from ..core.dimension_mapping import DETAILED_DIMENSION_NAMES
+            return DETAILED_DIMENSION_NAMES
+        else:
+            return {}
+
 
 class Layer1AnalysisNode(BaseLayerNode):
-    """Layer 1: 现状分析节点"""
+    """Layer 1: 现状分析节点（集成RAG知识预加载）"""
 
     def __init__(self):
         super().__init__(layer_number=1, layer_name="现状分析", output_key="analysis_report")
 
     def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """调用现状分析子图"""
+        """调用现状分析子图（集成RAG）"""
         from ..subgraphs.analysis_subgraph import call_analysis_subgraph
         return call_analysis_subgraph(
             raw_data=state["village_data"],
-            project_name=state["project_name"]
+            project_name=state["project_name"],
+            _streaming_enabled=state.get("_streaming_enabled", False),
+            _token_callback_factory=state.get("_token_callback_factory"),
+            rag_enabled=state.get("rag_enabled", True)  # 新增：传递RAG启用状态
         )
 
     def _build_success_updates(
@@ -262,31 +423,53 @@ class Layer1AnalysisNode(BaseLayerNode):
         checkpoint_id: str
     ) -> Dict[str, Any]:
         """构建成功状态更新"""
+        # 从子图返回值中正确获取维度报告
+        dimension_reports = result.get("analysis_dimension_reports", {})
+
+        # 为维度报告添加标题（如果还没有标题）
+        # 检查是否已添加标题（通过检查第一个维度报告）
+        needs_titles = True
+        if dimension_reports:
+            first_content = next(iter(dimension_reports.values()), "")
+            if first_content.startswith("## "):
+                needs_titles = False
+
+        if needs_titles:
+            dimension_reports = self._add_titles_to_dimension_reports(dimension_reports)
+
+        # 生成综合报告（与 main_graph.py 的 _generate_simple_combined_report 逻辑一致）
+        combined_report = self._generate_combined_report(
+            state["project_name"],
+            dimension_reports,
+            "现状分析"
+        )
+
         return StateBuilder()\
-            .set("analysis_report", result["analysis_report"])\
-            .set("dimension_reports", result.get("dimension_reports", {}))\
+            .set("analysis_report", combined_report)\
+            .set("analysis_dimension_reports", dimension_reports)\
             .set("layer_1_completed", True)\
             .set("current_layer", 2)\
             .set("last_checkpoint_id", checkpoint_id)\
-            .add_message(f"现状分析完成，生成了 {len(result['analysis_report'])} 字符的综合报告。")\
+            .add_message(f"现状分析完成，生成了 {len(dimension_reports)} 个维度的分析报告。")\
             .build()
 
 
 class Layer2ConceptNode(BaseLayerNode):
-    """Layer 2: 规划思路节点"""
+    """Layer 2: 规划思路节点（集成RAG执行摘要）"""
 
     def __init__(self):
         super().__init__(layer_number=2, layer_name="规划思路", output_key="planning_concept")
 
     def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """调用规划思路子图"""
+        """调用规划思路子图（集成RAG）"""
         from ..subgraphs.concept_subgraph import call_concept_subgraph
         return call_concept_subgraph(
             project_name=state["project_name"],
             analysis_report=state["analysis_report"],
             dimension_reports=state.get("dimension_reports", {}),
             task_description=state["task_description"],
-            constraints=state.get("constraints", "无特殊约束")
+            constraints=state.get("constraints", "无特殊约束"),
+            rag_enabled=state.get("rag_enabled", True)  # 新增：传递RAG启用状态
         )
 
     def _build_success_updates(
@@ -295,25 +478,48 @@ class Layer2ConceptNode(BaseLayerNode):
         result: Dict[str, Any],
         checkpoint_id: str
     ) -> Dict[str, Any]:
-        """构建成功状态更新"""
+        """
+        构建成功状态更新
+        """
+        # 从子图返回值中获取维度报告
+        dimension_reports = result.get("concept_dimension_reports", {})
+
+        # 为维度报告添加标题（如果还没有标题）
+        # 检查是否已添加标题（通过检查第一个维度报告）
+        needs_titles = True
+        if dimension_reports:
+            first_content = next(iter(dimension_reports.values()), "")
+            if first_content.startswith("## "):
+                needs_titles = False
+
+        if needs_titles:
+            dimension_reports = self._add_titles_to_dimension_reports(dimension_reports)
+
+        # 生成综合报告（使用基类方法）
+        combined_report = self._generate_combined_report(
+            state.get("project_name", "项目"),
+            dimension_reports,
+            "规划思路"
+        )
+
         return StateBuilder()\
-            .set("planning_concept", result["concept_report"])\
-            .set("concept_dimension_reports", result.get("concept_dimension_reports", {}))\
+            .set("planning_concept", combined_report)\
+            .set("concept_dimension_reports", dimension_reports)\
             .set("layer_2_completed", True)\
             .set("current_layer", 3)\
             .set("last_checkpoint_id", checkpoint_id)\
-            .add_message(f"规划思路已生成，长度 {len(result['concept_report'])} 字符。")\
+            .add_message(f"规划思路完成，生成了 {len(dimension_reports)} 个维度的分析报告。")\
             .build()
 
 
 class Layer3DetailNode(BaseLayerNode):
-    """Layer 3: 详细规划节点"""
+    """Layer 3: 详细规划节点（集成RAG章节全文）"""
 
     def __init__(self):
         super().__init__(layer_number=3, layer_name="详细规划", output_key="detailed_plan")
 
     def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """调用详细规划子图"""
+        """调用详细规划子图（集成RAG）"""
         from ..subgraphs.detailed_plan_subgraph import call_detailed_plan_subgraph
         return call_detailed_plan_subgraph(
             project_name=state["project_name"],
@@ -324,7 +530,8 @@ class Layer3DetailNode(BaseLayerNode):
             task_description=state.get("task_description", "制定村庄详细规划"),
             constraints=state.get("constraints", "无特殊约束"),
             required_dimensions=state.get("required_dimensions"),
-            enable_human_review=state.get("need_human_review", False)
+            enable_human_review=state.get("need_human_review", False),
+            rag_enabled=state.get("rag_enabled", True)  # 新增：传递RAG启用状态
         )
 
     def _build_success_updates(
@@ -333,28 +540,38 @@ class Layer3DetailNode(BaseLayerNode):
         result: Dict[str, Any],
         checkpoint_id: str
     ) -> Dict[str, Any]:
-        """构建成功状态更新"""
-        # 构建详细维度报告字典
-        detailed_dimension_reports = {
-            "dimension_industry": result.get("industry_plan", ""),
-            "dimension_master_plan": result.get("master_plan", ""),
-            "dimension_traffic": result.get("traffic_plan", ""),
-            "dimension_public_service": result.get("public_service_plan", ""),
-            "dimension_infrastructure": result.get("infrastructure_plan", ""),
-            "dimension_ecological": result.get("ecological_plan", ""),
-            "dimension_disaster_prevention": result.get("disaster_prevention_plan", ""),
-            "dimension_heritage": result.get("heritage_plan", ""),
-            "dimension_landscape": result.get("landscape_plan", ""),
-            "dimension_project_bank": result.get("project_bank", ""),
-        }
+        """
+        构建成功状态更新
+        """
+        # 从子图返回值中获取维度报告
+        dimension_reports = result.get("detailed_dimension_reports", {})
+        completed_dimensions = result.get("completed_dimensions", [])
+
+        # 为维度报告添加标题（如果还没有标题）
+        # 检查是否已添加标题（通过检查第一个维度报告）
+        needs_titles = True
+        if dimension_reports:
+            first_content = next(iter(dimension_reports.values()), "")
+            if first_content.startswith("## "):
+                needs_titles = False
+
+        if needs_titles:
+            dimension_reports = self._add_titles_to_dimension_reports(dimension_reports)
+
+        # 生成综合报告（使用基类方法）
+        combined_report = self._generate_combined_report(
+            state.get("project_name", "项目"),
+            dimension_reports,
+            "详细规划"
+        )
 
         return StateBuilder()\
-            .set("detailed_plan", result["detailed_plan_report"])\
-            .set("detailed_dimension_reports", detailed_dimension_reports)\
+            .set("detailed_plan", combined_report)\
+            .set("detailed_dimension_reports", dimension_reports)\
             .set("layer_3_completed", True)\
             .set("current_layer", 4)\
             .set("last_checkpoint_id", checkpoint_id)\
-            .add_message(f"详细规划已生成，包含 {len(result.get('completed_dimensions', []))} 个专业维度。")\
+            .add_message(f"详细规划完成，生成了 {len(dimension_reports)} 个专业维度的规划报告。")\
             .build()
 
 

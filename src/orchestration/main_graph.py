@@ -12,16 +12,18 @@
 - 移除UI代码到工具层
 """
 
-from typing import TypedDict, List, Dict, Any, Literal
-from typing_extensions import Annotated
+from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Literal, TypedDict, Optional
+from typing_extensions import Annotated
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
-import operator
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..core.prompts import SYSTEM_PROMPT, PLANNING_CONCEPT_PROMPT
+from ..core.dimension_mapping import DEFAULT_ADAPTER_CONFIG
 from ..utils.logger import get_logger
 from ..utils.output_manager import OutputManager
 from ..utils.blackboard_manager import get_blackboard
@@ -31,8 +33,8 @@ from ..subgraphs.detailed_plan_subgraph import call_detailed_plan_subgraph
 
 # 使用新工具
 from ..tools.checkpoint_tool import CheckpointTool
-from ..tools.interactive_tool import InteractiveTool
 from ..tools.revision_tool import RevisionTool
+from ..utils.checkpoint_manager import get_checkpoint_manager
 
 # 使用新的节点类
 from ..nodes import (
@@ -42,7 +44,6 @@ from ..nodes import (
     ToolBridgeNode,
     PauseManagerNode
 )
-from ..nodes.tool_nodes import _run_human_review, _run_pause_interaction, _run_revision
 
 logger = get_logger(__name__)
 
@@ -59,6 +60,9 @@ class VillagePlanningState(TypedDict):
     task_description: str          # 规划任务描述
     constraints: str               # 约束条件
 
+    # 会话管理
+    session_id: str                # 会话ID（格式：YYYYMMDD_HHMMSS），用于唯一标识执行会话
+
     # 流程控制
     current_layer: int             # 当前执行层级 (1/2/3)
     layer_1_completed: bool        # 现状分析完成
@@ -72,7 +76,7 @@ class VillagePlanningState(TypedDict):
 
     # 各层成果
     analysis_report: str           # 现状分析报告
-    dimension_reports: Dict[str, str]  # 各维度现状分析报告（用于部分状态传递）
+    analysis_dimension_reports: Dict[str, str]  # 各维度现状分析报告（用于部分状态传递）
     planning_concept: str          # 规划思路
     concept_dimension_reports: Dict[str, str]  # 各维度规划思路报告（用于部分状态传递）
     detailed_plan: str             # 详细规划方案
@@ -80,12 +84,11 @@ class VillagePlanningState(TypedDict):
     final_output: str              # 最终成果
 
     # 输出管理
-    output_manager: OutputManager  # 输出管理器实例
+    output_path: str  # 输出路径（可序列化的字符串，替代OutputManager对象）
 
     # Checkpoint相关
     checkpoint_enabled: bool       # 是否启用checkpoint
     last_checkpoint_id: str        # 最后保存的checkpoint ID
-    checkpoint_manager: Any        # checkpoint工具实例
 
     # 逐步执行模式
     step_mode: bool                # 是否启用逐步执行模式
@@ -120,6 +123,66 @@ def _get_llm():
     return create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
 
 
+def _generate_simple_combined_report(
+    project_name: str,
+    dimension_reports: Dict[str, str],
+    report_type: str,
+    layer_number: int = 1
+) -> str:
+    """
+    生成简单的综合报告（用于显示）
+
+    【新增】简单拼接维度报告，不使用 LLM
+    【更新】使用标准维度顺序（而非字母顺序）
+
+    Args:
+        project_name: 项目名称
+        dimension_reports: 维度报告字典
+        report_type: 报告类型（现状分析/规划思路/详细规划）
+        layer_number: 层级编号 (1=现状分析, 2=规划思路, 3=详细规划)
+
+    Returns:
+        拼接后的综合报告
+    """
+    from ..utils.output_manager import OutputManager
+    from ..core.dimension_mapping import (
+        ANALYSIS_DIMENSION_NAMES,
+        CONCEPT_DIMENSION_NAMES,
+        DETAILED_DIMENSION_NAMES
+    )
+
+    report = f"# {project_name} {report_type}报告\n\n"
+
+    # 获取维度名称映射
+    if layer_number == 1:
+        dimension_names_map = ANALYSIS_DIMENSION_NAMES
+    elif layer_number == 2:
+        dimension_names_map = CONCEPT_DIMENSION_NAMES
+    elif layer_number == 3:
+        dimension_names_map = DETAILED_DIMENSION_NAMES
+    else:
+        dimension_names_map = {}
+
+    # 使用标准顺序（而非字母顺序）
+    standard_order = OutputManager._get_dimension_order(layer_number)
+
+    for dimension_key in standard_order:
+        if dimension_key not in dimension_reports:
+            continue
+        content = dimension_reports[dimension_key]
+        display_name = dimension_names_map.get(dimension_key, dimension_key)
+
+        # 检测内容是否已包含"## 标题"，如果有则直接使用
+        if content.startswith("## "):
+            report += f"{content}\n\n"
+        else:
+            report += f"## {display_name}\n\n{content}\n\n"
+
+    report += f"---\n**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+
+    return report
+
+
 # ==========================================
 # Layer执行节点
 # ==========================================
@@ -128,7 +191,8 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
     """
     Layer 1: 执行现状分析
 
-    调用现状分析子图进行10个维度的并行分析。
+    调用现状分析子图进行12个维度的并行分析。
+    【重构】只保存维度报告，不生成综合报告
     """
     logger.info(f"[主图-Layer1] 开始现状分析，项目: {state['project_name']}")
 
@@ -140,15 +204,26 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
         )
 
         if result["success"]:
-            logger.info(f"[主图-Layer1] 现状分析完成，报告长度: {len(result['analysis_report'])} 字符")
+            analysis_dimension_reports = result.get("analysis_dimension_reports", {})
+            logger.info(f"[主图-Layer1] 现状分析完成，维度报告数量: {len(analysis_dimension_reports)}")
+
+            # 【重构】从维度报告生成简单的综合报告（仅用于显示）
+            combined_report = _generate_simple_combined_report(
+                state["project_name"],
+                analysis_dimension_reports,
+                "现状分析",
+                layer_number=1
+            )
 
             # 保存 Layer 1 结果（使用 OutputManager）
-            output_manager: OutputManager = state.get("output_manager")
+            from ..utils.output_manager_registry import get_output_manager_registry
+            registry = get_output_manager_registry()
+            output_manager = registry.get(state.get("session_id"))
             if output_manager and output_manager.use_default_structure:
                 try:
                     save_result = output_manager.save_layer1_results(
-                        combined_report=result["analysis_report"],
-                        dimension_reports=result.get("dimension_reports", {})
+                        combined_report=combined_report,
+                        dimension_reports=analysis_dimension_reports
                     )
                     logger.info(f"[主图-Layer1] 保存了 {save_result['saved_count']} 个文件")
                 except Exception as save_error:
@@ -157,47 +232,36 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
             # 保存checkpoint（如果启用）
             checkpoint_id = ""
             if state.get("checkpoint_enabled", False):
-                checkpoint_manager = state.get("checkpoint_manager")
+                checkpoint_manager = get_checkpoint_manager(
+                    project_name=state["project_name"],
+                    timestamp=state.get("session_id")
+                )
                 if checkpoint_manager:
-                    # 使用新工具
-                    if isinstance(checkpoint_manager, CheckpointTool):
-                        save_result = checkpoint_manager.save(
-                            state={**state, **{
-                                "analysis_report": result["analysis_report"],
-                                "dimension_reports": result.get("dimension_reports", {}),
-                                "layer_1_completed": True,
-                                "current_layer": 2
-                            }},
-                            layer=1,
-                            description="Layer 1 现状分析完成"
-                        )
-                        checkpoint_id = save_result["checkpoint_id"] if save_result["success"] else ""
-                    else:
-                        # 兼容旧版本
-                        checkpoint_id = checkpoint_manager.save_checkpoint(
-                            state={**state, **{
-                                "analysis_report": result["analysis_report"],
-                                "dimension_reports": result.get("dimension_reports", {}),
-                                "layer_1_completed": True,
-                                "current_layer": 2
-                            }},
-                            layer=1,
-                            description="Layer 1 现状分析完成"
-                        )
+                    save_result = checkpoint_manager.save(
+                        state={**state, **{
+                            "analysis_report": combined_report,
+                            "analysis_dimension_reports": analysis_dimension_reports,
+                            "layer_1_completed": True,
+                            "current_layer": 2
+                        }},
+                        layer=1,
+                        description="Layer 1 现状分析完成"
+                    )
+                    checkpoint_id = save_result["checkpoint_id"] if save_result["success"] else ""
 
             return {
-                "analysis_report": result["analysis_report"],
-                "dimension_reports": result.get("dimension_reports", {}),
+                "analysis_report": combined_report,
+                "analysis_dimension_reports": analysis_dimension_reports,
                 "layer_1_completed": True,
                 "current_layer": 2,
                 "last_checkpoint_id": checkpoint_id,
-                "messages": [AIMessage(content=f"现状分析完成，生成了 {len(result['analysis_report'])} 字符的综合报告。")]
+                "messages": [AIMessage(content=f"现状分析完成，生成了 {len(analysis_dimension_reports)} 个维度的分析报告。")]
             }
         else:
-            logger.error(f"[主图-Layer1] 现状分析失败: {result['analysis_report']}")
+            logger.error(f"[主图-Layer1] 现状分析失败: {result.get('error', '未知错误')}")
             return {
-                "analysis_report": f"现状分析失败: {result['analysis_report']}",
-                "dimension_reports": {},
+                "analysis_report": f"现状分析失败: {result.get('error', '未知错误')}",
+                "analysis_dimension_reports": {},
                 "layer_1_completed": False,
                 "messages": [AIMessage(content="现状分析失败，请检查输入数据或稍后重试。")]
             }
@@ -206,7 +270,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
         logger.error(f"[主图-Layer1] 执行异常: {str(e)}")
         return {
             "analysis_report": f"执行异常: {str(e)}",
-            "dimension_reports": {},
+            "analysis_dimension_reports": {},
             "layer_1_completed": False,
             "messages": [AIMessage(content=f"现状分析过程中发生错误: {str(e)}")]
         }
@@ -217,6 +281,7 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
     Layer 2: 生成规划思路（使用规划思路子图）
 
     调用规划思路子图进行4个维度的并行分析。
+    【重构】只保存维度报告，不生成综合报告
     """
     logger.info(f"[主图-Layer2] 开始规划思路分析，项目: {state['project_name']}")
 
@@ -225,21 +290,32 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
         result = call_concept_subgraph(
             project_name=state["project_name"],
             analysis_report=state["analysis_report"],
-            dimension_reports=state.get("dimension_reports", {}),
+            dimension_reports=state.get("analysis_dimension_reports", {}),
             task_description=state["task_description"],
             constraints=state.get("constraints", "无特殊约束")
         )
 
         if result["success"]:
-            logger.info(f"[主图-Layer2] 规划思路完成，报告长度: {len(result['concept_report'])} 字符")
+            concept_dimension_reports = result.get("concept_dimension_reports", {})
+            logger.info(f"[主图-Layer2] 规划思路完成，维度报告数量: {len(concept_dimension_reports)}")
+
+            # 【重构】从维度报告生成简单的综合报告（仅用于显示）
+            combined_report = _generate_simple_combined_report(
+                state["project_name"],
+                concept_dimension_reports,
+                "规划思路",
+                layer_number=2
+            )
 
             # 保存 Layer 2 结果（使用 OutputManager）
-            output_manager: OutputManager = state.get("output_manager")
+            from ..utils.output_manager_registry import get_output_manager_registry
+            registry = get_output_manager_registry()
+            output_manager = registry.get(state.get("session_id"))
             if output_manager and output_manager.use_default_structure:
                 try:
                     save_result = output_manager.save_layer2_results(
-                        combined_report=result["concept_report"],
-                        dimension_reports=result.get("concept_dimension_reports", {})
+                        combined_report=combined_report,
+                        dimension_reports=concept_dimension_reports
                     )
                     logger.info(f"[主图-Layer2] 保存了 {save_result['saved_count']} 个文件")
                 except Exception as save_error:
@@ -248,46 +324,35 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
             # 保存checkpoint（如果启用）
             checkpoint_id = ""
             if state.get("checkpoint_enabled", False):
-                checkpoint_manager = state.get("checkpoint_manager")
+                checkpoint_manager = get_checkpoint_manager(
+                    project_name=state["project_name"],
+                    timestamp=state.get("session_id")
+                )
                 if checkpoint_manager:
-                    # 使用新工具
-                    if isinstance(checkpoint_manager, CheckpointTool):
-                        save_result = checkpoint_manager.save(
-                            state={**state, **{
-                                "planning_concept": result["concept_report"],
-                                "concept_dimension_reports": result.get("concept_dimension_reports", {}),
-                                "layer_2_completed": True,
-                                "current_layer": 3
-                            }},
-                            layer=2,
-                            description="Layer 2 规划思路完成"
-                        )
-                        checkpoint_id = save_result["checkpoint_id"] if save_result["success"] else ""
-                    else:
-                        # 兼容旧版本
-                        checkpoint_id = checkpoint_manager.save_checkpoint(
-                            state={**state, **{
-                                "planning_concept": result["concept_report"],
-                                "concept_dimension_reports": result.get("concept_dimension_reports", {}),
-                                "layer_2_completed": True,
-                                "current_layer": 3
-                            }},
-                            layer=2,
-                            description="Layer 2 规划思路完成"
-                        )
+                    save_result = checkpoint_manager.save(
+                        state={**state, **{
+                            "planning_concept": combined_report,
+                            "concept_dimension_reports": concept_dimension_reports,
+                            "layer_2_completed": True,
+                            "current_layer": 3
+                        }},
+                        layer=2,
+                        description="Layer 2 规划思路完成"
+                    )
+                    checkpoint_id = save_result["checkpoint_id"] if save_result["success"] else ""
 
             return {
-                "planning_concept": result["concept_report"],
-                "concept_dimension_reports": result.get("concept_dimension_reports", {}),
+                "planning_concept": combined_report,
+                "concept_dimension_reports": concept_dimension_reports,
                 "layer_2_completed": True,
                 "current_layer": 3,
                 "last_checkpoint_id": checkpoint_id,
-                "messages": [AIMessage(content=f"规划思路已生成，长度 {len(result['concept_report'])} 字符。")]
+                "messages": [AIMessage(content=f"规划思路已生成，包含 {len(concept_dimension_reports)} 个维度的分析报告。")]
             }
         else:
-            logger.error(f"[主图-Layer2] 规划思路失败: {result['concept_report']}")
+            logger.error(f"[主图-Layer2] 规划思路失败: {result.get('error', '未知错误')}")
             return {
-                "planning_concept": f"规划思路失败: {result['concept_report']}",
+                "planning_concept": f"规划思路失败: {result.get('error', '未知错误')}",
                 "concept_dimension_reports": {},
                 "layer_2_completed": False,
                 "messages": [AIMessage(content="规划思路生成失败，请检查输入数据或稍后重试。")]
@@ -307,8 +372,8 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
     """
     Layer 3: 详细规划
 
-    调用详细规划子图进行10个专业维度的规划。
-    新增：支持适配器配置。
+    调用详细规划子图进行12个专业维度的规划。
+    【重构】只保存维度报告，不生成综合报告
     """
     logger.info(f"[主图-Layer3] 开始生成详细规划，项目: {state['project_name']}")
 
@@ -318,7 +383,7 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
             project_name=state["project_name"],
             analysis_report=state["analysis_report"],
             planning_concept=state["planning_concept"],
-            dimension_reports=state.get("dimension_reports", {}),
+            dimension_reports=state.get("analysis_dimension_reports", {}),
             concept_dimension_reports=state.get("concept_dimension_reports", {}),
             task_description=state.get("task_description", "制定村庄详细规划"),
             constraints=state.get("constraints", "无特殊约束"),
@@ -331,30 +396,26 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
         )
 
         if result["success"]:
-            logger.info(f"[主图-Layer3] 详细规划完成，报告长度: {len(result['detailed_plan_report'])} 字符")
+            detailed_dimension_reports = result.get("detailed_dimension_reports", {})
+            logger.info(f"[主图-Layer3] 详细规划完成，维度报告数量: {len(detailed_dimension_reports)}")
             logger.info(f"[主图-Layer3] 已完成维度: {result['completed_dimensions']}")
 
-            # 收集各维度详细规划报告
-            # 键名不带前缀，与 OutputManager 期望的格式一致
-            detailed_dimension_reports = {
-                "industry": result.get("industry_plan", ""),
-                "master_plan": result.get("master_plan", ""),
-                "traffic": result.get("traffic_plan", ""),
-                "public_service": result.get("public_service_plan", ""),
-                "infrastructure": result.get("infrastructure_plan", ""),
-                "ecological": result.get("ecological_plan", ""),
-                "disaster_prevention": result.get("disaster_prevention_plan", ""),
-                "heritage": result.get("heritage_plan", ""),
-                "landscape": result.get("landscape_plan", ""),
-                "project_bank": result.get("project_bank", ""),
-            }
+            # 【重构】从维度报告生成简单的综合报告（仅用于显示）
+            combined_report = _generate_simple_combined_report(
+                state["project_name"],
+                detailed_dimension_reports,
+                "详细规划",
+                layer_number=3
+            )
 
             # 保存 Layer 3 结果（使用 OutputManager）
-            output_manager: OutputManager = state.get("output_manager")
+            from ..utils.output_manager_registry import get_output_manager_registry
+            registry = get_output_manager_registry()
+            output_manager = registry.get(state.get("session_id"))
             if output_manager and output_manager.use_default_structure:
                 try:
                     save_result = output_manager.save_layer3_results(
-                        combined_report=result["detailed_plan_report"],
+                        combined_report=combined_report,
                         dimension_reports=detailed_dimension_reports
                     )
                     logger.info(f"[主图-Layer3] 保存了 {save_result['saved_count']} 个文件")
@@ -364,36 +425,25 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
             # 保存checkpoint（如果启用）
             checkpoint_id = ""
             if state.get("checkpoint_enabled", False):
-                checkpoint_manager = state.get("checkpoint_manager")
+                checkpoint_manager = get_checkpoint_manager(
+                    project_name=state["project_name"],
+                    timestamp=state.get("session_id")
+                )
                 if checkpoint_manager:
-                    # 使用新工具
-                    if isinstance(checkpoint_manager, CheckpointTool):
-                        save_result = checkpoint_manager.save(
-                            state={**state, **{
-                                "detailed_plan": result["detailed_plan_report"],
-                                "detailed_dimension_reports": detailed_dimension_reports,
-                                "layer_3_completed": True,
-                                "current_layer": 4
-                            }},
-                            layer=3,
-                            description="Layer 3 详细规划完成"
-                        )
-                        checkpoint_id = save_result["checkpoint_id"] if save_result["success"] else ""
-                    else:
-                        # 兼容旧版本
-                        checkpoint_id = checkpoint_manager.save_checkpoint(
-                            state={**state, **{
-                                "detailed_plan": result["detailed_plan_report"],
-                                "detailed_dimension_reports": detailed_dimension_reports,
-                                "layer_3_completed": True,
-                                "current_layer": 4
-                            }},
-                            layer=3,
-                            description="Layer 3 详细规划完成"
-                        )
+                    save_result = checkpoint_manager.save(
+                        state={**state, **{
+                            "detailed_plan": combined_report,
+                            "detailed_dimension_reports": detailed_dimension_reports,
+                            "layer_3_completed": True,
+                            "current_layer": 4
+                        }},
+                        layer=3,
+                        description="Layer 3 详细规划完成"
+                    )
+                    checkpoint_id = save_result["checkpoint_id"] if save_result["success"] else ""
 
             return {
-                "detailed_plan": result["detailed_plan_report"],
+                "detailed_plan": combined_report,
                 "detailed_dimension_reports": detailed_dimension_reports,
                 "layer_3_completed": True,
                 "current_layer": 4,
@@ -458,7 +508,9 @@ def generate_final_output(state: VillagePlanningState) -> Dict[str, Any]:
     logger.info(f"[主图-成果] 最终成果生成完成，总长度: {len(final_output)} 字符")
 
     # 保存最终综合报告（使用 OutputManager）
-    output_manager: OutputManager = state.get("output_manager")
+    from ..utils.output_manager_registry import get_output_manager_registry
+    registry = get_output_manager_registry()
+    output_manager = registry.get(state.get("session_id"))
     final_output_path = None
     if output_manager:
         try:
@@ -481,9 +533,9 @@ def tool_bridge_node(state: VillagePlanningState) -> Dict[str, Any]:
     """
     工具桥接节点 - 统一工具调用入口
 
-    根据状态标志调用相应的工具：
-    - need_human_review: 人工审查（使用InteractiveTool）
-    - pause_after_step: 暂停交互（使用InteractiveTool）
+    根据状态标志处理相应的工具逻辑：
+    - need_human_review: 人工审查（返回暂停状态，等待 API 调用）
+    - pause_after_step: 暂停交互（返回暂停状态，等待 API 调用）
     - need_revision: 修复（使用RevisionTool）
 
     Returns:
@@ -493,149 +545,77 @@ def tool_bridge_node(state: VillagePlanningState) -> Dict[str, Any]:
 
     # 优先级：人工审查 > 暂停 > 修复
     if state.get("need_human_review", False):
-        return _run_human_review(state)
+        return _prepare_human_review(state)
     elif state.get("pause_after_step", False):
-        return _run_pause_interaction(state)
+        return _prepare_pause(state)
     elif state.get("need_revision", False):
         return _run_revision(state)
     else:
         return state
 
 
-def _run_human_review(state: VillagePlanningState) -> Dict[str, Any]:
-    """执行人工审查（使用InteractiveTool）"""
-    logger.info(f"[主图-人工审查] 开始人工审查")
+def _prepare_human_review(state: VillagePlanningState) -> Dict[str, Any]:
+    """
+    准备人工审查（返回暂停状态）
 
-    # 获取当前需要审查的内容
+    在Web环境中，我们无法直接进行交互式审查。
+    相反，我们返回一个暂停状态，让API层知道需要人工审查。
+    """
+    logger.info(f"[主图-人工审查] 准备人工审查，返回暂停状态")
+
     current_layer = state.get("current_layer", 1)
-    if current_layer == 1:
-        content = state.get("analysis_report", "")
-        title = "现状分析报告"
-    elif current_layer == 2:
-        content = state.get("planning_concept", "")
-        title = "规划思路报告"
-    else:
-        content = state.get("detailed_plan", "")
-        title = "详细规划报告"
 
-    # 获取可用checkpoint列表（用于回退）
-    checkpoint_manager = state.get("checkpoint_manager")
-    available_checkpoints = []
-    if checkpoint_manager:
-        # 使用新工具
-        if isinstance(checkpoint_manager, CheckpointTool):
-            list_result = checkpoint_manager.list()
-            if list_result["success"]:
-                available_checkpoints = list_result["checkpoints"]
-        else:
-            # 兼容旧版本
-            available_checkpoints = checkpoint_manager.list_checkpoints()
-
-    # 使用InteractiveTool显示审查界面
-    tool = InteractiveTool()
-    result = tool.review_content(
-        content=content,
-        title=title,
-        allow_rollback=True,
-        available_checkpoints=available_checkpoints
+    # 保存当前checkpoint以便恢复
+    checkpoint_id = ""
+    checkpoint_manager = get_checkpoint_manager(
+        project_name=state["project_name"],
+        timestamp=state.get("session_id")
     )
+    if checkpoint_manager:
+        save_result = checkpoint_manager.save(
+            state=state,
+            layer=current_layer,
+            description=f"Layer {current_layer} 等待人工审查"
+        )
+        checkpoint_id = save_result.get("checkpoint_id", "") if save_result.get("success") else ""
 
-    # 处理审查结果
-    action = result.get("action", "")
-
-    if action == "approve":
-        logger.info("[主图-人工审查] 审核通过")
-        return {
-            "messages": [AIMessage(content="人工审查通过")],
-            "need_human_review": False,
-            "human_feedback": ""
-        }
-    elif action == "reject":
-        logger.info(f"[主图-人工审查] 审核驳回，反馈: {result.get('feedback', '')}")
-        return {
-            "messages": [AIMessage(content=f"人工审查驳回，反馈: {result.get('feedback', '')}")],
-            "need_human_review": False,
-            "human_feedback": result.get("feedback", ""),
-            "need_revision": True
-        }
-    elif action == "rollback":
-        logger.info(f"[主图-人工审查] 触发回退到: {result.get('checkpoint_id', '')}")
-        return {
-            "messages": [AIMessage(content=f"回退到checkpoint: {result.get('checkpoint_id', '')}")],
-            "trigger_rollback": True,
-            "rollback_target": result.get("checkpoint_id", "")
-        }
-    elif action == "quit":
-        logger.info("[主图-人工审查] 用户退出")
-        return {
-            "messages": [AIMessage(content="用户退出程序")],
-            "quit_requested": True
-        }
-    else:
-        # 默认通过
-        return {
-            "messages": [AIMessage(content="人工审查完成（默认通过）")],
-            "need_human_review": False
-        }
+    return {
+        "pause_after_step": True,
+        "messages": [AIMessage(content=f"Layer {current_layer} 已完成，等待人工审查")],
+        "last_checkpoint_id": checkpoint_id
+    }
 
 
-def _run_pause_interaction(state: VillagePlanningState) -> Dict[str, Any]:
-    """执行暂停交互（使用InteractiveTool）"""
-    logger.info(f"[主图-暂停] 进入暂停节点")
+def _prepare_pause(state: VillagePlanningState) -> Dict[str, Any]:
+    """
+    准备暂停（返回暂停状态）
 
-    tool = InteractiveTool()
+    在step模式下，每一层完成后都会暂停，等待外部继续指令。
+    """
+    logger.info(f"[主图-暂停] Step模式暂停，返回暂停状态")
 
-    # 显示进度
-    tool.show_progress(state)
+    current_layer = state.get("current_layer", 1)
 
-    # 交互循环
-    while True:
-        # 获取用户命令
-        menu_result = tool.show_menu()
-        if not menu_result["success"]:
-            continue
+    # 保存当前checkpoint以便恢复
+    checkpoint_id = ""
+    checkpoint_manager = get_checkpoint_manager(
+        project_name=state["project_name"],
+        timestamp=state.get("session_id")
+    )
+    if checkpoint_manager:
+        # 保存当前状态
+        save_result = checkpoint_manager.save(
+            state=state,
+            layer=current_layer,
+            description=f"Layer {current_layer} 完成，step模式暂停"
+        )
+        checkpoint_id = save_result.get("checkpoint_id", "") if save_result.get("success") else ""
 
-        command = menu_result["command"]
-        exec_result = tool.execute_command(command, state)
-
-        action = exec_result.get("action", "")
-        modified_state = exec_result.get("modified_state", {})
-
-        # Preserve layer completion state
-        preserved_state = {
-            "layer_1_completed": state.get("layer_1_completed", False),
-            "layer_2_completed": state.get("layer_2_completed", False),
-            "layer_3_completed": state.get("layer_3_completed", False),
-            "current_layer": state.get("current_layer", 1),
-        }
-
-        if action == "continue":
-            logger.info("[主图-暂停] 继续执行")
-            return {
-                "pause_after_step": False,
-                "messages": [AIMessage(content="继续执行")],
-                **preserved_state,
-                **modified_state
-            }
-        elif action == "rollback":
-            checkpoint_id = exec_result.get("checkpoint_id", "")
-            logger.info(f"[主图-暂停] 回退到: {checkpoint_id}")
-            return {
-                "trigger_rollback": True,
-                "rollback_target": checkpoint_id,
-                "messages": [AIMessage(content=f"回退到checkpoint: {checkpoint_id}")],
-                **preserved_state,
-                **modified_state
-            }
-        elif action == "quit":
-            logger.info("[主图-暂停] 用户退出")
-            return {
-                "quit_requested": True,
-                "messages": [AIMessage(content="用户退出程序")],
-                **preserved_state,
-                **modified_state
-            }
-        # 其他action保持暂停状态
+    return {
+        "pause_after_step": True,
+        "messages": [AIMessage(content=f"Layer {current_layer} 已完成，暂停中")],
+        "last_checkpoint_id": checkpoint_id
+    }
 
 
 def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
@@ -674,22 +654,9 @@ def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
         revised_results = revise_result["revised_results"]
         detailed_dimension_reports = state.get("detailed_dimension_reports", {})
 
-        # 维度键名映射 - 从子图的键名映射到状态中的键名
-        # 子图返回: "industry", "master_plan", 等（不带前缀）
-        # 状态中保存: 同样的键名（不带前缀）
-        # 维度名称到友好名称的映射（用于显示）
-        dimension_names = {
-            "industry": "产业规划",
-            "master_plan": "村域总体规划",
-            "traffic": "综合交通规划",
-            "public_service": "公共服务设施规划",
-            "infrastructure": "基础设施规划",
-            "ecological": "生态绿地系统规划",
-            "disaster_prevention": "防灾减灾规划",
-            "heritage": "历史文化保护规划",
-            "landscape": "村庄风貌规划",
-            "project_bank": "项目库"
-        }
+        # 使用共享的维度名称映射（用于显示）
+        from ..core.dimension_mapping import DETAILED_DIMENSION_NAMES
+        dimension_names = DETAILED_DIMENSION_NAMES
 
         # 重新组合综合报告
         updated_detailed_plan = state.get("detailed_plan", "")
@@ -811,14 +778,25 @@ def route_after_layer3(state: VillagePlanningState) -> Literal["final", "end"]:
         return "end"
 
 
-def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "layer2_concept", "layer3_detail", "end"]:
+def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "layer2_concept", "layer3_detail", "end", "__interrupt__"]:
     """
     工具桥接后的路由决策
 
     决定从tool_bridge出来后：
+    - 如果waiting_for_review或__interrupt__：中断图执行（路由到END）
     - 如果step_mode开启：路由到pause节点（设置暂停状态）
     - 否则：直接路由到对应的layer执行节点
     """
+    # Check for interruption signal first (highest priority)
+    if state.get("__interrupt__", False) or state.get("waiting_for_review", False):
+        logger.info("[主图-路由] Human review requested, interrupting graph execution")
+        return "__interrupt__"  # Special route to END
+
+    # Check for step mode pause (next priority)
+    if state.get("step_mode", False) and state.get("pause_after_step", False):
+        logger.info("[主图-路由] Step mode pause, interrupting graph execution")
+        return "__interrupt__"
+
     current_layer = state.get("current_layer", 1)
 
     # 检查退出标志
@@ -878,11 +856,14 @@ def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "la
 # 构建主图
 # ==========================================
 
-def create_village_planning_graph() -> StateGraph:
+def create_village_planning_graph(checkpointer: Optional[Any] = None) -> StateGraph:
     """
     创建村庄规划主图
 
     使用新的节点类实例替代旧的函数节点。
+
+    Args:
+        checkpointer: Optional LangGraph checkpointer for state persistence
 
     Returns:
         编译后的 StateGraph 实例
@@ -932,7 +913,7 @@ def create_village_planning_graph() -> StateGraph:
         }
     )
 
-    # tool_bridge -> pause/layer2/layer3/end
+    # tool_bridge -> pause/layer2/layer3/end/__interrupt__
     # 在step模式下，tool_bridge会路由到pause节点以重置暂停状态
     builder.add_conditional_edges(
         "tool_bridge",
@@ -941,6 +922,7 @@ def create_village_planning_graph() -> StateGraph:
             "pause": "pause",
             "layer2_concept": "layer2_concept",
             "layer3_detail": "layer3_detail",
+            "__interrupt__": END,  # NEW: Route interruption to END
             "end": END
         }
     )
@@ -969,10 +951,16 @@ def create_village_planning_graph() -> StateGraph:
     # 最终节点 -> END
     builder.add_edge("generate_final", END)
 
-    # 编译主图
-    main_graph = builder.compile()
+    # Compile with checkpointer
+    if checkpointer is None:
+        checkpointer = MemorySaver()
+        logger.info("[主图构建] Using default MemorySaver checkpointer")
+    else:
+        logger.info(f"[主图构建] Using provided checkpointer: {type(checkpointer).__name__}")
 
-    logger.info("[主图构建] 村庄规划主图构建完成")
+    main_graph = builder.compile(checkpointer=checkpointer)
+
+    logger.info("[主图构建] 村庄规划主图构建完成 (with checkpointer)")
 
     return main_graph
 
@@ -991,10 +979,18 @@ def run_village_planning(
     output_manager: OutputManager = None,
     custom_output_path: str = None,
     step_mode: bool = False,
-    step_level: str = "layer"
+    step_level: str = "layer",
+    resume_from_checkpoint: str = None
 ) -> Dict[str, Any]:
     """
     执行村庄规划主流程
+
+    支持的分步执行模式：
+    - step_mode=False: 一次性执行完成所有层级
+    - step_mode=True: 每层完成后暂停，返回暂停状态
+
+    支持从checkpoint恢复：
+    - resume_from_checkpoint: 指定checkpoint ID，从该点继续执行
 
     Args:
         project_name: 项目/村庄名称
@@ -1007,9 +1003,10 @@ def run_village_planning(
         custom_output_path: 自定义输出路径（可选）
         step_mode: 是否启用逐步执行模式
         step_level: 步骤级别
+        resume_from_checkpoint: checkpoint ID（用于恢复执行）
 
     Returns:
-        包含最终成果的字典
+        包含最终成果或暂停状态的字典
     """
     from ..core.langsmith_integration import get_langsmith_manager
 
@@ -1031,19 +1028,38 @@ def run_village_planning(
 
     logger.info(f"[主图-调用] 开始执行村庄规划: {project_name}")
 
-    # 智能检测village_data是文件路径还是直接数据
-    from ..tools.file_manager import VillageDataManager
-    manager = VillageDataManager()
+    # 从checkpoint恢复（如果提供）
+    if resume_from_checkpoint:
+        logger.info(f"[主图-调用] 从checkpoint恢复: {resume_from_checkpoint}")
+        checkpoint_manager = get_checkpoint_manager(
+            project_name=project_name,
+            timestamp=output_manager.timestamp if output_manager else None
+        )
+        load_result = checkpoint_manager.load(resume_from_checkpoint)
 
-    # 如果看起来像文件路径，尝试加载
-    if len(village_data) < 200 and ("\n" not in village_data or Path(village_data).exists()):
-        try:
-            result = manager.load_data(village_data)
-            if result["success"]:
-                village_data = result["content"]
-                logger.info(f"[主图-调用] 从文件加载数据: {result['metadata'].get('filename', 'unknown')}, {len(village_data)} 字符")
-        except:
-            pass
+        if load_result["success"]:
+            initial_state = load_result["state"]
+            logger.info(f"[主图-调用] 已恢复到 Layer {initial_state.get('current_layer', 1)}")
+        else:
+            logger.error(f"[主图-调用] 无法加载checkpoint: {load_result.get('error')}")
+            return {
+                "success": False,
+                "error": f"无法加载checkpoint: {load_result.get('error')}"
+            }
+    else:
+        # 智能检测village_data是文件路径还是直接数据
+        from ..tools.file_manager import VillageDataManager
+        manager = VillageDataManager()
+
+        # 如果看起来像文件路径，尝试加载
+        if len(village_data) < 200 and ("\n" not in village_data or Path(village_data).exists()):
+            try:
+                result = manager.load_data(village_data)
+                if result["success"]:
+                    village_data = result["content"]
+                    logger.info(f"[主图-调用] 从文件加载数据: {result['metadata'].get('filename', 'unknown')}, {len(village_data)} 字符")
+            except:
+                pass
 
     # 创建或使用提供的 OutputManager
     if output_manager is None:
@@ -1052,6 +1068,12 @@ def run_village_planning(
             project_name=project_name,
             custom_output_path=custom_output_path
         )
+
+    # 注册到全局registry
+    from ..utils.output_manager_registry import get_output_manager_registry
+    registry = get_output_manager_registry()
+    session_id = output_manager.timestamp if output_manager else datetime.now().strftime("%Y%m%d_%H%M%S")
+    registry.register(session_id, output_manager)
 
     # 确保输出目录存在
     if output_manager:
@@ -1066,6 +1088,7 @@ def run_village_planning(
         "village_data": village_data,
         "task_description": task_description,
         "constraints": constraints,
+        "session_id": session_id,
         "current_layer": 1,
         "layer_1_completed": False,
         "layer_2_completed": False,
@@ -1079,10 +1102,9 @@ def run_village_planning(
         "detailed_plan": "",
         "detailed_dimension_reports": {},
         "final_output": "",
-        "output_manager": output_manager,
+        "output_path": str(output_manager.output_path) if output_manager else "",
         "checkpoint_enabled": True,
         "last_checkpoint_id": "",
-        "checkpoint_manager": None,
         "step_mode": step_mode,
         "step_level": step_level,
         "pause_after_step": step_mode,
@@ -1092,29 +1114,19 @@ def run_village_planning(
         "messages": [],
         # 新增：黑板管理器
         "blackboard": get_blackboard(),
-        # 新增：适配器配置
-        "enable_adapters": False,  # 默认关闭适配器
-        "adapter_config": {
-            # 配置每个维度使用的适配器
-            "industry": ["gis"],  # 产业规划使用GIS分析
-            "ecological": ["gis"],  # 生态规划使用GIS分析
-            "traffic": ["network"],  # 交通规划使用网络分析
-            "infrastructure": ["gis", "network"],  # 基础设施使用多种适配器
-            "public_service": ["network"],  # 公共服务使用网络分析
-            "master_plan": ["gis"],  # 总体规划使用GIS分析
-            "landscape": ["gis"],  # 风貌规划使用GIS分析
-            "disaster_prevention": ["gis"]  # 防灾减灾使用GIS分析
-        }
+        # 适配器配置（使用共享的默认配置）
+        "enable_adapters": False,
+        "adapter_config": DEFAULT_ADAPTER_CONFIG
     }
 
     # 初始化checkpoint工具（如果启用）
     if initial_state["checkpoint_enabled"]:
-        checkpoint_manager = CheckpointTool(
+        checkpoint_manager = get_checkpoint_manager(
             project_name=project_name,
             timestamp=output_manager.timestamp if output_manager else None
         )
-        initial_state["checkpoint_manager"] = checkpoint_manager
-        logger.info("[主图-调用] Checkpoint工具已初始化")
+        logger.info("[主图-调用] Checkpoint工具已初始化（通过全局管理器）")
+        # 不将 checkpoint_manager 添加到 initial_state
 
     try:
         if stream_mode:
@@ -1135,8 +1147,30 @@ def run_village_planning(
 
         logger.info("[主图-调用] 规划流程执行完成")
 
+        # 检查是否处于暂停状态
+        if final_state.get("pause_after_step", False):
+            current_layer = final_state.get("current_layer", 1)
+            logger.info(f"[主图-调用] 任务暂停在 Layer {current_layer}")
+
+            return {
+                "success": True,
+                "status": "paused",
+                "current_layer": current_layer,
+                "checkpoint_id": final_state.get("last_checkpoint_id", ""),
+                "analysis_report": final_state.get("analysis_report", ""),
+                "planning_concept": final_state.get("planning_concept", ""),
+                "detailed_plan": final_state.get("detailed_plan", ""),
+                "layer_1_completed": final_state.get("layer_1_completed", False),
+                "layer_2_completed": final_state.get("layer_2_completed", False),
+                "layer_3_completed": final_state.get("layer_3_completed", False),
+                "output_manager": output_manager,
+                "state": final_state  # 返回完整状态用于恢复
+            }
+
+        # 正常完成
         return {
             "success": True,
+            "status": "completed",
             "final_output": final_state.get("final_output", ""),
             "final_output_path": final_state.get("final_output_path"),
             "analysis_report": final_state.get("analysis_report", ""),
@@ -1147,13 +1181,15 @@ def run_village_planning(
                 final_state.get("layer_2_completed", False),
                 final_state.get("layer_3_completed", False)
             ]),
-            "output_manager": output_manager
+            "output_manager": output_manager,
+            "state": final_state
         }
 
     except Exception as e:
         logger.error(f"[主图-调用] 执行失败: {str(e)}")
         return {
             "success": False,
+            "status": "failed",
             "error": str(e),
             "final_output": f"执行失败: {str(e)}"
         }
@@ -1179,7 +1215,10 @@ def resume_from_checkpoint(
 
     try:
         # 创建checkpoint工具
-        checkpoint_manager = CheckpointTool(project_name)
+        checkpoint_manager = get_checkpoint_manager(
+            project_name=project_name,
+            timestamp=output_manager.timestamp if output_manager else None
+        )
 
         # 加载checkpoint
         load_result = checkpoint_manager.load(checkpoint_id)
@@ -1201,6 +1240,13 @@ def resume_from_checkpoint(
             except Exception as e:
                 logger.warning(f"[主图-恢复] 重建output_manager失败: {e}")
 
+        # 注册到全局registry
+        from ..utils.output_manager_registry import get_output_manager_registry
+        registry = get_output_manager_registry()
+        session_id = state.get("session_id")
+        if session_id:
+            registry.register(session_id, output_manager)
+
         # 获取当前层级
         current_layer = state.get("current_layer", 1)
 
@@ -1216,9 +1262,8 @@ def resume_from_checkpoint(
             graph = create_village_planning_graph()
 
             # 更新状态
-            state["output_manager"] = output_manager
+            state["output_path"] = str(output_manager.output_path) if output_manager else ""
             state["checkpoint_enabled"] = True
-            state["checkpoint_manager"] = checkpoint_manager
 
             # 从Layer 2开始执行
             final_state = graph.invoke(state)
@@ -1246,9 +1291,8 @@ def resume_from_checkpoint(
             graph = create_village_planning_graph()
 
             # 更新状态
-            state["output_manager"] = output_manager
+            state["output_path"] = str(output_manager.output_path) if output_manager else ""
             state["checkpoint_enabled"] = True
-            state["checkpoint_manager"] = checkpoint_manager
 
             # 从Layer 3开始执行
             final_state = graph.invoke(state)

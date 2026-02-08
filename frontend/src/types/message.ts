@@ -11,12 +11,28 @@ export interface BaseMessage {
 }
 
 export type MessageRole = BaseMessage['role'];
-export type MessageType = 'text' | 'file' | 'progress' | 'action' | 'result' | 'error' | 'system';
+export type MessageType = 'text' | 'file' | 'progress' | 'action' | 'result' | 'error' | 'system' | 'layer_completed' | 'review_request' | 'checkpoint_list' | 'review_interaction';
+
+// Knowledge Reference Types (RAG集成)
+export interface KnowledgeReference {
+  source: string;
+  chapter?: string;
+  page?: string;
+  excerpt?: string;
+}
+
+// Streaming State (for Gemini-style streaming output)
+export type StreamingState = 'idle' | 'streaming' | 'paused' | 'completed';
 
 // Message Types
 export interface TextMessage extends BaseMessage {
   type: 'text';
   content: string;
+  // Streaming support
+  streamingState?: StreamingState;
+  streamingContent?: string; // 当前已显示的内容
+  // RAG知识引用
+  knowledgeReferences?: KnowledgeReference[];
 }
 
 export interface FileMessage extends BaseMessage {
@@ -24,6 +40,7 @@ export interface FileMessage extends BaseMessage {
   filename: string;
   fileContent: string;
   fileSize?: number;
+  encoding?: string;
 }
 
 export interface ProgressMessage extends BaseMessage {
@@ -63,6 +80,90 @@ export interface SystemMessage extends BaseMessage {
   level?: 'info' | 'warning' | 'error';
 }
 
+// Layer Completed Message
+export interface LayerCompletedMessage extends BaseMessage {
+  type: 'layer_completed';
+  layer: number;
+  content: string;
+  summary: {
+    word_count: number;
+    key_points: string[];
+    dimension_count?: number;
+    dimension_names?: string[];
+  };
+  fullReportContent?: string;
+  dimensionReports?: Record<string, string>;
+  actions: ActionButton[];
+}
+
+// Review Request Message
+export interface ReviewRequestMessage extends BaseMessage {
+  type: 'review_request';
+  content: string;
+  layer: number;
+  taskId: string;
+  summary: {
+    word_count: number;
+    section_count: number;
+  };
+  actions: ActionButton[];
+}
+
+// Checkpoint List Message
+export interface CheckpointListMessage extends BaseMessage {
+  type: 'checkpoint_list';
+  content: string;
+  checkpoints: Checkpoint[];
+  currentCheckpoint?: string;
+  actions: ActionButton[];
+}
+
+// Review Interaction Message - Interactive review UI embedded in chat
+export interface ReviewInteractionMessage extends BaseMessage {
+  type: 'review_interaction';
+  role: 'assistant';
+  layer: number;
+  content: string;
+  reviewState: 'pending' | 'approved' | 'rejected' | 'rolled_back';
+
+  // Review options
+  availableActions: ('approve' | 'reject' | 'rollback')[];
+
+  // Dimension selection
+  enableDimensionSelection: boolean;
+  availableDimensions?: DimensionInfo[];
+
+  // Checkpoint rollback
+  enableRollback: boolean;
+  checkpoints?: Checkpoint[];
+
+  // Feedback input
+  feedbackPlaceholder: string;
+  quickFeedbackOptions?: string[];
+
+  // Submission status
+  submittedAt?: Date;
+  submittedBy?: 'user';
+  submissionType?: 'approve' | 'reject' | 'rollback';
+  submissionFeedback?: string;
+  submissionDimensions?: string[];
+}
+
+// Dimension Info for review selection
+export interface DimensionInfo {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+// Checkpoint type
+export interface Checkpoint {
+  checkpoint_id: string;
+  description: string;
+  timestamp: string;
+  layer: number;
+}
+
 export type Message =
   | TextMessage
   | FileMessage
@@ -70,7 +171,11 @@ export type Message =
   | ActionMessage
   | ResultMessage
   | ErrorMessage
-  | SystemMessage;
+  | SystemMessage
+  | LayerCompletedMessage
+  | ReviewRequestMessage
+  | CheckpointListMessage
+  | ReviewInteractionMessage;
 
 // Action Button
 export interface ActionButton {
@@ -99,6 +204,7 @@ export interface PlanningParams {
   constraints?: string;
   stepMode?: boolean;
   streamMode?: boolean;
+  enableReview?: boolean;
 }
 
 // SSE Types
@@ -111,6 +217,71 @@ export interface SSEEvent {
   task_id?: string;
   result?: any;
   error?: string;
+  // Streaming support
+  text_chunk?: string;
+  thinking_state?: 'analyzing' | 'generating' | 'reviewing' | 'processing' | 'waiting';
+}
+
+// Layer Completed Event Data (for SSE)
+export interface LayerCompletedEventData {
+  layer: number;
+  layer_number: number;
+  session_id: string;
+  message: string;
+  current_layer: number;
+  // Report content included directly in SSE event
+  report_content?: string;
+  dimension_reports?: Record<string, string>;
+  timestamp?: number;
+}
+
+// Enhanced SSE Event Types for Gemini-style streaming
+export interface SSETextChunkEvent {
+  type: 'text_chunk';
+  chunk: string;
+  message_id: string;
+  is_complete: boolean;
+}
+
+export interface SSEThinkingEvent {
+  type: 'thinking';
+  state: 'analyzing' | 'generating' | 'reviewing' | 'processing' | 'waiting';
+  message?: string;
+}
+
+// Message Feedback (for message actions)
+export interface MessageFeedback {
+  positive?: boolean;
+  negative?: boolean;
+  timestamp?: Date;
+  comment?: string;
+}
+
+// Message Edit History
+export interface MessageEdit {
+  originalContent: string;
+  editedContent: string;
+  timestamp: Date;
+}
+
+// Enhanced Message Metadata
+export interface MessageMetadata {
+  // Streaming
+  streamingState?: StreamingState;
+  streamingContent?: string;
+  // Feedback
+  feedback?: MessageFeedback;
+  // Edit history
+  editHistory?: MessageEdit[];
+  // Thinking state
+  thinkingState?: 'analyzing' | 'generating' | 'reviewing' | 'processing' | 'waiting';
+  // Display options
+  highlighted?: boolean;
+  pinned?: boolean;
+  // Timestamps
+  editedAt?: Date;
+  streamingStartedAt?: Date;
+  streamingCompletedAt?: Date;
 }
 
 // Helper Functions
@@ -214,3 +385,11 @@ export const isProgressMessage = (msg: Message): msg is ProgressMessage => msg.t
 export const isResultMessage = (msg: Message): msg is ResultMessage => msg.type === 'result';
 
 export const isErrorMessage = (msg: Message): msg is ErrorMessage => msg.type === 'error';
+
+export const isLayerCompletedMessage = (msg: Message): msg is LayerCompletedMessage => msg.type === 'layer_completed';
+
+export const isReviewRequestMessage = (msg: Message): msg is ReviewRequestMessage => msg.type === 'review_request';
+
+export const isCheckpointListMessage = (msg: Message): msg is CheckpointListMessage => msg.type === 'checkpoint_list';
+
+export const isReviewInteractionMessage = (msg: Message): msg is ReviewInteractionMessage => msg.type === 'review_interaction';

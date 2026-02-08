@@ -1,28 +1,41 @@
-"""
-状态过滤工具
+"""State filtering utilities.
 
-根据维度依赖关系，智能组装子图需要的部分状态。
-支持完整依赖链追踪和Token优化统计。
+Intelligently assembles partial states required by subgraphs based on
+dimension dependency relationships. Supports full dependency chain tracking
+and token optimization statistics.
 """
 
-from typing import Dict, List, Any, Optional
+from __future__ import annotations
+
+from typing import Any, Literal, Callable
+
 from ..core.dimension_mapping import (
     ANALYSIS_TO_CONCEPT_MAPPING,
-    CONCEPT_TO_DETAILED_MAPPING,
     ANALYSIS_DIMENSION_NAMES,
     CONCEPT_DIMENSION_NAMES,
     DETAILED_DIMENSION_NAMES,
     FULL_DEPENDENCY_CHAIN,
-    get_full_dependency_chain
+    get_full_dependency_chain,
+    get_required_info_for_detailed
 )
 from ..utils.logger import get_logger
+
+# RAG imports (conditional to avoid errors if RAG not available)
+try:
+    from ..rag.core.context_manager import DocumentContextManager
+    from ..rag.core.summarization import HierarchicalSummary
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
+    logger = get_logger(__name__)
+    logger.warning("[RAG集成] RAG系统不可用，相关功能将被禁用")
 
 logger = get_logger(__name__)
 
 
 def filter_analysis_report_for_concept(
     concept_dimension: str,
-    full_analysis_reports: Optional[Dict[str, str]],
+    full_analysis_reports: dict[str, str] | None,
     full_analysis_report: str
 ) -> str:
     """
@@ -81,11 +94,11 @@ def filter_analysis_report_for_concept(
 
 def filter_state_for_detailed_dimension(
     detailed_dimension: str,
-    full_analysis_reports: Optional[Dict[str, str]],
+    full_analysis_reports: dict[str, str] | None,
     full_analysis_report: str,
-    full_concept_reports: Optional[Dict[str, str]],
+    full_concept_reports: dict[str, str] | None,
     full_concept_report: str
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """
     为特定详细规划维度筛选相关的现状分析和规划思路信息
 
@@ -99,9 +112,9 @@ def filter_state_for_detailed_dimension(
     Returns:
         包含 filtered_analysis 和 filtered_concept 的字典
     """
-    mapping = CONCEPT_TO_DETAILED_MAPPING.get(detailed_dimension)
+    mapping = get_required_info_for_detailed(detailed_dimension)
 
-    if not mapping:
+    if not mapping or not mapping.get("required_analyses"):
         # 未找到映射，返回完整报告
         logger.warning(f"[状态筛选] 未找到 {detailed_dimension} 的映射，返回完整报告")
         return {
@@ -159,7 +172,7 @@ def estimate_token_reduction(
     concept_dimension: str,
     full_report_length: int,
     filtered_report_length: int
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     估算 Token 使用优化效果
 
@@ -192,7 +205,7 @@ def estimate_token_reduction(
     }
 
 
-def log_optimization_results(results: List[Dict[str, Any]]):
+def log_optimization_results(results: list[dict[str, Any]]) -> None:
     """
     记录优化结果统计
 
@@ -225,12 +238,12 @@ def log_optimization_results(results: List[Dict[str, Any]]):
 
 def filter_state_for_detailed_dimension_v2(
     detailed_dimension: str,
-    full_analysis_reports: Optional[Dict[str, str]],
+    full_analysis_reports: dict[str, str] | None,
     full_analysis_report: str,
-    full_concept_reports: Optional[Dict[str, str]],
+    full_concept_reports: dict[str, str] | None,
     full_concept_report: str,
-    completed_detailed_reports: Optional[Dict[str, str]] = None
-) -> Dict[str, Any]:
+    completed_detailed_reports: dict[str, str] | None = None
+) -> dict[str, Any]:
     """
     增强的状态筛选函数，支持完整依赖链和Token统计
 
@@ -363,10 +376,10 @@ def filter_state_for_detailed_dimension_v2(
 
 def _filter_with_stats(
     dimension_name: str,
-    required_dims: List[str],
-    full_reports: Optional[Dict[str, str]],
+    required_dims: list[str],
+    full_reports: dict[str, str] | None,
     full_report: str,
-    dimension_names: Dict[str, str],
+    dimension_names: dict[str, str],
     report_type: str
 ) -> tuple:
     """
@@ -412,7 +425,7 @@ def _filter_with_stats(
 
 def visualize_filtering_result(
     detailed_dimension: str,
-    filtering_result: Dict[str, Any]
+    filtering_result: dict[str, Any]
 ) -> str:
     """
     可视化状态筛选结果（用于调试）
@@ -459,3 +472,169 @@ def visualize_filtering_result(
 
     lines.append(f"{'='*60}\n")
     return "\n".join(lines)
+
+
+# ==========================================
+# 两阶段RAG系统集成
+# ==========================================
+
+# 需要原文的维度（涉及法规条文、技术指标）
+CRITICAL_DIMENSIONS: set[str] = {
+    "land_use",           # 土地利用分类和标准
+    "historical_culture", # 文物保护法规
+    "infrastructure",     # 基础设施技术规范
+    "ecological_green",   # 生态保护红线
+    "disaster_prevention",  # 防灾减灾标准（Layer 3）
+}
+
+
+def get_rag_tool_by_dimension(
+    dimension_key: str,
+    phase: Literal[1, 2] = 2
+) -> Callable | None:
+    """
+    根据维度键和阶段动态路由RAG工具
+
+    Args:
+        dimension_key: 维度标识（如 "historical_culture", "land_use"）
+        phase: RAG阶段（1=全文上下文, 2=层次化摘要）
+
+    Returns:
+        对应的RAG工具函数，如果RAG不可用则返回None
+    """
+    if not RAG_AVAILABLE:
+        logger.warning(f"[RAG集成] RAG系统不可用，无法为 {dimension_key} 提供工具")
+        return None
+
+    # 初始化RAG系统
+    cm = DocumentContextManager()
+    hs = HierarchicalSummary()
+
+    if phase == 1 or dimension_key in CRITICAL_DIMENSIONS:
+        # Phase 1: 返回全文查询工具
+        return cm.get_chapter_by_header
+    else:
+        # Phase 2: 返回摘要查询工具
+        return hs.search_key_points
+
+
+def filter_knowledge_for_dimension(
+    dimension_key: str,
+    village_data: dict,
+    top_k: int = 5
+) -> dict:
+    """
+    为特定维度过滤和检索知识
+
+    Args:
+        dimension_key: 维度标识
+        village_data: 村庄数据
+        top_k: 返回结果数量
+
+    Returns:
+        过滤后的知识结果
+    """
+    if not RAG_AVAILABLE:
+        return {
+            "dimension": dimension_key,
+            "query": "",
+            "knowledge": [],
+            "phase": 0,
+            "error": "RAG系统不可用"
+        }
+
+    # 获取对应的RAG工具
+    rag_tool = get_rag_tool_by_dimension(dimension_key, phase=2)
+
+    if rag_tool is None:
+        return {
+            "dimension": dimension_key,
+            "query": "",
+            "knowledge": [],
+            "phase": 0,
+            "error": "无法获取RAG工具"
+        }
+
+    # 构建维度特定的查询
+    query = build_dimension_query(dimension_key, village_data)
+
+    try:
+        # 执行检索（根据工具类型调整调用方式）
+        if rag_tool.__name__ == "get_chapter_by_header":
+            # Phase 1 工具 - 需要不同的调用方式
+            results = {"content": "全文查询结果（待实现）"}
+            used_phase = 1
+        else:
+            # Phase 2 工具 - search_key_points
+            results = rag_tool(query, sources=None, top_k=top_k)
+            used_phase = 2
+
+        return {
+            "dimension": dimension_key,
+            "query": query,
+            "knowledge": results,
+            "phase": used_phase
+        }
+    except Exception as e:
+        logger.error(f"[RAG集成] 知识检索失败: {e}")
+        return {
+            "dimension": dimension_key,
+            "query": query,
+            "knowledge": [],
+            "phase": 0,
+            "error": str(e)
+        }
+
+
+def build_dimension_query(dimension_key: str, village_data: dict) -> str:
+    """
+    构建维度特定的检索查询
+
+    Args:
+        dimension_key: 维度标识
+        village_data: 村庄数据
+
+    Returns:
+        格式化的查询字符串
+    """
+    dimension_names = {
+        "location": "区位分析",
+        "socio_economic": "社会经济",
+        "villager_wishes": "村民意愿",
+        "superior_planning": "上位规划",
+        "natural_environment": "自然环境",
+        "land_use": "土地利用",
+        "traffic": "交通条件",
+        "public_services": "公共服务",
+        "infrastructure": "基础设施",
+        "ecological_green": "生态环境空间",
+        "architecture": "建筑风貌",
+        "historical_culture": "历史文化",
+        # Layer 2 dimensions
+        "resource_endowment": "资源禀赋分析",
+        "planning_positioning": "规划定位",
+        "development_goals": "发展目标",
+        "planning_strategy": "规划策略",
+        # Layer 3 dimensions
+        "industry": "产业规划",
+        "spatial_structure": "空间结构规划",
+        "land_use_detailed": "土地利用详细规划",
+        "settlement": "居民点规划",
+        "transportation_detailed": "综合交通规划",
+        "public_services_detailed": "公共服务设施规划",
+        "infrastructure_detailed": "基础设施规划",
+        "ecological_protection": "生态保护与修复",
+        "disaster_prevention": "防灾减灾规划",
+        "historical_culture_detailed": "历史文化保护",
+        "landscape": "景观风貌规划",
+        "project_library": "项目库策划",
+    }
+
+    dimension_name = dimension_names.get(dimension_key, dimension_key)
+
+    return f"""
+村庄名称: {village_data.get('name', '')}
+地理位置: {village_data.get('location', '')}
+分析维度: {dimension_name}
+规划目标: {village_data.get('planning_goals', '')}
+""".strip()

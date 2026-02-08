@@ -42,9 +42,21 @@ FULL_DEPENDENCY_CHAIN = {
         "wave": 1,
         "depends_on_detailed": []
     },
-    "master_plan": {
+    "spatial_structure": {
         "layer1_analyses": ["land_use", "superior_planning", "socio_economic", "natural_environment"],
         "layer2_concepts": ["planning_positioning", "planning_strategies"],
+        "wave": 1,
+        "depends_on_detailed": []
+    },
+    "land_use_planning": {
+        "layer1_analyses": ["land_use", "superior_planning", "natural_environment"],
+        "layer2_concepts": ["planning_positioning", "planning_strategies"],
+        "wave": 1,
+        "depends_on_detailed": []
+    },
+    "settlement_planning": {
+        "layer1_analyses": ["land_use", "architecture", "socio_economic", "villager_wishes"],
+        "layer2_concepts": ["planning_positioning", "development_goals"],
         "wave": 1,
         "depends_on_detailed": []
     },
@@ -95,9 +107,9 @@ FULL_DEPENDENCY_CHAIN = {
         "layer2_concepts": ["ALL"],  # 需要所有规划思路
         "wave": 2,
         "depends_on_detailed": [
-            "industry", "master_plan", "traffic", "public_service",
-            "infrastructure", "ecological", "disaster_prevention",
-            "heritage", "landscape"
+            "industry", "spatial_structure", "land_use_planning", "settlement_planning",
+            "traffic", "public_service", "infrastructure", "ecological",
+            "disaster_prevention", "heritage", "landscape"
         ]
     }
 }
@@ -109,10 +121,10 @@ FULL_DEPENDENCY_CHAIN = {
 
 WAVE_CONFIG = {
     1: {
-        "dimensions": ["industry", "master_plan", "traffic", "public_service",
-                      "infrastructure", "ecological", "disaster_prevention",
-                      "heritage", "landscape"],
-        "description": "第一波次：9个独立维度完全并行执行"
+        "dimensions": ["industry", "spatial_structure", "land_use_planning", "settlement_planning",
+                      "traffic", "public_service", "infrastructure", "ecological",
+                      "disaster_prevention", "heritage", "landscape"],
+        "description": "第一波次：11个独立维度完全并行执行"
     },
     2: {
         "dimensions": ["project_bank"],
@@ -140,7 +152,7 @@ ANALYSIS_TO_CONCEPT_MAPPING = {
         "required_analyses": [
             "location",              # 区位分析
             "socio_economic",        # 社会经济
-            "historical_cultural",   # 历史文化
+            "historical_culture",    # 历史文化与乡愁保护
             "traffic"                # 交通条件
         ],
         "description": "规划定位分析需要区位和人文信息"
@@ -163,59 +175,21 @@ ANALYSIS_TO_CONCEPT_MAPPING = {
     }
 }
 
-# 规划思路维度 → 详细规划维度的映射
-CONCEPT_TO_DETAILED_MAPPING = {
-    "industry": {
-        "required_concepts": ["resource_endowment", "development_goals"],
-        "required_analyses": ["socio_economic", "land_use"],
-        "description": "产业规划需要资源禀赋和发展目标信息"
-    },
-    "master_plan": {
-        "required_concepts": ["planning_positioning", "planning_strategies"],
-        "required_analyses": ["land_use", "superior_planning", "socio_economic", "natural_environment"],
-        "description": "总体规划需要土地利用、上位规划、社会经济和自然环境信息"
-    },
-    "traffic": {
-        "required_concepts": ["planning_strategies"],
-        "required_analyses": ["traffic", "location", "land_use"],
-        "description": "道路交通规划需要交通现状和土地利用信息"
-    },
-    "public_service": {
-        "required_concepts": ["development_goals"],
-        "required_analyses": ["public_services", "location", "socio_economic"],
-        "description": "公共服务设施规划需要服务现状和人口信息"
-    },
-    "infrastructure": {
-        "required_concepts": ["development_goals"],
-        "required_analyses": ["infrastructure", "land_use", "socio_economic"],
-        "description": "基础设施规划需要设施现状和布局信息"
-    },
-    "ecological": {
-        "required_concepts": ["resource_endowment", "planning_strategies"],
-        "required_analyses": ["ecological_green", "natural_environment", "land_use"],
-        "description": "生态绿地规划需要生态现状和自然资源信息"
-    },
-    "disaster_prevention": {
-        "required_concepts": ["planning_strategies"],
-        "required_analyses": ["infrastructure", "natural_environment", "architecture"],
-        "description": "防震减灾规划需要设施和建筑现状信息"
-    },
-    "heritage": {
-        "required_concepts": ["planning_positioning"],
-        "required_analyses": ["historical_cultural", "architecture"],
-        "description": "历史文保规划需要历史文化和建筑信息"
-    },
-    "landscape": {
-        "required_concepts": ["planning_positioning", "resource_endowment"],
-        "required_analyses": ["architecture", "natural_environment", "ecological_green"],
-        "description": "村庄风貌指引需要建筑和自然环境信息"
-    },
-    "project_bank": {
-        "required_concepts": ["ALL"],  # 需要所有规划思路
-        "required_analyses": ["ALL"],  # 需要所有现状分析
-        "description": "建设项目库需要所有维度的综合信息"
+def get_concept_to_detailed_mapping(detailed_dimension: str) -> dict:
+    """
+    从完整依赖链中提取规划思路维度映射（替代旧的 CONCEPT_TO_DETAILED_MAPPING）
+
+    Args:
+        detailed_dimension: 详细规划维度
+
+    Returns:
+        包含 required_concepts 和 required_analyses 的字典
+    """
+    chain = FULL_DEPENDENCY_CHAIN.get(detailed_dimension, {})
+    return {
+        "required_concepts": chain.get("layer2_concepts", []),
+        "required_analyses": chain.get("layer1_analyses", [])
     }
-}
 
 # 维度名称映射（规划思路）
 CONCEPT_DIMENSION_NAMES = {
@@ -228,7 +202,9 @@ CONCEPT_DIMENSION_NAMES = {
 # 维度名称映射（详细规划）
 DETAILED_DIMENSION_NAMES = {
     "industry": "产业规划",
-    "master_plan": "村庄总体规划",
+    "spatial_structure": "空间结构规划",
+    "land_use_planning": "土地利用规划",
+    "settlement_planning": "居民点规划",
     "traffic": "道路交通规划",
     "public_service": "公服设施规划",
     "infrastructure": "基础设施规划",
@@ -373,7 +349,7 @@ def get_wave_summary() -> dict:
 
 
 # ==========================================
-# 保留的旧API（向后兼容）
+# 统一的维度映射API
 # ==========================================
 
 def get_required_analyses_for_concept(concept_dimension: str) -> list:
@@ -389,13 +365,12 @@ def get_required_analyses_for_concept(concept_dimension: str) -> list:
     mapping = ANALYSIS_TO_CONCEPT_MAPPING.get(concept_dimension)
     if mapping:
         return mapping["required_analyses"]
-    # 默认返回所有维度
     return ["ALL"]
 
 
 def get_required_info_for_detailed(detailed_dimension: str) -> dict:
     """
-    获取指定详细规划维度需要的信息
+    获取指定详细规划维度需要的信息（从 FULL_DEPENDENCY_CHAIN 提取）
 
     Args:
         detailed_dimension: 详细规划维度（如 "industry"）
@@ -403,14 +378,49 @@ def get_required_info_for_detailed(detailed_dimension: str) -> dict:
     Returns:
         包含 required_concepts 和 required_analyses 的字典
     """
-    mapping = CONCEPT_TO_DETAILED_MAPPING.get(detailed_dimension)
-    if mapping:
+    chain = FULL_DEPENDENCY_CHAIN.get(detailed_dimension)
+    if chain:
         return {
-            "required_concepts": mapping["required_concepts"],
-            "required_analyses": mapping["required_analyses"]
+            "required_concepts": chain.get("layer2_concepts", []),
+            "required_analyses": chain.get("layer1_analyses", [])
         }
-    # 默认返回所有信息
     return {
         "required_concepts": ["ALL"],
         "required_analyses": ["ALL"]
     }
+
+
+# ==========================================
+# 默认适配器配置
+# ==========================================
+
+DEFAULT_ADAPTER_CONFIG = {
+    "industry": ["gis"],
+    "spatial_structure": ["gis"],
+    "land_use_planning": ["gis"],
+    "settlement_planning": ["gis"],
+    "ecological": ["gis"],
+    "traffic": ["network"],
+    "infrastructure": ["gis", "network"],
+    "public_service": ["network"],
+    "landscape": ["gis"],
+    "disaster_prevention": ["gis"]
+}
+
+
+__all__ = [
+    "ANALYSIS_DIMENSION_NAMES",
+    "CONCEPT_DIMENSION_NAMES",
+    "DETAILED_DIMENSION_NAMES",
+    "FULL_DEPENDENCY_CHAIN",
+    "WAVE_CONFIG",
+    "DEFAULT_ADAPTER_CONFIG",
+    "get_full_dependency_chain",
+    "get_execution_wave",
+    "get_dimensions_by_wave",
+    "check_detailed_dependencies_ready",
+    "visualize_dependency_graph",
+    "get_wave_summary",
+    "get_required_analyses_for_concept",
+    "get_required_info_for_detailed",
+]

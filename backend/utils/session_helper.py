@@ -1,16 +1,17 @@
 """
 Session Helper - 统一会话查找逻辑
-
-消除 villages.py 中的重复代码。
 """
 
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
-import re
 
 
 class SessionHelper:
     """会话辅助类 - 统一会话和村庄目录查找"""
+
+    TIMESTAMP_PATTERN = re.compile(r"^\d{8}_\d{6}$")
 
     def __init__(self, results_dir: Path):
         """
@@ -50,10 +51,6 @@ class SessionHelper:
         """
         解析会话目录
 
-        统一会话查找逻辑：
-        1. 如果提供了 session，使用指定的会话
-        2. 否则，使用最新的会话
-
         Args:
             village_name: 村庄名称
             session: 会话ID（可选）
@@ -81,7 +78,6 @@ class SessionHelper:
             raise HTTPException(status_code=404, detail=f"村庄没有规划会话")
 
         if not sessions:
-            # 某些端点可以容忍没有会话
             return village_dir, ""
 
         sessions.sort(reverse=True)
@@ -98,8 +94,6 @@ class SessionHelper:
         Returns:
             会话信息列表
         """
-        from datetime import datetime
-
         village_dir = self.resolve_village_dir(village_name)
         sessions = []
 
@@ -114,7 +108,6 @@ class SessionHelper:
                 "has_final_report": (session_dir / "final_combined_*.md").exists()
             })
 
-        # 按时间戳降序排序
         sessions.sort(key=lambda s: s["timestamp"], reverse=True)
         return sessions
 
@@ -133,8 +126,8 @@ class SessionHelper:
             if s.is_dir() and self._is_timestamp(s.name)
         ]
 
-    @staticmethod
-    def _is_timestamp(name: str) -> bool:
+    @classmethod
+    def _is_timestamp(cls, name: str) -> bool:
         """
         检查目录名是否是时间戳格式 (YYYYMMDD_HHMMSS)
 
@@ -144,8 +137,7 @@ class SessionHelper:
         Returns:
             是否是时间戳格式
         """
-        pattern = r"^\d{8}_\d{6}$"
-        return bool(re.match(pattern, name))
+        return bool(cls.TIMESTAMP_PATTERN.match(name))
 
 
 __all__ = ["SessionHelper"]

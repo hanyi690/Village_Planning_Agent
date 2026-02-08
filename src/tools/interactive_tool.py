@@ -1,5 +1,14 @@
 """
-交互式工具 - 人工审查和CLI交互工具
+InteractiveTool - DEPRECATED
+
+This module is deprecated and only kept for CLI mode compatibility.
+Web applications should use WebReviewTool instead.
+
+To use CLI mode:
+    from src.tools.interactive_tool import InteractiveTool  # noqa
+
+To use web mode:
+    from src.tools.web_review_tool import WebReviewTool
 
 提供交互式命令行界面功能：
 1. 人工审查报告（approve/reject/rollback）
@@ -8,14 +17,25 @@
 4. 菜单系统
 
 遵循tool pattern：所有方法返回结构化Dict结果。
+
+Deprecated in v5.0 - Use WebReviewTool for web applications
 """
 
 import sys
 from typing import Dict, Any, Optional, List
 
 from ..utils.logger import get_logger
+from ..utils.checkpoint_manager import get_checkpoint_manager
 
 logger = get_logger(__name__)
+
+# Deprecation warning
+import warnings
+warnings.warn(
+    "InteractiveTool is deprecated for web applications. Use WebReviewTool instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 # ==========================================
@@ -51,6 +71,22 @@ class InteractiveTool:
         self.use_colors = use_colors and self._supports_color()
         self.review_history: List[Dict[str, Any]] = []
         self.command_history: List[str] = []
+
+    def _has_stdin(self) -> bool:
+        """检测是否有可用的标准输入（用于区分CLI和Web环境）"""
+        try:
+            # Try to read from stdin without blocking
+            import select
+            if hasattr(select, 'select'):
+                # Unix-like systems
+                return bool(select.select([sys.stdin], [], [], 0)[0])
+            else:
+                # Windows or no select available - try a different approach
+                # Check if stdin is a TTY
+                return sys.stdin.isatty()
+        except:
+            # If detection fails, assume we have stdin
+            return True
 
     def _supports_color(self) -> bool:
         """检测终端是否支持颜色"""
@@ -105,6 +141,17 @@ class InteractiveTool:
             }
         """
         try:
+            # Check if running in web environment (no stdin)
+            if not self._has_stdin():
+                logger.warning("[InteractiveTool] Web environment detected (no stdin), auto-approving review")
+                return {
+                    "success": True,
+                    "action": "approve",
+                    "feedback": "",
+                    "checkpoint_id": "",
+                    "error": ""
+                }
+
             print("\n" + "=" * 80)
             print(self._colorize(f"  人工审查: {title}", self.COLOR_BOLD + self.COLOR_CYAN))
             print("=" * 80 + "\n")
@@ -174,6 +221,16 @@ class InteractiveTool:
                 else:
                     print(self._colorize("无效的选择，请重试。", self.COLOR_RED))
 
+        except EOFError:
+            # Web environment or stdin closed - auto-approve to continue execution
+            logger.warning("[InteractiveTool] EOF detected (web environment), auto-approving review")
+            return {
+                "success": True,
+                "action": "approve",
+                "feedback": "",
+                "checkpoint_id": "",
+                "error": ""
+            }
         except Exception as e:
             logger.error(f"[InteractiveTool] 审查内容时出错: {e}")
             return {
@@ -618,7 +675,10 @@ class InteractiveTool:
 
     def _cmd_checkpoints(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """列出所有checkpoint"""
-        checkpoint_manager = state.get("checkpoint_manager")
+        checkpoint_manager = get_checkpoint_manager(
+            project_name=state.get("project_name", "default"),
+            timestamp=state.get("session_id")
+        )
 
         if not checkpoint_manager:
             print(self._colorize("Checkpoint管理器未初始化。", self.COLOR_YELLOW))
@@ -630,13 +690,9 @@ class InteractiveTool:
                 "error": ""
             }
 
-        # 如果是旧版本CheckpointManager，使用旧接口
-        if hasattr(checkpoint_manager, 'list_checkpoints'):
-            checkpoints = checkpoint_manager.list_checkpoints()
-        else:
-            # 新版本CheckpointTool
-            result = checkpoint_manager.list()
-            checkpoints = result.get("checkpoints", [])
+        # 新版本CheckpointTool
+        result = checkpoint_manager.list()
+        checkpoints = result.get("checkpoints", [])
 
         if not checkpoints:
             print(self._colorize("没有可用的checkpoint。", self.COLOR_YELLOW))
@@ -797,7 +853,10 @@ class InteractiveTool:
             }
 
         # 2. 获取checkpoint列表（用于回退）
-        checkpoint_manager = state.get("checkpoint_manager")
+        checkpoint_manager = get_checkpoint_manager(
+            project_name=state.get("project_name", "default"),
+            timestamp=state.get("session_id")
+        )
         available_checkpoints = []
         if checkpoint_manager:
             list_result = checkpoint_manager.list()

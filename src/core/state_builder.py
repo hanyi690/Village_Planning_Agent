@@ -1,20 +1,21 @@
-"""
-状态构建器 - 提供流畅的状态更新API
+"""State builder for fluent state update API.
 
-轻量级工具类，用于统一状态字典更新模式。
+Lightweight utility class for unified state dictionary update patterns.
 """
 
-from typing import Dict, Any, Generic, TypeVar
+from __future__ import annotations
+
+from typing import Any, Generic, TypeVar
+
 from langchain_core.messages import AIMessage, HumanMessage
 
-T = TypeVar('T', bound=Dict[str, Any])
+T = TypeVar("T", bound=dict[str, Any])
 
 
 class StateBuilder(Generic[T]):
-    """
-    状态构建器 - 提供流畅的状态更新API
+    """State builder with fluent API for state updates.
 
-    用于构建状态更新字典，支持链式调用。
+    Used to build state update dictionaries with support for method chaining.
 
     Example:
         >>> builder = StateBuilder()
@@ -23,53 +24,49 @@ class StateBuilder(Generic[T]):
         {'key1': 'value1', 'key2': 'value2'}
     """
 
-    def __init__(self, original_state: T = None):
-        """
-        初始化状态构建器
+    def __init__(self, original_state: T | None = None) -> None:
+        """Initialize the state builder.
 
         Args:
-            original_state: 原始状态（可选，仅用于 build_full()）
+            original_state: Original state (optional, only used for build_full())
         """
         self.original_state = original_state or {}
-        self.updates: Dict[str, Any] = {}
+        self.updates: dict[str, Any] = {}
 
-    def set(self, key: str, value: Any) -> 'StateBuilder[T]':
-        """
-        设置字段
+    def set(self, key: str, value: Any) -> StateBuilder[T]:
+        """Set a field value.
 
         Args:
-            key: 字段名
-            value: 字段值
+            key: Field name
+            value: Field value
 
         Returns:
-            Self，支持链式调用
+            Self for method chaining
         """
         self.updates[key] = value
         return self
 
-    def set_multiple(self, updates: Dict[str, Any]) -> 'StateBuilder[T]':
-        """
-        批量设置
+    def set_multiple(self, updates: dict[str, Any]) -> StateBuilder[T]:
+        """Set multiple fields at once.
 
         Args:
-            updates: 字段更新字典
+            updates: Dictionary of field updates
 
         Returns:
-            Self，支持链式调用
+            Self for method chaining
         """
         self.updates.update(updates)
         return self
 
-    def add_message(self, content: str, role: str = "ai") -> 'StateBuilder[T]':
-        """
-        添加消息到messages列表
+    def add_message(self, content: str, role: str = "ai") -> StateBuilder[T]:
+        """Add a message to the messages list.
 
         Args:
-            content: 消息内容
-            role: 角色 ("ai" 或 "human")
+            content: Message content
+            role: Role ("ai" or "human")
 
         Returns:
-            Self，支持链式调用
+            Self for method chaining
         """
         if "messages" not in self.updates:
             self.updates["messages"] = []
@@ -78,16 +75,15 @@ class StateBuilder(Generic[T]):
         self.updates["messages"].append(msg)
         return self
 
-    def append_to(self, key: str, value: Any) -> 'StateBuilder[T]':
-        """
-        追加值到列表字段
+    def append_to(self, key: str, value: Any) -> StateBuilder[T]:
+        """Append a value to a list field.
 
         Args:
-            key: 字段名（必须是列表）
-            value: 要追加的值
+            key: Field name (must be a list)
+            value: Value to append
 
         Returns:
-            Self，支持链式调用
+            Self for method chaining
         """
         if key not in self.updates:
             self.updates[key] = []
@@ -97,57 +93,52 @@ class StateBuilder(Generic[T]):
         self.updates[key].append(value)
         return self
 
-    def merge(self, other_updates: Dict[str, Any]) -> 'StateBuilder[T]':
-        """
-        合并另一个状态更新字典
+    def merge(self, other_updates: dict[str, Any]) -> StateBuilder[T]:
+        """Merge another state update dictionary.
 
         Args:
-            other_updates: 另一个状态更新字典
+            other_updates: Another state update dictionary
 
         Returns:
-            Self，支持链式调用
+            Self for method chaining
         """
         self.updates = {**self.updates, **other_updates}
         return self
 
-    def build(self) -> Dict[str, Any]:
-        """
-        构建状态更新（仅包含变更）
+    def build(self) -> dict[str, Any]:
+        """Build the state update (contains only changes).
 
         Returns:
-            仅包含变更的字典
+            Dictionary containing only the changes
         """
         return self.updates
 
-    def build_full(self) -> Dict[str, Any]:
-        """
-        构建完整状态（原始+更新）
+    def build_full(self) -> dict[str, Any]:
+        """Build the full state (original + updates).
 
         Returns:
-            原始状态与更新合并后的完整字典
+            Complete dictionary with original state and updates merged
         """
         return {**self.original_state, **self.updates}
 
     def has_updates(self) -> bool:
-        """
-        检查是否有待应用的更新
+        """Check if there are pending updates.
 
         Returns:
-            True 如果有更新，False 否则
+            True if there are updates, False otherwise
         """
         return len(self.updates) > 0
 
-    def clear(self) -> 'StateBuilder[T]':
-        """
-        清空所有更新
+    def clear(self) -> StateBuilder[T]:
+        """Clear all updates.
 
         Returns:
-            Self，支持链式调用
+            Self for method chaining
         """
         self.updates.clear()
         return self
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # pragma: no cover
         return f"StateBuilder(updates={self.updates})"
 
 

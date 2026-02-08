@@ -5,7 +5,7 @@ Shared Task Manager Instance
 
 from .planning_service import PlanningTaskManager
 
-# 全局单例
+# Global singleton
 _shared_task_manager = None
 
 
@@ -17,5 +17,5 @@ def get_shared_task_manager() -> PlanningTaskManager:
     return _shared_task_manager
 
 
-# 便捷导出
+# Convenient export
 task_manager = get_shared_task_manager()

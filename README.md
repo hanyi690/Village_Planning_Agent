@@ -12,11 +12,13 @@
 
 ### 🌐 Web 应用
 
-- **现代化界面**: 基于 Next.js 14 + Bootstrap 5 的响应式 Web 界面
+- **现代化界面**: 基于 Next.js 14 + Bootstrap 5.3 的响应式 Web 界面
 - **实时进度**: SSE 流式传输，实时查看规划进度
-- **智能文件上传**: 支持多种编码自动检测（UTF-8/GBK/GB2312），解决中文乱码问题
+- **智能文件上传**: 支持多种编码自动检测（UTF-8/GBK/GB2312）和多格式解析（.txt/.md/.docx/.pdf）
 - **文件管理**: 支持多文件上传、会话历史、检查点管理
 - **交互式审查**: 支持人工审查、通过/驳回、回退修复
+- **历史会话**: 支持查看和加载历史会话记录
+- **检查点导航**: 时间轴可视化，支持检查点对比和回退
 
 ### 🏗️ 规划引擎
 
@@ -98,7 +100,7 @@ cd backend
 python main.py
 ```
 
-后端运行在 http://localhost:8080
+后端运行在 http://127.0.0.1:8000
 
 **启动前端** (新终端):
 
@@ -222,6 +224,8 @@ python -m src.cli.main \
 - ✅ **细粒度存储**：检查点只保存维度报告，便于灵活组合和快速加载
 - ✅ **统一命名**：`analysis_dimension_reports`, `concept_dimension_reports`, `detailed_dimension_reports`（英文键名）
 - ✅ **智能状态筛选**：根据依赖关系自动筛选相关维度，优化 LLM 上下文
+- ✅ **中心化状态管理**：前端使用 ViewMode 计算属性统一管理视图状态
+- ✅ **Smart Container 模式**：UnifiedContentSwitcher 自动响应状态变化切换视图
 
 ```
 村庄数据输入
@@ -394,18 +398,37 @@ Village_Planning_Agent/
 │   │   │   ├── page.tsx       # 首页
 │   │   │   ├── globals.css    # 全局样式
 │   │   │   └── village/       # 村庄规划页面
+│   │   │       └── [taskId]/  # 动态路由
+│   │   │           ├── loading.tsx # 加载状态
+│   │   │           └── page.tsx   # 规划页面
 │   │   ├── components/        # React 组件
-│   │   │   ├── chat/          # 聊天界面组件
+│   │   │   ├── chat/          # 聊天界面组件 (13个)
+│   │   │   │   ├── ChatPanel.tsx
+│   │   │   │   ├── MessageList.tsx
+│   │   │   │   ├── MessageBubble.tsx
+│   │   │   │   ├── LayerReportMessage.tsx
+│   │   │   │   ├── LayerReportCard.tsx
+│   │   │   │   ├── DimensionSection.tsx
+│   │   │   │   ├── ReviewInteractionMessage.tsx
+│   │   │   │   ├── CodeBlock.tsx
+│   │   │   │   └── ...
 │   │   │   ├── review/        # 审查功能组件
-│   │   │   ├── viewer/        # 报告查看组件
-│   │   │   ├── layout/        # 布局组件
+│   │   │   ├── report/        # 报告显示组件 (仅文档)
+│   │   │   ├── layout/        # 布局组件 (Header, HistoryPanel, UnifiedContentSwitcher ⭐)
+│   │   │   ├── ui/            # 通用UI组件 (Card, SegmentedControl)
 │   │   │   ├── FileUpload.tsx # 文件上传组件
 │   │   │   ├── DimensionSelector.tsx # 维度选择器
-│   │   │   └── VillageInputForm.tsx # 输入表单
+│   │   │   ├── VillageInputForm.tsx # 输入表单
+│   │   │   └── MarkdownRenderer.tsx # Markdown渲染
 │   │   ├── contexts/          # React Context 状态管理
-│   │   │   └── UnifiedPlanningContext.tsx
+│   │   │   └── UnifiedPlanningContext.tsx # 统一规划上下文
 │   │   ├── hooks/             # 自定义 Hooks
+│   │   │   ├── useStreaming.ts
+│   │   │   ├── useTaskSSE.ts
+│   │   │   └── useLazyLoad.tsx
 │   │   ├── lib/               # 工具库
+│   │   │   ├── api.ts         # API客户端
+│   │   │   └── utils.ts       # 工具函数
 │   │   ├── config/            # 配置文件
 │   │   └── types/             # TypeScript 类型定义
 │   ├── .env.local             # 前端环境变量
@@ -494,7 +517,7 @@ LLM_MODEL=gpt-4o-mini
 创建 `frontend/.env.local`:
 
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:8080
+NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 ```
 
 ---
@@ -507,14 +530,29 @@ NEXT_PUBLIC_API_URL=http://localhost:8080
 - **[变更日志](CHANGELOG.md)** - 📅 项目变更历史和版本规划
 - **[前端实现文档](docs/frontend.md)** - Next.js 应用架构、组件设计、状态管理
 - **[后端实现文档](docs/backend.md)** - FastAPI 架构、API 端点、服务层设计
-- **[核心智能体文档](docs/agent.md)** - LangGraph 架构、三层规划系统、节点设计、英文键名映射（已更新）
+- **[核心智能体文档](docs/agent.md)** - LangGraph 架构、三层规划系统、节点设计、英文键名映射、SSE 流管理（已更新）
 - **[快速参考](docs/QUICK_REFERENCE.md)** - 常用命令、配置、API 快速查询
+- **[SSE 循环修复文档](SSE_LOOP_FIX_COMPLETE.md)** - SSE 连接循环问题完整修复方案（新增）⭐
+- **[SSE 循环修复快速参考](SSE_LOOP_FIX_QUICK_REFERENCE.md)** - SSE 修复快速参考指南（新增）⭐
 
 **最新更新**:
+- ✅ **SSE 循环修复**：修复 Layer 1 完成后 SSE 连接无限循环问题 ⭐ NEW
+- ✅ **checkpointer API 修复**：修正 LangGraph aget() 方法调用，只传 config 参数
+- ✅ **流状态管理**：添加 stream_states 跟踪，防止 EventSource 无限重连
+- ✅ **暂停流程优化**：发送 stream_paused 事件，前端主动关闭连接
+- ✅ **批准后重连**：批准后创建新的 SSE 连接，正确执行后续层级
+- ✅ 统一UI状态管理：引入 ViewMode 计算属性和 UnifiedContentSwitcher 组件
+- ✅ 中心化视图逻辑：消除分散的状态管理代码，实现单一真相来源
+- ✅ Smart Container 模式：UnifiedContentSwitcher 自动响应状态变化
+- ✅ 前端组件清理：删除12个未使用组件，减少约1000-1500行代码
+- ✅ 更新组件架构文档，反映当前组件结构
+- ✅ 历史会话管理：支持查看和加载历史村庄会话
+- ✅ 报告同步优化：实时同步层级报告到聊天流
+- ✅ 聊天流优化：审查交互直接集成在聊天中
+- ✅ 组件架构更新：新增 LayerReportCard、DimensionSection 等组件
+- ✅ 检查点功能完善：支持检查点查看、对比和回退
 - ✅ 修复了 Layer 1 和 Layer 2 报告未显示的问题（状态转换检测）
-- ✅ 修复了 Layer1 现状分析字段缺失问题
 - ✅ 统一使用英文键名存储维度报告（如 `location`, `socio_economic`）
-- ✅ 删除了重复的 `dimension_reports` 字段
 - ✅ 修复了并行任务中维度报告无法正确合并的问题
 
 ---
@@ -555,7 +593,7 @@ A: 可能的原因：
 **Q: 前端无法连接后端**
 
 - 检查 `NEXT_PUBLIC_API_URL` 配置
-- 确认后端服务已启动（`http://localhost:8080/health`）
+- 确认后端服务已启动（`http://127.0.0.1:8000/health`）
 
 **Q: Token 消耗过高**
 

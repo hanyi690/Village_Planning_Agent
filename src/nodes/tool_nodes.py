@@ -11,7 +11,9 @@ from ..core.state_builder import StateBuilder
 from ..tools.interactive_tool import InteractiveTool
 from ..tools.checkpoint_tool import CheckpointTool
 from ..tools.revision_tool import RevisionTool
+from ..tools.web_review_tool import WebReviewTool
 from ..utils.logger import get_logger
+from ..utils.checkpoint_manager import get_checkpoint_manager
 
 logger = get_logger(__name__)
 
@@ -65,7 +67,11 @@ class ToolBridgeNode(BaseNode):
         if state.get("need_human_review", False):
             return self.human_review_node(state)
         elif state.get("pause_after_step", False):
-            return self.pause_interaction_node(state)
+            # ✅ 修复：Web模式下不进入CLI交互循环
+            # 返回空状态，让pause_after_step保持为True
+            # streaming.py会检测到并发送pause事件
+            logger.info("[ToolBridge] pause_after_step=True，不进入CLI交互，等待streaming.py处理")
+            return {}
         elif state.get("need_revision", False):
             return self.revision_node(state)
         else:
@@ -164,19 +170,28 @@ class ToolBridgeNode(BaseNode):
 
 
 class HumanReviewNode(BaseNode):
-    """人工审查工具节点 - 使用现有InteractiveTool"""
+    """Web环境人工审查节点 - 非阻塞，基于SSE事件"""
 
     def __init__(self):
         super().__init__("人工审查")
+        self.web_review_tool = WebReviewTool()
 
     def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        执行人工审查 - 增强版：支持维度选择
+        Web环境审查 - 触发图执行中断
 
-        对于详细规划阶段（Layer 3），传递可用维度列表以支持精确修复。
+        流程:
+        1. 创建审查请求
+        2. 设置 waiting_for_review 标志
+        3. 设置 __interrupt__ 标志以终止图执行
+        4. 前端通过SSE事件接收通知
+        5. 前端调用 /api/planning/review/{session_id}
+        6. 后端恢复执行
         """
-        # 获取当前内容
         current_layer = state.get("current_layer", 1)
+        session_id = state.get("session_id", "")
+
+        # 获取当前内容
         content_map = {
             1: ("analysis_report", "现状分析报告"),
             2: ("planning_concept", "规划思路报告"),
@@ -185,79 +200,49 @@ class HumanReviewNode(BaseNode):
         content_key, title = content_map.get(current_layer, ("analysis_report", "报告"))
         content = state.get(content_key, "")
 
-        # 获取checkpoint列表（使用现有CheckpointTool）
-        checkpoint_manager = state.get("checkpoint_manager")
+        # 获取检查点列表
+        checkpoint_manager = get_checkpoint_manager(
+            project_name=state["project_name"],
+            timestamp=state.get("session_id")
+        )
         available_checkpoints = []
-        if checkpoint_manager and isinstance(checkpoint_manager, CheckpointTool):
+        if checkpoint_manager:
             list_result = checkpoint_manager.list()
-            if list_result["success"]:
-                available_checkpoints = list_result["checkpoints"]
+            if list_result.get("success"):
+                available_checkpoints = list_result.get("checkpoints", [])
 
-        # 【新增】获取可用维度列表（仅Layer 3详细规划）
+        # 获取可用维度（Layer 3）
         available_dimensions = None
         if current_layer == 3:
-            # 详细规划阶段的10个专业维度
             available_dimensions = [
-                "产业规划",
-                "村域总体规划",
-                "综合交通规划",
-                "公共服务设施规划",
-                "基础设施规划",
-                "生态绿地系统规划",
-                "防灾减灾规划",
-                "历史文化保护规划",
-                "村庄风貌规划",
-                "项目库"
+                "产业规划", "村域总体规划", "综合交通规划",
+                "公共服务设施规划", "基础设施规划", "生态绿地系统规划",
+                "防灾减灾规划", "历史文化保护规划", "村庄风貌规划", "项目库"
             ]
 
-        # 执行人工审查（使用现有InteractiveTool）
-        tool = InteractiveTool()
-        result = tool.review_content(
+        # 创建审查请求（不阻塞）
+        result = self.web_review_tool.request_review(
             content=content,
             title=title,
-            allow_rollback=True,
+            session_id=session_id,
+            current_layer=current_layer,
             available_checkpoints=available_checkpoints,
-            available_dimensions=available_dimensions  # 【新增】传递可用维度
+            available_dimensions=available_dimensions
         )
 
-        # 处理结果
-        action = result.get("action", "")
-        if action == "approve":
-            return StateBuilder()\
-                .set("need_human_review", False)\
-                .set("human_feedback", "")\
-                .add_message("人工审查通过")\
-                .build()
-        elif action == "reject":
-            # 【新增】支持精确维度修复
-            builder = StateBuilder()\
-                .set("need_human_review", False)\
-                .set("human_feedback", result.get("feedback", ""))\
-                .set("need_revision", True)\
-                .add_message(f"人工审查驳回，反馈: {result.get('feedback', '')}")
+        review_id = result.get("review_id", "")
 
-            # 如果用户选择了特定维度，设置到状态中
-            target_dimensions = result.get("target_dimensions")
-            if target_dimensions:
-                builder = builder.set("revision_target_dimensions", target_dimensions)
+        logger.info(f"[HumanReviewNode] Triggering graph interruption for review: {review_id}")
 
-            return builder.build()
-        elif action == "rollback":
-            return StateBuilder()\
-                .set("trigger_rollback", True)\
-                .set("rollback_target", result.get("checkpoint_id", ""))\
-                .add_message(f"回退到checkpoint: {result.get('checkpoint_id', '')}")\
-                .build()
-        elif action == "quit":
-            return StateBuilder()\
-                .set("quit_requested", True)\
-                .add_message("用户退出程序")\
-                .build()
-        else:
-            return StateBuilder()\
-                .set("need_human_review", False)\
-                .add_message("人工审查完成（默认通过）")\
-                .build()
+        return {
+            "review_id": review_id,
+            "waiting_for_review": True,
+            "review_content": content,
+            "review_title": title,
+            "current_layer": current_layer,
+            "need_human_review": False,  # 清除，避免重复触发
+            "__interrupt__": True  # NEW: Signal to interrupt graph execution
+        }
 
 
 class RevisionNode(BaseNode):

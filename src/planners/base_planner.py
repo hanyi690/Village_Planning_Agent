@@ -1,14 +1,17 @@
-"""
-维度规划器基类
+"""Dimension planner base class.
 
-定义维度规划器的基础接口和通用功能，充分利用现有的基础设施：
-- llm_factory.create_llm() - LLM创建
-- dimension_mapping.get_full_dependency_chain() - 依赖管理
-- state_filter.filter_state_for_detailed_dimension_v2() - 状态筛选
+Defines the base interface and common functionality for dimension planners,
+leveraging existing infrastructure:
+- llm_factory.create_llm() - LLM creation
+- dimension_mapping.get_full_dependency_chain() - dependency management
+- state_filter.filter_state_for_detailed_dimension_v2() - state filtering
 """
+
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Any
+
 from langchain_core.messages import HumanMessage
 
 from ..core.llm_factory import create_llm

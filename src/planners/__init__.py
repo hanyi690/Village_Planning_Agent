@@ -21,7 +21,7 @@ from .analysis_planners import (
     InfrastructureAnalysisPlanner,
     EcologicalGreenAnalysisPlanner,
     ArchitectureAnalysisPlanner,
-    HistoricalCulturalAnalysisPlanner,
+    HistoricalCultureAnalysisPlanner,
     AnalysisPlannerFactory,
 )
 
@@ -39,7 +39,9 @@ from .concept_planners import (
 from .base_planner import DimensionPlanner
 from .detailed_planners import (
     IndustryPlanningPlanner,
-    MasterPlanPlanner,
+    SpatialStructurePlanner,
+    LandUsePlanningPlanner,
+    SettlementPlanningPlanner,
     TrafficPlanningPlanner,
     PublicServicePlanner,
     InfrastructurePlanner,
@@ -63,7 +65,7 @@ __all__ = [
     "InfrastructureAnalysisPlanner",
     "EcologicalGreenAnalysisPlanner",
     "ArchitectureAnalysisPlanner",
-    "HistoricalCulturalAnalysisPlanner",
+    "HistoricalCultureAnalysisPlanner",
     "AnalysisPlannerFactory",
 
     # Layer 2: 规划思路规划器
@@ -77,7 +79,9 @@ __all__ = [
     # Layer 3: 详细规划规划器
     "DimensionPlanner",
     "IndustryPlanningPlanner",
-    "MasterPlanPlanner",
+    "SpatialStructurePlanner",
+    "LandUsePlanningPlanner",
+    "SettlementPlanningPlanner",
     "TrafficPlanningPlanner",
     "PublicServicePlanner",
     "InfrastructurePlanner",

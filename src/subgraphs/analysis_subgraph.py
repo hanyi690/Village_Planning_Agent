@@ -2,6 +2,7 @@
 现状分析子图 (Analysis Subgraph)
 
 实现村庄现状分析的12个维度并行分析，使用 LangGraph 的 Send 机制实现 Map-Reduce 模式。
+集成两阶段RAG系统，支持知识预加载优化。
 
 12个分析维度：
 1. 区位分析
@@ -30,7 +31,23 @@ from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..utils.logger import get_logger
 from .analysis_prompts import get_dimension_prompt, ANALYSIS_SUMMARY_PROMPT, list_dimensions
 
-logger = get_logger(__name__)
+# RAG imports (conditional)
+try:
+    from ..orchestration.knowledge_preloader import KnowledgePreloader, format_dimension_knowledge
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
+    KnowledgePreloader = None  # type: ignore
+    format_dimension_knowledge = None  # type: ignore
+    logger = get_logger(__name__)
+    logger.warning("[RAG集成] 知识预加载器不可用，将使用传统模式")
+
+
+def merge_dicts(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str]:
+    """合并两个字典"""
+    result = {**left, **right}
+    logger.info(f"[merge_dicts] 合并字典: 左={len(left)}项, 右={len(right)}项 -> 结果={len(result)}项")
+    return result
 
 # ==========================================
 # 子图状态定义
@@ -46,12 +63,15 @@ class AnalysisState(TypedDict):
     subjects: List[str]  # 待分析的维度列表
     analyses: Annotated[List[Dict[str, str]], operator.add]  # 已完成的维度分析（使用add累加）
 
-    # 输出数据
-    final_report: str  # 最终综合分析报告
-    dimension_reports: Dict[str, str]  # 各维度独立报告（用于部分状态传递）
+    # 输出数据 - 只保留维度报告（使用自定义合并函数合并各维度的结果）
+    analysis_dimension_reports: Annotated[Dict[str, str], merge_dicts]  # 各维度独立报告
 
     # 消息历史（用于LLM交互）
     messages: Annotated[List[BaseMessage], add_messages]
+
+    # RAG知识预加载（新增）
+    knowledge_map: Dict[str, List[dict]]  # 预加载的知识映射
+    rag_enabled: bool  # 是否启用RAG
 
 
 class DimensionAnalysisState(TypedDict):
@@ -81,12 +101,14 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
     执行单个维度的分析
 
     使用新的 AnalysisPlanner 架构，充分利用现有的基础设施。
+    【重构】直接填充 analysis_dimension_reports，不经过 reduce 节点
+    【流式输出】支持 token 级别的流式输出
 
     Args:
         state: 包含维度信息和原始数据的状态
 
     Returns:
-        该维度的分析结果（包装在列表中以支持 operator.add 累加）
+        该维度的分析结果，直接更新 analysis_dimension_reports
     """
     dimension_key = state["dimension_key"]
     dimension_name = state["dimension_name"]
@@ -101,13 +123,36 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
         # 【使用新架构】调用规划器的 execute 方法
         # 注意：planner.execute 需要完整的状态字典，包含 raw_data
         planner_state = {"raw_data": state["raw_data"]}
-        planner_result = planner.execute(planner_state)
+
+        # 【流式输出支持】检查是否启用流式输出
+        streaming_enabled = state.get("_streaming_enabled", False)
+        token_callback_factory = state.get("_token_callback_factory")
+
+        if streaming_enabled and token_callback_factory:
+            # 创建 token 回调（Layer 1）
+            on_token_callback = token_callback_factory(
+                layer=1,
+                dimension=dimension_key
+            )
+
+            # 启用流式调用
+            planner_result = planner.execute(
+                planner_state,
+                streaming=True,
+                on_token_callback=on_token_callback
+            )
+        else:
+            # 普通阻塞调用
+            planner_result = planner.execute(planner_state)
 
         analysis_text = planner_result["analysis_result"]
         logger.info(f"[子图-分析] 完成 {dimension_name}，生成 {len(analysis_text)} 字符")
 
-        # 在 LangGraph 1.0.x 中，使用 operator.add 时需要返回列表
+        # 【重构】直接填充 analysis_dimension_reports
         return {
+            "analysis_dimension_reports": {
+                dimension_name: analysis_text
+            },
             "analyses": [{
                 "dimension_key": dimension_key,
                 "dimension_name": dimension_name,
@@ -119,6 +164,9 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
         logger.error(f"[子图-分析] {dimension_name} 执行失败: {str(e)}")
         # 返回错误信息而非崩溃
         return {
+            "analysis_dimension_reports": {
+                dimension_name: f"[分析失败] {str(e)}"
+            },
             "analyses": [{
                 "dimension_key": dimension_key,
                 "dimension_name": dimension_name,
@@ -154,7 +202,10 @@ def map_dimensions(state: AnalysisState) -> List[Send]:
             "dimension_key": dimension_key,
             "dimension_name": dimension_info["name"],
             "raw_data": state["raw_data"],
-            "analysis_result": ""
+            "analysis_result": "",
+            # 【流式输出支持】传递流式输出配置
+            "_streaming_enabled": state.get("_streaming_enabled", False),
+            "_token_callback_factory": state.get("_token_callback_factory")
         }
 
         # 创建 Send 对象：发送到 analyze_dimension 节点
@@ -164,120 +215,49 @@ def map_dimensions(state: AnalysisState) -> List[Send]:
     return sends
 
 
-def reduce_analyses(state: AnalysisState) -> Dict[str, Any]:
-    """
-    Reduce 阶段：汇总所有维度的分析结果
-
-    生成两种格式：
-    1. dimension_reports: 字典形式，每个维度的独立报告（用于部分状态传递）
-    2. dimension_reports_text: 拼接的文本（用于综合报告生成）
-    """
-    logger.info(f"[子图-Reduce] 开始汇总 {len(state['analyses'])} 个维度的分析结果")
-
-    # 整理分析结果为结构化格式
-    dimension_reports_dict = {}
-    dimension_reports_text = []
-
-    for analysis in state["analyses"]:
-        dimension_key = analysis['dimension_key']
-        dimension_name = analysis['dimension_name']
-        analysis_text = analysis['analysis_result']
-
-        # 保存独立的维度报告（用于部分传输）
-        dimension_reports_dict[dimension_key] = analysis_text
-
-        # 同时拼接用于综合报告
-        dimension_reports_text.append(f"""
-## {dimension_name}
-
-{analysis_text}
----
-""")
-
-    logger.info(f"[子图-Reduce] 汇总完成，生成了 {len(dimension_reports_dict)} 个维度报告")
-    return {
-        "dimension_reports": dimension_reports_dict,  # 新增：字典形式
-        "dimension_reports_text": "\n".join(dimension_reports_text)  # 用于综合报告
-    }
-
+# 【已删除】reduce_analyses 函数 - 不再需要汇总节点
+# 【已删除】generate_final_report 函数 - 不再需要生成综合报告
 
 # ==========================================
-# 最终报告生成节点
+# 知识预加载节点（新增）
 # ==========================================
 
-def generate_final_report(state: AnalysisState) -> Dict[str, Any]:
+def knowledge_preload_node(state: AnalysisState) -> Dict[str, Any]:
     """
-    生成最终的现状综合分析报告
+    知识预加载节点（集成RAG）
 
-    整合所有维度的分析结果，使用汇总 Prompt 生成连贯的报告。
-    支持LangSmith tracing。
+    在12维度并行分析前，预加载所有文档摘要到knowledge_map，
+    避免各个维度重复检索，大幅提升并行性能。
+    （同步包装函数，使用线程池运行异步代码）
     """
-    logger.info("[子图-汇总] 开始生成最终综合报告")
+    if not RAG_AVAILABLE or not state.get("rag_enabled", False):
+        logger.info("[子图-知识预加载] RAG未启用，跳过预加载")
+        return {"knowledge_map": {}, "rag_enabled": False}
 
     try:
-        # 使用 reduce 阶段生成的 dimension_reports_text
-        dimension_reports_text = state.get("dimension_reports_text", "")
+        import asyncio
+        import concurrent.futures
 
-        # 如果 dimension_reports_text 为空，从 analyses 重新构建
-        if not dimension_reports_text:
-            for analysis in state["analyses"]:
-                dimension_reports_text += f"\n### {analysis['dimension_name']}\n{analysis['analysis_result']}\n"
+        preloader = KnowledgePreloader()
+        logger.info("[子图-知识预加载] 开始预加载知识库...")
 
-        # 构建汇总 Prompt
-        summary_prompt = ANALYSIS_SUMMARY_PROMPT.format(
-            dimension_reports=dimension_reports_text
-        )
-
-        # 调用 LLM 生成最终报告（支持LangSmith）
-        from ..core.llm_factory import create_llm
-        from ..core.langsmith_integration import get_langsmith_manager
-
-        # 创建LangSmith metadata
-        langsmith = get_langsmith_manager()
-        metadata = None
-        if langsmith.is_enabled():
-            metadata = langsmith.create_run_metadata(
-                project_name=state.get('project_name', '村庄'),
-                dimension="analysis_summary",
-                layer=1
+        # 使用线程池运行异步函数
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                asyncio.run,
+                preloader.preload_all_knowledge(state)
             )
+            knowledge_map = future.result(timeout=30)
 
-        llm = create_llm(
-            model=LLM_MODEL,
-            temperature=0.7,
-            max_tokens=MAX_TOKENS,
-            metadata=metadata
-        )
-        response = llm.invoke([HumanMessage(content=summary_prompt)])
-
-        final_report = f"""# {state.get('project_name', '村庄')}现状综合分析报告
-
-{response.content}
-"""
-
-        logger.info(f"[子图-汇总] 最终报告生成完成，共 {len(final_report)} 字符")
+        logger.info(f"[子图-知识预加载] 完成，共{len(knowledge_map)}个维度")
 
         return {
-            "final_report": final_report,
-            "messages": [AIMessage(content=final_report)]
+            "knowledge_map": knowledge_map,
+            "rag_enabled": True
         }
-
     except Exception as e:
-        logger.error(f"[子图-汇总] 报告生成失败: {str(e)}")
-
-        # 降级方案：直接拼接各维度结果
-        fallback_report = f"""# {state.get('project_name', '村庄')}现状分析报告（简化版）
-
-## 各维度分析
-
-"""
-        for analysis in state["analyses"]:
-            fallback_report += f"### {analysis['dimension_name']}\n\n{analysis['analysis_result']}\n\n"
-
-        return {
-            "final_report": fallback_report,
-            "messages": [AIMessage(content=fallback_report)]
-        }
+        logger.warning(f"[子图-知识预加载] 预加载失败: {e}")
+        return {"knowledge_map": {}, "rag_enabled": False}
 
 
 # ==========================================
@@ -303,14 +283,16 @@ def initialize_analysis(state: AnalysisState) -> Dict[str, Any]:
         "infrastructure",     # 基础设施分析
         "ecological_green",   # 生态绿地分析
         "architecture",       # 建筑分析
-        "historical_cultural" # 历史文化分析
+        "historical_culture"  # 历史文化与乡愁保护分析
     ]
 
     logger.info(f"[子图-初始化] 设置 {len(all_dimensions)} 个分析维度")
 
     return {
         "subjects": all_dimensions,
-        "analyses": []
+        "analyses": [],
+        "knowledge_map": {},  # 初始化知识映射
+        "rag_enabled": state.get("rag_enabled", RAG_AVAILABLE)  # 传递RAG启用状态
     }
 
 
@@ -320,19 +302,19 @@ def initialize_analysis(state: AnalysisState) -> Dict[str, Any]:
 
 def create_analysis_subgraph() -> StateGraph:
     """
-    创建现状分析子图 - 使用封装节点
+    创建现状分析子图 - 重构版：删除汇总节点，集成知识预加载
+
+    流程：initialize -> knowledge_preload -> map -> analyze_dimension (并行) -> END
 
     Returns:
         编译后的 StateGraph 实例
     """
     from ..nodes.subgraph_nodes import (
         InitializeAnalysisNode,
-        AnalyzeDimensionNode,
-        ReduceAnalysesNode,
-        GenerateAnalysisReportNode
+        AnalyzeDimensionNode
     )
 
-    logger.info("[子图构建] 开始构建现状分析子图（使用封装节点）")
+    logger.info("[子图构建] 开始构建现状分析子图（重构版：无汇总节点 + RAG集成）")
 
     # 创建状态图
     builder = StateGraph(AnalysisState)
@@ -340,17 +322,15 @@ def create_analysis_subgraph() -> StateGraph:
     # 创建节点实例
     initialize_node = InitializeAnalysisNode()
     analyze_node = AnalyzeDimensionNode()
-    reduce_node = ReduceAnalysesNode()
-    report_node = GenerateAnalysisReportNode()
 
     # 添加节点
     builder.add_node("initialize", initialize_node)
+    builder.add_node("knowledge_preload", knowledge_preload_node)  # 新增：知识预加载节点
     builder.add_node("analyze_dimension", analyze_node)
-    builder.add_node("reduce_analyses", reduce_node)
-    builder.add_node("generate_report", report_node)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
+    builder.add_edge("initialize", "knowledge_preload")  # 新增：初始化后预加载知识
 
     # 关键：使用条件边实现并行分发
     # 在 LangGraph 1.0.x 中，Send 对象必须由路由函数返回，不能由节点返回
@@ -359,16 +339,15 @@ def create_analysis_subgraph() -> StateGraph:
         """路由函数：将状态分发到各维度的分析节点"""
         return map_dimensions(state)
 
-    builder.add_conditional_edges("initialize", route_to_dimensions)
+    builder.add_conditional_edges("knowledge_preload", route_to_dimensions)  # 修改：从knowledge_preload分发
 
-    builder.add_edge("analyze_dimension", "reduce_analyses")
-    builder.add_edge("reduce_analyses", "generate_report")
-    builder.add_edge("generate_report", END)
+    # 【重构】analyze 节点直接到 END，不再经过 reduce 和 generate 节点
+    builder.add_edge("analyze_dimension", END)
 
     # 编译子图
     analysis_subgraph = builder.compile()
 
-    logger.info("[子图构建] 现状分析子图构建完成（使用封装节点）")
+    logger.info("[子图构建] 现状分析子图构建完成（重构版：无汇总节点 + RAG集成）")
 
     return analysis_subgraph
 
@@ -379,19 +358,28 @@ def create_analysis_subgraph() -> StateGraph:
 
 def call_analysis_subgraph(
     raw_data: str,
-    project_name: str = "村庄"
+    project_name: str = "村庄",
+    _streaming_enabled: bool = False,  # 新增：是否启用流式输出
+    _token_callback_factory = None,  # 新增：token 回调工厂
+    rag_enabled: bool = True  # 新增：是否启用RAG
 ) -> Dict[str, Any]:
     """
     调用现状分析子图的包装函数
 
     这个函数可以在父图中作为一个节点使用，实现"不同状态模式"的调用。
+    【重构】只返回维度报告，不生成综合报告
+    【流式输出】支持 token 级别的流式输出
+    【RAG集成】支持知识预加载
 
     Args:
         raw_data: 村庄原始数据
         project_name: 项目名称
+        _streaming_enabled: 是否启用流式输出
+        _token_callback_factory: token 回调工厂函数
+        rag_enabled: 是否启用RAG知识检索
 
     Returns:
-        包含最终分析报告的字典
+        包含维度报告的字典
     """
     logger.info(f"[子图调用] 开始调用现状分析子图: {project_name}")
 
@@ -404,30 +392,44 @@ def call_analysis_subgraph(
         "project_name": project_name,
         "subjects": [],
         "analyses": [],
-        "final_report": "",
-        "dimension_reports": {},  # 新增：初始化维度报告字典
-        "messages": []
+        "analysis_dimension_reports": {},
+        "messages": [],
+        # 【流式输出支持】传递流式输出配置
+        "_streaming_enabled": _streaming_enabled,
+        "_token_callback_factory": _token_callback_factory,
+        # 【RAG集成】传递RAG启用状态
+        "rag_enabled": rag_enabled and RAG_AVAILABLE
     }
 
     try:
         # 调用子图
         result = subgraph.invoke(initial_state)
 
-        logger.info(f"[子图调用] 子图执行成功，报告长度: {len(result.get('final_report', ''))}")
-        logger.info(f"[子图调用] 维度报告数量: {len(result.get('dimension_reports', {}))}")
+        logger.info(f"[子图调用] 子图执行成功")
 
+        # 【修复】从 analyses 列表中提取维度报告并转换为字典（使用英文键名）
+        analyses = result.get("analyses", [])
+        dimension_reports = {}
+        for analysis in analyses:
+            dimension_key = analysis.get("dimension_key")  # 使用英文key
+            analysis_result = analysis.get("analysis_result")
+            if dimension_key and analysis_result:
+                dimension_reports[dimension_key] = analysis_result
+
+        logger.info(f"[子图调用] 维度报告数量: {len(dimension_reports)}")
+
+        # 返回维度报告字典（键名为英文）
         return {
-            "analysis_report": result.get("final_report", ""),
-            "dimension_reports": result.get("dimension_reports", {}),  # 新增：返回维度报告字典
+            "analysis_dimension_reports": dimension_reports,
             "success": True
         }
 
     except Exception as e:
         logger.error(f"[子图调用] 子图执行失败: {str(e)}")
         return {
-            "analysis_report": f"现状分析失败: {str(e)}",
-            "dimension_reports": {},  # 新增：失败时返回空字典
-            "success": False
+            "analysis_dimension_reports": {},
+            "success": False,
+            "error": str(e)
         }
 
 
@@ -452,8 +454,7 @@ if __name__ == "__main__":
         "project_name": "某某村",
         "subjects": [],
         "analyses": [],
-        "final_report": "",
-        "dimension_reports": {},
+        "analysis_dimension_reports": {},
         "messages": []
     }
 
@@ -462,6 +463,8 @@ if __name__ == "__main__":
     result = subgraph.invoke(initial_state)
 
     print("\n=== 执行完成 ===")
-    print(f"报告长度: {len(result['final_report'])} 字符")
-    print("\n=== 最终报告 ===")
-    print(result["final_report"])
+    print(f"维度报告数量: {len(result['analysis_dimension_reports'])}")
+    print("\n=== 维度报告 ===")
+    for dim_name, content in result['analysis_dimension_reports'].items():
+        print(f"\n### {dim_name}")
+        print(content[:200] + "..." if len(content) > 200 else content)

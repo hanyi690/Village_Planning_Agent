@@ -2,16 +2,11 @@
 现状分析规划器
 
 包含12个现状分析维度的规划器实现。
-充分利用现有基础设施：
-- llm_factory.create_llm()
-- analysis_prompts.get_dimension_prompt()
+使用统一基类 UnifiedPlannerBase 消除重复代码。
 """
 
-from typing import Dict, Any
-from abc import ABC
-from langchain_core.messages import HumanMessage
-
-from ..core.llm_factory import create_llm
+from typing import Dict, Any, Optional
+from .unified_base_planner import UnifiedPlannerBase
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,7 +16,7 @@ logger = get_logger(__name__)
 # 现状分析规划器基类
 # ==========================================
 
-class BaseAnalysisPlanner(ABC):
+class BaseAnalysisPlanner(UnifiedPlannerBase):
     """
     现状分析规划器基类
 
@@ -29,104 +24,49 @@ class BaseAnalysisPlanner(ABC):
     - 每个planner只接收raw_data（村庄原始数据）
     - 不需要状态筛选（第一层，没有前置依赖）
     - 直接使用get_dimension_prompt(dimension_key, raw_data)获取prompt
+    - 使用统一基类处理LLM调用、错误处理、LangSmith tracing
     """
 
-    def __init__(self, dimension_key: str, dimension_name: str):
+    def validate_state(self, state: Dict[str, Any]) -> tuple[bool, Optional[str]]:
         """
-        初始化规划器
+        验证状态是否包含必需的字段
 
         Args:
-            dimension_key: 维度标识（如 "location"）
-            dimension_name: 维度名称（如 "区位与对外交通分析"）
-        """
-        self.dimension_key = dimension_key
-        self.dimension_name = dimension_name
-
-    def get_prompt_template(self) -> str:
-        """获取Prompt模板"""
-        from ..subgraphs.analysis_prompts import get_dimension_prompt
-        return get_dimension_prompt(self.dimension_key, "{raw_data}")
-
-    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        执行该维度的现状分析
-
-        流程：
-        1. 从state获取raw_data
-        2. 构建prompt
-        3. 调用LLM（支持LangSmith tracing）
-        4. 返回结果
-
-        Args:
-            state: 完整的状态字典，必须包含 "raw_data"
+            state: 当前状态字典
 
         Returns:
-            {
-                "dimension_key": str,
-                "dimension_name": str,
-                "analysis_result": str  # 生成的分析内容
-            }
+            (is_valid, error_message)
         """
-        logger.info(f"[AnalysisPlanner] 执行 {self.dimension_name}")
+        if "raw_data" not in state:
+            return False, "缺少必需字段: raw_data"
 
-        # 1. 获取raw_data
         raw_data = state.get("raw_data", "")
-        if not raw_data:
-            logger.warning(f"[AnalysisPlanner] {self.dimension_name} 未提供原始数据")
-            return {
-                "dimension_key": self.dimension_key,
-                "dimension_name": self.dimension_name,
-                "analysis_result": "[分析失败] 未提供原始数据"
-            }
+        if not raw_data or not raw_data.strip():
+            return False, "raw_data 为空"
 
-        # 2. 构建prompt
+        return True, None
+
+    def build_prompt(self, state: Dict[str, Any]) -> str:
+        """
+        构建完整的prompt
+
+        Args:
+            state: 当前状态字典（已通过验证）
+
+        Returns:
+            完整的prompt字符串
+        """
         from ..subgraphs.analysis_prompts import get_dimension_prompt
-        prompt = get_dimension_prompt(self.dimension_key, raw_data)
+        raw_data = state.get("raw_data", "")
+        return get_dimension_prompt(self.dimension_key, raw_data)
 
-        # 3. 调用LLM（支持LangSmith tracing）
-        try:
-            # 创建LangSmith metadata（如果启用）
-            try:
-                from ..core.langsmith_integration import get_langsmith_manager
-                langsmith = get_langsmith_manager()
-                metadata = None
-                if langsmith.is_enabled():
-                    metadata = langsmith.create_run_metadata(
-                        project_name=state.get("project_name", "村庄"),
-                        dimension=self.dimension_key,
-                        layer=1  # 现状分析层级
-                    )
-            except Exception as e:
-                logger.debug(f"[AnalysisPlanner] LangSmith metadata创建失败: {e}")
-                metadata = None
+    def get_layer(self) -> int:
+        """返回规划层级：1 = 现状分析"""
+        return 1
 
-            llm = create_llm(
-                model="glm-4-flash",
-                temperature=0.7,
-                max_tokens=2000,
-                metadata=metadata
-            )
-            response = llm.invoke([HumanMessage(content=prompt)])
-            result = response.content
-
-            logger.info(f"[AnalysisPlanner] {self.dimension_name} 完成，长度: {len(result)}")
-
-            return {
-                "dimension_key": self.dimension_key,
-                "dimension_name": self.dimension_name,
-                "analysis_result": result
-            }
-
-        except Exception as e:
-            logger.error(f"[AnalysisPlanner] {self.dimension_name} 执行失败: {e}")
-            return {
-                "dimension_key": self.dimension_key,
-                "dimension_name": self.dimension_name,
-                "analysis_result": f"[执行失败] {str(e)}"
-            }
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.dimension_key}/{self.dimension_name})"
+    def get_result_key(self) -> str:
+        """返回结果字典的键名"""
+        return "analysis_result"
 
 
 # ==========================================
@@ -210,11 +150,11 @@ class ArchitectureAnalysisPlanner(BaseAnalysisPlanner):
         super().__init__("architecture", "建筑分析")
 
 
-class HistoricalCulturalAnalysisPlanner(BaseAnalysisPlanner):
-    """历史文化分析规划器"""
+class HistoricalCultureAnalysisPlanner(BaseAnalysisPlanner):
+    """历史文化与乡愁保护分析规划器"""
 
     def __init__(self):
-        super().__init__("historical_cultural", "历史文化分析")
+        super().__init__("historical_culture", "历史文化与乡愁保护分析")
 
 
 # ==========================================
@@ -240,7 +180,7 @@ class AnalysisPlannerFactory:
         "infrastructure": InfrastructureAnalysisPlanner,
         "ecological_green": EcologicalGreenAnalysisPlanner,
         "architecture": ArchitectureAnalysisPlanner,
-        "historical_cultural": HistoricalCulturalAnalysisPlanner
+        "historical_culture": HistoricalCultureAnalysisPlanner
     }
 
     @classmethod
@@ -296,6 +236,6 @@ __all__ = [
     "InfrastructureAnalysisPlanner",
     "EcologicalGreenAnalysisPlanner",
     "ArchitectureAnalysisPlanner",
-    "HistoricalCulturalAnalysisPlanner",
+    "HistoricalCultureAnalysisPlanner",
     "AnalysisPlannerFactory",
 ]

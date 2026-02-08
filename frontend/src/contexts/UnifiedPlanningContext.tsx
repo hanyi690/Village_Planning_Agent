@@ -6,7 +6,7 @@
  */
 
 import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect, useMemo } from 'react';
-import { Message, PlanningParams, Checkpoint } from '@/types/message';
+import { Message, PlanningParams, Checkpoint, ReviewInteractionMessage } from '@/types/message';
 import { VillageInputData } from '@/components/VillageInputForm';
 import { planningApi, dataApi, VillageInfo, VillageSession } from '@/lib/api';
 import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/lib/utils';

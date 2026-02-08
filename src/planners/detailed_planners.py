@@ -43,18 +43,60 @@ class IndustryPlanningPlanner(DimensionPlanner):
         )
 
 
-class MasterPlanPlanner(DimensionPlanner):
-    """村庄总体规划规划器"""
+class SpatialStructurePlanner(DimensionPlanner):
+    """空间结构规划规划器"""
 
     def __init__(self):
-        super().__init__("master_plan", "村庄总体规划")
+        super().__init__("spatial_structure", "空间结构规划")
 
     def get_prompt_template(self) -> str:
-        from ..subgraphs.detailed_plan_prompts import MASTER_PLAN_PROMPT
-        return MASTER_PLAN_PROMPT
+        from ..subgraphs.detailed_plan_prompts import SPATIAL_STRUCTURE_PROMPT
+        return SPATIAL_STRUCTURE_PROMPT
 
     def build_prompt(self, filtered_state: Dict[str, Any]) -> str:
-        """构建总体规划的完整prompt"""
+        """构建空间结构规划的完整prompt"""
+        template = self.get_prompt_template()
+        return template.format(
+            project_name=filtered_state.get("_project_name", "村庄"),
+            analysis_report=filtered_state.get("filtered_analysis", ""),
+            planning_concept=filtered_state.get("filtered_concepts", ""),
+            constraints=filtered_state.get("_constraints", "无特殊约束")
+        )
+
+
+class LandUsePlanningPlanner(DimensionPlanner):
+    """土地利用规划规划器"""
+
+    def __init__(self):
+        super().__init__("land_use_planning", "土地利用规划")
+
+    def get_prompt_template(self) -> str:
+        from ..subgraphs.detailed_plan_prompts import LAND_USE_PLANNING_PROMPT
+        return LAND_USE_PLANNING_PROMPT
+
+    def build_prompt(self, filtered_state: Dict[str, Any]) -> str:
+        """构建土地利用规划的完整prompt"""
+        template = self.get_prompt_template()
+        return template.format(
+            project_name=filtered_state.get("_project_name", "村庄"),
+            analysis_report=filtered_state.get("filtered_analysis", ""),
+            planning_concept=filtered_state.get("filtered_concepts", ""),
+            constraints=filtered_state.get("_constraints", "无特殊约束")
+        )
+
+
+class SettlementPlanningPlanner(DimensionPlanner):
+    """居民点规划规划器"""
+
+    def __init__(self):
+        super().__init__("settlement_planning", "居民点规划")
+
+    def get_prompt_template(self) -> str:
+        from ..subgraphs.detailed_plan_prompts import SETTLEMENT_PLANNING_PROMPT
+        return SETTLEMENT_PLANNING_PROMPT
+
+    def build_prompt(self, filtered_state: Dict[str, Any]) -> str:
+        """构建居民点规划的完整prompt"""
         template = self.get_prompt_template()
         return template.format(
             project_name=filtered_state.get("_project_name", "村庄"),
@@ -279,7 +321,9 @@ class DetailedPlannerFactory:
 
     _PLANNER_CLASSES = {
         "industry": IndustryPlanningPlanner,
-        "master_plan": MasterPlanPlanner,
+        "spatial_structure": SpatialStructurePlanner,
+        "land_use_planning": LandUsePlanningPlanner,
+        "settlement_planning": SettlementPlanningPlanner,
         "traffic": TrafficPlanningPlanner,
         "public_service": PublicServicePlanner,
         "infrastructure": InfrastructurePlanner,
@@ -343,7 +387,9 @@ class DetailedPlannerFactory:
 
 __all__ = [
     "IndustryPlanningPlanner",
-    "MasterPlanPlanner",
+    "SpatialStructurePlanner",
+    "LandUsePlanningPlanner",
+    "SettlementPlanningPlanner",
     "TrafficPlanningPlanner",
     "PublicServicePlanner",
     "InfrastructurePlanner",

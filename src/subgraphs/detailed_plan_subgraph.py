@@ -1,24 +1,26 @@
 """
 详细规划子图 (Detailed Planning Subgraph)
 
-基于现状分析和规划思路，生成详细的村庄规划方案，包含10个专业规划维度：
+基于现状分析和规划思路，生成详细的村庄规划方案，包含12个专业规划维度：
 1. 产业规划 (Industry Planning)
-2. 村庄总体规划 (Master Planning)
-3. 道路交通规划 (Traffic Planning)
-4. 公共服务设施规划 (Public Service Planning)
-5. 基础设施规划 (Infrastructure Planning)
-6. 生态绿地规划 (Ecological Planning)
-7. 防震减灾规划 (Disaster Prevention Planning)
-8. 历史文保规划 (Heritage Planning)
-9. 村庄风貌指引 (Landscape Planning)
-10. 建设项目库 (Project Bank)
+2. 空间结构规划 (Spatial Structure Planning)
+3. 土地利用规划 (Land Use Planning)
+4. 居民点规划 (Settlement Planning)
+5. 道路交通规划 (Traffic Planning)
+6. 公共服务设施规划 (Public Service Planning)
+7. 基础设施规划 (Infrastructure Planning)
+8. 生态绿地规划 (Ecological Planning)
+9. 防震减灾规划 (Disaster Prevention Planning)
+10. 历史文保规划 (Heritage Planning)
+11. 村庄风貌指引 (Landscape Planning)
+12. 建设项目库 (Project Bank)
 
 使用 LangGraph 的 Send 机制实现基于波次的动态并行调度。
 支持人机交互反馈循环。
 支持部分状态传递优化，根据维度依赖关系筛选相关信息。
 
 关键特性：
-- Wave 1: 9个独立维度完全并行执行
+- Wave 1: 11个独立维度完全并行执行
 - Wave 2: project_bank等待Wave 1完成后执行
 - 智能状态筛选：每个维度只接收其依赖的3-4个现状维度
 """
@@ -26,9 +28,9 @@
 from typing import TypedDict, List, Dict, Any, Literal, Union
 from typing_extensions import Annotated
 from langgraph.graph import StateGraph, END, START
-from langgraph.types import Send, interrupt
+from langgraph.types import Send
 from langgraph.graph.message import add_messages
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 import operator
 from datetime import datetime
 
@@ -39,13 +41,16 @@ from ..core.dimension_mapping import (
     get_execution_wave,
     get_dimensions_by_wave,
     check_detailed_dependencies_ready,
-    DETAILED_DIMENSION_NAMES
+    DETAILED_DIMENSION_NAMES,
+    DEFAULT_ADAPTER_CONFIG
 )
 from ..utils.logger import get_logger
 from ..utils.state_filter import filter_state_for_detailed_dimension_v2
 from .detailed_plan_prompts import (
     INDUSTRY_PLANNING_PROMPT,
-    MASTER_PLAN_PROMPT,
+    SPATIAL_STRUCTURE_PROMPT,
+    LAND_USE_PLANNING_PROMPT,
+    SETTLEMENT_PLANNING_PROMPT,
     TRAFFIC_PLANNING_PROMPT,
     PUBLIC_SERVICE_PROMPT,
     INFRASTRUCTURE_PROMPT,
@@ -71,7 +76,7 @@ class DetailedPlanState(TypedDict):
     # 输入数据
     project_name: str
     analysis_report: str           # 来自 Layer 1（完整版，降级使用）
-    dimension_reports: Dict[str, str]  # 各维度现状分析报告字典（用于部分状态传递）
+    analysis_dimension_reports: Dict[str, str]  # 各维度现状分析报告字典（用于部分状态传递）
     planning_concept: str          # 来自 Layer 2（完整版，降级使用）
     concept_dimension_reports: Dict[str, str]  # 各维度规划思路报告字典（用于部分状态传递）
     task_description: str
@@ -81,29 +86,29 @@ class DetailedPlanState(TypedDict):
     # 规划维度控制
     required_dimensions: List[str] # 需要生成的维度列表
     completed_dimensions: List[str] # 已完成的维度
-    current_dimension: str         # 当前处理的维度
 
     # 【新增】动态路由字段
     current_wave: int              # 当前执行波次 (1 或 2)
     total_waves: int               # 总波次数（固定为2）
     completed_dimension_reports: Dict[str, str]  # 已完成维度的报告（project_bank需要）
-    token_usage_stats: Dict[str, dict]  # Token使用统计
 
     # 【新增】适配器配置
     enable_adapters: bool          # 是否启用适配器
     adapter_config: Dict[str, List[str]]  # 各维度的适配器配置
 
     # 各维度规划结果（支持独立更新）
-    industry_plan: str             # 产业规划
-    master_plan: str               # 总体规划
-    traffic_plan: str              # 道路交通规划
-    public_service_plan: str       # 公服设施规划
-    infrastructure_plan: str       # 基础设施规划
-    ecological_plan: str           # 生态绿地规划
-    disaster_prevention_plan: str  # 防震减灾规划
-    heritage_plan: str             # 历史文保规划
-    landscape_plan: str            # 村庄风貌指引
-    project_bank: str              # 建设项目库
+    industry_plan: str                  # 产业规划
+    spatial_structure_plan: str         # 空间结构规划
+    land_use_planning_plan: str         # 土地利用规划
+    settlement_planning_plan: str       # 居民点规划
+    traffic_plan: str                   # 道路交通规划
+    public_service_plan: str            # 公服设施规划
+    infrastructure_plan: str            # 基础设施规划
+    ecological_plan: str                # 生态绿地规划
+    disaster_prevention_plan: str       # 防震减灾规划
+    heritage_plan: str                  # 历史文保规划
+    landscape_plan: str                 # 村庄风貌指引
+    project_bank: str                   # 建设项目库
 
     # 人机交互状态
     need_review: bool              # 是否需要人工审核
@@ -113,9 +118,8 @@ class DetailedPlanState(TypedDict):
     # 中间结果（用于并行处理）
     dimension_plans: Annotated[List[Dict[str, str]], operator.add]  # 已完成的维度规划
 
-    # 最终输出
-    final_detailed_plan: str       # 汇总的详细规划报告
-    consolidated_project_bank: str # 整合后的项目库
+    # 最终输出 - 只保留维度报告
+    detailed_dimension_reports: Dict[str, str]  # 各维度详细规划报告
 
     # 消息历史
     messages: Annotated[List[BaseMessage], add_messages]
@@ -150,7 +154,9 @@ class DetailedDimensionState(TypedDict):
 # 所有维度列表
 ALL_DIMENSIONS = [
     "industry",
-    "master_plan",
+    "spatial_structure",
+    "land_use_planning",
+    "settlement_planning",
     "traffic",
     "public_service",
     "infrastructure",
@@ -166,6 +172,22 @@ DIMENSION_NAMES = DETAILED_DIMENSION_NAMES
 
 # 【新增】波次配置常量
 TOTAL_WAVES = 2
+
+# 维度键名到状态字段名的映射
+DIMENSION_KEY_TO_FIELD = {
+    "industry": "industry_plan",
+    "spatial_structure": "spatial_structure_plan",
+    "land_use_planning": "land_use_planning_plan",
+    "settlement_planning": "settlement_planning_plan",
+    "traffic": "traffic_plan",
+    "public_service": "public_service_plan",
+    "infrastructure": "infrastructure_plan",
+    "ecological": "ecological_plan",
+    "disaster_prevention": "disaster_prevention_plan",
+    "heritage": "heritage_plan",
+    "landscape": "landscape_plan",
+    "project_bank": "project_bank"
+}
 
 
 # ==========================================
@@ -209,8 +231,7 @@ def initialize_detailed_planning(state: DetailedPlanState) -> Dict[str, Any]:
         "revision_count": state.get("revision_count", {}),
         "current_wave": current_wave,
         "total_waves": total_waves,
-        "completed_dimension_reports": {},
-        "token_usage_stats": {}
+        "completed_dimension_reports": {}
     }
 
 
@@ -231,7 +252,7 @@ def route_by_dependency_wave(state: DetailedPlanState) -> Union[List[Send], str]
 
     Returns:
         List[Send]: Send对象列表（并行执行多个维度）
-        str: 节点名称（"advance_wave", "generate_single", "generate_final"）
+        str: 节点名称（"advance_wave", "end"）
     """
     current_wave = state.get("current_wave", 1)
     completed = set(state.get("completed_dimensions", []))
@@ -264,11 +285,11 @@ def route_by_dependency_wave(state: DetailedPlanState) -> Union[List[Send], str]
                 return create_parallel_tasks_with_state_filtering(state, ["project_bank"])
         else:
             # 所有维度完成
-            logger.info("[子图-L3-波次路由] 所有维度完成，进入汇总")
-            return "generate_final"
+            logger.info("[子图-L3-波次路由] 所有维度完成，直接结束")
+            return "end"
 
-    # 默认进入汇总
-    return "generate_final"
+    # 默认进入结束
+    return "end"
 
 
 def create_parallel_tasks_with_state_filtering(
@@ -290,7 +311,6 @@ def create_parallel_tasks_with_state_filtering(
     """
     sends = []
     completed_detailed = state.get("completed_dimension_reports", {})
-    token_usage_stats = state.get("token_usage_stats", {})
 
     full_dimension_reports = state.get("dimension_reports", {})
     full_concept_dimension_reports = state.get("concept_dimension_reports", {})
@@ -328,8 +348,6 @@ def create_parallel_tasks_with_state_filtering(
 
         sends.append(Send("generate_dimension_plan", dimension_state))
 
-        # 记录Token统计
-        token_usage_stats[dim] = filtered["token_stats"]
         logger.info(f"[状态筛选] {dim}: "
                    f"节省 {filtered['token_stats']['reduction_percent']}% Token "
                    f"({filtered['token_stats']['tokens_saved']} 字符)")
@@ -472,23 +490,11 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
     汇总所有维度的规划结果，更新主状态
 
     同时更新 completed_dimension_reports，供后续维度（如project_bank）使用
+    【新增】清理每个维度报告内部的markdown标题行(## 标题)
     """
-    logger.info(f"[子图-L3-Reduce] 汇总 {len(state['dimension_plans'])} 个维度的规划结果")
+    from ..utils.text_formatter import clean_title_lines
 
-    # 维度key到TypedDict字段名的映射
-    # 注意：master_plan 的字段名就是 master_plan，不是 master_plan_plan
-    DIMENSION_KEY_TO_FIELD = {
-        "industry": "industry_plan",
-        "master_plan": "master_plan",  # 特殊：不需要加 _plan 后缀
-        "traffic": "traffic_plan",
-        "public_service": "public_service_plan",
-        "infrastructure": "infrastructure_plan",
-        "ecological": "ecological_plan",
-        "disaster_prevention": "disaster_prevention_plan",
-        "heritage": "heritage_plan",
-        "landscape": "landscape_plan",
-        "project_bank": "project_bank"  # 特殊：不需要加 _plan 后缀
-    }
+    logger.info(f"[子图-L3-Reduce] 汇总 {len(state['dimension_plans'])} 个维度的规划结果")
 
     # 更新各维度的规划到对应字段
     updates = {}
@@ -499,14 +505,23 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
         dim_key = plan["dimension_key"]
         dim_result = plan["dimension_result"]
 
+        # 【新增】清理维度规划文本中的标题行
+        cleaned_result = clean_title_lines(dim_result)
+
         # 使用映射获取正确的字段名
         field_name = DIMENSION_KEY_TO_FIELD.get(dim_key, f"{dim_key}_plan")
-        updates[field_name] = dim_result
-        logger.info(f"[子图-L3-Reduce] 设置 {field_name} = {len(dim_result)} 字符")
+        updates[field_name] = cleaned_result
+        logger.info(f"[子图-L3-Reduce] 设置 {field_name} = {len(cleaned_result)} 字符")
         completed.append(dim_key)
 
-        # 【新增】记录已完成维度的报告（供project_bank使用）
-        completed_reports[dim_key] = dim_result
+        # 【修改】记录已完成维度的清理后报告（供project_bank使用）
+        completed_reports[dim_key] = cleaned_result
+
+        # 【新增】记录清理前后对比的调试信息
+        original_length = len(dim_result)
+        cleaned_length = len(cleaned_result)
+        if original_length != cleaned_length:
+            logger.info(f"[子图-L3-Reduce] {dim_key}: 清理 {original_length-cleaned_length} 字符的标题标记")
 
     # 更新已完成列表和已完成报告字典
     updates["completed_dimensions"] = completed
@@ -570,84 +585,10 @@ def human_review_dimension(state: DetailedPlanState) -> Dict[str, Any]:
 
 
 # ==========================================
-# 最终汇总节点
+# 最终汇总节点 - 【已删除】
 # ==========================================
-
-def generate_final_detailed_plan(state: DetailedPlanState) -> Dict[str, Any]:
-    """
-    生成最终详细规划报告
-
-    整合所有维度的规划结果，生成连贯的详细规划文档。
-    """
-    logger.info("[子图-L3-汇总] 开始生成最终详细规划报告")
-
-    try:
-        # 整理各维度规划为文本
-        dimension_reports_text = ""
-        for dim_key in state["completed_dimensions"]:
-            field_name = f"{dim_key}_plan"
-            plan = state.get(field_name, "")
-            dimension_reports_text += f"\n\n{plan}\n\n"
-
-        # 构建汇总 Prompt
-        summary_prompt = DETAILED_PLAN_SUMMARY_PROMPT.format(
-            project_name=state["project_name"],
-            dimension_reports=dimension_reports_text[:10000]  # 限制长度
-        )
-
-        # 调用 LLM 生成最终报告
-        llm = _get_llm()
-        response = llm.invoke([HumanMessage(content=summary_prompt)])
-
-        final_detailed_plan = f"""# {state['project_name']} 详细规划报告
-
-{response.content}
-
----
-
-## 各专项规划
-
-{dimension_reports_text}
-
----
-
-**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**规划系统**: 村庄规划 AI 系统 - 详细规划层
-"""
-
-        logger.info(f"[子图-L3-汇总] 详细规划报告生成完成，共 {len(final_detailed_plan)} 字符")
-
-        return {
-            "final_detailed_plan": final_detailed_plan,
-            "messages": [AIMessage(content=f"详细规划报告已生成，总长度 {len(final_detailed_plan)} 字符。")]
-        }
-
-    except Exception as e:
-        logger.error(f"[子图-L3-汇总] 报告生成失败: {str(e)}")
-
-        # 降级方案：直接拼接各维度结果
-        fallback_plan = f"""# {state['project_name']} 详细规划报告
-
-## 各专项规划
-
-"""
-        for dim_key in state["completed_dimensions"]:
-            field_name = f"{dim_key}_plan"
-            plan = state.get(field_name, "")
-            fallback_plan += f"\n{plan}\n"
-
-        fallback_plan += f"""
-
----
-
-**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**说明**: 自动汇总版本
-"""
-
-        return {
-            "final_detailed_plan": fallback_plan,
-            "messages": [AIMessage(content="详细规划报告已生成（简化汇总版本）")]
-        }
+# generate_final_detailed_plan 函数已删除
+# 不再生成综合报告，只保留维度报告
 
 
 # ==========================================
@@ -656,7 +597,9 @@ def generate_final_detailed_plan(state: DetailedPlanState) -> Dict[str, Any]:
 
 def create_detailed_plan_subgraph() -> StateGraph:
     """
-    创建详细规划子图（基于波次的动态路由版本）- 使用封装节点
+    创建详细规划子图（基于波次的动态路由版本）- 重构版：删除汇总节点
+
+    流程：initialize -> route -> generate (并行) -> reduce -> check -> route/END
 
     Returns:
         编译后的 StateGraph 实例
@@ -664,11 +607,10 @@ def create_detailed_plan_subgraph() -> StateGraph:
     from ..nodes.subgraph_nodes import (
         InitializeDetailedPlanningNode,
         GenerateDimensionPlanNode,
-        ReduceDimensionReportsNode,
-        GenerateFinalDetailedPlanNode
+        ReduceDimensionReportsNode
     )
 
-    logger.info("[子图构建] 开始构建详细规划子图（波次动态路由版本，使用封装节点）")
+    logger.info("[子图构建] 开始构建详细规划子图（波次动态路由版本，重构版：无汇总节点）")
 
     # 创建状态图
     builder = StateGraph(DetailedPlanState)
@@ -677,7 +619,6 @@ def create_detailed_plan_subgraph() -> StateGraph:
     initialize_node = InitializeDetailedPlanningNode()
     generate_node = GenerateDimensionPlanNode()
     reduce_node = ReduceDimensionReportsNode()
-    report_node = GenerateFinalDetailedPlanNode()
 
     # 添加节点
     builder.add_node("initialize", initialize_node)
@@ -686,7 +627,6 @@ def create_detailed_plan_subgraph() -> StateGraph:
     builder.add_node("reduce_plans", reduce_node)
     builder.add_node("check_complete", check_all_dimensions_complete)
     builder.add_node("human_review", human_review_dimension)
-    builder.add_node("generate_final", report_node)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
@@ -695,7 +635,7 @@ def create_detailed_plan_subgraph() -> StateGraph:
     builder.add_conditional_edges(
         "initialize",
         route_by_dependency_wave,
-        ["generate_dimension_plan", "advance_wave", "generate_final"]
+        ["generate_dimension_plan", "advance_wave", "end"]
     )
 
     # Agent节点 -> Reduce
@@ -707,7 +647,7 @@ def create_detailed_plan_subgraph() -> StateGraph:
         check_all_dimensions_complete,
         {
             "continue": "route_next",  # 继续波次路由
-            "finalize": "generate_final"  # 所有维度完成
+            "finalize": "end"  # 所有维度完成，直接结束
         }
     )
 
@@ -718,21 +658,37 @@ def create_detailed_plan_subgraph() -> StateGraph:
     builder.add_conditional_edges(
         "route_next",
         route_by_dependency_wave,
-        ["generate_dimension_plan", "advance_wave", "generate_final"]
+        ["generate_dimension_plan", "advance_wave", "end"]
     )
 
     # 波次推进 -> 再次路由
     builder.add_edge("advance_wave", "route_next")
 
-    # 最终节点 -> END
-    builder.add_edge("generate_final", END)
+    # 【重构】删除 generate_final 节点，直接到 END
+    builder.add_node("end", lambda state: {"detailed_dimension_reports": _extract_dimension_reports(state)})
+    builder.add_edge("end", END)
 
     # 编译子图
     detailed_plan_subgraph = builder.compile()
 
-    logger.info("[子图构建] 详细规划子图构建完成（支持2波次动态路由，使用封装节点）")
+    logger.info("[子图构建] 详细规划子图构建完成（支持2波次动态路由，重构版：无汇总节点）")
 
     return detailed_plan_subgraph
+
+
+def _extract_dimension_reports(state: DetailedPlanState) -> Dict[str, str]:
+    """从状态中提取维度报告"""
+    from ..core.dimension_mapping import DETAILED_DIMENSION_NAMES
+
+    detailed_dimension_reports = {}
+    for dim_key in DETAILED_DIMENSION_NAMES.keys():
+        field_name = f"{dim_key}_plan"
+        content = state.get(field_name, "")
+        if content:
+            detailed_dimension_reports[dim_key] = content
+
+    logger.info(f"[子图-L3-提取] 提取了 {len(detailed_dimension_reports)} 个维度报告")
+    return detailed_dimension_reports
 
 
 # ==========================================
@@ -757,6 +713,8 @@ def call_detailed_plan_subgraph(
     """
     调用详细规划子图的包装函数
 
+    【重构】只返回维度报告，不生成综合报告
+
     Args:
         project_name: 项目/村庄名称
         analysis_report: 现状分析报告（来自 Layer 1）
@@ -772,7 +730,7 @@ def call_detailed_plan_subgraph(
         village_data: 村庄原始数据
 
     Returns:
-        包含最终详细规划报告的字典
+        包含维度报告的字典
     """
     logger.info(f"[子图调用] 开始调用详细规划子图: {project_name}")
 
@@ -783,18 +741,9 @@ def call_detailed_plan_subgraph(
     if required_dimensions is None:
         required_dimensions = ALL_DIMENSIONS
 
-    # 默认适配器配置
+    # 默认适配器配置（从 dimension_mapping 导入）
     if adapter_config is None:
-        adapter_config = {
-            "industry": ["gis"],
-            "ecological": ["gis"],
-            "traffic": ["network"],
-            "infrastructure": ["gis", "network"],
-            "public_service": ["network"],
-            "master_plan": ["gis"],
-            "landscape": ["gis"],
-            "disaster_prevention": ["gis"]
-        }
+        adapter_config = DEFAULT_ADAPTER_CONFIG
 
     # 构建初始状态
     initial_state: DetailedPlanState = {
@@ -808,17 +757,17 @@ def call_detailed_plan_subgraph(
         "village_data": village_data,
         "required_dimensions": required_dimensions,
         "completed_dimensions": [],
-        "current_dimension": "",
         # 【新增】波次路由相关字段
         "current_wave": 1,
         "total_waves": TOTAL_WAVES,
         "completed_dimension_reports": {},
-        "token_usage_stats": {},
         # 【新增】适配器配置
         "enable_adapters": enable_adapters,
         "adapter_config": adapter_config,
         "industry_plan": "",
-        "master_plan": "",
+        "spatial_structure_plan": "",
+        "land_use_planning_plan": "",
+        "settlement_planning_plan": "",
         "traffic_plan": "",
         "public_service_plan": "",
         "infrastructure_plan": "",
@@ -831,8 +780,7 @@ def call_detailed_plan_subgraph(
         "human_feedback": {},
         "revision_count": {},
         "dimension_plans": [],
-        "final_detailed_plan": "",
-        "consolidated_project_bank": "",
+        "detailed_dimension_reports": {},
         "messages": []
     }
 
@@ -840,29 +788,14 @@ def call_detailed_plan_subgraph(
         # 调用子图
         result = subgraph.invoke(initial_state)
 
-        logger.info(f"[子图调用] 子图执行成功，报告长度: {len(result.get('final_detailed_plan', ''))} 字符")
+        logger.info(f"[子图调用] 子图执行成功")
 
-        # 添加调试日志：提取各维度规划结果
-        logger.info(f"[子图调用] 提取各维度规划结果")
-        for dim_key in ["industry", "master_plan", "traffic", "public_service",
-                        "infrastructure", "ecological", "disaster_prevention",
-                        "heritage", "landscape"]:
-            field_name = f"{dim_key}_plan"
-            plan_content = result.get(field_name, "")
-            logger.info(f"[子图调用] {field_name}: {len(plan_content)} 字符")
+        # 【重构】只返回维度报告
+        detailed_dimension_reports = result.get("detailed_dimension_reports", {})
+        logger.info(f"[子图调用] 维度报告数量: {len(detailed_dimension_reports)}")
 
         return {
-            "detailed_plan_report": result["final_detailed_plan"],
-            "industry_plan": result.get("industry_plan", ""),
-            "master_plan": result.get("master_plan", ""),
-            "traffic_plan": result.get("traffic_plan", ""),
-            "public_service_plan": result.get("public_service_plan", ""),
-            "infrastructure_plan": result.get("infrastructure_plan", ""),
-            "ecological_plan": result.get("ecological_plan", ""),
-            "disaster_prevention_plan": result.get("disaster_prevention_plan", ""),
-            "heritage_plan": result.get("heritage_plan", ""),
-            "landscape_plan": result.get("landscape_plan", ""),
-            "project_bank": result.get("project_bank", ""),
+            "detailed_dimension_reports": detailed_dimension_reports,
             "completed_dimensions": result.get("completed_dimensions", []),
             "success": True
         }
@@ -870,7 +803,7 @@ def call_detailed_plan_subgraph(
     except Exception as e:
         logger.error(f"[子图调用] 子图执行失败: {str(e)}")
         return {
-            "detailed_plan_report": f"详细规划失败: {str(e)}",
+            "detailed_dimension_reports": {},
             "success": False,
             "error": str(e)
         }
@@ -912,8 +845,10 @@ if __name__ == "__main__":
     print("\n=== 执行完成 ===")
     print(f"成功: {result['success']}")
     print(f"完成的维度: {result['completed_dimensions']}")
-    print(f"报告长度: {len(result['detailed_plan_report'])} 字符")
+    print(f"维度报告数量: {len(result.get('detailed_dimension_reports', {}))}")
 
     if result['success']:
-        print("\n=== 产业规划预览 ===")
-        print(result['industry_plan'][:800])
+        print("\n=== 维度报告预览 ===")
+        for dim_key, content in result.get('detailed_dimension_reports', {}).items():
+            print(f"\n### {dim_key}: {len(content)} 字符")
+            print(content[:300] + "..." if len(content) > 300 else content)

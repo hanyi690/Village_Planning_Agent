@@ -42,7 +42,9 @@ async def stream_graph_execution(
     graph: StateGraph,
     initial_state: Dict[str, Any],
     session_id: str,
-    enable_streaming: bool = False  # 新增：是否启用 token 级流式输出
+    enable_streaming: bool = False,  # 新增：是否启用 token 级流式输出
+    checkpointer=None,  # NEW: Accept checkpointer
+    thread_id: str = None  # NEW: Accept thread_id for resume
 ) -> StreamingResponse:
     """
     Stream main graph execution events via SSE
@@ -52,6 +54,8 @@ async def stream_graph_execution(
         initial_state: Initial state dictionary for graph execution
         session_id: Session identifier (typically timestamp)
         enable_streaming: Enable token-level streaming output (default: False)
+        checkpointer: Optional LangGraph checkpointer for state persistence
+        thread_id: Optional thread_id for resuming execution (defaults to session_id)
 
     Returns:
         StreamingResponse with SSE events
@@ -74,6 +78,8 @@ async def stream_graph_execution(
             logger.info(f"[Streaming] step_mode={initial_state.get('step_mode')}")
             logger.info(f"[Streaming] enable_streaming={enable_streaming}")
             logger.info(f"[Streaming] LLM_MODEL={os.getenv('LLM_MODEL', 'not set')}")
+            logger.info(f"[Streaming] checkpointer={type(checkpointer).__name__ if checkpointer else None}")
+            logger.info(f"[Streaming] thread_id={thread_id or session_id}")
 
             # 如果启用流式输出，在状态中添加 token 缓冲区
             if enable_streaming:
@@ -103,8 +109,31 @@ async def stream_graph_execution(
             # Track previous state to detect transitions
             previous_event = {}
 
-            # Stream graph execution
-            async for event in graph.astream(initial_state, stream_mode="values"):
+            # NEW: Configure for resume if thread_id provided
+            config = {}
+            if thread_id and checkpointer:
+                config = {"configurable": {"thread_id": thread_id}}
+                logger.info(f"[Streaming] Resuming with thread_id: {thread_id}")
+
+                # 检查是否有保存的状态 - 修复：只传config，不传thread_id
+                saved_state = await checkpointer.aget(config)
+                if saved_state:
+                    # 从 checkpointer 恢复，不使用 initial_state
+                    logger.info(f"[Streaming] Resuming from checkpoint, state: current_layer={saved_state.get('current_layer')}")
+                    # 使用 None 作为初始状态，让 LangGraph 完全从 checkpointer 恢复
+                    stream_iterator = graph.astream(None, config, stream_mode="values")
+                else:
+                    # 新执行，使用 initial_state
+                    logger.info(f"[Streaming] No saved checkpoint found, starting new execution")
+                    stream_iterator = graph.astream(initial_state, config, stream_mode="values")
+            else:
+                # 没有 checkpointer，直接使用 initial_state
+                config = {"configurable": {"thread_id": session_id}}
+                logger.info(f"[Streaming] New execution with thread_id: {session_id}")
+                stream_iterator = graph.astream(initial_state, config, stream_mode="values")
+
+            # Stream graph execution with config
+            async for event in stream_iterator:
                 event_count += 1
                 logger.info(f"[Streaming] Event #{event_count}: current_layer={event.get('current_layer')}")
 
@@ -214,15 +243,29 @@ async def stream_graph_execution(
                 # Pause event (step mode or human review)
                 if event.get("pause_after_step"):
                     logger.info(f"[Streaming] Pause event at layer {current_layer}")
+
+                    # 更新流状态为 paused
+                    try:
+                        from backend.api.planning import _stream_states
+                        _stream_states[session_id] = "paused"
+                        logger.info(f"[Streaming] Stream state set to 'paused' for session {session_id}")
+                    except ImportError:
+                        logger.warning("[Streaming] Could not import _stream_states")
+
                     yield _format_sse_event("pause", {
                         "session_id": session_id,
                         "current_layer": current_layer,
                         "checkpoint_id": event.get("last_checkpoint_id", ""),
                         "reason": "step_mode" if event.get("step_mode") else "human_review"
                     })
-                    # Don't break - let the stream complete naturally
-                    # The async for loop will check for more events or complete when the graph finishes
-                    # Frontend will disconnect EventSource after receiving pause event
+                    # 发送流暂停结束事件
+                    yield _format_sse_event("stream_paused", {
+                        "session_id": session_id,
+                        "current_layer": current_layer,
+                        "reason": "waiting_for_resume"
+                    })
+                    logger.info(f"[Streaming] Stream paused at layer {current_layer}, ending event stream")
+                    break  # Exit stream loop
 
                 # Review request event (web-based review)
                 if event.get("waiting_for_review"):
@@ -244,6 +287,8 @@ async def stream_graph_execution(
 
                     # Pause execution stream, waiting for frontend response
                     # Frontend will call /api/planning/review/{session_id} to continue
+                    # The graph should have ended due to __interrupt__ signal
+                    logger.info(f"[Streaming] Graph interrupted for review, ending stream")
                     break
 
                 # Progress updates from messages
@@ -259,6 +304,15 @@ async def stream_graph_execution(
             # Check if execution completed normally
             if not initial_state.get("pause_after_step"):
                 logger.info(f"[Streaming] Execution completed normally")
+
+                # 更新流状态为 completed
+                try:
+                    from backend.api.planning import _stream_states
+                    _stream_states[session_id] = "completed"
+                    logger.info(f"[Streaming] Stream state set to 'completed' for session {session_id}")
+                except ImportError:
+                    logger.warning("[Streaming] Could not import _stream_states")
+
                 yield _format_sse_event("completed", {
                     "session_id": session_id,
                     "message": "规划完成",
