@@ -14,8 +14,6 @@ from typing import Optional, Callable, TypeVar, Any
 from functools import wraps
 from fastapi import HTTPException
 
-from backend.schemas import TaskStatus
-
 
 T = TypeVar('T')
 logger = logging.getLogger(__name__)
