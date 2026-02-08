@@ -85,7 +85,8 @@
       "Bash(Remove-Item -Force -Recurse -ErrorAction SilentlyContinue)",
       "Bash(Get-ChildItem -Path \"F:\\\\project\\\\Village_Planning_Agent\" -Filter *.pyc -Recurse -Force)",
       "Bash(Remove-Item:*)",
-      "Bash(del:*)"
+      "Bash(del:*)",
+      "Bash(then echo \"File still exists\")"
     ]
   }
 }

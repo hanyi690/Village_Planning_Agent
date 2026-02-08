@@ -1,7 +1,8 @@
 """
-Unified Planning API - Simplified Architecture
+Unified Planning API - Simplified Architecture (No BackgroundTaskManager)
 
 This API consolidates tasks.py and orchestration.py into a single, clean interface.
+Uses FastAPI BackgroundTasks for non-blocking execution.
 
 Endpoints:
 - POST /api/planning/start - Create and start planning session
@@ -11,6 +12,7 @@ Endpoints:
 - DELETE /api/planning/sessions/{session_id} - Delete session
 """
 
+import asyncio
 import json
 import logging
 import sys
@@ -18,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -26,10 +28,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from backend.api.tool_manager import tool_manager
 from backend.schemas import TaskStatus
-from backend.services.background_task_manager import background_task_manager
 from backend.services.rate_limiter import rate_limiter
 from backend.utils.progress_helper import calculate_progress
-from src.core.streaming import _format_sse_event
 from src.orchestration.main_graph import create_village_planning_graph
 from src.utils.output_manager import create_output_manager
 from src.utils.paths import get_results_dir
@@ -127,59 +127,10 @@ def _validate_resume_state(state: Dict[str, Any], current_layer: int) -> bool:
     return True
 
 
-async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Resume graph execution with restored state using background task manager
-
-    Args:
-        session_id: Session identifier
-        state: Current state dictionary
-
-    Returns:
-        Response with stream URL for resuming execution
-    """
-    from langgraph.checkpoint.memory import MemorySaver
-
-    # Validate state before resuming
-    current_layer = state.get("current_layer", 1)
-    if not _validate_resume_state(state, current_layer):
-        logger.error(f"[Planning API] Invalid state for resume at layer {current_layer}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot resume at layer {current_layer}: missing required data"
-        )
-
-    # Retrieve or create checkpointer for this session
-    checkpointer = _session_checkpointer.get(session_id)
-    if not checkpointer:
-        logger.warning(f"[Planning API] No checkpointer found for session {session_id}, creating new one")
-        checkpointer = MemorySaver()
-        _session_checkpointer[session_id] = checkpointer
-
-    # Update session state
-    if session_id in _sessions:
-        _sessions[session_id]["initial_state"] = state
-        _sessions[session_id]["current_layer"] = current_layer
-
-    # Create graph and resume background execution
-    graph = create_village_planning_graph(checkpointer=checkpointer)
-    await background_task_manager.start_execution(
-        session_id=session_id,
-        graph=graph,
-        initial_state=state,
-        checkpointer=checkpointer,
-        enable_streaming=state.get("_streaming_enabled", False)
-    )
-
-    logger.info(f"[Planning API] Resumed background execution for session {session_id}")
-
-    return {
-        "message": "Execution resumed",
-        "session_id": session_id,
-        "stream_url": f"/api/planning/stream/{session_id}",
-        "current_layer": current_layer,
-        "resumed": True
-    }
+def _format_sse_json(data: Dict[str, Any]) -> str:
+    """Format SSE JSON event"""
+    json_str = json.dumps(data, ensure_ascii=False)
+    return f"data: {json_str}\n\n"
 
 
 def _build_initial_state(request: StartPlanningRequest, session_id: str) -> Dict[str, Any]:
@@ -280,11 +231,199 @@ def _build_initial_state(request: StartPlanningRequest, session_id: str) -> Dict
 
 
 # ============================================
+# Background Execution Function
+# ============================================
+
+async def _execute_graph_in_background(
+    session_id: str,
+    graph,
+    initial_state: Dict[str, Any],
+    checkpointer
+):
+    """
+    在后台执行 LangGraph 并将事件写入会话状态
+
+    此函数由 FastAPI BackgroundTasks 调用，在独立的异步任务中运行。
+    事件直接写入 _sessions[session_id]["events"] 列表，无需队列。
+    """
+    try:
+        config = {"configurable": {"thread_id": session_id}}
+
+        # 获取会话事件列表的引用
+        events_list = _sessions[session_id]["events"]
+
+        # 流式执行图
+        stream_iterator = graph.astream(initial_state, config, stream_mode="values")
+
+        previous_event = {}
+        async for event in stream_iterator:
+            # 检测层级完成
+            for layer_num in [1, 2, 3]:
+                now_completed = event.get(f"layer_{layer_num}_completed", False)
+                was_completed = previous_event.get(f"layer_{layer_num}_completed", False)
+
+                if now_completed and not was_completed:
+                    # 获取报告内容
+                    if layer_num == 1:
+                        report = event.get("analysis_report", "")
+                        dimension_reports = event.get("analysis_dimension_reports", {})
+                    elif layer_num == 2:
+                        report = event.get("planning_concept", "")
+                        dimension_reports = event.get("concept_dimension_reports", {})
+                    else:  # layer_num == 3
+                        report = event.get("detailed_plan", "")
+                        dimension_reports = event.get("detailed_dimension_reports", {})
+
+                    # 生成事件并添加到会话事件列表
+                    event_data = {
+                        "type": "layer_completed",
+                        "layer": layer_num,
+                        "layer_number": layer_num,
+                        "session_id": session_id,
+                        "message": f"Layer {layer_num} completed",
+                        "report_content": report[:500000],  # Truncate if too large
+                        "dimension_reports": dimension_reports,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    events_list.append(event_data)
+                    logger.info(f"[Planning] Layer {layer_num} completed for {session_id}")
+
+            previous_event = {
+                "layer_1_completed": event.get("layer_1_completed", False),
+                "layer_2_completed": event.get("layer_2_completed", False),
+                "layer_3_completed": event.get("layer_3_completed", False),
+            }
+
+            # 检查暂停状态（步进模式）
+            if event.get("pause_after_step"):
+                pause_event = {
+                    "type": "pause",
+                    "session_id": session_id,
+                    "current_layer": event.get("current_layer"),
+                    "checkpoint_id": event.get("last_checkpoint_id", ""),
+                    "reason": "step_mode",
+                    "timestamp": datetime.now().isoformat()
+                }
+                events_list.append(pause_event)
+
+                stream_paused_event = {
+                    "type": "stream_paused",
+                    "session_id": session_id,
+                    "current_layer": event.get("current_layer"),
+                    "reason": "waiting_for_resume",
+                    "timestamp": datetime.now().isoformat()
+                }
+                events_list.append(stream_paused_event)
+
+                _stream_states[session_id] = "paused"
+                logger.info(f"[Planning] Execution paused at layer {event.get('current_layer')} for {session_id}")
+                return
+
+        # 发送完成事件
+        completion_event = {
+            "type": "completed",
+            "session_id": session_id,
+            "message": "规划完成",
+            "success": True,
+            "timestamp": datetime.now().isoformat()
+        }
+        events_list.append(completion_event)
+
+        # 更新会话状态
+        _sessions[session_id]["execution_complete"] = True
+        _sessions[session_id]["status"] = TaskStatus.completed
+        _stream_states[session_id] = "completed"
+
+        logger.info(f"[Planning] Execution completed for {session_id}")
+
+    except Exception as e:
+        logger.error(f"[Planning] Execution error for {session_id}: {e}", exc_info=True)
+
+        # 添加错误事件
+        error_event = {
+            "type": "error",
+            "session_id": session_id,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+        _sessions[session_id]["events"].append(error_event)
+
+        # 更新会话状态
+        _sessions[session_id]["execution_complete"] = True
+        _sessions[session_id]["execution_error"] = str(e)
+        _sessions[session_id]["status"] = TaskStatus.failed
+        _stream_states[session_id] = "completed"
+
+
+async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Resume graph execution with restored state (simplified version)
+
+    Args:
+        session_id: Session identifier
+        state: Current state dictionary
+
+    Returns:
+        Response with stream URL for resuming execution
+    """
+    from langgraph.checkpoint.memory import MemorySaver
+
+    # Validate state before resuming
+    current_layer = state.get("current_layer", 1)
+    if not _validate_resume_state(state, current_layer):
+        logger.error(f"[Planning API] Invalid state for resume at layer {current_layer}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot resume at layer {current_layer}: missing required data"
+        )
+
+    # Retrieve or create checkpointer for this session
+    checkpointer = _session_checkpointer.get(session_id)
+    if not checkpointer:
+        logger.warning(f"[Planning API] No checkpointer found for session {session_id}, creating new one")
+        checkpointer = MemorySaver()
+        _session_checkpointer[session_id] = checkpointer
+
+    # Update session state
+    if session_id in _sessions:
+        _sessions[session_id]["initial_state"] = state
+        _sessions[session_id]["current_layer"] = current_layer
+        _sessions[session_id]["events"] = []
+        _sessions[session_id]["execution_complete"] = False
+        _sessions[session_id]["execution_error"] = None
+        _sessions[session_id]["status"] = TaskStatus.running
+
+    # Create graph
+    graph = create_village_planning_graph(checkpointer=checkpointer)
+
+    # Reset stream state
+    _stream_states[session_id] = "active"
+
+    # Start background execution directly
+    asyncio.create_task(
+        _execute_graph_in_background(session_id, graph, state, checkpointer)
+    )
+
+    logger.info(f"[Planning API] Resumed background execution for session {session_id}")
+
+    return {
+        "message": "Execution resumed",
+        "session_id": session_id,
+        "stream_url": f"/api/planning/stream/{session_id}",
+        "current_layer": current_layer,
+        "resumed": True
+    }
+
+
+# ============================================
 # API Endpoints
 # ============================================
 
 @router.post("/api/planning/start")
-async def start_planning(request: StartPlanningRequest):
+async def start_planning(
+    request: StartPlanningRequest,
+    background_tasks: BackgroundTasks
+):
     """
     Start a new planning session
 
@@ -335,41 +474,43 @@ async def start_planning(request: StartPlanningRequest):
         # Mark task as started
         rate_limiter.mark_task_started(request.project_name)
 
-        # Initialize session
-        _sessions[session_id] = {
-            "session_id": session_id,
-            "project_name": request.project_name,
-            "status": TaskStatus.pending,
-            "created_at": datetime.now().isoformat(),
-            "request": request.dict(),
-            "current_layer": 1,
-        }
-
-        # Build and store initial state
+        # Build initial state
         initial_state = _build_initial_state(request, session_id)
-        _sessions[session_id]["initial_state"] = initial_state
-        _sessions[session_id]["status"] = TaskStatus.running
 
-        # Initialize execution flag
-        _active_executions[session_id] = False
-
-        # ===== NEW: Create graph and start background execution =====
+        # Create checkpointer and graph
         from langgraph.checkpoint.memory import MemorySaver
         checkpointer = MemorySaver()
         _session_checkpointer[session_id] = checkpointer
 
         graph = create_village_planning_graph(checkpointer=checkpointer)
 
-        # Start background execution immediately
-        await background_task_manager.start_execution(
-            session_id=session_id,
-            graph=graph,
-            initial_state=initial_state,
-            checkpointer=checkpointer,
-            enable_streaming=request.stream_mode
+        # Initialize session with events list
+        _sessions[session_id] = {
+            "session_id": session_id,
+            "project_name": request.project_name,
+            "status": TaskStatus.running,
+            "created_at": datetime.now().isoformat(),
+            "request": request.dict(),
+            "current_layer": 1,
+            "initial_state": initial_state,
+            "events": [],  # Store events directly in session
+            "execution_complete": False,
+            "execution_error": None,
+        }
+
+        # Mark execution as active
+        _active_executions[session_id] = True  # FIXED: Changed from False to True
+
+        # Start background execution (non-blocking)
+        background_tasks.add_task(
+            _execute_graph_in_background,
+            session_id,
+            graph,
+            initial_state,
+            checkpointer
         )
+
         logger.info(f"[Planning API] Background execution started for {session_id}")
-        # ===== Background execution started =====
 
         return {
             "task_id": session_id,
@@ -388,92 +529,84 @@ async def start_planning(request: StartPlanningRequest):
 @router.get("/api/planning/stream/{session_id}")
 async def stream_planning(session_id: str):
     """
-    SSE stream for planning progress
+    SSE stream for planning progress (simplified version)
 
-    Consumes events from background task queue.
+    Reads events from _sessions[session_id]["events"] list.
 
     Event Types:
-    - layer_started: Layer execution started
+    - connected: Connection established
     - layer_completed: Layer finished successfully
-    - checkpoint_saved: Checkpoint created
-    - pause: Execution paused (step mode or review)
-    - resumed: Execution resumed after review
-    - progress: Progress update
+    - pause: Execution paused (step mode)
+    - stream_paused: Stream paused, waiting for resume
     - completed: Planning finished
     - error: Execution error
     """
-    try:
-        if session_id not in _sessions:
-            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    if session_id not in _sessions:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-        # Check background task status
-        task_status = background_task_manager.get_task_status(session_id)
-        if task_status == "unknown":
-            raise HTTPException(
-                status_code=400,
-                detail="Background task not found. Session may not be properly initialized."
-            )
+    logger.info(f"[Planning API] Starting SSE stream for {session_id}")
 
-        logger.info(f"[Planning API] Starting SSE stream for {session_id} (background status: {task_status})")
+    async def event_generator():
+        try:
+            # 立即发送连接成功事件
+            yield _format_sse_json({
+                "type": "connected",
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat()
+            })
 
-        async def event_generator():
-            """Consume events from background task queue"""
-            try:
-                while True:
-                    # Check task status
-                    status = background_task_manager.get_task_status(session_id)
+            event_index = 0  # 追踪已发送的事件索引
 
-                    # Get next event (with timeout)
-                    event = await background_task_manager.get_event(session_id, timeout=2.0)
+            while True:
+                # 检查会话是否被删除
+                if session_id not in _sessions:
+                    logger.warning(f"[Planning] Session {session_id} deleted, closing stream")
+                    break
 
-                    if event:
-                        yield event
+                session = _sessions[session_id]
+                events_list = session.get("events", [])
 
-                        # Check if task completed
-                        if '"completed"' in event or '"error"' in event:
-                            logger.info(f"[Planning API] Task {session_id} finished")
-                            _stream_states[session_id] = "completed"
-                            break
-                    else:
-                        # No event received
-                        if status == "completed":
-                            yield _format_sse_event("completed", {
-                                "session_id": session_id,
-                                "success": True
-                            })
-                            _stream_states[session_id] = "completed"
-                            break
-                        elif status == "failed":
-                            yield _format_sse_event("error", {
-                                "session_id": session_id,
-                                "error": "Background task failed"
-                            })
-                            _stream_states[session_id] = "completed"
-                            break
-                        # Continue waiting for running tasks
+                # 发送新事件
+                while event_index < len(events_list):
+                    event = events_list[event_index]
+                    yield _format_sse_json(event)
+                    event_index += 1
 
-            except Exception as e:
-                logger.error(f"[Planning API] Stream error: {e}", exc_info=True)
-                yield _format_sse_event("error", {
-                    "session_id": session_id,
-                    "error": str(e)
-                })
+                    # 检查是否完成或出错
+                    if event.get("type") in ["completed", "error"]:
+                        logger.info(f"[Planning] Stream ending for {session_id}: {event.get('type')}")
+                        return
 
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no"
-            }
-        )
+                    # 检查是否暂停
+                    if event.get("type") == "stream_paused":
+                        logger.info(f"[Planning] Stream paused for {session_id}")
+                        _stream_states[session_id] = "paused"
+                        return
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[Planning API] Stream error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Stream error: {str(e)}")
+                # 发送心跳（每秒）
+                yield ": keep-alive\n\n"
+                await asyncio.sleep(1)
+
+        except asyncio.CancelledError:
+            logger.info(f"[Planning] SSE client disconnected: {session_id}")
+        except Exception as e:
+            logger.error(f"[Planning] SSE error for {session_id}: {e}", exc_info=True)
+            yield _format_sse_json({
+                "type": "error",
+                "session_id": session_id,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            })
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 @router.post("/api/planning/review/{session_id}")
@@ -527,7 +660,7 @@ async def review_action(session_id: str, request: ReviewActionRequest):
 
             logger.info(f"[Planning API] Review approved, resuming session {session_id}")
 
-            # NEW: Trigger graph re-invocation
+            # Trigger graph re-invocation
             return await _resume_graph_execution(session_id, initial_state)
 
         elif request.action == "reject":
@@ -648,7 +781,7 @@ async def delete_session(session_id: str):
     """
     Delete a session
 
-    Removes session from memory and cleans up checkpointer and background tasks.
+    Removes session from memory and cleans up checkpointer.
     Checkpoint data is preserved by default.
     """
     try:
@@ -662,8 +795,13 @@ async def delete_session(session_id: str):
             del _session_checkpointer[session_id]
             logger.info(f"[Planning API] Cleaned up checkpointer for session {session_id}")
 
-        # Clean up background task
-        background_task_manager.cleanup(session_id)
+        # Clean up active execution flag
+        if session_id in _active_executions:
+            del _active_executions[session_id]
+
+        # Clean up stream state
+        if session_id in _stream_states:
+            del _stream_states[session_id]
 
         logger.info(f"[Planning API] Session {session_id} deleted")
 
@@ -707,6 +845,9 @@ async def resume_from_checkpoint(request: ResumeRequest):
             "resumed_from": request.checkpoint_id,
             "current_layer": metadata.get("layer", 1),
             "initial_state": state,
+            "events": [],
+            "execution_complete": False,
+            "execution_error": None,
         }
 
         return {
@@ -798,7 +939,7 @@ async def reset_rate_limit(project_name: str):
 @router.post("/api/tasks")
 async def create_task_legacy(request: StartPlanningRequest):
     """Legacy task creation endpoint (maps to start_planning)"""
-    result = await start_planning(request)
+    result = await start_planning(request, BackgroundTasks())
     return {
         "task_id": result["task_id"],
         "status": result["status"],
