@@ -524,19 +524,35 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 
 ## 📚 文档
 
-详细实现文档请查看 `/docs` 目录：
+详细实现文档请查看项目根目录和 `/docs` 目录：
 
-- **[架构重构说明](docs/ARCHITECTURE_REFACTORING.md)** - ⭐ 最新重构说明，删除汇总节点优化
-- **[变更日志](CHANGELOG.md)** - 📅 项目变更历史和版本规划
-- **[前端实现文档](docs/frontend.md)** - Next.js 应用架构、组件设计、状态管理
-- **[后端实现文档](docs/backend.md)** - FastAPI 架构、API 端点、服务层设计
-- **[核心智能体文档](docs/agent.md)** - LangGraph 架构、三层规划系统、节点设计、英文键名映射、SSE 流管理（已更新）
-- **[快速参考](docs/QUICK_REFERENCE.md)** - 常用命令、配置、API 快速查询
-- **[SSE 循环修复文档](SSE_LOOP_FIX_COMPLETE.md)** - SSE 连接循环问题完整修复方案（新增）⭐
-- **[SSE 循环修复快速参考](SSE_LOOP_FIX_QUICK_REFERENCE.md)** - SSE 修复快速参考指南（新增）⭐
+### 核心文档
+- **[前端架构文档](FRONTEND_COMPONENT_ARCHITECTURE.md)** - Next.js 应用架构、组件设计、状态管理
+- **[前端视觉指南](FRONTEND_VISUAL_GUIDE.md)** - UI/UX 设计规范、色彩系统、组件样式
+- **[前端实现文档](docs/前端.md)** - 前端技术栈、类型系统、SSE集成、API客户端 ⭐ NEW
+- **[后端实现文档](docs/后端.md)** - FastAPI 架构、API端点、服务层设计 ⭐ NEW
+- **[核心智能体文档](docs/agent.md)** - LangGraph 架构、三层规划系统、节点设计、SSE流管理
+
+### 快速参考
+- **[快速开始](QUICK_START.md)** - 5分钟快速上手指南
+- **[安装指南](SETUP_GUIDE.md)** - 详细安装步骤说明
+- **[变更日志](CHANGELOG.md)** - 项目变更历史和版本规划
+- **[架构重构说明](docs/ARCHITECTURE_REFACTORING.md)** - 架构演进历史
+- **[快速参考](docs/QUICK_REFERENCE.md)** - 常用命令、配置、API快速查询
+
+### 修复文档
+- **[SSE循环修复](SSE_LOOP_FIX_COMPLETE.md)** - SSE连接循环问题完整修复方案
+- **[SSE循环修复快速参考](SSE_LOOP_FIX_QUICK_REFERENCE.md)** - SSE修复快速参考指南
 
 **最新更新**:
-- ✅ **SSE 循环修复**：修复 Layer 1 完成后 SSE 连接无限循环问题 ⭐ NEW
+- ✅ **前端架构简化**：重构类型系统，拆分为5个专注文件，优化代码组织 ⭐ NEW
+- ✅ **类型系统重构**：message.ts 拆分为 message-types.ts、message-guards.ts、message-helpers.ts
+- ✅ **代码清理**：删除未使用文件（features.ts、report/index.ts、backup文件），减少~250行
+- ✅ **Hook 简化**：useTaskSSE 接口统一，事件映射简化，减少复杂度
+- ✅ **API 层优化**：删除重复方法，修复导出，统一错误处理
+- ✅ **新增常量文件**：创建 constants.ts，提取共享层映射和配置
+- ✅ **组件精简**：ChatPanel.tsx 从1033行减少到~640行
+- ✅ **SSE 循环修复**：修复 Layer 1 完成后 SSE 连接无限循环问题
 - ✅ **checkpointer API 修复**：修正 LangGraph aget() 方法调用，只传 config 参数
 - ✅ **流状态管理**：添加 stream_states 跟踪，防止 EventSource 无限重连
 - ✅ **暂停流程优化**：发送 stream_paused 事件，前端主动关闭连接
