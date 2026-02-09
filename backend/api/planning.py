@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -30,6 +31,7 @@ from backend.api.tool_manager import tool_manager
 from backend.schemas import TaskStatus
 from backend.services.rate_limiter import rate_limiter
 from backend.utils.progress_helper import calculate_progress
+from backend.utils.logging import _extract_session_id
 from src.orchestration.main_graph import create_village_planning_graph
 from src.utils.output_manager import create_output_manager
 from src.utils.paths import get_results_dir
@@ -128,9 +130,10 @@ def _validate_resume_state(state: Dict[str, Any], current_layer: int) -> bool:
 
 
 def _format_sse_json(data: Dict[str, Any]) -> str:
-    """Format SSE JSON event"""
+    """Format SSE JSON event with event type field"""
+    event_type = data.get("type", "message")
     json_str = json.dumps(data, ensure_ascii=False)
-    return f"data: {json_str}\n\n"
+    return f"event: {event_type}\ndata: {json_str}\n\n"
 
 
 def _build_initial_state(request: StartPlanningRequest, session_id: str) -> Dict[str, Any]:
@@ -176,6 +179,7 @@ def _build_initial_state(request: StartPlanningRequest, session_id: str) -> Dict
 
         # Flow control
         "current_layer": 1,
+        "previous_layer": 1,  # ✅ 新增：初始化为1
         "layer_1_completed": False,
         "layer_2_completed": False,
         "layer_3_completed": False,
@@ -204,7 +208,7 @@ def _build_initial_state(request: StartPlanningRequest, session_id: str) -> Dict
         # Step mode settings
         "step_mode": request.step_mode,
         "step_level": "layer",
-        "pause_after_step": request.step_mode,
+        "pause_after_step": False,  # ✅ Fix: Don't pause at initialization
 
         # Routing control flags
         "quit_requested": False,
@@ -246,13 +250,24 @@ async def _execute_graph_in_background(
     此函数由 FastAPI BackgroundTasks 调用，在独立的异步任务中运行。
     事件直接写入 _sessions[session_id]["events"] 列表，无需队列。
     """
+    logger.info(f"[Planning] [{session_id}] ===== 后台执行开始 =====")
+    logger.info(f"[Planning] [{session_id}] Graph 类型: {type(graph).__name__}")
+    logger.info(f"[Planning] [{session_id}] Checkpointer: {checkpointer}")
+
     try:
         config = {"configurable": {"thread_id": session_id}}
 
         # 获取会话事件列表的引用
         events_list = _sessions[session_id]["events"]
+        # Get or initialize the set of sent layer events
+        sent_events = _sessions[session_id].setdefault("sent_layer_events", set())
+        logger.info(f"[Planning] [{session_id}] 已发送的layer事件: {sent_events}")
+        # Get or initialize the set of sent pause events
+        sent_pause_events = _sessions[session_id].setdefault("sent_pause_events", set())
+        logger.info(f"[Planning] [{session_id}] 已发送的pause事件: {sent_pause_events}")
 
         # 流式执行图
+        logger.info(f"[Planning] [{session_id}] 开始流式执行 graph.astream()")
         stream_iterator = graph.astream(initial_state, config, stream_mode="values")
 
         previous_event = {}
@@ -262,7 +277,11 @@ async def _execute_graph_in_background(
                 now_completed = event.get(f"layer_{layer_num}_completed", False)
                 was_completed = previous_event.get(f"layer_{layer_num}_completed", False)
 
-                if now_completed and not was_completed:
+                # 事件key用于去重追踪
+                event_key = f"layer_{layer_num}_completed"
+
+                # 检查：状态变化 + 未发送过
+                if now_completed and not was_completed and event_key not in sent_events:
                     # 获取报告内容
                     if layer_num == 1:
                         report = event.get("analysis_report", "")
@@ -286,7 +305,17 @@ async def _execute_graph_in_background(
                         "timestamp": datetime.now().isoformat()
                     }
                     events_list.append(event_data)
-                    logger.info(f"[Planning] Layer {layer_num} completed for {session_id}")
+                    sent_events.add(event_key)  # 标记已发送
+                    logger.info(f"[Planning] [{session_id}] ✓ layer_completed 事件已添加到队列")
+                    logger.info(f"[Planning] [{session_id}]   - Layer {layer_num}")
+                    logger.info(f"[Planning] [{session_id}]   - 队列长度: {len(events_list)}")
+                    logger.info(f"[Planning] [{session_id}]   - 报告长度: {len(report)} 字符")
+                    logger.info(f"[Planning] [{session_id}]   - 维度报告数量: {len(dimension_reports)}")
+                    logger.info(f"[Planning] [{session_id}]   - 已发送事件: {sent_events}")
+                elif now_completed and event_key in sent_events:
+                    # 重复事件检测
+                    logger.info(f"[Planning] [{session_id}] ⚠️ 跳过重复的 layer_{layer_num}_completed 事件")
+                    logger.info(f"[Planning] [{session_id}]   - 事件已在已发送列表中: {sent_events}")
 
             previous_event = {
                 "layer_1_completed": event.get("layer_1_completed", False),
@@ -296,30 +325,45 @@ async def _execute_graph_in_background(
 
             # 检查暂停状态（步进模式）
             if event.get("pause_after_step"):
-                pause_event = {
-                    "type": "pause",
-                    "session_id": session_id,
-                    "current_layer": event.get("current_layer"),
-                    "checkpoint_id": event.get("last_checkpoint_id", ""),
-                    "reason": "step_mode",
-                    "timestamp": datetime.now().isoformat()
-                }
-                events_list.append(pause_event)
+                current_layer = event.get("current_layer", 1)
 
-                stream_paused_event = {
-                    "type": "stream_paused",
-                    "session_id": session_id,
-                    "current_layer": event.get("current_layer"),
-                    "reason": "waiting_for_resume",
-                    "timestamp": datetime.now().isoformat()
-                }
-                events_list.append(stream_paused_event)
+                # ✅ 添加：pause事件去重
+                pause_event_key = f"pause_layer_{current_layer}"
 
-                _stream_states[session_id] = "paused"
-                logger.info(f"[Planning] Execution paused at layer {event.get('current_layer')} for {session_id}")
+                if pause_event_key not in sent_pause_events:
+                    # 首次检测到此layer的暂停，添加事件
+                    pause_event = {
+                        "type": "pause",
+                        "session_id": session_id,
+                        "current_layer": current_layer,
+                        "checkpoint_id": event.get("last_checkpoint_id", ""),
+                        "reason": "step_mode",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    events_list.append(pause_event)
+                    sent_pause_events.add(pause_event_key)  # ✅ 标记已发送
+
+                    stream_paused_event = {
+                        "type": "stream_paused",
+                        "session_id": session_id,
+                        "current_layer": current_layer,
+                        "reason": "waiting_for_resume",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    events_list.append(stream_paused_event)
+
+                    _stream_states[session_id] = "paused"
+                    logger.info(f"[Planning] [{session_id}] ✓ pause事件已添加到队列 (Layer {current_layer})")
+                    logger.info(f"[Planning] [{session_id}]   - 已发送pause事件: {sent_pause_events}")
+                else:
+                    # ⚠️ 重复pause事件，跳过
+                    logger.info(f"[Planning] [{session_id}] ⚠️ 跳过重复的pause事件 (Layer {current_layer})")
+                    logger.info(f"[Planning] [{session_id}]   - 事件已在已发送列表中: {sent_pause_events}")
+
                 return
 
         # 发送完成事件
+        logger.info(f"[Planning] [{session_id}] ===== 执行完成 =====")
         completion_event = {
             "type": "completed",
             "session_id": session_id,
@@ -334,7 +378,7 @@ async def _execute_graph_in_background(
         _sessions[session_id]["status"] = TaskStatus.completed
         _stream_states[session_id] = "completed"
 
-        logger.info(f"[Planning] Execution completed for {session_id}")
+        logger.info(f"[Planning] [{session_id}] 总事件数: {len(events_list)}")
 
     except Exception as e:
         logger.error(f"[Planning] Execution error for {session_id}: {e}", exc_info=True)
@@ -392,6 +436,13 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
         _sessions[session_id]["execution_complete"] = False
         _sessions[session_id]["execution_error"] = None
         _sessions[session_id]["status"] = TaskStatus.running
+        # Preserve sent_layer_events to prevent re-sending completed layer events
+        # This set tracks which layer completion events have already been sent
+        if "sent_layer_events" not in _sessions[session_id]:
+            _sessions[session_id]["sent_layer_events"] = set()
+            logger.info(f"[Planning API] [{session_id}] 初始化 sent_layer_events")
+        else:
+            logger.info(f"[Planning API] [{session_id}] 保留 sent_layer_events: {_sessions[session_id]['sent_layer_events']}")
 
     # Create graph
     graph = create_village_planning_graph(checkpointer=checkpointer)
@@ -430,9 +481,15 @@ async def start_planning(
     Creates a new session and initializes the main graph.
     Returns session_id immediately for SSE streaming.
     """
+    start_time = time.time()
+
     try:
-        logger.info(f"[Planning API] 收到规划请求: {request.project_name}")
+        logger.info(f"[Planning API] ===== 开始规划流程 =====")
+        logger.info(f"[Planning API] 项目名称: {request.project_name}")
         logger.info(f"[Planning API] 村庄数据长度: {len(request.village_data)} 字符")
+        logger.info(f"[Planning API] 任务描述: {request.task_description}")
+        logger.info(f"[Planning API] 步进模式: {request.step_mode}")
+        logger.info(f"[Planning API] 流式输出: {request.stream_mode}")
 
         # ===== Rate limit check =====
         allowed, message = rate_limiter.check_rate_limit(
@@ -451,6 +508,7 @@ async def start_planning(
                 detail=message,
                 headers={"Retry-After": str(retry_after)} if retry_after is not None else {}
             )
+        logger.info(f"[Planning API] 限流检查通过")
         # ===== Rate limit check end =====
 
         # Defensive check: Detect if village_data equals task_description
@@ -469,19 +527,21 @@ async def start_planning(
             raise HTTPException(status_code=400, detail="村庄数据不能为空或过短（至少需要10个字符）")
 
         session_id = _generate_session_id()
-        logger.info(f"[Planning API] Starting session {session_id} for {request.project_name}")
+        logger.info(f"[Planning API] 生成会话ID: {session_id}")
 
         # Mark task as started
         rate_limiter.mark_task_started(request.project_name)
 
         # Build initial state
         initial_state = _build_initial_state(request, session_id)
+        logger.info(f"[Planning API] 初始状态构建完成")
 
         # Create checkpointer and graph
         from langgraph.checkpoint.memory import MemorySaver
         checkpointer = MemorySaver()
         _session_checkpointer[session_id] = checkpointer
 
+        logger.info(f"[Planning API] 创建 LangGraph 实例")
         graph = create_village_planning_graph(checkpointer=checkpointer)
 
         # Initialize session with events list
@@ -496,6 +556,7 @@ async def start_planning(
             "events": [],  # Store events directly in session
             "execution_complete": False,
             "execution_error": None,
+            "sent_layer_events": set(),  # Track sent layer completion events to prevent duplicates
         }
 
         # Mark execution as active
@@ -510,7 +571,8 @@ async def start_planning(
             checkpointer
         )
 
-        logger.info(f"[Planning API] Background execution started for {session_id}")
+        elapsed = (time.time() - start_time) * 1000
+        logger.info(f"[Planning API] 后台任务已提交，立即返回响应 ({elapsed:.2f}ms)")
 
         return {
             "task_id": session_id,
@@ -544,7 +606,8 @@ async def stream_planning(session_id: str):
     if session_id not in _sessions:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-    logger.info(f"[Planning API] Starting SSE stream for {session_id}")
+    logger.info(f"[Planning API] [{session_id}] ===== SSE 连接建立 =====")
+    logger.info(f"[Planning API] [{session_id}] 客户端端点: /api/planning/stream/{session_id}")
 
     async def event_generator():
         try:
@@ -554,6 +617,7 @@ async def stream_planning(session_id: str):
                 "session_id": session_id,
                 "timestamp": datetime.now().isoformat()
             })
+            logger.info(f"[Planning API] [{session_id}] 已发送 'connected' 事件到客户端")
 
             event_index = 0  # 追踪已发送的事件索引
 
@@ -569,19 +633,42 @@ async def stream_planning(session_id: str):
                 # 发送新事件
                 while event_index < len(events_list):
                     event = events_list[event_index]
-                    yield _format_sse_json(event)
-                    event_index += 1
+                    event_type = event.get("type")
 
-                    # 检查是否完成或出错
-                    if event.get("type") in ["completed", "error"]:
-                        logger.info(f"[Planning] Stream ending for {session_id}: {event.get('type')}")
-                        return
+                    # ✅ 关键修改：先发送所有非 stream_paused 的事件
+                    if event_type == "stream_paused":
+                        # 检查是否还有未发送的事件
+                        if event_index + 1 < len(events_list):
+                            logger.warning(f"[Planning API] [{session_id}] 发现 stream_paused，但后面还有事件，先发送其他事件")
+                            # 暂时不发送 stream_paused，跳过它，先发送后面的
+                            event_index += 1
+                            continue
+                        else:
+                            # 确认这是最后一个事件了，可以安全关闭
+                            logger.info(f"[Planning API] [{session_id}] 发送事件: {event_type}")
+                            yield _format_sse_json(event)
+                            event_index += 1
 
-                    # 检查是否暂停
-                    if event.get("type") == "stream_paused":
-                        logger.info(f"[Planning] Stream paused for {session_id}")
-                        _stream_states[session_id] = "paused"
-                        return
+                            logger.info(f"[Planning API] [{session_id}] 流暂停，等待客户端恢复")
+                            _stream_states[session_id] = "paused"
+                            return
+                    else:
+                        # 正常发送其他事件（layer_completed, pause 等）
+                        logger.info(f"[Planning API] [{session_id}] 发送事件: {event_type}")
+
+                        # ✅ 额外日志：记录 layer_completed 事件详情
+                        if event_type == "layer_completed":
+                            logger.info(f"[Planning API] [{session_id}] → layer: {event.get('layer')}")
+                            logger.info(f"[Planning API] [{session_id}] → report_content长度: {len(event.get('report_content', ''))}")
+                            logger.info(f"[Planning API] [{session_id}] → dimension_reports数量: {len(event.get('dimension_reports', {}))}")
+
+                        yield _format_sse_json(event)
+                        event_index += 1
+
+                        # 检查是否完成或出错
+                        if event_type in ["completed", "error"]:
+                            logger.info(f"[Planning API] [{session_id}] 流结束，原因: {event_type}")
+                            return
 
                 # 发送心跳（每秒）
                 yield ": keep-alive\n\n"
@@ -638,9 +725,20 @@ async def review_action(session_id: str, request: ReviewActionRequest):
         web_review_tool = WebReviewTool()
 
         if request.action == "approve":
+            # ✅ 添加：详细日志记录批准前的状态
+            logger.info(f"[Planning API] [{session_id}] 批准请求 - 状态检查")
+            logger.info(f"[Planning API] [{session_id}]   - review_id: {review_id}")
+            logger.info(f"[Planning API] [{session_id}]   - pause_after_step: {is_pause_mode}")
+            logger.info(f"[Planning API] [{session_id}]   - waiting_for_review: {is_review_mode}")
+            logger.info(f"[Planning API] [{session_id}]   - current_layer: {initial_state.get('current_layer', 1)}")
+
             # 重置流状态为 active
             _stream_states[session_id] = "active"
             logger.info(f"[Planning API] Stream state reset to 'active' for session {session_id}")
+
+            # ✅ 添加：检查是否有正在运行的后台执行
+            if session_id in _active_executions and _active_executions[session_id]:
+                logger.warning(f"[Planning API] [{session_id}] 检测到正在运行的后台执行，标记为取消")
 
             # 清除两种暂停标志
             initial_state["waiting_for_review"] = False
@@ -648,6 +746,25 @@ async def review_action(session_id: str, request: ReviewActionRequest):
             initial_state["human_feedback"] = ""
             initial_state["__interrupt__"] = False  # Clear interruption flag
             session["status"] = TaskStatus.running
+
+            # ✅ 添加：清除pause事件追踪，为下一layer做准备
+            if "sent_pause_events" in _sessions[session_id]:
+                logger.info(f"[Planning API] [{session_id}] 清除pause事件追踪: {_sessions[session_id]['sent_pause_events']}")
+                # 保留已完成的layer事件，但准备接收新layer的pause事件
+                # 不清除整个set，只允许新的layer key
+
+            # ✅ Fix: Update current_layer to next layer based on completion status
+            current_layer = initial_state.get("current_layer", 1)
+            if current_layer == 1 and initial_state.get("layer_1_completed", False):
+                initial_state["current_layer"] = 2
+                logger.info(f"[Planning API] [{session_id}] Layer 1完成，进入Layer 2")
+            elif current_layer == 2 and initial_state.get("layer_2_completed", False):
+                initial_state["current_layer"] = 3
+                logger.info(f"[Planning API] [{session_id}] Layer 2完成，进入Layer 3")
+            elif current_layer == 3 and initial_state.get("layer_3_completed", False):
+                # Layer 3 is complete, move to final
+                initial_state["current_layer"] = 4
+                logger.info(f"[Planning API] [{session_id}] Layer 3完成，进入最终阶段")
 
             # Log which mode is being approved
             if is_pause_mode:
