@@ -544,8 +544,34 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 - **[SSE循环修复](SSE_LOOP_FIX_COMPLETE.md)** - SSE连接循环问题完整修复方案
 - **[SSE循环修复快速参考](SSE_LOOP_FIX_QUICK_REFERENCE.md)** - SSE修复快速参考指南
 
-**最新更新**:
-- ✅ **前端架构简化**：重构类型系统，拆分为5个专注文件，优化代码组织 ⭐ NEW
+**最新更新 (2025-02-09)** ⭐⭐⭐:
+- ✅ **Pause 事件去重机制**：修复审查面板重复显示问题
+  - 后端：添加 `sent_pause_events` Set 追踪，每个 Layer 只发送一次 pause 事件
+  - 前端：添加 `processedPauseEventsRef` 追踪，二次去重防护
+  - 批准后正确清理追踪状态，允许下一 layer 的 pause 事件被处理
+  - 任务完成时清除所有追踪，确保新任务从干净状态开始
+- ✅ **批准失败修复**：修复 "No pending review or pause" 错误
+  - 批准时详细状态日志，便于调试
+  - 清除 pause_after_step 标志和 pause 事件追踪
+  - 确保 approve 后状态一致，顺利进入下一 layer
+- ✅ **函数调用关系文档**：详细的前后端函数调用链和数据流向图
+  - 完整的 pause 事件处理流程（从检测到显示审查面板）
+  - 批准流程（从前端点击到后端执行再到新 SSE 连接）
+  - 文件间依赖关系（前端组件、后端模块、Agent 引擎）
+
+**修复效果**:
+- 修复前：Layer 1 → 2-3个审查面板 → 批准失败 "No pending review or pause"
+- 修复后：Layer 1 → 1个审查面板 → 批准立即成功 → 顺畅进入 Layer 2
+
+**详细文档**：
+- [前端修复说明](docs/前端.md#最新修复-2025-02-09--⭐⭐⭐-new)
+- [后端修复说明](docs/后端.md#1-pause-事件去重机制-2025-02--⭐⭐⭐-new)
+- [Agent 修复说明](docs/agent.md#0-pause-事件去重机制-2025-02-09--⭐⭐⭐-new)
+- [组件架构更新](FRONTEND_COMPONENT_ARCHITECTURE.md#pause-事件去重机制-2025-02-09--⭐⭐⭐-new)
+- [视觉设计更新](FRONTEND_VISUAL_GUIDE.md#pause-事件去重与状态清理-2025-02-09--⭐⭐⭐-new)
+
+**最新更新 (2024)**:
+- ✅ **前端架构简化**：重构类型系统，拆分为5个专注文件，优化代码组织
 - ✅ **类型系统重构**：message.ts 拆分为 message-types.ts、message-guards.ts、message-helpers.ts
 - ✅ **代码清理**：删除未使用文件（features.ts、report/index.ts、backup文件），减少~250行
 - ✅ **Hook 简化**：useTaskSSE 接口统一，事件映射简化，减少复杂度
@@ -553,23 +579,18 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 - ✅ **新增常量文件**：创建 constants.ts，提取共享层映射和配置
 - ✅ **组件精简**：ChatPanel.tsx 从1033行减少到~640行
 - ✅ **SSE 循环修复**：修复 Layer 1 完成后 SSE 连接无限循环问题
-- ✅ **checkpointer API 修复**：修正 LangGraph aget() 方法调用，只传 config 参数
 - ✅ **流状态管理**：添加 stream_states 跟踪，防止 EventSource 无限重连
 - ✅ **暂停流程优化**：发送 stream_paused 事件，前端主动关闭连接
 - ✅ **批准后重连**：批准后创建新的 SSE 连接，正确执行后续层级
-- ✅ 统一UI状态管理：引入 ViewMode 计算属性和 UnifiedContentSwitcher 组件
-- ✅ 中心化视图逻辑：消除分散的状态管理代码，实现单一真相来源
-- ✅ Smart Container 模式：UnifiedContentSwitcher 自动响应状态变化
-- ✅ 前端组件清理：删除12个未使用组件，减少约1000-1500行代码
-- ✅ 更新组件架构文档，反映当前组件结构
-- ✅ 历史会话管理：支持查看和加载历史村庄会话
-- ✅ 报告同步优化：实时同步层级报告到聊天流
-- ✅ 聊天流优化：审查交互直接集成在聊天中
-- ✅ 组件架构更新：新增 LayerReportCard、DimensionSection 等组件
-- ✅ 检查点功能完善：支持检查点查看、对比和回退
-- ✅ 修复了 Layer 1 和 Layer 2 报告未显示的问题（状态转换检测）
-- ✅ 统一使用英文键名存储维度报告（如 `location`, `socio_economic`）
-- ✅ 修复了并行任务中维度报告无法正确合并的问题
+- ✅ **UI状态管理**：引入 ViewMode 计算属性和 UnifiedContentSwitcher 组件
+- ✅ **前端组件清理**：删除12个未使用组件，减少约1000-1500行代码
+- ✅ **历史会话管理**：支持查看和加载历史村庄会话
+- ✅ **报告同步优化**：实时同步层级报告到聊天流
+- ✅ **检查点功能完善**：支持检查点查看、对比和回退
+- ✅ **统一英文键名**：使用英文键名存储维度报告（如 `location`, `socio_economic`）
+- ✅ **RAG系统集成**：集成检索增强生成，提升规划质量
+- ✅ **日志系统完善**：实现统一的日志管理和追踪
+- ✅ **限流保护**：添加API限流机制，防止滥用
 
 ---
 

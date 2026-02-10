@@ -1226,9 +1226,232 @@ npx shadcn-ui@latest add dialog
 
 ---
 
-## 最新改进 (2024年) ⭐
+## 最新改进 (2024-2025年) ⭐
 
-### 代码架构优化
+### Pause 事件去重与状态清理 (2025-02-09) ⭐⭐⭐ NEW
+
+**修复**: 审查面板重复显示问题
+
+**视觉影响**:
+- ✅ 每个 Layer 只显示一个审查面板
+- ✅ 批准后立即成功，无视觉延迟
+- ✅ 审查面板状态转换流畅（pending → approved）
+- ✅ 任务完成后清理状态，避免旧任务影响
+
+#### 审查面板视觉状态
+
+```css
+/* Pending State - 等待审查 */
+.review-panel.pending {
+  display: flex;
+  opacity: 1;
+  animation: slideIn 0.3s ease-out;
+}
+
+/* Approved State - 已批准 */
+.review-panel.approved {
+  opacity: 0.7;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
+/* 审查按钮样式 */
+.btn-approve {
+  background-color: var(--success-500);
+  color: white;
+  padding: 0.625rem 1.25rem;
+  border-radius: 0.5rem;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background-color: var(--success-600);
+    box-shadow: 0 4px 6px -1px rgba(34, 197, 94, 0.2);
+  }
+
+  &:active {
+    transform: translateY(1px);
+  }
+}
+
+.btn-reject {
+  background-color: var(--error-500);
+  color: white;
+  /* ... */
+}
+
+.btn-rollback {
+  background-color: var(--warning-500);
+  color: white;
+  /* ... */
+}
+```
+
+#### 去重日志视觉效果
+
+**浏览器控制台显示**:
+```
+[ChatPanel] Pause event for Layer 1 already processed, skipping duplicate review panel
+[ChatPanel] 标记 Layer 1 pause事件为已处理 {layer: 1, processedPauses: [1]}
+[ChatPanel] 清除 Layer 1 pause事件追踪 {layer: 1, remainingPauses: []}
+```
+
+#### 审查交互消息组件
+
+**文件**: `components/chat/ReviewInteractionMessage.tsx`
+
+**视觉结构**:
+```tsx
+<div className="review-interaction-message">
+  {/* Header */}
+  <div className="review-header">
+    <div className="review-badge">Layer {layer}</div>
+    <div className="review-status">{reviewState}</div>
+  </div>
+
+  {/* Content */}
+  <div className="review-content">
+    {content}
+  </div>
+
+  {/* Feedback Input (when rejected) */}
+  {reviewState === 'pending' && (
+    <textarea
+      placeholder={feedbackPlaceholder}
+      className="feedback-textarea"
+    />
+  )}
+
+  {/* Quick Feedback Options */}
+  {reviewState === 'pending' && quickFeedbackOptions && (
+    <div className="quick-feedback">
+      {quickFeedbackOptions.map(option => (
+        <button
+          key={option}
+          onClick={() => setFeedback(option)}
+          className="quick-feedback-btn"
+        >
+          {option}
+        </button>
+      ))}
+    </div>
+  )}
+
+  {/* Action Buttons */}
+  {reviewState === 'pending' && (
+    <div className="action-buttons">
+      <button onClick={onApprove} className="btn-approve">
+        ✓ 批准
+      </button>
+      <button onClick={onReject} className="btn-reject">
+        ✗ 驳回
+      </button>
+      {enableRollback && (
+        <button onClick={onRollback} className="btn-rollback">
+          ↺ 回退
+        </button>
+      )}
+    </div>
+  )}
+
+  {/* Checkpoint List (if rollback enabled) */}
+  {enableRollback && checkpoints && (
+    <div className="checkpoint-list">
+      {checkpoints.map(cp => (
+        <div key={cp.checkpoint_id} className="checkpoint-item">
+          <div className="checkpoint-time">{cp.timestamp}</div>
+          <div className="checkpoint-desc">{cp.description}</div>
+          <button onClick={() => onRollback(cp.checkpoint_id)}>
+            回退到此
+          </button>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
+```
+
+#### 视觉动画
+
+**审查面板出现动画**:
+```css
+@keyframes slideIn {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.review-panel {
+  animation: slideIn 0.3s ease-out;
+}
+```
+
+**批准成功反馈动画**:
+```css
+@keyframes successPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
+  }
+}
+
+.btn-approve:active {
+  animation: successPulse 0.5s ease-out;
+}
+```
+
+#### 维度选择器视觉
+
+```css
+.dimension-selector {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.dimension-checkbox {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--gray-300);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover {
+    border-color: var(--primary-300);
+    background-color: var(--primary-50);
+  }
+
+  &.selected {
+    border-color: var(--primary-500);
+    background-color: var(--primary-50);
+    box-shadow: 0 0 0 1px var(--primary-500);
+  }
+
+  input[type="checkbox"] {
+    margin-right: 0.5rem;
+    accent-color: var(--primary-500);
+  }
+
+  label {
+    cursor: pointer;
+    user-select: none;
+  }
+}
+```
+
+### 代码架构优化 (2024)
 
 虽然本指南主要关注视觉设计，但2024年的前端架构简化也间接提升了视觉系统的一致性和可维护性。
 
@@ -1307,9 +1530,114 @@ export const LAYER_LABEL_MAP = {
 - ✅ 提高了视觉一致性
 - ✅ 简化了样式维护
 
-### 视觉系统维护建议
+### 组件架构更新 (2025) ⭐ NEW
 
-基于2024年的架构改进,以下是维护视觉系统的最佳实践:
+#### UnifiedContentSwitcher 模式
+
+**新增**: Smart Container 视图切换器
+
+**视觉影响**:
+- ✅ 统一的视图切换动画
+- ✅ 一致的布局间距
+- ✅ 平滑的状态过渡
+
+**样式指南**:
+```css
+/* 统一的切换动画 */
+.unified-switcher {
+  transition: all 0.3s ease-in-out;
+}
+
+.view-container {
+  animation: fadeIn 0.2s ease-out;
+}
+```
+
+#### 检查点时间轴样式
+
+**新增**: 检查点可视化时间轴
+
+**设计规范**:
+```css
+/* 时间轴容器 */
+.checkpoint-timeline {
+  position: relative;
+  padding-left: 2rem;
+  border-left: 2px solid var(--gray-200);
+}
+
+/* 时间轴节点 */
+.checkpoint-node {
+  position: absolute;
+  left: -0.625rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  background: var(--primary-500);
+  border: 3px solid white;
+  box-shadow: 0 0 0 3px var(--primary-100);
+}
+
+/* 已完成状态 */
+.checkpoint-node.completed {
+  background: var(--success-500);
+  box-shadow: 0 0 0 3px var(--success-100);
+}
+
+/* 当前状态 */
+.checkpoint-node.current {
+  background: var(--warning-500);
+  box-shadow: 0 0 0 3px var(--warning-100);
+  animation: pulse 2s infinite;
+}
+```
+
+#### 历史会话卡片样式
+
+**新增**: 历史会话列表卡片
+
+**设计规范**:
+```css
+.session-card {
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.session-card:hover {
+  border-color: var(--primary-300);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.1);
+  transform: translateY(-2px);
+}
+
+.session-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+}
+
+.session-status.completed {
+  background: var(--success-50);
+  color: var(--success-700);
+}
+
+.session-status.in-progress {
+  background: var(--primary-50);
+  color: var(--primary-700);
+}
+```
+
+---
+
+### 视觉系统维护建议 (2025) ⭐ UPDATED
+
+基于 2024-2025 年的架构改进，以下是维护视觉系统的最佳实践:
 
 #### 1. 使用共享常量
 
@@ -1379,15 +1707,17 @@ className="p-4 m-2 gap-6"
 className="text-base font-medium"
 ```
 
-### 未来规划
+### 未来规划 (2025+)
 
-基于当前的架构改进,视觉系统的未来规划包括:
+基于当前的架构改进，视觉系统的未来规划包括:
 
-1. **设计令牌库** - 提取所有设计变量到统一文件
-2. **组件文档化** - 使用 Storybook 记录所有视觉组件
-3. **暗色模式** - 基于当前色彩系统扩展暗色主题
-4. **可访问性增强** - 添加更多 ARIA 标签和键盘导航
-5. **动画库** - 基于 Framer Motion 统一动画效果
+1. **设计令牌库** ⏳ - 提取所有设计变量到统一文件
+2. **组件文档化** ⏳ - 使用 Storybook 记录所有视觉组件
+3. **暗色模式** 🔄 - 基于当前色彩系统扩展暗色主题
+4. **可访问性增强** ⏳ - 添加更多 ARIA 标签和键盘导航
+5. **动画库** 🔄 - 基于 Framer Motion 统一动画效果
+6. **主题切换** 🆕 - 支持多套视觉主题切换
+7. **响应式优化** 🆕 - 改进移动端视觉体验
 
 ### 相关文档
 

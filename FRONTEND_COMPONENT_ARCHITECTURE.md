@@ -1341,9 +1341,308 @@ test('full planning workflow', async ({ page }) => {
 
 ---
 
-## 最新改进 (2024年) ⭐
+## 最新改进 (2024-2025年) ⭐
 
-### 架构简化与代码清理
+### Pause 事件去重机制 (2025-02-09) ⭐⭐⭐ NEW
+
+**问题**: 审查面板重复显示和批准失败
+
+**修复**: 前端添加 pause 事件二次去重防护
+
+#### ChatPanel 组件修复
+
+**文件**: `components/chat/ChatPanel.tsx`
+
+**核心改动**:
+
+1. **添加 pause 事件追踪 Ref** (Line 71):
+```typescript
+const processedPauseEventsRef = useRef<Set<number>>(new Set());
+```
+
+2. **onPause 处理器去重** (Lines 180-206):
+```typescript
+onPause: (data) => {
+  const layer = currentLayer || 1;
+
+  // ⭐ 去重检查
+  if (processedPauseEventsRef.current.has(layer)) {
+    console.log(`Pause event for Layer ${layer} already processed, skipping`);
+    return;
+  }
+
+  // 标记已处理
+  processedPauseEventsRef.current.add(layer);
+
+  // 显示审查面板
+  addMessage({
+    type: 'review_interaction',
+    layer: layer,
+    reviewState: 'pending',
+    ...
+  } as ReviewInteractionMessage);
+}
+```
+
+3. **批准后清除追踪** (Lines 385-387):
+```typescript
+const handleReviewInteractionApprove = async (message: ReviewInteractionMessage) => {
+  const response = await planningApi.approveReview(taskId);
+
+  // ⭐ 清除此 layer 的追踪，允许下一个 layer 的 pause 事件
+  const layer = message.layer;
+  processedPauseEventsRef.current.delete(layer);
+
+  reconnectSSE?.();
+};
+```
+
+4. **任务完成清理** (Lines 207-210):
+```typescript
+onComplete: (data: any) => {
+  // ⭐ 清除所有追踪 sets
+  completedLayersRef.current.clear();
+  processedPauseEventsRef.current.clear();
+
+  addMessage({
+    type: 'result',
+    content: `🎉 规划任务已完成！`,
+  });
+};
+```
+
+#### 函数调用关系图
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     ChatPanel 组件                            │
+└─────────────────────────────────────────────────────────────┘
+  │
+  ├─> useRef<Set<number>>()  [Line 71]
+  │   └─> processedPauseEventsRef.current
+  │
+  ├─> useTaskSSE(taskId, {  [Line ~200]
+  │     onPause: (data) => {...}  [Line 180]
+  │   })
+  │   │
+  │   └─> SSE 'pause' 事件触发
+  │       └─> processedPauseEventsRef.current.has(layer)  [Line 187]
+  │           ├─> True: return (跳过)  [Line 190]
+  │           └─> False:
+  │               ├─> processedPauseEventsRef.current.add(layer)  [Line 194]
+  │               ├─> addMessage(review_interaction)  [Line 198]
+  │               └─> loadCheckpoints()  [Line 217]
+  │
+  ├─> handleReviewInteractionApprove(message)  [Line 363]
+  │   │
+  │   ├─> planningApi.approveReview(taskId)  [Line 368]
+  │   │   └─> POST /api/planning/review/{taskId}
+  │   │       └─> { action: "approve" }
+  │   │
+  │   ├─> addMessage(reviewState: 'approved')  [Line 370]
+  │   │
+  │   ├─> processedPauseEventsRef.current.delete(layer)  [Line 386] ⭐
+  │   │
+  │   └─> reconnectSSE()  [Line 395]
+  │
+  └─> onComplete(data)  [Line 203]
+      ├─> completedLayersRef.current.clear()  [Line 208]
+      └─> processedPauseEventsRef.current.clear()  [Line 209] ⭐
+
+┌─────────────────────────────────────────────────────────────┐
+│                   UnifiedPlanningContext                     │
+└─────────────────────────────────────────────────────────────┘
+  │
+  ├─> addMessage(message)  [contexts/UnifiedPlanningContext.tsx]
+  │   └─> setMessages(prev => [...prev, message])
+  │
+  ├─> setStatus(status)  [Line 197, 391]
+  │   └─> setState(prev => ({ ...prev, status }))
+  │
+  └─> reconnectSSE()  [Line 395]
+      └─> useTaskSSE.reconnect()
+          └─> 创建新的 EventSource
+
+┌─────────────────────────────────────────────────────────────┐
+│                     useTaskSSE Hook                          │
+└─────────────────────────────────────────────────────────────┘
+  │
+  ├─> EventSource API  [hooks/useTaskSSE.ts]
+  │   ├─> new EventSource(`${API_URL}/planning/stream/${taskId}`)
+  │   ├─> es.addEventListener('pause', onPause)
+  │   └─> es.addEventListener('stream_paused', onStreamPaused)
+  │
+  └─> reconnect()  [Line 150]
+      ├─> eventSourceRef.current?.close()
+      ├─> initializingRef.current = false
+      └─> setIsConnected(false)
+          └─> useEffect 触发重新连接
+
+┌─────────────────────────────────────────────────────────────┐
+│                        API Client                            │
+└─────────────────────────────────────────────────────────────┘
+  │
+  ├─> planningApi.approveReview(taskId)  [lib/api.ts]
+  │   └─> fetch POST /api/planning/review/{taskId}
+  │       ├─> headers: { 'Content-Type': 'application/json' }
+  │       ├─> body: JSON.stringify({ action: 'approve' })
+  │       └─> return response.json()
+  │
+  └─> planningApi.getTaskStatus(taskId)
+      └─> fetch GET /api/planning/status/{taskId}
+          └─> 返回 { status, checkpoints, progress, ... }
+```
+
+#### 组件依赖关系
+
+```typescript
+// ChatPanel 依赖
+ChatPanel.tsx
+  ├─> types/message.ts
+  │   ├─> Message (联合类型)
+  │   ├─> ReviewInteractionMessage (具体类型)
+  │   └─> BaseMessage (基础接口)
+  │
+  ├─> types/message-guards.ts
+  │   └─> isReviewInteractionMessage() (类型守卫)
+  │
+  ├─> contexts/UnifiedPlanningContext.tsx
+  │   ├─> usePlanningContext() (Hook)
+  │   ├─> addMessage() (方法)
+  │   ├─> setStatus() (方法)
+  │   └─> reconnectSSE() (方法)
+  │
+  ├─> hooks/useTaskSSE.ts
+  │   ├─> UseTaskSSEOptions (接口)
+  │   ├─> onPause (回调)
+  │   └─> reconnect (方法)
+  │
+  ├─> lib/api.ts
+  │   ├─> planningApi.approveReview()
+  │   └─> planningApi.getTaskStatus()
+  │
+  └─> lib/logger.ts
+      └─> logger.chatPanel.info/warn/error
+```
+
+#### 数据流向图
+
+```
+┌──────────────┐
+│   后端发送    │
+│ pause 事件   │
+└──────┬───────┘
+       │ SSE
+       ↓
+┌──────────────┐
+│ useTaskSSE   │
+│ 事件监听     │
+└──────┬───────┘
+       │
+       ↓
+┌──────────────┐
+│   onPause    │ ◄──────┐
+│   处理器     │        │
+└──────┬───────┘        │
+       │                │
+       ├────────────────┤
+       │                │
+       ↓                │
+┌──────────────┐        │
+│ 去重检查      │        │
+│ has(layer)?  │        │
+└──────┬───────┘        │
+       │                │
+    已处理?             │
+       │                │
+    ┌──┴──┐          ┌──┴──┐
+   Yes    No          │     │
+    │      │          │     │
+    │      ↓          │     │
+    │   ┌─────────┐   │     │
+    │   │ 标记     │   │     │
+    │   │ 已处理   │   │     │
+    │   └────┬────┘   │     │
+    │        │        │     │
+    │        ↓        │     │
+    │   ┌─────────┐   │     │
+    │   │ return   │   │     │
+    │   └─────────┘   │     │
+    │                  │     │
+    │                  │     │
+    └──────────────────┘     │
+             │              │
+             ↓              │
+       ┌────────────┐       │
+       │ addMessage  │       │
+       │ review_     │       │
+       │ interaction │       │
+       └──────┬─────┘       │
+              │             │
+              ↓             │
+       ┌────────────┐       │
+       │ MessageList │       │
+       │ 渲染审查面板 │       │
+       └──────┬─────┘       │
+              │             │
+              ↓             │
+       ┌────────────┐       │
+       │ 用户点击    │       │
+       │ 批准按钮    │       │
+       └──────┬─────┘       │
+              │             │
+              ↓             │
+       ┌────────────┐       │
+       │ handleApprove│      │
+       └──────┬─────┘       │
+              │             │
+              ├─────────────┘
+              │
+              ↓
+       ┌────────────┐
+       │ 清除追踪    │ ◄───┐
+       │ delete(layer)│     │
+       └──────┬─────┘     │
+              │           │
+              ↓           │
+       ┌────────────┐     │
+       │ reconnectSSE│     │
+       └──────┬─────┘     │
+              │           │
+              ↓           │
+       ┌────────────┐     │
+       │ 新 SSE 连接 │     │
+       │ 继续 Layer 2│     │
+       └────────────┘     │
+                          │
+                          ↓ 等待下一个 pause 事件
+```
+
+#### 关键改进点
+
+1. **双重去重防护** ✅
+   - 后端：`sent_pause_events` Set 追踪
+   - 前端：`processedPauseEventsRef` 追踪
+   - 即使某一层失败，另一层也能提供保护
+
+2. **状态一致性** ✅
+   - 批准后前后端同步清除追踪
+   - 允许下一个 layer 的 pause 事件被处理
+
+3. **清理机制** ✅
+   - 批准后：清除当前 layer 的追踪
+   - 任务完成：清除所有追踪
+
+**修复效果**:
+- ✅ 每个 Layer 只显示一个审查面板
+- ✅ 点击批准立即成功，无错误
+- ✅ 顺畅的 Layer 1 → 2 → 3 执行流程
+
+---
+
+### 架构简化与代码清理 (2024)
+
+#### 1. 类型系统重构
 
 #### 1. 类型系统重构
 
@@ -1407,7 +1706,7 @@ types/
 - 统一配置管理
 - 提高可维护性
 
-### 代码质量提升
+### 代码质量提升 (2024)
 
 #### 验证结果
 
@@ -1421,6 +1720,114 @@ types/
 - **文件数量**: +8 (新增) -3 (删除) = +5
 - **组织结构**: 显著改善
 - **可维护性**: 大幅提升
+
+---
+
+### UI 状态管理优化 (2025) ⭐ NEW
+
+#### ViewMode 计算属性
+
+**新增**: `UnifiedPlanningContext` 中的 ViewMode 系统
+
+**功能**:
+- 统一管理视图模式（chat/report/review）
+- 自动响应状态变化
+- 消除分散的状态管理代码
+
+**实现**:
+```typescript
+// 计算属性：根据当前状态确定视图模式
+const viewMode = useMemo<ViewMode>(() => {
+  if (status === 'paused' || status === 'reviewing') {
+    return 'review';
+  }
+  if (currentLayer && currentLayer > 0) {
+    return 'report';
+  }
+  return 'chat';
+}, [status, currentLayer]);
+```
+
+#### UnifiedContentSwitcher 组件
+
+**新增**: Smart Container 模式内容切换器
+
+**职责**:
+- 根据 ViewMode 自动切换显示内容
+- 集中管理视图状态逻辑
+- 简化组件树结构
+
+**使用方式**:
+```tsx
+<UnifiedContentSwitcher
+  viewMode={viewMode}
+  messages={messages}
+  currentLayer={currentLayer}
+  dimensionReports={dimensionReports}
+/>
+```
+
+#### 优势
+
+- ✅ **单一真相来源**：所有视图状态集中管理
+- ✅ **自动响应**：状态变化自动更新视图
+- ✅ **代码简化**：减少条件判断和状态管理代码
+- ✅ **易于扩展**：添加新视图模式只需修改一处
+
+---
+
+### 历史会话管理 (2025) ⭐ NEW
+
+#### 功能特性
+
+**会话列表**:
+- 查看所有历史村庄会话
+- 按时间倒序排列
+- 显示会话状态和进度
+
+**会话加载**:
+- 从历史会话恢复
+- 创建新的 SSE 连接
+- 保留所有检查点和消息
+
+**实现**:
+```typescript
+// 获取会话列表
+const sessions = await planningApi.getSessions();
+
+// 加载历史会话
+const result = await planningApi.loadSession(sessionId);
+```
+
+---
+
+### 组件清理 (2025) ⭐ NEW
+
+#### 删除的组件 (12个)
+
+**布局组件**:
+- 删除未使用的布局容器组件
+- 简化页面结构
+
+**报告组件**:
+- 删除占位符文件
+- 整合到聊天流中显示
+
+**净减少**: 约 1000-1500 行代码
+
+#### 保留的核心组件
+
+**聊天界面** (13个组件):
+- ChatPanel, MessageList, MessageBubble, MessageContent
+- StreamingText, LayerReportCard, DimensionSection
+- ReviewInteractionMessage, CodeBlock, ThinkingIndicator
+- WelcomeCard, ActionButtonGroup
+
+**布局组件** (3个组件):
+- Header, HistoryPanel, UnifiedContentSwitcher ⭐ NEW
+
+**审查组件** (1个组件):
+- ReviewPanel
 
 ### 使用指南
 
