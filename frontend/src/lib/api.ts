@@ -1,3 +1,24 @@
+// ============================================
+// Request/Response Types
+// ============================================
+
+/**
+ * 统一 API 响应格式
+ * 提供一致的错误处理和类型安全
+ */
+export interface APIResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+  request_id?: string;
+}
+
+export interface ApiError {
+  message?: string;
+  detail?: string;
+}
+
 /**
  * Unified API Client for Village Planning System
  * Refactored to match simplified backend architecture
@@ -161,17 +182,16 @@ export interface FileUploadResponse {
 // Helper Functions
 // ============================================
 
-interface ApiError {
-  message?: string;
-  detail?: string;
-}
-
+/**
+ * 统一的 API 请求函数
+ * 支持统一响应格式、重试和错误处理
+ */
 async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
-  const headers = {
+  const headers: {
     'Content-Type': 'application/json',
     ...options.headers,
   };
@@ -181,21 +201,42 @@ async function apiRequest<T>(
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const response = await fetch(url, { ...options, headers });
+      const response = await fetch(url, { ...options, method: options.method || 'GET', headers });
 
-      if (response.ok) {
-        return response.json();
+      // 解析响应数据
+      const data = await response.json();
+
+      // 统一响应格式处理
+      if (!response.ok) {
+        // 尝试从错误响应中提取信息
+        const errorData = data as ApiError;
+        const errorMessage = errorData?.message || errorData?.detail || data?.error || 'API request failed';
+        const requestId = (data as any)?.request_id;
+
+        // 检查是否为标准格式响应
+        if (data as APIResponse<any>)?.success !== undefined) {
+          // 标准格式响应
+          if (!data.success) {
+            const error = new Error(errorMessage);
+            (error as any).requestId = requestId;
+            throw error;
+          }
+          // 成功的响应，返回数据
+          return data.data ?? data;  // 支持两种格式
+        } else {
+          // 旧格式响应，直接返回数据
+          return data;
+        }
       }
 
-      // Don't retry client errors (4xx)
+      // 客户端错误 (4xx) - 不重试
       if (response.status >= 400 && response.status < 500) {
-        const error = await response.json().catch<ApiError>(() => ({
-          message: response.statusText || 'API request failed',
-        }));
-        throw new Error(error.message || error.detail || 'API request failed');
+        const error = new Error(errorMessage);
+        (error as any).requestId = requestId;
+        throw error;
       }
 
-      // Server error (5xx) - retry
+      // 服务器错误 (5xx) - 重试
       lastError = new Error(`HTTP ${response.status}: ${response.statusText}`);
 
       if (attempt < MAX_RETRIES) {
@@ -220,6 +261,7 @@ async function apiRequest<T>(
     }
   }
 
+  // 抛出最后的错误（如果所有重试都失败）
   throw lastError || new Error('API request failed after retries');
 }
 
