@@ -14,10 +14,13 @@ from sqlmodel import SQLModel, select, Session
 from sqlmodel.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession as SQLAsyncSession
 
+# 导入数据库路径配置
+from backend.database.engine import DB_PATH
+
 logger = logging.getLogger(__name__)
 
-# Async database URL
-async_database_url = f"sqlite+aiosqlite:///data/village_planning.db"
+# Async database URL - 使用与同步数据库相同的路径配置
+async_database_url = f"sqlite+aiosqlite:///{DB_PATH}"
 
 # Async engine
 async_engine = None

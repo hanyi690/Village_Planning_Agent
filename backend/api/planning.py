@@ -39,6 +39,15 @@ from src.orchestration.main_graph import create_village_planning_graph
 from src.utils.output_manager import create_output_manager
 from src.utils.paths import get_results_dir
 
+# ✅ 新增：导入异步数据库包装器
+from backend.database.async_wrapper import (
+    add_event_async,
+    get_events_async,
+    create_session_async,
+    get_session_async,
+    update_session_async,
+)
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -154,6 +163,39 @@ def _append_session_event(session_id: str, event: Dict) -> None:
     with _sessions_lock:
         if session_id in _sessions:
             _sessions[session_id].setdefault("events", []).append(event)
+
+
+# ============================================
+# ✅ 新增：异步版本的事件追加函数
+# ============================================
+
+async def _append_session_event_async(session_id: str, event: Dict) -> bool:
+    """
+    异步版本的会话事件追加（高性能）
+
+    使用异步数据库操作替代内存操作，
+    显著提升高并发场景下的性能。
+
+    Args:
+        session_id: Session identifier
+        event: Event dictionary to append
+
+    Returns:
+        True: 成功, False: 失败
+    """
+    try:
+        # 使用异步数据库包装器
+        success = await add_event_async(session_id, event)
+        if success:
+            logger.debug(f"[Async DB] Event appended to session {session_id}")
+            # 同时更新内存缓存（保持兼容性）
+            _append_session_event(session_id, event)
+        return success
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to append event: {e}", exc_info=True)
+        # 失败时回退到内存版本
+        _append_session_event(session_id, event)
+        return False
 
 
 def _get_session_events_copy(session_id: str) -> list:
@@ -435,7 +477,8 @@ async def _execute_graph_in_background(
                         "dimension_reports": dimension_reports,
                         "timestamp": datetime.now().isoformat()
                     }
-                    _append_session_event(session_id, event_data)
+                    # ✅ 使用异步版本（高性能）
+                    await _append_session_event_async(session_id, event_data)
                     sent_events.add(event_key)  # 标记已发送
                     logger.info(f"[Planning] [{session_id}] ✓ layer_completed 事件已添加到队列")
                     logger.info(f"[Planning] [{session_id}]   - Layer {layer_num}")
@@ -481,10 +524,10 @@ async def _execute_graph_in_background(
                         "reason": "waiting_for_resume",
                         "timestamp": datetime.now().isoformat()
                     }
-                    _append_session_event(session_id, stream_paused_event)
+                    # ✅ 使用异步版本
+                    await _append_session_event_async(session_id, stream_paused_event)
 
                     _stream_states[session_id] = "paused"
-                    logger.info(f"[Planning] [{session_id}] ✓ pause事件已添加到队列 (Layer {current_layer})")
                     logger.info(f"[Planning] [{session_id}]   - 已发送pause事件: {sent_pause_events}")
                 else:
                     # ⚠️ 重复pause事件，跳过
@@ -502,13 +545,13 @@ async def _execute_graph_in_background(
             "success": True,
             "timestamp": datetime.now().isoformat()
         }
-        _append_session_event(session_id, completion_event)
+        # ✅ 使用异步版本
+        await _append_session_event_async(session_id, completion_event)
 
         # 更新会话状态
         _set_session_value(session_id, "execution_complete", True)
         _set_session_value(session_id, "status", TaskStatus.completed)
         _set_stream_state(session_id, "completed")
-
         logger.info(f"[Planning] [{session_id}] 总事件数: {len(events_list)}")
 
     except Exception as e:
@@ -521,7 +564,8 @@ async def _execute_graph_in_background(
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
-        _append_session_event(session_id, error_event)
+        # ✅ 使用异步版本
+        await _append_session_event_async(session_id, error_event)
 
         # 更新会话状态
         _set_session_value(session_id, "execution_complete", True)

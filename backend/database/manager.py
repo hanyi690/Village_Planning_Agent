@@ -14,6 +14,9 @@ from typing import Optional
 from sqlmodel import SQLModel, Session, create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+# 导入异步操作函数
+from . import operations_async
+
 # 异步导入 - Python 3.10+ 兼容
 try:
     from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
@@ -91,11 +94,18 @@ class DatabaseManager:
         else:
             raise ValueError(f"Unsupported DB mode: {mode}")
 
-    async def execute_operation(self, operation_name: str, async_func, sync_func, *args, **kwargs):
+    async def execute_operation(self, operation_name: str, async_func=None, sync_func=None, *args, **kwargs):
         """
         执行数据库操作（自动路由到对应版本）
 
         性能监控：慢查询警告（>100ms）
+
+        支持的操作类型：
+        - create_session
+        - get_session
+        - update_session
+        - add_event
+        - get_events
         """
         use_async = os.getenv("USE_ASYNC_DATABASE", "false").lower() == "true"
         mode = DBMode.ASYNC if use_async else DBMode.SYNC
@@ -104,10 +114,42 @@ class DatabaseManager:
         start = time.time()
 
         try:
+            # 根据操作类型选择对应的异步函数
             if mode == DBMode.ASYNC:
-                result = await async_func(*args, **kwargs)
+                if operation_name == 'create_session':
+                    result = await operations_async.create_planning_session_async(*args, **kwargs)
+                elif operation_name == 'get_session':
+                    result = await operations_async.get_planning_session_async(*args, **kwargs)
+                elif operation_name == 'update_session':
+                    result = await operations_async.update_planning_session_async(*args, **kwargs)
+                elif operation_name == 'add_event':
+                    result = await operations_async.add_session_event_async(*args, **kwargs)
+                elif operation_name == 'get_events':
+                    result = await operations_async.get_session_events_async(*args, **kwargs)
+                elif async_func:
+                    # 自定义异步函数
+                    result = await async_func(*args, **kwargs)
+                else:
+                    raise ValueError(f"Operation {operation_name} not supported in async mode")
             else:
-                result = sync_func(*args, **kwargs)
+                # 同步模式：使用传入的同步函数或默认行为
+                if sync_func:
+                    result = sync_func(*args, **kwargs)
+                else:
+                    # 默认：在内存中操作（用于向后兼容）
+                    if operation_name == 'add_event':
+                        # 内存版本的 add_event，不写入数据库
+                        from backend.api.planning import _append_session_event
+                        session_id, event = args
+                        _append_session_event(session_id, event)
+                        result = True
+                    elif operation_name == 'get_events':
+                        # 内存版本的 get_events
+                        from backend.api.planning import _get_session_events_copy
+                        session_id = args[0]
+                        result = _get_session_events_copy(session_id)
+                    else:
+                        raise ValueError(f"Operation {operation_name} not supported in sync mode without sync_func")
 
             elapsed = time.time() - start
 
