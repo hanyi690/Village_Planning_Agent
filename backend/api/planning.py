@@ -720,7 +720,50 @@ async def start_planning(
         logger.info(f"[Planning API] 创建 LangGraph 实例")
         graph = create_village_planning_graph(checkpointer=checkpointer)
 
-        # Initialize session with events list
+        # Initialize session state for database creation
+        session_state = {
+            "session_id": session_id,
+            "project_name": request.project_name,
+            "status": TaskStatus.running,
+            "created_at": datetime.now().isoformat(),
+            "request": request.dict(),
+            "current_layer": 1,
+            "initial_state": initial_state,
+            "pause_after_step": request.step_mode,
+            "execution_complete": False,
+            "execution_error": None,
+            "sent_layer_events": set(),  # Track sent layer completion events to prevent duplicates
+        }
+
+        # ✅ P0 FIX: Create database session FIRST before returning response
+        # This prevents 404 errors when frontend polls immediately after receiving task_id
+        db_start_time = time.time()
+        try:
+            logger.info(f"[Planning API] [{session_id}] Creating database session...")
+            logger.debug(f"[Planning API] [{session_id}] Session state: project={request.project_name}, step_mode={request.step_mode}")
+
+            await create_session_async(session_state)
+
+            db_elapsed = (time.time() - db_start_time) * 1000
+            logger.info(f"[Planning API] [{session_id}] ✓ Database session created successfully ({db_elapsed:.2f}ms)")
+            logger.info(f"[Planning API] [{session_id}] Frontend can now safely poll /api/planning/status/{session_id}")
+        except Exception as db_error:
+            db_elapsed = (time.time() - db_start_time) * 1000
+            logger.error(
+                f"[Planning API] [{session_id}] ✗ Database session creation failed after {db_elapsed:.2f}ms: {db_error}",
+                exc_info=True
+            )
+            logger.warning(f"[Planning API] [{session_id}] Cleaning up rate limiter state for project: {request.project_name}")
+
+            # Clean up in-memory state
+            rate_limiter.mark_task_completed(request.project_name, success=False)
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create planning session in database: {str(db_error)}"
+            )
+
+        # Initialize in-memory session with events list (after DB commit)
         with _sessions_lock:
             _sessions[session_id] = {
                 "session_id": session_id,
@@ -740,6 +783,7 @@ async def start_planning(
         _set_execution_active(session_id, True)
 
         # Start background execution (non-blocking)
+        # ✅ At this point, the database record already exists, so frontend polling will succeed
         background_tasks.add_task(
             _execute_graph_in_background,
             session_id,
@@ -747,9 +791,11 @@ async def start_planning(
             initial_state,
             checkpointer
         )
+        logger.info(f"[Planning API] [{session_id}] Background task submitted")
 
         elapsed = (time.time() - start_time) * 1000
-        logger.info(f"[Planning API] 后台任务已提交，立即返回响应 ({elapsed:.2f}ms)")
+        logger.info(f"[Planning API] [{session_id}] ✓ Session started successfully - returning response ({elapsed:.2f}ms)")
+        logger.info(f"[Planning API] [{session_id}] Response: task_id={session_id}, status=running, stream_url=/api/planning/stream/{session_id}")
 
         return {
             "task_id": session_id,
