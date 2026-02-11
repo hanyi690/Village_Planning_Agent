@@ -63,6 +63,9 @@ export function useTaskController(
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const triggeredEventsRef = useRef<Set<string>>(new Set());
 
+  // ✅ NEW: Track all timeout IDs for cleanup
+  const timeoutIdsRef = useRef<Set<NodeJS.Timeout>>(new Set());
+
   // ✅ 新增：记录已触发暂停的最高层级，用于检测状态抖动
   const lastTriggeredPauseLayerRef = useRef<number>(0);
 
@@ -175,10 +178,14 @@ export function useTaskController(
               console.log(`[TaskController] 更新已触发的最高暂停层级: ${lastTriggeredPauseLayerRef.current}`);
 
               // Auto-cleanup after 5 minutes to prevent memory leaks
-              setTimeout(() => {
+              // ✅ FIXED: Store timeout ID for cleanup
+              const timeoutId = setTimeout(() => {
                 triggeredEventsRef.current.delete(pauseKey);
+                timeoutIdsRef.current.delete(timeoutId);
                 console.log(`[TaskController] Cleanup pause key ${pauseKey} after timeout`);
               }, 5 * 60 * 1000);
+
+              timeoutIdsRef.current.add(timeoutId);
             } else {
               console.log(`[TaskController] Pause for Layer ${currentLayer} already triggered, skipping`);
             }
@@ -226,18 +233,37 @@ export function useTaskController(
       }
     };
 
+    // ✅ NEW: Determine if polling should stop
+    const shouldStopPolling = (taskState: TaskState): boolean => {
+      return (
+        !taskId ||
+        taskState.status === 'completed' ||
+        taskState.status === 'failed' ||
+        (taskState.executionComplete && taskState.status !== 'revising')
+      );
+    };
+
     // Initial poll
     pollStatus();
 
-    // Set up polling interval
-    pollingIntervalRef.current = setInterval(pollStatus, 2000);
+  // ✅ FIXED: Add stop polling logic
+    if (shouldStopPolling(state)) {
+      console.log('[TaskController] Stopping polling - terminal state reached');
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    } else {
+      // Set up polling interval
+      pollingIntervalRef.current = setInterval(pollStatus, 2000);
+    }
 
     return () => {
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current);
       }
     };
-  }, [taskId]);
+  }, [taskId]); // ✅ Only re-evaluate when taskId changes
 
   // Manage SSE connection based on status
   useEffect(() => {
@@ -305,6 +331,16 @@ export function useTaskController(
       await planningApi.rollbackCheckpoint(taskId, checkpointId);
     }, [taskId]),
   };
+
+  // ✅ NEW: Cleanup effect - clear all timeouts on unmount
+  useEffect(() => {
+    return () => {
+      // Clear all pending timeouts
+      timeoutIdsRef.current.forEach(id => clearTimeout(id));
+      timeoutIdsRef.current.clear();
+      console.log('[TaskController] Cleaned up all timeouts');
+    };
+  }, []);
 
   return [state, actions];
 }

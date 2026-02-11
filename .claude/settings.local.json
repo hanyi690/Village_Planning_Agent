@@ -106,7 +106,8 @@
       "Bash(./stop-services.bat:*)",
       "Bash(./start-services.bat:*)",
       "Bash(while read:*)",
-      "Bash(do taskkill:*)"
+      "Bash(do taskkill:*)",
+      "Bash(pause:*)"
     ]
   }
 }

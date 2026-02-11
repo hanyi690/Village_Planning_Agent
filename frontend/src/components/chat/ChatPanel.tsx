@@ -70,6 +70,18 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   const [uploadedFileContent, setUploadedFileContent] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // ✅ NEW: Track typing timeout for cleanup
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ✅ NEW: Use useMemo to cache filtered messages (P1.4 performance optimization)
+  const progressMessages = useMemo(() => {
+    return messages.filter(m => m.type === 'progress');
+  }, [messages]);
+
+  const reviewMessages = useMemo(() => {
+    return messages.filter(m => m.type === 'review_interaction');
+  }, [messages]);
+
   // 维度内容缓存 (用于流式渲染)
   const [dimensionContents, setDimensionContents] = useState<Map<string, string>>(new Map());
 
@@ -286,7 +298,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       sessionId: taskId || '',
       layers: ['Layer 1', 'Layer 2', 'Layer 3'],
       resultUrl: `/village/${taskId}`,
-    } as any);
+    } satisfies Message);
   }, [taskId, villageFormData?.projectName, setStatus, addMessage]);
 
   const handleError = useCallback((error: string) => {
@@ -390,6 +402,16 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // ✅ NEW: Cleanup effect - clear typing timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        console.log('[ChatPanel] Cleaned up typing timeout');
+      }
+    };
+  }, []);
 
   // Determine if input should be disabled
   const inputDisabled = isInputDisabled(status);
@@ -620,7 +642,8 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     setIsTyping(true);
 
     // TODO: Process message with AI
-    setTimeout(() => {
+    // ✅ FIXED: Store timeout ID for cleanup
+    typingTimeoutRef.current = setTimeout(() => {
       addMessage({
         id: `msg-${Date.now()}`,
         timestamp: new Date(),
@@ -629,6 +652,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         content: `收到: ${userText}`,
       });
       setIsTyping(false);
+      typingTimeoutRef.current = null;
     }, 500);
   }, [inputText, addMessage, hasPendingReview, pendingReviewMessage,
       handleReviewInteractionApprove, handleReviewInteractionReject]);
@@ -766,9 +790,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       {(status === 'collecting' || status === 'planning' || status === 'paused' || status === 'revising') && (
         <div className="flex-shrink-0 border-b border-gray-200 bg-white p-4 shadow-sm">
           {/* Progress bar - Card-style design */}
-          {messages.filter(m => m.type === 'progress').length > 0 && (
+          {progressMessages.length > 0 && (
             <div className="mb-3 bg-gray-50 rounded-xl p-4 shadow-sm border border-gray-200 animate-[fadeIn_0.3s_ease-in-out]">
-              {messages.filter(m => m.type === 'progress').map(msg => (
+              {progressMessages.map(msg => (
                 isProgressMessage(msg) && (
                   <div key={msg.id}>
                     <div className="flex justify-between items-center mb-2">

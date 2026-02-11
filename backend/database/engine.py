@@ -9,12 +9,11 @@ import logging
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Generator
-
 from sqlmodel import SQLModel, Session, create_engine
 from sqlalchemy.orm import sessionmaker
+import atexit
 
 logger = logging.getLogger(__name__)
-
 
 # Global database directory
 DB_DIR = Path(__file__).parent.parent.parent / "data"
@@ -25,6 +24,7 @@ DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 # Engine
 engine = None
+_engine_ref_count = 0
 
 # Session factory
 SessionLocal = None
@@ -32,10 +32,10 @@ SessionLocal = None
 
 def get_engine():
     """
-    Get or create database engine
-    获取或创建数据库引擎
+    Get or create database engine (with reference counting)
+    获取或创建数据库引擎（带引用计数）
     """
-    global engine
+    global engine, _engine_ref_count
 
     if engine is None:
         # Ensure data directory exists
@@ -44,13 +44,33 @@ def get_engine():
         # Create engine with SQLite configuration
         engine = create_engine(
             DATABASE_URL,
-            connect_args={"check_same_thread": False},  # Required for SQLite
-            echo=False  # Set to True for SQL query logging
+            connect_args={"check_same_thread": False},
+            pool_pre_ping=True,
+            pool_size=5,
+            max_overflow=10
         )
 
+        # Register cleanup function with atexit
+        atexit.register(dispose_engine)
         logger.info(f"Database engine created: {DB_PATH}")
 
+    _engine_ref_count += 1
     return engine
+
+
+def dispose_engine():
+    """
+    Close database engine when reference count reaches zero
+    引用计数为零时关闭数据库引擎
+    """
+    global engine, _engine_ref_count
+
+    _engine_ref_count -= 1
+
+    if _engine_ref_count <= 0 and engine is not None:
+        engine.dispose()
+        engine = None
+        logger.info("Database engine disposed")
 
 
 @contextmanager
@@ -109,7 +129,6 @@ def init_db() -> bool:
 
         logger.info("Database tables initialized successfully")
         return True
-
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}", exc_info=True)
         return False
@@ -130,5 +149,6 @@ __all__ = [
     "get_session",
     "init_db",
     "get_engine",
+    "dispose_engine",
     "get_db_path",
 ]

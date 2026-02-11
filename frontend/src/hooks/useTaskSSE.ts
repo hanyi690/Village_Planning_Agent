@@ -15,6 +15,27 @@ type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'paused' | 
 const MAX_RETRY_COUNT = 3;
 const BASE_RETRY_DELAY = 1000;
 
+// ✅ NEW: Type guard interfaces for type safety (P1.2)
+interface DimensionDeltaData {
+  dimension_key: string;
+  dimension_name: string;
+  layer: number;
+  chunk: string;
+  accumulated: string;
+}
+
+function isDimensionDeltaData(data: unknown): data is DimensionDeltaData {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'dimension_key' in data &&
+    'dimension_name' in data &&
+    'layer' in data &&
+    'chunk' in data &&
+    'accumulated' in data
+  );
+}
+
 export interface UseTaskSSECallbacks {
   onStatusUpdate?: (data: unknown) => void;
   onLayerCompleted?: (data: unknown) => void;
@@ -67,16 +88,21 @@ export function useTaskSSE(taskId: string | null | undefined, callbacks: UseTask
     // 维度级增量事件
     dimension_delta: (event: PlanningSSEEvent) => {
       const { dimension_key, dimension_name, layer, chunk, accumulated } = event.data || {};
-      if (dimension_key) {
-        console.log(`[useTaskSSE] Dimension delta: ${dimension_key} (+${chunk?.length || 0} chars)`);
-        callbacks.onDimensionDelta?.(
-          dimension_key as string,
-          dimension_name as string,
-          layer as number,
-          chunk as string,
-          accumulated as string
-        );
+
+      // ✅ FIXED: Use type guard instead of as assertion
+      if (!isDimensionDeltaData(event.data)) {
+        console.error('[useTaskSSE] Invalid dimension_delta data:', event.data);
+        return;
       }
+
+      console.log(`[useTaskSSE] Dimension delta: ${dimension_key} (+${chunk?.length || 0} chars)`);
+      callbacks.onDimensionDelta?.(
+        event.data.dimension_key,
+        event.data.dimension_name ?? '',
+        event.data.layer,
+        event.data.chunk ?? '',
+        event.data.accumulated ?? ''
+      );
     },
     // 维度完成事件
     dimension_complete: (event: PlanningSSEEvent) => {
@@ -311,6 +337,9 @@ export function useTaskSSE(taskId: string | null | undefined, callbacks: UseTask
       initializingRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Note: callbacks object is expected to be stable (referentially stable) when used by parent components.
+    // Re-running this effect when callbacks change would cause unnecessary SSE reconnections.
+    // The callbacks ref mechanism ensures we always use the latest callbacks without reconnecting.
   }, [taskId, callbacks]);
 
   const close = useCallback(() => {

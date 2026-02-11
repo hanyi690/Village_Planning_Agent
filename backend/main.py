@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -29,8 +30,15 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
+
 logger = logging.getLogger(__name__)
 
+# Environment configuration
+IS_PRODUCTION = os.getenv("ENVIRONMENT") == "production"
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:8000"
+).split(",")
 
 # ============================================
 # Application Lifecycle
@@ -50,8 +58,8 @@ async def lifespan(app: FastAPI):
     config_check = validate_config()
     if not config_check["valid"]:
         logger.error(f"❌ 配置验证失败: {config_check['errors']}")
-    for warning in config_check["warnings"]:
-        logger.warning(f"⚠️  {warning}")
+        for warning in config_check["warnings"]:
+            logger.warning(f"⚠️  {warning}")
 
     logger.info("🗄️  Initializing database...")
     from backend.database import init_db
@@ -68,11 +76,16 @@ async def lifespan(app: FastAPI):
     logger.info("✅ 后端服务启动完成")
     yield
 
+    # ✅ NEW: Clean up database connections
+    logger.info("🧹 Cleaning up resources...")
+    from backend.database.engine import dispose_engine
+    dispose_engine()
+    logger.info("✅ Resources cleaned up")
+
     # 关闭时停止清理任务
     await stop_session_cleanup()
     logger.info("🧹 Session cleanup task stopped")
     logger.info("👋 后端服务关闭")
-
 
 # ============================================
 # FastAPI Application
@@ -87,12 +100,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# ✅ FIXED: CORS configuration with environment-aware settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS if IS_PRODUCTION else ["*"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # Include routers
@@ -100,7 +114,6 @@ app.include_router(planning_router, tags=["Planning - Planning Execution"])
 app.include_router(data_router, tags=["Data - Data Access"])
 app.include_router(sessions.router, prefix="/api/sessions", tags=["Sessions - UI Session Management"])
 app.include_router(files.router, prefix="/api/files", tags=["Files - File Upload"])
-
 
 # ============================================
 # Health Check & Root Endpoints
@@ -115,7 +128,6 @@ async def health_check() -> dict[str, str]:
         "version": "1.0.0"
     }
 
-
 @app.get("/", tags=["Root"])
 async def root() -> dict[str, str]:
     """根路径"""
@@ -126,23 +138,40 @@ async def root() -> dict[str, str]:
         "health": "/health"
     }
 
-
 # ============================================
 # Error Handlers
 # ============================================
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc: Exception) -> JSONResponse:
-    """全局异常处理"""
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal Server Error",
-            "message": str(exc)
-        }
-    )
+    """
+    ✅ FIXED: Global exception handler with environment-aware error messages
+    全局异常处理（生产环境不暴露内部错误）
+    """
+    request_id = str(uuid.uuid4())
+    logger.error(f"Unhandled exception [{request_id}]: {exc}", exc_info=True)
 
+    # ✅ FIXED: In production, don't expose internal error details
+    if IS_PRODUCTION:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal Server Error",
+                "message": "An unexpected error occurred",
+                "request_id": request_id
+            }
+        )
+    else:
+        # Development: show full error details
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Internal Server Error",
+                "message": str(exc),
+                "type": type(exc).__name__,
+                "request_id": request_id
+            }
+        )
 
 # ============================================
 # Run Server (for development)
