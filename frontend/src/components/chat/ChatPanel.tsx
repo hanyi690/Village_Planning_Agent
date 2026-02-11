@@ -2,6 +2,7 @@
 
 /**
  * ChatPanel - Unified chat interface integrating messaging and progress display
+ * Refactored to use TaskController for state management (REST polling + SSE for text only)
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
@@ -16,16 +17,15 @@ import {
   isReviewInteractionMessage,
   isProgressMessage,
 } from '@/types';
-import { planningApi, fileApi } from '@/lib/api';
+import { planningApi, dataApi, fileApi } from '@/lib/api';
 import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/lib/utils';
 import { logger } from '@/lib/logger';
 import SegmentedControl from '@/components/ui/SegmentedControl';
-import { useTaskSSE, UseTaskSSECallbacks } from '@/hooks/useTaskSSE';
+import { useTaskController } from '@/controllers/TaskController';
 import MessageList from './MessageList';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEdit, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
 import {
-  LAYER_OPTIONS,
   LAYER_OPTIONS_ARRAY,
   LAYER_LABEL_MAP,
   LAYER_VALUE_MAP,
@@ -34,6 +34,7 @@ import {
   FILE_ACCEPT,
   isInputDisabled,
 } from '@/lib/constants';
+import { useStreamingRender } from '@/hooks/useStreamingRender';
 
 interface ChatPanelProps {
   className?: string;
@@ -42,10 +43,12 @@ interface ChatPanelProps {
 export default function ChatPanel({ className = '' }: ChatPanelProps) {
   const {
     messages,
+    setMessages,
     addMessage,
     updateLastMessage,
     status,
     taskId,
+    projectName,
     setStatus,
     villageFormData,
     showReviewPanel,
@@ -57,7 +60,6 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     startPlanning,
     loadLayerContent,
     showViewer,
-    pendingReviewMessage,
     setPendingReviewMessage,
   } = useUnifiedPlanningContext();
 
@@ -67,10 +69,14 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   const [isPlanning, setIsPlanning] = useState(false);
   const [uploadedFileContent, setUploadedFileContent] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const completedLayersRef = useRef<Set<number>>(new Set());
-  const processedPauseEventsRef = useRef<Set<number>>(new Set());
 
-  // Helper: Load checkpoints - defined before sseCallbacks
+  // 维度内容缓存 (用于流式渲染)
+  const [dimensionContents, setDimensionContents] = useState<Map<string, string>>(new Map());
+
+  // Rate limit error tracking
+  const [rateLimitError, setRateLimitError] = useState<{ projectName: string } | null>(null);
+
+  // Helper: Load checkpoints
   const loadCheckpoints = useCallback(async () => {
     if (!taskId) return;
     try {
@@ -82,178 +88,291 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     }
   }, [taskId, setCheckpoints]);
 
-  // SSE event handling - wrap in useMemo to stabilize object identity
-  const sseCallbacks: UseTaskSSECallbacks = useMemo(() => ({
-    onStatusUpdate: (data: any) => {
-      logger.chatPanel.debug('收到状态更新事件', data, taskId);
-      const lastProgressMsg = messages.findLast(m => m.type === 'progress');
+  // Helper: Load layer report content
+  const loadLayerReportContent = useCallback(async (layer: number): Promise<string | null> => {
+    const layerId = getLayerId(layer);
+    if (!layerId || !taskId || !projectName) {
+      console.warn('[ChatPanel] Missing required data for layer content load', {
+        layer,
+        hasLayerId: !!layerId,
+        hasTaskId: !!taskId,
+        hasProjectName: !!projectName,
+      });
+      return null;
+    }
 
-      if (lastProgressMsg) {
-        updateLastMessage({
-          content: data.message || '正在执行...',
-          progress: data.progress || 0,
-          currentLayer: data.current_layer,
-        });
-      } else {
-        addMessage({
-          ...createBaseMessage('assistant'),
-          type: 'progress',
-          content: data.message || '正在执行...',
-          progress: data.progress || 0,
-          currentLayer: data.current_layer,
-          taskId: taskId || undefined,
-        } as any);
-      }
-    },
+    console.log(`[ChatPanel] Loading Layer ${layer} report...`, { layerId, taskId, projectName });
 
-    onLayerCompleted: async (data: any) => {
-      const layer = data.layer_number;
+    try {
+      const data = await dataApi.getLayerContent(projectName, layerId, taskId, 'markdown');
 
-      // ✅ Check if this layer has already been processed
-      if (completedLayersRef.current.has(layer)) {
-        console.log(`[ChatPanel] Layer ${layer} already processed, skipping duplicate event`);
-        logger.chatPanel.warn(`跳过重复的 Layer ${layer} 完成事件`, { layer }, taskId);
-        return;
+      if (data.content?.trim().length > 0) {
+        console.log(`[ChatPanel] Layer ${layer} report loaded successfully, length: ${data.content.length}`);
+        return data.content;
       }
 
-      // Mark this layer as processed
-      completedLayersRef.current.add(layer);
-      logger.chatPanel.info(`标记 Layer ${layer} 为已处理`, { layer, completedLayers: Array.from(completedLayersRef.current) }, taskId);
+      console.warn(`[ChatPanel] Layer ${layer} report content is empty`);
+      return null;
+    } catch (error) {
+      console.error(`[ChatPanel] Layer ${layer} report loading failed:`, error);
+      return null;
+    }
+  }, [taskId, projectName]);
 
-      const reportContent = data.report_content;
-      const dimensionReports = data.dimension_reports;
+  // Create a layer completed message
+  function createLayerCompletedMessage(
+    layer: number,
+    content: string,
+    stats: { wordCount?: number } | null,
+    dimensions: Array<{ name: string }> = []
+  ) {
+    return {
+      ...createBaseMessage('assistant'),
+      type: 'layer_completed' as const,
+      layer,
+      content,
+      summary: {
+        word_count: stats?.wordCount || content.length || 0,
+        key_points: [],
+        dimension_count: dimensions.length,
+        dimension_names: dimensions.map(d => d.name),
+      },
+      fullReportContent: content,
+      dimensionReports: undefined,
+      actions: [
+        { id: 'open_review', label: '查看详情', action: 'view' as const, variant: 'primary' as const },
+        { id: 'approve_quick', label: '快速批准', action: 'approve' as const, variant: 'success' as const },
+      ],
+    };
+  }
 
-      logger.chatPanel.info('Layer 完成', { layer, hasReportContent: !!reportContent, hasDimensionReports: !!dimensionReports }, taskId);
-      const layerId = getLayerId(layer);
+  // ✅ Stabilize all callbacks using useCallback to prevent TaskController restarts
+  const handleLayerCompleted = useCallback(async (layer: number) => {
+    console.log(`[ChatPanel] handleLayerCompleted called`, {
+      layer,
+      taskId,
+      timestamp: new Date().toISOString(),
+    });
 
-      if (!layerId) {
-        console.error('[ChatPanel] Invalid layer number:', layer);
-        return;
-      }
+    logger.chatPanel.info(`Layer ${layer} completed (detected via REST polling)`, { layer }, taskId);
 
-      console.log('[ChatPanel] Layer completed:', { layer, hasReportContent: !!reportContent });
+    const layerId = getLayerId(layer);
+    if (!layerId) {
+      console.error('[ChatPanel] Invalid layer number:', layer);
+      return;
+    }
 
-      // Import parser
-      const { parseLayerReport, getReportStats } = await import('@/lib/layerReportParser');
-      const dimensions = reportContent ? parseLayerReport(reportContent) : [];
-      const stats = reportContent ? getReportStats(reportContent) : null;
+    const result = await loadLayerReportContent(layer);
 
-      // Add completion message
+    // Handle empty report content
+    if (!result || result.trim().length === 0) {
+      console.warn(`[ChatPanel] Layer ${layer} report content is empty, creating placeholder message`);
       addMessage({
         ...createBaseMessage('assistant'),
         type: 'layer_completed',
         layer,
-        content: `✅ Layer ${layer} 已完成`,
+        content: `✅ Layer ${layer} 已完成 (报告生成中...)`,
         summary: {
-          word_count: stats?.wordCount || reportContent?.length || 0,
+          word_count: 0,
           key_points: [],
-          dimension_count: stats?.dimensionCount || dimensions.length,
-          dimension_names: stats?.dimensionNames || dimensions.map(d => d.name),
+          dimension_count: 0,
+          dimension_names: [],
         },
-        fullReportContent: reportContent,
-        dimensionReports,
+        fullReportContent: '',
+        dimensionReports: undefined,
         actions: [
-          { id: 'open_review', label: '查看详情', action: 'view', variant: 'primary' },
-          { id: 'approve_quick', label: '快速批准', action: 'approve', variant: 'success' }
+          { id: 'view', label: '查看详情', action: 'view' as const, variant: 'primary' as const },
         ],
       });
+      return;
+    }
 
-      setCurrentLayer(layer);
-      setStatus('paused');
+    // Parse report
+    const { parseLayerReport, getReportStats } = await import('@/lib/layerReportParser');
+    const dimensions = parseLayerReport(result);
+    const stats = getReportStats(result);
 
-      // Handle truncated content warning
-      if (reportContent?.includes('[报告内容过长，已截断')) {
-        addMessage(createSystemMessage('⚠️ 报告内容较大，SSE传输已截断。完整内容请点击"查看详情"后刷新。', 'warning'));
-      } else if (!reportContent && !dimensionReports) {
-        // Fallback: Load from API if SSE data is missing
-        try {
-          await loadLayerContent(layerId);
-        } catch (error) {
-          console.error('[ChatPanel] Failed to load layer content:', error);
-          addMessage(createErrorMessage(`加载 Layer ${layer} 内容失败，请手动刷新`));
-        }
+    console.log(`[ChatPanel] Layer ${layer} report parsed:`, {
+      dimensions: dimensions.length,
+      wordCount: stats?.wordCount,
+    });
+
+    // Create and add message
+    addMessage(createLayerCompletedMessage(layer,
+      `✅ Layer ${layer} 已完成 (${stats?.wordCount || result.length}字, ${dimensions.length}个维度)`,
+      stats,
+      dimensions
+    ));
+  }, [taskId, loadLayerReportContent, addMessage]);
+
+  const handlePause = useCallback((layer: number) => {
+    logger.chatPanel.info(`Task paused at Layer ${layer} (detected via REST polling)`, { layer }, taskId);
+
+    setMessages((prevMessages) => {
+      // Check if review already exists for this layer
+      const hasExistingReview = prevMessages.some(m =>
+        (m.type === 'review_interaction' && m.layer === layer && (m as ReviewInteractionMessage).reviewState === 'pending')
+      );
+
+      if (hasExistingReview) {
+        logger.chatPanel.debug(`Skipping duplicate onPause for Layer ${layer} (review message exists)`);
+        return prevMessages;
       }
 
-      // ✅ Review interaction message is now added by onPause handler only
-      // This prevents duplicate review panels when both onLayerCompleted and onPause fire
-    },
+      // Find the layer_completed message
+      const lastLayerCompletedMsg = prevMessages.findLast(
+        m => m.type === 'layer_completed' && m.layer === layer
+      );
 
-    onPause: (data) => {
-      logger.chatPanel.info('执行暂停', data, taskId);
-      console.log('[ChatPanel] Task paused:', data);
-
-      const layer = currentLayer || 1;
-
-      // ✅ 添加：检查此layer的pause事件是否已处理
-      if (processedPauseEventsRef.current.has(layer)) {
-        console.log(`[ChatPanel] Pause event for Layer ${layer} already processed, skipping duplicate review panel`);
-        logger.chatPanel.warn(`跳过重复的 Layer ${layer} pause事件`, { layer }, taskId);
-        return;
+      if (lastLayerCompletedMsg) {
+        // Update existing message
+        return prevMessages.map(msg =>
+          msg.id === lastLayerCompletedMsg.id
+            ? { ...msg, actions: [
+                { id: 'open_review', label: '查看详情', action: 'view' as const, variant: 'primary' as const },
+                { id: 'approve_quick', label: '批准继续', action: 'approve' as const, variant: 'success' as const },
+              ]}
+            : msg
+        );
       }
 
-      // 标记此layer的pause事件已处理
-      processedPauseEventsRef.current.add(layer);
-      logger.chatPanel.info(`标记 Layer ${layer} pause事件为已处理`, { layer, processedPauses: Array.from(processedPauseEventsRef.current) }, taskId);
+      // Fallback: create review message (should rarely happen)
+      logger.chatPanel.warn(`No layer_completed message found for Layer ${layer}, creating review_interaction`);
+      return [
+        ...prevMessages,
+        {
+          ...createBaseMessage('assistant'),
+          type: 'review_interaction',
+          layer,
+          content: '规划已暂停，请审查后决定下一步操作',
+          reviewState: 'pending',
+          availableActions: ['approve', 'reject', 'rollback'],
+          enableDimensionSelection: true,
+          enableRollback: true,
+          feedbackPlaceholder: '请描述需要修改的内容（选填）',
+          quickFeedbackOptions: [
+            '内容结构需要优化，请重新组织',
+            '部分内容不够详细，需要补充',
+            '存在错误或不准确的信息',
+          ],
+        } as ReviewInteractionMessage,
+      ];
+    });
 
-      setStatus('paused');
-      addMessage({
+    loadCheckpoints();
+  }, [taskId, loadCheckpoints, setMessages]);
+
+  const handleComplete = useCallback(() => {
+    logger.chatPanel.info('Task completed (detected via REST polling)', {}, taskId);
+    setStatus('completed');
+    const projectName = villageFormData?.projectName || '村庄';
+    addMessage({
+      ...createBaseMessage('assistant'),
+      type: 'result',
+      content: `🎉 规划任务已完成！\n\n村庄：${projectName}`,
+      villageName: projectName,
+      sessionId: taskId || '',
+      layers: ['Layer 1', 'Layer 2', 'Layer 3'],
+      resultUrl: `/village/${taskId}`,
+    } as any);
+  }, [taskId, villageFormData?.projectName, setStatus, addMessage]);
+
+  const handleError = useCallback((error: string) => {
+    logger.chatPanel.error('Task error (detected via REST polling)', { error }, taskId);
+    setStatus('failed');
+    addMessage(createErrorMessage(`执行失败: ${error}`));
+  }, [taskId, setStatus, addMessage]);
+
+  const handleTextDelta = useCallback((text: string, layer?: number) => {
+    setMessages(prevMessages => {
+      const lastMsg = prevMessages[prevMessages.length - 1];
+      if (lastMsg?.type === 'text') {
+        return [...prevMessages.slice(0, -1), {
+          ...lastMsg,
+          content: (lastMsg as { content: string }).content + text
+        }];
+      }
+      return [...prevMessages, {
         ...createBaseMessage('assistant'),
-        type: 'review_interaction',
-        layer: layer,
-        content: '规划已暂停，请审查后决定下一步操作',
-        reviewState: 'pending',
-        availableActions: ['approve', 'reject', 'rollback'],
-        enableDimensionSelection: true,
-        enableRollback: true,
-        feedbackPlaceholder: '请描述需要修改的内容（选填）',
-        quickFeedbackOptions: [
-          '内容结构需要优化，请重新组织',
-          '部分内容不够详细，需要补充',
-          '存在错误或不准确的信息',
-        ],
-      } as ReviewInteractionMessage);
-      loadCheckpoints();
-    },
+        type: 'text',
+        content: text,
+      } as Message & { layer?: number }];
+    });
+  }, [setMessages]);
 
-    onComplete: (data: any) => {
-      logger.chatPanel.info('任务完成', data, taskId);
-      console.log('[ChatPanel] Task completed:', data);
-      setStatus('completed');
-      // ✅ 添加：清除所有追踪sets
-      completedLayersRef.current.clear();
-      processedPauseEventsRef.current.clear();
-      logger.chatPanel.info('清除所有layer和pause事件追踪', taskId);
-      addMessage({
-        ...createBaseMessage('assistant'),
-        type: 'result',
-        content: `🎉 规划任务已完成！\n\n村庄：${villageFormData?.projectName || '村庄'}`,
-        villageName: villageFormData?.projectName || '村庄',
-        sessionId: taskId || '',
-        layers: ['Layer 1', 'Layer 2', 'Layer 3'],
-        resultUrl: `/village/${taskId}`,
-      } as any);
-    },
+  // 批处理渲染 Hook - 用于维度级流式显示
+  const { addToken, completeDimension } = useStreamingRender(
+    useCallback((dimensionKey: string, content: string) => {
+      setDimensionContents(prev => {
+        const next = new Map(prev);
+        next.set(dimensionKey, content);
+        return next;
+      });
 
-    onError: (error: string) => {
-      logger.chatPanel.error('任务错误', { error }, taskId);
-      console.error('[ChatPanel] Task error:', error);
-      setStatus('failed');
-      addMessage(createErrorMessage(`执行失败: ${error}`));
-    },
-  }), [
-    messages,
-    taskId,
-    updateLastMessage,
-    addMessage,
-    setCurrentLayer,
-    setStatus,
-    loadLayerContent,
-    loadCheckpoints,
-    currentLayer,
-    villageFormData,
-  ]);
+      // 可以在这里添加UI更新逻辑
+      console.log(`[ChatPanel] Dimension content updated: ${dimensionKey}, length: ${content.length}`);
+    }, []),
+    { batchSize: 10, batchWindow: 50, debounceMs: 100 }
+  );
 
-  const { isConnected, error: sseError, reconnect: reconnectSSE } = useTaskSSE(taskId, sseCallbacks);
+  // 维度级流式回调
+  const handleDimensionDelta = useCallback((
+    dimensionKey: string,
+    dimensionName: string,
+    layer: number,
+    chunk: string,
+    accumulated: string
+  ) => {
+    // 使用批处理渲染
+    addToken(dimensionKey, chunk, accumulated);
+  }, [addToken]);
+
+  const handleDimensionComplete = useCallback((
+    dimensionKey: string,
+    dimensionName: string,
+    layer: number,
+    fullContent: string
+  ) => {
+    // 标记维度完成，刷新剩余内容
+    completeDimension(dimensionKey);
+    console.log(`[ChatPanel] Dimension complete: ${dimensionKey} (${fullContent.length} chars)`);
+  }, [completeDimension]);
+
+  const handleLayerProgress = useCallback((
+    layer: number,
+    completed: number,
+    total: number
+  ) => {
+    // 可以更新进度条
+    console.log(`[ChatPanel] Layer ${layer} progress: ${completed}/${total}`);
+  }, []);
+
+  // Stable callbacks object using useMemo
+  const callbacks = useMemo(() => ({
+    onLayerCompleted: handleLayerCompleted,
+    onPause: handlePause,
+    onComplete: handleComplete,
+    onError: handleError,
+    onTextDelta: handleTextDelta,
+    // 维度级流式回调
+    onDimensionDelta: handleDimensionDelta,
+    onDimensionComplete: handleDimensionComplete,
+    onLayerProgress: handleLayerProgress,
+  }), [handleLayerCompleted, handlePause, handleComplete, handleError, handleTextDelta, handleDimensionDelta, handleDimensionComplete, handleLayerProgress]);
+
+  // Stable handler for SegmentedControl onChange
+  const handleLayerChange = useCallback((layer: string) => {
+    const layerNumber = LAYER_LABEL_MAP[layer];
+    if (layerNumber !== undefined) {
+      setCurrentLayer(layerNumber);
+    }
+  }, [setCurrentLayer]);
+
+  // ✅ Use TaskController with stable callbacks
+  const [taskState, { approve, reject, rollback }] = useTaskController(taskId, callbacks);
+
+  // ❌ DELETED: useLayoutEffect that causes status bounce
+  // The pendingLayerCompletionRef mechanism has been removed
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -263,46 +382,32 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   // Determine if input should be disabled
   const inputDisabled = isInputDisabled(status);
 
+  // Derive pending review message from messages (single source of truth)
+  const pendingReviewMessage = useMemo(() => {
+    return messages.findLast(m =>
+      isReviewInteractionMessage(m) && (m as ReviewInteractionMessage).reviewState === 'pending'
+    ) as ReviewInteractionMessage | null;
+  }, [messages]);
+
   // Check for pending review state
   const hasPendingReview = messages.some(m =>
     isReviewInteractionMessage(m) && (m as ReviewInteractionMessage).reviewState === 'pending'
   );
 
-  // Auto-update pendingReviewMessage when messages change
-  useEffect(() => {
-    const pendingMsg = messages.findLast(m =>
-      isReviewInteractionMessage(m) && (m as ReviewInteractionMessage).reviewState === 'pending'
-    ) as ReviewInteractionMessage | undefined;
-
-    if (pendingMsg && !pendingReviewMessage) {
-      setPendingReviewMessage(pendingMsg);
-    } else if (!pendingMsg && pendingReviewMessage) {
-      setPendingReviewMessage(null);
-    }
-  }, [messages, pendingReviewMessage, setPendingReviewMessage]);
-
-  // Review handlers
+  // Review handlers - use TaskController actions
   const handleReviewApprove = useCallback(async () => {
-    if (!taskId) return;
-
     try {
-      const response = await planningApi.approveReview(taskId);
+      await approve();
       addMessage(createSystemMessage('✅ 已批准，继续执行下一层...'));
       setShowReviewPanel(false);
       setStatus('planning');
-
-      if (response.resumed) {
-        console.log('[ChatPanel] Approve successful, reconnecting SSE...');
-        reconnectSSE?.();
-      }
+      setPendingReviewMessage(null);  // ✅ Clear pending review
     } catch (error: any) {
       addMessage(createErrorMessage(`批准失败: ${error.message || '未知错误'}`));
     }
-  }, [taskId, addMessage, setStatus, setShowReviewPanel, reconnectSSE]);
+  }, [approve, addMessage, setShowReviewPanel, setStatus, setPendingReviewMessage]);
 
   const handleReviewReject = useCallback(async (feedback: string, dimensions?: string[]) => {
-    if (!taskId) return;
-
     try {
       addMessage({
         ...createBaseMessage('user'),
@@ -310,27 +415,25 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         content: `📝 修改请求：${feedback}`,
       });
       addMessage(createSystemMessage('🔄 正在根据反馈修复规划内容...'));
-      await planningApi.rejectReview(taskId, feedback, dimensions);
+      await reject(feedback);
       setShowReviewPanel(false);
       setStatus('revising');
     } catch (error: any) {
       addMessage(createErrorMessage(`驳回失败: ${error.message || '未知错误'}`));
     }
-  }, [taskId, addMessage, setStatus, setShowReviewPanel]);
+  }, [reject, addMessage, setShowReviewPanel, setStatus]);
 
   const handleRollback = useCallback(async (checkpointId: string) => {
-    if (!taskId) return;
-
     if (!confirm('确定要回退吗？之后的内容将被删除。')) return;
 
     try {
-      await planningApi.rollbackCheckpoint(taskId, checkpointId);
+      await rollback(checkpointId);
       addMessage(createSystemMessage(`↩️ 已回退到检查点: ${checkpointId}`));
       setShowReviewPanel(false);
     } catch (error: any) {
       addMessage(createErrorMessage(`回退失败: ${error.message || '未知错误'}`));
     }
-  }, [taskId, addMessage, setShowReviewPanel]);
+  }, [rollback, addMessage, setShowReviewPanel]);
 
   // Handler: Start planning from form submission
   const handleStartPlanning = useCallback(async () => {
@@ -340,11 +443,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
     try {
       setIsPlanning(true);
-      logger.chatPanel.info('设置规划状态为 true');
 
       // Use uploaded file content or generate default
-      const villageData = uploadedFileContent || `
-# 村庄现状数据（示例）
+      const villageData = uploadedFileContent || `# 村庄现状数据（示例）
 
 ## 基本信息
 - 村庄名称：${villageFormData.projectName}
@@ -359,22 +460,43 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
       await startPlanning({
         projectName: villageFormData.projectName,
-        villageData: villageData,
+        villageData,
         taskDescription: villageFormData.taskDescription || '制定村庄总体规划方案',
         constraints: villageFormData.constraints || '无特殊约束',
         enableReview: true,
         stepMode: true,
-        streamMode: true,  // ✅ 添加：启用流式输出
+        streamMode: true,
       });
       logger.chatPanel.info('规划启动成功', { status: 'planning' });
-    } catch (error: any) {
-      logger.chatPanel.error('规划启动失败', { error: error.message });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      logger.chatPanel.error('规划启动失败', { error: errorMessage });
       console.error('[ChatPanel] Failed to start planning:', error);
-      addMessage(createErrorMessage(`启动规划失败: ${error.message || '未知错误'}`));
+
+      // Detect rate limit errors
+      if (errorMessage.includes('过于频繁') || (error instanceof Error && 'status' in error && (error as any).status === 429)) {
+        setRateLimitError({ projectName: villageFormData.projectName });
+      }
+
+      addMessage(createErrorMessage(`启动规划失败: ${errorMessage}`));
     } finally {
       setIsPlanning(false);
     }
   }, [villageFormData, uploadedFileContent, startPlanning, addMessage]);
+
+  // Handler: Reset rate limit for a project
+  const handleResetRateLimit = useCallback(async (projectName: string) => {
+    try {
+      logger.chatPanel.info(`Resetting rate limit for project: ${projectName}`);
+      await planningApi.resetProject(projectName);
+      setRateLimitError(null);
+      addMessage(createSystemMessage(`✅ 已重置项目 "${projectName}" 的限流状态，请重试`));
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      logger.chatPanel.error('Failed to reset rate limit', { error: errorMessage });
+      addMessage(createErrorMessage(`重置限流失败: ${errorMessage}`));
+    }
+  }, [addMessage]);
 
   // Note: Form submission is now handled by UnifiedContentSwitcher
   // ChatPanel only handles the planning session after it has started
@@ -384,7 +506,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     if (!taskId) return;
 
     try {
-      const response = await planningApi.approveReview(taskId);
+      await planningApi.approveReview(taskId);
 
       // Update the review message state
       addMessage({
@@ -395,26 +517,15 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         submissionType: 'approve',
       } as ReviewInteractionMessage);
 
-      // Add system confirmation message
       addMessage(createSystemMessage('✅ 已批准，继续执行下一层...'));
-
-      // ✅ 添加：清除此layer的pause事件追踪，允许下一个layer的pause事件
-      const layer = message.layer;
-      processedPauseEventsRef.current.delete(layer);
-      logger.chatPanel.info(`清除 Layer ${layer} pause事件追踪`, { layer, remainingPauses: Array.from(processedPauseEventsRef.current) }, taskId);
-
       setShowReviewPanel(false);
       setStatus('planning');
-
-      // 重新创建 SSE 连接以接收后续事件
-      if (response.resumed) {
-        // 触发 SSE 重连
-        reconnectSSE?.();
-      }
-    } catch (error: any) {
-      addMessage(createErrorMessage(`批准失败: ${error.message || '未知错误'}`));
+      setPendingReviewMessage(null);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      addMessage(createErrorMessage(`批准失败: ${errorMessage}`));
     }
-  }, [taskId, addMessage, setStatus, setShowReviewPanel, reconnectSSE]);
+  }, [taskId, addMessage, setShowReviewPanel, setStatus, setPendingReviewMessage]);
 
   const handleReviewInteractionReject = useCallback(async (
     message: ReviewInteractionMessage,
@@ -436,11 +547,11 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       } as ReviewInteractionMessage);
 
       addMessage(createSystemMessage('🔄 正在根据反馈修复规划内容...'));
-
       await planningApi.rejectReview(taskId, feedback, dimensions);
       setStatus('revising');
-    } catch (error: any) {
-      addMessage(createErrorMessage(`驳回失败: ${error.message || '未知错误'}`));
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      addMessage(createErrorMessage(`驳回失败: ${errorMessage}`));
     }
   }, [taskId, addMessage, setStatus]);
 
@@ -461,28 +572,25 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       } as ReviewInteractionMessage);
 
       await planningApi.rollbackCheckpoint(taskId, checkpointId);
-
       addMessage(createSystemMessage(`↩️ 已回退到检查点: ${checkpointId}`));
-    } catch (error: any) {
-      addMessage(createErrorMessage(`回退失败: ${error.message || '未知错误'}`));
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      addMessage(createErrorMessage(`回退失败: ${errorMessage}`));
     }
   }, [taskId, addMessage]);
 
   // Send message handler - now supports review feedback
   const handleSendMessage = useCallback(async () => {
-    if (!inputText.trim()) return;
-
     const userText = inputText.trim();
+    if (!userText) return;
+
     setInputText('');
 
     // Check if in review state
     if (hasPendingReview && pendingReviewMessage) {
-      // Handle as review feedback
       if (userText === '批准' || userText.toLowerCase() === 'approve') {
-        // User approved
         await handleReviewInteractionApprove(pendingReviewMessage);
       } else {
-        // User rejected, input becomes feedback
         await handleReviewInteractionReject(pendingReviewMessage, userText);
       }
       return;
@@ -500,7 +608,6 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     setIsTyping(true);
 
     // TODO: Process message with AI
-    // For now, just echo back
     setTimeout(() => {
       addMessage({
         id: `msg-${Date.now()}`,
@@ -516,35 +623,12 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
   // File selection handler
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    console.log('[ChatPanel] handleFileSelect called');
-    console.log('[ChatPanel] Event target:', e.target);
-    console.log('[ChatPanel] Files:', e.target.files);
-    console.log('[ChatPanel] Disabled state:', {
-      inputDisabled,
-      isTyping,
-      isUploadingFile,
-    });
-
     const file = e.target.files?.[0];
-    console.log('[ChatPanel] Selected file:', file);
-
-    if (!file) {
-      console.log('[ChatPanel] No file selected, returning');
-      return;
-    }
-
-    console.log('[ChatPanel] Starting file upload:', {
-      name: file.name,
-      size: file.size,
-      type: file.type,
-    });
+    if (!file) return;
 
     try {
       setIsUploadingFile(true);
-      console.log('[ChatPanel] isUploadingFile set to true');
-
       const response = await fileApi.uploadFile(file);
-      console.log('[ChatPanel] Upload response:', response);
 
       // Store file content for later use when starting planning
       setUploadedFileContent(response.content);
@@ -559,18 +643,32 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       } as FileMessage);
 
       const encodingInfo = response.encoding ? `\n编码: ${response.encoding}` : '';
-      addMessage(createSystemMessage(`✅ 文件 "${file.name}" 已上传，点击 "开始规划" 按钮启动任务\n${encodingInfo}\n内容长度: ${response.content.length} 字符`));
+      addMessage(createSystemMessage(
+        `✅ 文件 "${file.name}" 已上传，点击 "开始规划" 按钮启动任务\n${encodingInfo}\n内容长度: ${response.content.length} 字符`
+      ));
 
       e.target.value = '';
-
-    } catch (error: any) {
-      console.error('[ChatPanel] Upload error:', error);
-      addMessage(createErrorMessage(`❌ 文件上传失败: ${error.message || '未知错误'}`));
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      addMessage(createErrorMessage(`❌ 文件上传失败: ${errorMessage}`));
     } finally {
       setIsUploadingFile(false);
-      console.log('[ChatPanel] isUploadingFile set to false');
     }
   };
+
+  // Default village data template
+  const getDefaultVillageData = useCallback((projectName: string) => `# 村庄现状数据（示例）
+
+## 基本信息
+- 村庄名称：${projectName}
+- 地理位置：中国某省某市某县
+- 人口规模：约1000人
+- 土地面积：约5000亩
+
+## 产业现状
+- 主要产业：农业、手工业
+- 经济水平：中等偏下
+`, []);
 
   // Action handler
   const handleAction = useCallback(async (action: ActionButton, message: Message) => {
@@ -583,75 +681,40 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       case 'approve':
         // Handle start planning button from file upload
         if (action.id === 'start_planning' && villageFormData) {
-            // Flow from ChatPanel file upload
-            console.log('[ChatPanel] 开始规划触发');
-            console.log('[ChatPanel] villageFormData 状态:', villageFormData);
-            console.log('[ChatPanel] 当前消息数量:', messages.length);
+          const fileMessages = messages.filter((msg: Message) => msg.type === 'file');
+          let villageData: string;
 
-            // Extract content from uploaded files
-            const fileMessages = messages.filter((msg: Message) => msg.type === 'file');
-            console.log('[ChatPanel] 找到的文件消息数量:', fileMessages.length);
-            console.log('[ChatPanel] 所有消息类型:', messages.map(m => ({ type: m.type, role: m.role })));
+          if (fileMessages.length > 0) {
+            villageData = fileMessages
+              .map((msg: Message) => (msg as FileMessage).fileContent)
+              .join('\n\n---\n\n');
 
-            let villageData: string;
-
-            // Use uploaded file content if available, otherwise use default data
-            if (fileMessages.length > 0) {
-              const uploadedContent = fileMessages
-                .map((msg: Message) => (msg as FileMessage).fileContent)
-                .join('\n\n---\n\n');
-
-              console.log('[ChatPanel] 提取的文件内容长度:', uploadedContent.length);
-              console.log('[ChatPanel] 文件内容预览:', uploadedContent.substring(0, 200));
-
-              // Validate file content length
-              if (uploadedContent.length < MIN_FILE_CONTENT_LENGTH) {
-                console.error('[ChatPanel] 文件内容过短');
-                addMessage(createSystemMessage(
-                  '⚠️ 上传的文件内容过短！\n\n' +
-                  '要求：至少需要 50 个字符\n' +
-                  '当前：' + uploadedContent.length + ' 个字符\n\n' +
-                  '请确保文件包含完整的村庄现状数据。',
-                  'error'
-                ));
-                return;
-              }
-
-              villageData = uploadedContent;
-            } else {
-              // No file uploaded, use default village data
-              villageData = `
-# 村庄现状数据（示例）
-
-## 基本信息
-- 村庄名称：${villageFormData.projectName}
-- 地理位置：中国某省某市某县
-- 人口规模：约1000人
-- 土地面积：约5000亩
-
-## 产业现状
-- 主要产业：农业、手工业
-- 经济水平：中等偏下
-`;
+            if (villageData.length < MIN_FILE_CONTENT_LENGTH) {
+              addMessage(createSystemMessage(
+                `⚠️ 上传的文件内容过短！\n\n要求：至少需要 ${MIN_FILE_CONTENT_LENGTH} 个字符\n当前：${villageData.length} 个字符\n\n请确保文件包含完整的村庄现状数据。`,
+                'error'
+              ));
+              return;
             }
+          } else {
+            villageData = getDefaultVillageData(villageFormData.projectName);
+          }
 
-            try {
-              await startPlanning({
-                projectName: villageFormData.projectName || '未命名村庄',
-                villageData: villageData,
-                taskDescription: villageFormData.taskDescription || '制定村庄总体规划方案',
-                constraints: villageFormData.constraints || '无特殊约束',
-                enableReview: true,
-                stepMode: true,
-                streamMode: true,  // ✅ 添加：启用流式输出
-              });
-              console.log('[ChatPanel] 规划启动成功');
-            } catch (error: any) {
-              console.error('[ChatPanel] 规划启动失败:', error);
-              addMessage(createErrorMessage(`❌ 规划启动失败: ${error.message || '未知错误'}`));
-            }
-        }
-        else if (action.id === 'approve_quick') {
+          try {
+            await startPlanning({
+              projectName: villageFormData.projectName || '未命名村庄',
+              villageData,
+              taskDescription: villageFormData.taskDescription || '制定村庄总体规划方案',
+              constraints: villageFormData.constraints || '无特殊约束',
+              enableReview: true,
+              stepMode: true,
+              streamMode: true,
+            });
+          } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : '未知错误';
+            addMessage(createErrorMessage(`❌ 规划启动失败: ${errorMessage}`));
+          }
+        } else if (action.id === 'approve_quick') {
           await handleReviewApprove();
         } else {
           addMessage({
@@ -674,7 +737,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         // View actions handled by component-specific handlers
         break;
     }
-  }, [messages, villageFormData, startPlanning, handleReviewApprove, addMessage]);
+  }, [messages, villageFormData, startPlanning, handleReviewApprove, addMessage, getDefaultVillageData]);
 
   // Handler: 查看完整报告（移除侧边栏功能，保留日志）
   const handleOpenInSidebar = useCallback((layer: number) => {
@@ -763,40 +826,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             <SegmentedControl
               options={LAYER_OPTIONS_ARRAY}
               value={currentLayer ? LAYER_VALUE_MAP[currentLayer] : LAYER_OPTIONS_ARRAY[0]}
-              onChange={(layer) => setCurrentLayer(LAYER_LABEL_MAP[layer])}
+              onChange={handleLayerChange}
               className="mb-4"
             />
-          )}
-
-          {/* Show "Start Planning" button when form is submitted but planning hasn't started */}
-          {status === 'collecting' && villageFormData && !taskId && (
-            <div className="mb-4 p-4 bg-success bg-opacity-10 rounded-3">
-              <div className="d-flex align-items-center justify-content-between">
-                <div>
-                  <h6 className="mb-1">📋 规划任务已准备</h6>
-                  <p className="small text-muted mb-0">
-                    村庄：{villageFormData.projectName}
-                  </p>
-                </div>
-                <button
-                  className="btn btn-success"
-                  onClick={handleStartPlanning}
-                  disabled={isPlanning}
-                >
-                  {isPlanning ? (
-                    <>
-                      <span className="spinner-border spinner-border-sm me-2"></span>
-                      启动中...
-                    </>
-                  ) : (
-                    <>
-                      <span className="me-2">🚀</span>
-                      开始规划
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
           )}
 
           <MessageList
@@ -828,6 +860,60 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       {/* Bottom: Input area */}
       <div className="border-t bg-white p-4">
         <div className="max-w-3xl mx-auto">
+          {/* Rate limit warning and reset button */}
+          {rateLimitError && (
+            <div className="mb-3 px-4 py-3 bg-warning bg-opacity-10 border border-warning rounded-lg flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">⚠️</span>
+                <div>
+                  <div className="font-semibold text-warning-800">请求过于频繁</div>
+                  <div className="text-sm text-warning-700">
+                    项目 "{rateLimitError.projectName}" 触发了速率限制
+                  </div>
+                </div>
+              </div>
+              <button
+                className="btn btn-outline-warning btn-sm px-4"
+                onClick={() => handleResetRateLimit(rateLimitError.projectName)}
+              >
+                <span className="me-1">🔄</span>
+                重置限制
+              </button>
+            </div>
+          )}
+
+          {/* Planning ready indicator with Start Planning button */}
+          {status === 'collecting' && villageFormData && !taskId && (
+            <div className="mb-3 px-4 py-3 bg-success bg-opacity-10 border border-success rounded-lg flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">📋</span>
+                <div>
+                  <div className="font-semibold text-success-800">规划任务已准备</div>
+                  <div className="text-sm text-success-700">
+                    村庄：{villageFormData.projectName}
+                  </div>
+                </div>
+              </div>
+              <button
+                className="btn btn-success px-4"
+                onClick={handleStartPlanning}
+                disabled={isPlanning}
+              >
+                {isPlanning ? (
+                  <>
+                    <span className="spinner-border spinner-border-sm me-2"></span>
+                    启动中...
+                  </>
+                ) : (
+                  <>
+                    <span className="me-2">🚀</span>
+                    开始规划
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
           {/* Review mode indicator */}
           {hasPendingReview && pendingReviewMessage && (
             <div className="mb-2 px-3 py-1.5 bg-orange-50 border border-orange-200 rounded-lg flex items-center gap-2">
@@ -838,30 +924,19 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             </div>
           )}
 
-          {/* 合并式输入框：包含文件上传和文本输入 */}
+          {/* Input area: file upload and text input */}
           <div className="flex items-center gap-2">
-            {/* 文件上传按钮（原生） */}
+            {/* File upload button (native) */}
             <input
               type="file"
               accept={FILE_ACCEPT}
-              onChange={(e) => {
-                console.log('[ChatPanel File Input] onChange triggered');
-                console.log('[ChatPanel File Input] Event:', e);
-                console.log('[ChatPanel File Input] Files:', e.target.files);
-                handleFileSelect(e);
-              }}
-              onClick={() => {
-                console.log('[ChatPanel File Input] onClick triggered');
-              }}
-              onFocus={() => {
-                console.log('[ChatPanel File Input] onFocus triggered');
-              }}
+              onChange={handleFileSelect}
               disabled={inputDisabled || isTyping || isUploadingFile}
               className="form-control form-control-sm"
               style={{ width: 'auto' }}
             />
 
-            {/* 文本输入框 */}
+            {/* Text input */}
             <textarea
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
@@ -885,7 +960,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
               rows={1}
             />
 
-            {/* 发送按钮 */}
+            {/* Send button */}
             <button
               onClick={handleSendMessage}
               disabled={inputDisabled || isTyping || !inputText.trim() || isUploadingFile}

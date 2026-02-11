@@ -5,11 +5,12 @@
  * 统一规划上下文 - 对话状态、UI状态和内容管理
  */
 
-import React, { createContext, useContext, useState, useCallback, ReactNode, useEffect, useMemo } from 'react';
+import { createContext, useContext, useState, useCallback, ReactNode, useMemo, useEffect } from 'react';
 import { Message, PlanningParams, Checkpoint, ReviewInteractionMessage } from '@/types';
 import { VillageInputData } from '@/components/VillageInputForm';
 import { planningApi, dataApi, VillageInfo, VillageSession } from '@/lib/api';
 import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/lib/utils';
+import { logger } from '@/lib/logger';
 import { LAYER_ID_MAP } from '@/lib/constants';
 
 type Status = 'idle' | 'collecting' | 'planning' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
@@ -83,6 +84,7 @@ interface UnifiedPlanningContextType {
 
   // Conversation actions
   addMessage: (message: Message) => void;
+  setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   updateLastMessage: (updates: Partial<Message>) => void;
   clearMessages: () => void;
   setTaskId: (taskId: string | null) => void;
@@ -139,7 +141,7 @@ export function UnifiedPlanningProvider({
   const [messages, setMessages] = useState<Message[]>([]);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
-  const [status, setStatus] = useState<Status>('idle');
+  const [status, setStatusState] = useState<Status>('idle');
   const [viewerVisible, setViewerVisible] = useState(false);
   const [referencedSection, setReferencedSection] = useState<string | undefined>();
 
@@ -170,7 +172,7 @@ export function UnifiedPlanningProvider({
   const [layerReportVisible, setLayerReportVisible] = useState(false);
   const [activeReportLayer, setActiveReportLayer] = useState(1);
 
-  // NEW: Report sync state
+  // Report sync state
   const [reportSyncState, setReportSyncState] = useState<ReportSyncState>({
     lastUpdated: 0,
     currentLayer: null,
@@ -179,50 +181,31 @@ export function UnifiedPlanningProvider({
 
   // Computed view mode - single source of truth for UI state
   const viewMode: ViewMode = useMemo(() => {
-    // Has active task ID? Show session
     if (taskId && taskId !== 'new') {
       return 'SESSION_ACTIVE';
     }
-
-    // Not idle? Show session (planning in progress)
     if (status !== 'idle') {
       return 'SESSION_ACTIVE';
     }
-
-    // Otherwise show welcome form
     return 'WELCOME_FORM';
   }, [taskId, status]);
 
   // Conversation actions
   const addMessage = useCallback((message: Message) => {
-    setMessages((prev) => {
-      // Check if this message duplicates the last one
-      const lastMessage = prev[prev.length - 1];
-
-      if (lastMessage) {
-        // Check if timestamps are very close (within 100ms)
-        const isTimeClose =
-          Math.abs(
-            new Date(message.timestamp).getTime() -
-            new Date(lastMessage.timestamp).getTime()
-          ) < 100;
-
-        // Check if content is identical (only for messages with content property)
-        let isContentSame = false;
-        if ('content' in lastMessage && 'content' in message) {
-          isContentSame = lastMessage.content === message.content;
-        }
-
-        // If both content and time are the same, treat as duplicate message
-        if (isContentSame && isTimeClose) {
-          console.log('[UnifiedPlanningContext] Skipping duplicate message:', message.type);
-          return prev; // Don't add duplicate message
-        }
-      }
-
-      return [...prev, message];
-    });
+    setMessages((prev) => [...prev, message]);
   }, []);
+
+  // Custom setStatus (no side effects - side effects moved to useEffect below)
+  const setStatus = useCallback((newStatus: Status) => {
+    setStatusState(newStatus);
+  }, []);
+
+  // Clear pending review message when status changes to planning or revising
+  useEffect(() => {
+    if (status === 'planning' || status === 'revising') {
+      setPendingReviewMessage(null);
+    }
+  }, [status]);
 
   const updateLastMessage = useCallback((updates: Partial<Message>) => {
     setMessages((prev) => {
@@ -237,26 +220,14 @@ export function UnifiedPlanningProvider({
   }, []);
 
   // Viewer actions
-  const showViewer = useCallback(() => {
-    setViewerVisible(true);
-  }, []);
-
-  const hideViewer = useCallback(() => {
-    setViewerVisible(false);
-  }, []);
-
-  const toggleViewer = useCallback(() => {
-    setViewerVisible((prev) => !prev);
-  }, []);
-
+  const showViewer = useCallback(() => setViewerVisible(true), []);
+  const hideViewer = useCallback(() => setViewerVisible(false), []);
+  const toggleViewer = useCallback(() => setViewerVisible(prev => !prev), []);
   const highlightSection = useCallback((section: string) => {
     setReferencedSection(section);
     setViewerVisible(true);
   }, []);
-
-  const clearHighlight = useCallback(() => {
-    setReferencedSection(undefined);
-  }, []);
+  const clearHighlight = useCallback(() => setReferencedSection(undefined), []);
 
   // Content actions
   const loadLayerContent = useCallback(async (layerId: string) => {
@@ -328,11 +299,13 @@ export function UnifiedPlanningProvider({
 
   // Planning actions
   const startPlanning = useCallback(async (params: PlanningParams) => {
+    logger.context.info('开始规划流程', { projectName: params.projectName });
+
     try {
       setStatus('collecting');
       setProjectName(params.projectName);
+      logger.context.info('设置状态为 collecting');
 
-      // Call backend API to start planning
       const response = await planningApi.startPlanning({
         project_name: params.projectName,
         village_data: params.villageData,
@@ -340,18 +313,20 @@ export function UnifiedPlanningProvider({
         constraints: params.constraints || '无特殊约束',
         enable_review: params.enableReview ?? true,
         step_mode: params.stepMode ?? true,
+        stream_mode: true,
       });
 
       setTaskId(response.task_id);
       setStatus('planning');
 
+      logger.context.info('API 调用成功', { taskId: response.task_id });
       addMessage(createSystemMessage(`🚀 规划任务已创建，任务ID: ${response.task_id.slice(0, 8)}...`));
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      logger.context.error('规划流程失败', { error: errorMessage });
       console.error('[UnifiedPlanningContext] Failed to start planning:', error);
       setStatus('failed');
-
-      addMessage(createErrorMessage(`启动规划失败: ${error.message || '未知错误'}`));
-
+      addMessage(createErrorMessage(`启动规划失败: ${errorMessage}`));
       throw error;
     }
   }, [addMessage]);
@@ -397,9 +372,10 @@ export function UnifiedPlanningProvider({
       const data = await dataApi.listVillages();
       setVillages(data);
       console.log('[UnifiedPlanningContext] Loaded villages history:', data.length, 'villages');
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '加载历史记录失败';
       console.error('[UnifiedPlanningContext] Failed to load villages history:', error);
-      setHistoryError(error.message || '加载历史记录失败');
+      setHistoryError(errorMessage);
       setVillages([]);
     } finally {
       setHistoryLoading(false);
@@ -426,32 +402,23 @@ export function UnifiedPlanningProvider({
 
     console.log('[UnifiedPlanningContext] Loading historical reports for:', villageName, sessionId);
 
-    // Layer mapping configuration
     const layers = [
       { id: 'layer_1_analysis', number: 1, name: '现状分析' },
       { id: 'layer_2_concept', number: 2, name: '规划思路' },
       { id: 'layer_3_detailed', number: 3, name: '详细规划' },
-    ];
+    ] as const;
 
     try {
-      // Load each layer sequentially
       for (const layer of layers) {
         try {
           console.log('[UnifiedPlanningContext] Loading layer:', layer.id);
 
-          // Fetch layer content from backend API
-          const data = await dataApi.getLayerContent(
-            villageName,
-            layer.id,
-            sessionId,  // Pass session ID to load historical data
-            'markdown'
-          );
+          const data = await dataApi.getLayerContent(villageName, layer.id, sessionId, 'markdown');
 
           console.log('[UnifiedPlanningContext] Loaded layer:', layer.number,
                       'content length:', data.content?.length || 0);
 
-          // Skip if no content
-          if (!data.content || data.content.length === 0) {
+          if (!data.content?.length) {
             console.warn('[UnifiedPlanningContext] Layer has no content:', layer.id);
             continue;
           }
@@ -477,11 +444,8 @@ export function UnifiedPlanningProvider({
             ],
           };
 
-          // Add message to chat
           addMessage(layerMessage);
-
         } catch (error) {
-          // Handle missing layers gracefully - don't fail entire operation
           console.error(`[UnifiedPlanningContext] Failed to load ${layer.id}:`, error);
           // Continue to next layer instead of throwing
         }
@@ -496,12 +460,11 @@ export function UnifiedPlanningProvider({
 
   const loadHistoricalSession = useCallback(async (villageName: string, sessionId: string) => {
     try {
-      // Clear current state
       clearMessages();
       setCheckpoints([]);
       setSelectedCheckpoint(null);
 
-      // 重置报告同步状态（重要：防止旧会话状态残留）
+      // Reset report sync state
       setReportSyncState({
         lastUpdated: 0,
         currentLayer: null,
@@ -511,21 +474,17 @@ export function UnifiedPlanningProvider({
       // Set new session info
       setProjectName(villageName);
       setTaskId(sessionId);
-      setStatus('completed'); // Fixed: Use 'completed' for historical sessions to prevent form from showing
+      setStatus('completed');
 
-      // Load checkpoints for this session
       await loadCheckpoints();
-
-      // Add system message
       addMessage(createSystemMessage(`📂 已加载历史会话: ${villageName} (${sessionId.slice(0, 8)}...)`));
-
-      // NEW: Load and display all three layer reports
       await loadHistoricalReports(villageName, sessionId);
 
       console.log('[UnifiedPlanningContext] Loaded historical session with reports:', sessionId);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
       console.error('[UnifiedPlanningContext] Failed to load historical session:', error);
-      addMessage(createSystemMessage(`❌ 加载历史会话失败: ${error.message}`));
+      addMessage(createSystemMessage(`❌ 加载历史会话失败: ${errorMessage}`));
     }
   }, [clearMessages, loadCheckpoints, addMessage, loadHistoricalReports]);
 
@@ -570,6 +529,7 @@ export function UnifiedPlanningProvider({
 
     // Actions
     addMessage,
+    setMessages,
     updateLastMessage,
     clearMessages,
     setTaskId,
