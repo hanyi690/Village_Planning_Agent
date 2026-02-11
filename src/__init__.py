@@ -44,10 +44,6 @@ from .tools import (
     save_checkpoint,
     load_checkpoint,
     list_checkpoints,
-    # 交互式
-    InteractiveTool,
-    review_report,
-    show_progress_and_wait,
     # 修复
     RevisionTool,
     parse_feedback,
@@ -81,9 +77,6 @@ __all__ = [
     "save_checkpoint",
     "load_checkpoint",
     "list_checkpoints",
-    "InteractiveTool",
-    "review_report",
-    "show_progress_and_wait",
     "RevisionTool",
     "parse_feedback",
     "revise_dimension",

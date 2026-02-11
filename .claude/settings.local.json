@@ -86,7 +86,27 @@
       "Bash(Get-ChildItem -Path \"F:\\\\project\\\\Village_Planning_Agent\" -Filter *.pyc -Recurse -Force)",
       "Bash(Remove-Item:*)",
       "Bash(del:*)",
-      "Bash(then echo \"File still exists\")"
+      "Bash(then echo \"File still exists\")",
+      "Bash(1)",
+      "Bash(cmd.exe:*)",
+      "Bash(start /B python:*)",
+      "Bash(Get-Process)",
+      "Bash(Where-Object { $_ProcessName -like \"*node*\" -or $_ProcessName -like \"*python*\" })",
+      "Bash(Select-Object:*)",
+      "Bash(Format-Table)",
+      "Bash(cd:*)",
+      "Bash(then cat logs/backend.pid)",
+      "Bash(then cat logs/frontend.pid)",
+      "Bash(npx skillfish add:*)",
+      "Bash(npx skills-installer install:*)",
+      "Skill(typescript-review)",
+      "Bash(start-services.bat)",
+      "Bash(stop-services.bat)",
+      "Bash(powershell.exe:*)",
+      "Bash(./stop-services.bat:*)",
+      "Bash(./start-services.bat:*)",
+      "Bash(while read:*)",
+      "Bash(do taskkill:*)"
     ]
   }
 }

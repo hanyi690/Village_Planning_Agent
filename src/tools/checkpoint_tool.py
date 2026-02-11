@@ -28,6 +28,111 @@ logger = get_logger(__name__)
 
 
 # ==========================================
+# SQLite存储实现（新增）
+# ==========================================
+
+class _SqlCheckpointStorage:
+    """
+    Checkpoint的SQLite存储实现（内部类）
+
+    提供基于数据库的checkpoint持久化功能。
+    """
+
+    def __init__(self) -> None:
+        """初始化SQLite存储"""
+        pass
+
+    def save(
+        self,
+        project_name: str,
+        timestamp: str,
+        checkpoint_id: str,
+        state: dict[str, Any],
+        metadata: dict[str, Any]
+    ) -> str | None:
+        """保存checkpoint到SQLite数据库"""
+        try:
+            from backend.database import create_checkpoint
+
+            success = create_checkpoint(
+                project_name=project_name,
+                timestamp=timestamp,
+                checkpoint_id=checkpoint_id,
+                state=state,
+                metadata=metadata
+            )
+
+            if success:
+                logger.info(f"[SqlStorage] Checkpoint已保存: {checkpoint_id}")
+                return checkpoint_id
+            else:
+                logger.error(f"[SqlStorage] 保存checkpoint失败")
+                return None
+
+        except Exception as e:
+            logger.error(f"[SqlStorage] 保存checkpoint失败: {e}")
+            return None
+
+    def load(self, checkpoint_id: str) -> dict[str, Any] | None:
+        """从SQLite数据库加载checkpoint"""
+        try:
+            from backend.database import get_checkpoint
+
+            data = get_checkpoint(checkpoint_id)
+
+            if data:
+                logger.info(f"[SqlStorage] Checkpoint已加载: {checkpoint_id}")
+                return {
+                    "checkpoint_id": data["checkpoint_id"],
+                    "timestamp": data["timestamp"],
+                    "metadata": data.get("metadata", {}),
+                    "state": data["state"]
+                }
+            else:
+                logger.error(f"[SqlStorage] Checkpoint不存在: {checkpoint_id}")
+                return None
+
+        except Exception as e:
+            logger.error(f"[SqlStorage] 加载checkpoint失败: {e}")
+            return None
+
+    def list_checkpoints(self, project_name: str, timestamp: str | None = None) -> list[dict[str, Any]]:
+        """列出项目的所有checkpoint"""
+        try:
+            from backend.database import list_checkpoints
+
+            if timestamp:
+                checkpoints = list_checkpoints(session_id=timestamp)
+            else:
+                # List all checkpoints (will need to filter by project name later)
+                checkpoints = list_checkpoints()
+
+            return checkpoints
+
+        except Exception as e:
+            logger.error(f"[SqlStorage] 列出checkpoint失败: {e}")
+            return []
+
+    def delete(self, checkpoint_id: str) -> bool:
+        """删除checkpoint"""
+        try:
+            from backend.database import delete_checkpoint
+
+            success = delete_checkpoint(checkpoint_id)
+
+            if success:
+                logger.info(f"[SqlStorage] Checkpoint已删除: {checkpoint_id}")
+                return True
+            else:
+                logger.warning(f"[SqlStorage] Checkpoint不存在: {checkpoint_id}")
+                return False
+
+        except Exception as e:
+            logger.error(f"[SqlStorage] 删除checkpoint失败: {e}")
+            return False
+
+
+# ==========================================
 # JSON存储实现（内部实现）
 # ==========================================
 
@@ -219,7 +324,8 @@ class CheckpointTool:
         self,
         project_name: str,
         timestamp: str | None = None,
-        storage: _JsonCheckpointStorage | None = None
+        storage: _JsonCheckpointStorage | _SqlCheckpointStorage | None = None,
+        use_sqlite: bool = False
     ) -> None:
         """
         初始化CheckpointTool
@@ -228,10 +334,17 @@ class CheckpointTool:
             project_name: 项目名称
             timestamp: 时间戳（可选）
             storage: 存储后端（可选）
+            use_sqlite: 是否使用SQLite存储（默认False，使用JSON）
         """
         self.project_name = self._sanitize_name(project_name)
         self.timestamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.storage = storage or _JsonCheckpointStorage()
+
+        # Select storage backend
+        if use_sqlite:
+            self.storage = storage or _SqlCheckpointStorage()
+        else:
+            self.storage = storage or _JsonCheckpointStorage()
+
         self.checkpoint_index: Dict[str, Dict[str, Any]] = {}
         self._load_index()
 

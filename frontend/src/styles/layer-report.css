@@ -1,0 +1,368 @@
+/**
+ * Layer Report Styles
+ * Custom styles for layer report display matching the reference HTML design
+ */
+
+/* Fade in animation */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Layer report container */
+.layer-report-container {
+  background: linear-gradient(135deg, #f5f9f5, #e8f5e9);
+  border-radius: 10px;
+  padding: 20px;
+  margin: 1.5rem 0;
+}
+
+/* Section Card - Main container (matches reference HTML) */
+.section-card {
+  border: 1px solid #c8e6c9;
+  background: white !important;
+  margin-bottom: 15px;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  overflow: hidden;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+}
+
+.section-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+  border-color: #8bc34a;
+}
+
+/* Section Header - Title area */
+.section-header {
+  padding: 12px 20px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #e8f5e9;
+  transition: background 0.3s ease;
+}
+
+.section-header:hover {
+  background: linear-gradient(90deg, #e8f5e9, #d0efd0);
+}
+
+.section-card.expanded .section-header {
+  background: linear-gradient(90deg, #e8f5e9, #d0efd0);
+}
+
+/* Section Title */
+.section-title {
+  font-weight: 600;
+  color: #1b5e20;
+  margin: 0;
+  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-title i {
+  color: #2e7d32;
+  font-size: 1.1rem;
+}
+
+/* Section Content - Content area (KEY: white background) */
+.section-content {
+  padding: 0 20px;
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.4s ease, padding 0.4s ease;
+  background: white !important;
+}
+
+.section-card.expanded .section-content {
+  padding: 15px 20px;
+  max-height: 2000px;
+  background: white !important;
+}
+
+/* Section content paragraph styles */
+.section-content p {
+  color: #666;
+  line-height: 1.7;
+  margin-bottom: 10px;
+  font-size: 0.95rem;
+}
+
+/* Subsection */
+.subsection {
+  margin: 12px 0;
+  padding: 10px 0 10px 15px;
+  border-left: 2px solid #c8e6c9;
+}
+
+/* Subsection title */
+.subsection-title {
+  font-weight: 600;
+  color: #2e7d32;
+  margin-bottom: 8px;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Chevron icon rotation */
+.chevron-icon {
+  transition: transform 0.3s ease;
+}
+
+.section-card.expanded .chevron-icon {
+  transform: rotate(180deg);
+}
+
+/* Dimension actions (hover-visible buttons) */
+.dimension-actions {
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.section-card:hover .dimension-actions {
+  opacity: 1;
+}
+
+.dimension-action-btn {
+  background: #f5f5f5;
+  border: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #666;
+  transition: all 0.2s ease;
+}
+
+.dimension-action-btn:hover {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+/* Layer completion message */
+.layer-completion-message {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+/* Stats grid item hover effect */
+.dimension-stat-item {
+  transition: all 0.2s ease;
+}
+
+.dimension-stat-item:hover {
+  border-color: #8bc34a !important;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.08) !important;
+}
+
+/* Primary action button */
+.btn-primary-layer {
+  background: linear-gradient(135deg, #2e7d32, #1b5e20);
+  color: var(--text-cream-primary);
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 10px rgba(46, 125, 50, 0.3);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-primary-layer:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 15px rgba(46, 125, 50, 0.4);
+}
+
+/* Secondary action button */
+.btn-secondary-layer {
+  background: white;
+  color: #2e7d32;
+  border: 1px solid #2e7d32;
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-secondary-layer:hover {
+  background: #e8f5e9;
+}
+
+/* Tertiary action button */
+.btn-tertiary-layer {
+  background: white;
+  color: #666;
+  border: 1px solid #ccc;
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-tertiary-layer:hover {
+  background: #f5f5f5;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .layer-report-container {
+    padding: 15px;
+    margin: 1rem 0;
+  }
+
+  .dimension-header {
+    padding: 10px 12px;
+  }
+
+  .dimension-content {
+    padding: 12px;
+  }
+
+  .dimension-section.expanded .dimension-content {
+    padding: 12px;
+  }
+}
+
+/* ========== 双模实时同步样式 ========== */
+
+/* Chat 模式：紧凑、折叠、有渐变遮罩 */
+.layer-report-card-chat {
+  max-height: 500px;
+  overflow: hidden;
+  position: relative;
+  transition: max-height 0.4s ease;
+}
+
+.layer-report-card-chat::after {
+  /* 渐变遮罩 */
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 80px;
+  background: linear-gradient(to bottom, transparent, rgba(245, 249, 245, 0.8), #f5f9f5);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Sidebar 模式：完整、展开、无遮罩 */
+.layer-report-card-sidebar {
+  max-height: none;
+  overflow: visible;
+}
+
+/* 聊天流动作按钮容器 */
+.layer-report-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid #c8e6c9;
+}
+
+/* "在侧边栏查看"按钮样式 */
+.btn-open-in-sidebar {
+  background: white;
+  color: #2e7d32;
+  border: 1px solid #2e7d32;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 2px 4px rgba(46, 125, 50, 0.1);
+}
+
+.btn-open-in-sidebar:hover {
+  background: #e8f5e9 !important;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(46, 125, 50, 0.3) !important;
+}
+
+/* 展开全文按钮动画 */
+.layer-report-card-chat button[aria-label="expand"] {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.02);
+  }
+}
+
+/* 移动端优化 */
+@media (max-width: 768px) {
+  .layer-report-card-chat {
+    max-height: 400px;
+  }
+
+  .btn-open-in-sidebar {
+    font-size: 0.8rem;
+    padding: 6px 12px;
+  }
+}
+
+/* ========== Markdown Content Styles ========== */
+
+.markdown-content p {
+  color: #666;
+  line-height: 1.7;
+  margin-bottom: 10px;
+  font-size: 0.95rem;
+}
+
+.markdown-content h3,
+.markdown-content h4 {
+  color: #1b5e20;
+  margin-top: 15px;
+  margin-bottom: 10px;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  margin-left: 20px;
+  margin-bottom: 10px;
+}
+
+.markdown-content li {
+  margin-bottom: 5px;
+  color: #666;
+}
+

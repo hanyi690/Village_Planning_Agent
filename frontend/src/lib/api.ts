@@ -7,7 +7,12 @@
 // Configuration
 // ============================================
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+// Retry configuration
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY = 1000; // ms
+const RETRY_BACKOFF_MULTIPLIER = 2;
 
 // ============================================
 // Types
@@ -40,6 +45,52 @@ export interface LayerContent {
   session?: string;
   timestamp?: string;
   checkpoint_id?: string;
+}
+
+// SSE Event type union for better type safety
+export type PlanningSSEEventType =
+  | 'layer_started'
+  | 'layer_completed'
+  | 'checkpoint_saved'
+  | 'pause'
+  | 'progress'
+  | 'completed'
+  | 'error'
+  | 'resumed'
+  | 'complete'
+  | 'text_chunk'
+  | 'thinking_start'
+  | 'thinking'
+  | 'thinking_end'
+  | 'review_request'
+  | 'content_delta'
+  | 'stream_paused';
+
+interface PlanningSSEDataBase {
+  progress?: number;
+  current_layer?: number;
+  layer_number?: number;
+  message?: string;
+  result?: unknown;
+  error?: string;
+  review_id?: string;
+  title?: string;
+  content?: string;
+  status?: string;
+  chunk?: string;
+  message_id?: string;
+  state?: 'analyzing' | 'generating' | 'reviewing' | 'processing' | 'waiting';
+  delta?: string;
+  accumulated?: string;
+  dimension?: string;
+  timestamp?: number;
+  [key: string]: unknown;
+}
+
+export interface PlanningSSEEvent {
+  type: PlanningSSEEventType;
+  session_id?: string;
+  data: PlanningSSEDataBase;
 }
 
 // ============================================
@@ -80,6 +131,23 @@ export interface SessionStatusResponse {
   checkpoints: Checkpoint[];
   checkpoint_count: number;
   progress?: number;
+
+  // Layer completion states
+  layer_1_completed: boolean;
+  layer_2_completed: boolean;
+  layer_3_completed: boolean;
+
+  // Pause/review states
+  pause_after_step: boolean;
+  waiting_for_review: boolean;
+  last_checkpoint_id: string | null;
+
+  // Error and completion states
+  execution_error: string | null;
+  execution_complete: boolean;
+
+  // Timestamp
+  updated_at?: string;
 }
 
 export interface FileUploadResponse {
@@ -88,41 +156,16 @@ export interface FileUploadResponse {
   size: number;
 }
 
-// SSE Event Types
-export interface PlanningSSEEvent {
-  type: 'layer_started' | 'layer_completed' | 'checkpoint_saved' | 'pause' | 'progress' | 'completed' | 'error' | 'resumed' | 'complete' | 'text_chunk' | 'thinking_start' | 'thinking' | 'thinking_end' | 'review_request' | 'content_delta';
-  session_id?: string;
-  data: {
-    progress?: number;
-    current_layer?: number;
-    layer_number?: number;
-    message?: string;
-    result?: any;
-    error?: string;
-    // review_request 事件额外字段
-    review_id?: string;
-    title?: string;
-    content?: string;
-    status?: string;
-    chunk?: string;
-    message_id?: string;
-    state?: 'analyzing' | 'generating' | 'reviewing' | 'processing' | 'waiting';
-    // content_delta 事件额外字段
-    delta?: string;
-    accumulated?: string;
-    dimension?: string;
-    timestamp?: number;
-    [key: string]: any;
-  };
-}
 
 // ============================================
 // Helper Functions
 // ============================================
 
-/**
- * Make an API request with error handling
- */
+interface ApiError {
+  message?: string;
+  detail?: string;
+}
+
 async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
@@ -133,26 +176,51 @@ async function apiRequest<T>(
     ...options.headers,
   };
 
-  try {
-    const response = await fetch(url, {
-      ...options,
-      headers,
-    });
+  let lastError: Error | null = null;
+  let retryDelay = INITIAL_RETRY_DELAY;
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        message: response.statusText || 'API request failed',
-      }));
-      throw new Error(error.message || error.detail || 'API request failed');
-    }
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, { ...options, headers });
 
-    return response.json();
-  } catch (error) {
-    if (error instanceof Error) {
-      throw error;
+      if (response.ok) {
+        return response.json();
+      }
+
+      // Don't retry client errors (4xx)
+      if (response.status >= 400 && response.status < 500) {
+        const error = await response.json().catch<ApiError>(() => ({
+          message: response.statusText || 'API request failed',
+        }));
+        throw new Error(error.message || error.detail || 'API request failed');
+      }
+
+      // Server error (5xx) - retry
+      lastError = new Error(`HTTP ${response.status}: ${response.statusText}`);
+
+      if (attempt < MAX_RETRIES) {
+        // Add jitter to prevent thundering herd
+        const jitter = Math.random() * 200; // 0-200ms jitter
+        await new Promise(resolve => setTimeout(resolve, retryDelay + jitter));
+        retryDelay *= RETRY_BACKOFF_MULTIPLIER;
+        console.warn(`[API] Retrying ${endpoint} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+      }
+
+    } catch (error) {
+      // Network error - retry
+      if (error instanceof TypeError && attempt < MAX_RETRIES) {
+        lastError = error;
+        const jitter = Math.random() * 200;
+        await new Promise(resolve => setTimeout(resolve, retryDelay + jitter));
+        retryDelay *= RETRY_BACKOFF_MULTIPLIER;
+        console.warn(`[API] Network error, retrying ${endpoint} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+      } else {
+        throw error;
+      }
     }
-    throw new Error('Unknown error occurred');
   }
+
+  throw lastError || new Error('API request failed after retries');
 }
 
 // ============================================
@@ -182,79 +250,82 @@ export const planningApi = {
   ): EventSource {
     const url = `${API_BASE_URL}/api/planning/stream/${sessionId}`;
     const es = new EventSource(url);
+    let connectionState: 'connecting' | 'connected' | 'paused' | 'closing' = 'connecting';
 
     // Helper to parse SSE event
-    const parseEvent = (event: MessageEvent, type: PlanningSSEEvent['type']) => {
+    function parseEvent(event: MessageEvent, type: PlanningSSEEventType): void {
       try {
-        const data = JSON.parse(event.data);
+        const data = JSON.parse(event.data) as PlanningSSEDataBase;
         onEvent({ type, data, session_id: sessionId });
       } catch (error) {
         console.error(`[SSE] Failed to parse ${type}:`, error);
       }
-    };
+    }
 
-    // Layer started
-    es.addEventListener('layer_started', (e) => parseEvent(e, 'layer_started'));
+    // Define event listeners for each event type
+    const eventTypes: PlanningSSEEventType[] = [
+      'layer_started',
+      'layer_completed',
+      'checkpoint_saved',
+      'review_request',
+      'content_delta',
+      'resumed',
+      'progress',
+    ];
 
-    // Layer completed
-    es.addEventListener('layer_completed', (e) => parseEvent(e, 'layer_completed'));
+    for (const eventType of eventTypes) {
+      es.addEventListener(eventType, (e) => parseEvent(e, eventType));
+    }
 
-    // Checkpoint saved
-    es.addEventListener('checkpoint_saved', (e) => parseEvent(e, 'checkpoint_saved'));
-
-    // Pause
+    // Special handling for pause events
     es.addEventListener('pause', (e) => {
+      connectionState = 'paused';
       parseEvent(e, 'pause');
-      // Don't close connection, wait for resume
     });
 
-    // Stream paused - 主动关闭连接
     es.addEventListener('stream_paused', (e) => {
-      console.log('[SSE] Stream paused by backend, closing connection');
-      parseEvent(e, 'pause');  // 兼容：也触发 pause 事件
-      es.close();  // 主动关闭连接
+      connectionState = 'paused';
+      parseEvent(e, 'pause'); // Also trigger pause for compatibility
+      es.close();
     });
 
-    // Review request (新増)
-    es.addEventListener('review_request', (e) => {
-      parseEvent(e, 'review_request');
-      // Don't close connection, wait for review action
-    });
-
-    // Content delta (流式输出)
-    es.addEventListener('content_delta', (e) => parseEvent(e, 'content_delta'));
-
-    // Resumed
-    es.addEventListener('resumed', (e) => parseEvent(e, 'resumed'));
-
-    // Progress
-    es.addEventListener('progress', (e) => parseEvent(e, 'progress'));
-
-    // Completed
+    // Completed event
     es.addEventListener('completed', (e) => {
       parseEvent(e, 'completed');
       es.close();
     });
 
-    // Error
-    es.addEventListener('error', (e: Event) => {
-      console.error('[SSE] SSE error:', e);
-      // 改进：传递更多上下文信息
+    // Error event
+    es.addEventListener('error', () => {
       onEvent({
         type: 'error',
         data: {
           error: 'SSE connection failed',
           details: 'Failed to establish SSE connection',
-          hint: 'Check if backend is running on port 8080'
-        }
+          hint: 'Check if backend is running on port 8000',
+        },
       });
       es.close();
     });
 
-    // Connection error
+    // Connection error handler
     es.onerror = (error) => {
       console.error('[SSE] Connection error:', error);
-      if (onError) onError(new Error('SSE connection error'));
+      console.error('[SSE] connectionState:', connectionState);
+      console.error('[SSE] readyState:', es.readyState);
+
+      // Distinguish between planned pause and actual error
+      if (connectionState === 'paused' || es.readyState === 2) {
+        console.log('[SSE] Connection closed as planned (pause state)');
+        return;
+      }
+
+      console.error('[SSE] Unexpected connection error');
+      onError?.(new Error('SSE connection error'));
+    };
+
+    es.onopen = () => {
+      connectionState = 'connected';
     };
 
     return es;
@@ -330,6 +401,17 @@ export const planningApi = {
     return apiRequest(`/api/planning/sessions/${sessionId}`, {
       method: 'DELETE',
     });
+  },
+
+  /**
+   * Reset rate limit for a project
+   * POST /api/planning/rate-limit/reset/{project_name}
+   */
+  async resetProject(projectName: string): Promise<{ message: string }> {
+    return apiRequest<{ message: string }>(
+      `/api/planning/rate-limit/reset/${encodeURIComponent(projectName)}`,
+      { method: 'POST' }
+    );
   },
 };
 

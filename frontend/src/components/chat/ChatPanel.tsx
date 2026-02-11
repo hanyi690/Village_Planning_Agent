@@ -209,14 +209,26 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     logger.chatPanel.info(`Task paused at Layer ${layer} (detected via REST polling)`, { layer }, taskId);
 
     setMessages((prevMessages) => {
-      // Check if review already exists for this layer
-      const hasExistingReview = prevMessages.some(m =>
-        (m.type === 'review_interaction' && m.layer === layer && (m as ReviewInteractionMessage).reviewState === 'pending')
+      // ✅ 改进：检查是否已存在【同层级】的审查消息（无论状态如何）
+      // 这样可以防止状态抖动（如LLM失败后状态回滚）触发重复弹窗
+      const hasAnyReviewForLayer = prevMessages.some(m =>
+        m.type === 'review_interaction' && m.layer === layer
       );
 
-      if (hasExistingReview) {
-        logger.chatPanel.debug(`Skipping duplicate onPause for Layer ${layer} (review message exists)`);
+      const hasPendingReviewForLayer = prevMessages.some(m =>
+        m.type === 'review_interaction' && m.layer === layer && (m as ReviewInteractionMessage).reviewState === 'pending'
+      );
+
+      if (hasPendingReviewForLayer) {
+        // 已有待处理的审查消息，跳过
+        logger.chatPanel.debug(`[幂等性] 跳过 Layer ${layer} 的重复暂停信号（已存在待处理的审查消息）`);
         return prevMessages;
+      }
+
+      if (hasAnyReviewForLayer) {
+        // 该层级已有过审查消息（但不是pending状态），可能是状态抖动
+        // 仍然创建新的审查消息，但记录警告日志
+        logger.chatPanel.warn(`[状态抖动检测] Layer ${layer} 已有过审查消息，但仍收到暂停信号（可能是LLM失败后状态回滚）`);
       }
 
       // Find the layer_completed message

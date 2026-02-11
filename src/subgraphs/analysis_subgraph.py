@@ -116,9 +116,9 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
     logger.info(f"[子图-分析] 开始执行 {dimension_name} ({dimension_key})")
 
     try:
-        # 【使用新架构】使用 AnalysisPlannerFactory 创建规划器
-        from ..planners.analysis_planners import AnalysisPlannerFactory
-        planner = AnalysisPlannerFactory.create_planner(dimension_key)
+        # 【使用新架构】使用 GenericPlannerFactory 创建规划器
+        from ..planners.generic_planner import GenericPlannerFactory
+        planner = GenericPlannerFactory.create_planner(dimension_key)
 
         # 【使用新架构】调用规划器的 execute 方法
         # 注意：planner.execute 需要完整的状态字典，包含 raw_data
@@ -161,16 +161,25 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        error_msg = f"[分析失败] {str(e)}"
         logger.error(f"[子图-分析] {dimension_name} 执行失败: {str(e)}")
-        # 返回错误信息而非崩溃
+
+        # ✅ 返回明确的错误标记，而非将错误字符串作为内容
+        # 这样调用方可以区分"成功但内容为空"和"失败"
         return {
             "analysis_dimension_reports": {
-                dimension_name: f"[分析失败] {str(e)}"
+                dimension_name: ""  # 空内容而非错误字符串
             },
             "analyses": [{
                 "dimension_key": dimension_key,
                 "dimension_name": dimension_name,
-                "analysis_result": f"[分析失败] {str(e)}"
+                "analysis_result": ""  # 空内容
+            }],
+            # ✅ 新增：标记失败的维度
+            "_failed_dimensions": [{
+                "dimension_key": dimension_key,
+                "dimension_name": dimension_name,
+                "error": error_msg
             }]
         }
 
@@ -361,7 +370,10 @@ def call_analysis_subgraph(
     project_name: str = "村庄",
     _streaming_enabled: bool = False,  # 新增：是否启用流式输出
     _token_callback_factory = None,  # 新增：token 回调工厂
-    rag_enabled: bool = True  # 新增：是否启用RAG
+    rag_enabled: bool = True,  # 新增：是否启用RAG
+    _streaming_queue=None,  # 新增：流式队列管理器
+    _storage_pipeline=None,  # 新增：异步存储管道
+    _dimension_events=None  # 新增：维度事件列表
 ) -> Dict[str, Any]:
     """
     调用现状分析子图的包装函数
@@ -398,30 +410,52 @@ def call_analysis_subgraph(
         "_streaming_enabled": _streaming_enabled,
         "_token_callback_factory": _token_callback_factory,
         # 【RAG集成】传递RAG启用状态
-        "rag_enabled": rag_enabled and RAG_AVAILABLE
+        "rag_enabled": rag_enabled and RAG_AVAILABLE,
     }
 
     try:
         # 调用子图
         result = subgraph.invoke(initial_state)
 
-        logger.info(f"[子图调用] 子图执行成功")
+        logger.info(f"[子图调用] 子图执行完成")
 
         # 【修复】从 analyses 列表中提取维度报告并转换为字典（使用英文键名）
         analyses = result.get("analyses", [])
         dimension_reports = {}
+
+        # ✅ 新增：收集失败的维度
+        failed_dimensions = []
         for analysis in analyses:
             dimension_key = analysis.get("dimension_key")  # 使用英文key
             analysis_result = analysis.get("analysis_result")
             if dimension_key and analysis_result:
                 dimension_reports[dimension_key] = analysis_result
+            elif dimension_key and not analysis_result:
+                # 空内容表示失败
+                failed_dimensions.append(dimension_key)
+
+        # ✅ 新增：从各维度的返回值中收集失败信息
+        # LangGraph 的并行执行会将各节点的返回值合并
+        failed_dims_from_result = result.get("_failed_dimensions", [])
+        if failed_dims_from_result:
+            failed_dimensions.extend([d["dimension_key"] for d in failed_dims_from_result])
+
+        # 去重
+        failed_dimensions = list(set(failed_dimensions))
 
         logger.info(f"[子图调用] 维度报告数量: {len(dimension_reports)}")
+        if failed_dimensions:
+            logger.warning(f"[子图调用] 失败的维度: {failed_dimensions}")
+
+        # ✅ 关键修改：只有当没有失败维度时才返回 success=True
+        all_success = len(failed_dimensions) == 0
 
         # 返回维度报告字典（键名为英文）
         return {
             "analysis_dimension_reports": dimension_reports,
-            "success": True
+            "success": all_success,
+            "failed_dimensions": failed_dimensions,
+            "error": None if all_success else f"{len(failed_dimensions)} 个维度分析失败"
         }
 
     except Exception as e:
@@ -429,6 +463,7 @@ def call_analysis_subgraph(
         return {
             "analysis_dimension_reports": {},
             "success": False,
+            "failed_dimensions": [],
             "error": str(e)
         }
 

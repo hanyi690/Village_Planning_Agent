@@ -63,6 +63,9 @@ export function useTaskController(
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const triggeredEventsRef = useRef<Set<string>>(new Set());
 
+  // ✅ 新增：记录已触发暂停的最高层级，用于检测状态抖动
+  const lastTriggeredPauseLayerRef = useRef<number>(0);
+
   // Update callbacks ref when callbacks change
   useEffect(() => {
     callbacksRef.current = callbacks;
@@ -72,6 +75,9 @@ export function useTaskController(
   useEffect(() => {
     triggeredEventsRef.current.clear();
     prevStateRef.current = state;
+    // ✅ 新增：重置已触发的最高暂停层级
+    lastTriggeredPauseLayerRef.current = 0;
+    console.log(`[TaskController] TaskId changed, reset state tracking`);
   }, [taskId]);
 
   // Poll status endpoint every 2 seconds
@@ -151,12 +157,22 @@ export function useTaskController(
             const currentLayer = newState.currentLayer ?? 1;
             const pauseKey = `pause_${taskId}_layer_${currentLayer}`;
 
-            if (!triggeredEventsRef.current.has(pauseKey)) {
+            // ✅ 新增：状态抖动检测
+            // 如果当前层级 <= 已触发暂停的最高层级，说明是状态回滚（如LLM失败导致的回退）
+            // 这种情况下不应该再次触发 onPause 回调
+            if (currentLayer <= lastTriggeredPauseLayerRef.current) {
+              console.log(`[TaskController] 检测到状态抖动：Layer ${currentLayer} <= 已触发的最高层级 ${lastTriggeredPauseLayerRef.current}，跳过 onPause`);
+              console.log(`[TaskController] 这可能是由于 LLM 调用失败导致的状态回滚`);
+            } else if (!triggeredEventsRef.current.has(pauseKey)) {
               eventsToTrigger.push(() => {
                 console.log(`[TaskController] Pause detected at Layer ${currentLayer}`);
                 callbacksRef.current.onPause?.(currentLayer);
               });
               triggeredEventsRef.current.add(pauseKey);
+
+              // ✅ 新增：更新已触发的最高层级
+              lastTriggeredPauseLayerRef.current = Math.max(lastTriggeredPauseLayerRef.current, currentLayer);
+              console.log(`[TaskController] 更新已触发的最高暂停层级: ${lastTriggeredPauseLayerRef.current}`);
 
               // Auto-cleanup after 5 minutes to prevent memory leaks
               setTimeout(() => {
@@ -188,6 +204,12 @@ export function useTaskController(
               });
               triggeredEventsRef.current.add(errorKey);
             }
+          }
+
+          // ✅ 新增：致命错误检测 - 当状态为 failed 时停止轮询
+          if (newState.status === 'failed' && newState.executionError) {
+            console.log(`[TaskController] 致命错误检测：状态为 failed，错误信息: ${newState.executionError}`);
+            // 注意：不在这里停止轮询，让组件决定是否停止
           }
 
           // Defer all callback execution until after render to avoid "Cannot update during rendering" error

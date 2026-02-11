@@ -107,9 +107,9 @@ def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
     logger.info(f"[子图-规划] 开始执行 {dimension_name} ({dimension_key})")
 
     try:
-        # 【使用新架构】使用 ConceptPlannerFactory 创建规划器
-        from ..planners.concept_planners import ConceptPlannerFactory
-        planner = ConceptPlannerFactory.create_planner(dimension_key)
+        # 【使用新架构】使用 GenericPlannerFactory 创建规划器
+        from ..planners.generic_planner import GenericPlannerFactory
+        planner = GenericPlannerFactory.create_planner(dimension_key)
 
         # 【使用新架构】调用规划器的 execute 方法
         # 注意：planner.execute 需要完整的状态字典，包含 analysis_report, task_description, constraints
@@ -322,7 +322,10 @@ def call_concept_subgraph(
     analysis_report: str,
     dimension_reports: Dict[str, str] = None,  # 新增：维度报告字典
     task_description: str = "制定村庄总体规划思路",
-    constraints: str = "无特殊约束"
+    constraints: str = "无特殊约束",
+    _streaming_queue=None,  # 新增：流式队列管理器
+    _storage_pipeline=None,  # 新增：异步存储管道
+    _dimension_events=None  # 新增：维度事件列表
 ) -> Dict[str, Any]:
     """
     调用规划思路子图的包装函数
@@ -354,7 +357,7 @@ def call_concept_subgraph(
         "dimensions": [],
         "concept_analyses": [],
         "concept_dimension_reports": {},
-        "messages": []
+        "messages": [],
     }
 
     try:

@@ -380,7 +380,7 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     """
     生成单个维度的详细规划 - 增强版：支持适配器
 
-    使用新的 DimensionPlanner 架构，充分利用现有的基础设施。
+    使用新的 GenericPlanner 架构，充分利用现有的基础设施。
     支持使用completed_plans（project_bank需要）。
     新增：支持适配器调用以获取专业分析数据。
     """
@@ -388,12 +388,20 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     dimension_name = state["dimension_name"]
     project_name = state["project_name"]
 
-    logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key})")
+    # 键名映射：将原始键名映射到 YAML 配置中的键名
+    # Layer 3 的 traffic 和 infrastructure 需要映射到 traffic_planning 和 infrastructure_planning
+    KEY_MAPPING = {
+        "traffic": "traffic_planning",
+        "infrastructure": "infrastructure_planning"
+    }
+    mapped_dimension_key = KEY_MAPPING.get(dimension_key, dimension_key)
+
+    logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key} -> {mapped_dimension_key})")
 
     try:
-        # 【使用新架构】使用 DetailedPlannerFactory 创建规划器
-        from ..planners.detailed_planners import DetailedPlannerFactory
-        planner = DetailedPlannerFactory.create_planner(dimension_key)
+        # 【使用新架构】使用 GenericPlannerFactory 创建规划器
+        from ..planners.generic_planner import GenericPlannerFactory
+        planner = GenericPlannerFactory.create_planner(mapped_dimension_key)
 
         # 【使用新架构】调用规划器的 execute 方法
         # 注意：planner.execute 需要完整的状态字典
@@ -708,7 +716,11 @@ def call_detailed_plan_subgraph(
     # 新增：适配器配置参数
     enable_adapters: bool = False,
     adapter_config: Dict[str, List[str]] = None,
-    village_data: str = ""
+    village_data: str = "",
+    # 新增：运行时对象参数
+    _streaming_queue=None,
+    _storage_pipeline=None,
+    _dimension_events=None
 ) -> Dict[str, Any]:
     """
     调用详细规划子图的包装函数
@@ -781,7 +793,7 @@ def call_detailed_plan_subgraph(
         "revision_count": {},
         "dimension_plans": [],
         "detailed_dimension_reports": {},
-        "messages": []
+        "messages": [],
     }
 
     try:

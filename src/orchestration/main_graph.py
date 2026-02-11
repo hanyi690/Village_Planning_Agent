@@ -65,6 +65,7 @@ class VillagePlanningState(TypedDict):
 
     # 流程控制
     current_layer: int             # 当前执行层级 (1/2/3)
+    previous_layer: int            # 上一层执行的编号 (用于判断刚完成哪一层)
     layer_1_completed: bool        # 现状分析完成
     layer_2_completed: bool        # 规划思路完成
     layer_3_completed: bool        # 详细规划完成
@@ -99,6 +100,10 @@ class VillagePlanningState(TypedDict):
     quit_requested: bool           # 用户请求退出
     trigger_rollback: bool         # 触发回退
     rollback_target: str           # 回退目标checkpoint ID
+
+    # 错误处理
+    execution_error: str           # 执行错误信息（用于前端显示）
+    layer_1_failed_dimensions: List[str]  # Layer 1 失败的维度列表
 
     # 消息历史
     messages: Annotated[List[BaseMessage], add_messages]
@@ -193,6 +198,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
 
     调用现状分析子图进行12个维度的并行分析。
     【重构】只保存维度报告，不生成综合报告
+    【修复】检查失败维度，检测致命错误，防止不断弹窗
     """
     logger.info(f"[主图-Layer1] 开始现状分析，项目: {state['project_name']}")
 
@@ -203,7 +209,41 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
             project_name=state["project_name"]
         )
 
-        if result["success"]:
+        # ✅ 新增：检测致命错误（连接失败等）
+        error_msg = result.get("error", "")
+        if error_msg and ("Connection error" in error_msg or "连接" in error_msg or "connection" in error_msg.lower()):
+            logger.error(f"[主图-Layer1] 致命错误：LLM连接失败，终止执行")
+            return {
+                **state,
+                "analysis_report": f"现状分析失败: {error_msg}",
+                "analysis_dimension_reports": {},
+                "layer_1_completed": False,
+                "execution_error": "LLM服务连接失败，请检查网络或API配置",
+                "quit_requested": True,  # 终止整个流程
+                "messages": [AIMessage(content="LLM服务连接失败，请检查网络或API配置后重试。")]
+            }
+
+        # ✅ 新增：检查失败维度数量
+        failed_dims = result.get("failed_dimensions", [])
+        total_dims = 12  # 12个维度
+
+        if failed_dims:
+            logger.warning(f"[主图-Layer1] 有 {len(failed_dims)} 个维度分析失败: {failed_dims}")
+
+            # 如果超过一半失败，视为致命错误
+            if len(failed_dims) > total_dims // 2:
+                logger.error(f"[主图-Layer1] 过多维度失败({len(failed_dims)}/{total_dims})，终止执行")
+                return {
+                    **state,
+                    "analysis_report": f"现状分析失败: {len(failed_dims)}个维度无法完成",
+                    "analysis_dimension_reports": {},
+                    "layer_1_completed": False,
+                    "execution_error": f"分析失败：{len(failed_dims)}个维度无法完成，请检查LLM配置或网络连接",
+                    "quit_requested": True,  # 终止整个流程
+                    "messages": [AIMessage(content=f"现状分析失败，{len(failed_dims)}个维度无法完成，请检查配置后重试。")]
+                }
+
+        if result["success"] or (len(failed_dims) <= total_dims // 2 and result.get("analysis_dimension_reports")):
             analysis_dimension_reports = result.get("analysis_dimension_reports", {})
             logger.info(f"[主图-Layer1] 现状分析完成，维度报告数量: {len(analysis_dimension_reports)}")
 
@@ -214,6 +254,10 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
                 "现状分析",
                 layer_number=1
             )
+
+            # 如果有部分失败，在报告中标注
+            if failed_dims:
+                combined_report += f"\n\n---\n**注意**: {len(failed_dims)} 个维度分析失败: {', '.join(failed_dims)}"
 
             # 保存 Layer 1 结果（使用 OutputManager）
             from ..utils.output_manager_registry import get_output_manager_registry
@@ -242,7 +286,8 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
                             "analysis_report": combined_report,
                             "analysis_dimension_reports": analysis_dimension_reports,
                             "layer_1_completed": True,
-                            "current_layer": 2
+                            "current_layer": 2,
+                            "layer_1_failed_dimensions": failed_dims
                         }},
                         layer=1,
                         description="Layer 1 现状分析完成"
@@ -253,6 +298,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
                 "analysis_report": combined_report,
                 "analysis_dimension_reports": analysis_dimension_reports,
                 "layer_1_completed": True,
+                "layer_1_failed_dimensions": failed_dims,
                 "current_layer": 2,
                 "last_checkpoint_id": checkpoint_id,
                 "messages": [AIMessage(content=f"现状分析完成，生成了 {len(analysis_dimension_reports)} 个维度的分析报告。")]
@@ -683,24 +729,22 @@ def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
 
 def pause_manager_node(state: VillagePlanningState) -> Dict[str, Any]:
     """
-    暂停管理节点：统一管理各种暂停场景
+    暂停管理节点：只在层级完成后设置暂停
 
-    支持的暂停场景：
-    - step_mode: 逐步执行模式
-    - 人工审核: need_human_review (未来扩展)
-    - 其他暂停场景: 易于扩展
-
-    在step模式下，为下一层执行准备暂停状态，确保每一层完成后都能正确暂停。
+    暂停条件（满足任一即可）：
+    1. step_mode=True 且 有任意层级完成（layer_1/2/3_completed=True）
+    2. need_human_review=True（未来扩展）
     """
-    # Step模式：设置暂停
-    if state.get("step_mode", False):
-        logger.info("[暂停管理] Step模式已启用，设置pause_after_step=True")
-        return {"pause_after_step": True}
+    # 检查是否有层级完成
+    layer_1_completed = state.get("layer_1_completed", False)
+    layer_2_completed = state.get("layer_2_completed", False)
+    layer_3_completed = state.get("layer_3_completed", False)
+    any_layer_completed = layer_1_completed or layer_2_completed or layer_3_completed
 
-    # 未来扩展：其他暂停场景
-    # if state.get("need_human_review", False):
-    #     logger.info("[暂停管理] 人工审核模式，设置pause_after_step=True")
-    #     return {"pause_after_step": True}
+    # 步进模式：只在层级完成后暂停
+    if state.get("step_mode", False) and any_layer_completed:
+        logger.info("[暂停管理] 步进模式：检测到层级完成，设置pause_after_step=True")
+        return {"pause_after_step": True}
 
     return {}
 
@@ -709,13 +753,28 @@ def pause_manager_node(state: VillagePlanningState) -> Dict[str, Any]:
 # 路由决策
 # ==========================================
 
-def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis", "layer2_concept", "layer3_detail"]:
+def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis", "layer2_concept", "layer3_detail", "end"]:
     """
     pause节点后的路由：根据current_layer决定执行哪个layer
 
     这个路由函数确保pause节点能够正确地将流程引导到当前应该执行的layer。
+
+    ✅ 修复：在步进模式下，如果检测到层级完成，直接返回END终止执行，
+    以便前端能够检测到暂停状态并触发审查流程。
     """
     current_layer = state.get("current_layer", 1)
+
+    # ✅ 检查是否需要暂停（步进模式 + 有层级完成）
+    step_mode = state.get("step_mode", False)
+    layer_1_completed = state.get("layer_1_completed", False)
+    layer_2_completed = state.get("layer_2_completed", False)
+    layer_3_completed = state.get("layer_3_completed", False)
+    any_layer_completed = layer_1_completed or layer_2_completed or layer_3_completed
+
+    if step_mode and any_layer_completed:
+        logger.info(f"[主图-路由] 步进模式：检测到层级完成，终止执行以便前端触发审查 (current_layer={current_layer}, layer_1={layer_1_completed}, layer_2={layer_2_completed}, layer_3={layer_3_completed})")
+        return "end"  # 终止执行，等待前端批准后恢复
+
     logger.info(f"[主图-路由] 从pause节点路由到Layer {current_layer}")
 
     if current_layer == 1:
@@ -736,15 +795,16 @@ def route_after_layer1(state: VillagePlanningState) -> Literal["tool_bridge", "l
         logger.warning("[主图-路由] 现状分析失败，流程终止")
         return "end"
 
-    # 检查是否需要暂停或人工审核
-    if state.get("step_mode", False) and state.get("pause_after_step", False):
-        logger.info("[主图-路由] 进入工具桥接（暂停）")
+    # 步进模式：进入tool_bridge准备暂停
+    if state.get("step_mode", False):
+        logger.info("[主图-路由] 步进模式：Layer 1完成，进入tool_bridge")
         return "tool_bridge"
 
     if state.get("need_human_review", False):
         logger.info("[主图-路由] 进入工具桥接（人工审核）")
         return "tool_bridge"
 
+    # 非步进模式：直接进入下一层
     logger.info("[主图-路由] 直接进入规划思路阶段")
     return "layer2"
 
@@ -755,15 +815,16 @@ def route_after_layer2(state: VillagePlanningState) -> Literal["tool_bridge", "l
         logger.warning("[主图-路由] 规划思路生成失败，流程终止")
         return "end"
 
-    # 检查是否需要暂停或人工审核
-    if state.get("step_mode", False) and state.get("pause_after_step", False):
-        logger.info("[主图-路由] 进入工具桥接（暂停）")
+    # 步进模式：进入tool_bridge准备暂停
+    if state.get("step_mode", False):
+        logger.info("[主图-路由] 步进模式：Layer 2完成，进入tool_bridge")
         return "tool_bridge"
 
     if state.get("need_human_review", False):
         logger.info("[主图-路由] 进入工具桥接（人工审核）")
         return "tool_bridge"
 
+    # 非步进模式：直接进入下一层
     logger.info("[主图-路由] 进入详细规划阶段")
     return "layer3"
 
@@ -783,21 +844,45 @@ def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "la
     工具桥接后的路由决策
 
     决定从tool_bridge出来后：
-    - 如果waiting_for_review或__interrupt__：中断图执行（路由到END）
-    - 如果step_mode开启：路由到pause节点（设置暂停状态）
+    - 如果waiting_for_review或__interrupt__：中断图执行
+    - 如果step_mode开启且层级已完成：路由到pause节点（设置暂停）
     - 否则：直接路由到对应的layer执行节点
-    """
-    # Check for interruption signal first (highest priority)
-    if state.get("__interrupt__", False) or state.get("waiting_for_review", False):
-        logger.info("[主图-路由] Human review requested, interrupting graph execution")
-        return "__interrupt__"  # Special route to END
 
-    # Check for step mode pause (next priority)
-    if state.get("step_mode", False) and state.get("pause_after_step", False):
-        logger.info("[主图-路由] Step mode pause, interrupting graph execution")
+    ✅ 修复：使用 previous_layer 判断刚完成哪一层（而不是 current_layer）
+    """
+    # 检查中断信号（最高优先级）
+    if state.get("__interrupt__", False) or state.get("waiting_for_review", False):
+        logger.info("[主图-路由] 检测到中断信号，终止图执行")
         return "__interrupt__"
 
-    current_layer = state.get("current_layer", 1)
+    # ✅ 修改：使用 previous_layer 判断刚完成哪一层
+    previous_layer = state.get("previous_layer", 1)
+    step_mode = state.get("step_mode", False)
+
+    # Layer 1完成，步进模式：暂停
+    if previous_layer == 1 and state.get("layer_1_completed", False) and step_mode:
+        logger.info("[主图-路由] 步进模式：Layer 1完成，进入pause节点")
+        return "pause"
+
+    # Layer 1完成，非步进模式：进入Layer 2
+    if previous_layer == 1 and state.get("layer_1_completed", False):
+        logger.info("[主图-路由] 直接进入Layer 2")
+        return "layer2_concept"
+
+    # Layer 2完成，步进模式：暂停
+    if previous_layer == 2 and state.get("layer_2_completed", False) and step_mode:
+        logger.info("[主图-路由] 步进模式：Layer 2完成，进入pause节点")
+        return "pause"
+
+    # Layer 2完成，非步进模式：进入Layer 3
+    if previous_layer == 2 and state.get("layer_2_completed", False):
+        logger.info("[主图-路由] 直接进入Layer 3")
+        return "layer3_detail"
+
+    # Layer 3完成，生成最终成果
+    if previous_layer == 3 and state.get("layer_3_completed", False):
+        logger.info("[主图-路由] Layer 3完成，生成最终成果")
+        return "end"
 
     # 检查退出标志
     if state.get("quit_requested", False):
@@ -809,46 +894,12 @@ def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "la
         logger.info("[主图-路由] 触发回退，流程结束（由checkpoint_tool处理）")
         return "end"
 
-    # 检查修复标志
-    if state.get("need_revision", False):
-        # 修复后继续
-        if current_layer == 1:
-            if state.get("step_mode", False):
-                logger.info("[主图-路由] Step模式：tool_bridge → pause → layer2")
-                return "pause"
-            return "layer2_concept"
-        elif current_layer == 2:
-            if state.get("step_mode", False):
-                logger.info("[主图-路由] Step模式：tool_bridge → pause → layer3")
-                return "pause"
-            return "layer3_detail"
-        else:
-            return "end"
-
-    # 根据current_layer和step_mode决定下一步
-    if current_layer == 1:
-        # Layer 1: 从tool_bridge回到layer 1（通常是回退后）或进入layer 2
-        if state.get("step_mode", False):
-            logger.info("[主图-路由] Step模式：tool_bridge → pause → layer2")
-            return "pause"
-        logger.info("[主图-路由] 直接进入Layer 2")
+    # 其他情况：根据previous_layer决定
+    if previous_layer == 1:
         return "layer2_concept"
-    elif current_layer == 2:
-        # Layer 2: 从tool_bridge继续到layer 2
-        if state.get("step_mode", False):
-            logger.info("[主图-路由] Step模式：tool_bridge → pause → layer2")
-            return "pause"
-        logger.info("[主图-路由] 直接进入Layer 2")
-        return "layer2_concept"
-    elif current_layer == 3:
-        # Layer 3: 从tool_bridge继续到layer 3
-        if state.get("step_mode", False):
-            logger.info("[主图-路由] Step模式：tool_bridge → pause → layer3")
-            return "pause"
-        logger.info("[主图-路由] 直接进入Layer 3")
+    elif previous_layer == 2:
         return "layer3_detail"
     else:
-        logger.info("[主图-路由] 流程结束")
         return "end"
 
 
@@ -898,7 +949,8 @@ def create_village_planning_graph(checkpointer: Optional[Any] = None) -> StateGr
         {
             "layer1_analysis": "layer1_analysis",
             "layer2_concept": "layer2_concept",
-            "layer3_detail": "layer3_detail"
+            "layer3_detail": "layer3_detail",
+            "end": END  # ✅ 添加：支持步进模式暂停时终止执行
         }
     )
 
@@ -1090,6 +1142,7 @@ def run_village_planning(
         "constraints": constraints,
         "session_id": session_id,
         "current_layer": 1,
+        "previous_layer": 1,  # ✅ 新增：初始化为1
         "layer_1_completed": False,
         "layer_2_completed": False,
         "layer_3_completed": False,
@@ -1111,6 +1164,8 @@ def run_village_planning(
         "quit_requested": False,
         "trigger_rollback": False,
         "rollback_target": "",
+        "execution_error": "",  # 新增：执行错误信息
+        "layer_1_failed_dimensions": [],  # 新增：Layer 1 失败的维度
         "messages": [],
         # 新增：黑板管理器
         "blackboard": get_blackboard(),

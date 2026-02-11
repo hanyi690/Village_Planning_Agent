@@ -28,13 +28,6 @@ from .checkpoint_tool import (
     list_checkpoints
 )
 
-# 交互式工具（新增）
-from .interactive_tool import (
-    InteractiveTool,
-    review_report,
-    show_progress_and_wait
-)
-
 # 修复工具（新增）
 from .revision_tool import (
     RevisionTool,
@@ -63,11 +56,6 @@ __all__ = [
     "save_checkpoint",
     "load_checkpoint",
     "list_checkpoints",
-
-    # 交互式
-    "InteractiveTool",
-    "review_report",
-    "show_progress_and_wait",
 
     # 修复
     "RevisionTool",

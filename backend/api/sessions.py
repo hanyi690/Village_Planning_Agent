@@ -8,12 +8,14 @@ It does NOT create planning sessions - use /api/planning/start for that.
 不创建规划会话 - 请使用 /api/planning/start 创建规划会话。
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime
-from pathlib import Path
-from typing import Dict, Literal, Optional
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -21,8 +23,19 @@ from pydantic import BaseModel, Field
 
 from backend.schemas import ConversationMessage, ConversationState
 from backend.utils.error_handler import handle_api_error
+from backend.database import (
+    create_ui_session,
+    get_ui_session,
+    update_ui_session,
+    delete_ui_session,
+    list_ui_sessions,
+    create_ui_message,
+    get_ui_messages,
+    delete_ui_messages,
+)
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Constants
 WELCOME_MESSAGE = """👋 欢迎使用村庄规划智能体！
@@ -35,8 +48,9 @@ WELCOME_MESSAGE = """👋 欢迎使用村庄规划智能体！
 
 请上传村庄现状数据文件，或直接告诉我村庄名称和信息。"""
 
-# Global UI session storage
-sessions: Dict[str, ConversationState] = {}
+# Global UI session storage (for backward compatibility, backed by database)
+sessions: dict[str, ConversationState] = {}
+USE_DATABASE_PERSISTENCE = True
 
 
 # ============================================
@@ -45,8 +59,10 @@ sessions: Dict[str, ConversationState] = {}
 
 class CreateSessionRequest(BaseModel):
     """Session creation request"""
-    session_type: Literal["conversation", "form", "cli", "api"] = Field(
-        default="conversation", description="会话类型"
+    session_type: str = Field(
+        default="conversation",
+        description="会话类型",
+        pattern="^(conversation|form|cli|api)$"
     )
 
 
@@ -57,12 +73,14 @@ class LinkTaskRequest(BaseModel):
 
 class AddMessageRequest(BaseModel):
     """Add message request"""
-    role: Literal["user", "assistant", "system"] = Field(..., description="消息角色")
+    role: str = Field(..., description="消息角色", pattern="^(user|assistant|system)$")
     content: str = Field(..., description="消息内容")
-    message_type: Literal["text", "file", "progress", "action", "result", "error", "system"] = Field(
-        default="text", description="消息类型"
+    message_type: str = Field(
+        default="text",
+        description="消息类型",
+        pattern="^(text|file|progress|action|result|error|system)$"
     )
-    metadata: Optional[Dict] = Field(None, description="额外元数据")
+    metadata: dict[str, Any] | None = Field(None, description="额外元数据")
 
 
 class SessionResponse(BaseModel):
@@ -70,14 +88,14 @@ class SessionResponse(BaseModel):
     session_id: str
     session_type: str
     status: str
-    message: Optional[str] = None
+    message: str | None = None
 
 
 # ============================================
 # Helper Functions
 # ============================================
 
-def get_session(session_id: str) -> Optional[ConversationState]:
+def get_session(session_id: str) -> ConversationState | None:
     """Get session by ID"""
     return sessions.get(session_id)
 
@@ -86,10 +104,22 @@ def create_session(session_id: str, session_type: str) -> ConversationState:
     """Create a new session"""
     conv = ConversationState(conversation_id=session_id, status="idle")
     sessions[session_id] = conv
+
+    if USE_DATABASE_PERSISTENCE:
+        try:
+            create_ui_session(session_id, session_type)
+        except Exception as e:
+            logger.error(f"Failed to create UI session in database: {e}")
+
     return conv
 
 
-def create_message(role: str, content: str, message_type: str = "text", **kwargs) -> ConversationMessage:
+def create_message(
+    role: str,
+    content: str,
+    message_type: str = "text",
+    **kwargs
+) -> ConversationMessage:
     """Create a conversation message with common fields"""
     return ConversationMessage(
         role=role,
@@ -152,6 +182,14 @@ async def delete_session(session_id: str):
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
 
     del sessions[session_id]
+
+    if USE_DATABASE_PERSISTENCE:
+        try:
+            delete_ui_messages(session_id)
+            delete_ui_session(session_id)
+        except Exception as e:
+            logger.error(f"Failed to delete UI session from database: {e}")
+
     return {"message": f"会话已删除: {session_id}"}
 
 
@@ -161,20 +199,22 @@ async def list_sessions():
     List all sessions
     列出所有会话
     """
+    session_list = [
+        {
+            "session_id": session_id,
+            "status": session.status,
+            "project_name": session.project_name,
+            "task_id": session.task_id,
+            "message_count": len(session.messages),
+            "created_at": session.created_at.isoformat(),
+            "updated_at": session.updated_at.isoformat(),
+        }
+        for session_id, session in sessions.items()
+    ]
+
     return {
-        "total": len(sessions),
-        "sessions": [
-            {
-                "session_id": session_id,
-                "status": session.status,
-                "project_name": session.project_name,
-                "task_id": session.task_id,
-                "message_count": len(session.messages),
-                "created_at": session.created_at.isoformat(),
-                "updated_at": session.updated_at.isoformat(),
-            }
-            for session_id, session in sessions.items()
-        ],
+        "total": len(session_list),
+        "sessions": session_list,
     }
 
 
@@ -197,6 +237,18 @@ async def add_message(session_id: str, request: AddMessageRequest):
         )
         session.messages.append(user_message)
         session.updated_at = datetime.now()
+
+        if USE_DATABASE_PERSISTENCE:
+            try:
+                create_ui_message(
+                    session_id=session_id,
+                    role=request.role,
+                    content=request.content,
+                    message_type=request.message_type,
+                    metadata=request.metadata
+                )
+            except Exception as e:
+                logger.error(f"Failed to save message to database: {e}")
 
         return {
             "success": True,

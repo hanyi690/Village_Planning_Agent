@@ -1,0 +1,366 @@
+# 维度配置 - 定义所有 28 个规划维度的元数据
+# 此配置文件驱动 GenericPlanner，实现配置即代码
+
+dimensions:
+  # ========== Layer 1: 现状分析 (12个) ==========
+  location:
+    key: "location"
+    name: "区位与对外交通分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "location_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  socio_economic:
+    key: "socio_economic"
+    name: "社会经济分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "socio_economic_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  villager_wishes:
+    key: "villager_wishes"
+    name: "村民意愿与诉求分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "villager_wishes_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  superior_planning:
+    key: "superior_planning"
+    name: "上位规划与政策导向分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "superior_planning_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  natural_environment:
+    key: "natural_environment"
+    name: "自然环境分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "natural_environment_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  land_use:
+    key: "land_use"
+    name: "土地利用分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "land_use_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  traffic:
+    key: "traffic"
+    name: "道路交通分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "traffic_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  public_services:
+    key: "public_services"
+    name: "公共服务设施分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "public_services_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  infrastructure:
+    key: "infrastructure"
+    name: "基础设施分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "infrastructure_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  ecological_green:
+    key: "ecological_green"
+    name: "生态绿地分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "ecological_green_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  architecture:
+    key: "architecture"
+    name: "建筑分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "architecture_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  historical_culture:
+    key: "historical_culture"
+    name: "历史文化与乡愁保护分析"
+    layer: 1
+    dependencies: []
+    state_filter: null
+    prompt_key: "historical_culture_analysis"
+    result_key: "analysis_result"
+    rag_enabled: true
+    tool: null
+
+  # ========== Layer 2: 规划思路 (4个) ==========
+  resource_endowment:
+    key: "resource_endowment"
+    name: "资源禀赋分析"
+    layer: 2
+    dependencies:
+      layer1_analyses: ["natural_environment", "land_use", "ecological_green", "socio_economic"]
+    state_filter: "filter_analysis_report_for_concept"
+    prompt_key: "resource_endowment_concept"
+    result_key: "concept_result"
+    rag_enabled: true
+    tool: null
+
+  planning_positioning:
+    key: "planning_positioning"
+    name: "规划定位分析"
+    layer: 2
+    dependencies:
+      layer1_analyses: ["location", "socio_economic", "historical_culture", "traffic"]
+    state_filter: "filter_analysis_report_for_concept"
+    prompt_key: "planning_positioning_concept"
+    result_key: "concept_result"
+    rag_enabled: true
+    tool: null
+
+  development_goals:
+    key: "development_goals"
+    name: "发展目标分析"
+    layer: 2
+    dependencies:
+      layer1_analyses: ["socio_economic", "public_services", "infrastructure", "traffic"]
+    state_filter: "filter_analysis_report_for_concept"
+    prompt_key: "development_goals_concept"
+    result_key: "concept_result"
+    rag_enabled: true
+    tool: null
+
+  planning_strategies:
+    key: "planning_strategies"
+    name: "规划策略分析"
+    layer: 2
+    dependencies:
+      layer1_analyses: ["ALL"]
+    state_filter: "filter_analysis_report_for_concept"
+    prompt_key: "planning_strategies_concept"
+    result_key: "concept_result"
+    rag_enabled: true
+    tool: null
+
+  # ========== Layer 3: 详细规划 (12个) ==========
+  industry:
+    key: "industry"
+    name: "产业规划"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["socio_economic", "land_use"]
+      layer2_concepts: ["resource_endowment", "development_goals"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "industry_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  spatial_structure:
+    key: "spatial_structure"
+    name: "空间结构规划"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["land_use", "superior_planning", "socio_economic", "natural_environment"]
+      layer2_concepts: ["planning_positioning", "planning_strategies"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "spatial_structure_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  land_use_planning:
+    key: "land_use_planning"
+    name: "土地利用规划"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["land_use", "superior_planning", "natural_environment"]
+      layer2_concepts: ["planning_positioning", "planning_strategies"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "land_use_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  settlement_planning:
+    key: "settlement_planning"
+    name: "居民点规划"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["land_use", "architecture", "socio_economic", "villager_wishes"]
+      layer2_concepts: ["planning_positioning", "development_goals"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "settlement_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  traffic_planning:
+    key: "traffic_planning"
+    name: "道路交通规划"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["location", "traffic", "villager_wishes", "superior_planning"]
+      layer2_concepts: ["planning_strategies"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "traffic_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  public_service:
+    key: "public_service"
+    name: "公服设施规划"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["public_services", "socio_economic", "villager_wishes"]
+      layer2_concepts: ["development_goals"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "public_service_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  infrastructure_planning:
+    key: "infrastructure_planning"
+    name: "基础设施规划"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["infrastructure", "land_use", "villager_wishes"]
+      layer2_concepts: ["development_goals"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "infrastructure_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  ecological:
+    key: "ecological"
+    name: "生态绿地规划"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["natural_environment", "ecological_green"]
+      layer2_concepts: ["resource_endowment", "planning_strategies"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "ecological_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  disaster_prevention:
+    key: "disaster_prevention"
+    name: "防震减灾规划"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["infrastructure", "natural_environment"]
+      layer2_concepts: ["planning_strategies"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "disaster_prevention_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  heritage:
+    key: "heritage"
+    name: "历史文保规划"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["historical_culture"]
+      layer2_concepts: ["planning_positioning"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "heritage_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  landscape:
+    key: "landscape"
+    name: "村庄风貌指引"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["architecture"]
+      layer2_concepts: ["planning_positioning", "resource_endowment"]
+      wave: 1
+      depends_on_detailed: []
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "landscape_planning"
+    result_key: "dimension_result"
+    rag_enabled: true
+    tool: null
+
+  project_bank:
+    key: "project_bank"
+    name: "建设项目库"
+    layer: 3
+    dependencies:
+      layer1_analyses: ["land_use", "socio_economic", "location", "villager_wishes", "superior_planning"]
+      layer2_concepts: ["ALL"]
+      wave: 2
+      depends_on_detailed: ["industry", "spatial_structure", "land_use_planning", "settlement_planning", "traffic_planning", "public_service", "infrastructure_planning", "ecological", "disaster_prevention", "heritage", "landscape"]
+    state_filter: "filter_state_for_detailed_dimension_v2"
+    prompt_key: "project_bank_planning"
+    result_key: "dimension_result"
+    rag_enabled: false
+    tool: null
