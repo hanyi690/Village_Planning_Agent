@@ -17,9 +17,12 @@ import json
 import logging
 import sys
 import time
+from collections import deque
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from threading import Lock
+from typing import Any, Dict, Generator, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
@@ -39,6 +42,10 @@ from src.utils.paths import get_results_dir
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Configuration constants
+MAX_SESSION_EVENTS = 1000  # Maximum events to keep per session (约 30 分钟流式事件)
+EVENT_CLEANUP_INTERVAL_SECONDS = 300  # Cleanup interval: 5 minutes (instead of 1 hour)
+
 # In-memory session storage (for production: use Redis)
 _sessions: Dict[str, Dict[str, Any]] = {}
 # Track active executions to prevent duplicate runs
@@ -47,6 +54,11 @@ _active_executions: Dict[str, bool] = {}
 _session_checkpointer: Dict[str, Any] = {}
 # Track stream states to prevent infinite reconnection
 _stream_states: Dict[str, str] = {}  # session_id -> "active" | "paused" | "completed"
+
+# Thread safety locks
+_sessions_lock = Lock()
+_active_executions_lock = Lock()
+_stream_states_lock = Lock()
 
 
 # ============================================
@@ -92,6 +104,125 @@ class SessionStatusResponse(BaseModel):
 # ============================================
 # Helper Functions
 # ============================================
+
+# Thread-safe session access helpers
+def _get_session_value(session_id: str, key: str, default=None) -> Any:
+    """
+    Thread-safe get session value
+
+    Args:
+        session_id: Session identifier
+        key: Session key to retrieve
+        default: Default value if key not found
+
+    Returns:
+        Session value or default
+    """
+    with _sessions_lock:
+        if session_id not in _sessions:
+            return default
+        return _sessions[session_id].get(key, default)
+
+
+def _set_session_value(session_id: str, key: str, value: Any) -> bool:
+    """
+    Thread-safe set session value
+
+    Args:
+        session_id: Session identifier
+        key: Session key to update
+        value: New value
+
+    Returns:
+        True if successful, False if session not found
+    """
+    with _sessions_lock:
+        if session_id not in _sessions:
+            return False
+        _sessions[session_id][key] = value
+        return True
+
+
+def _append_session_event(session_id: str, event: Dict) -> None:
+    """
+    Thread-safe append event to session events list
+
+    Args:
+        session_id: Session identifier
+        event: Event dictionary to append
+    """
+    with _sessions_lock:
+        if session_id in _sessions:
+            _sessions[session_id].setdefault("events", []).append(event)
+
+
+def _get_session_events_copy(session_id: str) -> list:
+    """
+    Thread-safe get copy of session events list
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        Copy of events list or empty list if session not found
+    """
+    with _sessions_lock:
+        if session_id not in _sessions:
+            return []
+        return list(_sessions[session_id].get("events", []))
+
+
+def _is_execution_active(session_id: str) -> bool:
+    """
+    Thread-safe check if execution is active
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        True if execution is active
+    """
+    with _active_executions_lock:
+        return _active_executions.get(session_id, False)
+
+
+def _set_execution_active(session_id: str, active: bool) -> None:
+    """
+    Thread-safe set execution active state
+
+    Args:
+        session_id: Session identifier
+        active: Active state to set
+    """
+    with _active_executions_lock:
+        _active_executions[session_id] = active
+
+
+def _get_stream_state(session_id: str) -> str:
+    """
+    Thread-safe get stream state
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        Stream state: "active", "paused", or "completed"
+    """
+    with _stream_states_lock:
+        return _stream_states.get(session_id, "active")
+
+
+def _set_stream_state(session_id: str, state: str) -> None:
+    """
+    Thread-safe set stream state
+
+    Args:
+        session_id: Session identifier
+        state: New stream state
+    """
+    with _stream_states_lock:
+        _stream_states[session_id] = state
+
 
 def _generate_session_id() -> str:
     """Generate session ID (timestamp format)"""
@@ -258,12 +389,12 @@ async def _execute_graph_in_background(
         config = {"configurable": {"thread_id": session_id}}
 
         # 获取会话事件列表的引用
-        events_list = _sessions[session_id]["events"]
+        events_list = _get_session_events_copy(session_id)
         # Get or initialize the set of sent layer events
-        sent_events = _sessions[session_id].setdefault("sent_layer_events", set())
+        sent_events = _get_session_value(session_id, "sent_layer_events", set())
         logger.info(f"[Planning] [{session_id}] 已发送的layer事件: {sent_events}")
         # Get or initialize the set of sent pause events
-        sent_pause_events = _sessions[session_id].setdefault("sent_pause_events", set())
+        sent_pause_events = _get_session_value(session_id, "sent_pause_events", set())
         logger.info(f"[Planning] [{session_id}] 已发送的pause事件: {sent_pause_events}")
 
         # 流式执行图
@@ -304,7 +435,7 @@ async def _execute_graph_in_background(
                         "dimension_reports": dimension_reports,
                         "timestamp": datetime.now().isoformat()
                     }
-                    events_list.append(event_data)
+                    _append_session_event(session_id, event_data)
                     sent_events.add(event_key)  # 标记已发送
                     logger.info(f"[Planning] [{session_id}] ✓ layer_completed 事件已添加到队列")
                     logger.info(f"[Planning] [{session_id}]   - Layer {layer_num}")
@@ -340,7 +471,7 @@ async def _execute_graph_in_background(
                         "reason": "step_mode",
                         "timestamp": datetime.now().isoformat()
                     }
-                    events_list.append(pause_event)
+                    _append_session_event(session_id, pause_event)
                     sent_pause_events.add(pause_event_key)  # ✅ 标记已发送
 
                     stream_paused_event = {
@@ -350,7 +481,7 @@ async def _execute_graph_in_background(
                         "reason": "waiting_for_resume",
                         "timestamp": datetime.now().isoformat()
                     }
-                    events_list.append(stream_paused_event)
+                    _append_session_event(session_id, stream_paused_event)
 
                     _stream_states[session_id] = "paused"
                     logger.info(f"[Planning] [{session_id}] ✓ pause事件已添加到队列 (Layer {current_layer})")
@@ -371,12 +502,12 @@ async def _execute_graph_in_background(
             "success": True,
             "timestamp": datetime.now().isoformat()
         }
-        events_list.append(completion_event)
+        _append_session_event(session_id, completion_event)
 
         # 更新会话状态
-        _sessions[session_id]["execution_complete"] = True
-        _sessions[session_id]["status"] = TaskStatus.completed
-        _stream_states[session_id] = "completed"
+        _set_session_value(session_id, "execution_complete", True)
+        _set_session_value(session_id, "status", TaskStatus.completed)
+        _set_stream_state(session_id, "completed")
 
         logger.info(f"[Planning] [{session_id}] 总事件数: {len(events_list)}")
 
@@ -390,13 +521,13 @@ async def _execute_graph_in_background(
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
-        _sessions[session_id]["events"].append(error_event)
+        _append_session_event(session_id, error_event)
 
         # 更新会话状态
-        _sessions[session_id]["execution_complete"] = True
-        _sessions[session_id]["execution_error"] = str(e)
-        _sessions[session_id]["status"] = TaskStatus.failed
-        _stream_states[session_id] = "completed"
+        _set_session_value(session_id, "execution_complete", True)
+        _set_session_value(session_id, "execution_error", str(e))
+        _set_session_value(session_id, "status", TaskStatus.failed)
+        _set_stream_state(session_id, "completed")
 
 
 async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -429,26 +560,27 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
         _session_checkpointer[session_id] = checkpointer
 
     # Update session state
-    if session_id in _sessions:
-        _sessions[session_id]["initial_state"] = state
-        _sessions[session_id]["current_layer"] = current_layer
-        _sessions[session_id]["events"] = []
-        _sessions[session_id]["execution_complete"] = False
-        _sessions[session_id]["execution_error"] = None
-        _sessions[session_id]["status"] = TaskStatus.running
-        # Preserve sent_layer_events to prevent re-sending completed layer events
-        # This set tracks which layer completion events have already been sent
-        if "sent_layer_events" not in _sessions[session_id]:
-            _sessions[session_id]["sent_layer_events"] = set()
-            logger.info(f"[Planning API] [{session_id}] 初始化 sent_layer_events")
-        else:
-            logger.info(f"[Planning API] [{session_id}] 保留 sent_layer_events: {_sessions[session_id]['sent_layer_events']}")
+    with _sessions_lock:
+        if session_id in _sessions:
+            _sessions[session_id]["initial_state"] = state
+            _sessions[session_id]["current_layer"] = current_layer
+            _sessions[session_id]["events"] = []
+            _sessions[session_id]["execution_complete"] = False
+            _sessions[session_id]["execution_error"] = None
+            _sessions[session_id]["status"] = TaskStatus.running
+            # Preserve sent_layer_events to prevent re-sending completed layer events
+            # This set tracks which layer completion events have already been sent
+            if "sent_layer_events" not in _sessions[session_id]:
+                _sessions[session_id]["sent_layer_events"] = set()
+                logger.info(f"[Planning API] [{session_id}] 初始化 sent_layer_events")
+            else:
+                logger.info(f"[Planning API] [{session_id}] 保留 sent_layer_events: {_sessions[session_id]['sent_layer_events']}")
 
     # Create graph
     graph = create_village_planning_graph(checkpointer=checkpointer)
 
     # Reset stream state
-    _stream_states[session_id] = "active"
+    _set_stream_state(session_id, "active")
 
     # Start background execution directly
     asyncio.create_task(
@@ -545,22 +677,23 @@ async def start_planning(
         graph = create_village_planning_graph(checkpointer=checkpointer)
 
         # Initialize session with events list
-        _sessions[session_id] = {
-            "session_id": session_id,
-            "project_name": request.project_name,
-            "status": TaskStatus.running,
-            "created_at": datetime.now().isoformat(),
-            "request": request.dict(),
-            "current_layer": 1,
-            "initial_state": initial_state,
-            "events": [],  # Store events directly in session
-            "execution_complete": False,
-            "execution_error": None,
-            "sent_layer_events": set(),  # Track sent layer completion events to prevent duplicates
-        }
+        with _sessions_lock:
+            _sessions[session_id] = {
+                "session_id": session_id,
+                "project_name": request.project_name,
+                "status": TaskStatus.running,
+                "created_at": datetime.now().isoformat(),
+                "request": request.dict(),
+                "current_layer": 1,
+                "initial_state": initial_state,
+                "events": deque(maxlen=MAX_SESSION_EVENTS),  # Auto-limit to prevent OOM
+                "execution_complete": False,
+                "execution_error": None,
+                "sent_layer_events": set(),  # Track sent layer completion events to prevent duplicates
+            }
 
         # Mark execution as active
-        _active_executions[session_id] = True  # FIXED: Changed from False to True
+        _set_execution_active(session_id, True)
 
         # Start background execution (non-blocking)
         background_tasks.add_task(
@@ -627,8 +760,7 @@ async def stream_planning(session_id: str):
                     logger.warning(f"[Planning] Session {session_id} deleted, closing stream")
                     break
 
-                session = _sessions[session_id]
-                events_list = session.get("events", [])
+                events_list = _get_session_events_copy(session_id)
 
                 # 发送新事件
                 while event_index < len(events_list):
@@ -707,10 +839,10 @@ async def review_action(session_id: str, request: ReviewActionRequest):
     - rollback: Rollback to checkpoint
     """
     try:
-        if session_id not in _sessions:
+        session = _get_session_value(session_id, None)
+        if not session:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-        session = _sessions[session_id]
         initial_state = session.get("initial_state", {})
         review_id = initial_state.get("review_id", "")
 
@@ -856,10 +988,10 @@ async def get_status(session_id: str):
     Returns current status, progress, and checkpoint information.
     """
     try:
-        if session_id not in _sessions:
+        session = _get_session_value(session_id, None)
+        if not session:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-        session = _sessions[session_id]
         project_name = session.get("project_name", "")
 
         # Get checkpoints
@@ -954,18 +1086,19 @@ async def resume_from_checkpoint(request: ResumeRequest):
         state = load_result.get("state", {})
         metadata = load_result.get("metadata", {})
 
-        _sessions[session_id] = {
-            "session_id": session_id,
-            "project_name": request.project_name,
-            "status": TaskStatus.running,
-            "created_at": datetime.now().isoformat(),
-            "resumed_from": request.checkpoint_id,
-            "current_layer": metadata.get("layer", 1),
-            "initial_state": state,
-            "events": [],
-            "execution_complete": False,
-            "execution_error": None,
-        }
+        with _sessions_lock:
+            _sessions[session_id] = {
+                "session_id": session_id,
+                "project_name": request.project_name,
+                "status": TaskStatus.running,
+                "created_at": datetime.now().isoformat(),
+                "resumed_from": request.checkpoint_id,
+                "current_layer": metadata.get("layer", 1),
+                "initial_state": state,
+                "events": deque(maxlen=MAX_SESSION_EVENTS),  # Auto-limit to prevent OOM
+                "execution_complete": False,
+                "execution_error": None,
+            }
 
         return {
             "session_id": session_id,
