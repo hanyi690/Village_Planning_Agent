@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { createPortal } from 'react-dom';
+import { useRouter } from 'next/navigation';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faHistory, faSearch, faSpinner, faInbox, faChevronRight, faClock } from '@fortawesome/free-solid-svg-icons';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
@@ -42,19 +42,18 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
 
   if (!mounted) return null;
 
-  return createPortal(
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', justifyContent: 'flex-end' }}>
-      {/* 遮罩 */}
-      <div 
-        style={{ position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)' }}
+  return (
+    <>
+      {/* Overlay */}
+      <div
+        className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
         onClick={onClose}
       />
-      
-      {/* 面板 */}
-      <div style={{ 
-        position: 'relative', width: '100%', maxWidth: '400px', backgroundColor: 'white', 
-        height: '100%', display: 'flex', flexDirection: 'column', boxShadow: '-4px 0 15px rgba(0,0,0,0.1)' 
-      }}>
+
+      {/* Panel */}
+      <div className="fixed right-0 top-0 bottom-0 w-full max-w-[400px] bg-white shadow-2xl flex flex-col"
+        style={{ zIndex: 50 }}
+      >
         {/* Header */}
         <div style={{ padding: '1rem', backgroundColor: '#16a34a', color: 'var(--text-cream-primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 'bold' }}>
@@ -119,7 +118,6 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
           )}
         </div>
       </div>
-    </div>,
-    document.body
+    </>
   );
 }

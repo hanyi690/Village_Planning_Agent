@@ -4,6 +4,8 @@ Checkpoint工具全局管理器
 避免将 CheckpointTool 实例存储在状态中，解决 msgpack 序列化问题。
 """
 
+from __future__ import annotations
+
 from typing import Dict, Optional
 from ..tools.checkpoint_tool import CheckpointTool
 from ..utils.logger import get_logger

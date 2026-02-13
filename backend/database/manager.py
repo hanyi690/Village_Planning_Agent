@@ -8,6 +8,7 @@ import os
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 from enum import Enum
 from typing import Optional
 
@@ -107,8 +108,9 @@ class DatabaseManager:
         - add_event
         - get_events
         """
-        use_async = os.getenv("USE_ASYNC_DATABASE", "false").lower() == "true"
+        use_async = os.getenv("USE_ASYNC_DATABASE", "true").lower() == "true"
         mode = DBMode.ASYNC if use_async else DBMode.SYNC
+        logger.info(f"Database mode: {mode.value} (USE_ASYNC_DATABASE={os.getenv('USE_ASYNC_DATABASE', 'true')})")
 
         import time
         start = time.time()

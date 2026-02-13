@@ -316,6 +316,11 @@ export function UnifiedPlanningProvider({
         stream_mode: true,
       });
 
+      // 强制检查 task_id 存在
+      if (!response || typeof response.task_id !== 'string') {
+        throw new Error('服务器响应缺少任务ID，可能已达请求频率上限');
+      }
+
       setTaskId(response.task_id);
       setStatus('planning');
 
@@ -430,7 +435,7 @@ export function UnifiedPlanningProvider({
             role: 'assistant',
             type: 'layer_completed',
             layer: layer.number,
-            content: `## ${layer.name}（历史会话）\n\n${data.content.substring(0, 200)}...`,
+            content: `## ${layer.name}(历史会话)\n\n${data.content.substring(0, 200)}...`,
             summary: {
               word_count: data.content.length,
               key_points: [`已加载 ${layer.name}`],

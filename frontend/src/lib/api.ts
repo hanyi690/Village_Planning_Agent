@@ -191,9 +191,9 @@ async function apiRequest<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
-  const headers: {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...options.headers,
+    ...(options.headers as Record<string, string>),
   };
 
   let lastError: Error | null = null;
@@ -206,46 +206,38 @@ async function apiRequest<T>(
       // 解析响应数据
       const data = await response.json();
 
-      // 统一响应格式处理
+      // 非2xx响应必须抛出错误，绝不返回数据
       if (!response.ok) {
         // 尝试从错误响应中提取信息
         const errorData = data as ApiError;
         const errorMessage = errorData?.message || errorData?.detail || data?.error || 'API request failed';
         const requestId = (data as any)?.request_id;
 
-        // 检查是否为标准格式响应
-        if (data as APIResponse<any>)?.success !== undefined) {
-          // 标准格式响应
-          if (!data.success) {
-            const error = new Error(errorMessage);
-            (error as any).requestId = requestId;
-            throw error;
-          }
-          // 成功的响应，返回数据
-          return data.data ?? data;  // 支持两种格式
-        } else {
-          // 旧格式响应，直接返回数据
-          return data;
-        }
-      }
-
-      // 客户端错误 (4xx) - 不重试
-      if (response.status >= 400 && response.status < 500) {
         const error = new Error(errorMessage);
         (error as any).requestId = requestId;
+        (error as any).status = response.status;
         throw error;
       }
 
-      // 服务器错误 (5xx) - 重试
-      lastError = new Error(`HTTP ${response.status}: ${response.statusText}`);
-
-      if (attempt < MAX_RETRIES) {
-        // Add jitter to prevent thundering herd
-        const jitter = Math.random() * 200; // 0-200ms jitter
-        await new Promise(resolve => setTimeout(resolve, retryDelay + jitter));
-        retryDelay *= RETRY_BACKOFF_MULTIPLIER;
-        console.warn(`[API] Retrying ${endpoint} (attempt ${attempt + 1}/${MAX_RETRIES})`);
+      // 成功响应 - 检查标准格式并返回数据
+      const apiResponse = data as APIResponse<any>;
+      if (apiResponse?.success !== undefined) {
+        // 标准格式响应
+        if (!apiResponse.success) {
+          // success=false 的错误响应
+          const errorMessage = apiResponse.error || apiResponse.message || 'API request failed';
+          const requestId = apiResponse.request_id;
+          const error = new Error(errorMessage);
+          (error as any).requestId = requestId;
+          (error as any).status = response.status;
+          throw error;
+        }
+        // 返回数据（支持 data 字段或直接返回 data 本身）
+        return apiResponse.data ?? apiResponse;
       }
+
+      // 旧格式直接返回
+      return data;
 
     } catch (error) {
       // Network error - retry

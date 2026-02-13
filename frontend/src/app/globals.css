@@ -14,7 +14,7 @@
   --primary-green-lighter: #f0fdf4; /* green-50 - 更浅的背景 */
   --primary-green-dark: #166534; /* green-800 - 深绿色 */
 
-  /* 核心配色方案 - 有机绿色主题 (保留向后兼容) */
+  /* 专业配色方案 - 有机绿色主题 (保留向后兼容) */
   --primary-50: #e8f5e9;
   --primary-100: #c8e6c9;
   --primary-200: #a5d6a7;
@@ -30,7 +30,7 @@
   --secondary-green: #15803d;    /* 次要绿色 - 用于悬停状态 */
   --light-green: #86efac;        /* 浅绿色 - 用于边框和背景 */
 
-  /* Cream text colors - replacing white */
+  /* Cream text colors - 替换白色 */
   --text-cream-primary: #FFFEF8;
   --text-cream-secondary: #F5F3EE;
   --text-cream-ivory: #FAF9F6;

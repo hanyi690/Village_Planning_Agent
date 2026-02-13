@@ -49,7 +49,7 @@ class OutputManager:
         "infrastructure",
         "ecological_green",
         "architecture",
-        "historical_culture",  # 统一使用 historical_culture
+        "historical_culture",
     ]
 
     # 规划思路维度列表（4个）

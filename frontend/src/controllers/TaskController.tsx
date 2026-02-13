@@ -12,7 +12,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { planningApi } from '../lib/api';
 
 export interface TaskState {
-  status: 'idle' | 'running' | 'paused' | 'completed' | 'failed';
+  status: 'idle' | 'pending' | 'running' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
   currentLayer: number | null;
   layer1Completed: boolean;
   layer2Completed: boolean;
@@ -65,6 +65,9 @@ export function useTaskController(
 
   // ✅ NEW: Track all timeout IDs for cleanup
   const timeoutIdsRef = useRef<Set<NodeJS.Timeout>>(new Set());
+
+  // ✅ P1 FIX: Track 404 errors during initial polling to provide better user experience
+  const errorCountRef = useRef<number>(0);
 
   // ✅ 新增：记录已触发暂停的最高层级，用于检测状态抖动
   const lastTriggeredPauseLayerRef = useRef<number>(0);
@@ -228,23 +231,57 @@ export function useTaskController(
 
           return newState;
         });
-      } catch (error) {
+      } catch (error: any) {
+        // ✅ P1 FIX: Distinguish error types for better handling
+        const status = error?.status || error?.response?.status;
+
+        if (status === 404) {
+          // Session not found - likely database hasn't committed yet after task creation
+          // This is expected during initial polling, silently skip and retry
+          console.warn(`[TaskController] Task ${taskId} initializing (404), will retry...`);
+          return; // Don't update state, continue polling
+        }
+
+        // For other errors, log and optionally notify user
         console.error('[TaskController] Poll error:', error);
+
+        // For 5xx errors, count consecutive failures
+        if (status >= 500) {
+          errorCountRef.current = (errorCountRef.current || 0) + 1;
+          if (errorCountRef.current > 5) {
+            console.error('[TaskController] Server connection unstable after 5 failed polls');
+            // Could add user notification here if needed
+          }
+        } else {
+          // Reset error count on non-5xx errors
+          errorCountRef.current = 0;
+        }
       }
     };
 
-    // ✅ NEW: Determine if polling should stop
+    // Determine if polling should stop
     const shouldStopPolling = (taskState: TaskState): boolean => {
       return (
         !taskId ||
         taskState.status === 'completed' ||
         taskState.status === 'failed' ||
-        (taskState.executionComplete && taskState.status !== 'revising')
+        taskState.executionComplete
       );
     };
 
-    // Initial poll
-    pollStatus();
+    // ✅ P1 FIX: Initial poll with 500ms delay to allow database commit
+    // This prevents initial 404 errors when task is just created
+    const initialPollTimeout = setTimeout(() => {
+      pollStatus();
+      // Track timeout for cleanup
+      timeoutIdsRef.current.add(initialPollTimeout);
+      // Remove after execution to prevent memory leak
+      setTimeout(() => {
+        timeoutIdsRef.current.delete(initialPollTimeout);
+      }, 1000);
+    }, 500);
+
+    timeoutIdsRef.current.add(initialPollTimeout);
 
   // ✅ FIXED: Add stop polling logic
     if (shouldStopPolling(state)) {
@@ -254,11 +291,16 @@ export function useTaskController(
         pollingIntervalRef.current = null;
       }
     } else {
-      // Set up polling interval
+      // Set up polling interval (2 seconds)
       pollingIntervalRef.current = setInterval(pollStatus, 2000);
     }
 
     return () => {
+      // Clear initial poll timeout
+      clearTimeout(initialPollTimeout);
+      timeoutIdsRef.current.delete(initialPollTimeout);
+
+      // Clear polling interval
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current);
       }
@@ -269,8 +311,10 @@ export function useTaskController(
   useEffect(() => {
     if (!taskId) return;
 
-    // Only connect SSE when status is 'running'
-    if (state.status === 'running') {
+    // Connect SSE when status indicates active execution
+    // 'running', 'planning', 'reviewing', 'revising' all indicate we need SSE connection
+    // 'planning' status is used after review approval, need to re-establish SSE connection
+    if (state.status === 'running' || state.status === 'planning' || state.status === 'reviewing' || state.status === 'revising') {
       if (sseConnectionRef.current) {
         sseConnectionRef.current.close();
       }

@@ -68,10 +68,22 @@ async def lifespan(app: FastAPI):
     else:
         logger.error("❌ Database initialization failed")
 
-    # 启动会话清理后台任务
-    from backend.api.planning import start_session_cleanup, stop_session_cleanup
-    await start_session_cleanup()
-    logger.info("🧹 Session cleanup task started")
+    # Initialize async engine if enabled
+    use_async = os.getenv("USE_ASYNC_DATABASE", "true").lower() == "true"
+    if use_async:
+        logger.info("Initializing async database engine...")
+        try:
+            from backend.database.operations_async import get_async_engine
+            await get_async_engine()
+            logger.info("✅ Async database engine initialized")
+        except Exception as e:
+            logger.error(f"❌ Async engine initialization failed: {e}")
+            logger.warning("⚠️  Falling back to sync mode")
+
+    # TODO: 启动会话清理后台任务（功能尚未实现）
+    # from backend.api.planning import start_session_cleanup, stop_session_cleanup
+    # await start_session_cleanup()
+    # logger.info("🧹 Session cleanup task started")
 
     logger.info("✅ 后端服务启动完成")
     yield
@@ -80,11 +92,21 @@ async def lifespan(app: FastAPI):
     logger.info("🧹 Cleaning up resources...")
     from backend.database.engine import dispose_engine
     dispose_engine()
+
+    # Dispose async engine
+    if use_async:
+        try:
+            from backend.database.operations_async import dispose_async_engine
+            await dispose_async_engine()
+            logger.info("✅ Async engine disposed")
+        except Exception as e:
+            logger.error(f"❌ Failed to dispose async engine: {e}")
+
     logger.info("✅ Resources cleaned up")
 
-    # 关闭时停止清理任务
-    await stop_session_cleanup()
-    logger.info("🧹 Session cleanup task stopped")
+    # TODO: 关闭时停止清理任务（功能尚未实现）
+    # await stop_session_cleanup()
+    # logger.info("🧹 Session cleanup task stopped")
     logger.info("👋 后端服务关闭")
 
 # ============================================

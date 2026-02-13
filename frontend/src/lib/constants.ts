@@ -26,7 +26,7 @@ export const LAYER_VALUE_MAP: Record<number, string> = {
 };
 
 export const LAYER_OPTIONS = ['现状分析', '规划思路', '详细规划'] as const;
-export const LAYER_OPTIONS_ARRAY = ['现状分析', '规划思路', '详细规划'] as string[];
+export const LAYER_OPTIONS_ARRAY = ['现状分析', '规划思路', '详细规划'];
 
 /**
  * Get layer ID from layer number

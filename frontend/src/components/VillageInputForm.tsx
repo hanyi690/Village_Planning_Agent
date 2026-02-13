@@ -39,7 +39,7 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
       <div className="mb-4 pb-3 border-bottom text-center">
         <h3 className="h5 fw-bold d-flex align-items-center justify-content-center gap-2 mb-2">
           <span className="d-none d-sm-inline bg-success rounded-circle"
-                style={{width: '4px', height: '32px'}}></span>
+                style={{ width: '4px', height: '32px' }}></span>
           创建规划任务
         </h3>
         <p className="text-muted small">

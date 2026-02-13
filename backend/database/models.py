@@ -45,7 +45,10 @@ class PlanningSession(SQLModel, table=True):
     status: str = Field(index=True)  # running/paused/completed/failed
 
     # User input
-    village_data: str = Field(sa_column=Text())
+    village_data: Optional[str] = Field(
+        default=None, 
+        sa_column=Text()       # ✅ 改为 Optional + default=None，生成可空列
+    )
     task_description: str = Field(default="制定村庄总体规划方案")
     constraints: str = Field(default="无特殊约束")
 
@@ -81,11 +84,21 @@ class PlanningSession(SQLModel, table=True):
     )
 
     # Event tracking
-    events: Optional[List[Dict[str, Any]]] = Field(
-        default=None,
+    events: List[Dict[str, Any]] = Field(
+        default_factory=list,          # ⭐ 修改点：自动初始化为 []
         sa_column=Column(JSON)
     )
 
+    sent_layer_events: List[str] = Field(
+        default_factory=list,          # JSON 数组存储已发送的 layer_completed 事件标识
+        sa_column=Column(JSON)
+    )
+
+    sent_pause_events: List[str] = Field(
+        default_factory=list,          # 存储 pause_layer_X 事件标识
+        sa_column=Column(JSON)
+    )
+    
     # Execution tracking
     execution_complete: bool = Field(default=False)
     execution_error: Optional[str] = None

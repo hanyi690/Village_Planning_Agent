@@ -108,7 +108,7 @@ export function useTaskSSE(taskId: string | null | undefined, callbacks: UseTask
     dimension_complete: (event: PlanningSSEEvent) => {
       const { dimension_key, dimension_name, layer, full_content } = event.data || {};
       if (dimension_key) {
-        console.log(`[useTaskSSE] Dimension complete: ${dimension_key} (${full_content?.length || 0} chars)`);
+        console.log(`[useTaskSSE] Dimension complete: ${dimension_key} (${typeof full_content === 'string' ? full_content.length : 0} chars)`);
         callbacks.onDimensionComplete?.(
           dimension_key as string,
           dimension_name as string,

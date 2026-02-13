@@ -5,6 +5,8 @@ Shared utility functions for formatting dimension reports and analyses.
 Used across multiple subgraphs to maintain consistency and reduce code duplication.
 """
 
+from __future__ import annotations
+
 from typing import List, Dict, Tuple
 import re
 
@@ -13,7 +15,7 @@ def clean_title_lines(text: str) -> str:
     """
     Clean markdown heading lines from text.
 
-    Removes the # symbols from markdown headings while preserving the heading content.
+    Removes # symbols from markdown headings while preserving heading content.
     This is used to clean up dimension reports before combining them.
 
     Args:
@@ -35,7 +37,7 @@ def clean_title_lines(text: str) -> str:
         match = title_pattern.match(line)
         if match:
             # Extract heading content (remove # symbols)
-            content = match.group(4)
+            content = match.group(3)
             # Preserve indentation
             cleaned_line = f"{match.group(1)}{content}"
             cleaned_lines.append(cleaned_line)
@@ -60,7 +62,7 @@ def format_dimension_reports(
             - dimension_key: The dimension identifier
             - dimension_name: The dimension display name
             - result_key: The analysis result (default: "dimension_result")
-        result_key: The key name for the analysis result in the dictionaries
+        result_key: The key name for analysis result in dictionaries
 
     Returns:
         Tuple of:
@@ -82,8 +84,8 @@ def format_dimension_reports(
     dimension_reports_text = []
 
     for analysis in analyses:
-        dimension_key = analysis['dimension_key']
-        dimension_name = analysis['dimension_name']
+        dimension_key = analysis["dimension_key"]
+        dimension_name = analysis["dimension_name"]
         analysis_text = analysis[result_key]
 
         # Store in dictionary
@@ -107,7 +109,7 @@ def format_dimension_reports_with_cleaning(
 
     Args:
         analyses: List of analysis dictionaries
-        result_key: The key name for the analysis result
+        result_key: The key name for analysis result
 
     Returns:
         Tuple of (reports dictionary, combined text with cleaned headings)
@@ -116,8 +118,8 @@ def format_dimension_reports_with_cleaning(
     dimension_reports_text = []
 
     for analysis in analyses:
-        dimension_key = analysis['dimension_key']
-        dimension_name = analysis['dimension_name']
+        dimension_key = analysis["dimension_key"]
+        dimension_name = analysis["dimension_name"]
         analysis_text = analysis[result_key]
 
         # Clean the analysis text
@@ -130,3 +132,10 @@ def format_dimension_reports_with_cleaning(
         dimension_reports_text.append(f"## {dimension_name}\n\n{cleaned_text}\n---")
 
     return dimension_reports_dict, "\n".join(dimension_reports_text)
+
+
+__all__ = [
+    "clean_title_lines",
+    "format_dimension_reports",
+    "format_dimension_reports_with_cleaning",
+]

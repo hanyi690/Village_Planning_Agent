@@ -31,64 +31,50 @@ logger = logging.getLogger(__name__)
 
 def create_planning_session(state: Dict[str, Any]) -> str:
     """
-    Create a new planning session
-    创建新的规划会话
-
-    Args:
-        state: Initial state dictionary
-
-    Returns:
-        str: Session ID
+    同步创建规划会话（必须与异步版本行为完全一致）
     """
-    try:
-        with get_session() as session:
-            # Extract fields from state
-            session_id = state.get("session_id")
-            project_name = state.get("project_name", "")
+    from .serialization import make_json_serializable
+    clean_state = make_json_serializable(state)   # ⭐ 核心修复：深度清洗
 
-            # Create planning session record
-            db_session = PlanningSession(
-                session_id=session_id,
-                project_name=project_name,
-                status="running",
-                village_data=state.get("village_data", ""),
-                task_description=state.get("task_description", "制定村庄总体规划方案"),
-                constraints=state.get("constraints", "无特殊约束"),
-
-                # Flow control
-                current_layer=state.get("current_layer", 1),
-                previous_layer=state.get("previous_layer", 1),
-                layer_1_completed=state.get("layer_1_completed", False),
-                layer_2_completed=state.get("layer_2_completed", False),
-                layer_3_completed=state.get("layer_3_completed", False),
-
-                # Review settings
-                need_human_review=state.get("need_human_review", False),
-                step_mode=state.get("step_mode", False),
-
-                # Output
-                output_path=state.get("output_path"),
-
-                # Store complete state snapshot
-                state_snapshot=state,
-                request_params=state.get("_request_params"),
-
-                # Initialize event tracking
-                events=[],
-                execution_complete=False,
-                execution_error=None,
-            )
-
-            session.add(db_session)
-            session.commit()
-
-            logger.info(f"Created planning session: {session_id}")
-            return session_id
-
-    except Exception as e:
-        logger.error(f"Failed to create planning session: {e}", exc_info=True)
-        raise
-
+    with get_session() as session:   # 确保 get_session 是可用的同步会话工厂
+        db_session = PlanningSession(
+            # ⭐ 全部字段从 clean_state 取值，不再出现原始 state
+            session_id=clean_state["session_id"],
+            project_name=clean_state.get("project_name", ""),
+            status="running",
+            # 使用 clean_state 中的值，若为 None 则转为空字符串（或保留 None，如果表已可空）
+            village_data=clean_state.get("village_data") or "",
+            task_description=clean_state.get("task_description", "制定村庄总体规划方案"),
+            constraints=clean_state.get("constraints", "无特殊约束"),
+            current_layer=clean_state.get("current_layer", 1),
+            previous_layer=clean_state.get("previous_layer", 1),
+            layer_1_completed=clean_state.get("layer_1_completed", False),
+            layer_2_completed=clean_state.get("layer_2_completed", False),
+            layer_3_completed=clean_state.get("layer_3_completed", False),
+            need_human_review=clean_state.get("need_human_review", False),
+            human_feedback=clean_state.get("human_feedback"),
+            need_revision=clean_state.get("need_revision", False),
+            step_mode=clean_state.get("step_mode", False),
+            pause_after_step=clean_state.get("pause_after_step", False),
+            output_path=clean_state.get("output_path"),
+            # ⭐ JSON 字段使用已清洗的 clean_state（set 已转为 list）
+            state_snapshot=clean_state,
+            request_params=clean_state.get("request_params"),
+            events=clean_state.get("events", []),
+            execution_complete=clean_state.get("execution_complete", False),
+            execution_error=clean_state.get("execution_error"),
+            completed_at=clean_state.get("completed_at"),
+            last_checkpoint_id=clean_state.get("last_checkpoint_id"),
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+            progress=clean_state.get("progress", 0),
+            waiting_for_review=clean_state.get("waiting_for_review", False),
+        )
+        session.add(db_session)
+        session.commit()
+        session.refresh(db_session)
+        logger.info(f"Created planning session (sync): {db_session.session_id}")
+        return db_session.session_id
 
 def get_planning_session(session_id: str) -> Optional[Dict[str, Any]]:
     """

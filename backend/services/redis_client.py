@@ -30,12 +30,12 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# Redis 配置
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-REDIS_DB = int(os.getenv('REDIS_DB', 0))
-REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')
-REDIS_TTL_SECONDS = int(os.getenv('REDIS_TTL_SECONDS', 604800))
+# Redis configuration
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+REDIS_DB = int(os.getenv("REDIS_DB", 0))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+REDIS_TTL_SECONDS = int(os.getenv("REDIS_TTL_SECONDS", 604800))
 
 USE_REDIS_CACHE = os.getenv('USE_REDIS_CACHE', 'true').lower() == 'true'
 
@@ -91,7 +91,7 @@ class RedisClient:
                 self._is_connected = True
                 logger.info("[Redis] ✓ Connected successfully")
             except RedisConnectionError as e:
-                logger.error(f"[Redis] ✗ Connection failed: {e}")
+                logger.error(f"[Redis] Connection failed: {e}")
                 self._is_connected = False
                 self._client = None
                 raise

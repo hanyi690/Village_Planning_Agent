@@ -5,6 +5,8 @@
 都能正确找到项目根目录和相关资源目录。
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import sys
 
@@ -91,7 +93,7 @@ def get_frontend_dir() -> Path:
     return project_root / "frontend"
 
 
-def ensure_working_directory():
+def ensure_working_directory() -> None:
     """
     确保当前工作目录在项目根目录
 
@@ -103,7 +105,7 @@ def ensure_working_directory():
 
 
 # 添加项目根目录到Python路径（用于导入）
-def add_project_to_path():
+def add_project_to_path() -> None:
     """
     将项目根目录添加到sys.path，确保可以正确导入项目模块
     """

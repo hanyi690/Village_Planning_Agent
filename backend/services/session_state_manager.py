@@ -293,7 +293,7 @@ class SessionStateManager:
             session_state = SessionState(
                 session_id=session_id,
                 project_name=project_name,
-                status='running',
+                status="running",
                 current_layer=1,
             )
             self._sessions[session_id] = session_state

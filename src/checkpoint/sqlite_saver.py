@@ -88,10 +88,8 @@ class SQLiteCheckpointSaver(BaseCheckpointSaver):
         config: Dict[str, Any],
         checkpoint: Checkpoint,
         metadata: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]
-    {
-        """
-        Save checkpoint
+    ) -> Dict[str, Any]:
+        """Save checkpoint
 
         Args:
             config: Configuration dict with thread_id

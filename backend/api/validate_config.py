@@ -3,18 +3,18 @@ Configuration validation - 验证环境配置
 """
 
 import os
-from typing import Any, Dict, List
+from typing import Any
 
 
-def validate_config() -> Dict[str, Any]:
+def validate_config() -> dict[str, Any]:
     """
     验证必要的环境变量
 
     Returns:
         Dict with keys:
         - valid: bool - Whether configuration is valid
-        - errors: List[str] - List of error messages
-        - warnings: List[str] - List of warning messages
+        - errors: list[str] - List of error messages
+        - warnings: list[str] - List of warning messages
     """
     errors = []
     warnings = []
