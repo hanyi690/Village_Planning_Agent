@@ -714,7 +714,7 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
     await graph.aupdate_state(
         config,
         {"pause_after_step": False},
-        as_node="PauseManagerNode"
+        as_node="pause"
     )
     logger.info(f"[Planning API] [{session_id}] 已清除 pause_after_step 标志")
 
