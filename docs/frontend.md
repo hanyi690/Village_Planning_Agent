@@ -1,6 +1,6 @@
 # 前端实现文档 (Frontend Implementation)
 
-> **村庄规划智能体** - Next.js 14 前端实现详解
+> **村庄规划智能体** - Next.js 前端实现详解
 
 ## 目录
 
@@ -33,7 +33,7 @@
 **REST 职责**：
 - 可靠的状态同步（每 2 秒轮询）
 - 完整的状态管理
-- 数据库单一真实源
+- AsyncSqliteSaver 作为状态源
 
 **SSE 职责**：
 - 维度级流式文本推送（打字机效果）
@@ -44,39 +44,44 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                      前端 (Next.js)            │
-│  ┌──────────────────────────────────────────┐     │
-│  │         TaskController (状态管理层)      │     │
-│  │  ┌────────────────────────────────────┐ │     │
-│  │  │  REST 轮询 (每 2 秒)            │ │     │
-│  │  │  ├─ GET /api/planning/status/{id} │ │     │
-│  │  │  ├─ layer_1_completed            │ │     │
-│  │  │  ├─ pause_after_step             │ │     │
-│  │  │  └─ waiting_for_review          │ │     │
-│  │  └────────────────────────────────────┘ │     │
-│  └──────────────────────────────────────────┘     │
-│  ┌──────────────────────────────────────────┐     │
-│  │  useStreamingRender (批处理渲染)        │     │
-│  │  ├─ addToken(dimensionKey, chunk)      │     │
-│  │  └─ RAF 批处理更新                   │     │
-│  └──────────────────────────────────────────┘     │
-│  ┌──────────────────────────────────────────┐     │
-│  │  useTaskSSE (维度级回调)              │     │
-│  │  ├─ onDimensionDelta                  │     │
-│  │  ├─ onDimensionComplete               │     │
-│  │  └─ onLayerProgress                  │     │
-│  └──────────────────────────────────────────┘     │
+│                   前端 (Next.js)                    │
+│  ┌──────────────────────────────────────────┐      │
+│  │         TaskController (状态管理层)      │      │
+│  │  ┌────────────────────────────────────┐ │      │
+│  │  │  REST 轮询 (每 2 秒)            │ │      │
+│  │  │  ├─ GET /api/planning/status/{id} │ │      │
+│  │  │  ├─ pauseAfterStep               │ │      │
+│  │  │  ├─ layer_X_completed            │ │      │
+│  │  │  └─ current_layer                 │ │      │
+│  │  └────────────────────────────────────┘ │      │
+│  │  ┌────────────────────────────────────┐ │      │
+│  │  │  SSE (维度级流式)                │ │      │
+│  │  │  GET /api/planning/stream/{id}    │ │      │
+│  │  └────────────────────────────────────┘ │      │
+│  └──────────────────────────────────────────┘      │
+│  ┌──────────────────────────────────────────┐      │
+│  │  ChatPanel (主界面)                     │      │
+│  │  ┌────────────────────────────────────┐ │      │
+│  │  │  ReviewInteractionMessage         │ │      │
+│  │  │  (审查交互 UI)                     │ │      │
+│  │  └────────────────────────────────────┘ │      │
+│  └──────────────────────────────────────────┘      │
 └─────────────────────────────────────────────────────┘
                     │
                     ▼
 ┌─────────────────────────────────────────────────────┐
-│              后端 (FastAPI)                    │
-│  ┌──────────────────────────────────────────┐     │
-│  │       异步数据库 (SQLite)              │     │
-│  │  └────────────────────────────────────┘ │     │
-│  ┌──────────────────────────────────────────┐     │
-│  │    StreamingQueueManager (维度级批处理)  │     │
-│  └──────────────────────────────────────────┘     │
+│                后端 (FastAPI)                       │
+│  ┌──────────────────────────────────────────┐      │
+│  │  AsyncSqliteSaver (状态持久化)          │      │
+│  │  ↓  checkpoints 表 (自动管理)            │      │
+│  │  - layer_X_completed                   │      │
+│  │  - analysis_report                     │      │
+│  │  - planning_concept                    │      │
+│  │  - sent_pause_events (内存状态)        │      │
+│  └──────────────────────────────────────────┘      │
+│  ┌──────────────────────────────────────────┐      │
+│  │    PauseManagerNode (暂停管理)         │      │
+│  └──────────────────────────────────────────┘      │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -126,107 +131,200 @@ interface PlanningState {
 **职责**: 无头状态管理，协调 REST 轮询和 SSE 回调
 
 **关键特性**:
-- REST 轮询每 2 秒获取状态
+- REST 轮询每 2 秒获取状态（从 AsyncSqliteSaver 读取）
 - SSE 事件处理（维度级流式）
+- 暂停检测和去重
 - 稳定回调引用
-- 防止状态同步死循环
 
-### 批处理渲染机制
+**数据流**:
+```
+TaskController.startMonitoring()
+  ↓
+setInterval(() => pollStatus(), 2000)
+  ↓
+pollStatus()
+  ↓
+GET /api/planning/status/{session_id}
+  ↓
+AsyncSqliteSaver.get_state()
+  ↓
+返回状态 (pauseAfterStep, layer_X_completed, etc.)
+  ↓
+触发回调: onPause, onLayerComplete, onStatusUpdate
+  ↓
+UnifiedPlanningContext 更新状态
+  ↓
+UI 重新渲染
+```
 
-**useStreamingRender Hook**:
-- **RAF 批处理**: 使用 `requestAnimationFrame` 批量更新 DOM
-- **防抖刷新**: 100ms 防抖延迟，减少不必要的 DOM 更新
-- **增量更新**: 只更新变化的部分
+### 暂停检测流程
 
-**性能目标**:
-- Token → 前端显示延迟：**< 100ms** (P95)
-- DOM 更新次数减少：**> 80%**
+```
+后端: PauseManagerNode 设置 pause_after_step=True
+  ↓
+后台执行检测暂停 → 发送 pause 事件
+  ↓
+_set_session_value 保存 sent_pause_events
+  ↓
+前端 REST 轮询: GET /api/planning/status/{id}
+  ↓
+返回 pauseAfterStep = len(sent_pause_events) > 0
+  ↓
+TaskController 检测到 pauseAfterStep 变化
+  ↓
+触发 onPause(layer) 回调
+  ↓
+ChatPanel.handlePause() 显示审查 UI
+```
 
 ---
 
 ## 核心组件
 
-### 聊天界面组件
+### ChatPanel
 
-| 组件 | 文件路径 | 职责 |
-|---------|-----------|------|
-| **ChatPanel** | `components/chat/ChatPanel.tsx` | 主聊天面板，集成批处理渲染 |
-| **MessageList** | `components/chat/MessageList.tsx` | 消息列表渲染 |
-| **MessageContent** | `components/chat/MessageContent.tsx` | 消息内容渲染 |
-| **DimensionSection** | `components/chat/DimensionSection.tsx` | 维度区块显示 |
-| **LayerReportCard** | `components/chat/LayerReportCard.tsx` | 层级报告卡片 |
-| **ReviewInteractionMessage** | `components/chat/ReviewInteractionMessage.tsx` | 审查交互消息 |
-| **StreamingText** | `components/chat/StreamingText.tsx` | 流式文本组件 |
+**文件**: `frontend/src/components/chat/ChatPanel.tsx`
 
-### 布局组件
+**职责**: 主聊天界面，管理消息显示和交互
 
-| 组件 | 文件路径 | 职责 |
-|---------|-----------|------|
-| **MainLayout** | `components/layout/MainLayout.tsx` | 主布局 |
-| **Sidebar** | `components/layout/Sidebar.tsx` | 侧边栏 |
-| **HistoryPanel** | `components/layout/HistoryPanel.tsx` | 历史会话面板 |
+**核心功能**:
+- 消息列表渲染（流式文本）
+- 人工审查交互（ReviewInteractionMessage）
+- 状态指示器（层进度、暂停状态）
+- 错误提示
 
-### 控制器和 Hooks
+**暂停处理**:
+```typescript
+const handlePause = useCallback((layer: number) => {
+  setMessages((prevMessages) => {
+    // 检查是否已存在同层级的审查消息
+    const hasAnyReviewForLayer = prevMessages.some(m =>
+      m.type === 'review_interaction' && m.layer === layer
+    );
 
-| 组件/Hook | 文件路径 | 职责 |
-|-------------|------|------|
-| **TaskController** | `controllers/TaskController.tsx` | 状态管理层 |
-| **UnifiedPlanningContext** | `contexts/UnifiedPlanningContext.tsx` | 统一规划上下文 |
-| **useTaskSSE** | `hooks/useTaskSSE.ts` | SSE 连接 Hook |
-| **useStreamingRender** | `hooks/useStreamingRender.ts` | 批处理渲染 Hook |
+    if (hasAnyReviewForLayer) {
+      // 已有审查消息，跳过（幂等性）
+      return prevMessages;
+    }
+
+    // 创建审查交互消息
+    return [
+      ...prevMessages,
+      {
+        type: 'review_interaction',
+        layer,
+        reviewState: 'pending',
+        content: '规划已暂停，请审查后决定下一步操作',
+        availableActions: ['approve', 'reject', 'rollback'],
+      } as ReviewInteractionMessage,
+    ];
+  });
+}, [setMessages]);
+```
+
+### ReviewInteractionMessage
+
+**文件**: `frontend/src/components/chat/ReviewInteractionMessage.tsx`
+
+**职责**: 人工审查消息组件
+
+**核心功能**:
+- 显示审查信息
+- 通过/驳回按钮
+- 回退修复功能
+- 反馈输入
+
+**数据流**:
+```
+用户点击"通过"
+  ↓
+handleReviewApprove(sessionId)
+  ↓
+POST /api/planning/review/{id}?action=approve
+  ↓
+后端清除 pause 标志 → 恢复执行
+  ↓
+前端 TaskController 检测到 pauseAfterStep=false
+  ↓
+继续执行规划任务
+```
+
+### UnifiedPlanningContext
+
+**文件**: `frontend/src/contexts/UnifiedPlanningContext.tsx`
+
+**职责**: 全局状态管理
+
+**核心状态**:
+```typescript
+const state: PlanningState = {
+  sessionId: string | null;
+  projectName: string | null;
+  status: 'idle' | 'running' | 'paused' | 'reviewing' | 'completed' | 'failed';
+  currentLayer: number | null;
+  messages: Message[];
+  error: string | null;
+};
+```
 
 ---
 
 ## 类型系统
 
-### 类型系统拆分
-
-**文件结构**:
-```
-frontend/src/lib/types/
-├── message-types.ts    # 具体消息类型定义
-├── message-guards.ts   # 类型守卫函数
-├── message-creators.ts # 消息创建工厂函数
-└── index.ts           # 统一导出
-```
-
 ### 核心类型定义
 
+**文件**: `frontend/src/types/index.ts`
+
 ```typescript
-// 基础消息接口
-export interface BaseMessage {
-  id: string;
-  timestamp: Date;
-  role: 'user' | 'assistant' | 'system';
-}
+// 任务状态
+type TaskStatus =
+  | 'idle'
+  | 'running'
+  | 'paused'
+  | 'reviewing'
+  | 'revising'
+  | 'completed'
+  | 'failed';
 
-// 文本消息
-export interface TextMessage extends BaseMessage {
-  type: 'text';
-  content: string;
-  streamingState?: StreamingState;
-  streamingContent?: string;
-}
-
-// 层级完成消息
-export interface LayerCompletedMessage extends BaseMessage {
-  type: 'layer_completed';
-  layer: number;
-  content: string;
-  summary: {
-    word_count: number;
-    key_points: string[];
-  };
-  actions: ActionButton[];
-}
+// 消息类型
+type MessageRole = 'user' | 'assistant' | 'system' | 'review';
 
 // 审查交互消息
-export interface ReviewInteractionMessage extends BaseMessage {
+interface ReviewInteractionMessage extends Message {
   type: 'review_interaction';
   layer: number;
-  content: string;
-  reviewState: 'pending' | 'approved' | 'rejected' | 'rolled_back';
-  availableActions: ('approve' | 'reject' | 'rollback')[];
+  reviewState: 'pending' | 'approved' | 'rejected';
+  availableActions: Array<'approve' | 'reject' | 'rollback'>;
+  enableDimensionSelection: boolean;
+  enableRollback: boolean;
+  feedbackPlaceholder: string;
+  quickFeedbackOptions: string[];
+}
+
+// 检查点类型
+interface Checkpoint {
+  checkpoint_id: string;
+  description: string;
+  timestamp: string;
+  layer: number;
+}
+```
+
+### 状态响应类型
+
+```typescript
+// SessionStatusResponse
+interface SessionStatusResponse {
+  session_id: string;
+  status: string;
+  current_layer: number;
+  layer_1_completed: boolean;
+  layer_2_completed: boolean;
+  layer_3_completed: boolean;
+  pause_after_step: boolean;
+  waiting_for_review: boolean;
+  execution_complete: boolean;
+  progress: number | null;
 }
 ```
 
@@ -234,73 +332,161 @@ export interface ReviewInteractionMessage extends BaseMessage {
 
 ## API 客户端
 
-### API Client
+### HTTP 客户端
 
 **文件**: `frontend/src/lib/api.ts`
 
-**职责**: 封装所有后端 API 调用，带重试机制
-
 **核心方法**:
 ```typescript
-class PlanningAPI {
-  private maxRetries: number = 3;
-  private retryDelay: number = 1000;
+class PlanningApi {
+  // POST /api/planning/start
+  async startPlanning(data: StartPlanningRequest): Promise<StartPlanningResponse>
 
-  // 开始规划
-  async startPlanning(data: StartPlanningRequest): Promise<StartPlanningResponse>;
+  // GET /api/planning/status/{sessionId}
+  async getStatus(sessionId: string): Promise<SessionStatusResponse>
 
-  // 获取任务状态 (REST 轮询 - 每 2 秒)
-  async getStatus(taskId: string): Promise<TaskStatusResponse>;
+  // POST /api/planning/review/{id}?action=approve
+  async approveReview(sessionId: string): Promise<{ message: string }>
 
-  // 审查操作
-  async submitReview(taskId: string, action: ReviewAction): Promise<ReviewResponse>;
+  // POST /api/planning/review/{id}?action=reject
+  async rejectReview(sessionId: string, feedback: string): Promise<{ message: string }>
 
-  // 带指数退避的重试机制
-  private async withRetry<T>(fn: () => Promise<T>): Promise<T>;
+  // POST /api/planning/review/{id}?action=rollback
+  async rollbackCheckpoint(sessionId: string, checkpointId: string): Promise<{ message: string }>
 }
 ```
 
-### SSE 事件处理
+### SSE 客户端
 
 **文件**: `frontend/src/hooks/useTaskSSE.ts`
 
+**核心方法**:
 ```typescript
-export interface UseTaskSSECallbacks {
-  // 维度级流式回调
-  onDimensionDelta?: (
-    dimensionKey: string,
-    dimensionName: string,
-    layer: number,
-    chunk: string,
-    accumulated: string
-  ) => void;
+function useTaskSSE(sessionId: string, callbacks: SSECallbacks) {
+  // 连接 SSE
+  const connect = () => {
+    const eventSource = new EventSource(`/api/planning/stream/${sessionId}`);
 
-  onDimensionComplete?: (
-    dimensionKey: string,
-    dimensionName: string,
-    layer: number,
-    fullContent: string
-  ) => void;
+    eventSource.addEventListener('dimension_delta', (e) => {
+      const data = JSON.parse(e.data);
+      callbacks.onDimensionDelta?.(data);
+    });
 
-  onLayerProgress?: (
-    layer: number,
-    completed: number,
-    total: number
-  ) => void;
+    eventSource.addEventListener('dimension_complete', (e) => {
+      const data = JSON.parse(e.data);
+      callbacks.onDimensionComplete?.(data);
+    });
+  };
+
+  return { connect, disconnect };
 }
 ```
 
 ---
 
-## 相关文档
+## 数据流总结
 
-- **[后端实现文档](backend.md)** - FastAPI 架构、异步数据库、流式队列
-- **[核心智能体文档](agent.md)** - LangGraph 架构、三层规划系统
-- **[前端组件架构](../FRONTEND_COMPONENT_ARCHITECTURE.md)** - 组件设计、状态管理
-- **[前端视觉指南](../FRONTEND_VISUAL_GUIDE.md)** - UI/UX 设计规范
-- **[README](../README.md)** - 项目概述和快速开始
+### 完整数据流
+
+```
+用户操作
+  ↓
+UnifiedPlanningContext.startPlanning()
+  ↓
+POST /api/planning/start
+  ↓
+TaskController (REST轮询每2秒) + useTaskSSE (SSE流式)
+  ↓
+├─ REST: /api/planning/status (从 AsyncSqliteSaver 读取状态)
+│  ├─ pauseAfterStep (暂停状态)
+│  ├─ layer_X_completed (层级完成)
+│  └─ current_layer (当前层级)
+├─ SSE: /api/planning/stream (dimension_delta, dimension_complete)
+└─ UI更新 (ChatPanel渲染)
+```
+
+### 暂停/恢复流程
+
+```
+步进模式 + 层级完成
+  ↓
+PauseManagerNode 设置 pause_after_step=True
+  ↓
+后台执行检测暂停 → 发送 pause 事件
+  ↓
+_set_session_value 保存 sent_pause_events
+  ↓
+前端 REST 轮询检测到 pauseAfterStep=true
+  ↓
+TaskController 触发 onPause(layer)
+  ↓
+ChatPanel 显示审查 UI
+  ↓
+用户批准 → POST /api/planning/review/{id}?action=approve
+  ↓
+后端清除 pause 标志 → 恢复执行
+  ↓
+前端检测到 pauseAfterStep=false
+  ↓
+继续执行
+```
+
+### 状态同步流程
+
+```
+AsyncSqliteSaver (后端)
+  ↓
+GET /api/planning/status/{session_id}
+  ↓
+TaskController.pollStatus()
+  ↓
+onPause/onLayerComplete 回调
+  ↓
+UnifiedPlanningContext.setState()
+  ↓
+UI 重新渲染
+```
+
+### 流式文本流程
+
+```
+LangGraph 节点执行
+  ↓
+维度内容生成
+  ↓
+SSE: dimension_delta 事件
+  ↓
+useTaskSSE.onDimensionDelta()
+  ↓
+UI 实时显示
+```
 
 ---
 
-**最后更新**: 2026-02-12
-**维护者**: Village Planning Agent Team
+## 性能优化
+
+### 1. SSE/REST 解耦
+
+**技术**: REST 轮询 + SSE 流式
+
+**效果**:
+- 无事件丢失风险
+- 无需复杂去重逻辑
+- 状态一致性保证
+
+### 2. 暂停事件去重
+
+**技术**: 层级作用域去重
+
+**效果**:
+- 防止同一层重复触发
+- 状态抖动检测
+- 自动清理超时键
+
+### 3. 稳定回调引用
+
+**技术**: useCallback + useRef
+
+**效果**:
+- 防止不必要的重新渲染
+- 减少内存分配

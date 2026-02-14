@@ -6,10 +6,11 @@
 
 - [技术栈](#技术栈)
 - [应用结构](#应用结构)
+- [AsyncSqliteSaver 状态持久化](#asyncsqlitesaver-状态持久化)
 - [SSE/REST 职责分离](#sse-rest-职责分离)
-- [异步数据库架构](#异步数据库架构)
-- [StreamingQueueManager](#streamingqueuemanager)
+- [数据流架构](#数据流架构)
 - [API 端点](#api-端点)
+- [暂停/恢复机制](#暂停恢复机制)
 
 ---
 
@@ -20,7 +21,9 @@
 - **异步支持**: asyncio + uvicorn
 - **数据验证**: Pydantic V2
 - **流式传输**: Server-Sent Events (SSE)
-- **数据库**: SQLite (异步)
+- **数据库**: SQLite (AsyncSqliteSaver)
+- **LangGraph**: 1.0.8+
+- **langgraph-checkpoint-sqlite**: 3.0.3+
 - **默认端口**: 8000
 
 ---
@@ -31,25 +34,197 @@
 backend/
 ├── main.py                     # 应用入口
 ├── api/                        # API 路由模块
-│   ├── planning.py            # 规划执行 API
+│   ├── planning.py            # 规划执行 API (REST + SSE)
 │   ├── sessions.py            # 会话管理 API
 │   ├── data.py               # 数据访问 API
 │   ├── validate_config.py     # 配置验证
 │   └── files.py             # 文件上传 API
 ├── database/                   # 数据库模块
-│   ├── manager.py            # 数据库管理器（异步/同步模式）
-│   ├── operations_async.py    # 异步数据库操作
-│   ├── async_wrapper.py      # 异步包装器（带回退）
-│   ├── operations.py         # 同步数据库操作
-│   └── models.py            # 数据库模型
+│   ├── models.py               # 数据库模型（精简版）
+│   ├── operations_async.py     # 异步数据库操作
+│   └── engine.py              # 数据库引擎
 ├── services/                   # 业务逻辑层
 │   ├── rate_limiter.py      # 速率限制
-│   ├── redis_client.py      # Redis 客户端
-│   └── session_state_manager.py  # 会话状态管理
+│   ├── session_state_manager.py  # 会话状态管理
+│   └── sse_event_stream.py   # SSE 事件流
 ├── schemas.py                  # Pydantic 数据模型
 ├── utils/                     # 后端工具类
 └── requirements.txt           # 依赖列表
 ```
+
+---
+
+## AsyncSqliteSaver 状态持久化
+
+### 架构设计
+
+**核心概念**: SQLite 作为 AI 的"自动硬盘"
+
+```
+┌─────────────────────────────────────────────────────┐
+│                LangGraph 执行图                    │
+│                                                      │
+│  状态变化 → AsyncSqliteSaver.put()                  │
+│             ↓                                      │
+│  自动序列化 → checkpoints 表                        │
+│                                                      │
+└─────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────┐
+│              SQLite 数据库                         │
+│                                                      │
+│  ┌──────────────────────────────────────────┐       │
+│  │   planning_sessions 表 (业务元数据)       │       │
+│  │   - session_id, project_name, status     │       │
+│  │   - created_at, updated_at               │       │
+│  └──────────────────────────────────────────┘       │
+│                                                      │
+│  ┌──────────────────────────────────────────┐       │
+│  │   checkpoints 表 (AI 状态快照)            │       │
+│  │   - thread_id                            │       │
+│  │   - checkpoint_id                        │       │
+│  │   - checkpoint (JSON/二进制)             │       │
+│  │   - layer_X_completed                    │       │
+│  │   - analysis_report                     │       │
+│  │   - planning_concept                    │       │
+│  │   - detailed_plan                       │       │
+│  └──────────────────────────────────────────┘       │
+│                                                      │
+│  ┌──────────────────────────────────────────┐       │
+│  │   checkpoints_blobs 表 (二进制数据)       │       │
+│  │   - checkpoint_id                        │       │
+│  │   - blob                                 │       │
+│  └──────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────┘
+```
+
+### 全局 Checkpointer 单例
+
+**文件**: `backend/api/planning.py`
+
+```python
+# 全局 checkpointer 实例（应用级别共享）
+_checkpointer: Optional[AsyncSqliteSaver] = None
+_checkpointer_lock = asyncio.Lock()
+
+async def get_global_checkpointer() -> AsyncSqliteSaver:
+    """
+    获取全局 AsyncSqliteSaver 实例（单例模式）
+
+    使用单例模式避免重复创建连接和调用 setup()，提高性能。
+    """
+    global _checkpointer, _checkpointer_initialized
+
+    if _checkpointer is not None and _checkpointer_initialized:
+        return _checkpointer
+
+    async with _checkpointer_lock:
+        if _checkpointer is not None and _checkpointer_initialized:
+            return _checkpointer
+
+        import aiosqlite
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+        conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
+        _checkpointer = AsyncSqliteSaver(conn)
+        await _checkpointer.setup()
+
+        _checkpointer_initialized = True
+        return _checkpointer
+```
+
+### LangGraph 集成
+
+**文件**: `src/orchestration/main_graph.py`
+
+```python
+def create_village_planning_graph(checkpointer: Optional[BaseCheckpointSaver] = None):
+    """
+    创建村庄规划主图，使用 AsyncSqliteSaver 进行状态持久化
+    """
+    if checkpointer is None:
+        # checkpointer 由调用方提供（从全局单例获取）
+        logger.info("[主图构建] Using provided checkpointer (persistent storage)")
+
+    # ... 图构建逻辑
+
+    return graph.compile(
+        checkpointer=checkpointer,
+        interrupt_before=["human_review"]
+    )
+```
+
+### 状态查询流程
+
+```
+API: GET /api/planning/status/{session_id}
+  ↓
+config = {"configurable": {"thread_id": session_id}}
+  ↓
+checkpointer = get_global_checkpointer()
+graph = create_village_planning_graph(checkpointer)
+  ↓
+checkpoint_state = await graph.get_state(config)
+  ↓
+AsyncSqliteSaver.get(config)
+  ↓
+从 checkpoints 表读取完整状态
+  ↓
+提取状态值 (layer_X_completed, status, etc.)
+  ↓
+返回 SessionStatusResponse
+```
+
+### 数据库模型精简
+
+**文件**: `backend/database/models.py`
+
+**关键变化**: 删除手动维护的状态字段
+
+```python
+class PlanningSession(SQLModel, table=True):
+    """
+    规划会话表 - 只存储业务元数据
+    AI 状态由 AsyncSqliteSaver 自动管理
+    """
+    __tablename__ = "planning_sessions"
+
+    # Primary key
+    session_id: str = Field(primary_key=True)
+
+    # Basic info
+    project_name: str = Field(index=True)
+    status: str = Field(index=True)
+
+    # Village data
+    village_data: Optional[str] = Field(default=None, sa_column=Text())
+
+    # Task info
+    task_description: str = Field(default="制定村庄总体规划方案")
+    constraints: str = Field(default="无特殊约束")
+    output_path: Optional[str] = None
+
+    # Timestamps
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+    completed_at: Optional[datetime] = None
+
+    # 注释：以下字段已删除，由 AsyncSqliteSaver 管理
+    # - layer_X_completed
+    # - pause_after_step
+    # - need_human_review
+    # - state_snapshot
+    # - events
+    # - current_layer
+    # - 等等...
+```
+
+### 优势
+
+✅ **自动管理**: LangGraph 自动保存状态，无需手动维护
+✅ **代码简洁**: 删除了 12+ 个手动维护的字段
+✅ **数据一致性**: AI 状态 = 数据库内容，天然匹配
+✅ **毫秒级恢复**: 从 checkpoint 毫秒级还原完整状态
 
 ---
 
@@ -59,7 +234,7 @@ backend/
 
 **REST 职责**：
 - 提供可靠的状态查询
-- 数据库作为单一真实源
+- AsyncSqliteSaver 作为状态源
 - 每 2 秒轮询获取状态变化
 
 **SSE 职责**：
@@ -71,7 +246,7 @@ backend/
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                      前端 (Next.js)           │
+│                   前端 (Next.js)                   │
 │  ┌──────────────────────────────────────────┐      │
 │  │         TaskController (状态管理层)      │      │
 │  │  ┌────────────────────────────────────┐ │      │
@@ -87,286 +262,253 @@ backend/
                     │
                     ▼
 ┌─────────────────────────────────────────────────────┐
-│              后端 (FastAPI)                    │
+│                后端 (FastAPI)                       │
 │  ┌──────────────────────────────────────────┐      │
-│  │       异步数据库 (SQLite)              │      │
-│  │  - PlanningSession 表存储所有状态      │      │
-│  │  - events 字段存储事件历史          │      │
+│  │  AsyncSqliteSaver (状态持久化)          │      │
+│  │  ↓  checkpoints 表 (自动管理)            │      │
+│  │  - layer_X_completed                   │      │
+│  │  - analysis_report                     │      │
+│  │  - planning_concept                    │      │
+│  │  - sent_pause_events (内存状态)        │      │
 │  └──────────────────────────────────────────┘      │
 │  ┌──────────────────────────────────────────┐      │
-│  │    StreamingQueueManager (维度级批处理)  │      │
+│  │    PauseManagerNode (暂停管理)         │      │
 │  └──────────────────────────────────────────┘      │
 └─────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 异步数据库架构
+## 数据流架构
 
-### 异步模式实现
+### REST 数据流（状态同步）
 
-**文件**: `backend/database/manager.py`
-
-**核心特性**:
-- **环境变量控制**: `USE_ASYNC_DATABASE` (默认: `"true"`)
-- **双轨支持**: 异步操作 + 同步回退
-- **统一接口**: 通过 `DatabaseManager.execute_operation` 路由
-
-### 数据库模型
-
-**文件**: `backend/database/models.py`
-
-**核心表结构**:
-```python
-class PlanningSession(SQLModel, table=True):
-    """规划会话表 - 数据库单一真实源"""
-    __tablename__ = "planning_sessions"
-
-    # Primary key
-    session_id: str = Field(primary_key=True)
-
-    # Basic info
-    project_name: str = Field(index=True)
-    status: str = Field(index=True)
-
-    # Layer completion status
-    layer_1_completed: bool = Field(default=False)
-    layer_2_completed: bool = Field(default=False)
-    layer_3_completed: bool = Field(default=False)
-
-    # Pause/review state
-    pause_after_step: bool = Field(default=False)
-
-    # Event tracking (JSON field)
-    events: Optional[List[Dict[str, Any]]] Field(
-        default=None,
-        sa_column=Column(JSON)
-    )
-
-    # Timestamps
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+```
+前端: TaskController (每2秒轮询)
+  ↓
+后端: GET /api/planning/status/{session_id}
+  ↓
+config = {"configurable": {"thread_id": session_id}}
+  ↓
+graph.get_state(config)
+  ↓
+AsyncSqliteSaver.get(config)
+  ↓
+从 checkpoints 表读取完整状态
+  ↓
+提取状态值 (pauseAfterStep, layer_X_completed, etc.)
+  ↓
+返回: SessionStatusResponse
+  ↓
+前端: 更新 UI 状态、触发回调
 ```
 
-### 异步操作实现
+### SSE 数据流（流式文本）
 
-**文件**: `backend/database/operations_async.py`
-
-**核心函数**:
-```python
-async def create_planning_session_async(state: Dict[str, Any]) -> str:
-    """创建规划会话（异步版本）"""
-    async with get_async_session() as session:
-        db_session = PlanningSession(
-            session_id=state["session_id"],
-            project_name=state.get("project_name", ""),
-            status="running",
-            events=[],
-            ...
-        )
-        session.add(db_session)
-        await session.commit()
-        return db_session.session_id
-
-async def add_session_event_async(session_id: str, event: Dict) -> bool:
-    """添加事件到 session.events JSON 字段"""
-    async with get_async_session() as session:
-        result = await session.execute(
-            select(PlanningSession)
-            .where(PlanningSession.session_id == session_id)
-        )
-        db_session = result.scalar_one_or_none()
-
-        events = db_session.events or []
-        events.append(event)
-        db_session.events = events
-        db_session.updated_at = datetime.now()
-
-        await session.commit()
-        return True
+```
+前端: useTaskSSE
+  ↓
+后端: GET /api/planning/stream/{session_id}
+  ↓
+维度级批处理
+  ↓
+SSE 事件: dimension_delta, dimension_complete
+  ↓
+前端: 实时显示流式文本
 ```
 
-### 同步回退机制
+### 状态保存流程
 
-**文件**: `backend/database/async_wrapper.py`
-
-**实现**:
-```python
-async def create_session_async(state: Dict[str, Any]) -> str:
-    """创建规划会话（异步，带同步回退）"""
-    db_manager = get_db_manager()
-
-    try:
-        return await db_manager.execute_operation(
-            'create_session',
-            None,
-            sync_ops.create_planning_session,  # sync fallback
-            state
-        )
-    except Exception as e:
-        logger.warning(f"Async create_session failed, trying sync: {e}")
-        return sync_ops.create_planning_session(state)
 ```
-
----
-
-## StreamingQueueManager
-
-### 批处理架构
-
-**文件**: `src/utils/streaming_queue_manager.py`
-
-**功能**：
-- 按维度隔离 token 队列
-- 批处理策略（50 tokens 或 100ms 时间窗口）
-- 线程安全操作（Lock 保护）
-- 维度完成时返回完整内容
-
-### 核心实现
-
-```python
-class StreamingQueueManager:
-    """流式队列管理器 - 维度级批处理"""
-
-    def __init__(
-        self,
-        batch_size: int = 50,
-        batch_window: float = 0.1,
-        flush_callback: Optional[Callable] = None
-    ):
-        self.batch_size = batch_size          # 50 tokens 触发刷新
-        self.batch_window = batch_window      # 100ms 时间窗口
-        self.flush_callback = flush_callback  # SSE 事件发射回调
-        self.queues: Dict[str, List[str]] = {}  # 维度队列
-        self.lock = threading.Lock()                   # 线程安全
+LangGraph 节点执行
+  ↓
+状态更新: state["layer_1_completed"] = True
+  ↓
+graph.update_state(config, updates)
+  ↓
+AsyncSqliteSaver.put(config, checkpoint)
+  ↓
+自动序列化 → checkpoints 表
+  ↓
+返回新 checkpoint_id
 ```
-
-### 批处理优化效果
-
-| 指标 | 优化前 | 优化后 | 提升 |
-|-------|--------|--------|------|
-| Token → 前端延迟 | ~500ms | <100ms | **80%** |
-| SSE 事件数量 | 频繁 | 减少 >80% | **5x** |
 
 ---
 
 ## API 端点
 
-### 规划执行 API (`/api/planning`)
+### 1. POST /api/planning/start
 
-**文件**: `backend/api/planning.py`
+启动新的规划任务
 
-#### POST `/api/planning/start`
-
-**功能**: 启动新的规划任务
+**请求体**:
+```json
+{
+  "project_name": "金田村规划",
+  "task_description": "制定村庄总体规划方案",
+  "village_data": "...",
+  "step_mode": true
+}
+```
 
 **响应**:
 ```json
 {
-  "success": true,
-  "task_id": "20240206_123456",
+  "task_id": "uuid",
   "status": "running",
   "message": "规划任务已启动"
 }
 ```
 
-#### GET `/api/planning/status/{task_id}`
+### 2. GET /api/planning/status/{session_id}
 
-**功能**: 获取任务可靠状态 - 数据库作为单一真实源
+获取规划会话状态（从 AsyncSqliteSaver 读取）
 
-**响应结构**:
+**响应**:
 ```json
 {
-  "task_id": "20240206_123456",
-  "project_name": "示例村庄",
+  "session_id": "uuid",
   "status": "running",
-  "layer_1_completed": true,
+  "current_layer": 1,
+  "layer_1_completed": false,
   "layer_2_completed": false,
   "layer_3_completed": false,
   "pause_after_step": false,
   "waiting_for_review": false,
-  "current_layer": 2
+  "execution_complete": false,
+  "progress": 33.3
 }
 ```
 
-#### GET `/api/planning/stream/{task_id}`
+**实现**:
+```python
+@router.get("/api/planning/status/{session_id}")
+async def get_session_status(session_id: str):
+    # 从内存状态获取 sent_pause_events
+    session_state = _get_session_value(session_id, "sent_pause_events", set())
+    pause_after_step = len(session_state) > 0
 
-**功能**: SSE 流式传输 - 维度级事件
+    return {
+        "session_id": session_id,
+        "pause_after_step": pause_after_step,
+        "waiting_for_review": pause_after_step,
+        # ... 其他状态
+    }
+```
+
+### 3. GET /api/planning/stream/{session_id}
+
+SSE 流式传输（维度级文本）
 
 **事件类型**:
-```typescript
-// 维度增量事件
-event: dimension_delta
-data: {
-  "dimension_key": "location",
-  "dimension_name": "区位分析",
-  "layer": 1,
-  "chunk": "村庄的地理位置...",
-  "accumulated": "村庄的地理位置位于..."
-}
+- `dimension_delta`: 维度增量 token
+- `dimension_complete`: 维度完成
+- `layer_progress`: 层级进度
+- `error`: 错误通知
 
-// 维度完成事件
-event: dimension_complete
-data: {
-  "dimension_key": "location",
-  "full_content": "完整维度的报告内容..."
+### 4. POST /api/planning/review/{session_id}
+
+人工审查操作
+
+**请求参数**:
+- `action`: approve/reject/rollback
+- `feedback`: 反馈内容（可选）
+- `checkpoint_id`: 检查点ID（回退时需要）
+
+**响应**:
+```json
+{
+  "message": "已批准，继续执行",
+  "current_layer": 2,
+  "resumed": true
 }
 ```
 
 ---
 
-## 启动和配置
+## 暂停/恢复机制
 
-### 生命周期管理
+### 暂停流程
 
-**文件**: `backend/main.py`
+```
+步进模式 (step_mode=True)
+  ↓
+层级完成 (layer_X_completed=True)
+  ↓
+PauseManagerNode 检测到暂停条件
+  ↓
+设置 state["pause_after_step"] = True
+  ↓
+后台执行检测到 pause_after_step
+  ↓
+生成 pause_event_key = f"pause_layer_{current_layer}"
+  ↓
+如果 pause_event_key 不在 sent_pause_events 中:
+  ↓
+发送 pause 事件
+  ↓
+sent_pause_events.add(pause_event_key)
+  ↓
+_set_session_value(session_id, "sent_pause_events", sent_pause_events)
+  ↓
+前端 REST 轮询检测到 pauseAfterStep=true
+  ↓
+显示审查 UI
+```
 
+**关键代码** (`backend/api/planning.py:586`):
 ```python
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    # 初始化数据库
-    from backend.database import init_db
-    if init_db():
-        logger.info("✅ Database initialized successfully")
-
-    # 初始化异步引擎
-    use_async = os.getenv("USE_ASYNC_DATABASE", "true").lower() == "true"
-    if use_async:
-        from backend.database.operations_async import get_async_engine
-        await get_async_engine()
-        logger.info("✅ Async database engine initialized")
-
-    yield
-
-    # 清理资源
-    if use_async:
-        from backend.database.operations_async import dispose_async_engine
-        await dispose_async_engine()
-        logger.info("✅ Async engine disposed")
+sent_pause_events.add(pause_event_key)
+_set_session_value(session_id, "sent_pause_events", sent_pause_events)  # 保存回session
 ```
 
-### 环境变量
+### 恢复流程
 
-```env
-# 数据库模式 (默认: true)
-USE_ASYNC_DATABASE=true
+```
+用户点击"批准"
+  ↓
+POST /api/planning/review/{session_id}?action=approve
+  ↓
+清除 pause 标志:
+  - initial_state["pause_after_step"] = False
+  - session["sent_pause_events"].clear()
+  ↓
+推进 current_layer
+  ↓
+调用 _resume_graph_execution()
+  ↓
+继续执行 LangGraph
 ```
 
-- `true`: 异步模式（推荐，支持并发）
-- `false`: 同步模式（回退选项）
+**关键代码** (`backend/api/planning.py:1114`):
+```python
+sent_pause_events = session.get("sent_pause_events", set())
+if sent_pause_events:
+    # 清除旧的 pause 事件
+    for event_key in sent_pause_events:
+        sent_pause_events.discard(event_key)
+    session["sent_pause_events"] = sent_pause_events
+```
 
 ---
 
-## 相关文档
+## 核心优势
 
-- **[前端实现文档](frontend.md)** - Next.js 14 技术栈、维度级流式响应、SSE/REST 解耦
-- **[核心智能体文档](agent.md)** - LangGraph 架构、三层规划系统
-- **[前端组件架构](../FRONTEND_COMPONENT_ARCHITECTURE.md)** - 组件设计、状态管理
-- **[前端视觉指南](../FRONTEND_VISUAL_GUIDE.md)** - UI/UX 设计规范
-- **[README](../README.md)** - 项目概述和快速开始
+### 1. AsyncSqliteSaver 状态持久化
+- 自动管理，无需手动维护
+- 双重表设计（checkpoints + checkpoints_blobs）
+- 毫秒级恢复
 
----
+### 2. SSE/REST 解耦
+- REST 可靠状态查询
+- SSE 流式文本推送
+- 无去重风险
 
-**最后更新**: 2026-02-12
-**维护者**: Village Planning Agent Team
+### 3. 双表精简设计
+- 业务表：只存储元数据
+- 检查点表：AsyncSqliteSaver 自动管理
+
+### 4. 暂停机制
+- 层级作用域去重
+- 状态抖动检测
+- 内存状态持久化（_set_session_value）

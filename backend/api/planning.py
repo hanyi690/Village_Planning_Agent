@@ -39,17 +39,77 @@ from src.orchestration.main_graph import create_village_planning_graph
 from src.utils.output_manager import create_output_manager
 from src.utils.paths import get_results_dir
 
-# ✅ 新增：导入异步数据库包装器
-from backend.database.async_wrapper import (
-    add_event_async,
-    get_events_async,
-    create_session_async,
-    get_session_async,
-    update_session_async,
+# ✅ 导入异步数据库操作
+from backend.database.operations_async import (
+    add_session_event_async as add_event_async,
+    get_session_events_async as get_events_async,
+    create_planning_session_async as create_session_async,
+    get_planning_session_async as get_session_async,
+    update_planning_session_async as update_session_async,
 )
+# ✅ 从 engine 导入数据库路径函数
+from backend.database.engine import get_db_path
 
 router = APIRouter()
+
 logger = logging.getLogger(__name__)
+
+# ============================================
+# Global Checkpointer Management
+# ============================================
+
+_checkpointer: Optional[Any] = None
+_checkpointer_lock = asyncio.Lock()
+_checkpointer_initialized = False
+
+
+async def get_global_checkpointer() -> Any:
+    """
+    获取全局 AsyncSqliteSaver 实例（单例模式）
+
+    使用单例模式避免重复创建连接和调用 setup()，提高性能。
+    此函数在第一次调用时初始化 checkpointer，后续调用返回同一实例。
+
+    Returns:
+        AsyncSqliteSaver 实例
+
+    Raises:
+        Exception: 如果初始化失败
+    """
+    global _checkpointer, _checkpointer_initialized
+
+    # 快速路径：如果已初始化，直接返回
+    if _checkpointer is not None and _checkpointer_initialized:
+        return _checkpointer
+
+    # 慢速路径：需要初始化（带锁）
+    async with _checkpointer_lock:
+        # 双重检查：可能在等待锁时已被其他协程初始化
+        if _checkpointer is not None and _checkpointer_initialized:
+            return _checkpointer
+
+        try:
+            logger.info("[Checkpointer] 正在初始化全局 AsyncSqliteSaver 实例...")
+
+            import aiosqlite
+            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+            # 创建连接
+            conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
+            _checkpointer = AsyncSqliteSaver(conn)
+
+            # 初始化表结构（只在第一次时调用）
+            await _checkpointer.setup()
+
+            _checkpointer_initialized = True
+            logger.info("[Checkpointer] ✅ 全局 AsyncSqliteSaver 实例初始化成功")
+
+            return _checkpointer
+
+        except Exception as e:
+            logger.error(f"[Checkpointer] ❌ 初始化失败: {e}", exc_info=True)
+            raise
+
 
 # Configuration constants
 MAX_SESSION_EVENTS = 1000  # Maximum events to keep per session (约 30 分钟流式事件)
@@ -59,8 +119,6 @@ EVENT_CLEANUP_INTERVAL_SECONDS = 300  # Cleanup interval: 5 minutes (instead of 
 _sessions: Dict[str, Dict[str, Any]] = {}
 # Track active executions to prevent duplicate runs
 _active_executions: Dict[str, bool] = {}
-# Store checkpointers for resume operations (keyed by session_id)
-_session_checkpointer: Dict[str, Any] = {}
 # Track stream states to prevent infinite reconnection
 _stream_states: Dict[str, str] = {}  # session_id -> "active" | "paused" | "completed"
 
@@ -485,58 +543,28 @@ async def _execute_graph_in_background(
                     # ✅ 使用异步版本（高性能）
                     await _append_session_event_async(session_id, event_data)
                     sent_events.add(event_key)  # 标记已发送
+                    _set_session_value(session_id, "sent_layer_events", sent_events)  # 保存回session
                     logger.info(f"[Planning] [{session_id}] ✓ layer_completed 事件已添加到队列")
                     logger.info(f"[Planning] [{session_id}]   - Layer {layer_num}")
                     logger.info(f"[Planning] [{session_id}]   - 队列长度: {len(events_list)}")
                     logger.info(f"[Planning] [{session_id}]   - 报告长度: {len(report)} 字符")
                     logger.info(f"[Planning] [{session_id}]   - 维度报告数量: {len(dimension_reports)}")
                     logger.info(f"[Planning] [{session_id}]   - 已发送事件: {sent_events}")
-                    await update_session_async(session_id, {
-                        "sent_layer_events": list(sent_events),
-                        "sent_pause_events": list(sent_pause_events)
-                    })
+                    # ✅ sent_layer_events 和 sent_pause_events 是内存状态,不需要持久化到数据库
                 elif now_completed and event_key in sent_events:
                     # 重复事件检测
                     logger.info(f"[Planning] [{session_id}] ⚠️ 跳过重复的 layer_{layer_num}_completed 事件")
                     logger.info(f"[Planning] [{session_id}]   - 事件已在已发送列表中: {sent_events}")
 
-            previous_event = {
-                "layer_1_completed": event.get("layer_1_completed", False),
-                "layer_2_completed": event.get("layer_2_completed", False),
-                "layer_3_completed": event.get("layer_3_completed", False),
-            }
-            state_updates = {
-                "layer_1_completed": event.get("layer_1_completed", False),
-                "layer_2_completed": event.get("layer_2_completed", False),
-                "layer_3_completed": event.get("layer_3_completed", False),
-                "current_layer": event.get("current_layer", 1),
-                "pause_after_step": event.get("pause_after_step", False),
-                "waiting_for_review": event.get("waiting_for_review", False),
-            }
-
+# ✅ 精简：不再手动同步数据库字段
+            # AsyncSqliteSaver 会自动将完整状态保存到 checkpoints 表
+            # 我们只需要维护业务元数据（status, created_at 等）
+            
             with _sessions_lock:
                 if session_id in _sessions:
-                    # 更新内存中的 initial_state
-                    _sessions[session_id]["initial_state"].update(state_updates)
-                    # 同时更新会话顶层字段（便于快速访问）
-                    _sessions[session_id]["current_layer"] = state_updates["current_layer"]
-                    # ✅ 直接更新数据库字段（单一真实源）
-                    _sessions[session_id]["layer_1_completed"] = state_updates["layer_1_completed"]
-                    _sessions[session_id]["layer_2_completed"] = state_updates["layer_2_completed"]
-                    _sessions[session_id]["layer_3_completed"] = state_updates["layer_3_completed"]
-                    _sessions[session_id]["pause_after_step"] = state_updates["pause_after_step"]
-                    _sessions[session_id]["waiting_for_review"] = state_updates["waiting_for_review"]
-
-            # ✅ 将完整的状态快照写回数据库
-            await update_session_async(session_id, {
-                "state_snapshot": _sessions[session_id]["initial_state"],
-                # ✅ 同时更新数据库字段（确保 get_session_status 能读取到正确状态）
-                "layer_1_completed": state_updates["layer_1_completed"],
-                "layer_2_completed": state_updates["layer_2_completed"],
-                "layer_3_completed": state_updates["layer_3_completed"],
-                "pause_after_step": state_updates["pause_after_step"],
-                "waiting_for_review": state_updates["waiting_for_review"],
-            })
+                    # 更新内存中的状态
+                    _sessions[session_id]["initial_state"].update(event)
+                    _sessions[session_id]["current_layer"] = event.get("current_layer", 1)
 
             # 检查暂停状态（步进模式）
             if event.get("pause_after_step"):
@@ -557,9 +585,8 @@ async def _execute_graph_in_background(
                     }
                     _append_session_event(session_id, pause_event)
                     sent_pause_events.add(pause_event_key)  # ✅ 标记已发送
-                    await update_session_async(session_id, {
-                        "sent_pause_events": list(sent_pause_events)
-                    })
+                    _set_session_value(session_id, "sent_pause_events", sent_pause_events)  # 保存回session
+                    # sent_pause_events 是内存状态,不需要持久化到数据库
 
                     stream_paused_event = {
                         "type": "stream_paused",
@@ -629,8 +656,6 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
     Returns:
         Response with stream URL for resuming execution
     """
-    from langgraph.checkpoint.memory import MemorySaver
-
     # Validate state before resuming
     current_layer = state.get("current_layer", 1)
     if not _validate_resume_state(state, current_layer):
@@ -639,13 +664,6 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
             status_code=400,
             detail=f"Cannot resume at layer {current_layer}: missing required data"
         )
-
-    # Retrieve or create checkpointer for this session
-    checkpointer = _session_checkpointer.get(session_id)
-    if not checkpointer:
-        logger.warning(f"[Planning API] No checkpointer found for session {session_id}, creating new one")
-        checkpointer = MemorySaver()
-        _session_checkpointer[session_id] = checkpointer
 
     # Update session state
     with _sessions_lock:
@@ -676,35 +694,34 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
     })
     logger.info(f"[Planning API] [{session_id}] 已添加 resumed 事件")
 
-    # ✅ 持久化状态到数据库：将status更新为running
+    # ✅ 持久化状态到数据库:只更新业务元数据
     try:
         await update_session_async(session_id, {
             "status": TaskStatus.running,
-            "state_snapshot": state,
-            "current_layer": current_layer,
-            "execution_complete": False,
             "execution_error": None,
-            # ✅ 同步更新 layer_X_completed 等字段
-            "layer_1_completed": state.get("layer_1_completed", False),
-            "layer_2_completed": state.get("layer_2_completed", False),
-            "layer_3_completed": state.get("layer_3_completed", False),
-            "pause_after_step": state.get("pause_after_step", False),
-            "waiting_for_review": state.get("waiting_for_review", False),
         })
         logger.info(f"[Planning API] [{session_id}] 状态已持久化到数据库: status=running")
     except Exception as db_error:
         logger.error(f"[Planning API] [{session_id}] 持久化状态失败: {db_error}", exc_info=True)
-        # 继续执行，不阻断恢复流程
+        # 继续执行,不阻断恢复流程
 
-    # Create graph
-    graph = create_village_planning_graph(checkpointer=checkpointer)
+    # ===== 暴力手动创建 AsyncSqliteSaver 实例 =====
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    
+    conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
+    saver = AsyncSqliteSaver(conn)
+    await saver.setup()
+    
+    # Create graph using checkpointer
+    graph = create_village_planning_graph(checkpointer=saver)
 
     # Reset stream state
     _set_stream_state(session_id, "active")
 
     # Start background execution directly
     asyncio.create_task(
-        _execute_graph_in_background(session_id, graph, state, checkpointer)
+        _execute_graph_in_background(session_id, graph, state, saver)
     )
 
     logger.info(f"[Planning API] Resumed background execution for session {session_id}")
@@ -788,14 +805,6 @@ async def start_planning(
         initial_state = _build_initial_state(request, session_id)
         logger.info(f"[Planning API] 初始状态构建完成")
 
-        # Create checkpointer and graph
-        from langgraph.checkpoint.memory import MemorySaver
-        checkpointer = MemorySaver()
-        _session_checkpointer[session_id] = checkpointer
-
-        logger.info(f"[Planning API] 创建 LangGraph 实例")
-        graph = create_village_planning_graph(checkpointer=checkpointer)
-
         # Initialize session state for database creation
         session_state = {
             "session_id": session_id,
@@ -803,15 +812,7 @@ async def start_planning(
             "status": TaskStatus.running,
             "created_at": datetime.now().isoformat(),
             "request": request.dict(),
-            "current_layer": 1,
-            "state_snapshot": initial_state, 
-            "initial_state": initial_state,
-            "pause_after_step": request.step_mode,
-            "execution_complete": False,
-            "execution_error": None,
-            "events": [],                     # ⭐ 新增：空事件列表
-            "sent_layer_events": [],         # ⭐ 新增：空列表（数据库存储为 JSON 数组）
-            "sent_pause_events": [],        # ⭐ 新增（可选）
+            # ✅ 只存储业务元数据,不存储 AI 生成的字段
         }
 
         # ✅ P0 FIX: Create database session FIRST before returning response
@@ -861,6 +862,12 @@ async def start_planning(
         # Mark execution as active
         _set_execution_active(session_id, True)
 
+        # 使用全局 checkpointer 单例
+        saver = await get_global_checkpointer()
+
+        logger.info(f"[Planning API] 创建 LangGraph 实例 (使用全局 AsyncSqliteSaver)")
+        graph = create_village_planning_graph(checkpointer=saver)
+        
         # Start background execution (non-blocking)
         # ✅ At this point, the database record already exists, so frontend polling will succeed
         background_tasks.add_task(
@@ -868,7 +875,7 @@ async def start_planning(
             session_id,
             graph,
             initial_state,
-            checkpointer
+            saver
         )
         logger.info(f"[Planning API] [{session_id}] Background task submitted")
 
@@ -967,8 +974,8 @@ async def stream_planning(session_id: str):
 @router.get("/api/planning/status/{session_id}")
 async def get_session_status(session_id: str):
     """
-    Get session status
-    获取会话状态
+    Get session status (直接从内存和数据库读取，避免 checkpointer 的线程问题)
+    获取会话状态 - 从数据库读取业务元数据,从内存状态获取实时进度
 
     Args:
         session_id: Session identifier
@@ -976,21 +983,42 @@ async def get_session_status(session_id: str):
     Returns:
         SessionStatusResponse with current state
     """
-    # 1. 尝试从内存获取
-    session = _get_session_value(session_id, None)
+    # 1. 从数据库获取业务元数据 (轻量级)
+    db_session = await get_session_async(session_id)
+    if not db_session:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-    # 2. 内存未命中 → 从数据库重建
-    if not session:
-        logger.warning(f"[Planning API] [{session_id}] 内存会话未命中，尝试从数据库重建")
-        session = await _rebuild_session_from_db(session_id)
-        if not session:
-            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
-        logger.info(f"[Planning API] [{session_id}] 已从数据库重建内存会话")
+    # 2. 从内存状态获取 current_layer 和其他状态信息（最快、最可靠）
+    current_layer = 1
+    layer_1_completed = False
+    layer_2_completed = False
+    layer_3_completed = False
+    pause_after_step = False
+    execution_complete = False
 
-    # 3. 构建响应 - 从数据库字段读取状态（单一真实源）
-    current_layer = session.get("current_layer", 1)
+    if session_id in _sessions:
+        session_state = _sessions[session_id]
+        current_layer = session_state.get("current_layer", 1)
+        # 从已发送的事件推断层级完成状态
+        sent_events = session_state.get("sent_layer_events", set())
+        layer_1_completed = "layer_1_completed" in sent_events
+        layer_2_completed = "layer_2_completed" in sent_events
+        layer_3_completed = "layer_3_completed" in sent_events
+        execution_complete = session_state.get("execution_complete", False)
+        
+        # 从暂停事件判断是否需要暂停
+        sent_pause_events = session_state.get("sent_pause_events", set())
+        pause_after_step = len(sent_pause_events) > 0
 
-    # 计算进度
+    # 3. 如果内存中没有，尝试从数据库获取
+    if current_layer == 1:
+        current_layer = db_session.get("current_layer", 1)
+        layer_1_completed = db_session.get("layer_1_completed", False)
+        layer_2_completed = db_session.get("layer_2_completed", False)
+        layer_3_completed = db_session.get("layer_3_completed", False)
+        execution_complete = db_session.get("execution_complete", False)
+
+    # 4. 计算进度
     progress = None
     if current_layer == 4:
         progress = 100
@@ -999,21 +1027,23 @@ async def get_session_status(session_id: str):
 
     return {
         "session_id": session_id,
-        "status": session.get("status", "running"),
+        # 业务元数据 (来自数据库)
+        "status": db_session.get("status", "running"),
+        "execution_error": db_session.get("execution_error"),
+        "created_at": db_session.get("created_at", ""),
+        # 当前层级和状态 (来自内存或数据库)
         "current_layer": current_layer,
-        "created_at": session.get("created_at", ""),
-        "checkpoints": [],  # TODO: 从数据库获取 checkpoints
+        "layer_1_completed": layer_1_completed,
+        "layer_2_completed": layer_2_completed,
+        "layer_3_completed": layer_3_completed,
+        "pause_after_step": pause_after_step,
+        "waiting_for_review": pause_after_step,
+        "execution_complete": execution_complete,
+        # 进度
+        "checkpoints": [],  # TODO: 从 checkpoints 表获取
         "checkpoint_count": 0,
         "progress": progress,
-        # ✅ 从数据库字段读取状态（而非 initial_state）
-        "layer_1_completed": session.get("layer_1_completed", False),
-        "layer_2_completed": session.get("layer_2_completed", False),
-        "layer_3_completed": session.get("layer_3_completed", False),
-        "pause_after_step": session.get("pause_after_step", False),
-        "waiting_for_review": session.get("waiting_for_review", False),
-        "last_checkpoint_id": session.get("last_checkpoint_id"),
-        "execution_error": session.get("execution_error"),
-        "execution_complete": session.get("execution_complete", False),
+        "last_checkpoint_id": None,
     }
 
 
@@ -1093,16 +1123,9 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         sent_pause_events.discard(event_key)
                     session["sent_pause_events"] = sent_pause_events
 
-            # ✅ 关键：将修改后的状态持久化到数据库
+            # ✅ 只持久化业务元数据到数据库
             await update_session_async(session_id, {
-                "state_snapshot": initial_state,
-                "sent_pause_events": list(sent_pause_events),
-                # ✅ 同步更新 layer_X_completed 等字段
-                "layer_1_completed": initial_state.get("layer_1_completed", False),
-                "layer_2_completed": initial_state.get("layer_2_completed", False),
-                "layer_3_completed": initial_state.get("layer_3_completed", False),
-                "pause_after_step": initial_state.get("pause_after_step", False),
-                "waiting_for_review": initial_state.get("waiting_for_review", False),
+                "status": TaskStatus.running,
             })
 
             if review_id:
@@ -1121,15 +1144,10 @@ async def review_action(session_id: str, request: ReviewActionRequest):
             initial_state["__interrupt__"] = False
             session["status"] = TaskStatus.revising
 
-            # ✅ 持久化状态
+            # ✅ 只持久化业务元数据到数据库
             await update_session_async(session_id, {
-                "state_snapshot": initial_state,
-                # ✅ 同步更新 layer_X_completed 等字段
-                "layer_1_completed": initial_state.get("layer_1_completed", False),
-                "layer_2_completed": initial_state.get("layer_2_completed", False),
-                "layer_3_completed": initial_state.get("layer_3_completed", False),
-                "pause_after_step": initial_state.get("pause_after_step", False),
-                "waiting_for_review": initial_state.get("waiting_for_review", False),
+                "status": TaskStatus.revising,
+                "execution_error": None,
             })
 
             if review_id:
@@ -1173,9 +1191,9 @@ async def review_action(session_id: str, request: ReviewActionRequest):
             session["current_layer"] = state.get("current_layer", 1)
             session["status"] = TaskStatus.paused
 
-            # ✅ 持久化回滚后的状态
+            # ✅ 只持久化业务元数据到数据库
             await update_session_async(session_id, {
-                "state_snapshot": initial_state
+                "status": TaskStatus.paused,
             })
 
             logger.info(f"[Planning API] Rolling back session {session_id}")
@@ -1199,19 +1217,13 @@ async def delete_session(session_id: str):
     """
     Delete a session
 
-    Removes session from memory and cleans up checkpointer.
-    Checkpoint data is preserved by default.
+    Removes session from memory. Checkpoint data is preserved by default.
     """
     try:
         if session_id not in _sessions:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
         del _sessions[session_id]
-
-        # Clean up checkpointer
-        if session_id in _session_checkpointer:
-            del _session_checkpointer[session_id]
-            logger.info(f"[Planning API] Cleaned up checkpointer for session {session_id}")
 
         # Clean up active execution flag
         if session_id in _active_executions:
@@ -1317,29 +1329,34 @@ async def _rebuild_session_from_db(session_id: str) -> Optional[Dict[str, Any]]:
     if not db_session:
         return None
 
+    # ✅ 新增：从 checkpointer 恢复 state
+    saver = await get_global_checkpointer()
+    config = {"configurable": {"thread_id": session_id}}
+    
+    try:
+        state_snapshot = await saver.aget_state(config)
+        initial_state = state_snapshot.values if state_snapshot else {}
+        logger.info(f"[Planning API] [{session_id}] 已从 AsyncSqliteSaver 恢复 state: pause_after_step={initial_state.get('pause_after_step', False)}, current_layer={initial_state.get('current_layer', 1)}")
+    except Exception as e:
+        logger.warning(f"[Planning API] [{session_id}] 无法从 checkpointer 恢复 state: {e}")
+        initial_state = {}
+
     with _sessions_lock:
         _sessions[session_id] = {
-            # ⚠️ 全部使用字典键访问，不能用点号！
-            "session_id": db_session["session_id"],           # ✅ 字典键
+            # ✅ 只从数据库读取业务元数据
+            "session_id": db_session["session_id"],
             "project_name": db_session["project_name"],
             "status": db_session["status"],
-            "created_at": db_session["created_at"],
-            "current_layer": db_session["current_layer"],
-            # 注意：模型中存储 LangGraph 状态的是 state_snapshot 字段
-            "initial_state": db_session.get("state_snapshot", {}),
-            "events": deque(db_session.get("events", []), maxlen=MAX_SESSION_EVENTS),
-            "execution_complete": db_session["execution_complete"],
             "execution_error": db_session.get("execution_error"),
-            "sent_layer_events": set(db_session.get("sent_layer_events", [])),
-            "sent_pause_events": set(db_session.get("sent_pause_events", [])),
             "created_at": db_session["created_at"].isoformat() if isinstance(db_session["created_at"], datetime) else db_session["created_at"],
-            # ✅ 添加缺失的数据库字段
-            "layer_1_completed": db_session.get("layer_1_completed", False),
-            "layer_2_completed": db_session.get("layer_2_completed", False),
-            "layer_3_completed": db_session.get("layer_3_completed", False),
-            "pause_after_step": db_session.get("pause_after_step", False),
-            "waiting_for_review": db_session.get("pause_after_step", False),  # 数据库中没有此字段，使用 pause_after_step 作为备用
-            "last_checkpoint_id": db_session.get("last_checkpoint_id"),
+            # ✅ 内存中的状态管理
+            "events": deque(maxlen=MAX_SESSION_EVENTS),
+            "execution_complete": False,
+            "sent_layer_events": set(),
+            "sent_pause_events": set(),
+            # ✅ 从 AsyncSqliteSaver 恢复 state
+            "initial_state": initial_state,
+            "current_layer": initial_state.get("current_layer", 1),
         }
     logger.info(f"[Planning API] [{session_id}] 已从数据库重建内存会话")
     return _sessions[session_id]

@@ -1,10 +1,10 @@
 # 村庄规划智能体 (Village Planning Agent)
 
-基于 LangGraph 和 LangChain 的智能村庄规划系统，提供 **Web 应用** 和 **CLI 工具** 两种使用方式，采用异步数据库架构实现专业的村庄规划辅助。
+基于 LangGraph 的智能村庄规划系统，提供 **Web 应用** 和 **CLI 工具** 两种使用方式，采用 AsyncSqliteSaver 实现状态持久化。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-0.2-green.svg)](https://github.com/langchain-ai/langgraph)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python13.com/downloads/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.0.8-green.svg)](https://github.com/langchain-ai/langgraph)
 
 ---
 
@@ -13,8 +13,7 @@
 ### Web 应用
 - **现代化界面**: 基于 Next.js 14 + Tailwind CSS 的响应式 Web 界面
 - **维度级流式响应**: 实时 Token → 前端显示 < 100ms 延迟
-- **SSE/REST 解耦架构**: REST 提供可靠状态（每 2 秒轮询），SSE 仅负责流式文本推送
-- **异步数据库**: 默认启用异步模式，支持并发数据库操作
+- **状态持久化**: AsyncSqliteSaver 自动保存状态到 SQLite，支持会话恢复
 - **智能文件上传**: 支持多种编码自动检测（UTF-8/GBK/GB2312）和多格式解析（.txt/.md/.docx/.pdf）
 - **交互式审查**: 支持人工审查、通过/驳回、回退修复
 - **历史会话**: 支持查看和加载历史会话记录
@@ -23,7 +22,7 @@
 ### 规划引擎
 - **三层架构**: 现状分析 → 规划思路 → 详细规划
 - **并行执行**: 12+4+12 个维度并行处理，高效执行
-- **智能恢复**: 检查点持久化，支持从任意阶段恢复
+- **智能恢复**: 检查点自动持久化，支持从任意阶段恢复
 - **状态筛选优化**: 智能过滤相关维度，节省 40-60% LLM token
 - **统一规划器**: 基于统一基类的通用规划器架构
 
@@ -57,7 +56,7 @@ MAX_TOKENS=65536
 
 OPENAI_API_BASE=https://api.deepseek.com/v1
 
-# 数据库模式: "true" for async (推荐), "false" for sync (回退)
+# 数据库模式
 USE_ASYNC_DATABASE=true
 
 # 向量数据库配置
@@ -70,13 +69,9 @@ LANGCHAIN_API_KEY=your_langsmith_api_key
 LANGCHAIN_PROJECT=village-planning-agent
 ```
 
-**3. 安装后端依赖**
+**3. 安装依赖**
 ```bash
 pip install -r requirements.txt
-```
-
-**4. 安装前端依赖**
-```bash
 cd frontend
 npm install
 ```
@@ -85,96 +80,151 @@ npm install
 
 **启动后端**:
 ```bash
-cd backend
-python main.py
+python backend/main.py
 ```
-后端运行在 http://127.0.0.1:8000
 
 **启动前端** (新终端):
 ```bash
-cd frontend
 npm run dev
 ```
-前端运行在 http://localhost:3000
 
-**访问应用**: 打开浏览器访问 http://localhost:3000
+**访问应用**: http://localhost:3000
 
 ---
 
 ## 数据流架构
 
-### 前端数据流
+### 整体架构
 
 ```
-用户操作
-  ↓
-UnifiedPlanningContext.startPlanning()
-  ↓
-POST /api/planning/start
-  ↓
-TaskController (REST轮询每2秒) + useTaskSSE (SSE流式)
-  ↓
-├─ REST: /api/planning/status (状态、层级完成)
-├─ SSE: /api/planning/stream (dimension_delta, dimension_complete)
-└─ UI更新 (useStreamingRender批处理渲染)
+┌─────────────────────────────────────────────────────────────┐
+│                        前端 (Next.js)                      │
+│  ┌──────────────────────────────────────────────────┐     │
+│  │         UnifiedPlanningContext                 │     │
+│  │  ┌──────────────┐  ┌──────────────┐             │     │
+│  │  │ TaskController│  │  useTaskSSE    │             │     │
+│  │  │ (REST 轮询)   │  │ (SSE 流式)    │             │     │
+│  │  └──────────────┘  └──────────────┘             │     │
+│  └──────────────────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────┘
+                        ↓ REST 轮询 (每2秒) + SSE 流式
+┌─────────────────────────────────────────────────────────────┐
+│                       后端 (FastAPI)                       │
+│  ┌──────────────────────────────────────────────────┐     │
+│  │   LangGraph 主图 (三层规划系统)                 │     │
+│  │   ↓ AsyncSqliteSaver (状态持久化)              │     │
+│  │   ↓ checkpoints 表 (自动管理)                   │     │
+│  │   - layer_X_completed                           │     │
+│  │   - analysis_report                            │     │
+│  │   - planning_concept                           │     │
+│  │   - detailed_plan                              │     │
+│  └──────────────────────────────────────────────────┘     │
+│  ┌──────────────────────────────────────────────────┐     │
+│   │   planning_sessions 表 (业务元数据)             │     │
+│   │   - session_id, project_name                  │     │
+│   │   - status, created_at                        │     │
+│  └──────────────────────────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 后端数据流
+### 数据流详解
+
+#### 1. REST 数据流（状态同步）
 
 ```
-FastAPI
+前端: TaskController (每2秒轮询)
   ↓
-├─ 异步数据库 (SQLite + aiosqlite)
-├─ StreamingQueueManager (维度级批处理)
-├─ AsyncStoragePipeline (异步存储)
-└─ SSE (维度级事件)
+后端: GET /api/planning/status/{session_id}
   ↓
-前端 (REST + SSE)
+config = {"configurable": {"thread_id": session_id}}
+  ↓
+graph.get_state(config)
+  ↓
+AsyncSqliteSaver.get(config)
+  ↓
+从 checkpoints 表读取完整状态快照
+  ↓
+返回: SessionStatusResponse
+  ↓
+前端: 更新 UI 状态、触发回调
 ```
 
-### SSE/REST 解耦架构
+#### 2. SSE 数据流（流式文本）
 
-**REST 职责**：
-- 每 2 秒轮询获取可靠状态
-- 数据库作为单一真实源
-- 层级完成、暂停、审查状态
+```
+前端: useTaskSSE
+  ↓
+后端: GET /api/planning/stream/{session_id}
+  ↓
+维度级批处理
+  ↓
+SSE 事件: dimension_delta, dimension_complete
+  ↓
+前端: 实时显示流式文本
+```
 
-**SSE 职责**：
-- 维度级流式文本推送（打字机效果）
-- `dimension_delta` - 维度增量 token
-- `dimension_complete` - 维度完成
-- `layer_progress` - 层级进度
+#### 3. AsyncSqliteSaver 状态持久化
+
+```
+LangGraph 执行图
+  ↓
+状态变化 → AsyncSqliteSaver.put()
+  ↓
+自动序列化 → checkpoints 表
+  │
+  ├─ checkpoints (主表)
+  │  ├─ thread_id
+  │  ├─ checkpoint_id
+  │  └─ checkpoint (JSON/二进制)
+  │
+  └─ checkpoints_blobs (二进制数据)
+     ├─ checkpoint_id
+     └─ blob
+```
+
+#### 4. 暂停/恢复流程
+
+```
+步进模式 + 层级完成
+  ↓
+PauseManagerNode 设置 pause_after_step=True
+  ↓
+后台执行检测暂停 → 发送 pause 事件
+  ↓
+_set_session_value 保存 sent_pause_events
+  ↓
+前端 REST 轮询检测到 pauseAfterStep=true
+  ↓
+显示审查 UI
+  ↓
+用户批准 → POST /api/planning/review/{id}?action=approve
+  ↓
+清除 pause 标志 → 恢复执行
+```
 
 ---
 
 ## 技术优势
 
-### 1. 异步数据库架构
-- 默认启用异步模式（`USE_ASYNC_DATABASE=true`）
-- 支持 SQLite 异步操作（aiosqlite）
-- 同步回退机制，确保兼容性
-- 更好的并发性能
+### 1. AsyncSqliteSaver 状态持久化
+- **自动管理**: LangGraph 自动保存状态，无需手动维护
+- **双重表设计**: checkpoints 表 + checkpoints_blobs 表
+- **毫秒级恢复**: 从 checkpoint 毫秒级还原完整状态
+- **数据一致性**: AI 状态 = 数据库内容，天然匹配
 
 ### 2. SSE/REST 解耦
-- REST 提供可靠状态: 每 2 秒轮询获取状态变化
-- SSE 仅用于流式文本: 只发送维度级事件
-- 无需复杂去重: 消除 SSE 事件丢失或重复的风险
-- 数据库作为单一真实源: 所有状态由数据库统一管理
+- **REST**: 可靠状态查询，每 2 秒轮询
+- **SSE**: 维度级流式文本，实时推送
+- **无去重风险**: 消除事件丢失或重复
 
-### 3. 并行执行优化
-- 使用并行处理多个维度
-- 智能状态筛选：只传递相关维度数据
-- 大幅减少 LLM token 消耗（可节省 40-60%）
+### 3. 双表精简设计
+- **业务表**: 只存储元数据 (session_id, project_name, status)
+- **检查点表**: AsyncSqliteSaver 自动管理完整状态
+- **代码简洁**: 删除了 12+ 个手动维护的字段
 
-### 4. 批处理渲染
-- 使用 `requestAnimationFrame` 批量更新 DOM
-- 防抖内容刷新（100ms）
-- 减少 > 80% 的 DOM 更新，提升性能
-
-### 5. 异步存储管道
-- 维度完成时立即写入缓存（非阻塞）
-- 层级完成时批量写入数据库
-- 文件写入使用后台任务，不阻塞流式传输
+### 4. 并行执行优化
+- 12+4+12 个维度并行处理
+- 智能状态筛选，节省 40-60% LLM token
 
 ---
 
@@ -182,33 +232,30 @@ FastAPI
 
 ```
 Village_Planning_Agent/
-├── backend/                    # FastAPI 后端
-│   ├── main.py                # 应用入口
-│   ├── api/                   # API 路由
-│   ├── database/              # 数据库模块
-│   │   ├── manager.py        # 数据库管理器（异步/同步模式）
-│   │   ├── operations_async.py # 异步数据库操作
-│   │   └── async_wrapper.py # 异步包装器（带回退）
-│   ├── services/              # 业务逻辑层
-│   ├── schemas.py             # Pydantic 数据模型
-│   └── requirements.txt        # Python 依赖
-├── frontend/                  # Next.js 14 前端
-│   ├── src/
-│   │   ├── app/              # Next.js App Router
-│   │   ├── components/       # React 组件
-│   │   ├── controllers/     # 状态控制器 (TaskController)
-│   │   ├── contexts/        # React Context (UnifiedPlanningContext)
-│   │   ├── hooks/          # 自定义 Hooks
-│   │   └── lib/            # 工具库
-│   └── package.json         # Node.js 依赖
-├── src/                        # 核心规划引擎
-│   ├── orchestration/         # 编排层
-│   ├── subgraphs/            # 三层子图
-│   ├── planners/             # 规划器层
-│   └── utils/                # 核心工具类
-├── data/                       # 数据目录
-├── docs/                       # 详细文档
-└── README.md                  # 项目说明
+├── backend/                      # FastAPI 后端
+│   ├── main.py                    # 应用入口
+│   ├── api/
+│   │   └── planning.py            # 规划 API (REST + SSE)
+│   ├── database/
+│   │   ├── models.py               # 数据库模型（精简版）
+│   │   └── operations_async.py     # 异步数据库操作
+│   └── requirements.txt            # Python 依赖
+├── frontend/                     # Next.js 14 前端
+│   └── src/
+│       ├── app/                    # Next.js App Router
+│       ├── controllers/            # 状态控制器
+│       │   └── TaskController.tsx  # REST 轮询
+│       └── hooks/                  # 自定义 Hooks
+│           └── useTaskSSE.ts        # SSE 处理
+├── src/                          # 核心规划引擎
+│   ├── orchestration/              # 编排层
+│   │   └── main_graph.py          # LangGraph 主图
+│   ├── subgraphs/                 # 三层子图
+│   ├── planners/                   # 规划器层
+│   ├── nodes/                      # 节点层
+│   └── utils/                      # 核心工具类
+└── data/                          # 数据目录
+    └── village_planning.db        # SQLite 数据库
 ```
 
 ---
@@ -240,48 +287,54 @@ LLM_MODEL=deepseek-chat
 ### 数据库配置
 
 ```env
-# 数据库模式 (默认: true)
+# 数据库模式
 USE_ASYNC_DATABASE=true
 ```
-
-- `true`: 异步模式（推荐，支持并发）
-- `false`: 同步模式（回退选项）
 
 ---
 
 ## 文档
 
-详细实现文档请查看项目根目录和 `/docs` 目录：
+详细实现文档：
 
-### 核心文档
-- **[核心智能体文档](docs/agent.md)** - LangGraph 架构、三层规划系统、统一规划器
-- **[前端实现文档](docs/frontend.md)** - Next.js 14 技术栈、类型系统、SSE/REST 解耦
-- **[后端实现文档](docs/backend.md)** - FastAPI 架构、API 端点、异步数据库状态管理
-- **[前端组件架构](FRONTEND_COMPONENT_ARCHITECTURE.md)** - Next.js 应用架构、组件设计、状态管理、数据流
-- **[前端视觉指南](FRONTEND_VISUAL_GUIDE.md)** - UI/UX 设计规范、色彩系统、组件样式
+- **[智能体架构](docs/agent.md)** - LangGraph 架构、三层规划系统、数据流
+- **[后端实现](docs/backend.md)** - FastAPI 架构、API 端点、AsyncSqliteSaver 集成
+- **[前端实现](docs/frontend.md)** - Next.js 技术栈、TaskController、SSE/REST 解耦
+- **[前端组件架构](FRONTEND_COMPONENT_ARCHITECTURE.md)** - 组件设计、状态管理、数据流
+- **[前端视觉指南](FRONTEND_VISUAL_GUIDE.md)** - UI/UX 设计规范、组件样式
 
 ---
 
 ## 常见问题
 
-### Q: 规划任务无法启动？
-A: 检查以下项：
-- 确认 LLM API Key 有效
-- 检查后端服务是否启动 (http://127.0.0.1:8000/health)
-- 查看后端日志确认数据库初始化成功
-- 确认 `USE_ASYNC_DATABASE=true` （推荐）
+### Q: 状态为什么没有持久化？
+A: 确认以下项：
+- 已安装 `langgraph-checkpoint-sqlite` 包
+- `main_graph.py` 使用 `get_sqlite_checkpointer()`
+- 检查 `data/village_planning.db` 权限正确
 
-### Q: 数据库错误？
-A:
-- 确认 SQLite 数据库文件权限正确
-- 检查 `USE_ASYNC_DATABASE` 配置
-- 如果异步模式失败，可设置为 `false` 使用同步模式
+### Q: 如何查看 checkpoint 数据？
+A: 使用 SQLite 客户端：
+```sql
+SELECT * FROM checkpoints WHERE thread_id = 'your_session_id';
+SELECT * FROM checkpoints_blobs WHERE checkpoint_id = 'your_checkpoint_id';
+```
 
-### Q: 前端无法连接后端？
-A:
-- 检查 `NEXT_PUBLIC_API_URL` 配置
-- 确认后端服务已启动
-- 查看浏览器控制台和后端日志
+### Q: 如何恢复会话？
+A: 使用相同的 `thread_id` 重新创建图：
+```python
+checkpointer = get_sqlite_checkpointer()
+graph = create_village_planning_graph(checkpointer=checkpointer)
+config = {"configurable": {"thread_id": "your_session_id"}}
+state = await graph.get_state(config)  # 自动从 checkpoint 恢复
+```
+
+### Q: 前端为什么没有显示 pause UI？
+A: 确认以下项：
+- 后端日志显示"已发送pause事件"
+- 后端日志显示`sent_pause_events`已保存
+- 前端日志显示`pauseAfterStep=true`
+- 检查 `backend/api/planning.py:586` 是否有 `_set_session_value` 调用
 
 ---
 
@@ -298,4 +351,4 @@ Copyright (c) 2024 村庄规划智能体项目
 - [LangGraph](https://github.com/langchain-ai/langgraph) - 强大的状态图框架
 - [LangChain](https://github.com/langchain-ai/langchain) - LLM 应用开发框架
 - [Next.js](https://nextjs.org/) - React 框架
-- [FastAPI](https://fastapi.tiangolo.com/) - 现代化 Python Web 框架
+- [AsyncSqliteSaver](https://github.com/langchain-ai/langgraph-checkpoint-sqlite) - SQLite 持久化
