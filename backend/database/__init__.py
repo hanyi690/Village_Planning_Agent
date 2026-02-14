@@ -3,50 +3,63 @@ Database module for Village Planning Agent
 村庄规划智能体数据库模块
 
 Provides SQLite + SQLModel persistence for planning sessions, checkpoints,
-and UI conversations.
+and UI conversations with pure async support.
 """
 
-from .engine import get_session, init_db
+from .engine import (
+    # Sync engine functions (deprecated, kept for backward compatibility)
+    get_session,
+    init_db,
+    # Async engine functions (recommended)
+    get_async_session,
+    init_async_db,
+    get_async_engine,
+    dispose_async_engine,
+    get_db_path,
+)
 from .models import (
     PlanningSession,
     Checkpoint,
     UISession,
     UIMessage
 )
-from .operations import (
-    # Planning session operations
-    create_planning_session,
-    get_planning_session,
-    update_planning_session,
-    delete_planning_session,
-    list_planning_sessions,
-    update_session_state,
-    add_session_event,
-    get_session_events,
-
-    # Checkpoint operations
-    create_checkpoint,
-    get_checkpoint,
-    list_checkpoints,
-    delete_checkpoint,
-
-    # UI session operations
-    create_ui_session,
-    get_ui_session,
-    update_ui_session,
-    delete_ui_session,
-    list_ui_sessions,
-
-    # UI message operations
-    create_ui_message,
-    get_ui_messages,
-    delete_ui_messages,
+from .operations_async import (
+    # Async planning session operations (recommended)
+    create_planning_session_async,
+    get_planning_session_async,
+    update_planning_session_async,
+    delete_planning_session_async,
+    list_planning_sessions_async,
+    update_session_state_async,
+    add_session_event_async,
+    get_session_events_async,
+    # Async checkpoint operations (recommended)
+    create_checkpoint_async,
+    get_checkpoint_async,
+    list_checkpoints_async,
+    delete_checkpoint_async,
+    # Async UI session operations (recommended)
+    create_ui_session_async,
+    get_ui_session_async,
+    update_ui_session_async,
+    delete_ui_session_async,
+    list_ui_sessions_async,
+    # Async UI message operations (recommended)
+    create_ui_message_async,
+    get_ui_messages_async,
+    delete_ui_messages_async,
 )
 
 __all__ = [
-    # Engine
+    # Engine (sync - deprecated)
     "get_session",
     "init_db",
+    # Engine (async - recommended)
+    "get_async_session",
+    "init_async_db",
+    "get_async_engine",
+    "dispose_async_engine",
+    "get_db_path",
 
     # Models
     "PlanningSession",
@@ -54,28 +67,25 @@ __all__ = [
     "UISession",
     "UIMessage",
 
-    # Operations
-    "create_planning_session",
-    "get_planning_session",
-    "update_planning_session",
-    "delete_planning_session",
-    "list_planning_sessions",
-    "update_session_state",
-    "add_session_event",
-    "get_session_events",
-
-    "create_checkpoint",
-    "get_checkpoint",
-    "list_checkpoints",
-    "delete_checkpoint",
-
-    "create_ui_session",
-    "get_ui_session",
-    "update_ui_session",
-    "delete_ui_session",
-    "list_ui_sessions",
-
-    "create_ui_message",
-    "get_ui_messages",
-    "delete_ui_messages",
+    # Async operations (recommended)
+    "create_planning_session_async",
+    "get_planning_session_async",
+    "update_planning_session_async",
+    "delete_planning_session_async",
+    "list_planning_sessions_async",
+    "update_session_state_async",
+    "add_session_event_async",
+    "get_session_events_async",
+    "create_checkpoint_async",
+    "get_checkpoint_async",
+    "list_checkpoints_async",
+    "delete_checkpoint_async",
+    "create_ui_session_async",
+    "get_ui_session_async",
+    "update_ui_session_async",
+    "delete_ui_session_async",
+    "list_ui_sessions_async",
+    "create_ui_message_async",
+    "get_ui_messages_async",
+    "delete_ui_messages_async",
 ]

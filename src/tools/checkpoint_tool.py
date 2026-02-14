@@ -35,14 +35,14 @@ class _SqlCheckpointStorage:
     """
     Checkpoint的SQLite存储实现（内部类）
 
-    提供基于数据库的checkpoint持久化功能。
+    提供基于数据库的checkpoint持久化功能（异步）。
     """
 
     def __init__(self) -> None:
         """初始化SQLite存储"""
         pass
 
-    def save(
+    async def save(
         self,
         project_name: str,
         timestamp: str,
@@ -50,16 +50,17 @@ class _SqlCheckpointStorage:
         state: dict[str, Any],
         metadata: dict[str, Any]
     ) -> str | None:
-        """保存checkpoint到SQLite数据库"""
+        """保存checkpoint到SQLite数据库（异步）"""
         try:
-            from backend.database import create_checkpoint
+            from backend.database import create_checkpoint_async
 
-            success = create_checkpoint(
-                project_name=project_name,
-                timestamp=timestamp,
+            success = await create_checkpoint_async(
                 checkpoint_id=checkpoint_id,
-                state=state,
-                metadata=metadata
+                session_id=timestamp,
+                layer=metadata.get("layer", 0),
+                description=metadata.get("description", ""),
+                state_snapshot=state,
+                checkpoint_metadata=metadata
             )
 
             if success:
@@ -73,20 +74,20 @@ class _SqlCheckpointStorage:
             logger.error(f"[SqlStorage] 保存checkpoint失败: {e}")
             return None
 
-    def load(self, checkpoint_id: str) -> dict[str, Any] | None:
-        """从SQLite数据库加载checkpoint"""
+    async def load(self, checkpoint_id: str) -> dict[str, Any] | None:
+        """从SQLite数据库加载checkpoint（异步）"""
         try:
-            from backend.database import get_checkpoint
+            from backend.database import get_checkpoint_async
 
-            data = get_checkpoint(checkpoint_id)
+            data = await get_checkpoint_async(checkpoint_id)
 
             if data:
                 logger.info(f"[SqlStorage] Checkpoint已加载: {checkpoint_id}")
                 return {
                     "checkpoint_id": data["checkpoint_id"],
                     "timestamp": data["timestamp"],
-                    "metadata": data.get("metadata", {}),
-                    "state": data["state"]
+                    "metadata": data.get("checkpoint_metadata", {}),
+                    "state": data["state_snapshot"]
                 }
             else:
                 logger.error(f"[SqlStorage] Checkpoint不存在: {checkpoint_id}")
@@ -96,16 +97,16 @@ class _SqlCheckpointStorage:
             logger.error(f"[SqlStorage] 加载checkpoint失败: {e}")
             return None
 
-    def list_checkpoints(self, project_name: str, timestamp: str | None = None) -> list[dict[str, Any]]:
-        """列出项目的所有checkpoint"""
+    async def list_checkpoints(self, project_name: str, timestamp: str | None = None) -> list[dict[str, Any]]:
+        """列出项目的所有checkpoint（异步）"""
         try:
-            from backend.database import list_checkpoints
+            from backend.database import list_checkpoints_async
 
             if timestamp:
-                checkpoints = list_checkpoints(session_id=timestamp)
+                checkpoints = await list_checkpoints_async(session_id=timestamp)
             else:
                 # List all checkpoints (will need to filter by project name later)
-                checkpoints = list_checkpoints()
+                checkpoints = await list_checkpoints_async()
 
             return checkpoints
 
@@ -113,12 +114,12 @@ class _SqlCheckpointStorage:
             logger.error(f"[SqlStorage] 列出checkpoint失败: {e}")
             return []
 
-    def delete(self, checkpoint_id: str) -> bool:
-        """删除checkpoint"""
+    async def delete(self, checkpoint_id: str) -> bool:
+        """删除checkpoint（异步）"""
         try:
-            from backend.database import delete_checkpoint
+            from backend.database import delete_checkpoint_async
 
-            success = delete_checkpoint(checkpoint_id)
+            success = await delete_checkpoint_async(checkpoint_id)
 
             if success:
                 logger.info(f"[SqlStorage] Checkpoint已删除: {checkpoint_id}")

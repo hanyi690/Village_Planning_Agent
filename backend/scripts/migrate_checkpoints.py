@@ -3,9 +3,10 @@ Migration script: JSON checkpoints to SQLite
 迁移脚本：将 JSON 检查点迁移到 SQLite
 
 This script scans the results/ directory for JSON checkpoint files
-and migrates them to the SQLite database.
+and migrates them to the SQLite database (async version).
 """
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -14,7 +15,7 @@ from datetime import datetime
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from backend.database import init_db, create_checkpoint
+from backend.database import init_async_db, create_checkpoint_async
 from src.utils.logger import get_logger
 from src.utils.paths import get_project_root
 
@@ -89,9 +90,9 @@ def scan_checkpoints(results_dir: Path) -> list[dict]:
         return checkpoints
 
 
-def migrate_checkpoints(checkpoints: list[dict], dry_run: bool = False) -> dict:
+async def migrate_checkpoints(checkpoints: list[dict], dry_run: bool = False) -> dict:
     """
-    Migrate checkpoints to SQLite database
+    Migrate checkpoints to SQLite database (async)
 
     Args:
         checkpoints: List of checkpoint data
@@ -122,13 +123,14 @@ def migrate_checkpoints(checkpoints: list[dict], dry_run: bool = False) -> dict:
                 stats["success"] += 1
                 continue
 
-            # Create checkpoint in database
-            success = create_checkpoint(
-                project_name=cp["project_name"],
-                timestamp=cp["timestamp"],
+            # Create checkpoint in database (async)
+            success = await create_checkpoint_async(
                 checkpoint_id=checkpoint_id,
-                state=cp["state"],
-                metadata=cp["metadata"]
+                session_id=cp["timestamp"],
+                layer=cp["metadata"].get("layer", 0),
+                description=cp["metadata"].get("description", ""),
+                state_snapshot=cp["state"],
+                checkpoint_metadata=cp["metadata"]
             )
 
             if success:
@@ -147,15 +149,15 @@ def migrate_checkpoints(checkpoints: list[dict], dry_run: bool = False) -> dict:
     return stats
 
 
-def main():
-    """Main migration function"""
+async def main():
+    """Main migration function (async)"""
     print("=" * 60)
     print("Checkpoint Migration: JSON → SQLite")
     print("=" * 60)
 
-    # Initialize database
+    # Initialize database (async)
     print("\n1. Initializing database...")
-    if not init_db():
+    if not await init_async_db():
         print("❌ Failed to initialize database")
         return
 
@@ -183,7 +185,7 @@ def main():
 
     # Confirm migration
     print("\n4. Starting migration...")
-    stats = migrate_checkpoints(checkpoints, dry_run=False)
+    stats = await migrate_checkpoints(checkpoints, dry_run=False)
 
     # Print results
     print("\n" + "=" * 60)
@@ -205,4 +207,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

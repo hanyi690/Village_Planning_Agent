@@ -31,9 +31,9 @@ from sqlalchemy import Index, UniqueConstraint
 class PlanningSession(SQLModel, table=True):
     """
     Planning session table
-    规划会话表
-
-    Stores complete state for village planning sessions.
+    规划会话表（精简版 - 只存储业务元数据）
+    
+    状态数据由 AsyncSqliteSaver 自动存储在 checkpoints 表中。
     """
     __tablename__ = "planning_sessions"
 
@@ -43,65 +43,28 @@ class PlanningSession(SQLModel, table=True):
     # Basic info
     project_name: str = Field(index=True)
     status: str = Field(index=True)  # running/paused/completed/failed
+    execution_error: Optional[str] = Field(
+        default=None,
+        sa_column=Text()  # 执行错误信息(业务元数据)
+    )
 
     # User input
     village_data: Optional[str] = Field(
-        default=None, 
-        sa_column=Text()       # ✅ 改为 Optional + default=None，生成可空列
+        default=None,
+        sa_column=Text()       # 可空列
     )
     task_description: str = Field(default="制定村庄总体规划方案")
     constraints: str = Field(default="无特殊约束")
 
-    # Flow control
-    current_layer: int = Field(default=1)
-    previous_layer: int = Field(default=1)
-    layer_1_completed: bool = Field(default=False)
-    layer_2_completed: bool = Field(default=False)
-    layer_3_completed: bool = Field(default=False)
-
-    # Review settings
-    need_human_review: bool = Field(default=False)
-    human_feedback: Optional[str] = None
-    need_revision: bool = Field(default=False)
-
-    # Step mode
-    step_mode: bool = Field(default=False)
-    pause_after_step: bool = Field(default=False)
+    # ✅ 精简：删除手动维护的状态字段
+    # 以下字段现在由 AsyncSqliteSaver 在 checkpoints 表中自动管理：
+    # - current_layer, layer_X_completed
+    # - pause_after_step, waiting_for_review
+    # - state_snapshot, execution_complete, execution_error
+    # - events, sent_layer_events, sent_pause_events
 
     # Output
     output_path: Optional[str] = None
-
-    # Complete state snapshot (JSON) - for checkpoint restoration
-    state_snapshot: Optional[Dict[str, Any]] = Field(
-        default=None,
-        sa_column=Column(JSON)
-    )
-
-    # Request parameters (JSON) - for session reconstruction
-    request_params: Optional[Dict[str, Any]] = Field(
-        default=None,
-        sa_column=Column(JSON)
-    )
-
-    # Event tracking
-    events: List[Dict[str, Any]] = Field(
-        default_factory=list,          # ⭐ 修改点：自动初始化为 []
-        sa_column=Column(JSON)
-    )
-
-    sent_layer_events: List[str] = Field(
-        default_factory=list,          # JSON 数组存储已发送的 layer_completed 事件标识
-        sa_column=Column(JSON)
-    )
-
-    sent_pause_events: List[str] = Field(
-        default_factory=list,          # 存储 pause_layer_X 事件标识
-        sa_column=Column(JSON)
-    )
-    
-    # Execution tracking
-    execution_complete: bool = Field(default=False)
-    execution_error: Optional[str] = None
 
     # Timestamps
     created_at: datetime = Field(default_factory=datetime.now)

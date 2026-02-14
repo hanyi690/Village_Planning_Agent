@@ -47,9 +47,9 @@ class SQLiteCheckpointSaver(BaseCheckpointSaver):
         self.db_path = db_path
         logger.info(f"SQLiteCheckpointSaver initialized")
 
-    def get(self, config: Dict[str, Any]) -> Optional[Checkpoint]:
+    async def get(self, config: Dict[str, Any]) -> Optional[Checkpoint]:
         """
-        Get checkpoint by config
+        Get checkpoint by config (async)
 
         Args:
             config: Configuration dict with thread_id
@@ -62,10 +62,10 @@ class SQLiteCheckpointSaver(BaseCheckpointSaver):
             if not thread_id:
                 return None
 
-            # Query database for checkpoint
-            from backend.database import get_planning_session
+            # Query database for checkpoint (async)
+            from backend.database import get_planning_session_async
 
-            session_data = get_planning_session(thread_id)
+            session_data = await get_planning_session_async(thread_id)
             if not session_data:
                 return None
 
@@ -83,13 +83,13 @@ class SQLiteCheckpointSaver(BaseCheckpointSaver):
             logger.error(f"Failed to get checkpoint: {e}", exc_info=True)
             return None
 
-    def put(
+    async def put(
         self,
         config: Dict[str, Any],
         checkpoint: Checkpoint,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Save checkpoint
+        """Save checkpoint (async)
 
         Args:
             config: Configuration dict with thread_id
@@ -107,10 +107,10 @@ class SQLiteCheckpointSaver(BaseCheckpointSaver):
             # Convert checkpoint to state dict
             state = self._checkpoint_to_state(checkpoint)
 
-            # Update database
-            from backend.database import update_session_state
+            # Update database (async)
+            from backend.database import update_session_state_async
 
-            update_session_state(thread_id, state)
+            await update_session_state_async(thread_id, state)
 
             logger.debug(f"Saved checkpoint for thread: {thread_id}")
             return config
@@ -119,14 +119,14 @@ class SQLiteCheckpointSaver(BaseCheckpointSaver):
             logger.error(f"Failed to save checkpoint: {e}", exc_info=True)
             return config
 
-    def list(
+    async def list(
         self,
         config: Dict[str, Any],
         limit: int = 10,
         before: Optional[Dict[str, Any]] = None
     ) -> Iterator[Checkpoint]:
         """
-        List checkpoints for a thread
+        List checkpoints for a thread (async)
 
         Args:
             config: Configuration dict
@@ -141,10 +141,10 @@ class SQLiteCheckpointSaver(BaseCheckpointSaver):
             if not thread_id:
                 return
 
-            # Query checkpoints from database
-            from backend.database import list_checkpoints
+            # Query checkpoints from database (async)
+            from backend.database import list_checkpoints_async
 
-            checkpoints = list_checkpoints(session_id=thread_id)
+            checkpoints = await list_checkpoints_async(session_id=thread_id)
 
             for cp_data in checkpoints[:limit]:
                 state = cp_data.get("state")

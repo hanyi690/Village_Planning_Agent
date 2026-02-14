@@ -229,7 +229,7 @@ class AsyncStoragePipeline:
     ) -> None:
         """写入SQLite（批量）"""
         try:
-            from backend.database import update_session_state
+            from backend.database import update_session_state_async
 
             # 确定state_key
             state_key = {
@@ -242,14 +242,14 @@ class AsyncStoragePipeline:
                 logger.warning(f"[StoragePipeline] Unknown layer: {layer}")
                 return
 
-            # 更新数据库
+            # 更新数据库（异步）
             update_data = {
                 state_key: dimension_reports,
                 f"layer_{layer}_completed": True,
                 "updated_at": datetime.now().isoformat()
             }
 
-            update_session_state(self.session_id, update_data)
+            await update_session_state_async(self.session_id, update_data)
 
             logger.info(
                 f"[StoragePipeline] SQLite批量写入成功: Layer {layer}, "

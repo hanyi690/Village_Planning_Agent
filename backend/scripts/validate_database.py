@@ -1,8 +1,9 @@
 """
-Quick validation script for database implementation
-数据库实现快速验证脚本
+Quick validation script for database implementation (async)
+数据库实现快速验证脚本（异步版本）
 """
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -16,28 +17,28 @@ def validate_imports():
     try:
         from backend.database import (
             get_session,
-            init_db,
+            init_async_db,
             PlanningSession,
             Checkpoint,
             UISession,
             UIMessage,
-            create_planning_session,
-            get_planning_session,
-            update_planning_session,
-            delete_planning_session,
-            list_planning_sessions,
-            create_checkpoint,
-            get_checkpoint,
-            list_checkpoints,
-            delete_checkpoint,
-            create_ui_session,
-            get_ui_session,
-            update_ui_session,
-            delete_ui_session,
-            list_ui_sessions,
-            create_ui_message,
-            get_ui_messages,
-            delete_ui_messages,
+            create_planning_session_async,
+            get_planning_session_async,
+            update_planning_session_async,
+            delete_planning_session_async,
+            list_planning_sessions_async,
+            create_checkpoint_async,
+            get_checkpoint_async,
+            list_checkpoints_async,
+            delete_checkpoint_async,
+            create_ui_session_async,
+            get_ui_session_async,
+            update_ui_session_async,
+            delete_ui_session_async,
+            list_ui_sessions_async,
+            create_ui_message_async,
+            get_ui_messages_async,
+            delete_ui_messages_async,
         )
         print("  ✓ All imports successful")
         return True
@@ -46,14 +47,14 @@ def validate_imports():
         return False
 
 
-def validate_database_init():
-    """Validate database initialization"""
+async def validate_database_init():
+    """Validate database initialization (async)"""
     print("\nValidating database initialization...")
 
     try:
-        from backend.database import init_db, get_db_path
+        from backend.database import init_async_db, get_db_path
 
-        if init_db():
+        if await init_async_db():
             db_path = get_db_path()
             print(f"  ✓ Database initialized at: {db_path}")
             return True
@@ -67,15 +68,15 @@ def validate_database_init():
         return False
 
 
-def validate_crud_operations():
-    """Validate basic CRUD operations"""
+async def validate_crud_operations():
+    """Validate basic CRUD operations (async)"""
     print("\nValidating CRUD operations...")
 
     try:
         from backend.database import (
-            create_planning_session,
-            get_planning_session,
-            delete_planning_session
+            create_planning_session_async,
+            get_planning_session_async,
+            delete_planning_session_async
         )
 
         # Test Create
@@ -89,11 +90,11 @@ def validate_crud_operations():
             "status": "running",
         }
 
-        result = create_planning_session(state)
+        result = await create_planning_session_async(state)
         print(f"  ✓ Created session: {result}")
 
         # Test Read
-        session = get_planning_session(session_id)
+        session = await get_planning_session_async(session_id)
         if session and session["project_name"] == "验证测试":
             print(f"  ✓ Retrieved session: {session['project_name']}")
         else:
@@ -101,7 +102,7 @@ def validate_crud_operations():
             return False
 
         # Test Delete
-        if delete_planning_session(session_id):
+        if await delete_planning_session_async(session_id):
             print("  ✓ Deleted session")
         else:
             print("  ✗ Failed to delete session")
@@ -116,25 +117,26 @@ def validate_crud_operations():
         return False
 
 
-def validate_checkpoint_operations():
-    """Validate checkpoint operations"""
+async def validate_checkpoint_operations():
+    """Validate checkpoint operations (async)"""
     print("\nValidating checkpoint operations...")
 
     try:
         from backend.database import (
-            create_checkpoint,
-            get_checkpoint,
-            delete_checkpoint
+            create_checkpoint_async,
+            get_checkpoint_async,
+            delete_checkpoint_async
         )
 
         # Test Create
         checkpoint_id = "validation_checkpoint_001"
-        success = create_checkpoint(
-            project_name="验证测试",
-            timestamp="test_session",
+        success = await create_checkpoint_async(
             checkpoint_id=checkpoint_id,
-            state={"test": "data"},
-            metadata={"layer": 1}
+            session_id="test_session",
+            layer=1,
+            description="Test checkpoint",
+            state_snapshot={"test": "data"},
+            checkpoint_metadata={"layer": 1}
         )
 
         if success:
@@ -144,7 +146,7 @@ def validate_checkpoint_operations():
             return False
 
         # Test Read
-        checkpoint = get_checkpoint(checkpoint_id)
+        checkpoint = await get_checkpoint_async(checkpoint_id)
         if checkpoint and checkpoint["layer"] == 1:
             print(f"  ✓ Retrieved checkpoint: layer {checkpoint['layer']}")
         else:
@@ -152,7 +154,7 @@ def validate_checkpoint_operations():
             return False
 
         # Test Delete
-        if delete_checkpoint(checkpoint_id):
+        if await delete_checkpoint_async(checkpoint_id):
             print("  ✓ Deleted checkpoint")
         else:
             print("  ✗ Failed to delete checkpoint")
@@ -167,19 +169,19 @@ def validate_checkpoint_operations():
         return False
 
 
-def main():
-    """Run all validations"""
+async def main():
+    """Run all validations (async)"""
     print("=" * 60)
-    print("Database Implementation Validation")
+    print("Database Implementation Validation (Async)")
     print("=" * 60)
 
     results = []
 
     # Run validations
     results.append(("Imports", validate_imports()))
-    results.append(("Database Init", validate_database_init()))
-    results.append(("CRUD Operations", validate_crud_operations()))
-    results.append(("Checkpoint Operations", validate_checkpoint_operations()))
+    results.append(("Database Init", await validate_database_init()))
+    results.append(("CRUD Operations", await validate_crud_operations()))
+    results.append(("Checkpoint Operations", await validate_checkpoint_operations()))
 
     # Print summary
     print("\n" + "=" * 60)
@@ -206,4 +208,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(asyncio.run(main()))

@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Literal, TypedDict, Optional
 from typing_extensions import Annotated
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
@@ -909,17 +908,41 @@ def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "la
 
 def create_village_planning_graph(checkpointer: Optional[Any] = None) -> StateGraph:
     """
-    创建村庄规划主图
-
-    使用新的节点类实例替代旧的函数节点。
-
+    创建村庄规划主图 (Main Graph)
+    
     Args:
-        checkpointer: Optional LangGraph checkpointer for state persistence
-
+        checkpointer: AsyncSqliteSaver 实例 (必须显式传入)
+    
     Returns:
-        编译后的 StateGraph 实例
+        编译后的 StateGraph
     """
     logger.info("[主图构建] 开始构建村庄规划主图")
+    
+    # 强制类型检查(调试利器)
+    logger.info(f"DEBUG: 传入的 checkpointer 类型是: {type(checkpointer)}")
+    logger.info(f"DEBUG: checkpointer 类名是: {type(checkpointer).__name__}")
+    logger.info(f"DEBUG: checkpointer MRO: {[cls.__name__ for cls in type(checkpointer).__mro__]}")
+    logger.info(f"DEBUG: checkpointer repr: {repr(checkpointer)}")
+    
+    # 如果类型不对,打印调用栈,看看是谁在传错东西
+    if "ContextManager" in str(type(checkpointer)):
+        import traceback
+        logger.error("发现元凶：传入了 ContextManager 而不是 Saver 实例！")
+        logger.error("调用栈:")
+        traceback.print_stack()
+        raise TypeError("发现元凶：传入了 ContextManager 而不是 Saver 实例！")
+    
+    # 强制要求外部传入 checkpointer,不要使用默认值
+    if checkpointer is None:
+        raise ValueError("Checkpointer 必须显式传入！不能为 None")
+    
+    # 在这里加一个断言,如果类型不对直接报错,防止它进入 compile
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+    if not isinstance(checkpointer, BaseCheckpointSaver):
+        raise TypeError(
+            f"这就是元凶！拿到的 checkpointer 类型居然是: {type(checkpointer)} "
+            f"(类名: {type(checkpointer).__name__})"
+        )
 
     # 创建节点实例
     pause_node = PauseManagerNode()
@@ -1005,11 +1028,20 @@ def create_village_planning_graph(checkpointer: Optional[Any] = None) -> StateGr
 
     # Compile with checkpointer
     if checkpointer is None:
+        # 如果没有提供 checkpointer,使用 MemorySaver (用于旧代码兼容)
+        from langgraph.checkpoint.memory import MemorySaver
         checkpointer = MemorySaver()
-        logger.info("[主图构建] Using default MemorySaver checkpointer")
+        logger.info("[主图构建] Using MemorySaver checkpointer (in-memory, no persistence)")
     else:
+        # 在这里加一个断言,如果类型不对直接报错,防止它进入 compile
+        from langgraph.checkpoint.base import BaseCheckpointSaver
+        if not isinstance(checkpointer, BaseCheckpointSaver):
+            raise TypeError(
+                f"这就是元凶！拿到的 checkpointer 类型居然是: {type(checkpointer)} "
+                f"(类名: {type(checkpointer).__name__})"
+            )
         logger.info(f"[主图构建] Using provided checkpointer: {type(checkpointer).__name__}")
-
+    
     main_graph = builder.compile(checkpointer=checkpointer)
 
     logger.info("[主图构建] 村庄规划主图构建完成 (with checkpointer)")

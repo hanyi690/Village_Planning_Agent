@@ -64,20 +64,22 @@ async def lifespan(app: FastAPI):
     logger.info("🗄️  Initializing database...")
     from backend.database import init_db
     if init_db():
-        logger.info("✅ Database initialized successfully")
+        logger.info("✅ Sync database initialized successfully")
     else:
-        logger.error("❌ Database initialization failed")
+        logger.error("❌ Sync database initialization failed")
 
-    # Initialize async engine if enabled
+    # Initialize async database if enabled
     use_async = os.getenv("USE_ASYNC_DATABASE", "true").lower() == "true"
     if use_async:
-        logger.info("Initializing async database engine...")
+        logger.info("Initializing async database...")
         try:
-            from backend.database.operations_async import get_async_engine
-            await get_async_engine()
-            logger.info("✅ Async database engine initialized")
+            from backend.database import init_async_db
+            if await init_async_db():
+                logger.info("✅ Async database initialized successfully")
+            else:
+                logger.error("❌ Async database initialization failed")
         except Exception as e:
-            logger.error(f"❌ Async engine initialization failed: {e}")
+            logger.error(f"❌ Async database initialization failed: {e}", exc_info=True)
             logger.warning("⚠️  Falling back to sync mode")
 
     # TODO: 启动会话清理后台任务（功能尚未实现）
@@ -96,11 +98,11 @@ async def lifespan(app: FastAPI):
     # Dispose async engine
     if use_async:
         try:
-            from backend.database.operations_async import dispose_async_engine
+            from backend.database import dispose_async_engine
             await dispose_async_engine()
             logger.info("✅ Async engine disposed")
         except Exception as e:
-            logger.error(f"❌ Failed to dispose async engine: {e}")
+            logger.error(f"❌ Failed to dispose async engine: {e}", exc_info=True)
 
     logger.info("✅ Resources cleaned up")
 

@@ -10,6 +10,7 @@
 from pathlib import Path
 from typing import Any, Dict, Optional
 import yaml
+import threading
 
 from .unified_base_planner import UnifiedPlannerBase
 from ..utils.logger import get_logger
@@ -36,6 +37,7 @@ class GenericPlanner(UnifiedPlannerBase):
     # 类级别配置缓存
     _dimensions_config: Optional[Dict[str, Any]] = None
     _prompts_config: Optional[Dict[str, str]] = None
+    _config_lock = threading.Lock()  # 线程安全锁
 
     def __init__(self, dimension_key: str):
         """
@@ -69,25 +71,32 @@ class GenericPlanner(UnifiedPlannerBase):
 
     @classmethod
     def _load_all_configs(cls) -> None:
-        """加载所有配置文件（带缓存）"""
+        """加载所有配置文件（带缓存 + 线程安全）"""
+        # 快速路径：如果已加载，直接返回
         if cls._dimensions_config is not None:
             return
 
-        config_dir = Path(__file__).parent.parent / "config"
+        # 使用锁保护配置加载
+        with cls._config_lock:
+            # 双重检查：可能在等待锁时已被其他线程加载
+            if cls._dimensions_config is not None:
+                return
 
-        # 加载维度配置
-        dimensions_path = config_dir / "dimensions.yaml"
-        with open(dimensions_path, 'r', encoding='utf-8') as f:
-            config_data = yaml.safe_load(f)
-            cls._dimensions_config = config_data["dimensions"]
+            config_dir = Path(__file__).parent.parent / "config"
 
-        # 加载 Prompt 配置
-        prompts_path = config_dir / "prompts.yaml"
-        with open(prompts_path, 'r', encoding='utf-8') as f:
-            prompt_data = yaml.safe_load(f)
-            cls._prompts_config = prompt_data["prompts"]
+            # 加载维度配置
+            dimensions_path = config_dir / "dimensions.yaml"
+            with open(dimensions_path, 'r', encoding='utf-8') as f:
+                config_data = yaml.safe_load(f)
+                cls._dimensions_config = config_data["dimensions"]
 
-        logger.info(f"[GenericPlanner] 配置加载完成: {len(cls._dimensions_config)} 个维度")
+            # 加载 Prompt 配置
+            prompts_path = config_dir / "prompts.yaml"
+            with open(prompts_path, 'r', encoding='utf-8') as f:
+                prompt_data = yaml.safe_load(f)
+                cls._prompts_config = prompt_data["prompts"]
+
+            logger.info(f"[GenericPlanner] 配置加载完成: {len(cls._dimensions_config)} 个维度")
 
     @classmethod
     def _load_dimension_config(cls, dimension_key: str) -> Optional[Dict[str, Any]]:

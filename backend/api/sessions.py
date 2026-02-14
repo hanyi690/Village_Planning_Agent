@@ -24,14 +24,16 @@ from pydantic import BaseModel, Field
 from backend.schemas import ConversationMessage, ConversationState
 from backend.utils.error_handler import handle_api_error
 from backend.database import (
-    create_ui_session,
-    get_ui_session,
-    update_ui_session,
-    delete_ui_session,
-    list_ui_sessions,
-    create_ui_message,
-    get_ui_messages,
-    delete_ui_messages,
+    # Async UI session operations
+    create_ui_session_async,
+    get_ui_session_async,
+    update_ui_session_async,
+    delete_ui_session_async,
+    list_ui_sessions_async,
+    # Async UI message operations
+    create_ui_message_async,
+    get_ui_messages_async,
+    delete_ui_messages_async,
 )
 
 router = APIRouter()
@@ -100,14 +102,14 @@ def get_session(session_id: str) -> ConversationState | None:
     return sessions.get(session_id)
 
 
-def create_session(session_id: str, session_type: str) -> ConversationState:
-    """Create a new session"""
+async def create_session(session_id: str, session_type: str) -> ConversationState:
+    """Create a new session (async)"""
     conv = ConversationState(conversation_id=session_id, status="idle")
     sessions[session_id] = conv
 
     if USE_DATABASE_PERSISTENCE:
         try:
-            create_ui_session(session_id, session_type)
+            await create_ui_session_async(session_id, session_type)
         except Exception as e:
             logger.error(f"Failed to create UI session in database: {e}")
 
@@ -142,7 +144,7 @@ async def create_new_session(request: CreateSessionRequest = CreateSessionReques
     """
     try:
         session_id = str(uuid.uuid4())
-        session = create_session(session_id, request.session_type)
+        session = await create_session(session_id, request.session_type)
 
         if request.session_type == "conversation":
             session.messages.append(create_message("assistant", WELCOME_MESSAGE))
@@ -185,8 +187,8 @@ async def delete_session(session_id: str):
 
     if USE_DATABASE_PERSISTENCE:
         try:
-            delete_ui_messages(session_id)
-            delete_ui_session(session_id)
+            await delete_ui_messages_async(session_id)
+            await delete_ui_session_async(session_id)
         except Exception as e:
             logger.error(f"Failed to delete UI session from database: {e}")
 
@@ -240,7 +242,7 @@ async def add_message(session_id: str, request: AddMessageRequest):
 
         if USE_DATABASE_PERSISTENCE:
             try:
-                create_ui_message(
+                await create_ui_message_async(
                     session_id=session_id,
                     role=request.role,
                     content=request.content,
