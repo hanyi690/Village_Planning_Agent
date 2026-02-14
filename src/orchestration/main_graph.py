@@ -758,20 +758,28 @@ def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis",
 
     这个路由函数确保pause节点能够正确地将流程引导到当前应该执行的layer。
 
-    ✅ 修复：在步进模式下，如果检测到层级完成，直接返回END终止执行，
-    以便前端能够检测到暂停状态并触发审查流程。
+    ✅ 修复：在步进模式下，只检查当前层级是否刚刚完成(等待批准)，
+    而不是检查是否有任何层级完成，避免误判导致无法继续执行后续层级。
     """
     current_layer = state.get("current_layer", 1)
 
-    # ✅ 检查是否需要暂停（步进模式 + 有层级完成）
+    # ✅ 检查当前层级是否刚刚完成（步进模式 + 当前层级完成）
     step_mode = state.get("step_mode", False)
     layer_1_completed = state.get("layer_1_completed", False)
     layer_2_completed = state.get("layer_2_completed", False)
     layer_3_completed = state.get("layer_3_completed", False)
-    any_layer_completed = layer_1_completed or layer_2_completed or layer_3_completed
 
-    if step_mode and any_layer_completed:
-        logger.info(f"[主图-路由] 步进模式：检测到层级完成，终止执行以便前端触发审查 (current_layer={current_layer}, layer_1={layer_1_completed}, layer_2={layer_2_completed}, layer_3={layer_3_completed})")
+    # 只检查当前层级是否刚刚完成，而不是检查是否有任何层级完成
+    current_layer_just_completed = False
+    if current_layer == 1 and layer_1_completed:
+        current_layer_just_completed = True
+    elif current_layer == 2 and layer_2_completed:
+        current_layer_just_completed = True
+    elif current_layer == 3 and layer_3_completed:
+        current_layer_just_completed = True
+
+    if step_mode and current_layer_just_completed:
+        logger.info(f"[主图-路由] 步进模式：当前层级{current_layer}刚刚完成，终止执行等待批准")
         return "end"  # 终止执行，等待前端批准后恢复
 
     logger.info(f"[主图-路由] 从pause节点路由到Layer {current_layer}")
