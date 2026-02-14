@@ -681,8 +681,8 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
                 logger.info(f"[Planning API] [{session_id}] 初始化 sent_layer_events")
             else:
                 logger.info(f"[Planning API] [{session_id}] 保留 sent_layer_events: {_sessions[session_id]['sent_layer_events']}")
-            if "sent_pause_events" not in _sessions[session_id]:
-                _sessions[session_id]["sent_pause_events"] = set()
+            # ✅ 清空 sent_pause_events 以便下一层暂停
+            _sessions[session_id]["sent_pause_events"].clear()
 
     # 添加 resumed 事件到 events 列表，通知前端已恢复执行
     _append_session_event(session_id, {
@@ -705,16 +705,18 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
         logger.error(f"[Planning API] [{session_id}] 持久化状态失败: {db_error}", exc_info=True)
         # 继续执行,不阻断恢复流程
 
-    # ===== 暴力手动创建 AsyncSqliteSaver 实例 =====
-    import aiosqlite
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-    
-    conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
-    saver = AsyncSqliteSaver(conn)
-    await saver.setup()
-    
-    # Create graph using checkpointer
+    # ✅ 使用统一的单例获取方式
+    saver = await get_global_checkpointer()
     graph = create_village_planning_graph(checkpointer=saver)
+    config = {"configurable": {"thread_id": session_id}}
+
+    # ✅ 使用 graph.aupdate_state 清除暂停标志
+    await graph.aupdate_state(
+        config,
+        {"pause_after_step": False},
+        as_node="PauseManagerNode"
+    )
+    logger.info(f"[Planning API] [{session_id}] 已清除 pause_after_step 标志")
 
     # Reset stream state
     _set_stream_state(session_id, "active")
@@ -1331,14 +1333,15 @@ async def _rebuild_session_from_db(session_id: str) -> Optional[Dict[str, Any]]:
 
     # ✅ 新增：从 checkpointer 恢复 state
     saver = await get_global_checkpointer()
+    graph = create_village_planning_graph(checkpointer=saver)
     config = {"configurable": {"thread_id": session_id}}
-    
+
     try:
-        state_snapshot = await saver.aget_state(config)
+        state_snapshot = await graph.aget_state(config)
         initial_state = state_snapshot.values if state_snapshot else {}
-        logger.info(f"[Planning API] [{session_id}] 已从 AsyncSqliteSaver 恢复 state: pause_after_step={initial_state.get('pause_after_step', False)}, current_layer={initial_state.get('current_layer', 1)}")
+        logger.info(f"[Planning API] [{session_id}] 已从 LangGraph checkpoint 恢复 state: pause_after_step={initial_state.get('pause_after_step', False)}, current_layer={initial_state.get('current_layer', 1)}")
     except Exception as e:
-        logger.warning(f"[Planning API] [{session_id}] 无法从 checkpointer 恢复 state: {e}")
+        logger.warning(f"[Planning API] [{session_id}] 无法从 checkpoint 恢复 state: {e}")
         initial_state = {}
 
     with _sessions_lock:
