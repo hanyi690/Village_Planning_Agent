@@ -399,9 +399,9 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key} -> {mapped_dimension_key})")
 
     try:
-        # 【使用新架构】使用 GenericPlannerFactory 创建规划器
-        from ..planners.generic_planner import GenericPlannerFactory
-        planner = GenericPlannerFactory.create_planner(mapped_dimension_key)
+        # 【使用新架构】使用 Layer3PlannerFactory 创建规划器（Python Code-First 模式）
+        from ..planners.layer3_planner import Layer3PlannerFactory
+        planner = Layer3PlannerFactory.create_planner(mapped_dimension_key, dimension_name)
 
         # 【使用新架构】调用规划器的 execute 方法
         # 注意：planner.execute 需要完整的状态字典
