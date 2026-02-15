@@ -19,6 +19,8 @@ interface LayerReportCardProps {
   showExpandAll?: boolean;   // NEW: 是否显示全局展开按钮
   onOpenInSidebar?: () => void;  // NEW: 跳转到侧边栏
   onToggleAll?: (expand: boolean) => void;  // NEW: 展开/折叠全部
+  isActive?: boolean;  // NEW: 是否为当前活跃层
+  hasStreamingDimensions?: boolean;  // NEW: 是否有流式维度内容
 }
 
 export default function LayerReportCard({
@@ -31,18 +33,26 @@ export default function LayerReportCard({
   showExpandAll,
   onOpenInSidebar,
   onToggleAll,
+  isActive = false,  // NEW: 默认为非活跃层
+  hasStreamingDimensions = false,  // NEW: 是否有流式维度内容
 }: LayerReportCardProps) {
-  // 行为差异：mode='chat' 默认折叠，mode='sidebar' 默认展开
-  const actualDefaultExpanded = defaultExpanded ?? (mode === 'sidebar');
-  const actualMaxHeight = maxHeight ?? (mode === 'chat' ? '500px' : 'none');
+  // ✅ 修复：活跃层默认展开，非活跃层默认折叠
+  // ✅ 新增：有流式维度内容时默认展开
+  const actualDefaultExpanded = defaultExpanded ?? (mode === 'sidebar' || isActive || hasStreamingDimensions);
+  const actualMaxHeight = maxHeight ?? (mode === 'chat' ? 'none' : 'none');
   const actualShowExpandAll = showExpandAll ?? (mode === 'sidebar');
 
   const [allExpanded, setAllExpanded] = useState(false);
   const [localExpanded, setLocalExpanded] = useState(actualDefaultExpanded);
 
-  // Parse dimensions from content if not provided
+  // ✅ 使用传入的 dimensions prop，或解析 content
   const dimensions = useMemo(() => {
-    if (propDimensions) return propDimensions;
+    // 如果有 propDimensions，使用它
+    if (propDimensions && propDimensions.length > 0) {
+      return propDimensions;
+    }
+    
+    // 回退到解析 content
     return parseLayerReport(content);
   }, [content, propDimensions]);
 
@@ -107,10 +117,30 @@ export default function LayerReportCard({
         padding: '20px',
         margin: '1.5rem 0',
         maxHeight: mode === 'chat' && !localExpanded ? actualMaxHeight : 'none',
-        overflow: 'hidden',
+        // ✅ 修复：当展开时，允许滚动
+        overflow: localExpanded ? 'visible' : 'hidden',
         position: 'relative',
+        // ✅ 新增：非活跃层降低不透明度
+        ...(isActive ? {} : { opacity: 0.7 }),
       }}
     >
+      {/* ✅ 新增：非活跃层添加标识 */}
+      {!isActive && mode === 'chat' && (
+        <div style={{
+          position: 'absolute',
+          top: '10px',
+          right: '10px',
+          background: 'rgba(0,0,0,0.05)',
+          padding: '2px 8px',
+          borderRadius: '4px',
+          fontSize: '0.75rem',
+          color: '#666',
+          zIndex: 1,
+        }}>
+          已完成
+        </div>
+      )}
+
       {/* Header - 聊天流简化，侧边栏完整 */}
       {mode === 'chat' ? (
         <div
@@ -235,7 +265,9 @@ export default function LayerReportCard({
       {/* Dimension sections */}
       <div
         style={{
-          maxHeight: mode === 'chat' && !localExpanded ? actualMaxHeight : 'none',
+          // ✅ 修复：只在折叠时限制高度，展开时不限制但设置最大高度防止无限展开
+          maxHeight: localExpanded ? '80vh' : (mode === 'chat' && !localExpanded ? actualMaxHeight : 'none'),
+          // ✅ 修复：始终保持 auto 滚动
           overflow: 'auto',
         }}
       >

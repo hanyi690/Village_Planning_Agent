@@ -5,11 +5,11 @@
 ## 目录
 
 - [架构概述](#架构概述)
-- [维度级流式响应架构](#维度级流式响应架构)
+- [SSE/REST 解耦架构](#sserest-解耦架构)
 - [数据流管理](#数据流管理)
 - [组件层级](#组件层级)
 - [类型系统](#类型系统)
-- [暂停/恢复组件](#暂停恢复组件)
+- [审查面板显示逻辑](#审查面板显示逻辑)
 
 ---
 
@@ -33,7 +33,7 @@
 
 ---
 
-## 维度级流式响应架构
+## SSE/REST 解耦架构
 
 ### 架构设计原则
 
@@ -62,8 +62,7 @@
 │  │  └────────────────────────────────────┘ │      │
 │  │  ┌────────────────────────────────────┐ │      │
 │  │  │  TaskController (REST 轮询)        │ │      │
-│  │  │  - 暂停检测                        │ │      │
-│  │  │  - 层级完成检测                    │ │      │
+│  │  │  - 状态同步                         │ │      │
 │  │  └────────────────────────────────────┘ │      │
 │  │  ┌────────────────────────────────────┐ │      │
 │  │  │  useTaskSSE (SSE 流式)             │ │      │
@@ -72,8 +71,7 @@
 │  │  └────────────────────────────────────┘ │      │
 │  └──────────────────────────────────────────┘      │
 └─────────────────────────────────────────────────────┘
-                    │
-                    ▼
+                    ↓ REST 轮询 (每2秒) + SSE 流式
 ┌─────────────────────────────────────────────────────┐
 │                后端 (FastAPI)                       │
 │  ┌──────────────────────────────────────────┐      │
@@ -81,7 +79,11 @@
 │  │  ↓  checkpoints 表 (自动管理)            │      │
 │  │  - layer_X_completed                   │      │
 │  │  - analysis_dimension_reports           │      │
-│  │  - sent_pause_events (内存状态)        │      │
+│  │  - concept_dimension_reports            │      │
+│  │  - detailed_dimension_reports           │      │
+│  │  - pause_after_step                    │      │
+│  │  - previous_layer                      │      │
+│  │  - pending_review_layer                │      │
 │  └──────────────────────────────────────────┘      │
 └─────────────────────────────────────────────────────┘
 ```
@@ -93,6 +95,57 @@
 | **dimension_delta** | 维度增量事件 | `{"dimension_key":"location","dimension_name":"区位分析","layer":1,"chunk":"...","accumulated":"完整内容"}` |
 | **dimension_complete** | 维度完成事件 | `{"dimension_key":"location","dimension_name":"区位分析","layer":1,"full_content":"完整维度的报告内容..."}` |
 | **layer_progress** | 层级进度事件 | `{"layer":1,"completed":2,"total":12,"percentage":16}` |
+| **pause** | 暂停事件 | `{"current_layer":1,"checkpoint_id":"...","reason":"step_mode"}` |
+| **stream_paused** | 流暂停事件 | `{"current_layer":1,"reason":"waiting_for_resume"}` |
+
+### layer_completed 事件详解
+
+**后端位置**: `backend/api/planning.py:575-576`
+
+**事件结构**:
+```python
+event_data = {
+    "type": "layer_completed",
+    "layer": layer_num,                           # 层级编号 (1, 2, 3)
+    "layer_number": layer_num,
+    "session_id": session_id,
+    "message": f"Layer {layer_num} completed",
+    "report_content": report[:500000],           # 完整报告内容（截断至 500k 字符）
+    "dimension_reports": dimension_reports,      # 各维度报告字典
+    "pause_after_step": event.get("pause_after_step", False),  # ✅ 是否需要暂停审查
+    "pending_review_layer": event.get("pending_review_layer", 0),  # ✅ 待审查层级
+    "timestamp": datetime.now().isoformat()
+}
+```
+
+**字段说明**:
+- `pause_after_step`: 指示是否在步进模式下暂停
+- `pending_review_layer`: 指示哪个层级需要审查（0 表示无需审查）
+
+**前端响应机制**:
+- **当前实现**: 通过 REST 轮询获取 `pause_after_step` 和 `pending_review_layer` 状态（每 2 秒）
+- **数据流**: TaskController → UnifiedPlanningContext → ReviewPanel 条件渲染
+- **显示条件**: `isPaused && pendingReviewLayer` 都为真时显示审查面板
+- **延迟**: 最多 2 秒轮询延迟
+
+**优化建议**:
+为了实现无延迟显示，可以在 SSE 事件处理中直接响应 `layer_completed` 事件：
+```typescript
+// 在 TaskController 中添加 layer_completed 事件处理
+} else if (eventType === 'layer_completed') {
+  const pauseAfterStep = event.data?.pause_after_step || false;
+  const pendingReviewLayer = event.data?.pending_review_layer || 0;
+
+  // 立即更新状态，无需等待轮询
+  if (pauseAfterStep && pendingReviewLayer > 0) {
+    actions.syncBackendState({
+      ...taskState,
+      pause_after_step: true,
+      pending_review_layer: pendingReviewLayer,
+    });
+  }
+}
+```
 
 ---
 
@@ -115,6 +168,17 @@ interface PlanningState {
   // 消息（UI 状态通过 messages 数组表示）
   messages: Message[];
 
+  // ✅ 新增：简化后的审查状态（单一真实源，来自后端）
+  isPaused: boolean;
+  pendingReviewLayer: number | null;
+  
+  // ✅ 新增：层级完成状态
+  completedLayers: {
+    1: boolean;
+    2: boolean;
+    3: boolean;
+  };
+
   // 状态
   status: TaskStatus;
   currentLayer: number | null;
@@ -134,26 +198,22 @@ interface PlanningState {
 **关键特性**:
 - REST 轮询每 2 秒获取状态（从 AsyncSqliteSaver 读取）
 - SSE 事件处理（维度级流式）
-- 暂停检测和去重
-- 稳定回调引用
+- 纯数据搬运: 获取状态 -> 同步到 Context
+- 无任何业务逻辑判断
 
-**暂停检测流程**:
+**数据流**:
 ```
-TaskController.pollStatus()
+TaskController.fetchStatus()
   ↓
 GET /api/planning/status/{session_id}
   ↓
-返回 pauseAfterStep = len(sent_pause_events) > 0
+返回状态 (pauseAfterStep, layer_X_completed, previousLayer, pendingReviewLayer, etc.)
   ↓
-检测到 pauseAfterStep 从 false 变为 true
+actions.syncBackendState(status)
   ↓
-生成 pauseKey = `pause_${taskId}_layer_${currentLayer}`
+直接更新 Context 状态 (不做任何判断)
   ↓
-如果 pauseKey 不在 triggeredEventsRef 中:
-  ↓
-触发 callbacksRef.current.onPause?.(currentLayer)
-  ↓
-ChatPanel.handlePause(layer) 显示审查 UI
+UI 重新渲染 (条件渲染 ReviewPanel)
 ```
 
 ### 消息驱动的 UI 状态管理
@@ -180,9 +240,9 @@ type Message =
 RootLayout (app/layout.tsx)
 └── Page (app/page.tsx)
     └── UnifiedPlanningContext
-        └── VillageInputForm
-            ├── VillageInputForm
-            └── SubmitButton
+        ├── VillageInputForm
+        │   ├── VillageInputForm
+        │   └── SubmitButton
         └── ChatPanel (规划执行界面)
             ├── MessageList
             │   ├── TextMessage
@@ -193,7 +253,9 @@ RootLayout (app/layout.tsx)
             │       ├── RejectButton
             │       ├── RollbackButton
             │       └── FeedbackInput
-            └── StatusIndicator
+            └── TaskController (状态管理层)
+                ├── REST 轮询 (每 2 秒)
+                └── SSE 流式
 ```
 
 ### 核心组件
@@ -206,7 +268,7 @@ RootLayout (app/layout.tsx)
 
 **关键功能**:
 - 消息列表渲染（流式文本）
-- 人工审查交互（ReviewInteractionMessage）
+- 条件渲染审查面板（状态驱动）
 - 状态指示器（层进度、暂停状态）
 - 错误提示
 
@@ -229,7 +291,7 @@ interface ChatPanelProps {
 **职责**: 人工审查消息组件
 
 **关键功能**:
-- 显示审查信息
+- 显示审查信息（层级信息）
 - 通过/驳回按钮
 - 回退修复功能
 - 反馈输入
@@ -260,22 +322,12 @@ POST /api/planning/review/{id}?action=approve
 **关键功能**:
 - REST 轮询（每 2 秒）
 - SSE 事件处理
-- 暂停检测和去重
+- 状态同步
 - 回调触发
 
 **使用示例**:
 ```typescript
-const [taskState, { approve, reject, rollback }] = useTaskController(taskId, {
-  onPause: (layer) => {
-    // 处理暂停
-  },
-  onLayerCompleted: (layer) => {
-    // 处理层级完成
-  },
-  onComplete: () => {
-    // 处理完成
-  },
-});
+const [taskState, { approve, reject, rollback }] = useTaskController(taskId);
 ```
 
 ---
@@ -324,6 +376,8 @@ interface Checkpoint {
 interface TaskState {
   status: TaskStatus;
   currentLayer: number | null;
+  previousLayer: number | null;      // 上一个完成的层级
+  pendingReviewLayer: number | null; // 待审查的层级
   layer1Completed: boolean;
   layer2Completed: boolean;
   layer3Completed: boolean;
@@ -344,6 +398,8 @@ interface SessionStatusResponse {
   session_id: string;
   status: string;
   current_layer: number;
+  previous_layer: number | null;      // 上一个完成的层级
+  pending_review_layer: number | null; // 待审查的层级
   layer_1_completed: boolean;
   layer_2_completed: boolean;
   layer_3_completed: boolean;
@@ -372,74 +428,99 @@ interface DimensionCompleteEvent {
 
 ---
 
-## 暂停/恢复组件
+## 审查面板显示逻辑
 
-### ChatPanel 暂停处理
+### 审查面板组件
 
-**文件**: `components/chat/ChatPanel.tsx`
+**文件**: `components/chat/ReviewPanel.tsx`
+
+**职责**: 状态驱动的独立审查组件，不依赖消息流
+
+**显示条件**: `isPaused && pendingReviewLayer`
 
 ```typescript
-const handlePause = useCallback((layer: number) => {
-  logger.chatPanel.info(`Task paused at Layer ${layer}`, { layer }, taskId);
-
-  setMessages((prevMessages) => {
-    // 幂等性检查
-    const hasAnyReviewForLayer = prevMessages.some(m =>
-      m.type === 'review_interaction' && m.layer === layer
-    );
-
-    const hasPendingReviewForLayer = prevMessages.some(m =>
-      m.type === 'review_interaction' && m.layer === layer && m.reviewState === 'pending'
-    );
-
-    if (hasPendingReviewForLayer) {
-      // 已有待处理的审查消息，跳过
-      return prevMessages;
-    }
-
-    // 创建审查交互消息
-    return [
-      ...prevMessages,
-      {
-        type: 'review_interaction',
-        layer,
-        reviewState: 'pending',
-        content: '规划已暂停，请审查后决定下一步操作',
-        availableActions: ['approve', 'reject', 'rollback'],
-      } as ReviewInteractionMessage,
-    ];
-  });
-}, [taskId, setMessages]);
+// ChatPanel.tsx:860-880
+{isPaused && pendingReviewLayer && (
+  <div className="border-t border-gray-200 bg-white">
+    <div className="max-w-4xl mx-auto">
+      <ReviewPanel
+        layer={pendingReviewLayer}
+        onApprove={async () => {
+          await approve();
+          addMessage(createSystemMessage(`✅ 已批准，继续执行下一层...`));
+          setStatus('planning');
+        }}
+        onReject={async (feedback) => {
+          await reject(feedback);
+          addMessage(createSystemMessage('🔄 正在根据反馈修复规划内容...'));
+          setStatus('revising');
+        }}
+        onRollback={async (checkpointId) => {
+          await rollback(checkpointId);
+          addMessage(createSystemMessage(`↩️ 已回退到检查点: ${checkpointId}`));
+        }}
+        isSubmitting={status === 'reviewing'}
+      />
+    </div>
+  </div>
+)}
 ```
 
-### TaskController 暂停检测
+### 状态数据流
 
-**文件**: `controllers/TaskController.tsx`
+```
+后端 layer_completed 事件
+  ↓
+pause_after_step = True
+pending_review_layer = N
+  ↓
+TaskController 轮询 /status (2秒间隔)
+  ↓
+syncBackendState(taskState)
+  ↓
+isPaused = True
+pendingReviewLayer = N
+  ↓
+ReviewPanel 显示 (条件渲染)
+```
 
+### 状态同步机制
+
+**UnifiedPlanningContext.syncBackendState()**:
 ```typescript
-// Pause detection with layer-scoped deduplication
-const isPaused = newState.pauseAfterStep || newState.status === 'paused';
-const wasPaused = prev.pauseAfterStep || prev.status === 'paused';
+// UnifiedPlanningContext.tsx:252-253
+const syncBackendState = useCallback((backendData: any) => {
+  console.log('[UnifiedPlanningContext] Syncing backend state:', backendData);
 
-if (isPaused && !wasPaused) {
-  const currentLayer = newState.currentLayer ?? 1;
-  const pauseKey = `pause_${taskId}_layer_${currentLayer}`;
+  setStatusState(backendData.status || 'idle');
+  setIsPaused(backendData.pause_after_step || backendData.status === 'paused');
+  setPendingReviewLayer(backendData.previous_layer ?? backendData.pending_review_layer ?? null);
+  setCurrentLayer(backendData.current_layer ?? null);
 
-  // 状态抖动检测
-  if (currentLayer <= lastTriggeredPauseLayerRef.current) {
-    console.log(`[TaskController] 检测到状态抖动：Layer ${currentLayer} <= 已触发的最高层级，跳过 onPause`);
-  } else if (!triggeredEventsRef.current.has(pauseKey)) {
-    eventsToTrigger.push(() => {
-      console.log(`[TaskController] Pause detected at Layer ${currentLayer}`);
-      callbacksRef.current.onPause?.(currentLayer);
-    });
-    triggeredEventsRef.current.add(pauseKey);
-    lastTriggeredPauseLayerRef.current = Math.max(
-      lastTriggeredPauseLayerRef.current,
-      currentLayer
-    );
-  }
-}
+  // 同步层级完成状态
+  setCompletedLayers({
+    1: backendData.layer_1_completed || false,
+    2: backendData.layer_2_completed || false,
+    3: backendData.layer_3_completed || false,
+  });
+}, []);
+```
+
+**ChatPanel 状态同步**:
+```typescript
+// ChatPanel.tsx:353-366
+useEffect(() => {
+  if (!taskId) return;
+
+  // 直接将 taskState 同步到 Context
+  // Controller 只负责数据搬运,不做任何业务逻辑判断
+  syncBackendState(taskState);
+
+  console.log('[ChatPanel] Synced backend state:', {
+    taskId,
+    taskState,
+  });
+}, [taskId, taskState, syncBackendState]);
 ```
 
 ---
@@ -460,7 +541,9 @@ TaskController (REST轮询每2秒) + useTaskSSE (SSE流式)
 ├─ REST: /api/planning/status (从 AsyncSqliteSaver 读取状态)
 │  ├─ pauseAfterStep (暂停状态)
 │  ├─ layer_X_completed (层级完成)
-│  └─ current_layer (当前层级)
+│  ├─ previousLayer (上一个完成的层级)
+│  ├─ pendingReviewLayer (待审查的层级)
+│  └─ executionComplete (执行完成)
 ├─ SSE: /api/planning/stream (dimension_delta, dimension_complete)
 └─ UI更新 (ChatPanel渲染)
 ```
@@ -472,15 +555,13 @@ TaskController (REST轮询每2秒) + useTaskSSE (SSE流式)
   ↓
 PauseManagerNode 设置 pause_after_step=True
   ↓
-后台执行检测暂停 → 发送 pause 事件
-  ↓
-_set_session_value 保存 sent_pause_events
-  ↓
 前端 REST 轮询检测到 pauseAfterStep=true
   ↓
-TaskController 触发 onPause(layer)
+TaskController.syncBackendState()
   ↓
-ChatPanel 显示审查 UI
+Context.isPaused = true, Context.pendingReviewLayer = 1
+  ↓
+ReviewPanel 显示 (条件渲染)
   ↓
 用户批准 → POST /api/planning/review/{id}?action=approve
   ↓
@@ -500,9 +581,7 @@ GET /api/planning/status/{session_id}
   ↓
 TaskController.pollStatus()
   ↓
-onPause/onLayerComplete 回调
-  ↓
-UnifiedPlanningContext.setState()
+syncBackendState()
   ↓
 UI 重新渲染
 ```
@@ -525,22 +604,22 @@ UI 实时显示
 
 ## 性能优化
 
-### 1. 暂停事件去重
-
-**技术**: 层级作用域去重 + 状态抖动检测
-
-**效果**:
-- 防止同一层重复触发
-- 状态抖动检测
-- 自动清理超时键
-
-### 2. SSE/REST 解耦
+### 1. SSE/REST 解耦
 
 **技术**: REST 轮询 + SSE 流式
 
 **效果**:
 - 无事件丢失风险
 - 无需复杂去重逻辑
+- 状态一致性保证
+
+### 2. 状态驱动 UI
+
+**技术**: 条件渲染 `{isPaused && <ReviewPanel ... />}`
+
+**效果**:
+- 无重复渲染风险
+- React 自动优化
 - 状态一致性保证
 
 ### 3. 稳定回调引用

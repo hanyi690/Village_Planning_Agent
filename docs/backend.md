@@ -7,7 +7,7 @@
 - [技术栈](#技术栈)
 - [应用结构](#应用结构)
 - [AsyncSqliteSaver 状态持久化](#asyncsqlitesaver-状态持久化)
-- [SSE/REST 职责分离](#sse-rest-职责分离)
+- [SSE/REST 职责分离](#sserest职责分离)
 - [数据流架构](#数据流架构)
 - [API 端点](#api-端点)
 - [暂停/恢复机制](#暂停恢复机制)
@@ -38,17 +38,18 @@ backend/
 │   ├── sessions.py            # 会话管理 API
 │   ├── data.py               # 数据访问 API
 │   ├── validate_config.py     # 配置验证
-│   └── files.py             # 文件上传 API
+│   └── files.py              # 文件上传 API
 ├── database/                   # 数据库模块
 │   ├── models.py               # 数据库模型（精简版）
 │   ├── operations_async.py     # 异步数据库操作
 │   └── engine.py              # 数据库引擎
 ├── services/                   # 业务逻辑层
-│   ├── rate_limiter.py      # 速率限制
-│   ├── session_state_manager.py  # 会话状态管理
-│   └── sse_event_stream.py   # SSE 事件流
-├── schemas.py                  # Pydantic 数据模型
-├── utils/                     # 后端工具类
+│   ├── rate_limiter.py        # 速率限制
+│   └── redis_client.py        # Redis 客户端（可选）
+├── utils/                      # 工具类
+│   ├── error_handler.py         # 错误处理
+│   ├── logging.py              # 日志
+│   └── session_helper.py       # 会话辅助
 └── requirements.txt           # 依赖列表
 ```
 
@@ -85,9 +86,12 @@ backend/
 │  │   - checkpoint_id                        │       │
 │  │   - checkpoint (JSON/二进制)             │       │
 │  │   - layer_X_completed                    │       │
-│  │   - analysis_report                     │       │
-│  │   - planning_concept                    │       │
-│  │   - detailed_plan                       │       │
+│  │   - analysis_dimension_reports           │       │
+│  │   - concept_dimension_reports            │       │
+│  │   - detailed_dimension_reports           │       │
+│  │   - pause_after_step                     │       │
+│  │   - previous_layer                        │       │
+│  │   - pending_review_layer                   │       │
 │  └──────────────────────────────────────────┘       │
 │                                                      │
 │  ┌──────────────────────────────────────────┐       │
@@ -170,7 +174,11 @@ AsyncSqliteSaver.get(config)
   ↓
 从 checkpoints 表读取完整状态
   ↓
-提取状态值 (layer_X_completed, status, etc.)
+提取状态值:
+  - pauseAfterStep (暂停状态)
+  - layer_X_completed (层级完成)
+  - currentLayer, previousLayer, pendingReviewLayer
+  - executionComplete, executionError
   ↓
 返回 SessionStatusResponse
 ```
@@ -195,6 +203,7 @@ class PlanningSession(SQLModel, table=True):
     # Basic info
     project_name: str = Field(index=True)
     status: str = Field(index=True)
+    execution_error: Optional[str] = Field(default=None, sa_column=Text())
 
     # Village data
     village_data: Optional[str] = Field(default=None, sa_column=Text())
@@ -240,7 +249,7 @@ class PlanningSession(SQLModel, table=True):
 **SSE 职责**：
 - 维度级流式文本推送
 - 实时 token 传输
-- 错误通知
+- 维度级增量事件
 
 ### 数据流架构
 
@@ -259,17 +268,19 @@ class PlanningSession(SQLModel, table=True):
 │  │  └────────────────────────────────────┘ │      │
 │  └──────────────────────────────────────────┘      │
 └─────────────────────────────────────────────────────┘
-                    │
-                    ▼
+                    ↓ REST 轮询 (每2秒) + SSE 流式
 ┌─────────────────────────────────────────────────────┐
 │                后端 (FastAPI)                       │
 │  ┌──────────────────────────────────────────┐      │
 │  │  AsyncSqliteSaver (状态持久化)          │      │
 │  │  ↓  checkpoints 表 (自动管理)            │      │
 │  │  - layer_X_completed                   │      │
-│  │  - analysis_report                     │      │
-│  │  - planning_concept                    │      │
-│  │  - sent_pause_events (内存状态)        │      │
+│  │  - analysis_dimension_reports           │      │
+│  │  - concept_dimension_reports            │      │
+│  │  - detailed_dimension_reports           │      │
+│  │  - pause_after_step                    │      │
+│  │  - previous_layer                     │      │
+│  │  - pending_review_layer                │      │
 │  └──────────────────────────────────────────┘      │
 │  ┌──────────────────────────────────────────┐      │
 │  │    PauseManagerNode (暂停管理)         │      │
@@ -288,15 +299,18 @@ class PlanningSession(SQLModel, table=True):
   ↓
 后端: GET /api/planning/status/{session_id}
   ↓
-config = {"configurable": {"thread_id": session_id}}
+从 AsyncSqliteSaver 读取完整状态:
+  config = {"configurable": {"thread_id": session_id}}
+  graph = create_village_planning_graph(checkpointer)
+  checkpoint_state = await graph.get_state(config)
   ↓
-graph.get_state(config)
+从 checkpoints 表读取完整状态快照
   ↓
-AsyncSqliteSaver.get(config)
-  ↓
-从 checkpoints 表读取完整状态
-  ↓
-提取状态值 (pauseAfterStep, layer_X_completed, etc.)
+提取状态值:
+  - pause_after_step (暂停状态)
+  - layer_X_completed (层级完成)
+  - currentLayer, previousLayer, pendingReviewLayer
+  - executionComplete, executionError
   ↓
 返回: SessionStatusResponse
   ↓
@@ -312,7 +326,10 @@ AsyncSqliteSaver.get(config)
   ↓
 维度级批处理
   ↓
-SSE 事件: dimension_delta, dimension_complete
+SSE 事件推送:
+  - dimension_delta: {dimension_key, dimension_name, layer, chunk, accumulated}
+  - dimension_complete: {dimension_key, dimension_name, layer, full_content}
+  - error: {error}
   ↓
 前端: 实时显示流式文本
 ```
@@ -356,7 +373,7 @@ AsyncSqliteSaver.put(config, checkpoint)
 {
   "task_id": "uuid",
   "status": "running",
-  "message": "规划任务已启动"
+  "stream_url": "/api/planning/stream/{task_id}"
 }
 ```
 
@@ -370,30 +387,17 @@ AsyncSqliteSaver.put(config, checkpoint)
   "session_id": "uuid",
   "status": "running",
   "current_layer": 1,
+  "previous_layer": null,
+  "pending_review_layer": null,
   "layer_1_completed": false,
   "layer_2_completed": false,
   "layer_3_completed": false,
   "pause_after_step": false,
   "waiting_for_review": false,
   "execution_complete": false,
-  "progress": 33.3
+  "progress": 0.0,
+  "execution_error": null
 }
-```
-
-**实现**:
-```python
-@router.get("/api/planning/status/{session_id}")
-async def get_session_status(session_id: str):
-    # 从内存状态获取 sent_pause_events
-    session_state = _get_session_value(session_id, "sent_pause_events", set())
-    pause_after_step = len(session_state) > 0
-
-    return {
-        "session_id": session_id,
-        "pause_after_step": pause_after_step,
-        "waiting_for_review": pause_after_step,
-        # ... 其他状态
-    }
 ```
 
 ### 3. GET /api/planning/stream/{session_id}
@@ -439,27 +443,49 @@ PauseManagerNode 检测到暂停条件
   ↓
 设置 state["pause_after_step"] = True
   ↓
-后台执行检测到 pause_after_step
-  ↓
-生成 pause_event_key = f"pause_layer_{current_layer}"
-  ↓
-如果 pause_event_key 不在 sent_pause_events 中:
-  ↓
-发送 pause 事件
-  ↓
-sent_pause_events.add(pause_event_key)
-  ↓
-_set_session_value(session_id, "sent_pause_events", sent_pause_events)
+路由到 END 终止执行
   ↓
 前端 REST 轮询检测到 pauseAfterStep=true
   ↓
 显示审查 UI
 ```
 
-**关键代码** (`backend/api/planning.py:586`):
+**关键节点**: `src/nodes/tool_nodes.py:PauseManagerNode`
 ```python
-sent_pause_events.add(pause_event_key)
-_set_session_value(session_id, "sent_pause_events", sent_pause_events)  # 保存回session
+class PauseManagerNode(BaseNode):
+    def execute(self, state: StateDict) -> StateDict:
+        layer_1_completed = state.get("layer_1_completed", False)
+        layer_2_completed = state.get("layer_2_completed", False)
+        layer_3_completed = state.get("layer_3_completed", False)
+        any_layer_completed = layer_1_completed or layer_2_completed or layer_3_completed
+
+        if state.get("step_mode", False) and any_layer_completed:
+            logger.info(f"[暂停管理] 步进模式：检测到层级完成，设置pause_after_step=True")
+            return {"pause_after_step": True}
+
+        return {}
+```
+
+**关键路由**: `src/orchestration/main_graph.py:route_after_pause`
+```python
+def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis", "layer2_concept", "layer3_detail", "end"]:
+    step_mode = state.get("step_mode", False)
+    any_layer_completed = state.get("layer_1_completed", False) or \
+                          state.get("layer_2_completed", False) or \
+                          state.get("layer_3_completed", False)
+
+    if step_mode and any_layer_completed:
+        logger.info("[主图-路由] 步进模式：检测到层级完成，终止执行以便前端触发审查")
+        return "end"
+
+    # 根据 current_layer 路由
+    current_layer = state.get("current_layer", 1)
+    if current_layer == 1:
+        return "layer1_analysis"
+    elif current_layer == 2:
+        return "layer2_concept"
+    else:
+        return "layer3_detail"
 ```
 
 ### 恢复流程
@@ -478,16 +504,6 @@ POST /api/planning/review/{session_id}?action=approve
 调用 _resume_graph_execution()
   ↓
 继续执行 LangGraph
-```
-
-**关键代码** (`backend/api/planning.py:1114`):
-```python
-sent_pause_events = session.get("sent_pause_events", set())
-if sent_pause_events:
-    # 清除旧的 pause 事件
-    for event_key in sent_pause_events:
-        sent_pause_events.discard(event_key)
-    session["sent_pause_events"] = sent_pause_events
 ```
 
 ---
@@ -509,6 +525,6 @@ if sent_pause_events:
 - 检查点表：AsyncSqliteSaver 自动管理
 
 ### 4. 暂停机制
-- 层级作用域去重
+- 层级作用域去重（pause_layer_X）
 - 状态抖动检测
 - 内存状态持久化（_set_session_value）

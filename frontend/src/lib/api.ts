@@ -78,6 +78,8 @@ export type PlanningSSEEventType =
   | 'completed'
   | 'error'
   | 'resumed'
+  | 'dimension_delta'
+  | 'dimension_complete'
   | 'complete'
   | 'text_chunk'
   | 'thinking_start'
@@ -145,6 +147,8 @@ export interface ReviewActionRequest {
 }
 
 export interface SessionStatusResponse {
+  pending_review_layer: null;
+  previous_layer: null;
   session_id: string;
   status: string;
   current_layer?: number;
@@ -305,6 +309,8 @@ export const planningApi = {
       'content_delta',
       'resumed',
       'progress',
+      'dimension_delta',
+      'dimension_complete',
     ];
 
     for (const eventType of eventTypes) {

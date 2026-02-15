@@ -93,6 +93,23 @@ export interface SystemMessage extends BaseMessage {
 // ============================================================================
 
 /**
+ * Dimension Report Message - Real-time streaming dimension report content
+ */
+export interface DimensionReportMessage extends BaseMessage {
+  type: 'dimension_report';
+  layer: number;
+  dimensionKey: string;
+  dimensionName: string;
+  content: string;
+  streamingState: 'streaming' | 'completed' | 'error';
+  wordCount: number;
+  progress?: {
+    current: number;
+    total: number;
+  };
+}
+
+/**
  * Layer Completed Message - Shown when a planning layer is completed
  */
 export interface LayerCompletedMessage extends BaseMessage {

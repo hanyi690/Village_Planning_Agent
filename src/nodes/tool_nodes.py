@@ -337,24 +337,26 @@ class PauseManagerNode(BaseNode):
 
     def execute(self, state: StateDict) -> StateDict:
         """
-        暂停管理节点：只在层级完成后设置暂停
-
-        暂停条件（满足任一即可）：
-        1. step_mode=True 且 有任意层级完成（layer_1/2/3_completed=True）
-        2. need_human_review=True（未来扩展）
+        暂停管理节点：在层级完成后设置暂停
+        
+        暂停条件：
+        1. step_mode=True（配置）
+        2. pending_review_layer > 0（有待审查的层级）
+        
+        使用 pending_review_layer 而非 layer_X_completed，避免恢复后无限循环
         """
-        layer_1_completed = state.get("layer_1_completed", False)
-        layer_2_completed = state.get("layer_2_completed", False)
-        layer_3_completed = state.get("layer_3_completed", False)
-        any_layer_completed = layer_1_completed or layer_2_completed or layer_3_completed
-
-        current_layer = state.get("current_layer", 1)
-
-        if state.get("step_mode", False) and any_layer_completed:
-            logger.info(f"[暂停管理] 步进模式：检测到层级完成 (current_layer={current_layer})，设置pause_after_step=True")
+        step_mode = state.get("step_mode", False)
+        pending_review_layer = state.get("pending_review_layer", 0)
+        
+        # ✅ 添加详细日志
+        logger.info(f"[暂停管理] 执行检查 - step_mode={step_mode}, pending_review_layer={pending_review_layer}")
+        
+        # ✅ 只在步进模式且有待审查层级时设置暂停
+        if step_mode and pending_review_layer > 0:
+            logger.info(f"[暂停管理] 有待审查层级 {pending_review_layer}，设置pause_after_step=True")
             return {"pause_after_step": True}
-
-        logger.debug(f"[暂停管理] 不设置暂停 (step_mode={state.get('step_mode', False)}, any_layer_completed={any_layer_completed})")
+        
+        logger.info(f"[暂停管理] 不设置暂停（step_mode={step_mode}, pending_review_layer={pending_review_layer}）")
         return {}
 
 

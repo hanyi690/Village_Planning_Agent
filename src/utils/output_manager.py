@@ -433,18 +433,18 @@ class OutputManager:
         Returns:
             按照定义顺序排列的维度键列表
         """
-        from ..core.dimension_mapping import (
+        from ..core.dimension_config import (
             ANALYSIS_DIMENSION_NAMES,
             CONCEPT_DIMENSION_NAMES,
             DETAILED_DIMENSION_NAMES
         )
 
         if layer_number == 1:
-            return list(ANALYSIS_DIMENSION_NAMES.keys())
+            return list(ANALYSIS_DIMENSION_NAMES().keys())
         elif layer_number == 2:
-            return list(CONCEPT_DIMENSION_NAMES.keys())
+            return list(CONCEPT_DIMENSION_NAMES().keys())
         elif layer_number == 3:
-            return list(DETAILED_DIMENSION_NAMES.keys())
+            return list(DETAILED_DIMENSION_NAMES().keys())
         else:
             return []
 

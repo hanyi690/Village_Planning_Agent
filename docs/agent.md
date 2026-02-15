@@ -7,7 +7,6 @@
 - [架构概述](#架构概述)
 - [三层规划系统](#三层规划系统)
 - [AsyncSqliteSaver 状态持久化](#asyncsqlitesaver-状态持久化)
-- [LangGraph 状态图](#langgraph-状态图)
 - [暂停/恢复机制](#暂停恢复机制)
 - [统一规划器](#统一规划器)
 - [状态筛选优化](#状态筛选优化)
@@ -59,7 +58,7 @@
 | 9 | 基础设施分析 | `infrastructure` |
 | 10 | 生态绿地分析 | `ecological_green` |
 | 11 | 建筑分析 | `architecture` |
-| 12 | 历史文化分析 | `historical_cultural` |
+| 12 | 历史文化分析 | `historical_culture` |
 
 **输出**: `analysis_dimension_reports` (字典)
 
@@ -107,7 +106,7 @@ state["current_layer"] = 3
 
 ### Layer 3: 详细规划
 
-**分波次执行** (Wave 1-3):
+**分波次执行** (Wave 1-2):
 
 **Wave 1** (11个维度并行):
 | 维度ID | 维度名称 | 英文键名 |
@@ -230,18 +229,6 @@ PauseManagerNode 检测到暂停条件
   ↓
 路由到 END 终止执行
   ↓
-后台执行检测到 pause_after_step
-  ↓
-生成 pause_event_key = f"pause_layer_{current_layer}"
-  ↓
-如果 pause_event_key 不在 sent_pause_events 中:
-  ↓
-发送 pause 事件
-  ↓
-sent_pause_events.add(pause_event_key)
-  ↓
-_set_session_value(session_id, "sent_pause_events", sent_pause_events)
-  ↓
 前端 REST 轮询检测到 pauseAfterStep=true
   ↓
 显示审查 UI
@@ -305,78 +292,6 @@ POST /api/planning/review/{session_id}?action=approve
 
 ---
 
-## LangGraph 状态图
-
-### 状态定义
-
-```python
-class PlanningState(TypedDict):
-    # 输入数据
-    project_name: str
-    village_data: str
-    task_description: str
-    step_mode: bool
-
-    # 层级完成标志（由 AsyncSqliteSaver 管理）
-    layer_1_completed: bool = False
-    layer_2_completed: bool = False
-    layer_3_completed: bool = False
-
-    # 层级追踪
-    previous_layer: int = 1
-    current_layer: int = 1
-
-    # 维度报告（由 AsyncSqliteSaver 管理）
-    analysis_dimension_reports: Annotated[dict[str, str], add]
-    concept_dimension_reports: Annotated[dict[str, str], add]
-    detailed_dimension_reports: Annotated[dict[str, str], add]
-
-    # 暂停相关（由 AsyncSqliteSaver 管理）
-    pause_after_step: bool = False
-    waiting_for_review: bool = False
-
-    # 其他状态
-    need_human_review: bool = False
-    human_feedback: str | None = None
-    need_revision: bool = False
-    execution_complete: bool = False
-    execution_error: str | None = None
-```
-
-### 状态转换流程
-
-```
-用户输入
-    ↓
-main_graph.start()
-    ↓
-layer1_analysis_node (并行12个维度)
-    ↓
-设置 analysis_dimension_reports, layer_1_completed, previous_layer=1, current_layer=2
-    ↓
-AsyncSqliteSaver.put() → 自动保存
-    ↓
-ToolBridgeNode 检测到 step_mode + layer_1_completed
-    ↓
-路由到 PauseManagerNode
-    ↓
-设置 pause_after_step=True
-    ↓
-路由到 END (暂停)
-    ↓
-REST 轮询检测到 pauseAfterStep=true
-    ↓
-前端显示审查 UI
-    ↓
-用户批准
-    ↓
-清除 pause 标志，推进 current_layer
-    ↓
-恢复执行 → layer2_concept_node
-```
-
----
-
 ## 统一规划器
 
 ### 基类设计
@@ -410,24 +325,6 @@ class UnifiedBasePlanner(ABC):
             维度规划报告
         """
         pass
-
-    def get_relevant_context(
-        self,
-        dimension_key: str,
-        all_reports: dict[str, str]
-    ) -> dict[str, str]:
-        """
-        获取相关上下文
-
-        Args:
-            dimension_key: 当前维度键名
-            all_reports: 所有维度报告
-
-        Returns:
-            相关维度报告字典
-        """
-        # 根据维度键名返回相关维度
-        pass
 ```
 
 ### 实现示例
@@ -451,11 +348,33 @@ class GenericPlanner(UnifiedBasePlanner):
         dimension_name: str,
         context: dict[str, Any]
     ) -> str:
-        # 获取相关上下文
-        relevant_context = self.get_relevant_context(
-            dimension_key,
-            context.get("all_reports", {})
-        )
+        # 获取相关上下文（状态筛选）
+        if context.get("layer") == 1:
+            # Layer 1: 直接使用 raw_data
+            relevant_context = {"raw_data": context.get("raw_data", "")}
+        elif context.get("layer") == 2:
+            # Layer 2: 筛选相关现状分析
+            from ..utils.state_filter import filter_analysis_report_for_concept
+            filtered_analysis = filter_analysis_report_for_concept(
+                concept_dimension=dimension_key,
+                full_analysis_reports=context.get("all_reports", {}),
+                full_analysis_report=context.get("analysis_report", "")
+            )
+            relevant_context = {"analysis_report": filtered_analysis}
+        elif context.get("layer") == 3:
+            # Layer 3: 筛选相关现状分析和规划思路
+            from ..utils.state_filter import filter_state_for_detailed_dimension_v2
+            filtered = filter_state_for_detailed_dimension_v2(
+                detailed_dimension=dimension_key,
+                full_analysis_reports=context.get("all_reports", {}),
+                full_analysis_report=context.get("analysis_report", ""),
+                full_concept_reports=context.get("concept_reports", {}),
+                full_concept_report=context.get("concept_report", "")
+            )
+            relevant_context = {
+                "filtered_analysis": filtered["filtered_analysis"],
+                "filtered_concepts": filtered["filtered_concepts"]
+            }
 
         # 调用 LLM
         chain = self.prompt | self.llm
@@ -477,28 +396,54 @@ class GenericPlanner(UnifiedBasePlanner):
 
 ### 实现原理
 
-**文件**: `src/planners/unified_base_planner.py`
+**文件**: `src/utils/state_filter.py`
 
 ```python
-def get_relevant_context(
-    self,
-    dimension_key: str,
-    all_reports: dict[str, str]
-) -> dict[str, str]:
+def filter_state_for_detailed_dimension_v2(
+    detailed_dimension: str,
+    full_analysis_reports: dict[str, str] | None,
+    full_analysis_report: str,
+    full_concept_reports: dict[str, str] | None,
+    full_concept_report: str,
+    completed_detailed_reports: dict[str, str] | None = None
+) -> dict[str, Any]:
     """
-    获取相关上下文（智能筛选）
+    增强的状态筛选函数，支持完整依赖链和Token统计
+    """
+    # 获取完整依赖链
+    dependency_chain = get_full_dependency_chain(detailed_dimension)
 
-    只返回与当前维度相关的维度报告，减少 token 消耗
-    """
-    # 维度相关性映射
-    relevance_map = {
-        "location": ["socio_economic", "traffic", "land_use"],
-        "socio_economic": ["location", "villager_wishes", "public_services"],
-        # ... 其他维度
+    # 筛选现状分析
+    required_analyses = dependency_chain.get("layer1_analyses", [])
+    filtered_analysis = _filter_with_reports(
+        required_analyses, full_analysis_reports, full_analysis_report
+    )
+
+    # 筛选规划思路
+    required_concepts = dependency_chain.get("layer2_concepts", [])
+    filtered_concepts = _filter_with_reports(
+        required_concepts, full_concept_reports, full_concept_report
+    )
+
+    # 筛选已完成的前序详细规划（仅project_bank需要）
+    depends_on_detailed = dependency_chain.get("depends_on_detailed", [])
+    filtered_detailed = {k: completed_detailed_reports[k] for k in depends_on_detailed if k in completed_detailed_reports}
+
+    # 计算Token统计
+    total_original = len(full_analysis_report) + len(full_concept_report)
+    total_filtered = len(filtered_analysis) + len(filtered_concepts)
+    reduction_percent = (1 - total_filtered / total_original) * 100
+
+    return {
+        "filtered_analysis": filtered_analysis,
+        "filtered_concepts": filtered_concepts,
+        "filtered_detailed": filtered_detailed,
+        "dependency_chain": dependency_chain,
+        "token_stats": {
+            "reduction_percent": round(reduction_percent, 2),
+            "tokens_saved": total_original - total_filtered
+        }
     }
-
-    relevant_keys = relevance_map.get(dimension_key, [])
-    return {k: all_reports[k] for k in relevant_keys if k in all_reports}
 ```
 
 ### 效果对比
@@ -580,10 +525,6 @@ REST 轮询
 PauseManagerNode 设置 pause_after_step=True
   ↓
 路由到 END
-  ↓
-后台执行检测暂停 → 发送 pause 事件
-  ↓
-_set_session_value 保存 sent_pause_events
   ↓
 前端 REST 轮询检测到 pauseAfterStep=true
   ↓

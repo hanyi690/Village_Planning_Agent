@@ -22,7 +22,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..core.prompts import SYSTEM_PROMPT, PLANNING_CONCEPT_PROMPT
-from ..core.dimension_mapping import DEFAULT_ADAPTER_CONFIG
+from ..core.dimension_config import DEFAULT_ADAPTER_CONFIG
 from ..utils.logger import get_logger
 from ..utils.output_manager import OutputManager
 from ..utils.blackboard_manager import get_blackboard
@@ -94,6 +94,7 @@ class VillagePlanningState(TypedDict):
     step_mode: bool                # 是否启用逐步执行模式
     step_level: str                # 步骤级别（layer/dimension/skill）
     pause_after_step: bool         # 是否在当前步骤后暂停
+    pending_review_layer: int      # 待审查的层级（0表示无，用于恢复时避免无限循环）
 
     # 路由控制标志
     quit_requested: bool           # 用户请求退出
@@ -149,7 +150,7 @@ def _generate_simple_combined_report(
         拼接后的综合报告
     """
     from ..utils.output_manager import OutputManager
-    from ..core.dimension_mapping import (
+    from ..core.dimension_config import (
         ANALYSIS_DIMENSION_NAMES,
         CONCEPT_DIMENSION_NAMES,
         DETAILED_DIMENSION_NAMES
@@ -159,11 +160,11 @@ def _generate_simple_combined_report(
 
     # 获取维度名称映射
     if layer_number == 1:
-        dimension_names_map = ANALYSIS_DIMENSION_NAMES
+        dimension_names_map = ANALYSIS_DIMENSION_NAMES()
     elif layer_number == 2:
-        dimension_names_map = CONCEPT_DIMENSION_NAMES
+        dimension_names_map = CONCEPT_DIMENSION_NAMES()
     elif layer_number == 3:
-        dimension_names_map = DETAILED_DIMENSION_NAMES
+        dimension_names_map = DETAILED_DIMENSION_NAMES()
     else:
         dimension_names_map = {}
 
@@ -299,6 +300,8 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
                 "layer_1_completed": True,
                 "layer_1_failed_dimensions": failed_dims,
                 "current_layer": 2,
+                "previous_layer": 1,  # ✅ 设置刚刚完成的层级
+                "pending_review_layer": 1,  # ✅ 设置待审查层级
                 "last_checkpoint_id": checkpoint_id,
                 "messages": [AIMessage(content=f"现状分析完成，生成了 {len(analysis_dimension_reports)} 个维度的分析报告。")]
             }
@@ -391,6 +394,8 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
                 "concept_dimension_reports": concept_dimension_reports,
                 "layer_2_completed": True,
                 "current_layer": 3,
+                "previous_layer": 2,  # ✅ 设置刚刚完成的层级
+                "pending_review_layer": 2,  # ✅ 设置待审查层级
                 "last_checkpoint_id": checkpoint_id,
                 "messages": [AIMessage(content=f"规划思路已生成，包含 {len(concept_dimension_reports)} 个维度的分析报告。")]
             }
@@ -492,6 +497,8 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
                 "detailed_dimension_reports": detailed_dimension_reports,
                 "layer_3_completed": True,
                 "current_layer": 4,
+                "previous_layer": 3,  # ✅ 设置刚刚完成的层级
+                "pending_review_layer": 3,  # ✅ 设置待审查层级
                 "last_checkpoint_id": checkpoint_id,
                 "messages": [AIMessage(content=f"详细规划已生成，包含 {len(result['completed_dimensions'])} 个专业维度。")]
             }
@@ -700,8 +707,8 @@ def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
         detailed_dimension_reports = state.get("detailed_dimension_reports", {})
 
         # 使用共享的维度名称映射（用于显示）
-        from ..core.dimension_mapping import DETAILED_DIMENSION_NAMES
-        dimension_names = DETAILED_DIMENSION_NAMES
+        from ..core.dimension_config import DETAILED_DIMENSION_NAMES
+        dimension_names = DETAILED_DIMENSION_NAMES()
 
         # 重新组合综合报告
         updated_detailed_plan = state.get("detailed_plan", "")
@@ -726,62 +733,26 @@ def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
         }
 
 
-def pause_manager_node(state: VillagePlanningState) -> Dict[str, Any]:
-    """
-    暂停管理节点：只在层级完成后设置暂停
-
-    暂停条件（满足任一即可）：
-    1. step_mode=True 且 有任意层级完成（layer_1/2/3_completed=True）
-    2. need_human_review=True（未来扩展）
-    """
-    # 检查是否有层级完成
-    layer_1_completed = state.get("layer_1_completed", False)
-    layer_2_completed = state.get("layer_2_completed", False)
-    layer_3_completed = state.get("layer_3_completed", False)
-    any_layer_completed = layer_1_completed or layer_2_completed or layer_3_completed
-
-    # 步进模式：只在层级完成后暂停
-    if state.get("step_mode", False) and any_layer_completed:
-        logger.info("[暂停管理] 步进模式：检测到层级完成，设置pause_after_step=True")
-        return {"pause_after_step": True}
-
-    return {}
-
-
 # ==========================================
 # 路由决策
 # ==========================================
 
 def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis", "layer2_concept", "layer3_detail", "end"]:
     """
-    pause节点后的路由：根据current_layer决定执行哪个layer
-
-    这个路由函数确保pause节点能够正确地将流程引导到当前应该执行的layer。
-
-    ✅ 修复：在步进模式下，只检查当前层级是否刚刚完成(等待批准)，
-    而不是检查是否有任何层级完成，避免误判导致无法继续执行后续层级。
+    pause节点后的路由：根据pending_review_layer决定执行还是终止
+    
+    ✅ 使用 pending_review_layer 判断，避免恢复后无限循环
     """
     current_layer = state.get("current_layer", 1)
-
-    # ✅ 检查当前层级是否刚刚完成（步进模式 + 当前层级完成）
     step_mode = state.get("step_mode", False)
-    layer_1_completed = state.get("layer_1_completed", False)
-    layer_2_completed = state.get("layer_2_completed", False)
-    layer_3_completed = state.get("layer_3_completed", False)
-
-    # 只检查当前层级是否刚刚完成，而不是检查是否有任何层级完成
-    current_layer_just_completed = False
-    if current_layer == 1 and layer_1_completed:
-        current_layer_just_completed = True
-    elif current_layer == 2 and layer_2_completed:
-        current_layer_just_completed = True
-    elif current_layer == 3 and layer_3_completed:
-        current_layer_just_completed = True
-
-    if step_mode and current_layer_just_completed:
-        logger.info(f"[主图-路由] 步进模式：当前层级{current_layer}刚刚完成，终止执行等待批准")
-        return "end"  # 终止执行，等待前端批准后恢复
-
+    pending_review_layer = state.get("pending_review_layer", 0)
+    
+    # ✅ 简化：如果有待审查层级，终止执行等待批准
+    if step_mode and pending_review_layer > 0:
+        logger.info(f"[主图-路由] 步进模式：有待审查层级 {pending_review_layer}，终止执行等待批准")
+        return "end"
+    
+    # 否则执行当前层级
     logger.info(f"[主图-路由] 从pause节点路由到Layer {current_layer}")
 
     if current_layer == 1:

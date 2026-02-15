@@ -3,7 +3,7 @@
 import { useCallback } from 'react';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
 import { VillageInputData } from '@/components/VillageInputForm';
-import { createSystemMessage } from '@/lib/utils/message-helpers';
+import { createSystemMessage } from '@/lib/utils';
 import ChatPanel from '@/components/chat/ChatPanel';
 import VillageInputForm from '@/components/VillageInputForm';
 

@@ -85,72 +85,8 @@ def _get_llm():
 
 
 # ==========================================
-# 并行分析节点函数
+# 辅助函数
 # ==========================================
-
-def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
-    """
-    执行单个规划思路维度的分析
-
-    使用新的 ConceptPlanner 架构，充分利用现有的基础设施。
-    【重构】直接填充 concept_dimension_reports，不经过 reduce 节点
-
-    Args:
-        state: 包含维度信息和输入数据的状态
-
-    Returns:
-        该维度的分析结果，直接更新 concept_dimension_reports
-    """
-    dimension_key = state["dimension_key"]
-    dimension_name = state["dimension_name"]
-
-    logger.info(f"[子图-规划] 开始执行 {dimension_name} ({dimension_key})")
-
-    try:
-        # 【使用新架构】使用 GenericPlannerFactory 创建规划器
-        from ..planners.generic_planner import GenericPlannerFactory
-        planner = GenericPlannerFactory.create_planner(dimension_key)
-
-        # 【使用新架构】调用规划器的 execute 方法
-        # 注意：planner.execute 需要完整的状态字典，包含 analysis_report, task_description, constraints
-
-        planner_state = {
-            "analysis_report": state["analysis_report"],
-            "dimension_reports": state.get("dimension_reports", {}),  # 可选，用于筛选
-            "task_description": state["task_description"],
-            "constraints": state["constraints"]
-        }
-        planner_result = planner.execute(planner_state)
-
-        concept_text = planner_result["concept_result"]
-        logger.info(f"[子图-规划] 完成 {dimension_name}，生成 {len(concept_text)} 字符")
-
-        # 【重构】直接填充 concept_dimension_reports
-        return {
-            "concept_dimension_reports": {
-                dimension_name: concept_text
-            },
-            "concept_analyses": [{
-                "dimension_key": dimension_key,
-                "dimension_name": dimension_name,
-                "concept_result": concept_text
-            }]
-        }
-
-    except Exception as e:
-        logger.error(f"[子图-规划] {dimension_name} 执行失败: {str(e)}")
-        # 返回错误信息而非崩溃
-        return {
-            "concept_dimension_reports": {
-                dimension_name: f"[分析失败] {str(e)}"
-            },
-            "concept_analyses": [{
-                "dimension_key": dimension_key,
-                "dimension_name": dimension_name,
-                "concept_result": f"[分析失败] {str(e)}"
-            }]
-        }
-
 
 def _get_dimension_prompt(
     dimension_key: str,

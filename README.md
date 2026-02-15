@@ -1,6 +1,6 @@
 # 村庄规划智能体 (Village Planning Agent)
 
-基于 LangGraph 的智能村庄规划系统，提供 **Web 应用** 和 **CLI 工具** 两种使用方式，采用 AsyncSqliteSaver 实现状态持久化。
+基于 LangGraph 的智能村庄规划系统，提供 Web 应用和 CLI 工具两种使用方式，采用 AsyncSqliteSaver 实现状态持久化。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python13.com/downloads/)
@@ -94,6 +94,12 @@ npm run dev
 
 ## 数据流架构
 
+### 核心设计理念
+
+**后端状态为单一真实源 (Single Source of Truth)**
+- Controller 只负责数据搬运,不做任何业务逻辑判断
+- 幂等性: 无论轮询多少次,只要后端状态不变,前端渲染结果不变
+
 ### 整体架构
 
 ```
@@ -102,8 +108,8 @@ npm run dev
 │  ┌──────────────────────────────────────────────────┐     │
 │  │         UnifiedPlanningContext                 │     │
 │  │  ┌──────────────┐  ┌──────────────┐             │     │
-│  │  │ TaskController│  │  useTaskSSE    │             │     │
-│  │  │ (REST 轮询)   │  │ (SSE 流式)    │             │     │
+│  │  │ TaskController│  │  ReviewPanel │             │     │
+│  │  │ (REST 轮询)   │  │ (条件渲染)   │             │     │
 │  │  └──────────────┘  └──────────────┘             │     │
 │  └──────────────────────────────────────────────────┘     │
 └─────────────────────────────────────────────────────────────┘
@@ -115,39 +121,46 @@ npm run dev
 │  │   ↓ AsyncSqliteSaver (状态持久化)              │     │
 │  │   ↓ checkpoints 表 (自动管理)                   │     │
 │  │   - layer_X_completed                           │     │
-│  │   - analysis_report                            │     │
-│  │   - planning_concept                           │     │
-│  │   - detailed_plan                              │     │
+│  │   - analysis_dimension_reports                 │     │
+│  │   - concept_dimension_reports                  │     │
+│  │   - detailed_dimension_reports                 │     │
+│  │   - pause_after_step                            │     │
 │  └──────────────────────────────────────────────────┘     │
 │  ┌──────────────────────────────────────────────────┐     │
-│   │   planning_sessions 表 (业务元数据)             │     │
-│   │   - session_id, project_name                  │     │
-│   │   - status, created_at                        │     │
+│  │   planning_sessions 表 (业务元数据)             │     │
+│  │   - session_id, project_name                  │     │
+│  │   - status, created_at                        │     │
 │  └──────────────────────────────────────────────────┘     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### 数据流详解
 
-#### 1. REST 数据流（状态同步）
+#### 1. TaskController 数据流（状态同步）
 
 ```
 前端: TaskController (每2秒轮询)
   ↓
 后端: GET /api/planning/status/{session_id}
   ↓
-config = {"configurable": {"thread_id": session_id}}
-  ↓
-graph.get_state(config)
-  ↓
-AsyncSqliteSaver.get(config)
-  ↓
-从 checkpoints 表读取完整状态快照
+从 AsyncSqliteSaver 读取完整状态
   ↓
 返回: SessionStatusResponse
+  - pauseAfterStep (暂停状态)
+  - layer_X_completed (层级完成)
+  - currentLayer, previousLayer, pendingReviewLayer
+  - executionComplete, executionError
   ↓
-前端: 更新 UI 状态、触发回调
+前端: syncBackendState(statusData)
+  ↓
+直接更新 Context 状态 (不做任何判断)
+  ↓
+UI 重新渲染 (条件渲染 ReviewPanel)
 ```
+
+**关键特性**:
+- ✅ **纯数据搬运**: Controller 只负责获取状态和同步,不做任何业务逻辑判断
+- ✅ **幂等性**: 无论轮询多少次,只要后端状态不变,前端渲染结果不变
 
 #### 2. SSE 数据流（流式文本）
 
@@ -158,7 +171,10 @@ AsyncSqliteSaver.get(config)
   ↓
 维度级批处理
   ↓
-SSE 事件: dimension_delta, dimension_complete
+SSE 事件推送:
+  - dimension_delta: {dimension_key, dimension_name, layer, chunk, accumulated}
+  - dimension_complete: {dimension_key, dimension_name, layer, full_content}
+  - error: {error}
   ↓
 前端: 实时显示流式文本
 ```
@@ -185,46 +201,62 @@ LangGraph 执行图
 #### 4. 暂停/恢复流程
 
 ```
-步进模式 + 层级完成
+步进模式 (step_mode=True) + 层级完成 (layer_X_completed=True)
   ↓
-PauseManagerNode 设置 pause_after_step=True
+PauseManagerNode 检测到暂停条件
   ↓
-后台执行检测暂停 → 发送 pause 事件
+设置 state["pause_after_step"] = True
   ↓
-_set_session_value 保存 sent_pause_events
+路由到 END 终止执行
   ↓
 前端 REST 轮询检测到 pauseAfterStep=true
   ↓
-显示审查 UI
+TaskController.syncBackendState() 更新状态
+  ↓
+Context.isPaused = true, Context.pendingReviewLayer = 1
+  ↓
+条件渲染: {isPaused && <ReviewPanel layer={pendingReviewLayer} />}
   ↓
 用户批准 → POST /api/planning/review/{id}?action=approve
   ↓
 清除 pause 标志 → 恢复执行
+  ↓
+前端 REST 轮询检测到 pauseAfterStep=false
+  ↓
+Context.isPaused = false
+  ↓
+ReviewPanel 自动消失
 ```
 
 ---
 
 ## 技术优势
 
-### 1. AsyncSqliteSaver 状态持久化
-- **自动管理**: LangGraph 自动保存状态，无需手动维护
+### 1. 极简版 TaskController
+- **纯数据搬运**: 只负责获取状态和同步,不做任何业务逻辑判断
+- **幂等性**: 无论轮询多少次,只要后端状态不变,前端渲染结果不变
+- **代码简洁**: 删除了所有 Ref 和去重逻辑,代码量减少约 60%
+
+### 2. 状态驱动 UI (State Driven)
+- **后端状态为单一真实源**: 前端 UI 直接根据后端状态渲染
+- **条件渲染**: `{isPaused && <ReviewPanel layer={pendingReviewLayer} />}`
+- **无重复渲染**: React 足够聪明,不会重复渲染重型组件
+
+### 3. AsyncSqliteSaver 状态持久化
+- **自动管理**: LangGraph 自动保存状态,无需手动维护
 - **双重表设计**: checkpoints 表 + checkpoints_blobs 表
 - **毫秒级恢复**: 从 checkpoint 毫秒级还原完整状态
-- **数据一致性**: AI 状态 = 数据库内容，天然匹配
+- **数据一致性**: AI 状态 = 数据库内容,天然匹配
 
-### 2. SSE/REST 解耦
-- **REST**: 可靠状态查询，每 2 秒轮询
-- **SSE**: 维度级流式文本，实时推送
+### 4. SSE/REST 解耦
+- **REST**: 可靠状态查询,每 2 秒轮询
+- **SSE**: 维度级流式文本,实时推送
 - **无去重风险**: 消除事件丢失或重复
 
-### 3. 双表精简设计
+### 5. 双表精简设计
 - **业务表**: 只存储元数据 (session_id, project_name, status)
 - **检查点表**: AsyncSqliteSaver 自动管理完整状态
 - **代码简洁**: 删除了 12+ 个手动维护的字段
-
-### 4. 并行执行优化
-- 12+4+12 个维度并行处理
-- 智能状态筛选，节省 40-60% LLM token
 
 ---
 
@@ -243,10 +275,16 @@ Village_Planning_Agent/
 ├── frontend/                     # Next.js 14 前端
 │   └── src/
 │       ├── app/                    # Next.js App Router
+│       ├── contexts/               # React Context
+│       │   └── UnifiedPlanningContext.tsx
 │       ├── controllers/            # 状态控制器
-│       │   └── TaskController.tsx  # REST 轮询
+│       │   └── TaskController.tsx  # 极简版 TaskController
+│       ├── components/chat/        # 聊天组件
+│       │   ├── ChatPanel.tsx      # 主聊天界面
+│       │   ├── ReviewPanel.tsx    # 审查面板
+│       │   └── MessageList.tsx    # 消息列表
 │       └── hooks/                  # 自定义 Hooks
-│           └── useTaskSSE.ts        # SSE 处理
+│           └── useStreamingRender.ts  # 流式渲染
 ├── src/                          # 核心规划引擎
 │   ├── orchestration/              # 编排层
 │   │   └── main_graph.py          # LangGraph 主图
@@ -297,9 +335,9 @@ USE_ASYNC_DATABASE=true
 
 详细实现文档：
 
-- **[智能体架构](docs/agent.md)** - LangGraph 架构、三层规划系统、数据流
+- **[智能体架构](docs/agent.md)** - LangGraph 架构、三层规划系统、状态持久化
 - **[后端实现](docs/backend.md)** - FastAPI 架构、API 端点、AsyncSqliteSaver 集成
-- **[前端实现](docs/frontend.md)** - Next.js 技术栈、TaskController、SSE/REST 解耦
+- **[前端实现](docs/frontend.md)** - Next.js 技术栈、极简版 TaskController、状态驱动 UI
 - **[前端组件架构](FRONTEND_COMPONENT_ARCHITECTURE.md)** - 组件设计、状态管理、数据流
 - **[前端视觉指南](FRONTEND_VISUAL_GUIDE.md)** - UI/UX 设计规范、组件样式
 
@@ -329,12 +367,11 @@ config = {"configurable": {"thread_id": "your_session_id"}}
 state = await graph.get_state(config)  # 自动从 checkpoint 恢复
 ```
 
-### Q: 前端为什么没有显示 pause UI？
+### Q: 前端为什么没有显示审查面板？
 A: 确认以下项：
-- 后端日志显示"已发送pause事件"
-- 后端日志显示`sent_pause_events`已保存
-- 前端日志显示`pauseAfterStep=true`
-- 检查 `backend/api/planning.py:586` 是否有 `_set_session_value` 调用
+- 后端日志显示 `pause_after_step=true`
+- 前端日志显示 `isPaused=true`
+- 检查 `ChatPanel.tsx` 中的条件渲染逻辑: `{isPaused && pendingReviewLayer && <ReviewPanel ... />}`
 
 ---
 

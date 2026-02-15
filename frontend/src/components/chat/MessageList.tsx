@@ -4,12 +4,13 @@
  * MessageList - Renders list of chat messages with Gemini-style enhancements
  */
 
-import { Message, ActionButton, LayerCompletedMessage, ReviewInteractionMessage } from '@/types';
+import { Message, ActionButton, LayerCompletedMessage, ReviewInteractionMessage, DimensionReportMessage } from '@/types';
 import { isReviewInteractionMessage } from '@/types';
 import ThinkingIndicator, { WaveThinkingIndicator } from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
 import ReviewInteractionMessageComponent from './ReviewInteractionMessage';
+import DimensionReportStreaming from './DimensionReportStreaming';
 
 interface MessageListProps {
   messages: Message[];
@@ -33,6 +34,7 @@ interface MessageListProps {
     checkpointId: string
   ) => Promise<void>;
   reviewDisabled?: boolean;
+  currentLayer?: number;  // NEW: 当前活跃层
 }
 
 export default function MessageList({
@@ -49,6 +51,7 @@ export default function MessageList({
   onReviewReject,
   onReviewRollback,
   reviewDisabled = false,
+  currentLayer,
 }: MessageListProps) {
   const handleCopy = (message: Message) => {
     if (message.type === 'text') {
@@ -83,16 +86,40 @@ export default function MessageList({
         </div>
       )}
 
-      {/* Regular messages */}
-      {messages.map((message) => {
+      {/* Regular messages - 过滤掉 dimension_report 类型 */}
+      {messages
+        .filter(message => message.type !== 'dimension_report')
+        .map((message) => {
         // Special handling for layer_completed messages
         if (message.type === 'layer_completed') {
+          const layerMsg = message as LayerCompletedMessage;
+          // 计算是否有流式维度（有维度报告且有内容）
+          const hasStreamingDimensions = Object.keys(layerMsg.dimensionReports || {}).length > 0;
+          
           return (
             <div key={message.id} className="w-full mb-4">
               <LayerReportMessage
-                message={message as LayerCompletedMessage}
+                message={layerMsg}
                 onOpenInSidebar={onOpenInSidebar}
                 onToggleAll={(expand) => handleToggleAllDimensions(message.layer, expand)}
+                currentLayer={currentLayer}
+                hasStreamingDimensions={hasStreamingDimensions}
+              />
+            </div>
+          );
+        }
+
+        // Special handling for dimension_report messages (streaming dimension content)
+        if (message.type === 'dimension_report') {
+          return (
+            <div key={message.id} className="w-full mb-2">
+              <DimensionReportStreaming
+                layer={message.layer}
+                dimensionKey={message.dimensionKey}
+                dimensionName={message.dimensionName}
+                content={message.content}
+                streamingState={message.streamingState}
+                wordCount={message.wordCount}
               />
             </div>
           );

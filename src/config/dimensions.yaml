@@ -364,3 +364,19 @@ dimensions:
     result_key: "dimension_result"
     rag_enabled: false
     tool: null
+
+# ==========================================
+# 适配器配置 - 映射维度到所需的工具
+# ==========================================
+
+adapters:
+  industry: ["gis"]
+  spatial_structure: ["gis"]
+  land_use_planning: ["gis"]
+  settlement_planning: ["gis"]
+  ecological: ["gis"]
+  traffic: ["network"]
+  infrastructure: ["gis", "network"]
+  public_service: ["network"]
+  landscape: ["gis"]
+  disaster_prevention: ["gis"]

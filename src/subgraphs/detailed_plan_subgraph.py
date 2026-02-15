@@ -35,7 +35,7 @@ import operator
 from datetime import datetime
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
-from ..core.dimension_mapping import (
+from ..core.dimension_config import (
     FULL_DEPENDENCY_CHAIN,
     WAVE_CONFIG,
     get_execution_wave,
@@ -686,10 +686,10 @@ def create_detailed_plan_subgraph() -> StateGraph:
 
 def _extract_dimension_reports(state: DetailedPlanState) -> Dict[str, str]:
     """从状态中提取维度报告"""
-    from ..core.dimension_mapping import DETAILED_DIMENSION_NAMES
+    from ..core.dimension_config import DETAILED_DIMENSION_NAMES
 
     detailed_dimension_reports = {}
-    for dim_key in DETAILED_DIMENSION_NAMES.keys():
+    for dim_key in DETAILED_DIMENSION_NAMES().keys():
         field_name = f"{dim_key}_plan"
         content = state.get(field_name, "")
         if content:

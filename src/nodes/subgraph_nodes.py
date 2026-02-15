@@ -89,7 +89,22 @@ class AnalyzeDimensionNode(BaseNode):
                 "raw_data": raw_data,
                 "project_name": state.get("project_name", "村庄")
             }
-            planner_result = planner.execute(planner_state)
+            
+            # ✅ 从 config 中获取 token 回调工厂（避免序列化问题）
+            on_token_callback = None
+            if hasattr(state, "config") and state.config.get("configurable"):
+                token_callback_factory = state.config["configurable"].get("_token_callback_factory")
+                if token_callback_factory:
+                    layer = 1  # 当前层级（可以从状态中获取）
+                    on_token_callback = token_callback_factory(layer, dimension_key)
+                    logger.debug(f"[{self.node_name}] 已创建 token 回调 for {dimension_key}")
+            
+            # ✅ 传递 on_token_callback 和 streaming 参数
+            planner_result = planner.execute(
+                planner_state,
+                streaming=state.get("_streaming_enabled", False),
+                on_token_callback=on_token_callback
+            )
 
             if not planner_result.get("success", True):
                 error_msg = planner_result.get("error", "未知错误")
@@ -523,21 +538,10 @@ class CheckAllDimensionsCompleteNode(BaseNode):
         super().__init__("检查维度完成状态")
 
     def execute(self, state: StateDict) -> StateDict:
-        """检查当前波次是否完成"""
-        # This node is only for routing, doesn't modify state
-        return {}
-
-
-class GenerateFinalDetailedPlanNode(BaseNode):
-    """生成最终详细规划报告节点"""
-
-    def __init__(self) -> None:
-        super().__init__("生成最终详细规划报告")
-
-    def execute(self, state: StateDict) -> StateDict:
-        """生成最终详细规划报告"""
-        from ..subgraphs.detailed_plan_subgraph import generate_final_detailed_plan as _generate
-        return _generate(state)
+        """检查当前波次是否完成，返回路由决策"""
+        from ..subgraphs.detailed_plan_subgraph import check_all_dimensions_complete as _check
+        routing_decision = _check(state)
+        return {"_routing_decision": routing_decision}
 
 
 # ==========================================

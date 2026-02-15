@@ -14,12 +14,6 @@ from .file_manager import (
 # 知识库工具（函数）
 from .knowledge_tool import knowledge_query
 
-# 地图工具（函数）
-from .map_tool import generate_simple_map
-
-# 规划工具（函数）
-from .planner_tool import plan_village
-
 # Checkpoint工具（新增）
 from .checkpoint_tool import (
     CheckpointTool,
@@ -44,12 +38,6 @@ __all__ = [
 
     # 知识库
     "knowledge_query",
-
-    # 地图
-    "generate_simple_map",
-
-    # 规划
-    "plan_village",
 
     # Checkpoint
     "CheckpointTool",

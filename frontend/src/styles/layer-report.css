@@ -253,16 +253,16 @@
 
 /* ========== 双模实时同步样式 ========== */
 
-/* Chat 模式：紧凑、折叠、有渐变遮罩 */
+/* Chat 模式：完整显示、无高度限制、无渐变遮罩 */
 .layer-report-card-chat {
-  max-height: 500px;
-  overflow: hidden;
+  max-height: none;
+  overflow: visible;
   position: relative;
   transition: max-height 0.4s ease;
 }
 
-.layer-report-card-chat::after {
-  /* 渐变遮罩 */
+/* 渐变遮罩已移除 - 用户可以完全查看报告内容 */
+/* .layer-report-card-chat::after {
   content: '';
   position: absolute;
   bottom: 0;
@@ -272,7 +272,7 @@
   background: linear-gradient(to bottom, transparent, rgba(245, 249, 245, 0.8), #f5f9f5);
   pointer-events: none;
   z-index: 1;
-}
+} */
 
 /* Sidebar 模式：完整、展开、无遮罩 */
 .layer-report-card-sidebar {
@@ -364,5 +364,94 @@
 .markdown-content li {
   margin-bottom: 5px;
   color: #666;
+}
+
+/* 维度报告消息样式 - 实时流式显示 */
+.dimension-report-message {
+  background: #f0f9ff;
+  border-left: 4px solid #3b82f6;
+  padding: 16px;
+  margin: 12px 0;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.dimension-report-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.dimension-report-title {
+  font-weight: 600;
+  color: #1e40af;
+  font-size: 0.95rem;
+}
+
+.dimension-report-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.dimension-report-streaming {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: #dbeafe;
+  color: #1e40af;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.dimension-report-completed {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: #d1fae5;
+  color: #065f46;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.dimension-report-content {
+  background: white;
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #374151;
+}
+
+/* 流式光标效果 */
+.dimension-report-content.streaming::after {
+  content: '|';
+  animation: blink 1s infinite;
+  color: #3b82f6;
+}
+
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
+}
+
+.dimension-report-word-count {
+  font-size: 0.8rem;
+  color: #9ca3af;
+  margin-top: 4px;
 }
 

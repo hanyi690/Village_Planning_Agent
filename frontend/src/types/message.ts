@@ -11,7 +11,7 @@ export interface BaseMessage {
 }
 
 export type MessageRole = BaseMessage['role'];
-export type MessageType = 'text' | 'file' | 'progress' | 'action' | 'result' | 'error' | 'system' | 'layer_completed' | 'review_request' | 'checkpoint_list' | 'review_interaction';
+export type MessageType = 'text' | 'file' | 'progress' | 'action' | 'result' | 'error' | 'system' | 'layer_completed' | 'review_request' | 'checkpoint_list' | 'review_interaction' | 'dimension_report';
 
 // Knowledge Reference Types (RAG集成)
 export interface KnowledgeReference {
@@ -158,7 +158,8 @@ import type {
   LayerCompletedMessage,
   ReviewRequestMessage,
   CheckpointListMessage,
-  ReviewInteractionMessage
+  ReviewInteractionMessage,
+  DimensionReportMessage
 } from './message-types';
 
 export type Message =
@@ -172,4 +173,5 @@ export type Message =
   | LayerCompletedMessage
   | ReviewRequestMessage
   | CheckpointListMessage
-  | ReviewInteractionMessage;
+  | ReviewInteractionMessage
+  | DimensionReportMessage;

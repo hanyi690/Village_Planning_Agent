@@ -108,6 +108,9 @@ class GenericPlanner(UnifiedPlannerBase):
     def _load_prompt_template(cls, prompt_key: str) -> str:
         """加载 Prompt 模板"""
         cls._load_all_configs()
+        if cls._prompts_config is None:
+            logger.error(f"[GenericPlanner] prompts_config 未加载")
+            return ""
         template = cls._prompts_config.get(prompt_key, "")
         if not template:
             logger.warning(f"[GenericPlanner] 未找到 Prompt 模板: {prompt_key}")
@@ -290,11 +293,11 @@ class GenericPlanner(UnifiedPlannerBase):
 
     def _format_detailed_plans(self, plans: Dict[str, str]) -> str:
         """格式化详细规划结果（用于 project_bank）"""
-        from ..core.dimension_mapping import DETAILED_DIMENSION_NAMES
+        from ..core.dimension_config import DETAILED_DIMENSION_NAMES
 
         formatted = []
         for key, content in plans.items():
-            name = DETAILED_DIMENSION_NAMES.get(key, key)
+            name = DETAILED_DIMENSION_NAMES().get(key, key)
             formatted.append(f"## {name}\n\n{content}\n")
 
         return "\n".join(formatted)
