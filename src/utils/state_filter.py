@@ -16,6 +16,7 @@ from ..core.dimension_config import (
     DETAILED_DIMENSION_NAMES,
     FULL_DEPENDENCY_CHAIN,
     get_full_dependency_chain,
+    get_full_dependency_chain_func,
     get_required_info_for_detailed
 )
 from ..utils.logger import get_logger
