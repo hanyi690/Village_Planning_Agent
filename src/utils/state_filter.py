@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, Callable
 
-from ..core.dimension_mapping import (
+from ..core.dimension_config import (
     ANALYSIS_TO_CONCEPT_MAPPING,
     ANALYSIS_DIMENSION_NAMES,
     CONCEPT_DIMENSION_NAMES,
@@ -49,7 +49,15 @@ def filter_analysis_report_for_concept(
     Returns:
         筛选后的分析报告
     """
-    mapping = ANALYSIS_TO_CONCEPT_MAPPING.get(concept_dimension)
+    # 调试日志：追踪配置加载和使用情况
+    logger.debug(f"[状态筛选] 开始筛选 {concept_dimension}")
+    logger.debug(f"[状态筛选] ANALYSIS_TO_CONCEPT_MAPPING 类型: {type(ANALYSIS_TO_CONCEPT_MAPPING)}")
+    
+    mapping_func = ANALYSIS_TO_CONCEPT_MAPPING()
+    logger.debug(f"[状态筛选] mapping_func 类型: {type(mapping_func)}")
+    
+    mapping = mapping_func.get(concept_dimension)
+    logger.debug(f"[状态筛选] mapping 内容: {mapping if mapping else 'None'}")
 
     if not mapping:
         # 未找到映射，返回完整报告
@@ -73,7 +81,7 @@ def filter_analysis_report_for_concept(
     for dimension_key in required_analyses:
         if dimension_key in full_analysis_reports:
             report_text = full_analysis_reports[dimension_key]
-            dimension_name = ANALYSIS_DIMENSION_NAMES.get(dimension_key, dimension_key)
+            dimension_name = ANALYSIS_DIMENSION_NAMES().get(dimension_key, dimension_key)
             relevant_reports.append(f"### {dimension_name}\n\n{report_text}\n")
         else:
             logger.warning(f"[状态筛选] 缺少维度 {dimension_key} 的报告")
@@ -84,7 +92,7 @@ def filter_analysis_report_for_concept(
         return full_analysis_report
 
     # 拼接相关维度报告
-    concept_name = CONCEPT_DIMENSION_NAMES.get(concept_dimension, concept_dimension)
+    concept_name = CONCEPT_DIMENSION_NAMES().get(concept_dimension, concept_dimension)
     filtered_report = f"# 与 {concept_name} 相关的现状分析\n\n" + "\n".join(relevant_reports)
 
     logger.info(f"[状态筛选] 为 {concept_dimension} 筛选了 {len(relevant_reports)} 个现状维度")
@@ -132,7 +140,7 @@ def filter_state_for_detailed_dimension(
         for dimension_key in required_analyses:
             if dimension_key in full_analysis_reports:
                 report_text = full_analysis_reports[dimension_key]
-                dimension_name = ANALYSIS_DIMENSION_NAMES.get(dimension_key, dimension_key)
+                dimension_name = ANALYSIS_DIMENSION_NAMES().get(dimension_key, dimension_key)
                 relevant_reports.append(f"### {dimension_name}\n\n{report_text}\n")
 
         if relevant_reports:
@@ -152,7 +160,7 @@ def filter_state_for_detailed_dimension(
         for dimension_key in required_concepts:
             if dimension_key in full_concept_reports:
                 concept_text = full_concept_reports[dimension_key]
-                concept_name = CONCEPT_DIMENSION_NAMES.get(dimension_key, dimension_key)
+                concept_name = CONCEPT_DIMENSION_NAMES().get(dimension_key, dimension_key)
                 relevant_concepts.append(f"### {concept_name}\n\n{concept_text}\n")
 
         if relevant_concepts:
@@ -265,7 +273,7 @@ def filter_state_for_detailed_dimension_v2(
         }
     """
     # 获取完整依赖链
-    dependency_chain = get_full_dependency_chain(detailed_dimension)
+    dependency_chain = get_full_dependency_chain_func(detailed_dimension)
 
     if not dependency_chain:
         logger.warning(f"[状态筛选v2] 未找到 {detailed_dimension} 的依赖链，返回完整报告")
@@ -294,7 +302,7 @@ def filter_state_for_detailed_dimension_v2(
         required_dims=required_analyses,
         full_reports=full_analysis_reports,
         full_report=full_analysis_report,
-        dimension_names=ANALYSIS_DIMENSION_NAMES,
+        dimension_names=ANALYSIS_DIMENSION_NAMES(),
         report_type="现状分析"
     )
 
@@ -310,7 +318,7 @@ def filter_state_for_detailed_dimension_v2(
         for dim_key in required_concepts:
             if dim_key in full_concept_reports:
                 concept_text = full_concept_reports[dim_key]
-                concept_name = CONCEPT_DIMENSION_NAMES.get(dim_key, dim_key)
+                concept_name = CONCEPT_DIMENSION_NAMES().get(dim_key, dim_key)
                 relevant_concepts.append(f"### {concept_name}\n\n{concept_text}\n")
 
         if relevant_concepts:
@@ -333,7 +341,7 @@ def filter_state_for_detailed_dimension_v2(
         for dep_dim in depends_on_detailed:
             if dep_dim in completed_detailed_reports:
                 filtered_detailed[dep_dim] = completed_detailed_reports[dep_dim]
-                logger.info(f"[状态筛选v2] {detailed_dimension} 包含前序规划: {DETAILED_DIMENSION_NAMES.get(dep_dim, dep_dim)}")
+                logger.info(f"[状态筛选v2] {detailed_dimension} 包含前序规划: {DETAILED_DIMENSION_NAMES().get(dep_dim, dep_dim)}")
 
         detailed_stats = {
             "depends_on_count": len(depends_on_detailed),
@@ -405,7 +413,7 @@ def _filter_with_stats(
             relevant_reports.append(f"### {dim_name}\n\n{report_text}\n")
 
     if relevant_reports:
-        filtered_report = f"# 与{DETAILED_DIMENSION_NAMES.get(dimension_name, dimension_name)}相关的{report_type}\n\n" + "\n".join(relevant_reports)
+        filtered_report = f"# 与{DETAILED_DIMENSION_NAMES().get(dimension_name, dimension_name)}相关的{report_type}\n\n" + "\n".join(relevant_reports)
         filtered_length = len(filtered_report)
         reduction_percent = (1 - filtered_length / original_length) * 100 if original_length > 0 else 0
         logger.info(f"[状态筛选v2] 为 {dimension_name} 筛选了 {len(relevant_reports)} 个{report_type}维度")
@@ -437,7 +445,7 @@ def visualize_filtering_result(
     Returns:
         格式化的可视化字符串
     """
-    lines = [f"\n{'='*60}", f"状态筛选结果: {DETAILED_DIMENSION_NAMES.get(detailed_dimension, detailed_dimension)}", f"{'='*60}"]
+    lines = [f"\n{'='*60}", f"状态筛选结果: {DETAILED_DIMENSION_NAMES().get(detailed_dimension, detailed_dimension)}", f"{'='*60}"]
 
     # 依赖链
     chain = filtering_result.get("dependency_chain", {})
@@ -467,7 +475,7 @@ def visualize_filtering_result(
     if detailed:
         lines.append(f"\n【包含的前序规划】")
         for dim, report in detailed.items():
-            dim_name = DETAILED_DIMENSION_NAMES.get(dim, dim)
+            dim_name = DETAILED_DIMENSION_NAMES().get(dim, dim)
             lines.append(f"  - {dim_name}: {len(report)} 字符")
 
     lines.append(f"{'='*60}\n")
