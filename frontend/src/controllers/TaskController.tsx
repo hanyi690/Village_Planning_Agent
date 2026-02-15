@@ -1,11 +1,15 @@
 /**
- * TaskController - Headless state management for planning tasks
+ * TaskController - 极简版状态管理
  *
- * This hook provides:
- * - Polling /status endpoint for reliable state updates
- * - SSE connection lifecycle management based on status
- * - Clear API for UI components
- * - Single source of truth: database state
+ * 核心理念:
+ * - 后端状态为单一真实源 (Single Source of Truth)
+ * - Controller 只负责数据搬运,不做任何业务逻辑判断
+ * - 幂等性: 无论轮询多少次,只要后端状态不变,前端渲染结果不变
+ *
+ * 功能:
+ * - 轮询 /status 端点获取后端状态
+ * - 将状态同步到 Context
+ * - SSE 连接管理 (仅用于文本流)
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
@@ -13,24 +17,17 @@ import { planningApi } from '../lib/api';
 
 export interface TaskState {
   status: 'idle' | 'pending' | 'running' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
-  currentLayer: number | null;
-  layer1Completed: boolean;
-  layer2Completed: boolean;
-  layer3Completed: boolean;
-  pauseAfterStep: boolean;
-  waitingForReview: boolean;
-  lastCheckpointId: string | null;
-  executionError: string | null;
-  executionComplete: boolean;
+  current_layer: number | null;
+  previous_layer: number | null;
+  pending_review_layer: number | null;
+  layer_1_completed: boolean;
+  layer_2_completed: boolean;
+  layer_3_completed: boolean;
+  pause_after_step: boolean;
+  last_checkpoint_id: string | null;
+  execution_error: string | null;
+  execution_complete: boolean;
   progress: number | null;
-}
-
-export interface TaskControllerCallbacks {
-  onLayerCompleted?: (layer: number) => void;
-  onPause?: (layer: number) => void;
-  onComplete?: () => void;
-  onError?: (error: string) => void;
-  onTextDelta?: (text: string, layer?: number) => void;
 }
 
 export interface TaskControllerActions {
@@ -41,299 +38,238 @@ export interface TaskControllerActions {
 
 export function useTaskController(
   taskId: string | null,
-  callbacks: TaskControllerCallbacks = {}
+  callbacks: {
+    onTextDelta?: (text: string, layer?: number) => void;
+    onDimensionDelta?: (dimensionKey: string, delta: string, accumulated: string, layer?: number) => void;
+    onDimensionComplete?: (dimensionKey: string, dimensionName: string, fullContent: string, layer?: number) => void;
+    onLayerCompleted?: (layer: number, reportContent: string, dimensionReports: Record<string, string>) => void;
+    onPause?: (layer: number, checkpointId: string) => void;
+    onError?: (error: string) => void;
+  } = {}
 ): [TaskState, TaskControllerActions] {
   const [state, setState] = useState<TaskState>({
     status: 'idle',
-    currentLayer: null,
-    layer1Completed: false,
-    layer2Completed: false,
-    layer3Completed: false,
-    pauseAfterStep: false,
-    waitingForReview: false,
-    lastCheckpointId: null,
-    executionError: null,
-    executionComplete: false,
+    current_layer: null,
+    previous_layer: null,
+    pending_review_layer: null,
+    layer_1_completed: false,
+    layer_2_completed: false,
+    layer_3_completed: false,
+    pause_after_step: false,
+    last_checkpoint_id: null,
+    execution_error: null,
+    execution_complete: false,
     progress: null,
   });
 
-  const prevStateRef = useRef<TaskState>(state);
-  const callbacksRef = useRef<TaskControllerCallbacks>(callbacks);
+  const callbacksRef = useRef(callbacks);
   const sseConnectionRef = useRef<EventSource | null>(null);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const triggeredEventsRef = useRef<Set<string>>(new Set());
+  const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // ✅ NEW: Track all timeout IDs for cleanup
-  const timeoutIdsRef = useRef<Set<NodeJS.Timeout>>(new Set());
-
-  // ✅ P1 FIX: Track 404 errors during initial polling to provide better user experience
-  const errorCountRef = useRef<number>(0);
-
-  // ✅ 新增：记录已触发暂停的最高层级，用于检测状态抖动
-  const lastTriggeredPauseLayerRef = useRef<number>(0);
-
-  // Update callbacks ref when callbacks change
+  // Update callbacks ref
   useEffect(() => {
     callbacksRef.current = callbacks;
   }, [callbacks]);
 
-  // Reset deduplication set when taskId changes
-  useEffect(() => {
-    triggeredEventsRef.current.clear();
-    prevStateRef.current = state;
-    // ✅ 新增：重置已触发的最高暂停层级
-    lastTriggeredPauseLayerRef.current = 0;
-    console.log(`[TaskController] TaskId changed, reset state tracking`);
+  // 纯数据搬运逻辑 - 获取状态 -> 同步到 Context -> 检查是否停止
+  const fetchStatus = useCallback(async () => {
+    if (!taskId) return false;
+
+    try {
+      // 1. 获取后端全量状态
+      const statusData = await planningApi.getStatus(taskId);
+
+      // 2. 直接同步到状态 (不做任何判断)
+      console.log('[TaskController] Syncing state from backend API:', {
+        'Raw status data': statusData,
+        'status': statusData.status,
+        'pause_after_step': statusData.pause_after_step,
+        'pause_after_step type': typeof statusData.pause_after_step,
+        'pending_review_layer': statusData.pending_review_layer,
+        'pending_review_layer type': typeof statusData.pending_review_layer,
+        'previous_layer': statusData.previous_layer,
+        'previous_layer type': typeof statusData.previous_layer,
+        'current_layer': statusData.current_layer,
+        'layer_1_completed': statusData.layer_1_completed,
+        'layer_2_completed': statusData.layer_2_completed,
+        'layer_3_completed': statusData.layer_3_completed,
+        'execution_complete': statusData.execution_complete,
+      });
+
+      setState({
+        status: statusData.status as TaskState['status'],
+        current_layer: statusData.current_layer ?? null,
+        previous_layer: statusData.previous_layer ?? null,
+        pending_review_layer: statusData.pending_review_layer ?? null,
+        layer_1_completed: statusData.layer_1_completed,
+        layer_2_completed: statusData.layer_2_completed,
+        layer_3_completed: statusData.layer_3_completed,
+        pause_after_step: statusData.pause_after_step,
+        last_checkpoint_id: statusData.last_checkpoint_id ?? null,
+        execution_error: statusData.execution_error ?? null,
+        execution_complete: statusData.execution_complete,
+        progress: statusData.progress ?? null,
+      });
+
+      console.log('[TaskController] State updated successfully');
+
+      // 3. 检查是否需要停止轮询
+      // 只有当 execution_complete=true 时才彻底停止
+      return statusData.execution_complete;
+
+    } catch (error: any) {
+      // 404 错误: 数据库尚未提交,跳过本次轮询
+      const status = error?.status || error?.response?.status;
+      if (status === 404) {
+        console.warn(`[TaskController] Task ${taskId} initializing (404), will retry...`);
+        return false;
+      }
+
+      // 其他错误: 记录日志,继续轮询
+      console.error('[TaskController] Poll error:', error);
+      return false;
+    }
   }, [taskId]);
 
-  // Poll status endpoint every 2 seconds
+  // 轮询副作用
   useEffect(() => {
-    if (!taskId) return;
-
-    const pollStatus = async () => {
-      try {
-        const statusData = await planningApi.getStatus(taskId);
-
-        console.log(`[TaskController] Poll result:`, {
-          taskId,
-          status: statusData.status,
-          layer: statusData.current_layer,
-          layer1: statusData.layer_1_completed,
-          layer2: statusData.layer_2_completed,
-          layer3: statusData.layer_3_completed,
-          pause: statusData.pause_after_step,
-        });
-
-        setState((currentState) => {
-          const newState = {
-            status: statusData.status as TaskState['status'],
-            currentLayer: statusData.current_layer ?? null,
-            layer1Completed: statusData.layer_1_completed,
-            layer2Completed: statusData.layer_2_completed,
-            layer3Completed: statusData.layer_3_completed,
-            pauseAfterStep: statusData.pause_after_step,
-            waitingForReview: statusData.waiting_for_review,
-            lastCheckpointId: statusData.last_checkpoint_id ?? null,
-            executionError: statusData.execution_error ?? null,
-            executionComplete: statusData.execution_complete,
-            progress: statusData.progress ?? null,
-          };
-
-          const prev = prevStateRef.current;
-          console.log(`[TaskController] State change:`, {
-            layer1: `${prev.layer1Completed} -> ${newState.layer1Completed}`,
-            layer2: `${prev.layer2Completed} -> ${newState.layer2Completed}`,
-            layer3: `${prev.layer3Completed} -> ${newState.layer3Completed}`,
-            pause: `${prev.pauseAfterStep} -> ${newState.pauseAfterStep}`,
-          });
-
-          // Collect events to trigger - defer execution until after render
-          const eventsToTrigger: Array<() => void> = [];
-
-          // Layer completion detection with deduplication
-          const layers = [
-            { key: 'layer1', number: 1, completed: newState.layer1Completed },
-            { key: 'layer2', number: 2, completed: newState.layer2Completed },
-            { key: 'layer3', number: 3, completed: newState.layer3Completed },
-          ] as const;
-
-          for (const layer of layers) {
-            const prevCompleted = layer.key === 'layer1' ? prev.layer1Completed :
-                               layer.key === 'layer2' ? prev.layer2Completed :
-                               prev.layer3Completed;
-            const eventKey = `${layer.key}_completed_${layer.completed}`;
-
-            if (!prevCompleted && layer.completed && !triggeredEventsRef.current.has(eventKey)) {
-              const layerNum = layer.number;
-              eventsToTrigger.push(() => {
-                console.log(`[TaskController] Layer ${layerNum} completed, triggering callback`);
-                callbacksRef.current.onLayerCompleted?.(layerNum);
-              });
-              triggeredEventsRef.current.add(eventKey);
-            } else if (!prevCompleted && layer.completed && triggeredEventsRef.current.has(eventKey)) {
-              console.log(`[TaskController] Layer ${layer.number} completion already triggered, skipping`);
-            }
-          }
-
-          // Pause detection with layer-scoped deduplication
-          const isPaused = newState.pauseAfterStep || newState.status === 'paused';
-          const wasPaused = prev.pauseAfterStep || prev.status === 'paused';
-
-          if (isPaused && !wasPaused) {
-            const currentLayer = newState.currentLayer ?? 1;
-            const pauseKey = `pause_${taskId}_layer_${currentLayer}`;
-
-            // ✅ 新增：状态抖动检测
-            // 如果当前层级 <= 已触发暂停的最高层级，说明是状态回滚（如LLM失败导致的回退）
-            // 这种情况下不应该再次触发 onPause 回调
-            if (currentLayer <= lastTriggeredPauseLayerRef.current) {
-              console.log(`[TaskController] 检测到状态抖动：Layer ${currentLayer} <= 已触发的最高层级 ${lastTriggeredPauseLayerRef.current}，跳过 onPause`);
-              console.log(`[TaskController] 这可能是由于 LLM 调用失败导致的状态回滚`);
-            } else if (!triggeredEventsRef.current.has(pauseKey)) {
-              eventsToTrigger.push(() => {
-                console.log(`[TaskController] Pause detected at Layer ${currentLayer}`);
-                callbacksRef.current.onPause?.(currentLayer);
-              });
-              triggeredEventsRef.current.add(pauseKey);
-
-              // ✅ 新增：更新已触发的最高层级
-              lastTriggeredPauseLayerRef.current = Math.max(lastTriggeredPauseLayerRef.current, currentLayer);
-              console.log(`[TaskController] 更新已触发的最高暂停层级: ${lastTriggeredPauseLayerRef.current}`);
-
-              // Auto-cleanup after 5 minutes to prevent memory leaks
-              // ✅ FIXED: Store timeout ID for cleanup
-              const timeoutId = setTimeout(() => {
-                triggeredEventsRef.current.delete(pauseKey);
-                timeoutIdsRef.current.delete(timeoutId);
-                console.log(`[TaskController] Cleanup pause key ${pauseKey} after timeout`);
-              }, 5 * 60 * 1000);
-
-              timeoutIdsRef.current.add(timeoutId);
-            } else {
-              console.log(`[TaskController] Pause for Layer ${currentLayer} already triggered, skipping`);
-            }
-          }
-
-          // Completion detection with deduplication
-          const completeKey = `complete_${newState.executionComplete}_${newState.status}`;
-          if (!prev.executionComplete && newState.executionComplete &&
-              newState.status === 'completed' && !triggeredEventsRef.current.has(completeKey)) {
-            eventsToTrigger.push(() => {
-              callbacksRef.current.onComplete?.();
-            });
-            triggeredEventsRef.current.add(completeKey);
-          }
-
-          // Error detection with deduplication
-          if (!prev.executionError && newState.executionError) {
-            const errorKey = `error_${newState.executionError}`;
-            if (!triggeredEventsRef.current.has(errorKey)) {
-              const errorMsg = newState.executionError;
-              eventsToTrigger.push(() => {
-                callbacksRef.current.onError?.(errorMsg);
-              });
-              triggeredEventsRef.current.add(errorKey);
-            }
-          }
-
-          // ✅ 新增：致命错误检测 - 当状态为 failed 时停止轮询
-          if (newState.status === 'failed' && newState.executionError) {
-            console.log(`[TaskController] 致命错误检测：状态为 failed，错误信息: ${newState.executionError}`);
-            // 注意：不在这里停止轮询，让组件决定是否停止
-          }
-
-          // Defer all callback execution until after render to avoid "Cannot update during rendering" error
-          if (eventsToTrigger.length > 0) {
-            queueMicrotask(() => {
-              eventsToTrigger.forEach(fn => fn());
-            });
-          }
-
-          return newState;
-        });
-      } catch (error: any) {
-        // ✅ P1 FIX: Distinguish error types for better handling
-        const status = error?.status || error?.response?.status;
-
-        if (status === 404) {
-          // Session not found - likely database hasn't committed yet after task creation
-          // This is expected during initial polling, silently skip and retry
-          console.warn(`[TaskController] Task ${taskId} initializing (404), will retry...`);
-          return; // Don't update state, continue polling
-        }
-
-        // For other errors, log and optionally notify user
-        console.error('[TaskController] Poll error:', error);
-
-        // For 5xx errors, count consecutive failures
-        if (status >= 500) {
-          errorCountRef.current = (errorCountRef.current || 0) + 1;
-          if (errorCountRef.current > 5) {
-            console.error('[TaskController] Server connection unstable after 5 failed polls');
-            // Could add user notification here if needed
-          }
-        } else {
-          // Reset error count on non-5xx errors
-          errorCountRef.current = 0;
-        }
+    if (!taskId) {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
       }
-    };
-
-    // Determine if polling should stop
-    const shouldStopPolling = (taskState: TaskState): boolean => {
-      return (
-        !taskId ||
-        taskState.status === 'completed' ||
-        taskState.status === 'failed' ||
-        taskState.executionComplete
-      );
-    };
-
-    // ✅ P1 FIX: Initial poll with 500ms delay to allow database commit
-    // This prevents initial 404 errors when task is just created
-    const initialPollTimeout = setTimeout(() => {
-      pollStatus();
-      // Track timeout for cleanup
-      timeoutIdsRef.current.add(initialPollTimeout);
-      // Remove after execution to prevent memory leak
-      setTimeout(() => {
-        timeoutIdsRef.current.delete(initialPollTimeout);
-      }, 1000);
-    }, 500);
-
-    timeoutIdsRef.current.add(initialPollTimeout);
-
-  // ✅ FIXED: Add stop polling logic
-    if (shouldStopPolling(state)) {
-      console.log('[TaskController] Stopping polling - terminal state reached');
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-    } else {
-      // Set up polling interval (2 seconds)
-      pollingIntervalRef.current = setInterval(pollStatus, 2000);
+      return;
     }
 
-    return () => {
-      // Clear initial poll timeout
-      clearTimeout(initialPollTimeout);
-      timeoutIdsRef.current.delete(initialPollTimeout);
+    const pollLoop = async () => {
+      const shouldStop = await fetchStatus();
 
-      // Clear polling interval
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
+      if (!shouldStop && taskId) {
+        // 继续轮询,2秒一次
+        pollTimerRef.current = setTimeout(pollLoop, 2000);
       }
     };
-  }, [taskId]); // ✅ Only re-evaluate when taskId changes
 
-  // Manage SSE connection based on status
+    // 立即执行一次,然后开始循环
+    pollLoop();
+
+    return () => {
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [taskId, fetchStatus]);
+
+  // SSE 连接管理 (仅用于文本流,不做业务逻辑判断)
   useEffect(() => {
     if (!taskId) return;
 
-    // Connect SSE when status indicates active execution
-    // 'running', 'planning', 'reviewing', 'revising' all indicate we need SSE connection
-    // 'planning' status is used after review approval, need to re-establish SSE connection
-    if (state.status === 'running' || state.status === 'planning' || state.status === 'reviewing' || state.status === 'revising') {
+    // ✅ 改用 pause_after_step 标志判断是否需要 SSE 连接
+    // 暂停时不需要 SSE（已停止发送事件），批准后需要 SSE（继续执行）
+    const shouldConnectSSE =
+      !state.execution_complete &&
+      !state.pause_after_step;
+
+    if (shouldConnectSSE) {
+      console.log('[TaskController] === SSE 连接建立 ===');
+      console.log('[TaskController] taskId:', taskId);
+      console.log('[TaskController] pause_after_step:', state.pause_after_step);
+      console.log('[TaskController] execution_complete:', state.execution_complete);
+      
+      // 关闭旧连接
       if (sseConnectionRef.current) {
+        console.log('[TaskController] 关闭旧 SSE 连接');
         sseConnectionRef.current.close();
       }
 
+      // 创建新连接
       const es = planningApi.createStream(
         taskId,
         (event) => {
+          console.log('[TaskController] === SSE 事件接收 ===');
+          console.log('[TaskController] event.type:', event.type);
+          console.log('[TaskController] event.data:', event.data);
+          
           const eventType = event.type;
           if (eventType === 'content_delta') {
-            const text = event.data?.delta || '';
-            const layer = event.data?.layer;
-            const layerNum = typeof layer === 'number' ? layer : undefined;
-            callbacksRef.current.onTextDelta?.(text, layerNum);
+            callbacksRef.current.onTextDelta?.(
+              event.data?.delta || '',
+              typeof event.data?.layer === 'number' ? event.data.layer : undefined
+            );
+          } else if (eventType === 'dimension_delta') {
+            const data = event.data as {
+              dimension_key?: string;
+              delta?: string;
+              accumulated?: string;
+              layer?: number;
+            } || {};
+            
+            callbacksRef.current.onDimensionDelta?.(
+              data.dimension_key || '',
+              data.delta || '',
+              data.accumulated || '',
+              data.layer
+            );
+          } else if (eventType === 'dimension_complete') {
+            const data = event.data as {
+              dimension_key?: string;
+              dimension_name?: string;
+              full_content?: string;
+              layer?: number;
+            } || {};
+            
+            callbacksRef.current.onDimensionComplete?.(
+              data.dimension_key || '',
+              data.dimension_name || '',
+              data.full_content || '',
+              data.layer
+            );
+          } else if (eventType === 'layer_completed') {
+            const data = event.data as {
+              layer?: number;
+              report_content?: string;
+              dimension_reports?: Record<string, string>;
+            } || {};
+
+            // ✅ 添加 Layer 2 专用调试日志
+            if (data.layer === 2) {
+              console.log('[TaskController] === Layer 2 Completed SSE Event ===');
+              console.log('[TaskController] data:', data);
+              console.log('[TaskController] dimension_reports:', data.dimension_reports);
+              console.log('[TaskController] dimension_reports keys:', Object.keys(data.dimension_reports || {}));
+              if (data.dimension_reports) {
+                for (const [key, value] of Object.entries(data.dimension_reports)) {
+                  console.log(`[TaskController]   - ${key}: ${value.length} chars`);
+                }
+              }
+            }
+
+            callbacksRef.current.onLayerCompleted?.(
+              data.layer || 1,
+              data.report_content || '',
+              data.dimension_reports || {}
+            );
+          } else if (eventType === 'pause') {
+            const data = event.data as {
+              current_layer?: number;
+              checkpoint_id?: string;
+              reason?: string;
+            } || {};
+            
+            callbacksRef.current.onPause?.(
+              data.current_layer || 1,
+              data.checkpoint_id || ''
+            );
           } else if (eventType === 'error') {
-            callbacksRef.current.onError?.(event.data?.error || event.data?.message || 'Unknown error');
+            callbacksRef.current.onError?.(
+              event.data?.error || event.data?.message || 'Unknown error'
+            );
           }
         },
         (error) => {
           console.error('[TaskController] SSE error:', error);
+          callbacksRef.current.onError?.('SSE connection error');
         }
       );
 
@@ -346,17 +282,15 @@ export function useTaskController(
         }
       };
     } else {
+      // 不需要 SSE 连接,关闭现有连接
+      console.log('[TaskController] === SSE 连接关闭 ===');
+      console.log('[TaskController] 原因:', state.execution_complete ? '执行完成' : '已暂停');
       if (sseConnectionRef.current) {
         sseConnectionRef.current.close();
         sseConnectionRef.current = null;
       }
     }
-  }, [taskId, state.status]);
-
-  // Update previous state ref after state changes
-  useEffect(() => {
-    prevStateRef.current = state;
-  }, [state]);
+  }, [taskId, state.pause_after_step, state.execution_complete]);
 
   // Action methods
   const actions: TaskControllerActions = {
@@ -375,16 +309,6 @@ export function useTaskController(
       await planningApi.rollbackCheckpoint(taskId, checkpointId);
     }, [taskId]),
   };
-
-  // ✅ NEW: Cleanup effect - clear all timeouts on unmount
-  useEffect(() => {
-    return () => {
-      // Clear all pending timeouts
-      timeoutIdsRef.current.forEach(id => clearTimeout(id));
-      timeoutIdsRef.current.clear();
-      console.log('[TaskController] Cleaned up all timeouts');
-    };
-  }, []);
 
   return [state, actions];
 }

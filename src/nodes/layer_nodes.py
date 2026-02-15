@@ -30,7 +30,14 @@ logger = get_logger(__name__)
 StateDict = dict[str, Any]
 
 # 定义运行时专用的key（不应持久化到checkpoint）
-RUNTIME_KEYS = {"_streaming_queue", "_storage_pipeline", "_dimension_events"}
+RUNTIME_KEYS = {
+    "_streaming_queue",
+    "_storage_pipeline",
+    "_dimension_events",
+    "_token_callback_factory",
+    "_streaming_enabled",
+    "_pending_tokens",
+}
 
 
 class BaseLayerNode(BaseNode):
@@ -234,7 +241,7 @@ class BaseLayerNode(BaseNode):
         Returns:
             带标题的维度报告字典
         """
-        from ..core.dimension_mapping import (
+        from ..core.dimension_config import (
             ANALYSIS_DIMENSION_NAMES,
             CONCEPT_DIMENSION_NAMES,
             DETAILED_DIMENSION_NAMES,
@@ -242,9 +249,9 @@ class BaseLayerNode(BaseNode):
 
         # Get dimension name mapping for current layer
         dimension_names_map = {
-            1: ANALYSIS_DIMENSION_NAMES,
-            2: CONCEPT_DIMENSION_NAMES,
-            3: DETAILED_DIMENSION_NAMES,
+            1: ANALYSIS_DIMENSION_NAMES(),
+            2: CONCEPT_DIMENSION_NAMES(),
+            3: DETAILED_DIMENSION_NAMES(),
         }.get(self.layer_number, {})
 
         # Add titles to reports that don't have them
@@ -392,16 +399,16 @@ class BaseLayerNode(BaseNode):
         Returns:
             英文键到中文名称的映射字典
         """
-        from ..core.dimension_mapping import (
+        from ..core.dimension_config import (
             ANALYSIS_DIMENSION_NAMES,
             CONCEPT_DIMENSION_NAMES,
             DETAILED_DIMENSION_NAMES,
         )
 
         mapping = {
-            1: ANALYSIS_DIMENSION_NAMES,
-            2: CONCEPT_DIMENSION_NAMES,
-            3: DETAILED_DIMENSION_NAMES,
+            1: ANALYSIS_DIMENSION_NAMES(),
+            2: CONCEPT_DIMENSION_NAMES(),
+            3: DETAILED_DIMENSION_NAMES(),
         }
         return mapping.get(self.layer_number, {})
 
@@ -459,6 +466,7 @@ class Layer1AnalysisNode(BaseLayerNode):
                 .set("layer_1_completed", True)
                 .set("previous_layer", 1)
                 .set("current_layer", 2)
+                .set("pending_review_layer", 1)
                 .set("last_checkpoint_id", checkpoint_id)
                 .add_message(f"现状分析完成，生成了 {len(dimension_reports)} 个维度的分析报告。")
                 .build())
@@ -482,10 +490,9 @@ class Layer2ConceptNode(BaseLayerNode):
         return call_concept_subgraph(
             project_name=state["project_name"],
             analysis_report=state["analysis_report"],
-            dimension_reports=state.get("dimension_reports", {}),
+            dimension_reports=state.get("analysis_dimension_reports", {}),
             task_description=state["task_description"],
             constraints=state.get("constraints", "无特殊约束"),
-            rag_enabled=state.get("rag_enabled", True),
             _streaming_queue=streaming_queue,
             _storage_pipeline=storage_pipeline,
             _dimension_events=dimension_events
@@ -500,6 +507,17 @@ class Layer2ConceptNode(BaseLayerNode):
         """构建成功状态更新"""
         dimension_reports = result.get("concept_dimension_reports", {})
 
+        # ✅ 添加调试日志
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[Layer2ConceptNode] === 开始构建成功更新 ===")
+        logger.info(f"[Layer2ConceptNode] result keys: {list(result.keys())}")
+        logger.info(f"[Layer2ConceptNode] dimension_reports: {dimension_reports}")
+        logger.info(f"[Layer2ConceptNode] dimension_reports keys: {list(dimension_reports.keys())}")
+        if dimension_reports:
+            for key, value in dimension_reports.items():
+                logger.info(f"[Layer2ConceptNode]   - {key}: {len(value)} chars")
+
         # Add titles if needed
         if dimension_reports:
             first_content = next(iter(dimension_reports.values()), "")
@@ -512,12 +530,15 @@ class Layer2ConceptNode(BaseLayerNode):
             "规划思路"
         )
 
+        logger.info(f"[Layer2ConceptNode] 设置 concept_dimension_reports: {len(dimension_reports)} 个维度")
+
         return (StateBuilder()
                 .set("planning_concept", combined_report)
                 .set("concept_dimension_reports", dimension_reports)
                 .set("layer_2_completed", True)
                 .set("previous_layer", 2)
                 .set("current_layer", 3)
+                .set("pending_review_layer", 2)
                 .set("last_checkpoint_id", checkpoint_id)
                 .add_message(f"规划思路完成，生成了 {len(dimension_reports)} 个维度的分析报告。")
                 .build())
@@ -580,6 +601,7 @@ class Layer3DetailNode(BaseLayerNode):
                 .set("layer_3_completed", True)
                 .set("previous_layer", 3)
                 .set("current_layer", 4)
+                .set("pending_review_layer", 3)
                 .set("last_checkpoint_id", checkpoint_id)
                 .add_message(f"详细规划完成，生成了 {len(dimension_reports)} 个专业维度的规划报告。")
                 .build())

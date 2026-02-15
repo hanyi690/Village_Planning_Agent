@@ -16,13 +16,16 @@ import type {
 import {
   isReviewInteractionMessage,
   isProgressMessage,
+  LayerCompletedMessage,
 } from '@/types';
 import { planningApi, dataApi, fileApi } from '@/lib/api';
 import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/lib/utils';
 import { logger } from '@/lib/logger';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import { useTaskController } from '@/controllers/TaskController';
+import { useStreamingRender } from '@/hooks/useStreamingRender';
 import MessageList from './MessageList';
+import ReviewPanel from './ReviewPanel';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEdit, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
 import {
@@ -34,7 +37,6 @@ import {
   FILE_ACCEPT,
   isInputDisabled,
 } from '@/lib/constants';
-import { useStreamingRender } from '@/hooks/useStreamingRender';
 
 interface ChatPanelProps {
   className?: string;
@@ -61,6 +63,13 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     loadLayerContent,
     showViewer,
     setPendingReviewMessage,
+    // ✅ 新增：简化后的审查状态
+    isPaused,
+    pendingReviewLayer,
+    // ✅ 新增：层级完成状态
+    completedLayers,
+    // ✅ 新增：同步后端状态
+    syncBackendState,
   } = useUnifiedPlanningContext();
 
   const [inputText, setInputText] = useState('');
@@ -131,181 +140,14 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     }
   }, [taskId, projectName]);
 
-  // Create a layer completed message
-  function createLayerCompletedMessage(
-    layer: number,
-    content: string,
-    stats: { wordCount?: number } | null,
-    dimensions: Array<{ name: string }> = []
-  ) {
-    return {
-      ...createBaseMessage('assistant'),
-      type: 'layer_completed' as const,
-      layer,
-      content,
-      summary: {
-        word_count: stats?.wordCount || content.length || 0,
-        key_points: [],
-        dimension_count: dimensions.length,
-        dimension_names: dimensions.map(d => d.name),
-      },
-      fullReportContent: content,
-      dimensionReports: undefined,
-      actions: [
-        { id: 'open_review', label: '查看详情', action: 'view' as const, variant: 'primary' as const },
-        { id: 'approve_quick', label: '快速批准', action: 'approve' as const, variant: 'success' as const },
-      ],
-    };
-  }
+  // ✅ 删除 createLayerCompletedMessage - 现在使用状态驱动
 
   // ✅ Stabilize all callbacks using useCallback to prevent TaskController restarts
-  const handleLayerCompleted = useCallback(async (layer: number) => {
-    console.log(`[ChatPanel] handleLayerCompleted called`, {
-      layer,
-      taskId,
-      timestamp: new Date().toISOString(),
-    });
+  // ✅ 删除 handleLayerCompleted - 现在使用状态驱动,从 Context 状态派生
 
-    logger.chatPanel.info(`Layer ${layer} completed (detected via REST polling)`, { layer }, taskId);
+  // ✅ 删除 handleComplete - 现在使用状态驱动,从 Context 状态派生
 
-    const layerId = getLayerId(layer);
-    if (!layerId) {
-      console.error('[ChatPanel] Invalid layer number:', layer);
-      return;
-    }
-
-    const result = await loadLayerReportContent(layer);
-
-    // Handle empty report content
-    if (!result || result.trim().length === 0) {
-      console.warn(`[ChatPanel] Layer ${layer} report content is empty, creating placeholder message`);
-      addMessage({
-        ...createBaseMessage('assistant'),
-        type: 'layer_completed',
-        layer,
-        content: `✅ Layer ${layer} 已完成 (报告生成中...)`,
-        summary: {
-          word_count: 0,
-          key_points: [],
-          dimension_count: 0,
-          dimension_names: [],
-        },
-        fullReportContent: '',
-        dimensionReports: undefined,
-        actions: [
-          { id: 'view', label: '查看详情', action: 'view' as const, variant: 'primary' as const },
-        ],
-      });
-      return;
-    }
-
-    // Parse report
-    const { parseLayerReport, getReportStats } = await import('@/lib/layerReportParser');
-    const dimensions = parseLayerReport(result);
-    const stats = getReportStats(result);
-
-    console.log(`[ChatPanel] Layer ${layer} report parsed:`, {
-      dimensions: dimensions.length,
-      wordCount: stats?.wordCount,
-    });
-
-    // Create and add message
-    addMessage(createLayerCompletedMessage(layer,
-      `✅ Layer ${layer} 已完成 (${stats?.wordCount || result.length}字, ${dimensions.length}个维度)`,
-      stats,
-      dimensions
-    ));
-  }, [taskId, loadLayerReportContent, addMessage]);
-
-  const handlePause = useCallback((layer: number) => {
-    logger.chatPanel.info(`Task paused at Layer ${layer} (detected via REST polling)`, { layer }, taskId);
-
-    setMessages((prevMessages) => {
-      // ✅ 改进：检查是否已存在【同层级】的审查消息（无论状态如何）
-      // 这样可以防止状态抖动（如LLM失败后状态回滚）触发重复弹窗
-      const hasAnyReviewForLayer = prevMessages.some(m =>
-        m.type === 'review_interaction' && m.layer === layer
-      );
-
-      const hasPendingReviewForLayer = prevMessages.some(m =>
-        m.type === 'review_interaction' && m.layer === layer && (m as ReviewInteractionMessage).reviewState === 'pending'
-      );
-
-      if (hasPendingReviewForLayer) {
-        // 已有待处理的审查消息，跳过
-        logger.chatPanel.debug(`[幂等性] 跳过 Layer ${layer} 的重复暂停信号（已存在待处理的审查消息）`);
-        return prevMessages;
-      }
-
-      if (hasAnyReviewForLayer) {
-        // 该层级已有过审查消息（但不是pending状态），可能是状态抖动
-        // 仍然创建新的审查消息，但记录警告日志
-        logger.chatPanel.warn(`[状态抖动检测] Layer ${layer} 已有过审查消息，但仍收到暂停信号（可能是LLM失败后状态回滚）`);
-      }
-
-      // Find the layer_completed message
-      const lastLayerCompletedMsg = prevMessages.findLast(
-        m => m.type === 'layer_completed' && m.layer === layer
-      );
-
-      if (lastLayerCompletedMsg) {
-        // Update existing message
-        return prevMessages.map(msg =>
-          msg.id === lastLayerCompletedMsg.id
-            ? { ...msg, actions: [
-                { id: 'open_review', label: '查看详情', action: 'view' as const, variant: 'primary' as const },
-                { id: 'approve_quick', label: '批准继续', action: 'approve' as const, variant: 'success' as const },
-              ]}
-            : msg
-        );
-      }
-
-      // Fallback: create review message (should rarely happen)
-      logger.chatPanel.warn(`No layer_completed message found for Layer ${layer}, creating review_interaction`);
-      return [
-        ...prevMessages,
-        {
-          ...createBaseMessage('assistant'),
-          type: 'review_interaction',
-          layer,
-          content: '规划已暂停，请审查后决定下一步操作',
-          reviewState: 'pending',
-          availableActions: ['approve', 'reject', 'rollback'],
-          enableDimensionSelection: true,
-          enableRollback: true,
-          feedbackPlaceholder: '请描述需要修改的内容（选填）',
-          quickFeedbackOptions: [
-            '内容结构需要优化，请重新组织',
-            '部分内容不够详细，需要补充',
-            '存在错误或不准确的信息',
-          ],
-        } as ReviewInteractionMessage,
-      ];
-    });
-
-    loadCheckpoints();
-  }, [taskId, loadCheckpoints, setMessages]);
-
-  const handleComplete = useCallback(() => {
-    logger.chatPanel.info('Task completed (detected via REST polling)', {}, taskId);
-    setStatus('completed');
-    const projectName = villageFormData?.projectName || '村庄';
-    addMessage({
-      ...createBaseMessage('assistant'),
-      type: 'result',
-      content: `🎉 规划任务已完成！\n\n村庄：${projectName}`,
-      villageName: projectName,
-      sessionId: taskId || '',
-      layers: ['Layer 1', 'Layer 2', 'Layer 3'],
-      resultUrl: `/village/${taskId}`,
-    } satisfies Message);
-  }, [taskId, villageFormData?.projectName, setStatus, addMessage]);
-
-  const handleError = useCallback((error: string) => {
-    logger.chatPanel.error('Task error (detected via REST polling)', { error }, taskId);
-    setStatus('failed');
-    addMessage(createErrorMessage(`执行失败: ${error}`));
-  }, [taskId, setStatus, addMessage]);
+  // ✅ 删除 handleError - 现在使用状态驱动,从 Context 状态派生
 
   const handleTextDelta = useCallback((text: string, layer?: number) => {
     setMessages(prevMessages => {
@@ -342,25 +184,123 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   // 维度级流式回调
   const handleDimensionDelta = useCallback((
     dimensionKey: string,
-    dimensionName: string,
-    layer: number,
-    chunk: string,
-    accumulated: string
+    delta: string,
+    accumulated: string,
+    layer?: number
   ) => {
+    // 更新维度内容缓存
+    setDimensionContents(prev => {
+      const key = `${layer}_${dimensionKey}`;
+      return new Map(prev).set(key, accumulated);
+    });
+
     // 使用批处理渲染
-    addToken(dimensionKey, chunk, accumulated);
-  }, [addToken]);
+    addToken(dimensionKey, delta, accumulated);
+
+    // 获取维度友好名称
+    const getDimensionName = (key: string): string => {
+      const nameMap: Record<string, string> = {
+        location: '区位分析',
+        socio_economic: '社会经济分析',
+        villager_wishes: '村民意愿分析',
+        superior_planning: '上位规划分析',
+        natural_environment: '自然环境分析',
+        land_use: '土地利用分析',
+        traffic: '道路交通分析',
+        public_services: '公共服务设施分析',
+        infrastructure: '基础设施分析',
+        ecological_green: '生态绿地分析',
+        architecture: '建筑分析',
+        historical_culture: '历史文化分析',
+        resource_endowment: '资源禀赋分析',
+        planning_positioning: '规划定位分析',
+        development_goals: '发展目标分析',
+        planning_strategies: '规划策略分析',
+        industry: '产业规划',
+        spatial_structure: '空间结构规划',
+        land_use_planning: '土地利用规划',
+        settlement_planning: '居民点规划',
+        public_service: '公共服务规划',
+        disaster_prevention: '防灾减灾规划',
+        heritage: '遗产保护规划',
+        landscape: '景观规划',
+        project_bank: '项目库规划',
+      };
+      return nameMap[key] || key;
+    };
+
+    const dimensionName = getDimensionName(dimensionKey);
+    const layerReportId = `layer_report_${layer}`;
+
+    // 检查该层是否已有 LayerReportMessage
+    const hasLayerReport = messages.some(m => m.id === layerReportId);
+
+    if (!hasLayerReport && delta.length > 0) {
+      // 第一次收到该层的维度 Token，创建 LayerReportMessage
+      addMessage({
+        ...createBaseMessage('assistant'),
+        id: layerReportId,
+        type: 'layer_completed' as const,
+        layer: layer || 1,
+        content: '',
+        summary: {
+          word_count: 0 as number,
+          key_points: [],
+          dimension_count: 0,
+        },
+        fullReportContent: '',
+        dimensionReports: {},  // 即时更新的维度报告
+        actions: [],
+      });
+    }
+
+    // 更新 LayerReportMessage 中的维度报告内容
+    setMessages(prev => prev.map(msg => {
+      if (msg.id === layerReportId && msg.type === 'layer_completed') {
+        const dimensionReports = {
+          ...(msg as LayerCompletedMessage).dimensionReports || {},
+          [dimensionKey]: accumulated,
+        };
+        const wordCount = Object.values(dimensionReports).reduce((sum, content) => sum + content.length, 0);
+        return {
+          ...msg,
+          dimensionReports,
+          summary: {
+            word_count: wordCount as number,
+            key_points: msg.summary?.key_points || [],
+            dimension_count: Object.keys(dimensionReports).length,
+          },
+        };
+      }
+      return msg;
+    }));
+  }, [addToken, messages, addMessage, setMessages]);
 
   const handleDimensionComplete = useCallback((
     dimensionKey: string,
     dimensionName: string,
-    layer: number,
-    fullContent: string
+    fullContent: string,
+    layer?: number
   ) => {
+    // 更新维度内容缓存
+    setDimensionContents(prev => {
+      const key = `${layer}_${dimensionKey}`;
+      return new Map(prev).set(key, fullContent);
+    });
+
     // 标记维度完成，刷新剩余内容
     completeDimension(dimensionKey);
+
+    // 更新消息状态为完成
+    const messageId = `dimension_${layer}_${dimensionKey}`;
+    setMessages(prev => prev.map(msg =>
+      msg.id === messageId
+        ? { ...msg, content: fullContent, wordCount: fullContent.length, streamingState: 'completed' as const }
+        : msg
+    ));
+
     console.log(`[ChatPanel] Dimension complete: ${dimensionKey} (${fullContent.length} chars)`);
-  }, [completeDimension]);
+  }, [completeDimension, setMessages]);
 
   const handleLayerProgress = useCallback((
     layer: number,
@@ -371,18 +311,94 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     console.log(`[ChatPanel] Layer ${layer} progress: ${completed}/${total}`);
   }, []);
 
+  const handleLayerCompleted = useCallback((
+    layer: number,
+    reportContent: string,
+    dimensionReports: Record<string, string>
+  ) => {
+    console.log(`[ChatPanel] Layer ${layer} completed`, {
+      reportLength: reportContent.length,
+      dimensionCount: Object.keys(dimensionReports).length,
+    });
+
+    const layerReportId = `layer_report_${layer}`;
+
+    // 检查该层是否已有 LayerReportMessage
+    const hasLayerReport = messages.some(m => m.id === layerReportId);
+
+    if (!hasLayerReport) {
+      // 创建 LayerReportMessage
+      const wordCount = Object.values(dimensionReports).reduce((sum, content) => sum + content.length, 0);
+      
+      addMessage({
+        ...createBaseMessage('assistant'),
+        id: layerReportId,
+        type: 'layer_completed' as const,
+        layer: layer,
+        content: reportContent,
+        summary: {
+          word_count: wordCount as number,
+          key_points: [],
+          dimension_count: Object.keys(dimensionReports).length,
+        },
+        fullReportContent: reportContent,
+        dimensionReports: dimensionReports,
+        actions: [
+          {
+            id: 'view_details',
+            label: '查看详情',
+            action: 'view',
+            onClick: () => {
+              showViewer();
+            },
+          },
+        ],
+      });
+    } else {
+      // 更新现有消息
+      setMessages(prev => prev.map(msg => {
+        if (msg.id === layerReportId && msg.type === 'layer_completed') {
+          const wordCount = Object.values(dimensionReports).reduce((sum, content) => sum + content.length, 0);
+          return {
+            ...msg,
+            content: reportContent,
+            fullReportContent: reportContent,
+            dimensionReports: dimensionReports,
+            summary: {
+              word_count: wordCount as number,
+              key_points: msg.summary?.key_points || [],
+              dimension_count: Object.keys(dimensionReports).length,
+            },
+          };
+        }
+        return msg;
+      }));
+    }
+  }, [messages, addMessage, setMessages, showViewer]);
+
+  const handlePause = useCallback((
+    layer: number,
+    checkpointId: string
+  ) => {
+    console.log(`[ChatPanel] Pause event received`, { layer, checkpointId });
+    // 状态同步由 TaskController 通过轮询处理
+    // 这里可以添加额外的 UI 更新逻辑
+  }, []);
+
   // Stable callbacks object using useMemo
   const callbacks = useMemo(() => ({
-    onLayerCompleted: handleLayerCompleted,
-    onPause: handlePause,
-    onComplete: handleComplete,
-    onError: handleError,
+    // ✅ 删除所有业务逻辑回调 - 现在使用状态驱动 UI
+    // Controller 只负责数据搬运,不做任何业务逻辑判断
     onTextDelta: handleTextDelta,
     // 维度级流式回调
     onDimensionDelta: handleDimensionDelta,
     onDimensionComplete: handleDimensionComplete,
     onLayerProgress: handleLayerProgress,
-  }), [handleLayerCompleted, handlePause, handleComplete, handleError, handleTextDelta, handleDimensionDelta, handleDimensionComplete, handleLayerProgress]);
+    // 层级完成回调
+    onLayerCompleted: handleLayerCompleted,
+    // 暂停回调
+    onPause: handlePause,
+  }), [handleTextDelta, handleDimensionDelta, handleDimensionComplete, handleLayerProgress, handleLayerCompleted, handlePause]);
 
   // Stable handler for SegmentedControl onChange
   const handleLayerChange = useCallback((layer: string) => {
@@ -398,10 +414,27 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   // ❌ DELETED: useLayoutEffect that causes status bounce
   // The pendingLayerCompletionRef mechanism has been removed
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom - DISABLED for manual scrolling control
+  // useEffect(() => {
+  //   messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  // }, [messages]);
+
+  // Scroll detection and jump-to-bottom button
+  const [showScrollButton, setShowScrollButton] = useState(false);
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    const container = document.querySelector('.flex-1.overflow-y-auto');
+    if (!container) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container as HTMLElement;
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 100;
+      setShowScrollButton(!isNearBottom);
+    };
+
+    container.addEventListener('scroll', handleScroll);
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, []);
 
   // ✅ NEW: Cleanup effect - clear typing timeout on unmount
   useEffect(() => {
@@ -412,6 +445,20 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       }
     };
   }, []);
+
+  // ✅ 新增：从 TaskController 同步状态到 Context
+  useEffect(() => {
+    if (!taskId) return;
+
+    // 直接将 taskState 同步到 Context
+    // Controller 只负责数据搬运,不做任何业务逻辑判断
+    syncBackendState(taskState);
+
+    console.log('[ChatPanel] Synced backend state:', {
+      taskId,
+      taskState,
+    });
+  }, [taskId, taskState, syncBackendState]);
 
   // Determine if input should be disabled
   const inputDisabled = isInputDisabled(status);
@@ -888,10 +935,58 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             onReviewReject={handleReviewInteractionReject}
             onReviewRollback={handleReviewInteractionRollback}
             reviewDisabled={status === 'revising'}
+            currentLayer={taskState.currentLayer ?? undefined}
           />
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Jump to bottom button */}
+        {showScrollButton && (
+          <button
+            onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
+            className="fixed bottom-24 right-8 bg-blue-500 text-white p-3 rounded-full shadow-lg hover:bg-blue-600 transition-colors z-50"
+            title="跳转到底部"
+          >
+            ↓
+          </button>
+        )}
       </div>
+
+      {/* ✅ 新增：条件渲染的审查面板 */}
+      {/* Debug logging for review panel condition */}
+      {console.log('[ChatPanel] Review panel condition check:', {
+        isPaused,
+        isPausedType: typeof isPaused,
+        pendingReviewLayer,
+        pendingReviewLayerType: typeof pendingReviewLayer,
+        condition1_isPaused: isPaused ? 'TRUE' : 'FALSE',
+        condition2_pendingReviewLayer: pendingReviewLayer ? `TRUE (${pendingReviewLayer})` : 'FALSE',
+        finalResult: isPaused && pendingReviewLayer ? 'SHOW PANEL' : 'HIDE PANEL',
+      })}
+      {isPaused && pendingReviewLayer && (
+        <div className="border-t border-gray-200 bg-white">
+          <div className="max-w-4xl mx-auto">
+            <ReviewPanel
+              layer={pendingReviewLayer}
+              onApprove={async () => {
+                await approve();
+                addMessage(createSystemMessage(`✅ 已批准，继续执行下一层...`));
+                setStatus('planning');
+              }}
+              onReject={async (feedback) => {
+                await reject(feedback);
+                addMessage(createSystemMessage('🔄 正在根据反馈修复规划内容...'));
+                setStatus('revising');
+              }}
+              onRollback={async (checkpointId) => {
+                await rollback(checkpointId);
+                addMessage(createSystemMessage(`↩️ 已回退到检查点: ${checkpointId}`));
+              }}
+              isSubmitting={status === 'reviewing'}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Bottom: Input area */}
       <div className="border-t bg-white p-4">
@@ -904,7 +999,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
                 <div>
                   <div className="font-semibold text-warning-800">请求过于频繁</div>
                   <div className="text-sm text-warning-700">
-                    项目 "{rateLimitError.projectName}" 触发了速率限制
+                    项目 &quot;{rateLimitError.projectName}&quot; 触发了速率限制
                   </div>
                 </div>
               </div>
@@ -1010,3 +1105,4 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     </div>
   );
 }
+

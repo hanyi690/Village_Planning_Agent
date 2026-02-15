@@ -5,7 +5,7 @@
  * 统一规划上下文 - 对话状态、UI状态和内容管理
  */
 
-import { createContext, useContext, useState, useCallback, ReactNode, useMemo, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback, ReactNode, useMemo, useEffect, useRef } from 'react';
 import { Message, PlanningParams, Checkpoint, ReviewInteractionMessage } from '@/types';
 import { VillageInputData } from '@/components/VillageInputForm';
 import { planningApi, dataApi, VillageInfo, VillageSession } from '@/lib/api';
@@ -63,6 +63,20 @@ interface UnifiedPlanningContextType {
   /** Track current pending review message for input box interaction */
   pendingReviewMessage: ReviewInteractionMessage | null;
   setPendingReviewMessage: (message: ReviewInteractionMessage | null) => void;
+
+  // ✅ 新增：简化后的审查状态（单一真实源，来自后端）
+  isPaused: boolean;
+  pendingReviewLayer: number | null;
+
+  // ✅ 新增：层级完成状态
+  completedLayers: {
+    1: boolean;
+    2: boolean;
+    3: boolean;
+  };
+
+  // ✅ 新增：同步后端状态的 action
+  syncBackendState: (backendData: any) => void;
 
   // Checkpoints
   checkpoints: Checkpoint[];
@@ -149,9 +163,21 @@ export function UnifiedPlanningProvider({
   const [villageFormData, setVillageFormData] = useState<VillageInputData | null>(null);
 
   // Review state
-  const [reviewPending, setReviewPending] = useState(false);
-  const [showReviewPanel, setShowReviewPanel] = useState(false);
   const [pendingReviewMessage, setPendingReviewMessage] = useState<ReviewInteractionMessage | null>(null);
+
+  // ✅ 简化后的审查状态
+  const [isPaused, setIsPaused] = useState(false);
+  const [pendingReviewLayer, setPendingReviewLayer] = useState<number | null>(null);
+
+  // ✅ 层级完成状态
+  const [completedLayers, setCompletedLayers] = useState({
+    1: false,
+    2: false,
+    3: false,
+  });
+
+  // ✅ 用于跟踪之前的状态，避免不必要的更新
+  const previousBackendStateRef = useRef<any>(null);
 
   // History state
   const [villages, setVillages] = useState<VillageInfo[]>([]);
@@ -162,7 +188,6 @@ export function UnifiedPlanningProvider({
 
   // Checkpoint state
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
-  const [currentLayer, setCurrentLayer] = useState<number | null>(null);
 
   // Content state
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<string | null>(null);
@@ -217,6 +242,111 @@ export function UnifiedPlanningProvider({
 
   const clearMessages = useCallback(() => {
     setMessages([]);
+  }, []);
+
+  // ✅ 新增：同步后端状态到 Context
+  const syncBackendState = useCallback((backendData: any) => {
+    // 比较关键字段，避免不必要的更新
+    const previousState = previousBackendStateRef.current;
+    const hasStateChanged = !previousState ||
+      previousState.status !== backendData.status ||
+      previousState.pause_after_step !== backendData.pause_after_step ||
+      previousState.pending_review_layer !== backendData.pending_review_layer ||
+      previousState.previous_layer !== backendData.previous_layer ||
+      previousState.layer_1_completed !== backendData.layer_1_completed ||
+      previousState.layer_2_completed !== backendData.layer_2_completed ||
+      previousState.layer_3_completed !== backendData.layer_3_completed;
+
+    if (!hasStateChanged) {
+      console.log('[UnifiedPlanningContext] State unchanged, skipping update');
+      return;
+    }
+
+    console.log('[UnifiedPlanningContext] Syncing backend state (changed):', {
+      status: backendData.status,
+      pause_after_step: backendData.pause_after_step,
+      pending_review_layer: backendData.pending_review_layer,
+      previous_layer: backendData.previous_layer,
+      layer_1_completed: backendData.layer_1_completed,
+      layer_2_completed: backendData.layer_2_completed,
+      layer_3_completed: backendData.layer_3_completed,
+      current_layer: backendData.current_layer,
+    });
+
+    setStatusState(backendData.status || 'idle');
+    
+    // 详细记录暂停状态判断逻辑
+    const pauseAfterStepValue = backendData.pause_after_step;
+    const statusValue = backendData.status;
+    const isStatusPaused = statusValue === 'paused';
+    
+    console.log('[UnifiedPlanningContext] Pause state calculation:', {
+      'pause_after_step value': pauseAfterStepValue,
+      'pause_after_step type': typeof pauseAfterStepValue,
+      'status value': statusValue,
+      'is status "paused"?': isStatusPaused,
+      'Condition 1 (pause_after_step)': pauseAfterStepValue ? 'TRUE' : 'FALSE',
+      'Condition 2 (status === "paused")': isStatusPaused ? 'TRUE' : 'FALSE',
+      'Final shouldPause': pauseAfterStepValue || isStatusPaused,
+    });
+    
+    const shouldPause = pauseAfterStepValue || isStatusPaused;
+    setIsPaused(shouldPause);
+    console.log('[UnifiedPlanningContext] Set isPaused:', shouldPause, '(pause_after_step:', pauseAfterStepValue, ', status:', statusValue, ')');
+    
+    // 详细记录待审查层级判断逻辑
+    const previousLayerValue = backendData.previous_layer;
+    const pendingReviewLayerValue = backendData.pending_review_layer;
+    
+    console.log('[UnifiedPlanningContext] Pending review layer calculation:', {
+      'previous_layer value': previousLayerValue,
+      'previous_layer type': typeof previousLayerValue,
+      'pending_review_layer value': pendingReviewLayerValue,
+      'pending_review_layer type': typeof pendingReviewLayerValue,
+      'First check (previous_layer)': previousLayerValue ? `${previousLayerValue} (truthy)` : 'null/falsy',
+      'Second check (pending_review_layer)': pendingReviewLayerValue ? `${pendingReviewLayerValue} (truthy)` : 'null/falsy',
+      'Final pendingLayer': previousLayerValue ?? pendingReviewLayerValue ?? null,
+    });
+    
+    const pendingLayer = previousLayerValue ?? pendingReviewLayerValue ?? null;
+    setPendingReviewLayer(pendingLayer);
+    console.log('[UnifiedPlanningContext] Set pendingReviewLayer:', pendingLayer);
+
+    // 同步层级完成状态
+    const completedLayersData = {
+      1: backendData.layer_1_completed || false,
+      2: backendData.layer_2_completed || false,
+      3: backendData.layer_3_completed || false,
+    };
+    setCompletedLayers(completedLayersData);
+    console.log('[UnifiedPlanningContext] Set completedLayers:', completedLayersData);
+    
+    // 综合状态摘要
+    console.log('[UnifiedPlanningContext] Final state summary:', {
+      isPaused: shouldPause,
+      pendingReviewLayer: pendingLayer,
+      reviewPanelShouldShow: shouldPause && pendingLayer,
+    });
+
+    // 同步其他状态
+    if (backendData.last_checkpoint_id) {
+      setSelectedCheckpoint(backendData.last_checkpoint_id);
+    }
+
+    if (backendData.execution_error) {
+      console.error('[UnifiedPlanningContext] Backend error:', backendData.execution_error);
+    }
+
+    // 更新之前的状态引用
+    previousBackendStateRef.current = {
+      status: backendData.status,
+      pause_after_step: backendData.pause_after_step,
+      pending_review_layer: backendData.pending_review_layer,
+      previous_layer: backendData.previous_layer,
+      layer_1_completed: backendData.layer_1_completed,
+      layer_2_completed: backendData.layer_2_completed,
+      layer_3_completed: backendData.layer_3_completed,
+    };
   }, []);
 
   // Viewer actions
@@ -506,16 +636,10 @@ export function UnifiedPlanningProvider({
     viewMode,
     villageFormData,
     setVillageFormData,
-    reviewPending,
-    setReviewPending,
-    showReviewPanel,
-    setShowReviewPanel,
     pendingReviewMessage,
     setPendingReviewMessage,
     checkpoints,
     setCheckpoints,
-    currentLayer,
-    setCurrentLayer,
     selectedCheckpoint,
     loadingContent,
     layerReportVisible,
@@ -524,6 +648,16 @@ export function UnifiedPlanningProvider({
     setActiveReportLayer,
     reportSyncState,
     triggerReportUpdate,
+
+    // ✅ 新增：简化后的审查状态
+    isPaused,
+    pendingReviewLayer,
+
+    // ✅ 新增：层级完成状态
+    completedLayers,
+
+    // ✅ 新增：同步后端状态
+    syncBackendState,
 
     // History state
     villages,
