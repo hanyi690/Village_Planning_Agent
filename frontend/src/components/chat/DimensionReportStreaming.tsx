@@ -209,11 +209,7 @@ export default function DimensionReportStreaming({
           {displayContent ? (
             <MarkdownRenderer
               content={displayContent}
-              style={{
-                fontSize: '13px',
-                lineHeight: '1.6',
-                color: '#333',
-              }}
+              className="text-sm leading-relaxed text-gray-700"
             />
           ) : (
             <div style={{ color: '#999', fontSize: '13px' }}>

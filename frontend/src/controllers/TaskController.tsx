@@ -18,8 +18,7 @@ import { planningApi } from '../lib/api';
 export interface TaskState {
   status: 'idle' | 'pending' | 'running' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
   current_layer: number | null;
-  previous_layer: number | null;
-  pending_review_layer: number | null;
+  previous_layer: number | null;  // 刚完成的层级（待审查层级）
   layer_1_completed: boolean;
   layer_2_completed: boolean;
   layer_3_completed: boolean;
@@ -51,7 +50,6 @@ export function useTaskController(
     status: 'idle',
     current_layer: null,
     previous_layer: null,
-    pending_review_layer: null,
     layer_1_completed: false,
     layer_2_completed: false,
     layer_3_completed: false,
@@ -84,11 +82,7 @@ export function useTaskController(
         'Raw status data': statusData,
         'status': statusData.status,
         'pause_after_step': statusData.pause_after_step,
-        'pause_after_step type': typeof statusData.pause_after_step,
-        'pending_review_layer': statusData.pending_review_layer,
-        'pending_review_layer type': typeof statusData.pending_review_layer,
         'previous_layer': statusData.previous_layer,
-        'previous_layer type': typeof statusData.previous_layer,
         'current_layer': statusData.current_layer,
         'layer_1_completed': statusData.layer_1_completed,
         'layer_2_completed': statusData.layer_2_completed,
@@ -100,7 +94,6 @@ export function useTaskController(
         status: statusData.status as TaskState['status'],
         current_layer: statusData.current_layer ?? null,
         previous_layer: statusData.previous_layer ?? null,
-        pending_review_layer: statusData.pending_review_layer ?? null,
         layer_1_completed: statusData.layer_1_completed,
         layer_2_completed: statusData.layer_2_completed,
         layer_3_completed: statusData.layer_3_completed,

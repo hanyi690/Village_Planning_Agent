@@ -10,11 +10,9 @@ import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
 import type {
   Message,
   ActionButton,
-  ReviewInteractionMessage,
   FileMessage,
 } from '@/types';
 import {
-  isReviewInteractionMessage,
   isProgressMessage,
   LayerCompletedMessage,
 } from '@/types';
@@ -55,8 +53,6 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     projectName,
     setStatus,
     villageFormData,
-    showReviewPanel,
-    setShowReviewPanel,
     checkpoints,
     setCheckpoints,
     currentLayer,
@@ -64,13 +60,12 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     startPlanning,
     loadLayerContent,
     showViewer,
-    setPendingReviewMessage,
-    // ✅ 新增：简化后的审查状态
+    // 审查状态
     isPaused,
     pendingReviewLayer,
-    // ✅ 新增：层级完成状态
+    // 层级完成状态
     completedLayers,
-    // ✅ 新增：同步后端状态
+    // 同步后端状态
     syncBackendState,
   } = useUnifiedPlanningContext();
 
@@ -87,10 +82,6 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   // ✅ NEW: Use useMemo to cache filtered messages (P1.4 performance optimization)
   const progressMessages = useMemo(() => {
     return messages.filter(m => m.type === 'progress');
-  }, [messages]);
-
-  const reviewMessages = useMemo(() => {
-    return messages.filter(m => m.type === 'review_interaction');
   }, [messages]);
 
   // 维度内容缓存 (用于流式渲染)
@@ -434,30 +425,21 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   // Determine if input should be disabled
   const inputDisabled = isInputDisabled(status);
 
-  // Derive pending review message from messages (single source of truth)
-  const pendingReviewMessage = useMemo(() => {
-    return messages.findLast(m =>
-      isReviewInteractionMessage(m) && (m as ReviewInteractionMessage).reviewState === 'pending'
-    ) as ReviewInteractionMessage | null;
-  }, [messages]);
-
-  // Check for pending review state
-  const hasPendingReview = messages.some(m =>
-    isReviewInteractionMessage(m) && (m as ReviewInteractionMessage).reviewState === 'pending'
-  );
+  // 审查状态: 状态驱动，由后端同步 (isPaused, pendingReviewLayer)
+  // 不再依赖 messages 中的 ReviewInteractionMessage
+  const hasPendingReview = isPaused && pendingReviewLayer !== null;
 
   // Review handlers - use TaskController actions
+  // 状态驱动: 审查状态由后端同步 (isPaused, pendingReviewLayer)
   const handleReviewApprove = useCallback(async () => {
     try {
       await approve();
       addMessage(createSystemMessage('✅ 已批准，继续执行下一层...'));
-      setShowReviewPanel(false);
-      setStatus('planning');
-      setPendingReviewMessage(null);  // ✅ Clear pending review
+      // 状态会通过 TaskController 轮询自动同步
     } catch (error: any) {
       addMessage(createErrorMessage(`批准失败: ${error.message || '未知错误'}`));
     }
-  }, [approve, addMessage, setShowReviewPanel, setStatus, setPendingReviewMessage]);
+  }, [approve, addMessage]);
 
   const handleReviewReject = useCallback(async (feedback: string, dimensions?: string[]) => {
     try {
@@ -468,12 +450,11 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       });
       addMessage(createSystemMessage('🔄 正在根据反馈修复规划内容...'));
       await reject(feedback);
-      setShowReviewPanel(false);
-      setStatus('revising');
+      // 状态会通过 TaskController 轮询自动同步
     } catch (error: any) {
       addMessage(createErrorMessage(`驳回失败: ${error.message || '未知错误'}`));
     }
-  }, [reject, addMessage, setShowReviewPanel, setStatus]);
+  }, [reject, addMessage]);
 
   const handleRollback = useCallback(async (checkpointId: string) => {
     if (!confirm('确定要回退吗？之后的内容将被删除。')) return;
@@ -481,11 +462,11 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     try {
       await rollback(checkpointId);
       addMessage(createSystemMessage(`↩️ 已回退到检查点: ${checkpointId}`));
-      setShowReviewPanel(false);
+      // 状态会通过 TaskController 轮询自动同步
     } catch (error: any) {
       addMessage(createErrorMessage(`回退失败: ${error.message || '未知错误'}`));
     }
-  }, [rollback, addMessage, setShowReviewPanel]);
+  }, [rollback, addMessage]);
 
   // Handler: Start planning from form submission
   const handleStartPlanning = useCallback(async () => {
@@ -552,101 +533,14 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
   // Note: Form submission is now handled by UnifiedContentSwitcher
   // ChatPanel only handles the planning session after it has started
+  // Review 功能现在通过 ReviewPanel 组件处理，基于状态驱动
 
-  // Review interaction handlers for embedded message UI
-  const handleReviewInteractionApprove = useCallback(async (message: ReviewInteractionMessage) => {
-    if (!taskId) return;
-
-    try {
-      await planningApi.approveReview(taskId);
-
-      // Update the review message state
-      addMessage({
-        ...message,
-        reviewState: 'approved',
-        submittedAt: new Date(),
-        submittedBy: 'user',
-        submissionType: 'approve',
-      } as ReviewInteractionMessage);
-
-      addMessage(createSystemMessage('✅ 已批准，继续执行下一层...'));
-      setShowReviewPanel(false);
-      setStatus('planning');
-      setPendingReviewMessage(null);
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : '未知错误';
-      addMessage(createErrorMessage(`批准失败: ${errorMessage}`));
-    }
-  }, [taskId, addMessage, setShowReviewPanel, setStatus, setPendingReviewMessage]);
-
-  const handleReviewInteractionReject = useCallback(async (
-    message: ReviewInteractionMessage,
-    feedback: string,
-    dimensions?: string[]
-  ) => {
-    if (!taskId) return;
-
-    try {
-      // Update the review message state
-      addMessage({
-        ...message,
-        reviewState: 'rejected',
-        submittedAt: new Date(),
-        submittedBy: 'user',
-        submissionType: 'reject',
-        submissionFeedback: feedback,
-        submissionDimensions: dimensions,
-      } as ReviewInteractionMessage);
-
-      addMessage(createSystemMessage('🔄 正在根据反馈修复规划内容...'));
-      await planningApi.rejectReview(taskId, feedback, dimensions);
-      setStatus('revising');
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : '未知错误';
-      addMessage(createErrorMessage(`驳回失败: ${errorMessage}`));
-    }
-  }, [taskId, addMessage, setStatus]);
-
-  const handleReviewInteractionRollback = useCallback(async (
-    message: ReviewInteractionMessage,
-    checkpointId: string
-  ) => {
-    if (!taskId) return;
-
-    try {
-      // Update the review message state
-      addMessage({
-        ...message,
-        reviewState: 'rolled_back',
-        submittedAt: new Date(),
-        submittedBy: 'user',
-        submissionType: 'rollback',
-      } as ReviewInteractionMessage);
-
-      await planningApi.rollbackCheckpoint(taskId, checkpointId);
-      addMessage(createSystemMessage(`↩️ 已回退到检查点: ${checkpointId}`));
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : '未知错误';
-      addMessage(createErrorMessage(`回退失败: ${errorMessage}`));
-    }
-  }, [taskId, addMessage]);
-
-  // Send message handler - now supports review feedback
+  // Send message handler
   const handleSendMessage = useCallback(async () => {
     const userText = inputText.trim();
     if (!userText) return;
 
     setInputText('');
-
-    // Check if in review state
-    if (hasPendingReview && pendingReviewMessage) {
-      if (userText === '批准' || userText.toLowerCase() === 'approve') {
-        await handleReviewInteractionApprove(pendingReviewMessage);
-      } else {
-        await handleReviewInteractionReject(pendingReviewMessage, userText);
-      }
-      return;
-    }
 
     // Normal chat message
     addMessage({
@@ -672,8 +566,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       setIsTyping(false);
       typingTimeoutRef.current = null;
     }, 500);
-  }, [inputText, addMessage, hasPendingReview, pendingReviewMessage,
-      handleReviewInteractionApprove, handleReviewInteractionReject]);
+  }, [inputText, addMessage]);
 
   // File selection handler
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -810,8 +703,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
           {/* Progress bar - Card-style design */}
           {progressMessages.length > 0 && (
             <div className="mb-3 bg-gray-50 rounded-xl p-4 shadow-sm border border-gray-200 animate-[fadeIn_0.3s_ease-in-out]">
-              {progressMessages.map(msg => (
-                isProgressMessage(msg) && (
+              {progressMessages.filter(msg => isProgressMessage(msg)).map(msg => (
                   <div key={msg.id}>
                     <div className="flex justify-between items-center mb-2">
                       <span className="text-sm font-semibold text-gray-700 flex items-center gap-2">
@@ -833,7 +725,6 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
                       </div>
                     )}
                   </div>
-                )
               ))}
             </div>
           )}
@@ -902,11 +793,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
               console.log('[ChatPanel] Toggle all dimensions for layer', layer, expand);
               // TODO: Implement expand/collapse all in LayerReportViewer
             }}
-            onReviewApprove={handleReviewInteractionApprove}
-            onReviewReject={handleReviewInteractionReject}
-            onReviewRollback={handleReviewInteractionRollback}
-            reviewDisabled={status === 'revising'}
-            currentLayer={taskState.currentLayer ?? undefined}
+            currentLayer={taskState.current_layer ?? undefined}
           />
           <div ref={messagesEndRef} />
         </div>
@@ -923,41 +810,8 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         )}
       </div>
 
-      {/* ✅ 新增：条件渲染的审查面板 */}
-      {/* Debug logging for review panel condition */}
-      {console.log('[ChatPanel] Review panel condition check:', {
-        isPaused,
-        isPausedType: typeof isPaused,
-        pendingReviewLayer,
-        pendingReviewLayerType: typeof pendingReviewLayer,
-        condition1_isPaused: isPaused ? 'TRUE' : 'FALSE',
-        condition2_pendingReviewLayer: pendingReviewLayer ? `TRUE (${pendingReviewLayer})` : 'FALSE',
-        finalResult: isPaused && pendingReviewLayer ? 'SHOW PANEL' : 'HIDE PANEL',
-      })}
-      {isPaused && pendingReviewLayer && (
-        <div className="border-t border-gray-200 bg-white">
-          <div className="max-w-4xl mx-auto">
-            <ReviewPanel
-              layer={pendingReviewLayer}
-              onApprove={async () => {
-                await approve();
-                addMessage(createSystemMessage(`✅ 已批准，继续执行下一层...`));
-                setStatus('planning');
-              }}
-              onReject={async (feedback) => {
-                await reject(feedback);
-                addMessage(createSystemMessage('🔄 正在根据反馈修复规划内容...'));
-                setStatus('revising');
-              }}
-              onRollback={async (checkpointId) => {
-                await rollback(checkpointId);
-                addMessage(createSystemMessage(`↩️ 已回退到检查点: ${checkpointId}`));
-              }}
-              isSubmitting={status === 'reviewing'}
-            />
-          </div>
-        </div>
-      )}
+      {/* 审查功能已通过 ReviewInteractionMessage 组件嵌入在 MessageList 中 */}
+      {/* 不需要额外的审查面板 */}
 
       {/* Bottom: Input area */}
       <div className="border-t bg-white p-4">
@@ -1016,14 +870,15 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             </div>
           )}
 
-          {/* Review mode indicator */}
-          {hasPendingReview && pendingReviewMessage && (
-            <div className="mb-2 px-3 py-1.5 bg-orange-50 border border-orange-200 rounded-lg flex items-center gap-2">
-              <FontAwesomeIcon icon={faEdit} className="text-orange-500" />
-              <span className="text-sm text-orange-700 font-medium">
-                审查模式：输入修改意见后按 Enter 发送驳回，或输入 &quot;批准&quot; 继续
-              </span>
-            </div>
+          {/* Review Panel - 状态驱动，基于 isPaused 和 pendingReviewLayer */}
+          {isPaused && pendingReviewLayer && (
+            <ReviewPanel
+              layer={pendingReviewLayer}
+              onApprove={handleReviewApprove}
+              onReject={handleReviewReject}
+              onRollback={handleRollback}
+              isSubmitting={false}
+            />
           )}
 
           {/* Input area: file upload and text input */}
@@ -1050,8 +905,8 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
               }}
               disabled={inputDisabled || isTyping}
               placeholder={
-                hasPendingReview && pendingReviewMessage
-                  ? `请输入对 Layer ${pendingReviewMessage.layer} 的修改意见... (Enter 发送驳回，留空输入 "批准" 继续)`
+                hasPendingReview && pendingReviewLayer
+                  ? `请输入对 Layer ${pendingReviewLayer} 的修改意见... (Enter 发送驳回，留空输入 "批准" 继续)`
                   : status === 'planning' || status === 'collecting'
                     ? '规划进行中...'
                     : '输入消息... (Enter 发送, Shift+Enter 换行)'

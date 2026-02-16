@@ -4,12 +4,10 @@
  * MessageList - Renders list of chat messages with Gemini-style enhancements
  */
 
-import { Message, ActionButton, LayerCompletedMessage, ReviewInteractionMessage, DimensionReportMessage } from '@/types';
-import { isReviewInteractionMessage } from '@/types';
+import { Message, ActionButton, LayerCompletedMessage, DimensionReportMessage } from '@/types';
 import ThinkingIndicator, { WaveThinkingIndicator } from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
-import ReviewInteractionMessageComponent from './ReviewInteractionMessage';
 import DimensionReportStreaming from './DimensionReportStreaming';
 
 interface MessageListProps {
@@ -22,19 +20,7 @@ interface MessageListProps {
   onOpenInSidebar?: (layer: number) => void;
   onViewLayerDetails?: (layer: number) => void;
   onToggleAllDimensions?: (layer: number, expand: boolean) => void;
-  // Review interaction callbacks
-  onReviewApprove?: (message: ReviewInteractionMessage) => Promise<void>;
-  onReviewReject?: (
-    message: ReviewInteractionMessage,
-    feedback: string,
-    dimensions?: string[]
-  ) => Promise<void>;
-  onReviewRollback?: (
-    message: ReviewInteractionMessage,
-    checkpointId: string
-  ) => Promise<void>;
-  reviewDisabled?: boolean;
-  currentLayer?: number;  // NEW: 当前活跃层
+  currentLayer?: number;
 }
 
 export default function MessageList({
@@ -47,10 +33,6 @@ export default function MessageList({
   onOpenInSidebar,
   onViewLayerDetails,
   onToggleAllDimensions,
-  onReviewApprove,
-  onReviewReject,
-  onReviewRollback,
-  reviewDisabled = false,
   currentLayer,
 }: MessageListProps) {
   const handleCopy = (message: Message) => {
@@ -86,10 +68,25 @@ export default function MessageList({
         </div>
       )}
 
-      {/* Regular messages - 过滤掉 dimension_report 类型 */}
-      {messages
-        .filter(message => message.type !== 'dimension_report')
-        .map((message) => {
+      {/* Regular messages - 包含所有消息类型 */}
+      {messages.map((message) => {
+        // Special handling for dimension_report messages (streaming dimension content)
+        if (message.type === 'dimension_report') {
+          const dimMsg = message as DimensionReportMessage;
+          return (
+            <div key={message.id} className="w-full mb-2">
+              <DimensionReportStreaming
+                layer={dimMsg.layer}
+                dimensionKey={dimMsg.dimensionKey}
+                dimensionName={dimMsg.dimensionName}
+                content={dimMsg.content}
+                streamingState={dimMsg.streamingState}
+                wordCount={dimMsg.wordCount}
+              />
+            </div>
+          );
+        }
+
         // Special handling for layer_completed messages
         if (message.type === 'layer_completed') {
           const layerMsg = message as LayerCompletedMessage;
@@ -104,38 +101,6 @@ export default function MessageList({
                 onToggleAll={(expand) => handleToggleAllDimensions(message.layer, expand)}
                 currentLayer={currentLayer}
                 hasStreamingDimensions={hasStreamingDimensions}
-              />
-            </div>
-          );
-        }
-
-        // Special handling for dimension_report messages (streaming dimension content)
-        if (message.type === 'dimension_report') {
-          return (
-            <div key={message.id} className="w-full mb-2">
-              <DimensionReportStreaming
-                layer={message.layer}
-                dimensionKey={message.dimensionKey}
-                dimensionName={message.dimensionName}
-                content={message.content}
-                streamingState={message.streamingState}
-                wordCount={message.wordCount}
-              />
-            </div>
-          );
-        }
-
-        // Special handling for review_interaction messages
-        if (isReviewInteractionMessage(message)) {
-          const reviewMsg = message as ReviewInteractionMessage;
-          return (
-            <div key={message.id} className="w-full mb-4">
-              <ReviewInteractionMessageComponent
-                message={reviewMsg}
-                onApprove={onReviewApprove ? () => onReviewApprove(reviewMsg) : async () => {}}
-                onReject={onReviewReject ? (feedback, dimensions) => onReviewReject(reviewMsg, feedback, dimensions) : async () => {}}
-                onRollback={onReviewRollback ? (checkpointId) => onReviewRollback(reviewMsg, checkpointId) : async () => {}}
-                disabled={reviewDisabled}
               />
             </div>
           );

@@ -20,7 +20,6 @@ import type {
   LayerCompletedMessage,
   ReviewRequestMessage,
   CheckpointListMessage,
-  ReviewInteractionMessage,
 } from './message-types';
 
 /**
@@ -74,11 +73,9 @@ export const isLayerCompletedMessage = (msg: Message): msg is LayerCompletedMess
 export const isReviewRequestMessage = (msg: Message): msg is ReviewRequestMessage => msg.type === 'review_request';
 
 /**
- * Check if message is a checkpoint list message
- */
-export const isCheckpointListMessage = (msg: Message): msg is CheckpointListMessage => msg.type === 'checkpoint_list';
 
-/**
- * Check if message is a review interaction message
+ * Check if message is a checkpoint list message
+
  */
-export const isReviewInteractionMessage = (msg: Message): msg is ReviewInteractionMessage => msg.type === 'review_interaction';
+
+export const isCheckpointListMessage = (msg: Message): msg is CheckpointListMessage => msg.type === 'checkpoint_list';

@@ -341,22 +341,21 @@ class PauseManagerNode(BaseNode):
         
         暂停条件：
         1. step_mode=True（配置）
-        2. pending_review_layer > 0（有待审查的层级）
+        2. previous_layer > 0（有刚完成的层级需要审查）
         
-        使用 pending_review_layer 而非 layer_X_completed，避免恢复后无限循环
+        使用 previous_layer 判断是否有待审查的层级
         """
         step_mode = state.get("step_mode", False)
-        pending_review_layer = state.get("pending_review_layer", 0)
+        previous_layer = state.get("previous_layer", 0)
         
-        # ✅ 添加详细日志
-        logger.info(f"[暂停管理] 执行检查 - step_mode={step_mode}, pending_review_layer={pending_review_layer}")
+        logger.info(f"[暂停管理] 执行检查 - step_mode={step_mode}, previous_layer={previous_layer}")
         
-        # ✅ 只在步进模式且有待审查层级时设置暂停
-        if step_mode and pending_review_layer > 0:
-            logger.info(f"[暂停管理] 有待审查层级 {pending_review_layer}，设置pause_after_step=True")
+        # 只在步进模式且有刚完成的层级时设置暂停
+        if step_mode and previous_layer > 0:
+            logger.info(f"[暂停管理] 有待审查层级 {previous_layer}，设置pause_after_step=True")
             return {"pause_after_step": True}
         
-        logger.info(f"[暂停管理] 不设置暂停（step_mode={step_mode}, pending_review_layer={pending_review_layer}）")
+        logger.info(f"[暂停管理] 不设置暂停（step_mode={step_mode}, previous_layer={previous_layer}）")
         return {}
 
 

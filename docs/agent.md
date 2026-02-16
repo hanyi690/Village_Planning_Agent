@@ -1,42 +1,161 @@
-# 核心智能体文档 (Core Agent Documentation)
+# 智能体架构文档
 
-> **村庄规划智能体** - 基于 LangGraph 的智能村庄规划系统
+> 村庄规划智能体 - LangGraph 核心引擎详解
 
 ## 目录
 
 - [架构概述](#架构概述)
+- [主图编排](#主图编排)
 - [三层规划系统](#三层规划系统)
-- [AsyncSqliteSaver 状态持久化](#asyncsqlitesaver-状态持久化)
-- [暂停/恢复机制](#暂停恢复机制)
-- [统一规划器](#统一规划器)
-- [状态筛选优化](#状态筛选优化)
+- [状态定义](#状态定义)
+- [路由决策](#路由决策)
+- [暂停恢复机制](#暂停恢复机制)
 
 ---
 
 ## 架构概述
 
-### 核心技术栈
+### 技术栈
 
-- **LangGraph 1.0.8+** - 状态图编排框架
-- **LangChain** - LLM 应用开发框架
-- **AsyncSqliteSaver** - SQLite 持久化（langgraph-checkpoint-sqlite 3.0.3+）
-- **Pydantic V2** - 数据验证和序列化
+- **LangGraph 1.0+**: 状态图编排框架
+- **LangChain**: LLM 应用开发框架
+- **AsyncSqliteSaver**: SQLite 状态持久化
+- **Pydantic V2**: 数据验证
 
 ### 设计原则
 
 1. **分层架构**: 三层递进式规划（现状分析 → 规划思路 → 详细规划）
-2. **并行执行**: 每层内多个维度并行处理，提升效率
+2. **并行执行**: 每层内多个维度使用 `Send` 机制并行处理
 3. **状态持久化**: AsyncSqliteSaver 自动保存状态到 SQLite
-4. **状态筛选**: 智能过滤相关维度数据，节省 LLM token 消耗
-5. **统一规划器**: 基于统一基类的通用架构
-6. **检查点机制**: 每层完成后自动保存，支持中断恢复
+4. **检查点机制**: 每层完成后自动保存，支持中断恢复
 
-### 核心优势
+### 目录结构
 
-✅ **自动状态管理**: AsyncSqliteSaver 自动持久化，无需手动维护
-✅ **毫秒级恢复**: 从 checkpoint 毫秒级还原完整状态
-✅ **数据一致性**: AI 状态 = 数据库内容，天然匹配
-✅ **代码简洁**: 删除手动同步逻辑，精简数据库模型
+```
+src/
+├── orchestration/
+│   └── main_graph.py            # 主图编排
+├── subgraphs/
+│   ├── analysis_subgraph.py     # Layer 1: 现状分析子图
+│   ├── concept_subgraph.py      # Layer 2: 规划思路子图
+│   └── detailed_plan_subgraph.py # Layer 3: 详细规划子图
+├── nodes/
+│   ├── base_node.py             # 节点基类
+│   ├── subgraph_nodes.py        # 子图节点
+│   └── tool_nodes.py            # 工具节点
+├── core/
+│   ├── config.py                # 配置
+│   ├── dimension_config.py      # 维度配置
+│   └── llm_factory.py           # LLM 工厂
+└── utils/
+    ├── state_filter.py          # 状态筛选
+    └── output_manager.py        # 输出管理
+```
+
+---
+
+## 主图编排
+
+### 状态定义
+
+```python
+# src/orchestration/main_graph.py
+class VillagePlanningState(TypedDict):
+    # 输入
+    project_name: str
+    village_data: str
+    task_description: str
+    constraints: str
+    
+    # 会话管理
+    session_id: str
+    
+    # 流程控制
+    current_layer: int             # 当前层级 (1/2/3)
+    previous_layer: int            # 刚完成的层级
+    layer_1_completed: bool
+    layer_2_completed: bool
+    layer_3_completed: bool
+    
+    # 步进模式
+    step_mode: bool
+    pause_after_step: bool
+    pending_review_layer: int      # 待审查层级 (0=无)
+    
+    # 层级输出
+    analysis_report: str
+    analysis_dimension_reports: Dict[str, str]
+    planning_concept: str
+    concept_dimension_reports: Dict[str, str]
+    detailed_plan: str
+    detailed_dimension_reports: Dict[str, str]
+    
+    # 输出路径
+    output_path: str
+    
+    # 错误处理
+    execution_error: str
+    layer_1_failed_dimensions: List[str]
+```
+
+### 图结构
+
+```
+START
+  ↓
+[route_initial]
+  ├──→ layer1_analysis
+  └──→ END (错误)
+  ↓
+[execute_layer1_analysis]
+  ↓
+[route_after_layer1]
+  ├──→ tool_bridge (步进模式)
+  ├──→ layer2_concept (正常流程)
+  └──→ END (失败)
+  ↓
+[tool_bridge_node]
+  ↓
+[route_after_tool_bridge]
+  ├──→ pause (步进模式暂停)
+  └──→ layer2_concept
+  ↓
+[pause_node]
+  ↓
+[route_after_pause]
+  ├──→ END (暂停等待审查)
+  └──→ layer1/2/3 (恢复执行)
+  ↓
+... Layer 2, Layer 3 类似 ...
+  ↓
+[generate_final_output]
+  ↓
+END
+```
+
+### 图构建代码
+
+```python
+def create_village_planning_graph(checkpointer=None):
+    builder = StateGraph(VillagePlanningState)
+    
+    # 添加节点
+    builder.add_node("layer1_analysis", execute_layer1_analysis)
+    builder.add_node("layer2_concept", execute_layer2_concept)
+    builder.add_node("layer3_detail", execute_layer3_detail)
+    builder.add_node("tool_bridge", tool_bridge_node)
+    builder.add_node("pause", pause_node)
+    builder.add_node("final", generate_final_output)
+    
+    # 条件边
+    builder.add_conditional_edges(START, route_initial)
+    builder.add_conditional_edges("layer1_analysis", route_after_layer1)
+    builder.add_conditional_edges("tool_bridge", route_after_tool_bridge)
+    builder.add_conditional_edges("pause", route_after_pause)
+    # ... 更多边
+    
+    return builder.compile(checkpointer=checkpointer)
+```
 
 ---
 
@@ -44,225 +163,182 @@
 
 ### Layer 1: 现状分析
 
-**并行维度** (12个):
-| 维度ID | 维度名称 | 英文键名 |
-|---------|-----------|-----------|
-| 1 | 区位与对外交通分析 | `location` |
-| 2 | 社会经济分析 | `socio_economic` |
-| 3 | 村民意愿分析 | `villager_wishes` |
-| 4 | 上位规划分析 | `superior_planning` |
-| 5 | 自然环境与资源分析 | `natural_environment` |
-| 6 | 村庄用地分析 | `land_use` |
-| 7 | 道路与交通分析 | `traffic` |
-| 8 | 公共服务设施分析 | `public_services` |
-| 9 | 基础设施分析 | `infrastructure` |
-| 10 | 生态绿地分析 | `ecological_green` |
-| 11 | 建筑分析 | `architecture` |
-| 12 | 历史文化分析 | `historical_culture` |
+**文件**: `src/subgraphs/analysis_subgraph.py`
 
-**输出**: `analysis_dimension_reports` (字典)
+**维度** (12 个并行):
 
-**AsyncSqliteSaver 存储**:
-```python
-state["analysis_dimension_reports"] = {
-    "location": "区位分析报告...",
-    "socio_economic": "社会经济分析报告...",
-    # ... 12 个维度
-}
-state["layer_1_completed"] = True
-state["previous_layer"] = 1
-state["current_layer"] = 2
-# AsyncSqliteSaver 自动保存到 checkpoints 表
+| 键名 | 维度 |
+|------|------|
+| location | 区位与对外交通分析 |
+| socio_economic | 社会经济分析 |
+| villager_wishes | 村民意愿分析 |
+| superior_planning | 上位规划分析 |
+| natural_environment | 自然环境与资源分析 |
+| land_use | 村庄用地分析 |
+| traffic | 道路与交通分析 |
+| public_services | 公共服务设施分析 |
+| infrastructure | 基础设施分析 |
+| ecological_green | 生态绿地分析 |
+| architecture | 建筑分析 |
+| historical_culture | 历史文化分析 |
+
+**子图结构**:
+
+```
+START → initialize → knowledge_preload → [Send] → analyze_dimension (×12) → END
 ```
 
----
+**并行执行**:
+
+```python
+def map_dimensions(state: AnalysisState) -> List[Send]:
+    sends = []
+    for dimension_key in state["subjects"]:
+        sends.append(Send("analyze_dimension", {
+            "dimension_key": dimension_key,
+            "raw_data": state["raw_data"],
+        }))
+    return sends
+
+builder.add_conditional_edges("knowledge_preload", map_dimensions)
+```
+
+**输出**:
+- `analysis_report`: 综合报告 (用于显示)
+- `analysis_dimension_reports`: 各维度独立报告字典
 
 ### Layer 2: 规划思路
 
-**并行维度** (4个):
-| 维度ID | 维度名称 | 英文键名 |
-|---------|-----------|-----------|
-| 1 | 资源禀赋分析 | `resource_endowment` |
-| 2 | 规划定位分析 | `planning_positioning` |
-| 3 | 发展目标分析 | `development_goals` |
-| 4 | 规划策略分析 | `planning_strategies` |
+**文件**: `src/subgraphs/concept_subgraph.py`
 
-**输出**: `concept_dimension_reports` (字典)
+**维度** (4 个并行):
 
-**AsyncSqliteSaver 存储**:
-```python
-state["concept_dimension_reports"] = {
-    "resource_endowment": "资源禀赋分析...",
-    "planning_positioning": "规划定位分析...",
-    # ... 4 个维度
-}
-state["layer_2_completed"] = True
-state["previous_layer"] = 2
-state["current_layer"] = 3
-# AsyncSqliteSaver 自动保存
-```
+| 键名 | 维度 |
+|------|------|
+| resource_endowment | 资源禀赋分析 |
+| planning_positioning | 规划定位分析 |
+| development_goals | 发展目标分析 |
+| planning_strategies | 规划策略分析 |
 
----
+**依赖**: 需要Layer 1 的 `analysis_report` 和 `analysis_dimension_reports`
+
+**输出**:
+- `planning_concept`: 综合报告
+- `concept_dimension_reports`: 各维度独立报告字典
 
 ### Layer 3: 详细规划
 
-**分波次执行** (Wave 1-2):
+**文件**: `src/subgraphs/detailed_plan_subgraph.py`
 
-**Wave 1** (11个维度并行):
-| 维度ID | 维度名称 | 英文键名 |
-|---------|-----------|-----------|
-| 1 | 产业规划 | `industry` |
-| 2 | 空间结构规划 | `spatial_structure` |
-| 3 | 土地利用规划 | `land_use_planning` |
-| 4 | 聚落体系规划 | `settlement_planning` |
-| 5 | 综合交通规划 | `traffic` |
-| 6 | 公共服务设施规划 | `public_service` |
-| 7 | 基础设施规划 | `infrastructure` |
-| 8 | 生态保护与修复规划 | `ecological` |
-| 9 | 防灾减灾规划 | `disaster_prevention` |
-| 10 | 历史文化遗产保护 | `heritage` |
-| 11 | 村庄风貌引导 | `landscape` |
+**维度** (12 个并行):
 
-**Wave 2** (依赖 Wave 1，项目库):
-| 维度ID | 维度名称 | 英文键名 |
-|---------|-----------|-----------|
-| 12 | 建设项目库 | `project_bank` |
+| 键名 | 维度 |
+|------|------|
+| industry | 产业规划 |
+| spatial_structure | 空间结构规划 |
+| land_use_planning | 土地利用规划 |
+| settlement_planning | 聚落体系规划 |
+| traffic | 综合交通规划 |
+| public_service | 公共服务设施规划 |
+| infrastructure | 基础设施规划 |
+| ecological | 生态保护与修复规划 |
+| disaster_prevention | 防灾减灾规划 |
+| heritage | 历史文化遗产保护 |
+| landscape | 村庄风貌引导 |
+| project_bank | 建设项目库 |
 
-**输出**: `detailed_dimension_reports` (字典)
+**分波执行**:
+- Wave 1: 前 11 个维度并行
+- Wave 2: `project_bank` (依赖 Wave 1 结果)
 
-**AsyncSqliteSaver 存储**:
+**依赖**: 需要Layer 1 和 Layer 2 的所有输出
+
+---
+
+## 状态定义
+
+### 子图状态
+
 ```python
-state["detailed_dimension_reports"] = {
-    "industry": "产业规划...",
-    "spatial_structure": "空间结构规划...",
-    # ... 12 个维度
-}
-state["layer_3_completed"] = True
-state["previous_layer"] = 3
-state["current_layer"] = 4
-# AsyncSqliteSaver 自动保存
+# analysis_subgraph.py
+class AnalysisState(TypedDict):
+    raw_data: str
+    project_name: str
+    subjects: List[str]  # 待分析维度列表
+    analyses: Annotated[List[Dict], operator.add]  # 并行结果累加
+    analysis_dimension_reports: Annotated[Dict[str, str], merge_dicts]
+    knowledge_map: Dict[str, List[dict]]  # RAG 知识映射
+    rag_enabled: bool
+```
+
+### 状态合并函数
+
+```python
+def merge_dicts(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str]:
+    """合并两个字典（用于并行节点结果合并）"""
+    result = {**left, **right}
+    return result
 ```
 
 ---
 
-## AsyncSqliteSaver 状态持久化
+## 路由决策
 
-### 架构设计
+### 初始路由
 
-**核心概念**: SQLite 作为 AI 的"自动硬盘"
-
-```
-┌─────────────────────────────────────────────────────┐
-│                LangGraph 执行图                    │
-│                                                      │
-│  状态变化 → AsyncSqliteSaver.put()                  │
-│             ↓                                      │
-│  自动序列化 → checkpoints 表                        │
-│                                                      │
-└─────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────┐
-│              SQLite 数据库                         │
-│                                                      │
-│  ┌──────────────────────────────────────────┐       │
-│  │   checkpoints 表 (AI 状态快照)            │       │
-│  │   - thread_id                            │       │
-│  │   - checkpoint_id                        │       │
-│  │   - checkpoint (JSON/二进制)             │       │
-│  │   - layer_X_completed                    │       │
-│  │   - analysis_dimension_reports           │       │
-│  │   - concept_dimension_reports            │       │
-│  │   - detailed_dimension_reports           │       │
-│  │   - pause_after_step                     │       │
-│  └──────────────────────────────────────────┘       │
-└─────────────────────────────────────────────────────┘
-```
-
-### 状态保存流程
-
-```
-LangGraph 节点执行
-  ↓
-状态更新: state["layer_1_completed"] = True
-  ↓
-graph.update_state(config, updates)
-  ↓
-AsyncSqliteSaver.put(config, checkpoint)
-  ↓
-自动序列化 → checkpoints 表
-  ↓
-返回新 checkpoint_id
-```
-
-### 状态恢复流程
-
-```
-API: GET /api/planning/status/{session_id}
-  ↓
-config = {"configurable": {"thread_id": session_id}}
-  ↓
-graph.get_state(config)
-  ↓
-AsyncSqliteSaver.get(config)
-  ↓
-从 checkpoints 表读取完整状态
-  ↓
-返回 StateSnapshot
-  ↓
-提取状态值 (layer_X_completed, reports, etc.)
-```
-
----
-
-## 暂停/恢复机制
-
-### 暂停流程
-
-```
-步进模式 (step_mode=True)
-  ↓
-层级完成 (layer_X_completed=True)
-  ↓
-PauseManagerNode 检测到暂停条件
-  ↓
-设置 state["pause_after_step"] = True
-  ↓
-路由到 END 终止执行
-  ↓
-前端 REST 轮询检测到 pauseAfterStep=true
-  ↓
-显示审查 UI
-```
-
-**关键节点**: `src/nodes/tool_nodes.py:PauseManagerNode`
 ```python
-class PauseManagerNode(BaseNode):
-    def execute(self, state: StateDict) -> StateDict:
-        layer_1_completed = state.get("layer_1_completed", False)
-        layer_2_completed = state.get("layer_2_completed", False)
-        layer_3_completed = state.get("layer_3_completed", False)
-        any_layer_completed = layer_1_completed or layer_2_completed or layer_3_completed
-
-        if state.get("step_mode", False) and any_layer_completed:
-            logger.info(f"[暂停管理] 步进模式：检测到层级完成，设置pause_after_step=True")
-            return {"pause_after_step": True}
-
-        return {}
-```
-
-**关键路由**: `src/orchestration/main_graph.py:route_after_pause`
-```python
-def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis", "layer2_concept", "layer3_detail", "end"]:
-    step_mode = state.get("step_mode", False)
-    any_layer_completed = state.get("layer_1_completed", False) or \
-                          state.get("layer_2_completed", False) or \
-                          state.get("layer_3_completed", False)
-
-    if step_mode and any_layer_completed:
-        logger.info("[主图-路由] 步进模式：检测到层级完成，终止执行以便前端触发审查")
+def route_initial(state: VillagePlanningState) -> Literal["layer1_analysis", "end"]:
+    if not state.get("village_data"):
         return "end"
+    return "layer1_analysis"
+```
 
-    # 根据当前层级路由
+### Layer 1 完成后路由
+
+```python
+def route_after_layer1(state: VillagePlanningState):
+    if not state["layer_1_completed"]:
+        return "end"
+    
+    # 步进模式 → 进入 tool_bridge 准备暂停
+    if state.get("step_mode"):
+        return "tool_bridge"
+    
+    # 正常流程 → 直接进入 Layer 2
+    return "layer2_concept"
+```
+
+### 工具桥接后路由
+
+```python
+def route_after_tool_bridge(state: VillagePlanningState):
+    # 使用 previous_layer 判断刚完成哪一层
+    previous_layer = state.get("previous_layer", 1)
+    step_mode = state.get("step_mode", False)
+    
+    # Layer 1 完成，步进模式 → 暂停
+    if previous_layer == 1 and state["layer_1_completed"] and step_mode:
+        return "pause"
+    
+    # Layer 1 完成，非步进模式 → Layer 2
+    if previous_layer == 1 and state["layer_1_completed"]:
+        return "layer2_concept"
+    
+    # ... 类似处理 Layer 2, Layer 3
+```
+
+### 暂停后路由
+
+```python
+def route_after_pause(state: VillagePlanningState):
+    step_mode = state.get("step_mode", False)
+    pending_review_layer = state.get("pending_review_layer", 0)
+    
+    # 有待审查层级 → 终止执行等待审查
+    if step_mode and pending_review_layer > 0:
+        return "end"
+    
+    # 否则继续执行当前层级
     current_layer = state.get("current_layer", 1)
     if current_layer == 1:
         return "layer1_analysis"
@@ -272,265 +348,158 @@ def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis",
         return "layer3_detail"
 ```
 
-### 恢复流程
-
-```
-用户点击"批准"
-  ↓
-POST /api/planning/review/{session_id}?action=approve
-  ↓
-清除 pause 标志:
-  - initial_state["pause_after_step"] = False
-  - session["sent_pause_events"].clear()
-  ↓
-推进 current_layer
-  ↓
-调用 _resume_graph_execution()
-  ↓
-继续执行 LangGraph
-```
-
 ---
 
-## 统一规划器
+## 暂停恢复机制
 
-### 基类设计
+### 暂停触发
 
-**文件**: `src/planners/unified_base_planner.py`
+1. **设置状态**: 层级完成时设置 `pause_after_step=True` 和 `pending_review_layer=N`
 
 ```python
-class UnifiedBasePlanner(ABC):
-    """
-    统一规划器基类
-
-    所有规划器继承此基类，确保一致的接口和行为
-    """
-
-    @abstractmethod
-    async def plan_dimension(
-        self,
-        dimension_key: str,
-        dimension_name: str,
-        context: dict[str, Any]
-    ) -> str:
-        """
-        规划单个维度
-
-        Args:
-            dimension_key: 维度键名（如 "location"）
-            dimension_name: 维度名称（如 "区位分析"）
-            context: 上下文信息（包含相关维度报告）
-
-        Returns:
-            维度规划报告
-        """
-        pass
+# execute_layer1_analysis() 返回
+return {
+    "analysis_report": combined_report,
+    "analysis_dimension_reports": dimension_reports,
+    "layer_1_completed": True,
+    "current_layer": 2,
+    "previous_layer": 1,          # 刚完成的层级
+    "pending_review_layer": 1,    # 待审查层级
+    "pause_after_step": True,     # 触发暂停
+}
 ```
 
-### 实现示例
+2. **路由决策**: `route_after_tool_bridge` 返回 `"pause"`
 
-**文件**: `src/planners/generic_planner.py`
-
-```python
-class GenericPlanner(UnifiedBasePlanner):
-    """通用规划器实现"""
-
-    def __init__(self, llm: BaseLanguageModel):
-        self.llm = llm
-        self.prompt = ChatPromptTemplate.from_messages([
-            ("system", "你是一个专业的村庄规划师..."),
-            ("human", "{dimension_name}\n\n{context}")
-        ])
-
-    async def plan_dimension(
-        self,
-        dimension_key: str,
-        dimension_name: str,
-        context: dict[str, Any]
-    ) -> str:
-        # 获取相关上下文（状态筛选）
-        if context.get("layer") == 1:
-            # Layer 1: 直接使用 raw_data
-            relevant_context = {"raw_data": context.get("raw_data", "")}
-        elif context.get("layer") == 2:
-            # Layer 2: 筛选相关现状分析
-            from ..utils.state_filter import filter_analysis_report_for_concept
-            filtered_analysis = filter_analysis_report_for_concept(
-                concept_dimension=dimension_key,
-                full_analysis_reports=context.get("all_reports", {}),
-                full_analysis_report=context.get("analysis_report", "")
-            )
-            relevant_context = {"analysis_report": filtered_analysis}
-        elif context.get("layer") == 3:
-            # Layer 3: 筛选相关现状分析和规划思路
-            from ..utils.state_filter import filter_state_for_detailed_dimension_v2
-            filtered = filter_state_for_detailed_dimension_v2(
-                detailed_dimension=dimension_key,
-                full_analysis_reports=context.get("all_reports", {}),
-                full_analysis_report=context.get("analysis_report", ""),
-                full_concept_reports=context.get("concept_reports", {}),
-                full_concept_report=context.get("concept_report", "")
-            )
-            relevant_context = {
-                "filtered_analysis": filtered["filtered_analysis"],
-                "filtered_concepts": filtered["filtered_concepts"]
-            }
-
-        # 调用 LLM
-        chain = self.prompt | self.llm
-        result = await chain.ainvoke({
-            "dimension_name": dimension_name,
-            "context": json.dumps(relevant_context, ensure_ascii=False)
-        })
-
-        return result.content
-```
-
----
-
-## 状态筛选优化
-
-### 优化目标
-
-节省 40-60% LLM token 消耗
-
-### 实现原理
-
-**文件**: `src/utils/state_filter.py`
+3. **暂停节点**: 设置最终暂停状态
 
 ```python
-def filter_state_for_detailed_dimension_v2(
-    detailed_dimension: str,
-    full_analysis_reports: dict[str, str] | None,
-    full_analysis_report: str,
-    full_concept_reports: dict[str, str] | None,
-    full_concept_report: str,
-    completed_detailed_reports: dict[str, str] | None = None
-) -> dict[str, Any]:
-    """
-    增强的状态筛选函数，支持完整依赖链和Token统计
-    """
-    # 获取完整依赖链
-    dependency_chain = get_full_dependency_chain(detailed_dimension)
-
-    # 筛选现状分析
-    required_analyses = dependency_chain.get("layer1_analyses", [])
-    filtered_analysis = _filter_with_reports(
-        required_analyses, full_analysis_reports, full_analysis_report
-    )
-
-    # 筛选规划思路
-    required_concepts = dependency_chain.get("layer2_concepts", [])
-    filtered_concepts = _filter_with_reports(
-        required_concepts, full_concept_reports, full_concept_report
-    )
-
-    # 筛选已完成的前序详细规划（仅project_bank需要）
-    depends_on_detailed = dependency_chain.get("depends_on_detailed", [])
-    filtered_detailed = {k: completed_detailed_reports[k] for k in depends_on_detailed if k in completed_detailed_reports}
-
-    # 计算Token统计
-    total_original = len(full_analysis_report) + len(full_concept_report)
-    total_filtered = len(filtered_analysis) + len(filtered_concepts)
-    reduction_percent = (1 - total_filtered / total_original) * 100
-
+def pause_node(state: VillagePlanningState):
     return {
-        "filtered_analysis": filtered_analysis,
-        "filtered_concepts": filtered_concepts,
-        "filtered_detailed": filtered_detailed,
-        "dependency_chain": dependency_chain,
-        "token_stats": {
-            "reduction_percent": round(reduction_percent, 2),
-            "tokens_saved": total_original - total_filtered
-        }
+        "pause_after_step": True,
+        "messages": [AIMessage(content="Layer X 已完成，暂停中")]
     }
 ```
 
-### 效果对比
+4. **最终路由**: `route_after_pause` 返回 `"end"`
 
-**优化前**:
-- 传递所有 12 个维度报告
-- Token 消耗：~50,000 tokens
+### 恢复执行
 
-**优化后**:
-- 只传递 3-5 个相关维度报告
-- Token 消耗：~20,000 tokens
-- **节省：60%**
+后端收到批准请求后：
+
+```python
+# backend/api/planning.py
+async def handle_review(session_id: str, action: str):
+    state = _sessions[session_id]["initial_state"]
+    
+    if action == "approve":
+        # 清除暂停标志
+        state["pause_after_step"] = False
+        state["pending_review_layer"] = 0
+        
+        # 清空已发送暂停事件
+        _sessions[session_id]["sent_pause_events"].clear()
+        
+        # 恢复执行
+        await _resume_graph_execution(session_id, state)
+```
 
 ---
 
-## 数据流总结
+## 层级执行节点
 
-### 完整数据流
+### Layer 1 执行
 
-```
-用户输入
-  ↓
-POST /api/planning/start
-  ↓
-main_graph.start()
-  ↓
-Layer 1: 12 个维度并行
-  ↓
-AsyncSqliteSaver.put() → checkpoints 表
-  ↓
-ToolBridgeNode → PauseManagerNode → END (暂停)
-  ↓
-REST 轮询读取状态 (pauseAfterStep=true)
-  ↓
-前端显示审查 UI
-  ↓
-用户批准 → 清除 pause 标志
-  ↓
-恢复执行 → Layer 2: 4 个维度并行
-  ↓
-AsyncSqliteSaver.put() → checkpoints 表
-  ↓
-REST 轮询读取状态
-  ↓
-前端显示流式文本
-  ↓
-Layer 3: 12 个维度并行
-  ↓
-AsyncSqliteSaver.put() → checkpoints 表
-  ↓
-REST 轮询读取状态
-  ↓
-前端显示流式文本
-  ↓
-完成
+```python
+def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
+    # 调用现状分析子图
+    result = call_analysis_subgraph(
+        raw_data=state["village_data"],
+        project_name=state["project_name"]
+    )
+    
+    if result["success"]:
+        # 生成综合报告
+        combined_report = _generate_simple_combined_report(
+            state["project_name"],
+            result["analysis_dimension_reports"],
+            "现状分析",
+            layer_number=1
+        )
+        
+        return {
+            "analysis_report": combined_report,
+            "analysis_dimension_reports": result["analysis_dimension_reports"],
+            "layer_1_completed": True,
+            "current_layer": 2,
+            "previous_layer": 1,
+            "pending_review_layer": 1,
+        }
+    
+    return {
+        "analysis_report": "分析失败",
+        "layer_1_completed": False,
+    }
 ```
 
-### 状态持久化流程
+### 错误处理
 
-```
-LangGraph 执行
-  ↓
-状态更新
-  ↓
-AsyncSqliteSaver.put()
-  ↓
-checkpoints 表
-  ↓
-REST 轮询
-  ↓
-前端更新 UI
+```python
+def execute_layer1_analysis(state: VillagePlanningState):
+    try:
+        result = call_analysis_subgraph(...)
+        
+        # 检测致命错误（连接失败）
+        if "Connection error" in result.get("error", ""):
+            return {
+                "execution_error": "LLM服务连接失败",
+                "quit_requested": True,  # 终止整个流程
+            }
+        
+        # 检查失败维度数量
+        failed_dims = result.get("failed_dimensions", [])
+        if len(failed_dims) > 6:  # 超过一半失败
+            return {
+                "execution_error": f"{len(failed_dims)}个维度失败",
+                "quit_requested": True,
+            }
+        
+        # 部分失败，继续执行
+        ...
+    except Exception as e:
+        return {"execution_error": str(e)}
 ```
 
-### 暂停/恢复流程
+---
 
+## 状态持久化
+
+### Checkpointer 集成
+
+```python
+# 创建图时传入 checkpointer
+graph = create_village_planning_graph(checkpointer=checkpointer)
+
+# 执行时使用 thread_id
+config = {"configurable": {"thread_id": session_id}}
+async for event in graph.astream(initial_state, config):
+    # 状态自动保存到 checkpoints 表
 ```
-步进模式 + 层级完成
-  ↓
-PauseManagerNode 设置 pause_after_step=True
-  ↓
-路由到 END
-  ↓
-前端 REST 轮询检测到 pauseAfterStep=true
-  ↓
-显示审查 UI
-  ↓
-用户批准 → POST /api/planning/review/{id}?action=approve
-  ↓
-清除 pause 标志 → 恢复执行
+
+### 状态读取
+
+```python
+# 获取当前状态
+checkpoint_state = await graph.aget_state(config)
+state_values = checkpoint_state.values
+
+# 获取历史状态
+history = [s async for s in graph.aget_state_history(config)]
+```
+
+### 状态更新
+
+```python
+# 从特定检查点恢复
+await graph.aupdate_state(config, new_values, checkpoint_id)
 ```

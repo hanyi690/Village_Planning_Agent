@@ -102,7 +102,7 @@ class VillagePlanningState(TypedDict):
     step_mode: bool                # 是否启用逐步执行模式
     step_level: str                # 步骤级别（layer/dimension/skill）
     pause_after_step: bool         # 是否在当前步骤后暂停
-    pending_review_layer: int      # 待审查的层级（0表示无，用于恢复时避免无限循环）
+    # 注: 已删除 pending_review_layer，使用 previous_layer 表示待审查层级
 
     # 路由控制标志
     quit_requested: bool           # 用户请求退出
@@ -308,8 +308,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
                 "layer_1_completed": True,
                 "layer_1_failed_dimensions": failed_dims,
                 "current_layer": 2,
-                "previous_layer": 1,  # ✅ 设置刚刚完成的层级
-                "pending_review_layer": 1,  # ✅ 设置待审查层级
+                "previous_layer": 1,  # 刚完成的层级（也是待审查层级）
                 "last_checkpoint_id": checkpoint_id,
                 "messages": [AIMessage(content=f"现状分析完成，生成了 {len(analysis_dimension_reports)} 个维度的分析报告。")]
             }
@@ -402,8 +401,7 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
                 "concept_dimension_reports": concept_dimension_reports,
                 "layer_2_completed": True,
                 "current_layer": 3,
-                "previous_layer": 2,  # ✅ 设置刚刚完成的层级
-                "pending_review_layer": 2,  # ✅ 设置待审查层级
+                "previous_layer": 2,  # 刚完成的层级（也是待审查层级）
                 "last_checkpoint_id": checkpoint_id,
                 "messages": [AIMessage(content=f"规划思路已生成，包含 {len(concept_dimension_reports)} 个维度的分析报告。")]
             }
@@ -505,8 +503,7 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
                 "detailed_dimension_reports": detailed_dimension_reports,
                 "layer_3_completed": True,
                 "current_layer": 4,
-                "previous_layer": 3,  # ✅ 设置刚刚完成的层级
-                "pending_review_layer": 3,  # ✅ 设置待审查层级
+                "previous_layer": 3,  # 刚完成的层级（也是待审查层级）
                 "last_checkpoint_id": checkpoint_id,
                 "messages": [AIMessage(content=f"详细规划已生成，包含 {len(result['completed_dimensions'])} 个专业维度。")]
             }
@@ -747,17 +744,17 @@ def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
 
 def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis", "layer2_concept", "layer3_detail", "end"]:
     """
-    pause节点后的路由：根据pending_review_layer决定执行还是终止
+    pause节点后的路由：根据 previous_layer 决定执行还是终止
     
-    ✅ 使用 pending_review_layer 判断，避免恢复后无限循环
+    使用 previous_layer 判断是否有刚完成的层级需要审查
     """
     current_layer = state.get("current_layer", 1)
     step_mode = state.get("step_mode", False)
-    pending_review_layer = state.get("pending_review_layer", 0)
+    previous_layer = state.get("previous_layer", 0)
     
-    # ✅ 简化：如果有待审查层级，终止执行等待批准
-    if step_mode and pending_review_layer > 0:
-        logger.info(f"[主图-路由] 步进模式：有待审查层级 {pending_review_layer}，终止执行等待批准")
+    # 如果有刚完成的层级（步进模式），终止执行等待批准
+    if step_mode and previous_layer > 0:
+        logger.info(f"[主图-路由] 步进模式：有待审查层级 {previous_layer}，终止执行等待批准")
         return "end"
     
     # 否则执行当前层级

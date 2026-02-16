@@ -464,9 +464,8 @@ class Layer1AnalysisNode(BaseLayerNode):
                 .set("analysis_report", combined_report)
                 .set("analysis_dimension_reports", dimension_reports)
                 .set("layer_1_completed", True)
-                .set("previous_layer", 1)
+                .set("previous_layer", 1)  # 刚完成的层级（也是待审查层级）
                 .set("current_layer", 2)
-                .set("pending_review_layer", 1)
                 .set("last_checkpoint_id", checkpoint_id)
                 .add_message(f"现状分析完成，生成了 {len(dimension_reports)} 个维度的分析报告。")
                 .build())
@@ -536,9 +535,8 @@ class Layer2ConceptNode(BaseLayerNode):
                 .set("planning_concept", combined_report)
                 .set("concept_dimension_reports", dimension_reports)
                 .set("layer_2_completed", True)
-                .set("previous_layer", 2)
+                .set("previous_layer", 2)  # 刚完成的层级（也是待审查层级）
                 .set("current_layer", 3)
-                .set("pending_review_layer", 2)
                 .set("last_checkpoint_id", checkpoint_id)
                 .add_message(f"规划思路完成，生成了 {len(dimension_reports)} 个维度的分析报告。")
                 .build())
@@ -599,9 +597,8 @@ class Layer3DetailNode(BaseLayerNode):
                 .set("detailed_plan", combined_report)
                 .set("detailed_dimension_reports", dimension_reports)
                 .set("layer_3_completed", True)
-                .set("previous_layer", 3)
+                .set("previous_layer", 3)  # 刚完成的层级（也是待审查层级）
                 .set("current_layer", 4)
-                .set("pending_review_layer", 3)
                 .set("last_checkpoint_id", checkpoint_id)
                 .add_message(f"详细规划完成，生成了 {len(dimension_reports)} 个专业维度的规划报告。")
                 .build())

@@ -5,7 +5,6 @@ import { useParams, useRouter } from 'next/navigation';
 import { UnifiedPlanningProvider } from '@/contexts/UnifiedPlanningContext';
 import UnifiedLayout from '@/components/layout/UnifiedLayout';
 import ChatPanel from '@/components/chat/ChatPanel';
-import ReviewPanel from '@/components/review/ReviewPanel';
 import { planningApi } from '@/lib/api';
 
 /**
@@ -14,6 +13,9 @@ import { planningApi } from '@/lib/api';
  * Route: /village/[taskId]
  * - taskId='new': Create new planning task
  * - taskId=<uuid>: View/manage existing task
+ *
+ * Review functionality is now embedded in the chat flow via ReviewInteractionMessage,
+ * controlled by Context state (isPaused, pendingReviewLayer).
  */
 export default function VillagePage() {
   const params = useParams();
@@ -22,7 +24,6 @@ export default function VillagePage() {
   const taskId = params.taskId as string;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showReviewPanel, setShowReviewPanel] = useState(false);
 
   // Handle 'new' task redirect
   useEffect(() => {
@@ -54,40 +55,6 @@ export default function VillagePage() {
       console.error('[VillagePage] Failed to load task:', err);
       setError(err.message || '加载任务失败');
       setLoading(false);
-    }
-  };
-
-  const handleReviewApprove = async () => {
-    try {
-      await planningApi.approveReview(taskId);
-      setShowReviewPanel(false);
-      // SSE will handle the rest
-    } catch (err: any) {
-      console.error('[VillagePage] Failed to approve:', err);
-      alert(`批准失败: ${err.message || '未知错误'}`);
-    }
-  };
-
-  const handleReviewReject = async (feedback: string, dimensions?: string[]) => {
-    try {
-      await planningApi.rejectReview(taskId, feedback, dimensions);
-      setShowReviewPanel(false);
-      // SSE will handle the rest
-    } catch (err: any) {
-      console.error('[VillagePage] Failed to reject:', err);
-      alert(`驳回失败: ${err.message || '未知错误'}`);
-    }
-  };
-
-  const handleRollback = async (checkpointId: string) => {
-    try {
-      await planningApi.rollbackCheckpoint(taskId, checkpointId);
-      setShowReviewPanel(false);
-      // Reload page to refresh state
-      window.location.reload();
-    } catch (err: any) {
-      console.error('[VillagePage] Failed to rollback:', err);
-      alert(`回退失败: ${err.message || '未知错误'}`);
     }
   };
 
@@ -135,15 +102,6 @@ export default function VillagePage() {
     <UnifiedPlanningProvider conversationId={conversationId}>
       <UnifiedLayout taskId={taskId}>
         <ChatPanel />
-
-        {/* Review Panel (overlay) */}
-        <ReviewPanel
-          isOpen={showReviewPanel}
-          onClose={() => setShowReviewPanel(false)}
-          onApprove={handleReviewApprove}
-          onReject={handleReviewReject}
-          onRollback={handleRollback}
-        />
       </UnifiedLayout>
     </UnifiedPlanningProvider>
   );

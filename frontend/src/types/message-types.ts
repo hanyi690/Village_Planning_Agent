@@ -148,40 +148,8 @@ export interface ReviewRequestMessage extends BaseMessage {
 export interface CheckpointListMessage extends BaseMessage {
   type: 'checkpoint_list';
   content: string;
-  checkpoints: import('./message').Checkpoint[];
-  currentCheckpoint?: string;
-  actions: ActionButton[];
-}
-
-/**
- * Review Interaction Message - Interactive review UI embedded in chat
- */
-export interface ReviewInteractionMessage extends BaseMessage {
-  type: 'review_interaction';
-  role: 'assistant';
-  layer: number;
-  content: string;
-  reviewState: 'pending' | 'approved' | 'rejected' | 'rolled_back';
-
-  // Review options
-  availableActions: ('approve' | 'reject' | 'rollback')[];
-
-  // Dimension selection
-  enableDimensionSelection: boolean;
-  availableDimensions?: import('./message').DimensionInfo[];
-
-  // Checkpoint rollback
-  enableRollback: boolean;
-  checkpoints?: import('./message').Checkpoint[];
-
-  // Feedback input
-  feedbackPlaceholder: string;
-  quickFeedbackOptions?: string[];
-
-  // Submission status
-  submittedAt?: Date;
-  submittedBy?: 'user';
-  submissionType?: 'approve' | 'reject' | 'rollback';
-  submissionFeedback?: string;
-  submissionDimensions?: string[];
-}
+    checkpoints: import('./message').Checkpoint[];
+    currentCheckpoint?: string;
+    actions: ActionButton[];
+  }
+  
