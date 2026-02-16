@@ -744,6 +744,28 @@ def list_dimensions():
     ]
 
 
+def get_specialized_data(dimension_key: str, state: dict) -> dict:
+    """
+    获取 Layer 1 的专业数据（通过 Hook）
+
+    此函数用于从外部脚本或数据源获取专业数据，并将其格式化为
+    可注入 Prompt 的字符串。
+
+    示例：自然环境分析可以调用 GIS 脚本获取坡度分析、土壤数据等
+
+    Args:
+        dimension_key: 维度标识（如 "natural_environment", "traffic"）
+        state: 当前状态，包含 project_id 等信息
+
+    Returns:
+        专业数据字典，格式如 {"slope_analysis": "...", "soil_quality": "..."}
+        如果该维度不需要专业数据，返回空字典
+    """
+    # Layer 1 暂时不提供专业数据
+    # 未来可以在这里添加调用 GIS 脚本或其他数据源的逻辑
+    return {}
+
+
 # ==========================================
 # 导出
 # ==========================================
@@ -753,4 +775,5 @@ __all__ = [
     "ANALYSIS_SUMMARY_PROMPT",
     "get_dimension_prompt",
     "list_dimensions",
+    "get_specialized_data",  # 新增
 ]

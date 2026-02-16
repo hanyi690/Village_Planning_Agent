@@ -1427,6 +1427,40 @@ def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_re
     )
 
 
+def get_specialized_data(dimension_key: str, state: dict) -> dict:
+    """
+    获取 Layer 3 的专业数据（通过 Hook）
+
+    此函数用于从外部脚本或数据源获取专业数据，并将其格式化为
+    可注入 Prompt 的字符串。
+
+    示例：产业规划可以调用产业脚本获取产业目录、市场数据等
+
+    Args:
+        dimension_key: 维度标识（如 "industry", "traffic"）
+        state: 当前状态，包含 project_id 等信息
+
+    Returns:
+        专业数据字典，格式如 {"industry_table": "...", "market_data": "..."}
+        如果该维度不需要专业数据，返回空字典
+    """
+    # 示例：为产业规划维度提供专业数据
+    if dimension_key == "industry":
+        # 这里可以调用外部脚本获取产业数据
+        # from ..scripts.load_industry_data import load_industry_table
+        # industry_table = load_industry_table(state.get("project_id"))
+        # return {"industry_table": industry_table}
+
+        # 当前返回示例数据（实际使用时替换为真实数据加载逻辑）
+        return {
+            "industry_market_data": "（此处将从脚本加载产业市场数据）",
+            "industry_supply_chain": "（此处将从脚本加载供应链数据）"
+        }
+
+    # 其他维度暂时不提供专业数据
+    return {}
+
+
 # ==========================================
 # 导出
 # ==========================================
@@ -1447,4 +1481,5 @@ __all__ = [
     "DETAILED_PLAN_SUMMARY_PROMPT",
     "list_detailed_dimensions",
     "get_dimension_prompt",
+    "get_specialized_data",  # 新增
 ]

@@ -400,6 +400,25 @@ def list_concept_dimensions():
     ]
 
 
+def get_specialized_data(dimension_key: str, state: dict) -> dict:
+    """
+    获取 Layer 2 的专业数据（通过 Hook）
+
+    此函数用于从外部脚本或数据源获取专业数据，并将其格式化为
+    可注入 Prompt 的字符串。
+
+    Args:
+        dimension_key: 维度标识（如 "resource_endowment", "planning_positioning"）
+        state: 当前状态，包含 project_id 等信息
+
+    Returns:
+        专业数据字典
+        如果该维度不需要专业数据，返回空字典
+    """
+    # Layer 2 暂时不提供专业数据
+    return {}
+
+
 # ==========================================
 # 导出
 # ==========================================
@@ -411,4 +430,5 @@ __all__ = [
     "PLANNING_STRATEGIES_PROMPT",
     "CONCEPT_SUMMARY_PROMPT",
     "list_concept_dimensions",
+    "get_specialized_data",  # 新增
 ]

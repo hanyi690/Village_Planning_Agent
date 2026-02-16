@@ -151,18 +151,65 @@ class GenericPlanner(UnifiedPlannerBase):
         Layer 2: 替换 {filtered_analysis}, {task_description}, {constraints}
         Layer 3: 替换 {project_name}, {filtered_analysis}, {filtered_concepts}, {constraints}
         + 工具钩子：如果配置了 tool，执行工具并注入 {tool_output}
+        + 专业数据钩子：调用 get_specialized_data 获取专业数据
         """
+        # 1. 获取基础上下文
         params = self._prepare_prompt_params(state)
 
-        # ⭐ 核心：工具钩子逻辑
+        # 2. 工具钩子逻辑
         tool_output = self._execute_tool_hook(state)
         params["tool_output"] = tool_output
+
+        # 3. 【新增】专业数据钩子逻辑
+        specialized_data = self._get_specialized_data(state)
+        params.update(specialized_data)
 
         try:
             return self.prompt_template.format(**params)
         except KeyError as e:
             logger.error(f"[{self.dimension_name}] Prompt 参数缺失: {e}")
             raise
+
+    def _get_specialized_data(self, state: Dict[str, Any]) -> Dict[str, str]:
+        """
+        获取专业数据（通过 Hook）
+
+        根据层级调用对应 prompts.py 中的 get_specialized_data 函数。
+        该函数负责从外部脚本或数据源获取专业数据，并将其格式化为
+        可注入 Prompt 的字符串。
+
+        Args:
+            state: 当前状态
+
+        Returns:
+            专业数据字典，格式如 {"industry_table": "...", "market_data": "..."}
+            如果未实现 Hook 或出错，返回空字典
+        """
+        try:
+            if self.layer == 1:
+                from ..subgraphs.analysis_prompts import get_specialized_data
+            elif self.layer == 2:
+                from ..subgraphs.concept_prompts import get_specialized_data
+            elif self.layer == 3:
+                from ..subgraphs.detailed_plan_prompts import get_specialized_data
+            else:
+                return {}
+
+            # 调用 Hook 函数
+            data = get_specialized_data(self.dimension_key, state)
+
+            if data:
+                logger.info(f"[{self.dimension_name}] 获取到专业数据: {list(data.keys())}")
+
+            return data
+
+        except (ImportError, AttributeError) as e:
+            # 如果没有实现 get_specialized_data，返回空字典
+            logger.debug(f"[{self.dimension_name}] 未实现 get_specialized_data Hook: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"[{self.dimension_name}] get_specialized_data 执行失败: {e}")
+            return {}
 
     def _execute_tool_hook(self, state: Dict[str, Any]) -> str:
         """
