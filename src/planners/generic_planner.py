@@ -12,10 +12,7 @@ from typing import Any, Dict, Optional
 
 from .unified_base_planner import UnifiedPlannerBase
 from ..utils.logger import get_logger
-from ..utils.state_filter import (
-    filter_analysis_report_for_concept,
-    filter_state_for_detailed_dimension_v2
-)
+from ..utils.state_filter import filter_analysis_report_for_concept
 from ..config.dimension_metadata import get_dimension_config
 
 logger = get_logger(__name__)
@@ -345,18 +342,10 @@ class GenericPlanner(UnifiedPlannerBase):
             params["constraints"] = state.get("constraints", "无特殊约束")
 
         elif self.layer == 3:
-            # 使用状态筛选函数
-            filtered = filter_state_for_detailed_dimension_v2(
-                detailed_dimension=self.dimension_key,
-                full_analysis_reports=state.get("dimension_reports"),
-                full_analysis_report=state["analysis_report"],
-                full_concept_reports=state.get("concept_dimension_reports"),
-                full_concept_report=state["planning_concept"],
-                completed_detailed_reports=state.get("completed_plans", {})
-            )
+            # 直接使用已经筛选好的数据（来自 detailed_plan_subgraph）
             params["project_name"] = state.get("project_name", "村庄")
-            params["filtered_analysis"] = filtered.get("filtered_analysis", "")
-            params["filtered_concepts"] = filtered.get("filtered_concepts", "")
+            params["filtered_analysis"] = state.get("analysis_report", "")  # 已经是筛选后的
+            params["filtered_concepts"] = state.get("planning_concept", "")  # 已经是筛选后的
             params["constraints"] = state.get("constraints", "无特殊约束")
 
             # 特殊处理 project_bank 需要前序规划
