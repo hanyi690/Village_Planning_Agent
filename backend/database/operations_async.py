@@ -16,7 +16,6 @@ from sqlmodel import SQLModel
 from .engine import get_async_session
 from .models import (
     PlanningSession,
-    Checkpoint,
     UISession,
     UIMessage
 )
@@ -67,19 +66,6 @@ def _planning_session_to_dict(db_session: PlanningSession) -> Dict[str, Any]:
         "created_at": db_session.created_at.isoformat() if db_session.created_at else None,
         "updated_at": db_session.updated_at.isoformat() if db_session.updated_at else None,
         "completed_at": db_session.completed_at.isoformat() if db_session.completed_at else None,
-    }
-
-
-def _checkpoint_to_dict(db_checkpoint: Checkpoint) -> Dict[str, Any]:
-    """Convert Checkpoint model to dictionary"""
-    return {
-        "checkpoint_id": db_checkpoint.checkpoint_id,
-        "session_id": db_checkpoint.session_id,
-        "layer": db_checkpoint.layer,
-        "description": db_checkpoint.description,
-        "state_snapshot": db_checkpoint.state_snapshot,
-        "checkpoint_metadata": db_checkpoint.checkpoint_metadata,
-        "timestamp": db_checkpoint.timestamp.isoformat() if db_checkpoint.timestamp else None,
     }
 
 
@@ -360,145 +346,6 @@ async def get_session_events_async(session_id: str) -> List[Dict[str, Any]]:
         List of event dictionaries (empty for now)
     """
     return []
-
-
-# ==========================================
-# Checkpoint Operations
-# ==========================================
-
-async def create_checkpoint_async(
-    checkpoint_id: str,
-    session_id: str,
-    layer: int,
-    description: str = "",
-    state_snapshot: Dict[str, Any] = None,
-    checkpoint_metadata: Dict[str, Any] = None
-) -> bool:
-    """
-    Create checkpoint (async)
-    
-    Args:
-        checkpoint_id: Checkpoint ID
-        session_id: Session ID
-        layer: Layer number
-        description: Checkpoint description
-        state_snapshot: State snapshot dictionary
-        checkpoint_metadata: Checkpoint metadata
-        
-    Returns:
-        bool: True if successful
-    """
-    try:
-        async with get_async_session() as session:
-            db_checkpoint = Checkpoint(
-                checkpoint_id=checkpoint_id,
-                session_id=session_id,
-                layer=layer,
-                description=description,
-                state_snapshot=state_snapshot or {},
-                checkpoint_metadata=checkpoint_metadata,
-                timestamp=datetime.now(),
-            )
-            session.add(db_checkpoint)
-            await session.commit()
-            logger.info(f"[Async DB] Created checkpoint: {checkpoint_id}")
-            return True
-    except Exception as e:
-        logger.error(f"[Async DB] Failed to create checkpoint {checkpoint_id}: {e}", exc_info=True)
-        return False
-
-
-async def get_checkpoint_async(checkpoint_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Get checkpoint by ID (async)
-    
-    Args:
-        checkpoint_id: Checkpoint ID
-        
-    Returns:
-        Dict with checkpoint data, or None if not found
-    """
-    try:
-        async with get_async_session() as session:
-            db_checkpoint = await session.execute(
-                select(Checkpoint).where(Checkpoint.checkpoint_id == checkpoint_id)
-            )
-            db_checkpoint = db_checkpoint.scalar_one_or_none()
-            
-            if not db_checkpoint:
-                return None
-            
-            return _checkpoint_to_dict(db_checkpoint)
-    except Exception as e:
-        logger.error(f"[Async DB] Failed to get checkpoint {checkpoint_id}: {e}", exc_info=True)
-        return None
-
-
-async def list_checkpoints_async(
-    session_id: Optional[str] = None,
-    layer: Optional[int] = None,
-    limit: int = 100
-) -> List[Dict[str, Any]]:
-    """
-    List checkpoints (async)
-    
-    Args:
-        session_id: Filter by session ID
-        layer: Filter by layer
-        limit: Maximum number of results
-        
-    Returns:
-        List of checkpoint dictionaries
-    """
-    try:
-        async with get_async_session() as session:
-            query = select(Checkpoint)
-            
-            if session_id:
-                query = query.where(Checkpoint.session_id == session_id)
-            
-            if layer is not None:
-                query = query.where(Checkpoint.layer == layer)
-            
-            query = query.order_by(Checkpoint.timestamp.desc()).limit(limit)
-            
-            result = await session.execute(query)
-            checkpoints = result.scalars().all()
-            
-            return [_checkpoint_to_dict(c) for c in checkpoints]
-    except Exception as e:
-        logger.error(f"[Async DB] Failed to list checkpoints: {e}", exc_info=True)
-        return []
-
-
-async def delete_checkpoint_async(checkpoint_id: str) -> bool:
-    """
-    Delete checkpoint (async)
-    
-    Args:
-        checkpoint_id: Checkpoint ID
-        
-    Returns:
-        bool: True if successful
-    """
-    try:
-        async with get_async_session() as session:
-            db_checkpoint = await session.execute(
-                select(Checkpoint).where(Checkpoint.checkpoint_id == checkpoint_id)
-            )
-            db_checkpoint = db_checkpoint.scalar_one_or_none()
-            
-            if not db_checkpoint:
-                logger.error(f"[Async DB] Checkpoint {checkpoint_id} not found")
-                return False
-            
-            await session.delete(db_checkpoint)
-            await session.commit()
-            logger.info(f"[Async DB] Deleted checkpoint: {checkpoint_id}")
-            return True
-    except Exception as e:
-        logger.error(f"[Async DB] Failed to delete checkpoint {checkpoint_id}: {e}", exc_info=True)
-        return False
 
 
 # ==========================================

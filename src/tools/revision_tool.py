@@ -143,23 +143,9 @@ class RevisionTool:
             logger.info(f"[RevisionTool] 开始修复维度: {dimension} (第{revision_count + 1}次)")
 
             # 根据维度选择正确的规划器
-            # Layer 3 详细规划维度使用 Layer3Planner，其他使用 GenericPlanner
-            layer3_dimensions = [
-                "industry", "spatial_structure", "land_use_planning", "settlement_planning",
-                "traffic_planning", "public_service", "infrastructure_planning",
-                "ecological", "disaster_prevention", "heritage", "landscape", "project_bank"
-            ]
-
-            if dimension in layer3_dimensions:
-                # Layer 3 使用 Layer3Planner
-                from ..planners.layer3_planner import Layer3PlannerFactory
-                from ..core.dimension_config import DETAILED_DIMENSION_NAMES
-                dimension_name = DETAILED_DIMENSION_NAMES().get(dimension, dimension)
-                planner = Layer3PlannerFactory.create_planner(dimension, dimension_name)
-            else:
-                # Layer 1 和 Layer 2 使用 GenericPlanner
-                from ..planners.generic_planner import GenericPlannerFactory
-                planner = GenericPlannerFactory.create_planner(dimension)
+            # 统一使用 GenericPlanner（支持所有层）
+            from ..planners.generic_planner import GenericPlannerFactory
+            planner = GenericPlannerFactory.create_planner(dimension)
 
             revised_result = planner.execute_with_feedback(
                 state=state,

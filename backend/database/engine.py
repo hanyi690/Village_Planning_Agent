@@ -135,9 +135,10 @@ def init_db() -> bool:
         engine = get_engine()
 
         # Import all models to ensure they are registered with SQLModel
-        from .models import PlanningSession, Checkpoint, UISession, UIMessage
+        # Note: Checkpoint is excluded because it's now managed by LangGraph's AsyncSqliteSaver
+        from .models import PlanningSession, UISession, UIMessage
 
-        # Create all tables
+        # Create all tables (except checkpoints, which is managed by LangGraph)
         SQLModel.metadata.create_all(engine)
 
         logger.info("[Sync DB] Database tables initialized successfully")
@@ -250,9 +251,10 @@ async def init_async_db() -> bool:
         engine = await get_async_engine()
 
         # Import all models to ensure they are registered with SQLModel
-        from .models import PlanningSession, Checkpoint, UISession, UIMessage
+        # Note: Checkpoint is excluded because it's now managed by LangGraph's AsyncSqliteSaver
+        from .models import PlanningSession, UISession, UIMessage
 
-        # Create all tables
+        # Create all tables (except checkpoints, which is managed by LangGraph)
         async with engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.create_all)
 

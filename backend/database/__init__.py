@@ -19,7 +19,6 @@ from .engine import (
 )
 from .models import (
     PlanningSession,
-    Checkpoint,
     UISession,
     UIMessage
 )
@@ -33,11 +32,6 @@ from .operations_async import (
     update_session_state_async,
     add_session_event_async,
     get_session_events_async,
-    # Async checkpoint operations (recommended)
-    create_checkpoint_async,
-    get_checkpoint_async,
-    list_checkpoints_async,
-    delete_checkpoint_async,
     # Async UI session operations (recommended)
     create_ui_session_async,
     get_ui_session_async,
@@ -63,7 +57,6 @@ __all__ = [
 
     # Models
     "PlanningSession",
-    "Checkpoint",
     "UISession",
     "UIMessage",
 
@@ -76,10 +69,6 @@ __all__ = [
     "update_session_state_async",
     "add_session_event_async",
     "get_session_events_async",
-    "create_checkpoint_async",
-    "get_checkpoint_async",
-    "list_checkpoints_async",
-    "delete_checkpoint_async",
     "create_ui_session_async",
     "get_ui_session_async",
     "update_ui_session_async",

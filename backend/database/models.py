@@ -71,9 +71,6 @@ class PlanningSession(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
 
-    # Relationships
-    checkpoints: List["Checkpoint"] = Relationship(back_populates="session")
-
     # Table options for composite indexes
     __table_args__ = (
         Index("idx_status_created", "status", "created_at"),
@@ -81,43 +78,10 @@ class PlanningSession(SQLModel, table=True):
     )
 
 
-class Checkpoint(SQLModel, table=True):
-    """
-    Checkpoint table
-    检查点表
-
-    Stores layer completion checkpoints for rollback support.
-    """
-    __tablename__ = "checkpoints"
-
-    # Primary key
-    checkpoint_id: str = Field(primary_key=True)
-
-    # Foreign key
-    session_id: str = Field(foreign_key="planning_sessions.session_id", index=True)
-
-    # Layer info
-    layer: int = Field(index=True)
-    description: str = Field(default="")
-
-    # State snapshot (JSON) - complete state for this checkpoint
-    state_snapshot: Dict[str, Any] = Field(
-        default={},
-        sa_column=Column(JSON)
-    )
-
-    # Checkpoint metadata (JSON) - additional checkpoint information
-    checkpoint_metadata: Optional[Dict[str, Any]] = Field(
-        default=None,
-        sa_column=Column(JSON)
-    )
-
-    # Timestamp
-    timestamp: datetime = Field(default_factory=datetime.now)
-
-    # Relationships
-    session: PlanningSession = Relationship(back_populates="checkpoints")
-
+# ==========================================
+# Note: Checkpoint table is now managed by LangGraph's AsyncSqliteSaver
+# The old Checkpoint model has been removed to avoid schema conflicts
+# ==========================================
 
 # ==========================================
 # UI Session Models
