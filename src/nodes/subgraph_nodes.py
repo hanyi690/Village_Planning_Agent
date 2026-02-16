@@ -453,7 +453,6 @@ class InitializeDetailedPlanningNode(BaseNode):
                 .set("dimension_plans", [])
                 .set("current_wave", 1)
                 .set("total_waves", TOTAL_WAVES)
-                .set("completed_dimension_reports", {})
                 .add_message(f"开始详细规划，共 {len(required)} 个维度")
                 .build())
 

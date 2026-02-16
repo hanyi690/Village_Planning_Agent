@@ -42,7 +42,7 @@ from ..core.dimension_config import (
     get_dimensions_by_wave,
     check_detailed_dependencies_ready,
     DETAILED_DIMENSION_NAMES,
-    DEFAULT_ADAPTER_CONFIG
+    get_default_adapter_config
 )
 from ..utils.logger import get_logger
 from ..utils.state_filter import filter_state_for_detailed_dimension_v2
@@ -90,25 +90,10 @@ class DetailedPlanState(TypedDict):
     # 【新增】动态路由字段
     current_wave: int              # 当前执行波次 (1 或 2)
     total_waves: int               # 总波次数（固定为2）
-    completed_dimension_reports: Dict[str, str]  # 已完成维度的报告（project_bank需要）
 
     # 【新增】适配器配置
     enable_adapters: bool          # 是否启用适配器
     adapter_config: Dict[str, List[str]]  # 各维度的适配器配置
-
-    # 各维度规划结果（支持独立更新）
-    industry_plan: str                  # 产业规划
-    spatial_structure_plan: str         # 空间结构规划
-    land_use_planning_plan: str         # 土地利用规划
-    settlement_planning_plan: str       # 居民点规划
-    traffic_plan: str                   # 道路交通规划
-    public_service_plan: str            # 公服设施规划
-    infrastructure_plan: str            # 基础设施规划
-    ecological_plan: str                # 生态绿地规划
-    disaster_prevention_plan: str       # 防震减灾规划
-    heritage_plan: str                  # 历史文保规划
-    landscape_plan: str                 # 村庄风貌指引
-    project_bank: str                   # 建设项目库
 
     # 人机交互状态
     need_review: bool              # 是否需要人工审核
@@ -173,23 +158,6 @@ DIMENSION_NAMES = DETAILED_DIMENSION_NAMES
 # 【新增】波次配置常量
 TOTAL_WAVES = 2
 
-# 维度键名到状态字段名的映射
-DIMENSION_KEY_TO_FIELD = {
-    "industry": "industry_plan",
-    "spatial_structure": "spatial_structure_plan",
-    "land_use_planning": "land_use_planning_plan",
-    "settlement_planning": "settlement_planning_plan",
-    "traffic": "traffic_plan",
-    "public_service": "public_service_plan",
-    "infrastructure": "infrastructure_plan",
-    "ecological": "ecological_plan",
-    "disaster_prevention": "disaster_prevention_plan",
-    "heritage": "heritage_plan",
-    "landscape": "landscape_plan",
-    "project_bank": "project_bank"
-}
-
-
 # ==========================================
 # LLM 调用辅助函数
 # ==========================================
@@ -210,6 +178,9 @@ def initialize_detailed_planning(state: DetailedPlanState) -> Dict[str, Any]:
     """
     logger.info(f"[子图-L3-初始化] 开始详细规划，项目: {state.get('project_name', '未命名')}")
 
+    logger.info(f"[子图-L3-初始化] ========== 初始化节点开始执行 ==========")
+    logger.info(f"[子图-L3-初始化] 传入状态字段数量: {len(state)}")
+
     # 如果没有指定维度，默认生成所有维度
     required = state.get("required_dimensions", ALL_DIMENSIONS)
 
@@ -222,6 +193,7 @@ def initialize_detailed_planning(state: DetailedPlanState) -> Dict[str, Any]:
 
     logger.info(f"[子图-L3-初始化] 设置 {len(valid_dimensions)} 个规划维度")
     logger.info(f"[子图-L3-初始化] 开始 Wave {current_wave}/{total_waves}")
+    logger.info(f"[子图-L3-初始化] ========== 初始化节点执行完成 ==========")
 
     return {
         "required_dimensions": valid_dimensions,
@@ -230,8 +202,7 @@ def initialize_detailed_planning(state: DetailedPlanState) -> Dict[str, Any]:
         "human_feedback": state.get("human_feedback", {}),
         "revision_count": state.get("revision_count", {}),
         "current_wave": current_wave,
-        "total_waves": total_waves,
-        "completed_dimension_reports": {}
+        "total_waves": total_waves
     }
 
 
@@ -310,7 +281,9 @@ def create_parallel_tasks_with_state_filtering(
         Send对象列表
     """
     sends = []
-    completed_detailed = state.get("completed_dimension_reports", {})
+    # 从独立字段动态提取已完成维度的报告
+    # 直接从 detailed_dimension_reports 读取已完成维度
+    completed_detailed = state.get("detailed_dimension_reports", {})
 
     full_dimension_reports = state.get("dimension_reports", {})
     full_concept_dimension_reports = state.get("concept_dimension_reports", {})
@@ -476,17 +449,17 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
     """
     汇总所有维度的规划结果，更新主状态
 
-    同时更新 completed_dimension_reports，供后续维度（如project_bank）使用
     【新增】清理每个维度报告内部的markdown标题行(## 标题)
     """
     from ..utils.text_formatter import clean_title_lines
 
-    logger.info(f"[子图-L3-Reduce] 汇总 {len(state['dimension_plans'])} 个维度的规划结果")
+    logger.info(f"[子图-L3-Reduce] ========== Reduce节点开始执行 ==========")
+    logger.info(f"[子图-L3-Reduce] dimension_plans 数量: {len(state['dimension_plans'])}")
+    logger.info(f"[子图-L3-Reduce] detailed_dimension_reports 当前状态: {list(state.get('detailed_dimension_reports', {}).keys())}")
 
-    # 更新各维度的规划到对应字段
-    updates = {}
+    # 直接更新 detailed_dimension_reports 字典
+    detailed_dimension_reports = state.get("detailed_dimension_reports", {})
     completed = []
-    completed_reports = state.get("completed_dimension_reports", {})
 
     for plan in state["dimension_plans"]:
         dim_key = plan["dimension_key"]
@@ -495,14 +468,10 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
         # 【新增】清理维度规划文本中的标题行
         cleaned_result = clean_title_lines(dim_result)
 
-        # 使用映射获取正确的字段名
-        field_name = DIMENSION_KEY_TO_FIELD.get(dim_key, f"{dim_key}_plan")
-        updates[field_name] = cleaned_result
-        logger.info(f"[子图-L3-Reduce] 设置 {field_name} = {len(cleaned_result)} 字符")
+        # 直接写入字典
+        detailed_dimension_reports[dim_key] = cleaned_result
+        logger.info(f"[子图-L3-Reduce] 设置 detailed_dimension_reports[{dim_key}] = {len(cleaned_result)} 字符")
         completed.append(dim_key)
-
-        # 【修改】记录已完成维度的清理后报告（供project_bank使用）
-        completed_reports[dim_key] = cleaned_result
 
         # 【新增】记录清理前后对比的调试信息
         original_length = len(dim_result)
@@ -510,14 +479,10 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
         if original_length != cleaned_length:
             logger.info(f"[子图-L3-Reduce] {dim_key}: 清理 {original_length-cleaned_length} 字符的标题标记")
 
-    # 更新已完成列表和已完成报告字典
-    updates["completed_dimensions"] = completed
-    updates["completed_dimension_reports"] = completed_reports
-
-    logger.info(f"[子图-L3-Reduce] 已完成维度: {', '.join(completed)}")
-    logger.info(f"[子图-L3-Reduce] 更新的字段: {list(updates.keys())}")
-
-    return updates
+    return {
+        "detailed_dimension_reports": detailed_dimension_reports,
+        "completed_dimensions": completed
+    }
 
 
 # ==========================================
@@ -601,19 +566,37 @@ def create_detailed_plan_subgraph() -> StateGraph:
 
     # 创建状态图
     builder = StateGraph(DetailedPlanState)
+    logger.info("[子图构建] StateGraph 创建成功")
 
     # 创建节点实例
+    logger.info("[子图构建] 创建节点实例...")
     initialize_node = InitializeDetailedPlanningNode()
+    logger.info(f"[子图构建] InitializeDetailedPlanningNode 类型: {type(initialize_node)}")
+
     generate_node = GenerateDimensionPlanNode()
+    logger.info(f"[子图构建] GenerateDimensionPlanNode 类型: {type(generate_node)}")
+
     reduce_node = ReduceDimensionReportsNode()
+    logger.info(f"[子图构建] ReduceDimensionReportsNode 类型: {type(reduce_node)}")
 
     # 添加节点
     builder.add_node("initialize", initialize_node)
+    logger.info("[子图构建] 节点 'initialize' 添加成功")
+
     builder.add_node("generate_dimension_plan", generate_node)
+    logger.info("[子图构建] 节点 'generate_dimension_plan' 添加成功")
+
     builder.add_node("advance_wave", advance_wave_node)  # 波次推进节点（保留函数形式）
+    logger.info("[子图构建] 节点 'advance_wave' 添加成功（函数节点）")
+
     builder.add_node("reduce_plans", reduce_node)
+    logger.info("[子图构建] 节点 'reduce_plans' 添加成功")
+
     builder.add_node("check_complete", check_all_dimensions_complete)
+    logger.info("[子图构建] 节点 'check_complete' 添加成功（函数节点）")
+
     builder.add_node("human_review", human_review_dimension)
+    logger.info("[子图构建] 节点 'human_review' 添加成功（函数节点）")
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
@@ -639,7 +622,11 @@ def create_detailed_plan_subgraph() -> StateGraph:
     )
 
     # 添加路由节点（用于再次触发波次路由）
-    builder.add_node("route_next", lambda state: {})
+    logger.warning("[子图构建] 添加 lambda 函数节点 'route_next' - 可能导致序列化问题")
+    route_next_lambda = lambda state: {}
+    logger.warning(f"[子图构建] route_next lambda 类型: {type(route_next_lambda)}")
+    builder.add_node("route_next", route_next_lambda)
+    logger.warning("[子图构建] 节点 'route_next' 添加成功（lambda 函数节点）")
 
     # 路由决策（再次使用波次路由函数）
     builder.add_conditional_edges(
@@ -652,30 +639,20 @@ def create_detailed_plan_subgraph() -> StateGraph:
     builder.add_edge("advance_wave", "route_next")
 
     # 【重构】删除 generate_final 节点，直接到 END
-    builder.add_node("end", lambda state: {"detailed_dimension_reports": _extract_dimension_reports(state)})
+    logger.warning("[子图构建] 添加 lambda 函数节点 'end' - 可能导致序列化问题")
+    end_lambda = lambda state: {"detailed_dimension_reports": state.get("detailed_dimension_reports", {})}
+    logger.warning(f"[子图构建] end lambda 类型: {type(end_lambda)}")
+    builder.add_node("end", end_lambda)
+    logger.warning("[子图构建] 节点 'end' 添加成功（lambda 函数节点）")
     builder.add_edge("end", END)
 
     # 编译子图
+    logger.info("[子图构建] 开始编译子图...")
     detailed_plan_subgraph = builder.compile()
-
+    logger.info(f"[子图构建] 子图编译成功，类型: {type(detailed_plan_subgraph)}")
     logger.info("[子图构建] 详细规划子图构建完成（支持2波次动态路由，重构版：无汇总节点）")
 
     return detailed_plan_subgraph
-
-
-def _extract_dimension_reports(state: DetailedPlanState) -> Dict[str, str]:
-    """从状态中提取维度报告"""
-    from ..core.dimension_config import DETAILED_DIMENSION_NAMES
-
-    detailed_dimension_reports = {}
-    for dim_key in DETAILED_DIMENSION_NAMES().keys():
-        field_name = f"{dim_key}_plan"
-        content = state.get(field_name, "")
-        if content:
-            detailed_dimension_reports[dim_key] = content
-
-    logger.info(f"[子图-L3-提取] 提取了 {len(detailed_dimension_reports)} 个维度报告")
-    return detailed_dimension_reports
 
 
 # ==========================================
@@ -724,9 +701,13 @@ def call_detailed_plan_subgraph(
         包含维度报告的字典
     """
     logger.info(f"[子图调用] 开始调用详细规划子图: {project_name}")
+    logger.info(f"[子图调用] 传入参数: project_name={project_name}, required_dimensions={required_dimensions}")
+    logger.info(f"[子图调用] 状态字段检查: dimension_reports类型={type(dimension_reports)}, concept_dimension_reports类型={type(concept_dimension_reports)}")
 
     # 创建子图实例
+    logger.info(f"[子图调用] 创建子图实例...")
     subgraph = create_detailed_plan_subgraph()
+    logger.info(f"[子图调用] 子图实例创建成功")
 
     # 如果没有指定维度，默认生成所有维度
     if required_dimensions is None:
@@ -734,7 +715,7 @@ def call_detailed_plan_subgraph(
 
     # 默认适配器配置（从 dimension_mapping 导入）
     if adapter_config is None:
-        adapter_config = DEFAULT_ADAPTER_CONFIG
+        adapter_config = get_default_adapter_config()
 
     # 构建初始状态
     initial_state: DetailedPlanState = {
@@ -751,22 +732,9 @@ def call_detailed_plan_subgraph(
         # 【新增】波次路由相关字段
         "current_wave": 1,
         "total_waves": TOTAL_WAVES,
-        "completed_dimension_reports": {},
         # 【新增】适配器配置
         "enable_adapters": enable_adapters,
         "adapter_config": adapter_config,
-        "industry_plan": "",
-        "spatial_structure_plan": "",
-        "land_use_planning_plan": "",
-        "settlement_planning_plan": "",
-        "traffic_plan": "",
-        "public_service_plan": "",
-        "infrastructure_plan": "",
-        "ecological_plan": "",
-        "disaster_prevention_plan": "",
-        "heritage_plan": "",
-        "landscape_plan": "",
-        "project_bank": "",
         "need_review": enable_human_review,
         "human_feedback": {},
         "revision_count": {},
@@ -775,10 +743,16 @@ def call_detailed_plan_subgraph(
         "messages": [],
     }
 
+    # 记录初始状态的所有字段及其类型
+    logger.info(f"[子图调用] 初始状态字段数量: {len(initial_state)}")
+    for key, value in initial_state.items():
+        value_type = type(value).__name__
+        logger.info(f"[子图调用] 状态字段: {key} = {value_type}")
+
     try:
         # 调用子图
+        logger.info(f"[子图调用] 开始调用 subgraph.invoke()...")
         result = subgraph.invoke(initial_state)
-
         logger.info(f"[子图调用] 子图执行成功")
 
         # 【重构】只返回维度报告
@@ -793,6 +767,9 @@ def call_detailed_plan_subgraph(
 
     except Exception as e:
         logger.error(f"[子图调用] 子图执行失败: {str(e)}")
+        logger.error(f"[子图调用] 错误类型: {type(e).__name__}")
+        import traceback
+        logger.error(f"[子图调用] 错误堆栈:\n{traceback.format_exc()}")
         return {
             "detailed_dimension_reports": {},
             "success": False,
