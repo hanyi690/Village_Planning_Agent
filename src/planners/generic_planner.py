@@ -1,16 +1,14 @@
 """
-通用规划器 - 通过 YAML 配置驱动，支持所有 28 个维度
+通用规划器 - Python Code-First 架构，支持所有 28 个维度
 
 复用现有基础设施：
 - UnifiedPlannerBase: LLM 调用、错误处理、RAG
 - state_filter: 状态筛选逻辑
-- dimension_mapping: 依赖关系映射
+- dimension_metadata: 维度元数据配置
+- prompts 模块: Python Prompt 模板
 """
 
-from pathlib import Path
 from typing import Any, Dict, Optional
-import yaml
-import threading
 
 from .unified_base_planner import UnifiedPlannerBase
 from ..utils.logger import get_logger
@@ -18,26 +16,23 @@ from ..utils.state_filter import (
     filter_analysis_report_for_concept,
     filter_state_for_detailed_dimension_v2
 )
+from ..config.dimension_metadata import get_dimension_config
 
 logger = get_logger(__name__)
 
 
 class GenericPlanner(UnifiedPlannerBase):
     """
-    通用规划器 - 单一类支持所有 28 个维度
+    通用规划器 - Python Code-First 架构，支持所有 28 个维度
 
     特性:
-    1. YAML 配置驱动
+    1. Python 模块驱动（不再依赖 YAML）
     2. 动态状态筛选（根据层级自动选择）
     3. 灵活 Prompt 构建
     4. 工具钩子支持
-    5. 向后兼容
+    5. 专业数据 Hook（get_specialized_data）
+    6. 统一架构（Layer 1/2/3 使用同一类）
     """
-
-    # 类级别配置缓存
-    _dimensions_config: Optional[Dict[str, Any]] = None
-    _prompts_config: Optional[Dict[str, str]] = None
-    _config_lock = threading.Lock()  # 线程安全锁
 
     def __init__(self, dimension_key: str):
         """
@@ -47,7 +42,7 @@ class GenericPlanner(UnifiedPlannerBase):
             dimension_key: 维度标识（如 "location", "industry"）
         """
         # 加载配置
-        config = self._load_dimension_config(dimension_key)
+        config = get_dimension_config(dimension_key)
         if not config:
             raise ValueError(f"未找到维度配置: {dimension_key}")
 
@@ -59,8 +54,8 @@ class GenericPlanner(UnifiedPlannerBase):
         self.prompt_key = config["prompt_key"]
         self.tool_name = config.get("tool")  # 工具钩子
 
-        # 加载 Prompt 模板
-        self.prompt_template = self._load_prompt_template(self.prompt_key)
+        # 加载 Prompt 模板（根据 layer 动态加载）
+        self.prompt_template = self._load_prompt_from_module(dimension_key)
 
         # 初始化基类
         super().__init__(
@@ -69,52 +64,57 @@ class GenericPlanner(UnifiedPlannerBase):
             rag_enabled=config.get("rag_enabled", True)
         )
 
-    @classmethod
-    def _load_all_configs(cls) -> None:
-        """加载所有配置文件（带缓存 + 线程安全）"""
-        # 快速路径：如果已加载，直接返回
-        if cls._dimensions_config is not None:
-            return
+    def _load_prompt_from_module(self, dimension_key: str) -> str:
+        """
+        从 Python 模块加载 Prompt 模板
 
-        # 使用锁保护配置加载
-        with cls._config_lock:
-            # 双重检查：可能在等待锁时已被其他线程加载
-            if cls._dimensions_config is not None:
-                return
+        根据层级动态导入对应的 prompts 模块：
+        - Layer 1: analysis_prompts.py（字典格式）
+        - Layer 2: concept_prompts.py（常量格式）
+        - Layer 3: detailed_plan_prompts.py（函数格式）
 
-            config_dir = Path(__file__).parent.parent / "config"
+        Args:
+            dimension_key: 维度键名
 
-            # 加载维度配置
-            dimensions_path = config_dir / "dimensions.yaml"
-            with open(dimensions_path, 'r', encoding='utf-8') as f:
-                config_data = yaml.safe_load(f)
-                cls._dimensions_config = config_data["dimensions"]
+        Returns:
+            Prompt 模板字符串
+        """
+        try:
+            if self.layer == 1:
+                from ..subgraphs.analysis_prompts import ANALYSIS_DIMENSIONS
+                if dimension_key in ANALYSIS_DIMENSIONS:
+                    return ANALYSIS_DIMENSIONS[dimension_key]["prompt"]
+                else:
+                    logger.warning(f"[GenericPlanner] Layer 1 未找到维度: {dimension_key}")
+                    return ""
 
-            # 加载 Prompt 配置
-            prompts_path = config_dir / "prompts.yaml"
-            with open(prompts_path, 'r', encoding='utf-8') as f:
-                prompt_data = yaml.safe_load(f)
-                cls._prompts_config = prompt_data["prompts"]
+            elif self.layer == 2:
+                # Layer 2 使用常量格式
+                from ..subgraphs.concept_prompts import (
+                    RESOURCE_ENDOWMENT_PROMPT,
+                    PLANNING_POSITIONING_PROMPT,
+                    DEVELOPMENT_GOALS_PROMPT,
+                    PLANNING_STRATEGIES_PROMPT
+                )
+                prompt_map = {
+                    "resource_endowment": RESOURCE_ENDOWMENT_PROMPT,
+                    "planning_positioning": PLANNING_POSITIONING_PROMPT,
+                    "development_goals": DEVELOPMENT_GOALS_PROMPT,
+                    "planning_strategies": PLANNING_STRATEGIES_PROMPT
+                }
+                return prompt_map.get(dimension_key, "")
 
-            logger.info(f"[GenericPlanner] 配置加载完成: {len(cls._dimensions_config)} 个维度")
+            elif self.layer == 3:
+                # Layer 3 使用函数格式，在 build_prompt 中动态调用
+                return ""  # 返回空字符串，实际在 build_prompt 中处理
 
-    @classmethod
-    def _load_dimension_config(cls, dimension_key: str) -> Optional[Dict[str, Any]]:
-        """加载指定维度的配置"""
-        cls._load_all_configs()
-        return cls._dimensions_config.get(dimension_key)
+            else:
+                logger.error(f"[GenericPlanner] 未知的层级: {self.layer}")
+                return ""
 
-    @classmethod
-    def _load_prompt_template(cls, prompt_key: str) -> str:
-        """加载 Prompt 模板"""
-        cls._load_all_configs()
-        if cls._prompts_config is None:
-            logger.error(f"[GenericPlanner] prompts_config 未加载")
+        except ImportError as e:
+            logger.error(f"[GenericPlanner] 导入 prompts 模块失败: {e}")
             return ""
-        template = cls._prompts_config.get(prompt_key, "")
-        if not template:
-            logger.warning(f"[GenericPlanner] 未找到 Prompt 模板: {prompt_key}")
-        return template
 
     def validate_state(self, state: Dict[str, Any]) -> tuple[bool, Optional[str]]:
         """
@@ -147,68 +147,106 @@ class GenericPlanner(UnifiedPlannerBase):
         """
         根据层级动态构建 Prompt
 
-        Layer 1: 直接替换 {raw_data}
+        Layer 1: 直接替换 {raw_data} + 专业数据 Hook
         Layer 2: 替换 {filtered_analysis}, {task_description}, {constraints}
-        Layer 3: 替换 {project_name}, {filtered_analysis}, {filtered_concepts}, {constraints}
-        + 工具钩子：如果配置了 tool，执行工具并注入 {tool_output}
-        + 专业数据钩子：调用 get_specialized_data 获取专业数据
+        Layer 3: 使用函数式 prompt + 专业数据 Hook
+
+        Hooks:
+        1. get_specialized_data(): 获取专业脚本数据
+        2. tool_hook(): 执行工具（如果配置了 tool）
         """
         # 1. 获取基础上下文
         params = self._prepare_prompt_params(state)
 
-        # 2. 工具钩子逻辑
+        # ⭐ 核心 1：专业数据 Hook
+        specialized_data = self._get_specialized_data_from_module(state)
+        params.update(specialized_data)
+
+        # ⭐ 核心 2：工具钩子逻辑
         tool_output = self._execute_tool_hook(state)
         params["tool_output"] = tool_output
 
-        # 3. 【新增】专业数据钩子逻辑
-        specialized_data = self._get_specialized_data(state)
-        params.update(specialized_data)
+        # Layer 3 使用函数式 prompt
+        if self.layer == 3:
+            return self._build_layer3_prompt(state, params)
 
+        # Layer 1 & 2 使用模板格式化
         try:
             return self.prompt_template.format(**params)
         except KeyError as e:
             logger.error(f"[{self.dimension_name}] Prompt 参数缺失: {e}")
             raise
 
-    def _get_specialized_data(self, state: Dict[str, Any]) -> Dict[str, str]:
+    def _build_layer3_prompt(self, state: Dict[str, Any], params: Dict[str, Any]) -> str:
         """
-        获取专业数据（通过 Hook）
-
-        根据层级调用对应 prompts.py 中的 get_specialized_data 函数。
-        该函数负责从外部脚本或数据源获取专业数据，并将其格式化为
-        可注入 Prompt 的字符串。
+        构建 Layer 3 的 Prompt（函数式）
 
         Args:
             state: 当前状态
+            params: 已准备的参数（包括专业数据）
 
         Returns:
-            专业数据字典，格式如 {"industry_table": "...", "market_data": "..."}
-            如果未实现 Hook 或出错，返回空字典
+            格式化后的 Prompt 字符串
+        """
+        try:
+            from ..subgraphs.detailed_plan_prompts import get_dimension_prompt
+
+            # 提取参数
+            project_name = params.get("project_name", "村庄")
+            filtered_analysis = params.get("filtered_analysis", "")
+            filtered_concepts = params.get("filtered_concepts", "")
+            constraints = params.get("constraints", "无特殊约束")
+
+            # 调用函数式 prompt
+            return get_dimension_prompt(
+                dimension_key=self.dimension_key,
+                project_name=project_name,
+                analysis_report=filtered_analysis,
+                planning_concept=filtered_concepts,
+                constraints=constraints
+            )
+
+        except ImportError as e:
+            logger.error(f"[GenericPlanner] 导入 get_dimension_prompt 失败: {e}")
+            return ""
+        except Exception as e:
+            logger.error(f"[GenericPlanner] 构建 Layer 3 Prompt 失败: {e}")
+            raise
+
+    def _get_specialized_data_from_module(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        从 Python 模块获取专业数据（Hook 模式）
+
+        这是 GenericPlanner 的核心 Hook 接口，用于注入专业脚本生成的数据。
+        支持的维度：
+        - Layer 1: natural_environment, socio_economic, land_use, traffic
+        - Layer 2: 目前无专业数据需求
+        - Layer 3: industry, spatial_structure, land_use_planning, traffic, infrastructure, disaster_prevention
+
+        Args:
+            state: 当前状态字典
+
+        Returns:
+            专业数据字典，键值对可直接用于 Prompt 格式化
         """
         try:
             if self.layer == 1:
                 from ..subgraphs.analysis_prompts import get_specialized_data
+                return get_specialized_data(self.dimension_key, state)
+
             elif self.layer == 2:
                 from ..subgraphs.concept_prompts import get_specialized_data
+                return get_specialized_data(self.dimension_key, state)
+
             elif self.layer == 3:
                 from ..subgraphs.detailed_plan_prompts import get_specialized_data
+                return get_specialized_data(self.dimension_key, state)
+
             else:
                 return {}
 
-            # 调用 Hook 函数
-            data = get_specialized_data(self.dimension_key, state)
-
-            if data:
-                logger.info(f"[{self.dimension_name}] 获取到专业数据: {list(data.keys())}")
-
-            return data
-
-        except (ImportError, AttributeError) as e:
-            # 如果没有实现 get_specialized_data，返回空字典
-            logger.debug(f"[{self.dimension_name}] 未实现 get_specialized_data Hook: {e}")
-            return {}
-        except Exception as e:
-            logger.error(f"[{self.dimension_name}] get_specialized_data 执行失败: {e}")
+        except ImportError as e:
+            logger.error(f"[GenericPlanner] 导入 get_specialized_data 失败: {e}")
             return {}
 
     def _execute_tool_hook(self, state: Dict[str, Any]) -> str:
@@ -355,9 +393,8 @@ class GenericPlanner(UnifiedPlannerBase):
 
     def get_result_key(self) -> str:
         """返回结果字典的键名"""
-        # 从配置读取，而不是硬编码
-        config = self._load_dimension_config(self.dimension_key)
-        return config.get("result_key", "dimension_result")
+        # 从配置读取
+        return self.config.get("result_key", "dimension_result")
 
 
 class GenericPlannerFactory:
@@ -391,10 +428,11 @@ class GenericPlannerFactory:
         Returns:
             {dimension_key: GenericPlanner} 字典
         """
-        GenericPlanner._load_all_configs()
+        from ..config.dimension_metadata import DIMENSIONS_METADATA
+
         planners = {}
 
-        for key, config in GenericPlanner._dimensions_config.items():
+        for key, config in DIMENSIONS_METADATA.items():
             if layer is None or config["layer"] == layer:
                 planners[key] = cls.create_planner(key)
 

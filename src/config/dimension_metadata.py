@@ -25,7 +25,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村庄的地理位置、交通区位、区域关系等"
+        "description": "分析村庄的地理位置、交通区位、区域关系等",
+        "prompt_key": "location_analysis"
     },
     
     "socio_economic": {
@@ -37,7 +38,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村庄人口、经济、产业等社会经济状况"
+        "description": "分析村庄人口、经济、产业等社会经济状况",
+        "prompt_key": "socio_economic_analysis"
     },
     
     "villager_wishes": {
@@ -49,9 +51,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村民对村庄发展的期望、诉求和参与意愿"
+        "description": "分析村民对村庄发展的期望、诉求和参与意愿",
+        "prompt_key": "villager_wishes_analysis"
     },
-    
+
     "superior_planning": {
         "key": "superior_planning",
         "name": "上位规划与政策导向分析",
@@ -61,9 +64,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析上位规划要求、政策约束和发展导向"
+        "description": "分析上位规划要求、政策约束和发展导向",
+        "prompt_key": "superior_planning_analysis"
     },
-    
+
     "natural_environment": {
         "key": "natural_environment",
         "name": "自然环境分析",
@@ -73,9 +77,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村庄的气候、水文、地形、生态等自然环境条件"
+        "description": "分析村庄的气候、水文、地形、生态等自然环境条件",
+        "prompt_key": "natural_environment_analysis"
     },
-    
+
     "land_use": {
         "key": "land_use",
         "name": "土地利用分析",
@@ -85,7 +90,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村庄各类用地的分布、规模和利用效率"
+        "description": "分析村庄各类用地的分布、规模和利用效率",
+        "prompt_key": "land_use_analysis"
     },
     
     "traffic": {
@@ -97,9 +103,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村庄内部道路和外部交通状况"
+        "description": "分析村庄内部道路和外部交通状况",
+        "prompt_key": "traffic_analysis"
     },
-    
+
     "public_services": {
         "key": "public_services",
         "name": "公共服务设施分析",
@@ -109,9 +116,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村庄教育、医疗、文化等公共服务设施配置"
+        "description": "分析村庄教育、医疗、文化等公共服务设施配置",
+        "prompt_key": "public_services_analysis"
     },
-    
+
     "infrastructure": {
         "key": "infrastructure",
         "name": "基础设施分析",
@@ -121,9 +129,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村庄供水、供电、排水、通信、环卫等基础设施状况"
+        "description": "分析村庄供水、供电、排水、通信、环卫等基础设施状况",
+        "prompt_key": "infrastructure_analysis"
     },
-    
+
     "ecological_green": {
         "key": "ecological_green",
         "name": "生态绿地分析",
@@ -133,7 +142,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村庄绿地、公园、生态空间等绿色基础设施"
+        "description": "分析村庄绿地、公园、生态空间等绿色基础设施",
+        "prompt_key": "ecological_green_analysis"
     },
     
     "architecture": {
@@ -145,9 +155,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村庄建筑的质量、风格、年代、功能等特征"
+        "description": "分析村庄建筑的质量、风格、年代、功能等特征",
+        "prompt_key": "architecture_analysis"
     },
-    
+
     "historical_culture": {
         "key": "historical_culture",
         "name": "历史文化与乡愁保护分析",
@@ -157,7 +168,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "analysis_result",
         "rag_enabled": True,
         "tool": None,
-        "description": "分析村庄的历史文化遗产、民俗风情、非物质文化、乡愁记忆等"
+        "description": "分析村庄的历史文化遗产、民俗风情、非物质文化、乡愁记忆等",
+        "prompt_key": "historical_culture_analysis"
     },
     
     # ==========================================
@@ -182,9 +194,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "concept_result",
         "rag_enabled": False,
         "tool": None,
-        "description": "深入挖掘和梳理村庄的资源禀赋"
+        "description": "深入挖掘和梳理村庄的资源禀赋",
+        "prompt_key": "resource_endowment"
     },
-    
+
     "planning_positioning": {
         "key": "planning_positioning",
         "name": "规划定位分析",
@@ -201,9 +214,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "concept_result",
         "rag_enabled": False,
         "tool": None,
-        "description": "确定村庄的发展定位"
+        "description": "确定村庄的发展定位",
+        "prompt_key": "planning_positioning"
     },
-    
+
     "development_goals": {
         "key": "development_goals",
         "name": "发展目标分析",
@@ -216,9 +230,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "concept_result",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定分阶段的发展目标体系"
+        "description": "制定分阶段的发展目标体系",
+        "prompt_key": "development_goals"
     },
-    
+
     "planning_strategies": {
         "key": "planning_strategies",
         "name": "规划策略分析",
@@ -241,7 +256,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "concept_result",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定系统性的规划策略"
+        "description": "制定系统性的规划策略",
+        "prompt_key": "planning_strategies"
     },
     
     # ==========================================
@@ -260,9 +276,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄产业发展规划"
+        "description": "制定村庄产业发展规划",
+        "prompt_key": "industry_planning"
     },
-    
+
     "spatial_structure": {
         "key": "spatial_structure",
         "name": "空间结构规划",
@@ -275,9 +292,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄空间结构规划方案"
+        "description": "制定村庄空间结构规划方案",
+        "prompt_key": "spatial_structure_planning"
     },
-    
+
     "land_use_planning": {
         "key": "land_use_planning",
         "name": "土地利用规划",
@@ -290,9 +308,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄土地利用规划方案"
+        "description": "制定村庄土地利用规划方案",
+        "prompt_key": "land_use_planning"
     },
-    
+
     "settlement_planning": {
         "key": "settlement_planning",
         "name": "居民点规划",
@@ -305,7 +324,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄居民点规划方案"
+        "description": "制定村庄居民点规划方案",
+        "prompt_key": "settlement_planning"
     },
     
     "traffic": {
@@ -320,9 +340,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄道路交通系统详细规划"
+        "description": "制定村庄道路交通系统详细规划",
+        "prompt_key": "traffic_planning"
     },
-    
+
     "public_service": {
         "key": "public_service",
         "name": "公共服务设施规划",
@@ -335,9 +356,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄公共服务设施配置规划"
+        "description": "制定村庄公共服务设施配置规划",
+        "prompt_key": "public_service_planning"
     },
-    
+
     "infrastructure": {
         "key": "infrastructure",
         "name": "基础设施规划",
@@ -350,9 +372,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄基础设施系统规划"
+        "description": "制定村庄基础设施系统规划",
+        "prompt_key": "infrastructure_planning"
     },
-    
+
     "ecological": {
         "key": "ecological",
         "name": "生态绿地规划",
@@ -365,7 +388,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄生态绿地系统规划"
+        "description": "制定村庄生态绿地系统规划",
+        "prompt_key": "ecological_planning"
     },
     
     "disaster_prevention": {
@@ -380,9 +404,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄防震减灾规划"
+        "description": "制定村庄防震减灾规划",
+        "prompt_key": "disaster_prevention_planning"
     },
-    
+
     "heritage": {
         "key": "heritage",
         "name": "历史文保规划",
@@ -395,9 +420,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄历史文化遗产保护规划"
+        "description": "制定村庄历史文化遗产保护规划",
+        "prompt_key": "heritage_planning"
     },
-    
+
     "landscape": {
         "key": "landscape",
         "name": "村庄风貌指引",
@@ -410,9 +436,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定村庄风貌控制和引导规划"
+        "description": "制定村庄风貌控制和引导规划",
+        "prompt_key": "landscape_planning"
     },
-    
+
     "project_bank": {
         "key": "project_bank",
         "name": "建设项目库",
@@ -436,7 +463,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": None,
-        "description": "整合各专业规划，建立建设项目库"
+        "description": "整合各专业规划，建立建设项目库",
+        "prompt_key": "project_bank_planning"
     }
 }
 
