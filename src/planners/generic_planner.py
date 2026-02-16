@@ -203,7 +203,8 @@ class GenericPlanner(UnifiedPlannerBase):
                 project_name=project_name,
                 analysis_report=filtered_analysis,
                 planning_concept=filtered_concepts,
-                constraints=constraints
+                constraints=constraints,
+                dimension_plans=params.get("dimension_plans", "")  # 修复：添加 project_bank 专用参数
             )
 
         except ImportError as e:
@@ -331,7 +332,7 @@ class GenericPlanner(UnifiedPlannerBase):
 
         if self.layer == 1:
             params["raw_data"] = state.get("raw_data", "")
-
+            params["professional_data_section"] = ""
         elif self.layer == 2:
             # 使用状态筛选函数
             filtered_analysis = filter_analysis_report_for_concept(
@@ -339,7 +340,7 @@ class GenericPlanner(UnifiedPlannerBase):
                 full_analysis_reports=state.get("dimension_reports"),
                 full_analysis_report=state["analysis_report"]
             )
-            params["filtered_analysis"] = filtered_analysis
+            params["analysis_report"] = filtered_analysis  # 修复：使用与 Prompt 模板一致的键名
             params["task_description"] = state.get("task_description", "")
             params["constraints"] = state.get("constraints", "无特殊约束")
 

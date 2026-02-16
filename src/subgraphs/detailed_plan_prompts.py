@@ -1385,7 +1385,7 @@ def list_detailed_dimensions():
 
 def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_report: str = "",
                           planning_concept: str = "", constraints: str = "",
-                          professional_data: dict = None) -> str:
+                          dimension_plans: str = "") -> str:
     """
     获取指定维度的 Prompt
 
@@ -1395,7 +1395,7 @@ def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_re
         analysis_report: 现状分析报告
         planning_concept: 规划思路
         constraints: 约束条件
-        professional_data: 保留参数（未使用）
+        dimension_plans: 其他维度的详细规划（用于 project_bank 等）
 
     Returns:
         格式化后的 Prompt 字符串
@@ -1423,7 +1423,8 @@ def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_re
         project_name=project_name,
         analysis_report=analysis_report,
         planning_concept=planning_concept,
-        constraints=constraints
+        constraints=constraints,
+        dimension_plans=dimension_plans  # 修复：添加缺失的参数
     )
 
 
