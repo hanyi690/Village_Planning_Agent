@@ -230,7 +230,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "concept_result",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定分阶段的发展目标体系",
+        "description": "制定简",
         "prompt_key": "development_goals"
     },
 
@@ -277,7 +277,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄产业发展规划",
-        "prompt_key": "industry_planning"
+        "prompt_key": "industry"
     },
 
     "spatial_structure": {
@@ -293,7 +293,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄空间结构规划方案",
-        "prompt_key": "spatial_structure_planning"
+        "prompt_key": "spatial_structure"
     },
 
     "land_use_planning": {
@@ -341,7 +341,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄道路交通系统详细规划",
-        "prompt_key": "traffic_planning"
+        "prompt_key": "traffic"
     },
 
     "public_service": {
@@ -357,7 +357,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄公共服务设施配置规划",
-        "prompt_key": "public_service_planning"
+        "prompt_key": "public_service"
     },
 
     "infrastructure": {
@@ -373,7 +373,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄基础设施系统规划",
-        "prompt_key": "infrastructure_planning"
+        "prompt_key": "infrastructure"
     },
 
     "ecological": {
@@ -389,7 +389,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄生态绿地系统规划",
-        "prompt_key": "ecological_planning"
+        "prompt_key": "ecological"
     },
     
     "disaster_prevention": {
@@ -405,7 +405,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄防震减灾规划",
-        "prompt_key": "disaster_prevention_planning"
+        "prompt_key": "disaster_prevention"
     },
 
     "heritage": {
@@ -421,7 +421,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄历史文化遗产保护规划",
-        "prompt_key": "heritage_planning"
+        "prompt_key": "heritage"
     },
 
     "landscape": {
@@ -437,7 +437,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄风貌控制和引导规划",
-        "prompt_key": "landscape_planning"
+        "prompt_key": "landscape"
     },
 
     "project_bank": {
@@ -464,7 +464,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "整合各专业规划，建立建设项目库",
-        "prompt_key": "project_bank_planning"
+        "prompt_key": "project_bank"
     }
 }
 

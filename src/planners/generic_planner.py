@@ -197,9 +197,9 @@ class GenericPlanner(UnifiedPlannerBase):
             filtered_concepts = params.get("filtered_concepts", "")
             constraints = params.get("constraints", "无特殊约束")
 
-            # 调用函数式 prompt
+            # 调用函数式 prompt（使用 self.prompt_key 而不是 self.dimension_key）
             return get_dimension_prompt(
-                dimension_key=self.dimension_key,
+                dimension_key=self.prompt_key,
                 project_name=project_name,
                 analysis_report=filtered_analysis,
                 planning_concept=filtered_concepts,

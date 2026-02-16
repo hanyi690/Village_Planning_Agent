@@ -388,20 +388,12 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     dimension_name = state["dimension_name"]
     project_name = state["project_name"]
 
-    # 键名映射：将原始键名映射到 YAML 配置中的键名
-    # Layer 3 的 traffic 和 infrastructure 需要映射到 traffic_planning 和 infrastructure_planning
-    KEY_MAPPING = {
-        "traffic": "traffic_planning",
-        "infrastructure": "infrastructure_planning"
-    }
-    mapped_dimension_key = KEY_MAPPING.get(dimension_key, dimension_key)
-
-    logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key} -> {mapped_dimension_key})")
+    logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key})")
 
     try:
         # 【使用 GenericPlanner】使用 GenericPlannerFactory 创建规划器
         from ..planners.generic_planner import GenericPlannerFactory
-        planner = GenericPlannerFactory.create_planner(mapped_dimension_key)
+        planner = GenericPlannerFactory.create_planner(dimension_key)
 
         # 【使用新架构】调用规划器的 execute 方法
         # 注意：planner.execute 需要完整的状态字典

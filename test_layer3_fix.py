@@ -1,5 +1,5 @@
 """
-测试 Layer 3 修复 - 验证 GenericPlanner 能正确初始化
+测试 Layer 3 修复 - 验证配置键名一致性
 """
 
 import sys
@@ -23,6 +23,8 @@ def test_dimension_config():
         ("location", 1),
         ("resource_endowment", 2),
         ("industry", 3),
+        ("traffic", 3),
+        ("infrastructure", 3),
         ("project_bank", 3),
     ]
 
@@ -30,9 +32,15 @@ def test_dimension_config():
         config = get_dimension_config(dim_key)
         if config:
             has_prompt_key = "prompt_key" in config
-            print(f"✓ {dim_key}: layer={config['layer']}, prompt_key={config.get('prompt_key', 'MISSING')}")
+            prompt_key = config.get("prompt_key", "MISSING")
+            print(f"✓ {dim_key}: layer={config['layer']}, prompt_key={prompt_key}")
             assert config["layer"] == expected_layer, f"层级不匹配: {dim_key}"
             assert has_prompt_key, f"缺少 prompt_key: {dim_key}"
+            
+            # 验证 Layer 3 的 prompt_key 与 dimension_key 一致
+            if expected_layer == 3:
+                assert prompt_key == dim_key, f"Layer 3 键名不一致: {dim_key} -> {prompt_key}"
+                print(f"  ✓ Layer 3 键名一致: {dim_key} == {prompt_key}")
         else:
             print(f"✗ {dim_key}: 配置未找到")
             raise AssertionError(f"配置未找到: {dim_key}")
@@ -50,6 +58,8 @@ def test_planner_initialization():
         ("location", 1),
         ("resource_endowment", 2),
         ("industry", 3),
+        ("traffic", 3),
+        ("infrastructure", 3),
         ("project_bank", 3),
     ]
 
@@ -58,11 +68,17 @@ def test_planner_initialization():
             planner = GenericPlannerFactory.create_planner(dim_key)
             print(f"✓ {dim_key}: 成功初始化 planner")
             print(f"  - layer: {planner.get_layer()}")
+            print(f"  - dimension_key: {planner.dimension_key}")
             print(f"  - prompt_key: {planner.prompt_key}")
             print(f"  - result_key: {planner.get_result_key()}")
 
             assert planner.get_layer() == expected_layer, f"层级不匹配: {dim_key}"
             assert planner.prompt_key is not None, f"prompt_key 为 None: {dim_key}"
+            
+            # 验证 prompt_key 与 dimension_key 一致
+            if expected_layer == 3:
+                assert planner.prompt_key == planner.dimension_key, f"键名不一致: {planner.dimension_key} != {planner.prompt_key}"
+                print(f"  ✓ 键名一致: {planner.dimension_key} == {planner.prompt_key}")
         except Exception as e:
             print(f"✗ {dim_key}: 初始化失败 - {e}")
             raise
@@ -80,6 +96,7 @@ def test_prompt_loading():
         ("location", 1),
         ("resource_endowment", 2),
         ("industry", 3),
+        ("traffic", 3),
     ]
 
     for dim_key, expected_layer in test_dimensions:
@@ -109,16 +126,46 @@ def test_prompt_loading():
     print("\n✓ 所有 Prompt 加载检查通过\n")
 
 
+def test_key_consistency():
+    """测试键名一致性"""
+    print("=" * 60)
+    print("测试 4: 检查键名一致性")
+    print("=" * 60)
+
+    # 测试所有 Layer 3 维度
+    layer3_dimensions = [
+        "industry", "spatial_structure", "land_use_planning", 
+        "settlement_planning", "traffic", "public_service", 
+        "infrastructure", "ecological", "disaster_prevention", 
+        "heritage", "landscape", "project_bank"
+    ]
+
+    for dim_key in layer3_dimensions:
+        config = get_dimension_config(dim_key)
+        if config:
+            prompt_key = config.get("prompt_key")
+            print(f"✓ {dim_key}: prompt_key={prompt_key}")
+            
+            # 验证键名一致
+            assert prompt_key == dim_key, f"键名不一致: {dim_key} != {prompt_key}"
+        else:
+            print(f"✗ {dim_key}: 配置未找到")
+            raise AssertionError(f"配置未找到: {dim_key}")
+
+    print("\n✓ 所有 Layer 3 键名一致性检查通过\n")
+
+
 if __name__ == "__main__":
-    print("\n开始 Layer 3 修复验证...\n")
+    print("\n开始 Layer 3 统一配置验证...\n")
 
     try:
         test_dimension_config()
         test_planner_initialization()
         test_prompt_loading()
+        test_key_consistency()
 
         print("=" * 60)
-        print("✓✓✓ 所有测试通过！Layer 3 修复成功 ✓✓✓")
+        print("✓✓✓ 所有测试通过！Layer 3 统一配置成功 ✓✓✓")
         print("=" * 60)
 
     except Exception as e:
