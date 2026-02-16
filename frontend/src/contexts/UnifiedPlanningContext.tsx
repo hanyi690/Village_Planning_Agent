@@ -12,6 +12,7 @@ import { planningApi, dataApi, VillageInfo, VillageSession } from '@/lib/api';
 import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/lib/utils';
 import { logger } from '@/lib/logger';
 import { LAYER_ID_MAP } from '@/lib/constants';
+import { PLANNING_DEFAULTS } from '@/config/planning';
 
 type Status = 'idle' | 'collecting' | 'planning' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
 
@@ -439,11 +440,11 @@ export function UnifiedPlanningProvider({
       const response = await planningApi.startPlanning({
         project_name: params.projectName,
         village_data: params.villageData,
-        task_description: params.taskDescription || '制定村庄总体规划方案',
-        constraints: params.constraints || '无特殊约束',
-        enable_review: params.enableReview ?? true,
-        step_mode: params.stepMode ?? true,
-        stream_mode: true,
+        task_description: params.taskDescription || PLANNING_DEFAULTS.defaultTask,
+        constraints: params.constraints || PLANNING_DEFAULTS.defaultConstraints,
+        enable_review: params.enableReview ?? PLANNING_DEFAULTS.enableReview,
+        step_mode: params.stepMode ?? PLANNING_DEFAULTS.stepMode,
+        stream_mode: PLANNING_DEFAULTS.streamMode,
       });
 
       // 强制检查 task_id 存在

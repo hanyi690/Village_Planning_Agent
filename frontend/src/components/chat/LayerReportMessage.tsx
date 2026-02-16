@@ -9,6 +9,7 @@ import { LayerCompletedMessage } from '@/types';
 import { parseLayerReport } from '@/lib/layerReportParser';
 import LayerReportCard from './LayerReportCard';
 import { useMemo } from 'react';
+import { getDimensionName, getDimensionIcon } from '@/config/dimensions';
 
 interface LayerReportMessageProps {
   message: LayerCompletedMessage;
@@ -17,70 +18,6 @@ interface LayerReportMessageProps {
   currentLayer?: number;  // NEW: 当前活跃层
   hasStreamingDimensions?: boolean;  // NEW: 是否有流式维度内容
 }
-
-// 获取维度友好名称
-const getDimensionName = (key: string): string => {
-  const nameMap: Record<string, string> = {
-    location: '区位分析',
-    socio_economic: '社会经济分析',
-    villager_wishes: '村民意愿分析',
-    superior_planning: '上位规划分析',
-    natural_environment: '自然环境分析',
-    land_use: '土地利用分析',
-    traffic: '道路交通分析',
-    public_services: '公共服务设施分析',
-    infrastructure: '基础设施分析',
-    ecological_green: '生态绿地分析',
-    architecture: '建筑分析',
-    historical_culture: '历史文化分析',
-    resource_endowment: '资源禀赋分析',
-    planning_positioning: '规划定位分析',
-    development_goals: '发展目标分析',
-    planning_strategies: '规划策略分析',
-    industry: '产业规划',
-    spatial_structure: '空间结构规划',
-    land_use_planning: '土地利用规划',
-    settlement_planning: '居民点规划',
-    public_service: '公共服务规划',
-    disaster_prevention: '防灾减灾规划',
-    heritage: '遗产保护规划',
-    landscape: '景观规划',
-    project_bank: '项目库规划',
-  };
-  return nameMap[key] || key;
-};
-
-// 获取维度图标
-const getDimensionIcon = (key: string): string => {
-  const iconMap: Record<string, string> = {
-    location: '📍',
-    socio_economic: '👥',
-    villager_wishes: '💭',
-    superior_planning: '📋',
-    natural_environment: '🌿',
-    land_use: '🏗️',
-    traffic: '🚗',
-    public_services: '🏛️',
-    infrastructure: '🔧',
-    ecological_green: '🌳',
-    architecture: '🏠',
-    historical_culture: '🏛️',
-    resource_endowment: '💎',
-    planning_positioning: '🎯',
-    development_goals: '🎯',
-    planning_strategies: '📊',
-    industry: '🏭',
-    spatial_structure: '🗺️',
-    land_use_planning: '📐',
-    settlement_planning: '🏘️',
-    public_service: '🏛️',
-    disaster_prevention: '🛡️',
-    heritage: '🏛️',
-    landscape: '🖼️',
-    project_bank: '📦',
-  };
-  return iconMap[key] || '📄';
-};
 
 export default function LayerReportMessage({
   message,

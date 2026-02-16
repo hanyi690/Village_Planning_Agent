@@ -28,6 +28,8 @@ import MessageList from './MessageList';
 import ReviewPanel from './ReviewPanel';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEdit, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
+import { getDimensionName } from '@/config/dimensions';
+import { PLANNING_DEFAULTS } from '@/config/planning';
 import {
   LAYER_OPTIONS_ARRAY,
   LAYER_LABEL_MAP,
@@ -198,37 +200,6 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     addToken(dimensionKey, delta, accumulated);
 
     // 获取维度友好名称
-    const getDimensionName = (key: string): string => {
-      const nameMap: Record<string, string> = {
-        location: '区位分析',
-        socio_economic: '社会经济分析',
-        villager_wishes: '村民意愿分析',
-        superior_planning: '上位规划分析',
-        natural_environment: '自然环境分析',
-        land_use: '土地利用分析',
-        traffic: '道路交通分析',
-        public_services: '公共服务设施分析',
-        infrastructure: '基础设施分析',
-        ecological_green: '生态绿地分析',
-        architecture: '建筑分析',
-        historical_culture: '历史文化分析',
-        resource_endowment: '资源禀赋分析',
-        planning_positioning: '规划定位分析',
-        development_goals: '发展目标分析',
-        planning_strategies: '规划策略分析',
-        industry: '产业规划',
-        spatial_structure: '空间结构规划',
-        land_use_planning: '土地利用规划',
-        settlement_planning: '居民点规划',
-        public_service: '公共服务规划',
-        disaster_prevention: '防灾减灾规划',
-        heritage: '遗产保护规划',
-        landscape: '景观规划',
-        project_bank: '项目库规划',
-      };
-      return nameMap[key] || key;
-    };
-
     const dimensionName = getDimensionName(dimensionKey);
     const layerReportId = `layer_report_${layer}`;
 
@@ -542,11 +513,11 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       await startPlanning({
         projectName: villageFormData.projectName,
         villageData,
-        taskDescription: villageFormData.taskDescription || '制定村庄总体规划方案',
-        constraints: villageFormData.constraints || '无特殊约束',
-        enableReview: true,
-        stepMode: true,
-        streamMode: true,
+        taskDescription: villageFormData.taskDescription || PLANNING_DEFAULTS.defaultTask,
+        constraints: villageFormData.constraints || PLANNING_DEFAULTS.defaultConstraints,
+        enableReview: PLANNING_DEFAULTS.enableReview,
+        stepMode: PLANNING_DEFAULTS.stepMode,
+        streamMode: PLANNING_DEFAULTS.streamMode,
       });
       logger.chatPanel.info('规划启动成功', { status: 'planning' });
     } catch (error: unknown) {
@@ -787,11 +758,11 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             await startPlanning({
               projectName: villageFormData.projectName || '未命名村庄',
               villageData,
-              taskDescription: villageFormData.taskDescription || '制定村庄总体规划方案',
-              constraints: villageFormData.constraints || '无特殊约束',
-              enableReview: true,
-              stepMode: true,
-              streamMode: true,
+              taskDescription: villageFormData.taskDescription || PLANNING_DEFAULTS.defaultTask,
+              constraints: villageFormData.constraints || PLANNING_DEFAULTS.defaultConstraints,
+              enableReview: PLANNING_DEFAULTS.enableReview,
+              stepMode: PLANNING_DEFAULTS.stepMode,
+              streamMode: PLANNING_DEFAULTS.streamMode,
             });
           } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : '未知错误';

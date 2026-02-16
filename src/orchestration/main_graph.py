@@ -20,7 +20,15 @@ from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 
-from ..core.config import LLM_MODEL, MAX_TOKENS
+from ..core.config import (
+    LLM_MODEL,
+    MAX_TOKENS,
+    DEFAULT_TASK_DESCRIPTION,
+    DEFAULT_CONSTRAINTS,
+    DEFAULT_ENABLE_REVIEW,
+    DEFAULT_STREAM_MODE,
+    DEFAULT_STEP_MODE,
+)
 from ..core.prompts import SYSTEM_PROMPT, PLANNING_CONCEPT_PROMPT
 from ..core.dimension_config import DEFAULT_ADAPTER_CONFIG
 from ..utils.logger import get_logger
@@ -1035,13 +1043,13 @@ def create_village_planning_graph(checkpointer: Optional[Any] = None) -> StateGr
 def run_village_planning(
     project_name: str,
     village_data: str,
-    task_description: str = "制定村庄总体规划方案",
-    constraints: str = "无特殊约束",
-    need_human_review: bool = False,
-    stream_mode: bool = False,
+    task_description: str = DEFAULT_TASK_DESCRIPTION,
+    constraints: str = DEFAULT_CONSTRAINTS,
+    need_human_review: bool = DEFAULT_ENABLE_REVIEW,
+    stream_mode: bool = DEFAULT_STREAM_MODE,
     output_manager: OutputManager = None,
     custom_output_path: str = None,
-    step_mode: bool = False,
+    step_mode: bool = DEFAULT_STEP_MODE,
     step_level: str = "layer",
     resume_from_checkpoint: str = None
 ) -> Dict[str, Any]:

@@ -8,6 +8,14 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from src.core.config import (
+    DEFAULT_TASK_DESCRIPTION,
+    DEFAULT_CONSTRAINTS,
+    DEFAULT_ENABLE_REVIEW,
+    DEFAULT_STREAM_MODE,
+    DEFAULT_STEP_MODE,
+)
+
 
 # ============================================
 # Enums
@@ -32,11 +40,11 @@ class PlanningRequest(BaseModel):
     """规划任务请求"""
     project_name: str = Field(..., description="项目名称/村庄名称")
     village_data: str = Field(..., description="村庄现状数据")
-    task_description: str = Field(default="制定村庄总体规划方案", description="规划任务描述")
-    constraints: str = Field(default="无特殊约束", description="规划约束条件")
-    need_human_review: bool = Field(default=False, description="是否需要人工审核")
-    stream_mode: bool = Field(default=False, description="是否使用流式输出")
-    step_mode: bool = Field(default=False, description="是否使用步进模式")
+    task_description: str = Field(default=DEFAULT_TASK_DESCRIPTION, description="规划任务描述")
+    constraints: str = Field(default=DEFAULT_CONSTRAINTS, description="规划约束条件")
+    need_human_review: bool = Field(default=DEFAULT_ENABLE_REVIEW, description="是否需要人工审核")
+    stream_mode: bool = Field(default=DEFAULT_STREAM_MODE, description="是否使用流式输出")
+    step_mode: bool = Field(default=DEFAULT_STEP_MODE, description="是否使用步进模式")
 
 
 class TaskResponse(BaseModel):

@@ -23,6 +23,11 @@ from sqlmodel import (
 )
 from sqlalchemy import Index, UniqueConstraint
 
+from src.core.config import (
+    DEFAULT_TASK_DESCRIPTION,
+    DEFAULT_CONSTRAINTS,
+)
+
 
 # ==========================================
 # Planning Session Models
@@ -53,8 +58,8 @@ class PlanningSession(SQLModel, table=True):
         default=None,
         sa_column=Text()       # 可空列
     )
-    task_description: str = Field(default="制定村庄总体规划方案")
-    constraints: str = Field(default="无特殊约束")
+    task_description: str = Field(default=DEFAULT_TASK_DESCRIPTION)
+    constraints: str = Field(default=DEFAULT_CONSTRAINTS)
 
     # ✅ 精简：删除手动维护的状态字段
     # 以下字段现在由 AsyncSqliteSaver 在 checkpoints 表中自动管理：

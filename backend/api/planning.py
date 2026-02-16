@@ -28,6 +28,14 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.core.config import (
+    DEFAULT_TASK_DESCRIPTION,
+    DEFAULT_CONSTRAINTS,
+    DEFAULT_ENABLE_REVIEW,
+    DEFAULT_STREAM_MODE,
+    DEFAULT_STEP_MODE,
+)
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from backend.api.tool_manager import tool_manager
@@ -136,11 +144,11 @@ class StartPlanningRequest(BaseModel):
     """Request to start planning session"""
     project_name: str = Field(..., description="项目名称/村庄名称")
     village_data: str = Field(..., description="村庄现状数据")
-    task_description: str = Field(default="制定村庄总体规划方案", description="规划任务描述")
-    constraints: str = Field(default="无特殊约束", description="规划约束条件")
-    enable_review: bool = Field(default=True, description="启用人工审查")
-    step_mode: bool = Field(default=True, description="步进模式（每层暂停）")
-    stream_mode: bool = Field(default=False, description="启用流式输出（token级实时传输）")
+    task_description: str = Field(default=DEFAULT_TASK_DESCRIPTION, description="规划任务描述")
+    constraints: str = Field(default=DEFAULT_CONSTRAINTS, description="规划约束条件")
+    enable_review: bool = Field(default=DEFAULT_ENABLE_REVIEW, description="启用人工审查")
+    step_mode: bool = Field(default=DEFAULT_STEP_MODE, description="步进模式（每层暂停）")
+    stream_mode: bool = Field(default=DEFAULT_STREAM_MODE, description="启用流式输出（token级实时传输）")
 
 
 class ReviewActionRequest(BaseModel):

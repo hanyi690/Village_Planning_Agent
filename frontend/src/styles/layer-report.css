@@ -366,6 +366,56 @@
   color: #666;
 }
 
+/* Table styles */
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 15px 0;
+  font-size: 0.9rem;
+  background-color: #ffffff;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid #e0e0e0;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.markdown-content th {
+  background-color: #f5f5f5;
+  font-weight: 600;
+  color: #333;
+  text-align: left;
+}
+
+.markdown-content th[align="center"] {
+  text-align: center;
+}
+
+.markdown-content th[align="right"] {
+  text-align: right;
+}
+
+.markdown-content tr:nth-child(even) {
+  background-color: #f9f9f9;
+}
+
+.markdown-content tr:hover {
+  background-color: #f0f9f0;
+}
+
+.markdown-content td[align="center"] {
+  text-align: center;
+}
+
+.markdown-content td[align="right"] {
+  text-align: right;
+}
+
 /* 维度报告消息样式 - 实时流式显示 */
 .dimension-report-message {
   background: #f0f9ff;

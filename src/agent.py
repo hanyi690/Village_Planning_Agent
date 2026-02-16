@@ -28,6 +28,13 @@ from .subgraphs.concept_subgraph import call_concept_subgraph
 from .tools.file_manager import VillageDataManager, read_village_data as _read_village_data
 
 # 导入配置
+from .core.config import (
+    DEFAULT_TASK_DESCRIPTION,
+    DEFAULT_CONSTRAINTS,
+    DEFAULT_ENABLE_REVIEW,
+    DEFAULT_STREAM_MODE,
+    DEFAULT_STEP_MODE,
+)
 from .core.config import OPENAI_API_KEY, LLM_MODEL, MAX_TOKENS
 from .utils.logger import get_logger
 import os
@@ -45,13 +52,13 @@ if OPENAI_API_KEY:
 def run_village_planning(
     project_name: str,
     village_data: Union[str, Path],
-    task_description: str = "制定村庄总体规划方案",
-    constraints: str = "无特殊约束",
-    need_human_review: bool = False,
-    stream_mode: bool = False,
+    task_description: str = DEFAULT_TASK_DESCRIPTION,
+    constraints: str = DEFAULT_CONSTRAINTS,
+    need_human_review: bool = DEFAULT_ENABLE_REVIEW,
+    stream_mode: bool = DEFAULT_STREAM_MODE,
     output_manager=None,
     custom_output_path: str = None,
-    step_mode: bool = False,
+    step_mode: bool = DEFAULT_STEP_MODE,
     step_level: str = "layer"
 ) -> Dict[str, Any]:
     """
