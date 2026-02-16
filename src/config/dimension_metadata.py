@@ -328,8 +328,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "prompt_key": "settlement_planning"
     },
     
-    "traffic": {
-        "key": "traffic",
+    "traffic_planning": {
+        "key": "traffic_planning",
         "name": "道路交通规划",
         "layer": 3,
         "dependencies": {
@@ -341,7 +341,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄道路交通系统详细规划",
-        "prompt_key": "traffic"
+        "prompt_key": "traffic_planning"
     },
 
     "public_service": {
@@ -360,8 +360,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "prompt_key": "public_service"
     },
 
-    "infrastructure": {
-        "key": "infrastructure",
+    "infrastructure_planning": {
+        "key": "infrastructure_planning",
         "name": "基础设施规划",
         "layer": 3,
         "dependencies": {
@@ -373,7 +373,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "rag_enabled": False,
         "tool": None,
         "description": "制定村庄基础设施系统规划",
-        "prompt_key": "infrastructure"
+        "prompt_key": "infrastructure_planning"
     },
 
     "ecological": {
@@ -450,9 +450,9 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
                 "spatial_structure",
                 "land_use_planning",
                 "settlement_planning",
-                "traffic",
+                "traffic_planning",
                 "public_service",
-                "infrastructure",
+                "infrastructure_planning",
                 "ecological",
                 "disaster_prevention",
                 "heritage",

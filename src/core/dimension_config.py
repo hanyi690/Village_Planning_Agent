@@ -44,23 +44,16 @@ def _load_all_configs() -> None:
         if _dimensions_config is not None:
             return
 
-        config_dir = Path(__file__).parent.parent / "config"
-
-        # 加载维度配置
-        dimensions_path = config_dir / "dimensions.yaml"
-        with open(dimensions_path, 'r', encoding='utf-8') as f:
-            config_data = yaml.safe_load(f)
-            _dimensions_config = config_data
-
-        # 加载 Prompt 配置
-        prompts_path = config_dir / "prompts.yaml"
-        with open(prompts_path, 'r', encoding='utf-8') as f:
-            prompt_data = yaml.safe_load(f)
-            _prompts_config = prompt_data
-
-        logger.info(f"[dimension_config] 配置加载完成: {len(_dimensions_config['dimensions'])} 个维度")
-
-
+        try:
+            # 从 dimension_metadata.py 加载配置
+            from ..config.dimension_metadata import DIMENSIONS_METADATA
+            _dimensions_config = {"dimensions": DIMENSIONS_METADATA}
+            _prompts_config = {}  # Prompt 不再从这里加载
+            logger.info(f"[dimension_config] 配置加载完成: {len(DIMENSIONS_METADATA)} 个维度")
+        except ImportError as e:
+            logger.error(f"[dimension_config] 导入 dimension_metadata 失败: {e}")
+            _dimensions_config = {"dimensions": {}}
+            _prompts_config = {}
 def get_dimensions_config() -> Dict[str, Any]:
     """获取完整的维度配置"""
     _load_all_configs()
