@@ -409,21 +409,8 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
             "village_data": state.get("village_data", "")  # 新增：用于适配器
         }
 
-        # 【新增】检查是否启用适配器
-        use_adapters = state.get("enable_adapters", False)
-        adapter_config = state.get("adapter_config", {})
-
-        # 获取该维度的适配器配置
-        adapter_types = adapter_config.get(dimension_key, [])
-
-        logger.info(f"[子图-L3-Agent] 适配器状态: use_adapters={use_adapters}, types={adapter_types}")
-
-        # 执行规划（带适配器支持）
-        planner_result = planner.execute(
-            state=planner_state,
-            use_adapters=use_adapters,
-            adapter_types=adapter_types
-        )
+        # 执行规划
+        planner_result = planner.execute(state=planner_state)
 
         result_key = planner.get_result_key(); plan_content = planner_result.get(result_key, planner_result.get("dimension_result", ""))
         logger.info(f"[子图-L3-Agent] 完成 {dimension_name}，生成 {len(plan_content)} 字符")
