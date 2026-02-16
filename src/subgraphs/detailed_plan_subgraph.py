@@ -425,7 +425,7 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
             adapter_types=adapter_types
         )
 
-        plan_content = planner_result["dimension_result"]
+        result_key = planner.get_result_key(); plan_content = planner_result.get(result_key, planner_result.get("dimension_result", ""))
         logger.info(f"[子图-L3-Agent] 完成 {dimension_name}，生成 {len(plan_content)} 字符")
 
         # 检查是否有反馈意见（添加到结果中）
@@ -856,3 +856,4 @@ if __name__ == "__main__":
         for dim_key, content in result.get('detailed_dimension_reports', {}).items():
             print(f"\n### {dim_key}: {len(content)} 字符")
             print(content[:300] + "..." if len(content) > 300 else content)
+
