@@ -59,15 +59,17 @@ class AnalyzeDimensionNode(BaseNode):
         logger.info(f"[子图-分析] 开始执行 {dimension_name} ({dimension_key})")
 
         try:
-            # 使用 AnalysisPlannerFactory 创建规划器
-            from ..planners.analysis_planners import AnalysisPlannerFactory
-            planner = AnalysisPlannerFactory.create_planner(dimension_key)
+            # 使用 GenericPlannerFactory 创建规划器
+            from ..planners.generic_planner import GenericPlannerFactory
+            planner = GenericPlannerFactory.create_planner(dimension_key)
 
             # 调用规划器的 execute 方法
-            planner_state = {"raw_data": raw_data}
+            planner_state = {"raw_data": raw_data, "village_data": raw_data}
             planner_result = planner.execute(planner_state)
 
-            analysis_text = planner_result["analysis_result"]
+            # 使用动态结果键名
+            result_key = planner.get_result_key()
+            analysis_text = planner_result.get(result_key, "")
             logger.info(f"[子图-分析] 完成 {dimension_name}，生成 {len(analysis_text)} 字符")
 
             # 返回结果（包装在列表中以支持 operator.add 累加）
@@ -235,9 +237,9 @@ class AnalyzeConceptDimensionNode(BaseNode):
         logger.info(f"[子图-规划思路] 开始执行 {dimension_name} ({dimension_key})")
 
         try:
-            # 使用 ConceptPlannerFactory 创建规划器
-            from ..planners.concept_planners import ConceptPlannerFactory
-            planner = ConceptPlannerFactory.create_planner(dimension_key)
+            # 使用 GenericPlannerFactory 创建规划器
+            from ..planners.generic_planner import GenericPlannerFactory
+            planner = GenericPlannerFactory.create_planner(dimension_key)
 
             # 调用规划器的 execute 方法
             planner_state = {
@@ -248,7 +250,9 @@ class AnalyzeConceptDimensionNode(BaseNode):
             }
             planner_result = planner.execute(planner_state)
 
-            concept_text = planner_result["concept_result"]
+            # 使用动态结果键名
+            result_key = planner.get_result_key()
+            concept_text = planner_result.get(result_key, "")
             logger.info(f"[子图-规划思路] 完成 {dimension_name}，生成 {len(concept_text)} 字符")
 
             # 返回结果（包装在列表中以支持 operator.add 累加）
