@@ -213,7 +213,7 @@ class InitializeConceptNode(BaseNode):
         dimensions = [d["key"] for d in list_concept_dimensions()]
 
         return StateBuilder()\
-            .set("concept_subjects", dimensions)\
+            .set("dimensions", dimensions)\
             .set("concept_analyses", [])\
             .add_message(f"开始规划思路分析，共 {len(dimensions)} 个维度")\
             .build()
@@ -229,7 +229,7 @@ class AnalyzeConceptDimensionNode(BaseNode):
         """执行单个维度的规划思路分析"""
         dimension_key = state.get("dimension_key")
         dimension_name = state.get("dimension_name", dimension_key)
-        analysis_report = state.get("analysis_report", "")
+        analysis_reports = state.get("analysis_reports", {})  # 使用正确的字段名
 
         if not dimension_key:
             return {"error": "缺少维度信息"}
@@ -243,7 +243,7 @@ class AnalyzeConceptDimensionNode(BaseNode):
 
             # 调用规划器的 execute 方法
             planner_state = {
-                "analysis_report": analysis_report,
+                "analysis_reports": analysis_reports,  # 使用正确的字段名
                 "project_name": state.get("project_name", "村庄"),
                 "task_description": state.get("task_description", "制定规划思路"),
                 "constraints": state.get("constraints", "无特殊约束")

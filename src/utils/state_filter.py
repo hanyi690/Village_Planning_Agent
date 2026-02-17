@@ -36,14 +36,12 @@ def filter_analysis_report_for_concept(
     Returns:
         筛选后的分析报告
     """
-    mapping = get_analysis_to_concept_mapping().get(concept_dimension)
+    required_analyses = get_analysis_to_concept_mapping().get(concept_dimension)
 
-    if not mapping:
+    if not required_analyses:
         # 未找到映射，返回完整报告
         logger.warning(f"[状态筛选] 未找到 {concept_dimension} 的映射，返回完整报告")
         return full_analysis_report
-
-    required_analyses = mapping["required_analyses"]
 
     # 处理 "ALL" 标记
     if "ALL" in required_analyses:
@@ -281,7 +279,7 @@ def filter_state_for_detailed_dimension_v2(
         required_dims=required_analyses,
         full_reports=full_analysis_reports,
         full_report=full_analysis_report,
-        dimension_names=ANALYSIS_DIMENSION_NAMES,
+        dimension_names=get_analysis_dimension_names(),
         report_type="现状分析"
     )
 
@@ -297,7 +295,7 @@ def filter_state_for_detailed_dimension_v2(
         for dim_key in required_concepts:
             if dim_key in full_concept_reports:
                 concept_text = full_concept_reports[dim_key]
-                concept_name = CONCEPT_DIMENSION_NAMES.get(dim_key, dim_key)
+                concept_name = get_concept_dimension_names().get(dim_key, dim_key)
                 relevant_concepts.append(f"### {concept_name}\n\n{concept_text}\n")
 
         if relevant_concepts:

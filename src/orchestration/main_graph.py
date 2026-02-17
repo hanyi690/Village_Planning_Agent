@@ -318,27 +318,19 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
             logger.info(f"[主图-Layer3] 详细规划完成，报告数: {len(result.get('detail_reports', {}))}")
             logger.info(f"[主图-Layer3] 已完成维度: {result['completed_dimensions']}")
 
-            # 收集各维度详细规划报告
-            # 键名不带前缀，与 OutputManager 期望的格式一致
-            detail_reports = {
-                "industry": result.get("industry_plan", ""),
-                "master_plan": result.get("master_plan", ""),
-                "traffic": result.get("traffic_plan", ""),
-                "public_service": result.get("public_service_plan", ""),
-                "infrastructure": result.get("infrastructure_plan", ""),
-                "ecological": result.get("ecological_plan", ""),
-                "disaster_prevention": result.get("disaster_prevention_plan", ""),
-                "heritage": result.get("heritage_plan", ""),
-                "landscape": result.get("landscape_plan", ""),
-                "project_bank": result.get("project_bank", ""),
-            }
+            # 直接使用子图返回的 detail_reports
+            detail_reports = result.get("detail_reports", {})
 
             # 保存 Layer 3 结果（使用 OutputManager）
             output_manager: OutputManager = state.get("output_manager")
             if output_manager and output_manager.use_default_structure:
                 try:
+                    # 动态生成汇总报告
+                    from ..utils.report_utils import generate_detail_report
+                    combined_report = generate_detail_report(detail_reports, state.get("project_name", "村庄"))
+                    
                     save_result = output_manager.save_layer3_results(
-                        combined_report=result["detailed_plan_report"],
+                        combined_report=combined_report,
                         dimension_reports=detail_reports
                     )
                     logger.info(f"[主图-Layer3] 保存了 {save_result['saved_count']} 个文件")

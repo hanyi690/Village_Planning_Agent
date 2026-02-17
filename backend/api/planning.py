@@ -1118,6 +1118,7 @@ async def get_session_status(session_id: str):
 
     # 2. 从内存状态获取 current_layer 和其他状态信息（最快、最可靠）
     current_layer = 1
+    previous_layer = 0  # 初始化默认值，防止 UnboundLocalError
     layer_1_completed = False
     layer_2_completed = False
     layer_3_completed = False
@@ -1143,6 +1144,8 @@ async def get_session_status(session_id: str):
     # 3. 如果内存中没有，尝试从数据库获取
     if current_layer == 1:
         current_layer = db_session.get("current_layer", 1)
+        # 从数据库恢复 previous_layer，如果没有则根据 current_layer 推算
+        previous_layer = db_session.get("previous_layer", current_layer - 1 if current_layer > 1 else 0)
         layer_1_completed = db_session.get("layer_1_completed", False)
         layer_2_completed = db_session.get("layer_2_completed", False)
         layer_3_completed = db_session.get("layer_3_completed", False)

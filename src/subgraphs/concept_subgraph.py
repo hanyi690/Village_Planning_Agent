@@ -374,7 +374,8 @@ def create_concept_subgraph() -> StateGraph:
     builder.add_node("initialize", initialize_node)
     builder.add_node("analyze_concept_dimension", analyze_node)
     builder.add_node("reduce_analyses", reduce_node)
-    builder.add_node("generate_final_concept", report_node)
+    # 注释掉综合报告生成节点，直接使用维度报告
+    # builder.add_node("generate_final_concept", report_node)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
@@ -389,8 +390,10 @@ def create_concept_subgraph() -> StateGraph:
     builder.add_conditional_edges("initialize", route_to_concept_dimensions)
 
     builder.add_edge("analyze_concept_dimension", "reduce_analyses")
-    builder.add_edge("reduce_analyses", "generate_final_concept")
-    builder.add_edge("generate_final_concept", END)
+    # 跳过综合报告生成，直接结束
+    builder.add_edge("reduce_analyses", END)
+    # builder.add_edge("reduce_analyses", "generate_final_concept")
+    # builder.add_edge("generate_final_concept", END)
 
     # 编译子图
     concept_subgraph = builder.compile()

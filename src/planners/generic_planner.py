@@ -128,7 +128,7 @@ class GenericPlanner(UnifiedPlannerBase):
                 return False, "raw_data 为空"
 
         elif self.layer == 2:
-            required_fields = ["analysis_report", "task_description", "constraints"]
+            required_fields = ["analysis_reports", "task_description", "constraints"]
             for field in required_fields:
                 if field not in state:
                     return False, f"缺少必需字段: {field}"
@@ -336,15 +336,17 @@ class GenericPlanner(UnifiedPlannerBase):
             params["raw_data"] = raw_data
             params["professional_data_section"] = ""
         elif self.layer == 2:
-            # 使用状态筛选函数
+            # 使用状态筛选函数，从维度报告字典中筛选相关内容
+            analysis_reports = state.get("analysis_reports", {})
             filtered_analysis = filter_analysis_report_for_concept(
                 concept_dimension=self.dimension_key,
-                full_analysis_reports=state.get("dimension_reports"),
-                full_analysis_report=state["analysis_report"]
+                full_analysis_reports=analysis_reports,  # 使用正确的字段名
+                full_analysis_report=""  # 不需要汇总报告，传入空字符串作为降级
             )
-            params["analysis_report"] = filtered_analysis  # 修复：使用与 Prompt 模板一致的键名
+            params["analysis_report"] = filtered_analysis  # 筛选后的字符串，填入 Prompt 模板
             params["task_description"] = state.get("task_description", "")
             params["constraints"] = state.get("constraints", "无特殊约束")
+            params["professional_data_section"] = ""  # Layer 2 也需要这个参数
 
         elif self.layer == 3:
             # 直接使用已经筛选好的数据（来自 detailed_plan_subgraph）
