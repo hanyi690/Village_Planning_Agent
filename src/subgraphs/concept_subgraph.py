@@ -20,8 +20,8 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 import operator
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
+from ..config.dimension_metadata import get_analysis_to_concept_mapping, get_analysis_dimension_names
 from ..utils.logger import get_logger
-from ..utils.state_filter import filter_analysis_report_for_concept
 from .concept_prompts import (
     RESOURCE_ENDOWMENT_PROMPT,
     PLANNING_POSITIONING_PROMPT,
@@ -61,7 +61,7 @@ class ConceptDimensionState(TypedDict):
     """单个维度分析的状态（用于并行节点）"""
     dimension_key: str           # 维度标识
     dimension_name: str           # 维度名称
-    analysis_reports: Dict[str, str]  # 完整的各维度现状分析字典（用于规划器二次筛选）
+    filtered_analysis: str       # 筛选后的现状分析文本（直接用于 Prompt）
     task_description: str         # 规划任务
     constraints: str             # 约束条件
     concept_result: str          # 分析结果
@@ -104,8 +104,9 @@ def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
         planner = GenericPlannerFactory.create_planner(dimension_key)
 
         # 【使用统一架构】调用规划器的 execute 方法
+        # 直接传递已筛选的 filtered_analysis 字段
         planner_state = {
-            "analysis_reports": state.get("analysis_reports", {}),
+            "filtered_analysis": state.get("filtered_analysis", ""),  # 预筛选的分析文本
             "project_name": state.get("project_name", "村庄"),
             "task_description": state["task_description"],
             "constraints": state["constraints"]
@@ -173,7 +174,7 @@ def map_concept_dimensions(state: ConceptState) -> List[Send]:
     Map 阶段：将4个维度映射为独立的分析任务
 
     使用 LangGraph 的 Send 机制，为每个维度创建独立的执行分支。
-    每个维度只接收相关的现状分析信息（部分状态传递优化）。
+    在创建 Send 时直接从 dimension_metadata 获取依赖，筛选相关 Layer 1 报告。
 
     Returns:
         Send 对象列表，每个 Send 指向 analyze_concept_dimension 节点并携带独立状态
@@ -183,6 +184,9 @@ def map_concept_dimensions(state: ConceptState) -> List[Send]:
     # 获取完整的维度分析报告字典
     analysis_reports = state.get("analysis_reports", {})
 
+    # 获取 Layer 1 -> Layer 2 的依赖映射
+    analysis_to_concept_mapping = get_analysis_to_concept_mapping()
+
     # 为每个维度创建 Send 对象
     sends = []
     for dimension_key in state["dimensions"]:
@@ -190,11 +194,22 @@ def map_concept_dimensions(state: ConceptState) -> List[Send]:
         dimensions_info = {d["key"]: d for d in list_concept_dimensions()}
         dimension_info = dimensions_info.get(dimension_key, {"name": dimension_key})
 
+        # 直接获取该维度需要的 Layer 1 分析维度
+        required_analyses = analysis_to_concept_mapping.get(dimension_key, [])
+        
+        # 筛选相关的现状分析报告
+        filtered_analysis_parts = []
+        for k in required_analyses:
+            if k in analysis_reports:
+                name = get_analysis_dimension_names().get(k, k)
+                filtered_analysis_parts.append(f"### {name}\n\n{analysis_reports[k]}\n")
+        filtered_analysis = "\n".join(filtered_analysis_parts) if filtered_analysis_parts else ""
+
         # 创建该维度的独立状态
         dimension_state = {
             "dimension_key": dimension_key,
             "dimension_name": dimension_info["name"],
-            "analysis_reports": analysis_reports,
+            "filtered_analysis": filtered_analysis,  # 预筛选的分析文本
             "task_description": state["task_description"],
             "constraints": state["constraints"],
             "concept_result": ""
@@ -202,6 +217,8 @@ def map_concept_dimensions(state: ConceptState) -> List[Send]:
 
         # 创建 Send 对象：发送到 analyze_concept_dimension 节点
         sends.append(Send("analyze_concept_dimension", dimension_state))
+        
+        logger.info(f"[子图-Map] {dimension_key}: 需要 {len(required_analyses)} 个现状维度")
 
     logger.info(f"[子图-Map] 创建了 {len(sends)} 个并行任务")
     return sends

@@ -12,7 +12,6 @@ from typing import Any, Dict, Optional
 
 from .unified_base_planner import UnifiedPlannerBase
 from ..utils.logger import get_logger
-from ..utils.state_filter import filter_analysis_report_for_concept
 from ..config.dimension_metadata import get_dimension_config
 
 logger = get_logger(__name__)
@@ -336,23 +335,17 @@ class GenericPlanner(UnifiedPlannerBase):
             params["raw_data"] = raw_data
             params["professional_data_section"] = ""
         elif self.layer == 2:
-            # 使用状态筛选函数，从维度报告字典中筛选相关内容
-            analysis_reports = state.get("analysis_reports", {})
-            filtered_analysis = filter_analysis_report_for_concept(
-                concept_dimension=self.dimension_key,
-                full_analysis_reports=analysis_reports,  # 使用正确的字段名
-                full_analysis_report=""  # 不需要汇总报告，传入空字符串作为降级
-            )
-            params["analysis_report"] = filtered_analysis  # 筛选后的字符串，填入 Prompt 模板
+            # 直接使用子图预筛选的 filtered_analysis 字段
+            params["analysis_report"] = state.get("filtered_analysis", "")
             params["task_description"] = state.get("task_description", "")
             params["constraints"] = state.get("constraints", "无特殊约束")
             params["professional_data_section"] = ""  # Layer 2 也需要这个参数
 
         elif self.layer == 3:
-            # 直接使用已经筛选好的数据（来自 detailed_plan_subgraph）
+            # 直接使用子图预筛选的数据（来自 detailed_plan_subgraph）
             params["project_name"] = state.get("project_name", "村庄")
-            params["filtered_analysis"] = state.get("analysis_report", "")  # 已经是筛选后的
-            params["filtered_concepts"] = state.get("planning_concept", "")  # 已经是筛选后的
+            params["filtered_analysis"] = state.get("filtered_analysis", "")  # 预筛选的现状分析
+            params["filtered_concepts"] = state.get("filtered_concept", "")  # 预筛选的规划思路
             params["constraints"] = state.get("constraints", "无特殊约束")
 
             # 特殊处理 project_bank 需要前序规划

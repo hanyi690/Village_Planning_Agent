@@ -35,14 +35,16 @@ from datetime import datetime
 from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..config.dimension_metadata import (
     get_full_dependency_chain,
+    get_full_dependency_chain_func,
     get_wave_config,
     get_execution_wave,
     get_dimensions_by_wave,
     check_detailed_dependencies_ready,
-    get_detailed_dimension_names
+    get_detailed_dimension_names,
+    get_analysis_dimension_names,
+    get_concept_dimension_names
 )
 from ..utils.logger import get_logger
-from ..utils.state_filter import filter_state_for_detailed_dimension_v2
 from .detailed_plan_prompts import (
     INDUSTRY_PLANNING_PROMPT,
     MASTER_PLAN_PROMPT,
@@ -115,15 +117,17 @@ class DetailedDimensionState(TypedDict):
     constraints: str
     human_feedback: str            # 针对该维度的反馈意见
     dimension_result: str          # 规划结果
-    # 【新增】支持前序规划（project_bank需要）
+    # 支持前序规划（project_bank需要）
     completed_plans: Dict[str, str]  # 已完成的前序详细规划
     dependency_chain: dict         # 完整依赖链信息
-    # 【新增】适配器支持
+    # 适配器支持
     enable_adapters: bool          # 是否启用适配器
     adapter_config: Dict[str, List[str]]  # 适配器配置
     village_data: str              # 村庄原始数据（用于适配器）
-    analysis_reports: Dict[str, str]  # 现状分析维度报告
-    concept_reports: Dict[str, str]   # 规划思路维度报告
+    # 筛选后的报告文本（直接用于 Prompt）
+    filtered_analysis: str         # 筛选后的现状分析文本
+    filtered_concept: str          # 筛选后的规划思路文本
+    filtered_detail: str           # 筛选后的前序详细规划文本
 
 
 # ==========================================
@@ -222,8 +226,8 @@ def route_by_dependency_wave(state: DetailedPlanState) -> Union[List[Send], str]
     logger.info(f"[子图-L3-波次路由] 当前Wave: {current_wave}/{state.get('total_waves', 2)}")
 
     if current_wave == 1:
-        # Wave 1: 9个维度完全并行执行
-        wave1_dims = get_dimensions_by_wave(1)
+        # Wave 1: Layer 3 的 Wave 1 维度并行执行
+        wave1_dims = get_dimensions_by_wave(1, layer=3)  # 关键修复：只获取 Layer 3 的维度
         pending = [d for d in wave1_dims if d not in completed]
 
         if pending:
@@ -261,8 +265,7 @@ def create_parallel_tasks_with_state_filtering(
     """
     创建并行任务，每个任务携带经过筛选的状态
 
-    关键优化：使用增强的state_filter v2，只传递必需的依赖信息
-    新增：传递适配器配置到子任务
+    直接从 dimension_metadata 获取依赖链，提取相关报告文本
 
     Args:
         state: 主状态
@@ -273,21 +276,40 @@ def create_parallel_tasks_with_state_filtering(
     """
     sends = []
     completed_detailed = state.get("completed_dimension_reports", {})
-    token_usage_stats = state.get("token_usage_stats", {})
 
     analysis_reports = state.get("analysis_reports", {})
     concept_reports = state.get("concept_reports", {})
 
     for dim in dimensions:
-        # 调用增强的筛选函数 v2
-        filtered = filter_state_for_detailed_dimension_v2(
-            detailed_dimension=dim,
-            full_analysis_reports=analysis_reports,
-            full_analysis_report="",  # 已删除综合报告
-            full_concept_reports=concept_reports,
-            full_concept_report="",  # 已删除综合报告
-            completed_detailed_reports=completed_detailed
-        )
+        # 直接获取依赖链
+        chain = get_full_dependency_chain_func(dim)
+        
+        # 提取 Layer 1 现状分析
+        required_analyses = chain.get("layer1_analyses", [])
+        filtered_analysis_parts = []
+        for k in required_analyses:
+            if k in analysis_reports:
+                name = get_analysis_dimension_names().get(k, k)
+                filtered_analysis_parts.append(f"### {name}\n\n{analysis_reports[k]}\n")
+        filtered_analysis = "\n".join(filtered_analysis_parts) if filtered_analysis_parts else ""
+        
+        # 提取 Layer 2 规划思路
+        required_concepts = chain.get("layer2_concepts", [])
+        filtered_concept_parts = []
+        for k in required_concepts:
+            if k in concept_reports:
+                name = get_concept_dimension_names().get(k, k)
+                filtered_concept_parts.append(f"### {name}\n\n{concept_reports[k]}\n")
+        filtered_concept = "\n".join(filtered_concept_parts) if filtered_concept_parts else ""
+        
+        # 提取 Layer 3 前序详细规划（project_bank 需要）
+        required_details = chain.get("layer3_plans", [])
+        filtered_detail_parts = []
+        for k in required_details:
+            if k in completed_detailed:
+                name = get_detailed_dimension_names().get(k, k)
+                filtered_detail_parts.append(f"### {name}\n\n{completed_detailed[k]}\n")
+        filtered_detail = "\n".join(filtered_detail_parts) if filtered_detail_parts else ""
 
         # 构建维度状态
         dimension_info = {d["key"]: d for d in list_detailed_dimensions()}.get(dim, {"name": dim})
@@ -299,23 +321,24 @@ def create_parallel_tasks_with_state_filtering(
             "constraints": state.get("constraints", ""),
             "human_feedback": state.get("human_feedback", {}).get(dim, ""),
             "dimension_result": "",
-            "completed_plans": filtered["filtered_detailed"],
-            "dependency_chain": filtered["dependency_chain"],
-            # 新增：传递适配器配置
+            "completed_plans": {k: completed_detailed[k] for k in required_details if k in completed_detailed},
+            "dependency_chain": chain,
+            # 适配器配置
             "enable_adapters": state.get("enable_adapters", False),
             "adapter_config": state.get("adapter_config", {}),
             "village_data": state.get("village_data", ""),
-            "analysis_reports": filtered.get("filtered_analysis", {}),
-            "concept_reports": filtered.get("filtered_concepts", {})
+            # 传递筛选后的文本
+            "filtered_analysis": filtered_analysis,
+            "filtered_concept": filtered_concept,
+            "filtered_detail": filtered_detail
         })
 
         sends.append(Send("generate_dimension_plan", dimension_state))
-
-        # 记录Token统计
-        token_usage_stats[dim] = filtered["token_stats"]
+        
         logger.info(f"[状态筛选] {dim}: "
-                   f"节省 {filtered['token_stats']['reduction_percent']}% Token "
-                   f"({filtered['token_stats']['tokens_saved']} 字符)")
+                   f"现状 {len(required_analyses)} 个, "
+                   f"思路 {len(required_concepts)} 个, "
+                   f"前序 {len(required_details)} 个")
 
     return sends
 
