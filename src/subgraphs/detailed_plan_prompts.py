@@ -1282,7 +1282,8 @@ def list_detailed_dimensions():
 
 def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_report: str = "",
                           planning_concept: str = "", constraints: str = "",
-                          professional_data: dict = None) -> str:
+                          professional_data: dict = None,
+                          dimension_plans: str = "") -> str:
     """
     获取指定维度的 Prompt
 
@@ -1293,6 +1294,7 @@ def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_re
         planning_concept: 规划思路
         constraints: 约束条件
         professional_data: 来自黑板的专业数据（可选）
+        dimension_plans: 前序详细规划（project_bank 专用）
 
     Returns:
         格式化后的 Prompt 字符串
@@ -1317,13 +1319,20 @@ def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_re
     # 生成专业数据部分
     professional_data_section = _generate_professional_data_section(dimension_key, professional_data)
 
-    return prompt_template.format(
-        project_name=project_name,
-        analysis_report=analysis_report,
-        planning_concept=planning_concept,
-        constraints=constraints,
-        professional_data_section=professional_data_section
-    )
+    # 基础参数
+    format_params = {
+        "project_name": project_name,
+        "analysis_report": analysis_report,
+        "planning_concept": planning_concept,
+        "constraints": constraints,
+        "professional_data_section": professional_data_section
+    }
+
+    # 只有 project_bank 维度需要 dimension_plans
+    if dimension_key == "project_bank":
+        format_params["dimension_plans"] = dimension_plans
+
+    return prompt_template.format(**format_params)
 
 
 def _generate_professional_data_section(dimension_key: str, professional_data: dict = None) -> str:
