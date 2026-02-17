@@ -42,12 +42,16 @@ from ..config.dimension_metadata import (
     check_detailed_dependencies_ready,
     get_detailed_dimension_names,
     get_analysis_dimension_names,
-    get_concept_dimension_names
+    get_concept_dimension_names,
+    list_dimensions
 )
 from ..utils.logger import get_logger
 from .detailed_plan_prompts import (
     INDUSTRY_PLANNING_PROMPT,
     MASTER_PLAN_PROMPT,
+    SPATIAL_STRUCTURE_PROMPT,
+    LAND_USE_PLANNING_PROMPT,
+    SETTLEMENT_PLANNING_PROMPT,
     TRAFFIC_PLANNING_PROMPT,
     PUBLIC_SERVICE_PROMPT,
     INFRASTRUCTURE_PROMPT,
@@ -57,7 +61,6 @@ from .detailed_plan_prompts import (
     LANDSCAPE_PROMPT,
     PROJECT_BANK_PROMPT,
     DETAILED_PLAN_SUMMARY_PROMPT,
-    list_detailed_dimensions,
     get_dimension_prompt
 )
 
@@ -312,7 +315,7 @@ def create_parallel_tasks_with_state_filtering(
         filtered_detail = "\n".join(filtered_detail_parts) if filtered_detail_parts else ""
 
         # 构建维度状态
-        dimension_info = {d["key"]: d for d in list_detailed_dimensions()}.get(dim, {"name": dim})
+        dimension_info = {d["key"]: d for d in list_dimensions(layer=3)}.get(dim, {"name": dim})
         dimension_state = DetailedDimensionState({
             "dimension_key": dim,
             "dimension_name": dimension_info.get("name", dim),
@@ -336,9 +339,9 @@ def create_parallel_tasks_with_state_filtering(
         sends.append(Send("generate_dimension_plan", dimension_state))
         
         logger.info(f"[状态筛选] {dim}: "
-                   f"现状 {len(required_analyses)} 个, "
-                   f"思路 {len(required_concepts)} 个, "
-                   f"前序 {len(required_details)} 个")
+                   f"现状 {len(required_analyses)} 个 ({len(filtered_analysis)}字符), "
+                   f"思路 {len(required_concepts)} 个 ({len(filtered_concept)}字符), "
+                   f"前序 {len(required_details)} 个 ({len(filtered_detail)}字符)")
 
     return sends
 
@@ -377,6 +380,10 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     project_name = state["project_name"]
 
     logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key})")
+    logger.info(f"[子图-L3-Agent] {dimension_name} 输入数据: "
+               f"filtered_analysis={len(state.get('filtered_analysis', ''))}字符, "
+               f"filtered_concept={len(state.get('filtered_concept', ''))}字符, "
+               f"completed_plans={len(state.get('completed_plans', {}))}个")
 
     try:
         # 【使用统一架构】使用 GenericPlannerFactory 创建规划器
@@ -386,8 +393,8 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
         # 【使用统一架构】调用规划器的 execute 方法
         planner_state = {
             "project_name": project_name,
-            "analysis_reports": state.get("analysis_reports", {}),
-            "concept_reports": state.get("concept_reports", {}),
+            "filtered_analysis": state.get("filtered_analysis", ""),  # 修复：使用正确的字段名
+            "filtered_concept": state.get("filtered_concept", ""),    # 修复：使用正确的字段名
             "completed_plans": state.get("completed_plans", {}),
             "task_description": state["task_description"],
             "constraints": state["constraints"],

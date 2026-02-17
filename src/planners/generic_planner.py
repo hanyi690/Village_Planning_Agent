@@ -117,7 +117,7 @@ class GenericPlanner(UnifiedPlannerBase):
         根据层级动态验证状态
 
         Layer 1: 检查 raw_data
-        Layer 2: 检查 analysis_report, task_description, constraints
+        Layer 2: 检查 filtered_analysis, task_description, constraints（filtered_analysis 可为空）
         Layer 3: 检查依赖是否满足
         """
         if self.layer == 1:
@@ -127,10 +127,9 @@ class GenericPlanner(UnifiedPlannerBase):
                 return False, "raw_data 为空"
 
         elif self.layer == 2:
-            required_fields = ["analysis_reports", "task_description", "constraints"]
-            for field in required_fields:
-                if field not in state:
-                    return False, f"缺少必需字段: {field}"
+            # filtered_analysis 可以为空字符串（有效值），只检查必要字段
+            if "task_description" not in state:
+                return False, "缺少必需字段: task_description"
 
         elif self.layer == 3:
             # 检查依赖是否满足
@@ -190,15 +189,21 @@ class GenericPlanner(UnifiedPlannerBase):
             # 提取参数
             project_name = params.get("project_name", "村庄")
             filtered_analysis = params.get("filtered_analysis", "")
-            filtered_concepts = params.get("filtered_concepts", "")
+            filtered_concept = params.get("filtered_concept", "")  # 统一使用单数形式
             constraints = params.get("constraints", "无特殊约束")
+
+            # 日志：验证 Prompt 构建
+            logger.info(f"[GenericPlanner-L3] {self.dimension_key} 构建Prompt: "
+                       f"analysis_report={len(filtered_analysis)}字符, "
+                       f"planning_concept={len(filtered_concept)}字符, "
+                       f"prompt_key={self.prompt_key}")
 
             # 调用函数式 prompt（使用 self.prompt_key 而不是 self.dimension_key）
             return get_dimension_prompt(
                 dimension_key=self.prompt_key,
                 project_name=project_name,
                 analysis_report=filtered_analysis,
-                planning_concept=filtered_concepts,
+                planning_concept=filtered_concept,
                 constraints=constraints,
                 dimension_plans=params.get("dimension_plans", "")  # 修复：添加 project_bank 专用参数
             )
@@ -335,18 +340,39 @@ class GenericPlanner(UnifiedPlannerBase):
             params["raw_data"] = raw_data
             params["professional_data_section"] = ""
         elif self.layer == 2:
-            # 直接使用子图预筛选的 filtered_analysis 字段
-            params["analysis_report"] = state.get("filtered_analysis", "")
+            # 直接使用子图预筛选的 filtered_analysis 和 filtered_concept 字段
+            # 将前序维度报告合并到 analysis_report 中
+            filtered_analysis = state.get("filtered_analysis", "")
+            filtered_concept = state.get("filtered_concept", "")
+            
+            # 合并：现状分析 + 前序规划思路
+            if filtered_concept:
+                combined_report = f"{filtered_analysis}\n\n### 前序规划思路\n\n{filtered_concept}"
+            else:
+                combined_report = filtered_analysis
+                
+            params["analysis_report"] = combined_report
             params["task_description"] = state.get("task_description", "")
             params["constraints"] = state.get("constraints", "无特殊约束")
             params["professional_data_section"] = ""  # Layer 2 也需要这个参数
+            
+            # 日志：验证数据传递
+            logger.info(f"[GenericPlanner-L2] {self.dimension_key} 参数准备: "
+                       f"filtered_analysis={len(filtered_analysis)}字符, "
+                       f"filtered_concept={len(filtered_concept)}字符, "
+                       f"combined_report={len(combined_report)}字符")
 
         elif self.layer == 3:
             # 直接使用子图预筛选的数据（来自 detailed_plan_subgraph）
             params["project_name"] = state.get("project_name", "村庄")
             params["filtered_analysis"] = state.get("filtered_analysis", "")  # 预筛选的现状分析
-            params["filtered_concepts"] = state.get("filtered_concept", "")  # 预筛选的规划思路
+            params["filtered_concept"] = state.get("filtered_concept", "")  # 预筛选的规划思路（单数形式，与状态定义一致）
             params["constraints"] = state.get("constraints", "无特殊约束")
+
+            # 日志：验证数据传递
+            logger.info(f"[GenericPlanner-L3] {self.dimension_key} 参数准备: "
+                       f"filtered_analysis={len(params['filtered_analysis'])}字符, "
+                       f"filtered_concept={len(params['filtered_concept'])}字符")
 
             # 特殊处理 project_bank 需要前序规划
             if self.dimension_key == "project_bank":

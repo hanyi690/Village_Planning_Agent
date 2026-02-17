@@ -122,7 +122,7 @@ PLANNING_POSITIONING_PROMPT = """你是乡村规划专家中的**规划定位分
 # 3. 发展目标分析
 DEVELOPMENT_GOALS_PROMPT = """你是乡村规划专家中的**发展目标分析专家**。
 
-**任务**：基于规划定位，制定分阶段的发展目标体系。
+**任务**：基于规划定位，制定的发展目标体系。
 
 **现状分析报告**：
 {analysis_report}
@@ -372,36 +372,6 @@ CONCEPT_SUMMARY_PROMPT = """你是乡村规划专家团队的**总协调人**。
 
 
 # ==========================================
-# 辅助函数
-# ==========================================
-
-def list_concept_dimensions():
-    """列出所有规划维度"""
-    return [
-        {
-            "key": "resource_endowment",
-            "name": "资源禀赋分析",
-            "description": "分析村庄的自然、人文、经济、区位等资源禀赋"
-        },
-        {
-            "key": "planning_positioning",
-            "name": "规划定位分析",
-            "description": "确定村庄在区域发展中的定位和方向"
-        },
-        {
-            "key": "development_goals",
-            "name": "发展目标分析",
-            "description": "制定近、中、远期分阶段发展目标"
-        },
-        {
-            "key": "planning_strategies",
-            "name": "规划策略分析",
-            "description": "提出空间、产业、生态、文化、基础设施、治理等策略"
-        }
-    ]
-
-
-# ==========================================
 # 专业数据获取函数（占位符）
 # ==========================================
 
@@ -431,6 +401,5 @@ __all__ = [
     "DEVELOPMENT_GOALS_PROMPT",
     "PLANNING_STRATEGIES_PROMPT",
     "CONCEPT_SUMMARY_PROMPT",
-    "list_concept_dimensions",
     "get_specialized_data",
 ]

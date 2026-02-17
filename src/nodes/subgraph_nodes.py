@@ -207,15 +207,20 @@ class InitializeConceptNode(BaseNode):
         super().__init__("规划思路初始化")
 
     def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """初始化规划思路，准备维度分析任务"""
-        from ..subgraphs.concept_prompts import list_concept_dimensions
+        """初始化规划思路，准备维度分析任务和波次路由状态"""
+        from ..config.dimension_metadata import list_dimensions
 
-        dimensions = [d["key"] for d in list_concept_dimensions()]
+        dimensions = [d["key"] for d in list_dimensions(layer=2)]
 
+        # 波次路由状态初始化
         return StateBuilder()\
             .set("dimensions", dimensions)\
             .set("concept_analyses", [])\
-            .add_message(f"开始规划思路分析，共 {len(dimensions)} 个维度")\
+            .set("current_wave", 1)\
+            .set("total_waves", 4)\
+            .set("completed_dimensions", [])\
+            .set("concept_reports", {})\
+            .add_message(f"开始规划思路分析，共 {len(dimensions)} 个维度，4 个波次")\
             .build()
 
 
@@ -226,15 +231,17 @@ class AnalyzeConceptDimensionNode(BaseNode):
         super().__init__("规划思路维度分析")
 
     def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """执行单个维度的规划思路分析"""
+        """执行单个维度的规划思路分析，使用预筛选的数据"""
         dimension_key = state.get("dimension_key")
         dimension_name = state.get("dimension_name", dimension_key)
-        analysis_reports = state.get("analysis_reports", {})  # 使用正确的字段名
 
         if not dimension_key:
             return {"error": "缺少维度信息"}
 
         logger.info(f"[子图-规划思路] 开始执行 {dimension_name} ({dimension_key})")
+        logger.info(f"[子图-规划思路] {dimension_name} 输入数据: "
+                   f"filtered_analysis={len(state.get('filtered_analysis', ''))}字符, "
+                   f"filtered_concept={len(state.get('filtered_concept', ''))}字符")
 
         try:
             # 使用 GenericPlannerFactory 创建规划器
@@ -242,8 +249,10 @@ class AnalyzeConceptDimensionNode(BaseNode):
             planner = GenericPlannerFactory.create_planner(dimension_key)
 
             # 调用规划器的 execute 方法
+            # 使用预筛选的 filtered_analysis 和 filtered_concept 字段
             planner_state = {
-                "analysis_reports": analysis_reports,  # 使用正确的字段名
+                "filtered_analysis": state.get("filtered_analysis", ""),  # 预筛选的现状分析
+                "filtered_concept": state.get("filtered_concept", ""),    # 前序 Layer 2 报告
                 "project_name": state.get("project_name", "村庄"),
                 "task_description": state.get("task_description", "制定规划思路"),
                 "constraints": state.get("constraints", "无特殊约束")
@@ -282,13 +291,14 @@ class ReduceConceptsNode(BaseNode):
         super().__init__("汇总规划思路结果")
 
     def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """汇总所有维度的规划思路结果"""
+        """汇总所有维度的规划思路结果，更新 completed_dimensions 用于波次路由"""
         concept_analyses = state.get("concept_analyses", [])
+        completed_dims = list(state.get("completed_dimensions", []))  # 获取已完成维度
 
         logger.info(f"[子图-规划思路-Reduce] 汇总 {len(concept_analyses)} 个维度的结果")
 
         # 整理结果为结构化格式
-        concept_reports_dict = {}
+        concept_reports_dict = dict(state.get("concept_reports", {}))  # 保留已有报告
         concept_reports_text = []
 
         for analysis in concept_analyses:
@@ -303,10 +313,16 @@ class ReduceConceptsNode(BaseNode):
 {concept_text}
 ---
 """)
+            # 记录已完成维度
+            if dimension_key not in completed_dims:
+                completed_dims.append(dimension_key)
+
+        logger.info(f"[子图-规划思路-Reduce] 已完成维度: {completed_dims}")
 
         return {
             "concept_reports": concept_reports_dict,  # 统一命名
-            "concept_reports_text": "\n".join(concept_reports_text)
+            "concept_reports_text": "\n".join(concept_reports_text),
+            "completed_dimensions": completed_dims  # 更新已完成维度列表
         }
 
 

@@ -20,15 +20,21 @@ from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 import operator
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
-from ..config.dimension_metadata import get_analysis_to_concept_mapping, get_analysis_dimension_names
+from ..config.dimension_metadata import (
+    get_analysis_to_concept_mapping, 
+    get_analysis_dimension_names,
+    get_concept_dimension_names,
+    get_dimensions_by_wave,
+    get_full_dependency_chain_func,
+    list_dimensions
+)
 from ..utils.logger import get_logger
 from .concept_prompts import (
     RESOURCE_ENDOWMENT_PROMPT,
     PLANNING_POSITIONING_PROMPT,
     DEVELOPMENT_GOALS_PROMPT,
     PLANNING_STRATEGIES_PROMPT,
-    CONCEPT_SUMMARY_PROMPT,
-    list_concept_dimensions
+    CONCEPT_SUMMARY_PROMPT
 )
 
 logger = get_logger(__name__)
@@ -53,6 +59,11 @@ class ConceptState(TypedDict):
     # 输出数据（统一命名）
     concept_reports: Dict[str, str]  # 各维度独立报告（用于部分状态传递）
 
+    # 波次路由状态
+    current_wave: int              # 当前波次 (1-4)
+    total_waves: int               # 总波次数 (4)
+    completed_dimensions: List[str] # 已完成的维度
+
     # 消息历史
     messages: Annotated[List[BaseMessage], add_messages]
 
@@ -62,6 +73,7 @@ class ConceptDimensionState(TypedDict):
     dimension_key: str           # 维度标识
     dimension_name: str           # 维度名称
     filtered_analysis: str       # 筛选后的现状分析文本（直接用于 Prompt）
+    filtered_concept: str        # 筛选后的规划思路文本（来自前序 Layer 2 维度）
     task_description: str         # 规划任务
     constraints: str             # 约束条件
     concept_result: str          # 分析结果
@@ -97,6 +109,9 @@ def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
     dimension_name = state["dimension_name"]
 
     logger.info(f"[子图-规划] 开始执行 {dimension_name} ({dimension_key})")
+    logger.info(f"[子图-规划] {dimension_name} 输入数据: "
+               f"filtered_analysis={len(state.get('filtered_analysis', ''))}字符, "
+               f"filtered_concept={len(state.get('filtered_concept', ''))}字符")
 
     try:
         # 【使用统一架构】使用 GenericPlannerFactory 创建规划器
@@ -104,9 +119,10 @@ def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
         planner = GenericPlannerFactory.create_planner(dimension_key)
 
         # 【使用统一架构】调用规划器的 execute 方法
-        # 直接传递已筛选的 filtered_analysis 字段
+        # 直接传递已筛选的 filtered_analysis 和 filtered_concept 字段
         planner_state = {
             "filtered_analysis": state.get("filtered_analysis", ""),  # 预筛选的分析文本
+            "filtered_concept": state.get("filtered_concept", ""),    # 前序 Layer 2 报告
             "project_name": state.get("project_name", "村庄"),
             "task_description": state["task_description"],
             "constraints": state["constraints"]
@@ -166,74 +182,133 @@ def _get_dimension_prompt(
 
 
 # ==========================================
-# Map-Reduce 路由与分发节点
+# 波次路由与分发节点
 # ==========================================
 
-def map_concept_dimensions(state: ConceptState) -> List[Send]:
+def route_by_dependency_wave(state: ConceptState):
     """
-    Map 阶段：将4个维度映射为独立的分析任务
+    基于依赖波次的动态路由函数
 
-    使用 LangGraph 的 Send 机制，为每个维度创建独立的执行分支。
-    在创建 Send 时直接从 dimension_metadata 获取依赖，筛选相关 Layer 1 报告。
+    Layer 2 有 4 个波次：
+    - Wave 1: resource_endowment（无同层依赖）
+    - Wave 2: planning_positioning（依赖 resource_endowment）
+    - Wave 3: development_goals（依赖 resource_endowment + planning_positioning）
+    - Wave 4: planning_strategies（依赖前三个）
 
     Returns:
-        Send 对象列表，每个 Send 指向 analyze_concept_dimension 节点并携带独立状态
+        List[Send]: Send对象列表（并行执行多个维度）
+        str: 节点名称（"advance_wave", END）
     """
-    logger.info(f"[子图-Map] 开始分发 {len(state['dimensions'])} 个规划维度")
+    current_wave = state.get("current_wave", 1)
+    completed = set(state.get("completed_dimensions", []))
+    total_waves = state.get("total_waves", 4)
 
-    # 获取完整的维度分析报告字典
-    analysis_reports = state.get("analysis_reports", {})
+    logger.info(f"[子图-L2-波次路由] 当前Wave: {current_wave}/{total_waves}")
 
-    # 获取 Layer 1 -> Layer 2 的依赖映射
-    analysis_to_concept_mapping = get_analysis_to_concept_mapping()
+    # 获取当前波次的维度
+    wave_dims = get_dimensions_by_wave(current_wave, layer=2)
+    pending = [d for d in wave_dims if d not in completed]
 
-    # 为每个维度创建 Send 对象
+    if pending:
+        logger.info(f"[子图-L2-波次路由] Wave {current_wave}: {len(pending)} 个维度并行执行: {pending}")
+        return create_parallel_tasks_with_state_filtering(state, pending)
+    else:
+        # 当前波次完成
+        if current_wave < total_waves:
+            logger.info(f"[子图-L2-波次路由] Wave {current_wave} 完成，推进到 Wave {current_wave + 1}")
+            return "advance_wave"
+        else:
+            logger.info("[子图-L2-波次路由] 所有维度完成，流程结束")
+            return END
+
+    # 默认结束
+    return END
+
+
+def create_parallel_tasks_with_state_filtering(
+    state: ConceptState,
+    dimensions: List[str]
+) -> List[Send]:
+    """
+    创建并行任务，每个任务携带经过筛选的状态
+
+    直接从 dimension_metadata 获取依赖链，提取相关报告文本
+
+    Args:
+        state: 主状态
+        dimensions: 要并行执行的维度列表
+
+    Returns:
+        Send对象列表
+    """
     sends = []
-    for dimension_key in state["dimensions"]:
-        # 获取维度信息
-        dimensions_info = {d["key"]: d for d in list_concept_dimensions()}
-        dimension_info = dimensions_info.get(dimension_key, {"name": dimension_key})
+    analysis_reports = state.get("analysis_reports", {})
+    concept_reports = state.get("concept_reports", {})  # 已完成的 Layer 2 报告
 
-        # 直接获取该维度需要的 Layer 1 分析维度
-        required_analyses = analysis_to_concept_mapping.get(dimension_key, [])
+    for dim in dimensions:
+        # 直接获取依赖链
+        chain = get_full_dependency_chain_func(dim)
         
-        # 筛选相关的现状分析报告
+        # 提取 Layer 1 现状分析
+        required_analyses = chain.get("layer1_analyses", [])
         filtered_analysis_parts = []
         for k in required_analyses:
             if k in analysis_reports:
                 name = get_analysis_dimension_names().get(k, k)
                 filtered_analysis_parts.append(f"### {name}\n\n{analysis_reports[k]}\n")
         filtered_analysis = "\n".join(filtered_analysis_parts) if filtered_analysis_parts else ""
+        
+        # 提取已完成的 Layer 2 规划思路（同层依赖）
+        required_concepts = chain.get("depends_on_same_layer", [])
+        filtered_concept_parts = []
+        for k in required_concepts:
+            if k in concept_reports:
+                name = get_concept_dimension_names().get(k, k)
+                filtered_concept_parts.append(f"### {name}\n\n{concept_reports[k]}\n")
+        filtered_concept = "\n".join(filtered_concept_parts) if filtered_concept_parts else ""
 
-        # 创建该维度的独立状态
-        dimension_state = {
-            "dimension_key": dimension_key,
-            "dimension_name": dimension_info["name"],
-            "filtered_analysis": filtered_analysis,  # 预筛选的分析文本
+        # 构建维度状态
+        dimension_info = {d["key"]: d for d in list_dimensions(layer=2)}.get(dim, {"name": dim})
+        dimension_state = ConceptDimensionState({
+            "dimension_key": dim,
+            "dimension_name": dimension_info.get("name", dim),
+            "filtered_analysis": filtered_analysis,
+            "filtered_concept": filtered_concept,
             "task_description": state["task_description"],
             "constraints": state["constraints"],
             "concept_result": ""
-        }
+        })
 
-        # 创建 Send 对象：发送到 analyze_concept_dimension 节点
         sends.append(Send("analyze_concept_dimension", dimension_state))
         
-        logger.info(f"[子图-Map] {dimension_key}: 需要 {len(required_analyses)} 个现状维度")
+        logger.info(f"[状态筛选-L2] {dim}: "
+                   f"现状 {len(required_analyses)} 个 ({len(filtered_analysis)}字符), "
+                   f"思路 {len(required_concepts)} 个 ({len(filtered_concept)}字符)")
 
-    logger.info(f"[子图-Map] 创建了 {len(sends)} 个并行任务")
+    logger.info(f"[子图-L2-Map] 创建了 {len(sends)} 个并行任务")
     return sends
+
+
+def advance_wave_node(state: ConceptState) -> Dict[str, Any]:
+    """
+    推进波次节点：将当前波次加1
+    """
+    current_wave = state.get("current_wave", 1)
+    logger.info(f"[子图-L2-推进波次] Wave {current_wave} → Wave {current_wave + 1}")
+    return {"current_wave": current_wave + 1}
 
 
 def reduce_concept_analyses(state: ConceptState) -> Dict[str, Any]:
     """
-    Reduce 阶段：汇总所有维度的分析结果
+    Reduce 阶段：汇总当前波次维度的分析结果
 
-    生成字典形式，每个维度的独立报告（用于部分状态传递）
+    更新 completed_dimensions 和 concept_reports，用于波次路由
     """
     logger.info(f"[子图-Reduce] 开始汇总 {len(state['concept_analyses'])} 个维度的分析结果")
 
     # 整理分析结果为结构化格式
-    concept_reports_dict = {}
+    concept_reports_dict = dict(state.get("concept_reports", {}))  # 保留已有报告
+    completed_dims = list(state.get("completed_dimensions", []))   # 保留已完成维度
 
     for analysis in state["concept_analyses"]:
         dimension_key = analysis['dimension_key']
@@ -241,10 +316,16 @@ def reduce_concept_analyses(state: ConceptState) -> Dict[str, Any]:
 
         # 保存独立的维度报告（用于部分传输）
         concept_reports_dict[dimension_key] = concept_text
+        
+        # 记录已完成维度
+        if dimension_key not in completed_dims:
+            completed_dims.append(dimension_key)
 
-    logger.info(f"[子图-Reduce] 汇总完成，生成了 {len(concept_reports_dict)} 个维度报告")
+    logger.info(f"[子图-Reduce] 汇总完成，已累计 {len(concept_reports_dict)} 个维度报告，"
+               f"已完成维度: {completed_dims}")
     return {
-        "concept_reports": concept_reports_dict
+        "concept_reports": concept_reports_dict,
+        "completed_dimensions": completed_dims
     }
 
 
@@ -338,7 +419,7 @@ def generate_final_concept(state: ConceptState) -> Dict[str, Any]:
 
 def initialize_concept_analysis(state: ConceptState) -> Dict[str, Any]:
     """
-    初始化规划思路分析流程，设置待分析的维度列表
+    初始化规划思路分析流程，设置待分析的维度列表和波次状态
     """
     logger.info(f"[子图-初始化] 开始规划思路分析，项目: {state.get('project_name', '未命名')}")
 
@@ -350,11 +431,15 @@ def initialize_concept_analysis(state: ConceptState) -> Dict[str, Any]:
         "planning_strategies"    # 规划策略
     ]
 
-    logger.info(f"[子图-初始化] 设置 {len(all_dimensions)} 个规划维度")
+    logger.info(f"[子图-初始化] 设置 {len(all_dimensions)} 个规划维度，共4个波次")
 
     return {
         "dimensions": all_dimensions,
-        "concept_analyses": []
+        "concept_analyses": [],
+        "current_wave": 1,  # 初始化波次
+        "total_waves": 4,   # 总波次数
+        "completed_dimensions": [],  # 已完成维度
+        "concept_reports": state.get("concept_reports", {})  # 保留已有报告
     }
 
 
@@ -364,7 +449,16 @@ def initialize_concept_analysis(state: ConceptState) -> Dict[str, Any]:
 
 def create_concept_subgraph() -> StateGraph:
     """
-    创建规划思路子图 - 使用封装节点
+    创建规划思路子图 - 使用波次路由模式
+
+    执行流程：
+    START → initialize → route_by_wave → [analyze_concept_dimension]* → reduce_analyses → advance_wave/END
+    
+    波次依赖：
+    - Wave 1: resource_endowment（无同层依赖）
+    - Wave 2: planning_positioning（依赖 resource_endowment）
+    - Wave 3: development_goals（依赖 resource_endowment + planning_positioning）
+    - Wave 4: planning_strategies（依赖前三个）
 
     Returns:
         编译后的 StateGraph 实例
@@ -376,7 +470,7 @@ def create_concept_subgraph() -> StateGraph:
         GenerateConceptReportNode
     )
 
-    logger.info("[子图构建] 开始构建规划思路子图（使用封装节点）")
+    logger.info("[子图构建] 开始构建规划思路子图（波次路由模式）")
 
     # 创建状态图
     builder = StateGraph(ConceptState)
@@ -391,31 +485,48 @@ def create_concept_subgraph() -> StateGraph:
     builder.add_node("initialize", initialize_node)
     builder.add_node("analyze_concept_dimension", analyze_node)
     builder.add_node("reduce_analyses", reduce_node)
-    # 注释掉综合报告生成节点，直接使用维度报告
-    # builder.add_node("generate_final_concept", report_node)
+    builder.add_node("advance_wave", advance_wave_node)  # 波次推进节点
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
 
-    # 关键：使用条件边实现并行分发
-    # 在 LangGraph 1.0.x 中，Send 对象必须由路由函数返回，不能由节点返回
-    # 路由函数接收状态并返回 Send 对象列表
-    def route_to_concept_dimensions(state: ConceptState) -> List[Send]:
-        """路由函数：将状态分发到各维度的规划思路节点"""
-        return map_concept_dimensions(state)
+    # 波次路由：从 initialize 路由到各维度或结束
+    builder.add_conditional_edges(
+        "initialize",
+        route_by_dependency_wave,
+        {
+            "advance_wave": "advance_wave",
+            END: END
+        }
+    )
 
-    builder.add_conditional_edges("initialize", route_to_concept_dimensions)
-
+    # 分析节点完成后进入 reduce
     builder.add_edge("analyze_concept_dimension", "reduce_analyses")
-    # 跳过综合报告生成，直接结束
-    builder.add_edge("reduce_analyses", END)
-    # builder.add_edge("reduce_analyses", "generate_final_concept")
-    # builder.add_edge("generate_final_concept", END)
+
+    # reduce 完成后路由：检查是否还有下一波次
+    builder.add_conditional_edges(
+        "reduce_analyses",
+        route_by_dependency_wave,
+        {
+            "advance_wave": "advance_wave",
+            END: END
+        }
+    )
+
+    # advance_wave 后重新路由
+    builder.add_conditional_edges(
+        "advance_wave",
+        route_by_dependency_wave,
+        {
+            "advance_wave": "advance_wave",
+            END: END
+        }
+    )
 
     # 编译子图
     concept_subgraph = builder.compile()
 
-    logger.info("[子图构建] 规划思路子图构建完成（使用封装节点）")
+    logger.info("[子图构建] 规划思路子图构建完成（波次路由模式）")
 
     return concept_subgraph
 
@@ -456,6 +567,9 @@ def call_concept_subgraph(
         "dimensions": [],
         "concept_analyses": [],
         "concept_reports": {},
+        "current_wave": 1,  # 初始化波次
+        "total_waves": 4,   # 总波次数
+        "completed_dimensions": [],  # 已完成维度
         "messages": []
     }
 
