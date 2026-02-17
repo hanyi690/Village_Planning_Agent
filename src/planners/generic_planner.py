@@ -373,11 +373,11 @@ class GenericPlanner(UnifiedPlannerBase):
 
     def _format_detailed_plans(self, plans: Dict[str, str]) -> str:
         """格式化详细规划结果（用于 project_bank）"""
-        from ..core.dimension_config import DETAILED_DIMENSION_NAMES
+        from ..config.dimension_metadata import get_detailed_dimension_names
 
         formatted = []
         for key, content in plans.items():
-            name = DETAILED_DIMENSION_NAMES().get(key, key)
+            name = get_detailed_dimension_names().get(key, key)
             formatted.append(f"## {name}\n\n{content}\n")
 
         return "\n".join(formatted)

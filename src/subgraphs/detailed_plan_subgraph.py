@@ -33,13 +33,13 @@ import operator
 from datetime import datetime
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
-from ..core.dimension_config import (
-    FULL_DEPENDENCY_CHAIN,
-    WAVE_CONFIG,
+from ..config.dimension_metadata import (
+    get_full_dependency_chain,
+    get_wave_config,
     get_execution_wave,
     get_dimensions_by_wave,
     check_detailed_dependencies_ready,
-    DETAILED_DIMENSION_NAMES
+    get_detailed_dimension_names
 )
 from ..utils.logger import get_logger
 from ..utils.state_filter import filter_state_for_detailed_dimension_v2
@@ -70,10 +70,8 @@ class DetailedPlanState(TypedDict):
     """详细规划子图的状态"""
     # 输入数据
     project_name: str
-    analysis_report: str           # 来自 Layer 1（完整版，降级使用）
-    dimension_reports: Dict[str, str]  # 各维度现状分析报告字典（用于部分状态传递）
-    planning_concept: str          # 来自 Layer 2（完整版，降级使用）
-    concept_dimension_reports: Dict[str, str]  # 各维度规划思路报告字典（用于部分状态传递）
+    analysis_reports: Dict[str, str]  # 各维度现状分析报告字典（用于部分状态传递）
+    concept_reports: Dict[str, str]   # 各维度规划思路报告字典（用于部分状态传递）
     task_description: str
     constraints: str
     village_data: str              # 村庄原始数据（用于适配器）
@@ -126,8 +124,6 @@ class DetailedDimensionState(TypedDict):
     dimension_key: str             # 维度标识
     dimension_name: str            # 维度名称
     project_name: str
-    analysis_report: str
-    planning_concept: str
     task_description: str
     constraints: str
     human_feedback: str            # 针对该维度的反馈意见
@@ -139,8 +135,8 @@ class DetailedDimensionState(TypedDict):
     enable_adapters: bool          # 是否启用适配器
     adapter_config: Dict[str, List[str]]  # 适配器配置
     village_data: str              # 村庄原始数据（用于适配器）
-    dimension_reports: Dict[str, str]  # 维度报告（用于状态筛选）
-    concept_dimension_reports: Dict[str, str]  # 规划思路维度报告
+    analysis_reports: Dict[str, str]  # 现状分析维度报告
+    concept_reports: Dict[str, str]   # 规划思路维度报告
 
 
 # ==========================================
@@ -161,8 +157,8 @@ ALL_DIMENSIONS = [
     "project_bank"
 ]
 
-# 维度名称映射（使用dimension_mapping中的定义）
-DIMENSION_NAMES = DETAILED_DIMENSION_NAMES
+# 维度名称映射
+DIMENSION_NAMES = get_detailed_dimension_names
 
 # 【新增】波次配置常量
 TOTAL_WAVES = 2
@@ -292,17 +288,17 @@ def create_parallel_tasks_with_state_filtering(
     completed_detailed = state.get("completed_dimension_reports", {})
     token_usage_stats = state.get("token_usage_stats", {})
 
-    full_dimension_reports = state.get("dimension_reports", {})
-    full_concept_dimension_reports = state.get("concept_dimension_reports", {})
+    analysis_reports = state.get("analysis_reports", {})
+    concept_reports = state.get("concept_reports", {})
 
     for dim in dimensions:
         # 调用增强的筛选函数 v2
         filtered = filter_state_for_detailed_dimension_v2(
             detailed_dimension=dim,
-            full_analysis_reports=full_dimension_reports,
-            full_analysis_report=state["analysis_report"],
-            full_concept_reports=full_concept_dimension_reports,
-            full_concept_report=state["planning_concept"],
+            full_analysis_reports=analysis_reports,
+            full_analysis_report="",  # 已删除综合报告
+            full_concept_reports=concept_reports,
+            full_concept_report="",  # 已删除综合报告
             completed_detailed_reports=completed_detailed
         )
 
@@ -312,18 +308,18 @@ def create_parallel_tasks_with_state_filtering(
             "dimension_key": dim,
             "dimension_name": dimension_info.get("name", dim),
             "project_name": state["project_name"],
-            "analysis_report": filtered["filtered_analysis"],
-            "planning_concept": filtered["filtered_concepts"],
-            "completed_plans": filtered["filtered_detailed"],
-            "dependency_chain": filtered["dependency_chain"],
             "task_description": state.get("task_description", "制定详细规划"),
             "constraints": state.get("constraints", ""),
             "human_feedback": state.get("human_feedback", {}).get(dim, ""),
             "dimension_result": "",
+            "completed_plans": filtered["filtered_detailed"],
+            "dependency_chain": filtered["dependency_chain"],
             # 新增：传递适配器配置
             "enable_adapters": state.get("enable_adapters", False),
             "adapter_config": state.get("adapter_config", {}),
-            "village_data": state.get("village_data", "")
+            "village_data": state.get("village_data", ""),
+            "analysis_reports": filtered.get("filtered_analysis", {}),
+            "concept_reports": filtered.get("filtered_concepts", {})
         })
 
         sends.append(Send("generate_dimension_plan", dimension_state))
@@ -378,13 +374,10 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
         planner = GenericPlannerFactory.create_planner(dimension_key)
 
         # 【使用统一架构】调用规划器的 execute 方法
-        # 注意：GenericPlanner 需要完整的状态字典
         planner_state = {
             "project_name": project_name,
-            "analysis_report": state["analysis_report"],
-            "planning_concept": state["planning_concept"],
-            "dimension_reports": state.get("dimension_reports", {}),
-            "concept_dimension_reports": state.get("concept_dimension_reports", {}),
+            "analysis_reports": state.get("analysis_reports", {}),
+            "concept_reports": state.get("concept_reports", {}),
             "completed_plans": state.get("completed_plans", {}),
             "task_description": state["task_description"],
             "constraints": state["constraints"],
@@ -742,10 +735,8 @@ def create_detailed_plan_subgraph() -> StateGraph:
 
 def call_detailed_plan_subgraph(
     project_name: str,
-    analysis_report: str,
-    planning_concept: str,
-    dimension_reports: Dict[str, str] = None,  # 新增：维度报告字典
-    concept_dimension_reports: Dict[str, str] = None,  # 新增：规划思路维度字典
+    analysis_reports: Dict[str, str] = None,
+    concept_reports: Dict[str, str] = None,
     task_description: str = "制定村庄详细规划",
     constraints: str = "无特殊约束",
     required_dimensions: List[str] = None,
@@ -760,10 +751,8 @@ def call_detailed_plan_subgraph(
 
     Args:
         project_name: 项目/村庄名称
-        analysis_report: 现状分析报告（来自 Layer 1）
-        planning_concept: 规划思路（来自 Layer 2）
-        dimension_reports: 各维度现状分析报告字典（用于部分状态传递）
-        concept_dimension_reports: 各维度规划思路报告字典（用于部分状态传递）
+        analysis_reports: 各维度现状分析报告字典（用于部分状态传递）
+        concept_reports: 各维度规划思路报告字典（用于部分状态传递）
         task_description: 规划任务描述
         constraints: 约束条件
         required_dimensions: 指定生成的维度列表（None = 全部）
@@ -800,10 +789,8 @@ def call_detailed_plan_subgraph(
     # 构建初始状态
     initial_state: DetailedPlanState = {
         "project_name": project_name,
-        "analysis_report": analysis_report,
-        "dimension_reports": dimension_reports or {},
-        "planning_concept": planning_concept,
-        "concept_dimension_reports": concept_dimension_reports or {},
+        "analysis_reports": analysis_reports or {},
+        "concept_reports": concept_reports or {},
         "task_description": task_description,
         "constraints": constraints,
         "village_data": village_data,
@@ -841,7 +828,7 @@ def call_detailed_plan_subgraph(
         # 调用子图
         result = subgraph.invoke(initial_state)
 
-        logger.info(f"[子图调用] 子图执行成功，报告长度: {len(result.get('final_detailed_plan', ''))} 字符")
+        logger.info(f"[子图调用] 子图执行成功，报告数: {len(result.get('final_detailed_plan', ''))} 字符")
 
         # 添加调试日志：提取各维度规划结果
         logger.info(f"[子图调用] 提取各维度规划结果")
@@ -852,8 +839,22 @@ def call_detailed_plan_subgraph(
             plan_content = result.get(field_name, "")
             logger.info(f"[子图调用] {field_name}: {len(plan_content)} 字符")
 
+        # 构建详细维度报告字典
+        detail_reports = {}
+        for dim_key in ["industry", "master_plan", "traffic", "public_service",
+                        "infrastructure", "ecological", "disaster_prevention",
+                        "heritage", "landscape", "project_bank"]:
+            if dim_key == "project_bank":
+                field_name = "project_bank"
+            else:
+                field_name = f"{dim_key}_plan"
+            plan_content = result.get(field_name, "")
+            if plan_content:
+                detail_reports[dim_key] = plan_content
+
         return {
             "detailed_plan_report": result["final_detailed_plan"],
+            "detail_reports": detail_reports,
             "industry_plan": result.get("industry_plan", ""),
             "master_plan": result.get("master_plan", ""),
             "traffic_plan": result.get("traffic_plan", ""),
@@ -872,6 +873,7 @@ def call_detailed_plan_subgraph(
         logger.error(f"[子图调用] 子图执行失败: {str(e)}")
         return {
             "detailed_plan_report": f"详细规划失败: {str(e)}",
+            "detail_reports": {},
             "success": False,
             "error": str(e)
         }

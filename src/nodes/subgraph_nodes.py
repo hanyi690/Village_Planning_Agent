@@ -127,7 +127,7 @@ class ReduceAnalysesNode(BaseNode):
 
         logger.info(f"[子图-Reduce] 汇总完成，生成了 {len(dimension_reports_dict)} 个维度报告")
         return {
-            "dimension_reports": dimension_reports_dict,
+            "analysis_reports": dimension_reports_dict,  # 统一命名
             "dimension_reports_text": "\n".join(dimension_reports_text)
         }
 
@@ -305,7 +305,7 @@ class ReduceConceptsNode(BaseNode):
 """)
 
         return {
-            "concept_dimension_reports": concept_reports_dict,
+            "concept_reports": concept_reports_dict,  # 统一命名
             "concept_reports_text": "\n".join(concept_reports_text)
         }
 

@@ -88,18 +88,35 @@ export default function CheckpointViewer({
     let layerContent = '';
     let layerTitle = '';
 
+    // 动态生成报告的辅助函数
+    const generateReportFromDict = (reports: Record<string, string> | undefined): string => {
+      if (!reports || Object.keys(reports).length === 0) return '';
+      return Object.entries(reports)
+        .map(([key, value]) => `${value}\n\n---\n`)
+        .join('');
+    };
+
     switch (layer) {
       case 1:
         layerTitle = '现状分析';
-        layerContent = state.analysis_report || state.layer_1_analysis || '';
+        // 新字段名: analysis_reports，兼容旧字段名: dimension_reports, analysis_report
+        layerContent = generateReportFromDict(state.analysis_reports) || 
+                       generateReportFromDict(state.dimension_reports) ||
+                       state.analysis_report || state.layer_1_analysis || '';
         break;
       case 2:
         layerTitle = '规划思路';
-        layerContent = state.planning_concept || state.layer_2_concept || '';
+        // 新字段名: concept_reports，兼容旧字段名: concept_dimension_reports, planning_concept
+        layerContent = generateReportFromDict(state.concept_reports) || 
+                       generateReportFromDict(state.concept_dimension_reports) ||
+                       state.planning_concept || state.layer_2_concept || '';
         break;
       case 3:
         layerTitle = '详细规划';
-        layerContent = state.detailed_plan || state.layer_3_detailed || state.final_detailed_plan || '';
+        // 新字段名: detail_reports，兼容旧字段名: detailed_dimension_reports, detailed_plan
+        layerContent = generateReportFromDict(state.detail_reports) || 
+                       generateReportFromDict(state.detailed_dimension_reports) ||
+                       state.detailed_plan || state.layer_3_detailed || state.final_detailed_plan || '';
         break;
       default:
         layerContent = JSON.stringify(state, null, 2);

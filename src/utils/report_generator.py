@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from .output_manager import OutputManager
-from ..core.dimension_config import (
+from ..config.dimension_metadata import (
     get_analysis_dimension_names,
     get_concept_dimension_names,
     get_detailed_dimension_names,

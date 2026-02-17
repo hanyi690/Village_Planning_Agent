@@ -360,15 +360,13 @@ def _validate_resume_state(state: Dict[str, Any], current_layer: int) -> bool:
         True if state is valid for resume
     """
     if current_layer == 2:
-        # Need Layer 1 data
-        return bool(state.get("analysis_report") and state.get("analysis_dimension_reports"))
+        # Need Layer 1 data (analysis_reports)
+        return bool(state.get("analysis_reports"))
     elif current_layer == 3:
-        # Need Layer 1 and 2 data
+        # Need Layer 1 and 2 data (analysis_reports, concept_reports)
         return bool(
-            state.get("analysis_report") and
-            state.get("analysis_dimension_reports") and
-            state.get("planning_concept") and
-            state.get("concept_dimension_reports")
+            state.get("analysis_reports") and
+            state.get("concept_reports")
         )
     return True
 
@@ -433,13 +431,10 @@ def _build_initial_state(request: StartPlanningRequest, session_id: str) -> Dict
         "human_feedback": None,
         "need_revision": False,
 
-        # Layer outputs
-        "analysis_report": "",
-        "analysis_dimension_reports": {},
-        "planning_concept": "",
-        "concept_dimension_reports": {},
-        "detailed_plan": "",
-        "detailed_dimension_reports": {},
+        # Layer outputs (统一命名)
+        "analysis_reports": {},    # Layer 1 维度报告
+        "concept_reports": {},     # Layer 2 维度报告
+        "detail_reports": {},      # Layer 3 维度报告
         "final_output": "",
 
         # Output management - use serializable path string
@@ -569,25 +564,32 @@ async def _execute_graph_in_background(
 
                     # 检查：未发送过
                     if event_key not in sent_events:
-                        # 获取报告内容
+                        # 获取维度报告内容（使用新的统一命名）
+                        from src.utils.report_utils import (
+                            generate_analysis_report,
+                            generate_concept_report,
+                            generate_detail_report
+                        )
+                        
+                        project_name = event.get("project_name", "村庄")
+                        
                         if layer_num == 1:
-                            report = event.get("analysis_report", "")
-                            # ✅ 修复：字段名是 dimension_reports，不是 analysis_dimension_reports
-                            dimension_reports = event.get("dimension_reports", {})
+                            dimension_reports = event.get("analysis_reports", {})
+                            report = generate_analysis_report(dimension_reports, project_name)
                         elif layer_num == 2:
-                            report = event.get("planning_concept", "")
-                            dimension_reports = event.get("concept_dimension_reports", {})
+                            dimension_reports = event.get("concept_reports", {})
+                            report = generate_concept_report(dimension_reports, project_name)
                             # ✅ 添加 Layer 2 专用调试日志
                             logger.info(f"[Planning] [{session_id}] === Layer 2 完成 ===")
                             logger.info(f"[Planning] [{session_id}] event keys: {list(event.keys())}")
-                            logger.info(f"[Planning] [{session_id}] concept_dimension_reports: {dimension_reports}")
+                            logger.info(f"[Planning] [{session_id}] concept_reports: {dimension_reports}")
                             logger.info(f"[Planning] [{session_id}] dimension_reports keys: {list(dimension_reports.keys())}")
                             if dimension_reports:
                                 for key, value in dimension_reports.items():
                                     logger.info(f"[Planning] [{session_id}]   - {key}: {len(value)} chars")
                         else:  # layer_num == 3
-                            report = event.get("detailed_plan", "")
-                            dimension_reports = event.get("detailed_dimension_reports", {})
+                            dimension_reports = event.get("detail_reports", {})
+                            report = generate_detail_report(dimension_reports, project_name)
 
                         # 生成事件并添加到会话事件列表
                         event_data = {
@@ -762,18 +764,21 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
                 checkpoint_values = checkpoint_state.values
                 if current_layer == 2:
                     # 需要 Layer 1 的数据
-                    if checkpoint_values.get("analysis_report") and checkpoint_values.get("dimension_reports"):
-                        state["analysis_report"] = checkpoint_values["analysis_report"]
-                        state["dimension_reports"] = checkpoint_values.get("dimension_reports", {})
-                        logger.info(f"[Planning API] [{session_id}] 从 checkpoint 恢复了 Layer 1 数据")
+                    # 兼容旧字段名：dimension_reports -> analysis_reports
+                    analysis_reports = checkpoint_values.get("analysis_reports") or checkpoint_values.get("dimension_reports", {})
+                    if analysis_reports:
+                        state["analysis_reports"] = analysis_reports
+                        logger.info(f"[Planning API] [{session_id}] 从 checkpoint 恢复了 Layer 1 数据 (analysis_reports)")
                 elif current_layer == 3:
                     # 需要 Layer 1 和 2 的数据
-                    if checkpoint_values.get("analysis_report"):
-                        state["analysis_report"] = checkpoint_values["analysis_report"]
-                        state["dimension_reports"] = checkpoint_values.get("dimension_reports", {})
-                    if checkpoint_values.get("planning_concept"):
-                        state["planning_concept"] = checkpoint_values["planning_concept"]
-                        state["concept_dimension_reports"] = checkpoint_values.get("concept_dimension_reports", {})
+                    # 兼容旧字段名
+                    analysis_reports = checkpoint_values.get("analysis_reports") or checkpoint_values.get("dimension_reports", {})
+                    concept_reports = checkpoint_values.get("concept_reports") or checkpoint_values.get("concept_dimension_reports", {})
+                    
+                    if analysis_reports:
+                        state["analysis_reports"] = analysis_reports
+                    if concept_reports:
+                        state["concept_reports"] = concept_reports
                     logger.info(f"[Planning API] [{session_id}] 从 checkpoint 恢复了 Layer 1 和 2 数据")
         except Exception as e:
             logger.error(f"[Planning API] [{session_id}] 从 checkpoint 恢复数据失败: {e}")
@@ -832,10 +837,10 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
     config = {"configurable": {"thread_id": session_id}}
 
     # ✅ 使用 graph.aupdate_state 清除暂停标志
+    # 注意：不指定 as_node，避免引用不存在的节点名称
     await graph.aupdate_state(
         config,
-        {"pause_after_step": False},
-        as_node="pause"
+        {"pause_after_step": False}
     )
     logger.info(f"[Planning API] [{session_id}] 已清除 pause_after_step 标志")
 

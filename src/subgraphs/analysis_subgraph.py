@@ -46,9 +46,8 @@ class AnalysisState(TypedDict):
     subjects: List[str]  # 待分析的维度列表
     analyses: Annotated[List[Dict[str, str]], operator.add]  # 已完成的维度分析（使用add累加）
 
-    # 输出数据
-    final_report: str  # 最终综合分析报告
-    dimension_reports: Dict[str, str]  # 各维度独立报告（用于部分状态传递）
+    # 输出数据（统一命名）
+    analysis_reports: Dict[str, str]  # 各维度独立报告（用于部分状态传递）
 
     # 消息历史（用于LLM交互）
     messages: Annotated[List[BaseMessage], add_messages]
@@ -170,36 +169,23 @@ def reduce_analyses(state: AnalysisState) -> Dict[str, Any]:
     """
     Reduce 阶段：汇总所有维度的分析结果
 
-    生成两种格式：
-    1. dimension_reports: 字典形式，每个维度的独立报告（用于部分状态传递）
-    2. dimension_reports_text: 拼接的文本（用于综合报告生成）
+    生成字典形式，每个维度的独立报告（用于部分状态传递）
     """
     logger.info(f"[子图-Reduce] 开始汇总 {len(state['analyses'])} 个维度的分析结果")
 
     # 整理分析结果为结构化格式
-    dimension_reports_dict = {}
-    dimension_reports_text = []
+    analysis_reports_dict = {}
 
     for analysis in state["analyses"]:
         dimension_key = analysis['dimension_key']
-        dimension_name = analysis['dimension_name']
         analysis_text = analysis['analysis_result']
 
         # 保存独立的维度报告（用于部分传输）
-        dimension_reports_dict[dimension_key] = analysis_text
+        analysis_reports_dict[dimension_key] = analysis_text
 
-        # 同时拼接用于综合报告
-        dimension_reports_text.append(f"""
-## {dimension_name}
-
-{analysis_text}
----
-""")
-
-    logger.info(f"[子图-Reduce] 汇总完成，生成了 {len(dimension_reports_dict)} 个维度报告")
+    logger.info(f"[子图-Reduce] 汇总完成，生成了 {len(analysis_reports_dict)} 个维度报告")
     return {
-        "dimension_reports": dimension_reports_dict,  # 新增：字典形式
-        "dimension_reports_text": "\n".join(dimension_reports_text)  # 用于综合报告
+        "analysis_reports": analysis_reports_dict
     }
 
 
@@ -409,8 +395,7 @@ def call_analysis_subgraph(
         "project_name": project_name,
         "subjects": [],
         "analyses": [],
-        "final_report": "",
-        "dimension_reports": {},  # 新增：初始化维度报告字典
+        "analysis_reports": {},
         "messages": []
     }
 
@@ -418,28 +403,20 @@ def call_analysis_subgraph(
         # 调用子图
         result = subgraph.invoke(initial_state)
 
-        # 使用维度报告作为主要输出（不再生成综合报告）
-        dimension_reports = result.get("dimension_reports", {})
+        # 使用维度报告作为主要输出
+        analysis_reports = result.get("analysis_reports", {})
         
-        # 构建简化报告（维度报告拼接）
-        analysis_report = ""
-        for dim_key, dim_report in dimension_reports.items():
-            analysis_report += f"{dim_report}\n\n"
-        
-        logger.info(f"[子图调用] 子图执行成功，报告长度: {len(analysis_report)}")
-        logger.info(f"[子图调用] 维度报告数量: {len(dimension_reports)}")
+        logger.info(f"[子图调用] 子图执行成功，维度报告数量: {len(analysis_reports)}")
 
         return {
-            "analysis_report": analysis_report.strip(),
-            "dimension_reports": dimension_reports,
+            "analysis_reports": analysis_reports,
             "success": True
         }
 
     except Exception as e:
         logger.error(f"[子图调用] 子图执行失败: {str(e)}")
         return {
-            "analysis_report": f"现状分析失败: {str(e)}",
-            "dimension_reports": {},  # 新增：失败时返回空字典
+            "analysis_reports": {},
             "success": False
         }
 
@@ -465,8 +442,7 @@ if __name__ == "__main__":
         "project_name": "某某村",
         "subjects": [],
         "analyses": [],
-        "final_report": "",
-        "dimension_reports": {},
+        "analysis_reports": {},
         "messages": []
     }
 
@@ -475,6 +451,7 @@ if __name__ == "__main__":
     result = subgraph.invoke(initial_state)
 
     print("\n=== 执行完成 ===")
-    print(f"报告长度: {len(result['final_report'])} 字符")
-    print("\n=== 最终报告 ===")
-    print(result["final_report"])
+    print(f"报告数: {len(result.get('analysis_reports', {}))} 个维度")
+    print("\n=== 维度报告 ===")
+    for key, value in result.get("analysis_reports", {}).items():
+        print(f"- {key}: {len(value)} 字符")

@@ -108,42 +108,23 @@ class BaseLayerNode(BaseNode):
                 # 根据不同层级调用不同的保存方法，使用正确的键名
                 if self.layer_number == 1:
                     save_result = output_manager.save_layer1_results(
-                        combined_report=result.get("analysis_report", ""),
-                        dimension_reports=result.get("dimension_reports", {})
+                        combined_report="",  # 不再生成综合报告
+                        dimension_reports=result.get("analysis_reports", {})
                     )
                 elif self.layer_number == 2:
                     save_result = output_manager.save_layer2_results(
-                        combined_report=result.get("concept_report", ""),
-                        dimension_reports=result.get("concept_dimension_reports", {})
+                        combined_report="",  # 不再生成综合报告
+                        dimension_reports=result.get("concept_reports", {})
                     )
                 elif self.layer_number == 3:
-                    # Layer 3 子图返回 industry_plan, master_plan 等独立字段
-                    # 需要转换为 detailed_dimension_reports 字典
-                    dimension_reports = {}
-                    dimension_key_map = {
-                        "industry_plan": "industry",
-                        "master_plan": "master_plan",
-                        "traffic_plan": "traffic",
-                        "public_service_plan": "public_service",
-                        "infrastructure_plan": "infrastructure",
-                        "ecological_plan": "ecological",
-                        "disaster_prevention_plan": "disaster_prevention",
-                        "heritage_plan": "heritage",
-                        "landscape_plan": "landscape",
-                        "project_bank": "project_bank"
-                    }
-                    for result_key, dimension_key in dimension_key_map.items():
-                        plan_content = result.get(result_key, "")
-                        # 添加调试日志
-                        logger.info(f"[{self.node_name}] 提取 {result_key}: {len(plan_content)} 字符 -> {dimension_key}")
-                        if plan_content:
-                            dimension_reports[dimension_key] = plan_content
+                    # Layer 3 使用 detail_reports
+                    detail_reports = result.get("detail_reports", {})
 
-                    logger.info(f"[{self.node_name}] dimension_reports 包含的维度: {list(dimension_reports.keys())}")
+                    logger.info(f"[{self.node_name}] detail_reports 包含的维度: {list(detail_reports.keys())}")
 
                     save_result = output_manager.save_layer3_results(
                         combined_report=result.get("detailed_plan_report", ""),
-                        dimension_reports=dimension_reports
+                        dimension_reports=detail_reports
                     )
                 else:
                     save_result = {"saved_count": 0}
@@ -188,19 +169,17 @@ class BaseLayerNode(BaseNode):
         """
         checkpoint_state = {
             **original_state,
-            self.output_key: result.get("report", ""),
             f"layer_{self.layer_number}_completed": True,
             "current_layer": self.layer_number + 1
         }
 
-        # 添加维度报告
-        if "dimension_reports" in result:
-            if self.layer_number == 1:
-                checkpoint_state["dimension_reports"] = result.get("dimension_reports", {})
-            elif self.layer_number == 2:
-                checkpoint_state["concept_dimension_reports"] = result.get("dimension_reports", {})
-            elif self.layer_number == 3:
-                checkpoint_state["detailed_dimension_reports"] = result.get("dimension_reports", {})
+        # 添加维度报告（使用统一命名）
+        if self.layer_number == 1:
+            checkpoint_state["analysis_reports"] = result.get("analysis_reports", {})
+        elif self.layer_number == 2:
+            checkpoint_state["concept_reports"] = result.get("concept_reports", {})
+        elif self.layer_number == 3:
+            checkpoint_state["detail_reports"] = result.get("detail_reports", {})
 
         return checkpoint_state
 
@@ -263,12 +242,12 @@ class Layer1AnalysisNode(BaseLayerNode):
     ) -> Dict[str, Any]:
         """构建成功状态更新"""
         return StateBuilder()\
-            .set("analysis_report", result["analysis_report"])\
-            .set("dimension_reports", result.get("dimension_reports", {}))\
+            .set("analysis_reports", result.get("analysis_reports", {}))\
             .set("layer_1_completed", True)\
             .set("current_layer", 2)\
+            .set("previous_layer", 1)\
             .set("last_checkpoint_id", checkpoint_id)\
-            .add_message(f"现状分析完成，生成了 {len(result['analysis_report'])} 字符的综合报告。")\
+            .add_message(f"现状分析完成，生成了 {len(result.get('analysis_reports', {}))} 个维度报告。")\
             .build()
 
 
@@ -283,8 +262,7 @@ class Layer2ConceptNode(BaseLayerNode):
         from ..subgraphs.concept_subgraph import call_concept_subgraph
         return call_concept_subgraph(
             project_name=state["project_name"],
-            analysis_report=state["analysis_report"],
-            dimension_reports=state.get("dimension_reports", {}),
+            analysis_reports=state.get("analysis_reports", {}),
             task_description=state["task_description"],
             constraints=state.get("constraints", "无特殊约束")
         )
@@ -297,12 +275,12 @@ class Layer2ConceptNode(BaseLayerNode):
     ) -> Dict[str, Any]:
         """构建成功状态更新"""
         return StateBuilder()\
-            .set("planning_concept", result["concept_report"])\
-            .set("concept_dimension_reports", result.get("concept_dimension_reports", {}))\
+            .set("concept_reports", result.get("concept_reports", {}))\
             .set("layer_2_completed", True)\
             .set("current_layer", 3)\
+            .set("previous_layer", 2)\
             .set("last_checkpoint_id", checkpoint_id)\
-            .add_message(f"规划思路已生成，长度 {len(result['concept_report'])} 字符。")\
+            .add_message(f"规划思路已生成，包含 {len(result.get('concept_reports', {}))} 个维度报告。")\
             .build()
 
 
@@ -317,10 +295,8 @@ class Layer3DetailNode(BaseLayerNode):
         from ..subgraphs.detailed_plan_subgraph import call_detailed_plan_subgraph
         return call_detailed_plan_subgraph(
             project_name=state["project_name"],
-            analysis_report=state["analysis_report"],
-            planning_concept=state["planning_concept"],
-            dimension_reports=state.get("dimension_reports", {}),
-            concept_dimension_reports=state.get("concept_dimension_reports", {}),
+            analysis_reports=state.get("analysis_reports", {}),
+            concept_reports=state.get("concept_reports", {}),
             task_description=state.get("task_description", "制定村庄详细规划"),
             constraints=state.get("constraints", "无特殊约束"),
             required_dimensions=state.get("required_dimensions"),
@@ -334,25 +310,14 @@ class Layer3DetailNode(BaseLayerNode):
         checkpoint_id: str
     ) -> Dict[str, Any]:
         """构建成功状态更新"""
-        # 构建详细维度报告字典
-        detailed_dimension_reports = {
-            "dimension_industry": result.get("industry_plan", ""),
-            "dimension_master_plan": result.get("master_plan", ""),
-            "dimension_traffic": result.get("traffic_plan", ""),
-            "dimension_public_service": result.get("public_service_plan", ""),
-            "dimension_infrastructure": result.get("infrastructure_plan", ""),
-            "dimension_ecological": result.get("ecological_plan", ""),
-            "dimension_disaster_prevention": result.get("disaster_prevention_plan", ""),
-            "dimension_heritage": result.get("heritage_plan", ""),
-            "dimension_landscape": result.get("landscape_plan", ""),
-            "dimension_project_bank": result.get("project_bank", ""),
-        }
+        # 使用子图返回的 detail_reports
+        detail_reports = result.get("detail_reports", {})
 
         return StateBuilder()\
-            .set("detailed_plan", result["detailed_plan_report"])\
-            .set("detailed_dimension_reports", detailed_dimension_reports)\
+            .set("detail_reports", detail_reports)\
             .set("layer_3_completed", True)\
             .set("current_layer", 4)\
+            .set("previous_layer", 3)\
             .set("last_checkpoint_id", checkpoint_id)\
             .add_message(f"详细规划已生成，包含 {len(result.get('completed_dimensions', []))} 个专业维度。")\
             .build()

@@ -152,9 +152,10 @@ class VillageDetail(BaseModel):
     """村庄详情"""
     name: str = Field(..., description="村庄名称")
     sessions: List[Dict[str, Any]] = Field(default_factory=list, description="会话列表")
-    layer_1_analysis: Optional[str] = Field(None, description="现状分析")
-    layer_2_concept: Optional[str] = Field(None, description="规划思路")
-    layer_3_detailed: Optional[str] = Field(None, description="详细规划")
+    # Layer outputs (统一命名)
+    analysis_reports: Optional[Dict[str, str]] = Field(None, description="Layer 1: 现状分析维度报告")
+    concept_reports: Optional[Dict[str, str]] = Field(None, description="Layer 2: 规划思路维度报告")
+    detail_reports: Optional[Dict[str, str]] = Field(None, description="Layer 3: 详细规划维度报告")
     final_report: Optional[str] = Field(None, description="最终报告")
 
 

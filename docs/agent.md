@@ -82,13 +82,12 @@ class VillagePlanningState(TypedDict):
     pause_after_step: bool
     pending_review_layer: int      # 待审查层级 (0=无)
     
-    # 层级输出
-    analysis_report: str
-    analysis_dimension_reports: Dict[str, str]
-    planning_concept: str
-    concept_dimension_reports: Dict[str, str]
-    detailed_plan: str
-    detailed_dimension_reports: Dict[str, str]
+    # 层级输出（统一命名：analysis_reports, concept_reports, detail_reports）
+    # 综合报告已移除，改为动态生成以节省存储空间
+    analysis_reports: Dict[str, str]   # Layer 1: 各维度现状分析报告
+    concept_reports: Dict[str, str]    # Layer 2: 各维度规划思路报告
+    detail_reports: Dict[str, str]     # Layer 3: 各维度详细规划报告
+    final_output: str                  # 最终成果
     
     # 输出路径
     output_path: str
@@ -204,8 +203,8 @@ builder.add_conditional_edges("knowledge_preload", map_dimensions)
 ```
 
 **输出**:
-- `analysis_report`: 综合报告 (用于显示)
-- `analysis_dimension_reports`: 各维度独立报告字典
+- `analysis_reports`: 各维度独立报告字典（用于部分状态传递）
+- 综合报告通过 `generate_analysis_report()` 动态生成
 
 ### Layer 2: 规划思路
 
@@ -220,11 +219,11 @@ builder.add_conditional_edges("knowledge_preload", map_dimensions)
 | development_goals | 发展目标分析 |
 | planning_strategies | 规划策略分析 |
 
-**依赖**: 需要Layer 1 的 `analysis_report` 和 `analysis_dimension_reports`
+**依赖**: 需要Layer 1 的 `analysis_reports`
 
 **输出**:
-- `planning_concept`: 综合报告
-- `concept_dimension_reports`: 各维度独立报告字典
+- `concept_reports`: 各维度独立报告字典（用于部分状态传递）
+- 综合报告通过 `generate_concept_report()` 动态生成
 
 ### Layer 3: 详细规划
 
@@ -266,7 +265,7 @@ class AnalysisState(TypedDict):
     project_name: str
     subjects: List[str]  # 待分析维度列表
     analyses: Annotated[List[Dict], operator.add]  # 并行结果累加
-    analysis_dimension_reports: Annotated[Dict[str, str], merge_dicts]
+    analysis_reports: Dict[str, str]  # 各维度独立报告
     knowledge_map: Dict[str, List[dict]]  # RAG 知识映射
     rag_enabled: bool
 ```
@@ -359,8 +358,7 @@ def route_after_pause(state: VillagePlanningState):
 ```python
 # execute_layer1_analysis() 返回
 return {
-    "analysis_report": combined_report,
-    "analysis_dimension_reports": dimension_reports,
+    "analysis_reports": dimension_reports,
     "layer_1_completed": True,
     "current_layer": 2,
     "previous_layer": 1,          # 刚完成的层级
@@ -419,17 +417,8 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
     )
     
     if result["success"]:
-        # 生成综合报告
-        combined_report = _generate_simple_combined_report(
-            state["project_name"],
-            result["analysis_dimension_reports"],
-            "现状分析",
-            layer_number=1
-        )
-        
         return {
-            "analysis_report": combined_report,
-            "analysis_dimension_reports": result["analysis_dimension_reports"],
+            "analysis_reports": result["analysis_reports"],
             "layer_1_completed": True,
             "current_layer": 2,
             "previous_layer": 1,
@@ -437,7 +426,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
         }
     
     return {
-        "analysis_report": "分析失败",
+        "analysis_reports": {},
         "layer_1_completed": False,
     }
 ```

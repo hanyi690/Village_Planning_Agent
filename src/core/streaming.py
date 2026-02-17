@@ -137,10 +137,15 @@ async def stream_graph_execution(
 
                 if layer_1_now_completed and not layer_1_was_completed:
                     # Layer 1 just completed
-                    report_content = _safe_truncate_report(event.get("analysis_report", ""))
-                    dimension_reports = event.get("analysis_dimension_reports", {})
+                    analysis_reports = event.get("analysis_reports", {})
+                    
+                    # 动态生成综合报告用于显示
+                    from ..utils.report_utils import generate_analysis_report
+                    report_content = _safe_truncate_report(
+                        generate_analysis_report(analysis_reports, event.get("project_name", "村庄"))
+                    )
 
-                    logger.info(f"[Streaming] Layer 1 just completed, sending event. Report size: {len(report_content)} chars, dimensions: {len(dimension_reports)}")
+                    logger.info(f"[Streaming] Layer 1 just completed, sending event. Report size: {len(report_content)} chars, dimensions: {len(analysis_reports)}")
 
                     yield _format_sse_event("layer_completed", {
                         "layer": 1,
@@ -150,7 +155,7 @@ async def stream_graph_execution(
                         "current_layer": 2,
                         # Include report content directly for immediate display
                         "report_content": report_content,
-                        "dimension_reports": dimension_reports,
+                        "dimension_reports": analysis_reports,
                         "timestamp": __import__('time').time()
                     })
 
@@ -159,10 +164,15 @@ async def stream_graph_execution(
 
                 if layer_2_now_completed and not layer_2_was_completed:
                     # Layer 2 just completed
-                    report_content = _safe_truncate_report(event.get("planning_concept", ""))
-                    dimension_reports = event.get("concept_dimension_reports", {})
+                    concept_reports = event.get("concept_reports", {})
+                    
+                    # 动态生成综合报告用于显示
+                    from ..utils.report_utils import generate_concept_report
+                    report_content = _safe_truncate_report(
+                        generate_concept_report(concept_reports, event.get("project_name", "村庄"))
+                    )
 
-                    logger.info(f"[Streaming] Layer 2 just completed, sending event. Report size: {len(report_content)} chars, dimensions: {len(dimension_reports)}")
+                    logger.info(f"[Streaming] Layer 2 just completed, sending event. Report size: {len(report_content)} chars, dimensions: {len(concept_reports)}")
 
                     yield _format_sse_event("layer_completed", {
                         "layer": 2,
@@ -171,7 +181,7 @@ async def stream_graph_execution(
                         "message": "规划思路完成",
                         "current_layer": 3,
                         "report_content": report_content,
-                        "dimension_reports": dimension_reports,
+                        "dimension_reports": concept_reports,
                         "timestamp": __import__('time').time()
                     })
 
@@ -180,10 +190,15 @@ async def stream_graph_execution(
 
                 if layer_3_now_completed and not layer_3_was_completed:
                     # Layer 3 just completed
-                    report_content = _safe_truncate_report(event.get("detailed_plan", ""))
-                    dimension_reports = event.get("detailed_dimension_reports", {})
+                    detail_reports = event.get("detail_reports", {})
+                    
+                    # 动态生成综合报告用于显示
+                    from ..utils.report_utils import generate_detail_report
+                    report_content = _safe_truncate_report(
+                        generate_detail_report(detail_reports, event.get("project_name", "村庄"))
+                    )
 
-                    logger.info(f"[Streaming] Layer 3 just completed, sending event. Report size: {len(report_content)} chars, dimensions: {len(dimension_reports)}")
+                    logger.info(f"[Streaming] Layer 3 just completed, sending event. Report size: {len(report_content)} chars, dimensions: {len(detail_reports)}")
 
                     yield _format_sse_event("layer_completed", {
                         "layer": 3,
@@ -192,7 +207,7 @@ async def stream_graph_execution(
                         "message": "详细规划完成",
                         "current_layer": 4,
                         "report_content": report_content,
-                        "dimension_reports": dimension_reports,
+                        "dimension_reports": detail_reports,
                         "timestamp": __import__('time').time()
                     })
 

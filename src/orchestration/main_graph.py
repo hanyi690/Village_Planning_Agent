@@ -68,13 +68,11 @@ class VillagePlanningState(TypedDict):
     human_feedback: str            # 人工反馈
     need_revision: bool            # 是否需要修复
 
-    # 各层成果
-    analysis_report: str           # 现状分析报告
-    dimension_reports: Dict[str, str]  # 各维度现状分析报告（用于部分状态传递）
-    planning_concept: str          # 规划思路
-    concept_dimension_reports: Dict[str, str]  # 各维度规划思路报告（用于部分状态传递）
-    detailed_plan: str             # 详细规划方案
-    detailed_dimension_reports: Dict[str, str]  # 各维度详细规划报告
+    # 各层成果（统一命名：analysis_reports, concept_reports, detail_reports）
+    # 综合报告已移除，改为动态生成以节省存储空间
+    analysis_reports: Dict[str, str]  # Layer 1: 各维度现状分析报告
+    concept_reports: Dict[str, str]   # Layer 2: 各维度规划思路报告
+    detail_reports: Dict[str, str]    # Layer 3: 各维度详细规划报告
     final_output: str              # 最终成果
 
     # 输出管理
@@ -162,8 +160,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
                     if isinstance(checkpoint_manager, CheckpointTool):
                         save_result = checkpoint_manager.save(
                             state={**state, **{
-                                "analysis_report": result["analysis_report"],
-                                "dimension_reports": result.get("dimension_reports", {}),
+                                "analysis_reports": result.get("analysis_reports", {}),
                                 "layer_1_completed": True,
                                 "current_layer": 2
                             }},
@@ -175,8 +172,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
                         # 兼容旧版本
                         checkpoint_id = checkpoint_manager.save_checkpoint(
                             state={**state, **{
-                                "analysis_report": result["analysis_report"],
-                                "dimension_reports": result.get("dimension_reports", {}),
+                                "analysis_reports": result.get("analysis_reports", {}),
                                 "layer_1_completed": True,
                                 "current_layer": 2
                             }},
@@ -185,18 +181,16 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
                         )
 
             return {
-                "analysis_report": result["analysis_report"],
-                "dimension_reports": result.get("dimension_reports", {}),
+                "analysis_reports": result.get("analysis_reports", {}),
                 "layer_1_completed": True,
                 "current_layer": 2,
                 "last_checkpoint_id": checkpoint_id,
-                "messages": [AIMessage(content=f"现状分析完成，生成了 {len(result['analysis_report'])} 字符的综合报告。")]
+                "messages": [AIMessage(content=f"现状分析完成，生成了 {len(result.get('analysis_reports', {}))} 个维度报告。")]
             }
         else:
-            logger.error(f"[主图-Layer1] 现状分析失败: {result['analysis_report']}")
+            logger.error(f"[主图-Layer1] 现状分析失败: {result.get('analysis_reports', {})}")
             return {
-                "analysis_report": f"现状分析失败: {result['analysis_report']}",
-                "dimension_reports": {},
+                "analysis_reports": {},
                 "layer_1_completed": False,
                 "messages": [AIMessage(content="现状分析失败，请检查输入数据或稍后重试。")]
             }
@@ -204,8 +198,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[主图-Layer1] 执行异常: {str(e)}")
         return {
-            "analysis_report": f"执行异常: {str(e)}",
-            "dimension_reports": {},
+            "analysis_reports": {},
             "layer_1_completed": False,
             "messages": [AIMessage(content=f"现状分析过程中发生错误: {str(e)}")]
         }
@@ -223,22 +216,21 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
         # 调用规划思路子图（传递维度报告字典）
         result = call_concept_subgraph(
             project_name=state["project_name"],
-            analysis_report=state["analysis_report"],
-            dimension_reports=state.get("dimension_reports", {}),
+            analysis_reports=state.get("analysis_reports", {}),
             task_description=state["task_description"],
             constraints=state.get("constraints", "无特殊约束")
         )
 
         if result["success"]:
-            logger.info(f"[主图-Layer2] 规划思路完成，报告长度: {len(result['concept_report'])} 字符")
+            logger.info(f"[主图-Layer2] 规划思路完成，报告数: {len(result.get('concept_reports', {}))}")
 
             # 保存 Layer 2 结果（使用 OutputManager）
             output_manager: OutputManager = state.get("output_manager")
             if output_manager and output_manager.use_default_structure:
                 try:
                     save_result = output_manager.save_layer2_results(
-                        combined_report=result["concept_report"],
-                        dimension_reports=result.get("concept_dimension_reports", {})
+                        combined_report=result.get("concept_report", ""),
+                        dimension_reports=result.get("concept_reports", {})
                     )
                     logger.info(f"[主图-Layer2] 保存了 {save_result['saved_count']} 个文件")
                 except Exception as save_error:
@@ -253,8 +245,7 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
                     if isinstance(checkpoint_manager, CheckpointTool):
                         save_result = checkpoint_manager.save(
                             state={**state, **{
-                                "planning_concept": result["concept_report"],
-                                "concept_dimension_reports": result.get("concept_dimension_reports", {}),
+                                "concept_reports": result.get("concept_reports", {}),
                                 "layer_2_completed": True,
                                 "current_layer": 3
                             }},
@@ -266,8 +257,7 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
                         # 兼容旧版本
                         checkpoint_id = checkpoint_manager.save_checkpoint(
                             state={**state, **{
-                                "planning_concept": result["concept_report"],
-                                "concept_dimension_reports": result.get("concept_dimension_reports", {}),
+                                "concept_reports": result.get("concept_reports", {}),
                                 "layer_2_completed": True,
                                 "current_layer": 3
                             }},
@@ -276,18 +266,16 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
                         )
 
             return {
-                "planning_concept": result["concept_report"],
-                "concept_dimension_reports": result.get("concept_dimension_reports", {}),
+                "concept_reports": result.get("concept_reports", {}),
                 "layer_2_completed": True,
                 "current_layer": 3,
                 "last_checkpoint_id": checkpoint_id,
-                "messages": [AIMessage(content=f"规划思路已生成，长度 {len(result['concept_report'])} 字符。")]
+                "messages": [AIMessage(content=f"规划思路已生成，包含 {len(result.get('concept_reports', {}))} 个维度报告。")]
             }
         else:
-            logger.error(f"[主图-Layer2] 规划思路失败: {result['concept_report']}")
+            logger.error(f"[主图-Layer2] 规划思路失败: {result.get('concept_report', '')}")
             return {
-                "planning_concept": f"规划思路失败: {result['concept_report']}",
-                "concept_dimension_reports": {},
+                "concept_reports": {},
                 "layer_2_completed": False,
                 "messages": [AIMessage(content="规划思路生成失败，请检查输入数据或稍后重试。")]
             }
@@ -295,8 +283,7 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[主图-Layer2] 执行异常: {str(e)}")
         return {
-            "planning_concept": f"执行异常: {str(e)}",
-            "concept_dimension_reports": {},
+            "concept_reports": {},
             "layer_2_completed": False,
             "messages": [AIMessage(content=f"规划思路生成过程中发生错误: {str(e)}")]
         }
@@ -315,10 +302,8 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
         # 调用详细规划子图（传递维度报告字典）
         result = call_detailed_plan_subgraph(
             project_name=state["project_name"],
-            analysis_report=state["analysis_report"],
-            planning_concept=state["planning_concept"],
-            dimension_reports=state.get("dimension_reports", {}),
-            concept_dimension_reports=state.get("concept_dimension_reports", {}),
+            analysis_reports=state.get("analysis_reports", {}),
+            concept_reports=state.get("concept_reports", {}),
             task_description=state.get("task_description", "制定村庄详细规划"),
             constraints=state.get("constraints", "无特殊约束"),
             required_dimensions=state.get("required_dimensions"),
@@ -330,12 +315,12 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
         )
 
         if result["success"]:
-            logger.info(f"[主图-Layer3] 详细规划完成，报告长度: {len(result['detailed_plan_report'])} 字符")
+            logger.info(f"[主图-Layer3] 详细规划完成，报告数: {len(result.get('detail_reports', {}))}")
             logger.info(f"[主图-Layer3] 已完成维度: {result['completed_dimensions']}")
 
             # 收集各维度详细规划报告
             # 键名不带前缀，与 OutputManager 期望的格式一致
-            detailed_dimension_reports = {
+            detail_reports = {
                 "industry": result.get("industry_plan", ""),
                 "master_plan": result.get("master_plan", ""),
                 "traffic": result.get("traffic_plan", ""),
@@ -354,7 +339,7 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
                 try:
                     save_result = output_manager.save_layer3_results(
                         combined_report=result["detailed_plan_report"],
-                        dimension_reports=detailed_dimension_reports
+                        dimension_reports=detail_reports
                     )
                     logger.info(f"[主图-Layer3] 保存了 {save_result['saved_count']} 个文件")
                 except Exception as save_error:
@@ -369,8 +354,7 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
                     if isinstance(checkpoint_manager, CheckpointTool):
                         save_result = checkpoint_manager.save(
                             state={**state, **{
-                                "detailed_plan": result["detailed_plan_report"],
-                                "detailed_dimension_reports": detailed_dimension_reports,
+                                "detail_reports": detail_reports,
                                 "layer_3_completed": True,
                                 "current_layer": 4
                             }},
@@ -382,8 +366,7 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
                         # 兼容旧版本
                         checkpoint_id = checkpoint_manager.save_checkpoint(
                             state={**state, **{
-                                "detailed_plan": result["detailed_plan_report"],
-                                "detailed_dimension_reports": detailed_dimension_reports,
+                                "detail_reports": detail_reports,
                                 "layer_3_completed": True,
                                 "current_layer": 4
                             }},
@@ -392,8 +375,7 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
                         )
 
             return {
-                "detailed_plan": result["detailed_plan_report"],
-                "detailed_dimension_reports": detailed_dimension_reports,
+                "detail_reports": detail_reports,
                 "layer_3_completed": True,
                 "current_layer": 4,
                 "last_checkpoint_id": checkpoint_id,
@@ -402,8 +384,7 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
         else:
             logger.error(f"[主图-Layer3] 详细规划失败: {result.get('error', '未知错误')}")
             return {
-                "detailed_plan": f"详细规划失败: {result.get('error', '未知错误')}",
-                "detailed_dimension_reports": {},
+                "detail_reports": {},
                 "layer_3_completed": False,
                 "messages": [AIMessage(content="详细规划生成失败，请检查输入数据或稍后重试。")]
             }
@@ -411,8 +392,7 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[主图-Layer3] 执行异常: {str(e)}")
         return {
-            "detailed_plan": f"执行异常: {str(e)}",
-            "detailed_dimension_reports": {},
+            "detail_reports": {},
             "layer_3_completed": False,
             "messages": [AIMessage(content=f"详细规划过程中发生错误: {str(e)}")]
         }
@@ -422,30 +402,54 @@ def generate_final_output(state: VillagePlanningState) -> Dict[str, Any]:
     """
     生成最终规划成果
 
-    整合三层输出，生成完整的规划文档。
+    整合三层输出，动态生成完整的规划文档。
     """
     logger.info(f"[主图-成果] 开始生成最终成果，项目: {state['project_name']}")
+    
+    # 动态生成各层综合报告
+    from ..utils.report_utils import (
+        generate_analysis_report,
+        generate_concept_report,
+        generate_detail_report
+    )
+    
+    project_name = state['project_name']
+    
+    analysis_report = generate_analysis_report(
+        state.get("analysis_reports", {}),
+        project_name
+    )
+    
+    planning_concept = generate_concept_report(
+        state.get("concept_reports", {}),
+        project_name
+    )
+    
+    detailed_plan = generate_detail_report(
+        state.get("detail_reports", {}),
+        project_name
+    )
 
     final_output = f"""
-# {state['project_name']} 村庄规划成果
+# {project_name} 村庄规划成果
 
 ---
 
 ## 一、现状分析报告
 
-{state['analysis_report']}
+{analysis_report}
 
 ---
 
 ## 二、规划思路
 
-{state['planning_concept']}
+{planning_concept}
 
 ---
 
 ## 三、详细规划方案
 
-{state['detailed_plan']}
+{detailed_plan}
 
 ---
 
@@ -620,7 +624,7 @@ def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
             return {"need_revision": False}
 
         revised_results = revise_result["revised_results"]
-        detailed_dimension_reports = state.get("detailed_dimension_reports", {})
+        detail_reports = state.get("detail_reports", {})
 
         # 维度键名映射 - 从子图的键名映射到状态中的键名
         # 子图返回: "industry", "master_plan", 等（不带前缀）
@@ -640,16 +644,15 @@ def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
         }
 
         # 重新组合综合报告
-        updated_detailed_plan = state.get("detailed_plan", "")
+        updated_detailed_plan = ""
         for dimension, revised_result in revised_results.items():
             dimension_name = dimension_names.get(dimension, dimension)
             updated_detailed_plan += f"\n\n## 修复后的{dimension_name}\n\n{revised_result}"
             # 同时更新状态中的维度报告
-            detailed_dimension_reports[dimension] = revised_result
+            detail_reports[dimension] = revised_result
 
         return {
-            "detailed_dimension_reports": detailed_dimension_reports,
-            "detailed_plan": updated_detailed_plan,
+            "detail_reports": detail_reports,
             "need_revision": False,
             "messages": [AIMessage(content=f"已修复 {len(revised_results)} 个维度")]
         }
@@ -1040,12 +1043,9 @@ def run_village_planning(
         "layer_3_completed": False,
         "need_human_review": need_human_review,
         "human_feedback": "",
-        "analysis_report": "",
-        "dimension_reports": {},
-        "planning_concept": "",
-        "concept_dimension_reports": {},
-        "detailed_plan": "",
-        "detailed_dimension_reports": {},
+        "analysis_reports": {},
+        "concept_reports": {},
+        "detail_reports": {},
         "final_output": "",
         "output_manager": output_manager,
         "checkpoint_enabled": True,

@@ -230,7 +230,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "concept_result",
         "rag_enabled": False,
         "tool": None,
-        "description": "制定简",
+        "description": "制定一句简洁的语句",
         "prompt_key": "development_goals"
     },
 
@@ -549,14 +549,360 @@ def dimension_exists(dimension_key: str) -> bool:
 
 
 # ==========================================
+# 缓存变量（延迟加载）
+# ==========================================
+
+_ANALYSIS_DIMENSION_NAMES = None
+_CONCEPT_DIMENSION_NAMES = None
+_DETAILED_DIMENSION_NAMES = None
+_ANALYSIS_TO_CONCEPT_MAPPING = None
+_CONCEPT_TO_DETAILED_MAPPING = None
+_FULL_DEPENDENCY_CHAIN = None
+_WAVE_CONFIG = None
+
+
+# ==========================================
+# 名称映射函数
+# ==========================================
+
+def get_analysis_dimension_names() -> Dict[str, str]:
+    """获取现状分析维度名称映射 (key -> name)"""
+    global _ANALYSIS_DIMENSION_NAMES
+    if _ANALYSIS_DIMENSION_NAMES is None:
+        _ANALYSIS_DIMENSION_NAMES = {
+            key: config["name"]
+            for key, config in DIMENSIONS_METADATA.items()
+            if config.get("layer") == 1
+        }
+    return _ANALYSIS_DIMENSION_NAMES
+
+
+def get_concept_dimension_names() -> Dict[str, str]:
+    """获取规划思路维度名称映射 (key -> name)"""
+    global _CONCEPT_DIMENSION_NAMES
+    if _CONCEPT_DIMENSION_NAMES is None:
+        _CONCEPT_DIMENSION_NAMES = {
+            key: config["name"]
+            for key, config in DIMENSIONS_METADATA.items()
+            if config.get("layer") == 2
+        }
+    return _CONCEPT_DIMENSION_NAMES
+
+
+def get_detailed_dimension_names() -> Dict[str, str]:
+    """获取详细规划维度名称映射 (key -> name)"""
+    global _DETAILED_DIMENSION_NAMES
+    if _DETAILED_DIMENSION_NAMES is None:
+        _DETAILED_DIMENSION_NAMES = {
+            key: config["name"]
+            for key, config in DIMENSIONS_METADATA.items()
+            if config.get("layer") == 3
+        }
+    return _DETAILED_DIMENSION_NAMES
+
+
+# 直接访问变量（兼容旧代码）
+ANALYSIS_DIMENSION_NAMES = property(get_analysis_dimension_names)
+CONCEPT_DIMENSION_NAMES = property(get_concept_dimension_names)
+DETAILED_DIMENSION_NAMES = property(get_detailed_dimension_names)
+
+
+# ==========================================
+# 依赖映射函数
+# ==========================================
+
+def get_analysis_to_concept_mapping() -> Dict[str, List[str]]:
+    """
+    获取现状分析到规划思路的映射
+    
+    Returns:
+        {concept_dimension: [analysis_dimensions]}
+    """
+    global _ANALYSIS_TO_CONCEPT_MAPPING
+    if _ANALYSIS_TO_CONCEPT_MAPPING is None:
+        mapping = {}
+        for key, config in DIMENSIONS_METADATA.items():
+            if config.get("layer") == 2:
+                deps = config.get("dependencies", {})
+                mapping[key] = deps.get("layer1_analyses", [])
+        _ANALYSIS_TO_CONCEPT_MAPPING = mapping
+    return _ANALYSIS_TO_CONCEPT_MAPPING
+
+
+def get_concept_to_detailed_mapping() -> Dict[str, List[str]]:
+    """
+    获取规划思路到详细规划的映射
+    
+    Returns:
+        {detailed_dimension: [concept_dimensions]}
+    """
+    global _CONCEPT_TO_DETAILED_MAPPING
+    if _CONCEPT_TO_DETAILED_MAPPING is None:
+        mapping = {}
+        for key, config in DIMENSIONS_METADATA.items():
+            if config.get("layer") == 3:
+                deps = config.get("dependencies", {})
+                mapping[key] = deps.get("layer2_concepts", [])
+        _CONCEPT_TO_DETAILED_MAPPING = mapping
+    return _CONCEPT_TO_DETAILED_MAPPING
+
+
+# 直接访问变量
+ANALYSIS_TO_CONCEPT_MAPPING = property(get_analysis_to_concept_mapping)
+CONCEPT_TO_DETAILED_MAPPING = property(get_concept_to_detailed_mapping)
+
+
+# ==========================================
+# 完整依赖链
+# ==========================================
+
+def get_full_dependency_chain() -> Dict[str, Dict[str, Any]]:
+    """
+    获取完整的三层依赖关系映射
+    
+    自动计算 wave 值：基于同层内部依赖关系拓扑排序
+    
+    Returns:
+        {dimension_key: {layer1_analyses: [...], layer2_concepts: [...], wave: N, depends_on_same_layer: [...]}}
+    """
+    global _FULL_DEPENDENCY_CHAIN
+    if _FULL_DEPENDENCY_CHAIN is None:
+        chain = {}
+        
+        # 收集所有维度的依赖信息
+        for key, config in DIMENSIONS_METADATA.items():
+            layer = config.get("layer")
+            deps = config.get("dependencies", {})
+            
+            if layer == 3:
+                # Layer 3: 检查同层依赖 (layer3_plans)
+                depends_on_same_layer = deps.get("layer3_plans", [])
+            elif layer == 2:
+                # Layer 2: 检查同层依赖 (layer2_concepts)
+                depends_on_same_layer = deps.get("layer2_concepts", [])
+            else:
+                depends_on_same_layer = []
+            
+            chain[key] = {
+                "layer": layer,
+                "layer1_analyses": deps.get("layer1_analyses", []) if layer >= 2 else [],
+                "layer2_concepts": deps.get("layer2_concepts", []) if layer == 3 else [],
+                "layer3_plans": deps.get("layer3_plans", []) if layer == 3 else [],
+                "depends_on_same_layer": depends_on_same_layer,
+                "wave": 1  # 默认值，后续自动计算
+            }
+        
+        # 自动计算每个维度的 wave（拓扑排序）
+        for key in chain:
+            chain[key]["wave"] = _calculate_wave(key, chain)
+        
+        _FULL_DEPENDENCY_CHAIN = chain
+    return _FULL_DEPENDENCY_CHAIN
+
+
+def _calculate_wave(dimension_key: str, chain: Dict[str, Dict[str, Any]]) -> int:
+    """
+    递归计算维度的执行波次
+    
+    Wave = 1 + max(wave of dependencies within same layer)
+    
+    Args:
+        dimension_key: 维度键名
+        chain: 完整依赖链
+        
+    Returns:
+        执行波次（从1开始）
+    """
+    if dimension_key not in chain:
+        return 1
+    
+    deps = chain[dimension_key]
+    same_layer_deps = deps.get("depends_on_same_layer", [])
+    
+    if not same_layer_deps:
+        return 1
+    
+    # 递归计算依赖的 wave
+    max_dep_wave = 0
+    for dep_key in same_layer_deps:
+        if dep_key in chain:
+            dep_wave = chain[dep_key].get("wave", 1)
+            if dep_wave == 1:
+                # 依赖的 wave 还没计算，递归计算
+                dep_wave = _calculate_wave(dep_key, chain)
+                chain[dep_key]["wave"] = dep_wave
+            max_dep_wave = max(max_dep_wave, dep_wave)
+    
+    return max_dep_wave + 1
+
+
+def get_full_dependency_chain_func(dimension_key: str) -> Dict[str, Any]:
+    """
+    获取单个维度的依赖链
+    
+    Args:
+        dimension_key: 维度键名
+        
+    Returns:
+        依赖链字典，如果不存在返回空字典
+    """
+    chain = get_full_dependency_chain()
+    return chain.get(dimension_key, {})
+
+
+FULL_DEPENDENCY_CHAIN = property(get_full_dependency_chain)
+
+
+# ==========================================
+# 波次配置
+# ==========================================
+
+def get_wave_config() -> Dict[int, Dict[str, Any]]:
+    """
+    获取波次配置（自动计算）
+    
+    Returns:
+        {wave_number: {dimensions: [...], description: "..."}}
+    """
+    global _WAVE_CONFIG
+    if _WAVE_CONFIG is None:
+        chain = get_full_dependency_chain()
+        waves = {}
+        
+        for key, deps in chain.items():
+            wave = deps.get("wave", 1)
+            layer = deps.get("layer", 1)
+            
+            # 只为 Layer 2 和 Layer 3 生成波次配置
+            if layer >= 2:
+                if wave not in waves:
+                    waves[wave] = {
+                        "dimensions": [],
+                        "description": f"Wave {wave}"
+                    }
+                waves[wave]["dimensions"].append(key)
+        
+        # 添加描述
+        for wave_num in sorted(waves.keys()):
+            if wave_num == 1:
+                waves[wave_num]["description"] = f"第一波次：{len(waves[wave_num]['dimensions'])}个独立维度并行执行"
+            else:
+                waves[wave_num]["description"] = f"第{wave_num}波次：依赖前序波次的维度"
+        
+        _WAVE_CONFIG = waves
+    return _WAVE_CONFIG
+
+
+def get_execution_wave(dimension_key: str) -> int:
+    """获取维度所属的执行波次"""
+    chain = get_full_dependency_chain()
+    if dimension_key in chain:
+        return chain[dimension_key].get("wave", 1)
+    return 1
+
+
+def get_dimensions_by_wave(wave: int, layer: Optional[int] = None) -> List[str]:
+    """
+    获取指定波次的所有维度
+    
+    Args:
+        wave: 波次号
+        layer: 可选，筛选特定层级
+        
+    Returns:
+        维度键名列表
+    """
+    chain = get_full_dependency_chain()
+    result = []
+    
+    for key, deps in chain.items():
+        if deps.get("wave") == wave:
+            if layer is None or deps.get("layer") == layer:
+                result.append(key)
+    
+    return result
+
+
+def check_detailed_dependencies_ready(
+    dimension_key: str,
+    completed_dimensions: List[str]
+) -> bool:
+    """
+    检查详细规划维度的依赖是否就绪
+    
+    Args:
+        dimension_key: 详细规划维度键名
+        completed_dimensions: 已完成的维度列表
+        
+    Returns:
+        如果所有依赖都已就绪返回 True
+    """
+    chain = get_full_dependency_chain()
+    if dimension_key not in chain:
+        return True
+    
+    deps = chain[dimension_key]
+    completed_set = set(completed_dimensions)
+    
+    # 检查 Layer 1 依赖
+    for dep in deps.get("layer1_analyses", []):
+        if dep not in completed_set:
+            return False
+    
+    # 检查 Layer 2 依赖
+    for dep in deps.get("layer2_concepts", []):
+        if dep not in completed_set:
+            return False
+    
+    # 检查详细规划内部依赖
+    for dep in deps.get("depends_on_detailed", []):
+        if dep not in completed_set:
+            return False
+    
+    return True
+
+
+WAVE_CONFIG = property(get_wave_config)
+
+
+# ==========================================
 # 导出
 # ==========================================
 
 __all__ = [
+    # 核心数据
     "DIMENSIONS_METADATA",
+    
+    # 基础函数
     "get_dimension_config",
     "list_dimensions",
     "get_layer_dimensions",
     "get_dimension_layer",
     "dimension_exists",
+    
+    # 名称映射
+    "get_analysis_dimension_names",
+    "get_concept_dimension_names",
+    "get_detailed_dimension_names",
+    "ANALYSIS_DIMENSION_NAMES",
+    "CONCEPT_DIMENSION_NAMES",
+    "DETAILED_DIMENSION_NAMES",
+    
+    # 依赖映射
+    "get_analysis_to_concept_mapping",
+    "get_concept_to_detailed_mapping",
+    "ANALYSIS_TO_CONCEPT_MAPPING",
+    "CONCEPT_TO_DETAILED_MAPPING",
+    
+    # 完整依赖链
+    "get_full_dependency_chain",
+    "get_full_dependency_chain_func",
+    "FULL_DEPENDENCY_CHAIN",
+    
+    # 波次配置
+    "get_wave_config",
+    "get_execution_wave",
+    "get_dimensions_by_wave",
+    "check_detailed_dependencies_ready",
+    "WAVE_CONFIG",
 ]
