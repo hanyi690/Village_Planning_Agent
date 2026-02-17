@@ -218,7 +218,7 @@ def route_by_dependency_wave(state: DetailedPlanState) -> Union[List[Send], str]
 
     Returns:
         List[Send]: Send对象列表（并行执行多个维度）
-        str: 节点名称（"advance_wave", "generate_single", "generate_final"）
+        str: 节点名称（"advance_wave", "route_next", END）
     """
     current_wave = state.get("current_wave", 1)
     completed = set(state.get("completed_dimensions", []))
@@ -250,12 +250,12 @@ def route_by_dependency_wave(state: DetailedPlanState) -> Union[List[Send], str]
                 logger.warning("[子图-L3-波次路由] Wave 2: project_bank 依赖未满足，强制执行")
                 return create_parallel_tasks_with_state_filtering(state, ["project_bank"])
         else:
-            # 所有维度完成
-            logger.info("[子图-L3-波次路由] 所有维度完成，进入汇总")
-            return "generate_final"
+            # 所有维度完成，直接结束
+            logger.info("[子图-L3-波次路由] 所有维度完成，流程结束")
+            return END
 
-    # 默认进入汇总
-    return "generate_final"
+    # 默认结束
+    return END
 
 
 def create_parallel_tasks_with_state_filtering(
@@ -681,7 +681,7 @@ def create_detailed_plan_subgraph() -> StateGraph:
     builder.add_conditional_edges(
         "initialize",
         route_by_dependency_wave,
-        ["generate_dimension_plan", "advance_wave", "END"]  # 直接结束而非生成汇总报告
+        ["generate_dimension_plan", "advance_wave", END]  # 使用 END 常量
     )
 
     # Agent节点 -> Reduce
@@ -704,14 +704,11 @@ def create_detailed_plan_subgraph() -> StateGraph:
     builder.add_conditional_edges(
         "route_next",
         route_by_dependency_wave,
-        ["generate_dimension_plan", "advance_wave", "END"]  # 直接结束而非生成汇总报告
+        ["generate_dimension_plan", "advance_wave", END]  # 使用 END 常量
     )
 
     # 波次推进 -> 再次路由
     builder.add_edge("advance_wave", "route_next")
-
-    # 最终节点 -> END
-    builder.add_edge("generate_final", END)
 
     # 编译子图
     detailed_plan_subgraph = builder.compile()
