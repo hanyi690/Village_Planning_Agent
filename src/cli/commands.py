@@ -207,10 +207,7 @@ class CommandRunner:
             print(f"\n所有层级完成: {result.get('all_layers_completed', False)}")
 
             # 显示保存位置
-            from ..utils.output_manager_registry import get_output_manager_registry
-            registry = get_output_manager_registry()
-            session_id = result.get("session_id")
-            output_manager = registry.get(session_id) if session_id else None
+            output_manager = result.get("output_manager")
             if output_manager:
                 print(output_manager.get_console_message())
 
@@ -312,10 +309,7 @@ class CommandRunner:
             print(f"\n所有层级完成: {result.get('all_layers_completed', False)}")
 
             # 显示保存位置
-            from ..utils.output_manager_registry import get_output_manager_registry
-            registry = get_output_manager_registry()
-            session_id = result.get("session_id")
-            output_manager = registry.get(session_id) if session_id else None
+            output_manager = result.get("output_manager")
             if output_manager:
                 print(output_manager.get_console_message())
         else:
@@ -349,10 +343,7 @@ class CommandRunner:
             print(f"所有层级完成: {result.get('all_layers_completed', False)}")
 
             # 显示保存位置
-            from ..utils.output_manager_registry import get_output_manager_registry
-            registry = get_output_manager_registry()
-            session_id = result.get("session_id")
-            output_manager = registry.get(session_id) if session_id else None
+            output_manager = result.get("output_manager")
             if output_manager:
                 print(output_manager.get_console_message())
         else:

@@ -1,87 +1,154 @@
 'use client';
 
-import { useState } from 'react';
-import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faChevronDown, faCheckSquare, faSquare } from '@fortawesome/free-solid-svg-icons';
+import React, { useState } from 'react';
+
+export interface DimensionOption {
+  id: string;
+  name: string;
+  disabled?: boolean;
+  detected?: boolean;
+}
 
 interface DimensionSelectorProps {
-  dimensions?: string[];
+  dimensions: DimensionOption[];
   selectedDimensions: string[];
-  onChange: (dimensions: string[]) => void;
+  onChange: (selected: string[]) => void;
+  disabled?: boolean;
+  autoDetected?: string[];
 }
 
 export default function DimensionSelector({
-  selectedDimensions = [],
+  dimensions,
+  selectedDimensions,
   onChange,
+  disabled = false,
+  autoDetected = [],
 }: DimensionSelectorProps) {
-  const [isOpen, setIsOpen] = useState(false);
-
-  const defaultDimensions = [
-    { id: 'location', label: '区位交通' },
-    { id: 'socio_economic', label: '社会经济' },
-    { id: 'villager_wishes', label: '村民意愿' },
-    { id: 'superior_planning', label: '上位规划' },
-    { id: 'natural_environment', label: '自然环境' },
-    { id: 'land_use', label: '土地利用' },
-    { id: 'traffic', label: '街巷空间' },
-    { id: 'public_services', label: '公共服务' },
-    { id: 'infrastructure', label: '基础设施' },
-    { id: 'ecological_green', label: '生态绿地' },
-    { id: 'architecture', label: '建筑风貌' },
-    { id: 'historical_culture', label: '历史文化' },
-  ];
+  const [selectAll, setSelectAll] = useState(false);
 
   const handleToggle = (dimensionId: string) => {
-    const next = selectedDimensions.includes(dimensionId)
-      ? selectedDimensions.filter((d) => d !== dimensionId)
+    if (disabled) return;
+
+    const newSelected = selectedDimensions.includes(dimensionId)
+      ? selectedDimensions.filter(id => id !== dimensionId)
       : [...selectedDimensions, dimensionId];
-    onChange(next);
+
+    onChange(newSelected);
+    setSelectAll(newSelected.length === dimensions.filter(d => !d.disabled).length);
+  };
+
+  const handleToggleAll = () => {
+    if (disabled) return;
+
+    const availableDimensions = dimensions.filter(d => !d.disabled).map(d => d.id);
+    const newSelected = selectAll ? [] : availableDimensions;
+
+    onChange(newSelected);
+    setSelectAll(!selectAll);
   };
 
   return (
-    <div className="relative">
-      {/* 更加简约的选择器外观，融入聊天卡片 */}
-      <button
-        type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-full hover:bg-white transition-all group"
-      >
-        <span className="text-xs font-medium text-gray-600 group-hover:text-green-600">
-          {selectedDimensions.length === 0 ? '全部分类' : `指定 ${selectedDimensions.length} 个维度`}
-        </span>
-        <FontAwesomeIcon 
-          icon={faChevronDown} 
-          className={`text-[10px] text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`}
-        />
-      </button>
+    <div className="dimension-selector">
+      <div className="d-flex justify-content-between align-items-center mb-2">
+        <label className="form-label mb-0">
+          <strong>选择需要修复的维度</strong>
+          {autoDetected.length > 0 && (
+            <span className="badge bg-info ms-2">
+              AI已识别 {autoDetected.length} 个维度
+            </span>
+          )}
+        </label>
+        <button
+          className="btn btn-sm btn-outline-secondary"
+          type="button"
+          onClick={handleToggleAll}
+          disabled={disabled}
+        >
+          <i className={`fas ${selectAll ? 'fa-check-square' : 'fa-square'} me-1`}></i>
+          {selectAll ? '取消全选' : '全选'}
+        </button>
+      </div>
 
-      {isOpen && (
-        <>
-          <div className="fixed inset-0 z-30" onClick={() => setIsOpen(false)} />
-          <div className="absolute left-0 bottom-full mb-2 z-40 w-64 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
-            <div className="p-2 grid grid-cols-2 gap-1 max-h-80 overflow-y-auto">
-              {defaultDimensions.map((dim) => {
-                const isSelected = selectedDimensions.includes(dim.id);
-                return (
-                  <button
-                    key={dim.id}
-                    onClick={() => handleToggle(dim.id)}
-                    className={`flex items-center gap-2 px-2 py-2 rounded-lg text-left transition-colors ${
-                      isSelected ? 'bg-green-50 text-green-700' : 'hover:bg-gray-50 text-gray-600'
-                    }`}
-                  >
-                    <FontAwesomeIcon 
-                      icon={isSelected ? faCheckSquare : faSquare} 
-                      className="text-xs" // 强制限制图标大小
-                    />
-                    <span className="text-[11px] truncate font-medium">{dim.label}</span>
-                  </button>
-                );
-              })}
+      <div className="dimension-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.5rem' }}>
+        {dimensions.map((dimension) => {
+          const isSelected = selectedDimensions.includes(dimension.id);
+          const isDetected = autoDetected.includes(dimension.id);
+
+          return (
+            <div
+              key={dimension.id}
+              className={`dimension-card ${isSelected ? 'selected' : ''} ${isDetected ? 'detected' : ''} ${dimension.disabled ? 'disabled' : ''}`}
+              style={{
+                border: '1px solid #dee2e6',
+                borderRadius: '0.375rem',
+                padding: '0.75rem',
+                cursor: dimension.disabled ? 'not-allowed' : 'pointer',
+                backgroundColor: isSelected ? 'var(--primary-green)' : (isDetected ? '#e7f5ff' : 'white'),
+                opacity: dimension.disabled ? 0.6 : 1,
+                transition: 'all 0.2s',
+              }}
+              onClick={() => handleToggle(dimension.id)}
+            >
+              <div className="d-flex align-items-center">
+                <i
+                  className={`fas ${isSelected ? 'fa-check-circle' : 'fa-circle'} me-2`}
+                  style={{ color: isSelected ? 'white' : (isDetected ? 'var(--primary-green)' : '#6c757d') }}
+                ></i>
+                <div className="flex-grow-1">
+                  <div className="dimension-name" style={{ fontWeight: 500, color: isSelected ? 'white' : 'inherit' }}>
+                    {dimension.name}
+                  </div>
+                  {isDetected && !isSelected && (
+                    <small className="text-muted" style={{ fontSize: '0.75rem' }}>
+                      <i className="fas fa-robot me-1"></i>
+                      AI识别
+                    </small>
+                  )}
+                  {dimension.disabled && (
+                    <small className="text-muted" style={{ fontSize: '0.75rem' }}>
+                      <i className="fas fa-lock me-1"></i>
+                      不可修复
+                    </small>
+                  )}
+                </div>
+              </div>
             </div>
-          </div>
-        </>
+          );
+        })}
+      </div>
+
+      {selectedDimensions.length > 0 && (
+        <div className="mt-2">
+          <small className="text-muted">
+            已选择 <strong>{selectedDimensions.length}</strong> 个维度
+          </small>
+        </div>
       )}
+
+      <style jsx>{`
+        .dimension-card:hover:not(.disabled) {
+          border-color: var(--primary-green);
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .dimension-card.selected:hover {
+          background-color: var(--primary-green);
+          opacity: 0.9;
+        }
+      `}</style>
     </div>
   );
 }
+
+// Predefined dimension options
+export const DIMENSION_OPTIONS: DimensionOption[] = [
+  { id: 'industry', name: '产业规划' },
+  { id: 'master_plan', name: '村庄总体规划' },
+  { id: 'traffic', name: '道路交通规划' },
+  { id: 'public_service', name: '公服设施规划' },
+  { id: 'infrastructure', name: '基础设施规划' },
+  { id: 'ecological', name: '生态绿地规划' },
+  { id: 'disaster_prevention', name: '防震减灾规划' },
+  { id: 'heritage', name: '历史文保规划' },
+  { id: 'landscape', name: '村庄风貌指引' },
+  { id: 'project_bank', name: '建设项目库' },
+];

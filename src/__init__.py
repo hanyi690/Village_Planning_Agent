@@ -44,6 +44,10 @@ from .tools import (
     save_checkpoint,
     load_checkpoint,
     list_checkpoints,
+    # 交互式
+    InteractiveTool,
+    review_report,
+    show_progress_and_wait,
     # 修复
     RevisionTool,
     parse_feedback,
@@ -53,6 +57,8 @@ from .tools import (
     VillageDataManager,
     read_village_data,
     knowledge_query,
+    generate_simple_map,
+    plan_village,
 )
 
 __all__ = [
@@ -75,6 +81,9 @@ __all__ = [
     "save_checkpoint",
     "load_checkpoint",
     "list_checkpoints",
+    "InteractiveTool",
+    "review_report",
+    "show_progress_and_wait",
     "RevisionTool",
     "parse_feedback",
     "revise_dimension",
@@ -83,4 +92,6 @@ __all__ = [
     "VillageDataManager",
     "read_village_data",
     "knowledge_query",
+    "generate_simple_map",
+    "plan_village",
 ]

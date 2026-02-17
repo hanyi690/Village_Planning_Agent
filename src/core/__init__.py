@@ -1,17 +1,17 @@
-"""Core module configuration and initialization."""
+"""
+核心模块 (Core Module)
+
+包含配置和初始化相关功能。
+"""
 
 from .config import (
+    OPENAI_API_KEY,
     LLM_MODEL,
-    LLM_PROVIDER,
     MAX_TOKENS,
-    LLM_TIMEOUT,
-    OPENAI_API_BASE,
     VECTOR_STORE_DIR,
     VECTORDB_PERSIST,
-    LANGCHAIN_TRACING_V2,
-    LANGCHAIN_API_KEY,
-    LANGCHAIN_PROJECT,
 )
+
 from .prompts import (
     SYSTEM_PROMPT,
     HUMAN_PROMPT_TEMPLATE,
@@ -19,19 +19,13 @@ from .prompts import (
 )
 
 __all__ = [
-    # LLM Configuration
+    # 配置
+    "OPENAI_API_KEY",
     "LLM_MODEL",
-    "LLM_PROVIDER",
     "MAX_TOKENS",
-    "LLM_TIMEOUT",
-    "OPENAI_API_BASE",
-    # Vector Store
     "VECTOR_STORE_DIR",
     "VECTORDB_PERSIST",
-    # LangSmith
-    "LANGCHAIN_TRACING_V2",
-    "LANGCHAIN_API_KEY",
-    "LANGCHAIN_PROJECT",
+
     # Prompts
     "SYSTEM_PROMPT",
     "HUMAN_PROMPT_TEMPLATE",

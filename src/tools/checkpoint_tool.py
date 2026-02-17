@@ -1,136 +1,27 @@
-"""Checkpoint persistence tool.
+"""
+Checkpoint工具 - 检查点持久化工具
 
-Provides complete lifecycle management for checkpoints:
-1. Save checkpoints
-2. Load checkpoints
-3. List checkpoints
-4. Rollback to specified checkpoint
-5. File cleanup
+提供checkpoint的完整生命周期管理：
+1. 保存checkpoint
+2. 加载checkpoint
+3. 列出checkpoint
+4. 回退到指定checkpoint
+5. 文件清理
 
-Follows tool pattern: all methods return structured Dict results.
+遵循tool pattern：所有方法返回结构化Dict结果。
 """
 
-from __future__ import annotations
-
-import json
 import re
 import shutil
-from datetime import datetime
+import json
 from pathlib import Path
-from typing import Any
-
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from datetime import datetime
+from typing import Dict, List, Optional, Any
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 
 from ..utils.logger import get_logger
-from ..utils.paths import get_project_root
 
 logger = get_logger(__name__)
-
-
-# ==========================================
-# SQLite存储实现（新增）
-# ==========================================
-
-class _SqlCheckpointStorage:
-    """
-    Checkpoint的SQLite存储实现（内部类）
-
-    提供基于数据库的checkpoint持久化功能（异步）。
-    """
-
-    def __init__(self) -> None:
-        """初始化SQLite存储"""
-        pass
-
-    async def save(
-        self,
-        project_name: str,
-        timestamp: str,
-        checkpoint_id: str,
-        state: dict[str, Any],
-        metadata: dict[str, Any]
-    ) -> str | None:
-        """保存checkpoint到SQLite数据库（异步）"""
-        try:
-            from backend.database import create_checkpoint_async
-
-            success = await create_checkpoint_async(
-                checkpoint_id=checkpoint_id,
-                session_id=timestamp,
-                layer=metadata.get("layer", 0),
-                description=metadata.get("description", ""),
-                state_snapshot=state,
-                checkpoint_metadata=metadata
-            )
-
-            if success:
-                logger.info(f"[SqlStorage] Checkpoint已保存: {checkpoint_id}")
-                return checkpoint_id
-            else:
-                logger.error(f"[SqlStorage] 保存checkpoint失败")
-                return None
-
-        except Exception as e:
-            logger.error(f"[SqlStorage] 保存checkpoint失败: {e}")
-            return None
-
-    async def load(self, checkpoint_id: str) -> dict[str, Any] | None:
-        """从SQLite数据库加载checkpoint（异步）"""
-        try:
-            from backend.database import get_checkpoint_async
-
-            data = await get_checkpoint_async(checkpoint_id)
-
-            if data:
-                logger.info(f"[SqlStorage] Checkpoint已加载: {checkpoint_id}")
-                return {
-                    "checkpoint_id": data["checkpoint_id"],
-                    "timestamp": data["timestamp"],
-                    "metadata": data.get("checkpoint_metadata", {}),
-                    "state": data["state_snapshot"]
-                }
-            else:
-                logger.error(f"[SqlStorage] Checkpoint不存在: {checkpoint_id}")
-                return None
-
-        except Exception as e:
-            logger.error(f"[SqlStorage] 加载checkpoint失败: {e}")
-            return None
-
-    async def list_checkpoints(self, project_name: str, timestamp: str | None = None) -> list[dict[str, Any]]:
-        """列出项目的所有checkpoint（异步）"""
-        try:
-            from backend.database import list_checkpoints_async
-
-            if timestamp:
-                checkpoints = await list_checkpoints_async(session_id=timestamp)
-            else:
-                # List all checkpoints (will need to filter by project name later)
-                checkpoints = await list_checkpoints_async()
-
-            return checkpoints
-
-        except Exception as e:
-            logger.error(f"[SqlStorage] 列出checkpoint失败: {e}")
-            return []
-
-    async def delete(self, checkpoint_id: str) -> bool:
-        """删除checkpoint（异步）"""
-        try:
-            from backend.database import delete_checkpoint_async
-
-            success = await delete_checkpoint_async(checkpoint_id)
-
-            if success:
-                logger.info(f"[SqlStorage] Checkpoint已删除: {checkpoint_id}")
-                return True
-            else:
-                logger.warning(f"[SqlStorage] Checkpoint不存在: {checkpoint_id}")
-                return False
-
-        except Exception as e:
-            logger.error(f"[SqlStorage] 删除checkpoint失败: {e}")
-            return False
 
 
 # ==========================================
@@ -144,12 +35,8 @@ class _JsonCheckpointStorage:
     提供基于文件系统的checkpoint持久化功能。
     """
 
-    def __init__(self, base_path: Path | None = None) -> None:
-        if base_path is None:
-            # 使用统一路径管理获取results目录的绝对路径
-            self.base_path = get_project_root() / "results"
-        else:
-            self.base_path = base_path
+    def __init__(self, base_path: Optional[Path] = None):
+        self.base_path = base_path or Path("results")
 
     def _get_checkpoint_dir(self, project_name: str, timestamp: str) -> Path:
         """获取checkpoint存储目录"""
@@ -167,9 +54,9 @@ class _JsonCheckpointStorage:
         project_name: str,
         timestamp: str,
         checkpoint_id: str,
-        state: dict[str, Any],
-        metadata: dict[str, Any]
-    ) -> str | None:
+        state: Dict[str, Any],
+        metadata: Dict[str, Any]
+    ) -> Optional[str]:
         """保存checkpoint到JSON文件"""
         try:
             checkpoint_dir = self._get_checkpoint_dir(project_name, timestamp)
@@ -194,7 +81,7 @@ class _JsonCheckpointStorage:
             logger.error(f"[JsonStorage] 保存checkpoint失败: {e}")
             return None
 
-    def load(self, file_path: str) -> dict[str, Any] | None:
+    def load(self, file_path: str) -> Optional[Dict[str, Any]]:
         """从JSON文件加载checkpoint"""
         try:
             path = Path(file_path)
@@ -212,7 +99,7 @@ class _JsonCheckpointStorage:
             logger.error(f"[JsonStorage] 加载checkpoint失败: {e}")
             return None
 
-    def list_checkpoints(self, project_name: str, timestamp: str | None = None) -> list[dict[str, Any]]:
+    def list_checkpoints(self, project_name: str, timestamp: Optional[str] = None) -> List[Dict[str, Any]]:
         """列出项目的所有checkpoint"""
         try:
             safe_name = self._sanitize_name(project_name)
@@ -266,7 +153,7 @@ class _JsonCheckpointStorage:
             logger.error(f"[JsonStorage] 删除checkpoint失败: {e}")
             return False
 
-    def _get_checkpoint_info(self, file_path: Path) -> dict[str, Any] | None:
+    def _get_checkpoint_info(self, file_path: Path) -> Optional[Dict[str, Any]]:
         """从checkpoint文件中提取元数据信息"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -324,10 +211,9 @@ class CheckpointTool:
     def __init__(
         self,
         project_name: str,
-        timestamp: str | None = None,
-        storage: _JsonCheckpointStorage | _SqlCheckpointStorage | None = None,
-        use_sqlite: bool = False
-    ) -> None:
+        timestamp: Optional[str] = None,
+        storage: Optional[_JsonCheckpointStorage] = None
+    ):
         """
         初始化CheckpointTool
 
@@ -335,17 +221,10 @@ class CheckpointTool:
             project_name: 项目名称
             timestamp: 时间戳（可选）
             storage: 存储后端（可选）
-            use_sqlite: 是否使用SQLite存储（默认False，使用JSON）
         """
         self.project_name = self._sanitize_name(project_name)
         self.timestamp = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        # Select storage backend
-        if use_sqlite:
-            self.storage = storage or _SqlCheckpointStorage()
-        else:
-            self.storage = storage or _JsonCheckpointStorage()
-
+        self.storage = storage or _JsonCheckpointStorage()
         self.checkpoint_index: Dict[str, Dict[str, Any]] = {}
         self._load_index()
 
@@ -368,10 +247,10 @@ class CheckpointTool:
 
     def save(
         self,
-        state: dict[str, Any],
+        state: Dict[str, Any],
         layer: int,
         description: str = ""
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         """
         保存checkpoint
 
@@ -453,7 +332,7 @@ class CheckpointTool:
                 "error": str(e)
             }
 
-    def load(self, checkpoint_id: str) -> dict[str, Any]:
+    def load(self, checkpoint_id: str) -> Dict[str, Any]:
         """
         加载checkpoint
 
@@ -494,11 +373,6 @@ class CheckpointTool:
             # 反序列化状态
             state = self._deserialize_state(data["state"])
 
-            # 移除 checkpoint_manager 字段（如果存在），避免序列化错误
-            if "checkpoint_manager" in state:
-                del state["checkpoint_manager"]
-                logger.info(f"[CheckpointTool] 已从加载的状态中移除 checkpoint_manager")
-
             logger.info(f"[CheckpointTool] Checkpoint已加载: {checkpoint_id}")
             return {
                 "success": True,
@@ -516,7 +390,7 @@ class CheckpointTool:
                 "error": str(e)
             }
 
-    def list(self, include_all: bool = False) -> dict[str, Any]:
+    def list(self, include_all: bool = False) -> Dict[str, Any]:
         """
         列出checkpoint
 
@@ -559,7 +433,7 @@ class CheckpointTool:
                 "error": str(e)
             }
 
-    def get_latest(self) -> dict[str, Any]:
+    def get_latest(self) -> Dict[str, Any]:
         """
         获取最新的checkpoint
 
@@ -598,88 +472,12 @@ class CheckpointTool:
                 "error": str(e)
             }
 
-    def resume_from_checkpoint(
-        self,
-        checkpoint_id: str,
-        updates: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        """
-        从checkpoint恢复执行（准备状态用于继续）
-
-        Args:
-            checkpoint_id: checkpoint ID
-            updates: 可选的状态更新（例如重置pause_after_step）
-
-        Returns:
-            结构化结果字典 {
-                "success": bool,
-                "state": dict,
-                "metadata": dict,
-                "error": str
-            }
-        """
-        try:
-            # 加载checkpoint
-            load_result = self.load(checkpoint_id)
-            if not load_result["success"]:
-                logger.error(f"[CheckpointTool] 无法加载checkpoint: {checkpoint_id}")
-                return {
-                    "success": False,
-                    "state": None,
-                    "metadata": {},
-                    "error": load_result["error"]
-                }
-
-            state = load_result["state"]
-            metadata = load_result["metadata"]
-
-            # 应用状态更新
-            if updates:
-                state.update(updates)
-
-            logger.info(f"[CheckpointTool] 已从checkpoint恢复: {checkpoint_id}")
-            return {
-                "success": True,
-                "state": state,
-                "metadata": metadata,
-                "error": ""
-            }
-
-        except Exception as e:
-            logger.error(f"[CheckpointTool] 恢复checkpoint时出错: {e}")
-            return {
-                "success": False,
-                "state": None,
-                "metadata": {},
-                "error": str(e)
-            }
-
-    def get_checkpoint_state(
-        self,
-        checkpoint_id: str
-    ) -> dict[str, Any]:
-        """
-        获取checkpoint的完整状态（便捷方法）
-
-        Args:
-            checkpoint_id: checkpoint ID
-
-        Returns:
-            结构化结果字典 {
-                "success": bool,
-                "state": dict,
-                "metadata": dict,
-                "error": str
-            }
-        """
-        return self.resume_from_checkpoint(checkpoint_id)
-
     def rollback(
         self,
         checkpoint_id: str,
-        current_output_dir: Path | None = None,
+        current_output_dir: Optional[Path] = None,
         dry_run: bool = False
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
         """
         回退到指定checkpoint
 
@@ -748,7 +546,7 @@ class CheckpointTool:
                 "error": str(e)
             }
 
-    def _serialize_state(self, state: dict[str, Any]) -> dict[str, Any]:
+    def _serialize_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """序列化状态（处理不可序列化的对象）"""
         serialized = {}
 
@@ -756,8 +554,13 @@ class CheckpointTool:
             if key == "messages":
                 serialized[key] = self._serialize_messages(value)
             elif key == "output_manager":
-                # Skip - output_manager is no longer in state, managed by registry
-                continue
+                if value:
+                    serialized[key] = {
+                        "_type": "OutputManager",
+                        "project_name": getattr(value, "project_name", ""),
+                        "timestamp": getattr(value, "timestamp", ""),
+                        "output_path": str(getattr(value, "output_path", ""))
+                    }
             elif isinstance(value, (str, int, float, bool, type(None), list, dict)):
                 serialized[key] = value
             else:
@@ -765,7 +568,7 @@ class CheckpointTool:
 
         return serialized
 
-    def _deserialize_state(self, serialized_state: dict[str, Any]) -> dict[str, Any]:
+    def _deserialize_state(self, serialized_state: Dict[str, Any]) -> Dict[str, Any]:
         """反序列化状态"""
         deserialized = {}
 
@@ -773,8 +576,7 @@ class CheckpointTool:
             if key == "messages":
                 deserialized[key] = self._deserialize_messages(value)
             elif key == "output_manager":
-                # Skip - output_manager is managed by registry
-                continue
+                deserialized[key] = None  # 占位符
             else:
                 deserialized[key] = value
 
@@ -830,7 +632,7 @@ class CheckpointTool:
         self,
         output_dir: Path,
         target_layer: int
-    ) -> list[Path]:
+    ) -> List[Path]:
         """识别需要清理的文件（回退点之后的文件）"""
         files_to_delete = []
 
@@ -857,7 +659,7 @@ class CheckpointTool:
 
         return files_to_delete
 
-    def _clean_files(self, files: list[Path]) -> int:
+    def _clean_files(self, files: List[Path]) -> int:
         """清理文件"""
         deleted_count = 0
 
@@ -927,7 +729,7 @@ class CheckpointTool:
 
 def save_checkpoint(
     project_name: str,
-    state: dict[str, Any],
+    state: Dict[str, Any],
     layer: int,
     description: str = ""
 ) -> str:
@@ -951,7 +753,7 @@ def save_checkpoint(
 def load_checkpoint(
     project_name: str,
     checkpoint_id: str
-) -> dict[str, Any] | None:
+) -> Optional[Dict[str, Any]]:
     """
     便捷函数：加载checkpoint
 
@@ -970,7 +772,7 @@ def load_checkpoint(
 def list_checkpoints(
     project_name: str,
     include_all: bool = False
-) -> list[dict[str, Any]]:
+) -> List[Dict[str, Any]]:
     """
     便捷函数：列出checkpoint
 

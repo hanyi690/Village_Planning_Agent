@@ -1,14 +1,13 @@
-"""Unified LLM Factory for Village Planning Agent.
+"""
+Unified LLM Factory for Village Planning Agent
 
 Supports both OpenAI and ZhipuAI (GLM) providers with auto-detection based on model name.
 Includes automatic LangSmith tracing support.
 """
 
-from __future__ import annotations
-
 import os
 from enum import Enum
-from typing import Any, Callable, List
+from typing import Optional, Any, List, Dict
 
 from ..utils.logger import get_logger
 
@@ -21,7 +20,7 @@ class LLMProvider(Enum):
     ZHIPUAI = "zhipuai"
 
 
-def detect_provider(model_name: str, explicit_provider: str | None = None) -> LLMProvider:
+def detect_provider(model_name: str, explicit_provider: Optional[str] = None) -> LLMProvider:
     """
     Detect the appropriate LLM provider based on model name prefix or explicit setting.
 
@@ -87,7 +86,9 @@ def get_api_key(provider: LLMProvider) -> str:
         return key
 
 
-def _merge_callbacks(user_callbacks: list[Any] | None = None) -> list[Any]:
+def _merge_callbacks(
+    user_callbacks: Optional[List[Any]] = None
+) -> List[Any]:
     """
     Merge user-provided callbacks with LangSmith callbacks
 
@@ -122,11 +123,9 @@ def _create_openai_llm(
     model: str,
     temperature: float = 0.7,
     max_tokens: int = 2000,
-    callbacks: list[Any] | None = None,
-    metadata: dict[str, Any] | None = None,
-    timeout: int = 300,
-    streaming: bool = False,
-    **kwargs: Any
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs
 ) -> Any:
     """
     Create an OpenAI LLM instance.
@@ -137,8 +136,6 @@ def _create_openai_llm(
         max_tokens: Maximum tokens to generate
         callbacks: Optional list of callback handlers (will be merged with LangSmith callbacks)
         metadata: Optional metadata dict for LangSmith tracing
-        timeout: Request timeout in seconds (default: 300)
-        streaming: Enable streaming output (default: False)
         **kwargs: Additional parameters to pass to the LLM
 
     Returns:
@@ -167,16 +164,11 @@ def _create_openai_llm(
     if metadata:
         kwargs['metadata'] = metadata
 
-    # Set timeout if not already provided
-    if 'timeout' not in kwargs:
-        kwargs['timeout'] = timeout
-
     return ChatOpenAI(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
         api_key=api_key,
-        streaming=streaming,
         **kwargs
     )
 
@@ -185,11 +177,9 @@ def _create_zhipuai_llm(
     model: str,
     temperature: float = 0.7,
     max_tokens: int = 2000,
-    callbacks: list[Any] | None = None,
-    metadata: dict[str, Any] | None = None,
-    timeout: int = 300,
-    streaming: bool = False,
-    **kwargs: Any
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs
 ) -> Any:
     """
     Create a ZhipuAI (GLM) LLM instance.
@@ -200,8 +190,6 @@ def _create_zhipuai_llm(
         max_tokens: Maximum tokens to generate
         callbacks: Optional list of callback handlers (will be merged with LangSmith callbacks)
         metadata: Optional metadata dict for LangSmith tracing
-        timeout: Request timeout in seconds (default: 300)
-        streaming: Enable streaming output (default: False)
         **kwargs: Additional parameters to pass to the LLM
 
     Returns:
@@ -228,30 +216,23 @@ def _create_zhipuai_llm(
     if metadata:
         kwargs['metadata'] = metadata
 
-    # Set timeout if not already provided
-    if 'timeout' not in kwargs:
-        kwargs['timeout'] = timeout
-
     return ChatZhipuAI(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
         api_key=api_key,
-        streaming=streaming,
         **kwargs
     )
 
 
 def create_llm(
-    model: str | None = None,
+    model: Optional[str] = None,
     temperature: float = 0.7,
     max_tokens: int = 2000,
-    provider: str | None = None,
-    callbacks: list[Any] | None = None,
-    metadata: dict[str, Any] | None = None,
-    timeout: int = 300,
-    streaming: bool = False,
-    **kwargs: Any
+    provider: Optional[str] = None,
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs
 ) -> Any:
     """
     Create an LLM instance with auto-detected provider.
@@ -267,8 +248,6 @@ def create_llm(
         provider: Explicit provider override ("openai" or "zhipuai"). If None, auto-detects from model name
         callbacks: Optional list of callback handlers (will be merged with LangSmith callbacks)
         metadata: Optional metadata dict for LangSmith tracing
-        timeout: Request timeout in seconds (default: 300)
-        streaming: Enable streaming output (default: False)
         **kwargs: Additional parameters passed to the underlying LLM constructor
 
     Returns:
@@ -297,11 +276,6 @@ def create_llm(
         >>> from langchain_core.messages import HumanMessage
         >>> response = llm.invoke([HumanMessage(content="Hello!")])
         >>> print(response.content)
-
-        >>> # Enable streaming
-        >>> llm = create_llm(streaming=True)
-        >>> for chunk in llm.stream([HumanMessage(content="Hello!")]):
-        ...     print(chunk.content, end="")
     """
     from .config import LLM_MODEL, LANGCHAIN_TRACING_V2, LANGCHAIN_PROJECT
 
@@ -325,8 +299,6 @@ def create_llm(
             max_tokens=max_tokens,
             callbacks=callbacks,
             metadata=metadata,
-            timeout=timeout,
-            streaming=streaming,
             **kwargs
         )
     else:  # OPENAI
@@ -336,8 +308,6 @@ def create_llm(
             max_tokens=max_tokens,
             callbacks=callbacks,
             metadata=metadata,
-            timeout=timeout,
-            streaming=streaming,
             **kwargs
         )
 
@@ -346,8 +316,8 @@ def create_llm(
 def get_default_llm(
     temperature: float = 0.7,
     max_tokens: int = 2000,
-    callbacks: list[Any] | None = None,
-    metadata: dict[str, Any] | None = None
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None
 ) -> Any:
     """
     Get the default LLM instance using model from environment.
@@ -371,9 +341,9 @@ def get_openai_llm(
     model: str = "gpt-4o-mini",
     temperature: float = 0.7,
     max_tokens: int = 2000,
-    callbacks: list[Any] | None = None,
-    metadata: dict[str, Any] | None = None,
-    **kwargs: Any
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs
 ) -> Any:
     """
     Get an OpenAI LLM instance explicitly.
@@ -397,9 +367,9 @@ def get_zhipuai_llm(
     model: str = "glm-4-flash",
     temperature: float = 0.7,
     max_tokens: int = 2000,
-    callbacks: list[Any] | None = None,
-    metadata: dict[str, Any] | None = None,
-    **kwargs: Any
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs
 ) -> Any:
     """
     Get a ZhipuAI LLM instance explicitly.

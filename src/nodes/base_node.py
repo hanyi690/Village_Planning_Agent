@@ -1,13 +1,11 @@
-"""Base node class for all graph nodes.
+"""
+节点基类
 
-Defines the base interface and common functionality for all nodes.
+定义所有节点的基础接口和通用功能。
 """
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
-from typing import Any
-
+from typing import Dict, Any
 from langchain_core.messages import AIMessage
 
 from ..utils.logger import get_logger
@@ -31,39 +29,39 @@ class BaseNode(ABC):
         ...         return {"output_key": result}
     """
 
-    def __init__(self, node_name: str) -> None:
+    def __init__(self, node_name: str):
         """
-        Initialize the node.
+        初始化节点
 
         Args:
-            node_name: Node name (used for logging and debugging)
+            node_name: 节点名称（用于日志和调试）
         """
         self.node_name = node_name
 
     @abstractmethod
-    def execute(self, state: dict[str, Any]) -> dict[str, Any]:
+    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute node logic (must be implemented by subclasses).
+        执行节点逻辑（子类必须实现）
 
         Args:
-            state: Current state
+            state: 当前状态
 
         Returns:
-            State update dictionary
+            状态更新字典
         """
         pass
 
-    def __call__(self, state: dict[str, Any]) -> dict[str, Any]:
+    def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Callable interface for LangGraph.
+        可调用接口，用于LangGraph
 
-        This allows node instances to be used directly as LangGraph node functions.
+        这使得节点实例可以直接用作LangGraph的节点函数。
 
         Args:
-            state: Current state
+            state: 当前状态
 
         Returns:
-            State update dictionary
+            状态更新字典
         """
         logger.info(f"[{self.node_name}] 开始执行")
         try:
@@ -74,30 +72,30 @@ class BaseNode(ABC):
             logger.error(f"[{self.node_name}] 执行失败: {e}")
             return self._build_error_response(e)
 
-    def _build_error_response(self, error: Exception) -> dict[str, Any]:
+    def _build_error_response(self, error: Exception) -> Dict[str, Any]:
         """
-        Build error response (can be overridden by subclasses).
+        构建错误响应（子类可重写）
 
         Args:
-            error: Exception object
+            error: 异常对象
 
         Returns:
-            State update dictionary containing error information
+            包含错误信息的状态更新字典
         """
         return {
             "messages": [AIMessage(content=f"{self.node_name}执行失败: {error}")]
         }
 
-    def validate_state(self, state: dict[str, Any], required_keys: list[str]) -> bool:
+    def validate_state(self, state: Dict[str, Any], required_keys: list) -> bool:
         """
-        Validate that state contains all required keys.
+        验证状态是否包含必需的键
 
         Args:
-            state: Current state
-            required_keys: List of required keys
+            state: 当前状态
+            required_keys: 必需的键列表
 
         Returns:
-            True if validation passes, False otherwise
+            True 如果验证通过，False 否则
         """
         missing_keys = [key for key in required_keys if key not in state]
         if missing_keys:
@@ -105,7 +103,7 @@ class BaseNode(ABC):
             return False
         return True
 
-    def __repr__(self) -> str:  # pragma: no cover
+    def __repr__(self) -> str:
         return f"{self.__class__.__name__}(name='{self.node_name}')"
 
 

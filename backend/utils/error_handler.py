@@ -1,236 +1,139 @@
-# -*- coding: utf-8 -*-
 """
-Centralized Error Handling for Backend APIs
+Error Handler - 统一错误处理
 
-Provides standardized error handling utilities to reduce code duplication
-across API endpoints.
+提供标准化的错误响应方法。
 """
 
-import functools
-import logging
-import traceback
-from typing import Any, Callable, TypeVar
-
+from typing import Optional
 from fastapi import HTTPException
 
 
-T = TypeVar("T")
-logger = logging.getLogger(__name__)
+class ErrorHandler:
+    """错误处理类 - 提供统一的错误响应"""
 
+    @staticmethod
+    def village_not_found(village_name: str) -> HTTPException:
+        """
+        村庄不存在错误
 
-def handle_api_error(
-    error: Exception,
-    context: str,
-    status_code: int = 500,
-    reraise: bool = False
-) -> HTTPException:
-    """
-    Standardized API error handler
+        Args:
+            village_name: 村庄名称
 
-    Args:
-        error: The exception that occurred
-        context: Description of where the error happened
-        status_code: HTTP status code to return
-        reraise: If True, re-raises the exception instead of returning HTTPException
-
-    Returns:
-        HTTPException with formatted error message
-    """
-    error_msg = str(error)
-    logger.error(f"[ERROR] {context}: {error_msg}", exc_info=True)
-
-    if reraise:
-        raise
-
-    return HTTPException(
-        status_code=status_code,
-        detail=f"{context} failed: {error_msg}"
-    )
-
-
-def log_and_raise(
-    error: Exception,
-    context: str,
-    status_code: int = 500
-) -> None:
-    """
-    Log error and raise HTTPException
-
-    Use this when you want to always raise an exception.
-
-    Args:
-        error: The exception that occurred
-        context: Description of where the error happened
-        status_code: HTTP status code
-
-    Raises:
-        HTTPException
-    """
-    error_msg = str(error)
-    logger.error(f"[ERROR] {context}: {error_msg}", exc_info=True)
-    raise HTTPException(
-        status_code=status_code,
-        detail=f"{context} failed: {error_msg}"
-    )
-
-
-def api_error_handler(
-    context: str,
-    status_code: int = 500,
-    reraise: bool = False
-):
-    """
-    Decorator to automatically handle exceptions in API endpoints
-
-    Args:
-        context: Description of what the endpoint does
-        status_code: HTTP status code for errors
-        reraise: If True, re-raises instead of catching
-    """
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        @functools.wraps(func)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> T:
-            try:
-                return await func(*args, **kwargs)
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise handle_api_error(e, context, status_code, reraise)
-
-        @functools.wraps(func)
-        def sync_wrapper(*args: Any, **kwargs: Any) -> T:
-            try:
-                return func(*args, **kwargs)
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise handle_api_error(e, context, status_code, reraise)
-
-        import asyncio
-        if asyncio.iscoroutinefunction(func):
-            return async_wrapper
-        return sync_wrapper
-    return decorator
-
-
-def validate_required(value: Any, field_name: str, min_length: int = 0) -> None:
-    """
-    Validate required field
-
-    Args:
-        value: Value to validate
-        field_name: Name of the field (for error message)
-        min_length: Minimum length for string values
-
-    Raises:
-        HTTPException: If validation fails
-    """
-    if not value or (isinstance(value, str) and len(value.strip()) < min_length):
-        suffix = f" or too short (min {min_length} chars)" if min_length > 0 else ""
-        raise HTTPException(
-            status_code=400,
-            detail=f"{field_name} cannot be empty{suffix}"
-        )
-
-
-def validate_session_exists(session_id: str, sessions_dict: dict) -> None:
-    """
-    Validate that a session exists
-
-    Args:
-        session_id: Session ID to validate
-        sessions_dict: Dictionary containing sessions
-
-    Raises:
-        HTTPException: If session not found
-    """
-    if session_id not in sessions_dict:
-        raise HTTPException(
+        Returns:
+            HTTPException 实例
+        """
+        return HTTPException(
             status_code=404,
-            detail=f"Session not found: {session_id}"
+            detail=f"村庄不存在: {village_name}"
+        )
+
+    @staticmethod
+    def session_not_found(session: str) -> HTTPException:
+        """
+        会话不存在错误
+
+        Args:
+            session: 会话ID
+
+        Returns:
+            HTTPException 实例
+        """
+        return HTTPException(
+            status_code=404,
+            detail=f"会话不存在: {session}"
+        )
+
+    @staticmethod
+    def no_sessions(village_name: Optional[str] = None) -> HTTPException:
+        """
+        没有会话错误
+
+        Args:
+            village_name: 村庄名称（可选）
+
+        Returns:
+            HTTPException 实例
+        """
+        if village_name:
+            return HTTPException(
+                status_code=404,
+                detail=f"村庄 {village_name} 没有规划会话"
+            )
+        return HTTPException(
+            status_code=404,
+            detail="村庄没有规划会话"
+        )
+
+    @staticmethod
+    def file_not_found(filename: str, layer: Optional[str] = None) -> HTTPException:
+        """
+        文件不存在错误
+
+        Args:
+            filename: 文件名
+            layer: 层级（可选）
+
+        Returns:
+            HTTPException 实例
+        """
+        if layer:
+            return HTTPException(
+                status_code=404,
+                detail=f"层级 {layer} 中的文件不存在: {filename}"
+            )
+        return HTTPException(
+            status_code=404,
+            detail=f"文件不存在: {filename}"
+        )
+
+    @staticmethod
+    def layer_not_found(layer: str) -> HTTPException:
+        """
+        层级不存在错误
+
+        Args:
+            layer: 层级名称
+
+        Returns:
+            HTTPException 实例
+        """
+        return HTTPException(
+            status_code=404,
+            detail=f"层级不存在: {layer}"
+        )
+
+    @staticmethod
+    def checkpoint_not_found(checkpoint_id: str) -> HTTPException:
+        """
+        检查点不存在错误
+
+        Args:
+            checkpoint_id: 检查点ID
+
+        Returns:
+            HTTPException 实例
+        """
+        return HTTPException(
+            status_code=404,
+            detail=f"检查点不存在: {checkpoint_id}"
+        )
+
+    @staticmethod
+    def generic_error(message: str, status_code: int = 400) -> HTTPException:
+        """
+        通用错误
+
+        Args:
+            message: 错误消息
+            status_code: HTTP状态码
+
+        Returns:
+            HTTPException 实例
+        """
+        return HTTPException(
+            status_code=status_code,
+            detail=message
         )
 
 
-def safe_execute(
-    func: Callable[..., T],
-    *args: Any,
-    default: T = None,
-    log_error: bool = True,
-    **kwargs: Any
-) -> T:
-    """
-    Safely execute a function, returning default on error
-
-    Args:
-        func: Function to execute
-        *args: Positional arguments for function
-        default: Value to return on error
-        log_error: Whether to log errors
-        **kwargs: Keyword arguments for function
-
-    Returns:
-        Function result or default value
-    """
-    try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        if log_error:
-            logger.error(f"Safe execution failed: {e}")
-        return default
-
-
-def build_error_response(
-    error: str,
-    context: str | None = None
-) -> dict:
-    """
-    Build standardized error response
-
-    Args:
-        error: Error message
-        context: Optional context about where the error occurred
-
-    Returns:
-        Error response dict
-    """
-    if context:
-        logger.error(f"[ERROR] {context}: {error}")
-
-    return {
-        "success": False,
-        "error": error,
-        "message": f"{context}: {error}" if context else error
-    }
-
-
-def build_success_response(
-    message: str,
-    **data: Any
-) -> dict:
-    """
-    Build standardized success response
-
-    Args:
-        message: Success message
-        **data: Additional data to include
-
-    Returns:
-        Success response dict
-    """
-    return {
-        "success": True,
-        "message": message,
-        **data
-    }
-
-
-__all__ = [
-    "handle_api_error",
-    "log_and_raise",
-    "api_error_handler",
-    "validate_required",
-    "validate_session_exists",
-    "safe_execute",
-    "build_error_response",
-    "build_success_response",
-]
+__all__ = ["ErrorHandler"]

@@ -142,10 +142,9 @@ class RevisionTool:
         try:
             logger.info(f"[RevisionTool] 开始修复维度: {dimension} (第{revision_count + 1}次)")
 
-            # 根据维度选择正确的规划器
-            # 统一使用 GenericPlanner（支持所有层）
-            from ..planners.generic_planner import GenericPlannerFactory
-            planner = GenericPlannerFactory.create_planner(dimension)
+            # 使用planner进行修复
+            from ..planners.detailed_planners import DetailedPlannerFactory
+            planner = DetailedPlannerFactory.create_planner(dimension)
 
             revised_result = planner.execute_with_feedback(
                 state=state,

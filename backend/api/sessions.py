@@ -1,43 +1,25 @@
 """
 Sessions API endpoints - UI session management
 会话API端点 - UI会话管理
-
-This API manages UI-specific sessions (conversations, form submissions).
-It does NOT create planning sessions - use /api/planning/start for that.
-此API管理UI特定的会话（对话、表单提交）。
-不创建规划会话 - 请使用 /api/planning/start 创建规划会话。
 """
-
-from __future__ import annotations
-
-import asyncio
-import json
-import logging
-import uuid
-from datetime import datetime
-from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from typing import Dict, Optional, List, Literal
 from pydantic import BaseModel, Field
+import uuid
+import asyncio
+import json
+from datetime import datetime
+from pathlib import Path
+import sys
 
-from backend.schemas import ConversationMessage, ConversationState
-from backend.utils.error_handler import handle_api_error
-from backend.database import (
-    # Async UI session operations
-    create_ui_session_async,
-    get_ui_session_async,
-    update_ui_session_async,
-    delete_ui_session_async,
-    list_ui_sessions_async,
-    # Async UI message operations
-    create_ui_message_async,
-    get_ui_messages_async,
-    delete_ui_messages_async,
-)
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from schemas import ConversationMessage, ConversationState
+from services.shared_task_manager import task_manager
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 # Constants
 WELCOME_MESSAGE = """👋 欢迎使用村庄规划智能体！
@@ -50,9 +32,8 @@ WELCOME_MESSAGE = """👋 欢迎使用村庄规划智能体！
 
 请上传村庄现状数据文件，或直接告诉我村庄名称和信息。"""
 
-# Global UI session storage (for backward compatibility, backed by database)
-sessions: dict[str, ConversationState] = {}
-USE_DATABASE_PERSISTENCE = True
+# Global session storage
+sessions: Dict[str, ConversationState] = {}
 
 
 # ============================================
@@ -61,11 +42,7 @@ USE_DATABASE_PERSISTENCE = True
 
 class CreateSessionRequest(BaseModel):
     """Session creation request"""
-    session_type: str = Field(
-        default="conversation",
-        description="会话类型",
-        pattern="^(conversation|form|cli|api)$"
-    )
+    session_type: Literal["conversation", "form", "cli", "api"] = Field(default="conversation", description="会话类型")
 
 
 class LinkTaskRequest(BaseModel):
@@ -75,14 +52,12 @@ class LinkTaskRequest(BaseModel):
 
 class AddMessageRequest(BaseModel):
     """Add message request"""
-    role: str = Field(..., description="消息角色", pattern="^(user|assistant|system)$")
+    role: Literal["user", "assistant", "system"] = Field(..., description="消息角色")
     content: str = Field(..., description="消息内容")
-    message_type: str = Field(
-        default="text",
-        description="消息类型",
-        pattern="^(text|file|progress|action|result|error|system)$"
+    message_type: Literal["text", "file", "progress", "action", "result", "error", "system"] = Field(
+        default="text", description="消息类型"
     )
-    metadata: dict[str, Any] | None = Field(None, description="额外元数据")
+    metadata: Optional[Dict] = Field(None, description="额外元数据")
 
 
 class SessionResponse(BaseModel):
@@ -90,38 +65,26 @@ class SessionResponse(BaseModel):
     session_id: str
     session_type: str
     status: str
-    message: str | None = None
+    message: Optional[str] = None
 
 
 # ============================================
 # Helper Functions
 # ============================================
 
-def get_session(session_id: str) -> ConversationState | None:
+def get_session(session_id: str) -> Optional[ConversationState]:
     """Get session by ID"""
     return sessions.get(session_id)
 
 
-async def create_session(session_id: str, session_type: str) -> ConversationState:
-    """Create a new session (async)"""
+def create_session(session_id: str, session_type: str) -> ConversationState:
+    """Create a new session"""
     conv = ConversationState(conversation_id=session_id, status="idle")
     sessions[session_id] = conv
-
-    if USE_DATABASE_PERSISTENCE:
-        try:
-            await create_ui_session_async(session_id, session_type)
-        except Exception as e:
-            logger.error(f"Failed to create UI session in database: {e}")
-
     return conv
 
 
-def create_message(
-    role: str,
-    content: str,
-    message_type: str = "text",
-    **kwargs
-) -> ConversationMessage:
+def create_message(role: str, content: str, message_type: str = "text", **kwargs) -> ConversationMessage:
     """Create a conversation message with common fields"""
     return ConversationMessage(
         role=role,
@@ -130,6 +93,14 @@ def create_message(
         timestamp=datetime.now(),
         **kwargs,
     )
+
+
+def handle_api_error(error: Exception, context: str) -> HTTPException:
+    """Standardized error handler"""
+    import traceback
+    print(f"[ERROR] {context}: {str(error)}", file=sys.stderr)
+    print(traceback.format_exc(), file=sys.stderr)
+    return HTTPException(status_code=500, detail=f"{context}失败: {str(error)}")
 
 
 # ============================================
@@ -144,8 +115,9 @@ async def create_new_session(request: CreateSessionRequest = CreateSessionReques
     """
     try:
         session_id = str(uuid.uuid4())
-        session = await create_session(session_id, request.session_type)
+        session = create_session(session_id, request.session_type)
 
+        # Add welcome message for conversation sessions
         if request.session_type == "conversation":
             session.messages.append(create_message("assistant", WELCOME_MESSAGE))
 
@@ -158,7 +130,7 @@ async def create_new_session(request: CreateSessionRequest = CreateSessionReques
             message="会话已创建",
         )
     except Exception as e:
-        raise handle_api_error(e, "创建会话", status_code=500)
+        raise handle_api_error(e, "创建会话")
 
 
 @router.get("/{session_id}")
@@ -183,15 +155,16 @@ async def delete_session(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
 
+    # Only allow deletion if not linked to an active task
+    if session.task_id:
+        task_info = task_manager.get_task(session.task_id)
+        if task_info and task_info["status"] in ["pending", "running", "paused", "reviewing", "revising"]:
+            raise HTTPException(
+                status_code=400,
+                detail="无法删除关联到活动任务的会话"
+            )
+
     del sessions[session_id]
-
-    if USE_DATABASE_PERSISTENCE:
-        try:
-            await delete_ui_messages_async(session_id)
-            await delete_ui_session_async(session_id)
-        except Exception as e:
-            logger.error(f"Failed to delete UI session from database: {e}")
-
     return {"message": f"会话已删除: {session_id}"}
 
 
@@ -201,22 +174,20 @@ async def list_sessions():
     List all sessions
     列出所有会话
     """
-    session_list = [
-        {
-            "session_id": session_id,
-            "status": session.status,
-            "project_name": session.project_name,
-            "task_id": session.task_id,
-            "message_count": len(session.messages),
-            "created_at": session.created_at.isoformat(),
-            "updated_at": session.updated_at.isoformat(),
-        }
-        for session_id, session in sessions.items()
-    ]
-
     return {
-        "total": len(session_list),
-        "sessions": session_list,
+        "total": len(sessions),
+        "sessions": [
+            {
+                "session_id": session_id,
+                "status": session.status,
+                "project_name": session.project_name,
+                "task_id": session.task_id,
+                "message_count": len(session.messages),
+                "created_at": session.created_at.isoformat(),
+                "updated_at": session.updated_at.isoformat(),
+            }
+            for session_id, session in sessions.items()
+        ],
     }
 
 
@@ -231,6 +202,7 @@ async def add_message(session_id: str, request: AddMessageRequest):
         if not session:
             raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
 
+        # Add user message
         user_message = create_message(
             request.role,
             request.content,
@@ -240,18 +212,6 @@ async def add_message(session_id: str, request: AddMessageRequest):
         session.messages.append(user_message)
         session.updated_at = datetime.now()
 
-        if USE_DATABASE_PERSISTENCE:
-            try:
-                await create_ui_message_async(
-                    session_id=session_id,
-                    role=request.role,
-                    content=request.content,
-                    message_type=request.message_type,
-                    metadata=request.metadata
-                )
-            except Exception as e:
-                logger.error(f"Failed to save message to database: {e}")
-
         return {
             "success": True,
             "message": "消息已添加",
@@ -260,31 +220,36 @@ async def add_message(session_id: str, request: AddMessageRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise handle_api_error(e, "添加消息", status_code=500)
+        raise handle_api_error(e, "添加消息")
 
 
 @router.post("/{session_id}/link")
 async def link_to_task(session_id: str, request: LinkTaskRequest):
     """
-    Link UI session to a planning task
-    关联UI会话到规划任务
-
-    Note: This does NOT create the planning task.
-    Use POST /api/planning/start to create planning tasks.
+    Link session to a task
+    关联会话到任务
     """
     try:
         session = get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail=f"会话不存在: {session_id}")
 
+        # Verify task exists
+        task_info = task_manager.get_task(request.task_id)
+        if not task_info:
+            raise HTTPException(status_code=404, detail=f"任务不存在: {request.task_id}")
+
+        # Link session to task
         session.task_id = request.task_id
+        session.project_name = task_info.get("request", {}).get("project_name")
         session.status = "planning"
         session.updated_at = datetime.now()
 
+        # Add system message
         session.messages.append(
             create_message(
                 "system",
-                f"🚀 规划任务已启动\n\n任务ID: {request.task_id}\n可以通过 /api/planning/stream/{request.task_id} 查看实时进度",
+                f"🚀 规划任务已启动\n\n任务ID: {request.task_id}\n村庄: {session.project_name}",
                 "system",
                 task_id=request.task_id,
             )
@@ -295,12 +260,12 @@ async def link_to_task(session_id: str, request: LinkTaskRequest):
             "task_id": request.task_id,
             "session_id": session_id,
             "status": "planning",
-            "message": f"UI会话已关联到规划任务: {request.task_id}",
+            "message": f"会话已关联到任务: {request.task_id}",
         }
     except HTTPException:
         raise
     except Exception as e:
-        raise handle_api_error(e, "关联任务", status_code=500)
+        raise handle_api_error(e, "关联任务")
 
 
 @router.get("/{session_id}/stream")
@@ -319,23 +284,35 @@ async def stream_session_updates(session_id: str):
                 yield f"data: {json.dumps({'error': 'Session not found'})}\n\n"
                 break
 
+            # If session is linked to a task, stream task updates
             if session.task_id:
-                event_data = {
-                    "type": "session_update",
-                    "session_id": session_id,
-                    "data": {
-                        "status": session.status,
-                        "message_count": len(session.messages),
-                        "updated_at": session.updated_at.isoformat(),
+                task_info = task_manager.get_task(session.task_id)
+                if task_info:
+                    event_data = {
+                        "type": "task_update",
+                        "session_id": session_id,
+                        "task_id": session.task_id,
+                        "data": {
+                            "status": task_info["status"],
+                            "progress": task_info.get("progress", 0),
+                            "current_layer": task_info.get("current_layer"),
+                            "message": task_info.get("message", ""),
+                            "updated_at": task_info["updated_at"].isoformat(),
+                        }
                     }
-                }
 
-                if session.status in ("completed", "failed"):
-                    event_data["type"] = session.status
+                    # Handle terminal states
+                    if task_info["status"] in ("completed", "failed"):
+                        if task_info["status"] == "completed":
+                            event_data["type"] = "complete"
+                            event_data["data"]["result"] = task_info.get("result")
+                        else:
+                            event_data["type"] = "failed"
+                            event_data["data"]["error"] = task_info.get("error")
+                        yield f"data: {json.dumps(event_data)}\n\n"
+                        break
+
                     yield f"data: {json.dumps(event_data)}\n\n"
-                    break
-
-                yield f"data: {json.dumps(event_data)}\n\n"
 
             await asyncio.sleep(1)
 

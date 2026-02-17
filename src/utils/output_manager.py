@@ -1,24 +1,22 @@
-"""Output management module.
+"""
+输出管理模块 (Output Manager)
 
-Manages automatic saving and file output for village planning results.
-Provides both default path and custom path modes, supporting three-layer
-planning with hierarchical saving.
+负责管理村庄规划结果的自动保存和文件输出。
+提供默认路径和自定义路径两种模式，支持三层规划的分层保存。
 
-Features:
-1. Default save path: results/{project_name}/{timestamp}/
-2. Custom path support (via --output parameter)
-3. Automatic directory structure creation
-4. Combined report and dimension report saving
-5. Automatic project name sanitization (removes special characters)
+功能特性：
+1. 默认保存路径：results/{project_name}/{timestamp}/
+2. 支持自定义路径（通过 --output 参数）
+3. 自动创建目录结构
+4. 保存综合报告和分维度报告
+5. 项目名称自动清理（移除特殊字符）
 """
 
-from __future__ import annotations
-
-import logging
 import re
-from datetime import datetime
 from pathlib import Path
-from typing import Any
+from datetime import datetime
+from typing import Dict, Optional, Any
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +34,10 @@ class OutputManager:
     # 时间戳格式：YYYYMMDD_HHMMSS
     TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
 
-    # 现状分析维度列表（12个）- 遵循 ANALYSIS_DIMENSION_NAMES 定义顺序
+    # 现状分析维度列表（12个）- 使用子图返回的实际键名
     ANALYSIS_DIMENSIONS = [
         "location",
         "socio_economic",
-        "villager_wishes",
-        "superior_planning",
         "natural_environment",
         "land_use",
         "traffic",
@@ -49,7 +45,9 @@ class OutputManager:
         "infrastructure",
         "ecological_green",
         "architecture",
-        "historical_culture",
+        "historical_cultural",
+        "villager_wishes",
+        "superior_planning"
     ]
 
     # 规划思路维度列表（4个）
@@ -60,12 +58,10 @@ class OutputManager:
         "planning_strategies"
     ]
 
-    # 详细规划维度列表（12个）
+    # 详细规划维度列表（10个）
     DETAILED_PLAN_DIMENSIONS = [
         "industry",
-        "spatial_structure",
-        "land_use_planning",
-        "settlement_planning",
+        "master_plan",
         "traffic",
         "public_service",
         "infrastructure",
@@ -79,15 +75,16 @@ class OutputManager:
     def __init__(
         self,
         project_name: str,
-        custom_output_path: str | None = None,
-        base_dir: Path | None = None
-    ) -> None:
-        """Initialize the output manager.
+        custom_output_path: Optional[str] = None,
+        base_dir: Optional[Path] = None
+    ):
+        """
+        初始化输出管理器
 
         Args:
-            project_name: Project/village name
-            custom_output_path: Custom output path (if provided, default path is not used)
-            base_dir: Base directory (defaults to project root)
+            project_name: 项目/村庄名称
+            custom_output_path: 自定义输出路径（如果提供，则不使用默认路径）
+            base_dir: 基础目录（默认为项目根目录）
         """
         self.project_name = self._sanitize_project_name(project_name)
         self.custom_output_path = custom_output_path
@@ -136,35 +133,37 @@ class OutputManager:
             return False
 
     def _sanitize_project_name(self, project_name: str) -> str:
-        """Sanitize project name by removing unsafe filename characters.
+        """
+        清理项目名称，移除不安全的文件名字符
 
         Args:
-            project_name: Original project name
+            project_name: 原始项目名称
 
         Returns:
-            Sanitized project name
+            清理后的项目名称
         """
-        # Remove or replace unsafe filename characters
-        # Windows disallows: < > : " / \ | ? *
-        # Replace with underscore
+        # 移除或替换不安全的文件名字符
+        # Windows 不允许的字符: < > : " / \ | ? *
+        # 替换为下划线
         sanitized = re.sub(r'[<>:"/\\|?*]', '_', project_name)
-        # Remove leading/trailing whitespace
+        # 移除首尾空格
         sanitized = sanitized.strip()
-        # Use default name if empty
+        # 如果为空，使用默认名称
         if not sanitized:
             sanitized = "unnamed_project"
 
         return sanitized
 
     def _save_file(self, file_path: Path, content: str) -> bool:
-        """Save file to specified path.
+        """
+        保存文件到指定路径
 
         Args:
-            file_path: File path
-            content: File content
+            file_path: 文件路径
+            content: 文件内容
 
         Returns:
-            True if save succeeded, False otherwise
+            bool: 是否成功保存
         """
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,8 +179,8 @@ class OutputManager:
     def save_layer1_results(
         self,
         combined_report: str,
-        dimension_reports: dict[str, str]
-    ) -> dict[str, Any]:
+        dimension_reports: Dict[str, str]
+    ) -> Dict[str, Any]:
         """
         保存 Layer 1 现状分析结果
 
@@ -212,20 +211,20 @@ class OutputManager:
             result["failed_count"] += 1
 
         # 保存各维度报告
-        # 维度键名到友好名称的映射（遵循 ANALYSIS_DIMENSION_NAMES 顺序）
+        # 维度键名到友好名称的映射
         dimension_names = {
             "location": "01_区位分析",
             "socio_economic": "02_社会经济分析",
-            "villager_wishes": "03_村民意愿与诉求分析",
-            "superior_planning": "04_上位规划与政策导向分析",
-            "natural_environment": "05_自然环境分析",
-            "land_use": "06_土地利用分析",
-            "traffic": "07_道路交通分析",
-            "public_services": "08_公共服务设施分析",
-            "infrastructure": "09_基础设施分析",
-            "ecological_green": "10_生态绿地分析",
-            "architecture": "11_建筑分析",
-            "historical_culture": "12_历史文化分析",
+            "natural_environment": "03_自然环境分析",
+            "land_use": "04_土地利用分析",
+            "traffic": "05_道路交通分析",
+            "public_services": "06_公共服务设施分析",
+            "infrastructure": "07_基础设施分析",
+            "ecological_green": "08_生态绿地分析",
+            "architecture": "09_建筑分析",
+            "historical_cultural": "10_历史文化分析",
+            "villager_wishes": "11_村民意愿与诉求分析",
+            "superior_planning": "12_上位规划与政策导向分析"
         }
 
         for dimension_key in self.ANALYSIS_DIMENSIONS:
@@ -245,8 +244,8 @@ class OutputManager:
     def save_layer2_results(
         self,
         combined_report: str,
-        dimension_reports: dict[str, str]
-    ) -> dict[str, Any]:
+        dimension_reports: Dict[str, str]
+    ) -> Dict[str, Any]:
         """
         保存 Layer 2 规划思路结果
 
@@ -301,8 +300,8 @@ class OutputManager:
     def save_layer3_results(
         self,
         combined_report: str,
-        dimension_reports: dict[str, str]
-    ) -> dict[str, Any]:
+        dimension_reports: Dict[str, str]
+    ) -> Dict[str, Any]:
         """
         保存 Layer 3 详细规划结果
 
@@ -335,17 +334,15 @@ class OutputManager:
         # 维度键名到友好名称的映射
         dimension_names = {
             "industry": "01_产业规划",
-            "spatial_structure": "02_空间结构规划",
-            "land_use_planning": "03_土地利用规划",
-            "settlement_planning": "04_居民点规划",
-            "traffic": "05_综合交通规划",
-            "public_service": "06_公共服务设施规划",
-            "infrastructure": "07_基础设施规划",
-            "ecological": "08_生态绿地系统规划",
-            "disaster_prevention": "09_防灾减灾规划",
-            "heritage": "10_历史文化保护规划",
-            "landscape": "11_村庄风貌规划",
-            "project_bank": "12_项目库"
+            "master_plan": "02_村域总体规划",
+            "traffic": "03_综合交通规划",
+            "public_service": "04_公共服务设施规划",
+            "infrastructure": "05_基础设施规划",
+            "ecological": "06_生态绿地系统规划",
+            "disaster_prevention": "07_防灾减灾规划",
+            "heritage": "08_历史文化保护规划",
+            "landscape": "09_村庄风貌规划",
+            "project_bank": "10_项目库"
         }
 
         for dimension_key in self.DETAILED_PLAN_DIMENSIONS:
@@ -362,7 +359,7 @@ class OutputManager:
         logger.info(f"[OutputManager] Layer 3 保存完成: {result['saved_count']} 个文件, {result['failed_count']} 个失败")
         return result
 
-    def save_final_combined(self, final_output: str) -> str | None:
+    def save_final_combined(self, final_output: str) -> Optional[str]:
         """
         保存最终综合报告
 
@@ -386,7 +383,7 @@ class OutputManager:
             logger.error(f"[OutputManager] 最终报告保存失败: {output_path}")
             return None
 
-    def get_output_summary(self) -> dict[str, Any]:
+    def get_output_summary(self) -> Dict[str, Any]:
         """
         获取输出路径的摘要信息
 
@@ -422,32 +419,6 @@ class OutputManager:
         else:
             return f"\n📄 结果已保存到: {self.output_path}"
 
-    @staticmethod
-    def _get_dimension_order(layer_number: int = 1) -> list[str]:
-        """
-        获取标准维度顺序（从 dimension_mapping.py 导入）
-
-        Args:
-            layer_number: 层级编号 (1=现状分析, 2=规划思路, 3=详细规划)
-
-        Returns:
-            按照定义顺序排列的维度键列表
-        """
-        from ..core.dimension_config import (
-            ANALYSIS_DIMENSION_NAMES,
-            CONCEPT_DIMENSION_NAMES,
-            DETAILED_DIMENSION_NAMES
-        )
-
-        if layer_number == 1:
-            return list(ANALYSIS_DIMENSION_NAMES().keys())
-        elif layer_number == 2:
-            return list(CONCEPT_DIMENSION_NAMES().keys())
-        elif layer_number == 3:
-            return list(DETAILED_DIMENSION_NAMES().keys())
-        else:
-            return []
-
 
 # ==========================================
 # 工厂函数
@@ -455,7 +426,7 @@ class OutputManager:
 
 def create_output_manager(
     project_name: str,
-    custom_output_path: str | None = None
+    custom_output_path: Optional[str] = None
 ) -> OutputManager:
     """
     创建输出管理器实例

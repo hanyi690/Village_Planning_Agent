@@ -1,0 +1,2786 @@
+
+    > 为什么不同子图之间的传递维度报告（不是全连接），不能更高效地直接通过send发送，或者有什么比较高效的优化方案，先检索实际   
+      实现和传递                                                                                                               
+
+✦ 我来帮你分析子图之间维度报告的传递机制。让我先探索相关代码实现。
+  ✔  Explore Agent
+     ⎿ 完成 (15 个工具使用 63.1k token(s) · 持续时间：2m 2s · 按 ctrl+r 展开)
+
+
+  ✔  Explore Agent
+     ⎿ 完成 (10 个工具使用 41.1k token(s) · 持续时间：1m 35s · 按 ctrl+r 展开)
+
+
+  ✔  Explore Agent
+     ⎿ 完成 (19 个工具使用 42.7k token(s) · 持续时间：2m 3s · 按 ctrl+r 展开)
+
+
+✦ 我已完成代码探索，现在让我总结关键发现并向你确认一些问题。
+
+  关键发现
+
+  当前架构
+
+  项目采用了混合传递模式：
+
+
+  ┌─────────────┬────────────┬────────────────────────────────────────────────────┐
+  │ 层级        │ 传递方式   │ 说明                                               │
+  ├─────────────┼────────────┼────────────────────────────────────────────────────┤
+  │ 主图 → 子图 │ 全连接     │ 整个维度报告字典通过状态传递                       │
+  │ 子图内部    │ 点对点筛选 │ 使用 filter_state_for_detailed_dimension_v2() 按需筛选 │
+  └─────────────┴────────────┴────────────────────────────────────────────────────┘
+
+  Send 机制使用情况
+
+  LangGraph 的 Send 机制目前仅在子图内部用于实现 Map-Reduce 并行分发：
+   - Layer 1: 12 个维度并行
+   - Layer 2: 4 个维度并行
+   - Layer 3: 分波并行（Wave 1: 11 维度，Wave 2: project_bank）
+
+  效率问题
+
+✦  1. 双重存储: 维度报告同时存储为字典和综合文本，内存约 2x
+   2. 主图层级全连接: Layer 1 的所有 12 个维度报告传递给 Layer 2，Layer 2 的 4 个维度报告传递给 Layer 3
+   3. 子图内部已有筛选: 在子图内部通过 filter_state_for_detailed_dimension_v2() 实现按需筛选
+✦ User Answers
+
+  你希望优化的是哪个层级的传递效率？主图层级（Layer1→Layer2→Layer3）还是子图内部（子图内并行执行时）？
+  Answer: 不仅都需要，还要考虑，子图之间的端对端传递是不是更好，但是要考虑持久化下对的回滚，暂停等
+
+  你关注的主要效率问题是？
+  Answer: 执行速度
+
+✦ 明白了！你希望：
+   1. 同时优化主图和子图两个层级
+   2. 考虑子图之间的端对端传递是否更高效
+   3. 需要考虑持久化、回滚、暂停等场景的兼容性
+
+✦ 让我进一步分析当前的持久化机制和暂停/恢复逻辑。
+  -  Explore Agent
+     ⎿ 完成 (22 个工具使用  token(s) · 持续时间：2m 12s · 按 ctrl+r 展开)
+
+
+
+ℹ 请求已取消。
+ 
+
+    > 继续执行                                                                                                                 
+
+✦ 让我继续探索持久化、回滚和暂停机制。
+  ✔  Explore Agent
+     ⎿ 完成 (18 个工具使用 79.6k token(s) · 持续时间：2m 16s · 按 ctrl+r 展开)
+
+
+✦ 现在我已经获取了完整的持久化和暂停/恢复机制信息。让我阅读几个关键文件来验证一些细节，然后制定优化方案。
+  ✔  Read File src\nodes\layer_nodes.py
+     从 src/nodes/layer_nodes.py 读取第 481-580 行，共 613 行
+
+  ✔  Read File src\\detailed_plan_subgraph.py
+     从 src/subgraphs/detailed_plan_subgraph.py 读取第 261-360 行，共 837 行
+
+✦ 我发现了一个关键问题！在 Layer3DetailNode._call_subgraph() 中：
+
+   dimension_reports=state.get("dimension_reports", {}),  # ❌ 错误的字段名
+
+  应该是 analysis_dimension_reports，而不是 dimension_reports。这可能导致 Layer 3 无法正确获取 Layer 1 的维度报告。
+
+✦ 现在让我综合所有发现，制定完整的优化方案。
+  ✔  Read File src\config\dimension_metadata.py
+     从 src/config/dimension_metadata.py 读取第 71-220 行，共 562 行
+
+✦ 现在我有了完整的理解。让我为你制定一个全面的优化方案。
+✦ Plan
+
+  维度报告传递优化方案
+
+  问题诊断
+
+  1. 当前架构
+   主图层级: 全连接传递（所有维度报告整体传递）
+   ├── Layer1 → Layer2: 传递 analysis_dimension_reports (全部12个)
+   ├── Layer2 → Layer3: 传递 concept_dimension_reports (全部4个) + analysis_report
+   └── 子图内部: 使用 Send + filter_state_for_detailed_dimension_v2 点对点筛选
+
+   子图内部: 已优化（按需筛选）
+   ├── Layer2: filter_analysis_report_for_concept()
+   └── Layer3: filter_state_for_detailed_dimension_v2()
+
+  2. 发现的Bug
+  文件: src/nodes/layer_nodes.py:564
+   # 错误：
+   dimension_reports=state.get("dimension_reports", {}),
+   # 应该是：
+   dimension_reports=state.get("analysis_dimension_reports", {}),
+
+  3. 效率问题
+   - 主图层级全连接传递，产生不必要的状态体积
+   - 双重持久化系统（AsyncSqliteSaver + CheckpointTool）增加复杂度
+   - 子图间依赖已经在 dimension_metadata.py 中定义，但主图未利用
+
+  ---
+
+  优化方案：端对端维度传递架构
+
+  核心思路
+  将维度依赖筛选提前到主图层级，只传递必要的维度报告到下一子图。
+
+  架构变更
+   当前：全连接传递
+   ┌─────────┐     全部12个维度     ┌─────────┐     全部4个维度     ┌─────────┐
+   │ Layer 1 │ ──────────────────▶ │ Layer 2 │ ──────────────────▶ │ Layer 3 │
+   └─────────┘                     └─────────┘                     └─────────┘
+
+   优化后：端对端按需传递
+   ┌─────────┐   筛选后的维度报告   ┌─────────┐   筛选后的维度报告   ┌─────────┐
+   │ Layer 1 │ ─────────────────▶ │ Layer 2 │ ─────────────────▶ │ Layer 3 │
+   └─────────┘                     └─────────┘                     └─────────┘
+        │                               │                               │
+        │   基于dependency_metadata     │   基于dependency_metadata     │
+        └───────────────────────────────┴───────────────────────────────┘
+                       在主图层级进行筛选
+
+  ---
+
+  具体实施步骤
+
+  步骤1：修复 Bug
+  文件: src/nodes/layer_nodes.py:564
+   # 修复字段名错误
+   dimension_reports=state.get("analysis_dimension_reports", {}),
+
+  步骤2：创建主图层级状态筛选器
+  新文件: src/utils/main_graph_state_filter.py
+
+   def filter_dimension_reports_for_next_layer(
+       current_layer: int,
+       dimension_reports: Dict[str, str],
+       all_dimension_metadata: Dict[str, Any]
+   ) -> Dict[str, str]:
+       """
+       根据下一层的依赖关系筛选维度报告
+
+       只保留下一层各维度依赖的维度报告
+       """
+       next_layer = current_layer + 1
+       next_layer_dims = get_dimensions_by_layer(next_layer)
+
+       # 收集所有依赖
+       required_dims = set()
+       for dim_key in next_layer_dims:
+           deps = all_dimension_metadata[dim_key].get("dependencies", {})
+           required_dims.update(deps.get("layer1_analyses", []))
+           required_dims.update(deps.get("layer2_concepts", []))
+
+       # 筛选报告
+       return {k: v for k, v in dimension_reports.items() if k in required_dims}
+
+  步骤3：修改主图节点传递逻辑
+  文件: src/nodes/layer_nodes.py
+
+  在 Layer1AnalysisNode._build_success_updates() 中：
+   # 在返回状态更新前筛选维度报告
+   filtered_reports = filter_dimension_reports_for_next_layer(
+       current_layer=1,
+       dimension_reports=dimension_reports,
+       all_dimension_metadata=dimension_metadata
+   )
+
+   return (StateBuilder()
+           .set("analysis_report", combined_report)
+           .set("analysis_dimension_reports", dimension_reports)  # 保留完整版本供checkpoint
+           .set("filtered_analysis_reports", filtered_reports)    # 新增：筛选版本供下一层
+           ...)
+
+  在 Layer2ConceptNode._call_subgraph() 中：
+   # 使用筛选后的版本
+   dimension_reports=state.get("filtered_analysis_reports", state.get("analysis_dimension_reports", {})),
+
+  步骤4：统一持久化方案（可选）
+   - 选择使用 LangGraph AsyncSqliteSaver 作为唯一持久化方案
+   - 废弃 CheckpointTool 的 JSON 文件存储
+   - 利用 LangGraph 内置的 checkpoint 机制支持暂停/恢复
+
+  步骤5：优化黑板模式（可选增强）
+  文件: src/orchestration/main_graph.py
+
+   # 利用 blackboard 实现跨子图数据共享
+   blackboard: Dict[str, Any] = {
+       "shared_analysis_insights": [],  # 跨层共享的分析洞察
+       "tool_results_cache": {},        # 工具调用结果缓存
+       "dimension_artifacts": {}        # 维度级别的中间产物
+   }
+
+  ---
+
+  收益评估
+
+
+  ┌───────────────────┬────────────┬──────────────┬──────────┐
+  │ 指标              │ 当前       │ 优化后       │ 提升     │
+  ├───────────────────┼────────────┼──────────────┼──────────┤
+  │ Layer2 接收维度数 │ 12个       │ ~6个（平均） │ ~50%减少 │
+  │ Layer3 接收维度数 │ 12+4=16个  │ ~8个（平均） │ ~50%减少 │
+  │ 状态序列化体积    │ 100%       │ ~60%         │ 40%减少  │
+  │ 暂停/恢复一致性   │ 双系统风险 │ 单系统保证   │ 更可靠   │
+  └───────────────────┴────────────┴──────────────┴──────────┘
+
+  ---
+
+  风险与兼容性
+
+   1. Checkpoint 回滚: 保留完整的 analysis_dimension_reports 用于回滚场景
+   2. 降级机制: 如果筛选失败，降级使用完整报告
+   3. 依赖配置: 需确保 dimension_metadata.py 中的依赖定义准确
+
+  ---
+
+  文件变更清单
+
+
+  ┌───────────────────────────────────────┬──────────┬────────────────────────┐
+  │ 文件                                  │ 操作     │ 说明                   │
+  ├───────────────────────────────────────┼──────────┼────────────────────────┤
+  │ src/nodes/layer_nodes.py              │ 修改     │ 修复Bug + 添加筛选逻辑 │
+  │ src/utils/main_graph_state_filter.py    │ 新建     │ 主图层级状态筛选器     │
+  │ src/subgraphs/detailed_plan_subgraph.py │ 修改     │ 使用筛选后的状态       │
+  │ src/subgraphs/concept_subgraph.py     │ 修改     │ 使用筛选后的状态       │
+  │ backend/api/planning.py               │ 可选修改 │ 统一持久化方案         │
+  └───────────────────────────────────────┴──────────┴────────────────────────┘
+
+
+ℹ 继续计划模式。请提供更多详细信息或提出问题以完善计划。
+ 
+
+    > 主图直接就是全连接的，不同子图之间的结点才是非全连接                                                                     
+
+✦ 明白了！让我重新理解你的问题：
+
+  主图层级是全连接的（Layer1 → Layer2 → Layer3
+  串行传递所有状态），但不同子图之间的节点是非全连接的（各维度之间有依赖关系，需要按需传递）。
+
+  你的核心问题是：子图内部的节点之间，是否可以直接通过 Send 实现更高效的端对端传递，而不是依赖主图传递完整状态后再筛选？
+
+✦ 让我深入探索子图内部的 Send 机制和节点依赖关系。
+  ✔  Explore Agent
+     ⎿ 完成 (12 个工具使用 43.6k token(s) · 持续时间：1m 51s · 按 ctrl+r 展开)
+
+
+✦ 非常好，我现在完全理解了你的问题。让我总结分析结果：
+
+  核心发现
+
+  1. 当前架构
+
+   主图层级: 全连接
+   ├── Layer1 → Layer2 → Layer3 (串行，传递完整状态)
+
+   子图内部: 
+   ├── Layer1: 12维度完全并行（无内部依赖）
+   ├── Layer2: 4维度并行执行（但实际有依赖关系未被利用！）
+   └── Layer3: Wave1(11维度并行) + Wave2(project_bank等待)
+
+  2. 关键问题
+
+  Layer 2 的依赖关系被忽略了！
+
+   定义的依赖链：
+   resource_endowment → planning_positioning → development_goals → planning_strategies
+
+   当前实现：
+   4个维度同时并行执行，依赖信息仅用于"输入筛选"而非"执行顺序"
+
+  3. 为什么不能用链式 Send
+
+  LangGraph 的 Send 机制限制：
+   - Send 是 Map-Reduce 模式：一次性分发，并行执行，最后 reduce
+   - 不支持 Pipeline 模式：无法在节点执行完后动态创建新的 Send
+
+✦  def route_chain(state):
+       # 问题：Send 列表在路由函数返回时就确定了
+       # 此时维度A可能还没执行完，无法获取A的结果传递给B
+       return [Send("dim_b", {...})]
+✦ User Answers
+
+  你想优化哪个层级的执行效率？Layer 2 的维度之间有依赖关系（resource_endowment → planning_positioning → development_goals → 
+  planning_strategies），但当前是并行执行的。Layer 3 已经按 Wave 分波执行。
+  Answer: 两者都要优化
+
+✦ 好的，你想同时优化 Layer 2 和 Layer 3。让我再确认一个关键问题：
+✦ User Answers
+
+  对于 Layer 2 的维度依赖关系（resource_endowment → planning_positioning → development_goals → 
+  planning_strategies），你希望如何处理？按依赖顺序执行会牺牲并行性，但下游维度可以利用上游维度的结果。
+  Answer: 按依赖顺序执行
+
+  对于 Layer 3，你希望优化哪些方面？当前是 Wave1(11维度并行) + Wave2(project_bank)。
+  Answer: 全面优化
+
+✦ 明白了！你的选择是：
+
+   1. Layer 2: 改为按依赖顺序执行（Wave 模式），让下游维度可以利用上游维度的结果
+   2. Layer 3: 全面优化（状态传递 + Wave 机制增强 + 增量执行支持）
+
+✦ 让我制定详细的优化方案。
+✦ Plan
+
+  子图维度传递优化方案
+
+  目标
+   1. Layer 2: 改为按依赖顺序执行（Wave 模式）
+   2. Layer 3: 全面优化（状态传递 + Wave 机制增强 + 增量执行支持）
+
+  ---
+
+  一、Layer 2 优化：Wave 模式执行
+
+  当前问题
+  Layer 2 四个维度有依赖链，但当前并行执行：
+   resource_endowment → planning_positioning → development_goals → planning_strategies
+
+  优化方案：多波次执行
+
+  修改文件: src/subgraphs/concept_subgraph.py
+
+   # 新增 Wave 配置
+   CONCEPT_WAVE_CONFIG = {
+       1: ["resource_endowment"],           # 无依赖
+       2: ["planning_positioning"],         # 依赖 Wave 1
+       3: ["development_goals"],            # 依赖 Wave 1, 2  
+       4: ["planning_strategies"]           # 依赖所有前序
+   }
+
+   # 新增路由函数（类似 Layer 3 的 route_by_dependency_wave）
+   def route_concept_by_wave(state: ConceptState) -> Union[List[Send], str]:
+       current_wave = state.get("current_wave", 1)
+       completed = set(state.get("completed_concept_dimensions", []))
+
+       wave_dims = CONCEPT_WAVE_CONFIG.get(current_wave, [])
+       pending = [d for d in wave_dims if d not in completed]
+
+       if pending:
+           return create_concept_sends_with_filtered_state(state, pending)
+       elif current_wave < 4:
+           return "advance_wave"
+       else:
+           return "end"
+
+  新增状态字段:
+   - current_concept_wave: int
+   - completed_concept_dimensions: List[str]
+
+  ---
+
+  二、Layer 3 全面优化
+
+  2.1 状态传递优化
+
+  修改文件: src/subgraphs/detailed_plan_subgraph.py
+
+  当前问题: create_parallel_tasks_with_state_filtering 在每次 Wave 切换时重新筛选整个状态
+
+  优化方案: 缓存筛选结果，避免重复计算
+
+   # 在子图入口预计算筛选结果
+   def initialize_detailed_planning(state: DetailedPlanState):
+       # 预计算每个维度的依赖状态
+       dimension_filtered_states = {}
+       for dim in ALL_DIMENSIONS:
+           dimension_filtered_states[dim] = filter_state_for_detailed_dimension_v2(
+               detailed_dimension=dim,
+               ...
+           )
+       return {
+           "dimension_filtered_states": dimension_filtered_states,
+           ...
+       }
+
+   # 在 Send 创建时直接使用缓存
+   def create_parallel_tasks_with_state_filtering(state, dimensions):
+       cached_states = state.get("dimension_filtered_states", {})
+       sends = []
+       for dim in dimensions:
+           # 更新已完成维度的状态（仅 project_bank 需要）
+           if cached_states.get(dim):
+               filtered = update_with_completed_reports(cached_states[dim], state)
+               sends.append(Send("generate_dimension_plan", build_dimension_state(filtered)))
+       return sends
+
+  2.2 Wave 机制增强
+
+  修改文件: src/core/dimension_config.py, src/subgraphs/detailed_plan_subgraph.py
+
+  支持动态 Wave 配置:
+
+   # 基于 dimension_metadata.py 自动生成 Wave 配置
+   def generate_wave_config_from_dependencies() -> Dict[int, List[str]]:
+       """根据依赖关系自动生成 Wave 配置"""
+       dims = list_detailed_dimensions()
+       wave_config = {}
+       assigned = set()
+       wave = 1
+
+       while len(assigned) < len(dims):
+           # 找出当前 Wave 可以执行的维度（所有依赖已满足）
+           ready_dims = []
+           for dim in dims:
+               if dim["key"] in assigned:
+                   continue
+               deps = dim.get("dependencies", {}).get("layer3_plans", [])
+               if all(d in assigned for d in deps):
+                   ready_dims.append(dim["key"])
+
+           if ready_dims:
+               wave_config[wave] = ready_dims
+               assigned.update(ready_dims)
+               wave += 1
+           else:
+               break  # 避免死循环
+
+       return wave_config
+
+  2.3 增量执行支持
+
+  新增文件: src/utils/incremental_executor.py
+
+   class IncrementalExecutor:
+       """增量执行器 - 支持只执行失败的维度"""
+
+       def __init__(self, checkpoint_manager, state_filter):
+           self.checkpoint_manager = checkpoint_manager
+           self.state_filter = state_filter
+
+       def get_pending_dimensions(
+           self,
+           all_dimensions: List[str],
+           completed: Dict[str, str],
+           failed: List[str]
+       ) -> List[str]:
+           """获取待执行的维度（排除已完成且成功的）"""
+           pending = []
+           for dim in all_dimensions:
+               if dim not in completed or dim in failed:
+                   pending.append(dim)
+           return pending
+
+       def resume_from_checkpoint(
+           self,
+           checkpoint_id: str,
+           only_failed: bool = True
+       ) -> DetailedPlanState:
+           """从 checkpoint 恢复，只执行失败的维度"""
+           state = self.checkpoint_manager.load(checkpoint_id)
+
+           if only_failed:
+               failed_dims = state.get("failed_dimensions", [])
+               completed = state.get("detailed_dimension_reports", {})
+
+               # 只保留失败维度的状态
+               pending = self.get_pending_dimensions(
+                   state.get("required_dimensions", []),
+                   completed,
+                   failed_dims
+               )
+
+               state["dimensions_to_execute"] = pending
+
+           return state
+
+  修改文件: src/subgraphs/detailed_plan_subgraph.py
+
+   # 在路由函数中支持增量执行
+   def route_by_dependency_wave(state: DetailedPlanState) -> Union[List[Send], str]:
+       # 检查是否是增量执行模式
+       dimensions_to_execute = state.get("dimensions_to_execute")
+
+       if dimensions_to_execute:
+           # 增量执行模式：只执行指定的维度
+           return create_parallel_tasks_for_dimensions(state, dimensions_to_execute)
+
+       # 正常模式：按 Wave 执行
+       ...
+
+  ---
+
+  三、统一状态筛选器
+
+  修改文件: src/utils/state_filter.py
+
+  新增通用筛选函数:
+
+   def filter_state_by_dependency_chain(
+       target_dimension: str,
+       all_states: Dict[str, Any],
+       dependency_chain: Dict[str, List[str]]
+   ) -> Dict[str, Any]:
+       """
+       通用状态筛选器 - 支持任意层级的依赖筛选
+
+       Args:
+           target_dimension: 目标维度
+           all_states: 所有可用状态 {layer1: {...}, layer2: {...}, layer3: {...}}
+           dependency_chain: 依赖链配置
+
+       Returns:
+           筛选后的状态
+       """
+       filtered = {}
+
+       for layer, deps in dependency_chain.items():
+           layer_state = all_states.get(layer, {})
+           filtered[layer] = {
+               k: v for k, v in layer_state.items()
+               if k in deps
+           }
+
+       return filtered
+
+  ---
+
+  四、Bug 修复
+
+  文件: src/nodes/layer_nodes.py:564
+
+   # 修复前（错误）
+   dimension_reports=state.get("dimension_reports", {}),
+
+   # 修复后（正确）
+   dimension_reports=state.get("analysis_dimension_reports", {}),
+
+  ---
+
+  五、文件变更清单
+
+
+  ┌───────────────────────────────────────┬──────┬─────────────────────────────────┐
+  │ 文件                                  │ 操作 │ 说明                            │
+  ├───────────────────────────────────────┼──────┼─────────────────────────────────┤
+  │ src/subgraphs/concept_subgraph.py     │ 修改 │ 新增 Wave 模式执行              │
+  │ src/subgraphs/detailed_plan_subgraph.py │ 修改 │ 状态缓存 + Wave 增强 + 增量执行 │
+  │ src/core/dimension_config.py          │ 修改 │ 自动生成 Wave 配置              │
+  │ src/utils/state_filter.py             │ 修改 │ 通用状态筛选器                  │
+  │ src/utils/incremental_executor.py     │ 新建 │ 增量执行器                      │
+  │ src/nodes/layer_nodes.py              │ 修改 │ Bug 修复                        │
+  └───────────────────────────────────────┴──────┴─────────────────────────────────┘
+
+  ---
+
+  六、收益评估
+
+
+  ┌──────────────────┬────────────────────┬────────────────────┐
+  │ 指标             │ 当前               │ 优化后             │
+  ├──────────────────┼────────────────────┼────────────────────┤
+  │ Layer 2 执行质量 │ 无法利用前序结果   │ 下游可利用上游结果 │
+  │ Layer 3 状态传递 │ 每次 Wave 重新筛选 │ 预计算缓存         │
+  │ 失败恢复         │ 全部重新执行       │ 只执行失败维度     │
+  │ Wave 配置        │ 硬编码             │ 自动生成           │
+  └──────────────────┴────────────────────┴────────────────────┘
+
+
+ℹ 继续计划模式。请提供更多详细信息或提出问题以完善计划。
+ 
+
+    > 应该还是使用@src\config\dimension_metadata.py 进行配置，可以删去没有再使用的代码                                         
+
+✦ 明白了！你的意思是：
+
+   1. 使用 `dimension_metadata.py` 作为唯一配置源，不要在代码中硬编码 Wave 配置
+   2. 删除不再使用的冗余代码
+
+✦ 让我先查看 dimension_metadata.py 和 dimension_config.py 的完整内容，找出哪些代码是冗余的。
+  ✔  Read File src\config\dimension_metadata.py
+     从 src/config/dimension_metadata.py 读取所有 562 行数据
+
+  ✔  Read File src\core\dimension_config.py
+     从 src/core/dimension_config.py 读取所有 575 行数据
+
+✦ 现在我明白了。我发现几个问题：
+
+  发现的问题
+
+  1. dimension_metadata.py 中 Layer 2 缺少 wave 字段
+  当前 Layer 2 维度有依赖关系但没有 wave 字段来控制执行顺序：
+
+   "planning_positioning": {
+       "dependencies": {
+           "layer2_concepts": ["resource_endowment"]  # 依赖前一个维度
+       },
+       # 缺少 "wave": 2  这样的字段
+   }
+
+  2. dimension_config.py 中有冗余代码
+   - _build_wave_config() 从 wave 字段构建波次配置，但 dimension_metadata.py 中没有定义 wave
+   - 导致当前 Wave 配置实际上是硬编码的默认值（都是 wave=1）
+
+  3. 需要基于依赖关系自动计算 Wave
+
+✦ 让我确认一下你的意图：
+✦ User Answers
+
+  对于 Wave 配置，你希望如何处理？当前 dimension_metadata.py 中 Layer 2 的维度有依赖关系（layer2_concepts），但没有 wave 
+  字段。dimension_config.py 的 _build_wave_config() 会读取 wave 字段。
+  Answer: 自动计算 Wave
+
+  你想删除哪些不再使用的代码？（可多选）
+  Answer: dimension_config.py 冗余代码, 旧映射函数, 重复导出函数
+
+✦ 明白了！你的选择是：
+
+   1. Wave 计算：自动根据 dependencies 计算 Wave，不需要手动配置
+   2. 代码清理：删除 dimension_config.py 中的冗余缓存变量、旧映射函数、重复导出函数
+
+✦ 现在我来制定最终的优化方案：
+✦ Plan
+
+  维度传递优化方案（修订版）
+
+  核心原则
+   1. 使用 `dimension_metadata.py` 作为唯一配置源
+   2. 自动根据 `dependencies` 计算 Wave 执行顺序
+   3. 删除冗余代码
+
+  ---
+
+  一、配置层改造
+
+  1.1 在 dimension_metadata.py 中添加 Wave 字段（可选）
+
+  如果需要更精细的控制，可以添加 wave 字段，但优先使用自动计算：
+
+   # Layer 2 示例（可选添加）
+   "resource_endowment": {
+       "layer": 2,
+       "dependencies": {},  # 无依赖
+       # "wave": 1  # 可选，不填则自动计算
+   },
+   "planning_positioning": {
+       "layer": 2,
+       "dependencies": {
+           "layer2_concepts": ["resource_endowment"]
+       },
+       # "wave": 2  # 自动计算为 2
+   },
+
+  1.2 改造 dimension_config.py
+
+  删除冗余代码：
+   - 删除模块级缓存变量（_cached_*, _ANALYSIS_DIMENSION_NAMES 等）
+   - 删除重复的函数导出（旧 API 兼容函数）
+   - 删除不再使用的映射函数
+
+  新增自动 Wave 计算函数：
+
+   def _calculate_wave_from_dependencies(dimensions: Dict[str, Any]) -> Dict[int, List[str]]:
+       """
+       根据依赖关系自动计算 Wave 执行顺序
+
+       算法：
+       1. 无依赖的维度 → Wave 1
+       2. 依赖 Wave N 的维度 → Wave N+1
+       3. 迭代直到所有维度分配完毕
+       """
+       waves = {}
+       assigned = set()
+       wave_num = 1
+
+       # 按层级分组处理
+       for layer in [1, 2, 3]:
+           layer_dims = {k: v for k, v in dimensions.items() if v.get("layer") == layer}
+
+           while True:
+               # 找出当前 Wave 可执行的维度
+               ready = []
+               for dim_key, dim_config in layer_dims.items():
+                   if dim_key in assigned:
+                       continue
+
+                   # 检查同层依赖是否满足
+                   deps = dim_config.get("dependencies", {})
+                   same_layer_deps = deps.get(f"layer{layer}_{'analyses' if layer == 1 else 'concepts' if layer == 2 else
+   'plans'}", [])
+
+                   if all(d in assigned for d in same_layer_deps):
+                       ready.append(dim_key)
+
+               if not ready:
+                   break
+
+               wave_key = f"layer{layer}_wave{wave_num}"
+               if wave_key not in waves:
+                   waves[wave_key] = []
+               waves[wave_key].extend(ready)
+               assigned.update(ready)
+               wave_num += 1
+
+           wave_num = 1  # 重置为下一层
+
+       return waves
+
+  ---
+
+  二、Layer 2 改造：Wave 模式执行
+
+  2.1 修改 src/subgraphs/concept_subgraph.py
+
+  新增路由函数：
+
+   def route_concept_by_wave(state: ConceptState) -> Union[List[Send], str]:
+       """基于依赖关系的波次路由"""
+       from ..core.dimension_config import get_concept_wave_dimensions, check_concept_dependencies
+
+       completed = set(state.get("completed_concept_dimensions", []))
+
+       # 按依赖顺序检查每个 Wave
+       for wave in [1, 2, 3, 4]:
+           dims = get_concept_wave_dimensions(wave)
+           pending = [d for d in dims if d not in completed]
+
+           if pending and check_concept_dependencies(pending[0], completed):
+               return create_concept_sends_with_state(state, pending)
+
+       return "end"
+
+  新增状态字段：
+   - current_concept_wave: int
+   - completed_concept_dimensions: List[str]
+
+  2.2 新增辅助函数到 dimension_config.py
+
+   def get_concept_wave_dimensions(wave: int) -> List[str]:
+       """获取 Layer 2 指定 Wave 的维度"""
+       # 基于 dependencies.layer2_concepts 自动计算
+       config = get_dimensions_config()
+       dimensions = config.get("dimensions", {})
+
+       # 计算每个维度的 wave
+       wave_map = _calculate_wave_for_layer(dimensions, layer=2)
+       return wave_map.get(wave, [])
+
+   def check_concept_dependencies(dimension: str, completed: set) -> bool:
+       """检查 Layer 2 维度的依赖是否满足"""
+       config = get_dimensions_config()
+       dim = config["dimensions"].get(dimension, {})
+       deps = dim.get("dependencies", {}).get("layer2_concepts", [])
+       return all(d in completed for d in deps)
+
+  ---
+
+  三、Layer 3 全面优化
+
+  3.1 状态传递优化
+
+  修改 `src/subgraphs/detailed_plan_subgraph.py`：
+
+   def initialize_detailed_planning(state: DetailedPlanState) -> Dict[str, Any]:
+       """预计算每个维度的筛选状态"""
+       from ..utils.state_filter import precompute_filtered_states
+
+       all_dims = list_detailed_dimensions()
+       filtered_states = precompute_filtered_states(
+           dimensions=all_dims,
+           analysis_reports=state.get("analysis_dimension_reports", {}),
+           concept_reports=state.get("concept_dimension_reports", {})
+       )
+
+       return {
+           "precomputed_states": filtered_states,
+           "current_wave": 1,
+           "completed_dimensions": []
+       }
+
+  3.2 增量执行支持
+
+  新增状态字段：
+   - dimensions_to_execute: List[str]  # 增量执行时指定
+   - failed_dimensions: List[str]  # 失败的维度
+
+  修改路由函数：
+
+   def route_by_dependency_wave(state: DetailedPlanState) -> Union[List[Send], str]:
+       # 检查是否是增量执行模式
+       dims_to_execute = state.get("dimensions_to_execute")
+       if dims_to_execute:
+           return create_parallel_tasks_for_dimensions(state, dims_to_execute)
+
+       # 正常 Wave 执行
+       ...
+
+  ---
+
+  四、Bug 修复
+
+  文件: src/nodes/layer_nodes.py:564
+
+   # 修复前
+   dimension_reports=state.get("dimension_reports", {}),
+
+   # 修复后
+   dimension_reports=state.get("analysis_dimension_reports", {}),
+
+  ---
+
+  五、代码清理清单
+
+  dimension_config.py 要删除的代码
+
+
+  ┌──────────┬───────────────────────────────┬──────────────────────────────────────┐
+  │ 类型     │ 代码                          │ 原因                                 │
+  ├──────────┼───────────────────────────────┼──────────────────────────────────────┤
+  │ 冗余缓存 │ _cached_analysis_names 等       │ 已有函数级别缓存                     │
+  │ 重复导出 │ ANALYSIS_DIMENSION_NAMES() 函数 │ 与 get_analysis_dimension_names() 重复 │
+  │ 旧映射   │ get_analysis_to_concept_mapping() │ 已被 dependencies 替代               │
+  │ 旧映射   │ ANALYSIS_TO_CONCEPT_MAPPING     │ 已被 dependencies 替代               │
+  └──────────┴───────────────────────────────┴──────────────────────────────────────┘
+
+  保留的函数
+
+
+  ┌───────────────────────────────────┬────────────────────────────────┐
+  │ 函数                              │ 说明                           │
+  ├───────────────────────────────────┼────────────────────────────────┤
+  │ get_dimensions_config()             │ 加载配置                       │
+  │ get_analysis_dimension_names()      │ 获取 Layer 1 维度名称          │
+  │ get_concept_dimension_names()       │ 获取 Layer 2 维度名称          │
+  │ get_detailed_dimension_names()      │ 获取 Layer 3 维度名称          │
+  │ get_full_dependency_chain()         │ 获取完整依赖链                 │
+  │ get_wave_config()                   │ 获取 Wave 配置（改为自动计算） │
+  │ get_dimensions_by_wave()            │ 获取指定 Wave 的维度           │
+  │ check_detailed_dependencies_ready() │ 检查依赖是否满足               │
+  └───────────────────────────────────┴────────────────────────────────┘
+
+  ---
+
+  六、文件变更清单
+
+
+  ┌───────────────────────────────────────┬──────────┬───────────────────────────────┐
+  │ 文件                                  │ 操作     │ 说明                          │
+  ├───────────────────────────────────────┼──────────┼───────────────────────────────┤
+  │ src/config/dimension_metadata.py      │ 可选修改 │ 添加 wave 字段（可选）        │
+  │ src/core/dimension_config.py          │ 重构     │ 删除冗余 + 新增自动 Wave 计算 │
+  │ src/subgraphs/concept_subgraph.py     │ 修改     │ 新增 Wave 模式执行            │
+  │ src/subgraphs/detailed_plan_subgraph.py │ 修改     │ 状态预计算 + 增量执行         │
+  │ src/nodes/layer_nodes.py              │ 修改     │ Bug 修复                      │
+  │ src/utils/state_filter.py             │ 可选修改 │ 新增预计算函数                │
+  └───────────────────────────────────────┴──────────┴───────────────────────────────┘
+
+  ---
+
+  七、执行顺序
+
+   1. 修复 Bug - layer_nodes.py:564
+   2. 重构 `dimension_config.py` - 删除冗余 + 新增自动 Wave 计算
+   3. 改造 Layer 2 子图 - Wave 模式执行
+   4. 优化 Layer 3 子图 - 状态预计算 + 增量执行
+
+ℹ 继续计划模式。请提供更多详细信息或提出问题以完善计划。
+ 
+
+    > layer2维度对layer1维度的依赖不能舍去                                                                                     
+
+✦ 明白了！Layer 2 维度对 Layer 1 维度的依赖（layer1_analyses）不能删除，这些依赖用于状态筛选。
+
+  让我重新梳理 Wave 计算逻辑：
+
+  Wave 计算说明
+
+  Layer 2 的依赖有两种：
+
+   1. `layer1_analyses` - 对 Layer 1 维度的依赖
+      - 用于状态筛选（每个 Layer 2 维度只需要特定的 Layer 1 报告）
+      - 不影响 Layer 2 内部执行顺序（Layer 1 已经全部完成）
+      - 必须保留
+
+   2. `layer2_concepts` - 对同层（Layer 2）维度的依赖
+      - 用于确定 Layer 2 内部的执行顺序
+      - 例如 planning_positioning 依赖 resource_endowment
+      - 用于 Wave 计算
+
+  Wave 计算只考虑同层依赖：
+
+✦  Layer 2 Wave 计算：
+   - Wave 1: resource_endowment（无 layer2_concepts 依赖）
+   - Wave 2: planning_positioning（依赖 resource_endowment）
+   - Wave 3: development_goals（依赖前两个）
+   - Wave 4: planning_strategies（依赖前三个）
+✦ Plan
+
+  维度传递优化方案（最终版）
+
+  核心原则
+   1. 保留所有依赖配置（layer1_analyses, layer2_concepts, layer3_plans）
+   2. Wave 只根据同层依赖计算（不影响跨层依赖）
+   3. 删除冗余代码
+
+  ---
+
+  一、Wave 计算逻辑
+
+  依赖类型说明
+
+
+  ┌─────────────────┬─────────────────────────────────┬─────────────────────────────┐
+  │ 依赖字段        │ 作用                            │ 是否影响 Wave               │
+  ├─────────────────┼─────────────────────────────────┼─────────────────────────────┤
+  │ layer1_analyses │ Layer 2/3 维度对 Layer 1 的依赖 │ ❌ 不影响（Layer 1 已完成） │
+  │ layer2_concepts │ Layer 2 内部维度之间的依赖      │ ✅ 用于 Wave 计算           │
+  │ layer3_plans    │ Layer 3 内部维度之间的依赖      │ ✅ 用于 Wave 计算           │
+  └─────────────────┴─────────────────────────────────┴─────────────────────────────┘
+
+  Wave 计算规则
+
+   Layer 2:
+   - Wave 1: 无 layer2_concepts 依赖的维度
+   - Wave 2: 只依赖 Wave 1 的维度
+   - Wave 3: 只依赖 Wave 1,2 的维度
+   - ...
+
+   Layer 3:
+   - Wave 1: 无 layer3_plans 依赖的维度（11个）
+   - Wave 2: 依赖 Wave 1 的维度（project_bank）
+
+  ---
+
+  二、代码改造
+
+  2.1 修改 dimension_config.py
+
+  新增自动 Wave 计算函数：
+
+   def _calculate_wave_for_layer(dimensions: Dict[str, Any], layer: int) -> Dict[int, List[str]]:
+       """
+       根据同层依赖自动计算 Wave
+
+       Args:
+           dimensions: 所有维度配置
+           layer: 层级（2 或 3）
+
+       Returns:
+           {wave_number: [dimension_keys]}
+       """
+       # 获取同层依赖字段名
+       dep_field = {
+           2: "layer2_concepts",
+           3: "layer3_plans"
+       }.get(layer)
+
+       # 获取该层所有维度
+       layer_dims = {k: v for k, v in dimensions.items() if v.get("layer") == layer}
+
+       waves = {}
+       assigned = set()
+       wave_num = 1
+
+       while len(assigned) < len(layer_dims):
+           # 找出当前 Wave 可执行的维度
+           ready = []
+           for dim_key, dim_config in layer_dims.items():
+               if dim_key in assigned:
+                   continue
+
+               # 获取同层依赖
+               deps = dim_config.get("dependencies", {}).get(dep_field, [])
+
+               # 检查依赖是否都已分配
+               if all(d in assigned for d in deps):
+                   ready.append(dim_key)
+
+           if not ready:
+               break  # 避免死循环
+
+           waves[wave_num] = ready
+           assigned.update(ready)
+           wave_num += 1
+
+       return waves
+
+  修改 `_build_wave_config()` 调用自动计算：
+
+   def _build_wave_config() -> Dict[int, Any]:
+       """构建 Layer 3 波次配置（使用自动计算）"""
+       config = get_dimensions_config()
+       dimensions = config.get("dimensions", {})
+
+       # 自动计算 Layer 3 Wave
+       wave_map = _calculate_wave_for_layer(dimensions, layer=3)
+
+       waves = {}
+       for wave_num, dim_keys in wave_map.items():
+           waves[wave_num] = {
+               "dimensions": dim_keys,
+               "description": f"Wave {wave_num}: {len(dim_keys)} 个维度"
+           }
+
+       return waves
+
+  新增 Layer 2 Wave 函数：
+
+   def get_concept_wave_config() -> Dict[int, List[str]]:
+       """获取 Layer 2 Wave 配置"""
+       config = get_dimensions_config()
+       dimensions = config.get("dimensions", {})
+       return _calculate_wave_for_layer(dimensions, layer=2)
+
+  2.2 删除冗余代码
+
+  删除以下内容：
+   - 模块级缓存变量（_cached_*）
+   - 重复的 API 函数（ANALYSIS_DIMENSION_NAMES() 等）
+   - 旧映射函数（get_analysis_to_concept_mapping()）
+
+  保留核心函数：
+   - get_dimensions_config() - 加载配置
+   - get_*_dimension_names() - 获取维度名称
+   - get_full_dependency_chain() - 获取完整依赖链
+   - get_wave_config() - Layer 3 Wave 配置
+   - get_concept_wave_config() - Layer 2 Wave 配置（新增）
+
+  ---
+
+  三、Layer 2 子图改造
+
+  3.1 修改 concept_subgraph.py
+
+  新增 Wave 路由：
+
+   def route_concept_by_wave(state: ConceptState) -> Union[List[Send], str]:
+       """基于同层依赖的波次路由"""
+       from ..core.dimension_config import get_concept_wave_config
+
+       completed = set(state.get("completed_concept_dimensions", []))
+       wave_config = get_concept_wave_config()
+
+       for wave_num in sorted(wave_config.keys()):
+           dims = wave_config[wave_num]
+           pending = [d for d in dims if d not in completed]
+
+           if pending:
+               return create_concept_sends(state, pending)
+
+       return "end"
+
+  新增状态字段：
+   - completed_concept_dimensions: List[str]
+
+  ---
+
+  四、Layer 3 优化
+
+  4.1 状态预计算
+
+  在子图入口预计算每个维度的筛选状态，避免重复计算。
+
+  4.2 增量执行支持
+
+  新增 dimensions_to_execute 状态字段，支持只执行失败的维度。
+
+  ---
+
+  五、Bug 修复
+
+  文件: src/nodes/layer_nodes.py:564
+
+   # 修复前
+   dimension_reports=state.get("dimension_reports", {}),
+
+   # 修复后
+   dimension_reports=state.get("analysis_dimension_reports", {}),
+
+  ---
+
+  六、文件变更清单
+
+
+  ┌───────────────────────────────────────┬─────────────────────────────────────┐
+  │ 文件                                  │ 操作                                │
+  ├───────────────────────────────────────┼─────────────────────────────────────┤
+  │ src/core/dimension_config.py          │ 重构：删除冗余 + 新增自动 Wave 计算 │
+  │ src/subgraphs/concept_subgraph.py     │ 修改：Wave 模式执行                 │
+  │ src/subgraphs/detailed_plan_subgraph.py │ 修改：状态预计算 + 增量执行         │
+  │ src/nodes/layer_nodes.py              │ 修改：Bug 修复                      │
+  └───────────────────────────────────────┴─────────────────────────────────────┘
+
+
+ℹ 退出计划模式并切换到智能模式。
+ 
+
+✦ 现在开始实施优化方案。
+  ✔  Plan 更新待办事项列表（5个待处理，0个进行中，0个已完成）
+     ·已更新待办事项列表
+       ⎿ ☐ 修复 Bug: layer_nodes.py:564 字段名错误
+         ☐ 重构 dimension_config.py: 删除冗余代码 + 新增自动 Wave 计算
+         ☐ 改造 concept_subgraph.py: Wave 模式执行
+         ☐ 优化 detailed_plan_subgraph.py: 状态预计算 + 增量执行
+         ☐ 测试验证优化效果
+
+  ✔  Plan 更新待办事项列表（4个待处理，1个进行中，0个已完成）
+     ·已更新待办事项列表
+       ⎿ ☐ 修复 Bug: layer_nodes.py:564 字段名错误
+         ☐ 重构 dimension_config.py: 删除冗余代码 + 新增自动 Wave 计算
+         ☐ 改造 concept_subgraph.py: Wave 模式执行
+         ☐ 优化 detailed_plan_subgraph.py: 状态预计算 + 增量执行
+         ☐ 测试验证优化效果
+
+  ✔  Read File src\nodes\layer_nodes.py
+     从 src/nodes/layer_nodes.py 读取第 556-585 行，共 613 行
+
+  ✔  Edit src\nodes\layer_nodes.py:         return call_detailed_p... =>         return call_detailed_p...
+       project_name=state["project_name"],
+       analysis_report=state["analysis_report"],
+       planning_concept=state["planning_concept"],
+     - dimension_reports=state.get("dimension_reports", {}),
+     + analysis_dimension_reports=state.get("analysis_dimension_reports", {}),
+       concept_dimension_reports=state.get("concept_dimension_reports", {}),
+       task_description=state.get("task_description", "制定村庄详细规划"),
+       constraints=state.get("constraints", "无特殊约束"),
+
+✦ 现在需要检查 call_detailed_plan_subgraph 函数的参数名是否匹配：
+  ✔  Search 'def call_detailed_plan_subgraph' in file src\\detailed_plan_subgraph.py
+     找到 1 个匹配
+
+  ✔  Read File src\\detailed_plan_subgraph.py
+     从 src/subgraphs/detailed_plan_subgraph.py 读取第 674-723 行，共 837 行
+
+✦ 需要修改 call_detailed_plan_subgraph 函数的参数名，将 dimension_reports 改为 analysis_dimension_reports 以保持一致性：
+  ✔  Edit src\\detailed_plan_subgraph.py: def call_detailed_plan_subgrap... => def call_detailed_plan_subgrap...
+       project_name: str,
+       analysis_report: str,
+       planning_concept: str,
+     - dimension_reports: Dict[str, str] = None,  # 新增：维度报告字典
+     - concept_dimension_reports: Dict[str, str] = None,  # 新增：规划思路维度字典
+     + analysis_dimension_reports: Dict[str, str] = None,  # Layer 1 维度报告字典
+     + concept_dimension_reports: Dict[str, str] = None,  # Layer 2 规划思路维度字典
+       task_description: str = "制定村庄详细规划",
+       constraints: str = "无特殊约束",
+       required_dimensions: List[str] = None,
+
+✦ 现在需要更新函数内部使用 dimension_reports 的地方：
+  ✔  Search 'dimension_reports' in file src\\detailed_plan_subgraph.py
+     找到 34 个匹配
+
+✦ 需要更新多处使用 dimension_reports 的地方。让我查看具体上下文：
+  ✔  Read File src\\detailed_plan_subgraph.py
+     从 src/subgraphs/detailed_plan_subgraph.py 读取第 716-795 行，共 837 行
+
+✦ 我需要修复多处使用 dimension_reports 变量的地方。让我逐个修复：
+  ✔  Edit src\\detailed_plan_subgraph.py:     logger.info(f"[子图调用] 开始调用详... =>     logger.info(f"[子图调用] 开始调用详…
+       """
+       logger.info(f"[子图调用] 开始调用详细规划子图: {project_name}")
+       logger.info(f"[子图调用] 传入参数: project_name={project_name}, required_dimensions={required_dimensions}")
+     - logger.info(f"[子图调用] 状态字段检查: dimension_reports类型={type(dimension_reports)}, 
+     concept_dimension_reports类型={type(concept_dimension_reports)}")
+     + logger.info(f"[子图调用] 状态字段检查: analysis_dimension_reports类型={type(analysis_dimension_reports)}, 
+     concept_dimension_reports类型={type(concept_dimension_reports)}")
+
+       # 创建子图实例
+       logger.info(f"[子图调用] 创建子图实例...")
+
+  ✔  Edit src\\detailed_plan_subgraph.py:     # 构建初始状态... =>     # 构建初始状态...
+       initial_state: DetailedPlanState = {
+           "project_name": project_name,
+           "analysis_report": analysis_report,
+     -     "dimension_reports": dimension_reports or {},
+     +     "dimension_reports": analysis_dimension_reports or {},  # 状态中保持 dimension_reports 键名以兼容现有逻辑
+           "planning_concept": planning_concept,
+           "concept_dimension_reports": concept_dimension_reports or {},
+           "task_description": task_description,
+
+✦ 现在更新第一个 todo 为完成，开始第二个任务：
+  ✔  Plan 更新待办事项列表（3个待处理，1个进行中，1个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 修复 Bug: layer_nodes.py:564 字段名错误
+         ☐ 重构 dimension_config.py: 删除冗余代码 + 新增自动 Wave 计算
+         ☐ 改造 concept_subgraph.py: Wave 模式执行
+         ☐ 优化 detailed_plan_subgraph.py: 状态预计算 + 增量执行
+         ☐ 测试验证优化效果
+
+✦ 现在重构 dimension_config.py。首先让我查看完整文件，然后重写：
+  ✔  Read File src\core\dimension_config.py
+     从 src/core/dimension_config.py 读取所有 575 行数据
+
+✦ 现在我来重写这个文件，删除冗余代码并添加自动 Wave 计算：
+  ✔  Write File 写入 src\core\dimension_config.py
+       """
+     - 维度配置加载器 - 从 YAML 配置文件加载维度映射信息
+     + 维度配置加载器 - 从 dimension_metadata.py 加载维度配置
+
+     - 此模块替代旧的 dimension_mapping.py，通过加载 YAML 配置文件来提供相同的 API，
+     - 实现配置即代码的架构。
+     - 
+     - 兼容性: 提供与原 dimension_mapping.py 相同的导出接口和函数。
+     + 提供统一的维度配置访问 API，包括：
+     + - 维度名称映射
+     + - 依赖关系查询
+     + - Wave 执行顺序（自动计算）
+       """
+
+     - from pathlib import Path
+       from typing import Any, Dict, List, Optional
+     - import yaml
+       import threading
+
+       from ..utils.logger import get_logger
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+       # ==========================================
+
+       _dimensions_config: Optional[Dict[str, Any]] = None
+     - _prompts_config: Optional[Dict[str, str]] = None
+       _config_lock = threading.Lock()
+
+
+
+       def _load_all_configs() -> None:
+           """加载所有配置文件（带缓存 + 线程安全）"""
+     -     global _dimensions_config, _prompts_config
+     +     global _dimensions_config
+
+     -     # 快速路径：如果已加载，直接返回
+           if _dimensions_config is not None:
+               return
+
+     -     # 使用锁保护配置加载
+           with _config_lock:
+     -         # 双重检查：可能在等待锁时已被其他线程加载
+               if _dimensions_config is not None:
+                   return
+
+               try:
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     -             # 从 dimension_metadata.py 加载配置
+                   from ..config.dimension_metadata import DIMENSIONS_METADATA
+                   _dimensions_config = {"dimensions": DIMENSIONS_METADATA}
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     -             _prompts_config = {}  # Prompt 不再从这里加载
+                   logger.info(f"[dimension_config] 配置加载完成: {len(DIMENSIONS_METADATA)} 个维度")
+               except ImportError as e:
+                   logger.error(f"[dimension_config] 导入 dimension_metadata 失败: {e}")
+                   _dimensions_config = {"dimensions": {}}
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     -             _prompts_config = {}
+     + 
+     + 
+       def get_dimensions_config() -> Dict[str, Any]:
+           """获取完整的维度配置"""
+           _load_all_configs()
+           return _dimensions_config
+
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     - def get_prompts_config() -> Dict[str, str]:
+     -     """获取完整的 Prompt 配置"""
+     -     _load_all_configs()
+     -     return _prompts_config
+     - 
+     - 
+       # ==========================================
+       # 维度名称映射
+       # ==========================================
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     - def _build_dimension_names_mapping(layer: int) -> Dict[str, str]:
+     -     """
+     -     构建指定层级的维度名称映射
+     - 
+     -     Args:
+     -         layer: 层级编号 (1, 2, 3)
+     - 
+     -     Returns:
+     -         维度 key 到名称的映射字典
+     -     """
+     -     config = get_dimensions_config()
+     -     dimensions = config.get("dimensions", {})
+     -     
+     -     return {
+     -         key: dim_data["name"]
+     -         for key, dim_data in dimensions.items()
+     -         if dim_data.get("layer") == layer
+     -     }
+     - 
+     - 
+     - def _build_full_dependency_chain() -> Dict[str, Any]:
+     -     """
+     -     从维度配置构建完整的三层依赖关系映射
+     - 
+     -     Returns:
+     -         包含每个详细规划维度依赖链的字典
+     -     """
+     -     config = get_dimensions_config()
+     -     dimensions = config.get("dimensions", {})
+     -     
+     -     chain = {}
+     -     for key, dim_data in dimensions.items():
+     -         if dim_data.get("layer") == 3:  # 只处理详细规划维度
+     -             deps = dim_data.get("dependencies", {})
+     -             chain[key] = {
+     -                 "layer1_analyses": deps.get("layer1_analyses", []),
+     -                 "layer2_concepts": deps.get("layer2_concepts", []),
+     -                 "wave": deps.get("wave", 1),
+     -                 "depends_on_detailed": deps.get("depends_on_detailed", [])
+     -             }
+     -     
+     -     return chain
+     - 
+     - 
+     - def _build_wave_config() -> Dict[int, Any]:
+     -     """
+     -     从维度配置构建波次配置
+     - 
+     -     Returns:
+     -         波次配置字典
+     -     """
+     -     config = get_dimensions_config()
+     -     dimensions = config.get("dimensions", {})
+     -     
+     -     waves = {}
+     -     for key, dim_data in dimensions.items():
+     -         if dim_data.get("layer") == 3:
+     -             wave = dim_data.get("dependencies", {}).get("wave", 1)
+     -             if wave not in waves:
+     -                 waves[wave] = {
+     -                     "dimensions": [],
+     -                     "description": f"Wave {wave}"
+     -                 }
+     -             waves[wave]["dimensions"].append(key)
+     -     
+     -     # 添加描述
+     -     if 1 in waves:
+     -         waves[1]["description"] = "第一波次：11个独立维度完全并行执行"
+     -     if 2 in waves:
+     -         waves[2]["description"] = "第二波次：项目建设库（等待Wave 1完成）"
+     -     
+     -     return waves
+     - 
+     - 
+     - # ==========================================
+     - # 公共导出 - 维度名称映射
+     - # ==========================================
+     - 
+       def get_analysis_dimension_names() -> Dict[str, str]:
+           """获取现状分析维度名称映射（Layer 1）"""
+           return _build_dimension_names_mapping(1)
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+           return _build_dimension_names_mapping(3)
+
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     - # 延迟初始化的属性（兼容旧 API）
+     - def ANALYSIS_DIMENSION_NAMES() -> Dict[str, str]:
+     -     """现状分析维度名称映射"""
+     -     return get_analysis_dimension_names()
+     + def _build_dimension_names_mapping(layer: int) -> Dict[str, str]:
+     +     """构建指定层级的维度名称映射"""
+     +     config = get_dimensions_config()
+     +     dimensions = config.get("dimensions", {})
+
+     +     return {
+     +         key: dim_data["name"]
+     +         for key, dim_data in dimensions.items()
+     +         if dim_data.get("layer") == layer
+     +     }
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     - def CONCEPT_DIMENSION_NAMES() -> Dict[str, str]:
+     -     """规划思路维度名称映射"""
+     -     return get_concept_dimension_names()
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     - 
+     - def DETAILED_DIMENSION_NAMES() -> Dict[str, str]:
+     -     """详细规划维度名称映射"""
+     -     return get_detailed_dimension_names()
+     - 
+     - 
+       # ==========================================
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     - # 公共导出 - 依赖链和波次配置
+     + # Wave 自动计算
+       # ==========================================
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     - def get_full_dependency_chain() -> Dict[str, Any]:
+     -     """获取完整的三层依赖关系映射"""
+     -     return _build_full_dependency_chain()
+     + def _calculate_wave_for_layer(dimensions: Dict[str, Any], layer: int) -> Dict[int, List[str]]:
+     +     """
+     +     根据同层依赖自动计算 Wave 执行顺序
+
+     +     Args:
+     +         dimensions: 所有维度配置
+     +         layer: 层级（2 或 3）
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     - def get_wave_config() -> Dict[int, Any]:
+     ... 后 628 行已隐藏 ...（输入ctrl+r查看全部）
+
+✦ 现在检查是否有其他文件引用了被删除的旧 API：
+  ✔  Search 'ANALYSIS_DIMENSION_NAMES|CONCEPT_DIMENSION_NAMES|DETAILED_DIMENSION_NAMES|FULL_DEPENDENCY_CHAIN|WAVE_CONFIG|DEFAUL…
+     找到 89 个匹配
+
+✦ 有多个文件使用了旧的 API（大写的函数名）。我需要在 dimension_config.py 中添加这些兼容性导出：
+  ✔  Edit src\core\dimension_config.py: # ============================... => # ============================...
+
+
+       # ==========================================
+     + # 兼容性导出（大写函数名，保持向后兼容）
+     + # ==========================================
+     + 
+     + def ANALYSIS_DIMENSION_NAMES() -> Dict[str, str]:
+     +     """兼容性导出：获取现状分析维度名称映射"""
+     +     return get_analysis_dimension_names()
+     + 
+     + def CONCEPT_DIMENSION_NAMES() -> Dict[str, str]:
+     +     """兼容性导出：获取规划思路维度名称映射"""
+     +     return get_concept_dimension_names()
+     + 
+     + def DETAILED_DIMENSION_NAMES() -> Dict[str, str]:
+     +     """兼容性导出：获取详细规划维度名称映射"""
+     +     return get_detailed_dimension_names()
+     + 
+     + def FULL_DEPENDENCY_CHAIN() -> Dict[str, Any]:
+     +     """兼容性导出：获取完整依赖关系映射"""
+     +     return get_full_dependency_chain()
+     + 
+     + def WAVE_CONFIG() -> Dict[int, Dict[str, Any]]:
+     +     """兼容性导出：获取波次配置"""
+     +     return get_wave_config()
+     + 
+     + def DEFAULT_ADAPTER_CONFIG() -> Dict[str, List[str]]:
+     +     """兼容性导出：获取默认适配器配置"""
+     +     return get_default_adapter_config()
+     + 
+     + def ANALYSIS_TO_CONCEPT_MAPPING() -> Dict[str, Any]:
+     +     """兼容性导出：获取现状分析到规划思路的映射"""
+     +     config = get_dimensions_config()
+     +     dimensions = config.get("dimensions", {})
+     +     
+     +     mapping = {}
+     +     for key, dim_data in dimensions.items():
+     +         if dim_data.get("layer") == 2:
+     +             deps = dim_data.get("dependencies", {})
+     +             mapping[key] = {
+     +                 "required_analyses": deps.get("layer1_analyses", []),
+     +                 "description": dim_data.get("description", "")
+     +             }
+     +     return mapping
+     + 
+     + 
+     + # ==========================================
+       # 导出
+       # ==========================================
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+           "get_default_adapter_config",
+           "get_wave_summary",
+           "visualize_dependency_graph",
+     +     # 兼容性导出（大写函数名）
+     +     "ANALYSIS_DIMENSION_NAMES",
+     +     "CONCEPT_DIMENSION_NAMES",
+     +     "DETAILED_DIMENSION_NAMES",
+     +     "FULL_DEPENDENCY_CHAIN",
+     +     "WAVE_CONFIG",
+     +     "DEFAULT_ADAPTER_CONFIG",
+     +     "ANALYSIS_TO_CONCEPT_MAPPING",
+       ]
+
+✦ 现在更新 todo 并开始第三个任务：改造 concept_subgraph.py：
+  ✔  Plan 更新待办事项列表（2个待处理，1个进行中，2个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 修复 Bug: layer_nodes.py:564 字段名错误
+         ✔ 重构 dimension_config.py: 删除冗余代码 + 新增自动 Wave 计算
+         ☐ 改造 concept_subgraph.py: Wave 模式执行
+         ☐ 优化 detailed_plan_subgraph.py: 状态预计算 + 增量执行
+         ☐ 测试验证优化效果
+
+  ✔  Read File src\subgraphs\concept_subgraph.py
+     从 src/subgraphs/concept_subgraph.py 读取所有 370 行数据
+
+✦ 现在我需要将 concept_subgraph.py 改造为 Wave 模式执行。让我修改它：
+  ✔  Write File 写入 src\subgraphs\concept_subgraph.py
+       """
+     - 规划思路子图 (Concept Subgraph)
+     + 规划思路子图
+
+     - 基于现状分析，生成规划思路，包含4个维度的并行分析：
+     - 1. 资源禀赋分析
+     - 2. 规划定位分析
+     - 3. 发展目标分析
+     - 4. 规划策略分析
+     + 基于现状分析，生成规划思路，包含4个维度的分析：
+     + 1. 资源禀赋分析 (Wave 1)
+     + 2. 规划定位分析 (Wave 2 - 依赖资源禀赋)
+     + 3. 发展目标分析 (Wave 3 - 依赖前两个)
+     + 4. 规划策略分析 (Wave 4 - 依赖前三个)
+
+     - 使用 LangGraph 的 Send 机制实现 Map-Reduce 模式。
+     + 使用 LangGraph 的 Send 机制实现基于依赖关系的 Wave 执行模式。
+       支持部分状态传递优化，根据维度依赖关系筛选相关的现状分析信息。
+       """
+
+     - from typing import TypedDict, List, Dict, Any
+     + from typing import TypedDict, List, Dict, Any, Union
+       from typing_extensions import Annotated
+       from langgraph.graph import StateGraph, END, START
+       from langgraph.types import Send
+       from langgraph.graph.message import add_messages
+     - from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+     + from langchain_core.messages import BaseMessage
+       import operator
+
+       from ..core.config import LLM_MODEL, MAX_TOKENS
+     + from ..core.dimension_config import (
+     +     get_concept_wave_config,
+     +     get_concept_dimensions_by_wave,
+     +     check_concept_dependencies_ready,
+     +     get_required_analyses_for_concept
+     + )
+       from ..utils.logger import get_logger
+       from ..utils.state_filter import filter_analysis_report_for_concept
+       from .concept_prompts import (
+           PLANNING_POSITIONING_PROMPT,
+           DEVELOPMENT_GOALS_PROMPT,
+           PLANNING_STRATEGIES_PROMPT,
+     -     CONCEPT_SUMMARY_PROMPT,
+           list_concept_dimensions
+       )
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+           task_description: str         # 规划任务描述
+           constraints: str             # 约束条件
+
+     -     # 中间状态 - 用于并行分析
+     -     dimensions: List[str]        # 待分析的维度列表
+     +     # Wave 执行控制
+     +     current_wave: int            # 当前波次
+     +     total_waves: int             # 总波次数
+     + 
+     +     # 执行状态
+     +     dimensions: List[str]        # 待分析的维度列表（兼容旧逻辑）
+     +     completed_concept_dimensions: List[str]  # 已完成的维度列表
+           concept_analyses: Annotated[List[Dict[str, str]], operator.add]  # 已完成的维度分析
+
+     -     # 输出数据 - 只保留维度报告（使用自定义合并函数合并各维度的结果）
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +     # 输出数据
+           concept_dimension_reports: Annotated[Dict[str, str], merge_dicts]  # 各维度独立报告
+
+           # 消息历史
+           dimension_key: str           # 维度标识
+           dimension_name: str           # 维度名称
+           analysis_report: str         # 现状分析报告（筛选后）
+     -     dimension_reports: Dict[str, str]  # 完整的各维度现状分析字典（用于规划器二次筛选）
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +     dimension_reports: Dict[str, str]  # 完整的各维度现状分析字典
+     +     concept_reports: Dict[str, str]  # 已完成的规划思路维度报告（来自前序 Wave）
+           task_description: str         # 规划任务
+           constraints: str             # 约束条件
+     -     planning_concept: str          # 分析结果
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +     concept_result: str          # 分析结果
+
+
+       # ==========================================
+     - # LLM 调用辅助函数
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     + # 初始化节点
+       # ==========================================
+
+     - def _get_llm():
+     -     """获取 LLM 实例，使用统一的 LLM 工厂"""
+     -     from ..core.llm_factory import create_llm
+     -     return create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     + def initialize_concept_analysis(state: ConceptState) -> Dict[str, Any]:
+     +     """
+     +     初始化规划思路分析流程，设置 Wave 执行参数
+     +     """
+     +     logger.info(f"[子图-L2-初始化] 开始规划思路分析，项目: {state.get('project_name', '未命名')}")
+
+     +     # 获取 Wave 配置（自动计算）
+     +     wave_config = get_concept_wave_config()
+     +     total_waves = len(wave_config)
+
+     +     logger.info(f"[子图-L2-初始化] Wave 配置: {wave_config}")
+     +     logger.info(f"[子图-L2-初始化] 总波次数: {total_waves}")
+     + 
+     +     # 获取所有维度（兼容旧逻辑）
+     +     all_dimensions = []
+     +     for wave in sorted(wave_config.keys()):
+     +         all_dimensions.extend(wave_config[wave])
+     + 
+     +     return {
+     +         "current_wave": 1,
+     +         "total_waves": total_waves,
+     +         "dimensions": all_dimensions,
+     +         "completed_concept_dimensions": [],
+     +         "concept_analyses": []
+     +     }
+     + 
+     + 
+       # ==========================================
+     - # 辅助函数
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     + # Wave 路由函数
+       # ==========================================
+
+     - def _get_dimension_prompt(
+     -     dimension_key: str,
+     -     analysis_report: str,
+     -     task_description: str,
+     -     constraints: str
+     - ) -> str:
+     -     """获取指定维度的 Prompt 模板"""
+     -     prompts_map = {
+     -         "resource_endowment": RESOURCE_ENDOWMENT_PROMPT,
+     -         "planning_positioning": PLANNING_POSITIONING_PROMPT,
+     -         "development_goals": DEVELOPMENT_GOALS_PROMPT,
+     -         "planning_strategies": PLANNING_STRATEGIES_PROMPT,
+     -     }
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     + def route_by_wave(state: ConceptState) -> Union[List[Send], str]:
+     +     """
+     +     基于依赖关系的波次路由函数
+
+     -     if dimension_key not in prompts_map:
+     -         raise ValueError(f"未知的规划维度: {dimension_key}")
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +     执行逻辑：
+     +     1. 获取当前 Wave 的维度列表
+     +     2. 检查依赖是否满足
+     +     3. 创建并行任务或推进到下一 Wave
+     +     """
+     +     current_wave = state.get("current_wave", 1)
+     +     completed = set(state.get("completed_concept_dimensions", []))
+     +     concept_reports = state.get("concept_dimension_reports", {})
+
+     -     prompt_template = prompts_map[dimension_key]
+     -     return prompt_template.format(
+     -         project_name="",  # 可以从 state 中获取
+     -         analysis_report=analysis_report[:3000],  # 限制长度
+     -         task_description=task_description,
+     -         constraints=constraints
+     -     )
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +     logger.info(f"[子图-L2-路由] 当前 Wave: {current_wave}, 已完成: {list(completed)}")
+
+     +     # 获取当前 Wave 的维度
+     +     wave_dimensions = get_concept_dimensions_by_wave(current_wave)
+
+     - # ==========================================
+     - # Map-Reduce 路由与分发节点
+     - # ==========================================
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +     if not wave_dimensions:
+     +         logger.info(f"[子图-L2-路由] Wave {current_wave} 无维度，检查是否完成")
+     +         if current_wave < state.get("total_waves", 4):
+     +             return "advance_wave"
+     +         return "end"
+
+     - def map_concept_dimensions(state: ConceptState) -> List[Send]:
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +     # 筛选出待执行的维度
+     +     pending = []
+     +     for dim in wave_dimensions:
+     +         if dim not in completed:
+     +             # 检查依赖是否满足
+     +             if check_concept_dependencies_ready(dim, list(completed)):
+     +                 pending.append(dim)
+     +             else:
+     +                 logger.warning(f"[子图-L2-路由] 维度 {dim} 依赖未满足，跳过")
+     + 
+     +     if pending:
+     +         logger.info(f"[子图-L2-路由] Wave {current_wave} 待执行维度: {pending}")
+     +         return create_wave_sends(state, pending, concept_reports)
+     +     
+     +     # 当前 Wave 全部完成，推进到下一 Wave
+     +     if current_wave < state.get("total_waves", 4):
+     +         logger.info(f"[子图-L2-路由] Wave {current_wave} 完成，推进到 Wave {current_wave + 1}")
+     +         return "advance_wave"
+     +     
+     +     return "end"
+     + 
+     + 
+     + def create_wave_sends(
+     +     state: ConceptState,
+     +     dimensions: List[str],
+     +     concept_reports: Dict[str, str]
+     + ) -> List[Send]:
+           """
+     -     Map 阶段：将4个维度映射为独立的分析任务
+     ... 后 339 行已隐藏 ...（输入ctrl+r查看全部）
+
+✦ 现在需要更新 subgraph_nodes.py 中的 AnalyzeConceptDimensionNode 来支持新的状态字段。让我检查一下：
+  ✔  Search 'class AnalyzeConceptDimensionNode' in file src\nodes\subgraph_nodes.py
+     找到 1 个匹配
+
+  ✔  Read File src\nodes\subgraph_nodes.py
+     从 src/nodes/subgraph_nodes.py 读取第 261-380 行，共 582 行
+
+✦ 我需要修改 AnalyzeConceptDimensionNode 来支持新的状态字段（concept_reports 和 completed_concept_dimensions）：
+  ✔  Edit src\nodes\subgraph_nodes.py: class AnalyzeConceptDimensionN... => class AnalyzeConceptDimensionN...
+
+
+       class AnalyzeConceptDimensionNode(BaseNode):
+     -     """规划思路维度分析节点（增强版：更好的错误处理和状态验证）"""
+     +     """规划思路维度分析节点（Wave 模式：支持前序 Wave 结果传递）"""
+
+           def __init__(self) -> None:
+               super().__init__("规划思路维度分析")
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+               logger.info(f"[{self.node_name}] 开始执行 {dimension_name} ({dimension_key})")
+
+     +         # 获取前序 Wave 的规划思路结果
+     +         concept_reports = state.get("concept_reports", {})
+     +         if concept_reports:
+     +             logger.info(f"[{self.node_name}] 接收到前序 Wave 结果: {list(concept_reports.keys())}")
+     + 
+               try:
+                   from ..planners.generic_planner import GenericPlannerFactory
+                   planner = GenericPlannerFactory.create_planner(dimension_key)
+                   planner_state = {
+                       "analysis_report": state.get("analysis_report", ""),
+                       "dimension_reports": state.get("dimension_reports", {}),
+     +                 "concept_reports": concept_reports,  # 传递前序 Wave 结果
+                       "project_name": state.get("project_name", "村庄"),
+                       "task_description": state.get("task_description", "制定规划思路"),
+                       "constraints": state.get("constraints", "无特殊约束")
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+                               "dimension_key": dimension_key,
+                               "dimension_name": dimension_name,
+                               "concept_result": f"[分析失败] {error_msg}"
+     -                     }]
+     +                     }],
+     +                     "completed_concept_dimensions": [dimension_key],
+     +                     "concept_dimension_reports": {dimension_key: f"[分析失败] {error_msg}"}
+                       }
+
+                   concept_text = planner_result["concept_result"]
+                   logger.info(f"[{self.node_name}] {dimension_name} 完成，生成 {len(concept_text)} 字符")
+
+     +             # Wave 模式：同时更新维度报告字典和完成列表
+                   return {
+                       "concept_analyses": [{
+                           "dimension_key": dimension_key,
+                           "dimension_name": dimension_name,
+                           "concept_result": concept_text
+     -                 }]
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +                 }],
+     +                 "completed_concept_dimensions": [dimension_key],
+     +                 "concept_dimension_reports": {dimension_key: concept_text}
+                   }
+
+               except ValueError as e:
+                           "dimension_key": dimension_key,
+                           "dimension_name": dimension_name,
+                           "concept_result": f"[分析失败] 不支持的维度: {dimension_key}"
+     -                 }]
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +                 }],
+     +                 "completed_concept_dimensions": [dimension_key],
+     +                 "concept_dimension_reports": {dimension_key: f"[分析失败] 不支持的维度: {dimension_key}"}
+                   }
+
+               except Exception as e:
+                           "dimension_key": dimension_key,
+                           "dimension_name": dimension_name,
+                           "concept_result": f"[分析失败] {str(e)}"
+     -                 }]
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +                 }],
+     +                 "completed_concept_dimensions": [dimension_key],
+     +                 "concept_dimension_reports": {dimension_key: f"[分析失败] {str(e)}"}
+                   }
+
+
+
+✦ 现在更新 todo 并开始优化 detailed_plan_subgraph.py：
+  ✔  Plan 更新待办事项列表（1个待处理，1个进行中，3个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 修复 Bug: layer_nodes.py:564 字段名错误
+         ✔ 重构 dimension_config.py: 删除冗余代码 + 新增自动 Wave 计算
+         ✔ 改造 concept_subgraph.py: Wave 模式执行
+         ☐ 优化 detailed_plan_subgraph.py: 状态预计算 + 增量执行
+         ☐ 测试验证优化效果
+
+✦ 现在检查 detailed_plan_subgraph.py 中需要更新的部分：
+  ✔  Read File src\\detailed_plan_subgraph.py
+     从 src/subgraphs/detailed_plan_subgraph.py 读取第 31-130 行，共 837 行
+
+✦ 我看到 detailed_plan_subgraph.py 已经有了 Wave 支持的基本结构。现在需要更新它使用新的自动 Wave 计算函数。让我查看路由部分：
+  ✔  Read File src\\detailed_plan_subgraph.py
+     从 src/subgraphs/detailed_plan_subgraph.py 读取第 141-240 行，共 837 行
+
+✦ 我看到 detailed_plan_subgraph.py 已经有 Wave 机制，但它使用的是 get_dimensions_by_wave(1) 这样的硬编码方式。让我检查
+  dimension_config.py 中的 get_wave_config() 是否正确返回自动计算的 Wave：
+
+✦ 现在让我更新 detailed_plan_subgraph.py 的初始化部分，使用新的自动 Wave 计算：
+  ✔  Edit src\\detailed_plan_subgraph.py: from ..core.dimension_config i... => from ..core.dimension_config i...
+
+       from ..core.config import LLM_MODEL, MAX_TOKENS
+       from ..core.dimension_config import (
+     -     FULL_DEPENDENCY_CHAIN,
+     -     WAVE_CONFIG,
+     -     get_execution_wave,
+     +     get_full_dependency_chain,
+     +     get_wave_config,
+           get_dimensions_by_wave,
+           check_detailed_dependencies_ready,
+     -     DETAILED_DIMENSION_NAMES,
+     +     get_detailed_dimension_names,
+           get_default_adapter_config
+       )
+       from ..utils.logger import get_logger
+
+✦ 现在更新使用 DETAILED_DIMENSION_NAMES 的地方：
+  ✔  Search 'DETAILED_DIMENSION_NAMES|FULL_DEPENDENCY_CHAIN|WAVE_CONFIG' in file src\\detailed_plan_subgraph.py
+     找到 4 个匹配
+
+  ✔  Read File src\\detailed_plan_subgraph.py
+     从 src/subgraphs/detailed_plan_subgraph.py 读取第 151-180 行，共 836 行
+
+  ✔  Edit src\\detailed_plan_subgraph.py:     "landscape",... =>     "landscape",...
+           "project_bank"
+       ]
+
+     - # 维度名称映射（使用dimension_mapping中的定义）
+     - DIMENSION_NAMES = DETAILED_DIMENSION_NAMES
+     + # 维度名称映射（使用函数调用方式）
+     + DIMENSION_NAMES = get_detailed_dimension_names
+
+     - # 【新增】波次配置常量
+     - TOTAL_WAVES = 2
+     + # 波次数（从自动计算的配置中获取）
+     + _wave_config = get_wave_config()
+     + TOTAL_WAVES = len(_wave_config) if _wave_config else 2
+
+       # ==========================================
+       # LLM 调用辅助函数
+
+✦ 现在更新 initialize_detailed_planning 函数来使用动态 Wave 配置：
+  ✔  Read File src\\detailed_plan_subgraph.py
+     从 src/subgraphs/detailed_plan_subgraph.py 读取第 161-210 行，共 837 行
+
+  ✔  Edit src\\detailed_plan_subgraph.py: def initialize_detailed_planni... => def initialize_detailed_planni...
+       # 验证维度有效性
+       valid_dimensions = [d for d in required if d in ALL_DIMENSIONS]
+
+     - # 初始化波次执行
+     + # 获取动态 Wave 配置
+     + wave_config = get_wave_config()
+     + total_waves = len(wave_config) if wave_config else TOTAL_WAVES
+       current_wave = 1
+     - total_waves = TOTAL_WAVES
+
+     + logger.info(f"[子图-L3-初始化] Wave 配置: {wave_config}")
+       logger.info(f"[子图-L3-初始化] 设置 {len(valid_dimensions)} 个规划维度")
+       logger.info(f"[子图-L3-初始化] 开始 Wave {current_wave}/{total_waves}")
+       logger.info(f"[子图-L3-初始化] ========== 初始化节点执行完成 ==========")
+
+✦ 现在更新 route_by_dependency_wave 函数来使用新的动态 Wave 配置：
+  ✔  Read File src\\detailed_plan_subgraph.py
+     从 src/subgraphs/detailed_plan_subgraph.py 读取第 201-280 行，共 839 行
+
+✦ 现在让我更新 route_by_dependency_wave 函数使其支持动态 Wave 配置和增量执行：
+  ✔  Edit src\\detailed_plan_subgraph.py: def route_by_dependency_wave(s... => def route_by_dependency_wave(s...
+
+       def route_by_dependency_wave(state: DetailedPlanState) -> Union[List[Send], str]:
+           """
+     -     基于依赖波次的动态路由函数
+     +     基于依赖波次的动态路由函数（支持增量执行）
+
+           逻辑：
+     -     1. 检查当前波次（Wave 1 或 Wave 2）
+     -     2. 筛选出当前波次可执行的维度
+     -     3. 对于Wave 1：返回9个维度的Send对象（完全并行）
+     -     4. 对于Wave 2：检查project_bank的9个前序依赖是否完成
+     -     5. 返回路由决策
+     +     1. 检查是否是增量执行模式（dimensions_to_execute）
+     +     2. 按动态 Wave 配置执行
+     +     3. 对于每个 Wave：检查依赖后并行执行
+     +     4. 返回路由决策
+
+           Returns:
+               List[Send]: Send对象列表（并行执行多个维度）
+               str: 节点名称（"advance_wave", "end"）
+           """
+           current_wave = state.get("current_wave", 1)
+     +     total_waves = state.get("total_waves", 2)
+           completed = set(state.get("completed_dimensions", []))
+
+     -     logger.info(f"[子图-L3-波次路由] 当前Wave: {current_wave}/{state.get('total_waves', 2)}")
+     +     # 检查是否是增量执行模式
+     +     dimensions_to_execute = state.get("dimensions_to_execute")
+     +     if dimensions_to_execute:
+     +         logger.info(f"[子图-L3-波次路由] 增量执行模式: {dimensions_to_execute}")
+     +         return create_parallel_tasks_with_state_filtering(state, dimensions_to_execute)
+
+     -     if current_wave == 1:
+     -         # Wave 1: 9个维度完全并行执行
+     -         wave1_dims = get_dimensions_by_wave(1)
+     -         pending = [d for d in wave1_dims if d not in completed]
+     +     logger.info(f"[子图-L3-波次路由] 当前Wave: {current_wave}/{total_waves}")
+     +     logger.info(f"[子图-L3-波次路由] 已完成维度: {list(completed)}")
+
+     +     # 获取动态 Wave 配置
+     +     wave_config = get_wave_config()
+     +     
+     +     # 获取当前 Wave 的维度
+     +     wave_dims = get_dimensions_by_wave(current_wave)
+     +     
+     +     if not wave_dims:
+     +         # 当前 Wave 无维度，检查是否还有更多 Wave
+     +         if current_wave < total_waves:
+     +             return "advance_wave"
+     +         return "end"
+     +     
+     +     # 筛选出待执行的维度
+     +     pending = [d for d in wave_dims if d not in completed]
+     +     
+           if pending:
+     -             logger.info(f"[子图-L3-波次路由] Wave 1: {len(pending)} 个维度并行执行")
+     -             return create_parallel_tasks_with_state_filtering(state, pending)
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +         # 检查每个维度的依赖是否满足
+     +         ready_dims = []
+     +         for dim in pending:
+     +             if check_detailed_dependencies_ready(dim, list(completed)):
+     +                 ready_dims.append(dim)
+                   else:
+     -             # Wave 1 完成，推进到 Wave 2
+     -             logger.info("[子图-L3-波次路由] Wave 1 全部完成，推进到 Wave 2")
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +                 logger.warning(f"[子图-L3-波次路由] 维度 {dim} 依赖未满足，跳过")
+     +         
+     +         if ready_dims:
+     +             logger.info(f"[子图-L3-波次路由] Wave {current_wave}: {len(ready_dims)} 个维度并行执行")
+     +             return create_parallel_tasks_with_state_filtering(state, ready_dims)
+     +     
+     +     # 当前 Wave 全部完成，推进到下一 Wave
+     +     if current_wave < total_waves:
+     +         logger.info(f"[子图-L3-波次路由] Wave {current_wave} 完成，推进到 Wave {current_wave + 1}")
+               return "advance_wave"
+
+     -     elif current_wave == 2:
+     -         # Wave 2: 只有 project_bank
+     -         if "project_bank" not in completed:
+     -             # 检查依赖是否满足
+     -             if check_detailed_dependencies_ready("project_bank", list(completed)):
+     -                 logger.info("[子图-L3-波次路由] Wave 2: project_bank 依赖满足，开始执行")
+     -                 return create_parallel_tasks_with_state_filtering(state, ["project_bank"])
+     -             else:
+     -                 # 依赖未满足，强制推进（异常情况）
+     -                 logger.warning("[子图-L3-波次路由] Wave 2: project_bank 依赖未满足，强制执行")
+     -                 return create_parallel_tasks_with_state_filtering(state, ["project_bank"])
+     -         else:
+     -             # 所有维度完成
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     +     # 所有 Wave 完成
+           logger.info("[子图-L3-波次路由] 所有维度完成，直接结束")
+           return "end"
+
+     -     # 默认进入结束
+     -     return "end"
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+     - 
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+       def create_parallel_tasks_with_state_filtering(
+           state: DetailedPlanState,
+           dimensions: List[str]
+
+✦ 现在让我检查 create_parallel_tasks_with_state_filtering 函数，确保它使用正确的状态字段：
+  ✔  Read File src\\detailed_plan_subgraph.py
+     从 src/subgraphs/detailed_plan_subgraph.py 读取第 266-335 行，共 851 行
+
+✦ 我看到 create_parallel_tasks_with_state_filtering 函数使用的是 state.get("dimension_reports", {})，这应该改为
+  state.get("analysis_dimension_reports", {}) 以保持一致性。让我修复：
+  ✔  Edit src\\detailed_plan_subgraph.py:     sends = []... =>     sends = []...
+       # 直接从 detailed_dimension_reports 读取已完成维度
+       completed_detailed = state.get("detailed_dimension_reports", {})
+
+     - full_dimension_reports = state.get("dimension_reports", {})
+     - full_concept_dimension_reports = state.get("concept_dimension_reports", {})
+     + full_dimension_reports = state.get("analysis_dimension_reports", {})  # Layer 1 维度报告
+     + full_concept_dimension_reports = state.get("concept_dimension_reports", {})  # Layer 2 维度报告
+
+       for dim in dimensions:
+           # 调用增强的筛选函数 v2
+
+✦ 现在更新 todo 并进行测试验证：
+  ✔  Plan 更新待办事项列表（0个待处理，1个进行中，4个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 修复 Bug: layer_nodes.py:564 字段名错误
+         ✔ 重构 dimension_config.py: 删除冗余代码 + 新增自动 Wave 计算
+         ✔ 改造 concept_subgraph.py: Wave 模式执行
+         ✔ 优化 detailed_plan_subgraph.py: 状态预计算 + 增量执行
+         ☐ 测试验证优化效果
+
+✦ 让我运行一个简单的测试来验证 Wave 配置是否正确计算：
+  x  Shell cd F:\project\Village_Planning_Agent; python -c " from src.core.dimension_config import get_wave_config, get_concept…
+     Error output:
+     File "<string>", line 13
+         print(f'Wave {wave}: {config[" dimensions\]}
+                                      ^
+     SyntaxError: unterminated string literal (detected at line 13)
+     Command exited with code: 1
+
+  ✔  Shell cd F:\project\Village_Planning_Agent; python -c " from src.core.dimension_config import get_wave_config, get_concept…
+     ... 前 7 行已隐藏 ...（输入ctrl+r查看全部）
+     Wave 1: ['industry', 'spatial_structure', 'land_use_planning', 'settlement_planning', 'traffic_planning',
+     'public_service', 'infrastructure_planning', 'ecological', 'disaster_prevention', 'heritage', 'landscape'] -
+     Wave 1: 11 个维度
+     Wave 2: ['project_bank'] - Wave 2: 1 个维度
+
+     2026-02-17 05:07:35,135 WARNING src.subgraphs.analysis_subgraph: [RAG集成] 知识预加载器不可用，将使用传统模式
+     2026-02-17 05:07:35,186 WARNING src.utils.state_filter: [RAG集成] RAG系统不可用，相关功能将被禁用
+     2026-02-17 05:07:35,196 INFO src.core.dimension_config: [dimension_config] 配置加载完成: 28 个维度
+
+
+✦ Wave 配置正确计算了：
+
+  Layer 2 Wave 配置：
+   - Wave 1: resource_endowment（无依赖）
+   - Wave 2: planning_positioning（依赖 Wave 1）
+   - Wave 3: development_goals（依赖 Wave 1, 2）
+   - Wave 4: planning_strategies（依赖所有前序）
+
+  Layer 3 Wave 配置：
+   - Wave 1: 11 个维度并行执行
+   - Wave 2: project_bank（依赖 Wave 1 所有维度）
+
+✦ 现在让我验证导入是否正常工作：
+  ✔  Shell cd F:\project\Village_Planning_Agent; python -c " # 测试兼容性导出 from src.core.dimension_config import (     ANALY…
+     ... 前 11 行已隐藏 ...（输入ctrl+r查看全部）
+     get_full_dependency_chain(): 12 个维度
+     get_wave_config(): 2 个 Wave
+
+     所有测试通过!
+
+     2026-02-17 05:07:50,003 WARNING src.subgraphs.analysis_subgraph: [RAG集成] 知识预加载器不可用，将使用传统模式
+     2026-02-17 05:07:50,036 WARNING src.utils.state_filter: [RAG集成] RAG系统不可用，相关功能将被禁用
+     2026-02-17 05:07:50,041 INFO src.core.dimension_config: [dimension_config] 配置加载完成: 28 个维度
+
+
+✦ 所有测试通过。现在让我验证子图是否能正常导入：
+  ✔  Shell cd F:\project\Village_Planning_Agent; python -c " # 测试子图导入 print('测试 concept_subgraph 导入...') from src.sub…
+     ... 前 4 行已隐藏 ...（输入ctrl+r查看全部）
+     测试 layer_nodes 导入...
+     layer_nodes 导入成功
+
+     所有子图导入测试通过!
+
+     2026-02-17 05:07:58,974 WARNING src.subgraphs.analysis_subgraph: [RAG集成] 知识预加载器不可用，将使用传统模式
+     2026-02-17 05:07:59,008 WARNING src.utils.state_filter: [RAG集成] RAG系统不可用，相关功能将被禁用
+     2026-02-17 05:07:59,013 INFO src.core.dimension_config: [dimension_config] 配置加载完成: 28 个维度
+
+
+✦ 所有导入测试通过。现在更新 todo 完成状态：
+  ✔  Plan 更新待办事项列表（0个待处理，0个进行中，5个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 修复 Bug: layer_nodes.py:564 字段名错误
+         ✔ 重构 dimension_config.py: 删除冗余代码 + 新增自动 Wave 计算
+         ✔ 改造 concept_subgraph.py: Wave 模式执行
+         ✔ 优化 detailed_plan_subgraph.py: 状态预计算 + 增量执行
+         ✔ 测试验证优化效果
+
+✦ 优化完成
+
+  我已完成维度报告传递优化方案的实施。以下是变更总结：
+
+  1. Bug 修复
+   - `layer_nodes.py:564`: 修复了 dimension_reports → analysis_dimension_reports 的字段名错误
+   - `detailed_plan_subgraph.py`: 同步修复了参数名和状态字段名
+
+  2. dimension_config.py 重构
+   - 删除了冗余代码：
+     - 删除了重复的缓存变量（_cached_*）
+     - 删除了旧映射函数（get_analysis_to_concept_mapping）
+     - 简化了模块级导出
+
+   - 新增自动 Wave 计算：
+     - _calculate_wave_for_layer(): 根据同层依赖自动计算 Wave
+     - get_concept_wave_config(): 获取 Layer 2 Wave 配置
+     - get_wave_config(): 获取 Layer 3 Wave 配置（已优化）
+
+  3. concept_subgraph.py 改造（Wave 模式）
+   - 新增 route_by_wave(): 基于依赖关系的波次路由
+   - 新增 create_wave_sends(): 创建 Wave 并行任务
+   - 新增 advance_wave(): 波次推进节点
+   - 支持前序 Wave 结果传递（concept_reports）
+
+  4. Wave 配置结果
+  Layer 2（按依赖顺序执行）：
+   Wave 1: resource_endowment（无依赖）
+   Wave 2: planning_positioning（依赖 Wave 1）
+   Wave 3: development_goals（依赖 Wave 1, 2）
+   Wave 4: planning_strategies（依赖所有前序）
+
+  Layer 3（保持原有逻辑）：
+   Wave 1: 11 个维度并行执行
+   Wave 2: project_bank（依赖 Wave 1 所有维度）
+
+✦ 5. 兼容性
+   - 保留了大写函数名导出（ANALYSIS_DIMENSION_NAMES 等），确保现有代码无需修改
+
+    > 针对layer状态变量保存的冗余，也给出修复方案，以及src/里没有实际使用（不包括以后可能拓展的）或者作用冗余的函数或者文件删  
+      去                                                                                                                       
+
+✦ 好的，我需要分析两个问题：
+   1. Layer 状态变量保存的冗余问题
+   2. src/ 目录下未使用或冗余的函数/文件
+
+✦ 让我启动探索代理来分析这些问题。
+  ✔  Explore Agent
+     ⎿ 完成 (14 个工具使用 50.2k token(s) · 持续时间：1m 36s · 按 ctrl+r 展开)
+
+
+  ✔  Explore Agent
+     ⎿ 完成 (56 个工具使用 83.9k token(s) · 持续时间：3m 10s · 按 ctrl+r 展开)
+
+
+✦ 我已经获得了两个分析报告。让我进一步确认一些关键信息：
+  ✔  Explore Agent
+     ⎿ 完成 (35 个工具使用 38.3k token(s) · 持续时间：1m 54s · 按 ctrl+r 展开)
+
+
+✦ 我已经收集了完整的信息。现在让我制定详细的优化方案：
+✦ Plan
+
+  Layer 状态变量冗余修复 + 未使用代码清理方案
+
+  一、Layer 状态变量冗余修复
+
+  问题分析
+
+  当前架构存在双重存储：
+   Layer 1: analysis_report (综合) + analysis_dimension_reports (维度)
+   Layer 2: planning_concept (综合) + concept_dimension_reports (维度)
+   Layer 3: detailed_plan (综合) + detailed_dimension_reports (维度)
+
+  综合报告 = 维度报告的简单拼接，导致约 60% 的存储冗余。
+
+  修复方案：保留维度报告，移除综合报告字段
+
+  1. 修改 VillagePlanningState 定义
+
+  文件: src/orchestration/main_graph.py
+
+   class VillagePlanningState(TypedDict):
+       # 移除冗余的综合报告字段:
+       # analysis_report: str
+       # planning_concept: str
+       # detailed_plan: str
+       # final_output: str
+
+       # 保留维度报告字段:
+       analysis_dimension_reports: Dict[str, str]
+       concept_dimension_reports: Dict[str, str]
+       detailed_dimension_reports: Dict[str, str]
+
+       # 新增: 最终输出路径（用于显示）
+       final_output_path: str
+
+  2. 新增按需生成综合报告函数
+
+  文件: src/utils/report_generator.py（新建或复用现有）
+
+   def get_combined_report(
+       dimension_reports: Dict[str, str],
+       project_name: str,
+       layer_name: str
+   ) -> str:
+       """按需生成综合报告（不存储在状态中）"""
+       # 复用 layer_nodes.py 中的 _generate_combined_report 逻辑
+
+  3. 修改 Layer 节点
+
+  文件: src/nodes/layer_nodes.py
+
+   - 移除 _build_success_updates 中保存综合报告的逻辑
+   - 只更新维度报告字典和状态控制字段
+
+  4. 修改状态筛选器
+
+  文件: src/utils/state_filter.py
+
+   - 修改 filter_state_for_detailed_dimension_v2 等函数
+   - 从 analysis_dimension_reports 而非 analysis_report 获取数据
+
+  5. 修改 API 响应
+
+  文件: backend/api/planning.py
+
+   - 在返回前端时按需生成综合报告
+   - 保持 API 响应格式不变
+
+  ---
+
+  二、未使用代码清理
+
+  2.1 可删除的文件
+
+
+  ┌─────────────────────────────┬────────────────────────────┐
+  │ 文件路径                    │ 原因                       │
+  ├─────────────────────────────┼────────────────────────────┤
+  │ src/utils/memory_manager.py │ 完全未使用，所有函数无调用 │
+  └─────────────────────────────┴────────────────────────────┘
+
+  2.2 可删除的函数/类
+
+
+  ┌─────────────────────────────┬────────────────────────┬────────────────────┐
+  │ 文件                        │ 函数/类                │ 原因               │
+  ├─────────────────────────────┼────────────────────────┼────────────────────┤
+  │ src/utils/output_manager.py │ get_output_summary()     │ 无任何调用         │
+  │ src/nodes/tool_nodes.py     │ PauseInteractionNode   │ 已标记弃用         │
+  │ src/nodes/tool_nodes.py     │ _run_human_review()      │ 未使用             │
+  │ src/nodes/tool_nodes.py     │ _run_pause_interaction() │ 未使用             │
+  │ src/tools/knowledge_tool.py │ 整个文件（可选）       │ 仅导出，无实际调用 │
+  └─────────────────────────────┴────────────────────────┴────────────────────┘
+
+  2.3 需要清理的导出
+
+  文件: src/nodes/__init__.py
+   - 移除 PauseInteractionNode 导出
+
+  文件: src/tools/__init__.py
+   - 考虑移除 knowledge_query 导出（如果确认不需要）
+
+  ---
+
+  三、实施步骤
+
+  步骤 1: 删除未使用文件和函数
+   1. 删除 src/utils/memory_manager.py
+   2. 删除 src/utils/output_manager.py 中的 get_output_summary()
+   3. 删除 src/nodes/tool_nodes.py 中的弃用代码
+   4. 清理相关导出
+
+  步骤 2: 重构状态变量（可选，需谨慎）
+   1. 新增 get_combined_report() 辅助函数
+   2. 逐步替换直接访问综合报告字段的代码
+   3. 移除冗余字段定义
+   4. 更新测试
+
+  ---
+
+  四、风险评估
+
+
+  ┌───────────────────────────┬──────────────────┬─────────────────────────────┐
+  │ 风险                      │ 影响             │ 缓解措施                    │
+  ├───────────────────────────┼──────────────────┼─────────────────────────────┤
+  │ 删除 memory_manager.py    │ 无影响（未使用） │ 确认无调用后直接删除        │
+  │ 删除 PauseInteractionNode │ 低风险（已弃用） │ 确认 main_graph.py 中未使用 │
+  │ 移除综合报告字段          │ 高风险           │ 需要更新所有引用位置        │
+  └───────────────────────────┴──────────────────┴─────────────────────────────┘
+
+  ---
+
+  五、文件变更清单
+
+  立即删除（低风险）
+   - src/utils/memory_manager.py - 整个文件
+   - src/utils/output_manager.py - get_output_summary() 函数
+   - src/nodes/tool_nodes.py - PauseInteractionNode, _run_human_review(), _run_pause_interaction()
+   - src/nodes/__init__.py - 移除弃用导出
+
+  需要重构（高风险，可选执行）
+   - src/orchestration/main_graph.py - 状态定义
+   - src/nodes/layer_nodes.py - 状态更新逻辑
+   - src/utils/state_filter.py - 状态筛选逻辑
+   - backend/api/planning.py - API 响应格式
+
+ℹ 退出计划模式并切换到智能模式。
+ 
+
+  ✔  Plan 更新待办事项列表（5个待处理，0个进行中，0个已完成）
+     ·已更新待办事项列表
+       ⎿ ☐ 删除 src/utils/memory_manager.py
+         ☐ 删除 src/utils/output_manager.py 中的 get_output_summary()
+         ☐ 删除 src/nodes/tool_nodes.py 中的弃用代码
+         ☐ 清理 src/nodes/__init__.py 导出
+         ☐ 检查并删除其他未使用代码
+
+  ✔  Plan 更新待办事项列表（4个待处理，1个进行中，0个已完成）
+     ·已更新待办事项列表
+       ⎿ ☐ 删除 src/utils/memory_manager.py
+         ☐ 删除 src/utils/output_manager.py 中的 get_output_summary()
+         ☐ 删除 src/nodes/tool_nodes.py 中的弃用代码
+         ☐ 清理 src/nodes/__init__.py 导出
+         ☐ 检查并删除其他未使用代码
+
+  ✔  Shell del "F:\project\Village_Planning_Agent\src\utils\memory_manager.py" [current working directory F:\project\Village_Pl…
+
+  ✔  Plan 更新待办事项列表（3个待处理，1个进行中，1个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 删除 src/utils/memory_manager.py
+         ☐ 删除 src/utils/output_manager.py 中的 get_output_summary()
+         ☐ 删除 src/nodes/tool_nodes.py 中的弃用代码
+         ☐ 清理 src/nodes/__init__.py 导出
+         ☐ 检查并删除其他未使用代码
+
+  ✔  Search 'def get_output_summary' in file src\utils\output_manager.py
+     找到 1 个匹配
+
+  ✔  Read File src\utils\output_manager.py
+     从 src/utils/output_manager.py 读取第 386-435 行，共 496 行
+
+  ✔  Edit src\utils\output_manager.py:             logger.error(f"[Ou... =>             logger.error(f"[Ou...
+               logger.error(f"[OutputManager] 最终报告保存失败: {output_path}")
+               return None
+
+     - def get_output_summary(self) -> dict[str, Any]:
+     -     """
+     -     获取输出路径的摘要信息
+     - 
+     -     Returns:
+     -         包含输出路径信息的字典
+     -     """
+     -     return {
+     -         "project_name": self.project_name,
+     -         "timestamp": self.timestamp,
+     -         "output_path": str(self.output_path),
+     -         "use_default_structure": self.use_default_structure,
+     -         "layer1_dir": str(self.layer1_dir) if self.use_default_structure else None,
+     -         "layer2_dir": str(self.layer2_dir) if self.use_default_structure else None,
+     -         "layer3_dir": str(self.layer3_dir) if self.use_default_structure else None,
+     -     }
+     - 
+       def get_console_message(self) -> str:
+           """
+           获取用于控制台显示的消息
+
+  ✔  Plan 更新待办事项列表（2个待处理，1个进行中，2个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 删除 src/utils/memory_manager.py
+         ✔ 删除 src/utils/output_manager.py 中的 get_output_summary()
+         ☐ 删除 src/nodes/tool_nodes.py 中的弃用代码
+         ☐ 清理 src/nodes/__init__.py 导出
+         ☐ 检查并删除其他未使用代码
+
+✦ 现在删除 src/nodes/tool_nodes.py 中的弃用代码：
+  ✔  Search 'class PauseInteractionNode|def _run_human_review|def _run_pause_interaction' in file src\nodes\tool_nodes.py
+     找到 3 个匹配
+
+  ✔  Read File src\nodes\tool_nodes.py
+     从 src/nodes/tool_nodes.py 读取所有 394 行数据
+
+  ✔  Edit src\nodes\tool_nodes.py:                 .build())... =>                 .build())...
+                       .build())
+
+
+     - class PauseInteractionNode(BaseNode):
+     -     """
+     -     暂停交互节点 - DEPRECATED
+     - 
+     -     This node is deprecated and no longer functional.
+     -     Web applications use WebReviewTool for review interactions.
+     -     CLI mode is no longer supported.
+     -     """
+     - 
+     -     def __init__(self) -> None:
+     -         super().__init__("暂停交互 (DEPRECATED)")
+     -         logger.warning("[PauseInteractionNode] This node is deprecated and no longer functional")
+     - 
+     -     def execute(self, state: StateDict) -> StateDict:
+     -         """
+     -         This method is deprecated and should not be called.
+     - 
+     -         In web mode, pause handling is done by streaming.py and WebReviewTool.
+     -         """
+     -         logger.error("[PauseInteractionNode] Execute called on deprecated node. Returning empty state.")
+     -         return {}
+     - 
+     - 
+       class PauseManagerNode(BaseNode):
+           """暂停管理节点"""
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+
+       # ==========================================
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     - # 辅助函数（用于向后兼容）
+     + # 辅助函数
+       # ==========================================
+
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     - def _run_human_review(state: StateDict) -> StateDict:
+     -     """执行人工审查（向后兼容函数）"""
+     -     node = HumanReviewNode()
+     -     return node.execute(state)
+     - 
+     - 
+     - def _run_pause_interaction(state: StateDict) -> StateDict:
+     -     """执行暂停交互（向后兼容函数）"""
+     -     node = PauseInteractionNode()
+     -     return node.execute(state)
+     - 
+     - 
+       def _run_revision(state: StateDict) -> StateDict:
+           """执行修复（向后兼容函数）"""
+           node = RevisionNode()
+           "ToolBridgeNode",
+           "HumanReviewNode",
+           "RevisionNode",
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     -     "PauseInteractionNode",
+           "PauseManagerNode",
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+     -     "_run_human_review",
+     -     "_run_pause_interaction",
+           "_run_revision",
+       ]
+
+  ✔  Plan 更新待办事项列表（1个待处理，1个进行中，3个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 删除 src/utils/memory_manager.py
+         ✔ 删除 src/utils/output_manager.py 中的 get_output_summary()
+         ✔ 删除 src/nodes/tool_nodes.py 中的弃用代码
+         ☐ 清理 src/nodes/__init__.py 导出
+         ☐ 检查并删除其他未使用代码
+
+  ✔  Read File src\nodes\__init__.py
+     从 src/nodes/__init__.py 读取所有 37 行数据
+
+  ✔  Edit src\nodes\__init__.py: """... => """...
+           ToolBridgeNode,
+           HumanReviewNode,
+           RevisionNode,
+     -     PauseInteractionNode,
+           PauseManagerNode
+       )
+       from .final_nodes import GenerateFinalOutputNode
+     ════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+           "ToolBridgeNode",
+           "HumanReviewNode",
+           "RevisionNode",
+     -     "PauseInteractionNode",
+           "PauseManagerNode",
+           "GenerateFinalOutputNode",
+       ]
+
+  ✔  Plan 更新待办事项列表（0个待处理，1个进行中，4个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 删除 src/utils/memory_manager.py
+         ✔ 删除 src/utils/output_manager.py 中的 get_output_summary()
+         ✔ 删除 src/nodes/tool_nodes.py 中的弃用代码
+         ✔ 清理 src/nodes/__init__.py 导出
+         ☐ 检查并删除其他未使用代码
+
+✦ 现在检查是否有其他未使用的代码，首先检查 knowledge_tool.py：
+  ✔  Search 'knowledge_query' within src
+     找到 5 个匹配
+
+  ✔  Search 'from.*knowledge_tool|import.*knowledge_tool' within ./
+     找到 2 个匹配
+
+✦ 让我检查 knowledge_tool.py 的内容：
+  ✔  Read File src\tools\knowledge_tool.py
+     从 src/tools/knowledge_tool.py 读取所有 18 行数据
+
+✦ knowledge_tool.py 依赖于 src/knowledge/rag.py，但该文件可能不存在或功能未实现。让我检查：
+  ✔  Glob '**/knowledge/**/*.py' within src
+     未找到文件
+
+✦ knowledge 目录不存在，所以 knowledge_tool.py 实际上无法工作。但它被导出了，可能用于未来扩展。让我询问用户是否要删除：
+✦ User Answers
+
+  src/tools/knowledge_tool.py 依赖不存在的 src/knowledge/rag.py，但被导出用于未来扩展。是否删除？
+  Answer: 保留
+
+✦ 好的，保留 knowledge_tool.py。现在验证所有修改是否正常工作：
+  ✔  Shell cd F:\project\Village_Planning_Agent; python -c " # 测试所有修改后的导入 print('测试 src/nodes/__init__.py...') from…
+     ... 前 4 行已隐藏 ...（输入ctrl+r查看全部）
+     测试 src/nodes/tool_nodes.py...
+     tool_nodes 导入成功
+
+     所有测试通过!
+
+     2026-02-17 05:18:34,273 WARNING src.subgraphs.analysis_subgraph: [RAG集成] 知识预加载器不可用，将使用传统模式
+     2026-02-17 05:18:34,305 WARNING src.utils.state_filter: [RAG集成] RAG系统不可用，相关功能将被禁用
+     2026-02-17 05:18:34,310 INFO src.core.dimension_config: [dimension_config] 配置加载完成: 28 个维度
+
+
+✦ 所有测试通过。现在更新 todo 完成状态：
+  ✔  Plan 更新待办事项列表（0个待处理，0个进行中，5个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 删除 src/utils/memory_manager.py
+         ✔ 删除 src/utils/output_manager.py 中的 get_output_summary()
+         ✔ 删除 src/nodes/tool_nodes.py 中的弃用代码
+         ✔ 清理 src/nodes/__init__.py 导出
+         ✔ 检查并删除其他未使用代码
+
+✦ 清理完成
+
+  已删除的文件/代码
+
+
+  ┌─────────────────────────────┬─────────────────────────────┬──────────────┐
+  │ 文件                        │ 删除内容                    │ 原因         │
+  ├─────────────────────────────┼─────────────────────────────┼──────────────┤
+  │ src/utils/memory_manager.py │ 整个文件                    │ 完全未使用   │
+  │ src/utils/output_manager.py │ get_output_summary() 方法     │ 无任何调用   │
+  │ src/nodes/tool_nodes.py     │ PauseInteractionNode 类     │ 已弃用       │
+  │ src/nodes/tool_nodes.py     │ _run_human_review() 函数      │ 未使用       │
+  │ src/nodes/tool_nodes.py     │ _run_pause_interaction() 函数 │ 未使用       │
+  │ src/nodes/__init__.py           │ PauseInteractionNode 导出   │ 对应类已删除 │
+  └─────────────────────────────┴─────────────────────────────┴──────────────┘
+
+  保留的代码
+
+
+  ┌─────────────────────────────┬─────────────────────────────────┐
+  │ 文件                        │ 原因                            │
+  ├─────────────────────────────┼─────────────────────────────────┤
+  │ src/tools/knowledge_tool.py │ 用户选择保留，用于未来 RAG 扩展 │
+  └─────────────────────────────┴─────────────────────────────────┘
+
+  Layer 状态冗余问题分析
+
+  发现了以下冗余问题（未实施修改，需要进一步确认）：
+
+   1. 双重存储：每层同时保存综合报告和维度报告字典
+      - analysis_report + analysis_dimension_reports
+      - planning_concept + concept_dimension_reports
+      - detailed_plan + detailed_dimension_reports
+
+   2. 建议方案：
+      - 保留维度报告字典
+      - 移除综合报告字段（改为按需生成）
+      - 可节省约 60% 的存储空间
+
+✦ 如果需要实施状态冗余修复，请告诉我。
+
+    > 实施状态冗余修现在还有必要使用state-filter吗直接使用"dependencies"配置对layer1/2的依赖不就好了吗，现在的state的依赖是怎  
+      么获取的？                                                                                                               
+
+✦ 好问题！让我分析当前 state_filter.py 的使用情况，以及是否可以直接使用 dependencies 配置来简化。
+  ✔  Explore Agent
+     ⎿ 完成 (11 个工具使用 40.9k token(s) · 持续时间：1m 18s · 按 ctrl+r 展开)
+
+
+✦ 分析完成。你的问题很好，让我总结一下：
+
+  关键发现
+
+  state_filter.py 不能被 dependencies 配置直接替代
+
+  原因：
+
+
+  ┌──────────────────┬───────────────────┬───────────────────┐
+  │ 功能             │ dependencies 配置 │ state_filter.py   │
+  ├──────────────────┼───────────────────┼───────────────────┤
+  │ 获取依赖列表     │ ✅                │ ✅ (内部调用前者) │
+  │ 实际筛选报告内容 │ ❌                │ ✅                │
+  │ 拼接格式化输出   │ ❌                │ ✅                │
+  │ Token 统计       │ ❌                │ ✅                │
+  │ 处理降级逻辑     │ ❌                │ ✅                │
+  └──────────────────┴───────────────────┴───────────────────┘
+
+  简单来说：
+   - dependencies 只是配置（"需要哪些维度"）
+   - state_filter 是数据处理（"从报告中提取并拼接内容"）
+
+  当前依赖获取流程
+
+   dimension_metadata.py (dependencies 配置)
+           ↓
+   dimension_config.py (get_full_dependency_chain_func 查询配置)
+           ↓
+   state_filter.py (实际筛选、拼接、统计)
+           ↓
+   子图使用筛选后的数据
+
+  发现的冗余问题
+
+✦ `generic_planner.py` 中存在重复筛选：
+   - concept_subgraph.py 调用时已经筛选过
+   - generic_planner.py:335 又调用了一次 filter_analysis_report_for_concept()
+✦ User Answers
+
+  state_filter.py 不能被 dependencies 配置替代，因为它做的是实际的数据筛选和拼接。但发现了重复筛选问题。你想如何处理？
+  Answer: 合并到 dimension_config
+
+  关于 Layer 状态变量冗余（综合报告 vs 维度报告字典），你想如何处理？
+  Answer: 立即实施
+
+✦ 好的！你选择：
+   1. state_filter：将筛选逻辑合并到 dimension_config.py
+   2. 状态冗余：立即实施，移除综合报告字段
+
+✦ 让我制定详细的重构方案：
+✦ Plan
+
+  state_filter 合并 + 状态冗余修复方案
+
+  一、state_filter 合并到 dimension_config.py
+
+  1.1 需要迁移的函数
+
+
+  ┌────────────────────────────────────┬──────────────────────────────────┬─────────────────────┐
+  │ 函数                               │ 功能                             │ 迁移后位置          │
+  ├────────────────────────────────────┼──────────────────────────────────┼─────────────────────┤
+  │ filter_analysis_report_for_concept     │ 筛选 Layer 2 所需的 Layer 1 报告 │ dimension_config.py │
+  │ filter_state_for_detailed_dimension_v2 │ 筛选 Layer 3 所需的所有依赖报告  │ dimension_config.py │
+  └────────────────────────────────────┴──────────────────────────────────┴─────────────────────┘
+
+  1.2 需要删除的函数（冗余或未使用）
+
+
+  ┌─────────────────────────────────┬────────────────────┐
+  │ 函数                            │ 原因               │
+  ├─────────────────────────────────┼────────────────────┤
+  │ filter_state_for_detailed_dimension │ 旧版，已被 v2 替代 │
+  │ estimate_token_reduction          │ 未被使用           │
+  │ log_optimization_results          │ 未被使用           │
+  │ visualize_filtering_result        │ 仅调试用，未被使用 │
+  │ get_rag_tool_by_dimension           │ RAG 功能未实现     │
+  │ filter_knowledge_for_dimension    │ RAG 功能未实现     │
+  │ build_dimension_query             │ RAG 功能未实现     │
+  └─────────────────────────────────┴────────────────────┘
+
+  1.3 迁移步骤
+
+   1. 将 filter_analysis_report_for_concept 和 filter_state_for_detailed_dimension_v2 移动到 dimension_config.py
+   2. 更新 concept_subgraph.py 和 detailed_plan_subgraph.py 的导入
+   3. 删除 state_filter.py 文件
+   4. 更新 generic_planner.py，移除重复筛选逻辑
+
+  ---
+
+  二、状态冗余修复
+
+  2.1 移除的冗余字段
+
+
+  ┌──────────────────┬─────────┬────────────────────────┐
+  │ 字段             │ Layer   │ 说明                   │
+  ├──────────────────┼─────────┼────────────────────────┤
+  │ analysis_report  │ Layer 1 │ 综合报告，改为按需生成 │
+  │ planning_concept │ Layer 2 │ 综合报告，改为按需生成 │
+  │ detailed_plan    │ Layer 3 │ 综合报告，改为按需生成 │
+  │ final_output     │ 最终    │ 综合报告，改为按需生成 │
+  └──────────────────┴─────────┴────────────────────────┘
+
+  2.2 新增辅助函数
+
+  在 dimension_config.py 中新增：
+
+   def get_combined_report(
+       dimension_reports: Dict[str, str],
+       project_name: str,
+       layer_name: str
+   ) -> str:
+       """按需生成综合报告（不存储在状态中）"""
+
+  2.3 需要修改的文件
+
+
+  ┌─────────────────────────────────┬────────────────────────────────────────────┐
+  │ 文件                            │ 修改内容                                   │
+  ├─────────────────────────────────┼────────────────────────────────────────────┤
+  │ src/orchestration/main_graph.py │ 移除综合报告字段定义，新增 final_output_path │
+  │ src/nodes/layer_nodes.py        │ 移除保存综合报告的逻辑，只更新维度报告     │
+  │ src/subgraphs/*.py              │ 更新导入，移除综合报告字段                 │
+  │ backend/api/planning.py         │ API 响应时按需生成综合报告                 │
+  └─────────────────────────────────┴────────────────────────────────────────────┘
+
+  ---
+
+  三、文件变更清单
+
+  新增/修改
+
+
+  ┌──────────────────────────────┬────────────────────────────────────┐
+  │ 文件                         │ 操作                               │
+  ├──────────────────────────────┼────────────────────────────────────┤
+  │ src/core/dimension_config.py │ 新增筛选函数 + get_combined_report() │
+  └──────────────────────────────┴────────────────────────────────────┘
+
+  删除
+
+
+  ┌───────────────────────────┬────────────────────────────────┐
+  │ 文件                      │ 原因                           │
+  ├───────────────────────────┼────────────────────────────────┤
+  │ src/utils/state_filter.py │ 功能迁移到 dimension_config.py │
+  └───────────────────────────┴────────────────────────────────┘
+
+  修改
+
+
+  ┌───────────────────────────────────────┬──────────────────────┐
+  │ 文件                                  │ 修改内容             │
+  ├───────────────────────────────────────┼──────────────────────┤
+  │ src/orchestration/main_graph.py       │ 移除综合报告字段     │
+  │ src/nodes/layer_nodes.py              │ 移除综合报告保存逻辑 │
+  │ src/subgraphs/concept_subgraph.py     │ 更新导入             │
+  │ src/subgraphs/detailed_plan_subgraph.py │ 更新导入             │
+  │ src/planners/generic_planner.py       │ 移除重复筛选         │
+  │ backend/api/planning.py               │ 按需生成综合报告     │
+  └───────────────────────────────────────┴──────────────────────┘
+
+  ---
+
+  四、实施顺序
+
+   1. 迁移筛选函数：将筛选逻辑移动到 dimension_config.py
+   2. 更新导入：修改所有引用 state_filter 的文件
+   3. 删除旧文件：删除 state_filter.py
+   4. 修复状态冗余：移除综合报告字段，修改相关代码
+   5. 测试验证：确保所有功能正常
+
+ℹ 退出计划模式并切换到智能模式。
+ 
+
+  ✔  Plan 更新待办事项列表（6个待处理，0个进行中，0个已完成）
+     ·已更新待办事项列表
+       ⎿ ☐ 迁移筛选函数到 dimension_config.py
+         ☐ 更新子图导入
+         ☐ 删除 state_filter.py
+         ☐ 修复状态冗余：移除综合报告字段
+         ☐ 更新 generic_planner.py 移除重复筛选
+         ☐ 测试验证
+
+  ✔  Plan 更新待办事项列表（5个待处理，1个进行中，0个已完成）
+     ·已更新待办事项列表
+       ⎿ ☐ 迁移筛选函数到 dimension_config.py
+         ☐ 更新子图导入
+         ☐ 删除 state_filter.py
+         ☐ 修复状态冗余：移除综合报告字段
+         ☐ 更新 generic_planner.py 移除重复筛选
+         ☐ 测试验证
+
+✦ 首先读取需要迁移的函数：
+  ✔  Read File src\utils\state_filter.py
+     从 src/utils/state_filter.py 读取所有 650 行数据
+
+✦ 现在我将核心筛选函数迁移到 dimension_config.py：
+  ✔  Read File src\core\dimension_config.py
+     从 src/core/dimension_config.py 读取所有 447 行数据
+
+✕ [API Error: 生成数据错误: HTTP 错误！状态：400，响应：{"error":{"message":"Bad request!: 
+  {\"routify_response\":{\"trace_id\":\"0b85795017712771872493320d1222\",\"request_id\":\"f25fd92653a24951b542b84aaa3f02ea\",\"
+  success\":false,\"status\":400,\"error_source\":\"CLIENT_ERROR\",\"error_message\":\"AllModelsFailed: 
+  请求供应商服务器失败\",\"error_detail\":{\"error\":{\"code\":\"1210\",\"message\":\"API 调用参数有误，请检查文档。Requested 
+  token count exceeds the model's maximum context length of 202752 tokens. You requested a total of 202775 tokens: 137239 
+  tokens from the input messages and 65536 tokens for the completion. Please reduce the number of tokens in the input messages 
+  or the completion to fit within the limit.\"}}}}","type":"BadRequest","code":"400"}} 
+  TraceID：00-97e337b748e325aa86a38fdd5364153a-fc4d9dc6b367fa61-01]
+
+
+    > /export file                                                                                                             
+
+
+glm-5 上下文剩余 33% | 智能模式 | 思考: 关闭
+cwd: F:\project\Village_Planning_Agent (dataflow-better*)
+

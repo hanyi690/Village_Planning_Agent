@@ -1,0 +1,12 @@
+2026-02-12 04:02:51,908 WARNING src.subgraphs.analysis_subgraph: [RAG集成] 知识预加载器不可用，将使用传统模式
+2026-02-12 04:03:10,743 WARNING src.utils.state_filter: [RAG集成] RAG系统不可用，相关功能将被禁用
+[RAG集成] auto_build_knowledge_base 不可用，文件上传将不会自动构建知识库
+INFO:     Will watch for changes in these directories: ['F:\\project\\Village_Planning_Agent']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [15024] using WatchFiles
+2026-02-12 04:03:13,050 WARNING src.subgraphs.analysis_subgraph: [RAG集成] 知识预加载器不可用，将使用传统模式
+2026-02-12 04:03:15,663 WARNING src.utils.state_filter: [RAG集成] RAG系统不可用，相关功能将被禁用
+2026-02-12 04:03:15,703 - watchfiles.main - INFO - 1 change detected
+2026-02-12 04:03:16,063 - watchfiles.main - INFO - 1 change detected
+[RAG集成] auto_build_knowledge_base 不可用，文件上传将不会自动构建知识库
+ERROR:    Error loading ASGI app. Could not import module "main".

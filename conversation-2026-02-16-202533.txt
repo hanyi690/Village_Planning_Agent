@@ -1,0 +1,1320 @@
+
+    > @conversation-2026-02-16-195419.t  
+      xt 根据历史继续没有完成的plan      
+
+  ✔  Read Files 将尝试读取并连接文件 使用模式：`conversation-2026-02-16-195419.…
+     ### ReadManyFiles
+     结果（目标目录：`F:\project\Village_Planning_Agent`）
+
+     成功读取并连接了 **1 个文件** 的内容。
+
+     **已处理的文件：**
+     - `conversation-2026-02-16-195419.txt`
+
+✦ 让我先阅读历史对话的后续内容，了解完整的情况。
+  ✔  Read File conversation-2026-02-16-195419.txt
+     从 conversation-2026-02-16-195419.txt 读取第 1228-2227 行，共
+     3096 行
+
+✦ 让我继续阅读历史文件的更多内容，了解完整的优化进度：
+  ✔  Read File conversation-2026-02-16-195419.txt
+     从 conversation-2026-02-16-195419.txt 读取所有 3096 行数据
+
+✦ 我已经看到了历史对话的内容。根据对话记录，任务是状态管理完整重构，目的是删除
+  冗余的 pending_review_layer 字段并简化前端状态。
+
+  进度总结：
+   - ✅ 后端: 删除 main_graph.py 中的 pending_review_layer
+   - ✅ 后端: 更新 tool_nodes.py 使用 previous_layer
+   - ✅ 后端: 更新 layer_nodes.py 删除 pending_review_layer
+   - ✅ 后端: 更新 planning.py 删除 pending_review_layer
+   - ✅ 前端: 简化 TaskController 删除 pending_review_layer
+   - ✅ 前端: 简化 UnifiedPlanningContext 删除冗余状态
+   - ❌ 待完成: 前端: 简化 ChatPanel 使用新的状态逻辑
+
+✦ 让我创建任务列表并继续完成剩余的工作：
+  ✔  Plan 更新待办事项列表（2个待处理，1个进行中，0个已完成）
+     ·已更新待办事项列表
+       ⎿ ☐ 前端: 简化 ChatPanel 删除 
+     showReviewPanel/setShowReviewPanel 相关代码
+         ☐ 验证前端是否还有 pendingReviewMessage/showReviewPanel 残留
+         ☐ 运行前端构建确保无编译错误
+
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 2-151 行，共
+     1077 行
+
+  ✔  Search 'showReviewPanel|setShowReviewPanel|pendingReviewMessage|setPending…
+     找到 30 个匹配
+
+✦ 我看到了当前的状态。ChatPanel.tsx 中仍有一些 setShowReviewPanel 和
+  setPendingReviewMessage 的引用，但 Context 已经删除了这些方法。让我检查
+  ChatPanel 的完整代码，并修复这些问题：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 421-620
+     行，共 1077 行
+
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 621-770
+     行，共 1077 行
+
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取所有 1077
+     行数据
+
+✦ 现在我需要查看 TaskController 来了解 approve/reject/rollback
+  函数是从哪里来的：
+  ✔  Read File ...end\src\controllers\TaskController.tsx
+     从 frontend/src/controllers/TaskController.tsx 读取所有 307
+     行数据
+
+✦ 现在我理解了代码结构。ChatPanel 中的 setShowReviewPanel 和
+  setPendingReviewMessage 应该已经被删除（因为 Context
+  已经删除了它们），但代码中还在引用。让我检查 UnifiedPlanningContext
+  的当前状态：
+  ✔  Read File ...frontend\\UnifiedPlanningContext.tsx
+     从 frontend/src/contexts/UnifiedPlanningContext.tsx 读取第 2-101
+     行，共 656 行
+
+  ✔  Search 'setShowReviewPanel|setPendingReviewMessage|showReviewPanel|pending…
+     未找到匹配结果
+
+✦ Context 中已经删除了这些方法。现在我需要修复 ChatPanel 中的引用错误。让我查看
+  ChatPanel 中的完整解构部分和需要修复的地方：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 41-110
+     行，共 1077 行
+
+✦ ChatPanel 的解构部分已经是正确的了（没有引用
+  setShowReviewPanel/setPendingReviewMessage）。问题在于回调函数中还在使用这些
+  方法。让我查看并修复这些回调函数：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 436-515
+     行，共 1077 行
+
+✦ 我看到了问题所在。代码中还有多处使用了 setShowReviewPanel 和
+  setPendingReviewMessage。这些方法已经从 Context 中删除，需要清理掉。让我查看
+  TaskController 的使用位置以及 approve/reject/rollback 的来源：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 391-470
+     行，共 1077 行
+
+✦ 我需要找到 taskState 和 approve/reject/rollback 是从哪里解构出来的：
+  ✔  Search 'useTaskController' in file ...tend\src\components\chat\ChatPanel.t…
+     找到 2 个匹配
+
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 371-420
+     行，共 1077 行
+
+✦ 现在我清楚了。approve、reject、rollback 来自
+  TaskController，这是正确的。问题在于：
+   1. setShowReviewPanel 和 setPendingReviewMessage 已经从 Context 删除
+   2. 但 handleReviewApprove、handleReviewReject、handleRollback
+      等函数还在引用它们
+
+  根据新的状态驱动设计，审查状态应该直接从 isPaused 和 pendingReviewLayer
+  派生，不需要单独的 showReviewPanel 状态。
+
+✦ 让我修复 ChatPanel 中的这些问题：
+  ✔  Edit ...tend\src\components\chat\ChatPanel.tsx:   // Review handlers - use…
+       );
+
+       // Review handlers - use TaskController actions
+     + // 状态驱动: 审查状态由后端同步 (isPaused, pendingReviewLayer)
+       const handleReviewApprove = useCallback(async () => {
+         try {
+           await approve();
+           addMessage(createSystemMessage('✅ 
+       已批准，继续执行下一层...'));
+     -     setShowReviewPanel(false);
+     -     setStatus('planning');
+     -     setPendingReviewMessage(null);  // ✅ Clear pending review
+     +     // 状态会通过 TaskController 轮询自动同步
+         } catch (error: any) {
+           addMessage(createErrorMessage(`批准失败: ${error.message ||
+       '未知错误'}`));
+         }
+     - }, [approve, addMessage, setShowReviewPanel, setStatus, 
+     setPendingReviewMessage]);
+     + }, [approve, addMessage]);
+
+       const handleReviewReject = useCallback(async (feedback: string,
+       dimensions?: string[]) => {
+         try {
+           });
+           addMessage(createSystemMessage('🔄 
+       正在根据反馈修复规划内容...'));
+           await reject(feedback);
+     -     setShowReviewPanel(false);
+     -     setStatus('revising');
+     +     // 状态会通过 TaskController 轮询自动同步
+         } catch (error: any) {
+           addMessage(createErrorMessage(`驳回失败: ${error.message ||
+       '未知错误'}`));
+         }
+     - }, [reject, addMessage, setShowReviewPanel, setStatus]);
+     + }, [reject, addMessage]);
+
+       const handleRollback = useCallback(async (checkpointId: string)
+       => {
+         if (!confirm('确定要回退吗？之后的内容将被删除。')) return;
+         try {
+           await rollback(checkpointId);
+           addMessage(createSystemMessage(`↩️ 已回退到检查点: 
+       ${checkpointId}`));
+     -     setShowReviewPanel(false);
+     +     // 状态会通过 TaskController 轮询自动同步
+         } catch (error: any) {
+           addMessage(createErrorMessage(`回退失败: ${error.message ||
+       '未知错误'}`));
+         }
+     - }, [rollback, addMessage, setShowReviewPanel]);
+     + }, [rollback, addMessage]);
+
+       // Handler: Start planning from form submission
+       const handleStartPlanning = useCallback(async () => {
+
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 546-605
+     行，共 1075 行
+
+  ✔  Edit ...tend\src\components\chat\ChatPanel.tsx:   // Review interaction ha…
+       // ChatPanel only handles the planning session after it has 
+       started
+
+       // Review interaction handlers for embedded message UI
+     + // 状态驱动: 审查状态由后端同步 (isPaused, pendingReviewLayer)
+       const handleReviewInteractionApprove = useCallback(async
+       (message: ReviewInteractionMessage) => {
+         if (!taskId) return;
+
+     ═════════════════════════════════════════════════════════════════
+           } as ReviewInteractionMessage);
+
+           addMessage(createSystemMessage('✅ 
+       已批准，继续执行下一层...'));
+     -     setShowReviewPanel(false);
+     -     setStatus('planning');
+     -     setPendingReviewMessage(null);
+     +     // 状态会通过 TaskController 轮询自动同步
+         } catch (error: unknown) {
+           const errorMessage = error instanceof Error ? error.message
+       : '未知错误';
+           addMessage(createErrorMessage(`批准失败: ${errorMessage}`
+       ));
+         }
+     - }, [taskId, addMessage, setShowReviewPanel, setStatus, 
+     setPendingReviewMessage]);
+     + }, [taskId, addMessage]);
+
+       const handleReviewInteractionReject = useCallback(async (
+         message: ReviewInteractionMessage,
+
+  ✔  Search 'setShowReviewPanel|setPendingReviewMessage' in file ...tend\src\co…
+     未找到匹配结果
+
+✦ ChatPanel 中的引用已清理完成。现在让我检查 app/page.tsx 和
+  app/village/[taskId]/page.tsx 中的残留代码：
+  ✔  Read File frontend\src\app\page.tsx
+     从 frontend/src/app/page.tsx 读取所有 56 行数据
+
+  ✔  Read File ...tend\src\app\village\[taskId]\page.tsx
+     从 frontend/src/app/village/[taskId]/page.tsx 读取所有 151 行数据
+
+✦ 我看到了问题。app/page.tsx 和 app/village/[taskId]/page.tsx 中有独立的
+  showReviewPanel 状态和 ReviewPanel
+  组件。根据新的状态驱动设计，审查面板的显示应该由 Context 中的 isPaused 和
+  pendingReviewLayer 状态控制，而不是本地状态。
+
+✦ 让我检查 ReviewPanel 组件，看看它是如何工作的：
+  ✔  Read File ...tend\components\review\ReviewPanel.tsx
+     从 frontend/src/components/review/ReviewPanel.tsx 读取第 1-100
+     行，共 189 行
+
+✦ 我看到 ReviewPanel 组件已被标记为 @deprecated，并且建议使用
+  ReviewInteractionMessage 在聊天流中嵌入审查功能。
+
+✦ 根据当前架构，审查面板应该通过 Context 中的 isPaused
+  状态来控制显示，而不是使用本地状态。让我检查一下 ReviewInteractionMessage
+  是否已经在 ChatPanel 的 MessageList 中使用：
+  ✔  Search 'ReviewInteractionMessage' within frontend\src\components\chat
+     找到 26 个匹配
+
+✦ 好的，ReviewInteractionMessage 组件已经在使用中。现在让我理解当前的架构：
+
+   1. 旧的 ReviewPanel - 独立的右侧抽屉组件，通过 isOpen prop 控制
+   2. 新的 ReviewInteractionMessage - 嵌入在聊天消息流中，更现代化的方式
+
+  根据历史对话中的重构目标，应该删除 showReviewPanel 本地状态，让审查面板根据
+  Context 中的 isPaused 和 pendingReviewLayer 状态自动显示。
+
+✦ 现在让我更新 app/page.tsx 和 app/village/[taskId]/page.tsx，使用 Context
+  的状态驱动审查面板：
+  ✔  Edit frontend\src\app\page.tsx: 'use client';... => 'use client';...
+       'use client';
+
+     - import { useState, useCallback } from 'react';
+       import { UnifiedPlanningProvider } from
+       '@/contexts/UnifiedPlanningContext';
+       import UnifiedLayout from '@/components/layout/UnifiedLayout';
+       import UnifiedContentSwitcher from
+       '@/components/layout/UnifiedContentSwitcher';
+     - import ReviewPanel from '@/components/review/ReviewPanel';
+
+       /**
+        * HomePage - Entry Point
+        * - UnifiedPlanningProvider: Global state and logic
+        * - UnifiedLayout: Header + history panel
+        * - UnifiedContentSwitcher: Smart container that renders Form
+       or Chat
+     -  * - ReviewPanel: Overlay for review workflow
+     +  *
+     +  * Review functionality is now embedded in the chat flow via 
+     ReviewInteractionMessage,
+     +  * controlled by Context state (isPaused, pendingReviewLayer).
+        */
+       export default function HomePage() {
+     -   const [showReviewPanel, setShowReviewPanel] = useState
+     (false);
+         const conversationId = `conv-${Date.now()}`;
+
+     -   const handleCloseReviewPanel = useCallback(() => {
+     -     setShowReviewPanel(false);
+     -   }, []);
+     - 
+     -   const handleReviewApprove = useCallback(async () => {
+     -     setShowReviewPanel(false);
+     -   }, []);
+     - 
+     -   const handleReviewReject = useCallback(async (_feedback: 
+     string, _dimensions?: string[]) => {
+     -     setShowReviewPanel(false);
+     -   }, []);
+     - 
+     -   const handleRollback = useCallback(async (_checkpointId: 
+     string) => {
+     -     setShowReviewPanel(false);
+     -   }, []);
+     - 
+         return (
+           <UnifiedPlanningProvider conversationId={conversationId}>
+             <UnifiedLayout taskId="new">
+               {/* Smart container - automatically shows Form or Chat 
+       based on context state */}
+               <UnifiedContentSwitcher />
+     ═════════════════════════════════════════════════════════════════
+     - 
+     -         {/* Review panel overlay - independent of view mode */}
+     -         <ReviewPanel
+     -           isOpen={showReviewPanel}
+     -           onClose={handleCloseReviewPanel}
+     -           onApprove={handleReviewApprove}
+     -           onReject={handleReviewReject}
+     -           onRollback={handleRollback}
+     -         />
+             </UnifiedLayout>
+           </UnifiedPlanningProvider>
+         );
+
+  ✔  Edit ...tend\src\app\village\[taskId]\page.tsx: 'use client';... => 'use c…
+       import { UnifiedPlanningProvider } from
+       '@/contexts/UnifiedPlanningContext';
+       import UnifiedLayout from '@/components/layout/UnifiedLayout';
+       import ChatPanel from '@/components/chat/ChatPanel';
+     - import ReviewPanel from '@/components/review/ReviewPanel';
+       import { planningApi } from '@/lib/api';
+
+       /**
+        * Route: /village/[taskId]
+        * - taskId='new': Create new planning task
+        * - taskId=<uuid>: View/manage existing task
+     +  *
+     +  * Review functionality is now embedded in the chat flow via 
+     ReviewInteractionMessage,
+     +  * controlled by Context state (isPaused, pendingReviewLayer).
+        */
+       export default function VillagePage() {
+         const params = useParams();
+         const taskId = params.taskId as string;
+         const [loading, setLoading] = useState(true);
+         const [error, setError] = useState<string | null>(null);
+     -   const [showReviewPanel, setShowReviewPanel] = useState
+     (false);
+
+         // Handle 'new' task redirect
+         useEffect(() => {
+     ═════════════════════════════════════════════════════════════════
+           }
+         };
+
+     -   const handleReviewApprove = async () => {
+     -     try {
+     -       await planningApi.approveReview(taskId);
+     -       setShowReviewPanel(false);
+     -       // SSE will handle the rest
+     -     } catch (err: any) {
+     -       console.error('[VillagePage] Failed to approve:', err);
+     -       alert(`批准失败: ${err.message || '未知错误'}`);
+     -     }
+     -   };
+     - 
+     -   const handleReviewReject = async (feedback: string, 
+     dimensions?: string[]) => {
+     -     try {
+     -       await planningApi.rejectReview(taskId, feedback, 
+     dimensions);
+     -       setShowReviewPanel(false);
+     -       // SSE will handle the rest
+     -     } catch (err: any) {
+     -       console.error('[VillagePage] Failed to reject:', err);
+     -       alert(`驳回失败: ${err.message || '未知错误'}`);
+     -     }
+     -   };
+     - 
+     -   const handleRollback = async (checkpointId: string) => {
+     -     try {
+     -       await planningApi.rollbackCheckpoint(taskId, 
+     checkpointId);
+     -       setShowReviewPanel(false);
+     -       // Reload page to refresh state
+     -       window.location.reload();
+     -     } catch (err: any) {
+     -       console.error('[VillagePage] Failed to rollback:', err);
+     -       alert(`回退失败: ${err.message || '未知错误'}`);
+     -     }
+     -   };
+     - 
+         if (loading) {
+           return (
+             <div className="min-h-screen flex items-center
+       justify-center bg-gray-50">
+     ═════════════════════════════════════════════════════════════════
+           <UnifiedPlanningProvider conversationId={conversationId}>
+             <UnifiedLayout taskId={taskId}>
+               <ChatPanel />
+     ═════════════════════════════════════════════════════════════════
+     - 
+     -         {/* Review Panel (overlay) */}
+     -         <ReviewPanel
+     -           isOpen={showReviewPanel}
+     -           onClose={() => setShowReviewPanel(false)}
+     -           onApprove={handleReviewApprove}
+     -           onReject={handleReviewReject}
+     -           onRollback={handleRollback}
+     -         />
+             </UnifiedLayout>
+           </UnifiedPlanningProvider>
+         );
+
+✦ 现在让我验证前端代码中是否还有 showReviewPanel 或 pendingReviewMessage
+  的残留引用：
+  ✔  Search 'showReviewPanel|setShowReviewPanel|pendingReviewMessage|setPending…
+     找到 8 个匹配
+
+✦ 这些 pendingReviewMessage 是正确的用法 - 它们是从 messages
+  数组中派生出来的，用于检查是否有待审查的消息，这与 Context 中删除的
+  pendingReviewMessage 状态是不同的概念。让我确认一下：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 431-450
+     行，共 1074 行
+
+✦ 这里的 pendingReviewMessage 是正确的用法 - 它是从 messages 数组中通过 useMemo
+  派生的局部变量，用于查找当前待审查的消息。这与之前从 Context 中删除的
+  pendingReviewMessage 状态是不同的概念。
+
+✦ 现在让我更新任务列表并运行前端构建验证：
+  ✔  Plan 更新待办事项列表（0个待处理，1个进行中，2个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 前端: 简化 ChatPanel 删除 
+     showReviewPanel/setShowReviewPanel 相关代码
+         ✔ 验证前端是否还有 pendingReviewMessage/showReviewPanel 残留
+         ☐ 运行前端构建确保无编译错误
+
+  x  Shell cd F:\project\Village_Planning_Agent\frontend; npm run build [curren…
+     ... 前 8 行已隐藏 ...（输入ctrl+r查看全部）
+     > 869 |       {/* Middle: Message list - Centered container + max
+     width */}
+           |       ^
+       870 |       <div className="flex-1 overflow-y-auto p-4">
+       871 |         <div className="max-w-4xl mx-auto">
+       872 |           {/* Layer Segmented Control - shown during
+     planning/paused */}
+     Next.js build worker exited with code: 1 and signal: null
+     Command exited with code: 1
+
+✦ 有一个类型错误。让我查看这个位置：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 851-900
+     行，共 1074 行
+
+✦ 错误显示在第 869 行。让我往前看一下，可能有一个条件渲染的问题：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 801-860
+     行，共 1074 行
+
+✦ 让我找到错误的具体位置。类型错误说 Type 'void' is not assignable to type 
+  'ReactNode'，这通常意味着某个条件渲染返回了 void。让我看看更多的代码上下文：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 741-820
+     行，共 1074 行
+
+✦ 我看到问题了！在第 808 行附近，progressMessages.map 中的条件渲染有问题：
+
+   {progressMessages.map(msg => (
+     isProgressMessage(msg) && (
+       <div key={msg.id}>
+
+  当 isProgressMessage(msg) 返回 false 时，表达式 isProgressMessage(msg) && 
+  (jsx) 会返回 false（一个 falsy 值），这会被 React 渲染为空。但在 TypeScript
+  严格模式下，false 不是有效的 ReactNode 类型。
+
+✦ 让我搜索整个文件中的类似问题：
+  ✔  Search '\.map\(.*=>\s*\(\s*\w+&&\s*\(' in file ...tend\src\components\chat…
+     未找到匹配结果
+
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 806-835
+     行，共 1074 行
+
+✦ 问题在于 progressMessages.map 中的 && 运算符可能返回
+  false。我需要将其改为三元运算符或使用 filter 过滤。让我修复这个问题：
+  ✔  Edit ...tend\src\components\chat\ChatPanel.tsx:             <div className…
+       {/* Progress bar - Card-style design */}
+       {progressMessages.length > 0 && (
+         <div className="mb-3 bg-gray-50 rounded-xl p-4 shadow-sm
+       border border-gray-200 animate-[fadeIn_0.3s_ease-in-out]">
+     -     {progressMessages.map(msg => (
+     -       isProgressMessage(msg) && (
+     +     {progressMessages.filter(msg => 
+     isProgressMessage(msg)).map(msg => (
+               <div key={msg.id}>
+                 <div className="flex justify-between items-center 
+       mb-2">
+                   <span className="text-sm font-semibold text-gray-
+       700 flex items-center gap-2">
+     ═════════════════════════════════════════════════════════════════
+                   </div>
+                 )}
+               </div>
+     -       )
+           ))}
+         </div>
+       )}
+
+  x  Shell cd F:\project\Village_Planning_Agent\frontend; npm run build [curren…
+     ... 前 8 行已隐藏 ...（输入ctrl+r查看全部）
+     > 867 |       {/* Middle: Message list - Centered container + max
+     width */}
+           |       ^
+       868 |       <div className="flex-1 overflow-y-auto p-4">
+       869 |         <div className="max-w-4xl mx-auto">
+       870 |           {/* Layer Segmented Control - shown during
+     planning/paused */}
+     Next.js build worker exited with code: 1 and signal: null
+     Command exited with code: 1
+
+✦ 错误还在。让我找到所有的条件渲染问题：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 781-860
+     行，共 1072 行
+
+✦ 错误报告在第 867 行。让我搜索文件中所有可能导致 void 的位置：
+  ✔  Search '\.map\(.*=>\s*\n?\s*\w+&&' in file ...tend\src\components\chat\Cha…
+     错误：ripgrep 以错误代码 2 退出：rg: the literal "\n" is not
+     allowed in a regex
+
+     Consider enabling multiline mode with the --multiline flag (or -U
+     for short).
+     When multiline mode is enabled, new line characters can be
+     matched.
+
+
+  ✔  Shell cd F:\project\Village_Planning_Agent\frontend\src\components\chat; f…
+     226:    setMessages(prev => prev.map(msg => {
+     264:    setMessages(prev => prev.map(msg =>
+     327:      setMessages(prev => prev.map(msg => {
+     737:              .map((msg: Message) => (msg as
+     FileMessage).fileContent)
+     807:              {progressMessages.filter(msg =>
+     isProgressMessage(msg)).map(msg => (
+
+
+✦ 让我看看第 226、264、327 行的代码：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 221-270
+     行，共 1072 行
+
+✦ 这些 .map 都是在回调函数中，不是 JSX 中的渲染。让我继续查看第 867
+  行附近的代码：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 856-895
+     行，共 1072 行
+
+✦ 让我查看完整的 JSX return 语句，从 return 开始：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 796-945
+     行，共 1072 行
+
+✦ 我看到了问题！在第 939 行有一个 console.log 调用在 JSX 中，它返回
+  void。让我删除这个调试日志：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 936-995
+     行，共 1072 行
+
+✦ 让我找到那个 console.log：
+  ✔  Search '\{console\.log.*Review panel' in file ...tend\src\components\chat\…
+     找到 1 个匹配
+
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 916-945
+     行，共 1072 行
+
+✦ 找到了！有一个 console.log 在 JSX 中，返回 void。让我删除这个调试日志：
+  ✔  Edit ...tend\src\components\chat\ChatPanel.tsx:       </div>... =>       <…
+         )}
+       </div>
+
+     - {/* ✅ 新增：条件渲染的审查面板 */}
+     - {/* Debug logging for review panel condition */}
+     - {console.log('[ChatPanel] Review panel condition check:', {
+     -   isPaused,
+     -   isPausedType: typeof isPaused,
+     -   pendingReviewLayer,
+     -   pendingReviewLayerType: typeof pendingReviewLayer,
+     -   condition1_isPaused: isPaused ? 'TRUE' : 'FALSE',
+     -   condition2_pendingReviewLayer: pendingReviewLayer ? `TRUE (
+     ${pendingReviewLayer})` : 'FALSE',
+     -   finalResult: isPaused && pendingReviewLayer ? 'SHOW PANEL' : 
+     'HIDE PANEL',
+     - })}
+     + {/* 条件渲染的审查面板 - 状态驱动 */}
+       {isPaused && pendingReviewLayer && (
+         <div className="border-t border-gray-200 bg-white">
+           <div className="max-w-4xl mx-auto">
+               onApprove={async () => {
+                 await approve();
+                 addMessage(createSystemMessage(`✅ 
+       已批准，继续执行下一层...`));
+     ═════════════════════════════════════════════════════════════════
+     -           setStatus('planning');
+               }}
+               onReject={async (feedback) => {
+                 await reject(feedback);
+                 addMessage(createSystemMessage('🔄 
+       正在根据反馈修复规划内容...'));
+     ═════════════════════════════════════════════════════════════════
+     -           setStatus('revising');
+               }}
+               onRollback={async (checkpointId) => {
+                 await rollback(checkpointId);
+
+✦ 现在我需要检查 ReviewPanel 组件的 props 是否正确。让我先看一下 ReviewPanel
+  的接口：
+  ✔  Read File ...tend\components\review\ReviewPanel.tsx
+     从 frontend/src/components/review/ReviewPanel.tsx 读取所有 189
+     行数据
+
+✦ 我看到 ReviewPanel 组件使用的是 isOpen, onClose 等 props，但我在 ChatPanel
+  中传递的是 layer, onApprove 等。这导致了类型错误。
+
+  根据新的状态驱动设计，审查面板应该：
+   1. 要么使用 ReviewInteractionMessage 组件嵌入在聊天流中
+   2. 要么创建一个新的简化的审查面板
+
+✦ 让我检查一下 ChatPanel 中使用 ReviewPanel 的当前代码，并修复它：
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 911-950
+     行，共 1060 行
+
+✦ 我看到了问题。ChatPanel 中使用了错误的 ReviewPanel props。有两个选择：
+   1. 创建一个新的简化的内联审查面板
+   2. 删除这个面板，因为审查功能已经通过 ReviewInteractionMessage
+      在聊天流中实现了
+
+✦ 根据之前的代码，ReviewInteractionMessage 已经在 MessageList
+  中处理审查功能了。让我删除这个多余的审查面板：
+  ✔  Edit ...tend\src\components\chat\ChatPanel.tsx:             title="跳转到底…
+         )}
+       </div>
+
+     - {/* 条件渲染的审查面板 - 状态驱动 */}
+     - {isPaused && pendingReviewLayer && (
+     -   <div className="border-t border-gray-200 bg-white">
+     -     <div className="max-w-4xl mx-auto">
+     -       <ReviewPanel
+     -         layer={pendingReviewLayer}
+     -         onApprove={async () => {
+     -           await approve();
+     -           addMessage(createSystemMessage(`✅ 
+     已批准，继续执行下一层...`));
+     -         }}
+     -         onReject={async (feedback) => {
+     -           await reject(feedback);
+     -           addMessage(createSystemMessage('🔄 
+     正在根据反馈修复规划内容...'));
+     -         }}
+     -         onRollback={async (checkpointId) => {
+     -           await rollback(checkpointId);
+     -           addMessage(createSystemMessage(`↩️ 已回退到检查点: 
+     ${checkpointId}`));
+     -         }}
+     -         isSubmitting={status === 'reviewing'}
+     -       />
+     -     </div>
+     -   </div>
+     - )}
+     + {/* 审查功能已通过 ReviewInteractionMessage 组件嵌入在 
+     MessageList 中 */}
+     + {/* 不需要额外的审查面板 */}
+
+       {/* Bottom: Input area */}
+       <div className="border-t bg-white p-4">
+
+✦ 现在检查是否需要删除 ReviewPanel 的 import：
+  ✔  Search 'import.*ReviewPanel' in file ...tend\src\components\chat\ChatPanel…
+     找到 1 个匹配
+
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 2-36 行，共
+     1039 行
+
+  ✔  Edit ...tend\src\components\chat\ChatPanel.tsx: import { useState, useRef,…
+       import { useTaskController } from
+       '@/controllers/TaskController';
+       import { useStreamingRender } from '@/hooks/useStreamingRender'
+       ;
+       import MessageList from './MessageList';
+     - import ReviewPanel from './ReviewPanel';
+       import { FontAwesomeIcon } from
+       '@fortawesome/react-fontawesome';
+       import { faEdit, faLayerGroup } from
+       '@fortawesome/free-solid-svg-icons';
+       import { getDimensionName } from '@/config/dimensions';
+
+✦ 现在再次运行构建：
+  x  Shell cd F:\project\Village_Planning_Agent\frontend; npm run build [curren…
+     ... 前 9 行已隐藏 ...（输入ctrl+r查看全部）
+       899 |             reviewDisabled={status === 'revising'}
+     > 900 |             currentLayer={taskState.currentLayer ??
+     undefined}
+           |                                     ^
+       901 |           />
+       902 |           <div ref={messagesEndRef} />
+       903 |         </div>
+     Next.js build worker exited with code: 1 and signal: null
+     Command exited with code: 1
+
+  ✔  Edit ...tend\src\components\chat\ChatPanel.tsx:             currentLayer={…
+           onReviewReject={handleReviewInteractionReject}
+           onReviewRollback={handleReviewInteractionRollback}
+           reviewDisabled={status === 'revising'}
+     -     currentLayer={taskState.currentLayer ?? undefined}
+     +     currentLayer={taskState.current_layer ?? undefined}
+         />
+         <div ref={messagesEndRef} />
+       </div>
+
+  x  Shell cd F:\project\Village_Planning_Agent\frontend; npm run build [curren…
+     ... 前 10 行已隐藏 ...（输入ctrl+r查看全部）
+       210 |             <MarkdownRenderer
+       211 |               content={displayContent}
+     > 212 |               style={{
+           |               ^
+       213 |                 fontSize: '13px',
+       214 |                 lineHeight: '1.6',
+       215 |                 color: '#333',
+     Next.js build worker exited with code: 1 and signal: null
+     Command exited with code: 1
+
+✦ 这是一个不同的错误，不是我们修改造成的。让我检查一下这个文件：
+  ✔  Read File ...tend\chat\DimensionReportStreaming.tsx
+     从 frontend/src/components/chat/DimensionReportStreaming.tsx
+     读取所有 227 行数据
+
+✦ 这是另一个组件的错误，不是我们的修改造成的。让我检查 MarkdownRenderer
+  的接口：
+  ✔  Search 'interface MarkdownRendererProps' within frontend\src
+     找到 1 个匹配
+
+  ✔  Read File ...ontend\components\MarkdownRenderer.tsx
+     从 frontend/src/components/MarkdownRenderer.tsx 读取第 1-30
+     行，共 66 行
+
+✦ MarkdownRendererProps 没有 style 属性。让我修复
+  DimensionReportStreaming.tsx：
+  ✔  Edit ...tend\chat\DimensionReportStreaming.tsx:           {displayContent …
+       {displayContent ? (
+         <MarkdownRenderer
+           content={displayContent}
+     -     style={{
+     -       fontSize: '13px',
+     -       lineHeight: '1.6',
+     -       color: '#333',
+     -     }}
+     +     className="text-sm leading-relaxed text-gray-700"
+         />
+       ) : (
+         <div style={{ color: '#999', fontSize: '13px' }}>
+
+  x  Shell cd F:\project\Village_Planning_Agent\frontend; npm run build [curren…
+     ... 前 11 行已隐藏 ...（输入ctrl+r查看全部）
+     (streaming dimension content)
+     > 113 |         if (message.type === 'dimension_report') {
+           |             ^
+       114 |           return (
+       115 |             <div key={message.id} className="w-full
+     mb-2">
+       116 |               <DimensionReportStreaming
+     Next.js build worker exited with code: 1 and signal: null
+     Command exited with code: 1
+
+✦ 这也是另一个组件的错误。让我查看这个类型定义：
+  ✔  Search 'type MessageType' within frontend\src\types
+     找到 1 个匹配
+
+✦ 类型定义中包含 dimension_report。让我检查 MessageList 中导入的类型：
+  ✔  Read File ...ontend\components\chat\MessageList.tsx
+     从 frontend/src/components/chat/MessageList.tsx 读取第 1-30
+     行，共 183 行
+
+  ✔  Read File frontend\src\types\message.ts
+     从 frontend/src/types/message.ts 读取所有 178 行数据
+
+✦ 我看到 DimensionReportMessage 是从 message-types 导入的。让我检查这个文件：
+  ✔  Read File frontend\src\types\message-types.ts
+     从 frontend/src/types/message-types.ts 读取所有 188 行数据
+
+✦ DimensionReportMessage 已经在类型定义中了。问题可能是 TypeScript
+  编译器的缓存问题。让我检查 MessageList 的代码：
+  ✔  Read File ...ontend\components\chat\MessageList.tsx
+     从 frontend/src/components/chat/MessageList.tsx 读取第 106-145
+     行，共 183 行
+
+✦ 问题是 Message 类型没有正确导入 DimensionReportMessage。让我检查导入部分：
+  ✔  Read File frontend\src\types\index.ts
+     从 frontend/src/types/index.ts 读取所有 20 行数据
+
+✦ 导入看起来正确。让我检查 Message 类型定义是否正确合并了
+  DimensionReportMessage：
+  x  Shell cd F:\project\Village_Planning_Agent\frontend; npx tsc --noEmit 2>&1…
+     Stdout:
+     src/components/chat/MessageList.tsx(113,13): error TS2367: This
+     comparison appears to be unintentional because the types
+     '"progress" | "error" | "review_request" | "result" | "file" |
+     "text" | "action" | "system" | "checkpoint_list" |
+     "review_interaction"' and '"dimension_report"' have no overlap.
+     Command exited with code: 1
+
+✦ 错误信息显示 Message 类型中没有包含 dimension_report。让我检查 message.ts
+  中的 Message 类型定义：
+  ✔  Read File frontend\src\types\message.ts
+     从 frontend/src/types/message.ts 读取第 141-170 行，共 178 行
+
+  ✔  Read File frontend\src\types\message.ts
+     从 frontend/src/types/message.ts 读取所有 178 行数据
+
+✦ 类型定义中确实包含了 DimensionReportMessage。这可能是 TypeScript
+  缓存问题。让我尝试清理缓存并重新构建：
+  x  Shell cd F:\project\Village_Planning_Agent\frontend; Remove-Item -Recurse …
+     ... 前 22 行已隐藏 ...（输入ctrl+r查看全部）
+     src/contexts/UnifiedPlanningContext.tsx(564,9): error TS2739:
+     Type '{ conversationId: string; messages: Message[]; taskId:
+     string | null; projectName: string | null; status: Status;
+     viewerVisible: boolean; referencedSection: string | undefined;
+     ... 44 more ...; loadHistoricalReports: (villageName: string,
+     sessionId: string) => Promise<...>; }' is missing the following
+     properties from type 'UnifiedPlanningContextType': currentLayer,
+     setCurrentLayer
+     Command exited with code: 1
+
+✦ 我看到了更多错误：
+   1. MessageList.tsx 中的 dimension_report 类型问题
+   2. UnifiedPlanningContext.tsx 缺少 setCurrentLayer 和 currentLayer
+
+✦ 让我先修复 UnifiedPlanningContext.tsx 的问题：
+  ✔  Search 'setCurrentLayer' in file ...frontend\\UnifiedPlanningContext.tsx
+     找到 2 个匹配
+
+  ✔  Read File ...frontend\\UnifiedPlanningContext.tsx
+     从 frontend/src/contexts/UnifiedPlanningContext.tsx 读取第
+     101-150 行，共 656 行
+
+  ✔  Search 'const \[currentLayer' in file ...frontend\\UnifiedPlanningContext.…
+     未找到匹配结果
+
+  ✔  Search 'currentLayer' in file ...frontend\\UnifiedPlanningContext.tsx
+     找到 8 个匹配
+
+  ✔  Read File ...frontend\\UnifiedPlanningContext.tsx
+     从 frontend/src/contexts/UnifiedPlanningContext.tsx 读取第
+     184-213 行，共 656 行
+
+✦ 我看到 currentLayer 在 reportSyncState 中，但 Context 接口需要一个独立的
+  currentLayer 状态和 setCurrentLayer 方法。让我检查更多的上下文：
+  ✔  Read File ...frontend\\UnifiedPlanningContext.tsx
+     从 frontend/src/contexts/UnifiedPlanningContext.tsx 读取第
+     401-450 行，共 656 行
+
+✦ 我看到在第 429 行调用了
+  setCurrentLayer(null)，但这个方法没有定义。让我搜索所有状态定义的位置：
+  ✔  Read File ...frontend\\UnifiedPlanningContext.tsx
+     从 frontend/src/contexts/UnifiedPlanningContext.tsx 读取第
+     146-225 行，共 656 行
+
+✦ 我看到问题了。Context 接口中定义了 currentLayer 和
+  setCurrentLayer，但在状态定义部分没有定义 currentLayer
+  状态。让我检查是否需要添加这个状态：
+  ✔  Read File ...frontend\\UnifiedPlanningContext.tsx
+     从 frontend/src/contexts/UnifiedPlanningContext.tsx 读取第 61-110
+     行，共 656 行
+
+✦ 我看到接口定义了 currentLayer 和 setCurrentLayer，但在状态定义部分没有
+  currentLayer 的 useState。让我添加它：
+  ✔  Edit ...frontend\\UnifiedPlanningContext.tsx:   // Checkpoint state... => …
+
+       // Checkpoint state
+       const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]
+       );
+     + const [currentLayer, setCurrentLayer] = useState<number | null
+     >(null);
+
+       // Content state
+       const [selectedCheckpoint, setSelectedCheckpoint] = useState<
+       string | null>(null);
+
+✦ 现在让我检查 dimension_report 类型的问题。问题可能是导入路径问题：
+  ✔  Read File ...ontend\components\chat\MessageList.tsx
+     从 frontend/src/components/chat/MessageList.tsx 读取第 1-15
+     行，共 183 行
+
+✦ 导入看起来是正确的。问题可能是在 LayerCompletedMessage 类型定义中缺少了
+  dimension_report。让我检查 LayerCompletedMessage 类型和 Message
+  类型是否有冲突：
+  ✔  Search 'type.*=.*'dimension_report'' in file frontend\src\types\message-ty…
+     未找到匹配结果
+
+  ✔  Search 'type: 'dimension_report'' in file frontend\src\types\message-types…
+     找到 1 个匹配
+
+✦ 类型定义是正确的。让我运行 TypeScript 检查看看最新的错误：
+  x  Shell cd F:\project\Village_Planning_Agent\frontend; npx tsc --noEmit 2>&1…
+     ... 前 20 行已隐藏 ...（输入ctrl+r查看全部）
+     src/contexts/UnifiedPlanningContext.tsx(565,9): error TS2739:
+     Type '{ conversationId: string; messages: Message[]; taskId:
+     string | null; projectName: string | null; status: Status;
+     viewerVisible: boolean; referencedSection: string | undefined;
+     ... 44 more ...; loadHistoricalReports: (villageName: string,
+     sessionId: string) => Promise<...>; }' is missing the following
+     properties from type 'UnifiedPlanningContextType': currentLayer,
+     setCurrentLayer
+     Command exited with code: 1
+
+✦ UnifiedPlanningContext.tsx 的错误说缺少 currentLayer 和
+  setCurrentLayer。让我检查 Provider 的 value 部分：
+  ✔  Read File ...frontend\\UnifiedPlanningContext.tsx
+     从 frontend/src/contexts/UnifiedPlanningContext.tsx 读取第
+     541-600 行，共 657 行
+
+  ✔  Read File ...frontend\\UnifiedPlanningContext.tsx
+     从 frontend/src/contexts/UnifiedPlanningContext.tsx 读取第
+     596-645 行，共 657 行
+
+✦ 我看到 currentLayer 和 setCurrentLayer 没有添加到 context value
+  中。让我添加它们：
+  ✔  Edit ...frontend\\UnifiedPlanningContext.tsx:     // 同步后端状态... =>   …
+       // 同步后端状态
+       syncBackendState,
+
+     + // Checkpoints
+     + currentLayer,
+     + setCurrentLayer,
+     + 
+       // History state
+       villages,
+       selectedVillage,
+
+✦ 现在让我再次检查 TypeScript 错误：
+  x  Shell cd F:\project\Village_Planning_Agent\frontend; npx tsc --noEmit 2>&1…
+     ... 前 12 行已隐藏 ...（输入ctrl+r查看全部）
+     src/components/chat/MessageList.tsx(119,40): error TS2339:
+     Property 'dimensionName' does not exist on type 'never'.
+     src/components/chat/MessageList.tsx(120,34): error TS2339:
+     Property 'content' does not exist on type 'never'.
+     src/components/chat/MessageList.tsx(121,41): error TS2339:
+     Property 'streamingState' does not exist on type 'never'.
+     src/components/chat/MessageList.tsx(122,36): error TS2339:
+     Property 'wordCount' does not exist on type 'never'.
+     Command exited with code: 1
+
+✦ UnifiedPlanningContext.tsx 的错误已经解决了。现在还剩下 MessageList.tsx 中的
+  dimension_report 类型问题。
+
+✦ 问题是 TypeScript 认为消息类型中没有 dimension_report。这可能是因为
+  LayerCompletedMessage 类型与 DimensionReportMessage 有冲突。让我仔细检查
+  Message 类型的导入：
+  ✔  Read File frontend\src\types\message.ts
+     从 frontend/src/types/message.ts 读取所有 178 行数据
+
+✦ 类型定义是正确的。问题可能是 TypeScript 的缓存问题。让我尝试不同的方法 - 在
+  MessageList 中直接导入类型：
+  ✔  Read File ...ontend\components\chat\MessageList.tsx
+     从 frontend/src/components/chat/MessageList.tsx 读取第 51-65
+     行，共 183 行
+
+  ✔  Read File ...ontend\components\chat\MessageList.tsx
+     从 frontend/src/components/chat/MessageList.tsx 读取第 71-120
+     行，共 183 行
+
+✦ 我看到问题了！代码在第 82-83 行先过滤掉了 dimension_report
+  类型的消息，然后在第 105 行又尝试检查 dimension_report 类型。但由于类型系统知
+  道这个分支永远不会被执行（因为已经过滤掉了），所以类型变成了 never。
+
+✦ 让我修复这个逻辑 - dimension_report
+  消息应该单独处理，不需要在常规消息列表中过滤后再检查：
+  ✔  Edit ...ontend\components\chat\MessageList.tsx:       {/* Regular messages…
+         </div>
+       )}
+
+     - {/* Regular messages - 过滤掉 dimension_report 类型 */}
+     - {messages
+     -   .filter(message => message.type !== 'dimension_report')
+     -   .map((message) => {
+     + {/* Regular messages - 包含所有消息类型 */}
+     + {messages.map((message) => {
+     +   // Special handling for dimension_report messages (streaming 
+     dimension content)
+     +   if (message.type === 'dimension_report') {
+     +     const dimMsg = message as DimensionReportMessage;
+     +     return (
+     +       <div key={message.id} className="w-full mb-2">
+     +         <DimensionReportStreaming
+     +           layer={dimMsg.layer}
+     +           dimensionKey={dimMsg.dimensionKey}
+     +           dimensionName={dimMsg.dimensionName}
+     +           content={dimMsg.content}
+     +           streamingState={dimMsg.streamingState}
+     +           wordCount={dimMsg.wordCount}
+     +         />
+     +       </div>
+     +     );
+     +   }
+     + 
+         // Special handling for layer_completed messages
+         if (message.type === 'layer_completed') {
+           const layerMsg = message as LayerCompletedMessage;
+     ═════════════════════════════════════════════════════════════════
+           );
+         }
+
+     -   // Special handling for dimension_report messages (streaming 
+     dimension content)
+     -   if (message.type === 'dimension_report') {
+     -     return (
+     -       <div key={message.id} className="w-full mb-2">
+     -         <DimensionReportStreaming
+     -           layer={message.layer}
+     -           dimensionKey={message.dimensionKey}
+     -           dimensionName={message.dimensionName}
+     -           content={message.content}
+     -           streamingState={message.streamingState}
+     -           wordCount={message.wordCount}
+     -         />
+     -       </div>
+     -     );
+     -   }
+     - 
+         // Special handling for review_interaction messages
+         if (isReviewInteractionMessage(message)) {
+           const reviewMsg = message as ReviewInteractionMessage;
+
+  ✔  Shell cd F:\project\Village_Planning_Agent\frontend; npx tsc --noEmit 2>&1…
+
+✦ TypeScript 类型检查通过了。现在运行完整的构建：
+  ✔  Shell cd F:\project\Village_Planning_Agent\frontend; npm run build [curren…
+     ... 前 74 行已隐藏 ...（输入ctrl+r查看全部）
+       ├ chunks/117-c9c5ec90674f31c1.js       31.7 kB
+       ├ chunks/fd9d1056-67c5bfec1fe7f7a0.js  53.6 kB
+       └ other shared chunks (total)          1.97 kB
+
+
+     ○  (Static)   prerendered as static content
+     ƒ  (Dynamic)  server-rendered on demand
+
+
+
+✦ 构建成功！虽然有一些 ESLint
+  警告，但这些都是关于依赖数组的问题，不是关键错误。
+
+✦ 让我更新任务列表：
+  ✔  Plan 更新待办事项列表（0个待处理，0个进行中，3个已完成）
+     ·已更新待办事项列表
+       ⎿ ✔ 前端: 简化 ChatPanel 删除
+     showReviewPanel/setShowReviewPanel 相关代码
+         ✔ 验证前端是否还有 pendingReviewMessage/showReviewPanel 残留
+         ✔ 运行前端构建确保无编译错误
+
+✦ 所有任务已完成。让我总结一下完成的工作：
+
+  ---
+
+  状态管理重构完成
+
+  根据历史对话中的计划，我完成了以下工作：
+
+  后端优化 ✅
+   1. 删除 `pending_review_layer` 字段
+      - src/orchestration/main_graph.py - 删除状态定义和设置
+      - src/nodes/tool_nodes.py - 改用 previous_layer
+      - src/nodes/layer_nodes.py - 删除 pending_review_layer 设置
+      - backend/api/planning.py - 删除相关读取和返回
+
+   2. 统一暂停状态
+      - 前端只用 status === 'paused' 判断暂停
+      - pause_after_step 保留用于 LangGraph 内部路由
+
+  前端优化 ✅
+   1. 简化 TaskController (frontend/src/controllers/TaskController.tsx)
+      - 删除 pending_review_layer 字段
+      - 直接使用 previous_layer
+
+   2. 简化 UnifiedPlanningContext
+      (frontend/src/contexts/UnifiedPlanningContext.tsx)
+      - 删除 pendingReviewMessage 状态
+      - 删除 showReviewPanel 状态
+      - 简化 isPaused 计算: isPaused = status === 'paused'
+      - 添加缺失的 currentLayer 状态
+
+   3. 简化 ChatPanel (frontend/src/components/chat/ChatPanel.tsx)
+      - 删除对 setShowReviewPanel/setPendingReviewMessage 的引用
+      - 删除多余的 ReviewPanel 组件调用（审查功能已通过
+        ReviewInteractionMessage 在聊天流中实现）
+      - 修复类型错误
+
+   4. 简化页面组件
+      - app/page.tsx - 删除本地 showReviewPanel 状态和 ReviewPanel
+      - app/village/[taskId]/page.tsx - 同上
+
+  额外修复 ✅
+   - 修复 DimensionReportStreaming.tsx 中 MarkdownRenderer 的 style 属性问题
+   - 修复 MessageList.tsx 中的类型推断问题（先处理 dimension_report 再处理
+     layer_completed）
+
+✦ 最终状态字段映射
+
+  ┌────────────────┬────────────────┬────────────────────────────────────┐
+  │ 前端变量       │ 后端字段       │ 说明                               │
+  ├────────────────┼────────────────┼────────────────────────────────────┤
+  │ status         │ status         │ 任务状态 (idle/running/paused/c... │
+  │ isPaused       │ `status ===... │ 计算属性                           │
+  │ `pendingRev... │ previous_layer │ 待审查层级                         │
+  │ `completedL... │ `layer_X_comp... │ 层级完成状态                       │
+  └────────────────┴────────────────┴────────────────────────────────────┘
+
+
+    > 探查为什么报告的触发显示逻辑，为   
+      什么没有running状态生成后立刻显示  
+      报告消息，前端不断加载tokne显示    
+
+✦ 我来探查报告显示逻辑的问题。让我启动探索代理来分析前端的消息生成和报告显示流
+  程。
+  ✔  Explore Agent
+     ⎿ 完成 (17 个工具使用 59.1k token(s) · 持续时间：2m 35s · 按 ctrl+r 展开)
+
+
+  ✔  Explore Agent
+     ⎿ 完成 (22 个工具使用 49.9k token(s) · 持续时间：2m 40s · 按 ctrl+r 展开)
+
+
+  ✔  Explore Agent
+     ⎿ 完成 (16 个工具使用 63.9k token(s) · 持续时间：2m 31s · 按 ctrl+r 展开)
+
+
+✦ 我已经完成了对三个方面的深入探查。让我阅读关键文件来验证发现并整理完整的分析
+  报告：
+  ✔  Read File src\nodes\subgraph_nodes.py
+     从 src/nodes/subgraph_nodes.py 读取第 111-160 行，共 570 行
+
+  ✔  Read File ...tend\src\components\chat\ChatPanel.tsx
+     从 frontend/src/components/chat/ChatPanel.tsx 读取第 196-275
+     行，共 1038 行
+
+  ✔  Search 'on_token_callback|token_callback' in file src\nodes\subgraph_nodes…
+     找到 6 个匹配
+
+  ✔  Read File src\nodes\subgraph_nodes.py
+     从 src/nodes/subgraph_nodes.py 读取第 89-128 行，共 570 行
+
+✦ 我找到了问题的核心！让我检查 state 的结构和 config 的传递方式：
+  ✔  Search '_token_callback_factory' within src
+     找到 7 个匹配
+
+  ✔  Read File src\nodes\layer_nodes.py
+     从 src/nodes/layer_nodes.py 读取第 31-80 行，共 613 行
+
+  ✔  Read File src\nodes\layer_nodes.py
+     从 src/nodes/layer_nodes.py 读取第 426-475 行，共 613 行
+
+✦ 现在让我检查子图中 _token_callback_factory 的使用方式：
+  ✔  Read File src\subgraphs\analysis_subgraph.py
+     从 src/subgraphs/analysis_subgraph.py 读取第 116-175 行，共 414
+     行
+
+✦ 我现在看到了完整的流程。问题在于 subgraph_nodes.py 中获取
+  token_callback_factory 的方式有问题。让我检查一下 state.config 是如何传递的：
+  ✔  Read File src\nodes\subgraph_nodes.py
+     从 src/nodes/subgraph_nodes.py 读取第 76-105 行，共 570 行
+
+✦ 现在我已经完成了全面的代码分析。让我整理发现并提出修复方案。
+
+  ---
+
+  问题分析报告
+
+  根本问题
+
+  问题核心: _token_callback_factory
+  通过两种路径传递，但子图节点中的获取逻辑存在错误。
+
+  问题 1: 子图节点中获取 token 回调工厂的方式错误
+
+  位置: src/nodes/subgraph_nodes.py:94-99
+
+   # ❌ 错误代码
+   on_token_callback = None
+   if hasattr(state, "config") and state.config.get("configurable"):
+       token_callback_factory = state.config["configurable"].get(
+   "_token_callback_factory")
+
+  问题:
+   - state 是一个 TypedDict 字典，不是对象
+   - hasattr(state, "config") 对于字典永远返回 False
+   - 因此 on_token_callback 永远是 None，流式回调从未触发！
+
+  正确做法:
+   - 工厂已经通过 Send 机制传递到 dimension_state 中
+   - 应该从 state.get("_token_callback_factory") 获取（已经传递过来了）
+
+  问题 2: 前端消息类型使用错误
+
+  位置: frontend/src/components/chat/ChatPanel.tsx:213-217
+
+   // 创建了错误的消息类型
+   addMessage({
+     type: 'layer_completed' as const,  // 应该是 'dimension_report' 
+   用于流式显示
+     ...
+   });
+
+  问题:
+   - dimension_report 消息类型专门用于流式显示单个维度内容
+   - layer_completed 消息类型用于显示整个层级完成的报告
+   - 当前代码在收到第一个 token 时创建 layer_completed 消息，但更新
+     dimensionReports 字段
+
+  问题 3: 前端依赖 SSE 事件，但后端未正确发送
+
+  由于问题 1，后端的 dimension_delta 事件从未发送，前端：
+   1. 无法实时显示维度内容
+   2. 只能等待 layer_completed 事件（层级完全完成后）
+   3. 用户看到的是"不断加载"但没有内容更新
+
+  ---
+
+  修复方案
+
+  方案 A: 修复 token 回调获取方式（推荐）
+
+  修改 src/nodes/subgraph_nodes.py:
+
+   # ✅ 正确代码
+   on_token_callback = None
+   token_callback_factory = state.get("_token_callback_factory")
+   if token_callback_factory:
+       layer = state.get("current_layer", 1)
+       dimension_key = state.get("dimension_key", "")
+       on_token_callback = token_callback_factory(layer, dimension_key)
+
+  优点: 最小改动，直接利用已有的传递机制
+
+  方案 B: 前端消息类型优化
+
+  创建专门的 dimension_report 消息用于流式显示，而不是复用 layer_completed。
+
+  ---
+
+  数据流时序图（修复后）
+
+   后端 LangGraph:
+     [维度分析开始]
+          ↓
+     AnalyzeDimensionNode.execute()
+          ↓ on_token_callback(token, accumulated)
+     token_callback_factory(layer, dimension)
+          ↓
+     _append_session_event({type: "dimension_delta", ...})
+          ↓ SSE 发送
+     前端 TaskController 接收
+          ↓ onDimensionDelta 回调
+     ChatPanel.handleDimensionDelta()
+          ↓ 创建/更新 dimension_report 消息
+     MessageList 渲染 DimensionReportStreaming
+          ↓ 实时显示 token
+     [维度完成]
+          ↓ dimension_complete 事件
+     [所有维度完成]
+          ↓ layer_completed 事件
+     [显示完整层级报告]
+
+  ---
+
+✦ 需要我继续深入某个方面吗？或者这个分析已经足够，我可以准备最终修复计划？
+✦ Plan
+
+  报告显示问题修复计划
+
+  根本原因
+
+  核心问题: src/nodes/subgraph_nodes.py:94-99 中获取 token 回调工厂的方式错误：
+
+   # ❌ 错误代码 - state 是字典，不是对象
+   if hasattr(state, "config") and state.config.get("configurable"):
+
+  hasattr(state, "config") 对字典永远返回 False，导致 dimension_delta SSE
+  事件从未发送。
+
+  修复步骤
+
+  1. 修复 token 回调获取 (后端)
+  文件: src/nodes/subgraph_nodes.py:94-99
+
+   # 修改为：
+   on_token_callback = None
+   token_callback_factory = state.get("_token_callback_factory")
+   if token_callback_factory:
+       layer = state.get("current_layer", 1)
+       dimension_key = state.get("dimension_key", "")
+       on_token_callback = token_callback_factory(layer, dimension_key)
+
+  2. 验证工厂传递 (确认)
+   - _token_callback_factory 已通过 Send 机制传递到 dimension_state
+   - 子图中的 state.get("_token_callback_factory") 应该能获取到工厂
+
+  3. 测试验证
+   - 启动服务，创建新规划任务
+   - 观察浏览器 Network 标签中 SSE dimension_delta 事件
+   - 验证前端实时显示维度内容
+
+  影响范围
+   - 后端: 1 个文件，约 5 行代码
+   - 风险: 低，仅修改条件判断逻辑
+
+ℹ 继续计划模式。请提供更多详细信息或提出问题以完善计划。
+ 
+
+    > /export file                       
+
+
+glm-5 上下文剩余 43% | 计划模式 | 思考: 关闭
+cwd: F:\project\Village_Planning_Agent (dataflow-better*)
+

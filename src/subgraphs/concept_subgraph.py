@@ -34,11 +34,6 @@ from .concept_prompts import (
 logger = get_logger(__name__)
 
 
-def merge_dicts(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str]:
-    """合并两个字典"""
-    return {**left, **right}
-
-
 # ==========================================
 # 子图状态定义
 # ==========================================
@@ -56,8 +51,9 @@ class ConceptState(TypedDict):
     dimensions: List[str]        # 待分析的维度列表
     concept_analyses: Annotated[List[Dict[str, str]], operator.add]  # 已完成的维度分析
 
-    # 输出数据 - 只保留维度报告（使用自定义合并函数合并各维度的结果）
-    concept_dimension_reports: Annotated[Dict[str, str], merge_dicts]  # 各维度独立报告
+    # 输出数据
+    final_concept: str           # 最终规划思路报告
+    concept_dimension_reports: Dict[str, str]  # 各维度独立报告（用于部分状态传递）
 
     # 消息历史
     messages: Annotated[List[BaseMessage], add_messages]
@@ -71,7 +67,7 @@ class ConceptDimensionState(TypedDict):
     dimension_reports: Dict[str, str]  # 完整的各维度现状分析字典（用于规划器二次筛选）
     task_description: str         # 规划任务
     constraints: str             # 约束条件
-    planning_concept: str          # 分析结果
+    concept_result: str          # 分析结果
 
 
 # ==========================================
@@ -85,8 +81,64 @@ def _get_llm():
 
 
 # ==========================================
-# 辅助函数
+# 并行分析节点函数
 # ==========================================
+
+def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
+    """
+    执行单个规划思路维度的分析
+
+    使用新的 ConceptPlanner 架构，充分利用现有的基础设施。
+
+    Args:
+        state: 包含维度信息和输入数据的状态
+
+    Returns:
+        该维度的分析结果（包装在列表中以支持 operator.add 累加）
+    """
+    dimension_key = state["dimension_key"]
+    dimension_name = state["dimension_name"]
+
+    logger.info(f"[子图-规划] 开始执行 {dimension_name} ({dimension_key})")
+
+    try:
+        # 【使用新架构】使用 ConceptPlannerFactory 创建规划器
+        from ..planners.concept_planners import ConceptPlannerFactory
+        planner = ConceptPlannerFactory.create_planner(dimension_key)
+
+        # 【使用新架构】调用规划器的 execute 方法
+        # 注意：planner.execute 需要完整的状态字典，包含 analysis_report, task_description, constraints
+        planner_state = {
+            "analysis_report": state["analysis_report"],
+            "dimension_reports": state.get("dimension_reports", {}),  # 可选，用于筛选
+            "task_description": state["task_description"],
+            "constraints": state["constraints"]
+        }
+        planner_result = planner.execute(planner_state)
+
+        concept_text = planner_result["concept_result"]
+        logger.info(f"[子图-规划] 完成 {dimension_name}，生成 {len(concept_text)} 字符")
+
+        # 在 LangGraph 1.0.x 中，使用 operator.add 时需要返回列表
+        return {
+            "concept_analyses": [{
+                "dimension_key": dimension_key,
+                "dimension_name": dimension_name,
+                "concept_result": concept_text
+            }]
+        }
+
+    except Exception as e:
+        logger.error(f"[子图-规划] {dimension_name} 执行失败: {str(e)}")
+        # 返回错误信息而非崩溃
+        return {
+            "concept_analyses": [{
+                "dimension_key": dimension_key,
+                "dimension_name": dimension_name,
+                "concept_result": f"[分析失败] {str(e)}"
+            }]
+        }
+
 
 def _get_dimension_prompt(
     dimension_key: str,
@@ -166,8 +218,126 @@ def map_concept_dimensions(state: ConceptState) -> List[Send]:
     return sends
 
 
-# 【已删除】reduce_concept_analyses 函数 - 不再需要汇总节点
-# 【已删除】generate_final_concept 函数 - 不再需要生成综合报告
+def reduce_concept_analyses(state: ConceptState) -> Dict[str, Any]:
+    """
+    Reduce 阶段：汇总所有维度的分析结果
+
+    生成两种格式：
+    1. concept_dimension_reports: 字典形式，每个维度的独立报告（用于部分状态传递）
+    2. dimension_reports_text: 拼接的文本（用于综合报告生成）
+    """
+    logger.info(f"[子图-Reduce] 开始汇总 {len(state['concept_analyses'])} 个维度的分析结果")
+
+    # 整理分析结果为结构化格式
+    dimension_reports_dict = {}
+    dimension_reports_text = []
+
+    for analysis in state["concept_analyses"]:
+        dimension_key = analysis['dimension_key']
+        dimension_name = analysis['dimension_name']
+        concept_text = analysis['concept_result']
+
+        # 保存独立的维度报告（用于部分传输）
+        dimension_reports_dict[dimension_key] = concept_text
+
+        # 同时拼接用于综合报告
+        dimension_reports_text.append(f"""
+## {dimension_name}
+
+{concept_text}
+---
+""")
+
+    logger.info(f"[子图-Reduce] 汇总完成，生成了 {len(dimension_reports_dict)} 个维度报告")
+    return {
+        "concept_dimension_reports": dimension_reports_dict,  # 新增：字典形式
+        "dimension_reports_text": "\n".join(dimension_reports_text)  # 用于综合报告
+    }
+
+
+# ==========================================
+# 最终规划思路生成节点
+# ==========================================
+
+def generate_final_concept(state: ConceptState) -> Dict[str, Any]:
+    """
+    生成最终规划思路报告
+
+    整合4个维度的分析结果，使用汇总 Prompt 生成连贯的报告。
+    支持LangSmith tracing。
+    """
+    logger.info("[子图-汇总] 开始生成最终规划思路报告")
+
+    try:
+        # 使用 reduce 阶段生成的 dimension_reports_text
+        dimension_reports_text = state.get("dimension_reports_text", "")
+
+        # 如果 dimension_reports_text 为空，从 concept_analyses 重新构建
+        if not dimension_reports_text:
+            for analysis in state["concept_analyses"]:
+                dimension_reports_text += f"\n### {analysis['dimension_name']}\n{analysis['concept_result']}\n"
+
+        # 构建汇总 Prompt
+        summary_prompt = CONCEPT_SUMMARY_PROMPT.format(
+            project_name=state["project_name"],
+            task_description=state["task_description"],
+            dimension_reports=dimension_reports_text
+        )
+
+        # 调用 LLM 生成最终报告（支持LangSmith）
+        from ..core.llm_factory import create_llm
+        from ..core.langsmith_integration import get_langsmith_manager
+
+        # 创建LangSmith metadata
+        langsmith = get_langsmith_manager()
+        metadata = None
+        if langsmith.is_enabled():
+            metadata = langsmith.create_run_metadata(
+                project_name=state.get('project_name', '村庄'),
+                dimension="concept_summary",
+                layer=2
+            )
+
+        llm = create_llm(
+            model=LLM_MODEL,
+            temperature=0.7,
+            max_tokens=MAX_TOKENS,
+            metadata=metadata
+        )
+        response = llm.invoke([HumanMessage(content=summary_prompt)])
+
+        final_concept = f"""# {state['project_name']} 规划思路报告
+
+{response.content}
+---
+
+**生成时间**: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+
+        logger.info(f"[子图-汇总] 规划思路报告生成完成，共 {len(final_concept)} 字符")
+
+        return {
+            "final_concept": final_concept,
+            "messages": [AIMessage(content=final_concept)]
+        }
+
+    except Exception as e:
+        logger.error(f"[子图-汇总] 报告生成失败: {str(e)}")
+
+        # 降级方案：直接拼接各维度结果
+        fallback_concept = f"""# {state['project_name']} 规划思路报告（简化版）
+
+## 各维度分析
+
+"""
+        for analysis in state["concept_analyses"]:
+            fallback_concept += f"### {analysis['dimension_name']}\n\n{analysis['concept_result']}\n\n"
+
+        return {
+            "final_concept": fallback_concept,
+            "messages": [AIMessage(content=fallback_concept)]
+        }
+
 
 # ==========================================
 # 初始化节点
@@ -201,19 +371,19 @@ def initialize_concept_analysis(state: ConceptState) -> Dict[str, Any]:
 
 def create_concept_subgraph() -> StateGraph:
     """
-    创建规划思路子图 - 重构版：删除汇总节点
-
-    流程：initialize -> map -> analyze_dimension (并行) -> END
+    创建规划思路子图 - 使用封装节点
 
     Returns:
         编译后的 StateGraph 实例
     """
     from ..nodes.subgraph_nodes import (
         InitializeConceptNode,
-        AnalyzeConceptDimensionNode
+        AnalyzeConceptDimensionNode,
+        ReduceConceptsNode,
+        GenerateConceptReportNode
     )
 
-    logger.info("[子图构建] 开始构建规划思路子图（重构版：无汇总节点）")
+    logger.info("[子图构建] 开始构建规划思路子图（使用封装节点）")
 
     # 创建状态图
     builder = StateGraph(ConceptState)
@@ -221,10 +391,14 @@ def create_concept_subgraph() -> StateGraph:
     # 创建节点实例
     initialize_node = InitializeConceptNode()
     analyze_node = AnalyzeConceptDimensionNode()
+    reduce_node = ReduceConceptsNode()
+    report_node = GenerateConceptReportNode()
 
     # 添加节点
     builder.add_node("initialize", initialize_node)
     builder.add_node("analyze_concept_dimension", analyze_node)
+    builder.add_node("reduce_analyses", reduce_node)
+    builder.add_node("generate_final_concept", report_node)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
@@ -238,13 +412,14 @@ def create_concept_subgraph() -> StateGraph:
 
     builder.add_conditional_edges("initialize", route_to_concept_dimensions)
 
-    # 【重构】analyze 节点直接到 END，不再经过 reduce 和 generate 节点
-    builder.add_edge("analyze_concept_dimension", END)
+    builder.add_edge("analyze_concept_dimension", "reduce_analyses")
+    builder.add_edge("reduce_analyses", "generate_final_concept")
+    builder.add_edge("generate_final_concept", END)
 
     # 编译子图
     concept_subgraph = builder.compile()
 
-    logger.info("[子图构建] 规划思路子图构建完成（重构版：无汇总节点）")
+    logger.info("[子图构建] 规划思路子图构建完成（使用封装节点）")
 
     return concept_subgraph
 
@@ -258,15 +433,10 @@ def call_concept_subgraph(
     analysis_report: str,
     dimension_reports: Dict[str, str] = None,  # 新增：维度报告字典
     task_description: str = "制定村庄总体规划思路",
-    constraints: str = "无特殊约束",
-    _streaming_queue=None,  # 新增：流式队列管理器
-    _storage_pipeline=None,  # 新增：异步存储管道
-    _dimension_events=None  # 新增：维度事件列表
+    constraints: str = "无特殊约束"
 ) -> Dict[str, Any]:
     """
     调用规划思路子图的包装函数
-
-    【重构】只返回维度报告，不生成综合报告
 
     Args:
         project_name: 项目/村庄名称
@@ -276,7 +446,7 @@ def call_concept_subgraph(
         constraints: 约束条件
 
     Returns:
-        包含维度报告的字典
+        包含最终规划思路报告的字典
     """
     logger.info(f"[子图调用] 开始调用规划思路子图: {project_name}")
 
@@ -286,45 +456,36 @@ def call_concept_subgraph(
     # 构建初始状态
     initial_state: ConceptState = {
         "analysis_report": analysis_report,
-        "dimension_reports": dimension_reports or {},
+        "dimension_reports": dimension_reports or {},  # 新增
         "project_name": project_name,
         "task_description": task_description,
         "constraints": constraints,
         "dimensions": [],
         "concept_analyses": [],
-        "concept_dimension_reports": {},
-        "messages": [],
+        "final_concept": "",
+        "concept_dimension_reports": {},  # 新增
+        "messages": []
     }
 
     try:
         # 调用子图
         result = subgraph.invoke(initial_state)
 
-        logger.info(f"[子图调用] 子图执行成功")
+        logger.info(f"[子图调用] 子图执行成功，报告长度: {len(result.get('final_concept', ''))} 字符")
+        logger.info(f"[子图调用] 维度报告数量: {len(result.get('concept_dimension_reports', {}))}")
 
-        # 【修复】从 concept_analyses 列表中提取维度报告并转换为字典（使用英文键名）
-        concept_analyses = result.get("concept_analyses", [])
-        dimension_reports = {}
-        for analysis in concept_analyses:
-            dimension_key = analysis.get("dimension_key")  # 使用英文key
-            concept_result = analysis.get("concept_result")
-            if dimension_key and concept_result:
-                dimension_reports[dimension_key] = concept_result
-
-        logger.info(f"[子图调用] 维度报告数量: {len(dimension_reports)}")
-
-        # 返回维度报告字典（键名为英文）
         return {
-            "concept_dimension_reports": dimension_reports,
+            "concept_report": result["final_concept"],
+            "concept_dimension_reports": result.get("concept_dimension_reports", {}),  # 新增
             "success": True
         }
 
     except Exception as e:
         logger.error(f"[子图调用] 子图执行失败: {str(e)}")
         return {
-            "concept_dimension_reports": {},
-            "success": False,
-            "error": str(e)
+            "concept_report": f"规划思路分析失败: {str(e)}",
+            "concept_dimension_reports": {},  # 新增：失败时返回空字典
+            "success": False
         }
 
 
@@ -353,6 +514,7 @@ if __name__ == "__main__":
         "constraints": "生态优先，绿色发展",
         "dimensions": [],
         "concept_analyses": [],
+        "final_concept": "",
         "concept_dimension_reports": {},
         "messages": []
     }
@@ -362,8 +524,6 @@ if __name__ == "__main__":
     result = subgraph.invoke(initial_state)
 
     print("\n=== 执行完成 ===")
-    print(f"维度报告数量: {len(result['concept_dimension_reports'])}")
-    print("\n=== 维度报告 ===")
-    for dim_name, content in result['concept_dimension_reports'].items():
-        print(f"\n### {dim_name}")
-        print(content[:200] + "..." if len(content) > 200 else content)
+    print(f"报告长度: {len(result['final_concept'])} 字符")
+    print("\n=== 最终规划思路 ===")
+    print(result["final_concept"])

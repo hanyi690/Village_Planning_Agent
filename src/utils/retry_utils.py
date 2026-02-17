@@ -11,8 +11,6 @@ Features:
 - Exponential backoff with optional jitter
 """
 
-from __future__ import annotations
-
 import time
 import random
 import functools
@@ -103,13 +101,13 @@ def _should_retry(
     if config.retry_on_timeout:
         # Check for common timeout error patterns
         error_msg = str(exception).lower()
-        timeout_keywords = ["timeout", "timed out", "time out", "deadline"]
+        timeout_keywords = ['timeout', 'timed out', 'time out', 'deadline']
         if any(keyword in error_msg for keyword in timeout_keywords):
             return True
 
     # Check for rate limit errors (429)
     error_msg = str(exception).lower()
-    rate_limit_keywords = ["429", "too many requests", "rate limit", "rate_limit", "ratelimit"]
+    rate_limit_keywords = ['429', 'too many requests', 'rate limit', 'rate_limit', 'ratelimit']
     if any(keyword in error_msg for keyword in rate_limit_keywords):
         return True
 

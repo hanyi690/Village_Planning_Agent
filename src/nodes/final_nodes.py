@@ -56,10 +56,8 @@ class GenerateFinalOutputNode(BaseNode):
 
         logger.info(f"[{self.node_name}] 最终成果生成完成，总长度: {len(final_output)} 字符")
 
-        # 保存最终综合报告（使用 OutputManager）- 从registry获取
-        from ..utils.output_manager_registry import get_output_manager_registry
-        registry = get_output_manager_registry()
-        output_manager = registry.get(state.get("session_id"))
+        # 保存最终综合报告（使用 OutputManager）
+        output_manager = state.get("output_manager")
         final_output_path = None
         if output_manager:
             try:

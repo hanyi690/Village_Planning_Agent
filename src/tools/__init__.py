@@ -14,12 +14,25 @@ from .file_manager import (
 # 知识库工具（函数）
 from .knowledge_tool import knowledge_query
 
+# 地图工具（函数）
+from .map_tool import generate_simple_map
+
+# 规划工具（函数）
+from .planner_tool import plan_village
+
 # Checkpoint工具（新增）
 from .checkpoint_tool import (
     CheckpointTool,
     save_checkpoint,
     load_checkpoint,
     list_checkpoints
+)
+
+# 交互式工具（新增）
+from .interactive_tool import (
+    InteractiveTool,
+    review_report,
+    show_progress_and_wait
 )
 
 # 修复工具（新增）
@@ -39,11 +52,22 @@ __all__ = [
     # 知识库
     "knowledge_query",
 
+    # 地图
+    "generate_simple_map",
+
+    # 规划
+    "plan_village",
+
     # Checkpoint
     "CheckpointTool",
     "save_checkpoint",
     "load_checkpoint",
     "list_checkpoints",
+
+    # 交互式
+    "InteractiveTool",
+    "review_report",
+    "show_progress_and_wait",
 
     # 修复
     "RevisionTool",
