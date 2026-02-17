@@ -6,6 +6,12 @@ test/output/*
 .claude/settings.local.json
 results/*
 
+# Database
+*.db
+*.db-shm
+*.db-wal
+data/village_planning.db
+
 # Node.js
 frontend/node_modules/
 frontend/.next/
