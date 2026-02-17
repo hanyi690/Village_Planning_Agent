@@ -33,7 +33,7 @@ import operator
 from datetime import datetime
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
-from ..core.dimension_mapping import (
+from ..core.dimension_config import (
     FULL_DEPENDENCY_CHAIN,
     WAVE_CONFIG,
     get_execution_wave,
@@ -362,7 +362,7 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     """
     生成单个维度的详细规划 - 增强版：支持适配器
 
-    使用新的 DimensionPlanner 架构，充分利用现有的基础设施。
+    使用 GenericPlanner 统一架构，充分利用现有的基础设施。
     支持使用completed_plans（project_bank需要）。
     新增：支持适配器调用以获取专业分析数据。
     """
@@ -373,12 +373,12 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key})")
 
     try:
-        # 【使用新架构】使用 DetailedPlannerFactory 创建规划器
-        from ..planners.detailed_planners import DetailedPlannerFactory
-        planner = DetailedPlannerFactory.create_planner(dimension_key)
+        # 【使用统一架构】使用 GenericPlannerFactory 创建规划器
+        from ..planners.generic_planner import GenericPlannerFactory
+        planner = GenericPlannerFactory.create_planner(dimension_key)
 
-        # 【使用新架构】调用规划器的 execute 方法
-        # 注意：planner.execute 需要完整的状态字典
+        # 【使用统一架构】调用规划器的 execute 方法
+        # 注意：GenericPlanner 需要完整的状态字典
         planner_state = {
             "project_name": project_name,
             "analysis_report": state["analysis_report"],
@@ -403,11 +403,12 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
         # 执行规划（带适配器支持）
         planner_result = planner.execute(
             state=planner_state,
-            use_adapters=use_adapters,
-            adapter_types=adapter_types
+            enable_langsmith=True
         )
 
-        plan_content = planner_result["dimension_result"]
+        # GenericPlanner 返回的结果键名由 get_result_key() 决定
+        result_key = planner.get_result_key()
+        plan_content = planner_result.get(result_key, planner_result.get("dimension_result", ""))
         logger.info(f"[子图-L3-Agent] 完成 {dimension_name}，生成 {len(plan_content)} 字符")
 
         # 检查是否有反馈意见（添加到结果中）

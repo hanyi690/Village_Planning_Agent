@@ -16,53 +16,90 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.logger import get_logger
-from tests.test_utils import (
-    ensure_output_dirs,
-    get_timestamp,
-    save_to_markdown,
-    generate_master_summary,
-    SUMMARY_OUTPUT_DIR
-)
 
 logger = get_logger(__name__)
 
 
-def run_analysis_tests() -> dict:
-    """运行分析子图测试"""
+def run_file_manager_tests() -> dict:
+    """运行文件管理器测试"""
     print("\n" + "="*80)
-    print("开始运行现状分析子图测试...")
+    print("开始运行文件管理器测试...")
     print("="*80 + "\n")
 
     results = {}
 
     try:
-        from tests.test_analysis_subgraph import run_all_tests_and_summary
-        results = run_all_tests_and_summary()
-        print("✅ 现状分析子图测试完成")
+        import pytest
+        result = pytest.main(["tests/test_file_manager.py", "-v", "--tb=short"])
+        results["文件管理器测试"] = {"success": result == 0, "exit_code": result}
+        print("✅ 文件管理器测试完成")
     except Exception as e:
-        logger.error(f"现状分析子图测试失败: {str(e)}", exc_info=True)
-        print(f"❌ 现状分析子图测试失败: {str(e)}")
-        results = {"错误": str(e)}
+        logger.error(f"文件管理器测试失败: {str(e)}", exc_info=True)
+        print(f"❌ 文件管理器测试失败: {str(e)}")
+        results["文件管理器测试"] = {"success": False, "error": str(e)}
 
     return results
 
 
-def run_concept_tests() -> dict:
-    """运行概念子图测试"""
+def run_integration_tests() -> dict:
+    """运行集成测试"""
     print("\n" + "="*80)
-    print("开始运行规划思路子图测试...")
+    print("开始运行集成测试...")
     print("="*80 + "\n")
 
     results = {}
 
     try:
-        from tests.test_concept_subgraph import run_all_tests_and_summary
-        results = run_all_tests_and_summary()
-        print("✅ 规划思路子图测试完成")
+        import pytest
+        result = pytest.main(["tests/test_integration.py", "-v", "--tb=short"])
+        results["集成测试"] = {"success": result == 0, "exit_code": result}
+        print("✅ 集成测试完成")
     except Exception as e:
-        logger.error(f"规划思路子图测试失败: {str(e)}", exc_info=True)
-        print(f"❌ 规划思路子图测试失败: {str(e)}")
-        results = {"错误": str(e)}
+        logger.error(f"集成测试失败: {str(e)}", exc_info=True)
+        print(f"❌ 集成测试失败: {str(e)}")
+        results["集成测试"] = {"success": False, "error": str(e)}
+
+    return results
+
+
+def run_langsmith_tests() -> dict:
+    """运行LangSmith集成测试"""
+    print("\n" + "="*80)
+    print("开始运行LangSmith集成测试...")
+    print("="*80 + "\n")
+
+    results = {}
+
+    try:
+        import pytest
+        result = pytest.main(["tests/test_langsmith_integration.py", "-v", "--tb=short"])
+        results["LangSmith集成测试"] = {"success": result == 0, "exit_code": result}
+        print("✅ LangSmith集成测试完成")
+    except Exception as e:
+        logger.error(f"LangSmith集成测试失败: {str(e)}", exc_info=True)
+        print(f"❌ LangSmith集成测试失败: {str(e)}")
+        results["LangSmith集成测试"] = {"success": False, "error": str(e)}
+
+    return results
+
+
+def run_planner_tests() -> dict:
+    """运行规划器测试"""
+    print("\n" + "="*80)
+    print("开始运行规划器测试...")
+    print("="*80 + "\n")
+
+    results = {}
+
+    try:
+        import pytest
+        result = pytest.main(["tests/planners/test_generic_planner.py", "-v", "--tb=short"])
+        results["规划器测试"] = {"success": result == 0, "exit_code": result}
+        print("✅ 规划器测试完成")
+    except Exception as e:
+        logger.error(f"规划器测试失败: {str(e)}", exc_info=True)
+        print(f"❌ 规划器测试失败: {str(e)}")
+        results["规划器测试"] = {"success": False, "error": str(e)}
 
     return results
 
@@ -73,31 +110,17 @@ def run_all_tests():
     print("Village Planning Agent - 综合测试")
     print("="*80)
 
-    # 确保输出目录存在
-    ensure_output_dirs()
-
     all_results = {}
     start_time = datetime.now()
 
     # 运行所有测试模块
-    analysis_results = run_analysis_tests()
-    all_results["现状分析"] = analysis_results
-
-    concept_results = run_concept_tests()
-    all_results["规划思路"] = concept_results
+    all_results["文件管理器"] = run_file_manager_tests()
+    all_results["集成测试"] = run_integration_tests()
+    all_results["LangSmith"] = run_langsmith_tests()
+    all_results["规划器"] = run_planner_tests()
 
     end_time = datetime.now()
-
-    # 生成主汇总报告
-    summary_content = generate_master_summary(all_results)
-
-    # 添加执行时间信息
     duration = (end_time - start_time).total_seconds()
-    summary_content += f"\n\n**总执行时间**: {duration:.2f} 秒\n"
-
-    timestamp = get_timestamp()
-    master_summary_file = SUMMARY_OUTPUT_DIR / f"master_summary_{timestamp}.md"
-    save_to_markdown(summary_content, master_summary_file)
 
     # 打印最终汇总
     print("\n" + "="*80)
@@ -105,20 +128,20 @@ def run_all_tests():
     print("="*80)
 
     # 统计总体数据
-    total_tests = 0
     total_passed = 0
+    total_failed = 0
 
     for module_name, module_results in all_results.items():
-        if isinstance(module_results, dict) and "错误" not in module_results:
-            module_total = len(module_results)
-            module_passed = sum(1 for r in module_results.values() if r.get("success", False))
-            total_tests += module_total
-            total_passed += module_passed
+        for test_name, result in module_results.items():
+            if result.get("success", False):
+                total_passed += 1
+                print(f"✅ {module_name} - {test_name}")
+            else:
+                total_failed += 1
+                print(f"❌ {module_name} - {test_name}")
 
-            print(f"\n{module_name}: {module_passed}/{module_total} 通过")
-
-    print(f"\n总体: {total_passed}/{total_tests} 通过")
-    print(f"主汇总报告: {master_summary_file.relative_to(Path.cwd())}")
+    print(f"\n总体: {total_passed} 通过, {total_failed} 失败")
+    print(f"总执行时间: {duration:.2f} 秒")
     print("="*80 + "\n")
 
     return all_results

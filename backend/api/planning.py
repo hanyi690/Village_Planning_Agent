@@ -572,7 +572,8 @@ async def _execute_graph_in_background(
                         # 获取报告内容
                         if layer_num == 1:
                             report = event.get("analysis_report", "")
-                            dimension_reports = event.get("analysis_dimension_reports", {})
+                            # ✅ 修复：字段名是 dimension_reports，不是 analysis_dimension_reports
+                            dimension_reports = event.get("dimension_reports", {})
                         elif layer_num == 2:
                             report = event.get("planning_concept", "")
                             dimension_reports = event.get("concept_dimension_reports", {})
@@ -747,11 +748,43 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
     # Validate state before resuming
     current_layer = state.get("current_layer", 1)
     if not _validate_resume_state(state, current_layer):
-        logger.error(f"[Planning API] Invalid state for resume at layer {current_layer}")
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot resume at layer {current_layer}: missing required data"
-        )
+        # 尝试从 checkpoint 历史中恢复缺失的数据
+        logger.warning(f"[Planning API] [{session_id}] 状态验证失败，尝试从 checkpoint 历史恢复数据")
+        
+        saver = await get_global_checkpointer()
+        graph = create_village_planning_graph(checkpointer=saver)
+        config = {"configurable": {"thread_id": session_id}}
+        
+        try:
+            # 直接获取最新 checkpoint 状态（使用 aget_state 而非 aget_state_history）
+            checkpoint_state = await graph.aget_state(config)
+            if checkpoint_state and checkpoint_state.values:
+                checkpoint_values = checkpoint_state.values
+                if current_layer == 2:
+                    # 需要 Layer 1 的数据
+                    if checkpoint_values.get("analysis_report") and checkpoint_values.get("dimension_reports"):
+                        state["analysis_report"] = checkpoint_values["analysis_report"]
+                        state["dimension_reports"] = checkpoint_values.get("dimension_reports", {})
+                        logger.info(f"[Planning API] [{session_id}] 从 checkpoint 恢复了 Layer 1 数据")
+                elif current_layer == 3:
+                    # 需要 Layer 1 和 2 的数据
+                    if checkpoint_values.get("analysis_report"):
+                        state["analysis_report"] = checkpoint_values["analysis_report"]
+                        state["dimension_reports"] = checkpoint_values.get("dimension_reports", {})
+                    if checkpoint_values.get("planning_concept"):
+                        state["planning_concept"] = checkpoint_values["planning_concept"]
+                        state["concept_dimension_reports"] = checkpoint_values.get("concept_dimension_reports", {})
+                    logger.info(f"[Planning API] [{session_id}] 从 checkpoint 恢复了 Layer 1 和 2 数据")
+        except Exception as e:
+            logger.error(f"[Planning API] [{session_id}] 从 checkpoint 恢复数据失败: {e}")
+        
+        # 再次验证
+        if not _validate_resume_state(state, current_layer):
+            logger.error(f"[Planning API] Invalid state for resume at layer {current_layer}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot resume at layer {current_layer}: missing required data"
+            )
 
     # Update session state
     with _sessions_lock:

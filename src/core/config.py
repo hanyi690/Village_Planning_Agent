@@ -27,3 +27,22 @@ LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY", "")
 LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT", "village-planning-agent")
 LANGCHAIN_ENDPOINT = os.getenv("LANGCHAIN_ENDPOINT", None)
 LANGCHAIN_CALLBACKS_BACKGROUND = os.getenv("LANGCHAIN_CALLBACKS_BACKGROUND", "true").lower() == "true"
+
+# ==========================================
+# Planning Configuration
+# ==========================================
+
+# Default task and constraints
+DEFAULT_TASK_DESCRIPTION: str = os.getenv(
+    "DEFAULT_TASK_DESCRIPTION",
+    "制定村庄总体规划方案"
+)
+DEFAULT_CONSTRAINTS: str = os.getenv(
+    "DEFAULT_CONSTRAINTS",
+    "无特殊约束"
+)
+
+# Execution mode defaults
+DEFAULT_STEP_MODE: bool = os.getenv("DEFAULT_STEP_MODE", "true").lower() in ("1", "true", "yes")
+DEFAULT_STREAM_MODE: bool = os.getenv("DEFAULT_STREAM_MODE", "true").lower() in ("1", "true", "yes")
+DEFAULT_ENABLE_REVIEW: bool = os.getenv("DEFAULT_ENABLE_REVIEW", "false").lower() in ("1", "true", "yes")

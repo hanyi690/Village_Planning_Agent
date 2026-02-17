@@ -1,0 +1,274 @@
+警告: 无法导入 langchain hub，RAG查询功能可能不可用。请安装: pip install langchainhub
+2026-02-18 02:52:45,161 - main - INFO - 🚀 村庄规划智能体后端启动中...
+2026-02-18 02:52:45,164 - main - INFO - 📁 Project root: F:\project\Village_Planning_Agent
+2026-02-18 02:52:45,166 - main - INFO - 📁 Working directory: F:\project\Village_Planning_Agent
+2026-02-18 02:52:45,169 - main - INFO - 📁 Results directory: F:\project\Village_Planning_Agent\results
+2026-02-18 02:52:45,172 - main - INFO - 🗄️  Initializing database...
+2026-02-18 02:52:45,192 - backend.database.engine - INFO - [Sync DB] Database engine created: F:\project\Village_Planning_Agent\data\village_planning.db
+2026-02-18 02:52:45,211 - backend.database.engine - INFO - [Sync DB] Database tables initialized successfully
+2026-02-18 02:52:45,212 - main - INFO - ✅ Sync database initialized successfully
+2026-02-18 02:52:45,212 - main - INFO - Initializing async database...
+2026-02-18 02:52:45,222 - backend.database.engine - INFO - [Async DB] Async database engine created: F:\project\Village_Planning_Agent\data\village_planning.db
+2026-02-18 02:52:45,230 - backend.database.engine - INFO - [Async DB] Database tables initialized successfully
+2026-02-18 02:52:45,230 - main - INFO - ✅ Async database initialized successfully
+2026-02-18 02:52:45,231 - main - INFO - ✅ 后端服务启动完成
+2026-02-18 02:53:04,304 - backend.api.files - INFO - [Upload] File received: 泗水镇金田村现状报告.docx, size: 596323 bytes
+2026-02-18 02:53:04,305 - backend.api.files - INFO - [Upload] Using MarkItDown for .docx file
+2026-02-18 02:53:06,011 - backend.api.files - INFO - [Upload] Successfully decoded 3511 characters using markitdown
+INFO:     127.0.0.1:62840 - "POST /api/files/upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62840 - "OPTIONS /api/planning/start HTTP/1.1" 200 OK
+2026-02-18 02:53:07,060 - backend.api.planning - INFO - [Planning API] ===== 开始规划流程 =====
+2026-02-18 02:53:07,060 - backend.api.planning - INFO - [Planning API] 项目名称: 金田村
+2026-02-18 02:53:07,061 - backend.api.planning - INFO - [Planning API] 村庄数据长度: 3511 字符
+2026-02-18 02:53:07,062 - backend.api.planning - INFO - [Planning API] 任务描述: 制定村庄总体规划方案
+2026-02-18 02:53:07,062 - backend.api.planning - INFO - [Planning API] 步进模式: True
+2026-02-18 02:53:07,063 - backend.api.planning - INFO - [Planning API] 流式输出: True
+2026-02-18 02:53:07,064 - backend.services.rate_limiter - INFO - [RateLimiter] 记录请求: project=金田村, session=
+2026-02-18 02:53:07,065 - backend.api.planning - INFO - [Planning API] 限流检查通过
+2026-02-18 02:53:07,065 - backend.api.planning - INFO - [Planning API] 生成会话ID: 20260218_025307
+2026-02-18 02:53:07,066 - backend.services.rate_limiter - INFO - [RateLimiter] 任务开始: 金田村
+2026-02-18 02:53:07,072 - src.utils.output_manager_registry - INFO - [OutputManagerRegistry] Registered: 20260218_025307
+2026-02-18 02:53:07,075 - backend.api.planning - INFO - [Planning API] 构建 LangGraph 初始状态
+2026-02-18 02:53:07,075 - backend.api.planning - INFO - [Planning API] village_data 字段长度: 3511 字符
+2026-02-18 02:53:07,076 - backend.api.planning - INFO - [Planning API] LangGraph 状态构建完成，流式输出模式: True
+2026-02-18 02:53:07,076 - backend.api.planning - INFO - [Planning API] 初始状态构建完成
+2026-02-18 02:53:07,077 - backend.api.planning - INFO - [Planning API] [20260218_025307] Creating database session...
+2026-02-18 02:53:07,102 - backend.database.operations_async - INFO - [Async DB] Created planning session: 20260218_025307
+2026-02-18 02:53:07,104 - backend.api.planning - INFO - [Planning API] [20260218_025307] ✓ Database session created successfully (27.18ms)
+2026-02-18 02:53:07,105 - backend.api.planning - INFO - [Planning API] [20260218_025307] Frontend can now safely poll /api/planning/status/20260218_025307
+2026-02-18 02:53:07,105 - backend.api.planning - INFO - [Checkpointer] 正在初始化全局 AsyncSqliteSaver 实例...
+2026-02-18 02:53:07,123 - backend.api.planning - INFO - [Checkpointer] ✅ 全局 AsyncSqliteSaver 实例初始化成功
+2026-02-18 02:53:07,124 - backend.api.planning - INFO - [Planning API] 创建 LangGraph 实例 (使用全局 AsyncSqliteSaver)
+2026-02-18 02:53:07,124 - src.orchestration.main_graph - INFO - [主图构建] 开始构建村庄规划主图
+2026-02-18 02:53:07,131 - src.orchestration.main_graph - INFO - [主图构建] 村庄规划主图构建完成
+2026-02-18 02:53:07,132 - backend.api.planning - INFO - [Planning API] [20260218_025307] Background task submitted
+2026-02-18 02:53:07,132 - backend.api.planning - INFO - [Planning API] [20260218_025307] ✓ Session started successfully - returning response (72.29ms)
+2026-02-18 02:53:07,132 - backend.api.planning - INFO - [Planning API] [20260218_025307] Response: task_id=20260218_025307, status=running, stream_url=/api/planning/stream/20260218_025307
+INFO:     127.0.0.1:62840 - "POST /api/planning/start HTTP/1.1" 200 OK
+2026-02-18 02:53:07,133 - backend.api.planning - INFO - [Planning] [20260218_025307] ===== 后台执行开始 =====
+2026-02-18 02:53:07,134 - backend.api.planning - INFO - [Planning] [20260218_025307] Graph 类型: CompiledStateGraph
+2026-02-18 02:53:07,134 - backend.api.planning - INFO - [Planning] [20260218_025307] Checkpointer: <langgraph.checkpoint.sqlite.aio.AsyncSqliteSaver object at 0x000001F7AE39D940>
+2026-02-18 02:53:07,135 - backend.api.planning - INFO - [Planning] [20260218_025307] 已发送的layer事件: set()
+2026-02-18 02:53:07,135 - backend.api.planning - INFO - [Planning] [20260218_025307] 已发送的pause事件: set()
+2026-02-18 02:53:07,135 - backend.api.planning - INFO - [Planning] [20260218_025307] Token 回调工厂已放入 config
+2026-02-18 02:53:07,136 - backend.api.planning - INFO - [Planning] [20260218_025307] 已清理运行时对象，传递给 LangGraph 的状态键: ['project_name', 'village_data', 'task_description', 'constraints', 'session_id', 'current_layer', 'previous_layer', 'layer_1_completed', 'layer_2_completed', 'layer_3_completed', 'need_human_review', 'human_feedback', 'need_revision', 'analysis_report', 'analysis_dimension_reports', 'planning_concept', 'concept_dimension_reports', 'detailed_plan', 'detailed_dimension_reports', 'final_output', 'output_path', 'checkpoint_enabled', 'last_checkpoint_id', 'step_mode', 'step_level', 'pause_after_step', 'quit_requested', 'trigger_rollback', 'rollback_target', 'required_dimensions', 'enable_adapters', 'adapter_config', 'messages', 'blackboard']
+2026-02-18 02:53:07,136 - backend.api.planning - INFO - [Planning] [20260218_025307] 开始流式执行 graph.astream()
+INFO:     127.0.0.1:62840 - "OPTIONS /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:07,140 - src.nodes.base_node - INFO - [暂停管理] 开始执行
+2026-02-18 02:53:07,141 - src.nodes.tool_nodes - INFO - [暂停管理] Step模式已启用，设置pause_after_step=True
+2026-02-18 02:53:07,144 - backend.api.planning - INFO - [Planning API] [20260218_025307] ===== SSE 连接建立 =====
+2026-02-18 02:53:07,142 - src.nodes.base_node - INFO - [暂停管理] 执行完成
+INFO:     127.0.0.1:62840 - "GET /api/planning/stream/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:07,153 - src.orchestration.main_graph - INFO - [主图-路由] 从pause节点路由到Layer 1
+2026-02-18 02:53:07,174 - backend.api.planning - INFO - [Planning] [20260218_025307] 检测到暂停状态
+2026-02-18 02:53:07,174 - backend.api.planning - INFO - [Planning] [20260218_025307]   - pause_after_step: True
+2026-02-18 02:53:07,175 - backend.api.planning - INFO - [Planning] [20260218_025307]   - previous_layer: 0
+2026-02-18 02:53:07,175 - backend.api.planning - INFO - [Planning] [20260218_025307] 状态已更新为 paused
+2026-02-18 02:53:07,178 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:07,184 - backend.api.planning - INFO - [Planning] SSE client disconnected: 20260218_025307
+2026-02-18 02:53:07,197 - backend.database.operations_async - INFO - [Async DB] Updated planning session: 20260218_025307
+2026-02-18 02:53:07,197 - backend.api.planning - INFO - [Planning] [20260218_025307] 状态已持久化到数据库
+2026-02-18 02:53:07,201 - backend.api.planning - INFO - [Planning] [20260218_025307]   - 已发送pause事件: {'pause_layer_0'}
+2026-02-18 02:53:09,312 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:12,301 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:15,309 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:18,310 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:21,303 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:24,309 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:27,296 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:30,298 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:33,306 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:36,306 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:39,298 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:42,308 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:45,312 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:48,316 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:51,300 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:54,308 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:53:57,306 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:00,306 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:03,308 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:06,313 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:09,313 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:12,314 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:15,311 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:18,305 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:21,302 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:24,309 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:27,306 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:30,304 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:33,296 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:36,302 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:39,316 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:42,300 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:45,304 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:48,318 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:51,312 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:54,312 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:54:57,339 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:00,310 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:03,302 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:06,313 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:09,310 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:12,312 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:15,309 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:18,297 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:21,305 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:24,313 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:27,304 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:30,302 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:33,305 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:36,307 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:39,296 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:42,304 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:45,314 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:48,314 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:51,308 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:54,302 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:55:57,309 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:00,297 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:03,311 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:06,299 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:09,309 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:12,306 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:15,313 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:18,305 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:21,313 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:24,303 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:27,308 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:30,311 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:33,300 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:36,306 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:39,305 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:42,311 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:45,299 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:48,311 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:51,307 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:54,315 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:56:57,307 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:00,303 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:03,306 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:06,306 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:09,310 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:12,307 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:15,300 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:18,308 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:21,303 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:24,298 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:27,312 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:30,313 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:33,314 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:36,300 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:39,309 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:42,305 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:45,310 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:48,297 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:51,304 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:54,298 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:57:57,307 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:58:00,307 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:58:03,307 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:58:06,306 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK
+2026-02-18 02:58:09,301 - backend.api.planning - INFO - [Status] [20260218_025307] Status query result:
+INFO:     127.0.0.1:58129 - "GET /api/planning/status/20260218_025307 HTTP/1.1" 200 OK

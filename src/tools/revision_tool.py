@@ -142,9 +142,9 @@ class RevisionTool:
         try:
             logger.info(f"[RevisionTool] 开始修复维度: {dimension} (第{revision_count + 1}次)")
 
-            # 使用planner进行修复
-            from ..planners.detailed_planners import DetailedPlannerFactory
-            planner = DetailedPlannerFactory.create_planner(dimension)
+            # 使用 GenericPlannerFactory 进行修复（统一架构）
+            from ..planners.generic_planner import GenericPlannerFactory
+            planner = GenericPlannerFactory.create_planner(dimension)
 
             revised_result = planner.execute_with_feedback(
                 state=state,

@@ -471,7 +471,7 @@ ANALYSIS_DIMENSIONS = {
 请开始你的建筑分析："""
     },
 
-    "historical_cultural": {
+    "historical_culture": {
         "name": "历史文化分析",
         "description": "分析村庄的历史文化遗产、民俗风情、非物质文化等",
         "prompt": """你是乡村规划专家中的**历史文化分析专家**。
@@ -744,6 +744,28 @@ def list_dimensions():
 
 
 # ==========================================
+# 专业数据获取函数（占位符）
+# ==========================================
+
+def get_specialized_data(dimension_key: str, state: dict) -> dict:
+    """
+    获取专业数据（占位函数）
+    
+    用于 GenericPlanner 的 Hook 接口，可在子类中重写以注入专业脚本生成的数据。
+    
+    Args:
+        dimension_key: 维度键名
+        state: 当前状态字典
+        
+    Returns:
+        专业数据字典，可包含：
+        - professional_data_section: 专业数据段落
+        - 其他自定义字段
+    """
+    return {}
+
+
+# ==========================================
 # 导出
 # ==========================================
 
@@ -752,4 +774,5 @@ __all__ = [
     "ANALYSIS_SUMMARY_PROMPT",
     "get_dimension_prompt",
     "list_dimensions",
+    "get_specialized_data",
 ]

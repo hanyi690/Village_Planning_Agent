@@ -6,14 +6,14 @@
 """
 
 from typing import Dict, List, Any, Optional
-from ..core.dimension_mapping import (
+from ..core.dimension_config import (
     ANALYSIS_TO_CONCEPT_MAPPING,
     CONCEPT_TO_DETAILED_MAPPING,
     ANALYSIS_DIMENSION_NAMES,
     CONCEPT_DIMENSION_NAMES,
     DETAILED_DIMENSION_NAMES,
     FULL_DEPENDENCY_CHAIN,
-    get_full_dependency_chain
+    get_full_dependency_chain_func
 )
 from ..utils.logger import get_logger
 
@@ -36,7 +36,7 @@ def filter_analysis_report_for_concept(
     Returns:
         筛选后的分析报告
     """
-    mapping = ANALYSIS_TO_CONCEPT_MAPPING.get(concept_dimension)
+    mapping = ANALYSIS_TO_CONCEPT_MAPPING().get(concept_dimension)
 
     if not mapping:
         # 未找到映射，返回完整报告
@@ -60,7 +60,7 @@ def filter_analysis_report_for_concept(
     for dimension_key in required_analyses:
         if dimension_key in full_analysis_reports:
             report_text = full_analysis_reports[dimension_key]
-            dimension_name = ANALYSIS_DIMENSION_NAMES.get(dimension_key, dimension_key)
+            dimension_name = ANALYSIS_DIMENSION_NAMES().get(dimension_key, dimension_key)
             relevant_reports.append(f"### {dimension_name}\n\n{report_text}\n")
         else:
             logger.warning(f"[状态筛选] 缺少维度 {dimension_key} 的报告")
@@ -99,7 +99,7 @@ def filter_state_for_detailed_dimension(
     Returns:
         包含 filtered_analysis 和 filtered_concept 的字典
     """
-    mapping = CONCEPT_TO_DETAILED_MAPPING.get(detailed_dimension)
+    mapping = CONCEPT_TO_DETAILED_MAPPING().get(detailed_dimension)
 
     if not mapping:
         # 未找到映射，返回完整报告
@@ -119,7 +119,7 @@ def filter_state_for_detailed_dimension(
         for dimension_key in required_analyses:
             if dimension_key in full_analysis_reports:
                 report_text = full_analysis_reports[dimension_key]
-                dimension_name = ANALYSIS_DIMENSION_NAMES.get(dimension_key, dimension_key)
+                dimension_name = ANALYSIS_DIMENSION_NAMES().get(dimension_key, dimension_key)
                 relevant_reports.append(f"### {dimension_name}\n\n{report_text}\n")
 
         if relevant_reports:
@@ -252,7 +252,7 @@ def filter_state_for_detailed_dimension_v2(
         }
     """
     # 获取完整依赖链
-    dependency_chain = get_full_dependency_chain(detailed_dimension)
+    dependency_chain = get_full_dependency_chain_func(detailed_dimension)
 
     if not dependency_chain:
         logger.warning(f"[状态筛选v2] 未找到 {detailed_dimension} 的依赖链，返回完整报告")

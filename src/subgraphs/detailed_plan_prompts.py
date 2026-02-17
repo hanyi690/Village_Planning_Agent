@@ -1426,6 +1426,26 @@ def _generate_professional_data_section(dimension_key: str, professional_data: d
 
 
 # ==========================================
+# 专业数据获取函数（占位符）
+# ==========================================
+
+def get_specialized_data(dimension_key: str, state: dict) -> dict:
+    """
+    获取专业数据（占位函数）
+    
+    用于 GenericPlanner 的 Hook 接口，可在子类中重写以注入专业脚本生成的数据。
+    
+    Args:
+        dimension_key: 维度键名
+        state: 当前状态字典
+        
+    Returns:
+        专业数据字典
+    """
+    return {}
+
+
+# ==========================================
 # 导出
 # ==========================================
 
@@ -1443,4 +1463,5 @@ __all__ = [
     "DETAILED_PLAN_SUMMARY_PROMPT",
     "list_detailed_dimensions",
     "get_dimension_prompt",
+    "get_specialized_data",
 ]

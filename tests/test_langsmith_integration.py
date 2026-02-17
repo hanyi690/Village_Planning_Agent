@@ -253,29 +253,29 @@ class TestConvenienceFunctions:
 class TestPlannerIntegration:
     """Tests for planner LangSmith integration"""
 
-    def test_analysis_planner_imports_work(self):
-        """Test that analysis planners can be imported"""
+    def test_generic_planner_imports_work(self):
+        """Test that generic planner can be imported"""
         try:
-            from src.planners.analysis_planners import AnalysisPlannerFactory
-            assert AnalysisPlannerFactory is not None
+            from src.planners.generic_planner import GenericPlannerFactory
+            assert GenericPlannerFactory is not None
         except ImportError as e:
-            pytest.skip(f"Could not import analysis planners: {e}")
+            pytest.skip(f"Could not import generic planner: {e}")
 
-    def test_concept_planner_imports_work(self):
-        """Test that concept planners can be imported"""
+    def test_backward_compatible_imports_work(self):
+        """Test that backward compatible factory names work"""
         try:
-            from src.planners.concept_planners import ConceptPlannerFactory
-            assert ConceptPlannerFactory is not None
+            from src.planners import (
+                AnalysisPlannerFactory,
+                ConceptPlannerFactory,
+                DetailedPlannerFactory,
+                GenericPlannerFactory
+            )
+            # All should point to GenericPlannerFactory
+            assert AnalysisPlannerFactory is GenericPlannerFactory
+            assert ConceptPlannerFactory is GenericPlannerFactory
+            assert DetailedPlannerFactory is GenericPlannerFactory
         except ImportError as e:
-            pytest.skip(f"Could not import concept planners: {e}")
-
-    def test_detailed_planner_imports_work(self):
-        """Test that detailed planners can be imported"""
-        try:
-            from src.planners.detailed_planners import DetailedPlannerFactory
-            assert DetailedPlannerFactory is not None
-        except ImportError as e:
-            pytest.skip(f"Could not import detailed planners: {e}")
+            pytest.skip(f"Could not import planners: {e}")
 
 
 class TestErrorHandling:

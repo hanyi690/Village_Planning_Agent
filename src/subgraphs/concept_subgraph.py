@@ -88,7 +88,7 @@ def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
     """
     执行单个规划思路维度的分析
 
-    使用新的 ConceptPlanner 架构，充分利用现有的基础设施。
+    使用 GenericPlanner 统一架构，充分利用现有的基础设施。
 
     Args:
         state: 包含维度信息和输入数据的状态
@@ -102,21 +102,24 @@ def analyze_concept_dimension(state: ConceptDimensionState) -> Dict[str, Any]:
     logger.info(f"[子图-规划] 开始执行 {dimension_name} ({dimension_key})")
 
     try:
-        # 【使用新架构】使用 ConceptPlannerFactory 创建规划器
-        from ..planners.concept_planners import ConceptPlannerFactory
-        planner = ConceptPlannerFactory.create_planner(dimension_key)
+        # 【使用统一架构】使用 GenericPlannerFactory 创建规划器
+        from ..planners.generic_planner import GenericPlannerFactory
+        planner = GenericPlannerFactory.create_planner(dimension_key)
 
-        # 【使用新架构】调用规划器的 execute 方法
-        # 注意：planner.execute 需要完整的状态字典，包含 analysis_report, task_description, constraints
+        # 【使用统一架构】调用规划器的 execute 方法
+        # 注意：GenericPlanner 需要完整的状态字典，包含 analysis_report, task_description, constraints
         planner_state = {
             "analysis_report": state["analysis_report"],
             "dimension_reports": state.get("dimension_reports", {}),  # 可选，用于筛选
+            "project_name": state.get("project_name", "村庄"),
             "task_description": state["task_description"],
             "constraints": state["constraints"]
         }
         planner_result = planner.execute(planner_state)
 
-        concept_text = planner_result["concept_result"]
+        # GenericPlanner 返回的结果键名由 get_result_key() 决定
+        result_key = planner.get_result_key()
+        concept_text = planner_result.get(result_key, planner_result.get("concept_result", ""))
         logger.info(f"[子图-规划] 完成 {dimension_name}，生成 {len(concept_text)} 字符")
 
         # 在 LangGraph 1.0.x 中，使用 operator.add 时需要返回列表

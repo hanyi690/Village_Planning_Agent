@@ -31,7 +31,6 @@ from ..subgraphs.detailed_plan_subgraph import call_detailed_plan_subgraph
 
 # 使用新工具
 from ..tools.checkpoint_tool import CheckpointTool
-from ..tools.interactive_tool import InteractiveTool
 from ..tools.revision_tool import RevisionTool
 
 # 使用新的节点类
@@ -39,10 +38,9 @@ from ..nodes import (
     Layer1AnalysisNode,
     Layer2ConceptNode,
     Layer3DetailNode,
-    ToolBridgeNode,
-    PauseManagerNode
+    ToolBridgeNode
 )
-from ..nodes.tool_nodes import _run_human_review, _run_pause_interaction, _run_revision
+from ..nodes.tool_nodes import _run_revision
 
 logger = get_logger(__name__)
 
@@ -91,6 +89,7 @@ class VillagePlanningState(TypedDict):
     step_mode: bool                # 是否启用逐步执行模式
     step_level: str                # 步骤级别（layer/dimension/skill）
     pause_after_step: bool         # 是否在当前步骤后暂停
+    previous_layer: int            # 刚完成的层级编号（用于暂停逻辑）
 
     # 路由控制标志
     quit_requested: bool           # 用户请求退出
@@ -503,7 +502,12 @@ def tool_bridge_node(state: VillagePlanningState) -> Dict[str, Any]:
 
 
 def _run_human_review(state: VillagePlanningState) -> Dict[str, Any]:
-    """执行人工审查（使用InteractiveTool）"""
+    """
+    执行人工审查（Web版本）
+    
+    注意：在Web环境中，人工审查由前端ReviewDrawer组件处理。
+    此函数仅设置审查请求状态，等待前端响应。
+    """
     logger.info(f"[主图-人工审查] 开始人工审查")
 
     # 获取当前需要审查的内容
@@ -522,120 +526,64 @@ def _run_human_review(state: VillagePlanningState) -> Dict[str, Any]:
     checkpoint_manager = state.get("checkpoint_manager")
     available_checkpoints = []
     if checkpoint_manager:
-        # 使用新工具
         if isinstance(checkpoint_manager, CheckpointTool):
             list_result = checkpoint_manager.list()
             if list_result["success"]:
                 available_checkpoints = list_result["checkpoints"]
         else:
-            # 兼容旧版本
             available_checkpoints = checkpoint_manager.list_checkpoints()
 
-    # 使用InteractiveTool显示审查界面
-    tool = InteractiveTool()
-    result = tool.review_content(
+    # 创建审查请求（非阻塞，等待前端响应）
+    from ..tools.web_review_tool import WebReviewTool
+    tool = WebReviewTool()
+    session_id = state.get("session_id", "default")
+    
+    result = tool.request_review(
         content=content,
         title=title,
-        allow_rollback=True,
+        session_id=session_id,
+        current_layer=current_layer,
         available_checkpoints=available_checkpoints
     )
 
-    # 处理审查结果
-    action = result.get("action", "")
-
-    if action == "approve":
-        logger.info("[主图-人工审查] 审核通过")
+    if result["success"]:
+        logger.info(f"[主图-人工审查] 已创建审查请求: {result['review_id']}")
         return {
-            "messages": [AIMessage(content="人工审查通过")],
-            "need_human_review": False,
-            "human_feedback": ""
-        }
-    elif action == "reject":
-        logger.info(f"[主图-人工审查] 审核驳回，反馈: {result.get('feedback', '')}")
-        return {
-            "messages": [AIMessage(content=f"人工审查驳回，反馈: {result.get('feedback', '')}")],
-            "need_human_review": False,
-            "human_feedback": result.get("feedback", ""),
-            "need_revision": True
-        }
-    elif action == "rollback":
-        logger.info(f"[主图-人工审查] 触发回退到: {result.get('checkpoint_id', '')}")
-        return {
-            "messages": [AIMessage(content=f"回退到checkpoint: {result.get('checkpoint_id', '')}")],
-            "trigger_rollback": True,
-            "rollback_target": result.get("checkpoint_id", "")
-        }
-    elif action == "quit":
-        logger.info("[主图-人工审查] 用户退出")
-        return {
-            "messages": [AIMessage(content="用户退出程序")],
-            "quit_requested": True
+            "messages": [AIMessage(content=f"已创建审查请求: {result['review_id']}")],
+            "review_id": result["review_id"],
+            "waiting_for_review": True
         }
     else:
-        # 默认通过
+        logger.warning("[主图-人工审查] 创建审查请求失败，默认通过")
         return {
-            "messages": [AIMessage(content="人工审查完成（默认通过）")],
+            "messages": [AIMessage(content="审查请求创建失败，默认通过")],
             "need_human_review": False
         }
 
 
 def _run_pause_interaction(state: VillagePlanningState) -> Dict[str, Any]:
-    """执行暂停交互（使用InteractiveTool）"""
+    """
+    执行暂停交互（Web版本）
+    
+    注意：在Web环境中，暂停交互由前端处理。
+    此函数仅设置暂停状态标志，等待前端指令。
+    """
     logger.info(f"[主图-暂停] 进入暂停节点")
 
-    tool = InteractiveTool()
+    # Preserve layer completion state
+    preserved_state = {
+        "layer_1_completed": state.get("layer_1_completed", False),
+        "layer_2_completed": state.get("layer_2_completed", False),
+        "layer_3_completed": state.get("layer_3_completed", False),
+        "current_layer": state.get("current_layer", 1),
+    }
 
-    # 显示进度
-    tool.show_progress(state)
-
-    # 交互循环
-    while True:
-        # 获取用户命令
-        menu_result = tool.show_menu()
-        if not menu_result["success"]:
-            continue
-
-        command = menu_result["command"]
-        exec_result = tool.execute_command(command, state)
-
-        action = exec_result.get("action", "")
-        modified_state = exec_result.get("modified_state", {})
-
-        # Preserve layer completion state
-        preserved_state = {
-            "layer_1_completed": state.get("layer_1_completed", False),
-            "layer_2_completed": state.get("layer_2_completed", False),
-            "layer_3_completed": state.get("layer_3_completed", False),
-            "current_layer": state.get("current_layer", 1),
-        }
-
-        if action == "continue":
-            logger.info("[主图-暂停] 继续执行")
-            return {
-                "pause_after_step": False,
-                "messages": [AIMessage(content="继续执行")],
-                **preserved_state,
-                **modified_state
-            }
-        elif action == "rollback":
-            checkpoint_id = exec_result.get("checkpoint_id", "")
-            logger.info(f"[主图-暂停] 回退到: {checkpoint_id}")
-            return {
-                "trigger_rollback": True,
-                "rollback_target": checkpoint_id,
-                "messages": [AIMessage(content=f"回退到checkpoint: {checkpoint_id}")],
-                **preserved_state,
-                **modified_state
-            }
-        elif action == "quit":
-            logger.info("[主图-暂停] 用户退出")
-            return {
-                "quit_requested": True,
-                "messages": [AIMessage(content="用户退出程序")],
-                **preserved_state,
-                **modified_state
-            }
-        # 其他action保持暂停状态
+    # 在Web环境中，暂停交互由前端处理
+    return {
+        "pause_after_step": True,
+        "messages": [AIMessage(content="已暂停，等待前端指令")],
+        **preserved_state
+    }
 
 
 def _run_revision(state: VillagePlanningState) -> Dict[str, Any]:
@@ -739,6 +687,23 @@ def pause_manager_node(state: VillagePlanningState) -> Dict[str, Any]:
 
 
 # ==========================================
+# 暂停初始化函数（替代 PauseManagerNode）
+# ==========================================
+
+def init_pause_state(state: VillagePlanningState) -> Dict[str, Any]:
+    """
+    初始化暂停状态
+    
+    只在 previous_layer > 0 且 step_mode 启用时设置暂停。
+    流程开始时（previous_layer=0）不暂停。
+    """
+    if state.get("step_mode", False) and state.get("previous_layer", 0) > 0:
+        logger.info(f"[主图-暂停初始化] Step模式 + Layer {state.get('previous_layer')} 完成，设置pause_after_step=True")
+        return {"pause_after_step": True}
+    return {}
+
+
+# ==========================================
 # 路由决策
 # ==========================================
 
@@ -769,8 +734,8 @@ def route_after_layer1(state: VillagePlanningState) -> Literal["tool_bridge", "l
         logger.warning("[主图-路由] 现状分析失败，流程终止")
         return "end"
 
-    # 检查是否需要暂停或人工审核
-    if state.get("step_mode", False) and state.get("pause_after_step", False):
+    # 检查是否需要暂停（step_mode + previous_layer > 0）
+    if state.get("step_mode", False) and state.get("previous_layer", 0) > 0:
         logger.info("[主图-路由] 进入工具桥接（暂停）")
         return "tool_bridge"
 
@@ -788,8 +753,8 @@ def route_after_layer2(state: VillagePlanningState) -> Literal["tool_bridge", "l
         logger.warning("[主图-路由] 规划思路生成失败，流程终止")
         return "end"
 
-    # 检查是否需要暂停或人工审核
-    if state.get("step_mode", False) and state.get("pause_after_step", False):
+    # 检查是否需要暂停（step_mode + previous_layer > 0）
+    if state.get("step_mode", False) and state.get("previous_layer", 0) > 0:
         logger.info("[主图-路由] 进入工具桥接（暂停）")
         return "tool_bridge"
 
@@ -811,12 +776,12 @@ def route_after_layer3(state: VillagePlanningState) -> Literal["final", "end"]:
         return "end"
 
 
-def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "layer2_concept", "layer3_detail", "end"]:
+def route_after_tool_bridge(state: VillagePlanningState) -> Literal["init_pause", "layer2_concept", "layer3_detail", "end"]:
     """
     工具桥接后的路由决策
 
     决定从tool_bridge出来后：
-    - 如果step_mode开启：路由到pause节点（设置暂停状态）
+    - 如果step_mode开启：路由到init_pause节点（设置暂停状态）
     - 否则：直接路由到对应的layer执行节点
     """
     current_layer = state.get("current_layer", 1)
@@ -836,13 +801,13 @@ def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "la
         # 修复后继续
         if current_layer == 1:
             if state.get("step_mode", False):
-                logger.info("[主图-路由] Step模式：tool_bridge → pause → layer2")
-                return "pause"
+                logger.info("[主图-路由] Step模式：tool_bridge → init_pause → layer2")
+                return "init_pause"
             return "layer2_concept"
         elif current_layer == 2:
             if state.get("step_mode", False):
-                logger.info("[主图-路由] Step模式：tool_bridge → pause → layer3")
-                return "pause"
+                logger.info("[主图-路由] Step模式：tool_bridge → init_pause → layer3")
+                return "init_pause"
             return "layer3_detail"
         else:
             return "end"
@@ -851,22 +816,22 @@ def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "la
     if current_layer == 1:
         # Layer 1: 从tool_bridge回到layer 1（通常是回退后）或进入layer 2
         if state.get("step_mode", False):
-            logger.info("[主图-路由] Step模式：tool_bridge → pause → layer2")
-            return "pause"
+            logger.info("[主图-路由] Step模式：tool_bridge → init_pause → layer2")
+            return "init_pause"
         logger.info("[主图-路由] 直接进入Layer 2")
         return "layer2_concept"
     elif current_layer == 2:
         # Layer 2: 从tool_bridge继续到layer 2
         if state.get("step_mode", False):
-            logger.info("[主图-路由] Step模式：tool_bridge → pause → layer2")
-            return "pause"
+            logger.info("[主图-路由] Step模式：tool_bridge → init_pause → layer2")
+            return "init_pause"
         logger.info("[主图-路由] 直接进入Layer 2")
         return "layer2_concept"
     elif current_layer == 3:
         # Layer 3: 从tool_bridge继续到layer 3
         if state.get("step_mode", False):
-            logger.info("[主图-路由] Step模式：tool_bridge → pause → layer3")
-            return "pause"
+            logger.info("[主图-路由] Step模式：tool_bridge → init_pause → layer3")
+            return "init_pause"
         logger.info("[主图-路由] 直接进入Layer 3")
         return "layer3_detail"
     else:
@@ -878,11 +843,15 @@ def route_after_tool_bridge(state: VillagePlanningState) -> Literal["pause", "la
 # 构建主图
 # ==========================================
 
-def create_village_planning_graph() -> StateGraph:
+def create_village_planning_graph(checkpointer=None) -> StateGraph:
     """
     创建村庄规划主图
 
     使用新的节点类实例替代旧的函数节点。
+
+    Args:
+        checkpointer: LangGraph checkpointer 实例（如 AsyncSqliteSaver），
+                     用于持久化图执行状态，支持暂停/恢复功能
 
     Returns:
         编译后的 StateGraph 实例
@@ -890,7 +859,6 @@ def create_village_planning_graph() -> StateGraph:
     logger.info("[主图构建] 开始构建村庄规划主图")
 
     # 创建节点实例
-    pause_node = PauseManagerNode()
     layer1_node = Layer1AnalysisNode()
     layer2_node = Layer2ConceptNode()
     layer3_node = Layer3DetailNode()
@@ -898,8 +866,8 @@ def create_village_planning_graph() -> StateGraph:
 
     builder = StateGraph(VillagePlanningState)
 
-    # 添加节点（使用节点实例的__call__方法）
-    builder.add_node("pause", pause_node)
+    # 添加节点
+    builder.add_node("init_pause", init_pause_state)  # 简化的暂停初始化
     builder.add_node("layer1_analysis", layer1_node)
     builder.add_node("layer2_concept", layer2_node)
     builder.add_node("layer3_detail", layer3_node)
@@ -907,12 +875,12 @@ def create_village_planning_graph() -> StateGraph:
     builder.add_node("tool_bridge", tool_bridge_node)
 
     # 构建执行流程
-    # START -> pause (暂停管理节点设置初始暂停状态)
-    builder.add_edge(START, "pause")
+    # START -> init_pause (初始化暂停状态)
+    builder.add_edge(START, "init_pause")
 
     # pause -> 根据current_layer路由到对应的layer
     builder.add_conditional_edges(
-        "pause",
+        "init_pause",
         route_after_pause,
         {
             "layer1_analysis": "layer1_analysis",
@@ -938,7 +906,7 @@ def create_village_planning_graph() -> StateGraph:
         "tool_bridge",
         route_after_tool_bridge,
         {
-            "pause": "pause",
+            "init_pause": "init_pause",
             "layer2_concept": "layer2_concept",
             "layer3_detail": "layer3_detail",
             "end": END
@@ -969,8 +937,8 @@ def create_village_planning_graph() -> StateGraph:
     # 最终节点 -> END
     builder.add_edge("generate_final", END)
 
-    # 编译主图
-    main_graph = builder.compile()
+    # 编译主图（支持 checkpointer 持久化）
+    main_graph = builder.compile(checkpointer=checkpointer)
 
     logger.info("[主图构建] 村庄规划主图构建完成")
 

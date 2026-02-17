@@ -1,0 +1,105 @@
+ ⚠ ./src/types/index.ts
+The requested module './message-guards' contains conflicting star exports for the names 'isActionMessage', 'isErrorMessage', 'isProgressMessage', 'isResultMessage', 'isUserMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+
+./src/types/index.ts
+The requested module './message-helpers' contains conflicting star exports for the name 'convertSSEToMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+
+./src/types/index.ts
+The requested module './message-guards' contains conflicting star exports for the names 'isActionMessage', 'isErrorMessage', 'isProgressMessage', 'isResultMessage', 'isUserMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+
+./src/types/index.ts
+The requested module './message-helpers' contains conflicting star exports for the name 'convertSSEToMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+ ⚠ ./src/types/index.ts
+The requested module './message-guards' contains conflicting star exports for the names 'isActionMessage', 'isErrorMessage', 'isProgressMessage', 'isResultMessage', 'isUserMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+
+./src/types/index.ts
+The requested module './message-helpers' contains conflicting star exports for the name 'convertSSEToMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+
+./src/types/index.ts
+The requested module './message-guards' contains conflicting star exports for the names 'isActionMessage', 'isErrorMessage', 'isProgressMessage', 'isResultMessage', 'isUserMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+
+./src/types/index.ts
+The requested module './message-helpers' contains conflicting star exports for the name 'convertSSEToMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+ ⚠ ./src/types/index.ts
+The requested module './message-guards' contains conflicting star exports for the names 'isActionMessage', 'isErrorMessage', 'isProgressMessage', 'isResultMessage', 'isUserMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+
+./src/types/index.ts
+The requested module './message-helpers' contains conflicting star exports for the name 'convertSSEToMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+
+./src/types/index.ts
+The requested module './message-guards' contains conflicting star exports for the names 'isActionMessage', 'isErrorMessage', 'isProgressMessage', 'isResultMessage', 'isUserMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx
+
+./src/types/index.ts
+The requested module './message-helpers' contains conflicting star exports for the name 'convertSSEToMessage' with the previous requested module './message'
+
+Import trace for requested module:
+./src/types/index.ts
+./src/components/chat/ChatPanel.tsx
+./src/components/layout/UnifiedContentSwitcher.tsx
+./src/app/page.tsx

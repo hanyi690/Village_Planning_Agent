@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 # Add parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.api import sessions, files
+from backend.api import files
 from backend.api.data import router as data_router
 from backend.api.planning import router as planning_router
 from backend.api.validate_config import validate_config
@@ -136,7 +136,6 @@ app.add_middleware(
 # Include routers
 app.include_router(planning_router, tags=["Planning - Planning Execution"])
 app.include_router(data_router, tags=["Data - Data Access"])
-app.include_router(sessions.router, prefix="/api/sessions", tags=["Sessions - UI Session Management"])
 app.include_router(files.router, prefix="/api/files", tags=["Files - File Upload"])
 
 # ============================================

@@ -3,9 +3,9 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6
 
-# File parsing
-python-docx>=0.8.11
-pypdf>=3.0.0
+# File parsing - MarkItDown (Microsoft)
+# 支持 docx, pdf, xlsx, pptx 等多种格式转换为 Markdown
+markitdown[docx,pdf,xlsx,pptx]
 
 # Encoding detection
 chardet>=5.0.0

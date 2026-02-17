@@ -328,7 +328,12 @@ class GenericPlanner(UnifiedPlannerBase):
         params = {}
 
         if self.layer == 1:
-            params["raw_data"] = state.get("raw_data", "")
+            # Layer 1: 限制数据长度，避免超出 token 上限
+            raw_data = state.get("raw_data", "")
+            MAX_DATA_LENGTH = 50000  # 约 25k tokens，保留空间给 prompt 和输出
+            if len(raw_data) > MAX_DATA_LENGTH:
+                raw_data = raw_data[:MAX_DATA_LENGTH] + "\n\n...[数据已截断，原始数据过长]"
+            params["raw_data"] = raw_data
             params["professional_data_section"] = ""
         elif self.layer == 2:
             # 使用状态筛选函数

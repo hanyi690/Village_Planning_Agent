@@ -80,7 +80,7 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
     """
     执行单个维度的分析
 
-    使用新的 AnalysisPlanner 架构，充分利用现有的基础设施。
+    使用 GenericPlanner 统一架构，充分利用现有的基础设施。
 
     Args:
         state: 包含维度信息和原始数据的状态
@@ -94,16 +94,18 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
     logger.info(f"[子图-分析] 开始执行 {dimension_name} ({dimension_key})")
 
     try:
-        # 【使用新架构】使用 AnalysisPlannerFactory 创建规划器
-        from ..planners.analysis_planners import AnalysisPlannerFactory
-        planner = AnalysisPlannerFactory.create_planner(dimension_key)
+        # 【使用统一架构】使用 GenericPlannerFactory 创建规划器
+        from ..planners.generic_planner import GenericPlannerFactory
+        planner = GenericPlannerFactory.create_planner(dimension_key)
 
-        # 【使用新架构】调用规划器的 execute 方法
-        # 注意：planner.execute 需要完整的状态字典，包含 raw_data
-        planner_state = {"raw_data": state["raw_data"]}
+        # 【使用统一架构】调用规划器的 execute 方法
+        # 注意：GenericPlanner 需要完整的状态字典，包含 raw_data
+        planner_state = {"raw_data": state["raw_data"], "project_name": state.get("project_name", "村庄")}
         planner_result = planner.execute(planner_state)
 
-        analysis_text = planner_result["analysis_result"]
+        # GenericPlanner 返回的结果键名由 get_result_key() 决定
+        result_key = planner.get_result_key()
+        analysis_text = planner_result.get(result_key, planner_result.get("analysis_result", ""))
         logger.info(f"[子图-分析] 完成 {dimension_name}，生成 {len(analysis_text)} 字符")
 
         # 在 LangGraph 1.0.x 中，使用 operator.add 时需要返回列表
@@ -303,7 +305,7 @@ def initialize_analysis(state: AnalysisState) -> Dict[str, Any]:
         "infrastructure",     # 基础设施分析
         "ecological_green",   # 生态绿地分析
         "architecture",       # 建筑分析
-        "historical_cultural" # 历史文化分析
+        "historical_culture"  # 历史文化分析
     ]
 
     logger.info(f"[子图-初始化] 设置 {len(all_dimensions)} 个分析维度")
@@ -347,7 +349,8 @@ def create_analysis_subgraph() -> StateGraph:
     builder.add_node("initialize", initialize_node)
     builder.add_node("analyze_dimension", analyze_node)
     builder.add_node("reduce_analyses", reduce_node)
-    builder.add_node("generate_report", report_node)
+    # 注释掉综合报告生成节点，直接使用维度报告
+    # builder.add_node("generate_report", report_node)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
@@ -362,8 +365,10 @@ def create_analysis_subgraph() -> StateGraph:
     builder.add_conditional_edges("initialize", route_to_dimensions)
 
     builder.add_edge("analyze_dimension", "reduce_analyses")
-    builder.add_edge("reduce_analyses", "generate_report")
-    builder.add_edge("generate_report", END)
+    # 跳过综合报告生成，直接结束
+    builder.add_edge("reduce_analyses", END)
+    # builder.add_edge("reduce_analyses", "generate_report")
+    # builder.add_edge("generate_report", END)
 
     # 编译子图
     analysis_subgraph = builder.compile()
@@ -413,12 +418,20 @@ def call_analysis_subgraph(
         # 调用子图
         result = subgraph.invoke(initial_state)
 
-        logger.info(f"[子图调用] 子图执行成功，报告长度: {len(result.get('final_report', ''))}")
-        logger.info(f"[子图调用] 维度报告数量: {len(result.get('dimension_reports', {}))}")
+        # 使用维度报告作为主要输出（不再生成综合报告）
+        dimension_reports = result.get("dimension_reports", {})
+        
+        # 构建简化报告（维度报告拼接）
+        analysis_report = ""
+        for dim_key, dim_report in dimension_reports.items():
+            analysis_report += f"{dim_report}\n\n"
+        
+        logger.info(f"[子图调用] 子图执行成功，报告长度: {len(analysis_report)}")
+        logger.info(f"[子图调用] 维度报告数量: {len(dimension_reports)}")
 
         return {
-            "analysis_report": result.get("final_report", ""),
-            "dimension_reports": result.get("dimension_reports", {}),  # 新增：返回维度报告字典
+            "analysis_report": analysis_report.strip(),
+            "dimension_reports": dimension_reports,
             "success": True
         }
 

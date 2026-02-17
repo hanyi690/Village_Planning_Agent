@@ -482,6 +482,7 @@ _FULL_DEPENDENCY_CHAIN = None
 _WAVE_CONFIG = None
 _DEFAULT_ADAPTER_CONFIG = None
 _ANALYSIS_TO_CONCEPT_MAPPING = None
+_CONCEPT_TO_DETAILED_MAPPING = None
 
 def _ensure_configs_loaded():
     """确保配置已加载"""
@@ -544,6 +545,33 @@ def ANALYSIS_TO_CONCEPT_MAPPING():
     return _ANALYSIS_TO_CONCEPT_MAPPING
 
 
+def _build_concept_to_detailed_mapping() -> Dict[str, Any]:
+    """
+    构建规划思路到详细规划的映射
+
+    Returns:
+        详细规划维度 -> 所需信息的映射字典
+    """
+    chain = get_full_dependency_chain()
+    mapping = {}
+    for detailed_dim, dim_chain in chain.items():
+        mapping[detailed_dim] = {
+            "required_concepts": dim_chain.get("layer2_concepts", ["ALL"]),
+            "required_analyses": dim_chain.get("layer1_analyses", ["ALL"]),
+            "description": f"{DETAILED_DIMENSION_NAMES().get(detailed_dim, detailed_dim)}需要的信息"
+        }
+    return mapping
+
+
+def CONCEPT_TO_DETAILED_MAPPING():
+    """获取规划思路到详细规划的映射"""
+    global _CONCEPT_TO_DETAILED_MAPPING
+    if _CONCEPT_TO_DETAILED_MAPPING is None:
+        _ensure_configs_loaded()
+        _CONCEPT_TO_DETAILED_MAPPING = _build_concept_to_detailed_mapping()
+    return _CONCEPT_TO_DETAILED_MAPPING
+
+
 __all__ = [
     # 维度名称映射
     "ANALYSIS_DIMENSION_NAMES",
@@ -555,6 +583,7 @@ __all__ = [
     "DEFAULT_ADAPTER_CONFIG",
     # 旧映射
     "ANALYSIS_TO_CONCEPT_MAPPING",
+    "CONCEPT_TO_DETAILED_MAPPING",
     # 函数
     "get_full_dependency_chain",
     "get_execution_wave",

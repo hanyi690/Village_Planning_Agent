@@ -1,0 +1,14 @@
+
+> village-planning-frontend@1.0.0 dev
+> next dev
+
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3000
+  - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 2.1s
+ ○ Compiling / ...
+ GET / 200 in 2268ms
+ GET /_next/static/css/app/bootstrap.min.css.map 404 in 445ms
+ GET /.well-known/appspecific/com.chrome.devtools.json 404 in 562ms
