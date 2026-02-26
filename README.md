@@ -1,6 +1,6 @@
 # 村庄规划智能体 (Village Planning Agent)
 
-基于 LangGraph 的智能村庄规划系统，提供 Web 应用和 CLI 工具两种使用方式。
+基于 LangGraph 的智能村庄规划系统，三层递进式规划架构。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
@@ -10,12 +10,12 @@
 
 ## 核心特性
 
-- **三层规划架构**: 现状分析 → 规划思路 → 详细规划，逐层递进
-- **并行维度执行**: 每层多个维度并行处理（12+4+12），高效执行
-- **实时流式输出**: SSE 维度级流式推送，Token 实时显示
-- **状态持久化**: AsyncSqliteSaver 自动保存状态，支持断点恢复
-- **人工审查支持**: 步进模式下每层完成可暂停审查
-- **状态驱动 UI**: 后端状态为单一真实源，前端条件渲染
+- **三层递进规划**: 现状分析(L1) → 规划思路(L2) → 详细规划(L3)
+- **维度并行执行**: 12+4+10 维度，Map-Reduce 并行处理
+- **SSE 流式推送**: 维度级增量文本，实时显示
+- **状态持久化**: AsyncSqliteSaver 自动保存，支持断点恢复
+- **人工审查**: 步进模式支持层级暂停审查
+- **后端状态驱动**: 单一真实源，前端条件渲染
 
 ---
 
@@ -30,26 +30,33 @@
 ### 安装
 
 ```bash
-# 克隆项目
 git clone https://github.com/yourusername/village-planning-agent.git
 cd village-planning-agent
 
-# 创建 .env 文件
-cp .env.example .env
-# 编辑 .env 填入 API Key
-
-# 安装依赖
+# 后端
 pip install -r backend/requirements.txt
+
+# 前端
 cd frontend && npm install
+```
+
+### 配置
+
+```env
+# .env
+ZHIPUAI_API_KEY=your_key
+# 或
+OPENAI_API_KEY=your_key
+LLM_MODEL=deepseek-chat
 ```
 
 ### 启动
 
 ```bash
-# 启动后端
+# 后端 (端口 8000)
 python backend/main.py
 
-# 启动前端（新终端）
+# 前端 (端口 3000)
 cd frontend && npm run dev
 ```
 
@@ -60,91 +67,159 @@ cd frontend && npm run dev
 ## 架构概览
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                      前端 (Next.js 14)                        │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  UnifiedPlanningContext (状态管理)                      │  │
-│  │  ├── TaskController (REST 轮询 / 2秒)                   │  │
-│  │  └── SSE 连接 (维度流式文本)                            │  │
-│  └────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────┘
-                           │ REST + SSE
-┌──────────────────────────────────────────────────────────────┐
-│                     后端 (FastAPI)                            │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  planning.py (API 路由)                                 │  │
-│  │  ├── POST /api/planning/start                          │  │
-│  │  ├── GET /api/planning/status/{id}                     │  │
-│  │  ├── GET /api/planning/stream/{id}                     │  │
-│  │  └── POST /api/planning/review/{id}                    │  │
-│  └────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────┘
-                           │
-┌──────────────────────────────────────────────────────────────┐
-│                   核心引擎 (LangGraph)                        │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  main_graph.py (主图编排)                               │  │
-│  │  ├── Layer 1: 现状分析子图 (12 维度并行)                │  │
-│  │  ├── Layer 2: 规划思路子图 (4 维度并行)                 │  │
-│  │  └── Layer 3: 详细规划子图 (12 维度并行)                │  │
-│  └────────────────────────────────────────────────────────┘  │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  AsyncSqliteSaver (状态持久化)                          │  │
-│  │  └── checkpoints 表 (自动管理所有状态)                  │  │
-│  └────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Frontend (Next.js 14)                    │
+│                                                             │
+│  UnifiedPlanningContext ───── TaskController                │
+│       │                           │                         │
+│       │  syncBackendState()       │  REST轮询(2s) + SSE     │
+│       ▼                           ▼                         │
+│  条件渲染: ReviewPanel / LayerReport                        │
+└─────────────────────────────────────────────────────────────┘
+                            │
+                     REST + SSE
+                            │
+┌─────────────────────────────────────────────────────────────┐
+│                    Backend (FastAPI)                        │
+│                                                             │
+│  API Routes:                                                │
+│    POST /api/planning/start    启动规划                     │
+│    GET  /api/planning/status   状态查询 (核心)              │
+│    GET  /api/planning/stream   SSE流式                      │
+│    POST /api/planning/review   审查操作                     │
+│                                                             │
+│  ToolManager (Singleton)                                    │
+│  RateLimiter: 5s/3次请求, 10s冷却期                         │
+└─────────────────────────────────────────────────────────────┘
+                            │
+┌─────────────────────────────────────────────────────────────┐
+│                   Core Engine (LangGraph)                   │
+│                                                             │
+│  main_graph.py:                                             │
+│    START → Layer1 → Layer2 → Layer3 → END                  │
+│                                                             │
+│  Subgraphs:                                                 │
+│    ├── analysis_subgraph   (12维度并行)                     │
+│    ├── concept_subgraph    (4维度串行)                      │
+│    └── detailed_plan_subgraph (10维度)                      │
+└─────────────────────────────────────────────────────────────┘
+                            │
+┌─────────────────────────────────────────────────────────────┐
+│                   Storage Layer                             │
+│                                                             │
+│  SQLite (village_planning.db):                              │
+│    ├── planning_sessions  业务元数据                        │
+│    └── checkpoints  LangGraph状态快照 (AsyncSqliteSaver)    │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## 数据流
 
-### REST 状态同步 (每 2 秒)
+### 核心原则：后端状态为单一真实源
 
 ```
-前端 TaskController.pollStatus()
-  ↓
-GET /api/planning/status/{session_id}
-  ↓
-从 AsyncSqliteSaver 读取完整状态
-  ↓
-返回 SessionStatusResponse
-  ├── pause_after_step (是否暂停)
-  ├── layer_X_completed (层级完成)
-  ├── previous_layer (刚完成的层级)
-  └── pending_review_layer (待审查层级)
-  ↓
-syncBackendState() 更新 Context
-  ↓
+┌──────────────────────────────────────────────────────────┐
+│                    Backend State                          │
+│  (AsyncSqliteSaver + _sessions 内存)                      │
+│                                                          │
+│  status: 'running' | 'paused' | 'completed' | 'failed'  │
+│  pause_after_step: boolean                               │
+│  previous_layer: number (待审查层级)                      │
+│  layer_X_completed: boolean                              │
+│  execution_complete: boolean                             │
+└──────────────────────────────────────────────────────────┘
+                          │
+              GET /api/planning/status (每2秒)
+                          │
+                          ▼
+┌──────────────────────────────────────────────────────────┐
+│                    Frontend Context                       │
+│  TaskController.fetchStatus()                            │
+│       │                                                  │
+│       ▼                                                  │
+│  setState(taskState)                                     │
+│       │                                                  │
+│       ▼                                                  │
+│  syncBackendState() → 更新 UnifiedPlanningContext        │
+│       │                                                  │
+│       ▼                                                  │
+│  条件渲染: {isPaused && <ReviewPanel />}                 │
+└──────────────────────────────────────────────────────────┘
+```
+
+### REST 状态同步
+
+```
+TaskController (每2秒轮询)
+    │
+    ▼
+GET /api/planning/status/{id}
+    │
+    ▼ 返回完整状态
+{
+  status: "paused",
+  pause_after_step: true,
+  previous_layer: 1,         // 待审查层级
+  layer_1_completed: true,
+  layer_2_completed: false,
+  layer_3_completed: false,
+  execution_complete: false
+}
+    │
+    ▼
+syncBackendState()
+    │
+    ▼
+isPaused = (status === 'paused')
+pendingReviewLayer = previous_layer
+completedLayers = {1: layer_1_completed, ...}
+    │
+    ▼
 UI 条件渲染 ReviewPanel
 ```
 
 ### SSE 流式文本
 
 ```
-后端 graph.astream() 执行
-  ↓
-维度内容生成 → dimension_delta 事件
-  ↓
-前端 onDimensionDelta 回调
-  ↓
+graph.astream() 执行
+    │
+    ▼ dimension_delta 事件
+{
+  type: "dimension_delta",
+  layer: 1,
+  dimension_key: "location",
+  delta: "金田村位于...",
+  accumulated: "金田村位于泗水镇..."
+}
+    │
+    ▼ onDimensionDelta 回调
 实时更新维度内容显示
 ```
 
-### 暂停/恢复流程
+### 审查操作流程
 
 ```
-步进模式 + 层级完成
-  ↓
-route_after_pause() 返回 "end"
-  ↓
-前端检测 pause_after_step=true
-  ↓
-显示 ReviewPanel (条件渲染)
-  ↓
-用户批准 → POST /api/planning/review?action=approve
-  ↓
-清除暂停标志 → 恢复执行
+用户点击"批准"
+    │
+    ▼
+POST /api/planning/review?action=approve
+    │
+    ▼
+后端: 清除暂停标志
+    - pause_after_step = false
+    - previous_layer = 0
+    - 启动后台任务继续执行
+    │
+    ▼
+REST轮询检测: status = 'running'
+    │
+    ▼
+syncBackendState(): isPaused = false
+    │
+    ▼
+ReviewPanel 消失 (条件渲染)
 ```
 
 ---
@@ -153,102 +228,60 @@ route_after_pause() 返回 "end"
 
 ```
 Village_Planning_Agent/
-├── backend/                      # FastAPI 后端
-│   ├── main.py                   # 应用入口
+├── backend/                 # FastAPI 后端
+│   ├── main.py              # 应用入口
 │   ├── api/
-│   │   ├── planning.py           # 规划 API (核心)
-│   │   ├── sessions.py           # 会话管理
-│   │   ├── data.py               # 数据访问
-│   │   └── files.py              # 文件上传
+│   │   ├── planning.py      # 核心 API
+│   │   ├── data.py          # 数据访问
+│   │   └── tool_manager.py  # 工具管理器
 │   ├── database/
-│   │   ├── models.py             # 数据模型 (精简版)
-│   │   ├── operations_async.py   # 异步操作
-│   │   └── engine.py             # 数据库引擎
-│   └── utils/                    # 工具函数
-├── frontend/                     # Next.js 14 前端
-│   └── src/
-│       ├── app/                  # App Router
-│       ├── contexts/
-│       │   └── UnifiedPlanningContext.tsx  # 全局状态
-│       ├── controllers/
-│       │   └── TaskController.tsx          # 状态同步
-│       ├── components/
-│       │   └── chat/
-│       │       ├── ChatPanel.tsx           # 主界面
-│       │       └── ReviewPanel.tsx         # 审查面板
-│       └── hooks/               # 自定义 Hooks
-├── src/                         # 核心规划引擎
+│   │   ├── models.py        # 数据模型
+│   │   └── operations_async.py
+│   └── services/
+│       └── rate_limiter.py
+├── frontend/src/            # Next.js 14 前端
+│   ├── contexts/
+│   │   └── UnifiedPlanningContext.tsx  # 全局状态
+│   ├── controllers/
+│   │   └── TaskController.tsx          # REST轮询+SSE
+│   ├── components/
+│   │   ├── chat/            # 聊天组件
+│   │   └── layout/          # 布局组件
+│   └── lib/api.ts           # API 客户端
+├── src/                     # 核心引擎
 │   ├── orchestration/
-│   │   └── main_graph.py        # LangGraph 主图
-│   ├── subgraphs/               # 三层子图
-│   │   ├── analysis_subgraph.py # 现状分析
-│   │   ├── concept_subgraph.py  # 规划思路
-│   │   └── detailed_plan_subgraph.py  # 详细规划
-│   ├── nodes/                   # 图节点
-│   └── core/                    # 核心配置
-└── data/                        # 数据目录
-    └── village_planning.db      # SQLite 数据库
+│   │   └── main_graph.py    # LangGraph 主图
+│   ├── subgraphs/           # 三层子图
+│   ├── nodes/               # 图节点
+│   ├── planners/            # 规划器
+│   └── tools/               # 工具层
+└── data/                    # 数据目录
+    └── village_planning.db
 ```
 
 ---
 
 ## 三层规划维度
 
-### Layer 1: 现状分析 (12 维度)
+### Layer 1: 现状分析 (12维度并行)
 
-| 维度 | 说明 |
-|------|------|
-| location | 区位与对外交通分析 |
-| socio_economic | 社会经济分析 |
-| villager_wishes | 村民意愿分析 |
-| superior_planning | 上位规划分析 |
-| natural_environment | 自然环境与资源分析 |
-| land_use | 村庄用地分析 |
-| traffic | 道路与交通分析 |
-| public_services | 公共服务设施分析 |
-| infrastructure | 基础设施分析 |
-| ecological_green | 生态绿地分析 |
-| architecture | 建筑分析 |
-| historical_culture | 历史文化分析 |
+区位分析、社会经济、自然环境、土地利用、道路交通、公共服务、基础设施、生态绿地、建筑、历史文化、村民意愿、上位规划
 
-### Layer 2: 规划思路 (4 维度)
+### Layer 2: 规划思路 (4维度串行)
 
-| 维度 | 说明 |
-|------|------|
-| resource_endowment | 资源禀赋分析 |
-| planning_positioning | 规划定位分析 |
-| development_goals | 发展目标分析 |
-| planning_strategies | 规划策略分析 |
+资源禀赋 → 规划定定位 → 发展目标 → 规划策略
 
-### Layer 3: 详细规划 (12 维度)
+### Layer 3: 详细规划 (10维度)
 
-产业规划、空间结构、土地利用、聚落体系、综合交通、公共服务设施、基础设施、生态保护、防灾减灾、历史文化遗产、村庄风貌、建设项目库。
-
----
-
-## 配置说明
-
-### 环境变量
-
-```env
-# LLM 配置 (任选其一)
-ZHIPUAI_API_KEY=your_zhipuai_key
-OPENAI_API_KEY=your_openai_key
-OPENAI_API_BASE=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
-MAX_TOKENS=65536
-
-# 数据库
-USE_ASYNC_DATABASE=true
-```
+产业规划、总体规划、交通规划、公共服务、基础设施、生态保护、防灾减灾、遗产保护、村庄风貌、项目库
 
 ---
 
 ## 文档
 
-- **[智能体架构](docs/agent.md)** - LangGraph 三层规划系统详解
-- **[后端实现](docs/backend.md)** - FastAPI API 端点与数据流
-- **[前端实现](docs/frontend.md)** - Next.js 状态管理与组件架构
+- **[智能体架构](docs/agent.md)** - LangGraph 主图与子图
+- **[后端实现](docs/backend.md)** - FastAPI API 与数据流
+- **[前端实现](docs/frontend.md)** - Next.js 状态管理
 
 ---
 

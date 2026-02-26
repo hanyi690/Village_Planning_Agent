@@ -1,25 +1,12 @@
 # 前端视觉设计指南
 
-> 村庄规划智能体 - UI/UX 设计规范
-
-## 目录
-
-- [设计原则](#设计原则)
-- [色彩系统](#色彩系统)
-- [排版系统](#排版系统)
-- [组件样式](#组件样式)
-- [状态样式](#状态样式)
-
----
+> UI/UX 设计规范与组件样式
 
 ## 设计原则
 
 1. **简洁优先**: 减少视觉干扰，聚焦核心内容
-2. **清晰反馈**: 每个操作都有明确的视觉反馈
-3. **一致性**: 统一的视觉语言和交互模式
-4. **性能优先**: 流畅动画，快速响应
-
----
+2. **清晰反馈**: 每个操作都有明确视觉反馈
+3. **一致性**: 统一视觉语言和交互模式
 
 ## 色彩系统
 
@@ -36,7 +23,6 @@
 --gray-50:  #f9fafb;  /* 背景 */
 --gray-100: #f3f4f6;  /* 次级背景 */
 --gray-200: #e5e7eb;  /* 边框 */
---gray-300: #d1d5db;  /* 输入框边框 */
 --gray-700: #374151;  /* 文本 */
 ```
 
@@ -48,28 +34,64 @@
 --error-500:  #ef4444;   /* 错误/失败 */
 ```
 
----
+## 排版
 
-## 排版系统
-
-### 字体家族
+### 字体
 
 ```css
-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 
-             'Microsoft YaHei', sans-serif;
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 
+             'PingFang SC', 'Microsoft YaHei', sans-serif;
 ```
 
-### 字体大小
+### 字号
 
-| 变量 | 大小 | 用途 |
+| 类名 | 大小 | 用途 |
 |------|------|------|
-| text-xs | 12px | 辅助信息、时间戳 |
-| text-sm | 14px | 次要文本、标签 |
-| text-base | 16px | 正文、按钮 |
+| text-xs | 12px | 辅助信息 |
+| text-sm | 14px | 次要文本 |
+| text-base | 16px | 正文 |
 | text-lg | 18px | 标题 |
-| text-xl | 20px | 区块标题 |
 
----
+## 页面布局
+
+### 主布局
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                           Header                             │
+│  Logo          项目名称              [历史] [设置]            │
+├─────────────────────────────────────────────────────────────┤
+│                           Main                               │
+│                                                              │
+│                     Content                                  │
+│              (Form 或 ChatPanel)                             │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### ChatPanel 布局
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ProgressHeader                                              │
+│  Layer 1 ████████░░░░░░░░  50%      状态: 执行中             │
+├─────────────────────────────────────────────────────────────┤
+│  MessageList                                                 │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ 开始规划金田村...                                        ││
+│  └─────────────────────────────────────────────────────────┘│
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │ Layer 1 完成 ▼                                           ││
+│  │ ├─ 区位分析    [查看]                                    ││
+│  │ ├─ 社会经济    [查看]                                    ││
+│  │ └─ ...                                                   ││
+│  └─────────────────────────────────────────────────────────┘│
+├─────────────────────────────────────────────────────────────┤
+│  ReviewPanel (条件渲染)                                      │
+│  📋 Layer 1 已完成，请审查                                   │
+│  [查看详情]  [驳回修改]  [批准继续]                           │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## 组件样式
 
@@ -82,22 +104,13 @@ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
   color: white;
   padding: 0.5rem 1rem;
   border-radius: 0.375rem;
-  font-weight: 500;
-}
-
-.btn-primary:hover {
-  background-color: var(--primary-600);
 }
 
 /* 成功按钮 */
-.btn-success {
-  background-color: var(--success-500);
-}
+.btn-success { background-color: var(--success-500); }
 
 /* 危险按钮 */
-.btn-danger {
-  background-color: var(--error-500);
-}
+.btn-danger { background-color: var(--error-500); }
 ```
 
 ### 卡片
@@ -108,22 +121,6 @@ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
   border: 1px solid var(--gray-200);
   border-radius: 0.5rem;
   padding: 1rem;
-}
-```
-
-### 输入框
-
-```css
-.input {
-  width: 100%;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--gray-300);
-  border-radius: 0.375rem;
-}
-
-.input:focus {
-  outline: none;
-  border-color: var(--primary-500);
 }
 ```
 
@@ -146,8 +143,6 @@ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
 }
 ```
 
----
-
 ## 状态样式
 
 ### 状态徽章
@@ -160,32 +155,12 @@ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
   padding: 0.25rem 0.75rem;
   border-radius: 9999px;
   font-size: 0.875rem;
-  font-weight: 500;
 }
 
-/* 执行中 */
-.status-badge-info {
-  background-color: #dbeafe;
-  color: #1e40af;
-}
-
-/* 完成 */
-.status-badge-success {
-  background-color: #dcfce7;
-  color: #166534;
-}
-
-/* 审查中 */
-.status-badge-warning {
-  background-color: #fef9c3;
-  color: #854d0e;
-}
-
-/* 失败 */
-.status-badge-error {
-  background-color: #fee2e2;
-  color: #991b1b;
-}
+.status-badge-info { background: #dbeafe; color: #1e40af; }
+.status-badge-success { background: #dcfce7; color: #166534; }
+.status-badge-warning { background: #fef9c3; color: #854d0e; }
+.status-badge-error { background: #fee2e2; color: #991b1b; }
 ```
 
 ### 进度条
@@ -196,7 +171,6 @@ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
   height: 0.5rem;
   background-color: var(--gray-200);
   border-radius: 0.25rem;
-  overflow: hidden;
 }
 
 .progress-fill {
@@ -218,48 +192,8 @@ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
   animation: spin 0.8s linear infinite;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 ```
-
----
-
-## Tailwind 配置
-
-```javascript
-// tailwind.config.js
-module.exports = {
-  theme: {
-    extend: {
-      colors: {
-        primary: {
-          500: '#3b82f6',
-          600: '#2563eb',
-        },
-        gray: {
-          50: '#f9fafb',
-          100: '#f3f4f6',
-          200: '#e5e7eb',
-          300: '#d1d5db',
-          700: '#374151',
-        },
-        success: {
-          500: '#22c55e',
-        },
-        warning: {
-          500: '#eab308',
-        },
-        error: {
-          500: '#ef4444',
-        },
-      },
-    },
-  },
-}
-```
-
----
 
 ## 响应式断点
 
@@ -267,7 +201,7 @@ module.exports = {
 /* 移动设备 */
 @media (max-width: 640px) {
   .container { padding: 0 0.5rem; }
-  .message-user, .message-assistant { max-width: 90%; }
+  .message { max-width: 90%; }
 }
 
 /* 平板设备 */
@@ -280,3 +214,43 @@ module.exports = {
   .container { max-width: 1200px; margin: 0 auto; }
 }
 ```
+
+## 动画
+
+```css
+/* 淡入 */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 滑入 */
+@keyframes slideIn {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* 打字光标 */
+.typing-cursor::after {
+  content: '|';
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+```
+
+## 图标
+
+使用 Font Awesome:
+
+| 图标 | 用途 |
+|------|------|
+| fa-play | 开始规划 |
+| fa-check | 批准 |
+| fa-times | 驳回 |
+| fa-history | 历史 |
+| fa-folder | 文件夹 |
+| fa-map-marker-alt | 区位 |
