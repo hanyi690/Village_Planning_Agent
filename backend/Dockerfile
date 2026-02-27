@@ -8,6 +8,10 @@ FROM python:3.11-slim as builder
 
 WORKDIR /app
 
+# 使用阿里云 Debian 镜像源加速（国内部署优化）
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
+
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -21,6 +25,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY requirements.txt .
 COPY backend/requirements.txt ./backend/
 
+# 使用阿里云 PyPI 镜像源加速（国内部署优化）
+RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
+
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
@@ -32,6 +39,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 FROM python:3.11-slim as production
 
 WORKDIR /app
+
+# 使用阿里云 Debian 镜像源加速（国内部署优化）
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
