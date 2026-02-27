@@ -52,6 +52,7 @@ class AnalyzeDimensionNode(BaseNode):
         dimension_key = state.get("dimension_key")
         dimension_name = state.get("dimension_name", dimension_key)
         raw_data = state.get("raw_data", "")
+        session_id = state.get("session_id", "")
 
         if not dimension_key:
             return {"error": "缺少维度信息"}
@@ -71,6 +72,20 @@ class AnalyzeDimensionNode(BaseNode):
             result_key = planner.get_result_key()
             analysis_text = planner_result.get(result_key, "")
             logger.info(f"[子图-分析] 完成 {dimension_name}，生成 {len(analysis_text)} 字符")
+
+            # ✅ 发送维度完成事件到 SSE
+            if session_id and analysis_text:
+                try:
+                    from backend.api.planning import append_dimension_complete_event
+                    append_dimension_complete_event(
+                        session_id=session_id,
+                        layer=1,
+                        dimension_key=dimension_key,
+                        dimension_name=dimension_name,
+                        content=analysis_text
+                    )
+                except Exception as e:
+                    logger.warning(f"[子图-分析] 发送维度完成事件失败: {e}")
 
             # 返回结果（包装在列表中以支持 operator.add 累加）
             return {
@@ -234,6 +249,7 @@ class AnalyzeConceptDimensionNode(BaseNode):
         """执行单个维度的规划思路分析，使用预筛选的数据"""
         dimension_key = state.get("dimension_key")
         dimension_name = state.get("dimension_name", dimension_key)
+        session_id = state.get("session_id", "")
 
         if not dimension_key:
             return {"error": "缺少维度信息"}
@@ -263,6 +279,20 @@ class AnalyzeConceptDimensionNode(BaseNode):
             result_key = planner.get_result_key()
             concept_text = planner_result.get(result_key, "")
             logger.info(f"[子图-规划思路] 完成 {dimension_name}，生成 {len(concept_text)} 字符")
+
+            # ✅ 发送维度完成事件到 SSE
+            if session_id and concept_text:
+                try:
+                    from backend.api.planning import append_dimension_complete_event
+                    append_dimension_complete_event(
+                        session_id=session_id,
+                        layer=2,
+                        dimension_key=dimension_key,
+                        dimension_name=dimension_name,
+                        content=concept_text
+                    )
+                except Exception as e:
+                    logger.warning(f"[子图-规划思路] 发送维度完成事件失败: {e}")
 
             # 返回结果（包装在列表中以支持 operator.add 累加）
             return {
@@ -420,8 +450,9 @@ class GenerateDimensionPlanNode(BaseNode):
         dimension_key = state["dimension_key"]
         dimension_name = state["dimension_name"]
         project_name = state["project_name"]
+        session_id = state.get("session_id", "")
 
-        logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key})")
+        # 日志由 detailed_plan_subgraph.py 统一输出，避免重复
 
         try:
             # 使用子图中的原始函数来执行（保持一致性）
@@ -443,6 +474,20 @@ class GenerateDimensionPlanNode(BaseNode):
 """
 
                 result["dimension_plans"][0]["dimension_result"] = plan_with_metadata
+
+                # ✅ 发送维度完成事件到 SSE
+                if session_id and plan_with_metadata:
+                    try:
+                        from backend.api.planning import append_dimension_complete_event
+                        append_dimension_complete_event(
+                            session_id=session_id,
+                            layer=3,
+                            dimension_key=dimension_key,
+                            dimension_name=dimension_name,
+                            content=plan_with_metadata
+                        )
+                    except Exception as e:
+                        logger.warning(f"[子图-L3-Agent] 发送维度完成事件失败: {e}")
 
             return result
 

@@ -380,7 +380,7 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
     project_name = state["project_name"]
 
     logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key})")
-    logger.info(f"[子图-L3-Agent] {dimension_name} 输入数据: "
+    logger.debug(f"[子图-L3-Agent] {dimension_name} 输入数据: "
                f"filtered_analysis={len(state.get('filtered_analysis', ''))}字符, "
                f"filtered_concept={len(state.get('filtered_concept', ''))}字符, "
                f"completed_plans={len(state.get('completed_plans', {}))}个")
@@ -408,7 +408,9 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
         # 获取该维度的适配器配置
         adapter_types = adapter_config.get(dimension_key, [])
 
-        logger.info(f"[子图-L3-Agent] 适配器状态: use_adapters={use_adapters}, types={adapter_types}")
+        # 只在启用适配器时才输出日志
+        if use_adapters and adapter_types:
+            logger.info(f"[子图-L3-Agent] 适配器启用: types={adapter_types}")
 
         # 执行规划（带适配器支持）
         planner_result = planner.execute(

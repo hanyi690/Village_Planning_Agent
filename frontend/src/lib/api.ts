@@ -80,6 +80,7 @@ export type PlanningSSEEventType =
   | 'resumed'
   | 'dimension_delta'
   | 'dimension_complete'
+  | 'dimension_revised'
   | 'complete'
   | 'text_chunk'
   | 'thinking_start'
@@ -326,15 +327,18 @@ export const planningApi = {
       'progress',
       'dimension_delta',
       'dimension_complete',
+      'dimension_revised',
     ];
 
     for (const eventType of eventTypes) {
       es.addEventListener(eventType, (e) => parseEvent(e, eventType));
     }
 
-    // Special handling for pause events
-    // Note: Do NOT close SSE connection here - let it close naturally when backend finishes
-    // The REST polling will detect pause_after_step and update UI state
+    // Special handling for terminal events
+    // MDN 最佳实践：让后端主动关闭连接，前端不要主动调用 es.close()
+    // 后端发送 stream_paused/completed 后会结束 HTTP 响应
+    // EventSource 会自动检测到连接关闭 (readyState 变为 CLOSED)
+
     es.addEventListener('pause', (e) => {
       connectionState = 'paused';
       parseEvent(e, 'pause');
@@ -343,41 +347,51 @@ export const planningApi = {
     es.addEventListener('stream_paused', (e) => {
       connectionState = 'paused';
       parseEvent(e, 'pause'); // Also trigger pause for compatibility
-      es.close();
+      // 最佳实践：不主动 close，让后端结束 HTTP 响应
+      // EventSource 会自动检测到连接关闭
     });
 
-    // Completed event
     es.addEventListener('completed', (e) => {
       parseEvent(e, 'completed');
-      es.close();
+      // 最佳实践：不主动 close，让后端结束 HTTP 响应
     });
 
-    // Error event
-    es.addEventListener('error', () => {
-      onEvent({
-        type: 'error',
-        data: {
-          error: 'SSE connection failed',
-          details: 'Failed to establish SSE connection',
-          hint: 'Check if backend is running on port 8000',
-        },
-      });
-      es.close();
+    // Error event listener for named 'error' events from server
+    es.addEventListener('error', (e) => {
+      // 这是一个命名事件，不是连接错误
+      // 服务端发送的 error 事件
+      try {
+        const data = e as MessageEvent;
+        const parsed = JSON.parse(data.data);
+        onEvent({
+          type: 'error',
+          data: parsed,
+        });
+      } catch {
+        onEvent({
+          type: 'error',
+          data: { error: 'Server sent error event' },
+        });
+      }
     });
 
-    // Connection error handler
-    es.onerror = (error) => {
-      console.error('[SSE] Connection error:', error);
-      console.error('[SSE] connectionState:', connectionState);
-      console.error('[SSE] readyState:', es.readyState);
-
-      // Distinguish between planned pause and actual error
-      if (connectionState === 'paused' || es.readyState === 2) {
-        console.log('[SSE] Connection closed as planned (pause state)');
+    // Connection error handler (onerror is for connection-level errors)
+    // MDN: 当连接失败时触发 error 事件
+    es.onerror = () => {
+      // readyState 2 = CLOSED：连接已正常关闭（后端结束了响应）
+      if (es.readyState === EventSource.CLOSED) {
+        console.log('[SSE] Connection closed by server (readyState=CLOSED)');
         return;
       }
 
-      console.error('[SSE] Unexpected connection error');
+      // readyState 0 = CONNECTING：浏览器正在尝试重连
+      if (es.readyState === EventSource.CONNECTING) {
+        console.log('[SSE] Reconnecting (readyState=CONNECTING)...');
+        return;
+      }
+
+      // 其他情况才是真正的错误
+      console.error('[SSE] Unexpected connection error, readyState:', es.readyState);
       onError?.(new Error('SSE connection error'));
     };
 

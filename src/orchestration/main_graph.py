@@ -797,7 +797,7 @@ def create_village_planning_graph(checkpointer=None) -> StateGraph:
     Returns:
         编译后的 StateGraph 实例
     """
-    logger.info("[主图构建] 开始构建村庄规划主图")
+    logger.debug("[主图构建] 开始构建村庄规划主图")  # 改为 DEBUG 级别减少日志噪音
 
     # 创建节点实例
     layer1_node = Layer1AnalysisNode()
@@ -885,7 +885,7 @@ def create_village_planning_graph(checkpointer=None) -> StateGraph:
     # 编译主图（支持 checkpointer 持久化）
     main_graph = builder.compile(checkpointer=checkpointer)
 
-    logger.info("[主图构建] 村庄规划主图构建完成")
+    logger.debug("[主图构建] 村庄规划主图构建完成")  # 改为 DEBUG 级别减少日志噪音
 
     return main_graph
 

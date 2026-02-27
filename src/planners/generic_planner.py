@@ -360,7 +360,7 @@ class GenericPlanner(UnifiedPlannerBase):
             params["professional_data_section"] = ""  # Layer 2 也需要这个参数
             
             # 日志：验证数据传递
-            logger.info(f"[GenericPlanner-L2] {self.dimension_key} 参数准备: "
+            logger.debug(f"[GenericPlanner-L2] {self.dimension_key} 参数准备: "
                        f"filtered_analysis={len(filtered_analysis)}字符, "
                        f"filtered_concept={len(filtered_concept)}字符, "
                        f"combined_report={len(combined_report)}字符")
@@ -372,8 +372,8 @@ class GenericPlanner(UnifiedPlannerBase):
             params["filtered_concept"] = state.get("filtered_concept", "")  # 预筛选的规划思路（单数形式，与状态定义一致）
             params["constraints"] = state.get("constraints", "无特殊约束")
 
-            # 日志：验证数据传递
-            logger.info(f"[GenericPlanner-L3] {self.dimension_key} 参数准备: "
+            # 日志：验证数据传递（DEBUG级别，详细日志在 _build_prompt 中输出）
+            logger.debug(f"[GenericPlanner-L3] {self.dimension_key} 参数准备: "
                        f"filtered_analysis={len(params['filtered_analysis'])}字符, "
                        f"filtered_concept={len(params['filtered_concept'])}字符")
 
