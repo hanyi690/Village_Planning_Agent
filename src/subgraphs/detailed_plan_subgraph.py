@@ -431,39 +431,24 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
 
 """
 
-        # 添加元数据
-        plan_with_metadata = f"""# {project_name} - {dimension_name}
-
-{plan_content}
-
----
-**编制**: {dimension_name}专业Agent
-**编制时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-"""
-
         # 返回结果（包装在列表中以支持累加）
+        # 注意：不再添加外部标题包装，与 Layer 1/2 保持一致，避免重复标题
         return {
             "dimension_plans": [{
                 "dimension_key": dimension_key,
                 "dimension_name": dimension_name,
-                "dimension_result": plan_with_metadata
+                "dimension_result": plan_content
             }]
         }
 
     except Exception as e:
         logger.error(f"[子图-L3-Agent] {dimension_name} 生成失败: {str(e)}")
 
-        error_plan = f"""# {project_name} - {dimension_name}
-
-[规划生成失败]
+        error_plan = f"""[规划生成失败]
 
 错误信息: {str(e)}
 
-请检查输入数据或稍后重试。
-
----
-**编制时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}
-"""
+请检查输入数据或稍后重试。"""
 
         return {
             "dimension_plans": [{

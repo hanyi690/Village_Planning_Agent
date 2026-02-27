@@ -315,12 +315,12 @@ class GenericPlanner(UnifiedPlannerBase):
         if self.layer >= 2:
             # Layer 2/3: 添加现状分析
             context["analysis_report"] = state.get("analysis_report", "")
-            context["dimension_reports"] = state.get("dimension_reports", {})
+            context["analysis_reports"] = state.get("analysis_reports", {})
 
         if self.layer >= 3:
             # Layer 3: 添加规划思路
             context["planning_concept"] = state.get("planning_concept", "")
-            context["concept_dimension_reports"] = state.get("concept_dimension_reports", {})
+            context["concept_reports"] = state.get("concept_reports", {})
 
             # 添加前序详细规划（用于 project_bank 等）
             context["completed_plans"] = state.get("completed_plans", {})
@@ -339,6 +339,9 @@ class GenericPlanner(UnifiedPlannerBase):
                 raw_data = raw_data[:MAX_DATA_LENGTH] + "\n\n...[数据已截断，原始数据过长]"
             params["raw_data"] = raw_data
             params["professional_data_section"] = ""
+            # 添加 task_description 和 constraints（用于 villager_wishes 和 superior_planning）
+            params["task_description"] = state.get("task_description", "未提供具体规划任务")
+            params["constraints"] = state.get("constraints", "无特殊约束")
         elif self.layer == 2:
             # 直接使用子图预筛选的 filtered_analysis 和 filtered_concept 字段
             # 将前序维度报告合并到 analysis_report 中

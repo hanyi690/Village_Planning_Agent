@@ -2,6 +2,8 @@
 工具模块 - 统一工具层
 
 提供所有工具的统一导出。
+
+检查点管理：统一使用 LangGraph AsyncSqliteSaver（通过 backend.api.planning 模块）
 """
 
 # 文件管理工具
@@ -16,14 +18,6 @@ from .knowledge_tool import knowledge_query
 
 # 规划工具（函数）
 from .planner_tool import plan_village
-
-# Checkpoint工具
-from .checkpoint_tool import (
-    CheckpointTool,
-    save_checkpoint,
-    load_checkpoint,
-    list_checkpoints
-)
 
 # 修复工具
 from .revision_tool import (
@@ -44,12 +38,6 @@ __all__ = [
 
     # 规划
     "plan_village",
-
-    # Checkpoint
-    "CheckpointTool",
-    "save_checkpoint",
-    "load_checkpoint",
-    "list_checkpoints",
 
     # 修复
     "RevisionTool",

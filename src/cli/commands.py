@@ -19,7 +19,6 @@ from ..agent import (
 )
 from ..orchestration.main_graph import resume_from_checkpoint
 from ..tools.file_manager import VillageDataManager
-from ..tools.checkpoint_tool import CheckpointTool
 from ..utils.logger import get_logger
 from ..utils.output_manager import create_output_manager
 
@@ -351,17 +350,40 @@ class CommandRunner:
 
     @_handle_command_errors
     def list_checkpoints(self):
-        """列出所有checkpoint"""
+        """列出所有checkpoint（使用 LangGraph API）"""
         logger.info(f"列出项目checkpoint: {self.args.project}")
 
-        checkpoint_manager = CheckpointTool(self.args.project)
-        list_result = checkpoint_manager.list()
+        # 使用 LangGraph API 获取检查点
+        import asyncio
+        import aiosqlite
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        from backend.database.engine import get_db_path
+        from ..orchestration.main_graph import create_village_planning_graph
 
-        if not list_result["success"] or not list_result["checkpoints"]:
+        async def get_checkpoints():
+            conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
+            saver = AsyncSqliteSaver(conn)
+            await saver.setup()
+            graph = create_village_planning_graph(checkpointer=saver)
+            config = {"configurable": {"thread_id": self.args.project}}
+
+            checkpoints = []
+            async for state_snapshot in graph.aget_state_history(config):
+                checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+                values = state_snapshot.values or {}
+                checkpoints.append({
+                    "checkpoint_id": checkpoint_id,
+                    "timestamp": state_snapshot.metadata.get("write_ts", "") if state_snapshot.metadata else "",
+                    "layer": values.get("current_layer", 1),
+                    "description": f"Layer {values.get('current_layer', 1)} checkpoint"
+                })
+            return checkpoints
+
+        checkpoints = asyncio.run(get_checkpoints())
+
+        if not checkpoints:
             print(f"\n没有找到项目 '{self.args.project}' 的checkpoint")
             return
-
-        checkpoints = list_result["checkpoints"]
 
         print("\n" + "="*80)
         print(f"项目 '{self.args.project}' 的Checkpoint列表")

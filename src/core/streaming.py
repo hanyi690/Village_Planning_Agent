@@ -411,26 +411,24 @@ class StreamingOrchestrator:
         """
         logger.info(f"[Orchestrator] Resuming session {session_id} from checkpoint {checkpoint_id}")
 
-        # Load checkpoint state
-        from ..tools.checkpoint_tool import CheckpointTool
-        checkpoint_tool = CheckpointTool(project_name)
-        load_result = checkpoint_tool.load(checkpoint_id)
+        # 使用 LangGraph API 从 checkpoint 恢复
+        # 构建 config（使用 session_id 作为 thread_id）
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+                "checkpoint_id": checkpoint_id
+            }
+        }
 
-        if not load_result["success"]:
-            # Return error event
-            async def error_event():
-                yield _format_sse_event("error", {
-                    "session_id": session_id,
-                    "error": f"Failed to load checkpoint: {checkpoint_id}",
-                    "success": False
-                })
-
-            return StreamingResponse(error_event(), media_type="text/event-stream")
-
-        state = load_result["state"]
-
-        # Continue execution with streaming
-        return await stream_checkpoint_resume(self.graph, state, session_id, enable_streaming)
+        # 继续执行（LangGraph 会自动从 checkpoint 恢复状态）
+        # 注意：这里需要传入 None 作为初始状态，LangGraph 会从 checkpoint 加载
+        return await stream_graph_execution(
+            self.graph, 
+            None,  # 由 LangGraph 从 checkpoint 加载
+            session_id, 
+            enable_streaming,
+            config=config
+        )
 
     def is_stream_active(self, session_id: str) -> bool:
         """Check if a stream is currently active for a session"""

@@ -88,19 +88,17 @@ class BaseLayerNode(BaseNode):
         result: Dict[str, Any]
     ) -> str:
         """
-        保存输出（OutputManager + Checkpoint）
+        保存输出（OutputManager）
 
-        使用现有的OutputManager和CheckpointTool。
+        Checkpoint 由 LangGraph AsyncSqliteSaver 自动管理。
 
         Args:
             state: 原始状态
             result: 子图执行结果
 
         Returns:
-            checkpoint_id 或空字符串
+            空字符串（checkpoint 由 LangGraph 管理）
         """
-        checkpoint_id = ""
-
         # OutputManager保存（使用现有工具）
         output_manager = state.get("output_manager")
         if output_manager and output_manager.use_default_structure:
@@ -133,24 +131,8 @@ class BaseLayerNode(BaseNode):
             except Exception as e:
                 logger.warning(f"[{self.node_name}] OutputManager保存失败: {e}")
 
-        # Checkpoint保存（使用现有CheckpointTool）
-        if state.get("checkpoint_enabled", False):
-            checkpoint_manager = state.get("checkpoint_manager")
-            if checkpoint_manager and hasattr(checkpoint_manager, 'save'):
-                try:
-                    # 构建checkpoint状态
-                    checkpoint_state = self._build_checkpoint_state(state, result)
-
-                    save_result = checkpoint_manager.save(
-                        state=checkpoint_state,
-                        layer=self.layer_number,
-                        description=f"Layer {self.layer_number} 完成"
-                    )
-                    checkpoint_id = save_result.get("checkpoint_id", "") if save_result.get("success") else ""
-                except Exception as e:
-                    logger.warning(f"[{self.node_name}] Checkpoint保存失败: {e}")
-
-        return checkpoint_id
+        # Checkpoint 由 LangGraph 自动保存，无需手动处理
+        return ""
 
     def _build_checkpoint_state(
         self,
@@ -158,45 +140,12 @@ class BaseLayerNode(BaseNode):
         result: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        构建用于checkpoint的状态（子类可重写）
-
-        Args:
-            original_state: 原始状态
-            result: 子图执行结果
-
-        Returns:
-            用于checkpoint的状态字典
-        """
-        checkpoint_state = {
-            **original_state,
-            f"layer_{self.layer_number}_completed": True,
-            "current_layer": self.layer_number + 1
-        }
-
-        # 添加维度报告（使用统一命名）
-        if self.layer_number == 1:
-            checkpoint_state["analysis_reports"] = result.get("analysis_reports", {})
-        elif self.layer_number == 2:
-            checkpoint_state["concept_reports"] = result.get("concept_reports", {})
-        elif self.layer_number == 3:
-            checkpoint_state["detail_reports"] = result.get("detail_reports", {})
-
-        return checkpoint_state
-
-    @abstractmethod
-    def _build_success_updates(
-        self,
-        state: Dict[str, Any],
-        result: Dict[str, Any],
-        checkpoint_id: str
-    ) -> Dict[str, Any]:
-        """
         构建成功状态更新（子类实现）
 
         Args:
             state: 原始状态
             result: 子图执行结果
-            checkpoint_id: checkpoint ID
+            checkpoint_id: checkpoint ID（现在为空字符串，由 LangGraph 管理）
 
         Returns:
             状态更新字典

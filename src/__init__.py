@@ -6,11 +6,13 @@ V4.0.0 - 分层架构重构
 架构层次：
 - tools/: 统一工具层（遵循tool pattern）
 - orchestration/: 编排层（纯业务逻辑）
-- cli/: 统一CLI层
+- cli/: CLI层
 - core/: 核心组件（LLM、配置等）
 - subgraphs/: 子图（分析、规划思路、详细规划）
 - utils/: 工具函数
 - knowledge/: 知识库
+
+检查点管理：统一使用 LangGraph AsyncSqliteSaver
 """
 
 # 核心接口
@@ -39,11 +41,6 @@ from .cli import main as cli_main
 
 # 工具层（仅导出新工具）
 from .tools import (
-    # Checkpoint
-    CheckpointTool,
-    save_checkpoint,
-    load_checkpoint,
-    list_checkpoints,
     # 修复
     RevisionTool,
     parse_feedback,
@@ -74,10 +71,6 @@ __all__ = [
     # CLI层
     "cli_main",
     # 工具层
-    "CheckpointTool",
-    "save_checkpoint",
-    "load_checkpoint",
-    "list_checkpoints",
     "RevisionTool",
     "parse_feedback",
     "revise_dimension",

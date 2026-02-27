@@ -862,6 +862,57 @@ def check_detailed_dependencies_ready(
     return True
 
 
+# 缓存下游依赖映射
+_DOWNSTREAM_DEPENDENCIES_CACHE = None
+
+
+def get_downstream_dependencies(dimension_key: str) -> List[str]:
+    """
+    获取依赖指定维度的所有下游维度（反向依赖）
+    
+    用于维度修复时确定需要级联更新的下游维度。
+    
+    Args:
+        dimension_key: 维度键名
+        
+    Returns:
+        依赖该维度的下游维度列表
+    """
+    global _DOWNSTREAM_DEPENDENCIES_CACHE
+    
+    # 构建缓存
+    if _DOWNSTREAM_DEPENDENCIES_CACHE is None:
+        cache = {}
+        for key, config in DIMENSIONS_METADATA.items():
+            deps = config.get("dependencies", {})
+            
+            # 处理 dependencies 是列表的情况（Layer 1 维度）
+            if isinstance(deps, list):
+                continue
+            
+            # 处理 Layer 1 依赖
+            for dep in deps.get("layer1_analyses", []):
+                if dep not in cache:
+                    cache[dep] = []
+                cache[dep].append(key)
+            
+            # 处理 Layer 2 依赖
+            for dep in deps.get("layer2_concepts", []):
+                if dep not in cache:
+                    cache[dep] = []
+                cache[dep].append(key)
+            
+            # 处理 Layer 3 依赖（同层依赖）
+            for dep in deps.get("layer3_plans", []):
+                if dep not in cache:
+                    cache[dep] = []
+                cache[dep].append(key)
+        
+        _DOWNSTREAM_DEPENDENCIES_CACHE = cache
+    
+    return _DOWNSTREAM_DEPENDENCIES_CACHE.get(dimension_key, [])
+
+
 WAVE_CONFIG = property(get_wave_config)
 
 
@@ -905,4 +956,7 @@ __all__ = [
     "get_dimensions_by_wave",
     "check_detailed_dependencies_ready",
     "WAVE_CONFIG",
+    
+    # 下游依赖
+    "get_downstream_dependencies",
 ]
