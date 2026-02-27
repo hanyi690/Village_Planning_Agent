@@ -83,7 +83,7 @@ export function PlanningProvider({ children, taskId }: PlanningProviderProps) {
       closeReviewDrawer();
 
       // Call API to approve review
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'}/api/planning/${taskId}/review/approve`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/planning/${taskId}/review/approve`, {
         method: 'POST',
       });
 
@@ -103,7 +103,7 @@ export function PlanningProvider({ children, taskId }: PlanningProviderProps) {
       setReviewStatus('revising');
 
       // Call API to reject review and trigger revision
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'}/api/planning/${taskId}/review/reject`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/planning/${taskId}/review/reject`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -136,7 +136,7 @@ export function PlanningProvider({ children, taskId }: PlanningProviderProps) {
   const submitRollback = useCallback(async (checkpointId: string) => {
     try {
       // Call API to rollback to checkpoint
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'}/api/planning/${taskId}/rollback`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/planning/${taskId}/rollback`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

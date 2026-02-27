@@ -36,7 +36,7 @@ export default function RevisionProgress({ taskId, onComplete, onError }: Revisi
 
   useEffect(() => {
     // Create SSE connection for revision progress
-    const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+    const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     const url = `${API_BASE_URL}/api/planning/${taskId}/stream`;
     const es = new EventSource(url);
 
