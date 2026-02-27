@@ -529,7 +529,8 @@ async def _execute_graph_in_background(
             return on_token
 
         # ✅ 将 token 回调工厂放入 config（不污染状态，避免序列化问题）
-        if initial_state.get("_streaming_enabled", False):
+        # 修复: initial_state 可能为 None（从 Checkpoint 恢复时），需要空值保护
+        if initial_state and initial_state.get("_streaming_enabled", False):
             config["configurable"]["_token_callback_factory"] = token_callback_factory
             logger.info(f"[Planning] [{session_id}] Token 回调工厂已放入 config")
 
@@ -544,7 +545,8 @@ async def _execute_graph_in_background(
         }
 
         # 清理运行时对象，避免 msgpack 序列化错误
-        clean_state = {k: v for k, v in initial_state.items() if k not in RUNTIME_KEYS}
+        # 修复: initial_state 可能为 None，使用空字典作为默认值
+        clean_state = {k: v for k, v in (initial_state or {}).items() if k not in RUNTIME_KEYS}
         logger.info(f"[Planning] [{session_id}] 已清理运行时对象，传递给 LangGraph 的状态键: {list(clean_state.keys())}")
 
         # 流式执行图
@@ -590,6 +592,14 @@ async def _execute_graph_in_background(
                         else:  # layer_num == 3
                             dimension_reports = event.get("detail_reports", {})
                             report = generate_detail_report(dimension_reports, project_name)
+                            # ✅ 添加 Layer 3 专用调试日志
+                            logger.info(f"[Planning] [{session_id}] === Layer 3 完成 ===")
+                            logger.info(f"[Planning] [{session_id}] event keys: {list(event.keys())}")
+                            logger.info(f"[Planning] [{session_id}] detail_reports: {dimension_reports}")
+                            logger.info(f"[Planning] [{session_id}] dimension_reports keys: {list(dimension_reports.keys())}")
+                            if dimension_reports:
+                                for key, value in dimension_reports.items():
+                                    logger.info(f"[Planning] [{session_id}]   - {key}: {len(value)} chars")
 
                         # 生成事件并添加到会话事件列表
                         event_data = {
@@ -736,72 +746,56 @@ async def _execute_graph_in_background(
         _set_stream_state(session_id, "completed")
 
 
-async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dict[str, Any]:
+async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None) -> Dict[str, Any]:
     """
-    Resume graph execution with restored state (simplified version)
+    Resume graph execution from checkpoint
+    
+    LangGraph 官方推荐模式：
+    1. Checkpoint 是唯一的数据源（Single Source of Truth）
+    2. 使用 graph.astream(None, config) 恢复执行
+    3. 废弃内存状态验证，信任 Checkpoint 完整性
 
     Args:
         session_id: Session identifier
-        state: Current state dictionary
+        state: (已废弃) 保留参数用于兼容旧调用
 
     Returns:
         Response with stream URL for resuming execution
     """
-    # Validate state before resuming
-    current_layer = state.get("current_layer", 1)
-    if not _validate_resume_state(state, current_layer):
-        # 尝试从 checkpoint 历史中恢复缺失的数据
-        logger.warning(f"[Planning API] [{session_id}] 状态验证失败，尝试从 checkpoint 历史恢复数据")
-        
-        saver = await get_global_checkpointer()
-        graph = create_village_planning_graph(checkpointer=saver)
-        config = {"configurable": {"thread_id": session_id}}
-        
-        try:
-            # 直接获取最新 checkpoint 状态（使用 aget_state 而非 aget_state_history）
-            checkpoint_state = await graph.aget_state(config)
-            if checkpoint_state and checkpoint_state.values:
-                checkpoint_values = checkpoint_state.values
-                if current_layer == 2:
-                    # 需要 Layer 1 的数据
-                    # 兼容旧字段名：dimension_reports -> analysis_reports
-                    analysis_reports = checkpoint_values.get("analysis_reports") or checkpoint_values.get("dimension_reports", {})
-                    if analysis_reports:
-                        state["analysis_reports"] = analysis_reports
-                        logger.info(f"[Planning API] [{session_id}] 从 checkpoint 恢复了 Layer 1 数据 (analysis_reports)")
-                elif current_layer == 3:
-                    # 需要 Layer 1 和 2 的数据
-                    # 兼容旧字段名
-                    analysis_reports = checkpoint_values.get("analysis_reports") or checkpoint_values.get("dimension_reports", {})
-                    concept_reports = checkpoint_values.get("concept_reports") or checkpoint_values.get("concept_dimension_reports", {})
-                    
-                    if analysis_reports:
-                        state["analysis_reports"] = analysis_reports
-                    if concept_reports:
-                        state["concept_reports"] = concept_reports
-                    logger.info(f"[Planning API] [{session_id}] 从 checkpoint 恢复了 Layer 1 和 2 数据")
-        except Exception as e:
-            logger.error(f"[Planning API] [{session_id}] 从 checkpoint 恢复数据失败: {e}")
-        
-        # 再次验证
-        if not _validate_resume_state(state, current_layer):
-            logger.error(f"[Planning API] Invalid state for resume at layer {current_layer}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot resume at layer {current_layer}: missing required data"
-            )
+    # ✅ 使用统一的单例获取方式
+    saver = await get_global_checkpointer()
+    graph = create_village_planning_graph(checkpointer=saver)
+    config = {"configurable": {"thread_id": session_id}}
+    
+    # ✅ 从 Checkpoint 获取完整状态（包含所有层级 reports）
+    checkpoint_state = await graph.aget_state(config)
+    if not checkpoint_state or not checkpoint_state.values:
+        logger.error(f"[Planning API] [{session_id}] Checkpoint 中未找到会话状态")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Session {session_id} not found in checkpoint"
+        )
+    
+    # 从 Checkpoint 获取完整状态
+    full_state = checkpoint_state.values
+    current_layer = full_state.get("current_layer", 1)
+    
+    logger.info(f"[Planning API] [{session_id}] 从 Checkpoint 恢复完整状态:")
+    logger.info(f"[Planning API] [{session_id}]   - current_layer: {current_layer}")
+    logger.info(f"[Planning API] [{session_id}]   - analysis_reports: {len(full_state.get('analysis_reports', {}))} 个维度")
+    logger.info(f"[Planning API] [{session_id}]   - concept_reports: {len(full_state.get('concept_reports', {}))} 个维度")
+    logger.info(f"[Planning API] [{session_id}]   - detail_reports: {len(full_state.get('detail_reports', {}))} 个维度")
+    logger.info(f"[Planning API] [{session_id}]   - need_revision: {full_state.get('need_revision', False)}")
 
-    # Update session state
+    # Update session state（仅更新业务元数据，不覆盖 Checkpoint 数据）
     with _sessions_lock:
         if session_id in _sessions:
-            _sessions[session_id]["initial_state"] = state
+            # 同步 current_layer 到内存会话
             _sessions[session_id]["current_layer"] = current_layer
-            # 不要清空 events 列表，而是添加一个 resumed 事件
             _sessions[session_id]["execution_complete"] = False
             _sessions[session_id]["execution_error"] = None
             _sessions[session_id]["status"] = TaskStatus.running
             # Preserve sent_layer_events to prevent re-sending completed layer events
-            # This set tracks which layer completion events have already been sent
             if "sent_layer_events" not in _sessions[session_id]:
                 _sessions[session_id]["sent_layer_events"] = set()
                 logger.info(f"[Planning API] [{session_id}] 初始化 sent_layer_events")
@@ -831,25 +825,20 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any]) -> Dic
         logger.error(f"[Planning API] [{session_id}] 持久化状态失败: {db_error}", exc_info=True)
         # 继续执行,不阻断恢复流程
 
-    # ✅ 使用统一的单例获取方式
-    saver = await get_global_checkpointer()
-    graph = create_village_planning_graph(checkpointer=saver)
-    config = {"configurable": {"thread_id": session_id}}
-
-    # ✅ 使用 graph.aupdate_state 清除暂停标志
-    # 注意：不指定 as_node，避免引用不存在的节点名称
-    await graph.aupdate_state(
-        config,
-        {"pause_after_step": False}
-    )
-    logger.info(f"[Planning API] [{session_id}] 已清除 pause_after_step 标志")
+    # ✅ 使用 graph.aupdate_state 清除暂停标志（如果需要）
+    if full_state.get("pause_after_step", False):
+        await graph.aupdate_state(
+            config,
+            {"pause_after_step": False}
+        )
+        logger.info(f"[Planning API] [{session_id}] 已清除 pause_after_step 标志")
 
     # Reset stream state
     _set_stream_state(session_id, "active")
 
-    # Start background execution directly
+    # ✅ 使用 None 作为输入，LangGraph 自动从 Checkpoint 加载完整状态
     asyncio.create_task(
-        _execute_graph_in_background(session_id, graph, state, saver)
+        _execute_graph_in_background(session_id, graph, None, saver)
     )
 
     logger.info(f"[Planning API] Resumed background execution for session {session_id}")
@@ -1230,28 +1219,41 @@ async def review_action(session_id: str, request: ReviewActionRequest):
             # 重置流状态
             _stream_states[session_id] = "active"
 
-            # 清除暂停标志
-            initial_state["pause_after_step"] = False
-            initial_state["previous_layer"] = 0  # 清除待审查层级
-            initial_state["human_feedback"] = ""
-            initial_state["__interrupt__"] = False
             session["status"] = TaskStatus.running
 
-            # 推进当前层
-            current_layer = initial_state.get("current_layer", 1)
+            # ✅ LangGraph 官方推荐模式：
+            # 使用 aupdate_state 更新 Checkpoint，而不是操作内存 initial_state
+            checkpointer = await get_global_checkpointer()
+            graph = create_village_planning_graph(checkpointer=checkpointer)
+            config = {"configurable": {"thread_id": session_id}}
+            
+            # 获取当前 Checkpoint 状态
+            checkpoint_state = await graph.aget_state(config)
+            if not checkpoint_state or not checkpoint_state.values:
+                raise HTTPException(status_code=400, detail="Session not found in checkpoint")
+            
+            current_layer = checkpoint_state.values.get("current_layer", 1)
+            
+            # 计算下一层
             next_layer = current_layer
-            if current_layer == 1 and initial_state.get("layer_1_completed", False):
-                initial_state["current_layer"] = 2
+            if current_layer == 1 and checkpoint_state.values.get("layer_1_completed", False):
                 next_layer = 2
                 logger.info(f"[Planning API] [{session_id}] Layer 1完成，进入Layer 2")
-            elif current_layer == 2 and initial_state.get("layer_2_completed", False):
-                initial_state["current_layer"] = 3
+            elif current_layer == 2 and checkpoint_state.values.get("layer_2_completed", False):
                 next_layer = 3
                 logger.info(f"[Planning API] [{session_id}] Layer 2完成，进入Layer 3")
-            elif current_layer == 3 and initial_state.get("layer_3_completed", False):
-                initial_state["current_layer"] = 4
+            elif current_layer == 3 and checkpoint_state.values.get("layer_3_completed", False):
                 next_layer = 4
                 logger.info(f"[Planning API] [{session_id}] Layer 3完成，进入最终阶段")
+
+            # 更新 Checkpoint
+            await graph.aupdate_state(config, {
+                "pause_after_step": False,
+                "previous_layer": 0,
+                "human_feedback": "",
+                "current_layer": next_layer,
+            })
+            logger.info(f"[Planning API] [{session_id}] 已更新 Checkpoint: current_layer={next_layer}")
 
             # 清除sent_pause_events中之前层的pause事件，确保新层的pause事件能够触发
             sent_pause_events = session.get("sent_pause_events", set())
@@ -1264,7 +1266,7 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         sent_pause_events.discard(event_key)
                     session["sent_pause_events"] = sent_pause_events
 
-            # ✅ 只持久化业务元数据到数据库
+            # 持久化业务元数据到数据库
             await update_session_async(session_id, {
                 "status": TaskStatus.running,
             })
@@ -1273,18 +1275,36 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                 web_review_tool.submit_review_decision(review_id=review_id, action="approve")
 
             logger.info(f"[Planning API] Review approved, resuming session {session_id}")
-            return await _resume_graph_execution(session_id, initial_state)
+            # ✅ 不传入 state，让 _resume_graph_execution 从 Checkpoint 加载完整状态
+            return await _resume_graph_execution(session_id)
 
         # ---------- reject ----------
         elif request.action == "reject":
-            initial_state["pause_after_step"] = False
-            initial_state["human_feedback"] = request.feedback
-            initial_state["need_revision"] = True
-            initial_state["revision_target_dimensions"] = request.dimensions
-            initial_state["__interrupt__"] = False
+            # ✅ LangGraph 官方推荐模式：
+            # 1. Checkpoint 是唯一数据源，不需要操作内存 initial_state
+            # 2. 使用 aupdate_state 增量更新 Checkpoint
+            # 3. _resume_graph_execution 从 Checkpoint 加载完整状态
+            
             session["status"] = TaskStatus.revising
 
-            # ✅ 只持久化业务元数据到数据库
+            # 获取 checkpointer 和图实例
+            checkpointer = await get_global_checkpointer()
+            graph = create_village_planning_graph(checkpointer=checkpointer)
+            config = {"configurable": {"thread_id": session_id}}
+            
+            # ✅ 使用 aupdate_state 增量更新 Checkpoint（不覆盖现有 reports）
+            await graph.aupdate_state(config, {
+                "need_revision": True,
+                "revision_target_dimensions": request.dimensions,
+                "human_feedback": request.feedback,
+                "pause_after_step": False,
+            })
+            logger.info(f"[Planning API] [{session_id}] 已更新 Checkpoint:")
+            logger.info(f"[Planning API] [{session_id}]   - need_revision: True")
+            logger.info(f"[Planning API] [{session_id}]   - revision_target_dimensions: {request.dimensions}")
+            logger.info(f"[Planning API] [{session_id}]   - human_feedback: {request.feedback[:50]}...")
+
+            # 持久化业务元数据到数据库
             await update_session_async(session_id, {
                 "status": TaskStatus.revising,
                 "execution_error": None,
@@ -1299,49 +1319,83 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                 )
 
             logger.info(f"[Planning API] Review rejected with feedback, session {session_id}")
-            return await _resume_graph_execution(session_id, initial_state)
+            # ✅ 不传入 state，让 _resume_graph_execution 从 Checkpoint 加载完整状态
+            return await _resume_graph_execution(session_id)
 
         # ---------- rollback ----------
         elif request.action == "rollback":
             if not request.checkpoint_id:
                 raise HTTPException(status_code=400, detail="Checkpoint ID required for rollback")
 
-            project_name = session.get("project_name", "")
-            checkpoint_tool = tool_manager.get_checkpoint_tool(project_name)
-            rollback_result = checkpoint_tool.rollback(
-                checkpoint_id=request.checkpoint_id,
-                current_output_dir=None
-            )
+            # 使用 LangGraph 统一检查点管理
+            try:
+                # 1. 获取全局 checkpointer
+                checkpointer = await get_global_checkpointer()
 
-            if not rollback_result.get("success"):
+                # 2. 创建图实例用于状态操作
+                graph = create_village_planning_graph(checkpointer=checkpointer)
+
+                # 3. 构建配置
+                config = {"configurable": {"thread_id": session_id}}
+
+                # 4. 从 LangGraph 检查点历史中查找目标检查点
+                target_state_snapshot = None
+                async for state_snapshot in graph.aget_state_history(config):
+                    snapshot_checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+                    if snapshot_checkpoint_id == request.checkpoint_id:
+                        target_state_snapshot = state_snapshot
+                        break
+
+                if not target_state_snapshot:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Checkpoint not found: {request.checkpoint_id}"
+                    )
+
+                # 5. 使用 aupdate_state 恢复状态
+                target_values = target_state_snapshot.values
+                await graph.aupdate_state(
+                    config,
+                    target_values,
+                    as_node=None  # 不指定节点，直接覆盖状态
+                )
+
+                logger.info(f"[Planning API] Successfully rolled back to checkpoint {request.checkpoint_id}")
+
+                # 6. 更新 session 元数据（不更新 initial_state，Checkpoint 是唯一数据源）
+                target_layer = target_values.get("current_layer", 1)
+                session["current_layer"] = target_layer
+                session["status"] = TaskStatus.paused
+
+                # 7. 提交审查决定
+                if review_id:
+                    web_review_tool.submit_review_decision(
+                        review_id=review_id,
+                        action="rollback",
+                        checkpoint_id=request.checkpoint_id
+                    )
+
+                # 8. 持久化业务元数据到数据库
+                await update_session_async(session_id, {
+                    "status": TaskStatus.paused,
+                })
+
+                logger.info(f"[Planning API] Rolling back session {session_id} to layer {target_layer}")
+
+                return {
+                    "message": f"Rolled back to checkpoint {request.checkpoint_id}",
+                    "current_layer": target_layer,
+                    "resumed": False  # 回退后不自动恢复，等待用户确认
+                }
+
+            except HTTPException:
+                raise
+            except Exception as rollback_error:
+                logger.error(f"[Planning API] Rollback error: {rollback_error}", exc_info=True)
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"Rollback failed: {rollback_result.get('error', 'Unknown error')}"
+                    status_code=500,
+                    detail=f"Rollback failed: {str(rollback_error)}"
                 )
-
-            if review_id:
-                web_review_tool.submit_review_decision(
-                    review_id=review_id,
-                    action="rollback",
-                    checkpoint_id=request.checkpoint_id
-                )
-
-            state = rollback_result.get("state", {})
-            initial_state.update(state)
-            session["current_layer"] = state.get("current_layer", 1)
-            session["status"] = TaskStatus.paused
-
-            # ✅ 只持久化业务元数据到数据库
-            await update_session_async(session_id, {
-                "status": TaskStatus.paused,
-            })
-
-            logger.info(f"[Planning API] Rolling back session {session_id}")
-
-            return {
-                "message": f"Rolling back to checkpoint {request.checkpoint_id}",
-                "resumed": True
-            }
 
         else:
             raise HTTPException(status_code=400, detail=f"Invalid action: {request.action}")
@@ -1389,23 +1443,37 @@ async def resume_from_checkpoint(request: ResumeRequest):
     """
     Resume execution from checkpoint
 
-    Loads checkpoint state and creates new session for continued execution.
+    Loads checkpoint state from LangGraph and creates new session for continued execution.
     """
     try:
         session_id = _generate_session_id()
         logger.info(f"[Planning API] Resuming from checkpoint {request.checkpoint_id}")
 
-        checkpoint_tool = tool_manager.get_checkpoint_tool(request.project_name)
-        load_result = checkpoint_tool.load(request.checkpoint_id)
+        # 使用 LangGraph API 获取检查点状态
+        checkpointer = await get_global_checkpointer()
+        graph = create_village_planning_graph(checkpointer=checkpointer)
 
-        if not load_result.get("success"):
+        # 从原始 session 的 thread_id 获取状态（需要前端传入原始 session_id）
+        # 注意：这里需要原始 session_id 来正确获取 checkpoint
+        # 暂时使用 project_name 作为 thread_id（需要改进）
+        config = {"configurable": {"thread_id": request.project_name}}
+
+        # 查找目标检查点
+        target_state = None
+        async for state_snapshot in graph.aget_state_history(config):
+            snapshot_checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+            if snapshot_checkpoint_id == request.checkpoint_id:
+                target_state = state_snapshot
+                break
+
+        if not target_state:
             raise HTTPException(
                 status_code=404,
                 detail=f"Checkpoint not found: {request.checkpoint_id}"
             )
 
-        state = load_result.get("state", {})
-        metadata = load_result.get("metadata", {})
+        state = target_state.values
+        target_layer = state.get("current_layer", 1)
 
         with _sessions_lock:
             _sessions[session_id] = {
@@ -1414,9 +1482,9 @@ async def resume_from_checkpoint(request: ResumeRequest):
                 "status": TaskStatus.running,
                 "created_at": datetime.now().isoformat(),
                 "resumed_from": request.checkpoint_id,
-                "current_layer": metadata.get("layer", 1),
+                "current_layer": target_layer,
                 "initial_state": state,
-                "events": deque(maxlen=MAX_SESSION_EVENTS),  # Auto-limit to prevent OOM
+                "events": deque(maxlen=MAX_SESSION_EVENTS),
                 "execution_complete": False,
                 "execution_error": None,
             }
@@ -1424,9 +1492,9 @@ async def resume_from_checkpoint(request: ResumeRequest):
         return {
             "session_id": session_id,
             "status": TaskStatus.running,
-            "message": f"Resumed from Layer {metadata.get('layer', 1)}",
+            "message": f"Resumed from Layer {target_layer}",
             "stream_url": f"/api/planning/stream/{session_id}",
-            "current_layer": metadata.get("layer", 1)
+            "current_layer": target_layer
         }
 
     except HTTPException:
@@ -1437,26 +1505,40 @@ async def resume_from_checkpoint(request: ResumeRequest):
 
 
 @router.get("/api/planning/checkpoints/{project_name}")
-async def list_checkpoints(project_name: str):
+async def list_checkpoints(project_name: str, session_id: Optional[str] = None):
     """
-    List all checkpoints for a project
+    List all checkpoints for a project from LangGraph
+
+    Args:
+        project_name: 项目名称
+        session_id: 可选的会话 ID，用于精确获取检查点
     """
     try:
-        checkpoint_tool = tool_manager.get_checkpoint_tool(project_name)
-        list_result = checkpoint_tool.list(include_all=True)
+        checkpointer = await get_global_checkpointer()
+        graph = create_village_planning_graph(checkpointer=checkpointer)
 
-        if not list_result.get("success"):
-            return {
-                "project_name": project_name,
-                "checkpoints": [],
-                "error": list_result.get("error", "Unknown error"),
-                "count": 0
+        # 使用 session_id 作为 thread_id
+        thread_id = session_id or project_name
+        config = {"configurable": {"thread_id": thread_id}}
+
+        checkpoints = []
+        async for state_snapshot in graph.aget_state_history(config):
+            checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+            values = state_snapshot.values or {}
+
+            # 构建检查点信息
+            checkpoint_info = {
+                "checkpoint_id": checkpoint_id,
+                "timestamp": state_snapshot.metadata.get("write_ts", "") if state_snapshot.metadata else "",
+                "layer": values.get("current_layer", 1),
+                "description": f"Layer {values.get('current_layer', 1)} checkpoint",
             }
+            checkpoints.append(checkpoint_info)
 
         return {
             "project_name": project_name,
-            "checkpoints": list_result.get("checkpoints", []),
-            "count": list_result.get("count", 0)
+            "checkpoints": checkpoints,
+            "count": len(checkpoints)
         }
 
     except Exception as e:
@@ -1483,6 +1565,17 @@ async def _rebuild_session_from_db(session_id: str) -> Optional[Dict[str, Any]]:
         initial_state = {}
 
     with _sessions_lock:
+        # 根据层级完成状态恢复 sent_layer_events，防止重复发送已完成的事件
+        sent_layer_events = set()
+        if initial_state.get("layer_1_completed"):
+            sent_layer_events.add("layer_1_completed")
+        if initial_state.get("layer_2_completed"):
+            sent_layer_events.add("layer_2_completed")
+        if initial_state.get("layer_3_completed"):
+            sent_layer_events.add("layer_3_completed")
+        
+        logger.info(f"[Planning API] [{session_id}] 恢复 sent_layer_events: {sent_layer_events}")
+        
         _sessions[session_id] = {
             # ✅ 只从数据库读取业务元数据
             "session_id": db_session["session_id"],
@@ -1493,7 +1586,7 @@ async def _rebuild_session_from_db(session_id: str) -> Optional[Dict[str, Any]]:
             # ✅ 内存中的状态管理
             "events": deque(maxlen=MAX_SESSION_EVENTS),
             "execution_complete": False,
-            "sent_layer_events": set(),
+            "sent_layer_events": sent_layer_events,  # ✅ 恢复而非重置
             "sent_pause_events": set(),
             # ✅ 从 AsyncSqliteSaver 恢复 state
             "initial_state": initial_state,
