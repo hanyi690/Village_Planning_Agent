@@ -29,8 +29,7 @@ from ..subgraphs.analysis_subgraph import call_analysis_subgraph
 from ..subgraphs.concept_subgraph import call_concept_subgraph
 from ..subgraphs.detailed_plan_subgraph import call_detailed_plan_subgraph
 
-# 使用新工具
-from ..tools.checkpoint_tool import CheckpointTool
+# 使用新工具（CheckpointTool 已移除，统一使用 LangGraph AsyncSqliteSaver）
 from ..tools.revision_tool import RevisionTool
 
 # 使用新的节点类
@@ -67,6 +66,7 @@ class VillagePlanningState(TypedDict):
     need_human_review: bool        # 是否需要人工审核
     human_feedback: str            # 人工反馈
     need_revision: bool            # 是否需要修复
+    revision_target_dimensions: List[str]  # 用户选择的修复维度列表
 
     # 各层成果（统一命名：analysis_reports, concept_reports, detail_reports）
     # 综合报告已移除，改为动态生成以节省存储空间
@@ -78,10 +78,8 @@ class VillagePlanningState(TypedDict):
     # 输出管理
     output_manager: OutputManager  # 输出管理器实例
 
-    # Checkpoint相关
-    checkpoint_enabled: bool       # 是否启用checkpoint
+    # Checkpoint相关（由 LangGraph AsyncSqliteSaver 自动管理）
     last_checkpoint_id: str        # 最后保存的checkpoint ID
-    checkpoint_manager: Any        # checkpoint工具实例
 
     # 逐步执行模式
     step_mode: bool                # 是否启用逐步执行模式
@@ -151,40 +149,12 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
                 except Exception as save_error:
                     logger.warning(f"[主图-Layer1] 保存结果时出错: {save_error}")
 
-            # 保存checkpoint（如果启用）
-            checkpoint_id = ""
-            if state.get("checkpoint_enabled", False):
-                checkpoint_manager = state.get("checkpoint_manager")
-                if checkpoint_manager:
-                    # 使用新工具
-                    if isinstance(checkpoint_manager, CheckpointTool):
-                        save_result = checkpoint_manager.save(
-                            state={**state, **{
-                                "analysis_reports": result.get("analysis_reports", {}),
-                                "layer_1_completed": True,
-                                "current_layer": 2
-                            }},
-                            layer=1,
-                            description="Layer 1 现状分析完成"
-                        )
-                        checkpoint_id = save_result["checkpoint_id"] if save_result["success"] else ""
-                    else:
-                        # 兼容旧版本
-                        checkpoint_id = checkpoint_manager.save_checkpoint(
-                            state={**state, **{
-                                "analysis_reports": result.get("analysis_reports", {}),
-                                "layer_1_completed": True,
-                                "current_layer": 2
-                            }},
-                            layer=1,
-                            description="Layer 1 现状分析完成"
-                        )
+            # Checkpoint 由 LangGraph 自动保存，无需手动处理
 
             return {
                 "analysis_reports": result.get("analysis_reports", {}),
                 "layer_1_completed": True,
                 "current_layer": 2,
-                "last_checkpoint_id": checkpoint_id,
                 "messages": [AIMessage(content=f"现状分析完成，生成了 {len(result.get('analysis_reports', {}))} 个维度报告。")]
             }
         else:
@@ -236,40 +206,12 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
                 except Exception as save_error:
                     logger.warning(f"[主图-Layer2] 保存结果时出错: {save_error}")
 
-            # 保存checkpoint（如果启用）
-            checkpoint_id = ""
-            if state.get("checkpoint_enabled", False):
-                checkpoint_manager = state.get("checkpoint_manager")
-                if checkpoint_manager:
-                    # 使用新工具
-                    if isinstance(checkpoint_manager, CheckpointTool):
-                        save_result = checkpoint_manager.save(
-                            state={**state, **{
-                                "concept_reports": result.get("concept_reports", {}),
-                                "layer_2_completed": True,
-                                "current_layer": 3
-                            }},
-                            layer=2,
-                            description="Layer 2 规划思路完成"
-                        )
-                        checkpoint_id = save_result["checkpoint_id"] if save_result["success"] else ""
-                    else:
-                        # 兼容旧版本
-                        checkpoint_id = checkpoint_manager.save_checkpoint(
-                            state={**state, **{
-                                "concept_reports": result.get("concept_reports", {}),
-                                "layer_2_completed": True,
-                                "current_layer": 3
-                            }},
-                            layer=2,
-                            description="Layer 2 规划思路完成"
-                        )
+            # Checkpoint 由 LangGraph 自动保存，无需手动处理
 
             return {
                 "concept_reports": result.get("concept_reports", {}),
                 "layer_2_completed": True,
                 "current_layer": 3,
-                "last_checkpoint_id": checkpoint_id,
                 "messages": [AIMessage(content=f"规划思路已生成，包含 {len(result.get('concept_reports', {}))} 个维度报告。")]
             }
         else:
@@ -337,40 +279,12 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
                 except Exception as save_error:
                     logger.warning(f"[主图-Layer3] 保存结果时出错: {save_error}")
 
-            # 保存checkpoint（如果启用）
-            checkpoint_id = ""
-            if state.get("checkpoint_enabled", False):
-                checkpoint_manager = state.get("checkpoint_manager")
-                if checkpoint_manager:
-                    # 使用新工具
-                    if isinstance(checkpoint_manager, CheckpointTool):
-                        save_result = checkpoint_manager.save(
-                            state={**state, **{
-                                "detail_reports": detail_reports,
-                                "layer_3_completed": True,
-                                "current_layer": 4
-                            }},
-                            layer=3,
-                            description="Layer 3 详细规划完成"
-                        )
-                        checkpoint_id = save_result["checkpoint_id"] if save_result["success"] else ""
-                    else:
-                        # 兼容旧版本
-                        checkpoint_id = checkpoint_manager.save_checkpoint(
-                            state={**state, **{
-                                "detail_reports": detail_reports,
-                                "layer_3_completed": True,
-                                "current_layer": 4
-                            }},
-                            layer=3,
-                            description="Layer 3 详细规划完成"
-                        )
+            # Checkpoint 由 LangGraph 自动保存，无需手动处理
 
             return {
                 "detail_reports": detail_reports,
                 "layer_3_completed": True,
                 "current_layer": 4,
-                "last_checkpoint_id": checkpoint_id,
                 "messages": [AIMessage(content=f"详细规划已生成，包含 {len(result['completed_dimensions'])} 个专业维度。")]
             }
         else:
@@ -518,16 +432,7 @@ def _run_human_review(state: VillagePlanningState) -> Dict[str, Any]:
         content = state.get("detailed_plan", "")
         title = "详细规划报告"
 
-    # 获取可用checkpoint列表（用于回退）
-    checkpoint_manager = state.get("checkpoint_manager")
-    available_checkpoints = []
-    if checkpoint_manager:
-        if isinstance(checkpoint_manager, CheckpointTool):
-            list_result = checkpoint_manager.list()
-            if list_result["success"]:
-                available_checkpoints = list_result["checkpoints"]
-        else:
-            available_checkpoints = checkpoint_manager.list_checkpoints()
+    # 获取可用checkpoint列表（由前端从后端 API 获取，这里不再处理）
 
     # 创建审查请求（非阻塞，等待前端响应）
     from ..tools.web_review_tool import WebReviewTool
@@ -539,7 +444,7 @@ def _run_human_review(state: VillagePlanningState) -> Dict[str, Any]:
         title=title,
         session_id=session_id,
         current_layer=current_layer,
-        available_checkpoints=available_checkpoints
+        available_checkpoints=[]  # 前端从 API 获取
     )
 
     if result["success"]:
@@ -691,7 +596,14 @@ def init_pause_state(state: VillagePlanningState) -> Dict[str, Any]:
     
     只在 previous_layer > 0 且 step_mode 启用时设置暂停。
     流程开始时（previous_layer=0）不暂停。
+    
+    修复流程（need_revision=True）时清除暂停标志，让修复正常执行。
     """
+    # 修复流程不需要暂停，清除暂停标志
+    if state.get("need_revision", False):
+        logger.info("[主图-暂停初始化] need_revision=True，清除 pause_after_step 让修复流程正常执行")
+        return {"pause_after_step": False}
+    
     if state.get("step_mode", False) and state.get("previous_layer", 0) > 0:
         logger.info(f"[主图-暂停初始化] Step模式 + Layer {state.get('previous_layer')} 完成，设置pause_after_step=True")
         return {"pause_after_step": True}
@@ -702,12 +614,18 @@ def init_pause_state(state: VillagePlanningState) -> Dict[str, Any]:
 # 路由决策
 # ==========================================
 
-def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis", "layer2_concept", "layer3_detail"]:
+def route_after_pause(state: VillagePlanningState) -> Literal["tool_bridge", "layer1_analysis", "layer2_concept", "layer3_detail", "generate_final"]:
     """
-    pause节点后的路由：根据current_layer决定执行哪个layer
+    pause节点后的路由：先检查修复标志，再根据current_layer决定执行哪个layer
 
-    这个路由函数确保pause节点能够正确地将流程引导到当前应该执行的layer。
+    优先级：need_revision > current_layer
     """
+    # 优先检查修复标志
+    if state.get("need_revision", False):
+        logger.info("[主图-路由] 检测到 need_revision=True，路由到 tool_bridge 执行修复")
+        return "tool_bridge"
+    
+    # 正常路由到当前层
     current_layer = state.get("current_layer", 1)
     logger.info(f"[主图-路由] 从pause节点路由到Layer {current_layer}")
 
@@ -717,6 +635,10 @@ def route_after_pause(state: VillagePlanningState) -> Literal["layer1_analysis",
         return "layer2_concept"
     elif current_layer == 3:
         return "layer3_detail"
+    elif current_layer == 4:
+        # Layer 3 审查通过后，从 pause 路由到最终成果生成
+        logger.info("[主图-路由] Layer 3 审查通过，从pause路由到最终成果生成")
+        return "generate_final"
     else:
         # 默认返回layer1
         logger.warning(f"[主图-路由] 无效的current_layer: {current_layer}，默认路由到Layer 1")
@@ -761,23 +683,33 @@ def route_after_layer2(state: VillagePlanningState) -> Literal["tool_bridge", "l
     return "layer3"
 
 
-def route_after_layer3(state: VillagePlanningState) -> Literal["final", "end"]:
+def route_after_layer3(state: VillagePlanningState) -> Literal["tool_bridge", "final", "end"]:
     """Layer 3 完成后的路由决策"""
-    if state["layer_3_completed"]:
-        logger.info("[主图-路由] 进入最终成果生成")
-        return "final"
-    else:
+    if not state["layer_3_completed"]:
         logger.warning("[主图-路由] 详细规划失败，流程终止")
         return "end"
 
+    # 检查是否需要暂停（step_mode + previous_layer > 0）
+    if state.get("step_mode", False) and state.get("previous_layer", 0) > 0:
+        logger.info("[主图-路由] Layer 3 完成，进入工具桥接（暂停）")
+        return "tool_bridge"
 
-def route_after_tool_bridge(state: VillagePlanningState) -> Literal["init_pause", "layer2_concept", "layer3_detail", "end"]:
+    if state.get("need_human_review", False):
+        logger.info("[主图-路由] 进入工具桥接（人工审核）")
+        return "tool_bridge"
+
+    logger.info("[主图-路由] 进入最终成果生成")
+    return "final"
+
+
+def route_after_tool_bridge(state: VillagePlanningState) -> Literal["init_pause", "layer2_concept", "layer3_detail", "generate_final", "end"]:
     """
     工具桥接后的路由决策
 
     决定从tool_bridge出来后：
     - 如果step_mode开启：路由到init_pause节点（设置暂停状态）
     - 否则：直接路由到对应的layer执行节点
+    - Layer 3 审查后：路由到 generate_final 生成最终成果
     """
     current_layer = state.get("current_layer", 1)
 
@@ -829,6 +761,13 @@ def route_after_tool_bridge(state: VillagePlanningState) -> Literal["init_pause"
             return "init_pause"
         logger.info("[主图-路由] 直接进入Layer 3")
         return "layer3_detail"
+    elif current_layer == 4:
+        # Layer 3 审查通过后，进入最终成果生成
+        if state.get("step_mode", False):
+            logger.info("[主图-路由] Step模式：tool_bridge → init_pause → final")
+            return "init_pause"
+        logger.info("[主图-路由] Layer 3 审查通过，进入最终成果生成")
+        return "generate_final"
     else:
         logger.info("[主图-路由] 流程结束")
         return "end"
@@ -873,14 +812,16 @@ def create_village_planning_graph(checkpointer=None) -> StateGraph:
     # START -> init_pause (初始化暂停状态)
     builder.add_edge(START, "init_pause")
 
-    # pause -> 根据current_layer路由到对应的layer
+    # pause -> 根据current_layer路由到对应的layer，或路由到tool_bridge执行修复
     builder.add_conditional_edges(
         "init_pause",
         route_after_pause,
         {
+            "tool_bridge": "tool_bridge",
             "layer1_analysis": "layer1_analysis",
             "layer2_concept": "layer2_concept",
-            "layer3_detail": "layer3_detail"
+            "layer3_detail": "layer3_detail",
+            "generate_final": "generate_final"
         }
     )
 
@@ -895,7 +836,7 @@ def create_village_planning_graph(checkpointer=None) -> StateGraph:
         }
     )
 
-    # tool_bridge -> pause/layer2/layer3/end
+    # tool_bridge -> pause/layer2/layer3/generate_final/end
     # 在step模式下，tool_bridge会路由到pause节点以重置暂停状态
     builder.add_conditional_edges(
         "tool_bridge",
@@ -904,6 +845,7 @@ def create_village_planning_graph(checkpointer=None) -> StateGraph:
             "init_pause": "init_pause",
             "layer2_concept": "layer2_concept",
             "layer3_detail": "layer3_detail",
+            "generate_final": "generate_final",
             "end": END
         }
     )
@@ -919,11 +861,12 @@ def create_village_planning_graph(checkpointer=None) -> StateGraph:
         }
     )
 
-    # Layer 3 -> final/end
+    # Layer 3 -> tool_bridge/final/end
     builder.add_conditional_edges(
         "layer3_detail",
         route_after_layer3,
         {
+            "tool_bridge": "tool_bridge",
             "final": "generate_final",
             "end": END
         }
@@ -1040,9 +983,7 @@ def run_village_planning(
         "detail_reports": {},
         "final_output": "",
         "output_manager": output_manager,
-        "checkpoint_enabled": True,
         "last_checkpoint_id": "",
-        "checkpoint_manager": None,
         "step_mode": step_mode,
         "step_level": step_level,
         "pause_after_step": step_mode,
@@ -1067,14 +1008,7 @@ def run_village_planning(
         }
     }
 
-    # 初始化checkpoint工具（如果启用）
-    if initial_state["checkpoint_enabled"]:
-        checkpoint_manager = CheckpointTool(
-            project_name=project_name,
-            timestamp=output_manager.timestamp if output_manager else None
-        )
-        initial_state["checkpoint_manager"] = checkpoint_manager
-        logger.info("[主图-调用] Checkpoint工具已初始化")
+    # Checkpoint 由 LangGraph AsyncSqliteSaver 自动管理，无需手动初始化
 
     try:
         if stream_mode:
@@ -1122,15 +1056,17 @@ def run_village_planning(
 def resume_from_checkpoint(
     checkpoint_id: str,
     project_name: str,
-    output_manager: OutputManager = None
+    output_manager: OutputManager = None,
+    checkpointer = None
 ) -> Dict[str, Any]:
     """
-    从checkpoint恢复执行
+    从checkpoint恢复执行（使用 LangGraph AsyncSqliteSaver）
 
     Args:
         checkpoint_id: checkpoint ID
         project_name: 项目名称
         output_manager: 输出管理器（可选）
+        checkpointer: LangGraph checkpointer 实例（可选）
 
     Returns:
         执行结果字典
@@ -1138,20 +1074,33 @@ def resume_from_checkpoint(
     logger.info(f"[主图-恢复] 从checkpoint恢复: {checkpoint_id}")
 
     try:
-        # 创建checkpoint工具
-        checkpoint_manager = CheckpointTool(project_name)
+        # 获取 checkpointer（如果未提供）
+        if checkpointer is None:
+            import asyncio
+            import aiosqlite
+            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+            from backend.database.engine import get_db_path
+            
+            async def get_checkpointer():
+                conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
+                saver = AsyncSqliteSaver(conn)
+                await saver.setup()
+                return saver
+            
+            checkpointer = asyncio.run(get_checkpointer())
 
-        # 加载checkpoint
-        load_result = checkpoint_manager.load(checkpoint_id)
-        if not load_result["success"]:
-            return {
-                "success": False,
-                "error": f"无法加载checkpoint: {checkpoint_id}"
+        # 创建主图
+        graph = create_village_planning_graph(checkpointer=checkpointer)
+
+        # 构建配置（使用 project_name 作为 thread_id）
+        config = {
+            "configurable": {
+                "thread_id": project_name,
+                "checkpoint_id": checkpoint_id
             }
+        }
 
-        state = load_result["state"]
-
-        # 重建output_manager
+        # 重建 output_manager
         if output_manager is None:
             try:
                 from ..utils.output_manager import create_output_manager
@@ -1161,85 +1110,27 @@ def resume_from_checkpoint(
             except Exception as e:
                 logger.warning(f"[主图-恢复] 重建output_manager失败: {e}")
 
-        # 获取当前层级
-        current_layer = state.get("current_layer", 1)
+        # 确保输出目录存在
+        if output_manager:
+            output_manager.ensure_directories()
 
-        # 根据当前层级决定执行路径
-        if current_layer == 2:
-            logger.info("[主图-恢复] Layer 1已完成，从Layer 2继续")
+        # 从指定 checkpoint 继续执行
+        # LangGraph 会自动从 checkpoint_id 恢复状态
+        final_state = graph.invoke(None, config)
 
-            # 确保输出目录存在
-            if output_manager:
-                output_manager.ensure_directories()
+        logger.info("[主图-恢复] 从checkpoint恢复执行完成")
 
-            # 创建主图
-            graph = create_village_planning_graph()
-
-            # 更新状态
-            state["output_manager"] = output_manager
-            state["checkpoint_enabled"] = True
-            state["checkpoint_manager"] = checkpoint_manager
-
-            # 从Layer 2开始执行
-            final_state = graph.invoke(state)
-
-            return {
-                "success": True,
-                "final_output": final_state.get("final_output", ""),
-                "resumed_from": checkpoint_id,
-                "all_layers_completed": all([
-                    final_state.get("layer_1_completed", False),
-                    final_state.get("layer_2_completed", False),
-                    final_state.get("layer_3_completed", False)
-                ]),
-                "output_manager": output_manager
-            }
-
-        elif current_layer == 3:
-            logger.info("[主图-恢复] Layer 2已完成，从Layer 3继续")
-
-            # 确保输出目录存在
-            if output_manager:
-                output_manager.ensure_directories()
-
-            # 创建主图
-            graph = create_village_planning_graph()
-
-            # 更新状态
-            state["output_manager"] = output_manager
-            state["checkpoint_enabled"] = True
-            state["checkpoint_manager"] = checkpoint_manager
-
-            # 从Layer 3开始执行
-            final_state = graph.invoke(state)
-
-            return {
-                "success": True,
-                "final_output": final_state.get("final_output", ""),
-                "resumed_from": checkpoint_id,
-                "all_layers_completed": all([
-                    final_state.get("layer_1_completed", False),
-                    final_state.get("layer_2_completed", False),
-                    final_state.get("layer_3_completed", False)
-                ]),
-                "output_manager": output_manager
-            }
-
-        elif current_layer >= 4:
-            logger.info("[主图-恢复] 所有层级已完成，无需继续执行")
-            return {
-                "success": True,
-                "final_output": state.get("final_output", ""),
-                "resumed_from": checkpoint_id,
-                "all_layers_completed": True,
-                "message": "所有层级已完成"
-            }
-
-        else:
-            return {
-                "success": False,
-                "error": f"无效的当前层级: {current_layer}"
-            }
+        return {
+            "success": True,
+            "final_output": final_state.get("final_output", ""),
+            "resumed_from": checkpoint_id,
+            "all_layers_completed": all([
+                final_state.get("layer_1_completed", False),
+                final_state.get("layer_2_completed", False),
+                final_state.get("layer_3_completed", False)
+            ]),
+            "output_manager": output_manager
+        }
 
     except Exception as e:
         logger.error(f"[主图-恢复] 恢复失败: {str(e)}")
