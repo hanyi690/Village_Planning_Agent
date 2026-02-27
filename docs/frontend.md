@@ -2,7 +2,7 @@
 
 > Next.js 14 前端架构 - 后端状态驱动、单一真实源
 
-## 核心架构
+## 架构概览
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -12,7 +12,7 @@
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                  UnifiedPlanningProvider                     │
-│                  (contexts/UnifiedPlanningContext.tsx)       │
+│              contexts/UnifiedPlanningContext.tsx             │
 │                                                             │
 │  状态: taskId, status, isPaused, pendingReviewLayer         │
 │  方法: syncBackendState(), startPlanning()                  │
@@ -20,15 +20,15 @@
          ┌─────────────────┬─────────────────┐
          ▼                 ▼                 ▼
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│UnifiedLayout │   │ ChatPanel    │   │ HistoryPanel │
-│(Header+Main) │   │ (主界面)     │   │ (历史抽屉)   │
+│UnifiedLayout │   │  ChatPanel   │   │ HistoryPanel │
+│ (Header+Main)│   │  (主界面)    │   │ (历史抽屉)   │
 └──────────────┘   └──────┬───────┘   └──────────────┘
                           │
          ┌────────────────┼────────────────┐
          ▼                ▼                ▼
   ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-  │MessageList   │ │TaskController│ │ReviewPanel   │
-  │              │ │(REST轮询+SSE)│ │(条件渲染)    │
+  │ MessageList  │ │TaskController│ │ ReviewPanel  │
+  │              │ │REST轮询+SSE │ │ (条件渲染)   │
   └──────────────┘ └──────────────┘ └──────────────┘
 ```
 
@@ -91,6 +91,7 @@ TaskController SSE 连接条件:
 
 事件类型:
   - dimension_delta: 维度增量文本
+  - dimension_complete: 维度完成
   - layer_completed: 层级完成
   - pause: 暂停等待审查
   - completed: 执行完成
@@ -117,7 +118,47 @@ syncBackendState(): isPaused = false
 ReviewPanel 消失 (条件渲染)
 ```
 
-## 核心组件
+## 组件层级
+
+### Layout 组件
+
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| UnifiedLayout | layout/UnifiedLayout.tsx | 主布局容器：Header + 主内容区 + 历史面板模态框 |
+| Header | layout/Header.tsx | 顶部导航栏：Logo + 新建按钮 + 历史按钮 |
+| HistoryPanel | layout/HistoryPanel.tsx | 历史记录面板：村庄列表 + 会话列表 |
+| UnifiedContentSwitcher | layout/UnifiedContentSwitcher.tsx | 内容切换器：根据状态显示表单或聊天界面 |
+
+### Chat 组件
+
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| ChatPanel | chat/ChatPanel.tsx | 主界面容器，协调状态同步 |
+| MessageList | chat/MessageList.tsx | 消息列表渲染，支持多种消息类型 |
+| MessageBubble | chat/MessageBubble.tsx | 消息气泡，包含操作按钮和知识引用 |
+| MessageContent | chat/MessageContent.tsx | 消息内容渲染器，根据类型分发 |
+| ReviewPanel | chat/ReviewPanel.tsx | 审查面板：批准按钮 + 聊天框反馈 |
+| LayerReportMessage | chat/LayerReportMessage.tsx | 层级完成消息 |
+| LayerReportCard | chat/LayerReportCard.tsx | 层级报告卡片，支持 chat/sidebar 双模式 |
+| DimensionSection | chat/DimensionSection.tsx | 单个维度卡片，可折叠 |
+| DimensionReportStreaming | chat/DimensionReportStreaming.tsx | 流式维度报告组件 |
+| StreamingText | chat/StreamingText.tsx | 流式文本显示，逐字打印效果 |
+| ThinkingIndicator | chat/ThinkingIndicator.tsx | 思考状态指示器 |
+
+### UI 组件
+
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| Card | ui/Card.tsx | 可复用卡片组件，支持多种变体 |
+| SegmentedControl | ui/SegmentedControl.tsx | iOS 风格分段控制器 |
+
+### Form 组件
+
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| VillageInputForm | VillageInputForm.tsx | 村庄数据输入表单 |
+
+## 核心组件详解
 
 ### UnifiedPlanningContext
 
@@ -130,7 +171,7 @@ interface PlanningState {
   // 任务标识
   taskId: string | null;
   projectName: string | null;
-  status: Status;  // idle|collecting|planning|paused|completed|failed
+  status: Status;  // idle|collecting|planning|paused|reviewing|revising|completed|failed
   
   // 审查状态 (从后端同步)
   isPaused: boolean;              // = status === 'paused'
@@ -144,6 +185,10 @@ interface PlanningState {
   villages: VillageInfo[];
   selectedVillage: VillageInfo | null;
   selectedSession: VillageSession | null;
+  
+  // 检查点
+  checkpoints: Checkpoint[];
+  currentLayer: number | null;
 }
 
 // 核心方法
@@ -163,7 +208,7 @@ syncBackendState(backendData) {
 
 **文件**: `controllers/TaskController.tsx`
 
-**职责**: REST 轮询 + SSE 管理 (无头组件)
+**职责**: REST 轮询 + SSE 管理 (无头组件，只负责数据搬运)
 
 ```typescript
 interface TaskState {
@@ -219,35 +264,53 @@ export default function ChatPanel() {
 }
 ```
 
-## 组件层级
+## Hooks
 
-### Layout 组件
-
-| 组件 | 文件 | 功能 |
+| Hook | 文件 | 功能 |
 |------|------|------|
-| UnifiedLayout | layout/UnifiedLayout.tsx | 主布局容器 |
-| Header | layout/Header.tsx | 顶部导航栏 |
-| HistoryPanel | layout/HistoryPanel.tsx | 历史记录抽屉 |
+| useStreamingRender | useStreamingRender.ts | 批处理渲染，使用 requestAnimationFrame 实现 |
+| useStreamingText | useStreamingText.ts | 流式文本输出，逐字打印效果 |
+| useTaskSSE | useTaskSSE.ts | SSE 连接管理，重试限制和指数退避 |
 
-### Chat 组件
+## Types 类型定义
 
-| 组件 | 文件 | 功能 |
-|------|------|------|
-| ChatPanel | chat/ChatPanel.tsx | 主界面容器 |
-| MessageList | chat/MessageList.tsx | 消息列表 |
-| MessageBubble | chat/MessageBubble.tsx | 消息气泡 |
-| MessageContent | chat/MessageContent.tsx | 消息内容渲染 |
-| StreamingText | chat/StreamingText.tsx | 流式文本显示 |
-| LayerReportCard | chat/LayerReportCard.tsx | 层级报告卡片 |
-| DimensionSection | chat/DimensionSection.tsx | 维度内容显示 |
-| ReviewPanel | chat/ReviewPanel.tsx | 审查操作面板 |
+### 核心消息类型
 
-### UI 组件
+```typescript
+// 基础消息类型
+type Message =
+  | TextMessage
+  | FileMessage
+  | ProgressMessage
+  | ActionMessage
+  | ResultMessage
+  | ErrorMessage
+  | SystemMessage
+  | DimensionReportMessage
+  | LayerCompletedMessage
+  | DimensionRevisedMessage
 
-| 组件 | 文件 | 功能 |
-|------|------|------|
-| Card | ui/Card.tsx | 卡片容器 |
-| SegmentedControl | ui/SegmentedControl.tsx | 分段控制器 |
+// 消息角色
+type MessageRole = 'user' | 'assistant' | 'system'
+```
+
+### 层级完成消息
+
+```typescript
+interface LayerCompletedMessage extends BaseMessage {
+  type: 'layer_completed'
+  layer: number
+  content: string
+  summary: {
+    word_count: number
+    key_points: string[]
+    dimension_count?: number
+    dimension_names?: string[]
+  }
+  dimensionReports?: Record<string, string>
+  actions: ActionButton[]
+}
+```
 
 ## API 客户端
 
@@ -275,29 +338,13 @@ fileApi: {
 }
 ```
 
-### API 响应格式
-
-```typescript
-interface APIResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  message?: string;
-  request_id?: string;
-}
-```
-
-### 重试机制
-
-```typescript
-const MAX_RETRIES = 3;
-const INITIAL_RETRY_DELAY = 1000; // ms
-const RETRY_BACKOFF_MULTIPLIER = 2;
-```
-
 ## 条件渲染
 
 ```typescript
+// 视图模式切换
+{viewMode === 'WELCOME_FORM' && <VillageInputForm />}
+{viewMode === 'SESSION_ACTIVE' && <ChatPanel />}
+
 // ReviewPanel 显示逻辑
 {isPaused && pendingReviewLayer && (
   <ReviewPanel 
@@ -307,42 +354,13 @@ const RETRY_BACKOFF_MULTIPLIER = 2;
   />
 )}
 
-// 视图模式切换
-{viewMode === 'WELCOME_FORM' && <VillageInputForm />}
-{viewMode === 'SESSION_ACTIVE' && <ChatInterface />}
-```
-
-## 消息类型
-
-```typescript
-// types/message.ts
-type MessageType = 
-  | 'text'              // 普通文本
-  | 'layer_completed'   // 层级完成
-  | 'review_interaction' // 审查交互
-  | 'error';            // 错误消息
-
-interface Message {
-  id: string;
-  timestamp: Date;
-  role: 'user' | 'assistant' | 'system';
-  type: MessageType;
-  content: string;
-  layer?: number;
-  summary?: {
-    word_count: number;
-    dimension_count?: number;
-  };
-  dimensionReports?: Record<string, string>;
-  actions?: MessageAction[];
+// 消息类型渲染
+switch (message.type) {
+  case 'layer_completed': return <LayerReportMessage />;
+  case 'dimension_report': return <DimensionReportStreaming />;
+  default: return <TextMessage />;
 }
 ```
-
-## 性能优化
-
-1. **状态变化检测**: `useRef` 跟踪前状态，避免不必要更新
-2. **稳定回调引用**: `useCallback` + `useMemo`
-3. **条件渲染**: 状态驱动，无冗余计算
 
 ## 关键文件索引
 
@@ -351,9 +369,12 @@ interface Message {
 | `contexts/UnifiedPlanningContext.tsx` | 全局状态管理 |
 | `controllers/TaskController.tsx` | REST轮询+SSE管理 |
 | `lib/api.ts` | API客户端 |
+| `types/message.ts` | 类型定义 |
+| `types/message-types.ts` | 具体消息类型定义 |
+| `types/message-guards.ts` | 类型守卫函数 |
+| `config/dimensions.ts` | 维度配置 |
+| `config/planning.ts` | 规划参数默认值 |
 | `components/chat/ChatPanel.tsx` | 主界面容器 |
 | `components/chat/ReviewPanel.tsx` | 审查面板 |
 | `components/chat/MessageList.tsx` | 消息列表 |
 | `components/layout/UnifiedLayout.tsx` | 主布局 |
-| `config/dimensions.ts` | 维度配置 |
-| `types/message.ts` | 类型定义 |

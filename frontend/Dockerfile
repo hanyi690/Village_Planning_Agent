@@ -9,7 +9,7 @@ FROM node:18-alpine AS deps
 WORKDIR /app
 
 # Copy package files
-COPY frontend/package.json frontend/package-lock.json* ./
+COPY package.json package-lock.json* ./
 
 # 使用阿里云 npm 镜像源加速（国内部署优化）
 RUN npm config set registry https://registry.npmmirror.com
@@ -26,7 +26,7 @@ WORKDIR /app
 
 # Copy dependencies from deps stage
 COPY --from=deps /app/node_modules ./node_modules
-COPY frontend/ .
+COPY . .
 
 # Set environment variables for build
 ENV NEXT_TELEMETRY_DISABLED=1
