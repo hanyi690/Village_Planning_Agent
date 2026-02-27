@@ -115,8 +115,15 @@ class LangSmithManager:
         """
         try:
             import langsmith
-            from langchain.callbacks import LangChainTracer
-            from langchain.smith import LangSmithRunTree
+            # LangChain v1: LangChainTracer moved to langchain_core.tracers
+            try:
+                from langchain_core.tracers.langchain import LangChainTracer
+            except ImportError:
+                from langchain.callbacks import LangChainTracer  # Fallback for older versions
+            try:
+                from langchain_core.tracers.langchain import LangSmithRunTree
+            except ImportError:
+                from langchain.smith import LangSmithRunTree  # Fallback for older versions
 
             # Set environment variables for LangChain auto-tracing
             os.environ["LANGCHAIN_TRACING_V2"] = "true"

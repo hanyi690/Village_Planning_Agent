@@ -1,25 +1,47 @@
-# LLM and LangChain
-langchain==0.1.0
-langchain-chroma==1.0.0
-langchain-community==0.4.1
-langchain-core==0.1.0
-langchain-text-splitters==0.1.0
+# ============================================
+# LangChain Ecosystem (v1.x)
+# ============================================
+langchain>=1.1.0
+langchain-core>=1.2.0
+langchain-community>=0.4.1
 langchain-openai>=1.1.0
-langgraph==0.2.28
-openai==1.54.0
+langchain-text-splitters>=1.0.0
+langchain-chroma>=1.0.0
 
-# ZhipuAI (GLM) support
+# ============================================
+# LangGraph (v1.x)
+# ============================================
+langgraph>=1.0.0
+langgraph-checkpoint>=4.0.0
+langgraph-checkpoint-sqlite>=3.0.0
+langgraph-prebuilt>=1.0.0
+langgraph-sdk>=0.3.0
+
+# ============================================
+# LLM Providers
+# ============================================
+openai>=2.0.0
 zhipuai>=2.1.4
 
-# Vector database
-chromadb==0.5.23
+# ============================================
+# Vector Database
+# ============================================
+chromadb>=1.0.0
 
-# Environment variables
-python-dotenv==1.0.0
+# ============================================
+# Core Dependencies
+# ============================================
+python-dotenv>=1.0.0
+pydantic>=2.12.0
+pydantic-settings>=2.0.0
+typing-extensions>=4.12.0
 
-# Type checking
-pydantic==2.9.0
-typing-extensions==4.12.0
-
-# LangSmith tracing
+# ============================================
+# LangSmith Tracing
+# ============================================
 langsmith>=0.1.0
+
+# ============================================
+# Optional: Classic LangChain (for legacy APIs)
+# ============================================
+# langchain-classic>=1.0.0  # Uncomment if using legacy chains/retrievers
