@@ -14,8 +14,8 @@ COPY package.json package-lock.json* ./
 # 使用阿里云 npm 镜像源加速（国内部署优化）
 RUN npm config set registry https://registry.npmmirror.com
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies (including devDependencies for build)
+RUN npm ci
 
 # ============================================
 # Stage 2: Builder
