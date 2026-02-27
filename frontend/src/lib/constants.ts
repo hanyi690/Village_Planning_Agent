@@ -57,7 +57,6 @@ export const FILE_ACCEPT = '.docx,.pdf,.txt,.md';
 
 export const DISABLE_INPUT_STATUSES = new Set([
   'planning',
-  'paused',
   'revising',
 ] as const);
 
