@@ -43,6 +43,14 @@ export function useTaskController(
     onDimensionComplete?: (dimensionKey: string, dimensionName: string, fullContent: string, layer?: number) => void;
     onLayerCompleted?: (layer: number, reportContent: string, dimensionReports: Record<string, string>) => void;
     onPause?: (layer: number, checkpointId: string) => void;
+    onDimensionRevised?: (data: {
+      dimension: string;
+      layer: number;
+      oldContent: string;
+      newContent: string;
+      feedback: string;
+      timestamp: string;
+    }) => void;
     onError?: (error: string) => void;
   } = {}
 ): [TaskState, TaskControllerActions] {
@@ -254,6 +262,30 @@ export function useTaskController(
               data.current_layer || 1,
               data.checkpoint_id || ''
             );
+          } else if (eventType === 'dimension_revised') {
+            // 【新增】处理维度修复完成事件
+            const data = event.data as {
+              dimension?: string;
+              layer?: number;
+              old_content?: string;
+              new_content?: string;
+              feedback?: string;
+              timestamp?: string;
+            } || {};
+            
+            console.log('[TaskController] === Dimension Revised SSE Event ===');
+            console.log('[TaskController] dimension:', data.dimension);
+            console.log('[TaskController] layer:', data.layer);
+            console.log('[TaskController] new_content length:', data.new_content?.length || 0);
+            
+            callbacksRef.current.onDimensionRevised?.({
+              dimension: data.dimension || '',
+              layer: data.layer || 1,
+              oldContent: data.old_content || '',
+              newContent: data.new_content || '',
+              feedback: data.feedback || '',
+              timestamp: data.timestamp || new Date().toISOString(),
+            });
           } else if (eventType === 'error') {
             callbacksRef.current.onError?.(
               event.data?.error || event.data?.message || 'Unknown error'

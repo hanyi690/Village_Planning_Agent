@@ -173,6 +173,21 @@ export interface SessionStatusResponse {
 
   // Timestamp
   updated_at?: string;
+
+  // 【新增】消息历史和修订历史
+  messages?: Array<{
+    type: string;
+    content: string;
+    role: string;
+  }>;
+  revision_history?: Array<{
+    dimension: string;
+    layer: number;
+    old_content: string;
+    new_content: string;
+    feedback: string;
+    timestamp: string;
+  }>;
 }
 
 export interface FileUploadResponse {

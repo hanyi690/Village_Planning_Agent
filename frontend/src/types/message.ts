@@ -63,6 +63,44 @@ export interface SystemMessage extends BaseMessage {
   level?: 'info' | 'warning' | 'error';
 }
 
+// 前向声明扩展消息类型（定义在 message-types.ts）
+export interface DimensionReportMessage extends BaseMessage {
+  type: 'dimension_report';
+  layer: number;
+  dimensionKey: string;
+  dimensionName: string;
+  content: string;
+  streamingState: 'streaming' | 'completed' | 'error';
+  wordCount: number;
+}
+
+export interface LayerCompletedMessage extends BaseMessage {
+  type: 'layer_completed';
+  layer: number;
+  content: string;
+  summary: {
+    word_count: number;
+    key_points: string[];
+    dimension_count?: number;
+    dimension_names?: string[];
+  };
+  fullReportContent?: string;
+  dimensionReports?: Record<string, string>;
+  actions: ActionButton[];
+}
+
+// 【新增】维度修复完成消息类型
+export interface DimensionRevisedMessage extends BaseMessage {
+  type: 'dimension_revised';
+  layer: number;
+  dimensionKey: string;
+  dimensionName: string;
+  oldContent?: string;  // 旧版本内容（可选，用于版本对比）
+  newContent: string;   // 新版本内容
+  feedback?: string;    // 用户修改意见
+  timestamp: string;
+}
+
 export type Message =
   | TextMessage
   | FileMessage
@@ -70,7 +108,10 @@ export type Message =
   | ActionMessage
   | ResultMessage
   | ErrorMessage
-  | SystemMessage;
+  | SystemMessage
+  | DimensionReportMessage
+  | LayerCompletedMessage
+  | DimensionRevisedMessage;
 
 // Action Button
 export interface ActionButton {

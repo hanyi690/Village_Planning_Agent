@@ -24,6 +24,7 @@ import { useTaskController } from '@/controllers/TaskController';
 import { useStreamingRender } from '@/hooks/useStreamingRender';
 import MessageList from './MessageList';
 import ReviewPanel from './ReviewPanel';
+import DimensionSelector from './DimensionSelector';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEdit, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
 import { getDimensionName } from '@/config/dimensions';
@@ -70,6 +71,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   } = useUnifiedPlanningContext();
 
   const [inputText, setInputText] = useState('');
+  const [selectedDimensions, setSelectedDimensions] = useState<string[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
@@ -347,6 +349,45 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     // 这里可以添加额外的 UI 更新逻辑
   }, []);
 
+  // 【新增】处理维度修复完成事件
+  const handleDimensionRevised = useCallback((data: {
+    dimension: string;
+    layer: number;
+    oldContent: string;
+    newContent: string;
+    feedback: string;
+    timestamp: string;
+  }) => {
+    console.log('[ChatPanel] Dimension revised event received', data);
+    
+    const dimensionName = getDimensionName(data.dimension);
+    
+    // 1. 添加用户反馈消息（如果有的话）
+    if (data.feedback) {
+      addMessage({
+        ...createBaseMessage(),
+        type: 'text',
+        role: 'user',
+        content: `修改意见：${data.feedback}`,
+      });
+    }
+    
+    // 2. 添加修复完成消息
+    addMessage({
+      ...createBaseMessage(),
+      type: 'dimension_report',
+      role: 'assistant',
+      layer: data.layer,
+      dimensionKey: data.dimension,
+      dimensionName: dimensionName,
+      content: data.newContent,
+      streamingState: 'completed',
+      wordCount: data.newContent.length,
+    });
+    
+    console.log(`[ChatPanel] 维度 ${data.dimension} 修复完成，已添加消息`);
+  }, [addMessage]);
+
   // Stable callbacks object using useMemo
   const callbacks = useMemo(() => ({
     // ✅ 删除所有业务逻辑回调 - 现在使用状态驱动 UI
@@ -360,7 +401,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     onLayerCompleted: handleLayerCompleted,
     // 暂停回调
     onPause: handlePause,
-  }), [handleTextDelta, handleDimensionDelta, handleDimensionComplete, handleLayerProgress, handleLayerCompleted, handlePause]);
+    // 【新增】维度修复完成回调
+    onDimensionRevised: handleDimensionRevised,
+  }), [handleTextDelta, handleDimensionDelta, handleDimensionComplete, handleLayerProgress, handleLayerCompleted, handlePause, handleDimensionRevised]);
 
   // Stable handler for SegmentedControl onChange
   const handleLayerChange = useCallback((layer: string) => {
@@ -446,10 +489,10 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       addMessage({
         ...createBaseMessage('user'),
         type: 'text',
-        content: `📝 修改请求：${feedback}`,
+        content: `📝 修改请求：${feedback}${dimensions ? ` (维度: ${dimensions.map(d => getDimensionName(d)).join(', ')})` : ''}`,
       });
       addMessage(createSystemMessage('🔄 正在根据反馈修复规划内容...'));
-      await reject(feedback);
+      await reject(feedback, dimensions);
       // 状态会通过 TaskController 轮询自动同步
     } catch (error: any) {
       addMessage(createErrorMessage(`驳回失败: ${error.message || '未知错误'}`));
@@ -541,6 +584,45 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     if (!userText) return;
 
     setInputText('');
+    
+    // 保存当前选中的维度，然后清除
+    const dimensionsToSubmit = selectedDimensions.length > 0 ? [...selectedDimensions] : undefined;
+    setSelectedDimensions([]);
+
+    // 审查状态下的特殊处理
+    if (isPaused && pendingReviewLayer) {
+      // 用户消息
+      addMessage({
+        id: `msg-${Date.now()}`,
+        timestamp: new Date(),
+        role: 'user',
+        type: 'text',
+        content: userText,
+      });
+
+      // 判断是否为批准指令
+      if (userText === '批准' || userText === '继续' || userText.toLowerCase() === 'approve') {
+        try {
+          addMessage(createSystemMessage('✅ 已批准，继续执行下一层...'));
+          await approve();
+        } catch (error: any) {
+          addMessage(createErrorMessage(`批准失败: ${error.message || '未知错误'}`));
+        }
+        return;
+      }
+
+      // 驳回/修改请求 - 通过聊天框发送反馈
+      try {
+        const dimensionInfo = dimensionsToSubmit 
+          ? ` (维度: ${dimensionsToSubmit.map(d => getDimensionName(d)).join(', ')})` 
+          : '';
+        addMessage(createSystemMessage(`🔄 正在根据反馈修复规划内容${dimensionsToSubmit ? '...' : '（自动识别维度）...'} `));
+        await reject(userText, dimensionsToSubmit);
+      } catch (error: any) {
+        addMessage(createErrorMessage(`修复失败: ${error.message || '未知错误'}`));
+      }
+      return;
+    }
 
     // Normal chat message
     addMessage({
@@ -566,7 +648,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       setIsTyping(false);
       typingTimeoutRef.current = null;
     }, 500);
-  }, [inputText, addMessage]);
+  }, [inputText, addMessage, isPaused, pendingReviewLayer, approve, reject, selectedDimensions]);
 
   // File selection handler
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -802,7 +884,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         {showScrollButton && (
           <button
             onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
-            className="fixed bottom-24 right-8 bg-blue-500 text-white p-3 rounded-full shadow-lg hover:bg-blue-600 transition-colors z-50"
+            className="fixed bottom-24 right-8 bg-blue-100 text-gray-900 border border-blue-300 p-3 rounded-full shadow-lg hover:bg-blue-200 transition-colors z-50"
             title="跳转到底部"
           >
             ↓
@@ -875,13 +957,23 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             <ReviewPanel
               layer={pendingReviewLayer}
               onApprove={handleReviewApprove}
-              onReject={handleReviewReject}
-              onRollback={handleRollback}
               isSubmitting={false}
             />
           )}
 
           {/* Input area: file upload and text input */}
+          {/* 维度选择器 - 仅在审查状态下显示 */}
+          {isPaused && pendingReviewLayer && (
+            <div className="mb-2">
+              <DimensionSelector
+                layer={pendingReviewLayer}
+                selectedDimensions={selectedDimensions}
+                onChange={setSelectedDimensions}
+                disabled={isTyping}
+              />
+            </div>
+          )}
+
           <div className="flex items-center gap-2">
             {/* File upload button (native) */}
             <input
@@ -906,7 +998,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
               disabled={inputDisabled || isTyping}
               placeholder={
                 hasPendingReview && pendingReviewLayer
-                  ? `请输入对 Layer ${pendingReviewLayer} 的修改意见... (Enter 发送驳回，留空输入 "批准" 继续)`
+                  ? `请输入修改意见，或输入"批准"继续...`
                   : status === 'planning' || status === 'collecting'
                     ? '规划进行中...'
                     : '输入消息... (Enter 发送, Shift+Enter 换行)'

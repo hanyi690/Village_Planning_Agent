@@ -1,10 +1,11 @@
 """
-Data API - Simplified Data Access Layer
+Data API - Database-Backed Data Access Layer
 
-This API provides access to historical planning data, checkpoints, and layer content.
+This API provides access to historical planning data using the database
+and LangGraph AsyncSqliteSaver for checkpoints.
 
 Endpoints:
-- GET /api/data/villages - List all villages
+- GET /api/data/villages - List all villages (projects)
 - GET /api/data/villages/{name}/sessions - Get village sessions
 - GET /api/data/villages/{name}/layers/{layer} - Get layer content
 - GET /api/data/villages/{name}/checkpoints - Get checkpoints
@@ -14,26 +15,25 @@ Endpoints:
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from backend.api.tool_manager import tool_manager
-from src.utils.paths import get_results_dir
+from backend.database.operations_async import (
+    list_projects_async,
+    list_planning_sessions_async,
+    list_project_sessions_async,
+)
+from backend.database.engine import get_db_path
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# Session directory name pattern
-SESSION_PATTERN = re.compile(r'\d{8}_\d{6}')
 
 # Layer name mapping
 LAYER_MAP = {
@@ -45,20 +45,20 @@ LAYER_MAP = {
     "detailed": "layer_3_detailed",
 }
 
+# Layer to state key mapping
+LAYER_TO_STATE_KEY = {
+    "layer_1_analysis": "analysis_reports",
+    "layer_2_concept": "concept_reports",
+    "layer_3_detailed": "detail_reports",
+    "analysis": "analysis_reports",
+    "concept": "concept_reports",
+    "detailed": "detail_reports",
+}
+
 
 # ============================================
 # Helper Functions
 # ============================================
-
-def _sanitize_name(name: str) -> str:
-    """Sanitize project name for file system"""
-    return re.sub(r'[<>:"/\\|?*]', '_', name).strip()
-
-
-def _validate_session_id(session_id: str) -> bool:
-    """Validate session ID format (YYYYMMDD_HHMMSS)"""
-    return bool(re.match(r'^\d{8}_\d{6}$', session_id))
-
 
 def _get_layer_dir(layer: str) -> str:
     """Get the actual directory name for a layer identifier"""
@@ -68,90 +68,67 @@ def _get_layer_dir(layer: str) -> str:
     return result
 
 
-def _find_village_directory(
-    village_name: str,
-    session_id: str | None = None
-) -> Path | None:
-    """Find village directory (exact match)"""
-    safe_name = _sanitize_name(village_name)
-    results_dir = get_results_dir()
-
-    village_dir = results_dir / safe_name
-    if not village_dir.exists() or not village_dir.is_dir():
-        return None
-
-    if session_id:
-        if not _validate_session_id(session_id):
-            return None
-        session_dir = village_dir / session_id
-        return session_dir if session_dir.exists() and session_dir.is_dir() else None
-
-    return village_dir
+async def _get_langgraph_checkpointer():
+    """Get LangGraph AsyncSqliteSaver instance"""
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    
+    conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
+    saver = AsyncSqliteSaver(conn)
+    await saver.setup()
+    return saver, conn
 
 
-def _read_file_content(file_path: Path) -> str:
-    """Read file content with UTF-8 encoding"""
+async def _get_session_checkpoints(thread_id: str) -> List[Dict[str, Any]]:
+    """Get checkpoints for a session using LangGraph API"""
+    from src.orchestration.main_graph import create_village_planning_graph
+    
+    checkpoints = []
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return f.read()
+        saver, conn = await _get_langgraph_checkpointer()
+        try:
+            graph = create_village_planning_graph(checkpointer=saver)
+            config = {"configurable": {"thread_id": thread_id}}
+
+            async for state_snapshot in graph.aget_state_history(config):
+                checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+                metadata = state_snapshot.metadata or {}
+                values = state_snapshot.values or {}
+                
+                checkpoints.append({
+                    "checkpoint_id": checkpoint_id,
+                    "timestamp": metadata.get("write_ts", ""),
+                    "layer": values.get("current_layer", 1),
+                    "description": f"Layer {values.get('current_layer', 1)} checkpoint"
+                })
+        finally:
+            await conn.close()
     except Exception as e:
-        logger.error(f"Failed to read {file_path}: {e}")
-        return ""
+        logger.error(f"[Data API] Failed to get checkpoints: {e}", exc_info=True)
+    
+    return checkpoints
 
 
-def _scan_session_directory(session_dir: Path) -> dict[str, Any] | None:
-    """Scan a session directory and extract metadata"""
+async def _get_state_from_checkpoint(thread_id: str, checkpoint_id: str = None) -> Dict[str, Any]:
+    """Get state from LangGraph checkpoint"""
+    from src.orchestration.main_graph import create_village_planning_graph
+    
     try:
-        checkpoint_dir = session_dir / "checkpoints"
-        checkpoint_count = 0
-        if checkpoint_dir.exists():
-            checkpoint_count = len(list(checkpoint_dir.glob("*.json")))
-
-        has_final_report = any(session_dir.glob("final_combined_*.md"))
-
-        return {
-            "session_id": session_dir.name,
-            "timestamp": session_dir.name,
-            "checkpoint_count": checkpoint_count,
-            "has_final_report": has_final_report
-        }
+        saver, conn = await _get_langgraph_checkpointer()
+        try:
+            graph = create_village_planning_graph(checkpointer=saver)
+            
+            config = {"configurable": {"thread_id": thread_id}}
+            if checkpoint_id:
+                config["configurable"]["checkpoint_id"] = checkpoint_id
+            
+            state_snapshot = await graph.aget_state(config)
+            return state_snapshot.values or {}
+        finally:
+            await conn.close()
     except Exception as e:
-        logger.warning(f"Failed to scan session {session_dir.name}: {e}")
-        return None
-
-
-def _collect_village_sessions(village_dir: Path) -> list[dict[str, Any]]:
-    """Collect all valid sessions from a village directory"""
-    sessions = []
-
-    for session_dir in village_dir.iterdir():
-        if not session_dir.is_dir():
-            continue
-
-        if not SESSION_PATTERN.match(session_dir.name):
-            continue
-
-        session_info = _scan_session_directory(session_dir)
-        if session_info:
-            sessions.append(session_info)
-
-    sessions.sort(key=lambda x: x["timestamp"], reverse=True)
-    return sessions
-
-
-def _read_checkpoint_file(checkpoint_file: Path) -> dict[str, Any] | None:
-    """Read a checkpoint file and return its metadata"""
-    try:
-        data = json.loads(_read_file_content(checkpoint_file))
-        return {
-            "checkpoint_id": checkpoint_file.stem,
-            "description": data.get("description", ""),
-            "timestamp": data.get("timestamp", ""),
-            "layer": data.get("layer", 1)
-        }
-    except Exception as e:
-        logger.warning(f"Failed to read checkpoint {checkpoint_file}: {e}")
-        return None
+        logger.error(f"[Data API] Failed to get state: {e}", exc_info=True)
+        return {}
 
 
 # ============================================
@@ -160,31 +137,36 @@ def _read_checkpoint_file(checkpoint_file: Path) -> dict[str, Any] | None:
 
 @router.get("/api/data/villages")
 async def list_villages():
-    """List all villages and their sessions"""
+    """List all villages (projects) from database"""
     try:
-        results_dir = get_results_dir()
-
-        if not results_dir.exists():
-            logger.warning(f"Results directory not found: {results_dir}")
-            return {"villages": []}
-
+        # Get projects grouped by project_name
+        projects = await list_projects_async()
+        
         villages = []
-
-        for village_dir in sorted(results_dir.iterdir()):
-            if not village_dir.is_dir():
-                continue
-
-            sessions = _collect_village_sessions(village_dir)
-
-            if sessions:
-                villages.append({
-                    "name": village_dir.name,
-                    "display_name": village_dir.name,
-                    "session_count": len(sessions),
-                    "sessions": sessions
+        for project in projects:
+            # Get sessions for this project
+            logger.info(f"[Data API] Processing project: {project['name']}, session_count: {project.get('session_count', 'N/A')}")
+            sessions = await list_project_sessions_async(project["name"], limit=10)
+            logger.info(f"[Data API] Found {len(sessions)} sessions for project '{project['name']}'")
+            
+            village_sessions = []
+            for session in sessions:
+                village_sessions.append({
+                    "session_id": session["session_id"],
+                    "timestamp": session["created_at"],
+                    "status": session["status"],
+                    "has_final_report": session["status"] == "completed",
+                    "checkpoint_count": 0  # TODO: 从 LangGraph checkpoint 获取实际数量
                 })
-
-        logger.info(f"[Data API] Found {len(villages)} villages")
+            
+            villages.append({
+                "name": project["name"],
+                "display_name": project["name"],
+                "session_count": project["session_count"],
+                "sessions": village_sessions
+            })
+        
+        logger.info(f"[Data API] Found {len(villages)} villages from database")
         return {"villages": villages}
 
     except Exception as e:
@@ -194,14 +176,23 @@ async def list_villages():
 
 @router.get("/api/data/villages/{name}/sessions")
 async def get_village_sessions(name: str):
-    """Get sessions for a specific village"""
+    """Get sessions for a specific village from database"""
     try:
-        village_dir = _find_village_directory(name)
-        if not village_dir:
+        sessions = await list_project_sessions_async(name)
+        
+        if not sessions:
             raise HTTPException(status_code=404, detail=f"Village not found: {name}")
-
-        sessions = _collect_village_sessions(village_dir)
-        return {"sessions": sessions}
+        
+        result_sessions = []
+        for session in sessions:
+            result_sessions.append({
+                "session_id": session["session_id"],
+                "timestamp": session["created_at"],
+                "status": session["status"],
+                "has_final_report": session["status"] == "completed"
+            })
+        
+        return {"sessions": result_sessions}
 
     except HTTPException:
         raise
@@ -214,70 +205,65 @@ async def get_village_sessions(name: str):
 async def get_layer_content(
     name: str,
     layer: str,
-    session: str | None = Query(None, description="Session ID (YYYYMMDD_HHMMSS)"),
+    session: str | None = Query(None, description="Session ID"),
     checkpoint_id: str | None = Query(None, description="Checkpoint ID"),
     format: str = Query("markdown", description="Content format: markdown | html | json")
 ):
-    """Get layer content"""
+    """Get layer content from LangGraph checkpoint state"""
     try:
         layer_dir_name = _get_layer_dir(layer)
-        village_dir = _find_village_directory(name, session)
-
-        if not village_dir:
-            raise HTTPException(status_code=404, detail=f"Village/session not found: {name}")
-
-        layer_dir = village_dir / layer_dir_name
-
-        if not layer_dir.exists():
-            checkpoint_dir = village_dir / "checkpoints"
-
-            if checkpoint_dir.exists():
-                checkpoint_files = list(checkpoint_dir.glob("checkpoint_*.json"))
-
-                if checkpoint_files:
-                    latest_checkpoint = max(checkpoint_files, key=lambda p: p.stat().st_mtime)
-                    checkpoint_id = latest_checkpoint.stem
-
-                    try:
-                        checkpoint_data = json.loads(_read_file_content(latest_checkpoint))
-                        state = checkpoint_data.get("state", {})
-
-                        layer_to_key_map = {
-                            "layer_1_analysis": "analysis_report",
-                            "layer_2_concept": "planning_concept",
-                            "layer_3_detailed": "detailed_plan"
-                        }
-                        content_key = layer_to_key_map.get(layer, f"{layer_dir_name}_result")
-
-                        if content_key in state:
-                            content = state[content_key]
-                            if isinstance(content, dict):
-                                content = content.get("content", str(content))
-                            return {
-                                "layer": layer,
-                                "content": content,
-                                "checkpoint_id": checkpoint_id,
-                                "timestamp": checkpoint_data.get("timestamp", "")
-                            }
-                    except Exception as e:
-                        logger.error(f"[Data API] Failed to load checkpoint {checkpoint_id}: {e}")
-
-            raise HTTPException(status_code=404, detail=f"Layer content not found: {layer}")
-
-        content_parts = []
-        for md_file in sorted(layer_dir.glob("*.md")):
-            content_parts.append(_read_file_content(md_file))
-
-        content = "\n\n---\n\n".join(content_parts)
-
+        content_key = LAYER_TO_STATE_KEY.get(layer, f"{layer_dir_name}_reports")
+        
+        # Get session_id if not provided
+        if not session:
+            sessions = await list_project_sessions_async(name, limit=1)
+            if not sessions:
+                raise HTTPException(status_code=404, detail=f"No sessions found for: {name}")
+            session = sessions[0]["session_id"]
+        
+        # Get state from checkpoint
+        state = await _get_state_from_checkpoint(session, checkpoint_id)
+        
+        if not state:
+            raise HTTPException(status_code=404, detail=f"State not found for session: {session}")
+        
+        # Extract layer content
+        content = ""
+        
+        # Try to get reports dict first
+        reports = state.get(content_key, {})
+        if reports:
+            if isinstance(reports, dict):
+                # Combine all dimension reports
+                content_parts = []
+                for dim_name, dim_content in reports.items():
+                    if dim_content:
+                        content_parts.append(f"## {dim_name}\n\n{dim_content}")
+                content = "\n\n---\n\n".join(content_parts)
+            else:
+                content = str(reports)
+        
+        # Fallback: try individual report keys
+        if not content:
+            # Try legacy keys
+            legacy_keys = [
+                "analysis_report", "planning_concept", "detailed_plan",
+                "final_output", "detailed_plan_report"
+            ]
+            for key in legacy_keys:
+                if key in state and state[key]:
+                    content = state[key]
+                    break
+        
         if not content:
             raise HTTPException(status_code=404, detail=f"No content found for layer: {layer}")
-
+        
         return {
             "layer": layer,
             "content": content,
             "session": session,
-            "timestamp": datetime.fromtimestamp(layer_dir.stat().st_mtime).isoformat()
+            "checkpoint_id": checkpoint_id,
+            "timestamp": datetime.now().isoformat()
         }
 
     except HTTPException:
@@ -290,49 +276,29 @@ async def get_layer_content(
 @router.get("/api/data/villages/{name}/checkpoints")
 async def get_checkpoints(
     name: str,
-    session: str | None = Query(None, description="Session ID (YYYYMMDD_HHMMSS format)")
+    session: str | None = Query(None, description="Session ID")
 ):
-    """Get checkpoints for a village"""
+    """Get checkpoints for a village using LangGraph API"""
     try:
-        if session and not _validate_session_id(session):
-            raise HTTPException(status_code=400, detail="Invalid session ID format")
-
-        checkpoint_tool = tool_manager.get_checkpoint_tool(name)
-
-        if session:
-            session_dir = _find_village_directory(name, session)
-            if not session_dir:
-                raise HTTPException(status_code=404, detail=f"Session not found: {session}")
-
-            checkpoint_dir = session_dir / "checkpoints"
-            if checkpoint_dir.exists():
-                checkpoints = [
-                    cp for cp in (
-                        _read_checkpoint_file(cp_file)
-                        for cp_file in sorted(checkpoint_dir.glob("checkpoint_*.json"), reverse=True)
-                    ) if cp is not None
-                ]
-
+        # Get session_id if not provided
+        if not session:
+            sessions = await list_project_sessions_async(name, limit=1)
+            if not sessions:
                 return {
                     "project_name": name,
-                    "session": session,
-                    "checkpoints": checkpoints,
-                    "count": len(checkpoints)
+                    "checkpoints": [],
+                    "count": 0
                 }
-
-        list_result = checkpoint_tool.list(include_all=True)
-
-        if not list_result.get("success"):
-            return {
-                "project_name": name,
-                "checkpoints": [],
-                "error": list_result.get("error", "Unknown error")
-            }
-
+            session = sessions[0]["session_id"]
+        
+        # Get checkpoints from LangGraph
+        checkpoints = await _get_session_checkpoints(session)
+        
         return {
             "project_name": name,
-            "checkpoints": list_result.get("checkpoints", []),
-            "count": list_result.get("count", 0)
+            "session": session,
+            "checkpoints": checkpoints,
+            "count": len(checkpoints)
         }
 
     except HTTPException:
@@ -344,21 +310,25 @@ async def get_checkpoints(
 
 @router.get("/api/data/villages/{name}/compare/{cp1}/{cp2}")
 async def compare_checkpoints(name: str, cp1: str, cp2: str):
-    """Compare two checkpoints"""
+    """Compare two checkpoints using LangGraph API"""
     try:
-        checkpoint_tool = tool_manager.get_checkpoint_tool(name)
-
-        load1 = checkpoint_tool.load(cp1)
-        load2 = checkpoint_tool.load(cp2)
-
-        if not load1.get("success"):
+        # Get latest session
+        sessions = await list_project_sessions_async(name, limit=1)
+        if not sessions:
+            raise HTTPException(status_code=404, detail=f"No sessions found for: {name}")
+        
+        session_id = sessions[0]["session_id"]
+        
+        # Get both states
+        state1 = await _get_state_from_checkpoint(session_id, cp1)
+        state2 = await _get_state_from_checkpoint(session_id, cp2)
+        
+        if not state1:
             raise HTTPException(status_code=404, detail=f"Checkpoint not found: {cp1}")
-        if not load2.get("success"):
+        if not state2:
             raise HTTPException(status_code=404, detail=f"Checkpoint not found: {cp2}")
-
-        state1 = load1.get("state", {})
-        state2 = load2.get("state", {})
-
+        
+        # Compare states
         differences = []
         layer_keys = ["layer_1_completed", "layer_2_completed", "layer_3_completed"]
         for key in layer_keys:
@@ -366,16 +336,16 @@ async def compare_checkpoints(name: str, cp1: str, cp2: str):
             val2 = state2.get(key, False)
             if val1 != val2:
                 differences.append(f"{key}: {val1} -> {val2}")
-
+        
         current_layer1 = state1.get("current_layer", 0)
         current_layer2 = state2.get("current_layer", 0)
         if current_layer1 != current_layer2:
             differences.append(f"current_layer: {current_layer1} -> {current_layer2}")
-
+        
         summary = f"Layer {current_layer1} -> Layer {current_layer2}"
         if differences:
             summary += f"\nChanges: {', '.join(differences)}"
-
+        
         return {
             "checkpoint_1": cp1,
             "checkpoint_2": cp2,
@@ -396,44 +366,63 @@ async def get_combined_plan(
     session: str | None = Query(None, description="Session ID"),
     format: str = Query("markdown", description="Content format: markdown | html | pdf")
 ):
-    """Get combined planning report"""
+    """Get combined planning report from LangGraph checkpoint"""
     try:
-        village_dir = _find_village_directory(name, session)
-
-        if not village_dir:
-            raise HTTPException(status_code=404, detail=f"Village/session not found: {name}")
-
-        final_reports = list(village_dir.glob("final_combined_*.md"))
-
-        if final_reports:
-            latest_report = max(final_reports, key=lambda p: p.stat().st_mtime)
-            content = _read_file_content(latest_report)
-            return {
-                "content": content,
-                "format": format,
-                "session": session,
-                "source": "final_combined"
-            }
-
-        layers = ["layer_1_analysis", "layer_2_concept", "layer_3_detailed"]
+        # Get session_id if not provided
+        if not session:
+            sessions = await list_project_sessions_async(name, limit=1)
+            if not sessions:
+                raise HTTPException(status_code=404, detail=f"No sessions found for: {name}")
+            session = sessions[0]["session_id"]
+        
+        # Get state
+        state = await _get_state_from_checkpoint(session)
+        
+        if not state:
+            raise HTTPException(status_code=404, detail=f"State not found for session: {session}")
+        
+        # Build combined content
         content_parts = []
-
-        for layer in layers:
-            layer_dir = village_dir / layer
-            if layer_dir.exists():
-                for md_file in sorted(layer_dir.glob("*.md")):
-                    content_parts.append(f"# {layer.replace('_', ' ').title()}\n\n")
-                    content_parts.append(_read_file_content(md_file))
-                    content_parts.append("\n\n---\n\n")
-
+        
+        # Layer 1
+        analysis_reports = state.get("analysis_reports", {})
+        if analysis_reports:
+            content_parts.append("# 现状分析\n\n")
+            for dim_name, dim_content in analysis_reports.items():
+                if dim_content:
+                    content_parts.append(f"## {dim_name}\n\n{dim_content}\n\n")
+            content_parts.append("\n---\n\n")
+        
+        # Layer 2
+        concept_reports = state.get("concept_reports", {})
+        if concept_reports:
+            content_parts.append("# 规划思路\n\n")
+            for dim_name, dim_content in concept_reports.items():
+                if dim_content:
+                    content_parts.append(f"## {dim_name}\n\n{dim_content}\n\n")
+            content_parts.append("\n---\n\n")
+        
+        # Layer 3
+        detail_reports = state.get("detail_reports", {})
+        if detail_reports:
+            content_parts.append("# 详细规划\n\n")
+            for dim_name, dim_content in detail_reports.items():
+                if dim_content:
+                    content_parts.append(f"## {dim_name}\n\n{dim_content}\n\n")
+        
+        # Final output
+        if state.get("final_output"):
+            content_parts.append("# 最终成果\n\n")
+            content_parts.append(state["final_output"])
+        
         if not content_parts:
             raise HTTPException(status_code=404, detail="No plan content found")
-
+        
         return {
             "content": "".join(content_parts),
             "format": format,
             "session": session,
-            "source": "combined_layers"
+            "source": "langgraph_checkpoint"
         }
 
     except HTTPException:

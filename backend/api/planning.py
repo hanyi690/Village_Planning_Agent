@@ -632,6 +632,39 @@ async def _execute_graph_in_background(
                         logger.info(f"[Planning] [{session_id}] ⚠️ 跳过重复的 layer_{layer_num}_completed 事件")
                         logger.info(f"[Planning] [{session_id}]   - 事件已在已发送列表中: {sent_events}")
 
+            # 【新增】检测修复完成事件
+            last_revised_dimensions = event.get("last_revised_dimensions", [])
+            if last_revised_dimensions and not event.get("need_revision", False):
+                logger.info(f"[Planning] [{session_id}] === 检测到修复完成 ===")
+                logger.info(f"[Planning] [{session_id}]   - last_revised_dimensions: {last_revised_dimensions}")
+                
+                # 从修订历史获取最新条目
+                revision_history = event.get("revision_history", [])
+                
+                for dim in last_revised_dimensions:
+                    # 从历史记录中获取该维度的最新修订
+                    latest_revision = next(
+                        (r for r in reversed(revision_history) if r.get("dimension") == dim),
+                        None
+                    )
+                    
+                    if latest_revision:
+                        # 发送 dimension_revised SSE 事件
+                        event_data = {
+                            "type": "dimension_revised",
+                            "dimension": dim,
+                            "layer": latest_revision.get("layer", 1),
+                            "old_content": latest_revision.get("old_content", "")[:1000],  # 截断避免过大
+                            "new_content": latest_revision.get("new_content", ""),
+                            "feedback": latest_revision.get("feedback", "")[:500],  # 截断
+                            "timestamp": latest_revision.get("timestamp", datetime.now().isoformat())
+                        }
+                        await _append_session_event_async(session_id, event_data)
+                        logger.info(f"[Planning] [{session_id}] ✓ dimension_revised 事件已发送: {dim}")
+                
+                # 清除标志避免重复发送（通过更新内存状态）
+                # 注意：不能直接修改 event，但下次循环会检测新的状态
+
             # 精简：不再手动同步数据库字段
             # AsyncSqliteSaver 会自动将完整状态保存到 checkpoints 表
             # 我们只需要维护业务元数据（status, created_at 等）
@@ -1159,6 +1192,36 @@ async def get_session_status(session_id: str):
         "execution_complete": execution_complete,
     })
 
+    # 【新增】从 LangGraph Checkpoint 获取 messages 和 revision_history
+    messages = []
+    revision_history = []
+    
+    try:
+        checkpointer = await get_global_checkpointer()
+        graph = create_village_planning_graph(checkpointer=checkpointer)
+        config = {"configurable": {"thread_id": session_id}}
+        checkpoint_state = await graph.aget_state(config)
+        
+        if checkpoint_state and checkpoint_state.values:
+            # 提取消息历史
+            raw_messages = checkpoint_state.values.get("messages", [])
+            # 将 BaseMessage 转换为可序列化的格式
+            for msg in raw_messages:
+                if hasattr(msg, 'content'):
+                    messages.append({
+                        "type": msg.__class__.__name__.lower().replace("message", ""),
+                        "content": msg.content,
+                        "role": "assistant" if "ai" in msg.__class__.__name__.lower() else "user"
+                    })
+            
+            # 提取修订历史
+            revision_history = checkpoint_state.values.get("revision_history", [])
+            
+            logger.info(f"[Status] [{session_id}] 从 Checkpoint 获取到 {len(messages)} 条消息, {len(revision_history)} 条修订记录")
+    except Exception as e:
+        logger.warning(f"[Status] [{session_id}] 获取 Checkpoint 数据失败: {e}")
+        # 继续执行，不影响其他状态返回
+
     return {
         "session_id": session_id,
         # 业务元数据 (来自数据库)
@@ -1176,6 +1239,9 @@ async def get_session_status(session_id: str):
         # 进度
         "progress": progress,
         "last_checkpoint_id": None,
+        # 【新增】消息历史和修订历史
+        "messages": messages,
+        "revision_history": revision_history,
     }
 
 

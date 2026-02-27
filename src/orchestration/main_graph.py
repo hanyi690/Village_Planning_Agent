@@ -104,6 +104,13 @@ class VillagePlanningState(TypedDict):
     #     "shared_insights": List[Dict[str, Any]] # 共享洞察
     # }
 
+    # 【新增】修订历史 - 保留每一次修改的完整记录
+    revision_history: List[Dict[str, Any]]  # 修订历史
+    # 格式: [{dimension, layer, old_content, new_content, feedback, timestamp}]
+
+    # 【新增】最近修复的维度列表 - 用于 SSE 事件触发
+    last_revised_dimensions: List[str]  # 最近一次修复涉及的维度列表
+
 
 # ==========================================
 # LLM 辅助函数

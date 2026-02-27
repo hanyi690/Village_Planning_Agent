@@ -13,6 +13,45 @@ import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/li
 import { logger } from '@/lib/logger';
 import { LAYER_ID_MAP } from '@/lib/constants';
 import { PLANNING_DEFAULTS } from '@/config/planning';
+import { getDimensionsByLayer, DIMENSION_NAMES } from '@/config/dimensions';
+
+/**
+ * 解析 Markdown 报告内容，提取维度数据
+ * 用于历史记录加载时构建 dimensionReports
+ */
+function parseDimensionReports(markdown: string, layerNumber: number): Record<string, string> {
+  const dimensionKeys = getDimensionsByLayer(layerNumber);
+  const result: Record<string, string> = {};
+  
+  if (!markdown) return result;
+  
+  // 匹配 ## 标题格式
+  const regex = /##\s+(.+?)\n([\s\S]*?)(?=\n##\s|$)/g;
+  let match;
+  
+  while ((match = regex.exec(markdown)) !== null) {
+    const title = match[1].trim();
+    const content = match[2].trim();
+    
+    // 尝试匹配维度键名（标题可能是英文键名或中文名称）
+    const key = dimensionKeys.find(k => {
+      const chineseName = DIMENSION_NAMES[k];
+      return title === k || 
+             title.includes(k) || 
+             k.includes(title) ||
+             title === chineseName ||
+             title.includes(chineseName) ||
+             chineseName.includes(title);
+    });
+    
+    if (key && content) {
+      result[key] = content;
+    }
+  }
+  
+  console.log(`[parseDimensionReports] Layer ${layerNumber}: found ${Object.keys(result).length} dimensions`);
+  return result;
+}
 
 type Status = 'idle' | 'collecting' | 'planning' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
 
@@ -443,6 +482,8 @@ export function UnifiedPlanningProvider({
       setHistoryLoading(true);
       setHistoryError(null);
       const data = await dataApi.listVillages();
+      console.log('[UnifiedPlanningContext] Raw data:', JSON.stringify(data, null, 2));
+      console.log('[UnifiedPlanningContext] First village sessions:', data[0]?.sessions?.slice(0, 2));
       setVillages(data);
       console.log('[UnifiedPlanningContext] Loaded villages history:', data.length, 'villages');
     } catch (error: unknown) {
@@ -475,6 +516,64 @@ export function UnifiedPlanningProvider({
 
     console.log('[UnifiedPlanningContext] Loading historical reports for:', villageName, sessionId);
 
+    // 【新增】先加载消息历史和修订历史
+    try {
+      const statusData = await planningApi.getStatus(sessionId);
+      
+      // 1. 还原消息历史
+      if (statusData.messages && statusData.messages.length > 0) {
+        console.log('[UnifiedPlanningContext] Loading message history:', statusData.messages.length, 'messages');
+        for (const msg of statusData.messages) {
+          // 跳过空消息
+          if (!msg.content || msg.content.trim().length === 0) continue;
+          
+          addMessage({
+            id: `msg-history-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            timestamp: new Date(),
+            role: msg.role as 'user' | 'assistant' | 'system',
+            type: 'text',
+            content: msg.content,
+          });
+        }
+      }
+      
+      // 2. 还原修订历史（修复对话流）
+      if (statusData.revision_history && statusData.revision_history.length > 0) {
+        console.log('[UnifiedPlanningContext] Loading revision history:', statusData.revision_history.length, 'revisions');
+        for (const revision of statusData.revision_history) {
+          const dimensionName = DIMENSION_NAMES[revision.dimension] || revision.dimension;
+          
+          // 添加用户反馈消息
+          if (revision.feedback) {
+            addMessage({
+              id: `msg-revision-feedback-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+              timestamp: new Date(revision.timestamp),
+              role: 'user',
+              type: 'text',
+              content: `修改意见（${dimensionName}）：${revision.feedback}`,
+            });
+          }
+          
+          // 添加修复结果消息
+          addMessage({
+            id: `msg-revision-result-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            timestamp: new Date(revision.timestamp),
+            role: 'assistant',
+            type: 'dimension_report',
+            layer: revision.layer,
+            dimensionKey: revision.dimension,
+            dimensionName: dimensionName,
+            content: revision.new_content,
+            streamingState: 'completed',
+            wordCount: revision.new_content?.length || 0,
+          });
+        }
+      }
+    } catch (error) {
+      console.warn('[UnifiedPlanningContext] Failed to load message history:', error);
+      // 继续加载层级报告
+    }
+
     const layers = [
       { id: 'layer_1_analysis', number: 1, name: '现状分析' },
       { id: 'layer_2_concept', number: 2, name: '规划思路' },
@@ -496,6 +595,11 @@ export function UnifiedPlanningProvider({
             continue;
           }
 
+          // 解析维度数据
+          const dimensionReports = parseDimensionReports(data.content, layer.number);
+          const dimensionCount = Object.keys(dimensionReports).length;
+          const dimensionNames = Object.keys(dimensionReports).map(k => DIMENSION_NAMES[k] || k);
+
           // Create layer completed message
           const layerMessage: Message = {
             id: `msg-historical-layer-${layer.number}-${Date.now()}`,
@@ -507,11 +611,11 @@ export function UnifiedPlanningProvider({
             summary: {
               word_count: data.content.length,
               key_points: [`已加载 ${layer.name}`],
-              dimension_count: 0,
-              dimension_names: [],
+              dimension_count: dimensionCount,
+              dimension_names: dimensionNames,
             },
             fullReportContent: data.content,
-            dimensionReports: undefined,
+            dimensionReports: dimensionReports,
             actions: [
               { id: 'view', label: '查看详情', action: 'view', variant: 'primary' },
             ],

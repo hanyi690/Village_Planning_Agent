@@ -240,6 +240,7 @@ async def list_planning_sessions_async(
     Returns:
         List of session dictionaries
     """
+    logger.info(f"[Async DB] list_planning_sessions_async called with project_name={project_name}, status={status}, limit={limit}")
     try:
         async with get_async_session() as session:
             query = select(PlanningSession)
@@ -255,10 +256,61 @@ async def list_planning_sessions_async(
             result = await session.execute(query)
             sessions = result.scalars().all()
             
+            logger.info(f"[Async DB] Found {len(sessions)} sessions for project_name={project_name}")
             return [_planning_session_to_dict(s) for s in sessions]
     except Exception as e:
         logger.error(f"[Async DB] Failed to list planning sessions: {e}", exc_info=True)
         return []
+
+
+async def list_projects_async() -> List[Dict[str, Any]]:
+    """
+    List all projects grouped by project_name (async)
+    
+    Returns:
+        List of project dictionaries with session counts
+    """
+    try:
+        async with get_async_session() as session:
+            # Query to get project_name and count, grouped by project_name
+            query = select(
+                PlanningSession.project_name,
+                func.count(PlanningSession.session_id).label("session_count"),
+                func.max(PlanningSession.created_at).label("last_session_at")
+            ).group_by(PlanningSession.project_name).order_by(
+                func.max(PlanningSession.created_at).desc()
+            )
+            
+            result = await session.execute(query)
+            rows = result.all()
+            
+            projects = []
+            for row in rows:
+                projects.append({
+                    "name": row.project_name,
+                    "display_name": row.project_name,
+                    "session_count": row.session_count,
+                    "last_session_at": row.last_session_at.isoformat() if row.last_session_at else None
+                })
+            
+            return projects
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to list projects: {e}", exc_info=True)
+        return []
+
+
+async def list_project_sessions_async(project_name: str, limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    List all sessions for a specific project (async)
+    
+    Args:
+        project_name: Project name
+        limit: Maximum number of results
+        
+    Returns:
+        List of session dictionaries
+    """
+    return await list_planning_sessions_async(project_name=project_name, limit=limit)
 
 
 async def update_session_state_async(session_id: str, state: Dict[str, Any]) -> bool:
