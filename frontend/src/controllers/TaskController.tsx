@@ -31,7 +31,7 @@ export interface TaskState {
 
 export interface TaskControllerActions {
   approve: () => Promise<void>;
-  reject: (feedback: string) => Promise<void>;
+  reject: (feedback: string, dimensions?: string[]) => Promise<void>;
   rollback: (checkpointId: string) => Promise<void>;
 }
 
@@ -274,15 +274,18 @@ export function useTaskController(
           sseConnectionRef.current = null;
         }
       };
-    } else {
-      // 不需要 SSE 连接,关闭现有连接
+    } else if (state.execution_complete) {
+      // 执行完成时关闭 SSE 连接
+      // 注意：暂停时不关闭 SSE，让后端自然结束流，确保 layer_completed 和 pause 事件都能被接收
       console.log('[TaskController] === SSE 连接关闭 ===');
-      console.log('[TaskController] 原因:', state.execution_complete ? '执行完成' : '已暂停');
+      console.log('[TaskController] 原因: 执行完成');
       if (sseConnectionRef.current) {
         sseConnectionRef.current.close();
         sseConnectionRef.current = null;
       }
     }
+    // 暂停时 (pause_after_step=true 但 execution_complete=false)：
+    // 不主动关闭 SSE，让连接保持打开直到后端结束流
   }, [taskId, state.pause_after_step, state.execution_complete]);
 
   // Action methods
@@ -292,9 +295,9 @@ export function useTaskController(
       await planningApi.approveReview(taskId);
     }, [taskId]),
 
-    reject: useCallback(async (feedback: string) => {
+    reject: useCallback(async (feedback: string, dimensions?: string[]) => {
       if (!taskId) throw new Error('No task ID');
-      await planningApi.rejectReview(taskId, feedback);
+      await planningApi.rejectReview(taskId, feedback, dimensions);
     }, [taskId]),
 
     rollback: useCallback(async (checkpointId: string) => {

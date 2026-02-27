@@ -318,6 +318,8 @@ export const planningApi = {
     }
 
     // Special handling for pause events
+    // Note: Do NOT close SSE connection here - let it close naturally when backend finishes
+    // The REST polling will detect pause_after_step and update UI state
     es.addEventListener('pause', (e) => {
       connectionState = 'paused';
       parseEvent(e, 'pause');
@@ -595,5 +597,29 @@ const api = {
   dataApi,
   fileApi,
 };
+
+// ============================================
+// Compatibility Aliases
+// ============================================
+
+/**
+ * taskApi - 别名指向 planningApi
+ * 用于兼容使用 taskApi 的旧代码
+ */
+export const taskApi = planningApi;
+
+/**
+ * ReviewData 类型 - 用于 ReviewDrawer
+ */
+export interface ReviewData {
+  current_layer: number;
+  content: string;
+  summary: {
+    word_count: number;
+    dimension_count?: number;
+  };
+  available_dimensions: string[];
+  checkpoints: Checkpoint[];
+}
 
 export default api;
