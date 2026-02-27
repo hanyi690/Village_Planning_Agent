@@ -215,7 +215,7 @@ export function StreamingTextWithControls(props: StreamingTextProps) {
           </button>
 
           {/* 进度指示 */}
-          <div className="flex items-center gap-2 ml-auto text-xs text-gray-500">
+          <div className="flex items-center gap-2 ml-auto text-xs text-gray-600">
             <span>{Math.round(progress)}%</span>
             <div className="w-16 h-1 bg-gray-200 rounded overflow-hidden">
               <div
@@ -229,7 +229,7 @@ export function StreamingTextWithControls(props: StreamingTextProps) {
 
       {/* 完成 */}
       {!isStreaming && displayedContent === props.content && (
-        <div className="text-xs text-gray-400 mt-1 flex items-center gap-1">
+        <div className="text-xs text-gray-600 mt-1 flex items-center gap-1">
           <i className="fas fa-check-circle icon-xs" />
           <span>完成</span>
         </div>

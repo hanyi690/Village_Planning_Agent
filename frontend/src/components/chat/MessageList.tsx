@@ -4,7 +4,7 @@
  * MessageList - Renders list of chat messages with Gemini-style enhancements
  */
 
-import { Message, ActionButton, LayerCompletedMessage, DimensionReportMessage } from '@/types';
+import { Message, ActionButton, LayerCompletedMessage, DimensionReportMessage, FileMessage } from '@/types';
 import ThinkingIndicator, { WaveThinkingIndicator } from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
@@ -21,6 +21,15 @@ interface MessageListProps {
   onViewLayerDetails?: (layer: number) => void;
   onToggleAllDimensions?: (layer: number, expand: boolean) => void;
   currentLayer?: number;
+}
+
+// 格式化文件大小
+function formatBytes(bytes: number | undefined): string {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
 export default function MessageList({
@@ -98,7 +107,7 @@ export default function MessageList({
               <LayerReportMessage
                 message={layerMsg}
                 onOpenInSidebar={onOpenInSidebar}
-                onToggleAll={(expand) => handleToggleAllDimensions(message.layer, expand)}
+                onToggleAll={(expand) => handleToggleAllDimensions(layerMsg.layer, expand)}
                 currentLayer={currentLayer}
                 hasStreamingDimensions={hasStreamingDimensions}
               />
@@ -106,8 +115,40 @@ export default function MessageList({
           );
         }
 
-        // Filter out file messages (handled separately)
-        if (message.type === 'file') return null;
+        // 文件消息渲染 - 显示文件名 + 内容预览
+        if (message.type === 'file') {
+          const fileMsg = message as FileMessage;
+          const previewContent = fileMsg.fileContent?.slice(0, 500) || '';
+          const hasMoreContent = (fileMsg.fileContent?.length || 0) > 500;
+          
+          return (
+            <div key={message.id} className="flex justify-end mb-4">
+              <div className="max-w-[70%] bg-green-100 border border-green-300 text-gray-900 rounded-2xl px-4 py-3 shadow-md">
+                {/* 文件头部信息 */}
+                <div className="flex items-center gap-2 mb-2 pb-2 border-b border-white/20">
+                  <i className="fas fa-file-alt text-lg" />
+                  <span className="font-medium">{fileMsg.filename}</span>
+                  <span className="text-xs opacity-75">({formatBytes(fileMsg.fileSize)})</span>
+                </div>
+                
+                {/* 内容预览 */}
+                {previewContent && (
+                  <div className="bg-white/10 rounded-lg p-2 text-sm font-mono whitespace-pre-wrap overflow-hidden max-h-40">
+                    {previewContent}
+                    {hasMoreContent && (
+                      <span className="text-gray-500">... (内容已截断)</span>
+                    )}
+                  </div>
+                )}
+                
+                {/* 时间戳 */}
+                <div className="text-xs opacity-60 mt-2 text-right">
+                  {new Date(message.timestamp).toLocaleTimeString()}
+                </div>
+              </div>
+            </div>
+          );
+        }
 
         // Default message bubble rendering
         return (

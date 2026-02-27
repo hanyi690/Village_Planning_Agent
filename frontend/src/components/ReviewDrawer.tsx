@@ -1,14 +1,24 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { taskApi, ReviewData } from '@/lib/api';
+import { planningApi, dataApi, Checkpoint, SessionStatusResponse, LayerContent } from '@/lib/api';
 import DimensionSelector, { DIMENSION_OPTIONS, DimensionOption } from './DimensionSelector';
 import MarkdownRenderer from './MarkdownRenderer';
 import CheckpointDiffViewer from './CheckpointDiffViewer';
 
+// 本地定义 ReviewData 接口
+interface ReviewData {
+  current_layer: number;
+  content: string;
+  summary: { word_count: number; dimension_count?: number; };
+  available_dimensions: string[];
+  checkpoints: Checkpoint[];
+}
+
 interface ReviewDrawerProps {
   isOpen: boolean;
   taskId: string;
+  projectName: string;  // 新增：项目名称，用于获取层级内容
   onClose: () => void;
   onApprove: () => Promise<void>;
   onReject: (feedback: string, dimensions?: string[]) => Promise<void>;
@@ -18,6 +28,7 @@ interface ReviewDrawerProps {
 export default function ReviewDrawer({
   isOpen,
   taskId,
+  projectName,
   onClose,
   onApprove,
   onReject,
@@ -45,11 +56,53 @@ export default function ReviewDrawer({
     setLoading(true);
     setError(null);
     try {
-      const data = await taskApi.getReviewData(taskId);
+      // 1. 获取会话状态（包含 checkpoints 和层级信息）
+      const status: SessionStatusResponse = await planningApi.getStatus(taskId);
+      
+      // 2. 确定当前层级
+      const currentLayer = status.current_layer || 1;
+      
+      // 3. 层级名称映射
+      const layerMap: Record<number, string> = {
+        1: 'layer_1_analysis',
+        2: 'layer_2_concept',
+        3: 'layer_3_detailed',
+      };
+      
+      // 4. 获取层级内容
+      let content = '';
+      try {
+        const layerContent: LayerContent = await dataApi.getLayerContent(
+          projectName,
+          layerMap[currentLayer] || 'layer_1_analysis',
+          taskId
+        );
+        content = layerContent.content || '';
+      } catch (layerErr) {
+        // 如果获取失败，使用空内容
+        console.warn('Failed to load layer content:', layerErr);
+        content = '';
+      }
+      
+      // 5. 构建 ReviewData
+      const data: ReviewData = {
+        current_layer: currentLayer,
+        content: content,
+        summary: {
+          word_count: content.length,
+          dimension_count: currentLayer === 3 ? 10 : currentLayer === 2 ? 4 : 12,
+        },
+        available_dimensions: currentLayer === 3 
+          ? ['industry', 'master_plan', 'traffic', 'public_service', 'infrastructure', 
+             'ecological', 'disaster_prevention', 'heritage', 'landscape', 'project_bank']
+          : [],
+        checkpoints: status.checkpoints || [],
+      };
+      
       setReviewData(data);
 
       // Auto-detect dimensions from content (simple keyword matching)
-      const detected = detectDimensions(data.content);
+      const detected = detectDimensions(content);
       setAutoDetectedDimensions(detected);
       setSelectedDimensions(detected);
     } catch (err: any) {

@@ -73,7 +73,7 @@ export default function DimensionSection({
           e.currentTarget.style.background = '#e8f5e9';
         }}
       >
-        <h4 className="section-title" style={{ margin: 0 }}>
+        <h4 className="section-title" style={{ margin: 0, color: '#1b5e20' }}>
           <i
             className={`fas ${icon}`}
             style={{
@@ -173,8 +173,8 @@ export default function DimensionSection({
         className="section-content"
         style={{
           padding: expanded ? '15px 20px' : '0 20px',
-          maxHeight: expanded ? '2000px' : '0',
-          overflow: 'hidden',
+          maxHeight: expanded ? '5000px' : '0',
+          overflow: expanded ? 'auto' : 'hidden',
           transition: 'max-height 0.4s ease, padding 0.4s ease',
           background: 'white',
         }}

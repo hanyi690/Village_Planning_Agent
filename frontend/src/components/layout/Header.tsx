@@ -31,7 +31,7 @@ export default function Header({ taskId, onToggleHistory, onNewTask }: HeaderPro
           村庄规划智能体
         </span>
         {taskId && taskId !== 'new' && (
-          <span className="hidden sm:inline-block ml-2 px-2 py-0.5 bg-gray-100 text-[10px] text-gray-500 rounded font-mono">
+          <span className="hidden sm:inline-block ml-2 px-2 py-0.5 bg-gray-100 text-[10px] text-gray-600 rounded font-mono">
             #{taskId.slice(0, 6)}
           </span>
         )}

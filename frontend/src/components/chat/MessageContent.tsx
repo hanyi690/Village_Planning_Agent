@@ -165,7 +165,7 @@ function renderCheckpointListMessage(message: Message, onAction?: (action: Actio
                   </span>
                   <span className="font-medium text-gray-700">{cp.description}</span>
                 </div>
-                <small className="text-xs text-gray-500">{cp.timestamp}</small>
+                <small className="text-xs text-gray-600">{cp.timestamp}</small>
               </div>
             </div>
           ))}

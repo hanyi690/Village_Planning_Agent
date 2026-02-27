@@ -119,7 +119,7 @@ export default function KnowledgeReference({
                     {ref.source}
                   </div>
                   {ref.chapter && (
-                    <div className="text-xs text-gray-500 mb-1">
+                    <div className="text-xs text-gray-600 mb-1">
                       章节: {ref.chapter}
                       {ref.page && ` (第${ref.page}页)`}
                     </div>

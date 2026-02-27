@@ -338,6 +338,7 @@ export default function NewVillagePage() {
           <ReviewDrawer
             isOpen={showReviewDrawer}
             taskId={taskId}
+            projectName={form.projectName}
             onClose={() => setShowReviewDrawer(false)}
             onApprove={handleApproveReview}
             onReject={handleRejectReview}

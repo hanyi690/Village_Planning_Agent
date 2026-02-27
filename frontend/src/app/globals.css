@@ -2,6 +2,10 @@
    Global Styles - 乡村智能规划大模型 (UI/UX Pro Max 版)
    ============================================ */
 
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
   /* ============================================
      专业色彩系统 - 绿色主题 (green-600)
@@ -74,9 +78,9 @@
   --input-bg: #ffffff;
   --input-border: #d1d5db;  /* gray-300 */
   --input-border-hover: #9ca3af;  /* gray-400 */
-  --input-placeholder: #9ca3af;  /* gray-400 */
+  --input-placeholder: #6b7280;  /* gray-500 */
 
-  /* 边框 */
+  /* 边框 - 深色 */
   --border-color: #e5e7eb; /* gray-200 */
   --border-color-hover: #d1d5db; /* gray-300 */
 
@@ -122,23 +126,8 @@ body {
    Text Color Safety Net - Ensure Visibility
    ============================================ */
 
-/* Preserve text-white only on elements with proper backgrounds */
-.text-white,
-[class*="text-white"] {
-  color: var(--text-cream-primary) !important;
-}
-
-/* Ensure white text always has a background */
-.message-bubble.bg-gradient-to-br.from-green-600 .text-white,
-[class*="from-green-600"] .text-white,
-[class*="from-blue-600"] .text-white,
-[class*="bg-green-"] .text-white,
-[class*="bg-blue-"] .text-white,
-[class*="bg-red-"] .text-white,
-[class*="bg-gray-900"] .text-white,
-[class*="bg-gray-800"] .text-white {
-  color: var(--text-cream-primary) !important;
-}
+/* 不再强制覆盖 text-white，让组件自己控制颜色 */
+/* text-white 类将使用 Tailwind 默认的白色 #ffffff */
 
 /* ============================================
    Typography
@@ -635,7 +624,7 @@ a:hover {
 }
 
 .btn-gradient-secondary {
-  background: white;
+  background: #1f2937;
   color: var(--primary-700);
   border: 2px solid var(--primary-500);
   padding: 0.875rem 2rem;
@@ -935,6 +924,7 @@ a:hover {
   background-color: #ffffff !important;
   border-color: var(--primary-green) !important;
   box-shadow: 0 0 0 0.25rem rgba(22, 163, 74, 0.1) !important;
+  color: #111827 !important;
 }
 
 .form-control::placeholder {
@@ -945,6 +935,9 @@ a:hover {
 /* Ensure form inputs take full width */
 .form-control {
   width: 100% !important;
+  background-color: #ffffff !important;
+  border-color: var(--gray-300) !important;
+  color: #111827 !important;
 }
 
 /* ============================================
@@ -965,7 +958,7 @@ a:hover {
 }
 
 /* ============================================
-   Header Component - 玻璃态效果
+   Header Component - 深色玻璃态效果
    ============================================ */
 
 /* 确保 Header 玻璃态效果正常 */
@@ -973,9 +966,13 @@ header {
   background-color: transparent !important;
 }
 
-/* Header 半透明背景 */
+/* Header 保持白色背景，文字使用深色 */
 header .bg-white\/80 {
   background-color: rgba(255, 255, 255, 0.8) !important;
+}
+
+header .bg-white\/95 {
+  background-color: rgba(255, 255, 255, 0.95) !important;
 }
 
 /* 确保 backdrop-blur 正常工作 */
@@ -986,13 +983,19 @@ header .bg-white\/80 {
   }
 }
 
-/* Header 内的文本使用深色 */
+/* Header 内的文本使用深色 - 确保在白色背景上可见 */
 header h1,
 header h2,
-header h3,
+header h3 {
+  color: #16a34a !important;
+}
+
 header p,
 header span,
-header .text-gray-900,
+header .text-gray-900 {
+  color: #111827 !important;
+}
+
 header .text-gray-600 {
-  color: inherit !important;
+  color: #4b5563 !important;
 }

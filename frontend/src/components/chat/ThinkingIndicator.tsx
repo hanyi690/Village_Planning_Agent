@@ -62,7 +62,7 @@ const STATE_CONFIG: Record<
   waiting: {
     icon: 'fa-hourglass-half',
     label: '等待中',
-    color: 'text-gray-500',
+    color: 'text-gray-600',
     bgColor: 'bg-gray-50',
   },
 };

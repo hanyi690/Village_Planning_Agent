@@ -39,7 +39,7 @@ export default function LayerReportCard({
   // ✅ 修复：活跃层默认展开，非活跃层默认折叠
   // ✅ 新增：有流式维度内容时默认展开
   const actualDefaultExpanded = defaultExpanded ?? (mode === 'sidebar' || isActive || hasStreamingDimensions);
-  const actualMaxHeight = maxHeight ?? (mode === 'chat' ? 'none' : 'none');
+  const actualMaxHeight = maxHeight ?? (mode === 'chat' ? '500px' : 'none');
   const actualShowExpandAll = showExpandAll ?? (mode === 'sidebar');
 
   const [allExpanded, setAllExpanded] = useState(false);
@@ -164,7 +164,7 @@ export default function LayerReportCard({
           <p
             style={{
               margin: '4px 0 0 0',
-              color: '#666',
+              color: '#9ca3af',
               fontSize: '0.85rem',
             }}
           >
@@ -179,14 +179,14 @@ export default function LayerReportCard({
             alignItems: 'center',
             marginBottom: '20px',
             paddingBottom: '15px',
-            borderBottom: '1px solid #c8e6c9',
+            borderBottom: '1px solid #374151',
           }}
         >
           <div>
             <h3
               style={{
                 margin: 0,
-                color: '#1b5e20',
+                color: '#4ade80',
                 fontSize: '1.3rem',
                 fontWeight: 600,
               }}
@@ -197,7 +197,7 @@ export default function LayerReportCard({
             <p
               style={{
                 margin: '5px 0 0 0',
-                color: '#666',
+                color: '#9ca3af',
                 fontSize: '0.9rem',
               }}
             >
@@ -211,7 +211,7 @@ export default function LayerReportCard({
               <button
                 onClick={handleExpandAll}
                 style={{
-                  background: 'linear-gradient(135deg, #2e7d32, #1b5e20)',
+                  background: 'linear-gradient(135deg, #16a34a, #15803d)',
                   color: 'white',
                   border: 'none',
                   padding: '8px 16px',
@@ -220,15 +220,15 @@ export default function LayerReportCard({
                   fontSize: '0.9rem',
                   fontWeight: 500,
                   transition: 'all 0.3s ease',
-                  boxShadow: '0 2px 6px rgba(46, 125, 50, 0.3)',
+                  boxShadow: '0 2px 6px rgba(22, 163, 74, 0.3)',
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 4px 10px rgba(46, 125, 50, 0.4)';
+                  e.currentTarget.style.boxShadow = '0 4px 10px rgba(22, 163, 74, 0.4)';
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = '0 2px 6px rgba(46, 125, 50, 0.3)';
+                  e.currentTarget.style.boxShadow = '0 2px 6px rgba(22, 163, 74, 0.3)';
                 }}
               >
                 <i className="fas fa-expand-alt" style={{ marginRight: '6px' }} />
@@ -237,9 +237,9 @@ export default function LayerReportCard({
               <button
                 onClick={handleCollapseAll}
                 style={{
-                  background: 'white',
-                  color: '#2e7d32',
-                  border: '1px solid #2e7d32',
+                  background: '#1f2937',
+                  color: '#4ade80',
+                  border: '1px solid #16a34a',
                   padding: '8px 16px',
                   borderRadius: '6px',
                   cursor: 'pointer',
@@ -248,10 +248,10 @@ export default function LayerReportCard({
                   transition: 'all 0.3s ease',
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = '#e8f5e9';
+                  e.currentTarget.style.background = '#111827';
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'white';
+                  e.currentTarget.style.background = '#1f2937';
                 }}
               >
                 <i className="fas fa-compress-alt" style={{ marginRight: '6px' }} />
@@ -294,7 +294,7 @@ export default function LayerReportCard({
             left: 0,
             right: 0,
             padding: '20px',
-            background: 'linear-gradient(to bottom, transparent, rgba(245, 249, 245, 0.95), #f5f9f5)',
+            background: 'linear-gradient(to bottom, transparent, rgba(31, 41, 55, 0.95), #1f2937)',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -304,26 +304,26 @@ export default function LayerReportCard({
           <button
             onClick={handleToggleExpanded}
             style={{
-              background: 'white',
-              color: '#2e7d32',
-              border: '1px solid #2e7d32',
+              background: '#1f2937',
+              color: '#4ade80',
+              border: '1px solid #16a34a',
               padding: '8px 20px',
               borderRadius: '6px',
               cursor: 'pointer',
               fontSize: '0.9rem',
               fontWeight: 500,
               transition: 'all 0.3s ease',
-              boxShadow: '0 2px 8px rgba(46, 125, 50, 0.2)',
+              boxShadow: '0 2px 8px rgba(22, 163, 74, 0.2)',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.background = '#e8f5e9';
+              e.currentTarget.style.background = '#111827';
               e.currentTarget.style.transform = 'translateY(-2px)';
-              e.currentTarget.style.boxShadow = '0 4px 12px rgba(46, 125, 50, 0.3)';
+              e.currentTarget.style.boxShadow = '0 4px 12px rgba(22, 163, 74, 0.3)';
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'white';
+              e.currentTarget.style.background = '#1f2937';
               e.currentTarget.style.transform = 'translateY(0)';
-              e.currentTarget.style.boxShadow = '0 2px 8px rgba(46, 125, 50, 0.2)';
+              e.currentTarget.style.boxShadow = '0 2px 8px rgba(22, 163, 74, 0.2)';
             }}
           >
             <i className="fas fa-chevron-down" style={{ marginRight: '6px' }} />
@@ -335,9 +335,9 @@ export default function LayerReportCard({
               onClick={onOpenInSidebar}
               className="btn-open-in-sidebar"
               style={{
-                background: 'white',
-                color: '#2e7d32',
-                border: '1px solid #2e7d32',
+                background: '#1f2937',
+                color: '#4ade80',
+                border: '1px solid #16a34a',
                 padding: '8px 16px',
                 borderRadius: '6px',
                 cursor: 'pointer',
@@ -348,12 +348,12 @@ export default function LayerReportCard({
                 gap: '6px',
               }}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#e8f5e9';
+                e.currentTarget.style.background = '#111827';
                 e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = '0 4px 10px rgba(46, 125, 50, 0.3)';
+                e.currentTarget.style.boxShadow = '0 4px 10px rgba(22, 163, 74, 0.3)';
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'white';
+                e.currentTarget.style.background = '#1f2937';
                 e.currentTarget.style.transform = 'translateY(0)';
                 e.currentTarget.style.boxShadow = 'none';
               }}

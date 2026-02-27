@@ -45,10 +45,9 @@ export default function MessageBubble({
       <div
         className={`message-bubble relative max-w-[70%] rounded-2xl px-4 py-3 shadow-sm transition-all duration-200 ${
           isUser
-            ? 'bg-gradient-to-br from-green-600 to-green-700 shadow-md hover:shadow-lg'
+            ? 'bg-green-100 border border-green-300 text-gray-900 shadow-md hover:shadow-lg'
             : 'bg-white border border-gray-200 text-gray-900 hover:shadow-md'
         }`}
-        style={isUser ? { color: 'var(--text-cream-primary)' } : {}}
       >
         {/* Message Actions (Non-User Only) */}
         {!isUser && (
@@ -76,7 +75,7 @@ export default function MessageBubble({
 
         {/* Assistant Label */}
         {!isUser && message.type !== 'progress' && (
-          <div className="text-xs text-gray-500 mb-1 flex items-center gap-1.5 font-medium">
+          <div className="text-xs text-gray-600 mb-1 flex items-center gap-1.5 font-medium">
             <span className="w-1.5 h-1.5 bg-green-600 rounded-full" />
             AI 助手
           </div>
