@@ -917,6 +917,167 @@ WAVE_CONFIG = property(get_wave_config)
 
 
 # ==========================================
+# 影响树（用于 Revision 级联更新）
+# ==========================================
+
+_IMPACT_TREE_CACHE = None
+
+
+def get_impact_tree(dimension_key: str) -> Dict[int, List[str]]:
+    """
+    获取维度修改后的影响树（级联更新范围）
+    
+    当一个维度被修改后，需要级联更新所有依赖它的下游维度。
+    返回按 wave 分组的维度列表，支持并行调度：
+    - Wave 1: 直接依赖该维度的下游维度（可并行）
+    - Wave 2: 依赖 Wave 1 维度的下游维度（可并行）
+    - ...
+    
+    Args:
+        dimension_key: 维度键名
+        
+    Returns:
+        {wave: [dimension_keys]} 按 wave 分组的维度列表
+        
+    Example:
+        >>> get_impact_tree("natural_environment")
+        {
+            1: ["resource_endowment", "ecological", "spatial_structure", "land_use_planning", "disaster_prevention"],
+            2: ["planning_positioning", "planning_strategies"],
+            3: ["development_goals", "project_bank"]
+        }
+    """
+    global _IMPACT_TREE_CACHE
+    
+    # 构建缓存（所有维度的影响树）
+    if _IMPACT_TREE_CACHE is None:
+        _IMPACT_TREE_CACHE = _build_all_impact_trees()
+    
+    return _IMPACT_TREE_CACHE.get(dimension_key, {})
+
+
+def _build_all_impact_trees() -> Dict[str, Dict[int, List[str]]]:
+    """
+    构建所有维度的影响树缓存
+    
+    Returns:
+        {dimension_key: {wave: [dependent_dimensions]}}
+    """
+    chain = get_full_dependency_chain()
+    trees = {}
+    
+    # 对每个维度，递归计算其影响范围
+    for dim_key in DIMENSIONS_METADATA.keys():
+        trees[dim_key] = _calculate_impact_tree(dim_key, chain)
+    
+    return trees
+
+
+def _calculate_impact_tree(
+    dimension_key: str,
+    chain: Dict[str, Dict[str, Any]]
+) -> Dict[int, List[str]]:
+    """
+    计算单个维度的影响树
+    
+    使用 BFS 遍历下游依赖，按 wave 分组
+    
+    Args:
+        dimension_key: 维度键名
+        chain: 完整依赖链
+        
+    Returns:
+        {wave: [dimension_keys]}
+    """
+    impact_tree: Dict[int, List[str]] = {}
+    visited = {dimension_key}  # 避免循环
+    current_wave_dims = [dimension_key]
+    wave = 0
+    
+    while current_wave_dims:
+        # 获取当前 wave 所有维度的直接下游依赖
+        next_wave_dims = []
+        for dim in current_wave_dims:
+            downstream = get_downstream_dependencies(dim)
+            for dep_dim in downstream:
+                if dep_dim not in visited:
+                    visited.add(dep_dim)
+                    next_wave_dims.append(dep_dim)
+        
+        if next_wave_dims:
+            wave += 1
+            # 按 wave 重新分组（基于维度自身的 wave 属性）
+            impact_tree[wave] = next_wave_dims
+        
+        current_wave_dims = next_wave_dims
+    
+    # 对每个 wave 内的维度按其自身 wave 属性排序（确保执行顺序正确）
+    sorted_tree = {}
+    for w, dims in impact_tree.items():
+        # 过滤掉不存在的维度，并按维度自身的 wave 排序
+        valid_dims = [d for d in dims if d in chain]
+        sorted_dims = sorted(valid_dims, key=lambda d: chain[d].get("wave", 1))
+        if sorted_dims:
+            sorted_tree[w] = sorted_dims
+    
+    return sorted_tree
+
+
+def get_revision_wave_dimensions(
+    target_dimensions: List[str],
+    completed_dimensions: List[str]
+) -> Dict[int, List[str]]:
+    """
+    获取修复任务中当前可执行的维度（按 wave 分组）
+    
+    合并多个目标维度的影响树，过滤已完成的维度，返回待执行的维度。
+    
+    Args:
+        target_dimensions: 用户选择要修复的维度列表
+        completed_dimensions: 已完成的维度列表（用于过滤）
+        
+    Returns:
+        {wave: [dimension_keys]} 可并行执行的维度分组
+    """
+    completed_set = set(completed_dimensions)
+    all_impact_dims: Dict[str, int] = {}  # {dimension: min_wave}
+    
+    # 合并所有目标维度的影响树
+    for target_dim in target_dimensions:
+        # 目标维度自身属于 Wave 0
+        if target_dim not in all_impact_dims:
+            all_impact_dims[target_dim] = 0
+        
+        # 获取下游影响
+        impact_tree = get_impact_tree(target_dim)
+        for wave, dims in impact_tree.items():
+            for dim in dims:
+                if dim not in all_impact_dims:
+                    all_impact_dims[dim] = wave
+                else:
+                    # 取最小 wave（确保依赖满足）
+                    all_impact_dims[dim] = min(all_impact_dims[dim], wave)
+    
+    # 过滤已完成的维度
+    pending_dims = {dim: wave for dim, wave in all_impact_dims.items() 
+                    if dim not in completed_set}
+    
+    # 按 wave 分组
+    result: Dict[int, List[str]] = {}
+    for dim, wave in pending_dims.items():
+        if wave not in result:
+            result[wave] = []
+        result[wave].append(dim)
+    
+    # 对每个 wave 内部按维度自身的 wave 属性排序
+    chain = get_full_dependency_chain()
+    for w in result:
+        result[w] = sorted(result[w], key=lambda d: chain.get(d, {}).get("wave", 1))
+    
+    return result
+
+
+# ==========================================
 # 导出
 # ==========================================
 
@@ -959,4 +1120,8 @@ __all__ = [
     
     # 下游依赖
     "get_downstream_dependencies",
+    
+    # 影响树（用于 Revision）
+    "get_impact_tree",
+    "get_revision_wave_dimensions",
 ]

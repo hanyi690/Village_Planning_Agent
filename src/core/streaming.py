@@ -218,6 +218,46 @@ async def stream_graph_execution(
                     "layer_3_completed": layer_3_now_completed,
                 }
 
+                # Dimension revised event (修复完成事件)
+                # 使用 sent_revised_events 进行去重，防止并行分支重复上报
+                last_revised_dimensions = event.get("last_revised_dimensions", [])
+                if last_revised_dimensions:
+                    # 初始化已发送集合（如果不存在）
+                    if '_sent_revised_events' not in initial_state:
+                        initial_state['_sent_revised_events'] = set()
+                    
+                    sent_events = initial_state['_sent_revised_events']
+                    
+                    for dim in last_revised_dimensions:
+                        if dim not in sent_events:
+                            sent_events.add(dim)
+                            
+                            # 获取维度信息
+                            from ..config.dimension_metadata import get_dimension_config, get_dimension_layer
+                            dim_config = get_dimension_config(dim)
+                            dim_name = dim_config.get("name", dim) if dim_config else dim
+                            dim_layer = get_dimension_layer(dim)
+                            
+                            # 获取修复后的内容
+                            if dim_layer == 1:
+                                revised_content = event.get("analysis_reports", {}).get(dim, "")
+                            elif dim_layer == 2:
+                                revised_content = event.get("concept_reports", {}).get(dim, "")
+                            else:
+                                revised_content = event.get("detail_reports", {}).get(dim, "")
+                            
+                            logger.info(f"[Streaming] Sending dimension_revised event: {dim} ({dim_name})")
+                            
+                            yield _format_sse_event("dimension_revised", {
+                                "dimension_key": dim,
+                                "dimension_name": dim_name,
+                                "layer": dim_layer,
+                                "session_id": session_id,
+                                "message": f"{dim_name} 已修复",
+                                "content": _safe_truncate_report(revised_content, 50000),  # 单维度限制 50KB
+                                "timestamp": __import__('time').time()
+                            })
+
                 # Checkpoint saved event
                 if event.get("last_checkpoint_id"):
                     yield _format_sse_event("checkpoint_saved", {

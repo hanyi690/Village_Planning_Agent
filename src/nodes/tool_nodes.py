@@ -4,7 +4,7 @@
 将工具调用封装为独立的节点类，利用现有工具。
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from .base_node import BaseNode
 from ..core.state_builder import StateBuilder
@@ -152,23 +152,29 @@ class ToolBridgeNode(BaseNode):
 
 
 class RevisionNode(BaseNode):
-    """修复工具节点 - 使用现有RevisionTool，支持依赖维度级联更新"""
+    """
+    修复工具节点 - 使用 RevisionSubgraph 实现并行修复
+    
+    特性：
+    1. 使用 LangGraph Send 机制实现并行修复
+    2. 复用 dimension_metadata.py 的依赖关系计算
+    3. 按 wave 分组执行，确保依赖顺序正确
+    4. 支持状态筛选，每个维度只接收依赖的上下文
+    """
 
     def __init__(self):
         super().__init__("修复")
 
     def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        执行修复 - 增强版：支持精确维度选择 + 依赖维度级联更新
-
+        执行修复 - 使用 RevisionSubgraph 并行处理
+        
         支持两种模式：
-        1. 精确维度模式：使用用户选择的维度（target_dimensions）
+        1. 精确维度模式：使用用户选择的维度（revision_target_dimensions）
         2. 自动识别模式：使用关键词自动识别维度（原有机制）
-
-        修复完成后会自动更新依赖该维度的下游维度。
         """
         logger.info("=" * 60)
-        logger.info("[修复] RevisionNode.execute 开始执行")
+        logger.info("[修复] RevisionNode.execute 开始执行（并行版本）")
         logger.info("=" * 60)
         
         feedback = state.get("human_feedback", "")
@@ -176,29 +182,19 @@ class RevisionNode(BaseNode):
             logger.warning("[修复] 没有 human_feedback，跳过修复")
             return StateBuilder().set("need_revision", False).build()
 
-        # 调试日志：显示状态信息
+        # 调试日志
         logger.info(f"[修复] human_feedback: {feedback[:100]}...")
         logger.info(f"[修复] need_revision: {state.get('need_revision')}")
-        logger.info(f"[修复] revision_target_dimensions: {state.get('revision_target_dimensions')}")
-        logger.info(f"[修复] current_layer: {state.get('current_layer')}")
         
-        # 检查状态中的报告
-        detail_reports = state.get("detail_reports", {})
-        logger.info(f"[修复] detail_reports 键列表: {list(detail_reports.keys())}")
-        
-        # 使用现有RevisionTool
-        tool = RevisionTool()
-
         # 1. 获取需要修复的维度
-        # 支持用户精确指定维度
         target_dimensions = state.get("revision_target_dimensions")
 
         if target_dimensions:
-            # 使用用户指定的维度
             dimensions = target_dimensions
             logger.info(f"[修复] 使用用户指定的维度: {dimensions}")
         else:
-            # 使用自动识别（现有机制）
+            # 使用自动识别
+            tool = RevisionTool()
             parse_result = tool.parse_feedback(feedback)
             dimensions = parse_result["dimensions"] if parse_result["success"] else []
             logger.info(f"[修复] 自动识别的维度: {dimensions}")
@@ -207,202 +203,90 @@ class RevisionNode(BaseNode):
             logger.warning("[修复] 没有识别到需要修复的维度")
             return StateBuilder().set("need_revision", False).build()
 
-        # 2. 逐个修复维度（使用DimensionPlanner）
-        logger.info(f"[修复] 开始调用 revise_multiple，维度: {dimensions}")
-        revise_result = tool.revise_multiple(
-            dimensions=dimensions,
-            state=state,
-            feedback=feedback
+        # 2. 调用 RevisionSubgraph 进行并行修复
+        from ..subgraphs.revision_subgraph import call_revision_subgraph
+        
+        # 获取已完成的维度（用于过滤）
+        completed_dimensions = self._get_completed_dimensions(state)
+        
+        revision_result = call_revision_subgraph(
+            project_name=state.get("project_name", ""),
+            feedback=feedback,
+            target_dimensions=dimensions,
+            analysis_reports=state.get("analysis_reports", {}),
+            concept_reports=state.get("concept_reports", {}),
+            detail_reports=state.get("detail_reports", {}),
+            completed_dimensions=completed_dimensions
         )
         
-        logger.info(f"[修复] revise_multiple 结果: success={revise_result['success']}")
-        logger.info(f"[修复]   - revised_results 键: {list(revise_result.get('revised_results', {}).keys())}")
-        logger.info(f"[修复]   - failed_dimensions: {revise_result.get('failed_dimensions', [])}")
-        logger.info(f"[修复]   - skipped_dimensions: {revise_result.get('skipped_dimensions', [])}")
-
-        if not revise_result["success"]:
-            logger.warning("[修复] revise_multiple 失败，返回")
+        logger.info(f"[修复] RevisionSubgraph 结果: success={revision_result['success']}")
+        
+        if not revision_result["success"]:
+            logger.warning("[修复] RevisionSubgraph 执行失败")
             return StateBuilder().set("need_revision", False).build()
 
-        # 3. 处理下游依赖维度更新
-        revised_results = revise_result["revised_results"]
-        original_results = revise_result.get("original_results", {})
+        # 3. 更新主状态
+        updated_reports = revision_result.get("updated_reports", {})
+        revision_history = revision_result.get("revision_history", [])
         
-        downstream_updates = self._process_downstream_dependencies(
-            revised_results=revised_results,
-            original_results=original_results,
-            state=state,
-            tool=tool
-        )
-        
-        # 合并修复结果和下游更新结果
-        all_updates = {**revised_results, **downstream_updates}
-        
-        # 4. 更新状态 - 根据维度层级更新正确的数据源
+        # 分别更新各层级报告
         from ..config.dimension_metadata import get_dimension_layer
         
-        # 分别收集各层级的更新
-        analysis_updates = {}
-        concept_updates = {}
-        detail_updates = {}
+        analysis_reports = dict(state.get("analysis_reports", {}))
+        concept_reports = dict(state.get("concept_reports", {}))
+        detail_reports = dict(state.get("detail_reports", {}))
         
-        for dimension, revised_result in all_updates.items():
+        for dimension, revised_content in updated_reports.items():
             layer = get_dimension_layer(dimension)
             if layer == 1:
-                analysis_updates[dimension] = revised_result
+                analysis_reports[dimension] = revised_content
             elif layer == 2:
-                concept_updates[dimension] = revised_result
-            else:  # layer == 3 或 None
-                detail_updates[dimension] = revised_result
-        
-        # 更新各层级报告
-        analysis_reports = state.get("analysis_reports", {})
-        concept_reports = state.get("concept_reports", {})
-        detail_reports = state.get("detail_reports", {})
-        
-        # 【新增】在覆盖前保存旧版本到修订历史
-        from datetime import datetime
-        revision_history = state.get("revision_history", [])
-        
-        for dimension, new_content in revised_results.items():
-            layer = get_dimension_layer(dimension)
-            # 获取旧版本内容
-            if layer == 1:
-                old_content = analysis_reports.get(dimension, "")
-            elif layer == 2:
-                old_content = concept_reports.get(dimension, "")
+                concept_reports[dimension] = revised_content
             else:
-                old_content = detail_reports.get(dimension, "")
-            
-            # 保存到历史记录
-            revision_entry = {
-                "dimension": dimension,
-                "layer": layer,
-                "old_content": old_content,
-                "new_content": new_content,
-                "feedback": feedback,
-                "timestamp": datetime.now().isoformat()
-            }
-            revision_history.append(revision_entry)
-            logger.info(f"[修复] 已保存维度 {dimension} 的修订历史")
+                detail_reports[dimension] = revised_content
         
-        analysis_reports.update(analysis_updates)
-        concept_reports.update(concept_updates)
-        detail_reports.update(detail_updates)
-
-        # 重新组合综合报告（仅更新 detail_reports 对应的综合报告）
-        updated_detailed_plan = state.get("detailed_plan", "")
-        for dimension, result in detail_updates.items():
-            updated_detailed_plan += f"\n\n## 修复后的{dimension}规划\n\n{result}"
-
+        # 合并修订历史
+        existing_history = list(state.get("revision_history", []))
+        existing_history.extend(revision_history)
+        
         # 构建日志消息
-        msg_parts = [f"已修复 {len(revised_results)} 个维度"]
-        if downstream_updates:
-            msg_parts.append(f"级联更新 {len(downstream_updates)} 个依赖维度")
+        msg_parts = [f"已修复 {len(updated_reports)} 个维度（并行处理）"]
         
         logger.info(f"[修复] 完成: {', '.join(msg_parts)}")
-        if analysis_updates:
-            logger.info(f"[修复] Layer 1 更新: {list(analysis_updates.keys())}")
-        if concept_updates:
-            logger.info(f"[修复] Layer 2 更新: {list(concept_updates.keys())}")
-        if detail_updates:
-            logger.info(f"[修复] Layer 3 更新: {list(detail_updates.keys())}")
+        logger.info(f"[修复] 更新的维度: {list(updated_reports.keys())}")
         logger.info("=" * 60)
         
-        # 【新增】设置 last_revised_dimensions 标志用于 SSE 事件触发
-        revised_dimensions = list(revised_results.keys())
+        # 设置 last_revised_dimensions 标志用于 SSE 事件触发
+        revised_dimensions = list(updated_reports.keys())
         logger.info(f"[修复] 设置 last_revised_dimensions: {revised_dimensions}")
         
         return StateBuilder()\
             .set("analysis_reports", analysis_reports)\
             .set("concept_reports", concept_reports)\
             .set("detail_reports", detail_reports)\
-            .set("detailed_plan", updated_detailed_plan)\
             .set("need_revision", False)\
-            .set("revision_history", revision_history)\
+            .set("revision_history", existing_history)\
             .set("last_revised_dimensions", revised_dimensions)\
             .add_message("，".join(msg_parts))\
             .build()
 
-    def _process_downstream_dependencies(
-        self,
-        revised_results: Dict[str, str],
-        original_results: Dict[str, str],
-        state: Dict[str, Any],
-        tool: RevisionTool
-    ) -> Dict[str, str]:
-        """
-        处理下游依赖维度的级联更新
-
-        对每个修复的维度：
-        1. 计算其下游依赖维度
-        2. 检查下游维度是否已生成（进度检查）
-        3. 生成变更摘要作为 feedback
-        4. 调用修复工具更新下游维度
-
-        Args:
-            revised_results: 修复后的维度结果 {dimension: revised_content}
-            original_results: 原始维度结果 {dimension: original_content}
-            state: 当前状态
-            tool: RevisionTool 实例
-
-        Returns:
-            更新后的下游维度结果 {dimension: revised_content}
-        """
-        from ..config.dimension_metadata import get_downstream_dependencies
+    def _get_completed_dimensions(self, state: Dict[str, Any]) -> List[str]:
+        """获取已完成的维度列表"""
+        completed = []
         
-        downstream_updates = {}
-        processed = set(revised_results.keys())  # 避免重复处理
-
-        for dim, new_result in revised_results.items():
-            # 获取下游依赖维度
-            downstream_dims = get_downstream_dependencies(dim)
-            
-            if not downstream_dims:
-                continue
-            
-            logger.info(f"[修复] 维度 {dim} 的下游依赖: {downstream_dims}")
-
-            for dep_dim in downstream_dims:
-                if dep_dim in processed:
-                    continue  # 避免重复处理
-
-                # 进度检查：只更新已生成的维度
-                existing = tool._get_dimension_result(dep_dim, state)
-                if not existing:
-                    logger.info(f"[修复] 跳过未生成的下游维度: {dep_dim}")
-                    continue
-
-                try:
-                    # 生成变更摘要
-                    original = original_results.get(dim, "")
-                    change_summary = tool.generate_change_summary(
-                        original=original,
-                        revised=new_result,
-                        target_dimension=dep_dim
-                    )
-
-                    # 使用变更摘要作为 feedback 更新下游维度
-                    logger.info(f"[修复] 级联更新下游维度 {dep_dim}")
-                    result = tool.revise_dimension(
-                        dimension=dep_dim,
-                        state=state,
-                        feedback=f"上游维度 {dim} 更新: {change_summary}",
-                        original_result=existing,
-                        revision_count=0
-                    )
-
-                    if result["success"]:
-                        downstream_updates[dep_dim] = result["revised_result"]
-                        processed.add(dep_dim)
-                        logger.info(f"[修复] 下游维度 {dep_dim} 更新完成")
-                    else:
-                        logger.warning(f"[修复] 下游维度 {dep_dim} 更新失败: {result.get('error')}")
-
-                except Exception as e:
-                    logger.error(f"[修复] 处理下游维度 {dep_dim} 时出错: {e}")
-
-        return downstream_updates
+        # Layer 1
+        analysis_reports = state.get("analysis_reports", {})
+        completed.extend(analysis_reports.keys())
+        
+        # Layer 2
+        concept_reports = state.get("concept_reports", {})
+        completed.extend(concept_reports.keys())
+        
+        # Layer 3
+        detail_reports = state.get("detail_reports", {})
+        completed.extend(detail_reports.keys())
+        
+        return list(set(completed))  # 去重
 
 
 # ==========================================
