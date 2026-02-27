@@ -21,6 +21,7 @@
          ▼                 ▼                 ▼
 ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
 │UnifiedLayout │   │ ChatPanel    │   │ HistoryPanel │
+│(Header+Main) │   │ (主界面)     │   │ (历史抽屉)   │
 └──────────────┘   └──────┬───────┘   └──────────────┘
                           │
          ┌────────────────┼────────────────┐
@@ -33,82 +34,56 @@
 
 ## 核心原则：后端状态为单一真实源
 
-前端不存储业务逻辑状态，所有关键状态从后端同步：
+前端不存储业务逻辑状态，所有关键状态从后端 `/api/planning/status` 同步：
 
 ```
-后端状态                          前端派生状态
-─────────────────────────────────────────────────────
-status: 'paused'         →      isPaused: true
-previous_layer: 1        →      pendingReviewLayer: 1
-layer_1_completed: true  →      completedLayers[1]: true
-execution_complete: true →      停止轮询
+后端状态                    →    前端派生状态
+────────────────────────────────────────────────
+status: 'paused'            →    isPaused: true
+previous_layer: 1           →    pendingReviewLayer: 1
+layer_1_completed: true     →    completedLayers[1]: true
+execution_complete: true    →    停止轮询
 ```
 
 ## 数据流
 
-### REST 状态同步 (每2秒)
+### 1. REST 状态同步 (每2秒轮询)
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                     Backend                                   │
-│  AsyncSqliteSaver → checkpoints 表                           │
-│  _sessions 内存 → 运行时状态                                  │
-└──────────────────────────────────────────────────────────────┘
-                          │
-                GET /api/planning/status/{id}
-                          │
-                          ▼
-┌──────────────────────────────────────────────────────────────┐
-│                   TaskController                              │
-│                                                              │
-│  const fetchStatus = async () => {                           │
-│    const statusData = await planningApi.getStatus(taskId);   │
-│    setState({                                                │
-│      status: statusData.status,                              │
-│      pause_after_step: statusData.pause_after_step,          │
-│      previous_layer: statusData.previous_layer,              │
-│      layer_X_completed: statusData.layer_X_completed,        │
-│    });                                                       │
-│    return statusData.execution_complete;                     │
-│  }                                                           │
-└──────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌──────────────────────────────────────────────────────────────┐
-│                   ChatPanel                                   │
-│                                                              │
-│  useEffect(() => {                                           │
-│    if (taskId) syncBackendState(taskState);                  │
-│  }, [taskId, taskState]);                                    │
-└──────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌──────────────────────────────────────────────────────────────┐
-│               UnifiedPlanningContext                          │
-│                                                              │
-│  syncBackendState(backendData) {                             │
-│    setStatus(backendData.status);                            │
-│    setIsPaused(backendData.status === 'paused');             │
-│    setPendingReviewLayer(backendData.previous_layer);        │
-│    setCompletedLayers({                                      │
-│      1: backendData.layer_1_completed,                       │
-│      2: backendData.layer_2_completed,                       │
-│      3: backendData.layer_3_completed,                       │
-│    });                                                       │
-│  }                                                           │
-└──────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌──────────────────────────────────────────────────────────────┐
-│                     UI 渲染                                   │
-│                                                              │
-│  {isPaused && pendingReviewLayer && (                        │
-│    <ReviewPanel layer={pendingReviewLayer} />                │
-│  )}                                                          │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│              Backend State               │
+│  AsyncSqliteSaver + _sessions 内存       │
+└──────────────────────────────────────────┘
+                    │
+          GET /api/planning/status/{id}
+                    │
+                    ▼
+┌──────────────────────────────────────────┐
+│            TaskController                │
+│  fetchStatus() → setState(taskState)    │
+└──────────────────────────────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────────┐
+│              ChatPanel                   │
+│  useEffect → syncBackendState(taskState)│
+└──────────────────────────────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────────┐
+│        UnifiedPlanningContext            │
+│  isPaused = (status === 'paused')        │
+│  pendingReviewLayer = previous_layer     │
+└──────────────────────────────────────────┘
+                    │
+                    ▼
+┌──────────────────────────────────────────┐
+│              UI 渲染                      │
+│  {isPaused && <ReviewPanel />}           │
+└──────────────────────────────────────────┘
 ```
 
-### SSE 流式文本
+### 2. SSE 流式事件
 
 ```
 TaskController SSE 连接条件:
@@ -118,43 +93,25 @@ TaskController SSE 连接条件:
   - dimension_delta: 维度增量文本
   - layer_completed: 层级完成
   - pause: 暂停等待审查
-
-处理流程:
-┌─────────────────────────────────────────┐
-│ planningApi.createStream(taskId)        │
-│     │                                   │
-│     ▼ event: dimension_delta            │
-│ onDimensionDelta(key, delta, accumulated)│
-│     │                                   │
-│     ▼ 实时更新维度内容显示              │
-└─────────────────────────────────────────┘
+  - completed: 执行完成
 ```
 
-### 审查操作流程
+### 3. 审查操作流程
 
 ```
 用户点击"批准"
       │
       ▼
-TaskController.approve()
-      │
-      ▼
 POST /api/planning/review?action=approve
       │
       ▼
-后端处理:
-  - pause_after_step = false
-  - previous_layer = 0
-  - 启动后台任务继续执行
+后端: 清除暂停标志，启动后台任务
       │
       ▼
-REST轮询检测 (2秒后):
-  status: 'running'
-  pause_after_step: false
+REST轮询检测: status = 'running'
       │
       ▼
-syncBackendState():
-  isPaused = false
+syncBackendState(): isPaused = false
       │
       ▼
 ReviewPanel 消失 (条件渲染)
@@ -163,6 +120,8 @@ ReviewPanel 消失 (条件渲染)
 ## 核心组件
 
 ### UnifiedPlanningContext
+
+**文件**: `contexts/UnifiedPlanningContext.tsx`
 
 **职责**: 全局状态容器，同步后端状态
 
@@ -178,9 +137,13 @@ interface PlanningState {
   pendingReviewLayer: number | null;  // = previous_layer
   completedLayers: { 1: boolean; 2: boolean; 3: boolean };
   
+  // 视图模式
+  viewMode: 'WELCOME_FORM' | 'SESSION_ACTIVE';
+  
   // 历史
-  villages: Village[];
-  selectedVillage: Village | null;
+  villages: VillageInfo[];
+  selectedVillage: VillageInfo | null;
+  selectedSession: VillageSession | null;
 }
 
 // 核心方法
@@ -197,6 +160,8 @@ syncBackendState(backendData) {
 ```
 
 ### TaskController
+
+**文件**: `controllers/TaskController.tsx`
 
 **职责**: REST 轮询 + SSE 管理 (无头组件)
 
@@ -228,7 +193,9 @@ const shouldConnectSSE = !execution_complete && !pause_after_step;
 
 ### ChatPanel
 
-**职责**: 主界面容器
+**文件**: `components/chat/ChatPanel.tsx`
+
+**职责**: 主界面容器，协调状态同步
 
 ```typescript
 export default function ChatPanel() {
@@ -269,8 +236,18 @@ export default function ChatPanel() {
 | ChatPanel | chat/ChatPanel.tsx | 主界面容器 |
 | MessageList | chat/MessageList.tsx | 消息列表 |
 | MessageBubble | chat/MessageBubble.tsx | 消息气泡 |
-| LayerReportMessage | chat/LayerReportMessage.tsx | 层级完成消息 |
+| MessageContent | chat/MessageContent.tsx | 消息内容渲染 |
+| StreamingText | chat/StreamingText.tsx | 流式文本显示 |
+| LayerReportCard | chat/LayerReportCard.tsx | 层级报告卡片 |
+| DimensionSection | chat/DimensionSection.tsx | 维度内容显示 |
 | ReviewPanel | chat/ReviewPanel.tsx | 审查操作面板 |
+
+### UI 组件
+
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| Card | ui/Card.tsx | 卡片容器 |
+| SegmentedControl | ui/SegmentedControl.tsx | 分段控制器 |
 
 ## API 客户端
 
@@ -290,7 +267,32 @@ dataApi: {
   listVillages()                   // GET /api/data/villages
   getVillageSessions(name)         // GET /api/data/villages/{name}/sessions
   getLayerContent(name, layer)     // GET /api/data/villages/{name}/layers/{layer}
+  getCheckpoints(name, session)    // GET /api/data/villages/{name}/checkpoints
 }
+
+fileApi: {
+  uploadFile(file)                 // POST /api/files/upload
+}
+```
+
+### API 响应格式
+
+```typescript
+interface APIResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  message?: string;
+  request_id?: string;
+}
+```
+
+### 重试机制
+
+```typescript
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY = 1000; // ms
+const RETRY_BACKOFF_MULTIPLIER = 2;
 ```
 
 ## 条件渲染
@@ -298,29 +300,60 @@ dataApi: {
 ```typescript
 // ReviewPanel 显示逻辑
 {isPaused && pendingReviewLayer && (
-  <ReviewPanel layer={pendingReviewLayer} onApprove={...} onReject={...} />
+  <ReviewPanel 
+    layer={pendingReviewLayer} 
+    onApprove={actions.approve} 
+    onReject={actions.reject} 
+  />
 )}
 
-// 消息类型渲染
-switch (message.type) {
-  case 'layer_completed': return <LayerReportMessage />;
-  case 'review_interaction': return <ReviewInteractionMessage />;
-  default: return <TextMessage />;
+// 视图模式切换
+{viewMode === 'WELCOME_FORM' && <VillageInputForm />}
+{viewMode === 'SESSION_ACTIVE' && <ChatInterface />}
+```
+
+## 消息类型
+
+```typescript
+// types/message.ts
+type MessageType = 
+  | 'text'              // 普通文本
+  | 'layer_completed'   // 层级完成
+  | 'review_interaction' // 审查交互
+  | 'error';            // 错误消息
+
+interface Message {
+  id: string;
+  timestamp: Date;
+  role: 'user' | 'assistant' | 'system';
+  type: MessageType;
+  content: string;
+  layer?: number;
+  summary?: {
+    word_count: number;
+    dimension_count?: number;
+  };
+  dimensionReports?: Record<string, string>;
+  actions?: MessageAction[];
 }
 ```
 
 ## 性能优化
 
-1. **状态变化检测**: useRef 跟踪前状态，避免不必要更新
-2. **稳定回调引用**: useCallback + useMemo
+1. **状态变化检测**: `useRef` 跟踪前状态，避免不必要更新
+2. **稳定回调引用**: `useCallback` + `useMemo`
 3. **条件渲染**: 状态驱动，无冗余计算
 
 ## 关键文件索引
 
 | 文件 | 功能 |
 |------|------|
-| contexts/UnifiedPlanningContext.tsx | 全局状态管理 |
-| controllers/TaskController.tsx | REST轮询+SSE管理 |
-| components/chat/ChatPanel.tsx | 主界面容器 |
-| components/chat/ReviewPanel.tsx | 审查面板 |
-| lib/api.ts | API 客户端 |
+| `contexts/UnifiedPlanningContext.tsx` | 全局状态管理 |
+| `controllers/TaskController.tsx` | REST轮询+SSE管理 |
+| `lib/api.ts` | API客户端 |
+| `components/chat/ChatPanel.tsx` | 主界面容器 |
+| `components/chat/ReviewPanel.tsx` | 审查面板 |
+| `components/chat/MessageList.tsx` | 消息列表 |
+| `components/layout/UnifiedLayout.tsx` | 主布局 |
+| `config/dimensions.ts` | 维度配置 |
+| `types/message.ts` | 类型定义 |

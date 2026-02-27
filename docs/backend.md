@@ -41,7 +41,7 @@ async def start_planning(request: StartPlanningRequest, background_tasks: Backgr
     # 1. 限流检查
     allowed, msg = rate_limiter.check_rate_limit(request.project_name, session_id)
     
-    # 2. 先创建数据库记录 (避免前端立即轮询时 404)
+    # 2. 创建数据库记录
     await create_session_async(session_state)
     
     # 3. 获取全局 checkpointer 单例
@@ -60,35 +60,7 @@ async def start_planning(request: StartPlanningRequest, background_tasks: Backgr
 
 **核心端点** - 状态查询 (REST 轮询)
 
-```python
-@router.get("/status/{session_id}")
-async def get_session_status(session_id: str):
-    # 1. 从数据库获取业务元数据
-    db_session = await get_session_async(session_id)
-    
-    # 2. 从内存状态获取实时进度
-    if session_id in _sessions:
-        session_state = _sessions[session_id]
-        current_layer = session_state.get("current_layer", 1)
-        sent_events = session_state.get("sent_layer_events", set())
-        layer_1_completed = "layer_1_completed" in sent_events
-        # ...
-    
-    # 3. 返回完整状态
-    return {
-        "session_id": session_id,
-        "status": db_session.get("status", "running"),
-        "current_layer": current_layer,
-        "previous_layer": previous_layer,      # 待审查层级
-        "layer_1_completed": layer_1_completed,
-        "layer_2_completed": layer_2_completed,
-        "layer_3_completed": layer_3_completed,
-        "pause_after_step": pause_after_step,
-        "execution_complete": execution_complete,
-    }
-```
-
-**响应字段说明**:
+**响应字段**:
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -97,31 +69,17 @@ async def get_session_status(session_id: str):
 | previous_layer | number | 刚完成的层级 (待审查) |
 | layer_X_completed | boolean | 层级完成状态 |
 | execution_complete | boolean | 执行是否完成 |
+| checkpoints | array | 检查点列表 |
 
 ### GET /api/planning/stream/{session_id}
 
 SSE 流式输出
 
-```python
-@router.get("/stream/{session_id}")
-async def stream_planning_events(session_id: str):
-    async def event_generator():
-        while True:
-            events = _get_session_events_copy(session_id)
-            for event in events[last_index:]:
-                yield f"data: {json.dumps(event)}\n\n"
-            
-            if stream_state == "completed": break
-            await asyncio.sleep(0.1)
-    
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-```
-
 **事件类型**:
 
 | 事件 | 数据 |
 |------|------|
-| dimension_delta | {layer, dimension_key, delta, accumulated} |
+| dimension_delta | {layer, dimension, delta, accumulated} |
 | layer_completed | {layer, report_content, dimension_reports} |
 | pause | {current_layer, checkpoint_id} |
 | completed | {success} |
@@ -145,6 +103,14 @@ async def handle_review(session_id: str, request: ReviewActionRequest):
         return await _resume_graph_execution(session_id, initial_state)
 ```
 
+### GET /api/data/villages
+
+列出所有村庄及其会话
+
+### GET /api/data/villages/{name}/layers/{layer}
+
+获取指定层级的规划内容
+
 ## 数据流
 
 ### 启动流程
@@ -152,7 +118,7 @@ async def handle_review(session_id: str, request: ReviewActionRequest):
 ```
 POST /api/planning/start
       │
-      ├─▶ 限流检查
+      ├─▶ 限流检查 (RateLimiter)
       ├─▶ 生成 session_id (YYYYMMDD_HHMMSS)
       ├─▶ 创建数据库记录 (PlanningSession)
       ├─▶ 构建 LangGraph 初始状态
@@ -176,7 +142,6 @@ async def _execute_graph_in_background(session_id, graph, initial_state, checkpo
                 "type": "layer_completed",
                 "layer": layer_num,
                 "report_content": report,
-                "dimension_reports": dimension_reports,
             })
         
         # 检测暂停 → 发送 pause 事件
@@ -243,12 +208,12 @@ _sessions: Dict[str, Dict] = {
 | pause_after_step | 内存 | 步进暂停 |
 | execution_complete | 内存 | 执行完成 |
 
-## 暂停恢复
+## 暂停恢复机制
 
 ### 触发暂停
 
 ```python
-# LangGraph 执行中
+# LangGraph 执行中检测到 pause_after_step
 if event.get("pause_after_step"):
     previous_layer = event.get("previous_layer", 1)
     
@@ -262,7 +227,7 @@ if event.get("pause_after_step"):
     _set_session_value(session_id, "status", TaskStatus.paused)
     await update_session_async(session_id, {"status": TaskStatus.paused})
     
-    return  # 终止执行
+    return  # 终止执行，等待审查
 ```
 
 ### 恢复执行
@@ -276,7 +241,7 @@ async def _resume_graph_execution(session_id: str, state: Dict) -> Dict:
     # 使用 aupdate_state 更新 checkpoint
     await graph.aupdate_state(config, {"pause_after_step": False})
     
-    # 启动后台任务
+    # 启动后台任务继续执行
     asyncio.create_task(_execute_graph_in_background(...))
 ```
 
@@ -291,23 +256,53 @@ class RateLimiter:
     cooldown_seconds = 10    # 冷却时间
 ```
 
-## 工具管理器
+## 数据库模型
 
-**文件**: `api/tool_manager.py`
+**文件**: `database/models.py`
 
 ```python
-class ToolManager (Singleton):
-    _checkpoint_tools: Dict[str, CheckpointTool]  # 按项目缓存
+class PlanningSession(SQLModel, table=True):
+    __tablename__ = "planning_sessions"
+    
+    session_id: str = Field(primary_key=True)
+    project_name: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    config: dict  # JSON配置
+
+class Checkpoint(SQLModel, table=True):
+    __tablename__ = "checkpoints"
+    
+    # LangGraph AsyncSqliteSaver 自动管理
+```
+
+## 应用生命周期
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动
+    ensure_working_directory()
+    init_db()               # 同步数据库初始化
+    await init_async_db()   # 异步数据库初始化
+    
+    yield
+    
+    # 关闭
+    dispose_engine()
+    await dispose_async_engine()
 ```
 
 ## 关键文件索引
 
 | 文件 | 功能 |
 |------|------|
-| backend/main.py | FastAPI 应用入口 |
-| backend/api/planning.py | 核心 API |
-| backend/api/data.py | 数据访问 API |
-| backend/api/tool_manager.py | 工具管理器 |
-| backend/database/models.py | 数据模型 |
-| backend/database/operations_async.py | 异步 CRUD |
-| backend/services/rate_limiter.py | 限流器 |
+| `backend/main.py` | FastAPI 应用入口 |
+| `backend/schemas.py` | Pydantic 请求/响应模型 |
+| `backend/api/planning.py` | 规划 API 核心 |
+| `backend/api/data.py` | 数据访问 API |
+| `backend/api/tool_manager.py` | 工具管理器 |
+| `backend/database/models.py` | SQLModel 数据模型 |
+| `backend/database/operations_async.py` | 异步 CRUD 操作 |
+| `backend/services/rate_limiter.py` | 限流器 |

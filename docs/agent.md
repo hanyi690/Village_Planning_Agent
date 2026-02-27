@@ -20,7 +20,7 @@
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
 │   Layer 1    │    │   Layer 2    │    │   Layer 3    │
 │ 现状分析子图  │───▶│ 规划思路子图  │───▶│ 详细规划子图  │
-│ (12维度并行) │    │ (4维度串行)   │    │ (10维度)     │
+│ (12维度并行) │    │ (4维度串行)   │    │ (12维度)     │
 └──────────────┘    └──────────────┘    └──────────────┘
         │                    │                    │
         └────────────────────┼────────────────────┘
@@ -119,7 +119,19 @@ def create_village_planning_graph(checkpointer=None):
 
 **文件**: `subgraphs/analysis_subgraph.py`
 
-**维度**: location, socio_economic, natural_environment, land_use, traffic, public_services, infrastructure, ecological_green, architecture, historical_culture, villager_wishes, superior_planning
+**维度**: 
+- location (区位分析)
+- socio_economic (社会经济)
+- natural_environment (自然环境)
+- land_use (土地利用)
+- traffic (道路交通)
+- public_services (公共服务)
+- infrastructure (基础设施)
+- ecological_green (生态绿地)
+- architecture (建筑)
+- historical_culture (历史文化)
+- villager_wishes (村民意愿)
+- superior_planning (上位规划)
 
 **执行模式**: Map-Reduce 并行 (Send 机制)
 
@@ -137,7 +149,11 @@ builder.add_conditional_edges("initialize", map_dimensions)
 
 **文件**: `subgraphs/concept_subgraph.py`
 
-**维度**: resource_endowment, planning_positioning, development_goals, planning_strategies
+**维度**:
+- resource_endowment (资源禀赋)
+- planning_positioning (规划定位)
+- development_goals (发展目标)
+- planning_strategies (规划策略)
 
 **执行模式**: 4波次串行 (依赖驱动)
 
@@ -148,13 +164,25 @@ builder.add_conditional_edges("initialize", map_dimensions)
 | development_goals | 前2个 (Wave 3) |
 | planning_strategies | 前3个 (Wave 4) |
 
-### Layer 3: 详细规划 (10维度)
+### Layer 3: 详细规划 (12维度)
 
 **文件**: `subgraphs/detailed_plan_subgraph.py`
 
-**维度**: industry, overall_planning, transportation, public_services, infrastructure, ecological_protection, disaster_prevention, heritage_protection, village_landscape, project_bank
+**维度**:
+- industry (产业规划)
+- spatial_structure (空间结构)
+- land_use_planning (土地利用)
+- settlement_planning (居民点)
+- traffic_planning (道路交通)
+- public_service (公共服务)
+- infrastructure_planning (基础设施)
+- ecological (生态绿地)
+- disaster_prevention (防灾减灾)
+- heritage (历史文保)
+- landscape (村庄风貌)
+- project_bank (项目库)
 
-**执行模式**: 2波次 (前9个并行，project_bank 依赖前9个)
+**执行模式**: 2波次 (前11个并行，project_bank 依赖前11个)
 
 ## 路由决策
 
@@ -264,48 +292,47 @@ create_village_planning_graph()
 └──────────────────────────────────────────┘
 ```
 
-## 三层规划维度
+## 维度配置
 
-### Layer 1: 现状分析 (12维度)
+**文件**: `config/dimension_metadata.py`
 
-| 维度 | 说明 |
-|------|------|
-| location | 区位分析 |
-| socio_economic | 社会经济 |
-| natural_environment | 自然环境 |
-| land_use | 土地利用 |
-| traffic | 道路交通 |
-| public_services | 公共服务 |
-| infrastructure | 基础设施 |
-| ecological_green | 生态绿地 |
-| architecture | 建筑 |
-| historical_culture | 历史文化 |
-| villager_wishes | 村民意愿 |
-| superior_planning | 上位规划 |
+```python
+DIMENSION_CONFIG = {
+    # Layer 1 维度
+    "location": {
+        "name": "区位分析",
+        "layer": 1,
+        "dependencies": [],
+    },
+    # ... 其他维度
+    
+    # Layer 2 维度
+    "resource_endowment": {
+        "name": "资源禀赋",
+        "layer": 2,
+        "dependencies": ["location", "socio_economic", ...],
+    },
+    # ...
+    
+    # Layer 3 维度
+    "industry": {
+        "name": "产业规划",
+        "layer": 3,
+        "dependencies": ["resource_endowment", "planning_positioning", ...],
+    },
+    # ...
+}
+```
 
-### Layer 2: 规划思路 (4维度)
+## LLM 配置
 
-| 维度 | 说明 |
-|------|------|
-| resource_endowment | 资源禀赋 |
-| planning_positioning | 规划定位 |
-| development_goals | 发展目标 |
-| planning_strategies | 规划策略 |
+**文件**: `core/config.py`
 
-### Layer 3: 详细规划 (10维度)
-
-| 维度 | 说明 |
-|------|------|
-| industry | 产业规划 |
-| overall_planning | 总体规划 |
-| transportation | 综合交通 |
-| public_services | 公共服务设施 |
-| infrastructure | 基础设施 |
-| ecological_protection | 生态系统 |
-| disaster_prevention | 防灾减灾 |
-| heritage_protection | 历史文化保护 |
-| village_landscape | 村庄风貌 |
-| project_bank | 项目库 |
+```python
+LLM_MODEL = "glm-4-flash"
+LLM_PROVIDER = "zhipuai"
+MAX_TOKENS = 1500
+```
 
 ## 设计模式
 
@@ -318,12 +345,14 @@ create_village_planning_graph()
 
 | 文件 | 功能 |
 |------|------|
-| src/agent.py | 对外接口 |
-| src/orchestration/main_graph.py | 主图编排 |
-| src/subgraphs/analysis_subgraph.py | Layer 1 子图 |
-| src/subgraphs/concept_subgraph.py | Layer 2 子图 |
-| src/subgraphs/detailed_plan_subgraph.py | Layer 3 子图 |
-| src/nodes/layer_nodes.py | Layer 节点 |
-| src/planners/unified_base_planner.py | 规划器基类 |
-| src/planners/generic_planner.py | 通用规划器 |
-| src/config/dimension_metadata.py | 维度配置 |
+| `src/agent.py` | 对外接口 |
+| `src/orchestration/main_graph.py` | 主图编排 |
+| `src/subgraphs/analysis_subgraph.py` | Layer 1 子图 |
+| `src/subgraphs/concept_subgraph.py` | Layer 2 子图 |
+| `src/subgraphs/detailed_plan_subgraph.py` | Layer 3 子图 |
+| `src/nodes/layer_nodes.py` | Layer 节点封装 |
+| `src/planners/unified_base_planner.py` | 规划器基类 |
+| `src/planners/generic_planner.py` | 通用规划器 |
+| `src/config/dimension_metadata.py` | 维度配置 |
+| `src/core/config.py` | 核心配置 |
+| `src/core/llm_factory.py` | LLM 工厂 |
