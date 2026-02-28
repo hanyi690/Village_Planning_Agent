@@ -1,6 +1,6 @@
 # 智能体架构文档
 
-> LangGraph 核心引擎 - 三层递进式规划系统
+> LangGraph 核心引擎 - 三层递进式规划系统 + RAG 知识检索
 
 ## 架构概览
 
@@ -14,6 +14,7 @@
 ┌─────────────────────────────────────────────────────────────┐
 │            orchestration/main_graph.py (主图编排)            │
 │  VillagePlanningState → StateGraph → 层级调度               │
+│  knowledge_cache: RAG 知识预加载缓存                         │
 └─────────────────────────────────────────────────────────────┘
         │                    │                    │
         ▼                    ▼                    ▼
@@ -38,80 +39,39 @@
 START
   │
   ▼
-┌─────────────────────────────────────────────────────────────┐
-│ init_pause (初始化暂停状态)                                  │
-│ - 检查 step_mode 和 previous_layer                           │
-│ - 如果 need_revision=True，清除暂停标志                      │
-└─────────────────────────────────────────────────────────────┘
+init_pause (初始化暂停状态)
   │
   ▼ (route_after_pause)
   │
-┌─────────────────────────────────────────────────────────────┐
-│ Layer 1: 现状分析 (12个维度完全并行)                          │
-│                                                             │
-│ [initialize] -> [analyze_dimension x 12] -> [reduce]        │
-│                                                             │
-│ 维度: location, socio_economic, natural_environment,        │
-│       land_use, traffic, public_services, infrastructure,   │
-│       ecological_green, architecture, historical_culture,   │
-│       villager_wishes, superior_planning                    │
-│                                                             │
-│ 输出: analysis_reports: Dict[str, str]                       │
-└─────────────────────────────────────────────────────────────┘
+Layer 1: 现状分析 (12维度并行)
+  │ initialize → [analyze_dimension x12] → reduce
+  │ 输出: analysis_reports
   │
   ▼ (route_after_layer1)
   │
-┌─────────────────────────────────────────────────────────────┐
-│ tool_bridge (可选)                                           │
-│ - step_mode 暂停                                             │
-│ - need_human_review 人工审核                                 │
-│ - need_revision 修复                                         │
-└─────────────────────────────────────────────────────────────┘
+tool_bridge (可选: step_mode暂停)
   │
   ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Layer 2: 规划思路 (4个维度，波次路由)                          │
-│                                                             │
-│ Wave 1: resource_endowment (无同层依赖)                      │
-│ Wave 2: planning_positioning (依赖 resource_endowment)      │
-│ Wave 3: development_goals (依赖前两个)                       │
-│ Wave 4: planning_strategies (依赖前三个)                     │
-│                                                             │
-│ 输出: concept_reports: Dict[str, str]                        │
-└─────────────────────────────────────────────────────────────┘
+Layer 2: 规划思路 (4维度波次)
+  │ Wave 1: resource_endowment
+  │ Wave 2: planning_positioning
+  │ Wave 3: development_goals
+  │ Wave 4: planning_strategies
+  │ 输出: concept_reports
   │
   ▼ (route_after_layer2)
   │
-┌─────────────────────────────────────────────────────────────┐
-│ tool_bridge (可选)                                           │
-└─────────────────────────────────────────────────────────────┘
+tool_bridge (可选)
   │
   ▼
-┌─────────────────────────────────────────────────────────────┐
-│ Layer 3: 详细规划 (12个维度，波次路由)                         │
-│                                                             │
-│ Wave 1: 9个维度并行执行                                      │
-│   industry, master_plan, traffic, public_service,           │
-│   infrastructure, ecological, disaster_prevention,          │
-│   heritage, landscape                                       │
-│                                                             │
-│ Wave 2: project_bank (依赖Wave 1全部完成)                    │
-│                                                             │
-│ 输出: detail_reports: Dict[str, str]                         │
-└─────────────────────────────────────────────────────────────┘
+Layer 3: 详细规划 (12维度波次)
+  │ Wave 1: 9维度并行
+  │ Wave 2: project_bank
+  │ 输出: detail_reports
   │
   ▼ (route_after_layer3)
   │
-┌─────────────────────────────────────────────────────────────┐
-│ tool_bridge (可选)                                           │
-└─────────────────────────────────────────────────────────────┘
-  │
-  ▼
-┌─────────────────────────────────────────────────────────────┐
-│ generate_final_output                                       │
-│ - 整合三层报告                                               │
-│ - 生成最终规划文档                                           │
-└─────────────────────────────────────────────────────────────┘
+generate_final_output
   │
   ▼
 END
@@ -122,50 +82,39 @@ END
 ```python
 class VillagePlanningState(TypedDict):
     # 输入数据
-    project_name: str              # 项目/村庄名称
-    village_data: str              # 村庄基础数据
+    project_name: str              # 项目名称
+    village_data: str              # 村庄基础数据 (raw_data)
     task_description: str          # 规划任务描述
     constraints: str               # 约束条件
 
     # 流程控制
-    current_layer: int             # 当前执行层级 (1/2/3)
-    layer_1_completed: bool        # 现状分析完成
-    layer_2_completed: bool        # 规划思路完成
-    layer_3_completed: bool        # 详细规划完成
+    current_layer: int             # 当前层级 (1/2/3)
+    layer_1_completed: bool
+    layer_2_completed: bool
+    layer_3_completed: bool
 
     # 人工审核
-    need_human_review: bool        # 是否需要人工审核
-    human_feedback: str            # 人工反馈
-    need_revision: bool            # 是否需要修复
-    revision_target_dimensions: List[str]  # 修复维度列表
+    need_human_review: bool
+    human_feedback: str
+    need_revision: bool
+    revision_target_dimensions: List[str]
 
     # 各层成果
-    analysis_reports: Dict[str, str]  # Layer 1: 现状分析报告
-    concept_reports: Dict[str, str]   # Layer 2: 规划思路报告
-    detail_reports: Dict[str, str]    # Layer 3: 详细规划报告
-    final_output: str              # 最终成果
+    analysis_reports: Dict[str, str]  # Layer 1
+    concept_reports: Dict[str, str]   # Layer 2
+    detail_reports: Dict[str, str]    # Layer 3
+    final_output: str
 
-    # 逐步执行模式
-    step_mode: bool                # 是否启用逐步执行模式
-    pause_after_step: bool         # 是否在当前步骤后暂停
-    previous_layer: int            # 刚完成的层级编号
+    # RAG 知识缓存
+    knowledge_cache: Dict[str, str]
 
-    # 路由控制
-    quit_requested: bool           # 用户请求退出
-    trigger_rollback: bool         # 触发回退
-    rollback_target: str           # 回退目标checkpoint ID
-
-    # 数据共享
-    blackboard: Dict[str, Any]
-
-    # 修订历史
-    revision_history: List[Dict[str, Any]]
-    last_revised_dimensions: List[str]
+    # 步进模式
+    step_mode: bool
+    pause_after_step: bool
+    previous_layer: int
 ```
 
 ## 主图编排
-
-### 图结构
 
 ```python
 def create_village_planning_graph(checkpointer=None):
@@ -182,32 +131,8 @@ def create_village_planning_graph(checkpointer=None):
     # 条件边
     builder.add_conditional_edges(START, route_initial)
     builder.add_conditional_edges("layer1_analysis", route_after_layer1)
-    builder.add_conditional_edges("layer2_concept", route_after_layer2)
-    builder.add_conditional_edges("layer3_detail", route_after_layer3)
-    builder.add_conditional_edges("tool_bridge", route_after_tool_bridge)
     
     return builder.compile(checkpointer=checkpointer)
-```
-
-### 路由决策
-
-```python
-def route_after_layer1(state):
-    if not state["layer_1_completed"]:
-        return "end"
-    if state.get("step_mode"):
-        return "tool_bridge"  # 准备暂停
-    return "layer2_concept"
-
-def route_after_tool_bridge(state):
-    previous = state.get("previous_layer", 1)
-    if state["step_mode"] and previous == 1:
-        return "pause"  # 等待审查
-    if previous == 1:
-        return "layer2_concept"
-    if previous == 2:
-        return "layer3_detail"
-    return "generate_final"
 ```
 
 ## 子图实现
@@ -216,18 +141,15 @@ def route_after_tool_bridge(state):
 
 **文件**: `subgraphs/analysis_subgraph.py`
 
-**执行模式**: Map-Reduce 并行 (Send 机制)
+**执行模式**: Map-Reduce 并行
 
 ```python
-def map_dimensions(state: AnalysisState) -> List[Send]:
-    return [
-        Send("analyze_dimension", {"dimension_key": key})
-        for key in state["subjects"]
-    ]
+def map_dimensions(state) -> List[Send]:
+    return [Send("analyze_dimension", {"dimension_key": key})
+            for key in state["subjects"]]
 
-builder.add_conditional_edges("initialize", map_dimensions)
-builder.add_node("analyze_dimension", AnalyzeDimensionNode())
-builder.add_node("reduce", ReduceAnalysesNode())
+# 节点流程
+initialize → knowledge_preload → [analyze_dimension x12] → reduce
 ```
 
 ### Layer 2: 规划思路子图
@@ -236,14 +158,11 @@ builder.add_node("reduce", ReduceAnalysesNode())
 
 **执行模式**: 波次路由 (依赖驱动)
 
-```python
-def route_by_dependency_wave(state):
-    completed = state.get("completed_dimensions", set())
-    for wave in wave_order:
-        ready = [d for d in wave if d not in completed]
-        if ready:
-            return Send("analyze_dimension", {"dimension_key": ready[0]})
-    return "reduce"
+```
+Wave 1: resource_endowment (无依赖)
+Wave 2: planning_positioning (依赖 Wave 1)
+Wave 3: development_goals (依赖 Wave 1,2)
+Wave 4: planning_strategies (依赖 Wave 1,2,3)
 ```
 
 ### Layer 3: 详细规划子图
@@ -252,11 +171,9 @@ def route_by_dependency_wave(state):
 
 **执行模式**: 波次路由
 
-```python
-WAVE_1 = ["industry", "master_plan", "traffic", "public_service", 
-          "infrastructure", "ecological", "disaster_prevention", 
-          "heritage", "landscape"]
-WAVE_2 = ["project_bank"]  # 依赖 Wave 1 全部完成
+```
+Wave 1: 9维度并行 (industry, master_plan, traffic, ...)
+Wave 2: project_bank (依赖 Wave 1 全部完成)
 ```
 
 ## 规划器层
@@ -275,7 +192,6 @@ class UnifiedPlannerBase(ABC):
     def get_layer(self) -> int: ...
     
     def execute(self, state, model, temperature) -> Dict[str, Any]:
-        # 标准执行流程
         prompt = self.build_prompt(state)
         response = self._call_llm(prompt, model, temperature)
         return self._parse_response(response)
@@ -294,13 +210,10 @@ class GenericPlanner(UnifiedPlannerBase):
         self.dimension_key = dimension_key
     
     def build_prompt(self, state) -> str:
-        layer = self.get_layer()
-        if layer == 1:
-            return self._build_layer1_prompt(state)
-        elif layer == 2:
-            return self._build_layer2_prompt(state)
-        else:
-            return self._build_layer3_prompt(state)
+        # 从 knowledge_cache 获取知识上下文
+        knowledge = state.get("knowledge_cache", {}).get(self.dimension_key, "")
+        # 构建包含知识的 Prompt
+        ...
 ```
 
 ## 维度配置
@@ -309,120 +222,109 @@ class GenericPlanner(UnifiedPlannerBase):
 
 ```python
 DIMENSION_CONFIG = {
-    # Layer 1 维度
-    "location": {
-        "name": "区位分析",
-        "layer": 1,
-        "dependencies": [],
-    },
-    "socio_economic": {
-        "name": "社会经济",
-        "layer": 1,
-        "dependencies": [],
-    },
-    # ... 其他 Layer 1 维度
+    # Layer 1 (12维度)
+    "location": {"name": "区位分析", "layer": 1, "dependencies": []},
+    "socio_economic": {"name": "社会经济", "layer": 1},
+    "land_use": {"name": "土地利用", "layer": 1, "rag_enabled": True},
+    # ...
     
-    # Layer 2 维度
-    "resource_endowment": {
-        "name": "资源禀赋",
-        "layer": 2,
-        "dependencies": ["natural_environment", "land_use", "socio_economic"],
-    },
-    "planning_positioning": {
-        "name": "规划定位",
-        "layer": 2,
-        "dependencies": ["location", "socio_economic", "resource_endowment"],
-    },
-    # ... 其他 Layer 2 维度
+    # Layer 2 (4维度)
+    "resource_endowment": {"name": "资源禀赋", "layer": 2},
+    "planning_positioning": {"name": "规划定位", "layer": 2},
+    # ...
     
-    # Layer 3 维度
-    "industry": {
-        "name": "产业规划",
-        "layer": 3,
-        "dependencies": ["socio_economic", "resource_endowment", "planning_positioning"],
-    },
-    # ... 其他 Layer 3 维度
+    # Layer 3 (12维度)
+    "industry": {"name": "产业规划", "layer": 3},
+    "land_use_planning": {"name": "土地利用规划", "layer": 3, "rag_enabled": True},
+    # ...
 }
 ```
 
-## 节点继承体系
+## RAG 知识检索
+
+### 模块架构
 
 ```
-BaseNode (基类)
-├── BaseLayerNode (Layer节点基类)
-│   ├── Layer1AnalysisNode (现状分析节点)
-│   ├── Layer2ConceptNode (规划思路节点)
-│   └── Layer3DetailNode (详细规划节点)
-│
-├── ToolBridgeNode (工具桥接节点)
-│   └── RevisionNode (修复节点)
-│
-└── SubgraphNodes (子图节点)
-    ├── InitializeAnalysisNode
-    ├── AnalyzeDimensionNode
-    ├── ReduceAnalysesNode
-    ├── InitializeConceptNode
-    └── ...
+src/rag/                          # RAG 模块（统一实现）
+├── config.py                     # 配置：DATA_DIR, 向量库路径
+├── core/
+│   ├── tools.py                  # 检索工具：knowledge_search_tool
+│   ├── cache.py                  # 查询缓存
+│   └── context_manager.py        # 上下文管理
+├── utils/
+│   └── loaders.py                # 文档加载器（支持多种格式）
+├── service/                      # 可选独立服务
+└── scripts/
+    └── build_kb_auto.py          # 知识库构建脚本
 ```
 
-## 节点调用链
+### 集成架构
 
 ```
-1. Layer 1 执行流程:
-   main_graph.Layer1AnalysisNode
-       -> analysis_subgraph.InitializeAnalysisNode
-       -> [analysis_subgraph.AnalyzeDimensionNode x 12] (并行)
-       -> analysis_subgraph.ReduceAnalysesNode
-       -> GenericPlanner.execute()
-
-2. Layer 2 执行流程:
-   main_graph.Layer2ConceptNode
-       -> concept_subgraph.InitializeConceptNode
-       -> [route_by_dependency_wave] (波次路由)
-       -> concept_subgraph.AnalyzeConceptDimensionNode
-       -> concept_subgraph.ReduceConceptsNode
-       -> GenericPlanner.execute()
-
-3. Layer 3 执行流程:
-   main_graph.Layer3DetailNode
-       -> detailed_plan_subgraph.InitializeDetailedPlanningNode
-       -> [route_by_dependency_wave] (波次路由)
-       -> detailed_plan_subgraph.GenerateDimensionPlanNode
-       -> detailed_plan_subgraph.ReduceDimensionReportsNode
-       -> GenericPlanner.execute()
-
-4. 修复执行流程:
-   main_graph.ToolBridgeNode
-       -> RevisionNode.execute()
-       -> revision_subgraph (并行修复多个维度)
-       -> GenericPlanner.execute_with_feedback()
+子图执行流程:
+┌─────────┐    ┌──────────────────┐    ┌─────────────┐
+│initialize│───▶│knowledge_preload │───▶│ 分析节点    │
+└─────────┘    │    _node         │    └─────────────┘
+               └──────────────────┘           │
+                      │                       ▼
+                      ▼              从 knowledge_cache
+               预加载关键维度知识            读取知识
+                      │
+                      ▼
+              src/rag/core/tools.py
+              knowledge_search_tool.invoke()
 ```
 
-## LLM 配置
+### 关键维度
 
-**文件**: `core/llm_factory.py`
+仅涉及法规条文、技术指标的维度启用 RAG：
+
+- **Layer 1**: land_use, infrastructure, ecological_green, historical_culture
+- **Layer 3**: land_use_planning, infrastructure_planning, ecological, disaster_prevention, heritage
+
+### 知识预加载节点
 
 ```python
-def create_llm(model_name: str = None, temperature: float = 0.7):
-    """统一LLM创建入口"""
-    provider = detect_provider(model_name or LLM_MODEL)
-    
-    if provider == "zhipuai":
-        return ChatZhipuAI(model=model_name, temperature=temperature)
-    elif provider == "openai":
-        return ChatOpenAI(model=model_name, temperature=temperature)
+from src.rag.core.tools import knowledge_search_tool
+
+def knowledge_preload_node(state) -> Dict[str, Any]:
+    knowledge_cache = {}
+    for dim in CRITICAL_DIMENSIONS:
+        if dim in state["subjects"]:
+            result = knowledge_search_tool.invoke({
+                "query": f"{dim} 现状分析 标准 方法",
+                "top_k": 3,
+                "context_mode": "standard"
+            })
+            knowledge_cache[dim] = result
+    return {"knowledge_cache": knowledge_cache}
 ```
 
-**支持提供商**: OpenAI, 智谱AI (GLM)
+## 数据流
 
-## 工具集
-
-| 工具 | 文件 | 功能 |
-|------|------|------|
-| VillageDataManager | tools/file_manager.py | 文件加载/解析 |
-| KnowledgeTool | tools/knowledge_tool.py | RAG知识检索 |
-| RevisionTool | tools/revision_tool.py | 规划修复 |
-| ToolRegistry | tools/registry.py | 工具注册中心 |
+```
+前端 raw_data (村庄现状)
+      │
+      ▼
+backend/api/planning.py
+      │ 构建 initial_state
+      ▼
+orchestration/main_graph.py
+      │ StateGraph.astream()
+      ▼
+┌─────────────────────────────────────┐
+│ Layer 1 子图                         │
+│   raw_data → 各维度分析              │
+│   knowledge_cache → Prompt 注入      │
+│   → analysis_reports                │
+└─────────────────────────────────────┘
+      │
+      ▼
+Layer 2 → Layer 3 → final_output
+      │
+      ▼
+SSE 事件推送 → 前端显示
+```
 
 ## 关键文件索引
 
@@ -433,13 +335,15 @@ def create_llm(model_name: str = None, temperature: float = 0.7):
 | `src/subgraphs/analysis_subgraph.py` | Layer 1 子图 |
 | `src/subgraphs/concept_subgraph.py` | Layer 2 子图 |
 | `src/subgraphs/detailed_plan_subgraph.py` | Layer 3 子图 |
-| `src/subgraphs/revision_subgraph.py` | 修复子图 |
 | `src/nodes/layer_nodes.py` | Layer 节点封装 |
-| `src/nodes/tool_nodes.py` | 工具节点 |
 | `src/nodes/subgraph_nodes.py` | 子图节点 |
 | `src/planners/unified_base_planner.py` | 规划器基类 |
 | `src/planners/generic_planner.py` | 通用规划器 |
 | `src/config/dimension_metadata.py` | 维度配置 |
 | `src/core/llm_factory.py` | LLM 工厂 |
-| `src/core/state_builder.py` | 状态构建器 |
-| `src/core/config.py` | 核心配置 |
+| `src/rag/` | RAG 模块（统一实现） |
+| `src/rag/core/tools.py` | RAG 检索工具 |
+| `src/rag/utils/loaders.py` | 文档加载器 |
+| `src/rag/config.py` | RAG 配置 |
+| `src/tools/knowledge_tool.py` | 知识检索工具接口 |
+| `src/tools/file_manager.py` | 文件数据管理 |
