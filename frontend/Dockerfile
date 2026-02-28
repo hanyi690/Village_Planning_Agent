@@ -24,6 +24,10 @@ FROM node:18-alpine AS builder
 
 WORKDIR /app
 
+# 接收构建时参数（用于注入 NEXT_PUBLIC_* 环境变量）
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 # Copy dependencies from deps stage
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .

@@ -43,6 +43,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        # 构建时注入 NEXT_PUBLIC_API_URL（关键：NEXT_PUBLIC_* 变量在构建时生效）
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     container_name: village-planning-frontend
     restart: unless-stopped
     ports:
