@@ -9,7 +9,7 @@ from typing import Literal
 # ==================== 项目路径配置 ====================
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
-DATA_DIR = SRC_DIR / "data"
+DATA_DIR = PROJECT_ROOT / "data"  # 指向项目根目录的 data/ 目录
 KNOWLEDGE_BASE_DIR = PROJECT_ROOT / "knowledge_base"
 
 # ==================== 向量数据库配置 ====================
@@ -88,3 +88,29 @@ def validate_config() -> None:
 
 # 初始化时验证
 validate_config()
+
+
+# ==================== 结构化元数据 Schema（未来优化预留）====================
+# 用于 Phase 1 知识库重构：在入库时注入结构化元数据
+# 支持 Phase 2 动态检索：基于维度、地形等元数据过滤
+METADATA_SCHEMA = {
+    "dimensions": list,        # 适用维度标识 ["traffic", "land_use", "infrastructure", ...]
+    "terrain": list,           # 适用地形 ["mountain", "plain", "hill", "all"]
+    "indicators": dict,        # 量化技术指标 {"道路红线宽度": ">=4m", "绿地率": ">=30%"}
+    "constraints": list,       # 强制性约束 ["严禁破坏基本农田", "建设用地不超X公顷"]
+    "source": str,             # 来源文档名称
+    "chunk_index": int,        # 切片索引（在原文档中的位置）
+    "document_type": str,      # 文档类型 ["policy", "standard", "case", "guide"]
+    "effective_date": str,     # 生效日期（政策文件）
+    "region": list,            # 适用地区 ["广东省", "梅州市", "平远县"]
+}
+
+# 维度-章节映射（用于 Phase 3 依赖矩阵切片）
+DIMENSION_CHAPTER_MAPPING = {
+    "land_use": ["用地分类", "土地整治", "三区三线"],
+    "infrastructure": ["给排水", "电力", "通信", "环卫"],
+    "traffic": ["道路系统", "交通组织", "停车设施"],
+    "ecological": ["生态保护", "绿地系统", "景观风貌"],
+    "disaster_prevention": ["防灾减灾", "消防安全", "防洪排涝"],
+    "heritage": ["文物保护", "历史建筑", "非遗保护"],
+}

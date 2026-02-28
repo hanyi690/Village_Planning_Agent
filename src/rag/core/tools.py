@@ -455,6 +455,46 @@ def full_document_tool(source: str) -> str:
     return get_full_document(source)
 
 
+@tool
+def check_technical_indicators(
+    query: str,
+    dimension: str = "",
+    terrain: str = "all"
+) -> str:
+    """
+    检索技术指标和规范标准（为未来元数据过滤检索预留）
+    
+    供 Layer 3 Agent 调用，专门用于检索具体的技术参数和硬性标准。
+    当前版本：简单封装 knowledge_search_tool
+    未来版本：基于 metadata 进行维度和地形过滤
+    
+    Args:
+        query: 检索查询（如"道路宽度标准"、"绿地率要求"）
+        dimension: 维度标识（如 "traffic", "land_use", "infrastructure"）
+        terrain: 地形类型（"mountain", "plain", "hill", "all"）
+    
+    Returns:
+        检索到的技术指标和规范内容
+    
+    Example:
+        >>> check_technical_indicators("道路红线宽度", dimension="traffic", terrain="mountain")
+    """
+    # 当前版本：简单封装，添加维度前缀增强检索精度
+    enhanced_query = f"{dimension} {query}" if dimension else query
+    
+    result = search_knowledge(
+        query=enhanced_query,
+        top_k=5,
+        context_mode="expanded"  # 使用扩展模式获取更多上下文
+    )
+    
+    # 添加元数据提示（为未来优化预留）
+    if dimension or terrain != "all":
+        result = f"【筛选条件】维度: {dimension or '全部'}, 地形: {terrain}\n\n{result}"
+    
+    return result
+
+
 # ==================== 工具列表 ====================
 
 PLANNING_TOOLS = [
@@ -464,6 +504,7 @@ PLANNING_TOOLS = [
     knowledge_search_tool,
     chapter_content_tool,
     full_document_tool,
+    check_technical_indicators,  # 新增：技术指标检索工具
 ]
 
 # 向后兼容：别名

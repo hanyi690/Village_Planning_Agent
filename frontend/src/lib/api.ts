@@ -618,6 +618,104 @@ export const fileApi = {
 };
 
 // ============================================
+// Knowledge Base Types
+// ============================================
+
+export interface KnowledgeDocument {
+  source: string;
+  chunk_count: number;
+  doc_type: string;
+}
+
+export interface KnowledgeStats {
+  total_documents: number;
+  total_chunks: number;
+  vector_db_path: string;
+  source_dir: string;
+}
+
+export interface AddDocumentResponse {
+  status: string;
+  message: string;
+  source?: string;
+  chunks_added?: number;
+}
+
+export interface SyncResponse {
+  status: string;
+  message: string;
+  added_count?: number;
+}
+
+// ============================================
+// Knowledge API
+// ============================================
+
+export const knowledgeApi = {
+  /**
+   * 列出知识库中的所有文档
+   * GET /api/knowledge/documents
+   */
+  async listDocuments(): Promise<KnowledgeDocument[]> {
+    return apiRequest<KnowledgeDocument[]>('/api/knowledge/documents');
+  },
+
+  /**
+   * 上传文档到知识库（增量添加）
+   * POST /api/knowledge/documents
+   */
+  async addDocument(file: File, category?: string): Promise<AddDocumentResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (category) {
+      formData.append('category', category);
+    }
+
+    const response = await fetch(`${API_BASE_URL}/api/knowledge/documents`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        message: response.statusText || 'Upload failed',
+      }));
+      throw new Error(error.message || error.detail || 'Upload failed');
+    }
+
+    return response.json();
+  },
+
+  /**
+   * 删除文档
+   * DELETE /api/knowledge/documents/{filename}
+   */
+  async deleteDocument(filename: string): Promise<{ status: string; message: string }> {
+    return apiRequest(`/api/knowledge/documents/${encodeURIComponent(filename)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * 获取知识库统计信息
+   * GET /api/knowledge/stats
+   */
+  async getStats(): Promise<KnowledgeStats> {
+    return apiRequest<KnowledgeStats>('/api/knowledge/stats');
+  },
+
+  /**
+   * 同步源目录
+   * POST /api/knowledge/sync
+   */
+  async syncDocuments(): Promise<SyncResponse> {
+    return apiRequest<SyncResponse>('/api/knowledge/sync', {
+      method: 'POST',
+    });
+  },
+};
+
+// ============================================
 // Default Export
 // ============================================
 
@@ -625,6 +723,7 @@ const api = {
   planningApi,
   dataApi,
   fileApi,
+  knowledgeApi,
 };
 
 // ============================================
