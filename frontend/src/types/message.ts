@@ -138,6 +138,7 @@ export interface PlanningParams {
   villageData: string;
   taskDescription?: string;
   constraints?: string;
+  enableReview?: boolean;
   stepMode?: boolean;
   streamMode?: boolean;
 }
