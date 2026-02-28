@@ -74,6 +74,12 @@ class VectorStoreCache:
             HuggingFaceEmbeddings 实例
         """
         if self._embedding_model is None:
+            import os
+            # 设置离线模式，避免网络请求超时
+            # 模型已在本地缓存时，无需连接 huggingface.co
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
             from langchain_huggingface import HuggingFaceEmbeddings
 
             print("📥 正在加载 Embedding 模型...")

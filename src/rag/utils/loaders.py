@@ -171,305 +171,161 @@ class BaseDocumentLoader:
             raise FileNotFoundError(f"找不到文件: {self.file_path}")
 
 
-# ==================== DOC 加载器 ====================
+# ==================== MarkItDown 统一加载器 ====================
+# 使用 Microsoft MarkItDown 统一处理多种文档格式
+# 支持: doc, docx, pdf, ppt, pptx, xlsx, xls, epub, html 等
 
-class DOCLoader(BaseDocumentLoader):
-    """Word 文档加载器（DOC - Legacy Office 97-2003 格式）"""
+# MarkItDown 支持的格式
+MARKITDOWN_EXTENSIONS = {
+    '.doc', '.docx',    # Word
+    '.pdf',             # PDF
+    '.ppt', '.pptx',    # PowerPoint
+    '.xls', '.xlsx',    # Excel
+    '.epub',            # EPUB
+    '.html', '.htm',    # HTML
+}
+
+
+class MarkItDownLoader(BaseDocumentLoader):
+    """
+    使用 MarkItDown 统一加载多种文档格式
+    
+    支持格式: doc, docx, pdf, ppt, pptx, xls, xlsx, epub, html
+    
+    优势:
+    - 跨平台兼容（无需 Linux 工具）
+    - 统一输出 Markdown 格式
+    - 保留文档结构（标题、列表、表格）
+    - 支持"伪装文件"（如 .docx 实际是 .doc）
+    """
 
     def load(self) -> list[Document]:
-        """加载 DOC 文件"""
+        """使用 MarkItDown 加载文档"""
         self._validate_file()
-        print(f"📝 正在读取 Word 文档（DOC 格式）: {self.file_path} ...")
-
+        
+        file_ext = self.file_path.suffix.lower()
+        print(f"📄 正在使用 MarkItDown 读取: {self.file_path.name} ({file_ext}) ...")
+        
         try:
-            text = self._extract_text()
-            return self._parse_text(text)
-        except Exception as e:
-            raise Exception(f"读取 Word 文档（DOC）失败: {e}\n提示: 请安装 catdoc: sudo apt-get install catdoc")
-
-    def _extract_text(self) -> str:
-        """尝试多种方法提取文本"""
-        extractors = [
-            self._extract_with_antiword,
-            self._extract_with_catdoc,
-            self._extract_with_olefile,
-        ]
-
-        for idx, extractor in enumerate(extractors, 1):
-            try:
-                if idx > 1:
-                    print(f"⚠️  前一种方法失败，尝试下一种...")
-                return extractor()
-            except Exception as e:
-                continue
-
-        raise Exception("所有提取方法都失败")
-
-    def _extract_with_antiword(self) -> str:
-        """使用 antiword 提取文本"""
-        try:
-            result = subprocess.run(
-                ['antiword', str(self.file_path)],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode == 0:
-                return result.stdout
-            raise Exception(f"antiword failed with code {result.returncode}")
-        except FileNotFoundError:
-            raise Exception("antiword 未安装，请运行: sudo apt-get install antiword")
-
-    def _extract_with_catdoc(self) -> str:
-        """使用 catdoc 提取文本"""
-        try:
-            result = subprocess.run(
-                ['catdoc', str(self.file_path)],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode == 0:
-                return result.stdout
-            raise Exception(f"catdoc failed with code {result.returncode}")
-        except FileNotFoundError:
-            raise Exception("catdoc 未安装，请运行: sudo apt-get install catdoc")
-
-    def _extract_with_olefile(self) -> str:
-        """使用 olefile 提取文本（纯 Python 备用方案）"""
-        try:
-            import olefile
+            markdown_content = self._convert_with_markitdown()
+            return self._parse_markdown(markdown_content, file_ext)
         except ImportError:
-            raise Exception("olefile 未安装，请运行: uv add olefile")
-
-        ole = olefile.OleFileIO(self.file_path)
-
-        if not ole.exists('WordDocument'):
-            raise Exception("不是有效的 Word 文档")
-
-        text_parts = []
-        streams_to_try = ['WordDocument', '1Table', '0Table', 'Data']
-
-        for stream_name in streams_to_try:
-            if not ole.exists(stream_name):
-                continue
-
-            try:
-                data = ole.openstream(stream_name).read()
-                print(f"   正在解析流: {stream_name} ({len(data)} 字节)")
-
-                for encoding in ['utf-16le', 'utf-16be', 'gbk', 'gb2312', 'gb18030', 'utf-8']:
-                    try:
-                        decoded = data.decode(encoding, errors='ignore')
-                        chinese_chars = re.findall(r'[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+', decoded)
-                        if chinese_chars:
-                            text_segment = ''.join(chinese_chars)
-                            text_segment = re.sub(r'\s+', '\n', text_segment)
-                            text_segment = re.sub(r'\n{3,}', '\n\n', text_segment)
-
-                            if len(text_segment.strip()) > 20:
-                                print(f"   ✓ 使用 {encoding} 编码提取了 {len(text_segment)} 个字符")
-                                text_parts.append(text_segment)
-                                break
-                    except:
-                        continue
-            except Exception as e:
-                print(f"   ⚠️  解析流 {stream_name} 失败: {e}")
-                continue
-
-        ole.close()
-
-        if not text_parts:
-            raise Exception("未能从文档中提取到有效文本，请将文件转换为 .docx 格式")
-
-        return '\n\n'.join(text_parts)
-
-    def _parse_text(self, text: str) -> list[Document]:
-        """解析提取的文本"""
-        cleaned_text = self.cleaner.clean_text(text)
-        paragraphs = [p.strip() for p in cleaned_text.split('\n\n') if p.strip()]
-
-        documents = []
-        for idx, paragraph in enumerate(paragraphs, start=1):
-            doc = self._create_document(
-                f"## 段落 {idx}\n\n{paragraph}",
-                paragraph=idx,
-                type="doc",
+            raise Exception(
+                "markitdown 库未安装，请运行: pip install 'markitdown[docx,pdf,xlsx,pptx]'"
             )
-            if doc:
-                documents.append(doc)
-
-        print(f"✅ 提取完成，共获取 {len(documents)} 个段落")
-        return documents
-
-
-# ==================== DOCX 加载器 ====================
-
-class DOCXLoader(BaseDocumentLoader):
-    """Word 文档加载器（DOCX）"""
-
-    def load(self) -> list[Document]:
-        """加载 DOCX 文件"""
-        self._validate_file()
-        print(f"📝 正在读取 Word 文档（DOCX 格式）: {self.file_path} ...")
-
-        if DocxDocument is None:
-            raise Exception("python-docx 未安装，请运行: uv add python-docx")
-
-        try:
-            doc = DocxDocument(str(self.file_path))
-            return self._parse_docx(doc)
         except Exception as e:
-            print(f"⚠️  python-docx 读取失败: {e}")
-            print(f"⚠️  可能是伪装成 .docx 的 .doc 文件，尝试使用 DOCLoader...")
-            return DOCLoader(self.file_path, self.category).load()
+            raise Exception(f"MarkItDown 解析失败: {e}")
 
-    def _parse_docx(self, doc) -> list[Document]:
-        """解析 DOCX 文档"""
-        documents = []
-        current_content = []
-        current_heading = "文档开始"
-        current_level = 0
-        paragraph_count = 0
+    def _convert_with_markitdown(self) -> str:
+        """使用 MarkItDown 转换文档为 Markdown"""
+        try:
+            from markitdown import MarkItDown
+        except ImportError:
+            raise ImportError("markitdown 未安装")
+        
+        md = MarkItDown(enable_plugins=False)
+        
+        file_ext = self.file_path.suffix.lower()
+        result = md.convert(str(self.file_path))
+        
+        return result.text_content
 
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            if not text:
-                continue
-
-            style_name = para.style.name if para.style else ""
-
-            if 'Heading' in style_name:
-                if current_content:
-                    doc = self._create_document(
-                        '\n'.join(current_content).strip(),
-                        paragraph=paragraph_count,
-                        type="docx",
-                    )
-                    if doc:
-                        documents.append(doc)
-
-                current_content = []
-                current_heading = text
-                current_level = self._extract_heading_level(style_name)
-                paragraph_count += 1
-            else:
-                current_content.append(text)
-
-        if current_content:
-            doc = self._create_document(
-                '\n'.join(current_content).strip(),
-                paragraph=paragraph_count,
-                type="docx",
-            )
-            if doc:
-                documents.append(doc)
-
+    def _parse_markdown(self, content: str, file_ext: str) -> list[Document]:
+        """解析 Markdown 内容为 Document 列表"""
+        if not content or not content.strip():
+            print(f"⚠️  文档内容为空")
+            return []
+        
+        # 清理内容
+        content = self.cleaner.clean_text(content)
+        
+        # 按标题分割（保留文档结构）
+        documents = self._split_by_headers(content, file_ext)
+        
+        # 如果按标题分割后为空，按段落分割
         if not documents:
-            return self._parse_as_paragraphs(doc)
-
+            documents = self._split_by_paragraphs(content, file_ext)
+        
         print(f"✅ 提取完成，共获取 {len(documents)} 个文档片段")
         return documents
 
-    def _extract_heading_level(self, style_name: str) -> int:
-        """从样式名称提取标题级别"""
-        for i in range(1, 7):
-            if f'Heading {i}' in style_name:
-                return i
-        return 6
-
-    def _parse_as_paragraphs(self, doc) -> list[Document]:
-        """按段落解析（当没有检测到标题时）"""
+    def _split_by_headers(self, content: str, file_ext: str) -> list[Document]:
+        """按 Markdown 标题分割文档"""
         documents = []
-        paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-
-        for idx, para_text in enumerate(paragraphs, start=1):
-            doc = self._create_document(
-                f"## 段落 {idx}\n\n{para_text}",
-                paragraph=idx,
-                type="docx",
-            )
-            if doc:
-                documents.append(doc)
-
-        return documents
-
-
-# ==================== PDF 加载器 ====================
-
-class PDFLoader(BaseDocumentLoader):
-    """PDF 文档加载器"""
-
-    def load(self) -> list[Document]:
-        """加载 PDF 文件"""
-        self._validate_file()
-        print(f"📄 正在读取 PDF: {self.file_path} ...")
-
-        if PdfReader is None:
-            raise Exception("pypdf 未安装，请运行: uv add pypdf")
-
-        try:
-            reader = PdfReader(str(self.file_path))
-            return self._parse_pdf(reader)
-        except Exception as e:
-            raise Exception(f"读取 PDF 文件失败: {e}")
-
-    def _parse_pdf(self, reader) -> list[Document]:
-        """解析 PDF 文档"""
-        documents = []
-
-        for page_idx, page in enumerate(reader.pages, start=1):
-            try:
-                text = page.extract_text()
-                if not text or not text.strip():
-                    continue
-
+        lines = content.split('\n')
+        
+        current_section = []
+        current_header = "文档开始"
+        current_level = 0
+        section_idx = 0
+        
+        for line in lines:
+            header_match = re.match(r'^(#{1,6})\s+(.+)$', line)
+            
+            if header_match:
+                # 保存当前章节
+                if current_section:
+                    section_content = '\n'.join(current_section).strip()
+                    if self.cleaner.is_meaningful_content(section_content):
+                        doc = self._create_document(
+                            section_content,
+                            section=section_idx + 1,
+                            type=file_ext.lstrip('.'),
+                            header=current_header,
+                            header_level=current_level,
+                        )
+                        if doc:
+                            documents.append(doc)
+                            section_idx += 1
+                
+                # 开始新章节
+                current_level = len(header_match.group(1))
+                current_header = header_match.group(2).strip()
+                current_section = [line]
+            else:
+                current_section.append(line)
+        
+        # 保存最后一个章节
+        if current_section:
+            section_content = '\n'.join(current_section).strip()
+            if self.cleaner.is_meaningful_content(section_content):
                 doc = self._create_document(
-                    f"# 第 {page_idx} 页\n\n{text}",
-                    page=page_idx,
-                    type="pdf",
+                    section_content,
+                    section=section_idx + 1,
+                    type=file_ext.lstrip('.'),
+                    header=current_header,
+                    header_level=current_level,
                 )
                 if doc:
                     documents.append(doc)
-            except Exception as e:
-                print(f"⚠️  处理第 {page_idx} 页时出错: {e}")
-                continue
-
-        print(f"✅ 提取完成，共获取 {len(documents)} 页有效内容")
+        
         return documents
 
-
-# ==================== PPTX 加载器 ====================
-
-class PPTXLoader(BaseDocumentLoader):
-    """PPTX 文档加载器"""
-
-    def load(self) -> list[Document]:
-        """加载 PPTX 文件"""
-        self._validate_file()
-        print(f"📂 正在读取 PPT: {self.file_path} ...")
-
-        if Presentation is None:
-            raise Exception("python-pptx 未安装，请运行: uv add python-pptx")
-
-        prs = Presentation(str(self.file_path))
+    def _split_by_paragraphs(self, content: str, file_ext: str) -> list[Document]:
+        """按段落分割文档"""
         documents = []
-
-        for slide_idx, slide in enumerate(prs.slides, start=1):
-            slide_texts = [
-                shape.text.strip()
-                for shape in slide.shapes
-                if hasattr(shape, "text") and shape.text.strip()
-            ]
-
-            if slide_texts:
-                content = "\n".join(slide_texts)
+        paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+        
+        for idx, paragraph in enumerate(paragraphs, start=1):
+            if self.cleaner.is_meaningful_content(paragraph):
                 doc = self._create_document(
-                    f"# 第 {slide_idx} 页\n\n{content}",
-                    page=slide_idx,
-                    type="pptx",
+                    f"## 段落 {idx}\n\n{paragraph}",
+                    paragraph=idx,
+                    type=file_ext.lstrip('.'),
                 )
                 if doc:
                     documents.append(doc)
-
-        print(f"✅ 提取完成，共获取 {len(documents)} 页有效内容")
+        
         return documents
+
+
+# ==================== 保留旧加载器作为别名（向后兼容）====================
+
+# DOCLoader 和 DOCXLoader 统一使用 MarkItDownLoader
+DOCLoader = MarkItDownLoader
+DOCXLoader = MarkItDownLoader
+PDFLoader = MarkItDownLoader
+PPTXLoader = MarkItDownLoader
 
 
 # ==================== Markdown 加载器 ====================
@@ -594,13 +450,32 @@ def load_documents_from_directory(
     file_extensions: Optional[list[str]] = None,
     category: Optional[Literal["policies", "cases"]] = None,
 ) -> list[Document]:
-    """从目录批量加载文档，自动检测真实文件类型"""
+    """从目录批量加载文档，自动检测真实文件类型
+    
+    支持格式（通过 MarkItDown）:
+    - Word: .doc, .docx
+    - PDF: .pdf
+    - PowerPoint: .ppt, .pptx
+    - Excel: .xls, .xlsx
+    - 其他: .epub, .html
+    
+    纯文本格式:
+    - Markdown: .md
+    - 文本: .txt
+    """
     directory = Path(directory)
     if not directory.exists():
         raise FileNotFoundError(f"目录不存在: {directory}")
 
     if file_extensions is None:
-        file_extensions = [".md", ".txt", ".pptx", ".ppt", ".pdf", ".docx", ".doc"]
+        # 默认支持的所有格式
+        file_extensions = [
+            # MarkItDown 支持的格式
+            ".doc", ".docx", ".pdf", ".ppt", ".pptx", ".xls", ".xlsx",
+            ".epub", ".html", ".htm",
+            # 纯文本格式
+            ".md", ".txt",
+        ]
 
     all_documents = []
 
@@ -631,22 +506,30 @@ def _create_loader(
     file_type: str,
     category: Optional[Literal["policies", "cases"]],
 ) -> Optional[BaseDocumentLoader]:
-    """根据文件类型创建对应的加载器"""
+    """根据文件类型创建对应的加载器
+    
+    MarkItDown 支持的格式统一使用 MarkItDownLoader:
+    - doc, docx (Word)
+    - pdf
+    - ppt, pptx (PowerPoint)
+    - xls, xlsx (Excel)
+    - epub, html
+    """
+    # MarkItDown 支持的格式（统一处理）
+    markitdown_types = {'pdf', 'doc', 'docx', 'pptx', 'ppt', 'xls', 'xlsx', 'epub', 'html'}
+    
+    if file_type in markitdown_types:
+        return MarkItDownLoader(file_path, category=category)
+    
+    # 其他格式使用专用加载器
     loader_map = {
-        'pdf': PDFLoader,
-        'doc': DOCLoader,
-        'docx': DOCXLoader,
-        'pptx': PPTXLoader,
         'markdown': MarkdownLoader,
         'txt': TextFileLoader,
     }
 
     loader_class = loader_map.get(file_type)
     if loader_class is None:
-        if file_type == 'ppt':
-            print(f"⚠️  暂不支持 PPT 格式，请转换为 PPTX: {file_path.name}")
-        else:
-            print(f"⚠️  不支持的文件类型: {file_type}，跳过: {file_path.name}")
+        print(f"⚠️  不支持的文件类型: {file_type}，跳过: {file_path.name}")
         return None
 
     return loader_class(file_path, category=category)
@@ -656,7 +539,15 @@ def load_knowledge_base(
     data_dir: str | Path,
     categories: Optional[list[Literal["policies", "cases"]]] = None,
 ) -> list[Document]:
-    """加载知识库（支持分类）"""
+    """加载知识库（支持分类）
+    
+    支持格式:
+    - Word: .doc, .docx
+    - PDF: .pdf
+    - PowerPoint: .ppt, .pptx
+    - Excel: .xls, .xlsx
+    - 其他: .epub, .html, .md, .txt
+    """
     data_dir = Path(data_dir)
 
     if categories is None:
@@ -673,6 +564,12 @@ def load_knowledge_base(
 
     all_documents = []
 
+    # 支持的所有格式
+    supported_extensions = [
+        ".doc", ".docx", ".pdf", ".ppt", ".pptx", ".xls", ".xlsx",
+        ".epub", ".html", ".htm", ".md", ".txt",
+    ]
+
     for category in categories:
         category_dir = data_dir / category
         if not category_dir.exists():
@@ -685,7 +582,7 @@ def load_knowledge_base(
 
         documents = load_documents_from_directory(
             category_dir,
-            file_extensions=[".md", ".txt", ".pptx", ".ppt", ".pdf", ".docx", ".doc"],
+            file_extensions=supported_extensions,
             category=category,
         )
         all_documents.extend(documents)
