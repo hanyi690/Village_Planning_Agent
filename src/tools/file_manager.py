@@ -4,7 +4,6 @@
 提供智能数据加载接口，支持多种文件格式和数据源：
 - 本地文件（txt, pdf, docx, md, pptx, xlsx等）
 - 纯文本（直接传入）
-- RAG知识库集成
 """
 
 from typing import Dict, Any, List, Union, Optional
@@ -13,23 +12,40 @@ from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# 延迟导入RAG模块，避免导入错误影响基础功能
-_rag_loaders = None
+# 支持的文件扩展名（从新 RAG 模块导入）
+SUPPORTED_EXTENSIONS = {
+    '.txt': 'text',
+    '.md': 'markdown',
+    '.pdf': 'pdf',
+    '.docx': 'docx',
+    '.doc': 'doc',
+    '.pptx': 'pptx',
+    '.ppt': 'ppt',
+}
 
-def _get_rag_loaders():
-    """延迟导入RAG加载器"""
-    global _rag_loaders
-    if _rag_loaders is None:
-        try:
-            from ..knowledge.rag import load_single_document, SUPPORTED_EXTENSIONS
-            _rag_loaders = {
-                "load_single_document": load_single_document,
-                "SUPPORTED_EXTENSIONS": SUPPORTED_EXTENSIONS
-            }
-        except ImportError as e:
-            logger.warning(f"[FileManager] RAG模块导入失败，部分功能不可用: {e}")
-            _rag_loaders = {"error": str(e)}
-    return _rag_loaders
+
+def _load_document_from_file(file_path: str) -> List[Any]:
+    """
+    使用新 RAG 模块的加载器加载文档
+    
+    Args:
+        file_path: 文件路径
+        
+    Returns:
+        Document 列表
+    """
+    from ..rag.utils.loaders import load_documents_from_directory, _create_loader
+    from ..rag.utils.loaders import FileTypeDetector
+    from pathlib import Path
+    
+    path = Path(file_path)
+    real_type = FileTypeDetector.detect(path)
+    
+    loader = _create_loader(path, real_type, category=None)
+    if loader is None:
+        return []
+    
+    return loader.load()
 
 
 class VillageDataManager:
@@ -56,7 +72,6 @@ class VillageDataManager:
         支持的数据源：
         - 本地文件（txt, pdf, docx, md, pptx, xlsx等）- 自动检测格式
         - 纯文本（直接传入）
-        - RAG知识库（集成现有rag.py）
 
         Args:
             source: 数据源，可以是文件路径或纯文本内容
@@ -70,18 +85,6 @@ class VillageDataManager:
             - content (str): 提取的文本内容
             - metadata (dict): 来源、类型、长度等
             - error (str): 失败时的错误信息
-
-        Example:
-            >>> manager = VillageDataManager()
-            >>>
-            >>> # 从文件加载
-            >>> result = manager.load_data("data/village.pdf")
-            >>> if result["success"]:
-            >>>     print(result["content"])
-            >>>
-            >>> # 从文本加载
-            >>> result = manager.load_data("人口：1200人\\n面积：5.2平方公里")
-            >>> print(result["content"])
         """
         # 自动检测数据源类型
         detected_type = self._detect_source_type(source) if source_type is None else source_type
@@ -99,21 +102,12 @@ class VillageDataManager:
             }
 
     def _detect_source_type(self, source: Union[str, Path]) -> str:
-        """
-        智能检测数据源类型
-
-        检测逻辑：
-        1. 如果看起来像文件路径且文件存在 -> file
-        2. 如果内容较短且包含换行符 -> 可能是文本
-        3. 否则 -> text
-        """
+        """智能检测数据源类型"""
         source_str = str(source).strip()
 
         # 检查是否为文件路径
-        if len(source_str) < 200:  # 文件路径通常不会太长
-            # 检查是否为路径格式
+        if len(source_str) < 200:
             if ("\\" in source_str or "/" in source_str) and "." in source_str:
-                # 尝试作为路径解析
                 try:
                     path = Path(source_str)
                     if path.exists() and path.is_file():
@@ -121,7 +115,6 @@ class VillageDataManager:
                 except:
                     pass
 
-        # 默认当作文本处理
         return "text"
 
     def _load_from_file(
@@ -129,30 +122,8 @@ class VillageDataManager:
         file_path: Union[str, Path],
         extract_metadata: bool = True
     ) -> Dict[str, Any]:
-        """
-        从文件加载数据
-
-        Args:
-            file_path: 文件路径
-            extract_metadata: 是否提取元数据
-
-        Returns:
-            加载结果字典
-        """
+        """从文件加载数据"""
         try:
-            # 获取RAG加载器
-            rag_loaders = _get_rag_loaders()
-            if "error" in rag_loaders:
-                return {
-                    "success": False,
-                    "content": "",
-                    "metadata": {},
-                    "error": f"文档加载器不可用，请检查依赖: {rag_loaders['error']}"
-                }
-
-            load_single_document = rag_loaders["load_single_document"]
-            SUPPORTED_EXTENSIONS = rag_loaders["SUPPORTED_EXTENSIONS"]
-
             path = Path(file_path)
 
             # 检查文件是否存在
@@ -176,8 +147,8 @@ class VillageDataManager:
 
             self.logger.info(f"[FileManager] 正在加载文件: {file_path}")
 
-            # 使用RAG系统的文档加载器
-            documents = load_single_document(str(path))
+            # 使用新 RAG 模块的文档加载器
+            documents = _load_document_from_file(str(path))
 
             if not documents:
                 return {
@@ -225,16 +196,7 @@ class VillageDataManager:
         text: str,
         extract_metadata: bool = True
     ) -> Dict[str, Any]:
-        """
-        从纯文本加载数据
-
-        Args:
-            text: 文本内容
-            extract_metadata: 是否提取元数据
-
-        Returns:
-            加载结果字典
-        """
+        """从纯文本加载数据"""
         try:
             if not text or not text.strip():
                 return {
@@ -278,16 +240,7 @@ class VillageDataManager:
         file_paths: List[Union[str, Path]],
         merge: bool = False
     ) -> Dict[str, Any]:
-        """
-        批量加载文件
-
-        Args:
-            file_paths: 文件路径列表
-            merge: 是否合并所有文件内容
-
-        Returns:
-            批量加载结果字典
-        """
+        """批量加载文件"""
         results = []
         all_content = []
         errors = []
@@ -326,48 +279,6 @@ class VillageDataManager:
                 "error": "" if len(all_content) > 0 else "所有文件加载失败"
             }
 
-    def add_to_rag(
-        self,
-        source: Union[str, Path],
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """
-        添加数据到RAG知识库
-
-        Args:
-            source: 数据源（文件路径或文本）
-            metadata: 额外的元数据
-
-        Returns:
-            添加结果字典
-        """
-        try:
-            # 延迟导入RAG函数
-            from ..knowledge.rag import add_single_document, add_texts
-
-            detected_type = self._detect_source_type(source)
-
-            if detected_type == "file":
-                self.logger.info(f"[FileManager] 添加文件到RAG: {source}")
-                result = add_single_document(str(source))
-                return result
-            elif detected_type == "text":
-                self.logger.info(f"[FileManager] 添加文本到RAG: {len(str(source))} 字符")
-                result = add_texts([str(source)], metadatas=[metadata or {}])
-                return result
-            else:
-                return {
-                    "status": "error",
-                    "message": f"无法识别的数据源类型: {detected_type}"
-                }
-
-        except Exception as e:
-            self.logger.error(f"[FileManager] 添加到RAG失败: {str(e)}")
-            return {
-                "status": "error",
-                "message": str(e)
-            }
-
 
 # ==========================================
 # 便捷函数
@@ -383,13 +294,6 @@ def read_village_data(source: Union[str, Path], source_type: Optional[str] = Non
 
     Returns:
         str: 提取的文本内容，失败时返回空字符串
-
-    Example:
-        >>> # 从文件读取
-        >>> data = read_village_data("data/village.txt")
-        >>>
-        >>> # 直接传入文本
-        >>> data = read_village_data("人口：1200人")
     """
     manager = VillageDataManager()
     result = manager.load_data(source, source_type=source_type)
@@ -410,12 +314,6 @@ def load_data_with_metadata(source: Union[str, Path]) -> Dict[str, Any]:
 
     Returns:
         Dict: 包含success, content, metadata, error的完整信息
-
-    Example:
-        >>> data = load_data_with_metadata("data/village.pdf")
-        >>> if data["success"]:
-        >>>     print(f"加载了 {data['metadata']['size']} 字符")
-        >>>     content = data["content"]
     """
     manager = VillageDataManager()
     return manager.load_data(source)
@@ -425,4 +323,5 @@ __all__ = [
     "VillageDataManager",
     "read_village_data",
     "load_data_with_metadata",
+    "SUPPORTED_EXTENSIONS",
 ]

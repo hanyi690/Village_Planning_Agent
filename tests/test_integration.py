@@ -102,11 +102,11 @@ def test_file_format_support():
     """测试支持的文件格式"""
     print("\n=== 测试文件格式支持 ===\n")
 
-    from src.knowledge.rag import SUPPORTED_EXTENSIONS
+    from src.tools.file_manager import SUPPORTED_EXTENSIONS
 
     print(f"支持的文件格式 ({len(SUPPORTED_EXTENSIONS)} 种):")
-    for ext, loader_class in sorted(SUPPORTED_EXTENSIONS.items()):
-        print(f"  ✓ {ext:8} - {loader_class.__name__}")
+    for ext in sorted(SUPPORTED_EXTENSIONS.keys()):
+        print(f"  ✓ {ext}")
 
     print(f"\n✓ 文件格式支持测试通过！")
 

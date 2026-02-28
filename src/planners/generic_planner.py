@@ -149,6 +149,7 @@ class GenericPlanner(UnifiedPlannerBase):
         Hooks:
         1. get_specialized_data(): 获取专业脚本数据
         2. tool_hook(): 执行工具（如果配置了 tool）
+        3. knowledge_cache: 从状态缓存读取 RAG 知识上下文
         """
         # 1. 获取基础上下文
         params = self._prepare_prompt_params(state)
@@ -160,6 +161,13 @@ class GenericPlanner(UnifiedPlannerBase):
         # ⭐ 核心 2：工具钩子逻辑
         tool_output = self._execute_tool_hook(state)
         params["tool_output"] = tool_output
+
+        # ⭐ 核心 3：RAG 知识上下文（预加载模式）
+        if self.rag_enabled:
+            knowledge_context = self.get_cached_knowledge(state)
+            params["knowledge_context"] = knowledge_context
+        else:
+            params["knowledge_context"] = ""
 
         # Layer 3 使用函数式 prompt
         if self.layer == 3:
@@ -191,11 +199,13 @@ class GenericPlanner(UnifiedPlannerBase):
             filtered_analysis = params.get("filtered_analysis", "")
             filtered_concept = params.get("filtered_concept", "")  # 统一使用单数形式
             constraints = params.get("constraints", "无特殊约束")
+            knowledge_context = params.get("knowledge_context", "")  # RAG 知识上下文
 
             # 日志：验证 Prompt 构建
             logger.info(f"[GenericPlanner-L3] {self.dimension_key} 构建Prompt: "
                        f"analysis_report={len(filtered_analysis)}字符, "
                        f"planning_concept={len(filtered_concept)}字符, "
+                       f"knowledge_context={len(knowledge_context)}字符, "
                        f"prompt_key={self.prompt_key}")
 
             # 调用函数式 prompt（使用 self.prompt_key 而不是 self.dimension_key）
@@ -205,7 +215,8 @@ class GenericPlanner(UnifiedPlannerBase):
                 analysis_report=filtered_analysis,
                 planning_concept=filtered_concept,
                 constraints=constraints,
-                dimension_plans=params.get("dimension_plans", "")  # 修复：添加 project_bank 专用参数
+                dimension_plans=params.get("dimension_plans", ""),  # 修复：添加 project_bank 专用参数
+                knowledge_context=knowledge_context  # 新增：RAG 知识上下文
             )
 
         except ImportError as e:
@@ -359,11 +370,20 @@ class GenericPlanner(UnifiedPlannerBase):
             params["constraints"] = state.get("constraints", "无特殊约束")
             params["professional_data_section"] = ""  # Layer 2 也需要这个参数
             
+            # 注入上位规划数据（来自 Layer 1 的 superior_planning 维度）
+            analysis_reports = state.get("analysis_reports", {})
+            superior_planning_content = analysis_reports.get("superior_planning", "")
+            if superior_planning_content:
+                params["superior_planning_context"] = superior_planning_content
+            else:
+                params["superior_planning_context"] = "未提供上位规划数据"
+            
             # 日志：验证数据传递
             logger.debug(f"[GenericPlanner-L2] {self.dimension_key} 参数准备: "
                        f"filtered_analysis={len(filtered_analysis)}字符, "
                        f"filtered_concept={len(filtered_concept)}字符, "
-                       f"combined_report={len(combined_report)}字符")
+                       f"combined_report={len(combined_report)}字符, "
+                       f"superior_planning_context={len(params['superior_planning_context'])}字符")
 
         elif self.layer == 3:
             # 直接使用子图预筛选的数据（来自 detailed_plan_subgraph）

@@ -99,6 +99,9 @@ class DetailedPlanState(TypedDict):
     # 输出数据（统一命名，只保留字典形式）
     detail_reports: Dict[str, str]  # 各维度独立报告（唯一输出）
 
+    # 【新增】RAG 知识缓存 - 预加载的知识上下文
+    knowledge_cache: Dict[str, str]  # 维度 -> 知识上下文
+
     # 人机交互状态
     need_review: bool              # 是否需要人工审核
     human_feedback: Dict[str, str] # 各维度的反馈意见
@@ -131,6 +134,8 @@ class DetailedDimensionState(TypedDict):
     filtered_analysis: str         # 筛选后的现状分析文本
     filtered_concept: str          # 筛选后的规划思路文本
     filtered_detail: str           # 筛选后的前序详细规划文本
+    # 【新增】RAG 知识缓存
+    knowledge_cache: Dict[str, str]  # 维度 -> 知识上下文
 
 
 # ==========================================
@@ -202,6 +207,76 @@ def initialize_detailed_planning(state: DetailedPlanState) -> Dict[str, Any]:
         "completed_dimension_reports": {},
         "token_usage_stats": {}
     }
+
+
+# ==========================================
+# 知识预加载节点
+# ==========================================
+
+# Layer 3 关键维度（需要 RAG 知识检索）
+LAYER3_CRITICAL_DIMENSIONS = [
+    "land_use_planning",       # 土地利用规划
+    "infrastructure_planning", # 基础设施规划
+    "ecological",              # 生态绿地规划
+    "disaster_prevention",     # 防震减灾规划
+    "heritage"                 # 历史文保规划
+]
+
+
+def knowledge_preload_node(state: DetailedPlanState) -> Dict[str, Any]:
+    """
+    预加载关键维度的 RAG 知识上下文
+
+    在并行规划开始前，统一检索关键维度所需的知识，缓存到状态中。
+    各维度规划节点从缓存读取，避免重复调用 RAG。
+
+    关键维度：land_use_planning, infrastructure, ecological, disaster_prevention, heritage
+
+    Returns:
+        {"knowledge_cache": {dimension_key: knowledge_content}}
+    """
+    logger.info("[子图-L3-知识预加载] 开始预加载关键维度知识")
+
+    # 检查 RAG 是否可用
+    try:
+        from ..rag.core.tools import knowledge_search_tool
+        RAG_AVAILABLE = True
+    except ImportError:
+        logger.warning("[子图-L3-知识预加载] RAG 工具不可用，跳过知识预加载")
+        return {"knowledge_cache": {}}
+
+    knowledge_cache: Dict[str, str] = {}
+    required_dimensions = state.get("required_dimensions", [])
+
+    # 只为关键维度预加载知识
+    dimensions_to_load = [d for d in LAYER3_CRITICAL_DIMENSIONS if d in required_dimensions]
+
+    for dimension_key in dimensions_to_load:
+        try:
+            # 获取维度名称用于构建查询
+            dimension_names = get_detailed_dimension_names()
+            dimension_name = dimension_names.get(dimension_key, dimension_key)
+
+            # 构建维度特定的查询
+            query = f"{dimension_name} 技术规范 标准 实施要求 规划导则"
+
+            # 调用 RAG 工具检索知识（Layer 3 使用更详细的上下文）
+            result = knowledge_search_tool.invoke({
+                "query": query,
+                "top_k": 5,
+                "context_mode": "expanded"  # Layer 3 使用扩展模式
+            })
+
+            if result and result.strip():
+                knowledge_cache[dimension_key] = result
+                logger.info(f"[子图-L3-知识预加载] {dimension_key}: 检索到 {len(result)} 字符知识")
+
+        except Exception as e:
+            logger.warning(f"[子图-L3-知识预加载] {dimension_key} 检索失败: {e}")
+            continue
+
+    logger.info(f"[子图-L3-知识预加载] 完成，缓存 {len(knowledge_cache)} 个维度知识")
+    return {"knowledge_cache": knowledge_cache}
 
 
 # ==========================================
@@ -333,7 +408,9 @@ def create_parallel_tasks_with_state_filtering(
             # 传递筛选后的文本
             "filtered_analysis": filtered_analysis,
             "filtered_concept": filtered_concept,
-            "filtered_detail": filtered_detail
+            "filtered_detail": filtered_detail,
+            # 【新增】传递知识缓存
+            "knowledge_cache": state.get("knowledge_cache", {})
         })
 
         sends.append(Send("generate_dimension_plan", dimension_state))
@@ -398,7 +475,8 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
             "completed_plans": state.get("completed_plans", {}),
             "task_description": state["task_description"],
             "constraints": state["constraints"],
-            "village_data": state.get("village_data", "")  # 新增：用于适配器
+            "village_data": state.get("village_data", ""),  # 新增：用于适配器
+            "knowledge_cache": state.get("knowledge_cache", {})  # 【新增】传递知识缓存
         }
 
         # 【新增】检查是否启用适配器
@@ -660,6 +738,7 @@ def create_detailed_plan_subgraph() -> StateGraph:
 
     # 添加节点
     builder.add_node("initialize", initialize_node)
+    builder.add_node("knowledge_preload", knowledge_preload_node)  # 新增：知识预加载节点
     builder.add_node("generate_dimension_plan", generate_node)
     builder.add_node("advance_wave", advance_wave_node)  # 波次推进节点（保留函数形式）
     builder.add_node("reduce_plans", reduce_node)
@@ -670,10 +749,11 @@ def create_detailed_plan_subgraph() -> StateGraph:
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
+    builder.add_edge("initialize", "knowledge_preload")  # 新增：initialize -> knowledge_preload
 
-    # 初始化 -> 波次路由决策
+    # 知识预加载 -> 波次路由决策
     builder.add_conditional_edges(
-        "initialize",
+        "knowledge_preload",
         route_by_dependency_wave,
         ["generate_dimension_plan", "advance_wave", END]  # 使用 END 常量
     )
@@ -790,6 +870,7 @@ def call_detailed_plan_subgraph(
         "adapter_config": adapter_config,
         # 输出数据
         "detail_reports": {},
+        "knowledge_cache": {},  # 【新增】知识缓存
         "need_review": enable_human_review,
         "human_feedback": {},
         "revision_count": {},

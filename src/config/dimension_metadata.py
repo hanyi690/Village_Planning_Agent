@@ -306,7 +306,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         },
         "state_filter": "filter_state_for_detailed_dimension_v2",
         "result_key": "detailed_plan",
-        "rag_enabled": False,
+        "rag_enabled": True,  # 关键维度：涉及法规条文和技术指标
         "tool": None,
         "description": "制定村庄土地利用规划方案",
         "prompt_key": "land_use_planning"
@@ -370,7 +370,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         },
         "state_filter": "filter_state_for_detailed_dimension_v2",
         "result_key": "detailed_plan",
-        "rag_enabled": False,
+        "rag_enabled": True,  # 关键维度：涉及技术规范和标准
         "tool": None,
         "description": "制定村庄基础设施系统规划",
         "prompt_key": "infrastructure_planning"
@@ -386,7 +386,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         },
         "state_filter": "filter_state_for_detailed_dimension_v2",
         "result_key": "detailed_plan",
-        "rag_enabled": False,
+        "rag_enabled": True,  # 关键维度：涉及生态保护法规
         "tool": None,
         "description": "制定村庄生态绿地系统规划",
         "prompt_key": "ecological"
@@ -402,7 +402,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         },
         "state_filter": "filter_state_for_detailed_dimension_v2",
         "result_key": "detailed_plan",
-        "rag_enabled": False,
+        "rag_enabled": True,  # 关键维度：涉及安全规范和强制标准
         "tool": None,
         "description": "制定村庄防震减灾规划",
         "prompt_key": "disaster_prevention"
@@ -418,7 +418,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         },
         "state_filter": "filter_state_for_detailed_dimension_v2",
         "result_key": "detailed_plan",
-        "rag_enabled": False,
+        "rag_enabled": True,  # 关键维度：涉及文物保护法规
         "tool": None,
         "description": "制定村庄历史文化遗产保护规划",
         "prompt_key": "heritage"

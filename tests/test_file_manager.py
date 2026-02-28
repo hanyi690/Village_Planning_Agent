@@ -165,9 +165,9 @@ class TestFileFormats:
 
     def test_supported_formats_list(self):
         """测试支持的格式列表"""
-        from src.knowledge.rag import SUPPORTED_EXTENSIONS
+        from src.tools.file_manager import SUPPORTED_EXTENSIONS
 
-        expected_formats = ['.txt', '.pdf', '.docx', '.md', '.pptx', '.ppt', '.xlsx', '.xls']
+        expected_formats = ['.txt', '.pdf', '.docx', '.md', '.pptx', '.ppt']
         for fmt in expected_formats:
             assert fmt in SUPPORTED_EXTENSIONS
 

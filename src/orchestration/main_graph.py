@@ -111,6 +111,10 @@ class VillagePlanningState(TypedDict):
     # 【新增】最近修复的维度列表 - 用于 SSE 事件触发
     last_revised_dimensions: List[str]  # 最近一次修复涉及的维度列表
 
+    # 【新增】RAG 知识缓存 - 预加载模式下的知识上下文缓存
+    knowledge_cache: Dict[str, str]  # 维度 -> 知识上下文
+    # 格式: {"land_use": "知识内容...", "infrastructure": "知识内容..."}
+
 
 # ==========================================
 # LLM 辅助函数

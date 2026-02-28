@@ -49,6 +49,9 @@ class AnalysisState(TypedDict):
     # 输出数据（统一命名）
     analysis_reports: Dict[str, str]  # 各维度独立报告（用于部分状态传递）
 
+    # 【新增】RAG 知识缓存 - 预加载的知识上下文
+    knowledge_cache: Dict[str, str]  # 维度 -> 知识上下文
+
     # 消息历史（用于LLM交互）
     messages: Annotated[List[BaseMessage], add_messages]
 
@@ -98,8 +101,12 @@ def analyze_dimension(state: DimensionAnalysisState) -> Dict[str, Any]:
         planner = GenericPlannerFactory.create_planner(dimension_key)
 
         # 【使用统一架构】调用规划器的 execute 方法
-        # 注意：GenericPlanner 需要完整的状态字典，包含 raw_data
-        planner_state = {"raw_data": state["raw_data"], "project_name": state.get("project_name", "村庄")}
+        # 注意：GenericPlanner 需要完整的状态字典，包含 raw_data 和 knowledge_cache
+        planner_state = {
+            "raw_data": state["raw_data"],
+            "project_name": state.get("project_name", "村庄"),
+            "knowledge_cache": state.get("knowledge_cache", {})  # 新增：传递知识缓存
+        }
         planner_result = planner.execute(planner_state)
 
         # GenericPlanner 返回的结果键名由 get_result_key() 决定
@@ -155,7 +162,8 @@ def map_dimensions(state: AnalysisState) -> List[Send]:
             "dimension_key": dimension_key,
             "dimension_name": dimension_info["name"],
             "raw_data": state["raw_data"],
-            "analysis_result": ""
+            "analysis_result": "",
+            "knowledge_cache": state.get("knowledge_cache", {})  # 新增：传递知识缓存
         }
 
         # 创建 Send 对象：发送到 analyze_dimension 节点
@@ -303,6 +311,72 @@ def initialize_analysis(state: AnalysisState) -> Dict[str, Any]:
 
 
 # ==========================================
+# 知识预加载节点
+# ==========================================
+
+# Layer 1 关键维度（需要 RAG 知识检索）
+LAYER1_CRITICAL_DIMENSIONS = [
+    "land_use",           # 土地利用分析
+    "infrastructure",     # 基础设施分析
+    "ecological_green",   # 生态绿地分析
+    "historical_culture", # 历史文化分析
+    "superior_planning"   # 上位规划与政策导向分析（涉及政策法规）
+]
+
+
+def knowledge_preload_node(state: AnalysisState) -> Dict[str, Any]:
+    """
+    预加载关键维度的 RAG 知识上下文
+
+    在并行分析开始前，统一检索关键维度所需的知识，缓存到状态中。
+    各维度分析节点从缓存读取，避免重复调用 RAG。
+
+    关键维度：land_use, infrastructure, ecological_green, historical_culture
+
+    Returns:
+        {"knowledge_cache": {dimension_key: knowledge_content}}
+    """
+    logger.info("[子图-知识预加载] 开始预加载关键维度知识")
+
+    # 检查 RAG 是否可用
+    try:
+        from ..rag.core.tools import knowledge_search_tool
+        RAG_AVAILABLE = True
+    except ImportError:
+        logger.warning("[子图-知识预加载] RAG 工具不可用，跳过知识预加载")
+        return {"knowledge_cache": {}}
+
+    knowledge_cache: Dict[str, str] = {}
+    subjects = state.get("subjects", [])
+
+    # 只为关键维度预加载知识
+    dimensions_to_load = [d for d in LAYER1_CRITICAL_DIMENSIONS if d in subjects]
+
+    for dimension_key in dimensions_to_load:
+        try:
+            # 构建维度特定的查询
+            query = f"{dimension_key} 现状分析 标准 方法 调研要求 规划规范"
+
+            # 调用 RAG 工具检索知识
+            result = knowledge_search_tool.invoke({
+                "query": query,
+                "top_k": 3,
+                "context_mode": "standard"
+            })
+
+            if result and result.strip():
+                knowledge_cache[dimension_key] = result
+                logger.info(f"[子图-知识预加载] {dimension_key}: 检索到 {len(result)} 字符知识")
+
+        except Exception as e:
+            logger.warning(f"[子图-知识预加载] {dimension_key} 检索失败: {e}")
+            continue
+
+    logger.info(f"[子图-知识预加载] 完成，缓存 {len(knowledge_cache)} 个维度知识")
+    return {"knowledge_cache": knowledge_cache}
+
+
+# ==========================================
 # 构建子图
 # ==========================================
 
@@ -333,6 +407,7 @@ def create_analysis_subgraph() -> StateGraph:
 
     # 添加节点
     builder.add_node("initialize", initialize_node)
+    builder.add_node("knowledge_preload", knowledge_preload_node)  # 新增：知识预加载节点
     builder.add_node("analyze_dimension", analyze_node)
     builder.add_node("reduce_analyses", reduce_node)
     # 注释掉综合报告生成节点，直接使用维度报告
@@ -340,6 +415,7 @@ def create_analysis_subgraph() -> StateGraph:
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
+    builder.add_edge("initialize", "knowledge_preload")  # 新增：initialize -> knowledge_preload
 
     # 关键：使用条件边实现并行分发
     # 在 LangGraph 1.0.x 中，Send 对象必须由路由函数返回，不能由节点返回
@@ -348,7 +424,7 @@ def create_analysis_subgraph() -> StateGraph:
         """路由函数：将状态分发到各维度的分析节点"""
         return map_dimensions(state)
 
-    builder.add_conditional_edges("initialize", route_to_dimensions)
+    builder.add_conditional_edges("knowledge_preload", route_to_dimensions)  # 修改：从 knowledge_preload 分发
 
     builder.add_edge("analyze_dimension", "reduce_analyses")
     # 跳过综合报告生成，直接结束
@@ -396,6 +472,7 @@ def call_analysis_subgraph(
         "subjects": [],
         "analyses": [],
         "analysis_reports": {},
+        "knowledge_cache": {},  # 新增：知识缓存
         "messages": []
     }
 
@@ -443,6 +520,7 @@ if __name__ == "__main__":
         "subjects": [],
         "analyses": [],
         "analysis_reports": {},
+        "knowledge_cache": {},  # 新增：知识缓存
         "messages": []
     }
 

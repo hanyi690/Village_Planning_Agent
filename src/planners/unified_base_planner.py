@@ -23,13 +23,14 @@ from ..utils.logger import get_logger
 
 # RAG imports (conditional to avoid errors if RAG not available)
 try:
-    from ..rag.core.context_manager import DocumentContextManager
-    from ..rag.core.summarization import HierarchicalSummary
+    from ..rag.core.context_manager import DocumentContextManager, get_context_manager
+    from ..rag.core.summarization import DocumentSummarizer
     RAG_AVAILABLE = True
 except ImportError:
     RAG_AVAILABLE = False
     DocumentContextManager = None  # type: ignore
-    HierarchicalSummary = None  # type: ignore
+    DocumentSummarizer = None  # type: ignore
+    get_context_manager = None  # type: ignore
 
 logger = get_logger(__name__)
 
@@ -100,20 +101,13 @@ class UnifiedPlannerBase(ABC):
         self.dimension_name = dimension_name
         self.rag_enabled = rag_enabled and RAG_AVAILABLE
 
-        # 初始化两阶段RAG系统
+        # RAG 组件延迟初始化（预加载模式下从状态缓存读取）
+        # context_manager 和 summarizer 保留为 None，按需从 get_context_manager 获取
+        self.context_manager = None  # type: ignore
+        self.summary_system = None  # type: ignore
+        
         if self.rag_enabled:
-            try:
-                self.context_manager = DocumentContextManager()
-                self.summary_system = HierarchicalSummary()
-                logger.debug(f"[{self.dimension_name}] RAG系统已启用")
-            except Exception as e:
-                logger.warning(f"[{self.dimension_name}] RAG系统初始化失败: {e}，将禁用RAG功能")
-                self.rag_enabled = False
-                self.context_manager = None  # type: ignore
-                self.summary_system = None  # type: ignore
-        else:
-            self.context_manager = None  # type: ignore
-            self.summary_system = None  # type: ignore
+            logger.debug(f"[{self.dimension_name}] RAG已启用（预加载模式）")
 
     @abstractmethod
     def validate_state(self, state: dict[str, Any]) -> tuple[bool, str | None]:
@@ -460,239 +454,80 @@ class UnifiedPlannerBase(ABC):
         return f"{self.__class__.__name__}({self.dimension_key}/{self.dimension_name})"
 
     # ==========================================
-    # 两阶段RAG知识检索方法
+    # RAG 知识检索方法（预加载模式）
     # ==========================================
 
-    async def _get_knowledge_context(
-        self,
-        state: dict[str, Any],
-        dimension: str,
-        layer: int
-    ) -> str:
+    def get_cached_knowledge(self, state: Dict[str, Any]) -> str:
         """
-        获取知识上下文（根据层级选择RAG阶段）
+        从状态缓存获取预加载的知识上下文
+
+        预加载模式下，知识由子图的 knowledge_preload_node 统一检索并缓存到状态中。
+        本方法从缓存读取，避免每个维度重复调用 RAG。
 
         Args:
-            state: 当前规划状态
-            dimension: 规划维度
-            layer: 当前层级（1/2/3）
+            state: 当前状态，包含 knowledge_cache 字段
 
         Returns:
-            格式化的知识上下文字符串
+            格式化的知识上下文字符串，无缓存时返回空字符串
         """
         if not self.rag_enabled:
             return ""
 
-        # 检查RAG组件是否可用
-        if self.context_manager is None or self.summary_system is None:
-            logger.warning(f"[{self.dimension_name}] RAG组件未初始化")
-            return ""
+        # 从状态缓存读取
+        knowledge_cache = state.get("knowledge_cache", {})
+        cached_knowledge = knowledge_cache.get(self.dimension_key, "")
 
-        # 构建查询
-        query = self._build_query(state, dimension, layer)
+        if cached_knowledge:
+            logger.debug(f"[{self.dimension_name}] 从缓存获取知识上下文，长度: {len(cached_knowledge)}")
+            return cached_knowledge
 
-        try:
-            # 根据层级选择RAG阶段
-            if layer == 1:
-                # Layer 1: 使用关键要点检索（快速）
-                return await self._get_phase2_key_points(query, dimension)
-            elif layer == 2:
-                # Layer 2: 使用执行摘要（宏观）
-                return await self._get_phase2_executive_summary(query)
-            else:  # layer == 3
-                # Layer 3: 使用章节全文（详细）
-                return await self._get_phase1_full_context(query, dimension)
-        except Exception as e:
-            logger.warning(f"[{self.dimension_name}] 知识检索失败: {e}")
-            return ""
+        return ""
 
-    async def _get_phase2_key_points(
-        self,
-        query: str,
-        dimension: str
-    ) -> str:
-        """
-        Phase 2: 搜索关键要点（Layer 1使用）
-
-        Args:
-            query: 检索查询
-            dimension: 维度名称
-
-        Returns:
-            格式化的关键要点字符串
-        """
-        if self.summary_system is None:
-            return "暂无相关知识点"
-
-        try:
-            results = self.summary_system.search_key_points(
-                query=query,
-                sources=None,
-                top_k=5
-            )
-
-            if not results.get("key_points"):
-                return "暂无相关知识点"
-
-            formatted = []
-            for i, point in enumerate(results["key_points"], 1):
-                formatted.append(f"【知识点{i}】{point}")
-
-            return "\n\n".join(formatted)
-        except Exception as e:
-            logger.warning(f"[{self.dimension_name}] Phase 2关键要点检索失败: {e}")
-            return "知识检索失败"
-
-    async def _get_phase2_executive_summary(self, query: str) -> str:
-        """
-        Phase 2: 获取执行摘要（Layer 2使用）
-
-        Args:
-            query: 检索查询
-
-        Returns:
-            格式化的执行摘要字符串
-        """
-        if self.context_manager is None or self.summary_system is None:
-            return "暂无参考文档"
-
-        try:
-            # 先获取相关文档列表
-            docs = self.context_manager.list_available_documents()
-
-            if not docs:
-                return "暂无参考文档"
-
-            # 获取前3个文档的执行摘要
-            summaries = []
-            for doc in docs[:3]:
-                summary = self.summary_system.get_executive_summary(doc["source"])
-                if summary.get("executive_summary"):
-                    summaries.append(f"""
-## {doc['source']}
-{summary['executive_summary']}
-                    """.strip())
-
-            return "\n\n".join(summaries) if summaries else "暂无参考文档"
-        except Exception as e:
-            logger.warning(f"[{self.dimension_name}] Phase 2执行摘要检索失败: {e}")
-            return "知识检索失败"
-
-    async def _get_phase1_full_context(
-        self,
-        query: str,
-        dimension: str
-    ) -> str:
-        """
-        Phase 1: 获取章节全文（Layer 3使用）
-
-        Args:
-            query: 检索查询
-            dimension: 维度名称
-
-        Returns:
-            格式化的章节全文字符串
-        """
-        if self.context_manager is None:
-            return "暂无详细规定"
-
-        try:
-            # 确定需要查询的章节（基于维度）
-            chapter_pattern = self._get_chapter_pattern(dimension)
-
-            # 搜索相关文档
-            docs = self.context_manager.list_available_documents()
-
-            contexts = []
-            for doc in docs:
-                chapter = self.context_manager.get_chapter_by_header(
-                    source=doc["source"],
-                    header_pattern=chapter_pattern
-                )
-
-                if chapter.get("content"):
-                    contexts.append(f"""
-## {doc['source']} - {chapter.get('chapter_title', '相关章节')}
-
-{chapter['content']}
-                    """.strip())
-
-            return "\n\n".join(contexts) if contexts else "暂无详细规定"
-        except Exception as e:
-            logger.warning(f"[{self.dimension_name}] Phase 1全文检索失败: {e}")
-            return "知识检索失败"
-
-    def _build_query(
+    def _build_knowledge_query(
         self,
         state: dict[str, Any],
         dimension: str,
         layer: int
     ) -> str:
         """
-        构建检索查询
+        构建知识检索查询（用于预加载节点）
 
         Args:
             state: 当前状态
-            dimension: 维度名称
+            dimension: 维度标识
             layer: 层级
 
         Returns:
             查询字符串
         """
-        village_data = state.get("village_data", state.get("raw_data", {}))
+        village_data = state.get("village_data", state.get("raw_data", ""))
 
-        # 处理字符串类型的raw_data
+        # 处理字符串类型的 raw_data
+        village_name = ""
         if isinstance(village_data, str):
-            # 尝试解析村庄名称
-            name_match = [line for line in village_data.split('\n') if '村庄' in line or '名称' in line]
-            village_name = name_match[0] if name_match else "未知村庄"
-            base_query = f"村庄: {village_name}\n维度: {dimension}"
-        else:
-            base_query = f"""
-村庄: {village_data.get('name', '')}
-位置: {village_data.get('location', '')}
-维度: {dimension}
-            """.strip()
+            lines = village_data.split('\n')
+            for line in lines[:10]:  # 只检查前10行
+                if '村庄' in line or '名称' in line:
+                    village_name = line.split('：')[-1].split(':')[-1].strip()
+                    break
+        elif isinstance(village_data, dict):
+            village_name = village_data.get('name', '')
 
+        # 根据层级构建查询
+        dimension_name = self.dimension_name
         if layer == 1:
-            return f"{base_query} 现状分析标准 调研方法"
+            return f"{dimension_name} 现状分析 标准 方法 调研要求"
         elif layer == 2:
-            return f"{base_query} 规划定位 发展目标"
-        else:
-            return f"{base_query} 技术规范 实施标准"
-
-    def _get_chapter_pattern(self, dimension: str) -> str:
-        """
-        根据维度获取章节标题模式
-
-        Args:
-            dimension: 维度名称
-
-        Returns:
-            章节标题正则表达式模式
-        """
-        dimension_chapters = {
-            "industry": r"(产业|发展|经济)",
-            "spatial_structure": r"(空间|布局|结构)",
-            "land_use": r"(用地|土地|分类)",
-            "settlement": r"(居民|居住|村落)",
-            "transportation": r"(交通|道路|出行)",
-            "public_services": r"(服务|设施|配套)",
-            "infrastructure": r"(基础设施|管网|市政)",
-            "ecological_protection": r"(生态|环保|绿地)",
-            "disaster_prevention": r"(防灾|减灾|安全)",
-            "historical_culture": r"(历史|文化|保护)",
-            "landscape": r"(景观|风貌|特色)",
-        }
-
-        return dimension_chapters.get(dimension, dimension)
+            return f"{dimension_name} 规划定位 发展目标 思路"
+        else:  # layer == 3
+            return f"{dimension_name} 技术规范 标准 实施要求"
 
     def _is_critical_dimension(self, dimension: str) -> bool:
         """
-        判断是否为关键维度（需要Phase 1原文）
+        判断是否为关键维度（需要知识检索）
 
         Args:
-            dimension: 维度名称
+            dimension: 维度标识
 
         Returns:
             是否为关键维度
