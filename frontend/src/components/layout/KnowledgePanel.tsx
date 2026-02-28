@@ -152,10 +152,10 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
 
     try {
       const result = await knowledgeApi.syncDocuments();
-      if (result.added > 0 || result.removed > 0) {
+      if (result.added_count && result.added_count > 0) {
         await loadData();
       }
-      alert(`同步完成\n新增: ${result.added} 个文档\n移除: ${result.removed} 个文档`);
+      alert(`同步完成\n新增: ${result.added_count || 0} 个文档`);
     } catch (err) {
       console.error('[KnowledgePanel] Sync failed:', err);
       setError(err instanceof Error ? err.message : '同步失败');
