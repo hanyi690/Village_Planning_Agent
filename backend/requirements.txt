@@ -10,6 +10,9 @@ markitdown[docx,pdf,xlsx,pptx]
 # Encoding detection
 chardet>=5.0.0
 
+# File type detection
+filetype>=1.2.0
+
 # CORS
 fastapi-cors>=0.0.6
 
