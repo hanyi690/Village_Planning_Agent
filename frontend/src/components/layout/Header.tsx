@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { faHistory, faLeaf, faPlus } from '@fortawesome/free-solid-svg-icons';
+import { faHistory, faLeaf, faPlus, faDatabase } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 // 核心补丁：防止图标在初始加载时巨大化
 import '@fortawesome/fontawesome-svg-core/styles.css';
@@ -10,9 +10,10 @@ interface HeaderProps {
   taskId: string;
   onToggleHistory?: () => void;
   onNewTask?: () => void;
+  onOpenKnowledge?: () => void;
 }
 
-export default function Header({ taskId, onToggleHistory, onNewTask }: HeaderProps) {
+export default function Header({ taskId, onToggleHistory, onNewTask, onOpenKnowledge }: HeaderProps) {
   const [isHistoryHovered, setIsHistoryHovered] = useState(false);
 
   return (
@@ -37,9 +38,24 @@ export default function Header({ taskId, onToggleHistory, onNewTask }: HeaderPro
         )}
       </div>
 
-      {/* 右侧：操作按钮 (移除所有白色文字) */}
+      {/* 右侧：操作按钮 */}
       <div className="flex items-center gap-3">
         
+        {/* 知识库按钮 */}
+        {onOpenKnowledge && (
+          <button
+            onClick={onOpenKnowledge}
+            className="flex items-center gap-1.5 px-3 py-1 bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 rounded-full transition-all group"
+          >
+            <FontAwesomeIcon 
+              icon={faDatabase} 
+              className="text-blue-600"
+              style={{ width: '12px', height: '12px' }} 
+            />
+            <span className="text-xs font-medium">知识库</span>
+          </button>
+        )}
+
         {/* 新建按钮：改用浅绿背景+深绿文字 */}
         {onNewTask && (
           <button

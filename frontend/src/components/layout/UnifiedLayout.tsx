@@ -13,6 +13,7 @@ import { useState, memo, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Header from './Header';
 import HistoryPanel from './HistoryPanel';
+import KnowledgePanel from './KnowledgePanel';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
 
 interface UnifiedLayoutProps {
@@ -23,10 +24,15 @@ interface UnifiedLayoutProps {
 function UnifiedLayoutComponent({ taskId, children }: UnifiedLayoutProps) {
   const router = useRouter();
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
   const { resetConversation } = useUnifiedPlanningContext();
 
   const handleToggleHistory = useCallback(() => {
     setHistoryModalOpen(prev => !prev);
+  }, []);
+
+  const handleOpenKnowledge = useCallback(() => {
+    setKnowledgeModalOpen(true);
   }, []);
 
   const handleNewTask = useCallback(() => {
@@ -43,6 +49,7 @@ function UnifiedLayoutComponent({ taskId, children }: UnifiedLayoutProps) {
           taskId={taskId}
           onToggleHistory={handleToggleHistory}
           onNewTask={handleNewTask}
+          onOpenKnowledge={handleOpenKnowledge}
         />
         {children}
       </main>
@@ -50,6 +57,11 @@ function UnifiedLayoutComponent({ taskId, children }: UnifiedLayoutProps) {
       {/* History Panel Modal */}
       {historyModalOpen && (
         <HistoryPanel onClose={() => setHistoryModalOpen(false)} />
+      )}
+
+      {/* Knowledge Panel Modal */}
+      {knowledgeModalOpen && (
+        <KnowledgePanel onClose={() => setKnowledgeModalOpen(false)} />
       )}
     </div>
   );
