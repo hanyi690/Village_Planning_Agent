@@ -48,7 +48,6 @@ from ..config.dimension_metadata import (
 from ..utils.logger import get_logger
 from .detailed_plan_prompts import (
     INDUSTRY_PLANNING_PROMPT,
-    MASTER_PLAN_PROMPT,
     SPATIAL_STRUCTURE_PROMPT,
     LAND_USE_PLANNING_PROMPT,
     SETTLEMENT_PLANNING_PROMPT,
