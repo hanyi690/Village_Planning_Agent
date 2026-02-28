@@ -19,6 +19,9 @@ services:
       - ENVIRONMENT=production
       - USE_ASYNC_DATABASE=true
       - ZHIPUAI_API_KEY=${ZHIPUAI_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE}
       - LLM_MODEL=${LLM_MODEL:-glm-4-flash}
       - LLM_PROVIDER=${LLM_PROVIDER:-zhipuai}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8000}
