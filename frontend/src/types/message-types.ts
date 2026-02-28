@@ -148,8 +148,21 @@ export interface ReviewRequestMessage extends BaseMessage {
 export interface CheckpointListMessage extends BaseMessage {
   type: 'checkpoint_list';
   content: string;
-    checkpoints: import('./message').Checkpoint[];
-    currentCheckpoint?: string;
-    actions: ActionButton[];
-  }
-  
+  checkpoints: import('./message').Checkpoint[];
+  currentCheckpoint?: string;
+  actions?: ActionButton[];
+}
+
+/**
+ * Dimension Revised Message - Shown when a dimension is revised after feedback
+ */
+export interface DimensionRevisedMessage extends BaseMessage {
+  type: 'dimension_revised';
+  layer: number;
+  dimensionKey: string;
+  dimensionName: string;
+  oldContent?: string;
+  newContent: string;
+  feedback?: string;
+}
+
