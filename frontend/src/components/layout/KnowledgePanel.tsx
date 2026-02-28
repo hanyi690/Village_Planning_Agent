@@ -91,8 +91,6 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
           source: file.name,
           doc_type: file.name.split('.').pop() || 'unknown',
           chunk_count: 0,
-          status: 'ready',
-          created_at: new Date().toISOString(),
           uiStatus: 'processing',
         };
         setDocuments(prev => [tempDoc, ...prev]);
