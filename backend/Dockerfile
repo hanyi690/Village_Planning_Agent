@@ -63,6 +63,15 @@ RUN useradd --create-home --shell /bin/bash appuser && \
     mkdir -p /app/data /app/logs /app/results /app/knowledge_base && \
     chown -R appuser:appuser /app
 
+# Pre-download Embedding model during build (using mirror)
+# This avoids network issues at runtime in restricted environments
+ENV HF_ENDPOINT=https://hf-mirror.com
+RUN python -c "from sentence_transformers import SentenceTransformer; \
+    print('Downloading Embedding model from mirror...'); \
+    SentenceTransformer('BAAI/bge-small-zh-v1.5'); \
+    print('Model downloaded successfully')" && \
+    chown -R appuser:appuser /home/appuser/.cache
+
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1

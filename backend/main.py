@@ -50,6 +50,11 @@ async def lifespan(app: FastAPI):
     ensure_working_directory()
     project_root = get_project_root()
 
+    # Setup HuggingFace environment (mirror + offline mode)
+    # This must be called before any HuggingFace imports
+    from src.rag.config import setup_huggingface_env
+    setup_huggingface_env()
+
     logger.info(f"🚀 村庄规划智能体后端启动中...")
     logger.info(f"📁 Project root: {project_root}")
     logger.info(f"📁 Working directory: {os.getcwd()}")

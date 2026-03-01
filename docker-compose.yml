@@ -42,8 +42,11 @@ services:
       - ./logs:/app/logs
       - ./results:/app/results
       - ./knowledge_base:/app/knowledge_base
-      # Mount HuggingFace cache for faster startup (pre-downloaded models)
-      - ${HF_HOME:-~/.cache/huggingface}:/home/appuser/.cache/huggingface:ro
+      # Mount HuggingFace cache for faster startup
+      # Option 1: Mount local cache (if you have pre-downloaded models)
+      # - ./models:/home/appuser/.cache/huggingface
+      # Option 2: Use host cache directory (read-write for auto-download)
+      - ${HF_CACHE_DIR:-./hf_cache}:/home/appuser/.cache/huggingface
     # Resource limits
     deploy:
       resources:

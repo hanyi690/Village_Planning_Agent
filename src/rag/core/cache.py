@@ -76,7 +76,15 @@ class VectorStoreCache:
         """
         if self._embedding_model is None:
             # 配置 HuggingFace 环境（离线模式/镜像站点）
+            # 必须在导入 HuggingFaceEmbeddings 之前调用
             setup_huggingface_env()
+
+            # 再次确保环境变量已设置（防止被其他代码覆盖）
+            import os
+            if os.environ.get("HF_HUB_OFFLINE") == "1":
+                print("🔒 强制离线模式已启用")
+            elif os.environ.get("HF_ENDPOINT"):
+                print(f"🌐 使用镜像站点: {os.environ.get('HF_ENDPOINT')}")
 
             from langchain_huggingface import HuggingFaceEmbeddings
 
