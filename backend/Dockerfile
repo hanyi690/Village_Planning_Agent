@@ -58,33 +58,29 @@ COPY backend/ ./backend/
 COPY src/ ./src/
 COPY requirements.txt .
 
-# Create non-root user for security
+# Create non-root user and directories
 RUN useradd --create-home --shell /bin/bash appuser && \
-    mkdir -p /app/data /app/logs /app/results /app/knowledge_base && \
+    mkdir -p /app/data /app/logs /app/results /app/knowledge_base /app/models && \
     chown -R appuser:appuser /app
-
-# Pre-download Embedding model during build (using mirror)
-# This avoids network issues at runtime in restricted environments
-ENV HF_ENDPOINT=https://hf-mirror.com
-RUN python -c "from sentence_transformers import SentenceTransformer; \
-    print('Downloading Embedding model from mirror...'); \
-    SentenceTransformer('BAAI/bge-small-zh-v1.5'); \
-    print('Model downloaded successfully')" && \
-    chown -R appuser:appuser /home/appuser/.cache
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV ENVIRONMENT=production
 ENV USE_ASYNC_DATABASE=true
-# HuggingFace Configuration (use mirror for faster download in China)
+
+# HuggingFace Configuration
+# Use /app/models for model storage (persistent via volume mount)
+ENV HF_HOME=/app/models
 ENV HF_ENDPOINT=https://hf-mirror.com
-# Embedding Model (auto-detect offline mode based on cache)
 ENV EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
 ENV EMBEDDING_DEVICE=cpu
 
-# Switch to non-root user
+# Pre-download Embedding model during build
+# Use HF_HOME to store in /app/models (not in user home)
+# Switch to appuser for download to ensure correct permissions
 USER appuser
+RUN python -c "\nimport os; \nos.environ['HF_HOME'] = '/app/models'; \nos.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'; \nfrom sentence_transformers import SentenceTransformer; \nprint('Downloading Embedding model...'); \nSentenceTransformer('BAAI/bge-small-zh-v1.5'); \nprint('Model downloaded successfully')"
 
 # Expose port
 EXPOSE 8000

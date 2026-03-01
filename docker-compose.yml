@@ -33,7 +33,8 @@ services:
       # Embedding Model Configuration
       - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-BAAI/bge-small-zh-v1.5}
       - EMBEDDING_DEVICE=${EMBEDDING_DEVICE:-cpu}
-      # HuggingFace Configuration (auto-detect offline mode)
+      # HuggingFace Configuration
+      - HF_HOME=/app/models
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
       - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-}
       - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-}
@@ -42,11 +43,8 @@ services:
       - ./logs:/app/logs
       - ./results:/app/results
       - ./knowledge_base:/app/knowledge_base
-      # Mount HuggingFace cache for faster startup
-      # Option 1: Mount local cache (if you have pre-downloaded models)
-      # - ./models:/home/appuser/.cache/huggingface
-      # Option 2: Use host cache directory (read-write for auto-download)
-      - ${HF_CACHE_DIR:-./hf_cache}:/home/appuser/.cache/huggingface
+      # Models directory (pre-downloaded during build, persistent via volume)
+      - ./models:/app/models
     # Resource limits
     deploy:
       resources:
