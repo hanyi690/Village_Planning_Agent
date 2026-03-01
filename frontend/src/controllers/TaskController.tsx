@@ -42,6 +42,8 @@ export function useTaskController(
     onDimensionDelta?: (dimensionKey: string, delta: string, accumulated: string, layer?: number) => void;
     onDimensionComplete?: (dimensionKey: string, dimensionName: string, fullContent: string, layer?: number) => void;
     onLayerCompleted?: (layer: number, reportContent: string, dimensionReports: Record<string, string>) => void;
+    // ✅ 新增：层级流完成回调（SSE 驱动的 UI 状态更新）
+    onLayerStreamComplete?: (layer: number) => void;
     onPause?: (layer: number, checkpointId: string) => void;
     onDimensionRevised?: (data: {
       dimension: string;
@@ -251,6 +253,22 @@ export function useTaskController(
               data.report_content || '',
               data.dimension_reports || {}
             );
+          } else if (eventType === 'layer_stream_complete') {
+            // ✅ 新增：层级流完成事件（SSE 驱动的 UI 状态更新）
+            // 此事件表示该层的所有维度内容已完全发送完毕
+            // 前端应只在此事件后更新 completedLayers 状态
+            const data = event.data as {
+              layer?: number;
+              layer_number?: number;
+              dimension_count?: number;
+            } || {};
+
+            console.log('[TaskController] === Layer Stream Complete SSE Event ===');
+            console.log('[TaskController] layer:', data.layer || data.layer_number);
+            console.log('[TaskController] dimension_count:', data.dimension_count);
+
+            // 调用回调更新 UI 状态
+            callbacksRef.current.onLayerStreamComplete?.(data.layer || data.layer_number || 1);
           } else if (eventType === 'pause') {
             const data = event.data as {
               current_layer?: number;

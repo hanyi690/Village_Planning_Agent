@@ -64,9 +64,38 @@ class AnalyzeDimensionNode(BaseNode):
             from ..planners.generic_planner import GenericPlannerFactory
             planner = GenericPlannerFactory.create_planner(dimension_key)
 
-            # 调用规划器的 execute 方法
+            # ✅ 创建 Token 回调函数 - 用于实时流式输出
+            def on_token_callback(token: str, accumulated: str):
+                """Token 级回调：将增量内容实时发送到 SSE"""
+                if session_id:
+                    try:
+                        from backend.api.planning import append_dimension_delta_event
+                        append_dimension_delta_event(
+                            session_id=session_id,
+                            layer=1,
+                            dimension_key=dimension_key,
+                            dimension_name=dimension_name,
+                            delta=token,
+                            accumulated=accumulated
+                        )
+                    except Exception as e:
+                        logger.warning(f"[子图-分析] Token 回调失败: {e}")
+
+            # ✅ 重置维度增量状态（确保新维度的流式输出从头开始）
+            if session_id:
+                try:
+                    from backend.api.planning import reset_dimension_delta_state
+                    reset_dimension_delta_state(session_id, 1, dimension_key)
+                except Exception as e:
+                    logger.warning(f"[子图-分析] 重置增量状态失败: {e}")
+
+            # 调用规划器的 execute 方法（启用流式输出）
             planner_state = {"raw_data": raw_data, "village_data": raw_data}
-            planner_result = planner.execute(planner_state)
+            planner_result = planner.execute(
+                planner_state,
+                streaming=True,
+                on_token_callback=on_token_callback
+            )
 
             # 使用动态结果键名
             result_key = planner.get_result_key()
@@ -264,7 +293,32 @@ class AnalyzeConceptDimensionNode(BaseNode):
             from ..planners.generic_planner import GenericPlannerFactory
             planner = GenericPlannerFactory.create_planner(dimension_key)
 
-            # 调用规划器的 execute 方法
+            # ✅ 创建 Token 回调函数 - 用于实时流式输出
+            def on_token_callback(token: str, accumulated: str):
+                """Token 级回调：将增量内容实时发送到 SSE"""
+                if session_id:
+                    try:
+                        from backend.api.planning import append_dimension_delta_event
+                        append_dimension_delta_event(
+                            session_id=session_id,
+                            layer=2,
+                            dimension_key=dimension_key,
+                            dimension_name=dimension_name,
+                            delta=token,
+                            accumulated=accumulated
+                        )
+                    except Exception as e:
+                        logger.warning(f"[子图-规划思路] Token 回调失败: {e}")
+
+            # ✅ 重置维度增量状态
+            if session_id:
+                try:
+                    from backend.api.planning import reset_dimension_delta_state
+                    reset_dimension_delta_state(session_id, 2, dimension_key)
+                except Exception as e:
+                    logger.warning(f"[子图-规划思路] 重置增量状态失败: {e}")
+
+            # 调用规划器的 execute 方法（启用流式输出）
             # 使用预筛选的 filtered_analysis 和 filtered_concept 字段
             planner_state = {
                 "filtered_analysis": state.get("filtered_analysis", ""),  # 预筛选的现状分析
@@ -273,7 +327,11 @@ class AnalyzeConceptDimensionNode(BaseNode):
                 "task_description": state.get("task_description", "制定规划思路"),
                 "constraints": state.get("constraints", "无特殊约束")
             }
-            planner_result = planner.execute(planner_state)
+            planner_result = planner.execute(
+                planner_state,
+                streaming=True,
+                on_token_callback=on_token_callback
+            )
 
             # 使用动态结果键名
             result_key = planner.get_result_key()
@@ -456,7 +514,8 @@ class GenerateDimensionPlanNode(BaseNode):
 
         try:
             # 使用子图中的原始函数来执行（保持一致性）
-            result = _generate(state)
+            # ✅ 启用流式输出
+            result = _generate(state, streaming=True)
 
             # 如果结果包含 dimension_plans，添加元数据
             if "dimension_plans" in result and result["dimension_plans"]:

@@ -72,6 +72,7 @@ export interface LayerContent {
 export type PlanningSSEEventType =
   | 'layer_started'
   | 'layer_completed'
+  | 'layer_stream_complete'  // ✅ 新增：层级流完成事件
   | 'checkpoint_saved'
   | 'pause'
   | 'progress'
@@ -320,6 +321,7 @@ export const planningApi = {
     const eventTypes: PlanningSSEEventType[] = [
       'layer_started',
       'layer_completed',
+      'layer_stream_complete',  // ✅ 新增：层级流完成事件
       'checkpoint_saved',
       'review_request',
       'content_delta',

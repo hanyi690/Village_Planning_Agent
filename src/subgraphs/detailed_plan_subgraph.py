@@ -443,17 +443,28 @@ def advance_wave_node(state: DetailedPlanState) -> Dict[str, Any]:
 # 专业Agent节点 - 生成各维度规划
 # ==========================================
 
-def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
+def generate_dimension_plan(
+    state: DetailedDimensionState,
+    streaming: bool = False,
+    on_token_callback=None
+) -> Dict[str, Any]:
     """
-    生成单个维度的详细规划 - 增强版：支持适配器
+    生成单个维度的详细规划 - 增强版：支持适配器和流式输出
 
     使用 GenericPlanner 统一架构，充分利用现有的基础设施。
     支持使用completed_plans（project_bank需要）。
     新增：支持适配器调用以获取专业分析数据。
+    新增：支持 Token 级流式输出。
+
+    Args:
+        state: 维度规划状态
+        streaming: 是否启用流式输出
+        on_token_callback: Token 回调函数，接收 (token, accumulated)
     """
     dimension_key = state["dimension_key"]
     dimension_name = state["dimension_name"]
     project_name = state["project_name"]
+    session_id = state.get("session_id", "")
 
     logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key})")
     logger.debug(f"[子图-L3-Agent] {dimension_name} 输入数据: "
@@ -465,6 +476,34 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
         # 【使用统一架构】使用 GenericPlannerFactory 创建规划器
         from ..planners.generic_planner import GenericPlannerFactory
         planner = GenericPlannerFactory.create_planner(dimension_key)
+
+        # ✅ 创建 Token 回调函数 - 用于实时流式输出
+        def internal_token_callback(token: str, accumulated: str):
+            """Token 级回调：将增量内容实时发送到 SSE"""
+            if session_id:
+                try:
+                    from backend.api.planning import append_dimension_delta_event
+                    append_dimension_delta_event(
+                        session_id=session_id,
+                        layer=3,
+                        dimension_key=dimension_key,
+                        dimension_name=dimension_name,
+                        delta=token,
+                        accumulated=accumulated
+                    )
+                except Exception as e:
+                    logger.warning(f"[子图-L3-Agent] Token 回调失败: {e}")
+            # 同时调用外部回调（如果有）
+            if on_token_callback:
+                on_token_callback(token, accumulated)
+
+        # ✅ 重置维度增量状态
+        if session_id:
+            try:
+                from backend.api.planning import reset_dimension_delta_state
+                reset_dimension_delta_state(session_id, 3, dimension_key)
+            except Exception as e:
+                logger.warning(f"[子图-L3-Agent] 重置增量状态失败: {e}")
 
         # 【使用统一架构】调用规划器的 execute 方法
         planner_state = {
@@ -489,10 +528,12 @@ def generate_dimension_plan(state: DetailedDimensionState) -> Dict[str, Any]:
         if use_adapters and adapter_types:
             logger.info(f"[子图-L3-Agent] 适配器启用: types={adapter_types}")
 
-        # 执行规划（带适配器支持）
+        # 执行规划（带适配器支持和流式输出）
         planner_result = planner.execute(
             state=planner_state,
-            enable_langsmith=True
+            enable_langsmith=True,
+            streaming=streaming,
+            on_token_callback=internal_token_callback if streaming else None
         )
 
         # GenericPlanner 返回的结果键名由 get_result_key() 决定

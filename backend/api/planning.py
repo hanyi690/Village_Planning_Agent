@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import sys
+import threading
 import time
 from collections import deque
 from contextlib import contextmanager
@@ -302,6 +303,96 @@ def append_dimension_complete_event(
     }
     _append_session_event(session_id, event_data)
     logger.debug(f"[Dimension Event] Layer {layer} - {dimension_name} completed ({len(content)} chars)")
+
+
+# ==========================================
+# Token 级流式输出 - 频率控制状态
+# ==========================================
+_dimension_delta_last_sent: Dict[str, float] = {}  # dimension_key -> last_sent_timestamp
+_dimension_delta_token_count: Dict[str, int] = {}  # dimension_key -> token_count_since_last_send
+_dimension_delta_lock = threading.Lock()
+
+# 频率控制参数
+DELTA_MIN_INTERVAL_MS = 50  # 最小发送间隔（毫秒）
+DELTA_MIN_TOKENS = 5  # 最小 token 数量
+
+
+def append_dimension_delta_event(
+    session_id: str,
+    layer: int,
+    dimension_key: str,
+    dimension_name: str,
+    delta: str,
+    accumulated: str
+) -> bool:
+    """
+    发送维度增量事件到 SSE 队列（带频率控制）
+    
+    频率控制策略：
+    - 每 50ms 最多发送一次
+    - 或每累积 5 个 tokens 发送一次
+    
+    这是一个同步函数，供子图节点的 token 回调调用。
+    
+    Args:
+        session_id: 会话ID
+        layer: 层级编号 (1/2/3)
+        dimension_key: 维度键名
+        dimension_name: 维度显示名称
+        delta: 增量文本（单个 token）
+        accumulated: 累积文本
+    
+    Returns:
+        bool: 是否实际发送了事件（用于调试）
+    """
+    current_time = time.time() * 1000  # 转换为毫秒
+    cache_key = f"{session_id}:{layer}:{dimension_key}"
+    
+    with _dimension_delta_lock:
+        # 检查是否应该发送
+        last_sent = _dimension_delta_last_sent.get(cache_key, 0)
+        token_count = _dimension_delta_token_count.get(cache_key, 0) + 1
+        
+        time_elapsed = current_time - last_sent
+        should_send = (time_elapsed >= DELTA_MIN_INTERVAL_MS) or (token_count >= DELTA_MIN_TOKENS)
+        
+        if not should_send:
+            # 只更新计数，不发送
+            _dimension_delta_token_count[cache_key] = token_count
+            return False
+        
+        # 发送事件
+        event_data = {
+            "type": "dimension_delta",
+            "layer": layer,
+            "dimension_key": dimension_key,
+            "dimension_name": dimension_name,
+            "delta": delta,
+            "accumulated": accumulated,
+            "timestamp": datetime.now().isoformat()
+        }
+        _append_session_event(session_id, event_data)
+        
+        # 更新状态
+        _dimension_delta_last_sent[cache_key] = current_time
+        _dimension_delta_token_count[cache_key] = 0
+        
+        return True
+
+
+def reset_dimension_delta_state(session_id: str, layer: int, dimension_key: str) -> None:
+    """
+    重置维度增量状态（在维度开始时调用）
+    
+    Args:
+        session_id: 会话ID
+        layer: 层级编号
+        dimension_key: 维度键名
+    """
+    cache_key = f"{session_id}:{layer}:{dimension_key}"
+    with _dimension_delta_lock:
+        _dimension_delta_last_sent.pop(cache_key, None)
+        _dimension_delta_token_count.pop(cache_key, None)
 
 
 def _get_session_events_copy(session_id: str) -> list:
@@ -661,6 +752,21 @@ async def _execute_graph_in_background(
                         logger.info(f"[Planning] [{session_id}]   - pause_after_step: {event.get('pause_after_step', False)}")
                         logger.info(f"[Planning] [{session_id}]   - previous_layer: {event.get('previous_layer', 0)}")
                         logger.info(f"[Planning] [{session_id}]   - 已发送事件: {sent_events}")
+                        
+                        # ✅ 新增：发送 layer_stream_complete 终结信号
+                        # 此事件表示该层的所有维度内容已完全发送完毕
+                        # 前端应只在此事件后更新 completedLayers 状态
+                        stream_complete_event = {
+                            "type": "layer_stream_complete",
+                            "layer": layer_num,
+                            "layer_number": layer_num,
+                            "session_id": session_id,
+                            "message": f"Layer {layer_num} stream complete",
+                            "dimension_count": len(dimension_reports),
+                            "timestamp": datetime.now().isoformat()
+                        }
+                        await _append_session_event_async(session_id, stream_complete_event)
+                        logger.info(f"[Planning] [{session_id}] ✓ layer_stream_complete 事件已发送")
                         # sent_layer_events 和 sent_pause_events 是内存状态,不需要持久化到数据库
                     else:
                         # 重复事件检测
