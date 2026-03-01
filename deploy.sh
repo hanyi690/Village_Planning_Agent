@@ -134,6 +134,12 @@ do_build() {
     export DOCKER_BUILDKIT=1
     export COMPOSE_DOCKER_CLI_BUILD=1
     $DOCKER_COMPOSE build --no-cache
+    
+    # Clean up build cache to save disk space
+    echo -e "${BLUE}[INFO] Cleaning up build cache...${NC}"
+    docker builder prune -f 2>/dev/null || true
+    docker image prune -f 2>/dev/null || true
+    
     echo -e "${GREEN}[INFO] Build complete. Run './deploy.sh start' to start services.${NC}"
 }
 
@@ -156,6 +162,13 @@ do_clean() {
     read -p "Press Enter to continue or Ctrl+C to cancel..."
     echo -e "${BLUE}[INFO] Removing containers and images...${NC}"
     $DOCKER_COMPOSE down -v --rmi local
+    
+    # Aggressive cleanup for build cache
+    echo -e "${BLUE}[INFO] Cleaning up Docker build cache...${NC}"
+    docker builder prune -f 2>/dev/null || true
+    docker image prune -f 2>/dev/null || true
+    docker system prune -f 2>/dev/null || true
+    
     echo -e "${GREEN}[OK] Cleanup complete.${NC}"
 }
 

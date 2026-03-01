@@ -76,11 +76,10 @@ ENV HF_ENDPOINT=https://hf-mirror.com
 ENV EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
 ENV EMBEDDING_DEVICE=cpu
 
-# Pre-download Embedding model during build
-# HF_HOME and HF_ENDPOINT are already set via ENV above
-# Switch to appuser for download to ensure correct permissions
-USER appuser
-RUN python -c "from sentence_transformers import SentenceTransformer; print('Downloading Embedding model...'); SentenceTransformer('BAAI/bge-small-zh-v1.5'); print('Model downloaded successfully')"
+# Model will be loaded at runtime from mounted volume or downloaded on first run
+# Pre-downloading during build causes large image size and build failures
+# Use: docker-compose with ./models:/app/models volume mount
+# Or: set HF_HOME to local path and download before deployment
 
 # Expose port
 EXPOSE 8000
