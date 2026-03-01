@@ -41,6 +41,7 @@ export function useTaskController(
     onTextDelta?: (text: string, layer?: number) => void;
     onDimensionDelta?: (dimensionKey: string, delta: string, accumulated: string, layer?: number) => void;
     onDimensionComplete?: (dimensionKey: string, dimensionName: string, fullContent: string, layer?: number) => void;
+    onLayerStarted?: (layer: number, layerName: string) => void;
     onLayerCompleted?: (layer: number, reportContent: string, dimensionReports: Record<string, string>) => void;
     // ✅ 新增：层级流完成回调（SSE 驱动的 UI 状态更新）
     onLayerStreamComplete?: (layer: number) => void;
@@ -227,6 +228,23 @@ export function useTaskController(
               data.dimension_name || '',
               data.full_content || '',
               data.layer
+            );
+          } else if (eventType === 'layer_started') {
+            // ✅ 新增：层级开始事件
+            const data = event.data as {
+              layer?: number;
+              layer_number?: number;
+              layer_name?: string;
+              message?: string;
+            } || {};
+
+            console.log('[TaskController] === Layer Started SSE Event ===');
+            console.log('[TaskController] layer:', data.layer || data.layer_number);
+            console.log('[TaskController] layer_name:', data.layer_name);
+
+            callbacksRef.current.onLayerStarted?.(
+              data.layer || data.layer_number || 1,
+              data.layer_name || ''
             );
           } else if (eventType === 'layer_completed') {
             const data = event.data as {

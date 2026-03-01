@@ -680,7 +680,28 @@ async def _execute_graph_in_background(
         stream_iterator = graph.astream(clean_state, config, stream_mode="values")
 
         previous_event = {}
+        sent_layer_started = set()  # 追踪已发送的 layer_started 事件
         async for event in stream_iterator:
+            # ✅ 检测层级开始（layer_started 事件）
+            current_layer = event.get("current_layer")
+            if current_layer and current_layer in [1, 2, 3]:
+                layer_started_key = f"layer_{current_layer}_started"
+                if layer_started_key not in sent_layer_started:
+                    # 发送 layer_started 事件
+                    layer_names = {1: "现状分析", 2: "规划思路", 3: "详细规划"}
+                    started_event = {
+                        "type": "layer_started",
+                        "layer": current_layer,
+                        "layer_number": current_layer,
+                        "layer_name": layer_names.get(current_layer, f"Layer {current_layer}"),
+                        "session_id": session_id,
+                        "message": f"开始执行 Layer {current_layer}: {layer_names.get(current_layer, '')}",
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    await _append_session_event_async(session_id, started_event)
+                    sent_layer_started.add(layer_started_key)
+                    logger.info(f"[Planning] [{session_id}] ✓ layer_started 事件已发送: Layer {current_layer}")
+
             # 检测层级完成
             for layer_num in [1, 2, 3]:
                 now_completed = event.get(f"layer_{layer_num}_completed", False)

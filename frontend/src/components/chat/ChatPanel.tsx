@@ -11,6 +11,7 @@ import type {
   Message,
   ActionButton,
   FileMessage,
+  ProgressMessage,
 } from '@/types';
 import {
   isProgressMessage,
@@ -342,6 +343,27 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     }
   }, [messages, addMessage, setMessages, showViewer]);
 
+  // ✅ 新增：处理层级开始事件
+  const handleLayerStarted = useCallback((layer: number, layerName: string) => {
+    console.log(`[ChatPanel] Layer ${layer} started - ${layerName}`);
+
+    // 添加层级开始消息
+    const layerLabels: Record<number, string> = {
+      1: '现状分析',
+      2: '规划思路',
+      3: '详细规划',
+    };
+
+    addMessage({
+      ...createBaseMessage(),
+      type: 'progress',
+      role: 'assistant',
+      content: `🔄 正在执行 Layer ${layer}: ${layerLabels[layer] || layerName}...`,
+      layer,
+      progress: 0,
+    } as ProgressMessage);
+  }, [addMessage]);
+
   // ✅ 新增：处理层级流完成事件（SSE 驱动的 UI 状态更新）
   // 此事件表示该层的所有维度内容已完全发送完毕
   // 前端应只在此事件后更新 completedLayers 状态
@@ -408,6 +430,8 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     // 维度级流式回调
     onDimensionDelta: handleDimensionDelta,
     onDimensionComplete: handleDimensionComplete,
+    // 层级开始回调
+    onLayerStarted: handleLayerStarted,
     onLayerProgress: handleLayerProgress,
     // 层级完成回调
     onLayerCompleted: handleLayerCompleted,
@@ -417,7 +441,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     onPause: handlePause,
     // 【新增】维度修复完成回调
     onDimensionRevised: handleDimensionRevised,
-  }), [handleTextDelta, handleDimensionDelta, handleDimensionComplete, handleLayerProgress, handleLayerCompleted, handleLayerStreamComplete, handlePause, handleDimensionRevised]);
+  }), [handleTextDelta, handleDimensionDelta, handleDimensionComplete, handleLayerStarted, handleLayerProgress, handleLayerCompleted, handleLayerStreamComplete, handlePause, handleDimensionRevised]);
 
   // Stable handler for SegmentedControl onChange
   const handleLayerChange = useCallback((layer: string) => {
@@ -666,29 +690,54 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
   // File selection handler
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
     try {
       setIsUploadingFile(true);
-      const response = await fileApi.uploadFile(file);
 
-      // Store file content for later use when starting planning
-      setUploadedFileContent(response.content);
+      // 支持多文件上传
+      const uploadPromises = Array.from(files).map(async (file) => {
+        const response = await fileApi.uploadFile(file);
+        return { file, response };
+      });
 
-      addMessage({
-        ...createBaseMessage('user'),
-        type: 'file',
-        filename: file.name,
-        fileContent: response.content,
-        fileSize: file.size,
-        encoding: response.encoding,
-      } as FileMessage);
+      const results = await Promise.all(uploadPromises);
 
-      const encodingInfo = response.encoding ? `\n编码: ${response.encoding}` : '';
-      addMessage(createSystemMessage(
-        `✅ 文件 "${file.name}" 已上传，点击 "开始规划" 按钮启动任务\n${encodingInfo}\n内容长度: ${response.content.length} 字符`
-      ));
+      // 合并所有文件内容
+      const allContents: string[] = [];
+      
+      for (const { file, response } of results) {
+        allContents.push(response.content);
+
+        addMessage({
+          ...createBaseMessage('user'),
+          type: 'file',
+          filename: file.name,
+          fileContent: response.content,
+          fileSize: file.size,
+          encoding: response.encoding,
+        } as FileMessage);
+
+        const encodingInfo = response.encoding ? `\n编码: ${response.encoding}` : '';
+        addMessage(createSystemMessage(
+          `✅ 文件 "${file.name}" 已上传${encodingInfo}\n内容长度: ${response.content.length} 字符`
+        ));
+      }
+
+      // 存储合并后的内容
+      const combinedContent = allContents.join('\n\n---\n\n');
+      setUploadedFileContent(combinedContent);
+
+      if (results.length > 1) {
+        addMessage(createSystemMessage(
+          `✅ 已上传 ${results.length} 个文件，总内容长度: ${combinedContent.length} 字符\n点击 "开始规划" 按钮启动任务`
+        ));
+      } else {
+        addMessage(createSystemMessage(
+          `点击 "开始规划" 按钮启动任务`
+        ));
+      }
 
       e.target.value = '';
     } catch (error: unknown) {
@@ -992,6 +1041,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             {/* File upload button (native) */}
             <input
               type="file"
+              multiple
               accept={FILE_ACCEPT}
               onChange={handleFileSelect}
               disabled={inputDisabled || isTyping || isUploadingFile}
