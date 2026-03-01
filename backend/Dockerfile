@@ -66,6 +66,11 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV ENVIRONMENT=production
 ENV USE_ASYNC_DATABASE=true
+# HuggingFace Configuration (use mirror for faster download in China)
+ENV HF_ENDPOINT=https://hf-mirror.com
+# Embedding Model (auto-detect offline mode based on cache)
+ENV EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
+ENV EMBEDDING_DEVICE=cpu
 
 # Expose port
 EXPOSE 8000

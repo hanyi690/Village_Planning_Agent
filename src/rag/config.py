@@ -37,6 +37,113 @@ EMBEDDING_MODEL_NAME = os.getenv(
 )
 EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")  # 可选: cuda, mps
 
+# ==================== HuggingFace 镜像和离线配置 ====================
+# 国内镜像站点（首次下载模型时使用）
+# 默认使用阿里云镜像，国内访问更快
+HF_ENDPOINT = os.getenv("HF_ENDPOINT", "https://hf-mirror.com")
+
+# 离线模式配置（自动检测，模型存在时自动启用离线）
+HF_HUB_OFFLINE = os.getenv("HF_HUB_OFFLINE", "") == "1"
+TRANSFORMERS_OFFLINE = os.getenv("TRANSFORMERS_OFFLINE", "") == "1"
+
+
+def get_huggingface_cache_dir() -> Path:
+    """
+    获取 HuggingFace 缓存目录
+    优先级：HF_HOME > HF_HUB_CACHE > 默认 ~/.cache/huggingface
+    """
+    hf_home = os.getenv("HF_HOME")
+    if hf_home:
+        return Path(hf_home)
+    
+    hf_hub_cache = os.getenv("HF_HUB_CACHE")
+    if hf_hub_cache:
+        return Path(hf_hub_cache)
+    
+    # 默认缓存目录
+    return Path.home() / ".cache" / "huggingface"
+
+
+def check_model_cached(model_name: str = None) -> bool:
+    """
+    检测模型是否已在本地缓存
+    
+    Args:
+        model_name: 模型名称，默认使用 EMBEDDING_MODEL_NAME
+        
+    Returns:
+        True 如果模型已缓存且完整
+    """
+    model_name = model_name or EMBEDDING_MODEL_NAME
+    
+    # 转换模型名称为缓存目录格式：BAAI/bge-small-zh-v1.5 -> models--BAAI--bge-small-zh-v1.5
+    cache_dir = get_huggingface_cache_dir()
+    model_cache_name = "models--" + model_name.replace("/", "--")
+    model_cache_path = cache_dir / "hub" / model_cache_name
+    
+    if not model_cache_path.exists():
+        return False
+    
+    # 检查是否有 .no_exist 标记（表示之前下载失败）
+    no_exist_path = model_cache_path / ".no_exist"
+    if no_exist_path.exists():
+        return False
+    
+    # 检查 snapshots 目录是否有内容
+    snapshots_dir = model_cache_path / "snapshots"
+    if not snapshots_dir.exists():
+        return False
+    
+    # 检查是否有有效的 snapshot（包含模型文件）
+    for snapshot in snapshots_dir.iterdir():
+        if snapshot.is_dir():
+            # 检查是否有模型文件（.bin 或 .safetensors）
+            has_model = list(snapshot.glob("*.bin")) or list(snapshot.glob("*.safetensors"))
+            if has_model:
+                return True
+    
+    return False
+
+
+def setup_huggingface_env(force_offline: bool = None, force_online: bool = False):
+    """
+    配置 HuggingFace 环境变量
+    自动检测模型缓存，智能决定离线模式或镜像下载
+    
+    Args:
+        force_offline: 强制离线模式（None 表示自动检测）
+        force_online: 强制在线模式（用于首次下载）
+    """
+    model_cached = check_model_cached()
+    
+    # 决定是否使用离线模式
+    if force_online:
+        # 强制在线模式（首次下载）
+        use_offline = False
+    elif force_offline is not None:
+        # 强制指定
+        use_offline = force_offline
+    else:
+        # 自动检测：模型已缓存则使用离线模式
+        use_offline = model_cached
+    
+    if use_offline:
+        # 离线模式：避免网络请求超时
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        print(f"✅ 模型已缓存，启用离线模式: {EMBEDDING_MODEL_NAME}")
+    else:
+        # 在线模式：使用镜像站点下载
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+        
+        # 设置镜像站点
+        if HF_ENDPOINT:
+            os.environ["HF_ENDPOINT"] = HF_ENDPOINT
+            print(f"📥 模型未缓存，使用镜像下载: {HF_ENDPOINT}")
+        else:
+            print(f"📥 模型未缓存，从 HuggingFace 官方下载")
+
 # ==================== 文本分割配置 ====================
 # 针对 Planning Agent 优化：更大的 chunk_size 保留更多上下文
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "2500"))  # 默认 2500（比传统 RAG 更大）

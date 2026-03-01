@@ -20,6 +20,7 @@ from src.rag.config import (
     CHROMA_COLLECTION_NAME,
     CHROMA_PERSIST_DIR,
     EMBEDDING_MODEL_NAME,
+    setup_huggingface_env,
 )
 
 
@@ -74,11 +75,8 @@ class VectorStoreCache:
             HuggingFaceEmbeddings 实例
         """
         if self._embedding_model is None:
-            import os
-            # 设置离线模式，避免网络请求超时
-            # 模型已在本地缓存时，无需连接 huggingface.co
-            os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+            # 配置 HuggingFace 环境（离线模式/镜像站点）
+            setup_huggingface_env()
 
             from langchain_huggingface import HuggingFaceEmbeddings
 

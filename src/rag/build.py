@@ -25,6 +25,7 @@ from src.rag.config import (
     VECTOR_DB_TYPE,
     DEFAULT_PROVIDER,
     is_docker,
+    setup_huggingface_env,
 )
 from src.rag.utils import load_knowledge_base
 from src.rag.visualize import SliceInspector
@@ -126,6 +127,9 @@ def build_vector_store(splits):
     构建向量存储
     支持多种向量数据库（Chroma/FAISS/Qdrant）
     """
+    # 配置 HuggingFace 环境（离线模式/镜像站点）
+    setup_huggingface_env()
+
     print(f"\n🧠 正在初始化 Embedding 模型: {EMBEDDING_MODEL_NAME}")
 
     # 检测是否在 Docker 中运行
