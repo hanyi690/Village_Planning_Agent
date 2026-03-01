@@ -199,49 +199,39 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     const dimensionName = getDimensionName(dimensionKey);
     const layerReportId = `layer_report_${layer}`;
 
-    // 检查该层是否已有 LayerReportMessage
-    const hasLayerReport = messages.some(m => m.id === layerReportId);
-
-    if (!hasLayerReport && delta.length > 0) {
-      // 第一次收到该层的维度 Token，创建 LayerReportMessage
-      addMessage({
-        ...createBaseMessage('assistant'),
-        id: layerReportId,
-        type: 'layer_completed' as const,
-        layer: layer || 1,
-        content: '',
-        summary: {
-          word_count: 0 as number,
-          key_points: [],
-          dimension_count: 0,
-        },
-        fullReportContent: '',
-        dimensionReports: {},  // 即时更新的维度报告
-        actions: [],
-      });
-    }
-
+    // ✅ 修改：不再创建消息，直接更新现有的 LayerReportMessage
+    // handleLayerStarted 已经创建了 LayerReportMessage
+    
     // 更新 LayerReportMessage 中的维度报告内容
-    setMessages(prev => prev.map(msg => {
-      if (msg.id === layerReportId && msg.type === 'layer_completed') {
-        const dimensionReports = {
-          ...(msg as LayerCompletedMessage).dimensionReports || {},
-          [dimensionKey]: accumulated,
-        };
-        const wordCount = Object.values(dimensionReports).reduce((sum, content) => sum + content.length, 0);
-        return {
-          ...msg,
-          dimensionReports,
-          summary: {
-            word_count: wordCount as number,
-            key_points: msg.summary?.key_points || [],
-            dimension_count: Object.keys(dimensionReports).length,
-          },
-        };
+    setMessages(prev => {
+      const existingMsg = prev.find(m => m.id === layerReportId);
+      if (!existingMsg) {
+        // 如果消息不存在（可能是 layer_started 事件还没到），跳过
+        console.warn(`[ChatPanel] LayerReportMessage not found: ${layerReportId}`);
+        return prev;
       }
-      return msg;
-    }));
-  }, [addToken, messages, addMessage, setMessages]);
+      
+      return prev.map(msg => {
+        if (msg.id === layerReportId && msg.type === 'layer_completed') {
+          const dimensionReports = {
+            ...(msg as LayerCompletedMessage).dimensionReports || {},
+            [dimensionKey]: accumulated,
+          };
+          const wordCount = Object.values(dimensionReports).reduce((sum, content) => sum + content.length, 0);
+          return {
+            ...msg,
+            dimensionReports,
+            summary: {
+              word_count: wordCount as number,
+              key_points: msg.summary?.key_points || [],
+              dimension_count: Object.keys(dimensionReports).length,
+            },
+          };
+        }
+        return msg;
+      });
+    });
+  }, [addToken, setMessages]);
 
   const handleDimensionComplete = useCallback((
     dimensionKey: string,
@@ -343,17 +333,41 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     }
   }, [messages, addMessage, setMessages, showViewer]);
 
-  // ✅ 新增：处理层级开始事件
+  // ✅ 新增：处理层级开始事件 - 创建空的 LayerReportMessage
   const handleLayerStarted = useCallback((layer: number, layerName: string) => {
     console.log(`[ChatPanel] Layer ${layer} started - ${layerName}`);
 
-    // 添加层级开始消息
     const layerLabels: Record<number, string> = {
       1: '现状分析',
       2: '规划思路',
       3: '详细规划',
     };
 
+    // 创建层级报告消息（空的，等待维度内容流式更新）
+    const layerReportId = `layer_report_${layer}`;
+    
+    // 检查该层是否已有 LayerReportMessage
+    const hasLayerReport = messages.some(m => m.id === layerReportId);
+    
+    if (!hasLayerReport) {
+      addMessage({
+        ...createBaseMessage('assistant'),
+        id: layerReportId,
+        type: 'layer_completed' as const,
+        layer: layer,
+        content: '',
+        summary: {
+          word_count: 0,
+          key_points: [],
+          dimension_count: 0,
+        },
+        fullReportContent: '',
+        dimensionReports: {},  // 空的，等待维度内容流式更新
+        actions: [],
+      });
+    }
+
+    // 添加层级开始提示消息
     addMessage({
       ...createBaseMessage(),
       type: 'progress',
@@ -362,7 +376,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       layer,
       progress: 0,
     } as ProgressMessage);
-  }, [addMessage]);
+  }, [messages, addMessage]);
 
   // ✅ 新增：处理层级流完成事件（SSE 驱动的 UI 状态更新）
   // 此事件表示该层的所有维度内容已完全发送完毕
