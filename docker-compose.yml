@@ -1,5 +1,6 @@
 # Docker Compose for Village Planning Agent
 # Usage: docker-compose up -d
+# For faster builds, use: DOCKER_BUILDKIT=1 docker-compose up -d
 
 version: '3.8'
 
@@ -11,6 +12,10 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      # Enable BuildKit for better caching
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    image: village-planning-backend:latest
     container_name: village-planning-backend
     restart: unless-stopped
     ports:
@@ -37,6 +42,8 @@ services:
       - ./logs:/app/logs
       - ./results:/app/results
       - ./knowledge_base:/app/knowledge_base
+      # Mount HuggingFace cache for faster startup (pre-downloaded models)
+      - ${HF_HOME:-~/.cache/huggingface}:/home/appuser/.cache/huggingface:ro
     # Resource limits
     deploy:
       resources:
@@ -68,18 +75,17 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      # Enable BuildKit for better caching
       args:
-        # 构建时注入 NEXT_PUBLIC_API_URL（关键：NEXT_PUBLIC_* 变量在构建时生效）
+        - BUILDKIT_INLINE_CACHE=1
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    image: village-planning-frontend:latest
     container_name: village-planning-frontend
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-      # IMPORTANT: This URL must be accessible from the browser (public IP or domain)
-      # For local testing: http://localhost:8000
-      # For production: http://YOUR_SERVER_IP:8000 or https://api.yourdomain.com
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     # Resource limits
     deploy:
@@ -114,11 +120,3 @@ services:
 networks:
   village-planning-network:
     driver: bridge
-
-# ============================================
-# Volumes (optional, for persistent data)
-# ============================================
-# volumes:
-#   data:
-#   logs:
-#   results:
