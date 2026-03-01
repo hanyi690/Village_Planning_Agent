@@ -77,10 +77,10 @@ ENV EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
 ENV EMBEDDING_DEVICE=cpu
 
 # Pre-download Embedding model during build
-# Use HF_HOME to store in /app/models (not in user home)
+# HF_HOME and HF_ENDPOINT are already set via ENV above
 # Switch to appuser for download to ensure correct permissions
 USER appuser
-RUN python -c "\nimport os; \nos.environ['HF_HOME'] = '/app/models'; \nos.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'; \nfrom sentence_transformers import SentenceTransformer; \nprint('Downloading Embedding model...'); \nSentenceTransformer('BAAI/bge-small-zh-v1.5'); \nprint('Model downloaded successfully')"
+RUN python -c "from sentence_transformers import SentenceTransformer; print('Downloading Embedding model...'); SentenceTransformer('BAAI/bge-small-zh-v1.5'); print('Model downloaded successfully')"
 
 # Expose port
 EXPOSE 8000

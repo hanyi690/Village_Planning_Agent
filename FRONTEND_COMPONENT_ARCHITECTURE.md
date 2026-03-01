@@ -26,15 +26,12 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                    Component Layer                           │
 │  Layout: UnifiedLayout, Header, HistoryPanel                │
-│  Chat: ChatPanel, MessageList, ReviewPanel, ...             │
+│  Chat: ChatPanel, MessageList, ReviewPanel                  │
 │  Form: VillageInputForm                                      │
-│  Report: KnowledgeReference                                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## 核心原则：后端状态为单一真实源
-
-前端不存储业务逻辑状态，所有关键状态从后端同步：
 
 ```
 后端状态                    →    前端派生状态
@@ -47,15 +44,13 @@ execution_complete: true    →    停止轮询
 
 ## 数据流
 
-### REST 状态同步
+### REST 状态同步 (每2秒轮询)
 
 ```
-Backend State → TaskController.fetchStatus() 
-            → ChatPanel.syncBackendState() 
-            → UnifiedPlanningContext 
-            → UI 渲染
-
-轮询间隔: 2秒
+Backend → TaskController.fetchStatus() 
+       → ChatPanel.syncBackendState() 
+       → UnifiedPlanningContext 
+       → UI 渲染
 ```
 
 ### SSE 流式事件
@@ -74,53 +69,35 @@ Backend State → TaskController.fetchStatus()
 
 ### Layout 组件
 
-| 组件 | 功能 |
-|------|------|
-| UnifiedLayout | 主布局容器 |
-| Header | 顶部导航栏 |
-| HistoryPanel | 历史记录面板 |
-| UnifiedContentSwitcher | 内容切换器 |
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| UnifiedLayout | layout/UnifiedLayout.tsx | 主布局容器 |
+| Header | layout/Header.tsx | 顶部导航栏 |
+| HistoryPanel | layout/HistoryPanel.tsx | 历史记录面板 |
 
 ### Chat 组件
 
-| 组件 | 功能 |
-|------|------|
-| ChatPanel | 主聊天面板 |
-| MessageList | 消息列表 |
-| MessageBubble | 消息气泡 |
-| MessageContent | 消息内容渲染 |
-| ReviewPanel | 审查面板 |
-| LayerReportMessage | 层级完成消息 |
-| LayerReportCard | 层级报告卡片 |
-| DimensionSection | 维度卡片 |
-| DimensionReportStreaming | 流式维度报告 |
-| DimensionSelector | 维度选择器 |
-| StreamingText | 流式文本 |
-| ThinkingIndicator | 思考指示器 |
-| ActionButtonGroup | 操作按钮组 |
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| ChatPanel | chat/ChatPanel.tsx | 主聊天面板 |
+| MessageList | chat/MessageList.tsx | 消息列表 |
+| MessageBubble | chat/MessageBubble.tsx | 消息气泡 |
+| ReviewPanel | chat/ReviewPanel.tsx | 审查面板 |
+| LayerReportCard | chat/LayerReportCard.tsx | 层级报告卡片 |
+| DimensionSection | chat/DimensionSection.tsx | 维度卡片 |
+| StreamingText | chat/StreamingText.tsx | 流式文本 |
 
 ### Form 组件
 
-| 组件 | 功能 |
-|------|------|
-| VillageInputForm | 村庄信息输入表单 |
-
-### Report 组件
-
-| 组件 | 功能 |
-|------|------|
-| KnowledgeReference | RAG 知识引用显示 |
-
-### UI 组件
-
-| 组件 | 功能 |
-|------|------|
-| Card | 卡片组件 |
-| SegmentedControl | 分段控制器 |
+| 组件 | 文件 | 功能 |
+|------|------|------|
+| VillageInputForm | form/VillageInputForm.tsx | 村庄信息输入表单 |
 
 ## Context 状态管理
 
 ### UnifiedPlanningContext
+
+**文件**: `contexts/UnifiedPlanningContext.tsx`
 
 ```typescript
 interface PlanningState {
@@ -151,6 +128,8 @@ approve/reject/rollback        // 审查操作
 
 ### TaskController
 
+**文件**: `controllers/TaskController.tsx`
+
 ```typescript
 // REST 轮询 (每2秒)
 useEffect(() => {
@@ -170,12 +149,35 @@ actions.reject()    // 驳回审查
 actions.rollback()  // 回退检查点
 ```
 
-## Hooks
+## API 客户端
 
-| Hook | 功能 |
-|------|------|
-| useStreamingRender | 批处理渲染 |
-| useStreamingText | 流式文本输出 |
+**文件**: `lib/api.ts`
+
+```typescript
+planningApi: {
+  startPlanning(request)           // POST /api/planning/start
+  createStream(sessionId)          // GET /api/planning/stream (SSE)
+  getStatus(sessionId)             // GET /api/planning/status
+  approveReview(sessionId)         // POST /api/planning/review
+  rejectReview(sessionId, feedback)
+  rollbackCheckpoint(sessionId, checkpointId)
+}
+
+dataApi: {
+  listVillages()                   // GET /api/data/villages
+  getLayerContent(name, layer)     // GET /api/data/villages/{name}/layers/{layer}
+}
+
+fileApi: {
+  uploadFile(file)                 // POST /api/files/upload
+}
+
+knowledgeApi: {
+  getStatus()                      // GET /api/knowledge/status
+  getDocuments()                   // GET /api/knowledge/documents
+  syncDocuments()                  // POST /api/knowledge/sync
+}
+```
 
 ## Types 类型定义
 
@@ -195,28 +197,6 @@ interface LayerCompletedMessage {
   layer: number
   content: string
   dimensionReports?: Record<string, string>
-}
-```
-
-## API 客户端
-
-```typescript
-planningApi: {
-  startPlanning(request)           // POST /api/planning/start
-  createStream(sessionId)          // GET /api/planning/stream (SSE)
-  getStatus(sessionId)             // GET /api/planning/status
-  approveReview(sessionId)         // POST /api/planning/review
-  rejectReview(sessionId, feedback)
-  rollbackCheckpoint(sessionId, checkpointId)
-}
-
-dataApi: {
-  listVillages()                   // GET /api/data/villages
-  getLayerContent(name, layer)     // GET /api/data/villages/{name}/layers/{layer}
-}
-
-fileApi: {
-  uploadFile(file)                 // POST /api/files/upload
 }
 ```
 
@@ -240,7 +220,7 @@ switch (message.type) {
 }
 ```
 
-## 关键文件索引
+## 关键文件
 
 | 文件 | 功能 |
 |------|------|

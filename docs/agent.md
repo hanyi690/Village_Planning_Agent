@@ -44,7 +44,7 @@ init_pause (初始化暂停状态)
   ▼ (route_after_pause)
   │
 Layer 1: 现状分析 (12维度并行)
-  │ initialize → [analyze_dimension x12] → reduce
+  │ initialize → knowledge_preload → [analyze_dimension x12] → reduce
   │ 输出: analysis_reports
   │
   ▼ (route_after_layer1)
@@ -79,11 +79,13 @@ END
 
 ## 状态定义
 
+**文件**: `src/orchestration/main_graph.py`
+
 ```python
 class VillagePlanningState(TypedDict):
     # 输入数据
     project_name: str              # 项目名称
-    village_data: str              # 村庄基础数据 (raw_data)
+    village_data: str              # 村庄基础数据
     task_description: str          # 规划任务描述
     constraints: str               # 约束条件
 
@@ -116,6 +118,8 @@ class VillagePlanningState(TypedDict):
 
 ## 主图编排
 
+**文件**: `src/orchestration/main_graph.py`
+
 ```python
 def create_village_planning_graph(checkpointer=None):
     builder = StateGraph(VillagePlanningState)
@@ -139,22 +143,23 @@ def create_village_planning_graph(checkpointer=None):
 
 ### Layer 1: 现状分析子图
 
-**文件**: `subgraphs/analysis_subgraph.py`
+**文件**: `src/subgraphs/analysis_subgraph.py`
 
 **执行模式**: Map-Reduce 并行
+
+```
+initialize → knowledge_preload_node → [analyze_dimension x12] → reduce
+```
 
 ```python
 def map_dimensions(state) -> List[Send]:
     return [Send("analyze_dimension", {"dimension_key": key})
             for key in state["subjects"]]
-
-# 节点流程
-initialize → knowledge_preload → [analyze_dimension x12] → reduce
 ```
 
 ### Layer 2: 规划思路子图
 
-**文件**: `subgraphs/concept_subgraph.py`
+**文件**: `src/subgraphs/concept_subgraph.py`
 
 **执行模式**: 波次路由 (依赖驱动)
 
@@ -167,7 +172,7 @@ Wave 4: planning_strategies (依赖 Wave 1,2,3)
 
 ### Layer 3: 详细规划子图
 
-**文件**: `subgraphs/detailed_plan_subgraph.py`
+**文件**: `src/subgraphs/detailed_plan_subgraph.py`
 
 **执行模式**: 波次路由
 
@@ -176,11 +181,17 @@ Wave 1: 9维度并行 (industry, master_plan, traffic, ...)
 Wave 2: project_bank (依赖 Wave 1 全部完成)
 ```
 
+### Revision 子图
+
+**文件**: `src/subgraphs/revision_subgraph.py`
+
+**功能**: 处理人工驳回后的并行修复机制
+
 ## 规划器层
 
 ### UnifiedPlannerBase (基类)
 
-**文件**: `planners/unified_base_planner.py`
+**文件**: `src/planners/unified_base_planner.py`
 
 ```python
 class UnifiedPlannerBase(ABC):
@@ -199,7 +210,7 @@ class UnifiedPlannerBase(ABC):
 
 ### GenericPlanner (通用规划器)
 
-**文件**: `planners/generic_planner.py`
+**文件**: `src/planners/generic_planner.py`
 
 ```python
 class GenericPlanner(UnifiedPlannerBase):
@@ -212,13 +223,12 @@ class GenericPlanner(UnifiedPlannerBase):
     def build_prompt(self, state) -> str:
         # 从 knowledge_cache 获取知识上下文
         knowledge = state.get("knowledge_cache", {}).get(self.dimension_key, "")
-        # 构建包含知识的 Prompt
         ...
 ```
 
 ## 维度配置
 
-**文件**: `config/dimension_metadata.py`
+**文件**: `src/config/dimension_metadata.py`
 
 ```python
 DIMENSION_CONFIG = {
@@ -242,26 +252,26 @@ DIMENSION_CONFIG = {
 
 ## RAG 知识检索
 
-### 模块架构
+### 模块结构
 
 ```
-src/rag/                          # RAG 模块（统一实现）
-├── config.py                     # 配置：DATA_DIR, 向量库路径
+src/rag/
+├── config.py                 # 配置：DATA_DIR, 向量库路径
 ├── core/
-│   ├── tools.py                  # 检索工具：knowledge_search_tool
-│   ├── cache.py                  # 查询缓存
-│   └── context_manager.py        # 上下文管理
+│   ├── tools.py              # 检索工具：knowledge_search_tool
+│   ├── cache.py              # 查询缓存
+│   └── context_manager.py    # 上下文管理
 ├── utils/
-│   └── loaders.py                # 文档加载器（支持多种格式）
-├── service/                      # 可选独立服务
+│   └── loaders.py            # 文档加载器
+├── service/                  # 可选独立服务
 └── scripts/
-    └── build_kb_auto.py          # 知识库构建脚本
+    └── build_kb_auto.py      # 知识库构建脚本
 ```
 
-### 集成架构
+### 集成方式
 
 ```
-子图执行流程:
+子图执行:
 ┌─────────┐    ┌──────────────────┐    ┌─────────────┐
 │initialize│───▶│knowledge_preload │───▶│ 分析节点    │
 └─────────┘    │    _node         │    └─────────────┘
@@ -269,36 +279,12 @@ src/rag/                          # RAG 模块（统一实现）
                       │                       ▼
                       ▼              从 knowledge_cache
                预加载关键维度知识            读取知识
-                      │
-                      ▼
-              src/rag/core/tools.py
-              knowledge_search_tool.invoke()
 ```
 
 ### 关键维度
 
-仅涉及法规条文、技术指标的维度启用 RAG：
-
 - **Layer 1**: land_use, infrastructure, ecological_green, historical_culture
 - **Layer 3**: land_use_planning, infrastructure_planning, ecological, disaster_prevention, heritage
-
-### 知识预加载节点
-
-```python
-from src.rag.core.tools import knowledge_search_tool
-
-def knowledge_preload_node(state) -> Dict[str, Any]:
-    knowledge_cache = {}
-    for dim in CRITICAL_DIMENSIONS:
-        if dim in state["subjects"]:
-            result = knowledge_search_tool.invoke({
-                "query": f"{dim} 现状分析 标准 方法",
-                "top_k": 3,
-                "context_mode": "standard"
-            })
-            knowledge_cache[dim] = result
-    return {"knowledge_cache": knowledge_cache}
-```
 
 ## 数据流
 
@@ -326,7 +312,7 @@ Layer 2 → Layer 3 → final_output
 SSE 事件推送 → 前端显示
 ```
 
-## 关键文件索引
+## 关键文件
 
 | 文件 | 功能 |
 |------|------|
@@ -335,15 +321,13 @@ SSE 事件推送 → 前端显示
 | `src/subgraphs/analysis_subgraph.py` | Layer 1 子图 |
 | `src/subgraphs/concept_subgraph.py` | Layer 2 子图 |
 | `src/subgraphs/detailed_plan_subgraph.py` | Layer 3 子图 |
+| `src/subgraphs/revision_subgraph.py` | Revision 子图 |
 | `src/nodes/layer_nodes.py` | Layer 节点封装 |
 | `src/nodes/subgraph_nodes.py` | 子图节点 |
 | `src/planners/unified_base_planner.py` | 规划器基类 |
 | `src/planners/generic_planner.py` | 通用规划器 |
 | `src/config/dimension_metadata.py` | 维度配置 |
 | `src/core/llm_factory.py` | LLM 工厂 |
-| `src/rag/` | RAG 模块（统一实现） |
 | `src/rag/core/tools.py` | RAG 检索工具 |
 | `src/rag/utils/loaders.py` | 文档加载器 |
-| `src/rag/config.py` | RAG 配置 |
 | `src/tools/knowledge_tool.py` | 知识检索工具接口 |
-| `src/tools/file_manager.py` | 文件数据管理 |

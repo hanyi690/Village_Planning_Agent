@@ -6,31 +6,34 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      Page (app/page.tsx)                     │
+│                      Page Layer                              │
+│  app/page.tsx (首页)  app/village/[taskId]/page.tsx          │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                  UnifiedPlanningProvider                     │
-│              contexts/UnifiedPlanningContext.tsx             │
-│  状态: taskId, status, isPaused, pendingReviewLayer         │
+│                      Context Layer                           │
+│  UnifiedPlanningContext (全局状态管理)                        │
 └─────────────────────────────────────────────────────────────┘
-         ┌─────────────────┬─────────────────┐
-         ▼                 ▼                 ▼
-┌──────────────┐   ┌──────────────┐   ┌──────────────┐
-│UnifiedLayout │   │  ChatPanel   │   │ HistoryPanel │
-└──────────────┘   └──────┬───────┘   └──────────────┘
-                          │
-         ┌────────────────┼────────────────┐
-         ▼                ▼                ▼
-  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-  │ MessageList  │ │TaskController│ │ ReviewPanel  │
-  └──────────────┘ └──────────────┘ └──────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Controller Layer                          │
+│  TaskController (REST轮询 + SSE文本流)                        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Component Layer                           │
+│  Layout: UnifiedLayout, Header, HistoryPanel                │
+│  Chat: ChatPanel, MessageList, ReviewPanel                  │
+│  Form: VillageInputForm                                      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## 核心原则：后端状态为单一真实源
 
-前端不存储业务逻辑状态，所有关键状态从后端 `/api/planning/status` 同步：
+前端不存储业务逻辑状态，所有关键状态从后端同步：
 
 ```
 后端状态                    →    前端派生状态
@@ -102,7 +105,40 @@ syncBackendState(): isPaused = false
 ReviewPanel 消失
 ```
 
-## 组件层级
+## 目录结构
+
+```
+frontend/src/
+├── app/                        # 页面路由
+│   ├── page.tsx                # 首页
+│   ├── layout.tsx              # 根布局
+│   └── village/[taskId]/       # 任务详情页
+├── contexts/
+│   └── UnifiedPlanningContext.tsx  # 全局状态
+├── controllers/
+│   └── TaskController.tsx      # REST轮询+SSE管理
+├── components/
+│   ├── layout/                 # 布局组件
+│   │   ├── UnifiedLayout.tsx
+│   │   ├── Header.tsx
+│   │   └── HistoryPanel.tsx
+│   ├── chat/                   # 聊天组件
+│   │   ├── ChatPanel.tsx
+│   │   ├── MessageList.tsx
+│   │   ├── MessageBubble.tsx
+│   │   ├── ReviewPanel.tsx
+│   │   ├── LayerReportCard.tsx
+│   │   ├── DimensionSection.tsx
+│   │   └── ...
+│   └── form/                   # 表单组件
+│       └── VillageInputForm.tsx
+├── lib/
+│   └── api.ts                  # API客户端
+├── hooks/                      # 自定义Hooks
+└── types/                      # 类型定义
+```
+
+## 核心组件
 
 ### Layout 组件
 
@@ -111,7 +147,6 @@ ReviewPanel 消失
 | UnifiedLayout | 主布局容器：Header + 主内容区 |
 | Header | 顶部导航栏：Logo + 新建按钮 + 历史按钮 |
 | HistoryPanel | 历史记录面板：村庄列表 + 会话列表 |
-| UnifiedContentSwitcher | 内容切换器：表单或聊天界面 |
 
 ### Chat 组件
 
@@ -120,15 +155,10 @@ ReviewPanel 消失
 | ChatPanel | 主界面容器，协调状态同步 |
 | MessageList | 消息列表渲染 |
 | MessageBubble | 消息气泡 |
-| MessageContent | 消息内容渲染器 |
 | ReviewPanel | 审查面板：批准/驳回 |
-| LayerReportMessage | 层级完成消息 |
 | LayerReportCard | 层级报告卡片 |
 | DimensionSection | 单个维度卡片 |
-| DimensionReportStreaming | 流式维度报告 |
 | StreamingText | 流式文本显示 |
-| ThinkingIndicator | 思考状态指示器 |
-| DimensionSelector | 维度选择器 |
 
 ### Form 组件
 
@@ -136,7 +166,7 @@ ReviewPanel 消失
 |------|------|
 | VillageInputForm | 村庄数据输入表单 |
 
-## 核心组件详解
+## Context 状态管理
 
 ### UnifiedPlanningContext
 
@@ -167,6 +197,8 @@ syncBackendState(backendData) {
 }
 ```
 
+## Controller 层
+
 ### TaskController
 
 **文件**: `controllers/TaskController.tsx`
@@ -185,60 +217,11 @@ useEffect(() => {
 
 // SSE 连接条件
 const shouldConnectSSE = !execution_complete && !pause_after_step;
-```
 
-### ChatPanel
-
-**文件**: `components/chat/ChatPanel.tsx`
-
-```typescript
-export default function ChatPanel() {
-  const { syncBackendState, isPaused, pendingReviewLayer } = useContext();
-  const [taskState, actions] = useTaskController(taskId, callbacks);
-  
-  // 同步后端状态
-  useEffect(() => {
-    if (taskId) syncBackendState(taskState);
-  }, [taskId, taskState]);
-  
-  return (
-    <div>
-      <ProgressHeader />
-      <MessageList messages={messages} />
-      {isPaused && pendingReviewLayer && (
-        <ReviewPanel layer={pendingReviewLayer} {...actions} />
-      )}
-    </div>
-  );
-}
-```
-
-## Hooks
-
-| Hook | 功能 |
-|------|------|
-| useStreamingRender | 批处理渲染 |
-| useStreamingText | 流式文本输出 |
-
-## Types 类型定义
-
-```typescript
-// 核心消息类型
-type Message =
-  | TextMessage
-  | FileMessage
-  | ProgressMessage
-  | LayerCompletedMessage
-  | DimensionReportMessage
-  | ErrorMessage
-
-// 层级完成消息
-interface LayerCompletedMessage {
-  type: 'layer_completed'
-  layer: number
-  content: string
-  dimensionReports?: Record<string, string>
-}
+// 返回 actions
+actions.approve()   // 批准审查
+actions.reject()    // 驳回审查
+actions.rollback()  // 回退检查点
 ```
 
 ## API 客户端
@@ -263,6 +246,33 @@ dataApi: {
 fileApi: {
   uploadFile(file)                 // POST /api/files/upload
 }
+
+knowledgeApi: {
+  getStatus()                      // GET /api/knowledge/status
+  getDocuments()                   // GET /api/knowledge/documents
+  syncDocuments()                  // POST /api/knowledge/sync
+}
+```
+
+## Types 类型定义
+
+```typescript
+// 核心消息类型
+type Message =
+  | TextMessage
+  | FileMessage
+  | ProgressMessage
+  | LayerCompletedMessage
+  | DimensionReportMessage
+  | ErrorMessage
+
+// 层级完成消息
+interface LayerCompletedMessage {
+  type: 'layer_completed'
+  layer: number
+  content: string
+  dimensionReports?: Record<string, string>
+}
 ```
 
 ## 条件渲染
@@ -285,7 +295,7 @@ switch (message.type) {
 }
 ```
 
-## 关键文件索引
+## 关键文件
 
 | 文件 | 功能 |
 |------|------|

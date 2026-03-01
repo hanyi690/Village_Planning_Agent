@@ -24,17 +24,17 @@
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         后端 (FastAPI)                               │
-│  /api/planning/start   启动规划                                      │
-│  /api/planning/status  状态查询 (REST轮询)                           │
-│  /api/planning/stream  SSE流式事件                                   │
-│  /api/planning/review  审查操作 (approve/reject/rollback)            │
+│  /api/planning/*   规划任务管理                                      │
+│  /api/data/*       村庄数据查询                                      │
+│  /api/files/*      文件上传解析                                      │
+│  /api/knowledge/*  知识库管理                                        │
 └─────────────────────────────────────────────────────────────────────┘
                                │ Python调用
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        Agent核心 (LangGraph)                         │
 │  主图: START → Layer1(并行) → Layer2(波次) → Layer3(波次) → END      │
-│  子图: analysis_subgraph / concept_subgraph / detailed_plan_subgraph │
+│  子图: analysis / concept / detailed_plan / revision                 │
 │  规划器: GenericPlanner (28维度统一执行)                              │
 │  RAG: knowledge_preload_node → knowledge_cache → Prompt注入         │
 └─────────────────────────────────────────────────────────────────────┘
@@ -50,9 +50,33 @@
 
 ## 核心数据流
 
-### 后端状态驱动
+### 请求处理流程
 
-后端状态为单一真实源，前端通过 REST 轮询同步状态：
+```
+前端表单提交 (village_data, task_description, constraints)
+       │
+       ▼ POST /api/planning/start
+backend/api/planning.py:start_planning()
+       │ 创建 session_id，写入数据库
+       │ 构建 initial_state
+       │ asyncio.create_task(_execute_graph_in_background)
+       ▼
+src/orchestration/main_graph.py
+       │ StateGraph.astream(initial_state, config)
+       ▼
+Layer 1: analysis_subgraph (12维度并行)
+       │ knowledge_preload_node → RAG检索
+       │ Map-Reduce 并行执行
+       ▼
+Layer 2: concept_subgraph (4维度波次)
+       ▼
+Layer 3: detailed_plan_subgraph (12维度波次)
+       ▼
+状态持久化 → SQLite checkpoints
+SSE事件推送 → 前端实时渲染
+```
+
+### REST 状态同步 (前端每2秒轮询)
 
 ```
 后端状态                          前端派生状态
@@ -61,32 +85,6 @@ status: 'paused'         →       isPaused: true
 previous_layer: 1        →       pendingReviewLayer: 1
 layer_X_completed: true  →       completedLayers[X]: true
 execution_complete: true →       停止轮询
-```
-
-### 数据流调用链
-
-```
-前端输入 (raw_data)
-       │
-       ▼ POST /api/planning/start
-backend/api/planning.py
-       │ _build_initial_state()
-       │ asyncio.create_task(execute_graph())
-       ▼
-src/orchestration/main_graph.py
-       │ 主图编排
-       ▼
-src/subgraphs/analysis_subgraph.py (Layer 1)
-       │ knowledge_preload_node: RAG检索 → knowledge_cache
-       │ Map-Reduce 并行执行 12 维度
-       ▼
-src/subgraphs/concept_subgraph.py (Layer 2)
-       │ 波次执行 4 维度
-       ▼
-src/subgraphs/detailed_plan_subgraph.py (Layer 3)
-       │ 波次执行 12 维度
-       ▼
-状态持久化 → SQLite checkpoints
 ```
 
 ### SSE 流式事件
@@ -152,6 +150,16 @@ cd frontend && npm run dev
 
 访问 http://localhost:3000
 
+### Docker 部署
+
+```bash
+# 一键部署
+./deploy.sh
+
+# 或 Windows
+deploy.bat
+```
+
 ### 构建知识库
 
 ```bash
@@ -175,27 +183,25 @@ python -m src.rag.scripts.kb_cli sync           # 同步源目录
 Village_Planning_Agent/
 ├── backend/                    # FastAPI 后端
 │   ├── main.py                 # 应用入口
-│   ├── api/
-│   │   ├── planning.py         # 规划API
-│   │   ├── data.py             # 数据API
-│   │   └── files.py            # 文件API (MarkItDown)
-│   └── database/
-│       └── models.py           # 数据模型
+│   ├── api/                    # API 路由
+│   │   ├── planning.py         # 规划任务API
+│   │   ├── data.py             # 村庄数据API
+│   │   ├── files.py            # 文件上传API
+│   │   └── knowledge.py        # 知识库API
+│   └── database/               # 数据模型
 ├── frontend/src/               # Next.js 14 前端
+│   ├── app/                    # 页面路由
 │   ├── contexts/               # 状态管理
 │   ├── controllers/            # 控制器
 │   ├── components/             # UI组件
-│   └── lib/api.ts              # API客户端
+│   └── lib/                    # API客户端
 ├── src/                        # Agent核心引擎
 │   ├── orchestration/          # 主图编排
 │   ├── subgraphs/              # 三层子图
 │   ├── nodes/                  # 节点实现
 │   ├── planners/               # 规划器
 │   ├── config/                 # 维度配置
-│   ├── rag/                    # RAG 知识检索（统一模块）
-│   │   ├── core/               # 核心工具
-│   │   ├── utils/              # 加载器
-│   │   └── scripts/            # 构建脚本
+│   ├── rag/                    # RAG 知识检索
 │   └── tools/                  # 工具函数
 ├── knowledge_base/             # 知识库存储
 │   └── chroma_db/              # ChromaDB 向量库
@@ -205,46 +211,59 @@ Village_Planning_Agent/
 └── docs/                       # 文档
 ```
 
-## API端点
+## API 端点
 
-| 端点                          | 方法 | 说明         |
-| ----------------------------- | ---- | ------------ |
-| `/api/planning/start`       | POST | 启动规划任务 |
-| `/api/planning/status/{id}` | GET  | 查询任务状态 |
-| `/api/planning/stream/{id}` | GET  | SSE流式事件  |
-| `/api/planning/review/{id}` | POST | 审查操作     |
-| `/api/data/villages`        | GET  | 列出所有村庄 |
-| `/api/files/upload`         | POST | 上传文件     |
+### 规划 API (`/api/planning/*`)
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/planning/start` | POST | 启动规划任务 |
+| `/api/planning/status/{id}` | GET | 查询任务状态 |
+| `/api/planning/stream/{id}` | GET | SSE流式事件 |
+| `/api/planning/review/{id}` | POST | 审查操作 |
+| `/api/planning/sessions/{id}` | DELETE | 删除会话 |
+
+### 数据 API (`/api/data/*`)
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/data/villages` | GET | 列出所有村庄 |
+| `/api/data/villages/{name}/layers/{layer}` | GET | 获取层级内容 |
+
+### 文件 API (`/api/files/*`)
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/files/upload` | POST | 上传并解析文件 |
+
+### 知识库 API (`/api/knowledge/*`)
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/knowledge/status` | GET | 知识库状态 |
+| `/api/knowledge/documents` | GET | 文档列表 |
+| `/api/knowledge/sync` | POST | 同步文档 |
 
 ## 文档
 
 - **[智能体架构](docs/agent.md)** - LangGraph 主图、子图、规划器、RAG
 - **[后端实现](docs/backend.md)** - FastAPI API 与数据流
 - **[前端实现](docs/frontend.md)** - Next.js 状态管理
-- **[前端组件架构](FRONTEND_COMPONENT_ARCHITECTURE.md)** - 组件结构与数据流
 
 ## RAG 知识检索
 
 ### 模块架构
 
-统一的 RAG 模块位于 `src/rag/`，提供知识检索增强能力：
+统一的 RAG 模块位于 `src/rag/`：
 
 - **核心工具**: `knowledge_search_tool` - 语义检索
 - **文档加载**: `loaders.py` - 支持 PDF, DOCX, PPTX, TXT, MD 等格式
 - **向量存储**: ChromaDB，持久化到 `knowledge_base/chroma_db/`
 
-### 关键维度
-
-系统为涉及法规条文和技术指标的维度自动注入知识上下文：
-
-- **Layer 1**: land_use, infrastructure, ecological_green, historical_culture, superior_planning
-- **Layer 3**: land_use_planning, infrastructure_planning, ecological, disaster_prevention, heritage
-
 ### 检索策略
 
 - **预加载模式**: 子图开始前统一检索，缓存到 `knowledge_cache`
-- **上下文模式**: standard (默认) / expanded (详细规划)
-- **检索工具**: `knowledge_search_tool`, `check_technical_indicators`
+- **关键维度**: 涉及法规条文和技术指标的维度自动注入知识上下文
 
 ## 许可证
 
