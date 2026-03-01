@@ -13,6 +13,23 @@ from typing import Optional, Literal
 from langchain_core.documents import Document
 import filetype
 
+# ==================== 支持的文件格式 ====================
+# 字典格式：扩展名 -> 描述
+SUPPORTED_EXTENSIONS = {
+    '.txt': 'Plain text file',
+    '.md': 'Markdown file',
+    '.pdf': 'PDF document',
+    '.doc': 'Microsoft Word 97-2003',
+    '.docx': 'Microsoft Word document',
+    '.ppt': 'Microsoft PowerPoint 97-2003',
+    '.pptx': 'Microsoft PowerPoint presentation',
+    '.xls': 'Microsoft Excel 97-2003',
+    '.xlsx': 'Microsoft Excel spreadsheet',
+    '.epub': 'EPUB ebook',
+    '.html': 'HTML file',
+    '.htm': 'HTML file',
+}
+
 # Optional imports for specific file formats
 try:
     from pptx import Presentation
