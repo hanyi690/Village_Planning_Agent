@@ -1,36 +1,79 @@
 # RAG 知识库构建 Dockerfile
 # 用于在容器中构建和部署知识库
-FROM python:3.13-slim
+# 多阶段构建优化镜像大小
 
-# 设置工作目录
+# ============================================
+# Stage 1: Builder
+# ============================================
+FROM python:3.11-slim AS builder
+
 WORKDIR /app
 
-# 设置环境变量
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    EMBEDDING_DEVICE=cpu \
-    VECTOR_DB_TYPE=chroma
+# 使用阿里云 Debian 镜像源加速（国内部署优化）
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# 安装系统依赖
+# Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制 uv 包管理器
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# 复制项目文件
-COPY pyproject.toml uv.lock ./
+# 使用阿里云 PyPI 镜像源加速
+RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# ============================================
+# Stage 2: Production
+# ============================================
+FROM python:3.11-slim AS production
+
+WORKDIR /app
+
+# 使用阿里云 Debian 镜像源加速
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
+    sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy application code
 COPY src/ ./src/
+COPY requirements.txt .
 
-# 安装依赖
-RUN uv sync --no-dev
+# Create non-root user and necessary directories
+RUN useradd --create-home --shell /bin/bash appuser && \
+    mkdir -p /app/knowledge_base/chroma_db /app/data && \
+    chown -R appuser:appuser /app
 
-# 创建必要的目录
-RUN mkdir -p knowledge_base/chroma_db src/data
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV ENVIRONMENT=production
+ENV EMBEDDING_DEVICE=cpu
+ENV VECTOR_DB_TYPE=chroma
+# HuggingFace Configuration (use mirror for faster download in China)
+ENV HF_ENDPOINT=https://hf-mirror.com
+ENV EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
 
-# 暴露端口（如果需要提供 Web 界面）
+# Switch to non-root user
+USER appuser
+
+# Expose port (for web interface if needed)
 EXPOSE 8000
 
-# 默认命令：构建知识库
-CMD ["uv", "run", "python", "-m", "src.rag.build"]
+# Default command: build knowledge base
+CMD ["python", "-m", "src.rag.build"]

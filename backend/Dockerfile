@@ -58,8 +58,10 @@ COPY backend/ ./backend/
 COPY src/ ./src/
 COPY requirements.txt .
 
-# Create necessary directories
-RUN mkdir -p /app/data /app/logs /app/results /app/knowledge_base
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash appuser && \
+    mkdir -p /app/data /app/logs /app/results /app/knowledge_base && \
+    chown -R appuser:appuser /app
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -71,6 +73,9 @@ ENV HF_ENDPOINT=https://hf-mirror.com
 # Embedding Model (auto-detect offline mode based on cache)
 ENV EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
 ENV EMBEDDING_DEVICE=cpu
+
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8000
