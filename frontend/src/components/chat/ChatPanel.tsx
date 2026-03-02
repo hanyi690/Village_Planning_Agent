@@ -278,6 +278,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       dimensionCount: Object.keys(dimensionReports).length,
     });
 
+    // ✅ 合并 layer_stream_complete 功能：直接更新 completedLayers 状态
+    setUILayerCompleted(layer, true);
+
     const layerReportId = `layer_report_${layer}`;
 
     // 检查该层是否已有 LayerReportMessage
@@ -378,16 +381,6 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     } as ProgressMessage);
   }, [messages, addMessage]);
 
-  // ✅ 新增：处理层级流完成事件（SSE 驱动的 UI 状态更新）
-  // 此事件表示该层的所有维度内容已完全发送完毕
-  // 前端应只在此事件后更新 completedLayers 状态
-  const handleLayerStreamComplete = useCallback((layer: number) => {
-    console.log(`[ChatPanel] Layer ${layer} stream complete - updating UI state`);
-
-    // 更新 SSE 驱动的层级完成状态
-    setUILayerCompleted(layer, true);
-  }, [setUILayerCompleted]);
-
   const handlePause = useCallback((
     layer: number,
     checkpointId: string
@@ -449,13 +442,11 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     onLayerProgress: handleLayerProgress,
     // 层级完成回调
     onLayerCompleted: handleLayerCompleted,
-    // ✅ 新增：层级流完成回调（SSE 驱动的 UI 状态更新）
-    onLayerStreamComplete: handleLayerStreamComplete,
     // 暂停回调
     onPause: handlePause,
     // 【新增】维度修复完成回调
     onDimensionRevised: handleDimensionRevised,
-  }), [handleTextDelta, handleDimensionDelta, handleDimensionComplete, handleLayerStarted, handleLayerProgress, handleLayerCompleted, handleLayerStreamComplete, handlePause, handleDimensionRevised]);
+  }), [handleTextDelta, handleDimensionDelta, handleDimensionComplete, handleLayerStarted, handleLayerProgress, handleLayerCompleted, handlePause, handleDimensionRevised]);
 
   // Stable handler for SegmentedControl onChange
   const handleLayerChange = useCallback((layer: string) => {

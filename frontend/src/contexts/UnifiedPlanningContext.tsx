@@ -110,11 +110,8 @@ interface UnifiedPlanningContextType {
   // 同步后端状态的 action
   syncBackendState: (backendData: any) => void;
 
-  // ✅ 新增：SSE 驱动的层级完成状态更新
+  // ✅ SSE 驱动的层级完成状态更新
   setUILayerCompleted: (layer: number, completed: boolean) => void;
-  
-  // ✅ 新增：从 REST 状态恢复（用于断线重连）
-  restoreFromBackendState: () => void;
 
   // Checkpoints
   checkpoints: Checkpoint[];
@@ -199,16 +196,8 @@ export function UnifiedPlanningProvider({
   const [isPaused, setIsPaused] = useState(false);
   const [pendingReviewLayer, setPendingReviewLayer] = useState<number | null>(null);
 
-  // 层级完成状态（双重状态源）
-  // backendCompletedLayers: 来自 REST 轮询，用于断线重连恢复
-  // completedLayers: 来自 SSE 事件，用于 UI 渲染（单一真实源）
-  const [backendCompletedLayers, setBackendCompletedLayers] = useState({
-    1: false,
-    2: false,
-    3: false,
-  });
-
-  // SSE 驱动的层级完成状态 - UI 渲染的真实源
+  // 层级完成状态（单一状态源）
+  // SSE 事件驱动更新，REST 轮询用于断线重连恢复
   const [completedLayers, setCompletedLayers] = useState({
     1: false,
     2: false,
@@ -314,23 +303,21 @@ export function UnifiedPlanningProvider({
     setPendingReviewLayer(previousLayerValue && previousLayerValue > 0 ? previousLayerValue : null);
     console.log('[UnifiedPlanningContext] Set pendingReviewLayer:', previousLayerValue);
 
-    // ✅ 重构：更新 REST 状态（用于断线重连恢复）
+    // ✅ 精简：单一状态源，直接更新 completedLayers
+    // SSE 事件驱动实时更新，REST 轮询用于断线重连恢复
     const backendCompletedData = {
       1: backendData.layer_1_completed || false,
       2: backendData.layer_2_completed || false,
       3: backendData.layer_3_completed || false,
     };
-    setBackendCompletedLayers(backendCompletedData);
 
-    // ✅ 重构：仅当 SSE 未连接时（status === 'idle' 或初始加载），使用 REST 状态恢复
-    // 这样可以处理断线重连的情况，同时避免 REST 轮询覆盖 SSE 的实时状态
     const currentStatus = backendData.status;
-    if (currentStatus === 'idle' || currentStatus === 'completed' || currentStatus === 'failed') {
-      // 会话结束或初始状态，同步 REST 状态到 UI
+    if (currentStatus === 'idle' || currentStatus === 'completed' || currentStatus === 'failed' || currentStatus === 'paused') {
+      // 会话结束、暂停或初始状态时，同步 REST 状态
       setCompletedLayers(backendCompletedData);
-      console.log('[UnifiedPlanningContext] Sync REST state to UI (session ended or idle):', backendCompletedData);
+      console.log('[UnifiedPlanningContext] Sync state from REST:', backendCompletedData);
     }
-    // 注意：运行中的状态由 SSE 的 layer_stream_complete 事件驱动，不在此处更新
+    // 运行中的状态由 SSE 的 layer_completed 事件驱动
 
     // 同步其他状态
     if (backendData.last_checkpoint_id) {
@@ -351,8 +338,8 @@ export function UnifiedPlanningProvider({
     };
   }, []);
 
-  // ✅ 新增：SSE 驱动的层级完成状态更新
-  // 此函数由 SSE 的 layer_stream_complete 事件调用
+  // ✅ SSE 驱动的层级完成状态更新
+  // 此函数由 handleLayerCompleted 回调调用
   const setUILayerCompleted = useCallback((layer: number, completed: boolean) => {
     setCompletedLayers(prev => {
       if (prev[layer as 1 | 2 | 3] === completed) {
@@ -363,12 +350,6 @@ export function UnifiedPlanningProvider({
       return newState;
     });
   }, []);
-
-  // ✅ 新增：从 REST 状态恢复（用于断线重连）
-  const restoreFromBackendState = useCallback(() => {
-    setCompletedLayers(backendCompletedLayers);
-    console.log('[UnifiedPlanningContext] Restored from backend state:', backendCompletedLayers);
-  }, [backendCompletedLayers]);
 
   // Viewer actions
   const showViewer = useCallback(() => setViewerVisible(true), []);
@@ -743,11 +724,8 @@ export function UnifiedPlanningProvider({
     // 同步后端状态
     syncBackendState,
 
-    // ✅ 新增：SSE 驱动的层级完成状态更新
+    // ✅ SSE 驱动的层级完成状态更新
     setUILayerCompleted,
-    
-    // ✅ 新增：从 REST 状态恢复（用于断线重连）
-    restoreFromBackendState,
 
     // Checkpoints
     currentLayer,

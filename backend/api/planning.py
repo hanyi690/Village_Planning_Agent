@@ -683,8 +683,11 @@ async def _execute_graph_in_background(
         sent_layer_started = set()  # 追踪已发送的 layer_started 事件
         async for event in stream_iterator:
             # ✅ 检测层级开始（layer_started 事件）
+            # 修复：仅在非暂停状态下发送，避免前端创建空卡片
             current_layer = event.get("current_layer")
-            if current_layer and current_layer in [1, 2, 3]:
+            pause_after_step = event.get("pause_after_step", False)
+            
+            if current_layer and current_layer in [1, 2, 3] and not pause_after_step:
                 layer_started_key = f"layer_{current_layer}_started"
                 if layer_started_key not in sent_layer_started:
                     # 发送 layer_started 事件
@@ -773,21 +776,6 @@ async def _execute_graph_in_background(
                         logger.info(f"[Planning] [{session_id}]   - pause_after_step: {event.get('pause_after_step', False)}")
                         logger.info(f"[Planning] [{session_id}]   - previous_layer: {event.get('previous_layer', 0)}")
                         logger.info(f"[Planning] [{session_id}]   - 已发送事件: {sent_events}")
-                        
-                        # ✅ 新增：发送 layer_stream_complete 终结信号
-                        # 此事件表示该层的所有维度内容已完全发送完毕
-                        # 前端应只在此事件后更新 completedLayers 状态
-                        stream_complete_event = {
-                            "type": "layer_stream_complete",
-                            "layer": layer_num,
-                            "layer_number": layer_num,
-                            "session_id": session_id,
-                            "message": f"Layer {layer_num} stream complete",
-                            "dimension_count": len(dimension_reports),
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        await _append_session_event_async(session_id, stream_complete_event)
-                        logger.info(f"[Planning] [{session_id}] ✓ layer_stream_complete 事件已发送")
                         # sent_layer_events 和 sent_pause_events 是内存状态,不需要持久化到数据库
                     else:
                         # 重复事件检测
