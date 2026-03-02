@@ -242,14 +242,20 @@ async def sync_documents(background_tasks: BackgroundTasks):
         from src.rag.config import DATA_DIR
         from src.rag.utils.loaders import SUPPORTED_EXTENSIONS
         
+        # 排除的目录（缓存、临时文件等）
+        EXCLUDE_DIRS = {'vectordb', 'backup', 'chroma_db', '__pycache__', '.git'}
+        
         # 获取知识库中已有的文档
         manager = get_kb_manager()
         existing_docs = {d["source"] for d in manager.list_documents()}
         
-        # 扫描源文件目录
+        # 扫描源文件目录，排除缓存目录
         source_files = []
         for ext in SUPPORTED_EXTENSIONS.keys():
-            source_files.extend(DATA_DIR.rglob(f"*{ext}"))
+            for f in DATA_DIR.rglob(f"*{ext}"):
+                # 排除缓存目录中的文件
+                if not any(excluded in f.parts for excluded in EXCLUDE_DIRS):
+                    source_files.append(f)
         
         # 找出需要添加的文件
         to_add = [f for f in source_files if f.name not in existing_docs]

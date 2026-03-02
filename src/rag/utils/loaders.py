@@ -85,9 +85,16 @@ class FileTypeDetector:
         mime_type = kind.mime
         doc_type = cls.MIME_TYPE_MAP.get(mime_type)
 
+        # OLE 格式处理
         if doc_type == 'ole':
             return 'doc' if ext in ['.doc', '.docx'] else doc_type
 
+        # .doc 扩展名保护：MIME 可能被误识别为 xls
+        if ext == '.doc' and doc_type in ['xls', 'xlsx']:
+            print(f"⚠️  检测到 .doc 文件被误识别为 {doc_type}，已修正为 doc")
+            return 'doc'
+
+        # .docx 文件伪装检测
         if ext == '.docx' and mime_type in [
             'application/vnd.ms-excel',
             'application/wps-office.xls',
@@ -97,6 +104,82 @@ class FileTypeDetector:
             return 'doc'
 
         return doc_type or cls.EXT_TYPE_MAP.get(ext, 'unknown')
+
+
+# ==================== .doc 文件转换器 ====================
+
+class DocToDocxConverter:
+    """
+    将旧版 .doc 文件转换为 .docx 格式
+    
+    MarkItDown 不支持旧版 .doc (OLE 格式)，需要先转换为 .docx
+    使用 Windows COM 接口 (需要安装 Microsoft Word)
+    """
+
+    @staticmethod
+    def is_available() -> bool:
+        """检查转换器是否可用（是否有 win32com）"""
+        try:
+            import win32com.client
+            return True
+        except ImportError:
+            return False
+
+    @staticmethod
+    def convert(doc_path: Path, output_dir: Optional[Path] = None) -> Optional[Path]:
+        """
+        将 .doc 文件转换为 .docx
+        
+        Args:
+            doc_path: .doc 文件路径
+            output_dir: 输出目录，默认为临时目录
+            
+        Returns:
+            转换后的 .docx 文件路径，失败返回 None
+        """
+        try:
+            import win32com.client
+            import tempfile
+        except ImportError:
+            print("❌ win32com 未安装，无法转换 .doc 文件。请运行: pip install pywin32")
+            return None
+
+        if not doc_path.exists():
+            print(f"❌ 文件不存在: {doc_path}")
+            return None
+
+        # 设置输出路径
+        if output_dir is None:
+            output_dir = Path(tempfile.gettempdir()) / "doc_conversions"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        docx_path = output_dir / (doc_path.stem + ".docx")
+
+        # 如果已存在转换后的文件，直接返回
+        if docx_path.exists():
+            print(f"✅ 使用已转换的文件: {docx_path}")
+            return docx_path
+
+        try:
+            print(f"🔄 正在转换 .doc 为 .docx: {doc_path.name} ...")
+            
+            word = win32com.client.Dispatch('Word.Application')
+            word.Visible = False
+            
+            # 打开 .doc 文件
+            doc = word.Documents.Open(str(doc_path.absolute()))
+            
+            # 保存为 .docx (格式代码 16 = wdFormatXMLDocument)
+            doc.SaveAs(str(docx_path.absolute()), FileFormat=16)
+            doc.Close()
+            word.Quit()
+            
+            print(f"✅ 转换成功: {docx_path}")
+            return docx_path
+            
+        except Exception as e:
+            print(f"❌ 转换失败: {e}")
+            return None
 
 
 # ==================== Markdown 清理 ====================
@@ -209,6 +292,10 @@ class MarkItDownLoader(BaseDocumentLoader):
     
     支持格式: doc, docx, pdf, ppt, pptx, xls, xlsx, epub, html
     
+    注意:
+    - 旧版 .doc (OLE格式) 会自动转换为 .docx 后再解析
+    - 需要 pywin32 才能处理 .doc 文件
+    
     优势:
     - 跨平台兼容（无需 Linux 工具）
     - 统一输出 Markdown 格式
@@ -221,10 +308,22 @@ class MarkItDownLoader(BaseDocumentLoader):
         self._validate_file()
         
         file_ext = self.file_path.suffix.lower()
+        actual_file = self.file_path
+        
+        # 特殊处理 .doc 文件：先转换为 .docx
+        if file_ext == '.doc':
+            actual_file = self._convert_doc_to_docx()
+            if actual_file is None:
+                raise Exception(
+                    "无法解析 .doc 文件。请安装 pywin32: pip install pywin32\n"
+                    "或将文件另存为 .docx 格式后重新上传。"
+                )
+            file_ext = '.docx'
+        
         print(f"📄 正在使用 MarkItDown 读取: {self.file_path.name} ({file_ext}) ...")
         
         try:
-            markdown_content = self._convert_with_markitdown()
+            markdown_content = self._convert_with_markitdown(actual_file)
             return self._parse_markdown(markdown_content, file_ext)
         except ImportError:
             raise Exception(
@@ -233,7 +332,11 @@ class MarkItDownLoader(BaseDocumentLoader):
         except Exception as e:
             raise Exception(f"MarkItDown 解析失败: {e}")
 
-    def _convert_with_markitdown(self) -> str:
+    def _convert_doc_to_docx(self) -> Optional[Path]:
+        """将 .doc 文件转换为 .docx"""
+        return DocToDocxConverter.convert(self.file_path)
+
+    def _convert_with_markitdown(self, file_path: Optional[Path] = None) -> str:
         """使用 MarkItDown 转换文档为 Markdown"""
         try:
             from markitdown import MarkItDown
@@ -242,8 +345,9 @@ class MarkItDownLoader(BaseDocumentLoader):
         
         md = MarkItDown(enable_plugins=False)
         
-        file_ext = self.file_path.suffix.lower()
-        result = md.convert(str(self.file_path))
+        # 使用传入的文件路径或原始路径
+        target_path = file_path or self.file_path
+        result = md.convert(str(target_path))
         
         return result.text_content
 

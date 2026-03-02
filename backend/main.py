@@ -4,8 +4,12 @@ FastAPI Backend Application - 村庄规划智能体后端服务
 
 from __future__ import annotations
 
-import logging
+# ⚠️ CRITICAL: 必须在所有其他导入之前设置 HuggingFace 镜像
+# huggingface_hub 在导入时读取 HF_ENDPOINT，之后设置无效
 import os
+os.environ['HF_ENDPOINT'] = os.getenv('HF_ENDPOINT', 'https://hf-mirror.com')
+
+import logging
 import sys
 import uuid
 from contextlib import asynccontextmanager

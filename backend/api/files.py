@@ -19,6 +19,10 @@ from pydantic import BaseModel, Field
 from pathlib import Path
 import logging
 import io
+import tempfile
+
+# 导入 .doc 文件转换器
+from src.rag.utils.loaders import DocToDocxConverter
 
 router = APIRouter()
 
@@ -155,6 +159,59 @@ def convert_with_markitdown(content: bytes, file_extension: str) -> tuple[str, s
         raise
 
 
+def _process_doc_file(content: bytes, filename: str) -> tuple[str, str]:
+    """
+    处理 .doc 文件：先转换为 .docx，再用 MarkItDown 解析
+    
+    MarkItDown 不支持旧版 .doc (OLE 格式)，
+    需要使用 DocToDocxConverter (win32com) 先转换为 .docx
+    
+    Args:
+        content: 原始文件字节
+        filename: 文件名（用于日志）
+        
+    Returns:
+        Tuple of (markdown_content, 'markitdown')
+        
+    Raises:
+        Exception: 如果转换或解析失败
+    """
+    # 检查转换器是否可用
+    if not DocToDocxConverter.is_available():
+        raise Exception(
+            "无法处理 .doc 文件。请安装 pywin32: pip install pywin32\n"
+            "或将文件另存为 .docx 格式后重新上传。"
+        )
+    
+    # 保存到临时文件
+    with tempfile.NamedTemporaryFile(suffix='.doc', delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+    
+    try:
+        # 转换 .doc 为 .docx
+        logger.info(f"[Upload] Converting .doc to .docx: {filename}")
+        docx_path = DocToDocxConverter.convert(tmp_path)
+        
+        if docx_path is None:
+            raise Exception("doc 到 docx 转换失败")
+        
+        # 读取转换后的 .docx 文件
+        with open(docx_path, 'rb') as f:
+            docx_content = f.read()
+        
+        # 用 MarkItDown 处理 .docx
+        logger.info(f"[Upload] Processing converted .docx file")
+        decoded_content, encoding = convert_with_markitdown(docx_content, '.docx')
+        
+        return decoded_content, encoding
+        
+    finally:
+        # 清理临时文件
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
 # ============================================
 # File Endpoints
 # ============================================
@@ -193,6 +250,13 @@ async def upload_file(file: UploadFile = File(...)):
             # 无扩展名，尝试作为文本处理
             logger.info(f"[Upload] No file extension, treating as text")
             decoded_content, encoding = decode_text_content(content)
+        elif file_ext == '.doc':
+            # 特殊处理 .doc 文件：MarkItDown 不支持 OLE 格式，需要先转换
+            logger.info(f"[Upload] Processing .doc file (OLE format), converting to .docx...")
+            try:
+                decoded_content, encoding = _process_doc_file(content, file.filename)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f".doc 文件处理失败: {str(e)}")
         elif file_ext in MARKITDOWN_EXTENSIONS:
             # 使用 MarkItDown 转换
             logger.info(f"[Upload] Using MarkItDown for {file_ext} file")

@@ -84,22 +84,26 @@ def check_model_cached(model_name: str = None) -> bool:
     if not model_cache_path.exists():
         return False
     
-    # 检查是否有 .no_exist 标记（表示之前下载失败）
-    no_exist_path = model_cache_path / ".no_exist"
-    if no_exist_path.exists():
-        return False
-    
     # 检查 snapshots 目录是否有内容
     snapshots_dir = model_cache_path / "snapshots"
     if not snapshots_dir.exists():
         return False
     
     # 检查是否有有效的 snapshot（包含模型文件）
+    no_exist_path = model_cache_path / ".no_exist"
     for snapshot in snapshots_dir.iterdir():
         if snapshot.is_dir():
             # 检查是否有模型文件（.bin 或 .safetensors）
             has_model = list(snapshot.glob("*.bin")) or list(snapshot.glob("*.safetensors"))
             if has_model:
+                # 模型文件存在，清除可能存在的过期 .no_exist 标记
+                # （之前下载可能中途失败留下了标记，但模型文件后来已完整下载）
+                if no_exist_path.exists():
+                    try:
+                        no_exist_path.unlink()
+                        print(f"🧹 已清除过期的 .no_exist 标记文件")
+                    except Exception:
+                        pass  # 忽略删除失败
                 return True
     
     return False

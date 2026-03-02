@@ -17,16 +17,32 @@ from src.rag.config import CHROMA_PERSIST_DIR
 # ==================== 数据结构 ====================
 
 @dataclass
+class ChunkInfo:
+    """文档切片信息"""
+    chunk_index: int
+    start_index: int
+    content_preview: str
+
+
+@dataclass
 class DocumentIndex:
     """原文档索引条目"""
     source: str
     doc_type: str
-    full_content: str
-    metadata: dict
-    chunks_info: list[dict]
+    total_chunks: int = 0
+    full_content: str = ""
+    metadata: dict = None
+    chunks_info: list = None
     executive_summary: str | None = None
-    chapter_summaries: list[dict] | None = None
-    key_points: list[str] | None = None
+    chapter_summaries: list | None = None
+    key_points: list | None = None
+
+    def __post_init__(self):
+        """初始化默认值"""
+        if self.metadata is None:
+            self.metadata = {}
+        if self.chunks_info is None:
+            self.chunks_info = []
 
 
 # ==================== 文档上下文管理器 ====================
