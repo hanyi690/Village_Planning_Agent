@@ -1,5 +1,72 @@
 # 村庄规划系统 - 服务管理指南
 
+## 环境配置
+
+### 1. 复制配置文件
+
+```bash
+cp .env.example .env
+```
+
+### 2. 配置 LLM API
+
+在 `.env` 文件中配置 LLM 服务：
+
+```env
+# DeepSeek (推荐)
+OPENAI_API_KEY=your_deepseek_api_key
+OPENAI_API_BASE=https://api.deepseek.com/v1
+LLM_MODEL=deepseek-chat
+
+# 或使用智谱 AI
+# ZHIPUAI_API_KEY=your_zhipuai_api_key
+# LLM_MODEL=glm-4-flash
+```
+
+### 3. 配置 Embedding 模型
+
+支持两种 Embedding 方案：
+
+#### 方案一：本地模型（默认）
+
+```env
+EMBEDDING_PROVIDER=local
+EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
+EMBEDDING_DEVICE=cpu
+HF_ENDPOINT=https://hf-mirror.com
+```
+
+#### 方案二：阿里云 Embedding API
+
+```env
+EMBEDDING_PROVIDER=aliyun
+DASHSCOPE_API_KEY=your_dashscope_api_key
+ALIYUN_EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_DIMENSIONS=1024
+```
+
+| 配置项                     | 说明                                 |
+| -------------------------- | ------------------------------------ |
+| `EMBEDDING_PROVIDER`     | `local` 或 `aliyun`              |
+| `DASHSCOPE_API_KEY`      | 阿里云百炼 API Key                   |
+| `ALIYUN_EMBEDDING_MODEL` | 模型名称，推荐 `text-embedding-v4` |
+| `EMBEDDING_DIMENSIONS`   | 向量维度，默认 1024                  |
+
+> **注意**：切换 Embedding 方案后需要重建知识库，因为向量维度不同。
+
+### 4. 知识库构建
+
+```bash
+# 首次使用或切换 Embedding 方案后执行
+python src/rag/build.py
+```
+
+构建过程会：
+
+1. 加载 `data/policies/` 下的文档
+2. 切分文档并生成向量
+3. 存储到 `knowledge_base/chroma_db/`
+
 ## 快速启动
 
 ### Windows 用户
@@ -96,7 +163,7 @@ pkill -f "next dev"
 
 ### 1. 访问前端
 
-打开浏览器访问: http://localhost:3001
+打开浏览器访问: http://localhost:3000
 
 ### 2. 测试规划流程
 
@@ -185,6 +252,31 @@ lsof -ti:8000 | xargs kill -9
 2. 重启服务
 3. 检查端口是否被占用
 4. 确认Python和Node.js环境正常
+
+### Q: Embedding 模型加载失败
+
+**A**: 检查以下几点：
+
+1. **本地模型**：确保网络可访问 HuggingFace 镜像
+
+   ```bash
+   # 测试镜像连接
+   curl https://hf-mirror.com
+   ```
+2. **阿里云 API**：确保 `DASHSCOPE_API_KEY` 已正确配置
+
+   ```bash
+   # 验证配置
+   python -c "from src.rag.config import DASHSCOPE_API_KEY; print(DASHSCOPE_API_KEY)"
+   ```
+
+### Q: 知识库查询无结果
+
+**A**: 可能原因：
+
+1. 知识库未构建：运行 `python src/rag/build.py`
+2. 切换了 Embedding 方案但未重建：删除 `knowledge_base/chroma_db/` 后重新构建
+3. 文档格式不支持：检查 `data/policies/` 目录下的文件格式
 
 ## 开发工具推荐
 
