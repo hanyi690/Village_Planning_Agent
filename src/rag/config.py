@@ -31,11 +31,27 @@ QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "rural_planning")
 
 # ==================== Embedding 模型配置 ====================
+# Embedding Provider: local (HuggingFace 本地) 或 aliyun (阿里云 DashScope API)
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local")
+
+# 本地模型配置 (EMBEDDING_PROVIDER=local)
 EMBEDDING_MODEL_NAME = os.getenv(
     "EMBEDDING_MODEL_NAME",
     "BAAI/bge-small-zh-v1.5"  # 中文 Embedding 模型
 )
 EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")  # 可选: cuda, mps
+
+# 阿里云 DashScope Embedding API 配置 (EMBEDDING_PROVIDER=aliyun)
+# 文档: https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
+ALIYUN_EMBEDDING_BASE_URL = os.getenv(
+    "ALIYUN_EMBEDDING_BASE_URL",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1"
+)
+# 支持的模型: text-embedding-v4 (推荐), text-embedding-v3, text-embedding-v2
+# text-embedding-v4 支持可变维度: 2048/1536/1024/768/512/256/128/64
+ALIYUN_EMBEDDING_MODEL = os.getenv("ALIYUN_EMBEDDING_MODEL", "text-embedding-v4")
+EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", "1024"))
 
 # ==================== HuggingFace 镜像和离线配置 ====================
 # 国内镜像站点（首次下载模型时使用）

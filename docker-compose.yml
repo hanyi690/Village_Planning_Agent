@@ -23,17 +23,23 @@ services:
     environment:
       - ENVIRONMENT=production
       - USE_ASYNC_DATABASE=true
+      # LLM Configuration
       - ZHIPUAI_API_KEY=${ZHIPUAI_API_KEY}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_API_BASE=${OPENAI_API_BASE}
-      - LLM_MODEL=${LLM_MODEL:-glm-4-flash}
-      - LLM_PROVIDER=${LLM_PROVIDER:-zhipuai}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8000}
       # Embedding Model Configuration
+      # Provider: local (HuggingFace) 或 aliyun (阿里云 DashScope API)
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-aliyun}
       - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-BAAI/bge-small-zh-v1.5}
       - EMBEDDING_DEVICE=${EMBEDDING_DEVICE:-cpu}
-      # HuggingFace Configuration
+      # Aliyun DashScope Embedding API
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - ALIYUN_EMBEDDING_MODEL=${ALIYUN_EMBEDDING_MODEL:-text-embedding-v4}
+      # HuggingFace Configuration (仅 EMBEDDING_PROVIDER=local 时需要)
       - HF_HOME=/app/models
       - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
       - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-}
@@ -43,17 +49,20 @@ services:
       - ./logs:/app/logs
       - ./results:/app/results
       - ./knowledge_base:/app/knowledge_base
-      # Models directory (pre-downloaded during build, persistent via volume)
+      # Models directory (仅 EMBEDDING_PROVIDER=local 时需要)
+      # 使用阿里云在线 Embedding 时可以注释掉此行
       - ./models:/app/models
-    # Resource limits
+    # Resource limits (使用在线 API 后内存需求降低)
+    # local embedding: 需要 4G 内存
+    # aliyun embedding: 只需要 2G 内存
     deploy:
       resources:
         limits:
           cpus: '2'
-          memory: 4G
+          memory: 2G
         reservations:
-          cpus: '0.5'
-          memory: 1G
+          cpus: '0.25'
+          memory: 512M
     # Log rotation
     logging:
       driver: "json-file"
@@ -93,10 +102,10 @@ services:
       resources:
         limits:
           cpus: '1'
-          memory: 2G
+          memory: 1G
         reservations:
           cpus: '0.25'
-          memory: 512M
+          memory: 256M
     # Log rotation
     logging:
       driver: "json-file"

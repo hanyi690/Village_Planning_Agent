@@ -69,12 +69,20 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV ENVIRONMENT=production
 ENV USE_ASYNC_DATABASE=true
 
-# HuggingFace Configuration
-# Use /app/models for model storage (persistent via volume mount)
-ENV HF_HOME=/app/models
-ENV HF_ENDPOINT=https://hf-mirror.com
-ENV EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
-ENV EMBEDDING_DEVICE=cpu
+# Embedding Configuration (set via environment variables in docker-compose.yml)
+# EMBEDDING_PROVIDER=local: uses HuggingFace local model (requires ~1-2GB RAM)
+# EMBEDDING_PROVIDER=aliyun: uses Aliyun DashScope API (minimal RAM, recommended for low-memory servers)
+# 
+# For local embedding, set these in docker-compose.yml:
+#   HF_HOME=/app/models
+#   HF_ENDPOINT=https://hf-mirror.com
+#   EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
+#   EMBEDDING_DEVICE=cpu
+#
+# For aliyun embedding, set these in docker-compose.yml:
+#   EMBEDDING_PROVIDER=aliyun
+#   DASHSCOPE_API_KEY=your_api_key
+#   ALIYUN_EMBEDDING_MODEL=text-embedding-v4
 
 # Model will be loaded at runtime from mounted volume or downloaded on first run
 # Pre-downloading during build causes large image size and build failures

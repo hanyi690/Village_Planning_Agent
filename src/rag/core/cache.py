@@ -20,8 +20,71 @@ from src.rag.config import (
     CHROMA_COLLECTION_NAME,
     CHROMA_PERSIST_DIR,
     EMBEDDING_MODEL_NAME,
+    EMBEDDING_PROVIDER,
+    DASHSCOPE_API_KEY,
+    ALIYUN_EMBEDDING_BASE_URL,
+    ALIYUN_EMBEDDING_MODEL,
+    EMBEDDING_DIMENSIONS,
     setup_huggingface_env,
 )
+
+
+class AliyunEmbeddings:
+    """
+    阿里云 Embedding API 封装类（OpenAI 兼容格式）
+    
+    使用 OpenAI SDK 调用阿里云 DashScope Embedding API，
+    自动处理批量限制（text-embedding-v4 批量最多 10 条）。
+    """
+    
+    # text-embedding-v4 批量限制为 10
+    BATCH_SIZE = 10
+    
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str = "text-embedding-v4",
+    ):
+        from openai import OpenAI
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.model = model
+    
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """
+        嵌入文档列表（自动分批处理）
+        
+        Args:
+            texts: 文本列表
+            
+        Returns:
+            嵌入向量列表
+        """
+        all_embeddings = []
+        for i in range(0, len(texts), self.BATCH_SIZE):
+            batch = texts[i:i + self.BATCH_SIZE]
+            response = self.client.embeddings.create(
+                model=self.model,
+                input=batch,
+            )
+            all_embeddings.extend([item.embedding for item in response.data])
+        return all_embeddings
+    
+    def embed_query(self, text: str) -> List[float]:
+        """
+        嵌入单个查询
+        
+        Args:
+            text: 查询文本
+            
+        Returns:
+            嵌入向量
+        """
+        response = self.client.embeddings.create(
+            model=self.model,
+            input=text,
+        )
+        return response.data[0].embedding
 
 
 class VectorStoreCache:
@@ -71,31 +134,62 @@ class VectorStoreCache:
         """
         懒加载并缓存 Embedding 模型
 
+        支持两种模式:
+        - local: 使用 HuggingFace 本地模型 (默认)
+        - aliyun: 使用阿里云 DashScope Embedding API
+
         Returns:
-            HuggingFaceEmbeddings 实例
+            HuggingFaceEmbeddings 或 OpenAIEmbeddings 实例
         """
         if self._embedding_model is None:
-            # 配置 HuggingFace 环境（离线模式/镜像站点）
-            # 必须在导入 HuggingFaceEmbeddings 之前调用
-            setup_huggingface_env()
-
-            # 再次确保环境变量已设置（防止被其他代码覆盖）
-            import os
-            if os.environ.get("HF_HUB_OFFLINE") == "1":
-                print("🔒 强制离线模式已启用")
-            elif os.environ.get("HF_ENDPOINT"):
-                print(f"🌐 使用镜像站点: {os.environ.get('HF_ENDPOINT')}")
-
-            from langchain_huggingface import HuggingFaceEmbeddings
-
-            print("📥 正在加载 Embedding 模型...")
-            self._embedding_model = HuggingFaceEmbeddings(
-                model_name=EMBEDDING_MODEL_NAME,
-                encode_kwargs={"normalize_embeddings": True},
-            )
-            print(f"✅ Embedding 模型已缓存: {EMBEDDING_MODEL_NAME}")
+            if EMBEDDING_PROVIDER == "aliyun":
+                # 阿里云 DashScope Embedding API (OpenAI 兼容接口)
+                self._init_aliyun_embedding()
+            else:
+                # 本地 HuggingFace 模型
+                self._init_local_embedding()
 
         return self._embedding_model
+
+    def _init_local_embedding(self):
+        """初始化本地 HuggingFace Embedding 模型"""
+        # 配置 HuggingFace 环境（离线模式/镜像站点）
+        # 必须在导入 HuggingFaceEmbeddings 之前调用
+        setup_huggingface_env()
+
+        # 再次确保环境变量已设置（防止被其他代码覆盖）
+        import os
+        if os.environ.get("HF_HUB_OFFLINE") == "1":
+            print("🔒 强制离线模式已启用")
+        elif os.environ.get("HF_ENDPOINT"):
+            print(f"🌐 使用镜像站点: {os.environ.get('HF_ENDPOINT')}")
+
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        print("📥 正在加载本地 Embedding 模型...")
+        self._embedding_model = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL_NAME,
+            encode_kwargs={"normalize_embeddings": True},
+        )
+        print(f"✅ 本地 Embedding 模型已缓存: {EMBEDDING_MODEL_NAME}")
+
+    def _init_aliyun_embedding(self):
+        """初始化阿里云 DashScope Embedding API（OpenAI 兼容格式）"""
+        if not DASHSCOPE_API_KEY:
+            raise ValueError(
+                "EMBEDDING_PROVIDER=aliyun 但未设置 DASHSCOPE_API_KEY。"
+                "请在 .env 中配置 DASHSCOPE_API_KEY=your_api_key"
+            )
+
+        print(f"🌐 正在连接阿里云 Embedding API: {ALIYUN_EMBEDDING_MODEL}")
+        # 使用自定义 AliyunEmbeddings 类（OpenAI 兼容格式）
+        # 自动处理批量限制（text-embedding-v4 批量最多 10 条）
+        self._embedding_model = AliyunEmbeddings(
+            api_key=DASHSCOPE_API_KEY,
+            base_url=ALIYUN_EMBEDDING_BASE_URL,
+            model=ALIYUN_EMBEDDING_MODEL,
+        )
+        print(f"✅ 阿里云 Embedding 已就绪: {ALIYUN_EMBEDDING_MODEL} (默认维度: 1024)")
 
     def get_vectorstore(self):
         """
