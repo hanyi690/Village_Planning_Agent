@@ -20,6 +20,7 @@ interface MessageContentProps {
   message: Message;
   onAction?: (action: ActionButton, message: Message) => void;
   enableStreaming?: boolean;
+  dimensionContents?: Map<string, string>;  // 实时流式内容（用于 token 级显示）
 }
 
 // Progress Message Renderer
@@ -114,7 +115,7 @@ function renderDimensionReportMessage(message: Message) {
 
 // Main Message Content Renderer
 export default function MessageContent(props: MessageContentProps) {
-  const { message, onAction, enableStreaming = true } = props;
+  const { message, onAction, enableStreaming = true, dimensionContents } = props;
 
   switch (message.type) {
     case 'text':
@@ -137,7 +138,10 @@ export default function MessageContent(props: MessageContentProps) {
 
     case 'layer_completed':
       return isLayerCompletedMessage(message) ? (
-        <LayerReportMessage message={message} />
+        <LayerReportMessage 
+          message={message} 
+          dimensionContents={dimensionContents}
+        />
       ) : null;
 
     case 'dimension_report':

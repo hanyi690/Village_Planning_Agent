@@ -19,6 +19,7 @@ interface MessageBubbleProps {
   onCopy?: (message: Message) => void;
   onRegenerate?: (message: Message) => void;
   enableStreaming?: boolean;
+  dimensionContents?: Map<string, string>;  // 实时流式内容（用于 token 级显示）
   children?: React.ReactNode;
 }
 
@@ -28,6 +29,7 @@ export default function MessageBubble({
   onCopy,
   onRegenerate,
   enableStreaming = true,
+  dimensionContents,
   children,
 }: MessageBubbleProps) {
   const [isHovered, setIsHovered] = useState(false);
@@ -87,6 +89,7 @@ export default function MessageBubble({
             message={message}
             onAction={onAction}
             enableStreaming={enableStreaming}
+            dimensionContents={dimensionContents}
           />
         )}
 

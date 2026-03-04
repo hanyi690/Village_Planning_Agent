@@ -162,6 +162,7 @@ export default function MessageList({
             onCopy={handleCopy}
             onRegenerate={handleRegenerate}
             enableStreaming={enableStreaming}
+            dimensionContents={dimensionContents}
           />
         );
       })}
