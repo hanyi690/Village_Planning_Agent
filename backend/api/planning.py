@@ -1034,13 +1034,17 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
         logger.error(f"[Planning API] [{session_id}] 持久化状态失败: {db_error}", exc_info=True)
         # 继续执行,不阻断恢复流程
 
-    # ✅ 使用 graph.aupdate_state 清除暂停标志（如果需要）
+    # ✅ 使用 graph.aupdate_state 清除暂停标志和 previous_layer（如果需要）
+    # 同时清除 previous_layer，避免 init_pause_state 在恢复后重新设置 pause_after_step = True
     if full_state.get("pause_after_step", False):
         await graph.aupdate_state(
             config,
-            {"pause_after_step": False}
+            {
+                "pause_after_step": False,
+                "previous_layer": 0,  # 清除 previous_layer，避免重复暂停
+            }
         )
-        logger.info(f"[Planning API] [{session_id}] 已清除 pause_after_step 标志")
+        logger.info(f"[Planning API] [{session_id}] 已清除 pause_after_step 和 previous_layer 标志")
 
     # Reset stream state
     _set_stream_state(session_id, "active")

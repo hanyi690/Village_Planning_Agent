@@ -28,7 +28,7 @@ import ReviewPanel from './ReviewPanel';
 import DimensionSelector from './DimensionSelector';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEdit, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
-import { getDimensionName } from '@/config/dimensions';
+import { getDimensionName, getDimensionsByLayer, DIMENSION_NAMES } from '@/config/dimensions';
 import { PLANNING_DEFAULTS } from '@/config/planning';
 import {
   LAYER_OPTIONS_ARRAY,
@@ -336,7 +336,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     }
   }, [messages, addMessage, setMessages, showViewer]);
 
-  // ✅ 新增：处理层级开始事件 - 创建空的 LayerReportMessage
+  // ✅ 新增：处理层级开始事件 - 创建空的 LayerReportMessage（预填充维度槽位）
   const handleLayerStarted = useCallback((layer: number, layerName: string) => {
     console.log(`[ChatPanel] Layer ${layer} started - ${layerName}`);
 
@@ -346,13 +346,22 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       3: '详细规划',
     };
 
-    // 创建层级报告消息（空的，等待维度内容流式更新）
+    // 创建层级报告消息（预填充维度槽位，等待流式更新）
     const layerReportId = `layer_report_${layer}`;
     
     // 检查该层是否已有 LayerReportMessage
     const hasLayerReport = messages.some(m => m.id === layerReportId);
     
     if (!hasLayerReport) {
+      // ✅ 预先获取该层级的所有维度，创建空槽位
+      const dimensionKeys = getDimensionsByLayer(layer);
+      const emptyDimensionReports: Record<string, string> = {};
+      dimensionKeys.forEach(key => {
+        emptyDimensionReports[key] = '';  // 空字符串，等待流式填充
+      });
+      
+      console.log(`[ChatPanel] Pre-creating ${dimensionKeys.length} dimension slots for Layer ${layer}`);
+      
       addMessage({
         ...createBaseMessage('assistant'),
         id: layerReportId,
@@ -362,10 +371,10 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         summary: {
           word_count: 0,
           key_points: [],
-          dimension_count: 0,
+          dimension_count: dimensionKeys.length,  // 预设维度数量
         },
         fullReportContent: '',
-        dimensionReports: {},  // 空的，等待维度内容流式更新
+        dimensionReports: emptyDimensionReports,  // ✅ 预填充空维度槽位
         actions: [],
       });
     }
