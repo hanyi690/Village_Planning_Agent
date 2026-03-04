@@ -140,12 +140,13 @@ def initialize_revision(state: RevisionState) -> Dict[str, Any]:
             "revision_history": []
         }
     
+    min_wave = min(wave_dimensions.keys())
     max_wave = max(wave_dimensions.keys())
     logger.info(f"[Revision-初始化] Wave 分布: {[(w, len(d)) for w, d in wave_dimensions.items()]}")
-    logger.info(f"[Revision-初始化] 最大 Wave: {max_wave}")
+    logger.info(f"[Revision-初始化] Wave 范围: {min_wave} - {max_wave}")
     
     return {
-        "current_wave": 1,
+        "current_wave": min_wave,  # 从最小 wave 开始（可能是 0，包含目标维度）
         "max_wave": max_wave,
         "completed_dimensions": completed_dimensions.copy(),
         "updated_reports": {},
