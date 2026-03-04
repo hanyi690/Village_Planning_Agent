@@ -683,11 +683,19 @@ async def _execute_graph_in_background(
         sent_layer_started = set()  # 追踪已发送的 layer_started 事件
         async for event in stream_iterator:
             # ✅ 检测层级开始（layer_started 事件）
-            # 修复：仅在非暂停状态下发送，避免前端创建空卡片
+            # 修复：步进模式下，刚完成层级时跳过 layer_started（等待恢复时再发送）
             current_layer = event.get("current_layer")
             pause_after_step = event.get("pause_after_step", False)
+            previous_layer = event.get("previous_layer", 0)
+            step_mode = event.get("step_mode", False)
             
-            if current_layer and current_layer in [1, 2, 3] and not pause_after_step:
+            # 步进模式下，刚完成层级时跳过 layer_started（等待恢复）
+            # previous_layer > 0 表示刚完成一个层级，此时应该暂停等待审查
+            skip_layer_started = previous_layer > 0 and step_mode
+            
+            if skip_layer_started:
+                logger.info(f"[Planning] [{session_id}] 步进模式：跳过 layer_started 发送（previous_layer={previous_layer}，等待恢复）")
+            elif current_layer and current_layer in [1, 2, 3] and not pause_after_step:
                 layer_started_key = f"layer_{current_layer}_started"
                 if layer_started_key not in sent_layer_started:
                     # 发送 layer_started 事件
