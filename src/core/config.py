@@ -10,7 +10,7 @@ ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY")
 # LLM Configuration
 LLM_MODEL = os.getenv("LLM_MODEL", "glm-4-flash")  # Default to GLM for fast, cost-effective inference
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "zhipuai")  # Options: "auto", "openai", "zhipuai"
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", "1500"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "4000"))  # 提高上限以支持 Layer 3 详细规划的完整输出
 
 # OpenAI-compatible API base URL (for DeepSeek, etc.)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")

@@ -11,7 +11,6 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.rag.config import (
@@ -22,6 +21,11 @@ from src.rag.config import (
     DATA_DIR,
     EMBEDDING_MODEL_NAME,
     EMBEDDING_DEVICE,
+    EMBEDDING_PROVIDER,
+    DASHSCOPE_API_KEY,
+    ALIYUN_EMBEDDING_BASE_URL,
+    ALIYUN_EMBEDDING_MODEL,
+    EMBEDDING_DIMENSIONS,
     VECTOR_DB_TYPE,
     DEFAULT_PROVIDER,
     is_docker,
@@ -126,26 +130,15 @@ def build_vector_store(splits):
     """
     构建向量存储
     支持多种向量数据库（Chroma/FAISS/Qdrant）
+    支持 Embedding 模式: local (HuggingFace) / aliyun (DashScope API)
     """
-    # 配置 HuggingFace 环境（离线模式/镜像站点）
-    setup_huggingface_env()
-
-    print(f"\n🧠 正在初始化 Embedding 模型: {EMBEDDING_MODEL_NAME}")
-
-    # 检测是否在 Docker 中运行
-    if is_docker():
-        print("🐳 检测到 Docker 环境，使用 CPU 推理")
-        device = "cpu"
-    else:
-        device = EMBEDDING_DEVICE
-        print(f"💻 设备: {device}")
+    print(f"\n🧠 正在初始化 Embedding 模型...")
 
     # 初始化 Embedding 模型
-    embedding_model = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL_NAME,
-        model_kwargs={"device": device},
-        encode_kwargs={"normalize_embeddings": True},  # 归一化向量
-    )
+    if EMBEDDING_PROVIDER == "aliyun":
+        embedding_model = _init_aliyun_embedding()
+    else:
+        embedding_model = _init_local_embedding()
 
     # 根据配置选择向量数据库
     if VECTOR_DB_TYPE == "chroma":
@@ -177,6 +170,60 @@ def build_vector_store(splits):
 
     else:
         raise ValueError(f"不支持的向量数据库类型: {VECTOR_DB_TYPE}")
+
+
+def _init_local_embedding():
+    """初始化本地 HuggingFace Embedding 模型"""
+    # 配置 HuggingFace 环境（离线模式/镜像站点）
+    setup_huggingface_env()
+
+    from langchain_huggingface import HuggingFaceEmbeddings
+
+    print(f"   Provider: local (HuggingFace)")
+    print(f"   Model: {EMBEDDING_MODEL_NAME}")
+
+    # 检测是否在 Docker 中运行
+    if is_docker():
+        print("🐳 检测到 Docker 环境，使用 CPU 推理")
+        device = "cpu"
+    else:
+        device = EMBEDDING_DEVICE
+        print(f"💻 设备: {device}")
+
+    embedding_model = HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL_NAME,
+        model_kwargs={"device": device},
+        encode_kwargs={"normalize_embeddings": True},  # 归一化向量
+    )
+
+    print(f"✅ 本地 Embedding 模型已加载")
+    return embedding_model
+
+
+def _init_aliyun_embedding():
+    """初始化阿里云 DashScope Embedding API"""
+    if not DASHSCOPE_API_KEY:
+        raise ValueError(
+            "EMBEDDING_PROVIDER=aliyun 但未设置 DASHSCOPE_API_KEY。"
+            "请在 .env 中配置 DASHSCOPE_API_KEY=your_api_key"
+        )
+
+    from langchain_openai import OpenAIEmbeddings
+
+    print(f"   Provider: aliyun (DashScope)")
+    print(f"   Model: {ALIYUN_EMBEDDING_MODEL}")
+    print(f"   Dimensions: {EMBEDDING_DIMENSIONS}")
+    print(f"   Base URL: {ALIYUN_EMBEDDING_BASE_URL}")
+
+    embedding_model = OpenAIEmbeddings(
+        api_key=DASHSCOPE_API_KEY,
+        base_url=ALIYUN_EMBEDDING_BASE_URL,
+        model=ALIYUN_EMBEDDING_MODEL,
+        dimensions=EMBEDDING_DIMENSIONS,
+    )
+
+    print(f"✅ 阿里云 Embedding API 已连接")
+    return embedding_model
 
 
 def main():

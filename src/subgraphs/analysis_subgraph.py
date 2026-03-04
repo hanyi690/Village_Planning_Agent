@@ -163,7 +163,8 @@ def map_dimensions(state: AnalysisState) -> List[Send]:
             "dimension_name": dimension_info["name"],
             "raw_data": state["raw_data"],
             "analysis_result": "",
-            "knowledge_cache": state.get("knowledge_cache", {})  # 新增：传递知识缓存
+            "knowledge_cache": state.get("knowledge_cache", {}),  # 传递知识缓存
+            "session_id": state.get("session_id", "")  # 传递 session_id 用于流式事件
         }
 
         # 创建 Send 对象：发送到 analyze_dimension 节点

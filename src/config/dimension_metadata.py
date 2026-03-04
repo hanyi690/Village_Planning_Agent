@@ -1058,9 +1058,10 @@ def get_revision_wave_dimensions(
                     # 取最小 wave（确保依赖满足）
                     all_impact_dims[dim] = min(all_impact_dims[dim], wave)
     
-    # 过滤已完成的维度
+    # 只保留已完成的维度（有报告的维度才能被修复）
+    # 未完成的维度没有内容可修复，应被过滤掉
     pending_dims = {dim: wave for dim, wave in all_impact_dims.items() 
-                    if dim not in completed_set}
+                    if dim in completed_set}
     
     # 按 wave 分组
     result: Dict[int, List[str]] = {}

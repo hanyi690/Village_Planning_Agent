@@ -276,7 +276,8 @@ def create_parallel_tasks_with_state_filtering(
             "filtered_concept": filtered_concept,
             "task_description": state["task_description"],
             "constraints": state["constraints"],
-            "concept_result": ""
+            "concept_result": "",
+            "session_id": state.get("session_id", "")  # 传递 session_id 用于流式事件
         })
 
         sends.append(Send("analyze_concept_dimension", dimension_state))

@@ -409,7 +409,9 @@ def create_parallel_tasks_with_state_filtering(
             "filtered_concept": filtered_concept,
             "filtered_detail": filtered_detail,
             # 【新增】传递知识缓存
-            "knowledge_cache": state.get("knowledge_cache", {})
+            "knowledge_cache": state.get("knowledge_cache", {}),
+            # 传递 session_id 用于流式事件
+            "session_id": state.get("session_id", "")
         })
 
         sends.append(Send("generate_dimension_plan", dimension_state))

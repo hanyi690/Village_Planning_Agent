@@ -23,7 +23,7 @@ set "LOGS_DIR=%CD%\logs"
 
 REM 2. Start backend service
 echo [INFO] Starting backend service...
-start /B cmd /c "cd /d %BACKEND_DIR% && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 --workers 1 > %LOGS_DIR%\backend_stdout.log 2> %LOGS_DIR%\backend_stderr.log"
+start /B cmd /c "cd /d %BACKEND_DIR% && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 --workers 1 --no-access-log > %LOGS_DIR%\backend_stdout.log 2> %LOGS_DIR%\backend_stderr.log"
 echo   [OK] Backend starting...
 echo.
 

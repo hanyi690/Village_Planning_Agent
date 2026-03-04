@@ -48,7 +48,7 @@ echo ""
 # 3. 启动后端服务
 echo -e "${BLUE}🚀 启动后端服务...${NC}"
 cd backend
-nohup python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 > ../logs/backend_stdout.log 2> ../logs/backend_stderr.log &
+nohup python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 --no-access-log > ../logs/backend_stdout.log 2> ../logs/backend_stderr.log &
 BACKEND_PID=$!
 echo $BACKEND_PID > ../logs/backend.pid
 echo -e "  ${GREEN}✓${NC} 后端启动中... (PID: $BACKEND_PID)"
