@@ -340,12 +340,19 @@ class UnifiedPlannerBase(ABC):
 
         # 调用LLM（流式或阻塞）
         if streaming:
-            # 流式调用
+            # 流式调用：直接在迭代中调用回调
+            # 注意：llm.stream() 不会触发 StreamingCallback.on_llm_new_token()
+            # 所以需要在这里直接调用 on_token_callback
             accumulated = ""
             for chunk in llm.stream([HumanMessage(content=prompt)]):
                 if hasattr(chunk, 'content') and chunk.content:
                     accumulated += chunk.content
-                    # 回调已经在StreamingCallback中处理
+                    # 直接调用回调，将 token 推送到前端
+                    if on_token_callback:
+                        try:
+                            on_token_callback(chunk.content, accumulated)
+                        except Exception as cb_error:
+                            logger.warning(f"[{self.dimension_name}] token回调失败: {cb_error}")
             return accumulated
         else:
             # 阻塞调用（原有逻辑）
