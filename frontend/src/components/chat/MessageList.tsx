@@ -21,6 +21,7 @@ interface MessageListProps {
   onViewLayerDetails?: (layer: number) => void;
   onToggleAllDimensions?: (layer: number, expand: boolean) => void;
   currentLayer?: number;
+  dimensionContents?: Map<string, string>;  // NEW: 实时维度内容（解决并行更新竞态）
 }
 
 // 格式化文件大小
@@ -43,6 +44,7 @@ export default function MessageList({
   onViewLayerDetails,
   onToggleAllDimensions,
   currentLayer,
+  dimensionContents,  // NEW: 实时维度内容
 }: MessageListProps) {
   const handleCopy = (message: Message) => {
     if (message.type === 'text') {
@@ -107,9 +109,10 @@ export default function MessageList({
               <LayerReportMessage
                 message={layerMsg}
                 onOpenInSidebar={onOpenInSidebar}
-                onToggleAll={(expand) => handleToggleAllDimensions(layerMsg.layer, expand)}
+                onToggleAllDimensions={(expand) => handleToggleAllDimensions(layerMsg.layer, expand)}
                 currentLayer={currentLayer}
                 hasStreamingDimensions={hasStreamingDimensions}
+                dimensionContents={dimensionContents}  // NEW: 传递实时维度内容
               />
             </div>
           );

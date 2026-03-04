@@ -180,13 +180,15 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   );
 
   // 维度级流式回调
+  // ✅ 修复：只更新 dimensionContents，不再更新 messages（解决并行更新竞态问题）
+  // LayerReportMessage 组件从 dimensionContents 读取实时内容
   const handleDimensionDelta = useCallback((
     dimensionKey: string,
     delta: string,
     accumulated: string,
     layer?: number
   ) => {
-    // 更新维度内容缓存
+    // 更新维度内容缓存（独立 Map，每个维度更新不会影响其他维度）
     setDimensionContents(prev => {
       const key = `${layer}_${dimensionKey}`;
       return new Map(prev).set(key, accumulated);
@@ -195,43 +197,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     // 使用批处理渲染
     addToken(dimensionKey, delta, accumulated);
 
-    // 获取维度友好名称
-    const dimensionName = getDimensionName(dimensionKey);
-    const layerReportId = `layer_report_${layer}`;
-
-    // ✅ 修改：不再创建消息，直接更新现有的 LayerReportMessage
-    // handleLayerStarted 已经创建了 LayerReportMessage
-    
-    // 更新 LayerReportMessage 中的维度报告内容
-    setMessages(prev => {
-      const existingMsg = prev.find(m => m.id === layerReportId);
-      if (!existingMsg) {
-        // 如果消息不存在（可能是 layer_started 事件还没到），跳过
-        console.warn(`[ChatPanel] LayerReportMessage not found: ${layerReportId}`);
-        return prev;
-      }
-      
-      return prev.map(msg => {
-        if (msg.id === layerReportId && msg.type === 'layer_completed') {
-          const dimensionReports = {
-            ...(msg as LayerCompletedMessage).dimensionReports || {},
-            [dimensionKey]: accumulated,
-          };
-          const wordCount = Object.values(dimensionReports).reduce((sum, content) => sum + content.length, 0);
-          return {
-            ...msg,
-            dimensionReports,
-            summary: {
-              word_count: wordCount as number,
-              key_points: msg.summary?.key_points || [],
-              dimension_count: Object.keys(dimensionReports).length,
-            },
-          };
-        }
-        return msg;
-      });
-    });
-  }, [addToken, setMessages]);
+    // 不再调用 setMessages 更新 dimensionReports，避免竞态条件
+    // LayerReportMessage 组件通过 dimensionContents prop 获取实时内容
+  }, [addToken]);
 
   const handleDimensionComplete = useCallback((
     dimensionKey: string,
@@ -953,6 +921,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
               // TODO: Implement expand/collapse all in LayerReportViewer
             }}
             currentLayer={taskState.current_layer ?? undefined}
+            dimensionContents={dimensionContents}  // NEW: 传递实时维度内容（解决并行更新竞态）
           />
           <div ref={messagesEndRef} />
         </div>

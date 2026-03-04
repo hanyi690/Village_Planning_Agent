@@ -14,36 +14,43 @@ import { getDimensionName, getDimensionIcon } from '@/config/dimensions';
 interface LayerReportMessageProps {
   message: LayerCompletedMessage;
   onOpenInSidebar?: (layer: number) => void;  // NEW: 跳转到侧边栏
-  onToggleAll?: (expand: boolean) => void;
+  onToggleAllDimensions?: (expand: boolean) => void;
   currentLayer?: number;  // NEW: 当前活跃层
   hasStreamingDimensions?: boolean;  // NEW: 是否有流式维度内容
+  dimensionContents?: Map<string, string>;  // NEW: 实时维度内容（解决并行更新竞态）
 }
 
 export default function LayerReportMessage({
   message,
   onOpenInSidebar,
-  onToggleAll,
+  onToggleAllDimensions,
   currentLayer,
   hasStreamingDimensions = false,  // NEW: 是否有流式维度内容
+  dimensionContents,  // NEW: 实时维度内容
 }: LayerReportMessageProps) {
-  // ✅ 使用 dimensionReports 字段，而不是解析 fullReportContent
+  // ✅ 使用 dimensionReports 字段，优先使用 dimensionContents（实时流式内容）
   const dimensions = useMemo(() => {
     const dimensionReports = (message as LayerCompletedMessage).dimensionReports || {};
 
-    // ✅ 添加 Layer 2 专用调试日志
-    if (message.layer === 2) {
-      console.log('[LayerReportMessage] === Layer 2 ===');
-      console.log('[LayerReportMessage] message:', message);
-      console.log('[LayerReportMessage] message.dimensionReports:', message.dimensionReports);
-      console.log('[LayerReportMessage] message.dimensionReports keys:', Object.keys(message.dimensionReports || {}));
-      console.log('[LayerReportMessage] dimensionReports:', dimensionReports);
-      console.log('[LayerReportMessage] dimensionReports keys:', Object.keys(dimensionReports));
-      console.log('[LayerReportMessage] dimensionReports length:', Object.keys(dimensionReports).length);
-      if (dimensionReports) {
-        for (const [key, value] of Object.entries(dimensionReports)) {
-          console.log(`[LayerReportMessage]   - ${key}: ${value.length} chars`);
-        }
+    // ✅ 优先使用 dimensionContents（实时流式内容，解决并行更新竞态问题）
+    if (dimensionContents && dimensionContents.size > 0) {
+      const result: { name: string; content: string; icon: string; subsections: string[] }[] = [];
+      
+      // 遍历 dimensionReports 的键（确保维度顺序正确）
+      for (const key of Object.keys(dimensionReports)) {
+        const contentKey = `${message.layer}_${key}`;
+        // 从 dimensionContents 获取实时内容，如果没有则使用 dimensionReports 中的内容
+        const content = dimensionContents.get(contentKey) || dimensionReports[key] || '';
+        
+        result.push({
+          name: getDimensionName(key),
+          content: content,
+          icon: getDimensionIcon(key),
+          subsections: [],
+        });
       }
+      
+      return result;
     }
 
     // 如果有 dimensionReports，使用它
@@ -58,7 +65,7 @@ export default function LayerReportMessage({
 
     // 回退到解析 fullReportContent
     return parseLayerReport(message.fullReportContent || '');
-  }, [message.dimensionReports, message.fullReportContent]);
+  }, [message.dimensionReports, message.fullReportContent, message.layer, dimensionContents]);
 
   // ✅ 判断是否为当前活跃层
   const isActive = message.layer === currentLayer;
@@ -77,7 +84,7 @@ export default function LayerReportMessage({
         isActive={isActive}  // ✅ 传递活跃状态
         hasStreamingDimensions={hasStreamingDimensions}  // ✅ 传递流式维度状态
         onOpenInSidebar={() => onOpenInSidebar?.(message.layer)}
-        onToggleAll={onToggleAll}
+        onToggleAll={onToggleAllDimensions}
       />
     </div>
   );
