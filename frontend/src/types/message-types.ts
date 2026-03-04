@@ -9,7 +9,7 @@
 import type { BaseMessage, ActionButton, KnowledgeReference } from './message';
 
 // ============================================================================
-// Basic Message Types
+// Core Message Types (实际使用的5种类型)
 // ============================================================================
 
 /**
@@ -48,51 +48,6 @@ export interface ProgressMessage extends BaseMessage {
 }
 
 /**
- * Action Message - Messages with action buttons
- */
-export interface ActionMessage extends BaseMessage {
-  type: 'action';
-  content: string;
-  actions: ActionButton[];
-  taskId?: string;
-}
-
-/**
- * Result Message - Final task results
- */
-export interface ResultMessage extends BaseMessage {
-  type: 'result';
-  content: string;
-  villageName: string;
-  sessionId: string;
-  layers: string[];
-  resultUrl?: string;
-}
-
-/**
- * Error Message - Error notifications
- */
-export interface ErrorMessage extends BaseMessage {
-  type: 'error';
-  content: string;
-  error?: string;
-  recoverable?: boolean;
-}
-
-/**
- * System Message - System-level notifications
- */
-export interface SystemMessage extends BaseMessage {
-  type: 'system';
-  content: string;
-  level?: 'info' | 'warning' | 'error';
-}
-
-// ============================================================================
-// Planning & Review Message Types
-// ============================================================================
-
-/**
  * Dimension Report Message - Real-time streaming dimension report content
  */
 export interface DimensionReportMessage extends BaseMessage {
@@ -125,44 +80,5 @@ export interface LayerCompletedMessage extends BaseMessage {
   fullReportContent?: string;
   dimensionReports?: Record<string, string>;
   actions: ActionButton[];
-}
-
-/**
- * Review Request Message - Request user review/approval
- */
-export interface ReviewRequestMessage extends BaseMessage {
-  type: 'review_request';
-  content: string;
-  layer: number;
-  taskId: string;
-  summary: {
-    word_count: number;
-    section_count: number;
-  };
-  actions: ActionButton[];
-}
-
-/**
- * Checkpoint List Message - Display available checkpoints
- */
-export interface CheckpointListMessage extends BaseMessage {
-  type: 'checkpoint_list';
-  content: string;
-  checkpoints: import('./message').Checkpoint[];
-  currentCheckpoint?: string;
-  actions?: ActionButton[];
-}
-
-/**
- * Dimension Revised Message - Shown when a dimension is revised after feedback
- */
-export interface DimensionRevisedMessage extends BaseMessage {
-  type: 'dimension_revised';
-  layer: number;
-  dimensionKey: string;
-  dimensionName: string;
-  oldContent?: string;
-  newContent: string;
-  feedback?: string;
 }
 

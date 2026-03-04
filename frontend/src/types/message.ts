@@ -90,48 +90,27 @@ export interface PlanningParams {
 // Message Union Type
 // ============================================================================
 
-// Import specific message types and create union
+// Import specific message types and create union (只保留实际使用的5种类型)
 import type {
   TextMessage,
   FileMessage,
   ProgressMessage,
-  ActionMessage,
-  ResultMessage,
-  ErrorMessage,
-  SystemMessage,
   DimensionReportMessage,
   LayerCompletedMessage,
-  DimensionRevisedMessage,
-  CheckpointListMessage,
-  ReviewRequestMessage,
 } from './message-types';
 
 export type Message =
   | TextMessage
   | FileMessage
   | ProgressMessage
-  | ActionMessage
-  | ResultMessage
-  | ErrorMessage
-  | SystemMessage
   | DimensionReportMessage
-  | LayerCompletedMessage
-  | DimensionRevisedMessage
-  | CheckpointListMessage
-  | ReviewRequestMessage;
+  | LayerCompletedMessage;
 
 // Re-export message types for convenience
 export type {
   TextMessage,
   FileMessage,
   ProgressMessage,
-  ActionMessage,
-  ResultMessage,
-  ErrorMessage,
-  SystemMessage,
   DimensionReportMessage,
   LayerCompletedMessage,
-  DimensionRevisedMessage,
-  CheckpointListMessage,
-  ReviewRequestMessage,
 };

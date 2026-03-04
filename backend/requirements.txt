@@ -13,6 +13,9 @@ chardet>=5.0.0
 # File type detection
 filetype>=1.2.0
 
+# Timeout protection (prevent large file hangs)
+func-timeout>=4.3.5
+
 # CORS
 fastapi-cors>=0.0.6
 

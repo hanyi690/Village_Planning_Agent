@@ -52,6 +52,8 @@ markitdown[docx,pdf,xlsx,pptx]
 filetype>=1.2.0
 # 编码检测
 chardet>=5.0.0
+# 超时保护（防止大文件卡死）
+func-timeout>=4.3.5
 
 # ============================================
 # Embedding Models

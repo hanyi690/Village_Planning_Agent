@@ -207,6 +207,9 @@ export function UnifiedPlanningProvider({
   // 用于跟踪之前的状态，避免不必要的更新
   const previousBackendStateRef = useRef<any>(null);
 
+  // 用于跟踪是否正在加载历史消息（避免重复存储）
+  const isLoadingHistoryRef = useRef(false);
+
   // History state
   const [villages, setVillages] = useState<VillageInfo[]>([]);
   const [selectedVillage, setSelectedVillage] = useState<VillageInfo | null>(null);
@@ -247,7 +250,24 @@ export function UnifiedPlanningProvider({
   // Conversation actions
   const addMessage = useCallback((message: Message) => {
     setMessages((prev) => [...prev, message]);
-  }, []);
+
+    // 异步存储消息到后端（跳过历史消息加载期间）
+    if (!isLoadingHistoryRef.current && taskId) {
+      // 异步存储，不阻塞 UI
+      planningApi.createMessage(taskId, {
+        role: message.role,
+        content: message.type === 'text' ? message.content :
+                 message.type === 'file' ? `[文件] ${message.filename}` :
+                 message.type === 'progress' ? message.content :
+                 message.type === 'dimension_report' ? message.content :
+                 message.type === 'layer_completed' ? message.content : '',
+        message_type: message.type,
+        metadata: message.type !== 'text' ? { ...message } as unknown as Record<string, unknown> : undefined,
+      }).catch((error) => {
+        console.warn('[UnifiedPlanningContext] Failed to store message:', error);
+      });
+    }
+  }, [taskId]);
 
   // Custom setStatus (no side effects - side effects moved to useEffect below)
   const setStatus = useCallback((newStatus: Status) => {
@@ -541,7 +561,9 @@ export function UnifiedPlanningProvider({
 
     console.log('[UnifiedPlanningContext] Loading historical reports for:', villageName, sessionId);
 
-    // 【新增】先加载消息历史和修订历史
+    // 设置标志，避免历史消息重复存储
+    isLoadingHistoryRef.current = true;
+
     try {
       const statusData = await planningApi.getStatus(sessionId);
       
@@ -657,6 +679,9 @@ export function UnifiedPlanningProvider({
     } catch (error) {
       console.error('[UnifiedPlanningContext] Failed to load historical reports:', error);
       addMessage(createErrorMessage('加载历史报告失败'));
+    } finally {
+      // 重置标志，允许后续消息存储
+      isLoadingHistoryRef.current = false;
     }
   }, [addMessage]);
 

@@ -3,7 +3,7 @@
  * Common message creation and manipulation utilities
  */
 
-import { Message, SystemMessage, ActionButton, BaseMessage } from '@/types';
+import { Message, ActionButton, BaseMessage, TextMessage } from '@/types';
 
 const MESSAGE_ID_COUNTER = { value: 0 };
 
@@ -28,15 +28,15 @@ export function createBaseMessage(role: Message['role'] = 'assistant'): BaseMess
 }
 
 /**
- * Create a system notification message
+ * Create a system notification message (as TextMessage)
  */
-export function createSystemMessage(content: string, level: 'info' | 'warning' | 'error' = 'info'): SystemMessage {
+export function createSystemMessage(content: string, level: 'info' | 'warning' | 'error' = 'info'): TextMessage {
+  const prefix = level === 'error' ? '❌ ' : level === 'warning' ? '⚠️ ' : 'ℹ️ ';
   return {
-    ...createBaseMessage('system'),
-    type: 'system',
-    content,
-    level,
-  } as SystemMessage;
+    ...createBaseMessage('assistant'),
+    type: 'text',
+    content: `${prefix}${content}`,
+  };
 }
 
 /**
@@ -60,34 +60,32 @@ export function createActionButtons(type: 'pause' | 'revision'): ActionButton[] 
 /**
  * Create success message
  */
-export function createSuccessMessage(content: string): SystemMessage {
+export function createSuccessMessage(content: string): TextMessage {
   return createSystemMessage(`✅ ${content}`, 'info');
 }
 
 /**
  * Create error message
  */
-export function createErrorMessage(content: string, recoverable = false): SystemMessage {
+export function createErrorMessage(content: string, recoverable = false): TextMessage {
   return {
-    ...createBaseMessage('system'),
-    type: 'system',
+    ...createBaseMessage('assistant'),
+    type: 'text',
     content: `❌ ${content}`,
-    level: 'error',
-    recoverable,
-  } as SystemMessage & { recoverable?: boolean };
+  };
 }
 
 /**
  * Create warning message
  */
-export function createWarningMessage(content: string): SystemMessage {
+export function createWarningMessage(content: string): TextMessage {
   return createSystemMessage(`⚠️ ${content}`, 'warning');
 }
 
 /**
  * Create info message
  */
-export function createInfoMessage(content: string): SystemMessage {
+export function createInfoMessage(content: string): TextMessage {
   return createSystemMessage(content, 'info');
 }
 

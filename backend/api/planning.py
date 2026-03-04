@@ -55,6 +55,9 @@ from backend.database.operations_async import (
     create_planning_session_async as create_session_async,
     get_planning_session_async as get_session_async,
     update_planning_session_async as update_session_async,
+    # UI 消息存储操作
+    create_ui_message_async,
+    get_ui_messages_async,
 )
 # ✅ 从 engine 导入数据库路径函数
 from backend.database.engine import get_db_path
@@ -168,6 +171,14 @@ class ResumeRequest(BaseModel):
     """Request to resume from checkpoint"""
     checkpoint_id: str = Field(..., description="检查点ID")
     project_name: str = Field(..., description="项目名称")
+
+
+class CreateUIMessageRequest(BaseModel):
+    """Request to create a UI message"""
+    role: str = Field(..., description="Message role: user | assistant | system")
+    content: str = Field(..., description="Message content")
+    message_type: str = Field(default="text", description="Message type: text | file | progress | layer_completed | dimension_report")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional message metadata")
 
 
 class SessionStatusResponse(BaseModel):
@@ -1467,7 +1478,62 @@ async def get_session_status(session_id: str):
         # 【新增】消息历史和修订历史
         "messages": messages,
         "revision_history": revision_history,
+        # 【新增】UI 消息列表（从数据库加载）
+        "ui_messages": await get_ui_messages_async(session_id),
     }
+
+
+@router.post("/api/planning/messages/{session_id}")
+async def create_ui_message(session_id: str, request: CreateUIMessageRequest):
+    """
+    存储 UI 消息到数据库
+    
+    Args:
+        session_id: Session identifier
+        request: Message data
+        
+    Returns:
+        Created message ID
+    """
+    # 验证 session 存在
+    db_session = await get_session_async(session_id)
+    if not db_session:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    
+    try:
+        message_id = await create_ui_message_async(
+            session_id=session_id,
+            role=request.role,
+            content=request.content,
+            message_type=request.message_type,
+            metadata=request.metadata
+        )
+        return {"success": True, "message_id": message_id}
+    except Exception as e:
+        logger.error(f"[Planning API] Failed to create UI message: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create message: {str(e)}")
+
+
+@router.get("/api/planning/messages/{session_id}")
+async def get_ui_messages(session_id: str, role: Optional[str] = None, limit: int = 100):
+    """
+    获取会话的 UI 消息列表
+    
+    Args:
+        session_id: Session identifier
+        role: Filter by role (optional)
+        limit: Maximum number of messages
+        
+    Returns:
+        List of UI messages
+    """
+    # 验证 session 存在
+    db_session = await get_session_async(session_id)
+    if not db_session:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    
+    messages = await get_ui_messages_async(session_id, role=role, limit=limit)
+    return {"success": True, "messages": messages}
 
 
 @router.post("/api/planning/review/{session_id}")

@@ -5,16 +5,16 @@
  * Individual message type renderers
  */
 
-import { Message, ActionButton, ProgressMessage, ActionMessage, ResultMessage, ErrorMessage } from '@/types';
+import { Message, ActionButton, ProgressMessage } from '@/types';
 import {
   isProgressMessage,
-  isActionMessage,
-  isResultMessage,
-  isErrorMessage,
+  isLayerCompletedMessage,
+  isDimensionReportMessage,
 } from '@/types';
 import StreamingText from './StreamingText';
 import ActionButtonGroup from './ActionButtonGroup';
 import { getButtonClasses } from '@/lib/utils';
+import LayerReportMessage from './LayerReportMessage';
 
 interface MessageContentProps {
   message: Message;
@@ -44,59 +44,6 @@ function renderProgressMessage(message: ProgressMessage) {
         </div>
       )}
     </>
-  );
-}
-
-// Action Message Renderer
-function renderActionMessage(message: ActionMessage, onAction?: (action: ActionButton, message: Message) => void) {
-  return (
-    <>
-      <div className="mb-3 leading-relaxed">{message.content}</div>
-      <ActionButtonGroup actions={message.actions} onAction={(a) => onAction?.(a, message)} />
-    </>
-  );
-}
-
-// Result Message Renderer
-function renderResultMessage(message: ResultMessage) {
-  return (
-    <>
-      <div className="mb-3 leading-relaxed">{message.content}</div>
-      <div className="text-sm mb-3 flex items-center gap-2 text-gray-600">
-        <i className="fas fa-map-marker-alt text-green-600" />
-        <span>村庄: {message.villageName}</span>
-      </div>
-      <button
-        className={getButtonClasses('primary', 'md', 'lg')}
-        onClick={() => message.resultUrl && (window.location.href = message.resultUrl)}
-        style={{ color: 'var(--text-cream-primary)' }}
-      >
-        <i className="fas fa-eye mr-2" />
-        查看结果
-      </button>
-    </>
-  );
-}
-
-// Error Message Renderer
-function renderErrorMessage(message: ErrorMessage, isUser: boolean) {
-  return (
-    <div className={`flex items-center gap-2 ${!isUser ? 'text-red-600' : ''}`} style={isUser ? { color: 'var(--text-cream-primary)' } : {}}>
-      <i className="fas fa-exclamation-circle" />
-      <span>{message.content}</span>
-    </div>
-  );
-}
-
-// System Message Renderer
-// System Message Renderer
-function renderSystemMessage(message: Message) {
-  if (message.type !== 'system') return null;
-
-  return (
-    <div className="text-sm bg-white/60 backdrop-blur-sm p-3 rounded-lg border border-gray-200/50">
-      {message.content}
-    </div>
   );
 }
 
@@ -141,42 +88,27 @@ function renderLayerCompletedMessage(message: Message, onAction?: (action: Actio
   );
 }
 
-// Checkpoint List Message Renderer
-function renderCheckpointListMessage(message: Message, onAction?: (action: ActionButton, message: Message) => void) {
-  if (message.type !== 'checkpoint_list') return null;
+// Dimension Report Message Renderer
+function renderDimensionReportMessage(message: Message) {
+  if (message.type !== 'dimension_report') return null;
 
   return (
-    <>
-      <div className="mb-3 flex items-center gap-2 font-semibold text-gray-700">
-        <i className="fas fa-history text-blue-500" />
-        <span>{message.content}</span>
+    <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-xs font-bold text-white">
+          {message.layer}
+        </span>
+        <span className="font-medium text-blue-700">{message.dimensionName}</span>
       </div>
-      {message.checkpoints && message.checkpoints.length > 0 && (
-        <div className="mt-2 space-y-2">
-          {message.checkpoints.map((cp) => (
-            <div
-              key={cp.checkpoint_id}
-              className="bg-gradient-to-r from-blue-50 to-indigo-50 px-3 py-2.5 rounded-lg text-sm border border-blue-100 hover:shadow-sm transition-all duration-200"
-            >
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-xs font-bold" style={{ color: 'var(--text-cream-primary)' }}>
-                    {cp.layer}
-                  </span>
-                  <span className="font-medium text-gray-700">{cp.description}</span>
-                </div>
-                <small className="text-xs text-gray-600">{cp.timestamp}</small>
-              </div>
-            </div>
-          ))}
+      <div className="text-sm text-gray-700 whitespace-pre-wrap">
+        {message.content}
+      </div>
+      {message.progress && (
+        <div className="mt-2 text-xs text-gray-500">
+          进度: {message.progress.current}/{message.progress.total} 字
         </div>
       )}
-      <ActionButtonGroup
-        actions={message.actions || []}
-        onAction={(a) => onAction?.(a, message)}
-        className="mt-3"
-      />
-    </>
+    </div>
   );
 }
 
@@ -203,23 +135,21 @@ export default function MessageContent(props: MessageContentProps) {
     case 'progress':
       return isProgressMessage(message) ? renderProgressMessage(message) : null;
 
-    case 'action':
-      return isActionMessage(message) ? renderActionMessage(message, onAction) : null;
-
-    case 'result':
-      return isResultMessage(message) ? renderResultMessage(message) : null;
-
-    case 'error':
-      return isErrorMessage(message) ? renderErrorMessage(message, message.role === 'user') : null;
-
-    case 'system':
-      return renderSystemMessage(message);
-
     case 'layer_completed':
-      return renderLayerCompletedMessage(message, onAction, enableStreaming);
+      return isLayerCompletedMessage(message) ? (
+        <LayerReportMessage message={message} />
+      ) : null;
 
-    case 'checkpoint_list':
-      return renderCheckpointListMessage(message, onAction);
+    case 'dimension_report':
+      return isDimensionReportMessage(message) ? renderDimensionReportMessage(message) : null;
+
+    case 'file':
+      return (
+        <div className="flex items-center gap-2 p-2 bg-gray-100 rounded-lg">
+          <i className="fas fa-file text-gray-500" />
+          <span className="text-sm">{message.filename}</span>
+        </div>
+      );
 
     default:
       return null;

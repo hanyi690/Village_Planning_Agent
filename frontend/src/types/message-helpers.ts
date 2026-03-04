@@ -10,7 +10,7 @@ import type {
   ActionButton,
   SSEEvent,
 } from './message';
-import type { ProgressMessage, ActionMessage, ResultMessage, ErrorMessage } from './message-types';
+import type { ProgressMessage, TextMessage } from './message-types';
 import { createActionButtons } from '@/lib/utils';
 
 /**
@@ -33,53 +33,44 @@ export function convertSSEToMessage(event: SSEEvent): Message {
       progress: event.progress,
       currentLayer: event.current_layer,
       taskId: event.task_id,
-    } as ProgressMessage;
+    } satisfies ProgressMessage;
   }
 
-  // Paused state
+  // Paused state - use TextMessage with action buttons info
   if (event.status === 'paused' || event.event_type === 'pause') {
     return {
       ...base,
-      type: 'action',
-      content: '当前层级已完成，请审查后继续',
-      actions: createActionButtons('pause'),
-      taskId: event.task_id,
-    } as ActionMessage;
+      type: 'text',
+      content: `⏸️ 当前层级已完成，请审查后继续\n\n可执行操作：查看内容、批准继续、请求修改`,
+    } satisfies TextMessage;
   }
 
-  // Revision complete
+  // Revision complete - use TextMessage
   if (event.event_type === 'revision_complete') {
     return {
       ...base,
-      type: 'action',
-      content: '修订已完成，请审查修订内容',
-      actions: createActionButtons('revision'),
-      taskId: event.task_id,
-    } as ActionMessage;
+      type: 'text',
+      content: `✅ 修订已完成，请审查修订内容\n\n可执行操作：查看修订、批准继续、继续修改`,
+    } satisfies TextMessage;
   }
 
-  // Task completed
+  // Task completed - use TextMessage with result info
   if (event.status === 'completed' && event.result) {
+    const projectName = event.result.project_name || '未知村庄';
     return {
       ...base,
-      type: 'result',
-      content: '规划已完成！',
-      villageName: event.result.project_name || '未知村庄',
-      sessionId: event.result.session_id || '',
-      layers: event.result.layers || [],
-      resultUrl: `/villages/${encodeURIComponent(event.result.project_name || '')}`,
-    } as ResultMessage;
+      type: 'text',
+      content: `🎉 规划已完成！\n\n村庄：${projectName}\n\n您可以在左侧查看完整规划报告。`,
+    } satisfies TextMessage;
   }
 
-  // Error state
+  // Error state - use TextMessage with error info
   if (event.status === 'failed' || event.error) {
     return {
       ...base,
-      type: 'error',
-      content: event.message || '任务失败',
-      error: event.error,
-      recoverable: false,
-    } as ErrorMessage;
+      type: 'text',
+      content: `❌ 任务失败\n\n错误：${event.message || event.error || '未知错误'}`,
+    } satisfies TextMessage;
   }
 
   // Default text message
@@ -87,5 +78,5 @@ export function convertSSEToMessage(event: SSEEvent): Message {
     ...base,
     type: 'text',
     content: event.message || '处理中...',
-  };
+  } satisfies TextMessage;
 }

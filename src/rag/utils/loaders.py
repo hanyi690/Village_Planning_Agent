@@ -112,37 +112,58 @@ class DocToDocxConverter:
     """
     将旧版 .doc 文件转换为 .docx 格式
     
+    支持跨平台：
+    - Windows: 优先使用 win32com (效果更好，需要安装 Microsoft Word)
+    - Linux/Docker: 使用 LibreOffice 命令行 (soffice --headless)
+    
     MarkItDown 不支持旧版 .doc (OLE 格式)，需要先转换为 .docx
-    使用 Windows COM 接口 (需要安装 Microsoft Word)
     """
+
+    # 默认超时时间（秒）
+    DEFAULT_TIMEOUT = 120
 
     @staticmethod
     def is_available() -> bool:
-        """检查转换器是否可用（是否有 win32com）"""
+        """检查转换器是否可用（win32com 或 LibreOffice）"""
+        # Windows: 检查 win32com
         try:
             import win32com.client
             return True
         except ImportError:
+            pass
+        
+        # Linux/Docker: 检查 LibreOffice
+        try:
+            result = subprocess.run(
+                ['which', 'soffice'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            return result.returncode == 0
+        except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
 
     @staticmethod
-    def convert(doc_path: Path, output_dir: Optional[Path] = None) -> Optional[Path]:
+    def convert(
+        doc_path: Path,
+        output_dir: Optional[Path] = None,
+        timeout: Optional[int] = None
+    ) -> Optional[Path]:
         """
         将 .doc 文件转换为 .docx
         
         Args:
             doc_path: .doc 文件路径
             output_dir: 输出目录，默认为临时目录
+            timeout: 超时时间（秒），默认 120
             
         Returns:
             转换后的 .docx 文件路径，失败返回 None
         """
-        try:
-            import win32com.client
-            import tempfile
-        except ImportError:
-            print("❌ win32com 未安装，无法转换 .doc 文件。请运行: pip install pywin32")
-            return None
+        import tempfile
+        
+        timeout = timeout or DocToDocxConverter.DEFAULT_TIMEOUT
 
         if not doc_path.exists():
             print(f"❌ 文件不存在: {doc_path}")
@@ -160,26 +181,83 @@ class DocToDocxConverter:
             print(f"✅ 使用已转换的文件: {docx_path}")
             return docx_path
 
+        # 尝试 Windows 方式 (win32com)
+        if DocToDocxConverter._try_win32com(doc_path, docx_path):
+            return docx_path
+
+        # 尝试 LibreOffice 方式
+        if DocToDocxConverter._try_libreoffice(doc_path, output_dir, timeout):
+            return docx_path
+
+        # 所有方式都失败
+        print("❌ 无法转换 .doc 文件。")
+        print("   Windows: 请安装 pywin32: pip install pywin32")
+        print("   Docker:  请确保 LibreOffice 已安装")
+        return None
+
+    @staticmethod
+    def _try_win32com(doc_path: Path, docx_path: Path) -> bool:
+        """Windows COM 方式转换"""
         try:
-            print(f"🔄 正在转换 .doc 为 .docx: {doc_path.name} ...")
+            import win32com.client
+            
+            print(f"🔄 正在转换 .doc 为 .docx (win32com): {doc_path.name} ...")
             
             word = win32com.client.Dispatch('Word.Application')
             word.Visible = False
             
-            # 打开 .doc 文件
             doc = word.Documents.Open(str(doc_path.absolute()))
-            
-            # 保存为 .docx (格式代码 16 = wdFormatXMLDocument)
-            doc.SaveAs(str(docx_path.absolute()), FileFormat=16)
+            doc.SaveAs(str(docx_path.absolute()), FileFormat=16)  # wdFormatXMLDocument
             doc.Close()
             word.Quit()
             
             print(f"✅ 转换成功: {docx_path}")
-            return docx_path
+            return True
             
+        except ImportError:
+            return False
         except Exception as e:
-            print(f"❌ 转换失败: {e}")
-            return None
+            print(f"⚠️  win32com 转换失败: {e}")
+            return False
+
+    @staticmethod
+    def _try_libreoffice(doc_path: Path, output_dir: Path, timeout: int) -> bool:
+        """LibreOffice 命令行方式转换"""
+        try:
+            print(f"🔄 正在转换 .doc 为 .docx (LibreOffice): {doc_path.name} ...")
+            
+            cmd = [
+                'soffice',
+                '--headless',
+                '--convert-to', 'docx',
+                '--outdir', str(output_dir),
+                str(doc_path.absolute())
+            ]
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            
+            docx_path = output_dir / (doc_path.stem + ".docx")
+            if docx_path.exists():
+                print(f"✅ 转换成功: {docx_path}")
+                return True
+            else:
+                print(f"⚠️  LibreOffice 转换失败: {result.stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            print(f"❌ LibreOffice 转换超时 (>{timeout}s)")
+            return False
+        except FileNotFoundError:
+            print("⚠️  LibreOffice 未安装")
+            return False
+        except Exception as e:
+            print(f"⚠️  LibreOffice 转换失败: {e}")
+            return False
 
 
 # ==================== Markdown 清理 ====================
@@ -292,19 +370,32 @@ class MarkItDownLoader(BaseDocumentLoader):
     
     支持格式: doc, docx, pdf, ppt, pptx, xls, xlsx, epub, html
     
-    注意:
-    - 旧版 .doc (OLE格式) 会自动转换为 .docx 后再解析
-    - 需要 pywin32 才能处理 .doc 文件
+    特性:
+    - 超时保护机制，防止大文件卡死
+    - 旧版 .doc (OLE格式) 自动转换为 .docx 后再解析
+    - 跨平台支持（Windows win32com + Linux LibreOffice）
     
     优势:
-    - 跨平台兼容（无需 Linux 工具）
+    - 跨平台兼容
     - 统一输出 Markdown 格式
     - 保留文档结构（标题、列表、表格）
     - 支持"伪装文件"（如 .docx 实际是 .doc）
     """
 
+    # 默认超时配置
+    DEFAULT_TIMEOUT = 120  # 秒
+
+    def __init__(
+        self,
+        file_path: str | Path,
+        category: Optional[Literal["policies", "cases"]] = None,
+        timeout: Optional[int] = None,
+    ):
+        super().__init__(file_path, category)
+        self.timeout = timeout or self.DEFAULT_TIMEOUT
+
     def load(self) -> list[Document]:
-        """使用 MarkItDown 加载文档"""
+        """使用 MarkItDown 加载文档（带超时保护）"""
         self._validate_file()
         
         file_ext = self.file_path.suffix.lower()
@@ -315,8 +406,10 @@ class MarkItDownLoader(BaseDocumentLoader):
             actual_file = self._convert_doc_to_docx()
             if actual_file is None:
                 raise Exception(
-                    "无法解析 .doc 文件。请安装 pywin32: pip install pywin32\n"
-                    "或将文件另存为 .docx 格式后重新上传。"
+                    "无法解析 .doc 文件。\n"
+                    "Windows: 请安装 pywin32: pip install pywin32\n"
+                    "Docker:  确保 LibreOffice 已安装\n"
+                    "或请将文件另存为 .docx 格式后重新上传。"
                 )
             file_ext = '.docx'
         
@@ -329,27 +422,47 @@ class MarkItDownLoader(BaseDocumentLoader):
             raise Exception(
                 "markitdown 库未安装，请运行: pip install 'markitdown[docx,pdf,xlsx,pptx]'"
             )
+        except TimeoutError:
+            raise Exception(
+                f"文档处理超时 (>{self.timeout}秒)，文件可能过大或损坏: {self.file_path.name}\n"
+                "建议：将文件转换为 .docx/.pptx 格式后重新上传，或检查文件是否损坏。"
+            )
         except Exception as e:
             raise Exception(f"MarkItDown 解析失败: {e}")
 
     def _convert_doc_to_docx(self) -> Optional[Path]:
         """将 .doc 文件转换为 .docx"""
-        return DocToDocxConverter.convert(self.file_path)
+        return DocToDocxConverter.convert(self.file_path, timeout=self.timeout)
 
     def _convert_with_markitdown(self, file_path: Optional[Path] = None) -> str:
-        """使用 MarkItDown 转换文档为 Markdown"""
+        """使用 MarkItDown 转换文档为 Markdown（带超时保护）"""
         try:
             from markitdown import MarkItDown
         except ImportError:
             raise ImportError("markitdown 未安装")
         
         md = MarkItDown(enable_plugins=False)
-        
-        # 使用传入的文件路径或原始路径
         target_path = file_path or self.file_path
-        result = md.convert(str(target_path))
         
-        return result.text_content
+        # 尝试使用 func_timeout 实现超时保护
+        try:
+            from func_timeout import func_timeout, FunctionTimedOut
+            
+            def _convert():
+                return md.convert(str(target_path))
+            
+            try:
+                result = func_timeout(self.timeout, _convert)
+                return result.text_content
+            except FunctionTimedOut:
+                raise TimeoutError(
+                    f"MarkItDown 处理超时 (>{self.timeout}s): {target_path.name}"
+                )
+                
+        except ImportError:
+            # func_timeout 未安装，使用无超时方式（保持向后兼容）
+            result = md.convert(str(target_path))
+            return result.text_content
 
     def _parse_markdown(self, content: str, file_ext: str) -> list[Document]:
         """解析 Markdown 内容为 Document 列表"""

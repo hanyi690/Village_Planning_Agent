@@ -189,6 +189,20 @@ export interface SessionStatusResponse {
     feedback: string;
     timestamp: string;
   }>;
+
+  // 【新增】UI 消息列表
+  ui_messages?: UIMessage[];
+}
+
+// UI 消息类型（用于持久化存储）
+export interface UIMessage {
+  id: number;
+  session_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  message_type: string;
+  message_metadata?: Record<string, unknown>;
+  timestamp: string;
 }
 
 export interface FileUploadResponse {
@@ -483,6 +497,34 @@ export const planningApi = {
       `/api/planning/rate-limit/reset/${encodeURIComponent(projectName)}`,
       { method: 'POST' }
     );
+  },
+
+  /**
+   * Create UI message
+   * POST /api/planning/messages/{session_id}
+   */
+  async createMessage(sessionId: string, message: {
+    role: string;
+    content: string;
+    message_type?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{ success: boolean; message_id: number }> {
+    return apiRequest(`/api/planning/messages/${sessionId}`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    });
+  },
+
+  /**
+   * Get UI messages
+   * GET /api/planning/messages/{session_id}
+   */
+  async getMessages(sessionId: string, role?: string, limit?: number): Promise<{ success: boolean; messages: UIMessage[] }> {
+    const params = new URLSearchParams();
+    if (role) params.append('role', role);
+    if (limit) params.append('limit', String(limit));
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return apiRequest(`/api/planning/messages/${sessionId}${query}`);
   },
 };
 

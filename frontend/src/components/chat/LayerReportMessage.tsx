@@ -6,7 +6,7 @@
  */
 
 import { LayerCompletedMessage } from '@/types';
-import { parseLayerReport } from '@/lib/layerReportParser';
+import { parseLayerReport, ParsedDimension } from '@/lib/layerReportParser';
 import LayerReportCard from './LayerReportCard';
 import { useMemo } from 'react';
 import { getDimensionName, getDimensionIcon } from '@/config/dimensions';
@@ -34,7 +34,7 @@ export default function LayerReportMessage({
 
     // ✅ 优先使用 dimensionContents（实时流式内容，解决并行更新竞态问题）
     if (dimensionContents && dimensionContents.size > 0) {
-      const result: { name: string; content: string; icon: string; subsections: string[] }[] = [];
+      const result: ParsedDimension[] = [];
       
       // 遍历 dimensionReports 的键（确保维度顺序正确）
       for (const key of Object.keys(dimensionReports)) {
@@ -46,7 +46,7 @@ export default function LayerReportMessage({
           name: getDimensionName(key),
           content: content,
           icon: getDimensionIcon(key),
-          subsections: [],
+          subsections: [], // Empty subsections array (ParsedSubsection[])
         });
       }
       
@@ -59,7 +59,7 @@ export default function LayerReportMessage({
         name: getDimensionName(key),
         content: content,
         icon: getDimensionIcon(key),
-        subsections: [],
+        subsections: [], // Empty subsections array (ParsedSubsection[])
       }));
     }
 
