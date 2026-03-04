@@ -49,7 +49,7 @@ export function getLayerName(layer: number): string {
 // ============================================
 
 export const MIN_FILE_CONTENT_LENGTH = 50;
-export const FILE_ACCEPT = '.docx,.pdf,.txt,.md';
+export const FILE_ACCEPT = '.docx,.doc,.pdf,.pptx,.ppt,.xlsx,.xls,.txt,.md';
 
 // ============================================
 // Status Constants
