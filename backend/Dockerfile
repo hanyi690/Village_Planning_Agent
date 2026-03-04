@@ -1,10 +1,19 @@
 # Backend Dockerfile for Village Planning Agent
 # Multi-stage build for optimized image size
+#
+# 构建选项:
+#   docker build -t village-planning-backend .  # 默认精简版 (~1-2GB)
+#   docker build --build-arg EMBEDDING_PROVIDER=local -t village-planning-backend .  # 完整版 (~4-5GB)
 
 # ============================================
 # Stage 1: Builder
 # ============================================
 FROM python:3.11-slim as builder
+
+# 构建参数: 选择 embedding 模式
+# - server: 精简版，使用阿里云 API（默认，镜像 ~1-2GB）
+# - local: 完整版，支持本地模型（镜像 ~4-5GB）
+ARG EMBEDDING_PROVIDER=server
 
 WORKDIR /app
 
@@ -21,16 +30,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements files
+# Copy all requirements files
 COPY requirements.txt .
+COPY requirements-server.txt .
 COPY backend/requirements.txt ./backend/
 
 # 使用阿里云 PyPI 镜像源加速（国内部署优化）
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
 
-# Install Python dependencies
+# Install Python dependencies based on EMBEDDING_PROVIDER
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
+    if [ "$EMBEDDING_PROVIDER" = "local" ]; then \
+        echo "Installing FULL requirements (local embedding support)..." && \
+        pip install --no-cache-dir -r requirements.txt; \
+    else \
+        echo "Installing SERVER requirements (aliyun embedding, no local models)..." && \
+        pip install --no-cache-dir -r requirements-server.txt; \
+    fi && \
     pip install --no-cache-dir -r backend/requirements.txt
 
 # ============================================
