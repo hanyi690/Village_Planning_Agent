@@ -63,6 +63,12 @@ HF_HUB_OFFLINE = os.getenv("HF_HUB_OFFLINE", "") == "1"
 TRANSFORMERS_OFFLINE = os.getenv("TRANSFORMERS_OFFLINE", "") == "1"
 
 
+# ==================== 查询缓存配置 ====================
+# 查询结果缓存 TTL（秒），0 表示永不过期
+# 知识库内容固定，建议使用 0（永不过期）或设置较长时间
+QUERY_CACHE_TTL = int(os.getenv("QUERY_CACHE_TTL", "0"))
+
+
 def get_huggingface_cache_dir() -> Path:
     """
     获取 HuggingFace 缓存目录

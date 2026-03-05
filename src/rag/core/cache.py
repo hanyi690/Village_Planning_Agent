@@ -25,6 +25,7 @@ from src.rag.config import (
     ALIYUN_EMBEDDING_BASE_URL,
     ALIYUN_EMBEDDING_MODEL,
     EMBEDDING_DIMENSIONS,
+    QUERY_CACHE_TTL,
     setup_huggingface_env,
 )
 
@@ -272,8 +273,8 @@ class VectorStoreCache:
         if cache_key in self._query_cache:
             results, timestamp = self._query_cache[cache_key]
 
-            # 检查是否过期
-            if datetime.now() - timestamp < timedelta(seconds=self.cache_ttl):
+            # 检查是否过期（cache_ttl = 0 表示永不过期）
+            if self.cache_ttl == 0 or datetime.now() - timestamp < timedelta(seconds=self.cache_ttl):
                 print(f"🎯 内存缓存命中: {query[:50]}...")
                 return results
             else:
@@ -287,9 +288,9 @@ class VectorStoreCache:
                 with open(cache_file, 'rb') as f:
                     cached_data = pickle.load(f)
 
-                # 检查是否过期
+                # 检查是否过期（cache_ttl = 0 表示永不过期）
                 cache_time = cached_data['timestamp']
-                if datetime.now() - cache_time < timedelta(seconds=self.cache_ttl):
+                if self.cache_ttl == 0 or datetime.now() - cache_time < timedelta(seconds=self.cache_ttl):
                     print(f"🎯 持久化缓存命中: {query[:50]}...")
                     # 加载到内存缓存
                     self._query_cache[cache_key] = (
@@ -409,7 +410,7 @@ def get_vector_cache() -> VectorStoreCache:
     """
     global _vector_cache
     if _vector_cache is None:
-        _vector_cache = VectorStoreCache()
+        _vector_cache = VectorStoreCache(cache_ttl=QUERY_CACHE_TTL)
     return _vector_cache
 
 
