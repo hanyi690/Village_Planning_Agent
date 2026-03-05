@@ -57,6 +57,7 @@ aiosqlite>=0.19.0
 markitdown[docx,pdf,xlsx,pptx]
 filetype>=1.2.0
 chardet>=5.0.0
+func-timeout>=4.3.5  # 超时保护，防止大文件处理卡死
 
 # ============================================
 # Terminal Output

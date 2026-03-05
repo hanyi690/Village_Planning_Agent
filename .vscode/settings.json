@@ -1,4 +1,9 @@
 {
     "claudeCodeChat.permissions.yoloMode": true,
-    "git.ignoreLimitWarning": true
+    "git.ignoreLimitWarning": true,
+    "python.analysis.extraPaths": [
+        "./src",
+        "./backend"
+    ],
+    "python.analysis.typeCheckingMode": "off"
 }

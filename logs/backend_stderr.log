@@ -1,99 +1,12 @@
 INFO:     Will watch for changes in these directories: ['F:\\project\\Village_Planning_Agent\\backend']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [113592] using WatchFiles
-USER_AGENT environment variable not set, consider setting it to identify your requests.
-INFO:     Started server process [106852]
+INFO:     Started reloader process [22204] using WatchFiles
+INFO:     Started server process [24928]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-2026-02-18 02:59:21,122 INFO src.utils.output_manager_registry: [OutputManagerRegistry] Registered: 20260218_025921
-2026-02-18 02:59:21,159 INFO src.orchestration.main_graph: [主图构建] 开始构建村庄规划主图
-2026-02-18 02:59:21,163 INFO src.orchestration.main_graph: [主图构建] 村庄规划主图构建完成
-2026-02-18 02:59:21,168 INFO src.orchestration.main_graph: [主图-路由] 从pause节点路由到Layer 1
-2026-02-18 02:59:21,168 INFO src.nodes.base_node: [Layer1-现状分析] 开始执行
-2026-02-18 02:59:21,170 INFO src.subgraphs.analysis_subgraph: [子图调用] 开始调用现状分析子图: 金田村
-2026-02-18 02:59:21,178 INFO src.subgraphs.analysis_subgraph: [子图构建] 开始构建现状分析子图（使用封装节点）
-2026-02-18 02:59:21,179 INFO src.subgraphs.analysis_subgraph: [子图构建] 现状分析子图构建完成（使用封装节点）
-2026-02-18 02:59:21,189 INFO src.nodes.base_node: [现状分析初始化] 开始执行
-2026-02-18 02:59:21,190 INFO src.nodes.base_node: [现状分析初始化] 执行完成
-2026-02-18 02:59:21,191 INFO src.subgraphs.analysis_subgraph: [子图-Map] 开始分发 12 个分析维度
-2026-02-18 02:59:21,191 INFO src.subgraphs.analysis_subgraph: [子图-Map] 创建了 12 个并行任务
-2026-02-18 02:59:21,194 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,194 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,194 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,195 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 区位与对外交通分析 (location)
-2026-02-18 02:59:21,195 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,195 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 社会经济分析 (socio_economic)
-2026-02-18 02:59:21,195 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,195 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 村民意愿与诉求分析 (villager_wishes)
-2026-02-18 02:59:21,195 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,198 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 上位规划与政策导向分析 (superior_planning)
-2026-02-18 02:59:21,196 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,196 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,199 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 自然环境分析 (natural_environment)
-2026-02-18 02:59:21,196 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,199 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 土地利用分析 (land_use)
-2026-02-18 02:59:21,197 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,200 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 道路交通分析 (traffic)
-2026-02-18 02:59:21,197 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,200 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 公共服务设施分析 (public_services)
-2026-02-18 02:59:21,197 INFO src.nodes.base_node: [维度分析] 开始执行
-2026-02-18 02:59:21,200 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 基础设施分析 (infrastructure)
-2026-02-18 02:59:21,201 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 生态绿地分析 (ecological_green)
-2026-02-18 02:59:21,201 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 建筑分析 (architecture)
-2026-02-18 02:59:21,202 INFO src.nodes.subgraph_nodes: [子图-分析] 开始执行 历史文化分析 (historical_culture)
-2026-02-18 02:59:21,216 ERROR src.nodes.subgraph_nodes: [子图-分析] 区位与对外交通分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,217 ERROR src.nodes.subgraph_nodes: [子图-分析] 社会经济分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,217 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,217 ERROR src.nodes.subgraph_nodes: [子图-分析] 道路交通分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,217 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,217 ERROR src.nodes.subgraph_nodes: [子图-分析] 建筑分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,218 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,217 ERROR src.nodes.subgraph_nodes: [子图-分析] 土地利用分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,218 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,217 ERROR src.nodes.subgraph_nodes: [子图-分析] 公共服务设施分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,219 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,218 ERROR src.nodes.subgraph_nodes: [子图-分析] 基础设施分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,220 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,218 ERROR src.nodes.subgraph_nodes: [子图-分析] 上位规划与政策导向分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,219 ERROR src.nodes.subgraph_nodes: [子图-分析] 村民意愿与诉求分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,222 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,219 ERROR src.nodes.subgraph_nodes: [子图-分析] 历史文化分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,223 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,219 ERROR src.nodes.subgraph_nodes: [子图-分析] 自然环境分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,223 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,220 ERROR src.nodes.subgraph_nodes: [子图-分析] 生态绿地分析 执行失败: No module named 'src.planners.analysis_planners'
-2026-02-18 02:59:21,224 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,225 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,225 INFO src.nodes.base_node: [维度分析] 执行完成
-2026-02-18 02:59:21,228 INFO src.nodes.base_node: [汇总分析结果] 开始执行
-2026-02-18 02:59:21,229 INFO src.nodes.subgraph_nodes: [子图-Reduce] 汇总 12 个维度的分析结果
-2026-02-18 02:59:21,229 INFO src.nodes.subgraph_nodes: [子图-Reduce] 汇总完成，生成了 12 个维度报告
-2026-02-18 02:59:21,229 INFO src.nodes.base_node: [汇总分析结果] 执行完成
-2026-02-18 02:59:21,253 INFO src.subgraphs.analysis_subgraph: [子图调用] 子图执行成功，报告长度: 684
-2026-02-18 02:59:21,254 INFO src.subgraphs.analysis_subgraph: [子图调用] 维度报告数量: 12
-2026-02-18 02:59:21,254 INFO src.nodes.base_node: [Layer1-现状分析] 执行完成
-2026-02-18 02:59:21,254 INFO src.orchestration.main_graph: [主图-路由] 直接进入规划思路阶段
-2026-02-18 02:59:21,259 INFO src.nodes.base_node: [Layer2-规划思路] 开始执行
-2026-02-18 02:59:21,259 INFO src.subgraphs.concept_subgraph: [子图调用] 开始调用规划思路子图: 金田村
-2026-02-18 02:59:21,260 INFO src.subgraphs.concept_subgraph: [子图构建] 开始构建规划思路子图（使用封装节点）
-2026-02-18 02:59:21,261 INFO src.subgraphs.concept_subgraph: [子图构建] 规划思路子图构建完成（使用封装节点）
-2026-02-18 02:59:21,263 INFO src.nodes.base_node: [规划思路初始化] 开始执行
-2026-02-18 02:59:21,264 INFO src.nodes.base_node: [规划思路初始化] 执行完成
-2026-02-18 02:59:21,264 INFO src.subgraphs.concept_subgraph: [子图-Map] 开始分发 0 个规划维度
-2026-02-18 02:59:21,265 INFO src.subgraphs.concept_subgraph: [子图-Map] 创建了 0 个并行任务（已优化状态传递）
-2026-02-18 02:59:21,273 INFO src.subgraphs.concept_subgraph: [子图调用] 子图执行成功，报告长度: 0 字符
-2026-02-18 02:59:21,273 INFO src.subgraphs.concept_subgraph: [子图调用] 维度报告数量: 0
-2026-02-18 02:59:21,273 INFO src.nodes.base_node: [Layer2-规划思路] 执行完成
-2026-02-18 02:59:21,274 INFO src.orchestration.main_graph: [主图-路由] 进入详细规划阶段
-2026-02-18 02:59:21,279 INFO src.nodes.base_node: [Layer3-详细规划] 开始执行
-2026-02-18 02:59:21,279 INFO src.subgraphs.detailed_plan_subgraph: [子图调用] 开始调用详细规划子图: 金田村
-2026-02-18 02:59:21,279 INFO src.subgraphs.detailed_plan_subgraph: [子图构建] 开始构建详细规划子图（波次动态路由版本，使用封装节点）
-2026-02-18 02:59:21,283 INFO src.subgraphs.detailed_plan_subgraph: [子图构建] 详细规划子图构建完成（支持2波次动态路由，使用封装节点）
-2026-02-18 02:59:21,286 INFO src.nodes.base_node: [详细规划初始化] 开始执行
-2026-02-18 02:59:21,288 INFO src.nodes.base_node: [详细规划初始化] 执行完成
-2026-02-18 02:59:21,289 INFO src.subgraphs.detailed_plan_subgraph: [子图-L3-波次路由] 当前Wave: 1/2
-2026-02-18 02:59:21,289 INFO src.core.dimension_config: [dimension_config] 配置加载完成: 28 个维度
-2026-02-18 02:59:21,289 INFO src.subgraphs.detailed_plan_subgraph: [子图-L3-波次路由] Wave 1: 12 个维度并行执行
-2026-02-18 02:59:21,295 ERROR src.subgraphs.detailed_plan_subgraph: [子图调用] 子图执行失败: 'function' object has no attribute 'get'
-2026-02-18 02:59:21,295 INFO src.nodes.base_node: [Layer3-详细规划] 执行完成
-2026-02-18 02:59:21,295 WARNING src.orchestration.main_graph: [主图-路由] 详细规划失败，流程终止
+forrtl: error (200): program aborting due to window-CLOSE event
+Image              PC                Routine            Line        Source             
+KERNELBASE.dll     00007FFA6F71D64D  Unknown               Unknown  Unknown
+KERNEL32.DLL       00007FFA71BEE8D7  Unknown               Unknown  Unknown
+ntdll.dll          00007FFA72C8C40C  Unknown               Unknown  Unknown
+^C
