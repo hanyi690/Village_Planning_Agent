@@ -35,143 +35,125 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
   }, [loadVillagesHistory]);
 
   const filteredVillages = useMemo(() => {
-    console.log('[HistoryPanel] villages:', villages);
-    console.log('[HistoryPanel] searchTerm:', searchTerm);
-    const result = villages.filter(v => 
+    return villages.filter(v => 
       v.display_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       v.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
-    console.log('[HistoryPanel] filteredVillages count:', result.length);
-    return result;
   }, [villages, searchTerm]);
 
-  // 详细渲染日志
-  console.log('[HistoryPanel] RENDER - mounted:', mounted);
-  console.log('[HistoryPanel] RENDER - historyLoading:', historyLoading);
-  console.log('[HistoryPanel] RENDER - villages.length:', villages.length);
-  console.log('[HistoryPanel] RENDER - filteredVillages.length:', filteredVillages.length);
-  console.log('[HistoryPanel] RENDER - Condition 1 (loading):', historyLoading && villages.length === 0);
-  console.log('[HistoryPanel] RENDER - Condition 2 (hasData):', filteredVillages.length > 0);
-  console.log('[HistoryPanel] RENDER - document.body exists:', !!document.body);
+  if (!mounted) return null;
 
-  if (!mounted) {
-    console.log('[HistoryPanel] NOT MOUNTED, returning null');
-    return null;
-  }
-
-  console.log('[HistoryPanel] CALLING createPortal');
   return createPortal(
     <>
-      {/* Overlay */}
+      {/* Overlay - Gemini style */}
       <div
-        style={{
-          position: 'fixed',
-          inset: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          backdropFilter: 'blur(4px)',
-          zIndex: 9998,
-          visibility: 'visible',
-          opacity: 1
-        }}
+        className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9998] animate-fade-in"
         onClick={onClose}
       />
 
-      {/* Panel - 使用纯内联样式 */}
-      <div style={{
-        position: 'fixed',
-        right: 0,
-        top: 0,
-        bottom: 0,
-        width: '400px',
-        maxWidth: '400px',
-        backgroundColor: 'white',
-        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
-        display: 'flex',
-        flexDirection: 'column',
-        zIndex: 9999,
-        visibility: 'visible',
-        opacity: 1,
-        overflow: 'hidden'
-      }}>
+      {/* Panel - Gemini dark style */}
+      <div className="fixed right-0 top-0 bottom-0 w-[400px] max-w-[400px] bg-[#1a1a1a] border-l border-[#2d2d2d] flex flex-col z-[9999] animate-slide-in-right">
+        
         {/* Header */}
-        <div style={{ padding: '1rem', backgroundColor: '#16a34a', color: 'var(--text-cream-primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 'bold' }}>
-            <FontAwesomeIcon icon={faHistory} style={{ marginRight: '8px' }} /> 历史记录
-          </h2>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-cream-primary)', cursor: 'pointer', fontSize: '1.2rem' }}>
-            <FontAwesomeIcon icon={faTimes} />
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[#2d2d2d]">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-green-500/20 to-green-600/10 border border-green-500/30">
+              <FontAwesomeIcon icon={faHistory} className="text-green-400" style={{ width: '14px', height: '14px' }} />
+            </div>
+            <h2 className="text-lg font-semibold text-white">历史记录</h2>
+          </div>
+          <button 
+            onClick={onClose} 
+            className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-[#2d2d2d] transition-colors"
+          >
+            <FontAwesomeIcon icon={faTimes} style={{ width: '16px', height: '16px' }} />
           </button>
         </div>
 
         {/* Search */}
-        <div style={{ padding: '1rem', borderBottom: '1px solid #eee' }}>
-          <input 
-            type="text"
-            placeholder="搜索村庄..."
-            style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #ddd', outline: 'none' }}
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
+        <div className="px-4 py-3 border-b border-[#2d2d2d]">
+          <div className="relative">
+            <FontAwesomeIcon 
+              icon={faSearch} 
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
+              style={{ width: '14px', height: '14px' }}
+            />
+            <input 
+              type="text"
+              placeholder="搜索村庄..."
+              className="w-full bg-[#242424] border border-[#3f3f46] rounded-xl py-2.5 pl-10 pr-4 text-white placeholder-zinc-500 focus:outline-none focus:border-green-500/50 focus:ring-1 focus:ring-green-500/20 transition-all"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
         </div>
 
         {/* List */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
-          {(() => {
-            console.log('[HistoryPanel] LIST RENDER - historyLoading:', historyLoading, 'villages.length:', villages.length);
-            console.log('[HistoryPanel] LIST RENDER - filteredVillages.length:', filteredVillages.length);
-            if (historyLoading && villages.length === 0) {
-              console.log('[HistoryPanel] LIST RENDER - Showing LOADING');
-              return (
-                <div style={{ textAlign: 'center', marginTop: '40px', color: '#666' }}>
-                  <FontAwesomeIcon icon={faSpinner} spin size="2x" style={{ color: '#16a34a', marginBottom: '10px' }} />
-                  <p>加载中...</p>
-                </div>
-              );
-            } else if (filteredVillages.length > 0) {
-              console.log('[HistoryPanel] LIST RENDER - Showing VILLAGES LIST');
-              return filteredVillages.map(village => {
-                console.log('[HistoryPanel] LIST RENDER - Village:', village.display_name, 'sessions:', village.sessions?.length);
-                return (
-                  <div key={village.name} style={{ marginBottom: '15px', border: '2px solid #16a34a', borderRadius: '8px', overflow: 'hidden' }}>
-                    <div style={{ padding: '10px', backgroundColor: '#fafafa', fontWeight: 'bold', borderBottom: '1px solid #f0f0f0', color: '#111827' }}>
-                      {village.display_name} ({village.sessions?.length || 0} 条记录)
-                    </div>
-                    <div style={{ padding: '5px' }}>
-                      {village.sessions && village.sessions.length > 0 ? village.sessions.map(session => (
-                        <div 
+        <div className="flex-1 overflow-y-auto p-4">
+          {historyLoading && villages.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
+              <div className="w-10 h-10 border-2 border-green-500/30 border-t-green-500 rounded-full animate-spin mb-4" />
+              <p className="text-sm">加载中...</p>
+            </div>
+          ) : filteredVillages.length > 0 ? (
+            <div className="space-y-3">
+              {filteredVillages.map(village => (
+                <div 
+                  key={village.name} 
+                  className="bg-[#1e1e1e] border border-[#2d2d2d] rounded-xl overflow-hidden hover:border-green-500/30 transition-colors"
+                >
+                  {/* Village header */}
+                  <div className="px-4 py-3 bg-[#242424] border-b border-[#2d2d2d] flex items-center justify-between">
+                    <span className="font-medium text-white">{village.display_name}</span>
+                    <span className="text-xs text-zinc-500 bg-[#1a1a1a] px-2 py-1 rounded-full">
+                      {village.sessions?.length || 0} 条记录
+                    </span>
+                  </div>
+                  
+                  {/* Sessions list */}
+                  <div className="p-2">
+                    {village.sessions && village.sessions.length > 0 ? (
+                      village.sessions.map(session => (
+                        <button
                           key={session.session_id}
                           onClick={() => {
                             loadHistoricalSession(village.name, session.session_id);
                             onClose();
                           }}
-                          style={{ 
-                            padding: '8px 10px', cursor: 'pointer', borderRadius: '4px', fontSize: '0.9rem',
-                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                            backgroundColor: '#fff', color: '#374151'
-                          }}
-                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f0fdf4'}
-                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#fff'}
+                          className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left text-zinc-300 hover:bg-[#2d2d2d] hover:text-white transition-colors group"
                         >
-                          <span><FontAwesomeIcon icon={faClock} style={{ marginRight: '8px', color: '#999' }} /> {new Date(session.timestamp).toLocaleString('zh-CN')}</span>
-                          <FontAwesomeIcon icon={faChevronRight} size="xs" style={{ color: '#ccc' }} />
-                        </div>
-                      )) : (
-                        <div style={{ padding: '10px', color: '#999', textAlign: 'center' }}>无会话记录</div>
-                      )}
-                    </div>
+                          <div className="flex items-center gap-2">
+                            <FontAwesomeIcon 
+                              icon={faClock} 
+                              className="text-zinc-500 group-hover:text-green-400 transition-colors"
+                              style={{ width: '12px', height: '12px' }}
+                            />
+                            <span className="text-sm">
+                              {new Date(session.timestamp).toLocaleString('zh-CN')}
+                            </span>
+                          </div>
+                          <FontAwesomeIcon 
+                            icon={faChevronRight} 
+                            className="text-zinc-600 group-hover:text-green-400 transition-colors"
+                            style={{ width: '10px', height: '10px' }}
+                          />
+                        </button>
+                      ))
+                    ) : (
+                      <div className="py-4 text-center text-zinc-500 text-sm">
+                        无会话记录
+                      </div>
+                    )}
                   </div>
-                );
-              });
-            } else {
-              console.log('[HistoryPanel] LIST RENDER - Showing EMPTY STATE');
-              return (
-                <div style={{ textAlign: 'center', marginTop: '100px', color: '#ccc' }}>
-                  <FontAwesomeIcon icon={faInbox} size="3x" style={{ marginBottom: '10px' }} />
-                  <p>暂无数据</p>
                 </div>
-              );
-            }
-          })()}
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-20 text-zinc-500">
+              <FontAwesomeIcon icon={faInbox} className="text-4xl mb-4" />
+              <p>暂无数据</p>
+            </div>
+          )}
         </div>
       </div>
     </>,

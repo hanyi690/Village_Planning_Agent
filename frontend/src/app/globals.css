@@ -1,5 +1,6 @@
 /* ============================================
-   Global Styles - 乡村智能规划大模型 (UI/UX Pro Max 版)
+   Global Styles - 乡村智能规划大模型
+   Gemini-Inspired Dark Theme with Green Accent
    ============================================ */
 
 @tailwind base;
@@ -8,126 +9,119 @@
 
 :root {
   /* ============================================
-     专业色彩系统 - 绿色主题 (green-600)
+     Gemini-Inspired Dark Theme Color System
+     深色主题 + 绿色强调色
      ============================================ */
 
-  /* 专业的绿色主题 - Tailwind green-600 */
-  --primary-green: #16a34a;      /* green-600 - 主要绿色 */
-  --primary-green-hover: #15803d; /* green-700 - 悬停状态 */
-  --primary-green-light: #dcfce7; /* green-100 - 浅绿色背景 */
-  --primary-green-lighter: #f0fdf4; /* green-50 - 更浅的背景 */
-  --primary-green-dark: #166534; /* green-800 - 深绿色 */
+  /* 主背景色 - 深色系 */
+  --bg-primary: #0f0f0f;
+  --bg-secondary: #1a1a1a;
+  --bg-tertiary: #242424;
+  --bg-elevated: #2d2d2d;
+  --bg-surface: #1e1e1e;
 
-  /* 专业配色方案 - 有机绿色主题 (保留向后兼容) */
-  --primary-50: #e8f5e9;
-  --primary-100: #c8e6c9;
-  --primary-200: #a5d6a7;
-  --primary-300: #81c784;
-  --primary-400: #66bb6a;
-  --primary-500: #4caf50;
-  --primary-600: #16a34a; /* 更新为 green-600 */
-  --primary-700: #15803d; /* 更新为 green-700 */
-  --primary-800: #166534; /* 更新为 green-800 */
-  --primary-900: #14532d;
+  /* 绿色强调色系 - 品牌色 */
+  --accent-green: #22c55e;        /* green-500 - 主强调色 */
+  --accent-green-light: #4ade80;  /* green-400 */
+  --accent-green-dark: #16a34a;   /* green-600 */
+  --accent-green-glow: rgba(34, 197, 94, 0.4);
+  --accent-green-subtle: rgba(34, 197, 94, 0.1);
 
-  /* 添加缺失的变量定义 */
-  --secondary-green: #15803d;    /* 次要绿色 - 用于悬停状态 */
-  --light-green: #86efac;        /* 浅绿色 - 用于边框和背景 */
+  /* 辅助强调色 */
+  --accent-blue: #3b82f6;
+  --accent-purple: #8b5cf6;
+  --accent-cyan: #06b6d4;
 
-  /* Cream text colors - 替换白色 */
-  --text-cream-primary: #FFFEF8;
-  --text-cream-secondary: #F5F3EE;
-  --text-cream-ivory: #FAF9F6;
-  --overlay-cream-light: rgba(255, 254, 248, 0.25);
+  /* 文字颜色 */
+  --text-primary: #ffffff;
+  --text-secondary: #a1a1aa;
+  --text-tertiary: #71717a;
+  --text-muted: #52525b;
 
-  /* 强调色 */
-  --accent-emerald: #10b981;
-  --accent-teal: #14b8a6;
-  --accent-lime: #84cc16;
+  /* 边框颜色 */
+  --border-primary: #2d2d2d;
+  --border-secondary: #3f3f46;
+  --border-accent: rgba(34, 197, 94, 0.3);
 
-  /* 中性色系统 - 统一标准 */
-  --gray-50: #f9fafb;
-  --gray-100: #f3f4f6;
-  --gray-200: #e5e7eb;
-  --gray-300: #d1d5db;
-  --gray-400: #9ca3af;
-  --gray-500: #6b7280;
-  --gray-600: #4b5563;
-  --gray-700: #374151;
-  --gray-800: #1f2937;
-  --gray-900: #111827;
+  /* 渐变色 */
+  --gradient-green: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  --gradient-glow: linear-gradient(135deg, rgba(34, 197, 94, 0.2) 0%, rgba(34, 197, 94, 0.05) 100%);
+  --gradient-surface: linear-gradient(180deg, #1a1a1a 0%, #0f0f0f 100%);
+  --gradient-card: linear-gradient(145deg, #1e1e1e 0%, #151515 100%);
 
-  /* 玻璃态 */
-  --glass-bg: rgba(255, 255, 255, 0.7);
-  --glass-border: rgba(255, 255, 255, 0.18);
-  --glass-shadow: rgba(0, 0, 0, 0.1);
+  /* 玻璃态效果 */
+  --glass-bg: rgba(30, 30, 30, 0.8);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 
-  /* 卡片阴影 - 专业设计 */
-  --shadow-card-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-card-md: 0 4px 6px rgba(0, 0, 0, 0.07);
-  --shadow-card-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+  /* 阴影系统 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 20px 60px rgba(0, 0, 0, 0.6);
+  --shadow-glow: 0 0 30px rgba(34, 197, 94, 0.3);
+  --shadow-glow-lg: 0 0 60px rgba(34, 197, 94, 0.4);
 
-  /* 现代化中性色方案 - 用于导航栏和框架 (DeepSeek/Gemini风格) */
-  --nav-bg: #ffffff;
-  --nav-border: #e5e7eb;
-  --nav-text-active: #111827;  /* gray-900 */
-  --nav-text-inactive: #6b7280;  /* gray-500 */
-  --nav-text-hover: #374151;  /* gray-700 */
+  /* 圆角系统 */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
 
-  /* 输入框中性色 */
-  --input-bg: #ffffff;
-  --input-border: #d1d5db;  /* gray-300 */
-  --input-border-hover: #9ca3af;  /* gray-400 */
-  --input-placeholder: #6b7280;  /* gray-500 */
+  /* 间距系统 */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
 
-  /* 边框 - 深色 */
-  --border-color: #e5e7eb; /* gray-200 */
-  --border-color-hover: #d1d5db; /* gray-300 */
+  /* 过渡动画 */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-bounce: 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  /* 阴影 - 多层次深度 */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-card: 0 2px 6px rgba(0, 0, 0, 0.03);
-  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.15);
-  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.2);
-  --shadow-glow: 0 0 20px rgba(22, 163, 74, 0.4); /* 使用 green-600 */
-
-  /* 圆角 - 统一标准 */
-  --border-radius-sm: 8px;       /* 小圆角 - 用于按钮、标签 */
-  --border-radius: 12px;         /* 标准圆角 - 用于卡片、输入框 */
-  --border-radius-lg: 16px;      /* 大圆角 - 用于模态框 */
-  --border-radius-xl: 24px;      /* 超大圆角 - 仅用于特殊元素 */
-
-  /* 间距 */
-  --spacing-xs: 8px;
-  --spacing-sm: 16px;
-  --spacing-md: 24px;
-  --spacing-lg: 32px;
-  --spacing-xl: 48px;
-
-  /* 过渡动画 - 流畅 */
-  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slow: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  /* 向后兼容变量 */
+  --primary-green: #22c55e;
+  --primary-green-hover: #16a34a;
+  --primary-green-light: rgba(34, 197, 94, 0.1);
+  --secondary-green: #16a34a;
+  --gray-50: #fafafa;
+  --gray-100: #f4f4f5;
+  --gray-200: #e4e4e7;
+  --gray-300: #d4d4d8;
+  --gray-400: #a1a1aa;
+  --gray-500: #71717a;
+  --gray-600: #52525b;
+  --gray-700: #3f3f46;
+  --gray-800: #27272a;
+  --gray-900: #18181b;
 }
 
-/* Bootstrap 5 already handles box-sizing, so we don't need universal selector */
+/* ============================================
+   Base Styles
+   ============================================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
 
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  background: var(--gray-50);
-  color: var(--gray-900);
+  background: var(--bg-primary);
+  color: var(--text-primary);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
 }
-
-/* ============================================
-   Text Color Safety Net - Ensure Visibility
-   ============================================ */
-
-/* 不再强制覆盖 text-white，让组件自己控制颜色 */
-/* text-white 类将使用 Tailwind 默认的白色 #ffffff */
 
 /* ============================================
    Typography
@@ -135,201 +129,254 @@ body {
 
 h1, h2, h3, h4, h5, h6 {
   font-weight: 600;
-  color: var(--primary-green);
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
 }
 
+h1 { font-size: 2rem; }
+h2 { font-size: 1.5rem; }
+h3 { font-size: 1.25rem; }
+h4 { font-size: 1.125rem; }
+
 a {
-  color: var(--primary-green);
+  color: var(--accent-green);
   text-decoration: none;
-  transition: var(--transition);
+  transition: color var(--transition-fast);
 }
 
 a:hover {
-  color: var(--secondary-green);
+  color: var(--accent-green-light);
 }
 
 /* ============================================
-   Buttons - 只保留2种样式
+   Gemini-Style Gradient Backgrounds
    ============================================ */
 
-/* 主按钮 - 绿色渐变 */
+.bg-gradient-radial {
+  background: radial-gradient(ellipse at top, rgba(34, 197, 94, 0.08) 0%, transparent 50%),
+              radial-gradient(ellipse at bottom right, rgba(59, 130, 246, 0.05) 0%, transparent 50%),
+              var(--bg-primary);
+}
+
+.bg-gradient-mesh {
+  background:
+    radial-gradient(at 40% 20%, rgba(34, 197, 94, 0.1) 0px, transparent 50%),
+    radial-gradient(at 80% 0%, rgba(59, 130, 246, 0.08) 0px, transparent 50%),
+    radial-gradient(at 0% 50%, rgba(139, 92, 246, 0.05) 0px, transparent 50%),
+    radial-gradient(at 80% 50%, rgba(34, 197, 94, 0.05) 0px, transparent 50%),
+    radial-gradient(at 0% 100%, rgba(6, 182, 212, 0.05) 0px, transparent 50%),
+    var(--bg-primary);
+}
+
+/* Gemini 风格的动态光效背景 */
+.gemini-glow-bg {
+  position: relative;
+  overflow: hidden;
+}
+
+.gemini-glow-bg::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(34, 197, 94, 0.08) 0%, transparent 40%);
+  animation: geminiGlow 20s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes geminiGlow {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  25% {
+    transform: translate(10%, 10%) scale(1.1);
+  }
+  50% {
+    transform: translate(-5%, 5%) scale(0.95);
+  }
+  75% {
+    transform: translate(5%, -10%) scale(1.05);
+  }
+}
+
+/* ============================================
+   Buttons - Gemini Style
+   ============================================ */
+
 .btn-primary {
-  background: linear-gradient(135deg, var(--primary-green), var(--secondary-green));
-  color: var(--text-cream-primary);
+  background: var(--gradient-green);
+  color: var(--text-primary);
   border: none;
   padding: 0.75rem 1.5rem;
-  border-radius: var(--border-radius);
+  border-radius: var(--radius-full);
   font-weight: 600;
-  box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3);
-  transition: var(--transition);
+  font-size: 0.875rem;
   cursor: pointer;
+  transition: all var(--transition-base);
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-primary::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.2) 0%, transparent 50%);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
 }
 
 .btn-primary:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(46, 125, 50, 0.4);
+  box-shadow: var(--shadow-glow);
+}
+
+.btn-primary:hover::before {
+  opacity: 1;
 }
 
 .btn-primary:active {
   transform: translateY(0);
 }
 
-/* 描边按钮 - 绿色边框 */
-.btn-outline-primary {
-  background: white;
-  color: var(--primary-green);
-  border: 2px solid var(--primary-green);
+.btn-secondary {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-secondary);
   padding: 0.75rem 1.5rem;
-  border-radius: var(--border-radius);
-  font-weight: 600;
-  transition: var(--transition);
+  border-radius: var(--radius-full);
+  font-weight: 500;
+  font-size: 0.875rem;
   cursor: pointer;
+  transition: all var(--transition-base);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-md);
+  font-weight: 500;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-ghost:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.btn-outline-primary {
+  background: transparent;
+  color: var(--accent-green);
+  border: 1px solid var(--accent-green);
+  padding: 0.75rem 1.5rem;
+  border-radius: var(--radius-full);
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all var(--transition-base);
 }
 
 .btn-outline-primary:hover {
-  background: var(--primary-green);
-  color: var(--text-cream-primary);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(46, 125, 50, 0.2);
+  background: var(--accent-green-subtle);
+  box-shadow: var(--shadow-glow);
 }
 
 /* ============================================
-   Cards - 统一样式
+   Cards - Gemini Style
    ============================================ */
 
 .card {
-  background: white;
-  border: 1px solid var(--light-green);
-  border-radius: var(--border-radius);
-  box-shadow: var(--shadow-card);
-  transition: var(--transition);
+  background: var(--gradient-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  transition: all var(--transition-base);
 }
 
 .card:hover {
-  transform: translateY(-2px);
+  border-color: var(--border-accent);
   box-shadow: var(--shadow-md);
-  border-color: var(--primary-green);
+}
+
+.card-elevated {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.glass-card {
+  background: var(--glass-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--glass-shadow);
 }
 
 /* ============================================
-   Forms
+   Forms - Gemini Style
    ============================================ */
 
-.form-control:focus {
-  border-color: var(--light-green);
-  box-shadow: 0 0 0 0.2rem rgba(46, 125, 50, 0.25);
-  outline: none;
+.form-control,
+.form-select {
+  width: 100%;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+  transition: all var(--transition-fast);
 }
 
+.form-control:focus,
 .form-select:focus {
-  border-color: var(--light-green);
-  box-shadow: 0 0 0 0.2rem rgba(46, 125, 50, 0.25);
   outline: none;
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 3px var(--accent-green-subtle);
+  background: var(--bg-elevated);
+}
+
+.form-control::placeholder {
+  color: var(--text-muted);
+}
+
+.form-label {
+  display: block;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-sm);
+  font-size: 0.875rem;
 }
 
 /* ============================================
-   Utility Classes
+   Chat Interface Styles
    ============================================ */
 
-.text-primary {
-  color: var(--primary-green) !important;
+.chat-container {
+  background: var(--bg-primary);
+  min-height: 100vh;
 }
 
-.bg-primary {
-  background-color: var(--primary-green) !important;
+.message-bubble {
+  position: relative;
+  animation: messageSlideIn 0.3s ease-out;
 }
 
-.border-primary {
-  border-color: var(--primary-green) !important;
-}
-
-/* ============================================
-   Icon Size System
-   ============================================ */
-
-/* 图标基础尺寸 */
-.icon-xs { font-size: 0.75rem; }   /* 12px */
-.icon-sm { font-size: 0.875rem; }  /* 14px */
-.icon-base { font-size: 1rem; }    /* 16px */
-.icon-lg { font-size: 1.125rem; }  /* 18px */
-.icon-xl { font-size: 1.25rem; }   /* 20px */
-
-/* 图标圆圈 */
-.icon-circle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--primary-green);
-  color: var(--text-cream-primary);
-  transition: var(--transition);
-}
-
-.icon-circle-xs {
-  width: 1.5rem;   /* 24px */
-  height: 1.5rem;
-  font-size: 0.75rem;  /* 12px */
-}
-
-.icon-circle-sm {
-  width: 2rem;     /* 32px */
-  height: 2rem;
-  font-size: 0.875rem; /* 14px */
-}
-
-.icon-circle-md {
-  width: 2.5rem;   /* 40px - was 3rem */
-  height: 2.5rem;
-  font-size: 1rem;  /* 16px - was 1.25rem */
-}
-
-.icon-circle-lg {
-  width: 3rem;     /* 48px - was 4rem */
-  height: 3rem;
-  font-size: 1.125rem; /* 18px - was 1.5rem */
-}
-
-/* 状态徽章 */
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.375rem 0.75rem;
-  border-radius: var(--border-radius);
-  font-size: 0.75rem;
-  font-weight: 600;
-  box-shadow: var(--shadow-sm);
-}
-
-.status-badge-success {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.status-badge-info {
-  background: #dbeafe;
-  color: #1e40af;
-}
-
-.status-badge-warning {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-/* ============================================
-   Animations - 简化为3个动画
-   ============================================ */
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes slideUp {
+@keyframes messageSlideIn {
   from {
     opacity: 0;
     transform: translateY(10px);
@@ -340,164 +387,108 @@ a:hover {
   }
 }
 
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+/* User message - 绿色渐变 */
+.message-user {
+  background: var(--gradient-green);
+  color: white;
+  border-radius: var(--radius-xl);
+  border-bottom-right-radius: var(--radius-sm);
 }
 
-.fade-in {
-  animation: fadeIn 0.3s ease-in-out;
+/* AI message - 深色卡片 */
+.message-assistant {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  border-bottom-left-radius: var(--radius-sm);
 }
 
-.animate-fade-in {
-  animation: fadeIn 0.3s ease-in-out;
-}
-
-.slide-up {
-  animation: slideUp 0.3s ease-out;
-}
-
-.spin {
-  animation: spin 1s linear infinite;
-}
-
-/* ============================================
-   Message Styles
-   ============================================ */
-
-.message-bubble {
-  position: relative;
-  transition: var(--transition);
-  animation: slideUp 0.3s ease-out;
-}
-
-.message-bubble:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
-}
-
-/* ============================================
-   Responsive
-   ============================================ */
-
-@media (max-width: 576px) {
-  h1 {
-    font-size: 1.75rem;
-  }
-
-  h2 {
-    font-size: 1.5rem;
-  }
-
-  .btn-primary,
-  .btn-outline-primary {
-    font-size: 1rem;
-    padding: 0.75rem 1.5rem;
-  }
-}
-
-/* ============================================
-   Scrollbar Styling
-   ============================================ */
-
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--gray-100);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--primary-300);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--primary-500);
-}
-
-/* ============================================
-   Glass Morphism Effects
-   ============================================ */
-
-.glass-card {
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  box-shadow:
-    0 8px 32px rgba(0, 0, 0, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.5);
-  border-radius: var(--border-radius-lg);
-  transition: var(--transition);
-}
-
-.glass-card:hover {
-  transform: translateY(-4px);
-  box-shadow:
-    0 12px 40px rgba(0, 0, 0, 0.15),
-    inset 0 1px 0 rgba(255, 255, 255, 0.6);
-}
-
-.glass-header {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-/* ============================================
-   Dynamic Gradient Backgrounds
-   ============================================ */
-
-.bg-animated-gradient {
-  background: linear-gradient(
-    -45deg,
-    var(--primary-50),
-    var(--primary-100),
-    var(--primary-200),
-    var(--primary-300)
-  );
-  background-size: 400% 400%;
-  animation: gradient-bg 15s ease infinite;
-}
-
-@keyframes gradient-bg {
-  0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0% 50%;
-  }
-}
-
-.grid-pattern {
+/* Message actions */
+.message-actions-container {
   position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(rgba(76, 175, 80, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(76, 175, 80, 0.05) 1px, transparent 1px);
-  background-size: 50px 50px;
-  mask-image: radial-gradient(ellipse at center, black 40%, transparent 70%);
+  top: -8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.message-bubble:hover .message-actions-container {
+  opacity: 1;
+}
+
+.message-action-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.message-action-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--accent-green);
+  border-color: var(--accent-green);
 }
 
 /* ============================================
-   Enhanced Animations
+   Input Area - Gemini Style
    ============================================ */
 
-@keyframes fadeInUp {
+.input-area {
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border-primary);
+  padding: var(--space-md);
+}
+
+.input-container {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  transition: all var(--transition-base);
+}
+
+.input-container:focus-within {
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 3px var(--accent-green-subtle);
+}
+
+.input-textarea {
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  resize: none;
+  width: 100%;
+  padding: var(--space-md);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.input-textarea:focus {
+  outline: none;
+}
+
+.input-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* ============================================
+   Animations - Gemini Style
+   ============================================ */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
   from {
     opacity: 0;
-    transform: translateY(30px);
+    transform: translateY(20px);
   }
   to {
     opacity: 1;
@@ -505,10 +496,10 @@ a:hover {
   }
 }
 
-@keyframes fadeInScale {
+@keyframes scaleIn {
   from {
     opacity: 0;
-    transform: scale(0.9);
+    transform: scale(0.95);
   }
   to {
     opacity: 1;
@@ -516,335 +507,265 @@ a:hover {
   }
 }
 
-@keyframes float {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-10px);
-  }
-}
-
 @keyframes shimmer {
-  0% {
-    background-position: -1000px 0;
-  }
-  100% {
-    background-position: 1000px 0;
-  }
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
 }
 
 @keyframes pulse-glow {
   0%, 100% {
-    box-shadow: 0 0 20px rgba(76, 175, 80, 0.3);
+    box-shadow: 0 0 20px var(--accent-green-glow);
   }
   50% {
-    box-shadow: 0 0 30px rgba(76, 175, 80, 0.6);
+    box-shadow: 0 0 40px var(--accent-green-glow);
   }
 }
 
-.animate-fade-in-up {
-  animation: fadeInUp 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
 }
 
-.animate-fade-in-scale {
-  animation: fadeInScale 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
 }
 
-.animate-float {
-  animation: float 3s ease-in-out infinite;
+.animate-slide-up {
+  animation: slideUp 0.4s ease-out;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.3s ease-out;
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 25%,
+    var(--bg-elevated) 50%,
+    var(--bg-tertiary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
 }
 
 .animate-pulse-glow {
   animation: pulse-glow 2s ease-in-out infinite;
 }
 
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
 /* Stagger animation delays */
-.animate-delay-100 {
-  animation-delay: 100ms;
-}
-.animate-delay-200 {
-  animation-delay: 200ms;
-}
-.animate-delay-300 {
-  animation-delay: 300ms;
-}
-.animate-delay-400 {
-  animation-delay: 400ms;
-}
-.animate-delay-500 {
-  animation-delay: 500ms;
-}
+.delay-100 { animation-delay: 100ms; }
+.delay-200 { animation-delay: 200ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-400 { animation-delay: 400ms; }
+.delay-500 { animation-delay: 500ms; }
 
 /* ============================================
-   Enhanced Button Styles
+   Thinking/Loading States - Gemini Style
    ============================================ */
 
-.btn-glow {
-  position: relative;
-  overflow: hidden;
-  transition: var(--transition);
+.thinking-dots {
+  display: flex;
+  gap: 4px;
 }
 
-.btn-glow::before {
+.thinking-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--accent-green);
+  border-radius: 50%;
+  animation: thinkingPulse 1.4s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) { animation-delay: 200ms; }
+.thinking-dot:nth-child(3) { animation-delay: 400ms; }
+
+@keyframes thinkingPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+}
+
+/* Gemini 风格的渐变思考指示器 */
+.thinking-gradient {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-green), var(--accent-cyan));
+  animation: thinkingRotate 2s linear infinite;
+  position: relative;
+}
+
+.thinking-gradient::before {
   content: '';
   position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0;
-  height: 0;
+  inset: 3px;
+  background: var(--bg-elevated);
   border-radius: 50%;
-  background: rgba(255, 254, 248, 0.3);
-  transform: translate(-50%, -50%);
-  transition: width 0.6s, height 0.6s;
 }
 
-.btn-glow:hover::before {
-  width: 300px;
-  height: 300px;
-}
-
-.btn-gradient-primary {
-  background: linear-gradient(135deg, var(--primary-600), var(--primary-700));
-  color: var(--text-cream-primary);
-  border: none;
-  padding: 0.875rem 2rem;
-  border-radius: var(--border-radius);
-  font-weight: 600;
-  box-shadow: 0 4px 12px rgba(67, 160, 71, 0.3);
-  transition: var(--transition);
-  cursor: pointer;
-  position: relative;
-  overflow: hidden;
-}
-
-.btn-gradient-primary:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-glow);
-}
-
-.btn-gradient-secondary {
-  background: #1f2937;
-  color: var(--primary-700);
-  border: 2px solid var(--primary-500);
-  padding: 0.875rem 2rem;
-  border-radius: var(--border-radius);
-  font-weight: 600;
-  transition: var(--transition);
-  cursor: pointer;
-}
-
-.btn-gradient-secondary:hover {
-  background: var(--primary-50);
-  border-color: var(--primary-600);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(67, 160, 71, 0.2);
+@keyframes thinkingRotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* ============================================
-   Input Focus Effects
+   Drawer/Modal Styles
    ============================================ */
 
-.input-focus-glow:focus {
-  border-color: var(--primary-500);
-  box-shadow: 0 0 0 4px rgba(76, 175, 80, 0.1);
-  outline: none;
+.drawer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 40;
+}
+
+.drawer-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: 400px;
+  max-width: 90vw;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-primary);
+  z-index: 50;
+  animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 40;
+}
+
+.modal-content {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  animation: scaleIn 0.3s ease-out;
 }
 
 /* ============================================
-   Step Indicator
+   Scrollbar Styling
    ============================================ */
 
-.step-indicator {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem 1.5rem;
-  border-radius: var(--border-radius-lg);
-  font-weight: 600;
-  transition: var(--transition);
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
-.step-indicator.active {
-  background: linear-gradient(135deg, var(--primary-500), var(--primary-600));
-  color: var(--text-cream-primary);
-  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.step-indicator.inactive {
-  background: var(--gray-100);
-  color: var(--gray-500);
+::-webkit-scrollbar-thumb {
+  background: var(--border-secondary);
+  border-radius: 3px;
 }
 
-.step-line {
-  flex: 1;
-  height: 2px;
-  background: var(--gray-200);
-  position: relative;
-}
-
-.step-line.active {
-  background: linear-gradient(90deg, var(--primary-500), var(--primary-400));
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
 /* ============================================
-   File Upload Zone
-   ============================================ */
-
-.upload-zone {
-  border: 2px dashed var(--primary-300);
-  border-radius: var(--border-radius-lg);
-  padding: 3rem;
-  text-align: center;
-  transition: var(--transition);
-  cursor: pointer;
-  background: var(--gray-50);
-}
-
-.upload-zone:hover {
-  border-color: var(--primary-500);
-  background: var(--primary-50);
-  transform: scale(1.02);
-}
-
-.upload-zone.dragging {
-  border-color: var(--primary-600);
-  background: var(--primary-100);
-  transform: scale(1.05);
-}
-
-/* ============================================
-   Preview Card
-   ============================================ */
-
-.preview-card {
-  background: white;
-  border-radius: var(--border-radius);
-  padding: 1rem;
-  box-shadow: var(--shadow-sm);
-  transition: var(--transition);
-  border: 1px solid var(--gray-200);
-}
-
-.preview-card:hover {
-  box-shadow: var(--shadow-md);
-  border-color: var(--primary-300);
-}
-
-/* ============================================
-   Typography Enhancements
+   Utility Classes
    ============================================ */
 
 .text-gradient {
-  background: linear-gradient(135deg, var(--primary-600), var(--primary-800));
+  background: var(--gradient-green);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-.heading-xl {
-  font-size: clamp(2.5rem, 5vw, 4rem);
-  font-weight: 800;
-  line-height: 1.1;
-  letter-spacing: -0.02em;
+.border-glow {
+  border: 1px solid var(--accent-green);
+  box-shadow: var(--shadow-glow);
 }
 
-.heading-lg {
-  font-size: clamp(2rem, 4vw, 3rem);
-  font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.01em;
+.bg-glow {
+  box-shadow: var(--shadow-glow);
 }
 
-.heading-md {
-  font-size: 1.5rem;
-  font-weight: 600;
-  line-height: 1.3;
+/* Status badges */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.status-badge-success {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--accent-green);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.status-badge-info {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-blue);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.status-badge-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 /* ============================================
-   Responsive Utilities
+   Responsive
    ============================================ */
 
 @media (max-width: 768px) {
-  .glass-card {
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+  :root {
+    --radius-lg: 12px;
+    --radius-xl: 16px;
   }
 
-  .heading-xl {
-    font-size: 2rem;
-  }
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.25rem; }
 
-  .heading-lg {
-    font-size: 1.75rem;
+  .drawer-panel {
+    width: 100%;
   }
 }
 
 /* ============================================
-   Modern Input Utilities
+   Accessibility
    ============================================ */
 
-.input-pill {
-  background: var(--input-bg);
-  border: 1px solid var(--input-border);
-  border-radius: 9999px; /* pill shape */
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-  transition: all 0.2s ease;
-}
-
-.input-pill:hover {
-  border-color: var(--input-border-hover);
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
-}
-
-.input-pill:focus-within {
-  border-color: var(--primary-500);
-  box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
-}
-
-/* ============================================
-   Navigation Utilities
-   ============================================ */
-
-.nav-item {
-  color: var(--nav-text-inactive);
-  transition: color 0.2s ease;
-}
-
-.nav-item:hover {
-  color: var(--nav-text-hover);
-}
-
-.nav-item.active {
-  color: var(--nav-text-active);
-  font-weight: 600;
-}
-
-.nav-dot-indicator {
-  width: 4px;
-  height: 4px;
-  background: var(--nav-text-active);
-  border-radius: 50%;
-}
-
-/* ============================================
-   Accessibility Utilities
-   ============================================ */
-
-/* 按钮焦点可见性 */
-.button-focus-visible:focus-visible {
-  outline: 2px solid var(--primary-500);
+.focus-visible:focus-visible {
+  outline: 2px solid var(--accent-green);
   outline-offset: 2px;
 }
 
-/* 输入框焦点可见性 */
-.input-focus-visible:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.15);
-}
-
-/* 屏幕阅读器专用 */
 .sr-only {
   position: absolute;
   width: 1px;
@@ -857,145 +778,17 @@ a:hover {
   border-width: 0;
 }
 
-/* Scrollbar styling for auto-expanding textarea */
-.scrollbar-thin {
-  scrollbar-width: thin;
-}
-
-.scrollbar-thin::-webkit-scrollbar {
-  width: 6px;
-}
-
-.scrollbar-thumb-gray-300::-webkit-scrollbar-thumb {
-  background-color: var(--gray-300);
-  border-radius: 9999px;
-}
-
-.scrollbar-thumb-gray-400::-webkit-scrollbar-thumb:hover {
-  background-color: var(--gray-400);
-}
-
-.scrollbar-thumb-rounded-full::-webkit-scrollbar-thumb {
-  border-radius: 9999px;
-}
-
 /* ============================================
-   Segmented Control Utilities
+   Print Styles
    ============================================ */
 
-.segmented-control {
-  @apply flex p-1 bg-gray-100 rounded-xl w-fit mx-auto;
-}
-
-.segmented-button {
-  @apply px-6 py-2 text-sm font-medium rounded-lg transition-all duration-200;
-}
-
-.segmented-button-active {
-  @apply bg-white text-blue-600 shadow-sm;
-}
-
-.segmented-button-inactive {
-  @apply text-gray-500 hover:text-gray-700;
-}
-
-/* ============================================
-   Conversational Input Utilities
-   ============================================ */
-
-.conversational-input-container {
-  @apply relative flex flex-col w-full border border-gray-200 rounded-xl shadow-sm bg-gray-50;
-}
-
-.conversational-textarea {
-  @apply w-full p-3 bg-transparent resize-none border-none focus:ring-0 text-sm;
-}
-
-.conversational-toolbar {
-  @apply flex items-center justify-between p-2 border-t border-gray-200 bg-white rounded-b-xl;
-}
-
-/* ============================================
-   Bootstrap 5 Compatible Focus Styles
-   ============================================ */
-
-/* Enhanced input focus styles that work with Bootstrap */
-.form-control:focus {
-  background-color: #ffffff !important;
-  border-color: var(--primary-green) !important;
-  box-shadow: 0 0 0 0.25rem rgba(22, 163, 74, 0.1) !important;
-  color: #111827 !important;
-}
-
-.form-control::placeholder {
-  color: var(--gray-400);
-  opacity: 1;
-}
-
-/* Ensure form inputs take full width */
-.form-control {
-  width: 100% !important;
-  background-color: #ffffff !important;
-  border-color: var(--gray-300) !important;
-  color: #111827 !important;
-}
-
-/* ============================================
-   Drawer/Modal Animations
-   ============================================ */
-
-@keyframes slideInRight {
-  from {
-    transform: translateX(100%);
+@media print {
+  body {
+    background: white;
+    color: black;
   }
-  to {
-    transform: translateX(0);
+
+  .no-print {
+    display: none;
   }
-}
-
-.animate-slide-in-right {
-  animation: slideInRight 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* ============================================
-   Header Component - 深色玻璃态效果
-   ============================================ */
-
-/* 确保 Header 玻璃态效果正常 */
-header {
-  background-color: transparent !important;
-}
-
-/* Header 保持白色背景，文字使用深色 */
-header .bg-white\/80 {
-  background-color: rgba(255, 255, 255, 0.8) !important;
-}
-
-header .bg-white\/95 {
-  background-color: rgba(255, 255, 255, 0.95) !important;
-}
-
-/* 确保 backdrop-blur 正常工作 */
-@supports (backdrop-filter: blur(12px)) {
-  header .backdrop-blur-md {
-    backdrop-filter: blur(12px) !important;
-    -webkit-backdrop-filter: blur(12px) !important;
-  }
-}
-
-/* Header 内的文本使用深色 - 确保在白色背景上可见 */
-header h1,
-header h2,
-header h3 {
-  color: #16a34a !important;
-}
-
-header p,
-header span,
-header .text-gray-900 {
-  color: #111827 !important;
-}
-
-header .text-gray-600 {
-  color: #4b5563 !important;
 }
