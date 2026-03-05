@@ -6,6 +6,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { motion } from 'framer-motion';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
 import type {
   Message,
@@ -823,50 +824,22 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   }, [showViewer]);
 
   return (
-    <div className={`flex flex-col h-full bg-[#0f0f0f] ${className}`}>
-      {/* Top: Progress bar and indicators - Gemini dark style */}
+    <div className={`flex flex-col h-full bg-[#F9FBF9] ${className}`}>
+      {/* Top: Status indicators only - Card-style design */}
       {(status === 'collecting' || status === 'planning' || status === 'paused' || status === 'revising') && (
-        <div className="flex-shrink-0 border-b border-[#2d2d2d] bg-[#1a1a1a] p-4">
-          {/* Progress bar - Dark card style */}
-          {progressMessages.length > 0 && (
-            <div className="mb-3 bg-[#1e1e1e] rounded-xl p-4 border border-[#2d2d2d] animate-fade-in">
-              {progressMessages.filter(msg => isProgressMessage(msg)).map(msg => (
-                  <div key={msg.id}>
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
-                        <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                        {msg.content}
-                      </span>
-                      <span className="text-sm font-bold text-green-400">{msg.progress}%</span>
-                    </div>
-                    <div className="w-full bg-[#2d2d2d] rounded-full h-2 overflow-hidden">
-                      <div
-                        className="bg-gradient-to-r from-green-500 to-green-400 h-2 rounded-full transition-all duration-300"
-                        style={{ width: `${msg.progress}%` }}
-                      />
-                    </div>
-                    {msg.currentLayer && (
-                      <div className="text-xs text-zinc-400 mt-2 font-medium flex items-center gap-1">
-                        <FontAwesomeIcon icon={faLayerGroup} className="text-green-400" style={{ width: '12px', height: '12px' }} />
-                        当前层级: {msg.currentLayer}
-                      </div>
-                    )}
-                  </div>
-              ))}
-            </div>
-          )}
-
-          {/* Status badge - Gemini style */}
+        <div className="flex-shrink-0 border-b border-gray-200 bg-white p-3 shadow-sm">
+          <div className="max-w-6xl mx-auto">
+          {/* Status badge - Colored + Icon + Shadow */}
           <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
-              status === 'collecting' || status === 'planning' ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30' :
-              status === 'paused' ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30' :
-              status === 'revising' ? 'bg-orange-500/15 text-orange-400 border border-orange-500/30' :
-              status === 'completed' ? 'bg-green-500/15 text-green-400 border border-green-500/30' :
-              status === 'failed' ? 'bg-red-500/15 text-red-400 border border-red-500/30' :
-              'bg-zinc-700/50 text-zinc-300 border border-zinc-600'
+            <span className={`status-badge ${
+              status === 'collecting' || status === 'planning' ? 'status-badge-info' :
+              status === 'paused' ? 'status-badge-warning' :
+              status === 'revising' ? 'status-badge-warning' :
+              status === 'completed' ? 'status-badge-success' :
+              status === 'failed' ? 'status-badge-error' :
+              'bg-gray-100 text-gray-700'
             }`}>
-              <span>
+              <span className="text-base">
                 {status === 'collecting' || status === 'planning' ? '🔄' :
                  status === 'paused' ? '⏸️' :
                  status === 'revising' ? '🔧' :
@@ -881,18 +854,19 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             </span>
 
             {currentLayer && (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-green-500/15 text-green-400 border border-green-500/30">
-                <FontAwesomeIcon icon={faLayerGroup} style={{ width: '12px', height: '12px' }} />
+              <span className="status-badge status-badge-success">
+                <FontAwesomeIcon icon={faLayerGroup} className="icon-xs" />
                 Layer {currentLayer}
               </span>
             )}
           </div>
+          </div>
         </div>
       )}
 
-      {/* Middle: Message list - Gemini dark style */}
-      <div className="flex-1 overflow-y-auto p-4 bg-gradient-radial">
-        <div className="max-w-4xl mx-auto">
+      {/* Middle: Message list - Centered container + max width */}
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-6xl mx-auto">
           {/* Layer Segmented Control - shown during planning/paused */}
           {(status === 'planning' || status === 'paused') && (
             <SegmentedControl
@@ -926,16 +900,14 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Jump to bottom button - Gemini style */}
+        {/* Jump to bottom button */}
         {showScrollButton && (
           <button
             onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })}
-            className="fixed bottom-28 right-8 bg-[#2d2d2d] text-zinc-300 border border-[#3f3f46] p-3 rounded-full shadow-lg hover:bg-[#3f3f46] hover:text-white transition-all z-50"
+            className="fixed bottom-24 right-8 bg-blue-100 text-gray-900 border border-blue-300 p-3 rounded-full shadow-lg hover:bg-blue-200 transition-colors z-50"
             title="跳转到底部"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-            </svg>
+            ↓
           </button>
         )}
       </div>
@@ -943,64 +915,77 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       {/* 审查功能已通过 ReviewInteractionMessage 组件嵌入在 MessageList 中 */}
       {/* 不需要额外的审查面板 */}
 
-      {/* Bottom: Input area - Gemini dark style */}
-      <div className="border-t border-[#2d2d2d] bg-[#1a1a1a] p-4">
-        <div className="max-w-3xl mx-auto">
-          {/* Rate limit warning */}
+      {/* Bottom: Floating Capsule Input Area - Gemini Style */}
+      <div className="sticky bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-gray-50 via-gray-50/95 to-transparent">
+        <div className="max-w-6xl mx-auto">
+          {/* Rate limit warning and reset button */}
           {rateLimitError && (
-            <div className="mb-3 px-4 py-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center justify-between">
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between"
+            >
               <div className="flex items-center gap-3">
-                <span className="text-xl">⚠️</span>
+                <span className="text-2xl">⚠️</span>
                 <div>
-                  <div className="font-semibold text-amber-400">请求过于频繁</div>
-                  <div className="text-sm text-amber-300/70">
+                  <div className="font-semibold text-amber-800">请求过于频繁</div>
+                  <div className="text-sm text-amber-700">
                     项目 &quot;{rateLimitError.projectName}&quot; 触发了速率限制
                   </div>
                 </div>
               </div>
               <button
-                className="px-4 py-2 bg-[#2d2d2d] border border-amber-500/30 text-amber-400 rounded-lg text-sm font-medium hover:bg-amber-500/20 transition-colors"
+                className="px-4 py-2 text-sm font-medium text-amber-700 bg-white border border-amber-300 rounded-full hover:bg-amber-100 transition-colors"
                 onClick={() => handleResetRateLimit(rateLimitError.projectName)}
               >
                 🔄 重置限制
               </button>
-            </div>
+            </motion.div>
           )}
 
-          {/* Planning ready indicator */}
+          {/* Planning ready indicator with Start Planning button */}
           {status === 'collecting' && villageFormData && !taskId && (
-            <div className="mb-3 px-4 py-3 bg-green-500/10 border border-green-500/30 rounded-xl flex items-center justify-between">
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-3 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center justify-between"
+            >
               <div className="flex items-center gap-3">
-                <span className="text-xl">📋</span>
+                <span className="text-2xl">📋</span>
                 <div>
-                  <div className="font-semibold text-green-400">规划任务已准备</div>
-                  <div className="text-sm text-green-300/70">
+                  <div className="font-semibold text-emerald-800">规划任务已准备</div>
+                  <div className="text-sm text-emerald-700">
                     村庄：{villageFormData.projectName}
                   </div>
                 </div>
               </div>
-              <button
-                className="px-5 py-2.5 bg-gradient-to-r from-green-600 to-green-500 text-white rounded-lg font-medium hover:from-green-500 hover:to-green-400 transition-all shadow-lg shadow-green-500/20 disabled:opacity-50"
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                className="px-5 py-2 font-medium text-white rounded-full"
+                style={{
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)',
+                }}
                 onClick={handleStartPlanning}
                 disabled={isPlanning}
               >
                 {isPlanning ? (
                   <span className="flex items-center gap-2">
-                    <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
+                    <i className="fas fa-spinner fa-spin text-sm" />
                     启动中...
                   </span>
                 ) : (
                   <span className="flex items-center gap-2">
-                    🚀 开始规划
+                    <span>🚀</span>
+                    开始规划
                   </span>
                 )}
-              </button>
-            </div>
+              </motion.button>
+            </motion.div>
           )}
 
-          {/* Review Panel - 状态驱动，基于 isPaused 和 pendingReviewLayer */}
+          {/* Review Panel - 状态驱动 */}
           {isPaused && pendingReviewLayer && (
             <ReviewPanel
               layer={pendingReviewLayer}
@@ -1009,10 +994,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             />
           )}
 
-          {/* Input area: file upload and text input */}
           {/* 维度选择器 - 仅在审查状态下显示 */}
           {isPaused && pendingReviewLayer && (
-            <div className="mb-2">
+            <div className="mb-3">
               <DimensionSelector
                 layer={pendingReviewLayer}
                 selectedDimensions={selectedDimensions}
@@ -1022,28 +1006,42 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             </div>
           )}
 
-          {/* Input area - Gemini style rounded container */}
-          <div className="flex items-end gap-3 p-2 bg-[#242424] rounded-2xl border border-[#3f3f46] focus-within:border-green-500/50 focus-within:ring-2 focus-within:ring-green-500/10 transition-all">
-            {/* File upload button */}
-            <label className={`flex-shrink-0 p-2 rounded-lg transition-colors cursor-pointer ${
-              inputDisabled || isTyping || isUploadingFile
-                ? 'text-zinc-600 cursor-not-allowed'
-                : 'text-zinc-400 hover:text-green-400 hover:bg-[#2d2d2d]'
-            }`}>
-              <input
-                type="file"
-                multiple
-                accept={FILE_ACCEPT}
-                onChange={handleFileSelect}
-                disabled={inputDisabled || isTyping || isUploadingFile}
-                className="hidden"
-              />
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-              </svg>
-            </label>
+          {/* Floating Capsule Input */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={`relative flex items-end gap-2 p-2 bg-white rounded-3xl shadow-lg border transition-all duration-300 ${
+              hasPendingReview
+                ? 'border-amber-200 shadow-amber-100/50'
+                : 'border-gray-100 hover:border-gray-200'
+            }`}
+          >
+            {/* Hidden file input */}
+            <input
+              type="file"
+              multiple
+              accept={FILE_ACCEPT}
+              onChange={handleFileSelect}
+              disabled={inputDisabled || isTyping || isUploadingFile}
+              className="hidden"
+              id="file-upload"
+            />
 
-            {/* Text input */}
+            {/* File upload button - icon only */}
+            <motion.label
+              htmlFor="file-upload"
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              className={`flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full cursor-pointer transition-colors ${
+                inputDisabled || isTyping || isUploadingFile
+                  ? 'text-gray-300 cursor-not-allowed'
+                  : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <i className={`fas ${isUploadingFile ? 'fa-spinner fa-spin' : 'fa-paperclip'}`} />
+            </motion.label>
+
+            {/* Text input - grows dynamically */}
             <textarea
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
@@ -1056,37 +1054,53 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
               disabled={inputDisabled || isTyping}
               placeholder={
                 hasPendingReview && pendingReviewLayer
-                  ? `请输入修改意见，或输入"批准"继续...`
+                  ? '请输入修改意见，或输入"批准"继续...'
                   : status === 'planning' || status === 'collecting'
                     ? '规划进行中...'
-                    : '输入消息... (Enter 发送, Shift+Enter 换行)'
+                    : '输入消息...'
               }
-              className="flex-1 bg-transparent text-white placeholder-zinc-500 resize-none py-2 focus:outline-none text-sm leading-relaxed max-h-32"
               rows={1}
-              style={{ minHeight: '24px' }}
+              className="flex-1 min-h-[40px] max-h-32 px-2 py-2 text-gray-900 placeholder-gray-400 bg-transparent border-0 resize-none focus:outline-none focus:ring-0 text-sm leading-relaxed"
+              style={{
+                height: 'auto',
+                overflow: inputText.split('\n').length > 2 ? 'auto' : 'hidden',
+              }}
             />
 
-            {/* Send button */}
-            <button
+            {/* Send button - gradient circle */}
+            <motion.button
               onClick={handleSendMessage}
               disabled={inputDisabled || isTyping || !inputText.trim() || isUploadingFile}
-              className={`flex-shrink-0 p-2 rounded-lg transition-all ${
-                inputDisabled || isTyping || !inputText.trim() || isUploadingFile
-                  ? 'text-zinc-600 cursor-not-allowed'
-                  : 'text-green-400 hover:bg-green-500/20 hover:text-green-300'
+              whileHover={inputText.trim() ? { scale: 1.05 } : {}}
+              whileTap={inputText.trim() ? { scale: 0.95 } : {}}
+              className={`flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full transition-all duration-300 ${
+                inputText.trim() && !inputDisabled
+                  ? 'text-white shadow-lg'
+                  : 'text-gray-300 bg-gray-100 cursor-not-allowed'
               }`}
+              style={
+                inputText.trim() && !inputDisabled
+                  ? {
+                      background: 'linear-gradient(135deg, #10b981 0%, #14b8a6 50%, #0891b2 100%)',
+                      boxShadow: '0 4px 15px rgba(16, 185, 129, 0.4)',
+                    }
+                  : {}
+              }
             >
-              {isUploadingFile || isTyping ? (
-                <svg className="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
+              {isUploadingFile ? (
+                <i className="fas fa-spinner fa-spin text-sm" />
+              ) : isTyping ? (
+                <i className="fas fa-spinner fa-spin text-sm" />
               ) : (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
+                <i className="fas fa-arrow-up text-sm" />
               )}
-            </button>
-          </div>
+            </motion.button>
+          </motion.div>
+
+          {/* Helper text */}
+          <p className="text-center text-xs text-gray-400 mt-2">
+            Enter 发送 · Shift+Enter 换行
+          </p>
         </div>
       </div>
     </div>

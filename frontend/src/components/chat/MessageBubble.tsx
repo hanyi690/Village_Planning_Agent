@@ -2,10 +2,13 @@
 
 /**
  * MessageBubble Component - Gemini Style
- * Individual message bubble with hover actions
+ * Individual message bubble with Gemini-style design
+ * - AI messages: transparent background, left-aligned with avatar
+ * - User messages: pill-shaped, right-aligned
  */
 
 import React, { useState } from 'react';
+import { motion } from 'framer-motion';
 import { Message, ActionButton } from '@/types';
 import { isUserMessage } from '@/types';
 import MessageContent from './MessageContent';
@@ -37,83 +40,147 @@ export default function MessageBubble({
   const handleCopy = () => onCopy?.(message);
   const handleRegenerate = () => onRegenerate?.(message);
 
-  return (
+  // Animation variants
+  const bubbleVariants = {
+    hidden: {
+      opacity: 0,
+      y: 10,
+      scale: 0.98,
+    },
+    visible: {
+      opacity: 1,
+      y: 0,
+      scale: 1,
+      transition: {
+        type: 'spring' as const,
+        stiffness: 150,
+        damping: 20,
+      },
+    },
+  };
+
+  // AI Avatar Component with gradient
+  const AIAvatar = () => (
     <div
-      className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-4 animate-slide-up`}
+      className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm"
+      style={{
+        background: 'linear-gradient(135deg, #10b981 0%, #14b8a6 50%, #0891b2 100%)',
+      }}
+    >
+      <i className="fas fa-sparkles text-[10px]" />
+    </div>
+  );
+
+  // User messages: right-aligned pill shape
+  if (isUser) {
+    return (
+      <motion.div
+        variants={bubbleVariants}
+        initial="hidden"
+        animate="visible"
+        className="flex justify-end mb-4"
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+      >
+        <div className="max-w-[75%] bg-gradient-to-br from-emerald-100/80 to-teal-50 border border-emerald-200 text-gray-900 rounded-2xl rounded-br-md px-4 py-3 shadow-sm">
+          {/* Message Content */}
+          {children || (
+            <MessageContent
+              message={message}
+              onAction={onAction}
+              enableStreaming={enableStreaming}
+              dimensionContents={dimensionContents}
+            />
+          )}
+
+          {/* Timestamp */}
+          <div className="text-[10px] text-gray-500 text-right mt-1.5 font-medium">
+            {formatMessageTimestamp(message.timestamp)}
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  // AI messages: left-aligned with avatar, transparent background (Gemini style)
+  return (
+    <motion.div
+      variants={bubbleVariants}
+      initial="hidden"
+      animate="visible"
+      className="flex justify-start mb-4 gap-3"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <div
-        className={`relative max-w-[75%] rounded-2xl px-4 py-3 transition-all duration-200 ${
-          isUser
-            ? 'bg-gradient-to-r from-green-600 to-green-500 text-white shadow-lg shadow-green-500/20 rounded-br-md'
-            : 'bg-[#1e1e1e] border border-[#2d2d2d] text-white hover:border-[#3f3f46] rounded-bl-md'
-        }`}
-      >
-        {/* Message Actions (AI messages only) */}
-        {!isUser && (
-          <div className={`absolute -top-2 right-3 flex gap-1 transition-all duration-200 ${isHovered ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-1'}`}>
+      {/* AI Avatar */}
+      <div className="flex-shrink-0 pt-1">
+        <AIAvatar />
+      </div>
+
+      {/* Message Content Area */}
+      <div className="flex-1 min-w-0">
+        {/* AI Label */}
+        {message.type !== 'progress' && (
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="text-xs font-medium text-transparent bg-clip-text bg-gradient-to-r from-emerald-500 to-teal-500">
+              AI 助手
+            </span>
+          </div>
+        )}
+
+        {/* Message Body */}
+        <div className="relative group">
+          {/* Action Buttons (hover to show) */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: isHovered ? 1 : 0 }}
+            className="absolute -right-2 top-0 flex items-center gap-1 bg-white rounded-lg shadow-md border border-gray-100 p-1 -translate-y-1/2 z-10"
+          >
             <button
-              className="p-1.5 bg-[#2d2d2d] border border-[#3f3f46] rounded-lg text-zinc-400 hover:text-green-400 hover:border-green-500/50 transition-all duration-150"
+              className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
               title="复制"
               onClick={handleCopy}
               aria-label="复制消息"
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
+              <i className="fas fa-copy text-xs" />
             </button>
             {message.type === 'text' && (
               <button
-                className="p-1.5 bg-[#2d2d2d] border border-[#3f3f46] rounded-lg text-zinc-400 hover:text-green-400 hover:border-green-500/50 transition-all duration-150"
+                className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
                 title="重新生成"
                 onClick={handleRegenerate}
                 aria-label="重新生成"
               >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
+                <i className="fas fa-redo text-xs" />
               </button>
             )}
-          </div>
-        )}
+          </motion.div>
 
-        {/* AI Assistant Label */}
-        {!isUser && message.type !== 'progress' && (
-          <div className="flex items-center gap-2 mb-2 pb-2 border-b border-[#2d2d2d]">
-            <div className="flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-br from-green-500 to-green-600">
-              <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-              </svg>
+          {/* Content - with background and border for visibility */}
+          <div className="text-gray-800 leading-relaxed bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm">
+            {children || (
+              <MessageContent
+                message={message}
+                onAction={onAction}
+                enableStreaming={enableStreaming}
+                dimensionContents={dimensionContents}
+              />
+            )}
+          </div>
+
+          {/* Knowledge References */}
+          {message.type === 'text' && message.knowledgeReferences && message.knowledgeReferences.length > 0 && (
+            <div className="mt-3">
+              <KnowledgeReference references={message.knowledgeReferences} />
             </div>
-            <span className="text-xs font-medium text-zinc-400">AI 助手</span>
-          </div>
-        )}
+          )}
 
-        {/* Message Content */}
-        {children || (
-          <MessageContent
-            message={message}
-            onAction={onAction}
-            enableStreaming={enableStreaming}
-            dimensionContents={dimensionContents}
-          />
-        )}
-
-        {/* Knowledge References */}
-        {!isUser && message.type === 'text' && message.knowledgeReferences && message.knowledgeReferences.length > 0 && (
-          <div className="mt-3 pt-3 border-t border-[#2d2d2d]">
-            <KnowledgeReference references={message.knowledgeReferences} />
-          </div>
-        )}
-
-        {/* Timestamp */}
-        <div className={`flex items-center justify-end gap-1 mt-2 ${isUser ? 'text-white/60' : 'text-zinc-500'}`}>
-          <span className="text-[10px] font-medium">
+          {/* Timestamp */}
+          <div className="text-[10px] text-gray-400 mt-2">
             {formatMessageTimestamp(message.timestamp)}
-          </span>
+          </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }

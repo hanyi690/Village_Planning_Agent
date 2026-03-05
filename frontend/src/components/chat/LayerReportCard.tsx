@@ -1,26 +1,28 @@
 'use client';
 
 /**
- * LayerReportCard - Complete layer report card with collapsible dimensions
- * 在侧边面板中渲染完整的 layer 报告
+ * LayerReportCard - Gemini Style
+ * Complete layer report card with collapsible dimensions
+ * 使用 Tailwind CSS + Framer Motion
  */
 
 import { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { ParsedDimension, parseLayerReport } from '@/lib/layerReportParser';
 import DimensionSection from './DimensionSection';
 
 interface LayerReportCardProps {
   layerNumber: number;
-  content: string; // Full markdown report
+  content: string;
   dimensions?: ParsedDimension[];
-  mode?: 'chat' | 'sidebar';  // NEW: 区分显示模式
+  mode?: 'chat' | 'sidebar';
   defaultExpanded?: boolean;
-  maxHeight?: string;        // NEW: 聊天模式下限制高度
-  showExpandAll?: boolean;   // NEW: 是否显示全局展开按钮
-  onOpenInSidebar?: () => void;  // NEW: 跳转到侧边栏
-  onToggleAll?: (expand: boolean) => void;  // NEW: 展开/折叠全部
-  isActive?: boolean;  // NEW: 是否为当前活跃层
-  hasStreamingDimensions?: boolean;  // NEW: 是否有流式维度内容
+  maxHeight?: string;
+  showExpandAll?: boolean;
+  onOpenInSidebar?: () => void;
+  onToggleAll?: (expand: boolean) => void;
+  isActive?: boolean;
+  hasStreamingDimensions?: boolean;
 }
 
 export default function LayerReportCard({
@@ -33,33 +35,26 @@ export default function LayerReportCard({
   showExpandAll,
   onOpenInSidebar,
   onToggleAll,
-  isActive = false,  // NEW: 默认为非活跃层
-  hasStreamingDimensions = false,  // NEW: 是否有流式维度内容
+  isActive = false,
+  hasStreamingDimensions = false,
 }: LayerReportCardProps) {
-  // ✅ 修复：活跃层默认展开，非活跃层默认折叠
-  // ✅ 新增：有流式维度内容时默认展开
   const actualDefaultExpanded = defaultExpanded ?? (mode === 'sidebar' || isActive || hasStreamingDimensions);
-  const actualMaxHeight = maxHeight ?? (mode === 'chat' ? '500px' : 'none');
+  const actualMaxHeight = maxHeight ?? (mode === 'chat' ? '800px' : 'none');
   const actualShowExpandAll = showExpandAll ?? (mode === 'sidebar');
 
   const [allExpanded, setAllExpanded] = useState(false);
   const [localExpanded, setLocalExpanded] = useState(actualDefaultExpanded);
 
-  // ✅ 使用传入的 dimensions prop，或解析 content
   const dimensions = useMemo(() => {
-    // 如果有 propDimensions，使用它
     if (propDimensions && propDimensions.length > 0) {
       return propDimensions;
     }
-    
-    // 回退到解析 content
     return parseLayerReport(content);
   }, [content, propDimensions]);
 
   const handleCopyDimension = (dimensionName: string, dimensionContent: string) => {
     const textToCopy = `## ${dimensionName}\n\n${dimensionContent}`;
     navigator.clipboard.writeText(textToCopy);
-    // TODO: Show toast notification
   };
 
   const handleExportDimension = (dimensionName: string, dimensionContent: string) => {
@@ -87,176 +82,112 @@ export default function LayerReportCard({
   };
 
   const handleToggleExpanded = () => {
-    setLocalExpanded(prev => !prev);
+    setLocalExpanded((prev) => !prev);
+  };
+
+  // Animation variants
+  const containerVariants = {
+    hidden: { opacity: 0, y: 20 },
+    visible: {
+      opacity: 1,
+      y: 0,
+      transition: {
+        duration: 0.3,
+        staggerChildren: 0.05,
+      },
+    },
   };
 
   if (dimensions.length === 0) {
     return (
-      <div
-        style={{
-          background: 'linear-gradient(135deg, #f5f9f5, #e8f5e9)',
-          borderRadius: '10px',
-          padding: '20px',
-          margin: '1.5rem 0',
-          textAlign: 'center',
-          color: '#666',
-        }}
+      <motion.div
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+        className="bg-gradient-to-br from-emerald-50 to-green-50 rounded-2xl p-6 text-center text-gray-500 my-6"
       >
-        <i className="fas fa-file-alt" style={{ fontSize: '2rem', marginBottom: '10px' }} />
+        <i className="fas fa-file-alt text-3xl mb-3 text-emerald-300" />
         <p>暂无维度数据</p>
-      </div>
+      </motion.div>
     );
   }
 
   return (
-    <div
-      className={`layer-report-container layer-report-card-${mode}`}
+    <motion.div
+      variants={containerVariants}
+      initial="hidden"
+      animate="visible"
+      layout
+      className={`relative bg-gradient-to-br from-emerald-50/80 to-green-50/80 rounded-2xl p-5 my-6 backdrop-blur-sm ${
+        !isActive ? 'opacity-70' : ''
+      }`}
       style={{
-        background: 'linear-gradient(135deg, #f5f9f5, #e8f5e9)',
-        borderRadius: '10px',
-        padding: '20px',
-        margin: '1.5rem 0',
         maxHeight: mode === 'chat' && !localExpanded ? actualMaxHeight : 'none',
-        // ✅ 修复：当展开时，允许滚动
         overflow: localExpanded ? 'visible' : 'hidden',
-        position: 'relative',
-        // ✅ 新增：非活跃层降低不透明度
-        ...(isActive ? {} : { opacity: 0.7 }),
       }}
     >
-      {/* ✅ 新增：非活跃层添加标识 */}
-      {!isActive && mode === 'chat' && (
-        <div style={{
-          position: 'absolute',
-          top: '10px',
-          right: '10px',
-          background: 'rgba(0,0,0,0.05)',
-          padding: '2px 8px',
-          borderRadius: '4px',
-          fontSize: '0.75rem',
-          color: '#666',
-          zIndex: 1,
-        }}>
-          已完成
-        </div>
-      )}
-
-      {/* Header - 聊天流简化，侧边栏完整 */}
-      {mode === 'chat' ? (
-        <div
-          style={{
-            marginBottom: '16px',
-            paddingBottom: '12px',
-            borderBottom: '1px solid #c8e6c9',
-          }}
-        >
-          <h3
-            style={{
-              margin: 0,
-              color: '#1b5e20',
-              fontSize: '1.1rem',
-              fontWeight: 600,
-            }}
+      {/* 非活跃层标识 */}
+      <AnimatePresence>
+        {!isActive && mode === 'chat' && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            className="absolute top-3 right-3 bg-black/5 px-2 py-1 rounded-lg text-xs text-gray-500 z-10"
           >
-            <i className="fas fa-layer-group" style={{ marginRight: '8px' }} />
+            已完成
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Header - Chat mode simplified */}
+      {mode === 'chat' ? (
+        <div className="mb-4 pb-3 border-b border-emerald-200/50">
+          <h3 className="flex items-center gap-2 text-base font-semibold text-emerald-800">
+            <i className="fas fa-layer-group text-emerald-500" />
             Layer {layerNumber} 报告
           </h3>
-          <p
-            style={{
-              margin: '4px 0 0 0',
-              color: '#9ca3af',
-              fontSize: '0.85rem',
-            }}
-          >
+          <p className="text-sm text-gray-500 mt-1">
             {dimensions.length} 个维度 · {content.length} 字
           </p>
         </div>
       ) : (
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: '20px',
-            paddingBottom: '15px',
-            borderBottom: '1px solid #374151',
-          }}
-        >
+        <div className="flex justify-between items-center mb-5 pb-4 border-b border-emerald-200/50">
           <div>
-            <h3
-              style={{
-                margin: 0,
-                color: '#4ade80',
-                fontSize: '1.3rem',
-                fontWeight: 600,
-              }}
-            >
-              <i className="fas fa-layer-group" style={{ marginRight: '10px' }} />
+            <h3 className="flex items-center gap-2 text-lg font-semibold text-emerald-800">
+              <i className="fas fa-layer-group text-emerald-500" />
               Layer {layerNumber} 完整报告
             </h3>
-            <p
-              style={{
-                margin: '5px 0 0 0',
-                color: '#9ca3af',
-                fontSize: '0.9rem',
-              }}
-            >
+            <p className="text-sm text-gray-500 mt-1">
               共 {dimensions.length} 个维度 · {content.length} 字
             </p>
           </div>
 
-          {/* Action buttons - 只在侧边栏模式显示 */}
+          {/* Action buttons - Sidebar only */}
           {actualShowExpandAll && (
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button
+            <div className="flex gap-2">
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
                 onClick={handleExpandAll}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md"
                 style={{
-                  background: 'linear-gradient(135deg, #16a34a, #15803d)',
-                  color: 'white',
-                  border: 'none',
-                  padding: '8px 16px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.9rem',
-                  fontWeight: 500,
-                  transition: 'all 0.3s ease',
-                  boxShadow: '0 2px 6px rgba(22, 163, 74, 0.3)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 4px 10px rgba(22, 163, 74, 0.4)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = '0 2px 6px rgba(22, 163, 74, 0.3)';
+                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)',
                 }}
               >
-                <i className="fas fa-expand-alt" style={{ marginRight: '6px' }} />
+                <i className="fas fa-expand-alt" />
                 展开全部
-              </button>
-              <button
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
                 onClick={handleCollapseAll}
-                style={{
-                  background: '#1f2937',
-                  color: '#4ade80',
-                  border: '1px solid #16a34a',
-                  padding: '8px 16px',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  fontSize: '0.9rem',
-                  fontWeight: 500,
-                  transition: 'all 0.3s ease',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = '#111827';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = '#1f2937';
-                }}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-emerald-600 bg-white border border-emerald-200 rounded-lg hover:bg-emerald-50 transition-colors"
               >
-                <i className="fas fa-compress-alt" style={{ marginRight: '6px' }} />
+                <i className="fas fa-compress-alt" />
                 折叠全部
-              </button>
+              </motion.button>
             </div>
           )}
         </div>
@@ -264,10 +195,9 @@ export default function LayerReportCard({
 
       {/* Dimension sections */}
       <div
+        className="space-y-3"
         style={{
-          // ✅ 修复：只在折叠时限制高度，展开时不限制但设置最大高度防止无限展开
-          maxHeight: localExpanded ? '80vh' : (mode === 'chat' && !localExpanded ? actualMaxHeight : 'none'),
-          // ✅ 修复：始终保持 auto 滚动
+          maxHeight: localExpanded ? '80vh' : mode === 'chat' && !localExpanded ? actualMaxHeight : 'none',
           overflow: 'auto',
         }}
       >
@@ -285,85 +215,39 @@ export default function LayerReportCard({
         ))}
       </div>
 
-      {/* 聊天流模式：展开全文按钮 */}
-      {mode === 'chat' && !localExpanded && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            padding: '20px',
-            background: 'linear-gradient(to bottom, transparent, rgba(31, 41, 55, 0.95), #1f2937)',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: '10px',
-          }}
-        >
-          <button
-            onClick={handleToggleExpanded}
-            style={{
-              background: '#1f2937',
-              color: '#4ade80',
-              border: '1px solid #16a34a',
-              padding: '8px 20px',
-              borderRadius: '6px',
-              cursor: 'pointer',
-              fontSize: '0.9rem',
-              fontWeight: 500,
-              transition: 'all 0.3s ease',
-              boxShadow: '0 2px 8px rgba(22, 163, 74, 0.2)',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = '#111827';
-              e.currentTarget.style.transform = 'translateY(-2px)';
-              e.currentTarget.style.boxShadow = '0 4px 12px rgba(22, 163, 74, 0.3)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = '#1f2937';
-              e.currentTarget.style.transform = 'translateY(0)';
-              e.currentTarget.style.boxShadow = '0 2px 8px rgba(22, 163, 74, 0.2)';
-            }}
+      {/* Chat mode: Expand button */}
+      <AnimatePresence>
+        {mode === 'chat' && !localExpanded && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute bottom-0 left-0 right-0 p-5 bg-gradient-to-t from-emerald-50 via-emerald-50/95 to-transparent flex flex-col items-center gap-3"
           >
-            <i className="fas fa-chevron-down" style={{ marginRight: '6px' }} />
-            展开全文
-          </button>
-
-          {onOpenInSidebar && (
-            <button
-              onClick={onOpenInSidebar}
-              className="btn-open-in-sidebar"
-              style={{
-                background: '#1f2937',
-                color: '#4ade80',
-                border: '1px solid #16a34a',
-                padding: '8px 16px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.85rem',
-                transition: 'all 0.3s ease',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#111827';
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = '0 4px 10px rgba(22, 163, 74, 0.3)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = '#1f2937';
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = 'none';
-              }}
+            <motion.button
+              whileHover={{ scale: 1.02, y: -2 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={handleToggleExpanded}
+              className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-emerald-600 bg-white border border-emerald-200 rounded-full shadow-md hover:bg-emerald-50 transition-colors"
             >
-              <i className="fas fa-external-link-alt" />
-              在侧边栏查看
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+              <i className="fas fa-chevron-down" />
+              展开全文
+            </motion.button>
+
+            {onOpenInSidebar && (
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={onOpenInSidebar}
+                className="flex items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:text-emerald-700 transition-colors"
+              >
+                <i className="fas fa-external-link-alt" />
+                在侧边栏查看
+              </motion.button>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }

@@ -1,8 +1,13 @@
 'use client';
 
+/**
+ * HistoryPanel - Gemini Style
+ * 历史记录面板 - 玻璃态效果 + Framer Motion 动画
+ */
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useRouter } from 'next/navigation';
+import { motion, AnimatePresence } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faHistory, faSearch, faSpinner, faInbox, faChevronRight, faClock } from '@fortawesome/free-solid-svg-icons';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
@@ -41,47 +46,92 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
     );
   }, [villages, searchTerm]);
 
+  // Animation variants
+  const overlayVariants = {
+    hidden: { opacity: 0 },
+    visible: { opacity: 1 },
+    exit: { opacity: 0 },
+  };
+
+  const panelVariants = {
+    hidden: { x: '100%', opacity: 0 },
+    visible: {
+      x: 0,
+      opacity: 1,
+      transition: {
+        type: 'spring' as const,
+        stiffness: 300,
+        damping: 30,
+      },
+    },
+    exit: {
+      x: '100%',
+      opacity: 0,
+      transition: {
+        duration: 0.2,
+      },
+    },
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, x: 20 },
+    visible: { opacity: 1, x: 0 },
+  };
+
   if (!mounted) return null;
 
   return createPortal(
     <>
-      {/* Overlay - Gemini style */}
-      <div
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9998] animate-fade-in"
+      {/* Overlay */}
+      <motion.div
+        variants={overlayVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+        className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[9998]"
         onClick={onClose}
       />
 
-      {/* Panel - Gemini dark style */}
-      <div className="fixed right-0 top-0 bottom-0 w-[400px] max-w-[400px] bg-[#1a1a1a] border-l border-[#2d2d2d] flex flex-col z-[9999] animate-slide-in-right">
-        
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[#2d2d2d]">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-green-500/20 to-green-600/10 border border-green-500/30">
-              <FontAwesomeIcon icon={faHistory} className="text-green-400" style={{ width: '14px', height: '14px' }} />
-            </div>
-            <h2 className="text-lg font-semibold text-white">历史记录</h2>
-          </div>
-          <button 
-            onClick={onClose} 
-            className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-[#2d2d2d] transition-colors"
+      {/* Panel - Glass morphism style */}
+      <motion.div
+        variants={panelVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+        className="fixed right-0 top-0 bottom-0 w-[400px] max-w-[400px] bg-white/95 backdrop-blur-xl shadow-2xl flex flex-col z-[9999] overflow-hidden border-l border-white/20"
+      >
+        {/* Header - Gradient */}
+        <div
+          className="px-5 py-4 flex justify-between items-center"
+          style={{
+            background: 'linear-gradient(135deg, #8b5cf6 0%, #3b82f6 50%, #ec4899 100%)',
+          }}
+        >
+          <h2 className="flex items-center gap-2 text-lg font-bold text-white">
+            <FontAwesomeIcon icon={faHistory} />
+            历史记录
+          </h2>
+          <motion.button
+            whileHover={{ scale: 1.1, rotate: 90 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={onClose}
+            className="w-8 h-8 flex items-center justify-center text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
           >
-            <FontAwesomeIcon icon={faTimes} style={{ width: '16px', height: '16px' }} />
-          </button>
+            <FontAwesomeIcon icon={faTimes} />
+          </motion.button>
         </div>
 
         {/* Search */}
-        <div className="px-4 py-3 border-b border-[#2d2d2d]">
+        <div className="p-4 border-b border-gray-100">
           <div className="relative">
-            <FontAwesomeIcon 
-              icon={faSearch} 
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"
-              style={{ width: '14px', height: '14px' }}
+            <FontAwesomeIcon
+              icon={faSearch}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
             />
-            <input 
+            <input
               type="text"
               placeholder="搜索村庄..."
-              className="w-full bg-[#242424] border border-[#3f3f46] rounded-xl py-2.5 pl-10 pr-4 text-white placeholder-zinc-500 focus:outline-none focus:border-green-500/50 focus:ring-1 focus:ring-green-500/20 transition-all"
+              className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border-0 rounded-xl text-gray-900 placeholder-gray-400 focus:bg-white focus:ring-2 focus:ring-violet-200 transition-all"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
@@ -90,72 +140,104 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
 
         {/* List */}
         <div className="flex-1 overflow-y-auto p-4">
-          {historyLoading && villages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
-              <div className="w-10 h-10 border-2 border-green-500/30 border-t-green-500 rounded-full animate-spin mb-4" />
-              <p className="text-sm">加载中...</p>
-            </div>
-          ) : filteredVillages.length > 0 ? (
-            <div className="space-y-3">
-              {filteredVillages.map(village => (
-                <div 
-                  key={village.name} 
-                  className="bg-[#1e1e1e] border border-[#2d2d2d] rounded-xl overflow-hidden hover:border-green-500/30 transition-colors"
+          <AnimatePresence mode="wait">
+            {historyLoading && villages.length === 0 ? (
+              <motion.div
+                key="loading"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="text-center py-10"
+              >
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
                 >
-                  {/* Village header */}
-                  <div className="px-4 py-3 bg-[#242424] border-b border-[#2d2d2d] flex items-center justify-between">
-                    <span className="font-medium text-white">{village.display_name}</span>
-                    <span className="text-xs text-zinc-500 bg-[#1a1a1a] px-2 py-1 rounded-full">
-                      {village.sessions?.length || 0} 条记录
-                    </span>
-                  </div>
-                  
-                  {/* Sessions list */}
-                  <div className="p-2">
-                    {village.sessions && village.sessions.length > 0 ? (
-                      village.sessions.map(session => (
-                        <button
-                          key={session.session_id}
-                          onClick={() => {
-                            loadHistoricalSession(village.name, session.session_id);
-                            onClose();
-                          }}
-                          className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left text-zinc-300 hover:bg-[#2d2d2d] hover:text-white transition-colors group"
-                        >
-                          <div className="flex items-center gap-2">
-                            <FontAwesomeIcon 
-                              icon={faClock} 
-                              className="text-zinc-500 group-hover:text-green-400 transition-colors"
-                              style={{ width: '12px', height: '12px' }}
-                            />
-                            <span className="text-sm">
+                  <FontAwesomeIcon
+                    icon={faSpinner}
+                    className="text-3xl"
+                    style={{ color: 'linear-gradient(135deg, #8b5cf6, #3b82f6)' }}
+                  />
+                </motion.div>
+                <p className="mt-3 text-gray-500">加载中...</p>
+              </motion.div>
+            ) : filteredVillages.length > 0 ? (
+              <motion.div
+                key="list"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="space-y-3"
+              >
+                {filteredVillages.map((village, index) => (
+                  <motion.div
+                    key={village.name}
+                    variants={itemVariants}
+                    initial="hidden"
+                    animate="visible"
+                    transition={{ delay: index * 0.05 }}
+                    className="bg-gray-50 rounded-xl border border-gray-100 overflow-hidden hover:border-violet-200 hover:shadow-md transition-all"
+                  >
+                    {/* Village Header */}
+                    <div className="px-4 py-3 font-semibold text-gray-800 bg-gradient-to-r from-gray-50 to-white border-b border-gray-100">
+                      {village.display_name}
+                      <span className="ml-2 text-xs font-normal text-gray-400">
+                        {village.sessions?.length || 0} 条记录
+                      </span>
+                    </div>
+
+                    {/* Sessions */}
+                    <div className="p-2 space-y-1">
+                      {village.sessions && village.sessions.length > 0 ? (
+                        village.sessions.map((session) => (
+                          <motion.button
+                            key={session.session_id}
+                            whileHover={{ x: 4, backgroundColor: '#f0fdf4' }}
+                            whileTap={{ scale: 0.98 }}
+                            onClick={() => {
+                              loadHistoricalSession(village.name, session.session_id);
+                              onClose();
+                            }}
+                            className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left bg-white hover:bg-emerald-50 transition-colors group"
+                          >
+                            <span className="flex items-center gap-2 text-sm text-gray-600">
+                              <FontAwesomeIcon
+                                icon={faClock}
+                                className="text-gray-300 group-hover:text-emerald-400 transition-colors"
+                              />
                               {new Date(session.timestamp).toLocaleString('zh-CN')}
                             </span>
-                          </div>
-                          <FontAwesomeIcon 
-                            icon={faChevronRight} 
-                            className="text-zinc-600 group-hover:text-green-400 transition-colors"
-                            style={{ width: '10px', height: '10px' }}
-                          />
-                        </button>
-                      ))
-                    ) : (
-                      <div className="py-4 text-center text-zinc-500 text-sm">
-                        无会话记录
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-20 text-zinc-500">
-              <FontAwesomeIcon icon={faInbox} className="text-4xl mb-4" />
-              <p>暂无数据</p>
-            </div>
-          )}
+                            <FontAwesomeIcon
+                              icon={faChevronRight}
+                              className="text-gray-200 group-hover:text-emerald-400 transition-colors"
+                            />
+                          </motion.button>
+                        ))
+                      ) : (
+                        <div className="text-center text-gray-400 text-sm py-3">
+                          无会话记录
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                ))}
+              </motion.div>
+            ) : (
+              <motion.div
+                key="empty"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="text-center py-16"
+              >
+                <FontAwesomeIcon
+                  icon={faInbox}
+                  className="text-5xl text-gray-200 mb-4"
+                />
+                <p className="text-gray-400">暂无历史记录</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
-      </div>
+      </motion.div>
     </>,
     document.body
   );

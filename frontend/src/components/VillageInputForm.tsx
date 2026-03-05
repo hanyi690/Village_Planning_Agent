@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, FormEvent } from 'react';
+import { motion } from 'framer-motion';
 
 export interface VillageInputData {
   projectName: string;
@@ -16,19 +17,16 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
   const [projectName, setProjectName] = useState('');
   const [taskDescription, setTaskDescription] = useState('');
   const [constraints, setConstraints] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [focusedField, setFocusedField] = useState<string | null>(null);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
 
     if (!projectName.trim()) {
-      // 可以替换为更优雅的提示方式
-      const nameInput = document.getElementById('projectName');
-      nameInput?.focus();
+      alert('请输入村庄名称');
       return;
     }
 
-    setIsSubmitting(true);
     onSubmit({
       projectName: projectName.trim(),
       taskDescription: taskDescription.trim(),
@@ -36,127 +34,192 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
     });
   };
 
-  return (
-    <div className="min-h-[calc(100vh-56px)] flex items-center justify-center p-4 bg-gradient-mesh">
-      {/* Decorative background elements */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-green-500/5 rounded-full blur-3xl" />
-        <div className="absolute bottom-1/4 right-1/4 w-80 h-80 bg-blue-500/5 rounded-full blur-3xl" />
-      </div>
+  // Animation variants
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1,
+        delayChildren: 0.2,
+      },
+    },
+  };
 
-      <div className="relative w-full max-w-xl animate-scale-in">
-        {/* Main form card */}
-        <div className="bg-[#1a1a1a]/90 backdrop-blur-xl border border-[#2d2d2d] rounded-3xl shadow-2xl overflow-hidden">
-          
-          {/* Header with gradient accent */}
-          <div className="relative px-6 py-8 text-center border-b border-[#2d2d2d]">
-            <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-green-500 via-green-400 to-cyan-500" />
-            
-            {/* Icon */}
-            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-green-500/20 to-green-600/10 border border-green-500/30 mb-4">
-              <svg className="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-            </div>
-            
-            <h2 className="text-2xl font-bold text-white mb-2">
-              创建规划任务
-            </h2>
-            <p className="text-zinc-400 text-sm">
-              请填写以下基础信息，AI 助手将为您生成定制化方案
-            </p>
-          </div>
+  const itemVariants = {
+    hidden: { opacity: 0, y: 20 },
+    visible: {
+      opacity: 1,
+      y: 0,
+      transition: {
+        type: 'spring' as const,
+        stiffness: 100,
+        damping: 12,
+      },
+    },
+  };
 
-          {/* Form body */}
-          <form onSubmit={handleSubmit} className="p-6 space-y-6">
-            
-            {/* Village Name */}
-            <div className="space-y-2">
-              <label htmlFor="projectName" className="flex items-center gap-2 text-sm font-medium text-zinc-300">
-                <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                村庄名称 <span className="text-red-400">*</span>
-              </label>
-              <input
-                id="projectName"
-                type="text"
-                className="w-full bg-[#242424] border border-[#3f3f46] rounded-xl px-4 py-3 text-white placeholder-zinc-500 focus:outline-none focus:border-green-500 focus:ring-2 focus:ring-green-500/20 transition-all duration-200"
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
-                placeholder="例如：杭州市余杭区李家村"
-                required
-              />
-            </div>
+  const InputField = ({
+    id,
+    label,
+    icon,
+    required,
+    value,
+    onChange,
+    placeholder,
+    isTextarea = false,
+    rows = 3,
+  }: {
+    id: string;
+    label: string;
+    icon: string;
+    required?: boolean;
+    value: string;
+    onChange: (value: string) => void;
+    placeholder: string;
+    isTextarea?: boolean;
+    rows?: number;
+  }) => {
+    const isFocused = focusedField === id;
 
-            {/* Task Description */}
-            <div className="space-y-2">
-              <label htmlFor="taskDescription" className="flex items-center gap-2 text-sm font-medium text-zinc-300">
-                <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-                任务描述
-              </label>
-              <textarea
-                id="taskDescription"
-                rows={4}
-                className="w-full bg-[#242424] border border-[#3f3f46] rounded-xl px-4 py-3 text-white placeholder-zinc-500 focus:outline-none focus:border-green-500 focus:ring-2 focus:ring-green-500/20 transition-all duration-200 resize-none"
-                value={taskDescription}
-                onChange={(e) => setTaskDescription(e.target.value)}
-                placeholder="请描述本次规划的主要目标、重点改造区域以及发展愿景..."
-              />
-            </div>
-
-            {/* Constraints */}
-            <div className="space-y-2">
-              <label htmlFor="constraints" className="flex items-center gap-2 text-sm font-medium text-zinc-300">
-                <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-                </svg>
-                约束条件
-              </label>
-              <textarea
-                id="constraints"
-                rows={3}
-                className="w-full bg-[#242424] border border-[#3f3f46] rounded-xl px-4 py-3 text-white placeholder-zinc-500 focus:outline-none focus:border-green-500 focus:ring-2 focus:ring-green-500/20 transition-all duration-200 resize-none"
-                value={constraints}
-                onChange={(e) => setConstraints(e.target.value)}
-                placeholder="例如：预算需控制在 500 万以内；保留村口百年古树..."
-              />
-            </div>
-
-            {/* Submit Button */}
-            <div className="pt-4">
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="relative w-full group flex items-center justify-center gap-3 px-6 py-4 bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400 text-white font-semibold rounded-xl transition-all duration-300 shadow-lg shadow-green-500/25 hover:shadow-green-500/40 disabled:opacity-70 disabled:cursor-not-allowed overflow-hidden"
-              >
-                {/* Shine effect */}
-                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
-                
-                <span className="relative z-10">
-                  {isSubmitting ? '正在创建...' : '开始规划'}
-                </span>
-                
-                {/* Arrow icon */}
-                <svg className="relative z-10 w-5 h-5 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                </svg>
-              </button>
-            </div>
-
-          </form>
-
-          {/* Footer hint */}
-          <div className="px-6 py-4 border-t border-[#2d2d2d] bg-[#151515]/50">
-            <p className="text-xs text-zinc-500 text-center">
-              💡 提示：描述越详细，AI 生成的规划方案将越精准
-            </p>
-          </div>
+    return (
+      <motion.div variants={itemVariants} className="w-full">
+        <label
+          htmlFor={id}
+          className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2"
+        >
+          <span>{icon}</span>
+          {label}
+          {required && <span className="text-red-400">*</span>}
+        </label>
+        <div className="relative group">
+          {isTextarea ? (
+            <textarea
+              id={id}
+              rows={rows}
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              onFocus={() => setFocusedField(id)}
+              onBlur={() => setFocusedField(null)}
+              placeholder={placeholder}
+              className="w-full px-4 py-3 bg-emerald-50/30 border-0 rounded-2xl text-gray-900 placeholder-gray-500 resize-none transition-all duration-300 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:shadow-[0_0_0_4px_rgba(16,185,129,0.1)]"
+            />
+          ) : (
+            <input
+              id={id}
+              type="text"
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              onFocus={() => setFocusedField(id)}
+              onBlur={() => setFocusedField(null)}
+              placeholder={placeholder}
+              className="w-full px-4 py-3.5 bg-emerald-50/30 border-0 rounded-2xl text-gray-900 placeholder-gray-500 transition-all duration-300 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:shadow-[0_0_0_4px_rgba(16,185,129,0.1)]"
+            />
+          )}
+          {/* 底部渐变线 */}
+          <div
+            className={`absolute bottom-0 left-4 right-4 h-0.5 rounded-full transition-all duration-300 ${
+              isFocused
+                ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 opacity-100'
+                : 'opacity-0'
+            }`}
+          />
         </div>
-      </div>
+      </motion.div>
+    );
+  };
+
+  return (
+    <div className="w-full min-h-[80vh] flex items-center justify-center p-4 bg-gradient-to-b from-emerald-50/50 to-white">
+      <motion.form
+        onSubmit={handleSubmit}
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+        className="w-full max-w-xl"
+      >
+        {/* 渐变欢迎标题 */}
+        <motion.div variants={itemVariants} className="text-center mb-8">
+          <h1 className="text-3xl sm:text-4xl font-bold mb-3">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 via-teal-500 to-cyan-600">
+              规划新村庄
+            </span>
+          </h1>
+          <p className="text-gray-500 text-sm sm:text-base">
+            填写基础信息，AI 助手将为您生成定制化规划方案
+          </p>
+        </motion.div>
+
+        {/* 表单卡片 */}
+        <motion.div
+          variants={itemVariants}
+          className="bg-white rounded-3xl shadow-xl shadow-gray-200/50 border border-gray-100 p-6 sm:p-8"
+        >
+          {/* 表单字段 */}
+          <div className="space-y-6">
+            <InputField
+              id="projectName"
+              label="村庄名称"
+              icon="📍"
+              required
+              value={projectName}
+              onChange={setProjectName}
+              placeholder="例如：杭州市余杭区李家村"
+            />
+
+            <InputField
+              id="taskDescription"
+              label="任务描述"
+              icon="📝"
+              value={taskDescription}
+              onChange={setTaskDescription}
+              placeholder="请描述本次规划的主要目标、重点改造区域以及发展愿景..."
+              isTextarea
+              rows={4}
+            />
+
+            <InputField
+              id="constraints"
+              label="约束条件"
+              icon="⚙️"
+              value={constraints}
+              onChange={setConstraints}
+              placeholder="例如：预算需控制在 500 万以内；保留村口百年古树..."
+              isTextarea
+              rows={3}
+            />
+          </div>
+
+          {/* 提交按钮 */}
+          <motion.div variants={itemVariants} className="mt-8 flex justify-center">
+            <motion.button
+              type="submit"
+              whileHover={{ scale: 1.02, y: -2 }}
+              whileTap={{ scale: 0.98 }}
+              className="relative px-8 py-3.5 rounded-full font-semibold text-white overflow-hidden group"
+              style={{
+                background: 'linear-gradient(135deg, #10b981 0%, #14b8a6 50%, #0891b2 100%)',
+                boxShadow: '0 4px 20px rgba(16, 185, 129, 0.4)',
+              }}
+            >
+              <span className="relative z-10 flex items-center gap-2">
+                <span>开始规划</span>
+                <span>🚀</span>
+              </span>
+              {/* Hover 光晕效果 */}
+              <div className="absolute inset-0 bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+            </motion.button>
+          </motion.div>
+        </motion.div>
+
+        {/* 底部提示 */}
+        <motion.p
+          variants={itemVariants}
+          className="text-center text-gray-400 text-xs mt-6"
+        >
+          AI 将基于您的输入生成专业的村庄规划方案
+        </motion.p>
+      </motion.form>
     </div>
   );
 }

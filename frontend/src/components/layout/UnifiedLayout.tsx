@@ -43,14 +43,17 @@ function UnifiedLayoutComponent({ taskId, children }: UnifiedLayoutProps) {
   }, [resetConversation, router]);
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <main className="flex-1 overflow-hidden flex flex-col">
-        <Header
-          taskId={taskId}
-          onToggleHistory={handleToggleHistory}
-          onNewTask={handleNewTask}
-          onOpenKnowledge={handleOpenKnowledge}
-        />
+    <div className="min-h-screen bg-[#F9FBF9]">
+      {/* Header - fixed at top */}
+      <Header
+        taskId={taskId}
+        onToggleHistory={handleToggleHistory}
+        onNewTask={handleNewTask}
+        onOpenKnowledge={handleOpenKnowledge}
+      />
+      
+      {/* Main content - centered with max-width */}
+      <main className="mx-auto w-full max-w-[1400px] px-4 pt-4 pb-8">
         {children}
       </main>
 

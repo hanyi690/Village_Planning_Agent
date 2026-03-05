@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import 'bootstrap/dist/css/bootstrap.min.css';
 import './globals.css';
 import '../styles/layer-report.css';
 
@@ -26,7 +25,7 @@ export default function RootLayout({
           referrerPolicy="no-referrer"
         />
       </head>
-      <body>
+      <body className="antialiased">
         {children}
       </body>
     </html>

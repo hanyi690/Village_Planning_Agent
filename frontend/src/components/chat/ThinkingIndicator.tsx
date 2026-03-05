@@ -1,11 +1,12 @@
 'use client';
 
 /**
- * ThinkingIndicator Component - Gemini Dark Style
- * 思考状态指示器 - 多状态动画反馈
+ * ThinkingIndicator Component - Gemini Style
+ * 思考状态指示器 - 使用 Framer Motion 实现流畅动画
  */
 
 import React from 'react';
+import { motion } from 'framer-motion';
 
 export type ThinkingState =
   | 'analyzing'
@@ -24,67 +25,46 @@ export interface ThinkingIndicatorProps {
 }
 
 /**
- * 状态配置 - Gemini 深色主题
+ * 状态配置 - 使用 Gemini 风格的幻彩渐变
  */
 const STATE_CONFIG: Record<
   ThinkingState,
   {
-    icon: React.ReactNode;
+    icon: string;
     label: string;
     gradient: string;
-    glowColor: string;
+    bgColor: string;
   }
 > = {
   analyzing: {
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-      </svg>
-    ),
+    icon: 'fa-microscope',
     label: '分析中',
     gradient: 'from-blue-500 to-cyan-500',
-    glowColor: 'rgba(59, 130, 246, 0.4)',
+    bgColor: 'bg-blue-50',
   },
   generating: {
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
-      </svg>
-    ),
+    icon: 'fa-wand-magic-sparkles',
     label: '生成中',
-    gradient: 'from-purple-500 to-pink-500',
-    glowColor: 'rgba(168, 85, 247, 0.4)',
+    gradient: 'from-violet-500 to-purple-500',
+    bgColor: 'bg-violet-50',
   },
   reviewing: {
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-      </svg>
-    ),
+    icon: 'fa-magnifying-glass-chart',
     label: '审查中',
-    gradient: 'from-orange-500 to-amber-500',
-    glowColor: 'rgba(249, 115, 22, 0.4)',
+    gradient: 'from-amber-500 to-orange-500',
+    bgColor: 'bg-amber-50',
   },
   processing: {
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-      </svg>
-    ),
+    icon: 'fa-gears',
     label: '处理中',
-    gradient: 'from-green-500 to-emerald-500',
-    glowColor: 'rgba(34, 197, 94, 0.4)',
+    gradient: 'from-emerald-500 to-teal-500',
+    bgColor: 'bg-emerald-50',
   },
   waiting: {
-    icon: (
-      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    ),
+    icon: 'fa-hourglass-half',
     label: '等待中',
-    gradient: 'from-zinc-400 to-zinc-500',
-    glowColor: 'rgba(161, 161, 170, 0.3)',
+    gradient: 'from-gray-400 to-gray-500',
+    bgColor: 'bg-gray-50',
   },
 };
 
@@ -94,30 +74,116 @@ const STATE_CONFIG: Record<
 const SIZE_CONFIG: Record<
   'sm' | 'md' | 'lg',
   {
-    padding: string;
+    containerPadding: string;
     iconSize: string;
     textSize: string;
+    dotSize: string;
   }
 > = {
   sm: {
-    padding: 'px-3 py-2',
-    iconSize: 'w-4 h-4',
+    containerPadding: 'px-3 py-2',
+    iconSize: 'text-sm',
     textSize: 'text-xs',
+    dotSize: 'w-1.5 h-1.5',
   },
   md: {
-    padding: 'px-4 py-3',
-    iconSize: 'w-5 h-5',
+    containerPadding: 'px-4 py-3',
+    iconSize: 'text-base',
     textSize: 'text-sm',
+    dotSize: 'w-2 h-2',
   },
   lg: {
-    padding: 'px-5 py-4',
-    iconSize: 'w-6 h-6',
+    containerPadding: 'px-5 py-4',
+    iconSize: 'text-xl',
     textSize: 'text-base',
+    dotSize: 'w-2.5 h-2.5',
   },
 };
 
 /**
- * 思考指示器组件 - Gemini 风格
+ * 波动点动画组件
+ */
+function WaveDots({ size }: { size: 'sm' | 'md' | 'lg' }) {
+  const dotSize = SIZE_CONFIG[size].dotSize;
+
+  return (
+    <div className="flex items-center gap-1">
+      {[0, 1, 2].map((i) => (
+        <motion.div
+          key={i}
+          className={`${dotSize} rounded-full`}
+          style={{
+            background: 'linear-gradient(135deg, #8b5cf6 0%, #3b82f6 50%, #ec4899 100%)',
+          }}
+          animate={{
+            y: [0, -6, 0],
+            opacity: [0.4, 1, 0.4],
+          }}
+          transition={{
+            duration: 0.8,
+            repeat: Infinity,
+            delay: i * 0.15,
+            ease: 'easeInOut',
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 渐变图标组件
+ */
+function GradientIcon({
+  icon,
+  gradient,
+  size,
+}: {
+  icon: string;
+  gradient: string;
+  size: string;
+}) {
+  return (
+    <motion.div
+      className={`relative ${size}`}
+      animate={{
+        scale: [1, 1.1, 1],
+      }}
+      transition={{
+        duration: 2,
+        repeat: Infinity,
+        ease: 'easeInOut',
+      }}
+    >
+      <i
+        className={`fas ${icon} bg-gradient-to-r ${gradient} bg-clip-text text-transparent`}
+        style={{
+          WebkitTextFillColor: 'transparent',
+          backgroundClip: 'text',
+        }}
+      />
+      {/* 脉冲光圈 */}
+      <motion.div
+        className="absolute inset-0 rounded-full"
+        style={{
+          background: `linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(59, 130, 246, 0.3), rgba(236, 72, 153, 0.3))`,
+        }}
+        animate={{
+          scale: [0.8, 1.5],
+          opacity: [0.5, 0],
+        }}
+        transition={{
+          duration: 1.5,
+          repeat: Infinity,
+          ease: 'easeOut',
+        }}
+      />
+    </motion.div>
+  );
+}
+
+/**
+ * 主思考指示器组件
  */
 export default function ThinkingIndicator({
   state,
@@ -131,47 +197,49 @@ export default function ThinkingIndicator({
   const sizeConfig = SIZE_CONFIG[size];
 
   return (
-    <div className={`flex items-center gap-3 ${sizeConfig.padding} rounded-xl bg-[#1e1e1e] border border-[#2d2d2d] ${className}`}>
-      {/* 动画图标容器 */}
-      <div className="relative">
-        {/* 背景光晕 */}
-        <div 
-          className={`absolute inset-0 bg-gradient-to-r ${config.gradient} rounded-full blur-md opacity-30 animate-pulse`}
-          style={{ transform: 'scale(1.5)' }}
-        />
-        
-        {/* 图标 */}
-        <div className={`relative p-2 rounded-full bg-gradient-to-r ${config.gradient} text-white`}>
-          <div className="animate-spin">
-            {React.cloneElement(config.icon as React.ReactElement, {
-              className: sizeConfig.iconSize
-            })}
-          </div>
-        </div>
-      </div>
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -10 }}
+      className={`inline-flex items-center gap-3 rounded-2xl ${config.bgColor} ${sizeConfig.containerPadding} ${className}`}
+    >
+      {/* 渐变图标 */}
+      <GradientIcon
+        icon={config.icon}
+        gradient={config.gradient}
+        size={sizeConfig.iconSize}
+      />
 
       {/* 状态文本 */}
-      <div className="flex-1 min-w-0">
-        <div className={`font-medium text-white ${sizeConfig.textSize}`}>
+      <div className="flex flex-col">
+        <div className={`font-medium text-gray-700 ${sizeConfig.textSize}`}>
           {config.label}
         </div>
         {message && (
-          <div className={`text-zinc-400 ${sizeConfig.textSize} mt-0.5 truncate`}>
+          <div className={`text-gray-500 mt-0.5 ${sizeConfig.textSize}`}>
             {message}
           </div>
         )}
 
         {/* 进度条 */}
         {showProgress && (
-          <div className="mt-2 h-1 bg-[#2d2d2d] rounded-full overflow-hidden">
-            <div
-              className={`h-full bg-gradient-to-r ${config.gradient} rounded-full transition-all duration-300`}
-              style={{ width: `${progress}%` }}
+          <div className="mt-2 w-36 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+            <motion.div
+              className="h-full rounded-full"
+              style={{
+                background: 'linear-gradient(135deg, #8b5cf6 0%, #3b82f6 50%, #ec4899 100%)',
+              }}
+              initial={{ width: 0 }}
+              animate={{ width: `${progress}%` }}
+              transition={{ duration: 0.3, ease: 'easeOut' }}
             />
           </div>
         )}
       </div>
-    </div>
+
+      {/* 波动点 */}
+      <WaveDots size={size} />
+    </motion.div>
   );
 }
 
@@ -188,17 +256,24 @@ export function CompactThinkingIndicator({
   const config = STATE_CONFIG[state];
 
   return (
-    <div className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-[#1e1e1e] border border-[#2d2d2d] ${className}`}>
-      <div className={`animate-spin ${config.gradient.replace('from-', 'text-').split(' ')[0]}`}>
-        {config.icon}
-      </div>
-      <span className="text-xs text-zinc-300">{config.label}</span>
+    <div className={`inline-flex items-center gap-2 ${className}`}>
+      <motion.i
+        className={`fas ${config.icon} text-sm`}
+        animate={{ rotate: 360 }}
+        transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+        style={{
+          background: `linear-gradient(135deg, #8b5cf6, #3b82f6, #ec4899)`,
+          WebkitTextFillColor: 'transparent',
+          backgroundClip: 'text',
+        }}
+      />
+      <span className="text-xs text-gray-600">{config.label}</span>
     </div>
   );
 }
 
 /**
- * 波动型思考指示器 - Gemini 风格
+ * 波动型思考指示器 (纯点动画)
  */
 export function WaveThinkingIndicator({
   message = '思考中...',
@@ -208,23 +283,16 @@ export function WaveThinkingIndicator({
   className?: string;
 }) {
   return (
-    <div className={`inline-flex items-center gap-3 px-4 py-2.5 rounded-full bg-[#1e1e1e] border border-[#2d2d2d] ${className}`}>
-      {/* 波动点动画 */}
-      <div className="flex items-center gap-1">
-        {[0, 1, 2].map((i) => (
-          <span
-            key={i}
-            className="w-2 h-2 bg-green-400 rounded-full animate-bounce"
-            style={{ animationDelay: `${i * 0.15}s` }}
-          />
-        ))}
-      </div>
-
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className={`inline-flex items-center gap-3 ${className}`}
+    >
+      <WaveDots size="md" />
       {message && (
-        <span className="text-sm text-zinc-300">
-          {message}
-        </span>
+        <span className="text-sm text-gray-500">{message}</span>
       )}
-    </div>
+    </motion.div>
   );
 }

@@ -1,11 +1,13 @@
 'use client';
 
 /**
- * KnowledgePanel - 知识库管理面板 (Gemini Dark Style)
+ * KnowledgePanel - Gemini Style
+ * 知识库管理面板 - 玻璃态效果 + Framer Motion 动画
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { 
   faTimes, 
@@ -42,6 +44,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // 加载数据
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
@@ -70,6 +73,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
     };
   }, [loadData]);
 
+  // 处理文件上传
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
@@ -114,6 +118,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
     }
   };
 
+  // 处理删除
   const handleDelete = async (filename: string) => {
     if (!confirm(`确定要删除 "${filename}" 吗？\n这将同时删除向量数据库中的相关数据。`)) {
       return;
@@ -131,6 +136,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
     }
   };
 
+  // 处理同步
   const handleSync = async () => {
     setSyncing(true);
     setError(null);
@@ -149,6 +155,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
     }
   };
 
+  // 拖拽处理
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -166,15 +173,16 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
     handleFileUpload(e.dataTransfer.files);
   }, []);
 
+  // 获取状态图标
   const getStatusIcon = (status?: DocumentStatus) => {
     switch (status) {
       case 'processing':
-        return <FontAwesomeIcon icon={faSpinner} spin className="text-blue-400" style={{ width: '12px', height: '12px' }} />;
+        return <FontAwesomeIcon icon={faSpinner} spin className="text-blue-500" />;
       case 'error':
-        return <FontAwesomeIcon icon={faExclamationTriangle} className="text-red-400" style={{ width: '12px', height: '12px' }} />;
+        return <FontAwesomeIcon icon={faExclamationTriangle} className="text-red-500" />;
       case 'ready':
       default:
-        return <FontAwesomeIcon icon={faCheck} className="text-green-400" style={{ width: '12px', height: '12px' }} />;
+        return <FontAwesomeIcon icon={faCheck} className="text-emerald-500" />;
     }
   };
 
@@ -190,65 +198,112 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
     }
   };
 
+  // Animation variants
+  const overlayVariants = {
+    hidden: { opacity: 0 },
+    visible: { opacity: 1 },
+    exit: { opacity: 0 },
+  };
+
+  const panelVariants = {
+    hidden: { x: '100%', opacity: 0 },
+    visible: {
+      x: 0,
+      opacity: 1,
+      transition: {
+        type: 'spring' as const,
+        stiffness: 300,
+        damping: 30,
+      },
+    },
+    exit: {
+      x: '100%',
+      opacity: 0,
+      transition: { duration: 0.2 },
+    },
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 10 },
+    visible: { opacity: 1, y: 0 },
+  };
+
   if (!mounted) return null;
 
   return createPortal(
     <>
-      {/* Overlay - Gemini style */}
-      <div
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9998] animate-fade-in"
+      {/* Overlay */}
+      <motion.div
+        variants={overlayVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+        className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[9998]"
         onClick={onClose}
       />
 
-      {/* Panel - Gemini dark style */}
-      <div className="fixed top-0 right-0 bottom-0 w-[500px] max-w-[500px] bg-[#1a1a1a] border-l border-[#2d2d2d] flex flex-col z-[9999] animate-slide-in-right">
-        
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[#2d2d2d]">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500/20 to-blue-600/10 border border-blue-500/30">
-              <FontAwesomeIcon icon={faDatabase} className="text-blue-400" style={{ width: '14px', height: '14px' }} />
-            </div>
-            <h2 className="text-lg font-semibold text-white">知识库管理</h2>
-          </div>
-          <button 
-            onClick={onClose} 
-            className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-[#2d2d2d] transition-colors"
+      {/* Panel - Glass morphism style */}
+      <motion.div
+        variants={panelVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+        className="fixed top-0 right-0 bottom-0 w-[500px] max-w-[500px] bg-white/95 backdrop-blur-xl shadow-2xl flex flex-col z-[9999] border-l border-white/20"
+      >
+        {/* Header - Gradient */}
+        <div
+          className="px-5 py-4 flex justify-between items-center"
+          style={{
+            background: 'linear-gradient(135deg, #8b5cf6 0%, #3b82f6 50%, #ec4899 100%)',
+          }}
+        >
+          <h2 className="flex items-center gap-2 text-lg font-bold text-white">
+            <FontAwesomeIcon icon={faDatabase} />
+            知识库管理
+          </h2>
+          <motion.button
+            whileHover={{ scale: 1.1, rotate: 90 }}
+            whileTap={{ scale: 0.9 }}
+            onClick={onClose}
+            className="w-8 h-8 flex items-center justify-center text-white/80 hover:text-white rounded-full hover:bg-white/10 transition-colors"
           >
-            <FontAwesomeIcon icon={faTimes} style={{ width: '16px', height: '16px' }} />
-          </button>
+            <FontAwesomeIcon icon={faTimes} />
+          </motion.button>
         </div>
 
         {/* Stats Bar */}
         {stats && (
-          <div className="px-5 py-3 bg-[#1e1e1e] border-b border-[#2d2d2d] flex items-center justify-between">
-            <div className="flex items-center gap-4 text-sm text-zinc-400">
+          <div className="px-5 py-3 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between">
+            <div className="flex items-center gap-4 text-sm text-gray-600">
               <span className="flex items-center gap-1.5">
-                <FontAwesomeIcon icon={faFileAlt} className="text-green-400" style={{ width: '12px', height: '12px' }} />
+                <FontAwesomeIcon icon={faFileAlt} className="text-violet-500" />
                 {stats.total_documents} 个文档
               </span>
               <span className="flex items-center gap-1.5">
-                <FontAwesomeIcon icon={faDatabase} className="text-blue-400" style={{ width: '12px', height: '12px' }} />
+                <FontAwesomeIcon icon={faDatabase} className="text-blue-500" />
                 {stats.total_chunks} 个切片
               </span>
             </div>
-            <button
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
               onClick={handleSync}
               disabled={syncing}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm text-green-400 bg-green-500/10 hover:bg-green-500/20 rounded-lg border border-green-500/30 disabled:opacity-50 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-violet-600 bg-white hover:bg-violet-50 rounded-lg border border-violet-200 disabled:opacity-50 transition-colors"
             >
-              <FontAwesomeIcon icon={syncing ? faSpinner : faSync} spin={syncing} style={{ width: '12px', height: '12px' }} />
+              <FontAwesomeIcon icon={syncing ? faSpinner : faSync} spin={syncing} />
               同步
-            </button>
+            </motion.button>
           </div>
         )}
 
         {/* Upload Area */}
-        <div
-          className={`mx-5 mt-4 p-6 border-2 border-dashed rounded-xl text-center transition-all ${
+        <motion.div
+          whileHover={{ scale: 1.01 }}
+          className={`mx-5 mt-4 p-6 border-2 border-dashed rounded-2xl text-center transition-all duration-300 ${
             dragActive 
-              ? 'border-green-500 bg-green-500/10' 
-              : 'border-[#3f3f46] hover:border-green-500/50 bg-[#1e1e1e]'
+              ? 'border-violet-400 bg-violet-50/50 scale-[1.02]' 
+              : 'border-gray-200 hover:border-violet-300 hover:bg-violet-50/30'
           }`}
           onDragEnter={handleDrag}
           onDragLeave={handleDrag}
@@ -263,92 +318,137 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
             className="hidden"
             onChange={(e) => handleFileUpload(e.target.files)}
           />
-          <FontAwesomeIcon 
-            icon={uploading ? faSpinner : faCloudUploadAlt} 
-            spin={uploading}
-            className="text-4xl text-zinc-500 mb-3"
-          />
-          <p className="text-zinc-300 mb-2">
+          <motion.div
+            animate={uploading ? { rotate: 360 } : {}}
+            transition={{ duration: 1, repeat: uploading ? Infinity : 0, ease: 'linear' }}
+          >
+            <FontAwesomeIcon 
+              icon={uploading ? faSpinner : faCloudUploadAlt} 
+              className="text-4xl text-gray-300 mb-3"
+            />
+          </motion.div>
+          <p className="text-gray-500 mb-3">
             {uploading ? '正在上传...' : '拖拽文件到此处，或'}
           </p>
           {!uploading && (
-            <button
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={() => fileInputRef.current?.click()}
-              className="px-5 py-2 bg-gradient-to-r from-green-600 to-green-500 text-white rounded-lg text-sm font-medium hover:from-green-500 hover:to-green-400 transition-all shadow-lg shadow-green-500/20"
+              className="px-5 py-2.5 text-white font-medium rounded-full shadow-md"
+              style={{
+                background: 'linear-gradient(135deg, #8b5cf6 0%, #3b82f6 100%)',
+                boxShadow: '0 4px 15px rgba(139, 92, 246, 0.3)',
+              }}
             >
               选择文件
-            </button>
+            </motion.button>
           )}
-          <p className="text-xs text-zinc-500 mt-3">
+          <p className="text-xs text-gray-400 mt-3">
             支持 PDF、Word、PPT、Markdown 格式
           </p>
-        </div>
+        </motion.div>
 
         {/* Error Message */}
-        {error && (
-          <div className="mx-5 mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm flex items-center gap-2">
-            <FontAwesomeIcon icon={faExclamationTriangle} style={{ width: '14px', height: '14px' }} />
-            {error}
-          </div>
-        )}
+        <AnimatePresence>
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="mx-5 mt-3 p-3 bg-red-50 border border-red-200 rounded-xl text-red-600 text-sm flex items-center gap-2"
+            >
+              <FontAwesomeIcon icon={faExclamationTriangle} />
+              {error}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Document List */}
         <div className="flex-1 overflow-y-auto p-5">
-          {loading ? (
-            <div className="flex flex-col items-center justify-center py-16 text-zinc-400">
-              <div className="w-10 h-10 border-2 border-green-500/30 border-t-green-500 rounded-full animate-spin mb-4" />
-              <p className="text-sm">加载中...</p>
-            </div>
-          ) : documents.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-zinc-500">
-              <FontAwesomeIcon icon={faDatabase} className="text-4xl mb-4" />
-              <p>知识库为空</p>
-              <p className="text-sm mt-1">上传文档开始构建知识库</p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {documents.map((doc) => (
-                <div
-                  key={doc.source}
-                  className="flex items-center justify-between p-3 bg-[#1e1e1e] rounded-xl border border-[#2d2d2d] hover:border-[#3f3f46] transition-colors"
+          <AnimatePresence mode="wait">
+            {loading ? (
+              <motion.div
+                key="loading"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="text-center py-10"
+              >
+                <motion.div
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
                 >
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[#2d2d2d]">
-                      <FontAwesomeIcon icon={faFileAlt} className="text-zinc-400" style={{ width: '14px', height: '14px' }} />
+                  <FontAwesomeIcon icon={faSpinner} className="text-3xl text-violet-500" />
+                </motion.div>
+                <p className="mt-3 text-gray-400">加载中...</p>
+              </motion.div>
+            ) : documents.length === 0 ? (
+              <motion.div
+                key="empty"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="text-center py-16"
+              >
+                <FontAwesomeIcon icon={faDatabase} className="text-5xl text-gray-200 mb-4" />
+                <p className="text-gray-400">知识库为空</p>
+                <p className="text-sm text-gray-300 mt-1">上传文档开始构建知识库</p>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="list"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="space-y-2"
+              >
+                {documents.map((doc, index) => (
+                  <motion.div
+                    key={doc.source}
+                    variants={itemVariants}
+                    initial="hidden"
+                    animate="visible"
+                    transition={{ delay: index * 0.03 }}
+                    whileHover={{ scale: 1.01, x: 4 }}
+                    className="flex items-center justify-between p-4 bg-gray-50/80 rounded-xl border border-gray-100 hover:border-violet-200 hover:bg-white transition-all group"
+                  >
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <FontAwesomeIcon icon={faFileAlt} className="text-gray-300 group-hover:text-violet-400 transition-colors" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-800 truncate">{doc.source}</p>
+                        <p className="text-xs text-gray-400">
+                          {doc.chunk_count} 个切片 · {doc.doc_type.toUpperCase()}
+                        </p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-white truncate">{doc.source}</p>
-                      <p className="text-xs text-zinc-500">
-                        {doc.chunk_count} 个切片 · {doc.doc_type.toUpperCase()}
-                      </p>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs flex items-center gap-1.5">
+                        {getStatusIcon(doc.uiStatus)}
+                        <span className="text-gray-400">{getStatusText(doc.uiStatus)}</span>
+                      </span>
+                      {doc.uiStatus !== 'processing' && (
+                        <motion.button
+                          whileHover={{ scale: 1.1 }}
+                          whileTap={{ scale: 0.9 }}
+                          onClick={() => handleDelete(doc.source)}
+                          className="p-1.5 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                          title="删除"
+                        >
+                          <FontAwesomeIcon icon={faTrash} />
+                        </motion.button>
+                      )}
                     </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs flex items-center gap-1.5">
-                      {getStatusIcon(doc.uiStatus)}
-                      <span className="text-zinc-500">{getStatusText(doc.uiStatus)}</span>
-                    </span>
-                    {doc.uiStatus !== 'processing' && (
-                      <button
-                        onClick={() => handleDelete(doc.source)}
-                        className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors"
-                        title="删除"
-                      >
-                        <FontAwesomeIcon icon={faTrash} style={{ width: '12px', height: '12px' }} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+                  </motion.div>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Footer */}
-        <div className="px-5 py-3 bg-[#151515] border-t border-[#2d2d2d] text-center text-xs text-zinc-500">
+        <div className="px-5 py-3 bg-gray-50/80 border-t border-gray-100 text-center text-xs text-gray-400">
           知识库文档用于增强规划智能体的专业能力
         </div>
-      </div>
+      </motion.div>
     </>,
     document.body
   );

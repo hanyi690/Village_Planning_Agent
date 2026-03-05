@@ -44,9 +44,9 @@ export default function UnifiedContentSwitcher() {
   }, [setVillageFormData, setStatus, setProjectName, addMessage]);
 
   return (
-    <div className="flex-1 relative overflow-hidden flex flex-col">
+    <div className="w-full">
       {viewMode === 'SESSION_ACTIVE' ? (
-        <div className="flex h-full overflow-hidden">
+        <div className="w-full h-[calc(100vh-80px)] overflow-hidden">
           <ChatPanel />
           {/* Viewer sidebar will be rendered by ChatPanel when needed */}
         </div>

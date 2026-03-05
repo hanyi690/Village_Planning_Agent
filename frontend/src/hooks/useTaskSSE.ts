@@ -16,11 +16,12 @@ const MAX_RETRY_COUNT = 3;
 const BASE_RETRY_DELAY = 1000;
 
 // ✅ NEW: Type guard interfaces for type safety (P1.2)
+// ✅ FIXED: 将 chunk 改为 delta，与后端发送的字段名一致
 interface DimensionDeltaData {
   dimension_key: string;
   dimension_name: string;
   layer: number;
-  chunk: string;
+  delta: string;
   accumulated: string;
 }
 
@@ -31,7 +32,7 @@ function isDimensionDeltaData(data: unknown): data is DimensionDeltaData {
     'dimension_key' in data &&
     'dimension_name' in data &&
     'layer' in data &&
-    'chunk' in data &&
+    'delta' in data &&
     'accumulated' in data
   );
 }
@@ -87,7 +88,7 @@ export function useTaskSSE(taskId: string | null | undefined, callbacks: UseTask
   const createEventHandlers = () => ({
     // 维度级增量事件
     dimension_delta: (event: PlanningSSEEvent) => {
-      const { dimension_key, dimension_name, layer, chunk, accumulated } = event.data || {};
+      const { dimension_key, dimension_name, layer, delta, accumulated } = event.data || {};
 
       // ✅ FIXED: Use type guard instead of as assertion
       if (!isDimensionDeltaData(event.data)) {
@@ -95,12 +96,12 @@ export function useTaskSSE(taskId: string | null | undefined, callbacks: UseTask
         return;
       }
 
-      console.log(`[useTaskSSE] Dimension delta: ${dimension_key} (+${chunk?.length || 0} chars)`);
+      console.log(`[useTaskSSE] Dimension delta: ${dimension_key} (+${delta?.length || 0} chars)`);
       callbacks.onDimensionDelta?.(
         event.data.dimension_key,
         event.data.dimension_name ?? '',
         event.data.layer,
-        event.data.chunk ?? '',
+        event.data.delta ?? '',
         event.data.accumulated ?? ''
       );
     },
