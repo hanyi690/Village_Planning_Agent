@@ -195,14 +195,30 @@ def search_knowledge(query: str, top_k: int = 5, context_mode: str = "standard")
     - 匹配的文档片段列表，包含来源、位置、内容
     """
     try:
-        db = get_vectorstore()
-        context_chars_map = {"minimal": 0, "standard": 300, "expanded": 500}
-        context_chars = context_chars_map.get(context_mode, 300)
-
-        results: list[Document] = db.similarity_search(query, k=top_k)
+        # 构建缓存参数
+        context_params = {"top_k": top_k, "context_mode": context_mode}
+        
+        # ✅ 尝试从缓存获取
+        cache = get_vector_cache()
+        cached = cache.get_cached_query(query, context_params)
+        
+        if cached is not None:
+            # 缓存命中，使用缓存的结果继续格式化
+            results = cached
+        else:
+            # 缓存未命中，执行检索
+            db = get_vectorstore()
+            results: list[Document] = db.similarity_search(query, k=top_k)
+            
+            # ✅ 缓存检索结果
+            if results:
+                cache.cache_query_result(query, results, context_params)
 
         if not results:
             return "⚠️  知识库中未找到相关信息。"
+            
+        context_chars_map = {"minimal": 0, "standard": 300, "expanded": 500}
+        context_chars = context_chars_map.get(context_mode, 300)
 
         fragments = []
 
