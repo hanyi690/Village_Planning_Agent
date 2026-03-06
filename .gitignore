@@ -48,12 +48,8 @@ logs/
 backend/logs/
 frontend/logs/
 
-# Database
-data/*.db
-data/*.sqlite
-data/*.sqlite3
-data/*.db-shm
-data/*.db-wal
+# Database and data files
+data/
 
 results/
 
@@ -80,8 +76,7 @@ nul
 # Knowledge base (vector database)
 knowledge_base/
 
-# Policy documents (reference materials, not source code)
-data/policies/
+# Document files (keep in data/ but ignore if elsewhere)
 *.pptx
 *.ppt
 *.docx
