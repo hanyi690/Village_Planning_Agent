@@ -16,9 +16,9 @@ COPY package.json package-lock.json* ./
 RUN npm config set registry https://registry.npmmirror.com
 
 # Install dependencies (including devDependencies for build)
-# 使用 npm install 而非 npm ci，以正确安装 Linux 平台的原生绑定
-# @tailwindcss/oxide 需要针对目标平台的原生模块
-RUN npm install --legacy-peer-deps
+# 删除 Windows 平台的 package-lock.json，强制重新解析依赖
+# 这样 npm 会下载适合 Linux 平台的原生模块 (@tailwindcss/oxide)
+RUN rm -f package-lock.json && npm install
 
 # ============================================
 # Stage 2: Builder
