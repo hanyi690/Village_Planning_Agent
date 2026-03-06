@@ -61,11 +61,33 @@ EMBEDDING_DIMENSIONS=1024
 python src/rag/build.py
 ```
 
+**知识库分类**：
+
+知识库支持两类文档：
+
+| 目录 | 类型 | 说明 |
+|------|------|------|
+| `data/policies/` | 政策文档 | 国家/地方政策、规划标准、法规文件 |
+| `data/cases/` | 案例文档 | 规划案例、参考范例、实践总结 |
+
 构建过程会：
 
-1. 加载 `data/policies/` 下的文档
-2. 切分文档并生成向量
-3. 存储到 `knowledge_base/chroma_db/`
+1. 加载 `data/policies/` 下的政策文档
+2. 加载 `data/cases/` 下的案例文档（如有）
+3. 自动识别目录名作为文档类别 (category)
+4. 切分文档并生成向量
+5. 存储到 `knowledge_base/chroma_db/`
+
+### 5. RAG 缓存配置
+
+```env
+# 查询缓存 TTL（秒），0 表示禁用缓存
+QUERY_CACHE_TTL=3600
+```
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `QUERY_CACHE_TTL` | 0 (禁用) | 查询结果缓存时间，单位秒 |
 
 ## 快速启动
 

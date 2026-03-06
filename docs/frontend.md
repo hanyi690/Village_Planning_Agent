@@ -36,6 +36,18 @@
 | Framer Motion | 12.32.0 | 动画库 |
 | react-markdown | 9.0.0 | Markdown 渲染 |
 
+## 设计风格
+
+### Gemini 风格暗色主题
+
+前端采用 Gemini 风格的暗色主题设计，主要特点：
+
+- **主色调**：绿色系 (#10b981 emerald-500) 作为强调色
+- **背景色**：深灰色系 (#0f0f11, #1a1a1a)
+- **文本色**：浅灰色 (#e5e5e5) 和白色
+- **动画效果**：流畅的微动画和过渡效果
+- **思考指示器**：脉动动画效果，模拟 AI 思考过程
+
 ## 核心原则：单一状态源
 
 前端不存储独立业务状态，所有状态从后端 LangGraph Checkpointer 同步：
@@ -99,11 +111,22 @@ frontend/src/
 │   │   ├── ChatPanel.tsx
 │   │   ├── MessageList.tsx
 │   │   ├── MessageBubble.tsx
+│   │   ├── MessageContent.tsx      # 消息内容包装
+│   │   ├── StreamingText.tsx       # 流式文本渲染
+│   │   ├── ThinkingIndicator.tsx   # 思考指示器 (Gemini风格)
+│   │   ├── ActionButtonGroup.tsx   # 操作按钮组
+│   │   ├── DimensionSection.tsx    # 维度区块
+│   │   ├── LayerReportCard.tsx     # 层级报告卡片
 │   │   ├── ReviewPanel.tsx
 │   │   ├── LayerReportMessage.tsx
 │   │   ├── DimensionReportStreaming.tsx
 │   │   └── DimensionSelector.tsx
+│   ├── report/                 # 报告组件
+│   │   └── KnowledgeReference.tsx  # 知识引用展示
 │   ├── ui/                     # 通用UI组件
+│   │   ├── Card.tsx            # 卡片组件
+│   │   └── SegmentedControl.tsx # 分段控制器
+│   ├── MarkdownRenderer.tsx    # Markdown渲染器
 │   └── VillageInputForm.tsx    # 输入表单
 ├── hooks/
 │   ├── useTaskSSE.ts           # SSE连接管理
@@ -204,9 +227,16 @@ App (page.tsx)
                        ├── MessageList
                        │      └── MessageBubble
                        │             └── MessageContent
-                       │                    ├── TextMessage
+                       │                    ├── StreamingText (流式文本)
+                       │                    ├── ThinkingIndicator (思考动画)
+                       │                    ├── MarkdownRenderer (Markdown)
                        │                    ├── LayerReportMessage
+                       │                    │      └── LayerReportCard
+                       │                    │             └── DimensionSection
                        │                    └── DimensionReportStreaming
+                       │                           └── KnowledgeReference
+                       │
+                       ├── ActionButtonGroup (操作按钮)
                        │
                        └── ReviewPanel (条件渲染)
 ```
@@ -219,9 +249,20 @@ App (page.tsx)
 | UnifiedContentSwitcher | layout/UnifiedContentSwitcher.tsx | 视图切换 |
 | ChatPanel | chat/ChatPanel.tsx | 主聊天面板 |
 | MessageList | chat/MessageList.tsx | 消息列表渲染 |
+| MessageBubble | chat/MessageBubble.tsx | 消息气泡容器 |
+| MessageContent | chat/MessageContent.tsx | 消息内容包装器 |
+| StreamingText | chat/StreamingText.tsx | 流式文本渲染动画 |
+| ThinkingIndicator | chat/ThinkingIndicator.tsx | 思考指示器 (Gemini风格动画) |
+| ActionButtonGroup | chat/ActionButtonGroup.tsx | 操作按钮组 (批准/驳回等) |
+| DimensionSection | chat/DimensionSection.tsx | 维度报告区块 |
+| LayerReportCard | chat/LayerReportCard.tsx | 层级报告卡片容器 |
 | ReviewPanel | chat/ReviewPanel.tsx | 审查面板 |
 | LayerReportMessage | chat/LayerReportMessage.tsx | 层级完成消息 |
 | DimensionReportStreaming | chat/DimensionReportStreaming.tsx | 维度流式报告 |
+| KnowledgeReference | report/KnowledgeReference.tsx | 知识引用展示 |
+| MarkdownRenderer | MarkdownRenderer.tsx | Markdown 渲染器 |
+| Card | ui/Card.tsx | 通用卡片组件 |
+| SegmentedControl | ui/SegmentedControl.tsx | 分段控制器 |
 
 ## 消息类型
 

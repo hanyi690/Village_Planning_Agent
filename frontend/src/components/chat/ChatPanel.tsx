@@ -80,6 +80,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
   const [uploadedFileContent, setUploadedFileContent] = useState<string | null>(null);
+  const [stepMode, setStepMode] = useState(PLANNING_DEFAULTS.stepMode);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // ✅ NEW: Track typing timeout for cleanup
@@ -561,7 +562,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         taskDescription: villageFormData.taskDescription || PLANNING_DEFAULTS.defaultTask,
         constraints: villageFormData.constraints || PLANNING_DEFAULTS.defaultConstraints,
         enableReview: PLANNING_DEFAULTS.enableReview,
-        stepMode: PLANNING_DEFAULTS.stepMode,
+        stepMode,
         streamMode: PLANNING_DEFAULTS.streamMode,
       });
       logger.chatPanel.info('规划启动成功', { status: 'planning' });
@@ -579,7 +580,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     } finally {
       setIsPlanning(false);
     }
-  }, [villageFormData, uploadedFileContent, startPlanning, addMessage]);
+  }, [villageFormData, uploadedFileContent, startPlanning, addMessage, stepMode]);
 
   // Handler: Reset rate limit for a project
   const handleResetRateLimit = useCallback(async (projectName: string) => {
@@ -782,7 +783,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
               taskDescription: villageFormData.taskDescription || PLANNING_DEFAULTS.defaultTask,
               constraints: villageFormData.constraints || PLANNING_DEFAULTS.defaultConstraints,
               enableReview: PLANNING_DEFAULTS.enableReview,
-              stepMode: PLANNING_DEFAULTS.stepMode,
+              stepMode,
               streamMode: PLANNING_DEFAULTS.streamMode,
             });
           } catch (error: unknown) {
@@ -812,7 +813,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         // View actions handled by component-specific handlers
         break;
     }
-  }, [messages, villageFormData, startPlanning, handleReviewApprove, addMessage, getDefaultVillageData]);
+  }, [messages, villageFormData, startPlanning, handleReviewApprove, addMessage, getDefaultVillageData, stepMode]);
 
   // Handler: 查看完整报告（移除侧边栏功能，保留日志）
   const handleOpenInSidebar = useCallback((layer: number) => {
@@ -1040,6 +1041,36 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             >
               <i className={`fas ${isUploadingFile ? 'fa-spinner fa-spin' : 'fa-paperclip'}`} />
             </motion.label>
+
+            {/* Step Mode Toggle - Gemini style pill switch */}
+            <div className="flex items-center p-0.5 bg-gray-100 rounded-full flex-shrink-0">
+              <motion.button
+                type="button"
+                onClick={() => setStepMode(false)}
+                whileHover={!stepMode ? {} : { scale: 1.02 }}
+                whileTap={!stepMode ? {} : { scale: 0.98 }}
+                className={`px-2.5 py-1 text-xs font-medium rounded-full transition-all duration-200 ${
+                  !stepMode
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                连续
+              </motion.button>
+              <motion.button
+                type="button"
+                onClick={() => setStepMode(true)}
+                whileHover={stepMode ? {} : { scale: 1.02 }}
+                whileTap={stepMode ? {} : { scale: 0.98 }}
+                className={`px-2.5 py-1 text-xs font-medium rounded-full transition-all duration-200 ${
+                  stepMode
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                分步
+              </motion.button>
+            </div>
 
             {/* Text input - grows dynamically */}
             <textarea

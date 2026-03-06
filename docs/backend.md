@@ -36,8 +36,9 @@
 | `/status/{session_id}` | GET | 获取会话状态 (REST轮询) |
 | `/review/{session_id}` | POST | 审查操作 (approve/reject/rollback) |
 | `/resume` | POST | 从检查点恢复 |
-| `/checkpoints/{project_name}` | GET | 列出项目检查点 |
-| `/messages/{session_id}` | GET/POST | UI消息管理 |
+| `/checkpoints/{project_name}` | GET | 列出项目检查点 (支持 session_id 参数精确查询) |
+| `/messages/{session_id}` | POST | 创建 UI 消息 (存储到数据库) |
+| `/messages/{session_id}` | GET | 获取 UI 消息列表 (支持 role 过滤) |
 | `/sessions/{session_id}` | DELETE | 删除会话 |
 | `/rate-limit/reset/{project}` | POST | 重置限流 |
 
