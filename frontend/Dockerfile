@@ -4,7 +4,8 @@
 # ============================================
 # Stage 1: Dependencies
 # ============================================
-FROM node:18-alpine AS deps
+# 使用 Debian-slim 替代 Alpine，支持 Tailwind CSS v4 的原生绑定 (@tailwindcss/oxide)
+FROM node:18-slim AS deps
 
 WORKDIR /app
 
@@ -20,7 +21,7 @@ RUN npm ci
 # ============================================
 # Stage 2: Builder
 # ============================================
-FROM node:18-alpine AS builder
+FROM node:18-slim AS builder
 
 WORKDIR /app
 
@@ -42,7 +43,7 @@ RUN npm run build
 # ============================================
 # Stage 3: Production
 # ============================================
-FROM node:18-alpine AS production
+FROM node:18-slim AS production
 
 WORKDIR /app
 
@@ -52,9 +53,9 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# Create non-root user
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Create non-root user (Debian style)
+RUN groupadd --system --gid 1001 nodejs
+RUN useradd --system --uid 1001 --gid nodejs nextjs
 
 # Copy built application
 COPY --from=builder /app/public ./public
