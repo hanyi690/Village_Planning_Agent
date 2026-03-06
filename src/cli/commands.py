@@ -353,17 +353,14 @@ class CommandRunner:
         """列出所有checkpoint（使用 LangGraph API）"""
         logger.info(f"列出项目checkpoint: {self.args.project}")
 
-        # 使用 LangGraph API 获取检查点
+        # 使用全局 checkpointer 单例获取检查点
         import asyncio
-        import aiosqlite
-        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-        from backend.database.engine import get_db_path
+        from backend.api.planning import get_global_checkpointer
         from ..orchestration.main_graph import create_village_planning_graph
 
         async def get_checkpoints():
-            conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
-            saver = AsyncSqliteSaver(conn)
-            await saver.setup()
+            # 使用全局 checkpointer 单例，避免创建独立连接
+            saver = await get_global_checkpointer()
             graph = create_village_planning_graph(checkpointer=saver)
             config = {"configurable": {"thread_id": self.args.project}}
 

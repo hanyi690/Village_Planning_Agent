@@ -67,20 +67,20 @@ class PopulationPredictionAdapter(BaseAdapter):
         执行人口预测分析
 
         Args:
-            analysis_type: 分析类型 (population_forecast/population_structure/labor_force_analysis)
-            **kwargs: 分析参数，可包含：
-                - baseline_population: 基期人口
-                - baseline_year: 基期年份
-                - forecast_years: 预测年份数
-                - growth_rate: 增长率（%）
-                - age_structure: 年龄结构数据
-                - custom_params: 自定义参数
+            analysis_type: 分析类型
+                - population_forecast: 通用人口预测
+                - village_forecast: 村庄规划标准模型 (Pn=P0*(1+K)^n+M)
+                - population_structure: 人口结构分析
+                - labor_force_analysis: 劳动力供给分析
+            **kwargs: 分析参数
 
         Returns:
             AdapterResult: 分析结果
         """
         if analysis_type == "population_forecast":
             return self._forecast_population(**kwargs)
+        elif analysis_type == "village_forecast":
+            return self._village_forecast(**kwargs)
         elif analysis_type == "population_structure":
             return self._analyze_population_structure(**kwargs)
         elif analysis_type == "labor_force_analysis":
@@ -100,6 +100,7 @@ class PopulationPredictionAdapter(BaseAdapter):
             "adapter_name": "PopulationPredictionAdapter",
             "supported_analyses": [
                 "population_forecast",
+                "village_forecast",
                 "population_structure",
                 "labor_force_analysis"
             ],
@@ -112,6 +113,18 @@ class PopulationPredictionAdapter(BaseAdapter):
                     "growth_rate": "number (optional)",
                     "peak_year": "integer (optional)",
                     "peak_population": "integer (optional)"
+                },
+                "village_forecast": {
+                    "model": "string (village_standard)",
+                    "formula": "string (Pn = P0 × (1 + K)^n + M)",
+                    "baseline_population": "integer",
+                    "baseline_year": "integer",
+                    "target_year": "integer",
+                    "forecast_years": "integer",
+                    "natural_growth_rate_permillage": "number (‰)",
+                    "mechanical_growth": "integer",
+                    "forecast_population": "integer",
+                    "intermediate_results": "dict (optional)"
                 },
                 "population_structure": {
                     "age_distribution": "array",
@@ -233,6 +246,116 @@ class PopulationPredictionAdapter(BaseAdapter):
                 data={},
                 metadata={},
                 error=f"人口预测失败: {str(e)}"
+            )
+
+    def _village_forecast(self, **kwargs) -> AdapterResult:
+        """
+        村庄规划标准人口预测模型
+
+        公式: Pn = P0 × (1 + K)^n + M
+
+        其中:
+        - Pn: 规划期末人口数
+        - P0: 规划基期年人口总数
+        - K: 规划期内人口自然增长率（‰，千分比）
+        - n: 预测年限
+        - M: 机械增长人口（迁入-迁出）
+
+        参考示例:
+        金田村户籍人口1406人，自然增长率4‰，预测11年后+机械增长200人
+        Pn = 1406 × (1 + 0.004)^11 + 200 = 1681人
+        """
+        logger.info("[PopulationAdapter] 执行村庄规划标准人口预测")
+
+        # 检查必需参数
+        baseline_population = kwargs.get("baseline_population")
+        if baseline_population is None:
+            return AdapterResult(
+                success=False,
+                status=AdapterStatus.FAILED,
+                data={},
+                metadata={},
+                error="缺少必需参数: baseline_population（基期人口）"
+            )
+
+        baseline_year = kwargs.get("baseline_year")
+        if baseline_year is None:
+            return AdapterResult(
+                success=False,
+                status=AdapterStatus.FAILED,
+                data={},
+                metadata={},
+                error="缺少必需参数: baseline_year（基期年份）"
+            )
+
+        try:
+            # 目标年份（默认2035年）
+            target_year = kwargs.get("target_year", 2035)
+
+            # 预测年限
+            n = target_year - baseline_year
+            if n <= 0:
+                return AdapterResult(
+                    success=False,
+                    status=AdapterStatus.FAILED,
+                    data={},
+                    metadata={},
+                    error=f"目标年份 {target_year} 必须大于基期年份 {baseline_year}"
+                )
+
+            # 自然增长率（‰千分比，默认4‰）
+            natural_growth_rate = kwargs.get("natural_growth_rate", 4.0)  # ‰
+
+            # 机械增长人口（默认0）
+            mechanical_growth = kwargs.get("mechanical_growth", 0)
+
+            # 转换千分比为小数
+            K = natural_growth_rate / 1000
+
+            # 计算预测人口: Pn = P0 × (1 + K)^n + M
+            natural_growth_factor = (1 + K) ** n
+            forecast_population = int(baseline_population * natural_growth_factor + mechanical_growth)
+
+            # 计算中间年份（可选）
+            intermediate_years = kwargs.get("intermediate_years", [2030])
+            intermediate_results = {}
+            for year in intermediate_years:
+                if year > baseline_year and year < target_year:
+                    mid_n = year - baseline_year
+                    mid_pop = int(baseline_population * ((1 + K) ** mid_n) + mechanical_growth * (mid_n / n))
+                    intermediate_results[year] = mid_pop
+
+            result = {
+                "model": "village_standard",
+                "formula": "Pn = P0 × (1 + K)^n + M",
+                "baseline_population": baseline_population,
+                "baseline_year": baseline_year,
+                "target_year": target_year,
+                "forecast_years": n,
+                "natural_growth_rate_permillage": natural_growth_rate,  # ‰
+                "mechanical_growth": mechanical_growth,
+                "natural_growth_factor": round(natural_growth_factor, 4),
+                "forecast_population": forecast_population,
+                "intermediate_results": intermediate_results if intermediate_results else None
+            }
+
+            return AdapterResult(
+                success=True,
+                status=AdapterStatus.SUCCESS,
+                data=result,
+                metadata={
+                    "analysis_type": "village_forecast",
+                    "model": "village_standard"
+                }
+            )
+
+        except Exception as e:
+            return AdapterResult(
+                success=False,
+                status=AdapterStatus.FAILED,
+                data={},
+                metadata={},
+                error=f"村庄人口预测失败: {str(e)}"
             )
 
     def _analyze_population_structure(self, **kwargs) -> AdapterResult:

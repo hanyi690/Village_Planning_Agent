@@ -95,37 +95,102 @@ def calculate_population(context: Dict[str, Any]) -> str:
     """
     人口预测模型
 
-    基于现状数据，使用 Leslie 矩阵或线性回归预测未来人口
+    使用村庄规划标准模型: Pn = P0 × (1 + K)^n + M
 
     Args:
-        context: 包含 socio_economy 等现状分析的上下文
+        context: 包含人口相关数据的上下文
+            - socio_economic: 社会经济分析文本（提取基期人口）
+            - baseline_population: 基期人口（可选，优先使用）
+            - baseline_year: 基期年份（可选，默认2024）
+            - target_year: 目标年份（可选，默认2035）
+            - natural_growth_rate: 自然增长率‰（可选，默认4‰）
+            - mechanical_growth: 机械增长人口（可选，默认0）
 
     Returns:
         格式化的预测结果字符串
     """
-    # 从上下文提取当前人口
-    socio_economic = context.get("socio_economic", "")
-
-    # 简化示例：提取数字（实际应使用更复杂的解析）
     import re
-    pop_match = re.search(r'人口[：:]\s*(\d+)', socio_economic)
-    current_pop = int(pop_match.group(1)) if pop_match else 1000
+    from datetime import datetime
 
-    # 执行预测（这里简化，实际应使用完整的 Leslie 矩阵）
-    projected_2030 = int(current_pop * 1.05)
-    projected_2035 = int(current_pop * 1.10)
+    # 提取基期人口
+    baseline_population = context.get("baseline_population")
+    if baseline_population is None:
+        # 从 socio_economic 文本中提取
+        socio_economic = context.get("socio_economic", "")
+        pop_match = re.search(r'(?:户籍)?人口[：:]\s*(\d+)', socio_economic)
+        baseline_population = int(pop_match.group(1)) if pop_match else 1000
 
-    return f"""## 人口预测结果
+    # 其他参数
+    current_year = datetime.now().year
+    baseline_year = context.get("baseline_year", current_year)
+    target_year = context.get("target_year", 2035)
+    natural_growth_rate = context.get("natural_growth_rate", 4.0)  # ‰
+    mechanical_growth = context.get("mechanical_growth", 0)
 
-基于现状数据（当前人口 {current_pop} 人），采用人口增长模型预测：
+    try:
+        from .adapters.population_adapter import PopulationPredictionAdapter
 
-- 2030年：预计人口 {projected_2030} 人（增长 5%）
-- 2035年：预计人口 {projected_2035} 人（增长 10%）
+        adapter = PopulationPredictionAdapter()
+        result = adapter.execute(
+            analysis_type="village_forecast",
+            baseline_population=baseline_population,
+            baseline_year=baseline_year,
+            target_year=target_year,
+            natural_growth_rate=natural_growth_rate,
+            mechanical_growth=mechanical_growth,
+            intermediate_years=[2030]  # 中间年份
+        )
 
-**预测依据**：
-- 考虑自然增长率（出生率 - 死亡率）
-- 考虑机械增长率（流入人口 - 流出人口）
-- 参考同类村庄发展趋势
+        if result.success:
+            data = result.data
+            intermediate = data.get("intermediate_results", {})
+
+            return f"""## 人口预测结果
+
+**预测模型**: Pn = P0 × (1 + K)^n + M（村庄规划标准模型）
+
+**基础参数**:
+- 基期年份: {data['baseline_year']}年
+- 基期人口: {data['baseline_population']}人
+- 自然增长率: {data['natural_growth_rate_permillage']}‰
+- 机械增长人口: {data['mechanical_growth']}人
+
+**预测结果**:
+- 预测年限: {data['forecast_years']}年
+- 自然增长系数: {data['natural_growth_factor']}
+- **{data['target_year']}年预测人口: {data['forecast_population']}人**
+{f"- 2030年预测人口: {intermediate.get(2030, 'N/A')}人" if 2030 in intermediate else ""}
+
+**计算过程**:
+P{n} = {baseline_population} × (1 + {natural_growth_rate/1000})^{data['forecast_years']} + {mechanical_growth}
+     = {baseline_population} × {data['natural_growth_factor']} + {mechanical_growth}
+     = {data['forecast_population']}人
+"""
+        else:
+            logger.warning(f"[population_model_v1] Adapter 预测失败: {result.error}，使用简化模型")
+            raise Exception(result.error)
+
+    except Exception as e:
+        # 降级到简化模型
+        n = target_year - baseline_year
+        K = natural_growth_rate / 1000
+        forecast_pop = int(baseline_population * ((1 + K) ** n) + mechanical_growth)
+
+        logger.warning(f"[population_model_v1] 使用简化模型（{e}）")
+
+        return f"""## 人口预测结果
+
+**预测模型**: Pn = P0 × (1 + K)^n + M（简化计算）
+
+**基础参数**:
+- 基期人口: {baseline_population}人
+- 自然增长率: {natural_growth_rate}‰
+- 机械增长人口: {mechanical_growth}人
+
+**预测结果**:
+- **{target_year}年预测人口: {forecast_pop}人**
+
+**注意**: 适配器不可用，使用简化计算
 """
 
 
@@ -162,6 +227,7 @@ def calculate_gis_coverage(context: Dict[str, Any]) -> str:
 """
     except (ImportError, Exception):
         # 如果没有 GIS 环境，返回模拟数据
+        logger.warning("[gis_coverage_calculator] GIS 模块不可用，返回估算模拟数据")
         return """## GIS 土地利用分析结果
 
 基于现状调研数据估算：
@@ -202,6 +268,7 @@ def calculate_network_accessibility(context: Dict[str, Any]) -> str:
 **路网数据**：OD 成本矩阵
 """
     except (ImportError, Exception):
+        logger.warning("[network_accessibility] 网络分析模块不可用，返回定性分析（模拟数据）")
         return """## 交通可达性分析结果
 
 基于现状路网结构分析：
@@ -213,24 +280,97 @@ def calculate_network_accessibility(context: Dict[str, Any]) -> str:
 """
 
 
-# ==========================================
-# 适配器迁移辅助
-# ==========================================
-
-def migrate_adapter_to_tool(adapter_class, tool_name: str):
+@ToolRegistry.register("knowledge_search")
+def knowledge_search_tool(context: Dict[str, Any]) -> str:
     """
-    将现有适配器迁移为工具函数的辅助函数
+    RAG 知识检索工具
 
-    Usage:
-        from ..tools.adapters import GISAnalysisAdapter
-        migrate_adapter_to_tool(GISAnalysisAdapter, "gis_custom_analysis")
+    从知识库中检索相关信息，支持专业数据和法规条文的查询。
+
+    Args:
+        context: 包含 query 和可选参数的上下文字典
+            - query: 查询字符串（必需）
+            - top_k: 返回结果数量（可选，默认 5）
+            - context_mode: 上下文模式（可选，默认 "standard"）
+
+    Returns:
+        格式化的知识检索结果
     """
-    def wrapper(context: Dict[str, Any]) -> str:
-        adapter = adapter_class()
-        return adapter.execute(context)
+    try:
+        from ..rag.core.tools import knowledge_search_tool as rag_search_tool
 
-    ToolRegistry.register(tool_name)(wrapper)
-    return wrapper
+        query = context.get("query", "")
+        top_k = context.get("top_k", 5)
+        context_mode = context.get("context_mode", "standard")
+
+        if not query:
+            return "## 知识检索错误\n\n错误: 缺少查询参数 'query'"
+
+        result = rag_search_tool.invoke({
+            "query": query,
+            "top_k": top_k,
+            "context_mode": context_mode
+        })
+
+        logger.info(f"[ToolRegistry] 知识检索成功: query='{query[:50]}...'")
+        return result
+
+    except Exception as e:
+        logger.error(f"[ToolRegistry] 知识检索失败: {e}")
+        return f"## 知识检索错误\n\n错误: {str(e)}"
+
+
+# ==========================================
+# 工具初始化
+# ==========================================
+
+def _initialize_adapter_tools():
+    """
+    初始化 Adapter 工具
+
+    尝试使用 wrappers 模块注册所有可用的 Adapter
+    """
+    from .adapters.wrappers import register_adapter_as_tool, format_population_result, format_gis_result, format_network_result
+
+    # 尝试注册 GIS Adapter
+    try:
+        from .adapters.gis_adapter import GISAnalysisAdapter
+        register_adapter_as_tool(
+            GISAnalysisAdapter,
+            "gis_analysis",
+            adapter_name="GIS 空间分析",
+            result_formatter=format_gis_result
+        )
+    except ImportError:
+        logger.debug("[ToolRegistry] GIS Adapter 未安装，跳过注册")
+
+    # 尝试注册 Network Adapter
+    try:
+        from .adapters.network_adapter import NetworkAnalysisAdapter
+        register_adapter_as_tool(
+            NetworkAnalysisAdapter,
+            "network_analysis",
+            adapter_name="交通网络分析",
+            result_formatter=format_network_result
+        )
+    except ImportError:
+        logger.debug("[ToolRegistry] Network Adapter 未安装，跳过注册")
+
+    # 尝试注册 Population Adapter
+    try:
+        from .adapters.population_adapter import PopulationPredictionAdapter
+        register_adapter_as_tool(
+            PopulationPredictionAdapter,
+            "population_prediction",
+            adapter_name="人口预测分析",
+            result_formatter=format_population_result
+        )
+    except ImportError:
+        logger.debug("[ToolRegistry] Population Adapter 未安装，跳过注册")
+
+
+# 模块加载时初始化 Adapter 工具
+_initialize_adapter_tools()
 
 
 __all__ = ["ToolRegistry"]

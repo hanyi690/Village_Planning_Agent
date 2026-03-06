@@ -1088,17 +1088,9 @@ def resume_from_checkpoint(
         # 获取 checkpointer（如果未提供）
         if checkpointer is None:
             import asyncio
-            import aiosqlite
-            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-            from backend.database.engine import get_db_path
+            from backend.api.planning import get_global_checkpointer
             
-            async def get_checkpointer():
-                conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
-                saver = AsyncSqliteSaver(conn)
-                await saver.setup()
-                return saver
-            
-            checkpointer = asyncio.run(get_checkpointer())
+            checkpointer = asyncio.run(get_global_checkpointer())
 
         # 创建主图
         graph = create_village_planning_graph(checkpointer=checkpointer)

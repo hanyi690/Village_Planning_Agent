@@ -87,3 +87,6 @@ data/policies/
 *.docx
 *.doc
 *.pdf
+
+# Reference code repositories (for learning purposes only)
+docs/references/

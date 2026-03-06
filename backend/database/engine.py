@@ -57,6 +57,19 @@ def get_engine():
             max_overflow=10
         )
 
+        # 启用 WAL 模式以提高并发写入安全性
+        from sqlalchemy import event
+        
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            cursor.close()
+        
+        logger.info("[Sync DB] WAL mode enabled")
+
         # Register cleanup function with atexit
         atexit.register(dispose_engine)
         logger.info(f"[Sync DB] Database engine created: {DB_PATH}")
@@ -183,6 +196,19 @@ async def get_async_engine() -> create_async_engine:
             connect_args={"check_same_thread": False},
             pool_pre_ping=True,
         )
+        
+        # 启用 WAL 模式以提高并发写入安全性
+        from sqlalchemy import event
+        
+        @event.listens_for(async_engine.sync_engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            cursor.close()
+        
+        logger.info("[Async DB] WAL mode enabled")
         logger.info(f"[Async DB] Async database engine created: {DB_PATH}")
     
     _async_engine_ref_count += 1

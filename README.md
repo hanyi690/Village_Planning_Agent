@@ -19,23 +19,22 @@
 │                         前端 (Next.js 14)                            │
 │  UnifiedPlanningContext ←─REST轮询(2s)─ TaskController              │
 │        ↓                                    SSE流式文本              │
-│  条件渲染: ReviewPanel / LayerReportCard                             │
+│  条件渲染: ReviewPanel / LayerReportMessage                         │
 └─────────────────────────────────────────────────────────────────────┘
                                │ HTTP/SSE
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         后端 (FastAPI)                               │
-│  /api/planning/*   规划任务管理                                      │
-│  /api/data/*       村庄数据查询                                      │
-│  /api/files/*      文件上传解析                                      │
-│  /api/knowledge/*  知识库管理                                        │
+│  /api/planning/*   规划任务管理    /api/data/*   村庄数据查询        │
+│  /api/files/*      文件上传解析    /api/knowledge/*  知识库管理      │
+│  AsyncSqliteSaver (Checkpointer单例) → 状态持久化                   │
 └─────────────────────────────────────────────────────────────────────┘
                                │ Python调用
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        Agent核心 (LangGraph)                         │
-│  主图: START → init_pause → Layer1(并行) → Layer2(波次) →            │
-│        Layer3(波次) → generate_final → END                           │
+│  主图: START → init_pause → Layer1(并行) → Layer2(波次) →           │
+│        Layer3(波次) → tool_bridge → generate_final → END            │
 │  子图: analysis / concept / detailed_plan / revision                 │
 │  规划器: GenericPlanner (28维度统一执行)                              │
 │  RAG: knowledge_preload_node → knowledge_cache → Prompt注入         │
@@ -44,7 +43,7 @@
                                ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          存储层 (SQLite)                             │
-│  planning_sessions: 业务元数据                                       │
+│  planning_sessions: 业务元数据    ui_sessions/messages: UI状态       │
 │  checkpoints: LangGraph状态快照 (单一真实源)                         │
 │  knowledge_base/chroma_db/: RAG 向量数据库                           │
 └─────────────────────────────────────────────────────────────────────┘
@@ -67,11 +66,38 @@ layer_X_completed: true  →       completedLayers[X]: true
 execution_complete: true →       停止轮询
 ```
 
+### 规划执行流程
+
+```
+HTTP POST /api/planning/start
+    │
+    ├─→ 限流检查 (rate_limiter)
+    ├─→ 创建 PlanningSession 记录
+    ├─→ 获取 Checkpointer 单例
+    ├─→ 创建图实例 (create_village_planning_graph)
+    └─→ 后台异步执行 (_execute_graph_in_background)
+            │
+            ▼
+        Layer 1: 12维度并行执行
+            │ analysis_reports 输出
+            ▼
+        Layer 2: 4维度波次执行 (Wave1→Wave4)
+            │ concept_reports 输出
+            ▼
+        Layer 3: 12维度波次执行
+            │ detail_reports 输出
+            ▼
+        generate_final_output
+            │ final_output
+            ▼
+        SSE: completed 事件
+```
+
 ### SSE 流式事件
 
 | 事件类型               | 说明                     |
 | ---------------------- | ------------------------ |
-| `layer_started`      | 层级开始（非暂停时）     |
+| `layer_started`      | 层级开始                 |
 | `content_delta`      | 文本增量                 |
 | `dimension_delta`    | 维度内容增量（Token级）  |
 | `dimension_complete` | 维度完成                 |
@@ -82,23 +108,10 @@ execution_complete: true →       停止轮询
 
 ### REST 状态同步
 
-前端每2秒轮询 `/api/planning/status/{id}` 获取完整状态，用于：
+前端每2秒轮询 `/api/planning/status/{id}` 获取完整状态：
 - 初始加载时恢复状态
 - SSE 断线后重新同步
 - 获取消息历史和修订历史
-
-### 审查操作流程
-
-```
-层级完成 → 后端设置 pause_after_step=true
-        → REST轮询检测到 status='paused'
-        → 前端显示 ReviewPanel
-        → 用户点击"驳回"并填写反馈
-        → POST /api/planning/review?action=reject
-        → 后端执行修复（级联更新下游维度）
-        → SSE 发送 dimension_revised 事件
-        → 前端更新消息流
-```
 
 ## 三层规划维度
 
@@ -112,7 +125,7 @@ execution_complete: true →       停止轮询
 
 ### Layer 3: 详细规划 (12维度波次执行)
 
-产业规划、空间结构规划、**土地利用规划★**、居民点规划、道路交通规划、公共服务设施规划、**基础设施规划★**、**生态绿地规划★**、**防震减灾规划★**、**历史文保规划★**、村庄风貌指引、项目库
+产业规划、空间结构规划、土地利用规划★、居民点规划、道路交通规划、公共服务设施规划、基础设施规划★、生态绿地规划★、防震减灾规划★、历史文保规划★、村庄风貌指引、项目库
 
 > ★ 标记为启用 RAG 知识检索的关键维度
 
@@ -200,17 +213,13 @@ Village_Planning_Agent/
 │   │   ├── files.py            # 文件上传API
 │   │   └── knowledge.py        # 知识库API
 │   ├── database/               # 数据模型
-│   ├── services/               # 服务层
+│   ├── services/               # 服务层 (限流器)
 │   └── utils/                  # 工具函数
 ├── frontend/src/               # Next.js 14 前端
 │   ├── app/                    # 页面路由
 │   ├── contexts/               # 状态管理
-│   │   └── UnifiedPlanningContext.tsx
+│   ├── controllers/            # TaskController
 │   ├── components/             # UI组件
-│   │   ├── layout/             # 布局组件
-│   │   ├── chat/               # 聊天组件
-│   │   ├── report/             # 报告组件
-│   │   └── ui/                 # 通用UI组件
 │   ├── hooks/                  # 自定义Hooks
 │   ├── lib/                    # API客户端
 │   ├── config/                 # 配置文件
@@ -218,34 +227,17 @@ Village_Planning_Agent/
 ├── src/                        # Agent核心引擎
 │   ├── agent.py                # 对外接口
 │   ├── orchestration/          # 主图编排
-│   │   └── main_graph.py       # StateGraph定义
 │   ├── subgraphs/              # 三层子图
-│   │   ├── analysis_subgraph.py
-│   │   ├── concept_subgraph.py
-│   │   ├── detailed_plan_subgraph.py
-│   │   └── revision_subgraph.py
 │   ├── nodes/                  # 节点实现
-│   │   ├── layer_nodes.py      # Layer节点
-│   │   ├── subgraph_nodes.py   # 子图节点
-│   │   └── tool_nodes.py       # 工具节点
 │   ├── planners/               # 规划器
-│   │   ├── generic_planner.py
-│   │   └── unified_base_planner.py
 │   ├── config/                 # 维度配置
-│   │   └── dimension_metadata.py
 │   ├── core/                   # 核心模块
-│   │   ├── config.py           # 全局配置
-│   │   ├── llm_factory.py      # LLM工厂
-│   │   └── prompts.py          # Prompt模板
 │   ├── rag/                    # RAG 知识检索
 │   └── tools/                  # 工具函数
 ├── knowledge_base/             # 知识库存储
-│   └── chroma_db/              # ChromaDB 向量库
 ├── data/                       # 数据文件
-│   ├── village_planning.db     # SQLite数据库
-│   └── policies/               # 政策文档源文件
-├── tests/                      # 测试文件
-└── docs/                       # 文档
+├── docs/                       # 文档
+└── tests/                      # 测试文件
 ```
 
 ## API 端点
@@ -254,61 +246,39 @@ Village_Planning_Agent/
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/planning/start` | POST | 启动规划任务 |
-| `/api/planning/status/{id}` | GET | 查询任务状态 |
-| `/api/planning/stream/{id}` | GET | SSE流式事件 |
-| `/api/planning/review/{id}` | POST | 审查操作 (approve/reject/rollback) |
-| `/api/planning/sessions/{id}` | DELETE | 删除会话 |
+| `/start` | POST | 启动规划任务 |
+| `/status/{id}` | GET | 查询任务状态 (REST轮询) |
+| `/stream/{id}` | GET | SSE流式事件 |
+| `/review/{id}` | POST | 审查操作 (approve/reject/rollback) |
+| `/sessions/{id}` | DELETE | 删除会话 |
 
 ### 数据 API (`/api/data/*`)
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/data/villages` | GET | 列出所有村庄 |
-| `/api/data/villages/{name}/layers/{layer}` | GET | 获取层级内容 |
-| `/api/data/villages/{name}/checkpoints` | GET | 获取检查点列表 |
+| `/villages` | GET | 列出所有村庄 |
+| `/villages/{name}/layers/{layer}` | GET | 获取层级内容 |
+| `/villages/{name}/checkpoints` | GET | 获取检查点列表 |
 
 ### 文件 API (`/api/files/*`)
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/files/upload` | POST | 上传并解析文件 |
+| `/upload` | POST | 上传并解析文件 |
 
 ### 知识库 API (`/api/knowledge/*`)
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/knowledge/stats` | GET | 知识库统计 |
-| `/api/knowledge/documents` | GET | 文档列表 |
-| `/api/knowledge/documents` | POST | 上传文档 |
-| `/api/knowledge/sync` | POST | 同步文档 |
+| `/stats` | GET | 知识库统计 |
+| `/documents` | GET/POST | 文档列表/上传 |
+| `/sync` | POST | 同步文档 |
 
 ## 文档
 
 - **[智能体架构](docs/agent.md)** - LangGraph 主图、子图、规划器、RAG
 - **[后端实现](docs/backend.md)** - FastAPI API 与数据流
 - **[前端实现](docs/frontend.md)** - Next.js 状态管理
-
-## RAG 知识检索
-
-### 模块架构
-
-统一的 RAG 模块位于 `src/rag/`：
-
-- **核心工具**: `knowledge_search_tool` - 语义检索
-- **文档加载**: `loaders.py` - 支持 PDF, DOCX, DOC, PPTX, TXT, MD 等格式
-- **向量存储**: ChromaDB，持久化到 `knowledge_base/chroma_db/`
-
-### 检索策略
-
-- **预加载模式**: 子图开始前统一检索，缓存到 `knowledge_cache`
-- **关键维度**: 涉及法规条文和技术指标的维度自动注入知识上下文
-
-### 关键维度列表
-
-**Layer 1**: land_use, infrastructure, ecological_green, historical_culture
-
-**Layer 3**: land_use_planning, infrastructure_planning, ecological, disaster_prevention, heritage
 
 ## 维度依赖与波次执行
 

@@ -6,6 +6,9 @@
 检查点管理：统一使用 LangGraph AsyncSqliteSaver（通过 backend.api.planning 模块）
 """
 
+# 工具注册中心
+from .registry import ToolRegistry
+
 # 文件管理工具
 from .file_manager import (
     VillageDataManager,
@@ -28,6 +31,9 @@ from .revision_tool import (
 )
 
 __all__ = [
+    # 工具注册中心
+    "ToolRegistry",
+
     # 文件管理
     "VillageDataManager",
     "read_village_data",

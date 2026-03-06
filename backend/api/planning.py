@@ -108,6 +108,13 @@ async def get_global_checkpointer() -> Any:
 
             # 创建连接
             conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
+            
+            # 启用 WAL 模式以提高并发写入安全性
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA synchronous=NORMAL")
+            await conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            logger.info("[Checkpointer] WAL mode enabled")
+            
             _checkpointer = AsyncSqliteSaver(conn)
 
             # 初始化表结构（只在第一次时调用）

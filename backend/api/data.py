@@ -68,41 +68,29 @@ def _get_layer_dir(layer: str) -> str:
     return result
 
 
-async def _get_langgraph_checkpointer():
-    """Get LangGraph AsyncSqliteSaver instance"""
-    import aiosqlite
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-    
-    conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
-    saver = AsyncSqliteSaver(conn)
-    await saver.setup()
-    return saver, conn
-
-
 async def _get_session_checkpoints(thread_id: str) -> List[Dict[str, Any]]:
     """Get checkpoints for a session using LangGraph API"""
     from src.orchestration.main_graph import create_village_planning_graph
+    from .planning import get_global_checkpointer
     
     checkpoints = []
     try:
-        saver, conn = await _get_langgraph_checkpointer()
-        try:
-            graph = create_village_planning_graph(checkpointer=saver)
-            config = {"configurable": {"thread_id": thread_id}}
+        # 使用全局 checkpointer 单例，避免创建独立连接
+        saver = await get_global_checkpointer()
+        graph = create_village_planning_graph(checkpointer=saver)
+        config = {"configurable": {"thread_id": thread_id}}
 
-            async for state_snapshot in graph.aget_state_history(config):
-                checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
-                metadata = state_snapshot.metadata or {}
-                values = state_snapshot.values or {}
-                
-                checkpoints.append({
-                    "checkpoint_id": checkpoint_id,
-                    "timestamp": metadata.get("write_ts", ""),
-                    "layer": values.get("current_layer", 1),
-                    "description": f"Layer {values.get('current_layer', 1)} checkpoint"
-                })
-        finally:
-            await conn.close()
+        async for state_snapshot in graph.aget_state_history(config):
+            checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+            metadata = state_snapshot.metadata or {}
+            values = state_snapshot.values or {}
+            
+            checkpoints.append({
+                "checkpoint_id": checkpoint_id,
+                "timestamp": metadata.get("write_ts", ""),
+                "layer": values.get("current_layer", 1),
+                "description": f"Layer {values.get('current_layer', 1)} checkpoint"
+            })
     except Exception as e:
         logger.error(f"[Data API] Failed to get checkpoints: {e}", exc_info=True)
     
@@ -112,20 +100,19 @@ async def _get_session_checkpoints(thread_id: str) -> List[Dict[str, Any]]:
 async def _get_state_from_checkpoint(thread_id: str, checkpoint_id: str = None) -> Dict[str, Any]:
     """Get state from LangGraph checkpoint"""
     from src.orchestration.main_graph import create_village_planning_graph
+    from .planning import get_global_checkpointer
     
     try:
-        saver, conn = await _get_langgraph_checkpointer()
-        try:
-            graph = create_village_planning_graph(checkpointer=saver)
-            
-            config = {"configurable": {"thread_id": thread_id}}
-            if checkpoint_id:
-                config["configurable"]["checkpoint_id"] = checkpoint_id
-            
-            state_snapshot = await graph.aget_state(config)
-            return state_snapshot.values or {}
-        finally:
-            await conn.close()
+        # 使用全局 checkpointer 单例，避免创建独立连接
+        saver = await get_global_checkpointer()
+        graph = create_village_planning_graph(checkpointer=saver)
+        
+        config = {"configurable": {"thread_id": thread_id}}
+        if checkpoint_id:
+            config["configurable"]["checkpoint_id"] = checkpoint_id
+        
+        state_snapshot = await graph.aget_state(config)
+        return state_snapshot.values or {}
     except Exception as e:
         logger.error(f"[Data API] Failed to get state: {e}", exc_info=True)
         return {}

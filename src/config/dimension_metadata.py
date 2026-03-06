@@ -37,7 +37,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": None,
         "result_key": "analysis_result",
         "rag_enabled": True,
-        "tool": None,
+        "tool": "population_model_v1",  # 人口预测工具，提供人口趋势分析
         "description": "分析村庄人口、经济、产业等社会经济状况",
         "prompt_key": "socio_economic_analysis"
     },
@@ -89,7 +89,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": None,
         "result_key": "analysis_result",
         "rag_enabled": True,
-        "tool": None,
+        "tool": "gis_coverage_calculator",  # GIS 覆盖率计算工具，提供土地利用结构分析
         "description": "分析村庄各类用地的分布、规模和利用效率",
         "prompt_key": "land_use_analysis"
     },
@@ -102,7 +102,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": None,
         "result_key": "analysis_result",
         "rag_enabled": True,
-        "tool": None,
+        "tool": "network_accessibility",  # 网络可达性分析工具，提供交通网络分析
         "description": "分析村庄内部道路和外部交通状况",
         "prompt_key": "traffic_analysis"
     },
