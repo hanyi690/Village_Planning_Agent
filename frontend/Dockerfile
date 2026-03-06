@@ -4,8 +4,8 @@
 # ============================================
 # Stage 1: Dependencies
 # ============================================
-# 使用 Debian-slim 替代 Alpine，支持 Tailwind CSS v4 的原生绑定 (@tailwindcss/oxide)
-FROM node:18-slim AS deps
+# 使用 Node.js 20 和 Debian-slim，支持 Tailwind CSS v4 的原生绑定 (@tailwindcss/oxide)
+FROM node:20-slim AS deps
 
 WORKDIR /app
 
@@ -16,14 +16,15 @@ COPY package.json package-lock.json* ./
 RUN npm config set registry https://registry.npmmirror.com
 
 # Install dependencies (including devDependencies for build)
-# 删除 Windows 平台的 package-lock.json，强制重新解析依赖
-# 这样 npm 会下载适合 Linux 平台的原生模块 (@tailwindcss/oxide)
-RUN rm -f package-lock.json && npm install
+# 清理缓存并强制重新安装，确保下载适合 Linux 平台的原生模块
+RUN rm -rf node_modules package-lock.json && \
+    npm cache clean --force && \
+    npm install
 
 # ============================================
 # Stage 2: Builder
 # ============================================
-FROM node:18-slim AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /app
 
@@ -45,7 +46,7 @@ RUN npm run build
 # ============================================
 # Stage 3: Production
 # ============================================
-FROM node:18-slim AS production
+FROM node:20-slim AS production
 
 WORKDIR /app
 
