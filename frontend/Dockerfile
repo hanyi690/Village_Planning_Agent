@@ -16,7 +16,9 @@ COPY package.json package-lock.json* ./
 RUN npm config set registry https://registry.npmmirror.com
 
 # Install dependencies (including devDependencies for build)
-RUN npm ci
+# 使用 npm install 而非 npm ci，以正确安装 Linux 平台的原生绑定
+# @tailwindcss/oxide 需要针对目标平台的原生模块
+RUN npm install --legacy-peer-deps
 
 # ============================================
 # Stage 2: Builder
