@@ -80,7 +80,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
   const [uploadedFileContent, setUploadedFileContent] = useState<string | null>(null);
-  const [stepMode, setStepMode] = useState(PLANNING_DEFAULTS.stepMode);
+  const [stepMode, setStepMode] = useState<boolean>(PLANNING_DEFAULTS.stepMode);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // ✅ NEW: Track typing timeout for cleanup
