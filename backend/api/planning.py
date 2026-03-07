@@ -55,10 +55,12 @@ from backend.database.operations_async import (
     create_planning_session_async as create_session_async,
     get_planning_session_async as get_session_async,
     update_planning_session_async as update_session_async,
+    delete_planning_session_async as delete_session_async,
     # UI 消息存储操作
     create_ui_message_async,
     get_ui_messages_async,
     upsert_ui_message_async,  # ✅ 新增：upsert 消息
+    delete_ui_messages_async,
 )
 # ✅ 从 engine 导入数据库路径函数
 from backend.database.engine import get_db_path
@@ -1812,27 +1814,65 @@ async def review_action(session_id: str, request: ReviewActionRequest):
 @router.delete("/api/planning/sessions/{session_id}")
 async def delete_session(session_id: str):
     """
-    Delete a session
+    Delete a session completely
 
-    Removes session from memory. Checkpoint data is preserved by default.
+    Removes session from:
+    1. Memory (_sessions, _active_executions, _stream_states)
+    2. Database (planning_sessions table)
+    3. UI messages (ui_messages table)
+    4. LangGraph checkpoints
     """
     try:
-        if session_id not in _sessions:
-            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+        # 获取 session 信息（用于删除 checkpoint）
+        session_info = _sessions.get(session_id)
+        project_name = session_info.get("project_name") if session_info else None
 
-        del _sessions[session_id]
+        # 1. 删除内存状态
+        if session_id in _sessions:
+            del _sessions[session_id]
 
-        # Clean up active execution flag
         if session_id in _active_executions:
             del _active_executions[session_id]
 
-        # Clean up stream state
         if session_id in _stream_states:
             del _stream_states[session_id]
 
-        logger.info(f"[Planning API] Session {session_id} deleted")
+        # 2. 删除数据库记录
+        db_deleted = await delete_session_async(session_id)
+        if db_deleted:
+            logger.info(f"[Planning API] Deleted database record for session {session_id}")
+        else:
+            logger.warning(f"[Planning API] No database record found for session {session_id}")
 
-        return {"message": f"Session {session_id} deleted"}
+        # 3. 删除 UI 消息
+        await delete_ui_messages_async(session_id)
+        logger.info(f"[Planning API] Deleted UI messages for session {session_id}")
+
+        # 4. 删除 LangGraph checkpoint（如果有 project_name）
+        if project_name:
+            try:
+                checkpointer = await get_global_checkpointer()
+                config = {"configurable": {"thread_id": project_name}}
+
+                # 遍历并删除该 thread_id 下的所有 checkpoint
+                deleted_checkpoints = []
+                async for state_snapshot in checkpointer.aget_state_history(config):
+                    checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
+                    if checkpoint_id:
+                        try:
+                            await checkpointer.adelete(state_snapshot.config)
+                            deleted_checkpoints.append(checkpoint_id)
+                        except Exception as e:
+                            logger.warning(f"[Planning API] Failed to delete checkpoint {checkpoint_id}: {e}")
+
+                if deleted_checkpoints:
+                    logger.info(f"[Planning API] Deleted {len(deleted_checkpoints)} checkpoints for session {session_id}")
+            except Exception as e:
+                logger.warning(f"[Planning API] Failed to delete checkpoints: {e}")
+
+        logger.info(f"[Planning API] Session {session_id} fully deleted")
+
+        return {"message": f"Session {session_id} deleted", "deleted_checkpoints": project_name is not None}
 
     except HTTPException:
         raise

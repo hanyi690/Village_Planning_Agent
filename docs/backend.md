@@ -39,7 +39,7 @@
 | `/checkpoints/{project_name}` | GET | 列出项目检查点 (支持 session_id 参数精确查询) |
 | `/messages/{session_id}` | POST | 创建 UI 消息 (存储到数据库) |
 | `/messages/{session_id}` | GET | 获取 UI 消息列表 (支持 role 过滤) |
-| `/sessions/{session_id}` | DELETE | 删除会话 |
+| `/sessions/{session_id}` | DELETE | 删除会话（完整删除：数据库+UI消息+Checkpoint） |
 | `/rate-limit/reset/{project}` | POST | 重置限流 |
 
 ### Data API (`/api/data/*`)
@@ -174,6 +174,75 @@ class ReviewActionRequest(BaseModel):
     dimensions: Optional[List[str]]  # 审查维度（驳回时）
     checkpoint_id: Optional[str]  # 检查点ID（回退时必填）
 ```
+
+**级联更新机制**：
+
+当用户选择修复某个维度时，系统会自动识别并更新所有依赖它的下游维度：
+
+| 维度类型 | Feedback 策略 | 说明 |
+|----------|--------------|------|
+| 目标维度 | 用户 feedback | 使用用户提供的修改意见 |
+| 下游维度 | 级联更新 prompt | 基于上游更新内容自动调整 |
+
+**执行流程**：
+```
+用户选择修复: ["land_use"]
+    │
+    ├─→ Wave 0: land_use (目标维度)
+    │       → 使用用户 feedback
+    │
+    ├─→ Wave 1: [spatial_structure, land_use_planning]
+    │       → 使用级联更新 prompt
+    │
+    └─→ Wave 2: [project_bank]
+            → 使用级联更新 prompt
+```
+
+**级联更新 Prompt 结构** (`src/subgraphs/revision_subgraph.py`):
+```
+【级联更新任务】
+上游相关维度已完成修订，请根据上游更新内容调整本维度。
+
+【上游已更新的内容】
+{filtered_detail}
+
+【原始修改背景（供参考）】
+{user_feedback}
+
+【要求】
+1. 仔细阅读上游已更新的内容
+2. 识别本维度中受上游更新影响的部分
+3. 调整本维度内容，确保与上游维度保持一致
+4. 只修改确实受影响的部分
+5. 在修改处标注【级联更新】
+```
+
+### DELETE /api/planning/sessions/{session_id}
+
+完整删除会话，包括：
+
+**删除范围**：
+1. **内存状态**：`_sessions`、`_active_executions`、`_stream_states`
+2. **数据库记录**：`planning_sessions` 表中的会话记录
+3. **UI 消息**：`ui_messages` 表中的所有相关消息
+4. **LangGraph Checkpoint**：AsyncSqliteSaver 中的检查点数据
+
+**响应**：
+```json
+{
+  "message": "Session {session_id} deleted completely",
+  "deleted": {
+    "memory": true,
+    "database": true,
+    "ui_messages": 15,
+    "checkpoints": 3
+  }
+}
+```
+
+**错误处理**：
+- 404: 会话不存在
+- 500: 删除失败
 
 ## 数据库模型
 

@@ -357,15 +357,30 @@ export const planningApi = {
     es.addEventListener('pause', (e) => {
       connectionState = 'paused';
       parseEvent(e, 'pause');
-      // 🔧 修复：主动关闭连接，阻止自动重连
-      es.close();
+      // 🔧 修复：延迟关闭连接，确保 dimension_revised 等事件能被处理完成
+      // 使用 requestAnimationFrame + setTimeout 确保微任务队列清空后再关闭
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          if (es.readyState !== EventSource.CLOSED) {
+            es.close();
+            console.log('[SSE] Connection safely closed after ensuring event queue processing.');
+          }
+        }, 300);
+      });
     });
 
     es.addEventListener('stream_paused', (e) => {
       connectionState = 'paused';
       parseEvent(e, 'pause'); // Also trigger pause for compatibility
-      // 🔧 修复：主动关闭连接，阻止自动重连
-      es.close();
+      // 🔧 修复：延迟关闭连接，确保 dimension_revised 等事件能被处理完成
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          if (es.readyState !== EventSource.CLOSED) {
+            es.close();
+            console.log('[SSE] Connection safely closed after stream_paused event.');
+          }
+        }, 300);
+      });
     });
 
     es.addEventListener('completed', (e) => {

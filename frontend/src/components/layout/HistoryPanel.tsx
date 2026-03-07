@@ -9,8 +9,76 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faHistory, faSearch, faSpinner, faInbox, faChevronRight, faClock } from '@fortawesome/free-solid-svg-icons';
+import { faTimes, faHistory, faSearch, faSpinner, faInbox, faChevronRight, faClock, faTrash, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
+
+interface DeleteConfirmModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  isDeleting: boolean;
+}
+
+function DeleteConfirmModal({ isOpen, onClose, onConfirm, isDeleting }: DeleteConfirmModalProps) {
+  if (!isOpen) return null;
+
+  return createPortal(
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[10000] flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.9, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.9, opacity: 0 }}
+        className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-100 flex items-center justify-center">
+            <FontAwesomeIcon
+              icon={faExclamationTriangle}
+              className="text-2xl text-red-500"
+            />
+          </div>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">
+            确认删除
+          </h3>
+          <p className="text-gray-500 text-sm mb-6">
+            确定要删除此会话吗？此操作将删除会话记录、消息历史和相关数据，且无法恢复。
+          </p>
+          <div className="flex gap-3">
+            <button
+              onClick={onClose}
+              disabled={isDeleting}
+              className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-xl font-medium hover:bg-gray-200 transition-colors disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              onClick={onConfirm}
+              disabled={isDeleting}
+              className="flex-1 px-4 py-2.5 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {isDeleting ? (
+                <>
+                  <FontAwesomeIcon icon={faSpinner} spin />
+                  删除中...
+                </>
+              ) : (
+                '确认删除'
+              )}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>,
+    document.body
+  );
+}
 
 export default function HistoryPanel({ onClose }: { onClose: () => void }) {
   const {
@@ -18,12 +86,21 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
     historyLoading,
     loadVillagesHistory,
     loadHistoricalSession,
+    deleteSession,
+    deletingSessionId,
     taskId
   } = useUnifiedPlanningContext();
 
   const [mounted, setMounted] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const hasLoadedRef = useRef(false);
+
+  // Delete confirmation state
+  const [deleteTarget, setDeleteTarget] = useState<{
+    sessionId: string;
+    villageName: string;
+  } | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -45,6 +122,27 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
       v.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
   }, [villages, searchTerm]);
+
+  const handleDeleteClick = (e: React.MouseEvent, sessionId: string, villageName: string) => {
+    e.stopPropagation();
+    setDeleteTarget({ sessionId, villageName });
+    setShowDeleteConfirm(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    
+    const success = await deleteSession(deleteTarget.sessionId, deleteTarget.villageName);
+    if (success) {
+      setShowDeleteConfirm(false);
+      setDeleteTarget(null);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setShowDeleteConfirm(false);
+    setDeleteTarget(null);
+  };
 
   // Animation variants
   const overlayVariants = {
@@ -188,30 +286,61 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
                     {/* Sessions */}
                     <div className="p-2 space-y-1">
                       {village.sessions && village.sessions.length > 0 ? (
-                        village.sessions.map((session) => (
-                          <motion.button
-                            key={session.session_id}
-                            whileHover={{ x: 4, backgroundColor: '#f0fdf4' }}
-                            whileTap={{ scale: 0.98 }}
-                            onClick={() => {
-                              loadHistoricalSession(village.name, session.session_id);
-                              onClose();
-                            }}
-                            className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left bg-white hover:bg-emerald-50 transition-colors group"
-                          >
-                            <span className="flex items-center gap-2 text-sm text-gray-600">
-                              <FontAwesomeIcon
-                                icon={faClock}
-                                className="text-gray-300 group-hover:text-emerald-400 transition-colors"
-                              />
-                              {new Date(session.timestamp).toLocaleString('zh-CN')}
-                            </span>
-                            <FontAwesomeIcon
-                              icon={faChevronRight}
-                              className="text-gray-200 group-hover:text-emerald-400 transition-colors"
-                            />
-                          </motion.button>
-                        ))
+                        village.sessions.map((session) => {
+                          const isDeleting = deletingSessionId === session.session_id;
+                          const isCurrentSession = taskId === session.session_id;
+                          
+                          return (
+                            <motion.div
+                              key={session.session_id}
+                              className={`flex items-center gap-1 rounded-lg bg-white ${
+                                isDeleting ? 'opacity-50' : ''
+                              }`}
+                            >
+                              <motion.button
+                                whileHover={{ x: 4, backgroundColor: '#f0fdf4' }}
+                                whileTap={{ scale: 0.98 }}
+                                onClick={() => {
+                                  if (!isDeleting) {
+                                    loadHistoricalSession(village.name, session.session_id);
+                                    onClose();
+                                  }
+                                }}
+                                disabled={isDeleting}
+                                className="flex-1 flex items-center justify-between px-3 py-2.5 rounded-lg text-left hover:bg-emerald-50 transition-colors group disabled:cursor-not-allowed"
+                              >
+                                <span className="flex items-center gap-2 text-sm text-gray-600">
+                                  <FontAwesomeIcon
+                                    icon={faClock}
+                                    className="text-gray-300 group-hover:text-emerald-400 transition-colors"
+                                  />
+                                  {new Date(session.timestamp).toLocaleString('zh-CN')}
+                                  {isCurrentSession && (
+                                    <span className="text-xs text-violet-500 font-medium">当前</span>
+                                  )}
+                                </span>
+                                <FontAwesomeIcon
+                                  icon={faChevronRight}
+                                  className="text-gray-200 group-hover:text-emerald-400 transition-colors"
+                                />
+                              </motion.button>
+                              <motion.button
+                                whileHover={{ scale: 1.1 }}
+                                whileTap={{ scale: 0.9 }}
+                                onClick={(e) => handleDeleteClick(e, session.session_id, village.name)}
+                                disabled={isDeleting}
+                                className="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-red-500 rounded-lg hover:bg-red-50 transition-colors disabled:cursor-not-allowed"
+                                title="删除会话"
+                              >
+                                <FontAwesomeIcon
+                                  icon={isDeleting ? faSpinner : faTrash}
+                                  spin={isDeleting}
+                                  className="text-sm"
+                                />
+                              </motion.button>
+                            </motion.div>
+                          );
+                        })
                       ) : (
                         <div className="text-center text-gray-400 text-sm py-3">
                           无会话记录
@@ -238,6 +367,18 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
           </AnimatePresence>
         </div>
       </motion.div>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {showDeleteConfirm && (
+          <DeleteConfirmModal
+            isOpen={showDeleteConfirm}
+            onClose={handleDeleteCancel}
+            onConfirm={handleDeleteConfirm}
+            isDeleting={deletingSessionId !== null}
+          />
+        )}
+      </AnimatePresence>
     </>,
     document.body
   );

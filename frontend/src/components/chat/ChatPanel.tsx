@@ -401,23 +401,43 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     oldContent: string;
     newContent: string;
     feedback: string;
+    isTarget: boolean;
+    revisionType: string;
     timestamp: string;
   }) => {
     console.log('[ChatPanel] Dimension revised event received', data);
     
     const dimensionName = getDimensionName(data.dimension);
     
-    // 1. 添加用户反馈消息（如果有的话）
-    if (data.feedback) {
+    // 根据维度类型显示不同的消息
+    if (data.isTarget) {
+      // 目标维度：显示用户反馈和修复结果
+      if (data.feedback) {
+        addMessage({
+          ...createBaseMessage(),
+          type: 'text',
+          role: 'user',
+          content: `🎯 修改意见（${dimensionName}）：${data.feedback}`,
+        });
+      }
+      
       addMessage({
         ...createBaseMessage(),
         type: 'text',
-        role: 'user',
-        content: `修改意见：${data.feedback}`,
+        role: 'assistant',
+        content: `✅ **${dimensionName}** 已按用户反馈完成修改`,
+      });
+    } else {
+      // 级联维度：显示级联更新提示
+      addMessage({
+        ...createBaseMessage(),
+        type: 'text',
+        role: 'assistant',
+        content: `🔗 **${dimensionName}** 已根据上游更新自动调整`,
       });
     }
     
-    // 2. 添加修复完成消息
+    // 添加修复后的内容
     addMessage({
       ...createBaseMessage(),
       type: 'dimension_report',
@@ -430,7 +450,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       wordCount: data.newContent.length,
     });
     
-    console.log(`[ChatPanel] 维度 ${data.dimension} 修复完成，已添加消息`);
+    console.log(`[ChatPanel] 维度 ${data.dimension} 修复完成（${data.revisionType}），已添加消息`);
   }, [addMessage]);
 
   // Stable callbacks object using useMemo
@@ -922,6 +942,8 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             }}
             currentLayer={taskState.current_layer ?? undefined}
             dimensionContents={dimensionContents}  // NEW: 传递实时维度内容（解决并行更新竞态）
+            checkpoints={checkpoints}
+            onRollback={handleRollback}
           />
           <div ref={messagesEndRef} />
         </div>
@@ -1016,6 +1038,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             <ReviewPanel
               layer={pendingReviewLayer}
               onApprove={handleReviewApprove}
+              onReject={(feedback) => handleReviewReject(feedback, selectedDimensions.length > 0 ? selectedDimensions : undefined)}
               isSubmitting={false}
             />
           )}

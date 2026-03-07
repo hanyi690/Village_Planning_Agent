@@ -50,6 +50,8 @@ export function useTaskController(
       oldContent: string;
       newContent: string;
       feedback: string;
+      isTarget: boolean;
+      revisionType: string;
       timestamp: string;
     }) => void;
     onError?: (error: string) => void;
@@ -295,6 +297,8 @@ export function useTaskController(
             old_content?: string;
             new_content?: string;
             feedback?: string;
+            is_target?: boolean;
+            revision_type?: string;
             timestamp?: string;
           } || {};
           
@@ -304,6 +308,8 @@ export function useTaskController(
             oldContent: data.old_content || '',
             newContent: data.new_content || '',
             feedback: data.feedback || '',
+            isTarget: data.is_target ?? true,
+            revisionType: data.revision_type || '',
             timestamp: data.timestamp || new Date().toISOString(),
           });
         } else if (eventType === 'error') {
@@ -341,7 +347,9 @@ export function useTaskController(
     reject: useCallback(async (feedback: string, dimensions?: string[]) => {
       if (!taskId) throw new Error('No task ID');
       await planningApi.rejectReview(taskId, feedback, dimensions);
-    }, [taskId]),
+      // ✅ 拒绝后立即获取最新状态，触发 UI 更新和 SSE 连接重建
+      await fetchStatus();
+    }, [taskId, fetchStatus]),
 
     rollback: useCallback(async (checkpointId: string) => {
       if (!taskId) throw new Error('No task ID');

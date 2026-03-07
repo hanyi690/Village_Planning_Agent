@@ -117,10 +117,11 @@ frontend/src/
 │   │   ├── ActionButtonGroup.tsx   # 操作按钮组
 │   │   ├── DimensionSection.tsx    # 维度区块
 │   │   ├── LayerReportCard.tsx     # 层级报告卡片
-│   │   ├── ReviewPanel.tsx
+│   │   ├── ReviewPanel.tsx         # 审查面板（支持批准/驳回）
 │   │   ├── LayerReportMessage.tsx
 │   │   ├── DimensionReportStreaming.tsx
-│   │   └── DimensionSelector.tsx
+│   │   ├── DimensionSelector.tsx   # 维度选择器
+│   │   └── CheckpointMarker.tsx    # 检查点时间线标记
 │   ├── report/                 # 报告组件
 │   │   └── KnowledgeReference.tsx  # 知识引用展示
 │   ├── ui/                     # 通用UI组件
@@ -247,8 +248,9 @@ App (page.tsx)
 |------|------|------|
 | UnifiedLayout | layout/UnifiedLayout.tsx | 主布局容器 |
 | UnifiedContentSwitcher | layout/UnifiedContentSwitcher.tsx | 视图切换 |
+| HistoryPanel | layout/HistoryPanel.tsx | 历史记录面板（支持删除会话） |
 | ChatPanel | chat/ChatPanel.tsx | 主聊天面板 |
-| MessageList | chat/MessageList.tsx | 消息列表渲染 |
+| MessageList | chat/MessageList.tsx | 消息列表渲染（集成检查点标记） |
 | MessageBubble | chat/MessageBubble.tsx | 消息气泡容器 |
 | MessageContent | chat/MessageContent.tsx | 消息内容包装器 |
 | StreamingText | chat/StreamingText.tsx | 流式文本渲染动画 |
@@ -256,9 +258,11 @@ App (page.tsx)
 | ActionButtonGroup | chat/ActionButtonGroup.tsx | 操作按钮组 (批准/驳回等) |
 | DimensionSection | chat/DimensionSection.tsx | 维度报告区块 |
 | LayerReportCard | chat/LayerReportCard.tsx | 层级报告卡片容器 |
-| ReviewPanel | chat/ReviewPanel.tsx | 审查面板 |
+| ReviewPanel | chat/ReviewPanel.tsx | 审查面板（支持批准/驳回） |
 | LayerReportMessage | chat/LayerReportMessage.tsx | 层级完成消息 |
 | DimensionReportStreaming | chat/DimensionReportStreaming.tsx | 维度流式报告 |
+| DimensionSelector | chat/DimensionSelector.tsx | 维度选择器（驳回时选择修复维度） |
+| CheckpointMarker | chat/CheckpointMarker.tsx | 检查点时间线标记（支持回滚） |
 | KnowledgeReference | report/KnowledgeReference.tsx | 知识引用展示 |
 | MarkdownRenderer | MarkdownRenderer.tsx | Markdown 渲染器 |
 | Card | ui/Card.tsx | 通用卡片组件 |
@@ -286,6 +290,8 @@ planningApi.createStream(sessionId, onEvent) // GET /stream (SSE)
 planningApi.getStatus(sessionId)             // GET /status
 planningApi.approveReview(sessionId)         // POST /review (approve)
 planningApi.rejectReview(sessionId, feedback, dimensions)  // POST /review (reject)
+planningApi.rollbackCheckpoint(sessionId, checkpointId)    // POST /review (rollback)
+planningApi.deleteSession(sessionId)         // DELETE /sessions/{id}
 
 // Data API
 dataApi.listVillages()                       // GET /villages
@@ -312,14 +318,22 @@ knowledgeApi.addDocument(file)               // POST /documents
 {viewMode === 'WELCOME_FORM' && <VillageInputForm />}
 {viewMode === 'SESSION_ACTIVE' && <ChatPanel />}
 
-// ReviewPanel 显示
+// ReviewPanel 显示（支持批准和驳回）
 {isPaused && pendingReviewLayer && (
   <ReviewPanel 
     layer={pendingReviewLayer}
     onApprove={() => planningApi.approveReview(taskId)}
-    onReject={(feedback, dimensions) => 
-      planningApi.rejectReview(taskId, feedback, dimensions)
-    }
+    onReject={(feedback) => handleReviewReject(feedback)}
+  />
+)}
+
+// CheckpointMarker 在 MessageList 中渲染
+// 每个 layer_completed 消息后显示对应的检查点标记
+{checkpoint && (
+  <CheckpointMarker
+    checkpoint={checkpoint}
+    onRollback={() => handleRollback(checkpoint.checkpoint_id)}
+    isRollingBack={isRollingBack}
   />
 )}
 
@@ -335,11 +349,71 @@ switch (message.type) {
 
 | 文件 | 功能 |
 |------|------|
-| `contexts/UnifiedPlanningContext.tsx` | 全局状态管理 |
+| `contexts/UnifiedPlanningContext.tsx` | 全局状态管理（含 deleteSession 方法） |
 | `controllers/TaskController.tsx` | REST轮询 + SSE事件处理 |
 | `lib/api.ts` | API客户端封装 |
 | `config/dimensions.ts` | 28个维度配置 |
 | `types/message-types.ts` | 消息类型定义 |
 | `hooks/useTaskSSE.ts` | SSE连接管理 |
 | `components/chat/ChatPanel.tsx` | 主界面容器 |
-| `components/chat/ReviewPanel.tsx` | 审查面板 |
+| `components/chat/ReviewPanel.tsx` | 审查面板（批准/驳回） |
+| `components/chat/CheckpointMarker.tsx` | 检查点时间线标记（回滚） |
+| `components/chat/DimensionSelector.tsx` | 维度选择器 |
+| `components/layout/HistoryPanel.tsx` | 历史记录面板（删除会话） |
+
+## 审查与回滚功能
+
+### 审查面板 (ReviewPanel)
+
+当层级完成并进入暂停状态时，显示审查面板：
+
+```
+┌────────────────────────────────────────┐
+│ ⏸️ 现状分析 待审查                      │
+│                                        │
+│ ┌─────────────┐  ┌─────────────┐      │
+│ │ ✅ 批准继续  │  │ ✏️ 驳回修改  │      │
+│ └─────────────┘  └─────────────┘      │
+└────────────────────────────────────────┘
+```
+
+点击「驳回修改」后展开输入框：
+- 输入修改意见
+- 选择需要修复的维度（可选）
+- 提交后调用 `reject(feedback, dimensions)` API
+
+### 检查点标记 (CheckpointMarker)
+
+在每个层级完成后，在对话时间线中显示检查点标记：
+
+```
+────────────────────────────────────────
+│ 📌 Layer 1 完成 · 2024-01-15 10:30   │
+│ ──────────────  ───────────────────  │
+│                [恢复到此点]           │
+────────────────────────────────────────
+```
+
+功能：
+- 显示层级完成时间
+- 点击「恢复到此点」触发回滚确认弹窗
+- 确认后调用 `rollback(checkpointId)` API
+
+### 历史记录删除 (HistoryPanel)
+
+在历史记录面板中，每个会话项右侧显示删除按钮：
+
+```
+┌────────────────────────────────────┐
+│ 📁 某某村 (3条记录)                │
+│   ├─ 2024-01-15 10:30    [🗑️]     │
+│   ├─ 2024-01-14 14:20    [🗑️]     │
+│   └─ 2024-01-13 09:00    [🗑️]     │
+└────────────────────────────────────┘
+```
+
+删除流程：
+1. 点击删除按钮
+2. 显示确认弹窗
+3. 确认后调用 `deleteSession(sessionId)` API
+4. 后端完整删除：数据库记录 + UI消息 + Checkpoint数据

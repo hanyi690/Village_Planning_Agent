@@ -169,6 +169,8 @@ interface UnifiedPlanningContextType {
   selectSession: (session: VillageSession) => void;
   loadHistoricalSession: (villageName: string, sessionId: string) => Promise<void>;
   loadHistoricalReports: (villageName: string, sessionId: string) => Promise<void>;
+  deleteSession: (sessionId: string, villageName: string) => Promise<boolean>;
+  deletingSessionId: string | null;
 }
 
 const UnifiedPlanningContext = createContext<UnifiedPlanningContextType | undefined>(undefined);
@@ -730,6 +732,40 @@ export function UnifiedPlanningProvider({
     }
   }, [clearMessages, loadCheckpoints, addMessage, loadHistoricalReports]);
 
+  // Delete session
+  const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+
+  const deleteSession = useCallback(async (sessionId: string, villageName: string): Promise<boolean> => {
+    try {
+      setDeletingSessionId(sessionId);
+      console.log('[UnifiedPlanningContext] Deleting session:', sessionId);
+
+      await planningApi.deleteSession(sessionId);
+
+      // 刷新历史列表
+      await loadVillagesHistory();
+
+      // 如果删除的是当前会话，重置状态
+      if (taskId === sessionId) {
+        clearMessages();
+        setTaskId(null);
+        setProjectName(null);
+        setStatus('idle');
+        addMessage(createSystemMessage(`🗑️ 已删除会话: ${sessionId.slice(0, 8)}...`));
+      }
+
+      console.log('[UnifiedPlanningContext] Session deleted successfully:', sessionId);
+      return true;
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '未知错误';
+      console.error('[UnifiedPlanningContext] Failed to delete session:', error);
+      addMessage(createErrorMessage(`删除会话失败: ${errorMessage}`));
+      return false;
+    } finally {
+      setDeletingSessionId(null);
+    }
+  }, [taskId, clearMessages, addMessage, loadVillagesHistory]);
+
   // Context value
   const value: UnifiedPlanningContextType = {
     // State
@@ -805,6 +841,8 @@ export function UnifiedPlanningProvider({
     selectSession,
     loadHistoricalSession,
     loadHistoricalReports,
+    deleteSession,
+    deletingSessionId,
   };
 
   return (

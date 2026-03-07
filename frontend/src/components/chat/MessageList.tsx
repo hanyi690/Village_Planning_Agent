@@ -4,11 +4,12 @@
  * MessageList - Renders list of chat messages with Gemini-style enhancements
  */
 
-import { Message, ActionButton, LayerCompletedMessage, DimensionReportMessage, FileMessage } from '@/types';
+import { Message, ActionButton, LayerCompletedMessage, DimensionReportMessage, FileMessage, Checkpoint } from '@/types';
 import ThinkingIndicator, { WaveThinkingIndicator } from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
 import DimensionReportStreaming from './DimensionReportStreaming';
+import CheckpointMarker from './CheckpointMarker';
 
 interface MessageListProps {
   messages: Message[];
@@ -22,6 +23,10 @@ interface MessageListProps {
   onToggleAllDimensions?: (layer: number, expand: boolean) => void;
   currentLayer?: number;
   dimensionContents?: Map<string, string>;  // NEW: 实时维度内容（解决并行更新竞态）
+  // Checkpoint 回滚
+  checkpoints?: Checkpoint[];
+  onRollback?: (checkpointId: string) => Promise<void>;
+  isRollingBack?: boolean;
 }
 
 // 格式化文件大小
@@ -45,6 +50,9 @@ export default function MessageList({
   onToggleAllDimensions,
   currentLayer,
   dimensionContents,  // NEW: 实时维度内容
+  checkpoints = [],
+  onRollback,
+  isRollingBack = false,
 }: MessageListProps) {
   const handleCopy = (message: Message) => {
     if (message.type === 'text') {
@@ -104,6 +112,9 @@ export default function MessageList({
           // 计算是否有流式维度（有维度报告且有内容）
           const hasStreamingDimensions = Object.keys(layerMsg.dimensionReports || {}).length > 0;
           
+          // 查找对应层级的 checkpoint
+          const layerCheckpoint = checkpoints.find(cp => cp.layer === layerMsg.layer);
+          
           return (
             <div key={message.id} className="w-full mb-4">
               <LayerReportMessage
@@ -114,6 +125,15 @@ export default function MessageList({
                 hasStreamingDimensions={hasStreamingDimensions}
                 dimensionContents={dimensionContents}  // NEW: 传递实时维度内容
               />
+              
+              {/* Checkpoint 回滚标记 */}
+              {layerCheckpoint && onRollback && (
+                <CheckpointMarker
+                  checkpoint={layerCheckpoint}
+                  onRollback={onRollback}
+                  isRollingBack={isRollingBack}
+                />
+              )}
             </div>
           );
         }

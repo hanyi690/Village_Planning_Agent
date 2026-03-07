@@ -95,6 +95,8 @@ class RevisionDimensionState(TypedDict):
     filtered_detail: str
     # 依赖链信息
     dependency_chain: dict
+    # 是否是目标维度（用户选择的维度）
+    is_target_dimension: bool
 
 
 # ==========================================
@@ -260,6 +262,10 @@ def create_parallel_revision_tasks(
         config = get_dimension_config(dim)
         dimension_name = config.get("name", dim) if config else dim
         
+        # 判断是否是目标维度（用户选择的维度）
+        target_dimensions = state.get("target_dimensions", [])
+        is_target = dim in target_dimensions
+        
         # 构建维度状态
         dimension_state = RevisionDimensionState({
             "dimension_key": dim,
@@ -270,7 +276,8 @@ def create_parallel_revision_tasks(
             "filtered_analysis": filtered_analysis,
             "filtered_concept": filtered_concept,
             "filtered_detail": filtered_detail,
-            "dependency_chain": chain
+            "dependency_chain": chain,
+            "is_target_dimension": is_target
         })
         
         sends.append(Send("revise_single_dimension", dimension_state))
@@ -284,6 +291,51 @@ def create_parallel_revision_tasks(
 
 
 # ==========================================
+# 级联更新辅助函数
+# ==========================================
+
+def _build_cascade_feedback(
+    dimension_name: str,
+    filtered_detail: str,
+    user_feedback: str
+) -> str:
+    """
+    构建级联更新用的 feedback
+    
+    下游维度不直接使用用户反馈，而是使用专门的级联更新提示，
+    告知模型上游维度已更新，需要据此调整本维度内容。
+    
+    Args:
+        dimension_name: 当前维度名称
+        filtered_detail: 筛选后的上游详细规划内容
+        user_feedback: 用户对目标维度的原始反馈（作为参考）
+        
+    Returns:
+        级联更新用的 feedback 字符串
+    """
+    return f"""
+【级联更新任务】
+上游相关维度已完成修订，请根据上游更新内容调整本维度"{dimension_name}"。
+
+【上游已更新的内容】
+{filtered_detail[:3000] if filtered_detail else "（无上游内容）"}
+
+【原始修改背景（供参考）】
+{user_feedback[:500] if user_feedback else "（无用户反馈）"}
+
+【要求】
+1. 仔细阅读上游已更新的内容
+2. 识别本维度中受上游更新影响的部分
+3. 调整本维度内容，确保与上游维度保持一致和协调
+4. 保持本维度的原有结构和格式
+5. 只修改确实受影响的部分，无需大幅改写
+6. 在修改处标注"【级联更新】"
+
+请生成更新后的规划内容：
+"""
+
+
+# ==========================================
 # 单维度修复节点
 # ==========================================
 
@@ -292,11 +344,13 @@ def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
     修复单个维度
     
     使用 GenericPlanner 统一架构执行修复
+    区分目标维度和下游维度，使用不同的 feedback 策略
     """
     dimension_key = state["dimension_key"]
     dimension_name = state["dimension_name"]
-    feedback = state["feedback"]
+    user_feedback = state["feedback"]
     original_content = state["original_content"]
+    is_target = state.get("is_target_dimension", True)
     
     logger.info(f"[Revision-修复] 开始修复 {dimension_name} ({dimension_key})")
     
@@ -316,13 +370,29 @@ def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
         from ..planners.generic_planner import GenericPlannerFactory
         planner = GenericPlannerFactory.create_planner(dimension_key)
         
+        # 根据是否是目标维度选择不同的 feedback 策略
+        if is_target:
+            # 目标维度：使用用户反馈
+            feedback = user_feedback
+            revision_type = "目标维度修复"
+            logger.info(f"[Revision-修复] {dimension_name} 是目标维度，使用用户反馈")
+        else:
+            # 下游维度：使用级联更新 prompt
+            feedback = _build_cascade_feedback(
+                dimension_name=dimension_name,
+                filtered_detail=state.get("filtered_detail", ""),
+                user_feedback=user_feedback
+            )
+            revision_type = "级联更新"
+            logger.info(f"[Revision-修复] {dimension_name} 是下游维度，使用级联更新 prompt")
+        
         # 构建规划器状态
         planner_state = {
             "project_name": state.get("project_name", ""),
             "filtered_analysis": state.get("filtered_analysis", ""),
             "filtered_concept": state.get("filtered_concept", ""),
             "filtered_detail": state.get("filtered_detail", ""),
-            "task_description": "根据反馈修订规划内容",
+            "task_description": f"根据反馈修订规划内容（{revision_type}）",
             "constraints": feedback
         }
         
@@ -342,7 +412,9 @@ def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
                 "dimension_name": dimension_name,
                 "success": True,
                 "revised_content": revised_result,
-                "original_content": original_content
+                "original_content": original_content,
+                "is_target": is_target,
+                "revision_type": revision_type
             }]
         }
         
@@ -390,13 +462,17 @@ def reduce_revision_results(state: RevisionState) -> Dict[str, Any]:
             if dim not in completed_dimensions:
                 completed_dimensions.append(dim)
             
-            # 记录历史
+            # 记录历史（包含维度类型信息）
             revision_history.append({
                 "dimension": dim,
                 "dimension_name": result.get("dimension_name", dim),
                 "old_content": original_content,
                 "new_content": revised_content,
-                "timestamp": datetime.now().isoformat()
+                "is_target": result.get("is_target", True),
+                "revision_type": result.get("revision_type", ""),
+                "timestamp": datetime.now().isoformat(),
+                "layer": get_dimension_layer(dim),
+                "feedback": (state.get("feedback") or "")[:500]  # 防空处理，截断避免过长
             })
             
             logger.info(f"[Revision-汇总] 维度 {dim} 更新完成")

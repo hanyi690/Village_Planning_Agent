@@ -40,6 +40,20 @@ export interface Checkpoint {
   layer: number;
 }
 
+// Revision Item - 修复项（区分目标维度和级联维度）
+export interface RevisionItem {
+  dimension: string;
+  dimensionName: string;
+  layer: number;
+  isTarget: boolean;                    // 是否是用户选择的目标维度
+  revisionType: string;                 // "目标维度修复" | "级联更新"
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  oldContent?: string;
+  newContent?: string;
+  feedback?: string;
+  timestamp: string;
+}
+
 // Action Button
 export interface ActionButton {
   id: string;
