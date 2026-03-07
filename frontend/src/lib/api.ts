@@ -198,6 +198,7 @@ export interface SessionStatusResponse {
 export interface UIMessage {
   id: number;
   session_id: string;
+  message_id: string;  // ✅ 前端消息 ID（用于 upsert）
   role: 'user' | 'assistant' | 'system';
   content: string;
   message_type: string;
@@ -356,18 +357,21 @@ export const planningApi = {
     es.addEventListener('pause', (e) => {
       connectionState = 'paused';
       parseEvent(e, 'pause');
+      // 🔧 修复：主动关闭连接，阻止自动重连
+      es.close();
     });
 
     es.addEventListener('stream_paused', (e) => {
       connectionState = 'paused';
       parseEvent(e, 'pause'); // Also trigger pause for compatibility
-      // 最佳实践：不主动 close，让后端结束 HTTP 响应
-      // EventSource 会自动检测到连接关闭
+      // 🔧 修复：主动关闭连接，阻止自动重连
+      es.close();
     });
 
     es.addEventListener('completed', (e) => {
       parseEvent(e, 'completed');
-      // 最佳实践：不主动 close，让后端结束 HTTP 响应
+      // 🔧 修复：主动关闭连接，阻止自动重连
+      es.close();
     });
 
     // Error event listener for named 'error' events from server
@@ -500,18 +504,29 @@ export const planningApi = {
   },
 
   /**
-   * Create UI message
+   * Create UI message (with upsert)
    * POST /api/planning/messages/{session_id}
+   * 
+   * 使用前端消息 ID 进行 upsert：
+   * - 如果消息已存在（相同 session_id + message_id），则更新
+   * - 否则创建新消息
    */
   async createMessage(sessionId: string, message: {
+    id: string;  // 前端消息 ID（唯一标识，用于 upsert）
     role: string;
     content: string;
     message_type?: string;
     metadata?: Record<string, unknown>;
-  }): Promise<{ success: boolean; message_id: number }> {
+  }): Promise<{ success: boolean; message_id: number; frontend_id: string }> {
     return apiRequest(`/api/planning/messages/${sessionId}`, {
       method: 'POST',
-      body: JSON.stringify(message),
+      body: JSON.stringify({
+        message_id: message.id,  // 传递前端消息 ID
+        role: message.role,
+        content: message.content,
+        message_type: message.message_type,
+        metadata: message.metadata,
+      }),
     });
   },
 

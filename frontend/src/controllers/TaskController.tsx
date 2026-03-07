@@ -72,6 +72,13 @@ export function useTaskController(
   const callbacksRef = useRef(callbacks);
   const sseConnectionRef = useRef<EventSource | null>(null);
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const prevTaskIdRef = useRef<string | null>(null);
+  const stateRef = useRef(state);  // 🔧 用于在轮询循环中访问最新状态
+
+  // 同步 state 到 ref
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // Update callbacks ref
   useEffect(() => {
@@ -146,9 +153,17 @@ export function useTaskController(
     const pollLoop = async () => {
       const shouldStop = await fetchStatus();
 
-      if (!shouldStop && taskId) {
+      // 🔧 修复：暂停/完成状态下停止轮询
+      const currentState = stateRef.current;
+      const shouldPausePolling = 
+        currentState.status === 'paused' || 
+        currentState.status === 'completed';
+
+      if (!shouldStop && taskId && !shouldPausePolling) {
         // 继续轮询,2秒一次
         pollTimerRef.current = setTimeout(pollLoop, 2000);
+      } else if (shouldPausePolling) {
+        console.log('[TaskController] Polling paused due to status:', currentState.status);
       }
     };
 
@@ -164,186 +179,164 @@ export function useTaskController(
   }, [taskId, fetchStatus]);
 
   // SSE 连接管理 (仅用于文本流,不做业务逻辑判断)
+  // 🔧 修复：SSE 连接依赖 taskId 和 status，暂停/完成状态下关闭连接
   useEffect(() => {
-    if (!taskId) return;
-
-    // ✅ 改用 pause_after_step 标志判断是否需要 SSE 连接
-    // 暂停时不需要 SSE（已停止发送事件），批准后需要 SSE（继续执行）
-    const shouldConnectSSE =
-      !state.execution_complete &&
-      !state.pause_after_step;
-
-    if (shouldConnectSSE) {
-      console.log('[TaskController] === SSE 连接建立 ===');
-      console.log('[TaskController] taskId:', taskId);
-      console.log('[TaskController] pause_after_step:', state.pause_after_step);
-      console.log('[TaskController] execution_complete:', state.execution_complete);
-      
-      // 关闭旧连接
+    // 🔧 修复：使用 state.status 而不是 stateRef.current.status，确保与依赖一致
+    const currentStatus = state.status;
+    const shouldCloseConnection = currentStatus === 'paused' || currentStatus === 'completed';
+    
+    if (!taskId || shouldCloseConnection) {
+      // 无 taskId 或处于暂停/完成状态时关闭连接
       if (sseConnectionRef.current) {
-        console.log('[TaskController] 关闭旧 SSE 连接');
+        console.log('[TaskController] === SSE 连接关闭 ===');
+        console.log('[TaskController] 原因:', !taskId ? 'taskId 为空' : `状态为 ${currentStatus}`);
         sseConnectionRef.current.close();
+        sseConnectionRef.current = null;
       }
+      return;
+    }
 
-      // 创建新连接
-      const es = planningApi.createStream(
-        taskId,
-        (event) => {
-          console.log('[TaskController] === SSE 事件接收 ===');
-          console.log('[TaskController] event.type:', event.type);
-          console.log('[TaskController] event.data:', event.data);
+    // 检查 taskId 是否变化（只有 taskId 变化时才重建连接）
+    const taskIdChanged = prevTaskIdRef.current !== taskId;
+    prevTaskIdRef.current = taskId;
+
+    if (!taskIdChanged && sseConnectionRef.current) {
+      // taskId 未变化且连接已存在，不需要重建
+      return;
+    }
+
+    // taskId 变化或连接不存在，创建新连接
+    console.log('[TaskController] === SSE 连接建立 ===');
+    console.log('[TaskController] taskId:', taskId);
+    
+    // 关闭旧连接
+    if (sseConnectionRef.current) {
+      console.log('[TaskController] 关闭旧 SSE 连接');
+      sseConnectionRef.current.close();
+    }
+
+    // 创建新连接
+    const es = planningApi.createStream(
+      taskId,
+      (event) => {
+        const eventType = event.type;
+        if (eventType === 'content_delta') {
+          callbacksRef.current.onTextDelta?.(
+            event.data?.delta || '',
+            typeof event.data?.layer === 'number' ? event.data.layer : undefined
+          );
+        } else if (eventType === 'dimension_delta') {
+          const data = event.data as {
+            dimension_key?: string;
+            delta?: string;
+            accumulated?: string;
+            layer?: number;
+          } || {};
           
-          const eventType = event.type;
-          if (eventType === 'content_delta') {
-            callbacksRef.current.onTextDelta?.(
-              event.data?.delta || '',
-              typeof event.data?.layer === 'number' ? event.data.layer : undefined
-            );
-          } else if (eventType === 'dimension_delta') {
-            const data = event.data as {
-              dimension_key?: string;
-              delta?: string;
-              accumulated?: string;
-              layer?: number;
-            } || {};
-            
-            callbacksRef.current.onDimensionDelta?.(
-              data.dimension_key || '',
-              data.delta || '',
-              data.accumulated || '',
-              data.layer
-            );
-          } else if (eventType === 'dimension_complete') {
-            const data = event.data as {
-              dimension_key?: string;
-              dimension_name?: string;
-              full_content?: string;
-              layer?: number;
-            } || {};
-            
-            callbacksRef.current.onDimensionComplete?.(
-              data.dimension_key || '',
-              data.dimension_name || '',
-              data.full_content || '',
-              data.layer
-            );
-          } else if (eventType === 'layer_started') {
-            // ✅ 新增：层级开始事件
-            const data = event.data as {
-              layer?: number;
-              layer_number?: number;
-              layer_name?: string;
-              message?: string;
-            } || {};
+          callbacksRef.current.onDimensionDelta?.(
+            data.dimension_key || '',
+            data.delta || '',
+            data.accumulated || '',
+            data.layer
+          );
+        } else if (eventType === 'dimension_complete') {
+          const data = event.data as {
+            dimension_key?: string;
+            dimension_name?: string;
+            full_content?: string;
+            layer?: number;
+          } || {};
+          
+          callbacksRef.current.onDimensionComplete?.(
+            data.dimension_key || '',
+            data.dimension_name || '',
+            data.full_content || '',
+            data.layer
+          );
+        } else if (eventType === 'layer_started') {
+          const data = event.data as {
+            layer?: number;
+            layer_number?: number;
+            layer_name?: string;
+            message?: string;
+          } || {};
 
-            console.log('[TaskController] === Layer Started SSE Event ===');
-            console.log('[TaskController] layer:', data.layer || data.layer_number);
-            console.log('[TaskController] layer_name:', data.layer_name);
+          callbacksRef.current.onLayerStarted?.(
+            data.layer || data.layer_number || 1,
+            data.layer_name || ''
+          );
+        } else if (eventType === 'layer_completed') {
+          const data = event.data as {
+            layer?: number;
+            report_content?: string;
+            dimension_reports?: Record<string, string>;
+          } || {};
 
-            callbacksRef.current.onLayerStarted?.(
-              data.layer || data.layer_number || 1,
-              data.layer_name || ''
-            );
-          } else if (eventType === 'layer_completed') {
-            const data = event.data as {
-              layer?: number;
-              report_content?: string;
-              dimension_reports?: Record<string, string>;
-            } || {};
-
-            // ✅ 添加 Layer 2 专用调试日志
-            if (data.layer === 2) {
-              console.log('[TaskController] === Layer 2 Completed SSE Event ===');
-              console.log('[TaskController] data:', data);
-              console.log('[TaskController] dimension_reports:', data.dimension_reports);
-              console.log('[TaskController] dimension_reports keys:', Object.keys(data.dimension_reports || {}));
-              if (data.dimension_reports) {
-                for (const [key, value] of Object.entries(data.dimension_reports)) {
-                  console.log(`[TaskController]   - ${key}: ${value.length} chars`);
-                }
-              }
-            }
-
-            callbacksRef.current.onLayerCompleted?.(
-              data.layer || 1,
-              data.report_content || '',
-              data.dimension_reports || {}
-            );
-          } else if (eventType === 'pause') {
-            const data = event.data as {
-              current_layer?: number;
-              checkpoint_id?: string;
-              reason?: string;
-            } || {};
-            
-            callbacksRef.current.onPause?.(
-              data.current_layer || 1,
-              data.checkpoint_id || ''
-            );
-          } else if (eventType === 'dimension_revised') {
-            // 【新增】处理维度修复完成事件
-            const data = event.data as {
-              dimension?: string;
-              layer?: number;
-              old_content?: string;
-              new_content?: string;
-              feedback?: string;
-              timestamp?: string;
-            } || {};
-            
-            console.log('[TaskController] === Dimension Revised SSE Event ===');
-            console.log('[TaskController] dimension:', data.dimension);
-            console.log('[TaskController] layer:', data.layer);
-            console.log('[TaskController] new_content length:', data.new_content?.length || 0);
-            
-            callbacksRef.current.onDimensionRevised?.({
-              dimension: data.dimension || '',
-              layer: data.layer || 1,
-              oldContent: data.old_content || '',
-              newContent: data.new_content || '',
-              feedback: data.feedback || '',
-              timestamp: data.timestamp || new Date().toISOString(),
-            });
-          } else if (eventType === 'error') {
-            callbacksRef.current.onError?.(
-              event.data?.error || event.data?.message || 'Unknown error'
-            );
-          }
-        },
-        (error) => {
-          console.error('[TaskController] SSE error:', error);
-          callbacksRef.current.onError?.('SSE connection error');
+          callbacksRef.current.onLayerCompleted?.(
+            data.layer || 1,
+            data.report_content || '',
+            data.dimension_reports || {}
+          );
+        } else if (eventType === 'pause') {
+          const data = event.data as {
+            current_layer?: number;
+            checkpoint_id?: string;
+            reason?: string;
+          } || {};
+          
+          callbacksRef.current.onPause?.(
+            data.current_layer || 1,
+            data.checkpoint_id || ''
+          );
+        } else if (eventType === 'dimension_revised') {
+          const data = event.data as {
+            dimension?: string;
+            layer?: number;
+            old_content?: string;
+            new_content?: string;
+            feedback?: string;
+            timestamp?: string;
+          } || {};
+          
+          callbacksRef.current.onDimensionRevised?.({
+            dimension: data.dimension || '',
+            layer: data.layer || 1,
+            oldContent: data.old_content || '',
+            newContent: data.new_content || '',
+            feedback: data.feedback || '',
+            timestamp: data.timestamp || new Date().toISOString(),
+          });
+        } else if (eventType === 'error') {
+          callbacksRef.current.onError?.(
+            event.data?.error || event.data?.message || 'Unknown error'
+          );
         }
-      );
+      },
+      (error) => {
+        console.error('[TaskController] SSE error:', error);
+        callbacksRef.current.onError?.('SSE connection error');
+      }
+    );
 
-      sseConnectionRef.current = es;
+    sseConnectionRef.current = es;
 
-      return () => {
-        if (sseConnectionRef.current) {
-          sseConnectionRef.current.close();
-          sseConnectionRef.current = null;
-        }
-      };
-    } else if (state.execution_complete) {
-      // 执行完成时关闭 SSE 连接
-      // 注意：暂停时不关闭 SSE，让后端自然结束流，确保 layer_completed 和 pause 事件都能被接收
-      console.log('[TaskController] === SSE 连接关闭 ===');
-      console.log('[TaskController] 原因: 执行完成');
+    return () => {
       if (sseConnectionRef.current) {
         sseConnectionRef.current.close();
         sseConnectionRef.current = null;
       }
-    }
-    // 暂停时 (pause_after_step=true 但 execution_complete=false)：
-    // 不主动关闭 SSE，让连接保持打开直到后端结束流
-  }, [taskId, state.pause_after_step, state.execution_complete]);
+    };
+  }, [taskId, state.status]);  // 🔧 添加 status 依赖，暂停/完成时触发关闭
 
   // Action methods
   const actions: TaskControllerActions = {
     approve: useCallback(async () => {
       if (!taskId) throw new Error('No task ID');
       await planningApi.approveReview(taskId);
-    }, [taskId]),
+      // ✅ 批准后立即获取最新状态，触发 UI 更新
+      // 这会同步更新 isPaused 和 pendingReviewLayer
+      await fetchStatus();
+    }, [taskId, fetchStatus]),
 
     reject: useCallback(async (feedback: string, dimensions?: string[]) => {
       if (!taskId) throw new Error('No task ID');

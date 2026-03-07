@@ -123,6 +123,8 @@ class UIMessage(SQLModel, table=True):
     UI 消息表
 
     Stores messages in UI conversations.
+    
+    ✅ 支持 Upsert：使用 (session_id, message_id) 作为唯一标识
     """
     __tablename__ = "ui_messages"
 
@@ -131,6 +133,9 @@ class UIMessage(SQLModel, table=True):
 
     # Foreign key
     session_id: str = Field(foreign_key="ui_sessions.conversation_id", index=True)
+
+    # ✅ 前端消息 ID（唯一标识，用于 upsert）
+    message_id: str = Field(index=True)  # 前端生成的唯一 ID，如 "msg-1234567890-1" 或 "layer_report_1"
 
     # Message content
     role: str = Field(index=True)  # user/assistant/system
@@ -148,6 +153,11 @@ class UIMessage(SQLModel, table=True):
 
     # Relationships
     session: UISession = Relationship(back_populates="messages")
+
+    # ✅ 唯一约束：(session_id, message_id) 必须唯一
+    __table_args__ = (
+        UniqueConstraint("session_id", "message_id", name="uq_session_message"),
+    )
 
 
 # ==========================================

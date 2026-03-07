@@ -629,11 +629,17 @@ def route_after_pause(state: VillagePlanningState) -> Literal["tool_bridge", "la
     """
     pause节点后的路由：先检查修复标志，再根据current_layer决定执行哪个layer
 
-    优先级：need_revision > current_layer
+    优先级：need_revision > pause_after_step > current_layer
     """
     # 优先检查修复标志
     if state.get("need_revision", False):
         logger.info("[主图-路由] 检测到 need_revision=True，路由到 tool_bridge 执行修复")
+        return "tool_bridge"
+    
+    # 检查是否需要暂停等待审查
+    if state.get("pause_after_step", False):
+        logger.info("[主图-路由] 检测到 pause_after_step=True，等待审查")
+        # 返回 tool_bridge，但后端会检测到暂停状态并停止发送事件
         return "tool_bridge"
     
     # 正常路由到当前层

@@ -133,6 +133,7 @@ interface UnifiedPlanningContextType {
 
   // Conversation actions
   addMessage: (message: Message) => void;
+  syncMessageToBackend: (message: Message) => void;  // 🔧 新增：同步消息到后端
   setMessages: (messages: Message[] | ((prev: Message[]) => Message[])) => void;
   updateLastMessage: (updates: Partial<Message>) => void;
   clearMessages: () => void;
@@ -251,10 +252,14 @@ export function UnifiedPlanningProvider({
   const addMessage = useCallback((message: Message) => {
     setMessages((prev) => [...prev, message]);
 
-    // 异步存储消息到后端（跳过历史消息加载期间）
-    if (!isLoadingHistoryRef.current && taskId) {
+    // 异步存储消息到后端（跳过历史消息加载期间和延迟存储的消息）
+    // 🔧 跳过有 _pendingStorage 标记的消息（等待完整数据后再存储）
+    const pendingStorage = (message as any)._pendingStorage;
+    if (!isLoadingHistoryRef.current && taskId && !pendingStorage) {
       // 异步存储，不阻塞 UI
+      // ✅ 传递消息 ID 用于 upsert
       planningApi.createMessage(taskId, {
+        id: message.id,  // 前端消息 ID（用于 upsert）
         role: message.role,
         content: message.type === 'text' ? message.content :
                  message.type === 'file' ? `[文件] ${message.filename}` :
@@ -265,6 +270,26 @@ export function UnifiedPlanningProvider({
         metadata: message.type !== 'text' ? { ...message } as unknown as Record<string, unknown> : undefined,
       }).catch((error) => {
         console.warn('[UnifiedPlanningContext] Failed to store message:', error);
+      });
+    }
+  }, [taskId]);
+
+  // 🔧 新增：同步单条消息到后端（用于消息更新后的持久化）
+  const syncMessageToBackend = useCallback((message: Message) => {
+    if (!isLoadingHistoryRef.current && taskId) {
+      // ✅ 传递消息 ID 用于 upsert
+      planningApi.createMessage(taskId, {
+        id: message.id,  // 前端消息 ID（用于 upsert）
+        role: message.role,
+        content: message.type === 'text' ? message.content :
+                 message.type === 'file' ? `[文件] ${message.filename}` :
+                 message.type === 'progress' ? message.content :
+                 message.type === 'dimension_report' ? message.content :
+                 message.type === 'layer_completed' ? message.content : '',
+        message_type: message.type,
+        metadata: message.type !== 'text' ? { ...message } as unknown as Record<string, unknown> : undefined,
+      }).catch((error) => {
+        console.warn('[UnifiedPlanningContext] Failed to sync message to backend:', error);
       });
     }
   }, [taskId]);
@@ -477,6 +502,30 @@ export function UnifiedPlanningProvider({
       setStatus('planning');
 
       logger.context.info('API 调用成功', { taskId: response.task_id });
+      
+      // 🔧 新增：将 taskId 设置前添加的消息存储到数据库
+      // 这些消息（如文件上传、"已设置规划任务"等）在 taskId 为空时未被存储
+      setMessages(prev => {
+        for (const msg of prev) {
+          // 跳过延迟存储的消息（等待完整数据）
+          if ((msg as any)._pendingStorage) continue;
+          
+          // ✅ 传递消息 ID 用于 upsert
+          planningApi.createMessage(response.task_id, {
+            id: msg.id,  // 前端消息 ID
+            role: msg.role,
+            content: msg.type === 'text' ? msg.content :
+                     msg.type === 'file' ? `[文件] ${msg.filename}` :
+                     msg.type === 'progress' ? msg.content :
+                     msg.type === 'dimension_report' ? msg.content :
+                     msg.type === 'layer_completed' ? msg.content : '',
+            message_type: msg.type,
+            metadata: msg.type !== 'text' ? { ...msg } as unknown as Record<string, unknown> : undefined,
+          }).catch(err => console.warn('[UnifiedPlanningContext] Failed to store message:', err));
+        }
+        return prev;  // 不修改消息列表
+      });
+      
       addMessage(createSystemMessage(`🚀 规划任务已创建，任务ID: ${response.task_id.slice(0, 8)}...`));
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : '未知错误';
@@ -567,20 +616,44 @@ export function UnifiedPlanningProvider({
     try {
       const statusData = await planningApi.getStatus(sessionId);
       
-      // 1. 还原消息历史
-      if (statusData.messages && statusData.messages.length > 0) {
-        console.log('[UnifiedPlanningContext] Loading message history:', statusData.messages.length, 'messages');
-        for (const msg of statusData.messages) {
+      // ✅ 简化：使用 ui_messages 恢复消息历史
+      // 数据库已通过 upsert 确保消息唯一性，无需前端去重
+      if (statusData.ui_messages && statusData.ui_messages.length > 0) {
+        console.log('[UnifiedPlanningContext] Loading UI messages:', statusData.ui_messages.length, 'messages');
+        
+        // 按 timestamp 排序后直接恢复
+        const sortedMessages = [...statusData.ui_messages].sort((a, b) => {
+          const timeA = new Date(a.timestamp || 0).getTime();
+          const timeB = new Date(b.timestamp || 0).getTime();
+          return timeA - timeB;
+        });
+        
+        for (const msg of sortedMessages) {
           // 跳过空消息
-          if (!msg.content || msg.content.trim().length === 0) continue;
+          if (!msg.content && !msg.message_metadata) continue;
           
-          addMessage({
-            id: `msg-history-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            timestamp: new Date(),
-            role: msg.role as 'user' | 'assistant' | 'system',
-            type: 'text',
-            content: msg.content,
-          });
+          // ✅ 使用数据库中的 message_id（前端原始 ID）恢复消息
+          const messageId = msg.message_id || `msg-history-${msg.id}`;
+          
+          // 根据 message_type 和 message_metadata 恢复原始消息结构
+          if (msg.message_type && msg.message_type !== 'text' && msg.message_metadata) {
+            // 从 metadata 恢复完整消息（文件、维度报告等）
+            const restoredMessage = {
+              ...msg.message_metadata,
+              id: messageId,  // ✅ 使用原始前端消息 ID
+              timestamp: new Date(msg.timestamp || Date.now()),
+            } as Message;
+            addMessage(restoredMessage);
+          } else {
+            // 普通文本消息
+            addMessage({
+              id: messageId,  // ✅ 使用原始前端消息 ID
+              timestamp: new Date(msg.timestamp || Date.now()),
+              role: msg.role as 'user' | 'assistant' | 'system',
+              type: 'text',
+              content: msg.content,
+            });
+          }
         }
       }
       
@@ -593,7 +666,7 @@ export function UnifiedPlanningProvider({
           // 添加用户反馈消息
           if (revision.feedback) {
             addMessage({
-              id: `msg-revision-feedback-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+              id: `revision-feedback-${revision.timestamp}-${revision.dimension}`,
               timestamp: new Date(revision.timestamp),
               role: 'user',
               type: 'text',
@@ -603,7 +676,7 @@ export function UnifiedPlanningProvider({
           
           // 添加修复结果消息
           addMessage({
-            id: `msg-revision-result-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            id: `revision-result-${revision.timestamp}-${revision.dimension}`,
             timestamp: new Date(revision.timestamp),
             role: 'assistant',
             type: 'dimension_report',
@@ -614,64 +687,6 @@ export function UnifiedPlanningProvider({
             streamingState: 'completed',
             wordCount: revision.new_content?.length || 0,
           });
-        }
-      }
-    } catch (error) {
-      console.warn('[UnifiedPlanningContext] Failed to load message history:', error);
-      // 继续加载层级报告
-    }
-
-    const layers = [
-      { id: 'layer_1_analysis', number: 1, name: '现状分析' },
-      { id: 'layer_2_concept', number: 2, name: '规划思路' },
-      { id: 'layer_3_detailed', number: 3, name: '详细规划' },
-    ] as const;
-
-    try {
-      for (const layer of layers) {
-        try {
-          console.log('[UnifiedPlanningContext] Loading layer:', layer.id);
-
-          const data = await dataApi.getLayerContent(villageName, layer.id, sessionId, 'markdown');
-
-          console.log('[UnifiedPlanningContext] Loaded layer:', layer.number,
-                      'content length:', data.content?.length || 0);
-
-          if (!data.content?.length) {
-            console.warn('[UnifiedPlanningContext] Layer has no content:', layer.id);
-            continue;
-          }
-
-          // 解析维度数据
-          const dimensionReports = parseDimensionReports(data.content, layer.number);
-          const dimensionCount = Object.keys(dimensionReports).length;
-          const dimensionNames = Object.keys(dimensionReports).map(k => DIMENSION_NAMES[k] || k);
-
-          // Create layer completed message
-          const layerMessage: Message = {
-            id: `msg-historical-layer-${layer.number}-${Date.now()}`,
-            timestamp: data.timestamp ? new Date(data.timestamp) : new Date(),
-            role: 'assistant',
-            type: 'layer_completed',
-            layer: layer.number,
-            content: `## ${layer.name}(历史会话)\n\n${data.content.substring(0, 200)}...`,
-            summary: {
-              word_count: data.content.length,
-              key_points: [`已加载 ${layer.name}`],
-              dimension_count: dimensionCount,
-              dimension_names: dimensionNames,
-            },
-            fullReportContent: data.content,
-            dimensionReports: dimensionReports,
-            actions: [
-              { id: 'view', label: '查看详情', action: 'view', variant: 'primary' },
-            ],
-          };
-
-          addMessage(layerMessage);
-        } catch (error) {
-          console.error(`[UnifiedPlanningContext] Failed to load ${layer.id}:`, error);
-          // Continue to next layer instead of throwing
         }
       }
 
@@ -765,6 +780,7 @@ export function UnifiedPlanningProvider({
 
     // Actions
     addMessage,
+    syncMessageToBackend,  // 🔧 新增：同步消息到后端
     setMessages,
     updateLastMessage,
     clearMessages,

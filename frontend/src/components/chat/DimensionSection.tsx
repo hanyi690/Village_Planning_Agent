@@ -63,7 +63,7 @@ export default function DimensionSection({
       <motion.div
         layout
         onClick={() => setExpanded(!expanded)}
-        className="flex justify-between items-center px-4 py-3 bg-gradient-to-r from-emerald-50 to-transparent cursor-pointer hover:from-emerald-100 transition-colors"
+        className="group flex justify-between items-center px-4 py-3 bg-gradient-to-r from-emerald-50 to-transparent cursor-pointer hover:from-emerald-100 transition-colors"
       >
         <h4 className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
           <i className={`fas ${icon} text-emerald-500`} />
@@ -71,8 +71,8 @@ export default function DimensionSection({
         </h4>
 
         <div className="flex items-center gap-2">
-          {/* Action buttons - show on hover */}
-          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          {/* Action buttons - 始终可见 */}
+          <div className="flex gap-1">
             {onCopy && (
               <motion.button
                 whileHover={{ scale: 1.1 }}
@@ -81,7 +81,7 @@ export default function DimensionSection({
                   e.stopPropagation();
                   onCopy();
                 }}
-                className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                className="w-7 h-7 flex items-center justify-center text-gray-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
                 title="复制内容"
               >
                 <i className="fas fa-copy text-xs" />
@@ -95,7 +95,7 @@ export default function DimensionSection({
                   e.stopPropagation();
                   onExport();
                 }}
-                className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
+                className="w-7 h-7 flex items-center justify-center text-gray-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
                 title="导出"
               >
                 <i className="fas fa-download text-xs" />

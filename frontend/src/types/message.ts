@@ -14,6 +14,8 @@ export interface BaseMessage {
   id: string;
   timestamp: Date;
   role: 'user' | 'assistant' | 'system';
+  // 🔧 内部标记：延迟存储（等待完整数据后再存储）
+  _pendingStorage?: boolean;
 }
 
 export type MessageRole = BaseMessage['role'];

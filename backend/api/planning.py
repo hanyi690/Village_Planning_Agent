@@ -58,6 +58,7 @@ from backend.database.operations_async import (
     # UI 消息存储操作
     create_ui_message_async,
     get_ui_messages_async,
+    upsert_ui_message_async,  # ✅ 新增：upsert 消息
 )
 # ✅ 从 engine 导入数据库路径函数
 from backend.database.engine import get_db_path
@@ -182,6 +183,7 @@ class ResumeRequest(BaseModel):
 
 class CreateUIMessageRequest(BaseModel):
     """Request to create a UI message"""
+    message_id: str = Field(..., description="Frontend message ID (unique identifier for upsert)")
     role: str = Field(..., description="Message role: user | assistant | system")
     content: str = Field(..., description="Message content")
     message_type: str = Field(default="text", description="Message type: text | file | progress | layer_completed | dimension_report")
@@ -698,22 +700,29 @@ async def _execute_graph_in_background(
         stream_iterator = graph.astream(clean_state, config, stream_mode="values")
 
         previous_event = {}
-        sent_layer_started = set()  # 追踪已发送的 layer_started 事件
+        # ✅ 从 session 获取 sent_layer_started（持久化状态）
+        sent_layer_started = _get_session_value(session_id, "sent_layer_started", set())
+        logger.info(f"[Planning] [{session_id}] 已发送的 layer_started 事件: {sent_layer_started}")
+        
         async for event in stream_iterator:
             # ✅ 检测层级开始（layer_started 事件）
-            # 修复：步进模式下，刚完成层级时跳过 layer_started（等待恢复时再发送）
+            # 关键修复：检查是否是真正的层级开始执行，而不是层级完成后的状态更新
             current_layer = event.get("current_layer")
             pause_after_step = event.get("pause_after_step", False)
             previous_layer = event.get("previous_layer", 0)
-            step_mode = event.get("step_mode", False)
             
-            # 步进模式下，刚完成层级时跳过 layer_started（等待恢复）
-            # previous_layer > 0 表示刚完成一个层级，此时应该暂停等待审查
-            skip_layer_started = previous_layer > 0 and step_mode
+            # 判断是否应该发送 layer_started：
+            # 1. current_layer 有效
+            # 2. 没有暂停
+            # 3. 不是从上一层完成后的状态更新（previous_layer=0 或 current_layer <= previous_layer）
+            should_send_started = (
+                current_layer and 
+                current_layer in [1, 2, 3] and 
+                not pause_after_step and
+                not (previous_layer > 0 and current_layer > previous_layer)  # 关键：排除层级完成后的状态更新
+            )
             
-            if skip_layer_started:
-                logger.info(f"[Planning] [{session_id}] 步进模式：跳过 layer_started 发送（previous_layer={previous_layer}，等待恢复）")
-            elif current_layer and current_layer in [1, 2, 3] and not pause_after_step:
+            if should_send_started:
                 layer_started_key = f"layer_{current_layer}_started"
                 if layer_started_key not in sent_layer_started:
                     # 发送 layer_started 事件
@@ -729,6 +738,7 @@ async def _execute_graph_in_background(
                     }
                     await _append_session_event_async(session_id, started_event)
                     sent_layer_started.add(layer_started_key)
+                    _set_session_value(session_id, "sent_layer_started", sent_layer_started)
                     logger.info(f"[Planning] [{session_id}] ✓ layer_started 事件已发送: Layer {current_layer}")
 
             # 检测层级完成
@@ -1037,7 +1047,9 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
             # ✅ 关键修复：同步更新 initial_state 中的 pause_after_step
             # 这样 /api/planning/status 端点才能正确读取到 False
             _sessions[session_id]["initial_state"]["pause_after_step"] = False
-            logger.info(f"[Planning API] [{session_id}] 已清除内存中的 pause_after_step 标志")
+            # ✅ 同步清除 previous_layer，确保下一层暂停时能正确设置
+            _sessions[session_id]["initial_state"]["previous_layer"] = 0
+            logger.info(f"[Planning API] [{session_id}] 已清除内存中的 pause_after_step 和 previous_layer 标志")
 
     # 添加 resumed 事件到 events 列表，通知前端已恢复执行
     _append_session_event(session_id, {
@@ -1071,6 +1083,29 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
             }
         )
         logger.info(f"[Planning API] [{session_id}] 已清除 pause_after_step 和 previous_layer 标志")
+
+    # ✅ 恢复执行时发送 layer_started 事件
+    # 确保前端收到该事件后创建空的 LayerReportMessage
+    # 注意：只有 Layer 1/2/3 才发送 layer_started，Layer 4 是最终成果生成，不需要
+    layer_names = {1: "现状分析", 2: "规划思路", 3: "详细规划"}
+    layer_started_key = f"layer_{current_layer}_started"
+    sent_layer_started = _get_session_value(session_id, "sent_layer_started", set())
+    
+    # 🔧 修复：只有 current_layer 在 [1, 2, 3] 范围内才发送 layer_started 事件
+    if layer_started_key not in sent_layer_started and current_layer in [1, 2, 3]:
+        started_event = {
+            "type": "layer_started",
+            "layer": current_layer,
+            "layer_number": current_layer,
+            "layer_name": layer_names.get(current_layer, f"Layer {current_layer}"),
+            "session_id": session_id,
+            "message": f"开始执行 Layer {current_layer}: {layer_names.get(current_layer, '')}",
+            "timestamp": datetime.now().isoformat()
+        }
+        _append_session_event(session_id, started_event)
+        sent_layer_started.add(layer_started_key)
+        _set_session_value(session_id, "sent_layer_started", sent_layer_started)
+        logger.info(f"[Planning API] [{session_id}] ✓ 恢复时发送 layer_started 事件: Layer {current_layer}")
 
     # Reset stream state
     _set_stream_state(session_id, "active")
@@ -1493,14 +1528,16 @@ async def get_session_status(session_id: str):
 @router.post("/api/planning/messages/{session_id}")
 async def create_ui_message(session_id: str, request: CreateUIMessageRequest):
     """
-    存储 UI 消息到数据库
+    存储 UI 消息到数据库（使用 Upsert）
+    
+    根据 (session_id, message_id) 唯一约束自动判断是更新还是创建。
     
     Args:
         session_id: Session identifier
-        request: Message data
+        request: Message data (包含前端消息 ID)
         
     Returns:
-        Created message ID
+        Created/updated message database ID
     """
     # 验证 session 存在
     db_session = await get_session_async(session_id)
@@ -1508,17 +1545,19 @@ async def create_ui_message(session_id: str, request: CreateUIMessageRequest):
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
     
     try:
-        message_id = await create_ui_message_async(
+        # ✅ 使用 upsert 替代 create
+        db_id = await upsert_ui_message_async(
             session_id=session_id,
+            message_id=request.message_id,  # 前端消息 ID
             role=request.role,
             content=request.content,
             message_type=request.message_type,
             metadata=request.metadata
         )
-        return {"success": True, "message_id": message_id}
+        return {"success": True, "message_id": db_id, "frontend_id": request.message_id}
     except Exception as e:
-        logger.error(f"[Planning API] Failed to create UI message: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create message: {str(e)}")
+        logger.error(f"[Planning API] Failed to upsert UI message: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upsert message: {str(e)}")
 
 
 @router.get("/api/planning/messages/{session_id}")
@@ -1940,6 +1979,14 @@ async def _rebuild_session_from_db(session_id: str) -> Optional[Dict[str, Any]]:
         
         logger.info(f"[Planning API] [{session_id}] 恢复 sent_layer_events: {sent_layer_events}")
         
+        # 🔧 修复：根据暂停状态恢复 sent_pause_events，防止重复发送暂停事件
+        sent_pause_events = set()
+        if initial_state.get("pause_after_step"):
+            previous_layer = initial_state.get("previous_layer", 0)
+            if previous_layer > 0:
+                sent_pause_events.add(f"pause_layer_{previous_layer}")
+                logger.info(f"[Planning API] [{session_id}] 恢复 sent_pause_events: {sent_pause_events}")
+        
         _sessions[session_id] = {
             # ✅ 只从数据库读取业务元数据
             "session_id": db_session["session_id"],
@@ -1952,7 +1999,7 @@ async def _rebuild_session_from_db(session_id: str) -> Optional[Dict[str, Any]]:
             "execution_complete": False,
             "sent_layer_events": sent_layer_events,  # ✅ 恢复而非重置
             "sent_revised_events": set(),  # 修订事件不持久化，恢复时重置
-            "sent_pause_events": set(),
+            "sent_pause_events": sent_pause_events,  # 🔧 修复：恢复而非重置
             # ✅ 从 AsyncSqliteSaver 恢复 state
             "initial_state": initial_state,
             "current_layer": initial_state.get("current_layer", 1),

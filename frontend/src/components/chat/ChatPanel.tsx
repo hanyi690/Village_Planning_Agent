@@ -72,6 +72,8 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     syncBackendState,
     // ✅ 新增：SSE 驱动的层级完成状态更新
     setUILayerCompleted,
+    // 🔧 新增：同步消息到后端（用于延迟存储）
+    syncMessageToBackend,
   } = useUnifiedPlanningContext();
 
   const [inputText, setInputText] = useState('');
@@ -218,7 +220,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     // 标记维度完成，刷新剩余内容
     completeDimension(dimensionKey);
 
-    // 更新消息状态为完成
+    // 更新消息状态为完成（如果消息存在）
     const messageId = `dimension_${layer}_${dimensionKey}`;
     setMessages(prev => prev.map(msg =>
       msg.id === messageId
@@ -286,25 +288,39 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       });
     } else {
       // 更新现有消息
-      setMessages(prev => prev.map(msg => {
-        if (msg.id === layerReportId && msg.type === 'layer_completed') {
-          const wordCount = Object.values(dimensionReports).reduce((sum, content) => sum + content.length, 0);
-          return {
-            ...msg,
-            content: reportContent,
-            fullReportContent: reportContent,
-            dimensionReports: dimensionReports,
-            summary: {
-              word_count: wordCount as number,
-              key_points: msg.summary?.key_points || [],
-              dimension_count: Object.keys(dimensionReports).length,
-            },
-          };
+      const wordCount = Object.values(dimensionReports).reduce((sum, content) => sum + content.length, 0);
+      
+      setMessages(prev => {
+        const updated = prev.map(msg => {
+          if (msg.id === layerReportId && msg.type === 'layer_completed') {
+            // 🔧 移除 _pendingStorage 标记，更新完整数据
+            const { _pendingStorage, ...rest } = msg as any;
+            return {
+              ...rest,
+              content: reportContent,
+              fullReportContent: reportContent,
+              dimensionReports: dimensionReports,
+              summary: {
+                word_count: wordCount as number,
+                key_points: rest.summary?.key_points || [],
+                dimension_count: Object.keys(dimensionReports).length,
+              },
+            };
+          }
+          return msg;
+        });
+        
+        // 🔧 存储完整数据到数据库
+        const updatedMsg = updated.find(m => m.id === layerReportId);
+        if (updatedMsg) {
+          syncMessageToBackend(updatedMsg);
+          console.log(`[ChatPanel] Synced completed layer_report_${layer} to backend`);
         }
-        return msg;
-      }));
+        
+        return updated;
+      });
     }
-  }, [messages, addMessage, setMessages, showViewer]);
+  }, [messages, addMessage, setMessages, showViewer, syncMessageToBackend]);
 
   // ✅ 新增：处理层级开始事件 - 创建空的 LayerReportMessage（预填充维度槽位）
   const handleLayerStarted = useCallback((layer: number, layerName: string) => {
@@ -346,18 +362,27 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         fullReportContent: '',
         dimensionReports: emptyDimensionReports,  // ✅ 预填充空维度槽位
         actions: [],
+        // 🔧 标记为延迟存储，等待 handleLayerCompleted 完成后再存储
+        _pendingStorage: true,
       });
     }
 
-    // 添加层级开始提示消息
-    addMessage({
-      ...createBaseMessage(),
-      type: 'progress',
-      role: 'assistant',
-      content: `🔄 正在执行 Layer ${layer}: ${layerLabels[layer] || layerName}...`,
-      layer,
-      progress: 0,
-    } as ProgressMessage);
+    // 🔧 修复：添加层级开始提示消息前检查是否已存在
+    // 使用 currentLayer 属性（字符串类型）或内容匹配来检查
+    const layerProgressContent = `🔄 正在执行 Layer ${layer}:`;
+    const hasProgressMsg = messages.some(m => 
+      m.type === 'progress' && m.content.startsWith(layerProgressContent)
+    );
+    
+    if (!hasProgressMsg) {
+      addMessage({
+        ...createBaseMessage(),
+        type: 'progress',
+        role: 'assistant',
+        content: `🔄 正在执行 Layer ${layer}: ${layerLabels[layer] || layerName}...`,
+        progress: 0,
+      } as ProgressMessage);
+    }
   }, [messages, addMessage]);
 
   const handlePause = useCallback((

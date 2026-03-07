@@ -578,10 +578,13 @@ async def create_ui_message_async(
     role: str,
     content: str,
     message_type: str = "text",
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    message_id: Optional[str] = None
 ) -> int:
     """
     Create UI message (async)
+    
+    ⚠️ 已废弃：建议使用 upsert_ui_message_async
     
     Args:
         session_id: Session ID
@@ -589,6 +592,7 @@ async def create_ui_message_async(
         content: Message content
         message_type: Message type
         metadata: Message metadata
+        message_id: 前端消息 ID（可选，用于向后兼容）
         
     Returns:
         int: Message ID
@@ -596,6 +600,7 @@ async def create_ui_message_async(
     async with get_async_session() as session:
         db_message = UIMessage(
             session_id=session_id,
+            message_id=message_id or f"msg-{datetime.now().timestamp()}",
             role=role,
             content=content,
             message_type=message_type,
@@ -607,6 +612,74 @@ async def create_ui_message_async(
         await session.refresh(db_message)
         logger.info(f"[Async DB] Created UI message: {db_message.id}")
         return db_message.id
+
+
+async def upsert_ui_message_async(
+    session_id: str,
+    message_id: str,
+    role: str,
+    content: str,
+    message_type: str = "text",
+    metadata: Optional[Dict[str, Any]] = None
+) -> int:
+    """
+    Upsert UI message - 更新或创建消息
+    
+    使用 SQLite 的 INSERT ... ON CONFLICT UPDATE 语法，
+    根据 (session_id, message_id) 唯一约束自动判断是更新还是创建。
+    
+    Args:
+        session_id: Session ID
+        message_id: 前端消息 ID（唯一标识）
+        role: Message role (user/assistant/system)
+        content: Message content
+        message_type: Message type
+        metadata: Message metadata
+        
+    Returns:
+        int: Message database ID
+    """
+    import json
+    from sqlalchemy import text
+    
+    try:
+        async with get_async_session() as session:
+            # 使用原生 SQL 进行 upsert（SQLite 语法）
+            result = await session.execute(
+                text("""
+                    INSERT INTO ui_messages 
+                        (session_id, message_id, role, content, message_type, message_metadata, timestamp)
+                    VALUES 
+                        (:session_id, :message_id, :role, :content, :message_type, :metadata, CURRENT_TIMESTAMP)
+                    ON CONFLICT(session_id, message_id) DO UPDATE SET
+                        content = excluded.content,
+                        message_type = excluded.message_type,
+                        message_metadata = excluded.message_metadata,
+                        timestamp = CURRENT_TIMESTAMP
+                """),
+                {
+                    "session_id": session_id,
+                    "message_id": message_id,
+                    "role": role,
+                    "content": content,
+                    "message_type": message_type,
+                    "metadata": json.dumps(metadata) if metadata else None,
+                }
+            )
+            await session.commit()
+            
+            # 获取消息的数据库 ID
+            msg_result = await session.execute(
+                text("SELECT id FROM ui_messages WHERE session_id = :session_id AND message_id = :message_id"),
+                {"session_id": session_id, "message_id": message_id}
+            )
+            row = msg_result.scalar()
+            logger.info(f"[Async DB] Upserted UI message: db_id={row}, message_id={message_id}")
+            return row
+            
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to upsert UI message: {e}", exc_info=True)
+        raise
 
 
 async def get_ui_messages_async(
