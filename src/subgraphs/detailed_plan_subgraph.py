@@ -65,6 +65,13 @@ from .detailed_plan_prompts import (
 
 logger = get_logger(__name__)
 
+# 导入项目提取工具（用于 project_bank 优化）
+from ..tools.project_extractor import (
+    extract_projects_hybrid,
+    extract_projects_batch,
+    format_shadow_cache_for_prompt
+)
+
 
 # ==========================================
 # 子图状态定义
@@ -100,6 +107,10 @@ class DetailedPlanState(TypedDict):
 
     # 【新增】RAG 知识缓存 - 预加载的知识上下文
     knowledge_cache: Dict[str, str]  # 维度 -> 知识上下文
+
+    # 【新增】项目影子缓存 - Wave 1 维度完成时提取的项目信息
+    # 格式: {dimension_key: [{name, content, scale, location, phase}]}
+    project_shadow_cache: Dict[str, List[Dict[str, str]]]
 
     # 人机交互状态
     need_review: bool              # 是否需要人工审核
@@ -381,12 +392,32 @@ def create_parallel_tasks_with_state_filtering(
         
         # 提取 Layer 3 前序详细规划（project_bank 需要）
         required_details = chain.get("layer3_plans", [])
-        filtered_detail_parts = []
-        for k in required_details:
-            if k in completed_detailed:
-                name = get_detailed_dimension_names().get(k, k)
-                filtered_detail_parts.append(f"### {name}\n\n{completed_detailed[k]}\n")
-        filtered_detail = "\n".join(filtered_detail_parts) if filtered_detail_parts else ""
+        
+        # 【优化】project_bank 使用影子缓存而非完整报告
+        if dim == "project_bank":
+            shadow_cache = state.get("project_shadow_cache", {})
+            if shadow_cache:
+                # 使用预提取的项目信息（大幅减少 token 量）
+                filtered_detail = format_shadow_cache_for_prompt(shadow_cache)
+                logger.info(f"[状态筛选] project_bank 使用影子缓存 ({len(filtered_detail)}字符) "
+                           f"替代完整报告（节省约 {sum(len(completed_detailed.get(k, '')) for k in required_details) - len(filtered_detail)} 字符）")
+            else:
+                # 回退到完整报告
+                filtered_detail_parts = []
+                for k in required_details:
+                    if k in completed_detailed:
+                        name = get_detailed_dimension_names().get(k, k)
+                        filtered_detail_parts.append(f"### {name}\n\n{completed_detailed[k]}\n")
+                filtered_detail = "\n".join(filtered_detail_parts) if filtered_detail_parts else ""
+                logger.warning(f"[状态筛选] project_bank 影子缓存为空，回退到完整报告")
+        else:
+            # 其他维度使用完整报告
+            filtered_detail_parts = []
+            for k in required_details:
+                if k in completed_detailed:
+                    name = get_detailed_dimension_names().get(k, k)
+                    filtered_detail_parts.append(f"### {name}\n\n{completed_detailed[k]}\n")
+            filtered_detail = "\n".join(filtered_detail_parts) if filtered_detail_parts else ""
 
         # 构建维度状态
         dimension_info = {d["key"]: d for d in list_dimensions(layer=3)}.get(dim, {"name": dim})
@@ -585,11 +616,13 @@ def generate_dimension_plan(
 # Reduce 节点 - 汇总维度规划结果
 # ==========================================
 
-def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
+async def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
     """
     汇总所有维度的规划结果，更新主状态
 
     同时更新 completed_dimension_reports，供后续维度（如project_bank）使用
+    
+    【优化】Wave 1 维度完成时，异步提取项目信息到 project_shadow_cache
     """
     logger.info(f"[子图-L3-Reduce] 汇总 {len(state['dimension_plans'])} 个维度的规划结果")
 
@@ -597,6 +630,7 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
     detail_reports = {}
     completed = []
     completed_reports = state.get("completed_dimension_reports", {})
+    current_wave = state.get("current_wave", 1)
 
     for plan in state["dimension_plans"]:
         dim_key = plan["dimension_key"]
@@ -610,11 +644,39 @@ def reduce_dimension_plans(state: DetailedPlanState) -> Dict[str, Any]:
 
     logger.info(f"[子图-L3-Reduce] 已完成维度: {', '.join(completed)}")
 
-    return {
+    result = {
         "detail_reports": detail_reports,
         "completed_dimensions": completed,
         "completed_dimension_reports": completed_reports
     }
+
+    # 【优化】Wave 1 完成时，提取项目信息到影子缓存
+    if current_wave == 1:
+        # 获取 project_bank 需要的维度列表
+        project_bank_deps = get_full_dependency_chain_func("project_bank").get("layer3_plans", [])
+        
+        # 筛选出刚刚完成的 Wave 1 维度
+        wave1_completed = {k: completed_reports[k] for k in project_bank_deps if k in completed_reports}
+        
+        if wave1_completed:
+            logger.info(f"[子图-L3-Reduce] 提取 Wave 1 维度的项目信息: {list(wave1_completed.keys())}")
+            
+            # 获取现有的影子缓存
+            shadow_cache = state.get("project_shadow_cache", {})
+            
+            # 异步提取项目信息
+            try:
+                new_extracts = await extract_projects_batch(wave1_completed, use_llm=True)
+                shadow_cache.update(new_extracts)
+                
+                total_projects = sum(len(v) for v in new_extracts.values())
+                logger.info(f"[子图-L3-Reduce] 提取到 {total_projects} 个项目，已缓存")
+                
+                result["project_shadow_cache"] = shadow_cache
+            except Exception as e:
+                logger.warning(f"[子图-L3-Reduce] 项目提取失败: {e}")
+
+    return result
 
 
 # ==========================================

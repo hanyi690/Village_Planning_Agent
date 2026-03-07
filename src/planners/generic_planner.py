@@ -397,11 +397,19 @@ class GenericPlanner(UnifiedPlannerBase):
                        f"filtered_analysis={len(params['filtered_analysis'])}字符, "
                        f"filtered_concept={len(params['filtered_concept'])}字符")
 
-            # 特殊处理 project_bank 需要前序规划
+            # 特殊处理 project_bank：优先使用影子缓存
             if self.dimension_key == "project_bank":
-                params["dimension_plans"] = self._format_detailed_plans(
-                    state.get("completed_plans", {})
-                )
+                # 优先使用预筛选的 filtered_detail（影子缓存格式化后的内容）
+                filtered_detail = state.get("filtered_detail", "")
+                if filtered_detail:
+                    params["dimension_plans"] = filtered_detail
+                    logger.info(f"[GenericPlanner-L3] project_bank 使用影子缓存: {len(filtered_detail)}字符")
+                else:
+                    # 回退到原始逻辑
+                    params["dimension_plans"] = self._format_detailed_plans(
+                        state.get("completed_plans", {})
+                    )
+                    logger.warning(f"[GenericPlanner-L3] project_bank 回退到完整报告")
 
         return params
 
