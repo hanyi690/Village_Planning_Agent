@@ -70,54 +70,40 @@ async def lifespan(app: FastAPI):
         for warning in config_check["warnings"]:
             logger.warning(f"⚠️  {warning}")
 
+    # Initialize async database
     logger.info("🗄️  Initializing database...")
-    from backend.database import init_db
-    if init_db():
-        logger.info("✅ Sync database initialized successfully")
-    else:
-        logger.error("❌ Sync database initialization failed")
+    try:
+        from backend.database import init_async_db
+        if await init_async_db():
+            logger.info("✅ Database initialized successfully")
+        else:
+            logger.error("❌ Database initialization failed")
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}", exc_info=True)
 
-    # Initialize async database if enabled
-    use_async = os.getenv("USE_ASYNC_DATABASE", "true").lower() == "true"
-    if use_async:
-        logger.info("Initializing async database...")
-        try:
-            from backend.database import init_async_db
-            if await init_async_db():
-                logger.info("✅ Async database initialized successfully")
-            else:
-                logger.error("❌ Async database initialization failed")
-        except Exception as e:
-            logger.error(f"❌ Async database initialization failed: {e}", exc_info=True)
-            logger.warning("⚠️  Falling back to sync mode")
-
-    # TODO: 启动会话清理后台任务（功能尚未实现）
-    # from backend.api.planning import start_session_cleanup, stop_session_cleanup
-    # await start_session_cleanup()
-    # logger.info("🧹 Session cleanup task started")
+    # 启动会话清理后台任务
+    from backend.api.planning import start_session_cleanup, stop_session_cleanup
+    await start_session_cleanup()
+    logger.info("🧹 Session cleanup task started")
 
     logger.info("✅ 后端服务启动完成")
     yield
 
-    # ✅ NEW: Clean up database connections
+    # Clean up database connections
     logger.info("🧹 Cleaning up resources...")
-    from backend.database.engine import dispose_engine
-    dispose_engine()
-
-    # Dispose async engine
-    if use_async:
-        try:
-            from backend.database import dispose_async_engine
-            await dispose_async_engine()
-            logger.info("✅ Async engine disposed")
-        except Exception as e:
-            logger.error(f"❌ Failed to dispose async engine: {e}", exc_info=True)
+    try:
+        from backend.database import dispose_async_engine
+        await dispose_async_engine()
+        logger.info("✅ Database engine disposed")
+    except Exception as e:
+        logger.error(f"❌ Failed to dispose database engine: {e}", exc_info=True)
 
     logger.info("✅ Resources cleaned up")
 
-    # TODO: 关闭时停止清理任务（功能尚未实现）
-    # await stop_session_cleanup()
-    # logger.info("🧹 Session cleanup task stopped")
+    # 关闭时停止清理任务
+    from backend.api.planning import stop_session_cleanup
+    await stop_session_cleanup()
+    logger.info("🧹 Session cleanup task stopped")
     logger.info("👋 后端服务关闭")
 
 # ============================================

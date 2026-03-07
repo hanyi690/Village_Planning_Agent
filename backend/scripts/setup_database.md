@@ -23,9 +23,9 @@ pip install -r requirements.txt
    pip install sqlmodel aiosqlite
    ```
 
-2. **Initialize database**
+2. **Initialize database (async)**
    ```bash
-   python -c "from backend.database import init_db; init_db()"
+   python -c "import asyncio; from backend.database import init_async_db; asyncio.run(init_async_db())"
    ```
 
 3. **Validate installation**
@@ -33,12 +33,7 @@ pip install -r requirements.txt
    python backend/scripts/validate_database.py
    ```
 
-4. **Run tests**
-   ```bash
-   python backend/database/test_database.py
-   ```
-
-5. **Migrate existing data (optional)**
+4. **Migrate existing data (optional)**
    ```bash
    python backend/scripts/migrate_checkpoints.py
    ```
@@ -108,21 +103,18 @@ python backend/scripts/validate_database.py
 
 After successful setup:
 
-1. **Review documentation**: `docs/database.md`
-2. **Run test suite**: `python backend/database/test_database.py`
+1. **Review documentation**: `docs/backend.md`
+2. **Run validation script**: `python backend/scripts/validate_database.py`
 3. **Start backend**: `python backend/main.py`
 4. **Test API endpoints**: See `docs/backend.md`
 
-## Configuration
+## Architecture
 
-The database is enabled by default. SQLite is the primary storage method with in-memory caching for performance.
+The database layer is fully async using SQLAlchemy async engine with `aiosqlite`:
 
-**In `backend/api/planning.py`:**
-```python
-USE_DATABASE_PERSISTENCE = True  # SQLite is the primary storage method
-```
+- **Engine**: `backend/database/engine.py` - Async database connection management
+- **Models**: `backend/database/models.py` - SQLModel definitions
+- **Operations**: `backend/database/operations_async.py` - Async CRUD operations
+- **Checkpointer**: LangGraph's `AsyncSqliteSaver` for state persistence
 
-**In `backend/api/sessions.py`:**
-```python
-USE_DATABASE_PERSISTENCE = True  # SQLite is the primary storage method
-```
+All database operations are async and support concurrent access with WAL mode enabled.

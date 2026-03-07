@@ -2,17 +2,14 @@
 Database engine and session management
 数据库引擎和会话管理
 
-Provides SQLite connection and session factory for both sync and async operations.
+Provides SQLite connection and session factory for async operations.
 """
 
 import logging
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Generator
-from sqlmodel import SQLModel, Session, create_engine
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-import atexit
+from sqlmodel import SQLModel
 
 logger = logging.getLogger(__name__)
 
@@ -20,149 +17,9 @@ logger = logging.getLogger(__name__)
 DB_DIR = Path(__file__).parent.parent.parent / "data"
 DB_PATH = DB_DIR / "village_planning.db"
 
-# ==========================================
-# Sync Engine (保留用于向后兼容)
-# ==========================================
-
-# Database URL
-DATABASE_URL = f"sqlite:///{DB_PATH}"
-
-# Engine
-engine = None
-_engine_ref_count = 0
-
-# Session factory
-SessionLocal = None
-
-
-def get_engine():
-    """
-    Get or create database engine (with reference counting)
-    获取或创建数据库引擎（带引用计数）
-    
-    Deprecated: 建议使用异步版本 get_async_engine()
-    """
-    global engine, _engine_ref_count
-
-    if engine is None:
-        # Ensure data directory exists
-        DB_DIR.mkdir(parents=True, exist_ok=True)
-
-        # Create engine with SQLite configuration
-        engine = create_engine(
-            DATABASE_URL,
-            connect_args={"check_same_thread": False},
-            pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=10
-        )
-
-        # 启用 WAL 模式以提高并发写入安全性
-        from sqlalchemy import event
-        
-        @event.listens_for(engine, "connect")
-        def set_sqlite_pragma(dbapi_connection, connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
-            cursor.close()
-        
-        logger.info("[Sync DB] WAL mode enabled")
-
-        # Register cleanup function with atexit
-        atexit.register(dispose_engine)
-        logger.info(f"[Sync DB] Database engine created: {DB_PATH}")
-
-    _engine_ref_count += 1
-    return engine
-
-
-def dispose_engine():
-    """
-    Close database engine when reference count reaches zero
-    引用计数为零时关闭数据库引擎
-    
-    Deprecated: 建议使用异步版本 dispose_async_engine()
-    """
-    global engine, _engine_ref_count
-
-    _engine_ref_count -= 1
-
-    if _engine_ref_count <= 0 and engine is not None:
-        engine.dispose()
-        engine = None
-        logger.info("[Sync DB] Database engine disposed")
-
-
-@contextmanager
-def get_session() -> Generator[Session, None, None]:
-    """
-    Get database session (dependency injection)
-    获取数据库会话（依赖注入）
-
-    Yields:
-        Session: SQLModel session
-
-    Example:
-        with get_session() as session:
-            session.add(session_obj)
-            session.commit()
-    
-    Deprecated: 建议使用异步版本 get_async_session()
-    """
-    global SessionLocal
-
-    if SessionLocal is None:
-        engine = get_engine()
-        SessionLocal = sessionmaker(
-            autocommit=False,
-            autoflush=False,
-            bind=engine
-        )
-
-    session = SessionLocal()
-    try:
-        yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
-
-
-def init_db() -> bool:
-    """
-    Initialize database tables
-    初始化数据库表
-
-    Creates all tables if they don't exist.
-
-    Returns:
-        bool: True if successful
-    
-    Deprecated: 建议使用异步版本 init_async_db()
-    """
-    try:
-        engine = get_engine()
-
-        # Import all models to ensure they are registered with SQLModel
-        # Note: Checkpoint is excluded because it's now managed by LangGraph's AsyncSqliteSaver
-        from .models import PlanningSession, UISession, UIMessage
-
-        # Create all tables (except checkpoints, which is managed by LangGraph)
-        SQLModel.metadata.create_all(engine)
-
-        logger.info("[Sync DB] Database tables initialized successfully")
-        return True
-    except Exception as e:
-        logger.error(f"[Sync DB] Failed to initialize database: {e}", exc_info=True)
-        return False
-
 
 # ==========================================
-# Async Engine (主要实现)
+# Async Engine
 # ==========================================
 
 # Async database URL
@@ -303,12 +160,7 @@ def get_db_path() -> Path:
 
 
 __all__ = [
-    # Sync functions (deprecated, kept for backward compatibility)
-    "get_session",
-    "init_db",
-    "get_engine",
-    "dispose_engine",
-    # Async functions (recommended)
+    # Async functions
     "get_async_session",
     "init_async_db",
     "get_async_engine",

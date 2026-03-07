@@ -7,10 +7,7 @@ and UI conversations with pure async support.
 """
 
 from .engine import (
-    # Sync engine functions (deprecated, kept for backward compatibility)
-    get_session,
-    init_db,
-    # Async engine functions (recommended)
+    # Async engine functions
     get_async_session,
     init_async_db,
     get_async_engine,
@@ -23,7 +20,7 @@ from .models import (
     UIMessage
 )
 from .operations_async import (
-    # Async planning session operations (recommended)
+    # Async planning session operations
     create_planning_session_async,
     get_planning_session_async,
     update_planning_session_async,
@@ -32,23 +29,20 @@ from .operations_async import (
     update_session_state_async,
     add_session_event_async,
     get_session_events_async,
-    # Async UI session operations (recommended)
+    # Async UI session operations
     create_ui_session_async,
     get_ui_session_async,
     update_ui_session_async,
     delete_ui_session_async,
     list_ui_sessions_async,
-    # Async UI message operations (recommended)
+    # Async UI message operations
     create_ui_message_async,
     get_ui_messages_async,
     delete_ui_messages_async,
 )
 
 __all__ = [
-    # Engine (sync - deprecated)
-    "get_session",
-    "init_db",
-    # Engine (async - recommended)
+    # Engine (async)
     "get_async_session",
     "init_async_db",
     "get_async_engine",
@@ -60,7 +54,7 @@ __all__ = [
     "UISession",
     "UIMessage",
 
-    # Async operations (recommended)
+    # Async operations
     "create_planning_session_async",
     "get_planning_session_async",
     "update_planning_session_async",

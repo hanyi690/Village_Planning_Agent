@@ -155,6 +155,142 @@ _stream_states_lock = Lock()
 
 
 # ============================================
+# Session Cleanup Background Task
+# ============================================
+
+# Session TTL configuration
+SESSION_TTL_HOURS = 24  # 会话过期时间（小时）
+
+# Cleanup task management
+_cleanup_task: Optional[asyncio.Task] = None
+_cleanup_running = False
+
+
+async def start_session_cleanup() -> None:
+    """
+    启动会话清理后台任务
+    
+    定期清理过期的内存状态，防止长期运行导致无用状态堆积。
+    """
+    global _cleanup_task, _cleanup_running
+    
+    if _cleanup_running:
+        logger.warning("[Session Cleanup] 清理任务已在运行中")
+        return
+    
+    _cleanup_running = True
+    _cleanup_task = asyncio.create_task(_session_cleanup_loop())
+    logger.info(f"[Session Cleanup] 🧹 会话清理后台任务已启动 (TTL: {SESSION_TTL_HOURS}h, 间隔: {EVENT_CLEANUP_INTERVAL_SECONDS}s)")
+
+
+async def stop_session_cleanup() -> None:
+    """
+    停止会话清理后台任务
+    """
+    global _cleanup_task, _cleanup_running
+    
+    if not _cleanup_running or _cleanup_task is None:
+        return
+    
+    _cleanup_running = False
+    
+    try:
+        _cleanup_task.cancel()
+        await _cleanup_task
+    except asyncio.CancelledError:
+        pass
+    
+    _cleanup_task = None
+    logger.info("[Session Cleanup] 🧹 会话清理后台任务已停止")
+
+
+async def _session_cleanup_loop() -> None:
+    """
+    会话清理循环
+    
+    每隔 EVENT_CLEANUP_INTERVAL_SECONDS 秒执行一次清理，
+    移除超过 SESSION_TTL_HOURS 小时的过期会话状态。
+    """
+    from datetime import timedelta
+    
+    logger.info("[Session Cleanup] 清理循环开始运行")
+    
+    while _cleanup_running:
+        try:
+            await asyncio.sleep(EVENT_CLEANUP_INTERVAL_SECONDS)
+            
+            if not _cleanup_running:
+                break
+            
+            now = datetime.now()
+            cutoff_time = now - timedelta(hours=SESSION_TTL_HOURS)
+            
+            # 统计清理数量
+            cleaned_sessions = 0
+            cleaned_executions = 0
+            cleaned_streams = 0
+            cleaned_log_trackers = 0
+            
+            # 清理过期的 _sessions
+            with _sessions_lock:
+                expired_session_ids = [
+                    sid for sid, sdata in _sessions.items()
+                    if sdata.get("updated_at") and sdata["updated_at"] < cutoff_time
+                ]
+                for sid in expired_session_ids:
+                    del _sessions[sid]
+                    cleaned_sessions += 1
+            
+            # 清理孤儿状态的 _active_executions（对应 session 不存在）
+            with _sessions_lock, _active_executions_lock:
+                orphan_executions = [
+                    sid for sid in _active_executions
+                    if sid not in _sessions
+                ]
+                for sid in orphan_executions:
+                    del _active_executions[sid]
+                    cleaned_executions += 1
+            
+            # 清理孤儿状态的 _stream_states
+            with _sessions_lock, _stream_states_lock:
+                orphan_streams = [
+                    sid for sid in _stream_states
+                    if sid not in _sessions
+                ]
+                for sid in orphan_streams:
+                    del _stream_states[sid]
+                    cleaned_streams += 1
+            
+            # 清理孤儿状态的 _status_log_tracker
+            with _sessions_lock, _status_log_lock:
+                orphan_trackers = [
+                    sid for sid in _status_log_tracker
+                    if sid not in _sessions
+                ]
+                for sid in orphan_trackers:
+                    del _status_log_tracker[sid]
+                    cleaned_log_trackers += 1
+            
+            total_cleaned = cleaned_sessions + cleaned_executions + cleaned_streams + cleaned_log_trackers
+            
+            if total_cleaned > 0:
+                logger.info(
+                    f"[Session Cleanup] 🧹 清理完成: "
+                    f"sessions={cleaned_sessions}, executions={cleaned_executions}, "
+                    f"streams={cleaned_streams}, trackers={cleaned_log_trackers}"
+                )
+            else:
+                logger.debug(f"[Session Cleanup] 本次清理无需处理（当前活跃会话: {len(_sessions)}）")
+                
+        except asyncio.CancelledError:
+            logger.info("[Session Cleanup] 清理循环被取消")
+            break
+        except Exception as e:
+            logger.error(f"[Session Cleanup] 清理循环出错: {e}", exc_info=True)
+            await asyncio.sleep(60)  # 出错后等待 1 分钟再重试
+
+
+# ============================================
 # Request/Response Schemas
 # ============================================
 

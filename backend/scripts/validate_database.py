@@ -10,16 +10,16 @@ from pathlib import Path
 # Add parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+
 def validate_imports():
     """Validate all imports work"""
     print("Validating imports...")
 
     try:
         from backend.database import (
-            get_session,
+            get_async_session,
             init_async_db,
             PlanningSession,
-            Checkpoint,
             UISession,
             UIMessage,
             create_planning_session_async,
@@ -27,10 +27,6 @@ def validate_imports():
             update_planning_session_async,
             delete_planning_session_async,
             list_planning_sessions_async,
-            create_checkpoint_async,
-            get_checkpoint_async,
-            list_checkpoints_async,
-            delete_checkpoint_async,
             create_ui_session_async,
             get_ui_session_async,
             update_ui_session_async,
@@ -117,53 +113,47 @@ async def validate_crud_operations():
         return False
 
 
-async def validate_checkpoint_operations():
-    """Validate checkpoint operations (async)"""
-    print("\nValidating checkpoint operations...")
+async def validate_ui_operations():
+    """Validate UI message operations (async)"""
+    print("\nValidating UI operations...")
 
     try:
         from backend.database import (
-            create_checkpoint_async,
-            get_checkpoint_async,
-            delete_checkpoint_async
+            create_ui_message_async,
+            get_ui_messages_async,
+            delete_ui_messages_async,
         )
+
+        session_id = "validation_ui_test_001"
 
         # Test Create
-        checkpoint_id = "validation_checkpoint_001"
-        success = await create_checkpoint_async(
-            checkpoint_id=checkpoint_id,
-            session_id="test_session",
-            layer=1,
-            description="Test checkpoint",
-            state_snapshot={"test": "data"},
-            checkpoint_metadata={"layer": 1}
+        msg_id = await create_ui_message_async(
+            session_id=session_id,
+            role="user",
+            content="测试消息",
+            message_type="text"
         )
-
-        if success:
-            print(f"  ✓ Created checkpoint: {checkpoint_id}")
-        else:
-            print("  ✗ Failed to create checkpoint")
-            return False
+        print(f"  ✓ Created UI message: {msg_id}")
 
         # Test Read
-        checkpoint = await get_checkpoint_async(checkpoint_id)
-        if checkpoint and checkpoint["layer"] == 1:
-            print(f"  ✓ Retrieved checkpoint: layer {checkpoint['layer']}")
+        messages = await get_ui_messages_async(session_id)
+        if messages and len(messages) > 0:
+            print(f"  ✓ Retrieved {len(messages)} message(s)")
         else:
-            print("  ✗ Failed to retrieve checkpoint")
+            print("  ✗ Failed to retrieve messages")
             return False
 
         # Test Delete
-        if await delete_checkpoint_async(checkpoint_id):
-            print("  ✓ Deleted checkpoint")
+        if await delete_ui_messages_async(session_id):
+            print("  ✓ Deleted messages")
         else:
-            print("  ✗ Failed to delete checkpoint")
+            print("  ✗ Failed to delete messages")
             return False
 
         return True
 
     except Exception as e:
-        print(f"  ✗ Checkpoint validation failed: {e}")
+        print(f"  ✗ UI operations validation failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -181,7 +171,7 @@ async def main():
     results.append(("Imports", validate_imports()))
     results.append(("Database Init", await validate_database_init()))
     results.append(("CRUD Operations", await validate_crud_operations()))
-    results.append(("Checkpoint Operations", await validate_checkpoint_operations()))
+    results.append(("UI Operations", await validate_ui_operations()))
 
     # Print summary
     print("\n" + "=" * 60)
