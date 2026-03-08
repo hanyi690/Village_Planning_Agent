@@ -900,7 +900,7 @@ def create_detailed_plan_subgraph() -> StateGraph:
 # 子图包装函数（用于父图调用）
 # ==========================================
 
-def call_detailed_plan_subgraph(
+async def call_detailed_plan_subgraph(
     project_name: str,
     analysis_reports: Dict[str, str] = None,
     concept_reports: Dict[str, str] = None,
@@ -983,8 +983,8 @@ def call_detailed_plan_subgraph(
     }
 
     try:
-        # 调用子图
-        result = subgraph.invoke(initial_state)
+        # 调用子图（异步）
+        result = await subgraph.ainvoke(initial_state)
 
         detail_reports = result.get("detail_reports", {})
         logger.info(f"[子图调用] 子图执行成功，维度报告数量: {len(detail_reports)}")

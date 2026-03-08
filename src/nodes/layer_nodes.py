@@ -8,14 +8,14 @@ from abc import abstractmethod
 from typing import Dict, Any
 from pathlib import Path
 
-from .base_node import BaseNode
+from .base_node import BaseNode, AsyncBaseNode
 from ..core.state_builder import StateBuilder
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class BaseLayerNode(BaseNode):
+class BaseLayerNode(AsyncBaseNode):
     """
     Layer节点基类
 
@@ -49,7 +49,7 @@ class BaseLayerNode(BaseNode):
         self.layer_name = layer_name
         self.output_key = output_key
 
-    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
         执行Layer节点的标准流程：
         1. 调用子图
@@ -57,8 +57,8 @@ class BaseLayerNode(BaseNode):
         3. 保存输出
         4. 返回状态更新
         """
-        # 1. 调用子图
-        result = self._call_subgraph(state)
+        # 1. 调用子图（异步）
+        result = await self._call_subgraph(state)
 
         if not result.get("success", False):
             return self._build_failure_updates(result)
@@ -70,7 +70,7 @@ class BaseLayerNode(BaseNode):
         return self._build_success_updates(state, result, checkpoint_id)
 
     @abstractmethod
-    def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
         调用对应的子图（子类实现）
 
@@ -175,10 +175,10 @@ class Layer1AnalysisNode(BaseLayerNode):
     def __init__(self):
         super().__init__(layer_number=1, layer_name="现状分析", output_key="analysis_report")
 
-    def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """调用现状分析子图"""
         from ..subgraphs.analysis_subgraph import call_analysis_subgraph
-        return call_analysis_subgraph(
+        return await call_analysis_subgraph(
             raw_data=state["village_data"],
             project_name=state["project_name"]
         )
@@ -206,10 +206,10 @@ class Layer2ConceptNode(BaseLayerNode):
     def __init__(self):
         super().__init__(layer_number=2, layer_name="规划思路", output_key="planning_concept")
 
-    def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """调用规划思路子图"""
         from ..subgraphs.concept_subgraph import call_concept_subgraph
-        return call_concept_subgraph(
+        return await call_concept_subgraph(
             project_name=state["project_name"],
             analysis_reports=state.get("analysis_reports", {}),
             task_description=state["task_description"],
@@ -239,10 +239,10 @@ class Layer3DetailNode(BaseLayerNode):
     def __init__(self):
         super().__init__(layer_number=3, layer_name="详细规划", output_key="detailed_plan")
 
-    def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_subgraph(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """调用详细规划子图"""
         from ..subgraphs.detailed_plan_subgraph import call_detailed_plan_subgraph
-        return call_detailed_plan_subgraph(
+        return await call_detailed_plan_subgraph(
             project_name=state["project_name"],
             analysis_reports=state.get("analysis_reports", {}),
             concept_reports=state.get("concept_reports", {}),

@@ -445,7 +445,7 @@ def create_analysis_subgraph() -> StateGraph:
 # 子图包装函数（用于父图调用）
 # ==========================================
 
-def call_analysis_subgraph(
+async def call_analysis_subgraph(
     raw_data: str,
     project_name: str = "村庄"
 ) -> Dict[str, Any]:
@@ -478,8 +478,8 @@ def call_analysis_subgraph(
     }
 
     try:
-        # 调用子图
-        result = subgraph.invoke(initial_state)
+        # 调用子图（异步）
+        result = await subgraph.ainvoke(initial_state)
 
         # 使用维度报告作为主要输出
         analysis_reports = result.get("analysis_reports", {})

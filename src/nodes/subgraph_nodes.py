@@ -11,7 +11,7 @@
 """
 
 from typing import Dict, Any, List
-from .base_node import BaseNode
+from .base_node import BaseNode, AsyncBaseNode
 from ..core.state_builder import StateBuilder
 from ..utils.logger import get_logger
 
@@ -574,17 +574,17 @@ class GenerateDimensionPlanNode(BaseNode):
             }
 
 
-class ReduceDimensionReportsNode(BaseNode):
+class ReduceDimensionReportsNode(AsyncBaseNode):
     """汇总详细规划报告节点"""
 
     def __init__(self):
         super().__init__("汇总详细规划报告")
 
-    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """汇总所有维度的详细规划报告"""
         from ..subgraphs.detailed_plan_subgraph import reduce_dimension_plans as _reduce
 
-        return _reduce(state)
+        return await _reduce(state)
 
 
 class CheckAllDimensionsCompleteNode(BaseNode):

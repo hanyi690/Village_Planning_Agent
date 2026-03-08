@@ -53,9 +53,10 @@ class BaseNode(ABC):
 
     def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        可调用接口，用于LangGraph
+        同步调用接口，用于LangGraph
 
         这使得节点实例可以直接用作LangGraph的节点函数。
+        对于异步节点，请使用 AsyncBaseNode。
 
         Args:
             state: 当前状态
@@ -66,6 +67,47 @@ class BaseNode(ABC):
         logger.info(f"[{self.node_name}] 开始执行")
         try:
             result = self.execute(state)
+            logger.info(f"[{self.node_name}] 执行完成")
+            return result
+        except Exception as e:
+            logger.error(f"[{self.node_name}] 执行失败: {e}")
+            return self._build_error_response(e)
+
+
+class AsyncBaseNode(BaseNode):
+    """
+    异步节点基类
+
+    用于需要异步执行的节点（如调用异步子图）。
+    LangGraph 会自动检测并正确处理异步节点。
+    """
+
+    @abstractmethod
+    async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        异步执行节点逻辑（子类必须实现）
+
+        Args:
+            state: 当前状态
+
+        Returns:
+            状态更新字典
+        """
+        pass
+
+    async def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        异步调用接口，用于LangGraph
+
+        Args:
+            state: 当前状态
+
+        Returns:
+            状态更新字典
+        """
+        logger.info(f"[{self.node_name}] 开始执行")
+        try:
+            result = await self.execute(state)
             logger.info(f"[{self.node_name}] 执行完成")
             return result
         except Exception as e:
@@ -107,4 +149,4 @@ class BaseNode(ABC):
         return f"{self.__class__.__name__}(name='{self.node_name}')"
 
 
-__all__ = ["BaseNode"]
+__all__ = ["BaseNode", "AsyncBaseNode"]

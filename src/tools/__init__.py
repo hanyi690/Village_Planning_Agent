@@ -19,9 +19,6 @@ from .file_manager import (
 # 知识库工具（函数）
 from .knowledge_tool import knowledge_query
 
-# 规划工具（函数）
-from .planner_tool import plan_village
-
 # 修复工具
 from .revision_tool import (
     RevisionTool,
@@ -41,9 +38,6 @@ __all__ = [
 
     # 知识库
     "knowledge_query",
-
-    # 规划
-    "plan_village",
 
     # 修复
     "RevisionTool",

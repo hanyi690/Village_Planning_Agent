@@ -1625,6 +1625,15 @@ async def get_session_status(session_id: str):
             # 提取修订历史
             revision_history = checkpoint_state.values.get("revision_history", [])
             
+            # 🔧 修复：从 checkpoint 获取最新的暂停状态（覆盖 initial_state 的旧值）
+            # 这是解决 Layer 2/3 审查面板不弹出的关键
+            checkpoint_pause = checkpoint_state.values.get("pause_after_step")
+            checkpoint_prev = checkpoint_state.values.get("previous_layer")
+            if checkpoint_pause is not None:
+                pause_after_step = checkpoint_pause
+            if checkpoint_prev is not None:
+                previous_layer = checkpoint_prev
+            
             # 只在消息数量变化时打印日志（使用 DEBUG 级别）
             msg_count = len(messages)
             rev_count = len(revision_history)

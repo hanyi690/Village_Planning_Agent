@@ -6,7 +6,7 @@
 
 from typing import Dict, Any, List
 
-from .base_node import BaseNode
+from .base_node import BaseNode, AsyncBaseNode
 from ..core.state_builder import StateBuilder
 from ..tools.revision_tool import RevisionTool
 from ..utils.logger import get_logger
@@ -151,7 +151,7 @@ class ToolBridgeNode(BaseNode):
             .build()
 
 
-class RevisionNode(BaseNode):
+class RevisionNode(AsyncBaseNode):
     """
     修复工具节点 - 使用 RevisionSubgraph 实现并行修复
     
@@ -165,7 +165,7 @@ class RevisionNode(BaseNode):
     def __init__(self):
         super().__init__("修复")
 
-    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
         执行修复 - 使用 RevisionSubgraph 并行处理
         
@@ -209,7 +209,7 @@ class RevisionNode(BaseNode):
         # 获取已完成的维度（用于过滤）
         completed_dimensions = self._get_completed_dimensions(state)
         
-        revision_result = call_revision_subgraph(
+        revision_result = await call_revision_subgraph(
             project_name=state.get("project_name", ""),
             feedback=feedback,
             target_dimensions=dimensions,

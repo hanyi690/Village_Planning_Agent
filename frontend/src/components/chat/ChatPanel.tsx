@@ -66,6 +66,8 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     // 审查状态
     isPaused,
     pendingReviewLayer,
+    setIsPaused,  // 🔧 新增：用于 SSE pause 事件更新
+    setPendingReviewLayer,  // 🔧 新增：用于 SSE pause 事件更新
     // 层级完成状态
     completedLayers,
     // 同步后端状态
@@ -390,9 +392,28 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     checkpointId: string
   ) => {
     console.log(`[ChatPanel] Pause event received`, { layer, checkpointId });
-    // 状态同步由 TaskController 通过轮询处理
-    // 这里可以添加额外的 UI 更新逻辑
-  }, []);
+    
+    // 🔧 修复：更新审查状态，使 ReviewPanel 能够正确显示
+    setIsPaused(true);
+    setPendingReviewLayer(layer);
+    console.log(`[ChatPanel] Set isPaused=true, pendingReviewLayer=${layer}`);
+    
+    // 🔧 修复：添加新的 checkpoint 到状态，使 CheckpointMarker 能够正确显示
+    if (checkpointId && layer > 0) {
+      setCheckpoints(prev => {
+        // 避免重复添加同一层的 checkpoint
+        if (prev.some(cp => cp.layer === layer)) {
+          return prev;
+        }
+        return [...prev, {
+          checkpoint_id: checkpointId,
+          layer: layer,
+          timestamp: new Date().toISOString(),
+          description: `Layer ${layer} checkpoint`
+        }];
+      });
+    }
+  }, [setCheckpoints, setIsPaused, setPendingReviewLayer]);
 
   // 【新增】处理维度修复完成事件
   const handleDimensionRevised = useCallback((data: {

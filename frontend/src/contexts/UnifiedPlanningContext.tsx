@@ -99,6 +99,8 @@ interface UnifiedPlanningContextType {
   // Review state (简化版 - 直接从后端同步)
   isPaused: boolean;           // 暂停状态: status === 'paused'
   pendingReviewLayer: number | null;  // 待审查层级: previous_layer
+  setIsPaused: (paused: boolean) => void;  // 🔧 新增：用于 SSE pause 事件更新
+  setPendingReviewLayer: (layer: number | null) => void;  // 🔧 新增：用于 SSE pause 事件更新
 
   // 层级完成状态
   completedLayers: {
@@ -145,7 +147,7 @@ interface UnifiedPlanningContextType {
   setVillageFormData: (data: VillageInputData | null) => void;
 
   // Checkpoint actions
-  setCheckpoints: (checkpoints: Checkpoint[]) => void;
+  setCheckpoints: (checkpoints: Checkpoint[] | ((prev: Checkpoint[]) => Checkpoint[])) => void;
   setCurrentLayer: (layer: number | null) => void;
 
   // Content actions
@@ -793,6 +795,8 @@ export function UnifiedPlanningProvider({
     // 审查状态
     isPaused,
     pendingReviewLayer,
+    setIsPaused,  // 🔧 新增：用于 SSE pause 事件更新
+    setPendingReviewLayer,  // 🔧 新增：用于 SSE pause 事件更新
 
     // 层级完成状态
     completedLayers,

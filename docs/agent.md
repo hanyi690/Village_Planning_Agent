@@ -310,6 +310,51 @@ src/rag/
     └── build_kb_auto.py      # 构建脚本
 ```
 
+## 节点基类
+
+### BaseNode (同步节点基类)
+
+```python
+class BaseNode(ABC):
+    """同步节点基类"""
+    
+    @abstractmethod
+    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """执行节点逻辑（子类必须实现）"""
+        pass
+    
+    def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """同步调用接口，用于LangGraph"""
+        ...
+```
+
+### AsyncBaseNode (异步节点基类)
+
+```python
+class AsyncBaseNode(BaseNode):
+    """异步节点基类
+    
+    用于需要异步执行的节点（如调用异步子图）。
+    LangGraph 会自动检测并正确处理异步节点。
+    """
+    
+    @abstractmethod
+    async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """异步执行节点逻辑（子类必须实现）"""
+        pass
+    
+    async def __call__(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """异步调用接口，用于LangGraph"""
+        ...
+```
+
+**异步节点应用**:
+- `BaseLayerNode` - Layer 层节点（调用异步子图）
+- `ReduceDimensionReportsNode` - 汇总报告节点
+- `RevisionNode` - 修复工具节点
+
+**子图调用异步化**: 所有 `call_*_subgraph` 函数均为异步函数，使用 `await subgraph.ainvoke()` 调用。
+
 ## 目录结构
 
 ```
@@ -330,9 +375,10 @@ src/
 │   ├── detailed_plan_subgraph.py # Layer 3 子图
 │   └── revision_subgraph.py    # Revision 子图
 ├── nodes/
-│   ├── layer_nodes.py          # Layer 节点
+│   ├── base_node.py            # 节点基类 (BaseNode, AsyncBaseNode)
+│   ├── layer_nodes.py          # Layer 节点 (异步)
 │   ├── subgraph_nodes.py       # 子图节点
-│   └── tool_nodes.py           # 工具节点
+│   └── tool_nodes.py           # 工具节点 (含异步 RevisionNode)
 ├── planners/
 │   ├── unified_base_planner.py # 规划器基类
 │   └── generic_planner.py      # 通用规划器

@@ -536,7 +536,7 @@ def create_concept_subgraph() -> StateGraph:
 # 子图包装函数（用于父图调用）
 # ==========================================
 
-def call_concept_subgraph(
+async def call_concept_subgraph(
     project_name: str,
     analysis_reports: Dict[str, str] = None,
     task_description: str = "制定村庄总体规划思路",
@@ -575,8 +575,8 @@ def call_concept_subgraph(
     }
 
     try:
-        # 调用子图
-        result = subgraph.invoke(initial_state)
+        # 调用子图（异步）
+        result = await subgraph.ainvoke(initial_state)
 
         logger.info(f"[子图调用] 子图执行成功，维度报告数量: {len(result.get('concept_reports', {}))}")
 

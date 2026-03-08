@@ -591,7 +591,7 @@ def create_revision_subgraph() -> StateGraph:
 # 子图包装函数（用于父图调用）
 # ==========================================
 
-def call_revision_subgraph(
+async def call_revision_subgraph(
     project_name: str,
     feedback: str,
     target_dimensions: List[str],
@@ -644,8 +644,8 @@ def call_revision_subgraph(
     }
     
     try:
-        # 调用子图
-        result = subgraph.invoke(initial_state)
+        # 调用子图（异步）
+        result = await subgraph.ainvoke(initial_state)
         
         updated_reports = result.get("updated_reports", {})
         revision_history = result.get("revision_history", [])

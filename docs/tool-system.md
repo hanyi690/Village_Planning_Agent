@@ -49,7 +49,7 @@
 | **内置工具** | `src/tools/registry.py` | ⚠️ 部分完成 | 人口预测已完成，GIS/网络为模拟数据 |
 | **Adapter 工具** | `src/tools/adapters/` | ⚠️ 代码完整但缺数据 | 人口预测已完成，GIS/网络需要外部数据 |
 | **RAG 工具** | `src/rag/core/tools.py` | ✅ 完成 | 知识检索工具集 |
-| **业务工具** | `src/tools/` | ⚠️ 部分完成 | 规划、修复、文件管理等 |
+| **业务工具** | `src/tools/` | ⚠️ 部分完成 | 修复、文件管理等 |
 
 ---
 
@@ -338,18 +338,6 @@ class WebReviewTool:
     def request_review(content, title, session_id) -> Dict  # 请求审查
     def submit_review_decision(review_id, action, feedback) -> Dict  # 提交审查决定
 ```
-
----
-
-#### 2.4.4 planner_tool ⚠️ 简化实现
-
-**文件**: `src/tools/planner_tool.py`
-
-**功能**: 生成分阶段村庄规划大纲
-
-**状态**: 当前为简化示例实现，仅输出固定的三阶段模板
-
-**预留**: 可接入规则引擎或 GIS 服务
 
 ---
 
@@ -895,7 +883,6 @@ def _prepare_tool_context(self, state: Dict[str, Any]) -> Dict[str, Any]:
 | `src/tools/registry.py` | 工具注册中心 |
 | `src/tools/file_manager.py` | 文件管理器 |
 | `src/tools/knowledge_tool.py` | 知识检索工具接口 |
-| `src/tools/planner_tool.py` | 规划工具 |
 | `src/tools/revision_tool.py` | 修复工具 |
 | `src/tools/web_review_tool.py` | Web 审查工具 |
 | `src/tools/adapters/__init__.py` | Adapter 工厂 |

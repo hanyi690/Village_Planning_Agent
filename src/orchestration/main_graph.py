@@ -130,7 +130,7 @@ def _get_llm():
 # Layer执行节点
 # ==========================================
 
-def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
+async def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
     """
     Layer 1: 执行现状分析
 
@@ -140,7 +140,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
 
     try:
         # 调用现状分析子图
-        result = call_analysis_subgraph(
+        result = await call_analysis_subgraph(
             raw_data=state["village_data"],
             project_name=state["project_name"]
         )
@@ -185,7 +185,7 @@ def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]:
         }
 
 
-def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
+async def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
     """
     Layer 2: 生成规划思路（使用规划思路子图）
 
@@ -195,7 +195,7 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
 
     try:
         # 调用规划思路子图（传递维度报告字典）
-        result = call_concept_subgraph(
+        result = await call_concept_subgraph(
             project_name=state["project_name"],
             analysis_reports=state.get("analysis_reports", {}),
             task_description=state["task_description"],
@@ -242,7 +242,7 @@ def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
         }
 
 
-def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
+async def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
     """
     Layer 3: 详细规划
 
@@ -253,7 +253,7 @@ def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
 
     try:
         # 调用详细规划子图（传递维度报告字典）
-        result = call_detailed_plan_subgraph(
+        result = await call_detailed_plan_subgraph(
             project_name=state["project_name"],
             analysis_reports=state.get("analysis_reports", {}),
             concept_reports=state.get("concept_reports", {}),

@@ -51,8 +51,6 @@ from .tools import (
     read_village_data,
     # 知识库
     knowledge_query,
-    # 规划
-    plan_village,
 )
 
 __all__ = [
@@ -80,6 +78,4 @@ __all__ = [
     "read_village_data",
     # 知识库
     "knowledge_query",
-    # 规划
-    "plan_village",
 ]
