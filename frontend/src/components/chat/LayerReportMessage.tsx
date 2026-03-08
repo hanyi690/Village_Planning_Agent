@@ -25,46 +25,97 @@ export default function LayerReportMessage({
   onOpenInSidebar,
   onToggleAllDimensions,
   currentLayer,
-  hasStreamingDimensions = false,  // NEW: 是否有流式维度内容
-  dimensionContents,  // NEW: 实时维度内容
+  hasStreamingDimensions = false,
+  dimensionContents,
 }: LayerReportMessageProps) {
-  // ✅ 使用 dimensionReports 字段，优先使用 dimensionContents（实时流式内容）
+  // ✅ 修复：调整渲染优先级，确保层级完成时使用 REST API 完整数据
+  // 策略：
+  // 1. 如果 dimensionReports 有完整数据（来自 REST API），优先使用它
+  // 2. 否则使用 dimensionContents 作为流式显示
+  // 3. 最后回退到解析 fullReportContent
   const dimensions = useMemo(() => {
     const dimensionReports = (message as LayerCompletedMessage).dimensionReports || {};
+    const dimensionReportKeys = Object.keys(dimensionReports);
+    const hasDimensionReports = dimensionReportKeys.length > 0;
+    
+    // 检查 dimensionReports 内容是否完整（非空字符串）
+    const hasCompleteDimensionReports = hasDimensionReports && 
+      dimensionReportKeys.some(key => {
+        const content = dimensionReports[key];
+        return content && content.length > 0;
+      });
+    
+    const hasDimensionContents = dimensionContents && dimensionContents.size > 0;
+    
+    // ✅ 调试日志：追踪数据来源
+    console.log(`[LayerReportMessage] Layer ${message.layer} 数据状态:`, {
+      dimensionReportsCount: dimensionReportKeys.length,
+      hasCompleteDimensionReports,
+      dimensionContentsSize: dimensionContents?.size || 0,
+      hasDimensionContents,
+    });
 
-    // ✅ 优先使用 dimensionContents（实时流式内容，解决并行更新竞态问题）
-    if (dimensionContents && dimensionContents.size > 0) {
-      const result: ParsedDimension[] = [];
-      
-      // 遍历 dimensionReports 的键（确保维度顺序正确）
-      for (const key of Object.keys(dimensionReports)) {
-        const contentKey = `${message.layer}_${key}`;
-        // 从 dimensionContents 获取实时内容，如果没有则使用 dimensionReports 中的内容
-        const content = dimensionContents.get(contentKey) || dimensionReports[key] || '';
-        
-        result.push({
-          name: getDimensionName(key),
-          content: content,
-          icon: getDimensionIcon(key),
-          subsections: [], // Empty subsections array (ParsedSubsection[])
-        });
-      }
-      
-      return result;
-    }
-
-    // 如果有 dimensionReports，使用它
-    if (Object.keys(dimensionReports).length > 0) {
+    // 1. ✅ 优先使用 dimensionReports（REST API 完整数据）
+    // 当 dimensionReports 有完整内容时，说明层级已完成，REST API 返回了完整数据
+    if (hasCompleteDimensionReports) {
+      console.log(`[LayerReportMessage] Layer ${message.layer} 使用 REST API 数据 (dimensionReports)`);
       return Object.entries(dimensionReports).map(([key, content]) => ({
         name: getDimensionName(key),
         content: content,
         icon: getDimensionIcon(key),
-        subsections: [], // Empty subsections array (ParsedSubsection[])
+        subsections: [],
       }));
     }
 
-    // 回退到解析 fullReportContent
-    return parseLayerReport(message.fullReportContent || '');
+    // 2. 使用 dimensionContents（流式累积内容）
+    if (hasDimensionContents) {
+      console.log(`[LayerReportMessage] Layer ${message.layer} 使用流式累积数据 (dimensionContents)`);
+      const result: ParsedDimension[] = [];
+      
+      // 如果有 dimensionReports 键但内容为空，使用键顺序
+      if (hasDimensionReports) {
+        for (const key of dimensionReportKeys) {
+          const contentKey = `${message.layer}_${key}`;
+          const content = dimensionContents.get(contentKey) || '';
+          if (content) {
+            result.push({
+              name: getDimensionName(key),
+              content: content,
+              icon: getDimensionIcon(key),
+              subsections: [],
+            });
+          }
+        }
+      } else {
+        // 没有 dimensionReports，直接遍历 dimensionContents
+        dimensionContents.forEach((content, key) => {
+          const parts = key.split('_');
+          if (parts.length >= 2) {
+            const keyLayer = parseInt(parts[0], 10);
+            if (keyLayer === message.layer && content) {
+              const dimKey = parts.slice(1).join('_');
+              result.push({
+                name: getDimensionName(dimKey),
+                content: content,
+                icon: getDimensionIcon(dimKey),
+                subsections: [],
+              });
+            }
+          }
+        });
+      }
+      
+      if (result.length > 0) return result;
+    }
+
+    // 3. 回退到解析 fullReportContent
+    if (message.fullReportContent) {
+      console.log(`[LayerReportMessage] Layer ${message.layer} 解析 fullReportContent`);
+      return parseLayerReport(message.fullReportContent);
+    }
+
+    console.warn(`[LayerReportMessage] Layer ${message.layer} 无可用数据源！`);
+    return [];
   }, [message.dimensionReports, message.fullReportContent, message.layer, dimensionContents]);
 
   // ✅ 判断是否为当前活跃层

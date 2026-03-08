@@ -1,7 +1,8 @@
 """
 Unified LLM Factory for Village Planning Agent
 
-Supports both OpenAI and ZhipuAI (GLM) providers with auto-detection based on model name.
+Supports OpenAI (including DeepSeek) and ZhipuAI (GLM) providers.
+Provider is determined by LLM_PROVIDER environment variable or explicit parameter.
 Includes automatic LangSmith tracing support.
 """
 
@@ -20,38 +21,34 @@ class LLMProvider(Enum):
     ZHIPUAI = "zhipuai"
 
 
-def detect_provider(model_name: str, explicit_provider: Optional[str] = None) -> LLMProvider:
+def get_provider(explicit_provider: Optional[str] = None) -> LLMProvider:
     """
-    Detect the appropriate LLM provider based on model name prefix or explicit setting.
+    Get the LLM provider from explicit setting or environment variable.
 
     Args:
-        model_name: The model name (e.g., "glm-4-flash", "gpt-4o-mini")
-        explicit_provider: Optional explicit provider override ("openai" or "zhipuai")
+        explicit_provider: Optional explicit provider override ("deepseek", "openai", or "zhipuai")
 
     Returns:
         LLMProvider enum value
 
     Examples:
-        >>> detect_provider("glm-4-flash")
+        >>> get_provider("zhipuai")
         <LLMProvider.ZHIPUAI: 'zhipuai'>
-        >>> detect_provider("gpt-4o-mini")
-        <LLMProvider.OPENAI: 'openai'>
-        >>> detect_provider("custom-model", explicit_provider="zhipuai")
-        <LLMProvider.ZHIPUAI: 'zhipuai'>
+        >>> get_provider()  # Returns LLM_PROVIDER from environment
+        <LLMProvider.OPENAI: 'openai'>  # if LLM_PROVIDER=deepseek or openai
     """
-    if explicit_provider:
-        try:
-            return LLMProvider(explicit_provider.lower())
-        except ValueError:
-            pass
-
-    # Auto-detect based on model name prefix
-    if model_name.startswith("glm-"):
-        return LLMProvider.ZHIPUAI
-    elif model_name.startswith("gpt-") or model_name.startswith("deepseek-"):
+    from .config import LLM_PROVIDER
+    
+    provider_name = explicit_provider or LLM_PROVIDER
+    
+    # Map provider names
+    if provider_name in ("deepseek", "openai"):
         return LLMProvider.OPENAI
+    elif provider_name == "zhipuai":
+        return LLMProvider.ZHIPUAI
     else:
-        # Default to OpenAI for unknown models
+        # Fallback to OpenAI for unknown providers
+        logger.warning(f"Unknown provider '{provider_name}', falling back to OpenAI")
         return LLMProvider.OPENAI
 
 
@@ -125,6 +122,7 @@ def _create_openai_llm(
     max_tokens: int = 2000,
     callbacks: Optional[List[Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    streaming: bool = False,
     **kwargs
 ) -> Any:
     """
@@ -136,6 +134,7 @@ def _create_openai_llm(
         max_tokens: Maximum tokens to generate
         callbacks: Optional list of callback handlers (will be merged with LangSmith callbacks)
         metadata: Optional metadata dict for LangSmith tracing
+        streaming: Enable streaming mode for the LLM
         **kwargs: Additional parameters to pass to the LLM
 
     Returns:
@@ -169,6 +168,7 @@ def _create_openai_llm(
         temperature=temperature,
         max_tokens=max_tokens,
         api_key=api_key,
+        streaming=streaming,
         **kwargs
     )
 
@@ -179,6 +179,7 @@ def _create_zhipuai_llm(
     max_tokens: int = 2000,
     callbacks: Optional[List[Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    streaming: bool = False,
     **kwargs
 ) -> Any:
     """
@@ -190,6 +191,7 @@ def _create_zhipuai_llm(
         max_tokens: Maximum tokens to generate
         callbacks: Optional list of callback handlers (will be merged with LangSmith callbacks)
         metadata: Optional metadata dict for LangSmith tracing
+        streaming: Enable streaming mode for the LLM
         **kwargs: Additional parameters to pass to the LLM
 
     Returns:
@@ -221,6 +223,7 @@ def _create_zhipuai_llm(
         temperature=temperature,
         max_tokens=max_tokens,
         api_key=api_key,
+        streaming=streaming,
         **kwargs
     )
 
@@ -232,22 +235,24 @@ def create_llm(
     provider: Optional[str] = None,
     callbacks: Optional[List[Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    streaming: bool = False,
     **kwargs
 ) -> Any:
     """
-    Create an LLM instance with auto-detected provider.
+    Create an LLM instance with specified provider.
 
     This is the main factory function that unifies LLM creation across providers.
-    It automatically detects the appropriate provider based on the model name prefix
-    or explicit provider setting.
+    The provider is determined by: explicit `provider` parameter > LLM_PROVIDER env var.
 
     Args:
-        model: Model name. If None, reads from LLM_MODEL environment variable (default: "glm-4-flash")
+        model: Model name. If None, reads from LLM_MODEL environment variable (default: "deepseek-chat")
         temperature: Sampling temperature (0.0 to 1.0)
         max_tokens: Maximum tokens to generate
-        provider: Explicit provider override ("openai" or "zhipuai"). If None, auto-detects from model name
+        provider: Explicit provider override ("deepseek", "openai", or "zhipuai").
+                  If None, uses LLM_PROVIDER environment variable
         callbacks: Optional list of callback handlers (will be merged with LangSmith callbacks)
         metadata: Optional metadata dict for LangSmith tracing
+        streaming: Enable streaming mode for the LLM (default: False)
         **kwargs: Additional parameters passed to the underlying LLM constructor
 
     Returns:
@@ -258,15 +263,12 @@ def create_llm(
         ImportError: If required packages are not installed
 
     Examples:
-        >>> # Auto-detect provider from model name
-        >>> llm = create_llm(model="glm-4-flash")  # Returns ChatZhipuAI
-        >>> llm = create_llm(model="gpt-4o-mini")  # Returns ChatOpenAI
-
-        >>> # Explicit provider override
-        >>> llm = create_llm(model="custom-model", provider="zhipuai")
-
-        >>> # Use default model from environment
+        >>> # Use default provider and model from environment
         >>> llm = create_llm(temperature=0.5)
+
+        >>> # Explicit provider
+        >>> llm = create_llm(model="glm-4-flash", provider="zhipuai")
+        >>> llm = create_llm(model="gpt-4o", provider="openai")
 
         >>> # With LangSmith metadata
         >>> metadata = {"project": "My Village", "dimension": "industry"}
@@ -288,26 +290,29 @@ def create_llm(
     else:
         logger.debug("[LLM Factory] LangSmith tracing not enabled")
 
-    # Detect provider
-    detected_provider = detect_provider(model, provider)
+    # Get provider from explicit setting or environment
+    selected_provider = get_provider(provider)
+    logger.info(f"[LLM Factory] Creating LLM: model={model}, provider={selected_provider.value}, streaming={streaming}")
 
     # Route to appropriate provider-specific function
-    if detected_provider == LLMProvider.ZHIPUAI:
+    if selected_provider == LLMProvider.ZHIPUAI:
         return _create_zhipuai_llm(
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
             callbacks=callbacks,
             metadata=metadata,
+            streaming=streaming,
             **kwargs
         )
-    else:  # OPENAI
+    else:  # OPENAI (includes DeepSeek)
         return _create_openai_llm(
             model=model,
             temperature=temperature,
             max_tokens=max_tokens,
             callbacks=callbacks,
             metadata=metadata,
+            streaming=streaming,
             **kwargs
         )
 

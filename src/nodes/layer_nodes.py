@@ -180,7 +180,8 @@ class Layer1AnalysisNode(BaseLayerNode):
         from ..subgraphs.analysis_subgraph import call_analysis_subgraph
         return await call_analysis_subgraph(
             raw_data=state["village_data"],
-            project_name=state["project_name"]
+            project_name=state["project_name"],
+            session_id=state.get("session_id", "")
         )
 
     def _build_success_updates(
@@ -213,7 +214,8 @@ class Layer2ConceptNode(BaseLayerNode):
             project_name=state["project_name"],
             analysis_reports=state.get("analysis_reports", {}),
             task_description=state["task_description"],
-            constraints=state.get("constraints", "无特殊约束")
+            constraints=state.get("constraints", "无特殊约束"),
+            session_id=state.get("session_id", "")
         )
 
     def _build_success_updates(
@@ -249,7 +251,8 @@ class Layer3DetailNode(BaseLayerNode):
             task_description=state.get("task_description", "制定村庄详细规划"),
             constraints=state.get("constraints", "无特殊约束"),
             required_dimensions=state.get("required_dimensions"),
-            enable_human_review=state.get("need_human_review", False)
+            enable_human_review=state.get("need_human_review", False),
+            session_id=state.get("session_id", "")
         )
 
     def _build_success_updates(

@@ -134,7 +134,7 @@ async def get_global_checkpointer() -> Any:
 
 
 # Configuration constants
-MAX_SESSION_EVENTS = 1000  # Maximum events to keep per session (约 30 分钟流式事件)
+MAX_SESSION_EVENTS = 5000  # Maximum events to keep per session (增加容量以支持更长的规划会话)
 EVENT_CLEANUP_INTERVAL_SECONDS = 300  # Cleanup interval: 5 minutes (instead of 1 hour)
 
 # In-memory session storage (for production: use Redis)
@@ -147,6 +147,10 @@ _stream_states: Dict[str, str] = {}  # session_id -> "active" | "paused" | "comp
 # Status query log optimization - track repeated queries to reduce log spam
 _status_log_tracker: Dict[str, Dict[str, Any]] = {}  # session_id -> {count, last_state, last_log_time}
 _status_log_lock = Lock()
+
+# ✅ 全局事件计数器：用于为每个事件分配唯一 ID，解决 deque rotation 问题
+_event_counter = 0
+_event_counter_lock = Lock()
 
 # Thread safety locks
 _sessions_lock = Lock()
@@ -386,17 +390,28 @@ def _set_session_value(session_id: str, key: str, value: Any) -> bool:
         return True
 
 
-def _append_session_event(session_id: str, event: Dict) -> None:
+def _append_session_event(session_id: str, event: Dict) -> int:
     """
     Thread-safe append event to session events list
 
     Args:
         session_id: Session identifier
         event: Event dictionary to append
+
+    Returns:
+        The event_id assigned to this event, or -1 if failed
     """
+    global _event_counter
     with _sessions_lock:
         if session_id in _sessions:
+            # ✅ 为事件分配唯一 ID
+            with _event_counter_lock:
+                _event_counter += 1
+                event_id = _event_counter
+            event["_event_id"] = event_id
             _sessions[session_id].setdefault("events", []).append(event)
+            return event_id
+    return -1
 
 
 # ============================================
@@ -417,18 +432,28 @@ async def _append_session_event_async(session_id: str, event: Dict) -> bool:
     Returns:
         True: 成功, False: 失败
     """
+    global _event_counter
+    # ✅ 先分配唯一 ID（在任何存储之前）
+    with _event_counter_lock:
+        _event_counter += 1
+        event["_event_id"] = _event_counter
+
     try:
         # 使用异步数据库包装器
         success = await add_event_async(session_id, event)
         if success:
             logger.debug(f"[Async DB] Event appended to session {session_id}")
-            # 同时更新内存缓存（保持兼容性）
-            _append_session_event(session_id, event)
+            # 同时更新内存缓存（不再调用 _append_session_event 避免重复分配 ID）
+            with _sessions_lock:
+                if session_id in _sessions:
+                    _sessions[session_id].setdefault("events", []).append(event)
         return success
     except Exception as e:
         logger.error(f"[Async DB] Failed to append event: {e}", exc_info=True)
-        # 失败时回退到内存版本
-        _append_session_event(session_id, event)
+        # 失败时回退到内存版本（event_id 已经分配）
+        with _sessions_lock:
+            if session_id in _sessions:
+                _sessions[session_id].setdefault("events", []).append(event)
         return False
 
 
@@ -514,6 +539,10 @@ def append_dimension_delta_event(
         time_elapsed = current_time - last_sent
         should_send = (time_elapsed >= DELTA_MIN_INTERVAL_MS) or (token_count >= DELTA_MIN_TOKENS)
         
+        # 调试：每10次打印一次状态
+        if token_count % 10 == 0:
+            logger.debug(f"[dimension_delta] {dimension_key}: token_count={token_count}, time_elapsed={time_elapsed:.0f}ms, should_send={should_send}")
+        
         if not should_send:
             # 只更新计数，不发送
             _dimension_delta_token_count[cache_key] = token_count
@@ -530,6 +559,12 @@ def append_dimension_delta_event(
             "timestamp": datetime.now().isoformat()
         }
         _append_session_event(session_id, event_data)
+        
+        # 精简日志：只在里程碑时打印
+        milestones = {500, 1000, 2000, 5000, 10000}
+        hit_milestone = any(abs(len(accumulated) - m) < 50 for m in milestones)
+        if token_count == 1 or hit_milestone:
+            logger.info(f"[dimension_delta] {dimension_key}: {len(accumulated)} chars")
         
         # 更新状态
         _dimension_delta_last_sent[cache_key] = current_time
@@ -813,10 +848,11 @@ async def _execute_graph_in_background(
             return on_token
 
         # ✅ 将 token 回调工厂放入 config（不污染状态，避免序列化问题）
-        # 修复: initial_state 可能为 None（从 Checkpoint 恢复时），需要空值保护
-        if initial_state and initial_state.get("_streaming_enabled", False):
+        # 修复: 从 checkpoint 恢复时 initial_state 为 None，默认启用流式输出
+        streaming_enabled = (initial_state.get("_streaming_enabled", True) if initial_state else True)
+        if streaming_enabled:
             config["configurable"]["_token_callback_factory"] = token_callback_factory
-            logger.info(f"[Planning] [{session_id}] Token 回调工厂已放入 config")
+            logger.info(f"[Planning] [{session_id}] Token 回调工厂已放入 config (streaming_enabled={streaming_enabled})")
 
         # 定义运行时专用的key（不应持久化到checkpoint）
         RUNTIME_KEYS = {
@@ -925,32 +961,57 @@ async def _execute_graph_in_background(
                                 for key, value in dimension_reports.items():
                                     logger.info(f"[Planning] [{session_id}]   - {key}: {len(value)} chars")
 
-                        # 生成事件并添加到会话事件列表
+                        # ✅ 数据完整性验证和警告（仅用于日志）
+                        total_dimension_content = sum(len(v) for v in dimension_reports.values()) if dimension_reports else 0
+                        
+                        if not dimension_reports or len(dimension_reports) == 0:
+                            logger.warning(f"[Planning] [{session_id}] ⚠️ Layer {layer_num} dimension_reports 为空！")
+                            logger.warning(f"[Planning] [{session_id}]   - 原始状态键: analysis_reports/concept_reports/detail_reports")
+                            logger.warning(f"[Planning] [{session_id}]   - event keys: {list(event.keys())}")
+                        elif total_dimension_content == 0:
+                            logger.warning(f"[Planning] [{session_id}] ⚠️ Layer {layer_num} dimension_reports 有 {len(dimension_reports)} 个维度但内容全为空！")
+                            logger.warning(f"[Planning] [{session_id}]   - 维度键列表: {list(dimension_reports.keys())}")
+                        else:
+                            logger.info(f"[Planning] [{session_id}] ✓ Layer {layer_num} 数据完整: {len(dimension_reports)} 个维度, {total_dimension_content} 字符")
+
+                        # ✅ Signal-Fetch Pattern: SSE 只发送轻量信号，不传全量数据
+                        # 前端收到信号后会调用 REST API /sessions/{id}/layer/{layer}/reports 获取完整数据
                         event_data = {
                             "type": "layer_completed",
                             "layer": layer_num,
                             "layer_number": layer_num,
                             "session_id": session_id,
                             "message": f"Layer {layer_num} completed",
-                            "report_content": report[:500000],  # Truncate if too large
-                            "dimension_reports": dimension_reports,
+                            # ✅ 精简：不再传输大型数据，改用 REST API 拉取
+                            # "report_content": report[:500000],  # 已移除
+                            # "dimension_reports": dimension_reports,  # 已移除
+                            # ✅ 新增：信号字段，告知前端数据是否完整
+                            "has_data": len(dimension_reports) > 0 and total_dimension_content > 0,
+                            "dimension_count": len(dimension_reports) if dimension_reports else 0,
+                            "total_chars": total_dimension_content,
                             "pause_after_step": event.get("pause_after_step", False),
-                            "previous_layer": event.get("previous_layer", 0),  # 刚完成的层级
+                            "previous_layer": event.get("previous_layer", 0),
                             "timestamp": datetime.now().isoformat()
                         }
+                        
+                        logger.info(f"[Planning] [{session_id}] ✓ layer_completed 轻量信号已发送: Layer {layer_num}")
+                        logger.info(f"[Planning] [{session_id}]   - dimension_count: {len(dimension_reports) if dimension_reports else 0}")
+                        logger.info(f"[Planning] [{session_id}]   - total_chars: {total_dimension_content}")
+                        logger.info(f"[Planning] [{session_id}]   - has_data: {event_data['has_data']}")
+                        logger.info(f"[Planning] [{session_id}]   - pause_after_step: {event.get('pause_after_step', False)}")
+                        
                         # 使用异步版本（高性能）
                         await _append_session_event_async(session_id, event_data)
                         sent_events.add(event_key)  # 标记已发送
                         _set_session_value(session_id, "sent_layer_events", sent_events)  # 保存回session
-                        logger.info(f"[Planning] [{session_id}] ✓ layer_completed 事件已添加到队列")
-                        logger.info(f"[Planning] [{session_id}]   - Layer {layer_num}")
-                        logger.info(f"[Planning] [{session_id}]   - 队列长度: {len(events_list)}")
-                        logger.info(f"[Planning] [{session_id}]   - 报告长度: {len(report)} 字符")
-                        logger.info(f"[Planning] [{session_id}]   - 维度报告数量: {len(dimension_reports)}")
-                        logger.info(f"[Planning] [{session_id}]   - pause_after_step: {event.get('pause_after_step', False)}")
-                        logger.info(f"[Planning] [{session_id}]   - previous_layer: {event.get('previous_layer', 0)}")
-                        logger.info(f"[Planning] [{session_id}]   - 已发送事件: {sent_events}")
-                        # sent_layer_events 和 sent_pause_events 是内存状态,不需要持久化到数据库
+                        
+                        # ✅ 验证：确认事件已在队列中
+                        events_after = _get_session_events_copy(session_id)
+                        last_event = events_after[-1] if events_after else None
+                        if last_event and last_event.get("type") == "layer_completed":
+                            logger.info(f"[Planning] [{session_id}] ✓ layer_completed 事件已验证在队列中 (队列长度: {len(events_after)})")
+                        else:
+                            logger.warning(f"[Planning] [{session_id}] ⚠️ layer_completed 事件验证失败！队列长度: {len(events_after)}, 最后事件: {last_event.get('type') if last_event else 'None'}")
                     else:
                         # 重复事件检测
                         logger.info(f"[Planning] [{session_id}] ⚠️ 跳过重复的 layer_{layer_num}_completed 事件")
@@ -1447,7 +1508,9 @@ async def stream_planning(session_id: str):
                 "timestamp": datetime.now().isoformat()
             })
 
-            event_index = 0
+            # ✅ 使用 event_id 跟踪已发送事件，解决 deque rotation 问题
+            last_sent_event_id = 0
+            last_log_time = 0  # 用于控制日志频率
 
             while True:
                 if session_id not in _sessions:
@@ -1456,38 +1519,82 @@ async def stream_planning(session_id: str):
 
                 events_list = _get_session_events_copy(session_id)
 
-                while event_index < len(events_list):
-                    event = events_list[event_index]
-                    event_type = event.get("type")
+                # ✅ 找出所有未发送的事件（event_id > last_sent_event_id）
+                pending_events = [
+                    e for e in events_list
+                    if e.get("_event_id", 0) > last_sent_event_id
+                ]
 
-                    # stream_paused 特殊处理：确保所有其他事件都处理完再关闭
-                    if event_type == "stream_paused":
-                        # 检查队列中是否还有其他未处理的事件（非 stream_paused 类型）
-                        remaining_events = [
-                            e for e in events_list[event_index:]
-                            if e.get("type") != "stream_paused"
-                        ]
-                        if remaining_events:
-                            # 还有其他事件要处理，跳过 stream_paused
-                            logger.info(f"[Planning] [{session_id}] stream_paused: 还有 {len(remaining_events)} 个事件待处理，跳过")
-                            event_index += 1
-                            continue
-                        else:
-                            # 所有事件都处理完了，发送 stream_paused 并关闭连接
-                            logger.info(f"[Planning] [{session_id}] stream_paused: 所有事件已处理，关闭连接")
-                            yield _format_sse_json(event)
-                            event_index += 1
-                            _stream_states[session_id] = "paused"
-                            return
+                if pending_events:
+                    # 按 event_id 排序确保顺序
+                    pending_events.sort(key=lambda e: e.get("_event_id", 0))
+                    pending_count = len(pending_events)
+
+                    # 检测新事件到达
+                    if pending_count > 0:
+                        new_max_id = pending_events[-1].get("_event_id", 0)
+                        new_events_count = new_max_id - last_sent_event_id
+                        if new_events_count > 0:
+                            logger.info(f"[Planning] [{session_id}] 🔔 检测到 {new_events_count} 个新事件 (event_id: {last_sent_event_id} → {new_max_id})")
+
+                    # 打印队列状态
+                    pending_types = [e.get("type") for e in pending_events[:20]]
+                    if len(pending_events) > 20:
+                        logger.info(f"[Planning] [{session_id}] SSE队列状态: 待发送={pending_count}, 类型前20={pending_types}...")
                     else:
-                        yield _format_sse_json(event)
-                        event_index += 1
+                        logger.info(f"[Planning] [{session_id}] SSE队列状态: 待发送={pending_count}, 类型={pending_types}")
 
-                        if event_type in ["completed", "error"]:
-                            return
+                    # 发送事件
+                    for event in pending_events:
+                        event_type = event.get("type")
+                        event_id = event.get("_event_id", 0)
+
+                        # stream_paused 特殊处理
+                        if event_type == "stream_paused":
+                            # 检查后面是否还有其他事件
+                            remaining_after = [
+                                e for e in events_list
+                                if e.get("_event_id", 0) > event_id and e.get("type") != "stream_paused"
+                            ]
+                            if remaining_after:
+                                logger.info(f"[Planning] [{session_id}] stream_paused: 后面还有 {len(remaining_after)} 个事件，等待处理")
+                                last_sent_event_id = event_id
+                                continue
+                            else:
+                                logger.info(f"[Planning] [{session_id}] stream_paused: 所有事件已处理，发送并关闭连接")
+                                yield _format_sse_json(event)
+                                last_sent_event_id = event_id
+                                _stream_states[session_id] = "paused"
+                                return
+                        else:
+                            # 打印发送详情
+                            if event_type == "dimension_delta":
+                                dim_key = event.get("dimension_key", "?")
+                                accumulated_len = len(event.get("accumulated", ""))
+                                logger.info(f"[Planning] [{session_id}] SSE发送: {event_type} [{dim_key}] accumulated={accumulated_len}")
+                            elif event_type == "layer_completed":
+                                layer = event.get("layer", "?")
+                                dim_count = event.get("dimension_count", 0)
+                                total_chars = event.get("total_chars", 0)
+                                logger.info(f"[Planning] [{session_id}] SSE发送: {event_type} layer={layer}, dims={dim_count}, chars={total_chars}")
+                            else:
+                                logger.info(f"[Planning] [{session_id}] SSE发送: {event_type}")
+
+                            yield _format_sse_json(event)
+                            last_sent_event_id = event_id
+
+                            if event_type in ["completed", "error"]:
+                                return
+                else:
+                    # 空闲状态 - 每 5 秒打印一次
+                    import time
+                    current_time = time.time()
+                    if current_time - last_log_time > 5:
+                        logger.debug(f"[Planning] [{session_id}] SSE 空闲中，等待新事件...")
+                        last_log_time = current_time
 
                 yield ": keep-alive\n\n"
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.3)
 
         except asyncio.CancelledError:
             logger.info(f"[Planning] SSE client disconnected: {session_id}")
@@ -1603,6 +1710,10 @@ async def get_session_status(session_id: str):
     # 【新增】从 LangGraph Checkpoint 获取 messages 和 revision_history
     messages = []
     revision_history = []
+    # ✅ 新增：维度报告数据（用于历史加载恢复完整报告）
+    analysis_reports = {}
+    concept_reports = {}
+    detail_reports = {}
     
     try:
         checkpointer = await get_global_checkpointer()
@@ -1624,6 +1735,11 @@ async def get_session_status(session_id: str):
             
             # 提取修订历史
             revision_history = checkpoint_state.values.get("revision_history", [])
+            
+            # ✅ 新增：提取维度报告数据（用于历史加载恢复完整报告）
+            analysis_reports = checkpoint_state.values.get("analysis_reports", {})
+            concept_reports = checkpoint_state.values.get("concept_reports", {})
+            detail_reports = checkpoint_state.values.get("detail_reports", {})
             
             # 🔧 修复：从 checkpoint 获取最新的暂停状态（覆盖 initial_state 的旧值）
             # 这是解决 Layer 2/3 审查面板不弹出的关键
@@ -1669,7 +1785,106 @@ async def get_session_status(session_id: str):
         "revision_history": revision_history,
         # 【新增】UI 消息列表（从数据库加载）
         "ui_messages": await get_ui_messages_async(session_id),
+        # ✅ 新增：维度报告数据（用于历史加载恢复完整报告）
+        "analysis_reports": analysis_reports,
+        "concept_reports": concept_reports,
+        "detail_reports": detail_reports,
     }
+
+
+# ============================================
+# Signal-Fetch Pattern: REST API 获取层级报告
+# ============================================
+
+@router.get("/api/planning/sessions/{session_id}/layer/{layer}/reports")
+async def get_layer_reports(session_id: str, layer: int):
+    """
+    【Signal-Fetch Pattern】从 Checkpoint 获取指定层级的完整维度报告
+    
+    这个 API 是"单一真实源"的数据拉取端点，前端在收到 SSE layer_completed 信号后，
+    调用此 API 获取完整、可靠的维度报告数据，避免 SSE 传输中数据丢失的问题。
+    
+    Args:
+        session_id: 会话 ID
+        layer: 层级编号 (1/2/3)
+        
+    Returns:
+        {
+            "layer": 1,
+            "reports": { "dimension_key": "content", ... },
+            "report_content": "合并后的完整报告",
+            "project_name": "...",
+            "completed": true
+        }
+    """
+    # 验证层级有效
+    if layer not in [1, 2, 3]:
+        raise HTTPException(status_code=400, detail=f"Invalid layer: {layer}. Must be 1, 2, or 3.")
+    
+    # 验证 session 存在
+    db_session = await get_session_async(session_id)
+    if not db_session:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    
+    try:
+        # 从 Checkpoint 获取完整状态
+        checkpointer = await get_global_checkpointer()
+        graph = create_village_planning_graph(checkpointer=checkpointer)
+        config = {"configurable": {"thread_id": session_id}}
+        checkpoint_state = await graph.aget_state(config)
+        
+        if not checkpoint_state or not checkpoint_state.values:
+            raise HTTPException(status_code=404, detail=f"No checkpoint found for session: {session_id}")
+        
+        # 根据层级获取对应的维度报告
+        project_name = checkpoint_state.values.get("project_name", "村庄规划")
+        
+        if layer == 1:
+            reports = checkpoint_state.values.get("analysis_reports", {})
+            layer_completed = checkpoint_state.values.get("layer_1_completed", False)
+            from src.utils.report_utils import generate_analysis_report
+            report_content = generate_analysis_report(reports, project_name)
+        elif layer == 2:
+            reports = checkpoint_state.values.get("concept_reports", {})
+            layer_completed = checkpoint_state.values.get("layer_2_completed", False)
+            from src.utils.report_utils import generate_concept_report
+            report_content = generate_concept_report(reports, project_name)
+        else:  # layer == 3
+            reports = checkpoint_state.values.get("detail_reports", {})
+            layer_completed = checkpoint_state.values.get("layer_3_completed", False)
+            from src.utils.report_utils import generate_detail_report
+            report_content = generate_detail_report(reports, project_name)
+        
+        # 计算统计数据
+        total_chars = sum(len(v) for v in reports.values()) if reports else 0
+        dimension_count = len(reports) if reports else 0
+        
+        # ✅ 详细日志：追踪每个维度的内容长度
+        logger.info(f"[Planning API] [{session_id}] === REST API Layer {layer} 数据 ===")
+        logger.info(f"[Planning API] [{session_id}] 维度数量: {dimension_count}, 总字符数: {total_chars}")
+        if reports:
+            for key, value in reports.items():
+                logger.info(f"[Planning API] [{session_id}]   - {key}: {len(value)} chars")
+        else:
+            logger.warning(f"[Planning API] [{session_id}] ⚠️ reports 为空！")
+        
+        return {
+            "layer": layer,
+            "reports": reports,
+            "report_content": report_content,
+            "project_name": project_name,
+            "completed": layer_completed,
+            "stats": {
+                "dimension_count": dimension_count,
+                "total_chars": total_chars
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Planning API] [{session_id}] Failed to get layer {layer} reports: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get layer reports: {str(e)}")
 
 
 @router.post("/api/planning/messages/{session_id}")

@@ -344,7 +344,10 @@ class UnifiedPlannerBase(ABC):
             # 注意：llm.stream() 不会触发 StreamingCallback.on_llm_new_token()
             # 所以需要在这里直接调用 on_token_callback
             accumulated = ""
+            chunk_count = 0
+            logger.info(f"[{self.dimension_name}] 开始流式调用 LLM, on_token_callback={'已设置' if on_token_callback else '未设置'}")
             for chunk in llm.stream([HumanMessage(content=prompt)]):
+                chunk_count += 1
                 if hasattr(chunk, 'content') and chunk.content:
                     accumulated += chunk.content
                     # 直接调用回调，将 token 推送到前端
@@ -353,6 +356,7 @@ class UnifiedPlannerBase(ABC):
                             on_token_callback(chunk.content, accumulated)
                         except Exception as cb_error:
                             logger.warning(f"[{self.dimension_name}] token回调失败: {cb_error}")
+            logger.info(f"[{self.dimension_name}] 流式调用完成, chunk数={chunk_count}, 总长度={len(accumulated)}")
             return accumulated
         else:
             # 阻塞调用（原有逻辑）

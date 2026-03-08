@@ -41,6 +41,7 @@ class AnalysisState(TypedDict):
     # 输入数据
     raw_data: str  # 原始村庄数据
     project_name: str  # 项目名称
+    session_id: str  # 会话ID（用于流式输出事件）
 
     # 中间状态 - 用于并行分析
     subjects: List[str]  # 待分析的维度列表
@@ -62,6 +63,8 @@ class DimensionAnalysisState(TypedDict):
     dimension_name: str  # 维度名称
     raw_data: str  # 原始数据
     analysis_result: str  # 分析结果
+    knowledge_cache: Dict[str, str]  # 知识缓存
+    session_id: str  # 会话ID（用于流式输出事件）
 
 
 # ==========================================
@@ -148,7 +151,9 @@ def map_dimensions(state: AnalysisState) -> List[Send]:
     Returns:
         Send 对象列表，每个 Send 指向 analyze_dimension 节点并携带独立状态
     """
-    logger.info(f"[子图-Map] 开始分发 {len(state['subjects'])} 个分析维度")
+    # 【调试】打印 session_id 传递情况
+    session_id_debug = state.get("session_id", "(未设置)")
+    logger.info(f"[子图-Map] 开始分发 {len(state['subjects'])} 个分析维度, session_id={session_id_debug}")
 
     # 为每个维度创建 Send 对象
     sends = []
@@ -447,7 +452,8 @@ def create_analysis_subgraph() -> StateGraph:
 
 async def call_analysis_subgraph(
     raw_data: str,
-    project_name: str = "村庄"
+    project_name: str = "村庄",
+    session_id: str = ""
 ) -> Dict[str, Any]:
     """
     调用现状分析子图的包装函数
@@ -457,6 +463,7 @@ async def call_analysis_subgraph(
     Args:
         raw_data: 村庄原始数据
         project_name: 项目名称
+        session_id: 会话ID（用于流式输出事件）
 
     Returns:
         包含最终分析报告的字典
@@ -470,6 +477,7 @@ async def call_analysis_subgraph(
     initial_state: AnalysisState = {
         "raw_data": raw_data,
         "project_name": project_name,
+        "session_id": session_id,
         "subjects": [],
         "analyses": [],
         "analysis_reports": {},

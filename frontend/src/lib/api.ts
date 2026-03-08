@@ -192,6 +192,11 @@ export interface SessionStatusResponse {
 
   // 【新增】UI 消息列表
   ui_messages?: UIMessage[];
+  
+  // ✅ 新增：维度报告数据（用于历史加载恢复完整报告）
+  analysis_reports?: Record<string, string>;
+  concept_reports?: Record<string, string>;
+  detail_reports?: Record<string, string>;
 }
 
 // UI 消息类型（用于持久化存储）
@@ -204,6 +209,19 @@ export interface UIMessage {
   message_type: string;
   message_metadata?: Record<string, unknown>;
   timestamp: string;
+}
+
+// 【Signal-Fetch Pattern】层级报告响应类型
+export interface LayerReportsResponse {
+  layer: number;
+  reports: Record<string, string>;  // 维度键 -> 维度内容
+  report_content: string;           // 合并后的完整报告
+  project_name: string;
+  completed: boolean;               // 该层级是否完成
+  stats: {
+    dimension_count: number;
+    total_chars: number;
+  };
 }
 
 export interface FileUploadResponse {
@@ -324,10 +342,55 @@ export const planningApi = {
     // Helper to parse SSE event
     function parseEvent(event: MessageEvent, type: PlanningSSEEventType): void {
       try {
-        const data = JSON.parse(event.data) as PlanningSSEDataBase;
+        const rawData = event.data;
+        const data = JSON.parse(rawData) as PlanningSSEDataBase;
+        
+        // ✅ Signal-Fetch Pattern: SSE 只发送轻量信号
+        if (type === 'layer_completed') {
+          const layer = (data as any).layer || '?';
+          const hasData = (data as any).has_data ?? false;
+          const dimensionCount = (data as any).dimension_count || 0;
+          const totalChars = (data as any).total_chars || 0;
+          
+          console.log(`[SSE] layer_completed signal received:`, {
+            layer,
+            has_data: hasData,
+            dimension_count: dimensionCount,
+            total_chars: totalChars,
+            rawDataLength: rawData?.length || 0,
+          });
+          
+          // 信号模式下，has_data 表示后端是否有数据
+          if (!hasData) {
+            console.warn(`[SSE] ⚠️ layer_completed 信号显示后端无数据，前端将从 REST API 获取`);
+          }
+        } else if (type === 'dimension_complete') {
+          const dimKey = (data as any).dimension_key || '?';
+          const fullContent = (data as any).full_content || '';
+          console.log(`[SSE] dimension_complete: ${dimKey} (${fullContent.length} chars)`);
+        } else if (type === 'dimension_delta') {
+          // ✅ 增强日志：记录详细的事件信息
+          const dimKey = (data as any).dimension_key || '?';
+          const accumulated = (data as any).accumulated || '';
+          const delta = (data as any).delta || '';
+          const layer = (data as any).layer || '?';
+          
+          // 每隔一定字符数记录一次（里程碑日志）
+          const milestones = [100, 500, 1000, 2000, 5000];
+          const isMilestone = milestones.some(m => 
+            accumulated.length >= m && accumulated.length < m + 50
+          );
+          
+          if (accumulated.length <= 10 || isMilestone) {
+            console.log(`[SSE] dimension_delta: ${dimKey} (layer=${layer}, accumulated=${accumulated.length}, delta=${delta.length})`);
+          }
+        }
+        
         onEvent({ type, data, session_id: sessionId });
       } catch (error) {
         console.error(`[SSE] Failed to parse ${type}:`, error);
+        console.error(`[SSE] Raw data length: ${event.data?.length || 0}`);
+        console.error(`[SSE] Raw data preview: ${event.data?.substring(0, 500)}...`);
       }
     }
 
@@ -350,43 +413,43 @@ export const planningApi = {
     }
 
     // Special handling for terminal events
-    // MDN 最佳实践：让后端主动关闭连接，前端不要主动调用 es.close()
-    // 后端发送 stream_paused/completed 后会结束 HTTP 响应
-    // EventSource 会自动检测到连接关闭 (readyState 变为 CLOSED)
+    // 🔧 架构优化：遵循"显式终态协议"
+    // 后端发送 stream_paused/completed 表示所有数据已发送完毕
+    // 使用 queueMicrotask 确保 UI 更新已提交后再关闭连接
 
     es.addEventListener('pause', (e) => {
       connectionState = 'paused';
       parseEvent(e, 'pause');
-      // 🔧 修复：延迟关闭连接，确保 dimension_revised 等事件能被处理完成
-      // 使用 requestAnimationFrame + setTimeout 确保微任务队列清空后再关闭
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          if (es.readyState !== EventSource.CLOSED) {
-            es.close();
-            console.log('[SSE] Connection safely closed after ensuring event queue processing.');
-          }
-        }, 300);
+      // 使用 queueMicrotask 确保 React state 更新已提交后再关闭
+      queueMicrotask(() => {
+        if (es.readyState !== EventSource.CLOSED) {
+          es.close();
+          console.log('[SSE] Connection closed after pause event (via queueMicrotask)');
+        }
       });
     });
 
     es.addEventListener('stream_paused', (e) => {
       connectionState = 'paused';
       parseEvent(e, 'pause'); // Also trigger pause for compatibility
-      // 🔧 修复：延迟关闭连接，确保 dimension_revised 等事件能被处理完成
-      requestAnimationFrame(() => {
-        setTimeout(() => {
-          if (es.readyState !== EventSource.CLOSED) {
-            es.close();
-            console.log('[SSE] Connection safely closed after stream_paused event.');
-          }
-        }, 300);
+      // 后端确保所有事件已发送，可以安全关闭
+      queueMicrotask(() => {
+        if (es.readyState !== EventSource.CLOSED) {
+          es.close();
+          console.log('[SSE] Connection closed after stream_paused event (via queueMicrotask)');
+        }
       });
     });
 
     es.addEventListener('completed', (e) => {
       parseEvent(e, 'completed');
-      // 🔧 修复：主动关闭连接，阻止自动重连
-      es.close();
+      // 任务完成，立即关闭连接
+      queueMicrotask(() => {
+        if (es.readyState !== EventSource.CLOSED) {
+          es.close();
+          console.log('[SSE] Connection closed after completed event');
+        }
+      });
     });
 
     // Error event listener for named 'error' events from server
@@ -430,6 +493,37 @@ export const planningApi = {
 
     es.onopen = () => {
       connectionState = 'connected';
+    };
+
+    // 🔧 防御性编程：兜底超时保护
+    // 防止后端异常导致连接挂死，5 分钟无活动则关闭
+    const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟
+    let lastActivityTime = Date.now();
+
+    // 监听所有消息，重置活动时间
+    const originalOnMessage = es.onmessage;
+    es.onmessage = (event) => {
+      lastActivityTime = Date.now();
+      if (originalOnMessage) {
+        originalOnMessage.call(es, event);
+      }
+    };
+
+    // 定期检查连接活动状态
+    const idleCheckInterval = setInterval(() => {
+      const idleTime = Date.now() - lastActivityTime;
+      if (idleTime > IDLE_TIMEOUT_MS && es.readyState !== EventSource.CLOSED) {
+        console.warn('[SSE] Connection idle timeout (5 min), closing');
+        clearInterval(idleCheckInterval);
+        es.close();
+      }
+    }, 60000); // 每分钟检查一次
+
+    // 清理函数：关闭连接时清除定时器
+    const originalClose = es.close.bind(es);
+    es.close = () => {
+      clearInterval(idleCheckInterval);
+      originalClose();
     };
 
     return es;
@@ -480,6 +574,17 @@ export const planningApi = {
    */
   async getStatus(sessionId: string): Promise<SessionStatusResponse> {
     return apiRequest<SessionStatusResponse>(`/api/planning/status/${sessionId}`);
+  },
+
+  /**
+   * 【Signal-Fetch Pattern】获取指定层级的维度报告
+   * GET /api/planning/sessions/{session_id}/layer/{layer}/reports
+   * 
+   * 从 Checkpoint 获取完整、可靠的维度报告数据，
+   * 避免依赖 SSE 传输中可能不完整的数据。
+   */
+  async getLayerReports(sessionId: string, layer: number): Promise<LayerReportsResponse> {
+    return apiRequest<LayerReportsResponse>(`/api/planning/sessions/${sessionId}/layer/${layer}/reports`);
   },
 
   /**

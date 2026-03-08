@@ -55,6 +55,7 @@ class VillagePlanningState(TypedDict):
     village_data: str              # 村庄基础数据
     task_description: str          # 规划任务描述
     constraints: str               # 约束条件
+    session_id: str                # 会话ID（用于流式输出事件）
 
     # 流程控制
     current_layer: int             # 当前执行层级 (1/2/3)
@@ -142,7 +143,8 @@ async def execute_layer1_analysis(state: VillagePlanningState) -> Dict[str, Any]
         # 调用现状分析子图
         result = await call_analysis_subgraph(
             raw_data=state["village_data"],
-            project_name=state["project_name"]
+            project_name=state["project_name"],
+            session_id=state.get("session_id", "")
         )
 
         if result["success"]:
@@ -199,7 +201,8 @@ async def execute_layer2_concept(state: VillagePlanningState) -> Dict[str, Any]:
             project_name=state["project_name"],
             analysis_reports=state.get("analysis_reports", {}),
             task_description=state["task_description"],
-            constraints=state.get("constraints", "无特殊约束")
+            constraints=state.get("constraints", "无特殊约束"),
+            session_id=state.get("session_id", "")
         )
 
         if result["success"]:
@@ -264,7 +267,8 @@ async def execute_layer3_detail(state: VillagePlanningState) -> Dict[str, Any]:
             # 新增：传递适配器配置
             enable_adapters=state.get("enable_adapters", False),
             adapter_config=state.get("adapter_config", {}),
-            village_data=state.get("village_data", "")
+            village_data=state.get("village_data", ""),
+            session_id=state.get("session_id", "")
         )
 
         if result["success"]:

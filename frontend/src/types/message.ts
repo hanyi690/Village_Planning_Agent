@@ -54,6 +54,19 @@ export interface RevisionItem {
   timestamp: string;
 }
 
+// Dimension Progress - 维度进度项（支持多维度并行执行）
+export type DimensionStatus = 'pending' | 'streaming' | 'completed' | 'failed';
+
+export interface DimensionProgressItem {
+  dimensionKey: string;
+  dimensionName: string;
+  layer: number;
+  status: DimensionStatus;
+  wordCount: number;
+  startedAt?: string;
+  completedAt?: string;
+}
+
 // Action Button
 export interface ActionButton {
   id: string;

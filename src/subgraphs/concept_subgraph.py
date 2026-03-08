@@ -51,6 +51,7 @@ class ConceptState(TypedDict):
     project_name: str            # 项目名称
     task_description: str         # 规划任务描述
     constraints: str             # 约束条件
+    session_id: str              # 会话ID（用于流式输出事件）
 
     # 中间状态 - 用于并行分析
     dimensions: List[str]        # 待分析的维度列表
@@ -77,6 +78,7 @@ class ConceptDimensionState(TypedDict):
     task_description: str         # 规划任务
     constraints: str             # 约束条件
     concept_result: str          # 分析结果
+    session_id: str              # 会话ID（用于流式输出事件）
 
 
 # ==========================================
@@ -540,7 +542,8 @@ async def call_concept_subgraph(
     project_name: str,
     analysis_reports: Dict[str, str] = None,
     task_description: str = "制定村庄总体规划思路",
-    constraints: str = "无特殊约束"
+    constraints: str = "无特殊约束",
+    session_id: str = ""
 ) -> Dict[str, Any]:
     """
     调用规划思路子图的包装函数
@@ -550,6 +553,7 @@ async def call_concept_subgraph(
         analysis_reports: 各维度现状分析报告字典（用于部分状态传递）
         task_description: 规划任务描述
         constraints: 约束条件
+        session_id: 会话ID（用于流式输出事件）
 
     Returns:
         包含最终规划思路报告的字典
@@ -565,6 +569,7 @@ async def call_concept_subgraph(
         "project_name": project_name,
         "task_description": task_description,
         "constraints": constraints,
+        "session_id": session_id,
         "dimensions": [],
         "concept_analyses": [],
         "concept_reports": {},

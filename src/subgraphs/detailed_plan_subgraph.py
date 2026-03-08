@@ -86,6 +86,7 @@ class DetailedPlanState(TypedDict):
     task_description: str
     constraints: str
     village_data: str              # 村庄原始数据（用于适配器）
+    session_id: str                # 会话ID（用于流式输出事件）
 
     # 规划维度控制
     required_dimensions: List[str] # 需要生成的维度列表
@@ -146,6 +147,8 @@ class DetailedDimensionState(TypedDict):
     filtered_detail: str           # 筛选后的前序详细规划文本
     # 【新增】RAG 知识缓存
     knowledge_cache: Dict[str, str]  # 维度 -> 知识上下文
+    # 【新增】会话ID（用于流式输出事件）
+    session_id: str                # 会话ID
 
 
 # ==========================================
@@ -445,6 +448,9 @@ def create_parallel_tasks_with_state_filtering(
             "session_id": state.get("session_id", "")
         })
 
+        # 【调试】打印 session_id 传递情况
+        logger.debug(f"[状态筛选] {dim}: session_id={state.get('session_id', '(空)')}")
+
         sends.append(Send("generate_dimension_plan", dimension_state))
         
         logger.info(f"[状态筛选] {dim}: "
@@ -499,7 +505,8 @@ def generate_dimension_plan(
     project_name = state["project_name"]
     session_id = state.get("session_id", "")
 
-    logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key})")
+    # 【调试】打印 session_id 值
+    logger.info(f"[子图-L3-Agent] 开始生成 {dimension_name} ({dimension_key}), session_id={session_id or '(空)'}")
     logger.debug(f"[子图-L3-Agent] {dimension_name} 输入数据: "
                f"filtered_analysis={len(state.get('filtered_analysis', ''))}字符, "
                f"filtered_concept={len(state.get('filtered_concept', ''))}字符, "
@@ -911,7 +918,8 @@ async def call_detailed_plan_subgraph(
     # 新增：适配器配置参数
     enable_adapters: bool = False,
     adapter_config: Dict[str, List[str]] = None,
-    village_data: str = ""
+    village_data: str = "",
+    session_id: str = ""
 ) -> Dict[str, Any]:
     """
     调用详细规划子图的包装函数
@@ -927,6 +935,7 @@ async def call_detailed_plan_subgraph(
         enable_adapters: 是否启用适配器
         adapter_config: 适配器配置字典
         village_data: 村庄原始数据
+        session_id: 会话ID（用于流式输出事件）
 
     Returns:
         包含最终详细规划报告的字典
@@ -961,6 +970,7 @@ async def call_detailed_plan_subgraph(
         "task_description": task_description,
         "constraints": constraints,
         "village_data": village_data,
+        "session_id": session_id,
         "required_dimensions": required_dimensions,
         "completed_dimensions": [],
         "current_dimension": "",

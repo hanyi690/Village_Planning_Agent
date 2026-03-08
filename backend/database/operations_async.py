@@ -86,6 +86,7 @@ def _ui_message_to_dict(db_message: UIMessage) -> Dict[str, Any]:
     return {
         "id": db_message.id,
         "session_id": db_message.session_id,
+        "message_id": db_message.message_id,  # ✅ 前端消息ID（用于消息恢复和去重）
         "role": db_message.role,
         "content": db_message.content,
         "message_type": db_message.message_type,

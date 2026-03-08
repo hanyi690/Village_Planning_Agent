@@ -57,7 +57,8 @@ class AnalyzeDimensionNode(BaseNode):
         if not dimension_key:
             return {"error": "缺少维度信息"}
 
-        logger.info(f"[子图-分析] 开始执行 {dimension_name} ({dimension_key})")
+        # 【调试】打印 session_id 传递情况
+        logger.info(f"[子图-分析] 开始执行 {dimension_name} ({dimension_key}), session_id={session_id or '(空)'}")
 
         try:
             # 使用 GenericPlannerFactory 创建规划器
@@ -65,8 +66,12 @@ class AnalyzeDimensionNode(BaseNode):
             planner = GenericPlannerFactory.create_planner(dimension_key)
 
             # ✅ 创建 Token 回调函数 - 用于实时流式输出
+            callback_count = [0]  # 使用列表来在闭包中计数
             def on_token_callback(token: str, accumulated: str):
                 """Token 级回调：将增量内容实时发送到 SSE"""
+                callback_count[0] += 1
+                if callback_count[0] <= 3:  # 只打印前3次
+                    logger.info(f"[子图-分析] Token回调 #{callback_count[0]}: token长度={len(token)}, 累积长度={len(accumulated)}")
                 if session_id:
                     try:
                         from backend.api.planning import append_dimension_delta_event
@@ -80,6 +85,8 @@ class AnalyzeDimensionNode(BaseNode):
                         )
                     except Exception as e:
                         logger.warning(f"[子图-分析] Token 回调失败: {e}")
+                else:
+                    logger.warning(f"[子图-分析] Token回调时 session_id 为空")
 
             # ✅ 重置维度增量状态（确保新维度的流式输出从头开始）
             if session_id:
@@ -510,7 +517,8 @@ class GenerateDimensionPlanNode(BaseNode):
         project_name = state["project_name"]
         session_id = state.get("session_id", "")
 
-        # 日志由 detailed_plan_subgraph.py 统一输出，避免重复
+        # 【调试】打印 session_id 值
+        logger.info(f"[GenerateDimensionPlanNode] {dimension_name} session_id={session_id or '(空)'}")
 
         try:
             # 使用子图中的原始函数来执行（保持一致性）

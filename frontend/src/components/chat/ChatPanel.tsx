@@ -23,9 +23,9 @@ import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/li
 import { logger } from '@/lib/logger';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import { useTaskController } from '@/controllers/TaskController';
-import { useStreamingRender } from '@/hooks/useStreamingRender';
 import MessageList from './MessageList';
 import ReviewPanel from './ReviewPanel';
+import ProgressPanel from './ProgressPanel';
 import DimensionSelector from './DimensionSelector';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faEdit, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
@@ -70,6 +70,15 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     setPendingReviewLayer,  // 🔧 新增：用于 SSE pause 事件更新
     // 层级完成状态
     completedLayers,
+    // 进度面板状态
+    progressPanelVisible,
+    setProgressPanelVisible,
+    dimensionProgress,
+    executingDimensions,
+    currentPhase,
+    setCurrentLayerAndPhase,
+    setDimensionStreaming,
+    setDimensionCompleted,
     // 同步后端状态
     syncBackendState,
     // ✅ 新增：SSE 驱动的层级完成状态更新
@@ -170,42 +179,25 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     });
   }, [setMessages]);
 
-  // 批处理渲染 Hook - 用于维度级流式显示
-  const { addToken, completeDimension } = useStreamingRender(
-    useCallback((dimensionKey: string, content: string) => {
-      setDimensionContents(prev => {
-        const next = new Map(prev);
-        next.set(dimensionKey, content);
-        return next;
-      });
-
-      // 可以在这里添加UI更新逻辑
-      console.log(`[ChatPanel] Dimension content updated: ${dimensionKey}, length: ${content.length}`);
-    }, []),
-    { batchSize: 10, batchWindow: 50, debounceMs: 100 }
-  );
-
   // 维度级流式回调
-  // ✅ 修复：只更新 dimensionContents，不再更新 messages（解决并行更新竞态问题）
-  // LayerReportMessage 组件从 dimensionContents 读取实时内容
+  // 直接更新 dimensionContents，内容立即显示（移除批处理，避免 key 不一致问题）
   const handleDimensionDelta = useCallback((
     dimensionKey: string,
     delta: string,
     accumulated: string,
     layer?: number
   ) => {
+    const layerNum = layer || currentLayer || 1;
+
     // 更新维度内容缓存（独立 Map，每个维度更新不会影响其他维度）
     setDimensionContents(prev => {
-      const key = `${layer}_${dimensionKey}`;
+      const key = `${layerNum}_${dimensionKey}`;
       return new Map(prev).set(key, accumulated);
     });
 
-    // 使用批处理渲染
-    addToken(dimensionKey, delta, accumulated);
-
-    // 不再调用 setMessages 更新 dimensionReports，避免竞态条件
-    // LayerReportMessage 组件通过 dimensionContents prop 获取实时内容
-  }, [addToken]);
+    // 更新进度面板状态
+    setDimensionStreaming(layerNum, dimensionKey, getDimensionName(dimensionKey));
+  }, [currentLayer, setDimensionStreaming]);
 
   const handleDimensionComplete = useCallback((
     dimensionKey: string,
@@ -213,25 +205,27 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     fullContent: string,
     layer?: number
   ) => {
+    const layerNum = layer || currentLayer || 1;
+
     // 更新维度内容缓存
     setDimensionContents(prev => {
-      const key = `${layer}_${dimensionKey}`;
+      const key = `${layerNum}_${dimensionKey}`;
       return new Map(prev).set(key, fullContent);
     });
 
-    // 标记维度完成，刷新剩余内容
-    completeDimension(dimensionKey);
-
     // 更新消息状态为完成（如果消息存在）
-    const messageId = `dimension_${layer}_${dimensionKey}`;
+    const messageId = `dimension_${layerNum}_${dimensionKey}`;
     setMessages(prev => prev.map(msg =>
       msg.id === messageId
         ? { ...msg, content: fullContent, wordCount: fullContent.length, streamingState: 'completed' as const }
         : msg
     ));
 
+    // 更新进度面板状态：标记维度完成
+    setDimensionCompleted(layerNum, dimensionKey, fullContent.length);
+
     console.log(`[ChatPanel] Dimension complete: ${dimensionKey} (${fullContent.length} chars)`);
-  }, [completeDimension, setMessages]);
+  }, [setMessages, currentLayer, setDimensionCompleted]);
 
   const handleLayerProgress = useCallback((
     layer: number,
@@ -242,17 +236,134 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     console.log(`[ChatPanel] Layer ${layer} progress: ${completed}/${total}`);
   }, []);
 
-  const handleLayerCompleted = useCallback((
+  // ✅ Signal-Fetch Pattern: 层级完成后的数据拉取函数
+  const fetchLayerReportsFromBackend = useCallback(async (layer: number): Promise<{
+    reports: Record<string, string>;
+    reportContent: string;
+  } | null> => {
+    if (!taskId) {
+      console.warn('[ChatPanel] No taskId, cannot fetch layer reports');
+      return null;
+    }
+    
+    try {
+      console.log(`[ChatPanel] Fetching layer ${layer} reports from backend (Signal-Fetch Pattern)...`);
+      const response = await planningApi.getLayerReports(taskId, layer);
+      
+      // ✅ 增强调试日志：追踪 REST API 返回数据的完整性
+      const reportKeys = Object.keys(response.reports || {});
+      const reportsWithContent = reportKeys.filter(k => response.reports[k] && response.reports[k].length > 0);
+      
+      console.log(`[ChatPanel] Layer ${layer} REST API 响应:`, {
+        dimensionCount: response.stats.dimension_count,
+        totalChars: response.stats.total_chars,
+        completed: response.completed,
+        reportKeysCount: reportKeys.length,
+        reportsWithContentCount: reportsWithContent.length,
+        reportKeys: reportKeys,
+      });
+      
+      // ✅ 检查数据完整性
+      if (reportsWithContent.length === 0) {
+        console.warn(`[ChatPanel] ⚠️ REST API 返回的维度报告内容全为空！`);
+      } else if (reportsWithContent.length < reportKeys.length) {
+        console.warn(`[ChatPanel] ⚠️ REST API 返回的维度报告部分为空: ${reportKeys.length - reportsWithContent.length} 个维度`);
+      }
+      
+      return {
+        reports: response.reports,
+        reportContent: response.report_content,
+      };
+    } catch (error) {
+      console.error(`[ChatPanel] Failed to fetch layer ${layer} reports:`, error);
+      return null;
+    }
+  }, [taskId]);
+
+  const handleLayerCompleted = useCallback(async (
     layer: number,
     reportContent: string,
     dimensionReports: Record<string, string>
   ) => {
-    console.log(`[ChatPanel] Layer ${layer} completed`, {
-      reportLength: reportContent.length,
-      dimensionCount: Object.keys(dimensionReports).length,
+    console.log(`[ChatPanel] Layer ${layer} completed signal received (SSE data)`, {
+      reportLength: reportContent?.length || 0,
+      dimensionCount: Object.keys(dimensionReports || {}).length,
+    });
+    
+    // ✅ 调试日志：追踪 dimensionContents 当前状态
+    const currentLayerContents: string[] = [];
+    dimensionContents.forEach((content, key) => {
+      const parts = key.split('_');
+      if (parts.length >= 2) {
+        const keyLayer = parseInt(parts[0], 10);
+        if (keyLayer === layer) {
+          currentLayerContents.push(`${key}: ${content.length} chars`);
+        }
+      }
+    });
+    console.log(`[ChatPanel] dimensionContents 中 Layer ${layer} 的数据:`, {
+      count: currentLayerContents.length,
+      details: currentLayerContents,
+    });
+    
+    // ✅ Signal-Fetch Pattern: 优先从后端 REST API 获取完整数据
+    let finalReports: Record<string, string> = { ...dimensionReports };
+    let finalReportContent = reportContent;
+    
+    // 尝试从后端获取完整数据
+    const backendData = await fetchLayerReportsFromBackend(layer);
+    
+    if (backendData && backendData.reports && Object.keys(backendData.reports).length > 0) {
+      // 使用后端 REST API 返回的完整数据
+      finalReports = backendData.reports;
+      finalReportContent = backendData.reportContent;
+      
+      // ✅ 详细日志：追踪每个维度的内容长度
+      console.log(`[ChatPanel] Using REST API data: ${Object.keys(finalReports).length} dimensions, ${finalReportContent.length} chars`);
+      Object.entries(finalReports).forEach(([key, content]) => {
+        console.log(`[ChatPanel]   - ${key}: ${content?.length || 0} chars`);
+      });
+    } else {
+      // 回退：合并 SSE 数据和 dimensionContents（流式累积数据）
+      console.log(`[ChatPanel] REST API failed, falling back to SSE + dimensionContents merge`);
+      
+      dimensionContents.forEach((content, key) => {
+        const parts = key.split('_');
+        if (parts.length >= 2) {
+          const keyLayer = parseInt(parts[0], 10);
+          const dimKey = parts.slice(1).join('_');
+          
+          if (keyLayer === layer && content && content.length > 0) {
+            const sseContent = finalReports[dimKey] || '';
+            if (content.length > sseContent.length) {
+              finalReports[dimKey] = content;
+            }
+          }
+        }
+      });
+      
+      // 重新生成报告内容（如果 SSE 的 reportContent 为空或太短）
+      const totalChars = Object.values(finalReports).reduce((sum, c) => sum + (c?.length || 0), 0);
+      if (!reportContent || reportContent.length < totalChars * 0.5) {
+        finalReportContent = Object.entries(finalReports)
+          .map(([key, content]) => `## ${getDimensionName(key)}\n\n${content}`)
+          .join('\n\n---\n\n');
+      }
+    }
+
+    const finalWordCount = Object.values(finalReports).reduce((sum, c) => sum + (c?.length || 0), 0);
+
+    // ✅ 调试日志：追踪最终数据的完整性
+    const finalReportDetails = Object.entries(finalReports).map(([key, content]) => 
+      `${key}: ${content?.length || 0} chars`
+    );
+    console.log(`[ChatPanel] Layer ${layer} 最终数据:`, {
+      dimensionCount: Object.keys(finalReports).length,
+      totalChars: finalWordCount,
+      details: finalReportDetails,
     });
 
-    // ✅ 合并 layer_stream_complete 功能：直接更新 completedLayers 状态
+    // ✅ 更新层级完成状态
     setUILayerCompleted(layer, true);
 
     const layerReportId = `layer_report_${layer}`;
@@ -262,21 +373,19 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
     if (!hasLayerReport) {
       // 创建 LayerReportMessage
-      const wordCount = Object.values(dimensionReports).reduce((sum, content) => sum + content.length, 0);
-      
       addMessage({
         ...createBaseMessage('assistant'),
         id: layerReportId,
         type: 'layer_completed' as const,
         layer: layer,
-        content: reportContent,
+        content: finalReportContent,
         summary: {
-          word_count: wordCount as number,
+          word_count: finalWordCount as number,
           key_points: [],
-          dimension_count: Object.keys(dimensionReports).length,
+          dimension_count: Object.keys(finalReports).length,
         },
-        fullReportContent: reportContent,
-        dimensionReports: dimensionReports,
+        fullReportContent: finalReportContent,
+        dimensionReports: finalReports,
         actions: [
           {
             id: 'view_details',
@@ -289,44 +398,46 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         ],
       });
     } else {
-      // 更新现有消息
-      const wordCount = Object.values(dimensionReports).reduce((sum, content) => sum + content.length, 0);
-      
+      // 更新现有消息（从 handleLayerStarted 创建的空消息更新为完整数据）
       setMessages(prev => {
         const updated = prev.map(msg => {
           if (msg.id === layerReportId && msg.type === 'layer_completed') {
-            // 🔧 移除 _pendingStorage 标记，更新完整数据
+            // ✅ 关键修复：移除 _pendingStorage 标记，确保数据被存储
             const { _pendingStorage, ...rest } = msg as any;
             return {
               ...rest,
-              content: reportContent,
-              fullReportContent: reportContent,
-              dimensionReports: dimensionReports,
+              content: finalReportContent,
+              fullReportContent: finalReportContent,
+              dimensionReports: finalReports,
               summary: {
-                word_count: wordCount as number,
-                key_points: rest.summary?.key_points || [],
-                dimension_count: Object.keys(dimensionReports).length,
+                word_count: finalWordCount as number,
+                key_points: msg.summary?.key_points || [],
+                dimension_count: Object.keys(finalReports).length,
               },
             };
           }
           return msg;
         });
         
-        // 🔧 存储完整数据到数据库
+        // 存储完整数据到数据库
         const updatedMsg = updated.find(m => m.id === layerReportId);
         if (updatedMsg) {
+          // ✅ 关键修复：显式调用 syncMessageToBackend 存储完整数据
           syncMessageToBackend(updatedMsg);
-          console.log(`[ChatPanel] Synced completed layer_report_${layer} to backend`);
+          console.log(`[ChatPanel] Synced completed layer_report_${layer} to backend, wordCount=${finalWordCount}`);
         }
         
         return updated;
       });
     }
-  }, [messages, addMessage, setMessages, showViewer, syncMessageToBackend]);
+  }, [messages, addMessage, setMessages, showViewer, syncMessageToBackend, dimensionContents, fetchLayerReportsFromBackend]);
 
   // ✅ 新增：处理层级开始事件 - 创建空的 LayerReportMessage（预填充维度槽位）
   const handleLayerStarted = useCallback((layer: number, layerName: string) => {
     console.log(`[ChatPanel] Layer ${layer} started - ${layerName}`);
+
+    // 🔧 更新当前层级和阶段（用于 ProgressPanel 显示）
+    setCurrentLayerAndPhase(layer);
 
     const layerLabels: Record<number, string> = {
       1: '现状分析',
@@ -359,14 +470,14 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         summary: {
           word_count: 0,
           key_points: [],
-          dimension_count: dimensionKeys.length,  // 预设维度数量
+          dimension_count: dimensionKeys.length,
         },
         fullReportContent: '',
-        dimensionReports: emptyDimensionReports,  // ✅ 预填充空维度槽位
+        dimensionReports: emptyDimensionReports,
         actions: [],
-        // 🔧 标记为延迟存储，等待 handleLayerCompleted 完成后再存储
+        // ✅ 关键修复：标记为延迟存储，等待层级完成后存储完整数据
         _pendingStorage: true,
-      });
+      } as any);  // 使用 any 类型扩展，因为 _pendingStorage 不在标准类型中
     }
 
     // 🔧 修复：添加层级开始提示消息前检查是否已存在
@@ -385,9 +496,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         progress: 0,
       } as ProgressMessage);
     }
-  }, [messages, addMessage]);
+  }, [messages, addMessage, setCurrentLayerAndPhase]);
 
-  const handlePause = useCallback((
+  const handlePause = useCallback(async (
     layer: number,
     checkpointId: string
   ) => {
@@ -413,7 +524,36 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         }];
       });
     }
-  }, [setCheckpoints, setIsPaused, setPendingReviewLayer]);
+    
+    // ✅ 兜底机制：从 REST API 获取最新层级数据
+    // 当 SSE 的 layer_completed 事件丢失时，确保数据仍能被正确获取
+    if (layer > 0) {
+      console.log(`[ChatPanel] Pause fallback: fetching layer ${layer} data from REST API...`);
+      try {
+        const backendData = await fetchLayerReportsFromBackend(layer);
+        if (backendData && backendData.reports && Object.keys(backendData.reports).length > 0) {
+          console.log(`[ChatPanel] Pause fallback: got ${Object.keys(backendData.reports).length} dimensions, updating dimensionContents`);
+          // 更新 dimensionContents 状态
+          setDimensionContents(prev => {
+            const newMap = new Map(prev);
+            Object.entries(backendData.reports).forEach(([dimKey, content]) => {
+              const key = `${layer}_${dimKey}`;
+              const existing = newMap.get(key) || '';
+              // 只有当 REST API 数据更长时才更新
+              if (!existing || content.length > existing.length) {
+                newMap.set(key, content);
+              }
+            });
+            return newMap;
+          });
+        } else {
+          console.log(`[ChatPanel] Pause fallback: REST API returned no data for layer ${layer}`);
+        }
+      } catch (error) {
+        console.error(`[ChatPanel] Pause fallback: REST API error for layer ${layer}:`, error);
+      }
+    }
+  }, [setCheckpoints, setIsPaused, setPendingReviewLayer, fetchLayerReportsFromBackend, setDimensionContents]);
 
   // 【新增】处理维度修复完成事件
   const handleDimensionRevised = useCallback((data: {
@@ -1054,6 +1194,16 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
             </motion.div>
           )}
 
+          {/* Progress Panel - 执行进度面板 */}
+          <ProgressPanel
+            visible={progressPanelVisible}
+            currentLayer={currentLayer}
+            currentPhase={currentPhase}
+            dimensionProgress={dimensionProgress}
+            executingDimensions={executingDimensions}
+            onClose={() => setProgressPanelVisible(false)}
+          />
+
           {/* Review Panel - 状态驱动 */}
           {isPaused && pendingReviewLayer && (
             <ReviewPanel
@@ -1140,6 +1290,23 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
                 分步
               </motion.button>
             </div>
+
+            {/* Progress Panel Toggle - 进度面板开关 */}
+            <motion.button
+              type="button"
+              onClick={() => setProgressPanelVisible(!progressPanelVisible)}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-all duration-200 flex-shrink-0 ${
+                progressPanelVisible
+                  ? 'bg-blue-100 text-blue-700 ring-1 ring-blue-300'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+              title={progressPanelVisible ? '隐藏进度面板' : '显示进度面板'}
+            >
+              <span>📊</span>
+              <span>{progressPanelVisible ? '隐藏进度' : '进度'}</span>
+            </motion.button>
 
             {/* Text input - grows dynamically */}
             <textarea

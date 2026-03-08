@@ -191,9 +191,10 @@ async def extract_projects_by_llm(
 
     try:
         from src.core.llm_factory import create_llm
+        from src.core.config import LLM_MODEL
 
-        # 使用快速模型
-        llm = create_llm(model="glm-4-flash", temperature=0.1, max_tokens=2000)
+        # 使用配置的模型
+        llm = create_llm(model=LLM_MODEL, temperature=0.1, max_tokens=2000)
 
         prompt = PROJECT_EXTRACTOR_PROMPT.format(content=content)
 

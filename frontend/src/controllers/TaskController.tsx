@@ -181,17 +181,15 @@ export function useTaskController(
   }, [taskId, fetchStatus]);
 
   // SSE 连接管理 (仅用于文本流,不做业务逻辑判断)
-  // 🔧 修复：SSE 连接依赖 taskId 和 status，暂停/完成状态下关闭连接
+  // 🔧 架构优化：SSE 连接仅依赖 taskId，完全解耦 UI 状态
+  // 连接关闭由后端的显式结束信号（stream_paused/completed）控制
+  // 遵循"职责单一原则"和"显式终态协议"
   useEffect(() => {
-    // 🔧 修复：使用 state.status 而不是 stateRef.current.status，确保与依赖一致
-    const currentStatus = state.status;
-    const shouldCloseConnection = currentStatus === 'paused' || currentStatus === 'completed';
-    
-    if (!taskId || shouldCloseConnection) {
-      // 无 taskId 或处于暂停/完成状态时关闭连接
+    if (!taskId) {
+      // 无 taskId 时关闭连接
       if (sseConnectionRef.current) {
         console.log('[TaskController] === SSE 连接关闭 ===');
-        console.log('[TaskController] 原因:', !taskId ? 'taskId 为空' : `状态为 ${currentStatus}`);
+        console.log('[TaskController] 原因: taskId 为空');
         sseConnectionRef.current.close();
         sseConnectionRef.current = null;
       }
@@ -268,16 +266,23 @@ export function useTaskController(
             data.layer_name || ''
           );
         } else if (eventType === 'layer_completed') {
+          // ✅ Signal-Fetch Pattern: SSE 只发送轻量信号
+          // 前端收到信号后会调用 REST API 获取完整数据
           const data = event.data as {
             layer?: number;
-            report_content?: string;
-            dimension_reports?: Record<string, string>;
+            has_data?: boolean;
+            dimension_count?: number;
+            total_chars?: number;
           } || {};
 
+          console.log(`[TaskController] layer_completed signal received: Layer ${data.layer}, has_data=${data.has_data}`);
+
+          // 调用回调，让前端从 REST API 获取完整数据
+          // SSE 数据已不包含 report_content 和 dimension_reports
           callbacksRef.current.onLayerCompleted?.(
             data.layer || 1,
-            data.report_content || '',
-            data.dimension_reports || {}
+            '',  // SSE 不再传输 report_content
+            {}   // SSE 不再传输 dimension_reports
           );
         } else if (eventType === 'pause') {
           const data = event.data as {
@@ -332,7 +337,7 @@ export function useTaskController(
         sseConnectionRef.current = null;
       }
     };
-  }, [taskId, state.status]);  // 🔧 添加 status 依赖，暂停/完成时触发关闭
+  }, [taskId]);  // 🔧 仅依赖 taskId，连接关闭由后端显式信号控制
 
   // Action methods
   const actions: TaskControllerActions = {

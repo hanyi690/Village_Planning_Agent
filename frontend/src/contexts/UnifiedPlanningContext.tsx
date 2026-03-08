@@ -6,7 +6,7 @@
  */
 
 import { createContext, useContext, useState, useCallback, ReactNode, useMemo, useEffect, useRef } from 'react';
-import { Message, PlanningParams, Checkpoint } from '@/types';
+import { Message, PlanningParams, Checkpoint, DimensionProgressItem, DimensionStatus } from '@/types';
 import { VillageInputData } from '@/components/VillageInputForm';
 import { planningApi, dataApi, VillageInfo, VillageSession } from '@/lib/api';
 import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/lib/utils';
@@ -75,6 +75,9 @@ export interface LayerContent {
   checkpointId: string;
 }
 
+// 进度面板阶段类型
+export type ProgressPhase = 'idle' | '现状分析' | '规划思路' | '详细规划' | '修复中';
+
 interface UnifiedPlanningContextType {
   // Conversation state
   conversationId: string;
@@ -108,6 +111,18 @@ interface UnifiedPlanningContextType {
     2: boolean;
     3: boolean;
   };
+
+  // 进度面板状态（支持多维度并行执行）
+  progressPanelVisible: boolean;
+  setProgressPanelVisible: (visible: boolean) => void;
+  dimensionProgress: Map<string, DimensionProgressItem>;
+  executingDimensions: Set<string>;  // 当前执行中的维度 key 集合
+  currentPhase: ProgressPhase;
+  setCurrentLayerAndPhase: (layer: number) => void;  // 🔧 新增：设置当前层级和阶段
+  updateDimensionProgress: (key: string, updates: Partial<DimensionProgressItem>) => void;
+  setDimensionStreaming: (layer: number, dimensionKey: string, dimensionName: string) => void;
+  setDimensionCompleted: (layer: number, dimensionKey: string, wordCount: number) => void;
+  clearDimensionProgress: () => void;
 
   // 同步后端状态的 action
   syncBackendState: (backendData: any) => void;
@@ -209,11 +224,95 @@ export function UnifiedPlanningProvider({
     3: false,
   });
 
+  // 进度面板状态（支持多维度并行执行）
+  const [progressPanelVisible, setProgressPanelVisible] = useState(false);
+  const [dimensionProgress, setDimensionProgress] = useState<Map<string, DimensionProgressItem>>(new Map());
+  const [executingDimensions, setExecutingDimensions] = useState<Set<string>>(new Set());
+  const [currentPhase, setCurrentPhase] = useState<ProgressPhase>('idle');
+
   // 用于跟踪之前的状态，避免不必要的更新
   const previousBackendStateRef = useRef<any>(null);
 
   // 用于跟踪是否正在加载历史消息（避免重复存储）
   const isLoadingHistoryRef = useRef(false);
+
+  // ==================== 进度面板辅助函数 ====================
+
+  // 更新维度进度
+  const updateDimensionProgress = useCallback((key: string, updates: Partial<DimensionProgressItem>) => {
+    setDimensionProgress(prev => {
+      const next = new Map(prev);
+      const existing = next.get(key);
+      if (existing) {
+        next.set(key, { ...existing, ...updates });
+      } else {
+        // 创建新的进度项
+        next.set(key, {
+          dimensionKey: updates.dimensionKey || '',
+          dimensionName: updates.dimensionName || '',
+          layer: updates.layer || 0,
+          status: updates.status || 'pending',
+          wordCount: updates.wordCount || 0,
+          ...updates,
+        });
+      }
+      return next;
+    });
+  }, []);
+
+  // 🔧 新增：设置当前层级和阶段（在 layer_started 事件时调用）
+  const setCurrentLayerAndPhase = useCallback((layer: number) => {
+    setCurrentLayer(layer);
+    setCurrentPhase(
+      layer === 1 ? '现状分析' :
+      layer === 2 ? '规划思路' :
+      layer === 3 ? '详细规划' : 'idle'
+    );
+    console.log(`[UnifiedPlanningContext] Set layer ${layer}, phase updated`);
+  }, []);
+
+  // 设置维度为流式执行状态
+  const setDimensionStreaming = useCallback((layer: number, dimensionKey: string, dimensionName: string) => {
+    const key = `${layer}_${dimensionKey}`;
+    updateDimensionProgress(key, {
+      dimensionKey,
+      dimensionName,
+      layer,
+      status: 'streaming',
+      startedAt: new Date().toISOString(),
+    });
+    setExecutingDimensions(prev => new Set(prev).add(key));
+    // 更新当前阶段（确保一致性）
+    setCurrentPhase(
+      layer === 1 ? '现状分析' :
+      layer === 2 ? '规划思路' :
+      layer === 3 ? '详细规划' : 'idle'
+    );
+  }, [updateDimensionProgress]);
+
+  // 设置维度完成（从执行中集合移除）
+  const setDimensionCompleted = useCallback((layer: number, dimensionKey: string, wordCount: number) => {
+    const key = `${layer}_${dimensionKey}`;
+    updateDimensionProgress(key, {
+      status: 'completed',
+      wordCount,
+      completedAt: new Date().toISOString(),
+    });
+    setExecutingDimensions(prev => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  }, [updateDimensionProgress]);
+
+  // 清空进度状态（会话重置时调用）
+  const clearDimensionProgress = useCallback(() => {
+    setDimensionProgress(new Map());
+    setExecutingDimensions(new Set());
+    setCurrentPhase('idle');
+  }, []);
+
+  // ==================== 结束进度面板辅助函数 ====================
 
   // History state
   const [villages, setVillages] = useState<VillageInfo[]>([]);
@@ -375,6 +474,19 @@ export function UnifiedPlanningProvider({
 
     if (backendData.execution_error) {
       console.error('[UnifiedPlanningContext] Backend error:', backendData.execution_error);
+    }
+
+    // 🔧 新增：同步 currentLayer 和 currentPhase（用于进度面板显示）
+    const currentLayerValue = backendData.current_layer;
+    if (currentLayerValue && currentLayerValue >= 1 && currentLayerValue <= 3) {
+      setCurrentLayer(currentLayerValue);
+      const phaseMap: Record<number, '现状分析' | '规划思路' | '详细规划'> = {
+        1: '现状分析',
+        2: '规划思路',
+        3: '详细规划',
+      };
+      setCurrentPhase(phaseMap[currentLayerValue] || 'idle');
+      console.log('[UnifiedPlanningContext] Sync currentLayer:', currentLayerValue);
     }
 
     // 更新之前的状态引用
@@ -571,8 +683,11 @@ export function UnifiedPlanningProvider({
       currentLayer: null,
       isStreaming: false,
     });
+    // 清空进度面板状态
+    clearDimensionProgress();
+    setProgressPanelVisible(false);
     // Don't reset history state when resetting conversation
-  }, []);
+  }, [clearDimensionProgress]);
 
   // History actions
   const loadVillagesHistory = useCallback(async () => {
@@ -647,6 +762,53 @@ export function UnifiedPlanningProvider({
               id: messageId,  // ✅ 使用原始前端消息 ID
               timestamp: new Date(msg.timestamp || Date.now()),
             } as Message;
+            
+            // ✅ 关键修复：检查 layer_completed 消息的 dimensionReports 是否为空
+            // 如果为空，从后端返回的维度报告数据中补充
+            if (msg.message_type === 'layer_completed') {
+              const layerNum = (msg.message_metadata as any)?.layer;
+              const dimensionReports = (restoredMessage as any).dimensionReports || {};
+              const hasContent = Object.values(dimensionReports).some((v: any) => v && v.length > 0);
+              
+              if (!hasContent && layerNum) {
+                console.log(`[UnifiedPlanningContext] Layer ${layerNum} dimensionReports 为空，尝试从 checkpoint 补充`);
+                
+                // 从后端返回的 checkpoint 数据中获取维度报告
+                let checkpointReports: Record<string, string> = {};
+                if (layerNum === 1 && statusData.analysis_reports) {
+                  checkpointReports = statusData.analysis_reports;
+                } else if (layerNum === 2 && statusData.concept_reports) {
+                  checkpointReports = statusData.concept_reports;
+                } else if (layerNum === 3 && statusData.detail_reports) {
+                  checkpointReports = statusData.detail_reports;
+                }
+                
+                // 如果 checkpoint 中有数据，补充到消息中
+                if (Object.keys(checkpointReports).length > 0) {
+                  const hasCheckpointContent = Object.values(checkpointReports).some((v: any) => v && v.length > 0);
+                  if (hasCheckpointContent) {
+                    console.log(`[UnifiedPlanningContext] 从 checkpoint 补充 Layer ${layerNum} 维度报告: ${Object.keys(checkpointReports).length} 个维度`);
+                    (restoredMessage as any).dimensionReports = checkpointReports;
+                    
+                    // 同时更新 fullReportContent
+                    const reportContent = Object.entries(checkpointReports)
+                      .map(([key, content]) => `## ${DIMENSION_NAMES[key] || key}\n\n${content}`)
+                      .join('\n\n---\n\n');
+                    (restoredMessage as any).fullReportContent = reportContent;
+                    (restoredMessage as any).content = reportContent;
+                    
+                    // 更新 summary
+                    const wordCount = Object.values(checkpointReports).reduce((sum: number, v: any) => sum + (v?.length || 0), 0);
+                    (restoredMessage as any).summary = {
+                      word_count: wordCount,
+                      key_points: [],
+                      dimension_count: Object.keys(checkpointReports).length,
+                    };
+                  }
+                }
+              }
+            }
+            
             addMessage(restoredMessage);
           } else {
             // 普通文本消息
@@ -695,6 +857,69 @@ export function UnifiedPlanningProvider({
       }
 
       console.log('[UnifiedPlanningContext] Historical reports loaded successfully');
+
+      // 🔧 新增：恢复进度面板状态（用于历史会话查看）
+      // 根据已完成的层级恢复进度状态
+      if (statusData.layer_1_completed) {
+        // Layer 1 已完成，设置所有维度为 completed
+        const layer1Dimensions = getDimensionsByLayer(1);
+        for (const dimKey of layer1Dimensions) {
+          updateDimensionProgress(`1_${dimKey}`, {
+            dimensionKey: dimKey,
+            dimensionName: DIMENSION_NAMES[dimKey] || dimKey,
+            layer: 1,
+            status: 'completed',
+            wordCount: 0, // 历史会话不记录字数
+          });
+        }
+      }
+      if (statusData.layer_2_completed) {
+        const layer2Dimensions = getDimensionsByLayer(2);
+        for (const dimKey of layer2Dimensions) {
+          updateDimensionProgress(`2_${dimKey}`, {
+            dimensionKey: dimKey,
+            dimensionName: DIMENSION_NAMES[dimKey] || dimKey,
+            layer: 2,
+            status: 'completed',
+            wordCount: 0,
+          });
+        }
+      }
+      if (statusData.layer_3_completed) {
+        const layer3Dimensions = getDimensionsByLayer(3);
+        for (const dimKey of layer3Dimensions) {
+          updateDimensionProgress(`3_${dimKey}`, {
+            dimensionKey: dimKey,
+            dimensionName: DIMENSION_NAMES[dimKey] || dimKey,
+            layer: 3,
+            status: 'completed',
+            wordCount: 0,
+          });
+        }
+      }
+
+      // 设置当前层级和阶段（用于进度面板显示）
+      const currentLayerValue = statusData.current_layer;
+      if (currentLayerValue && currentLayerValue >= 1 && currentLayerValue <= 3) {
+        setCurrentLayer(currentLayerValue);
+        const phaseMap: Record<number, '现状分析' | '规划思路' | '详细规划'> = {
+          1: '现状分析',
+          2: '规划思路',
+          3: '详细规划',
+        };
+        setCurrentPhase(phaseMap[currentLayerValue] || 'idle');
+      } else if (statusData.layer_3_completed) {
+        // 全部完成，显示详细规划
+        setCurrentLayer(3);
+        setCurrentPhase('详细规划');
+      } else if (statusData.layer_2_completed) {
+        setCurrentLayer(3);
+        setCurrentPhase('详细规划');
+      } else if (statusData.layer_1_completed) {
+        setCurrentLayer(2);
+        setCurrentPhase('规划思路');
+      }
+
     } catch (error) {
       console.error('[UnifiedPlanningContext] Failed to load historical reports:', error);
       addMessage(createErrorMessage('加载历史报告失败'));
@@ -702,7 +927,7 @@ export function UnifiedPlanningProvider({
       // 重置标志，允许后续消息存储
       isLoadingHistoryRef.current = false;
     }
-  }, [addMessage]);
+  }, [addMessage, updateDimensionProgress, setCurrentLayer, setCurrentPhase]);
 
   const loadHistoricalSession = useCallback(async (villageName: string, sessionId: string) => {
     try {
@@ -800,6 +1025,18 @@ export function UnifiedPlanningProvider({
 
     // 层级完成状态
     completedLayers,
+
+    // 进度面板状态
+    progressPanelVisible,
+    setProgressPanelVisible,
+    dimensionProgress,
+    executingDimensions,
+    currentPhase,
+    setCurrentLayerAndPhase,
+    updateDimensionProgress,
+    setDimensionStreaming,
+    setDimensionCompleted,
+    clearDimensionProgress,
 
     // 同步后端状态
     syncBackendState,
