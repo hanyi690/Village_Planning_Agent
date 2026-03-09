@@ -1,6 +1,6 @@
 # 后端实现文档
 
-> FastAPI 后端架构 - REST 状态同步 + SSE 流式输出
+> FastAPI 后端架构 - SSOT 架构 + SSE 事件驱动
 
 ## 架构概览
 
@@ -19,11 +19,35 @@
          └───────────────────────┼───────────────────────┘
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                   Storage Layer (SQLite + LangGraph)                │
-│  AsyncSqliteSaver (Checkpointer单例) → 状态唯一真实源               │
-│  PlanningSession / UISession / UIMessage                            │
+│                   Storage Layer (SSOT Architecture)                 │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │ LangGraph Checkpoint (唯一真实源)                           │   │
+│  │ metadata: {published_layers, version, last_signal_timestamp}│   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                              │                                      │
+│              ┌───────────────┼───────────────┐                      │
+│              ▼               ▼               ▼                      │
+│     ┌─────────────┐ ┌─────────────┐ ┌─────────────┐                │
+│     │ SQLite DB   │ │ SSE Queue   │ │ 文件系统    │                │
+│     │ 业务元数据  │ │ asyncio.Queue│ │ 报告输出    │                │
+│     │ is_executing│ │ 阅后即焚    │ │ Markdown    │                │
+│     │ stream_state│ │             │ │             │                │
+│     └─────────────┘ └─────────────┘ └─────────────┘                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+## 核心设计原则
+
+### SSOT (Single Source of Truth)
+
+以 LangGraph Checkpoint 为唯一真实源：
+
+| 数据类型 | 存储位置 | 说明 |
+|---------|---------|------|
+| 规划状态 | Checkpoint | layer_X_completed, analysis_reports 等 |
+| 去重状态 | Checkpoint metadata | published_layers, version |
+| 执行状态 | SQLite DB | is_executing, stream_state |
+| SSE 事件 | asyncio.Queue | 阅后即焚，不持久化 |
 
 ## API 路由
 
@@ -150,20 +174,23 @@ async def _execute_graph_in_background(session_id, graph, initial_state, checkpo
 
 ### GET /api/planning/stream/{session_id}
 
-SSE 流式输出事件：
+SSE 流式输出事件（使用 asyncio.Queue 订阅管理系统）：
 
 | 事件 | 数据 | 说明 |
 |------|------|------|
 | connected | `{session_id}` | 连接建立 |
 | layer_started | `{layer, layer_name}` | 层级开始 |
 | content_delta | `{delta}` | 文本增量 |
-| dimension_delta | `{layer, dimension, delta, accumulated}` | 维度Token增量 |
+| dimension_delta | `{layer, dimension, delta, accumulated}` | 维度Token增量（频率控制：500ms/50 tokens） |
 | dimension_complete | `{layer, dimension, content}` | 维度完成 |
 | dimension_revised | `{layer, dimension, old_content, new_content}` | 维度修复 |
-| layer_completed | `{layer, report_content, dimension_reports}` | 层级完成 |
-| pause | `{layer}` | 步进暂停 |
+| layer_completed | `{layer, has_data, dimension_count, version}` | 层级完成（Signal-Fetch 模式，不含完整内容） |
+| pause | `{layer, checkpoint_id}` | 步进暂停 |
+| stream_paused | `{reason}` | SSE 流关闭信号 |
 | completed | `{message}` | 规划完成 |
 | error | `{message}` | 错误信息 |
+
+**Signal-Fetch Pattern**: SSE 只发送轻量信号，前端通过 REST API 获取完整数据，避免大数据量通过 SSE 传输。
 
 ### POST /api/planning/review/{session_id}
 
@@ -257,6 +284,10 @@ class PlanningSession(SQLModel, table=True):
     status: str              # running/paused/completed/failed (索引)
     execution_error: str     # 执行错误信息
     
+    # 执行状态（SSOT：存储在数据库，替代内存状态）
+    is_executing: bool       # 是否正在执行
+    stream_state: str        # 流状态: active/paused/completed
+    
     village_data: str        # 村庄现状数据
     task_description: str    # 规划任务描述
     constraints: str         # 约束条件
@@ -266,6 +297,8 @@ class PlanningSession(SQLModel, table=True):
     updated_at: datetime
     completed_at: datetime
 ```
+
+**注意**: `is_executing` 和 `stream_state` 替代了旧架构中的内存 `_active_executions` 和 `_stream_states` 字典，确保服务重启后状态不丢失。
 
 ### UISession / UIMessage
 
@@ -374,7 +407,149 @@ backend/
 | 文件 | 功能 |
 |------|------|
 | `main.py` | FastAPI 应用入口 |
-| `api/planning.py` | 规划 API 核心，SSE 事件 |
+| `api/planning.py` | 规划 API 核心，SSE 事件，订阅管理 |
 | `database/engine.py` | Checkpointer 单例 |
 | `database/models.py` | SQLModel 数据模型 |
+| `database/operations_async.py` | 异步 CRUD 操作（含执行状态管理） |
 | `services/rate_limiter.py` | 请求限流 |
+
+## SSE 订阅管理系统
+
+### asyncio.Queue 订阅架构
+
+替代传统的轮询模式，实现事件驱动：
+
+```python
+# 全局订阅管理
+_session_subscribers: Dict[str, set] = {}  # session_id -> set of asyncio.Queue
+
+async def subscribe_session(session_id: str) -> asyncio.Queue:
+    """订阅 session 的事件流，返回专用的 asyncio.Queue"""
+    queue = asyncio.Queue(maxsize=200)
+    _session_subscribers[session_id].add(queue)
+    
+    # 同步历史事件到新订阅者
+    for event in _sessions[session_id]["events"]:
+        queue.put_nowait(event)
+    
+    # 如果内存中没有历史事件，从 Checkpoint 重建
+    if historical_count == 0 or not layer_completed_found:
+        rebuilt_events = await _rebuild_events_from_checkpoint(session_id)
+        for event in rebuilt_events:
+            queue.put_nowait(event)
+    
+    return queue
+
+async def unsubscribe_session(session_id: str, queue: asyncio.Queue):
+    """取消订阅"""
+    _session_subscribers[session_id].discard(queue)
+
+async def publish_event_to_subscribers(session_id: str, event: Dict):
+    """发布事件到所有订阅者"""
+    for queue in list(_session_subscribers.get(session_id, set())):
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            pass  # 队列满，丢弃事件
+```
+
+### 跨线程安全事件发布
+
+LLM 回调运行在同步线程中，需要安全地发布事件：
+
+```python
+# 保存主事件循环引用
+_main_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+@router.on_event("startup")
+async def _save_main_event_loop():
+    global _main_event_loop
+    _main_event_loop = asyncio.get_running_loop()
+
+def _publish_event_sync(session_id: str, event: Dict) -> None:
+    """同步版本的发布函数 - 供 LLM 回调调用"""
+    loop = _main_event_loop or asyncio.get_running_loop()
+    asyncio.run_coroutine_threadsafe(
+        publish_event_to_subscribers(session_id, event),
+        loop
+    )
+```
+
+### Checkpoint 事件重建
+
+服务重启后，从 Checkpoint 重建关键事件：
+
+```python
+async def _rebuild_events_from_checkpoint(session_id: str) -> List[Dict]:
+    """从 Checkpoint 重建关键事件（服务重启后恢复）"""
+    events = []
+    checkpoint_state = await graph.aget_state(config)
+    state = checkpoint_state.values
+    
+    # 重建 layer_completed 事件
+    for layer_num in [1, 2, 3]:
+        if state.get(f"layer_{layer_num}_completed"):
+            events.append({
+                "type": "layer_completed",
+                "layer": layer_num,
+                "_rebuild": True,
+                ...
+            })
+    
+    # 重建 pause 事件
+    if state.get("pause_after_step"):
+        events.append({"type": "pause", ...})
+    
+    return events
+```
+
+### 事件频率控制
+
+优化参数减少事件数量，避免队列阻塞：
+
+```python
+DELTA_MIN_INTERVAL_MS = 500  # 最小发送间隔（从 200ms 增加）
+DELTA_MIN_TOKENS = 50        # 最小 token 数量（从 20 增加）
+MAX_EVENTS_PER_SESSION = 500 # 每个会话最大事件数
+```
+
+## 执行状态管理
+
+### 数据库替代内存状态
+
+```python
+# 替代内存 _active_executions 和 _stream_states
+
+async def _is_execution_active(session_id: str) -> bool:
+    """从数据库读取执行状态"""
+    from backend.database.operations_async import is_execution_active_async
+    return await is_execution_active_async(session_id)
+
+async def _set_execution_active(session_id: str, active: bool):
+    """写入数据库"""
+    from backend.database.operations_async import set_execution_active_async
+    await set_execution_active_async(session_id, active)
+
+async def _get_stream_state(session_id: str) -> str:
+    """从数据库读取流状态"""
+    from backend.database.operations_async import get_stream_state_async
+    return await get_stream_state_async(session_id)
+
+async def _set_stream_state(session_id: str, state: str):
+    """写入数据库"""
+    from backend.database.operations_async import set_stream_state_async
+    await set_stream_state_async(session_id, state)
+```
+
+## State Metadata 结构
+
+```python
+# VillagePlanningState 中的 metadata 字段
+metadata: Dict[str, Any] = {
+    "published_layers": [1, 2],           # 已发送 layer_completed 信号的层级
+    "version": 102,                        # 状态版本号，用于前端同步
+    "last_signal_timestamp": "2026-...",  # 最后信号时间戳
+}
+```
+
+用于持久化去重和版本化同步。

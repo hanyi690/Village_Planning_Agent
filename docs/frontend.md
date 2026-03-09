@@ -48,9 +48,11 @@
 - **动画效果**：流畅的微动画和过渡效果
 - **思考指示器**：脉动动画效果，模拟 AI 思考过程
 
-## 核心原则：单一状态源
+## 核心原则
 
-前端不存储独立业务状态，所有状态从后端 LangGraph Checkpointer 同步：
+### 单一状态源 (SSOT)
+
+前端不存储独立业务状态，所有状态从后端 LangGraph Checkpoint 同步：
 
 ```
 后端状态 (Checkpointer)        →    前端派生状态
@@ -58,35 +60,100 @@
 status: 'paused'               →    isPaused: true
 previous_layer: 1              →    pendingReviewLayer: 1
 layer_1_completed: true        →    completedLayers[1]: true
+version: 102                   →    localVersionRef: 102
 execution_complete: true       →    停止轮询
+```
+
+### Signal-Fetch Pattern
+
+SSE 只发送轻量信号，完整数据通过 REST API 获取：
+
+```
+后端 SSE 事件                    前端处理
+────────────────────────────────────────────────
+layer_started: {layer, name}  → 创建空 LayerReportMessage
+dimension_delta: {delta}      → 批量更新内容缓存 (useStreamingRender)
+layer_completed: {layer, ver} → REST API 获取完整报告
+pause: {layer}                → 显示审查面板
+stream_paused: {reason}       → 关闭 SSE 连接，等待用户操作
 ```
 
 ## 状态同步机制
 
-### REST 轮询 (每2秒)
+### SSE 事件驱动 + REST 状态确认
+
+前端使用 SSE 接收实时事件，通过 REST API 确认状态：
 
 ```typescript
 // controllers/TaskController.tsx
-const pollLoop = async () => {
-  const shouldStop = await fetchStatus();
-  if (!shouldStop && taskId) {
-    pollTimerRef.current = setTimeout(pollLoop, 2000);
-  }
-};
+// SSE 连接建立（仅依赖 taskId）
+useEffect(() => {
+    if (!taskId) return;
+    
+    const es = planningApi.createStream(taskId, (event) => {
+        switch (event.type) {
+            case 'layer_completed':
+                // Signal-Fetch: 触发 REST API 获取完整数据
+                callbacks.onLayerCompleted?.(event.data.layer, '', {});
+                break;
+            case 'stream_paused':
+                // SSE 流关闭，等待用户操作
+                break;
+            // ... 其他事件
+        }
+    });
+    
+    return () => es.close();
+}, [taskId]);
 ```
 
-### SSE 实时事件
+### 版本化同步
+
+使用 version 字段防止状态回滚：
 
 ```typescript
-// 事件类型
-type PlanningSSEEventType =
-  | 'layer_started'      // 层级开始
-  | 'layer_completed'    // 层级完成
-  | 'dimension_delta'    // 维度Token增量
-  | 'dimension_complete' // 维度完成
-  | 'dimension_revised'  // 维度修复完成
-  | 'pause'              // 暂停
-  | 'error';             // 错误
+// contexts/UnifiedPlanningContext.tsx
+const localVersionRef = useRef<number>(0);
+
+const syncBackendState = useCallback((backendData: any) => {
+    const serverVersion = backendData.version ?? 0;
+    const localVersion = localVersionRef.current;
+    
+    // 跳过旧版本数据
+    if (serverVersion > 0 && serverVersion <= localVersion) {
+        console.log(`跳过旧版本: server=${serverVersion}, local=${localVersion}`);
+        return;
+    }
+    
+    // 更新本地版本号
+    if (serverVersion > 0) {
+        localVersionRef.current = serverVersion;
+    }
+    
+    // 继续处理状态更新...
+}, []);
+```
+
+### 断线重连机制
+
+SSE 断线时自动重连，重连前先获取完整状态：
+
+```typescript
+// TaskController.tsx
+const MAX_RECONNECT_ATTEMPTS = 5;
+
+const handleSSEError = () => {
+    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+        // 重连前先获取一次完整状态
+        fetchStatus().then(() => {
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 5000);
+            setTimeout(() => {
+                sseConnectionRef.current = createSSEConnection();
+                reconnectAttempts++;
+            }, delay);
+        });
+    }
+};
 ```
 
 ## 目录结构
