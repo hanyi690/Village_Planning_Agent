@@ -756,11 +756,13 @@ async def _rebuild_events_from_checkpoint(session_id: str) -> List[Dict[str, Any
         # 重建 pause 事件
         if state.get("pause_after_step", False):
             previous_layer = state.get("previous_layer", 1)
+            # ✅ 从 checkpoint 配置中获取真实的 checkpoint_id
+            checkpoint_id = checkpoint_state.config.get("configurable", {}).get("checkpoint_id", "")
             pause_event = {
                 "type": "pause",
                 "session_id": session_id,
                 "current_layer": previous_layer,
-                "checkpoint_id": state.get("last_checkpoint_id", ""),
+                "checkpoint_id": checkpoint_id,
                 "reason": "step_mode",
                 "timestamp": datetime.now().isoformat(),
                 "_rebuild": True,
@@ -1288,6 +1290,10 @@ async def _execute_graph_in_background(
         metadata = checkpoint_state.values.get("metadata", {})
         published_layers = set(metadata.get("published_layers", []))
         logger.info(f"[Planning] [{session_id}] 从 Checkpoint 读取 published_layers: {published_layers}")
+        
+        # ✅ 持久化去重：读取已发送的修订维度信号
+        published_revisions = set(metadata.get("published_revisions", []))
+        logger.info(f"[Planning] [{session_id}] 从 Checkpoint 读取 published_revisions: {published_revisions}")
 
         # 执行周期内的临时去重（用于 layer_started 和 pause，这些不需要持久化）
         sent_layer_started_this_run = set()
@@ -1412,6 +1418,7 @@ async def _execute_graph_in_background(
                 logger.info(f"[Planning] [{session_id}] === 检测到修复完成: {last_revised_dimensions} ===")
                 
                 revision_history = event.get("revision_history", [])
+                new_published_revisions = set()  # 本次需要添加的修订
                 
                 for dim in last_revised_dimensions:
                     latest_revision = next(
@@ -1422,6 +1429,13 @@ async def _execute_graph_in_background(
                     if latest_revision:
                         layer = latest_revision.get("layer", 1)
                         new_content = latest_revision.get("new_content", "")
+                        revision_timestamp = latest_revision.get("timestamp", datetime.now().isoformat())
+                        
+                        # ✅ 去重：使用 dimension + timestamp 作为唯一标识
+                        revision_key = f"{dim}_{revision_timestamp}"
+                        if revision_key in published_revisions:
+                            logger.info(f"[Planning] [{session_id}] 跳过已发送的修订: {revision_key}")
+                            continue
                         
                         # ✅ 记录维度修订历史到数据库
                         try:
@@ -1445,10 +1459,32 @@ async def _execute_graph_in_background(
                             "dimension": dim,
                             "layer": layer,
                             # 不携带 new_content，前端应调用 REST API 获取
-                            "timestamp": latest_revision.get("timestamp", datetime.now().isoformat())
+                            "timestamp": revision_timestamp
                         }
                         await _append_session_event_async(session_id, event_data)
                         logger.info(f"[Planning] [{session_id}] ✓ dimension_revised 信号已发送: {dim}")
+                        
+                        # 标记为已发送
+                        new_published_revisions.add(revision_key)
+                
+                # ✅ 更新 metadata：将新发送的修订添加到 published_revisions
+                if new_published_revisions:
+                    published_revisions.update(new_published_revisions)
+                    # 获取当前 metadata 和版本
+                    current_state = await graph.aget_state(config)
+                    current_metadata = current_state.values.get("metadata", {})
+                    current_version = current_state.values.get("version", 0)
+                    
+                    # 更新 metadata
+                    updated_metadata = dict(current_metadata)
+                    updated_metadata["published_revisions"] = list(published_revisions)
+                    
+                    await graph.aupdate_state(
+                        config,
+                        {"metadata": updated_metadata},
+                        as_node="update_metadata"
+                    )
+                    logger.info(f"[Planning] [{session_id}] ✅ 已更新 metadata: published_revisions 新增 {new_published_revisions}")
 
             # ✅ SSOT 简化：不再手动同步内存状态到 _sessions
             # LangGraph Checkpoint 是唯一真实源
@@ -1462,11 +1498,16 @@ async def _execute_graph_in_background(
 
                 # ✅ 简化：只在本执行周期内去重
                 if pause_event_key not in sent_pause_this_run:
+                    # ✅ 从 LangGraph checkpoint 获取真实的 checkpoint_id
+                    current_state = await graph.aget_state(config)
+                    checkpoint_id = current_state.config.get("configurable", {}).get("checkpoint_id", "")
+                    logger.info(f"[Planning] [{session_id}] 获取到 checkpoint_id: {checkpoint_id}")
+                    
                     pause_event = {
                         "type": "pause",
                         "session_id": session_id,
                         "current_layer": previous_layer,
-                        "checkpoint_id": event.get("last_checkpoint_id", ""),
+                        "checkpoint_id": checkpoint_id,
                         "reason": "step_mode",
                         "timestamp": datetime.now().isoformat()
                     }
@@ -2003,6 +2044,9 @@ async def get_session_status(session_id: str):
     # 判断执行完成状态
     execution_complete = layer_1_completed and layer_2_completed and layer_3_completed
 
+    # ✅ 从 checkpoint 配置中获取真实的 checkpoint_id
+    last_checkpoint_id = checkpoint_state.config.get("configurable", {}).get("checkpoint_id", "") if checkpoint_state else ""
+
     return {
         "session_id": session_id,
         # 业务元数据 (来自数据库)
@@ -2020,7 +2064,7 @@ async def get_session_status(session_id: str):
         "pause_after_step": pause_after_step,
         "execution_complete": execution_complete,
         "progress": progress,
-        "last_checkpoint_id": None,
+        "last_checkpoint_id": last_checkpoint_id,
         # 消息历史和修订历史
         "messages": messages,
         "revision_history": revision_history,
@@ -2387,18 +2431,24 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         detail=f"Checkpoint not found: {request.checkpoint_id}"
                     )
 
-                # 5. 使用 aupdate_state 恢复状态
+                # 5. 使用 aupdate_state 恢复状态，并设置暂停审查状态
                 target_values = target_state_snapshot.values
+                target_layer = target_values.get("current_layer", 1)
+                
+                # 确保回滚后进入正确的暂停审查状态
                 await graph.aupdate_state(
                     config,
-                    target_values,
+                    {
+                        **target_values,
+                        "pause_after_step": True,  # 确保回滚后进入暂停状态
+                        "previous_layer": target_layer,  # 标识刚回滚的层级
+                    },
                     as_node=None  # 不指定节点，直接覆盖状态
                 )
 
                 logger.info(f"[Planning API] Successfully rolled back to checkpoint {request.checkpoint_id}")
 
                 # 6. 更新 session 元数据（不更新 initial_state，Checkpoint 是唯一数据源）
-                target_layer = target_values.get("current_layer", 1)
                 session["current_layer"] = target_layer
                 session["status"] = TaskStatus.paused
 
@@ -2773,8 +2823,10 @@ async def get_dimension_content(session_id: str, dimension_key: str):
             "dimension_key": "village_overview",
             "layer": 1,
             "content": "...",
+            "previous_content": "...",  # 上一个版本的内容（用于显示修复前后对比）
             "version": 2,
-            "exists": true
+            "exists": true,
+            "has_previous": true
         }
     """
     from src.config.dimension_metadata import get_dimension_layer
@@ -2809,16 +2861,31 @@ async def get_dimension_content(session_id: str, dimension_key: str):
         
         content = reports.get(dimension_key, "")
         
-        # 获取版本号（从修订历史）
-        from backend.database.operations_async import get_latest_dimension_version_async
+        # 获取版本号和上一个版本内容（从修订历史）
+        from backend.database.operations_async import (
+            get_latest_dimension_version_async,
+            get_previous_dimension_version_async
+        )
         latest_version = await get_latest_dimension_version_async(session_id, layer, dimension_key)
+        version = latest_version.get("version", 1) if latest_version else 1
+        
+        # ✅ 获取上一个版本的内容（用于前端显示修复前后对比）
+        previous_content = None
+        if version > 1:
+            previous_revision = await get_previous_dimension_version_async(
+                session_id, layer, dimension_key, version
+            )
+            if previous_revision:
+                previous_content = previous_revision.get("content")
         
         return {
             "dimension_key": dimension_key,
             "layer": layer,
             "content": content,
-            "version": latest_version.get("version", 1) if latest_version else 1,
+            "previous_content": previous_content,
+            "version": version,
             "exists": bool(content),
+            "has_previous": previous_content is not None,
         }
         
     except HTTPException:

@@ -617,8 +617,10 @@ export const planningApi = {
     dimension_key: string;
     layer: number;
     content: string;
+    previous_content: string | null;
     version: number;
     exists: boolean;
+    has_previous: boolean;
   }> {
     return apiRequest(`/api/planning/sessions/${sessionId}/dimensions/${dimensionKey}`);
   },

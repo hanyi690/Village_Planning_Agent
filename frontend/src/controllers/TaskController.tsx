@@ -378,10 +378,11 @@ export function useTaskController(
     rollback: useCallback(async (checkpointId: string) => {
       if (!taskId) throw new Error('No task ID');
       await planningApi.rollbackCheckpoint(taskId, checkpointId);
-      // 🔧 触发 SSE 重连（回滚后需要重新订阅）
-      console.log('[TaskController] 回滚完成，触发 SSE 重连');
+      // 🔧 回滚后显式同步状态，确保审查面板正确显示
+      console.log('[TaskController] 回滚完成，同步状态');
+      await fetchStatus();
       setSseReconnectKey(prev => prev + 1);
-    }, [taskId]),
+    }, [taskId, fetchStatus]),
   };
 
   return [state, actions];

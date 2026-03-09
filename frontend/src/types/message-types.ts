@@ -62,6 +62,10 @@ export interface DimensionReportMessage extends BaseMessage {
     current: number;
     total: number;
   };
+  // ✅ 修复相关字段：用于显示修复前后对比
+  previousContent?: string;       // 修复前的原始内容
+  revisionVersion?: number;       // 版本号
+  isRevision?: boolean;           // 是否是修复后的报告
 }
 
 /**

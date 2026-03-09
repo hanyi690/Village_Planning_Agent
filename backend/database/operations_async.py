@@ -1058,3 +1058,55 @@ async def get_latest_dimension_version_async(
     except Exception as e:
         logger.error(f"[Async DB] Failed to get latest dimension version: {e}", exc_info=True)
         return None
+
+
+async def get_previous_dimension_version_async(
+    session_id: str,
+    layer: int,
+    dimension_key: str,
+    current_version: int,
+) -> Optional[Dict[str, Any]]:
+    """
+    Get the previous version of a dimension (async)
+    获取维度的上一个版本（用于显示修复前后对比）
+    
+    Args:
+        session_id: Session ID
+        layer: Layer number
+        dimension_key: Dimension identifier
+        current_version: Current version number
+        
+    Returns:
+        Previous revision dictionary or None
+    """
+    if current_version <= 1:
+        return None
+    
+    try:
+        async with get_async_session() as session:
+            query = select(DimensionRevision).where(
+                DimensionRevision.session_id == session_id,
+                DimensionRevision.layer == layer,
+                DimensionRevision.dimension_key == dimension_key,
+                DimensionRevision.version == current_version - 1,
+            )
+            
+            result = await session.execute(query)
+            revision = result.scalar_one_or_none()
+            
+            if revision:
+                return {
+                    "id": revision.id,
+                    "session_id": revision.session_id,
+                    "layer": revision.layer,
+                    "dimension_key": revision.dimension_key,
+                    "content": revision.content,
+                    "version": revision.version,
+                    "created_at": revision.created_at.isoformat() if revision.created_at else None,
+                    "reason": revision.reason,
+                    "created_by": revision.created_by,
+                }
+            return None
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to get previous dimension version: {e}", exc_info=True)
+        return None

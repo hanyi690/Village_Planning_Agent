@@ -623,11 +623,22 @@ def init_pause_state(state: VillagePlanningState) -> Dict[str, Any]:
     流程开始时（previous_layer=0）不暂停。
     
     修复流程（need_revision=True）时清除暂停标志，让修复正常执行。
+    
+    清除 last_revised_dimensions 标志，避免第二次迭代重复处理。
     """
     # 修复流程不需要暂停，清除暂停标志
     if state.get("need_revision", False):
         logger.info("[主图-暂停初始化] need_revision=True，清除 pause_after_step 让修复流程正常执行")
         return {"pause_after_step": False}
+    
+    # 🔧 清除已处理的修订标志，避免第二次迭代重复处理
+    # 当 last_revised_dimensions 存在且 need_revision=False 时，说明修复已完成
+    if state.get("last_revised_dimensions"):
+        logger.info(f"[主图-暂停初始化] 清除 last_revised_dimensions: {state['last_revised_dimensions']}")
+        return {
+            "pause_after_step": False,
+            "last_revised_dimensions": []  # 清除标志，避免第二次迭代检测到
+        }
     
     if state.get("step_mode", False) and state.get("previous_layer", 0) > 0:
         logger.info(f"[主图-暂停初始化] Step模式 + Layer {state.get('previous_layer')} 完成，设置pause_after_step=True")

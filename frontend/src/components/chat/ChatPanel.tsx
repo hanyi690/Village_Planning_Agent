@@ -647,6 +647,8 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       }
       
       const newContent = dimensionData.content;
+      const previousContent = dimensionData.previous_content;
+      const version = dimensionData.version || 1;
       
       // 添加修复后的维度报告
       const dimensionReportMsg = {
@@ -658,6 +660,10 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         dimensionKey: data.dimension,
         dimensionName: dimensionName,
         content: newContent,
+        // ✅ 保存原始内容引用，用于显示修复前后对比
+        previousContent: previousContent || undefined,
+        revisionVersion: version,
+        isRevision: true,
         streamingState: 'completed' as const,
         wordCount: newContent.length,
       };
@@ -671,7 +677,10 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         return newContents;
       });
       
-      console.log(`[ChatPanel] 维度 ${data.dimension} 修复完成 (v${dimensionData.version})，已添加并持久化消息`);
+      console.log(`[ChatPanel] 维度 ${data.dimension} 修复完成 (v${version})，已添加并持久化消息`);
+      if (previousContent) {
+        console.log(`[ChatPanel] 包含原始内容用于对比，原始长度: ${previousContent.length}`);
+      }
     } catch (error) {
       console.error(`[ChatPanel] Failed to fetch dimension content:`, error);
       // 降级处理：添加错误提示消息
@@ -887,11 +896,33 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 - 经济水平：中等偏下
 `;
 
+      // 合并上传的文件内容到 taskDescription
+      let taskDescription = villageFormData.taskDescription || PLANNING_DEFAULTS.defaultTask;
+      if (villageFormData.taskDescriptionFiles && villageFormData.taskDescriptionFiles.length > 0) {
+        const fileContents = villageFormData.taskDescriptionFiles
+          .map(f => `### 📎 文件：${f.filename}\n\n${f.content}`)
+          .join('\n\n---\n\n');
+        taskDescription = taskDescription
+          ? `${taskDescription}\n\n---\n\n${fileContents}`
+          : fileContents;
+      }
+
+      // 合并上传的文件内容到 constraints
+      let constraints = villageFormData.constraints || PLANNING_DEFAULTS.defaultConstraints;
+      if (villageFormData.constraintsFiles && villageFormData.constraintsFiles.length > 0) {
+        const fileContents = villageFormData.constraintsFiles
+          .map(f => `### 📎 文件：${f.filename}\n\n${f.content}`)
+          .join('\n\n---\n\n');
+        constraints = constraints
+          ? `${constraints}\n\n---\n\n${fileContents}`
+          : fileContents;
+      }
+
       await startPlanning({
         projectName: villageFormData.projectName,
         villageData,
-        taskDescription: villageFormData.taskDescription || PLANNING_DEFAULTS.defaultTask,
-        constraints: villageFormData.constraints || PLANNING_DEFAULTS.defaultConstraints,
+        taskDescription,
+        constraints,
         enableReview: PLANNING_DEFAULTS.enableReview,
         stepMode,
         streamMode: PLANNING_DEFAULTS.streamMode,
