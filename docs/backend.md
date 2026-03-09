@@ -179,13 +179,13 @@ SSE 流式输出事件（使用 asyncio.Queue 订阅管理系统）：
 | 事件 | 数据 | 说明 |
 |------|------|------|
 | connected | `{session_id}` | 连接建立 |
-| layer_started | `{layer, layer_name}` | 层级开始 |
+| layer_started | `{layer, layer_name, layer_number}` | 层级开始 |
 | content_delta | `{delta}` | 文本增量 |
-| dimension_delta | `{layer, dimension, delta, accumulated}` | 维度Token增量（频率控制：500ms/50 tokens） |
-| dimension_complete | `{layer, dimension, content}` | 维度完成 |
+| dimension_delta | `{layer, dimension_key, delta, accumulated}` | 维度Token增量（频率控制：500ms/50 tokens） |
+| dimension_complete | `{layer, dimension_key, dimension_name, full_content}` | 维度完成 |
 | dimension_revised | `{layer, dimension, old_content, new_content}` | 维度修复 |
 | layer_completed | `{layer, has_data, dimension_count, version}` | 层级完成（Signal-Fetch 模式，不含完整内容） |
-| pause | `{layer, checkpoint_id}` | 步进暂停 |
+| pause | `{layer, checkpoint_id, current_layer}` | 步进暂停 |
 | stream_paused | `{reason}` | SSE 流关闭信号 |
 | completed | `{message}` | 规划完成 |
 | error | `{message}` | 错误信息 |
@@ -296,9 +296,17 @@ class PlanningSession(SQLModel, table=True):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime
+
+    # 复合索引
+    __table_args__ = (
+        Index("idx_status_created", "status", "created_at"),
+        Index("idx_project_status", "project_name", "status"),
+    )
 ```
 
-**注意**: `is_executing` 和 `stream_state` 替代了旧架构中的内存 `_active_executions` 和 `_stream_states` 字典，确保服务重启后状态不丢失。
+**注意**: 
+- `is_executing` 和 `stream_state` 替代了旧架构中的内存 `_active_executions` 和 `_stream_states` 字典
+- 状态字段（layer_X_completed, current_layer 等）由 LangGraph Checkpoint 自动管理，不在此表中存储
 
 ### UISession / UIMessage
 
@@ -310,6 +318,8 @@ class UISession(SQLModel, table=True):
     status: str              # idle/running
     project_name: str
     task_id: str             # 关联规划会话ID
+    created_at: datetime
+    updated_at: datetime
     messages: List[UIMessage]  # 一对多
 
 class UIMessage(SQLModel, table=True):
@@ -317,11 +327,39 @@ class UIMessage(SQLModel, table=True):
     
     id: int                  # 自增主键
     session_id: str          # 外键
+    message_id: str          # 前端消息ID（用于 upsert 去重）
     role: str                # user/assistant/system
     content: str             # 消息内容
     message_type: str        # text/file/progress/action/result/error/system
     message_metadata: dict   # 元数据 (JSON)
+    created_at: datetime     # 原始创建时间（用于排序）
+    timestamp: datetime      # 最后更新时间
+
+    # 唯一约束：(session_id, message_id) 必须唯一
+    __table_args__ = (
+        UniqueConstraint("session_id", "message_id", name="uq_session_message"),
+    )
 ```
+
+### DimensionRevision
+
+```python
+class DimensionRevision(SQLModel, table=True):
+    __tablename__ = "dimension_revisions"
+    
+    id: int                  # 自增主键
+    session_id: str          # 外键
+    layer: int               # 层级 (1/2/3)
+    dimension_key: str       # 维度标识
+    content: str             # 修改后的完整内容
+    previous_content_hash: str  # 前一个版本的哈希
+    reason: str              # 修改原因
+    created_by: str          # 修改者
+    version: int             # 该维度的版本号
+    created_at: datetime
+```
+
+**注意**: Checkpoint 表由 LangGraph AsyncSqliteSaver 自动管理，不在此定义。
 
 ## Checkpointer 单例
 
@@ -384,13 +422,14 @@ backend/
 ├── main.py                 # 应用入口
 ├── schemas.py              # Pydantic 请求/响应模型
 ├── api/
-│   ├── planning.py         # 规划 API 核心
+│   ├── planning.py         # 规划 API 核心（SSE、订阅管理）
 │   ├── data.py             # 数据访问 API
 │   ├── files.py            # 文件上传 API
 │   ├── knowledge.py        # 知识库 API
+│   ├── tool_manager.py     # 工具管理器
 │   └── validate_config.py  # 配置验证
 ├── database/
-│   ├── engine.py           # Checkpointer 单例
+│   ├── engine.py           # 数据库引擎（Checkpointer 单例）
 │   ├── models.py           # SQLModel 数据模型
 │   └── operations_async.py # 异步 CRUD 操作
 ├── services/

@@ -880,19 +880,22 @@ def _prepare_tool_context(self, state: Dict[str, Any]) -> Dict[str, Any]:
 | 文件路径 | 功能描述 |
 |---------|---------|
 | `src/tools/__init__.py` | 工具模块导出 |
-| `src/tools/registry.py` | 工具注册中心 |
-| `src/tools/file_manager.py` | 文件管理器 |
+| `src/tools/registry.py` | 工具注册中心（内置工具实现） |
+| `src/tools/file_manager.py` | 文件管理器（VillageDataManager） |
 | `src/tools/knowledge_tool.py` | 知识检索工具接口 |
-| `src/tools/revision_tool.py` | 修复工具 |
-| `src/tools/web_review_tool.py` | Web 审查工具 |
-| `src/tools/adapters/__init__.py` | Adapter 工厂 |
-| `src/tools/adapters/base_adapter.py` | Adapter 基类 |
-| `src/tools/adapters/gis_adapter.py` | GIS 分析适配器 |
-| `src/tools/adapters/network_adapter.py` | 网络分析适配器 |
-| `src/tools/adapters/population_adapter.py` | 人口预测适配器 |
+| `src/tools/revision_tool.py` | 修复工具（维度识别、批量修复） |
+| `src/tools/web_review_tool.py` | Web 审查工具（非阻塞，基于事件） |
+| `src/tools/project_extractor.py` | 项目提取工具（正则+LLM混合提取） |
+| `src/tools/adapters/__init__.py` | Adapter 工厂和初始化 |
+| `src/tools/adapters/base_adapter.py` | Adapter 基类（状态机、Schema） |
+| `src/tools/adapters/gis_adapter.py` | GIS 分析适配器（土地利用） |
+| `src/tools/adapters/network_adapter.py` | 网络分析适配器（连通度、可达性） |
+| `src/tools/adapters/population_adapter.py` | 人口预测适配器（村庄标准模型） |
 | `src/tools/adapters/schema_registry.py` | Schema 注册表 |
-| `src/tools/adapters/wrappers.py` | Adapter 包装器 |
+| `src/tools/adapters/wrappers.py` | Adapter 包装器（注册为工具） |
 | `src/config/dimension_metadata.py` | 维度配置（含 tool 字段） |
 | `src/config/dimension_keys.py` | 维度键名枚举 |
 | `src/planners/generic_planner.py` | 规划器（工具调用入口） |
-| `src/rag/core/tools.py` | RAG 知识检索工具集 |
+| `src/rag/core/tools.py` | RAG 知识检索工具集（7个工具） |
+| `src/rag/config.py` | RAG 配置（Embedding、向量库） |
+| `src/rag/build.py` | 知识库构建入口 |

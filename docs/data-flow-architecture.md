@@ -708,9 +708,13 @@ rebuilt_events = await _rebuild_events_from_checkpoint(session_id)
 | 后台执行 | `backend/api/planning.py` | `_execute_graph_in_background` |
 | 持久化去重 | `backend/api/planning.py` | published_layers 检查和更新 |
 | Checkpoint 重建 | `backend/api/planning.py` | `_rebuild_events_from_checkpoint` |
-| SSE 订阅 | `backend/api/planning.py` | `subscribe_session` |
-| 执行状态管理 | `backend/database/operations_async.py` | `is_execution_active_async` 等 |
+| SSE 订阅 | `backend/api/planning.py` | `subscribe_session`, `_publish_event_sync` |
+| 执行状态管理 | `backend/database/operations_async.py` | `is_execution_active_async`, `set_stream_state_async` |
+| 数据库模型 | `backend/database/models.py` | PlanningSession, UIMessage, DimensionRevision |
 | Status API | `backend/api/planning.py` | `get_session_status` (含 version) |
-| 版本化同步 | `frontend/src/contexts/UnifiedPlanningContext.tsx` | `syncBackendState` |
-| TaskController | `frontend/src/controllers/TaskController.tsx` | SSE 连接管理 |
-| ChatPanel | `frontend/src/components/chat/ChatPanel.tsx` | 事件处理 |
+| 版本化同步 | `frontend/src/contexts/UnifiedPlanningContext.tsx` | `syncBackendState`, `localVersionRef` |
+| TaskController | `frontend/src/controllers/TaskController.tsx` | SSE 连接管理、断线重连 |
+| ChatPanel | `frontend/src/components/chat/ChatPanel.tsx` | 事件处理、消息更新 |
+| API 客户端 | `frontend/src/lib/api.ts` | planningApi, dataApi, knowledgeApi |
+| 维度配置 | `src/config/dimension_metadata.py` | 28个维度元数据 |
+| 消息类型 | `frontend/src/types/message.ts` | Message 联合类型定义 |

@@ -2,12 +2,17 @@
 
 > LangGraph 核心引擎 - 三层递进式规划系统 + RAG 知识检索
 
+## 版本信息
+
+- **版本**: 2.1.0
+- **架构**: hierarchical-langgraph
+
 ## 架构概览
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                   src/agent.py (接口层)                             │
-│  run_village_planning() / run_analysis_only()                       │
+│  run_village_planning() / run_analysis_only() / run_concept_only()  │
 └─────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -86,9 +91,10 @@ class VillagePlanningState(TypedDict):
     village_data: str              # 村庄基础数据
     task_description: str          # 规划任务描述
     constraints: str               # 约束条件
+    session_id: str                # 会话ID（用于流式输出事件）
 
     # 流程控制
-    current_layer: int             # 当前层级 (1/2/3)
+    current_layer: int             # 当前层级 (1/2/3/4，4表示完成)
     layer_1_completed: bool
     layer_2_completed: bool
     layer_3_completed: bool
@@ -100,26 +106,27 @@ class VillagePlanningState(TypedDict):
     revision_target_dimensions: List[str]
 
     # 各层成果
-    analysis_reports: Dict[str, str]  # Layer 1
-    concept_reports: Dict[str, str]   # Layer 2
-    detail_reports: Dict[str, str]    # Layer 3
+    analysis_reports: Dict[str, str]  # Layer 1: 各维度现状分析报告
+    concept_reports: Dict[str, str]   # Layer 2: 各维度规划思路报告
+    detail_reports: Dict[str, str]    # Layer 3: 各维度详细规划报告
     final_output: str
 
     # RAG 知识缓存
     knowledge_cache: Dict[str, str]
 
-    # 【新增】项目影子缓存 - Wave 1 维度完成时提取的项目信息
-    # 格式: {dimension_key: [{name, content, scale, location, phase}]}
-    # 用于 project_bank 维度的 token 优化
-    project_shadow_cache: Dict[str, List[Dict[str, str]]]
-
-    # 【新增】元数据 - 持久化到 Checkpoint，用于去重和版本化同步
-    metadata: Dict[str, Any]  # {published_layers, version, last_signal_timestamp}
+    # 元数据 - 持久化到 Checkpoint，用于去重和版本化同步
+    metadata: Dict[str, Any]  # {published_layers, version, last_signal_timestamp, event_id_counter}
 
     # 步进模式
     step_mode: bool
+    step_level: str                # 步骤级别（layer/dimension/skill）
     pause_after_step: bool
-    previous_layer: int
+    previous_layer: int            # 刚完成的层级编号
+
+    # 路由控制
+    quit_requested: bool           # 用户请求退出
+    trigger_rollback: bool         # 触发回退
+    rollback_target: str           # 回退目标checkpoint ID
 
     # 修订历史
     revision_history: List[Dict[str, Any]]
@@ -127,6 +134,9 @@ class VillagePlanningState(TypedDict):
 
     # 黑板模式数据共享
     blackboard: Dict[str, Any]
+
+    # 消息历史
+    messages: Annotated[List[BaseMessage], add_messages]
 ```
 
 ## 主图编排
@@ -246,11 +256,17 @@ class GenericPlanner(UnifiedPlannerBase):
 | Layer 2 | 4 | 波次 (Wave 1→4) |
 | Layer 3 | 12 | 波次 (Wave 1→2) |
 
-### RAG 启用的维度
+### Layer 1 维度列表
 
-**Layer 1**: 全部12个维度启用
+location, socio_economic, villager_wishes, superior_planning, natural_environment, land_use, traffic, public_services, infrastructure, ecological_green, architecture, historical_culture
 
-**Layer 3 关键维度**: land_use_planning, infrastructure_planning, ecological, disaster_prevention, heritage
+### Layer 2 维度列表
+
+resource_endowment, planning_positioning, development_goals, planning_strategies
+
+### Layer 3 维度列表
+
+industry, spatial_structure, land_use_planning, settlement_planning, traffic_planning, public_service, infrastructure_planning, ecological, disaster_prevention, heritage, landscape, project_bank
 
 ### 依赖配置示例
 
@@ -387,15 +403,20 @@ src/
 │   ├── config.py               # 全局配置
 │   ├── llm_factory.py          # LLM工厂
 │   ├── state_builder.py        # 状态构建器
-│   └── streaming.py            # 流式输出
+│   ├── streaming.py            # 流式输出
+│   ├── prompts.py              # 提示词模板
+│   └── langsmith_integration.py # LangSmith 集成
 ├── config/
 │   └── dimension_metadata.py   # 维度元数据
 ├── orchestration/
 │   └── main_graph.py           # 主图编排
 ├── subgraphs/
 │   ├── analysis_subgraph.py    # Layer 1 子图
+│   ├── analysis_prompts.py     # Layer 1 提示词
 │   ├── concept_subgraph.py     # Layer 2 子图
+│   ├── concept_prompts.py      # Layer 2 提示词
 │   ├── detailed_plan_subgraph.py # Layer 3 子图
+│   ├── detailed_plan_prompts.py # Layer 3 提示词
 │   └── revision_subgraph.py    # Revision 子图
 ├── nodes/
 │   ├── base_node.py            # 节点基类 (BaseNode, AsyncBaseNode)
@@ -407,25 +428,50 @@ src/
 │   └── generic_planner.py      # 通用规划器
 ├── tools/
 │   ├── registry.py             # 工具注册表
+│   ├── file_manager.py         # 文件管理器
+│   ├── knowledge_tool.py       # 知识检索工具接口
+│   ├── revision_tool.py        # 修复工具
+│   ├── web_review_tool.py      # Web 审查工具
+│   ├── project_extractor.py    # 项目提取工具
 │   └── adapters/               # 适配器
-└── rag/
-    └── core/tools.py           # RAG 检索工具
+│       ├── base_adapter.py
+│       ├── population_adapter.py
+│       ├── gis_adapter.py
+│       └── network_adapter.py
+├── rag/
+│   ├── config.py               # RAG 配置
+│   ├── build.py                # 知识库构建入口
+│   └── core/
+│       ├── tools.py            # RAG 检索工具
+│       ├── cache.py            # Embedding 模型缓存
+│       └── loaders.py          # 文档加载器
+└── utils/
+    ├── logger.py               # 日志工具
+    ├── output_manager.py       # 输出管理器
+    ├── blackboard_manager.py   # 黑板管理器
+    ├── report_utils.py         # 报告生成工具
+    └── paths.py                # 路径配置
 ```
 
 ## 关键文件
 
 | 文件 | 功能 |
 |------|------|
-| `src/agent.py` | 对外接口 |
-| `src/orchestration/main_graph.py` | 主图编排 |
-| `src/subgraphs/analysis_subgraph.py` | Layer 1 子图 |
-| `src/subgraphs/concept_subgraph.py` | Layer 2 子图 |
-| `src/subgraphs/detailed_plan_subgraph.py` | Layer 3 子图 |
-| `src/planners/generic_planner.py` | 通用规划器 |
-| `src/config/dimension_metadata.py` | 维度配置 |
+| `src/agent.py` | 对外接口（run_village_planning, run_analysis_only, run_concept_only） |
+| `src/orchestration/main_graph.py` | 主图编排（状态定义、路由逻辑、图构建） |
+| `src/subgraphs/analysis_subgraph.py` | Layer 1 子图（12维度并行分析） |
+| `src/subgraphs/concept_subgraph.py` | Layer 2 子图（4维度波次执行） |
+| `src/subgraphs/detailed_plan_subgraph.py` | Layer 3 子图（12维度波次执行） |
+| `src/subgraphs/revision_subgraph.py` | Revision 子图（级联修复） |
+| `src/planners/generic_planner.py` | 通用规划器（工具调用、Prompt构建） |
+| `src/config/dimension_metadata.py` | 维度配置（28个维度的元数据） |
 | `src/tools/registry.py` | 工具注册表 |
 | `src/tools/project_extractor.py` | 项目提取工具 |
-| `src/rag/core/tools.py` | RAG 检索工具 |
+| `src/tools/file_manager.py` | 文件管理器（支持多种格式） |
+| `src/rag/core/tools.py` | RAG 检索工具集 |
+| `src/nodes/base_node.py` | 节点基类（BaseNode, AsyncBaseNode） |
+| `src/nodes/layer_nodes.py` | Layer 节点实现 |
+| `src/core/llm_factory.py` | LLM 工厂（支持 DeepSeek/OpenAI/智谱） |
 
 ## 项目库影子缓存机制
 

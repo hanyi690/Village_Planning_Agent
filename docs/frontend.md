@@ -162,11 +162,12 @@ const handleSSEError = () => {
 frontend/src/
 ├── app/                        # 页面路由
 │   ├── page.tsx                # 首页
+│   ├── layout.tsx              # 根布局
 │   └── village/[taskId]/       # 任务详情页
 ├── contexts/
-│   └── UnifiedPlanningContext.tsx  # 全局状态
+│   └── UnifiedPlanningContext.tsx  # 全局状态管理
 ├── controllers/
-│   └── TaskController.tsx      # 状态同步控制器
+│   └── TaskController.tsx      # SSE 连接管理、状态同步
 ├── components/
 │   ├── layout/                 # 布局组件
 │   │   ├── UnifiedLayout.tsx
@@ -178,30 +179,34 @@ frontend/src/
 │   │   ├── ChatPanel.tsx
 │   │   ├── MessageList.tsx
 │   │   ├── MessageBubble.tsx
-│   │   ├── MessageContent.tsx      # 消息内容包装
-│   │   ├── StreamingText.tsx       # 流式文本渲染
-│   │   ├── ThinkingIndicator.tsx   # 思考指示器 (Gemini风格)
-│   │   ├── ActionButtonGroup.tsx   # 操作按钮组
-│   │   ├── DimensionSection.tsx    # 维度区块
-│   │   ├── LayerReportCard.tsx     # 层级报告卡片
-│   │   ├── ReviewPanel.tsx         # 审查面板（支持批准/驳回）
+│   │   ├── MessageContent.tsx
+│   │   ├── StreamingText.tsx
+│   │   ├── ThinkingIndicator.tsx
+│   │   ├── ActionButtonGroup.tsx
+│   │   ├── DimensionSection.tsx
+│   │   ├── LayerReportCard.tsx
+│   │   ├── ReviewPanel.tsx
 │   │   ├── LayerReportMessage.tsx
 │   │   ├── DimensionReportStreaming.tsx
-│   │   ├── DimensionSelector.tsx   # 维度选择器
-│   │   └── CheckpointMarker.tsx    # 检查点时间线标记
+│   │   ├── DimensionSelector.tsx
+│   │   └── CheckpointMarker.tsx
 │   ├── report/                 # 报告组件
-│   │   └── KnowledgeReference.tsx  # 知识引用展示
+│   │   └── KnowledgeReference.tsx
 │   ├── ui/                     # 通用UI组件
-│   │   ├── Card.tsx            # 卡片组件
-│   │   └── SegmentedControl.tsx # 分段控制器
-│   ├── MarkdownRenderer.tsx    # Markdown渲染器
-│   └── VillageInputForm.tsx    # 输入表单
+│   │   ├── Card.tsx
+│   │   └── SegmentedControl.tsx
+│   ├── MarkdownRenderer.tsx
+│   └── VillageInputForm.tsx
 ├── hooks/
 │   ├── useTaskSSE.ts           # SSE连接管理
 │   ├── useStreamingRender.ts   # 流式渲染批处理
 │   └── useStreamingText.ts     # 文本流式渲染
 ├── lib/
-│   └── api.ts                  # API客户端
+│   ├── api.ts                  # API客户端
+│   ├── logger.ts               # 日志工具
+│   ├── constants.ts            # 常量定义
+│   └── utils/
+│       └── message-helpers.ts  # 消息辅助函数
 ├── config/
 │   ├── dimensions.ts           # 维度配置
 │   └── planning.ts             # 规划配置
@@ -340,11 +345,12 @@ App (page.tsx)
 | 类型 | 说明 | 关键字段 |
 |------|------|----------|
 | `text` | 普通文本 | content, streamingState |
-| `layer_completed` | 层级完成 | layer, fullReportContent, dimensionReports |
-| `dimension_report` | 维度报告 | layer, dimensionKey, streamingState |
-| `dimension_revised` | 维度修复 | layer, dimensionKey, oldContent, newContent |
-| `progress` | 进度更新 | progress, currentLayer |
-| `error` | 错误 | content, error |
+| `file` | 文件上传 | content, filename, size |
+| `progress` | 进度更新 | progress, currentLayer, currentPhase |
+| `dimension_report` | 维度报告 | layer, dimensionKey, dimensionName, streamingState |
+| `layer_completed` | 层级完成 | layer, fullReportContent, dimensionReports, checkpointId |
+
+**注意**: 前端只使用 5 种消息类型，保持简洁。
 
 ## API 客户端
 
@@ -416,17 +422,20 @@ switch (message.type) {
 
 | 文件 | 功能 |
 |------|------|
-| `contexts/UnifiedPlanningContext.tsx` | 全局状态管理（含 deleteSession 方法） |
-| `controllers/TaskController.tsx` | REST轮询 + SSE事件处理 |
-| `lib/api.ts` | API客户端封装 |
-| `config/dimensions.ts` | 28个维度配置 |
-| `types/message-types.ts` | 消息类型定义 |
+| `contexts/UnifiedPlanningContext.tsx` | 全局状态管理（消息、任务、进度面板） |
+| `controllers/TaskController.tsx` | SSE 连接管理、状态同步、断线重连 |
+| `lib/api.ts` | API客户端封装（Planning、Data、Knowledge） |
+| `config/dimensions.ts` | 28个维度配置（名称、层级映射） |
+| `types/message.ts` | 消息类型定义（5种消息类型联合） |
+| `types/message-types.ts` | 具体消息类型详细定义 |
 | `hooks/useTaskSSE.ts` | SSE连接管理 |
 | `components/chat/ChatPanel.tsx` | 主界面容器 |
 | `components/chat/ReviewPanel.tsx` | 审查面板（批准/驳回） |
 | `components/chat/CheckpointMarker.tsx` | 检查点时间线标记（回滚） |
-| `components/chat/DimensionSelector.tsx` | 维度选择器 |
+| `components/chat/DimensionSelector.tsx` | 维度选择器（驳回时选择修复维度） |
 | `components/layout/HistoryPanel.tsx` | 历史记录面板（删除会话） |
+| `components/chat/ThinkingIndicator.tsx` | 思考指示器（Gemini风格动画） |
+| `lib/utils/message-helpers.ts` | 消息创建辅助函数 |
 
 ## 审查与回滚功能
 

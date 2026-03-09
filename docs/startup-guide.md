@@ -78,6 +78,24 @@ python src/rag/build.py
 4. 切分文档并生成向量
 5. 存储到 `knowledge_base/chroma_db/`
 
+**支持的文档格式**：
+- `.txt` - 纯文本
+- `.md` - Markdown
+- `.pdf` - PDF 文档
+- `.docx`, `.doc` - Word 文档
+- `.pptx`, `.ppt` - PowerPoint 演示文稿
+
+**知识库工具**：
+
+| 工具 | 功能 | 状态 |
+|------|------|------|
+| `list_available_documents` | 列出知识库文档 | ✅ 完成 |
+| `document_overview_tool` | 获取文档概览 | ✅ 完成 |
+| `chapter_content_tool` | 获取章节内容（三级详情） | ✅ 完成 |
+| `knowledge_search_tool` | 知识检索（三种上下文模式） | ✅ 完成 |
+| `key_points_search_tool` | 搜索关键要点 | ✅ 完成 |
+| `full_document_tool` | 获取完整文档内容 | ✅ 完成 |
+
 ### 5. RAG 缓存配置
 
 ```env
@@ -133,17 +151,16 @@ logs/
 ### 查看日志
 
 ```bash
-# 实时监控后端日志
-tail -f logs/backend.log
+# Windows 用户 (PowerShell)
+Get-Content logs\backend.log -Tail 50    # 查看后端最近日志
+Get-Content logs\frontend.log -Tail 50   # 查看前端最近日志
+Get-Content logs\backend.log -Wait       # 实时监控后端日志
 
-# 实时监控前端日志
-tail -f logs/frontend.log
-
-# 查看后端最近日志
-tail -n 50 logs/backend.log
-
-# 查看前端最近日志
-tail -n 50 logs/frontend.log
+# Linux/Mac 用户
+tail -f logs/backend.log                 # 实时监控后端日志
+tail -f logs/frontend.log                # 实时监控前端日志
+tail -n 50 logs/backend.log              # 查看后端最近日志
+tail -n 50 logs/frontend.log             # 查看前端最近日志
 ```
 
 ### 日志自动清理
@@ -167,16 +184,21 @@ stop-services.bat
 ### 手动停止
 
 ```bash
+# Windows (PowerShell)
+# 读取PID文件并停止
+Stop-Process -Id (Get-Content logs\backend.pid) -ErrorAction SilentlyContinue
+Stop-Process -Id (Get-Content logs\frontend.pid) -ErrorAction SilentlyContinue
+
+# 或者直接查找进程
+taskkill /F /IM python.exe
+taskkill /F /IM node.exe
+
+# Linux/Mac
 # 读取PID文件并停止
 kill $(cat logs/backend.pid)
 kill $(cat logs/frontend.pid)
 
 # 或者直接查找进程
-# Windows:
-taskkill /F /IM python.exe
-taskkill /F /IM node.exe
-
-# Linux/Mac:
 pkill -f "uvicorn"
 pkill -f "next dev"
 ```
@@ -249,12 +271,12 @@ curl http://localhost:8000/api/planning/health
 **A**: 修改启动脚本中的端口号，或停止占用端口的进程:
 
 ```bash
-# Windows
-netstat -ano | findstr ":8000"
-taskkill /F /PID <进程ID>
+# Windows (PowerShell)
+netstat -ano | findstr ":8000"           # 查找占用端口的进程
+taskkill /F /PID <进程ID>                # 停止进程
 
 # Linux/Mac
-lsof -ti:8000 | xargs kill -9
+lsof -ti:8000 | xargs kill -9            # 停止占用 8000 端口的进程
 ```
 
 ### Q: 日志文件太大
