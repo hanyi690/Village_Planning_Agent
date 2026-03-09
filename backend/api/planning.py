@@ -1482,7 +1482,7 @@ async def _execute_graph_in_background(
                     await graph.aupdate_state(
                         config,
                         {"metadata": updated_metadata},
-                        as_node="update_metadata"
+                        as_node=None  # 不指定节点，直接更新状态
                     )
                     logger.info(f"[Planning] [{session_id}] ✅ 已更新 metadata: published_revisions 新增 {new_published_revisions}")
 
@@ -1647,8 +1647,10 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
         logger.info(f"[Planning API] [{session_id}] 已清除 pause_after_step 和 previous_layer 标志")
 
     # 发送 layer_started 事件（如果是有效的层级）
+    # 注意：如果需要修复，不发送 layer_started，因为修复是对当前已完成层级的修改
+    need_revision = full_state.get("need_revision", False)
     layer_names = {1: "现状分析", 2: "规划思路", 3: "详细规划"}
-    if current_layer in [1, 2, 3]:
+    if current_layer in [1, 2, 3] and not need_revision:
         started_event = {
             "type": "layer_started",
             "layer": current_layer,
@@ -1660,6 +1662,8 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
         }
         _append_session_event(session_id, started_event)
         logger.info(f"[Planning API] [{session_id}] ✓ 恢复时发送 layer_started 事件: Layer {current_layer}")
+    elif need_revision:
+        logger.info(f"[Planning API] [{session_id}] 检测到 need_revision=True，跳过 layer_started 事件")
 
     await _set_stream_state(session_id, "active")
 
@@ -2414,18 +2418,22 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                 # 2. 创建图实例用于状态操作
                 graph = create_village_planning_graph(checkpointer=checkpointer)
 
-                # 3. 构建配置
+                # 3. 构建配置（使用 session_id 作为 thread_id）
                 config = {"configurable": {"thread_id": session_id}}
+                logger.info(f"[Rollback] 查找检查点: session_id={session_id}, checkpoint_id={request.checkpoint_id}")
 
                 # 4. 从 LangGraph 检查点历史中查找目标检查点
                 target_state_snapshot = None
+                available_checkpoints = []
                 async for state_snapshot in graph.aget_state_history(config):
                     snapshot_checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+                    available_checkpoints.append(snapshot_checkpoint_id)
                     if snapshot_checkpoint_id == request.checkpoint_id:
                         target_state_snapshot = state_snapshot
                         break
 
                 if not target_state_snapshot:
+                    logger.error(f"[Rollback] 检查点未找到! 可用的检查点: {available_checkpoints}")
                     raise HTTPException(
                         status_code=404,
                         detail=f"Checkpoint not found: {request.checkpoint_id}"
@@ -2433,23 +2441,111 @@ async def review_action(session_id: str, request: ReviewActionRequest):
 
                 # 5. 使用 aupdate_state 恢复状态，并设置暂停审查状态
                 target_values = target_state_snapshot.values
-                target_layer = target_values.get("current_layer", 1)
                 
-                # 确保回滚后进入正确的暂停审查状态
+                # 综合判断目标层级（刚完成的层级）
+                # 不单独依赖 previous_layer，因为可能因 LangGraph checkpoint 机制未正确保存
+                def determine_completed_layer(values: dict) -> int:
+                    """
+                    综合判断刚完成的层级
+                    
+                    优先级：
+                    1. previous_layer（如果存在且有效）
+                    2. layer_N_completed 标志
+                    3. 数据存在性判断
+                    """
+                    # 优先使用 previous_layer（如果存在且有效）
+                    prev_layer = values.get("previous_layer", 0)
+                    if prev_layer > 0:
+                        logger.info(f"[Rollback] 使用 previous_layer={prev_layer}")
+                        return prev_layer
+                    
+                    # 回退：根据完成标志判断
+                    if values.get("layer_3_completed", False):
+                        logger.info("[Rollback] 根据 layer_3_completed=True 判断层级为 3")
+                        return 3
+                    if values.get("layer_2_completed", False):
+                        logger.info("[Rollback] 根据 layer_2_completed=True 判断层级为 2")
+                        return 2
+                    if values.get("layer_1_completed", False):
+                        logger.info("[Rollback] 根据 layer_1_completed=True 判断层级为 1")
+                        return 1
+                    
+                    # 再回退：根据数据存在判断（检查非空字典）
+                    detail_reports = values.get("detail_reports", {})
+                    if detail_reports and len(detail_reports) > 0:
+                        logger.info(f"[Rollback] 根据 detail_reports 存在判断层级为 3，维度数: {len(detail_reports)}")
+                        return 3
+                    
+                    concept_reports = values.get("concept_reports", {})
+                    if concept_reports and len(concept_reports) > 0:
+                        logger.info(f"[Rollback] 根据 concept_reports 存在判断层级为 2，维度数: {len(concept_reports)}")
+                        return 2
+                    
+                    analysis_reports = values.get("analysis_reports", {})
+                    if analysis_reports and len(analysis_reports) > 0:
+                        logger.info(f"[Rollback] 根据 analysis_reports 存在判断层级为 1，维度数: {len(analysis_reports)}")
+                        return 1
+                    
+                    logger.info("[Rollback] 无法判断层级，返回 0（初始状态）")
+                    return 0
+                
+                target_completed_layer = determine_completed_layer(target_values)
+                logger.info(f"[Rollback] 最终判断目标层级: {target_completed_layer}")
+                
+                # 根据目标层级构造回退状态
+                # 确保保留目标层级的数据，清空后续层级的数据
+                if target_completed_layer == 2:
+                    # 回退到 Layer 2 完成时：保留 L1+L2 数据，清空 L3
+                    rollback_state = {
+                        **target_values,
+                        # 确保 Layer 2 数据存在
+                        "concept_reports": target_values.get("concept_reports", {}),
+                        "layer_2_completed": True,
+                        # 清空 Layer 3 数据
+                        "detail_reports": {},
+                        "layer_3_completed": False,
+                        # 设置正确的层级状态
+                        "current_layer": 3,
+                        "previous_layer": 2,
+                        "pause_after_step": True,
+                    }
+                    logger.info(f"[Planning API] 回退到 Layer 2 完成状态，保留 concept_reports，清空 detail_reports")
+                elif target_completed_layer == 1:
+                    # 回退到 Layer 1 完成时：仅保留 L1 数据
+                    rollback_state = {
+                        **target_values,
+                        # 确保 Layer 1 数据存在
+                        "analysis_reports": target_values.get("analysis_reports", {}),
+                        "layer_1_completed": True,
+                        # 清空 Layer 2/3 数据
+                        "concept_reports": {},
+                        "detail_reports": {},
+                        "layer_2_completed": False,
+                        "layer_3_completed": False,
+                        # 设置正确的层级状态
+                        "current_layer": 2,
+                        "previous_layer": 1,
+                        "pause_after_step": True,
+                    }
+                    logger.info(f"[Planning API] 回退到 Layer 1 完成状态，保留 analysis_reports，清空 concept_reports 和 detail_reports")
+                else:
+                    # 其他情况（初始状态或未知），直接使用检查点值
+                    rollback_state = {
+                        **target_values,
+                        "pause_after_step": True,
+                    }
+                    logger.info(f"[Planning API] 回退到初始状态/未知状态，直接使用检查点值")
+                
                 await graph.aupdate_state(
                     config,
-                    {
-                        **target_values,
-                        "pause_after_step": True,  # 确保回滚后进入暂停状态
-                        "previous_layer": target_layer,  # 标识刚回滚的层级
-                    },
+                    rollback_state,
                     as_node=None  # 不指定节点，直接覆盖状态
                 )
 
                 logger.info(f"[Planning API] Successfully rolled back to checkpoint {request.checkpoint_id}")
 
                 # 6. 更新 session 元数据（不更新 initial_state，Checkpoint 是唯一数据源）
-                session["current_layer"] = target_layer
+                session["current_layer"] = rollback_state.get("current_layer", 1)
                 session["status"] = TaskStatus.paused
 
                 # 7. 提交审查决定
@@ -2465,11 +2561,12 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                     "status": TaskStatus.paused,
                 })
 
-                logger.info(f"[Planning API] Rolling back session {session_id} to layer {target_layer}")
+                logger.info(f"[Planning API] Rolling back session {session_id} to Layer {target_completed_layer} completed state")
 
                 return {
-                    "message": f"Rolled back to checkpoint {request.checkpoint_id}",
-                    "current_layer": target_layer,
+                    "message": f"Rolled back to Layer {target_completed_layer} completed state",
+                    "current_layer": rollback_state.get("current_layer", 1),
+                    "previous_layer": target_completed_layer,
                     "resumed": False  # 回退后不自动恢复，等待用户确认
                 }
 
@@ -2629,19 +2726,27 @@ async def list_checkpoints(project_name: str, session_id: Optional[str] = None):
 
     Args:
         project_name: 项目名称
-        session_id: 可选的会话 ID，用于精确获取检查点
+        session_id: 会话 ID（推荐传入，确保与 rollback 使用相同的 thread_id）
     """
     try:
         checkpointer = await get_global_checkpointer()
         graph = create_village_planning_graph(checkpointer=checkpointer)
 
-        # 使用 session_id 作为 thread_id
+        # 使用 session_id 作为 thread_id（与 rollback 保持一致）
+        # 如果没有 session_id，回退功能将无法使用
         thread_id = session_id or project_name
         config = {"configurable": {"thread_id": thread_id}}
+        
+        logger.info(f"[Checkpoints] list_checkpoints: project_name={project_name}, session_id={session_id}, thread_id={thread_id}")
 
         checkpoints = []
         async for state_snapshot in graph.aget_state_history(config):
             checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+            
+            # 跳过空 checkpoint_id
+            if not checkpoint_id:
+                continue
+            
             values = state_snapshot.values or {}
 
             # ✅ 修复时间戳格式：确保返回 ISO 8601 格式
@@ -2689,11 +2794,26 @@ async def list_checkpoints(project_name: str, session_id: Optional[str] = None):
                 timestamp = datetime.now().isoformat()
 
             # 构建检查点信息
+            # 使用 previous_layer 判断检查点状态（"Layer N 完成后"）
+            completed_layer = values.get("previous_layer", 0)
+            current_layer = values.get("current_layer", 1)
+            
+            if completed_layer > 0:
+                # Layer N 刚完成的状态
+                description = f"Layer {completed_layer} 完成"
+                display_layer = completed_layer
+            else:
+                # 初始状态或执行中
+                description = f"初始状态"
+                display_layer = current_layer
+            
             checkpoint_info = {
                 "checkpoint_id": checkpoint_id,
                 "timestamp": timestamp,
-                "layer": values.get("current_layer", 1),
-                "description": f"Layer {values.get('current_layer', 1)} checkpoint",
+                "layer": display_layer,
+                "current_layer": current_layer,
+                "previous_layer": completed_layer,
+                "description": description,
             }
             checkpoints.append(checkpoint_info)
 

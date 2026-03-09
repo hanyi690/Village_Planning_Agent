@@ -85,11 +85,27 @@ async def _get_session_checkpoints(thread_id: str) -> List[Dict[str, Any]]:
             metadata = state_snapshot.metadata or {}
             values = state_snapshot.values or {}
             
+            # 使用 previous_layer 判断检查点层级（与 planning.py 一致）
+            # previous_layer 表示刚完成的层级，用于回退判断
+            completed_layer = values.get("previous_layer", 0)
+            current_layer = values.get("current_layer", 1)
+            
+            if completed_layer > 0:
+                # Layer N 刚完成的状态
+                display_layer = completed_layer
+                description = f"Layer {completed_layer} 完成"
+            else:
+                # 初始状态或执行中，使用 current_layer 作为参考
+                display_layer = current_layer
+                description = f"初始状态"
+            
             checkpoints.append({
                 "checkpoint_id": checkpoint_id,
                 "timestamp": metadata.get("write_ts", ""),
-                "layer": values.get("current_layer", 1),
-                "description": f"Layer {values.get('current_layer', 1)} checkpoint"
+                "layer": display_layer,
+                "current_layer": current_layer,
+                "previous_layer": completed_layer,
+                "description": description
             })
     except Exception as e:
         logger.error(f"[Data API] Failed to get checkpoints: {e}", exc_info=True)

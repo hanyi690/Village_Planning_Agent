@@ -635,9 +635,16 @@ def init_pause_state(state: VillagePlanningState) -> Dict[str, Any]:
     # 当 last_revised_dimensions 存在且 need_revision=False 时，说明修复已完成
     if state.get("last_revised_dimensions"):
         logger.info(f"[主图-暂停初始化] 清除 last_revised_dimensions: {state['last_revised_dimensions']}")
+        # 修复完成后，step_mode 下需要暂停让用户审查修复结果
+        if state.get("step_mode", False):
+            logger.info("[主图-暂停初始化] 修复完成 + Step模式，设置 pause_after_step=True 等待审查")
+            return {
+                "pause_after_step": True,
+                "last_revised_dimensions": []
+            }
         return {
             "pause_after_step": False,
-            "last_revised_dimensions": []  # 清除标志，避免第二次迭代检测到
+            "last_revised_dimensions": []
         }
     
     if state.get("step_mode", False) and state.get("previous_layer", 0) > 0:
