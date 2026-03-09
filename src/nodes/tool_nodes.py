@@ -14,7 +14,7 @@ from ..utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class ToolBridgeNode(BaseNode):
+class ToolBridgeNode(AsyncBaseNode):
     """
     工具桥接节点 - 统一管理所有工具调用
 
@@ -41,7 +41,7 @@ class ToolBridgeNode(BaseNode):
             self._adapter_factory = get_adapter_factory()
         return self._adapter_factory
 
-    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """根据状态标志路由到相应的处理逻辑"""
         # 优先级：适配器调用 > 修复
 
@@ -53,9 +53,9 @@ class ToolBridgeNode(BaseNode):
         elif state.get("use_population_adapter", False):
             return self._run_population_adapter(state)
 
-        # 修复逻辑
+        # 修复逻辑 - 使用 await 调用异步节点
         if state.get("need_revision", False):
-            return self.revision_node(state)
+            return await self.revision_node(state)
         else:
             return {}  # 无操作
 

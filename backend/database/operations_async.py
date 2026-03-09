@@ -17,7 +17,8 @@ from .engine import get_async_session
 from .models import (
     PlanningSession,
     UISession,
-    UIMessage
+    UIMessage,
+    DimensionRevision,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +95,7 @@ def _ui_message_to_dict(db_message: UIMessage) -> Dict[str, Any]:
         "content": db_message.content,
         "message_type": db_message.message_type,
         "message_metadata": db_message.message_metadata,
+        "created_at": db_message.created_at.isoformat() if db_message.created_at else None,  # ✅ 原始创建时间
         "timestamp": db_message.timestamp.isoformat() if db_message.timestamp else None,
     }
 
@@ -778,21 +780,25 @@ async def upsert_ui_message_async(
     """
     import json
     from sqlalchemy import text
+    from datetime import datetime
     
     try:
         async with get_async_session() as session:
             # 使用原生 SQL 进行 upsert（SQLite 语法）
+            # ✅ created_at 只在插入时设置，更新时保留原值
+            # ✅ timestamp 每次更新都会刷新
+            now = datetime.now().isoformat()
             result = await session.execute(
                 text("""
                     INSERT INTO ui_messages 
-                        (session_id, message_id, role, content, message_type, message_metadata, timestamp)
+                        (session_id, message_id, role, content, message_type, message_metadata, created_at, timestamp)
                     VALUES 
-                        (:session_id, :message_id, :role, :content, :message_type, :metadata, CURRENT_TIMESTAMP)
+                        (:session_id, :message_id, :role, :content, :message_type, :metadata, :now, :now)
                     ON CONFLICT(session_id, message_id) DO UPDATE SET
                         content = excluded.content,
                         message_type = excluded.message_type,
                         message_metadata = excluded.message_metadata,
-                        timestamp = CURRENT_TIMESTAMP
+                        timestamp = :now
                 """),
                 {
                     "session_id": session_id,
@@ -801,6 +807,7 @@ async def upsert_ui_message_async(
                     "content": content,
                     "message_type": message_type,
                     "metadata": json.dumps(metadata) if metadata else None,
+                    "now": now,
                 }
             )
             await session.commit()
@@ -883,3 +890,171 @@ async def delete_ui_messages_async(session_id: str, role: Optional[str] = None) 
     except Exception as e:
         logger.error(f"[Async DB] Failed to delete UI messages for session {session_id}: {e}", exc_info=True)
         return False
+
+
+# ==========================================
+# Dimension Revision Operations
+# ==========================================
+
+async def create_dimension_revision_async(
+    session_id: str,
+    layer: int,
+    dimension_key: str,
+    content: str,
+    reason: Optional[str] = None,
+    created_by: Optional[str] = None,
+    previous_content_hash: Optional[str] = None,
+) -> int:
+    """
+    Create a dimension revision record (async)
+    创建维度修订记录
+    
+    Args:
+        session_id: Session ID
+        layer: Layer number (1/2/3)
+        dimension_key: Dimension identifier
+        content: New content
+        reason: Reason for revision
+        created_by: Who made the revision
+        previous_content_hash: Hash of previous content
+        
+    Returns:
+        int: Revision database ID
+    """
+    import hashlib
+    
+    try:
+        async with get_async_session() as session:
+            # Get the latest version number for this dimension
+            version_result = await session.execute(
+                select(func.max(DimensionRevision.version)).where(
+                    DimensionRevision.session_id == session_id,
+                    DimensionRevision.layer == layer,
+                    DimensionRevision.dimension_key == dimension_key,
+                )
+            )
+            latest_version = version_result.scalar() or 0
+            new_version = latest_version + 1
+            
+            # Create new revision
+            revision = DimensionRevision(
+                session_id=session_id,
+                layer=layer,
+                dimension_key=dimension_key,
+                content=content,
+                previous_content_hash=previous_content_hash or hashlib.md5(content.encode()).hexdigest()[:16],
+                reason=reason,
+                created_by=created_by,
+                version=new_version,
+            )
+            session.add(revision)
+            await session.commit()
+            await session.refresh(revision)
+            
+            logger.info(f"[Async DB] Created revision v{new_version} for dimension {dimension_key} in session {session_id}")
+            return revision.id
+            
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to create dimension revision: {e}", exc_info=True)
+        raise
+
+
+async def get_dimension_revisions_async(
+    session_id: str,
+    layer: Optional[int] = None,
+    dimension_key: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """
+    Get dimension revision history (async)
+    获取维度修订历史
+    
+    Args:
+        session_id: Session ID
+        layer: Filter by layer (optional)
+        dimension_key: Filter by dimension key (optional)
+        limit: Maximum number of results
+        
+    Returns:
+        List of revision dictionaries
+    """
+    try:
+        async with get_async_session() as session:
+            query = select(DimensionRevision).where(
+                DimensionRevision.session_id == session_id
+            )
+            
+            if layer is not None:
+                query = query.where(DimensionRevision.layer == layer)
+            if dimension_key:
+                query = query.where(DimensionRevision.dimension_key == dimension_key)
+            
+            query = query.order_by(DimensionRevision.created_at.desc()).limit(limit)
+            
+            result = await session.execute(query)
+            revisions = result.scalars().all()
+            
+            return [
+                {
+                    "id": r.id,
+                    "session_id": r.session_id,
+                    "layer": r.layer,
+                    "dimension_key": r.dimension_key,
+                    "content": r.content,
+                    "previous_content_hash": r.previous_content_hash,
+                    "reason": r.reason,
+                    "created_by": r.created_by,
+                    "version": r.version,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in revisions
+            ]
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to get dimension revisions: {e}", exc_info=True)
+        return []
+
+
+async def get_latest_dimension_version_async(
+    session_id: str,
+    layer: int,
+    dimension_key: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Get the latest version of a dimension (async)
+    获取维度的最新版本
+    
+    Args:
+        session_id: Session ID
+        layer: Layer number
+        dimension_key: Dimension identifier
+        
+    Returns:
+        Latest revision dictionary or None
+    """
+    try:
+        async with get_async_session() as session:
+            query = select(DimensionRevision).where(
+                DimensionRevision.session_id == session_id,
+                DimensionRevision.layer == layer,
+                DimensionRevision.dimension_key == dimension_key,
+            ).order_by(DimensionRevision.version.desc()).limit(1)
+            
+            result = await session.execute(query)
+            revision = result.scalar_one_or_none()
+            
+            if revision:
+                return {
+                    "id": revision.id,
+                    "session_id": revision.session_id,
+                    "layer": revision.layer,
+                    "dimension_key": revision.dimension_key,
+                    "content": revision.content,
+                    "version": revision.version,
+                    "created_at": revision.created_at.isoformat() if revision.created_at else None,
+                    "reason": revision.reason,
+                    "created_by": revision.created_by,
+                }
+            return None
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to get latest dimension version: {e}", exc_info=True)
+        return None

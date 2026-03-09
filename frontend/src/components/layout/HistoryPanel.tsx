@@ -11,6 +11,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faHistory, faSearch, faSpinner, faInbox, faChevronRight, faClock, faTrash, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
+import { formatFullTimestamp } from '@/lib/utils';
 
 interface DeleteConfirmModalProps {
   isOpen: boolean;
@@ -314,7 +315,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
                                     icon={faClock}
                                     className="text-gray-300 group-hover:text-emerald-400 transition-colors"
                                   />
-                                  {new Date(session.timestamp).toLocaleString('zh-CN')}
+                                  {formatFullTimestamp(session.timestamp)}
                                   {isCurrentSession && (
                                     <span className="text-xs text-violet-500 font-medium">当前</span>
                                   )}

@@ -103,6 +103,10 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   // ✅ NEW: Track layer report message creation state (fix React closure trap)
   // 使用 ref 而不是依赖 messages 状态，确保 handleLayerCompleted 能正确检测消息是否存在
   const layerReportCreatedRef = useRef<Record<number, boolean>>({});
+  
+  // ✅ NEW: Track layer progress message creation state
+  // 用于避免在连续模式下重复创建进度消息
+  const layerProgressCreatedRef = useRef<Record<number, boolean>>({});
 
   // ✅ NEW: Use useMemo to cache filtered messages (P1.4 performance optimization)
   const progressMessages = useMemo(() => {
@@ -478,8 +482,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   }, [messages, addMessage, setMessages, showViewer, syncMessageToBackend, dimensionContents, fetchLayerReportsFromBackend, flushBatch]);
 
   // ✅ 新增：处理层级开始事件 - 创建空的 LayerReportMessage（预填充维度槽位）
+  // 🔧 修复：使用函数式更新 + ref 双重检查，确保消息不会被重复创建或跳过
   const handleLayerStarted = useCallback((layer: number, layerName: string) => {
-    console.log(`[ChatPanel] Layer ${layer} started - ${layerName}`);
+    console.log(`[ChatPanel] 🚀 handleLayerStarted 被调用: Layer ${layer}, layerName="${layerName}"`);
 
     // 🔧 更新当前层级和阶段（用于 ProgressPanel 显示）
     setCurrentLayerAndPhase(layer);
@@ -493,20 +498,33 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     // 创建层级报告消息（预填充维度槽位，等待流式更新）
     const layerReportId = `layer_report_${layer}`;
     
-    // 检查该层是否已有 LayerReportMessage
-    const hasLayerReport = messages.some(m => m.id === layerReportId);
+    // 🔧 关键修复：使用函数式更新，在 setMessages 回调中检查消息是否存在
+    // 这样避免了 React 状态闭包问题和 ref 过早设置的问题
+    let messageCreated = false;
     
-    if (!hasLayerReport) {
-      // ✅ 预先获取该层级的所有维度，创建空槽位
+    setMessages(prev => {
+      // 在回调中检查消息是否已存在
+      const exists = prev.some(m => m.id === layerReportId);
+      
+      if (exists) {
+        console.log(`[ChatPanel] Layer ${layer} 占位消息已存在，跳过创建`);
+        return prev;  // 消息已存在，不做任何修改
+      }
+      
+      // 创建新的占位消息
       const dimensionKeys = getDimensionsByLayer(layer);
       const emptyDimensionReports: Record<string, string> = {};
       dimensionKeys.forEach(key => {
         emptyDimensionReports[key] = '';  // 空字符串，等待流式填充
       });
       
-      console.log(`[ChatPanel] Pre-creating ${dimensionKeys.length} dimension slots for Layer ${layer}`);
+      console.log(`[ChatPanel] ✅ 创建 Layer ${layer} 占位消息，${dimensionKeys.length} 个维度槽位`);
+      messageCreated = true;
       
-      addMessage({
+      // 更新 ref 标记
+      layerReportCreatedRef.current[layer] = true;
+      
+      const newMsg = {
         ...createBaseMessage('assistant'),
         id: layerReportId,
         type: 'layer_completed' as const,
@@ -520,33 +538,34 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         fullReportContent: '',
         dimensionReports: emptyDimensionReports,
         actions: [],
-        // ✅ 关键修复：标记为延迟存储，等待层级完成后存储完整数据
         _pendingStorage: true,
-      } as any);  // 使用 any 类型扩展，因为 _pendingStorage 不在标准类型中
+      } as any;
       
-      // ✅ 关键修复：使用 ref 标记消息已创建，解决 React 闭包陷阱问题
-      // handleLayerCompleted 可能因为闭包问题看到旧的 messages 状态
-      layerReportCreatedRef.current[layer] = true;
-      console.log(`[ChatPanel] Layer ${layer} report marked as created in ref`);
-    }
+      return [...prev, newMsg];
+    });
 
-    // 🔧 修复：添加层级开始提示消息前检查是否已存在
-    // 使用 currentLayer 属性（字符串类型）或内容匹配来检查
-    const layerProgressContent = `🔄 正在执行 Layer ${layer}:`;
-    const hasProgressMsg = messages.some(m => 
-      m.type === 'progress' && m.content.startsWith(layerProgressContent)
-    );
-    
-    if (!hasProgressMsg) {
-      addMessage({
+    // 🔧 修复：添加层级开始提示消息（使用函数式更新避免闭包问题）
+    setMessages(prev => {
+      const progressId = `progress_layer_${layer}`;
+      const hasProgress = prev.some(m => m.id === progressId && m.type === 'progress');
+      
+      if (hasProgress) {
+        return prev;
+      }
+      
+      return [...prev, {
         ...createBaseMessage(),
+        id: progressId,
         type: 'progress',
         role: 'assistant',
         content: `🔄 正在执行 Layer ${layer}: ${layerLabels[layer] || layerName}...`,
         progress: 0,
-      } as ProgressMessage);
-    }
-  }, [messages, addMessage, setCurrentLayerAndPhase]);
+      } as ProgressMessage];
+    });
+    
+    // 更新进度消息的 ref 标记
+    layerProgressCreatedRef.current[layer] = true;
+  }, [setMessages, setCurrentLayerAndPhase]);
 
   const handlePause = useCallback(async (
     layer: number,
@@ -606,63 +625,59 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   }, [setCheckpoints, setIsPaused, setPendingReviewLayer, fetchLayerReportsFromBackend, setDimensionContents]);
 
   // 【新增】处理维度修复完成事件
-  const handleDimensionRevised = useCallback((data: {
+  // ✅ Signal-Fetch 模式：SSE 事件只发送轻量信号，内容通过 REST API 获取
+  const handleDimensionRevised = useCallback(async (data: {
     dimension: string;
     layer: number;
-    oldContent: string;
-    newContent: string;
-    feedback: string;
-    isTarget: boolean;
-    revisionType: string;
     timestamp: string;
+    // 注意：SSE 事件不再携带 newContent，需要通过 REST API 获取
   }) => {
-    console.log('[ChatPanel] Dimension revised event received', data);
+    console.log('[ChatPanel] Dimension revised signal received', data);
     
     const dimensionName = getDimensionName(data.dimension);
+    const revisionId = `revision-${data.timestamp}-${data.dimension}`;  // 可预测 ID，便于去重
     
-    // 根据维度类型显示不同的消息
-    if (data.isTarget) {
-      // 目标维度：显示用户反馈和修复结果
-      if (data.feedback) {
-        addMessage({
-          ...createBaseMessage(),
-          type: 'text',
-          role: 'user',
-          content: `🎯 修改意见（${dimensionName}）：${data.feedback}`,
-        });
+    try {
+      // ✅ Signal-Fetch 模式：调用 REST API 获取维度内容
+      const dimensionData = await planningApi.getDimensionContent(taskId || '', data.dimension);
+      
+      if (!dimensionData.exists) {
+        console.warn(`[ChatPanel] Dimension ${data.dimension} content not found`);
+        return;
       }
       
-      addMessage({
+      const newContent = dimensionData.content;
+      
+      // 添加修复后的维度报告
+      const dimensionReportMsg = {
         ...createBaseMessage(),
-        type: 'text',
-        role: 'assistant',
-        content: `✅ **${dimensionName}** 已按用户反馈完成修改`,
+        id: revisionId,  // 使用可预测 ID
+        type: 'dimension_report' as const,
+        role: 'assistant' as const,
+        layer: data.layer,
+        dimensionKey: data.dimension,
+        dimensionName: dimensionName,
+        content: newContent,
+        streamingState: 'completed' as const,
+        wordCount: newContent.length,
+      };
+      addMessage(dimensionReportMsg);
+      syncMessageToBackend(dimensionReportMsg);  // ✅ 持久化修复后的维度报告
+      
+      // 更新维度内容到状态
+      setDimensionContents(prev => {
+        const newContents = new Map(prev);
+        newContents.set(data.dimension, newContent);
+        return newContents;
       });
-    } else {
-      // 级联维度：显示级联更新提示
-      addMessage({
-        ...createBaseMessage(),
-        type: 'text',
-        role: 'assistant',
-        content: `🔗 **${dimensionName}** 已根据上游更新自动调整`,
-      });
+      
+      console.log(`[ChatPanel] 维度 ${data.dimension} 修复完成 (v${dimensionData.version})，已添加并持久化消息`);
+    } catch (error) {
+      console.error(`[ChatPanel] Failed to fetch dimension content:`, error);
+      // 降级处理：添加错误提示消息
+      addMessage(createSystemMessage(`获取维度 ${dimensionName} 内容失败，请刷新页面重试`, 'error'));
     }
-    
-    // 添加修复后的内容
-    addMessage({
-      ...createBaseMessage(),
-      type: 'dimension_report',
-      role: 'assistant',
-      layer: data.layer,
-      dimensionKey: data.dimension,
-      dimensionName: dimensionName,
-      content: data.newContent,
-      streamingState: 'completed',
-      wordCount: data.newContent.length,
-    });
-    
-    console.log(`[ChatPanel] 维度 ${data.dimension} 修复完成（${data.revisionType}），已添加消息`);
-  }, [addMessage]);
+  }, [addMessage, syncMessageToBackend, taskId, setDimensionContents]);
 
   // Stable callbacks object using useMemo
   const callbacks = useMemo(() => ({
@@ -742,6 +757,66 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       taskState,
     });
   }, [taskId, taskState, syncBackendState]);
+
+  // ✅ SSE 断线重连后的层级状态恢复机制
+  // 当检测到 taskState.layer_X_completed 为 true 但 messages 中没有对应消息时
+  // 主动从 REST API 获取数据并创建 LayerReportMessage
+  // 🔧 修复：使用 messages 状态检查而非 ref，避免 ref 与实际状态不同步的问题
+  useEffect(() => {
+    if (!taskId || status === 'idle') return;
+
+    const layersToCheck = [
+      { layer: 1, completed: taskState.layer_1_completed },
+      { layer: 2, completed: taskState.layer_2_completed },
+      { layer: 3, completed: taskState.layer_3_completed },
+    ];
+
+    layersToCheck.forEach(async ({ layer, completed }) => {
+      if (!completed) return;
+      
+      // 🔧 修复：在 messages 中检查是否存在对应的消息
+      const layerReportId = `layer_report_${layer}`;
+      const messageExists = messages.some(m => m.id === layerReportId);
+      
+      if (messageExists) {
+        // 消息已存在，检查是否需要更新数据
+        const existingMsg = messages.find(m => m.id === layerReportId);
+        if (existingMsg && (existingMsg as any).fullReportContent && (existingMsg as any).fullReportContent.length > 0) {
+          // 消息已有完整数据，无需恢复
+          return;
+        }
+        // 消息存在但没有完整数据，需要获取数据
+        console.log(`[ChatPanel] 🔄 SSE 断线恢复：Layer ${layer} 消息存在但数据不完整，补充数据...`);
+      } else {
+        console.log(`[ChatPanel] 🔄 SSE 断线恢复：Layer ${layer} 已完成但消息不存在，创建消息...`);
+      }
+
+      // 获取完整数据
+      try {
+        const backendData = await fetchLayerReportsFromBackend(layer);
+        if (backendData && backendData.reports && Object.keys(backendData.reports).length > 0) {
+          console.log(`[ChatPanel] 🔄 SSE 断线恢复：获取到 Layer ${layer} 数据，${Object.keys(backendData.reports).length} 个维度`);
+          
+          // 调用 handleLayerCompleted 来更新/创建消息
+          // handleLayerCompleted 会自动处理消息存在/不存在的情况
+          await handleLayerCompleted(layer, backendData.reportContent, backendData.reports);
+        } else {
+          console.warn(`[ChatPanel] 🔄 SSE 断线恢复：Layer ${layer} 数据为空`);
+        }
+      } catch (error) {
+        console.error(`[ChatPanel] 🔄 SSE 断线恢复：获取 Layer ${layer} 数据失败:`, error);
+      }
+    });
+  }, [
+    taskId,
+    status,
+    taskState.layer_1_completed,
+    taskState.layer_2_completed,
+    taskState.layer_3_completed,
+    messages,  // 🔧 添加 messages 依赖，确保能检测到消息状态
+    handleLayerCompleted,
+    fetchLayerReportsFromBackend,
+  ]);
 
   // Determine if input should be disabled
   const inputDisabled = isInputDisabled(status);

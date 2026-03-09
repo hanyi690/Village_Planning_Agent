@@ -208,7 +208,8 @@ export interface UIMessage {
   content: string;
   message_type: string;
   message_metadata?: Record<string, unknown>;
-  timestamp: string;
+  created_at?: string;  // ✅ 原始创建时间（用于排序）
+  timestamp: string;    // 最后更新时间
 }
 
 // 【Signal-Fetch Pattern】层级报告响应类型
@@ -329,18 +330,36 @@ export const planningApi = {
   /**
    * Get SSE stream for planning session
    * GET /api/planning/stream/{session_id}
+   * 
+   * @param sessionId - 会话 ID
+   * @param onEvent - 事件回调
+   * @param onError - 错误回调（仅用于不可恢复的错误）
+   * @param onReconnect - 重连成功回调（浏览器自动重连后触发，用于同步状态）
    */
   createStream(
     sessionId: string,
     onEvent: (event: PlanningSSEEvent) => void,
-    onError?: (error: Error) => void
+    onError?: (error: Error) => void,
+    onReconnect?: () => void
   ): EventSource {
     const url = `${API_BASE_URL}/api/planning/stream/${sessionId}`;
     const es = new EventSource(url);
     let connectionState: 'connecting' | 'connected' | 'paused' | 'closing' = 'connecting';
+    
+    // 🔧 重连检测：标记是否正在重连
+    let isReconnecting = false;
+    let wasConnected = false;
+
+    // 🔧 空闲超时保护：跟踪最后活动时间
+    // 注意：必须在 parseEvent 之前定义，以便闭包访问
+    const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟
+    let lastActivityTime = Date.now();
 
     // Helper to parse SSE event
     function parseEvent(event: MessageEvent, type: PlanningSSEEventType): void {
+      // ✅ 重置空闲计时器 - 命名事件也需要重置活动时间
+      lastActivityTime = Date.now();
+      
       try {
         const rawData = event.data;
         const data = JSON.parse(rawData) as PlanningSSEDataBase;
@@ -482,7 +501,13 @@ export const planningApi = {
 
       // readyState 0 = CONNECTING：浏览器正在尝试重连
       if (es.readyState === EventSource.CONNECTING) {
-        console.log('[SSE] Reconnecting (readyState=CONNECTING)...');
+        // 🔧 修复：如果之前已连接过，说明是断线重连
+        if (wasConnected) {
+          isReconnecting = true;
+          console.log('[SSE] Connection lost, browser is auto-reconnecting...');
+        } else {
+          console.log('[SSE] Initial connection in progress...');
+        }
         return;
       }
 
@@ -492,24 +517,19 @@ export const planningApi = {
     };
 
     es.onopen = () => {
-      connectionState = 'connected';
-    };
-
-    // 🔧 防御性编程：兜底超时保护
-    // 防止后端异常导致连接挂死，5 分钟无活动则关闭
-    const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 分钟
-    let lastActivityTime = Date.now();
-
-    // 监听所有消息，重置活动时间
-    const originalOnMessage = es.onmessage;
-    es.onmessage = (event) => {
-      lastActivityTime = Date.now();
-      if (originalOnMessage) {
-        originalOnMessage.call(es, event);
+      // 🔧 重连检测：如果之前设置过重连标记，说明这是重连成功
+      if (isReconnecting) {
+        console.log('[SSE] ✅ Auto-reconnect successful! Calling onReconnect callback...');
+        isReconnecting = false;
+        // 调用重连回调，让上层决定是否需要同步状态
+        onReconnect?.();
       }
+      connectionState = 'connected';
+      wasConnected = true;
     };
 
-    // 定期检查连接活动状态
+    // 🔧 空闲超时检查：定期检查连接活动状态
+    // 注意：lastActivityTime 已在函数开头定义，parseEvent 中会重置
     const idleCheckInterval = setInterval(() => {
       const idleTime = Date.now() - lastActivityTime;
       if (idleTime > IDLE_TIMEOUT_MS && es.readyState !== EventSource.CLOSED) {
@@ -585,6 +605,44 @@ export const planningApi = {
    */
   async getLayerReports(sessionId: string, layer: number): Promise<LayerReportsResponse> {
     return apiRequest<LayerReportsResponse>(`/api/planning/sessions/${sessionId}/layer/${layer}/reports`);
+  },
+
+  /**
+   * Get dimension content (Signal-Fetch Pattern)
+   * GET /api/planning/sessions/{session_id}/dimensions/{dimension_key}
+   * 
+   * 当收到 dimension_revised SSE 信号后，调用此 API 获取完整内容。
+   */
+  async getDimensionContent(sessionId: string, dimensionKey: string): Promise<{
+    dimension_key: string;
+    layer: number;
+    content: string;
+    version: number;
+    exists: boolean;
+  }> {
+    return apiRequest(`/api/planning/sessions/${sessionId}/dimensions/${dimensionKey}`);
+  },
+
+  /**
+   * Get dimension revision history
+   * GET /api/planning/sessions/{session_id}/dimensions/{dimension_key}/revisions
+   */
+  async getDimensionRevisions(sessionId: string, dimensionKey: string, limit: number = 20): Promise<{
+    dimension_key: string;
+    layer: number;
+    revisions: Array<{
+      id: number;
+      layer: number;
+      dimension_key: string;
+      content: string;
+      version: number;
+      reason: string | null;
+      created_by: string | null;
+      created_at: string;
+    }>;
+    count: number;
+  }> {
+    return apiRequest(`/api/planning/sessions/${sessionId}/dimensions/${dimensionKey}/revisions?limit=${limit}`);
   },
 
   /**

@@ -86,12 +86,55 @@ export function useTaskController(
   }, [callbacks]);
 
   // ✅ 简化：只在 SSE 断线重连时获取状态
+  // 🔧 增强：检测层级状态变化并触发回调
   const fetchStatus = useCallback(async () => {
     if (!taskId) return;
 
     try {
       const statusData = await planningApi.getStatus(taskId);
-      
+
+      // ✅ 新增：检测层级完成状态变化
+      const layerCompletedChanged =
+        (statusData.layer_1_completed && !state.layer_1_completed) ||
+        (statusData.layer_2_completed && !state.layer_2_completed) ||
+        (statusData.layer_3_completed && !state.layer_3_completed);
+
+      if (layerCompletedChanged) {
+        console.log('[TaskController] 🔄 检测到层级完成状态变化，触发恢复回调:', {
+          layer_1: statusData.layer_1_completed,
+          layer_2: statusData.layer_2_completed,
+          layer_3: statusData.layer_3_completed,
+        });
+
+        // 检查每层的完成状态变化
+        const layerNames: Record<number, string> = {
+          1: '现状分析',
+          2: '规划思路',
+          3: '详细规划',
+        };
+
+        // Layer 1 完成状态变化
+        if (statusData.layer_1_completed && !state.layer_1_completed) {
+          console.log('[TaskController] 🔄 触发 Layer 1 started 回调（断线恢复）');
+          callbacksRef.current.onLayerStarted?.(1, layerNames[1]);
+          callbacksRef.current.onLayerCompleted?.(1, '', {});
+        }
+
+        // Layer 2 完成状态变化
+        if (statusData.layer_2_completed && !state.layer_2_completed) {
+          console.log('[TaskController] 🔄 触发 Layer 2 started 回调（断线恢复）');
+          callbacksRef.current.onLayerStarted?.(2, layerNames[2]);
+          callbacksRef.current.onLayerCompleted?.(2, '', {});
+        }
+
+        // Layer 3 完成状态变化
+        if (statusData.layer_3_completed && !state.layer_3_completed) {
+          console.log('[TaskController] 🔄 触发 Layer 3 started 回调（断线恢复）');
+          callbacksRef.current.onLayerStarted?.(3, layerNames[3]);
+          callbacksRef.current.onLayerCompleted?.(3, '', {});
+        }
+      }
+
       setState({
         status: statusData.status as TaskState['status'],
         current_layer: statusData.current_layer ?? null,
@@ -110,12 +153,13 @@ export function useTaskController(
         status: statusData.status,
         current_layer: statusData.current_layer,
         pause_after_step: statusData.pause_after_step,
+        layer_completed: [statusData.layer_1_completed, statusData.layer_2_completed, statusData.layer_3_completed],
       });
 
     } catch (error: any) {
       console.error('[TaskController] 获取状态失败:', error);
     }
-  }, [taskId]);
+  }, [taskId, state.layer_1_completed, state.layer_2_completed, state.layer_3_completed]);
 
   // ✅ SSE 连接管理（唯一的状态更新渠道）
   // 添加断线重连逻辑
@@ -202,12 +246,17 @@ export function useTaskController(
               layer_name?: string;
             } || {};
 
-            console.log(`[TaskController] 🚀 layer_started: layer=${data.layer || data.layer_number}`);
+            const layerNum = data.layer || data.layer_number || 1;
+            console.log(`[TaskController] 🚀 layer_started 事件接收: layer=${layerNum}, layer_name="${data.layer_name || ''}"`);
+            console.log(`[TaskController] 🚀 准备调用 onLayerStarted 回调...`);
 
-            callbacksRef.current.onLayerStarted?.(
-              data.layer || data.layer_number || 1,
-              data.layer_name || ''
-            );
+            // 调用回调
+            if (callbacksRef.current.onLayerStarted) {
+              callbacksRef.current.onLayerStarted(layerNum, data.layer_name || '');
+              console.log(`[TaskController] 🚀 onLayerStarted 回调已调用`);
+            } else {
+              console.warn(`[TaskController] ⚠️ onLayerStarted 回调未定义！`);
+            }
           } else if (eventType === 'layer_completed') {
             const data = event.data as {
               layer?: number;
@@ -283,6 +332,13 @@ export function useTaskController(
             console.error('[TaskController] SSE 重连失败，已达到最大重试次数');
             callbacksRef.current.onError?.('SSE connection failed after multiple retries');
           }
+        },
+        // 🔧 新增：浏览器自动重连成功后的回调
+        () => {
+          console.log('[TaskController] 🔄 浏览器自动重连成功，同步最新状态...');
+          console.log('[TaskController] 🔄 断线恢复机制：将检测层级完成状态变化并触发回调');
+          // 重连成功后获取完整状态，确保不错过断开期间的事件
+          fetchStatus();
         }
       );
 

@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faBookmark, faUndo, faSpinner, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
+import { formatFullTimestamp, parseTimestamp } from '@/lib/utils';
 import type { Checkpoint } from '@/types';
 
 interface CheckpointMarkerProps {
@@ -34,7 +35,12 @@ export default function CheckpointMarker({
   };
 
   const layerName = layerNames[checkpoint.layer] || `第 ${checkpoint.layer} 层`;
-  const timestamp = new Date(checkpoint.timestamp).toLocaleString('zh-CN');
+  
+  // ✅ 使用安全的时间解析函数
+  const parsedDate = parseTimestamp(checkpoint.timestamp);
+  const timestamp = parsedDate 
+    ? formatFullTimestamp(checkpoint.timestamp) 
+    : '刚刚';  // 解析失败时显示"刚刚"
 
   const handleRollbackClick = () => {
     setShowConfirm(true);

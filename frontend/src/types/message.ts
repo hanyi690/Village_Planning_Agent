@@ -14,6 +14,9 @@ export interface BaseMessage {
   id: string;
   timestamp: Date;
   role: 'user' | 'assistant' | 'system';
+  // ✅ 原始创建时间（ISO 字符串），用于历史消息正确排序
+  // 后端数据库在插入时设置，更新时保持不变
+  created_at?: string;
   // 🔧 内部标记：延迟存储（等待完整数据后再存储）
   _pendingStorage?: boolean;
 }

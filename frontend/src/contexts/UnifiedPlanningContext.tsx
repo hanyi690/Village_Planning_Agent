@@ -758,12 +758,15 @@ export function UnifiedPlanningProvider({
       if (statusData.ui_messages && statusData.ui_messages.length > 0) {
         console.log('[UnifiedPlanningContext] Loading UI messages:', statusData.ui_messages.length, 'messages');
         
-        // 按 timestamp 排序后直接恢复
+        // ✅ 使用 created_at 排序（原始创建时间），而非 timestamp（更新时间）
         const sortedMessages = [...statusData.ui_messages].sort((a, b) => {
-          const timeA = new Date(a.timestamp || 0).getTime();
-          const timeB = new Date(b.timestamp || 0).getTime();
+          const timeA = new Date(a.created_at || a.timestamp || 0).getTime();
+          const timeB = new Date(b.created_at || b.timestamp || 0).getTime();
           return timeA - timeB;
         });
+        
+        // ✅ 去重：追踪已加载的消息 ID
+        const loadedMessageIds = new Set<string>();
         
         for (const msg of sortedMessages) {
           // 跳过空消息
@@ -772,6 +775,13 @@ export function UnifiedPlanningProvider({
           // ✅ 使用数据库中的 message_id（前端原始 ID）恢复消息
           const messageId = msg.message_id || `msg-history-${msg.id}`;
           
+          // ✅ 去重检查：跳过已存在的消息
+          if (loadedMessageIds.has(messageId)) {
+            console.log(`[UnifiedPlanningContext] 跳过重复消息: ${messageId}`);
+            continue;
+          }
+          loadedMessageIds.add(messageId);
+          
           // 根据 message_type 和 message_metadata 恢复原始消息结构
           if (msg.message_type && msg.message_type !== 'text' && msg.message_metadata) {
             // 从 metadata 恢复完整消息（文件、维度报告等）
@@ -779,6 +789,7 @@ export function UnifiedPlanningProvider({
               ...msg.message_metadata,
               id: messageId,  // ✅ 使用原始前端消息 ID
               timestamp: new Date(msg.timestamp || Date.now()),
+              created_at: msg.created_at,  // ✅ 保留原始创建时间，用于正确排序
             } as Message;
             
             // ✅ 关键修复：检查 layer_completed 消息的 dimensionReports 是否为空
@@ -839,38 +850,66 @@ export function UnifiedPlanningProvider({
             });
           }
         }
-      }
-      
-      // 2. 还原修订历史（修复对话流）
-      if (statusData.revision_history && statusData.revision_history.length > 0) {
-        console.log('[UnifiedPlanningContext] Loading revision history:', statusData.revision_history.length, 'revisions');
-        for (const revision of statusData.revision_history) {
-          const dimensionName = DIMENSION_NAMES[revision.dimension] || revision.dimension;
-          
-          // 添加用户反馈消息
-          if (revision.feedback) {
-            addMessage({
-              id: `revision-feedback-${revision.timestamp}-${revision.dimension}`,
-              timestamp: new Date(revision.timestamp),
-              role: 'user',
-              type: 'text',
-              content: `修改意见（${dimensionName}）：${revision.feedback}`,
-            });
+        
+        // 2. 还原修订历史（修复对话流）- 仅作为补充数据源
+        // ✅ 如果 ui_messages 中已有修复消息，则跳过
+        if (statusData.revision_history && statusData.revision_history.length > 0) {
+          console.log('[UnifiedPlanningContext] Loading revision history:', statusData.revision_history.length, 'revisions');
+          for (const revision of statusData.revision_history) {
+            const dimensionName = DIMENSION_NAMES[revision.dimension] || revision.dimension;
+            const revisionId = `revision-${revision.timestamp}-${revision.dimension}`;
+            
+            // ✅ 去重检查：跳过已从 ui_messages 加载的修复消息
+            if (loadedMessageIds.has(revisionId)) {
+              console.log(`[UnifiedPlanningContext] 跳过已加载的修复消息: ${revisionId}`);
+              continue;
+            }
+            
+            // 添加用户反馈消息
+            if (revision.feedback) {
+              const feedbackId = `${revisionId}-feedback`;
+              if (!loadedMessageIds.has(feedbackId)) {
+                loadedMessageIds.add(feedbackId);
+                addMessage({
+                  id: feedbackId,
+                  timestamp: new Date(revision.timestamp),
+                  role: 'user',
+                  type: 'text',
+                  content: `🎯 修改意见（${dimensionName}）：${revision.feedback}`,
+                });
+              }
+            }
+            
+            // 添加修复结果消息
+            const resultId = `${revisionId}-result`;
+            if (!loadedMessageIds.has(resultId)) {
+              loadedMessageIds.add(resultId);
+              addMessage({
+                id: resultId,
+                timestamp: new Date(revision.timestamp),
+                role: 'assistant',
+                type: 'text',
+                content: `✅ **${dimensionName}** 已按用户反馈完成修改`,
+              });
+            }
+            
+            // 添加修复后的维度报告
+            if (!loadedMessageIds.has(revisionId)) {
+              loadedMessageIds.add(revisionId);
+              addMessage({
+                id: revisionId,
+                timestamp: new Date(revision.timestamp),
+                role: 'assistant',
+                type: 'dimension_report',
+                layer: revision.layer,
+                dimensionKey: revision.dimension,
+                dimensionName: dimensionName,
+                content: revision.new_content,
+                streamingState: 'completed',
+                wordCount: revision.new_content?.length || 0,
+              });
+            }
           }
-          
-          // 添加修复结果消息
-          addMessage({
-            id: `revision-result-${revision.timestamp}-${revision.dimension}`,
-            timestamp: new Date(revision.timestamp),
-            role: 'assistant',
-            type: 'dimension_report',
-            layer: revision.layer,
-            dimensionKey: revision.dimension,
-            dimensionName: dimensionName,
-            content: revision.new_content,
-            streamingState: 'completed',
-            wordCount: revision.new_content?.length || 0,
-          });
         }
       }
 
@@ -966,14 +1005,23 @@ export function UnifiedPlanningProvider({
       setStatus('completed');
 
       await loadCheckpoints();
-      addMessage(createSystemMessage(`📂 已加载历史会话: ${villageName} (${sessionId.slice(0, 8)}...)`));
+      
+      // ✅ 先加载历史报告，获取消息列表
       await loadHistoricalReports(villageName, sessionId);
+      
+      // ✅ 然后添加系统消息，时间戳设置为当前时间（排在历史消息之后）
+      // 系统消息表示"加载完成"的通知，应该出现在所有历史消息之后
+      addMessage(createSystemMessage(
+        `📂 已加载历史会话: ${villageName} (${sessionId.slice(0, 8)}...)`,
+        'info',
+        new Date().toISOString()  // 使用当前时间，确保排在最后
+      ));
 
       console.log('[UnifiedPlanningContext] Loaded historical session with reports:', sessionId);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : '未知错误';
       console.error('[UnifiedPlanningContext] Failed to load historical session:', error);
-      addMessage(createSystemMessage(`❌ 加载历史会话失败: ${errorMessage}`));
+      addMessage(createSystemMessage(`❌ 加载历史会话失败: ${errorMessage}`, 'error'));
     }
   }, [clearMessages, loadCheckpoints, addMessage, loadHistoricalReports]);
 

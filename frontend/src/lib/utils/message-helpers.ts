@@ -20,23 +20,38 @@ export function generateMessageId(): string {
  * Returns complete BaseMessage with required fields
  */
 export function createBaseMessage(role: Message['role'] = 'assistant'): BaseMessage {
+  const now = new Date();
   return {
     id: generateMessageId(),
-    timestamp: new Date(),
+    timestamp: now,
+    created_at: now.toISOString(),  // ✅ 原始创建时间，用于历史消息正确排序
     role,
   };
 }
 
 /**
  * Create a system notification message (as TextMessage)
+ * Note: System notifications are ephemeral UI signals and should NOT be persisted to database.
+ * The _pendingStorage flag prevents automatic storage in addMessage().
+ *
+ * @param content - 消息内容
+ * @param level - 消息级别
+ * @param timestamp - 可选的时间戳（ISO 字符串），用于排序。如果不提供则使用当前时间
  */
-export function createSystemMessage(content: string, level: 'info' | 'warning' | 'error' = 'info'): TextMessage {
+export function createSystemMessage(
+  content: string,
+  level: 'info' | 'warning' | 'error' = 'info',
+  timestamp?: string
+): TextMessage & { created_at: string } {
   const prefix = level === 'error' ? '❌ ' : level === 'warning' ? '⚠️ ' : 'ℹ️ ';
+  const createdAt = timestamp || new Date().toISOString();
   return {
     ...createBaseMessage('assistant'),
     type: 'text',
     content: `${prefix}${content}`,
-  };
+    _pendingStorage: true,  // 系统通知消息不应持久化到数据库
+    created_at: createdAt,  // ✅ 添加 created_at 用于排序
+  } as TextMessage & { _pendingStorage: boolean; created_at: string };
 }
 
 /**
@@ -108,7 +123,8 @@ export function formatMessageTimestamp(date: Date): string {
  */
 export function formatFullTimestamp(timestamp: string): string {
   try {
-    const date = new Date(timestamp);
+    const date = parseTimestamp(timestamp);
+    if (!date) return timestamp;
     return date.toLocaleString('zh-CN', {
       year: 'numeric',
       month: '2-digit',
@@ -119,6 +135,52 @@ export function formatFullTimestamp(timestamp: string): string {
   } catch {
     return timestamp;
   }
+}
+
+/**
+ * Parse timestamp safely
+ * Handles ISO 8601, custom formats, and returns null for invalid dates
+ */
+export function parseTimestamp(timestamp: string | Date | undefined | null): Date | null {
+  if (!timestamp) return null;
+
+  // 如果已经是 Date 对象
+  if (timestamp instanceof Date) {
+    return isNaN(timestamp.getTime()) ? null : timestamp;
+  }
+
+  // 尝试解析字符串
+  try {
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) {
+      // 尝试解析 YYYYMMDD_HHMMSS 格式
+      const match = timestamp.match(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+      if (match) {
+        const [, year, month, day, hour, minute, second] = match;
+        const parsed = new Date(
+          parseInt(year),
+          parseInt(month) - 1,
+          parseInt(day),
+          parseInt(hour),
+          parseInt(minute),
+          parseInt(second)
+        );
+        return isNaN(parsed.getTime()) ? null : parsed;
+      }
+      return null;
+    }
+    return date;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get timestamp for sorting (returns milliseconds or 0 for invalid dates)
+ */
+export function getSortTimestamp(timestamp: string | Date | undefined | null): number {
+  const date = parseTimestamp(timestamp);
+  return date ? date.getTime() : 0;
 }
 
 /**

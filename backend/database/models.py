@@ -155,7 +155,10 @@ class UIMessage(SQLModel, table=True):
         sa_column=Column(JSON)
     )
 
-    # Timestamp
+    # Timestamps
+    # ✅ created_at: 原始创建时间，用于历史消息排序（不会被 upsert 更新）
+    created_at: datetime = Field(default_factory=datetime.now)
+    # timestamp: 最后更新时间（每次 upsert 都会更新）
     timestamp: datetime = Field(default_factory=datetime.now)
 
     # Relationships
@@ -164,6 +167,52 @@ class UIMessage(SQLModel, table=True):
     # ✅ 唯一约束：(session_id, message_id) 必须唯一
     __table_args__ = (
         UniqueConstraint("session_id", "message_id", name="uq_session_message"),
+    )
+
+
+# ==========================================
+# Dimension Revision Models
+# ==========================================
+
+class DimensionRevision(SQLModel, table=True):
+    """
+    Dimension revision table
+    维度修订表
+    
+    Stores revision history for each dimension, enabling:
+    - 追溯维度修改历史
+    - 查看不同版本的内容
+    - 支持回滚到历史版本
+    
+    ✅ SSOT: Checkpoint 仍是维度当前内容的唯一真实源
+    此表仅作为历史日志，不影响当前状态
+    """
+    __tablename__ = "dimension_revisions"
+
+    # Primary key (auto-increment)
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Session and dimension identification
+    session_id: str = Field(foreign_key="ui_sessions.conversation_id", index=True)
+    layer: int = Field(index=True)  # 层级 (1/2/3)
+    dimension_key: str = Field(index=True)  # 维度标识
+
+    # Content
+    content: str = Field(sa_column=Text())  # 修改后的完整内容
+    previous_content_hash: Optional[str] = None  # 前一个版本的哈希（用于链式追溯）
+
+    # Metadata
+    reason: Optional[str] = None  # 修改原因（如"用户修正"、"LLM生成"、"级联更新"）
+    created_by: Optional[str] = None  # 修改者（如"system"、"user"）
+    version: int = Field(default=1, index=True)  # 该维度的版本号（从1开始递增）
+
+    # Timestamp
+    created_at: datetime = Field(default_factory=datetime.now)
+
+    # Table options for composite indexes
+    __table_args__ = (
+        Index("idx_revision_session_dim", "session_id", "dimension_key"),
+        Index("idx_revision_session_version", "session_id", "layer", "dimension_key", "version"),
     )
 
 
@@ -180,4 +229,5 @@ __all__ = [
     "Checkpoint",
     "UISession",
     "UIMessage",
+    "DimensionRevision",
 ]

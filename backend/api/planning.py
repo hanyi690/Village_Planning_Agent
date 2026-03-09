@@ -485,6 +485,8 @@ async def _append_session_event_async(session_id: str, event: Dict) -> bool:
                 if session_id in _sessions:
                     events = _sessions[session_id].setdefault("events", [])
                     events.append(event)  # deque 会自动限制大小（maxlen）
+            # ✅ 发布事件到 SSE 订阅者（修复连续模式 layer_completed 事件丢失问题）
+            _publish_event_sync(session_id, event)
         return success
     except Exception as e:
         logger.error(f"[Async DB] Failed to append event: {e}", exc_info=True)
@@ -493,6 +495,8 @@ async def _append_session_event_async(session_id: str, event: Dict) -> bool:
             if session_id in _sessions:
                 events = _sessions[session_id].setdefault("events", [])
                 events.append(event)  # deque 会自动限制大小（maxlen）
+        # ✅ 发布事件到 SSE 订阅者（修复连续模式 layer_completed 事件丢失问题）
+        _publish_event_sync(session_id, event)
         return False
 
 
@@ -960,11 +964,13 @@ def _publish_event_sync(session_id: str, event: Dict) -> None:
             publish_event_to_subscribers(session_id, event),
             loop
         )
-        # 🔧 等待完成（带超时），确保事件真正发送
-        future.result(timeout=5.0)
+        # 🔧 非阻塞模式：不等待结果，事件在后台发送
+        # 原来的 future.result(timeout=5.0) 会导致每次事件发送阻塞最多 5 秒
+        # 改为 fire-and-forget 模式，提高响应速度
+        # future.result(timeout=5.0)  # 已移除阻塞等待
         
         if event_type in ["layer_completed", "layer_started", "dimension_complete"]:
-            logger.info(f"[SSE Publish Sync] Session {session_id}: ✅ {event_type} 已通过 {loop_source} 发送")
+            logger.info(f"[SSE Publish Sync] Session {session_id}: ✅ {event_type} 已通过 {loop_source} 发送（非阻塞）")
     except Exception as e:
         if event_type in ["layer_completed", "dimension_complete"]:
             logger.error(f"[SSE Publish Sync] Session {session_id}: ⚠️ 发送 {event_type} 失败: {e}")
@@ -1293,16 +1299,20 @@ async def _execute_graph_in_background(
             current_layer = event.get("current_layer")
             pause_after_step = event.get("pause_after_step", False)
             previous_layer = event.get("previous_layer", 0)
+            step_mode = event.get("step_mode", False)
             
             # 判断是否应该发送 layer_started：
             # 1. current_layer 有效 (1/2/3)
             # 2. 没有暂停
-            # 3. 不是从上一层完成后的状态更新（previous_layer=0 或 current_layer <= previous_layer）
+            # 3. 该层级尚未发布过（使用 published_layers 判断，避免重复发送）
+            # 4. 🔧 关键修复：step_mode 下，如果 previous_layer > 0，说明刚完成一个层级，应该等待用户批准
+            #    而不是立即发送新层级的 layer_started 事件
             should_send_started = (
                 current_layer and 
                 current_layer in [1, 2, 3] and 
                 not pause_after_step and
-                not (previous_layer > 0 and current_layer > previous_layer)
+                not (step_mode and previous_layer > 0) and  # 🔧 新增：step_mode 下层级切换时不发送
+                current_layer not in published_layers  # 使用持久化的已发布层级来判断
             )
             
             if should_send_started:
@@ -1411,15 +1421,34 @@ async def _execute_graph_in_background(
                     
                     if latest_revision:
                         layer = latest_revision.get("layer", 1)
+                        new_content = latest_revision.get("new_content", "")
+                        
+                        # ✅ 记录维度修订历史到数据库
+                        try:
+                            from backend.database.operations_async import create_dimension_revision_async
+                            await create_dimension_revision_async(
+                                session_id=session_id,
+                                layer=layer,
+                                dimension_key=dim,
+                                content=new_content,
+                                reason=latest_revision.get("revision_type", "用户修正"),
+                                created_by="revision_flow",
+                            )
+                            logger.info(f"[Planning] [{session_id}] ✓ 维度修订历史已记录: {dim}")
+                        except Exception as e:
+                            logger.warning(f"[Planning] [{session_id}] 记录维度修订历史失败: {e}")
+                        
+                        # ✅ Signal-Fetch 模式：SSE 事件不携带报告内容，只发送信号
+                        # 前端收到信号后应调用 REST API 获取完整内容
                         event_data = {
                             "type": "dimension_revised",
                             "dimension": dim,
                             "layer": layer,
-                            "new_content": latest_revision.get("new_content", ""),
+                            # 不携带 new_content，前端应调用 REST API 获取
                             "timestamp": latest_revision.get("timestamp", datetime.now().isoformat())
                         }
                         await _append_session_event_async(session_id, event_data)
-                        logger.info(f"[Planning] [{session_id}] ✓ dimension_revised 事件已发送: {dim}")
+                        logger.info(f"[Planning] [{session_id}] ✓ dimension_revised 信号已发送: {dim}")
 
             # ✅ SSOT 简化：不再手动同步内存状态到 _sessions
             # LangGraph Checkpoint 是唯一真实源
@@ -2549,10 +2578,54 @@ async def list_checkpoints(project_name: str, session_id: Optional[str] = None):
             checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
             values = state_snapshot.values or {}
 
+            # ✅ 修复时间戳格式：确保返回 ISO 8601 格式
+            raw_timestamp = ""
+            if state_snapshot.metadata:
+                # LangGraph 的 write_ts 可能是 Unix 时间戳或其他格式
+                raw_timestamp = state_snapshot.metadata.get("write_ts", "")
+            
+            # 尝试转换为 ISO 格式
+            timestamp = ""
+            if raw_timestamp:
+                try:
+                    # 如果是 Unix 时间戳（整数或浮点数）
+                    if isinstance(raw_timestamp, (int, float)):
+                        from datetime import datetime, timezone
+                        dt = datetime.fromtimestamp(raw_timestamp, tz=timezone.utc)
+                        timestamp = dt.isoformat()
+                    # 如果已经是字符串，尝试解析并重新格式化
+                    elif isinstance(raw_timestamp, str):
+                        # 尝试多种格式解析
+                        parsed = None
+                        for fmt in ["%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"]:
+                            try:
+                                parsed = datetime.strptime(raw_timestamp, fmt)
+                                break
+                            except ValueError:
+                                continue
+                        if parsed:
+                            timestamp = parsed.isoformat()
+                        else:
+                            # 尝试作为 Unix 时间戳解析
+                            try:
+                                ts = float(raw_timestamp)
+                                from datetime import timezone
+                                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                                timestamp = dt.isoformat()
+                            except ValueError:
+                                timestamp = raw_timestamp  # 保持原样
+                except Exception as e:
+                    logger.warning(f"[Checkpoints] Failed to parse timestamp {raw_timestamp}: {e}")
+                    timestamp = str(raw_timestamp)
+            
+            # 如果没有有效时间戳，使用当前时间
+            if not timestamp:
+                timestamp = datetime.now().isoformat()
+
             # 构建检查点信息
             checkpoint_info = {
                 "checkpoint_id": checkpoint_id,
-                "timestamp": state_snapshot.metadata.get("write_ts", "") if state_snapshot.metadata else "",
+                "timestamp": timestamp,
                 "layer": values.get("current_layer", 1),
                 "description": f"Layer {values.get('current_layer', 1)} checkpoint",
             }
@@ -2662,6 +2735,126 @@ async def create_task_legacy(request: StartPlanningRequest):
 async def stream_task_legacy(task_id: str):
     """Legacy task streaming endpoint (maps to stream_planning)"""
     return await stream_planning(task_id)
+
+
+# ============================================
+# Dimension Content & Revision History APIs
+# ============================================
+
+@router.get("/api/planning/sessions/{session_id}/dimensions/{dimension_key}")
+async def get_dimension_content(session_id: str, dimension_key: str):
+    """
+    【Signal-Fetch Pattern】从 Checkpoint 获取单个维度的最新内容
+    
+    当前端收到 dimension_revised SSE 信号后，调用此 API 获取完整内容。
+    
+    Args:
+        session_id: 会话 ID
+        dimension_key: 维度标识（如 "village_overview", "population_scale"）
+        
+    Returns:
+        {
+            "dimension_key": "village_overview",
+            "layer": 1,
+            "content": "...",
+            "version": 2,
+            "exists": true
+        }
+    """
+    from src.config.dimension_metadata import get_dimension_layer
+    
+    # 验证 session 存在
+    db_session = await get_session_async(session_id)
+    if not db_session:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    
+    try:
+        # 从 Checkpoint 获取完整状态
+        checkpointer = await get_global_checkpointer()
+        graph = create_village_planning_graph(checkpointer=checkpointer)
+        config = {"configurable": {"thread_id": session_id}}
+        checkpoint_state = await graph.aget_state(config)
+        
+        if not checkpoint_state or not checkpoint_state.values:
+            raise HTTPException(status_code=404, detail=f"No checkpoint found for session: {session_id}")
+        
+        # 获取维度所在层级
+        layer = get_dimension_layer(dimension_key)
+        if not layer:
+            raise HTTPException(status_code=400, detail=f"Unknown dimension: {dimension_key}")
+        
+        # 根据层级获取对应的报告字典
+        if layer == 1:
+            reports = checkpoint_state.values.get("analysis_reports", {})
+        elif layer == 2:
+            reports = checkpoint_state.values.get("concept_reports", {})
+        else:
+            reports = checkpoint_state.values.get("detail_reports", {})
+        
+        content = reports.get(dimension_key, "")
+        
+        # 获取版本号（从修订历史）
+        from backend.database.operations_async import get_latest_dimension_version_async
+        latest_version = await get_latest_dimension_version_async(session_id, layer, dimension_key)
+        
+        return {
+            "dimension_key": dimension_key,
+            "layer": layer,
+            "content": content,
+            "version": latest_version.get("version", 1) if latest_version else 1,
+            "exists": bool(content),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Planning API] Failed to get dimension content: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/planning/sessions/{session_id}/dimensions/{dimension_key}/revisions")
+async def get_dimension_revisions(session_id: str, dimension_key: str, limit: int = 20):
+    """
+    获取维度的修订历史
+    
+    Args:
+        session_id: 会话 ID
+        dimension_key: 维度标识
+        limit: 最大返回数量
+        
+    Returns:
+        {
+            "dimension_key": "village_overview",
+            "revisions": [...]
+        }
+    """
+    from ..config.dimension_metadata import get_dimension_layer
+    
+    # 验证 session 存在
+    db_session = await get_session_async(session_id)
+    if not db_session:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    
+    # 获取维度所在层级
+    layer = get_dimension_layer(dimension_key)
+    if not layer:
+        raise HTTPException(status_code=400, detail=f"Unknown dimension: {dimension_key}")
+    
+    # 查询修订历史
+    from backend.database.operations_async import get_dimension_revisions_async
+    revisions = await get_dimension_revisions_async(
+        session_id=session_id,
+        layer=layer,
+        dimension_key=dimension_key,
+        limit=limit,
+    )
+    
+    return {
+        "dimension_key": dimension_key,
+        "layer": layer,
+        "revisions": revisions,
+        "count": len(revisions),
+    }
 
 
 __all__ = ["router"]

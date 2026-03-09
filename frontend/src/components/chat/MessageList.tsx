@@ -10,6 +10,7 @@ import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
 import DimensionReportStreaming from './DimensionReportStreaming';
 import CheckpointMarker from './CheckpointMarker';
+import { parseTimestamp } from '@/lib/utils';
 
 interface MessageListProps {
   messages: Message[];
@@ -166,7 +167,10 @@ export default function MessageList({
                 
                 {/* 时间戳 */}
                 <div className="text-xs opacity-60 mt-2 text-right">
-                  {new Date(message.timestamp).toLocaleTimeString()}
+                  {(() => {
+                    const date = parseTimestamp(message.timestamp);
+                    return date ? date.toLocaleTimeString() : '刚刚';
+                  })()}
                 </div>
               </div>
             </div>
