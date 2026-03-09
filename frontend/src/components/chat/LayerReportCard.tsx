@@ -52,6 +52,11 @@ export default function LayerReportCard({
     return parseLayerReport(content);
   }, [content, propDimensions]);
 
+  // 🔧 计算实际字符数（从 dimensions 内容计算，而非使用 content.length）
+  const actualCharCount = useMemo(() => {
+    return dimensions.reduce((sum, dim) => sum + (dim.content?.length || 0), 0);
+  }, [dimensions]);
+
   const handleCopyDimension = (dimensionName: string, dimensionContent: string) => {
     const textToCopy = `## ${dimensionName}\n\n${dimensionContent}`;
     navigator.clipboard.writeText(textToCopy);
@@ -148,7 +153,7 @@ export default function LayerReportCard({
             Layer {layerNumber} 报告
           </h3>
           <p className="text-sm text-gray-500 mt-1">
-            {dimensions.length} 个维度 · {content.length} 字
+            {dimensions.length} 个维度 · {actualCharCount} 字
           </p>
         </div>
       ) : (
@@ -159,7 +164,7 @@ export default function LayerReportCard({
               Layer {layerNumber} 完整报告
             </h3>
             <p className="text-sm text-gray-500 mt-1">
-              共 {dimensions.length} 个维度 · {content.length} 字
+              共 {dimensions.length} 个维度 · {actualCharCount} 字
             </p>
           </div>
 

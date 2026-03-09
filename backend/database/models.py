@@ -53,6 +53,13 @@ class PlanningSession(SQLModel, table=True):
         sa_column=Text()  # 执行错误信息(业务元数据)
     )
 
+    # 【新增】执行状态 - 替代内存中的 _active_executions
+    is_executing: bool = Field(default=False, index=True)
+
+    # 【新增】流状态 - 替代内存中的 _stream_states
+    # 值: "active", "paused", "completed"
+    stream_state: str = Field(default="active", index=True)
+
     # User input
     village_data: Optional[str] = Field(
         default=None,

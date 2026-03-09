@@ -71,7 +71,7 @@ class AnalyzeDimensionNode(BaseNode):
                 """Token 级回调：将增量内容实时发送到 SSE"""
                 callback_count[0] += 1
                 if callback_count[0] <= 3:  # 只打印前3次
-                    logger.info(f"[子图-分析] Token回调 #{callback_count[0]}: token长度={len(token)}, 累积长度={len(accumulated)}")
+                    logger.debug(f"[子图-分析] Token回调 #{callback_count[0]}: token长度={len(token)}, 累积长度={len(accumulated)}")
                 if session_id:
                     try:
                         from backend.api.planning import append_dimension_delta_event
@@ -112,6 +112,17 @@ class AnalyzeDimensionNode(BaseNode):
             # ✅ 发送维度完成事件到 SSE
             if session_id and analysis_text:
                 try:
+                    # 🔧 先强制刷新剩余的 dimension_delta 事件（确保内容完整）
+                    from backend.api.planning import flush_dimension_delta
+                    flush_dimension_delta(
+                        session_id=session_id,
+                        layer=1,
+                        dimension_key=dimension_key,
+                        dimension_name=dimension_name,
+                        final_accumulated=analysis_text
+                    )
+                    
+                    # 然后发送维度完成事件
                     from backend.api.planning import append_dimension_complete_event
                     append_dimension_complete_event(
                         session_id=session_id,
@@ -348,6 +359,17 @@ class AnalyzeConceptDimensionNode(BaseNode):
             # ✅ 发送维度完成事件到 SSE
             if session_id and concept_text:
                 try:
+                    # 🔧 先强制刷新剩余的 dimension_delta 事件（确保内容完整）
+                    from backend.api.planning import flush_dimension_delta
+                    flush_dimension_delta(
+                        session_id=session_id,
+                        layer=2,
+                        dimension_key=dimension_key,
+                        dimension_name=dimension_name,
+                        final_accumulated=concept_text
+                    )
+                    
+                    # 然后发送维度完成事件
                     from backend.api.planning import append_dimension_complete_event
                     append_dimension_complete_event(
                         session_id=session_id,

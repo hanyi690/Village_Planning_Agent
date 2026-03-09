@@ -8,6 +8,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
+import { useStreamingRender } from '@/hooks/useStreamingRender';
 import type {
   Message,
   ActionButton,
@@ -99,6 +100,10 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   // ✅ NEW: Track typing timeout for cleanup
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // ✅ NEW: Track layer report message creation state (fix React closure trap)
+  // 使用 ref 而不是依赖 messages 状态，确保 handleLayerCompleted 能正确检测消息是否存在
+  const layerReportCreatedRef = useRef<Record<number, boolean>>({});
+
   // ✅ NEW: Use useMemo to cache filtered messages (P1.4 performance optimization)
   const progressMessages = useMemo(() => {
     return messages.filter(m => m.type === 'progress');
@@ -106,6 +111,24 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
   // 维度内容缓存 (用于流式渲染)
   const [dimensionContents, setDimensionContents] = useState<Map<string, string>>(new Map());
+
+  // 🔧 批处理渲染 Hook：减少高频事件导致的 React 重渲染压力
+  const { addToken, completeDimension, flushBatch } = useStreamingRender(
+    (dimensionKey: string, content: string, layer?: number) => {
+      // 批处理回调：更新维度内容缓存
+      setDimensionContents(prev => {
+        // 🔧 FIX: 优先使用传入的 layer 参数，解决闭包陷阱问题
+        const layerNum = layer !== undefined ? layer : (currentLayer || 1);
+        const key = `${layerNum}_${dimensionKey}`;
+        return new Map(prev).set(key, content);
+      });
+    },
+    {
+      batchSize: 10,     // 每 10 个事件批处理一次
+      batchWindow: 50,   // 或 50ms 时间窗口
+      debounceMs: 30,    // 防抖延迟 30ms（降低延迟）
+    }
+  );
 
   // Rate limit error tracking
   const [rateLimitError, setRateLimitError] = useState<{ projectName: string } | null>(null);
@@ -180,7 +203,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   }, [setMessages]);
 
   // 维度级流式回调
-  // 直接更新 dimensionContents，内容立即显示（移除批处理，避免 key 不一致问题）
+  // 🔧 使用批处理 Hook 减少高频事件的 React 重渲染压力
   const handleDimensionDelta = useCallback((
     dimensionKey: string,
     delta: string,
@@ -189,15 +212,12 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   ) => {
     const layerNum = layer || currentLayer || 1;
 
-    // 更新维度内容缓存（独立 Map，每个维度更新不会影响其他维度）
-    setDimensionContents(prev => {
-      const key = `${layerNum}_${dimensionKey}`;
-      return new Map(prev).set(key, accumulated);
-    });
+    // 🔧 FIX: 将 layerNum 传递给 addToken，解决闭包陷阱问题
+    addToken(dimensionKey, delta, accumulated, layerNum);
 
-    // 更新进度面板状态
+    // 更新进度面板状态（低频操作，直接更新）
     setDimensionStreaming(layerNum, dimensionKey, getDimensionName(dimensionKey));
-  }, [currentLayer, setDimensionStreaming]);
+  }, [currentLayer, setDimensionStreaming, addToken]);
 
   const handleDimensionComplete = useCallback((
     dimensionKey: string,
@@ -207,7 +227,10 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
   ) => {
     const layerNum = layer || currentLayer || 1;
 
-    // 更新维度内容缓存
+    // 🔧 FIX: 将 layerNum 传递给 completeDimension，解决闭包陷阱问题
+    completeDimension(dimensionKey, layerNum);
+
+    // 更新维度内容缓存（使用完整内容覆盖）
     setDimensionContents(prev => {
       const key = `${layerNum}_${dimensionKey}`;
       return new Map(prev).set(key, fullContent);
@@ -246,15 +269,21 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       return null;
     }
     
+    // 🔧 新增：记录调用开始时间
+    const startTime = Date.now();
+    console.log(`[ChatPanel] 📡 REST API 调用开始: GET /layer/${layer}/reports, taskId=${taskId}`);
+    
     try {
-      console.log(`[ChatPanel] Fetching layer ${layer} reports from backend (Signal-Fetch Pattern)...`);
       const response = await planningApi.getLayerReports(taskId, layer);
+      
+      // 🔧 新增：记录调用耗时
+      const elapsed = Date.now() - startTime;
       
       // ✅ 增强调试日志：追踪 REST API 返回数据的完整性
       const reportKeys = Object.keys(response.reports || {});
       const reportsWithContent = reportKeys.filter(k => response.reports[k] && response.reports[k].length > 0);
       
-      console.log(`[ChatPanel] Layer ${layer} REST API 响应:`, {
+      console.log(`[ChatPanel] ✅ REST API 响应成功: Layer ${layer}, 耗时=${elapsed}ms`, {
         dimensionCount: response.stats.dimension_count,
         totalChars: response.stats.total_chars,
         completed: response.completed,
@@ -285,6 +314,9 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     reportContent: string,
     dimensionReports: Record<string, string>
   ) => {
+    // 🔧 强制刷新所有批处理事件，确保流式数据完整
+    flushBatch();
+
     console.log(`[ChatPanel] Layer ${layer} completed signal received (SSE data)`, {
       reportLength: reportContent?.length || 0,
       dimensionCount: Object.keys(dimensionReports || {}).length,
@@ -368,12 +400,15 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
 
     const layerReportId = `layer_report_${layer}`;
 
-    // 检查该层是否已有 LayerReportMessage
-    const hasLayerReport = messages.some(m => m.id === layerReportId);
+    // ✅ 关键修复：使用 ref 检查而不是 messages.some()，解决 React 闭包陷阱问题
+    // handleLayerStarted 已创建空消息并设置 ref 标记
+    const hasLayerReport = layerReportCreatedRef.current[layer] || false;
+    
+    console.log(`[ChatPanel] Layer ${layer} completed - hasLayerReport (ref): ${hasLayerReport}, messages.some: ${messages.some(m => m.id === layerReportId)}`);
 
     if (!hasLayerReport) {
-      // 创建 LayerReportMessage
-      addMessage({
+      // 创建 LayerReportMessage（首次创建路径）
+      const newMsg = {
         ...createBaseMessage('assistant'),
         id: layerReportId,
         type: 'layer_completed' as const,
@@ -390,13 +425,23 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
           {
             id: 'view_details',
             label: '查看详情',
-            action: 'view',
+            action: 'view' as const,
             onClick: () => {
               showViewer();
             },
           },
         ],
-      });
+      };
+      
+      addMessage(newMsg);
+      
+      // ✅ 关键修复：首次创建路径也需要显式调用 syncMessageToBackend
+      // 虽然没有 _pendingStorage 标记，但为了确保存储成功，显式调用更可靠
+      syncMessageToBackend(newMsg as any);
+      console.log(`[ChatPanel] Created and synced layer_report_${layer} to backend (first creation), wordCount=${finalWordCount}`);
+      
+      // 更新 ref 标记
+      layerReportCreatedRef.current[layer] = true;
     } else {
       // 更新现有消息（从 handleLayerStarted 创建的空消息更新为完整数据）
       setMessages(prev => {
@@ -430,7 +475,7 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         return updated;
       });
     }
-  }, [messages, addMessage, setMessages, showViewer, syncMessageToBackend, dimensionContents, fetchLayerReportsFromBackend]);
+  }, [messages, addMessage, setMessages, showViewer, syncMessageToBackend, dimensionContents, fetchLayerReportsFromBackend, flushBatch]);
 
   // ✅ 新增：处理层级开始事件 - 创建空的 LayerReportMessage（预填充维度槽位）
   const handleLayerStarted = useCallback((layer: number, layerName: string) => {
@@ -478,6 +523,11 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
         // ✅ 关键修复：标记为延迟存储，等待层级完成后存储完整数据
         _pendingStorage: true,
       } as any);  // 使用 any 类型扩展，因为 _pendingStorage 不在标准类型中
+      
+      // ✅ 关键修复：使用 ref 标记消息已创建，解决 React 闭包陷阱问题
+      // handleLayerCompleted 可能因为闭包问题看到旧的 messages 状态
+      layerReportCreatedRef.current[layer] = true;
+      console.log(`[ChatPanel] Layer ${layer} report marked as created in ref`);
     }
 
     // 🔧 修复：添加层级开始提示消息前检查是否已存在

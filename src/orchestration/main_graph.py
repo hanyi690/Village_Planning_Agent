@@ -116,6 +116,16 @@ class VillagePlanningState(TypedDict):
     knowledge_cache: Dict[str, str]  # 维度 -> 知识上下文
     # 格式: {"land_use": "知识内容...", "infrastructure": "知识内容..."}
 
+    # 【新增】元数据 - 用于持久化去重和版本化同步
+    # 存储在 Checkpoint 中，随状态一起回滚或恢复
+    metadata: Dict[str, Any]
+    # 格式: {
+    #     "published_layers": [1, 2],           # 已发送 layer_completed 信号的层级
+    #     "version": 102,                        # 状态版本号，用于前端同步
+    #     "last_signal_timestamp": "2025-...",  # 最后信号时间戳
+    #     "event_id_counter": 0                  # 事件 ID 计数器
+    # }
+
 
 # ==========================================
 # LLM 辅助函数

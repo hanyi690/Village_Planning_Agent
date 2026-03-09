@@ -59,6 +59,9 @@ def _planning_session_to_dict(db_session: PlanningSession) -> Dict[str, Any]:
         "project_name": db_session.project_name,
         "status": db_session.status,
         "execution_error": db_session.execution_error,
+        # 【新增】执行状态和流状态
+        "is_executing": db_session.is_executing if hasattr(db_session, 'is_executing') else False,
+        "stream_state": db_session.stream_state if hasattr(db_session, 'stream_state') else "active",
         "village_data": db_session.village_data,
         "task_description": db_session.task_description,
         "constraints": db_session.constraints,
@@ -116,6 +119,9 @@ async def create_planning_session_async(state: Dict[str, Any]) -> str:
             session_id=clean_state["session_id"],
             project_name=clean_state.get("project_name", ""),
             status="running",
+            # 【新增】初始化执行状态和流状态
+            is_executing=True,  # 创建时开始执行
+            stream_state="active",
             village_data=clean_state.get("village_data") or "",
             task_description=clean_state.get("task_description", "制定村庄总体规划方案"),
             constraints=clean_state.get("constraints", "无特殊约束"),
@@ -382,6 +388,136 @@ async def add_session_event_async(session_id: str, event: Dict[str, Any]) -> boo
             return True
     except Exception as e:
         logger.error(f"[Async DB] Failed to add event to session {session_id}: {e}", exc_info=True)
+        return False
+
+
+# ==========================================
+# 【新增】执行状态和流状态操作
+# ==========================================
+
+async def is_execution_active_async(session_id: str) -> bool:
+    """
+    检查执行是否活跃 (从数据库读取)
+    
+    替代内存中的 _active_executions 全局变量
+    
+    Args:
+        session_id: Session ID
+        
+    Returns:
+        bool: True if execution is active
+    """
+    try:
+        async with get_async_session() as session:
+            db_session = await session.execute(
+                select(PlanningSession).where(PlanningSession.session_id == session_id)
+            )
+            db_session = db_session.scalar_one_or_none()
+            
+            if not db_session:
+                return False
+            
+            return db_session.is_executing if hasattr(db_session, 'is_executing') else False
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to check execution state {session_id}: {e}", exc_info=True)
+        return False
+
+
+async def set_execution_active_async(session_id: str, active: bool) -> bool:
+    """
+    设置执行活跃状态 (写入数据库)
+    
+    替代内存中的 _active_executions 全局变量
+    
+    Args:
+        session_id: Session ID
+        active: Active state to set
+        
+    Returns:
+        bool: True if successful
+    """
+    try:
+        async with get_async_session() as session:
+            db_session = await session.execute(
+                select(PlanningSession).where(PlanningSession.session_id == session_id)
+            )
+            db_session = db_session.scalar_one_or_none()
+            
+            if not db_session:
+                logger.error(f"[Async DB] Session {session_id} not found")
+                return False
+            
+            if hasattr(db_session, 'is_executing'):
+                db_session.is_executing = active
+            db_session.updated_at = datetime.now()
+            await session.commit()
+            logger.info(f"[Async DB] Set execution active for {session_id}: {active}")
+            return True
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to set execution state {session_id}: {e}", exc_info=True)
+        return False
+
+
+async def get_stream_state_async(session_id: str) -> str:
+    """
+    获取流状态 (从数据库读取)
+    
+    替代内存中的 _stream_states 全局变量
+    
+    Args:
+        session_id: Session ID
+        
+    Returns:
+        str: Stream state: "active", "paused", or "completed"
+    """
+    try:
+        async with get_async_session() as session:
+            db_session = await session.execute(
+                select(PlanningSession).where(PlanningSession.session_id == session_id)
+            )
+            db_session = db_session.scalar_one_or_none()
+            
+            if not db_session:
+                return "active"
+            
+            return db_session.stream_state if hasattr(db_session, 'stream_state') else "active"
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to get stream state {session_id}: {e}", exc_info=True)
+        return "active"
+
+
+async def set_stream_state_async(session_id: str, state: str) -> bool:
+    """
+    设置流状态 (写入数据库)
+    
+    替代内存中的 _stream_states 全局变量
+    
+    Args:
+        session_id: Session ID
+        state: New stream state ("active", "paused", or "completed")
+        
+    Returns:
+        bool: True if successful
+    """
+    try:
+        async with get_async_session() as session:
+            db_session = await session.execute(
+                select(PlanningSession).where(PlanningSession.session_id == session_id)
+            )
+            db_session = db_session.scalar_one_or_none()
+            
+            if not db_session:
+                logger.error(f"[Async DB] Session {session_id} not found")
+                return False
+            
+            if hasattr(db_session, 'stream_state'):
+                db_session.stream_state = state
+            db_session.updated_at = datetime.now()
+            await session.commit()
+            logger.info(f"[Async DB] Set stream state for {session_id}: {state}")
+            return True
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to set stream state {session_id}: {e}", exc_info=True)
         return False
 
 

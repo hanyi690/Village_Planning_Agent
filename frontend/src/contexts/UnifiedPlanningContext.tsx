@@ -233,6 +233,9 @@ export function UnifiedPlanningProvider({
   // 用于跟踪之前的状态，避免不必要的更新
   const previousBackendStateRef = useRef<any>(null);
 
+  // 【新增】版本号 state，用于版本化同步
+  const localVersionRef = useRef<number>(0);
+
   // 用于跟踪是否正在加载历史消息（避免重复存储）
   const isLoadingHistoryRef = useRef(false);
 
@@ -416,6 +419,21 @@ export function UnifiedPlanningProvider({
 
   // 同步后端状态到 Context
   const syncBackendState = useCallback((backendData: any) => {
+    // 【新增】版本化同步：检查版本号，防止乱序导致的 UI 回滚
+    const serverVersion = backendData.version ?? 0;
+    const localVersion = localVersionRef.current;
+
+    if (serverVersion > 0 && serverVersion <= localVersion) {
+      console.log(`[UnifiedPlanningContext] 跳过旧版本数据: serverVersion=${serverVersion}, localVersion=${localVersion}`);
+      return;
+    }
+
+    // 更新本地版本号
+    if (serverVersion > 0) {
+      localVersionRef.current = serverVersion;
+      console.log(`[UnifiedPlanningContext] 更新版本号: ${localVersion} -> ${serverVersion}`);
+    }
+
     // 比较关键字段，避免不必要的更新
     const previousState = previousBackendStateRef.current;
     const hasStateChanged = !previousState ||

@@ -554,7 +554,8 @@ def generate_dimension_plan(
             "task_description": state["task_description"],
             "constraints": state["constraints"],
             "village_data": state.get("village_data", ""),  # 新增：用于适配器
-            "knowledge_cache": state.get("knowledge_cache", {})  # 【新增】传递知识缓存
+            "knowledge_cache": state.get("knowledge_cache", {}),  # 【新增】传递知识缓存
+            "filtered_detail": state.get("filtered_detail", "")  # 【修复】project_bank 影子缓存
         }
 
         # 【新增】检查是否启用适配器
@@ -590,6 +591,31 @@ def generate_dimension_plan(
 {state['human_feedback']}
 
 """
+
+        # ✅ 发送维度完成事件到 SSE
+        if session_id and plan_content:
+            try:
+                # 🔧 先强制刷新剩余的 dimension_delta 事件（确保内容完整）
+                from backend.api.planning import flush_dimension_delta
+                flush_dimension_delta(
+                    session_id=session_id,
+                    layer=3,
+                    dimension_key=dimension_key,
+                    dimension_name=dimension_name,
+                    final_accumulated=plan_content
+                )
+                
+                # 然后发送维度完成事件
+                from backend.api.planning import append_dimension_complete_event
+                append_dimension_complete_event(
+                    session_id=session_id,
+                    layer=3,
+                    dimension_key=dimension_key,
+                    dimension_name=dimension_name,
+                    content=plan_content
+                )
+            except Exception as e:
+                logger.warning(f"[子图-L3-Agent] 发送维度完成事件失败: {e}")
 
         # 返回结果（包装在列表中以支持累加）
         # 注意：不再添加外部标题包装，与 Layer 1/2 保持一致，避免重复标题

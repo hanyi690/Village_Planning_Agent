@@ -13,6 +13,7 @@ Endpoints:
 """
 
 import asyncio
+import copy
 import json
 import logging
 import sys
@@ -69,6 +70,22 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
+
+# ============================================
+# 🔧 Startup Event - 保存主事件循环引用
+# ============================================
+@router.on_event("startup")
+async def _save_main_event_loop():
+    """
+    在应用启动时保存主事件循环引用
+    
+    这样可以在 LLM 回调的同步线程中安全地发布 SSE 事件
+    """
+    global _main_event_loop
+    _main_event_loop = asyncio.get_running_loop()
+    logger.info("[SSE] 主事件循环已保存，跨线程事件发布已启用")
+
+
 # ============================================
 # Global Checkpointer Management
 # ============================================
@@ -76,6 +93,12 @@ logger = logging.getLogger(__name__)
 _checkpointer: Optional[Any] = None
 _checkpointer_lock = asyncio.Lock()
 _checkpointer_initialized = False
+
+# ============================================
+# 🔧 跨线程安全事件发布 - 主事件循环引用
+# ============================================
+# 用于在 LLM 回调的同步线程中安全地发布 SSE 事件
+_main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 async def get_global_checkpointer() -> Any:
@@ -156,6 +179,9 @@ _event_counter_lock = Lock()
 _sessions_lock = Lock()
 _active_executions_lock = Lock()
 _stream_states_lock = Lock()
+
+# 🔧 新增：asyncio.Queue 订阅管理系统（每个 SSE 连接独立队列）
+_session_subscribers: Dict[str, set] = {}  # session_id -> set of asyncio.Queue
 
 
 # ============================================
@@ -393,6 +419,9 @@ def _set_session_value(session_id: str, key: str, value: Any) -> bool:
 def _append_session_event(session_id: str, event: Dict) -> int:
     """
     Thread-safe append event to session events list
+    
+    注意：events 使用 deque(maxlen=MAX_SESSION_EVENTS)，会自动丢弃最旧的事件，
+    无需手动裁剪。
 
     Args:
         session_id: Session identifier
@@ -404,12 +433,18 @@ def _append_session_event(session_id: str, event: Dict) -> int:
     global _event_counter
     with _sessions_lock:
         if session_id in _sessions:
+            events = _sessions[session_id].setdefault("events", [])
+            
             # ✅ 为事件分配唯一 ID
             with _event_counter_lock:
                 _event_counter += 1
                 event_id = _event_counter
             event["_event_id"] = event_id
-            _sessions[session_id].setdefault("events", []).append(event)
+            events.append(event)  # deque 会自动限制大小（maxlen）
+            
+            # 🔧 发布事件到 asyncio.Queue 订阅者
+            _publish_event_sync(session_id, event)
+            
             return event_id
     return -1
 
@@ -424,6 +459,8 @@ async def _append_session_event_async(session_id: str, event: Dict) -> bool:
 
     使用异步数据库操作替代内存操作，
     显著提升高并发场景下的性能。
+    
+    注意：events 使用 deque(maxlen=MAX_SESSION_EVENTS)，会自动丢弃最旧的事件。
 
     Args:
         session_id: Session identifier
@@ -446,14 +483,16 @@ async def _append_session_event_async(session_id: str, event: Dict) -> bool:
             # 同时更新内存缓存（不再调用 _append_session_event 避免重复分配 ID）
             with _sessions_lock:
                 if session_id in _sessions:
-                    _sessions[session_id].setdefault("events", []).append(event)
+                    events = _sessions[session_id].setdefault("events", [])
+                    events.append(event)  # deque 会自动限制大小（maxlen）
         return success
     except Exception as e:
         logger.error(f"[Async DB] Failed to append event: {e}", exc_info=True)
         # 失败时回退到内存版本（event_id 已经分配）
         with _sessions_lock:
             if session_id in _sessions:
-                _sessions[session_id].setdefault("events", []).append(event)
+                events = _sessions[session_id].setdefault("events", [])
+                events.append(event)  # deque 会自动限制大小（maxlen）
         return False
 
 
@@ -495,9 +534,12 @@ _dimension_delta_last_sent: Dict[str, float] = {}  # dimension_key -> last_sent_
 _dimension_delta_token_count: Dict[str, int] = {}  # dimension_key -> token_count_since_last_send
 _dimension_delta_lock = threading.Lock()
 
-# 频率控制参数
-DELTA_MIN_INTERVAL_MS = 50  # 最小发送间隔（毫秒）
-DELTA_MIN_TOKENS = 5  # 最小 token 数量
+# ✅ SSOT 优化：频率控制参数（大幅减少事件数量，避免队列阻塞）
+DELTA_MIN_INTERVAL_MS = 500  # 最小发送间隔（毫秒）- 从 200ms 增加到 500ms
+DELTA_MIN_TOKENS = 50        # 最小 token 数量 - 从 20 增加到 50 tokens
+
+# 事件队列大小限制（防止内存爆炸）
+MAX_EVENTS_PER_SESSION = 500   # 每个会话最大事件数
 
 
 def append_dimension_delta_event(
@@ -564,7 +606,7 @@ def append_dimension_delta_event(
         milestones = {500, 1000, 2000, 5000, 10000}
         hit_milestone = any(abs(len(accumulated) - m) < 50 for m in milestones)
         if token_count == 1 or hit_milestone:
-            logger.info(f"[dimension_delta] {dimension_key}: {len(accumulated)} chars")
+            logger.debug(f"[dimension_delta] {dimension_key}: {len(accumulated)} chars")
         
         # 更新状态
         _dimension_delta_last_sent[cache_key] = current_time
@@ -588,72 +630,427 @@ def reset_dimension_delta_state(session_id: str, layer: int, dimension_key: str)
         _dimension_delta_token_count.pop(cache_key, None)
 
 
+def flush_dimension_delta(
+    session_id: str,
+    layer: int,
+    dimension_key: str,
+    dimension_name: str,
+    final_accumulated: str
+) -> None:
+    """
+    在维度生成结束时，强制将缓冲池中剩余的 token 发送出去
+    
+    由于频率控制（200ms/20 tokens），最后不满条件的 token 会被缓存，
+    调用此函数可确保所有内容都被发送，避免"内容不完整"问题。
+    
+    Args:
+        session_id: 会话ID
+        layer: 层级编号 (1/2/3)
+        dimension_key: 维度键名
+        dimension_name: 维度显示名称
+        final_accumulated: 最终完整的累积文本
+    """
+    cache_key = f"{session_id}:{layer}:{dimension_key}"
+    with _dimension_delta_lock:
+        token_count = _dimension_delta_token_count.get(cache_key, 0)
+        
+        # 只要有未发送的增量，就发送一次完整状态
+        if token_count > 0:
+            event_data = {
+                "type": "dimension_delta",
+                "layer": layer,
+                "dimension_key": dimension_key,
+                "dimension_name": dimension_name,
+                "accumulated": final_accumulated,  # 发送完整文本
+                "delta": "",  # 增量为空
+                "timestamp": datetime.now().isoformat()
+            }
+            _append_session_event(session_id, event_data)
+            
+            # 清零计数器
+            _dimension_delta_token_count[cache_key] = 0
+            logger.debug(f"[flush_dimension_delta] {dimension_key}: flushed {token_count} remaining tokens, total={len(final_accumulated)} chars")
+
+
+# ============================================
+# 🔧 asyncio.Queue 订阅管理系统
+# ============================================
+
+async def _rebuild_events_from_checkpoint(session_id: str) -> List[Dict[str, Any]]:
+    """
+    从 Checkpoint 重建关键事件
+    
+    当内存 _sessions 中没有历史事件时（如服务重启后），
+    从 LangGraph Checkpoint 读取状态并重建 layer_completed 和 pause 事件。
+    
+    Args:
+        session_id: 会话 ID
+        
+    Returns:
+        重建的事件列表
+    """
+    events = []
+    
+    try:
+        # ✅ 修复：使用正确的函数获取 checkpointer 和创建 graph
+        checkpointer = await get_global_checkpointer()
+        if not checkpointer:
+            logger.warning(f"[Checkpoint Rebuild] Session {session_id}: checkpointer 不可用")
+            return events
+        
+        graph = create_village_planning_graph(checkpointer=checkpointer)
+        if not graph:
+            logger.warning(f"[Checkpoint Rebuild] Session {session_id}: graph 创建失败")
+            return events
+        
+        config = {"configurable": {"thread_id": session_id}}
+        checkpoint_state = await graph.aget_state(config)
+        
+        if not checkpoint_state or not checkpoint_state.values:
+            logger.debug(f"[Checkpoint Rebuild] Session {session_id}: 无 Checkpoint 状态")
+            return events
+        
+        state = checkpoint_state.values
+        
+        # 获取已发送的层级列表
+        metadata = state.get("metadata", {})
+        published_layers = set(metadata.get("published_layers", []))
+        
+        layer_names = {1: "现状分析", 2: "规划思路", 3: "详细规划"}
+        
+        # 重建 layer_completed 事件
+        for layer_num in [1, 2, 3]:
+            if state.get(f"layer_{layer_num}_completed", False):
+                # 获取维度报告
+                if layer_num == 1:
+                    dimension_reports = state.get("analysis_reports", {})
+                elif layer_num == 2:
+                    dimension_reports = state.get("concept_reports", {})
+                else:
+                    dimension_reports = state.get("detail_reports", {})
+                
+                total_chars = sum(len(v) for v in dimension_reports.values()) if dimension_reports else 0
+                
+                event = {
+                    "type": "layer_completed",
+                    "layer": layer_num,
+                    "layer_number": layer_num,
+                    "session_id": session_id,
+                    "message": f"Layer {layer_num} completed",
+                    "has_data": len(dimension_reports) > 0 and total_chars > 0,
+                    "dimension_count": len(dimension_reports) if dimension_reports else 0,
+                    "total_chars": total_chars,
+                    "pause_after_step": state.get("pause_after_step", False),
+                    "previous_layer": state.get("previous_layer", 0),
+                    "timestamp": metadata.get("last_signal_timestamp", datetime.now().isoformat()),
+                    # 标记：此事件来自 Checkpoint 重建
+                    "_rebuild": True,
+                }
+                events.append(event)
+                logger.info(f"[Checkpoint Rebuild] Session {session_id}: 重建 layer_completed 事件 Layer {layer_num}")
+        
+        # 重建 pause 事件
+        if state.get("pause_after_step", False):
+            previous_layer = state.get("previous_layer", 1)
+            pause_event = {
+                "type": "pause",
+                "session_id": session_id,
+                "current_layer": previous_layer,
+                "checkpoint_id": state.get("last_checkpoint_id", ""),
+                "reason": "step_mode",
+                "timestamp": datetime.now().isoformat(),
+                "_rebuild": True,
+            }
+            events.append(pause_event)
+            logger.info(f"[Checkpoint Rebuild] Session {session_id}: 重建 pause 事件 Layer {previous_layer}")
+        
+        logger.info(f"[Checkpoint Rebuild] Session {session_id}: 共重建 {len(events)} 个事件")
+        
+    except Exception as e:
+        logger.error(f"[Checkpoint Rebuild] Session {session_id}: 重建失败 - {e}", exc_info=True)
+    
+    return events
+
+
+async def subscribe_session(session_id: str) -> asyncio.Queue:
+    """
+    订阅 session 的事件流，返回专用的 asyncio.Queue
+    
+    每个 SSE 连接获得独立的队列，实现：
+    - 事件驱动模式（无需轮询）
+    - 多客户端支持
+    - 无竞态条件
+    - 🔧 历史事件同步（确保 SSE 连接前的事件不丢失）
+    - 🔧 Checkpoint 重建（服务重启后恢复状态）
+    
+    Args:
+        session_id: 会话 ID
+        
+    Returns:
+        asyncio.Queue: 专用于该连接的事件队列
+    """
+    queue = asyncio.Queue(maxsize=200)  # 每个客户端最多缓存 200 个事件
+    
+    if session_id not in _session_subscribers:
+        _session_subscribers[session_id] = set()
+    _session_subscribers[session_id].add(queue)
+    
+    # 🔧 关键修复：同步历史事件到新订阅者
+    # 解决 SSE 连接建立前事件丢失的问题
+    historical_count = 0
+    event_type_counts: Dict[str, int] = {}  # 🔧 新增：按类型统计事件数量
+    layer_completed_found = False
+    
+    with _sessions_lock:
+        if session_id in _sessions:
+            # events 是 deque，直接遍历
+            events = _sessions[session_id].get("events", [])
+            for event in events:
+                try:
+                    queue.put_nowait(event)
+                    historical_count += 1
+                    # 🔧 新增：按类型统计
+                    event_type = event.get("type", "unknown")
+                    event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
+                    # 🔧 新增：检测 layer_completed 事件
+                    if event_type == "layer_completed":
+                        layer_completed_found = True
+                except asyncio.QueueFull:
+                    logger.warning(f"[SSE Subscribe] Session {session_id}: 队列已满，丢弃历史事件")
+                    break
+    
+    # 🔧 新增：如果内存中没有历史事件或缺少关键事件，从 Checkpoint 重建
+    if historical_count == 0 or not layer_completed_found:
+        logger.info(f"[SSE Subscribe] Session {session_id}: 尝试从 Checkpoint 重建事件 (内存事件={historical_count}, layer_completed={layer_completed_found})")
+        rebuilt_events = await _rebuild_events_from_checkpoint(session_id)
+        
+        if rebuilt_events:
+            for event in rebuilt_events:
+                try:
+                    queue.put_nowait(event)
+                    event_type = event.get("type", "unknown")
+                    event_type_counts[event_type] = event_type_counts.get(event_type, 0) + 1
+                    historical_count += 1
+                    if event_type == "layer_completed":
+                        layer_completed_found = True
+                except asyncio.QueueFull:
+                    logger.warning(f"[SSE Subscribe] Session {session_id}: 队列已满，丢弃重建事件")
+                    break
+    
+    # 🔧 新增：详细日志，包括事件类型分布
+    logger.info(f"[SSE Subscribe] Session {session_id}: 订阅者数量 = {len(_session_subscribers[session_id])}, 同步历史事件 = {historical_count}")
+    if historical_count > 0:
+        logger.info(f"[SSE Subscribe] Session {session_id}: 历史事件类型分布 = {event_type_counts}")
+        if layer_completed_found:
+            logger.info(f"[SSE Subscribe] Session {session_id}: ✅ 历史事件中包含 layer_completed")
+        else:
+            logger.info(f"[SSE Subscribe] Session {session_id}: ⚠️ 历史事件中没有 layer_completed")
+    
+    return queue
+
+
+async def unsubscribe_session(session_id: str, queue: asyncio.Queue) -> None:
+    """
+    取消订阅 session 的事件流
+    
+    Args:
+        session_id: 会话 ID
+        queue: 要移除的队列
+    """
+    if session_id in _session_subscribers:
+        _session_subscribers[session_id].discard(queue)
+        if not _session_subscribers[session_id]:
+            del _session_subscribers[session_id]
+            logger.debug(f"[SSE Unsubscribe] Session {session_id}: 无订阅者，清理订阅表")
+        else:
+            logger.debug(f"[SSE Unsubscribe] Session {session_id}: 剩余订阅者数量 = {len(_session_subscribers[session_id])}")
+
+
+async def publish_event_to_subscribers(session_id: str, event: Dict) -> None:
+    """
+    发布事件到所有订阅者
+    
+    Args:
+        session_id: 会话 ID
+        event: 事件字典
+    """
+    subscribers = _session_subscribers.get(session_id, set())
+    event_type = event.get("type", "unknown")
+    
+    # 🔧 新增：对于重要事件类型，打印订阅者数量
+    if event_type in ["layer_completed", "layer_started", "pause", "stream_paused", "dimension_complete"]:
+        logger.info(f"[SSE Publish] Session {session_id}: 事件类型={event_type}, 订阅者数量={len(subscribers)}")
+    
+    if not subscribers:
+        # 🔧 新增：对于重要事件，记录无订阅者的警告
+        if event_type in ["layer_completed", "dimension_complete"]:
+            logger.warning(f"[SSE Publish] Session {session_id}: ⚠️ 事件 {event_type} 无订阅者！事件将丢失！")
+        return
+    
+    # 统计成功/失败数量
+    success_count = 0
+    dropped_count = 0
+    
+    for queue in list(subscribers):  # 使用 list() 避免迭代时修改
+        try:
+            queue.put_nowait(event)
+            success_count += 1
+        except asyncio.QueueFull:
+            # 队列满：客户端处理太慢，丢弃该事件
+            dropped_count += 1
+    
+    # 🔧 新增：对于重要事件，记录发送结果
+    if event_type in ["layer_completed", "layer_started", "pause", "dimension_complete"]:
+        if dropped_count > 0:
+            logger.warning(f"[SSE Publish] Session {session_id}: {event_type} 发送结果: {success_count} 成功, {dropped_count} 因队列满丢弃")
+        else:
+            logger.info(f"[SSE Publish] Session {session_id}: ✅ {event_type} 已发送到 {success_count} 个订阅者")
+
+
+def _publish_event_sync(session_id: str, event: Dict) -> None:
+    """
+    同步版本的发布函数 - 供 LLM 回调调用
+    
+    🔧 跨线程安全：优先使用保存的主事件循环 _main_event_loop
+    使用 asyncio.run_coroutine_threadsafe 从同步代码调用异步发布
+    
+    Args:
+        session_id: 会话 ID
+        event: 事件字典
+    """
+    event_type = event.get("type", "unknown")
+    
+    # 🔧 检查订阅者数量
+    subscribers = _session_subscribers.get(session_id, set())
+    subscriber_count = len(subscribers)
+    
+    # 🔧 对于重要事件，记录调用详情
+    if event_type in ["dimension_delta", "dimension_complete"]:
+        if subscriber_count > 0:
+            logger.debug(f"[SSE Publish Sync] Session {session_id}: {event_type}, 订阅者={subscriber_count}")
+    elif event_type in ["layer_completed", "layer_started"]:
+        logger.info(f"[SSE Publish Sync] Session {session_id}: {event_type}, 订阅者={subscriber_count}")
+    
+    # 🔧 跨线程安全：优先使用保存的主事件循环
+    loop = None
+    loop_source = None
+    
+    if _main_event_loop is not None:
+        loop = _main_event_loop
+        loop_source = "saved_main_loop"
+    else:
+        # 回退：尝试获取当前运行的事件循环
+        try:
+            loop = asyncio.get_running_loop()
+            loop_source = "current_loop"
+        except RuntimeError:
+            pass
+    
+    if loop is None:
+        # 没有可用的事件循环
+        if event_type in ["layer_completed", "dimension_complete"]:
+            logger.warning(f"[SSE Publish Sync] Session {session_id}: ⚠️ 无可用事件循环，事件 {event_type} 无法发送！")
+        else:
+            logger.debug(f"[SSE Publish Sync] No event loop available, skipping {event_type}")
+        return
+    
+    try:
+        # 从同步代码安全地调用异步函数
+        future = asyncio.run_coroutine_threadsafe(
+            publish_event_to_subscribers(session_id, event),
+            loop
+        )
+        # 🔧 等待完成（带超时），确保事件真正发送
+        future.result(timeout=5.0)
+        
+        if event_type in ["layer_completed", "layer_started", "dimension_complete"]:
+            logger.info(f"[SSE Publish Sync] Session {session_id}: ✅ {event_type} 已通过 {loop_source} 发送")
+    except Exception as e:
+        if event_type in ["layer_completed", "dimension_complete"]:
+            logger.error(f"[SSE Publish Sync] Session {session_id}: ⚠️ 发送 {event_type} 失败: {e}")
+        else:
+            logger.debug(f"[SSE Publish Sync] Failed to send {event_type}: {e}")
+
+
 def _get_session_events_copy(session_id: str) -> list:
     """
-    Thread-safe get copy of session events list
-
+    Thread-safe get deep copy of session events list
+    
+    使用深拷贝防止 "deque mutated during iteration" 错误：
+    当写入线程正在追加事件时，如果读取协程正好在遍历队列，
+    浅拷贝会导致 RuntimeError: deque mutated during iteration。
+    
     Args:
         session_id: Session identifier
 
     Returns:
-        Copy of events list or empty list if session not found
+        Deep copy of events list or empty list if session not found
     """
     with _sessions_lock:
         if session_id not in _sessions:
             return []
-        return list(_sessions[session_id].get("events", []))
+        # 🔧 使用深拷贝，确保事件对象不会被其他线程修改
+        return copy.deepcopy(_sessions[session_id].get("events", []))
 
 
-def _is_execution_active(session_id: str) -> bool:
+async def _is_execution_active(session_id: str) -> bool:
     """
-    Thread-safe check if execution is active
-
+    检查执行是否活跃 (从数据库读取)
+    
+    ✅ SSOT 简化：不再使用内存 _active_executions，直接从数据库读取
+    
     Args:
         session_id: Session identifier
 
     Returns:
         True if execution is active
     """
-    with _active_executions_lock:
-        return _active_executions.get(session_id, False)
+    from backend.database.operations_async import is_execution_active_async
+    return await is_execution_active_async(session_id)
 
 
-def _set_execution_active(session_id: str, active: bool) -> None:
+async def _set_execution_active(session_id: str, active: bool) -> None:
     """
-    Thread-safe set execution active state
-
+    设置执行活跃状态 (写入数据库)
+    
+    ✅ SSOT 简化：不再使用内存 _active_executions，直接写入数据库
+    
     Args:
         session_id: Session identifier
         active: Active state to set
     """
-    with _active_executions_lock:
-        _active_executions[session_id] = active
+    from backend.database.operations_async import set_execution_active_async
+    await set_execution_active_async(session_id, active)
 
 
-def _get_stream_state(session_id: str) -> str:
+async def _get_stream_state(session_id: str) -> str:
     """
-    Thread-safe get stream state
-
+    获取流状态 (从数据库读取)
+    
+    ✅ SSOT 简化：不再使用内存 _stream_states，直接从数据库读取
+    
     Args:
         session_id: Session identifier
 
     Returns:
         Stream state: "active", "paused", or "completed"
     """
-    with _stream_states_lock:
-        return _stream_states.get(session_id, "active")
+    from backend.database.operations_async import get_stream_state_async
+    return await get_stream_state_async(session_id)
 
 
-def _set_stream_state(session_id: str, state: str) -> None:
+async def _set_stream_state(session_id: str, state: str) -> None:
     """
-    Thread-safe set stream state
-
+    设置流状态 (写入数据库)
+    
+    ✅ SSOT 简化：不再使用内存 _stream_states，直接写入数据库
+    
     Args:
         session_id: Session identifier
         state: New stream state
     """
-    with _stream_states_lock:
-        _stream_states[session_id] = state
+    from backend.database.operations_async import set_stream_state_async
+    await set_stream_state_async(session_id, state)
 
 
 def _generate_session_id() -> str:
@@ -782,6 +1179,13 @@ def _build_initial_state(request: StartPlanningRequest, session_id: str) -> Dict
         "messages": [],
         "blackboard": {},
 
+        # 【新增】元数据 - 持久化到 Checkpoint，用于去重和版本化同步
+        "metadata": {
+            "published_layers": [],      # 已发送 layer_completed 信号的层级
+            "version": 0,                # 状态版本号
+            "last_signal_timestamp": None,
+        },
+
         # Streaming output configuration
         "_streaming_enabled": request.stream_mode,
         "_token_callback_factory": None,
@@ -806,7 +1210,11 @@ async def _execute_graph_in_background(
     在后台执行 LangGraph 并将事件写入会话状态
 
     此函数由 FastAPI BackgroundTasks 调用，在独立的异步任务中运行。
-    事件直接写入 _sessions[session_id]["events"] 列表，无需队列。
+    事件直接写入 _sessions[session_id]["events"] 列表。
+    
+    ✅ SSOT 简化：不再使用 sent_*_events 集合进行内存去重
+    - LangGraph 的状态变化是原子的，每次 astream 返回的事件都是唯一的状态变化
+    - SSE 事件是"阅后即焚"的，不需要持久化去重状态
     """
     logger.info(f"[Planning] [{session_id}] ===== 后台执行开始 =====")
     logger.info(f"[Planning] [{session_id}] Graph 类型: {type(graph).__name__}")
@@ -815,15 +1223,10 @@ async def _execute_graph_in_background(
     try:
         config = {"configurable": {"thread_id": session_id}}
 
-        # 获取会话事件列表的引用
-        events_list = _get_session_events_copy(session_id)
-        # Get or initialize the set of sent layer events
-        sent_events = _get_session_value(session_id, "sent_layer_events", set())
-        logger.info(f"[Planning] [{session_id}] 已发送的layer事件: {sent_events}")
-        # Get or initialize the set of sent pause events
-        sent_pause_events = _get_session_value(session_id, "sent_pause_events", set())
-        logger.info(f"[Planning] [{session_id}] 已发送的pause事件: {sent_pause_events}")
-
+        # ✅ 移除：不再需要获取 sent_*_events 集合
+        # 跟踪已发送的 layer_started 事件（用于本执行周期内的去重，不持久化）
+        sent_layer_started_this_run = set()
+        
         # 创建 Token 回调工厂，用于实时发送维度内容到 SSE
         dimension_accumulators = {}  # 跟踪每个维度的累积内容
 
@@ -873,11 +1276,17 @@ async def _execute_graph_in_background(
         logger.info(f"[Planning] [{session_id}] 开始流式执行 graph.astream()")
         stream_iterator = graph.astream(clean_state, config, stream_mode="values")
 
-        previous_event = {}
-        # ✅ 从 session 获取 sent_layer_started（持久化状态）
-        sent_layer_started = _get_session_value(session_id, "sent_layer_started", set())
-        logger.info(f"[Planning] [{session_id}] 已发送的 layer_started 事件: {sent_layer_started}")
-        
+        # ✅ 持久化去重：从 Checkpoint metadata 读取已发送的层级信号
+        # 不再使用内存 set，避免服务重启后状态丢失
+        checkpoint_state = await graph.aget_state(config)
+        metadata = checkpoint_state.values.get("metadata", {})
+        published_layers = set(metadata.get("published_layers", []))
+        logger.info(f"[Planning] [{session_id}] 从 Checkpoint 读取 published_layers: {published_layers}")
+
+        # 执行周期内的临时去重（用于 layer_started 和 pause，这些不需要持久化）
+        sent_layer_started_this_run = set()
+        sent_pause_this_run = set()
+
         async for event in stream_iterator:
             # ✅ 检测层级开始（layer_started 事件）
             # 关键修复：检查是否是真正的层级开始执行，而不是层级完成后的状态更新
@@ -886,20 +1295,20 @@ async def _execute_graph_in_background(
             previous_layer = event.get("previous_layer", 0)
             
             # 判断是否应该发送 layer_started：
-            # 1. current_layer 有效
+            # 1. current_layer 有效 (1/2/3)
             # 2. 没有暂停
             # 3. 不是从上一层完成后的状态更新（previous_layer=0 或 current_layer <= previous_layer）
             should_send_started = (
                 current_layer and 
                 current_layer in [1, 2, 3] and 
                 not pause_after_step and
-                not (previous_layer > 0 and current_layer > previous_layer)  # 关键：排除层级完成后的状态更新
+                not (previous_layer > 0 and current_layer > previous_layer)
             )
             
             if should_send_started:
                 layer_started_key = f"layer_{current_layer}_started"
-                if layer_started_key not in sent_layer_started:
-                    # 发送 layer_started 事件
+                # ✅ 只在本执行周期内去重，不持久化
+                if layer_started_key not in sent_layer_started_this_run:
                     layer_names = {1: "现状分析", 2: "规划思路", 3: "详细规划"}
                     started_event = {
                         "type": "layer_started",
@@ -911,126 +1320,90 @@ async def _execute_graph_in_background(
                         "timestamp": datetime.now().isoformat()
                     }
                     await _append_session_event_async(session_id, started_event)
-                    sent_layer_started.add(layer_started_key)
-                    _set_session_value(session_id, "sent_layer_started", sent_layer_started)
+                    sent_layer_started_this_run.add(layer_started_key)
                     logger.info(f"[Planning] [{session_id}] ✓ layer_started 事件已发送: Layer {current_layer}")
 
             # 检测层级完成
             for layer_num in [1, 2, 3]:
                 now_completed = event.get(f"layer_{layer_num}_completed", False)
 
-                # ✅ 简化：只检查层级是否完成，不依赖 previous_event
-                if now_completed:
-                    # 事件key用于去重追踪
-                    event_key = f"layer_{layer_num}_completed"
+                # ✅ 持久化去重：检查 metadata.published_layers 而不是内存 set
+                if now_completed and layer_num not in published_layers:
+                    # 获取维度报告内容
+                    from src.utils.report_utils import (
+                        generate_analysis_report,
+                        generate_concept_report,
+                        generate_detail_report
+                    )
+                    
+                    project_name = event.get("project_name", "村庄")
+                    
+                    if layer_num == 1:
+                        dimension_reports = event.get("analysis_reports", {})
+                    elif layer_num == 2:
+                        dimension_reports = event.get("concept_reports", {})
+                        logger.info(f"[Planning] [{session_id}] === Layer 2 完成 ===")
+                        logger.info(f"[Planning] [{session_id}] concept_reports: {list(dimension_reports.keys()) if dimension_reports else 'empty'}")
+                    else:  # layer_num == 3
+                        dimension_reports = event.get("detail_reports", {})
+                        logger.info(f"[Planning] [{session_id}] === Layer 3 完成 ===")
+                        logger.info(f"[Planning] [{session_id}] detail_reports: {list(dimension_reports.keys()) if dimension_reports else 'empty'}")
 
-                    # 检查：未发送过
-                    if event_key not in sent_events:
-                        # 获取维度报告内容（使用新的统一命名）
-                        from src.utils.report_utils import (
-                            generate_analysis_report,
-                            generate_concept_report,
-                            generate_detail_report
-                        )
-                        
-                        project_name = event.get("project_name", "村庄")
-                        
-                        if layer_num == 1:
-                            dimension_reports = event.get("analysis_reports", {})
-                            report = generate_analysis_report(dimension_reports, project_name)
-                        elif layer_num == 2:
-                            dimension_reports = event.get("concept_reports", {})
-                            report = generate_concept_report(dimension_reports, project_name)
-                            # ✅ 添加 Layer 2 专用调试日志
-                            logger.info(f"[Planning] [{session_id}] === Layer 2 完成 ===")
-                            logger.info(f"[Planning] [{session_id}] event keys: {list(event.keys())}")
-                            logger.info(f"[Planning] [{session_id}] concept_reports: {dimension_reports}")
-                            logger.info(f"[Planning] [{session_id}] dimension_reports keys: {list(dimension_reports.keys())}")
-                            if dimension_reports:
-                                for key, value in dimension_reports.items():
-                                    logger.info(f"[Planning] [{session_id}]   - {key}: {len(value)} chars")
-                        else:  # layer_num == 3
-                            dimension_reports = event.get("detail_reports", {})
-                            report = generate_detail_report(dimension_reports, project_name)
-                            # ✅ 添加 Layer 3 专用调试日志
-                            logger.info(f"[Planning] [{session_id}] === Layer 3 完成 ===")
-                            logger.info(f"[Planning] [{session_id}] event keys: {list(event.keys())}")
-                            logger.info(f"[Planning] [{session_id}] detail_reports: {dimension_reports}")
-                            logger.info(f"[Planning] [{session_id}] dimension_reports keys: {list(dimension_reports.keys())}")
-                            if dimension_reports:
-                                for key, value in dimension_reports.items():
-                                    logger.info(f"[Planning] [{session_id}]   - {key}: {len(value)} chars")
-
-                        # ✅ 数据完整性验证和警告（仅用于日志）
-                        total_dimension_content = sum(len(v) for v in dimension_reports.values()) if dimension_reports else 0
-                        
-                        if not dimension_reports or len(dimension_reports) == 0:
-                            logger.warning(f"[Planning] [{session_id}] ⚠️ Layer {layer_num} dimension_reports 为空！")
-                            logger.warning(f"[Planning] [{session_id}]   - 原始状态键: analysis_reports/concept_reports/detail_reports")
-                            logger.warning(f"[Planning] [{session_id}]   - event keys: {list(event.keys())}")
-                        elif total_dimension_content == 0:
-                            logger.warning(f"[Planning] [{session_id}] ⚠️ Layer {layer_num} dimension_reports 有 {len(dimension_reports)} 个维度但内容全为空！")
-                            logger.warning(f"[Planning] [{session_id}]   - 维度键列表: {list(dimension_reports.keys())}")
-                        else:
-                            logger.info(f"[Planning] [{session_id}] ✓ Layer {layer_num} 数据完整: {len(dimension_reports)} 个维度, {total_dimension_content} 字符")
-
-                        # ✅ Signal-Fetch Pattern: SSE 只发送轻量信号，不传全量数据
-                        # 前端收到信号后会调用 REST API /sessions/{id}/layer/{layer}/reports 获取完整数据
-                        event_data = {
-                            "type": "layer_completed",
-                            "layer": layer_num,
-                            "layer_number": layer_num,
-                            "session_id": session_id,
-                            "message": f"Layer {layer_num} completed",
-                            # ✅ 精简：不再传输大型数据，改用 REST API 拉取
-                            # "report_content": report[:500000],  # 已移除
-                            # "dimension_reports": dimension_reports,  # 已移除
-                            # ✅ 新增：信号字段，告知前端数据是否完整
-                            "has_data": len(dimension_reports) > 0 and total_dimension_content > 0,
-                            "dimension_count": len(dimension_reports) if dimension_reports else 0,
-                            "total_chars": total_dimension_content,
-                            "pause_after_step": event.get("pause_after_step", False),
-                            "previous_layer": event.get("previous_layer", 0),
-                            "timestamp": datetime.now().isoformat()
-                        }
-                        
-                        logger.info(f"[Planning] [{session_id}] ✓ layer_completed 轻量信号已发送: Layer {layer_num}")
-                        logger.info(f"[Planning] [{session_id}]   - dimension_count: {len(dimension_reports) if dimension_reports else 0}")
-                        logger.info(f"[Planning] [{session_id}]   - total_chars: {total_dimension_content}")
-                        logger.info(f"[Planning] [{session_id}]   - has_data: {event_data['has_data']}")
-                        logger.info(f"[Planning] [{session_id}]   - pause_after_step: {event.get('pause_after_step', False)}")
-                        
-                        # 使用异步版本（高性能）
-                        await _append_session_event_async(session_id, event_data)
-                        sent_events.add(event_key)  # 标记已发送
-                        _set_session_value(session_id, "sent_layer_events", sent_events)  # 保存回session
-                        
-                        # ✅ 验证：确认事件已在队列中
-                        events_after = _get_session_events_copy(session_id)
-                        last_event = events_after[-1] if events_after else None
-                        if last_event and last_event.get("type") == "layer_completed":
-                            logger.info(f"[Planning] [{session_id}] ✓ layer_completed 事件已验证在队列中 (队列长度: {len(events_after)})")
-                        else:
-                            logger.warning(f"[Planning] [{session_id}] ⚠️ layer_completed 事件验证失败！队列长度: {len(events_after)}, 最后事件: {last_event.get('type') if last_event else 'None'}")
+                    # 数据完整性验证
+                    total_dimension_content = sum(len(v) for v in dimension_reports.values()) if dimension_reports else 0
+                    
+                    if not dimension_reports:
+                        logger.warning(f"[Planning] [{session_id}] ⚠️ Layer {layer_num} dimension_reports 为空！")
                     else:
-                        # 重复事件检测
-                        logger.info(f"[Planning] [{session_id}] ⚠️ 跳过重复的 layer_{layer_num}_completed 事件")
-                        logger.info(f"[Planning] [{session_id}]   - 事件已在已发送列表中: {sent_events}")
+                        logger.info(f"[Planning] [{session_id}] ✓ Layer {layer_num} 数据完整: {len(dimension_reports)} 个维度, {total_dimension_content} 字符")
 
-            # 【新增】检测修复完成事件
+                    # ✅ Signal-Fetch Pattern: SSE 只发送轻量信号
+                    event_data = {
+                        "type": "layer_completed",
+                        "layer": layer_num,
+                        "layer_number": layer_num,
+                        "session_id": session_id,
+                        "message": f"Layer {layer_num} completed",
+                        "has_data": len(dimension_reports) > 0 and total_dimension_content > 0,
+                        "dimension_count": len(dimension_reports) if dimension_reports else 0,
+                        "total_chars": total_dimension_content,
+                        "pause_after_step": event.get("pause_after_step", False),
+                        "previous_layer": event.get("previous_layer", 0),
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    
+                    logger.info(f"[Planning] [{session_id}] ✓ layer_completed 信号: Layer {layer_num}, dims={event_data['dimension_count']}")
+                    
+                    # 发送事件
+                    await _append_session_event_async(session_id, event_data)
+                    
+                    # ✅ 持久化更新：将层级添加到 published_layers，并递增版本号
+                    published_layers.add(layer_num)
+                    current_metadata = event.get("metadata", {})
+                    current_version = current_metadata.get("version", 0)
+                    updated_metadata = {
+                        **current_metadata,
+                        "published_layers": list(published_layers),
+                        "version": current_version + 1,  # 【新增】递增版本号
+                        "last_signal_timestamp": datetime.now().isoformat(),
+                    }
+                    await graph.aupdate_state(config, {"metadata": updated_metadata})
+                    logger.info(f"[Planning] [{session_id}] ✅ 已更新 metadata: published_layers={list(published_layers)}, version={current_version + 1}")
+                    
+                    # 检查 SSE 订阅者状态
+                    subscribers = _session_subscribers.get(session_id, set())
+                    subscriber_count = len(subscribers)
+                    if subscriber_count == 0:
+                        logger.warning(f"[Planning] [{session_id}] ⚠️ layer_completed 发送时无 SSE 订阅者！")
+
+            # 【简化】检测修复完成事件
             last_revised_dimensions = event.get("last_revised_dimensions", [])
             if last_revised_dimensions and not event.get("need_revision", False):
-                logger.info(f"[Planning] [{session_id}] === 检测到修复完成 ===")
-                logger.info(f"[Planning] [{session_id}]   - last_revised_dimensions: {last_revised_dimensions}")
+                logger.info(f"[Planning] [{session_id}] === 检测到修复完成: {last_revised_dimensions} ===")
                 
-                # 获取已发送的 revised 事件集合（幂等检查）
-                sent_revised_events = _get_session_value(session_id, "sent_revised_events", set())
-                
-                # 从修订历史获取最新条目
                 revision_history = event.get("revision_history", [])
                 
                 for dim in last_revised_dimensions:
-                    # 从历史记录中获取该维度的最新修订
                     latest_revision = next(
                         (r for r in reversed(revision_history) if r.get("dimension") == dim),
                         None
@@ -1038,108 +1411,55 @@ async def _execute_graph_in_background(
                     
                     if latest_revision:
                         layer = latest_revision.get("layer", 1)
-                        # 使用复合键确保同一维度在不同层级可以独立修复
-                        revised_event_key = f"revised_{layer}_{dim}"
-                        
-                        # 幂等检查：避免重复发送
-                        if revised_event_key in sent_revised_events:
-                            logger.debug(f"[Planning] [{session_id}] 跳过重复的 revised 事件: {revised_event_key}")
-                            continue
-                        
-                        # 发送 dimension_revised SSE 事件
                         event_data = {
                             "type": "dimension_revised",
                             "dimension": dim,
                             "layer": layer,
-                            "old_content": latest_revision.get("old_content", "")[:1000],  # 截断避免过大
                             "new_content": latest_revision.get("new_content", ""),
-                            "feedback": latest_revision.get("feedback", "")[:500],  # 截断
                             "timestamp": latest_revision.get("timestamp", datetime.now().isoformat())
                         }
                         await _append_session_event_async(session_id, event_data)
-                        
-                        # 标记为已发送
-                        sent_revised_events.add(revised_event_key)
-                        _set_session_value(session_id, "sent_revised_events", sent_revised_events)
                         logger.info(f"[Planning] [{session_id}] ✓ dimension_revised 事件已发送: {dim}")
-                
-                # 清除标志避免重复检测（通过更新内存状态）
-                # 注意：不能直接修改 event，但下次循环会检测新的状态
 
-            # 精简：不再手动同步数据库字段
-            # AsyncSqliteSaver 会自动将完整状态保存到 checkpoints 表
-            # 我们只需要维护业务元数据（status, created_at 等）
-            
-            with _sessions_lock:
-                if session_id in _sessions:
-                    # 更新内存中的状态
-                    _sessions[session_id]["initial_state"].update(event)
-                    _sessions[session_id]["current_layer"] = event.get("current_layer", 1)
-                    
-                    # 将关键字段也同步到 session_state 根级别
-                    # 这样 /api/planning/status 端点可以正确读取这些字段
-                    if "pause_after_step" in event:
-                        _sessions[session_id]["pause_after_step"] = event["pause_after_step"]
-                    if "previous_layer" in event:
-                        _sessions[session_id]["previous_layer"] = event["previous_layer"]
+            # ✅ SSOT 简化：不再手动同步内存状态到 _sessions
+            # LangGraph Checkpoint 是唯一真实源
 
             # 检查暂停状态（步进模式）
             if event.get("pause_after_step"):
                 logger.info(f"[Planning] [{session_id}] 检测到暂停状态")
-                logger.info(f"[Planning] [{session_id}]   - pause_after_step: {event.get('pause_after_step')}")
-                logger.info(f"[Planning] [{session_id}]   - previous_layer: {event.get('previous_layer')}")
                 
-                # 使用 previous_layer 作为待审查层级
                 previous_layer = event.get("previous_layer", 1)
-
-                # pause事件去重
                 pause_event_key = f"pause_layer_{previous_layer}"
 
-                if pause_event_key not in sent_pause_events:
-                    # 首次检测到此layer的暂停，添加事件
+                # ✅ 简化：只在本执行周期内去重
+                if pause_event_key not in sent_pause_this_run:
                     pause_event = {
                         "type": "pause",
                         "session_id": session_id,
-                        "current_layer": previous_layer,  # 刚完成的层级
+                        "current_layer": previous_layer,
                         "checkpoint_id": event.get("last_checkpoint_id", ""),
                         "reason": "step_mode",
                         "timestamp": datetime.now().isoformat()
                     }
                     _append_session_event(session_id, pause_event)
-                    sent_pause_events.add(pause_event_key)
-                    _set_session_value(session_id, "sent_pause_events", sent_pause_events)
-                    # sent_pause_events 是内存状态,不需要持久化到数据库
-                    
-                    # 更新会话状态为 paused
-                    _set_session_value(session_id, "status", TaskStatus.paused)
-                    logger.info(f"[Planning] [{session_id}] 状态已更新为 paused")
+                    sent_pause_this_run.add(pause_event_key)
                     
                     # 持久化状态到数据库
                     try:
-                        await update_session_async(session_id, {
-                            "status": TaskStatus.paused,
-                        })
-                        logger.info(f"[Planning] [{session_id}] 状态已持久化到数据库")
+                        await update_session_async(session_id, {"status": TaskStatus.paused})
+                        logger.info(f"[Planning] [{session_id}] 状态已持久化到数据库: paused")
                     except Exception as e:
                         logger.error(f"[Planning] [{session_id}] 持久化状态失败: {e}")
 
                     stream_paused_event = {
                         "type": "stream_paused",
                         "session_id": session_id,
-                        "current_layer": previous_layer,  # ✅ 使用刚刚完成的层级
+                        "current_layer": previous_layer,
                         "reason": "waiting_for_resume",
                         "timestamp": datetime.now().isoformat()
                     }
-                    # 使用异步版本添加事件
-                    # SSE generator 会在发送 stream_paused 后自动结束流
                     await _append_session_event_async(session_id, stream_paused_event)
-
                     _stream_states[session_id] = "paused"
-                    logger.info(f"[Planning] [{session_id}]   - 已发送pause事件: {sent_pause_events}")
-                else:
-                    # ⚠️ 重复pause事件，跳过
-                    logger.info(f"[Planning] [{session_id}] ⚠️ 跳过重复的pause事件 (Layer {previous_layer})")
-                    logger.info(f"[Planning] [{session_id}]   - 事件已在已发送列表中: {sent_pause_events}")
 
                 return
 
@@ -1152,14 +1472,16 @@ async def _execute_graph_in_background(
             "success": True,
             "timestamp": datetime.now().isoformat()
         }
-        # ✅ 使用异步版本
         await _append_session_event_async(session_id, completion_event)
-
-        # 更新会话状态
-        _set_session_value(session_id, "execution_complete", True)
-        _set_session_value(session_id, "status", TaskStatus.completed)
-        _set_stream_state(session_id, "completed")
-        logger.info(f"[Planning] [{session_id}] 总事件数: {len(events_list)}")
+        
+        # 更新数据库状态
+        try:
+            await update_session_async(session_id, {"status": TaskStatus.completed})
+        except Exception as e:
+            logger.error(f"[Planning] [{session_id}] 持久化状态失败: {e}")
+        
+        await _set_stream_state(session_id, "completed")
+        logger.info(f"[Planning] [{session_id}] 执行完成")
 
     except Exception as e:
         logger.error(f"[Planning] Execution error for {session_id}: {e}", exc_info=True)
@@ -1171,24 +1493,28 @@ async def _execute_graph_in_background(
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
-        # ✅ 使用异步版本
         await _append_session_event_async(session_id, error_event)
 
-        # 更新会话状态
-        _set_session_value(session_id, "execution_complete", True)
-        _set_session_value(session_id, "execution_error", str(e))
-        _set_session_value(session_id, "status", TaskStatus.failed)
-        _set_stream_state(session_id, "completed")
+        # 更新数据库状态
+        try:
+            await update_session_async(session_id, {
+                "status": TaskStatus.failed,
+                "execution_error": str(e)
+            })
+        except Exception as db_error:
+            logger.error(f"[Planning] [{session_id}] 持久化错误状态失败: {db_error}")
+        
+        await _set_stream_state(session_id, "completed")
 
 
 async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Resume graph execution from checkpoint
     
-    LangGraph 官方推荐模式：
-    1. Checkpoint 是唯一的数据源（Single Source of Truth）
-    2. 使用 graph.astream(None, config) 恢复执行
-    3. 废弃内存状态验证，信任 Checkpoint 完整性
+    ✅ SSOT 简化：
+    - Checkpoint 是唯一的数据源（Single Source of Truth）
+    - 使用 graph.astream(None, config) 恢复执行
+    - 不再维护内存中的 sent_*_events 集合
 
     Args:
         session_id: Session identifier
@@ -1197,12 +1523,12 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
     Returns:
         Response with stream URL for resuming execution
     """
-    # ✅ 使用统一的单例获取方式
+    # 使用统一的单例获取方式
     saver = await get_global_checkpointer()
     graph = create_village_planning_graph(checkpointer=saver)
     config = {"configurable": {"thread_id": session_id}}
     
-    # ✅ 从 Checkpoint 获取完整状态（包含所有层级 reports）
+    # 从 Checkpoint 获取完整状态
     checkpoint_state = await graph.aget_state(config)
     if not checkpoint_state or not checkpoint_state.values:
         logger.error(f"[Planning API] [{session_id}] Checkpoint 中未找到会话状态")
@@ -1211,46 +1537,16 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
             detail=f"Session {session_id} not found in checkpoint"
         )
     
-    # 从 Checkpoint 获取完整状态
     full_state = checkpoint_state.values
     current_layer = full_state.get("current_layer", 1)
     
-    logger.info(f"[Planning API] [{session_id}] 从 Checkpoint 恢复完整状态:")
+    logger.info(f"[Planning API] [{session_id}] 从 Checkpoint 恢复:")
     logger.info(f"[Planning API] [{session_id}]   - current_layer: {current_layer}")
-    logger.info(f"[Planning API] [{session_id}]   - analysis_reports: {len(full_state.get('analysis_reports', {}))} 个维度")
-    logger.info(f"[Planning API] [{session_id}]   - concept_reports: {len(full_state.get('concept_reports', {}))} 个维度")
-    logger.info(f"[Planning API] [{session_id}]   - detail_reports: {len(full_state.get('detail_reports', {}))} 个维度")
-    logger.info(f"[Planning API] [{session_id}]   - need_revision: {full_state.get('need_revision', False)}")
+    logger.info(f"[Planning API] [{session_id}]   - layer_1_completed: {full_state.get('layer_1_completed', False)}")
+    logger.info(f"[Planning API] [{session_id}]   - layer_2_completed: {full_state.get('layer_2_completed', False)}")
+    logger.info(f"[Planning API] [{session_id}]   - layer_3_completed: {full_state.get('layer_3_completed', False)}")
 
-    # Update session state（仅更新业务元数据，不覆盖 Checkpoint 数据）
-    with _sessions_lock:
-        if session_id in _sessions:
-            # 同步 current_layer 到内存会话
-            _sessions[session_id]["current_layer"] = current_layer
-            _sessions[session_id]["execution_complete"] = False
-            _sessions[session_id]["execution_error"] = None
-            _sessions[session_id]["status"] = TaskStatus.running
-            # Preserve sent_layer_events to prevent re-sending completed layer events
-            if "sent_layer_events" not in _sessions[session_id]:
-                _sessions[session_id]["sent_layer_events"] = set()
-                logger.info(f"[Planning API] [{session_id}] 初始化 sent_layer_events")
-            else:
-                logger.info(f"[Planning API] [{session_id}] 保留 sent_layer_events: {_sessions[session_id]['sent_layer_events']}")
-            # 初始化 sent_revised_events（如果不存在）
-            if "sent_revised_events" not in _sessions[session_id]:
-                _sessions[session_id]["sent_revised_events"] = set()
-                logger.info(f"[Planning API] [{session_id}] 初始化 sent_revised_events")
-            # ✅ 清空 sent_pause_events 以便下一层暂停
-            _sessions[session_id]["sent_pause_events"].clear()
-            
-            # ✅ 关键修复：同步更新 initial_state 中的 pause_after_step
-            # 这样 /api/planning/status 端点才能正确读取到 False
-            _sessions[session_id]["initial_state"]["pause_after_step"] = False
-            # ✅ 同步清除 previous_layer，确保下一层暂停时能正确设置
-            _sessions[session_id]["initial_state"]["previous_layer"] = 0
-            logger.info(f"[Planning API] [{session_id}] 已清除内存中的 pause_after_step 和 previous_layer 标志")
-
-    # 添加 resumed 事件到 events 列表，通知前端已恢复执行
+    # 添加 resumed 事件
     _append_session_event(session_id, {
         "type": "resumed",
         "session_id": session_id,
@@ -1258,9 +1554,8 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
         "message": "Execution resumed after review approval",
         "timestamp": datetime.now().isoformat()
     })
-    logger.info(f"[Planning API] [{session_id}] 已添加 resumed 事件")
 
-    # ✅ 持久化状态到数据库:只更新业务元数据
+    # 持久化状态到数据库
     try:
         await update_session_async(session_id, {
             "status": TaskStatus.running,
@@ -1268,30 +1563,22 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
         })
         logger.info(f"[Planning API] [{session_id}] 状态已持久化到数据库: status=running")
     except Exception as db_error:
-        logger.error(f"[Planning API] [{session_id}] 持久化状态失败: {db_error}", exc_info=True)
-        # 继续执行,不阻断恢复流程
+        logger.error(f"[Planning API] [{session_id}] 持久化状态失败: {db_error}")
 
-    # ✅ 使用 graph.aupdate_state 清除暂停标志和 previous_layer（如果需要）
-    # 同时清除 previous_layer，避免 init_pause_state 在恢复后重新设置 pause_after_step = True
+    # 清除 Checkpoint 中的暂停标志
     if full_state.get("pause_after_step", False):
         await graph.aupdate_state(
             config,
             {
                 "pause_after_step": False,
-                "previous_layer": 0,  # 清除 previous_layer，避免重复暂停
+                "previous_layer": 0,
             }
         )
         logger.info(f"[Planning API] [{session_id}] 已清除 pause_after_step 和 previous_layer 标志")
 
-    # ✅ 恢复执行时发送 layer_started 事件
-    # 确保前端收到该事件后创建空的 LayerReportMessage
-    # 注意：只有 Layer 1/2/3 才发送 layer_started，Layer 4 是最终成果生成，不需要
+    # 发送 layer_started 事件（如果是有效的层级）
     layer_names = {1: "现状分析", 2: "规划思路", 3: "详细规划"}
-    layer_started_key = f"layer_{current_layer}_started"
-    sent_layer_started = _get_session_value(session_id, "sent_layer_started", set())
-    
-    # 🔧 修复：只有 current_layer 在 [1, 2, 3] 范围内才发送 layer_started 事件
-    if layer_started_key not in sent_layer_started and current_layer in [1, 2, 3]:
+    if current_layer in [1, 2, 3]:
         started_event = {
             "type": "layer_started",
             "layer": current_layer,
@@ -1302,19 +1589,16 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
             "timestamp": datetime.now().isoformat()
         }
         _append_session_event(session_id, started_event)
-        sent_layer_started.add(layer_started_key)
-        _set_session_value(session_id, "sent_layer_started", sent_layer_started)
         logger.info(f"[Planning API] [{session_id}] ✓ 恢复时发送 layer_started 事件: Layer {current_layer}")
 
-    # Reset stream state
-    _set_stream_state(session_id, "active")
+    await _set_stream_state(session_id, "active")
 
-    # ✅ 使用 None 作为输入，LangGraph 自动从 Checkpoint 加载完整状态
+    # 启动后台执行
     asyncio.create_task(
         _execute_graph_in_background(session_id, graph, None, saver)
     )
-
-    logger.info(f"[Planning API] Resumed background execution for session {session_id}")
+    
+    logger.info(f"[Planning API] [{session_id}] 恢复执行，stream_url=/api/planning/stream/{session_id}")
 
     return {
         "message": "Execution resumed",
@@ -1434,25 +1718,17 @@ async def start_planning(
             )
 
         # Initialize in-memory session with events list (after DB commit)
+        # ✅ SSOT 简化：只保留 SSE 所需的最小字段，业务状态从 LangGraph Checkpoint 读取
         with _sessions_lock:
             _sessions[session_id] = {
                 "session_id": session_id,
                 "project_name": request.project_name,
-                "status": TaskStatus.running,
                 "created_at": datetime.now().isoformat(),
-                "request": request.dict(),
-                "current_layer": 1,
-                "initial_state": initial_state,
-                "events": deque(maxlen=MAX_SESSION_EVENTS),  # Auto-limit to prevent OOM
-                "execution_complete": False,
-                "execution_error": None,
-                "sent_layer_events": set(),  # Track sent layer completion events to prevent duplicates
-                "sent_revised_events": set(),  # Track sent dimension revised events to prevent duplicates
-                "sent_pause_events": set(),  # Track sent pause events to prevent duplicates
+                "events": deque(maxlen=MAX_SESSION_EVENTS),  # SSE 事件队列（阅后即焚）
             }
 
-        # Mark execution as active
-        _set_execution_active(session_id, True)
+        # Mark execution as active (数据库写入)
+        await _set_execution_active(session_id, True)
 
         # 使用全局 checkpointer 单例
         saver = await get_global_checkpointer()
@@ -1497,9 +1773,22 @@ async def stream_planning(session_id: str):
         if not rebuilt:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
+    # 🔧 新增：详细的 SSE 连接日志
+    session_state = _sessions.get(session_id, {})
+    current_layer = session_state.get("current_layer", "?")
+    sent_layer_events = session_state.get("sent_layer_events", set())
+    stream_state = _stream_states.get(session_id, "unknown")
+    subscriber_count_before = len(_session_subscribers.get(session_id, set()))
+    
     logger.info(f"[Planning API] [{session_id}] ===== SSE 连接建立 =====")
+    logger.info(f"[Planning API] [{session_id}] 连接前状态: current_layer={current_layer}, stream_state={stream_state}")
+    logger.info(f"[Planning API] [{session_id}] 已发送的层级事件: {sent_layer_events}")
+    logger.info(f"[Planning API] [{session_id}] 连接前订阅者数量: {subscriber_count_before}")
 
     async def event_generator():
+        # 🔧 订阅 session 的 asyncio.Queue（事件驱动模式）
+        queue = await subscribe_session(session_id)
+        
         try:
             # 立即发送连接成功事件
             yield _format_sse_json({
@@ -1508,95 +1797,72 @@ async def stream_planning(session_id: str):
                 "timestamp": datetime.now().isoformat()
             })
 
-            # ✅ 使用 event_id 跟踪已发送事件，解决 deque rotation 问题
-            last_sent_event_id = 0
-            last_log_time = 0  # 用于控制日志频率
-
             while True:
-                if session_id not in _sessions:
-                    logger.warning(f"[Planning] Session {session_id} deleted, closing stream")
-                    break
-
-                events_list = _get_session_events_copy(session_id)
-
-                # ✅ 找出所有未发送的事件（event_id > last_sent_event_id）
-                pending_events = [
-                    e for e in events_list
-                    if e.get("_event_id", 0) > last_sent_event_id
-                ]
-
-                if pending_events:
-                    # 按 event_id 排序确保顺序
-                    pending_events.sort(key=lambda e: e.get("_event_id", 0))
-                    pending_count = len(pending_events)
-
-                    # 检测新事件到达
-                    if pending_count > 0:
-                        new_max_id = pending_events[-1].get("_event_id", 0)
-                        new_events_count = new_max_id - last_sent_event_id
-                        if new_events_count > 0:
-                            logger.info(f"[Planning] [{session_id}] 🔔 检测到 {new_events_count} 个新事件 (event_id: {last_sent_event_id} → {new_max_id})")
-
-                    # 打印队列状态
-                    pending_types = [e.get("type") for e in pending_events[:20]]
-                    if len(pending_events) > 20:
-                        logger.info(f"[Planning] [{session_id}] SSE队列状态: 待发送={pending_count}, 类型前20={pending_types}...")
+                try:
+                    # 🔧 事件驱动：等待事件到达，无需轮询！
+                    event = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=30.0  # 30秒超时，发送 keep-alive
+                    )
+                    
+                    event_type = event.get("type")
+                    
+                    # 打印发送详情
+                    if event_type == "dimension_delta":
+                        dim_key = event.get("dimension_key", "?")
+                        accumulated_len = len(event.get("accumulated", ""))
+                        logger.debug(f"[Planning] [{session_id}] SSE发送: {event_type} [{dim_key}] accumulated={accumulated_len}")
+                    elif event_type == "dimension_complete":
+                        # 🔧 新增：dimension_complete 事件日志
+                        dim_key = event.get("dimension_key", "?")
+                        layer = event.get("layer", "?")
+                        content_len = len(event.get("full_content", ""))
+                        logger.info(f"[Planning] [{session_id}] SSE发送: {event_type} layer={layer}, dimension={dim_key}, chars={content_len}")
+                    elif event_type == "layer_completed":
+                        layer = event.get("layer", "?")
+                        dim_count = event.get("dimension_count", 0)
+                        total_chars = event.get("total_chars", 0)
+                        logger.info(f"[Planning] [{session_id}] SSE发送: {event_type} layer={layer}, dims={dim_count}, chars={total_chars}")
+                    elif event_type == "layer_started":
+                        layer = event.get("layer", "?")
+                        layer_name = event.get("layer_name", "?")
+                        logger.info(f"[Planning] [{session_id}] SSE发送: {event_type} layer={layer} ({layer_name})")
                     else:
-                        logger.info(f"[Planning] [{session_id}] SSE队列状态: 待发送={pending_count}, 类型={pending_types}")
+                        logger.info(f"[Planning] [{session_id}] SSE发送: {event_type}")
 
                     # 发送事件
-                    for event in pending_events:
-                        event_type = event.get("type")
-                        event_id = event.get("_event_id", 0)
+                    yield _format_sse_json(event)
 
-                        # stream_paused 特殊处理
-                        if event_type == "stream_paused":
-                            # 检查后面是否还有其他事件
-                            remaining_after = [
-                                e for e in events_list
-                                if e.get("_event_id", 0) > event_id and e.get("type") != "stream_paused"
-                            ]
-                            if remaining_after:
-                                logger.info(f"[Planning] [{session_id}] stream_paused: 后面还有 {len(remaining_after)} 个事件，等待处理")
-                                last_sent_event_id = event_id
-                                continue
-                            else:
-                                logger.info(f"[Planning] [{session_id}] stream_paused: 所有事件已处理，发送并关闭连接")
-                                yield _format_sse_json(event)
-                                last_sent_event_id = event_id
-                                _stream_states[session_id] = "paused"
-                                return
-                        else:
-                            # 打印发送详情
-                            if event_type == "dimension_delta":
-                                dim_key = event.get("dimension_key", "?")
-                                accumulated_len = len(event.get("accumulated", ""))
-                                logger.info(f"[Planning] [{session_id}] SSE发送: {event_type} [{dim_key}] accumulated={accumulated_len}")
-                            elif event_type == "layer_completed":
-                                layer = event.get("layer", "?")
-                                dim_count = event.get("dimension_count", 0)
-                                total_chars = event.get("total_chars", 0)
-                                logger.info(f"[Planning] [{session_id}] SSE发送: {event_type} layer={layer}, dims={dim_count}, chars={total_chars}")
-                            else:
-                                logger.info(f"[Planning] [{session_id}] SSE发送: {event_type}")
-
-                            yield _format_sse_json(event)
-                            last_sent_event_id = event_id
-
-                            if event_type in ["completed", "error"]:
-                                return
-                else:
-                    # 空闲状态 - 每 5 秒打印一次
-                    import time
-                    current_time = time.time()
-                    if current_time - last_log_time > 5:
-                        logger.debug(f"[Planning] [{session_id}] SSE 空闲中，等待新事件...")
-                        last_log_time = current_time
-
-                yield ": keep-alive\n\n"
-                await asyncio.sleep(0.3)
+                    # 检查终止事件
+                    if event_type in ["completed", "error"]:
+                        logger.info(f"[Planning] [{session_id}] SSE 流结束: {event_type}")
+                        return
+                    elif event_type == "stream_paused":
+                        _stream_states[session_id] = "paused"
+                        logger.info(f"[Planning] [{session_id}] stream_paused: 发送并关闭连接")
+                        return
+                        
+                except asyncio.TimeoutError:
+                    # 30秒无事件，发送心跳保持连接
+                    yield ": keep-alive\n\n"
 
         except asyncio.CancelledError:
+            # 🔧 新增：更详细的断开连接日志
+            subscriber_count_after = len(_session_subscribers.get(session_id, set()))
+            logger.info(f"[Planning] SSE client disconnected: {session_id} (CancelledError)")
+            logger.info(f"[Planning] SSE 断开后订阅者数量: {subscriber_count_after}")
+        except Exception as e:
+            logger.error(f"[Planning] SSE error for {session_id}: {e}", exc_info=True)
+            yield _format_sse_json({
+                "type": "error",
+                "session_id": session_id,
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            })
+        except asyncio.CancelledError:
+            # 🔧 新增：断开后状态日志
+            final_subscriber_count = len(_session_subscribers.get(session_id, set()))
+            logger.info(f"[Planning] [{session_id}] SSE 连接已关闭（Cancelled），剩余订阅者: {final_subscriber_count}")
             logger.info(f"[Planning] SSE client disconnected: {session_id}")
         except Exception as e:
             logger.error(f"[Planning] SSE error for {session_id}: {e}", exc_info=True)
@@ -1606,6 +1872,11 @@ async def stream_planning(session_id: str):
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             })
+        finally:
+            # 🔧 取消订阅
+            final_subscriber_count = len(_session_subscribers.get(session_id, set()))
+            logger.info(f"[Planning] [{session_id}] SSE finally: 取消订阅，当前订阅者数: {final_subscriber_count}")
+            await unsubscribe_session(session_id, queue)
 
     return StreamingResponse(
         event_generator(),
@@ -1621,99 +1892,37 @@ async def stream_planning(session_id: str):
 @router.get("/api/planning/status/{session_id}")
 async def get_session_status(session_id: str):
     """
-    Get session status (直接从内存和数据库读取，避免 checkpointer 的线程问题)
-    获取会话状态 - 从数据库读取业务元数据,从内存状态获取实时进度
-
+    Get session status
+    
+    ✅ SSOT 简化：只从 LangGraph Checkpoint 读取状态，不再从内存 _sessions 读取
+    - Checkpoint 是唯一真实源
+    - 数据库只用于业务元数据（status, created_at, execution_error）
+    
     Args:
         session_id: Session identifier
 
     Returns:
         SessionStatusResponse with current state
     """
-    # 1. 从数据库获取业务元数据 (轻量级)
+    # 1. 从数据库获取业务元数据
     db_session = await get_session_async(session_id)
     if not db_session:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-    # 2. 从内存状态获取 current_layer 和其他状态信息（最快、最可靠）
+    # 2. 从 LangGraph Checkpoint 获取完整状态
     current_layer = 1
-    previous_layer = 0  # 初始化默认值，防止 UnboundLocalError
+    previous_layer = 0
     layer_1_completed = False
     layer_2_completed = False
     layer_3_completed = False
     pause_after_step = False
-    execution_complete = False
-
-    if session_id in _sessions:
-        session_state = _sessions[session_id]
-        initial_state = session_state.get("initial_state", {})
-        
-        current_layer = session_state.get("current_layer", 1)
-        # 从已发送的事件推断层级完成状态
-        sent_events = session_state.get("sent_layer_events", set())
-        layer_1_completed = "layer_1_completed" in sent_events
-        layer_2_completed = "layer_2_completed" in sent_events
-        layer_3_completed = "layer_3_completed" in sent_events
-        execution_complete = session_state.get("execution_complete", False)
-        
-        # 从 initial_state 读取暂停相关字段
-        pause_after_step = initial_state.get("pause_after_step", False)
-        previous_layer = initial_state.get("previous_layer", 0)
-
-    # 3. 如果内存中没有，尝试从数据库获取
-    if current_layer == 1:
-        current_layer = db_session.get("current_layer", 1)
-        # 从数据库恢复 previous_layer，如果没有则根据 current_layer 推算
-        previous_layer = db_session.get("previous_layer", current_layer - 1 if current_layer > 1 else 0)
-        layer_1_completed = db_session.get("layer_1_completed", False)
-        layer_2_completed = db_session.get("layer_2_completed", False)
-        layer_3_completed = db_session.get("layer_3_completed", False)
-        execution_complete = db_session.get("execution_complete", False)
-
-    # 4. 计算进度
-    progress = None
-    if current_layer == 4:
-        progress = 100
-    elif current_layer in [1, 2, 3]:
-        progress = (current_layer / 3) * 100
-
-    # 优化日志输出 - 状态变化时打印，或每 10 次查询汇总打印
-    current_status = db_session.get("status", "running")
-    state_key = f"{current_status}|{current_layer}|{pause_after_step}|{previous_layer}"
-    
-    with _status_log_lock:
-        tracker = _status_log_tracker.get(session_id, {
-            "count": 0, 
-            "last_state": None, 
-            "last_log_time": 0
-        })
-        tracker["count"] += 1
-        state_changed = tracker["last_state"] != state_key
-        time_since_last_log = time.time() - tracker["last_log_time"]
-        
-        # 打印日志的条件：状态变化 或 超过 30 秒未打印
-        should_log = state_changed or time_since_last_log > 30
-        
-        if should_log:
-            if state_changed:
-                logger.info(f"[Status] [{session_id}] 状态变化: {tracker['last_state']} → {state_key} (查询次数: {tracker['count']})")
-            else:
-                logger.info(f"[Status] [{session_id}] 轮询汇总: {state_key} (查询次数: {tracker['count']})")
-            
-            # 重置计数器
-            tracker["count"] = 0
-            tracker["last_state"] = state_key
-            tracker["last_log_time"] = time.time()
-        
-        _status_log_tracker[session_id] = tracker
-
-    # 【新增】从 LangGraph Checkpoint 获取 messages 和 revision_history
     messages = []
     revision_history = []
-    # ✅ 新增：维度报告数据（用于历史加载恢复完整报告）
     analysis_reports = {}
     concept_reports = {}
     detail_reports = {}
+    metadata = {}  # 【新增】用于存储版本号等元数据
+    version = 0    # 【新增】版本号
     
     try:
         checkpointer = await get_global_checkpointer()
@@ -1722,9 +1931,18 @@ async def get_session_status(session_id: str):
         checkpoint_state = await graph.aget_state(config)
         
         if checkpoint_state and checkpoint_state.values:
+            state = checkpoint_state.values
+            
+            # 从 Checkpoint 读取所有状态
+            current_layer = state.get("current_layer", 1)
+            previous_layer = state.get("previous_layer", 0)
+            layer_1_completed = state.get("layer_1_completed", False)
+            layer_2_completed = state.get("layer_2_completed", False)
+            layer_3_completed = state.get("layer_3_completed", False)
+            pause_after_step = state.get("pause_after_step", False)
+            
             # 提取消息历史
-            raw_messages = checkpoint_state.values.get("messages", [])
-            # 将 BaseMessage 转换为可序列化的格式
+            raw_messages = state.get("messages", [])
             for msg in raw_messages:
                 if hasattr(msg, 'content'):
                     messages.append({
@@ -1733,35 +1951,28 @@ async def get_session_status(session_id: str):
                         "role": "assistant" if "ai" in msg.__class__.__name__.lower() else "user"
                     })
             
-            # 提取修订历史
-            revision_history = checkpoint_state.values.get("revision_history", [])
+            revision_history = state.get("revision_history", [])
+            analysis_reports = state.get("analysis_reports", {})
+            concept_reports = state.get("concept_reports", {})
+            detail_reports = state.get("detail_reports", {})
             
-            # ✅ 新增：提取维度报告数据（用于历史加载恢复完整报告）
-            analysis_reports = checkpoint_state.values.get("analysis_reports", {})
-            concept_reports = checkpoint_state.values.get("concept_reports", {})
-            detail_reports = checkpoint_state.values.get("detail_reports", {})
+            # 【新增】获取版本号用于前端同步
+            metadata = state.get("metadata", {})
+            version = metadata.get("version", 0)
             
-            # 🔧 修复：从 checkpoint 获取最新的暂停状态（覆盖 initial_state 的旧值）
-            # 这是解决 Layer 2/3 审查面板不弹出的关键
-            checkpoint_pause = checkpoint_state.values.get("pause_after_step")
-            checkpoint_prev = checkpoint_state.values.get("previous_layer")
-            if checkpoint_pause is not None:
-                pause_after_step = checkpoint_pause
-            if checkpoint_prev is not None:
-                previous_layer = checkpoint_prev
-            
-            # 只在消息数量变化时打印日志（使用 DEBUG 级别）
-            msg_count = len(messages)
-            rev_count = len(revision_history)
-            with _status_log_lock:
-                last_msg_count = _status_log_tracker.get(session_id, {}).get("last_msg_count", -1)
-                if msg_count != last_msg_count:
-                    logger.debug(f"[Status] [{session_id}] 消息数: {msg_count}, 修订记录: {rev_count}")
-                    if session_id in _status_log_tracker:
-                        _status_log_tracker[session_id]["last_msg_count"] = msg_count
+            logger.debug(f"[Status] [{session_id}] Checkpoint: layer={current_layer}, pause={pause_after_step}, version={version}")
     except Exception as e:
-        logger.warning(f"[Status] [{session_id}] 获取 Checkpoint 数据失败: {e}")
-        # 继续执行，不影响其他状态返回
+        logger.warning(f"[Status] [{session_id}] 获取 Checkpoint 失败: {e}")
+
+    # 3. 计算进度
+    progress = None
+    if current_layer == 4:
+        progress = 100
+    elif current_layer in [1, 2, 3]:
+        progress = (current_layer / 3) * 100
+
+    # 判断执行完成状态
+    execution_complete = layer_1_completed and layer_2_completed and layer_3_completed
 
     return {
         "session_id": session_id,
@@ -1769,23 +1980,24 @@ async def get_session_status(session_id: str):
         "status": db_session.get("status", "running"),
         "execution_error": db_session.get("execution_error"),
         "created_at": db_session.get("created_at", ""),
-        # 当前层级和状态 (来自内存或数据库)
+        # 【新增】版本号，用于前端同步
+        "version": version,
+        # 当前层级和状态 (来自 Checkpoint)
         "current_layer": current_layer,
-        "previous_layer": previous_layer if session_id in _sessions else db_session.get("previous_layer"),
+        "previous_layer": previous_layer,
         "layer_1_completed": layer_1_completed,
         "layer_2_completed": layer_2_completed,
         "layer_3_completed": layer_3_completed,
         "pause_after_step": pause_after_step,
         "execution_complete": execution_complete,
-        # 进度
         "progress": progress,
         "last_checkpoint_id": None,
-        # 【新增】消息历史和修订历史
+        # 消息历史和修订历史
         "messages": messages,
         "revision_history": revision_history,
-        # 【新增】UI 消息列表（从数据库加载）
+        # UI 消息列表
         "ui_messages": await get_ui_messages_async(session_id),
-        # ✅ 新增：维度报告数据（用于历史加载恢复完整报告）
+        # 维度报告数据
         "analysis_reports": analysis_reports,
         "concept_reports": concept_reports,
         "detail_reports": detail_reports,
@@ -1948,9 +2160,9 @@ async def get_ui_messages(session_id: str, role: Optional[str] = None, limit: in
 async def review_action(session_id: str, request: ReviewActionRequest):
     """
     Handle review actions from web frontend
-    支持内存未命中时从数据库重建会话
+    ✅ SSOT 模式：始终从 Checkpoint 获取状态，不依赖内存
     """
-    logger.info(f"🔥🔥🔥 review_action 被调用！ session_id={session_id}")  # 新增
+    logger.info(f"🔥🔥🔥 review_action 被调用！ session_id={session_id}")
     try:
         # ========== 1. 尝试从内存获取会话 ==========
         session = _get_session_value(session_id, None)
@@ -1963,10 +2175,23 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                 raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
             logger.info(f"[Planning API] [{session_id}] 审查时已从数据库重建内存会话")
 
-        # ========== 3. 获取状态并执行审查操作 ==========
-        initial_state = session.get("initial_state", {})
-        review_id = initial_state.get("review_id", "")
-        is_pause_mode = initial_state.get("pause_after_step", False)
+        # ========== 3. ✅ 直接从 Checkpoint 获取状态（不依赖内存 initial_state）==========
+        checkpointer = await get_global_checkpointer()
+        graph = create_village_planning_graph(checkpointer=checkpointer)
+        config = {"configurable": {"thread_id": session_id}}
+        
+        checkpoint_state = await graph.aget_state(config)
+        if not checkpoint_state or not checkpoint_state.values:
+            raise HTTPException(status_code=404, detail=f"Session not found in checkpoint: {session_id}")
+        
+        state = checkpoint_state.values
+        review_id = state.get("review_id", "")
+        is_pause_mode = state.get("pause_after_step", False)
+        
+        logger.info(f"[Planning API] [{session_id}] 从 Checkpoint 读取状态:")
+        logger.info(f"[Planning API] [{session_id}]   - review_id: {review_id}")
+        logger.info(f"[Planning API] [{session_id}]   - pause_after_step: {is_pause_mode}")
+        logger.info(f"[Planning API] [{session_id}]   - current_layer: {state.get('current_layer', 1)}")
 
         if not review_id and not is_pause_mode and request.action != "rollback":
             raise HTTPException(status_code=400, detail="No pending review or pause")
@@ -1979,7 +2204,7 @@ async def review_action(session_id: str, request: ReviewActionRequest):
             logger.info(f"[Planning API] [{session_id}] 批准请求 - 状态检查")
             logger.info(f"[Planning API] [{session_id}]   - review_id: {review_id}")
             logger.info(f"[Planning API] [{session_id}]   - pause_after_step: {is_pause_mode}")
-            logger.info(f"[Planning API] [{session_id}]   - current_layer: {initial_state.get('current_layer', 1)}")
+            logger.info(f"[Planning API] [{session_id}]   - current_layer: {state.get('current_layer', 1)}")
 
             # 重置流状态
             _stream_states[session_id] = "active"
@@ -2278,18 +2503,13 @@ async def resume_from_checkpoint(request: ResumeRequest):
         state = target_state.values
         target_layer = state.get("current_layer", 1)
 
+        # ✅ SSOT 简化：只保留 SSE 所需的最小字段
         with _sessions_lock:
             _sessions[session_id] = {
                 "session_id": session_id,
                 "project_name": request.project_name,
-                "status": TaskStatus.running,
                 "created_at": datetime.now().isoformat(),
-                "resumed_from": request.checkpoint_id,
-                "current_layer": target_layer,
-                "initial_state": state,
-                "events": deque(maxlen=MAX_SESSION_EVENTS),
-                "execution_complete": False,
-                "execution_error": None,
+                "events": deque(maxlen=MAX_SESSION_EVENTS),  # SSE 事件队列
             }
 
         return {
@@ -2349,62 +2569,40 @@ async def list_checkpoints(project_name: str, session_id: Optional[str] = None):
         raise HTTPException(status_code=500, detail=f"Failed to list checkpoints: {str(e)}")
 
 async def _rebuild_session_from_db(session_id: str) -> Optional[Dict[str, Any]]:
-    """从数据库重建内存会话（字典版本）"""
+    """
+    从数据库 + Checkpoint 完整重建内存会话
+    
+    ✅ SSOT 模式：从 LangGraph Checkpoint 获取完整状态，确保 review_action 等操作能正常工作
+    """
     db_session = await get_session_async(session_id)
     if not db_session:
         return None
 
-    # ✅ 新增：从 checkpointer 恢复 state
-    saver = await get_global_checkpointer()
-    graph = create_village_planning_graph(checkpointer=saver)
-    config = {"configurable": {"thread_id": session_id}}
-
+    # ✅ 从 Checkpoint 获取完整状态
+    initial_state = {}
     try:
-        state_snapshot = await graph.aget_state(config)
-        initial_state = state_snapshot.values if state_snapshot else {}
-        logger.info(f"[Planning API] [{session_id}] 已从 LangGraph checkpoint 恢复 state: pause_after_step={initial_state.get('pause_after_step', False)}, current_layer={initial_state.get('current_layer', 1)}")
+        checkpointer = await get_global_checkpointer()
+        if checkpointer:
+            graph = create_village_planning_graph(checkpointer=checkpointer)
+            config = {"configurable": {"thread_id": session_id}}
+            checkpoint_state = await graph.aget_state(config)
+            if checkpoint_state and checkpoint_state.values:
+                initial_state = dict(checkpoint_state.values)
+                logger.info(f"[Planning API] [{session_id}] 从 Checkpoint 恢复状态成功")
     except Exception as e:
-        logger.warning(f"[Planning API] [{session_id}] 无法从 checkpoint 恢复 state: {e}")
-        initial_state = {}
+        logger.warning(f"[Planning API] [{session_id}] Checkpoint 读取失败: {e}")
 
+    # ✅ 初始化内存会话，包含完整状态
     with _sessions_lock:
-        # 根据层级完成状态恢复 sent_layer_events，防止重复发送已完成的事件
-        sent_layer_events = set()
-        if initial_state.get("layer_1_completed"):
-            sent_layer_events.add("layer_1_completed")
-        if initial_state.get("layer_2_completed"):
-            sent_layer_events.add("layer_2_completed")
-        if initial_state.get("layer_3_completed"):
-            sent_layer_events.add("layer_3_completed")
-        
-        logger.info(f"[Planning API] [{session_id}] 恢复 sent_layer_events: {sent_layer_events}")
-        
-        # 🔧 修复：根据暂停状态恢复 sent_pause_events，防止重复发送暂停事件
-        sent_pause_events = set()
-        if initial_state.get("pause_after_step"):
-            previous_layer = initial_state.get("previous_layer", 0)
-            if previous_layer > 0:
-                sent_pause_events.add(f"pause_layer_{previous_layer}")
-                logger.info(f"[Planning API] [{session_id}] 恢复 sent_pause_events: {sent_pause_events}")
-        
         _sessions[session_id] = {
-            # ✅ 只从数据库读取业务元数据
             "session_id": db_session["session_id"],
             "project_name": db_session["project_name"],
-            "status": db_session["status"],
-            "execution_error": db_session.get("execution_error"),
             "created_at": db_session["created_at"].isoformat() if isinstance(db_session["created_at"], datetime) else db_session["created_at"],
-            # ✅ 内存中的状态管理
-            "events": deque(maxlen=MAX_SESSION_EVENTS),
-            "execution_complete": False,
-            "sent_layer_events": sent_layer_events,  # ✅ 恢复而非重置
-            "sent_revised_events": set(),  # 修订事件不持久化，恢复时重置
-            "sent_pause_events": sent_pause_events,  # 🔧 修复：恢复而非重置
-            # ✅ 从 AsyncSqliteSaver 恢复 state
-            "initial_state": initial_state,
-            "current_layer": initial_state.get("current_layer", 1),
+            "events": deque(maxlen=MAX_SESSION_EVENTS),  # SSE 事件队列
+            "initial_state": initial_state,  # ✅ 添加完整状态
         }
-    logger.info(f"[Planning API] [{session_id}] 已从数据库重建内存会话")
+    
+    logger.info(f"[Planning API] [{session_id}] 已从数据库重建内存会话（包含 initial_state）")
     return _sessions[session_id]
 # ============================================
 # Management Endpoints (for monitoring)
