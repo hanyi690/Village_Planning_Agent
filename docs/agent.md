@@ -108,6 +108,14 @@ class VillagePlanningState(TypedDict):
     # RAG 知识缓存
     knowledge_cache: Dict[str, str]
 
+    # 【新增】项目影子缓存 - Wave 1 维度完成时提取的项目信息
+    # 格式: {dimension_key: [{name, content, scale, location, phase}]}
+    # 用于 project_bank 维度的 token 优化
+    project_shadow_cache: Dict[str, List[Dict[str, str]]]
+
+    # 【新增】元数据 - 持久化到 Checkpoint，用于去重和版本化同步
+    metadata: Dict[str, Any]  # {published_layers, version, last_signal_timestamp}
+
     # 步进模式
     step_mode: bool
     pause_after_step: bool
@@ -172,12 +180,27 @@ Wave 4: planning_strategies
 
 ### Layer 3: 详细规划子图
 
-**执行模式**: 波次路由
+**执行模式**: 波次路由 + 项目影子缓存优化
 
 ```
 Wave 1: 11维度并行 (industry, spatial_structure, ...)
+    │
+    ├── 完成后调用 extract_projects_batch() 提取项目信息
+    │   └── 存入 project_shadow_cache
+    │
+    ▼
 Wave 2: project_bank (依赖 Wave 1 全部完成)
+    │
+    ├── 从 project_shadow_cache 读取项目信息
+    ├── 格式化为 filtered_detail（~5000字符）
+    └── 替代完整报告（~50000字符，节省约90% token）
 ```
+
+**项目影子缓存优化**:
+- Wave 1 完成时，从各维度报告中提取建设项目信息
+- 使用正则 + LLM 混合提取，确保准确性
+- project_bank 维度使用影子缓存替代完整报告
+- 显著减少 LLM 输入 token 量
 
 ### Revision 子图
 
@@ -401,4 +424,227 @@ src/
 | `src/planners/generic_planner.py` | 通用规划器 |
 | `src/config/dimension_metadata.py` | 维度配置 |
 | `src/tools/registry.py` | 工具注册表 |
+| `src/tools/project_extractor.py` | 项目提取工具 |
 | `src/rag/core/tools.py` | RAG 检索工具 |
+
+## 项目库影子缓存机制
+
+### 概述
+
+项目库（project_bank）维度依赖所有其他 Layer 3 维度的输出。为避免将完整的 11 份报告（约 50000+ 字符）作为输入，系统实现了影子缓存优化：
+
+```
+原始方案: 11 份完整报告 → project_bank LLM（~50000 字符输入）
+优化方案: 影子缓存 → project_bank LLM（~5000 字符输入）
+节省效果: 约 90% token 减少
+```
+
+### 数据流架构
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Wave 1 Dimensions (并行)                      │
+│  industry, spatial_structure, land_use_planning, ...            │
+│                           ↓                                      │
+│              completed_dimension_reports                         │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────┐
+│              reduce_dimension_plans() 项目提取                   │
+│  ┌─────────────────┐    ┌─────────────────┐                     │
+│  │ 正则提取        │    │ LLM 提取        │                     │
+│  │ PROJECT_PATTERNS│    │ PROJECT_EXTRACTOR│                    │
+│  │ SCALE_PATTERNS  │    │ _PROMPT          │                    │
+│  └────────┬────────┘    └────────┬────────┘                     │
+│           └──────────┬───────────┘                              │
+│                      ↓                                           │
+│           project_shadow_cache                                   │
+│           {dim: [{name, scale, phase, ...}]}                     │
+└─────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────┐
+│              Wave 2: project_bank                                │
+│  format_shadow_cache_for_prompt() → filtered_detail             │
+│  格式化输出:                                                      │
+│  ### 产业规划                                                     │
+│  - 特色种植基地（50亩） [近期]                                    │
+│  - 农产品加工车间（300㎡） [中期]                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 项目提取模式
+
+**正则提取模式**（`src/tools/project_extractor.py`）:
+
+```python
+PROJECT_PATTERNS = [
+    r"项目[名称]*[：:]\s*([^\n]+)",           # 项目名称：XXX
+    r"建设[（(]?([^）)\n]{2,20})[）)]?",       # 建设XXX
+    r"(新建|改造|扩建|修建)([^，,。\n]{2,25})", # 新建/改造XXX
+    # ...
+]
+
+SCALE_PATTERNS = [
+    r"(面积|规模|长度)[：:]\s*(\d+\.?\d*)\s*(㎡|km|m)",
+    # ...
+]
+
+PHASE_KEYWORDS = {
+    "近期": ["近期", "2025", "2026", "一期"],
+    "中期": ["中期", "2027", "2028", "二期"],
+    "远期": ["远期", "2029", "2030", "三期"],
+}
+```
+
+**LLM 辅助提取**:
+- 当内容包含项目关键词时，调用 LLM 补充提取
+- 输出结构化 JSON: `[{name, content, scale, location, phase}]`
+- 与正则提取结果合并去重
+
+### 影子缓存格式化
+
+```python
+def format_shadow_cache_for_prompt(shadow_cache) -> str:
+    """
+    将影子缓存格式化为 Prompt 输入
+    
+    输出格式:
+    ### 产业规划
+    - 特色种植基地（50亩） [近期]
+    - 农产品加工车间（300㎡） [中期]
+    
+    ### 道路交通规划
+    - 主干道硬化（2km） [近期]
+    """
+```
+
+### 状态传递链
+
+```
+1. Wave 1 完成 → reduce_dimension_plans()
+   └─ extract_projects_batch() → project_shadow_cache
+
+2. Wave 2 路由 → create_parallel_tasks_with_state_filtering()
+   └─ format_shadow_cache_for_prompt() → filtered_detail
+
+3. GenericPlanner._prepare_prompt_params()
+   └─ state.get("filtered_detail") → params["dimension_plans"]
+
+4. _build_layer3_prompt()
+   └─ get_dimension_prompt("project_bank", dimension_plans=...)
+```
+
+## 流式输出系统
+
+### 架构概览
+
+```
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   LLM API    │───▶│  Planner     │───▶│  Backend     │───▶│   Frontend   │
+│ (DeepSeek)   │    │  (Generic)   │    │  (FastAPI)   │    │  (React)     │
+└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
+       │                   │                   │                   │
+       │ streaming=True    │ on_token_callback │ SSE Events        │ EventSource
+       ▼                   ▼                   ▼                   ▼
+   llm.stream()     StreamingCallback   dimension_delta     useStreamingRender
+```
+
+### Token 回调机制
+
+**StreamingCallback 类**（`src/planners/unified_base_planner.py`）:
+
+```python
+class StreamingCallback(BaseCallbackHandler):
+    """流式回调处理器"""
+    
+    def __init__(self, on_token_callback: Callable[[str, str], None] | None = None):
+        self.on_token_callback = on_token_callback
+        self.accumulated_content = ""
+    
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        """每次生成新 token 时调用"""
+        self.accumulated_content += token
+        if self.on_token_callback:
+            self.on_token_callback(token, self.accumulated_content)
+```
+
+**回调函数签名**:
+```python
+def on_token_callback(token: str, accumulated: str) -> None:
+    """
+    Args:
+        token: 当前生成的 token（增量）
+        accumulated: 累积的完整内容
+    """
+```
+
+### 频率控制
+
+后端对 SSE 事件进行频率控制，避免事件过多：
+
+```python
+# 频率控制参数
+DELTA_MIN_INTERVAL_MS = 500  # 最小发送间隔（毫秒）
+DELTA_MIN_TOKENS = 50        # 最小 token 数量
+
+# 发送条件：满足其一即可
+should_send = (time_elapsed >= 500) or (token_count >= 50)
+```
+
+### 子图节点集成
+
+**维度分析节点中的 Token 回调**（`src/nodes/subgraph_nodes.py`）:
+
+```python
+def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    session_id = state.get("session_id", "")
+    
+    # 创建 Token 回调函数
+    def on_token_callback(token: str, accumulated: str):
+        if session_id:
+            from backend.api.planning import append_dimension_delta_event
+            append_dimension_delta_event(
+                session_id=session_id,
+                layer=1,
+                dimension_key=dimension_key,
+                dimension_name=dimension_name,
+                delta=token,
+                accumulated=accumulated
+            )
+    
+    # 执行规划器（启用流式）
+    planner_result = planner.execute(
+        planner_state,
+        streaming=True,
+        on_token_callback=on_token_callback
+    )
+    
+    # 发送维度完成事件
+    if session_id:
+        flush_dimension_delta(...)  # 强制刷新剩余 token
+        append_dimension_complete_event(...)
+```
+
+### SSE 事件类型
+
+| 事件类型 | 数据内容 | 触发时机 |
+|---------|---------|---------|
+| `dimension_delta` | `{layer, dimension_key, delta, accumulated}` | 频率控制后发送 |
+| `dimension_complete` | `{layer, dimension_key, full_content}` | 维度分析完成 |
+| `layer_completed` | `{layer, has_data, version}` | 层级完成（Signal-Fetch 模式） |
+
+### 前端批处理
+
+前端使用 `useStreamingRender` Hook 进行批处理，减少 DOM 更新：
+
+```typescript
+// 配置参数
+const { batchSize = 10, batchWindow = 50, debounceMs = 100 } = options;
+
+// 使用 requestAnimationFrame 批量更新
+const scheduleBatch = () => {
+  requestAnimationFrame(() => {
+    flushBatchInternal();  // 防抖后执行回调
+  });
+};
+```
