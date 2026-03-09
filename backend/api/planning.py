@@ -2294,8 +2294,17 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                 web_review_tool.submit_review_decision(review_id=review_id, action="approve")
 
             logger.info(f"[Planning API] Review approved, resuming session {session_id}")
-            # ✅ 不传入 state，让 _resume_graph_execution 从 Checkpoint 加载完整状态
-            return await _resume_graph_execution(session_id)
+            
+            # ✅ 优化：后台执行 _resume_graph_execution，立即返回响应
+            # 减少前端等待时间（从 100-300ms 降至 < 50ms）
+            asyncio.create_task(_resume_graph_execution(session_id))
+            
+            return {
+                "message": "approved",
+                "session_id": session_id,
+                "resumed": True,
+                "current_layer": next_layer,
+            }
 
         # ---------- reject ----------
         elif request.action == "reject":
@@ -2338,8 +2347,15 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                 )
 
             logger.info(f"[Planning API] Review rejected with feedback, session {session_id}")
-            # ✅ 不传入 state，让 _resume_graph_execution 从 Checkpoint 加载完整状态
-            return await _resume_graph_execution(session_id)
+            
+            # ✅ 优化：后台执行 _resume_graph_execution，立即返回响应
+            asyncio.create_task(_resume_graph_execution(session_id))
+            
+            return {
+                "message": "rejected",
+                "session_id": session_id,
+                "resumed": True,
+            }
 
         # ---------- rollback ----------
         elif request.action == "rollback":

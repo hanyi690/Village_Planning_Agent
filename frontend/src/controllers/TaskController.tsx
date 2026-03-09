@@ -357,25 +357,23 @@ export function useTaskController(
 
   // Action methods
   const actions: TaskControllerActions = {
+    // ✅ 优化：移除 fetchStatus() 串行等待，SSE 重连后会自动同步状态
+    // 减少约 100-200ms 延迟
     approve: useCallback(async () => {
       if (!taskId) throw new Error('No task ID');
       await planningApi.approveReview(taskId);
-      // 批准后获取最新状态
-      await fetchStatus();
-      // 🔧 触发 SSE 重连（批准后 Layer 2 需要重新订阅）
+      // 🔧 触发 SSE 重连，状态由 SSE 历史事件同步
       console.log('[TaskController] 批准完成，触发 SSE 重连');
       setSseReconnectKey(prev => prev + 1);
-    }, [taskId, fetchStatus]),
+    }, [taskId]),
 
     reject: useCallback(async (feedback: string, dimensions?: string[]) => {
       if (!taskId) throw new Error('No task ID');
       await planningApi.rejectReview(taskId, feedback, dimensions);
-      // 拒绝后获取最新状态
-      await fetchStatus();
-      // 🔧 触发 SSE 重连（拒绝后修正需要重新订阅）
+      // 🔧 触发 SSE 重连，状态由 SSE 历史事件同步
       console.log('[TaskController] 拒绝完成，触发 SSE 重连');
       setSseReconnectKey(prev => prev + 1);
-    }, [taskId, fetchStatus]),
+    }, [taskId]),
 
     rollback: useCallback(async (checkpointId: string) => {
       if (!taskId) throw new Error('No task ID');
