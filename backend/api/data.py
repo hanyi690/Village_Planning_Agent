@@ -95,8 +95,10 @@ async def _get_session_checkpoints(thread_id: str) -> List[Dict[str, Any]]:
                 display_layer = completed_layer
                 description = f"Layer {completed_layer} 完成"
             else:
-                # 初始状态或执行中，使用 current_layer 作为参考
-                display_layer = current_layer
+                # 初始状态：layer 为 0，避免与 Layer N 完成检查点混淆
+                # 前端 find(cp => cp.layer === layerMsg.layer) 会返回第一个匹配
+                # 如果初始状态也是 layer: 1，会匹配到错误的检查点
+                display_layer = 0
                 description = f"初始状态"
             
             checkpoints.append({
