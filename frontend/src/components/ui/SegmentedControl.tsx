@@ -29,7 +29,7 @@ const SegmentedControl: React.FC<SegmentedControlProps> = ({
       role="tablist"
       className={`flex p-1 bg-gray-100 rounded-xl w-fit mx-auto ${className}`}
     >
-      {options.map((option, index) => {
+      {options.map((option) => {
         const isActive = value === option;
 
         return (

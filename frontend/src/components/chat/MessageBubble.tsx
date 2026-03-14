@@ -9,7 +9,7 @@
 
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Message, ActionButton } from '@/types';
+import { Message } from '@/types';
 import { isUserMessage } from '@/types';
 import MessageContent from './MessageContent';
 import { formatMessageTimestamp } from '@/lib/utils';
@@ -17,7 +17,6 @@ import KnowledgeReference from '../report/KnowledgeReference';
 
 interface MessageBubbleProps {
   message: Message;
-  onAction?: (action: ActionButton, message: Message) => void;
   onCopy?: (message: Message) => void;
   onRegenerate?: (message: Message) => void;
   enableStreaming?: boolean;
@@ -27,7 +26,6 @@ interface MessageBubbleProps {
 
 export default function MessageBubble({
   message,
-  onAction,
   onCopy,
   onRegenerate,
   enableStreaming = true,
@@ -87,7 +85,6 @@ export default function MessageBubble({
           {children || (
             <MessageContent
               message={message}
-              onAction={onAction}
               enableStreaming={enableStreaming}
               dimensionContents={dimensionContents}
             />
@@ -161,7 +158,6 @@ export default function MessageBubble({
             {children || (
               <MessageContent
                 message={message}
-                onAction={onAction}
                 enableStreaming={enableStreaming}
                 dimensionContents={dimensionContents}
               />

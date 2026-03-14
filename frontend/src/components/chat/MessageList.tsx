@@ -4,8 +4,8 @@
  * MessageList - Renders list of chat messages with Gemini-style enhancements
  */
 
-import { Message, ActionButton, LayerCompletedMessage, DimensionReportMessage, FileMessage, Checkpoint } from '@/types';
-import ThinkingIndicator, { WaveThinkingIndicator } from './ThinkingIndicator';
+import { Message, LayerCompletedMessage, DimensionReportMessage, FileMessage, Checkpoint } from '@/types';
+import ThinkingIndicator from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
 import DimensionReportStreaming from './DimensionReportStreaming';
@@ -17,13 +17,12 @@ interface MessageListProps {
   isTyping?: boolean;
   thinkingState?: 'analyzing' | 'generating' | 'reviewing' | 'processing' | 'waiting';
   thinkingMessage?: string;
-  onAction?: (action: ActionButton, message: Message) => void;
   enableStreaming?: boolean;
   onOpenInSidebar?: (layer: number) => void;
   onViewLayerDetails?: (layer: number) => void;
   onToggleAllDimensions?: (layer: number, expand: boolean) => void;
   currentLayer?: number;
-  dimensionContents?: Map<string, string>;  // NEW: 实时维度内容（解决并行更新竞态）
+  dimensionContents?: Map<string, string>;
   // Checkpoint 回滚
   checkpoints?: Checkpoint[];
   onRollback?: (checkpointId: string) => Promise<void>;
@@ -44,13 +43,12 @@ export default function MessageList({
   isTyping,
   thinkingState,
   thinkingMessage,
-  onAction,
   enableStreaming = true,
   onOpenInSidebar,
-  onViewLayerDetails,
+  onViewLayerDetails: _onViewLayerDetails,
   onToggleAllDimensions,
   currentLayer,
-  dimensionContents,  // NEW: 实时维度内容
+  dimensionContents,
   checkpoints = [],
   onRollback,
   isRollingBack = false,
@@ -63,10 +61,6 @@ export default function MessageList({
 
   const handleRegenerate = (message: Message) => {
     console.log('Regenerate message:', message.id);
-  };
-
-  const handleViewLayerDetails = (layer: number) => {
-    onViewLayerDetails?.(layer);
   };
 
   const handleToggleAllDimensions = (layer: number, expand: boolean) => {
@@ -182,7 +176,6 @@ export default function MessageList({
           <MessageBubble
             key={message.id}
             message={message}
-            onAction={onAction}
             onCopy={handleCopy}
             onRegenerate={handleRegenerate}
             enableStreaming={enableStreaming}

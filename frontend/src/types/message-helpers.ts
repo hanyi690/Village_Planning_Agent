@@ -7,11 +7,9 @@
 
 import type {
   Message,
-  ActionButton,
   SSEEvent,
 } from './message';
 import type { ProgressMessage, TextMessage } from './message-types';
-import { createActionButtons } from '@/lib/utils';
 
 /**
  * Convert SSE event to Message type

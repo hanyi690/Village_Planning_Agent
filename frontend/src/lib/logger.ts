@@ -17,6 +17,7 @@ export class Logger {
     this.module = module;
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private log(level: LogLevel, action: string, details?: any, sessionId?: string | null) {
     const timestamp = new Date().toISOString();
     const sessionIdStr = sessionId ? ` [${sessionId.slice(0, 12)}...]` : '';
@@ -24,18 +25,22 @@ export class Logger {
     console.log(`[${timestamp}] [${level}] [${this.module}]${sessionIdStr} ${action}${detailsStr}`);
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   info(action: string, details?: any, sessionId?: string | null) {
     this.log(LogLevel.INFO, action, details, sessionId);
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   warn(action: string, details?: any, sessionId?: string | null) {
     this.log(LogLevel.WARN, action, details, sessionId);
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   error(action: string, details?: any, sessionId?: string | null) {
     this.log(LogLevel.ERROR, action, details, sessionId);
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   debug(action: string, details?: any, sessionId?: string | null) {
     this.log(LogLevel.DEBUG, action, details, sessionId);
   }

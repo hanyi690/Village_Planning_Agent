@@ -82,7 +82,7 @@ export function createSuccessMessage(content: string): TextMessage {
 /**
  * Create error message
  */
-export function createErrorMessage(content: string, recoverable = false): TextMessage {
+export function createErrorMessage(content: string, _recoverable = false): TextMessage {
   return {
     ...createBaseMessage('assistant'),
     type: 'text',

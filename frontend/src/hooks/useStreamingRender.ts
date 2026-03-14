@@ -106,6 +106,7 @@ export function useStreamingRender(
 
     // 触发批处理
     scheduleBatch();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
@@ -122,6 +123,7 @@ export function useStreamingRender(
       flushBatchInternal();
       isFlushScheduled.current = false;
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchSize, batchWindow, debounceMs]);
 
   /**

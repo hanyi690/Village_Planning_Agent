@@ -41,6 +41,10 @@ export interface Checkpoint {
   description: string;
   timestamp: string;
   layer: number;
+  type?: 'key' | 'regular';  // 检查点类型：key=关键检查点，regular=普通检查点
+  phase?: string;            // 规划阶段枚举值
+  current_layer?: number;    // 当前层级
+  previous_layer?: number;   // 前一个层级
 }
 
 // Revision Item - 修复项（区分目标维度和级联维度）
@@ -83,6 +87,17 @@ export interface ActionButton {
 // SSE Types
 // ============================================================================
 
+/**
+ * SSE Event result 类型
+ * 包含状态、消息和可选的数据负载
+ */
+export interface SSEEventResult {
+  status?: string;
+  message?: string;
+  data?: unknown;
+  [key: string]: unknown;
+}
+
 export interface SSEEvent {
   event_type?: string;
   status?: string;
@@ -90,7 +105,7 @@ export interface SSEEvent {
   current_layer?: string;
   message?: string;
   task_id?: string;
-  result?: any;
+  result?: SSEEventResult;
   error?: string;
 }
 

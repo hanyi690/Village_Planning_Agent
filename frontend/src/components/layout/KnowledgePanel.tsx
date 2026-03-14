@@ -9,13 +9,12 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { 
-  faTimes, 
-  faDatabase, 
-  faUpload, 
-  faSpinner, 
-  faTrash, 
-  faCheck, 
+import {
+  faTimes,
+  faDatabase,
+  faSpinner,
+  faTrash,
+  faCheck,
   faExclamationTriangle,
   faSync,
   faFileAlt,

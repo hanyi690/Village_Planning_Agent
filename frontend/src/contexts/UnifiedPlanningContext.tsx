@@ -5,53 +5,15 @@
  * 统一规划上下文 - 对话状态、UI状态和内容管理
  */
 
-import { createContext, useContext, useState, useCallback, ReactNode, useMemo, useEffect, useRef } from 'react';
-import { Message, PlanningParams, Checkpoint, DimensionProgressItem, DimensionStatus } from '@/types';
+import { createContext, useContext, useState, useCallback, ReactNode, useMemo, useRef } from 'react';
+import { Message, PlanningParams, Checkpoint, DimensionProgressItem } from '@/types';
 import { VillageInputData } from '@/components/VillageInputForm';
-import { planningApi, dataApi, VillageInfo, VillageSession } from '@/lib/api';
-import { createBaseMessage, createSystemMessage, createErrorMessage } from '@/lib/utils';
+import { planningApi, dataApi, VillageInfo, VillageSession, SessionStatusResponse } from '@/lib/api';
+import { createSystemMessage, createErrorMessage } from '@/lib/utils';
 import { logger } from '@/lib/logger';
 import { LAYER_ID_MAP } from '@/lib/constants';
 import { PLANNING_DEFAULTS } from '@/config/planning';
 import { getDimensionsByLayer, DIMENSION_NAMES } from '@/config/dimensions';
-
-/**
- * 解析 Markdown 报告内容，提取维度数据
- * 用于历史记录加载时构建 dimensionReports
- */
-function parseDimensionReports(markdown: string, layerNumber: number): Record<string, string> {
-  const dimensionKeys = getDimensionsByLayer(layerNumber);
-  const result: Record<string, string> = {};
-  
-  if (!markdown) return result;
-  
-  // 匹配 ## 标题格式
-  const regex = /##\s+(.+?)\n([\s\S]*?)(?=\n##\s|$)/g;
-  let match;
-  
-  while ((match = regex.exec(markdown)) !== null) {
-    const title = match[1].trim();
-    const content = match[2].trim();
-    
-    // 尝试匹配维度键名（标题可能是英文键名或中文名称）
-    const key = dimensionKeys.find(k => {
-      const chineseName = DIMENSION_NAMES[k];
-      return title === k || 
-             title.includes(k) || 
-             k.includes(title) ||
-             title === chineseName ||
-             title.includes(chineseName) ||
-             chineseName.includes(title);
-    });
-    
-    if (key && content) {
-      result[key] = content;
-    }
-  }
-  
-  console.log(`[parseDimensionReports] Layer ${layerNumber}: found ${Object.keys(result).length} dimensions`);
-  return result;
-}
 
 type Status = 'idle' | 'collecting' | 'planning' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
 
@@ -125,7 +87,7 @@ interface UnifiedPlanningContextType {
   clearDimensionProgress: () => void;
 
   // 同步后端状态的 action
-  syncBackendState: (backendData: any) => void;
+  syncBackendState: (backendData: Partial<SessionStatusResponse> & { version?: number }) => void;
 
   // ✅ SSE 驱动的层级完成状态更新
   setUILayerCompleted: (layer: number, completed: boolean) => void;
@@ -231,6 +193,7 @@ export function UnifiedPlanningProvider({
   const [currentPhase, setCurrentPhase] = useState<ProgressPhase>('idle');
 
   // 用于跟踪之前的状态，避免不必要的更新
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const previousBackendStateRef = useRef<any>(null);
 
   // 【新增】版本号 state，用于版本化同步
@@ -360,6 +323,7 @@ export function UnifiedPlanningProvider({
 
     // 异步存储消息到后端（跳过历史消息加载期间和延迟存储的消息）
     // 🔧 跳过有 _pendingStorage 标记的消息（等待完整数据后再存储）
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pendingStorage = (message as any)._pendingStorage;
     if (!isLoadingHistoryRef.current && taskId && !pendingStorage) {
       // 异步存储，不阻塞 UI
@@ -418,7 +382,7 @@ export function UnifiedPlanningProvider({
   }, []);
 
   // 同步后端状态到 Context
-  const syncBackendState = useCallback((backendData: any) => {
+  const syncBackendState = useCallback((backendData: Partial<SessionStatusResponse> & { version?: number }) => {
     // 【新增】版本化同步：检查版本号，防止乱序导致的 UI 回滚
     const serverVersion = backendData.version ?? 0;
     const localVersion = localVersionRef.current;
@@ -457,7 +421,7 @@ export function UnifiedPlanningProvider({
       current_layer: backendData.current_layer,
     });
 
-    setStatusState(backendData.status || 'idle');
+    setStatusState((backendData.status || 'idle') as Status);
     
     // 暂停状态判断: status === 'paused'
     const isPausedValue = backendData.status === 'paused';
@@ -551,7 +515,7 @@ export function UnifiedPlanningProvider({
       setLoadingContent(true);
 
       // Load from API with session parameter
-      const data = await dataApi.getLayerContent(
+      await dataApi.getLayerContent(
         projectName,
         layerId,
         taskId,  // Pass session ID to locate correct directory
@@ -642,6 +606,7 @@ export function UnifiedPlanningProvider({
       setMessages(prev => {
         for (const msg of prev) {
           // 跳过延迟存储的消息（等待完整数据）
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           if ((msg as any)._pendingStorage) continue;
           
           // ✅ 传递消息 ID 用于 upsert
@@ -669,10 +634,10 @@ export function UnifiedPlanningProvider({
       addMessage(createErrorMessage(`启动规划失败: ${errorMessage}`));
       throw error;
     }
-  }, [addMessage]);
+  }, [addMessage, setStatus]);
 
   // Trigger report update (同步更新聊天流)
-  const triggerReportUpdate = useCallback((layer: number, content: string) => {
+  const triggerReportUpdate = useCallback((layer: number, _content: string) => {
     const layerId = LAYER_ID_MAP[layer];
     if (!layerId) return;
 
@@ -705,7 +670,7 @@ export function UnifiedPlanningProvider({
     clearDimensionProgress();
     setProgressPanelVisible(false);
     // Don't reset history state when resetting conversation
-  }, [clearDimensionProgress]);
+  }, [clearDimensionProgress, setStatus]);
 
   // History actions
   const loadVillagesHistory = useCallback(async () => {
@@ -795,13 +760,13 @@ export function UnifiedPlanningProvider({
             // ✅ 关键修复：检查 layer_completed 消息的 dimensionReports 是否为空
             // 如果为空，从后端返回的维度报告数据中补充
             if (msg.message_type === 'layer_completed') {
-              const layerNum = (msg.message_metadata as any)?.layer;
-              const dimensionReports = (restoredMessage as any).dimensionReports || {};
-              const hasContent = Object.values(dimensionReports).some((v: any) => v && v.length > 0);
-              
+              const layerNum = (msg.message_metadata as { layer?: number })?.layer;
+              const dimensionReports = (restoredMessage as { dimensionReports?: Record<string, string> }).dimensionReports || {};
+              const hasContent = Object.values(dimensionReports).some((v: string) => v && v.length > 0);
+
               if (!hasContent && layerNum) {
                 console.log(`[UnifiedPlanningContext] Layer ${layerNum} dimensionReports 为空，尝试从 checkpoint 补充`);
-                
+
                 // 从后端返回的 checkpoint 数据中获取维度报告
                 let checkpointReports: Record<string, string> = {};
                 if (layerNum === 1 && statusData.analysis_reports) {
@@ -811,24 +776,24 @@ export function UnifiedPlanningProvider({
                 } else if (layerNum === 3 && statusData.detail_reports) {
                   checkpointReports = statusData.detail_reports;
                 }
-                
+
                 // 如果 checkpoint 中有数据，补充到消息中
                 if (Object.keys(checkpointReports).length > 0) {
-                  const hasCheckpointContent = Object.values(checkpointReports).some((v: any) => v && v.length > 0);
+                  const hasCheckpointContent = Object.values(checkpointReports).some((v: string) => v && v.length > 0);
                   if (hasCheckpointContent) {
                     console.log(`[UnifiedPlanningContext] 从 checkpoint 补充 Layer ${layerNum} 维度报告: ${Object.keys(checkpointReports).length} 个维度`);
-                    (restoredMessage as any).dimensionReports = checkpointReports;
-                    
+                    (restoredMessage as { dimensionReports?: Record<string, string> }).dimensionReports = checkpointReports;
+
                     // 同时更新 fullReportContent
                     const reportContent = Object.entries(checkpointReports)
                       .map(([key, content]) => `## ${DIMENSION_NAMES[key] || key}\n\n${content}`)
                       .join('\n\n---\n\n');
-                    (restoredMessage as any).fullReportContent = reportContent;
-                    (restoredMessage as any).content = reportContent;
-                    
+                    (restoredMessage as { fullReportContent?: string }).fullReportContent = reportContent;
+                    (restoredMessage as { content?: string }).content = reportContent;
+
                     // 更新 summary
-                    const wordCount = Object.values(checkpointReports).reduce((sum: number, v: any) => sum + (v?.length || 0), 0);
-                    (restoredMessage as any).summary = {
+                    const wordCount = Object.values(checkpointReports).reduce((sum: number, v: string) => sum + (v?.length || 0), 0);
+                    (restoredMessage as { summary?: { word_count: number; key_points: unknown[]; dimension_count: number } }).summary = {
                       word_count: wordCount,
                       key_points: [],
                       dimension_count: Object.keys(checkpointReports).length,
@@ -1023,12 +988,12 @@ export function UnifiedPlanningProvider({
       console.error('[UnifiedPlanningContext] Failed to load historical session:', error);
       addMessage(createSystemMessage(`❌ 加载历史会话失败: ${errorMessage}`, 'error'));
     }
-  }, [clearMessages, loadCheckpoints, addMessage, loadHistoricalReports]);
+  }, [clearMessages, loadCheckpoints, addMessage, loadHistoricalReports, setStatus]);
 
   // Delete session
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
 
-  const deleteSession = useCallback(async (sessionId: string, villageName: string): Promise<boolean> => {
+  const deleteSession = useCallback(async (sessionId: string, _villageName: string): Promise<boolean> => {
     try {
       setDeletingSessionId(sessionId);
       console.log('[UnifiedPlanningContext] Deleting session:', sessionId);
@@ -1057,7 +1022,7 @@ export function UnifiedPlanningProvider({
     } finally {
       setDeletingSessionId(null);
     }
-  }, [taskId, clearMessages, addMessage, loadVillagesHistory]);
+  }, [taskId, clearMessages, addMessage, loadVillagesHistory, setStatus]);
 
   // Context value
   const value: UnifiedPlanningContextType = {

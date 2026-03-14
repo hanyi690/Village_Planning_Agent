@@ -26,9 +26,10 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Generator, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from typing_extensions import Annotated
 
 from src.core.config import (
     DEFAULT_TASK_DESCRIPTION,
@@ -40,9 +41,9 @@ from src.core.config import (
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from backend.api.tool_manager import tool_manager
+from backend.api.tool_manager import tool_manager, ToolManager
 from backend.schemas import TaskStatus
-from backend.services.rate_limiter import rate_limiter
+from backend.services.rate_limiter import rate_limiter, RateLimiter
 from backend.utils.progress_helper import calculate_progress
 from backend.utils.logging import _extract_session_id
 from src.orchestration.main_graph import create_village_planning_graph
@@ -69,6 +70,39 @@ from backend.database.engine import get_db_path
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# 🔧 Dependency Injection - FastAPI 最佳实践
+# ============================================
+
+def get_rate_limiter() -> RateLimiter:
+    """
+    获取 RateLimiter 实例的依赖注入函数
+
+    使用 FastAPI 的 Depends 模式进行依赖注入，便于单元测试和依赖管理。
+
+    Returns:
+        RateLimiter: 全局限流器实例
+    """
+    return rate_limiter
+
+
+def get_tool_manager() -> ToolManager:
+    """
+    获取 ToolManager 实例的依赖注入函数
+
+    使用 FastAPI 的 Depends 模式进行依赖注入，便于单元测试和依赖管理。
+
+    Returns:
+        ToolManager: 全局工具管理器实例
+    """
+    return tool_manager
+
+
+# 类型别名：用于端点参数的便捷类型注解
+RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
+ToolManagerDep = Annotated[ToolManager, Depends(get_tool_manager)]
 
 
 # ============================================
@@ -1690,7 +1724,8 @@ async def _resume_graph_execution(session_id: str, state: Dict[str, Any] = None)
 @router.post("/api/planning/start")
 async def start_planning(
     request: StartPlanningRequest,
-    background_tasks: BackgroundTasks
+    background_tasks: BackgroundTasks,
+    limiter: RateLimiterDep
 ):
     """
     Start a new planning session
@@ -1709,7 +1744,7 @@ async def start_planning(
         logger.info(f"[Planning API] 流式输出: {request.stream_mode}")
 
         # ===== Rate limit check =====
-        allowed, message = rate_limiter.check_rate_limit(
+        allowed, message = limiter.check_rate_limit(
             project_name=request.project_name,
             session_id=""  # session_id not yet generated
         )
@@ -1718,7 +1753,7 @@ async def start_planning(
             logger.warning(f"[Planning API] 限流触发: {message}")
 
             # Calculate retry-after time if available
-            retry_after = rate_limiter.get_retry_after(request.project_name)
+            retry_after = limiter.get_retry_after(request.project_name)
 
             raise HTTPException(
                 status_code=429,  # 429 Too Many Requests
@@ -1747,7 +1782,7 @@ async def start_planning(
         logger.info(f"[Planning API] 生成会话ID: {session_id}")
 
         # Mark task as started
-        rate_limiter.mark_task_started(request.project_name)
+        limiter.mark_task_started(request.project_name)
 
         # Build initial state
         initial_state = _build_initial_state(request, session_id)
@@ -1784,7 +1819,7 @@ async def start_planning(
             logger.warning(f"[Planning API] [{session_id}] Cleaning up rate limiter state for project: {request.project_name}")
 
             # Clean up in-memory state
-            rate_limiter.mark_task_completed(request.project_name, success=False)
+            limiter.mark_task_completed(request.project_name, success=False)
 
             raise HTTPException(
                 status_code=500,
@@ -2442,18 +2477,56 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                 # 5. 使用 aupdate_state 恢复状态，并设置暂停审查状态
                 target_values = target_state_snapshot.values
                 
-                # 综合判断目标层级（刚完成的层级）
-                # 不单独依赖 previous_layer，因为可能因 LangGraph checkpoint 机制未正确保存
+                # 从 metadata 获取检查点信息
+                metadata = target_values.get("metadata", {})
+                checkpoint_type = metadata.get("checkpoint_type", "regular")
+                checkpoint_phase = metadata.get("checkpoint_phase", "")
+                checkpoint_layer = metadata.get("checkpoint_layer", 0)
+                
+                # 检查是否为关键检查点
+                if checkpoint_type != "key":
+                    # 如果不是关键检查点，回退到旧的判断逻辑
+                    logger.warning(f"[Rollback] 检查点类型为 '{checkpoint_type}'，使用回退判断逻辑")
+                
+                def determine_completed_layer_from_phase(phase: str) -> int:
+                    """从阶段枚举值获取层级"""
+                    phase_layer_map = {
+                        "layer1_completed": 1,
+                        "layer2_completed": 2,
+                        "layer3_completed": 3,
+                        "final_output": 3,
+                    }
+                    return phase_layer_map.get(phase, 0)
+                
                 def determine_completed_layer(values: dict) -> int:
                     """
                     综合判断刚完成的层级
                     
                     优先级：
-                    1. previous_layer（如果存在且有效）
-                    2. layer_N_completed 标志
-                    3. 数据存在性判断
+                    1. metadata.checkpoint_phase（如果存在且有效）
+                    2. phase 字段（新增的明确阶段标识）
+                    3. previous_layer（如果存在且有效）
+                    4. layer_N_completed 标志
+                    5. 数据存在性判断
                     """
-                    # 优先使用 previous_layer（如果存在且有效）
+                    # 优先从 metadata 读取
+                    meta = values.get("metadata", {})
+                    meta_phase = meta.get("checkpoint_phase", "")
+                    if meta_phase:
+                        layer = determine_completed_layer_from_phase(meta_phase)
+                        if layer > 0:
+                            logger.info(f"[Rollback] 使用 metadata.checkpoint_phase={meta_phase}，层级={layer}")
+                            return layer
+                    
+                    # 其次使用 phase 字段
+                    phase = values.get("phase", "")
+                    if phase:
+                        layer = determine_completed_layer_from_phase(phase)
+                        if layer > 0:
+                            logger.info(f"[Rollback] 使用 phase={phase}，层级={layer}")
+                            return layer
+                    
+                    # 回退：使用 previous_layer（如果存在且有效）
                     prev_layer = values.get("previous_layer", 0)
                     if prev_layer > 0:
                         logger.info(f"[Rollback] 使用 previous_layer={prev_layer}")
@@ -2470,7 +2543,7 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         logger.info("[Rollback] 根据 layer_1_completed=True 判断层级为 1")
                         return 1
                     
-                    # 再回退：根据数据存在判断（检查非空字典）
+                    # 最后回退：根据数据存在判断（检查非空字典）
                     detail_reports = values.get("detail_reports", {})
                     if detail_reports and len(detail_reports) > 0:
                         logger.info(f"[Rollback] 根据 detail_reports 存在判断层级为 3，维度数: {len(detail_reports)}")
@@ -2494,13 +2567,24 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                 
                 # 根据目标层级构造回退状态
                 # 确保保留目标层级的数据，清空后续层级的数据
-                if target_completed_layer == 2:
+                if target_completed_layer == 3:
+                    # 回退到 Layer 3 完成时：保留 L1+L2+L3 数据
+                    rollback_state = {
+                        **target_values,
+                        "phase": "layer3_completed",
+                        "current_layer": 4,
+                        "previous_layer": 3,
+                        "pause_after_step": True,
+                    }
+                    logger.info(f"[Planning API] 回退到 Layer 3 完成状态")
+                elif target_completed_layer == 2:
                     # 回退到 Layer 2 完成时：保留 L1+L2 数据，清空 L3
                     rollback_state = {
                         **target_values,
                         # 确保 Layer 2 数据存在
                         "concept_reports": target_values.get("concept_reports", {}),
                         "layer_2_completed": True,
+                        "phase": "layer2_completed",
                         # 清空 Layer 3 数据
                         "detail_reports": {},
                         "layer_3_completed": False,
@@ -2509,6 +2593,9 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         "previous_layer": 2,
                         "pause_after_step": True,
                     }
+                    # 更新 completed_dimensions
+                    existing_completed = target_values.get("completed_dimensions", {})
+                    rollback_state["completed_dimensions"] = {k: v for k, v in existing_completed.items() if k != "layer3"}
                     logger.info(f"[Planning API] 回退到 Layer 2 完成状态，保留 concept_reports，清空 detail_reports")
                 elif target_completed_layer == 1:
                     # 回退到 Layer 1 完成时：仅保留 L1 数据
@@ -2517,6 +2604,7 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         # 确保 Layer 1 数据存在
                         "analysis_reports": target_values.get("analysis_reports", {}),
                         "layer_1_completed": True,
+                        "phase": "layer1_completed",
                         # 清空 Layer 2/3 数据
                         "concept_reports": {},
                         "detail_reports": {},
@@ -2527,11 +2615,15 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         "previous_layer": 1,
                         "pause_after_step": True,
                     }
+                    # 更新 completed_dimensions
+                    existing_completed = target_values.get("completed_dimensions", {})
+                    rollback_state["completed_dimensions"] = {"layer1": existing_completed.get("layer1", [])}
                     logger.info(f"[Planning API] 回退到 Layer 1 完成状态，保留 analysis_reports，清空 concept_reports 和 detail_reports")
                 else:
                     # 其他情况（初始状态或未知），直接使用检查点值
                     rollback_state = {
                         **target_values,
+                        "phase": "init",
                         "pause_after_step": True,
                     }
                     logger.info(f"[Planning API] 回退到初始状态/未知状态，直接使用检查点值")
@@ -2794,24 +2886,37 @@ async def list_checkpoints(project_name: str, session_id: Optional[str] = None):
                 timestamp = datetime.now().isoformat()
 
             # 构建检查点信息
-            # 使用 previous_layer 判断检查点状态（"Layer N 完成后"）
+            # 优先从 metadata 读取检查点类型和阶段
+            state_metadata = values.get("metadata", {})
+            checkpoint_type = state_metadata.get("checkpoint_type", "regular")
+            checkpoint_phase = state_metadata.get("checkpoint_phase", "")
+            checkpoint_description = state_metadata.get("checkpoint_description", "")
+            
+            # 从 phase 字段读取（新增的明确阶段标识）
+            phase = values.get("phase", checkpoint_phase)
+            
+            # 确定层级和描述
             completed_layer = values.get("previous_layer", 0)
             current_layer = values.get("current_layer", 1)
             
-            if completed_layer > 0:
+            # 根据类型确定描述
+            if checkpoint_type == "key" and checkpoint_description:
+                description = checkpoint_description
+                display_layer = state_metadata.get("checkpoint_layer", completed_layer)
+            elif completed_layer > 0:
                 # Layer N 刚完成的状态
                 description = f"Layer {completed_layer} 完成"
                 display_layer = completed_layer
             else:
-                # 初始状态：layer 为 0，避免与 Layer N 完成检查点混淆
-                # 前端 find(cp => cp.layer === layerMsg.layer) 会返回第一个匹配
-                # 如果初始状态也是 layer: 1，会匹配到错误的检查点
-                description = f"初始状态"
+                # 初始状态
+                description = "初始状态"
                 display_layer = 0
             
             checkpoint_info = {
                 "checkpoint_id": checkpoint_id,
                 "timestamp": timestamp,
+                "type": checkpoint_type,  # 新增：检查点类型 (key/regular)
+                "phase": phase,           # 新增：规划阶段
                 "layer": display_layer,
                 "current_layer": current_layer,
                 "previous_layer": completed_layer,
@@ -2889,15 +2994,15 @@ async def list_sessions():
 
 
 @router.get("/api/planning/rate-limit/status")
-async def get_rate_limit_status():
+async def get_rate_limit_status(limiter: RateLimiterDep):
     """Get rate limit status (for monitoring)"""
-    return rate_limiter.get_status()
+    return limiter.get_status()
 
 
 @router.post("/api/planning/rate-limit/reset/{project_name}")
-async def reset_rate_limit(project_name: str):
+async def reset_rate_limit(project_name: str, limiter: RateLimiterDep):
     """Reset rate limit status for a project (admin function)"""
-    success = rate_limiter.reset_project(project_name)
+    success = limiter.reset_project(project_name)
     if success:
         return {"message": f"已重置项目 '{project_name}' 的限流状态"}
     else:

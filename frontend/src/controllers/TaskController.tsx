@@ -156,7 +156,7 @@ export function useTaskController(
         layer_completed: [statusData.layer_1_completed, statusData.layer_2_completed, statusData.layer_3_completed],
       });
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[TaskController] 获取状态失败:', error);
     }
   }, [taskId, state.layer_1_completed, state.layer_2_completed, state.layer_3_completed]);

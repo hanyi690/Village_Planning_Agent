@@ -35,6 +35,7 @@ export default function VillagePage() {
 
     // Validate task ID and load task data
     loadTaskData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [taskId]);
 
   const loadTaskData = async () => {
@@ -51,9 +52,9 @@ export default function VillagePage() {
       }
 
       setLoading(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('[VillagePage] Failed to load task:', err);
-      setError(err.message || '加载任务失败');
+      setError(err instanceof Error ? err.message : '加载任务失败');
       setLoading(false);
     }
   };

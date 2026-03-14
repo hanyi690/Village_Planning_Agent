@@ -23,7 +23,7 @@ import VillageInputForm from '@/components/VillageInputForm';
  * - Consistent view transitions
  */
 export default function UnifiedContentSwitcher() {
-  const { viewMode, startPlanning, setVillageFormData, setStatus, setProjectName, addMessage } = useUnifiedPlanningContext();
+  const { viewMode, setVillageFormData, setStatus, setProjectName, addMessage } = useUnifiedPlanningContext();
 
   const handleFormSubmit = useCallback(async (data: VillageInputData) => {
     console.log('[UnifiedContentSwitcher] Form submitted:', data);

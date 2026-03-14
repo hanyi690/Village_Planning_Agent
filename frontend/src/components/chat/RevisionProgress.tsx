@@ -21,7 +21,7 @@ export default function RevisionProgress({
   revisions,
   currentWave,
   maxWave,
-  targetDimensions,
+  targetDimensions: _targetDimensions,
 }: RevisionProgressProps) {
   // 按维度类型分组
   const targetRevisions = revisions.filter(r => r.isTarget);

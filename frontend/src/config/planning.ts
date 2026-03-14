@@ -64,7 +64,9 @@ export const convertToBackendParams = (params: {
   enableReview?: boolean;
   taskDescription?: string;
   constraints?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
 }): Record<string, any> => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const result: Record<string, any> = {};
 
   if (params.stepMode !== undefined) {

@@ -54,6 +54,7 @@ export default function MarkdownRenderer({
           ),
           // Customize image rendering
           img: ({ src, alt }) => (
+            // eslint-disable-next-line @next/next/no-img-element
             <img src={src} alt={alt} style={{ maxWidth: '100%' }} />
           ),
         }}

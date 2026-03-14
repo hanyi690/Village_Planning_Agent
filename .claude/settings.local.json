@@ -107,7 +107,9 @@
       "Bash(./start-services.bat:*)",
       "Bash(while read:*)",
       "Bash(do taskkill:*)",
-      "Bash(pause:*)"
+      "Bash(pause:*)",
+      "Bash(npm run:*)",
+      "Skill(code-review:code-review)"
     ]
   }
 }

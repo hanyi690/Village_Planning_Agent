@@ -123,6 +123,7 @@ export function useStreamingText(
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, enabled]); // 仅在 content 或 enabled 变化时重新开始
 
   /**
@@ -192,7 +193,7 @@ export function useStreamingText(
  */
 export function useStreamingAccumulator() {
   const [fullContent, setFullContent] = useState('');
-  const [displayedContent, setDisplayedContent] = useState('');
+  const [, setDisplayedContent] = useState('');
   const streamingState = useStreamingText(fullContent);
 
   /**

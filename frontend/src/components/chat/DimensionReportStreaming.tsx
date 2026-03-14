@@ -18,7 +18,7 @@ interface DimensionReportStreamingProps {
 }
 
 export default function DimensionReportStreaming({
-  layer,
+  layer: _layer,
   dimensionKey,
   dimensionName,
   content,

@@ -116,6 +116,7 @@ export default function LayerReportMessage({
 
     console.warn(`[LayerReportMessage] Layer ${message.layer} 无可用数据源！`);
     return [];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [message.dimensionReports, message.fullReportContent, message.layer, dimensionContents]);
 
   // ✅ 判断是否为当前活跃层

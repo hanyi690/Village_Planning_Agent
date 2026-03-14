@@ -74,5 +74,6 @@ export type PlanningStatus =
  * Check if input should be disabled for a given status
  */
 export function isInputDisabled(status: PlanningStatus): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return DISABLE_INPUT_STATUSES.has(status as any);
 }

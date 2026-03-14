@@ -191,13 +191,28 @@ class Layer1AnalysisNode(BaseLayerNode):
         checkpoint_id: str
     ) -> Dict[str, Any]:
         """构建成功状态更新"""
+        from ..core.checkpoint_types import PlanningPhase, create_key_checkpoint_metadata
+        
+        analysis_reports = result.get("analysis_reports", {})
+        completed_dims = list(analysis_reports.keys())
+        
+        # 构建检查点元数据
+        checkpoint_meta = create_key_checkpoint_metadata(layer=1)
+        
+        # 合并现有 metadata
+        existing_metadata = state.get("metadata", {})
+        updated_metadata = {**existing_metadata, **checkpoint_meta}
+        
         return StateBuilder()\
-            .set("analysis_reports", result.get("analysis_reports", {}))\
+            .set("analysis_reports", analysis_reports)\
             .set("layer_1_completed", True)\
             .set("current_layer", 2)\
             .set("previous_layer", 1)\
+            .set("phase", PlanningPhase.LAYER1_COMPLETED.value)\
+            .set("completed_dimensions", {"layer1": completed_dims})\
+            .set("metadata", updated_metadata)\
             .set("last_checkpoint_id", checkpoint_id)\
-            .add_message(f"现状分析完成，生成了 {len(result.get('analysis_reports', {}))} 个维度报告。")\
+            .add_message(f"现状分析完成，生成了 {len(analysis_reports)} 个维度报告。")\
             .build()
 
 
@@ -225,13 +240,30 @@ class Layer2ConceptNode(BaseLayerNode):
         checkpoint_id: str
     ) -> Dict[str, Any]:
         """构建成功状态更新"""
+        from ..core.checkpoint_types import PlanningPhase, create_key_checkpoint_metadata
+        
+        concept_reports = result.get("concept_reports", {})
+        completed_dims = list(concept_reports.keys())
+        
+        # 构建检查点元数据
+        checkpoint_meta = create_key_checkpoint_metadata(layer=2)
+        
+        # 合并现有 metadata 和 completed_dimensions
+        existing_metadata = state.get("metadata", {})
+        updated_metadata = {**existing_metadata, **checkpoint_meta}
+        existing_completed = state.get("completed_dimensions", {})
+        updated_completed = {**existing_completed, "layer2": completed_dims}
+        
         return StateBuilder()\
-            .set("concept_reports", result.get("concept_reports", {}))\
+            .set("concept_reports", concept_reports)\
             .set("layer_2_completed", True)\
             .set("current_layer", 3)\
             .set("previous_layer", 2)\
+            .set("phase", PlanningPhase.LAYER2_COMPLETED.value)\
+            .set("completed_dimensions", updated_completed)\
+            .set("metadata", updated_metadata)\
             .set("last_checkpoint_id", checkpoint_id)\
-            .add_message(f"规划思路已生成，包含 {len(result.get('concept_reports', {}))} 个维度报告。")\
+            .add_message(f"规划思路已生成，包含 {len(concept_reports)} 个维度报告。")\
             .build()
 
 
@@ -262,14 +294,29 @@ class Layer3DetailNode(BaseLayerNode):
         checkpoint_id: str
     ) -> Dict[str, Any]:
         """构建成功状态更新"""
+        from ..core.checkpoint_types import PlanningPhase, create_key_checkpoint_metadata
+        
         # 使用子图返回的 detail_reports
         detail_reports = result.get("detail_reports", {})
-
+        completed_dims = list(detail_reports.keys())
+        
+        # 构建检查点元数据
+        checkpoint_meta = create_key_checkpoint_metadata(layer=3)
+        
+        # 合并现有 metadata 和 completed_dimensions
+        existing_metadata = state.get("metadata", {})
+        updated_metadata = {**existing_metadata, **checkpoint_meta}
+        existing_completed = state.get("completed_dimensions", {})
+        updated_completed = {**existing_completed, "layer3": completed_dims}
+        
         return StateBuilder()\
             .set("detail_reports", detail_reports)\
             .set("layer_3_completed", True)\
             .set("current_layer", 4)\
             .set("previous_layer", 3)\
+            .set("phase", PlanningPhase.LAYER3_COMPLETED.value)\
+            .set("completed_dimensions", updated_completed)\
+            .set("metadata", updated_metadata)\
             .set("last_checkpoint_id", checkpoint_id)\
             .add_message(f"详细规划已生成，包含 {len(result.get('completed_dimensions', []))} 个专业维度。")\
             .build()

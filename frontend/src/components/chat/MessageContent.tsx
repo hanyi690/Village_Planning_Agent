@@ -5,20 +5,17 @@
  * Individual message type renderers
  */
 
-import { Message, ActionButton, ProgressMessage } from '@/types';
+import { Message, ProgressMessage } from '@/types';
 import {
   isProgressMessage,
   isLayerCompletedMessage,
   isDimensionReportMessage,
 } from '@/types';
 import StreamingText from './StreamingText';
-import ActionButtonGroup from './ActionButtonGroup';
-import { getButtonClasses } from '@/lib/utils';
 import LayerReportMessage from './LayerReportMessage';
 
 interface MessageContentProps {
   message: Message;
-  onAction?: (action: ActionButton, message: Message) => void;
   enableStreaming?: boolean;
   dimensionContents?: Map<string, string>;  // 实时流式内容（用于 token 级显示）
 }
@@ -44,47 +41,6 @@ function renderProgressMessage(message: ProgressMessage) {
           当前: {message.currentLayer}
         </div>
       )}
-    </>
-  );
-}
-
-// Layer Completed Message Renderer
-function renderLayerCompletedMessage(message: Message, onAction?: (action: ActionButton, message: Message) => void, enableStreaming = true) {
-  if (message.type !== 'layer_completed') return null;
-
-  return (
-    <>
-      <div className="mb-2 font-bold flex items-center gap-2">
-        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-green-600 text-xs" style={{ color: 'var(--text-cream-primary)' }}>
-          <i className="fas fa-check" />
-        </span>
-        Layer {message.layer} 已完成
-      </div>
-      <div className="mb-3 leading-relaxed">
-        {enableStreaming ? (
-          <StreamingText content={message.content} speed={50} />
-        ) : (
-          message.content
-        )}
-      </div>
-      {message.summary?.key_points && message.summary.key_points.length > 0 && (
-        <div className="bg-gradient-to-br from-green-50 to-emerald-50 p-3 rounded-lg mt-2 text-sm border border-green-100">
-          <strong className="text-green-700 flex items-center gap-1.5 mb-2">
-            <i className="fas fa-lightbulb text-yellow-500" />
-            关键点:
-          </strong>
-          <ul className="mt-2 mb-0 pl-5 space-y-1">
-            {message.summary.key_points.map((point, idx) => (
-              <li key={idx} className="text-gray-700">{point}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-      <ActionButtonGroup
-        actions={message.actions || []}
-        onAction={(a) => onAction?.(a, message)}
-        className="mt-3"
-      />
     </>
   );
 }
@@ -115,7 +71,7 @@ function renderDimensionReportMessage(message: Message) {
 
 // Main Message Content Renderer
 export default function MessageContent(props: MessageContentProps) {
-  const { message, onAction, enableStreaming = true, dimensionContents } = props;
+  const { message, enableStreaming = true, dimensionContents } = props;
 
   switch (message.type) {
     case 'text':

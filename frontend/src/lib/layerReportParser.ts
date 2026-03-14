@@ -97,7 +97,7 @@ export function parseLayerReport(markdown: string): ParsedDimension[] {
       : markdown.length;
 
     // 提取内容（自动排除 ## 标题行）
-    let content = markdown.substring(startIndex, endIndex).trim();
+    const content = markdown.substring(startIndex, endIndex).trim();
 
     // 提取子章节（### 三级标题）
     const subsections = extractSubsections(content);

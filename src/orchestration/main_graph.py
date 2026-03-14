@@ -123,8 +123,19 @@ class VillagePlanningState(TypedDict):
     #     "published_layers": [1, 2],           # 已发送 layer_completed 信号的层级
     #     "version": 102,                        # 状态版本号，用于前端同步
     #     "last_signal_timestamp": "2025-...",  # 最后信号时间戳
-    #     "event_id_counter": 0                  # 事件 ID 计数器
+    #     "event_id_counter": 0,                 # 事件 ID 计数器
+    #     "checkpoint_type": "key",              # 检查点类型 (key/regular)
+    #     "checkpoint_phase": "layer1_completed", # 检查点阶段
+    #     "checkpoint_layer": 1,                 # 检查点所属层级
+    #     "checkpoint_description": "现状分析完成" # 检查点描述
     # }
+    
+    # 【新增】明确的阶段标识 - 替代多字段推断
+    # 使用 PlanningPhase 枚举值，避免通过 layer_X_completed 等字段推断
+    phase: str  # PlanningPhase 枚举值: init, layer1_completed, layer2_completed, etc.
+    
+    # 【新增】各层级完成的维度列表 - 用于维度级检查点
+    completed_dimensions: Dict[str, List[str]]  # {"layer1": ["land_use", ...], "layer2": [...], "layer3": [...]}
 
 
 # ==========================================
