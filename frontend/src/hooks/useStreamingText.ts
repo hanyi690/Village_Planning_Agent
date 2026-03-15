@@ -54,43 +54,43 @@ export function useStreamingText(
   /**
    * 动画循环 - 使用 requestAnimationFrame 确保流畅度
    */
-  const animate = useCallback((timestamp: number) => {
-    if (completeRef.current) {
-      return;
-    }
-
-    // 如果暂停，继续循环但不更新
-    if (isPaused) {
-      animationFrameRef.current = requestAnimationFrame(animate);
-      return;
-    }
-
-    // 检查是否应该更新
-    if (timestamp - lastUpdateTimeRef.current >= updateInterval) {
-      const nextIndex = Math.min(
-        currentIndexRef.current + batchSize,
-        content.length
-      );
-
-      if (nextIndex > currentIndexRef.current) {
-        currentIndexRef.current = nextIndex;
-        setDisplayedContent(content.slice(0, nextIndex));
-        setProgress((nextIndex / content.length) * 100);
-        lastUpdateTimeRef.current = timestamp;
-      }
-
-      // 检查是否完成
-      if (nextIndex >= content.length) {
-        completeRef.current = true;
-        setIsStreaming(false);
-        onComplete?.();
+  const animate = useCallback(
+    (timestamp: number) => {
+      if (completeRef.current) {
         return;
       }
-    }
 
-    // 继续动画循环
-    animationFrameRef.current = requestAnimationFrame(animate);
-  }, [content, batchSize, updateInterval, isPaused, onComplete]);
+      // 如果暂停，继续循环但不更新
+      if (isPaused) {
+        animationFrameRef.current = requestAnimationFrame(animate);
+        return;
+      }
+
+      // 检查是否应该更新
+      if (timestamp - lastUpdateTimeRef.current >= updateInterval) {
+        const nextIndex = Math.min(currentIndexRef.current + batchSize, content.length);
+
+        if (nextIndex > currentIndexRef.current) {
+          currentIndexRef.current = nextIndex;
+          setDisplayedContent(content.slice(0, nextIndex));
+          setProgress((nextIndex / content.length) * 100);
+          lastUpdateTimeRef.current = timestamp;
+        }
+
+        // 检查是否完成
+        if (nextIndex >= content.length) {
+          completeRef.current = true;
+          setIsStreaming(false);
+          onComplete?.();
+          return;
+        }
+      }
+
+      // 继续动画循环
+      animationFrameRef.current = requestAnimationFrame(animate);
+    },
+    [content, batchSize, updateInterval, isPaused, onComplete]
+  );
 
   /**
    * 开始流式输出
@@ -123,7 +123,7 @@ export function useStreamingText(
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, enabled]); // 仅在 content 或 enabled 变化时重新开始
 
   /**
@@ -200,7 +200,7 @@ export function useStreamingAccumulator() {
    * 添加新的文本块
    */
   const appendChunk = useCallback((chunk: string) => {
-    setFullContent(prev => prev + chunk);
+    setFullContent((prev) => prev + chunk);
   }, []);
 
   /**

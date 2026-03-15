@@ -903,12 +903,13 @@ async def create_dimension_revision_async(
     content: str,
     reason: Optional[str] = None,
     created_by: Optional[str] = None,
+    previous_content: Optional[str] = None,
     previous_content_hash: Optional[str] = None,
 ) -> int:
     """
     Create a dimension revision record (async)
     创建维度修订记录
-    
+
     Args:
         session_id: Session ID
         layer: Layer number (1/2/3)
@@ -916,13 +917,14 @@ async def create_dimension_revision_async(
         content: New content
         reason: Reason for revision
         created_by: Who made the revision
+        previous_content: Previous content (for frontend display of before/after comparison)
         previous_content_hash: Hash of previous content
-        
+
     Returns:
         int: Revision database ID
     """
     import hashlib
-    
+
     try:
         async with get_async_session() as session:
             # Get the latest version number for this dimension
@@ -935,13 +937,14 @@ async def create_dimension_revision_async(
             )
             latest_version = version_result.scalar() or 0
             new_version = latest_version + 1
-            
+
             # Create new revision
             revision = DimensionRevision(
                 session_id=session_id,
                 layer=layer,
                 dimension_key=dimension_key,
                 content=content,
+                previous_content=previous_content,
                 previous_content_hash=previous_content_hash or hashlib.md5(content.encode()).hexdigest()[:16],
                 reason=reason,
                 created_by=created_by,
@@ -950,10 +953,10 @@ async def create_dimension_revision_async(
             session.add(revision)
             await session.commit()
             await session.refresh(revision)
-            
+
             logger.info(f"[Async DB] Created revision v{new_version} for dimension {dimension_key} in session {session_id}")
             return revision.id
-            
+
     except Exception as e:
         logger.error(f"[Async DB] Failed to create dimension revision: {e}", exc_info=True)
         raise

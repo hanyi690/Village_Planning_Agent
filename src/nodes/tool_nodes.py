@@ -8,6 +8,7 @@ from typing import Dict, Any, List
 
 from .base_node import BaseNode, AsyncBaseNode
 from ..core.state_builder import StateBuilder
+from ..core.checkpoint_types import CheckpointMetadata, CheckpointType, PlanningPhase
 from ..tools.revision_tool import RevisionTool
 from ..utils.logger import get_logger
 
@@ -81,7 +82,6 @@ class ToolBridgeNode(AsyncBaseNode):
                 error=result.error
             )
 
-        from ..core.state_builder import StateBuilder
         return StateBuilder()\
             .set("use_gis_adapter", False)\
             .set("last_adapter_result", result.to_dict())\
@@ -111,7 +111,6 @@ class ToolBridgeNode(AsyncBaseNode):
                 error=result.error
             )
 
-        from ..core.state_builder import StateBuilder
         return StateBuilder()\
             .set("use_network_adapter", False)\
             .set("last_adapter_result", result.to_dict())\
@@ -143,7 +142,6 @@ class ToolBridgeNode(AsyncBaseNode):
                 error=result.error
             )
 
-        from ..core.state_builder import StateBuilder
         return StateBuilder()\
             .set("use_population_adapter", False)\
             .set("last_adapter_result", result.to_dict())\
@@ -259,7 +257,29 @@ class RevisionNode(AsyncBaseNode):
         # 设置 last_revised_dimensions 标志用于 SSE 事件触发
         revised_dimensions = list(updated_reports.keys())
         logger.info(f"[修复] 设置 last_revised_dimensions: {revised_dimensions}")
-        
+
+        # 创建修复完成检查点元数据（标记为关键检查点，支持回滚）
+        current_layer = state.get("current_layer", 1)
+
+        # 根据当前层推断修复完成阶段
+        phase_map = {
+            1: PlanningPhase.LAYER1_ANALYZING,
+            2: PlanningPhase.LAYER2_CONCEPTING,
+            3: PlanningPhase.LAYER3_PLANNING,
+        }
+        repair_phase = phase_map.get(current_layer, PlanningPhase.INIT)
+
+        repair_meta = CheckpointMetadata(
+            type=CheckpointType.KEY,
+            phase=repair_phase,
+            layer=current_layer,
+            description=f"修复完成（Layer {current_layer}）"
+        )
+
+        # 合并现有 metadata
+        existing_metadata = state.get("metadata", {})
+        new_metadata = {**existing_metadata, **repair_meta.to_dict()}
+
         return StateBuilder()\
             .set("analysis_reports", analysis_reports)\
             .set("concept_reports", concept_reports)\
@@ -267,6 +287,7 @@ class RevisionNode(AsyncBaseNode):
             .set("need_revision", False)\
             .set("revision_history", existing_history)\
             .set("last_revised_dimensions", revised_dimensions)\
+            .set("metadata", new_metadata)\
             .add_message("，".join(msg_parts))\
             .build()
 

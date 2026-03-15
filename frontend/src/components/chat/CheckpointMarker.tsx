@@ -14,7 +14,13 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faBookmark, faUndo, faSpinner, faExclamationTriangle, faCircle } from '@fortawesome/free-solid-svg-icons';
+import {
+  faBookmark,
+  faUndo,
+  faSpinner,
+  faExclamationTriangle,
+  faCircle,
+} from '@fortawesome/free-solid-svg-icons';
 import { formatFullTimestamp, parseTimestamp } from '@/lib/utils';
 import type { Checkpoint } from '@/types';
 
@@ -39,15 +45,13 @@ export default function CheckpointMarker({
   };
 
   const layerName = layerNames[checkpoint.layer] || `第 ${checkpoint.layer} 层`;
-  
+
   // 检查点类型
   const isKeyCheckpoint = checkpoint.type === 'key';
-  
+
   // ✅ 使用安全的时间解析函数
   const parsedDate = parseTimestamp(checkpoint.timestamp);
-  const timestamp = parsedDate 
-    ? formatFullTimestamp(checkpoint.timestamp) 
-    : '刚刚';  // 解析失败时显示"刚刚"
+  const timestamp = parsedDate ? formatFullTimestamp(checkpoint.timestamp) : '刚刚'; // 解析失败时显示"刚刚"
 
   const handleRollbackClick = () => {
     setShowConfirm(true);
@@ -71,15 +75,15 @@ export default function CheckpointMarker({
 
   // 根据检查点类型设置样式
   const containerClass = isKeyCheckpoint
-    ? "relative my-4"  // 关键检查点：正常间距
-    : "relative my-2 opacity-60";  // 普通检查点：减小间距，淡化
+    ? 'relative my-4' // 关键检查点：正常间距
+    : 'relative my-2 opacity-60'; // 普通检查点：减小间距，淡化
 
   const iconGradient = isKeyCheckpoint
-    ? "bg-gradient-to-br from-violet-500 to-blue-500"  // 关键检查点：醒目渐变
-    : "bg-gradient-to-br from-gray-400 to-gray-500";  // 普通检查点：灰色
+    ? 'bg-gradient-to-br from-violet-500 to-blue-500' // 关键检查点：醒目渐变
+    : 'bg-gradient-to-br from-gray-400 to-gray-500'; // 普通检查点：灰色
 
-  const iconSize = isKeyCheckpoint ? "w-8 h-8" : "w-6 h-6";
-  const separatorWidth = isKeyCheckpoint ? "w-16" : "w-8";
+  const iconSize = isKeyCheckpoint ? 'w-8 h-8' : 'w-6 h-6';
+  const separatorWidth = isKeyCheckpoint ? 'w-16' : 'w-8';
 
   return (
     <div className={containerClass}>
@@ -92,12 +96,12 @@ export default function CheckpointMarker({
             animate={{ scale: 1 }}
             className={`${iconSize} rounded-full ${iconGradient} flex items-center justify-center shadow-lg`}
           >
-            <FontAwesomeIcon 
-              icon={isKeyCheckpoint ? faBookmark : faCircle} 
-              className={`text-white ${isKeyCheckpoint ? 'text-sm' : 'text-xs'}`} 
+            <FontAwesomeIcon
+              icon={isKeyCheckpoint ? faBookmark : faCircle}
+              className={`text-white ${isKeyCheckpoint ? 'text-sm' : 'text-xs'}`}
             />
           </motion.div>
-          
+
           {/* 分隔线 */}
           <div className={`${separatorWidth} h-0.5 bg-gradient-to-r from-violet-300 to-gray-200`} />
         </div>
@@ -105,7 +109,9 @@ export default function CheckpointMarker({
         {/* 中间：信息 */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className={`text-sm ${isKeyCheckpoint ? 'font-medium' : 'font-normal'} text-gray-700`}>
+            <span
+              className={`text-sm ${isKeyCheckpoint ? 'font-medium' : 'font-normal'} text-gray-700`}
+            >
               {layerName} 完成
             </span>
             {isKeyCheckpoint && checkpoint.phase && (
@@ -113,14 +119,10 @@ export default function CheckpointMarker({
                 关键点
               </span>
             )}
-            <span className="text-xs text-gray-400">
-              {timestamp}
-            </span>
+            <span className="text-xs text-gray-400">{timestamp}</span>
           </div>
           {checkpoint.description && (
-            <p className="text-xs text-gray-500 truncate mt-0.5">
-              {checkpoint.description}
-            </p>
+            <p className="text-xs text-gray-500 truncate mt-0.5">{checkpoint.description}</p>
           )}
         </div>
 
@@ -150,20 +152,15 @@ export default function CheckpointMarker({
           >
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
-                <FontAwesomeIcon
-                  icon={faExclamationTriangle}
-                  className="text-amber-500"
-                />
+                <FontAwesomeIcon icon={faExclamationTriangle} className="text-amber-500" />
               </div>
-              
+
               <div className="flex-1">
-                <h4 className="text-sm font-semibold text-gray-900 mb-1">
-                  确认回滚
-                </h4>
+                <h4 className="text-sm font-semibold text-gray-900 mb-1">确认回滚</h4>
                 <p className="text-xs text-gray-500 mb-3">
                   将恢复到「{layerName}」完成时的状态，之后的内容将被清除。此操作不可撤销。
                 </p>
-                
+
                 <div className="flex gap-2">
                   <button
                     onClick={handleCancel}

@@ -36,7 +36,7 @@ export default function DimensionReportStreaming({
   // 添加脉冲动画（仅在客户端）
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    
+
     const style = document.createElement('style');
     style.textContent = `
       @keyframes pulse {
@@ -55,7 +55,7 @@ export default function DimensionReportStreaming({
       }
     `;
     document.head.appendChild(style);
-    
+
     return () => {
       document.head.removeChild(style);
     };
@@ -119,9 +119,10 @@ export default function DimensionReportStreaming({
         borderRadius: '8px',
         transition: 'all 0.3s ease',
         overflow: 'hidden',
-        boxShadow: streamingState === 'streaming'
-          ? '0 2px 8px rgba(25, 118, 210, 0.15)'
-          : '0 2px 6px rgba(0,0,0,0.03)',
+        boxShadow:
+          streamingState === 'streaming'
+            ? '0 2px 8px rgba(25, 118, 210, 0.15)'
+            : '0 2px 6px rgba(0,0,0,0.03)',
       }}
     >
       {/* Header */}
@@ -134,9 +135,8 @@ export default function DimensionReportStreaming({
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          background: streamingState === 'streaming'
-            ? 'linear-gradient(90deg, #e3f2fd, #bbdefb)'
-            : '#e8f5e9',
+          background:
+            streamingState === 'streaming' ? 'linear-gradient(90deg, #e3f2fd, #bbdefb)' : '#e8f5e9',
           transition: 'background 0.3s ease',
         }}
       >
@@ -175,9 +175,7 @@ export default function DimensionReportStreaming({
                   animation: 'pulse 1.5s infinite',
                 }}
               />
-              <span style={{ fontSize: '12px', color: '#666' }}>
-                生成中...
-              </span>
+              <span style={{ fontSize: '12px', color: '#666' }}>生成中...</span>
             </div>
           )}
 
@@ -201,9 +199,7 @@ export default function DimensionReportStreaming({
           style={{
             padding: '16px',
             background: '#fafafa',
-            borderTop: streamingState === 'streaming'
-              ? '1px solid #64b5f6'
-              : '1px solid #c8e6c9',
+            borderTop: streamingState === 'streaming' ? '1px solid #64b5f6' : '1px solid #c8e6c9',
           }}
         >
           {displayContent ? (

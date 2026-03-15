@@ -17,7 +17,7 @@ interface MarkdownRendererProps {
 export default function MarkdownRenderer({
   content,
   className = '',
-  suppressFirstHeader = false
+  suppressFirstHeader = false,
 }: MarkdownRendererProps) {
   // Process content to remove first header if suppressFirstHeader is enabled
   const processedContent = React.useMemo(() => {
@@ -40,7 +40,7 @@ export default function MarkdownRenderer({
         fontSize: '0.95rem',
         maxHeight: 'none',
         height: 'auto',
-        overflow: 'visible'
+        overflow: 'visible',
       }}
     >
       <ReactMarkdown

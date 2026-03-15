@@ -35,24 +35,14 @@ from backend.database.engine import get_db_path
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Layer name mapping
-LAYER_MAP = {
-    "layer_1_analysis": "layer_1_analysis",
-    "layer_2_concept": "layer_2_concept",
-    "layer_3_detailed": "layer_3_detailed",
-    "analysis": "layer_1_analysis",
-    "concept": "layer_2_concept",
-    "detailed": "layer_3_detailed",
-}
-
-# Layer to state key mapping
-LAYER_TO_STATE_KEY = {
-    "layer_1_analysis": "analysis_reports",
-    "layer_2_concept": "concept_reports",
-    "layer_3_detailed": "detail_reports",
-    "analysis": "analysis_reports",
-    "concept": "concept_reports",
-    "detailed": "detail_reports",
+# Layer configuration mapping - combines directory name and state key
+LAYER_CONFIG = {
+    "layer_1_analysis": {"dir": "layer_1_analysis", "state_key": "analysis_reports"},
+    "layer_2_concept": {"dir": "layer_2_concept", "state_key": "concept_reports"},
+    "layer_3_detailed": {"dir": "layer_3_detailed", "state_key": "detail_reports"},
+    "analysis": {"dir": "layer_1_analysis", "state_key": "analysis_reports"},
+    "concept": {"dir": "layer_2_concept", "state_key": "concept_reports"},
+    "detailed": {"dir": "layer_3_detailed", "state_key": "detail_reports"},
 }
 
 
@@ -60,9 +50,9 @@ LAYER_TO_STATE_KEY = {
 # Helper Functions
 # ============================================
 
-def _get_layer_dir(layer: str) -> str:
-    """Get the actual directory name for a layer identifier"""
-    result = LAYER_MAP.get(layer)
+def _get_layer_config(layer: str) -> Dict[str, str]:
+    """Get layer configuration (directory name and state key)"""
+    result = LAYER_CONFIG.get(layer)
     if not result:
         raise ValueError(f"Invalid layer: {layer}")
     return result
@@ -84,12 +74,17 @@ async def _get_session_checkpoints(thread_id: str) -> List[Dict[str, Any]]:
             checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
             metadata = state_snapshot.metadata or {}
             values = state_snapshot.values or {}
-            
+
+            # 从 values.metadata 获取检查点类型和阶段信息
+            state_metadata = values.get("metadata", {})
+            checkpoint_type = state_metadata.get("checkpoint_type", "regular")
+            checkpoint_phase = state_metadata.get("checkpoint_phase", "")
+
             # 使用 previous_layer 判断检查点层级（与 planning.py 一致）
             # previous_layer 表示刚完成的层级，用于回退判断
             completed_layer = values.get("previous_layer", 0)
             current_layer = values.get("current_layer", 1)
-            
+
             if completed_layer > 0:
                 # Layer N 刚完成的状态
                 display_layer = completed_layer
@@ -100,14 +95,16 @@ async def _get_session_checkpoints(thread_id: str) -> List[Dict[str, Any]]:
                 # 如果初始状态也是 layer: 1，会匹配到错误的检查点
                 display_layer = 0
                 description = f"初始状态"
-            
+
             checkpoints.append({
                 "checkpoint_id": checkpoint_id,
                 "timestamp": metadata.get("write_ts", ""),
                 "layer": display_layer,
                 "current_layer": current_layer,
                 "previous_layer": completed_layer,
-                "description": description
+                "description": description,
+                "type": checkpoint_type,  # 新增：用于前端判断是否显示"恢复到此点"按钮
+                "phase": checkpoint_phase,  # 新增：用于前端展示阶段信息
             })
     except Exception as e:
         logger.error(f"[Data API] Failed to get checkpoints: {e}", exc_info=True)
@@ -216,8 +213,9 @@ async def get_layer_content(
 ):
     """Get layer content from LangGraph checkpoint state"""
     try:
-        layer_dir_name = _get_layer_dir(layer)
-        content_key = LAYER_TO_STATE_KEY.get(layer, f"{layer_dir_name}_reports")
+        config = _get_layer_config(layer)
+        layer_dir_name = config["dir"]
+        content_key = config["state_key"]
         
         # Get session_id if not provided
         if not session:

@@ -38,9 +38,10 @@ export default function LayerReportCard({
   isActive = false,
   hasStreamingDimensions = false,
 }: LayerReportCardProps) {
-  const actualDefaultExpanded = defaultExpanded ?? (mode === 'sidebar' || isActive || hasStreamingDimensions);
+  const actualDefaultExpanded =
+    defaultExpanded ?? (mode === 'sidebar' || isActive || hasStreamingDimensions);
   const actualMaxHeight = maxHeight ?? (mode === 'chat' ? '800px' : 'none');
-  const actualShowExpandAll = showExpandAll ?? (mode === 'sidebar');
+  const actualShowExpandAll = showExpandAll ?? mode === 'sidebar';
 
   const [allExpanded, setAllExpanded] = useState(false);
   const [localExpanded, setLocalExpanded] = useState(actualDefaultExpanded);
@@ -123,7 +124,7 @@ export default function LayerReportCard({
       initial="hidden"
       animate="visible"
       layout
-      className={`relative bg-gradient-to-br from-emerald-50/80 to-green-50/80 rounded-2xl p-5 my-6 backdrop-blur-sm ${
+      className={`relative bg-gradient-to-br from-cyan-50/80 to-teal-50/80 rounded-xl p-5 my-6 backdrop-blur-sm ${
         !isActive ? 'opacity-70' : ''
       }`}
       style={{
@@ -138,7 +139,7 @@ export default function LayerReportCard({
             initial={{ opacity: 0, scale: 0.8 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.8 }}
-            className="absolute top-3 right-3 bg-black/5 px-2 py-1 rounded-lg text-xs text-gray-500 z-10"
+            className="absolute top-3 right-3 bg-gray-100/80 px-2 py-1 rounded-lg text-xs text-gray-600 z-10"
           >
             已完成
           </motion.div>
@@ -147,9 +148,9 @@ export default function LayerReportCard({
 
       {/* Header - Chat mode simplified */}
       {mode === 'chat' ? (
-        <div className="mb-4 pb-3 border-b border-emerald-200/50">
-          <h3 className="flex items-center gap-2 text-base font-semibold text-emerald-800">
-            <i className="fas fa-layer-group text-emerald-500" />
+        <div className="mb-4 pb-3 border-b border-cyan-200/50">
+          <h3 className="flex items-center gap-2 text-base font-semibold text-cyan-800">
+            <i className="fas fa-layer-group text-cyan-500" />
             Layer {layerNumber} 报告
           </h3>
           <p className="text-sm text-gray-500 mt-1">
@@ -157,10 +158,10 @@ export default function LayerReportCard({
           </p>
         </div>
       ) : (
-        <div className="flex justify-between items-center mb-5 pb-4 border-b border-emerald-200/50">
+        <div className="flex justify-between items-center mb-5 pb-4 border-b border-cyan-200/50">
           <div>
-            <h3 className="flex items-center gap-2 text-lg font-semibold text-emerald-800">
-              <i className="fas fa-layer-group text-emerald-500" />
+            <h3 className="flex items-center gap-2 text-lg font-semibold text-cyan-800">
+              <i className="fas fa-layer-group text-cyan-500" />
               Layer {layerNumber} 完整报告
             </h3>
             <p className="text-sm text-gray-500 mt-1">
@@ -177,8 +178,8 @@ export default function LayerReportCard({
                 onClick={handleExpandAll}
                 className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md"
                 style={{
-                  background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)',
+                  background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+                  boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
                 }}
               >
                 <i className="fas fa-expand-alt" />
@@ -188,7 +189,7 @@ export default function LayerReportCard({
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={handleCollapseAll}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-emerald-600 bg-white border border-emerald-200 rounded-lg hover:bg-emerald-50 transition-colors"
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors"
               >
                 <i className="fas fa-compress-alt" />
                 折叠全部
@@ -202,7 +203,11 @@ export default function LayerReportCard({
       <div
         className="space-y-3"
         style={{
-          maxHeight: localExpanded ? '80vh' : mode === 'chat' && !localExpanded ? actualMaxHeight : 'none',
+          maxHeight: localExpanded
+            ? '80vh'
+            : mode === 'chat' && !localExpanded
+              ? actualMaxHeight
+              : 'none',
           overflow: 'auto',
         }}
       >
@@ -227,13 +232,13 @@ export default function LayerReportCard({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute bottom-0 left-0 right-0 p-5 bg-gradient-to-t from-emerald-50 via-emerald-50/95 to-transparent flex flex-col items-center gap-3"
+            className="absolute bottom-0 left-0 right-0 p-5 bg-gradient-to-t from-cyan-50 via-cyan-50/95 to-transparent flex flex-col items-center gap-3"
           >
             <motion.button
               whileHover={{ scale: 1.02, y: -2 }}
               whileTap={{ scale: 0.98 }}
               onClick={handleToggleExpanded}
-              className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-emerald-600 bg-white border border-emerald-200 rounded-full shadow-md hover:bg-emerald-50 transition-colors"
+              className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-xl shadow-md hover:bg-cyan-50 transition-colors"
             >
               <i className="fas fa-chevron-down" />
               展开全文
@@ -244,7 +249,7 @@ export default function LayerReportCard({
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={onOpenInSidebar}
-                className="flex items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:text-emerald-700 transition-colors"
+                className="flex items-center gap-2 px-4 py-2 text-sm text-cyan-600 hover:text-cyan-700 transition-colors"
               >
                 <i className="fas fa-external-link-alt" />
                 在侧边栏查看

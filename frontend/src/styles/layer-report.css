@@ -31,12 +31,12 @@
   border-radius: 8px;
   transition: all 0.3s ease;
   overflow: hidden;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
 }
 
 .section-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.08);
   border-color: #8bc34a;
 }
 
@@ -80,7 +80,9 @@
   padding: 0 20px;
   max-height: 0;
   overflow: hidden;
-  transition: max-height 0.4s ease, padding 0.4s ease;
+  transition:
+    max-height 0.4s ease,
+    padding 0.4s ease;
   background: white !important;
 }
 
@@ -166,7 +168,7 @@
 .dimension-stat-item:hover {
   border-color: #8bc34a !important;
   transform: translateY(-2px);
-  box-shadow: 0 4px 10px rgba(0,0,0,0.08) !important;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08) !important;
 }
 
 /* Primary action button */
@@ -314,12 +316,13 @@
 }
 
 /* 展开全文按钮动画 */
-.layer-report-card-chat button[aria-label="expand"] {
+.layer-report-card-chat button[aria-label='expand'] {
   animation: pulse 2s ease-in-out infinite;
 }
 
 @keyframes pulse {
-  0%, 100% {
+  0%,
+  100% {
     transform: scale(1);
   }
   50% {
@@ -392,11 +395,11 @@
   text-align: left;
 }
 
-.markdown-content th[align="center"] {
+.markdown-content th[align='center'] {
   text-align: center;
 }
 
-.markdown-content th[align="right"] {
+.markdown-content th[align='right'] {
   text-align: right;
 }
 
@@ -408,11 +411,11 @@
   background-color: #f0f9f0;
 }
 
-.markdown-content td[align="center"] {
+.markdown-content td[align='center'] {
   text-align: center;
 }
 
-.markdown-content td[align="right"] {
+.markdown-content td[align='right'] {
   text-align: right;
 }
 
@@ -491,10 +494,12 @@
 }
 
 @keyframes blink {
-  0%, 50% {
+  0%,
+  50% {
     opacity: 1;
   }
-  51%, 100% {
+  51%,
+  100% {
     opacity: 0;
   }
 }
@@ -504,4 +509,3 @@
   color: #9ca3af;
   margin-top: 4px;
 }
-

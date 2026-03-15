@@ -14,7 +14,7 @@ interface RevisionProgressProps {
   revisions: RevisionItem[];
   currentWave: number;
   maxWave: number;
-  targetDimensions: string[];  // 用户选择的目标维度
+  targetDimensions: string[]; // 用户选择的目标维度
 }
 
 export default function RevisionProgress({
@@ -24,11 +24,11 @@ export default function RevisionProgress({
   targetDimensions: _targetDimensions,
 }: RevisionProgressProps) {
   // 按维度类型分组
-  const targetRevisions = revisions.filter(r => r.isTarget);
-  const cascadeRevisions = revisions.filter(r => !r.isTarget);
+  const targetRevisions = revisions.filter((r) => r.isTarget);
+  const cascadeRevisions = revisions.filter((r) => !r.isTarget);
 
   // 计算进度
-  const completedCount = revisions.filter(r => r.status === 'completed').length;
+  const completedCount = revisions.filter((r) => r.status === 'completed').length;
   const totalCount = revisions.length;
   const progress = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
 
@@ -41,9 +41,13 @@ export default function RevisionProgress({
           <span className="font-medium text-slate-700">修复进度</span>
         </div>
         <div className="flex items-center gap-2 text-sm text-slate-500">
-          <span>Wave {currentWave}/{maxWave}</span>
+          <span>
+            Wave {currentWave}/{maxWave}
+          </span>
           <span className="text-slate-300">|</span>
-          <span>{completedCount}/{totalCount} 完成</span>
+          <span>
+            {completedCount}/{totalCount} 完成
+          </span>
         </div>
       </div>
 

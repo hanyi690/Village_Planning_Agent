@@ -13,11 +13,11 @@ import { getDimensionName, getDimensionIcon } from '@/config/dimensions';
 
 interface LayerReportMessageProps {
   message: LayerCompletedMessage;
-  onOpenInSidebar?: (layer: number) => void;  // NEW: 跳转到侧边栏
+  onOpenInSidebar?: (layer: number) => void; // NEW: 跳转到侧边栏
   onToggleAllDimensions?: (expand: boolean) => void;
-  currentLayer?: number;  // NEW: 当前活跃层
-  hasStreamingDimensions?: boolean;  // NEW: 是否有流式维度内容
-  dimensionContents?: Map<string, string>;  // NEW: 实时维度内容（解决并行更新竞态）
+  currentLayer?: number; // NEW: 当前活跃层
+  hasStreamingDimensions?: boolean; // NEW: 是否有流式维度内容
+  dimensionContents?: Map<string, string>; // NEW: 实时维度内容（解决并行更新竞态）
 }
 
 export default function LayerReportMessage({
@@ -37,16 +37,17 @@ export default function LayerReportMessage({
     const dimensionReports = (message as LayerCompletedMessage).dimensionReports || {};
     const dimensionReportKeys = Object.keys(dimensionReports);
     const hasDimensionReports = dimensionReportKeys.length > 0;
-    
+
     // 检查 dimensionReports 内容是否完整（非空字符串）
-    const hasCompleteDimensionReports = hasDimensionReports && 
-      dimensionReportKeys.some(key => {
+    const hasCompleteDimensionReports =
+      hasDimensionReports &&
+      dimensionReportKeys.some((key) => {
         const content = dimensionReports[key];
         return content && content.length > 0;
       });
-    
+
     const hasDimensionContents = dimensionContents && dimensionContents.size > 0;
-    
+
     // ✅ 调试日志：追踪数据来源
     console.log(`[LayerReportMessage] Layer ${message.layer} 数据状态:`, {
       dimensionReportsCount: dimensionReportKeys.length,
@@ -58,7 +59,9 @@ export default function LayerReportMessage({
     // 1. ✅ 优先使用 dimensionReports（REST API 完整数据）
     // 当 dimensionReports 有完整内容时，说明层级已完成，REST API 返回了完整数据
     if (hasCompleteDimensionReports) {
-      console.log(`[LayerReportMessage] Layer ${message.layer} 使用 REST API 数据 (dimensionReports)`);
+      console.log(
+        `[LayerReportMessage] Layer ${message.layer} 使用 REST API 数据 (dimensionReports)`
+      );
       return Object.entries(dimensionReports).map(([key, content]) => ({
         name: getDimensionName(key),
         content: content,
@@ -69,9 +72,11 @@ export default function LayerReportMessage({
 
     // 2. 使用 dimensionContents（流式累积内容）
     if (hasDimensionContents) {
-      console.log(`[LayerReportMessage] Layer ${message.layer} 使用流式累积数据 (dimensionContents)`);
+      console.log(
+        `[LayerReportMessage] Layer ${message.layer} 使用流式累积数据 (dimensionContents)`
+      );
       const result: ParsedDimension[] = [];
-      
+
       // 如果有 dimensionReports 键但内容为空，使用键顺序
       if (hasDimensionReports) {
         for (const key of dimensionReportKeys) {
@@ -104,7 +109,7 @@ export default function LayerReportMessage({
           }
         });
       }
-      
+
       if (result.length > 0) return result;
     }
 
@@ -116,7 +121,7 @@ export default function LayerReportMessage({
 
     console.warn(`[LayerReportMessage] Layer ${message.layer} 无可用数据源！`);
     return [];
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [message.dimensionReports, message.fullReportContent, message.layer, dimensionContents]);
 
   // ✅ 判断是否为当前活跃层
@@ -133,12 +138,11 @@ export default function LayerReportMessage({
         defaultExpanded={false}
         maxHeight="500px"
         showExpandAll={false}
-        isActive={isActive}  // ✅ 传递活跃状态
-        hasStreamingDimensions={hasStreamingDimensions}  // ✅ 传递流式维度状态
+        isActive={isActive} // ✅ 传递活跃状态
+        hasStreamingDimensions={hasStreamingDimensions} // ✅ 传递流式维度状态
         onOpenInSidebar={() => onOpenInSidebar?.(message.layer)}
         onToggleAll={onToggleAllDimensions}
       />
     </div>
   );
 }
-

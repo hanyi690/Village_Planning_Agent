@@ -199,6 +199,10 @@ class DimensionRevision(SQLModel, table=True):
 
     # Content
     content: str = Field(sa_column=Text())  # 修改后的完整内容
+    previous_content: Optional[str] = Field(
+        default=None,
+        sa_column=Text()
+    )  # 前一个版本的完整内容（用于前端显示修复前后对比）
     previous_content_hash: Optional[str] = None  # 前一个版本的哈希（用于链式追溯）
 
     # Metadata
@@ -226,7 +230,6 @@ class DimensionRevision(SQLModel, table=True):
 
 __all__ = [
     "PlanningSession",
-    "Checkpoint",
     "UISession",
     "UIMessage",
     "DimensionRevision",

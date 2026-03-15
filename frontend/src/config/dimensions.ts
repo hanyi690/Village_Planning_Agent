@@ -93,12 +93,7 @@ export const DIMENSIONS_BY_LAYER: Record<number, string[]> = {
     'architecture',
     'historical_culture',
   ],
-  2: [
-    'resource_endowment',
-    'planning_positioning',
-    'development_goals',
-    'planning_strategies',
-  ],
+  2: ['resource_endowment', 'planning_positioning', 'development_goals', 'planning_strategies'],
   3: [
     'industry',
     'spatial_structure',
@@ -147,12 +142,14 @@ export const getDimensionsByLayer = (layer: number): string[] => {
  * @param layer 层级编号（1、2、3）
  * @returns 维度配置数组
  */
-export const getDimensionConfigsByLayer = (layer: number): Array<{
+export const getDimensionConfigsByLayer = (
+  layer: number
+): Array<{
   key: string;
   name: string;
   icon: string;
 }> => {
-  return getDimensionsByLayer(layer).map(key => ({
+  return getDimensionsByLayer(layer).map((key) => ({
     key,
     name: getDimensionName(key),
     icon: getDimensionIcon(key),

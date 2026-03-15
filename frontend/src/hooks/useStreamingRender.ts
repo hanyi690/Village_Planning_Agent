@@ -36,9 +36,9 @@
 import { useRef, useCallback, useEffect } from 'react';
 
 interface StreamingRenderOptions {
-  batchSize?: number;      // 批处理大小（token数量）
-  batchWindow?: number;    // 时间窗口（ms）
-  debounceMs?: number;     // 防抖延迟
+  batchSize?: number; // 批处理大小（token数量）
+  batchWindow?: number; // 时间窗口（ms）
+  debounceMs?: number; // 防抖延迟
 }
 
 interface DimensionBuffer {
@@ -46,7 +46,7 @@ interface DimensionBuffer {
   chunks: string[];
   lastUpdate: number;
   accumulated: string;
-  layer?: number;  // 🔧 FIX: 添加 layer 字段，解决闭包陷阱
+  layer?: number; // 🔧 FIX: 添加 layer 字段，解决闭包陷阱
 }
 
 interface UseStreamingRenderReturn {
@@ -67,11 +67,7 @@ export function useStreamingRender(
   onContentUpdate: (dimensionKey: string, content: string, layer?: number) => void,
   options: StreamingRenderOptions = {}
 ): UseStreamingRenderReturn {
-  const {
-    batchSize = 10,
-    batchWindow = 50,
-    debounceMs = 100,
-  } = options;
+  const { batchSize = 10, batchWindow = 50, debounceMs = 100 } = options;
 
   const buffers = useRef<Map<string, DimensionBuffer>>(new Map());
   const rafId = useRef<number>();
@@ -81,33 +77,36 @@ export function useStreamingRender(
   /**
    * 添加token到缓冲区
    */
-  const addToken = useCallback((
-    dimensionKey: string,
-    chunk: string,
-    accumulated: string,
-    layer?: number  // 🔧 FIX: 添加 layer 参数，解决闭包陷阱
-  ) => {
-    const buffer = buffers.current.get(dimensionKey) || {
-      dimensionKey,
-      chunks: [],
-      lastUpdate: Date.now(),
-      accumulated: '',
-      layer: layer,  // 🔧 FIX: 存储传入的 layer 值
-    };
+  const addToken = useCallback(
+    (
+      dimensionKey: string,
+      chunk: string,
+      accumulated: string,
+      layer?: number // 🔧 FIX: 添加 layer 参数，解决闭包陷阱
+    ) => {
+      const buffer = buffers.current.get(dimensionKey) || {
+        dimensionKey,
+        chunks: [],
+        lastUpdate: Date.now(),
+        accumulated: '',
+        layer: layer, // 🔧 FIX: 存储传入的 layer 值
+      };
 
-    buffer.chunks.push(chunk);
-    buffer.accumulated = accumulated;
-    buffer.lastUpdate = Date.now();
-    // 🔧 FIX: 如果传入了新的 layer 值，更新它（避免使用旧值）
-    if (layer !== undefined) {
-      buffer.layer = layer;
-    }
-    buffers.current.set(dimensionKey, buffer);
+      buffer.chunks.push(chunk);
+      buffer.accumulated = accumulated;
+      buffer.lastUpdate = Date.now();
+      // 🔧 FIX: 如果传入了新的 layer 值，更新它（避免使用旧值）
+      if (layer !== undefined) {
+        buffer.layer = layer;
+      }
+      buffers.current.set(dimensionKey, buffer);
 
-    // 触发批处理
-    scheduleBatch();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      // 触发批处理
+      scheduleBatch();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    []
+  );
 
   /**
    * 调度批处理（使用RAF）
@@ -123,7 +122,7 @@ export function useStreamingRender(
       flushBatchInternal();
       isFlushScheduled.current = false;
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchSize, batchWindow, debounceMs]);
 
   /**
@@ -135,10 +134,7 @@ export function useStreamingRender(
 
     // 收集需要更新的维度
     for (const [key, buffer] of buffers.current) {
-      if (
-        buffer.chunks.length >= batchSize ||
-        (now - buffer.lastUpdate) >= batchWindow
-      ) {
+      if (buffer.chunks.length >= batchSize || now - buffer.lastUpdate >= batchWindow) {
         updates.push({ dimensionKey: key, content: buffer.accumulated, layer: buffer.layer });
         buffer.chunks = [];
         buffer.lastUpdate = now;
@@ -193,27 +189,32 @@ export function useStreamingRender(
   /**
    * 标记维度完成
    */
-  const completeDimension = useCallback((dimensionKey: string, layer?: number) => {
-    const buffer = buffers.current.get(dimensionKey);
-    if (buffer && buffer.chunks.length > 0) {
-      // 🔧 FIX: 优先使用传入的 layer 参数，否则使用 buffer 中存储的值
-      const layerToUse = layer !== undefined ? layer : buffer.layer;
-      // 立即刷新该维度
-      onContentUpdate(dimensionKey, buffer.accumulated, layerToUse);
-      buffers.current.delete(dimensionKey);
-    } else if (buffer) {
-      // 即使没有chunk，也要删除
-      buffers.current.delete(dimensionKey);
-    }
-  }, [onContentUpdate]);
+  const completeDimension = useCallback(
+    (dimensionKey: string, layer?: number) => {
+      const buffer = buffers.current.get(dimensionKey);
+      if (buffer && buffer.chunks.length > 0) {
+        // 🔧 FIX: 优先使用传入的 layer 参数，否则使用 buffer 中存储的值
+        const layerToUse = layer !== undefined ? layer : buffer.layer;
+        // 立即刷新该维度
+        onContentUpdate(dimensionKey, buffer.accumulated, layerToUse);
+        buffers.current.delete(dimensionKey);
+      } else if (buffer) {
+        // 即使没有chunk，也要删除
+        buffers.current.delete(dimensionKey);
+      }
+    },
+    [onContentUpdate]
+  );
 
   /**
    * 获取统计信息（用于调试）
    */
   const getStats = useCallback(() => {
     const activeDimensions = Array.from(buffers.current.keys());
-    const bufferSize = Array.from(buffers.current.values())
-      .reduce((sum, buf) => sum + buf.chunks.length, 0);
+    const bufferSize = Array.from(buffers.current.values()).reduce(
+      (sum, buf) => sum + buf.chunks.length,
+      0
+    );
 
     return {
       bufferSize,

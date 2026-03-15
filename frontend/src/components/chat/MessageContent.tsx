@@ -6,18 +6,14 @@
  */
 
 import { Message, ProgressMessage } from '@/types';
-import {
-  isProgressMessage,
-  isLayerCompletedMessage,
-  isDimensionReportMessage,
-} from '@/types';
+import { isProgressMessage, isLayerCompletedMessage, isDimensionReportMessage } from '@/types';
 import StreamingText from './StreamingText';
 import LayerReportMessage from './LayerReportMessage';
 
 interface MessageContentProps {
   message: Message;
   enableStreaming?: boolean;
-  dimensionContents?: Map<string, string>;  // 实时流式内容（用于 token 级显示）
+  dimensionContents?: Map<string, string>; // 实时流式内容（用于 token 级显示）
 }
 
 // Progress Message Renderer
@@ -25,7 +21,10 @@ function renderProgressMessage(message: ProgressMessage) {
   return (
     <>
       <div className="mb-2">{message.content}</div>
-      <div className="w-full rounded-full h-2 overflow-hidden" style={{ background: 'var(--overlay-cream-light)' }}>
+      <div
+        className="w-full rounded-full h-2 overflow-hidden"
+        style={{ background: 'var(--overlay-cream-light)' }}
+      >
         <div
           className="h-2 rounded-full transition-all duration-300 shadow-sm"
           style={{ width: `${message.progress}%`, background: 'var(--text-cream-primary)' }}
@@ -57,9 +56,7 @@ function renderDimensionReportMessage(message: Message) {
         </span>
         <span className="font-medium text-blue-700">{message.dimensionName}</span>
       </div>
-      <div className="text-sm text-gray-700 whitespace-pre-wrap">
-        {message.content}
-      </div>
+      <div className="text-sm text-gray-700 whitespace-pre-wrap">{message.content}</div>
       {message.progress && (
         <div className="mt-2 text-xs text-gray-500">
           进度: {message.progress.current}/{message.progress.total} 字
@@ -94,10 +91,7 @@ export default function MessageContent(props: MessageContentProps) {
 
     case 'layer_completed':
       return isLayerCompletedMessage(message) ? (
-        <LayerReportMessage 
-          message={message} 
-          dimensionContents={dimensionContents}
-        />
+        <LayerReportMessage message={message} dimensionContents={dimensionContents} />
       ) : null;
 
     case 'dimension_report':

@@ -5,10 +5,7 @@
  * Helper functions for converting SSE events to frontend messages.
  */
 
-import type {
-  Message,
-  SSEEvent,
-} from './message';
+import type { Message, SSEEvent } from './message';
 import type { ProgressMessage, TextMessage } from './message-types';
 
 /**

@@ -41,10 +41,10 @@ export interface Checkpoint {
   description: string;
   timestamp: string;
   layer: number;
-  type?: 'key' | 'regular';  // 检查点类型：key=关键检查点，regular=普通检查点
-  phase?: string;            // 规划阶段枚举值
-  current_layer?: number;    // 当前层级
-  previous_layer?: number;   // 前一个层级
+  type?: 'key' | 'regular'; // 检查点类型：key=关键检查点，regular=普通检查点
+  phase?: string; // 规划阶段枚举值
+  current_layer?: number; // 当前层级
+  previous_layer?: number; // 前一个层级
 }
 
 // Revision Item - 修复项（区分目标维度和级联维度）
@@ -52,8 +52,8 @@ export interface RevisionItem {
   dimension: string;
   dimensionName: string;
   layer: number;
-  isTarget: boolean;                    // 是否是用户选择的目标维度
-  revisionType: string;                 // "目标维度修复" | "级联更新"
+  isTarget: boolean; // 是否是用户选择的目标维度
+  revisionType: string; // "目标维度修复" | "级联更新"
   status: 'pending' | 'processing' | 'completed' | 'failed';
   oldContent?: string;
   newContent?: string;
@@ -118,7 +118,15 @@ export interface ConversationState {
   messages: Message[];
   taskId: string | null;
   projectName: string | null;
-  status: 'idle' | 'collecting' | 'planning' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
+  status:
+    | 'idle'
+    | 'collecting'
+    | 'planning'
+    | 'paused'
+    | 'reviewing'
+    | 'revising'
+    | 'completed'
+    | 'failed';
   viewerVisible: boolean;
   referencedSection?: string;
 }

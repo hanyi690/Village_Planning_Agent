@@ -31,9 +31,7 @@ export default function PlanningReadyIndicator({
         <span className="text-2xl">📋</span>
         <div>
           <div className="font-semibold text-emerald-800">规划任务已准备</div>
-          <div className="text-sm text-emerald-700">
-            村庄：{projectName}
-          </div>
+          <div className="text-sm text-emerald-700">村庄：{projectName}</div>
         </div>
       </div>
       <motion.button

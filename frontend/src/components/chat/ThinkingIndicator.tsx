@@ -8,12 +8,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 
-export type ThinkingState =
-  | 'analyzing'
-  | 'generating'
-  | 'reviewing'
-  | 'processing'
-  | 'waiting';
+export type ThinkingState = 'analyzing' | 'generating' | 'reviewing' | 'processing' | 'waiting';
 
 export interface ThinkingIndicatorProps {
   state: ThinkingState;
@@ -134,15 +129,7 @@ function WaveDots({ size }: { size: 'sm' | 'md' | 'lg' }) {
 /**
  * 渐变图标组件
  */
-function GradientIcon({
-  icon,
-  gradient,
-  size,
-}: {
-  icon: string;
-  gradient: string;
-  size: string;
-}) {
+function GradientIcon({ icon, gradient, size }: { icon: string; gradient: string; size: string }) {
   return (
     <motion.div
       className={`relative ${size}`}
@@ -204,22 +191,12 @@ export default function ThinkingIndicator({
       className={`inline-flex items-center gap-3 rounded-2xl ${config.bgColor} ${sizeConfig.containerPadding} ${className}`}
     >
       {/* 渐变图标 */}
-      <GradientIcon
-        icon={config.icon}
-        gradient={config.gradient}
-        size={sizeConfig.iconSize}
-      />
+      <GradientIcon icon={config.icon} gradient={config.gradient} size={sizeConfig.iconSize} />
 
       {/* 状态文本 */}
       <div className="flex flex-col">
-        <div className={`font-medium text-gray-700 ${sizeConfig.textSize}`}>
-          {config.label}
-        </div>
-        {message && (
-          <div className={`text-gray-500 mt-0.5 ${sizeConfig.textSize}`}>
-            {message}
-          </div>
-        )}
+        <div className={`font-medium text-gray-700 ${sizeConfig.textSize}`}>{config.label}</div>
+        {message && <div className={`text-gray-500 mt-0.5 ${sizeConfig.textSize}`}>{message}</div>}
 
         {/* 进度条 */}
         {showProgress && (
@@ -290,9 +267,7 @@ export function WaveThinkingIndicator({
       className={`inline-flex items-center gap-3 ${className}`}
     >
       <WaveDots size="md" />
-      {message && (
-        <span className="text-sm text-gray-500">{message}</span>
-      )}
+      {message && <span className="text-sm text-gray-500">{message}</span>}
     </motion.div>
   );
 }

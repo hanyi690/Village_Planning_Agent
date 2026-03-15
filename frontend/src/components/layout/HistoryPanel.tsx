@@ -9,7 +9,17 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faHistory, faSearch, faSpinner, faInbox, faChevronRight, faClock, faTrash, faExclamationTriangle } from '@fortawesome/free-solid-svg-icons';
+import {
+  faTimes,
+  faHistory,
+  faSearch,
+  faSpinner,
+  faInbox,
+  faChevronRight,
+  faClock,
+  faTrash,
+  faExclamationTriangle,
+} from '@fortawesome/free-solid-svg-icons';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
 import { formatFullTimestamp } from '@/lib/utils';
 
@@ -40,14 +50,9 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, isDeleting }: DeleteCo
       >
         <div className="text-center">
           <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-100 flex items-center justify-center">
-            <FontAwesomeIcon
-              icon={faExclamationTriangle}
-              className="text-2xl text-red-500"
-            />
+            <FontAwesomeIcon icon={faExclamationTriangle} className="text-2xl text-red-500" />
           </div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">
-            确认删除
-          </h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-2">确认删除</h3>
           <p className="text-gray-500 text-sm mb-6">
             确定要删除此会话吗？此操作将删除会话记录、消息历史和相关数据，且无法恢复。
           </p>
@@ -89,7 +94,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
     loadHistoricalSession,
     deleteSession,
     deletingSessionId,
-    taskId
+    taskId,
   } = useUnifiedPlanningContext();
 
   const [mounted, setMounted] = useState(false);
@@ -106,7 +111,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     setMounted(true);
     document.body.style.overflow = 'hidden';
-    
+
     if (!hasLoadedRef.current) {
       hasLoadedRef.current = true;
       loadVillagesHistory();
@@ -118,9 +123,10 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
   }, [loadVillagesHistory]);
 
   const filteredVillages = useMemo(() => {
-    return villages.filter(v => 
-      v.display_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      v.name.toLowerCase().includes(searchTerm.toLowerCase())
+    return villages.filter(
+      (v) =>
+        v.display_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        v.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
   }, [villages, searchTerm]);
 
@@ -132,7 +138,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
 
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
-    
+
     const success = await deleteSession(deleteTarget.sessionId, deleteTarget.villageName);
     if (success) {
       setShowDeleteConfirm(false);
@@ -290,7 +296,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
                         village.sessions.map((session) => {
                           const isDeleting = deletingSessionId === session.session_id;
                           const isCurrentSession = taskId === session.session_id;
-                          
+
                           return (
                             <motion.div
                               key={session.session_id}
@@ -317,7 +323,9 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
                                   />
                                   {formatFullTimestamp(session.timestamp)}
                                   {isCurrentSession && (
-                                    <span className="text-xs text-violet-500 font-medium">当前</span>
+                                    <span className="text-xs text-violet-500 font-medium">
+                                      当前
+                                    </span>
                                   )}
                                 </span>
                                 <FontAwesomeIcon
@@ -328,7 +336,9 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
                               <motion.button
                                 whileHover={{ scale: 1.1 }}
                                 whileTap={{ scale: 0.9 }}
-                                onClick={(e) => handleDeleteClick(e, session.session_id, village.name)}
+                                onClick={(e) =>
+                                  handleDeleteClick(e, session.session_id, village.name)
+                                }
                                 disabled={isDeleting}
                                 className="w-8 h-8 flex items-center justify-center text-gray-300 hover:text-red-500 rounded-lg hover:bg-red-50 transition-colors disabled:cursor-not-allowed"
                                 title="删除会话"
@@ -343,9 +353,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
                           );
                         })
                       ) : (
-                        <div className="text-center text-gray-400 text-sm py-3">
-                          无会话记录
-                        </div>
+                        <div className="text-center text-gray-400 text-sm py-3">无会话记录</div>
                       )}
                     </div>
                   </motion.div>
@@ -358,10 +366,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
                 animate={{ opacity: 1, scale: 1 }}
                 className="text-center py-16"
               >
-                <FontAwesomeIcon
-                  icon={faInbox}
-                  className="text-5xl text-gray-200 mb-4"
-                />
+                <FontAwesomeIcon icon={faInbox} className="text-5xl text-gray-200 mb-4" />
                 <p className="text-gray-400">暂无历史记录</p>
               </motion.div>
             )}

@@ -1464,6 +1464,7 @@ async def _execute_graph_in_background(
                         layer = latest_revision.get("layer", 1)
                         new_content = latest_revision.get("new_content", "")
                         revision_timestamp = latest_revision.get("timestamp", datetime.now().isoformat())
+                        old_content = latest_revision.get("old_content", "")  # 获取修复前的内容
                         
                         # ✅ 去重：使用 dimension + timestamp 作为唯一标识
                         revision_key = f"{dim}_{revision_timestamp}"
@@ -1471,7 +1472,7 @@ async def _execute_graph_in_background(
                             logger.info(f"[Planning] [{session_id}] 跳过已发送的修订: {revision_key}")
                             continue
                         
-                        # ✅ 记录维度修订历史到数据库
+                        # ✅ 记录维度修订历史到数据库（包含 previous_content 用于前端显示修复前后对比）
                         try:
                             from backend.database.operations_async import create_dimension_revision_async
                             await create_dimension_revision_async(
@@ -1479,6 +1480,7 @@ async def _execute_graph_in_background(
                                 layer=layer,
                                 dimension_key=dim,
                                 content=new_content,
+                                previous_content=old_content,  # 新增：传入旧内容
                                 reason=latest_revision.get("revision_type", "用户修正"),
                                 created_by="revision_flow",
                             )
@@ -2395,14 +2397,14 @@ async def review_action(session_id: str, request: ReviewActionRequest):
             # 1. Checkpoint 是唯一数据源，不需要操作内存 initial_state
             # 2. 使用 aupdate_state 增量更新 Checkpoint
             # 3. _resume_graph_execution 从 Checkpoint 加载完整状态
-            
+
             session["status"] = TaskStatus.revising
 
             # 获取 checkpointer 和图实例
             checkpointer = await get_global_checkpointer()
             graph = create_village_planning_graph(checkpointer=checkpointer)
             config = {"configurable": {"thread_id": session_id}}
-            
+
             # ✅ 使用 aupdate_state 增量更新 Checkpoint（不覆盖现有 reports）
             await graph.aupdate_state(config, {
                 "need_revision": True,
@@ -2430,10 +2432,10 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                 )
 
             logger.info(f"[Planning API] Review rejected with feedback, session {session_id}")
-            
+
             # ✅ 优化：后台执行 _resume_graph_execution，立即返回响应
             asyncio.create_task(_resume_graph_execution(session_id))
-            
+
             return {
                 "message": "rejected",
                 "session_id": session_id,

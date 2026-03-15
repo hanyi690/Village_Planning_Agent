@@ -173,8 +173,8 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
               whileTap={{ scale: 0.9 }}
               className={`absolute right-3 top-3 z-10 w-8 h-8 flex items-center justify-center rounded-full cursor-pointer transition-colors ${
                 isUploading
-                  ? 'text-emerald-400 cursor-wait'
-                  : 'text-gray-400 hover:text-emerald-500 hover:bg-emerald-50'
+                  ? 'text-cyan-400 cursor-wait'
+                  : 'text-gray-400 hover:text-cyan-500 hover:bg-cyan-50'
               }`}
               title="上传文件"
             >
@@ -191,7 +191,7 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
               onFocus={() => setFocusedField(id)}
               onBlur={() => setFocusedField(null)}
               placeholder={placeholder}
-              className="w-full px-4 py-3 pr-12 bg-emerald-50/30 border-0 rounded-2xl text-gray-900 placeholder-gray-500 resize-none transition-all duration-300 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:shadow-[0_0_0_4px_rgba(16,185,129,0.1)]"
+              className="w-full px-4 py-3 pr-12 bg-cyan-50/30 border-0 rounded-2xl text-gray-900 placeholder-gray-500 resize-none transition-all duration-300 focus:bg-white focus:ring-2 focus:ring-cyan-500/20 focus:shadow-[0_0_0_4px_rgba(8,145,178,0.1)]"
             />
           ) : (
             <input
@@ -202,14 +202,14 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
               onFocus={() => setFocusedField(id)}
               onBlur={() => setFocusedField(null)}
               placeholder={placeholder}
-              className="w-full px-4 py-3.5 bg-emerald-50/30 border-0 rounded-2xl text-gray-900 placeholder-gray-500 transition-all duration-300 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:shadow-[0_0_0_4px_rgba(16,185,129,0.1)]"
+              className="w-full px-4 py-3.5 bg-cyan-50/30 border-0 rounded-2xl text-gray-900 placeholder-gray-500 transition-all duration-300 focus:bg-white focus:ring-2 focus:ring-cyan-500/20 focus:shadow-[0_0_0_4px_rgba(8,145,178,0.1)]"
             />
           )}
           {/* 底部渐变线 */}
           <div
             className={`absolute bottom-0 left-4 right-4 h-0.5 rounded-full transition-all duration-300 ${
               isFocused
-                ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 opacity-100'
+                ? 'bg-gradient-to-r from-cyan-500 via-teal-500 to-emerald-500 opacity-100'
                 : 'opacity-0'
             }`}
           />
@@ -221,19 +221,19 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
             {uploadedFiles.map((file, index) => (
               <span
                 key={index}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 text-xs rounded-full border border-emerald-200"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-cyan-50 text-cyan-700 text-xs rounded-full border border-cyan-200"
               >
-                <i className="fas fa-file-alt text-emerald-500" />
+                <i className="fas fa-file-alt text-cyan-500" />
                 <span className="max-w-[120px] truncate" title={file.filename}>
                   {file.filename}
                 </span>
                 <button
                   type="button"
                   onClick={() => fileType && removeFile(fileType, index)}
-                  className="ml-1 w-4 h-4 flex items-center justify-center rounded-full hover:bg-emerald-200 transition-colors"
+                  className="ml-1 w-4 h-4 flex items-center justify-center rounded-full hover:bg-cyan-200 transition-colors"
                   title="移除文件"
                 >
-                  <i className="fas fa-times text-[10px] text-emerald-600" />
+                  <i className="fas fa-times text-[10px] text-cyan-600" />
                 </button>
               </span>
             ))}
@@ -244,7 +244,7 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
   };
 
   return (
-    <div className="w-full min-h-[80vh] flex items-center justify-center p-4 bg-gradient-to-b from-emerald-50/50 to-white">
+    <div className="w-full min-h-[80vh] flex items-center justify-center p-4 bg-gradient-to-b from-cyan-50/50 to-white">
       <motion.form
         onSubmit={handleSubmit}
         variants={containerVariants}
@@ -255,7 +255,7 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
         {/* 渐变欢迎标题 */}
         <motion.div variants={itemVariants} className="text-center mb-8">
           <h1 className="text-3xl sm:text-4xl font-bold mb-3">
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-emerald-600 via-teal-500 to-cyan-600">
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-600 via-teal-500 to-emerald-600">
               规划新村庄
             </span>
           </h1>
@@ -267,7 +267,7 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
         {/* 表单卡片 */}
         <motion.div
           variants={itemVariants}
-          className="bg-white rounded-3xl shadow-xl shadow-gray-200/50 border border-gray-100 p-6 sm:p-8"
+          className="bg-white rounded-2xl shadow-xl shadow-cyan-100/50 border border-cyan-100 p-6 sm:p-8"
         >
           {/* 隐藏的文件输入元素 */}
           <input
@@ -336,10 +336,10 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
               type="submit"
               whileHover={{ scale: 1.02, y: -2 }}
               whileTap={{ scale: 0.98 }}
-              className="relative px-8 py-3.5 rounded-full font-semibold text-white overflow-hidden group"
+              className="relative px-8 py-3.5 rounded-xl font-semibold text-white overflow-hidden group"
               style={{
-                background: 'linear-gradient(135deg, #10b981 0%, #14b8a6 50%, #0891b2 100%)',
-                boxShadow: '0 4px 20px rgba(16, 185,129, 0.4)',
+                background: 'linear-gradient(135deg, #0891B2 0%, #22D3EE 100%)',
+                boxShadow: '0 4px 20px rgba(8, 145, 178, 0.3)',
               }}
             >
               <span className="relative z-10 flex items-center gap-2">
@@ -353,10 +353,7 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
         </motion.div>
 
         {/* 底部提示 */}
-        <motion.p
-          variants={itemVariants}
-          className="text-center text-gray-400 text-xs mt-6"
-        >
+        <motion.p variants={itemVariants} className="text-center text-gray-400 text-xs mt-6">
           AI 将基于您的输入生成专业的村庄规划方案
         </motion.p>
       </motion.form>

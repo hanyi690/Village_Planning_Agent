@@ -38,9 +38,7 @@ describe('useStreamingText', () => {
     });
 
     it('should return full content when disabled', () => {
-      const { result } = renderHook(() =>
-        useStreamingText('Hello World', { enabled: false })
-      );
+      const { result } = renderHook(() => useStreamingText('Hello World', { enabled: false }));
       expect(result.current.displayedContent).toBe('Hello World');
     });
   });
@@ -142,9 +140,7 @@ describe('useStreamingText', () => {
   describe('onComplete callback', () => {
     it('should have onComplete option', () => {
       const onComplete = jest.fn();
-      const { result } = renderHook(() =>
-        useStreamingText('Hello', { onComplete })
-      );
+      const { result } = renderHook(() => useStreamingText('Hello', { onComplete }));
 
       // onComplete is registered but may not be called due to test environment
       expect(result.current.skipToEnd).toBeDefined();

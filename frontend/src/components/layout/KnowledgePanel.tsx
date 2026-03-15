@@ -18,7 +18,7 @@ import {
   faExclamationTriangle,
   faSync,
   faFileAlt,
-  faCloudUploadAlt
+  faCloudUploadAlt,
 } from '@fortawesome/free-solid-svg-icons';
 import { knowledgeApi, KnowledgeDocument, KnowledgeStats } from '@/lib/api';
 
@@ -52,7 +52,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
         knowledgeApi.listDocuments(),
         knowledgeApi.getStats(),
       ]);
-      setDocuments(docsData.map(d => ({ ...d, uiStatus: 'ready' as DocumentStatus })));
+      setDocuments(docsData.map((d) => ({ ...d, uiStatus: 'ready' as DocumentStatus })));
       setStats(statsData);
     } catch (err) {
       console.error('[KnowledgePanel] Failed to load data:', err);
@@ -87,23 +87,19 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
           chunk_count: 0,
           uiStatus: 'processing',
         };
-        setDocuments(prev => [tempDoc, ...prev]);
+        setDocuments((prev) => [tempDoc, ...prev]);
 
         try {
           await knowledgeApi.addDocument(file, 'policies');
-          setDocuments(prev => 
-            prev.map(d => 
-              d.source === file.name 
-                ? { ...d, uiStatus: 'ready' as DocumentStatus }
-                : d
+          setDocuments((prev) =>
+            prev.map((d) =>
+              d.source === file.name ? { ...d, uiStatus: 'ready' as DocumentStatus } : d
             )
           );
         } catch (err) {
-          setDocuments(prev => 
-            prev.map(d => 
-              d.source === file.name 
-                ? { ...d, uiStatus: 'error' as DocumentStatus }
-                : d
+          setDocuments((prev) =>
+            prev.map((d) =>
+              d.source === file.name ? { ...d, uiStatus: 'error' as DocumentStatus } : d
             )
           );
           console.error('[KnowledgePanel] Upload failed:', err);
@@ -125,8 +121,8 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
 
     try {
       await knowledgeApi.deleteDocument(filename);
-      setDocuments(prev => prev.filter(d => d.source !== filename));
-      
+      setDocuments((prev) => prev.filter((d) => d.source !== filename));
+
       const newStats = await knowledgeApi.getStats();
       setStats(newStats);
     } catch (err) {
@@ -300,8 +296,8 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
         <motion.div
           whileHover={{ scale: 1.01 }}
           className={`mx-5 mt-4 p-6 border-2 border-dashed rounded-2xl text-center transition-all duration-300 ${
-            dragActive 
-              ? 'border-violet-400 bg-violet-50/50 scale-[1.02]' 
+            dragActive
+              ? 'border-violet-400 bg-violet-50/50 scale-[1.02]'
               : 'border-gray-200 hover:border-violet-300 hover:bg-violet-50/30'
           }`}
           onDragEnter={handleDrag}
@@ -321,14 +317,12 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
             animate={uploading ? { rotate: 360 } : {}}
             transition={{ duration: 1, repeat: uploading ? Infinity : 0, ease: 'linear' }}
           >
-            <FontAwesomeIcon 
-              icon={uploading ? faSpinner : faCloudUploadAlt} 
+            <FontAwesomeIcon
+              icon={uploading ? faSpinner : faCloudUploadAlt}
               className="text-4xl text-gray-300 mb-3"
             />
           </motion.div>
-          <p className="text-gray-500 mb-3">
-            {uploading ? '正在上传...' : '拖拽文件到此处，或'}
-          </p>
+          <p className="text-gray-500 mb-3">{uploading ? '正在上传...' : '拖拽文件到此处，或'}</p>
           {!uploading && (
             <motion.button
               whileHover={{ scale: 1.05 }}
@@ -343,9 +337,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
               选择文件
             </motion.button>
           )}
-          <p className="text-xs text-gray-400 mt-3">
-            支持 PDF、Word、PPT、Markdown 格式
-          </p>
+          <p className="text-xs text-gray-400 mt-3">支持 PDF、Word、PPT、Markdown 格式</p>
         </motion.div>
 
         {/* Error Message */}
@@ -411,7 +403,10 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
                     className="flex items-center justify-between p-4 bg-gray-50/80 rounded-xl border border-gray-100 hover:border-violet-200 hover:bg-white transition-all group"
                   >
                     <div className="flex items-center gap-3 flex-1 min-w-0">
-                      <FontAwesomeIcon icon={faFileAlt} className="text-gray-300 group-hover:text-violet-400 transition-colors" />
+                      <FontAwesomeIcon
+                        icon={faFileAlt}
+                        className="text-gray-300 group-hover:text-violet-400 transition-colors"
+                      />
                       <div className="min-w-0">
                         <p className="text-sm font-medium text-gray-800 truncate">{doc.source}</p>
                         <p className="text-xs text-gray-400">

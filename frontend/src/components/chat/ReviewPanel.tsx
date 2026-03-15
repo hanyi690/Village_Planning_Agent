@@ -10,7 +10,13 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faCheck, faEdit, faTimes, faPaperPlane, faSpinner } from '@fortawesome/free-solid-svg-icons';
+import {
+  faCheck,
+  faEdit,
+  faTimes,
+  faPaperPlane,
+  faSpinner,
+} from '@fortawesome/free-solid-svg-icons';
 
 interface ReviewPanelProps {
   layer: number;
@@ -53,7 +59,7 @@ export default function ReviewPanel({
 
   const handleSubmitReject = async () => {
     if (!feedback.trim() || !onReject) return;
-    
+
     setIsRejecting(true);
     try {
       await onReject(feedback.trim());
@@ -139,9 +145,7 @@ export default function ReviewPanel({
             <div className="px-4 pb-4">
               <div className="bg-white rounded-xl border border-amber-200 p-3">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-medium text-amber-700">
-                    📝 输入修改意见
-                  </span>
+                  <span className="text-xs font-medium text-amber-700">📝 输入修改意见</span>
                   <button
                     onClick={handleCancelReject}
                     className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -149,7 +153,7 @@ export default function ReviewPanel({
                     <FontAwesomeIcon icon={faTimes} className="text-xs" />
                   </button>
                 </div>
-                
+
                 <textarea
                   value={feedback}
                   onChange={(e) => setFeedback(e.target.value)}
@@ -159,11 +163,9 @@ export default function ReviewPanel({
                   rows={3}
                   autoFocus
                 />
-                
+
                 <div className="flex items-center justify-between mt-2">
-                  <span className="text-xs text-gray-400">
-                    或在下方聊天框选择维度后发送
-                  </span>
+                  <span className="text-xs text-gray-400">或在下方聊天框选择维度后发送</span>
                   <button
                     onClick={handleSubmitReject}
                     disabled={!feedback.trim() || isRejecting}

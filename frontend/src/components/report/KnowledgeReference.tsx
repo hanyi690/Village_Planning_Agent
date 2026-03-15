@@ -23,7 +23,7 @@ interface KnowledgeReferenceProps {
 
 export default function KnowledgeReference({
   references,
-  className = ''
+  className = '',
 }: KnowledgeReferenceProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [viewingOriginal, setViewingOriginal] = useState<string | null>(null);
@@ -64,7 +64,9 @@ export default function KnowledgeReference({
   };
 
   return (
-    <div className={`knowledge-references bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4 ${className}`}>
+    <div
+      className={`knowledge-references bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4 ${className}`}
+    >
       <div
         className="flex items-center justify-between cursor-pointer"
         onClick={() => setIsExpanded(!isExpanded)}
@@ -89,19 +91,12 @@ export default function KnowledgeReference({
           </span>
         </div>
         <svg
-          className={`w-5 h-5 text-blue-600 transition-transform ${
-            isExpanded ? 'rotate-180' : ''
-          }`}
+          className={`w-5 h-5 text-blue-600 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
         >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M19 9l-7 7-7-7"
-          />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </div>
 
@@ -115,9 +110,7 @@ export default function KnowledgeReference({
               <div className="flex items-start gap-2">
                 <span className="text-blue-600 font-medium mt-0.5">•</span>
                 <div className="flex-1">
-                  <div className="font-medium text-gray-900 mb-1">
-                    {ref.source}
-                  </div>
+                  <div className="font-medium text-gray-900 mb-1">{ref.source}</div>
                   {ref.chapter && (
                     <div className="text-xs text-gray-600 mb-1">
                       章节: {ref.chapter}
@@ -126,7 +119,8 @@ export default function KnowledgeReference({
                   )}
                   {ref.excerpt && (
                     <div className="text-xs text-gray-600 italic bg-gray-50 p-2 rounded">
-                      &quot;{ref.excerpt.substring(0, 100)}{ref.excerpt.length > 100 ? '...' : ''}&quot;
+                      &quot;{ref.excerpt.substring(0, 100)}
+                      {ref.excerpt.length > 100 ? '...' : ''}&quot;
                     </div>
                   )}
                 </div>

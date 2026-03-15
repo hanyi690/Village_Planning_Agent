@@ -104,10 +104,7 @@ export default function DimensionSection({
           </div>
 
           {/* Chevron icon */}
-          <motion.div
-            animate={{ rotate: expanded ? 180 : 0 }}
-            transition={{ duration: 0.2 }}
-          >
+          <motion.div animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
             <i className="fas fa-chevron-down text-gray-400 text-xs" />
           </motion.div>
         </div>
@@ -128,10 +125,7 @@ export default function DimensionSection({
               {subsections.length > 0 ? (
                 <div className="space-y-4">
                   {subsections.map((subsection, index) => (
-                    <div
-                      key={index}
-                      className="pl-4 border-l-2 border-emerald-200"
-                    >
+                    <div key={index} className="pl-4 border-l-2 border-emerald-200">
                       <div className="flex items-center gap-2 text-sm font-medium text-emerald-700 mb-2">
                         <i className="fas fa-caret-right text-xs text-emerald-400" />
                         {subsection.title}

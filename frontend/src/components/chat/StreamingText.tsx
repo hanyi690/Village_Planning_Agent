@@ -59,20 +59,13 @@ export default function StreamingText({
 }: StreamingTextProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const {
-    displayedContent,
-    isStreaming,
-    isPaused,
-    progress,
-    pause,
-    resume,
-    skipToEnd,
-  } = useStreamingText(content, {
-    speed,
-    batchSize,
-    enabled,
-    onComplete,
-  });
+  const { displayedContent, isStreaming, isPaused, progress, pause, resume, skipToEnd } =
+    useStreamingText(content, {
+      speed,
+      batchSize,
+      enabled,
+      onComplete,
+    });
 
   // 自动滚动到底部
   useEffect(() => {
@@ -86,7 +79,19 @@ export default function StreamingText({
 
   // 如果提供了自定义渲染函数，使用它
   if (children) {
-    return <>{children({ text: displayedContent, isStreaming, isPaused, progress, pause, resume, skipToEnd })}</>;
+    return (
+      <>
+        {children({
+          text: displayedContent,
+          isStreaming,
+          isPaused,
+          progress,
+          pause,
+          resume,
+          skipToEnd,
+        })}
+      </>
+    );
   }
 
   // 默认渲染
@@ -99,9 +104,7 @@ export default function StreamingText({
       }}
     >
       {/* 文本内容 */}
-      <span className="streaming-text-content">
-        {displayedContent}
-      </span>
+      <span className="streaming-text-content">{displayedContent}</span>
 
       {/* 打字光标效果 */}
       {isStreaming && !isPaused && (
@@ -148,7 +151,8 @@ export default function StreamingText({
       {/* 内联样式 */}
       <style jsx>{`
         @keyframes blink {
-          0%, 100% {
+          0%,
+          100% {
             opacity: 1;
           }
           50% {
@@ -169,27 +173,18 @@ export default function StreamingText({
  * 快捷组件：带控制按钮的流式文本
  */
 export function StreamingTextWithControls(props: StreamingTextProps) {
-  const {
-    displayedContent,
-    isStreaming,
-    isPaused,
-    progress,
-    pause,
-    resume,
-    skipToEnd,
-  } = useStreamingText(props.content, {
-    speed: props.speed,
-    batchSize: props.batchSize,
-    enabled: props.enabled,
-    onComplete: props.onComplete,
-  });
+  const { displayedContent, isStreaming, isPaused, progress, pause, resume, skipToEnd } =
+    useStreamingText(props.content, {
+      speed: props.speed,
+      batchSize: props.batchSize,
+      enabled: props.enabled,
+      onComplete: props.onComplete,
+    });
 
   return (
     <div className="streaming-text-with-controls">
       {/* 流式文本 */}
-      <div className="streaming-text-content mb-2">
-        {displayedContent}
-      </div>
+      <div className="streaming-text-content mb-2">{displayedContent}</div>
 
       {/* 控制按钮 */}
       {isStreaming && (

@@ -1,9 +1,12 @@
 /* ============================================
-   Global Styles - 乡村智能规划大模型 (UI/UX Pro Max 版)
-   Gemini Style - Tailwind CSS v4
+   Global Styles - 村庄规划智能体 (UI/UX Pro Max 优化版)
+   Minimal Single Column + Soft UI Evolution
    ============================================ */
 
-@import "tailwindcss";
+/* 引入 Plus Jakarta Sans 字体 - UI/UX Pro Max 推荐 */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
+@import 'tailwindcss';
 
 /* Tailwind v4 内容路径配置 */
 @source "../components/**/*.{js,ts,jsx,tsx}";
@@ -11,54 +14,87 @@
 @source "../contexts/**/*.{js,ts,jsx,tsx}";
 @source "../hooks/**/*.{js,ts,jsx,tsx}";
 
-/* Tailwind v4 主题扩展 */
+/* Tailwind v4 主题扩展 - 清新青色主题 */
 @theme {
-  /* 森系自然渐变色 - Aurora Green */
+  /* 清新青色主题 - UI/UX Pro Max 推荐 */
+  --color-primary: #0891b2;
+  --color-primary-light: #22d3ee;
+  --color-primary-dark: #164e63;
+  --color-cta: #22c55e;
+  --color-background: #ecfeff;
+
+  /* 森系自然渐变色 - Aurora Green (保留兼容) */
   --color-ai-emerald: #10b981;
   --color-ai-teal: #14b8a6;
   --color-ai-cyan: #0891b2;
   --color-ai-mint: #34d399;
   --color-ai-forest: #064e3b;
-  
-  /* 动画时长 */
+
+  /* 动画时长 - 统一标准 */
   --animate-duration-fast: 150ms;
-  --animate-duration-normal: 300ms;
+  --animate-duration-normal: 200ms;
+  --animate-duration-slow: 300ms;
 }
 
 :root {
   /* ============================================
-     专业色彩系统 - 森系绿色主题 (Aurora Green)
+     专业色彩系统 - 清新青色主题 (UI/UX Pro Max 推荐)
      ============================================ */
 
-  /* 森系绿色主题 - 祖母绿/苔藓绿系列 */
-  --primary-green: #059669;       /* emerald-600 - 主要绿色 */
+  /* Primary 主色 - 清新青色 */
+  --primary: #0891b2; /* cyan-600 - 主色调 */
+  --primary-hover: #0e7490; /* cyan-700 - 悬停状态 */
+  --primary-light: #ecfeff; /* cyan-50 - 浅青色背景 */
+  --primary-lighter: #f0fdfa; /* cyan-100 - 更浅的背景 */
+  --primary-dark: #164e63; /* cyan-900 - 深青色文本 */
+
+  /* Secondary 次要色 - 亮青色 */
+  --secondary: #22d3ee; /* cyan-400 */
+  --secondary-hover: #06b6d4; /* cyan-500 */
+
+  /* CTA 行动按钮 - 清洁绿色 */
+  --cta: #22c55e; /* green-500 */
+  --cta-hover: #16a34a; /* green-600 */
+
+  /* Background 背景色 */
+  --bg-primary: #ffffff; /* 纯白背景 */
+  --bg-secondary: #ecfeff; /* 极淡青色背景 */
+  --bg-tertiary: #f0fdfa; /* 青色 50 */
+
+  /* Text 文本色 */
+  --text-primary: #164e63; /* cyan-900 - 主文本 */
+  --text-secondary: #0891b2; /* cyan-600 - 次要文本 */
+  --text-muted: #64748b; /* slate-500 - 弱化文本 */
+
+  /* 森系绿色主题 - 祖母绿/苔藓绿系列 (保留兼容) */
+  --primary-green: #059669; /* emerald-600 - 主要绿色 */
   --primary-green-hover: #047857; /* emerald-700 - 悬停状态 */
   --primary-green-light: #d1fae5; /* emerald-100 - 浅绿色背景 */
   --primary-green-lighter: #ecfdf5; /* emerald-50 - 更浅的背景 */
-  --primary-green-dark: #064e3b;  /* emerald-900 - 深苔藓绿 */
+  --primary-green-dark: #064e3b; /* emerald-900 - 深苔藓绿 */
 
   /* ============================================
-     森系自然风格 - Aurora Green 渐变
+     渐变系统 - 减少过度渐变，使用纯色提升专业感
      ============================================ */
 
-  /* AI 主题渐变 - 用于思考状态、AI 标识等 */
-  --ai-gradient-primary: linear-gradient(135deg, #10b981 0%, #14b8a6 50%, #0891b2 100%);
-  --ai-gradient-secondary: linear-gradient(135deg, #34d399 0%, #2dd4bf 50%, #22d3ee 100%);
-  --ai-gradient-subtle: linear-gradient(135deg, #ecfdf5 0%, #f0fdfa 50%, #ecfeff 100%);
+  /* AI 状态渐变 - 保留但简化 */
+  --ai-gradient-primary: linear-gradient(135deg, #0891b2 0%, #22d3ee 100%);
+  --ai-gradient-secondary: linear-gradient(135deg, #34d399 0%, #22c55e 100%);
+  --ai-gradient-subtle: linear-gradient(135deg, #ecfeff 0%, #f0fdfa 100%);
 
   /* AI 状态色 - 用于 ThinkingIndicator */
-  --ai-analyzing: #14b8a6;     /* teal-500 - 分析中 */
-  --ai-generating: #10b981;    /* emerald-500 - 生成中 */
-  --ai-reviewing: #f59e0b;     /* amber-500 - 审查中 */
-  --ai-processing: #0891b2;    /* cyan-600 - 处理中 */
+  --ai-analyzing: #0891b2; /* cyan-600 - 分析中 */
+  --ai-generating: #22c55e; /* green-500 - 生成中 */
+  --ai-reviewing: #f59e0b; /* amber-500 - 审查中 */
+  --ai-processing: #06b6d4; /* cyan-500 - 处理中 */
 
   /* AI 背景色 - 浅色系 */
-  --ai-bg-analyzing: #f0fdfa;  /* teal-50 */
-  --ai-bg-generating: #ecfdf5; /* emerald-50 */
-  --ai-bg-reviewing: #fffbeb;  /* amber-50 */
+  --ai-bg-analyzing: #f0fdfa; /* cyan-50 */
+  --ai-bg-generating: #f0fdf4; /* green-50 */
+  --ai-bg-reviewing: #fffbeb; /* amber-50 */
   --ai-bg-processing: #ecfeff; /* cyan-50 */
 
-  /* 森系配色方案 - 祖母绿主题 */
+  /* 森系配色方案 - 祖母绿主题 (保留兼容) */
   --primary-50: #ecfdf5;
   --primary-100: #d1fae5;
   --primary-200: #a7f3d0;
@@ -71,31 +107,32 @@
   --primary-900: #064e3b; /* emerald-900 */
 
   /* 添加缺失的变量定义 */
-  --secondary-green: #047857;    /* 次要绿色 - emerald-700 悬停状态 */
-  --light-green: #6ee7b7;        /* 浅绿色 - emerald-300 */
+  --secondary-green: #047857; /* 次要绿色 - emerald-700 悬停状态 */
+  --light-green: #6ee7b7; /* 浅绿色 - emerald-300 */
 
   /* Cream text colors - 替换白色 */
-  --text-cream-primary: #FFFEF8;
-  --text-cream-secondary: #F5F3EE;
-  --text-cream-ivory: #FAF9F6;
+  --text-cream-primary: #fffef8;
+  --text-cream-secondary: #f5f3ee;
+  --text-cream-ivory: #faf9f6;
   --overlay-cream-light: rgba(255, 254, 248, 0.25);
 
   /* 强调色 */
   --accent-emerald: #10b981;
   --accent-teal: #14b8a6;
+  --accent-cyan: #0891b2; /* 新增：清新青色强调 */
   --accent-lime: #84cc16;
 
-  /* 中性色系统 - 统一标准 */
-  --gray-50: #f9fafb;
-  --gray-100: #f3f4f6;
-  --gray-200: #e5e7eb;
-  --gray-300: #d1d5db;
-  --gray-400: #9ca3af;
-  --gray-500: #6b7280;
-  --gray-600: #4b5563;
-  --gray-700: #374151;
-  --gray-800: #1f2937;
-  --gray-900: #111827;
+  /* 中性色系统 - 统一标准 (slate 色系，更现代) */
+  --gray-50: #f8fafc; /* slate-50 */
+  --gray-100: #f1f5f9; /* slate-100 */
+  --gray-200: #e2e8f0; /* slate-200 */
+  --gray-300: #cbd5e1; /* slate-300 */
+  --gray-400: #94a3b8; /* slate-400 */
+  --gray-500: #64748b; /* slate-500 */
+  --gray-600: #475569; /* slate-600 */
+  --gray-700: #334155; /* slate-700 */
+  --gray-800: #1e293b; /* slate-800 */
+  --gray-900: #0f172a; /* slate-900 */
 
   /* 玻璃态 */
   --glass-bg: rgba(255, 255, 255, 0.7);
@@ -110,33 +147,33 @@
   /* 现代化中性色方案 - 用于导航栏和框架 (DeepSeek/Gemini风格) */
   --nav-bg: #ffffff;
   --nav-border: #e5e7eb;
-  --nav-text-active: #111827;  /* gray-900 */
-  --nav-text-inactive: #6b7280;  /* gray-500 */
-  --nav-text-hover: #374151;  /* gray-700 */
+  --nav-text-active: #111827; /* gray-900 */
+  --nav-text-inactive: #6b7280; /* gray-500 */
+  --nav-text-hover: #374151; /* gray-700 */
 
-  /* 输入框中性色 */
+  /* 输入框中性色 - 更新为 slate 色系 */
   --input-bg: #ffffff;
-  --input-border: #d1d5db;  /* gray-300 */
-  --input-border-hover: #9ca3af;  /* gray-400 */
-  --input-placeholder: #6b7280;  /* gray-500 */
+  --input-border: #cbd5e1; /* slate-300 */
+  --input-border-hover: #94a3b8; /* slate-400 */
+  --input-placeholder: #64748b; /* slate-500 */
 
-  /* 边框 - 深色 */
-  --border-color: #e5e7eb; /* gray-200 */
-  --border-color-hover: #d1d5db; /* gray-300 */
+  /* 边框 - 更新为 slate 色系 */
+  --border-color: #e2e8f0; /* slate-200 */
+  --border-color-hover: #cbd5e1; /* slate-300 */
 
-  /* 阴影 - 多层次深度 */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-card: 0 2px 6px rgba(0, 0, 0, 0.03);
-  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.15);
-  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.2);
-  --shadow-glow: 0 0 20px rgba(5, 150, 105, 0.4); /* 使用 emerald-600 */
+  /* 阴影 - Soft UI Evolution，更精细的多层阴影 */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  --shadow-glow: 0 0 20px rgba(8, 145, 178, 0.3); /* 使用 cyan-600 */
 
-  /* 圆角 - 统一标准 */
-  --border-radius-sm: 8px;       /* 小圆角 - 用于按钮、标签 */
-  --border-radius: 12px;         /* 标准圆角 - 用于卡片、输入框 */
-  --border-radius-lg: 16px;      /* 大圆角 - 用于模态框 */
-  --border-radius-xl: 24px;      /* 超大圆角 - 仅用于特殊元素 */
+  /* 圆角 - 统一标准，减少随意性 */
+  --border-radius-sm: 6px; /* 小圆角 - 用于按钮、标签 */
+  --border-radius: 10px; /* 标准圆角 - 用于卡片、输入框 */
+  --border-radius-lg: 14px; /* 大圆角 - 用于模态框 */
+  --border-radius-xl: 20px; /* 超大圆角 - 仅用于特殊元素 */
 
   /* 间距 */
   --spacing-xs: 8px;
@@ -145,18 +182,27 @@
   --spacing-lg: 32px;
   --spacing-xl: 48px;
 
-  /* 过渡动画 - 流畅 */
-  --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-slow: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  /* 过渡动画 - 统一标准，现代化动画时长 */
+  --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-fast: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Bootstrap 5 already handles box-sizing, so we don't need universal selector */
 
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  background: var(--gray-50);
-  color: var(--gray-900);
+  font-family:
+    'Plus Jakarta Sans',
+    'Inter',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Microsoft YaHei',
+    sans-serif;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -170,67 +216,97 @@ body {
 /* text-white 类将使用 Tailwind 默认的白色 #ffffff */
 
 /* ============================================
-   Typography
+   Typography - 使用 Plus Jakarta Sans 字体
    ============================================ */
 
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   font-weight: 600;
-  color: var(--primary-green);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
 }
 
 a {
-  color: var(--primary-green);
+  color: var(--primary);
   text-decoration: none;
-  transition: var(--transition);
+  transition: var(--transition-fast);
 }
 
 a:hover {
-  color: var(--secondary-green);
+  color: var(--primary-hover);
 }
 
 /* ============================================
    Buttons - 只保留2种样式
    ============================================ */
 
-/* 主按钮 - 绿色渐变 */
+/* 主按钮 - 清新青色 */
 .btn-primary {
-  background: linear-gradient(135deg, var(--primary-green), var(--secondary-green));
-  color: var(--text-cream-primary);
+  background: var(--primary);
+  color: white;
   border: none;
-  padding: 0.75rem 1.5rem;
+  padding: 0.625rem 1.25rem;
   border-radius: var(--border-radius);
-  font-weight: 600;
-  box-shadow: 0 4px 12px rgba(46, 125, 50, 0.3);
-  transition: var(--transition);
+  font-weight: 500;
+  font-size: 0.875rem;
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition-fast);
   cursor: pointer;
 }
 
 .btn-primary:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(46, 125, 50, 0.4);
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
 }
 
 .btn-primary:active {
   transform: translateY(0);
 }
 
-/* 描边按钮 - 绿色边框 */
+/* 描边按钮 - 清新青色边框 */
 .btn-outline-primary {
-  background: white;
-  color: var(--primary-green);
-  border: 2px solid var(--primary-green);
-  padding: 0.75rem 1.5rem;
+  background: transparent;
+  color: var(--primary);
+  border: 1.5px solid var(--primary);
+  padding: 0.625rem 1.25rem;
   border-radius: var(--border-radius);
-  font-weight: 600;
-  transition: var(--transition);
+  font-weight: 500;
+  font-size: 0.875rem;
+  transition: var(--transition-fast);
   cursor: pointer;
 }
 
 .btn-outline-primary:hover {
-  background: var(--primary-green);
-  color: var(--text-cream-primary);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(46, 125, 50, 0.2);
+  background: var(--primary-light);
+  border-color: var(--primary-hover);
+  color: var(--primary-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* CTA 按钮 - 行动按钮（绿色） */
+.btn-cta {
+  background: var(--cta);
+  color: white;
+  border: none;
+  padding: 0.625rem 1.25rem;
+  border-radius: var(--border-radius);
+  font-weight: 500;
+  font-size: 0.875rem;
+  box-shadow: var(--shadow-sm);
+  transition: var(--transition-fast);
+  cursor: pointer;
+}
+
+.btn-cta:hover {
+  background: var(--cta-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
 }
 
 /* ============================================
@@ -239,16 +315,16 @@ a:hover {
 
 .card {
   background: white;
-  border: 1px solid var(--light-green);
+  border: 1px solid var(--border-color);
   border-radius: var(--border-radius);
   box-shadow: var(--shadow-card);
-  transition: var(--transition);
+  transition: var(--transition-fast);
 }
 
 .card:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
   box-shadow: var(--shadow-md);
-  border-color: var(--primary-green);
+  border-color: var(--primary);
 }
 
 /* ============================================
@@ -288,11 +364,21 @@ a:hover {
    ============================================ */
 
 /* 图标基础尺寸 */
-.icon-xs { font-size: 0.75rem; }   /* 12px */
-.icon-sm { font-size: 0.875rem; }  /* 14px */
-.icon-base { font-size: 1rem; }    /* 16px */
-.icon-lg { font-size: 1.125rem; }  /* 18px */
-.icon-xl { font-size: 1.25rem; }   /* 20px */
+.icon-xs {
+  font-size: 0.75rem;
+} /* 12px */
+.icon-sm {
+  font-size: 0.875rem;
+} /* 14px */
+.icon-base {
+  font-size: 1rem;
+} /* 16px */
+.icon-lg {
+  font-size: 1.125rem;
+} /* 18px */
+.icon-xl {
+  font-size: 1.25rem;
+} /* 20px */
 
 /* 图标圆圈 */
 .icon-circle {
@@ -306,25 +392,25 @@ a:hover {
 }
 
 .icon-circle-xs {
-  width: 1.5rem;   /* 24px */
+  width: 1.5rem; /* 24px */
   height: 1.5rem;
-  font-size: 0.75rem;  /* 12px */
+  font-size: 0.75rem; /* 12px */
 }
 
 .icon-circle-sm {
-  width: 2rem;     /* 32px */
+  width: 2rem; /* 32px */
   height: 2rem;
   font-size: 0.875rem; /* 14px */
 }
 
 .icon-circle-md {
-  width: 2.5rem;   /* 40px - was 3rem */
+  width: 2.5rem; /* 40px - was 3rem */
   height: 2.5rem;
-  font-size: 1rem;  /* 16px - was 1.25rem */
+  font-size: 1rem; /* 16px - was 1.25rem */
 }
 
 .icon-circle-lg {
-  width: 3rem;     /* 48px - was 4rem */
+  width: 3rem; /* 48px - was 4rem */
   height: 3rem;
   font-size: 1.125rem; /* 18px - was 1.5rem */
 }
@@ -557,7 +643,8 @@ a:hover {
 }
 
 @keyframes float {
-  0%, 100% {
+  0%,
+  100% {
     transform: translateY(0);
   }
   50% {
@@ -575,7 +662,8 @@ a:hover {
 }
 
 @keyframes pulse-glow {
-  0%, 100% {
+  0%,
+  100% {
     box-shadow: 0 0 20px rgba(76, 175, 80, 0.3);
   }
   50% {
@@ -636,7 +724,9 @@ a:hover {
   border-radius: 50%;
   background: rgba(255, 254, 248, 0.3);
   transform: translate(-50%, -50%);
-  transition: width 0.6s, height 0.6s;
+  transition:
+    width 0.6s,
+    height 0.6s;
 }
 
 .btn-glow:hover::before {

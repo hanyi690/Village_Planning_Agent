@@ -23,23 +23,26 @@ interface ProgressPanelProps {
 // 阶段标签映射
 const PHASE_LABELS: Record<string, string> = {
   idle: '等待开始',
-  '现状分析': 'Layer 1: 现状分析',
-  '规划思路': 'Layer 2: 规划思路',
-  '详细规划': 'Layer 3: 详细规划',
-  '修复中': '修复中',
+  现状分析: 'Layer 1: 现状分析',
+  规划思路: 'Layer 2: 规划思路',
+  详细规划: 'Layer 3: 详细规划',
+  修复中: '修复中',
 };
 
 // 阶段颜色映射
 const PHASE_COLORS: Record<string, string> = {
   idle: 'bg-gray-100 text-gray-600',
-  '现状分析': 'bg-blue-100 text-blue-700',
-  '规划思路': 'bg-purple-100 text-purple-700',
-  '详细规划': 'bg-emerald-100 text-emerald-700',
-  '修复中': 'bg-amber-100 text-amber-700',
+  现状分析: 'bg-blue-100 text-blue-700',
+  规划思路: 'bg-purple-100 text-purple-700',
+  详细规划: 'bg-emerald-100 text-emerald-700',
+  修复中: 'bg-amber-100 text-amber-700',
 };
 
 // 状态图标和颜色配置
-const STATUS_CONFIG: Record<DimensionStatus, { icon: string; colorClass: string; label: string; animate?: boolean }> = {
+const STATUS_CONFIG: Record<
+  DimensionStatus,
+  { icon: string; colorClass: string; label: string; animate?: boolean }
+> = {
   pending: { icon: '⏳', colorClass: 'text-gray-400', label: '等待中' },
   streaming: { icon: '🔄', colorClass: 'text-blue-500', label: '执行中', animate: true },
   completed: { icon: '✅', colorClass: 'text-emerald-500', label: '已完成' },
@@ -66,7 +69,7 @@ export default function ProgressPanel({
   const allDimensions = currentLayer ? getDimensionConfigsByLayer(currentLayer) : [];
 
   // 计算完成进度
-  const completedCount = allDimensions.filter(dim => {
+  const completedCount = allDimensions.filter((dim) => {
     const key = `${currentLayer}_${dim.key}`;
     const progress = dimensionProgress.get(key);
     return progress?.status === 'completed';
@@ -91,7 +94,9 @@ export default function ProgressPanel({
           <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200/50 bg-white/50">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-slate-700">📊 执行进度</span>
-              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${PHASE_COLORS[currentPhase]}`}>
+              <span
+                className={`px-2 py-0.5 text-xs font-medium rounded-full ${PHASE_COLORS[currentPhase]}`}
+              >
                 {PHASE_LABELS[currentPhase]}
               </span>
             </div>
@@ -102,7 +107,9 @@ export default function ProgressPanel({
                   {executingCount} 个维度执行中
                 </span>
               )}
-              <span className="text-sm text-slate-500">{completedCount}/{totalCount} 维度</span>
+              <span className="text-sm text-slate-500">
+                {completedCount}/{totalCount} 维度
+              </span>
               <button
                 onClick={onClose}
                 className="text-slate-400 hover:text-slate-600 transition-colors text-sm"
@@ -145,14 +152,16 @@ export default function ProgressPanel({
                         isExecuting
                           ? 'bg-blue-50 ring-1 ring-blue-300 shadow-sm'
                           : status === 'completed'
-                          ? 'bg-emerald-50/50'
-                          : status === 'failed'
-                          ? 'bg-red-50/50'
-                          : 'bg-white/50'
+                            ? 'bg-emerald-50/50'
+                            : status === 'failed'
+                              ? 'bg-red-50/50'
+                              : 'bg-white/50'
                       }`}
                     >
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <span className={`${config.colorClass} ${config.animate ? 'animate-spin' : ''}`}>
+                        <span
+                          className={`${config.colorClass} ${config.animate ? 'animate-spin' : ''}`}
+                        >
                           {config.icon}
                         </span>
                         <span className="truncate text-slate-700 font-medium" title={dim.name}>
@@ -161,9 +170,11 @@ export default function ProgressPanel({
                       </div>
                       {/* 字数显示 */}
                       {progress?.wordCount && progress.wordCount > 0 && (
-                        <span className={`text-xs ml-1 flex-shrink-0 ${
-                          isExecuting ? 'text-blue-600 font-medium' : 'text-slate-400'
-                        }`}>
+                        <span
+                          className={`text-xs ml-1 flex-shrink-0 ${
+                            isExecuting ? 'text-blue-600 font-medium' : 'text-slate-400'
+                          }`}
+                        >
                           {formatWordCount(progress.wordCount)}字
                         </span>
                       )}
@@ -176,9 +187,7 @@ export default function ProgressPanel({
 
           {/* 空状态 */}
           {allDimensions.length === 0 && (
-            <div className="px-4 py-4 text-center text-sm text-slate-400">
-              等待规划任务开始...
-            </div>
+            <div className="px-4 py-4 text-center text-sm text-slate-400">等待规划任务开始...</div>
           )}
         </motion.div>
       )}

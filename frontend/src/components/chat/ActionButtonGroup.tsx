@@ -28,8 +28,11 @@ export default function ActionButtonGroup({
         <button
           key={action.id}
           className={getButtonClasses(
-            action.variant === 'primary' ? 'primary' :
-            action.variant === 'success' ? 'success' : 'secondary',
+            action.variant === 'primary'
+              ? 'primary'
+              : action.variant === 'success'
+                ? 'success'
+                : 'secondary',
             'md',
             'lg'
           )}

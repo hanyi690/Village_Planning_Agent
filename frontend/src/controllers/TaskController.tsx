@@ -16,7 +16,15 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { planningApi } from '../lib/api';
 
 export interface TaskState {
-  status: 'idle' | 'pending' | 'running' | 'paused' | 'reviewing' | 'revising' | 'completed' | 'failed';
+  status:
+    | 'idle'
+    | 'pending'
+    | 'running'
+    | 'paused'
+    | 'reviewing'
+    | 'revising'
+    | 'completed'
+    | 'failed';
   current_layer: number | null;
   previous_layer: number | null;
   layer_1_completed: boolean;
@@ -39,10 +47,24 @@ export function useTaskController(
   taskId: string | null,
   callbacks: {
     onTextDelta?: (text: string, layer?: number) => void;
-    onDimensionDelta?: (dimensionKey: string, delta: string, accumulated: string, layer?: number) => void;
-    onDimensionComplete?: (dimensionKey: string, dimensionName: string, fullContent: string, layer?: number) => void;
+    onDimensionDelta?: (
+      dimensionKey: string,
+      delta: string,
+      accumulated: string,
+      layer?: number
+    ) => void;
+    onDimensionComplete?: (
+      dimensionKey: string,
+      dimensionName: string,
+      fullContent: string,
+      layer?: number
+    ) => void;
     onLayerStarted?: (layer: number, layerName: string) => void;
-    onLayerCompleted?: (layer: number, reportContent: string, dimensionReports: Record<string, string>) => void;
+    onLayerCompleted?: (
+      layer: number,
+      reportContent: string,
+      dimensionReports: Record<string, string>
+    ) => void;
     onPause?: (layer: number, checkpointId: string) => void;
     onDimensionRevised?: (data: {
       dimension: string;
@@ -153,9 +175,12 @@ export function useTaskController(
         status: statusData.status,
         current_layer: statusData.current_layer,
         pause_after_step: statusData.pause_after_step,
-        layer_completed: [statusData.layer_1_completed, statusData.layer_2_completed, statusData.layer_3_completed],
+        layer_completed: [
+          statusData.layer_1_completed,
+          statusData.layer_2_completed,
+          statusData.layer_3_completed,
+        ],
       });
-
     } catch (error: unknown) {
       console.error('[TaskController] 获取状态失败:', error);
     }
@@ -191,32 +216,42 @@ export function useTaskController(
     const createSSEConnection = () => {
       console.log('[TaskController] === SSE 连接建立 ===');
       console.log('[TaskController] taskId:', taskId);
-      
+
       const es = planningApi.createStream(
         taskId,
         (event) => {
           const eventType = event.type;
-          
+
           // 重置重连计数（成功收到事件）
           reconnectAttemptsRef.current = 0;
-          
-          if (['layer_completed', 'layer_started', 'dimension_complete', 'pause', 'stream_paused', 'connected'].includes(eventType)) {
+
+          if (
+            [
+              'layer_completed',
+              'layer_started',
+              'dimension_complete',
+              'pause',
+              'stream_paused',
+              'connected',
+            ].includes(eventType)
+          ) {
             console.log(`[TaskController] 📩 SSE 事件: ${eventType}`, event.data);
           }
-          
+
           if (eventType === 'content_delta') {
             callbacksRef.current.onTextDelta?.(
               event.data?.delta || '',
               typeof event.data?.layer === 'number' ? event.data.layer : undefined
             );
           } else if (eventType === 'dimension_delta') {
-            const data = event.data as {
-              dimension_key?: string;
-              delta?: string;
-              accumulated?: string;
-              layer?: number;
-            } || {};
-            
+            const data =
+              (event.data as {
+                dimension_key?: string;
+                delta?: string;
+                accumulated?: string;
+                layer?: number;
+              }) || {};
+
             callbacksRef.current.onDimensionDelta?.(
               data.dimension_key || '',
               data.delta || '',
@@ -224,15 +259,18 @@ export function useTaskController(
               data.layer
             );
           } else if (eventType === 'dimension_complete') {
-            const data = event.data as {
-              dimension_key?: string;
-              dimension_name?: string;
-              full_content?: string;
-              layer?: number;
-            } || {};
-            
-            console.log(`[TaskController] ✅ dimension_complete: layer=${data.layer}, dimension=${data.dimension_key}`);
-            
+            const data =
+              (event.data as {
+                dimension_key?: string;
+                dimension_name?: string;
+                full_content?: string;
+                layer?: number;
+              }) || {};
+
+            console.log(
+              `[TaskController] ✅ dimension_complete: layer=${data.layer}, dimension=${data.dimension_key}`
+            );
+
             callbacksRef.current.onDimensionComplete?.(
               data.dimension_key || '',
               data.dimension_name || '',
@@ -240,14 +278,17 @@ export function useTaskController(
               data.layer
             );
           } else if (eventType === 'layer_started') {
-            const data = event.data as {
-              layer?: number;
-              layer_number?: number;
-              layer_name?: string;
-            } || {};
+            const data =
+              (event.data as {
+                layer?: number;
+                layer_number?: number;
+                layer_name?: string;
+              }) || {};
 
             const layerNum = data.layer || data.layer_number || 1;
-            console.log(`[TaskController] 🚀 layer_started 事件接收: layer=${layerNum}, layer_name="${data.layer_name || ''}"`);
+            console.log(
+              `[TaskController] 🚀 layer_started 事件接收: layer=${layerNum}, layer_name="${data.layer_name || ''}"`
+            );
             console.log(`[TaskController] 🚀 准备调用 onLayerStarted 回调...`);
 
             // 调用回调
@@ -258,41 +299,37 @@ export function useTaskController(
               console.warn(`[TaskController] ⚠️ onLayerStarted 回调未定义！`);
             }
           } else if (eventType === 'layer_completed') {
-            const data = event.data as {
-              layer?: number;
-              has_data?: boolean;
-              dimension_count?: number;
-            } || {};
+            const data =
+              (event.data as {
+                layer?: number;
+                has_data?: boolean;
+                dimension_count?: number;
+              }) || {};
 
             console.log(`[TaskController] ✅ layer_completed signal: Layer ${data.layer}`);
 
-            callbacksRef.current.onLayerCompleted?.(
-              data.layer || 1,
-              '',
-              {}
-            );
+            callbacksRef.current.onLayerCompleted?.(data.layer || 1, '', {});
           } else if (eventType === 'pause') {
-            const data = event.data as {
-              current_layer?: number;
-              checkpoint_id?: string;
-            } || {};
-            
+            const data =
+              (event.data as {
+                current_layer?: number;
+                checkpoint_id?: string;
+              }) || {};
+
             console.log(`[TaskController] ⏸️ pause: layer=${data.current_layer}`);
-            
-            callbacksRef.current.onPause?.(
-              data.current_layer || 1,
-              data.checkpoint_id || ''
-            );
+
+            callbacksRef.current.onPause?.(data.current_layer || 1, data.checkpoint_id || '');
           } else if (eventType === 'stream_paused') {
             console.log(`[TaskController] 🔚 stream_paused: SSE 流关闭`);
           } else if (eventType === 'dimension_revised') {
-            const data = event.data as {
-              dimension?: string;
-              layer?: number;
-              new_content?: string;
-              timestamp?: string;
-            } || {};
-            
+            const data =
+              (event.data as {
+                dimension?: string;
+                layer?: number;
+                new_content?: string;
+                timestamp?: string;
+              }) || {};
+
             callbacksRef.current.onDimensionRevised?.({
               dimension: data.dimension || '',
               layer: data.layer || 1,
@@ -311,14 +348,16 @@ export function useTaskController(
         },
         (error) => {
           console.error('[TaskController] SSE error:', error);
-          
+
           // ✅ 断线重连逻辑
           if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttemptsRef.current++;
             const delay = Math.min(1000 * reconnectAttemptsRef.current, 5000);
-            
-            console.log(`[TaskController] SSE 断线，${delay}ms 后重连 (尝试 ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`);
-            
+
+            console.log(
+              `[TaskController] SSE 断线，${delay}ms 后重连 (尝试 ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`
+            );
+
             setTimeout(() => {
               // 重连前先获取一次完整状态
               fetchStatus().then(() => {
@@ -364,25 +403,31 @@ export function useTaskController(
       await planningApi.approveReview(taskId);
       // 🔧 触发 SSE 重连，状态由 SSE 历史事件同步
       console.log('[TaskController] 批准完成，触发 SSE 重连');
-      setSseReconnectKey(prev => prev + 1);
+      setSseReconnectKey((prev) => prev + 1);
     }, [taskId]),
 
-    reject: useCallback(async (feedback: string, dimensions?: string[]) => {
-      if (!taskId) throw new Error('No task ID');
-      await planningApi.rejectReview(taskId, feedback, dimensions);
-      // 🔧 触发 SSE 重连，状态由 SSE 历史事件同步
-      console.log('[TaskController] 拒绝完成，触发 SSE 重连');
-      setSseReconnectKey(prev => prev + 1);
-    }, [taskId]),
+    reject: useCallback(
+      async (feedback: string, dimensions?: string[]) => {
+        if (!taskId) throw new Error('No task ID');
+        await planningApi.rejectReview(taskId, feedback, dimensions);
+        // 🔧 触发 SSE 重连，状态由 SSE 历史事件同步
+        console.log('[TaskController] 拒绝完成，触发 SSE 重连');
+        setSseReconnectKey((prev) => prev + 1);
+      },
+      [taskId]
+    ),
 
-    rollback: useCallback(async (checkpointId: string) => {
-      if (!taskId) throw new Error('No task ID');
-      await planningApi.rollbackCheckpoint(taskId, checkpointId);
-      // 🔧 回滚后显式同步状态，确保审查面板正确显示
-      console.log('[TaskController] 回滚完成，同步状态');
-      await fetchStatus();
-      setSseReconnectKey(prev => prev + 1);
-    }, [taskId, fetchStatus]),
+    rollback: useCallback(
+      async (checkpointId: string) => {
+        if (!taskId) throw new Error('No task ID');
+        await planningApi.rollbackCheckpoint(taskId, checkpointId);
+        // 🔧 回滚后显式同步状态，确保审查面板正确显示
+        console.log('[TaskController] 回滚完成，同步状态');
+        await fetchStatus();
+        setSseReconnectKey((prev) => prev + 1);
+      },
+      [taskId, fetchStatus]
+    ),
   };
 
   return [state, actions];

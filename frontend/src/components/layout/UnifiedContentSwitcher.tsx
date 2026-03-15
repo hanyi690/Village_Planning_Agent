@@ -23,25 +23,33 @@ import VillageInputForm from '@/components/VillageInputForm';
  * - Consistent view transitions
  */
 export default function UnifiedContentSwitcher() {
-  const { viewMode, setVillageFormData, setStatus, setProjectName, addMessage } = useUnifiedPlanningContext();
+  const { viewMode, setVillageFormData, setStatus, setProjectName, addMessage } =
+    useUnifiedPlanningContext();
 
-  const handleFormSubmit = useCallback(async (data: VillageInputData) => {
-    console.log('[UnifiedContentSwitcher] Form submitted:', data);
+  const handleFormSubmit = useCallback(
+    async (data: VillageInputData) => {
+      console.log('[UnifiedContentSwitcher] Form submitted:', data);
 
-    // Save form data to context
-    setVillageFormData(data);
-    setProjectName(data.projectName);
+      // Save form data to context
+      setVillageFormData(data);
+      setProjectName(data.projectName);
 
-    // Add confirmation message
-    addMessage(createSystemMessage(`✅ 已设置规划任务\n\n村庄：${data.projectName}\n需求：${data.taskDescription}`));
+      // Add confirmation message
+      addMessage(
+        createSystemMessage(
+          `✅ 已设置规划任务\n\n村庄：${data.projectName}\n需求：${data.taskDescription}`
+        )
+      );
 
-    // Set status to 'collecting' to trigger view mode change
-    // This will switch to chat view WITHOUT starting planning
-    setStatus('collecting');
+      // Set status to 'collecting' to trigger view mode change
+      // This will switch to chat view WITHOUT starting planning
+      setStatus('collecting');
 
-    // ❌ Remove: await startPlanning(...)
-    // ✅ Let user click "开始规划" button in chat interface instead
-  }, [setVillageFormData, setStatus, setProjectName, addMessage]);
+      // ❌ Remove: await startPlanning(...)
+      // ✅ Let user click "开始规划" button in chat interface instead
+    },
+    [setVillageFormData, setStatus, setProjectName, addMessage]
+  );
 
   return (
     <div className="w-full">

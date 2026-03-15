@@ -18,7 +18,6 @@ from pathlib import Path
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
-import operator
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..core.prompts import SYSTEM_PROMPT, PLANNING_CONCEPT_PROMPT
@@ -997,19 +996,6 @@ def run_village_planning(
 
     logger.info(f"[主图-调用] 开始执行村庄规划: {project_name}")
 
-    # 智能检测village_data是文件路径还是直接数据
-    from ..tools.file_manager import VillageDataManager
-    manager = VillageDataManager()
-
-    # 如果看起来像文件路径，尝试加载
-    if len(village_data) < 200 and ("\n" not in village_data or Path(village_data).exists()):
-        try:
-            result = manager.load_data(village_data)
-            if result["success"]:
-                village_data = result["content"]
-                logger.info(f"[主图-调用] 从文件加载数据: {result['metadata'].get('filename', 'unknown')}, {len(village_data)} 字符")
-        except:
-            pass
 
     # 创建或使用提供的 OutputManager
     if output_manager is None:
@@ -1043,7 +1029,6 @@ def run_village_planning(
         "detail_reports": {},
         "final_output": "",
         "output_manager": output_manager,
-        "last_checkpoint_id": "",
         "step_mode": step_mode,
         "step_level": step_level,
         "pause_after_step": step_mode,
@@ -1051,24 +1036,19 @@ def run_village_planning(
         "trigger_rollback": False,
         "rollback_target": "",
         "messages": [],
-        # 新增：黑板管理器
         "blackboard": get_blackboard(),
-        # 新增：适配器配置
-        "enable_adapters": False,  # 默认关闭适配器
+        "enable_adapters": False,
         "adapter_config": {
-            # 配置每个维度使用的适配器
             "industry": ["gis"],  # 产业规划使用GIS分析
             "ecological": ["gis"],  # 生态规划使用GIS分析
-            "traffic": ["network"],  # 交通规划使用网络分析
-            "infrastructure": ["gis", "network"],  # 基础设施使用多种适配器
-            "public_service": ["network"],  # 公共服务使用网络分析
+            "traffic": ["network"],
+            "infrastructure": ["gis", "network"],
+            "public_service": ["network"],
             "master_plan": ["gis"],  # 总体规划使用GIS分析
             "landscape": ["gis"],  # 风貌规划使用GIS分析
             "disaster_prevention": ["gis"]  # 防灾减灾使用GIS分析
         }
-    }
-
-    # Checkpoint 由 LangGraph AsyncSqliteSaver 自动管理，无需手动初始化
+}
 
     try:
         if stream_mode:

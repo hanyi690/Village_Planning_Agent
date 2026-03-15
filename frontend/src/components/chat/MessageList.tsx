@@ -4,7 +4,13 @@
  * MessageList - Renders list of chat messages with Gemini-style enhancements
  */
 
-import { Message, LayerCompletedMessage, DimensionReportMessage, FileMessage, Checkpoint } from '@/types';
+import {
+  Message,
+  LayerCompletedMessage,
+  DimensionReportMessage,
+  FileMessage,
+  Checkpoint,
+} from '@/types';
 import ThinkingIndicator from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
@@ -106,21 +112,23 @@ export default function MessageList({
           const layerMsg = message as LayerCompletedMessage;
           // 计算是否有流式维度（有维度报告且有内容）
           const hasStreamingDimensions = Object.keys(layerMsg.dimensionReports || {}).length > 0;
-          
+
           // 查找对应层级的 checkpoint
-          const layerCheckpoint = checkpoints.find(cp => cp.layer === layerMsg.layer);
-          
+          const layerCheckpoint = checkpoints.find((cp) => cp.layer === layerMsg.layer);
+
           return (
             <div key={message.id} className="w-full mb-4">
               <LayerReportMessage
                 message={layerMsg}
                 onOpenInSidebar={onOpenInSidebar}
-                onToggleAllDimensions={(expand) => handleToggleAllDimensions(layerMsg.layer, expand)}
+                onToggleAllDimensions={(expand) =>
+                  handleToggleAllDimensions(layerMsg.layer, expand)
+                }
                 currentLayer={currentLayer}
                 hasStreamingDimensions={hasStreamingDimensions}
-                dimensionContents={dimensionContents}  // NEW: 传递实时维度内容
+                dimensionContents={dimensionContents} // NEW: 传递实时维度内容
               />
-              
+
               {/* Checkpoint 回滚标记 */}
               {layerCheckpoint && onRollback && (
                 <CheckpointMarker
@@ -138,7 +146,7 @@ export default function MessageList({
           const fileMsg = message as FileMessage;
           const previewContent = fileMsg.fileContent?.slice(0, 500) || '';
           const hasMoreContent = (fileMsg.fileContent?.length || 0) > 500;
-          
+
           return (
             <div key={message.id} className="flex justify-end mb-4">
               <div className="max-w-[70%] bg-green-100 border border-green-300 text-gray-900 rounded-2xl px-4 py-3 shadow-md">
@@ -148,17 +156,15 @@ export default function MessageList({
                   <span className="font-medium">{fileMsg.filename}</span>
                   <span className="text-xs opacity-75">({formatBytes(fileMsg.fileSize)})</span>
                 </div>
-                
+
                 {/* 内容预览 */}
                 {previewContent && (
                   <div className="bg-white/10 rounded-lg p-2 text-sm font-mono whitespace-pre-wrap overflow-hidden max-h-40">
                     {previewContent}
-                    {hasMoreContent && (
-                      <span className="text-gray-500">... (内容已截断)</span>
-                    )}
+                    {hasMoreContent && <span className="text-gray-500">... (内容已截断)</span>}
                   </div>
                 )}
-                
+
                 {/* 时间戳 */}
                 <div className="text-xs opacity-60 mt-2 text-right">
                   {(() => {

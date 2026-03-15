@@ -28,7 +28,7 @@ function UnifiedLayoutComponent({ taskId, children }: UnifiedLayoutProps) {
   const { resetConversation } = useUnifiedPlanningContext();
 
   const handleToggleHistory = useCallback(() => {
-    setHistoryModalOpen(prev => !prev);
+    setHistoryModalOpen((prev) => !prev);
   }, []);
 
   const handleOpenKnowledge = useCallback(() => {
@@ -51,21 +51,15 @@ function UnifiedLayoutComponent({ taskId, children }: UnifiedLayoutProps) {
         onNewTask={handleNewTask}
         onOpenKnowledge={handleOpenKnowledge}
       />
-      
+
       {/* Main content - centered with max-width */}
-      <main className="mx-auto w-full max-w-[1400px] px-4 pt-4 pb-8">
-        {children}
-      </main>
+      <main className="mx-auto w-full max-w-[1400px] px-4 pt-4 pb-8">{children}</main>
 
       {/* History Panel Modal */}
-      {historyModalOpen && (
-        <HistoryPanel onClose={() => setHistoryModalOpen(false)} />
-      )}
+      {historyModalOpen && <HistoryPanel onClose={() => setHistoryModalOpen(false)} />}
 
       {/* Knowledge Panel Modal */}
-      {knowledgeModalOpen && (
-        <KnowledgePanel onClose={() => setKnowledgeModalOpen(false)} />
-      )}
+      {knowledgeModalOpen && <KnowledgePanel onClose={() => setKnowledgeModalOpen(false)} />}
     </div>
   );
 }

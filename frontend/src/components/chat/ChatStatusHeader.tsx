@@ -28,16 +28,17 @@ const VISIBLE_STATUSES = ['collecting', 'planning', 'paused', 'revising'];
  * ChatStatusHeader - 顶部状态指示器
  * 显示当前执行状态和层级信息
  */
-export default function ChatStatusHeader({
-  status,
-  currentLayer,
-}: ChatStatusHeaderProps) {
+export default function ChatStatusHeader({ status, currentLayer }: ChatStatusHeaderProps) {
   // 只在特定状态下显示
   if (!VISIBLE_STATUSES.includes(status)) {
     return null;
   }
 
-  const config = STATUS_CONFIG[status] || { badgeClass: 'bg-gray-100 text-gray-700', icon: '💬', text: '就绪' };
+  const config = STATUS_CONFIG[status] || {
+    badgeClass: 'bg-gray-100 text-gray-700',
+    icon: '💬',
+    text: '就绪',
+  };
 
   return (
     <div className="flex-shrink-0 border-b border-gray-200 bg-white p-3 shadow-sm">

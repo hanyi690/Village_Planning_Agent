@@ -25,10 +25,7 @@ const SegmentedControl: React.FC<SegmentedControlProps> = ({
   className = '',
 }) => {
   return (
-    <div
-      role="tablist"
-      className={`flex p-1 bg-gray-100 rounded-xl w-fit mx-auto ${className}`}
-    >
+    <div role="tablist" className={`flex p-1 bg-gray-100 rounded-xl w-fit mx-auto ${className}`}>
       {options.map((option) => {
         const isActive = value === option;
 
@@ -42,10 +39,7 @@ const SegmentedControl: React.FC<SegmentedControlProps> = ({
             className={`
               px-6 py-2 text-sm font-medium rounded-lg
               transition-all duration-200
-              ${isActive
-                ? 'bg-white text-blue-600 shadow-sm'
-                : 'text-gray-600 hover:text-gray-800'
-              }
+              ${isActive ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-800'}
             `}
           >
             {option}

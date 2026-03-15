@@ -76,7 +76,11 @@ export function useChatInput({
 
       // 驳回/修改请求
       try {
-        addMessage(createSystemMessage(`🔄 正在根据反馈修复规划内容${dimensionsToSubmit ? '...' : '（自动识别维度）...'} `));
+        addMessage(
+          createSystemMessage(
+            `🔄 正在根据反馈修复规划内容${dimensionsToSubmit ? '...' : '（自动识别维度）...'} `
+          )
+        );
         await reject(userText, dimensionsToSubmit);
       } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : '未知错误';

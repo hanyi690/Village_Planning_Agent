@@ -15,10 +15,7 @@ interface RateLimitWarningProps {
  * RateLimitWarning - 限流警告组件
  * 当项目触发速率限制时显示警告和重置按钮
  */
-export default function RateLimitWarning({
-  projectName,
-  onReset,
-}: RateLimitWarningProps) {
+export default function RateLimitWarning({ projectName, onReset }: RateLimitWarningProps) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 10 }}

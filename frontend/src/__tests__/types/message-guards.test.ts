@@ -11,7 +11,14 @@ import {
   isLayerCompletedMessage,
   isDimensionReportMessage,
 } from '@/types/message-guards';
-import type { Message, TextMessage, FileMessage, ProgressMessage, LayerCompletedMessage, DimensionReportMessage } from '@/types';
+import type {
+  Message,
+  TextMessage,
+  FileMessage,
+  ProgressMessage,
+  LayerCompletedMessage,
+  DimensionReportMessage,
+} from '@/types';
 
 describe('Message Type Guards', () => {
   // Helper to create base message
@@ -172,7 +179,13 @@ describe('Message Type Guards', () => {
     it('should correctly narrow types in conditional blocks', () => {
       const messages: Message[] = [
         { ...createBaseMessage('user'), type: 'text', content: 'User message' },
-        { ...createBaseMessage(), type: 'file', filename: 'test.txt', fileSize: 100, fileContent: 'content' },
+        {
+          ...createBaseMessage(),
+          type: 'file',
+          filename: 'test.txt',
+          fileSize: 100,
+          fileContent: 'content',
+        },
         { ...createBaseMessage(), type: 'progress', content: 'Loading...', progress: 30 },
       ];
 

@@ -87,9 +87,7 @@ export default function ChatInputArea({
           whileHover={!stepMode ? {} : { scale: 1.02 }}
           whileTap={!stepMode ? {} : { scale: 0.98 }}
           className={`px-2.5 py-1 text-xs font-medium rounded-full transition-all duration-200 ${
-            !stepMode
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-500 hover:text-gray-700'
+            !stepMode ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
           }`}
         >
           连续
@@ -100,9 +98,7 @@ export default function ChatInputArea({
           whileHover={stepMode ? {} : { scale: 1.02 }}
           whileTap={stepMode ? {} : { scale: 0.98 }}
           className={`px-2.5 py-1 text-xs font-medium rounded-full transition-all duration-200 ${
-            stepMode
-              ? 'bg-white text-gray-900 shadow-sm'
-              : 'text-gray-500 hover:text-gray-700'
+            stepMode ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
           }`}
         >
           分步

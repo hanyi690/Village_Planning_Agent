@@ -165,11 +165,13 @@ export default function MessageBubble({
           </div>
 
           {/* Knowledge References */}
-          {message.type === 'text' && message.knowledgeReferences && message.knowledgeReferences.length > 0 && (
-            <div className="mt-3">
-              <KnowledgeReference references={message.knowledgeReferences} />
-            </div>
-          )}
+          {message.type === 'text' &&
+            message.knowledgeReferences &&
+            message.knowledgeReferences.length > 0 && (
+              <div className="mt-3">
+                <KnowledgeReference references={message.knowledgeReferences} />
+              </div>
+            )}
 
           {/* Timestamp */}
           <div className="text-[10px] text-gray-400 mt-2">

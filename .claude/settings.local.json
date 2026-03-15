@@ -109,7 +109,26 @@
       "Bash(do taskkill:*)",
       "Bash(pause:*)",
       "Bash(npm run:*)",
-      "Skill(code-review:code-review)"
+      "Skill(code-review:code-review)",
+      "WebFetch",
+      "Bash(./doctor)",
+      "Bash(claude install:*)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH=/usr/bin/bash.exe claude install)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH=\"C:/msys64/usr/bin/bash.exe\" claude install)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH=\"C:/usr/bin/bash.exe\" claude install)",
+      "Read(//f//**)",
+      "Bash(pwd -W)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH=\"D:/Git/bin/bash.exe\" claude install)",
+      "Read(//bin/**)",
+      "Read(//d/Git/**)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH=\"D:/Git/usr/bin/bash.exe\" claude install)",
+      "Bash(which git-bash:*)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH=\"C:/Program Files/Git/bin/bash.exe\" claude install 2>&1 || \"C:/Program Files/Git/git-bash.exe\" --version 2>/dev/null || echo \"trying alternative\")",
+      "Bash(cygpath:*)",
+      "Bash(CLAUDE_CODE_GIT_BASH_PATH=\"D:\\\\Git\\\\usr\\\\bin\\\\bash.exe\" claude install)",
+      "mcp__filesystem__edit_file",
+      "Bash(file:*)",
+      "Bash(npx prettier:*)"
     ]
   }
 }

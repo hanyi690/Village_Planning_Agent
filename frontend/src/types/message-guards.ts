@@ -6,9 +6,7 @@
  * Use these to safely check message types before accessing type-specific properties.
  */
 
-import type {
-  Message,
-} from './message';
+import type { Message } from './message';
 import type {
   TextMessage,
   FileMessage,
@@ -40,9 +38,11 @@ export const isProgressMessage = (msg: Message): msg is ProgressMessage => msg.t
 /**
  * Check if message is a layer completed message
  */
-export const isLayerCompletedMessage = (msg: Message): msg is LayerCompletedMessage => msg.type === 'layer_completed';
+export const isLayerCompletedMessage = (msg: Message): msg is LayerCompletedMessage =>
+  msg.type === 'layer_completed';
 
 /**
  * Check if message is a dimension report message
  */
-export const isDimensionReportMessage = (msg: Message): msg is DimensionReportMessage => msg.type === 'dimension_report';
+export const isDimensionReportMessage = (msg: Message): msg is DimensionReportMessage =>
+  msg.type === 'dimension_report';

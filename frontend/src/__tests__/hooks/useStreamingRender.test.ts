@@ -37,9 +37,7 @@ describe('useStreamingRender', () => {
 
   describe('initialization', () => {
     it('should initialize with empty buffers', () => {
-      const { result } = renderHook(() =>
-        useStreamingRender(mockOnContentUpdate)
-      );
+      const { result } = renderHook(() => useStreamingRender(mockOnContentUpdate));
 
       const stats = result.current.getStats();
       expect(stats.bufferSize).toBe(0);
@@ -49,9 +47,7 @@ describe('useStreamingRender', () => {
 
   describe('addToken', () => {
     it('should add tokens to buffer', () => {
-      const { result } = renderHook(() =>
-        useStreamingRender(mockOnContentUpdate)
-      );
+      const { result } = renderHook(() => useStreamingRender(mockOnContentUpdate));
 
       act(() => {
         result.current.addToken('dimension1', 'token1', 'token1');
@@ -63,9 +59,7 @@ describe('useStreamingRender', () => {
     });
 
     it('should accumulate tokens for same dimension', () => {
-      const { result } = renderHook(() =>
-        useStreamingRender(mockOnContentUpdate)
-      );
+      const { result } = renderHook(() => useStreamingRender(mockOnContentUpdate));
 
       act(() => {
         result.current.addToken('dimension1', 'Hello', 'Hello');
@@ -78,9 +72,7 @@ describe('useStreamingRender', () => {
     });
 
     it('should handle multiple dimensions', () => {
-      const { result } = renderHook(() =>
-        useStreamingRender(mockOnContentUpdate)
-      );
+      const { result } = renderHook(() => useStreamingRender(mockOnContentUpdate));
 
       act(() => {
         result.current.addToken('dimension1', 'content1', 'content1');
@@ -96,9 +88,7 @@ describe('useStreamingRender', () => {
 
   describe('completeDimension', () => {
     it('should flush dimension immediately on complete', () => {
-      const { result } = renderHook(() =>
-        useStreamingRender(mockOnContentUpdate)
-      );
+      const { result } = renderHook(() => useStreamingRender(mockOnContentUpdate));
 
       act(() => {
         result.current.addToken('dimension1', 'content1', 'content1');
@@ -109,9 +99,7 @@ describe('useStreamingRender', () => {
     });
 
     it('should remove dimension from buffer after complete', () => {
-      const { result } = renderHook(() =>
-        useStreamingRender(mockOnContentUpdate)
-      );
+      const { result } = renderHook(() => useStreamingRender(mockOnContentUpdate));
 
       act(() => {
         result.current.addToken('dimension1', 'content1', 'content1');
@@ -125,9 +113,7 @@ describe('useStreamingRender', () => {
 
   describe('flushBatch', () => {
     it('should flush all buffered content', () => {
-      const { result } = renderHook(() =>
-        useStreamingRender(mockOnContentUpdate)
-      );
+      const { result } = renderHook(() => useStreamingRender(mockOnContentUpdate));
 
       act(() => {
         result.current.addToken('dimension1', 'content1', 'content1');
@@ -178,9 +164,7 @@ describe('useStreamingRender', () => {
 
   describe('layer parameter', () => {
     it('should pass layer to callback', () => {
-      const { result } = renderHook(() =>
-        useStreamingRender(mockOnContentUpdate)
-      );
+      const { result } = renderHook(() => useStreamingRender(mockOnContentUpdate));
 
       act(() => {
         result.current.addToken('dimension1', 'content', 'content', 1);
