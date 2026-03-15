@@ -1,0 +1,39 @@
+# http://editorconfig.org
+# 统一编辑器行为，消除"幽灵字符"干扰
+# 解决 AI 编程助手因缩进、换行符不匹配导致的编辑失败
+
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 2
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Markdown 文件保留行尾空格（用于两个空格换行语法）
+[*.md]
+trim_trailing_whitespace = false
+
+# Windows 批处理文件使用 CRLF
+[*.{bat,cmd}]
+end_of_line = crlf
+
+# JSON 文件保持 2 空格缩进
+[*.json]
+indent_size = 2
+
+# TypeScript/JavaScript 配置
+[*.{ts,tsx,js,jsx}]
+charset = utf-8
+indent_style = space
+indent_size = 2
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Python 配置
+[*.py]
+indent_style = space
+indent_size = 4

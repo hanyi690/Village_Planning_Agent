@@ -1,0 +1,20 @@
+# 强制统一换行符为 LF（Unix 风格）
+# 解决 Windows/Unix 跨平台协作时的换行符混乱问题
+# 同时解决 AI 编程助手因换行符不匹配导致的编辑失败
+
+* text=auto eol=lf
+
+# Windows 批处理文件例外，必须使用 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件不转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary

@@ -1,0 +1,11 @@
+# Prettier 忽略文件
+# 这些文件不需要格式化
+
+.next/
+out/
+node_modules/
+build/
+dist/
+*.min.js
+coverage/
+*.log
