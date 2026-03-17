@@ -257,6 +257,10 @@ def create_parallel_revision_tasks(
             original_content = concept_reports.get(dim, "")
         else:
             original_content = detail_reports.get(dim, "")
+
+        # [DEBUG] 确认修复时获取到的原文
+        original_preview = original_content[:100].replace('\n', ' ') if original_content else "(空)"
+        logger.info(f"[Revision] 获取到的原文 ({dim}, Layer{layer}): {original_preview}...")
         
         # 获取维度名称
         config = get_dimension_config(dim)
@@ -598,7 +602,7 @@ async def call_revision_subgraph(
     analysis_reports: Dict[str, str] = None,
     concept_reports: Dict[str, str] = None,
     detail_reports: Dict[str, str] = None,
-    completed_dimensions: List[str] = None
+    from_checkpoint_id: str = None  # 新增：从指定 checkpoint 获取原始报告
 ) -> Dict[str, Any]:
     """
     调用修复子图的包装函数
@@ -611,6 +615,7 @@ async def call_revision_subgraph(
         concept_reports: Layer 2 规划思路报告
         detail_reports: Layer 3 详细规划报告
         completed_dimensions: 已完成的维度列表
+        from_checkpoint_id: 可选，从指定 checkpoint 获取原始报告（用于回滚后的修复）
         
     Returns:
         {
@@ -622,6 +627,45 @@ async def call_revision_subgraph(
     """
     logger.info(f"[Revision-子图调用] 开始调用修复子图: {project_name}")
     logger.info(f"[Revision-子图调用] 目标维度: {target_dimensions}")
+    logger.info(f"[Revision-子图调用] from_checkpoint_id: {from_checkpoint_id}")
+
+    # 新增：从历史 checkpoint 获取原始报告
+    original_reports = None
+    if from_checkpoint_id:
+        try:
+            from ..orchestration.main_graph import create_village_planning_graph
+            from ..utils.checkpoint_manager import get_global_checkpointer
+
+            checkpointer = await get_global_checkpointer()
+            graph = create_village_planning_graph(checkpointer=checkpointer)
+            config = {"configurable": {"thread_id": project_name}}
+
+            # 遍历历史 checkpoint，找到目标 checkpoint
+            async for state_snapshot in graph.aget_state_history(config):
+                snapshot_checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+                if snapshot_checkpoint_id == from_checkpoint_id:
+                    original_reports = {
+                        "analysis_reports": state_snapshot.values.get("analysis_reports", {}),
+                        "concept_reports": state_snapshot.values.get("concept_reports", {}),
+                        "detail_reports": state_snapshot.values.get("detail_reports", {}),
+                    }
+                    logger.info(f"[Revision-子图调用] 从 checkpoint {from_checkpoint_id} 获取原始报告")
+                    break
+
+            if not original_reports:
+                logger.warning(f"[Revision-子图调用] 未找到 checkpoint {from_checkpoint_id}，使用当前状态")
+        except Exception as e:
+            logger.error(f"[Revision-子图调用] 获取历史 checkpoint 失败：{e}")
+            original_reports = None
+
+    if original_reports:
+        analysis_reports = original_reports.get("analysis_reports", analysis_reports or {})
+        concept_reports = original_reports.get("concept_reports", concept_reports or {})
+        detail_reports = original_reports.get("detail_reports", detail_reports or {})
+        logger.info(f"[Revision-子图调用] 使用历史 checkpoint 的原始报告")
+    else:
+        logger.info(f"[Revision-子图调用] 使用当前状态的报告")
+
     
     # 创建子图实例
     subgraph = create_revision_subgraph()

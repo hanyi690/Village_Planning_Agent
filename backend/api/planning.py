@@ -2478,7 +2478,14 @@ async def review_action(session_id: str, request: ReviewActionRequest):
 
                 # 5. 使用 aupdate_state 恢复状态，并设置暂停审查状态
                 target_values = target_state_snapshot.values
-                
+
+                # [DEBUG] 确认目标 checkpoint 的 analysis_reports 内容
+                target_analysis_reports = target_values.get("analysis_reports", {})
+                logger.info(f"[Rollback] 目标 checkpoint 的 analysis_reports 维度数：{len(target_analysis_reports)}")
+                for dim_key in list(target_analysis_reports.keys())[:3]:  # 只显示前 3 个
+                    report_preview = str(target_analysis_reports[dim_key])[:100].replace('\n', ' ')
+                    logger.info(f"[Rollback] 目标 checkpoint 的 analysis_reports[{dim_key}]: {report_preview}...")
+
                 # 从 metadata 获取检查点信息
                 metadata = target_values.get("metadata", {})
                 checkpoint_type = metadata.get("checkpoint_type", "regular")
@@ -2569,6 +2576,9 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                 
                 # 根据目标层级构造回退状态
                 # 确保保留目标层级的数据，清空后续层级的数据
+                # 新增：设置 revision_from_checkpoint_id 用于修复时从历史 checkpoint 获取原始报告
+                rollback_checkpoint_id = target_state_snapshot.config.get("configurable", {}).get("checkpoint_id")
+
                 if target_completed_layer == 3:
                     # 回退到 Layer 3 完成时：保留 L1+L2+L3 数据
                     rollback_state = {
@@ -2577,6 +2587,7 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         "current_layer": 4,
                         "previous_layer": 3,
                         "pause_after_step": True,
+                        "revision_from_checkpoint_id": rollback_checkpoint_id,
                     }
                     logger.info(f"[Planning API] 回退到 Layer 3 完成状态")
                 elif target_completed_layer == 2:
@@ -2594,6 +2605,7 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         "current_layer": 3,
                         "previous_layer": 2,
                         "pause_after_step": True,
+                        "revision_from_checkpoint_id": rollback_checkpoint_id,
                     }
                     # 更新 completed_dimensions
                     existing_completed = target_values.get("completed_dimensions", {})
@@ -2616,6 +2628,7 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         "current_layer": 2,
                         "previous_layer": 1,
                         "pause_after_step": True,
+                        "revision_from_checkpoint_id": rollback_checkpoint_id,
                     }
                     # 更新 completed_dimensions
                     existing_completed = target_values.get("completed_dimensions", {})
@@ -2627,6 +2640,7 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                         **target_values,
                         "phase": "init",
                         "pause_after_step": True,
+                        "revision_from_checkpoint_id": rollback_checkpoint_id,
                     }
                     logger.info(f"[Planning API] 回退到初始状态/未知状态，直接使用检查点值")
                 
@@ -2635,6 +2649,14 @@ async def review_action(session_id: str, request: ReviewActionRequest):
                     rollback_state,
                     as_node=None  # 不指定节点，直接覆盖状态
                 )
+
+                # [DEBUG] 立即验证回滚后的状态
+                verify_state = await graph.aget_state(config)
+                verify_analysis_reports = verify_state.values.get("analysis_reports", {})
+                logger.info(f"[Rollback] 回滚后的 analysis_reports 维度数：{len(verify_analysis_reports)}")
+                for dim_key in list(verify_analysis_reports.keys())[:3]:  # 只显示前 3 个
+                    report_preview = str(verify_analysis_reports[dim_key])[:100].replace('\n', ' ')
+                    logger.info(f"[Rollback] 回滚后的 analysis_reports[{dim_key}]: {report_preview}...")
 
                 logger.info(f"[Planning API] Successfully rolled back to checkpoint {request.checkpoint_id}")
 

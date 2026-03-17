@@ -18,11 +18,13 @@ import { planningApi } from '@/lib/api';
  * Review functionality is now embedded in the chat flow via ReviewInteractionMessage,
  * controlled by Context state (isPaused, pendingReviewLayer).
  */
-export default function VillagePage() {
+
+// VillagePageContent - Internal component with access to state
+function VillagePageContent() {
   const params = useParams();
   const router = useRouter();
-
   const taskId = params.taskId as string;
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -123,4 +125,9 @@ export default function VillagePage() {
       {layerSidebarOpen && <LayerSidebar activeLayer={activeLayer} onClose={handleLayerSidebarClose} />}
     </UnifiedPlanningProvider>
   );
+}
+
+// Main page component
+export default function VillagePage() {
+  return <VillagePageContent />;
 }

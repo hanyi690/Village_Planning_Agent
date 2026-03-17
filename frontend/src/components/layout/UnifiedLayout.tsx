@@ -19,9 +19,10 @@ import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
 interface UnifiedLayoutProps {
   taskId: string;
   children: React.ReactNode;
+  onLayerChange?: (layer: number) => void;
 }
 
-function UnifiedLayoutComponent({ taskId, children }: UnifiedLayoutProps) {
+function UnifiedLayoutComponent({ taskId, children, onLayerChange }: UnifiedLayoutProps) {
   const router = useRouter();
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
@@ -50,6 +51,7 @@ function UnifiedLayoutComponent({ taskId, children }: UnifiedLayoutProps) {
         onToggleHistory={handleToggleHistory}
         onNewTask={handleNewTask}
         onOpenKnowledge={handleOpenKnowledge}
+        onLayerChange={onLayerChange}
       />
 
       {/* Main content - centered with max-width */}

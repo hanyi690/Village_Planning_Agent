@@ -74,6 +74,8 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     syncMessageToBackend,
     // 层级完成状态
     completedLayers,
+    // 🔧 新增：Layer 报告内容存储（用于侧边栏）
+    setLayerReports,
   } = useUnifiedPlanningContext();
 
   const [inputText, setInputText] = useState('');
@@ -368,6 +370,33 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       // ✅ 更新层级完成状态
       setUILayerCompleted(layer, true);
 
+      // 🔧 新增：同步 Layer 报告内容到 Context（用于侧边栏显示）
+      const layerReportUpdate: Partial<Record<number, { reports: Record<string, string>; content: string }>> = {
+        1: { reports: finalReports, content: finalReportContent },
+        2: { reports: finalReports, content: finalReportContent },
+        3: { reports: finalReports, content: finalReportContent },
+      };
+      const update = layerReportUpdate[layer];
+      if (update) {
+        if (layer === 1) {
+          setLayerReports({
+            analysis_reports: update.reports,
+            analysis_report_content: update.content,
+          });
+        } else if (layer === 2) {
+          setLayerReports({
+            concept_reports: update.reports,
+            concept_report_content: update.content,
+          });
+        } else if (layer === 3) {
+          setLayerReports({
+            detail_reports: update.reports,
+            detail_report_content: update.content,
+          });
+        }
+        console.log(`[ChatPanel] Synced Layer ${layer} reports to Context`);
+      }
+
       const layerReportId = `layer_report_${layer}`;
 
       // ✅ 关键修复：使用 ref 检查而不是 messages.some()，解决 React 闭包陷阱问题
@@ -464,6 +493,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       fetchLayerReportsFromBackend,
       flushBatch,
       setUILayerCompleted,
+      setLayerReports,
     ]
   );
 

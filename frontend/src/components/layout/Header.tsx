@@ -5,12 +5,15 @@ import { faHistory, faLeaf, faPlus, faDatabase } from '@fortawesome/free-solid-s
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 // 核心补丁：防止图标在初始加载时巨大化
 import '@fortawesome/fontawesome-svg-core/styles.css';
+import SegmentedControl from '@/components/ui/SegmentedControl';
+import { LAYER_OPTIONS_ARRAY, LAYER_LABEL_MAP, LAYER_VALUE_MAP } from '@/lib/constants';
 
 interface HeaderProps {
   taskId: string;
   onToggleHistory?: () => void;
   onNewTask?: () => void;
   onOpenKnowledge?: () => void;
+  onLayerChange?: (layer: number) => void;
 }
 
 export default function Header({
@@ -18,8 +21,16 @@ export default function Header({
   onToggleHistory,
   onNewTask,
   onOpenKnowledge,
+  onLayerChange,
 }: HeaderProps) {
   const [isHistoryHovered, setIsHistoryHovered] = useState(false);
+  const [currentLayer, setCurrentLayer] = useState<number>(1);
+
+  const handleLayerChange = (layerName: string) => {
+    const layer = LAYER_LABEL_MAP[layerName];
+    setCurrentLayer(layer);
+    onLayerChange?.(layer);
+  };
 
   return (
     <header className="relative w-full h-14 flex items-center justify-between px-4 lg:px-6 bg-white/80 backdrop-blur-md border-b border-gray-200 z-50">
@@ -91,6 +102,15 @@ export default function Header({
             <span className="w-2 h-2 bg-cyan-500 rounded-full opacity-60 group-hover:opacity-100 transition-opacity" />
           </button>
         )}
+      </div>
+
+      {/* Layer 切换器 - 常驻显示在 Header 底部 */}
+      <div className="absolute bottom-0 left-0 right-0 h-12 flex items-center justify-center border-t border-gray-100">
+        <SegmentedControl
+          options={LAYER_OPTIONS_ARRAY}
+          value={LAYER_VALUE_MAP[currentLayer] || LAYER_OPTIONS_ARRAY[0]}
+          onChange={handleLayerChange}
+        />
       </div>
     </header>
   );

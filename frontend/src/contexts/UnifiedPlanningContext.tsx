@@ -59,6 +59,16 @@ export interface LayerContent {
   checkpointId: string;
 }
 
+// Layer 报告内容存储（用于侧边栏显示）
+export interface LayerReportContent {
+  analysis_reports: Record<string, string>; // Layer 1
+  concept_reports: Record<string, string>;  // Layer 2
+  detail_reports: Record<string, string>;   // Layer 3
+  analysis_report_content: string;
+  concept_report_content: string;
+  detail_report_content: string;
+}
+
 // 进度面板阶段类型
 export type ProgressPhase = 'idle' | '现状分析' | '规划思路' | '详细规划' | '修复中';
 
@@ -130,6 +140,10 @@ interface UnifiedPlanningContextType {
   setLayerReportVisible: (visible: boolean) => void;
   activeReportLayer: number;
   setActiveReportLayer: (layer: number) => void;
+
+  // Layer 报告内容存储（用于侧边栏显示）
+  layerReports: LayerReportContent;
+  setLayerReports: (reports: Partial<LayerReportContent>) => void;
 
   // Conversation actions
   addMessage: (message: Message) => void;
@@ -326,6 +340,16 @@ export function UnifiedPlanningProvider({
   // Layer report state
   const [layerReportVisible, setLayerReportVisible] = useState(false);
   const [activeReportLayer, setActiveReportLayer] = useState(1);
+
+  // Layer 报告内容存储（用于侧边栏显示）
+  const [layerReports, setLayerReportsState] = useState<LayerReportContent>({
+    analysis_reports: {},
+    concept_reports: {},
+    detail_reports: {},
+    analysis_report_content: '',
+    concept_report_content: '',
+    detail_report_content: '',
+  });
 
   // Report sync state
   const [reportSyncState, setReportSyncState] = useState<ReportSyncState>({
@@ -765,8 +789,22 @@ export function UnifiedPlanningProvider({
     // 清空进度面板状态
     clearDimensionProgress();
     setProgressPanelVisible(false);
+    // 清空 Layer 报告内容
+    setLayerReportsState({
+      analysis_reports: {},
+      concept_reports: {},
+      detail_reports: {},
+      analysis_report_content: '',
+      concept_report_content: '',
+      detail_report_content: '',
+    });
     // Don't reset history state when resetting conversation
   }, [clearDimensionProgress, setStatus]);
+
+  // 🔧 Layer Reports 更新方法
+  const setLayerReports = useCallback((reports: Partial<LayerReportContent>) => {
+    setLayerReportsState((prev) => ({ ...prev, ...reports }));
+  }, []);
 
   // History actions
   const loadVillagesHistory = useCallback(async () => {
@@ -1139,6 +1177,8 @@ export function UnifiedPlanningProvider({
     setLayerReportVisible,
     activeReportLayer,
     setActiveReportLayer,
+    layerReports,
+    setLayerReports,
     reportSyncState,
     triggerReportUpdate,
 

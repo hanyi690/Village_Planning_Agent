@@ -128,7 +128,11 @@
       "Bash(CLAUDE_CODE_GIT_BASH_PATH=\"D:\\\\Git\\\\usr\\\\bin\\\\bash.exe\" claude install)",
       "mcp__filesystem__edit_file",
       "Bash(file:*)",
-      "Bash(npx prettier:*)"
+      "Bash(npx prettier:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git worktree:*)",
+      "Bash(npm test:*)",
+      "Bash(git stash:*)"
     ]
   }
 }

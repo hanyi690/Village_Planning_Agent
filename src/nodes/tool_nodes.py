@@ -206,7 +206,10 @@ class RevisionNode(AsyncBaseNode):
         
         # 获取已完成的维度（用于过滤）
         completed_dimensions = self._get_completed_dimensions(state)
-        
+
+        # 获取 from_checkpoint_id（用于从历史 checkpoint 获取原始报告）
+        from_checkpoint_id = state.get("revision_from_checkpoint_id")
+
         revision_result = await call_revision_subgraph(
             project_name=state.get("project_name", ""),
             feedback=feedback,
@@ -214,7 +217,8 @@ class RevisionNode(AsyncBaseNode):
             analysis_reports=state.get("analysis_reports", {}),
             concept_reports=state.get("concept_reports", {}),
             detail_reports=state.get("detail_reports", {}),
-            completed_dimensions=completed_dimensions
+            completed_dimensions=completed_dimensions,
+            from_checkpoint_id=from_checkpoint_id
         )
         
         logger.info(f"[修复] RevisionSubgraph 结果: success={revision_result['success']}")
