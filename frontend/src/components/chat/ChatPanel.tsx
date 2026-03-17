@@ -35,9 +35,10 @@ import {
 
 interface ChatPanelProps {
   className?: string;
+  onOpenLayerSidebar?: (layer: number) => void;
 }
 
-export default function ChatPanel({ className = '' }: ChatPanelProps) {
+export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPanelProps) {
   const {
     messages,
     setMessages,
@@ -71,6 +72,8 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
     setUILayerCompleted,
     // 🔧 新增：同步消息到后端（用于延迟存储）
     syncMessageToBackend,
+    // 层级完成状态
+    completedLayers,
   } = useUnifiedPlanningContext();
 
   const [inputText, setInputText] = useState('');
@@ -735,9 +738,11 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       const layerNumber = LAYER_LABEL_MAP[layer];
       if (layerNumber !== undefined) {
         setCurrentLayer(layerNumber);
+        // 打开侧边栏
+        onOpenLayerSidebar?.(layerNumber);
       }
     },
-    [setCurrentLayer]
+    [setCurrentLayer, onOpenLayerSidebar]
   );
 
   // ✅ Use TaskController with stable callbacks
@@ -1336,15 +1341,16 @@ export default function ChatPanel({ className = '' }: ChatPanelProps) {
       {/* Middle: Message list - Centered container + max width */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="max-w-6xl mx-auto">
-          {/* Layer Segmented Control - shown during planning/paused */}
-          {(status === 'planning' || status === 'paused') && (
+          {/* Layer Segmented Control - 有 Layer 数据时常驻显示 */}
+          {(completedLayers[1] || completedLayers[2] || completedLayers[3]) ||
+          (status === 'planning' || status === 'paused') ? (
             <SegmentedControl
               options={LAYER_OPTIONS_ARRAY}
               value={currentLayer ? LAYER_VALUE_MAP[currentLayer] : LAYER_OPTIONS_ARRAY[0]}
               onChange={handleLayerChange}
               className="mb-4"
             />
-          )}
+          ) : null}
 
           <MessageList
             messages={messages}

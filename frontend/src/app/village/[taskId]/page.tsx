@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { UnifiedPlanningProvider } from '@/contexts/UnifiedPlanningContext';
 import UnifiedLayout from '@/components/layout/UnifiedLayout';
 import ChatPanel from '@/components/chat/ChatPanel';
+import LayerSidebar from '@/components/layer/LayerSidebar';
 import { planningApi } from '@/lib/api';
 
 /**
@@ -24,6 +25,20 @@ export default function VillagePage() {
   const taskId = params.taskId as string;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Layer sidebar state
+  const [layerSidebarOpen, setLayerSidebarOpen] = useState(false);
+  const [activeLayer, setActiveLayer] = useState<number | null>(null);
+
+  const handleLayerSidebarOpen = useCallback((layer: number) => {
+    setActiveLayer(layer);
+    setLayerSidebarOpen(true);
+  }, []);
+
+  const handleLayerSidebarClose = useCallback(() => {
+    setLayerSidebarOpen(false);
+    setActiveLayer(null);
+  }, []);
 
   // Handle 'new' task redirect
   useEffect(() => {
@@ -102,8 +117,10 @@ export default function VillagePage() {
   return (
     <UnifiedPlanningProvider conversationId={conversationId}>
       <UnifiedLayout taskId={taskId}>
-        <ChatPanel />
+        <ChatPanel onOpenLayerSidebar={handleLayerSidebarOpen} />
       </UnifiedLayout>
+      {/* Layer Sidebar */}
+      {layerSidebarOpen && <LayerSidebar activeLayer={activeLayer} onClose={handleLayerSidebarClose} />}
     </UnifiedPlanningProvider>
   );
 }
