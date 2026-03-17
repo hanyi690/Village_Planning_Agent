@@ -9,7 +9,7 @@
  * - History panel: 右侧抽屉模态框
  */
 
-import { useState, memo, useCallback } from 'react';
+import React, { useState, memo, useCallback, ReactElement, Children } from 'react';
 import { useRouter } from 'next/navigation';
 import Header from './Header';
 import HistoryPanel from './HistoryPanel';
@@ -19,10 +19,10 @@ import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
 interface UnifiedLayoutProps {
   taskId: string;
   children: React.ReactNode;
-  onLayerChange?: (layer: number) => void;
+  onOpenLayerSidebar?: (layer: number) => void;
 }
 
-function UnifiedLayoutComponent({ taskId, children, onLayerChange }: UnifiedLayoutProps) {
+function UnifiedLayoutComponent({ taskId, children, onOpenLayerSidebar }: UnifiedLayoutProps) {
   const router = useRouter();
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
@@ -51,11 +51,20 @@ function UnifiedLayoutComponent({ taskId, children, onLayerChange }: UnifiedLayo
         onToggleHistory={handleToggleHistory}
         onNewTask={handleNewTask}
         onOpenKnowledge={handleOpenKnowledge}
-        onLayerChange={onLayerChange}
       />
 
       {/* Main content - centered with max-width */}
-      <main className="mx-auto w-full max-w-[1400px] px-4 pt-4 pb-8">{children}</main>
+      <main className="mx-auto w-full max-w-[1400px] px-4 pt-4 pb-8">
+        {/* Clone children with onOpenLayerSidebar prop */}
+        {Children.map(children, (child) => {
+          if (React.isValidElement(child)) {
+            return React.cloneElement(child as ReactElement<{ onOpenLayerSidebar?: (layer: number) => void }>, {
+              onOpenLayerSidebar,
+            });
+          }
+          return child;
+        })}
+      </main>
 
       {/* History Panel Modal */}
       {historyModalOpen && <HistoryPanel onClose={() => setHistoryModalOpen(false)} />}
