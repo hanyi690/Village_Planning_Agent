@@ -73,6 +73,9 @@ nul
 # Claude Code
 .claude/
 
+# Git worktrees
+.worktrees/
+
 # Knowledge base (vector database)
 knowledge_base/
 
