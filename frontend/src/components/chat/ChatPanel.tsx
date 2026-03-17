@@ -205,9 +205,8 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       setDimensionCompleted(layerNum, dimensionKey, fullContent.length);
 
       console.log(`[ChatPanel] Dimension complete: ${dimensionKey} (${fullContent.length} chars)`);
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     },
-    [setMessages, currentLayer, setDimensionCompleted]
+    [setMessages, currentLayer, setDimensionCompleted, completeDimension]
   );
 
   const handleLayerProgress = useCallback((layer: number, completed: number, total: number) => {
@@ -850,11 +849,11 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       if (messageExists) {
         // 消息已存在，检查是否需要更新数据
         const existingMsg = messages.find((m) => m.id === layerReportId);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (
           existingMsg &&
-          (existingMsg as any).fullReportContent &&
-          (existingMsg as any).fullReportContent.length > 0
+          'fullReportContent' in existingMsg &&
+          existingMsg.fullReportContent &&
+          existingMsg.fullReportContent.length > 0
         ) {
           // 消息已有完整数据，无需恢复
           return;

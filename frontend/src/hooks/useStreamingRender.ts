@@ -4,11 +4,11 @@
  * 功能：
  * - 使用 requestAnimationFrame 批量更新
  * - 防抖内容刷新
- * - 增量DOM更新（只更新变化部分）
+ * - 增量 DOM 更新（只更新变化部分）
  *
  * 目标：
  * - Token → 前端显示延迟 < 100ms
- * - 减少 > 80% 的DOM更新
+ * - 减少 > 80% 的 DOM 更新
  * - 平滑的流式显示效果
  *
  * Example:
@@ -36,7 +36,7 @@
 import { useRef, useCallback, useEffect } from 'react';
 
 interface StreamingRenderOptions {
-  batchSize?: number; // 批处理大小（token数量）
+  batchSize?: number; // 批处理大小（token 数量）
   batchWindow?: number; // 时间窗口（ms）
   debounceMs?: number; // 防抖延迟
 }
@@ -75,57 +75,6 @@ export function useStreamingRender(
   const isFlushScheduled = useRef(false);
 
   /**
-   * 添加token到缓冲区
-   */
-  const addToken = useCallback(
-    (
-      dimensionKey: string,
-      chunk: string,
-      accumulated: string,
-      layer?: number // 🔧 FIX: 添加 layer 参数，解决闭包陷阱
-    ) => {
-      const buffer = buffers.current.get(dimensionKey) || {
-        dimensionKey,
-        chunks: [],
-        lastUpdate: Date.now(),
-        accumulated: '',
-        layer: layer, // 🔧 FIX: 存储传入的 layer 值
-      };
-
-      buffer.chunks.push(chunk);
-      buffer.accumulated = accumulated;
-      buffer.lastUpdate = Date.now();
-      // 🔧 FIX: 如果传入了新的 layer 值，更新它（避免使用旧值）
-      if (layer !== undefined) {
-        buffer.layer = layer;
-      }
-      buffers.current.set(dimensionKey, buffer);
-
-      // 触发批处理
-      scheduleBatch();
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    },
-    []
-  );
-
-  /**
-   * 调度批处理（使用RAF）
-   */
-  const scheduleBatch = useCallback(() => {
-    if (isFlushScheduled.current) {
-      return; // 已经调度了，避免重复
-    }
-
-    isFlushScheduled.current = true;
-
-    rafId.current = requestAnimationFrame(() => {
-      flushBatchInternal();
-      isFlushScheduled.current = false;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batchSize, batchWindow, debounceMs]);
-
-  /**
    * 内部批处理刷新函数
    */
   const flushBatchInternal = useCallback(() => {
@@ -157,16 +106,65 @@ export function useStreamingRender(
   }, [batchSize, batchWindow, debounceMs, onContentUpdate]);
 
   /**
+   * 调度批处理（使用 RAF）
+   */
+  const scheduleBatch = useCallback(() => {
+    if (isFlushScheduled.current) {
+      return; // 已经调度了，避免重复
+    }
+
+    isFlushScheduled.current = true;
+
+    rafId.current = requestAnimationFrame(() => {
+      flushBatchInternal();
+      isFlushScheduled.current = false;
+    });
+  }, [flushBatchInternal]);
+
+  /**
+   * 添加 token 到缓冲区
+   */
+  const addToken = useCallback(
+    (
+      dimensionKey: string,
+      chunk: string,
+      accumulated: string,
+      layer?: number // 🔧 FIX: 添加 layer 参数，解决闭包陷阱
+    ) => {
+      const buffer = buffers.current.get(dimensionKey) || {
+        dimensionKey,
+        chunks: [],
+        lastUpdate: Date.now(),
+        accumulated: '',
+        layer: layer, // 🔧 FIX: 存储传入的 layer 值
+      };
+
+      buffer.chunks.push(chunk);
+      buffer.accumulated = accumulated;
+      buffer.lastUpdate = Date.now();
+      // 🔧 FIX: 如果传入了新的 layer 值，更新它（避免使用旧值）
+      if (layer !== undefined) {
+        buffer.layer = layer;
+      }
+      buffers.current.set(dimensionKey, buffer);
+
+      // 触发批处理
+      scheduleBatch();
+    },
+    [scheduleBatch]
+  );
+
+  /**
    * 手动刷新所有批次
    */
   const flushBatch = useCallback(() => {
-    // 取消待处理的RAF
+    // 取消待处理的 RAF
     if (rafId.current) {
       cancelAnimationFrame(rafId.current);
       isFlushScheduled.current = false;
     }
 
-    // 立即刷新所有buffer
+    // 立即刷新所有 buffer
     const updates: Array<{ dimensionKey: string; content: string; layer?: number }> = [];
 
     for (const [key, buffer] of buffers.current) {
@@ -199,7 +197,7 @@ export function useStreamingRender(
         onContentUpdate(dimensionKey, buffer.accumulated, layerToUse);
         buffers.current.delete(dimensionKey);
       } else if (buffer) {
-        // 即使没有chunk，也要删除
+        // 即使没有 chunk，也要删除
         buffers.current.delete(dimensionKey);
       }
     },
