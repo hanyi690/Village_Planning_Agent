@@ -602,6 +602,7 @@ async def call_revision_subgraph(
     analysis_reports: Dict[str, str] = None,
     concept_reports: Dict[str, str] = None,
     detail_reports: Dict[str, str] = None,
+    completed_dimensions: List[str] = None,  # 已完成的维度列表
     from_checkpoint_id: str = None  # 新增：从指定 checkpoint 获取原始报告
 ) -> Dict[str, Any]:
     """

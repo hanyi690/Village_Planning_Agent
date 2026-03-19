@@ -40,9 +40,14 @@ class PlanningPhase(str, Enum):
     # Layer 3: 详细规划
     LAYER3_PLANNING = "layer3_planning"         # Layer 3 执行中
     LAYER3_COMPLETED = "layer3_completed"       # Layer 3 完成
-    
+
     # 最终输出
     FINAL_OUTPUT = "final_output"               # 最终报告生成完成
+
+    # 维度修复完成
+    LAYER1_REVISION_COMPLETED = "layer1_revision_completed"  # Layer 1 维度修复完成
+    LAYER2_REVISION_COMPLETED = "layer2_revision_completed"  # Layer 2 维度修复完成
+    LAYER3_REVISION_COMPLETED = "layer3_revision_completed"  # Layer 3 维度修复完成
     
     @classmethod
     def get_layer(cls, phase: "PlanningPhase") -> int:
@@ -51,10 +56,13 @@ class PlanningPhase(str, Enum):
             cls.INIT: 0,
             cls.LAYER1_ANALYZING: 1,
             cls.LAYER1_COMPLETED: 1,
+            cls.LAYER1_REVISION_COMPLETED: 1,
             cls.LAYER2_CONCEPTING: 2,
             cls.LAYER2_COMPLETED: 2,
+            cls.LAYER2_REVISION_COMPLETED: 2,
             cls.LAYER3_PLANNING: 3,
             cls.LAYER3_COMPLETED: 3,
+            cls.LAYER3_REVISION_COMPLETED: 3,
             cls.FINAL_OUTPUT: 4,
         }
         return phase_layer_map.get(phase, 0)
@@ -66,6 +74,9 @@ class PlanningPhase(str, Enum):
             cls.LAYER1_COMPLETED,
             cls.LAYER2_COMPLETED,
             cls.LAYER3_COMPLETED,
+            cls.LAYER1_REVISION_COMPLETED,
+            cls.LAYER2_REVISION_COMPLETED,
+            cls.LAYER3_REVISION_COMPLETED,
             cls.FINAL_OUTPUT
         ]
     
@@ -76,10 +87,13 @@ class PlanningPhase(str, Enum):
             cls.INIT: "初始状态",
             cls.LAYER1_ANALYZING: "现状分析中",
             cls.LAYER1_COMPLETED: "现状分析完成",
+            cls.LAYER1_REVISION_COMPLETED: "现状分析维度修复完成",
             cls.LAYER2_CONCEPTING: "规划思路中",
             cls.LAYER2_COMPLETED: "规划思路完成",
+            cls.LAYER2_REVISION_COMPLETED: "规划思路维度修复完成",
             cls.LAYER3_PLANNING: "详细规划中",
             cls.LAYER3_COMPLETED: "详细规划完成",
+            cls.LAYER3_REVISION_COMPLETED: "详细规划维度修复完成",
             cls.FINAL_OUTPUT: "最终报告生成",
         }
         return descriptions.get(phase, "未知状态")

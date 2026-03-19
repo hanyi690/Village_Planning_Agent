@@ -58,9 +58,13 @@ function UnifiedLayoutComponent({ taskId, children, onOpenLayerSidebar }: Unifie
         {/* Clone children with onOpenLayerSidebar prop */}
         {Children.map(children, (child) => {
           if (React.isValidElement(child)) {
-            return React.cloneElement(child as ReactElement<{ onOpenLayerSidebar?: (layer: number) => void }>, {
-              onOpenLayerSidebar,
-            });
+            // 只在 children 没有 onOpenLayerSidebar 时才注入
+            const existingProps = child.props as { onOpenLayerSidebar?: (layer: number) => void };
+            if (!existingProps.onOpenLayerSidebar && onOpenLayerSidebar) {
+              return React.cloneElement(child as ReactElement<{ onOpenLayerSidebar?: (layer: number) => void }>, {
+                onOpenLayerSidebar,
+              });
+            }
           }
           return child;
         })}

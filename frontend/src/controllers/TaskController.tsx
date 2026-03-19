@@ -349,6 +349,19 @@ export function useTaskController(
         (error) => {
           console.error('[TaskController] SSE error:', error);
 
+          // 🔧 修复：检查是否是后端错误导致的断开
+          // 如果 state.execution_error 有值，说明后端处理出错，不应重连
+          if (state.execution_error) {
+            console.error(
+              '[TaskController] 检测到后端错误，跳过重连:',
+              state.execution_error
+            );
+            callbacksRef.current.onError?.(
+              `后端错误：${state.execution_error}，请检查任务配置或联系管理员`
+            );
+            return;
+          }
+
           // ✅ 断线重连逻辑
           if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttemptsRef.current++;

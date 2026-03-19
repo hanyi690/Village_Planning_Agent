@@ -265,19 +265,38 @@ class RevisionNode(AsyncBaseNode):
         # 创建修复完成检查点元数据（标记为关键检查点，支持回滚）
         current_layer = state.get("current_layer", 1)
 
-        # 根据当前层推断修复完成阶段
+        # 根据当前层推断修复完成阶段（使用新增的 REVISION_COMPLETED 枚举）
         phase_map = {
-            1: PlanningPhase.LAYER1_ANALYZING,
-            2: PlanningPhase.LAYER2_CONCEPTING,
-            3: PlanningPhase.LAYER3_PLANNING,
+            1: PlanningPhase.LAYER1_REVISION_COMPLETED,
+            2: PlanningPhase.LAYER2_REVISION_COMPLETED,
+            3: PlanningPhase.LAYER3_REVISION_COMPLETED,
         }
         repair_phase = phase_map.get(current_layer, PlanningPhase.INIT)
+
+        # 获取修复的维度信息（用于检查点元数据）
+        from ..config.dimension_metadata import get_dimension_config, get_dimension_layer
+        repair_dimension_keys = list(updated_reports.keys())
+        repair_dimension_names = []
+        for dim_key in repair_dimension_keys:
+            dim_config = get_dimension_config(dim_key)
+            if dim_config:
+                repair_dimension_names.append(dim_config.get("name", dim_key))
+            else:
+                repair_dimension_names.append(dim_key)
+
+        # 构建描述：列出所有修复的维度
+        if len(repair_dimension_names) <= 3:
+            description = f"维度修复完成：{', '.join(repair_dimension_names)}"
+        else:
+            description = f"维度修复完成（Layer {current_layer}，共{len(repair_dimension_names)}个维度）"
 
         repair_meta = CheckpointMetadata(
             type=CheckpointType.KEY,
             phase=repair_phase,
             layer=current_layer,
-            description=f"修复完成（Layer {current_layer}）"
+            dimension_key=",".join(repair_dimension_keys) if repair_dimension_keys else None,
+            dimension_name=",".join(repair_dimension_names) if repair_dimension_names else None,
+            description=description
         )
 
         # 合并现有 metadata

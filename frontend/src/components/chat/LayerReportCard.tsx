@@ -23,6 +23,7 @@ interface LayerReportCardProps {
   onToggleAll?: (expand: boolean) => void;
   isActive?: boolean;
   hasStreamingDimensions?: boolean;
+  simplified?: boolean;
 }
 
 export default function LayerReportCard({
@@ -37,11 +38,12 @@ export default function LayerReportCard({
   onToggleAll,
   isActive = false,
   hasStreamingDimensions = false,
+  simplified = false,
 }: LayerReportCardProps) {
   const actualDefaultExpanded =
-    defaultExpanded ?? (mode === 'sidebar' || isActive || hasStreamingDimensions);
+    defaultExpanded ?? (simplified ? false : (mode === 'sidebar' || isActive || hasStreamingDimensions));
   const actualMaxHeight = maxHeight ?? (mode === 'chat' ? '800px' : 'none');
-  const actualShowExpandAll = showExpandAll ?? mode === 'sidebar';
+  const actualShowExpandAll = showExpandAll ?? (mode === 'sidebar' && !simplified);
 
   const [allExpanded, setAllExpanded] = useState(false);
   const [localExpanded, setLocalExpanded] = useState(actualDefaultExpanded);
@@ -146,57 +148,61 @@ export default function LayerReportCard({
         )}
       </AnimatePresence>
 
-      {/* Header - Chat mode simplified */}
-      {mode === 'chat' ? (
-        <div className="mb-4 pb-3 border-b border-cyan-200/50">
-          <h3 className="flex items-center gap-2 text-base font-semibold text-cyan-800">
-            <i className="fas fa-layer-group text-cyan-500" />
-            Layer {layerNumber} 报告
-          </h3>
-          <p className="text-sm text-gray-500 mt-1">
-            {dimensions.length} 个维度 · {actualCharCount} 字
-          </p>
-        </div>
-      ) : (
-        <div className="flex justify-between items-center mb-5 pb-4 border-b border-cyan-200/50">
-          <div>
-            <h3 className="flex items-center gap-2 text-lg font-semibold text-cyan-800">
-              <i className="fas fa-layer-group text-cyan-500" />
-              Layer {layerNumber} 完整报告
-            </h3>
-            <p className="text-sm text-gray-500 mt-1">
-              共 {dimensions.length} 个维度 · {actualCharCount} 字
-            </p>
-          </div>
+      {/* Header - Sidebar simplified mode skips header */}
+      {!simplified && (
+        <>
+          {mode === 'chat' ? (
+            <div className="mb-4 pb-3 border-b border-cyan-200/50">
+              <h3 className="flex items-center gap-2 text-base font-semibold text-cyan-800">
+                <i className="fas fa-layer-group text-cyan-500" />
+                Layer {layerNumber} 报告
+              </h3>
+              <p className="text-sm text-gray-500 mt-1">
+                {dimensions.length} 个维度 · {actualCharCount} 字
+              </p>
+            </div>
+          ) : (
+            <div className="flex justify-between items-center mb-5 pb-4 border-b border-cyan-200/50">
+              <div>
+                <h3 className="flex items-center gap-2 text-lg font-semibold text-cyan-800">
+                  <i className="fas fa-layer-group text-cyan-500" />
+                  Layer {layerNumber} 完整报告
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  共 {dimensions.length} 个维度 · {actualCharCount} 字
+                </p>
+              </div>
 
-          {/* Action buttons - Sidebar only */}
-          {actualShowExpandAll && (
-            <div className="flex gap-2">
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={handleExpandAll}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md"
-                style={{
-                  background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
-                  boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
-                }}
-              >
-                <i className="fas fa-expand-alt" />
-                展开全部
-              </motion.button>
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={handleCollapseAll}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors"
-              >
-                <i className="fas fa-compress-alt" />
-                折叠全部
-              </motion.button>
+              {/* Action buttons - Sidebar only */}
+              {actualShowExpandAll && (
+                <div className="flex gap-2">
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={handleExpandAll}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md"
+                    style={{
+                      background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+                      boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
+                    }}
+                  >
+                    <i className="fas fa-expand-alt" />
+                    展开全部
+                  </motion.button>
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={handleCollapseAll}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors"
+                  >
+                    <i className="fas fa-compress-alt" />
+                    折叠全部
+                  </motion.button>
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </>
       )}
 
       {/* Dimension sections */}

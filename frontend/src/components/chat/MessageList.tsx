@@ -17,6 +17,7 @@ import LayerReportMessage from './LayerReportMessage';
 import DimensionReportStreaming from './DimensionReportStreaming';
 import CheckpointMarker from './CheckpointMarker';
 import { parseTimestamp } from '@/lib/utils';
+import MarkdownRenderer from '@/components/MarkdownRenderer';
 
 interface MessageListProps {
   messages: Message[];
@@ -33,6 +34,7 @@ interface MessageListProps {
   checkpoints?: Checkpoint[];
   onRollback?: (checkpointId: string) => Promise<void>;
   isRollingBack?: boolean;
+  onViewFileInSidebar?: (file: FileMessage) => void;
 }
 
 // 格式化文件大小
@@ -58,6 +60,7 @@ export default function MessageList({
   checkpoints = [],
   onRollback,
   isRollingBack = false,
+  onViewFileInSidebar,
 }: MessageListProps) {
   const handleCopy = (message: Message) => {
     if (message.type === 'text') {
@@ -113,8 +116,11 @@ export default function MessageList({
           // 计算是否有流式维度（有维度报告且有内容）
           const hasStreamingDimensions = Object.keys(layerMsg.dimensionReports || {}).length > 0;
 
-          // 查找对应层级的 checkpoint
-          const layerCheckpoint = checkpoints.find((cp) => cp.layer === layerMsg.layer);
+          // 查找对应层级的 key 类型 checkpoint（按时间排序取最后一个）
+          const layerCheckpoint = checkpoints
+            .filter((cp) => cp.layer === layerMsg.layer && cp.type === 'key')
+            .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1))
+            .at(-1);
 
           return (
             <div key={message.id} className="w-full mb-4">
@@ -150,17 +156,23 @@ export default function MessageList({
           return (
             <div key={message.id} className="flex justify-end mb-4">
               <div className="max-w-[70%] bg-green-100 border border-green-300 text-gray-900 rounded-2xl px-4 py-3 shadow-md">
-                {/* 文件头部信息 */}
+                {/* 文件头部信息 - 图标可点击 */}
                 <div className="flex items-center gap-2 mb-2 pb-2 border-b border-white/20">
-                  <i className="fas fa-file-alt text-lg" />
+                  <button
+                    onClick={() => onViewFileInSidebar?.(fileMsg)}
+                    className="hover:opacity-70 transition-opacity"
+                    title="在侧边栏查看完整文件"
+                  >
+                    <i className="fas fa-file-alt text-lg" />
+                  </button>
                   <span className="font-medium">{fileMsg.filename}</span>
                   <span className="text-xs opacity-75">({formatBytes(fileMsg.fileSize)})</span>
                 </div>
 
-                {/* 内容预览 */}
+                {/* 内容预览 - 移除高度限制 */}
                 {previewContent && (
-                  <div className="bg-white/10 rounded-lg p-2 text-sm font-mono whitespace-pre-wrap overflow-hidden max-h-40">
-                    {previewContent}
+                  <div className="bg-white/10 rounded-lg p-2 text-sm font-mono whitespace-pre-wrap overflow-auto max-h-full">
+                    <MarkdownRenderer content={previewContent} className="text-sm" />
                     {hasMoreContent && <span className="text-gray-500">... (内容已截断)</span>}
                   </div>
                 )}

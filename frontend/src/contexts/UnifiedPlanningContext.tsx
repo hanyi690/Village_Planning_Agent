@@ -14,7 +14,7 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import { Message, PlanningParams, Checkpoint, DimensionProgressItem } from '@/types';
+import { Message, PlanningParams, Checkpoint, DimensionProgressItem, FileMessage } from '@/types';
 import { VillageInputData } from '@/components/VillageInputForm';
 import {
   planningApi,
@@ -174,6 +174,12 @@ interface UnifiedPlanningContextType {
   toggleViewer: () => void;
   highlightSection: (section: string) => void;
   clearHighlight: () => void;
+
+  // File viewer
+  viewingFile: FileMessage | null;
+  showFileViewer: (file: FileMessage) => void;
+  hideFileViewer: () => void;
+
   startPlanning: (params: PlanningParams) => Promise<void>;
   resetConversation: () => void;
 
@@ -205,6 +211,7 @@ export function UnifiedPlanningProvider({
   const [status, setStatusState] = useState<Status>('idle');
   const [viewerVisible, setViewerVisible] = useState(false);
   const [referencedSection, setReferencedSection] = useState<string | undefined>();
+  const [viewingFile, setViewingFile] = useState<FileMessage | null>(null);
 
   // Form state
   const [villageFormData, setVillageFormData] = useState<VillageInputData | null>(null);
@@ -599,6 +606,16 @@ export function UnifiedPlanningProvider({
   }, []);
   const clearHighlight = useCallback(() => setReferencedSection(undefined), []);
 
+  // File viewer actions
+  const showFileViewer = useCallback((file: FileMessage) => {
+    setViewingFile(file);
+    setViewerVisible(true);
+  }, []);
+  const hideFileViewer = useCallback(() => {
+    setViewingFile(null);
+    setViewerVisible(false);
+  }, []);
+
   // Content actions
   const loadLayerContent = useCallback(
     async (layerId: string) => {
@@ -657,12 +674,18 @@ export function UnifiedPlanningProvider({
         await planningApi.rollbackCheckpoint(taskId, checkpointId);
         setSelectedCheckpoint(checkpointId);
 
-        // Reload checkpoints and content
+        // Reload checkpoints
         await loadCheckpoints();
 
-        // Clear cached content to force reload
-        // TODO: setLayerContents was not defined, need to fix this properly
-        // setLayerContents({});
+        // 新增：获取并同步后端状态，更新 UI（如 pendingReviewLayer、completedLayers 等）
+        try {
+          const backendState = await planningApi.getStatus(taskId);
+          syncBackendState(backendState);
+          console.log('[UnifiedPlanningContext] Rollback: synced backend state from REST');
+        } catch (syncError) {
+          console.warn('[UnifiedPlanningContext] Rollback: failed to sync backend state:', syncError);
+          // 不抛出错误，避免影响回滚流程
+        }
 
         addMessage(createSystemMessage(`✅ 已回退到检查点 ${checkpointId.slice(0, 8)}...`));
       } catch (error) {
@@ -670,7 +693,7 @@ export function UnifiedPlanningProvider({
         throw error;
       }
     },
-    [taskId, loadCheckpoints, addMessage]
+    [taskId, loadCheckpoints, addMessage, syncBackendState]
   );
 
   // Planning actions
@@ -1238,6 +1261,12 @@ export function UnifiedPlanningProvider({
     toggleViewer,
     highlightSection,
     clearHighlight,
+
+    // File viewer
+    viewingFile,
+    showFileViewer,
+    hideFileViewer,
+
     startPlanning,
     resetConversation,
 

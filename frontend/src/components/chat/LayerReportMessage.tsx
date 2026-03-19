@@ -135,8 +135,8 @@ export default function LayerReportMessage({
         content={message.fullReportContent || ''}
         dimensions={dimensions}
         mode="chat"
-        defaultExpanded={false}
-        maxHeight="500px"
+        defaultExpanded={true}
+        maxHeight="none"
         showExpandAll={false}
         isActive={isActive} // ✅ 传递活跃状态
         hasStreamingDimensions={hasStreamingDimensions} // ✅ 传递流式维度状态

@@ -7,7 +7,8 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                      Page Layer (App Router)                         │
-│  app/page.tsx (首页)  app/village/[taskId]/page.tsx (任务详情)       │
+│                        app/page.tsx (首页)                           │
+│              ⚠️ 已删除：app/village/[taskId]/page.tsx (冗余)         │
 └─────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -22,8 +23,49 @@
 │  Layout: UnifiedLayout, Header, HistoryPanel, KnowledgePanel        │
 │  Chat: ChatPanel, MessageList, ReviewPanel, LayerReportMessage      │
 │  Form: VillageInputForm                                              │
+│  Layer: LayerSidebar (首页渲染)                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+## 页面架构说明
+
+### 首页 (`app/page.tsx`) - 唯一用户交互页面
+
+**功能**：
+- 入口页面，用于创建新任务或从历史面板加载会话
+- 通过 `HistoryPanel` 加载历史会话时，**不跳转路由**，直接设置 Context 中的 `taskId`
+- 通过 `taskId` 和 `status` 状态切换视图（`UnifiedContentSwitcher`）
+- **包含 Layer 侧边栏支持**：点击 Layer 按钮时拉取后端最新报告内容并显示
+
+**Layer 侧边栏机制**：
+```typescript
+// HomePage - Layer sidebar state
+const [layerSidebarOpen, setLayerSidebarOpen] = useState(false);
+const [activeLayer, setActiveLayer] = useState<number | null>(null);
+
+const handleLayerSidebarOpen = useCallback((layer: number) => {
+  setActiveLayer(layer);
+  setLayerSidebarOpen(true);
+}, []);
+
+const handleLayerSidebarClose = useCallback(() => {
+  setLayerSidebarOpen(false);
+  setActiveLayer(null);
+}, []);
+
+// 条件渲染 LayerSidebar
+{layerSidebarOpen && (
+  <LayerSidebar activeLayer={activeLayer} onClose={handleLayerSidebarClose} />
+)}
+```
+
+### 村庄页面 (`app/village/[taskId]/page.tsx`) - 已删除
+
+**删除原因**：
+- 没有任何地方导航到这个页面
+- 用户从历史面板加载会话后，留在首页 (`/`)
+- 通过 Context 的 `taskId` 状态切换视图
+- 这是冗余代码，已删除
 
 ## 技术栈
 
@@ -161,9 +203,9 @@ const handleSSEError = () => {
 ```
 frontend/src/
 ├── app/                        # 页面路由
-│   ├── page.tsx                # 首页
+│   ├── page.tsx                # 首页 (唯一用户交互页面)
 │   ├── layout.tsx              # 根布局
-│   └── village/[taskId]/       # 任务详情页
+│   └── village/[taskId]/       # ⚠️ 已删除 (冗余代码)
 ├── contexts/
 │   └── UnifiedPlanningContext.tsx  # 全局状态管理
 ├── controllers/
@@ -190,6 +232,8 @@ frontend/src/
 │   │   ├── DimensionReportStreaming.tsx
 │   │   ├── DimensionSelector.tsx
 │   │   └── CheckpointMarker.tsx
+│   ├── layer/                  # Layer 组件
+│   │   └── LayerSidebar.tsx    # Layer 报告侧边栏 (首页渲染)
 │   ├── report/                 # 报告组件
 │   │   └── KnowledgeReference.tsx
 │   ├── ui/                     # 通用UI组件
@@ -335,6 +379,7 @@ App (page.tsx)
 | DimensionReportStreaming | chat/DimensionReportStreaming.tsx | 维度流式报告 |
 | DimensionSelector | chat/DimensionSelector.tsx | 维度选择器（驳回时选择修复维度） |
 | CheckpointMarker | chat/CheckpointMarker.tsx | 检查点时间线标记（支持回滚） |
+| LayerSidebar | layer/LayerSidebar.tsx | Layer 报告侧边栏（首页渲染） |
 | KnowledgeReference | report/KnowledgeReference.tsx | 知识引用展示 |
 | MarkdownRenderer | MarkdownRenderer.tsx | Markdown 渲染器 |
 | Card | ui/Card.tsx | 通用卡片组件 |
@@ -436,6 +481,97 @@ switch (message.type) {
 | `components/layout/HistoryPanel.tsx` | 历史记录面板（删除会话） |
 | `components/chat/ThinkingIndicator.tsx` | 思考指示器（Gemini风格动画） |
 | `lib/utils/message-helpers.ts` | 消息创建辅助函数 |
+
+## Layer 侧边栏与报告拉取机制
+
+### SegmentedControl 触发式按钮
+
+**文件**: `components/ui/SegmentedControl.tsx` / `components/chat/ChatPanel.tsx`
+
+SegmentedControl 从状态切换型改为触发式按钮，点击时从后端拉取最新报告内容：
+
+```typescript
+// ChatPanel.tsx - handleLayerChange
+const handleLayerChange = useCallback(
+  async (layer: string) => {
+    const layerNumber = LAYER_LABEL_MAP[layer];
+    if (layerNumber === undefined || !taskId) return;
+
+    // 1. 从后端拉取最新报告（回滚后自动返回回滚后的内容）
+    try {
+      const reports = await planningApi.getLayerReports(taskId, layerNumber);
+
+      // 2. 更新 context 中的报告内容
+      if (layerNumber === 1) {
+        setLayerReports({ analysis_report_content: reports.report_content || '' });
+      } else if (layerNumber === 2) {
+        setLayerReports({ concept_report_content: reports.report_content || '' });
+      } else if (layerNumber === 3) {
+        setLayerReports({ detail_report_content: reports.report_content || '' });
+      }
+    } catch (error) {
+      console.error('[ChatPanel] 获取 Layer 报告失败:', error);
+    }
+
+    // 3. 打开侧边栏
+    onOpenLayerSidebar?.(layerNumber);
+  },
+  [setCurrentLayer, onOpenLayerSidebar, taskId, setLayerReports]
+);
+```
+
+**关键点**:
+- 点击按钮时调用 `planningApi.getLayerReports()` 从后端获取最新报告
+- 回滚后，后端 Checkpoint 已更新为目标状态，API 自动返回回滚后的内容
+- 不需要传递 `checkpoint_id` 参数，后端自动返回当前最新 Checkpoint 数据
+
+### UnifiedLayout cloneElement Prop 注入修复
+
+**文件**: `components/layout/UnifiedLayout.tsx`
+
+修复 cloneElement 无条件覆盖子组件已有 prop 的问题：
+
+```typescript
+// 修改前 (无条件覆盖)
+{Children.map(children, (child) => {
+  if (React.isValidElement(child)) {
+    return React.cloneElement(child, { onOpenLayerSidebar });
+  }
+  return child;
+})}
+
+// 修改后 (检查已存在才注入)
+{Children.map(children, (child) => {
+  if (React.isValidElement(child)) {
+    // 只在 children 没有 onOpenLayerSidebar 时才注入
+    const existingProps = child.props as { onOpenLayerSidebar?: (layer: number) => void };
+    if (!existingProps.onOpenLayerSidebar && onOpenLayerSidebar) {
+      return React.cloneElement(child, { onOpenLayerSidebar });
+    }
+  }
+  return child;
+})}
+```
+
+### Layer 报告内容存储
+
+**文件**: `contexts/UnifiedPlanningContext.tsx`
+
+```typescript
+export interface LayerReportContent {
+  analysis_reports: Record<string, string>;   // Layer 1 维度报告
+  concept_reports: Record<string, string>;    // Layer 2 维度报告
+  detail_reports: Record<string, string>;     // Layer 3 维度报告
+  analysis_report_content: string;            // Layer 1 汇总报告
+  concept_report_content: string;             // Layer 2 汇总报告
+  detail_report_content: string;              // Layer 3 汇总报告
+}
+
+// Context 提供 setLayerReports 方法
+setLayerReports: (reports: Partial<LayerReportContent>) => void;
+```
+
+---
 
 ## 审查与回滚功能
 

@@ -453,7 +453,7 @@ class MarkItDownLoader(BaseDocumentLoader):
             
             try:
                 result = func_timeout(self.timeout, _convert)
-                return result.text_content
+                return result.markdown
             except FunctionTimedOut:
                 raise TimeoutError(
                     f"MarkItDown 处理超时 (>{self.timeout}s): {target_path.name}"
@@ -462,7 +462,7 @@ class MarkItDownLoader(BaseDocumentLoader):
         except ImportError:
             # func_timeout 未安装，使用无超时方式（保持向后兼容）
             result = md.convert(str(target_path))
-            return result.text_content
+            return result.markdown
 
     def _parse_markdown(self, content: str, file_ext: str) -> list[Document]:
         """解析 Markdown 内容为 Document 列表"""

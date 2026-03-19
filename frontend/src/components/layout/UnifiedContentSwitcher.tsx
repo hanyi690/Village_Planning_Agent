@@ -22,7 +22,11 @@ import VillageInputForm from '@/components/VillageInputForm';
  * - Easy to add new views
  * - Consistent view transitions
  */
-export default function UnifiedContentSwitcher() {
+interface UnifiedContentSwitcherProps {
+  onOpenLayerSidebar?: (layer: number) => void;
+}
+
+export default function UnifiedContentSwitcher({ onOpenLayerSidebar }: UnifiedContentSwitcherProps) {
   const { viewMode, setVillageFormData, setStatus, setProjectName, addMessage } =
     useUnifiedPlanningContext();
 
@@ -55,7 +59,7 @@ export default function UnifiedContentSwitcher() {
     <div className="w-full">
       {viewMode === 'SESSION_ACTIVE' ? (
         <div className="w-full h-[calc(100vh-80px)] overflow-hidden">
-          <ChatPanel />
+          <ChatPanel onOpenLayerSidebar={onOpenLayerSidebar} />
           {/* Viewer sidebar will be rendered by ChatPanel when needed */}
         </div>
       ) : (

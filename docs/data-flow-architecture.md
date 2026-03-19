@@ -680,7 +680,122 @@ rebuilt_events = await _rebuild_events_from_checkpoint(session_id)
 
 ---
 
-## 12. 性能优化
+## 12. 回滚机制详解
+
+### 12.1 回滚实现原理
+
+**文件**: `backend/api/planning.py` - `rollback_checkpoint()`
+
+回滚功能使用 LangGraph 统一检查点管理，不需要传递 `checkpoint_id` 参数：
+
+```python
+async def rollback_checkpoint(session_id: str, checkpoint_id: str):
+    """
+    回滚到指定检查点
+
+    关键实现:
+    1. 使用 LangGraph 统一检查点管理
+    2. 回滚后 Checkpoint 自动更新为目标状态
+    3. getLayerReports API 自动返回最新 Checkpoint 内容
+    """
+    checkpointer = await get_global_checkpointer()
+    graph = create_village_planning_graph(checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": session_id}}
+
+    # 1. 从 LangGraph 检查点历史中查找目标检查点
+    target_state_snapshot = await graph.aget_state(config)
+
+    # 2. 遍历历史找到目标 checkpoint
+    # (通过 checkpoint_id 匹配)
+
+    # 3. 更新状态到目标 checkpoint
+    rollback_state = {
+        "analysis_reports": target_reports,
+        "concept_reports": concept_reports,
+        "detail_reports": detail_reports,
+        # ... 其他状态
+    }
+    await graph.aupdate_state(config, rollback_state, as_node=None)
+
+    # ✅ 回滚后，analysis_reports, concept_reports, detail_reports
+    # 已经是回滚 checkpoint 的内容
+```
+
+### 12.2 前端拉取报告机制
+
+**文件**: `frontend/src/components/chat/ChatPanel.tsx` - `handleLayerChange`
+
+前端点击 Layer 按钮时，从后端拉取最新报告：
+
+```typescript
+// ChatPanel.tsx - handleLayerChange
+const handleLayerChange = useCallback(
+  async (layer: string) => {
+    const layerNumber = LAYER_LABEL_MAP[layer];
+    if (layerNumber === undefined || !taskId) return;
+
+    // ✅ 从后端拉取最新报告 (回滚后自动返回回滚后的内容)
+    const reports = await planningApi.getLayerReports(taskId, layerNumber);
+
+    // ✅ 更新 context 中的报告内容
+    if (layerNumber === 1) {
+      setLayerReports({ analysis_report_content: reports.report_content || '' });
+    } else if (layerNumber === 2) {
+      setLayerReports({ concept_report_content: reports.report_content || '' });
+    } else if (layerNumber === 3) {
+      setLayerReports({ detail_report_content: reports.report_content || '' });
+    }
+
+    // 打开侧边栏
+    onOpenLayerSidebar?.(layerNumber);
+  },
+  [setCurrentLayer, onOpenLayerSidebar, taskId, setLayerReports]
+);
+```
+
+**关键点**:
+- `getLayerReports` API 不需要 `checkpoint_id` 参数
+- 后端调用 `graph.aget_state(config)` 获取当前最新 Checkpoint 状态
+- 回滚后，当前 Checkpoint 已经是回滚目标状态
+- **回滚后的"最新"就是回滚目标**
+
+### 12.3 回滚数据流
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│ 用户点击回滚 │────>│ 后端更新     │────>│ Checkpoint   │
+│              │     │ Checkpoint   │     │ 状态已更新   │
+└──────────────┘     └──────────────┘     └──────────────┘
+                                                │
+                                                ▼
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│ 侧边栏显示   │<────│ REST API     │<────│ getLayerReports │
+│ 回滚后内容   │     │ 返回最新内容 │     │ 获取当前状态 │
+└──────────────┘     └──────────────┘     └──────────────┘
+```
+
+### 12.4 设计决策
+
+**为什么不需要 checkpoint_id 参数？**
+
+1. **LangGraph Checkpoint 模型**:
+   - Checkpoint 是一个时间线，每个 checkpoint 有唯一 ID
+   - `graph.aget_state(config)` 返回当前最新 checkpoint 状态
+   - `graph.aupdate_state()` 更新当前状态到目标 checkpoint
+
+2. **回滚即更新**:
+   - 回滚后，当前 checkpoint 已经是回滚目标
+   - 后续 API 调用自动基于最新 checkpoint
+   - 不需要额外传递 checkpoint_id
+
+3. **前端简化**:
+   - `getLayerReports(sessionId, layer)` 只需要 sessionId 和 layer
+   - 不需要处理 checkpoint_id 的传递和缓存
+   - 回滚后点击 Layer 按钮，自动显示回滚内容
+
+---
+
+## 13. 性能优化
 
 ### 12.1 事件批处理
 

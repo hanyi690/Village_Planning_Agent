@@ -52,6 +52,8 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     setCurrentLayer,
     startPlanning,
     showViewer,
+    // File viewer
+    showFileViewer,
     // 审查状态
     isPaused,
     pendingReviewLayer,
@@ -72,8 +74,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     setUILayerCompleted,
     // 🔧 新增：同步消息到后端（用于延迟存储）
     syncMessageToBackend,
-    // 层级完成状态
-    completedLayers,
     // 🔧 新增：Layer 报告内容存储（用于侧边栏）
     setLayerReports,
   } = useUnifiedPlanningContext();
@@ -761,21 +761,44 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     ]
   );
 
+  // ✅ Use TaskController with stable callbacks
+  const [taskState, { approve, reject, rollback }] = useTaskController(taskId, callbacks);
+
   // Stable handler for SegmentedControl onChange
   const handleLayerChange = useCallback(
-    (layer: string) => {
+    async (layer: string) => {
+      console.log('[ChatPanel] Layer change requested:', layer);
       const layerNumber = LAYER_LABEL_MAP[layer];
-      if (layerNumber !== undefined) {
+      console.log('[ChatPanel] Mapped layer number:', layerNumber);
+      console.log('[ChatPanel] onOpenLayerSidebar:', onOpenLayerSidebar);
+
+      if (layerNumber !== undefined && taskId) {
         setCurrentLayer(layerNumber);
-        // 打开侧边栏
+
+        // 1. 从后端拉取最新报告（回滚后自动返回回滚后的内容）
+        try {
+          const reports = await planningApi.getLayerReports(taskId, layerNumber);
+          console.log('[ChatPanel] Layer reports fetched:', reports);
+
+          // 2. 更新 context 中的报告内容
+          if (layerNumber === 1) {
+            setLayerReports({ analysis_report_content: reports.report_content || '' });
+          } else if (layerNumber === 2) {
+            setLayerReports({ concept_report_content: reports.report_content || '' });
+          } else if (layerNumber === 3) {
+            setLayerReports({ detail_report_content: reports.report_content || '' });
+          }
+        } catch (error) {
+          console.error('[ChatPanel] 获取 Layer 报告失败:', error);
+        }
+
+        // 3. 打开侧边栏
+        console.log('[ChatPanel] Calling onOpenLayerSidebar with:', layerNumber);
         onOpenLayerSidebar?.(layerNumber);
       }
     },
-    [setCurrentLayer, onOpenLayerSidebar]
+    [setCurrentLayer, onOpenLayerSidebar, taskId, setLayerReports]
   );
-
-  // ✅ Use TaskController with stable callbacks
-  const [taskState, { approve, reject, rollback }] = useTaskController(taskId, callbacks);
 
   // ❌ DELETED: useLayoutEffect that causes status bounce
   // The pendingLayerCompletionRef mechanism has been removed
@@ -1304,6 +1327,15 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     [showViewer]
   );
 
+  // Handler: 在侧边栏查看文件内容
+  const handleViewFileInSidebar = useCallback(
+    (file: FileMessage) => {
+      console.log('[ChatPanel] View file in sidebar:', file.filename);
+      showFileViewer(file);
+    },
+    [showFileViewer]
+  );
+
   return (
     <div className={`flex flex-col h-full bg-[#F9FBF9] ${className}`}>
       {/* Top: Status indicators only - Card-style design */}
@@ -1368,23 +1400,26 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       )}
 
       {/* Middle: Message list - Centered container + max width */}
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="max-w-6xl mx-auto">
-          {/* Layer Segmented Control - 有 Layer 数据时常驻显示 */}
-          {(completedLayers[1] || completedLayers[2] || completedLayers[3]) ||
-          (status === 'planning' || status === 'paused') ? (
+      {/* Layer Segmented Control - 固定在 ChatPanel 顶部，不随消息滚动 */}
+      {taskId && taskId !== 'new' && (
+        <div className="sticky top-0 bg-[#F9FBF9] border-b border-gray-200 z-10">
+          <div className="max-w-6xl mx-auto p-4">
             <SegmentedControl
               options={LAYER_OPTIONS_ARRAY}
               value={currentLayer ? LAYER_VALUE_MAP[currentLayer] : LAYER_OPTIONS_ARRAY[0]}
               onChange={handleLayerChange}
-              className="mb-4"
             />
-          ) : null}
+          </div>
+        </div>
+      )}
 
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-6xl mx-auto">
           <MessageList
             messages={messages}
             isTyping={isTyping}
             onOpenInSidebar={handleOpenInSidebar}
+            onViewFileInSidebar={handleViewFileInSidebar}
             onViewLayerDetails={(layer) => {
               const layerId = getLayerId(layer);
               if (layerId) {

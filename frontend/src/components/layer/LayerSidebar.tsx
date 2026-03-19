@@ -3,7 +3,7 @@
 /**
  * LayerSidebar - Layer 报告侧边栏
  * 复用 HistoryPanel 的动画和 Portal 渲染逻辑
- * 使用 LayerReportCard 显示对应 Layer 的完整报告内容
+ * 使用 DimensionSection 显示各个维度的独立折叠卡片
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
@@ -12,7 +12,8 @@ import { motion } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
 import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
-import LayerReportCard from '@/components/chat/LayerReportCard';
+import DimensionSection from '@/components/chat/DimensionSection';
+import { getDimensionConfigsByLayer } from '@/config/dimensions';
 import { LAYER_VALUE_MAP } from '@/lib/constants';
 
 interface LayerSidebarProps {
@@ -21,10 +22,7 @@ interface LayerSidebarProps {
 }
 
 export default function LayerSidebar({ activeLayer, onClose }: LayerSidebarProps) {
-  const {
-    layerReports,
-    completedLayers,
-  } = useUnifiedPlanningContext();
+  const { layerReports, completedLayers } = useUnifiedPlanningContext();
 
   const [mounted, setMounted] = useState(false);
 
@@ -109,7 +107,7 @@ export default function LayerSidebar({ activeLayer, onClose }: LayerSidebarProps
         initial="hidden"
         animate="visible"
         exit="exit"
-        className="fixed right-0 top-0 bottom-0 w-[450px] max-w-[450px] bg-white/95 backdrop-blur-xl shadow-2xl flex flex-col z-[9999] overflow-hidden border-l border-white/20"
+        className="fixed right-0 top-0 bottom-0 w-[600px] max-w-[90vw] bg-white/95 backdrop-blur-xl shadow-2xl flex flex-col z-[9999] overflow-hidden border-l border-white/20"
       >
         {/* Header - Gradient */}
         <div
@@ -134,15 +132,23 @@ export default function LayerSidebar({ activeLayer, onClose }: LayerSidebarProps
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-5">
-          {layerContent.content ? (
-            <LayerReportCard
-              layerNumber={activeLayer}
-              content={layerContent.content}
-              dimensions={undefined} // Let LayerReportCard parse from content
-              mode="sidebar"
-              defaultExpanded={true}
-              isActive={completedLayers[activeLayer as 1 | 2 | 3] || false}
-            />
+          {layerContent.reports && Object.keys(layerContent.reports).length > 0 ? (
+            <div className="space-y-4">
+              {getDimensionConfigsByLayer(activeLayer).map(({ key, name, icon }) => {
+                const content = layerContent.reports[key] || '';
+                if (!content) return null;
+
+                return (
+                  <DimensionSection
+                    key={key}
+                    name={name}
+                    content={content}
+                    icon={icon}
+                    defaultExpanded={false}
+                  />
+                );
+              })}
+            </div>
           ) : (
             <div className="flex flex-col items-center justify-center py-16 text-gray-400">
               <FontAwesomeIcon icon={faLayerGroup} className="text-5xl mb-4" />
