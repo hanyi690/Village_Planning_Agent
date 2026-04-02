@@ -35,6 +35,8 @@ from src.rag.utils import load_knowledge_base
 from src.rag.visualize import SliceInspector
 from src.rag.core.context_manager import DocumentContextManager
 from src.rag.core.summarization import DocumentSummarizer, DocumentSummary
+from src.rag.metadata.injector import MetadataInjector, CategoryDetector
+from src.rag.slicing.strategies import SlicingStrategyFactory
 
 
 def load_documents():

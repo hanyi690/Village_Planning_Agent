@@ -8,7 +8,7 @@
 4. 支持渐进式披露 - 通过参数控制返回详细程度
 """
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
 from langchain_core.documents import Document
 from langchain_core.tools import Tool, tool
@@ -32,6 +32,37 @@ def format_error(message: str, error: Exception) -> str:
     """格式化错误消息"""
     return f"❌ {message}时发生错误: {error}"
 
+def _build_metadata_filter(
+    dimension: Optional[str] = None,
+    terrain: Optional[str] = None,
+    doc_type: Optional[str] = None,
+) -> Optional[Dict]:
+    """
+    构建 ChromaDB metadata 过滤器
+
+    Args:
+        dimension: 维度标识（如 "traffic", "land_use"）
+        terrain: 地形类型（"mountain", "plain", "hill", "all"）
+        doc_type: 文档类型（"policy", "standard", "case"）
+
+    Returns:
+        ChromaDB filter dict，如果无过滤条件则返回 None
+    """
+    filter_dict = {}
+
+    # 维度过滤：使用 $in 操作符匹配 dimension_tags 数组
+    if dimension:
+        filter_dict["dimension_tags"] = {"$in": [dimension]}
+
+    # 地形过滤
+    if terrain and terrain != "all":
+        filter_dict["terrain"] = terrain
+
+    # 文档类型过滤
+    if doc_type:
+        filter_dict["document_type"] = doc_type
+
+    return filter_dict if filter_dict else None
 
 # ==================== 工具函数 ====================
 
@@ -174,14 +205,22 @@ def get_chapter_content(source: str, chapter_pattern: str, detail_level: str = "
         return format_error("获取章节内容", e)
 
 
-def search_knowledge(query: str, top_k: int = 5, context_mode: str = "standard") -> str:
+def search_knowledge(
+    query: str,
+    top_k: int = 5,
+    context_mode: str = "standard",
+    dimension: Optional[str] = None,
+    terrain: Optional[str] = None,
+    doc_type: Optional[str] = None,
+) -> str:
     """
-    检索知识库（支持多种上下文模式）
+    检索知识库（支持多种上下文模式 + 元数据过滤）
 
     **何时使用：**
     - 需要查找特定信息时
     - 获取相关片段的上下文
     - 探索知识库中的相关内容
+    - 按维度/地形/文档类型过滤检索
 
     **参数：**
     - query (str | required): 查询问题或关键词
@@ -190,26 +229,47 @@ def search_knowledge(query: str, top_k: int = 5, context_mode: str = "standard")
       - "minimal": 仅匹配片段（最少 Token）- 最快
       - "standard": 片段 + 短上下文（300 字，默认）
       - "expanded": 片段 + 长上下文（500 字）- 最详细
+    - dimension (str | optional): 维度标识过滤（如 "traffic", "land_use"）
+    - terrain (str | optional): 地形类型过滤（"mountain", "plain", "hill", "all"）
+    - doc_type (str | optional): 文档类型过滤（"policy", "standard", "case"）
 
     **返回：**
     - 匹配的文档片段列表，包含来源、位置、内容
     """
     try:
-        # 构建缓存参数
-        context_params = {"top_k": top_k, "context_mode": context_mode}
-        
+        # 构建缓存参数（包含过滤条件）
+        context_params = {
+            "top_k": top_k,
+            "context_mode": context_mode,
+            "dimension": dimension,
+            "terrain": terrain,
+            "doc_type": doc_type,
+        }
+
         # ✅ 尝试从缓存获取
         cache = get_vector_cache()
         cached = cache.get_cached_query(query, context_params)
-        
+
         if cached is not None:
             # 缓存命中，使用缓存的结果继续格式化
             results = cached
         else:
             # 缓存未命中，执行检索
             db = get_vectorstore()
-            results: list[Document] = db.similarity_search(query, k=top_k)
-            
+
+            # 构建 metadata filter
+            filter_dict = _build_metadata_filter(dimension, terrain, doc_type)
+
+            # 使用 filter 进行检索
+            if filter_dict:
+                results: list[Document] = db.similarity_search(
+                    query,
+                    k=top_k,
+                    filter=filter_dict
+                )
+            else:
+                results: list[Document] = db.similarity_search(query, k=top_k)
+
             # ✅ 缓存检索结果
             if results:
                 cache.cache_query_result(query, results, context_params)

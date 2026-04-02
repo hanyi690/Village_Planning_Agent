@@ -34,6 +34,11 @@ from src.rag.config import (
 from src.rag.core.cache import get_vector_cache
 from src.rag.core.context_manager import DocumentContextManager
 from src.rag.utils.loaders import load_documents_from_directory, _create_loader, FileTypeDetector
+from src.rag.metadata.injector import MetadataInjector
+from src.rag.slicing.strategies import SlicingStrategyFactory
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class KnowledgeBaseManager:
@@ -99,21 +104,31 @@ class KnowledgeBaseManager:
                     doc_stats[source] = {
                         "source": source,
                         "chunk_count": 0,
-                        "doc_type": metadata.get("type", "unknown"),
+                        "doc_type": metadata.get("document_type", metadata.get("type", "unknown")),
+                        # 元数据字段（新增）
+                        # ChromaDB 存储为逗号分隔的字符串，需解析回列表
+                        "dimension_tags": metadata.get("dimension_tags", "").split(",") if metadata.get("dimension_tags") else [],
+                        "terrain": metadata.get("terrain"),  # None if not set
+                        "regions": metadata.get("regions", "").split(",") if metadata.get("regions") else [],
+                        "category": metadata.get("category", "policies"),
                     }
                 doc_stats[source]["chunk_count"] += 1
             
             return list(doc_stats.values())
             
         except Exception as e:
-            print(f"❌ 列出文档失败: {e}")
+            logger.error(f"列出文档失败: {e}")
             return []
     
     def add_document(
         self,
         file_path: str,
         category: Optional[str] = None,
-        skip_summary: bool = True
+        skip_summary: bool = True,
+        # 新增：手动指定的元数据（若不指定则自动标注）
+        doc_type: Optional[str] = None,
+        dimension_tags: Optional[list[str]] = None,
+        terrain: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         增量添加单个文档到知识库
@@ -139,15 +154,15 @@ class KnowledgeBaseManager:
         # 检查是否已存在
         existing = self._check_document_exists(source_name)
         if existing:
-            print(f"⚠️  文档已存在，将先删除旧版本: {source_name}")
+            logger.warning(f"  文档已存在，将先删除旧版本: {source_name}")
             self.delete_document(source_name)
         
         try:
-            print(f"\n📄 处理文档: {source_name}")
+            logger.info(f"处理文档: {source_name}")
             
             # 1. 检测文件类型
             real_type = FileTypeDetector.detect(path)
-            print(f"   类型: {real_type}")
+            logger.info(f"类型: {real_type}")
             
             # 2. 加载文档
             loader = _create_loader(path, real_type, category=category)
@@ -164,14 +179,14 @@ class KnowledgeBaseManager:
                     "message": "文档内容为空或无法解析"
                 }
             
-            print(f"   加载了 {len(documents)} 个文档片段")
+            logger.info(f"加载了 {len(documents)} 个文档片段")
             
             # 3. 合并文档内容
             full_content = "\n\n".join(doc.page_content for doc in documents)
             
             # 4. 切分文档
             splits = self.text_splitter.split_text(full_content)
-            print(f"   切分为 {len(splits)} 个片段")
+            logger.info(f"切分为 {len(splits)} 个片段")
             
             # 5. 创建 Document 对象并添加元数据
             split_docs = []
@@ -193,9 +208,35 @@ class KnowledgeBaseManager:
                 )
                 split_docs.append(doc)
             
-            # 6. 增量添加到 ChromaDB
+            # 6. 注入元数据（新增：维度标签、地形类型等）
+            # 若用户手动指定了元数据则使用手动指定的，否则自动标注
+            logger.info("   注入元数据...")
+            injector = MetadataInjector()
+            injector.inject_batch(
+                split_docs,
+                category=category,
+                doc_type=doc_type,
+                dimension_tags=dimension_tags,
+                terrain=terrain,
+            )
+
+            # 打印元数据信息
+            injected_dimension_tags = set()
+            injected_terrains = set()
+            for doc in split_docs:
+                # ChromaDB 存储为逗号分隔的字符串，需解析回列表
+                dim_tags = doc.metadata.get("dimension_tags", "")
+                if isinstance(dim_tags, str):
+                    dim_tags = dim_tags.split(",") if dim_tags else []
+                injected_dimension_tags.update(dim_tags)
+                injected_terrains.add(doc.metadata.get("terrain", "all"))
+
+            logger.info(f"维度标签：{list(injected_dimension_tags)}")
+            logger.info(f"地形类型：{list(injected_terrains)}")
+
+            # 7. 增量添加到 ChromaDB
             self.vectorstore.add_documents(split_docs)
-            print(f"   ✅ 已添加 {len(split_docs)} 个向量")
+            logger.info(f"已添加 {len(split_docs)} 个向量")
             
             # 7. 更新文档索引
             self._update_document_index(source_name, documents, split_docs)
@@ -237,7 +278,7 @@ class KnowledgeBaseManager:
                     "message": f"文档不存在: {source_name}"
                 }
             
-            print(f"\n🗑️  删除文档: {source_name}")
+            logger.info(f"删除文档: {source_name}")
             
             # 1. 从 ChromaDB 删除
             collection = self.vectorstore._collection
@@ -247,7 +288,7 @@ class KnowledgeBaseManager:
                 where={"source": source_name}
             )
             
-            print(f"   ✅ 已从向量库删除")
+            logger.info(f"已从向量库删除")
             
             # 2. 从文档索引删除
             self._remove_from_index(source_name)
@@ -279,7 +320,7 @@ class KnowledgeBaseManager:
             重建结果
         """
         try:
-            print("\n🔧 重建文档索引...")
+            logger.info("重建文档索引...")
             
             # 从 DATA_DIR 重新加载所有文档
             documents = load_documents_from_directory(DATA_DIR)
@@ -310,7 +351,7 @@ class KnowledgeBaseManager:
             self.context_manager.build_index(documents, splits)
             self.context_manager.save()
             
-            print(f"   ✅ 索引重建完成")
+            logger.info(f"索引重建完成")
             
             return {
                 "status": "success",
@@ -401,10 +442,10 @@ class KnowledgeBaseManager:
             )
             
             self.context_manager.save()
-            print(f"   ✅ 文档索引已更新")
+            logger.info(f"文档索引已更新")
             
         except Exception as e:
-            print(f"   ⚠️  更新索引失败: {e}")
+            logger.warning(f"  更新索引失败: {e}")
     
     def _remove_from_index(self, source_name: str) -> None:
         """从文档索引中删除"""
@@ -412,9 +453,9 @@ class KnowledgeBaseManager:
             if source_name in self.context_manager.doc_index:
                 del self.context_manager.doc_index[source_name]
                 self.context_manager.save()
-                print(f"   ✅ 已从索引删除")
+                logger.info(f"已从索引删除")
         except Exception as e:
-            print(f"   ⚠️  从索引删除失败: {e}")
+            logger.warning(f"  从索引删除失败: {e}")
 
 
 # 全局实例
@@ -432,12 +473,12 @@ def get_kb_manager() -> KnowledgeBaseManager:
 if __name__ == "__main__":
     # 测试
     manager = KnowledgeBaseManager()
-    
-    print("\n📊 知识库统计:")
+
+    logger.info("知识库统计:")
     stats = manager.get_stats()
-    print(f"   文档数: {stats.get('total_documents', 0)}")
-    print(f"   切片数: {stats.get('total_chunks', 0)}")
-    
-    print("\n📚 文档列表:")
+    logger.info(f"文档数: {stats.get('total_documents', 0)}")
+    logger.info(f"切片数: {stats.get('total_chunks', 0)}")
+
+    logger.info("文档列表:")
     for doc in stats.get("documents", []):
-        print(f"   - {doc['source']}: {doc['chunk_count']} 切片")
+        logger.info(f"- {doc['source']}: {doc['chunk_count']} 切片")

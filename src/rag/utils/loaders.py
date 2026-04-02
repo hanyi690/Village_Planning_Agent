@@ -782,13 +782,15 @@ def load_knowledge_base(
     - Excel: .xls, .xlsx
     - 其他: .epub, .html, .md, .txt
     """
+    from src.core.config import KB_CATEGORIES
+
     data_dir = Path(data_dir)
 
     if categories is None:
         categories = [
             item.name
             for item in data_dir.iterdir()
-            if item.is_dir() and item.name in ["policies", "cases"]
+            if item.is_dir() and item.name in KB_CATEGORIES
         ]
 
     if not categories:
