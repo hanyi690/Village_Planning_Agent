@@ -90,6 +90,101 @@ const handleLayerSidebarClose = useCallback(() => {
 - **动画效果**：流畅的微动画和过渡效果
 - **思考指示器**：脉动动画效果，模拟 AI 思考过程
 
+### 色彩系统
+
+```css
+/* 主色调 */
+--primary-green: #16a34a;       /* 主品牌色 */
+--primary-green-hover: #15803d; /* 悬停色 */
+
+/* 语义色 */
+--success: #22c55e;  /* 成功/完成 */
+--warning: #eab308;  /* 警告/审查 */
+--error:   #ef4444;  /* 错误/失败 */
+--info:    #3b82f6;  /* 信息 */
+```
+
+### 状态徽章
+
+```css
+.status-paused { background: #fef9c3; color: #854d0e; }
+.status-completed { background: #dcfce7; color: #166534; }
+.status-failed { background: #fee2e2; color: #991b1b; }
+```
+
+### 流式文本光标
+
+```css
+.streaming-cursor::after {
+  content: '▋';
+  animation: blink 1s infinite;
+  color: var(--primary-green);
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+```
+
+### 维度图标
+
+#### Layer 1: 现状分析
+
+| 图标 | 维度 |
+|------|------|
+| 📍 | 区位与对外交通分析 |
+| 👥 | 社会经济分析 |
+| 💭 | 村民意愿与诉求分析 |
+| 📋 | 上位规划与政策导向分析 |
+| 🌿 | 自然环境分析 |
+| 🏗️ | 土地利用分析 |
+| 🚗 | 道路交通分析 |
+| 🏛️ | 公共服务设施分析 |
+| 🔧 | 基础设施分析 |
+| 🌳 | 生态绿地分析 |
+| 🏠 | 建筑分析 |
+| 🏮 | 历史文化与乡愁保护分析 |
+
+#### Layer 2: 规划思路
+
+| 图标 | 维度 |
+|------|------|
+| 💎 | 资源禀赋分析 |
+| 🎯 | 规划定位分析 |
+| 📈 | 发展目标分析 |
+| 📊 | 规划策略分析 |
+
+#### Layer 3: 详细规划
+
+| 图标 | 维度 |
+|------|------|
+| 🏭 | 产业规划 |
+| 🗺️ | 空间结构规划 |
+| 📐 | 土地利用规划 |
+| 🏘️ | 居民点规划 |
+| 🛣️ | 道路交通规划 |
+| 🏥 | 公共服务设施规划 |
+| 🔨 | 基础设施规划 |
+| 🌲 | 生态绿地规划 |
+| 🛡️ | 防震减灾规划 |
+| 🏰 | 历史文保规划 |
+| 🎨 | 村庄风貌指引 |
+| 📦 | 建设项目库 |
+
+### 响应式断点
+
+```css
+@media (max-width: 640px) {
+  .message { max-width: 90%; }
+}
+
+@media (min-width: 1025px) {
+  .container { max-width: 1200px; }
+  .message { max-width: 80%; }
+}
+```
+
 ## 核心原则
 
 ### 单一状态源 (SSOT)

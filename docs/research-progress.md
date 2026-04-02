@@ -5,7 +5,7 @@
 ## 总体进度
 
 ```
-课题一 ████████░░░░░░░░░░░░ 70%  部分完成
+课题一 ██████████████████░░ 90%  已完成
 课题二 ██████████████████░░ 90%  已完成
 课题三 ███████████████████░ 95%  已完成
 课题四 ███████████████████░ 95%  已完成
@@ -15,7 +15,7 @@
 
 ## 课题一：面向村庄规划的领域知识库构建与RAG应用研究
 
-### 完成度：70%
+### 完成度：90%
 
 ### 已实现功能
 
@@ -29,14 +29,86 @@
 | 知识库增量管理 | 已完成 | `src/rag/core/kb_manager.py` |
 | 查询缓存 | 已完成 | `src/rag/core/cache.py` |
 | 文档摘要生成 | 已完成 | `src/rag/core/summarization.py` |
+| **元数据注入模块** | **已完成** | `src/rag/metadata/` |
+| **差异化切片策略** | **已完成** | `src/rag/slicing/strategies.py` |
+| **元数据过滤检索** | **已完成** | `src/rag/core/tools.py` |
+
+### 核心创新点（Phase 1-4 已实现）
+
+#### Phase 1: 元数据注入模块 ✅
+
+| 组件 | 功能 |
+|------|------|
+| DimensionTagger | 支持 15 个分析维度的自动识别（基于内容关键词匹配） |
+| TerrainTagger | 支持 5 种地形类型识别（mountain/plain/hill/coastal/riverside） |
+| DocumentTypeTagger | 支持 5 种文档类型识别（policy/standard/case/guide/report） |
+| MetadataInjector | 批量注入元数据到文档切片 |
+
+**注入元数据字段**：
+- `dimension_tags`: List[str] - 适用的分析维度列表
+- `terrain`: str - 地形类型（mountain/plain/hill/coastal/riverside/all）
+- `document_type`: str - 文档类型（policy/standard/case/guide/report）
+- `regions`: List[str] - 涉及的地区列表
+- `category`: str - 知识类别（policies/cases/standards/domain/local）
+
+#### Phase 2: 差异化切片策略 ✅
+
+| 策略类 | 适用文档 | 切片特点 |
+|--------|----------|----------|
+| PolicySlicer | 政策文档 | 按"第 X 条"分割，保持条款完整性 |
+| CaseSlicer | 案例文档 | 按项目阶段分割（背景/思路/措施...） |
+| StandardSlicer | 标准规范 | 按章节编号分割（4.1, 4.2...） |
+| GuideSlicer | 指南手册 | 按知识点/标题分割 |
+| DefaultSlicer | 通用文档 | RecursiveCharacterTextSplitter (2500/500) |
+
+#### Phase 3: 元数据过滤检索 ✅
+
+| 功能 | 说明 |
+|------|------|
+| `_build_metadata_filter` | 构建维度、地形、文档类型的复合过滤条件 |
+| `search_knowledge` | 支持元数据过滤的相似性检索 |
+| `check_technical_indicators` | 技术指标精准检索工具（支持多维度过滤） |
+| `knowledge_preload_node` | 知识预加载优化（使用维度特定查询模板） |
+
+**维度特定查询模板**：
+```python
+DIMENSION_QUERIES = {
+    "land_use": "土地利用 用地分类 三区三线 建设用地标准 规划技术规范",
+    "infrastructure": "基础设施 给排水 电力通信 污水处理 技术规范 建设标准",
+    "ecological_green": "生态绿地 绿地系统 景观风貌 生态保护 绿地率 技术规范",
+    "historical_culture": "历史文化 文物保护 传统村落 历史建筑 保护规划 规范",
+    "superior_planning": "上位规划 政策法规 乡村振兴 十四五规划 指导意见",
+}
+```
+
+#### Phase 4: 集成到入库流程 ✅
+
+**优化后的入库流程**：
+```
+加载文档 → 识别文档类型 → 选择切片策略 → 差异化切片 → 注入元数据 → 存入向量库
+                                      ↓
+                              维度标签、地形类型、文档类型
+```
+
+**修改文件**：
+- `src/rag/build.py` - 集成 MetadataInjector 和 SlicingStrategyFactory
+- `src/rag/core/kb_manager.py` - 增量添加文档时注入元数据
+
+### 验收标准达成情况
+
+| 指标 | 目标值 | 验证方式 | 状态 |
+|------|--------|----------|------|
+| 元数据完整性 | 100% 切片包含 dimension_tags | MetadataInjector 测试 | ✅ |
+| 检索精度提升 | 使用过滤后相关性 +50% | 对比测试（需实际数据验证） | ⏳ |
+| Token 效率 | 预加载后每维度 -30% Token | LangSmith tracing（需实际运行） | ⏳ |
+| 维度覆盖率 | 15/15 维度有标签映射 | 检查 tagging_rules.py | ✅ |
 
 ### 缺失功能
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
 | 知识抽取 | 未实现 | 无从法规/标准中自动抽取关键概念的模块 |
-| 结构化元数据注入 | 预留未用 | `METADATA_SCHEMA` 已定义，但入库时未注入 |
-| 知识库内容 | 空 | `data/policies` 目录为空，需填充政策法规数据 |
+| 知识库内容 | 部分填充 | 需继续补充政策法规、技术标准数据 |
 
 ### 建议投刊
 
@@ -203,9 +275,9 @@ Layer 1 现状分析维度：
 
 ### 课题一改进
 
-1. 填充知识库内容（政策法规、技术标准）
-2. 实现结构化元数据注入
-3. 开发自动知识抽取模块
+1. 填充知识库内容（政策法规、技术标准、案例库）
+2. 开发自动知识抽取模块（从法规/标准中抽取关键概念）
+3. 性能验证与优化（LangSmith tracing 对比优化前后 Token 消耗）
 
 ### 课题三改进
 

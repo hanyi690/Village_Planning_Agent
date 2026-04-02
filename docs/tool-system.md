@@ -343,7 +343,7 @@ class WebReviewTool:
 
 ---
 
-### 2.5 RAG 知识检索工具集
+### 2.5 RAG 知识检索工具集（v2.0 - 支持元数据过滤）
 
 **文件**: `src/rag/core/tools.py`
 
@@ -355,7 +355,55 @@ class WebReviewTool:
 | `knowledge_search_tool` | 知识检索（三种上下文模式） | ✅ 完成 |
 | `key_points_search_tool` | 搜索关键要点 | ✅ 完成 |
 | `full_document_tool` | 获取完整文档内容 | ✅ 完成 |
-| `check_technical_indicators` | 检索技术指标 | ⚠️ 预留元数据过滤接口 |
+| `check_technical_indicators` | 检索技术指标（**支持元数据过滤**） | ✅ 完成 |
+
+**新增功能（2026-03 优化）**：
+
+1. **`_build_metadata_filter`** - 元数据过滤器构建
+   ```python
+   filter_dict = _build_metadata_filter(
+       dimension="traffic",
+       terrain="mountain",
+       doc_type="standard"
+   )
+   # 返回：{'dimension_tags': {'$in': ['traffic']}, 'terrain': 'mountain', 'document_type': 'standard'}
+   ```
+
+2. **`search_knowledge`** - 支持元数据过滤的检索
+   ```python
+   result = search_knowledge(
+       query="道路宽度标准",
+       top_k=5,
+       dimension="traffic",
+       terrain="mountain"
+   )
+   ```
+
+3. **`check_technical_indicators`** - 技术指标检索工具（已实现元数据过滤）
+   ```python
+   result = check_technical_indicators.invoke({
+       "query": "道路红线宽度",
+       "dimension": "traffic",
+       "terrain": "mountain",
+       "doc_type": "standard"
+   })
+   ```
+
+4. **`knowledge_preload_node`** - 知识预加载优化
+   - 使用维度特定查询模板（DIMENSION_QUERIES）
+   - 调用 `check_technical_indicators` 进行精准检索
+   - 支持维度过滤
+
+**维度特定查询模板**：
+```python
+DIMENSION_QUERIES = {
+    "land_use": "土地利用 用地分类 三区三线 建设用地标准 规划技术规范",
+    "infrastructure": "基础设施 给排水 电力通信 污水处理 技术规范 建设标准",
+    "ecological_green": "生态绿地 绿地系统 景观风貌 生态保护 绿地率 技术规范",
+    "historical_culture": "历史文化 文物保护 传统村落 历史建筑 保护规划 规范",
+    "superior_planning": "上位规划 政策法规 乡村振兴 十四五规划 指导意见",
+}
+```
 
 ---
 
@@ -750,12 +798,30 @@ def _load_builtin_schemas(self):
 
 **文件**: `src/rag/core/tools.py`
 
-**状态**: 框架已建，预留元数据过滤接口
+**状态**: ✅ **已完成**（2026-03 优化）
 
-**待实现**:
-- 按维度过滤技术指标
-- 按地形类型过滤
-- 结构化指标输出
+**已实现功能**:
+- ✅ 按维度过滤技术指标
+- ✅ 按地形类型过滤
+- ✅ 按文档类型过滤
+- ✅ 结构化指标输出
+
+**使用示例**:
+```python
+from src.rag.core.tools import check_technical_indicators
+
+# 山区道路交通规范检索
+result = check_technical_indicators.invoke({
+    "query": "道路宽度标准",
+    "dimension": "traffic",
+    "terrain": "mountain",
+    "doc_type": "standard"
+})
+```
+
+**核心函数**:
+- `_build_metadata_filter(dimension, terrain, doc_type)` - 构建 ChromaDB 过滤条件
+- `search_knowledge(query, top_k, dimension, terrain, doc_type)` - 支持元数据过滤的检索
 
 #### 6.2.2 planner_tool 增强
 
@@ -898,4 +964,10 @@ def _prepare_tool_context(self, state: Dict[str, Any]) -> Dict[str, Any]:
 | `src/planners/generic_planner.py` | 规划器（工具调用入口） |
 | `src/rag/core/tools.py` | RAG 知识检索工具集（7个工具） |
 | `src/rag/config.py` | RAG 配置（Embedding、向量库） |
-| `src/rag/build.py` | 知识库构建入口 |
+| `src/rag/build.py` | 知识库构建入口（集成差异化切片和元数据注入） |
+| `src/rag/metadata/__init__.py` | 元数据模块导出 |
+| `src/rag/metadata/tagging_rules.py` | 标注规则配置（24 维度关键词映射） |
+| `src/rag/metadata/injector.py` | 元数据注入器 |
+| `src/rag/slicing/__init__.py` | 切片策略模块导出 |
+| `src/rag/slicing/strategies.py` | 差异化切片策略 |
+| `src/rag/core/kb_manager.py` | 知识库管理（已集成元数据注入） |

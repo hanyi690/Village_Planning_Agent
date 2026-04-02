@@ -320,7 +320,7 @@ ToolRegistry.execute_tool("population_model_v1", context)
 "traffic": {"tool": "network_accessibility"}
 ```
 
-## RAG 知识检索
+## RAG 知识检索（v2.0 - 支持元数据过滤）
 
 ### 集成方式
 
@@ -335,18 +335,77 @@ ToolRegistry.execute_tool("population_model_v1", context)
                预加载关键维度知识            读取知识
 ```
 
+### 核心创新点（2026-03 新增）
+
+**Phase 1: 元数据注入模块** ✅
+- `DimensionTagger` - 15 个分析维度自动识别
+- `TerrainTagger` - 5 种地形类型识别
+- `DocumentTypeTagger` - 5 种文档类型识别
+- `MetadataInjector` - 批量注入元数据到切片
+
+**Phase 2: 差异化切片策略** ✅
+- `PolicySlicer` - 按"第 X 条"分割（政策文档）
+- `CaseSlicer` - 按项目阶段分割（案例文档）
+- `StandardSlicer` - 按章节编号分割（标准规范）
+- `GuideSlicer` - 按知识点/标题分割（指南手册）
+
+**Phase 3: 元数据过滤检索** ✅
+- `_build_metadata_filter` - 复合过滤条件构建
+- `search_knowledge` - 支持维度/地形/文档类型过滤
+- `check_technical_indicators` - 技术指标精准检索
+
+**Phase 4: 集成到入库流程** ✅
+- `src/rag/build.py` - 差异化切片 + 元数据注入
+- `src/rag/core/kb_manager.py` - 增量添加文档时注入
+
 ### 模块结构
 
 ```
 src/rag/
-├── config.py                 # 配置
-├── build.py                  # 知识库构建入口
+├── config.py                 # 配置（Embedding、向量库）
+├── build.py                  # 知识库构建入口（已集成差异化切片）
+├── metadata/                 # 元数据模块（新增）
+│   ├── __init__.py
+│   ├── tagging_rules.py      # 标注规则配置（24 维度关键词映射）
+│   └── injector.py           # 元数据注入器
+├── slicing/                  # 切片策略模块（新增）
+│   ├── __init__.py
+│   └── strategies.py         # 差异化切片策略
 ├── core/
-│   ├── tools.py              # knowledge_search_tool
+│   ├── tools.py              # knowledge_search_tool（支持 metadata 过滤）
 │   ├── cache.py              # Embedding 模型缓存
-│   └── loaders.py            # 文档加载器
+│   ├── loaders.py            # 文档加载器
+│   ├── kb_manager.py         # 知识库管理（已集成元数据注入）
+│   └── summarization.py      # 文档摘要生成
 └── scripts/
     └── build_kb_auto.py      # 构建脚本
+```
+
+### 元数据字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| dimension_tags | List[str] | 适用的分析维度列表 |
+| terrain | str | 地形类型：mountain/plain/hill/coastal/riverside/all |
+| document_type | str | 文档类型：policy/standard/case/guide/report |
+| source | str | 来源文件路径 |
+| category | str | 知识类别：policies/cases/standards/domain/local |
+| chunk_index | int | 切片在文档中的索引 |
+| total_chunks | int | 文档总切片数 |
+| regions | List[str] | 涉及的地区列表 |
+
+### 使用示例
+
+```python
+from src.rag.core.tools import check_technical_indicators
+
+# 山区道路交通规范检索（支持多维度过滤）
+result = check_technical_indicators.invoke({
+    "query": "道路宽度标准",
+    "dimension": "traffic",
+    "terrain": "mountain",
+    "doc_type": "standard"
+})
 ```
 
 ## 节点基类
