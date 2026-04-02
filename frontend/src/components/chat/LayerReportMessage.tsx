@@ -8,7 +8,7 @@
 import { LayerCompletedMessage } from '@/types';
 import { parseLayerReport, ParsedDimension } from '@/lib/layerReportParser';
 import LayerReportCard from './LayerReportCard';
-import { useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { getDimensionName, getDimensionIcon } from '@/config/dimensions';
 
 interface LayerReportMessageProps {
@@ -20,7 +20,7 @@ interface LayerReportMessageProps {
   dimensionContents?: Map<string, string>; // NEW: 实时维度内容（解决并行更新竞态）
 }
 
-export default function LayerReportMessage({
+function LayerReportMessage({
   message,
   onOpenInSidebar,
   onToggleAllDimensions,
@@ -146,3 +146,8 @@ export default function LayerReportMessage({
     </div>
   );
 }
+
+// React.memo 优化：减少层级报告组件的不必要重渲染
+const MemoizedLayerReportMessage = React.memo(LayerReportMessage);
+
+export default MemoizedLayerReportMessage;

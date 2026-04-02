@@ -6,7 +6,7 @@
  * 使用 Tailwind CSS + Framer Motion
  */
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ParsedSubsection } from '@/lib/layerReportParser';
 import MarkdownRenderer from '../MarkdownRenderer';
@@ -21,7 +21,7 @@ interface DimensionSectionProps {
   onExport?: () => void;
 }
 
-export default function DimensionSection({
+function DimensionSection({
   name,
   content,
   icon,
@@ -148,3 +148,8 @@ export default function DimensionSection({
     </motion.div>
   );
 }
+
+// React.memo 优化：避免父组件更新导致的不必要重渲染
+const MemoizedDimensionSection = React.memo(DimensionSection);
+
+export default MemoizedDimensionSection;

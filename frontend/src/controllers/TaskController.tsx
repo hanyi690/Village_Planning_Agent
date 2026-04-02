@@ -77,6 +77,8 @@ export function useTaskController(
       timestamp: string;
     }) => void;
     onError?: (error: string) => void;
+    // ✅ Fix 2: SSE 连接状态回调
+    onConnected?: () => void;
   } = {}
 ): [TaskState, TaskControllerActions] {
   const [state, setState] = useState<TaskState>({
@@ -102,6 +104,16 @@ export function useTaskController(
   const reconnectAttemptsRef = useRef(0);
   const MAX_RECONNECT_ATTEMPTS = 5;
 
+  // ✅ Fix 1: 使用 ref 追踪层级完成状态，避免 fetchStatus 依赖循环
+  const prevLayerCompletedRef = useRef({
+    layer_1: false,
+    layer_2: false,
+    layer_3: false,
+  });
+
+  // ✅ Fix ESLint: 使用 ref 追踪 execution_error，避免 SSE useEffect 频繁重建
+  const executionErrorRef = useRef<string | null>(null);
+
   // Update callbacks ref
   useEffect(() => {
     callbacksRef.current = callbacks;
@@ -115,11 +127,11 @@ export function useTaskController(
     try {
       const statusData = await planningApi.getStatus(taskId);
 
-      // ✅ 新增：检测层级完成状态变化
+      // ✅ Fix 1: 使用 ref 比较而非 state，避免依赖循环
       const layerCompletedChanged =
-        (statusData.layer_1_completed && !state.layer_1_completed) ||
-        (statusData.layer_2_completed && !state.layer_2_completed) ||
-        (statusData.layer_3_completed && !state.layer_3_completed);
+        (statusData.layer_1_completed && !prevLayerCompletedRef.current.layer_1) ||
+        (statusData.layer_2_completed && !prevLayerCompletedRef.current.layer_2) ||
+        (statusData.layer_3_completed && !prevLayerCompletedRef.current.layer_3);
 
       if (layerCompletedChanged) {
         console.log('[TaskController] 🔄 检测到层级完成状态变化，触发恢复回调:', {
@@ -136,21 +148,21 @@ export function useTaskController(
         };
 
         // Layer 1 完成状态变化
-        if (statusData.layer_1_completed && !state.layer_1_completed) {
+        if (statusData.layer_1_completed && !prevLayerCompletedRef.current.layer_1) {
           console.log('[TaskController] 🔄 触发 Layer 1 started 回调（断线恢复）');
           callbacksRef.current.onLayerStarted?.(1, layerNames[1]);
           callbacksRef.current.onLayerCompleted?.(1, '', {});
         }
 
         // Layer 2 完成状态变化
-        if (statusData.layer_2_completed && !state.layer_2_completed) {
+        if (statusData.layer_2_completed && !prevLayerCompletedRef.current.layer_2) {
           console.log('[TaskController] 🔄 触发 Layer 2 started 回调（断线恢复）');
           callbacksRef.current.onLayerStarted?.(2, layerNames[2]);
           callbacksRef.current.onLayerCompleted?.(2, '', {});
         }
 
         // Layer 3 完成状态变化
-        if (statusData.layer_3_completed && !state.layer_3_completed) {
+        if (statusData.layer_3_completed && !prevLayerCompletedRef.current.layer_3) {
           console.log('[TaskController] 🔄 触发 Layer 3 started 回调（断线恢复）');
           callbacksRef.current.onLayerStarted?.(3, layerNames[3]);
           callbacksRef.current.onLayerCompleted?.(3, '', {});
@@ -171,6 +183,16 @@ export function useTaskController(
         progress: statusData.progress ?? null,
       });
 
+      // ✅ Fix 1: 更新 ref 追踪的层级完成状态
+      prevLayerCompletedRef.current = {
+        layer_1: statusData.layer_1_completed,
+        layer_2: statusData.layer_2_completed,
+        layer_3: statusData.layer_3_completed,
+      };
+
+      // ✅ Fix ESLint: 同步 execution_error 到 ref
+      executionErrorRef.current = statusData.execution_error ?? null;
+
       console.log('[TaskController] ✅ 状态同步完成:', {
         status: statusData.status,
         current_layer: statusData.current_layer,
@@ -184,7 +206,7 @@ export function useTaskController(
     } catch (error: unknown) {
       console.error('[TaskController] 获取状态失败:', error);
     }
-  }, [taskId, state.layer_1_completed, state.layer_2_completed, state.layer_3_completed]);
+  }, [taskId]); // ✅ Fix 1: 只依赖 taskId，移除 state.layer_X_completed 依赖循环
 
   // ✅ SSE 连接管理（唯一的状态更新渠道）
   // 添加断线重连逻辑
@@ -304,11 +326,16 @@ export function useTaskController(
                 layer?: number;
                 has_data?: boolean;
                 dimension_count?: number;
+                dimension_reports?: Record<string, string>;
               }) || {};
 
             console.log(`[TaskController] ✅ layer_completed signal: Layer ${data.layer}`);
 
-            callbacksRef.current.onLayerCompleted?.(data.layer || 1, '', {});
+            callbacksRef.current.onLayerCompleted?.(
+              data.layer || 1,
+              '',
+              data.dimension_reports || {}
+            );
           } else if (eventType === 'pause') {
             const data =
               (event.data as {
@@ -344,20 +371,24 @@ export function useTaskController(
             callbacksRef.current.onError?.(
               event.data?.error || event.data?.message || 'Unknown error'
             );
+          } else if (eventType === 'connected') {
+            // ✅ Fix 2: SSE 连接成功回调
+            console.log('[TaskController] 🔗 SSE connected event received');
+            callbacksRef.current.onConnected?.();
           }
         },
         (error) => {
           console.error('[TaskController] SSE error:', error);
 
           // 🔧 修复：检查是否是后端错误导致的断开
-          // 如果 state.execution_error 有值，说明后端处理出错，不应重连
-          if (state.execution_error) {
+          // ✅ Fix ESLint: 使用 ref 而不是 state.execution_error
+          if (executionErrorRef.current) {
             console.error(
               '[TaskController] 检测到后端错误，跳过重连:',
-              state.execution_error
+              executionErrorRef.current
             );
             callbacksRef.current.onError?.(
-              `后端错误：${state.execution_error}，请检查任务配置或联系管理员`
+              `后端错误：${executionErrorRef.current}，请检查任务配置或联系管理员`
             );
             return;
           }

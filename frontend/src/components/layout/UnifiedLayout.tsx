@@ -14,7 +14,7 @@ import { useRouter } from 'next/navigation';
 import Header from './Header';
 import HistoryPanel from './HistoryPanel';
 import KnowledgePanel from './KnowledgePanel';
-import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
+import { useConversationContext } from '@/contexts/ConversationContext';
 
 interface UnifiedLayoutProps {
   taskId: string;
@@ -26,7 +26,7 @@ function UnifiedLayoutComponent({ taskId, children, onOpenLayerSidebar }: Unifie
   const router = useRouter();
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
-  const { resetConversation } = useUnifiedPlanningContext();
+  const { resetConversation } = useConversationContext();
 
   const handleToggleHistory = useCallback(() => {
     setHistoryModalOpen((prev) => !prev);

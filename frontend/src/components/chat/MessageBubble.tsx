@@ -24,7 +24,7 @@ interface MessageBubbleProps {
   children?: React.ReactNode;
 }
 
-export default function MessageBubble({
+function MessageBubble({
   message,
   onCopy,
   onRegenerate,
@@ -182,3 +182,8 @@ export default function MessageBubble({
     </motion.div>
   );
 }
+
+// React.memo 优化：减少不必要的重渲染
+const MemoizedMessageBubble = React.memo(MessageBubble);
+
+export default MemoizedMessageBubble;

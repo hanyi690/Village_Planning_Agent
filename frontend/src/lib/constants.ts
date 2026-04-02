@@ -28,6 +28,15 @@ export const LAYER_VALUE_MAP: Record<number, string> = {
 export const LAYER_OPTIONS = ['现状分析', '规划思路', '详细规划'] as const;
 export const LAYER_OPTIONS_ARRAY = ['现状分析', '规划思路', '详细规划'];
 
+// 层级 ID 数组，用于遍历
+export const LAYER_IDS = [1, 2, 3] as const;
+
+// SSE 数据完整性阈值：超过此字符数视为数据完整
+export const MIN_SSE_DATA_CHARS = 100;
+
+// 层级阶段类型
+export type LayerPhase = 'idle' | '现状分析' | '规划思路' | '详细规划';
+
 /**
  * Get layer ID from layer number
  */
@@ -42,6 +51,14 @@ export function getLayerId(
  */
 export function getLayerName(layer: number): string {
   return LAYER_VALUE_MAP[layer] || `Layer ${layer}`;
+}
+
+/**
+ * Get layer phase from layer number
+ * Used for phase display in progress panels
+ */
+export function getLayerPhase(layer: number): LayerPhase {
+  return (LAYER_VALUE_MAP[layer] as LayerPhase) || 'idle';
 }
 
 // ============================================
@@ -69,6 +86,11 @@ export type PlanningStatus =
   | 'revising'
   | 'completed'
   | 'failed';
+
+/**
+ * View mode for the main content switcher
+ */
+export type ViewMode = 'WELCOME_FORM' | 'SESSION_ACTIVE';
 
 /**
  * Check if input should be disabled for a given status

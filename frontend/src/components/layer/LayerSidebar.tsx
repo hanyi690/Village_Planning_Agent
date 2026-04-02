@@ -11,7 +11,8 @@ import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
-import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
+import { useReportContext } from '@/contexts/ReportContext';
+import { usePlanningStateContext } from '@/contexts/PlanningStateContext';
 import DimensionSection from '@/components/chat/DimensionSection';
 import { getDimensionConfigsByLayer } from '@/config/dimensions';
 import { LAYER_VALUE_MAP } from '@/lib/constants';
@@ -22,7 +23,8 @@ interface LayerSidebarProps {
 }
 
 export default function LayerSidebar({ activeLayer, onClose }: LayerSidebarProps) {
-  const { layerReports, completedLayers } = useUnifiedPlanningContext();
+  const { layerReports } = useReportContext();
+  const { completedLayers } = usePlanningStateContext();
 
   const [mounted, setMounted] = useState(false);
 

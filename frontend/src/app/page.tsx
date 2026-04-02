@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { UnifiedPlanningProvider, useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
+import { UnifiedPlanningProvider } from '@/contexts/UnifiedPlanningContext';
+import { useViewerContext } from '@/contexts/ViewerContext';
 import UnifiedLayout from '@/components/layout/UnifiedLayout';
 import UnifiedContentSwitcher from '@/components/layout/UnifiedContentSwitcher';
 import LayerSidebar from '@/components/layer/LayerSidebar';
@@ -21,7 +22,7 @@ import FileViewerSidebar from '@/components/chat/FileViewerSidebar';
 
 // Internal component to render FileViewerSidebar with Context access
 function FileViewerWrapper() {
-  const { viewingFile, hideFileViewer } = useUnifiedPlanningContext();
+  const { viewingFile, hideFileViewer } = useViewerContext();
 
   return <FileViewerSidebar file={viewingFile} onClose={hideFileViewer} />;
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback } from 'react';
-import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
+import { useConversationContext } from '@/contexts/ConversationContext';
 import { VillageInputData } from '@/components/VillageInputForm';
 import { createSystemMessage } from '@/lib/utils';
 import ChatPanel from '@/components/chat/ChatPanel';
@@ -28,7 +28,7 @@ interface UnifiedContentSwitcherProps {
 
 export default function UnifiedContentSwitcher({ onOpenLayerSidebar }: UnifiedContentSwitcherProps) {
   const { viewMode, setVillageFormData, setStatus, setProjectName, addMessage } =
-    useUnifiedPlanningContext();
+    useConversationContext();
 
   const handleFormSubmit = useCallback(
     async (data: VillageInputData) => {

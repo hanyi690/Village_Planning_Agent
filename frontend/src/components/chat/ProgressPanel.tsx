@@ -7,6 +7,7 @@
  * 内嵌在 ChatPanel 底部，用户手动控制显示/隐藏
  */
 
+import React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getDimensionConfigsByLayer } from '@/config/dimensions';
 import type { DimensionProgressItem, DimensionStatus } from '@/types';
@@ -57,7 +58,7 @@ function formatWordCount(count: number): string {
   return count.toString();
 }
 
-export default function ProgressPanel({
+function ProgressPanel({
   visible,
   currentLayer,
   currentPhase,
@@ -194,3 +195,9 @@ export default function ProgressPanel({
     </AnimatePresence>
   );
 }
+
+// React.memo 优化：减少高频 SSE 事件触发的不必要重渲染
+// 使用 React.memo 包装组件，减少父组件更新导致的重渲染
+const MemoizedProgressPanel = React.memo(ProgressPanel);
+
+export default MemoizedProgressPanel;

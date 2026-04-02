@@ -20,7 +20,7 @@ import {
   faTrash,
   faExclamationTriangle,
 } from '@fortawesome/free-solid-svg-icons';
-import { useUnifiedPlanningContext } from '@/contexts/UnifiedPlanningContext';
+import { useHistoryContext } from '@/contexts/HistoryContext';
 import { formatFullTimestamp } from '@/lib/utils';
 
 interface DeleteConfirmModalProps {
@@ -96,7 +96,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
     deleteSession,
     deletingSessionId,
     taskId,
-  } = useUnifiedPlanningContext();
+  } = useHistoryContext();
 
   const [mounted, setMounted] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
