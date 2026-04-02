@@ -8,8 +8,8 @@ GIS空间分析适配器
 from typing import Dict, Any, List, Optional
 import json
 
-from .base_adapter import BaseAdapter, AdapterResult, AdapterStatus
-from ...utils.logger import get_logger
+from ..base_adapter import BaseAdapter, AdapterResult, AdapterStatus
+from ....utils.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -7,6 +7,9 @@
 from typing import Dict, Type, Optional, Any
 from .base_adapter import BaseAdapter, AdapterStatus, AdapterResult, MockAdapter
 from .schema_registry import SchemaRegistry, SchemaDefinition, get_schema_registry
+from ...utils.logger import get_logger
+
+_logger = get_logger(__name__)
 
 
 class AdapterFactory:
@@ -22,13 +25,7 @@ class AdapterFactory:
         self._adapter_instances: Dict[str, BaseAdapter] = {}
         self._schema_registry = get_schema_registry()
 
-        logger = self._get_logger()
-        logger.info("[AdapterFactory] 适配器工厂已初始化")
-
-    def _get_logger(self):
-        """获取日志记录器"""
-        from ...utils.logger import get_logger
-        return get_logger(__name__)
+        _logger.info("[AdapterFactory] 适配器工厂已初始化")
 
     def register_adapter_class(self, name: str, adapter_class: Type[BaseAdapter]) -> bool:
         """
@@ -46,13 +43,11 @@ class AdapterFactory:
                 raise TypeError(f"{adapter_class} 必须继承自 BaseAdapter")
 
             self._adapter_classes[name] = adapter_class
-            logger = self._get_logger()
-            logger.info(f"[AdapterFactory] 已注册适配器类: {name} -> {adapter_class.__name__}")
+            _logger.info(f"[AdapterFactory] 已注册适配器类: {name} -> {adapter_class.__name__}")
             return True
 
         except Exception as e:
-            logger = self._get_logger()
-            logger.error(f"[AdapterFactory] 注册适配器类失败: {str(e)}")
+            _logger.error(f"[AdapterFactory] 注册适配器类失败: {str(e)}")
             return False
 
     def create_adapter(
@@ -72,16 +67,14 @@ class AdapterFactory:
         Returns:
             适配器实例，如果创建失败则返回None
         """
-        logger = self._get_logger()
-
         # 检查缓存
         if use_cache and name in self._adapter_instances:
-            logger.debug(f"[AdapterFactory] 使用缓存的适配器实例: {name}")
+            _logger.debug(f"[AdapterFactory] 使用缓存的适配器实例: {name}")
             return self._adapter_instances[name]
 
         # 检查适配器类是否已注册
         if name not in self._adapter_classes:
-            logger.error(f"[AdapterFactory] 适配器类未注册: {name}")
+            _logger.error(f"[AdapterFactory] 适配器类未注册: {name}")
             return None
 
         try:
@@ -93,11 +86,11 @@ class AdapterFactory:
             if use_cache:
                 self._adapter_instances[name] = adapter_instance
 
-            logger.info(f"[AdapterFactory] 已创建适配器实例: {name}")
+            _logger.info(f"[AdapterFactory] 已创建适配器实例: {name}")
             return adapter_instance
 
         except Exception as e:
-            logger.error(f"[AdapterFactory] 创建适配器实例失败: {str(e)}")
+            _logger.error(f"[AdapterFactory] 创建适配器实例失败: {str(e)}")
             return None
 
     def get_adapter(self, name: str, config: Optional[Dict[str, Any]] = None) -> Optional[BaseAdapter]:
@@ -120,7 +113,6 @@ class AdapterFactory:
         Returns:
             适配器信息字典 {name: {class_name, is_available, status}}
         """
-        logger = self._get_logger()
         result = {}
 
         for name, adapter_class in self._adapter_classes.items():
@@ -158,8 +150,6 @@ class AdapterFactory:
         Returns:
             适配器执行结果
         """
-        logger = self._get_logger()
-
         adapter = self.get_adapter(name)
         if not adapter:
             return AdapterResult(
@@ -170,7 +160,7 @@ class AdapterFactory:
                 error=f"适配器不可用: {name}"
             )
 
-        logger.info(f"[AdapterFactory] 运行适配器: {name}")
+        _logger.info(f"[AdapterFactory] 运行适配器: {name}")
         return adapter.run(**kwargs)
 
     def validate_result(
@@ -215,8 +205,7 @@ class AdapterFactory:
     def clear_cache(self):
         """清除所有缓存的适配器实例"""
         self._adapter_instances.clear()
-        logger = self._get_logger()
-        logger.info("[AdapterFactory] 已清除适配器实例缓存")
+        _logger.info("[AdapterFactory] 已清除适配器实例缓存")
 
 
 # 全局适配器工厂实例
@@ -243,33 +232,30 @@ def _initialize_builtin_adapters(factory: AdapterFactory):
 
     注意：实际的适配器类将在后续文件中定义（gis_adapter, network_adapter等）
     """
-    logger = factory._get_logger()
-    logger.info("[AdapterFactory] 初始化内置适配器（延迟加载）")
+    _logger.info("[AdapterFactory] 初始化内置适配器（延迟加载）")
 
-    # 延迟导入以避免循环依赖
-    # GIS适配器
+    # Analysis 适配器
     try:
-        from .gis_adapter import GISAnalysisAdapter
-        factory.register_adapter_class("gis", GISAnalysisAdapter)
+        from .analysis import GISAnalysisAdapter, NetworkAnalysisAdapter, PopulationPredictionAdapter
         factory.register_adapter_class("gis_analysis", GISAnalysisAdapter)
-    except ImportError:
-        logger.warning("[AdapterFactory] GIS适配器模块未找到，将在稍后注册")
-
-    # Network适配器
-    try:
-        from .network_adapter import NetworkAnalysisAdapter
-        factory.register_adapter_class("network", NetworkAnalysisAdapter)
         factory.register_adapter_class("network_analysis", NetworkAnalysisAdapter)
-    except ImportError:
-        logger.warning("[AdapterFactory] Network适配器模块未找到，将在稍后注册")
-
-    # Population适配器
-    try:
-        from .population_adapter import PopulationPredictionAdapter
-        factory.register_adapter_class("population", PopulationPredictionAdapter)
         factory.register_adapter_class("population_prediction", PopulationPredictionAdapter)
     except ImportError:
-        logger.warning("[AdapterFactory] Population适配器模块未找到，将在稍后注册")
+        _logger.warning("[AdapterFactory] Analysis 适配器模块未找到，将在稍后注册")
+
+    # Data Fetch 适配器
+    try:
+        from .data_fetch import GISDataFetchAdapter
+        factory.register_adapter_class("gis_data_fetch", GISDataFetchAdapter)
+    except ImportError:
+        _logger.warning("[AdapterFactory] Data Fetch 适配器模块未找到，将在稍后注册")
+
+    # Visualization 适配器
+    try:
+        from .visualization import GISVisualizationAdapter
+        factory.register_adapter_class("gis_visualization", GISVisualizationAdapter)
+    except ImportError:
+        _logger.warning("[AdapterFactory] Visualization 适配器模块未找到，将在稍后注册")
 
 
 def create_adapter(name: str, config: Optional[Dict[str, Any]] = None) -> Optional[BaseAdapter]:

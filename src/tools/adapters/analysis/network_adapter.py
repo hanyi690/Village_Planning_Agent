@@ -8,8 +8,8 @@
 from typing import Dict, Any, List, Optional, Tuple
 import json
 
-from .base_adapter import BaseAdapter, AdapterResult, AdapterStatus
-from ...utils.logger import get_logger
+from ..base_adapter import BaseAdapter, AdapterResult, AdapterStatus
+from ....utils.logger import get_logger
 
 logger = get_logger(__name__)
 
