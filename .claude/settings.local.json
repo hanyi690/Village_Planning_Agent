@@ -134,7 +134,9 @@
       "Bash(npm test:*)",
       "Bash(git stash:*)",
       "Bash(git branch:*)",
-      "Bash(cd frontend:*)"
+      "Bash(cd frontend:*)",
+      "mcp__plugin_context7_context7__resolve-library-id",
+      "mcp__plugin_context7_context7__query-docs"
     ]
   }
 }

@@ -276,48 +276,37 @@ Village_Planning_Agent/
 
 ## 文档
 
-- **[智能体架构](docs/agent.md)** - LangGraph 主图、子图、规划器、RAG
-- **[后端实现](docs/backend.md)** - FastAPI API 与数据流
-- **[前端实现](docs/frontend.md)** - Next.js 状态管理
+### 核心架构文档
+
+- **[智能体架构](docs/agent.md)** - LangGraph 主图、子图、规划器、RAG 知识检索（v2.0 支持元数据过滤）
+- **[前端实现](docs/frontend.md)** - Next.js 14 前端架构、组件层次、设计规范
+- **[数据和状态流转](docs/data-flow-architecture.md)** - SSE 事件、REST 轮询、Checkpoint 版本化同步
+- **[工具系统](docs/tool-system.md)** - 工具注册、Adapter 适配器、RAG 工具集
+
+### 其他文档
+
+- **[后端实现](docs/backend_architecture_analysis.md)** - FastAPI API 与数据流分析
+- **[研究课题实现](docs/research-progress.md)** - Hierarchical LangGraph 架构研究
+- **[服务管理](docs/startup-guide.md)** - 服务启动与管理指南
+- **[演示文档](docs/village_planning_presentation.md)** - 村庄规划系统演示（Marp 格式）
+
+### RAG 知识库
+
+RAG 系统已实现以下优化（详见 [智能体架构](docs/agent.md#rag-知识检索 v2.0---支持元数据过滤)）：
+
+- **元数据注入**: 维度标签、地形类型、文档类型自动识别
+- **差异化切片**: 政策/案例/标准/指南不同类型文档采用不同切片策略
+- **元数据过滤检索**: 支持按维度、地形、文档类型精准过滤
 
 ## 维度依赖与波次执行
 
-### 依赖链
+系统通过波次调度处理维度间的依赖关系。详细配置见 [智能体架构](docs/agent.md#维度配置)。
 
-维度之间存在依赖关系，通过 `dimension_metadata.py` 配置：
+- **Layer 1**: 12 维度并行执行（无依赖）
+- **Layer 2**: 4 维度波次执行（Wave 1→4，逐级依赖）
+- **Layer 3**: 12 维度波次执行（Wave 1 并行，Wave 2 依赖 Wave 1）
 
-```python
-# Layer 2 依赖 Layer 1
-"planning_positioning": {
-    "dependencies": {
-        "layer1_analyses": ["location", "socio_economic", "superior_planning"],
-        "layer2_concepts": ["resource_endowment"]
-    }
-}
-
-# Layer 3 依赖 Layer 1, 2 和同层维度
-"project_bank": {
-    "dependencies": {
-        "layer3_plans": ["industry", "spatial_structure", ...]  # 所有其他维度
-    }
-}
-```
-
-### 波次调度
-
-- **Wave 1**: 无依赖的维度，可并行执行
-- **Wave N**: 依赖 Wave 1..N-1 的维度
-
-### 级联修复
-
-当维度被修复时，自动更新所有下游依赖维度：
-
-```
-修复 natural_environment
-  → Wave 1: resource_endowment, ecological, spatial_structure, ...
-  → Wave 2: planning_positioning, planning_strategies
-  → Wave 3: development_goals, project_bank
-```
+级联修复：当维度被驳回修复时，自动更新所有下游依赖维度。
 
 ## 许可证
 
