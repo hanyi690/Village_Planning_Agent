@@ -19,6 +19,7 @@
 
 from typing import Dict, Any, Union
 from pathlib import Path
+import asyncio
 
 # 导入新版接口
 from .orchestration.main_graph import run_village_planning as _run_main_graph
@@ -165,10 +166,10 @@ def run_analysis_only(
         >>> print(result['analysis_report'])
     """
     logger.info(f"[Agent] 执行现状分析：{project_name}")
-    return call_analysis_subgraph(
+    return asyncio.run(call_analysis_subgraph(
         raw_data=village_data,
         project_name=project_name
-    )
+    ))
 
 
 def run_concept_only(
@@ -202,10 +203,10 @@ def run_concept_only(
     village_data = _load_village_data(village_data)
 
     # 执行现状分析
-    analysis_result = call_analysis_subgraph(
+    analysis_result = asyncio.run(call_analysis_subgraph(
         raw_data=village_data,
         project_name=project_name
-    )
+    ))
 
     if not analysis_result["success"]:
         return {

@@ -76,7 +76,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": None,
         "result_key": "analysis_result",
         "rag_enabled": True,
-        "tool": None,
+        "tool": "wfs_data_fetch",  # WFS 数据获取工具，获取水系/地形数据
         "description": "分析村庄的气候、水文、地形、生态等自然环境条件",
         "prompt_key": "natural_environment_analysis"
     },
@@ -102,7 +102,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": None,
         "result_key": "analysis_result",
         "rag_enabled": True,
-        "tool": "network_accessibility",  # 网络可达性分析工具，提供交通网络分析
+        "tool": "accessibility_analysis",  # 可达性分析工具，基于真实道路网络
         "description": "分析村庄内部道路和外部交通状况",
         "prompt_key": "traffic_analysis"
     },
@@ -115,7 +115,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": None,
         "result_key": "analysis_result",
         "rag_enabled": True,
-        "tool": None,
+        "tool": "poi_search",  # POI 搜索工具，获取公共服务设施分布
         "description": "分析村庄教育、医疗、文化等公共服务设施配置",
         "prompt_key": "public_services_analysis"
     },
