@@ -193,3 +193,20 @@ export function parseCustomTimestamp(timestamp: string): string {
   const [, year, month, day, hour, minute] = match;
   return `${year}-${month}-${day} ${hour}:${minute}`;
 }
+
+/**
+ * Extract error message from unknown error
+ * Reusable helper to avoid duplicated error handling pattern
+ */
+export function getErrorMessage(error: unknown, fallback = '未知错误'): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (error && typeof error === 'object' && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return fallback;
+}

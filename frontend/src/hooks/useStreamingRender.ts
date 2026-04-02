@@ -21,7 +21,7 @@
  *       return next;
  *     });
  *   },
- *   { batchSize: 10, batchWindow: 50, debounceMs: 100 }
+ *   { batchSize: 10, batchWindow: 50, debounceMs: 30 }
  * );
  *
  * // Add streaming tokens
@@ -67,7 +67,7 @@ export function useStreamingRender(
   onContentUpdate: (dimensionKey: string, content: string, layer?: number) => void,
   options: StreamingRenderOptions = {}
 ): UseStreamingRenderReturn {
-  const { batchSize = 10, batchWindow = 50, debounceMs = 100 } = options;
+  const { batchSize = 10, batchWindow = 50, debounceMs = 30 } = options;
 
   const buffers = useRef<Map<string, DimensionBuffer>>(new Map());
   const rafId = useRef<number>();

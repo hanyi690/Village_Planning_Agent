@@ -27,7 +27,13 @@ import {
   faPlus,
 } from '@fortawesome/free-solid-svg-icons';
 import { knowledgeApi, KnowledgeDocument, KnowledgeStats, AddDocumentOptions } from '@/lib/api';
-import { getDimensionName } from '@/config/dimensions';
+import { getDimensionName, DIMENSIONS_BY_LAYER } from '@/config/dimensions';
+
+// 维度标签 - 基于 Layer 1 维度，增加知识库专用标签
+const LAYER1_DIMENSIONS = [
+  ...DIMENSIONS_BY_LAYER[1],
+  'disaster_prevention', // 知识库专用：防震减灾
+] as const;
 
 // ============================================
 // 常量定义
@@ -54,23 +60,6 @@ const DOC_TYPES = [
 ] as const;
 
 type DocTypeValue = (typeof DOC_TYPES)[number]['value'];
-
-// 维度标签 - 使用 Layer 1 的维度（现状分析）
-const LAYER1_DIMENSIONS = [
-  'location',
-  'socio_economic',
-  'villager_wishes',
-  'superior_planning',
-  'natural_environment',
-  'land_use',
-  'traffic',
-  'public_services',
-  'infrastructure',
-  'ecological_green',
-  'architecture',
-  'historical_culture',
-  'disaster_prevention',
-] as const;
 
 // 维度颜色映射
 const DIMENSION_COLORS: Record<string, string> = {

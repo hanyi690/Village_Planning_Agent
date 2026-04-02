@@ -572,9 +572,9 @@ _dimension_delta_last_sent: Dict[str, float] = {}  # dimension_key -> last_sent_
 _dimension_delta_token_count: Dict[str, int] = {}  # dimension_key -> token_count_since_last_send
 _dimension_delta_lock = threading.Lock()
 
-# ✅ SSOT 优化：频率控制参数（大幅减少事件数量，避免队列阻塞）
-DELTA_MIN_INTERVAL_MS = 500  # 最小发送间隔（毫秒）- 从 200ms 增加到 500ms
-DELTA_MIN_TOKENS = 50        # 最小 token 数量 - 从 20 增加到 50 tokens
+# ✅ 频率控制参数（平衡实时性和性能）
+DELTA_MIN_INTERVAL_MS = 200  # 最小发送间隔（毫秒）- 降低延迟
+DELTA_MIN_TOKENS = 20        # 最小 token 数量 - 更频繁更新
 
 # 事件队列大小限制（防止内存爆炸）
 MAX_EVENTS_PER_SESSION = 500   # 每个会话最大事件数
