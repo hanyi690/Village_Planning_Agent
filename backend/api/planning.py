@@ -1285,7 +1285,6 @@ async def _execute_graph_in_background(
                     "layer": layer,
                     "dimension_key": dimension,
                     "delta": token,
-                    "accumulated": accumulated,
                     "timestamp": datetime.now().isoformat()
                 }
                 _append_session_event(session_id, event_data)
@@ -1407,7 +1406,7 @@ async def _execute_graph_in_background(
                     else:
                         logger.info(f"[Planning] [{session_id}] ✓ Layer {layer_num} 数据完整: {len(dimension_reports)} 个维度, {total_dimension_content} 字符")
 
-                    # ✅ Signal-Fetch Pattern: SSE 只发送轻量信号
+                    # ✅ SSE 直接携带维度数据，避免 Signal-Fetch 延迟
                     event_data = {
                         "type": "layer_completed",
                         "layer": layer_num,
@@ -1419,7 +1418,9 @@ async def _execute_graph_in_background(
                         "total_chars": total_dimension_content,
                         "pause_after_step": event.get("pause_after_step", False),
                         "previous_layer": event.get("previous_layer", 0),
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": datetime.now().isoformat(),
+                        # 新增：携带完整维度数据，前端无需额外 REST 调用
+                        "dimension_reports": dimension_reports if dimension_reports else {}
                     }
                     
                     logger.info(f"[Planning] [{session_id}] ✓ layer_completed 信号: Layer {layer_num}, dims={event_data['dimension_count']}")
