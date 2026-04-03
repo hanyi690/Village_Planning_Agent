@@ -289,6 +289,8 @@ INTENT_CLASSIFICATION_PROMPT = """分析用户消息，判断其意图。
 
 def _classify_with_llm(message: str, state: Optional[Dict[str, Any]] = None) -> IntentResult:
     """使用 LLM 分类意图"""
+    error_msg = ""  # 初始化错误消息
+
     try:
         llm = create_llm(model=LLM_MODEL, temperature=0.1, max_tokens=200)
 
@@ -327,15 +329,18 @@ def _classify_with_llm(message: str, state: Optional[Dict[str, Any]] = None) -> 
                 parameters=data.get("parameters", {}),
                 reason=data.get("reason", "")
             )
+        else:
+            error_msg = "LLM 响应中未找到 JSON 格式"
 
     except Exception as e:
-        logger.error(f"[intent] LLM 分类失败: {e}")
+        error_msg = str(e)
+        logger.error(f"[intent] LLM 分类失败: {error_msg}")
 
     return IntentResult(
         intent=UserIntent.UNKNOWN,
         confidence=0.0,
         parameters={},
-        reason=f"LLM 分类异常: {str(e)}"
+        reason=f"LLM 分类异常: {error_msg}"
     )
 
 
