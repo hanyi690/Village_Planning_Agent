@@ -12,12 +12,13 @@
 - 移除UI代码到工具层
 """
 
-from typing import TypedDict, List, Dict, Any, Literal
+from typing import TypedDict, List, Dict, Any, Literal, Optional
 from typing_extensions import Annotated
 from pathlib import Path
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from enum import Enum
 
 from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..core.prompts import SYSTEM_PROMPT, PLANNING_CONCEPT_PROMPT
@@ -44,7 +45,82 @@ logger = get_logger(__name__)
 
 
 # ==========================================
-# 主图状态定义
+# 对话式规划阶段枚举
+# ==========================================
+
+class PlanningPhase(Enum):
+    """规划阶段枚举 - 用于对话式状态追踪"""
+    # 初始化阶段
+    INIT = "init"
+
+    # Layer 1: 现状分析
+    LAYER1_ANALYSIS = "layer1_analysis"
+    LAYER1_REVIEW = "layer1_review"
+
+    # Layer 2: 规划思路
+    LAYER2_CONCEPT = "layer2_concept"
+    LAYER2_REVIEW = "layer2_review"
+
+    # Layer 3: 详细规划
+    LAYER3_DETAIL = "layer3_detail"
+    LAYER3_REVIEW = "layer3_review"
+
+    # 完成
+    COMPLETED = "completed"
+
+
+# ==========================================
+# 对话式状态定义（简化版）
+# ==========================================
+
+class PlanningContext(TypedDict):
+    """规划上下文（初始化后不可变）"""
+    village_data: str
+    task_description: str
+    constraints: str
+    knowledge_cache: Dict[str, str]
+
+
+class ConversationState(TypedDict):
+    """
+    对话式规划状态（简化版）
+
+    设计原则：
+    - 聚焦对话核心，减少流程控制字段
+    - 使用 PlanningPhase 枚举替代多字段推断
+    - 报告按层级组织，支持增量更新
+    """
+    # === 核心标识 ===
+    session_id: str
+    project_name: str
+
+    # === 对话核心 ===
+    messages: Annotated[List[BaseMessage], add_messages]
+    conversation_turns: int
+
+    # === 规划上下文（不可变） ===
+    planning_context: PlanningContext
+
+    # === 阶段追踪 ===
+    current_phase: str  # PlanningPhase 枚举值
+    completed_dimensions: Dict[str, List[str]]  # {"layer1": [...], ...}
+
+    # === 成果存储 ===
+    reports: Dict[str, Dict[str, str]]  # {"layer1": {"location": "..."}, ...}
+
+    # === 工具状态 ===
+    active_tools: List[Dict[str, Any]]
+
+    # === 审核状态 ===
+    pending_review: bool
+    review_feedback: str
+
+    # === 扩展数据（兼容旧字段） ===
+    extra: Dict[str, Any]  # 存放 output_manager、blackboard 等非序列化对象
+
+
+# ==========================================
+# 主图状态定义（保留向后兼容）
 # ==========================================
 
 class VillagePlanningState(TypedDict):
