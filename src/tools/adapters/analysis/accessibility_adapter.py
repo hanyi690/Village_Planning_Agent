@@ -14,13 +14,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from concurrent.futures import ThreadPoolExecutor
 
 from ..base_adapter import BaseAdapter, AdapterResult, AdapterStatus
-from ...geocoding.tianditu_extended import (
-    TiandituExtendedService,
-    RouteType,
-    WFSLayerType,
-    get_extended_service,
-)
-from ...geocoding.tianditu_boundary import get_boundary_service
+from ...geocoding.tianditu_provider import TiandituProvider
 from ....utils.logger import get_logger
 from ....utils.geo_utils import haversine_distance
 
@@ -81,18 +75,16 @@ class AccessibilityAdapter(BaseAdapter):
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """初始化适配器"""
-        self._extended_service: Optional[TiandituExtendedService] = None
-        self._boundary_service = None
+        self._provider: Optional[TiandituProvider] = None
         super().__init__(config)
 
     def validate_dependencies(self) -> bool:
         """验证外部依赖是否可用"""
         try:
-            self._extended_service = get_extended_service()
-            self._boundary_service = get_boundary_service()
+            self._provider = TiandituProvider()
 
-            if self._extended_service.is_available():
-                logger.info("[AccessibilityAdapter] 天地图扩展服务可用")
+            if self._provider.api_key:
+                logger.info("[AccessibilityAdapter] 天地图服务可用")
                 return True
             else:
                 logger.warning("[AccessibilityAdapter] 天地图 API Key 未配置")
@@ -105,10 +97,10 @@ class AccessibilityAdapter(BaseAdapter):
     def initialize(self) -> bool:
         """初始化适配器"""
         try:
-            if not self._extended_service:
-                self._extended_service = get_extended_service()
+            if not self._provider:
+                self._provider = TiandituProvider()
 
-            if not self._extended_service.is_available():
+            if not self._provider.api_key:
                 logger.warning(
                     "[AccessibilityAdapter] 天地图 API Key 未配置，"
                     "请设置 TIANDITU_API_KEY 环境变量"
@@ -225,7 +217,7 @@ class AccessibilityAdapter(BaseAdapter):
                 error="缺少 destinations 参数"
             )
 
-        if not self._extended_service or not self._extended_service.is_available():
+        if not self._provider or not self._provider.api_key:
             return AdapterResult(
                 success=False,
                 status=AdapterStatus.FAILED,
@@ -240,7 +232,7 @@ class AccessibilityAdapter(BaseAdapter):
 
         # 并行计算所有路线
         def calc_route(dest):
-            return dest, self._extended_service.driving_route(origin, dest)
+            return dest, self._provider.plan_route(origin, dest, route_type=0)
 
         route_results = []
         with ThreadPoolExecutor(max_workers=5) as executor:
@@ -249,8 +241,11 @@ class AccessibilityAdapter(BaseAdapter):
 
         for dest, route_result in route_results:
             if route_result.success:
-                time_minutes = route_result.duration / 60
-                distance_km = route_result.distance / 1000
+                route_data = route_result.data.get("route", {})
+                duration = route_data.get("duration", 0)
+                distance = route_data.get("distance", 0)
+                time_minutes = duration / 60
+                distance_km = distance / 1000
 
                 is_reachable = (
                     time_minutes <= max_time and
@@ -259,12 +254,12 @@ class AccessibilityAdapter(BaseAdapter):
 
                 accessibility_matrix.append({
                     "destination": dest,
-                    "distance": route_result.distance,
-                    "duration": route_result.duration,
+                    "distance": distance,
+                    "duration": duration,
                     "distance_km": distance_km,
                     "time_minutes": time_minutes,
                     "is_reachable": is_reachable,
-                    "geometry": route_result.geometry,
+                    "geometry": route_result.data.get("geojson"),
                 })
 
                 if is_reachable:
@@ -349,7 +344,7 @@ class AccessibilityAdapter(BaseAdapter):
                 error="缺少 destinations 参数"
             )
 
-        if not self._extended_service or not self._extended_service.is_available():
+        if not self._provider or not self._provider.api_key:
             return AdapterResult(
                 success=False,
                 status=AdapterStatus.FAILED,
@@ -365,7 +360,7 @@ class AccessibilityAdapter(BaseAdapter):
 
         # 并行计算所有步行路线
         def calc_route(dest):
-            return dest, self._extended_service.walking_route(origin, dest)
+            return dest, self._provider.plan_route(origin, dest, route_type=3)
 
         route_results = []
         with ThreadPoolExecutor(max_workers=5) as executor:
@@ -374,8 +369,11 @@ class AccessibilityAdapter(BaseAdapter):
 
         for dest, route_result in route_results:
             if route_result.success:
-                time_minutes = route_result.duration / 60
-                distance_km = route_result.distance / 1000
+                route_data = route_result.data.get("route", {})
+                duration = route_data.get("duration", 0)
+                distance = route_data.get("distance", 0)
+                time_minutes = duration / 60
+                distance_km = distance / 1000
 
                 is_reachable = (
                     time_minutes <= max_time and
@@ -384,12 +382,12 @@ class AccessibilityAdapter(BaseAdapter):
 
                 accessibility_matrix.append({
                     "destination": dest,
-                    "distance": route_result.distance,
-                    "duration": route_result.duration,
+                    "distance": distance,
+                    "duration": duration,
                     "distance_km": distance_km,
                     "time_minutes": time_minutes,
                     "is_reachable": is_reachable,
-                    "geometry": route_result.geometry,
+                    "geometry": route_result.data.get("geojson"),
                 })
 
                 if is_reachable:
@@ -475,7 +473,7 @@ class AccessibilityAdapter(BaseAdapter):
                 error="缺少 center 参数"
             )
 
-        if not self._extended_service or not self._extended_service.is_available():
+        if not self._provider or not self._provider.api_key:
             return AdapterResult(
                 success=False,
                 status=AdapterStatus.FAILED,
@@ -489,7 +487,7 @@ class AccessibilityAdapter(BaseAdapter):
             radius = self.SERVICE_RADIUS_STANDARDS[poi_type]
 
         # 搜索范围内的 POI
-        poi_result = self._extended_service.search_poi_nearby(
+        poi_result = self._provider.search_poi(
             keyword=poi_type,
             center=center,
             radius=radius * 3  # 扩大搜索范围以获取周边设施
@@ -497,7 +495,7 @@ class AccessibilityAdapter(BaseAdapter):
 
         facilities = []
         if poi_result.success:
-            facilities = poi_result.pois
+            facilities = poi_result.data.get("pois", [])
 
         # 计算覆盖情况
         covered_points = []
@@ -632,7 +630,7 @@ class AccessibilityAdapter(BaseAdapter):
                 error="缺少 center 参数"
             )
 
-        if not self._extended_service or not self._extended_service.is_available():
+        if not self._provider or not self._provider.api_key:
             return AdapterResult(
                 success=False,
                 status=AdapterStatus.FAILED,
@@ -654,7 +652,7 @@ class AccessibilityAdapter(BaseAdapter):
                 radius = 500  # 默认半径
 
             # 搜索 POI
-            poi_result = self._extended_service.search_poi_nearby(
+            poi_result = self._provider.search_poi(
                 keyword=poi_type,
                 center=center,
                 radius=radius * 2
@@ -662,7 +660,7 @@ class AccessibilityAdapter(BaseAdapter):
 
             facilities = []
             if poi_result.success:
-                facilities = poi_result.pois
+                facilities = poi_result.data.get("pois", [])
 
             # 筛选范围内的设施
             in_range_facilities = []

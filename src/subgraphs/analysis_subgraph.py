@@ -385,7 +385,7 @@ def create_analysis_subgraph() -> StateGraph:
     创建现状分析子图 - 使用 Map-Reduce 并行模式
 
     执行流程：
-    START → initialize → map_dimensions → [analyze_dimension]* → reduce_analyses → generate_final_report → END
+    START → initialize → knowledge_preload → [analyze_dimension]* → reduce_analyses → END
 
     Returns:
         编译后的 StateGraph 实例
@@ -393,8 +393,7 @@ def create_analysis_subgraph() -> StateGraph:
     from ..nodes.subgraph_nodes import (
         InitializeAnalysisNode,
         AnalyzeDimensionNode,
-        ReduceAnalysesNode,
-        GenerateAnalysisReportNode
+        ReduceAnalysesNode
     )
 
     logger.info("[子图构建] 开始构建现状分析子图（Map-Reduce 并行模式）")
@@ -406,14 +405,12 @@ def create_analysis_subgraph() -> StateGraph:
     initialize_node = InitializeAnalysisNode()
     analyze_node = AnalyzeDimensionNode()
     reduce_node = ReduceAnalysesNode()
-    report_node = GenerateAnalysisReportNode()
 
     # 添加节点
     builder.add_node("initialize", initialize_node)
     builder.add_node("knowledge_preload", knowledge_preload_node)
     builder.add_node("analyze_dimension", analyze_node)
     builder.add_node("reduce_analyses", reduce_node)
-    builder.add_node("generate_final_report", report_node)
 
     # 构建执行流程
     builder.add_edge(START, "initialize")
@@ -426,12 +423,9 @@ def create_analysis_subgraph() -> StateGraph:
         ["analyze_dimension", "reduce_analyses"]
     )
 
-    # Reduce 阶段：汇总所有分析结果
+    # Reduce 阶段：汇总所有分析结果后直接结束
     builder.add_edge("analyze_dimension", "reduce_analyses")
-
-    # 生成最终报告
-    builder.add_edge("reduce_analyses", "generate_final_report")
-    builder.add_edge("generate_final_report", END)
+    builder.add_edge("reduce_analyses", END)
 
     # 编译子图
     analysis_subgraph = builder.compile()
@@ -488,7 +482,7 @@ async def call_analysis_subgraph(
 
         return {
             "analysis_reports": result.get("analysis_reports", {}),
-            "final_report": result.get("final_report", ""),
+            "final_report": "",  # 已删除综合报告生成，保留此字段用于兼容
             "messages": result.get("messages", []),
             "success": True
         }
@@ -497,7 +491,7 @@ async def call_analysis_subgraph(
         logger.error(f"[子图调用] 现状分析失败: {str(e)}")
         return {
             "analysis_reports": {},
-            "final_report": f"现状分析失败: {str(e)}",
+            "final_report": "",  # 与成功路径保持一致
             "messages": [],
             "success": False
         }

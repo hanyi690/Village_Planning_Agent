@@ -191,7 +191,6 @@ def _initialize_adapter_tools():
 # 导入内置工具模块（自动注册）
 from .builtin import knowledge_search_tool, web_search_tool
 from .builtin.population import calculate_population
-from .builtin.network import calculate_network_accessibility
 
 # 初始化 Adapter 工具
 _initialize_adapter_tools()

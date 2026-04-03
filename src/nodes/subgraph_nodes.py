@@ -194,70 +194,6 @@ class ReduceAnalysesNode(BaseNode):
         }
 
 
-class GenerateAnalysisReportNode(BaseNode):
-    """生成现状分析报告节点"""
-
-    def __init__(self):
-        super().__init__("生成现状分析报告")
-
-    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """生成综合现状分析报告"""
-        from ..core.llm_factory import create_llm
-        from ..core.config import LLM_MODEL, MAX_TOKENS
-        from ..subgraphs.analysis_prompts import ANALYSIS_SUMMARY_PROMPT
-        from langchain_core.messages import HumanMessage, AIMessage
-        from datetime import datetime
-
-        logger.info("[子图-汇总] 开始生成最终综合报告")
-
-        try:
-            # 使用 reduce 阶段生成的 dimension_reports_text
-            dimension_reports_text = state.get("dimension_reports_text", "")
-
-            # 如果 dimension_reports_text 为空，从 analyses 重新构建
-            if not dimension_reports_text:
-                for analysis in state.get("analyses", []):
-                    dimension_reports_text += f"\n### {analysis['dimension_name']}\n{analysis['analysis_result']}\n"
-
-            # 构建汇总 Prompt
-            summary_prompt = ANALYSIS_SUMMARY_PROMPT.format(
-                dimension_reports=dimension_reports_text
-            )
-
-            # 调用 LLM 生成最终报告
-            llm = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
-            response = llm.invoke([HumanMessage(content=summary_prompt)])
-
-            final_report = f"""# {state.get('project_name', '村庄')}现状综合分析报告
-
-{response.content}
-"""
-
-            logger.info(f"[子图-汇总] 最终报告生成完成，共 {len(final_report)} 字符")
-
-            return {
-                "final_report": final_report,
-                "messages": [AIMessage(content=final_report)]
-            }
-
-        except Exception as e:
-            logger.error(f"[子图-汇总] 报告生成失败: {str(e)}")
-
-            # 降级方案：直接拼接各维度结果
-            fallback_report = f"""# {state.get('project_name', '村庄')}现状分析报告（简化版）
-
-## 各维度分析
-
-"""
-            for analysis in state.get("analyses", []):
-                fallback_report += f"### {analysis['dimension_name']}\n\n{analysis['analysis_result']}\n\n"
-
-            return {
-                "final_report": fallback_report,
-                "messages": [AIMessage(content=fallback_report)]
-            }
-
-
 # ==========================================
 # Concept Subgraph 节点
 # ==========================================
@@ -443,58 +379,6 @@ class ReduceConceptsNode(BaseNode):
         }
 
 
-class GenerateConceptReportNode(BaseNode):
-    """生成规划思路报告节点"""
-
-    def __init__(self):
-        super().__init__("生成规划思路报告")
-
-    def execute(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """生成综合规划思路报告"""
-        from ..core.llm_factory import create_llm
-        from ..core.config import LLM_MODEL, MAX_TOKENS
-        from ..subgraphs.concept_prompts import CONCEPT_SUMMARY_PROMPT
-        from langchain_core.messages import HumanMessage, AIMessage
-
-        logger.info("[子图-规划思路-汇总] 开始生成最终报告")
-
-        try:
-            concept_reports_text = state.get("concept_reports_text", "")
-
-            # 构建汇总 Prompt
-            summary_prompt = CONCEPT_SUMMARY_PROMPT.format(
-                project_name=state.get("project_name", "村庄"),
-                concept_reports=concept_reports_text
-            )
-
-            llm = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
-            response = llm.invoke([HumanMessage(content=summary_prompt)])
-
-            final_report = f"""# {state.get('project_name', '村庄')}规划思路报告
-
-{response.content}
-"""
-
-            logger.info(f"[子图-规划思路-汇总] 报告生成完成，共 {len(final_report)} 字符")
-
-            return {
-                "final_concept_report": final_report,
-                "messages": [AIMessage(content=final_report)]
-            }
-
-        except Exception as e:
-            logger.error(f"[子图-规划思路-汇总] 报告生成失败: {str(e)}")
-
-            fallback_report = f"# {state.get('project_name', '村庄')}规划思路（简化版）\n\n"
-            for analysis in state.get("concept_analyses", []):
-                fallback_report += f"## {analysis['dimension_name']}\n\n{analysis['concept_result']}\n\n"
-
-            return {
-                "final_concept_report": fallback_report,
-                "messages": [AIMessage(content=fallback_report)]
-            }
-
-
 # ==========================================
 # Detailed Plan Subgraph 节点
 # ==========================================
@@ -654,13 +538,11 @@ __all__ = [
     "InitializeAnalysisNode",
     "AnalyzeDimensionNode",
     "ReduceAnalysesNode",
-    "GenerateAnalysisReportNode",
 
     # Concept Subgraph Nodes
     "InitializeConceptNode",
     "AnalyzeConceptDimensionNode",
     "ReduceConceptsNode",
-    "GenerateConceptReportNode",
 
     # Detailed Plan Subgraph Nodes
     "InitializeDetailedPlanningNode",

@@ -250,12 +250,7 @@ def _initialize_builtin_adapters(factory: AdapterFactory):
     except ImportError:
         _logger.warning("[AdapterFactory] Data Fetch 适配器模块未找到，将在稍后注册")
 
-    # Visualization 适配器
-    try:
-        from .visualization import GISVisualizationAdapter
-        factory.register_adapter_class("gis_visualization", GISVisualizationAdapter)
-    except ImportError:
-        _logger.warning("[AdapterFactory] Visualization 适配器模块未找到，将在稍后注册")
+
 
 
 def create_adapter(name: str, config: Optional[Dict[str, Any]] = None) -> Optional[BaseAdapter]:

@@ -469,8 +469,7 @@ def create_concept_subgraph() -> StateGraph:
     from ..nodes.subgraph_nodes import (
         InitializeConceptNode,
         AnalyzeConceptDimensionNode,
-        ReduceConceptsNode,
-        GenerateConceptReportNode
+        ReduceConceptsNode
     )
 
     logger.info("[子图构建] 开始构建规划思路子图（波次路由模式）")
@@ -482,7 +481,6 @@ def create_concept_subgraph() -> StateGraph:
     initialize_node = InitializeConceptNode()
     analyze_node = AnalyzeConceptDimensionNode()
     reduce_node = ReduceConceptsNode()
-    report_node = GenerateConceptReportNode()
 
     # 添加节点
     builder.add_node("initialize", initialize_node)
@@ -594,7 +592,7 @@ async def call_concept_subgraph(
     except Exception as e:
         logger.error(f"[子图调用] 子图执行失败: {str(e)}")
         return {
-            "concept_report": f"规划思路分析失败: {str(e)}",
+            "concept_report": "",  # 与成功路径保持一致
             "concept_reports": {},
             "success": False
         }

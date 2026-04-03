@@ -67,8 +67,15 @@ GIS_TILE_SOURCE: str = os.getenv("GIS_TILE_SOURCE", "tianditu")
 # 天地图地理服务配置
 # ==========================================
 
-# 天地图 API Key (WGS-84坐标系，无需转换)
+# 天地图 API Key (服务端密钥，校验 IP 白名单)
+# 注意：需在天地图控制台配置 IP 白名单（本地测试可留空）
 TIANDITU_API_KEY: str = os.getenv("TIANDITU_API_KEY", "")
+
+# 天地图速率限制（每秒请求数）
+TIANDITU_RATE_LIMIT: float = float(os.getenv("TIANDITU_RATE_LIMIT", "5.0"))
+
+# 天地图最大重试次数
+TIANDITU_MAX_RETRIES: int = int(os.getenv("TIANDITU_MAX_RETRIES", "3"))
 
 # GIS 服务超时时间（秒）
 GIS_TIMEOUT: int = int(os.getenv("GIS_TIMEOUT", "30"))
