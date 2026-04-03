@@ -3,16 +3,23 @@
 
 将 Adapter 适配器包装为可注册的工具函数，
 但不自动注册，由调用者决定注册时机。
+
+支持两种模式：
+1. 传统模式：返回格式化字符串（用于 Planner Hook）
+2. 对话模式：发送 SSE 事件 + 返回结构化结果（用于对话式 Agent）
 """
 
-from typing import Dict, Any, Type, Optional, Callable
-from .base_adapter import BaseAdapter, AdapterResult, AdapterStatus
+from typing import Dict, Any, Type, Optional, Callable, List
+from .base_adapter import (
+    BaseAdapter, AdapterResult, AdapterStatus,
+    ToolExecutionResult, ToolStage, DisplayHints
+)
 from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 # 已知上下文键列表
-KNOWN_CONTEXT_KEYS = ("analysis_type", "village_data", "socio_economic", "traffic", "land_use")
+KNOWN_CONTEXT_KEYS = ("analysis_type", "village_data", "socio_economic", "traffic", "land_use", "session_id")
 
 
 def create_adapter_tool_function(
@@ -356,6 +363,7 @@ def format_poi_result(result: AdapterResult) -> str:
 
 __all__ = [
     "create_adapter_tool_function",
+    "create_adapter_tool_function_with_events",
     "format_population_result",
     "format_gis_result",
     "format_network_result",
@@ -364,3 +372,183 @@ __all__ = [
     "format_accessibility_result",
     "format_poi_result",
 ]
+
+
+# ==========================================
+# 对话式工具包装器（带 SSE 事件）
+# ==========================================
+
+# 工具显示名称映射
+TOOL_DISPLAY_NAMES = {
+    "gis_data_fetch": "GIS 数据获取",
+    "gis_analysis": "GIS 空间分析",
+    "poi_search": "POI 搜索",
+    "route_planning": "路径规划",
+    "accessibility_analysis": "可达性分析",
+    "population_prediction": "人口预测",
+    "network_analysis": "网络分析",
+    "wfs_data_fetch": "WFS 数据获取",
+    "reverse_geocode": "逆地理编码",
+    "knowledge_search": "知识检索",
+    "web_search": "网络搜索",
+}
+
+# 工具显示提示映射
+TOOL_DISPLAY_HINTS = {
+    "gis_data_fetch": DisplayHints(primary_view="map", priority_fields=["geojson", "center"]),
+    "gis_analysis": DisplayHints(primary_view="map", priority_fields=["result", "coverage"]),
+    "poi_search": DisplayHints(primary_view="table", priority_fields=["pois", "geojson"]),
+    "route_planning": DisplayHints(primary_view="map", priority_fields=["route", "geojson"]),
+    "accessibility_analysis": DisplayHints(primary_view="table", priority_fields=["accessibility_matrix", "coverage_by_type"]),
+    "population_prediction": DisplayHints(primary_view="chart", priority_fields=["projections", "structure"]),
+    "network_analysis": DisplayHints(primary_view="text", priority_fields=["accessibility", "connectivity"]),
+}
+
+
+def create_adapter_tool_function_with_events(
+    adapter_class: Type[BaseAdapter],
+    adapter_name: str,
+    default_analysis_type: Optional[str] = None,
+    result_formatter: Optional[Callable[[AdapterResult], str]] = None,
+    stages: Optional[List[str]] = None
+) -> Callable[[Dict[str, Any]], ToolExecutionResult]:
+    """
+    创建支持 SSE 事件的对话式工具函数
+
+    Args:
+        adapter_class: Adapter 类
+        adapter_name: 适配器名称（工具标识）
+        default_analysis_type: 默认分析类型
+        result_formatter: 自定义结果格式化函数
+        stages: 工具执行阶段列表（如 ["init", "execute", "format"]）
+
+    Returns:
+        返回 ToolExecutionResult 的工具函数
+    """
+
+    def tool_function(context: Dict[str, Any]) -> ToolExecutionResult:
+        """
+        对话式工具函数包装器
+
+        Args:
+            context: 包含 session_id 和所需数据的上下文字典
+
+        Returns:
+            ToolExecutionResult: 结构化工具结果
+        """
+        # 导入 SSE 事件函数（延迟导入避免循环依赖）
+        from backend.api.planning import (
+            append_tool_call_event,
+            append_tool_progress_event,
+            append_tool_result_event
+        )
+
+        session_id = context.get("session_id", "unknown")
+        display_name = TOOL_DISPLAY_NAMES.get(adapter_name, adapter_name)
+        tool_stages = stages or ["init", "execute"]
+        display_hints = TOOL_DISPLAY_HINTS.get(adapter_name, DisplayHints())
+
+        # 初始化阶段列表
+        stage_objects = [ToolStage(name=s, status="pending", progress=0.0, message="") for s in tool_stages]
+
+        # 发送 tool_call 事件
+        append_tool_call_event(
+            session_id=session_id,
+            tool_name=adapter_name,
+            tool_display_name=display_name,
+            description=f"执行 {display_name}",
+            estimated_time=5.0 if "gis" in adapter_name else 2.0,
+            stage=tool_stages[0]
+        )
+
+        try:
+            # 阶段 1: 初始化
+            if len(tool_stages) > 1:
+                stage_objects[0].status = "running"
+                stage_objects[0].progress = 0.1
+                stage_objects[0].message = "初始化适配器"
+                append_tool_progress_event(
+                    session_id, adapter_name, tool_stages[0], 0.1, "初始化适配器"
+                )
+
+                adapter = adapter_class()
+
+                stage_objects[0].status = "success"
+                stage_objects[0].progress = 0.2
+                append_tool_progress_event(
+                    session_id, adapter_name, tool_stages[0], 0.2, "初始化完成"
+                )
+            else:
+                adapter = adapter_class()
+
+            # 阶段 2: 执行
+            execute_stage_idx = 1 if len(tool_stages) > 1 else 0
+            if execute_stage_idx < len(stage_objects):
+                stage_objects[execute_stage_idx].status = "running"
+                stage_objects[execute_stage_idx].progress = 0.3
+                stage_objects[execute_stage_idx].message = "执行分析"
+                append_tool_progress_event(
+                    session_id, adapter_name, tool_stages[execute_stage_idx], 0.3, "执行分析"
+                )
+
+            kwargs = {}
+            if default_analysis_type:
+                kwargs["analysis_type"] = default_analysis_type
+
+            for key in KNOWN_CONTEXT_KEYS:
+                if key in context and key != "session_id":
+                    kwargs[key] = context[key]
+
+            result = adapter.run(**kwargs)
+
+            # 更新执行阶段状态
+            if execute_stage_idx < len(stage_objects):
+                stage_objects[execute_stage_idx].status = "success"
+                stage_objects[execute_stage_idx].progress = 0.8
+                append_tool_progress_event(
+                    session_id, adapter_name, tool_stages[execute_stage_idx], 0.8, "分析完成"
+                )
+
+            # 转换为 ToolExecutionResult
+            tool_result = ToolExecutionResult.from_adapter_result(
+                adapter_name, result, display_hints
+            )
+            tool_result.stages = stage_objects
+
+            # 发送 tool_result 事件
+            append_tool_result_event(
+                session_id=session_id,
+                tool_name=adapter_name,
+                status="success" if result.success else "error",
+                summary=tool_result.summary,
+                display_hints=display_hints.to_dict(),
+                data_preview=result_formatter(result)[:200] if result_formatter else None
+            )
+
+            return tool_result
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"[AdapterWrapper] {adapter_name} 执行失败: {error_msg}")
+
+            # 发送错误事件
+            append_tool_result_event(
+                session_id=session_id,
+                tool_name=adapter_name,
+                status="error",
+                summary=f"工具 {adapter_name} 执行失败",
+                display_hints=display_hints.to_dict(),
+                data_preview=error_msg
+            )
+
+            return ToolExecutionResult(
+                tool_name=adapter_name,
+                status="error",
+                stages=stage_objects,
+                data={},
+                display_hints=display_hints,
+                summary=f"执行失败: {error_msg}",
+                error=error_msg
+            )
+
+    return tool_function

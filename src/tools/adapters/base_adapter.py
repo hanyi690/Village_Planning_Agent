@@ -6,8 +6,8 @@
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass
+from typing import Dict, Any, List, Optional, Literal
+from dataclasses import dataclass, field
 from enum import Enum
 
 from ...utils.logger import get_logger
@@ -43,6 +43,120 @@ class AdapterResult:
             "metadata": self.metadata,
             "error": self.error
         }
+
+
+# ==========================================
+# 对话式工具结果数据类
+# ==========================================
+
+@dataclass
+class ToolStage:
+    """工具执行阶段（用于多阶段进度展示）"""
+    name: str                      # "data_fetch", "analysis", "visualization"
+    status: Literal["pending", "running", "success", "error"]
+    progress: float = 0.0          # 0.0 - 1.0
+    message: str = ""
+    data_preview: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "status": self.status,
+            "progress": self.progress,
+            "message": self.message,
+            "data_preview": self.data_preview
+        }
+
+
+@dataclass
+class DisplayHints:
+    """前端渲染提示"""
+    primary_view: Literal["text", "table", "map", "chart", "json"] = "text"
+    priority_fields: List[str] = field(default_factory=list)
+    expandable: bool = True
+    max_preview_length: int = 500
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "primary_view": self.primary_view,
+            "priority_fields": self.priority_fields,
+            "expandable": self.expandable,
+            "max_preview_length": self.max_preview_length
+        }
+
+
+@dataclass
+class ToolExecutionResult:
+    """结构化工具结果（用于对话式展示）
+
+    与 AdapterResult 的区别：
+    - AdapterResult: 内部计算结果，保留完整数据结构
+    - ToolExecutionResult: 对话展示结果，包含前端渲染提示
+    """
+    tool_name: str
+    status: Literal["pending", "running", "success", "error"]
+    stages: List[ToolStage] = field(default_factory=list)
+    data: Dict[str, Any] = field(default_factory=dict)
+    display_hints: DisplayHints = field(default_factory=DisplayHints)
+    summary: str = ""              # LLM 上下文摘要
+    error: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "tool_name": self.tool_name,
+            "status": self.status,
+            "stages": [s.to_dict() for s in self.stages],
+            "data": self.data,
+            "display_hints": self.display_hints.to_dict(),
+            "summary": self.summary,
+            "error": self.error
+        }
+
+    @classmethod
+    def from_adapter_result(
+        cls,
+        tool_name: str,
+        adapter_result: AdapterResult,
+        display_hints: Optional[DisplayHints] = None
+    ) -> "ToolExecutionResult":
+        """从 AdapterResult 转换"""
+        status = "success" if adapter_result.success else "error"
+        summary = cls._generate_summary(tool_name, adapter_result)
+
+        return cls(
+            tool_name=tool_name,
+            status=status,
+            stages=[],
+            data=adapter_result.data,
+            display_hints=display_hints or DisplayHints(),
+            summary=summary,
+            error=adapter_result.error
+        )
+
+    @staticmethod
+    def _generate_summary(tool_name: str, result: AdapterResult) -> str:
+        """生成 LLM 上下文摘要"""
+        if not result.success:
+            return f"工具 {tool_name} 执行失败: {result.error}"
+
+        data = result.data
+        if not data:
+            return f"工具 {tool_name} 执行成功，无返回数据"
+
+        # 根据数据类型生成摘要
+        if "geojson" in data:
+            features = data.get("geojson", {}).get("features", [])
+            return f"工具 {tool_name} 返回 GeoJSON 数据，包含 {len(features)} 个要素"
+        elif "pois" in data:
+            pois = data.get("pois", [])
+            return f"工具 {tool_name} 找到 {len(pois)} 个 POI"
+        elif "route" in data:
+            route = data.get("route", {})
+            distance = route.get("distance", 0)
+            return f"工具 {tool_name} 规划路径，距离 {distance} 米"
+        else:
+            keys = list(data.keys())[:5]
+            return f"工具 {tool_name} 执行成功，返回数据包含: {', '.join(keys)}"
 
 
 class BaseAdapter(ABC):

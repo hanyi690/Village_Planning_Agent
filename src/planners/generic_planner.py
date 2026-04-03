@@ -280,16 +280,53 @@ class GenericPlanner(UnifiedPlannerBase):
         if not tool_name:
             return ""  # 无工具，返回空字符串
 
+        # 获取 session_id 用于 SSE 事件
+        session_id = state.get("session_id", "unknown")
+
         try:
             from ..tools.registry import ToolRegistry
 
             # 准备工具上下文
             tool_context = self._prepare_tool_context(state)
+            tool_context["session_id"] = session_id  # 确保传递 session_id
 
-            # 执行工具
-            tool_result = ToolRegistry.execute_tool(tool_name, tool_context)
+            # 尝试使用 SSE 事件模式执行
+            try:
+                from backend.api.planning import (
+                    append_tool_call_event,
+                    append_tool_result_event
+                )
+                from ..tools.adapters.tool_wrapper import TOOL_DISPLAY_NAMES
 
-            logger.info(f"[{self.dimension_name}] 工具执行成功: {tool_name}")
+                display_name = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
+
+                # 发送 tool_call 事件
+                append_tool_call_event(
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    tool_display_name=display_name,
+                    description=f"执行 {display_name} 为 {self.dimension_name} 维度提供数据支持",
+                    estimated_time=3.0
+                )
+
+                # 执行工具
+                tool_result = ToolRegistry.execute_tool(tool_name, tool_context)
+
+                # 发送 tool_result 事件
+                append_tool_result_event(
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    status="success",
+                    summary=f"{display_name} 执行成功",
+                    data_preview=tool_result[:200] if len(tool_result) > 200 else tool_result
+                )
+
+                logger.info(f"[{self.dimension_name}] 工具执行成功(带SSE): {tool_name}")
+
+            except ImportError:
+                # SSE 事件不可用，回退到传统模式
+                tool_result = ToolRegistry.execute_tool(tool_name, tool_context)
+                logger.info(f"[{self.dimension_name}] 工具执行成功: {tool_name}")
 
             return f"\n【参考数据 - {tool_name}】\n{tool_result}\n"
 
@@ -298,6 +335,20 @@ class GenericPlanner(UnifiedPlannerBase):
             return ""
         except Exception as e:
             logger.error(f"[{self.dimension_name}] 工具执行失败: {e}")
+
+            # 尝试发送错误事件
+            try:
+                from backend.api.planning import append_tool_result_event
+                append_tool_result_event(
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    status="error",
+                    summary=f"工具执行失败: {str(e)}",
+                    data_preview=str(e)
+                )
+            except:
+                pass
+
             return f"\n【工具执行失败】\n{str(e)}\n"
 
     def _prepare_tool_context(self, state: Dict[str, Any]) -> Dict[str, Any]:

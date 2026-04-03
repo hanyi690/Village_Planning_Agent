@@ -710,6 +710,105 @@ def flush_dimension_delta(
             logger.debug(f"[flush_dimension_delta] {dimension_key}: flushed {token_count} remaining tokens, total={len(final_accumulated)} chars")
 
 
+# ==========================================
+# Tool SSE Events - 工具执行可视化
+# ==========================================
+
+def append_tool_call_event(
+    session_id: str,
+    tool_name: str,
+    tool_display_name: str,
+    description: str,
+    estimated_time: Optional[float] = None,
+    stage: str = "init"
+) -> None:
+    """
+    发送工具调用开始事件
+
+    Args:
+        session_id: 会话ID
+        tool_name: 工具名称（内部标识）
+        tool_display_name: 工具显示名称（用户可见）
+        description: 工具执行描述
+        estimated_time: 预估执行时间（秒）
+        stage: 当前阶段名称
+    """
+    event_data = {
+        "type": "tool_call",
+        "tool_name": tool_name,
+        "tool_display_name": tool_display_name,
+        "description": description,
+        "estimated_time": estimated_time,
+        "stage": stage,
+        "status": "running",
+        "timestamp": datetime.now().isoformat()
+    }
+    _append_session_event(session_id, event_data)
+    logger.debug(f"[Tool Event] {tool_name} started: {description}")
+
+
+def append_tool_progress_event(
+    session_id: str,
+    tool_name: str,
+    stage: str,
+    progress: float,
+    message: str
+) -> None:
+    """
+    发送工具执行进度事件
+
+    Args:
+        session_id: 会话ID
+        tool_name: 工具名称
+        stage: 当前阶段名称
+        progress: 进度值 (0.0 - 1.0)
+        message: 进度消息
+    """
+    event_data = {
+        "type": "tool_progress",
+        "tool_name": tool_name,
+        "stage": stage,
+        "progress": progress,
+        "message": message,
+        "status": "running",
+        "timestamp": datetime.now().isoformat()
+    }
+    _append_session_event(session_id, event_data)
+    logger.debug(f"[Tool Event] {tool_name} progress: {stage} {progress*100:.0f}% - {message}")
+
+
+def append_tool_result_event(
+    session_id: str,
+    tool_name: str,
+    status: str,
+    summary: str,
+    display_hints: Optional[Dict[str, Any]] = None,
+    data_preview: Optional[str] = None
+) -> None:
+    """
+    发送工具执行结果事件
+
+    Args:
+        session_id: 会话ID
+        tool_name: 工具名称
+        status: 执行状态 ("success" / "error")
+        summary: 结果摘要（LLM 上下文）
+        display_hints: 前端渲染提示
+        data_preview: 数据预览（可选）
+    """
+    event_data = {
+        "type": "tool_result",
+        "tool_name": tool_name,
+        "status": status,
+        "summary": summary,
+        "display_hints": display_hints or {},
+        "data_preview": data_preview,
+        "timestamp": datetime.now().isoformat()
+    }
+    _append_session_event(session_id, event_data)
+    logger.debug(f"[Tool Event] {tool_name} completed: status={status}")
+
+
 # ============================================
 # 🔧 asyncio.Queue 订阅管理系统
 # ============================================
