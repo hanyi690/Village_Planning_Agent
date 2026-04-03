@@ -361,19 +361,6 @@ def format_poi_result(result: AdapterResult) -> str:
     return "\n".join(lines)
 
 
-__all__ = [
-    "create_adapter_tool_function",
-    "create_adapter_tool_function_with_events",
-    "format_population_result",
-    "format_gis_result",
-    "format_network_result",
-    "format_gis_fetch_result",
-    "format_visualization_result",
-    "format_accessibility_result",
-    "format_poi_result",
-]
-
-
 # ==========================================
 # 对话式工具包装器（带 SSE 事件）
 # ==========================================
@@ -552,3 +539,18 @@ def create_adapter_tool_function_with_events(
             )
 
     return tool_function
+
+
+__all__ = [
+    "create_adapter_tool_function",
+    "create_adapter_tool_function_with_events",
+    "format_population_result",
+    "format_gis_result",
+    "format_network_result",
+    "format_gis_fetch_result",
+    "format_visualization_result",
+    "format_accessibility_result",
+    "format_poi_result",
+    "TOOL_DISPLAY_NAMES",
+    "TOOL_DISPLAY_HINTS",
+]

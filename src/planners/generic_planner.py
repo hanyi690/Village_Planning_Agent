@@ -290,17 +290,21 @@ class GenericPlanner(UnifiedPlannerBase):
             tool_context = self._prepare_tool_context(state)
             tool_context["session_id"] = session_id  # 确保传递 session_id
 
-            # 尝试使用 SSE 事件模式执行
+            # 检查 SSE 事件是否可用
+            sse_available = False
             try:
                 from backend.api.planning import (
                     append_tool_call_event,
                     append_tool_result_event
                 )
                 from ..tools.adapters.tool_wrapper import TOOL_DISPLAY_NAMES
+                sse_available = True
+            except ImportError:
+                pass
 
+            # 发送 tool_call 事件（如果 SSE 可用）
+            if sse_available:
                 display_name = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
-
-                # 发送 tool_call 事件
                 append_tool_call_event(
                     session_id=session_id,
                     tool_name=tool_name,
@@ -309,10 +313,11 @@ class GenericPlanner(UnifiedPlannerBase):
                     estimated_time=3.0
                 )
 
-                # 执行工具
-                tool_result = ToolRegistry.execute_tool(tool_name, tool_context)
+            # 执行工具
+            tool_result = ToolRegistry.execute_tool(tool_name, tool_context)
 
-                # 发送 tool_result 事件
+            # 发送 tool_result 事件（如果 SSE 可用）
+            if sse_available:
                 append_tool_result_event(
                     session_id=session_id,
                     tool_name=tool_name,
@@ -320,12 +325,8 @@ class GenericPlanner(UnifiedPlannerBase):
                     summary=f"{display_name} 执行成功",
                     data_preview=tool_result[:200] if len(tool_result) > 200 else tool_result
                 )
-
                 logger.info(f"[{self.dimension_name}] 工具执行成功(带SSE): {tool_name}")
-
-            except ImportError:
-                # SSE 事件不可用，回退到传统模式
-                tool_result = ToolRegistry.execute_tool(tool_name, tool_context)
+            else:
                 logger.info(f"[{self.dimension_name}] 工具执行成功: {tool_name}")
 
             return f"\n【参考数据 - {tool_name}】\n{tool_result}\n"
@@ -346,7 +347,7 @@ class GenericPlanner(UnifiedPlannerBase):
                     summary=f"工具执行失败: {str(e)}",
                     data_preview=str(e)
                 )
-            except:
+            except ImportError:
                 pass
 
             return f"\n【工具执行失败】\n{str(e)}\n"
