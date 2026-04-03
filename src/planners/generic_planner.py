@@ -323,7 +323,7 @@ class GenericPlanner(UnifiedPlannerBase):
                     tool_name=tool_name,
                     status="success",
                     summary=f"{display_name} 执行成功",
-                    data_preview=tool_result[:200] if len(tool_result) > 200 else tool_result
+                    data_preview=tool_result[:200]
                 )
                 logger.info(f"[{self.dimension_name}] 工具执行成功(带SSE): {tool_name}")
             else:

@@ -714,6 +714,36 @@ def flush_dimension_delta(
 # Tool SSE Events - 工具执行可视化
 # ==========================================
 
+# 工具事件状态常量
+TOOL_STATUS_RUNNING = "running"
+TOOL_STATUS_SUCCESS = "success"
+TOOL_STATUS_ERROR = "error"
+
+
+def _build_tool_event(
+    event_type: str,
+    tool_name: str,
+    **extra_fields
+) -> Dict[str, Any]:
+    """
+    构建工具事件数据（工厂函数）
+
+    Args:
+        event_type: 事件类型 (tool_call/tool_progress/tool_result)
+        tool_name: 工具名称
+        **extra_fields: 额外字段
+
+    Returns:
+        事件数据字典
+    """
+    base = {
+        "type": event_type,
+        "tool_name": tool_name,
+        "timestamp": datetime.now().isoformat()
+    }
+    return {**base, **extra_fields}
+
+
 def append_tool_call_event(
     session_id: str,
     tool_name: str,
@@ -733,16 +763,15 @@ def append_tool_call_event(
         estimated_time: 预估执行时间（秒）
         stage: 当前阶段名称
     """
-    event_data = {
-        "type": "tool_call",
-        "tool_name": tool_name,
-        "tool_display_name": tool_display_name,
-        "description": description,
-        "estimated_time": estimated_time,
-        "stage": stage,
-        "status": "running",
-        "timestamp": datetime.now().isoformat()
-    }
+    event_data = _build_tool_event(
+        "tool_call",
+        tool_name,
+        tool_display_name=tool_display_name,
+        description=description,
+        estimated_time=estimated_time,
+        stage=stage,
+        status=TOOL_STATUS_RUNNING
+    )
     _append_session_event(session_id, event_data)
     logger.debug(f"[Tool Event] {tool_name} started: {description}")
 
@@ -764,15 +793,14 @@ def append_tool_progress_event(
         progress: 进度值 (0.0 - 1.0)
         message: 进度消息
     """
-    event_data = {
-        "type": "tool_progress",
-        "tool_name": tool_name,
-        "stage": stage,
-        "progress": progress,
-        "message": message,
-        "status": "running",
-        "timestamp": datetime.now().isoformat()
-    }
+    event_data = _build_tool_event(
+        "tool_progress",
+        tool_name,
+        stage=stage,
+        progress=progress,
+        message=message,
+        status=TOOL_STATUS_RUNNING
+    )
     _append_session_event(session_id, event_data)
     logger.debug(f"[Tool Event] {tool_name} progress: {stage} {progress*100:.0f}% - {message}")
 
@@ -796,15 +824,14 @@ def append_tool_result_event(
         display_hints: 前端渲染提示
         data_preview: 数据预览（可选）
     """
-    event_data = {
-        "type": "tool_result",
-        "tool_name": tool_name,
-        "status": status,
-        "summary": summary,
-        "display_hints": display_hints or {},
-        "data_preview": data_preview,
-        "timestamp": datetime.now().isoformat()
-    }
+    event_data = _build_tool_event(
+        "tool_result",
+        tool_name,
+        status=status,
+        summary=summary,
+        display_hints=display_hints or {},
+        data_preview=data_preview
+    )
     _append_session_event(session_id, event_data)
     logger.debug(f"[Tool Event] {tool_name} completed: status={status}")
 

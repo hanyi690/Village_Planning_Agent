@@ -413,6 +413,21 @@ def create_adapter_tool_function_with_events(
         返回 ToolExecutionResult 的工具函数
     """
 
+    def _update_stage(
+        stage_obj: ToolStage,
+        session_id: str,
+        tool_name: str,
+        stage_name: str,
+        status: str,
+        progress: float,
+        message: str
+    ) -> None:
+        """更新阶段状态并发送进度事件（辅助函数）"""
+        stage_obj.status = status
+        stage_obj.progress = progress
+        stage_obj.message = message
+        append_tool_progress_event(session_id, tool_name, stage_name, progress, message)
+
     def tool_function(context: Dict[str, Any]) -> ToolExecutionResult:
         """
         对话式工具函数包装器
@@ -451,19 +466,16 @@ def create_adapter_tool_function_with_events(
         try:
             # 阶段 1: 初始化
             if len(tool_stages) > 1:
-                stage_objects[0].status = "running"
-                stage_objects[0].progress = 0.1
-                stage_objects[0].message = "初始化适配器"
-                append_tool_progress_event(
-                    session_id, adapter_name, tool_stages[0], 0.1, "初始化适配器"
+                _update_stage(
+                    stage_objects[0], session_id, adapter_name, tool_stages[0],
+                    "running", 0.1, "初始化适配器"
                 )
 
                 adapter = adapter_class()
 
-                stage_objects[0].status = "success"
-                stage_objects[0].progress = 0.2
-                append_tool_progress_event(
-                    session_id, adapter_name, tool_stages[0], 0.2, "初始化完成"
+                _update_stage(
+                    stage_objects[0], session_id, adapter_name, tool_stages[0],
+                    "success", 0.2, "初始化完成"
                 )
             else:
                 adapter = adapter_class()
@@ -471,11 +483,9 @@ def create_adapter_tool_function_with_events(
             # 阶段 2: 执行
             execute_stage_idx = 1 if len(tool_stages) > 1 else 0
             if execute_stage_idx < len(stage_objects):
-                stage_objects[execute_stage_idx].status = "running"
-                stage_objects[execute_stage_idx].progress = 0.3
-                stage_objects[execute_stage_idx].message = "执行分析"
-                append_tool_progress_event(
-                    session_id, adapter_name, tool_stages[execute_stage_idx], 0.3, "执行分析"
+                _update_stage(
+                    stage_objects[execute_stage_idx], session_id, adapter_name, tool_stages[execute_stage_idx],
+                    "running", 0.3, "执行分析"
                 )
 
             kwargs = {}
@@ -490,10 +500,9 @@ def create_adapter_tool_function_with_events(
 
             # 更新执行阶段状态
             if execute_stage_idx < len(stage_objects):
-                stage_objects[execute_stage_idx].status = "success"
-                stage_objects[execute_stage_idx].progress = 0.8
-                append_tool_progress_event(
-                    session_id, adapter_name, tool_stages[execute_stage_idx], 0.8, "分析完成"
+                _update_stage(
+                    stage_objects[execute_stage_idx], session_id, adapter_name, tool_stages[execute_stage_idx],
+                    "success", 0.8, "分析完成"
                 )
 
             # 转换为 ToolExecutionResult
