@@ -165,7 +165,7 @@ def tool_execution_node(state: ConversationState) -> Dict[str, Any]:
     }
 
 
-def planning_step_node(state: ConversationState) -> Dict[str, Any]:
+async def planning_step_node(state: ConversationState) -> Dict[str, Any]:
     """
     规划步骤节点 - 执行下一阶段规划
 
@@ -185,7 +185,7 @@ def planning_step_node(state: ConversationState) -> Dict[str, Any]:
     }
 
     handler = phase_handlers.get(phase, _handle_init_phase)
-    result = handler(state, session_id, project_name, context)
+    result = await handler(state, session_id, project_name, context)
 
     return result
 
