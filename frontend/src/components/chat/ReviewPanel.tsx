@@ -5,6 +5,7 @@
  *
  * 支持批准和驳回两种操作
  * 驳回时可展开输入框填写修改意见
+ * 支持选择特定维度进行定向修订
  */
 
 import { useState } from 'react';
@@ -17,16 +18,21 @@ import {
   faPaperPlane,
   faSpinner,
 } from '@fortawesome/free-solid-svg-icons';
+import { LAYER_VALUE_MAP } from '@/lib/constants';
 
 interface ReviewPanelProps {
   layer: number;
+  dimensions?: string[]; // 可选维度列表
+  dimensionNames?: Record<string, string>; // 维度显示名称映射
   onApprove: () => Promise<void>;
-  onReject?: (feedback: string) => Promise<void>;
+  onReject?: (feedback: string, selectedDimensions?: string[]) => Promise<void>;
   isSubmitting?: boolean;
 }
 
 export default function ReviewPanel({
   layer,
+  dimensions = [],
+  dimensionNames = {},
   onApprove,
   onReject,
   isSubmitting = false,
@@ -34,14 +40,9 @@ export default function ReviewPanel({
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [feedback, setFeedback] = useState('');
   const [isRejecting, setIsRejecting] = useState(false);
+  const [selectedDimensions, setSelectedDimensions] = useState<string[]>([]);
 
-  const layerNames: Record<number, string> = {
-    1: '现状分析',
-    2: '规划思路',
-    3: '详细规划',
-  };
-
-  const layerName = layerNames[layer] || `第 ${layer} 层`;
+  const layerName = LAYER_VALUE_MAP[layer] || `第 ${layer} 层`;
 
   const handleApproveClick = async () => {
     if (isSubmitting) return;
@@ -55,6 +56,15 @@ export default function ReviewPanel({
   const handleCancelReject = () => {
     setShowRejectInput(false);
     setFeedback('');
+    setSelectedDimensions([]);
+  };
+
+  const handleDimensionToggle = (dimKey: string) => {
+    setSelectedDimensions(prev =>
+      prev.includes(dimKey)
+        ? prev.filter(d => d !== dimKey)
+        : [...prev, dimKey]
+    );
   };
 
   const handleSubmitReject = async () => {
@@ -62,9 +72,10 @@ export default function ReviewPanel({
 
     setIsRejecting(true);
     try {
-      await onReject(feedback.trim());
+      await onReject(feedback.trim(), selectedDimensions.length > 0 ? selectedDimensions : undefined);
       setShowRejectInput(false);
       setFeedback('');
+      setSelectedDimensions([]);
     } catch (error) {
       console.error('[ReviewPanel] Reject failed:', error);
     } finally {
@@ -153,6 +164,35 @@ export default function ReviewPanel({
                     <FontAwesomeIcon icon={faTimes} className="text-xs" />
                   </button>
                 </div>
+
+                {/* 维度选择器 */}
+                {dimensions.length > 0 && (
+                  <div className="mb-3">
+                    <span className="text-xs text-gray-500 mb-1.5 block">
+                      🎯 选择需要修订的维度（可选）
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {dimensions.map(dimKey => (
+                        <button
+                          key={dimKey}
+                          onClick={() => handleDimensionToggle(dimKey)}
+                          className={`px-2 py-1 text-xs rounded-full transition-all ${
+                            selectedDimensions.includes(dimKey)
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                        >
+                          {dimensionNames[dimKey] || dimKey}
+                        </button>
+                      ))}
+                    </div>
+                    {selectedDimensions.length > 0 && (
+                      <p className="text-xs text-amber-600 mt-1.5">
+                        已选择 {selectedDimensions.length} 个维度进行定向修订
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 <textarea
                   value={feedback}

@@ -1,25 +1,20 @@
 """
-村庄规划Agent - 新架构
+村庄规划 Agent - Router Agent 架构
 
-V4.0.0 - 分层架构重构
+V5.0.0 - 统一 Agent 架构重构
 
-架构层次：
-- tools/: 统一工具层（遵循tool pattern）
-- orchestration/: 编排层（纯业务逻辑）
-- cli/: CLI层
-- core/: 核心组件（LLM、配置等）
-- subgraphs/: 子图（分析、规划思路、详细规划）
-- utils/: 工具函数
-- knowledge/: 知识库
-
-检查点管理：统一使用 LangGraph AsyncSqliteSaver
+架构特点：
+- 单一 State，消灭双写问题
+- conversation_node 作为中央路由（大脑）
+- Send API 实现维度并行分发
+- Checkpoint 完整记录聊天+规划
 """
 
 # 核心接口
 from .agent import (
     run_village_planning,
+    run_village_planning_async,
     run_analysis_only,
-    run_concept_only,
     quick_analysis,
     quick_planning,
     VillageDataManager,
@@ -30,52 +25,31 @@ from .agent import (
 
 # 编排层
 from .orchestration import (
-    VillagePlanningState,
-    run_village_planning as orchestration_run_village_planning,
+    UnifiedPlanningState,
+    PlanningPhase,
+    create_unified_planning_graph,
+    run_unified_planning,
+    run_unified_planning_async,
     resume_from_checkpoint,
-    create_village_planning_graph
-)
-
-# CLI层
-from .cli import main as cli_main
-
-# 工具层（仅导出新工具）
-from .tools import (
-    # 修复
-    RevisionTool,
-    parse_feedback,
-    revise_dimension,
-    revise_dimensions,
-    # 文件管理
-    VillageDataManager,
-    read_village_data,
-    # 知识库
-    knowledge_query,
 )
 
 __all__ = [
     # 核心接口
     "run_village_planning",
+    "run_village_planning_async",
     "run_analysis_only",
-    "run_concept_only",
     "quick_analysis",
     "quick_planning",
     "__version__",
     "__architecture__",
     # 编排层
-    "VillagePlanningState",
+    "UnifiedPlanningState",
+    "PlanningPhase",
+    "create_unified_planning_graph",
+    "run_unified_planning",
+    "run_unified_planning_async",
     "resume_from_checkpoint",
-    "create_village_planning_graph",
-    # CLI层
-    "cli_main",
-    # 工具层
-    "RevisionTool",
-    "parse_feedback",
-    "revise_dimension",
-    "revise_dimensions",
     # 文件管理
     "VillageDataManager",
     "read_village_data",
-    # 知识库
-    "knowledge_query",
 ]

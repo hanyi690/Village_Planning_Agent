@@ -1,5 +1,7 @@
 # FastAPI 后端架构分析报告
 
+> **相关文档**: [系统架构总览](architecture.md) | [数据流转](data-flow-architecture.md)
+>
 > 生成时间：2026-03-15
 > 项目版本：1.0.0
 > 分析范围：backend/ 目录

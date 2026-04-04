@@ -1,18 +1,16 @@
 """
 内置工具模块
 
-提供核心工具实现，通过装饰器自动注册到 ToolRegistry。
+提供核心工具实现，简化版注册机制。
 """
 
 from typing import Dict, Any
 
-from ..registry import ToolRegistry
 from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-@ToolRegistry.register("knowledge_search")
 def knowledge_search_tool(context: Dict[str, Any]) -> str:
     """
     RAG 知识检索工具
@@ -52,7 +50,6 @@ def knowledge_search_tool(context: Dict[str, Any]) -> str:
         return f"## 知识检索错误\n\n错误: {str(e)}"
 
 
-@ToolRegistry.register("web_search")
 def web_search_tool(context: Dict[str, Any]) -> str:
     """
     网络搜索工具

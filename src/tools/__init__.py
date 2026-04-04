@@ -7,7 +7,31 @@
 """
 
 # 工具注册中心
-from .registry import ToolRegistry
+from .registry import ToolRegistry, ToolMetadata, TOOL_PARAMETER_SCHEMAS, TOOL_METADATA_DEFINITIONS
+
+# 统一工具定义（LangChain @tool 装饰器）
+from .tools import (
+    gis_analysis,
+    network_analysis,
+    population_prediction,
+    accessibility_analysis,
+    knowledge_search,
+    web_search,
+    ALL_TOOLS,
+    get_tools_for_llm,
+)
+
+# 核心分析逻辑
+from .core import (
+    run_gis_analysis,
+    format_gis_result,
+    run_network_analysis,
+    format_network_result,
+    run_population_analysis,
+    format_population_result,
+    run_accessibility_analysis,
+    format_accessibility_result,
+)
 
 # 文件管理工具
 from .file_manager import (
@@ -30,6 +54,29 @@ from .revision_tool import (
 __all__ = [
     # 工具注册中心
     "ToolRegistry",
+    "ToolMetadata",
+    "TOOL_PARAMETER_SCHEMAS",
+    "TOOL_METADATA_DEFINITIONS",
+
+    # 统一工具定义
+    "gis_analysis",
+    "network_analysis",
+    "population_prediction",
+    "accessibility_analysis",
+    "knowledge_search",
+    "web_search",
+    "ALL_TOOLS",
+    "get_tools_for_llm",
+
+    # 核心分析逻辑
+    "run_gis_analysis",
+    "format_gis_result",
+    "run_network_analysis",
+    "format_network_result",
+    "run_population_analysis",
+    "format_population_result",
+    "run_accessibility_analysis",
+    "format_accessibility_result",
 
     # 文件管理
     "VillageDataManager",

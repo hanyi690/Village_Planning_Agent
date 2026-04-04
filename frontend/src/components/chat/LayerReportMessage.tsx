@@ -17,7 +17,7 @@ interface LayerReportMessageProps {
   onToggleAllDimensions?: (expand: boolean) => void;
   currentLayer?: number; // NEW: 当前活跃层
   hasStreamingDimensions?: boolean; // NEW: 是否有流式维度内容
-  dimensionContents?: Map<string, string>; // NEW: 实时维度内容（解决并行更新竞态）
+  dimensionContents?: Record<string, string>; // NEW: 实时维度内容（解决并行更新竞态）
 }
 
 function LayerReportMessage({
@@ -46,13 +46,13 @@ function LayerReportMessage({
         return content && content.length > 0;
       });
 
-    const hasDimensionContents = dimensionContents && dimensionContents.size > 0;
+    const hasDimensionContents = dimensionContents && Object.keys(dimensionContents).length > 0;
 
     // ✅ 调试日志：追踪数据来源
     console.log(`[LayerReportMessage] Layer ${message.layer} 数据状态:`, {
       dimensionReportsCount: dimensionReportKeys.length,
       hasCompleteDimensionReports,
-      dimensionContentsSize: dimensionContents?.size || 0,
+      dimensionContentsSize: Object.keys(dimensionContents || {}).length,
       hasDimensionContents,
     });
 
@@ -81,7 +81,7 @@ function LayerReportMessage({
       if (hasDimensionReports) {
         for (const key of dimensionReportKeys) {
           const contentKey = `${message.layer}_${key}`;
-          const content = dimensionContents.get(contentKey) || '';
+          const content = dimensionContents[contentKey] || '';
           if (content) {
             result.push({
               name: getDimensionName(key),
@@ -93,7 +93,7 @@ function LayerReportMessage({
         }
       } else {
         // 没有 dimensionReports，直接遍历 dimensionContents
-        dimensionContents.forEach((content, key) => {
+        Object.entries(dimensionContents).forEach(([key, content]) => {
           const parts = key.split('_');
           if (parts.length >= 2) {
             const keyLayer = parseInt(parts[0], 10);

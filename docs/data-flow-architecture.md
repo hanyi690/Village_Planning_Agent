@@ -1,5 +1,7 @@
 # 数据和状态流转架构文档
 
+> **相关文档**: [系统架构总览](architecture.md) | [前端实现](frontend.md) | [后端实现](backend_architecture_analysis.md)
+
 ## 概述
 
 本文档详细描述 Village Planning Agent 系统从数据生成到前端展示的完整流程，包括状态变化、存储时机、事件发送机制和架构设计。

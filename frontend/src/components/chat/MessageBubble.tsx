@@ -20,7 +20,7 @@ interface MessageBubbleProps {
   onCopy?: (message: Message) => void;
   onRegenerate?: (message: Message) => void;
   enableStreaming?: boolean;
-  dimensionContents?: Map<string, string>;
+  dimensionContents?: Record<string, string>;
   children?: React.ReactNode;
 }
 

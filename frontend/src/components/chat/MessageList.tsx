@@ -29,7 +29,7 @@ interface MessageListProps {
   onViewLayerDetails?: (layer: number) => void;
   onToggleAllDimensions?: (layer: number, expand: boolean) => void;
   currentLayer?: number;
-  dimensionContents?: Map<string, string>;
+  dimensionContents?: Record<string, string>;
   // Checkpoint 回滚
   checkpoints?: Checkpoint[];
   onRollback?: (checkpointId: string) => Promise<void>;

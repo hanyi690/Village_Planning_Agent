@@ -406,6 +406,52 @@ CONCEPT_SUMMARY_PROMPT = """你是乡村规划专家团队的**总协调人**。
 # 专业数据获取函数（占位符）
 # ==========================================
 
+def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
+                         task_description: str = "", constraints: str = "",
+                         professional_data: dict = None,
+                         superior_planning_context: str = "") -> str:
+    """
+    获取规划思路维度的 Prompt 模板
+
+    Args:
+        dimension_key: 维度键名
+        analysis_report: 现状分析报告
+        task_description: 规划任务描述
+        constraints: 约束条件
+        professional_data: 专业数据（可选）
+        superior_planning_context: 上位规划上下文（positioning 维度专用）
+
+    Returns:
+        格式化后的 Prompt 字符串
+    """
+    dimension_map = {
+        "resource_endowment": RESOURCE_ENDOWMENT_PROMPT,
+        "planning_positioning": PLANNING_POSITIONING_PROMPT,
+        "development_goals": DEVELOPMENT_GOALS_PROMPT,
+        "planning_strategies": PLANNING_STRATEGIES_PROMPT,
+    }
+
+    prompt_template = dimension_map.get(dimension_key, "")
+    if not prompt_template:
+        return ""
+
+    # 生成专业数据部分（可扩展）
+    professional_data_section = ""
+    if professional_data:
+        # 可根据维度添加专业数据格式化逻辑
+        pass
+
+    format_params = {
+        "analysis_report": analysis_report,
+        "task_description": task_description,
+        "constraints": constraints,
+        "professional_data_section": professional_data_section,
+        "superior_planning_context": superior_planning_context or "暂无上位规划参考",
+    }
+
+    return prompt_template.format(**format_params)
+
+
 def get_specialized_data(dimension_key: str, state: dict) -> dict:
     """
     获取专业数据（占位函数）
@@ -432,5 +478,6 @@ __all__ = [
     "DEVELOPMENT_GOALS_PROMPT",
     "PLANNING_STRATEGIES_PROMPT",
     "CONCEPT_SUMMARY_PROMPT",
+    "get_dimension_prompt",
     "get_specialized_data",
 ]

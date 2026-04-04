@@ -6,6 +6,7 @@
 
 - **三层递进规划**: 现状分析(L1) → 规划思路(L2) → 详细规划(L3)
 - **28维度智能执行**: 12+4+12 维度，Map-Reduce 并行 + 波次路由
+- **专业 Prompt 模板**: 28个维度各有定制化专业模板，包含输出格式规范和分析要点
 - **RAG 知识检索**: 关键维度预加载知识，法规条文和技术指标智能注入
 - **SSE 流式推送**: Token 级增量文本实时显示
 - **状态持久化**: LangGraph Checkpointer 自动保存，支持断点恢复
@@ -15,38 +16,47 @@
 ## 系统架构
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         前端 (Next.js 14)                            │
-│  UnifiedPlanningContext ←─REST轮询(2s)─ TaskController              │
-│        ↓                                    SSE流式文本              │
-│  条件渲染: ReviewPanel / LayerReportMessage                         │
-└─────────────────────────────────────────────────────────────────────┘
-                               │ HTTP/SSE
-                               ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                         后端 (FastAPI)                               │
-│  /api/planning/*   规划任务管理    /api/data/*   村庄数据查询        │
-│  /api/files/*      文件上传解析    /api/knowledge/*  知识库管理      │
-│  AsyncSqliteSaver (Checkpointer单例) → 状态持久化                   │
-└─────────────────────────────────────────────────────────────────────┘
-                               │ Python调用
-                               ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Agent核心 (LangGraph)                         │
-│  主图: START → init_pause → Layer1(并行) → Layer2(波次) →           │
-│        Layer3(波次) → tool_bridge → generate_final → END            │
-│  子图: analysis / concept / detailed_plan / revision                 │
-│  规划器: GenericPlanner (28维度统一执行)                              │
-│  RAG: knowledge_preload_node → knowledge_cache → Prompt注入         │
-└─────────────────────────────────────────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                          存储层 (SQLite)                             │
-│  planning_sessions: 业务元数据    ui_sessions/messages: UI状态       │
-│  checkpoints: LangGraph状态快照 (单一真实源)                         │
-│  knowledge_base/chroma_db/: RAG 向量数据库                           │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                          Village_Planning_Agent 架构                             │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  ┌─────────────┐     ┌──────────────────┐     ┌──────────────────────────────┐ │
+│  │  Frontend   │────▶│   FastAPI API    │────▶│    LangGraph Orchestration   │ │
+│  │  (React)    │     │   (backend/)     │     │      (src/orchestration/)    │ │
+│  └─────────────┘     └──────────────────┘     └──────────────────────────────┘ │
+│         │                    │                          │                       │
+│         │ SSE/REST            │                          ▼                       │
+│         │                    │                ┌──────────────────────────────┐ │
+│         │                    ▼                │      Node Layer              │ │
+│         │          ┌─────────────────┐        │      (src/nodes/)            │ │
+│         │          │   Database      │        └──────────────────────────────┘ │
+│         │          │ (SQLite + WAL)  │                      │                 │
+│         │          └─────────────────┘                      │                 │
+│         │                                   ┌───────────────┼───────────┐      │
+│         │                                   ▼               ▼           ▼      │
+│         │                         ┌─────────────────┐ ┌──────────┐ ┌────────┐ │
+│         │                         │   Tool System   │ │   LLM    │ │   RAG  │ │
+│         │                         │ (src/tools/)    │ │ Factory  │ │(src/rag│ │
+│         │                         └─────────────────┘ └──────────┘ └────────┘ │
+│         │                                                                   │
+│         └───────────────────────────────────────────────────────────────────▶ │
+│                              SSE Stream Events                                 │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+三层规划流程:
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  Layer 1 (现状分析) ──▶ Layer 2 (规划思路) ──▶ Layer 3 (详细规划)               │
+│                                                                                 │
+│  ┌───────────────┐    ┌───────────────┐    ┌───────────────────────────────────┐│
+│  │ 12 维度并行   │    │ 4 维度波次执行│    │ 12 维度波次执行                   ││
+│  │ (单波次)      │    │ (Wave 1-4)    │    │ (Wave 1-4)                        ││
+│  └───────────────┘    └───────────────┘    └───────────────────────────────────┘│
+│                                                                                 │
+│  维度依赖链: Layer1 ──▶ Layer2 ──▶ Layer3 (跨层依赖)                           │
+│              同层维度 ──▶ 同层维度 (同层依赖，Wave 控制)                        │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 核心数据流
@@ -207,36 +217,66 @@ python -m src.rag.scripts.kb_cli sync           # 同步源目录
 Village_Planning_Agent/
 ├── backend/                    # FastAPI 后端
 │   ├── main.py                 # 应用入口
+│   ├── schemas.py              # Pydantic 数据模型
 │   ├── api/                    # API 路由
-│   │   ├── planning.py         # 规划任务API
+│   │   ├── planning.py         # 规划任务API (核心: /start, /stream, /review)
 │   │   ├── data.py             # 村庄数据API
 │   │   ├── files.py            # 文件上传API
-│   │   └── knowledge.py        # 知识库API
-│   ├── database/               # 数据模型
-│   ├── services/               # 服务层 (限流器)
+│   │   ├── knowledge.py        # 知识库API
+│   │   ├── routes.py           # 路由聚合
+│   │   └── tool_manager.py     # 工具管理API
+│   ├── database/               # 数据模型 (SQLModel)
+│   │   ├── models.py           # PlanningSession, SessionEvent
+│   │   └── operations_async.py # 异步CRUD操作
+│   ├── services/               # 服务层
+│   │   ├── planning_service.py # 规划执行服务
+│   │   ├── checkpoint_service.py # 检查点服务
+│   │   ├── session_service.py  # 会话管理服务
+│   │   ├── review_service.py   # 审查服务
+│   │   ├── sse_manager.py      # SSE 事件管理
+│   │   └── rate_limiter.py     # 限流器
 │   └── utils/                  # 工具函数
 ├── frontend/src/               # Next.js 14 前端
-│   ├── app/                    # 页面路由
-│   ├── contexts/               # 状态管理
-│   ├── controllers/            # TaskController
+│   ├── app/                    # 页面路由 (App Router)
+│   ├── providers/              # Context Provider
+│   ├── controllers/            # TaskController (任务控制)
 │   ├── components/             # UI组件
+│   │   ├── chat/               # 聊天组件 (ChatPanel, ToolStatusPanel)
+│   │   └── planning/           # 规划组件 (ReviewPanel, DimensionCard)
 │   ├── hooks/                  # 自定义Hooks
 │   ├── lib/                    # API客户端
-│   ├── config/                 # 配置文件
 │   └── types/                  # 类型定义
 ├── src/                        # Agent核心引擎
-│   ├── agent.py                # 对外接口
+│   ├── agent.py                # 对外接口 (run_village_planning)
 │   ├── orchestration/          # 主图编排
-│   ├── subgraphs/              # 三层子图
-│   ├── nodes/                  # 节点实现
-│   ├── planners/               # 规划器
+│   │   ├── main_graph.py       # 主图定义 (StateGraph构建)
+│   │   ├── state.py            # 状态定义 (PlanningState, PlanningPhase)
+│   │   ├── routing.py          # 路由逻辑 (Send API)
+│   │   └── nodes/              # 节点实现
+│   │       ├── dimension_node.py # 统一维度分析节点
+│   │       └── revision_node.py  # 维度修复节点
+│   ├── subgraphs/              # Prompt 模板系统
+│   │   ├── analysis_prompts.py # Layer 1: 12维度现状分析模板
+│   │   ├── concept_prompts.py  # Layer 2: 4维度规划思路模板
+│   │   └── detailed_plan_prompts.py # Layer 3: 12维度详细规划模板
 │   ├── config/                 # 维度配置
+│   │   └── dimension_metadata.py # 维度元数据权威来源 (28维度)
 │   ├── core/                   # 核心模块
+│   │   ├── config.py           # 全局配置 (LLM, API Keys)
+│   │   └── llm_factory.py      # LLM工厂 (OpenAI/ZhipuAI双提供商)
 │   ├── rag/                    # RAG 知识检索
+│   │   ├── core/               # RAG核心引擎
+│   │   └── scripts/            # 知识库构建脚本
 │   └── tools/                  # 工具函数
-├── knowledge_base/             # 知识库存储
+│       ├── registry.py         # 工具注册中心
+│       ├── tools.py            # 工具定义
+│       ├── builtin/            # 内置工具
+│       └── core/               # 核心工具实现 (GIS, 人口预测)
+├── knowledge_base/             # 知识库存储 (ChromaDB)
 ├── data/                       # 数据文件
-├── docs/                       # 文档
+│   ├── policies/               # 政策文档 (RAG源)
+│   └── output/                 # 规划输出
+├── docs/                       # 架构文档
 └── tests/                      # 测试文件
 ```
 
@@ -278,14 +318,26 @@ Village_Planning_Agent/
 
 ### 核心架构文档
 
-- **[智能体架构](docs/agent.md)** - LangGraph 主图、子图、规划器、RAG 知识检索（v2.0 支持元数据过滤）
-- **[前端实现](docs/frontend.md)** - Next.js 14 前端架构、组件层次、设计规范
+- **[系统架构总览](docs/architecture.md)** - 前端/后端/Agent 三层完整架构、文件依赖关系、数据流向
+- **[智能体架构](docs/agent.md)** - LangGraph 主图、子图、规划器、RAG 知识检索详细实现
+- **[前端实现](docs/frontend.md)** - Next.js 14 组件层次、Context 状态管理、SSE 事件处理
+- **[后端实现](docs/backend_architecture_analysis.md)** - FastAPI API 与数据流分析
 - **[数据和状态流转](docs/data-flow-architecture.md)** - SSE 事件、REST 轮询、Checkpoint 版本化同步
-- **[工具系统](docs/tool-system.md)** - 工具注册、Adapter 适配器、RAG 工具集
+- **[工具系统](docs/tool-system.md)** - 工具注册、Adapter 适配器、bind_tools 动态调用
+
+### 快速导航
+
+| 想了解... | 请阅读 |
+|----------|--------|
+| 整体架构和文件关系 | [系统架构总览](docs/architecture.md) |
+| LangGraph 图结构和节点 | [智能体架构](docs/agent.md) |
+| 前端组件和状态管理 | [前端实现](docs/frontend.md) |
+| SSE 事件和状态同步 | [数据和状态流转](docs/data-flow-architecture.md) |
+| 工具注册和执行流程 | [工具系统](docs/tool-system.md) |
+| API 端点定义 | 见下方 API 端点章节 |
 
 ### 其他文档
 
-- **[后端实现](docs/backend_architecture_analysis.md)** - FastAPI API 与数据流分析
 - **[研究课题实现](docs/research-progress.md)** - Hierarchical LangGraph 架构研究
 - **[服务管理](docs/startup-guide.md)** - 服务启动与管理指南
 - **[演示文档](docs/village_planning_presentation.md)** - 村庄规划系统演示（Marp 格式）

@@ -1,6 +1,8 @@
 # 工具系统文档
 
-本文档详细说明 Village_Planning_Agent 的工具系统架构、现有实现、扩展方式和注入流程。
+> **相关文档**: [系统架构总览](architecture.md) | [智能体架构](agent.md)
+>
+> 本文档详细说明 Village_Planning_Agent 的工具系统架构、现有实现、扩展方式和注入流程。
 
 ---
 

@@ -1,17 +1,29 @@
 """
 Village Planning Agent - 子图模块
 
-包含层级化的子图实现：
-- AnalysisSubgraph: 现状分析团队（10个维度并行分析）
-- ConceptSubgraph: 规划思路团队（4个维度并行分析）
+Prompts 模板（核心内容）：
+- analysis_prompts: 现状分析 Prompt 模板
+- concept_prompts: 规划思路 Prompt 模板
+- detailed_plan_prompts: 详细规划 Prompt 模板
+
+注意：
+1. revision_subgraph 已合并到 orchestration/nodes/revision_node.py
+2. analysis_subgraph、concept_subgraph、detailed_plan_subgraph 已被
+   新的维度节点 (dimension_node.py) 替代
 """
 
-from .analysis_subgraph import create_analysis_subgraph, call_analysis_subgraph
-from .concept_subgraph import create_concept_subgraph, call_concept_subgraph
+# 向后兼容：从 revision_node 导入修复子图相关内容
+from ..orchestration.nodes.revision_node import (
+    create_revision_subgraph,
+    call_revision_subgraph,
+    RevisionState,
+    RevisionDimensionState,
+)
 
 __all__ = [
-    'create_analysis_subgraph',
-    'call_analysis_subgraph',
-    'create_concept_subgraph',
-    'call_concept_subgraph',
+    # 向后兼容导出
+    'create_revision_subgraph',
+    'call_revision_subgraph',
+    'RevisionState',
+    'RevisionDimensionState',
 ]

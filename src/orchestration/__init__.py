@@ -1,19 +1,56 @@
 """
-编排层 - 业务逻辑编排
+编排层 - Router Agent 架构
 
-提供主图的构建和执行，不包含UI代码。
+单一 State，消灭双写问题。
 """
 
+from .state import (
+    PlanningPhase,
+    PlanningConfig,
+    UnifiedPlanningState,
+    create_initial_state,
+    get_layer_dimensions,
+    get_wave_dimensions,
+    get_total_waves,
+    get_next_phase,
+    _phase_to_layer,
+    _layer_to_phase,
+)
 from .main_graph import (
-    VillagePlanningState,
-    run_village_planning,
+    create_unified_planning_graph,
+    run_unified_planning,
+    run_unified_planning_async,
     resume_from_checkpoint,
-    create_village_planning_graph
+)
+from .routing import (
+    intent_router,
+    route_by_phase,
+    collect_layer_results,
+    emit_sse_events,
+    check_phase_completion,
 )
 
 __all__ = [
-    "VillagePlanningState",
-    "run_village_planning",
+    # 状态
+    "PlanningPhase",
+    "PlanningConfig",
+    "UnifiedPlanningState",
+    "create_initial_state",
+    "get_layer_dimensions",
+    "get_wave_dimensions",
+    "get_total_waves",
+    "get_next_phase",
+    "_phase_to_layer",
+    "_layer_to_phase",
+    # 主图
+    "create_unified_planning_graph",
+    "run_unified_planning",
+    "run_unified_planning_async",
     "resume_from_checkpoint",
-    "create_village_planning_graph",
+    # 路由
+    "intent_router",
+    "route_by_phase",
+    "collect_layer_results",
+    "emit_sse_events",
+    "check_phase_completion",
 ]

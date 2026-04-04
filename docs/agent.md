@@ -1,11 +1,14 @@
 # 智能体架构文档
 
+> **相关文档**: [系统架构总览](architecture.md) | [前端实现](frontend.md) | [工具系统](tool-system.md)
+>
 > LangGraph 核心引擎 - 三层递进式规划系统 + RAG 知识检索
 
 ## 版本信息
 
-- **版本**: 2.1.0
+- **版本**: 2.2.0
 - **架构**: hierarchical-langgraph
+- **更新**: Prompt 模板系统集成，28维度专业模板
 
 ## 架构概览
 
@@ -217,6 +220,159 @@ Wave 2: project_bank (依赖 Wave 1 全部完成)
 **功能**: 处理人工驳回后的并行修复机制
 
 **级联更新**: 修复一个维度时，自动更新所有下游依赖维度
+
+## Prompt 模板系统
+
+### 概述
+
+系统为 28 个维度各配备了专业的 Prompt 模板，包含详细的输出格式规范、分析要点和禁忌事项。
+
+### 模板文件结构
+
+```
+src/subgraphs/
+├── analysis_prompts.py        # Layer 1: 12维度现状分析模板
+│   └── get_dimension_prompt(dimension_key, raw_data, ...)
+├── concept_prompts.py         # Layer 2: 4维度规划思路模板
+│   └── get_dimension_prompt(dimension_key, analysis_report, ...)
+└── detailed_plan_prompts.py   # Layer 3: 12维度详细规划模板
+    └── get_dimension_prompt(dimension_key, project_name, ...)
+```
+
+### 模板调用链
+
+```
+dimension_node.py
+    │
+    ├── Layer 1 → analysis_prompts.get_dimension_prompt()
+    │     └── 输入: raw_data, task_description, constraints
+    │
+    ├── Layer 2 → concept_prompts.get_dimension_prompt()
+    │     └── 输入: analysis_report (Layer1摘要), superior_planning_context
+    │
+    └── Layer 3 → detailed_plan_prompts.get_dimension_prompt()
+          └── 输入: analysis_report, planning_concept, dimension_plans
+```
+
+### Layer 1 模板示例
+
+**区位分析 (location)** 专业格式要求：
+
+```
+输出格式要求（严格遵循）：
+1. 层级展开格式：必须按照从大到小的层级展开（省→市→县→镇→村）
+2. 每层独立段落：每个层级的描述独立成段
+3. 冒号分隔：使用"[地点]在[上级区域]的位置：描述内容"的格式
+4. 自然段落叙述：不要使用编号列表（1. 2. 3.），使用自然段落
+
+输出格式示例：
+[市]在[省]的位置：[市]是[省][区域位置]，位于[省][方位]。
+[县]在[市]的位置：[县]是[市][行政关系]，位于[市][方位]。
+...
+```
+
+### Layer 2 模板示例
+
+**资源禀赋 (resource_endowment)** 专业格式要求：
+
+```
+输出格式要求（严格遵循）：
+1. 简洁条目式：使用"[资源类型]：[具体资源]"的格式
+2. 每行一个资源类别：每个资源类别必须独占一行
+3. 唯一性资源识别（重点）：
+   - 全镇唯一：识别在全镇范围内独有的稀缺资源
+   - 全县唯一：识别在县级范围内独有的独特资源
+
+输出格式示例：
+民俗资源：黄粄、船灯舞、仙人粄
+自然资源：古檀林、山溪、杉木林
+唯一性标签：【全镇唯一】1200年古檀木、【全县唯一】船灯舞非遗
+```
+
+### Layer 3 模板示例
+
+**产业规划 (industry)** 专业格式要求：
+
+```
+规划要点：
+1. 产业定位与资源匹配
+2. 三链逻辑构建：
+   - 强链——强化现有环节
+   - 补链——补充缺失环节
+   - 拓链——延伸产业链条
+3. 产业体系构建（一二三产融合）
+4. 产业项目细化（项目名称/建设内容/规模/选址）
+5. 空间布局
+6. 实施保障
+
+输出要求：
+- 使用表格呈现产业项目清单
+- 三链逻辑完整，上下游衔接紧密
+```
+
+### 模板集成机制
+
+**`dimension_node.py` 的 `_build_dimension_prompt()` 函数**：
+
+```python
+def _build_dimension_prompt(dimension_key, dimension_name, village_data,
+                            task_description, constraints, reports) -> str:
+    """构建维度分析 prompt - 使用专业模板"""
+    layer = get_dimension_layer(dimension_key) or 3
+
+    # Layer 1: 使用 analysis_prompts 模板
+    if layer == 1:
+        from ...subgraphs.analysis_prompts import get_dimension_prompt
+        return get_dimension_prompt(
+            dimension_key=dimension_key,
+            raw_data=village_data,
+            task_description=task_description,
+            constraints=constraints
+        )
+
+    # Layer 2: 使用 concept_prompts 模板
+    elif layer == 2:
+        from ...subgraphs.concept_prompts import get_dimension_prompt
+        layer1_reports = reports.get("layer1", {})
+        analysis_summary = _format_layer1_summary(layer1_reports)
+        return get_dimension_prompt(
+            dimension_key=dimension_key,
+            analysis_report=analysis_summary,
+            superior_planning_context=_get_superior_planning_context(reports)
+        )
+
+    # Layer 3: 使用 detailed_plan_prompts 模板
+    elif layer == 3:
+        from ...subgraphs.detailed_plan_prompts import get_dimension_prompt
+        # ... 构建 Layer 1 和 Layer 2 报告摘要
+        return get_dimension_prompt(
+            dimension_key=dimension_key,
+            project_name=project_name,
+            analysis_report=analysis_summary,
+            planning_concept=concept_summary,
+            dimension_plans=dimension_plans
+        )
+```
+
+### 辅助函数
+
+| 函数 | 功能 |
+|------|------|
+| `_format_layer1_summary()` | 格式化 Layer 1 报告摘要（截取前 500 字符） |
+| `_format_layer2_summary()` | 格式化 Layer 2 报告摘要 |
+| `_get_superior_planning_context()` | 获取上位规划上下文（从 Layer 1 的 superior_planning 维度） |
+| `_get_dimension_plans()` | 获取前序详细规划内容（project_bank 维度专用） |
+| `_build_fallback_prompt()` | 备用简化 prompt（仅用于未知维度） |
+
+### 维度键名映射
+
+维度键名在 `dimension_metadata.py` 和模板文件中完全匹配，无需额外映射：
+
+| 层级 | 维度键名 | 模板变量 |
+|------|---------|---------|
+| Layer 1 | `location`, `socio_economic`, ... | `ANALYSIS_DIMENSIONS[key]` |
+| Layer 2 | `resource_endowment`, `planning_positioning`, ... | `*_PROMPT` 常量 |
+| Layer 3 | `industry`, `spatial_structure`, ... | `get_dimension_prompt()` 的 `dimension_map` |
 
 ## 规划器层
 
@@ -461,55 +617,33 @@ src/
 ├── core/
 │   ├── config.py               # 全局配置
 │   ├── llm_factory.py          # LLM工厂
-│   ├── state_builder.py        # 状态构建器
-│   ├── streaming.py            # 流式输出
-│   ├── prompts.py              # 提示词模板
 │   └── langsmith_integration.py # LangSmith 集成
 ├── config/
-│   └── dimension_metadata.py   # 维度元数据
+│   └── dimension_metadata.py   # 维度元数据 (28维度权威来源)
 ├── orchestration/
-│   └── main_graph.py           # 主图编排
+│   ├── main_graph.py           # 主图编排
+│   ├── state.py                # 状态定义
+│   ├── routing.py              # 路由逻辑
+│   └── nodes/
+│       ├── dimension_node.py   # 统一维度分析节点
+│       └── revision_node.py    # 维度修复节点
 ├── subgraphs/
-│   ├── analysis_subgraph.py    # Layer 1 子图
-│   ├── analysis_prompts.py     # Layer 1 提示词
-│   ├── concept_subgraph.py     # Layer 2 子图
-│   ├── concept_prompts.py      # Layer 2 提示词
-│   ├── detailed_plan_subgraph.py # Layer 3 子图
-│   ├── detailed_plan_prompts.py # Layer 3 提示词
-│   └── revision_subgraph.py    # Revision 子图
-├── nodes/
-│   ├── base_node.py            # 节点基类 (BaseNode, AsyncBaseNode)
-│   ├── layer_nodes.py          # Layer 节点 (异步)
-│   ├── subgraph_nodes.py       # 子图节点
-│   └── tool_nodes.py           # 工具节点 (含异步 RevisionNode)
-├── planners/
-│   ├── unified_base_planner.py # 规划器基类
-│   └── generic_planner.py      # 通用规划器
+│   ├── analysis_prompts.py     # Layer 1 提示词 (12维度)
+│   ├── concept_prompts.py      # Layer 2 提示词 (4维度)
+│   └── detailed_plan_prompts.py # Layer 3 提示词 (12维度)
 ├── tools/
 │   ├── registry.py             # 工具注册表
-│   ├── file_manager.py         # 文件管理器
-│   ├── knowledge_tool.py       # 知识检索工具接口
-│   ├── revision_tool.py        # 修复工具
-│   ├── web_review_tool.py      # Web 审查工具
-│   ├── project_extractor.py    # 项目提取工具
-│   └── adapters/               # 适配器
-│       ├── base_adapter.py
-│       ├── population_adapter.py
-│       ├── gis_adapter.py
-│       └── network_adapter.py
+│   ├── tools.py                # 工具定义
+│   └── core/                   # 核心工具实现
 ├── rag/
 │   ├── config.py               # RAG 配置
 │   ├── build.py                # 知识库构建入口
 │   └── core/
 │       ├── tools.py            # RAG 检索工具
-│       ├── cache.py            # Embedding 模型缓存
-│       └── loaders.py          # 文档加载器
+│       └── kb_manager.py       # 知识库管理
 └── utils/
     ├── logger.py               # 日志工具
-    ├── output_manager.py       # 输出管理器
-    ├── blackboard_manager.py   # 黑板管理器
-    ├── report_utils.py         # 报告生成工具
-    └── paths.py                # 路径配置
+    └── sse_publisher.py        # SSE 事件发布器
 ```
 
 ## 关键文件
@@ -518,19 +652,20 @@ src/
 |------|------|
 | `src/agent.py` | 对外接口（run_village_planning, run_analysis_only, run_concept_only） |
 | `src/orchestration/main_graph.py` | 主图编排（状态定义、路由逻辑、图构建） |
-| `src/subgraphs/analysis_subgraph.py` | Layer 1 子图（12维度并行分析） |
-| `src/subgraphs/concept_subgraph.py` | Layer 2 子图（4维度波次执行） |
-| `src/subgraphs/detailed_plan_subgraph.py` | Layer 3 子图（12维度波次执行） |
-| `src/subgraphs/revision_subgraph.py` | Revision 子图（级联修复） |
+| `src/orchestration/nodes/dimension_node.py` | 统一维度分析节点（Prompt 模板集成） |
+| `src/orchestration/nodes/revision_node.py` | 维度修复节点 |
+| `src/subgraphs/analysis_prompts.py` | Layer 1 提示词模板（12维度，含专业格式要求） |
+| `src/subgraphs/concept_prompts.py` | Layer 2 提示词模板（4维度，含唯一性资源识别） |
+| `src/subgraphs/detailed_plan_prompts.py` | Layer 3 提示词模板（12维度，含三链逻辑等） |
 | `src/planners/generic_planner.py` | 通用规划器（工具调用、Prompt构建） |
 | `src/config/dimension_metadata.py` | 维度配置（28个维度的元数据） |
 | `src/tools/registry.py` | 工具注册表 |
+| `src/tools/tools.py` | 工具定义 |
 | `src/tools/project_extractor.py` | 项目提取工具 |
-| `src/tools/file_manager.py` | 文件管理器（支持多种格式） |
 | `src/rag/core/tools.py` | RAG 检索工具集 |
-| `src/nodes/base_node.py` | 节点基类（BaseNode, AsyncBaseNode） |
-| `src/nodes/layer_nodes.py` | Layer 节点实现 |
 | `src/core/llm_factory.py` | LLM 工厂（支持 DeepSeek/OpenAI/智谱） |
+| `backend/services/planning_service.py` | 规划执行服务 |
+| `backend/services/sse_manager.py` | SSE 事件管理 |
 
 ## 项目库影子缓存机制
 

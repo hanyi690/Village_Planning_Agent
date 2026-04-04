@@ -46,10 +46,9 @@ def calculate_population(context: Dict[str, Any]) -> str:
     mechanical_growth = context.get("mechanical_growth", 0)
 
     try:
-        from ..adapters.analysis import PopulationPredictionAdapter
+        from ..core.population_core import run_population_analysis
 
-        adapter = PopulationPredictionAdapter()
-        result = adapter.execute(
+        result = run_population_analysis(
             analysis_type="village_forecast",
             baseline_population=baseline_population,
             baseline_year=baseline_year,
@@ -59,8 +58,8 @@ def calculate_population(context: Dict[str, Any]) -> str:
             intermediate_years=[2030]
         )
 
-        if result.success:
-            data = result.data
+        if result.get("success"):
+            data = result["data"]
             intermediate = data.get("intermediate_results", {})
 
             return f"""## 人口预测结果
@@ -85,8 +84,8 @@ P{n} = {baseline_population} × (1 + {natural_growth_rate/1000})^{data['forecast
      = {data['forecast_population']}人
 """
         else:
-            logger.warning(f"[population_model_v1] Adapter 预测失败: {result.error}，使用简化模型")
-            raise Exception(result.error)
+            logger.warning(f"[population_model_v1] 预测失败: {result.get('error')}，使用简化模型")
+            raise Exception(result.get("error"))
 
     except Exception as e:
         n = target_year - baseline_year

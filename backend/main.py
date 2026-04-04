@@ -1,11 +1,15 @@
 """
 FastAPI Backend Application - 村庄规划智能体后端服务
+
+Architecture:
+- routes.py: Unified API router (aggregates all endpoints)
+- services/: Business logic (planning_service, sse_manager, checkpoint_service)
+- database/: Async database operations
 """
 
 from __future__ import annotations
 
-# ⚠️ CRITICAL: 必须在所有其他导入之前设置 HuggingFace 镜像
-# huggingface_hub 在导入时读取 HF_ENDPOINT，之后设置无效
+# CRITICAL: Set HuggingFace mirror before any imports
 import os
 os.environ['HF_ENDPOINT'] = os.getenv('HF_ENDPOINT', 'https://hf-mirror.com')
 
@@ -22,9 +26,6 @@ from fastapi.responses import JSONResponse
 # Add parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend.api import files, knowledge
-from backend.api.data import router as data_router
-from backend.api.planning import router as planning_router
 from backend.api.validate_config import validate_config
 from src.utils.paths import ensure_working_directory, get_project_root, get_results_dir
 
@@ -35,7 +36,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 
-# 🔧 减少第三方库的日志噪音
+# Reduce third-party log noise
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -48,18 +49,18 @@ ALLOWED_ORIGINS = os.getenv(
     "http://localhost:3000,http://localhost:8000"
 ).split(",")
 
+
 # ============================================
 # Application Lifecycle
 # ============================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
+    """Application lifecycle management"""
     ensure_working_directory()
     project_root = get_project_root()
 
-    # Setup HuggingFace environment (mirror + offline mode)
-    # This must be called before any HuggingFace imports
+    # Setup HuggingFace environment
     from src.rag.config import setup_huggingface_env
     setup_huggingface_env()
 
@@ -68,6 +69,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"📁 Working directory: {os.getcwd()}")
     logger.info(f"📁 Results directory: {get_results_dir()}")
 
+    # Validate configuration
     config_check = validate_config()
     if not config_check["valid"]:
         logger.error(f"❌ 配置验证失败: {config_check['errors']}")
@@ -85,7 +87,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}", exc_info=True)
 
-    # 启动会话清理后台任务
+    # Start session cleanup task
     from backend.api.planning import start_session_cleanup, stop_session_cleanup
     await start_session_cleanup()
     logger.info("🧹 Session cleanup task started")
@@ -93,7 +95,7 @@ async def lifespan(app: FastAPI):
     logger.info("✅ 后端服务启动完成")
     yield
 
-    # Clean up database connections
+    # Clean up resources
     logger.info("🧹 Cleaning up resources...")
     try:
         from backend.database import dispose_async_engine
@@ -102,13 +104,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Failed to dispose database engine: {e}", exc_info=True)
 
-    logger.info("✅ Resources cleaned up")
-
-    # 关闭时停止清理任务
-    from backend.api.planning import stop_session_cleanup
+    # Stop cleanup task
     await stop_session_cleanup()
     logger.info("🧹 Session cleanup task stopped")
     logger.info("👋 后端服务关闭")
+
 
 # ============================================
 # FastAPI Application
@@ -123,7 +123,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# ✅ FIXED: CORS configuration with environment-aware settings
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS if IS_PRODUCTION else ["*"],
@@ -132,11 +132,10 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 
-# Include routers
-app.include_router(planning_router, tags=["Planning - Planning Execution"])
-app.include_router(data_router, tags=["Data - Data Access"])
-app.include_router(files.router, prefix="/api/files", tags=["Files - File Upload"])
-app.include_router(knowledge.router, prefix="/api/knowledge", tags=["Knowledge - Knowledge Base Management"])
+# Include unified router (aggregates all API routes)
+from backend.api.routes import router
+app.include_router(router)
+
 
 # ============================================
 # Health Check & Root Endpoints
@@ -144,16 +143,17 @@ app.include_router(knowledge.router, prefix="/api/knowledge", tags=["Knowledge -
 
 @app.get("/health", tags=["Health"])
 async def health_check() -> dict[str, str]:
-    """健康检查端点"""
+    """Health check endpoint"""
     return {
         "status": "healthy",
         "service": "village-planning-backend",
         "version": "1.0.0"
     }
 
+
 @app.get("/", tags=["Root"])
 async def root() -> dict[str, str]:
-    """根路径"""
+    """Root endpoint"""
     return {
         "message": "村庄规划智能体 API",
         "version": "1.0.0",
@@ -161,20 +161,17 @@ async def root() -> dict[str, str]:
         "health": "/health"
     }
 
+
 # ============================================
 # Error Handlers
 # ============================================
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc: Exception) -> JSONResponse:
-    """
-    ✅ FIXED: Global exception handler with environment-aware error messages
-    全局异常处理（生产环境不暴露内部错误）
-    """
+    """Global exception handler"""
     request_id = str(uuid.uuid4())
     logger.error(f"Unhandled exception [{request_id}]: {exc}", exc_info=True)
 
-    # ✅ FIXED: In production, don't expose internal error details
     if IS_PRODUCTION:
         return JSONResponse(
             status_code=500,
@@ -185,7 +182,6 @@ async def global_exception_handler(request, exc: Exception) -> JSONResponse:
             }
         )
     else:
-        # Development: show full error details
         return JSONResponse(
             status_code=500,
             content={
@@ -195,6 +191,7 @@ async def global_exception_handler(request, exc: Exception) -> JSONResponse:
                 "request_id": request_id
             }
         )
+
 
 # ============================================
 # Run Server (for development)

@@ -13,7 +13,7 @@ import LayerReportMessage from './LayerReportMessage';
 interface MessageContentProps {
   message: Message;
   enableStreaming?: boolean;
-  dimensionContents?: Map<string, string>; // 实时流式内容（用于 token 级显示）
+  dimensionContents?: Record<string, string>; // 实时流式内容（用于 token 级显示）
 }
 
 // Progress Message Renderer

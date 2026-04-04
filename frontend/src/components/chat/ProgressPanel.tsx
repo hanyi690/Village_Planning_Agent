@@ -16,8 +16,8 @@ interface ProgressPanelProps {
   visible: boolean;
   currentLayer: number | null;
   currentPhase: 'idle' | '现状分析' | '规划思路' | '详细规划' | '修复中';
-  dimensionProgress: Map<string, DimensionProgressItem>;
-  executingDimensions: Set<string>;
+  dimensionProgress: Record<string, DimensionProgressItem>;
+  executingDimensions: string[];
   onClose: () => void;
 }
 
@@ -72,14 +72,14 @@ function ProgressPanel({
   // 计算完成进度
   const completedCount = allDimensions.filter((dim) => {
     const key = `${currentLayer}_${dim.key}`;
-    const progress = dimensionProgress.get(key);
+    const progress = dimensionProgress[key];
     return progress?.status === 'completed';
   }).length;
   const totalCount = allDimensions.length;
   const progressPercent = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
 
   // 统计执行中的维度数量
-  const executingCount = executingDimensions.size;
+  const executingCount = executingDimensions.length;
 
   return (
     <AnimatePresence>
@@ -139,10 +139,10 @@ function ProgressPanel({
               <div className="grid grid-cols-2 gap-1.5">
                 {allDimensions.map((dim) => {
                   const key = `${currentLayer}_${dim.key}`;
-                  const progress = dimensionProgress.get(key);
+                  const progress = dimensionProgress[key];
                   const status = progress?.status || 'pending';
                   const config = STATUS_CONFIG[status];
-                  const isExecuting = executingDimensions.has(key);
+                  const isExecuting = executingDimensions.includes(key);
 
                   return (
                     <motion.div

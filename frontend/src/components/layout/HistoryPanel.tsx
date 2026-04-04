@@ -20,7 +20,7 @@ import {
   faTrash,
   faExclamationTriangle,
 } from '@fortawesome/free-solid-svg-icons';
-import { useHistoryContext } from '@/contexts/HistoryContext';
+import { usePlanningContext } from '@/providers/PlanningProvider';
 import { formatFullTimestamp } from '@/lib/utils';
 
 interface DeleteConfirmModalProps {
@@ -88,15 +88,25 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, isDeleting }: DeleteCo
 
 export default function HistoryPanel({ onClose }: { onClose: () => void }) {
   const {
+    state,
+    actions,
+  } = usePlanningContext();
+
+  const {
     villages,
     historyLoading,
     historyError,
-    loadVillagesHistory,
-    loadHistoricalSession,
-    deleteSession,
-    deletingSessionId,
     taskId,
-  } = useHistoryContext();
+    deletingSessionId,
+    loadVillagesHistory,
+  } = {
+    villages: state.villages,
+    historyLoading: state.historyLoading,
+    historyError: state.historyError,
+    taskId: state.taskId,
+    deletingSessionId: state.deletingSessionId,
+    loadVillagesHistory: actions.loadVillagesHistory,
+  };
 
   const [mounted, setMounted] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -115,13 +125,13 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
 
     if (!hasLoadedRef.current) {
       hasLoadedRef.current = true;
-      loadVillagesHistory();
+      actions.loadVillagesHistory();
     }
 
     return () => {
       document.body.style.overflow = 'unset';
     };
-  }, [loadVillagesHistory]);
+  }, [actions]);
 
   const filteredVillages = useMemo(() => {
     return villages.filter(
@@ -140,7 +150,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
 
-    const success = await deleteSession(deleteTarget.sessionId, deleteTarget.villageName);
+    const success = await actions.deleteSession(deleteTarget.sessionId, deleteTarget.villageName);
     if (success) {
       setShowDeleteConfirm(false);
       setDeleteTarget(null);
@@ -330,7 +340,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
                                 whileTap={{ scale: 0.98 }}
                                 onClick={() => {
                                   if (!isDeleting) {
-                                    loadHistoricalSession(village.name, session.session_id);
+                                    actions.loadHistoricalSession(village.name, session.session_id);
                                     onClose();
                                   }
                                 }}

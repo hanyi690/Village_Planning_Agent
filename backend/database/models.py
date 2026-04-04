@@ -4,6 +4,8 @@ SQLModel 数据库模型
 
 Defines all database tables for planning sessions, checkpoints,
 and UI conversations.
+
+简化版：移除冗余状态字段，状态由 LangGraph Checkpoint 统一管理。
 """
 
 from datetime import datetime
@@ -37,8 +39,9 @@ class PlanningSession(SQLModel, table=True):
     """
     Planning session table
     规划会话表（精简版 - 只存储业务元数据）
-    
-    状态数据由 AsyncSqliteSaver 自动存储在 checkpoints 表中。
+
+    状态数据由 LangGraph AsyncSqliteSaver 自动存储在 checkpoints 表中。
+    移除冗余字段：status, is_executing, stream_state
     """
     __tablename__ = "planning_sessions"
 
@@ -47,36 +50,23 @@ class PlanningSession(SQLModel, table=True):
 
     # Basic info
     project_name: str = Field(index=True)
-    status: str = Field(index=True)  # running/paused/completed/failed
-    execution_error: Optional[str] = Field(
-        default=None,
-        sa_column=Text()  # 执行错误信息(业务元数据)
-    )
-
-    # 【新增】执行状态 - 替代内存中的 _active_executions
-    is_executing: bool = Field(default=False, index=True)
-
-    # 【新增】流状态 - 替代内存中的 _stream_states
-    # 值: "active", "paused", "completed"
-    stream_state: str = Field(default="active", index=True)
 
     # User input
     village_data: Optional[str] = Field(
         default=None,
-        sa_column=Text()       # 可空列
+        sa_column=Text()
     )
     task_description: str = Field(default=DEFAULT_TASK_DESCRIPTION)
     constraints: str = Field(default=DEFAULT_CONSTRAINTS)
 
-    # ✅ 精简：删除手动维护的状态字段
-    # 以下字段现在由 AsyncSqliteSaver 在 checkpoints 表中自动管理：
-    # - current_layer, layer_X_completed
-    # - pause_after_step, waiting_for_review
-    # - state_snapshot, execution_complete, execution_error
-    # - events, sent_layer_events, sent_pause_events
-
     # Output
     output_path: Optional[str] = None
+
+    # Error info (业务元数据)
+    execution_error: Optional[str] = Field(
+        default=None,
+        sa_column=Text()
+    )
 
     # Timestamps
     created_at: datetime = Field(default_factory=datetime.now)
@@ -85,15 +75,14 @@ class PlanningSession(SQLModel, table=True):
 
     # Table options for composite indexes
     __table_args__ = (
-        Index("idx_status_created", "status", "created_at"),
-        Index("idx_project_status", "project_name", "status"),
+        Index("idx_project_created", "project_name", "created_at"),
     )
 
 
 # ==========================================
-# Note: Checkpoint table is now managed by LangGraph's AsyncSqliteSaver
-# The old Checkpoint model has been removed to avoid schema conflicts
+# Note: Checkpoint table is managed by LangGraph's AsyncSqliteSaver
 # ==========================================
+
 
 # ==========================================
 # UI Session Models
@@ -130,8 +119,8 @@ class UIMessage(SQLModel, table=True):
     UI 消息表
 
     Stores messages in UI conversations.
-    
-    ✅ 支持 Upsert：使用 (session_id, message_id) 作为唯一标识
+
+    支持 Upsert：使用 (session_id, message_id) 作为唯一标识
     """
     __tablename__ = "ui_messages"
 
@@ -141,30 +130,28 @@ class UIMessage(SQLModel, table=True):
     # Foreign key
     session_id: str = Field(foreign_key="ui_sessions.conversation_id", index=True)
 
-    # ✅ 前端消息 ID（唯一标识，用于 upsert）
-    message_id: str = Field(index=True)  # 前端生成的唯一 ID，如 "msg-1234567890-1" 或 "layer_report_1"
+    # 前端消息 ID（唯一标识，用于 upsert）
+    message_id: str = Field(index=True)
 
     # Message content
     role: str = Field(index=True)  # user/assistant/system
     content: str = Field(sa_column=Text())
     message_type: str = Field(default="text")  # text/file/progress/action/result/error/system
 
-    # Message metadata (JSON) - additional message information
+    # Message metadata (JSON)
     message_metadata: Optional[Dict[str, Any]] = Field(
         default=None,
         sa_column=Column(JSON)
     )
 
     # Timestamps
-    # ✅ created_at: 原始创建时间，用于历史消息排序（不会被 upsert 更新）
     created_at: datetime = Field(default_factory=datetime.now)
-    # timestamp: 最后更新时间（每次 upsert 都会更新）
     timestamp: datetime = Field(default_factory=datetime.now)
 
     # Relationships
     session: UISession = Relationship(back_populates="messages")
 
-    # ✅ 唯一约束：(session_id, message_id) 必须唯一
+    # 唯一约束：(session_id, message_id) 必须唯一
     __table_args__ = (
         UniqueConstraint("session_id", "message_id", name="uq_session_message"),
     )
@@ -178,13 +165,10 @@ class DimensionRevision(SQLModel, table=True):
     """
     Dimension revision table
     维度修订表
-    
-    Stores revision history for each dimension, enabling:
-    - 追溯维度修改历史
-    - 查看不同版本的内容
-    - 支持回滚到历史版本
-    
-    ✅ SSOT: Checkpoint 仍是维度当前内容的唯一真实源
+
+    Stores revision history for each dimension.
+
+    SSOT: Checkpoint 仍是维度当前内容的唯一真实源
     此表仅作为历史日志，不影响当前状态
     """
     __tablename__ = "dimension_revisions"
@@ -198,17 +182,17 @@ class DimensionRevision(SQLModel, table=True):
     dimension_key: str = Field(index=True)  # 维度标识
 
     # Content
-    content: str = Field(sa_column=Text())  # 修改后的完整内容
+    content: str = Field(sa_column=Text())
     previous_content: Optional[str] = Field(
         default=None,
         sa_column=Text()
-    )  # 前一个版本的完整内容（用于前端显示修复前后对比）
-    previous_content_hash: Optional[str] = None  # 前一个版本的哈希（用于链式追溯）
+    )
+    previous_content_hash: Optional[str] = None
 
     # Metadata
-    reason: Optional[str] = None  # 修改原因（如"用户修正"、"LLM生成"、"级联更新"）
-    created_by: Optional[str] = None  # 修改者（如"system"、"user"）
-    version: int = Field(default=1, index=True)  # 该维度的版本号（从1开始递增）
+    reason: Optional[str] = None
+    created_by: Optional[str] = None
+    version: int = Field(default=1, index=True)
 
     # Timestamp
     created_at: datetime = Field(default_factory=datetime.now)
@@ -218,14 +202,6 @@ class DimensionRevision(SQLModel, table=True):
         Index("idx_revision_session_dim", "session_id", "dimension_key"),
         Index("idx_revision_session_version", "session_id", "layer", "dimension_key", "version"),
     )
-
-
-# ==========================================
-# Indices
-# ==========================================
-
-# Create composite indices for common queries
-# These are created automatically by SQLModel based on index=True in field definitions
 
 
 __all__ = [

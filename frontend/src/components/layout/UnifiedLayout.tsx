@@ -14,7 +14,7 @@ import { useRouter } from 'next/navigation';
 import Header from './Header';
 import HistoryPanel from './HistoryPanel';
 import KnowledgePanel from './KnowledgePanel';
-import { useConversationContext } from '@/contexts/ConversationContext';
+import { usePlanningContext } from '@/providers/PlanningProvider';
 
 interface UnifiedLayoutProps {
   taskId: string;
@@ -26,7 +26,7 @@ function UnifiedLayoutComponent({ taskId, children, onOpenLayerSidebar }: Unifie
   const router = useRouter();
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
-  const { resetConversation } = useConversationContext();
+  const { actions } = usePlanningContext();
 
   const handleToggleHistory = useCallback(() => {
     setHistoryModalOpen((prev) => !prev);
@@ -37,11 +37,11 @@ function UnifiedLayoutComponent({ taskId, children, onOpenLayerSidebar }: Unifie
   }, []);
 
   const handleNewTask = useCallback(() => {
-    // 清除当前会话状态
-    resetConversation();
-    // 导航到根路由创建新任务
+    // Clear current session state
+    actions.resetConversation();
+    // Navigate to root to create new task
     router.push('/');
-  }, [resetConversation, router]);
+  }, [actions, router]);
 
   return (
     <div className="min-h-screen bg-[#F9FBF9]">

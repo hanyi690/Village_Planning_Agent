@@ -87,6 +87,34 @@ export type PlanningStatus =
   | 'completed'
   | 'failed';
 
+// ============================================
+// Status Badge Constants
+// ============================================
+
+export interface StatusBadgeConfig {
+  className: string;
+  icon: string;
+  label: string;
+}
+
+export const STATUS_BADGE_MAP: Record<PlanningStatus, StatusBadgeConfig> = {
+  idle: { className: 'bg-gray-100 text-gray-700', icon: '💬', label: '就绪' },
+  collecting: { className: 'status-badge-info', icon: '🔄', label: '执行中' },
+  planning: { className: 'status-badge-info', icon: '🔄', label: '执行中' },
+  paused: { className: 'status-badge-warning', icon: '⏸️', label: '等待审查' },
+  reviewing: { className: 'status-badge-warning', icon: '🔍', label: '审查中' },
+  revising: { className: 'status-badge-warning', icon: '🔧', label: '修复中' },
+  completed: { className: 'status-badge-success', icon: '✅', label: '已完成' },
+  failed: { className: 'status-badge-error', icon: '❌', label: '失败' },
+};
+
+/**
+ * Get status badge config for a given status
+ */
+export function getStatusBadge(status: PlanningStatus): StatusBadgeConfig {
+  return STATUS_BADGE_MAP[status] || STATUS_BADGE_MAP.idle;
+}
+
 /**
  * View mode for the main content switcher
  */

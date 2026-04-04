@@ -50,6 +50,15 @@ LAYER_CONFIG = {
 # Helper Functions
 # ============================================
 
+def _infer_session_status(session: Dict[str, Any]) -> str:
+    """Infer session status from available fields (adapted to simplified PlanningSession)"""
+    if session.get("completed_at"):
+        return "completed"
+    if session.get("execution_error"):
+        return "error"
+    return "running"
+
+
 def _get_layer_config(layer: str) -> Dict[str, str]:
     """Get layer configuration (directory name and state key)"""
     result = LAYER_CONFIG.get(layer)
@@ -156,8 +165,8 @@ async def list_villages():
                 village_sessions.append({
                     "session_id": session["session_id"],
                     "timestamp": session["created_at"],
-                    "status": session["status"],
-                    "has_final_report": session["status"] == "completed",
+                    "status": _infer_session_status(session),
+                    "has_final_report": _infer_session_status(session) == "completed",
                     "checkpoint_count": 0  # TODO: 从 LangGraph checkpoint 获取实际数量
                 })
             
@@ -190,8 +199,8 @@ async def get_village_sessions(name: str):
             result_sessions.append({
                 "session_id": session["session_id"],
                 "timestamp": session["created_at"],
-                "status": session["status"],
-                "has_final_report": session["status"] == "completed"
+                "status": _infer_session_status(session),
+                "has_final_report": _infer_session_status(session) == "completed"
             })
         
         return {"sessions": result_sessions}

@@ -85,3 +85,66 @@ export interface LayerCompletedMessage extends BaseMessage {
   dimensionReports?: Record<string, string>;
   actions: ActionButton[];
 }
+
+// ============================================================================
+// Tool Execution Messages (工具执行相关消息类型)
+// ============================================================================
+
+/**
+ * Tool Execution Status - 工具执行状态类型
+ */
+export type ToolExecutionStatus = 'pending' | 'running' | 'success' | 'error';
+
+/**
+ * Tool Stage - 工具执行阶段
+ */
+export interface ToolStage {
+  name: string;
+  status: ToolExecutionStatus;
+  progress: number;
+  message: string;
+}
+
+/**
+ * Tool Display Hints - 前端渲染提示
+ */
+export interface ToolDisplayHints {
+  primary_view?: 'text' | 'table' | 'map' | 'chart' | 'json';
+  priority_fields?: string[];
+}
+
+/**
+ * Tool Call Message - 工具调用开始
+ */
+export interface ToolCallMessage extends BaseMessage {
+  type: 'tool_call';
+  toolName: string;
+  toolDisplayName: string;
+  description: string;
+  estimatedTime?: number;
+  stage?: string;
+}
+
+/**
+ * Tool Progress Message - 工具执行进度
+ */
+export interface ToolProgressMessage extends BaseMessage {
+  type: 'tool_progress';
+  toolName: string;
+  stage: string;
+  progress: number;
+  message: string;
+}
+
+/**
+ * Tool Result Message - 工具执行结果
+ */
+export interface ToolResultMessage extends BaseMessage {
+  type: 'tool_result';
+  toolName: string;
+  status: 'success' | 'error';
+  summary: string;
+  displayHints?: ToolDisplayHints;
+  dataPreview?: string;
+  stages?: ToolStage[];
+}

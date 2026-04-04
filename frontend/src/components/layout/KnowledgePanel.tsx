@@ -28,6 +28,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons';
 import { knowledgeApi, KnowledgeDocument, KnowledgeStats, AddDocumentOptions } from '@/lib/api';
 import { getDimensionName, DIMENSIONS_BY_LAYER } from '@/config/dimensions';
+import { getErrorMessage } from '@/lib/utils';
 
 // 维度标签 - 基于 Layer 1 维度，增加知识库专用标签
 const LAYER1_DIMENSIONS = [
@@ -158,7 +159,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
       setStats(statsData);
     } catch (err) {
       console.error('[KnowledgePanel] Failed to load data:', err);
-      setError(err instanceof Error ? err.message : '加载失败');
+      setError(getErrorMessage(err, '加载失败'));
     } finally {
       setLoading(false);
     }
@@ -287,7 +288,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
       setStats(newStats);
     } catch (err) {
       console.error('[KnowledgePanel] Delete failed:', err);
-      setError(err instanceof Error ? err.message : '删除失败');
+      setError(getErrorMessage(err, '删除失败'));
     }
   };
 
@@ -304,7 +305,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
       alert(`同步完成\n新增：${result.added_count || 0} 个文档`);
     } catch (err) {
       console.error('[KnowledgePanel] Sync failed:', err);
-      setError(err instanceof Error ? err.message : '同步失败');
+      setError(getErrorMessage(err, '同步失败'));
     } finally {
       setSyncing(false);
     }

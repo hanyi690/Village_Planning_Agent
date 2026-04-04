@@ -1,59 +1,172 @@
 """
-工具注册中心 - Hook + Registry 模式
+工具注册中心 - 简化版
 
-支持特殊维度调用自定义 Python 工具（GIS、人口模型、定量计算等）
-
-支持两种执行模式：
-1. 传统模式：execute_tool() 返回格式化字符串
-2. 对话模式：execute_tool_structured() 返回结构化结果 + SSE 事件
+支持装饰器注册和动态调用，移除适配器层嵌套。
 """
 
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Type
+from dataclasses import dataclass
+from pydantic import BaseModel
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
+@dataclass
 class ToolMetadata:
     """工具元数据（用于 LLM bind_tools）"""
 
-    def __init__(
-        self,
-        name: str,
-        description: str,
-        input_schema: Optional[Dict[str, Any]] = None,
-        display_name: Optional[str] = None
-    ):
-        self.name = name
-        self.description = description
-        self.input_schema = input_schema or {}
-        self.display_name = display_name or name
+    name: str
+    description: str
+    input_schema: Optional[Type[BaseModel]] = None
+    display_name: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+    display_hints: Optional[Dict[str, Any]] = None
 
-    def to_langchain_tool(self):
-        """转换为 LangChain Tool 格式"""
-        from langchain_core.tools import StructuredTool
+    def __post_init__(self):
+        if self.display_name is None:
+            self.display_name = self.name
+        if self.display_hints is None:
+            self.display_hints = {"primary_view": "text", "priority_fields": []}
 
-        return StructuredTool(
-            name=self.name,
-            description=self.description,
-            args_schema=self.input_schema
-        )
+    def to_openai_tool_schema(self) -> Dict[str, Any]:
+        """转换为 OpenAI function calling 格式"""
+        schema = {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+            }
+        }
+
+        if self.parameters:
+            schema["function"]["parameters"] = self.parameters
+        elif self.input_schema:
+            schema["function"]["parameters"] = self.input_schema.model_json_schema()
+
+        return schema
+
+
+# 工具参数 Schema（JSON Schema 格式）
+TOOL_PARAMETER_SCHEMAS = {
+    "gis_analysis": {
+        "type": "object",
+        "properties": {
+            "analysis_type": {
+                "type": "string",
+                "enum": ["land_use_analysis", "soil_analysis", "hydrology_analysis"],
+                "description": "分析类型"
+            },
+            "geo_data_path": {"type": "string", "description": "数据文件路径"},
+        },
+        "required": ["analysis_type"]
+    },
+    "network_analysis": {
+        "type": "object",
+        "properties": {
+            "analysis_type": {
+                "type": "string",
+                "enum": ["connectivity_metrics", "accessibility_analysis", "centrality_analysis"],
+                "description": "分析类型"
+            },
+            "network_data": {"type": "object", "description": "网络数据"},
+        },
+        "required": ["analysis_type"]
+    },
+    "population_prediction": {
+        "type": "object",
+        "properties": {
+            "analysis_type": {
+                "type": "string",
+                "enum": ["population_forecast", "village_forecast", "population_structure", "labor_force_analysis"],
+                "description": "分析类型"
+            },
+            "baseline_population": {"type": "integer", "description": "基期人口数"},
+            "baseline_year": {"type": "integer", "description": "基期年份"},
+        },
+        "required": ["baseline_population", "baseline_year"]
+    },
+    "accessibility_analysis": {
+        "type": "object",
+        "properties": {
+            "analysis_type": {
+                "type": "string",
+                "enum": ["driving_accessibility", "walking_accessibility", "service_coverage", "poi_coverage"],
+                "description": "分析类型"
+            },
+            "origin": {"type": "array", "items": {"type": "number"}, "description": "起点坐标 [lon, lat]"},
+            "center": {"type": "array", "items": {"type": "number"}, "description": "中心坐标 [lon, lat]"},
+        },
+        "required": ["analysis_type"]
+    },
+    "knowledge_search": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "搜索查询"},
+            "top_k": {"type": "integer", "default": 5, "description": "返回结果数量"},
+        },
+        "required": ["query"]
+    },
+    "web_search": {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "搜索查询"},
+            "backend": {"type": "string", "default": "tavily", "description": "搜索后端"},
+        },
+        "required": ["query"]
+    },
+}
+
+# 工具元数据定义
+TOOL_METADATA_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    "gis_analysis": {
+        "display_name": "GIS 空间分析",
+        "description": "执行空间分析，如土地利用分析、土壤分析、水文分析等。",
+        "estimated_time": 8.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["total_area", "land_use_types"]}
+    },
+    "network_analysis": {
+        "display_name": "网络分析",
+        "description": "分析交通网络特性，计算道路密度、连通度等指标。",
+        "estimated_time": 5.0,
+        "display_hints": {"primary_view": "text", "priority_fields": ["network_density", "connectivity_index"]}
+    },
+    "population_prediction": {
+        "display_name": "人口预测",
+        "description": "基于人口模型预测未来人口变化趋势，支持村庄规划标准模型。",
+        "estimated_time": 3.0,
+        "display_hints": {"primary_view": "chart", "priority_fields": ["forecast_population", "growth_rate"]}
+    },
+    "accessibility_analysis": {
+        "display_name": "可达性分析",
+        "description": "分析设施可达性，计算服务覆盖范围和出行时间。",
+        "estimated_time": 6.0,
+        "display_hints": {"primary_view": "table", "priority_fields": ["coverage_rate", "accessibility_matrix"]}
+    },
+    "knowledge_search": {
+        "display_name": "知识检索",
+        "description": "从知识库检索专业数据和法规条文。",
+        "estimated_time": 2.0,
+        "display_hints": {"primary_view": "text", "priority_fields": ["content", "source"]}
+    },
+    "web_search": {
+        "display_name": "网络搜索",
+        "description": "从互联网搜索实时信息。",
+        "estimated_time": 4.0,
+        "display_hints": {"primary_view": "text", "priority_fields": ["results"]}
+    },
+}
 
 
 class ToolRegistry:
     """
-    工具注册中心
+    简化的工具注册中心
 
-    管理所有自定义工具函数，支持装饰器注册和动态调用
-
-    支持两种模式：
-    - 传统模式：execute_tool() 返回字符串（用于 Planner Hook）
-    - 对话模式：execute_tool_structured() 返回 ToolExecutionResult（用于对话式 Agent）
+    使用装饰器注册工具函数，支持 LangChain 原生 @tool 装饰器。
     """
 
     _tools: Dict[str, Callable] = {}
     _tool_metadata: Dict[str, ToolMetadata] = {}
-    _structured_tools: Dict[str, Callable] = {}  # 返回 ToolExecutionResult 的工具
 
     @classmethod
     def register(cls, name: str):
@@ -61,43 +174,30 @@ class ToolRegistry:
         装饰器：注册工具函数
 
         Usage:
-            @ToolRegistry.register("population_model_v1")
-            def calculate_population(context: dict) -> str:
+            @ToolRegistry.register("my_tool")
+            def my_tool(context: dict) -> str:
                 ...
         """
         def decorator(func: Callable) -> Callable:
             cls._tools[name] = func
-            logger.info(f"[ToolRegistry] 工具已注册: {name} -> {func.__name__}")
+            logger.info(f"[ToolRegistry] 工具已注册: {name}")
             return func
         return decorator
 
     @classmethod
     def get_tool(cls, name: str) -> Optional[Callable]:
-        """
-        获取工具函数
-
-        Args:
-            name: 工具名称
-
-        Returns:
-            工具函数，未找到返回 None
-        """
+        """获取工具函数"""
         return cls._tools.get(name)
 
     @classmethod
     def list_tools(cls) -> Dict[str, str]:
-        """
-        列出所有已注册工具
-
-        Returns:
-            {工具名称: 函数名} 字典
-        """
+        """列出所有已注册工具"""
         return {name: func.__name__ for name, func in cls._tools.items()}
 
     @classmethod
     def execute_tool(cls, name: str, context: Dict[str, Any]) -> str:
         """
-        执行工具并返回结果（传统模式，返回字符串）
+        执行工具并返回结果
 
         Args:
             name: 工具名称
@@ -105,9 +205,6 @@ class ToolRegistry:
 
         Returns:
             工具输出字符串
-
-        Raises:
-            ValueError: 工具不存在或执行失败
         """
         tool_func = cls.get_tool(name)
         if not tool_func:
@@ -122,44 +219,6 @@ class ToolRegistry:
             raise
 
     @classmethod
-    def register_with_metadata(cls, metadata: ToolMetadata):
-        """
-        装饰器：带元数据注册工具（用于 LLM bind_tools）
-
-        Usage:
-            @ToolRegistry.register_with_metadata(ToolMetadata(
-                name="gis_analysis",
-                description="GIS 空间分析",
-                display_name="GIS 空间分析"
-            ))
-            def gis_analysis(context: dict) -> str:
-                ...
-        """
-        def decorator(func: Callable) -> Callable:
-            cls._tools[metadata.name] = func
-            cls._tool_metadata[metadata.name] = metadata
-            logger.info(f"[ToolRegistry] 工具已注册(带元数据): {metadata.name}")
-            return func
-        return decorator
-
-    @classmethod
-    def register_structured(cls, name: str):
-        """
-        装饰器：注册结构化工具（返回 ToolExecutionResult）
-
-        Usage:
-            @ToolRegistry.register_structured("gis_analysis")
-            def gis_analysis(context: dict) -> ToolExecutionResult:
-                ...
-        """
-        def decorator(func: Callable) -> Callable:
-            cls._structured_tools[name] = func
-            cls._tools[name] = func  # 同时注册到普通工具
-            logger.info(f"[ToolRegistry] 结构化工具已注册: {name}")
-            return func
-        return decorator
-
-    @classmethod
     def get_tool_metadata(cls, name: str) -> Optional[ToolMetadata]:
         """获取工具元数据"""
         return cls._tool_metadata.get(name)
@@ -170,204 +229,67 @@ class ToolRegistry:
         return cls._tool_metadata.copy()
 
     @classmethod
-    def execute_tool_structured(cls, name: str, context: Dict[str, Any]) -> "ToolExecutionResult":
-        """
-        执行工具并返回结构化结果（对话模式）
-
-        Args:
-            name: 工具名称
-            context: 上下文数据（必须包含 session_id）
-
-        Returns:
-            ToolExecutionResult: 结构化工具结果
-        """
-        from .adapters.base_adapter import ToolExecutionResult, DisplayHints
-
-        # 优先使用结构化工具
-        tool_func = cls._structured_tools.get(name) or cls._tools.get(name)
-        if not tool_func:
-            return ToolExecutionResult(
-                tool_name=name,
-                status="error",
-                data={},
-                display_hints=DisplayHints(),
-                summary=f"工具不存在: {name}",
-                error=f"工具不存在: {name}"
-            )
-
-        try:
-            result = tool_func(context)
-
-            # 如果返回的是 ToolExecutionResult，直接返回
-            if isinstance(result, ToolExecutionResult):
-                return result
-
-            # 如果返回的是字符串，包装为 ToolExecutionResult
-            if isinstance(result, str):
-                return ToolExecutionResult(
-                    tool_name=name,
-                    status="success",
-                    data={"text": result},
-                    display_hints=DisplayHints(),
-                    summary=result[:200] if len(result) > 200 else result
-                )
-
-            # 其他类型
-            return ToolExecutionResult(
-                tool_name=name,
-                status="success",
-                data={"result": result},
-                display_hints=DisplayHints(),
-                summary=str(result)[:200]
-            )
-
-        except Exception as e:
-            logger.error(f"[ToolRegistry] 结构化工具执行失败: {name}, 错误: {e}")
-            return ToolExecutionResult(
-                tool_name=name,
-                status="error",
-                data={},
-                display_hints=DisplayHints(),
-                summary=f"执行失败: {str(e)}",
-                error=str(e)
-            )
-
-    @classmethod
-    def to_langchain_tools(cls) -> List:
-        """
-        转换为 LangChain 工具列表（用于 bind_tools）
-
-        Returns:
-            LangChain Tool 列表
-        """
-        tools = []
-        for name, metadata in cls._tool_metadata.items():
-            tools.append(metadata.to_langchain_tool())
-        return tools
-
-    @classmethod
     def get_tools_for_context(cls, context: Dict[str, Any]) -> List[ToolMetadata]:
-        """
-        根据上下文获取可用工具列表
-
-        Args:
-            context: 当前对话上下文
-
-        Returns:
-            相关工具元数据列表
-        """
-        # 目前返回所有工具，后续可以根据 phase/dimension 过滤
+        """根据上下文获取可用工具列表"""
         return list(cls._tool_metadata.values())
 
+    @classmethod
+    def get_tool_info(cls, tool_name: str) -> Dict[str, Any]:
+        """
+        获取工具完整信息（单次查找）
 
-def _initialize_adapter_tools():
-    """
-    初始化 Adapter 工具
+        Args:
+            tool_name: 工具名称
 
-    使用新的 tool_wrapper 模块注册适配器工具
-    """
-    from .adapters.tool_wrapper import (
-        create_adapter_tool_function,
-        format_population_result,
-        format_gis_result,
-        format_network_result,
-        format_gis_fetch_result,
-        format_visualization_result,
-        format_accessibility_result,
-        format_poi_result
-    )
+        Returns:
+            包含 display_name, description, estimated_time 的字典
+        """
+        meta_def = TOOL_METADATA_DEFINITIONS.get(tool_name, {})
+        return {
+            "display_name": meta_def.get("display_name", tool_name),
+            "description": meta_def.get("description", ""),
+            "estimated_time": meta_def.get("estimated_time")
+        }
 
-    # Analysis Adapters
-    try:
-        from .adapters.analysis import (
-            GISAnalysisAdapter,
-            NetworkAnalysisAdapter,
-            PopulationPredictionAdapter,
-            AccessibilityAdapter
-        )
+    @classmethod
+    def get_display_name(cls, tool_name: str) -> str:
+        """获取工具显示名称"""
+        return cls.get_tool_info(tool_name)["display_name"]
 
-        tool_func = create_adapter_tool_function(
-            GISAnalysisAdapter, "GIS 空间分析", result_formatter=format_gis_result
-        )
-        ToolRegistry.register("gis_analysis")(tool_func)
+    @classmethod
+    def get_description(cls, tool_name: str) -> str:
+        """获取工具描述"""
+        return cls.get_tool_info(tool_name)["description"]
 
-        tool_func = create_adapter_tool_function(
-            NetworkAnalysisAdapter, "交通网络分析", result_formatter=format_network_result
-        )
-        ToolRegistry.register("network_analysis")(tool_func)
-
-        tool_func = create_adapter_tool_function(
-            PopulationPredictionAdapter, "人口预测分析", result_formatter=format_population_result
-        )
-        ToolRegistry.register("population_prediction")(tool_func)
-
-        # 可达性分析适配器
-        tool_func = create_adapter_tool_function(
-            AccessibilityAdapter, "可达性分析", result_formatter=format_accessibility_result
-        )
-        ToolRegistry.register("accessibility_analysis")(tool_func)
-    except ImportError:
-        logger.debug("[ToolRegistry] Analysis Adapters 未安装，跳过注册")
-
-    # Data Fetch Adapter
-    try:
-        from .adapters.data_fetch import GISDataFetchAdapter
-        tool_func = create_adapter_tool_function(
-            GISDataFetchAdapter, "GIS 数据拉取", result_formatter=format_gis_fetch_result
-        )
-        ToolRegistry.register("gis_data_fetch")(tool_func)
-
-        # POI 搜索工具
-        tool_func = create_adapter_tool_function(
-            GISDataFetchAdapter, "POI 数据获取",
-            default_analysis_type="poi_fetch",
-            result_formatter=format_poi_result
-        )
-        ToolRegistry.register("poi_search")(tool_func)
-
-        # WFS 数据获取工具
-        tool_func = create_adapter_tool_function(
-            GISDataFetchAdapter, "WFS 图层获取",
-            default_analysis_type="wfs_fetch",
-            result_formatter=format_gis_fetch_result
-        )
-        ToolRegistry.register("wfs_data_fetch")(tool_func)
-
-        # 路径规划工具
-        tool_func = create_adapter_tool_function(
-            GISDataFetchAdapter, "路径数据获取",
-            default_analysis_type="route_fetch",
-            result_formatter=format_gis_fetch_result
-        )
-        ToolRegistry.register("route_planning")(tool_func)
-
-        # 逆地理编码工具
-        tool_func = create_adapter_tool_function(
-            GISDataFetchAdapter, "逆地理编码",
-            default_analysis_type="reverse_geocode",
-            result_formatter=format_gis_fetch_result
-        )
-        ToolRegistry.register("reverse_geocode")(tool_func)
-    except ImportError:
-        logger.debug("[ToolRegistry] Data Fetch Adapter 未安装，跳过注册")
-
-    # Visualization Adapter
-    try:
-        from .adapters.visualization import GISVisualizationAdapter
-        tool_func = create_adapter_tool_function(
-            GISVisualizationAdapter, "GIS 可视化", result_formatter=format_visualization_result
-        )
-        ToolRegistry.register("gis_visualization")(tool_func)
-    except ImportError:
-        logger.debug("[ToolRegistry] Visualization Adapter 未安装，跳过注册")
+    @classmethod
+    def get_estimated_time(cls, tool_name: str) -> Optional[float]:
+        """获取工具预估执行时间"""
+        return cls.get_tool_info(tool_name)["estimated_time"]
 
 
-# 导入内置工具模块（自动注册）
+# from builtin module
 from .builtin import knowledge_search_tool, web_search_tool
 from .builtin.population import calculate_population
 
-# 初始化 Adapter 工具
-_initialize_adapter_tools()
+# 注册内置工具
+ToolRegistry._tools["knowledge_search"] = knowledge_search_tool
+ToolRegistry._tools["web_search"] = web_search_tool
+ToolRegistry._tools["population_model_v1"] = calculate_population
+
+# 注册元数据
+for name, meta_def in TOOL_METADATA_DEFINITIONS.items():
+    ToolRegistry._tool_metadata[name] = ToolMetadata(
+        name=name,
+        description=meta_def.get("description", ""),
+        display_name=meta_def.get("display_name", name),
+        parameters=TOOL_PARAMETER_SCHEMAS.get(name),
+        display_hints=meta_def.get("display_hints")
+    )
 
 
-__all__ = ["ToolRegistry"]
+__all__ = [
+    "ToolRegistry",
+    "ToolMetadata",
+    "TOOL_PARAMETER_SCHEMAS",
+    "TOOL_METADATA_DEFINITIONS",
+]

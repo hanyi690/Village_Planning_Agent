@@ -159,6 +159,75 @@ def get_db_path() -> Path:
     return DB_PATH
 
 
+# ==========================================
+# Global Checkpointer (LangGraph)
+# ==========================================
+
+_checkpointer = None
+_checkpointer_lock = None
+_checkpointer_initialized = False
+
+
+async def get_global_checkpointer():
+    """
+    Get global AsyncSqliteSaver instance (singleton pattern)
+
+    Uses singleton pattern to avoid duplicate connection creation and setup() calls.
+    This function initializes the checkpointer on first call and returns the same instance afterwards.
+
+    Returns:
+        AsyncSqliteSaver instance
+
+    Raises:
+        Exception: If initialization fails
+    """
+    import asyncio
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    global _checkpointer, _checkpointer_lock, _checkpointer_initialized
+
+    # Create lock if needed
+    if _checkpointer_lock is None:
+        _checkpointer_lock = asyncio.Lock()
+
+    # Fast path: already initialized
+    if _checkpointer is not None and _checkpointer_initialized:
+        return _checkpointer
+
+    # Slow path: need initialization (with lock)
+    async with _checkpointer_lock:
+        # Double check: may have been initialized while waiting for lock
+        if _checkpointer is not None and _checkpointer_initialized:
+            return _checkpointer
+
+        try:
+            logger.info("[Checkpointer] Initializing global AsyncSqliteSaver instance...")
+
+            # Create connection
+            conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
+
+            # Enable WAL mode for better concurrent write safety
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA synchronous=NORMAL")
+            await conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            logger.info("[Checkpointer] WAL mode enabled")
+
+            _checkpointer = AsyncSqliteSaver(conn)
+
+            # Initialize table structure (only on first call)
+            await _checkpointer.setup()
+
+            _checkpointer_initialized = True
+            logger.info("[Checkpointer] Global AsyncSqliteSaver instance initialized successfully")
+
+            return _checkpointer
+
+        except Exception as e:
+            logger.error(f"[Checkpointer] Initialization failed: {e}", exc_info=True)
+            raise
+
+
 __all__ = [
     # Async functions
     "get_async_session",
@@ -167,4 +236,6 @@ __all__ = [
     "dispose_async_engine",
     # Utilities
     "get_db_path",
+    # Checkpointer
+    "get_global_checkpointer",
 ]

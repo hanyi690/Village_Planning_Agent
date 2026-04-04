@@ -145,13 +145,16 @@ export interface PlanningParams {
 // Message Union Type
 // ============================================================================
 
-// Import specific message types and create union (只保留实际使用的5种类型)
+// Import specific message types and create union
 import type {
   TextMessage,
   FileMessage,
   ProgressMessage,
   DimensionReportMessage,
   LayerCompletedMessage,
+  ToolCallMessage,
+  ToolProgressMessage,
+  ToolResultMessage,
 } from './message-types';
 
 export type Message =
@@ -159,7 +162,10 @@ export type Message =
   | FileMessage
   | ProgressMessage
   | DimensionReportMessage
-  | LayerCompletedMessage;
+  | LayerCompletedMessage
+  | ToolCallMessage
+  | ToolProgressMessage
+  | ToolResultMessage;
 
 // Re-export message types for convenience
 export type {
@@ -168,4 +174,7 @@ export type {
   ProgressMessage,
   DimensionReportMessage,
   LayerCompletedMessage,
+  ToolCallMessage,
+  ToolProgressMessage,
+  ToolResultMessage,
 };
