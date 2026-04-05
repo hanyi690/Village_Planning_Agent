@@ -48,6 +48,8 @@ from ...core.state_builder import StateBuilder
 from ...core.checkpoint_types import CheckpointMetadata, CheckpointType, PlanningPhase
 from ...tools.revision_tool import RevisionTool
 from ...utils.logger import get_logger
+from ...utils.sse_publisher import SSEPublisher
+from ...utils.event_factory import create_revision_completed_event
 
 logger = get_logger(__name__)
 
@@ -62,6 +64,7 @@ class RevisionState(TypedDict):
     project_name: str
     feedback: str                          # 用户反馈
     target_dimensions: List[str]           # 用户选择要修复的维度
+    session_id: str                        # SSE 事件发送需要的 session_id
 
     # 现有报告（用于状态筛选和更新）- 使用新架构 reports 结构
     reports: Dict[str, Dict[str, str]]     # {"layer1": {...}, "layer2": {...}, "layer3": {...}}
@@ -97,6 +100,8 @@ class RevisionDimensionState(TypedDict):
     dependency_chain: dict
     # 是否是目标维度（用户选择的维度）
     is_target_dimension: bool
+    # SSE 事件发送需要的 session_id
+    session_id: str
 
 
 # ==========================================
@@ -134,13 +139,26 @@ def initialize_revision(state: RevisionState) -> Dict[str, Any]:
     wave_dimensions = get_revision_wave_dimensions(target_dimensions, completed_dimensions)
 
     if not wave_dimensions:
-        logger.warning("[Revision-初始化] 没有待修复的维度")
-        return {
-            "current_wave": 1,
-            "max_wave": 0,
-            "updated_reports": {},
-            "revision_history": []
-        }
+        # 检查目标维度是否被过滤掉（未完成）
+        filtered_targets = [d for d in target_dimensions if d not in completed_dimensions]
+        if filtered_targets:
+            logger.warning(f"[Revision-初始化] 目标维度未完成，无法修复: {filtered_targets}")
+            # 返回空结果，上层会处理错误
+            return {
+                "current_wave": 1,
+                "max_wave": 0,
+                "updated_reports": {},
+                "revision_history": [],
+                "error": f"以下维度尚未完成，无法修复：{filtered_targets}"
+            }
+        else:
+            logger.warning("[Revision-初始化] 没有待修复的维度")
+            return {
+                "current_wave": 1,
+                "max_wave": 0,
+                "updated_reports": {},
+                "revision_history": []
+            }
 
     min_wave = min(wave_dimensions.keys())
     max_wave = max(wave_dimensions.keys())
@@ -271,10 +289,16 @@ def create_parallel_revision_tasks(
             "filtered_concept": filtered_concept,
             "filtered_detail": filtered_detail,
             "dependency_chain": chain,
-            "is_target_dimension": is_target
+            "is_target_dimension": is_target,
+            "session_id": state.get("session_id", "")
         })
 
         sends.append(Send("revise_single_dimension", dimension_state))
+
+        # 从 chain 获取依赖数量用于日志
+        required_analyses = chain.get("layer1_analyses", [])
+        required_concepts = chain.get("layer2_concepts", [])
+        required_details = chain.get("layer3_plans", [])
 
         logger.info(f"[Revision-状态筛选] {dim}: "
                    f"现状 {len(required_analyses)} 个 ({len(filtered_analysis)}字符), "
@@ -331,12 +355,15 @@ def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
 
     使用 GenericPlanner 统一架构执行修复
     区分目标维度和下游维度，使用不同的 feedback 策略
+    支持实时 SSE 事件发送（带 is_revision 标识）
     """
     dimension_key = state["dimension_key"]
     dimension_name = state["dimension_name"]
     user_feedback = state["feedback"]
     original_content = state["original_content"]
     is_target = state.get("is_target_dimension", True)
+    session_id = state.get("session_id", "")
+    layer = get_dimension_layer(dimension_key)
 
     logger.info(f"[Revision-修复] 开始修复 {dimension_name} ({dimension_key})")
 
@@ -350,6 +377,20 @@ def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
                 "error": "原始内容不存在"
             }]
         }
+
+    # Import SSE utilities once if session_id exists
+    sse_publisher = None
+    if session_id:
+        from ...utils.sse_publisher import SSEPublisher
+        sse_publisher = SSEPublisher
+        sse_publisher.send_dimension_start(
+            session_id=session_id,
+            layer=layer,
+            dimension_key=dimension_key,
+            dimension_name=dimension_name,
+            is_revision=True
+        )
+        logger.info(f"[Revision-修复] 发送 dimension_start 事件 (is_revision=true)")
 
     try:
         # 使用 GenericPlanner 进行修复
@@ -382,15 +423,40 @@ def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
             "constraints": feedback
         }
 
-        # 执行修复（带反馈）
+        # 创建流式 token callback（用于实时 SSE 输出）
+        on_token_callback = None
+        if sse_publisher:
+            on_token_callback = sse_publisher.create_token_callback(
+                session_id=session_id,
+                layer=layer,
+                dimension_key=dimension_key,
+                dimension_name=dimension_name,
+                is_revision=True
+            )
+
+        # 执行修复（带流式输出）
         revised_result = planner.execute_with_feedback(
             state=planner_state,
             feedback=feedback,
             original_result=original_content,
-            revision_count=0
+            revision_count=0,
+            streaming=bool(sse_publisher),
+            on_token_callback=on_token_callback
         )
 
         logger.info(f"[Revision-修复] 维度 {dimension_key} 修复完成，内容长度: {len(revised_result)}")
+
+        # 发送 dimension_complete 事件（带 is_revision 标识）
+        if sse_publisher:
+            sse_publisher.send_dimension_complete(
+                session_id=session_id,
+                layer=layer,
+                dimension_key=dimension_key,
+                dimension_name=dimension_name,
+                full_content=revised_result,
+                is_revision=True
+            )
+            logger.info(f"[Revision-修复] 发送 dimension_complete 事件 (is_revision=true)")
 
         return {
             "revision_results": [{
@@ -583,7 +649,8 @@ async def call_revision_subgraph(
     target_dimensions: List[str],
     reports: Dict[str, Dict[str, str]] = None,
     completed_dimensions: List[str] = None,
-    from_checkpoint_id: str = None
+    from_checkpoint_id: str = None,
+    session_id: str = ""
 ) -> Dict[str, Any]:
     """
     调用修复子图的包装函数
@@ -595,6 +662,7 @@ async def call_revision_subgraph(
         reports: 统一的 reports 结构 {"layer1": {...}, "layer2": {...}, "layer3": {...}}
         completed_dimensions: 已完成的维度列表
         from_checkpoint_id: 可选，从指定 checkpoint 获取原始报告
+        session_id: SSE 事件发送需要的 session_id
 
     Returns:
         {
@@ -647,6 +715,7 @@ async def call_revision_subgraph(
         "project_name": project_name,
         "feedback": feedback,
         "target_dimensions": target_dimensions,
+        "session_id": session_id,
         "reports": reports or {"layer1": {}, "layer2": {}, "layer3": {}},
         "completed_dimensions": completed_dimensions or [],
         "current_wave": 1,
@@ -729,6 +798,7 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # 2. 调用 RevisionSubgraph 进行并行修复
     completed_dimensions = _get_completed_dimensions(state)
     from_checkpoint_id = state.get("revision_from_checkpoint_id")
+    session_id = state.get("session_id", state.get("project_name", ""))
 
     revision_result = await call_revision_subgraph(
         project_name=state.get("project_name", ""),
@@ -736,14 +806,20 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
         target_dimensions=dimensions,
         reports=state.get("reports", {}),
         completed_dimensions=completed_dimensions,
-        from_checkpoint_id=from_checkpoint_id
+        from_checkpoint_id=from_checkpoint_id,
+        session_id=session_id
     )
 
     logger.info(f"[修复] RevisionSubgraph 结果: success={revision_result['success']}")
 
     if not revision_result["success"]:
         logger.warning("[修复] RevisionSubgraph 执行失败")
-        return StateBuilder().set("need_revision", False).build()
+        error_msg = revision_result.get("error", "未知错误")
+        return StateBuilder() \
+            .set("need_revision", False) \
+            .set("pause_after_step", True) \
+            .add_message(f"修复失败：{error_msg}。请重新操作或继续规划。") \
+            .build()
 
     # 3. 更新主状态
     updated_reports = revision_result.get("updated_reports", {})
@@ -821,9 +897,20 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
     existing_metadata = state.get("metadata", {})
     new_metadata = {**existing_metadata, **repair_meta.to_dict()}
 
+    # Send revision_completed SSE event using factory function
+    revision_completed_event = create_revision_completed_event(
+        layer=current_layer,
+        revised_dimensions=revised_dimensions,
+        session_id=session_id,
+    )
+    SSEPublisher.send_events_batch(session_id, [revision_completed_event])
+    logger.info(f"[修复] 发送 revision_completed 事件: layer={current_layer}, revised_dimensions={revised_dimensions}")
+
     return StateBuilder()\
         .set("reports", reports)\
         .set("need_revision", False)\
+        .set("pause_after_step", True)\
+        .set("previous_layer", current_layer)\
         .set("revision_history", existing_history)\
         .set("last_revised_dimensions", revised_dimensions)\
         .set("metadata", new_metadata)\

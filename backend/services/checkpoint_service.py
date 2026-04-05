@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 from backend.constants import MAX_SESSION_EVENTS
-from src.orchestration.state import get_layer_dimensions, get_layer_name
+from src.orchestration.state import get_layer_dimensions, get_layer_name, _phase_to_layer
 
 # Lazy import for DIMENSION_NAMES to avoid circular dependency
 _DIMENSION_NAMES = None
@@ -145,10 +145,11 @@ class CheckpointService:
 
     @classmethod
     async def clear_pause_flags(cls, session_id: str) -> bool:
-        """Clear pause flags in checkpoint state."""
+        """Clear pause flags and reset wave for next layer."""
         return await cls.update_state(session_id, {
             "pause_after_step": False,
             "previous_layer": 0,
+            "current_wave": 1,  # Reset wave for next layer execution
         })
 
     @classmethod
@@ -219,7 +220,14 @@ class CheckpointService:
             # Get dimension names mapping (lazy loaded)
             DIMENSION_NAMES = _get_dimension_names()
 
+            # Pre-compute current layer from phase (efficiency: avoid repeated calls)
+            current_layer_from_phase = _phase_to_layer(phase)
+
             for layer_num in [1, 2, 3]:
+                # Filter by phase: skip layers that haven't been reached yet
+                if current_layer_from_phase is not None and layer_num > current_layer_from_phase:
+                    continue
+
                 layer_key = f"layer{layer_num}"
                 layer_completed = len(completed_dims.get(layer_key, [])) >= len(get_layer_dimensions(layer_num))
 

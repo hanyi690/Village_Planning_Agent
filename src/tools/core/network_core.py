@@ -133,7 +133,9 @@ def _analyze_accessibility(
             for dest in destinations:
                 try:
                     distance = nx.shortest_path_length(G, origin, dest, weight="weight")
-                    travel_time = distance / 30 * 60
+                    # 速度参数化：优先从边属性获取，否则使用默认值
+                    avg_speed = kwargs.get("avg_speed_kmh", 30)
+                    travel_time = distance / avg_speed * 60
                     od_matrix.append({
                         "origin": origin,
                         "destination": dest,

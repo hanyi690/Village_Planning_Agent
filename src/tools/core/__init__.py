@@ -8,6 +8,8 @@ from .gis_core import run_gis_analysis, format_gis_result
 from .network_core import run_network_analysis, format_network_result
 from .population_core import run_population_analysis, format_population_result
 from .accessibility_core import run_accessibility_analysis, format_accessibility_result
+from .gis_data_fetcher import GISDataFetcher
+from .geo_analysis_agent import GeoAnalysisAgent
 
 __all__ = [
     "run_gis_analysis",
@@ -18,4 +20,6 @@ __all__ = [
     "format_population_result",
     "run_accessibility_analysis",
     "format_accessibility_result",
+    "GISDataFetcher",
+    "GeoAnalysisAgent",
 ]

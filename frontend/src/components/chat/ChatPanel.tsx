@@ -3,7 +3,7 @@
 /**
  * ChatPanel - Unified chat interface integrating messaging and progress display
  * Refactored to use Zustand + Immer for state management
- * Business logic extracted to hooks: usePlanningHandlers, useReviewActions
+ * Business logic: usePlanningActions (from planning-context), usePlanningHandlers
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';

@@ -1,56 +1,33 @@
-"""
-天地图 API 封装
-
-直接封装天地图 REST API，支持：
-- 行政区划查询
-- POI 搜索
-- 地理编码/逆地理编码
-- WFS 图层获取
-- 路径规划
-"""
-
+"""天地图核心 API 封装"""
 import time
 import re
 import requests
+import xml.etree.ElementTree as ET
 from typing import Dict, Any, Tuple, Optional, List
-from dataclasses import dataclass
 
-from ...core.config import (
+from .types import TiandituResult
+from .constants import (
+    SEARCH_URL,
+    GEOCODER_URL,
+    ADMIN_API,
+    ROUTE_URL,
+    WFS_URL
+)
+from .tiles import TileService
+from .wfs import WfsService
+from ....core.config import (
     TIANDITU_API_KEY,
     TIANDITU_RATE_LIMIT,
     TIANDITU_MAX_RETRIES,
     GIS_TIMEOUT
 )
-from ...utils.logger import get_logger
+from ....utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-@dataclass
-class TiandituResult:
-    """天地图 API 返回结果"""
-    success: bool
-    data: Dict[str, Any]
-    metadata: Dict[str, Any]
-    error: Optional[str] = None
-
-
 class TiandituProvider:
     """天地图 API 封装"""
-
-    # API endpoints
-    BASE_URL = "https://api.tianditu.gov.cn"
-    SEARCH_URL = f"{BASE_URL}/v2/search"
-    GEOCODER_URL = f"{BASE_URL}/geocoder"
-
-    # 行政区划查询 endpoints
-    ADMIN_API = "https://api.tianditu.gov.cn/v2/administrative"
-
-    # WFS endpoints
-    WFS_URL = "http://gisserver.tianditu.gov.cn/TDTService/wfs"
-
-    # 路径规划 endpoints
-    ROUTE_URL = "https://api.tianditu.gov.cn/drive"
 
     def __init__(self):
         self.api_key = TIANDITU_API_KEY
@@ -58,6 +35,10 @@ class TiandituProvider:
         self.max_retries = TIANDITU_MAX_RETRIES
         self.timeout = GIS_TIMEOUT
         self._last_request_time = 0
+
+        # 子服务
+        self.tile_service = TileService(self.api_key)
+        self.wfs_service = WfsService(self.api_key)
 
         if not self.api_key:
             logger.warning("[TiandituProvider] TIANDITU_API_KEY 未配置")
@@ -210,7 +191,7 @@ class TiandituProvider:
             "extensions": "true"
         }
 
-        result = self._request(self.ADMIN_API, params)
+        result = self._request(ADMIN_API, params)
 
         if not result.success:
             return result
@@ -283,31 +264,18 @@ class TiandituProvider:
         if not wkt or not wkt.startswith("MULTIPOLYGON"):
             return [[]]
 
-        # 提取括号内的坐标部分
-        import re
-
-        # MULTIPOLYGON(((x y, x y, ...)))
-        # 转换为 GeoJSON MultiPolygon 格式: [[[x, y], [x, y], ...]]
-
         # 移除 MULTIPOLYGON 前缀
         coords_str = wkt.replace("MULTIPOLYGON", "").strip()
 
         # 解析多层括号结构
         polygons = []
 
-        # 使用正则提取每个 POLYGON 的坐标
-        # 匹配 (((...))) 这样的结构
-        polygon_pattern = r'\(\(([^)]+(?:\)[^)]*)*)\)\)'
-
-        # 简化处理：直接解析坐标
         try:
             # 提取所有数字对
             coord_pairs = re.findall(r'(\d+\.\d+)\s+(\d+\.\d+)', coords_str)
             if coord_pairs:
                 # 转换为 [lng, lat] 格式
                 ring = [[float(lon), float(lat)] for lon, lat in coord_pairs]
-                # MultiPolygon 格式: [polygon1, polygon2, ...]
-                # 每个 polygon: [ring1, ring2, ...]
                 polygons.append([ring])
         except Exception as e:
             logger.warning(f"[TiandituProvider] WKT 解析失败: {e}")
@@ -329,7 +297,7 @@ class TiandituProvider:
             "type": "query"
         }
 
-        result = self._request(self.SEARCH_URL, params)
+        result = self._request(SEARCH_URL, params)
 
         if not result.success:
             return result
@@ -401,7 +369,7 @@ class TiandituProvider:
             "type": "query"
         }
 
-        result = self._request(self.SEARCH_URL, params)
+        result = self._request(SEARCH_URL, params)
 
         if not result.success:
             return result
@@ -465,7 +433,7 @@ class TiandituProvider:
             "ds": f'{{"keyWord":"{address}"}}'
         }
 
-        result = self._request(self.GEOCODER_URL, params)
+        result = self._request(GEOCODER_URL, params)
 
         if not result.success:
             return result
@@ -498,7 +466,7 @@ class TiandituProvider:
             "type": "geocode"
         }
 
-        result = self._request(self.GEOCODER_URL, params)
+        result = self._request(GEOCODER_URL, params)
 
         if not result.success:
             return result
@@ -527,56 +495,8 @@ class TiandituProvider:
         bbox: Tuple[float, float, float, float],
         max_features: int = 1000
     ) -> TiandituResult:
-        """获取 WFS 图层数据"""
-        params = {
-            "SERVICE": "WFS",
-            "VERSION": "1.0.0",
-            "REQUEST": "GetFeature",
-            "TYPENAME": layer_type,
-            "MAXFEATURES": max_features,
-            "BBOX": f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}",
-            "OUTPUTFORMAT": "application/json",
-            "tk": self.api_key
-        }
-
-        # WFS 使用不同的请求方式
-        url = f"{self.WFS_URL}?SERVICE=WFS&VERSION=1.0.0&REQUEST=GetFeature&TYPENAME={layer_type}&MAXFEATURES={max_features}&BBOX={bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}&OUTPUTFORMAT=application/json&tk={self.api_key}"
-
-        self._rate_limit_wait()
-
-        try:
-            resp = requests.get(url, headers=self._get_headers(), timeout=self.timeout)
-
-            if resp.status_code != 200:
-                return TiandituResult(
-                    success=False,
-                    data={},
-                    metadata={},
-                    error=f"WFS HTTP {resp.status_code}"
-                )
-
-            geojson = resp.json()
-
-            features = geojson.get("features", [])
-
-            return TiandituResult(
-                success=True,
-                data={"geojson": geojson},
-                metadata={
-                    "layer": layer_type,
-                    "feature_count": len(features),
-                    "bbox": bbox,
-                    "source": "tianditu_wfs"
-                }
-            )
-
-        except Exception as e:
-            return TiandituResult(
-                success=False,
-                data={},
-                metadata={},
-                error=str(e)
-            )
+        """获取 WFS 图层数据（委托给 WfsService）"""
+        return self.wfs_service.get_wfs_data(layer_type, bbox, max_features)
 
     def plan_route(
         self,
@@ -599,14 +519,12 @@ class TiandituProvider:
             "type": "search"
         }
 
-        result = self._request(self.ROUTE_URL, params)
+        result = self._request(ROUTE_URL, params)
 
         if not result.success:
             return result
 
         # drive API 返回 XML 格式，需要解析
-        import xml.etree.ElementTree as ET
-
         data = result.data
         if isinstance(data, str):
             try:
@@ -674,150 +592,35 @@ class TiandituProvider:
             }
         )
 
-    # ==================== 地图瓦片服务 ====================
+    # ==================== 瓦片服务委托 ====================
 
-    # 瓦片图层类型定义
-    TILE_LAYERS = {
-        "vec": "矢量底图",
-        "img": "影像底图",
-        "ter": "地形晕渲"
-    }
+    def get_tile_url(self, *args, **kwargs) -> str:
+        """获取瓦片 URL（委托给 TileService）"""
+        return self.tile_service.get_tile_url(*args, **kwargs)
 
-    # 注记图层类型定义
-    ANNOTATION_LAYERS = {
-        "cva": "矢量注记",
-        "cia": "影像注记",
-        "cta": "地形注记"
-    }
+    def get_tile_template(self, *args, **kwargs) -> str:
+        """获取瓦片模板 URL（委托给 TileService）"""
+        return self.tile_service.get_tile_template(*args, **kwargs)
 
-    def get_tile_url(
-        self,
-        layer: str = "vec",
-        projection: str = "c",
-        x: int = 0,
-        y: int = 0,
-        z: int = 1,
-        server: int = 0
-    ) -> str:
-        """获取单个瓦片 URL
+    def get_annotation_url(self, *args, **kwargs) -> str:
+        """获取注记瓦片 URL（委托给 TileService）"""
+        return self.tile_service.get_annotation_url(*args, **kwargs)
 
-        Args:
-            layer: 图层类型 vec=矢量, img=影像, ter=地形
-            projection: 投影类型 c=经纬度投影, w=球面墨卡托投影
-            x: 瓦片列号
-            y: 瓦片行号
-            z: 缩放级别 (1-18)
-            server: 服务器编号 (0-7)，用于负载均衡
+    def get_annotation_template(self, *args, **kwargs) -> str:
+        """获取注记模板 URL（委托给 TileService）"""
+        return self.tile_service.get_annotation_template(*args, **kwargs)
 
-        Returns:
-            瓦片图片 URL
-        """
-        if layer not in self.TILE_LAYERS:
-            logger.warning(f"[TiandituProvider] 未知的图层类型: {layer}")
-        if projection not in ("c", "w"):
-            logger.warning(f"[TiandituProvider] 未知的投影类型: {projection}")
+    def get_global_boundary_url(self, *args, **kwargs) -> str:
+        """获取全球境界瓦片 URL（委托给 TileService）"""
+        return self.tile_service.get_global_boundary_url(*args, **kwargs)
 
-        return (
-            f"http://t{server}.tianditu.gov.cn/{layer}_{projection}/wmts"
-            f"?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
-            f"&LAYER={layer}&STYLE=default&TILEMATRIXSET={projection}"
-            f"&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
-            f"&tk={self.api_key}"
-        )
-
-    def get_tile_template(
-        self,
-        layer: str = "vec",
-        projection: str = "c"
-    ) -> str:
-        """获取瓦片模板 URL（用于 Leaflet/Mapbox）
-
-        Args:
-            layer: 图层类型 vec=矢量, img=影像, ter=地形
-            projection: 投影类型 c=经纬度投影, w=球面墨卡托投影
-
-        Returns:
-            包含 {s}/{z}/{x}/{y} 占位符的模板 URL
-        """
-        return (
-            f"http://t{{s}}.tianditu.gov.cn/{layer}_{projection}/wmts"
-            f"?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
-            f"&LAYER={layer}&STYLE=default&TILEMATRIXSET={projection}"
-            f"&FORMAT=tiles&TILEMATRIX={{z}}&TILEROW={{y}}&TILECOL={{x}}"
-            f"&tk={self.api_key}"
-        )
-
-    def get_annotation_url(
-        self,
-        annotation_type: str = "cva",
-        projection: str = "c",
-        x: int = 0,
-        y: int = 0,
-        z: int = 1,
-        server: int = 0
-    ) -> str:
-        """获取注记图层瓦片 URL
-
-        Args:
-            annotation_type: 注记类型 cva=矢量注记, cia=影像注记, cta=地形注记
-            projection: 投影类型 c=经纬度投影, w=球面墨卡托投影
-            x: 瓦片列号
-            y: 瓦片行号
-            z: 缩放级别
-            server: 服务器编号 (0-7)
-
-        Returns:
-            注记瓦片 URL
-        """
-        if annotation_type not in self.ANNOTATION_LAYERS:
-            logger.warning(f"[TiandituProvider] 未知的注记类型: {annotation_type}")
-
-        return (
-            f"http://t{server}.tianditu.gov.cn/{annotation_type}_{projection}/wmts"
-            f"?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
-            f"&LAYER={annotation_type}&STYLE=default&TILEMATRIXSET={projection}"
-            f"&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}"
-            f"&tk={self.api_key}"
-        )
-
-    def get_annotation_template(
-        self,
-        annotation_type: str = "cva",
-        projection: str = "c"
-    ) -> str:
-        """获取注记图层模板 URL
-
-        Args:
-            annotation_type: 注记类型 cva=矢量注记, cia=影像注记, cta=地形注记
-            projection: 投影类型 c=经纬度投影, w=球面墨卡托投影
-
-        Returns:
-            注记瓦片模板 URL
-        """
-        return (
-            f"http://t{{s}}.tianditu.gov.cn/{annotation_type}_{projection}/wmts"
-            f"?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
-            f"&LAYER={annotation_type}&STYLE=default&TILEMATRIXSET={projection}"
-            f"&FORMAT=tiles&TILEMATRIX={{z}}&TILEROW={{y}}&TILECOL={{x}}"
-            f"&tk={self.api_key}"
-        )
+    def get_3d_tiles_url(self, *args, **kwargs) -> str:
+        """获取三维瓦片 URL（委托给 TileService）"""
+        return self.tile_service.get_3d_tiles_url(*args, **kwargs)
 
     def get_layer_info(self) -> Dict[str, Any]:
-        """获取所有可用图层信息
-
-        Returns:
-            图层类型和投影类型的说明
-        """
-        return {
-            "base_layers": self.TILE_LAYERS,
-            "annotation_layers": self.ANNOTATION_LAYERS,
-            "projections": {
-                "c": "经纬度投影 (EPSG:4326)",
-                "w": "球面墨卡托投影 (EPSG:3857)"
-            },
-            "zoom_range": {"min": 1, "max": 18},
-            "server_range": {"min": 0, "max": 7}
-        }
+        """获取所有可用图层信息"""
+        return self.tile_service.get_layer_info()
 
 
-__all__ = ["TiandituProvider", "TiandituResult"]
+__all__ = ["TiandituProvider"]

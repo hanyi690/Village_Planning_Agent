@@ -332,7 +332,9 @@ class GenericPlanner:
         state: Dict[str, Any],
         feedback: str,
         original_result: str,
-        revision_count: int = 0
+        revision_count: int = 0,
+        streaming: bool = False,
+        on_token_callback: Callable[[str, str], None] | None = None
     ) -> str:
         """
         基于反馈重新执行（用于人工审核流程）
@@ -342,6 +344,8 @@ class GenericPlanner:
             feedback: 人工反馈意见
             original_result: 原始执行结果
             revision_count: 修改次数
+            streaming: 是否启用流式输出（默认: False）
+            on_token_callback: token回调函数，接收 (token, accumulated)
 
         Returns:
             修改后的结果
@@ -358,7 +362,9 @@ class GenericPlanner:
             result = self._invoke_llm(
                 prompt=revision_prompt,
                 state=state,
-                enable_langsmith=True
+                enable_langsmith=True,
+                streaming=streaming,
+                on_token_callback=on_token_callback
             )
             logger.info(f"[{self.dimension_name}] revision done, len: {len(result)}")
             return result

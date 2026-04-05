@@ -61,7 +61,7 @@ export function useSSEConnection({
     if (events.length === 0) return;
 
     // Critical event types that should never be merged/deferred
-    const criticalEventTypes = ['dimension_complete', 'layer_completed', 'layer_started'];
+    const criticalEventTypes = ['dimension_start', 'dimension_complete', 'layer_completed', 'layer_started'];
 
     // Group events by type
     const dimensionDeltaMap = new Map<string, BatchEvent>();

@@ -3,7 +3,7 @@
  * Common message creation and manipulation utilities
  */
 
-import { Message, ActionButton, BaseMessage, TextMessage } from '@/types';
+import { Message, ActionButton, BaseMessage, TextMessage, Checkpoint } from '@/types';
 
 const MESSAGE_ID_COUNTER = { value: 0 };
 
@@ -208,4 +208,117 @@ export function getErrorMessage(error: unknown, fallback = '未知错误'): stri
     return String((error as { message: unknown }).message);
   }
   return fallback;
+}
+
+// ============================================
+// Message ID Factories
+// ============================================
+
+/**
+ * Build layer report message ID
+ * Used for layer_report messages that aggregate dimension reports
+ */
+export function buildLayerReportId(layer: number): string {
+  return `layer_report_${layer}`;
+}
+
+/**
+ * Build revision report message ID
+ * Used for revision_report messages that show revision results
+ */
+export function buildRevisionReportId(layer: number, dimensionKey: string): string {
+  return `revision_report_${layer}_${dimensionKey}`;
+}
+
+/**
+ * Build dimension progress key
+ * Used as key in dimensionProgress state record
+ */
+export function buildDimensionProgressKey(layer: number, dimensionKey: string): string {
+  return `${layer}_${dimensionKey}`;
+}
+
+// ============================================
+// Dimension Report Utilities
+// ============================================
+
+/**
+ * Format dimension reports as markdown content
+ * Converts Record of dimension reports to a single markdown string
+ */
+export function formatDimensionReportsAsContent(
+  dimensionReports: Record<string, string>
+): string {
+  return Object.entries(dimensionReports)
+    .map(([key, content]) => `## ${key}\n\n${content}`)
+    .join('\n\n---\n\n');
+}
+
+/**
+ * Calculate summary from dimension reports
+ * Returns word count and dimension count for progress tracking
+ */
+export function calculateReportSummary(
+  dimensionReports: Record<string, string>
+): { word_count: number; dimension_count: number } {
+  return {
+    word_count: Object.values(dimensionReports).reduce(
+      (sum, content) => sum + (content?.length || 0),
+      0
+    ),
+    dimension_count: Object.keys(dimensionReports).length,
+  };
+}
+
+// ============================================
+// Checkpoint Utilities
+// ============================================
+
+/**
+ * Find the latest checkpoint matching a predicate
+ * Filters checkpoints and returns the one with the latest timestamp
+ */
+export function findLatestCheckpoint(
+  checkpoints: Checkpoint[],
+  predicate: (cp: Checkpoint) => boolean
+): Checkpoint | undefined {
+  return checkpoints
+    .filter(predicate)
+    .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1))
+    .at(-1);
+}
+
+/**
+ * Build checkpoint lookup map by layer
+ * Pre-computes checkpoint lookups for efficient access in render loops
+ */
+export function buildCheckpointByLayerMap(
+  checkpoints: Checkpoint[]
+): Map<number, Checkpoint[]> {
+  const map = new Map<number, Checkpoint[]>();
+  for (const cp of checkpoints) {
+    const arr = map.get(cp.layer) ?? [];
+    arr.push(cp);
+    map.set(cp.layer, arr);
+  }
+  // Sort each layer's checkpoints by timestamp
+  for (const [, arr] of map) {
+    arr.sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1));
+  }
+  return map;
+}
+
+// ============================================
+// Word Count Utilities
+// ============================================
+
+/**
+ * Format word count for display
+ * Shows 'k' suffix for counts >= 1000
+ */
+export function formatWordCount(count: number): string {
+  if (count >= 1000) {
+    return `${(count / 1000).toFixed(1)}k`;
+  }
+  return count.toString();
 }

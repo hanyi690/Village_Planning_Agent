@@ -41,10 +41,12 @@ export interface Checkpoint {
   description: string;
   timestamp: string;
   layer: number;
-  type?: 'key' | 'regular'; // 检查点类型：key=关键检查点，regular=普通检查点
-  phase?: string; // 规划阶段枚举值
-  current_layer?: number; // 当前层级
-  previous_layer?: number; // 前一个层级
+  type?: 'key' | 'regular';
+  phase?: string;
+  current_layer?: number;
+  previous_layer?: number;
+  isRevision?: boolean;
+  revisedDimensions?: string[];
 }
 
 // Revision Item - 修复项（区分目标维度和级联维度）
@@ -73,6 +75,7 @@ export interface DimensionProgressItem {
   startedAt?: string;
   completedAt?: string;
   error?: string;
+  isRevision?: boolean;
 }
 
 // Action Button

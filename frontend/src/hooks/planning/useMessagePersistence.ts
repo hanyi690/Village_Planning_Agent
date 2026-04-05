@@ -104,8 +104,16 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
     return metadata;
   };
 
-  // Check if a layer_completed message should be updated (has more data)
+  // Check if a message should be updated (for layer_completed and dimension_report)
   function shouldMessageBeUpdated(msg: Message): boolean {
+    // Handle dimension_report messages
+    if (msg.type === 'dimension_report') {
+      const dimMsg = msg as DimensionReportMessage;
+      // Only save when streamingState becomes completed
+      return dimMsg.streamingState === 'completed';
+    }
+
+    // Handle layer_completed messages
     if (msg.type !== 'layer_completed') return false;
     const layerMsg = msg as LayerCompletedMessage;
     const currentVersion = messageVersionsRef.current.get(msg.id);
@@ -113,7 +121,7 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
     if (msg._pendingStorage) return false;
     const newDimensionCount = layerMsg.summary?.dimension_count || 0;
     const newWordCount = layerMsg.summary?.word_count || 0;
-    return newDimensionCount > currentVersion.dimensionCount || newWordCount > currentVersion.wordCount + 100;
+    return newDimensionCount > currentVersion.dimensionCount || newWordCount > currentVersion.wordCount + 500;
   }
 
   // Save a single message to backend
@@ -230,12 +238,10 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       }
     }
 
-    // Check all layer_completed messages for potential updates
-    const layerMessages = messages.filter(
-      (msg) => msg.type === 'layer_completed' && !msg._pendingStorage
-    );
-    for (const msg of layerMessages) {
-      if (shouldMessageBeUpdated(msg)) {
+    // Check layer_completed and dimension_report messages for potential updates (single pass)
+    const updatableTypes = ['layer_completed', 'dimension_report'];
+    for (const msg of messages) {
+      if (updatableTypes.includes(msg.type) && !msg._pendingStorage && shouldMessageBeUpdated(msg)) {
         messagesToSave.push(msg);
       }
     }

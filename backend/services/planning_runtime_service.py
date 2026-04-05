@@ -51,6 +51,7 @@ from src.utils.event_factory import (
     create_completed_event,
     create_error_event,
     create_layer_started_event,
+    create_checkpoint_saved_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,10 +174,14 @@ class PlanningRuntimeService:
 
     @classmethod
     async def aget_state_history(cls, session_id: str):
-        """Get checkpoint history iterator for a session."""
+        """Get checkpoint history iterator for a session.
+
+        Yields state snapshots from the graph's checkpoint history.
+        """
         await cls.ensure_initialized()
         config = cls.get_thread_config(session_id)
-        return cls._graph.aget_state_history(config)
+        async for snapshot in cls._graph.aget_state_history(config):
+            yield snapshot
 
     @classmethod
     def get_checkpointer(cls) -> Optional[BaseCheckpointSaver]:
@@ -235,7 +240,7 @@ class PlanningRuntimeService:
             "pending_review": False,
             "need_revision": False,
             "revision_target_dimensions": [],
-            "review_feedback": "",
+            "human_feedback": "",
             "metadata": {
                 "published_layers": [],
                 "version": 0,
@@ -505,11 +510,75 @@ class PlanningRuntimeService:
         # 5. Resume from checkpoint, go directly to intent_router -> route_planning
         logger.info(f"[PlanningRuntimeService] [{session_id}] Background execution started")
 
+        # Track last completed layer from values mode
+        # This is used to correlate checkpoint_saved events with the correct layer
+        last_completed_layer = 0
+        last_phase = ""
+        is_revision = False
+        revision_dimensions = []
+
         try:
-            stream_iterator = cls._graph.astream(None, config, stream_mode="values")
+            # Use dual stream mode: 'values' for state updates, 'checkpoints' for checkpoint persistence
+            stream_iterator = cls._graph.astream(None, config, stream_mode=['values', 'checkpoints'])
 
             async for event in stream_iterator:
-                pass
+                if isinstance(event, tuple) and len(event) == 2:
+                    mode, data = event
+
+                    if mode == 'values':
+                        # From values mode: detect layer completion by checking pause_after_step
+                        state = data
+                        if state.get('pause_after_step') and state.get('previous_layer'):
+                            layer = state.get('previous_layer', 0)
+                            if layer > 0:
+                                last_completed_layer = layer
+                                last_phase = state.get('phase', '')
+
+                                # Detect if this is a revision completion
+                                last_revised_dimensions = state.get('last_revised_dimensions', [])
+                                if last_revised_dimensions:
+                                    is_revision = True
+                                    revision_dimensions = last_revised_dimensions
+                                else:
+                                    is_revision = False
+                                    revision_dimensions = []
+
+                                logger.info(f"[PlanningRuntimeService] [{session_id}] {'Revision' if is_revision else 'Layer'} {layer} completed")
+
+                    elif mode == 'checkpoints':
+                        # From checkpoints mode: checkpoint persisted, now send checkpoint_saved event
+                        checkpoint_id = None
+                        if hasattr(data, 'config'):
+                            checkpoint_id = data.config.get('configurable', {}).get('checkpoint_id', '')
+                        elif isinstance(data, dict):
+                            checkpoint_id = data.get('config', {}).get('configurable', {}).get('checkpoint_id', '')
+
+                        if last_completed_layer > 0 and checkpoint_id:
+                            logger.info(f"[PlanningRuntimeService] [{session_id}] checkpoints mode: checkpoint_id={checkpoint_id} for {'Revision' if is_revision else 'Layer'} {last_completed_layer}")
+
+                            # Build event using factory function
+                            checkpoint_saved_event = create_checkpoint_saved_event(
+                                checkpoint_id=checkpoint_id,
+                                layer=last_completed_layer,
+                                phase=last_phase,
+                                session_id=session_id,
+                                is_revision=is_revision,
+                                revised_dimensions=revision_dimensions,
+                            )
+
+                            sse_manager.append_event(session_id, checkpoint_saved_event)
+                            sse_manager.publish_sync(session_id, checkpoint_saved_event)
+
+                            # Reset tracking for next layer
+                            last_completed_layer = 0
+                            last_phase = ""
+                            is_revision = False
+                            revision_dimensions = []
+
+                else:
+                    # Legacy single-mode handling (if stream_mode=['values'] only)
+                    # This branch handles the case where event is not a tuple
+                    pass
 
             # Send completed event
             await cls._append_event(session_id, create_completed_event(session_id))

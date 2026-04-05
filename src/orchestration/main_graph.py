@@ -312,9 +312,9 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 # 收集和推进节点
 # ==========================================
 
-def collect_results(state: UnifiedPlanningState) -> Dict[str, Any]:
+async def collect_results(state: UnifiedPlanningState) -> Dict[str, Any]:
     """收集维度分析结果"""
-    return collect_layer_results(state)
+    return await collect_layer_results(state)
 
 
 def emit_events(state: UnifiedPlanningState) -> Dict[str, Any]:
@@ -361,6 +361,22 @@ def advance_phase(state: UnifiedPlanningState) -> Dict[str, Any]:
 def route_intent(state: UnifiedPlanningState) -> Literal["execute_tools", "route_planning", "end"]:
     """意图路由"""
     return intent_router(state)
+
+
+def route_revision(state: UnifiedPlanningState) -> Literal["conversation", "__end__"]:
+    """
+    Revision 后的路由
+
+    当 revision 设置了 pause_after_step 时，直接结束。
+    这确保 checkpoint_saved 事件关联的是 revision 完成时的状态。
+
+    不影响级联更新：级联更新在 revision_node 内部完成。
+    不影响恢复执行：恢复执行通过 _trigger_planning_execution 的合成消息实现。
+    """
+    if state.get("pause_after_step"):
+        logger.info("[Revision路由] pause_after_step=True，直接结束")
+        return END
+    return "conversation"
 
 
 def route_planning(state: UnifiedPlanningState) -> Union[List[Send], str]:
@@ -473,7 +489,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
         "collect_results",
         check_completion,
         {
-            "continue": "conversation",  # 继续当前阶段
+            "continue": "route_planning",  # 波次/维度推进后自动继续执行
             "advance": "advance_phase",  # 推进到下一阶段
             "complete": END,             # 规划完成
             "revision": "revision",      # 进入修订
@@ -484,8 +500,15 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     # 阶段推进 -> 路由分发
     builder.add_edge("advance_phase", "route_planning")
 
-    # 修订 -> 返回对话
-    builder.add_edge("revision", "conversation")
+    # 修订 -> 条件路由（pause_after_step 时直接结束）
+    builder.add_conditional_edges(
+        "revision",
+        route_revision,
+        {
+            END: END,
+            "conversation": "conversation"
+        }
+    )
 
     # 编译图
     graph = builder.compile(checkpointer=checkpointer)

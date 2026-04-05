@@ -86,6 +86,19 @@ TIANDITU_MAX_RETRIES: int = int(os.getenv("TIANDITU_MAX_RETRIES", "3"))
 GIS_TIMEOUT: int = int(os.getenv("GIS_TIMEOUT", "30"))
 
 # ==========================================
+# 高德地图地理服务配置
+# ==========================================
+
+# 高德地图 API Key
+AMAP_API_KEY: str = os.getenv("AMAP_API_KEY", "")
+
+# 高德地图速率限制（每秒请求数）
+AMAP_RATE_LIMIT: float = float(os.getenv("AMAP_RATE_LIMIT", "30.0"))
+
+# 高德地图最大重试次数
+AMAP_MAX_RETRIES: int = int(os.getenv("AMAP_MAX_RETRIES", "3"))
+
+# ==========================================
 # Knowledge Base Constants
 # ==========================================
 

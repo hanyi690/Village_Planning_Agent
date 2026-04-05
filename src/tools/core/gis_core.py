@@ -90,8 +90,11 @@ def _analyze_land_use(geo_data_path: Optional[str], **kwargs) -> Dict[str, Any]:
             "data": {
                 "total_area": round(total_area, 2),
                 "land_use_types": land_use_types,
-                "land_use_efficiency": 0.75,
-                "development_intensity": 0.35
+                "pending_metrics": {
+                    "land_use_efficiency": "pending",
+                    "development_intensity": "pending"
+                },
+                "note": "土地效率指标需结合自然资源数据计算"
             }
         }
     except Exception as e:
@@ -116,15 +119,19 @@ def _analyze_soil(soil_data_path: Optional[str], **kwargs) -> Dict[str, Any]:
             soil_types.append({
                 "type": row[soil_column],
                 "area": round(area_km2, 2),
-                "suitability": "适宜"
+                "suitability": "pending",
+                "note": "土壤适宜性需结合土壤理化性质数据评估"
             })
 
         return {
             "success": True,
             "data": {
                 "soil_types": soil_types,
-                "soil_quality_index": 0.68,
-                "erosion_risk": "中等"
+                "pending_metrics": {
+                    "soil_quality_index": "pending",
+                    "erosion_risk": "pending"
+                },
+                "note": "土壤质量指标需结合土壤理化性质数据计算"
             }
         }
     except Exception as e:
@@ -154,11 +161,36 @@ def _analyze_hydrology(hydrology_data_path: Optional[str], **kwargs) -> Dict[str
 
             water_systems.append(water_system)
 
+        # 计算洪水风险缓冲区（基于水系要素）
+        buffer_distance = kwargs.get("flood_buffer_distance", 100)  # 默认100米缓冲区
+        flood_risk_areas = []
+
+        for _, row in gdf.iterrows():
+            # 为水系要素创建缓冲区
+            if row.geometry.geom_type in ["LineString", "Polygon", "MultiPolygon"]:
+                try:
+                    buffer_geom = row.geometry.buffer(buffer_distance)
+                    flood_area_km2 = buffer_geom.area / 1_000_000
+
+                    flood_risk_areas.append({
+                        "water_name": row.get("name", "未命名水体"),
+                        "water_type": row.get("type", "其他"),
+                        "buffer_distance_m": buffer_distance,
+                        "risk_area_km2": round(flood_area_km2, 4),
+                        "risk_level": "pending"  # 需结合地形/降雨数据评估
+                    })
+                except Exception:
+                    pass
+
         return {
             "success": True,
             "data": {
                 "water_systems": water_systems,
-                "flood_risk_areas": []
+                "flood_risk_areas": flood_risk_areas,
+                "analysis_params": {
+                    "buffer_distance": buffer_distance,
+                    "note": "洪水风险等级需结合地形高程和降雨数据进一步评估"
+                }
             }
         }
     except Exception as e:

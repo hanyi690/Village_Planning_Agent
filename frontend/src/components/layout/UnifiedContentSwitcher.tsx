@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useMemo } from 'react';
-import { usePlanningStore, usePlanningActions } from '@/stores';
+import { usePlanningStore } from '@/stores';
 import { VillageInputData } from '@/components/VillageInputForm';
 import { createSystemMessage } from '@/lib/utils';
 import ChatPanel from '@/components/chat/ChatPanel';

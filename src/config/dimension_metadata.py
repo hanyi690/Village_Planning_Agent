@@ -1060,8 +1060,10 @@ def get_revision_wave_dimensions(
                 if dim not in all_impact_dims:
                     all_impact_dims[dim] = wave
                 else:
-                    # 取最小 wave（确保依赖满足）
-                    all_impact_dims[dim] = min(all_impact_dims[dim], wave)
+                    # 取最大 wave（确保依赖满足）
+                    # 如果维度既是目标维度(wave=0)，又是其他维度的下游(wave>0)
+                    # 应该取最大值，确保在依赖维度之后执行
+                    all_impact_dims[dim] = max(all_impact_dims[dim], wave)
     
     # 只保留已完成的维度（有报告的维度才能被修复）
     # 未完成的维度没有内容可修复，应被过滤掉

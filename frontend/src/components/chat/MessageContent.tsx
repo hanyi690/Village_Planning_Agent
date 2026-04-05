@@ -5,10 +5,12 @@
  * Individual message type renderers
  */
 
-import { Message, ProgressMessage } from '@/types';
+import { Message, ProgressMessage, DimensionReportMessage } from '@/types';
 import { isProgressMessage, isLayerCompletedMessage, isDimensionReportMessage } from '@/types';
 import StreamingText from './StreamingText';
 import LayerReportMessage from './LayerReportMessage';
+import MarkdownRenderer from '@/components/MarkdownRenderer';
+import { formatWordCount } from '@/lib/utils';
 
 interface MessageContentProps {
   message: Message;
@@ -45,9 +47,7 @@ function renderProgressMessage(message: ProgressMessage) {
 }
 
 // Dimension Report Message Renderer
-function renderDimensionReportMessage(message: Message) {
-  if (message.type !== 'dimension_report') return null;
-
+function renderDimensionReportMessage(message: DimensionReportMessage) {
   return (
     <div className="bg-blue-50 p-3 rounded-lg border border-blue-200">
       <div className="flex items-center gap-2 mb-2">
@@ -55,9 +55,32 @@ function renderDimensionReportMessage(message: Message) {
           {message.layer}
         </span>
         <span className="font-medium text-blue-700">{message.dimensionName}</span>
+        {/* Revision marker */}
+        {message.isRevision && (
+          <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-600">
+            修复
+          </span>
+        )}
+        {/* Streaming state indicator */}
+        {message.streamingState === 'streaming' && (
+          <span className="text-xs text-blue-500 animate-pulse">生成中...</span>
+        )}
+        {message.streamingState === 'error' && (
+          <span className="text-xs text-red-500">生成错误</span>
+        )}
       </div>
-      <div className="text-sm text-gray-700 whitespace-pre-wrap">{message.content}</div>
-      {message.progress && (
+      {/* Markdown rendered content */}
+      <div className="text-sm text-gray-700">
+        <MarkdownRenderer content={message.content} className="text-sm" />
+      </div>
+      {/* Word count when completed */}
+      {message.streamingState === 'completed' && message.wordCount > 0 && (
+        <div className="mt-2 text-xs text-gray-500">
+          字数: {formatWordCount(message.wordCount)}
+        </div>
+      )}
+      {/* Progress during streaming */}
+      {message.progress && message.streamingState === 'streaming' && (
         <div className="mt-2 text-xs text-gray-500">
           进度: {message.progress.current}/{message.progress.total} 字
         </div>

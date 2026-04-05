@@ -51,7 +51,7 @@ async def create_ui_message(session_id: str, request: CreateUIMessageRequest):
             metadata=request.metadata,
             created_at=message_created_at,
         )
-        logger.info(f"[Planning API] [{session_id}] UI message upserted: db_id={message_db_id}, message_id={request.message_id}")
+        logger.debug(f"[Planning API] [{session_id}] UI message upserted: db_id={message_db_id}, message_id={request.message_id}")
 
         return {
             "success": True,

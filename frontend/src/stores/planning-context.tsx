@@ -13,8 +13,8 @@
  * 4. Provides high-level actions for planning workflow
  */
 
-import { useEffect, useCallback, ReactNode, useState } from 'react';
-import { usePlanningStore, type PlanningState } from '@/stores/planningStore';
+import { useEffect, useCallback, ReactNode } from 'react';
+import { usePlanningStore } from '@/stores/planningStore';
 import { useSSEConnection, useMessagePersistence, useSessionRestore } from '@/hooks/planning';
 import {
   planningApi,
@@ -22,11 +22,11 @@ import {
   VillageInfo,
   VillageSession,
 } from '@/lib/api';
-import { createSystemMessage, getErrorMessage } from '@/lib/utils';
+import { createSystemMessage, createErrorMessage, getErrorMessage } from '@/lib/utils';
+import { transformBackendMessages } from '@/lib/utils/message-transform';
 import { logger } from '@/lib/logger';
 import { PLANNING_DEFAULTS } from '@/config/planning';
-import type { PlanningParams, Checkpoint, Message } from '@/types';
-import type { VillageInputData } from '@/components/VillageInputForm';
+import type { PlanningParams } from '@/types';
 
 // ============================================
 // Provider Props
@@ -82,15 +82,36 @@ export function usePlanningActions() {
 
   const approve = useCallback(async () => {
     if (!store.taskId) throw new Error('No task ID');
-    await planningApi.approveReview(store.taskId);
-    store.setPaused(false);
-    store.setPendingReviewLayer(null);
+    logger.context.info('Approving review', { taskId: store.taskId });
+    try {
+      await planningApi.approveReview(store.taskId);
+      store.setPaused(false);
+      store.setPendingReviewLayer(null);
+      store.triggerSseReconnect();
+
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error, 'Unknown error');
+      logger.context.error('Failed to approve review', { error: errorMessage });
+      store.addMessage(createErrorMessage(`批准失败: ${errorMessage}`));
+      throw error;
+    }
   }, [store]);
 
   const reject = useCallback(async (feedback: string, dimensions?: string[]) => {
     if (!store.taskId) throw new Error('No task ID');
-    await planningApi.rejectReview(store.taskId, feedback, dimensions);
-    store.setPaused(false);
+    if (!feedback.trim()) throw new Error('Feedback is required');
+    logger.context.info('Rejecting review', { taskId: store.taskId, feedback: feedback.slice(0, 50) });
+    try {
+      await planningApi.rejectReview(store.taskId, feedback, dimensions);
+      store.setPaused(false);
+      store.triggerSseReconnect();
+      
+    } catch (error: unknown) {
+      const errorMessage = getErrorMessage(error, 'Unknown error');
+      logger.context.error('Failed to reject review', { error: errorMessage });
+
+      throw error;
+    }
   }, [store]);
 
   const rollback = useCallback(async (checkpointId: string) => {
@@ -161,7 +182,7 @@ export function usePlanningActions() {
     }
   }, [store]);
 
-  const deleteSession = useCallback(async (sessionId: string, villageName: string): Promise<boolean> => {
+  const deleteSession = useCallback(async (sessionId: string, _villageName: string): Promise<boolean> => {
     try {
       await planningApi.deleteSession(sessionId);
       // Reload villages history
@@ -220,110 +241,6 @@ export function usePlanningActions() {
     addMessage: store.addMessage,
     setMessages: store.setMessages,
   };
-}
-
-// Helper to transform backend messages
-function transformBackendMessages(messages: unknown[]): Message[] {
-  return messages.map((msg: unknown) => {
-    const m = msg as Record<string, unknown>;
-    const baseMsg = {
-      id: (m.message_id as string) || `db-${m.id}`,
-      timestamp: new Date((m.created_at as string) || Date.now()),
-      role: (m.role || 'assistant') as 'user' | 'assistant' | 'system',
-      created_at: m.created_at as string | undefined,
-    };
-
-    const msgMeta = (m.message_metadata || m.metadata || {}) as Record<string, unknown>;
-
-    switch (m.message_type) {
-      case 'dimension_report':
-        return {
-          ...baseMsg,
-          type: 'dimension_report' as const,
-          layer: (msgMeta.layer as number) || 1,
-          dimensionKey: (msgMeta.dimensionKey as string) || '',
-          dimensionName: (msgMeta.dimensionName as string) || '',
-          content: (m.content as string) || '',
-          streamingState: (msgMeta.streamingState as 'streaming' | 'completed' | 'error') || 'completed',
-          wordCount: (msgMeta.wordCount as number) || ((m.content as string)?.length || 0),
-          previousContent: msgMeta.previousContent as string | undefined,
-          revisionVersion: msgMeta.revisionVersion as number | undefined,
-          isRevision: msgMeta.isRevision as boolean | undefined,
-        };
-
-      case 'layer_completed':
-        return {
-          ...baseMsg,
-          type: 'layer_completed' as const,
-          layer: (msgMeta.layer as number) || 1,
-          content: (m.content as string) || '',
-          summary: (msgMeta.summary as { word_count: number; key_points: string[] }) || { word_count: 0, key_points: [] },
-          fullReportContent: msgMeta.fullReportContent as string | undefined,
-          dimensionReports: msgMeta.dimensionReports as Record<string, string> | undefined,
-          actions: [],
-        };
-
-      case 'file':
-        return {
-          ...baseMsg,
-          type: 'file' as const,
-          filename: (msgMeta.filename as string) || '',
-          fileContent: (msgMeta.fileContent as string) || '',
-          fileSize: msgMeta.fileSize as number | undefined,
-          encoding: msgMeta.encoding as string | undefined,
-        };
-
-      case 'progress':
-        return {
-          ...baseMsg,
-          type: 'progress' as const,
-          content: (m.content as string) || '',
-          progress: (msgMeta.progress as number) || 0,
-          currentLayer: msgMeta.currentLayer as string | undefined,
-          taskId: msgMeta.taskId as string | undefined,
-        };
-
-      case 'tool_call':
-        return {
-          ...baseMsg,
-          type: 'tool_call' as const,
-          toolName: (msgMeta.toolName as string) || '',
-          toolDisplayName: (msgMeta.toolDisplayName as string) || '',
-          description: (msgMeta.description as string) || '',
-          estimatedTime: msgMeta.estimatedTime as number | undefined,
-          stage: msgMeta.stage as string | undefined,
-        };
-
-      case 'tool_progress':
-        return {
-          ...baseMsg,
-          type: 'tool_progress' as const,
-          toolName: (msgMeta.toolName as string) || '',
-          stage: (msgMeta.stage as string) || '',
-          progress: (msgMeta.progress as number) || 0,
-          message: (msgMeta.message as string) || '',
-        };
-
-      case 'tool_result':
-        return {
-          ...baseMsg,
-          type: 'tool_result' as const,
-          toolName: (msgMeta.toolName as string) || '',
-          status: (msgMeta.status as 'success' | 'error') || 'success',
-          summary: (msgMeta.summary as string) || '',
-          displayHints: msgMeta.displayHints as { primary_view?: 'text' | 'table' | 'map' | 'chart' | 'json'; priority_fields?: string[] } | undefined,
-          dataPreview: msgMeta.dataPreview as string | undefined,
-          stages: msgMeta.stages as { name: string; status: 'pending' | 'running' | 'success' | 'error'; progress: number; message: string }[] | undefined,
-        };
-
-      default:
-        return {
-          ...baseMsg,
-          type: 'text' as const,
-          content: (m.content as string) || '',
-        };
-    }
-  });
 }
 
 // ============================================

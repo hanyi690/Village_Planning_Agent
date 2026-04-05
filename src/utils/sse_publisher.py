@@ -12,6 +12,7 @@ SSE 事件发布器
 from typing import Dict, Any, Optional, Callable, List
 from datetime import datetime
 
+from backend.constants.sse_events import SSEEventType
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -68,7 +69,7 @@ class SSEPublisher:
         _send_sse_event(session_id, event_data)
 
         # Log key event types (avoid high-frequency events like dimension_delta)
-        if event_type in ["tool_call", "tool_result", "layer_started", "layer_completed"]:
+        if event_type in [SSEEventType.TOOL_CALL, SSEEventType.TOOL_RESULT, SSEEventType.LAYER_STARTED, SSEEventType.LAYER_COMPLETED]:
             logger.info(f"[SSEPublisher] {session_id}: sent {event_type}")
 
     @staticmethod
@@ -95,10 +96,32 @@ class SSEPublisher:
 
     @staticmethod
     def send_layer_start(session_id: str, layer: int, layer_name: str, dimension_count: int) -> None:
-        """发送层级开始事件"""
+        """
+        Send layer_started event.
+
+        Clears old dimension_complete cache before sending to prevent
+        stale events from previous layer being sent on SSE reconnect.
+
+        Args:
+            session_id: Session ID
+            layer: Layer number (1-3)
+            layer_name: Layer display name
+            dimension_count: Number of dimensions in this layer
+        """
+        # Clear old dimension_complete cache to prevent stale events
+        sse_manager = _get_sse_manager()
+        cleared_count = sse_manager.clear_dimension_cache(session_id)
+        if cleared_count > 0:
+            logger.info(f"[SSEPublisher] Cleared {cleared_count} dimension caches before Layer {layer}")
+
+        # Clear old dimension_start cache to prevent stale events
+        cleared_start_count = sse_manager.clear_dimension_start_cache(session_id)
+        if cleared_start_count > 0:
+            logger.info(f"[SSEPublisher] Cleared {cleared_start_count} dimension_start caches before Layer {layer}")
+
         SSEPublisher.send_event(
             session_id=session_id,
-            event_type="layer_started",
+            event_type=SSEEventType.LAYER_STARTED,
             layer=layer,
             layer_name=layer_name,
             dimension_count=dimension_count
@@ -110,7 +133,7 @@ class SSEPublisher:
         """发送层级完成事件"""
         SSEPublisher.send_event(
             session_id=session_id,
-            event_type="layer_completed",
+            event_type=SSEEventType.LAYER_COMPLETED,
             layer=layer,
             layer_name=layer_name,
             dimension_count=dimension_count,
@@ -119,41 +142,46 @@ class SSEPublisher:
 
     @staticmethod
     def send_dimension_start(session_id: str, layer: int, dimension_key: str,
-                             dimension_name: str) -> None:
+                             dimension_name: str, is_revision: bool = False) -> None:
         """发送维度开始事件"""
         SSEPublisher.send_event(
             session_id=session_id,
-            event_type="dimension_start",
+            event_type=SSEEventType.DIMENSION_START,
             layer=layer,
             dimension_key=dimension_key,
-            dimension_name=dimension_name
+            dimension_name=dimension_name,
+            is_revision=is_revision
         )
 
     @staticmethod
     def send_dimension_delta(session_id: str, layer: int, dimension_key: str,
-                              dimension_name: str, token: str, accumulated: str) -> None:
+                              dimension_name: str, token: str, accumulated: str,
+                              is_revision: bool = False) -> None:
         """发送维度增量事件"""
         SSEPublisher.send_event(
             session_id=session_id,
-            event_type="dimension_delta",
+            event_type=SSEEventType.DIMENSION_DELTA,
             layer=layer,
             dimension_key=dimension_key,
             dimension_name=dimension_name,
             delta=token,
-            accumulated=accumulated
+            accumulated=accumulated,
+            is_revision=is_revision
         )
 
     @staticmethod
     def send_dimension_complete(session_id: str, layer: int, dimension_key: str,
-                                 dimension_name: str, full_content: str) -> None:
+                                 dimension_name: str, full_content: str,
+                                 is_revision: bool = False) -> None:
         """发送维度完成事件"""
         SSEPublisher.send_event(
             session_id=session_id,
-            event_type="dimension_complete",
+            event_type=SSEEventType.DIMENSION_COMPLETE,
             layer=layer,
             dimension_key=dimension_key,
             dimension_name=dimension_name,
-            full_content=full_content
+            full_content=full_content,
+            is_revision=is_revision
         )
 
     @staticmethod
@@ -171,7 +199,7 @@ class SSEPublisher:
         """
         SSEPublisher.send_event(
             session_id=session_id,
-            event_type="tool_call",
+            event_type=SSEEventType.TOOL_CALL,
             tool_name=tool_name,
             tool_display_name=tool_display_name,
             description=description,
@@ -193,7 +221,7 @@ class SSEPublisher:
         """
         SSEPublisher.send_event(
             session_id=session_id,
-            event_type="tool_progress",
+            event_type=SSEEventType.TOOL_PROGRESS,
             tool_name=tool_name,
             stage=stage,
             progress=progress,
@@ -216,7 +244,7 @@ class SSEPublisher:
         """
         SSEPublisher.send_event(
             session_id=session_id,
-            event_type="tool_result",
+            event_type=SSEEventType.TOOL_RESULT,
             tool_name=tool_name,
             status=status,
             result_preview=result_preview,
@@ -225,7 +253,8 @@ class SSEPublisher:
 
     @staticmethod
     def create_token_callback(session_id: str, layer: int,
-                               dimension_key: str, dimension_name: str) -> Callable[[str, str], None]:
+                               dimension_key: str, dimension_name: str,
+                               is_revision: bool = False) -> Callable[[str, str], None]:
         """创建 token 回调函数"""
         def on_token(token: str, accumulated: str) -> None:
             SSEPublisher.send_dimension_delta(
@@ -234,7 +263,8 @@ class SSEPublisher:
                 dimension_key=dimension_key,
                 dimension_name=dimension_name,
                 token=token,
-                accumulated=accumulated
+                accumulated=accumulated,
+                is_revision=is_revision
             )
         return on_token
 

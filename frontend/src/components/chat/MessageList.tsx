@@ -4,9 +4,11 @@
  * MessageList - Renders list of chat messages with Gemini-style enhancements
  */
 
+import { useMemo } from 'react';
 import {
   Message,
   LayerCompletedMessage,
+  DimensionReportMessage,
   FileMessage,
   Checkpoint,
 } from '@/types';
@@ -14,7 +16,7 @@ import ThinkingIndicator from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
 import CheckpointMarker from './CheckpointMarker';
-import { parseTimestamp } from '@/lib/utils';
+import { parseTimestamp, findLatestCheckpoint } from '@/lib/utils';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
 
 interface MessageListProps {
@@ -60,6 +62,35 @@ export default function MessageList({
   isRollingBack = false,
   onViewFileInSidebar,
 }: MessageListProps) {
+  // Pre-compute checkpoint lookups to avoid O(n*m) filter+sort in render loop
+  const keyCheckpointByLayer = useMemo(() => {
+    const map = new Map<number, Checkpoint>();
+    for (const cp of checkpoints) {
+      if (cp.type === 'key') {
+        const existing = map.get(cp.layer);
+        // Keep the latest timestamp
+        if (!existing || cp.timestamp > existing.timestamp) {
+          map.set(cp.layer, cp);
+        }
+      }
+    }
+    return map;
+  }, [checkpoints]);
+
+  const revisionCheckpointByLayer = useMemo(() => {
+    const map = new Map<number, Checkpoint>();
+    for (const cp of checkpoints) {
+      if (cp.isRevision) {
+        const existing = map.get(cp.layer);
+        // Keep the latest timestamp
+        if (!existing || cp.timestamp > existing.timestamp) {
+          map.set(cp.layer, cp);
+        }
+      }
+    }
+    return map;
+  }, [checkpoints]);
+
   const handleCopy = (message: Message) => {
     if (message.type === 'text') {
       navigator.clipboard.writeText(message.content);
@@ -100,11 +131,8 @@ export default function MessageList({
           // 计算是否有流式维度（有维度报告且有内容）
           const hasStreamingDimensions = Object.keys(layerMsg.dimensionReports || {}).length > 0;
 
-          // 查找对应层级的 key 类型 checkpoint（按时间排序取最后一个）
-          const layerCheckpoint = checkpoints
-            .filter((cp) => cp.layer === layerMsg.layer && cp.type === 'key')
-            .sort((a, b) => (a.timestamp > b.timestamp ? 1 : -1))
-            .at(-1);
+          // Use pre-computed checkpoint lookup
+          const layerCheckpoint = keyCheckpointByLayer.get(layerMsg.layer);
 
           return (
             <div key={message.id} className="w-full mb-4">
@@ -123,6 +151,34 @@ export default function MessageList({
               {layerCheckpoint && onRollback && (
                 <CheckpointMarker
                   checkpoint={layerCheckpoint}
+                  onRollback={onRollback}
+                  isRollingBack={isRollingBack}
+                />
+              )}
+            </div>
+          );
+        }
+
+        // dimension_report revision messages with checkpoint marker
+        if (message.type === 'dimension_report' && (message as DimensionReportMessage).isRevision) {
+          const dimMsg = message as DimensionReportMessage;
+
+          // Use pre-computed checkpoint lookup
+          const revisionCheckpoint = revisionCheckpointByLayer.get(dimMsg.layer);
+
+          return (
+            <div key={message.id} className="w-full mb-4">
+              <MessageBubble
+                message={message}
+                onCopy={handleCopy}
+                onRegenerate={handleRegenerate}
+                enableStreaming={enableStreaming}
+                dimensionContents={dimensionContents}
+              />
+              {/* Revision checkpoint marker */}
+              {revisionCheckpoint && onRollback && (
+                <CheckpointMarker
+                  checkpoint={revisionCheckpoint}
                   onRollback={onRollback}
                   isRollingBack={isRollingBack}
                 />

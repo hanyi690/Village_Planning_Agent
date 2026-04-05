@@ -112,9 +112,14 @@ export default function CheckpointMarker({
             <span
               className={`text-sm ${isKeyCheckpoint ? 'font-medium' : 'font-normal'} text-gray-700`}
             >
-              {layerName} 完成
+              {checkpoint.isRevision ? '维度修复完成' : `${layerName} 完成`}
             </span>
-            {isKeyCheckpoint && checkpoint.phase && (
+            {checkpoint.isRevision && checkpoint.revisedDimensions && (
+              <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-600">
+                {checkpoint.revisedDimensions.length} 个维度
+              </span>
+            )}
+            {isKeyCheckpoint && !checkpoint.isRevision && checkpoint.phase && (
               <span className="text-xs px-1.5 py-0.5 rounded bg-violet-100 text-violet-600">
                 关键点
               </span>

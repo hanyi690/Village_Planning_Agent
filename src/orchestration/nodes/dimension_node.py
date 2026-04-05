@@ -89,11 +89,13 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
             if task_description:
                 query = f"{query} {task_description[:50]}"
 
+            # 移除 dimension 参数：ChromaDB 不支持数组类型的 metadata 过滤
+            # dimension_tags 存储为逗号分隔字符串，$in 操作符只能精确匹配整个字符串
+            # 依赖向量相似度搜索自然偏向相关内容即可
             result = search_knowledge(
                 query=query,
                 top_k=3,
-                context_mode="standard",
-                dimension=dim_key
+                context_mode="standard"
             )
 
             if result and not result.startswith("❌"):

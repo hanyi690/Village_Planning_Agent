@@ -317,9 +317,10 @@ export function usePlanningState(): PlanningState {
 }
 
 /**
- * Get store actions
+ * Get store actions (basic setters only)
+ * Note: For high-level planning actions (approve/reject/rollback), use usePlanningActions from planning-context
  */
-export function usePlanningActions() {
+export function useStoreActions() {
   return usePlanningStore((state) => ({
     setTaskId: state.setTaskId,
     setProjectName: state.setProjectName,

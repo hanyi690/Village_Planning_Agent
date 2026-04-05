@@ -21,8 +21,10 @@ from .state import (
     _layer_to_phase,
 )
 from .nodes.dimension_node import create_dimension_state, DIMENSION_NAMES
+from ..config.dimension_metadata import get_dimension_layer
 from ..utils.logger import get_logger
 from ..utils.event_factory import create_layer_completed_event, create_pause_event
+from ..utils.sse_publisher import SSEPublisher
 
 logger = get_logger(__name__)
 
@@ -106,20 +108,6 @@ def route_by_phase(state: Dict[str, Any]) -> Union[List[Send], str]:
     if layer == 0:
         logger.info("[路由] INIT 阶段，返回 advance_phase")
         return "advance_phase"
-
-    # 恢复执行检测：phase 已推进但 previous_layer=0 表示刚批准
-    # 发送 layer_started 事件（Agent 自治原则）
-    if layer in [2, 3] and previous_layer == 0:
-        session_id = state.get("session_id", "")
-        if session_id:
-            from ..utils.sse_publisher import SSEPublisher
-            SSEPublisher.send_layer_start(
-                session_id=session_id,
-                layer=layer,
-                layer_name=get_layer_name(layer),
-                dimension_count=len(get_layer_dimensions(layer))
-            )
-            logger.info(f"[路由] 恢复执行，发送 layer_started for Layer {layer}")
 
     # 知识预加载检测：如果缓存为空，先预加载
     if not knowledge_cache:
@@ -206,10 +194,8 @@ def _route_wave_layer(state: Dict[str, Any], layer: int, current_wave: int) -> U
             next_wave_dims = get_wave_dimensions(layer, next_wave)
             pending = [d for d in next_wave_dims if d not in completed]
 
-            return [
-                Send("analyze_dimension", create_dimension_state(dim, state))
-                for dim in pending
-            ]
+            # 返回 Send 列表，波次推进由 collect_layer_results 处理
+            return [Send("analyze_dimension", create_dimension_state(dim, state)) for dim in pending]
 
     # 执行当前波次的未完成维度
     pending_dims = [d for d in wave_dims if d not in completed]
@@ -225,7 +211,52 @@ def _route_wave_layer(state: Dict[str, Any], layer: int, current_wave: int) -> U
 # 收集节点
 # ==========================================
 
-def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
+
+def _send_layer_completion_events(
+    session_id: str,
+    layer: int,
+    phase: str,
+    reports: Dict[str, Any],
+    step_mode: bool,
+) -> None:
+    """统一发送层级完成的 SSE 事件
+
+    Args:
+        session_id: Session ID
+        layer: 完成的层级
+        phase: 当前阶段
+        reports: 报告数据
+        step_mode: 是否分步模式
+
+    Note:
+        checkpoint_saved 事件由 _trigger_planning_execution 在 checkpoint 持久化后发送，
+        此函数只发送 layer_completed 和 pause 事件。
+    """
+    sse_events = []
+
+    # 发送 layer_completed 事件
+    sse_events.append(create_layer_completed_event(
+        layer=layer,
+        phase=phase,
+        reports=reports,
+        pause_after_step=True,
+        previous_layer=layer,
+        session_id=session_id,
+    ))
+
+    # step_mode 下额外发送 pause 事件
+    if step_mode:
+        sse_events.append(create_pause_event(
+            previous_layer=layer,
+            step_mode=True,
+            session_id=session_id,
+        ))
+
+    SSEPublisher.send_events_batch(session_id, sse_events)
+    logger.info(f"[收集] Layer {layer} 发送 {len(sse_events)} 个 SSE 事件: {[e.get('type') for e in sse_events]}")
+
+
+async def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     收集当前层所有维度结果，推进到下一 phase
 
@@ -258,13 +289,20 @@ def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
     if layer_key not in completed_dimensions:
         completed_dimensions[layer_key] = []
 
-    # 合并结果
+    # 合并结果（带维度归属验证，防止跨层污染）
+    layer_dims = set(get_layer_dimensions(layer))
     for result in dimension_results:
         dim_key = result.get("dimension_key")
         if result.get("success") and dim_key:
-            reports[layer_key][dim_key] = result.get("result", "")
-            if dim_key not in completed_dimensions[layer_key]:
-                completed_dimensions[layer_key].append(dim_key)
+            # 维度归属验证：只处理属于当前层的维度
+            if dim_key in layer_dims:
+                reports[layer_key][dim_key] = result.get("result", "")
+                if dim_key not in completed_dimensions[layer_key]:
+                    completed_dimensions[layer_key].append(dim_key)
+            else:
+                # 记录跨层维度警告（用于调试）
+                dim_layer = get_dimension_layer(dim_key)
+                logger.debug(f"[收集] 跳过跨层维度: {dim_key} (属于 Layer {dim_layer}, 当前 Layer {layer})")
 
     # 检查是否完成当前层
     total_dims = get_layer_dimensions(layer)
@@ -299,73 +337,52 @@ def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
             current_metadata["version"] = current_metadata.get("version", 0) + 1
             updates["metadata"] = current_metadata
 
-            # 生成层级完成事件
-            sse_events = []
+            # 发送层级完成事件（checkpoint_saved 由 _trigger_planning_execution 发送）
             session_id = state.get("session_id", "")
-            # 使用当前 phase（不推进），前端通过 previous_layer 判断刚完成的层级
-            sse_events.append(create_layer_completed_event(
-                layer=layer,
-                phase=phase,  # 保持当前 phase，不推进
-                reports=reports,
-                pause_after_step=True,
-                previous_layer=layer,  # 前端依赖此字段
+            _send_layer_completion_events(
                 session_id=session_id,
-            ))
+                layer=layer,
+                phase=phase,
+                reports=reports,
+                step_mode=state.get("step_mode", False),
+            )
 
-            # step_mode 下生成暂停事件
-            if state.get("step_mode"):
-                sse_events.append(create_pause_event(
-                    previous_layer=layer,
-                    step_mode=True,
-                    session_id=session_id,
-                ))
-
-            # 立即发送事件（不走 emit_events 节点）
-            from ..utils.sse_publisher import SSEPublisher
-            SSEPublisher.send_events_batch(session_id, sse_events)
-            logger.info(f"[收集] 立即发送 {len(sse_events)} 个 SSE 事件: {[e.get('type') for e in sse_events]}")
-
-            # 返回空列表，避免事件被重复发送
             updates["sse_events"] = []
         elif layer == 3:
-            # Layer 3 完成时，直接进入 completed 状态（不需要暂停等待审查）
-            logger.info(f"[收集] Layer 3 完成，进入 completed 状态")
-            updates["phase"] = PlanningPhase.COMPLETED.value
-            updates["pause_after_step"] = False
-            updates["previous_layer"] = 0
+            # Layer 3 completion: also pause for review
+            logger.info(f"[collect] Layer 3 completed, setting pause for review")
+            updates["current_wave"] = 1
+            updates["pause_after_step"] = True
+            updates["previous_layer"] = layer
 
-            # 更新 metadata 中的进度
+            # Update metadata
             current_metadata = dict(state.get("metadata", {}))
             current_metadata["progress"] = 100
             current_metadata["version"] = current_metadata.get("version", 0) + 1
             updates["metadata"] = current_metadata
 
-            # 发送层级完成事件（不暂停）
+            # 发送层级完成事件（checkpoint_saved 由 _trigger_planning_execution 发送）
             session_id = state.get("session_id", "")
-            sse_events = []
-            sse_events.append(create_layer_completed_event(
-                layer=layer,
-                phase=PlanningPhase.COMPLETED.value,
-                reports=reports,
-                pause_after_step=False,
-                previous_layer=layer,
+            _send_layer_completion_events(
                 session_id=session_id,
-            ))
-            from ..utils.sse_publisher import SSEPublisher
-            SSEPublisher.send_events_batch(session_id, sse_events)
-            logger.info(f"[收集] Layer 3 完成，发送 {len(sse_events)} 个 SSE 事件")
+                layer=layer,
+                phase=phase,
+                reports=reports,
+                step_mode=state.get("step_mode", False),
+            )
+
             updates["sse_events"] = []
     else:
-        # 检查波次推进
-        current_wave = state.get("current_wave", 1)
-        total_waves = get_total_waves(layer)
-        wave_dims = get_wave_dimensions(layer, current_wave)
-        wave_completed = all(d in completed_dimensions.get(layer_key, []) for d in wave_dims)
+        # 层级未完成，检查波次推进
+        if layer in [2, 3]:
+            current_wave = state.get("current_wave", 1)
+            total_waves = get_total_waves(layer)
+            wave_dims = get_wave_dimensions(layer, current_wave)
+            wave_completed = all(d in completed_dimensions.get(layer_key, []) for d in wave_dims)
 
-        if wave_completed and current_wave < total_waves:
-            updates["current_wave"] = current_wave + 1
-            logger.info(f"[收集] 推进到 Wave {current_wave + 1}")
-
+            if wave_completed and current_wave < total_waves:
+                updates["current_wave"] = current_wave + 1
+                logger.info(f"[收集] 推进到 Wave {current_wave + 1}")
     return updates
 
 
@@ -415,7 +432,7 @@ def check_phase_completion(state: Dict[str, Any]) -> Literal["continue", "advanc
     检查当前阶段是否完成
 
     Returns:
-        "continue": 继续当前阶段
+        "continue": 继续执行下一维度/波次（自动回到 route_planning）
         "advance": 推进到下一阶段
         "complete": 规划完成
         "pause": 暂停等待审查

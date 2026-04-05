@@ -14,6 +14,7 @@ import { useSearchParams } from 'next/navigation';
 import { usePlanningStore } from '@/stores/planningStore';
 import { planningApi } from '@/lib/api';
 import { logger } from '@/lib/logger';
+import { transformBackendMessages } from '@/lib/utils/message-transform';
 
 interface UseSessionRestoreOptions {
   enabled?: boolean;
@@ -155,110 +156,6 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
     restoreSession,
     updateUrlWithTaskId,
   };
-}
-
-// Helper to transform backend messages to frontend format
-function transformBackendMessages(messages: unknown[]): import('@/types').Message[] {
-  return messages.map((msg: unknown) => {
-    const m = msg as Record<string, unknown>;
-    const baseMsg = {
-      id: (m.message_id as string) || `db-${m.id}`,
-      timestamp: new Date((m.created_at as string) || Date.now()),
-      role: (m.role || 'assistant') as 'user' | 'assistant' | 'system',
-      created_at: m.created_at as string | undefined,
-    };
-
-    const msgMeta = (m.message_metadata || m.metadata || {}) as Record<string, unknown>;
-
-    switch (m.message_type) {
-      case 'dimension_report':
-        return {
-          ...baseMsg,
-          type: 'dimension_report' as const,
-          layer: (msgMeta.layer as number) || 1,
-          dimensionKey: (msgMeta.dimensionKey as string) || '',
-          dimensionName: (msgMeta.dimensionName as string) || '',
-          content: (m.content as string) || '',
-          streamingState: (msgMeta.streamingState as 'streaming' | 'completed' | 'error') || 'completed',
-          wordCount: (msgMeta.wordCount as number) || ((m.content as string)?.length || 0),
-          previousContent: msgMeta.previousContent as string | undefined,
-          revisionVersion: msgMeta.revisionVersion as number | undefined,
-          isRevision: msgMeta.isRevision as boolean | undefined,
-        };
-
-      case 'layer_completed':
-        return {
-          ...baseMsg,
-          type: 'layer_completed' as const,
-          layer: (msgMeta.layer as number) || 1,
-          content: (m.content as string) || '',
-          summary: (msgMeta.summary as { word_count: number; key_points: string[] }) || { word_count: 0, key_points: [] },
-          fullReportContent: msgMeta.fullReportContent as string | undefined,
-          dimensionReports: msgMeta.dimensionReports as Record<string, string> | undefined,
-          actions: [],
-        };
-
-      case 'file':
-        return {
-          ...baseMsg,
-          type: 'file' as const,
-          filename: (msgMeta.filename as string) || '',
-          fileContent: (msgMeta.fileContent as string) || '',
-          fileSize: msgMeta.fileSize as number | undefined,
-          encoding: msgMeta.encoding as string | undefined,
-        };
-
-      case 'progress':
-        return {
-          ...baseMsg,
-          type: 'progress' as const,
-          content: (m.content as string) || '',
-          progress: (msgMeta.progress as number) || 0,
-          currentLayer: msgMeta.currentLayer as string | undefined,
-          taskId: msgMeta.taskId as string | undefined,
-        };
-
-      case 'tool_call':
-        return {
-          ...baseMsg,
-          type: 'tool_call' as const,
-          toolName: (msgMeta.toolName as string) || '',
-          toolDisplayName: (msgMeta.toolDisplayName as string) || '',
-          description: (msgMeta.description as string) || '',
-          estimatedTime: msgMeta.estimatedTime as number | undefined,
-          stage: msgMeta.stage as string | undefined,
-        };
-
-      case 'tool_progress':
-        return {
-          ...baseMsg,
-          type: 'tool_progress' as const,
-          toolName: (msgMeta.toolName as string) || '',
-          stage: (msgMeta.stage as string) || '',
-          progress: (msgMeta.progress as number) || 0,
-          message: (msgMeta.message as string) || '',
-        };
-
-      case 'tool_result':
-        return {
-          ...baseMsg,
-          type: 'tool_result' as const,
-          toolName: (msgMeta.toolName as string) || '',
-          status: (msgMeta.status as 'success' | 'error') || 'success',
-          summary: (msgMeta.summary as string) || '',
-          displayHints: msgMeta.displayHints as { primary_view?: 'text' | 'table' | 'map' | 'chart' | 'json'; priority_fields?: string[] } | undefined,
-          dataPreview: msgMeta.dataPreview as string | undefined,
-          stages: msgMeta.stages as { name: string; status: 'pending' | 'running' | 'success' | 'error'; progress: number; message: string }[] | undefined,
-        };
-
-      default:
-        return {
-          ...baseMsg,
-          type: 'text' as const,
-          content: (m.content as string) || '',
-        };
-    }
-  });
 }
 
 export default useSessionRestore;

@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 
 from backend.services import PlanningRuntimeService
+from src.orchestration.state import _phase_to_layer
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -35,17 +36,25 @@ async def list_checkpoints(project_name: str, session_id: Optional[str] = None):
             continue
 
         values = state_snapshot.values or {}
+        metadata = values.get("metadata", {})
 
         # Build checkpoint info
+        phase = values.get("phase", "init")
+        # Use existing _phase_to_layer; for "completed", show layer 3 (final report)
+        layer = _phase_to_layer(phase)
+        if layer is None:
+            layer = 3  # completed phase maps to layer 3 for UI display
+
         checkpoint = {
             "checkpoint_id": checkpoint_id,
             "project_name": project_name,
-            "phase": values.get("phase", "init"),
+            "phase": phase,
             "created_at": None,
+            "type": metadata.get("checkpoint_type", "regular"),
+            "layer": layer,
         }
 
         # Get timestamp from metadata
-        metadata = values.get("metadata", {})
         if metadata.get("last_signal_timestamp"):
             checkpoint["created_at"] = metadata["last_signal_timestamp"]
 

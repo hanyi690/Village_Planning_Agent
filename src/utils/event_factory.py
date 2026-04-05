@@ -64,15 +64,21 @@ def create_pause_event(
     previous_layer: int,
     step_mode: bool,
     session_id: Optional[str] = None,
+    checkpoint_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """创建暂停事件
 
     当层级完成且启用 step_mode 时发送，通知前端等待用户审查。
 
+    Note:
+        checkpoint_saved 事件由 _trigger_planning_execution 在 checkpoint 持久化后发送，
+        此事件不包含 checkpoint_id。前端应依赖 checkpoint_saved 事件创建 checkpoint。
+
     Args:
         previous_layer: 刚完成的层级编号
         step_mode: 是否启用分步执行模式
         session_id: 可选的 session ID
+        checkpoint_id: 不再使用，保留参数兼容性
 
     Returns:
         标准化的 pause 事件字典
@@ -80,13 +86,87 @@ def create_pause_event(
     return {
         "type": "pause",
         "current_layer": previous_layer,
-        "checkpoint_id": session_id,
+        "checkpoint_id": checkpoint_id,  # 不再 fallback 到 session_id
         "pause_after_step": True,
         "previous_layer": previous_layer,
         "step_mode": step_mode,
         "message": f"Layer {previous_layer} completed, waiting for review",
         "session_id": session_id,
         "task_id": session_id,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+
+def create_checkpoint_saved_event(
+    checkpoint_id: str,
+    layer: int,
+    phase: str,
+    session_id: str,
+    checkpoint_type: str = "key",
+    description: Optional[str] = None,
+    is_revision: bool = False,
+    revised_dimensions: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """创建检查点保存事件
+
+    当层级完成时发送，通知前端创建检查点标记。
+
+    Args:
+        checkpoint_id: LangGraph checkpoint ID
+        layer: 层级编号
+        phase: 当前阶段
+        session_id: Session ID
+        checkpoint_type: 检查点类型 ('key' 或 'regular')
+        description: 可选描述
+        is_revision: 是否是修订检查点
+        revised_dimensions: 修订的维度列表
+
+    Returns:
+        标准化的 checkpoint_saved 事件字典
+    """
+    event = {
+        "type": "checkpoint_saved",
+        "checkpoint_id": checkpoint_id,
+        "layer": layer,
+        "checkpoint_type": checkpoint_type,
+        "phase": phase,
+        "session_id": session_id,
+        "description": description or f"Layer {layer} checkpoint",
+        "timestamp": datetime.now().isoformat(),
+    }
+    if is_revision:
+        event["is_revision"] = True
+        event["revised_dimensions"] = revised_dimensions or []
+        event["description"] = description or f"Revision checkpoint (Layer {layer})"
+    return event
+
+
+def create_revision_completed_event(
+    layer: int,
+    revised_dimensions: List[str],
+    session_id: str,
+    previous_layer: Optional[int] = None,
+) -> Dict[str, Any]:
+    """创建修订完成事件
+
+    当维度修复完成时发送，通知前端修订已完成。
+
+    Args:
+        layer: 当前层级编号
+        revised_dimensions: 修订的维度列表
+        session_id: Session ID
+        previous_layer: 前一个层级编号
+
+    Returns:
+        标准化的 revision_completed 事件字典
+    """
+    return {
+        "type": "revision_completed",
+        "layer": layer,
+        "revised_dimensions": revised_dimensions,
+        "session_id": session_id,
+        "previous_layer": previous_layer or layer,
+        "pause_after_step": True,
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -135,6 +215,11 @@ def create_layer_started_event(
 
     Returns:
         标准化的 layer_started 事件字典
+
+    Note:
+        兼容性设计：同时发送 layer 和 layer_number 字段。
+        新代码优先使用 layer 字段，layer_number 保留向后兼容。
+        SSEManager 使用 event.get("layer") or event.get("layer_number") 回退逻辑。
     """
     return {
         "type": "layer_started",
@@ -194,6 +279,8 @@ def create_error_event(
 __all__ = [
     "create_layer_completed_event",
     "create_pause_event",
+    "create_checkpoint_saved_event",
+    "create_revision_completed_event",
     "create_dimension_delta_event",
     "create_layer_started_event",
     "create_completed_event",
