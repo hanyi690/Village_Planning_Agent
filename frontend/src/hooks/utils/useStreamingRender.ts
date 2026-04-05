@@ -231,6 +231,8 @@ export function useStreamingRender(
       if (timeoutId.current) {
         clearTimeout(timeoutId.current);
       }
+      // Clear buffers on unmount to prevent memory leaks
+      buffers.current.clear();
     };
   }, []);
 

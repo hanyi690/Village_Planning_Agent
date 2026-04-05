@@ -6,7 +6,7 @@
  * Use these to safely check message types before accessing type-specific properties.
  */
 
-import type { Message } from './message';
+import type { Message } from './index';
 import type {
   TextMessage,
   FileMessage,

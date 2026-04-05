@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage
 from .state import (
     PlanningPhase,
     get_layer_dimensions,
+    get_layer_name,
     get_wave_dimensions,
     get_total_waves,
     get_next_phase,
@@ -21,6 +22,7 @@ from .state import (
 )
 from .nodes.dimension_node import create_dimension_state, DIMENSION_NAMES
 from ..utils.logger import get_logger
+from ..utils.event_factory import create_layer_completed_event, create_pause_event
 
 logger = get_logger(__name__)
 
@@ -76,11 +78,55 @@ def route_by_phase(state: Dict[str, Any]) -> Union[List[Send], str]:
     Send API 实现：
     - 返回 List[Send]：并行执行多个维度
     - 返回 str：跳转到指定节点或 END
+
+    知识预加载：
+    - 检测 knowledge_cache 是否为空
+    - 如果为空，先进入 knowledge_preload 节点
+
+    恢复执行检测：
+    - 当 phase 推进到 layer2/3 且 previous_layer=0 时
+    - 表示用户刚批准，需要发送 layer_started
     """
     phase = state.get("phase", PlanningPhase.INIT.value)
     current_wave = state.get("current_wave", 1)
+    config = state.get("config", {})
+    knowledge_cache = config.get("knowledge_cache", {})
+    previous_layer = state.get("previous_layer", 0)
 
-    logger.info(f"[路由] 当前阶段: {phase}, 波次: {current_wave}")
+    logger.debug(f"[路由] 当前阶段: {phase}, 波次: {current_wave}, previous_layer={previous_layer}")
+
+    # 暂停状态优先检测
+    if state.get("pause_after_step", False):
+        logger.info("[路由] 检测到 pause_after_step=True，等待用户审查")
+        return END
+
+    layer = _phase_to_layer(phase)
+
+    # INIT 阶段需要推进到 layer1
+    if layer == 0:
+        logger.info("[路由] INIT 阶段，返回 advance_phase")
+        return "advance_phase"
+
+    # 恢复执行检测：phase 已推进但 previous_layer=0 表示刚批准
+    # 发送 layer_started 事件（Agent 自治原则）
+    if layer in [2, 3] and previous_layer == 0:
+        session_id = state.get("session_id", "")
+        if session_id:
+            from ..utils.sse_publisher import SSEPublisher
+            SSEPublisher.send_layer_start(
+                session_id=session_id,
+                layer=layer,
+                layer_name=get_layer_name(layer),
+                dimension_count=len(get_layer_dimensions(layer))
+            )
+            logger.info(f"[路由] 恢复执行，发送 layer_started for Layer {layer}")
+
+    # 知识预加载检测：如果缓存为空，先预加载
+    if not knowledge_cache:
+        layer = _phase_to_layer(phase)
+        if layer and layer in [1, 2, 3]:
+            logger.info(f"[路由] knowledge_cache 为空，进入预加载 (Layer {layer})")
+            return "knowledge_preload"
 
     # 特殊状态优先
     if state.get("need_revision"):
@@ -91,11 +137,8 @@ def route_by_phase(state: Dict[str, Any]) -> Union[List[Send], str]:
         logger.info("[路由] 已完成，结束")
         return END
 
-    if phase == PlanningPhase.INIT.value:
-        # 初始化阶段，开始 Layer 1
-        return _check_layer_completion(state, layer=1)
-
-    elif phase == PlanningPhase.LAYER1.value:
+    # Layer 1/2/3 路由
+    if phase == PlanningPhase.LAYER1.value:
         return _check_layer_completion(state, layer=1)
 
     elif phase == PlanningPhase.LAYER2.value:
@@ -126,7 +169,7 @@ def _check_layer_completion(state: Dict[str, Any], layer: int) -> Union[List[Sen
         logger.info(f"[路由] Layer {layer} 完成，推进到 {next_phase}")
         return "collect_results"
 
-    logger.info(f"[路由] Layer {layer}: {len(pending)} 个维度待执行")
+    logger.debug(f"[路由] Layer {layer}: {len(pending)} 个维度待执行")
     return [Send("analyze_dimension", create_dimension_state(d, state)) for d in pending]
 
 
@@ -170,7 +213,7 @@ def _route_wave_layer(state: Dict[str, Any], layer: int, current_wave: int) -> U
 
     # 执行当前波次的未完成维度
     pending_dims = [d for d in wave_dims if d not in completed]
-    logger.info(f"[路由] Layer {layer} Wave {current_wave}: {len(pending_dims)} 个维度待执行")
+    logger.debug(f"[路由] Layer {layer} Wave {current_wave}: {len(pending_dims)} 个维度待执行")
 
     return [
         Send("analyze_dimension", create_dimension_state(dim, state))
@@ -197,6 +240,16 @@ def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
     completed_dimensions = dict(state.get("completed_dimensions", {}))
 
     layer = _phase_to_layer(phase)
+
+    # Guard: completed 或未知阶段无对应层级
+    if layer is None:
+        logger.info(f"[收集] Phase {phase} 无对应层级，跳过结果收集")
+        return {
+            "dimension_results": [],
+            "reports": state.get("reports", {}),
+            "completed_dimensions": state.get("completed_dimensions", {}),
+        }
+
     layer_key = f"layer{layer}"
 
     # 初始化该层的报告
@@ -227,12 +280,81 @@ def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 检查是否需要推进波次或阶段
     if completed_count >= len(total_dims):
-        # 当前层完成，推进到下一阶段
-        next_phase = get_next_phase(phase)
-        if next_phase:
-            logger.info(f"[收集] {phase} 完成，推进到 {next_phase}")
-            updates["phase"] = next_phase
+        # 当前层完成
+        if layer and layer < 3:
+            # Layer 1/2 完成时，设置暂停等待用户审查
+            # ⚠️ 不推进 phase，保持当前阶段表示"刚完成，等待审查"
+            # approve 时才推进 phase 到下一阶段
+            logger.info(f"[收集] {phase} 完成，设置暂停等待审查（phase 保持不变）")
             updates["current_wave"] = 1
+
+            # 设置暂停状态（等待用户批准后才发送 layer_started）
+            updates["pause_after_step"] = True
+            updates["previous_layer"] = layer
+            logger.info(f"[收集] Layer {layer} 完成，设置 pause_after_step=True，phase={phase}")
+
+            # 更新 metadata 中的进度
+            current_metadata = dict(state.get("metadata", {}))
+            current_metadata["progress"] = (layer / 3) * 100
+            current_metadata["version"] = current_metadata.get("version", 0) + 1
+            updates["metadata"] = current_metadata
+
+            # 生成层级完成事件
+            sse_events = []
+            session_id = state.get("session_id", "")
+            # 使用当前 phase（不推进），前端通过 previous_layer 判断刚完成的层级
+            sse_events.append(create_layer_completed_event(
+                layer=layer,
+                phase=phase,  # 保持当前 phase，不推进
+                reports=reports,
+                pause_after_step=True,
+                previous_layer=layer,  # 前端依赖此字段
+                session_id=session_id,
+            ))
+
+            # step_mode 下生成暂停事件
+            if state.get("step_mode"):
+                sse_events.append(create_pause_event(
+                    previous_layer=layer,
+                    step_mode=True,
+                    session_id=session_id,
+                ))
+
+            # 立即发送事件（不走 emit_events 节点）
+            from ..utils.sse_publisher import SSEPublisher
+            SSEPublisher.send_events_batch(session_id, sse_events)
+            logger.info(f"[收集] 立即发送 {len(sse_events)} 个 SSE 事件: {[e.get('type') for e in sse_events]}")
+
+            # 返回空列表，避免事件被重复发送
+            updates["sse_events"] = []
+        elif layer == 3:
+            # Layer 3 完成时，直接进入 completed 状态（不需要暂停等待审查）
+            logger.info(f"[收集] Layer 3 完成，进入 completed 状态")
+            updates["phase"] = PlanningPhase.COMPLETED.value
+            updates["pause_after_step"] = False
+            updates["previous_layer"] = 0
+
+            # 更新 metadata 中的进度
+            current_metadata = dict(state.get("metadata", {}))
+            current_metadata["progress"] = 100
+            current_metadata["version"] = current_metadata.get("version", 0) + 1
+            updates["metadata"] = current_metadata
+
+            # 发送层级完成事件（不暂停）
+            session_id = state.get("session_id", "")
+            sse_events = []
+            sse_events.append(create_layer_completed_event(
+                layer=layer,
+                phase=PlanningPhase.COMPLETED.value,
+                reports=reports,
+                pause_after_step=False,
+                previous_layer=layer,
+                session_id=session_id,
+            ))
+            from ..utils.sse_publisher import SSEPublisher
+            SSEPublisher.send_events_batch(session_id, sse_events)
+            logger.info(f"[收集] Layer 3 完成，发送 {len(sse_events)} 个 SSE 事件")
+            updates["sse_events"] = []
     else:
         # 检查波次推进
         current_wave = state.get("current_wave", 1)
@@ -257,14 +379,29 @@ def emit_sse_events(state: Dict[str, Any]) -> Dict[str, Any]:
     session_id = state.get("session_id", "")
 
     if not sse_events:
+        logger.debug("[SSE-emit] 无事件需要发送")
         return {"sse_events": []}
+
+    # Log event details
+    event_types = [e.get("type", "unknown") for e in sse_events]
+    logger.info(f"[SSE-emit] session_id={session_id}, 准备发送 {len(sse_events)} 个事件: {event_types}")
+
+    # Check subscriber count before sending
+    try:
+        from backend.services.sse_manager import SSEManager
+        subscriber_count = SSEManager.get_subscriber_count(session_id)
+        logger.info(f"[SSE-emit] subscriber_count={subscriber_count} for session_id={session_id}")
+        if subscriber_count == 0:
+            logger.warning(f"[SSE-emit] 无订阅者，事件可能丢失！session_id={session_id}")
+    except Exception as e:
+        logger.warning(f"[SSE-emit] 无法获取订阅者数量: {e}")
 
     try:
         from ..utils.sse_publisher import SSEPublisher
         SSEPublisher.send_events_batch(session_id, sse_events)
-        logger.info(f"[SSE] 批量发送 {len(sse_events)} 个事件")
+        logger.info(f"[SSE-emit] 批量发送成功: {len(sse_events)} 个事件")
     except Exception as e:
-        logger.error(f"[SSE] 批量发送失败: {e}")
+        logger.error(f"[SSE-emit] 批量发送失败: {e}", exc_info=True)
 
     return {"sse_events": []}
 
@@ -273,7 +410,7 @@ def emit_sse_events(state: Dict[str, Any]) -> Dict[str, Any]:
 # 阶段推进检查
 # ==========================================
 
-def check_phase_completion(state: Dict[str, Any]) -> Literal["continue", "advance", "complete"]:
+def check_phase_completion(state: Dict[str, Any]) -> Literal["continue", "advance", "complete", "pause"]:
     """
     检查当前阶段是否完成
 
@@ -281,7 +418,13 @@ def check_phase_completion(state: Dict[str, Any]) -> Literal["continue", "advanc
         "continue": 继续当前阶段
         "advance": 推进到下一阶段
         "complete": 规划完成
+        "pause": 暂停等待审查
     """
+    # 暂停状态返回 pause
+    if state.get("pause_after_step", False):
+        logger.info("[完成检查] pause_after_step=True，返回 pause")
+        return "pause"
+
     phase = state.get("phase", PlanningPhase.INIT.value)
 
     if phase == PlanningPhase.COMPLETED.value:

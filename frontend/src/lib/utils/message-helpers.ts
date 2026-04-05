@@ -49,9 +49,8 @@ export function createSystemMessage(
     ...createBaseMessage('assistant'),
     type: 'text',
     content: `${prefix}${content}`,
-    _pendingStorage: true,  // 系统通知消息不应持久化到数据库
     created_at: createdAt,  // ✅ 添加 created_at 用于排序
-  } as TextMessage & { _pendingStorage: boolean; created_at: string };
+  } as TextMessage & { created_at: string };
 }
 
 /**

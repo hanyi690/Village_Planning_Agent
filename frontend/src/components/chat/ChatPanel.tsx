@@ -2,17 +2,24 @@
 
 /**
  * ChatPanel - Unified chat interface integrating messaging and progress display
- * Refactored to use PlanningProvider for state management (SSE-based)
+ * Refactored to use Zustand + Immer for state management
+ * Business logic extracted to hooks: usePlanningHandlers, useReviewActions
  */
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { usePlanningContext } from '@/providers/PlanningProvider';
-import { useStreamingRender } from '@/hooks/useStreamingRender';
-import { useThrottleCallback } from '@/hooks/useThrottleCallback';
-import type { Message, FileMessage, ProgressMessage, Checkpoint } from '@/types';
+import { usePlanningStore, usePlanningActions } from '@/stores';
+import { useStreamingRender } from '@/hooks/utils';
+import { useThrottleCallback } from '@/hooks/utils';
+import { usePlanningHandlers } from '@/hooks/planning';
+import type { Message, FileMessage, Checkpoint } from '@/types';
 import { planningApi, fileApi } from '@/lib/api';
-import { createBaseMessage, createSystemMessage, createErrorMessage, getErrorMessage } from '@/lib/utils';
+import {
+  createBaseMessage,
+  createSystemMessage,
+  createErrorMessage,
+  getErrorMessage,
+} from '@/lib/utils';
 import { logger } from '@/lib/logger';
 import SegmentedControl from '@/components/ui/SegmentedControl';
 import MessageList from './MessageList';
@@ -22,7 +29,7 @@ import ToolStatusPanel from './ToolStatusPanel';
 import DimensionSelector from './DimensionSelector';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faLayerGroup } from '@fortawesome/free-solid-svg-icons';
-import { getDimensionName, getDimensionsByLayer } from '@/config/dimensions';
+import { getDimensionName, getDimensionsByLayer, DIMENSION_NAMES } from '@/config/dimensions';
 import { PLANNING_DEFAULTS } from '@/config/planning';
 import {
   LAYER_OPTIONS_ARRAY,
@@ -30,7 +37,6 @@ import {
   LAYER_VALUE_MAP,
   LAYER_IDS,
   getLayerId,
-  MIN_SSE_DATA_CHARS,
   FILE_ACCEPT,
   isInputDisabled,
   getStatusBadge,
@@ -42,26 +48,33 @@ interface ChatPanelProps {
 }
 
 export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPanelProps) {
-  const { state, dispatch, actions } = usePlanningContext();
+  // Get state from Zustand store
+  const messages = usePlanningStore((state) => state.messages);
+  const status = usePlanningStore((state) => state.status);
+  const taskId = usePlanningStore((state) => state.taskId);
+  const villageFormData = usePlanningStore((state) => state.villageFormData);
+  const currentLayer = usePlanningStore((state) => state.currentLayer);
+  const isPaused = usePlanningStore((state) => state.isPaused);
+  const pendingReviewLayer = usePlanningStore((state) => state.pendingReviewLayer);
+  const progressPanelVisible = usePlanningStore((state) => state.progressPanelVisible);
+  const dimensionProgress = usePlanningStore((state) => state.dimensionProgress);
+  const executingDimensions = usePlanningStore((state) => state.executingDimensions);
+  const currentPhase = usePlanningStore((state) => state.currentPhase);
+  const completedDimensions = usePlanningStore((state) => state.completedDimensions);
+  const toolStatusMap = usePlanningStore((state) => state.toolStatuses);
+  const checkpoints = usePlanningStore((state) => state.checkpoints);
 
-  // Derive values from state
-  const messages = state.messages;
-  const status = state.status;
-  const taskId = state.taskId;
-  const villageFormData = state.villageFormData;
-  const currentLayer = state.currentLayer;
-  const isPaused = state.isPaused;
-  const pendingReviewLayer = state.pendingReviewLayer;
-  const progressPanelVisible = state.progressPanelVisible;
-  const dimensionProgress = state.dimensionProgress;
-  const executingDimensions = state.executingDimensions;
-  const currentPhase = state.currentPhase;
-  const completedLayers = useMemo(() => ({
-    1: state.completedDimensions.layer1.length > 0,
-    2: state.completedDimensions.layer2.length > 0,
-    3: state.completedDimensions.layer3.length > 0,
-  }), [state.completedDimensions]);
-  const toolStatusMap = state.toolStatuses;
+  // Get actions
+  const actions = usePlanningActions();
+
+  const completedLayers = useMemo(
+    () => ({
+      1: completedDimensions.layer1.length > 0,
+      2: completedDimensions.layer2.length > 0,
+      3: completedDimensions.layer3.length > 0,
+    }),
+    [completedDimensions]
+  );
 
   const [inputText, setInputText] = useState('');
   const [selectedDimensions, setSelectedDimensions] = useState<string[]>([]);
@@ -76,17 +89,8 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   // Track typing timeout for cleanup
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Track layer report message creation state
-  const layerReportCreatedRef = useRef<Record<number, boolean>>({});
-
-  // Track layer progress message creation state
-  const layerProgressCreatedRef = useRef<Record<number, boolean>>({});
-
   // SSE connection state tracking ref
   const sseConnectedRef = useRef(false);
-
-  // Debounce tracking for REST API calls
-  const restoringLayersRef = useRef<Set<number>>(new Set());
 
   // Dimension content cache (for streaming render) - optimized: use Record instead of Map
   const [dimensionContents, setDimensionContents] = useState<Record<string, string>>({});
@@ -108,193 +112,195 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     }
   );
 
-  // Throttle setDimensionStreaming
+  // Throttle setDimensionStreaming - use getState() for stable reference
   const throttledSetDimensionStreaming = useThrottleCallback(
     (layer: number, dimensionKey: string, dimensionName: string) => {
-      dispatch({ type: 'SET_DIMENSION_STREAMING', layer, dimensionKey, dimensionName });
+      usePlanningStore.getState().setDimensionStreaming(layer, dimensionKey, dimensionName);
     },
     300
   );
 
+  // Define showViewer before usePlanningHandlers initialization
+  const showViewer = useCallback(() => {
+    usePlanningStore.getState().setViewerVisible(true);
+  }, []);
+
+  // Initialize usePlanningHandlers hook with streaming callbacks
+  const planningHandlers = usePlanningHandlers({
+    addToken,
+    completeDimension,
+    flushBatch,
+    throttledSetDimensionStreaming,
+    showViewer,
+  });
+
   // Rate limit error tracking
   const [rateLimitError, setRateLimitError] = useState<{ projectName: string } | null>(null);
 
-  // Tool status handlers (dispatch to PlanningProvider)
-  const handleToolCall = useCallback((data: {
-    toolName: string;
-    toolDisplayName: string;
-    description: string;
-    estimatedTime?: number;
-    stage?: string;
-  }) => {
-    dispatch({
-      type: 'SET_TOOL_STATUS',
-      toolName: data.toolName,
-      status: {
+  // Tool status handlers - use getState() for stable references
+  const handleToolCall = useCallback(
+    (data: {
+      toolName: string;
+      toolDisplayName: string;
+      description: string;
+      estimatedTime?: number;
+      stage?: string;
+    }) => {
+      usePlanningStore.getState().setToolStatus(data.toolName, {
         toolName: data.toolName,
         status: 'running',
         stage: data.stage,
         message: data.description,
-      },
-    });
-  }, [dispatch]);
+      });
+    },
+    []
+  );
 
-  const handleToolProgress = useCallback((data: {
-    toolName: string;
-    stage: string;
-    progress: number;
-    message: string;
-  }) => {
-    const existing = toolStatusMap[data.toolName];
-    if (existing) {
-      dispatch({
-        type: 'SET_TOOL_STATUS',
-        toolName: data.toolName,
-        status: {
+  const handleToolProgress = useCallback(
+    (data: { toolName: string; stage: string; progress: number; message: string }) => {
+      const state = usePlanningStore.getState();
+      const existing = state.toolStatuses[data.toolName];
+      if (existing) {
+        state.setToolStatus(data.toolName, {
           ...existing,
           stage: data.stage,
           progress: data.progress,
           message: data.message,
-        },
-      });
-    }
-  }, [dispatch, toolStatusMap]);
+        });
+      }
+    },
+    []
+  );
 
-  const handleToolResult = useCallback((data: {
-    toolName: string;
-    status: 'success' | 'error';
-    summary: string;
-    displayHints?: {
-      primary_view?: 'text' | 'table' | 'map' | 'chart' | 'json';
-      priority_fields?: string[];
-    };
-    dataPreview?: string;
-  }) => {
-    const existing = toolStatusMap[data.toolName];
-    if (existing) {
-      dispatch({
-        type: 'SET_TOOL_STATUS',
-        toolName: data.toolName,
-        status: {
+  const handleToolResult = useCallback(
+    (data: {
+      toolName: string;
+      status: 'success' | 'error';
+      summary: string;
+      displayHints?: {
+        primary_view?: 'text' | 'table' | 'map' | 'chart' | 'json';
+        priority_fields?: string[];
+      };
+      dataPreview?: string;
+    }) => {
+      const state = usePlanningStore.getState();
+      const existing = state.toolStatuses[data.toolName];
+      if (existing) {
+        state.setToolStatus(data.toolName, {
           ...existing,
           status: data.status,
           summary: data.summary,
-        },
-      });
-    }
-  }, [dispatch, toolStatusMap]);
+        });
+      }
+    },
+    []
+  );
 
-  // Helper functions for message operations
-  const addMessage = useCallback((message: Message) => {
-    dispatch({ type: 'ADD_MESSAGE', message });
-  }, [dispatch]);
+  // Helper functions for message operations - use getState() for stable references
+  const addMessage = useCallback(
+    (message: Message) => {
+      usePlanningStore.getState().addMessage(message);
+    },
+    []
+  );
 
-  const setMessages = useCallback((messagesOrUpdater: Message[] | ((prev: Message[]) => Message[])) => {
-    if (typeof messagesOrUpdater === 'function') {
-      const newMessages = messagesOrUpdater(state.messages);
-      dispatch({ type: 'SET_MESSAGES', messages: newMessages });
-    } else {
-      dispatch({ type: 'SET_MESSAGES', messages: messagesOrUpdater });
-    }
-  }, [dispatch, state.messages]);
-
-  const showViewer = useCallback(() => {
-    dispatch({ type: 'SET_VIEWER_VISIBLE', visible: true });
-  }, [dispatch]);
-
-  const syncMessageToBackend = useCallback((message: Message) => {
-    // Handled by PlanningProvider when adding messages
-    console.log('[ChatPanel] Message synced:', message.id);
-  }, []);
+  const setMessages = useCallback(
+    (messagesOrUpdater: Message[] | ((prev: Message[]) => Message[])) => {
+      const state = usePlanningStore.getState();
+      if (typeof messagesOrUpdater === 'function') {
+        const newMessages = messagesOrUpdater(state.messages);
+        state.setMessages(newMessages);
+      } else {
+        state.setMessages(messagesOrUpdater);
+      }
+    },
+    []
+  );
 
   const startPlanning = actions.startPlanning;
 
-  // Additional helper functions
-  const setDimensionCompleted = useCallback((layer: number, dimensionKey: string, wordCount: number) => {
-    dispatch({ type: 'SET_DIMENSION_COMPLETED', layer, dimensionKey, wordCount });
-  }, [dispatch]);
+  const setProgressPanelVisible = useCallback(
+    (visible: boolean) => {
+      usePlanningStore.getState().setProgressPanelVisible(visible);
+    },
+    []
+  );
 
-  const setUILayerCompleted = useCallback((layer: number, completed: boolean) => {
-    dispatch({ type: 'SET_LAYER_COMPLETED', layer, completed });
-  }, [dispatch]);
+  const setIsPaused = useCallback(
+    (paused: boolean) => {
+      usePlanningStore.getState().setPaused(paused);
+    },
+    []
+  );
 
-  const setCurrentLayerAndPhase = useCallback((layer: number) => {
-    dispatch({ type: 'SET_DIMENSION_STREAMING', layer, dimensionKey: '', dimensionName: '' });
-  }, [dispatch]);
+  const setPendingReviewLayer = useCallback(
+    (layer: number | null) => {
+      usePlanningStore.getState().setPendingReviewLayer(layer);
+    },
+    []
+  );
 
-  const setProgressPanelVisible = useCallback((visible: boolean) => {
-    // Not directly supported in PlanningProvider yet - placeholder
-    console.log('[ChatPanel] setProgressPanelVisible:', visible);
-  }, []);
+  const setCheckpoints = useCallback(
+    (checkpointsOrUpdater: Checkpoint[] | ((prev: Checkpoint[]) => Checkpoint[])) => {
+      const state = usePlanningStore.getState();
+      if (typeof checkpointsOrUpdater === 'function') {
+        const newCheckpoints = checkpointsOrUpdater(state.checkpoints);
+        state.setCheckpoints(newCheckpoints);
+      } else {
+        state.setCheckpoints(checkpointsOrUpdater);
+      }
+    },
+    []
+  );
 
-  const setIsPaused = useCallback((paused: boolean) => {
-    dispatch({ type: 'SET_PAUSED', paused });
-  }, [dispatch]);
+  const syncBackendState = useCallback(
+    (
+      backendData: Partial<{
+        status: string;
+        previous_layer: number;
+        current_layer: number;
+        layer_1_completed: boolean;
+        layer_2_completed: boolean;
+        layer_3_completed: boolean;
+        last_checkpoint_id: string;
+        phase: string;
+        version: number;
+      }>
+    ) => {
+      usePlanningStore.getState().syncBackendState(backendData);
+    },
+    []
+  );
 
-  const setPendingReviewLayer = useCallback((layer: number | null) => {
-    dispatch({ type: 'SET_PENDING_REVIEW_LAYER', layer });
-  }, [dispatch]);
-
-  const setLayerReports = useCallback((reports: Partial<{
-    analysis_reports: Record<string, string>;
-    concept_reports: Record<string, string>;
-    detail_reports: Record<string, string>;
-    analysis_report_content: string;
-    concept_report_content: string;
-    detail_report_content: string;
-  }>) => {
-    const newReports: Partial<{
-      layer1: Record<string, string>;
-      layer2: Record<string, string>;
-      layer3: Record<string, string>;
-    }> = {};
-    if (reports.analysis_reports) newReports.layer1 = reports.analysis_reports;
-    if (reports.concept_reports) newReports.layer2 = reports.concept_reports;
-    if (reports.detail_reports) newReports.layer3 = reports.detail_reports;
-    dispatch({ type: 'SET_REPORTS', reports: newReports });
-  }, [dispatch]);
-
-  const setCheckpoints = useCallback((checkpointsOrUpdater: Checkpoint[] | ((prev: Checkpoint[]) => Checkpoint[])) => {
-    if (typeof checkpointsOrUpdater === 'function') {
-      const newCheckpoints = checkpointsOrUpdater(state.checkpoints);
-      dispatch({ type: 'SET_CHECKPOINTS', checkpoints: newCheckpoints });
-    } else {
-      dispatch({ type: 'SET_CHECKPOINTS', checkpoints: checkpointsOrUpdater });
-    }
-  }, [dispatch, state.checkpoints]);
-
-  const syncBackendState = useCallback((backendData: Partial<{
-    status: string;
-    previous_layer: number;
-    current_layer: number;
-    layer_1_completed: boolean;
-    layer_2_completed: boolean;
-    layer_3_completed: boolean;
-    last_checkpoint_id: string;
-    phase: string;
-    version: number;
-  }>) => {
-    dispatch({ type: 'SYNC_BACKEND_STATE', backendData });
-  }, [dispatch]);
-
-  const showFileViewer = useCallback((file: FileMessage) => {
-    dispatch({ type: 'SET_VIEWING_FILE', file });
-  }, [dispatch]);
+  const showFileViewer = useCallback(
+    (file: FileMessage) => {
+      usePlanningStore.getState().setViewingFile(file);
+    },
+    []
+  );
 
   // Derive taskState-like object for compatibility
-  const taskState = useMemo(() => ({
-    status: state.status,
-    current_layer: state.currentLayer ?? undefined,
-    previous_layer: undefined as number | undefined,
-    layer_1_completed: completedLayers[1],
-    layer_2_completed: completedLayers[2],
-    layer_3_completed: completedLayers[3],
-    pause_after_step: state.isPaused,
-    last_checkpoint_id: state.selectedCheckpoint ?? undefined,
-    execution_error: null,
-    execution_complete: completedLayers[1] && completedLayers[2] && completedLayers[3],
-    progress: null,
-  }), [state, completedLayers]);
+  const taskState = useMemo(
+    () => ({
+      status: status,
+      current_layer: currentLayer ?? undefined,
+      previous_layer: undefined as number | undefined,
+      layer_1_completed: completedLayers[1],
+      layer_2_completed: completedLayers[2],
+      layer_3_completed: completedLayers[3],
+      pause_after_step: isPaused,
+      last_checkpoint_id: usePlanningStore.getState().selectedCheckpoint ?? undefined,
+      execution_error: null,
+      execution_complete: completedLayers[1] && completedLayers[2] && completedLayers[3],
+      progress: null,
+    }),
+    [
+      status,
+      currentLayer,
+      isPaused,
+      completedLayers,
+    ]
+  );
 
   // Action shortcuts for review handlers
   const approve = actions.approve;
@@ -327,479 +333,28 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     [setMessages]
   );
 
-  // 维度级流式回调
-  // 🔧 使用批处理 Hook + throttle 减少高频事件的 React 重渲染压力
-  const handleDimensionDelta = useCallback(
-    (dimensionKey: string, delta: string, accumulated: string, layer?: number) => {
-      const layerNum = layer || currentLayer || 1;
+  // 维度级流式回调 - 使用 usePlanningHandlers hook
+  const handleDimensionDelta = planningHandlers.handleDimensionDelta;
+  const handleDimensionComplete = planningHandlers.handleDimensionComplete;
 
-      // 🔧 FIX: 将 layerNum 传递给 addToken，解决闭包陷阱问题
-      addToken(dimensionKey, delta, accumulated, layerNum);
-
-      // 🔧 throttle 更新进度面板状态，减少渲染频率
-      throttledSetDimensionStreaming(layerNum, dimensionKey, getDimensionName(dimensionKey));
-    },
-    [currentLayer, throttledSetDimensionStreaming, addToken]
-  );
-
-  const handleDimensionComplete = useCallback(
-    (dimensionKey: string, dimensionName: string, fullContent: string, layer?: number) => {
-      const layerNum = layer || currentLayer || 1;
-
-      // 🔧 FIX: 将 layerNum 传递给 completeDimension，解决闭包陷阱问题
-      completeDimension(dimensionKey, layerNum);
-
-      // 更新维度内容缓存（使用完整内容覆盖）
-      setDimensionContents((prev) => {
-        const key = `${layerNum}_${dimensionKey}`;
-        return { ...prev, [key]: fullContent };
-      });
-
-      // 更新消息状态为完成（如果消息存在）
-      const messageId = `dimension_${layerNum}_${dimensionKey}`;
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === messageId
-            ? {
-                ...msg,
-                content: fullContent,
-                wordCount: fullContent.length,
-                streamingState: 'completed' as const,
-              }
-            : msg
-        )
-      );
-
-      // 更新进度面板状态：标记维度完成
-      setDimensionCompleted(layerNum, dimensionKey, fullContent.length);
-
-      console.log(`[ChatPanel] Dimension complete: ${dimensionKey} (${fullContent.length} chars)`);
-    },
-    [setMessages, currentLayer, setDimensionCompleted, completeDimension]
-  );
-
+  // 层级进度回调（保留简单日志）
   const handleLayerProgress = useCallback((layer: number, completed: number, total: number) => {
-    // 可以更新进度条
     console.log(`[ChatPanel] Layer ${layer} progress: ${completed}/${total}`);
   }, []);
 
-  // ✅ Signal-Fetch Pattern: 层级完成后的数据拉取函数
-  const fetchLayerReportsFromBackend = useCallback(
-    async (
-      layer: number
-    ): Promise<{
-      reports: Record<string, string>;
-      reportContent: string;
-    } | null> => {
-      if (!taskId) {
-        console.warn('[ChatPanel] No taskId, cannot fetch layer reports');
-        return null;
-      }
+  // 层级完成回调 - 使用 usePlanningHandlers hook
+  const handleLayerCompleted = planningHandlers.handleLayerCompleted;
 
-      // 🔧 新增：记录调用开始时间
-      const startTime = Date.now();
-      console.log(
-        `[ChatPanel] 📡 REST API 调用开始: GET /layer/${layer}/reports, taskId=${taskId}`
-      );
+  // 层级数据恢复 - 使用 usePlanningHandlers hook
+  const restoreLayerData = planningHandlers.restoreLayerData;
 
-      try {
-        const response = await planningApi.getLayerReports(taskId, layer);
+  // 层级开始回调 - 使用 usePlanningHandlers hook
+  const handleLayerStarted = planningHandlers.handleLayerStarted;
 
-        // 🔧 新增：记录调用耗时
-        const elapsed = Date.now() - startTime;
+  // 获取层级报告的函数引用 - 来自 usePlanningHandlers hook
+  const fetchLayerReportsFromBackend = planningHandlers.fetchLayerReportsFromBackend;
 
-        // ✅ 增强调试日志：追踪 REST API 返回数据的完整性
-        const reportKeys = Object.keys(response.reports || {});
-        const reportsWithContent = reportKeys.filter(
-          (k) => response.reports[k] && response.reports[k].length > 0
-        );
-
-        console.log(`[ChatPanel] ✅ REST API 响应成功: Layer ${layer}, 耗时=${elapsed}ms`, {
-          dimensionCount: response.stats.dimension_count,
-          totalChars: response.stats.total_chars,
-          completed: response.completed,
-          reportKeysCount: reportKeys.length,
-          reportsWithContentCount: reportsWithContent.length,
-          reportKeys: reportKeys,
-        });
-
-        // ✅ 检查数据完整性
-        if (reportsWithContent.length === 0) {
-          console.warn(`[ChatPanel] ⚠️ REST API 返回的维度报告内容全为空！`);
-        } else if (reportsWithContent.length < reportKeys.length) {
-          console.warn(
-            `[ChatPanel] ⚠️ REST API 返回的维度报告部分为空: ${reportKeys.length - reportsWithContent.length} 个维度`
-          );
-        }
-
-        return {
-          reports: response.reports,
-          reportContent: response.report_content,
-        };
-      } catch (error) {
-        console.error(`[ChatPanel] Failed to fetch layer ${layer} reports:`, error);
-        return null;
-      }
-    },
-    [taskId]
-  );
-
-  const handleLayerCompleted = useCallback(
-    async (layer: number, reportContent: string, dimensionReports: Record<string, string>) => {
-      // 🔧 强制刷新所有批处理事件，确保流式数据完整
-      flushBatch();
-
-      console.log(`[ChatPanel] Layer ${layer} completed signal received (SSE data)`, {
-        reportLength: reportContent?.length || 0,
-        dimensionCount: Object.keys(dimensionReports || {}).length,
-      });
-
-      // ✅ 调试日志：追踪 dimensionContents 当前状态
-      const currentLayerContents: string[] = [];
-      Object.entries(dimensionContents).forEach(([key, content]) => {
-        const parts = key.split('_');
-        if (parts.length >= 2) {
-          const keyLayer = parseInt(parts[0], 10);
-          if (keyLayer === layer) {
-            currentLayerContents.push(`${key}: ${content.length} chars`);
-          }
-        }
-      });
-      console.log(`[ChatPanel] dimensionContents 中 Layer ${layer} 的数据:`, {
-        count: currentLayerContents.length,
-        details: currentLayerContents,
-      });
-
-      // ✅ 优化：优先使用 SSE 携带的 dimension_reports 数据
-      // SSE 已携带完整维度数据，避免 Signal-Fetch 模式的 REST API 延迟
-      let finalReports: Record<string, string> = {};
-      let finalReportContent = reportContent;
-
-      // 优先检查 SSE 携带的维度数据是否完整
-      const sseDataComplete = dimensionReports && Object.keys(dimensionReports).length > 0;
-      const sseTotalChars = sseDataComplete
-        ? Object.values(dimensionReports).reduce((sum, c) => sum + (c?.length || 0), 0)
-        : 0;
-
-      if (sseDataComplete && sseTotalChars > MIN_SSE_DATA_CHARS) {
-        // SSE 数据完整，直接使用，无需 REST API 调用
-        finalReports = dimensionReports;
-        console.log(`[ChatPanel] Using SSE data directly: ${Object.keys(finalReports).length} dimensions, ${sseTotalChars} chars`);
-        Object.entries(finalReports).forEach(([key, content]) => {
-          console.log(`[ChatPanel]   - ${key}: ${content?.length || 0} chars`);
-        });
-      } else {
-        // SSE 数据不完整，调用 REST API 作为兜底
-        console.log(`[ChatPanel] SSE data incomplete, fetching from REST API...`);
-
-        // 尝试从后端获取完整数据
-        const backendData = await fetchLayerReportsFromBackend(layer);
-
-        if (backendData && backendData.reports && Object.keys(backendData.reports).length > 0) {
-          // 使用后端 REST API 返回的完整数据
-          finalReports = backendData.reports;
-          finalReportContent = backendData.reportContent;
-
-          // ✅ 详细日志：追踪每个维度的内容长度
-          console.log(
-            `[ChatPanel] Using REST API data: ${Object.keys(finalReports).length} dimensions, ${finalReportContent?.length || 0} chars`
-          );
-          Object.entries(finalReports).forEach(([key, content]) => {
-            console.log(`[ChatPanel]   - ${key}: ${content?.length || 0} chars`);
-          });
-        } else {
-          // 最后回退：合并 dimensionContents（流式累积数据）
-          console.log(`[ChatPanel] REST API failed, falling back to dimensionContents merge`);
-
-          Object.entries(dimensionContents).forEach(([key, content]) => {
-            const parts = key.split('_');
-            if (parts.length >= 2) {
-              const keyLayer = parseInt(parts[0], 10);
-              const dimKey = parts.slice(1).join('_');
-
-              if (keyLayer === layer && content && content.length > 0) {
-                const existingContent = finalReports[dimKey] || '';
-                if (content.length > existingContent.length) {
-                  finalReports[dimKey] = content;
-                }
-              }
-            }
-          });
-
-          // 重新生成报告内容
-          const fallbackTotalChars = Object.values(finalReports).reduce(
-            (sum, c) => sum + (c?.length || 0),
-            0
-          );
-          finalReportContent = Object.entries(finalReports)
-            .map(([key, content]) => `## ${getDimensionName(key)}\n\n${content}`)
-            .join('\n\n---\n\n');
-          console.log(`[ChatPanel] Fallback generated: ${fallbackTotalChars} chars`);
-        }
-      }
-
-      const finalWordCount = Object.values(finalReports).reduce(
-        (sum, c) => sum + (c?.length || 0),
-        0
-      );
-
-      // ✅ 调试日志：追踪最终数据的完整性
-      const finalReportDetails = Object.entries(finalReports).map(
-        ([key, content]) => `${key}: ${content?.length || 0} chars`
-      );
-      console.log(`[ChatPanel] Layer ${layer} 最终数据:`, {
-        dimensionCount: Object.keys(finalReports).length,
-        totalChars: finalWordCount,
-        details: finalReportDetails,
-      });
-
-      // ✅ 更新层级完成状态
-      setUILayerCompleted(layer, true);
-
-      // 🔧 同步 Layer 报告内容到 Context（用于侧边栏显示）
-      if (layer === 1) {
-        setLayerReports({
-          analysis_reports: finalReports,
-          analysis_report_content: finalReportContent,
-        });
-      } else if (layer === 2) {
-        setLayerReports({
-          concept_reports: finalReports,
-          concept_report_content: finalReportContent,
-        });
-      } else if (layer === 3) {
-        setLayerReports({
-          detail_reports: finalReports,
-          detail_report_content: finalReportContent,
-        });
-      }
-      console.log(`[ChatPanel] Synced Layer ${layer} reports to Context`);
-
-      const layerReportId = `layer_report_${layer}`;
-
-      // ✅ 关键修复：使用 ref 检查而不是 messages.some()，解决 React 闭包陷阱问题
-      // handleLayerStarted 已创建空消息并设置 ref 标记
-      const hasLayerReport = layerReportCreatedRef.current[layer] || false;
-
-      console.log(
-        `[ChatPanel] Layer ${layer} completed - hasLayerReport (ref): ${hasLayerReport}, messages.some: ${messages.some((m) => m.id === layerReportId)}`
-      );
-
-      if (!hasLayerReport) {
-        // 创建 LayerReportMessage（首次创建路径）
-        const newMsg = {
-          ...createBaseMessage('assistant'),
-          id: layerReportId,
-          type: 'layer_completed' as const,
-          layer: layer,
-          content: finalReportContent,
-          summary: {
-            word_count: finalWordCount as number,
-            key_points: [],
-            dimension_count: Object.keys(finalReports).length,
-          },
-          fullReportContent: finalReportContent,
-          dimensionReports: finalReports,
-          actions: [
-            {
-              id: 'view_details',
-              label: '查看详情',
-              action: 'view' as const,
-              onClick: () => {
-                showViewer();
-              },
-            },
-          ],
-        };
-
-        addMessage(newMsg);
-
-        // ✅ 关键修复：首次创建路径也需要显式调用 syncMessageToBackend
-        // 虽然没有 _pendingStorage 标记，但为了确保存储成功，显式调用更可靠
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        syncMessageToBackend(newMsg as any);
-        console.log(
-          `[ChatPanel] Created and synced layer_report_${layer} to backend (first creation), wordCount=${finalWordCount}`
-        );
-
-        // 更新 ref 标记
-        layerReportCreatedRef.current[layer] = true;
-      } else {
-        // 更新现有消息（从 handleLayerStarted 创建的空消息更新为完整数据）
-        setMessages((prev) => {
-          const updated = prev.map((msg) => {
-            if (msg.id === layerReportId && msg.type === 'layer_completed') {
-              // ✅ 关键修复：移除 _pendingStorage 标记，确保数据被存储
-              // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any
-              const { _pendingStorage: _unused, ...rest } = msg as any;
-              return {
-                ...rest,
-                content: finalReportContent,
-                fullReportContent: finalReportContent,
-                dimensionReports: finalReports,
-                summary: {
-                  word_count: finalWordCount as number,
-                  key_points: msg.summary?.key_points || [],
-                  dimension_count: Object.keys(finalReports).length,
-                },
-              };
-            }
-            return msg;
-          });
-
-          // 存储完整数据到数据库
-          const updatedMsg = updated.find((m) => m.id === layerReportId);
-          if (updatedMsg) {
-            // ✅ 关键修复：显式调用 syncMessageToBackend 存储完整数据
-            syncMessageToBackend(updatedMsg);
-            console.log(
-              `[ChatPanel] Synced completed layer_report_${layer} to backend, wordCount=${finalWordCount}`
-            );
-          }
-
-          return updated;
-        });
-      }
-    },
-    [
-      messages,
-      addMessage,
-      setMessages,
-      showViewer,
-      syncMessageToBackend,
-      dimensionContents,
-      fetchLayerReportsFromBackend,
-      flushBatch,
-      setUILayerCompleted,
-      setLayerReports,
-    ]
-  );
-
-  // 统一层级数据恢复函数 - 消除 handleConnected 和 useEffect 中的重复逻辑
-  const restoreLayerData = useCallback(
-    async (layer: number) => {
-      if (!completedLayers[layer as 1 | 2 | 3]) return;
-
-      // 防抖检查 - 避免重复调用同一 layer
-      if (restoringLayersRef.current.has(layer)) {
-        console.log(`[ChatPanel] Layer ${layer} restoration in progress, skipping`);
-        return;
-      }
-
-      const layerReportId = `layer_report_${layer}`;
-      const existingMsg = messages.find((m) => m.id === layerReportId);
-      if (
-        existingMsg &&
-        'fullReportContent' in existingMsg &&
-        (existingMsg.fullReportContent ?? '').length > 0
-      ) {
-        return;
-      }
-
-      restoringLayersRef.current.add(layer);
-      try {
-        const backendData = await fetchLayerReportsFromBackend(layer);
-        if (backendData?.reports && Object.keys(backendData.reports).length > 0) {
-          await handleLayerCompleted(layer, backendData.reportContent, backendData.reports);
-          console.log(`[ChatPanel] Layer ${layer} data restored successfully`);
-        }
-      } catch (error) {
-        console.error(`[ChatPanel] Layer ${layer} restore failed:`, error);
-      } finally {
-        restoringLayersRef.current.delete(layer);
-      }
-    },
-    [completedLayers, messages, fetchLayerReportsFromBackend, handleLayerCompleted]
-  );
-
-  // 新增：处理层级开始事件 - 创建空的 LayerReportMessage（预填充维度槽位）
-  // 使用函数式更新 + ref 双重检查，确保消息不会被重复创建或跳过
-  const handleLayerStarted = useCallback(
-    (layer: number, layerName: string) => {
-      console.log(
-        `[ChatPanel] 🚀 handleLayerStarted 被调用: Layer ${layer}, layerName="${layerName}"`
-      );
-
-      // 更新当前层级和阶段（用于 ProgressPanel 显示）
-      setCurrentLayerAndPhase(layer);
-
-      // 创建层级报告消息（预填充维度槽位，等待流式更新）
-      const layerReportId = `layer_report_${layer}`;
-
-      // 🔧 关键修复：使用函数式更新，在 setMessages 回调中检查消息是否存在
-      // 这样避免了 React 状态闭包问题和 ref 过早设置的问题
-      setMessages((prev) => {
-        // 在回调中检查消息是否已存在
-        const exists = prev.some((m) => m.id === layerReportId);
-
-        if (exists) {
-          console.log(`[ChatPanel] Layer ${layer} 占位消息已存在，跳过创建`);
-          return prev; // 消息已存在，不做任何修改
-        }
-
-        // 创建新的占位消息
-        const dimensionKeys = getDimensionsByLayer(layer);
-        const emptyDimensionReports: Record<string, string> = {};
-        dimensionKeys.forEach((key) => {
-          emptyDimensionReports[key] = ''; // 空字符串，等待流式填充
-        });
-
-        console.log(
-          `[ChatPanel] ✅ 创建 Layer ${layer} 占位消息，${dimensionKeys.length} 个维度槽位`
-        );
-
-        // 更新 ref 标记
-        layerReportCreatedRef.current[layer] = true;
-
-        const newMsg = {
-          ...createBaseMessage('assistant'),
-          id: layerReportId,
-          type: 'layer_completed' as const,
-          layer: layer,
-          content: '',
-          summary: {
-            word_count: 0,
-            key_points: [],
-            dimension_count: dimensionKeys.length,
-          },
-          fullReportContent: '',
-          dimensionReports: emptyDimensionReports,
-          actions: [],
-          _pendingStorage: true,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any;
-
-        return [...prev, newMsg];
-      });
-
-      // 🔧 修复：添加层级开始提示消息（使用函数式更新避免闭包问题）
-      setMessages((prev) => {
-        const progressId = `progress_layer_${layer}`;
-        const hasProgress = prev.some((m) => m.id === progressId && m.type === 'progress');
-
-        if (hasProgress) {
-          return prev;
-        }
-
-        return [
-          ...prev,
-          {
-            ...createBaseMessage(),
-            id: progressId,
-            type: 'progress',
-            role: 'assistant',
-            content: `Executing Layer ${layer}: ${LAYER_VALUE_MAP[layer] || layerName}...`,
-            progress: 0,
-          } as ProgressMessage,
-        ];
-      });
-
-      // 更新进度消息的 ref 标记
-      layerProgressCreatedRef.current[layer] = true;
-    },
-    [setMessages, setCurrentLayerAndPhase]
-  );
-
+  // 暂停回调 - 处理审查暂停状态
   const handlePause = useCallback(
     async (layer: number, checkpointId: string) => {
       console.log(`[ChatPanel] Pause event received`, { layer, checkpointId });
@@ -914,7 +469,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
           wordCount: newContent.length,
         };
         addMessage(dimensionReportMsg);
-        syncMessageToBackend(dimensionReportMsg); // ✅ 持久化修复后的维度报告
 
         // 更新维度内容到状态
         setDimensionContents((prev) => ({
@@ -936,7 +490,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
         );
       }
     },
-    [addMessage, syncMessageToBackend, taskId, setDimensionContents]
+    [addMessage, taskId, setDimensionContents]
   );
 
   // SSE 连接成功回调 - 连接成功后触发状态恢复检查
@@ -1012,11 +566,8 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
 
           // 2. Update reports in state
           const layerKey = `layer${layerNumber}` as 'layer1' | 'layer2' | 'layer3';
-          dispatch({
-            type: 'SET_REPORTS',
-            reports: {
-              [layerKey]: reports.reports || {},
-            },
+          usePlanningStore.getState().setReports({
+            [layerKey]: reports.reports || {},
           });
         } catch (error) {
           console.error('[ChatPanel] Failed to fetch Layer reports:', error);
@@ -1027,7 +578,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
         onOpenLayerSidebar?.(layerNumber);
       }
     },
-    [onOpenLayerSidebar, taskId, dispatch]
+    [onOpenLayerSidebar, taskId]
   );
 
   // ❌ DELETED: useLayoutEffect that causes status bounce
@@ -1103,43 +654,21 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       await actions.approve();
       addMessage(createSystemMessage('✅ Approved, continuing to next layer...'));
     } catch (error: unknown) {
-      addMessage(
-        createErrorMessage(`Approval failed: ${getErrorMessage(error, 'Unknown error')}`)
-      );
+      addMessage(createErrorMessage(`Approval failed: ${getErrorMessage(error, 'Unknown error')}`));
     }
   }, [actions, addMessage]);
 
-  const handleReviewReject = useCallback(
-    async (feedback: string, dimensions?: string[]) => {
-      try {
-        addMessage({
-          ...createBaseMessage('user'),
-          type: 'text',
-          content: `📝 Revision request: ${feedback}${dimensions ? ` (Dimensions: ${dimensions.map((d) => getDimensionName(d)).join(', ')})` : ''}`,
-        });
-        addMessage(createSystemMessage('🔄 Revising based on feedback...'));
-        await actions.reject(feedback, dimensions);
-      } catch (error: unknown) {
-        addMessage(
-          createErrorMessage(`Rejection failed: ${getErrorMessage(error, 'Unknown error')}`)
-        );
-      }
-    },
-    [actions, addMessage]
-  );
-
   const handleRollbackAction = useCallback(
     async (checkpointId: string) => {
-      if (!confirm('Are you sure you want to rollback? Subsequent content will be deleted.')) return;
+      if (!confirm('Are you sure you want to rollback? Subsequent content will be deleted.'))
+        return;
 
       setIsRollingBack(true);
       try {
-        await actions.rollback(checkpointId);
+        await rollback(checkpointId);
         addMessage(createSystemMessage(`↩️ Rolled back to checkpoint: ${checkpointId}`));
       } catch (error: unknown) {
-        addMessage(
-          createErrorMessage(`回退失败: ${getErrorMessage(error, '未知错误')}`)
-        );
+        addMessage(createErrorMessage(`回退失败: ${getErrorMessage(error, '未知错误')}`));
       } finally {
         setIsRollingBack(false);
       }
@@ -1156,32 +685,34 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     try {
       setIsPlanning(true);
 
-      // Use uploaded file content or generate default
-      const villageData =
-        uploadedFileContent ||
-        `# 村庄现状数据（示例）
+      // 1. 构建村庄现状数据：优先使用聊天界面上传的文件
+      let villageData = uploadedFileContent || '';
 
-## 基本信息
-- 村庄名称：${villageFormData.projectName}
-- 地理位置：中国某省某市某县
-- 人口规模：约1000人
-- 土地面积：约5000亩
-
-## 产业现状
-- 主要产业：农业、手工业
-- 经济水平：中等偏下
-`;
-
-      // 合并上传的文件内容到 taskDescription
-      let taskDescription = villageFormData.taskDescription || PLANNING_DEFAULTS.defaultTask;
+      // 2. 合并表单上传的文件内容
       if (villageFormData.taskDescriptionFiles && villageFormData.taskDescriptionFiles.length > 0) {
         const fileContents = villageFormData.taskDescriptionFiles
-          .map((f) => `### 📎 文件：${f.filename}\n\n${f.content}`)
+          .map((f) => `## 📎 文件：${f.filename}\n\n${f.content}`)
           .join('\n\n---\n\n');
-        taskDescription = taskDescription
-          ? `${taskDescription}\n\n---\n\n${fileContents}`
-          : fileContents;
+
+        villageData = villageData ? `${villageData}\n\n---\n\n${fileContents}` : fileContents;
       }
+
+      // 注意：删除默认示例数据，villageData 可能为空字符串
+      // 后端 prompt 模板已有默认处理：raw_data 为空时显示占位提示
+      console.log('[ChatPanel] villageData length:', villageData.length);
+      console.log('[ChatPanel] villageData preview:', villageData.slice(0, 300));
+      console.log(
+        '[ChatPanel] taskDescriptionFiles count:',
+        villageFormData.taskDescriptionFiles?.length || 0
+      );
+
+      // 提取村名（优先从文件内容匹配，其次使用项目名称）
+      const villageNameMatch = villageData.match(/(?:广东省|梅州市|平远县|泗水镇)?(.{2,8}村)/);
+      const villageName = villageNameMatch ? villageNameMatch[1] : villageFormData.projectName;
+      console.log('[ChatPanel] 提取的村名:', villageName);
+
+      // taskDescription 仅使用表单文本输入（文件内容已合并到 villageData）
+      const taskDescription = villageFormData.taskDescription || PLANNING_DEFAULTS.defaultTask;
 
       // 合并上传的文件内容到 constraints
       let constraints = villageFormData.constraints || PLANNING_DEFAULTS.defaultConstraints;
@@ -1195,6 +726,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       await startPlanning({
         projectName: villageFormData.projectName,
         villageData,
+        villageName,
         taskDescription,
         constraints,
         enableReview: PLANNING_DEFAULTS.enableReview,
@@ -1259,9 +791,11 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     // 审查状态下的特殊处理
     if (isPaused && pendingReviewLayer) {
       // 用户消息
+      const now = new Date();
       addMessage({
         id: `msg-${Date.now()}`,
-        timestamp: new Date(),
+        timestamp: now,
+        created_at: now.toISOString(),
         role: 'user',
         type: 'text',
         content: userText,
@@ -1271,7 +805,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       if (userText === '批准' || userText === '继续' || userText.toLowerCase() === 'approve') {
         try {
           addMessage(createSystemMessage('✅ Approved, continuing to next layer...'));
-          await actions.approve();
+          await approve();
         } catch (error: unknown) {
           addMessage(
             createErrorMessage(`Approval failed: ${getErrorMessage(error, 'Unknown error')}`)
@@ -1287,7 +821,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
             `🔄 Revising based on feedback${dimensionsToSubmit ? '...' : ' (auto-detecting dimensions)...'} `
           )
         );
-        await actions.reject(userText, dimensionsToSubmit);
+        await reject(userText, dimensionsToSubmit);
       } catch (error: unknown) {
         addMessage(
           createErrorMessage(`Revision failed: ${getErrorMessage(error, 'Unknown error')}`)
@@ -1297,9 +831,11 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     }
 
     // Normal chat message
+    const userMsgNow = new Date();
     addMessage({
       id: `msg-${Date.now()}`,
-      timestamp: new Date(),
+      timestamp: userMsgNow,
+      created_at: userMsgNow.toISOString(),
       role: 'user',
       type: 'text',
       content: userText,
@@ -1310,9 +846,11 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     // TODO: Process message with AI
     // ✅ FIXED: Store timeout ID for cleanup
     typingTimeoutRef.current = setTimeout(() => {
+      const assistantMsgNow = new Date();
       addMessage({
         id: `msg-${Date.now()}`,
-        timestamp: new Date(),
+        timestamp: assistantMsgNow,
+        created_at: assistantMsgNow.toISOString(),
         role: 'assistant',
         type: 'text',
         content: `收到: ${userText}`,
@@ -1490,7 +1028,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
             }}
             currentLayer={currentLayer ?? undefined}
             dimensionContents={dimensionContents}
-            checkpoints={state.checkpoints}
+            checkpoints={checkpoints}
             onRollback={handleRollbackAction}
             isRollingBack={isRollingBack}
           />
@@ -1601,13 +1139,9 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
           {isPaused && pendingReviewLayer && (
             <ReviewPanel
               layer={pendingReviewLayer}
+              dimensions={getDimensionsByLayer(pendingReviewLayer)}
+              dimensionNames={DIMENSION_NAMES}
               onApprove={handleReviewApprove}
-              onReject={(feedback) =>
-                handleReviewReject(
-                  feedback,
-                  selectedDimensions.length > 0 ? selectedDimensions : undefined
-                )
-              }
               isSubmitting={false}
             />
           )}

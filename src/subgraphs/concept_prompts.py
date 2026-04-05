@@ -409,7 +409,8 @@ CONCEPT_SUMMARY_PROMPT = """你是乡村规划专家团队的**总协调人**。
 def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
                          task_description: str = "", constraints: str = "",
                          professional_data: dict = None,
-                         superior_planning_context: str = "") -> str:
+                         superior_planning_context: str = "",
+                         knowledge_context: str = "") -> str:
     """
     获取规划思路维度的 Prompt 模板
 
@@ -420,6 +421,7 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
         constraints: 约束条件
         professional_data: 专业数据（可选）
         superior_planning_context: 上位规划上下文（positioning 维度专用）
+        knowledge_context: RAG 知识上下文（可选）
 
     Returns:
         格式化后的 Prompt 字符串
@@ -441,15 +443,32 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
         # 可根据维度添加专业数据格式化逻辑
         pass
 
+    # 构建知识上下文部分
+    knowledge_section = ""
+    if knowledge_context:
+        knowledge_section = f"\n**参考规范与标准**\n{knowledge_context}\n"
+
     format_params = {
         "analysis_report": analysis_report,
         "task_description": task_description,
         "constraints": constraints,
         "professional_data_section": professional_data_section,
         "superior_planning_context": superior_planning_context or "暂无上位规划参考",
+        "knowledge_context": knowledge_context,
+        "knowledge_section": knowledge_section,
     }
 
-    return prompt_template.format(**format_params)
+    # 尝试格式化，如果模板没有 knowledge_context 占位符则使用 knowledge_section
+    try:
+        return prompt_template.format(**format_params)
+    except KeyError:
+        # 模板可能没有 knowledge_context 占位符，移除后重试
+        format_params.pop("knowledge_context", None)
+        # 在模板末尾添加知识部分
+        formatted = prompt_template.format(**format_params)
+        if knowledge_section:
+            formatted = formatted.rstrip() + knowledge_section
+        return formatted
 
 
 def get_specialized_data(dimension_key: str, state: dict) -> dict:

@@ -7,7 +7,7 @@
  * Usage:
  * ```tsx
  * // Bad - subscribes to entire state, re-renders on any change
- * const { state } = usePlanningContext();
+ * const state = usePlanningStore();
  * const messages = state.messages;
  *
  * // Good - only re-renders when messages change
@@ -16,7 +16,7 @@
  */
 
 import { useMemo } from 'react';
-import { usePlanningContext, PlanningState } from '@/providers/PlanningProvider';
+import { usePlanningStore, type PlanningState } from '@/stores/planningStore';
 import type { Message, DimensionProgressItem, Checkpoint } from '@/types';
 import type { VillageInfo, VillageSession } from '@/lib/api';
 
@@ -28,64 +28,56 @@ import type { VillageInfo, VillageSession } from '@/lib/api';
  * Select messages array - only re-renders when messages change
  */
 export function useMessages(): Message[] {
-  const { state } = usePlanningContext();
-  return state.messages;
+  return usePlanningStore((state) => state.messages);
 }
 
 /**
  * Select status - only re-renders when status changes
  */
 export function useStatus(): PlanningState['status'] {
-  const { state } = usePlanningContext();
-  return state.status;
+  return usePlanningStore((state) => state.status);
 }
 
 /**
  * Select taskId - only re-renders when taskId changes
  */
 export function useTaskId(): string | null {
-  const { state } = usePlanningContext();
-  return state.taskId;
+  return usePlanningStore((state) => state.taskId);
 }
 
 /**
  * Select projectName - only re-renders when projectName changes
  */
 export function useProjectName(): string | null {
-  const { state } = usePlanningContext();
-  return state.projectName;
+  return usePlanningStore((state) => state.projectName);
 }
 
 /**
  * Select currentLayer - only re-renders when currentLayer changes
  */
 export function useCurrentLayer(): number | null {
-  const { state } = usePlanningContext();
-  return state.currentLayer;
+  return usePlanningStore((state) => state.currentLayer);
 }
 
 /**
  * Select currentPhase - only re-renders when currentPhase changes
  */
 export function useCurrentPhase(): PlanningState['currentPhase'] {
-  const { state } = usePlanningContext();
-  return state.currentPhase;
+  return usePlanningStore((state) => state.currentPhase);
 }
 
 /**
  * Select isPaused - only re-renders when isPaused changes
  */
 export function useIsPaused(): boolean {
-  const { state } = usePlanningContext();
-  return state.isPaused;
+  return usePlanningStore((state) => state.isPaused);
 }
 
 /**
  * Select pendingReviewLayer - only re-renders when pendingReviewLayer changes
  */
 export function usePendingReviewLayer(): number | null {
-  const { state } = usePlanningContext();
-  return state.pendingReviewLayer;
+  return usePlanningStore((state) => state.pendingReviewLayer);
 }
 
 // ============================================
@@ -96,8 +88,7 @@ export function usePendingReviewLayer(): number | null {
  * Select all dimension progress - use sparingly, prefer useDimensionProgress
  */
 export function useDimensionProgressAll(): Record<string, DimensionProgressItem> {
-  const { state } = usePlanningContext();
-  return state.dimensionProgress;
+  return usePlanningStore((state) => state.dimensionProgress);
 }
 
 /**
@@ -105,24 +96,21 @@ export function useDimensionProgressAll(): Record<string, DimensionProgressItem>
  * Only re-renders when that specific dimension's progress changes
  */
 export function useDimensionProgress(key: string): DimensionProgressItem | undefined {
-  const { state } = usePlanningContext();
-  return state.dimensionProgress[key];
+  return usePlanningStore((state) => state.dimensionProgress[key]);
 }
 
 /**
  * Select executing dimensions array
  */
 export function useExecutingDimensions(): string[] {
-  const { state } = usePlanningContext();
-  return state.executingDimensions;
+  return usePlanningStore((state) => state.executingDimensions);
 }
 
 /**
  * Check if a specific dimension is executing
  */
 export function useIsDimensionExecuting(key: string): boolean {
-  const { state } = usePlanningContext();
-  return state.executingDimensions.includes(key);
+  return usePlanningStore((state) => state.executingDimensions.includes(key));
 }
 
 // ============================================
@@ -133,16 +121,14 @@ export function useIsDimensionExecuting(key: string): boolean {
  * Select completed layers status
  */
 export function useCompletedLayers(): { 1: boolean; 2: boolean; 3: boolean } {
-  const { state } = usePlanningContext();
-  return state.completedLayers;
+  return usePlanningStore((state) => state.completedLayers);
 }
 
 /**
  * Check if a specific layer is completed
  */
 export function useIsLayerCompleted(layer: 1 | 2 | 3): boolean {
-  const { state } = usePlanningContext();
-  return state.completedLayers[layer];
+  return usePlanningStore((state) => state.completedLayers[layer]);
 }
 
 // ============================================
@@ -153,17 +139,17 @@ export function useIsLayerCompleted(layer: 1 | 2 | 3): boolean {
  * Select all reports - use sparingly
  */
 export function useReports(): PlanningState['reports'] {
-  const { state } = usePlanningContext();
-  return state.reports;
+  return usePlanningStore((state) => state.reports);
 }
 
 /**
  * Select reports for a specific layer
  */
 export function useLayerReports(layer: 1 | 2 | 3): Record<string, string> {
-  const { state } = usePlanningContext();
-  const layerKey = `layer${layer}` as const;
-  return state.reports[layerKey];
+  return usePlanningStore((state) => {
+    const layerKey = `layer${layer}` as const;
+    return state.reports[layerKey];
+  });
 }
 
 // ============================================
@@ -174,26 +160,24 @@ export function useLayerReports(layer: 1 | 2 | 3): Record<string, string> {
  * Select all tool statuses
  */
 export function useToolStatuses(): PlanningState['toolStatuses'] {
-  const { state } = usePlanningContext();
-  return state.toolStatuses;
+  return usePlanningStore((state) => state.toolStatuses);
 }
 
 /**
  * Select specific tool status
  */
 export function useToolStatus(toolName: string): PlanningState['toolStatuses'][string] | undefined {
-  const { state } = usePlanningContext();
-  return state.toolStatuses[toolName];
+  return usePlanningStore((state) => state.toolStatuses[toolName]);
 }
 
 /**
  * Get count of running tools
  */
 export function useRunningToolsCount(): number {
-  const { state } = usePlanningContext();
+  const toolStatuses = usePlanningStore((state) => state.toolStatuses);
   return useMemo(() => {
-    return Object.values(state.toolStatuses).filter(t => t?.status === 'running').length;
-  }, [state.toolStatuses]);
+    return Object.values(toolStatuses).filter((t) => t?.status === 'running').length;
+  }, [toolStatuses]);
 }
 
 // ============================================
@@ -204,32 +188,28 @@ export function useRunningToolsCount(): number {
  * Select villages list
  */
 export function useVillages(): VillageInfo[] {
-  const { state } = usePlanningContext();
-  return state.villages;
+  return usePlanningStore((state) => state.villages);
 }
 
 /**
  * Select selected village
  */
 export function useSelectedVillage(): VillageInfo | null {
-  const { state } = usePlanningContext();
-  return state.selectedVillage;
+  return usePlanningStore((state) => state.selectedVillage);
 }
 
 /**
  * Select selected session
  */
 export function useSelectedSession(): VillageSession | null {
-  const { state } = usePlanningContext();
-  return state.selectedSession;
+  return usePlanningStore((state) => state.selectedSession);
 }
 
 /**
  * Select history loading state
  */
 export function useHistoryLoading(): boolean {
-  const { state } = usePlanningContext();
-  return state.historyLoading;
+  return usePlanningStore((state) => state.historyLoading);
 }
 
 // ============================================
@@ -240,16 +220,14 @@ export function useHistoryLoading(): boolean {
  * Select checkpoints list
  */
 export function useCheckpoints(): Checkpoint[] {
-  const { state } = usePlanningContext();
-  return state.checkpoints;
+  return usePlanningStore((state) => state.checkpoints);
 }
 
 /**
  * Select selected checkpoint ID
  */
 export function useSelectedCheckpointId(): string | null {
-  const { state } = usePlanningContext();
-  return state.selectedCheckpoint;
+  return usePlanningStore((state) => state.selectedCheckpoint);
 }
 
 // ============================================
@@ -260,32 +238,28 @@ export function useSelectedCheckpointId(): string | null {
  * Select view mode
  */
 export function useViewMode(): PlanningState['viewMode'] {
-  const { state } = usePlanningContext();
-  return state.viewMode;
+  return usePlanningStore((state) => state.viewMode);
 }
 
 /**
  * Select progress panel visibility
  */
 export function useProgressPanelVisible(): boolean {
-  const { state } = usePlanningContext();
-  return state.progressPanelVisible;
+  return usePlanningStore((state) => state.progressPanelVisible);
 }
 
 /**
  * Select layer report visibility
  */
 export function useLayerReportVisible(): boolean {
-  const { state } = usePlanningContext();
-  return state.layerReportVisible;
+  return usePlanningStore((state) => state.layerReportVisible);
 }
 
 /**
  * Select active report layer
  */
 export function useActiveReportLayer(): number {
-  const { state } = usePlanningContext();
-  return state.activeReportLayer;
+  return usePlanningStore((state) => state.activeReportLayer);
 }
 
 // ============================================
@@ -297,33 +271,90 @@ export function useActiveReportLayer(): number {
  * Returns status, isPaused, currentPhase, currentLayer
  */
 export function usePlanningStatusInfo() {
-  const { state } = usePlanningContext();
-  return useMemo(() => ({
-    status: state.status,
-    isPaused: state.isPaused,
-    currentPhase: state.currentPhase,
-    currentLayer: state.currentLayer,
-  }), [state.status, state.isPaused, state.currentPhase, state.currentLayer]);
+  const status = usePlanningStore((state) => state.status);
+  const isPaused = usePlanningStore((state) => state.isPaused);
+  const currentPhase = usePlanningStore((state) => state.currentPhase);
+  const currentLayer = usePlanningStore((state) => state.currentLayer);
+
+  return useMemo(
+    () => ({
+      status,
+      isPaused,
+      currentPhase,
+      currentLayer,
+    }),
+    [status, isPaused, currentPhase, currentLayer]
+  );
 }
 
 /**
  * Select progress summary for current layer
  */
 export function useProgressSummary(layer: number | null) {
-  const { state } = usePlanningContext();
+  const completedDimensions = usePlanningStore((state) => state.completedDimensions);
+  const executingDimensions = usePlanningStore((state) => state.executingDimensions);
+
   return useMemo(() => {
     if (!layer) return { completed: 0, total: 0, executing: 0 };
 
     const layerKey = `layer${layer}` as 'layer1' | 'layer2' | 'layer3';
-    const completed = state.completedDimensions[layerKey]?.length || 0;
-    const executing = state.executingDimensions.filter(k => k.startsWith(`${layer}_`)).length;
+    const completed = completedDimensions[layerKey]?.length || 0;
+    const executing = executingDimensions.filter((k) => k.startsWith(`${layer}_`)).length;
 
     return { completed, executing };
-  }, [layer, state.completedDimensions, state.executingDimensions]);
+  }, [layer, completedDimensions, executingDimensions]);
 }
 
-// Export all selectors
-export {
-  usePlanningContext,
-  usePlanningContextOptional,
-} from '@/providers/PlanningProvider';
+// ============================================
+// Store Access (for backwards compatibility)
+// ============================================
+
+/**
+ * Get the full store state (use sparingly, prefer specific selectors)
+ */
+export function usePlanningState(): PlanningState {
+  return usePlanningStore();
+}
+
+/**
+ * Get store actions
+ */
+export function usePlanningActions() {
+  return usePlanningStore((state) => ({
+    setTaskId: state.setTaskId,
+    setProjectName: state.setProjectName,
+    setStatus: state.setStatus,
+    setPhase: state.setPhase,
+    addMessage: state.addMessage,
+    setMessages: state.setMessages,
+    updateLastMessage: state.updateLastMessage,
+    clearMessages: state.clearMessages,
+    updateDimensionProgress: state.updateDimensionProgress,
+    setDimensionStreaming: state.setDimensionStreaming,
+    setDimensionCompleted: state.setDimensionCompleted,
+    clearDimensionProgress: state.clearDimensionProgress,
+    setLayerCompleted: state.setLayerCompleted,
+    setReports: state.setReports,
+    setCompletedDimensions: state.setCompletedDimensions,
+    syncBackendState: state.syncBackendState,
+    setViewerVisible: state.setViewerVisible,
+    setViewingFile: state.setViewingFile,
+    setPaused: state.setPaused,
+    setPendingReviewLayer: state.setPendingReviewLayer,
+    setVillageFormData: state.setVillageFormData,
+    setProgressPanelVisible: state.setProgressPanelVisible,
+    setStepMode: state.setStepMode,
+    setVillages: state.setVillages,
+    setSelectedVillage: state.setSelectedVillage,
+    setSelectedSession: state.setSelectedSession,
+    setHistoryLoading: state.setHistoryLoading,
+    setHistoryError: state.setHistoryError,
+    setCheckpoints: state.setCheckpoints,
+    setSelectedCheckpoint: state.setSelectedCheckpoint,
+    setToolStatus: state.setToolStatus,
+    clearToolStatus: state.clearToolStatus,
+    handleSSEEvent: state.handleSSEEvent,
+    resetConversation: state.resetConversation,
+    initConversation: state.initConversation,
+  }));
+}

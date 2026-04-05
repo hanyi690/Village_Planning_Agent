@@ -35,14 +35,14 @@ from backend.database.engine import get_db_path
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Layer configuration mapping - combines directory name and state key
+# Layer configuration mapping - uses new architecture with layer_key
 LAYER_CONFIG = {
-    "layer_1_analysis": {"dir": "layer_1_analysis", "state_key": "analysis_reports"},
-    "layer_2_concept": {"dir": "layer_2_concept", "state_key": "concept_reports"},
-    "layer_3_detailed": {"dir": "layer_3_detailed", "state_key": "detail_reports"},
-    "analysis": {"dir": "layer_1_analysis", "state_key": "analysis_reports"},
-    "concept": {"dir": "layer_2_concept", "state_key": "concept_reports"},
-    "detailed": {"dir": "layer_3_detailed", "state_key": "detail_reports"},
+    "layer_1_analysis": {"dir": "layer_1_analysis", "layer_key": "layer1"},
+    "layer_2_concept": {"dir": "layer_2_concept", "layer_key": "layer2"},
+    "layer_3_detailed": {"dir": "layer_3_detailed", "layer_key": "layer3"},
+    "analysis": {"dir": "layer_1_analysis", "layer_key": "layer1"},
+    "concept": {"dir": "layer_2_concept", "layer_key": "layer2"},
+    "detailed": {"dir": "layer_3_detailed", "layer_key": "layer3"},
 }
 
 
@@ -69,14 +69,14 @@ def _get_layer_config(layer: str) -> Dict[str, str]:
 
 async def _get_session_checkpoints(thread_id: str) -> List[Dict[str, Any]]:
     """Get checkpoints for a session using LangGraph API"""
-    from src.orchestration.main_graph import create_village_planning_graph
-    from .planning import get_global_checkpointer
+    from src.orchestration.main_graph import create_unified_planning_graph
+    from backend.database.engine import get_global_checkpointer
     
     checkpoints = []
     try:
         # 使用全局 checkpointer 单例，避免创建独立连接
         saver = await get_global_checkpointer()
-        graph = create_village_planning_graph(checkpointer=saver)
+        graph = create_unified_planning_graph(checkpointer=saver)
         config = {"configurable": {"thread_id": thread_id}}
 
         async for state_snapshot in graph.aget_state_history(config):
@@ -123,13 +123,13 @@ async def _get_session_checkpoints(thread_id: str) -> List[Dict[str, Any]]:
 
 async def _get_state_from_checkpoint(thread_id: str, checkpoint_id: str = None) -> Dict[str, Any]:
     """Get state from LangGraph checkpoint"""
-    from src.orchestration.main_graph import create_village_planning_graph
-    from .planning import get_global_checkpointer
+    from src.orchestration.main_graph import create_unified_planning_graph
+    from backend.database.engine import get_global_checkpointer
     
     try:
         # 使用全局 checkpointer 单例，避免创建独立连接
         saver = await get_global_checkpointer()
-        graph = create_village_planning_graph(checkpointer=saver)
+        graph = create_unified_planning_graph(checkpointer=saver)
         
         config = {"configurable": {"thread_id": thread_id}}
         if checkpoint_id:
@@ -224,27 +224,28 @@ async def get_layer_content(
     try:
         config = _get_layer_config(layer)
         layer_dir_name = config["dir"]
-        content_key = config["state_key"]
-        
+        layer_key = config["layer_key"]
+
         # Get session_id if not provided
         if not session:
             sessions = await list_project_sessions_async(name, limit=1)
             if not sessions:
                 raise HTTPException(status_code=404, detail=f"No sessions found for: {name}")
             session = sessions[0]["session_id"]
-        
+
         # Get state from checkpoint
         state = await _get_state_from_checkpoint(session, checkpoint_id)
-        
+
         if not state:
             raise HTTPException(status_code=404, detail=f"State not found for session: {session}")
-        
-        # Extract layer content
+
+        # Extract layer content from reports structure
         content = ""
-        
-        # Try to get reports dict first
-        reports = state.get(content_key, {})
-        if reports:
+
+        # Get reports dict and extract layer-specific reports
+        reports = state.get("reports", {})
+        layer_reports = reports.get(layer_key, {})
+        if layer_reports:
             if isinstance(reports, dict):
                 # Combine all dimension reports
                 content_parts = []
@@ -395,9 +396,14 @@ async def get_combined_plan(
         
         # Build combined content
         content_parts = []
-        
+
+        # Get reports from unified structure
+        reports = state.get("reports", {})
+        analysis_reports = reports.get("layer1", {})
+        concept_reports = reports.get("layer2", {})
+        detail_reports = reports.get("layer3", {})
+
         # Layer 1
-        analysis_reports = state.get("analysis_reports", {})
         if analysis_reports:
             content_parts.append("# 现状分析\n\n")
             for dim_name, dim_content in analysis_reports.items():
@@ -406,7 +412,6 @@ async def get_combined_plan(
             content_parts.append("\n---\n\n")
         
         # Layer 2
-        concept_reports = state.get("concept_reports", {})
         if concept_reports:
             content_parts.append("# 规划思路\n\n")
             for dim_name, dim_content in concept_reports.items():
@@ -415,7 +420,6 @@ async def get_combined_plan(
             content_parts.append("\n---\n\n")
         
         # Layer 3
-        detail_reports = state.get("detail_reports", {})
         if detail_reports:
             content_parts.append("# 详细规划\n\n")
             for dim_name, dim_content in detail_reports.items():

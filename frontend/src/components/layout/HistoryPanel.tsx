@@ -20,7 +20,7 @@ import {
   faTrash,
   faExclamationTriangle,
 } from '@fortawesome/free-solid-svg-icons';
-import { usePlanningContext } from '@/providers/PlanningProvider';
+import { usePlanningStore, usePlanningActions } from '@/stores';
 import { formatFullTimestamp } from '@/lib/utils';
 
 interface DeleteConfirmModalProps {
@@ -87,26 +87,13 @@ function DeleteConfirmModal({ isOpen, onClose, onConfirm, isDeleting }: DeleteCo
 }
 
 export default function HistoryPanel({ onClose }: { onClose: () => void }) {
-  const {
-    state,
-    actions,
-  } = usePlanningContext();
+  const villages = usePlanningStore((state) => state.villages);
+  const historyLoading = usePlanningStore((state) => state.historyLoading);
+  const historyError = usePlanningStore((state) => state.historyError);
+  const taskId = usePlanningStore((state) => state.taskId);
+  const deletingSessionId = usePlanningStore((state) => state.deletingSessionId);
 
-  const {
-    villages,
-    historyLoading,
-    historyError,
-    taskId,
-    deletingSessionId,
-    loadVillagesHistory,
-  } = {
-    villages: state.villages,
-    historyLoading: state.historyLoading,
-    historyError: state.historyError,
-    taskId: state.taskId,
-    deletingSessionId: state.deletingSessionId,
-    loadVillagesHistory: actions.loadVillagesHistory,
-  };
+  const actions = usePlanningActions();
 
   const [mounted, setMounted] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -271,7 +258,7 @@ export default function HistoryPanel({ onClose }: { onClose: () => void }) {
                 <p className="text-red-600 font-medium mb-2">加载失败</p>
                 <p className="text-gray-500 text-sm mb-4">{historyError}</p>
                 <button
-                  onClick={loadVillagesHistory}
+                  onClick={() => actions.loadVillagesHistory()}
                   className="px-4 py-2 bg-violet-500 text-white rounded-lg hover:bg-violet-600 transition-colors text-sm font-medium"
                 >
                   重试

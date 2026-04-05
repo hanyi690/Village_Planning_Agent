@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from backend.schemas import TaskStatus
+from backend.schemas import TaskStatus, SessionStatusResponse
 from backend.services.sse_manager import sse_manager
 from backend.services.checkpoint_service import checkpoint_service
 from backend.database.operations_async import (
@@ -24,53 +24,6 @@ from backend.database.operations_async import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-class SessionStatusResponse:
-    """Response model for session status."""
-    def __init__(
-        self,
-        session_id: str,
-        status: str,
-        current_layer: Optional[int] = None,
-        previous_layer: Optional[int] = None,
-        created_at: Optional[str] = None,
-        progress: Optional[float] = None,
-        layer_1_completed: bool = False,
-        layer_2_completed: bool = False,
-        layer_3_completed: bool = False,
-        pause_after_step: bool = False,
-        execution_complete: bool = False,
-        execution_error: Optional[str] = None,
-    ):
-        self.session_id = session_id
-        self.status = status
-        self.current_layer = current_layer
-        self.previous_layer = previous_layer
-        self.created_at = created_at
-        self.progress = progress
-        self.layer_1_completed = layer_1_completed
-        self.layer_2_completed = layer_2_completed
-        self.layer_3_completed = layer_3_completed
-        self.pause_after_step = pause_after_step
-        self.execution_complete = execution_complete
-        self.execution_error = execution_error
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "session_id": self.session_id,
-            "status": self.status,
-            "current_layer": self.current_layer,
-            "previous_layer": self.previous_layer,
-            "created_at": self.created_at,
-            "progress": self.progress,
-            "layer_1_completed": self.layer_1_completed,
-            "layer_2_completed": self.layer_2_completed,
-            "layer_3_completed": self.layer_3_completed,
-            "pause_after_step": self.pause_after_step,
-            "execution_complete": self.execution_complete,
-            "execution_error": self.execution_error,
-        }
 
 
 class LayerReportsResponse:

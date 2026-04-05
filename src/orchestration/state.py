@@ -108,6 +108,7 @@ PHASE_DESCRIPTIONS: Dict[str, str] = {
 class PlanningConfig(TypedDict):
     """规划配置"""
     village_data: str
+    village_name: str
     task_description: str
     constraints: str
     knowledge_cache: Dict[str, str]
@@ -146,6 +147,11 @@ class UnifiedPlanningState(TypedDict):
     revision_target_dimensions: List[str]
     review_feedback: str
 
+    # Step Mode 控制
+    step_mode: bool              # 是否启用分步执行（层级完成后暂停）
+    pause_after_step: bool       # 层级完成后暂停标志
+    previous_layer: int          # 刚完成的层级编号（用于审查面板）
+
     # 元数据
     metadata: Dict[str, Any]
 
@@ -178,23 +184,71 @@ def create_initial_state(
         need_revision=False,
         revision_target_dimensions=[],
         review_feedback="",
+        step_mode=False,
+        pause_after_step=False,
+        previous_layer=0,
         metadata={}
     )
 
 
-def _phase_to_layer(phase: str) -> int:
-    """phase 转 layer 编号（使用 PHASE_ORDER）"""
-    try:
-        return PHASE_ORDER.index(phase)
-    except ValueError:
-        return 0
+def _phase_to_layer(phase: str) -> Optional[int]:
+    """phase 转 layer 编号
+
+    支持简化版和详细版两种 phase 格式：
+    - 简化版：init, layer1, layer2, layer3, completed
+    - 详细版：layer1_analyzing, layer1_completed, layer2_concepting, etc.
+
+    Args:
+        phase: 阶段字符串
+
+    Returns:
+        0: 对于 init
+        1-3: 对于 layer1/2/3 相关阶段
+        None: 对于 completed 或未知阶段
+    """
+    # 简化版映射
+    simple_map = {
+        PlanningPhase.INIT.value: 0,
+        PlanningPhase.LAYER1.value: 1,
+        PlanningPhase.LAYER2.value: 2,
+        PlanningPhase.LAYER3.value: 3,
+    }
+
+    # 直接匹配简化版
+    if phase in simple_map:
+        return simple_map[phase]
+
+    # 详细版解析：layer1_analyzing -> 1, layer2_completed -> 2, etc.
+    if phase.startswith("layer") and "_" in phase:
+        try:
+            layer_num = int(phase.split("_")[0].replace("layer", ""))
+            if layer_num in [1, 2, 3]:
+                return layer_num
+        except (ValueError, IndexError):
+            pass
+
+    # completed 返回 None（无对应执行层级）
+    if phase == PlanningPhase.COMPLETED.value:
+        return None
+
+    return None
 
 
 def _layer_to_phase(layer: int) -> str:
-    """layer 编号转 phase（使用 PHASE_ORDER）"""
-    if 0 <= layer < len(PHASE_ORDER):
-        return PHASE_ORDER[layer]
-    return PlanningPhase.INIT.value
+    """layer 编号转 phase
+
+    Args:
+        layer: 层级编号 (1-3)
+
+    Returns:
+        对应的阶段字符串
+    """
+    layer_to_phase_map = {
+        1: PlanningPhase.LAYER1.value,
+        2: PlanningPhase.LAYER2.value,
+        3: PlanningPhase.LAYER3.value,
+    }
+    return layer_to_phase_map.get(layer, PlanningPhase.INIT.value)
 
 
 def get_layer_dimensions(layer: int) -> List[str]:
@@ -223,6 +277,74 @@ def get_next_phase(current_phase: str) -> Optional[str]:
     return None
 
 
+def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None) -> Dict[str, Any]:
+    """将 UnifiedPlanningState 转换为前端 UI 状态格式
+
+    Agent 自治：状态自己知道如何呈现给 UI，而非 API 层手动拼接。
+
+    Args:
+        state: LangGraph checkpoint state values
+        db_session: Optional database session metadata
+
+    Returns:
+        UI-ready status dictionary
+    """
+    phase = state.get("phase", "init")
+    reports = state.get("reports", {})
+
+    # 使用 _phase_to_layer 函数计算 current_layer（支持详细版 phase）
+    current_layer = _phase_to_layer(phase)
+    if current_layer is None:
+        # completed 或未知阶段：如果 reports 有数据，显示 3
+        if phase == PlanningPhase.COMPLETED.value or phase == "completed":
+            current_layer = 3
+        else:
+            current_layer = 0
+
+    # 从 metadata 获取进度（优先使用预先计算的值）
+    metadata = state.get("metadata", {})
+    progress = metadata.get("progress")
+    if progress is None:
+        # 降级计算：复用已计算的 current_layer
+        if phase == PlanningPhase.COMPLETED.value or phase == "completed":
+            progress = 100
+        elif current_layer and current_layer > 0:
+            progress = (current_layer / 3) * 100
+        else:
+            progress = 0
+
+    # 计算 execution_complete
+    execution_complete = (
+        len(reports.get("layer1", {})) > 0 and
+        len(reports.get("layer2", {})) > 0 and
+        len(reports.get("layer3", {})) > 0
+    )
+
+    return {
+        # 核心状态
+        "phase": phase,
+        "current_wave": state.get("current_wave", 1),
+        "reports": reports,
+        "pause_after_step": state.get("pause_after_step", False),
+        "previous_layer": state.get("previous_layer", 0),
+        "step_mode": state.get("step_mode", False),
+
+        # 计算字段
+        "current_layer": current_layer,
+        "progress": progress,
+        "execution_complete": execution_complete,
+
+        # 完成维度
+        "completed_dimensions": state.get("completed_dimensions", {}),
+
+        # 元数据
+        "version": metadata.get("version", 0),
+        "status": db_session.get("status", "running") if db_session else "running",
+        "execution_error": db_session.get("execution_error") if db_session else None,
+        "created_at": db_session.get("created_at", "") if db_session else "",
+    }
+
+
 __all__ = [
     "PlanningPhase",
     "PlanningConfig",
@@ -238,4 +360,5 @@ __all__ = [
     "LAYER_NAMES_BY_NUMBER",
     "get_layer_name",
     "PHASE_DESCRIPTIONS",
+    "state_to_ui_status",
 ]

@@ -17,8 +17,10 @@ interface DimensionSectionProps {
   icon: string;
   subsections?: ParsedSubsection[];
   defaultExpanded?: boolean;
+  expanded?: boolean;
   onCopy?: () => void;
   onExport?: () => void;
+  onToggle?: (expanded: boolean) => void;
 }
 
 function DimensionSection({
@@ -27,10 +29,13 @@ function DimensionSection({
   icon,
   subsections = [],
   defaultExpanded = false,
+  expanded: controlledExpanded,
   onCopy,
   onExport,
+  onToggle,
 }: DimensionSectionProps) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [internalExpanded, setInternalExpanded] = useState(defaultExpanded);
+  const isExpanded = controlledExpanded !== undefined ? controlledExpanded : internalExpanded;
 
   // Animation variants
   const contentVariants = {
@@ -62,7 +67,12 @@ function DimensionSection({
       {/* Header */}
       <motion.div
         layout
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => {
+          if (controlledExpanded === undefined) {
+            setInternalExpanded(!internalExpanded);
+          }
+          onToggle?.(!isExpanded);
+        }}
         className="group flex justify-between items-center px-4 py-3 bg-gradient-to-r from-emerald-50 to-transparent cursor-pointer hover:from-emerald-100 transition-colors"
       >
         <h4 className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
@@ -104,7 +114,7 @@ function DimensionSection({
           </div>
 
           {/* Chevron icon */}
-          <motion.div animate={{ rotate: expanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
+          <motion.div animate={{ rotate: isExpanded ? 180 : 0 }} transition={{ duration: 0.2 }}>
             <i className="fas fa-chevron-down text-gray-400 text-xs" />
           </motion.div>
         </div>
@@ -112,7 +122,7 @@ function DimensionSection({
 
       {/* Content */}
       <AnimatePresence initial={false}>
-        {expanded && (
+        {isExpanded && (
           <motion.div
             key="content"
             variants={contentVariants}

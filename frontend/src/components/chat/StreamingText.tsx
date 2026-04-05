@@ -6,7 +6,7 @@
  */
 
 import React, { useEffect, useRef } from 'react';
-import { useStreamingText } from '@/hooks/useStreamingText';
+import { useStreamingText } from '@/hooks/ui';
 
 export interface StreamingTextProps {
   content: string;

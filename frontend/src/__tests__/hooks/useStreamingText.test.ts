@@ -4,7 +4,7 @@
  */
 
 import { renderHook, act } from '@testing-library/react';
-import { useStreamingText } from '@/hooks/useStreamingText';
+import { useStreamingText } from '@/hooks/ui';
 
 // Mock requestAnimationFrame
 // eslint-disable-next-line @typescript-eslint/no-unused-vars

@@ -10,7 +10,7 @@ import {
   isProgressMessage,
   isLayerCompletedMessage,
   isDimensionReportMessage,
-} from '@/types/message-guards';
+} from '@/types/message/message-guards';
 import type {
   Message,
   TextMessage,

@@ -41,6 +41,7 @@ from ...config.dimension_metadata import (
     get_detailed_dimension_names,
     get_revision_wave_dimensions,
     get_dimension_config,
+    filter_reports_by_dependency,
 )
 from ...core.config import LLM_MODEL, MAX_TOKENS
 from ...core.state_builder import StateBuilder
@@ -62,10 +63,8 @@ class RevisionState(TypedDict):
     feedback: str                          # 用户反馈
     target_dimensions: List[str]           # 用户选择要修复的维度
 
-    # 现有报告（用于状态筛选和更新）
-    analysis_reports: Dict[str, str]       # Layer 1 现状分析报告
-    concept_reports: Dict[str, str]        # Layer 2 规划思路报告
-    detail_reports: Dict[str, str]         # Layer 3 详细规划报告
+    # 现有报告（用于状态筛选和更新）- 使用新架构 reports 结构
+    reports: Dict[str, Dict[str, str]]     # {"layer1": {...}, "layer2": {...}, "layer3": {...}}
 
     # 任务控制
     completed_dimensions: List[str]        # 已完成的维度（用于过滤）
@@ -215,40 +214,30 @@ def create_parallel_revision_tasks(
     """
     sends = []
 
-    analysis_reports = state.get("analysis_reports", {})
-    concept_reports = state.get("concept_reports", {})
-    detail_reports = state.get("detail_reports", {})
+    # Get reports from unified structure
+    reports = state.get("reports", {})
+    analysis_reports = reports.get("layer1", {})
+    concept_reports = reports.get("layer2", {})
+    detail_reports = reports.get("layer3", {})
 
     for dim in dimensions:
-        # 获取依赖链
         chain = get_full_dependency_chain_func(dim)
 
-        # 筛选 Layer 1 现状分析
-        required_analyses = chain.get("layer1_analyses", [])
-        filtered_analysis_parts = []
-        for k in required_analyses:
-            if k in analysis_reports:
-                name = get_analysis_dimension_names().get(k, k)
-                filtered_analysis_parts.append(f"### {name}\n\n{analysis_reports[k]}\n")
-        filtered_analysis = "\n".join(filtered_analysis_parts) if filtered_analysis_parts else ""
-
-        # 筛选 Layer 2 规划思路
-        required_concepts = chain.get("layer2_concepts", [])
-        filtered_concept_parts = []
-        for k in required_concepts:
-            if k in concept_reports:
-                name = get_concept_dimension_names().get(k, k)
-                filtered_concept_parts.append(f"### {name}\n\n{concept_reports[k]}\n")
-        filtered_concept = "\n".join(filtered_concept_parts) if filtered_concept_parts else ""
-
-        # 筛选 Layer 3 前序详细规划
-        required_details = chain.get("layer3_plans", [])
-        filtered_detail_parts = []
-        for k in required_details:
-            if k in detail_reports:
-                name = get_detailed_dimension_names().get(k, k)
-                filtered_detail_parts.append(f"### {name}\n\n{detail_reports[k]}\n")
-        filtered_detail = "\n".join(filtered_detail_parts) if filtered_detail_parts else ""
+        filtered_analysis = filter_reports_by_dependency(
+            required_keys=chain.get("layer1_analyses", []),
+            reports=analysis_reports,
+            name_mapping=get_analysis_dimension_names()
+        )
+        filtered_concept = filter_reports_by_dependency(
+            required_keys=chain.get("layer2_concepts", []),
+            reports=concept_reports,
+            name_mapping=get_concept_dimension_names()
+        )
+        filtered_detail = filter_reports_by_dependency(
+            required_keys=chain.get("layer3_plans", []),
+            reports=detail_reports,
+            name_mapping=get_detailed_dimension_names()
+        )
 
         # 获取原始内容
         layer = get_dimension_layer(dim)
@@ -592,9 +581,7 @@ async def call_revision_subgraph(
     project_name: str,
     feedback: str,
     target_dimensions: List[str],
-    analysis_reports: Dict[str, str] = None,
-    concept_reports: Dict[str, str] = None,
-    detail_reports: Dict[str, str] = None,
+    reports: Dict[str, Dict[str, str]] = None,
     completed_dimensions: List[str] = None,
     from_checkpoint_id: str = None
 ) -> Dict[str, Any]:
@@ -605,9 +592,7 @@ async def call_revision_subgraph(
         project_name: 项目/村庄名称
         feedback: 用户反馈
         target_dimensions: 要修复的维度列表
-        analysis_reports: Layer 1 现状分析报告
-        concept_reports: Layer 2 规划思路报告
-        detail_reports: Layer 3 详细规划报告
+        reports: 统一的 reports 结构 {"layer1": {...}, "layer2": {...}, "layer3": {...}}
         completed_dimensions: 已完成的维度列表
         from_checkpoint_id: 可选，从指定 checkpoint 获取原始报告
 
@@ -627,22 +612,18 @@ async def call_revision_subgraph(
     original_reports = None
     if from_checkpoint_id:
         try:
-            from ...orchestration.main_graph import create_village_planning_graph
-            from ...utils.checkpoint_manager import get_global_checkpointer
+            from ...orchestration.main_graph import create_unified_planning_graph
+            from backend.database.engine import get_global_checkpointer
 
             checkpointer = await get_global_checkpointer()
-            graph = create_village_planning_graph(checkpointer=checkpointer)
+            graph = create_unified_planning_graph(checkpointer=checkpointer)
             config = {"configurable": {"thread_id": project_name}}
 
             # 遍历历史 checkpoint，找到目标 checkpoint
             async for state_snapshot in graph.aget_state_history(config):
                 snapshot_checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
                 if snapshot_checkpoint_id == from_checkpoint_id:
-                    original_reports = {
-                        "analysis_reports": state_snapshot.values.get("analysis_reports", {}),
-                        "concept_reports": state_snapshot.values.get("concept_reports", {}),
-                        "detail_reports": state_snapshot.values.get("detail_reports", {}),
-                    }
+                    original_reports = state_snapshot.values.get("reports", {})
                     logger.info(f"[Revision-子图调用] 从 checkpoint {from_checkpoint_id} 获取原始报告")
                     break
 
@@ -653,9 +634,7 @@ async def call_revision_subgraph(
             original_reports = None
 
     if original_reports:
-        analysis_reports = original_reports.get("analysis_reports", analysis_reports or {})
-        concept_reports = original_reports.get("concept_reports", concept_reports or {})
-        detail_reports = original_reports.get("detail_reports", detail_reports or {})
+        reports = original_reports
         logger.info(f"[Revision-子图调用] 使用历史 checkpoint 的原始报告")
     else:
         logger.info(f"[Revision-子图调用] 使用当前状态的报告")
@@ -663,14 +642,12 @@ async def call_revision_subgraph(
     # 创建子图实例
     subgraph = create_revision_subgraph()
 
-    # 构建初始状态
+    # 构建初始状态（使用新架构）
     initial_state: RevisionState = {
         "project_name": project_name,
         "feedback": feedback,
         "target_dimensions": target_dimensions,
-        "analysis_reports": analysis_reports or {},
-        "concept_reports": concept_reports or {},
-        "detail_reports": detail_reports or {},
+        "reports": reports or {"layer1": {}, "layer2": {}, "layer3": {}},
         "completed_dimensions": completed_dimensions or [],
         "current_wave": 1,
         "max_wave": 0,
@@ -757,9 +734,7 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
         project_name=state.get("project_name", ""),
         feedback=feedback,
         target_dimensions=dimensions,
-        analysis_reports=state.get("analysis_reports", {}),
-        concept_reports=state.get("concept_reports", {}),
-        detail_reports=state.get("detail_reports", {}),
+        reports=state.get("reports", {}),
         completed_dimensions=completed_dimensions,
         from_checkpoint_id=from_checkpoint_id
     )
@@ -774,19 +749,16 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
     updated_reports = revision_result.get("updated_reports", {})
     revision_history = revision_result.get("revision_history", [])
 
-    # 分别更新各层级报告
-    analysis_reports = dict(state.get("analysis_reports", {}))
-    concept_reports = dict(state.get("concept_reports", {}))
-    detail_reports = dict(state.get("detail_reports", {}))
+    # 更新 reports 结构
+    reports = dict(state.get("reports", {}))
+    for layer_key in ["layer1", "layer2", "layer3"]:
+        if layer_key not in reports:
+            reports[layer_key] = {}
 
     for dimension, revised_content in updated_reports.items():
         layer = get_dimension_layer(dimension)
-        if layer == 1:
-            analysis_reports[dimension] = revised_content
-        elif layer == 2:
-            concept_reports[dimension] = revised_content
-        else:
-            detail_reports[dimension] = revised_content
+        layer_key = f"layer{layer}"
+        reports[layer_key][dimension] = revised_content
 
     # 合并修订历史
     existing_history = list(state.get("revision_history", []))
@@ -804,7 +776,16 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"[修复] 设置 last_revised_dimensions: {revised_dimensions}")
 
     # 创建修复完成检查点元数据
-    current_layer = state.get("current_layer", 1)
+    # 从修复的维度推导 layer
+    repair_dimension_keys = list(updated_reports.keys())
+    if repair_dimension_keys:
+        current_layer = get_dimension_layer(repair_dimension_keys[0])
+    else:
+        # 从 phase 推导（fallback）
+        from ..state import _phase_to_layer
+        current_layer = _phase_to_layer(state.get("phase", "layer1")) or 1
+
+    logger.info(f"[修复] Derived current_layer: {current_layer}")
 
     phase_map = {
         1: PlanningPhase.LAYER1_REVISION_COMPLETED,
@@ -841,9 +822,7 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
     new_metadata = {**existing_metadata, **repair_meta.to_dict()}
 
     return StateBuilder()\
-        .set("analysis_reports", analysis_reports)\
-        .set("concept_reports", concept_reports)\
-        .set("detail_reports", detail_reports)\
+        .set("reports", reports)\
         .set("need_revision", False)\
         .set("revision_history", existing_history)\
         .set("last_revised_dimensions", revised_dimensions)\
@@ -856,14 +835,10 @@ def _get_completed_dimensions(state: Dict[str, Any]) -> List[str]:
     """获取已完成的维度列表"""
     completed = []
 
-    analysis_reports = state.get("analysis_reports", {})
-    completed.extend(analysis_reports.keys())
-
-    concept_reports = state.get("concept_reports", {})
-    completed.extend(concept_reports.keys())
-
-    detail_reports = state.get("detail_reports", {})
-    completed.extend(detail_reports.keys())
+    reports = state.get("reports", {})
+    for layer_key in ["layer1", "layer2", "layer3"]:
+        layer_reports = reports.get(layer_key, {})
+        completed.extend(layer_reports.keys())
 
     return list(set(completed))
 

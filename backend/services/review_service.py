@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel, Field
 from backend.schemas import TaskStatus
 from backend.services.sse_manager import sse_manager
 from backend.services.checkpoint_service import checkpoint_service
@@ -24,69 +25,31 @@ from backend.database.operations_async import (
 logger = logging.getLogger(__name__)
 
 
-class ApproveResponse:
+# ============================================
+# Response Models (Pydantic)
+# ============================================
+
+class ApproveResponse(BaseModel):
     """Response model for approve action."""
-    def __init__(
-        self,
-        session_id: str,
-        message: str,
-        resumed: bool = True,
-        current_layer: Optional[int] = None,
-    ):
-        self.session_id = session_id
-        self.message = message
-        self.resumed = resumed
-        self.current_layer = current_layer
-
-    def to_dict(self) -> Dict[str, Any]:
-        result = {
-            "message": self.message,
-            "session_id": self.session_id,
-            "resumed": self.resumed,
-        }
-        if self.current_layer is not None:
-            result["current_layer"] = self.current_layer
-        return result
+    message: str = Field(default="approved")
+    session_id: str
+    resumed: bool = Field(default=True)
+    current_layer: Optional[int] = None
 
 
-class RejectResponse:
+class RejectResponse(BaseModel):
     """Response model for reject action."""
-    def __init__(self, session_id: str, message: str, resumed: bool = True):
-        self.session_id = session_id
-        self.message = message
-        self.resumed = resumed
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "message": self.message,
-            "session_id": self.session_id,
-            "resumed": self.resumed,
-        }
+    message: str = Field(default="rejected")
+    session_id: str
+    resumed: bool = Field(default=True)
 
 
-class RollbackResponse:
+class RollbackResponse(BaseModel):
     """Response model for rollback action."""
-    def __init__(
-        self,
-        session_id: str,
-        message: str,
-        phase: str,
-        target_layer: int,
-        resumed: bool = False,
-    ):
-        self.session_id = session_id
-        self.message = message
-        self.phase = phase
-        self.target_layer = target_layer
-        self.resumed = resumed
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "message": self.message,
-            "phase": self.phase,
-            "target_layer": self.target_layer,
-            "resumed": self.resumed,
-        }
+    message: str
+    phase: str
+    target_layer: int
+    resumed: bool = Field(default=False)
 
 
 class ReviewService:
@@ -117,56 +80,27 @@ class ReviewService:
         Raises:
             ValueError: If session not found
         """
-        from src.orchestration.main_graph import create_unified_planning_graph
-        from src.orchestration.state import get_layer_dimensions
-        from backend.database.engine import get_global_checkpointer
+        from src.orchestration.state import get_layer_dimensions, get_layer_name
 
-        # Get current state from checkpoint
-        checkpointer = await get_global_checkpointer()
-        graph = create_unified_planning_graph(checkpointer=checkpointer)
-        config = {"configurable": {"thread_id": session_id}}
+        # Use CheckpointService for state validation
+        state = await checkpoint_service.validate_session(session_id)
 
-        checkpoint_state = await graph.aget_state(config)
-        if not checkpoint_state or not checkpoint_state.values:
-            raise ValueError(f"Session {session_id} not found in checkpoint")
+        # Calculate next layer using CheckpointService
+        next_layer, next_phase = await checkpoint_service.calculate_next_layer(session_id, state)
 
-        state = checkpoint_state.values
-        phase = state.get("phase", "init")
-        completed_dims = state.get("completed_dimensions", {})
+        logger.info(f"[ReviewService] [{session_id}] Approving: phase={state.get('phase', 'init')} -> {next_phase}")
 
-        # Calculate next layer based on phase
-        phase_order = ["init", "layer1", "layer2", "layer3", "completed"]
-        try:
-            phase_idx = phase_order.index(phase)
-            current_layer = phase_idx
-        except ValueError:
-            current_layer = 1
-
-        next_layer = current_layer
-        layer_1_completed = len(completed_dims.get("layer1", [])) >= len(get_layer_dimensions(1))
-        layer_2_completed = len(completed_dims.get("layer2", [])) >= len(get_layer_dimensions(2))
-        layer_3_completed = len(completed_dims.get("layer3", [])) >= len(get_layer_dimensions(3))
-
-        if phase == "layer1" and layer_1_completed:
-            next_layer = 2
-            next_phase = "layer2"
-        elif phase == "layer2" and layer_2_completed:
-            next_layer = 3
-            next_phase = "layer3"
-        elif phase == "layer3" and layer_3_completed:
-            next_layer = 4
-            next_phase = "completed"
-        else:
-            next_phase = phase
-
-        logger.info(f"[ReviewService] [{session_id}] Approving: phase={phase} -> {next_phase}")
-
-        # Update checkpoint state
-        await graph.aupdate_state(config, {
+        # Update checkpoint state - clear pause flags and set next phase
+        # ⚠️ 推进 phase 到下一阶段（Agent 自治：恢复执行后自动发送 layer_started）
+        await checkpoint_service.update_state(session_id, {
             "pause_after_step": False,
+            "previous_layer": 0,
             "phase": next_phase,
             "current_wave": 1,
         })
+
+        logger.info(f"[ReviewService] [{session_id}] Approved, phase={state.get('phase', 'init')} -> {next_phase}, next_layer={next_layer}")
+        logger.info(f"[ReviewService] [{session_id}] layer_started 将由 Agent 恢复执行时自动发送")
 
         # Update stream state
         sse_manager.set_stream_state(session_id, "active")
@@ -214,21 +148,16 @@ class ReviewService:
             RejectResponse with result
 
         Raises:
-            ValueError: If feedback is empty or session not found
+            ValueError: If feedback is empty
         """
-        from src.orchestration.main_graph import create_unified_planning_graph
-        from backend.database.engine import get_global_checkpointer
-
         if not feedback:
             raise ValueError("Feedback is required for rejection")
 
-        # Get checkpointer
-        checkpointer = await get_global_checkpointer()
-        graph = create_unified_planning_graph(checkpointer=checkpointer)
-        config = {"configurable": {"thread_id": session_id}}
+        # Validate session exists
+        await checkpoint_service.validate_session(session_id)
 
-        # Update checkpoint state
-        await graph.aupdate_state(config, {
+        # Update checkpoint state using CheckpointService
+        await checkpoint_service.update_state(session_id, {
             "need_revision": True,
             "revision_target_dimensions": dimensions or [],
             "human_feedback": feedback,
@@ -285,30 +214,29 @@ class ReviewService:
         Raises:
             ValueError: If checkpoint not found
         """
-        from src.orchestration.main_graph import create_unified_planning_graph
         from src.orchestration.state import get_layer_dimensions
-        from backend.database.engine import get_global_checkpointer
 
-        # Get checkpointer
-        checkpointer = await get_global_checkpointer()
-        graph = create_unified_planning_graph(checkpointer=checkpointer)
-        config = {"configurable": {"thread_id": session_id}}
+        # Validate session exists
+        await checkpoint_service.validate_session(session_id)
+
+        # Get checkpoint history using CheckpointService
+        history = await checkpoint_service.get_checkpoint_history(session_id)
 
         # Find target checkpoint
-        target_state_snapshot = None
+        target_snapshot = None
         available_checkpoints = []
-        async for state_snapshot in graph.aget_state_history(config):
-            snapshot_checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+        for snapshot in history:
+            snapshot_checkpoint_id = snapshot.get("checkpoint_id", "")
             available_checkpoints.append(snapshot_checkpoint_id)
             if snapshot_checkpoint_id == checkpoint_id:
-                target_state_snapshot = state_snapshot
+                target_snapshot = snapshot
                 break
 
-        if not target_state_snapshot:
+        if not target_snapshot:
             logger.error(f"[Rollback] Checkpoint not found! Available: {available_checkpoints}")
             raise ValueError(f"Checkpoint not found: {checkpoint_id}")
 
-        target_values = target_state_snapshot.values
+        target_values = target_snapshot.get("values", {})
 
         # Determine completed layer from target state
         def determine_completed_layer(values: dict) -> int:
@@ -337,7 +265,7 @@ class ReviewService:
         logger.info(f"[Rollback] Target completed layer: {target_completed_layer}")
 
         # Build rollback state
-        rollback_checkpoint_id = target_state_snapshot.config.get("configurable", {}).get("checkpoint_id")
+        rollback_checkpoint_id = target_snapshot.get("config", {}).get("configurable", {}).get("checkpoint_id")
         existing_reports = target_values.get("reports", {})
         existing_completed = target_values.get("completed_dimensions", {})
 
@@ -390,8 +318,8 @@ class ReviewService:
                 "revision_from_checkpoint_id": rollback_checkpoint_id,
             }
 
-        # Apply rollback state
-        await graph.aupdate_state(config, rollback_state, as_node=None)
+        # Apply rollback state using CheckpointService with as_node=None
+        await checkpoint_service.update_state(session_id, rollback_state, as_node=None)
 
         # Update database status
         await update_planning_session_async(session_id, {

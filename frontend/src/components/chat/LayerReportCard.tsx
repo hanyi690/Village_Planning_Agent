@@ -6,7 +6,7 @@
  * 使用 Tailwind CSS + Framer Motion
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ParsedDimension, parseLayerReport } from '@/lib/layerReportParser';
 import DimensionSection from './DimensionSection';
@@ -47,6 +47,7 @@ export default function LayerReportCard({
 
   const [allExpanded, setAllExpanded] = useState(false);
   const [localExpanded, setLocalExpanded] = useState(actualDefaultExpanded);
+  const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
 
   const dimensions = useMemo(() => {
     if (propDimensions && propDimensions.length > 0) {
@@ -59,6 +60,57 @@ export default function LayerReportCard({
   const actualCharCount = useMemo(() => {
     return dimensions.reduce((sum, dim) => sum + (dim.content?.length || 0), 0);
   }, [dimensions]);
+
+  // Initialize expandedMap when dimensions change
+  useEffect(() => {
+    if (dimensions.length > 0) {
+      setExpandedMap((prev) => {
+        // Only initialize if empty or new dimensions added
+        if (Object.keys(prev).length === 0) {
+          const initial: Record<string, boolean> = {};
+          dimensions.forEach((dim) => {
+            initial[dim.name] = actualDefaultExpanded;
+          });
+          return initial;
+        }
+        // Add new dimensions with default value
+        const updated = { ...prev };
+        dimensions.forEach((dim) => {
+          if (!(dim.name in updated)) {
+            updated[dim.name] = actualDefaultExpanded;
+          }
+        });
+        return updated;
+      });
+    }
+  }, [dimensions, actualDefaultExpanded]);
+
+  // Handle toggle all dimensions
+  const handleToggleAll = (expand: boolean) => {
+    const newMap: Record<string, boolean> = {};
+    dimensions.forEach((dim) => {
+      newMap[dim.name] = expand;
+    });
+    setExpandedMap(newMap);
+    setAllExpanded(expand);
+    onToggleAll?.(expand);
+  };
+
+  // Handle single dimension toggle
+  const handleDimensionToggle = (dimensionName: string, expanded: boolean) => {
+    setExpandedMap((prev) => {
+      const newMap = {
+        ...prev,
+        [dimensionName]: expanded,
+      };
+      // Update allExpanded state based on new state
+      const allDimsExpanded = dimensions.every(
+        (dim) => newMap[dim.name] ?? actualDefaultExpanded
+      );
+      setAllExpanded(allDimsExpanded);
+      return newMap;
+    });
+  };
 
   const handleCopyDimension = (dimensionName: string, dimensionContent: string) => {
     const textToCopy = `## ${dimensionName}\n\n${dimensionContent}`;
@@ -77,16 +129,6 @@ export default function LayerReportCard({
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  };
-
-  const handleExpandAll = () => {
-    setAllExpanded(true);
-    onToggleAll?.(true);
-  };
-
-  const handleCollapseAll = () => {
-    setAllExpanded(false);
-    onToggleAll?.(false);
   };
 
   const handleToggleExpanded = () => {
@@ -130,8 +172,8 @@ export default function LayerReportCard({
         !isActive ? 'opacity-70' : ''
       }`}
       style={{
-        maxHeight: mode === 'chat' && !localExpanded ? actualMaxHeight : 'none',
-        overflow: localExpanded ? 'visible' : 'hidden',
+        maxHeight: localExpanded ? 'none' : actualMaxHeight,
+        overflow: 'hidden',
       }}
     >
       {/* 非活跃层标识 */}
@@ -160,6 +202,22 @@ export default function LayerReportCard({
               <p className="text-sm text-gray-500 mt-1">
                 {dimensions.length} 个维度 · {actualCharCount} 字
               </p>
+              {/* Chat mode expand/collapse toggle button */}
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => handleToggleAll(!allExpanded)}
+                className={allExpanded
+                  ? "flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg"
+                  : "flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white rounded-lg shadow-sm"
+                }
+                style={!allExpanded ? {
+                  background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+                } : undefined}
+              >
+                <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
+                {allExpanded ? '折叠全部' : '展开全部'}
+              </motion.button>
             </div>
           ) : (
             <div className="flex justify-between items-center mb-5 pb-4 border-b border-cyan-200/50">
@@ -175,30 +233,22 @@ export default function LayerReportCard({
 
               {/* Action buttons - Sidebar only */}
               {actualShowExpandAll && (
-                <div className="flex gap-2">
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={handleExpandAll}
-                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md"
-                    style={{
-                      background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
-                      boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
-                    }}
-                  >
-                    <i className="fas fa-expand-alt" />
-                    展开全部
-                  </motion.button>
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={handleCollapseAll}
-                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors"
-                  >
-                    <i className="fas fa-compress-alt" />
-                    折叠全部
-                  </motion.button>
-                </div>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => handleToggleAll(!allExpanded)}
+                  className={allExpanded
+                    ? "flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors"
+                    : "flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md"
+                  }
+                  style={!allExpanded ? {
+                    background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+                    boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
+                  } : undefined}
+                >
+                  <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
+                  {allExpanded ? '折叠全部' : '展开全部'}
+                </motion.button>
               )}
             </div>
           )}
@@ -206,17 +256,7 @@ export default function LayerReportCard({
       )}
 
       {/* Dimension sections */}
-      <div
-        className="space-y-3"
-        style={{
-          maxHeight: localExpanded
-            ? '80vh'
-            : mode === 'chat' && !localExpanded
-              ? actualMaxHeight
-              : 'none',
-          overflow: 'auto',
-        }}
-      >
+      <div className="space-y-3">
         {dimensions.map((dimension, index) => (
           <DimensionSection
             key={index}
@@ -224,7 +264,8 @@ export default function LayerReportCard({
             content={dimension.content}
             icon={dimension.icon}
             subsections={dimension.subsections}
-            defaultExpanded={allExpanded || actualDefaultExpanded}
+            expanded={expandedMap[dimension.name] ?? actualDefaultExpanded}
+            onToggle={(expanded) => handleDimensionToggle(dimension.name, expanded)}
             onCopy={() => handleCopyDimension(dimension.name, dimension.content)}
             onExport={() => handleExportDimension(dimension.name, dimension.content)}
           />

@@ -4,7 +4,7 @@
  */
 
 import { renderHook, act } from '@testing-library/react';
-import { useStreamingRender } from '@/hooks/useStreamingRender';
+import { useStreamingRender } from '@/hooks/utils';
 
 // Mock requestAnimationFrame
 let rafCallback: FrameRequestCallback | null = null;

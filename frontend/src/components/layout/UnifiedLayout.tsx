@@ -14,7 +14,7 @@ import { useRouter } from 'next/navigation';
 import Header from './Header';
 import HistoryPanel from './HistoryPanel';
 import KnowledgePanel from './KnowledgePanel';
-import { usePlanningContext } from '@/providers/PlanningProvider';
+import { usePlanningActions } from '@/stores';
 
 interface UnifiedLayoutProps {
   taskId: string;
@@ -26,7 +26,7 @@ function UnifiedLayoutComponent({ taskId, children, onOpenLayerSidebar }: Unifie
   const router = useRouter();
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [knowledgeModalOpen, setKnowledgeModalOpen] = useState(false);
-  const { actions } = usePlanningContext();
+  const actions = usePlanningActions();
 
   const handleToggleHistory = useCallback(() => {
     setHistoryModalOpen((prev) => !prev);
@@ -44,7 +44,7 @@ function UnifiedLayoutComponent({ taskId, children, onOpenLayerSidebar }: Unifie
   }, [actions, router]);
 
   return (
-    <div className="min-h-screen bg-[#F9FBF9]">
+    <div className="h-screen overflow-hidden bg-[#F9FBF9]">
       {/* Header - fixed at top */}
       <Header
         taskId={taskId}
@@ -54,7 +54,7 @@ function UnifiedLayoutComponent({ taskId, children, onOpenLayerSidebar }: Unifie
       />
 
       {/* Main content - centered with max-width */}
-      <main className="mx-auto w-full max-w-[1400px] px-4 pt-4 pb-8">
+      <main className="mx-auto w-full max-w-[1400px] px-4 pt-14 pb-4 h-full">
         {/* Clone children with onOpenLayerSidebar prop */}
         {Children.map(children, (child) => {
           if (React.isValidElement(child)) {

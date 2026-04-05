@@ -74,6 +74,20 @@ class SSEManager:
     _stream_states_lock = Lock()
     _status_log_lock = Lock()
 
+    # ============================================
+    # Critical Event Cache (prevent event loss when no subscribers)
+    # ============================================
+
+    # Cache dimension_complete events: session_id -> dimension_key -> event
+    _last_dimension_complete: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    # Cache layer_completed events: session_id -> layer -> event
+    _last_layer_completed: Dict[str, Dict[int, Dict[str, Any]]] = {}
+
+    # Locks for critical event cache
+    _dimension_cache_lock = Lock()
+    _layer_cache_lock = Lock()
+
     @classmethod
     def save_event_loop(cls, loop: asyncio.AbstractEventLoop) -> None:
         """
@@ -158,7 +172,9 @@ class SSEManager:
         """
         Subscribe to session's event stream.
 
-        Creates a dedicated queue for this connection and syncs historical events.
+        Creates a dedicated queue for this connection and syncs:
+        1. Historical events from session storage
+        2. Cached critical events (dimension_complete, layer_completed)
 
         Args:
             session_id: Session identifier
@@ -166,7 +182,7 @@ class SSEManager:
         Returns:
             asyncio.Queue for this connection
         """
-        queue = asyncio.Queue(maxsize=200)
+        queue = asyncio.Queue(maxsize=500)
 
         with cls._subscribers_lock:
             if session_id not in cls._session_subscribers:
@@ -186,7 +202,35 @@ class SSEManager:
                         logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping event")
                         break
 
-        logger.info(f"[SSEManager] Session {session_id}: Subscribed, historical events = {historical_count}")
+        # Sync cached dimension_complete events
+        cached_dim_count = 0
+        with cls._dimension_cache_lock:
+            if session_id in cls._last_dimension_complete:
+                for dim_key, event in cls._last_dimension_complete[session_id].items():
+                    try:
+                        queue.put_nowait(event)
+                        cached_dim_count += 1
+                    except asyncio.QueueFull:
+                        logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached dim event")
+                        break
+
+        # Sync cached layer_completed events
+        cached_layer_count = 0
+        with cls._layer_cache_lock:
+            if session_id in cls._last_layer_completed:
+                for layer, event in cls._last_layer_completed[session_id].items():
+                    try:
+                        queue.put_nowait(event)
+                        cached_layer_count += 1
+                    except asyncio.QueueFull:
+                        logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached layer event")
+                        break
+
+        total_synced = historical_count + cached_dim_count + cached_layer_count
+        logger.info(
+            f"[SSEManager] Session {session_id}: Subscribed, "
+            f"historical={historical_count}, cached_dim={cached_dim_count}, cached_layer={cached_layer_count}, total={total_synced}"
+        )
         return queue
 
     @classmethod
@@ -224,6 +268,8 @@ class SSEManager:
         """
         Publish event to all subscribers (async version).
 
+        When no subscribers, cache critical events for later delivery.
+
         Args:
             session_id: Session identifier
             event: Event dictionary
@@ -231,9 +277,29 @@ class SSEManager:
         subscribers = cls._session_subscribers.get(session_id, set())
         event_type = event.get("type", "unknown")
 
+        # Cache critical events regardless of subscriber status
+        if event_type == "dimension_complete":
+            dimension_key = event.get("dimension_key", "")
+            if dimension_key:
+                with cls._dimension_cache_lock:
+                    if session_id not in cls._last_dimension_complete:
+                        cls._last_dimension_complete[session_id] = {}
+                    cls._last_dimension_complete[session_id][dimension_key] = event
+                    logger.info(f"[SSEManager] Cached dimension_complete for {session_id}/{dimension_key}")
+
+        elif event_type == "layer_completed":
+            layer = event.get("layer", 0)
+            if layer:
+                with cls._layer_cache_lock:
+                    if session_id not in cls._last_layer_completed:
+                        cls._last_layer_completed[session_id] = {}
+                    cls._last_layer_completed[session_id][layer] = event
+                    logger.info(f"[SSEManager] Cached layer_completed for {session_id}/Layer{layer}")
+
+        # If no subscribers, skip sending (events are already cached above)
         if not subscribers:
             if event_type in ["layer_completed", "dimension_complete"]:
-                logger.warning(f"[SSEManager] Session {session_id}: No subscribers for {event_type}")
+                logger.warning(f"[SSEManager] Session {session_id}: No subscribers, event cached")
             return
 
         success_count = 0
@@ -575,6 +641,8 @@ class SSEManager:
             "executions": 0,
             "streams": 0,
             "log_trackers": 0,
+            "dimension_caches": 0,
+            "layer_caches": 0,
         }
 
         # Clean expired sessions
@@ -620,12 +688,33 @@ class SSEManager:
                 del cls._status_log_tracker[sid]
                 cleaned["log_trackers"] += 1
 
+        # Clean orphan dimension_complete caches
+        with cls._dimension_cache_lock:
+            orphan_dim_caches = [
+                sid for sid in cls._last_dimension_complete
+                if sid not in current_session_ids
+            ]
+            for sid in orphan_dim_caches:
+                del cls._last_dimension_complete[sid]
+                cleaned["dimension_caches"] += 1
+
+        # Clean orphan layer_completed caches
+        with cls._layer_cache_lock:
+            orphan_layer_caches = [
+                sid for sid in cls._last_layer_completed
+                if sid not in current_session_ids
+            ]
+            for sid in orphan_layer_caches:
+                del cls._last_layer_completed[sid]
+                cleaned["layer_caches"] += 1
+
         total = sum(cleaned.values())
         if total > 0:
             logger.info(
                 f"[SSEManager] Cleanup completed: "
                 f"sessions={cleaned['sessions']}, executions={cleaned['executions']}, "
-                f"streams={cleaned['streams']}, trackers={cleaned['log_trackers']}"
+                f"streams={cleaned['streams']}, trackers={cleaned['log_trackers']}, "
+                f"dim_caches={cleaned['dimension_caches']}, layer_caches={cleaned['layer_caches']}"
             )
 
         return cleaned
@@ -633,7 +722,7 @@ class SSEManager:
     @classmethod
     def delete_session_all_states(cls, session_id: str) -> Dict[str, bool]:
         """
-        Delete all states for a session (sessions, executions, streams, log_trackers).
+        Delete all states for a session (sessions, executions, streams, log_trackers, event caches).
 
         Args:
             session_id: Session identifier
@@ -647,6 +736,22 @@ class SSEManager:
             "stream": cls.delete_stream_state(session_id),
             "log_tracker": cls.delete_status_log_tracker(session_id),
         }
+
+        # Clean up critical event caches
+        with cls._dimension_cache_lock:
+            if session_id in cls._last_dimension_complete:
+                del cls._last_dimension_complete[session_id]
+                result["dimension_cache"] = True
+            else:
+                result["dimension_cache"] = False
+
+        with cls._layer_cache_lock:
+            if session_id in cls._last_layer_completed:
+                del cls._last_layer_completed[session_id]
+                result["layer_cache"] = True
+            else:
+                result["layer_cache"] = False
+
         logger.debug(f"[SSEManager] Session {session_id}: all states deleted")
         return result
 

@@ -11,7 +11,7 @@ import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
-import { usePlanningContext } from '@/providers/PlanningProvider';
+import { usePlanningStore } from '@/stores';
 import DimensionSection from '@/components/chat/DimensionSection';
 import { getDimensionConfigsByLayer } from '@/config/dimensions';
 import { LAYER_VALUE_MAP } from '@/lib/constants';
@@ -22,22 +22,23 @@ interface LayerSidebarProps {
 }
 
 export default function LayerSidebar({ activeLayer, onClose }: LayerSidebarProps) {
-  const { state } = usePlanningContext();
+  const reports = usePlanningStore((state) => state.reports);
+  const completedDimensions = usePlanningStore((state) => state.completedDimensions);
 
   // Derive layerReports and completedLayers from state
   const layerReports = {
-    analysis_reports: state.reports.layer1,
-    concept_reports: state.reports.layer2,
-    detail_reports: state.reports.layer3,
+    analysis_reports: reports.layer1,
+    concept_reports: reports.layer2,
+    detail_reports: reports.layer3,
     analysis_report_content: '',
     concept_report_content: '',
     detail_report_content: '',
   };
 
   const completedLayers = {
-    1: state.completedDimensions.layer1.length > 0,
-    2: state.completedDimensions.layer2.length > 0,
-    3: state.completedDimensions.layer3.length > 0,
+    1: completedDimensions.layer1.length > 0,
+    2: completedDimensions.layer2.length > 0,
+    3: completedDimensions.layer3.length > 0,
   };
 
   const [mounted, setMounted] = useState(false);

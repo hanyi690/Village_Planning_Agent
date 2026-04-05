@@ -36,73 +36,59 @@ class TaskStatus(str, Enum):
 # Task Schemas
 # ============================================
 
-class PlanningRequest(BaseModel):
-    """规划任务请求"""
-    project_name: str = Field(..., description="项目名称/村庄名称")
-    village_data: str = Field(..., description="村庄现状数据")
+class StartPlanningRequest(BaseModel):
+    """启动规划会话请求"""
+    project_name: str = Field(..., description="项目/村庄名称")
+    village_data: str = Field(..., description="村庄基础数据")
+    village_name: str = Field("", description="村庄名称（用于提示词约束）")
     task_description: str = Field(default=DEFAULT_TASK_DESCRIPTION, description="规划任务描述")
     constraints: str = Field(default=DEFAULT_CONSTRAINTS, description="规划约束条件")
-    need_human_review: bool = Field(default=DEFAULT_ENABLE_REVIEW, description="是否需要人工审核")
-    stream_mode: bool = Field(default=DEFAULT_STREAM_MODE, description="是否使用流式输出")
-    step_mode: bool = Field(default=DEFAULT_STEP_MODE, description="是否使用步进模式")
-
-
-class TaskResponse(BaseModel):
-    """任务创建响应"""
-    task_id: str = Field(..., description="任务ID")
-    status: TaskStatus = Field(..., description="任务状态")
-    message: str = Field(..., description="响应消息")
-
-
-class TaskStatusResponse(BaseModel):
-    """任务状态响应"""
-    task_id: str = Field(..., description="任务ID")
-    status: TaskStatus = Field(..., description="任务状态")
-    progress: Optional[float] = Field(None, description="进度百分比 (0-100)")
-    current_layer: Optional[str] = Field(None, description="当前层级")
-    message: Optional[str] = Field(None, description="状态消息")
-    result: Optional[Dict[str, Any]] = Field(None, description="任务结果")
-    error: Optional[str] = Field(None, description="错误信息")
-    created_at: datetime = Field(..., description="创建时间")
-    updated_at: datetime = Field(..., description="更新时间")
+    enable_review: bool = Field(default=DEFAULT_ENABLE_REVIEW, description="启用交互式审查")
+    stream_mode: bool = Field(default=DEFAULT_STREAM_MODE, description="启用流式输出")
+    step_mode: bool = Field(default=DEFAULT_STEP_MODE, description="启用分步执行模式")
 
 
 # ============================================
 # Review & Revision Schemas
 # ============================================
 
-class ReviewRejectRequest(BaseModel):
-    """审查驳回请求"""
-    feedback: str = Field(..., description="驳回反馈/修改意见", min_length=1)
-    target_dimensions: Optional[List[str]] = Field(None, description="目标维度列表（仅Layer 3详细规划需要）")
+class ReviewActionRequest(BaseModel):
+    """审查操作请求"""
+    action: str = Field(..., description="操作类型: approve, reject, rollback")
+    feedback: str = Field("", description="驳回反馈（reject 时必填）")
+    dimensions: Optional[List[str]] = Field(None, description="需要修订的维度列表")
+    checkpoint_id: Optional[str] = Field(None, description="回滚目标检查点（rollback 时必填）")
 
 
-class RollbackRequest(BaseModel):
-    """回退请求"""
-    checkpoint_id: str = Field(..., description="检查点ID")
-
-
-class ReviewDataResponse(BaseModel):
-    """审查数据响应"""
-    task_id: str = Field(..., description="任务ID")
-    current_layer: int = Field(..., description="当前层级 (1/2/3)")
-    content: str = Field(..., description="当前层级内容")
-    summary: Dict[str, Any] = Field(..., description="内容摘要")
-    available_dimensions: List[str] = Field(..., description="可修改的维度列表")
-    checkpoints: List[Dict[str, Any]] = Field(..., description="可用检查点列表")
-
-
-class ReviewActionResponse(BaseModel):
-    """审查操作响应"""
-    success: bool = Field(..., description="操作是否成功")
-    message: str = Field(..., description="响应消息")
-    task_status: TaskStatus = Field(..., description="任务当前状态")
-    revision_progress: Optional[Dict[str, Any]] = Field(None, description="修复进度信息")
+class ResumeRequest(BaseModel):
+    """恢复执行请求"""
+    checkpoint_id: str = Field(..., description="目标检查点 ID")
+    project_name: str = Field(..., description="项目名称")
 
 
 # ============================================
 # Session Schemas
 # ============================================
+
+class SessionStatusResponse(BaseModel):
+    """会话状态响应"""
+    session_id: str = Field(..., description="会话ID")
+    status: str = Field(..., description="会话状态")
+    current_layer: Optional[int] = Field(None, description="当前层级")
+    previous_layer: Optional[int] = Field(None, description="前一个层级")
+    created_at: Optional[str] = Field(None, description="创建时间")
+    progress: Optional[float] = Field(None, description="进度百分比")
+    layer_1_completed: bool = Field(False, description="Layer 1 是否完成")
+    layer_2_completed: bool = Field(False, description="Layer 2 是否完成")
+    layer_3_completed: bool = Field(False, description="Layer 3 是否完成")
+    pause_after_step: bool = Field(False, description="是否处于暂停状态")
+    execution_complete: bool = Field(False, description="执行是否完成")
+    execution_error: Optional[str] = Field(None, description="执行错误信息")
+    messages: List[Dict[str, Any]] = Field(default_factory=list, description="消息列表")
+    ui_messages: List[Dict[str, Any]] = Field(default_factory=list, description="UI消息列表")
+    revision_history: List[Dict[str, Any]] = Field(default_factory=list, description="修订历史")
+    last_checkpoint_id: str = Field("", description="最后一个检查点ID")
+
 
 class ConversationMessage(BaseModel):
     """会话消息"""
@@ -168,3 +154,27 @@ class HealthResponse(BaseModel):
     status: str = Field(..., description="服务状态")
     version: str = Field(default="1.0.0", description="API版本")
     timestamp: datetime = Field(default_factory=datetime.now, description="检查时间")
+
+
+# ============================================
+# UI Message Schemas
+# ============================================
+
+class CreateUIMessageRequest(BaseModel):
+    """创建 UI 消息请求"""
+    message_id: str = Field(..., description="前端消息ID（唯一标识，用于 upsert）")
+    role: str = Field(..., description="消息角色: user, assistant, system")
+    content: str = Field(..., description="消息内容")
+    message_type: str = Field("text", description="消息类型: text, markdown, status")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
+
+
+class ChatMessageRequest(BaseModel):
+    """对话消息请求"""
+    message: str = Field(..., description="用户消息内容")
+
+
+class RunDimensionsRequest(BaseModel):
+    """运行维度分析请求"""
+    layer: int = Field(..., description="层级 (1, 2, 或 3)")
+    dimension_keys: List[str] = Field(..., description="要分析的维度键列表")

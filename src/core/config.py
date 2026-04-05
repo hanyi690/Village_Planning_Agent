@@ -17,12 +17,17 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
+# LLM Request Timeout (seconds)
+LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "180"))  # 3 minutes
+LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "300"))  # 5 minutes
+
 # OpenAI-compatible API base URL (for DeepSeek, etc.)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")
 
 # RAG / Vector store settings
 VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", "f:\\project\\Village_Planning_Agent\\vectordb")
 VECTORDB_PERSIST = os.getenv("VECTORDB_PERSIST", "true").lower() in ("1", "true", "yes")
+RAG_ENABLED = os.getenv("RAG_ENABLED", "true").lower() in ("1", "true", "yes")
 
 # ==========================================
 # LangSmith 追踪配置
@@ -87,4 +92,10 @@ GIS_TIMEOUT: int = int(os.getenv("GIS_TIMEOUT", "30"))
 # 知识库类别
 KB_CATEGORIES = ["policies", "cases", "standards", "domain", "local"]
 KB_DEFAULT_CATEGORY = "policies"
+
+# ==========================================
+# Logging Configuration
+# ==========================================
+
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 

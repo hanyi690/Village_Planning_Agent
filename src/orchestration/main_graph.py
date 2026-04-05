@@ -76,6 +76,7 @@ from .routing import (
 from .nodes.dimension_node import (
     analyze_dimension_for_send,
     create_dimension_state,
+    knowledge_preload_node,
     DIMENSION_NAMES,
     get_layer_from_dimension,
 )
@@ -85,26 +86,18 @@ logger = get_logger(__name__)
 
 
 # ==========================================
-# 工具定义
+# Graph Caching (avoid repeated construction)
 # ==========================================
 
-ADVANCE_PLANNING_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "AdvancePlanningIntent",
-        "description": "推进规划流程到下一阶段。当用户表示要继续规划、开始分析、下一步时调用。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "reason": {
-                    "type": "string",
-                    "description": "推进规划的原因"
-                }
-            },
-            "required": []
-        }
-    }
-}
+_cached_graph = None
+_graph_checkpointer_ref = None
+
+
+# ==========================================
+# 工具定义（从共享常量导入）
+# ==========================================
+
+from src.constants.tools import ADVANCE_PLANNING_TOOL
 
 
 # ==========================================
@@ -125,9 +118,13 @@ async def conversation_node(state: UnifiedPlanningState) -> Dict[str, Any]:
     project_name = state.get("project_name", "")
     config = state.get("config", {})
     reports = state.get("reports", {})
+    previous_layer = state.get("previous_layer", 0)
 
-    # 构建系统提示
-    system_prompt = _build_system_prompt(phase, project_name, config, reports)
+    # 构建系统提示（传递恢复执行信息）
+    system_prompt = _build_system_prompt(
+        phase, project_name, config, reports,
+        previous_layer=previous_layer
+    )
 
     # 获取 LLM 并绑定工具
     llm = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
@@ -148,7 +145,8 @@ def _build_system_prompt(
     phase: str,
     project_name: str,
     config: PlanningConfig,
-    reports: Dict[str, Dict[str, str]]
+    reports: Dict[str, Dict[str, str]],
+    previous_layer: int = 0
 ) -> str:
     """构建系统提示"""
     # 格式化已有报告
@@ -162,9 +160,28 @@ def _build_system_prompt(
                 preview = content[:100] + "..." if len(content) > 100 else content
                 reports_summary += f"  - {dim_name}: {preview}\n"
 
+    # 恢复执行提示（当 phase 是 layer2/3 且 previous_layer 为 0 时表示刚恢复）
+    resume_hint = ""
+    layer_num = 0
+    if phase.startswith("layer"):
+        try:
+            layer_num = int(phase.replace("layer", ""))
+        except ValueError:
+            pass
+
+    # 检测恢复执行状态：phase 已推进到下一层，previous_layer=0 表示刚批准
+    if layer_num in [2, 3] and previous_layer == 0:
+        completed_layer = layer_num - 1
+        resume_hint = f"""
+
+【恢复执行提示】
+用户已批准 Layer {completed_layer} 的审查结果，现在需要继续执行 Layer {layer_num} 的规划分析。
+请立即调用 AdvancePlanningIntent 工具开始下一层的规划分析，无需等待用户再次确认。"""
+
     return f"""你是村庄规划助手，正在进行 {project_name} 的规划工作。
 
 当前阶段：{PHASE_DESCRIPTIONS.get(phase, '未知')}
+{resume_hint}
 
 规划任务：{config.get('task_description', '制定村庄发展规划')}
 约束条件：{config.get('constraints', '无特殊约束')}
@@ -305,7 +322,7 @@ def emit_events(state: UnifiedPlanningState) -> Dict[str, Any]:
     return emit_sse_events(state)
 
 
-def check_completion(state: UnifiedPlanningState) -> Literal["continue", "advance", "complete", "revision"]:
+def check_completion(state: UnifiedPlanningState) -> Literal["continue", "advance", "complete", "revision", "pause"]:
     """检查阶段完成状态"""
     if state.get("need_revision"):
         return "revision"
@@ -316,6 +333,8 @@ def check_completion(state: UnifiedPlanningState) -> Literal["continue", "advanc
         return "complete"
     elif result == "advance":
         return "advance"
+    elif result == "pause":
+        return "pause"
     else:
         return "continue"
 
@@ -359,7 +378,17 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
 
     单一 State，消灭双写问题。
     Checkpoint 完整记录聊天+规划。
+
+    Uses caching to avoid repeated graph construction.
     """
+    global _cached_graph, _graph_checkpointer_ref
+
+    # Cache hit: return cached graph
+    if _cached_graph is not None and _graph_checkpointer_ref is checkpointer:
+        logger.debug("[图构建] 使用缓存的 Router Agent 图")
+        return _cached_graph
+
+    # Cache miss: build new graph
     logger.info("[图构建] 开始构建 Router Agent 图")
 
     builder = StateGraph(UnifiedPlanningState)
@@ -367,6 +396,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     # 添加节点
     builder.add_node("conversation", conversation_node)
     builder.add_node("execute_tools", execute_tools_node)
+    builder.add_node("knowledge_preload", knowledge_preload_node)
     builder.add_node("analyze_dimension", analyze_dimension)
     builder.add_node("emit_events", emit_events)
     builder.add_node("collect_results", collect_results)
@@ -420,12 +450,17 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
         "route_planning",
         route_planning,
         {
+            "knowledge_preload": "knowledge_preload",
             "analyze_dimension": "analyze_dimension",
             "revision": "revision",
             "collect_results": "collect_results",
+            "advance_phase": "advance_phase",
             END: END
         }
     )
+
+    # 知识预加载完成后，返回路由重新分发
+    builder.add_edge("knowledge_preload", "route_planning")
 
     # 维度分析 -> 发送事件
     builder.add_edge("analyze_dimension", "emit_events")
@@ -441,12 +476,13 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
             "continue": "conversation",  # 继续当前阶段
             "advance": "advance_phase",  # 推进到下一阶段
             "complete": END,             # 规划完成
-            "revision": "revision"       # 进入修订
+            "revision": "revision",      # 进入修订
+            "pause": END                 # 暂停等待审查
         }
     )
 
-    # 阶段推进 -> 返回对话
-    builder.add_edge("advance_phase", "conversation")
+    # 阶段推进 -> 路由分发
+    builder.add_edge("advance_phase", "route_planning")
 
     # 修订 -> 返回对话
     builder.add_edge("revision", "conversation")
@@ -454,6 +490,10 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     # 编译图
     graph = builder.compile(checkpointer=checkpointer)
     logger.info("[图构建] Router Agent 图构建完成")
+
+    # Update cache
+    _cached_graph = graph
+    _graph_checkpointer_ref = checkpointer
 
     return graph
 

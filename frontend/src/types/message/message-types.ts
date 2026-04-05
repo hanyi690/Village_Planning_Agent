@@ -6,7 +6,7 @@
  * Each type represents a different kind of message in the conversational UI.
  */
 
-import type { BaseMessage, ActionButton, KnowledgeReference } from './message';
+import type { BaseMessage, ActionButton, KnowledgeReference } from './index';
 
 // ============================================================================
 // Core Message Types (实际使用的5种类型)

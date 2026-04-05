@@ -28,10 +28,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.api.validate_config import validate_config
 from src.utils.paths import ensure_working_directory, get_project_root, get_results_dir
+from src.core.config import LOG_LEVEL
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
@@ -87,10 +88,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Database initialization failed: {e}", exc_info=True)
 
-    # Start session cleanup task
-    from backend.api.planning import start_session_cleanup, stop_session_cleanup
-    await start_session_cleanup()
-    logger.info("🧹 Session cleanup task started")
+    # Initialize PlanningRuntimeService (LangGraph runtime singleton)
+    logger.info("🔧 Initializing PlanningRuntimeService...")
+    try:
+        from backend.services.planning_runtime_service import PlanningRuntimeService
+        await PlanningRuntimeService.initialize()
+        logger.info("✅ PlanningRuntimeService initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ PlanningRuntimeService initialization failed: {e}", exc_info=True)
+
+    # Save event loop for cross-thread SSE publishing and start cleanup
+    from backend.api.planning import on_startup, on_shutdown
+    await on_startup()
+    logger.info("🧹 SSE event loop saved, session cleanup task started")
 
     logger.info("✅ 后端服务启动完成")
     yield
@@ -104,8 +114,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Failed to dispose database engine: {e}", exc_info=True)
 
-    # Stop cleanup task
-    await stop_session_cleanup()
+    # Stop cleanup task via on_shutdown
+    await on_shutdown()
     logger.info("🧹 Session cleanup task stopped")
     logger.info("👋 后端服务关闭")
 

@@ -7,17 +7,117 @@
 状态驱动的 SSE 事件发布，废弃回调模式。
 """
 
+import asyncio
 from datetime import datetime
 from typing import Dict, Any, List, Optional, AsyncGenerator
 from langchain_core.messages import AIMessage
 
-from ...core.config import LLM_MODEL, MAX_TOKENS
+from ...core.config import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT, RAG_ENABLED
 from ...core.llm_factory import create_llm
 from ...config.dimension_metadata import get_dimension_config, get_dimension_layer
 from ...utils.logger import get_logger
-from ..state import PlanningPhase, get_layer_dimensions, get_wave_dimensions
+from ..state import PlanningPhase, get_layer_dimensions, get_wave_dimensions, _phase_to_layer
 
 logger = get_logger(__name__)
+
+
+# ==========================================
+# RAG 知识预加载
+# ==========================================
+
+async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    知识预加载节点 - 在维度分析前批量检索相关知识
+
+    预加载模式下，知识由本节点统一检索并缓存到 knowledge_cache。
+    后续维度节点从缓存读取，避免重复 RAG 调用。
+
+    Args:
+        state: 当前状态，包含 phase, config 等
+
+    Returns:
+        {"config": {"knowledge_cache": {维度键: 知识内容}}}
+    """
+    existing_config = state.get("config", {})
+    if not RAG_ENABLED:
+        logger.info("[知识预加载] RAG 未启用，跳过")
+        return {"config": {**existing_config, "knowledge_cache": {}}}
+
+    phase = state.get("phase", PlanningPhase.INIT.value)
+    config = state.get("config", {})
+    existing_cache = config.get("knowledge_cache", {})
+
+    # 确定当前层级的维度列表
+    layer = _phase_to_layer(phase)
+    if layer is None:
+        existing_config = state.get("config", {})
+        logger.info(f"[知识预加载] 阶段 {phase} 无对应层级，跳过")
+        return {"config": {**existing_config, "knowledge_cache": existing_cache}}
+
+    dimensions = get_layer_dimensions(layer)
+    if not dimensions:
+        existing_config = state.get("config", {})
+        logger.info(f"[知识预加载] Layer {layer} 无维度，跳过")
+        return {"config": {**existing_config, "knowledge_cache": existing_cache}}
+
+    logger.info(f"[知识预加载] 开始预加载 Layer {layer} 知识，维度: {len(dimensions)} 个")
+
+    # 批量检索知识
+    from ...rag.core.tools import search_knowledge
+
+    knowledge_cache = {}
+    task_description = config.get("task_description", "")
+    success_count = 0
+    fail_count = 0
+    success_details = []
+
+    for dim_key in dimensions:
+        # 如果已有缓存，跳过
+        if dim_key in existing_cache and existing_cache[dim_key]:
+            knowledge_cache[dim_key] = existing_cache[dim_key]
+            logger.debug(f"[知识预加载] {dim_key} 已缓存，跳过")
+            success_count += 1
+            success_details.append(f"{dim_key}({len(existing_cache[dim_key])})")
+            continue
+
+        try:
+            # 构建检索查询：维度名称 + 任务描述
+            dim_name = DIMENSION_NAMES.get(dim_key, dim_key)
+            query = f"{dim_name} 规划标准 技术指标"
+
+            # 添加任务上下文
+            if task_description:
+                query = f"{query} {task_description[:50]}"
+
+            result = search_knowledge(
+                query=query,
+                top_k=3,
+                context_mode="standard",
+                dimension=dim_key
+            )
+
+            if result and not result.startswith("❌"):
+                knowledge_cache[dim_key] = result
+                success_count += 1
+                success_details.append(f"{dim_key}({len(result)})")
+                logger.debug(f"[知识预加载] {dim_key} 检索成功，长度: {len(result)}")
+            else:
+                knowledge_cache[dim_key] = ""
+                fail_count += 1
+                logger.debug(f"[知识预加载] {dim_key} 检索无结果")
+
+        except Exception as e:
+            logger.error(f"[知识预加载] {dim_key} 检索失败: {e}")
+            knowledge_cache[dim_key] = ""
+            fail_count += 1
+
+    # 汇总日志
+    logger.info(f"[知识预加载] 完成: {success_count} 成功, {fail_count} 失败")
+    if success_details:
+        logger.info(f"[知识预加载] 成功维度: {', '.join(success_details[:6])}")
+
+    existing_config = state.get("config", {})
+    return {"config": {**existing_config, "knowledge_cache": knowledge_cache}}
 
 
 # ==========================================
@@ -99,7 +199,7 @@ async def analyze_dimension_for_send(
 
     dimension_name = DIMENSION_NAMES.get(dimension_key, dimension_key)
     layer = get_layer_from_dimension(dimension_key)
-    logger.info(f"[维度节点-Send] 开始分析: {dimension_name} ({dimension_key}), Layer: {layer}")
+    logger.debug(f"[维度节点-Send] 开始分析: {dimension_name} ({dimension_key}), Layer: {layer}")
 
     # 构建 SSE 事件列表
     sse_events = []
@@ -113,65 +213,109 @@ async def analyze_dimension_for_send(
         dimension_name=dimension_name
     ))
 
-    # 获取上下文
+    # 获取上下文 - 根据层级区分数据来源
     village_data = config.get("village_data", "")
+    village_name = config.get("village_name", "")
     task_description = config.get("task_description", "")
     constraints = config.get("constraints", "")
+    knowledge_cache = config.get("knowledge_cache", {})
+
+    # 区分层级数据来源
+    if layer == 2:
+        layer1_reports = reports.get("layer1", {})
+        if layer1_reports:
+            logger.debug(f"[维度节点] Layer 2 使用 Layer 1 报告，维度数: {len(layer1_reports)}")
+        else:
+            logger.warning(f"[维度节点] Layer 2 执行但 Layer 1 报告为空!")
+    elif layer == 3:
+        layer1_reports = reports.get("layer1", {})
+        layer2_reports = reports.get("layer2", {})
+        logger.debug(f"[维度节点] Layer 3 使用 Layer 1 ({len(layer1_reports)}) + Layer 2 ({len(layer2_reports)}) 报告")
+    else:
+        logger.debug(f"[维度节点] Layer 1 使用 village_data")
 
     # 构建 prompt
     prompt = _build_dimension_prompt(
         dimension_key=dimension_key,
         dimension_name=dimension_name,
         village_data=village_data,
+        village_name=village_name,
         task_description=task_description,
         constraints=constraints,
-        reports=reports
+        reports=reports,
+        knowledge_cache=knowledge_cache
     )
 
     # 调用 LLM（流式，收集 token 事件）
     llm = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
 
-    try:
-        # 流式模式：收集所有 token 事件
-        result = ""
+    # Record start time for diagnostics
+    start_time = asyncio.get_event_loop().time()
+    logger.debug(f"[维度节点-Send] LLM 调用开始: {dimension_name}")
+
+    # 实时发送：直接调用 SSEPublisher 发送 delta 事件
+    # 不再收集到 sse_events 数组，避免批量发送时的队列溢出
+    from ...utils.sse_publisher import SSEPublisher
+
+    async def collect_stream():
+        """Collect streaming result with real-time SSE publishing"""
+        collected_result = ""
         async for chunk in llm.astream(prompt):
             if chunk.content:
                 token = chunk.content
-                result += token
-                # 每 10 个字符发送一次 delta 事件（减少事件数量）
-                if len(result) % 50 == 0 or len(result) < 100:
-                    sse_events.append(_create_sse_event(
-                        event_type="dimension_delta",
+                collected_result += token
+                # 实时发送 delta 事件（不再收集到数组）
+                if len(collected_result) % 15 == 0 or len(collected_result) <= 30:
+                    SSEPublisher.send_dimension_delta(
                         session_id=session_id,
                         layer=layer,
                         dimension_key=dimension_key,
                         dimension_name=dimension_name,
-                        delta=token,
-                        accumulated=result
-                    ))
+                        token=token,
+                        accumulated=collected_result
+                    )
+        return collected_result
 
-        # 发送最后一次 delta（确保完整内容）
-        sse_events.append(_create_sse_event(
-            event_type="dimension_delta",
+    try:
+        # Use asyncio.wait_for for timeout protection
+        result = await asyncio.wait_for(
+            collect_stream(),
+            timeout=LLM_STREAM_TIMEOUT
+        )
+
+        elapsed = asyncio.get_event_loop().time() - start_time
+        logger.info(f"[维度节点-Send] LLM 调用完成: {dimension_name}, 耗时: {elapsed:.1f}s")
+
+        # Send final delta (实时发送，确保完整内容)
+        SSEPublisher.send_dimension_delta(
             session_id=session_id,
             layer=layer,
             dimension_key=dimension_key,
             dimension_name=dimension_name,
-            delta="",
+            token="",
             accumulated=result
-        ))
+        )
 
-        # 发送维度完成事件
-        sse_events.append(_create_sse_event(
-            event_type="dimension_complete",
+        # Send dimension complete event (实时发送，确保事件不丢失)
+        SSEPublisher.send_dimension_complete(
             session_id=session_id,
             layer=layer,
             dimension_key=dimension_key,
             dimension_name=dimension_name,
             full_content=result
+        )
+
+        # Keep a placeholder in sse_events for state tracking only
+        sse_events.append(_create_sse_event(
+            event_type="dimension_complete_sent",
+            session_id=session_id,
+            layer=layer,
+            dimension_key=dimension_key,
+            dimension_name=dimension_name
         ))
 
-        logger.info(f"[维度节点-Send] 分析完成: {dimension_name}, 长度: {len(result)}")
+        elapsed_total = asyncio.get_event_loop().time() - start_time
+        logger.info(f"[维度节点-Send] 分析完成: {dimension_name}, 长度: {len(result)}, 总耗时: {elapsed_total:.1f}s")
 
         return {
             "dimension_results": [{
@@ -184,10 +328,38 @@ async def analyze_dimension_for_send(
             "sse_events": sse_events
         }
 
-    except Exception as e:
-        logger.error(f"[维度节点-Send] 分析失败: {dimension_name}, 错误: {e}")
+    except asyncio.TimeoutError:
+        elapsed = asyncio.get_event_loop().time() - start_time
+        logger.error(f"[维度节点-Send] LLM 调用超时: {dimension_name}, 耗时: {elapsed:.1f}s")
 
-        # 发送错误事件
+        # Send timeout error event
+        sse_events.append(_create_sse_event(
+            event_type="dimension_error",
+            session_id=session_id,
+            layer=layer,
+            dimension_key=dimension_key,
+            dimension_name=dimension_name,
+            error=f"LLM 调用超时 (>{LLM_STREAM_TIMEOUT}s)",
+            error_type="timeout"
+        ))
+
+        return {
+            "dimension_results": [{
+                "dimension_key": dimension_key,
+                "dimension_name": dimension_name,
+                "result": f"分析超时: LLM 调用超过 {LLM_STREAM_TIMEOUT} 秒",
+                "success": False,
+                "layer": layer,
+                "error_type": "timeout"
+            }],
+            "sse_events": sse_events
+        }
+
+    except Exception as e:
+        elapsed = asyncio.get_event_loop().time() - start_time
+        logger.error(f"[维度节点-Send] 分析失败: {dimension_name}, 耗时: {elapsed:.1f}s, 错误: {e}")
+
+        # Send error event
         sse_events.append(_create_sse_event(
             event_type="dimension_error",
             session_id=session_id,
@@ -251,17 +423,21 @@ async def analyze_dimension_node(
 
     # 获取上下文
     village_data = config.get("village_data", "")
+    village_name = config.get("village_name", "")
     task_description = config.get("task_description", "")
     constraints = config.get("constraints", "")
+    knowledge_cache = config.get("knowledge_cache", {})
 
     # 构建 prompt
     prompt = _build_dimension_prompt(
         dimension_key=dimension_key,
         dimension_name=dimension_name,
         village_data=village_data,
+        village_name=village_name,
         task_description=task_description,
         constraints=constraints,
-        reports=reports
+        reports=reports,
+        knowledge_cache=knowledge_cache
     )
 
     # 调用 LLM（流式）
@@ -327,10 +503,16 @@ def _build_dimension_prompt(
     village_data: str,
     task_description: str,
     constraints: str,
-    reports: Dict[str, Dict[str, str]]
+    reports: Dict[str, Dict[str, str]],
+    village_name: str = "",
+    knowledge_cache: Dict[str, str] = None
 ) -> str:
     """构建维度分析 prompt - 使用专业模板"""
     layer = get_dimension_layer(dimension_key) or 3
+    knowledge_cache = knowledge_cache or {}
+
+    # 从缓存获取当前维度的知识
+    knowledge_context = knowledge_cache.get(dimension_key, "")
 
     # Layer 1: 使用 analysis_prompts 模板
     if layer == 1:
@@ -338,50 +520,92 @@ def _build_dimension_prompt(
         return get_dimension_prompt(
             dimension_key=dimension_key,
             raw_data=village_data,
-            professional_data=None,  # TODO: 从 state 获取专业数据
+            village_name=village_name,
+            professional_data=None,
             task_description=task_description,
-            constraints=constraints
+            constraints=constraints,
+            knowledge_context=knowledge_context
         )
 
-    # Layer 2: 使用 concept_prompts 模板
+    # Layer 2: 使用 concept_prompts 模板（按依赖配置筛选）
     elif layer == 2:
         from ...subgraphs.concept_prompts import get_dimension_prompt
-        # 构建 Layer 1 报告摘要
+        from ...config.dimension_metadata import (
+            get_full_dependency_chain_func,
+            get_analysis_dimension_names,
+            filter_reports_by_dependency,
+        )
+
+        chain = get_full_dependency_chain_func(dimension_key)
         layer1_reports = reports.get("layer1", {})
-        analysis_summary = _format_layer1_summary(layer1_reports)
+
+        analysis_summary = filter_reports_by_dependency(
+            required_keys=chain.get("layer1_analyses", []),
+            reports=layer1_reports,
+            name_mapping=get_analysis_dimension_names()
+        )
+
+        logger.info(f"[Dimension-Prompt] {dimension_key}: "
+                   f"筛选后 Layer1={len(chain.get('layer1_analyses', []))}/{len(layer1_reports)} 个")
 
         return get_dimension_prompt(
             dimension_key=dimension_key,
             analysis_report=analysis_summary,
             task_description=task_description,
             constraints=constraints,
-            superior_planning_context=_get_superior_planning_context(reports)
+            superior_planning_context=_get_superior_planning_context(reports),
+            knowledge_context=knowledge_context
         )
 
-    # Layer 3: 使用 detailed_plan_prompts 模板
+    # Layer 3: 使用 detailed_plan_prompts 模板（按依赖配置筛选）
     elif layer == 3:
         from ...subgraphs.detailed_plan_prompts import get_dimension_prompt
-        # 构建 Layer 1 和 Layer 2 报告摘要
+        from ...config.dimension_metadata import (
+            get_full_dependency_chain_func,
+            get_analysis_dimension_names,
+            get_concept_dimension_names,
+            get_detailed_dimension_names,
+            filter_reports_by_dependency,
+        )
+
+        chain = get_full_dependency_chain_func(dimension_key)
         layer1_reports = reports.get("layer1", {})
         layer2_reports = reports.get("layer2", {})
-        analysis_summary = _format_layer1_summary(layer1_reports)
-        concept_summary = _format_layer2_summary(layer2_reports)
+        layer3_reports = reports.get("layer3", {})
 
-        # 前序详细规划（project_bank 专用）
-        dimension_plans = _get_dimension_plans(reports, dimension_key)
+        analysis_summary = filter_reports_by_dependency(
+            required_keys=chain.get("layer1_analyses", []),
+            reports=layer1_reports,
+            name_mapping=get_analysis_dimension_names()
+        )
+        concept_summary = filter_reports_by_dependency(
+            required_keys=chain.get("layer2_concepts", []),
+            reports=layer2_reports,
+            name_mapping=get_concept_dimension_names()
+        )
+        dimension_plans = filter_reports_by_dependency(
+            required_keys=chain.get("layer3_plans", []),
+            reports=layer3_reports,
+            name_mapping=get_detailed_dimension_names()
+        )
+
+        logger.info(f"[Dimension-Prompt] {dimension_key}: "
+                   f"筛选后 Layer1={len(chain.get('layer1_analyses', []))}/{len(layer1_reports)} 个, "
+                   f"Layer2={len(chain.get('layer2_concepts', []))}/{len(layer2_reports)} 个, "
+                   f"Layer3={len(chain.get('layer3_plans', []))} 个")
 
         return get_dimension_prompt(
             dimension_key=dimension_key,
-            project_name="",  # TODO: 从 state 获取项目名
+            project_name="",
             analysis_report=analysis_summary,
             planning_concept=concept_summary,
             constraints=constraints,
-            professional_data=None,  # TODO: 从 state 获取专业数据
+            professional_data=None,
             dimension_plans=dimension_plans,
-            knowledge_context=""  # TODO: 从 state 获取 RAG 知识
+            knowledge_context=knowledge_context
         )
 
-    # Fallback: 使用简化 prompt（不应到达）
+    # Fallback: 使用简化 prompt
     return _build_fallback_prompt(dimension_name, village_data, task_description, constraints)
 
 
@@ -496,6 +720,7 @@ __all__ = [
     "analyze_dimension_node",
     "analyze_dimension_for_send",
     "create_dimension_state",
+    "knowledge_preload_node",
     "DIMENSION_NAMES",
     "get_layer_from_dimension",
 ]

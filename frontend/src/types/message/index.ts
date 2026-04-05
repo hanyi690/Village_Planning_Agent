@@ -72,6 +72,7 @@ export interface DimensionProgressItem {
   wordCount: number;
   startedAt?: string;
   completedAt?: string;
+  error?: string;
 }
 
 // Action Button
@@ -134,6 +135,7 @@ export interface ConversationState {
 export interface PlanningParams {
   projectName: string;
   villageData: string;
+  villageName?: string;
   taskDescription?: string;
   constraints?: string;
   enableReview?: boolean;
@@ -178,3 +180,7 @@ export type {
   ToolProgressMessage,
   ToolResultMessage,
 };
+
+// Re-export guards and helpers
+export * from './message-guards';
+export * from './message-helpers';

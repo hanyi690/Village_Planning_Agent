@@ -83,15 +83,25 @@ def _ui_session_to_dict(db_session: UISession) -> Dict[str, Any]:
 
 def _ui_message_to_dict(db_message: UIMessage) -> Dict[str, Any]:
     """Convert UIMessage model to dictionary"""
+    # 反序列化 metadata（数据库存储为 JSON 字符串）
+    metadata = db_message.message_metadata
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except json.JSONDecodeError:
+            logger.warning(f"[Async DB] Failed to parse metadata for message {db_message.id}")
+            metadata = None
+
     return {
         "id": db_message.id,
+        "frontend_id": db_message.message_id,  # 前端兼容字段
         "session_id": db_message.session_id,
-        "message_id": db_message.message_id,  # ✅ 前端消息ID（用于消息恢复和去重）
+        "message_id": db_message.message_id,  # 前端消息ID（用于消息恢复和去重）
         "role": db_message.role,
         "content": db_message.content,
         "message_type": db_message.message_type,
-        "message_metadata": db_message.message_metadata,
-        "created_at": db_message.created_at.isoformat() if db_message.created_at else None,  # ✅ 原始创建时间
+        "message_metadata": metadata,  # 返回解析后的对象
+        "created_at": db_message.created_at.isoformat() if db_message.created_at else None,  # 原始创建时间
         "timestamp": db_message.timestamp.isoformat() if db_message.timestamp else None,
     }
 
@@ -630,7 +640,8 @@ async def create_ui_message_async(
     content: str,
     message_type: str = "text",
     metadata: Optional[Dict[str, Any]] = None,
-    message_id: Optional[str] = None
+    message_id: Optional[str] = None,
+    created_at: Optional[datetime] = None
 ) -> int:
     """
     Create UI message (async)
@@ -644,7 +655,8 @@ async def create_ui_message_async(
         message_type: Message type
         metadata: Message metadata
         message_id: 前端消息 ID（可选，用于向后兼容）
-        
+        created_at: 精确时间戳（可选，用于保证消息时序）
+
     Returns:
         int: Message ID
     """
@@ -656,7 +668,7 @@ async def create_ui_message_async(
             content=content,
             message_type=message_type,
             message_metadata=metadata,
-            timestamp=datetime.now(),
+            timestamp=created_at or datetime.now(),
         )
         session.add(db_message)
         await session.commit()
@@ -671,7 +683,8 @@ async def upsert_ui_message_async(
     role: str,
     content: str,
     message_type: str = "text",
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    created_at: Optional[str] = None
 ) -> int:
     """
     Upsert UI message - 更新或创建消息
@@ -704,8 +717,8 @@ async def upsert_ui_message_async(
                 text("""
                     INSERT INTO ui_messages 
                         (session_id, message_id, role, content, message_type, message_metadata, created_at, timestamp)
-                    VALUES 
-                        (:session_id, :message_id, :role, :content, :message_type, :metadata, :now, :now)
+                    VALUES
+                        (:session_id, :message_id, :role, :content, :message_type, :metadata, :created_at, :now)
                     ON CONFLICT(session_id, message_id) DO UPDATE SET
                         content = excluded.content,
                         message_type = excluded.message_type,
@@ -719,6 +732,7 @@ async def upsert_ui_message_async(
                     "content": content,
                     "message_type": message_type,
                     "metadata": json.dumps(metadata) if metadata else None,
+                    "created_at": created_at or now,
                     "now": now,
                 }
             )
@@ -730,7 +744,7 @@ async def upsert_ui_message_async(
                 {"session_id": session_id, "message_id": message_id}
             )
             row = msg_result.scalar()
-            logger.info(f"[Async DB] Upserted UI message: db_id={row}, message_id={message_id}")
+            logger.debug(f"[Async DB] Upserted UI message: db_id={row}, message_id={message_id}")
             return row
             
     except Exception as e:
@@ -761,7 +775,7 @@ async def get_ui_messages_async(
             if role:
                 query = query.where(UIMessage.role == role)
             
-            query = query.order_by(UIMessage.timestamp.asc()).limit(limit)
+            query = query.order_by(UIMessage.created_at.asc()).limit(limit)
             
             result = await session.execute(query)
             messages = result.scalars().all()

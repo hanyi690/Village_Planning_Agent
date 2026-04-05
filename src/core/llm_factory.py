@@ -148,9 +148,12 @@ def _create_openai_llm(
     api_key = get_api_key(LLMProvider.OPENAI)
 
     # Support for custom API base URL (e.g., DeepSeek)
-    from .config import OPENAI_API_BASE
+    from .config import OPENAI_API_BASE, LLM_REQUEST_TIMEOUT
     if OPENAI_API_BASE:
         kwargs['base_url'] = OPENAI_API_BASE
+
+    # Add request timeout for API calls
+    kwargs['request_timeout'] = LLM_REQUEST_TIMEOUT
 
     # Merge callbacks with LangSmith callbacks
     all_callbacks = _merge_callbacks(callbacks)
@@ -206,6 +209,10 @@ def _create_zhipuai_llm(
         )
 
     api_key = get_api_key(LLMProvider.ZHIPUAI)
+
+    # Add request timeout for API calls
+    from .config import LLM_REQUEST_TIMEOUT
+    kwargs['request_timeout'] = LLM_REQUEST_TIMEOUT
 
     # Merge callbacks with LangSmith callbacks
     all_callbacks = _merge_callbacks(callbacks)
@@ -284,15 +291,15 @@ def create_llm(
     if model is None:
         model = LLM_MODEL
 
-    # Log LangSmith tracing status
+    # Log LangSmith tracing status (DEBUG level)
     if LANGCHAIN_TRACING_V2:
-        logger.info(f"[LLM Factory] LangSmith tracing enabled (project: {LANGCHAIN_PROJECT})")
+        logger.debug(f"[LLM Factory] LangSmith tracing enabled (project: {LANGCHAIN_PROJECT})")
     else:
         logger.debug("[LLM Factory] LangSmith tracing not enabled")
 
     # Get provider from explicit setting or environment
     selected_provider = get_provider(provider)
-    logger.info(f"[LLM Factory] Creating LLM: model={model}, provider={selected_provider.value}, streaming={streaming}")
+    logger.debug(f"[LLM Factory] Creating LLM: model={model}, provider={selected_provider.value}, streaming={streaming}")
 
     # Route to appropriate provider-specific function
     if selected_provider == LLMProvider.ZHIPUAI:

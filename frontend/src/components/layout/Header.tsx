@@ -22,7 +22,7 @@ export default function Header({
   const [isHistoryHovered, setIsHistoryHovered] = useState(false);
 
   return (
-    <header className="relative w-full h-14 flex items-center justify-between px-4 lg:px-6 bg-white/80 backdrop-blur-md border-b border-gray-200 z-50">
+    <header className="fixed top-0 left-0 right-0 z-50 w-full h-14 flex items-center justify-between px-4 lg:px-6 bg-white/80 backdrop-blur-md border-b border-gray-200">
       {/* 左侧：Logo 与 品牌名 */}
       <div className="flex items-center gap-2.5">
         <div className="flex items-center justify-center w-8 h-8 bg-gradient-to-br from-cyan-500 to-teal-600 rounded-lg shadow-sm">
@@ -51,7 +51,7 @@ export default function Header({
             <FontAwesomeIcon
               icon={faDatabase}
               className="text-blue-600 group-hover:text-blue-700"
-              style={{ width: '14px', height: '14px' }}
+              style={{ width: '12px', height: '12px' }}
             />
             <span className="text-sm font-medium">知识库</span>
           </button>

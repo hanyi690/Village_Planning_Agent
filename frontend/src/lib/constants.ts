@@ -127,3 +127,45 @@ export function isInputDisabled(status: PlanningStatus): boolean {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return DISABLE_INPUT_STATUSES.has(status as any);
 }
+
+// ============================================
+// Agent Phase to Status Mapping
+// ============================================
+
+/**
+ * Agent phase 常量
+ *
+ * 与后端 src/orchestration/state.py 中的 PlanningPhase 枚举对应
+ */
+export const AgentPhase = {
+  INIT: 'init',
+  LAYER1: 'layer1',
+  LAYER2: 'layer2',
+  LAYER3: 'layer3',
+  COMPLETED: 'completed',
+} as const;
+
+export type AgentPhaseValue = (typeof AgentPhase)[keyof typeof AgentPhase];
+
+/**
+ * Agent phase + flags 组合转换为前端 PlanningStatus
+ *
+ * Agent 使用 phase + flags 组合表示状态：
+ * - phase: init, layer1, layer2, layer3, completed
+ * - pause_after_step: 层级完成后暂停标志
+ * - need_revision: 是否需要修订
+ *
+ * 前端使用单一 PlanningStatus 枚举值。
+ * 此函数提供统一的转换规则。
+ */
+export function agentPhaseToStatus(
+  phase: string,
+  pause_after_step: boolean,
+  need_revision: boolean
+): PlanningStatus {
+  if (pause_after_step) return 'paused';
+  if (need_revision) return 'revising';
+  if (phase === AgentPhase.INIT) return 'idle';
+  if (phase === AgentPhase.COMPLETED) return 'completed';
+  return 'planning';
+}

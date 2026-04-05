@@ -3,6 +3,11 @@
 
 从 dimensions.yaml 迁移到 Python 代码，提供维度的元数据信息。
 包括 layer、dependencies、state_filter、rag_enabled、tool 等配置。
+
+注意：
+- state_filter 字段已废弃（原计划用于动态筛选函数，但未实现）
+- 实际筛选逻辑已硬编码在 dimension_node.py 的 _build_dimension_prompt 函数中
+- 保留 state_filter 作为文档标记，用于说明预期的筛选意图
 """
 
 from typing import Dict, List, Any, Optional
@@ -1079,6 +1084,36 @@ def get_revision_wave_dimensions(
 
 
 # ==========================================
+# 报告筛选辅助函数
+# ==========================================
+
+def filter_reports_by_dependency(
+    required_keys: List[str],
+    reports: Dict[str, str],
+    name_mapping: Dict[str, str]
+) -> str:
+    """
+    按依赖配置筛选报告并格式化为 Markdown
+
+    用于 dimension_node 和 revision_node 中统一处理报告筛选逻辑。
+
+    Args:
+        required_keys: 需要包含的维度键名列表（来自依赖配置）
+        reports: 报告内容字典 {key: content}
+        name_mapping: 维度名称映射 {key: display_name}
+
+    Returns:
+        格式化的 Markdown 字符串，每个报告为一个章节
+    """
+    filtered_parts = []
+    for k in required_keys:
+        if k in reports:
+            name = name_mapping.get(k, k)
+            filtered_parts.append(f"### {name}\n\n{reports[k]}\n")
+    return "\n".join(filtered_parts) if filtered_parts else ""
+
+
+# ==========================================
 # 导出
 # ==========================================
 
@@ -1125,4 +1160,7 @@ __all__ = [
     # 影响树（用于 Revision）
     "get_impact_tree",
     "get_revision_wave_dimensions",
+
+    # 报告筛选辅助
+    "filter_reports_by_dependency",
 ]

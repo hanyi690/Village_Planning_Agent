@@ -7,14 +7,12 @@
 import {
   Message,
   LayerCompletedMessage,
-  DimensionReportMessage,
   FileMessage,
   Checkpoint,
 } from '@/types';
 import ThinkingIndicator from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
-import DimensionReportStreaming from './DimensionReportStreaming';
 import CheckpointMarker from './CheckpointMarker';
 import { parseTimestamp } from '@/lib/utils';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
@@ -93,22 +91,8 @@ export default function MessageList({
 
       {/* Regular messages - 包含所有消息类型 */}
       {messages.map((message) => {
-        // Special handling for dimension_report messages (streaming dimension content)
-        if (message.type === 'dimension_report') {
-          const dimMsg = message as DimensionReportMessage;
-          return (
-            <div key={message.id} className="w-full mb-2">
-              <DimensionReportStreaming
-                layer={dimMsg.layer}
-                dimensionKey={dimMsg.dimensionKey}
-                dimensionName={dimMsg.dimensionName}
-                content={dimMsg.content}
-                streamingState={dimMsg.streamingState}
-                wordCount={dimMsg.wordCount}
-              />
-            </div>
-          );
-        }
+        // dimension_report messages are no longer rendered independently
+        // They are aggregated into layer_report messages for cleaner display
 
         // Special handling for layer_completed messages
         if (message.type === 'layer_completed') {

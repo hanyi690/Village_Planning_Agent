@@ -27,6 +27,7 @@ export function useThrottleCallback<T extends (...args: any[]) => any>(
       if (timeoutIdRef.current) {
         clearTimeout(timeoutIdRef.current);
       }
+      pendingArgsRef.current = null;
     };
   }, []);
 
