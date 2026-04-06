@@ -204,6 +204,13 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     []
   );
 
+  const addMessages = useCallback(
+    (messages: Message[]) => {
+      usePlanningStore.getState().addMessages(messages);
+    },
+    []
+  );
+
   const setMessages = useCallback(
     (messagesOrUpdater: Message[] | ((prev: Message[]) => Message[])) => {
       const state = usePlanningStore.getState();
@@ -878,21 +885,28 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
 
       // 合并所有文件内容
       const allContents: string[] = [];
+      const messagesToAdd: Message[] = [];
 
       for (const { file, response } of results) {
         allContents.push(response.content);
 
-        addMessage({
+        messagesToAdd.push({
           ...createBaseMessage('user'),
           type: 'file',
           filename: file.name,
           fileContent: response.content,
-          fileSize: file.size,
+          fileSize: response.size,
           encoding: response.encoding,
+          fileType: response.fileType,
+          imageBase64: response.imageBase64,
+          imageFormat: response.imageFormat,
+          thumbnailBase64: response.thumbnailBase64,
+          imageWidth: response.imageWidth,
+          imageHeight: response.imageHeight,
         } as FileMessage);
 
         const encodingInfo = response.encoding ? `\n编码: ${response.encoding}` : '';
-        addMessage(
+        messagesToAdd.push(
           createSystemMessage(
             `✅ 文件 "${file.name}" 已上传${encodingInfo}\n内容长度: ${response.content.length} 字符`
           )
@@ -901,17 +915,21 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
 
       // 存储合并后的内容
       const combinedContent = allContents.join('\n\n---\n\n');
-      setUploadedFileContent(combinedContent);
 
+      // 添加最后的提示消息
       if (results.length > 1) {
-        addMessage(
+        messagesToAdd.push(
           createSystemMessage(
             `✅ 已上传 ${results.length} 个文件，总内容长度: ${combinedContent.length} 字符\n点击 "开始规划" 按钮启动任务`
           )
         );
       } else {
-        addMessage(createSystemMessage(`点击 "开始规划" 按钮启动任务`));
+        messagesToAdd.push(createSystemMessage(`点击 "开始规划" 按钮启动任务`));
       }
+
+      // 批量添加所有消息（只触发一次渲染）
+      addMessages(messagesToAdd);
+      setUploadedFileContent(combinedContent);
 
       e.target.value = '';
     } catch (error: unknown) {

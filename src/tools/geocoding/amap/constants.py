@@ -14,6 +14,7 @@ TRAFFIC_CIRCLE_URL = f"{BASE_URL}/traffic/status/circle"
 TRAFFIC_ROAD_URL = f"{BASE_URL}/traffic/status/road"
 GEOCODE_URL = f"{BASE_URL}/geocode/geo"
 REGEOCODE_URL = f"{BASE_URL}/geocode/regeo"
+DISTRICT_URL = f"{BASE_URL}/config/district"
 
 # POI 类型码 - 公共服务设施
 POI_TYPES_PUBLIC_SERVICE: Dict[str, str] = {
@@ -108,6 +109,7 @@ __all__ = [
     "TRAFFIC_ROAD_URL",
     "GEOCODE_URL",
     "REGEOCODE_URL",
+    "DISTRICT_URL",
     "POI_TYPES_PUBLIC_SERVICE",
     "SERVICE_RADIUS_STANDARDS_AMAP",
     "TRAFFIC_STATUS_LEVELS",

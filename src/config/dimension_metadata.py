@@ -296,7 +296,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": "filter_state_for_detailed_dimension_v2",
         "result_key": "detailed_plan",
         "rag_enabled": False,
-        "tool": None,
+        "tool": "planning_vectorizer",
+        "gis_output": "vector_layers",
         "description": "制定村庄空间结构规划方案",
         "prompt_key": "spatial_structure"
     },
@@ -344,7 +345,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": "filter_state_for_detailed_dimension_v2",
         "result_key": "detailed_plan",
         "rag_enabled": False,
-        "tool": None,
+        "tool": "isochrone_analysis",
         "description": "制定村庄道路交通系统详细规划",
         "prompt_key": "traffic_planning"
     },
@@ -360,7 +361,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": "filter_state_for_detailed_dimension_v2",
         "result_key": "detailed_plan",
         "rag_enabled": False,
-        "tool": None,
+        "tool": "facility_validator",
         "description": "制定村庄公共服务设施配置规划",
         "prompt_key": "public_service"
     },
@@ -391,8 +392,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         },
         "state_filter": "filter_state_for_detailed_dimension_v2",
         "result_key": "detailed_plan",
-        "rag_enabled": True,  # 关键维度：涉及生态保护法规
-        "tool": None,
+        "rag_enabled": True,
+        "tool": "ecological_sensitivity",
         "description": "制定村庄生态绿地系统规划",
         "prompt_key": "ecological"
     },

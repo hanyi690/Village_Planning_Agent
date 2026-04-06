@@ -11,6 +11,7 @@ from .constants import (
     WALKING_URL,
     GEOCODE_URL,
     REGEOCODE_URL,
+    DISTRICT_URL,
     POI_TYPES_PUBLIC_SERVICE,
     POI_EXTENSIONS,
     DEFAULT_POI_PAGE_SIZE,
@@ -428,6 +429,152 @@ class AmapProvider:
             },
             metadata={"lon": lon, "lat": lat, "source": "amap"},
         )
+
+    # ==================== 行政区划查询 ====================
+
+    def get_district(
+        self,
+        keywords: str,
+        subdistrict: int = 1,
+        extensions: str = "base",
+        filter_adcode: Optional[str] = None,
+    ) -> AmapResult:
+        """行政区划查询
+
+        Args:
+            keywords: 查询关键字（行政区名称、citycode、adcode）
+            subdistrict: 子级行政区级数（0=不返回，1=下一级，2=下两级，3=下三级）
+            extensions: 返回结果控制（base=基本信息，all=包含边界坐标）
+            filter_adcode: 按行政区划过滤（adcode）
+
+        Returns:
+            AmapResult with district data
+
+        Note:
+            目前不能返回乡镇/街道级别的边界值
+        """
+        params = {
+            "keywords": keywords,
+            "subdistrict": str(subdistrict),
+            "extensions": extensions,
+        }
+
+        if filter_adcode:
+            params["filter"] = filter_adcode
+
+        result = self._request(DISTRICT_URL, params)
+
+        if not result.success:
+            return result
+
+        data = result.data
+        districts = data.get("districts", [])
+
+        if not districts:
+            return AmapResult(
+                success=False,
+                data={},
+                metadata={},
+                error=f"未找到 {keywords} 的行政区划",
+            )
+
+        # 解析行政区划列表
+        district_list = []
+        for dist in districts:
+            district_item = {
+                "adcode": dist.get("adcode", ""),
+                "name": dist.get("name", ""),
+                "level": dist.get("level", ""),
+                "citycode": dist.get("citycode", ""),
+                "center": self._parse_center(dist.get("center", "")),
+                "polyline": dist.get("polyline", ""),  # 边界坐标字符串
+                "districts": dist.get("districts", []),  # 下级行政区
+            }
+            district_list.append(district_item)
+
+        # 取第一个作为主结果
+        main_district = district_list[0]
+
+        # 如果 extensions=all，解析边界坐标为 GeoJSON
+        geojson = None
+        if extensions == "all" and main_district.get("polyline"):
+            geojson = self._parse_polyline_to_geojson(
+                main_district["polyline"],
+                main_district["name"],
+                main_district["adcode"]
+            )
+
+        return AmapResult(
+            success=True,
+            data={
+                "district": main_district,
+                "districts": district_list,
+                "geojson": geojson,
+            },
+            metadata={
+                "keyword": keywords,
+                "subdistrict": subdistrict,
+                "extensions": extensions,
+                "source": "amap",
+            },
+        )
+
+    def _parse_center(self, center_str: str) -> Tuple[float, float]:
+        """解析中心坐标字符串"""
+        if not center_str or "," not in center_str:
+            return (0.0, 0.0)
+        parts = center_str.split(",")
+        return (float(parts[0]), float(parts[1]))
+
+    def _parse_polyline_to_geojson(
+        self,
+        polyline: str,
+        name: str,
+        adcode: str
+    ) -> Optional[Dict[str, Any]]:
+        """解析 polyline 边界坐标为 GeoJSON
+
+        高德 polyline 格式: "x1,y1;x2,y2;...|x1,y1;x2,y2;..."
+        每个 | 分隔的是一个区域（可能是 MultiPolygon 的多个部分）
+        """
+        if not polyline:
+            return None
+
+        polygons = []
+        for region in polyline.split("|"):
+            if not region:
+                continue
+            ring = []
+            for coord_pair in region.split(";"):
+                if "," in coord_pair:
+                    parts = coord_pair.split(",")
+                    ring.append([float(parts[0]), float(parts[1])])
+            if ring:
+                # 确保 ring 是闭合的
+                if ring[0] != ring[-1]:
+                    ring.append(ring[0])
+                polygons.append([ring])
+
+        if not polygons:
+            return None
+
+        geometry_type = "Polygon" if len(polygons) == 1 else "MultiPolygon"
+        coordinates = polygons[0] if len(polygons) == 1 else polygons
+
+        return {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "properties": {
+                    "name": name,
+                    "adcode": adcode,
+                },
+                "geometry": {
+                    "type": geometry_type,
+                    "coordinates": coordinates,
+                },
+            }],
+        }
 
     # ==================== 路径规划 ====================
 

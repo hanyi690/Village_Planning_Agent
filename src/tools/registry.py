@@ -115,6 +115,77 @@ TOOL_PARAMETER_SCHEMAS = {
         },
         "required": ["query"]
     },
+    # GIS Planning Integration Tools
+    "spatial_overlay": {
+        "type": "object",
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": ["intersect", "union", "difference", "clip"],
+                "description": "空间叠加操作类型"
+            },
+            "layer_a": {"type": "object", "description": "第一图层 (GeoJSON)"},
+            "layer_b": {"type": "object", "description": "第二图层 (GeoJSON)"},
+        },
+        "required": ["operation", "layer_a", "layer_b"]
+    },
+    "spatial_query": {
+        "type": "object",
+        "properties": {
+            "query_type": {
+                "type": "string",
+                "enum": ["contains", "intersects", "within", "nearest"],
+                "description": "空间查询类型"
+            },
+            "geometry": {"type": "object", "description": "查询几何 (GeoJSON)"},
+            "target_layer": {"type": "object", "description": "目标图层 (GeoJSON)"},
+        },
+        "required": ["query_type", "geometry", "target_layer"]
+    },
+    "isochrone_analysis": {
+        "type": "object",
+        "properties": {
+            "center": {"type": "array", "items": {"type": "number"}, "description": "中心点坐标 [lon, lat]"},
+            "time_minutes": {"type": "array", "items": {"type": "integer"}, "description": "等时圈时间(分钟)"},
+            "travel_mode": {"type": "string", "enum": ["walk", "drive", "bike"], "description": "出行方式"},
+        },
+        "required": ["center"]
+    },
+    "planning_vectorizer": {
+        "type": "object",
+        "properties": {
+            "zones": {"type": "array", "description": "功能区列表"},
+            "facilities": {"type": "array", "description": "设施点列表"},
+            "village_center": {"type": "array", "items": {"type": "number"}, "description": "村庄中心坐标"},
+        },
+        "required": ["zones"]
+    },
+    "facility_validator": {
+        "type": "object",
+        "properties": {
+            "facility_type": {"type": "string", "description": "设施类型"},
+            "location": {"type": "array", "items": {"type": "number"}, "description": "设施位置 [lon, lat]"},
+            "analysis_params": {"type": "object", "description": "分析参数"},
+        },
+        "required": ["facility_type", "location"]
+    },
+    "ecological_sensitivity": {
+        "type": "object",
+        "properties": {
+            "study_area": {"type": "object", "description": "研究区域 (GeoJSON)"},
+            "water_features": {"type": "object", "description": "水系要素 (GeoJSON)"},
+        },
+        "required": ["study_area"]
+    },
+    "map_renderer": {
+        "type": "object",
+        "properties": {
+            "layers": {"type": "array", "description": "图层数据列表"},
+            "title": {"type": "string", "description": "地图标题"},
+            "center": {"type": "array", "items": {"type": "number"}, "description": "地图中心"},
+        },
+        "required": ["layers"]
+    },
 }
 
 # 工具元数据定义
@@ -154,6 +225,49 @@ TOOL_METADATA_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "description": "从互联网搜索实时信息。",
         "estimated_time": 4.0,
         "display_hints": {"primary_view": "text", "priority_fields": ["results"]}
+    },
+    # GIS Planning Integration Tools
+    "spatial_overlay": {
+        "display_name": "空间叠加分析",
+        "description": "执行空间叠加操作：相交、合并、差异、裁剪。",
+        "estimated_time": 5.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["feature_count", "total_area_km2"]}
+    },
+    "spatial_query": {
+        "display_name": "空间查询",
+        "description": "执行空间查询：包含、相交、内部、最近邻。",
+        "estimated_time": 3.0,
+        "display_hints": {"primary_view": "table", "priority_fields": ["match_count", "returned_count"]}
+    },
+    "isochrone_analysis": {
+        "display_name": "等时圈分析",
+        "description": "生成基于时间可达性的等时圈，分析服务覆盖范围。",
+        "estimated_time": 8.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["isochrones", "coverage_rate"]}
+    },
+    "planning_vectorizer": {
+        "display_name": "规划矢量化",
+        "description": "将规划方案转换为GIS矢量数据，创建功能区和设施点。",
+        "estimated_time": 4.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["geojson", "feature_count"]}
+    },
+    "facility_validator": {
+        "display_name": "设施选址验证",
+        "description": "验证设施选址合理性，评估服务覆盖、人口可达性。",
+        "estimated_time": 6.0,
+        "display_hints": {"primary_view": "text", "priority_fields": ["overall_score", "suitability_level"]}
+    },
+    "ecological_sensitivity": {
+        "display_name": "生态敏感性评估",
+        "description": "评估区域生态敏感性，识别生态保护区域。",
+        "estimated_time": 7.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["sensitivity_class", "sensitive_area_km2"]}
+    },
+    "map_renderer": {
+        "display_name": "专题地图渲染",
+        "description": "渲染规划专题地图，支持符号化和图例。",
+        "estimated_time": 3.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["map_html", "layer_info"]}
     },
 }
 
@@ -271,12 +385,18 @@ class ToolRegistry:
 from .builtin import knowledge_search_tool, web_search_tool
 from .builtin.population import calculate_population
 
-# 注册内置工具
+# Register built-in tools
 ToolRegistry._tools["knowledge_search"] = knowledge_search_tool
 ToolRegistry._tools["web_search"] = web_search_tool
 ToolRegistry._tools["population_model_v1"] = calculate_population
 
-# 注册元数据
+# Register GIS tools
+from .core.gis_tool_wrappers import GIS_TOOL_WRAPPERS
+for tool_name, wrapper_func in GIS_TOOL_WRAPPERS.items():
+    ToolRegistry._tools[tool_name] = wrapper_func
+    logger.info(f"[ToolRegistry] GIS tool registered: {tool_name}")
+
+# Register metadata
 for name, meta_def in TOOL_METADATA_DEFINITIONS.items():
     ToolRegistry._tool_metadata[name] = ToolMetadata(
         name=name,

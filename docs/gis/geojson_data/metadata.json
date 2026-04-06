@@ -1,0 +1,53 @@
+{
+  "fetch_time": "2026-04-06 15:09:01",
+  "target_location": "金田村, 泗水镇, 平远县",
+  "buffer_radius_km": 2.0,
+  "max_features_per_layer": 500,
+  "center": [
+    116.040808,
+    24.816827
+  ],
+  "bbox": [
+    116.02278998198199,
+    24.79880898198198,
+    116.05882601801801,
+    24.83484501801802
+  ],
+  "layers": {
+    "hyda": {
+      "success": true,
+      "feature_count": 0
+    },
+    "hydl": {
+      "success": true,
+      "feature_count": 1
+    },
+    "hydp": {
+      "success": true,
+      "feature_count": 0
+    },
+    "lrrl": {
+      "success": true,
+      "feature_count": 0
+    },
+    "lrdl": {
+      "success": true,
+      "feature_count": 1
+    },
+    "resa": {
+      "success": true,
+      "feature_count": 0
+    },
+    "resp": {
+      "success": true,
+      "feature_count": 0
+    }
+  },
+  "status": "complete",
+  "summary": {
+    "total_layers": 7,
+    "success_layers": 7,
+    "failed_layers": 0,
+    "total_features": 2
+  }
+}

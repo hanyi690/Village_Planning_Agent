@@ -112,3 +112,12 @@ KB_DEFAULT_CATEGORY = "policies"
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
+# ==========================================
+# Multimodal Configuration
+# ==========================================
+
+MULTIMODAL_ENABLED = os.getenv("MULTIMODAL_ENABLED", "false").lower() == "true"
+MULTIMODAL_MODEL = os.getenv("MULTIMODAL_MODEL", "gpt-4o")
+IMAGE_DETAIL_LEVEL = os.getenv("IMAGE_DETAIL_LEVEL", "auto")  # "low", "high", or "auto"
+MAX_IMAGE_SIZE_MULTIMODAL = int(os.getenv("MAX_IMAGE_SIZE_MULTIMODAL", "10_000_000"))  # 10MB
+

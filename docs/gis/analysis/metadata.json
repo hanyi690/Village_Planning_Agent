@@ -1,0 +1,21 @@
+{
+  "analysis_name": "金田村 GIS 空间分析",
+  "created_at": "2026-04-06T15:47:31.820439",
+  "data_sources": {
+    "water": "天地图 WFS 服务",
+    "road": "天地图 WFS 服务",
+    "poi": "高德地图 POI API",
+    "boundary": "高德地图行政区划 API"
+  },
+  "outputs": {
+    "interactive_map": "F:\\project\\Village_Planning_Agent\\docs\\gis\\analysis\\maps\\jintian_interactive_map.html",
+    "static_map": "F:\\project\\Village_Planning_Agent\\docs\\gis\\analysis\\maps\\jintian_base_map.png",
+    "report": "F:\\project\\Village_Planning_Agent\\docs\\gis\\analysis\\reports\\jintian_gis_analysis.md",
+    "results": "F:\\project\\Village_Planning_Agent\\docs\\gis\\analysis\\data\\analysis_results.json"
+  },
+  "analysis_params": {
+    "water_buffer_m": 100,
+    "road_buffer_m": 50,
+    "poi_service_radius_m": 500
+  }
+}

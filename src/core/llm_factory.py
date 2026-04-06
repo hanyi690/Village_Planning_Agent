@@ -399,3 +399,98 @@ def get_zhipuai_llm(
     """
     return _create_zhipuai_llm(model, temperature, max_tokens,
                               callbacks=callbacks, metadata=metadata, **kwargs)
+
+
+def create_multimodal_llm(
+    model: Optional[str] = None,
+    temperature: float = 0.7,
+    max_tokens: int = 2000,
+    provider: Optional[str] = None,
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    streaming: bool = False,
+    **kwargs
+) -> Any:
+    """
+    Create a multimodal LLM instance that supports text + image input.
+
+    This function creates an LLM capable of processing images along with text.
+    The model is automatically selected based on the provider if not specified.
+
+    Args:
+        model: Model name. If None, uses provider-specific default vision model:
+               - OpenAI: "gpt-4o"
+               - ZhipuAI: "glm-4v"
+        temperature: Sampling temperature (0.0 to 1.0)
+        max_tokens: Maximum tokens to generate
+        provider: Explicit provider override ("openai" or "zhipuai")
+        callbacks: Optional list of callback handlers
+        metadata: Optional metadata dict for LangSmith tracing
+        streaming: Enable streaming mode (default: False)
+        **kwargs: Additional parameters
+
+    Returns:
+        Multimodal LLM instance (ChatOpenAI with vision support)
+
+    Raises:
+        ValueError: If provider doesn't support multimodal or API key not found
+
+    Examples:
+        >>> from src.core.message_builder import build_multimodal_message
+        >>> llm = create_multimodal_llm()
+        >>> msg = build_multimodal_message("Describe this image", image_base64="...", image_format="png")
+        >>> response = llm.invoke([msg])
+    """
+    from .config import MULTIMODAL_ENABLED
+    from .message_builder import get_recommended_multimodal_model, is_image_message_supported
+
+    if not MULTIMODAL_ENABLED:
+        logger.warning("[LLM Factory] MULTIMODAL_ENABLED is false. Creating regular LLM instead.")
+        return create_llm(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            provider=provider,
+            callbacks=callbacks,
+            metadata=metadata,
+            streaming=streaming,
+            **kwargs
+        )
+
+    # Get provider
+    selected_provider = get_provider(provider)
+
+    # Check if provider supports multimodal
+    if not is_image_message_supported(selected_provider.value):
+        raise ValueError(
+            f"Provider '{selected_provider.value}' does not support multimodal/vision. "
+            f"Supported providers: openai, zhipuai"
+        )
+
+    # Select appropriate multimodal model
+    if model is None:
+        model = get_recommended_multimodal_model(selected_provider.value)
+
+    logger.info(f"[LLM Factory] Creating multimodal LLM: model={model}, provider={selected_provider.value}")
+
+    # Create LLM using existing factory functions
+    if selected_provider == LLMProvider.ZHIPUAI:
+        return _create_zhipuai_llm(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            callbacks=callbacks,
+            metadata=metadata,
+            streaming=streaming,
+            **kwargs
+        )
+    else:  # OPENAI
+        return _create_openai_llm(
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            callbacks=callbacks,
+            metadata=metadata,
+            streaming=streaming,
+            **kwargs
+        )

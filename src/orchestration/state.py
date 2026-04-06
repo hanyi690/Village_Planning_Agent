@@ -152,6 +152,10 @@ class UnifiedPlanningState(TypedDict):
     pause_after_step: bool       # 层级完成后暂停标志
     previous_layer: int          # 刚完成的层级编号（用于审查面板）
 
+    # GIS 分析结果（规划矢量化与空间分析）
+    gis_analysis_results: Dict[str, Any]  # GIS 分析结果 {dimension_key: result}
+    planning_layers: Dict[str, Any]       # 规划矢量图层 {layer_name: GeoJSON}
+
     # 元数据
     metadata: Dict[str, Any]
 
@@ -187,6 +191,8 @@ def create_initial_state(
         step_mode=False,
         pause_after_step=False,
         previous_layer=0,
+        gis_analysis_results={},
+        planning_layers={},
         metadata={}
     )
 

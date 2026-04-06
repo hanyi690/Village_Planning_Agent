@@ -1,0 +1,50 @@
+{
+  "fetch_time": "2026-04-06 15:15:00",
+  "target_location": "金田村, 泗水镇, 平远县",
+  "buffer_radius_km": 2.0,
+  "center": [
+    116.044146,
+    24.818629
+  ],
+  "data_sources": [
+    "amap",
+    "tianditu_wfs"
+  ],
+  "amap_data": {
+    "county_boundary": true,
+    "village_center": true,
+    "poi_count": 2
+  },
+  "wfs_data": {
+    "hyda": {
+      "success": true,
+      "count": 0
+    },
+    "hydl": {
+      "success": true,
+      "count": 1
+    },
+    "hydp": {
+      "success": true,
+      "count": 0
+    },
+    "lrrl": {
+      "success": true,
+      "count": 0
+    },
+    "lrdl": {
+      "success": true,
+      "count": 1
+    },
+    "resa": {
+      "success": true,
+      "count": 0
+    },
+    "resp": {
+      "success": true,
+      "count": 0
+    }
+  },
+  "status": "complete",
+  "wfs_total_features": 2
+}

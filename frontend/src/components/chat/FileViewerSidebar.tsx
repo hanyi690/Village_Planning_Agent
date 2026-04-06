@@ -10,9 +10,12 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faTimes, faFileAlt, faCopy, faCheck } from '@fortawesome/free-solid-svg-icons';
+import { faTimes, faFileAlt, faCopy, faCheck, faImage } from '@fortawesome/free-solid-svg-icons';
 import type { FileMessage } from '@/types';
+import { DEFAULT_IMAGE_FORMAT } from '@/lib/constants';
+import { formatFileSize } from '@/lib/utils';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
+import ImagePreview from '@/components/ui/ImagePreview';
 
 interface FileViewerSidebarProps {
   file: FileMessage | null;
@@ -73,14 +76,6 @@ export default function FileViewerSidebar({ file, onClose }: FileViewerSidebarPr
   };
 
   if (!mounted || !file) return null;
-
-  // 格式化文件大小
-  const formatFileSize = (bytes?: number): string => {
-    if (!bytes) return '';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
-  };
 
   return createPortal(
     <>
@@ -143,11 +138,22 @@ export default function FileViewerSidebar({ file, onClose }: FileViewerSidebarPr
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-5">
-          {file.fileContent ? (
+          {/* Image file rendering */}
+          {file.fileType === 'image' && file.imageBase64 ? (
+            <ImagePreview
+              imageBase64={file.imageBase64}
+              imageFormat={file.imageFormat || DEFAULT_IMAGE_FORMAT}
+              filename={file.filename}
+              thumbnailBase64={file.thumbnailBase64}
+              imageWidth={file.imageWidth}
+              imageHeight={file.imageHeight}
+              className="bg-gray-50 rounded-lg p-2 border border-gray-200"
+            />
+          ) : file.fileContent ? (
             <MarkdownRenderer content={file.fileContent} className="bg-gray-50 rounded-lg p-4 border border-gray-200" />
           ) : (
             <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-              <FontAwesomeIcon icon={faFileAlt} className="text-5xl mb-4" />
+              <FontAwesomeIcon icon={file.fileType === 'image' ? faImage : faFileAlt} className="text-5xl mb-4" />
               <p className="text-center">暂无文件内容</p>
             </div>
           )}

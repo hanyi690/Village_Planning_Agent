@@ -14,15 +14,17 @@ Files API endpoints - File upload helper
 """
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from typing import Dict, Any, Set
+from typing import Dict, Any, Set, Optional
 from pydantic import BaseModel, Field
 from pathlib import Path
 import logging
 import io
 import tempfile
+import base64
 
 # 导入 .doc 文件转换器
 from src.rag.utils.loaders import DocToDocxConverter
+from src.core.config import MAX_IMAGE_SIZE_MULTIMODAL
 
 router = APIRouter()
 
@@ -39,6 +41,12 @@ class FileUploadResponse(BaseModel):
     content: str = Field(..., description="Decoded file content")
     encoding: str = Field(..., description="Detected encoding or 'markitdown'")
     size: int = Field(..., description="Content size in characters")
+    file_type: Optional[str] = Field(None, description="File type: 'document' or 'image'")
+    image_base64: Optional[str] = Field(None, description="Base64 encoded image data")
+    image_format: Optional[str] = Field(None, description="Image format: jpg, png, gif, etc.")
+    thumbnail_base64: Optional[str] = Field(None, description="Base64 encoded thumbnail")
+    image_width: Optional[int] = Field(None, description="Image width in pixels")
+    image_height: Optional[int] = Field(None, description="Image height in pixels")
 
 
 # ============================================
@@ -65,6 +73,11 @@ TEXT_EXTENSIONS: Set[str] = {
     '.py', '.js', '.ts', '.java', '.c', '.cpp', '.h',
     '.css', '.scss', '.less',
     '.yaml', '.yml', '.toml', '.ini', '.cfg',
+}
+
+# 图片格式
+IMAGE_EXTENSIONS: Set[str] = {
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'
 }
 
 
@@ -152,7 +165,8 @@ def convert_with_markitdown(content: bytes, file_extension: str) -> tuple[str, s
     stream = io.BytesIO(content)
 
     try:
-        result = md.convert_stream(stream, file_ext=file_extension)
+        # keep_data_uris=True 保留文档中的嵌入图片（base64 data URI）
+        result = md.convert_stream(stream, file_ext=file_extension, keep_data_uris=True)
         return result.text_content, 'markitdown'
     except Exception as e:
         logger.error(f"[MarkItDown] Conversion failed: {str(e)}")
@@ -212,6 +226,96 @@ def _process_doc_file(content: bytes, filename: str) -> tuple[str, str]:
             tmp_path.unlink()
 
 
+def process_image(
+    content: bytes,
+    file_ext: str,
+    needs_full_image: bool = True,
+    max_display_size: int = 1024,
+) -> Dict[str, Any]:
+    """
+    Process image file and return base64 encoded data with metadata.
+
+    Args:
+        content: Raw image bytes
+        file_ext: File extension (e.g., '.jpg', '.png')
+        needs_full_image: If True, encode full image for LLM. If False, only thumbnail.
+        max_display_size: Max dimension for display image (default 1024). Large images
+                         are resized to reduce memory/cost for LLM consumption.
+
+    Returns:
+        Dict with image_base64, image_format, thumbnail_base64, width, height
+
+    Raises:
+        ImportError: If Pillow is not installed
+        Exception: If image processing fails
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.error("[Image] Pillow library not installed. Install with: pip install Pillow")
+        raise ImportError("Pillow 库未安装，请运行: pip install Pillow")
+
+    IMAGE_FORMAT_MAP = {
+        '.jpg': 'jpeg', '.jpeg': 'jpeg',
+        '.png': 'png', '.gif': 'gif',
+        '.webp': 'webp', '.bmp': 'bmp'
+    }
+    image_format = IMAGE_FORMAT_MAP.get(file_ext, 'jpeg')
+
+    try:
+        img = Image.open(io.BytesIO(content))
+        original_width, original_height = img.size
+
+        if img.mode in ('RGBA', 'P'):
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            background.paste(img, mask=img.split()[-1])
+            img = background
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        image_base64 = None
+
+        if needs_full_image:
+            if max(img.size) > max_display_size:
+                ratio = max_display_size / max(img.size)
+                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                img_for_full = img.copy()
+                img_for_full.thumbnail(new_size, Image.Resampling.LANCZOS)
+                full_buffer = io.BytesIO()
+                img_for_full.save(full_buffer, format=image_format.upper())
+                image_base64 = base64.b64encode(full_buffer.getvalue()).decode('utf-8')
+                del img_for_full, full_buffer
+                logger.info(f"[Image] Resized for LLM: {original_width}x{original_height} -> {new_size[0]}x{new_size[1]}")
+            else:
+                full_buffer = io.BytesIO()
+                img.save(full_buffer, format=image_format.upper())
+                image_base64 = base64.b64encode(full_buffer.getvalue()).decode('utf-8')
+                del full_buffer
+
+        thumb_img = img.copy()
+        thumb_img.thumbnail((200, 150), Image.Resampling.LANCZOS)
+        thumb_buffer = io.BytesIO()
+        thumb_img.save(thumb_buffer, format=image_format.upper())
+        thumbnail_base64 = base64.b64encode(thumb_buffer.getvalue()).decode('utf-8')
+        del thumb_img, thumb_buffer
+
+        logger.info(f"[Image] Processed: {original_width}x{original_height}, format={image_format}, full_encoded={image_base64 is not None}")
+
+        return {
+            'image_base64': image_base64,
+            'image_format': image_format,
+            'thumbnail_base64': thumbnail_base64,
+            'image_width': original_width,
+            'image_height': original_height,
+        }
+
+    except Exception as e:
+        logger.error(f"[Image] Processing failed: {str(e)}")
+        raise Exception(f"图片处理失败: {str(e)}")
+
+
 # ============================================
 # File Endpoints
 # ============================================
@@ -228,8 +332,10 @@ async def upload_file(file: UploadFile = File(...)):
     - Excel (.xlsx, .xls)
     - PowerPoint (.pptx, .ppt)
     - 纯文本文件 (.txt, .md 等)
+    - 图片文件 (.jpg, .jpeg, .png, .gif, .webp, .bmp)
 
     返回解码后的内容（Markdown 格式）和编码信息。
+    图片文件返回 base64 编码数据。
     """
     try:
         # Read file content
@@ -241,15 +347,42 @@ async def upload_file(file: UploadFile = File(...)):
         if file_size == 0:
             raise HTTPException(status_code=400, detail="文件内容为空")
 
-        if file_size > 50_000_000:  # 50MB limit for documents
+        # 图片文件大小限制
+        file_ext = Path(file.filename).suffix.lower()
+        if file_ext in IMAGE_EXTENSIONS and file_size > MAX_IMAGE_SIZE_MULTIMODAL:
+            raise HTTPException(status_code=400, detail=f"图片文件过大（限制{MAX_IMAGE_SIZE_MULTIMODAL // 1_000_000}MB）")
+        elif file_size > 50_000_000:  # 50MB limit for documents
             raise HTTPException(status_code=400, detail="文件过大（限制50MB）")
 
         # 获取文件扩展名
-        file_ext = Path(file.filename).suffix.lower()
         if not file_ext:
             # 无扩展名，尝试作为文本处理
             logger.info(f"[Upload] No file extension, treating as text")
             decoded_content, encoding = decode_text_content(content)
+        elif file_ext in IMAGE_EXTENSIONS:
+            # 图片文件处理
+            logger.info(f"[Upload] Processing image file: {file_ext}")
+            try:
+                image_data = process_image(content, file_ext)
+                # 图片文件返回简短描述作为 content
+                decoded_content = f"[图片: {file.filename}, 尺寸: {image_data['image_width']}x{image_data['image_height']}]"
+                encoding = 'base64'
+
+                return FileUploadResponse(
+                    content=decoded_content,
+                    encoding=encoding,
+                    size=len(decoded_content),
+                    file_type='image',
+                    image_base64=image_data['image_base64'],
+                    image_format=image_data['image_format'],
+                    thumbnail_base64=image_data['thumbnail_base64'],
+                    image_width=image_data['image_width'],
+                    image_height=image_data['image_height'],
+                )
+            except ImportError as e:
+                raise HTTPException(status_code=500, detail=str(e))
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"图片处理失败: {str(e)}")
         elif file_ext == '.doc':
             # 特殊处理 .doc 文件：MarkItDown 不支持 OLE 格式，需要先转换
             logger.info(f"[Upload] Processing .doc file (OLE format), converting to .docx...")
@@ -288,7 +421,8 @@ async def upload_file(file: UploadFile = File(...)):
         return FileUploadResponse(
             content=decoded_content,
             encoding=encoding,
-            size=content_length
+            size=content_length,
+            file_type='document',
         )
 
     except HTTPException:

@@ -118,8 +118,36 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if success_details:
         logger.info(f"[知识预加载] 成功维度: {', '.join(success_details[:6])}")
 
+    # ==========================================
+    # GIS 数据自动获取（新增）
+    # ==========================================
+    gis_analysis_results = {}
+    village_name = config.get("village_name", "")
+
+    if village_name and layer == 1:  # 只在 Layer 1 首次获取
+        logger.info(f"[知识预加载] 开始获取 GIS 数据: {village_name}")
+        try:
+            gis_result = _execute_gis_tool("gis_data_fetch", {
+                "location": village_name,
+                "buffer_km": 5.0,
+                "max_features": 500
+            })
+            if gis_result and gis_result.get("success"):
+                gis_analysis_results["_auto_fetched"] = gis_result
+                logger.info(f"[知识预加载] GIS 数据获取成功")
+            else:
+                logger.warning(f"[知识预加载] GIS 数据获取失败: {gis_result.get('error') if gis_result else 'No result'}")
+        except Exception as e:
+            logger.error(f"[知识预加载] GIS 数据获取异常: {e}")
+
     existing_config = state.get("config", {})
-    return {"config": {**existing_config, "knowledge_cache": knowledge_cache}}
+    result = {"config": {**existing_config, "knowledge_cache": knowledge_cache}}
+
+    # 如果有 GIS 数据，添加到返回结果
+    if gis_analysis_results:
+        result["gis_analysis_results"] = gis_analysis_results
+
+    return result
 
 
 # ==========================================
@@ -222,6 +250,32 @@ async def analyze_dimension_for_send(
     constraints = config.get("constraints", "")
     knowledge_cache = config.get("knowledge_cache", {})
 
+    # ==========================================
+    # GIS 工具调用（新增）
+    # ==========================================
+    gis_tool_result = None
+    gis_tool_name = None
+    dimension_config = get_dimension_config(dimension_key)
+    if dimension_config:
+        gis_tool_name = dimension_config.get("tool")
+
+    if gis_tool_name:
+        logger.info(f"[维度节点] {dimension_key} 配置了工具: {gis_tool_name}")
+        gis_tool_result = _execute_gis_tool(
+            tool_name=gis_tool_name,
+            context={
+                "village_data": village_data,
+                "village_name": village_name,
+                "dimension_key": dimension_key,
+                "config": config,
+                "reports": reports,
+            }
+        )
+        if gis_tool_result and gis_tool_result.get("success"):
+            logger.info(f"[维度节点] {dimension_key} 工具执行成功")
+        else:
+            logger.warning(f"[维度节点] {dimension_key} 工具执行失败: {gis_tool_result.get('error') if gis_tool_result else 'No result'}")
+
     # 区分层级数据来源
     if layer == 2:
         layer1_reports = reports.get("layer1", {})
@@ -245,7 +299,8 @@ async def analyze_dimension_for_send(
         task_description=task_description,
         constraints=constraints,
         reports=reports,
-        knowledge_cache=knowledge_cache
+        knowledge_cache=knowledge_cache,
+        gis_tool_result=gis_tool_result
     )
 
     # 调用 LLM（流式，收集 token 事件）
@@ -319,15 +374,24 @@ async def analyze_dimension_for_send(
         elapsed_total = asyncio.get_event_loop().time() - start_time
         logger.info(f"[维度节点-Send] 分析完成: {dimension_name}, 长度: {len(result)}, 总耗时: {elapsed_total:.1f}s")
 
+        # 构建 GIS 数据返回（新增）
+        gis_data_return = {}
+        if gis_tool_result and gis_tool_result.get("success"):
+            gis_data_return = {
+                "gis_analysis_result": gis_tool_result
+            }
+
         return {
             "dimension_results": [{
                 "dimension_key": dimension_key,
                 "dimension_name": dimension_name,
                 "result": result,
                 "success": True,
-                "layer": layer
+                "layer": layer,
+                **gis_data_return
             }],
-            "sse_events": sse_events
+            "sse_events": sse_events,
+            **({"gis_analysis_results": {dimension_key: gis_tool_result}} if gis_tool_result else {})
         }
 
     except asyncio.TimeoutError:
@@ -439,7 +503,8 @@ async def analyze_dimension_node(
         task_description=task_description,
         constraints=constraints,
         reports=reports,
-        knowledge_cache=knowledge_cache
+        knowledge_cache=knowledge_cache,
+        gis_tool_result=gis_tool_result
     )
 
     # 调用 LLM（流式）
@@ -507,7 +572,8 @@ def _build_dimension_prompt(
     constraints: str,
     reports: Dict[str, Dict[str, str]],
     village_name: str = "",
-    knowledge_cache: Dict[str, str] = None
+    knowledge_cache: Dict[str, str] = None,
+    gis_tool_result: Dict[str, Any] = None
 ) -> str:
     """构建维度分析 prompt - 使用专业模板"""
     layer = get_dimension_layer(dimension_key) or 3
@@ -516,6 +582,9 @@ def _build_dimension_prompt(
     # 从缓存获取当前维度的知识
     knowledge_context = knowledge_cache.get(dimension_key, "")
 
+    # 构建 GIS 专业数据上下文（新增）
+    professional_data = _format_gis_tool_result(gis_tool_result)
+
     # Layer 1: 使用 analysis_prompts 模板
     if layer == 1:
         from ...subgraphs.analysis_prompts import get_dimension_prompt
@@ -523,7 +592,7 @@ def _build_dimension_prompt(
             dimension_key=dimension_key,
             raw_data=village_data,
             village_name=village_name,
-            professional_data=None,
+            professional_data=professional_data,
             task_description=task_description,
             constraints=constraints,
             knowledge_context=knowledge_context
@@ -602,13 +671,92 @@ def _build_dimension_prompt(
             analysis_report=analysis_summary,
             planning_concept=concept_summary,
             constraints=constraints,
-            professional_data=None,
+            professional_data=professional_data,
             dimension_plans=dimension_plans,
             knowledge_context=knowledge_context
         )
 
     # Fallback: 使用简化 prompt
     return _build_fallback_prompt(dimension_name, village_data, task_description, constraints)
+
+
+def _format_gis_tool_result(gis_tool_result: Optional[Dict[str, Any]]) -> Optional[str]:
+    """
+    格式化 GIS 工具结果为 professional_data 文本
+
+    Args:
+        gis_tool_result: GIS 工具执行结果
+
+    Returns:
+        格式化的文本，可用于 prompt 注入
+    """
+    if not gis_tool_result:
+        return None
+
+    if not gis_tool_result.get("success"):
+        return f"GIS分析失败: {gis_tool_result.get('error', '未知错误')}"
+
+    # 提取关键信息
+    parts = ["## GIS分析结果"]
+
+    # 设施验证结果
+    if "facility_type" in gis_tool_result:
+        parts.append(f"- 设施类型: {gis_tool_result.get('facility_type')}")
+        parts.append(f"- 综合评分: {gis_tool_result.get('overall_score', 0)}/100")
+        parts.append(f"- 适宜性等级: {gis_tool_result.get('suitability_level', 'Unknown')}")
+        if gis_tool_result.get("recommendations"):
+            parts.append("- 建议:")
+            for rec in gis_tool_result.get("recommendations", [])[:3]:
+                parts.append(f"  * {rec}")
+
+    # 生态敏感性评估结果
+    elif "sensitivity_class" in gis_tool_result:
+        parts.append(f"- 敏感性等级: {gis_tool_result.get('sensitivity_class')}")
+        parts.append(f"- 研究区域: {gis_tool_result.get('study_area_km2', 0)} km²")
+        parts.append(f"- 敏感区域: {gis_tool_result.get('sensitive_area_km2', 0)} km²")
+        if gis_tool_result.get("recommendations"):
+            parts.append("- 保护建议:")
+            for rec in gis_tool_result.get("recommendations", [])[:3]:
+                parts.append(f"  * {rec}")
+
+    # 等时圈分析结果
+    elif "isochrones" in gis_tool_result or gis_tool_result.get("geojson"):
+        parts.append("- 等时圈分析已完成")
+        if gis_tool_result.get("center"):
+            parts.append(f"- 中心点: {gis_tool_result.get('center')}")
+        if gis_tool_result.get("travel_mode"):
+            parts.append(f"- 出行方式: {gis_tool_result.get('travel_mode')}")
+
+    # 规划矢量化结果
+    elif "zones" in gis_tool_result or "facilities" in gis_tool_result:
+        if gis_tool_result.get("zones"):
+            zone_data = gis_tool_result["zones"]
+            parts.append(f"- 功能区数量: {zone_data.get('feature_count', 0)}")
+            parts.append(f"- 总面积: {zone_data.get('total_area_ha', 0)} 公顷")
+        if gis_tool_result.get("facilities"):
+            facility_data = gis_tool_result["facilities"]
+            parts.append(f"- 设施点数量: {facility_data.get('feature_count', 0)}")
+
+    # GIS 数据获取结果
+    elif gis_tool_result.get("data"):
+        data = gis_tool_result.get("data", {})
+        parts.append(f"- 位置: {gis_tool_result.get('location', 'Unknown')}")
+        if gis_tool_result.get("water"):
+            parts.append("- 水系数据: 已获取")
+        if gis_tool_result.get("road"):
+            parts.append("- 道路数据: 已获取")
+        if gis_tool_result.get("residential"):
+            parts.append("- 居民地数据: 已获取")
+
+    # 默认情况
+    else:
+        parts.append("- 分析已完成")
+        # 添加所有非嵌套的键值对
+        for k, v in gis_tool_result.items():
+            if k not in ["geojson", "data", "success"] and isinstance(v, (str, int, float, bool)):
+                parts.append(f"- {k}: {v}")
+
+    return "\n".join(parts)
 
 
 def _format_layer1_summary(layer1_reports: Dict[str, str]) -> str:
@@ -687,6 +835,43 @@ def _build_fallback_prompt(dimension_name: str, village_data: str,
 
 请开始分析：
 """
+
+
+# ==========================================
+# GIS 工具执行辅助函数
+# ==========================================
+
+def _execute_gis_tool(tool_name: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    执行 GIS 工具并返回结果
+
+    Args:
+        tool_name: 工具名称
+        context: 工具上下文
+
+    Returns:
+        工具执行结果字典，失败返回 None
+    """
+    import json
+    from ...tools.registry import ToolRegistry
+
+    tool_func = ToolRegistry.get_tool(tool_name)
+    if not tool_func:
+        logger.warning(f"[GIS工具] 工具未注册: {tool_name}")
+        return None
+
+    try:
+        result_str = tool_func(context)
+        # 解析 JSON 结果
+        if isinstance(result_str, str):
+            try:
+                return json.loads(result_str)
+            except json.JSONDecodeError:
+                return {"success": True, "data": result_str}
+        return result_str
+    except Exception as e:
+        logger.error(f"[GIS工具] 执行失败 {tool_name}: {e}")
+        return {"success": False, "error": str(e)}
 
 
 # ==========================================

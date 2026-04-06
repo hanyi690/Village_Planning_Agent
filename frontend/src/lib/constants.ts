@@ -66,7 +66,11 @@ export function getLayerPhase(layer: number): LayerPhase {
 // ============================================
 
 export const MIN_FILE_CONTENT_LENGTH = 50;
-export const FILE_ACCEPT = '.docx,.doc,.pdf,.pptx,.ppt,.xlsx,.xls,.txt,.md';
+export const FILE_ACCEPT = '.docx,.doc,.pdf,.pptx,.ppt,.xlsx,.xls,.txt,.md,.jpg,.jpeg,.png,.gif,.webp,.bmp';
+
+export const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
+export const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+export const DEFAULT_IMAGE_FORMAT = 'jpeg' as const;
 
 // ============================================
 // Status Constants

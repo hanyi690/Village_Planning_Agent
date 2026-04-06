@@ -1,0 +1,19 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "金田村",
+        "type": "village_center"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.040808,
+          24.816827
+        ]
+      }
+    }
+  ]
+}

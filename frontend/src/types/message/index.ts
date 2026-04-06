@@ -160,6 +160,7 @@ import type {
   ToolCallMessage,
   ToolProgressMessage,
   ToolResultMessage,
+  GisResultMessage,
 } from './message-types';
 
 export type Message =
@@ -170,7 +171,8 @@ export type Message =
   | LayerCompletedMessage
   | ToolCallMessage
   | ToolProgressMessage
-  | ToolResultMessage;
+  | ToolResultMessage
+  | GisResultMessage;
 
 // Re-export message types for convenience
 export type {
@@ -182,6 +184,7 @@ export type {
   ToolCallMessage,
   ToolProgressMessage,
   ToolResultMessage,
+  GisResultMessage,
 };
 
 // Re-export guards and helpers

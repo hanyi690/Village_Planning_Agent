@@ -89,7 +89,14 @@ class WfsService:
                     error=f"WFS HTTP {resp.status_code}"
                 )
 
-            geojson = resp.json()
+            # 尝试解析 JSON，若失败则返回空 GeoJSON
+            try:
+                geojson = resp.json()
+            except ValueError:
+                # 空响应或非 JSON 格式，返回空要素
+                logger.warning(f"[WfsService] {layer_type} 返回非 JSON 响应，视为空数据")
+                geojson = {"type": "FeatureCollection", "features": []}
+
             features = geojson.get("features", [])
 
             return TiandituResult(

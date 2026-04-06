@@ -34,6 +34,12 @@ export interface FileMessage extends BaseMessage {
   fileContent: string;
   fileSize?: number;
   encoding?: string;
+  fileType?: 'document' | 'image';
+  imageBase64?: string;
+  imageFormat?: string;
+  thumbnailBase64?: string;
+  imageWidth?: number;
+  imageHeight?: number;
 }
 
 /**
@@ -147,4 +153,64 @@ export interface ToolResultMessage extends BaseMessage {
   displayHints?: ToolDisplayHints;
   dataPreview?: string;
   stages?: ToolStage[];
+}
+
+// ============================================================================
+// GIS Result Messages (GIS 分析结果消息类型)
+// ============================================================================
+
+/**
+ * GeoJSON Feature - 单个地理要素
+ */
+export interface GeoJsonFeature {
+  type: 'Feature';
+  geometry: {
+    type: 'Point' | 'LineString' | 'Polygon' | 'MultiPoint' | 'MultiLineString' | 'MultiPolygon';
+    coordinates: unknown;
+  };
+  properties?: Record<string, unknown>;
+}
+
+/**
+ * GeoJSON FeatureCollection - 地理要素集合
+ */
+export interface GeoJsonFeatureCollection {
+  type: 'FeatureCollection';
+  features: GeoJsonFeature[];
+}
+
+/**
+ * GIS Layer Configuration - 图层配置
+ */
+export interface GISLayerConfig {
+  geojson: GeoJsonFeatureCollection;
+  layerType: 'function_zone' | 'facility_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone';
+  layerName: string;
+  style?: {
+    fillColor?: string;
+    fillOpacity?: number;
+    color?: string;
+    weight?: number;
+  };
+}
+
+/**
+ * GIS Result Message - GIS 分析结果消息
+ */
+export interface GisResultMessage extends BaseMessage {
+  type: 'gis_result';
+  dimensionKey: string;
+  dimensionName: string;
+  summary: string;
+  layers: GISLayerConfig[];
+  mapOptions?: {
+    center: [number, number];
+    zoom: number;
+  };
+  analysisData?: {
+    overallScore?: number;
+    suitabilityLevel?: string;
+    sensitivityClass?: string;
+    recommendations?: string[];
+  };
 }

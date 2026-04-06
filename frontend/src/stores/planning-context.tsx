@@ -239,6 +239,7 @@ export function usePlanningActions() {
     resetConversation,
     sendChatMessage,
     addMessage: store.addMessage,
+    addMessages: store.addMessages,
     setMessages: store.setMessages,
   };
 }

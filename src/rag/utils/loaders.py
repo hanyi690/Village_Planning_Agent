@@ -65,6 +65,11 @@ class FileTypeDetector:
         'text/plain': 'txt',
         'text/markdown': 'md',
         'application/x-ole-storage': 'ole',
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/gif': 'gif',
+        'image/webp': 'webp',
+        'image/bmp': 'bmp',
     }
 
     EXT_TYPE_MAP = {

@@ -11,13 +11,18 @@ import {
   DimensionReportMessage,
   FileMessage,
   Checkpoint,
+  GisResultMessage,
 } from '@/types';
+import { isGisResultMessage } from '@/types/message/message-guards';
 import ThinkingIndicator from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
 import CheckpointMarker from './CheckpointMarker';
-import { parseTimestamp, findLatestCheckpoint } from '@/lib/utils';
+import { parseTimestamp } from '@/lib/utils';
+import { formatFileSize } from '@/lib/utils';
+import { DEFAULT_IMAGE_FORMAT } from '@/lib/constants';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
+import { MapView } from '@/components/gis';
 
 interface MessageListProps {
   messages: Message[];
@@ -35,15 +40,6 @@ interface MessageListProps {
   onRollback?: (checkpointId: string) => Promise<void>;
   isRollingBack?: boolean;
   onViewFileInSidebar?: (file: FileMessage) => void;
-}
-
-// 格式化文件大小
-function formatBytes(bytes: number | undefined): string {
-  if (!bytes || bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
 export default function MessageList({
@@ -187,11 +183,15 @@ export default function MessageList({
           );
         }
 
-        // 文件消息渲染 - 显示文件名 + 内容预览
+        // 文件消息渲染 - 显示文件名 + 内容预览或图片缩略图
         if (message.type === 'file') {
           const fileMsg = message as FileMessage;
-          const previewContent = fileMsg.fileContent?.slice(0, 500) || '';
-          const hasMoreContent = (fileMsg.fileContent?.length || 0) > 500;
+          const isImageFile = fileMsg.fileType === 'image' && (fileMsg.thumbnailBase64 || fileMsg.imageBase64);
+          const imageSrc = isImageFile
+            ? `data:image/${fileMsg.imageFormat || DEFAULT_IMAGE_FORMAT};base64,${fileMsg.thumbnailBase64 || fileMsg.imageBase64}`
+            : null;
+          const previewContent = !isImageFile ? (fileMsg.fileContent?.slice(0, 500) || '') : '';
+          const hasMoreContent = !isImageFile && (fileMsg.fileContent?.length || 0) > 500;
 
           return (
             <div key={message.id} className="flex justify-end mb-4">
@@ -203,17 +203,118 @@ export default function MessageList({
                     className="hover:opacity-70 transition-opacity"
                     title="在侧边栏查看完整文件"
                   >
-                    <i className="fas fa-file-alt text-lg" />
+                    <i className={`fas ${isImageFile ? 'fa-image' : 'fa-file-alt'} text-lg`} />
                   </button>
                   <span className="font-medium">{fileMsg.filename}</span>
-                  <span className="text-xs opacity-75">({formatBytes(fileMsg.fileSize)})</span>
+                  {fileMsg.imageWidth && fileMsg.imageHeight && (
+                    <span className="text-xs opacity-75">
+                      ({fileMsg.imageWidth}x{fileMsg.imageHeight})
+                    </span>
+                  )}
+                  <span className="text-xs opacity-75">({formatFileSize(fileMsg.fileSize)})</span>
                 </div>
 
-                {/* 内容预览 - 移除高度限制 */}
-                {previewContent && (
+                {/* 图片缩略图 */}
+                {isImageFile && imageSrc && (
+                  <div className="mb-2">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={imageSrc}
+                      alt={fileMsg.filename}
+                      className="rounded-lg shadow-sm max-w-[200px] h-auto cursor-pointer hover:opacity-90 transition-opacity"
+                      onClick={() => onViewFileInSidebar?.(fileMsg)}
+                      title="点击查看大图"
+                      loading="lazy"
+                    />
+                  </div>
+                )}
+
+                {/* 文档内容预览 */}
+                {!isImageFile && previewContent && (
                   <div className="bg-white/10 rounded-lg p-2 text-sm font-mono whitespace-pre-wrap overflow-auto max-h-full">
                     <MarkdownRenderer content={previewContent} className="text-sm" />
                     {hasMoreContent && <span className="text-gray-500">... (内容已截断)</span>}
+                  </div>
+                )}
+
+                {/* 时间戳 */}
+                <div className="text-xs opacity-60 mt-2 text-right">
+                  {(() => {
+                    const date = parseTimestamp(message.timestamp);
+                    return date ? date.toLocaleTimeString() : '刚刚';
+                  })()}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // GIS 结果消息渲染
+        if (isGisResultMessage(message)) {
+          const gisMsg = message as GisResultMessage;
+          return (
+            <div key={message.id} className="flex justify-start mb-4">
+              <div className="max-w-[85%] bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm">
+                {/* 标题 */}
+                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-100">
+                  <i className="fas fa-map-marked-alt text-blue-600" />
+                  <span className="font-medium text-gray-800">
+                    {gisMsg.dimensionName} - GIS 分析结果
+                  </span>
+                </div>
+
+                {/* 分析摘要 */}
+                {gisMsg.summary && (
+                  <div className="mb-3 text-sm text-gray-600">
+                    <MarkdownRenderer content={gisMsg.summary} />
+                  </div>
+                )}
+
+                {/* 分析数据 */}
+                {gisMsg.analysisData && (
+                  <div className="mb-3 grid grid-cols-2 gap-2 text-sm">
+                    {gisMsg.analysisData.overallScore !== undefined && (
+                      <div className="bg-gray-50 rounded px-2 py-1">
+                        <span className="text-gray-500">综合评分：</span>
+                        <span className="font-medium">{gisMsg.analysisData.overallScore}/100</span>
+                      </div>
+                    )}
+                    {gisMsg.analysisData.suitabilityLevel && (
+                      <div className="bg-gray-50 rounded px-2 py-1">
+                        <span className="text-gray-500">适宜性：</span>
+                        <span className="font-medium">{gisMsg.analysisData.suitabilityLevel}</span>
+                      </div>
+                    )}
+                    {gisMsg.analysisData.sensitivityClass && (
+                      <div className="bg-gray-50 rounded px-2 py-1">
+                        <span className="text-gray-500">敏感性：</span>
+                        <span className="font-medium">{gisMsg.analysisData.sensitivityClass}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 地图 */}
+                {gisMsg.layers && gisMsg.layers.length > 0 && (
+                  <div className="mb-3">
+                    <MapView
+                      layers={gisMsg.layers}
+                      center={gisMsg.mapOptions?.center}
+                      zoom={gisMsg.mapOptions?.zoom}
+                      height="300px"
+                    />
+                  </div>
+                )}
+
+                {/* 建议 */}
+                {gisMsg.analysisData?.recommendations && gisMsg.analysisData.recommendations.length > 0 && (
+                  <div className="text-sm text-gray-600">
+                    <div className="font-medium mb-1">建议：</div>
+                    <ul className="list-disc list-inside space-y-1">
+                      {gisMsg.analysisData.recommendations.slice(0, 3).map((rec, i) => (
+                        <li key={i}>{rec}</li>
+                      ))}
+                    </ul>
                   </div>
                 )}
 

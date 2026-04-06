@@ -267,6 +267,7 @@ export interface PlanningActions {
 
   // Messages
   addMessage: (message: Message) => void;
+  addMessages: (messages: Message[]) => void;
   setMessages: (messages: Message[]) => void;
   updateLastMessage: (updates: Partial<Message>) => void;
   clearMessages: () => void;
@@ -942,6 +943,11 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     addMessage: (message) =>
       set((state) => {
         state.messages.push(message);
+      }),
+
+    addMessages: (messages) =>
+      set((state) => {
+        state.messages.push(...messages);
       }),
 
     setMessages: (messages) =>
