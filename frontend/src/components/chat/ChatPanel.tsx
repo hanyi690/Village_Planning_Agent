@@ -344,9 +344,9 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   const handleDimensionDelta = planningHandlers.handleDimensionDelta;
   const handleDimensionComplete = planningHandlers.handleDimensionComplete;
 
-  // 层级进度回调（保留简单日志）
-  const handleLayerProgress = useCallback((layer: number, completed: number, total: number) => {
-    console.log(`[ChatPanel] Layer ${layer} progress: ${completed}/${total}`);
+  // 层级进度回调
+  const handleLayerProgress = useCallback((_layer: number, _completed: number, _total: number) => {
+    // Layer progress tracking
   }, []);
 
   // 层级完成回调 - 使用 usePlanningHandlers hook
@@ -364,12 +364,9 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   // 暂停回调 - 处理审查暂停状态
   const handlePause = useCallback(
     async (layer: number, checkpointId: string) => {
-      console.log(`[ChatPanel] Pause event received`, { layer, checkpointId });
-
       // 🔧 修复：更新审查状态，使 ReviewPanel 能够正确显示
       setIsPaused(true);
       setPendingReviewLayer(layer);
-      console.log(`[ChatPanel] Set isPaused=true, pendingReviewLayer=${layer}`);
 
       // 🔧 修复：添加新的 checkpoint 到状态，使 CheckpointMarker 能够正确显示
       if (checkpointId && layer > 0) {
@@ -394,13 +391,9 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       // ✅ 兜底机制：从 REST API 获取最新层级数据
       // 当 SSE 的 layer_completed 事件丢失时，确保数据仍能被正确获取
       if (layer > 0) {
-        console.log(`[ChatPanel] Pause fallback: fetching layer ${layer} data from REST API...`);
         try {
           const backendData = await fetchLayerReportsFromBackend(layer);
           if (backendData && backendData.reports && Object.keys(backendData.reports).length > 0) {
-            console.log(
-              `[ChatPanel] Pause fallback: got ${Object.keys(backendData.reports).length} dimensions, updating dimensionContents`
-            );
             // 更新 dimensionContents 状态
             setDimensionContents((prev) => {
               const updates: Record<string, string> = {};
@@ -414,8 +407,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
               });
               return Object.keys(updates).length > 0 ? { ...prev, ...updates } : prev;
             });
-          } else {
-            console.log(`[ChatPanel] Pause fallback: REST API returned no data for layer ${layer}`);
           }
         } catch (error) {
           console.error(`[ChatPanel] Pause fallback: REST API error for layer ${layer}:`, error);
@@ -440,8 +431,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       timestamp: string;
       // 注意：SSE 事件不再携带 newContent，需要通过 REST API 获取
     }) => {
-      console.log('[ChatPanel] Dimension revised signal received', data);
-
       const dimensionName = getDimensionName(data.dimension);
       const revisionId = `revision-${data.timestamp}-${data.dimension}`; // 可预测 ID，便于去重
 
@@ -482,13 +471,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
           ...prev,
           [data.dimension]: newContent,
         }));
-
-        console.log(
-          `[ChatPanel] 维度 ${data.dimension} 修复完成 (v${version})，已添加并持久化消息`
-        );
-        if (previousContent) {
-          console.log(`[ChatPanel] 包含原始内容用于对比，原始长度: ${previousContent.length}`);
-        }
       } catch (error) {
         console.error(`[ChatPanel] Failed to fetch dimension content:`, error);
         // 降级处理：添加错误提示消息
@@ -502,7 +484,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
 
   // SSE 连接成功回调 - 连接成功后触发状态恢复检查
   const handleConnected = useCallback(() => {
-    console.log('[ChatPanel] SSE connected, triggering layer restoration');
     sseConnectedRef.current = true;
 
     // 串行处理，避免并发竞态
@@ -560,16 +541,12 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   // Stable handler for SegmentedControl onChange
   const handleLayerChange = useCallback(
     async (layer: string) => {
-      console.log('[ChatPanel] Layer change requested:', layer);
       const layerNumber = LAYER_LABEL_MAP[layer];
-      console.log('[ChatPanel] Mapped layer number:', layerNumber);
-      console.log('[ChatPanel] onOpenLayerSidebar:', onOpenLayerSidebar);
 
       if (layerNumber !== undefined && taskId) {
         // 1. Fetch latest reports from backend
         try {
           const reports = await planningApi.getLayerReports(taskId, layerNumber);
-          console.log('[ChatPanel] Layer reports fetched:', reports);
 
           // 2. Update reports in state
           const layerKey = `layer${layerNumber}` as 'layer1' | 'layer2' | 'layer3';
@@ -581,7 +558,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
         }
 
         // 3. Open sidebar
-        console.log('[ChatPanel] Calling onOpenLayerSidebar with:', layerNumber);
         onOpenLayerSidebar?.(layerNumber);
       }
     },
@@ -618,7 +594,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     return () => {
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
-        console.log('[ChatPanel] Cleaned up typing timeout');
       }
     };
   }, []);
@@ -630,11 +605,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     // 直接将 taskState 同步到 Context
     // Controller 只负责数据搬运,不做任何业务逻辑判断
     syncBackendState(taskState);
-
-    console.log('[ChatPanel] Synced backend state:', {
-      taskId,
-      taskState,
-    });
   }, [taskId, taskState, syncBackendState]);
 
   // SSE 断线重连后的层级状态恢复机制（备用保护）
@@ -706,17 +676,10 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
 
       // 注意：删除默认示例数据，villageData 可能为空字符串
       // 后端 prompt 模板已有默认处理：raw_data 为空时显示占位提示
-      console.log('[ChatPanel] villageData length:', villageData.length);
-      console.log('[ChatPanel] villageData preview:', villageData.slice(0, 300));
-      console.log(
-        '[ChatPanel] taskDescriptionFiles count:',
-        villageFormData.taskDescriptionFiles?.length || 0
-      );
 
       // 提取村名（优先从文件内容匹配，其次使用项目名称）
       const villageNameMatch = villageData.match(/(?:广东省|梅州市|平远县|泗水镇)?(.{2,8}村)/);
       const villageName = villageNameMatch ? villageNameMatch[1] : villageFormData.projectName;
-      console.log('[ChatPanel] 提取的村名:', villageName);
 
       // taskDescription 仅使用表单文本输入（文件内容已合并到 villageData）
       const taskDescription = villageFormData.taskDescription || PLANNING_DEFAULTS.defaultTask;
@@ -903,6 +866,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
           thumbnailBase64: response.thumbnailBase64,
           imageWidth: response.imageWidth,
           imageHeight: response.imageHeight,
+          embeddedImages: response.embeddedImages,
         } as FileMessage);
 
         const encodingInfo = response.encoding ? `\n编码: ${response.encoding}` : '';
@@ -963,7 +927,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     (layer: number) => {
       const layerId = getLayerId(layer);
       if (layerId) {
-        console.log('[ChatPanel] Open layer report in viewer:', layerId);
         showViewer();
       }
     },
@@ -973,7 +936,6 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   // Handler: 在侧边栏查看文件内容
   const handleViewFileInSidebar = useCallback(
     (file: FileMessage) => {
-      console.log('[ChatPanel] View file in sidebar:', file.filename);
       showFileViewer(file);
     },
     [showFileViewer]
@@ -1035,13 +997,11 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
             onViewLayerDetails={(layer) => {
               const layerId = getLayerId(layer);
               if (layerId) {
-                console.log('[ChatPanel] View layer details:', layerId);
                 showViewer();
               }
             }}
-            onToggleAllDimensions={(layer, expand) => {
+            onToggleAllDimensions={(_layer, _expand) => {
               // This would expand/collapse all dimensions in the viewer
-              console.log('[ChatPanel] Toggle all dimensions for layer', layer, expand);
               // TODO: Implement expand/collapse all in LayerReportViewer
             }}
             currentLayer={currentLayer ?? undefined}

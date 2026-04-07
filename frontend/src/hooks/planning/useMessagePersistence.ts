@@ -67,6 +67,7 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       metadata.summary = layerMsg.summary;
       metadata.fullReportContent = layerMsg.fullReportContent;
       metadata.dimensionReports = layerMsg.dimensionReports;
+      metadata.dimensionGisData = layerMsg.dimensionGisData;
     } else if (msg.type === 'file') {
       const fileMsg = msg as FileMessage;
       metadata.filename = fileMsg.filename;
@@ -116,11 +117,18 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
     // Handle layer_completed messages
     if (msg.type !== 'layer_completed') return false;
     const layerMsg = msg as LayerCompletedMessage;
-    const currentVersion = messageVersionsRef.current.get(msg.id);
+
+    // Use layer + id as version tracking key to distinguish different layers
+    const versionKey = `${msg.id}_layer${layerMsg.layer}`;
+    const currentVersion = messageVersionsRef.current.get(versionKey);
+
     if (!currentVersion) return true;
     if (msg._pendingStorage) return false;
+
     const newDimensionCount = layerMsg.summary?.dimension_count || 0;
     const newWordCount = layerMsg.summary?.word_count || 0;
+
+    // Update if dimension count increased or word count increased significantly
     return newDimensionCount > currentVersion.dimensionCount || newWordCount > currentVersion.wordCount + 500;
   }
 
@@ -142,14 +150,23 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
     // For layer_completed messages, verify data completeness before saving
     if (msg.type === 'layer_completed') {
       const layerMsg = msg as LayerCompletedMessage;
-      // Must have dimensionReports with at least one entry
+
+      // Log for debugging
+      const reportCount = layerMsg.dimensionReports ? Object.keys(layerMsg.dimensionReports).length : 0;
+      const contentLength = layerMsg.fullReportContent?.length || 0;
+      console.log(
+        `[Persistence] layer_completed check: id=${msg.id}, layer=${layerMsg.layer}, reports=${reportCount}, content=${contentLength}`
+      );
+
+      // Lower threshold: allow 50+ chars for saving (was 100)
       if (!layerMsg.dimensionReports || Object.keys(layerMsg.dimensionReports).length === 0) {
-        console.log(`[useMessagePersistence] Skipping layer_completed ${msg.id}: no dimensionReports`);
+        console.warn(`[Persistence] Skipping layer_completed (no dimensionReports): ${msg.id}`);
         return;
       }
-      // Must have fullReportContent
-      if (!layerMsg.fullReportContent || layerMsg.fullReportContent.length < 100) {
-        console.log(`[useMessagePersistence] Skipping layer_completed ${msg.id}: incomplete fullReportContent`);
+      if (!layerMsg.fullReportContent || layerMsg.fullReportContent.length < 50) {
+        console.warn(
+          `[Persistence] Skipping layer_completed (content too short): ${msg.id}, length=${layerMsg.fullReportContent?.length ?? 0}`
+        );
         return;
       }
     }
@@ -170,13 +187,13 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       // Update version tracking for layer_completed messages
       if (msg.type === 'layer_completed') {
         const layerMsg = msg as LayerCompletedMessage;
-        messageVersionsRef.current.set(msg.id, {
+        // Use layer + id as version tracking key
+        const versionKey = `${msg.id}_layer${layerMsg.layer}`;
+        messageVersionsRef.current.set(versionKey, {
           dimensionCount: layerMsg.summary?.dimension_count || 0,
           wordCount: layerMsg.summary?.word_count || 0,
         });
       }
-
-      console.log(`[useMessagePersistence] Saved ${msg.id} (type: ${msg.type}, updated: ${needsUpdate})`);
     } catch (error) {
       console.error(`[useMessagePersistence] Failed to save message ${msg.id}:`, error);
     }
@@ -196,9 +213,6 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       );
       if (unsaved.length > 0) {
         pendingMessagesRef.current.push(...unsaved);
-        console.log(
-          `[useMessagePersistence] No taskId, pending ${unsaved.length} messages (total: ${pendingMessagesRef.current.length})`
-        );
       }
       return;
     }
@@ -212,9 +226,6 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       if (pendingMessagesRef.current.length > 0) {
         messagesToSave.push(...pendingMessagesRef.current);
         pendingMessagesRef.current = [];
-        console.log(
-          `[useMessagePersistence] taskId set to ${taskId}, flushing pending messages`
-        );
       }
 
       // 2. 批量保存当前所有未保存消息
@@ -222,10 +233,6 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
         (msg) => !savedMessageIdsRef.current.has(msg.id) && !msg._pendingStorage
       );
       messagesToSave.push(...unsavedCurrent);
-
-      console.log(
-        `[useMessagePersistence] taskId set, batch saving ${messagesToSave.length} messages`
-      );
     } else {
       // 常规保存：只保存最后一条消息
       const lastMessage = messages[messages.length - 1];
@@ -250,6 +257,7 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
     for (const msg of messagesToSave) {
       saveSingleMessage(msg, taskId);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- saveSingleMessage 只依赖 refs (稳定) 和传入参数，无需加入依赖
   }, [messages, taskId, enabled]);
 }
 

@@ -29,6 +29,9 @@ from .amap import (
     TRAFFIC_STATUS_LEVELS,
 )
 
+# POI 统一接口（高德优先）
+from .poi_provider import POIProvider
+
 
 __all__ = [
     # 天地图
@@ -55,4 +58,6 @@ __all__ = [
     "POI_TYPES_PUBLIC_SERVICE",
     "SERVICE_RADIUS_STANDARDS_AMAP",
     "TRAFFIC_STATUS_LEVELS",
+    # POI 统一接口
+    "POIProvider",
 ]

@@ -9,6 +9,14 @@
 # 工具注册中心
 from .registry import ToolRegistry, ToolMetadata, TOOL_PARAMETER_SCHEMAS, TOOL_METADATA_DEFINITIONS
 
+# 工具返回值类型定义
+from .types import (
+    ResultDataType,
+    NormalizedToolResult,
+    normalize_tool_result,
+    safe_get_nested,
+)
+
 # 统一工具定义（LangChain @tool 装饰器）
 from .tools import (
     gis_analysis,
@@ -57,6 +65,12 @@ __all__ = [
     "ToolMetadata",
     "TOOL_PARAMETER_SCHEMAS",
     "TOOL_METADATA_DEFINITIONS",
+
+    # 工具返回值类型定义
+    "ResultDataType",
+    "NormalizedToolResult",
+    "normalize_tool_result",
+    "safe_get_nested",
 
     # 统一工具定义
     "gis_analysis",

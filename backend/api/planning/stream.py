@@ -97,4 +97,38 @@ async def stream_planning(session_id: str):
     )
 
 
+@router.get("/api/planning/stream/{session_id}/sync")
+async def sync_events(session_id: str, from_seq: int = 0):
+    """
+    Reconnection sync endpoint.
+
+    Returns events from a specific sequence number for SSE reconnection.
+    Used by client to recover missed events after reconnection.
+
+    Args:
+        session_id: Session identifier
+        from_seq: Last sequence number client received (returns events with seq > from_seq)
+
+    Returns:
+        JSON with events list and last_seq
+    """
+    # Check if session exists
+    if not sse_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    events = sse_manager.get_events_from_seq(session_id, from_seq)
+    last_seq = sse_manager.get_last_seq(session_id)
+
+    logger.info(
+        f"[Planning API] [{session_id}] Sync requested from_seq={from_seq}, "
+        f"returned {len(events)} events, last_seq={last_seq}"
+    )
+
+    return {
+        "events": events,
+        "last_seq": last_seq,
+        "from_seq": from_seq,
+    }
+
+
 __all__ = ["router"]

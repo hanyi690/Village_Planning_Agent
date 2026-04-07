@@ -81,7 +81,11 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": None,
         "result_key": "analysis_result",
         "rag_enabled": True,
-        "tool": "wfs_data_fetch",  # WFS 数据获取工具，获取水系/地形数据
+        "tool": "wfs_data_fetch",
+        "tool_params": {
+            "location": {"source": "config", "path": "village_name"},
+            "buffer_km": {"source": "literal", "value": 5.0}
+        },
         "description": "分析村庄的气候、水文、地形、生态等自然环境条件",
         "prompt_key": "natural_environment_analysis"
     },
@@ -107,7 +111,11 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": None,
         "result_key": "analysis_result",
         "rag_enabled": True,
-        "tool": "accessibility_analysis",  # 可达性分析工具，基于真实道路网络
+        "tool": "accessibility_analysis",
+        "tool_params": {
+            "analysis_type": {"source": "literal", "value": "service_coverage"},
+            "center": {"source": "gis_cache", "path": "_auto_fetched.center"}
+        },
         "description": "分析村庄内部道路和外部交通状况",
         "prompt_key": "traffic_analysis"
     },
@@ -120,7 +128,12 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": None,
         "result_key": "analysis_result",
         "rag_enabled": True,
-        "tool": "poi_search",  # POI 搜索工具，获取公共服务设施分布
+        "tool": "poi_search",
+        "tool_params": {
+            "keyword": {"source": "literal", "value": "学校|医院|超市|银行"},
+            "center": {"source": "gis_cache", "path": "_auto_fetched.center"},
+            "radius": {"source": "literal", "value": 5000}
+        },
         "description": "分析村庄教育、医疗、文化等公共服务设施配置",
         "prompt_key": "public_services_analysis"
     },
@@ -346,6 +359,11 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "result_key": "detailed_plan",
         "rag_enabled": False,
         "tool": "isochrone_analysis",
+        "tool_params": {
+            "center": {"source": "gis_cache", "path": "_auto_fetched.center"},
+            "time_minutes": {"source": "literal", "value": [5, 10, 15]},
+            "travel_mode": {"source": "literal", "value": "walk"}
+        },
         "description": "制定村庄道路交通系统详细规划",
         "prompt_key": "traffic_planning"
     },

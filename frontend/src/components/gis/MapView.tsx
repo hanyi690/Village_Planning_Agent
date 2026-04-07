@@ -1,166 +1,271 @@
 'use client';
 
 /**
- * MapContainer - Leaflet 地图容器组件
+ * MapView - MapLibre GL 地图容器组件
  *
- * 用于渲染 GIS 分析结果，支持 GeoJSON 图层、等时圈等功能。
+ * 用于渲染 GIS 分析结果，支持 GeoJSON 图层、矢量瓦片等。
+ * 使用 GeoJSON 标准坐标格式 [longitude, latitude]（经度在前）。
  */
 
-import { useEffect, useState, useMemo, useCallback } from 'react';
-import dynamic from 'next/dynamic';
+import { useEffect, useState, useMemo } from 'react';
+import Map, { Source, Layer } from 'react-map-gl/maplibre';
+import type { FillLayerSpecification, LineLayerSpecification, CircleLayerSpecification, StyleSpecification } from 'maplibre-gl';
+import type { FeatureCollection, Geometry } from 'geojson';
+import 'maplibre-gl/dist/maplibre-gl.css';
 
-// 动态导入 Leaflet 组件，避免 SSR 问题
-const MapContainer = dynamic(
-  () => import('react-leaflet').then((mod) => mod.MapContainer),
-  { ssr: false }
-);
-const TileLayer = dynamic(
-  () => import('react-leaflet').then((mod) => mod.TileLayer),
-  { ssr: false }
-);
-const GeoJSON = dynamic(
-  () => import('react-leaflet').then((mod) => mod.GeoJSON),
-  { ssr: false }
-);
+import type { GISLayerConfig, GeoJsonFeatureCollection } from '@/types/message/message-types';
+import { PLANNING_COLORS, DEFAULT_COLORS, TILE_SOURCES, LineColors, FeatureColors } from '@/lib/constants/gis';
 
-import type { GISLayerConfig } from '@/types/message/message-types';
+// Tile URLs (static - evaluated at build time)
+// ter_w: 地形晕渲（球面墨卡托投影）- 淡色背景更适合规划展示
+// cta_w: 地形注记（球面墨卡托投影）
+const TIANDITU_BASE_URL = '/api/tiles/tianditu/ter_w/{z}/{y}/{x}';
+const TIANDITU_ANNOTATION_URL = '/api/tiles/tianditu/cta_w/{z}/{y}/{x}';
+const GEOQ_TILE_URL = 'https://map.geoq.cn/ArcGIS/rest/services/ChinaOnlineCommunity/MapServer/tile/{z}/{y}/{x}';
+const OSM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-// 导入 Leaflet CSS
-import 'leaflet/dist/leaflet.css';
+// Tile config type
+type TileConfig = { baseUrl: string; annotationUrl: string; attribution: string };
 
-// Leaflet 类型定义
-type LeafletPathOptions = {
-  fillColor?: string;
-  fillOpacity?: number;
-  color?: string;
-  weight?: number;
-  radius?: number;
-  opacity?: number;
-};
+// Module-level tile config (IIFE - evaluated once at build time)
+const TILE_CONFIG: TileConfig = (() => {
+  const source = (process.env.NEXT_PUBLIC_TILE_SOURCE || TILE_SOURCES.TIANDITU) as keyof typeof configs;
+  const configs: Record<string, TileConfig> = {
+    [TILE_SOURCES.TIANDITU]: {
+      baseUrl: TIANDITU_BASE_URL,
+      annotationUrl: TIANDITU_ANNOTATION_URL,
+      attribution: '天地图'
+    },
+    [TILE_SOURCES.GEOQ]: {
+      baseUrl: GEOQ_TILE_URL,
+      annotationUrl: '',
+      attribution: 'GeoQ'
+    },
+    [TILE_SOURCES.OSM]: {
+      baseUrl: OSM_TILE_URL,
+      annotationUrl: '',
+      attribution: 'OpenStreetMap'
+    },
+  };
+  return configs[source] || configs[TILE_SOURCES.OSM];
+})();
 
 interface MapViewProps {
   layers: GISLayerConfig[];
-  center?: [number, number];
+  center?: [number, number]; // [longitude, latitude] GeoJSON 标准
   zoom?: number;
   height?: string;
   title?: string;
 }
 
-// 规划符号样式
-const PLANNING_STYLES: Record<string, Record<string, LeafletPathOptions>> = {
-  function_zone: {
-    '居住用地': { fillColor: '#FFD700', fillOpacity: 0.6, color: '#B8860B', weight: 2 },
-    '产业用地': { fillColor: '#FF6B6B', fillOpacity: 0.6, color: '#CC0000', weight: 2 },
-    '公共服务用地': { fillColor: '#4A90D9', fillOpacity: 0.6, color: '#1E3A5F', weight: 2 },
-    '生态绿地': { fillColor: '#90EE90', fillOpacity: 0.6, color: '#228B22', weight: 2 },
-    '交通用地': { fillColor: '#808080', fillOpacity: 0.5, color: '#404040', weight: 2 },
-    '水域': { fillColor: '#87CEEB', fillOpacity: 0.7, color: '#4169E1', weight: 2 },
-    '农业用地': { fillColor: '#8B4513', fillOpacity: 0.5, color: '#654321', weight: 2 },
-    '商业用地': { fillColor: '#FFA500', fillOpacity: 0.6, color: '#CC8400', weight: 2 },
-  },
-  facility_point: {
-    '现状保留': { fillColor: 'green', radius: 8 },
-    '规划新建': { fillColor: 'blue', radius: 8 },
-    '规划改扩建': { fillColor: 'orange', radius: 8 },
-    '规划迁建': { fillColor: 'purple', radius: 8 },
-  },
-  sensitivity_zone: {
-    '高敏感区': { fillColor: '#FF0000', fillOpacity: 0.4, color: '#CC0000', weight: 2 },
-    '中敏感区': { fillColor: '#FFFF00', fillOpacity: 0.3, color: '#CCCC00', weight: 2 },
-    '低敏感区': { fillColor: '#00FF00', fillOpacity: 0.2, color: '#00CC00', weight: 2 },
-  },
-  isochrone: {
-    '5min': { fillColor: '#00FF00', fillOpacity: 0.3, color: '#00CC00', weight: 2 },
-    '10min': { fillColor: '#FFFF00', fillOpacity: 0.25, color: '#CCCC00', weight: 2 },
-    '15min': { fillColor: '#FFA500', fillOpacity: 0.2, color: '#CC8400', weight: 2 },
-  },
+// Layer style from backend
+interface LayerStyle {
+  color?: string;
+}
+
+// Layer rendering priority (numerical order, higher = top layer)
+const LAYER_PRIORITY: Record<string, number> = {
+  'sensitivity_zone': 1,   // Sensitivity zones (bottom layer)
+  'function_zone': 2,      // Functional zones
+  'isochrone': 3,          // Isochrones
+  'development_axis': 4,   // Development axes
+  'facility_point': 5,     // Facility points (top layer)
 };
 
-// 默认样式
-const DEFAULT_STYLE: LeafletPathOptions = { fillColor: '#CCCCCC', fillOpacity: 0.5, color: '#666666', weight: 2 };
+// Get feature colors - prioritize backend color
+function getFeatureColors(
+  geojson: GeoJsonFeatureCollection | undefined,
+  layerType: string,
+  layerStyle?: LayerStyle,
+  directColor?: string
+): { fill: string; stroke: string } {
+  // Priority 1: Use direct color field (backend sends color at top level)
+  if (directColor) {
+    return { fill: directColor, stroke: directColor };
+  }
 
-// 获取要素样式（提取到组件外部避免重复创建）
-function getFeatureStyle(properties: Record<string, unknown> | undefined, layerType: string): LeafletPathOptions {
-  const styles = PLANNING_STYLES[layerType] || {};
-  const props = properties || {};
+  // Priority 2: Use backend style.color if provided
+  if (layerStyle?.color) {
+    return { fill: layerStyle.color, stroke: layerStyle.color };
+  }
 
-  // 根据图层类型确定子类型
+  // Priority 3: Use feature's style.color from geojson properties
+  const geojsonProps = geojson?.features?.[0]?.properties as Record<string, unknown> | undefined;
+  const geojsonColor = geojsonProps?.style as Record<string, unknown> | undefined;
+  const colorValue = geojsonColor?.color as string | undefined;
+  if (colorValue) {
+    return { fill: colorValue, stroke: colorValue };
+  }
+
+  // Priority 4: Use PLANNING_COLORS lookup
+  // Note: development_axis handled separately in layerStyles, not here
+  const props = geojsonProps || {};
+
+  // Map layerType to correct PLANNING_COLORS sub-object
   let subtype = 'default';
+  let colorsMap: Record<string, FeatureColors>;
+
   if (layerType === 'function_zone') {
+    colorsMap = PLANNING_COLORS.function_zone;
     subtype = (props.zone_type as string) || '居住用地';
   } else if (layerType === 'facility_point') {
+    colorsMap = PLANNING_COLORS.facility_point;
     subtype = (props.status as string) || '规划新建';
   } else if (layerType === 'sensitivity_zone') {
+    colorsMap = PLANNING_COLORS.sensitivity_zone;
     subtype = (props.sensitivity_level as string) || '中敏感区';
   } else if (layerType === 'isochrone') {
+    colorsMap = PLANNING_COLORS.isochrone;
     const timeMinutes = props.time_minutes as number;
     if (timeMinutes) {
       subtype = `${timeMinutes}min`;
     }
+  } else {
+    // Fallback for unknown layer types
+    return DEFAULT_COLORS;
   }
 
-  const baseStyle = styles[subtype] || DEFAULT_STYLE;
-
-  // 返回样式
-  const result: LeafletPathOptions = { ...baseStyle };
-  if (props.color) {
-    result.fillColor = props.color as string;
-  }
-  if (props.fillOpacity !== undefined) {
-    result.fillOpacity = props.fillOpacity as number;
-  }
-  return result;
+  return colorsMap[subtype] || DEFAULT_COLORS;
 }
 
 export default function MapView({
   layers,
-  center = [30.0, 120.0],
+  center = [120.0, 30.0], // [longitude, latitude] GeoJSON 标准
   zoom = 14,
   height = '400px',
   title,
 }: MapViewProps) {
   const [mounted, setMounted] = useState(false);
-  const [L, setL] = useState<typeof import('leaflet') | null>(null);
 
   useEffect(() => {
     setMounted(true);
-    // 只在客户端加载 Leaflet
-    import('leaflet').then((leaflet) => {
-      setL(leaflet.default || leaflet);
-    });
   }, []);
 
-  // 使用 useMemo 缓存样式函数，避免每次渲染重新创建
-  const layerRenderers = useMemo(() => {
-    if (!L) return [];
-
-    return layers.map((layer) => {
-      // 样式函数
-      const styleFunc = (feature: { properties?: Record<string, unknown> } | undefined) => {
-        if (!feature) return DEFAULT_STYLE;
-        return getFeatureStyle(feature.properties, layer.layerType);
-      };
-
-      // 点要素渲染函数
-      const pointToLayerFunc = layer.layerType === 'facility_point'
-        ? (feature: { properties?: Record<string, unknown> }, latlng: L.LatLng) => {
-            const style = getFeatureStyle(feature?.properties, layer.layerType);
-            return L.circleMarker(latlng, {
-              radius: style.radius || 8,
-              fillColor: style.fillColor || 'blue',
-              color: '#fff',
-              weight: 2,
-              opacity: 1,
-              fillOpacity: 0.8,
-            });
-          }
-        : undefined;
-
-      return { layer, styleFunc, pointToLayerFunc };
+  // 构建 GeoJSON sources - 添加图层渲染优先级排序
+  const geojsonSources = useMemo(() => {
+    return [...layers].sort((a, b) => {
+      const pa = LAYER_PRIORITY[a.layerType] || 0;
+      const pb = LAYER_PRIORITY[b.layerType] || 0;
+      return pa - pb;
+    }).map((layer, index) => {
+      const sourceId = `layer-${index}-${layer.layerName}`;
+      return { sourceId, data: layer.geojson, layer };
     });
-  }, [layers, L]);
+  }, [layers]);
 
-  if (!mounted || !L) {
+  // Build layer styles
+  const layerStyles = useMemo(() => {
+    return geojsonSources.map(({ sourceId, layer }) => {
+      // Get color from top-level or style.color (backend sends color at top level)
+      const directColor = layer.color;
+      const styleColor = layer.style?.color;
+      if (layer.layerType === 'facility_point') {
+        // Point features - circle layer
+        const colors = getFeatureColors(layer.geojson, layer.layerType, { color: styleColor }, directColor);
+        const circleLayer: CircleLayerSpecification = {
+          id: `${sourceId}-circle`,
+          type: 'circle',
+          source: sourceId,
+          paint: {
+            'circle-radius': 8,
+            'circle-color': colors.fill,
+            'circle-stroke-width': 2,
+            'circle-stroke-color': colors.stroke,
+            'circle-opacity': 0.8,
+          },
+        };
+        return [circleLayer];
+      } else if (layer.layerType === 'development_axis') {
+        // Line features - use LineColors type
+        let lineColor = directColor || styleColor;
+        let lineWidth = 2;
+        if (!lineColor) {
+          const axisStyles: Record<string, LineColors> = PLANNING_COLORS.development_axis;
+          const props = layer.geojson?.features?.[0]?.properties || {};
+          const axisType = (props.axis_type as string) || '发展主轴';
+          const style = axisStyles[axisType] || { stroke: '#FF0000', width: 2 };
+          lineColor = style.stroke;
+          lineWidth = style.width;
+        }
+        const lineLayer: LineLayerSpecification = {
+          id: `${sourceId}-line`,
+          type: 'line',
+          source: sourceId,
+          paint: {
+            'line-color': lineColor,
+            'line-width': lineWidth,
+          },
+        };
+        return [lineLayer];
+      } else {
+        // Polygon features - fill + line layers
+        const colors = getFeatureColors(layer.geojson, layer.layerType, { color: styleColor }, directColor);
+        const fillLayer: FillLayerSpecification = {
+          id: `${sourceId}-fill`,
+          type: 'fill',
+          source: sourceId,
+          paint: {
+            'fill-color': colors.fill,
+            'fill-opacity': 0.5,
+          },
+        };
+        const lineLayer: LineLayerSpecification = {
+          id: `${sourceId}-line`,
+          type: 'line',
+          source: sourceId,
+          paint: {
+            'line-color': colors.stroke,
+            'line-width': 2,
+          },
+        };
+        return [fillLayer, lineLayer];
+      }
+    });
+  }, [geojsonSources]);
+
+  // Build base map style (static - TILE_CONFIG is module-level constant)
+  const mapStyle: StyleSpecification = useMemo(() => {
+    // Tianditu needs annotation layer overlay for place names
+    if (TILE_CONFIG.annotationUrl) {
+      return {
+        version: 8,
+        sources: {
+          'base-tiles': {
+            type: 'raster',
+            tiles: [TILE_CONFIG.baseUrl],
+            tileSize: 256,
+            attribution: TILE_CONFIG.attribution,
+          },
+          'annotation-tiles': {
+            type: 'raster',
+            tiles: [TILE_CONFIG.annotationUrl],
+            tileSize: 256,
+          },
+        },
+        layers: [
+          { id: 'base-tiles-layer', type: 'raster', source: 'base-tiles' },
+          { id: 'annotation-tiles-layer', type: 'raster', source: 'annotation-tiles' },
+        ],
+      } as StyleSpecification;
+    }
+    // Other tile sources without annotation overlay
+    return {
+      version: 8,
+      sources: {
+        'base-tiles': {
+          type: 'raster',
+          tiles: [TILE_CONFIG.baseUrl],
+          tileSize: 256,
+          attribution: TILE_CONFIG.attribution,
+        },
+      },
+      layers: [
+        { id: 'base-tiles-layer', type: 'raster', source: 'base-tiles' },
+      ],
+    } as StyleSpecification;
+  }, []);
+
+  if (!mounted) {
     return (
       <div
         className="bg-gray-100 rounded-lg flex items-center justify-center"
@@ -179,25 +284,28 @@ export default function MapView({
         </div>
       )}
       <div style={{ height }}>
-        <MapContainer
-          center={center}
-          zoom={zoom}
-          style={{ height: '100%', width: '100%' }}
-          scrollWheelZoom={true}
+        <Map
+          initialViewState={{
+            longitude: center[0],
+            latitude: center[1],
+            zoom: zoom,
+          }}
+          style={{ width: '100%', height: '100%' }}
+          mapStyle={mapStyle}
         >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          {layerRenderers.map(({ layer, styleFunc, pointToLayerFunc }, index) => (
-            <GeoJSON
-              key={`layer-${index}-${layer.layerName}`}
-              data={layer.geojson}
-              style={styleFunc}
-              pointToLayer={pointToLayerFunc}
-            />
+          {geojsonSources.map(({ sourceId, data }, index) => (
+            <Source
+              key={sourceId}
+              id={sourceId}
+              type="geojson"
+              data={data as FeatureCollection<Geometry>}
+            >
+              {layerStyles[index].map((layerStyle) => (
+                <Layer key={layerStyle.id} {...layerStyle} />
+              ))}
+            </Source>
           ))}
-        </MapContainer>
+        </Map>
       </div>
     </div>
   );

@@ -13,6 +13,17 @@ import type { BaseMessage, ActionButton, KnowledgeReference } from './index';
 // ============================================================================
 
 /**
+ * Embedded image from document
+ */
+export interface EmbeddedImage {
+  imageBase64: string;
+  imageFormat: string;
+  thumbnailBase64: string;
+  imageWidth: number;
+  imageHeight: number;
+}
+
+/**
  * Text Message - Standard text content with optional streaming and knowledge references
  */
 export interface TextMessage extends BaseMessage {
@@ -40,6 +51,7 @@ export interface FileMessage extends BaseMessage {
   thumbnailBase64?: string;
   imageWidth?: number;
   imageHeight?: number;
+  embeddedImages?: EmbeddedImage[];
 }
 
 /**
@@ -51,6 +63,28 @@ export interface ProgressMessage extends BaseMessage {
   progress: number;
   currentLayer?: string;
   taskId?: string;
+}
+
+/**
+ * GIS Analysis Data - GIS 分析数据
+ */
+export interface GISAnalysisData {
+  overallScore?: number;
+  suitabilityLevel?: string;
+  sensitivityClass?: string;
+  recommendations?: string[];
+}
+
+/**
+ * GIS Data for Dimension Report - 维度报告的 GIS 数据
+ */
+export interface GISData {
+  layers?: GISLayerConfig[];
+  mapOptions?: {
+    center: [number, number];
+    zoom: number;
+  };
+  analysisData?: GISAnalysisData;
 }
 
 /**
@@ -68,10 +102,12 @@ export interface DimensionReportMessage extends BaseMessage {
     current: number;
     total: number;
   };
-  // ✅ 修复相关字段：用于显示修复前后对比
-  previousContent?: string; // 修复前的原始内容
-  revisionVersion?: number; // 版本号
-  isRevision?: boolean; // 是否是修复后的报告
+  // 修复相关字段：用于显示修复前后对比
+  previousContent?: string;
+  revisionVersion?: number;
+  isRevision?: boolean;
+  // GIS 数据
+  gisData?: GISData;
 }
 
 /**
@@ -90,6 +126,8 @@ export interface LayerCompletedMessage extends BaseMessage {
   fullReportContent?: string;
   dimensionReports?: Record<string, string>;
   actions: ActionButton[];
+  // GIS 数据：每个维度的 GIS 分析结果
+  dimensionGisData?: Record<string, GISData>;
 }
 
 // ============================================================================
@@ -186,6 +224,7 @@ export interface GISLayerConfig {
   geojson: GeoJsonFeatureCollection;
   layerType: 'function_zone' | 'facility_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone';
   layerName: string;
+  color?: string; // Backend sends color at top level
   style?: {
     fillColor?: string;
     fillOpacity?: number;

@@ -127,6 +127,52 @@ async def stream_planning(session_id: str):
     )
 ```
 
+### 终止事件处理机制
+
+当收到终止事件（`pause`、`stream_paused`、`completed`）时，前端立即关闭 SSE 连接，
+并设置抑制重连标记，阻止浏览器自动重连：
+
+```typescript
+// frontend/src/lib/api/planning-api.ts
+let shouldSuppressReconnect = false;
+
+// pause 事件处理 - 立即关闭，阻止浏览器自动重连
+es.addEventListener('pause', (e) => {
+  parseEvent(e, 'pause');
+  shouldSuppressReconnect = true;  // 设置抑制标记
+  if (es.readyState !== EventSource.CLOSED) {
+    es.close();
+    console.log('[SSE] Connection closed after pause event');
+  }
+});
+
+// completed 事件处理
+es.addEventListener('completed', (e) => {
+  parseEvent(e, 'completed');
+  shouldSuppressReconnect = true;
+  if (es.readyState !== EventSource.CLOSED) {
+    es.close();
+    console.log('[SSE] Connection closed after completed event');
+  }
+});
+
+// 错误处理中检查抑制标记
+es.onerror = () => {
+  if (es.readyState === EventSource.CONNECTING) {
+    if (shouldSuppressReconnect) {
+      // 抑制自动重连日志 - 这是预期的断开
+      return;
+    }
+    console.log('[SSE] Connection lost, browser is auto-reconnecting...');
+  }
+};
+```
+
+**设计原则**：
+- **立即关闭**：收到终止事件后立即调用 `es.close()`，不使用延迟
+- **抑制重连**：设置标记阻止浏览器自动重连时的误导性日志
+- **避免竞争**：防止延迟关闭期间浏览器自动重连与 approve 流程产生竞争
+
 ---
 
 ## SSE管理器

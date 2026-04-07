@@ -5,6 +5,7 @@ from typing import Dict, Any, Tuple
 
 from .types import TiandituResult
 from .constants import WFS_URL, WFS_LAYERS
+from ..rate_limiter import RateLimiter
 from ....core.config import (
     TIANDITU_API_KEY,
     TIANDITU_RATE_LIMIT,
@@ -18,21 +19,24 @@ logger = get_logger(__name__)
 class WfsService:
     """WFS 服务封装"""
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, rate_limiter: RateLimiter = None):
+        """初始化 WFS 服务
+
+        Args:
+            api_key: 天地图 API Key
+            rate_limiter: 外部传入的速率限制器（共享天地图限制器）
+        """
         self.api_key = api_key
-        self.rate_limit = TIANDITU_RATE_LIMIT
         self.timeout = GIS_TIMEOUT
-        self._last_request_time = 0
+        # 使用传入的限制器或获取全局天地图限制器
+        if rate_limiter:
+            self._rate_limiter = rate_limiter
+        else:
+            self._rate_limiter = RateLimiter.get_instance("tianditu", TIANDITU_RATE_LIMIT)
 
     def _rate_limit_wait(self):
-        """速率限制等待"""
-        if self.rate_limit <= 0:
-            return
-        min_interval = 1.0 / self.rate_limit
-        elapsed = time.time() - self._last_request_time
-        if elapsed < min_interval:
-            time.sleep(min_interval - elapsed)
-        self._last_request_time = time.time()
+        """使用共享速率限制器等待"""
+        self._rate_limiter.wait()
 
     def _get_headers(self) -> Dict[str, str]:
         """获取请求头"""
@@ -50,7 +54,7 @@ class WfsService:
         """获取 WFS 图层数据
 
         Args:
-            layer_type: 图层类型 (LRRL/LRDL/HYDA/HYDL/HYDP/RESA/RESP)
+            layer_type: 图层类型 (TDTService:LRRL/TDTService:LRDL/TDTService:HYDA/TDTService:HYDL/TDTService:RESA/TDTService:RESP)
             bbox: 边界框 (min_lon, min_lat, max_lon, max_lat)
             max_features: 最大要素数量
 
@@ -89,13 +93,41 @@ class WfsService:
                     error=f"WFS HTTP {resp.status_code}"
                 )
 
-            # 尝试解析 JSON，若失败则返回空 GeoJSON
+            # 尝试解析 JSON，若失败则记录实际响应内容
             try:
                 geojson = resp.json()
+                response_type = "json"
+                response_preview = None
             except ValueError:
-                # 空响应或非 JSON 格式，返回空要素
-                logger.warning(f"[WfsService] {layer_type} 返回非 JSON 响应，视为空数据")
+                # 检查是否是 OGC ServiceExceptionReport
+                response_text = resp.text
+                if "<?xml" in response_text and "ServiceExceptionReport" in response_text:
+                    import xml.etree.ElementTree as ET
+                    try:
+                        root = ET.fromstring(response_text)
+                        ns = {"ogc": "http://www.opengis.net/ogc"}
+                        exc_elem = root.find(".//ogc:ServiceException", ns) or root.find("ServiceException")
+                        error_code = exc_elem.get("code", "NoApplicableCode") if exc_elem else "Unknown"
+                        error_msg = (exc_elem.text or "").strip() if exc_elem else "WFS 服务错误"
+
+                        logger.warning(f"[WfsService] {layer_type} ServiceException: [{error_code}] {error_msg}")
+                        return TiandituResult(
+                            success=False,
+                            data={},
+                            metadata={
+                                "layer": layer_type,
+                                "error_code": error_code,
+                                "response_type": "service_exception"
+                            },
+                            error=f"WFS [{error_code}]: {error_msg}"
+                        )
+                    except ET.ParseError:
+                        logger.warning(f"[WfsService] {layer_type} XML 解析失败")
+                # 其他非 JSON 响应
+                response_preview = response_text[:200] if response_text else "(empty)"
+                logger.warning(f"[WfsService] {layer_type} 非预期响应: {response_preview}")
                 geojson = {"type": "FeatureCollection", "features": []}
+                response_type = "non_json_fallback"
 
             features = geojson.get("features", [])
 
@@ -107,7 +139,10 @@ class WfsService:
                     "layer_name": WFS_LAYERS.get(layer_type, layer_type),
                     "feature_count": len(features),
                     "bbox": bbox,
-                    "source": "tianditu_wfs"
+                    "source": "tianditu_wfs",
+                    # 增强: 标记响应类型，便于诊断
+                    "response_type": response_type,
+                    **({"response_preview": response_preview} if response_preview else {})
                 }
             )
 
@@ -144,37 +179,29 @@ class WfsService:
         metadata = {"layers": [], "total_count": 0, "bbox": bbox}
 
         if include_areas:
-            result = self.get_wfs_data("HYDA", bbox, max_features)
+            result = self.get_wfs_data("TDTService:HYDA", bbox, max_features)
             if result.success:
                 features = result.data.get("geojson", {}).get("features", [])
                 all_features.extend(features)
                 metadata["layers"].append({
-                    "type": "HYDA",
+                    "type": "TDTService:HYDA",
                     "name": "水系面",
                     "count": len(features)
                 })
 
         if include_lines:
-            result = self.get_wfs_data("HYDL", bbox, max_features)
+            result = self.get_wfs_data("TDTService:HYDL", bbox, max_features)
             if result.success:
                 features = result.data.get("geojson", {}).get("features", [])
                 all_features.extend(features)
                 metadata["layers"].append({
-                    "type": "HYDL",
+                    "type": "TDTService:HYDL",
                     "name": "水系线",
                     "count": len(features)
                 })
 
-        if include_points:
-            result = self.get_wfs_data("HYDP", bbox, max_features)
-            if result.success:
-                features = result.data.get("geojson", {}).get("features", [])
-                all_features.extend(features)
-                metadata["layers"].append({
-                    "type": "HYDP",
-                    "name": "水系点",
-                    "count": len(features)
-                })
+        # 注意：HYDP（水系点）不存在于天地图 WFS 服务中
+        # include_points 参数保留但无实际效果
 
         metadata["total_count"] = len(all_features)
 
@@ -211,23 +238,23 @@ class WfsService:
         metadata = {"layers": [], "total_count": 0, "bbox": bbox}
 
         if include_railways:
-            result = self.get_wfs_data("LRRL", bbox, max_features)
+            result = self.get_wfs_data("TDTService:LRRL", bbox, max_features)
             if result.success:
                 features = result.data.get("geojson", {}).get("features", [])
                 all_features.extend(features)
                 metadata["layers"].append({
-                    "type": "LRRL",
+                    "type": "TDTService:LRRL",
                     "name": "铁路",
                     "count": len(features)
                 })
 
         if include_roads:
-            result = self.get_wfs_data("LRDL", bbox, max_features)
+            result = self.get_wfs_data("TDTService:LRDL", bbox, max_features)
             if result.success:
                 features = result.data.get("geojson", {}).get("features", [])
                 all_features.extend(features)
                 metadata["layers"].append({
-                    "type": "LRDL",
+                    "type": "TDTService:LRDL",
                     "name": "公路",
                     "count": len(features)
                 })
@@ -267,23 +294,23 @@ class WfsService:
         metadata = {"layers": [], "total_count": 0, "bbox": bbox}
 
         if include_areas:
-            result = self.get_wfs_data("RESA", bbox, max_features)
+            result = self.get_wfs_data("TDTService:RESA", bbox, max_features)
             if result.success:
                 features = result.data.get("geojson", {}).get("features", [])
                 all_features.extend(features)
                 metadata["layers"].append({
-                    "type": "RESA",
+                    "type": "TDTService:RESA",
                     "name": "居民地面",
                     "count": len(features)
                 })
 
         if include_points:
-            result = self.get_wfs_data("RESP", bbox, max_features)
+            result = self.get_wfs_data("TDTService:RESP", bbox, max_features)
             if result.success:
                 features = result.data.get("geojson", {}).get("features", [])
                 all_features.extend(features)
                 metadata["layers"].append({
-                    "type": "RESP",
+                    "type": "TDTService:RESP",
                     "name": "居民地点",
                     "count": len(features)
                 })

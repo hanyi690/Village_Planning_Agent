@@ -14,6 +14,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { planningApi } from '@/lib/api';
 import { usePlanningStore } from '@/stores/planningStore';
+import { buildDimensionProgressKey } from '@/lib/utils/message-helpers';
 import type { PlanningSSEEvent } from '@/lib/api/types';
 
 // Internal batch event representation
@@ -49,11 +50,15 @@ export function useSSEConnection({
   const batchQueueRef = useRef<BatchEvent[]>([]);
   const batchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Delta override tracking - track dimensions that have received complete events
+  const completedDimensionKeysRef = useRef<Set<string>>(new Set());
+
   // Store actions
   const handleSSEEvent = usePlanningStore((state) => state.handleSSEEvent);
   const syncBackendState = usePlanningStore((state) => state.syncBackendState);
 
   // Process batched events - merge dimension_delta events by key, send critical events immediately
+  // Implements override mechanism: critical events skip pending delta events
   const processBatch = useCallback(() => {
     const events = batchQueueRef.current;
     batchQueueRef.current = [];
@@ -63,20 +68,65 @@ export function useSSEConnection({
     // Critical event types that should never be merged/deferred
     const criticalEventTypes = ['dimension_start', 'dimension_complete', 'layer_completed', 'layer_started'];
 
-    // Group events by type
-    const dimensionDeltaMap = new Map<string, BatchEvent>();
+    // Keep last N delta events per key for better accumulated content accuracy
+    const MAX_DELTA_PER_KEY = 3;
+    const dimensionDeltaMap = new Map<string, BatchEvent[]>();
     const criticalEvents: BatchEvent[] = [];
     const otherEvents: BatchEvent[] = [];
+
+    // Track dimensions/layers that have received complete events
+    // These will skip pending delta events to avoid redundant processing
+    const completedKeys = completedDimensionKeysRef.current;
 
     for (const event of events) {
       if (criticalEventTypes.includes(event.type)) {
         // Critical events: send immediately, no merging
         criticalEvents.push(event);
+
+        // Override mechanism: mark dimension as completed when dimension_complete arrives
+        if (event.type === 'dimension_complete') {
+          const data = event.data as { layer?: number; dimension_key?: string };
+          const key = buildDimensionProgressKey(data.layer || 1, data.dimension_key || '');
+          completedKeys.add(key);
+        }
+
+        // Override mechanism: clear all layer deltas when layer_completed arrives
+        if (event.type === 'layer_completed') {
+          const data = event.data as { layer?: number };
+          const layer = data.layer || 1;
+          // Remove all delta events for this layer from the map
+          for (const k of dimensionDeltaMap.keys()) {
+            if (k.startsWith(`${layer}_`)) {
+              dimensionDeltaMap.delete(k);
+            }
+          }
+          // Clear completed keys for next layer
+          completedKeys.clear();
+        }
+
+        // Reset completed keys when a new layer starts
+        if (event.type === 'layer_started') {
+          completedKeys.clear();
+        }
       } else if (event.type === 'dimension_delta') {
         const data = event.data as { layer?: number; dimension_key?: string };
-        const key = `${data.layer || 1}_${data.dimension_key || ''}`;
-        // Keep only the last event for each dimension key
-        dimensionDeltaMap.set(key, event);
+        const key = buildDimensionProgressKey(data.layer || 1, data.dimension_key || '');
+
+        // Skip delta if dimension already received complete event
+        if (completedKeys.has(key)) {
+          continue;
+        }
+
+        // Keep last N events for each dimension key, take latest accumulated
+        let deltaList = dimensionDeltaMap.get(key);
+        if (!deltaList) {
+          deltaList = [];
+          dimensionDeltaMap.set(key, deltaList);
+        }
+        deltaList.push(event);
+        if (deltaList.length > MAX_DELTA_PER_KEY) {
+          deltaList.shift();
+        }
       } else {
         otherEvents.push(event);
       }
@@ -87,9 +137,15 @@ export function useSSEConnection({
       handleSSEEvent(event);
     }
 
-    // Dispatch merged dimension_delta events
-    for (const event of dimensionDeltaMap.values()) {
-      handleSSEEvent(event);
+    // Dispatch dimension_delta events - use the latest one (has most accumulated content)
+    // Skip any delta events for dimensions that have received complete events
+    for (const [key, deltaList] of dimensionDeltaMap) {
+      // Double-check: skip if dimension_complete was processed in this batch
+      if (completedKeys.has(key)) {
+        continue;
+      }
+      const latestDelta = deltaList[deltaList.length - 1];
+      handleSSEEvent(latestDelta);
     }
 
     // Dispatch other events
@@ -126,24 +182,18 @@ export function useSSEConnection({
   // Connect to SSE
   const connectSSE = useCallback(
     (taskIdParam: string) => {
+      // Close old connection first to prevent race conditions
       if (sseConnectionRef.current) {
-        sseConnectionRef.current.close();
+        const oldEs = sseConnectionRef.current;
+        sseConnectionRef.current = null;  // Clear ref immediately to prevent reuse
+        oldEs.close();
+        console.log('[useSSEConnection] Closed old SSE connection before reconnect');
       }
-
-      console.log('[useSSEConnection] Connecting to SSE for task:', taskIdParam);
 
       const es = planningApi.createStream(
         taskIdParam,
         (event: PlanningSSEEvent) => {
           reconnectAttemptsRef.current = 0;
-
-          // Log dimension_complete events
-          if (event.type === 'dimension_complete') {
-            const data = event.data as { dimension_key?: string; layer?: number };
-            console.log(
-              `[useSSEConnection] dimension_complete RECEIVED: layer=${data.layer}, key=${data.dimension_key}`
-            );
-          }
 
           enqueueEvent({
             type: event.type,
@@ -156,9 +206,6 @@ export function useSSEConnection({
           if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttemptsRef.current++;
             const delay = Math.min(1000 * reconnectAttemptsRef.current, 5000);
-            console.log(
-              `[useSSEConnection] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`
-            );
             setTimeout(() => {
               const currentTaskId = usePlanningStore.getState().taskId;
               if (currentTaskId) {
@@ -168,9 +215,25 @@ export function useSSEConnection({
           }
         },
         () => {
-          console.log('[useSSEConnection] SSE reconnected, syncing state...');
           const currentTaskId = usePlanningStore.getState().taskId;
           if (currentTaskId) {
+            // Sync missed events using seq-based sync API
+            const lastSeq = usePlanningStore.getState().lastProcessedSeq;
+            planningApi.syncEvents(currentTaskId, lastSeq).then((syncResult) => {
+              if (syncResult.events.length > 0) {
+                console.log(`[useSSEConnection] Synced ${syncResult.events.length} missed events from seq ${lastSeq}`);
+                // Process missed events
+                for (const event of syncResult.events) {
+                  enqueueEvent({
+                    type: event.type,
+                    data: event.data,
+                  });
+                }
+              }
+            }).catch((err) => {
+              console.warn('[useSSEConnection] Sync API failed, falling back to status sync:', err);
+            });
+            // Also sync backend state for non-event data
             planningApi.getStatus(currentTaskId).then((statusData) => {
               syncBackendState(statusData);
             });
@@ -179,7 +242,6 @@ export function useSSEConnection({
         }
       );
 
-      console.log('[useSSEConnection] SSE connection created, readyState:', es.readyState);
       sseConnectionRef.current = es;
       return es;
     },
@@ -205,13 +267,6 @@ export function useSSEConnection({
       prevTaskIdRef.current = taskId;
       prevResumeTriggerRef.current = resumeTrigger;
 
-      // Log reconnect reason
-      if (taskIdChanged) {
-        console.log('[useSSEConnection] TaskId changed, reconnecting...');
-      } else {
-        console.log('[useSSEConnection] Resume triggered, reconnecting...');
-      }
-
       connectSSE(taskId);
     }
 
@@ -232,7 +287,6 @@ export function useSSEConnection({
       }
       // Process remaining events in queue
       if (batchQueueRef.current.length > 0) {
-        console.log('[useSSEConnection] Cleanup: flushing', batchQueueRef.current.length, 'queued events');
         processBatch();
       }
     };

@@ -152,6 +152,7 @@ export interface PlanningParams {
 
 // Import specific message types and create union
 import type {
+  EmbeddedImage,
   TextMessage,
   FileMessage,
   ProgressMessage,
@@ -176,6 +177,7 @@ export type Message =
 
 // Re-export message types for convenience
 export type {
+  EmbeddedImage,
   TextMessage,
   FileMessage,
   ProgressMessage,

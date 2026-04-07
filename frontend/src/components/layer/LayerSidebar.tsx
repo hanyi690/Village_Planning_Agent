@@ -25,16 +25,6 @@ export default function LayerSidebar({ activeLayer, onClose }: LayerSidebarProps
   const reports = usePlanningStore((state) => state.reports);
   const completedDimensions = usePlanningStore((state) => state.completedDimensions);
 
-  // Derive layerReports and completedLayers from state
-  const layerReports = {
-    analysis_reports: reports.layer1,
-    concept_reports: reports.layer2,
-    detail_reports: reports.layer3,
-    analysis_report_content: '',
-    concept_report_content: '',
-    detail_report_content: '',
-  };
-
   const completedLayers = {
     1: completedDimensions.layer1.length > 0,
     2: completedDimensions.layer2.length > 0,
@@ -56,24 +46,24 @@ export default function LayerSidebar({ activeLayer, onClose }: LayerSidebarProps
   const layerContent = useMemo(() => {
     if (activeLayer === 1) {
       return {
-        reports: layerReports.analysis_reports,
-        content: layerReports.analysis_report_content,
+        reports: reports.layer1,
+        content: '',
       };
     }
     if (activeLayer === 2) {
       return {
-        reports: layerReports.concept_reports,
-        content: layerReports.concept_report_content,
+        reports: reports.layer2,
+        content: '',
       };
     }
     if (activeLayer === 3) {
       return {
-        reports: layerReports.detail_reports,
-        content: layerReports.detail_report_content,
+        reports: reports.layer3,
+        content: '',
       };
     }
     return { reports: {}, content: '' };
-  }, [activeLayer, layerReports]);
+  }, [activeLayer, reports]);
 
   // Animation variants
   const overlayVariants = {

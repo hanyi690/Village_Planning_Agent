@@ -11,6 +11,15 @@ from enum import Enum
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
+
+def merge_dicts(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge two dicts for LangGraph concurrent updates.
+
+    Used with Annotated to allow multiple dimension nodes to update
+    gis_analysis_results and planning_layers simultaneously.
+    """
+    return {**left, **right}
+
 # 复用 dimension_metadata.py 的波次配置
 from ..config.dimension_metadata import (
     get_layer_dimensions as _get_layer_dimensions,
@@ -152,9 +161,10 @@ class UnifiedPlanningState(TypedDict):
     pause_after_step: bool       # 层级完成后暂停标志
     previous_layer: int          # 刚完成的层级编号（用于审查面板）
 
-    # GIS 分析结果（规划矢量化与空间分析）
-    gis_analysis_results: Dict[str, Any]  # GIS 分析结果 {dimension_key: result}
-    planning_layers: Dict[str, Any]       # 规划矢量图层 {layer_name: GeoJSON}
+    # GIS analysis results (vectorization and spatial analysis)
+    # Use Annotated with merge_dicts to support concurrent updates from Send API
+    gis_analysis_results: Annotated[Dict[str, Any], merge_dicts]  # {dimension_key: result}
+    planning_layers: Annotated[Dict[str, Any], merge_dicts]       # {layer_name: GeoJSON}
 
     # 元数据
     metadata: Dict[str, Any]
@@ -367,4 +377,5 @@ __all__ = [
     "get_layer_name",
     "PHASE_DESCRIPTIONS",
     "state_to_ui_status",
+    "merge_dicts",
 ]

@@ -7,7 +7,7 @@
  * 内嵌在 ChatPanel 底部，用户手动控制显示/隐藏
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getDimensionConfigsByLayer } from '@/config/dimensions';
 import type { DimensionProgressItem, DimensionStatus } from '@/types';
@@ -66,17 +66,52 @@ function ProgressPanel({
   executingDimensions,
   onClose,
 }: ProgressPanelProps) {
-  // 获取当前层级的所有维度配置
-  const allDimensions = currentLayer ? getDimensionConfigsByLayer(currentLayer) : [];
+  // Memoize dimension derivation to avoid O(n*m) nested loop on every render
+  const { allDimensions, effectiveLayer } = useMemo(() => {
+    if (currentLayer) {
+      return {
+        allDimensions: getDimensionConfigsByLayer(currentLayer),
+        effectiveLayer: currentLayer,
+      };
+    }
 
-  // 计算完成进度
-  const completedCount = allDimensions.filter((dim) => {
-    const key = `${currentLayer}_${dim.key}`;
-    const progress = dimensionProgress[key];
-    return progress?.status === 'completed';
-  }).length;
-  const totalCount = allDimensions.length;
-  const progressPercent = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
+    const progressKeys = Object.keys(dimensionProgress);
+    if (progressKeys.length === 0) {
+      return { allDimensions: [], effectiveLayer: 1 };
+    }
+
+    // Fallback: derive from dimensionProgress with O(n) lookup
+    const progressValues = Object.values(dimensionProgress);
+    const uniqueKeys = new Map<string, { key: string; name: string }>();
+
+    progressValues.forEach((progress) => {
+      if (!uniqueKeys.has(progress.dimensionKey)) {
+        uniqueKeys.set(progress.dimensionKey, {
+          key: progress.dimensionKey,
+          name: progress.dimensionName || progress.dimensionKey,
+        });
+      }
+    });
+
+    return {
+      allDimensions: Array.from(uniqueKeys.values()),
+      effectiveLayer: progressValues[0]?.layer || 1,
+    };
+  }, [currentLayer, dimensionProgress]);
+
+  // Memoize completion stats
+  const { completedCount, totalCount, progressPercent } = useMemo(() => {
+    const count = allDimensions.filter((dim) => {
+      const key = `${effectiveLayer}_${dim.key}`;
+      return dimensionProgress[key]?.status === 'completed';
+    }).length;
+    const total = allDimensions.length;
+    return {
+      completedCount: count,
+      totalCount: total,
+      progressPercent: total > 0 ? (count / total) * 100 : 0,
+    };
+  }, [allDimensions, dimensionProgress, effectiveLayer]);
 
   // 统计执行中的维度数量
   const executingCount = executingDimensions.length;
@@ -138,7 +173,7 @@ function ProgressPanel({
             <div className="max-h-40 overflow-y-auto px-4 py-2">
               <div className="grid grid-cols-2 gap-1.5">
                 {allDimensions.map((dim) => {
-                  const key = `${currentLayer}_${dim.key}`;
+                  const key = `${effectiveLayer}_${dim.key}`;
                   const progress = dimensionProgress[key];
                   const status = progress?.status || 'pending';
                   const config = STATUS_CONFIG[status];

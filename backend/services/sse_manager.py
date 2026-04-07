@@ -24,6 +24,7 @@ from threading import Lock, RLock
 from typing import Any, Dict, List, Optional, Set
 
 from backend.constants.sse_events import SSEEventType
+from backend.constants.config import SSE_QUEUE_SIZE, SSE_QUEUE_WAIT_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,27 @@ class SSEManager:
     _status_log_lock = Lock()
 
     # ============================================
+    # Pending Events (queue-full fallback cache)
+    # ============================================
+
+    # Events waiting to be sent when queue was full: session_id -> list of events
+    _pending_events: Dict[str, List[Dict[str, Any]]] = {}
+    _pending_events_lock = Lock()
+
+    # ============================================
+    # Sequence Numbers (event ordering & dedup)
+    # ============================================
+
+    # Global sequence number per session: session_id -> current_seq
+    _session_seq: Dict[str, int] = {}
+    _session_seq_lock = Lock()
+
+    # Recent events buffer for reconnection sync: session_id -> deque of events
+    MAX_SEQ_BUFFER = 50
+    _seq_buffer: Dict[str, deque] = {}
+    _seq_buffer_lock = Lock()
+
+    # ============================================
     # Critical Event Cache (prevent event loss when no subscribers)
     # ============================================
 
@@ -130,6 +152,87 @@ class SSEManager:
         """
         cls._main_event_loop = loop
         logger.info("[SSEManager] Main event loop saved, cross-thread publishing enabled")
+
+    # ============================================
+    # Sequence Number Methods
+    # ============================================
+
+    @classmethod
+    def _get_next_seq(cls, session_id: str) -> int:
+        """
+        Get next sequence number for a session.
+
+        Thread-safe increment of sequence number.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            New sequence number
+        """
+        with cls._session_seq_lock:
+            cls._session_seq[session_id] = cls._session_seq.get(session_id, 0) + 1
+            return cls._session_seq[session_id]
+
+    @classmethod
+    def get_last_seq(cls, session_id: str) -> int:
+        """
+        Get last sequence number for a session.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            Last sequence number (0 if not found)
+        """
+        with cls._session_seq_lock:
+            return cls._session_seq.get(session_id, 0)
+
+    @classmethod
+    def _add_to_seq_buffer(cls, session_id: str, event: Dict[str, Any]) -> None:
+        """
+        Add event to sequence buffer for reconnection sync.
+
+        Args:
+            session_id: Session identifier
+            event: Event dictionary (must contain 'seq' field)
+        """
+        with cls._seq_buffer_lock:
+            if session_id not in cls._seq_buffer:
+                cls._seq_buffer[session_id] = deque(maxlen=cls.MAX_SEQ_BUFFER)
+            cls._seq_buffer[session_id].append(event)
+
+    @classmethod
+    def get_events_from_seq(cls, session_id: str, from_seq: int) -> List[Dict[str, Any]]:
+        """
+        Get events from a specific sequence number for reconnection sync.
+
+        Args:
+            session_id: Session identifier
+            from_seq: Start sequence number (exclusive)
+
+        Returns:
+            List of events with seq > from_seq
+        """
+        with cls._seq_buffer_lock:
+            if session_id not in cls._seq_buffer:
+                return []
+            return [e for e in cls._seq_buffer[session_id] if e.get("seq", 0) > from_seq]
+
+    @classmethod
+    def clear_seq_state(cls, session_id: str) -> None:
+        """
+        Clear sequence number state for a session.
+
+        Args:
+            session_id: Session identifier
+        """
+        with cls._session_seq_lock:
+            if session_id in cls._session_seq:
+                del cls._session_seq[session_id]
+        with cls._seq_buffer_lock:
+            if session_id in cls._seq_buffer:
+                del cls._seq_buffer[session_id]
 
     # ============================================
     # Unified Cache Operations (using CACHE_CONFIG pattern)
@@ -294,6 +397,58 @@ class SSEManager:
         return 0
 
     @classmethod
+    def clear_layer_started_cache(cls, session_id: str, exclude_layer: int = None) -> int:
+        """
+        Clear layer_started cache for a session, excluding a specific layer.
+
+        Called when a new layer starts to prevent stale events from previous layers
+        being sent on SSE reconnect.
+
+        Args:
+            session_id: Session identifier
+            exclude_layer: Layer number to keep (current layer), None to clear all
+
+        Returns:
+            Number of cached layer_started events cleared
+        """
+        with cls._layer_started_cache_lock:
+            if session_id not in cls._last_layer_started:
+                return 0
+            cache = cls._last_layer_started[session_id]
+            to_remove = [l for l in cache.keys() if l != exclude_layer]
+            for l in to_remove:
+                del cache[l]
+            if to_remove:
+                logger.info(f"[SSEManager] Cleared {len(to_remove)} layer_started caches for {session_id}, keeping Layer {exclude_layer}")
+            return len(to_remove)
+
+    @classmethod
+    def clear_layer_completed_cache(cls, session_id: str, exclude_layer: int = None) -> int:
+        """
+        Clear layer_completed cache for a session, excluding a specific layer.
+
+        Called when a new layer starts to prevent stale events from previous layers
+        being sent on SSE reconnect.
+
+        Args:
+            session_id: Session identifier
+            exclude_layer: Layer number to keep (current layer), None to clear all
+
+        Returns:
+            Number of cached layer_completed events cleared
+        """
+        with cls._layer_cache_lock:
+            if session_id not in cls._last_layer_completed:
+                return 0
+            cache = cls._last_layer_completed[session_id]
+            to_remove = [l for l in cache.keys() if l != exclude_layer]
+            for l in to_remove:
+                del cache[l]
+            if to_remove:
+                logger.info(f"[SSEManager] Cleared {len(to_remove)} layer_completed caches for {session_id}, keeping Layer {exclude_layer}")
+            return len(to_remove)
+
+    @classmethod
     def get_session_events(cls, session_id: str) -> deque:
         """
         Get or create events deque for a session.
@@ -377,12 +532,34 @@ class SSEManager:
         Returns:
             asyncio.Queue for this connection
         """
-        queue = asyncio.Queue(maxsize=500)
+        queue = asyncio.Queue(maxsize=SSE_QUEUE_SIZE)
 
         with cls._subscribers_lock:
             if session_id not in cls._session_subscribers:
                 cls._session_subscribers[session_id] = set()
             cls._session_subscribers[session_id].add(queue)
+
+        # Flush pending events that were cached due to previous queue-full
+        pending_flush_count = 0
+        with cls._pending_events_lock:
+            if session_id in cls._pending_events:
+                pending_events = cls._pending_events[session_id]
+                for event in pending_events:
+                    try:
+                        queue.put_nowait(event)
+                        pending_flush_count += 1
+                    except asyncio.QueueFull:
+                        # Queue still full, keep remaining events
+                        remaining = pending_events[pending_flush_count:]
+                        cls._pending_events[session_id] = remaining
+                        logger.warning(
+                            f"[SSEManager] Session {session_id}: Queue full on pending flush, "
+                            f"{len(remaining)} events still pending"
+                        )
+                        break
+                if pending_flush_count > 0 and len(cls._pending_events.get(session_id, [])) == 0:
+                    del cls._pending_events[session_id]
+                    logger.info(f"[SSEManager] Session {session_id}: Flushed {pending_flush_count} pending events")
 
         # ⚠️ 缓存事件优先同步（关键事件优先入队列，防止被大量历史事件挤出）
         # 新同步顺序：layer_started > layer_completed > resumed > dimension_complete > historical
@@ -446,11 +623,16 @@ class SSEManager:
                         break
 
         # 5. historical events (最低优先级)
+        # 注意：过滤掉终端事件（completed, error），防止历史遗留导致连接立即关闭
+        TERMINAL_EVENTS = {"completed", "error"}
         historical_count = 0
         with cls._sessions_lock:
             if session_id in cls._sessions:
                 events = cls._sessions[session_id].get("events", [])
                 for event in events:
+                    # 跳过终端事件，这些不应该在重连时发送
+                    if event.get("type") in TERMINAL_EVENTS:
+                        continue
                     try:
                         queue.put_nowait(event)
                         historical_count += 1
@@ -458,10 +640,10 @@ class SSEManager:
                         logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping historical event")
                         break
 
-        total_synced = historical_count + cached_dim_count + cached_dimension_start_count + cached_layer_count + cached_layer_started_count + cached_resumed_count
+        total_synced = historical_count + cached_dim_count + cached_dimension_start_count + cached_layer_count + cached_layer_started_count + cached_resumed_count + pending_flush_count
         logger.info(
             f"[SSEManager] Session {session_id}: Subscribed, "
-            f"historical={historical_count}, cached_dim_start={cached_dimension_start_count}, cached_dim={cached_dim_count}, cached_layer={cached_layer_count}, "
+            f"pending_flush={pending_flush_count}, historical={historical_count}, cached_dim_start={cached_dimension_start_count}, cached_dim={cached_dim_count}, cached_layer={cached_layer_count}, "
             f"cached_layer_started={cached_layer_started_count}, cached_resumed={cached_resumed_count}, total={total_synced}"
         )
         return queue
@@ -509,6 +691,14 @@ class SSEManager:
         """
         subscribers = cls._session_subscribers.get(session_id, set())
         event_type = event.get("type", "unknown")
+
+        # Add sequence number to event for ordering and dedup
+        seq = cls._get_next_seq(session_id)
+        event["seq"] = seq
+        event["session_id"] = session_id
+
+        # Add to seq buffer for reconnection sync
+        cls._add_to_seq_buffer(session_id, event)
 
         # Cache critical events regardless of subscriber status
         if event_type == SSEEventType.DIMENSION_START:
@@ -564,7 +754,19 @@ class SSEManager:
                 queue.put_nowait(event)
                 success_count += 1
             except asyncio.QueueFull:
-                logger.warning(f"[SSEManager] Session {session_id}: Queue full, event dropped")
+                # Try blocking wait with timeout before falling back to cache
+                try:
+                    await asyncio.wait_for(queue.put(event), timeout=SSE_QUEUE_WAIT_TIMEOUT)
+                    success_count += 1
+                except asyncio.TimeoutError:
+                    # Cache to pending_events for later retry
+                    with cls._pending_events_lock:
+                        cls._pending_events.setdefault(session_id, []).append(event)
+                        pending_count = len(cls._pending_events[session_id])
+                    logger.warning(
+                        f"[SSEManager] Session {session_id}: Queue full after {SSE_QUEUE_WAIT_TIMEOUT}s wait, "
+                        f"event cached to pending (total pending: {pending_count})"
+                    )
 
         if event_type in [SSEEventType.LAYER_COMPLETED, SSEEventType.DIMENSION_COMPLETE]:
             logger.info(f"[SSEManager] Session {session_id}: {event_type} sent to {success_count} subscribers")
@@ -902,6 +1104,9 @@ class SSEManager:
             "layer_caches": 0,
             "layer_started_caches": 0,
             "resumed_caches": 0,
+            "pending_events": 0,
+            "seq_states": 0,
+            "seq_buffers": 0,
         }
 
         # Clean expired sessions
@@ -997,6 +1202,35 @@ class SSEManager:
                 del cls._last_resumed[sid]
                 cleaned["resumed_caches"] += 1
 
+        # Clean orphan pending events
+        with cls._pending_events_lock:
+            orphan_pending = [
+                sid for sid in cls._pending_events
+                if sid not in current_session_ids
+            ]
+            for sid in orphan_pending:
+                del cls._pending_events[sid]
+                cleaned["pending_events"] += 1
+
+        # Clean orphan seq states
+        with cls._session_seq_lock:
+            orphan_seq = [
+                sid for sid in cls._session_seq
+                if sid not in current_session_ids
+            ]
+            for sid in orphan_seq:
+                del cls._session_seq[sid]
+                cleaned["seq_states"] += 1
+
+        with cls._seq_buffer_lock:
+            orphan_seq_buffer = [
+                sid for sid in cls._seq_buffer
+                if sid not in current_session_ids
+            ]
+            for sid in orphan_seq_buffer:
+                del cls._seq_buffer[sid]
+                cleaned["seq_buffers"] += 1
+
         total = sum(cleaned.values())
         if total > 0:
             logger.info(
@@ -1005,7 +1239,8 @@ class SSEManager:
                 f"streams={cleaned['streams']}, trackers={cleaned['log_trackers']}, "
                 f"dim_caches={cleaned['dimension_caches']}, dim_start_caches={cleaned['dimension_start_caches']}, "
                 f"layer_caches={cleaned['layer_caches']}, layer_started_caches={cleaned['layer_started_caches']}, "
-                f"resumed_caches={cleaned['resumed_caches']}"
+                f"resumed_caches={cleaned['resumed_caches']}, pending_events={cleaned['pending_events']}, "
+                f"seq_states={cleaned['seq_states']}, seq_buffers={cleaned['seq_buffers']}"
             )
 
         return cleaned
@@ -1063,6 +1298,17 @@ class SSEManager:
                 result["resumed_cache"] = True
             else:
                 result["resumed_cache"] = False
+
+        with cls._pending_events_lock:
+            if session_id in cls._pending_events:
+                del cls._pending_events[session_id]
+                result["pending_events"] = True
+            else:
+                result["pending_events"] = False
+
+        # Clean up seq state
+        cls.clear_seq_state(session_id)
+        result["seq_state"] = True
 
         logger.debug(f"[SSEManager] Session {session_id}: all states deleted")
         return result

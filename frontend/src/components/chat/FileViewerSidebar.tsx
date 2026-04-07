@@ -138,6 +138,30 @@ export default function FileViewerSidebar({ file, onClose }: FileViewerSidebarPr
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-5">
+          {/* Embedded images from document */}
+          {file.embeddedImages && file.embeddedImages.length > 0 && (
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold text-gray-600 mb-2 flex items-center gap-2">
+                <FontAwesomeIcon icon={faImage} className="text-emerald-500" />
+                文档图片 ({file.embeddedImages.length})
+              </h3>
+              <div className="grid grid-cols-2 gap-2">
+                {file.embeddedImages.map((img, idx) => (
+                  <ImagePreview
+                    key={idx}
+                    imageBase64={img.imageBase64}
+                    imageFormat={img.imageFormat || DEFAULT_IMAGE_FORMAT}
+                    filename={`图片 ${idx + 1}`}
+                    thumbnailBase64={img.thumbnailBase64}
+                    imageWidth={img.imageWidth}
+                    imageHeight={img.imageHeight}
+                    className="rounded-lg border border-gray-200"
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Image file rendering */}
           {file.fileType === 'image' && file.imageBase64 ? (
             <ImagePreview

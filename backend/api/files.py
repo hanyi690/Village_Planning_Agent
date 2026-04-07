@@ -14,7 +14,7 @@ Files API endpoints - File upload helper
 """
 
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from typing import Dict, Any, Set, Optional
+from typing import Dict, Any, Set, Optional, List
 from pydantic import BaseModel, Field
 from pathlib import Path
 import logging
@@ -36,6 +36,15 @@ logger = logging.getLogger(__name__)
 # Response Schemas
 # ============================================
 
+class EmbeddedImage(BaseModel):
+    """Embedded image from document"""
+    image_base64: str = Field(..., description="Base64 encoded image data")
+    image_format: str = Field(..., description="Image format: jpg, png, gif, etc.")
+    thumbnail_base64: str = Field(..., description="Base64 encoded thumbnail")
+    image_width: int = Field(..., description="Image width in pixels")
+    image_height: int = Field(..., description="Image height in pixels")
+
+
 class FileUploadResponse(BaseModel):
     """File upload response"""
     content: str = Field(..., description="Decoded file content")
@@ -47,6 +56,7 @@ class FileUploadResponse(BaseModel):
     thumbnail_base64: Optional[str] = Field(None, description="Base64 encoded thumbnail")
     image_width: Optional[int] = Field(None, description="Image width in pixels")
     image_height: Optional[int] = Field(None, description="Image height in pixels")
+    embedded_images: Optional[List[EmbeddedImage]] = Field(None, description="Embedded images from document")
 
 
 # ============================================
@@ -78,6 +88,14 @@ TEXT_EXTENSIONS: Set[str] = {
 # 图片格式
 IMAGE_EXTENSIONS: Set[str] = {
     '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'
+}
+
+# 图片格式映射（用于 base64 编码时的 format 参数）
+IMAGE_FORMAT_MAP: Dict[str, str] = {
+    '.jpg': 'jpeg', '.jpeg': 'jpeg',
+    '.png': 'png', '.gif': 'gif',
+    '.webp': 'webp', '.bmp': 'bmp',
+    '.emf': 'emf', '.wmf': 'wmf', '.tiff': 'tiff'
 }
 
 
@@ -165,12 +183,130 @@ def convert_with_markitdown(content: bytes, file_extension: str) -> tuple[str, s
     stream = io.BytesIO(content)
 
     try:
-        # keep_data_uris=True 保留文档中的嵌入图片（base64 data URI）
-        result = md.convert_stream(stream, file_ext=file_extension, keep_data_uris=True)
+        # keep_data_uris=False 防止 base64 图片嵌入 Markdown（避免内容膨胀）
+        result = md.convert_stream(stream, file_ext=file_extension, keep_data_uris=False)
         return result.text_content, 'markitdown'
     except Exception as e:
         logger.error(f"[MarkItDown] Conversion failed: {str(e)}")
         raise
+
+
+def _encode_image_with_thumbnail(
+    img: 'Image.Image',
+    max_display_size: int = 1024,
+    thumb_size: tuple[int, int] = (200, 150),
+    needs_full_image: bool = True,
+    output_format: str = 'jpeg',
+) -> Dict[str, Any]:
+    """
+    Unified image encoding: RGB conversion, resize, thumbnail generation, base64 encoding.
+
+    Args:
+        img: PIL Image object
+        max_display_size: Max dimension for display image
+        thumb_size: Thumbnail size tuple
+        needs_full_image: Whether to generate full-size image
+        output_format: Output format for encoding (default 'jpeg')
+
+    Returns:
+        Dict with: image_base64, image_format, thumbnail_base64, width, height
+    """
+    from PIL import Image  # Import for Image.new and Image.Resampling
+
+    # Record original dimensions
+    original_width, original_height = img.size
+
+    # RGB conversion (handle RGBA/P modes)
+    if img.mode in ('RGBA', 'P'):
+        background = Image.new('RGB', img.size, (255, 255, 255))
+        if img.mode == 'P':
+            img = img.convert('RGBA')
+        background.paste(img, mask=img.split()[-1])
+        img = background
+    elif img.mode != 'RGB':
+        img = img.convert('RGB')
+
+    # Encode full image (optional, resize if too large)
+    image_base64 = None
+    if needs_full_image:
+        if max(img.size) > max_display_size:
+            ratio = max_display_size / max(img.size)
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            img.thumbnail(new_size, Image.Resampling.LANCZOS)
+
+        full_buffer = io.BytesIO()
+        img.save(full_buffer, format=output_format.upper())
+        image_base64 = base64.b64encode(full_buffer.getvalue()).decode('utf-8')
+
+    # Generate thumbnail from current image state
+    thumb_img = img.copy()
+    thumb_img.thumbnail(thumb_size, Image.Resampling.LANCZOS)
+    thumb_buffer = io.BytesIO()
+    thumb_img.save(thumb_buffer, format=output_format.upper())
+    thumbnail_base64 = base64.b64encode(thumb_buffer.getvalue()).decode('utf-8')
+
+    return {
+        'image_base64': image_base64,
+        'image_format': output_format,
+        'thumbnail_base64': thumbnail_base64,
+        'image_width': original_width,
+        'image_height': original_height,
+    }
+
+
+def _extract_embedded_images(content: bytes, file_ext: str) -> List[Dict[str, Any]]:
+    """
+    Extract embedded images from document files.
+
+    .docx files are ZIP archives with images stored in word/media/.
+    This function extracts those images and returns them as base64-encoded data.
+
+    Args:
+        content: Raw document bytes
+        file_ext: File extension (.docx, etc.)
+
+    Returns:
+        List of image dicts with: image_base64, image_format, thumbnail_base64, width, height
+    """
+    if file_ext != '.docx':
+        return []
+
+    try:
+        import zipfile
+        from PIL import Image
+    except ImportError:
+        logger.warning("[ImageExtract] zipfile or Pillow not available")
+        return []
+
+    images = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(content), 'r') as z:
+            # Find media files in word/media/
+            media_files = [f for f in z.namelist()
+                          if f.startswith('word/media/') and not f.endswith('/')]
+
+            logger.info(f"[ImageExtract] Found {len(media_files)} media files in .docx")
+
+            # Limit to 10 images to avoid excessive processing
+            for media_file in media_files[:10]:
+                try:
+                    img_data = z.read(media_file)
+
+                    # Open and process image using shared function (outputs JPEG)
+                    img = Image.open(io.BytesIO(img_data))
+                    result = _encode_image_with_thumbnail(img)
+                    images.append(result)
+
+                    logger.info(f"[ImageExtract] Extracted: {media_file}, {result['image_width']}x{result['image_height']}")
+
+                except Exception as e:
+                    logger.warning(f"[ImageExtract] Failed to extract {media_file}: {e}")
+                    continue
+
+    except Exception as e:
+        logger.warning(f"[ImageExtract] Failed to open .docx as ZIP: {e}")
+
+    return images
 
 
 def _process_doc_file(content: bytes, filename: str) -> tuple[str, str]:
@@ -255,61 +391,26 @@ def process_image(
         logger.error("[Image] Pillow library not installed. Install with: pip install Pillow")
         raise ImportError("Pillow 库未安装，请运行: pip install Pillow")
 
-    IMAGE_FORMAT_MAP = {
-        '.jpg': 'jpeg', '.jpeg': 'jpeg',
-        '.png': 'png', '.gif': 'gif',
-        '.webp': 'webp', '.bmp': 'bmp'
-    }
     image_format = IMAGE_FORMAT_MAP.get(file_ext, 'jpeg')
 
     try:
         img = Image.open(io.BytesIO(content))
-        original_width, original_height = img.size
+        result = _encode_image_with_thumbnail(
+            img,
+            max_display_size=max_display_size,
+            needs_full_image=needs_full_image,
+            output_format=image_format,
+        )
 
-        if img.mode in ('RGBA', 'P'):
-            background = Image.new('RGB', img.size, (255, 255, 255))
-            if img.mode == 'P':
-                img = img.convert('RGBA')
-            background.paste(img, mask=img.split()[-1])
-            img = background
-        elif img.mode != 'RGB':
-            img = img.convert('RGB')
+        # Log resize info if applicable
+        if needs_full_image and max(img.size) > max_display_size:
+            ratio = max_display_size / max(img.size)
+            new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+            logger.info(f"[Image] Resized for LLM: {result['image_width']}x{result['image_height']} -> {new_size[0]}x{new_size[1]}")
 
-        image_base64 = None
+        logger.info(f"[Image] Processed: {result['image_width']}x{result['image_height']}, format={image_format}, full_encoded={result['image_base64'] is not None}")
 
-        if needs_full_image:
-            if max(img.size) > max_display_size:
-                ratio = max_display_size / max(img.size)
-                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                img_for_full = img.copy()
-                img_for_full.thumbnail(new_size, Image.Resampling.LANCZOS)
-                full_buffer = io.BytesIO()
-                img_for_full.save(full_buffer, format=image_format.upper())
-                image_base64 = base64.b64encode(full_buffer.getvalue()).decode('utf-8')
-                del img_for_full, full_buffer
-                logger.info(f"[Image] Resized for LLM: {original_width}x{original_height} -> {new_size[0]}x{new_size[1]}")
-            else:
-                full_buffer = io.BytesIO()
-                img.save(full_buffer, format=image_format.upper())
-                image_base64 = base64.b64encode(full_buffer.getvalue()).decode('utf-8')
-                del full_buffer
-
-        thumb_img = img.copy()
-        thumb_img.thumbnail((200, 150), Image.Resampling.LANCZOS)
-        thumb_buffer = io.BytesIO()
-        thumb_img.save(thumb_buffer, format=image_format.upper())
-        thumbnail_base64 = base64.b64encode(thumb_buffer.getvalue()).decode('utf-8')
-        del thumb_img, thumb_buffer
-
-        logger.info(f"[Image] Processed: {original_width}x{original_height}, format={image_format}, full_encoded={image_base64 is not None}")
-
-        return {
-            'image_base64': image_base64,
-            'image_format': image_format,
-            'thumbnail_base64': thumbnail_base64,
-            'image_width': original_width,
-            'image_height': original_height,
-        }
+        return result
 
     except Exception as e:
         logger.error(f"[Image] Processing failed: {str(e)}")
@@ -418,11 +519,19 @@ async def upload_file(file: UploadFile = File(...)):
             logger.error(f"[Upload] Invalid decoded content: length={len(decoded_content.strip())}")
             raise HTTPException(status_code=400, detail="文件内容不能为空或过短（至少需要10个字符）")
 
+        # Extract embedded images for .docx files
+        embedded_images = []
+        if file_ext == '.docx':
+            embedded_images = _extract_embedded_images(content, file_ext)
+            if embedded_images:
+                logger.info(f"[Upload] Extracted {len(embedded_images)} embedded images from .docx")
+
         return FileUploadResponse(
             content=decoded_content,
             encoding=encoding,
             size=content_length,
             file_type='document',
+            embedded_images=embedded_images if embedded_images else None,
         )
 
     except HTTPException:

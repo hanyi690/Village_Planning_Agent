@@ -9,7 +9,8 @@
 
 import asyncio
 from datetime import datetime
-from typing import Dict, Any, List, Optional, AsyncGenerator
+from enum import Enum
+from typing import Dict, Any, List, Optional, AsyncGenerator, Union, TYPE_CHECKING
 from langchain_core.messages import AIMessage
 
 from ...core.config import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT, RAG_ENABLED
@@ -17,8 +18,21 @@ from ...core.llm_factory import create_llm
 from ...config.dimension_metadata import get_dimension_config, get_dimension_layer
 from ...utils.logger import get_logger
 from ..state import PlanningPhase, get_layer_dimensions, get_wave_dimensions, _phase_to_layer
+from ...tools.types import normalize_tool_result, NormalizedToolResult, ResultDataType, safe_get_nested
 
 logger = get_logger(__name__)
+
+
+# ==========================================
+# ParamSource 枚举 - 工具参数来源类型
+# ==========================================
+
+class ParamSource(str, Enum):
+    """工具参数来源枚举"""
+    LITERAL = "literal"      # 固定值
+    GIS_CACHE = "gis_cache"  # 从 GIS 分析结果缓存取值
+    CONFIG = "config"        # 从 state.config 取值
+    CONTEXT = "context"      # 从 context 直接取值
 
 
 # ==========================================
@@ -132,11 +146,11 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 "buffer_km": 5.0,
                 "max_features": 500
             })
-            if gis_result and gis_result.get("success"):
+            if gis_result and gis_result.success:
                 gis_analysis_results["_auto_fetched"] = gis_result
                 logger.info(f"[知识预加载] GIS 数据获取成功")
             else:
-                logger.warning(f"[知识预加载] GIS 数据获取失败: {gis_result.get('error') if gis_result else 'No result'}")
+                logger.warning(f"[知识预加载] GIS 数据获取失败: {gis_result.error if gis_result else 'No result'}")
         except Exception as e:
             logger.error(f"[知识预加载] GIS 数据获取异常: {e}")
 
@@ -200,6 +214,38 @@ def _create_sse_event(
     }
 
 
+def _extract_gis_data_for_sse(gis_tool_result: Optional[NormalizedToolResult]) -> Optional[Dict[str, Any]]:
+    """从规范化 GIS 工具结果提取 SSE 事件所需的 GIS 数据
+
+    Args:
+        gis_tool_result: NormalizedToolResult 实例
+
+    Returns:
+        SSE 事件数据字典
+    """
+    if not gis_tool_result or not gis_tool_result.success:
+        return None
+
+    result = {}
+
+    # 1. 直接使用规范化结果的图层属性
+    if gis_tool_result.has_geojson:
+        result["layers"] = gis_tool_result.layers_data or []
+
+    # 2. 分析数据
+    if gis_tool_result.has_analysis:
+        result["analysisData"] = gis_tool_result.analysis_data
+
+    # 3. 地图选项
+    if gis_tool_result.center:
+        result["mapOptions"] = {
+            "center": gis_tool_result.center,
+            "zoom": gis_tool_result.raw_data.get("zoom", 14),
+        }
+
+    return result if result else None
+
+
 # ==========================================
 # 维度分析节点（状态驱动版本）
 # ==========================================
@@ -226,6 +272,8 @@ async def analyze_dimension_for_send(
     project_name = state.get("project_name", "")
     config = state.get("config", {})
     reports = state.get("reports", {})
+    # 修复: 从 state 顶层获取 GIS 分析结果
+    gis_analysis_results = state.get("gis_analysis_results", {})
 
     dimension_name = DIMENSION_NAMES.get(dimension_key, dimension_key)
     layer = get_layer_from_dimension(dimension_key)
@@ -255,9 +303,11 @@ async def analyze_dimension_for_send(
     # ==========================================
     gis_tool_result = None
     gis_tool_name = None
+    tool_params_config = None
     dimension_config = get_dimension_config(dimension_key)
     if dimension_config:
         gis_tool_name = dimension_config.get("tool")
+        tool_params_config = dimension_config.get("tool_params")
 
     if gis_tool_name:
         logger.info(f"[维度节点] {dimension_key} 配置了工具: {gis_tool_name}")
@@ -269,12 +319,15 @@ async def analyze_dimension_for_send(
                 "dimension_key": dimension_key,
                 "config": config,
                 "reports": reports,
-            }
+                # 修复: 传入顶层的 GIS 分析结果
+                "gis_analysis_results": gis_analysis_results,
+            },
+            tool_params_config=tool_params_config
         )
-        if gis_tool_result and gis_tool_result.get("success"):
+        if gis_tool_result and gis_tool_result.success:
             logger.info(f"[维度节点] {dimension_key} 工具执行成功")
         else:
-            logger.warning(f"[维度节点] {dimension_key} 工具执行失败: {gis_tool_result.get('error') if gis_tool_result else 'No result'}")
+            logger.warning(f"[维度节点] {dimension_key} 工具执行失败: {gis_tool_result.error if gis_tool_result else 'No result'}")
 
     # 区分层级数据来源
     if layer == 2:
@@ -322,7 +375,8 @@ async def analyze_dimension_for_send(
                 token = chunk.content
                 collected_result += token
                 # 实时发送 delta 事件（不再收集到数组）
-                if len(collected_result) % 15 == 0 or len(collected_result) <= 30:
+                # 节流优化: 每 100 字符发送一次，减少约 85% delta 事件
+                if len(collected_result) % 100 == 0 or len(collected_result) <= 50:
                     SSEPublisher.send_dimension_delta(
                         session_id=session_id,
                         layer=layer,
@@ -353,13 +407,19 @@ async def analyze_dimension_for_send(
             accumulated=result
         )
 
+        # Extract GIS data for SSE event
+        gis_data_for_event = None
+        if gis_tool_result and gis_tool_result.success:
+            gis_data_for_event = _extract_gis_data_for_sse(gis_tool_result)
+
         # Send dimension complete event (实时发送，确保事件不丢失)
         SSEPublisher.send_dimension_complete(
             session_id=session_id,
             layer=layer,
             dimension_key=dimension_key,
             dimension_name=dimension_name,
-            full_content=result
+            full_content=result,
+            gis_data=gis_data_for_event
         )
 
         # Keep a placeholder in sse_events for state tracking only
@@ -376,7 +436,7 @@ async def analyze_dimension_for_send(
 
         # 构建 GIS 数据返回（新增）
         gis_data_return = {}
-        if gis_tool_result and gis_tool_result.get("success"):
+        if gis_tool_result and gis_tool_result.success:
             gis_data_return = {
                 "gis_analysis_result": gis_tool_result
             }
@@ -494,7 +554,7 @@ async def analyze_dimension_node(
     constraints = config.get("constraints", "")
     knowledge_cache = config.get("knowledge_cache", {})
 
-    # 构建 prompt
+    # 构建 prompt（旧版本不执行 GIS 工具调用）
     prompt = _build_dimension_prompt(
         dimension_key=dimension_key,
         dimension_name=dimension_name,
@@ -503,8 +563,7 @@ async def analyze_dimension_node(
         task_description=task_description,
         constraints=constraints,
         reports=reports,
-        knowledge_cache=knowledge_cache,
-        gis_tool_result=gis_tool_result
+        knowledge_cache=knowledge_cache
     )
 
     # 调用 LLM（流式）
@@ -573,7 +632,7 @@ def _build_dimension_prompt(
     reports: Dict[str, Dict[str, str]],
     village_name: str = "",
     knowledge_cache: Dict[str, str] = None,
-    gis_tool_result: Dict[str, Any] = None
+    gis_tool_result: Optional[NormalizedToolResult] = None
 ) -> str:
     """构建维度分析 prompt - 使用专业模板"""
     layer = get_dimension_layer(dimension_key) or 3
@@ -680,12 +739,12 @@ def _build_dimension_prompt(
     return _build_fallback_prompt(dimension_name, village_data, task_description, constraints)
 
 
-def _format_gis_tool_result(gis_tool_result: Optional[Dict[str, Any]]) -> Optional[str]:
+def _format_gis_tool_result(gis_tool_result: Optional[NormalizedToolResult]) -> Optional[str]:
     """
-    格式化 GIS 工具结果为 professional_data 文本
+    格式化规范化 GIS 工具结果为 professional_data 文本
 
     Args:
-        gis_tool_result: GIS 工具执行结果
+        gis_tool_result: NormalizedToolResult 实例
 
     Returns:
         格式化的文本，可用于 prompt 注入
@@ -693,67 +752,78 @@ def _format_gis_tool_result(gis_tool_result: Optional[Dict[str, Any]]) -> Option
     if not gis_tool_result:
         return None
 
-    if not gis_tool_result.get("success"):
-        return f"GIS分析失败: {gis_tool_result.get('error', '未知错误')}"
+    if not gis_tool_result.success:
+        return f"GIS分析失败: {gis_tool_result.error or '未知错误'}"
+
+    # 文本类型直接返回
+    if gis_tool_result.has_text:
+        return gis_tool_result.text_data
 
     # 提取关键信息
     parts = ["## GIS分析结果"]
+    raw_data = gis_tool_result.raw_data
 
     # 设施验证结果
-    if "facility_type" in gis_tool_result:
-        parts.append(f"- 设施类型: {gis_tool_result.get('facility_type')}")
-        parts.append(f"- 综合评分: {gis_tool_result.get('overall_score', 0)}/100")
-        parts.append(f"- 适宜性等级: {gis_tool_result.get('suitability_level', 'Unknown')}")
-        if gis_tool_result.get("recommendations"):
+    if "facility_type" in raw_data:
+        parts.append(f"- 设施类型: {raw_data.get('facility_type')}")
+        parts.append(f"- 综合评分: {raw_data.get('overall_score', 0)}/100")
+        parts.append(f"- 适宜性等级: {raw_data.get('suitability_level', 'Unknown')}")
+        if raw_data.get("recommendations"):
             parts.append("- 建议:")
-            for rec in gis_tool_result.get("recommendations", [])[:3]:
+            for rec in raw_data.get("recommendations", [])[:3]:
                 parts.append(f"  * {rec}")
 
     # 生态敏感性评估结果
-    elif "sensitivity_class" in gis_tool_result:
-        parts.append(f"- 敏感性等级: {gis_tool_result.get('sensitivity_class')}")
-        parts.append(f"- 研究区域: {gis_tool_result.get('study_area_km2', 0)} km²")
-        parts.append(f"- 敏感区域: {gis_tool_result.get('sensitive_area_km2', 0)} km²")
-        if gis_tool_result.get("recommendations"):
+    elif "sensitivity_class" in raw_data:
+        parts.append(f"- 敏感性等级: {raw_data.get('sensitivity_class')}")
+        parts.append(f"- 研究区域: {raw_data.get('study_area_km2', 0)} km²")
+        parts.append(f"- 敏感区域: {raw_data.get('sensitive_area_km2', 0)} km²")
+        if raw_data.get("recommendations"):
             parts.append("- 保护建议:")
-            for rec in gis_tool_result.get("recommendations", [])[:3]:
+            for rec in raw_data.get("recommendations", [])[:3]:
                 parts.append(f"  * {rec}")
 
     # 等时圈分析结果
-    elif "isochrones" in gis_tool_result or gis_tool_result.get("geojson"):
+    elif "isochrones" in raw_data or gis_tool_result.has_geojson:
         parts.append("- 等时圈分析已完成")
-        if gis_tool_result.get("center"):
-            parts.append(f"- 中心点: {gis_tool_result.get('center')}")
-        if gis_tool_result.get("travel_mode"):
-            parts.append(f"- 出行方式: {gis_tool_result.get('travel_mode')}")
+        if gis_tool_result.center:
+            parts.append(f"- 中心点: {gis_tool_result.center}")
+        if raw_data.get("travel_mode"):
+            parts.append(f"- 出行方式: {raw_data.get('travel_mode')}")
 
     # 规划矢量化结果
-    elif "zones" in gis_tool_result or "facilities" in gis_tool_result:
-        if gis_tool_result.get("zones"):
-            zone_data = gis_tool_result["zones"]
+    elif "zones" in raw_data or "facilities" in raw_data:
+        if raw_data.get("zones"):
+            zone_data = raw_data["zones"]
             parts.append(f"- 功能区数量: {zone_data.get('feature_count', 0)}")
             parts.append(f"- 总面积: {zone_data.get('total_area_ha', 0)} 公顷")
-        if gis_tool_result.get("facilities"):
-            facility_data = gis_tool_result["facilities"]
+        if raw_data.get("facilities"):
+            facility_data = raw_data["facilities"]
             parts.append(f"- 设施点数量: {facility_data.get('feature_count', 0)}")
 
     # GIS 数据获取结果
-    elif gis_tool_result.get("data"):
-        data = gis_tool_result.get("data", {})
-        parts.append(f"- 位置: {gis_tool_result.get('location', 'Unknown')}")
-        if gis_tool_result.get("water"):
-            parts.append("- 水系数据: 已获取")
-        if gis_tool_result.get("road"):
-            parts.append("- 道路数据: 已获取")
-        if gis_tool_result.get("residential"):
-            parts.append("- 居民地数据: 已获取")
+    elif gis_tool_result.location:
+        parts.append(f"- 位置: {gis_tool_result.location}")
+        if gis_tool_result.layers_data:
+            layer_names = [l.get("layerName", "") for l in gis_tool_result.layers_data]
+            parts.append(f"- 已获取图层: {', '.join(layer_names)}")
+
+    # 分析数据摘要
+    elif gis_tool_result.has_analysis:
+        analysis = gis_tool_result.analysis_data
+        if analysis.get("summary"):
+            parts.append(f"- 分析摘要: {analysis['summary'][:100]}...")
+        if analysis.get("coverage_rate"):
+            parts.append(f"- 覆盖率: {analysis['coverage_rate']:.1%}")
+        if analysis.get("reachable_count"):
+            parts.append(f"- 可达设施: {analysis['reachable_count']} 个")
 
     # 默认情况
     else:
         parts.append("- 分析已完成")
         # 添加所有非嵌套的键值对
-        for k, v in gis_tool_result.items():
-            if k not in ["geojson", "data", "success"] and isinstance(v, (str, int, float, bool)):
+        for k, v in raw_data.items():
+            if k not in ["geojson", "data", "success", "layers"] and isinstance(v, (str, int, float, bool)):
                 parts.append(f"- {k}: {v}")
 
     return "\n".join(parts)
@@ -841,16 +911,100 @@ def _build_fallback_prompt(dimension_name: str, village_data: str,
 # GIS 工具执行辅助函数
 # ==========================================
 
-def _execute_gis_tool(tool_name: str, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _get_nested_value(data: Dict[str, Any], path: str) -> Any:
     """
-    执行 GIS 工具并返回结果
+    嵌套路径取值（包装 safe_get_nested）
+
+    Args:
+        data: 数据字典
+        path: 嵌套路径，如 "_auto_fetched.center"
+
+    Returns:
+        找到的值，不存在则返回 None
+    """
+    if not data or not path:
+        return None
+    return safe_get_nested(data, path.split("."))
+
+
+def _resolve_tool_params(
+    tool_params_config: Dict[str, Dict[str, Any]],
+    context: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    解析工具参数配置
+
+    根据 tool_params 配置从不同来源解析参数值。
+
+    Args:
+        tool_params_config: 参数配置字典
+            {
+                "param_name": {"source": "literal", "value": xxx},
+                "param_name": {"source": "gis_cache", "path": "_auto_fetched.center"},
+                "param_name": {"source": "config", "path": "village_name"}
+            }
+        context: 工具上下文，包含 village_data, village_name, config, reports 等
+
+    Returns:
+        解析后的参数字典
+    """
+    resolved = {}
+    config = context.get("config", {})
+    # 修复: 从 context 顶层获取 gis_analysis_results，而非从 config 内部
+    gis_results = context.get("gis_analysis_results", {})
+
+    for param_name, param_config in tool_params_config.items():
+        source = param_config.get("source", ParamSource.LITERAL.value)
+
+        if source == ParamSource.LITERAL.value:
+            # 固定值
+            resolved[param_name] = param_config.get("value")
+
+        elif source == ParamSource.GIS_CACHE.value:
+            # 从 GIS 分析结果缓存取值
+            path = param_config.get("path", "")
+            value = _get_nested_value(gis_results, path)
+            if value is not None:
+                resolved[param_name] = value
+            else:
+                logger.warning(f"[参数解析] gis_cache 路径 {path} 未找到值")
+
+        elif source == ParamSource.CONFIG.value:
+            # 从 state.config 取值
+            path = param_config.get("path", "")
+            value = _get_nested_value(config, path)
+            if value is not None:
+                resolved[param_name] = value
+            else:
+                logger.warning(f"[参数解析] config 路径 {path} 未找到值")
+
+        elif source == ParamSource.CONTEXT.value:
+            # 从 context 直接取值
+            key = param_config.get("key", param_name)
+            if key in context:
+                resolved[param_name] = context[key]
+            else:
+                logger.warning(f"[参数解析] context.{key} 未找到值")
+
+    return resolved
+
+
+def _execute_gis_tool(
+    tool_name: str,
+    context: Dict[str, Any],
+    tool_params_config: Optional[Dict[str, Dict[str, Any]]] = None
+) -> Optional[NormalizedToolResult]:
+    """
+    执行 GIS 工具并返回规范化结果
 
     Args:
         tool_name: 工具名称
         context: 工具上下文
+        tool_params_config: 工具参数配置（可选）
+            如果提供，将根据配置解析参数；否则使用 context 作为参数
 
     Returns:
-        工具执行结果字典，失败返回 None
+        NormalizedToolResult 实例，失败返回 None
     """
     import json
     from ...tools.registry import ToolRegistry
@@ -861,17 +1015,25 @@ def _execute_gis_tool(tool_name: str, context: Dict[str, Any]) -> Optional[Dict[
         return None
 
     try:
-        result_str = tool_func(context)
-        # 解析 JSON 结果
-        if isinstance(result_str, str):
-            try:
-                return json.loads(result_str)
-            except json.JSONDecodeError:
-                return {"success": True, "data": result_str}
-        return result_str
+        # 解析参数配置
+        if tool_params_config:
+            resolved_params = _resolve_tool_params(tool_params_config, context)
+            logger.info(f"[GIS工具] {tool_name} 参数解析结果: {list(resolved_params.keys())}")
+        else:
+            resolved_params = context
+
+        result_str = tool_func(resolved_params)
+
+        # 规范化结果
+        return normalize_tool_result(result_str, tool_name)
+
     except Exception as e:
         logger.error(f"[GIS工具] 执行失败 {tool_name}: {e}")
-        return {"success": False, "error": str(e)}
+        return NormalizedToolResult(
+            success=False,
+            data_type=ResultDataType.ERROR,
+            error=str(e)
+        )
 
 
 # ==========================================
@@ -900,6 +1062,8 @@ def create_dimension_state(
         "config": parent_state.get("config", {}),
         "reports": parent_state.get("reports", {}),
         "completed_dimensions": parent_state.get("completed_dimensions", {}),
+        # 新增：传递 GIS 分析结果
+        "gis_analysis_results": parent_state.get("gis_analysis_results", {}),
     }
 
 
@@ -910,4 +1074,5 @@ __all__ = [
     "knowledge_preload_node",
     "DIMENSION_NAMES",
     "get_layer_from_dimension",
+    "ParamSource",
 ]

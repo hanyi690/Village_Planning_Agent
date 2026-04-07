@@ -6,6 +6,12 @@ ToolRegistry expects: tool_func(context: Dict[str, Any]) -> str
 
 These wrappers convert the context dict to function-specific parameters
 and format the output as a string or JSON.
+
+Standard Output Format:
+- Success: {"success": True, ...data_fields}
+- Failure: {"success": False, "error": "error_message"}
+
+Each wrapper returns JSON with consistent structure for frontend parsing.
 """
 
 from typing import Dict, Any, List, Optional, Tuple
@@ -29,6 +35,23 @@ def _extract_result_fields(result: Dict[str, Any], field_names: List[str]) -> Di
     """Extract specified fields from result data."""
     data = result.get("data", {})
     return {name: data.get(name) for name in field_names if data.get(name) is not None}
+
+
+def _ensure_tuple_coord(coord) -> Optional[Tuple[float, float]]:
+    """Convert list coordinate to tuple if needed."""
+    if coord is None:
+        return None
+    if isinstance(coord, list) and len(coord) == 2:
+        return tuple(coord)
+    return coord
+
+
+def _count_geojson_features(result: Dict[str, Any], category: str) -> int:
+    """Count features in a GeoJSON result for a given category."""
+    if not result.get(category, {}).get("success", False):
+        return 0
+    geojson = result[category].get("geojson", {})
+    return len(geojson.get("features", []))
 
 
 def _wrap_tool_response(result: Dict[str, Any], success_fields: List[str]) -> str:
@@ -88,9 +111,7 @@ def wrap_isochrone_analysis(context: Dict[str, Any]) -> str:
     """Wrapper for isochrone analysis tool."""
     from .isochrone_analysis import generate_isochrones
 
-    center = context.get("center", [0, 0])
-    if isinstance(center, list) and len(center) == 2:
-        center = tuple(center)
+    center = _ensure_tuple_coord(context.get("center", [0, 0]))
 
     result = generate_isochrones(
         center=center,
@@ -107,9 +128,7 @@ def wrap_planning_vectorizer(context: Dict[str, Any]) -> str:
 
     zones = context.get("zones", [])
     facilities = context.get("facilities", [])
-    village_center = context.get("village_center")
-    if isinstance(village_center, list) and len(village_center) == 2:
-        village_center = tuple(village_center)
+    village_center = _ensure_tuple_coord(context.get("village_center"))
 
     results = {}
 
@@ -132,9 +151,7 @@ def wrap_facility_validator(context: Dict[str, Any]) -> str:
     """Wrapper for facility location validation tool."""
     from ..builtin.gis_validation import validate_facility_location
 
-    location = context.get("location", [0, 0])
-    if isinstance(location, list) and len(location) == 2:
-        location = tuple(location)
+    location = _ensure_tuple_coord(context.get("location", [0, 0]))
 
     result = validate_facility_location(
         facility_type=context.get("facility_type", "公共服务设施"),
@@ -167,9 +184,7 @@ def wrap_map_renderer(context: Dict[str, Any]) -> str:
     """Wrapper for map rendering tool."""
     from .map_renderer import render_planning_map
 
-    center = context.get("center")
-    if isinstance(center, list) and len(center) == 2:
-        center = tuple(center)
+    center = _ensure_tuple_coord(context.get("center"))
 
     result = render_planning_map(
         layers=context.get("layers", []),
@@ -189,9 +204,9 @@ def wrap_map_renderer(context: Dict[str, Any]) -> str:
 
 def wrap_gis_data_fetch(context: Dict[str, Any]) -> str:
     """Wrapper for GIS data fetcher tool."""
-    from .gis_data_fetcher import GISDataFetcher
+    from .gis_data_fetcher import get_fetcher
 
-    fetcher = GISDataFetcher()
+    fetcher = get_fetcher()
     result = fetcher.fetch_all_gis_data(
         location=context.get("location", ""),
         buffer_km=context.get("buffer_km", 5.0),
@@ -221,6 +236,125 @@ def wrap_gis_data_fetch(context: Dict[str, Any]) -> str:
     }, ensure_ascii=False)
 
 
+def wrap_accessibility_analysis(context: Dict[str, Any]) -> str:
+    """Wrapper for accessibility analysis tool."""
+    from .accessibility_core import run_accessibility_analysis
+
+    origin = _ensure_tuple_coord(context.get("origin"))
+    center = _ensure_tuple_coord(context.get("center"))
+
+    destinations = context.get("destinations", [])
+    if destinations and isinstance(destinations[0], list):
+        destinations = [tuple(d) if len(d) == 2 else d for d in destinations]
+
+    result = run_accessibility_analysis(
+        analysis_type=context.get("analysis_type", "service_coverage"),
+        origin=origin,
+        destinations=destinations,
+        center=center,
+        **{k: v for k, v in context.items()
+           if k not in ["analysis_type", "origin", "destinations", "center"]}
+    )
+
+    if result.get("success"):
+        data = result.get("data", {})
+        summary = data.get("summary", {})
+        return _format_success_response({
+            "summary": summary,
+            "coverage_rate": summary.get("coverage_rate", 0),
+            "reachable_count": summary.get("reachable", 0),
+            "geojson": data.get("geojson")
+        })
+    return _format_error_response(result.get("error", "Unknown error"))
+
+
+def wrap_poi_search(context: Dict[str, Any]) -> str:
+    """Wrapper for POI search tool (使用 POIProvider 高德优先策略)."""
+    from ..geocoding import POIProvider
+
+    keyword = context.get("keyword", "")
+    region = context.get("region", "")
+    page_size = context.get("page_size", 20)
+
+    if region:
+        result = POIProvider.search_poi_in_region(keyword, region, page_size)
+    else:
+        center = _ensure_tuple_coord(context.get("center")) or (0, 0)
+        radius = context.get("radius", 1000)
+        result = POIProvider.search_poi_nearby(keyword, center, radius, page_size)
+
+    if result.get("success"):
+        pois = result.get("pois", [])
+        return _format_success_response({
+            "pois": pois,
+            "total_count": len(pois),
+            "geojson": result.get("geojson"),
+            "layer_type": "facility_point",  # POI 应为设施点类型
+            "layer_name": "公共服务设施",     # 图层名称
+            "source": result.get("source", "unknown")
+        })
+    return _format_error_response(result.get("error", "POI search failed"))
+
+
+def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
+    """Wrapper for GIS coverage calculator tool."""
+    from .gis_data_fetcher import get_fetcher
+
+    fetcher = get_fetcher()
+    location = context.get("location", "")
+    buffer_km = context.get("buffer_km", 5.0)
+
+    result = fetcher.fetch_all_gis_data(location, buffer_km, max_features=100)
+
+    # Calculate coverage statistics using helper
+    water_success = result.get("water", {}).get("success", False)
+    road_success = result.get("road", {}).get("success", False)
+    residential_success = result.get("residential", {}).get("success", False)
+
+    water_count = _count_geojson_features(result, "water")
+    road_count = _count_geojson_features(result, "road")
+    residential_count = _count_geojson_features(result, "residential")
+
+    coverage_rate = sum([water_success, road_success, residential_success]) / 3
+
+    # 提取 GIS 图层数据（用于地图渲染）
+    type_mapping = {
+        "water": {"layerType": "sensitivity_zone", "layerName": "水系", "color": "#87CEEB"},
+        "road": {"layerType": "development_axis", "layerName": "道路", "color": "#FF6B6B"},
+        "residential": {"layerType": "function_zone", "layerName": "居民地", "color": "#FFD700"},
+    }
+
+    layers = []
+    for category, mapping in type_mapping.items():
+        cat_data = result.get(category, {})
+        if cat_data.get("success") and cat_data.get("geojson"):
+            geojson = cat_data["geojson"]
+            if geojson.get("features"):
+                layers.append({
+                    "geojson": geojson,
+                    "layerType": mapping["layerType"],
+                    "layerName": mapping["layerName"],
+                    "color": mapping["color"],
+                })
+
+    return _format_success_response({
+        "location": location,
+        "coverage_rate": coverage_rate,
+        "layers_available": {
+            "water": water_success,
+            "road": road_success,
+            "residential": residential_success
+        },
+        "feature_counts": {
+            "water": water_count,
+            "road": road_count,
+            "residential": residential_count
+        },
+        "center": result.get("center"),
+        "layers": layers,  # 新增：GIS 图层数据
+    })
+
+
 # Tool name to wrapper mapping
 GIS_TOOL_WRAPPERS = {
     "spatial_overlay": wrap_spatial_overlay,
@@ -231,6 +365,10 @@ GIS_TOOL_WRAPPERS = {
     "ecological_sensitivity": wrap_ecological_sensitivity,
     "map_renderer": wrap_map_renderer,
     "gis_data_fetch": wrap_gis_data_fetch,
+    "wfs_data_fetch": wrap_gis_data_fetch,
+    "accessibility_analysis": wrap_accessibility_analysis,
+    "poi_search": wrap_poi_search,
+    "gis_coverage_calculator": wrap_gis_coverage_calculator,
 }
 
 
@@ -250,4 +388,7 @@ __all__ = [
     "wrap_ecological_sensitivity",
     "wrap_map_renderer",
     "wrap_gis_data_fetch",
+    "wrap_accessibility_analysis",
+    "wrap_poi_search",
+    "wrap_gis_coverage_calculator",
 ]

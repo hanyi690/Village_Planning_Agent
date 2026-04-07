@@ -74,25 +74,8 @@ export function usePlanningHandlers({
         return null;
       }
 
-      const startTime = Date.now();
-      console.log(`[usePlanningHandlers] 📡 REST API 调用开始: GET /layer/${layer}/reports, taskId=${taskId}`);
-
       try {
         const response = await planningApi.getLayerReports(taskId, layer);
-        const elapsed = Date.now() - startTime;
-
-        const reportKeys = Object.keys(response.reports || {});
-        const reportsWithContent = reportKeys.filter(
-          (k) => response.reports[k] && response.reports[k].length > 0
-        );
-
-        console.log(`[usePlanningHandlers] ✅ REST API 响应成功: Layer ${layer}, 耗时=${elapsed}ms`, {
-          dimensionCount: response.stats.dimension_count,
-          totalChars: response.stats.total_chars,
-          completed: response.completed,
-          reportKeysCount: reportKeys.length,
-          reportsWithContentCount: reportsWithContent.length,
-        });
 
         return {
           reports: response.reports,
@@ -139,7 +122,6 @@ export function usePlanningHandlers({
       setMessages(updatedMessages);
 
       setDimensionCompleted(layerNum, dimensionKey, fullContent.length);
-      console.log(`[usePlanningHandlers] Dimension complete: ${dimensionKey} (${fullContent.length} chars)`);
     },
     [currentLayer, completeDimension, setMessages, setDimensionCompleted]
   );
@@ -150,8 +132,6 @@ export function usePlanningHandlers({
 
   const handleLayerStarted = useCallback(
     (layer: number, layerName: string) => {
-      console.log(`[usePlanningHandlers] 🚀 Layer ${layer} started: "${layerName}"`);
-
       setDimensionStreaming(layer, '', '');
 
       const layerReportId = `layer_report_${layer}`;
@@ -161,7 +141,6 @@ export function usePlanningHandlers({
       const exists = currentMessages.some((m) => m.id === layerReportId);
 
       if (exists) {
-        console.log(`[usePlanningHandlers] Layer ${layer} 占位消息已存在，跳过创建`);
         return;
       }
 
@@ -172,7 +151,6 @@ export function usePlanningHandlers({
         emptyDimensionReports[key] = '';
       });
 
-      console.log(`[usePlanningHandlers] ✅ 创建 Layer ${layer} 占位消息，${dimensionKeys.length} 个维度槽位`);
       layerReportCreatedRef.current[layer] = true;
 
       const newMsg: Message = {
@@ -217,11 +195,6 @@ export function usePlanningHandlers({
     async (layer: number, reportContent: string, dimensionReports: Record<string, string>) => {
       flushBatch();
 
-      console.log(`[usePlanningHandlers] Layer ${layer} completed signal received`, {
-        reportLength: reportContent?.length || 0,
-        dimensionCount: Object.keys(dimensionReports || {}).length,
-      });
-
       // SSE data completeness check
       let finalReports: Record<string, string> = {};
       let finalReportContent = reportContent;
@@ -233,18 +206,14 @@ export function usePlanningHandlers({
 
       if (sseDataComplete && sseTotalChars > MIN_SSE_DATA_CHARS) {
         finalReports = dimensionReports;
-        console.log(`[usePlanningHandlers] Using SSE data: ${Object.keys(finalReports).length} dimensions, ${sseTotalChars} chars`);
       } else {
-        console.log(`[usePlanningHandlers] SSE data incomplete, fetching from REST API...`);
         const backendData = await fetchLayerReportsFromBackend(layer);
 
         if (backendData?.reports && Object.keys(backendData.reports).length > 0) {
           finalReports = backendData.reports;
           finalReportContent = backendData.reportContent;
-          console.log(`[usePlanningHandlers] Using REST API data: ${Object.keys(finalReports).length} dimensions`);
         } else {
           // Fallback: merge dimensionContents
-          console.log(`[usePlanningHandlers] REST API failed, falling back to dimensionContents`);
           Object.entries(dimensionContentsRef.current).forEach(([key, content]) => {
             const parts = key.split('_');
             if (parts.length >= 2) {
@@ -273,7 +242,6 @@ export function usePlanningHandlers({
       // Sync reports to store
       const layerKey = `layer${layer}` as 'layer1' | 'layer2' | 'layer3';
       setReports({ [layerKey]: finalReports });
-      console.log(`[usePlanningHandlers] Synced Layer ${layer} reports to store`);
 
       // Update or create layer report message
       const layerReportId = `layer_report_${layer}`;
@@ -306,7 +274,6 @@ export function usePlanningHandlers({
 
         addMessage(newMsg);
         layerReportCreatedRef.current[layer] = true;
-        console.log(`[usePlanningHandlers] Created layer_report_${layer}`);
       } else {
         // Update existing message
         const currentMessages = usePlanningStore.getState().messages;
@@ -330,7 +297,6 @@ export function usePlanningHandlers({
           return msg;
         });
         setMessages(updatedMessages);
-        console.log(`[usePlanningHandlers] Updated layer_report_${layer}`);
       }
 
       // Save layer report to backend (upsert)
@@ -352,13 +318,12 @@ export function usePlanningHandlers({
               dimensionReports: finalReports,
             },
           });
-          console.log(`[usePlanningHandlers] Saved layer_report_${layer} to backend`);
         } catch (error) {
           console.error(`[usePlanningHandlers] Failed to save layer_report_${layer}:`, error);
         }
       }
     },
-    [flushBatch, fetchLayerReportsFromBackend, setLayerCompleted, setReports, addMessage, setMessages, showViewer]
+    [flushBatch, fetchLayerReportsFromBackend, setLayerCompleted, setReports, addMessage, setMessages, showViewer, taskId]
   );
 
   // ============================================
@@ -370,7 +335,6 @@ export function usePlanningHandlers({
       if (!completedLayers[layer as 1 | 2 | 3]) return;
 
       if (restoringLayersRef.current.has(layer)) {
-        console.log(`[usePlanningHandlers] Layer ${layer} restoration in progress, skipping`);
         return;
       }
 
@@ -385,7 +349,6 @@ export function usePlanningHandlers({
         const backendData = await fetchLayerReportsFromBackend(layer);
         if (backendData?.reports && Object.keys(backendData.reports).length > 0) {
           await handleLayerCompleted(layer, backendData.reportContent, backendData.reports);
-          console.log(`[usePlanningHandlers] Layer ${layer} data restored`);
         }
       } catch (error) {
         console.error(`[usePlanningHandlers] Layer ${layer} restore failed:`, error);

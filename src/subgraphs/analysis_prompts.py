@@ -827,6 +827,10 @@ def _generate_professional_data_section(dimension_key: str, professional_data: d
     if not professional_data:
         return ""
 
+    # 处理字符串输入（来自 _format_gis_tool_result）
+    if isinstance(professional_data, str):
+        return f"\n**【专业数据】**：\n{professional_data}\n"
+
     sections = []
 
     # 自然环境维度的专业数据

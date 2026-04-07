@@ -227,37 +227,91 @@ const enqueueEvent = useCallback(
 
 ### 重连机制
 
-SSE 连接支持自动重连，使用指数退避策略:
+SSE 连接支持自动重连，使用指数退避策略。关键改进：**建立新连接前先关闭旧连接**。
 
 ```typescript
 const MAX_RECONNECT_ATTEMPTS = 5;
 
-// 错误处理中的重连逻辑
-if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
-  reconnectAttemptsRef.current++;
-  const delay = Math.min(1000 * reconnectAttemptsRef.current, 5000);
-  setTimeout(() => {
-    const currentTaskId = usePlanningStore.getState().taskId;
-    if (currentTaskId) {
-      connectSSE(currentTaskId);
+// connectSSE 函数 - 先关闭旧连接再建立新连接
+const connectSSE = useCallback(
+  (taskIdParam: string) => {
+    // Close old connection first to prevent race conditions
+    if (sseConnectionRef.current) {
+      const oldEs = sseConnectionRef.current;
+      sseConnectionRef.current = null;  // Clear ref immediately to prevent reuse
+      oldEs.close();
+      console.log('[useSSEConnection] Closed old SSE connection before reconnect');
     }
-  }, delay);
-}
+
+    const es = planningApi.createStream(
+      taskIdParam,
+      (event: PlanningSSEEvent) => {
+        reconnectAttemptsRef.current = 0;
+        enqueueEvent({ type: event.type, data: event.data });
+      },
+      (error) => {
+        // 错误处理中的重连逻辑
+        if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttemptsRef.current++;
+          const delay = Math.min(1000 * reconnectAttemptsRef.current, 5000);
+          setTimeout(() => {
+            const currentTaskId = usePlanningStore.getState().taskId;
+            if (currentTaskId) {
+              connectSSE(currentTaskId);
+            }
+          }, delay);
+        }
+      },
+      // onReconnect callback
+      () => {
+        const currentTaskId = usePlanningStore.getState().taskId;
+        if (currentTaskId) {
+          planningApi.getStatus(currentTaskId).then((statusData) => {
+            syncBackendState(statusData);
+          });
+        }
+        onReconnect?.();
+      }
+    );
+
+    sseConnectionRef.current = es;
+    return es;
+  },
+  [enqueueEvent, syncBackendState, onReconnect]
+);
 ```
 
-重连后自动同步状态:
+**设计要点**：
+- **立即清理引用**：将 `sseConnectionRef.current` 设为 `null` 在关闭前，防止竞争条件下复用旧连接
+- **先关后连**：避免旧连接与新连接的竞争，确保只有一个活跃连接
+- **指数退避**：重连间隔从 1s 递增到最大 5s，避免频繁重连
+
+### approve 流程的重连触发
+
+用户 approve 后，前端通过 `sseResumeTrigger` 值变化触发新连接：
 
 ```typescript
-() => {
-  console.log('[useSSEConnection] SSE reconnected, syncing state...');
-  const currentTaskId = usePlanningStore.getState().taskId;
-  if (currentTaskId) {
-    planningApi.getStatus(currentTaskId).then((statusData) => {
-      syncBackendState(statusData);
-    });
+// frontend/src/hooks/planning/useSSEConnection.ts
+useEffect(() => {
+  if (!enabled || !taskId) {
+    if (sseConnectionRef.current) {
+      sseConnectionRef.current.close();
+      sseConnectionRef.current = null;
+    }
+    return;
   }
-  onReconnect?.();
-}
+
+  // Reconnect trigger: taskId change or resumeTrigger change
+  const taskIdChanged = prevTaskIdRef.current !== taskId;
+  const resumeTriggered = prevResumeTriggerRef.current !== resumeTrigger;
+  const shouldReconnect = taskIdChanged || resumeTriggered;
+
+  if (shouldReconnect) {
+    prevTaskIdRef.current = taskId;
+    prevResumeTriggerRef.current = resumeTrigger;
+    connectSSE(taskId);  // 会先关闭旧连接
+  }
+}, [taskId, enabled, resumeTrigger, connectSSE]);
 ```
 
 ---
@@ -497,7 +551,12 @@ sequenceDiagram
     participant Store as Zustand Store
 
     Agent->>SSE: layer_completed event
-    SSE->>Frontend: SSE: layer_completed
+    SSE->>Frontend: SSE: layer_completed + pause
+
+    Frontend->>Frontend: parseEvent(pause)
+    Frontend->>Frontend: shouldSuppressReconnect = true
+    Frontend->>Frontend: es.close() immediately
+    Note over Frontend: 抑制浏览器自动重连
 
     Frontend->>Store: handleSSEEvent({type: 'layer_completed'})
 
@@ -511,10 +570,22 @@ sequenceDiagram
 
     Note over Frontend: User approves
 
+    Frontend->>Frontend: triggerSseReconnect()
+    Frontend->>Frontend: sseResumeTrigger++
+
+    Note over Frontend: useEffect detects change
+    Frontend->>Frontend: connectSSE(taskId)
+    Frontend->>Frontend: Close old connection first
+    Frontend->>Frontend: Create new SSE connection
+
     Frontend->>Agent: approve request
-    Agent->>SSE: resumed event
+    Agent->>SSE: resumed + layer_started (Layer 2)
+    Note over SSE: 前端已订阅，事件实时推送
+
     SSE->>Frontend: SSE: resumed
+    SSE->>Frontend: SSE: layer_started
     Frontend->>Store: handleSSEEvent({type: 'resumed'})
+    Frontend->>Store: handleSSEEvent({type: 'layer_started'})
 
     Note over Store: Clear pause_after_step
     Note over Store: Continue to next layer

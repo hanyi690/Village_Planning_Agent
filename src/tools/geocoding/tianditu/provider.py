@@ -15,6 +15,7 @@ from .constants import (
 )
 from .tiles import TileService
 from .wfs import WfsService
+from ..rate_limiter import RateLimiter
 from ....core.config import (
     TIANDITU_API_KEY,
     TIANDITU_RATE_LIMIT,
@@ -26,6 +27,29 @@ from ....utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _parse_tianditu_pois(pois: List[Dict]) -> List[Dict]:
+    """解析天地图 POI 列表为统一格式
+
+    Args:
+        pois: 天地图 API 返回的 POI 原始数据
+
+    Returns:
+        统一格式的 POI 列表 [{"name", "lon", "lat", "address", "category"}]
+    """
+    poi_list = []
+    for poi in pois:
+        lonlat = poi.get("lonlat", ",").split(",")
+        poi_item = {
+            "name": poi.get("name", ""),
+            "lon": float(lonlat[0]) if len(lonlat) > 0 else 0,
+            "lat": float(lonlat[1]) if len(lonlat) > 1 else 0,
+            "address": poi.get("address", ""),
+            "category": poi.get("typeName", "")
+        }
+        poi_list.append(poi_item)
+    return poi_list
+
+
 class TiandituProvider:
     """天地图 API 封装"""
 
@@ -34,11 +58,13 @@ class TiandituProvider:
         self.rate_limit = TIANDITU_RATE_LIMIT  # QPS
         self.max_retries = TIANDITU_MAX_RETRIES
         self.timeout = GIS_TIMEOUT
-        self._last_request_time = 0
 
-        # 子服务
+        # 使用全局速率限制器（与其他天地图组件共享）
+        self._rate_limiter = RateLimiter.get_instance("tianditu", self.rate_limit)
+
+        # 子服务（共享同一速率限制器）
         self.tile_service = TileService(self.api_key)
-        self.wfs_service = WfsService(self.api_key)
+        self.wfs_service = WfsService(self.api_key, rate_limiter=self._rate_limiter)
 
         if not self.api_key:
             logger.warning("[TiandituProvider] TIANDITU_API_KEY 未配置")
@@ -51,14 +77,8 @@ class TiandituProvider:
         }
 
     def _rate_limit_wait(self):
-        """速率限制等待"""
-        if self.rate_limit <= 0:
-            return
-        min_interval = 1.0 / self.rate_limit
-        elapsed = time.time() - self._last_request_time
-        if elapsed < min_interval:
-            time.sleep(min_interval - elapsed)
-        self._last_request_time = time.time()
+        """使用全局速率限制器等待"""
+        self._rate_limiter.wait()
 
     def _request(self, url: str, params: Dict[str, Any]) -> TiandituResult:
         """发送请求（含重试）"""
@@ -317,24 +337,12 @@ class TiandituProvider:
         pois = data.get("pois", [])
         total = data.get("count", len(pois))
 
-        # 构建 POI 列表
-        poi_list = []
+        # 使用辅助函数解析 POI
+        poi_list = _parse_tianditu_pois(pois)
+
+        # 构建 GeoJSON Feature
         features = []
-
-        for poi in pois:
-            # V2 API 坐标格式: "lon,lat"
-            lonlat = poi.get("lonlat", ",").split(",")
-            poi_item = {
-                "name": poi.get("name", ""),
-                "lon": float(lonlat[0]) if len(lonlat) > 0 else 0,
-                "lat": float(lonlat[1]) if len(lonlat) > 1 else 0,
-                "address": poi.get("address", ""),
-                "distance": poi.get("distance", ""),
-                "category": poi.get("typeName", "")
-            }
-            poi_list.append(poi_item)
-
-            # 构建 GeoJSON Feature
+        for poi_item in poi_list:
             features.append({
                 "type": "Feature",
                 "properties": poi_item,
@@ -388,20 +396,12 @@ class TiandituProvider:
         pois = data.get("pois", [])
         total = data.get("count", len(pois))
 
-        poi_list = []
+        # 使用辅助函数解析 POI
+        poi_list = _parse_tianditu_pois(pois)
+
+        # 构建 GeoJSON Feature
         features = []
-
-        for poi in pois:
-            lonlat = poi.get("lonlat", ",").split(",")
-            poi_item = {
-                "name": poi.get("name", ""),
-                "lon": float(lonlat[0]) if len(lonlat) > 0 else 0,
-                "lat": float(lonlat[1]) if len(lonlat) > 1 else 0,
-                "address": poi.get("address", ""),
-                "category": poi.get("typeName", "")
-            }
-            poi_list.append(poi_item)
-
+        for poi_item in poi_list:
             features.append({
                 "type": "Feature",
                 "properties": poi_item,

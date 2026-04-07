@@ -31,15 +31,16 @@ PROJECTIONS: Dict[str, str] = {
     "w": "球面墨卡托投影 (EPSG:3857)"
 }
 
-# WFS 图层类型
+# WFS 图层类型（需要 TDTService: 前缀）
+# GetCapabilities 确认的可用图层：LRRL/LRDL/HYDA/HYDL/RESA/RESP
+# 注意：HYDP（水系点）不存在于服务中，已移除
 WFS_LAYERS: Dict[str, str] = {
-    "LRRL": "铁路",
-    "LRDL": "公路",
-    "HYDA": "水系面",
-    "HYDL": "水系线",
-    "HYDP": "水系点",
-    "RESA": "居民地面",
-    "RESP": "居民地点"
+    "TDTService:LRRL": "铁路",
+    "TDTService:LRDL": "公路",
+    "TDTService:HYDA": "水系面",
+    "TDTService:HYDL": "水系线",
+    "TDTService:RESA": "居民地面",
+    "TDTService:RESP": "居民地点"
 }
 
 # 新增瓦片服务

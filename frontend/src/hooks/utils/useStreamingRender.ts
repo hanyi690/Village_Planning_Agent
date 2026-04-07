@@ -231,7 +231,7 @@ export function useStreamingRender(
       if (timeoutId.current) {
         clearTimeout(timeoutId.current);
       }
-      // Clear buffers on unmount to prevent memory leaks
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- cleanup 函数中清理 ref 是合法模式，防止内存泄漏
       buffers.current.clear();
     };
   }, []);

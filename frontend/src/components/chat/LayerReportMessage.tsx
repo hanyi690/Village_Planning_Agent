@@ -48,20 +48,9 @@ function LayerReportMessage({
 
     const hasDimensionContents = dimensionContents && Object.keys(dimensionContents).length > 0;
 
-    // ✅ 调试日志：追踪数据来源
-    console.log(`[LayerReportMessage] Layer ${message.layer} 数据状态:`, {
-      dimensionReportsCount: dimensionReportKeys.length,
-      hasCompleteDimensionReports,
-      dimensionContentsSize: Object.keys(dimensionContents || {}).length,
-      hasDimensionContents,
-    });
-
     // 1. ✅ 优先使用 dimensionReports（REST API 完整数据）
     // 当 dimensionReports 有完整内容时，说明层级已完成，REST API 返回了完整数据
     if (hasCompleteDimensionReports) {
-      console.log(
-        `[LayerReportMessage] Layer ${message.layer} 使用 REST API 数据 (dimensionReports)`
-      );
       return Object.entries(dimensionReports).map(([key, content]) => ({
         name: getDimensionName(key),
         content: content,
@@ -72,9 +61,6 @@ function LayerReportMessage({
 
     // 2. 使用 dimensionContents（流式累积内容）
     if (hasDimensionContents) {
-      console.log(
-        `[LayerReportMessage] Layer ${message.layer} 使用流式累积数据 (dimensionContents)`
-      );
       const result: ParsedDimension[] = [];
 
       // 如果有 dimensionReports 键但内容为空，使用键顺序
@@ -115,7 +101,6 @@ function LayerReportMessage({
 
     // 3. 回退到解析 fullReportContent
     if (message.fullReportContent) {
-      console.log(`[LayerReportMessage] Layer ${message.layer} 解析 fullReportContent`);
       return parseLayerReport(message.fullReportContent);
     }
 
@@ -134,6 +119,7 @@ function LayerReportMessage({
         layerNumber={message.layer}
         content={message.fullReportContent || ''}
         dimensions={dimensions}
+        dimensionGisData={message.dimensionGisData}
         mode="chat"
         defaultExpanded={true}
         maxHeight="none"

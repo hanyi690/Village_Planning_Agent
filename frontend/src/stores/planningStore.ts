@@ -21,6 +21,7 @@ import type {
   LayerCompletedMessage,
   DimensionReportMessage,
 } from '@/types';
+import type { GISData } from '@/types/message/message-types';
 import type { VillageInputData } from '@/components/VillageInputForm';
 import type { VillageInfo, VillageSession, SessionStatusResponse } from '@/lib/api';
 import { getLayerPhase, PlanningStatus, LayerPhase, AgentPhase } from '@/lib/constants';
@@ -93,6 +94,7 @@ export interface PlanningState {
 
   // SSE Reconnect
   sseResumeTrigger: number;
+  lastProcessedSeq: number;
 
   // Messages
   messages: Message[];
@@ -218,6 +220,7 @@ function createInitialState(conversationId: string): PlanningState {
     isPaused: false,
     pendingReviewLayer: null,
     sseResumeTrigger: 0,
+    lastProcessedSeq: 0,
 
     // Messages
     messages: [],
@@ -329,6 +332,17 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
   const eventType = event.type;
   const data = (event.data as Record<string, unknown>) || {};
 
+  // Sequence number check for deduplication
+  // Skip events that have already been processed or are out of order
+  const seq = (data.seq as number) || 0;
+  if (seq > 0) {
+    if (seq <= state.lastProcessedSeq) {
+      // Skip duplicate or old event
+      return;
+    }
+    state.lastProcessedSeq = seq;
+  }
+
   switch (eventType) {
     case 'connected': {
       state.status = 'planning';
@@ -373,6 +387,12 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const layer = dimData.layer || 1;
       const dimensionKey = dimData.dimension_key || '';
       const key = buildDimensionProgressKey(layer, dimensionKey);
+
+      // 兜底：如果 currentLayer 未设置，从事件中获取
+      if (state.currentLayer === null) {
+        state.currentLayer = layer;
+        state.currentPhase = getLayerPhase(layer);
+      }
 
       // Track executing dimension (no longer create standalone message)
       state.executingDimensions.push(key);
@@ -463,13 +483,9 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         if (!layerMsg.dimensionReports) {
           layerMsg.dimensionReports = {};
         }
+        // Only update the current dimension content (lightweight update)
+        // Skip expensive fullReportContent and summary calculation - defer to dimension_complete
         layerMsg.dimensionReports[dimensionKey] = dimData.accumulated;
-
-        // Update fullReportContent and summary using utility functions
-        layerMsg.fullReportContent = formatDimensionReportsAsContent(layerMsg.dimensionReports);
-        const summary = calculateReportSummary(layerMsg.dimensionReports);
-        layerMsg.summary.word_count = summary.word_count;
-        layerMsg.summary.dimension_count = summary.dimension_count;
       }
 
       // 3. Update dimensionProgress (auto-initialize if missing)
@@ -501,6 +517,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         full_content?: string;
         layer?: number;
         is_revision?: boolean;
+        gis_data?: GISData;
       };
       const layer = dimData.layer || 1;
       const dimensionKey = dimData.dimension_key || '';
@@ -561,6 +578,14 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         const summary = calculateReportSummary(layerMsg.dimensionReports);
         layerMsg.summary.word_count = summary.word_count;
         layerMsg.summary.dimension_count = summary.dimension_count;
+
+        // Store GIS data to layer_completed message
+        if (dimData.gis_data) {
+          if (!layerMsg.dimensionGisData) {
+            layerMsg.dimensionGisData = {};
+          }
+          layerMsg.dimensionGisData[dimensionKey] = dimData.gis_data;
+        }
       }
 
       // 直接使用事件中的 layer 更新 currentLayer（避免 phase 映射失败）
@@ -587,16 +612,19 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       state.currentPhase = getLayerPhase(layerNum);
 
       // Reset dimensionProgress and executingDimensions for new layer
+      // Note: This only resets progress tracking, not the actual message content
       state.dimensionProgress = {};
       state.executingDimensions = [];
 
       // Create layer_report message framework for real-time streaming
+      // Key: Do NOT overwrite existing message - protect content from history restore or SSE reconnect
       const layerReportId = buildLayerReportId(layerNum);
       const existingMessage = state.messages.find(
         (m) => m.id === layerReportId && m.type === 'layer_completed'
       );
 
       if (!existingMessage) {
+        // Only create new message framework if it doesn't exist
         const baseMsg = createBaseMessage('assistant');
         const newMessage: LayerCompletedMessage = {
           ...baseMsg,
@@ -615,6 +643,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         };
         state.messages.push(newMessage);
       }
+      // If message exists (history restore or SSE reconnect), preserve its content unchanged
       break;
     }
 

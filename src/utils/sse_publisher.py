@@ -99,7 +99,7 @@ class SSEPublisher:
         """
         Send layer_started event.
 
-        Clears old dimension_complete cache before sending to prevent
+        Clears old layer and dimension caches before sending to prevent
         stale events from previous layer being sent on SSE reconnect.
 
         Args:
@@ -108,8 +108,18 @@ class SSEPublisher:
             layer_name: Layer display name
             dimension_count: Number of dimensions in this layer
         """
-        # Clear old dimension_complete cache to prevent stale events
         sse_manager = _get_sse_manager()
+
+        # Clear old layer_started/layer_completed caches (keep current layer)
+        cleared_layer_started = sse_manager.clear_layer_started_cache(session_id, exclude_layer=layer)
+        if cleared_layer_started > 0:
+            logger.info(f"[SSEPublisher] Cleared {cleared_layer_started} layer_started caches before Layer {layer}")
+
+        cleared_layer_completed = sse_manager.clear_layer_completed_cache(session_id, exclude_layer=layer)
+        if cleared_layer_completed > 0:
+            logger.info(f"[SSEPublisher] Cleared {cleared_layer_completed} layer_completed caches before Layer {layer}")
+
+        # Clear old dimension_complete cache to prevent stale events
         cleared_count = sse_manager.clear_dimension_cache(session_id)
         if cleared_count > 0:
             logger.info(f"[SSEPublisher] Cleared {cleared_count} dimension caches before Layer {layer}")
@@ -172,17 +182,26 @@ class SSEPublisher:
     @staticmethod
     def send_dimension_complete(session_id: str, layer: int, dimension_key: str,
                                  dimension_name: str, full_content: str,
-                                 is_revision: bool = False) -> None:
+                                 is_revision: bool = False,
+                                 gis_data: Optional[Dict[str, Any]] = None) -> None:
         """发送维度完成事件"""
+        event_data = {
+            "layer": layer,
+            "dimension_key": dimension_key,
+            "dimension_name": dimension_name,
+            "full_content": full_content,
+            "is_revision": is_revision,
+        }
+        if gis_data:
+            event_data["gis_data"] = gis_data
+
         SSEPublisher.send_event(
             session_id=session_id,
             event_type=SSEEventType.DIMENSION_COMPLETE,
-            layer=layer,
-            dimension_key=dimension_key,
-            dimension_name=dimension_name,
-            full_content=full_content,
-            is_revision=is_revision
+            **event_data
         )
+        if gis_data:
+            logger.info(f"[SSEPublisher] sent dimension_complete with gis_data for {dimension_key}")
 
     @staticmethod
     def send_tool_call(session_id: str, tool_name: str, tool_display_name: str,

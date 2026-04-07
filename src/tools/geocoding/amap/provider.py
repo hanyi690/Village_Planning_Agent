@@ -1,4 +1,5 @@
 """高德地图核心 API 封装"""
+import math
 import time
 import requests
 from typing import Dict, Any, Tuple, Optional, List
@@ -18,6 +19,7 @@ from .constants import (
     DEFAULT_POI_OFFSET,
     DRIVING_STRATEGY,
 )
+from ..rate_limiter import RateLimiter
 from ....core.config import (
     AMAP_API_KEY,
     AMAP_RATE_LIMIT,
@@ -29,6 +31,106 @@ from ....utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+# ==========================================
+# GCJ-02 → WGS84 坐标转换
+# ==========================================
+
+# 定义一些常量
+_X_PI = 3.14159265358979324 * 3000.0 / 180.0
+_PI = 3.1415926535897932384626
+_A = 6378245.0  # 长半轴
+_EE = 0.00669342162296594323  # 偏心率平方
+
+
+def _out_of_china(lon: float, lat: float) -> bool:
+    """判断是否在国内，不在国内则不做偏移"""
+    return not (73.66 < lon < 135.05 and 3.86 < lat < 53.55)
+
+
+def _transform_lat(lon: float, lat: float) -> float:
+    """纬度转换"""
+    ret = -100.0 + 2.0 * lon + 3.0 * lat + 0.2 * lat * lat + \
+          0.1 * lon * lat + 0.2 * math.sqrt(abs(lon))
+    ret += (20.0 * math.sin(6.0 * lon * _PI) + 20.0 *
+            math.sin(2.0 * lon * _PI)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(lat * _PI) + 40.0 *
+            math.sin(lat / 3.0 * _PI)) * 2.0 / 3.0
+    ret += (160.0 * math.sin(lat / 12.0 * _PI) + 320 *
+            math.sin(lat * _PI / 30.0)) * 2.0 / 3.0
+    return ret
+
+
+def _transform_lon(lon: float, lat: float) -> float:
+    """经度转换"""
+    ret = 300.0 + lon + 2.0 * lat + 0.1 * lon * lon + \
+          0.1 * lon * lat + 0.1 * math.sqrt(abs(lon))
+    ret += (20.0 * math.sin(6.0 * lon * _PI) + 20.0 *
+            math.sin(2.0 * lon * _PI)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(lon * _PI) + 40.0 *
+            math.sin(lon / 3.0 * _PI)) * 2.0 / 3.0
+    ret += (150.0 * math.sin(lon / 12.0 * _PI) + 300.0 *
+            math.sin(lon / 30.0 * _PI)) * 2.0 / 3.0
+    return ret
+
+
+def gcj02_to_wgs84(lon: float, lat: float) -> Tuple[float, float]:
+    """GCJ-02 转 WGS-84
+
+    高德地图使用的 GCJ-02 坐标系转 WGS-84 坐标系。
+
+    Args:
+        lon: GCJ-02 经度
+        lat: GCJ-02 纬度
+
+    Returns:
+        (wgs_lon, wgs_lat): WGS-84 坐标
+    """
+    if _out_of_china(lon, lat):
+        return lon, lat
+
+    dlat = _transform_lat(lon - 105.0, lat - 35.0)
+    dlon = _transform_lon(lon - 105.0, lat - 35.0)
+    radlat = lat / 180.0 * _PI
+    magic = math.sin(radlat)
+    magic = 1 - _EE * magic * magic
+    sqrtmagic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((_A * (1 - _EE)) / (magic * sqrtmagic) * _PI)
+    dlon = (dlon * 180.0) / (_A / sqrtmagic * math.cos(radlat) * _PI)
+    mglat = lat + dlat
+    mglon = lon + dlon
+    return lon * 2 - mglon, lat * 2 - mglat
+
+
+def _parse_route_steps(steps: List) -> Tuple[List[List[float]], List[Dict]]:
+    """解析高德路径步骤为坐标和指令列表
+
+    Args:
+        steps: 高德 API 返回的步骤列表
+
+    Returns:
+        (route_coords, step_list): 路径坐标列表和步骤信息列表
+    """
+    route_coords = []
+    step_list = []
+
+    for step in steps:
+        polyline = step.get("polyline", "")
+        if polyline:
+            for coord_pair in polyline.split(";"):
+                if "," in coord_pair:
+                    parts = coord_pair.split(",")
+                    route_coords.append([float(parts[0]), float(parts[1])])
+
+        step_list.append({
+            "instruction": step.get("instruction", ""),
+            "road": step.get("road", ""),
+            "distance": int(step.get("distance", 0)),
+            "duration": int(step.get("duration", 0)),
+        })
+
+    return route_coords, step_list
+
+
 class AmapProvider:
     """高德地图 API 封装"""
 
@@ -37,7 +139,9 @@ class AmapProvider:
         self.rate_limit = AMAP_RATE_LIMIT  # QPS
         self.max_retries = AMAP_MAX_RETRIES
         self.timeout = GIS_TIMEOUT
-        self._last_request_time = 0
+
+        # 使用全局速率限制器
+        self._rate_limiter = RateLimiter.get_instance("amap", self.rate_limit)
 
         if not self.api_key:
             logger.warning("[AmapProvider] AMAP_API_KEY 未配置")
@@ -50,14 +154,8 @@ class AmapProvider:
         }
 
     def _rate_limit_wait(self):
-        """速率限制等待"""
-        if self.rate_limit <= 0:
-            return
-        min_interval = 1.0 / self.rate_limit
-        elapsed = time.time() - self._last_request_time
-        if elapsed < min_interval:
-            time.sleep(min_interval - elapsed)
-        self._last_request_time = time.time()
+        """使用全局速率限制器等待"""
+        self._rate_limiter.wait()
 
     def _request(self, url: str, params: Dict[str, Any]) -> AmapResult:
         """发送请求（含重试）"""
@@ -315,22 +413,31 @@ class AmapProvider:
         )
 
     def _parse_pois(self, pois: List[Dict]) -> List[Dict[str, Any]]:
-        """解析 POI 数据为统一格式"""
+        """解析 POI 数据为统一格式
+
+        注意：高德 POI 坐标为 GCJ-02，需要转换为 WGS-84
+        """
         poi_list = []
         for poi in pois:
-            # 高德坐标格式: "lon,lat"
+            # 高德坐标格式: "lon,lat" (GCJ-02)
             location_str = poi.get("location", "")
             lon, lat = 0.0, 0.0
+            gcj_lon, gcj_lat = 0.0, 0.0
             if location_str and "," in location_str:
                 parts = location_str.split(",")
-                lon = float(parts[0])
-                lat = float(parts[1])
+                gcj_lon = float(parts[0])
+                gcj_lat = float(parts[1])
+                # GCJ-02 → WGS-84 坐标转换
+                lon, lat = gcj02_to_wgs84(gcj_lon, gcj_lat)
 
             poi_item = {
                 "id": poi.get("id", ""),
                 "name": poi.get("name", ""),
                 "lon": lon,
                 "lat": lat,
+                # 保留原始 GCJ-02 坐标供参考
+                "lon_gcj02": gcj_lon,
+                "lat_gcj02": gcj_lat,
                 "address": poi.get("address", "") or poi.get("pname", "") + poi.get("cityname", "") + poi.get("adname", ""),
                 "distance": int(poi.get("distance", 0)) if poi.get("distance") else 0,
                 "category": poi.get("type", ""),
@@ -629,25 +736,9 @@ class AmapProvider:
         distance = int(path.get("distance", 0))  # 米
         duration = int(path.get("duration", 0))  # 秒
 
-        # 解析路径坐标
+        # 使用辅助函数解析路径步骤
         steps = path.get("steps", [])
-        route_coords = []
-        step_list = []
-
-        for step in steps:
-            polyline = step.get("polyline", "")
-            if polyline:
-                for coord_pair in polyline.split(";"):
-                    if "," in coord_pair:
-                        parts = coord_pair.split(",")
-                        route_coords.append([float(parts[0]), float(parts[1])])
-
-            step_list.append({
-                "instruction": step.get("instruction", ""),
-                "road": step.get("road", ""),
-                "distance": int(step.get("distance", 0)),
-                "duration": int(step.get("duration", 0)),
-            })
+        route_coords, step_list = _parse_route_steps(steps)
 
         # 构建 GeoJSON
         geojson = {
@@ -722,23 +813,9 @@ class AmapProvider:
         distance = int(path.get("distance", 0))
         duration = int(path.get("duration", 0))
 
+        # 使用辅助函数解析路径步骤
         steps = path.get("steps", [])
-        route_coords = []
-        step_list = []
-
-        for step in steps:
-            polyline = step.get("polyline", "")
-            if polyline:
-                for coord_pair in polyline.split(";"):
-                    if "," in coord_pair:
-                        parts = coord_pair.split(",")
-                        route_coords.append([float(parts[0]), float(parts[1])])
-
-            step_list.append({
-                "instruction": step.get("instruction", ""),
-                "distance": int(step.get("distance", 0)),
-                "duration": int(step.get("duration", 0)),
-            })
+        route_coords, step_list = _parse_route_steps(steps)
 
         geojson = {
             "type": "FeatureCollection",
@@ -772,4 +849,4 @@ class AmapProvider:
         )
 
 
-__all__ = ["AmapProvider"]
+__all__ = ["AmapProvider", "gcj02_to_wgs84"]

@@ -10,11 +10,19 @@ import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ParsedDimension, parseLayerReport } from '@/lib/layerReportParser';
 import DimensionSection from './DimensionSection';
+import type { GISData } from '@/types/message/message-types';
+import { DIMENSION_NAMES } from '@/config/dimensions';
+
+// Build reverse mapping: name -> key
+const NAME_TO_KEY: Record<string, string> = Object.fromEntries(
+  Object.entries(DIMENSION_NAMES).map(([key, name]) => [name, key])
+);
 
 interface LayerReportCardProps {
   layerNumber: number;
   content: string;
   dimensions?: ParsedDimension[];
+  dimensionGisData?: Record<string, GISData>;
   mode?: 'chat' | 'sidebar';
   defaultExpanded?: boolean;
   maxHeight?: string;
@@ -30,6 +38,7 @@ export default function LayerReportCard({
   layerNumber,
   content,
   dimensions: propDimensions,
+  dimensionGisData,
   mode = 'sidebar',
   defaultExpanded,
   maxHeight,
@@ -257,19 +266,25 @@ export default function LayerReportCard({
 
       {/* Dimension sections */}
       <div className="space-y-3">
-        {dimensions.map((dimension, index) => (
-          <DimensionSection
-            key={index}
-            name={dimension.name}
-            content={dimension.content}
-            icon={dimension.icon}
-            subsections={dimension.subsections}
-            expanded={expandedMap[dimension.name] ?? actualDefaultExpanded}
-            onToggle={(expanded) => handleDimensionToggle(dimension.name, expanded)}
-            onCopy={() => handleCopyDimension(dimension.name, dimension.content)}
-            onExport={() => handleExportDimension(dimension.name, dimension.content)}
-          />
-        ))}
+        {dimensions.map((dimension, index) => {
+          const dimensionKey = NAME_TO_KEY[dimension.name];
+          const gisData = dimensionKey ? dimensionGisData?.[dimensionKey] : undefined;
+
+          return (
+            <DimensionSection
+              key={index}
+              name={dimension.name}
+              content={dimension.content}
+              icon={dimension.icon}
+              subsections={dimension.subsections}
+              gisData={gisData}
+              expanded={expandedMap[dimension.name] ?? actualDefaultExpanded}
+              onToggle={(expanded) => handleDimensionToggle(dimension.name, expanded)}
+              onCopy={() => handleCopyDimension(dimension.name, dimension.content)}
+              onExport={() => handleExportDimension(dimension.name, dimension.content)}
+            />
+          );
+        })}
       </div>
 
       {/* Chat mode: Expand button */}

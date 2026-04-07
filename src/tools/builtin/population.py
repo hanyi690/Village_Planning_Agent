@@ -44,6 +44,7 @@ def calculate_population(context: Dict[str, Any]) -> str:
     target_year = context.get("target_year", 2035)
     natural_growth_rate = context.get("natural_growth_rate", 4.0)
     mechanical_growth = context.get("mechanical_growth", 0)
+    n = target_year - baseline_year
 
     try:
         from ..core.population_core import run_population_analysis

@@ -339,9 +339,72 @@ def calculate_population(context: Dict[str, Any]) -> str:
 | `knowledge_search` | 知识检索 | RAG 知识库检索 | 2.0s |
 | `web_search` | 网络搜索 | 互联网实时搜索 | 4.0s |
 | `population_model_v1` | 人口预测 | 人口趋势预测 | 3.0s |
-| `gis_analysis` | GIS 空间分析 | 土地利用/土壤/水文分析 | 8.0s |
+| `gis_data_fetch` | GIS 数据获取 | 天地图 WFS 数据获取（水系/道路/居民地） | 5.0s |
+| `poi_search` | POI 搜索 | 高德优先 POI 搜索，自动坐标转换 | 3.0s |
 | `accessibility_analysis` | 可达性分析 | 设施可达性计算 | 6.0s |
-| `network_analysis` | 网络分析 | 交通网络特性分析 | 5.0s |
+| `isochrone_analysis` | 等时圈分析 | 出行时间圈分析 | 5.0s |
+| `spatial_overlay` | 空间叠加 | 图层叠加分析 | 4.0s |
+| `facility_validator` | 设施验证 | 设施选址适宜性评估 | 3.0s |
+| `ecological_sensitivity` | 生态敏感性 | 生态敏感区评估 | 4.0s |
+
+### GIS 工具详解
+
+#### gis_data_fetch - WFS 数据获取
+
+```python
+# 获取天地图 WFS 数据
+result = ToolRegistry.execute_tool("gis_data_fetch", {
+    "location": "平远县泗水镇金田村",
+    "buffer_km": 5.0,
+    "max_features": 500
+})
+
+# 返回结构
+{
+    "success": True,
+    "location": "平远县泗水镇金田村",
+    "center": [116.04, 24.82],
+    "water": True,      # 水系数据是否成功
+    "road": True,       # 道路数据是否成功
+    "residential": False,
+    "data": {
+        "water": {"success": True, "geojson": {...}},
+        "road": {"success": True, "geojson": {...}},
+        "residential": {"success": False, "geojson": null}
+    }
+}
+```
+
+#### poi_search - POI 搜索
+
+```python
+# 区域 POI 搜索（高德优先）
+result = ToolRegistry.execute_tool("poi_search", {
+    "keyword": "学校",
+    "region": "平远县",
+    "page_size": 20
+})
+
+# 返回结构
+{
+    "success": True,
+    "pois": [
+        {
+            "id": "B0FFAB1234",
+            "name": "某某学校",
+            "lon": 115.892285,       # WGS-84（已转换）
+            "lat": 24.559714,
+            "lon_gcj02": 115.893000, # 原始 GCJ-02
+            "lat_gcj02": 24.560000,
+            "address": "广东省梅州市平远县",
+            "category": "科教文化服务;学校"
+        }
+    ],
+    "total_count": 5,
+    "source": "amap",  # 数据来源
+    "geojson": {...}   # GeoJSON 格式
+}
+```
 
 ---
 
@@ -736,6 +799,10 @@ sequenceDiagram
 | 参数 Schema | `src/tools/registry.py` | `TOOL_PARAMETER_SCHEMAS` |
 | 内置工具 | `src/tools/builtin/__init__.py` | `knowledge_search_tool`, `web_search_tool` |
 | 人口预测 | `src/tools/builtin/population.py` | `calculate_population` |
+| GIS 工具包装 | `src/tools/core/gis_tool_wrappers.py` | `wrap_gis_data_fetch`, `wrap_poi_search` |
+| WFS 数据获取 | `src/tools/core/gis_data_fetcher.py` | `GISDataFetcher` |
+| POI 搜索 | `src/tools/geocoding/poi_provider.py` | `POIProvider` |
+| 坐标转换 | `src/tools/geocoding/amap/provider.py` | `gcj02_to_wgs84` |
 | SSE 发布 | `src/utils/sse_publisher.py` | `send_tool_*` 系列方法 |
 | 工具节点 | `src/orchestration/main_graph.py` | `execute_tools_node` |
 
@@ -746,3 +813,4 @@ sequenceDiagram
 - [Agent核心实现](./agent-core-implementation.md) - Router Agent 架构
 - [维度与层级数据流](./layer-dimension-dataflow.md) - Tool-Dimension 绑定
 - [后端API与数据流](./backend-api-dataflow.md) - SSE 事件类型
+- [GIS系统架构](./gis-system-architecture.md) - GIS 数据获取与可视化
