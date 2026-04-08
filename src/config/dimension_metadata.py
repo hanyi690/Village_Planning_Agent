@@ -98,7 +98,11 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "state_filter": None,
         "result_key": "analysis_result",
         "rag_enabled": True,
-        "tool": "gis_coverage_calculator",  # GIS 覆盖率计算工具，提供土地利用结构分析
+        "tool": "gis_coverage_calculator",
+        "tool_params": {
+            "location": {"source": "config", "path": "village_name"},
+            "buffer_km": {"source": "literal", "value": 5.0}
+        },
         "description": "分析村庄各类用地的分布、规模和利用效率",
         "prompt_key": "land_use_analysis"
     },

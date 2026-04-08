@@ -18,7 +18,7 @@ from ...core.llm_factory import create_llm
 from ...config.dimension_metadata import get_dimension_config, get_dimension_layer
 from ...utils.logger import get_logger
 from ..state import PlanningPhase, get_layer_dimensions, get_wave_dimensions, _phase_to_layer
-from ...tools.types import normalize_tool_result, NormalizedToolResult, ResultDataType, safe_get_nested
+from ...tools.types import normalize_tool_result, NormalizedToolResult, ResultDataType
 
 logger = get_logger(__name__)
 
@@ -913,7 +913,7 @@ def _build_fallback_prompt(dimension_name: str, village_data: str,
 
 def _get_nested_value(data: Dict[str, Any], path: str) -> Any:
     """
-    嵌套路径取值（包装 safe_get_nested）
+    嵌套路径取值 - 支持 NormalizedToolResult 对象和 dict
 
     Args:
         data: 数据字典
@@ -924,7 +924,33 @@ def _get_nested_value(data: Dict[str, Any], path: str) -> Any:
     """
     if not data or not path:
         return None
-    return safe_get_nested(data, path.split("."))
+
+    keys = path.split(".")
+    current = data
+
+    for key in keys:
+        # 处理 NormalizedToolResult 对象
+        if isinstance(current, NormalizedToolResult):
+            # 支持的属性: center, location, success, raw_data, geojson_data, etc.
+            if hasattr(current, key):
+                current = getattr(current, key)
+                continue
+            # 尝试从 raw_data 提取
+            if hasattr(current, "raw_data") and isinstance(current.raw_data, dict):
+                current = current.raw_data.get(key)
+                if current is None:
+                    return None
+                continue
+            return None
+
+        # 处理 dict 类型
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+        if current is None:
+            return None
+
+    return current
 
 
 def _resolve_tool_params(
@@ -969,6 +995,24 @@ def _resolve_tool_params(
             else:
                 logger.warning(f"[参数解析] gis_cache 路径 {path} 未找到值")
 
+                # Center 参数容错：当 center 为 None 时，尝试从 village_name 计算
+                # 使用缓存避免多次冗余 API 调用
+                if path.endswith("center"):
+                    # 先检查缓存
+                    fallback_center = gis_results.get("_center_fallback")
+                    if fallback_center is None and not gis_results.get("_center_fallback_failed"):
+                        # 使用 GISDataFetcher 单例（避免重复创建 TiandituProvider）
+                        fallback_center = _compute_center_fallback(config.get("village_name", ""))
+                        if fallback_center:
+                            gis_results["_center_fallback"] = fallback_center  # 缓存成功结果
+                            logger.info(f"[参数解析] center 容错计算成功并缓存: {fallback_center}")
+                        else:
+                            gis_results["_center_fallback_failed"] = True  # 标记失败，避免重复尝试
+                            logger.warning(f"[参数解析] center 容错计算失败，已标记跳过后续尝试")
+
+                    if fallback_center:
+                        resolved[param_name] = fallback_center
+
         elif source == ParamSource.CONFIG.value:
             # 从 state.config 取值
             path = param_config.get("path", "")
@@ -987,6 +1031,38 @@ def _resolve_tool_params(
                 logger.warning(f"[参数解析] context.{key} 未找到值")
 
     return resolved
+
+
+def _compute_center_fallback(location: str) -> Optional[tuple]:
+    """
+    Center 参数容错计算 - 使用 GISDataFetcher 单例
+
+    Args:
+        location: 地名（如 village_name）
+
+    Returns:
+        中心点坐标元组 (lon, lat) 或 None
+    """
+    if not location:
+        return None
+
+    try:
+        from ...tools.core.gis_data_fetcher import get_fetcher
+        fetcher = get_fetcher()  # 使用单例，避免重复创建 TiandituProvider
+
+        # 复用 GISDataFetcher.get_village_center() 的分层定位策略
+        center, metadata = fetcher.get_village_center(location, buffer_km=2.0)
+
+        if center:
+            logger.info(f"[容错计算] 定位成功: {location} -> {center}, 策略: {metadata.get('strategy_used')}")
+            return center
+
+        logger.warning(f"[容错计算] 无法定位 {location}")
+        return None
+
+    except Exception as e:
+        logger.error(f"[容错计算] 异常: {e}")
+        return None
 
 
 def _execute_gis_tool(

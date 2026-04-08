@@ -119,7 +119,11 @@ def _parse_route_steps(steps: List) -> Tuple[List[List[float]], List[Dict]]:
             for coord_pair in polyline.split(";"):
                 if "," in coord_pair:
                     parts = coord_pair.split(",")
-                    route_coords.append([float(parts[0]), float(parts[1])])
+                    gcj_lon = float(parts[0])
+                    gcj_lat = float(parts[1])
+                    # GCJ-02 → WGS-84 坐标转换
+                    lon, lat = gcj02_to_wgs84(gcj_lon, gcj_lat)
+                    route_coords.append([lon, lat])
 
         step_list.append({
             "instruction": step.get("instruction", ""),
@@ -483,16 +487,21 @@ class AmapProvider:
         geocode = geocodes[0]
         location_str = geocode.get("location", "")
         lon, lat = 0.0, 0.0
+        gcj_lon, gcj_lat = 0.0, 0.0
         if location_str and "," in location_str:
             parts = location_str.split(",")
-            lon = float(parts[0])
-            lat = float(parts[1])
+            gcj_lon = float(parts[0])
+            gcj_lat = float(parts[1])
+            # GCJ-02 → WGS-84 坐标转换
+            lon, lat = gcj02_to_wgs84(gcj_lon, gcj_lat)
 
         return AmapResult(
             success=True,
             data={
                 "lon": lon,
                 "lat": lat,
+                "lon_gcj02": gcj_lon,
+                "lat_gcj02": gcj_lat,
                 "formatted_address": geocode.get("formatted_address", address),
                 "level": geocode.get("level", ""),
                 "adcode": geocode.get("adcode", ""),
@@ -627,11 +636,14 @@ class AmapProvider:
         )
 
     def _parse_center(self, center_str: str) -> Tuple[float, float]:
-        """解析中心坐标字符串"""
+        """解析中心坐标字符串（GCJ-02 → WGS-84）"""
         if not center_str or "," not in center_str:
             return (0.0, 0.0)
         parts = center_str.split(",")
-        return (float(parts[0]), float(parts[1]))
+        gcj_lon = float(parts[0])
+        gcj_lat = float(parts[1])
+        # GCJ-02 → WGS-84 坐标转换
+        return gcj02_to_wgs84(gcj_lon, gcj_lat)
 
     def _parse_polyline_to_geojson(
         self,
@@ -655,7 +667,11 @@ class AmapProvider:
             for coord_pair in region.split(";"):
                 if "," in coord_pair:
                     parts = coord_pair.split(",")
-                    ring.append([float(parts[0]), float(parts[1])])
+                    gcj_lon = float(parts[0])
+                    gcj_lat = float(parts[1])
+                    # GCJ-02 → WGS-84 坐标转换（高德坐标系转国际标准坐标系）
+                    lon, lat = gcj02_to_wgs84(gcj_lon, gcj_lat)
+                    ring.append([lon, lat])
             if ring:
                 # 确保 ring 是闭合的
                 if ring[0] != ring[-1]:
@@ -845,6 +861,193 @@ class AmapProvider:
                 "duration": duration,
                 "steps_count": len(step_list),
                 "source": "amap",
+            },
+        )
+
+    # ==================== 道路数据获取 ====================
+
+    def search_roads_by_poi(
+        self,
+        keywords: str,
+        center: Tuple[float, float],
+        radius: int = 5000,
+        city: Optional[str] = None,
+    ) -> AmapResult:
+        """通过POI搜索获取道路数据
+
+        高德地图没有专门的"道路搜索API"，但可以通过POI搜索获取道路类别的数据。
+        返回的道路数据包含名称、位置等信息，可用于补充村级道路数据。
+
+        Args:
+            keywords: 搜索关键词，如"村道"、"乡道"、"道路"
+            center: 搜索中心点坐标 (lon, lat) - WGS-84坐标
+            radius: 搜索半径（米），默认5000
+            city: 城市名称或adcode（可选）
+
+        Returns:
+            AmapResult with road data (包含道路POI列表和GeoJSON)
+        """
+        # 注意：高德API输入需要GCJ-02坐标，我们需要将WGS-84转回GCJ-02
+        # 但由于我们通常使用高德获取的WGS-84坐标作为输入，这里需要反向转换
+        # 实际上，大多数情况下用户传入的坐标已经是从高德获取的（已转换），所以这里保持WGS-84输入
+        params = {
+            "keywords": keywords,
+            "location": f"{center[0]},{center[1]}",
+            "radius": str(radius),
+            "extensions": "all",
+        }
+        if city:
+            params["city"] = city
+
+        result = self._request(POI_AROUND_URL, params)
+
+        if not result.success:
+            return result
+
+        data = result.data
+        pois = data.get("pois", [])
+        count = int(data.get("count", 0))
+
+        # 解析POI数据
+        poi_list = self._parse_pois(pois)
+
+        # 构建GeoJSON FeatureCollection
+        features = []
+        for poi in poi_list:
+            feature = {
+                "type": "Feature",
+                "properties": {
+                    "id": poi["id"],
+                    "name": poi["name"],
+                    "category": poi["category"],
+                    "typecode": poi["typecode"],
+                    "address": poi["address"],
+                    "distance": poi["distance"],
+                },
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [poi["lon"], poi["lat"]],
+                },
+            }
+            features.append(feature)
+
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features,
+        }
+
+        return AmapResult(
+            success=True,
+            data={
+                "roads": poi_list,
+                "geojson": geojson,
+                "total": count,
+            },
+            metadata={
+                "keywords": keywords,
+                "center": center,
+                "radius": radius,
+                "city": city,
+                "total_count": count,
+                "source": "amap_poi_search",
+                "note": "通过POI搜索获取道路数据，坐标已转换为WGS-84",
+            },
+        )
+
+    def get_road_network_by_routing(
+        self,
+        center: Tuple[float, float],
+        radius_km: float = 5.0,
+        grid_points: int = 4,
+    ) -> AmapResult:
+        """通过路径规划获取区域道路网络数据
+
+        在指定区域内的多个点之间进行路径规划，获取道路几何数据。
+        这种方法可以获取道路的完整几何信息（polyline）。
+
+        Args:
+            center: 中心点坐标 (lon, lat) - WGS-84
+            radius_km: 覆盖半径（公里），默认5km
+            grid_points: 网格点数量，默认4（2x2网格）
+
+        Returns:
+            AmapResult with road network GeoJSON
+        """
+        # 计算网格点坐标
+        radius_deg = radius_km / 111.0
+        grid_coords = []
+
+        # 在中心点周围生成网格点
+        offsets = [-radius_deg, 0, radius_deg]
+        for lon_offset in offsets:
+            for lat_offset in offsets:
+                grid_coords.append((
+                    center[0] + lon_offset,
+                    center[1] + lat_offset
+                ))
+
+        # 在网格点之间进行路径规划，获取道路几何
+        all_route_coords = []
+        route_features = []
+
+        # 只规划部分路线以避免API调用过多
+        route_pairs = [
+            (grid_coords[0], grid_coords[2]),  # 左下到右下
+            (grid_coords[0], grid_coords[6]),  # 左下到右上
+            (grid_coords[2], grid_coords[6]),  # 右下到右上
+            (grid_coords[0], grid_coords[8]),  # 左下到右中
+        ]
+
+        for i, (origin, dest) in enumerate(route_pairs[:3]):  # 限制最多3条路线
+            route_result = self.plan_route_driving(origin, dest)
+
+            if route_result.success and route_result.data.get("geojson"):
+                geojson = route_result.data["geojson"]
+                features = geojson.get("features", [])
+
+                for feat in features:
+                    if feat["geometry"]["type"] == "LineString":
+                        coords = feat["geometry"]["coordinates"]
+                        all_route_coords.extend(coords)
+
+                        route_feature = {
+                            "type": "Feature",
+                            "properties": {
+                                "route_id": i,
+                                "distance": feat["properties"].get("distance", 0),
+                                "duration": feat["properties"].get("duration", 0),
+                                "source": "amap_routing",
+                            },
+                            "geometry": feat["geometry"],
+                        }
+                        route_features.append(route_feature)
+
+        # 合并所有道路坐标，创建道路网络GeoJSON
+        network_geojson = {
+            "type": "FeatureCollection",
+            "features": route_features,
+        }
+
+        # 计算覆盖统计
+        total_distance = sum(
+            f["properties"]["distance"] for f in route_features
+        )
+        unique_coords = len(set(tuple(c) for c in all_route_coords))
+
+        return AmapResult(
+            success=True,
+            data={
+                "geojson": network_geojson,
+                "route_count": len(route_features),
+                "total_distance_m": total_distance,
+                "unique_coords": unique_coords,
+            },
+            metadata={
+                "center": center,
+                "radius_km": radius_km,
+                "grid_points": len(grid_coords),
+                "source": "amap_routing_network",
+                "note": "通过路径规划获取的道路网络几何数据",
             },
         )
 

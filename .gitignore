@@ -88,3 +88,6 @@ knowledge_base/
 
 # Reference code repositories (for learning purposes only)
 docs/references/
+
+# Tile cache (map tiles)
+tile_cache/

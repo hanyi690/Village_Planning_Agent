@@ -222,7 +222,7 @@ export interface GeoJsonFeatureCollection {
  */
 export interface GISLayerConfig {
   geojson: GeoJsonFeatureCollection;
-  layerType: 'function_zone' | 'facility_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone';
+  layerType: 'boundary' | 'function_zone' | 'facility_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone';
   layerName: string;
   color?: string; // Backend sends color at top level
   style?: {

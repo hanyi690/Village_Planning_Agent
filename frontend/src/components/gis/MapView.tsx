@@ -7,55 +7,78 @@
  * 使用 GeoJSON 标准坐标格式 [longitude, latitude]（经度在前）。
  */
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import Map, { Source, Layer } from 'react-map-gl/maplibre';
 import type { FillLayerSpecification, LineLayerSpecification, CircleLayerSpecification, StyleSpecification } from 'maplibre-gl';
-import type { FeatureCollection, Geometry } from 'geojson';
+import type { MapRef } from 'react-map-gl/maplibre';
+import type { FeatureCollection, Geometry, Position } from 'geojson';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import type { GISLayerConfig, GeoJsonFeatureCollection } from '@/types/message/message-types';
-import { PLANNING_COLORS, DEFAULT_COLORS, TILE_SOURCES, LineColors, FeatureColors } from '@/lib/constants/gis';
+import { PLANNING_COLORS, DEFAULT_COLORS, TILE_SOURCES, BASE_MAP_TYPES, BaseMapType, LineColors, FeatureColors } from '@/lib/constants/gis';
 
-// Tile URLs (static - evaluated at build time)
-// ter_w: 地形晕渲（球面墨卡托投影）- 淡色背景更适合规划展示
-// cta_w: 地形注记（球面墨卡托投影）
-const TIANDITU_BASE_URL = '/api/tiles/tianditu/ter_w/{z}/{y}/{x}';
-const TIANDITU_ANNOTATION_URL = '/api/tiles/tianditu/cta_w/{z}/{y}/{x}';
+// Helper: Extract all coordinates from a geometry recursively
+function extractCoords(geometry: { type: string; coordinates: unknown }): Position[] {
+  const coords: Position[] = [];
+  const coordsData = geometry.coordinates;
+  if (geometry.type === 'Point') {
+    coords.push(coordsData as Position);
+  } else if (geometry.type === 'LineString' || geometry.type === 'MultiPoint') {
+    coords.push(...(coordsData as Position[]));
+  } else if (geometry.type === 'Polygon' || geometry.type === 'MultiLineString') {
+    for (const ring of coordsData as Position[][]) {
+      coords.push(...ring);
+    }
+  } else if (geometry.type === 'MultiPolygon') {
+    for (const polygon of coordsData as Position[][][]) {
+      for (const ring of polygon) {
+        coords.push(...ring);
+      }
+    }
+  }
+  return coords;
+}
+
+// Helper: Calculate bounds from GeoJSON
+function getBoundsFromGeoJSON(geojson: GeoJsonFeatureCollection): [[number, number], [number, number]] | null {
+  if (!geojson.features || geojson.features.length === 0) return null;
+
+  let minLon = Infinity, maxLon = -Infinity;
+  let minLat = Infinity, maxLat = -Infinity;
+
+  for (const feature of geojson.features) {
+    const coords = extractCoords(feature.geometry);
+    for (const coord of coords) {
+      const [lon, lat] = coord;
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+  }
+
+  if (minLon === Infinity) return null;
+  return [[minLon, minLat], [maxLon, maxLat]];
+}
+
+// Tile URLs - vec_w: Vector map (planning法定底图), cva_w: Vector annotation
+const getTiandituUrls = (baseMapType: BaseMapType) => {
+  const config = BASE_MAP_TYPES[baseMapType];
+  return {
+    baseUrl: `/api/tiles/tianditu/${config.tile}_w/{z}/{y}/{x}`,
+    annotationUrl: `/api/tiles/tianditu/${config.annotation}_w/{z}/{y}/{x}`,
+  };
+};
 const GEOQ_TILE_URL = 'https://map.geoq.cn/ArcGIS/rest/services/ChinaOnlineCommunity/MapServer/tile/{z}/{y}/{x}';
 const OSM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-// Tile config type
-type TileConfig = { baseUrl: string; annotationUrl: string; attribution: string };
-
-// Module-level tile config (IIFE - evaluated once at build time)
-const TILE_CONFIG: TileConfig = (() => {
-  const source = (process.env.NEXT_PUBLIC_TILE_SOURCE || TILE_SOURCES.TIANDITU) as keyof typeof configs;
-  const configs: Record<string, TileConfig> = {
-    [TILE_SOURCES.TIANDITU]: {
-      baseUrl: TIANDITU_BASE_URL,
-      annotationUrl: TIANDITU_ANNOTATION_URL,
-      attribution: '天地图'
-    },
-    [TILE_SOURCES.GEOQ]: {
-      baseUrl: GEOQ_TILE_URL,
-      annotationUrl: '',
-      attribution: 'GeoQ'
-    },
-    [TILE_SOURCES.OSM]: {
-      baseUrl: OSM_TILE_URL,
-      annotationUrl: '',
-      attribution: 'OpenStreetMap'
-    },
-  };
-  return configs[source] || configs[TILE_SOURCES.OSM];
-})();
-
 interface MapViewProps {
   layers: GISLayerConfig[];
-  center?: [number, number]; // [longitude, latitude] GeoJSON 标准
+  center?: [number, number]; // [longitude, latitude] GeoJSON standard
   zoom?: number;
   height?: string;
   title?: string;
+  baseMapType?: BaseMapType; // Default: 'vector' (planning法定底图)
 }
 
 // Layer style from backend
@@ -65,7 +88,8 @@ interface LayerStyle {
 
 // Layer rendering priority (numerical order, higher = top layer)
 const LAYER_PRIORITY: Record<string, number> = {
-  'sensitivity_zone': 1,   // Sensitivity zones (bottom layer)
+  'boundary': 0,           // Administrative boundary (bottom layer, reference area)
+  'sensitivity_zone': 1,   // Sensitivity zones
   'function_zone': 2,      // Functional zones
   'isochrone': 3,          // Isochrones
   'development_axis': 4,   // Development axes
@@ -105,6 +129,7 @@ function getFeatureColors(
   let subtype = 'default';
   let colorsMap: Record<string, FeatureColors>;
 
+  // Note: boundary is handled separately in layerStyles (line layer, not fill)
   if (layerType === 'function_zone') {
     colorsMap = PLANNING_COLORS.function_zone;
     subtype = (props.zone_type as string) || '居住用地';
@@ -130,16 +155,40 @@ function getFeatureColors(
 
 export default function MapView({
   layers,
-  center = [120.0, 30.0], // [longitude, latitude] GeoJSON 标准
+  center = [120.0, 30.0],
   zoom = 14,
   height = '400px',
   title,
+  baseMapType = 'vector',
 }: MapViewProps) {
   const [mounted, setMounted] = useState(false);
+  const mapRef = useRef<MapRef>(null);
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Auto-fit bounds when boundary layer is present
+  useEffect(() => {
+    if (!mounted || !mapRef.current) return;
+
+    const boundaryLayer = layers.find(l => l.layerType === 'boundary');
+    if (boundaryLayer) {
+      const bounds = getBoundsFromGeoJSON(boundaryLayer.geojson);
+      if (bounds) {
+        // Add padding around the boundary (5% of range)
+        const [minLon, minLat] = bounds[0];
+        const [maxLon, maxLat] = bounds[1];
+        const paddingLon = (maxLon - minLon) * 0.05;
+        const paddingLat = (maxLat - minLat) * 0.05;
+
+        mapRef.current.fitBounds(
+          [bounds[0], bounds[1]],
+          { padding: 40, duration: 1000 }
+        );
+      }
+    }
+  }, [mounted, layers]);
 
   // 构建 GeoJSON sources - 添加图层渲染优先级排序
   const geojsonSources = useMemo(() => {
@@ -159,7 +208,21 @@ export default function MapView({
       // Get color from top-level or style.color (backend sends color at top level)
       const directColor = layer.color;
       const styleColor = layer.style?.color;
-      if (layer.layerType === 'facility_point') {
+      if (layer.layerType === 'boundary') {
+        // Boundary - line only, no fill
+        const boundaryStyle = (PLANNING_COLORS.boundary as Record<string, LineColors>)['行政边界'] || { stroke: '#333333', width: 2 };
+        const boundaryLayer: LineLayerSpecification = {
+          id: `${sourceId}-boundary`,
+          type: 'line',
+          source: sourceId,
+          paint: {
+            'line-color': boundaryStyle.stroke,
+            'line-width': boundaryStyle.width,
+            'line-opacity': 1,
+          },
+        };
+        return [boundaryLayer];
+      } else if (layer.layerType === 'facility_point') {
         // Point features - circle layer
         const colors = getFeatureColors(layer.geojson, layer.layerType, { color: styleColor }, directColor);
         const circleLayer: CircleLayerSpecification = {
@@ -223,47 +286,56 @@ export default function MapView({
     });
   }, [geojsonSources]);
 
-  // Build base map style (static - TILE_CONFIG is module-level constant)
+  // Build base map style - dynamic based on baseMapType
   const mapStyle: StyleSpecification = useMemo(() => {
-    // Tianditu needs annotation layer overlay for place names
-    if (TILE_CONFIG.annotationUrl) {
+    const tileSource = process.env.NEXT_PUBLIC_TILE_SOURCE || TILE_SOURCES.TIANDITU;
+
+    // Handle non-Tianditu tile sources
+    if (tileSource !== TILE_SOURCES.TIANDITU) {
+      const otherConfigs: Record<string, { baseUrl: string; attribution: string }> = {
+        [TILE_SOURCES.GEOQ]: { baseUrl: GEOQ_TILE_URL, attribution: 'GeoQ' },
+        [TILE_SOURCES.OSM]: { baseUrl: OSM_TILE_URL, attribution: 'OpenStreetMap' },
+      };
+      const config = otherConfigs[tileSource] || otherConfigs[TILE_SOURCES.OSM];
       return {
         version: 8,
         sources: {
           'base-tiles': {
             type: 'raster',
-            tiles: [TILE_CONFIG.baseUrl],
+            tiles: [config.baseUrl],
             tileSize: 256,
-            attribution: TILE_CONFIG.attribution,
-          },
-          'annotation-tiles': {
-            type: 'raster',
-            tiles: [TILE_CONFIG.annotationUrl],
-            tileSize: 256,
+            attribution: config.attribution,
           },
         },
         layers: [
           { id: 'base-tiles-layer', type: 'raster', source: 'base-tiles' },
-          { id: 'annotation-tiles-layer', type: 'raster', source: 'annotation-tiles' },
         ],
       } as StyleSpecification;
     }
-    // Other tile sources without annotation overlay
+
+    // Tianditu with annotation layer
+    const { baseUrl, annotationUrl } = getTiandituUrls(baseMapType);
     return {
       version: 8,
       sources: {
         'base-tiles': {
           type: 'raster',
-          tiles: [TILE_CONFIG.baseUrl],
+          tiles: [baseUrl],
           tileSize: 256,
-          attribution: TILE_CONFIG.attribution,
+          attribution: '天地图',
+        },
+        'annotation-tiles': {
+          type: 'raster',
+          tiles: [annotationUrl],
+          tileSize: 256,
         },
       },
       layers: [
         { id: 'base-tiles-layer', type: 'raster', source: 'base-tiles' },
+        { id: 'annotation-tiles-layer', type: 'raster', source: 'annotation-tiles' },
       ],
     } as StyleSpecification;
-  }, []);
+  }, [baseMapType]);
 
   if (!mounted) {
     return (
@@ -285,6 +357,7 @@ export default function MapView({
       )}
       <div style={{ height }}>
         <Map
+          ref={mapRef}
           initialViewState={{
             longitude: center[0],
             latitude: center[1],

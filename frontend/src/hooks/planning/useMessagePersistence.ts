@@ -41,6 +41,7 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
   // Store state
   const taskId = usePlanningStore((state) => state.taskId);
   const messages = usePlanningStore((state) => state.messages);
+  const dimensionProgress = usePlanningStore((state) => state.dimensionProgress);
 
   // Extract metadata for a message
   const extractMetadata = (msg: Message): Record<string, unknown> => {
@@ -74,6 +75,14 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       metadata.fileContent = fileMsg.fileContent;
       metadata.fileSize = fileMsg.fileSize;
       metadata.encoding = fileMsg.encoding;
+      // 图片相关字段（确保图片消息刷新后能恢复）
+      metadata.fileType = fileMsg.fileType;
+      metadata.imageBase64 = fileMsg.imageBase64;
+      metadata.imageFormat = fileMsg.imageFormat;
+      metadata.thumbnailBase64 = fileMsg.thumbnailBase64;
+      metadata.imageWidth = fileMsg.imageWidth;
+      metadata.imageHeight = fileMsg.imageHeight;
+      metadata.embeddedImages = fileMsg.embeddedImages;
     } else if (msg.type === 'progress') {
       const progressMsg = msg as ProgressMessage;
       metadata.progress = progressMsg.progress;
@@ -117,6 +126,11 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
     // Handle layer_completed messages
     if (msg.type !== 'layer_completed') return false;
     const layerMsg = msg as LayerCompletedMessage;
+
+    // 先检查内容完整性（前置过滤）
+    const hasReports = layerMsg.dimensionReports && Object.keys(layerMsg.dimensionReports).length > 0;
+    const hasContent = layerMsg.fullReportContent && layerMsg.fullReportContent.length >= 50;
+    if (!hasReports || !hasContent) return false;
 
     // Use layer + id as version tracking key to distinguish different layers
     const versionKey = `${msg.id}_layer${layerMsg.layer}`;
@@ -202,6 +216,20 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
   useEffect(() => {
     if (!enabled) return;
 
+    // Debug: 记录 layer_completed 消息状态
+    const layerCompletedMsgs = messages.filter((m) => m.type === 'layer_completed');
+    if (layerCompletedMsgs.length > 0) {
+      console.log(
+        '[Persistence] useEffect triggered:',
+        layerCompletedMsgs.map((m) => ({
+          id: m.id,
+          layer: (m as LayerCompletedMessage).layer,
+          reportCount: Object.keys((m as LayerCompletedMessage).dimensionReports || {}).length,
+          contentLength: (m as LayerCompletedMessage).fullReportContent?.length || 0,
+        }))
+      );
+    }
+
     // 检测 taskId 状态转换（不在初始化时设置 prev，确保 taskIdJustSet 能正确检测）
     const taskIdJustSet = taskId && !prevTaskIdRef.current;
     prevTaskIdRef.current = taskId;
@@ -258,7 +286,7 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       saveSingleMessage(msg, taskId);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- saveSingleMessage 只依赖 refs (稳定) 和传入参数，无需加入依赖
-  }, [messages, taskId, enabled]);
+  }, [messages, taskId, enabled, dimensionProgress]);
 }
 
 export default useMessagePersistence;

@@ -301,8 +301,11 @@ def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
     from .gis_data_fetcher import get_fetcher
 
     fetcher = get_fetcher()
-    location = context.get("location", "")
+    location = context.get("location") or context.get("village_name", "")
     buffer_km = context.get("buffer_km", 5.0)
+
+    if not location:
+        return _format_error_response("缺少 location 或 village_name 参数")
 
     result = fetcher.fetch_all_gis_data(location, buffer_km, max_features=100)
 
@@ -319,13 +322,29 @@ def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
 
     # 提取 GIS 图层数据（用于地图渲染）
     type_mapping = {
+        "boundary": {"layerType": "boundary", "layerName": "行政边界", "color": "#333333"},
         "water": {"layerType": "sensitivity_zone", "layerName": "水系", "color": "#87CEEB"},
         "road": {"layerType": "development_axis", "layerName": "道路", "color": "#FF6B6B"},
         "residential": {"layerType": "function_zone", "layerName": "居民地", "color": "#FFD700"},
     }
 
     layers = []
+    # 首先添加边界图层（作为参考区域）
+    boundary_data = result.get("boundary", {})
+    if boundary_data.get("success") and boundary_data.get("geojson"):
+        boundary_geojson = boundary_data["geojson"]
+        if boundary_geojson.get("features"):
+            layers.append({
+                "geojson": boundary_geojson,
+                "layerType": "boundary",
+                "layerName": "行政边界",
+                "color": "#333333",
+            })
+
     for category, mapping in type_mapping.items():
+        # boundary 已单独处理，跳过
+        if category == "boundary":
+            continue
         cat_data = result.get(category, {})
         if cat_data.get("success") and cat_data.get("geojson"):
             geojson = cat_data["geojson"]

@@ -111,6 +111,12 @@ function DimensionSection({
         <h4 className="flex items-center gap-2 text-sm font-semibold text-emerald-800">
           <i className={`fas ${icon} text-emerald-500`} />
           {name}
+          {gisData?.layers && gisData.layers.length > 0 && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 text-xs font-normal">
+              <i className="fas fa-map-marker-alt mr-1" />
+              空间分析
+            </span>
+          )}
         </h4>
 
         <div className="flex items-center gap-2">
@@ -203,6 +209,13 @@ function DimensionSection({
                   {/* GIS 地图 */}
                   {gisData.layers && gisData.layers.length > 0 && (
                     <div className="mt-3">
+                      {/* Analysis summary */}
+                      <div className="mb-2 p-2 bg-blue-50 rounded-lg flex items-center gap-2">
+                        <i className="fas fa-layer-group text-blue-500" />
+                        <span className="text-sm text-gray-700">
+                          分析图层：{gisData.layers.map(l => l.layerName).join('、')}
+                        </span>
+                      </div>
                       <MapView
                         layers={gisData.layers}
                         center={gisData.mapOptions?.center}
