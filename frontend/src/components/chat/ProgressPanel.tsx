@@ -46,24 +46,6 @@ interface ProgressPanelProps {
   onClose: () => void;
 }
 
-// 阶段标签映射
-const PHASE_LABELS: Record<string, string> = {
-  idle: '等待开始',
-  现状分析: 'Layer 1: 现状分析',
-  规划思路: 'Layer 2: 规划思路',
-  详细规划: 'Layer 3: 详细规划',
-  修复中: '修复中',
-};
-
-// 阶段颜色映射
-const PHASE_COLORS: Record<string, string> = {
-  idle: 'bg-gray-100 text-gray-600',
-  现状分析: 'bg-blue-100 text-blue-700',
-  规划思路: 'bg-purple-100 text-purple-700',
-  详细规划: 'bg-emerald-100 text-emerald-700',
-  修复中: 'bg-amber-100 text-amber-700',
-};
-
 // 状态图标和颜色配置
 const STATUS_CONFIG: Record<
   DimensionStatus,
@@ -78,7 +60,7 @@ const STATUS_CONFIG: Record<
 function ProgressPanel({
   visible,
   currentLayer,
-  currentPhase,
+  currentPhase: _currentPhase,
   dimensionProgress,
   executingDimensions,
   layerDimensionCount,
@@ -155,7 +137,6 @@ function ProgressPanel({
     }
   }, [
     viewingLayer,
-    currentLayer,
     dimensionProgress,
     layerProgressHistory,
     layerDimensionCount,

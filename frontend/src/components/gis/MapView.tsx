@@ -176,12 +176,6 @@ export default function MapView({
     if (boundaryLayer) {
       const bounds = getBoundsFromGeoJSON(boundaryLayer.geojson);
       if (bounds) {
-        // Add padding around the boundary (5% of range)
-        const [minLon, minLat] = bounds[0];
-        const [maxLon, maxLat] = bounds[1];
-        const paddingLon = (maxLon - minLon) * 0.05;
-        const paddingLat = (maxLat - minLat) * 0.05;
-
         mapRef.current.fitBounds(
           [bounds[0], bounds[1]],
           { padding: 40, duration: 1000 }

@@ -13,7 +13,7 @@
  * 4. Provides high-level actions for planning workflow
  */
 
-import { useEffect, useCallback, ReactNode } from 'react';
+import { useEffect, useCallback, ReactNode, Suspense } from 'react';
 import { usePlanningStore } from '@/stores/planningStore';
 import { useSSEConnection, useMessagePersistence, useSessionRestore } from '@/hooks/planning';
 import { planningApi, dataApi, VillageInfo, VillageSession, ImageData } from '@/lib/api';
@@ -303,6 +303,12 @@ Task ID: ${response.task_id.slice(0, 8)}...`;
 // Provider Component
 // ============================================
 
+// Session restore wrapper - needs Suspense for useSearchParams
+function SessionRestoreWrapper() {
+  useSessionRestore();
+  return null;
+}
+
 export function PlanningProvider({ children, conversationId }: PlanningProviderProps) {
   const taskId = usePlanningStore((state) => state.taskId);
   const isPaused = usePlanningStore((state) => state.isPaused);
@@ -314,9 +320,6 @@ export function PlanningProvider({ children, conversationId }: PlanningProviderP
   useEffect(() => {
     initConversation(conversationId);
   }, [conversationId, initConversation]);
-
-  // Session restore from URL taskId
-  useSessionRestore();
 
   // SSE connection with reconnect trigger
   useSSEConnection({ taskId, resumeTrigger: sseResumeTrigger });
@@ -340,7 +343,15 @@ export function PlanningProvider({ children, conversationId }: PlanningProviderP
     }
   }, [isPaused, taskId, setCheckpoints]);
 
-  return <>{children}</>;
+  return (
+    <>
+      {/* Session restore wrapped in Suspense for useSearchParams */}
+      <Suspense fallback={null}>
+        <SessionRestoreWrapper />
+      </Suspense>
+      {children}
+    </>
+  );
 }
 
 // ============================================

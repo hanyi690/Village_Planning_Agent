@@ -113,7 +113,7 @@ export default function LayerReportCard({
     });
 
     // Derive allExpanded after state update (outside setter)
-    const allDimsExpanded = currentKeys.every((key) => actualDefaultExpanded);
+    const allDimsExpanded = currentKeys.every((_key) => actualDefaultExpanded);
     setAllExpanded(allDimsExpanded);
   }, [dimensions, actualDefaultExpanded, expandedMap]);
 
