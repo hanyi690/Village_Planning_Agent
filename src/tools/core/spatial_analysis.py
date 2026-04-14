@@ -7,23 +7,29 @@ and spatial query functions (contains, intersects, within, nearest).
 Reference: GeoPandas-AI design patterns for planning-specific GIS operations.
 """
 
-from typing import Dict, Any, List, Optional, Literal, Tuple
+from typing import Dict, Any, List, Optional, Literal, Tuple, TYPE_CHECKING
 from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Type checking imports (only evaluated by type checkers, not at runtime)
+if TYPE_CHECKING:
+    import geopandas as gpd
+
 # Check geopandas availability
 try:
-    import geopandas as gpd
+    import geopandas as _gpd
     import shapely.geometry as geom
     from shapely.ops import nearest_points
     GEOPANDAS_AVAILABLE = True
+    gpd = _gpd  # Make available for runtime use
 except ImportError:
     GEOPANDAS_AVAILABLE = False
     logger.warning("[spatial_analysis] geopandas/shapely not available")
+    gpd = None  # Placeholder for type hints
 
 
-def geojson_to_geodataframe(geojson: Dict[str, Any]) -> Optional[gpd.GeoDataFrame]:
+def geojson_to_geodataframe(geojson: Dict[str, Any]) -> Optional["gpd.GeoDataFrame"]:
     """
     Convert GeoJSON FeatureCollection to GeoDataFrame
 
@@ -92,7 +98,7 @@ def geojson_to_geodataframe(geojson: Dict[str, Any]) -> Optional[gpd.GeoDataFram
         return None
 
 
-def geodataframe_to_geojson(gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
+def geodataframe_to_geojson(gdf: "gpd.GeoDataFrame") -> Dict[str, Any]:
     """
     Convert GeoDataFrame to GeoJSON FeatureCollection
 
