@@ -179,6 +179,8 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     # ... 添加边
 ```
 
+**注意**：emit_events 节点负责从 `sse_events` 字段批量发送维度分析产生的事件。层级完成事件（layer_completed、pause）由 `collect_layer_results` 函数直接发送。
+
 ### 条件边路由
 
 ```python
@@ -437,6 +439,17 @@ def create_initial_state(
 
 ### Layer 2 波次执行
 
+Layer 2 波次基于依赖关系动态计算：
+
+| Wave | 维度 | 依赖关系 |
+|------|------|----------|
+| Wave 1 | resource_endowment | 无同层依赖 |
+| Wave 2 | planning_positioning | 依赖 resource_endowment |
+| Wave 3 | development_goals | 依赖 resource_endowment, planning_positioning |
+| Wave 4 | planning_strategies | 依赖前3个维度 |
+
+TOTAL_WAVES 通过 `_calculate_wave()` 动态计算，而非硬编码。
+
 Layer 2 使用波次执行，因为维度间存在依赖关系:
 
 ```python
@@ -529,6 +542,28 @@ async def revision_node(state: UnifiedPlanningState) -> Dict[str, Any]:
         "previous_layer": state.get("previous_layer"),
     }
 ```
+
+---
+
+## 双模式 Stream 机制
+
+PlanningRuntimeService 使用双模式 stream 同时监控状态变化和 checkpoint 持久化：
+
+```python
+# backend/services/planning_runtime_service.py
+async def _trigger_planning_execution(cls, session_id: str, ...) -> None:
+    async for event in graph.astream(
+        initial_state,
+        config={"configurable": {"thread_id": session_id}},
+        stream_mode=["values", "checkpoints"]  # 双模式
+    ):
+        # values: 状态变化事件
+        # checkpoints: 持久化事件（checkpoint_saved）
+```
+
+**设计要点**：
+- `values` 模式：监控状态变化，触发 dimension_delta 等事件
+- `checkpoints` 模式：监控持久化，准确关联 checkpoint_saved 到对应层级
 
 ---
 

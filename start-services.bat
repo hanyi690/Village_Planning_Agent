@@ -21,9 +21,13 @@ set "BACKEND_DIR=%CD%\backend"
 set "FRONTEND_DIR=%CD%\frontend"
 set "LOGS_DIR=%CD%\logs"
 
+REM Port configuration (check environment variables, otherwise use defaults)
+if not defined BACKEND_PORT set BACKEND_PORT=8000
+if not defined FRONTEND_PORT set FRONTEND_PORT=3000
+
 REM 2. Start backend service
 echo [INFO] Starting backend service...
-start /B cmd /c "cd /d %BACKEND_DIR% && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 --workers 1 --no-access-log > %LOGS_DIR%\backend_stdout.log 2> %LOGS_DIR%\backend_stderr.log"
+start /B cmd /c "cd /d %BACKEND_DIR% && python -m uvicorn main:app --reload --host 0.0.0.0 --port %BACKEND_PORT% --workers 1 --no-access-log > %LOGS_DIR%\backend_stdout.log 2> %LOGS_DIR%\backend_stderr.log"
 echo   [OK] Backend starting...
 echo.
 
@@ -33,9 +37,9 @@ set /a COUNT=0
 :check_backend
 set /a COUNT+=1
 ping -n 2 127.0.0.1 >nul 2>&1
-curl -s http://localhost:8000/docs >nul 2>&1
+curl -s http://localhost:%BACKEND_PORT%/docs >nul 2>&1
 if %errorlevel% equ 0 (
-  echo   [OK] Backend started: http://localhost:8000
+  echo   [OK] Backend started: http://localhost:%BACKEND_PORT%
 ) else (
   if %COUNT% lss 20 (
     goto check_backend
@@ -60,7 +64,6 @@ echo.
 REM Wait for frontend to start
 echo [INFO] Waiting for frontend service...
 set /a COUNT=0
-set FRONTEND_PORT=3000
 :check_frontend
 set /a COUNT+=1
 ping -n 2 127.0.0.1 >nul 2>&1
@@ -84,8 +87,8 @@ echo ===================================
 echo.
 echo [URL] Access addresses:
 echo   Frontend: http://localhost:%FRONTEND_PORT%
-echo   Backend:  http://localhost:8000
-echo   API Docs: http://localhost:8000/docs
+echo   Backend:  http://localhost:%BACKEND_PORT%
+echo   API Docs: http://localhost:%BACKEND_PORT%/docs
 echo.
 echo [LOG] Log files:
 echo   Backend: type logs\backend_stdout.log

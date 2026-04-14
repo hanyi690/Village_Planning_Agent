@@ -262,11 +262,8 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "layer": 2,
         "dependencies": {
             "layer1_analyses": [
-                "natural_environment",
-                "land_use",
                 "traffic",
-                "infrastructure",
-                "historical_culture"
+                "infrastructure"
             ],
             "layer2_concepts": [
                 "resource_endowment",

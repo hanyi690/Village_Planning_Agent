@@ -419,28 +419,34 @@ export interface LayerCompletedMessage extends BaseMessage {
   actions: ActionButton[];
 }
 
-// 工具消息类型
-export interface ToolCallMessage extends BaseMessage {
-  type: 'tool_call';
+// 工具消息类型（合并为统一的 ToolStatusMessage）
+export interface ToolStatusMessage extends BaseMessage {
+  type: 'tool_status';
   toolName: string;
   toolDisplayName: string;
   description: string;
+  status: 'pending' | 'running' | 'success' | 'error';
+  progress?: number;
+  stage?: string;
+  stageMessage?: string;
+  summary?: string;
+  error?: string;
   estimatedTime?: number;
 }
 
-export interface ToolProgressMessage extends BaseMessage {
-  type: 'tool_progress';
-  toolName: string;
-  stage: string;
-  progress: number;
-  message: string;
-}
-
-export interface ToolResultMessage extends BaseMessage {
-  type: 'tool_result';
-  toolName: string;
-  status: 'success' | 'error';
+// 新增 GIS 结果消息
+export interface GisResultMessage extends BaseMessage {
+  type: 'gis_result';
+  dimensionKey: string;
+  dimensionName: string;
   summary: string;
+  layers: GISLayerConfig[];
+  mapOptions?: { center: [number, number]; zoom: number };
+  analysisData?: {
+    overallScore?: number;
+    suitabilityLevel?: string;
+    recommendations?: string[];
+  };
 }
 ```
 
@@ -457,8 +463,12 @@ function isDimensionReportMessage(message: Message): message is DimensionReportM
   return message.type === 'dimension_report';
 }
 
-function isToolCallMessage(message: Message): message is ToolCallMessage {
-  return message.type === 'tool_call';
+function isToolStatusMessage(message: Message): message is ToolStatusMessage {
+  return message.type === 'tool_status';
+}
+
+function isGisResultMessage(message: Message): message is GisResultMessage {
+  return message.type === 'gis_result';
 }
 ```
 

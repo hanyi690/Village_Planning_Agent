@@ -64,6 +64,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   const toolStatusMap = usePlanningStore((state) => state.toolStatuses);
   const checkpoints = usePlanningStore((state) => state.checkpoints);
   const layerDimensionCount = usePlanningStore((state) => state.layerDimensionCount);
+  const layerProgressHistory = usePlanningStore((state) => state.layerProgressHistory);
 
   // Get actions
   const actions = usePlanningActions();
@@ -199,19 +200,13 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   );
 
   // Helper functions for message operations - use getState() for stable references
-  const addMessage = useCallback(
-    (message: Message) => {
-      usePlanningStore.getState().addMessage(message);
-    },
-    []
-  );
+  const addMessage = useCallback((message: Message) => {
+    usePlanningStore.getState().addMessage(message);
+  }, []);
 
-  const addMessages = useCallback(
-    (messages: Message[]) => {
-      usePlanningStore.getState().addMessages(messages);
-    },
-    []
-  );
+  const addMessages = useCallback((messages: Message[]) => {
+    usePlanningStore.getState().addMessages(messages);
+  }, []);
 
   const setMessages = useCallback(
     (messagesOrUpdater: Message[] | ((prev: Message[]) => Message[])) => {
@@ -228,26 +223,17 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
 
   const startPlanning = actions.startPlanning;
 
-  const setProgressPanelVisible = useCallback(
-    (visible: boolean) => {
-      usePlanningStore.getState().setProgressPanelVisible(visible);
-    },
-    []
-  );
+  const setProgressPanelVisible = useCallback((visible: boolean) => {
+    usePlanningStore.getState().setProgressPanelVisible(visible);
+  }, []);
 
-  const setIsPaused = useCallback(
-    (paused: boolean) => {
-      usePlanningStore.getState().setPaused(paused);
-    },
-    []
-  );
+  const setIsPaused = useCallback((paused: boolean) => {
+    usePlanningStore.getState().setPaused(paused);
+  }, []);
 
-  const setPendingReviewLayer = useCallback(
-    (layer: number | null) => {
-      usePlanningStore.getState().setPendingReviewLayer(layer);
-    },
-    []
-  );
+  const setPendingReviewLayer = useCallback((layer: number | null) => {
+    usePlanningStore.getState().setPendingReviewLayer(layer);
+  }, []);
 
   const setCheckpoints = useCallback(
     (checkpointsOrUpdater: Checkpoint[] | ((prev: Checkpoint[]) => Checkpoint[])) => {
@@ -281,12 +267,9 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     []
   );
 
-  const showFileViewer = useCallback(
-    (file: FileMessage) => {
-      usePlanningStore.getState().setViewingFile(file);
-    },
-    []
-  );
+  const showFileViewer = useCallback((file: FileMessage) => {
+    usePlanningStore.getState().setViewingFile(file);
+  }, []);
 
   // Derive taskState-like object for compatibility
   const taskState = useMemo(
@@ -303,12 +286,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       execution_complete: completedLayers[1] && completedLayers[2] && completedLayers[3],
       progress: null,
     }),
-    [
-      status,
-      currentLayer,
-      isPaused,
-      completedLayers,
-    ]
+    [status, currentLayer, isPaused, completedLayers]
   );
 
   // Action shortcuts for review handlers
@@ -706,7 +684,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
         streamMode: PLANNING_DEFAULTS.streamMode,
         images: uploadedImages.length > 0 ? uploadedImages : undefined,
       });
-      setUploadedImages([]);  // Clear images after use
+      setUploadedImages([]); // Clear images after use
       logger.chatPanel.info('规划启动成功', { status: 'planning' });
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error, '未知错误');
@@ -795,8 +773,12 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
             `🔄 Revising based on feedback${dimensionsToSubmit ? '...' : ' (auto-detecting dimensions)...'} `
           )
         );
-        await reject(userText, dimensionsToSubmit, uploadedImages.length > 0 ? uploadedImages : undefined);
-        setUploadedImages([]);  // Clear images after use
+        await reject(
+          userText,
+          dimensionsToSubmit,
+          uploadedImages.length > 0 ? uploadedImages : undefined
+        );
+        setUploadedImages([]); // Clear images after use
       } catch (error: unknown) {
         addMessage(
           createErrorMessage(`Revision failed: ${getErrorMessage(error, 'Unknown error')}`)
@@ -833,7 +815,16 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       setIsTyping(false);
       typingTimeoutRef.current = null;
     }, 500);
-  }, [inputText, addMessage, isPaused, pendingReviewLayer, approve, reject, selectedDimensions, uploadedImages]);
+  }, [
+    inputText,
+    addMessage,
+    isPaused,
+    pendingReviewLayer,
+    approve,
+    reject,
+    selectedDimensions,
+    uploadedImages,
+  ]);
 
   // File selection handler
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1138,6 +1129,8 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
             dimensionProgress={dimensionProgress}
             executingDimensions={executingDimensions}
             layerDimensionCount={layerDimensionCount}
+            layerProgressHistory={layerProgressHistory}
+            completedLayers={completedLayers}
             onClose={() => setProgressPanelVisible(false)}
           />
 

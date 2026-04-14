@@ -60,12 +60,13 @@ def _get_flash_llm() -> ChatOpenAI:
         _flash_llm_instance = ChatOpenAI(
             model=FLASH_MODEL_NAME,
             temperature=FLASH_MODEL_TEMPERATURE,
-            max_tokens=FLASH_MODEL_MAX_TOKENS,
+            # max_tokens is disabled to prevent incomplete JSON output
             api_key=DASHSCOPE_API_KEY,
             base_url=DASHSCOPE_API_BASE,
             request_timeout=LLM_REQUEST_TIMEOUT,
+            model_kwargs={"response_format": {"type": "json_object"}},
         )
-        logger.debug(f"[摘要生成] Flash LLM 实例创建: model={FLASH_MODEL_NAME}")
+        logger.debug(f"[摘要生成] Flash LLM 实例创建: model={FLASH_MODEL_NAME}, json_mode=True")
     return _flash_llm_instance
 
 
@@ -83,12 +84,7 @@ DIMENSION_SUMMARY_PROMPT = """你是规划报告摘要专家。请将以下维�
 ## 输出要求（JSON格式）：
 请严格按以下格式输出，不要添加任何其他内容：
 ```json
-{
-  "summary": "核心结论和建议（200字内）",
-  "key_points": ["要点1", "要点2", "要点3"],
-  "metrics": {"指标名": "数值"},
-  "tags": ["标签1", "标签2", "标签3"]
-}
+{{"summary": "核心结论和建议（200字内）", "key_points": ["要点1", "要点2", "要点3"], "metrics": {{}}}}
 ```
 
 注意：
@@ -149,29 +145,45 @@ async def generate_dimension_summary(
             response = await llm.ainvoke(prompt)
             raw_output = response.content.strip()
 
+            # Debug: log raw LLM output
+            logger.debug(f"[摘要生成] {dimension_key} LLM原始输出 (长度={len(raw_output)}): {raw_output[:500]}...")
+
             # Extract JSON from response (handle markdown code blocks)
             json_str = _extract_json(raw_output)
 
+            # Debug: log extraction result
             if json_str:
-                data = json.loads(json_str)
+                logger.debug(f"[摘要生成] {dimension_key} 提取的JSON (长度={len(json_str)}): {json_str[:300]}...")
+            else:
+                logger.warning(f"[摘要生成] {dimension_key} _extract_json返回None, attempt={attempt + 1}")
+                if attempt < max_retries - 1:
+                    prompt = DIMENSION_SUMMARY_PROMPT.format(
+                        dimension_name=dimension_name,
+                        content=content
+                    ) + "\n\n上次输出格式错误，请确保输出纯JSON格式。"
+                    continue
+                break
 
-                # Validate required fields
-                if "summary" not in data:
-                    data["summary"] = full_content[:200] + "..."
+            data = json.loads(json_str)
 
-                return DimensionSummary(
-                    dimension_key=dimension_key,
-                    dimension_name=dimension_name,
-                    layer=layer,
-                    summary=data.get("summary", ""),
-                    key_points=data.get("key_points", []),
-                    metrics=data.get("metrics", {}),
-                    tags=data.get("tags", []),
-                    created_at=datetime.now().isoformat()
-                )
+            # Validate required fields
+            if "summary" not in data:
+                data["summary"] = full_content[:200] + "..."
+
+            return DimensionSummary(
+                dimension_key=dimension_key,
+                dimension_name=dimension_name,
+                layer=layer,
+                summary=data.get("summary", ""),
+                key_points=data.get("key_points", []),
+                metrics=data.get("metrics", {}),
+                tags=data.get("tags", []),
+                created_at=datetime.now().isoformat()
+            )
 
         except json.JSONDecodeError as e:
             logger.warning(f"[摘要生成] {dimension_key} JSON解析失败 (attempt {attempt + 1}): {e}")
+            logger.debug(f"[摘要生成] {dimension_key} JSON解析失败位置: line={e.lineno}, col={e.colno}")
             if attempt < max_retries - 1:
                 # Add JSON hint for retry
                 prompt = DIMENSION_SUMMARY_PROMPT.format(
@@ -180,8 +192,12 @@ async def generate_dimension_summary(
                 ) + "\n\n上次输出格式错误，请确保输出纯JSON格式。"
                 continue
 
+        except KeyError as e:
+            logger.error(f"[摘要生成] {dimension_key} 字段访问错误: {e}")
+            break
+
         except Exception as e:
-            logger.error(f"[摘要生成] {dimension_key} 生成失败: {e}")
+            logger.error(f"[摘要生成] {dimension_key} 生成失败 (type={type(e).__name__}): {e}")
             break
 
     # Fallback: Create basic summary from content
@@ -302,9 +318,20 @@ def format_summaries_for_review(
     return "\n".join(parts)
 
 
+def _validate_json_structure(text: str) -> bool:
+    """Validate if string is a valid JSON structure."""
+    if not text:
+        return False
+    try:
+        json.loads(text)
+        return True
+    except json.JSONDecodeError:
+        return False
+
+
 def _extract_json(text: str) -> Optional[str]:
     """
-    Extract JSON string from text (handles markdown code blocks).
+    Extract JSON string from text (handles markdown code blocks and nested JSON).
 
     Args:
         text: Raw text potentially containing JSON
@@ -317,25 +344,44 @@ def _extract_json(text: str) -> Optional[str]:
         start = text.find("```json") + 7
         end = text.find("```", start)
         if end > start:
-            return text[start:end].strip()
+            candidate = text[start:end].strip()
+            if _validate_json_structure(candidate):
+                return candidate
 
     if "```" in text:
         start = text.find("```") + 3
         end = text.find("```", start)
         if end > start:
-            return text[start:end].strip()
+            candidate = text[start:end].strip()
+            if _validate_json_structure(candidate):
+                return candidate
 
-    # Try direct JSON parsing
+    # Try direct JSON parsing - with validation
     text = text.strip()
     if text.startswith("{") and text.endswith("}"):
-        return text
+        if _validate_json_structure(text):
+            return text
 
-    # Look for JSON-like content
-    import re
-    json_pattern = r'\{[^{}]*\}'
-    match = re.search(json_pattern, text)
-    if match:
-        return match.group()
+    # Extract nested JSON using brace counting
+    start = text.find("{")
+    if start == -1:
+        return None
+
+    brace_count = 0
+    end = start
+    for i, char in enumerate(text[start:], start):
+        if char == "{":
+            brace_count += 1
+        elif char == "}":
+            brace_count -= 1
+            if brace_count == 0:
+                end = i + 1
+                break
+
+    if end > start:
+        candidate = text[start:end]
+        if _validate_json_structure(candidate):
+            return candidate
 
     return None
 

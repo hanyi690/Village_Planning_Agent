@@ -334,18 +334,23 @@ def calculate_population(context: Dict[str, Any]) -> str:
 
 ### 内置工具列表
 
-| 工具名称 | 显示名称 | 功能 | 预估时间 |
-|----------|----------|------|----------|
-| `knowledge_search` | 知识检索 | RAG 知识库检索 | 2.0s |
-| `web_search` | 网络搜索 | 互联网实时搜索 | 4.0s |
-| `population_model_v1` | 人口预测 | 人口趋势预测 | 3.0s |
-| `gis_data_fetch` | GIS 数据获取 | 天地图 WFS 数据获取（水系/道路/居民地） | 5.0s |
-| `poi_search` | POI 搜索 | 高德优先 POI 搜索，自动坐标转换 | 3.0s |
-| `accessibility_analysis` | 可达性分析 | 设施可达性计算 | 6.0s |
-| `isochrone_analysis` | 等时圈分析 | 出行时间圈分析 | 5.0s |
-| `spatial_overlay` | 空间叠加 | 图层叠加分析 | 4.0s |
-| `facility_validator` | 设施验证 | 设施选址适宜性评估 | 3.0s |
-| `ecological_sensitivity` | 生态敏感性 | 生态敏感区评估 | 4.0s |
+# 核心注册工具（@ToolRegistry.register）
+| 工具名称 | 显示名称 | 注册位置 |
+|----------|----------|----------|
+| population_prediction | 人口预测 | src/tools/builtin/population.py |
+| knowledge_search | 知识检索 | src/rag/core/tools.py |
+| web_search | 网络搜索 | src/tools/search_tool.py |
+
+# 维度绑定工具（dimension_metadata.py tool 字段）
+| 维度 | 绑定工具 |
+|------|----------|
+| socio_economic | population_prediction |
+| natural_environment | wfs_data_fetch |
+| traffic | accessibility_analysis |
+| public_services | poi_search |
+| spatial_structure | planning_vectorizer |
+| traffic_planning | isochrone_analysis |
+| ecological | ecological_sensitivity |
 
 ### GIS 工具详解
 
@@ -405,6 +410,29 @@ result = ToolRegistry.execute_tool("poi_search", {
     "geojson": {...}   # GeoJSON 格式
 }
 ```
+
+---
+
+## GIS 工具架构
+
+GIS 工具位于 `src/tools/core/` 目录：
+
+```
+src/tools/
+├── core/
+│   ├── gis_core.py           # 核心分析函数
+│   ├── gis_tool_wrappers.py  # 工具包装器
+│   └── gis_data_fetcher.py   # WFS 数据获取
+├── geocoding/
+│   ├── amap/provider.py      # 高德API（含GCJ-02→WGS-84转换）
+│   ├── tianditu/provider.py  # 天地图WFS
+│   └── poi_provider.py       # POI 搜索
+```
+
+### 坐标转换
+
+高德API使用GCJ-02坐标系，天地图使用WGS-84。
+`gcj02_to_wgs84()` 函数在 `src/tools/geocoding/amap/provider.py:76-101` 实现坐标转换。
 
 ---
 

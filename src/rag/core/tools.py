@@ -23,7 +23,7 @@ from src.rag.core.cache import get_vector_cache
 
 # ==================== 类型定义 ====================
 
-CONTENT_PREVIEW_LENGTH = 300
+CONTENT_PREVIEW_LENGTH = 1000
 
 
 class KnowledgeSource(TypedDict):

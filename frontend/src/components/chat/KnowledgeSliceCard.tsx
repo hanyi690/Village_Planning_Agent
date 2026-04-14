@@ -14,6 +14,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { KnowledgeSource } from '@/types';
+import MarkdownRenderer from '@/components/MarkdownRenderer';
 
 interface KnowledgeSliceCardProps {
   sources: KnowledgeSource[];
@@ -22,6 +23,7 @@ interface KnowledgeSliceCardProps {
 
 export default function KnowledgeSliceCard({ sources, className = '' }: KnowledgeSliceCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [expandedSliceIndex, setExpandedSliceIndex] = useState<number | null>(null);
 
   if (!sources || sources.length === 0) {
     return null;
@@ -67,8 +69,11 @@ export default function KnowledgeSliceCard({ sources, className = '' }: Knowledg
             <div className="px-3 py-2 border-t border-gray-100 space-y-2">
               {sources.map((source, idx) => (
                 <div key={idx} className="text-sm bg-white p-2 rounded border border-gray-100">
-                  {/* Source header */}
-                  <div className="flex items-center gap-2 mb-1">
+                  {/* Source header - Clickable */}
+                  <div
+                    className="flex items-center gap-2 mb-1 cursor-pointer hover:bg-gray-50 transition-colors rounded px-1 py-0.5 -mx-1 -my-0.5"
+                    onClick={() => setExpandedSliceIndex(expandedSliceIndex === idx ? null : idx)}
+                  >
                     <span className="text-gray-500 font-medium text-xs">#{idx + 1}</span>
                     <span className="font-medium text-gray-900 text-xs truncate max-w-[200px]">
                       {source.source}
@@ -76,6 +81,11 @@ export default function KnowledgeSliceCard({ sources, className = '' }: Knowledg
                     {source.doc_type && (
                       <span className="text-xs text-gray-400">[{source.doc_type}]</span>
                     )}
+                    <motion.i
+                      animate={{ rotate: expandedSliceIndex === idx ? 180 : 0 }}
+                      transition={{ duration: 0.15 }}
+                      className="fas fa-chevron-down text-gray-400 text-xs ml-auto"
+                    />
                   </div>
 
                   {/* Page info */}
@@ -83,13 +93,31 @@ export default function KnowledgeSliceCard({ sources, className = '' }: Knowledg
                     <div className="text-xs text-gray-500 mb-1">第 {source.page} 页</div>
                   )}
 
-                  {/* Content preview */}
-                  {source.content && (
+                  {/* Content preview (collapsed) */}
+                  {source.content && expandedSliceIndex !== idx && (
                     <div className="text-xs text-gray-600 bg-gray-50 p-1.5 rounded italic line-clamp-2">
                       &quot;{source.content.substring(0, 150)}
                       {source.content.length > 150 ? '...' : ''}&quot;
                     </div>
                   )}
+
+                  {/* Full content with Markdown (expanded) */}
+                  <AnimatePresence initial={false}>
+                    {expandedSliceIndex === idx && source.content && (
+                      <motion.div
+                        key="detail"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="overflow-hidden mt-2"
+                      >
+                        <div className="bg-gray-50 p-2 rounded border border-gray-200 text-xs text-gray-700 prose prose-sm max-w-none">
+                          <MarkdownRenderer content={source.content} />
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               ))}
             </div>

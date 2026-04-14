@@ -131,7 +131,15 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     query = f"{query} {task_description[:50]}"
                 fallback_query = None
 
-            context_params = {"top_k": 3, "context_mode": "standard"}
+            context_params = {
+                "top_k": 3,
+                "context_mode": "standard",
+                "dimension": None,
+                "terrain": None,
+                "doc_type": None,
+                "task_id": None,
+                "include_summaries": False,
+            }
 
             try:
                 result = await asyncio.to_thread(
@@ -158,7 +166,7 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     cached_docs = cache.get_cached_query(final_query, context_params)
                     if cached_docs:
                         sources = extract_sources_from_documents(cached_docs)
-                    logger.debug(f"[知识预加载] {dim_key} 检索成功，长度: {len(result)}, 切片数: {len(sources)}")
+                    logger.info(f"[知识预加载] {dim_key} 检索成功，长度: {len(result)}, 切片数: {len(sources)}")
                     return (dim_key, result, sources)
                 else:
                     logger.debug(f"[知识预加载] {dim_key} 检索无结果")
@@ -776,11 +784,13 @@ def _build_dimension_prompt(
         from ...config.dimension_metadata import (
             get_full_dependency_chain_func,
             get_analysis_dimension_names,
+            get_concept_dimension_names,
             filter_reports_by_dependency,
         )
 
         chain = get_full_dependency_chain_func(dimension_key)
         layer1_reports = reports.get("layer1", {})
+        layer2_reports = reports.get("layer2", {})
 
         analysis_summary = filter_reports_by_dependency(
             required_keys=chain.get("layer1_analyses", []),
@@ -788,17 +798,26 @@ def _build_dimension_prompt(
             name_mapping=get_analysis_dimension_names()
         )
 
+        # Layer2 同层依赖筛选
+        layer2_contexts = filter_reports_by_dependency(
+            required_keys=chain.get("layer2_concepts", []),
+            reports=layer2_reports,
+            name_mapping=get_concept_dimension_names()
+        )
+
         logger.info(f"[Dimension-Prompt] {dimension_key}: "
-                   f"筛选后 Layer1={len(chain.get('layer1_analyses', []))}/{len(layer1_reports)} 个")
+                   f"筛选后 Layer1={len(chain.get('layer1_analyses', []))}/{len(layer1_reports)} 个, "
+                   f"Layer2={len(chain.get('layer2_concepts', []))}/{len(layer2_reports)} 个")
 
         return get_dimension_prompt(
             dimension_key=dimension_key,
             analysis_report=analysis_summary,
+            layer2_contexts=layer2_contexts,
             task_description=task_description,
             constraints=constraints,
             superior_planning_context=_get_superior_planning_context(reports),
             knowledge_context=knowledge_context,
-            summary_context=summary_context  # Phase 3: 注入摘要背景
+            summary_context=summary_context
         )
 
     # Layer 3: 使用 detailed_plan_prompts 模板（按依赖配置筛选）

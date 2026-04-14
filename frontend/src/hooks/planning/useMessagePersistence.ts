@@ -67,6 +67,7 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       metadata.fullReportContent = layerMsg.fullReportContent;
       metadata.dimensionReports = layerMsg.dimensionReports;
       metadata.dimensionGisData = layerMsg.dimensionGisData;
+      metadata.dimensionKnowledgeSources = layerMsg.dimensionKnowledgeSources;
     } else if (msg.type === 'file') {
       const fileMsg = msg as FileMessage;
       metadata.filename = fileMsg.filename;

@@ -6,22 +6,18 @@
  * 使用 Tailwind CSS + Framer Motion
  */
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ParsedDimension, parseLayerReport } from '@/lib/layerReportParser';
+import { ParsedDimension, parseLayerReport, getDimensionKey } from '@/lib/layerReportParser';
 import DimensionSection from './DimensionSection';
 import type { GISData, KnowledgeSource } from '@/types/message/message-types';
-import { DIMENSION_NAMES } from '@/config/dimensions';
-
-// Build reverse mapping: name -> key
-const NAME_TO_KEY: Record<string, string> = Object.fromEntries(
-  Object.entries(DIMENSION_NAMES).map(([key, name]) => [name, key])
-);
+import { getDimensionName, getDimensionIcon } from '@/config/dimensions';
 
 interface LayerReportCardProps {
   layerNumber: number;
   content: string;
   dimensions?: ParsedDimension[];
+  dimensionReports?: Record<string, string>; // ✅ 新增：直接使用 dimension_key
   dimensionGisData?: Record<string, GISData>;
   dimensionKnowledgeSources?: Record<string, KnowledgeSource[]>;
   mode?: 'chat' | 'sidebar';
@@ -39,6 +35,7 @@ export default function LayerReportCard({
   layerNumber,
   content,
   dimensions: propDimensions,
+  dimensionReports,
   dimensionGisData,
   dimensionKnowledgeSources,
   mode = 'sidebar',
@@ -60,13 +57,31 @@ export default function LayerReportCard({
   const [allExpanded, setAllExpanded] = useState(false);
   const [localExpanded, setLocalExpanded] = useState(actualDefaultExpanded);
   const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
+  const prevDimensionKeys = useRef<string[]>([]);
 
   const dimensions = useMemo(() => {
+    // 1. 优先使用 propDimensions（如果带 key）
     if (propDimensions && propDimensions.length > 0) {
       return propDimensions;
     }
+    // 2. 从 dimensionReports 构建（使用 dimension_key）
+    if (dimensionReports) {
+      const entries = Object.entries(dimensionReports);
+      if (entries.length > 0) {
+        return entries
+          .filter(([, content]) => content && content.length > 0)
+          .map(([key, content]) => ({
+            key,
+            name: getDimensionName(key),
+            content,
+            subsections: [],
+            icon: getDimensionIcon(key),
+          }));
+      }
+    }
+    // 3. 回退：解析 markdown（旧数据兼容）
     return parseLayerReport(content);
-  }, [content, propDimensions]);
+  }, [content, propDimensions, dimensionReports]);
 
   // 🔧 计算实际字符数（从 dimensions 内容计算，而非使用 content.length）
   const actualCharCount = useMemo(() => {
@@ -75,36 +90,38 @@ export default function LayerReportCard({
 
   // Initialize expandedMap when dimensions change
   useEffect(() => {
-    if (dimensions.length > 0) {
-      setExpandedMap((prev) => {
-        // Only initialize if empty or new dimensions added
-        if (Object.keys(prev).length === 0) {
-          const initial: Record<string, boolean> = {};
-          dimensions.forEach((dim) => {
-            initial[dim.name] = actualDefaultExpanded;
-          });
-          // Sync allExpanded state with expandedMap initial state
-          const allDimsExpanded = dimensions.every((dim) => initial[dim.name]);
-          setAllExpanded(allDimsExpanded);
-          return initial;
-        }
-        // Add new dimensions with default value
-        const updated = { ...prev };
-        dimensions.forEach((dim) => {
-          if (!(dim.name in updated)) {
-            updated[dim.name] = actualDefaultExpanded;
-          }
-        });
-        return updated;
-      });
+    if (dimensions.length === 0) return;
+
+    const currentKeys = dimensions.map(getDimensionKey);
+    const prevKeysStr = prevDimensionKeys.current.join(',');
+    const currentKeysStr = currentKeys.join(',');
+
+    // Skip if keys haven't changed (avoid unnecessary re-runs)
+    if (prevKeysStr === currentKeysStr && expandedMap[currentKeys[0]] !== undefined) {
+      return;
     }
-  }, [dimensions, actualDefaultExpanded]);
+    prevDimensionKeys.current = currentKeys;
+
+    setExpandedMap((prev) => {
+      const updated = { ...prev };
+      currentKeys.forEach((key) => {
+        if (!(key in updated)) {
+          updated[key] = actualDefaultExpanded;
+        }
+      });
+      return updated;
+    });
+
+    // Derive allExpanded after state update (outside setter)
+    const allDimsExpanded = currentKeys.every((key) => actualDefaultExpanded);
+    setAllExpanded(allDimsExpanded);
+  }, [dimensions, actualDefaultExpanded, expandedMap]);
 
   // Handle toggle all dimensions
   const handleToggleAll = (expand: boolean) => {
     const newMap: Record<string, boolean> = {};
     dimensions.forEach((dim) => {
-      newMap[dim.name] = expand;
+      newMap[getDimensionKey(dim)] = expand;
     });
     setExpandedMap(newMap);
     setAllExpanded(expand);
@@ -112,17 +129,17 @@ export default function LayerReportCard({
   };
 
   // Handle single dimension toggle
-  const handleDimensionToggle = (dimensionName: string, expanded: boolean) => {
-    setExpandedMap((prev) => {
-      const newMap = {
-        ...prev,
-        [dimensionName]: expanded,
-      };
-      // Update allExpanded state based on new state
-      const allDimsExpanded = dimensions.every((dim) => newMap[dim.name] ?? actualDefaultExpanded);
-      setAllExpanded(allDimsExpanded);
-      return newMap;
+  const handleDimensionToggle = (dimensionKey: string, expanded: boolean) => {
+    setExpandedMap((prev) => ({
+      ...prev,
+      [dimensionKey]: expanded,
+    }));
+    // Derive allExpanded outside the setter
+    const allDimsExpanded = dimensions.every((dim) => {
+      const key = getDimensionKey(dim);
+      return key === dimensionKey ? expanded : (expandedMap[key] ?? actualDefaultExpanded);
     });
+    setAllExpanded(allDimsExpanded);
   };
 
   const handleCopyDimension = (dimensionName: string, dimensionContent: string) => {
@@ -281,23 +298,24 @@ export default function LayerReportCard({
       {/* Dimension sections */}
       <div className="space-y-3">
         {dimensions.map((dimension, index) => {
-          const dimensionKey = NAME_TO_KEY[dimension.name];
+          const dimensionKey = dimension.key;
           const gisData = dimensionKey ? dimensionGisData?.[dimensionKey] : undefined;
           const knowledgeSources = dimensionKey
             ? dimensionKnowledgeSources?.[dimensionKey]
             : undefined;
+          const expandedKey = getDimensionKey(dimension);
 
           return (
             <DimensionSection
-              key={index}
+              key={dimensionKey || index}
               name={dimension.name}
               content={dimension.content}
               icon={dimension.icon}
               subsections={dimension.subsections}
               gisData={gisData}
               knowledgeSources={knowledgeSources}
-              expanded={expandedMap[dimension.name] ?? actualDefaultExpanded}
-              onToggle={(expanded) => handleDimensionToggle(dimension.name, expanded)}
+              expanded={expandedMap[expandedKey] ?? actualDefaultExpanded}
+              onToggle={(expanded) => handleDimensionToggle(expandedKey, expanded)}
               onCopy={() => handleCopyDimension(dimension.name, dimension.content)}
               onExport={() => handleExportDimension(dimension.name, dimension.content)}
             />

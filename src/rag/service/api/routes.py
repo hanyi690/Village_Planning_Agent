@@ -52,7 +52,7 @@ def extract_knowledge_sources(tool_output: str) -> list[dict]:
     import re
 
     sources = []
-    pattern = r"【知识片段 \d+】\s*\n来源: ([^\n]+)\s*\n位置: 第(\d+)\s*(.*?)\s*\n内容:\s*([\s\S]*?)(?=【知识片段|$)"
+    pattern = r"【知识片段 \d+】\s*\n来源: ([^\n]+)\s*\n位置: 第(\d+)\s*([^\n]*)\s*\n?内容:\s*\n?([\s\S]*?)(?=【知识片段|$)"
 
     for match in re.findall(pattern, tool_output):
         source, page_num, doc_type, content = match

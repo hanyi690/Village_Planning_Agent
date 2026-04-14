@@ -52,6 +52,7 @@ function LayerReportMessage({
     // 当 dimensionReports 有完整内容时，说明层级已完成，REST API 返回了完整数据
     if (hasCompleteDimensionReports) {
       return Object.entries(dimensionReports).map(([key, content]) => ({
+        key, // ✅ 添加 dimension_key
         name: getDimensionName(key),
         content: content,
         icon: getDimensionIcon(key),
@@ -70,6 +71,7 @@ function LayerReportMessage({
           const content = dimensionContents[contentKey] || '';
           if (content) {
             result.push({
+              key, // ✅ 添加 dimension_key
               name: getDimensionName(key),
               content: content,
               icon: getDimensionIcon(key),
@@ -86,6 +88,7 @@ function LayerReportMessage({
             if (keyLayer === message.layer && content) {
               const dimKey = parts.slice(1).join('_');
               result.push({
+                key: dimKey, // ✅ 添加 dimension_key
                 name: getDimensionName(dimKey),
                 content: content,
                 icon: getDimensionIcon(dimKey),

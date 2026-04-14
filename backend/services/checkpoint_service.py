@@ -18,6 +18,7 @@ from typing import Dict, List, Any, Optional, Tuple
 
 from backend.constants import MAX_SESSION_EVENTS
 from src.orchestration.state import get_layer_dimensions, get_layer_name, _phase_to_layer
+from src.utils.event_factory import create_layer_completed_event
 
 # Lazy import for DIMENSION_NAMES to avoid circular dependency
 _DIMENSION_NAMES = None
@@ -313,6 +314,10 @@ class CheckpointService:
             completed_dims = state.get("completed_dimensions", {})
             phase = state.get("phase", "init")
 
+            # Get knowledge sources cache from state config
+            config = state.get("config", {})
+            knowledge_sources_cache = config.get("knowledge_sources_cache", {})
+
             # Get dimension names mapping (lazy loaded)
             DIMENSION_NAMES = _get_dimension_names()
 
@@ -329,22 +334,18 @@ class CheckpointService:
 
                 if layer_completed:
                     dimension_reports = reports.get(layer_key, {})
-                    total_chars = sum(len(v) for v in dimension_reports.values()) if dimension_reports else 0
 
-                    event = {
-                        "type": "layer_completed",
-                        "layer": layer_num,
-                        "layer_number": layer_num,
-                        "session_id": session_id,
-                        "message": f"Layer {layer_num} completed",
-                        "has_data": len(dimension_reports) > 0 and total_chars > 0,
-                        "dimension_count": len(dimension_reports) if dimension_reports else 0,
-                        "total_chars": total_chars,
-                        "pause_after_step": state.get("pause_after_step", False),
-                        "phase": phase,
-                        "timestamp": metadata.get("last_signal_timestamp", datetime.now().isoformat()),
-                        "_rebuild": True,
-                    }
+                    # Use event factory for consistent event creation
+                    event = create_layer_completed_event(
+                        layer=layer_num,
+                        phase=phase,
+                        reports=reports,
+                        pause_after_step=state.get("pause_after_step", False),
+                        previous_layer=layer_num,
+                        session_id=session_id,
+                        knowledge_sources_cache=knowledge_sources_cache,
+                    )
+                    event["_rebuild"] = True
                     events.append(event)
                     logger.info(f"[CheckpointService] Session {session_id}: rebuilt layer_completed event Layer {layer_num}")
 
@@ -358,6 +359,7 @@ class CheckpointService:
                                 "dimension_key": dim_key,
                                 "dimension_name": dim_name,
                                 "full_content": dim_content,
+                                "knowledge_sources": knowledge_sources_cache.get(dim_key, []),
                                 "session_id": session_id,
                                 "timestamp": metadata.get("last_signal_timestamp", datetime.now().isoformat()),
                                 "_rebuild": True,

@@ -50,14 +50,14 @@
 
 ### Layer 2: 规划思路
 
-4个维度，存在依赖关系，按 Wave 执行:
+4个维度，存在依赖关系，按 Wave 执行：
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Layer 2: 规划思路                          │
 ├─────────────────────────────────────────────────────────────────┤
 │ Wave 1:                                                          │
-│   resource_endowment    │ 资源禀赋分析 (依赖多个 Layer 1 维度)    │
+│   resource_endowment    │ 资源禀赋分析 (无同层依赖)              │
 │                        │                                          │
 │ Wave 2:                                                          │
 │   planning_positioning  │ 规划定位分析 (依赖 resource_endowment)  │
@@ -65,10 +65,19 @@
 │ Wave 3:                                                          │
 │   development_goals     │ 发展目标分析 (依赖 resource_endowment,  │
 │                        │                   planning_positioning)   │
+│                        │                                          │
+│ Wave 4:                                                          │
 │   planning_strategies   │ 规划策略分析 (依赖前3个维度)            │
 └─────────────────────────────────────────────────────────────────┘
           ↓ (全部完成后进入 Layer 3)
 ```
+
+| Wave | 维度 | 依赖关系 |
+|------|------|----------|
+| Wave 1 | resource_endowment | 无同层依赖 |
+| Wave 2 | planning_positioning | 依赖 resource_endowment |
+| Wave 3 | development_goals | 依赖 resource_endowment, planning_positioning |
+| Wave 4 | planning_strategies | 依赖前3个维度 |
 
 ### Layer 3: 详细规划
 
@@ -613,15 +622,18 @@ graph LR
 
     subgraph Wave3["Wave 3"]
         W3_1[development_goals]
-        W3_2[planning_strategies]
+    end
+
+    subgraph Wave4["Wave 4"]
+        W4_1[planning_strategies]
     end
 
     W1_1 --> W2_1
     W1_1 --> W3_1
     W2_1 --> W3_1
-    W1_1 --> W3_2
-    W2_1 --> W3_2
-    W3_1 --> W3_2
+    W1_1 --> W4_1
+    W2_1 --> W4_1
+    W3_1 --> W4_1
 ```
 
 ---

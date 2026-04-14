@@ -229,6 +229,7 @@ def _send_layer_completion_events(
     phase: str,
     reports: Dict[str, Any],
     step_mode: bool,
+    state: Dict[str, Any] = None,
 ) -> None:
     """统一发送层级完成的 SSE 事件
 
@@ -238,12 +239,19 @@ def _send_layer_completion_events(
         phase: 当前阶段
         reports: 报告数据
         step_mode: 是否分步模式
+        state: 当前状态（用于获取 knowledge_sources_cache）
 
     Note:
         checkpoint_saved 事件由 _trigger_planning_execution 在 checkpoint 持久化后发送，
         此函数只发送 layer_completed 和 pause 事件。
     """
     sse_events = []
+
+    # Extract knowledge sources from state config
+    knowledge_sources_cache = None
+    if state:
+        config = state.get("config", {})
+        knowledge_sources_cache = config.get("knowledge_sources_cache")
 
     # 发送 layer_completed 事件
     sse_events.append(create_layer_completed_event(
@@ -253,6 +261,7 @@ def _send_layer_completion_events(
         pause_after_step=True,
         previous_layer=layer,
         session_id=session_id,
+        knowledge_sources_cache=knowledge_sources_cache,
     ))
 
     # step_mode 下额外发送 pause 事件
@@ -353,7 +362,7 @@ async def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception as idx_e:
                     logger.warning(f"[收集] Layer {layer} 摘要索引失败: {idx_e}")
         except Exception as e:
-            logger.warning(f"[收集] Layer {layer} 摘要生成失败: {e}，继续执行")
+            logger.warning(f"[收集] Layer {layer} 摘要生成失败 ({type(e).__name__}): {e}，继续执行")
             # 摘要生成失败不影响主流程，继续执行
 
         # 当前层完成
@@ -383,6 +392,7 @@ async def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
                 phase=phase,
                 reports=reports,
                 step_mode=state.get("step_mode", False),
+                state=state,
             )
 
             updates["sse_events"] = []
@@ -407,6 +417,7 @@ async def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
                 phase=phase,
                 reports=reports,
                 step_mode=state.get("step_mode", False),
+                state=state,
             )
 
             updates["sse_events"] = []

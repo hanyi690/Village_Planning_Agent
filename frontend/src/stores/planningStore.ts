@@ -54,6 +54,14 @@ interface CompletedDimensions {
   layer3: string[];
 }
 
+interface LayerProgressSnapshot {
+  completedAt: string;
+  dimensionCount: number;
+  completedCount: number;
+  totalWordCount: number;
+  dimensionDetails: DimensionProgressItem[];
+}
+
 interface ToolStatus {
   toolName: string;
   status: 'running' | 'success' | 'error';
@@ -104,6 +112,11 @@ export interface PlanningState {
   dimensionProgress: Record<string, DimensionProgressItem>;
   executingDimensions: string[];
   layerDimensionCount: Record<number, number>;
+  layerProgressHistory: {
+    layer1?: LayerProgressSnapshot;
+    layer2?: LayerProgressSnapshot;
+    layer3?: LayerProgressSnapshot;
+  };
 
   // UI State
   viewerVisible: boolean;
@@ -231,6 +244,7 @@ function createInitialState(conversationId: string): PlanningState {
     dimensionProgress: {},
     executingDimensions: [],
     layerDimensionCount: {},
+    layerProgressHistory: {},
 
     // UI State
     viewerVisible: false,
@@ -396,12 +410,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const layer = dimData.layer || 1;
       const dimensionKey = dimData.dimension_key || '';
       const key = buildDimensionProgressKey(layer, dimensionKey);
-
-      // 兜底：如果 currentLayer 未设置，从事件中获取
-      if (state.currentLayer === null) {
-        state.currentLayer = layer;
-        state.currentPhase = getLayerPhase(layer);
-      }
 
       // Track executing dimension (no longer create standalone message)
       state.executingDimensions.push(key);
@@ -600,20 +608,14 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         }
       }
 
-      // 直接使用事件中的 layer 更新 currentLayer（避免 phase 映射失败）
-      state.currentLayer = layer;
-      state.currentPhase = getLayerPhase(layer);
-
-      // 仅更新 completedDimensions 和 completedLayers
-      const newCompletedDimensions = deriveCompletedDimensions(state.reports);
-      if (!shallowEqualCompletedDimensions(newCompletedDimensions, state.completedDimensions)) {
-        state.completedDimensions = newCompletedDimensions;
+      // Ensure phase is correct (dimension_complete may arrive before layer_started)
+      const expectedPhase = `layer${layer}`;
+      if (state.phase !== expectedPhase) {
+        state.phase = expectedPhase;
       }
-      state.completedLayers = {
-        1: state.completedDimensions.layer1.length > 0,
-        2: state.completedDimensions.layer2.length > 0,
-        3: state.completedDimensions.layer3.length > 0,
-      };
+
+      // Derive UI state from phase (currentLayer, currentPhase, completedLayers, etc.)
+      deriveUIStateInStore(state);
       break;
     }
 
@@ -624,8 +626,28 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         dimension_count?: number;
       };
       const layerNum = layerData.layer || layerData.layer_number || 1;
-      state.currentLayer = layerNum;
-      state.currentPhase = getLayerPhase(layerNum);
+
+      // Save history snapshot before resetting (preserve previous layer progress)
+      const prevLayer = state.currentLayer;
+      if (prevLayer && prevLayer !== layerNum && Object.keys(state.dimensionProgress).length > 0) {
+        const prevItems = Object.values(state.dimensionProgress).filter(
+          (p) => p.layer === prevLayer
+        );
+
+        if (prevItems.length > 0) {
+          const layerKey = `layer${prevLayer}` as keyof typeof state.layerProgressHistory;
+          state.layerProgressHistory[layerKey] = {
+            completedAt: new Date().toISOString(),
+            dimensionCount: state.layerDimensionCount[prevLayer] || prevItems.length,
+            completedCount: prevItems.filter((p) => p.status === 'completed').length,
+            totalWordCount: prevItems.reduce((sum, p) => sum + p.wordCount, 0),
+            dimensionDetails: prevItems,
+          };
+        }
+      }
+
+      // Core: Update phase first, then derive UI state from it
+      state.phase = `layer${layerNum}`;
 
       // Store dimension_count for progress panel display (with change detection)
       if (
@@ -668,6 +690,9 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         state.messages.push(newMessage);
       }
       // If message exists (history restore or SSE reconnect), preserve its content unchanged
+
+      // Derive UI state from phase (currentLayer, currentPhase, completedLayers, etc.)
+      deriveUIStateInStore(state);
       break;
     }
 
@@ -676,6 +701,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         layer?: number;
         phase?: string;
         dimension_reports?: Record<string, string>;
+        dimension_knowledge_sources?: Record<string, KnowledgeSource[]>;
         pause_after_step?: boolean;
         previous_layer?: number;
         task_id?: string;
@@ -715,6 +741,12 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         const summary = calculateReportSummary(layerMsg.dimensionReports);
         layerMsg.summary.word_count = summary.word_count;
         layerMsg.summary.dimension_count = summary.dimension_count;
+
+        // Update knowledge sources if provided
+        if (layerData.dimension_knowledge_sources) {
+          layerMsg.dimensionKnowledgeSources = layerMsg.dimensionKnowledgeSources ?? {};
+          Object.assign(layerMsg.dimensionKnowledgeSources, layerData.dimension_knowledge_sources);
+        }
       }
 
       // Force mark all dimensions in current layer as completed
@@ -737,31 +769,8 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         );
       }
 
-      // Use layer from event to update currentLayer
-      // When paused, show the just completed layer; when continuing, show new phase
-      if (layerData.pause_after_step && layerData.previous_layer) {
-        state.currentLayer = layerData.previous_layer;
-        state.currentPhase = getLayerPhase(layerData.previous_layer);
-      } else {
-        state.currentLayer = layerNum;
-        state.currentPhase = getLayerPhase(layerNum);
-      }
-
-      // 仅更新 completedDimensions 和 completedLayers
-      const newCompletedDimensions = deriveCompletedDimensions(state.reports);
-      if (!shallowEqualCompletedDimensions(newCompletedDimensions, state.completedDimensions)) {
-        state.completedDimensions = newCompletedDimensions;
-      }
-      state.completedLayers = {
-        1: state.completedDimensions.layer1.length > 0,
-        2: state.completedDimensions.layer2.length > 0,
-        3: state.completedDimensions.layer3.length > 0,
-      };
-
-      // 暂停状态设置
-      state.isPaused = state.pause_after_step === true;
-      state.pendingReviewLayer =
-        state.isPaused && state.previous_layer > 0 ? state.previous_layer : null;
+      // Derive UI state from phase and pause state (currentLayer, currentPhase, etc.)
+      deriveUIStateInStore(state);
       break;
     }
 
@@ -1060,8 +1069,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 }
 
 function deriveUIStateInStore(state: PlanningState): void {
-  const currentLayer = phaseToLayer(state.phase);
-
   // Derive completedDimensions from reports
   const newCompletedDimensions = deriveCompletedDimensions(state.reports);
 
@@ -1082,8 +1089,10 @@ function deriveUIStateInStore(state: PlanningState): void {
   state.pendingReviewLayer =
     state.isPaused && state.previous_layer > 0 ? state.previous_layer : null;
 
-  state.currentLayer = currentLayer;
-  state.currentPhase = currentLayer ? getLayerPhase(currentLayer) : 'idle';
+  // Derive currentLayer: prefer pendingReviewLayer when paused, else from phase
+  const layerFromPhase = phaseToLayer(state.phase);
+  state.currentLayer = state.pendingReviewLayer || layerFromPhase;
+  state.currentPhase = state.currentLayer ? getLayerPhase(state.currentLayer) : 'idle';
 }
 
 // ============================================

@@ -193,8 +193,12 @@ async def extract_projects_by_llm(
         from src.core.llm_factory import create_llm
         from src.core.config import LLM_MODEL
 
-        # 使用配置的模型
-        llm = create_llm(model=LLM_MODEL, temperature=0.1, max_tokens=2000)
+        # 使用配置的模型（启用 JSON 结构化输出）
+        llm = create_llm(
+            model=LLM_MODEL,
+            temperature=0.1,
+            model_kwargs={"response_format": {"type": "json_object"}},
+        )
 
         prompt = PROJECT_EXTRACTOR_PROMPT.format(content=content)
 
