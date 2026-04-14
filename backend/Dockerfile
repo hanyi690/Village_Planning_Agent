@@ -21,9 +21,11 @@ WORKDIR /app
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
     sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# Install build dependencies
+# Install build dependencies (including GDAL for geopandas)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    libgdal-dev \
+    gdal-bin \
     && rm -rf /var/lib/apt/lists/*
 
 # Create virtual environment
@@ -60,10 +62,11 @@ WORKDIR /app
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
     sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# Install runtime dependencies only
-# LibreOffice 用于 .doc 文件转换（Docker/Linux 环境替代 Windows COM）
+# Install runtime dependencies (including GDAL for geopandas, LibreOffice for .doc conversion)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    gdal-bin \
+    libgdal-dev \
     libreoffice-writer \
     libreoffice-core \
     libreoffice-common \
