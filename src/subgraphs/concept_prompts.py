@@ -410,7 +410,8 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
                          task_description: str = "", constraints: str = "",
                          professional_data: dict = None,
                          superior_planning_context: str = "",
-                         knowledge_context: str = "") -> str:
+                         knowledge_context: str = "",
+                         summary_context: str = "") -> str:  # Phase 4: 添加 summary_context
     """
     获取规划思路维度的 Prompt 模板
 
@@ -422,6 +423,7 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
         professional_data: 专业数据（可选）
         superior_planning_context: 上位规划上下文（positioning 维度专用）
         knowledge_context: RAG 知识上下文（可选）
+        summary_context: 摘要背景上下文（Phase 4，可选）
 
     Returns:
         格式化后的 Prompt 字符串
@@ -448,6 +450,11 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
     if knowledge_context:
         knowledge_section = f"\n**参考规范与标准**\n{knowledge_context}\n"
 
+    # Phase 4: 构建摘要背景部分（XML 标签显式区分）
+    summary_section = ""
+    if summary_context:
+        summary_section = f"\n{summary_context}\n"
+
     format_params = {
         "analysis_report": analysis_report,
         "task_description": task_description,
@@ -456,6 +463,7 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
         "superior_planning_context": superior_planning_context or "暂无上位规划参考",
         "knowledge_context": knowledge_context,
         "knowledge_section": knowledge_section,
+        "summary_section": summary_section,  # Phase 4
     }
 
     # 尝试格式化，如果模板没有 knowledge_context 占位符则使用 knowledge_section

@@ -62,11 +62,25 @@ async def review_action(session_id: str, request: ReviewActionRequest):
             if not request.feedback:
                 raise HTTPException(status_code=400, detail="Feedback is required for rejection")
 
+            # 转换图片为 dict 格式
+            images_data = []
+            if request.images:
+                for img in request.images:
+                    if hasattr(img, 'model_dump'):
+                        images_data.append(img.model_dump())
+                    elif hasattr(img, 'dict'):
+                        images_data.append(img.dict())
+                    elif isinstance(img, dict):
+                        images_data.append(img)
+                    else:
+                        images_data.append(img)
+
             response = await review_service.reject(
                 session_id,
                 request.feedback,
                 request.dimensions,
                 review_id,
+                images=images_data,
             )
             asyncio.create_task(PlanningRuntimeService.resume_execution(session_id))
             return response.model_dump()

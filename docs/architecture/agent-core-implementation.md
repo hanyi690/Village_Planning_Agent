@@ -619,15 +619,15 @@ sequenceDiagram
 
 ## 关键代码路径
 
-| 功能 | 文件路径 | 关键函数/类 |
-|------|----------|-------------|
-| 图定义 | `src/orchestration/main_graph.py` | `create_unified_planning_graph` |
-| 状态定义 | `src/orchestration/state.py` | `UnifiedPlanningState` |
-| 意图路由 | `src/orchestration/routing.py` | `intent_router` |
-| 规划路由 | `src/orchestration/routing.py` | `route_by_phase` |
-| 维度分析 | `src/orchestration/nodes/dimension_node.py` | `analyze_dimension_for_send` |
-| 结果收集 | `src/orchestration/routing.py` | `collect_layer_results` |
-| 修订节点 | `src/orchestration/nodes/revision_node.py` | `revision_node` |
+| 功能     | 文件路径                                      | 关键函数/类                       |
+| -------- | --------------------------------------------- | --------------------------------- |
+| 图定义   | `src/orchestration/main_graph.py`           | `create_unified_planning_graph` |
+| 状态定义 | `src/orchestration/state.py`                | `UnifiedPlanningState`          |
+| 意图路由 | `src/orchestration/routing.py`              | `intent_router`                 |
+| 规划路由 | `src/orchestration/routing.py`              | `route_by_phase`                |
+| 维度分析 | `src/orchestration/nodes/dimension_node.py` | `analyze_dimension_for_send`    |
+| 结果收集 | `src/orchestration/routing.py`              | `collect_layer_results`         |
+| 修订节点 | `src/orchestration/nodes/revision_node.py`  | `revision_node`                 |
 
 ---
 

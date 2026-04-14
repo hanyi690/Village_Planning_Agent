@@ -24,16 +24,38 @@ export interface EmbeddedImage {
 }
 
 /**
- * Text Message - Standard text content with optional streaming and knowledge references
+ * Knowledge Source - 知识库切片信息
+ */
+export interface KnowledgeSource {
+  source: string;      // 文档来源
+  page: number;        // 页码
+  doc_type: string;    // 文档类型
+  content: string;     // 内容预览
+}
+
+/**
+ * Text Message - Standard text content with optional streaming, images and knowledge references
  */
 export interface TextMessage extends BaseMessage {
   type: 'text';
   content: string;
   // Streaming support
   streamingState?: 'idle' | 'streaming' | 'paused' | 'completed';
-  streamingContent?: string; // 当前已显示的内容
-  // RAG知识引用
+  streamingContent?: string;
+  // Multimodal images
+  images?: ImageAttachment[];
+  // RAG knowledge references
   knowledgeReferences?: KnowledgeReference[];
+}
+
+/**
+ * Image Attachment - Multimodal image for TextMessage
+ */
+export interface ImageAttachment {
+  base64: string;
+  format: string;
+  width?: number;
+  height?: number;
 }
 
 /**
@@ -108,6 +130,8 @@ export interface DimensionReportMessage extends BaseMessage {
   isRevision?: boolean;
   // GIS 数据
   gisData?: GISData;
+  // 知识库切片
+  knowledgeSources?: KnowledgeSource[];
 }
 
 /**
@@ -128,10 +152,12 @@ export interface LayerCompletedMessage extends BaseMessage {
   actions: ActionButton[];
   // GIS 数据：每个维度的 GIS 分析结果
   dimensionGisData?: Record<string, GISData>;
+  // 知识库切片：每个维度的知识来源
+  dimensionKnowledgeSources?: Record<string, KnowledgeSource[]>;
 }
 
 // ============================================================================
-// Tool Execution Messages (工具执行相关消息类型)
+// Tool Status Message (合并 tool_call/progress/result)
 // ============================================================================
 
 /**
@@ -140,57 +166,22 @@ export interface LayerCompletedMessage extends BaseMessage {
 export type ToolExecutionStatus = 'pending' | 'running' | 'success' | 'error';
 
 /**
- * Tool Stage - 工具执行阶段
+ * Tool Status Message - Unified tool execution status
  */
-export interface ToolStage {
-  name: string;
-  status: ToolExecutionStatus;
-  progress: number;
-  message: string;
-}
-
-/**
- * Tool Display Hints - 前端渲染提示
- */
-export interface ToolDisplayHints {
-  primary_view?: 'text' | 'table' | 'map' | 'chart' | 'json';
-  priority_fields?: string[];
-}
-
-/**
- * Tool Call Message - 工具调用开始
- */
-export interface ToolCallMessage extends BaseMessage {
-  type: 'tool_call';
+export interface ToolStatusMessage extends BaseMessage {
+  type: 'tool_status';
   toolName: string;
   toolDisplayName: string;
   description: string;
-  estimatedTime?: number;
+  status: ToolExecutionStatus;
+  progress?: number;
   stage?: string;
-}
-
-/**
- * Tool Progress Message - 工具执行进度
- */
-export interface ToolProgressMessage extends BaseMessage {
-  type: 'tool_progress';
-  toolName: string;
-  stage: string;
-  progress: number;
-  message: string;
-}
-
-/**
- * Tool Result Message - 工具执行结果
- */
-export interface ToolResultMessage extends BaseMessage {
-  type: 'tool_result';
-  toolName: string;
-  status: 'success' | 'error';
-  summary: string;
-  displayHints?: ToolDisplayHints;
-  dataPreview?: string;
-  stages?: ToolStage[];
+  stageMessage?: string;
+  summary?: string;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+  estimatedTime?: number;
 }
 
 // ============================================================================

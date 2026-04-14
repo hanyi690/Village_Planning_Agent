@@ -8,6 +8,7 @@
 
 import React, { useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { getToolIconEmoji } from '@/lib/constants';
 
 // Simplified ToolStatus type
 export interface SimpleToolStatus {
@@ -24,21 +25,6 @@ interface ToolStatusPanelProps {
   onClose?: () => void;
   maxVisible?: number;
 }
-
-// Tool icons mapping
-const TOOL_ICONS: Record<string, string> = {
-  gis_data_fetch: '🗺️',
-  gis_analysis: '📊',
-  poi_search: '🔍',
-  route_planning: '🚗',
-  accessibility_analysis: '🚶',
-  population_prediction: '👥',
-  network_analysis: '🌐',
-  wfs_data_fetch: '📡',
-  reverse_geocode: '📍',
-  knowledge_search: '📚',
-  web_search: '🔎',
-};
 
 // Status color mapping
 const STATUS_COLORS: Record<string, string> = {
@@ -124,7 +110,7 @@ function ToolStatusPanel({ tools, onClose, maxVisible = 5 }: ToolStatusPanelProp
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-sm flex-shrink-0">
-                        {TOOL_ICONS[tool.name] || '⚙️'}
+                        {getToolIconEmoji(tool.name)}
                       </span>
                       <span className="font-medium truncate text-sm" title={tool.name}>
                         {tool.name}

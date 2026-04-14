@@ -10,7 +10,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ParsedDimension, parseLayerReport } from '@/lib/layerReportParser';
 import DimensionSection from './DimensionSection';
-import type { GISData } from '@/types/message/message-types';
+import type { GISData, KnowledgeSource } from '@/types/message/message-types';
 import { DIMENSION_NAMES } from '@/config/dimensions';
 
 // Build reverse mapping: name -> key
@@ -23,6 +23,7 @@ interface LayerReportCardProps {
   content: string;
   dimensions?: ParsedDimension[];
   dimensionGisData?: Record<string, GISData>;
+  dimensionKnowledgeSources?: Record<string, KnowledgeSource[]>;
   mode?: 'chat' | 'sidebar';
   defaultExpanded?: boolean;
   maxHeight?: string;
@@ -39,6 +40,7 @@ export default function LayerReportCard({
   content,
   dimensions: propDimensions,
   dimensionGisData,
+  dimensionKnowledgeSources,
   mode = 'sidebar',
   defaultExpanded,
   maxHeight,
@@ -50,7 +52,8 @@ export default function LayerReportCard({
   simplified = false,
 }: LayerReportCardProps) {
   const actualDefaultExpanded =
-    defaultExpanded ?? (simplified ? false : (mode === 'sidebar' || isActive || hasStreamingDimensions));
+    defaultExpanded ??
+    (simplified ? false : mode === 'sidebar' || isActive || hasStreamingDimensions);
   const actualMaxHeight = maxHeight ?? (mode === 'chat' ? '800px' : 'none');
   const actualShowExpandAll = showExpandAll ?? (mode === 'sidebar' && !simplified);
 
@@ -80,6 +83,9 @@ export default function LayerReportCard({
           dimensions.forEach((dim) => {
             initial[dim.name] = actualDefaultExpanded;
           });
+          // Sync allExpanded state with expandedMap initial state
+          const allDimsExpanded = dimensions.every((dim) => initial[dim.name]);
+          setAllExpanded(allDimsExpanded);
           return initial;
         }
         // Add new dimensions with default value
@@ -113,9 +119,7 @@ export default function LayerReportCard({
         [dimensionName]: expanded,
       };
       // Update allExpanded state based on new state
-      const allDimsExpanded = dimensions.every(
-        (dim) => newMap[dim.name] ?? actualDefaultExpanded
-      );
+      const allDimsExpanded = dimensions.every((dim) => newMap[dim.name] ?? actualDefaultExpanded);
       setAllExpanded(allDimsExpanded);
       return newMap;
     });
@@ -216,13 +220,18 @@ export default function LayerReportCard({
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => handleToggleAll(!allExpanded)}
-                className={allExpanded
-                  ? "flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg"
-                  : "flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white rounded-lg shadow-sm"
+                className={
+                  allExpanded
+                    ? 'flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg'
+                    : 'flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white rounded-lg shadow-sm'
                 }
-                style={!allExpanded ? {
-                  background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
-                } : undefined}
+                style={
+                  !allExpanded
+                    ? {
+                        background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+                      }
+                    : undefined
+                }
               >
                 <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
                 {allExpanded ? '折叠全部' : '展开全部'}
@@ -246,14 +255,19 @@ export default function LayerReportCard({
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
                   onClick={() => handleToggleAll(!allExpanded)}
-                  className={allExpanded
-                    ? "flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors"
-                    : "flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md"
+                  className={
+                    allExpanded
+                      ? 'flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors'
+                      : 'flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md'
                   }
-                  style={!allExpanded ? {
-                    background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
-                    boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
-                  } : undefined}
+                  style={
+                    !allExpanded
+                      ? {
+                          background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+                          boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
+                        }
+                      : undefined
+                  }
                 >
                   <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
                   {allExpanded ? '折叠全部' : '展开全部'}
@@ -269,6 +283,9 @@ export default function LayerReportCard({
         {dimensions.map((dimension, index) => {
           const dimensionKey = NAME_TO_KEY[dimension.name];
           const gisData = dimensionKey ? dimensionGisData?.[dimensionKey] : undefined;
+          const knowledgeSources = dimensionKey
+            ? dimensionKnowledgeSources?.[dimensionKey]
+            : undefined;
 
           return (
             <DimensionSection
@@ -278,6 +295,7 @@ export default function LayerReportCard({
               icon={dimension.icon}
               subsections={dimension.subsections}
               gisData={gisData}
+              knowledgeSources={knowledgeSources}
               expanded={expandedMap[dimension.name] ?? actualDefaultExpanded}
               onToggle={(expanded) => handleDimensionToggle(dimension.name, expanded)}
               onCopy={() => handleCopyDimension(dimension.name, dimension.content)}

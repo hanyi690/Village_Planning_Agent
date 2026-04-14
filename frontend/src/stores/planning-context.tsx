@@ -16,12 +16,7 @@
 import { useEffect, useCallback, ReactNode } from 'react';
 import { usePlanningStore } from '@/stores/planningStore';
 import { useSSEConnection, useMessagePersistence, useSessionRestore } from '@/hooks/planning';
-import {
-  planningApi,
-  dataApi,
-  VillageInfo,
-  VillageSession,
-} from '@/lib/api';
+import { planningApi, dataApi, VillageInfo, VillageSession, ImageData } from '@/lib/api';
 import { createSystemMessage, createErrorMessage, getErrorMessage } from '@/lib/utils';
 import { transformBackendMessages } from '@/lib/utils/message-transform';
 import { logger } from '@/lib/logger';
@@ -44,41 +39,65 @@ interface PlanningProviderProps {
 export function usePlanningActions() {
   const store = usePlanningStore();
 
-  const startPlanning = useCallback(async (params: PlanningParams) => {
-    logger.context.info('Starting planning', { projectName: params.projectName });
+  const startPlanning = useCallback(
+    async (params: PlanningParams) => {
+      logger.context.info('Starting planning', { projectName: params.projectName });
 
-    try {
-      store.setStatus('collecting');
-      store.setProjectName(params.projectName);
-      store.setStepMode(params.stepMode ?? PLANNING_DEFAULTS.stepMode);
+      try {
+        store.setStatus('collecting');
+        store.setProjectName(params.projectName);
+        store.setStepMode(params.stepMode ?? PLANNING_DEFAULTS.stepMode);
 
-      const response = await planningApi.startPlanning({
-        project_name: params.projectName,
-        village_data: params.villageData,
-        village_name: params.villageName || params.projectName,
-        task_description: params.taskDescription || PLANNING_DEFAULTS.defaultTask,
-        constraints: params.constraints || PLANNING_DEFAULTS.defaultConstraints,
-        enable_review: params.enableReview ?? PLANNING_DEFAULTS.enableReview,
-        step_mode: params.stepMode ?? PLANNING_DEFAULTS.stepMode,
-        stream_mode: PLANNING_DEFAULTS.streamMode,
-      });
+        const response = await planningApi.startPlanning({
+          project_name: params.projectName,
+          village_data: params.villageData,
+          village_name: params.villageName || params.projectName,
+          task_description: params.taskDescription || PLANNING_DEFAULTS.defaultTask,
+          constraints: params.constraints || PLANNING_DEFAULTS.defaultConstraints,
+          enable_review: params.enableReview ?? PLANNING_DEFAULTS.enableReview,
+          step_mode: params.stepMode ?? PLANNING_DEFAULTS.stepMode,
+          stream_mode: PLANNING_DEFAULTS.streamMode,
+          images: params.images,
+        });
 
-      if (!response || typeof response.task_id !== 'string') {
-        throw new Error('Server response missing task ID');
+        if (!response || typeof response.task_id !== 'string') {
+          throw new Error('Server response missing task ID');
+        }
+
+        store.setTaskId(response.task_id);
+        store.setStatus('planning');
+
+        // Build initialization message with planning context
+        const villageName = params.villageName || params.projectName;
+        const taskDesc = params.taskDescription || PLANNING_DEFAULTS.defaultTask;
+        const constraintsText = params.constraints || PLANNING_DEFAULTS.defaultConstraints;
+
+        // Truncate long content (preserve line breaks, relaxed limit for file content)
+        const truncate = (text: string, maxLen: number = 500): string => {
+          if (text.length <= maxLen) return text;
+          const breakPoint = text.lastIndexOf('\n', maxLen);
+          if (breakPoint > maxLen * 0.7) return text.slice(0, breakPoint) + '...';
+          return text.slice(0, maxLen) + '...';
+        };
+
+        const initMessage = `规划任务已启动
+
+村庄: ${villageName}
+任务: ${truncate(taskDesc)}
+约束: ${truncate(constraintsText)}
+
+Task ID: ${response.task_id.slice(0, 8)}...`;
+
+        store.addMessage(createSystemMessage(initMessage));
+      } catch (error: unknown) {
+        const errorMessage = getErrorMessage(error, 'Unknown error');
+        logger.context.error('Planning failed to start', { error: errorMessage });
+        store.setStatus('failed');
+        throw error;
       }
-
-      store.setTaskId(response.task_id);
-      store.setStatus('planning');
-      store.addMessage(
-        createSystemMessage(`Planning started. Task ID: ${response.task_id.slice(0, 8)}...`)
-      );
-    } catch (error: unknown) {
-      const errorMessage = getErrorMessage(error, 'Unknown error');
-      logger.context.error('Planning failed to start', { error: errorMessage });
-      store.setStatus('failed');
-      throw error;
-    }
-  }, [store]);
+    },
+    [store]
+  );
 
   const approve = useCallback(async () => {
     if (!store.taskId) throw new Error('No task ID');
@@ -87,8 +106,8 @@ export function usePlanningActions() {
       await planningApi.approveReview(store.taskId);
       store.setPaused(false);
       store.setPendingReviewLayer(null);
+      store.clearProgressState();
       store.triggerSseReconnect();
-
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error, 'Unknown error');
       logger.context.error('Failed to approve review', { error: errorMessage });
@@ -97,36 +116,54 @@ export function usePlanningActions() {
     }
   }, [store]);
 
-  const reject = useCallback(async (feedback: string, dimensions?: string[]) => {
-    if (!store.taskId) throw new Error('No task ID');
-    if (!feedback.trim()) throw new Error('Feedback is required');
-    logger.context.info('Rejecting review', { taskId: store.taskId, feedback: feedback.slice(0, 50) });
-    try {
-      await planningApi.rejectReview(store.taskId, feedback, dimensions);
-      store.setPaused(false);
-      store.triggerSseReconnect();
-      
-    } catch (error: unknown) {
-      const errorMessage = getErrorMessage(error, 'Unknown error');
-      logger.context.error('Failed to reject review', { error: errorMessage });
+  const reject = useCallback(
+    async (feedback: string, dimensions?: string[], images?: ImageData[]) => {
+      if (!store.taskId) throw new Error('No task ID');
+      if (!feedback.trim()) throw new Error('Feedback is required');
+      logger.context.info('Rejecting review', {
+        taskId: store.taskId,
+        feedback: feedback.slice(0, 50),
+        hasImages: (images?.length ?? 0) > 0,
+      });
+      try {
+        await planningApi.rejectReview(store.taskId, feedback, dimensions, images);
+        store.setPaused(false);
 
-      throw error;
-    }
-  }, [store]);
+        // Use clearRevisionProgress to preserve other completed dimensions
+        if (dimensions && dimensions.length > 0) {
+          store.clearRevisionProgress(store.currentLayer || 1, dimensions);
+        } else {
+          // When no dimensions specified (full reject), clear all progress
+          store.clearProgressState();
+        }
 
-  const rollback = useCallback(async (checkpointId: string) => {
-    if (!store.taskId) throw new Error('No task ID');
-    await planningApi.rollbackCheckpoint(store.taskId, checkpointId);
-    store.setSelectedCheckpoint(checkpointId);
+        store.triggerSseReconnect();
+      } catch (error: unknown) {
+        const errorMessage = getErrorMessage(error, 'Unknown error');
+        logger.context.error('Failed to reject review', { error: errorMessage });
 
-    // Sync state after rollback
-    const statusData = await planningApi.getStatus(store.taskId);
-    store.syncBackendState(statusData);
+        throw error;
+      }
+    },
+    [store]
+  );
 
-    store.addMessage(
-      createSystemMessage(`Rolled back to checkpoint ${checkpointId.slice(0, 8)}...`)
-    );
-  }, [store]);
+  const rollback = useCallback(
+    async (checkpointId: string) => {
+      if (!store.taskId) throw new Error('No task ID');
+      await planningApi.rollbackCheckpoint(store.taskId, checkpointId);
+      store.setSelectedCheckpoint(checkpointId);
+
+      // Sync state after rollback
+      const statusData = await planningApi.getStatus(store.taskId);
+      store.syncBackendState(statusData);
+
+      store.addMessage(
+        createSystemMessage(`Rolled back to checkpoint ${checkpointId.slice(0, 8)}...`)
+      );
+    },
+    [store]
+  );
 
   const loadVillagesHistory = useCallback(async () => {
     store.setHistoryLoading(true);
@@ -143,57 +180,69 @@ export function usePlanningActions() {
     }
   }, [store]);
 
-  const selectVillage = useCallback((village: VillageInfo) => {
-    store.setSelectedVillage(village);
-  }, [store]);
+  const selectVillage = useCallback(
+    (village: VillageInfo) => {
+      store.setSelectedVillage(village);
+    },
+    [store]
+  );
 
-  const selectSession = useCallback((session: VillageSession) => {
-    store.setSelectedSession(session);
-  }, [store]);
+  const selectSession = useCallback(
+    (session: VillageSession) => {
+      store.setSelectedSession(session);
+    },
+    [store]
+  );
 
-  const loadHistoricalSession = useCallback(async (villageName: string, sessionId: string) => {
-    store.clearMessages();
-    store.setCheckpoints([]);
-    store.setSelectedCheckpoint(null);
-    store.setProjectName(villageName);
-    store.setTaskId(sessionId);
-    store.setStatus('completed');
+  const loadHistoricalSession = useCallback(
+    async (villageName: string, sessionId: string) => {
+      store.clearMessages();
+      store.setCheckpoints([]);
+      store.setSelectedCheckpoint(null);
+      store.setProjectName(villageName);
+      store.setTaskId(sessionId);
+      store.setStatus('completed');
 
-    try {
-      const response = await dataApi.getCheckpoints(villageName, sessionId);
-      store.setCheckpoints(response.checkpoints);
-
-      const statusData = await planningApi.getStatus(sessionId);
-      store.syncBackendState(statusData);
-
-      // Load historical messages
       try {
-        const messagesResponse = await planningApi.getMessages(sessionId);
-        if (messagesResponse.success && messagesResponse.messages.length > 0) {
-          const transformedMessages = transformBackendMessages(messagesResponse.messages);
-          store.setMessages(transformedMessages);
-        }
-      } catch (msgError) {
-        console.error('[PlanningProvider] Failed to load messages:', msgError);
-      }
-    } catch (error: unknown) {
-      const errorMessage = getErrorMessage(error, 'Failed to load session');
-      store.setHistoryError(errorMessage);
-    }
-  }, [store]);
+        const response = await dataApi.getCheckpoints(villageName, sessionId);
+        store.setCheckpoints(response.checkpoints);
 
-  const deleteSession = useCallback(async (sessionId: string, _villageName: string): Promise<boolean> => {
-    try {
-      await planningApi.deleteSession(sessionId);
-      // Reload villages history
-      await loadVillagesHistory();
-      return true;
-    } catch (error: unknown) {
-      const errorMessage = getErrorMessage(error, 'Failed to delete session');
-      store.setHistoryError(errorMessage);
-      return false;
-    }
-  }, [store, loadVillagesHistory]);
+        const statusData = await planningApi.getStatus(sessionId);
+        store.syncBackendState(statusData);
+
+        // Load historical messages
+        try {
+          const messagesResponse = await planningApi.getMessages(sessionId);
+          if (messagesResponse.success && messagesResponse.messages.length > 0) {
+            const transformedMessages = transformBackendMessages(messagesResponse.messages);
+            store.setMessages(transformedMessages);
+          }
+        } catch (msgError) {
+          console.error('[PlanningProvider] Failed to load messages:', msgError);
+        }
+      } catch (error: unknown) {
+        const errorMessage = getErrorMessage(error, 'Failed to load session');
+        store.setHistoryError(errorMessage);
+      }
+    },
+    [store]
+  );
+
+  const deleteSession = useCallback(
+    async (sessionId: string, _villageName: string): Promise<boolean> => {
+      try {
+        await planningApi.deleteSession(sessionId);
+        // Reload villages history
+        await loadVillagesHistory();
+        return true;
+      } catch (error: unknown) {
+        const errorMessage = getErrorMessage(error, 'Failed to delete session');
+        store.setHistoryError(errorMessage);
+        return false;
+      }
+    },
+    [store, loadVillagesHistory]
+  );
 
   const showViewer = useCallback(() => {
     store.setViewerVisible(true);
@@ -203,10 +252,13 @@ export function usePlanningActions() {
     store.setViewerVisible(false);
   }, [store]);
 
-  const showFileViewer = useCallback((file: Parameters<typeof store.setViewingFile>[0]) => {
-    store.setViewingFile(file as Parameters<typeof store.setViewingFile>[0]);
-    store.setViewerVisible(true);
-  }, [store]);
+  const showFileViewer = useCallback(
+    (file: Parameters<typeof store.setViewingFile>[0]) => {
+      store.setViewingFile(file as Parameters<typeof store.setViewingFile>[0]);
+      store.setViewerVisible(true);
+    },
+    [store]
+  );
 
   const hideFileViewer = useCallback(() => {
     store.setViewingFile(null);
@@ -217,10 +269,13 @@ export function usePlanningActions() {
     store.resetConversation();
   }, [store]);
 
-  const sendChatMessage = useCallback(async (message: string) => {
-    if (!store.taskId) throw new Error('No task ID');
-    return planningApi.sendChatMessage(store.taskId, message);
-  }, [store]);
+  const sendChatMessage = useCallback(
+    async (message: string) => {
+      if (!store.taskId) throw new Error('No task ID');
+      return planningApi.sendChatMessage(store.taskId, message);
+    },
+    [store]
+  );
 
   return {
     startPlanning,

@@ -20,8 +20,9 @@ import type {
   FileMessage,
   LayerCompletedMessage,
   DimensionReportMessage,
+  KnowledgeSource,
 } from '@/types';
-import type { GISData } from '@/types/message/message-types';
+import type { GisResultMessage, ToolStatusMessage } from '@/types/message/message-types';
 import type { VillageInputData } from '@/components/VillageInputForm';
 import type { VillageInfo, VillageSession, SessionStatusResponse } from '@/lib/api';
 import { getLayerPhase, PlanningStatus, LayerPhase, AgentPhase } from '@/lib/constants';
@@ -102,6 +103,7 @@ export interface PlanningState {
   // Progress
   dimensionProgress: Record<string, DimensionProgressItem>;
   executingDimensions: string[];
+  layerDimensionCount: Record<number, number>;
 
   // UI State
   viewerVisible: boolean;
@@ -228,6 +230,7 @@ function createInitialState(conversationId: string): PlanningState {
     // Progress
     dimensionProgress: {},
     executingDimensions: [],
+    layerDimensionCount: {},
 
     // UI State
     viewerVisible: false,
@@ -318,6 +321,12 @@ export interface PlanningActions {
 
   // SSE Reconnect trigger
   triggerSseReconnect: () => void;
+
+  // Clear progress state (for approve/reject transitions)
+  clearProgressState: () => void;
+
+  // Clear only revision dimensions progress (preserve other completed dimensions)
+  clearRevisionProgress: (layer: number, dimensionsToRevise: string[]) => void;
 
   // Reset
   resetConversation: () => void;
@@ -517,7 +526,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         full_content?: string;
         layer?: number;
         is_revision?: boolean;
-        gis_data?: GISData;
+        knowledge_sources?: KnowledgeSource[];
       };
       const layer = dimData.layer || 1;
       const dimensionKey = dimData.dimension_key || '';
@@ -579,12 +588,15 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         layerMsg.summary.word_count = summary.word_count;
         layerMsg.summary.dimension_count = summary.dimension_count;
 
-        // Store GIS data to layer_completed message
-        if (dimData.gis_data) {
-          if (!layerMsg.dimensionGisData) {
-            layerMsg.dimensionGisData = {};
+        // GIS data is now sent via independent gis_result events after review
+        // Remove gis_data handling from dimension_complete
+
+        // Store knowledge_sources to layer_completed message
+        if (dimData.knowledge_sources && dimData.knowledge_sources.length > 0) {
+          if (!layerMsg.dimensionKnowledgeSources) {
+            layerMsg.dimensionKnowledgeSources = {};
           }
-          layerMsg.dimensionGisData[dimensionKey] = dimData.gis_data;
+          layerMsg.dimensionKnowledgeSources[dimensionKey] = dimData.knowledge_sources;
         }
       }
 
@@ -606,10 +618,22 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     }
 
     case 'layer_started': {
-      const layerData = data as { layer?: number; layer_number?: number };
+      const layerData = data as {
+        layer?: number;
+        layer_number?: number;
+        dimension_count?: number;
+      };
       const layerNum = layerData.layer || layerData.layer_number || 1;
       state.currentLayer = layerNum;
       state.currentPhase = getLayerPhase(layerNum);
+
+      // Store dimension_count for progress panel display (with change detection)
+      if (
+        layerData.dimension_count &&
+        state.layerDimensionCount[layerNum] !== layerData.dimension_count
+      ) {
+        state.layerDimensionCount[layerNum] = layerData.dimension_count;
+      }
 
       // Reset dimensionProgress and executingDimensions for new layer
       // Note: This only resets progress tracking, not the actual message content
@@ -797,6 +821,129 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
+    // ============================================
+    // New Unified Tool Events (tool_started, tool_status)
+    // ============================================
+
+    case 'tool_started': {
+      const toolData = data as {
+        tool_name?: string;
+        tool_display_name?: string;
+        description?: string;
+        estimated_time?: number;
+        status?: string;
+        started_at?: string;
+      };
+      const toolName = toolData.tool_name || '';
+      if (!toolName) return;
+
+      const baseMsg = createBaseMessage('assistant');
+      const newMessage: ToolStatusMessage = {
+        ...baseMsg,
+        id: `tool_${toolName}_${Date.now()}`,
+        type: 'tool_status',
+        toolName,
+        toolDisplayName: toolData.tool_display_name || toolName,
+        description: toolData.description || '',
+        status: 'running',
+        estimatedTime: toolData.estimated_time,
+        startedAt: toolData.started_at,
+      };
+      state.messages.push(newMessage);
+
+      state.toolStatuses[toolName] = {
+        toolName,
+        status: 'running',
+        message: toolData.description,
+      };
+      break;
+    }
+
+    case 'tool_status': {
+      const toolData = data as {
+        tool_name?: string;
+        status?: string;
+        progress?: number;
+        stage?: string;
+        stage_message?: string;
+        summary?: string;
+        error?: string;
+        completed_at?: string;
+      };
+      const toolName = toolData.tool_name || '';
+      if (!toolName) return;
+
+      const msgIdx = state.messages.findIndex(
+        (m) => m.type === 'tool_status' && (m as ToolStatusMessage).toolName === toolName
+      );
+
+      if (msgIdx >= 0) {
+        const msg = state.messages[msgIdx] as ToolStatusMessage;
+        msg.status = (toolData.status as ToolStatusMessage['status']) || msg.status;
+        if (toolData.progress !== undefined) msg.progress = toolData.progress;
+        if (toolData.stage) msg.stage = toolData.stage;
+        if (toolData.stage_message) msg.stageMessage = toolData.stage_message;
+        if (toolData.summary) msg.summary = toolData.summary;
+        if (toolData.error) msg.error = toolData.error;
+        if (toolData.completed_at) msg.completedAt = toolData.completed_at;
+      }
+
+      const existing = state.toolStatuses[toolName];
+      if (existing) {
+        existing.status =
+          toolData.status === 'error'
+            ? 'error'
+            : toolData.status === 'success'
+              ? 'success'
+              : 'running';
+        if (toolData.progress !== undefined) existing.progress = toolData.progress;
+        if (toolData.stage) existing.stage = toolData.stage;
+        if (toolData.stage_message) existing.message = toolData.stage_message;
+        if (toolData.summary) existing.summary = toolData.summary;
+      }
+      break;
+    }
+
+    // ============================================
+    // GIS Result Event
+    // ============================================
+
+    case 'gis_result': {
+      const gisData = data as {
+        dimension_key?: string;
+        dimension_name?: string;
+        summary?: string;
+        layers?: unknown[];
+        map_options?: { center?: [number, number]; zoom?: number };
+        analysis_data?: {
+          overall_score?: number;
+          suitability_level?: string;
+          sensitivity_class?: string;
+          recommendations?: string[];
+        };
+      };
+      const dimensionKey = gisData.dimension_key || '';
+      if (!dimensionKey) return;
+
+      const baseMsg = createBaseMessage('assistant');
+      const newMessage: GisResultMessage = {
+        ...baseMsg,
+        id: `gis_${dimensionKey}_${Date.now()}`,
+        type: 'gis_result',
+        dimensionKey,
+        dimensionName: gisData.dimension_name || dimensionKey,
+        summary: gisData.summary || '',
+        layers: (gisData.layers as GisResultMessage['layers']) || [],
+        mapOptions:
+          gisData.map_options?.center && gisData.map_options?.zoom
+            ? { center: gisData.map_options.center, zoom: gisData.map_options.zoom }
+            : undefined,
+        analysisData: gisData.analysis_data,
+      };
+      state.messages.push(newMessage);
+      break;
+    }
+
     case 'ai_response_complete': {
       const aiData = data as { content?: string };
       const aiMessage = {
@@ -824,14 +971,15 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       }
 
       state.pause_after_step = true;
-      state.previous_layer = pauseData.current_layer || pauseData.previous_layer || state.previous_layer;
+      state.previous_layer =
+        pauseData.current_layer || pauseData.previous_layer || state.previous_layer;
       state.status = 'paused';
 
       // Note: checkpoint_saved event (sent before pause) already creates the checkpoint
       // This is a fallback in case checkpoint_saved was missed
       const layer = pauseData.current_layer || pauseData.previous_layer || 0;
       if (pauseData.checkpoint_id && layer > 0) {
-        const existingCp = state.checkpoints.find(cp => cp.layer === layer);
+        const existingCp = state.checkpoints.find((cp) => cp.layer === layer);
         if (!existingCp) {
           state.checkpoints.push({
             checkpoint_id: pauseData.checkpoint_id,
@@ -886,7 +1034,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const layer = cpData.layer || 0;
       const cpType: 'key' | 'regular' = cpData.checkpoint_type === 'key' ? 'key' : 'regular';
 
-      const existingIndex = state.checkpoints.findIndex(cp => cp.layer === layer);
+      const existingIndex = state.checkpoints.findIndex((cp) => cp.layer === layer);
       const newCheckpoint = {
         checkpoint_id: cpData.checkpoint_id || '',
         layer: layer,
@@ -1207,6 +1355,40 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     triggerSseReconnect: () =>
       set((state) => {
         state.sseResumeTrigger += 1;
+      }),
+
+    // Clear progress state (used when approve/reject to wait for new layer)
+    clearProgressState: () =>
+      set((state) => {
+        state.currentLayer = null;
+        state.currentPhase = 'idle';
+        state.dimensionProgress = {};
+        state.executingDimensions = [];
+      }),
+
+    // Clear only revision dimensions progress, preserve other completed dimensions
+    clearRevisionProgress: (layer, dimensionsToRevise) =>
+      set((state) => {
+        if (!dimensionsToRevise || dimensionsToRevise.length === 0) {
+          // If no dimensions specified, only clear executing state for this layer
+          state.executingDimensions = state.executingDimensions.filter(
+            (k) => !k.startsWith(`${layer}_`)
+          );
+          return;
+        }
+
+        // Clear progress for specified dimensions only
+        for (const dimKey of dimensionsToRevise) {
+          const progressKey = buildDimensionProgressKey(layer, dimKey);
+          delete state.dimensionProgress[progressKey];
+        }
+
+        // Clear executing state for specified dimensions only (preserve other executing)
+        const keysToRemove = dimensionsToRevise.map((dim) => buildDimensionProgressKey(layer, dim));
+        state.executingDimensions = state.executingDimensions.filter(
+          (k) => !keysToRemove.includes(k)
+        );
+        // Preserve currentLayer and currentPhase for UI display
       }),
 
     // Reset

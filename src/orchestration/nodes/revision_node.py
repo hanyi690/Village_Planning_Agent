@@ -50,6 +50,11 @@ from ...tools.revision_tool import RevisionTool
 from ...utils.logger import get_logger
 from ...utils.sse_publisher import SSEPublisher
 from ...utils.event_factory import create_revision_completed_event
+from ...utils.summary_generator import (
+    format_summary_for_llm,
+    format_summaries_for_review,
+    DimensionSummary,
+)
 
 logger = get_logger(__name__)
 
@@ -66,8 +71,14 @@ class RevisionState(TypedDict):
     target_dimensions: List[str]           # 用户选择要修复的维度
     session_id: str                        # SSE 事件发送需要的 session_id
 
+    # 图片数据（多模态修复）
+    images: List[Dict[str, Any]]           # revision 时上传的图片
+
     # 现有报告（用于状态筛选和更新）- 使用新架构 reports 结构
     reports: Dict[str, Dict[str, str]]     # {"layer1": {...}, "layer2": {...}, "layer3": {...}}
+
+    # 维度摘要（用于下游维度，减少 token）
+    dimension_summaries: Dict[str, Dict[str, Any]]  # {dimension_key: DimensionSummary}
 
     # 任务控制
     completed_dimensions: List[str]        # 已完成的维度（用于过滤）
@@ -92,16 +103,22 @@ class RevisionDimensionState(TypedDict):
     project_name: str
     feedback: str
     original_content: str
-    # 筛选后的上下文
+    # 筛选后的上下文（完整报告，用于目标维度）
     filtered_analysis: str
     filtered_concept: str
     filtered_detail: str
+    # 筛选后的摘要上下文（用于下游维度，减少 token）
+    filtered_analysis_summary: str
+    filtered_concept_summary: str
+    filtered_detail_summary: str
     # 依赖链信息
     dependency_chain: dict
     # 是否是目标维度（用户选择的维度）
     is_target_dimension: bool
     # SSE 事件发送需要的 session_id
     session_id: str
+    # 图片数据（多模态修复）
+    images: List[Dict[str, Any]]
 
 
 # ==========================================
@@ -228,7 +245,11 @@ def create_parallel_revision_tasks(
     """
     创建并行修复任务，每个任务携带筛选后的状态
 
-    复用原图的状态筛选逻辑，确保每个维度只接收其依赖的上下文
+    复用原图的状态筛选逻辑，确保每个维度只接收其依赖的上下文。
+
+    上下文策略：
+    - 目标维度：使用完整报告（准确修复需要完整内容）
+    - 下游维度：使用摘要（级联更新不需要完整内容，减少 token）
     """
     sends = []
 
@@ -238,9 +259,13 @@ def create_parallel_revision_tasks(
     concept_reports = reports.get("layer2", {})
     detail_reports = reports.get("layer3", {})
 
+    # Get dimension summaries (for downstream dimensions)
+    dimension_summaries = state.get("dimension_summaries", {})
+
     for dim in dimensions:
         chain = get_full_dependency_chain_func(dim)
 
+        # Build full context (for target dimensions)
         filtered_analysis = filter_reports_by_dependency(
             required_keys=chain.get("layer1_analyses", []),
             reports=analysis_reports,
@@ -256,6 +281,26 @@ def create_parallel_revision_tasks(
             reports=detail_reports,
             name_mapping=get_detailed_dimension_names()
         )
+
+        # Build summary context (for downstream dimensions, reduce token)
+        layer1_deps = chain.get("layer1_analyses", [])
+        layer2_deps = chain.get("layer2_concepts", [])
+        layer3_deps = chain.get("layer3_plans", [])
+
+        filtered_analysis_summary = format_summaries_for_review(
+            summaries={k: dimension_summaries[k] for k in layer1_deps if k in dimension_summaries},
+            target_dimensions=layer1_deps
+        ) if dimension_summaries else ""
+
+        filtered_concept_summary = format_summaries_for_review(
+            summaries={k: dimension_summaries[k] for k in layer2_deps if k in dimension_summaries},
+            target_dimensions=layer2_deps
+        ) if dimension_summaries else ""
+
+        filtered_detail_summary = format_summaries_for_review(
+            summaries={k: dimension_summaries[k] for k in layer3_deps if k in dimension_summaries},
+            target_dimensions=layer3_deps
+        ) if dimension_summaries else ""
 
         # 获取原始内容
         layer = get_dimension_layer(dim)
@@ -288,12 +333,25 @@ def create_parallel_revision_tasks(
             "filtered_analysis": filtered_analysis,
             "filtered_concept": filtered_concept,
             "filtered_detail": filtered_detail,
+            "filtered_analysis_summary": filtered_analysis_summary,
+            "filtered_concept_summary": filtered_concept_summary,
+            "filtered_detail_summary": filtered_detail_summary,
             "dependency_chain": chain,
             "is_target_dimension": is_target,
-            "session_id": state.get("session_id", "")
+            "session_id": state.get("session_id", ""),
+            "images": state.get("images", []),
         })
 
         sends.append(Send("revise_single_dimension", dimension_state))
+
+        # Log summary usage
+        if is_target:
+            logger.info(f"[Revision-状态筛选] {dim} 是目标维度，使用完整上下文")
+        else:
+            summary_len = len(filtered_analysis_summary) + len(filtered_concept_summary) + len(filtered_detail_summary)
+            full_len = len(filtered_analysis) + len(filtered_concept) + len(filtered_detail)
+            logger.info(f"[Revision-状态筛选] {dim} 是下游维度，使用摘要上下文")
+            logger.info(f"[Revision-状态筛选] {dim}: 完整={full_len}字符 -> 摘要={summary_len}字符")
 
         # 从 chain 获取依赖数量用于日志
         required_analyses = chain.get("layer1_analyses", [])
@@ -301,9 +359,9 @@ def create_parallel_revision_tasks(
         required_details = chain.get("layer3_plans", [])
 
         logger.info(f"[Revision-状态筛选] {dim}: "
-                   f"现状 {len(required_analyses)} 个 ({len(filtered_analysis)}字符), "
-                   f"思路 {len(required_concepts)} 个 ({len(filtered_concept)}字符), "
-                   f"前序 {len(required_details)} 个 ({len(filtered_detail)}字符)")
+                   f"现状 {len(required_analyses)} 个, "
+                   f"思路 {len(required_concepts)} 个, "
+                   f"前序 {len(required_details)} 个")
 
     return sends
 
@@ -315,26 +373,36 @@ def create_parallel_revision_tasks(
 def _build_cascade_feedback(
     dimension_name: str,
     filtered_detail: str,
+    filtered_detail_summary: str,
     user_feedback: str
 ) -> str:
     """
-    构建级联更新用的 feedback
+    构建级联更新用的 feedback（使用摘要减少 token）
 
     下游维度不直接使用用户反馈，而是使用专门的级联更新提示，
     告知模型上游维度已更新，需要据此调整本维度内容。
+
+    Args:
+        dimension_name: 当前维度名称
+        filtered_detail: 完整的上游内容（已废弃，保留参数兼容）
+        filtered_detail_summary: 上游摘要内容（推荐使用）
+        user_feedback: 原始用户反馈
     """
+    # Use summary if available, otherwise fallback to truncated full content
+    upstream_content = filtered_detail_summary or (filtered_detail[:3000] if filtered_detail else "（无上游内容）")
+
     return f"""
 【级联更新任务】
 上游相关维度已完成修订，请根据上游更新内容调整本维度"{dimension_name}"。
 
-【上游已更新的内容】
-{filtered_detail[:3000] if filtered_detail else "（无上游内容）"}
+【上游已更新的内容（摘要）】
+{upstream_content}
 
 【原始修改背景（供参考）】
 {user_feedback[:500] if user_feedback else "（无用户反馈）"}
 
 【要求】
-1. 仔细阅读上游已更新的内容
+1. 仔细阅读上游已更新的内容摘要
 2. 识别本维度中受上游更新影响的部分
 3. 调整本维度内容，确保与上游维度保持一致和协调
 4. 保持本维度的原有结构和格式
@@ -399,29 +467,40 @@ def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
 
         # 根据是否是目标维度选择不同的 feedback 策略
         if is_target:
-            # 目标维度：使用用户反馈
+            # 目标维度：使用用户反馈 + 完整上下文
             feedback = user_feedback
             revision_type = "目标维度修复"
             logger.info(f"[Revision-修复] {dimension_name} 是目标维度，使用用户反馈")
+
+            # 目标维度使用完整报告（准确修复需要完整内容）
+            planner_state = {
+                "project_name": state.get("project_name", ""),
+                "filtered_analysis": state.get("filtered_analysis", ""),
+                "filtered_concept": state.get("filtered_concept", ""),
+                "filtered_detail": state.get("filtered_detail", ""),
+                "task_description": f"根据反馈修订规划内容（{revision_type}）",
+                "constraints": feedback
+            }
         else:
-            # 下游维度：使用级联更新 prompt
+            # 下游维度：使用级联更新 prompt + 摘要上下文（减少 token）
             feedback = _build_cascade_feedback(
                 dimension_name=dimension_name,
                 filtered_detail=state.get("filtered_detail", ""),
+                filtered_detail_summary=state.get("filtered_detail_summary", ""),
                 user_feedback=user_feedback
             )
             revision_type = "级联更新"
-            logger.info(f"[Revision-修复] {dimension_name} 是下游维度，使用级联更新 prompt")
+            logger.info(f"[Revision-修复] {dimension_name} 是下游维度，使用级联更新 prompt + 摘要上下文")
 
-        # 构建规划器状态
-        planner_state = {
-            "project_name": state.get("project_name", ""),
-            "filtered_analysis": state.get("filtered_analysis", ""),
-            "filtered_concept": state.get("filtered_concept", ""),
-            "filtered_detail": state.get("filtered_detail", ""),
-            "task_description": f"根据反馈修订规划内容（{revision_type}）",
-            "constraints": feedback
-        }
+            # 下游维度使用摘要（不需要完整内容）
+            planner_state = {
+                "project_name": state.get("project_name", ""),
+                "filtered_analysis": state.get("filtered_analysis_summary", "") or state.get("filtered_analysis", ""),
+                "filtered_concept": state.get("filtered_concept_summary", "") or state.get("filtered_concept", ""),
+                "filtered_detail": state.get("filtered_detail_summary", "") or state.get("filtered_detail", ""),
+                "task_description": f"根据反馈修订规划内容（{revision_type}）",
+                "constraints": feedback
+            }
 
         # 创建流式 token callback（用于实时 SSE 输出）
         on_token_callback = None
@@ -441,7 +520,8 @@ def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
             original_result=original_content,
             revision_count=0,
             streaming=bool(sse_publisher),
-            on_token_callback=on_token_callback
+            on_token_callback=on_token_callback,
+            images=state.get("images", []),
         )
 
         logger.info(f"[Revision-修复] 维度 {dimension_key} 修复完成，内容长度: {len(revised_result)}")
@@ -648,9 +728,11 @@ async def call_revision_subgraph(
     feedback: str,
     target_dimensions: List[str],
     reports: Dict[str, Dict[str, str]] = None,
+    dimension_summaries: Dict[str, Dict[str, Any]] = None,
     completed_dimensions: List[str] = None,
     from_checkpoint_id: str = None,
-    session_id: str = ""
+    session_id: str = "",
+    images: List[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     调用修复子图的包装函数
@@ -660,9 +742,11 @@ async def call_revision_subgraph(
         feedback: 用户反馈
         target_dimensions: 要修复的维度列表
         reports: 统一的 reports 结构 {"layer1": {...}, "layer2": {...}, "layer3": {...}}
+        dimension_summaries: 维度摘要字典（用于下游维度减少 token）
         completed_dimensions: 已完成的维度列表
         from_checkpoint_id: 可选，从指定 checkpoint 获取原始报告
         session_id: SSE 事件发送需要的 session_id
+        images: 上传的图片列表（用于多模态修复）
 
     Returns:
         {
@@ -716,7 +800,9 @@ async def call_revision_subgraph(
         "feedback": feedback,
         "target_dimensions": target_dimensions,
         "session_id": session_id,
+        "images": images or [],
         "reports": reports or {"layer1": {}, "layer2": {}, "layer3": {}},
+        "dimension_summaries": dimension_summaries or {},
         "completed_dimensions": completed_dimensions or [],
         "current_wave": 1,
         "max_wave": 0,
@@ -805,9 +891,11 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
         feedback=feedback,
         target_dimensions=dimensions,
         reports=state.get("reports", {}),
+        dimension_summaries=state.get("dimension_summaries", {}),
         completed_dimensions=completed_dimensions,
         from_checkpoint_id=from_checkpoint_id,
-        session_id=session_id
+        session_id=session_id,
+        images=state.get("revision_images", []),
     )
 
     logger.info(f"[修复] RevisionSubgraph 结果: success={revision_result['success']}")
@@ -913,6 +1001,7 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
         .set("previous_layer", current_layer)\
         .set("revision_history", existing_history)\
         .set("last_revised_dimensions", revised_dimensions)\
+        .set("revision_images", [])\
         .set("metadata", new_metadata)\
         .add_message("，".join(msg_parts))\
         .build()

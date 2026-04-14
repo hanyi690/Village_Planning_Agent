@@ -12,17 +12,19 @@ import {
   FileMessage,
   Checkpoint,
   GisResultMessage,
+  ToolStatusMessage,
 } from '@/types';
-import { isGisResultMessage } from '@/types/message/message-guards';
+import { isGisResultMessage, isToolStatusMessage } from '@/types/message/message-guards';
 import ThinkingIndicator from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';
 import LayerReportMessage from './LayerReportMessage';
 import CheckpointMarker from './CheckpointMarker';
+import ToolStatusCard from './ToolStatusCard';
+import GisResultCard from './GisResultCard';
 import { parseTimestamp } from '@/lib/utils';
 import { formatFileSize } from '@/lib/utils';
 import { DEFAULT_IMAGE_FORMAT } from '@/lib/constants';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
-import { MapView } from '@/components/gis';
 
 interface MessageListProps {
   messages: Message[];
@@ -249,84 +251,23 @@ export default function MessageList({
           );
         }
 
-        // GIS 结果消息渲染
+        // GIS result message rendering
         if (isGisResultMessage(message)) {
-          const gisMsg = message as GisResultMessage;
           return (
-            <div key={message.id} className="flex justify-start mb-4">
-              <div className="max-w-[85%] bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm">
-                {/* 标题 */}
-                <div className="flex items-center gap-2 mb-3 pb-2 border-b border-gray-100">
-                  <i className="fas fa-map-marked-alt text-blue-600" />
-                  <span className="font-medium text-gray-800">
-                    {gisMsg.dimensionName} - GIS 分析结果
-                  </span>
-                </div>
+            <GisResultCard
+              key={message.id}
+              message={message as GisResultMessage}
+            />
+          );
+        }
 
-                {/* 分析摘要 */}
-                {gisMsg.summary && (
-                  <div className="mb-3 text-sm text-gray-600">
-                    <MarkdownRenderer content={gisMsg.summary} />
-                  </div>
-                )}
-
-                {/* 分析数据 */}
-                {gisMsg.analysisData && (
-                  <div className="mb-3 grid grid-cols-2 gap-2 text-sm">
-                    {gisMsg.analysisData.overallScore !== undefined && (
-                      <div className="bg-gray-50 rounded px-2 py-1">
-                        <span className="text-gray-500">综合评分：</span>
-                        <span className="font-medium">{gisMsg.analysisData.overallScore}/100</span>
-                      </div>
-                    )}
-                    {gisMsg.analysisData.suitabilityLevel && (
-                      <div className="bg-gray-50 rounded px-2 py-1">
-                        <span className="text-gray-500">适宜性：</span>
-                        <span className="font-medium">{gisMsg.analysisData.suitabilityLevel}</span>
-                      </div>
-                    )}
-                    {gisMsg.analysisData.sensitivityClass && (
-                      <div className="bg-gray-50 rounded px-2 py-1">
-                        <span className="text-gray-500">敏感性：</span>
-                        <span className="font-medium">{gisMsg.analysisData.sensitivityClass}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* 地图 */}
-                {gisMsg.layers && gisMsg.layers.length > 0 && (
-                  <div className="mb-3">
-                    <MapView
-                      layers={gisMsg.layers}
-                      center={gisMsg.mapOptions?.center}
-                      zoom={gisMsg.mapOptions?.zoom}
-                      height="300px"
-                    />
-                  </div>
-                )}
-
-                {/* 建议 */}
-                {gisMsg.analysisData?.recommendations && gisMsg.analysisData.recommendations.length > 0 && (
-                  <div className="text-sm text-gray-600">
-                    <div className="font-medium mb-1">建议：</div>
-                    <ul className="list-disc list-inside space-y-1">
-                      {gisMsg.analysisData.recommendations.slice(0, 3).map((rec, i) => (
-                        <li key={i}>{rec}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {/* 时间戳 */}
-                <div className="text-xs opacity-60 mt-2 text-right">
-                  {(() => {
-                    const date = parseTimestamp(message.timestamp);
-                    return date ? date.toLocaleTimeString() : '刚刚';
-                  })()}
-                </div>
-              </div>
-            </div>
+        // Tool status message rendering
+        if (isToolStatusMessage(message)) {
+          return (
+            <ToolStatusCard
+              key={message.id}
+              message={message as ToolStatusMessage}
+            />
           );
         }
 

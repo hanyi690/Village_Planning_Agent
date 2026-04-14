@@ -91,3 +91,7 @@ docs/references/
 
 # Tile cache (map tiles)
 tile_cache/
+
+# SSL private keys (never commit to repository)
+nginx/ssl/*.pem
+!nginx/ssl/.gitkeep

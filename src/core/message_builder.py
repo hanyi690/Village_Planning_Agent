@@ -162,18 +162,27 @@ def get_recommended_multimodal_model(provider: str) -> str:
     """
     Get the recommended multimodal model for a provider.
 
+    Priority: MULTIMODAL_MODEL env var > provider-specific default
+
     Args:
         provider: Provider name
 
     Returns:
         Recommended model name for vision tasks
     """
+    from .config import MULTIMODAL_MODEL
+
+    # Use configured multimodal model if available
+    if MULTIMODAL_MODEL:
+        logger.debug(f"[MessageBuilder] Using configured MULTIMODAL_MODEL: {MULTIMODAL_MODEL}")
+        return MULTIMODAL_MODEL
+
+    # Fallback to provider-specific defaults
     if provider == "openai":
         return "gpt-4o"  # Most capable vision model
     elif provider == "zhipuai":
         return "glm-4v"  # ZhipuAI vision model
     elif provider == "deepseek":
-        # DeepSeek doesn't have a vision model yet, fallback
         logger.warning("[MessageBuilder] DeepSeek does not support vision, returning text model")
         return "deepseek-chat"
 

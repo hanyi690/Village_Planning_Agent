@@ -8,7 +8,7 @@
 4. 支持渐进式披露 - 通过参数控制返回详细程度
 """
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List, TypedDict
 
 from langchain_core.documents import Document
 from langchain_core.tools import Tool, tool
@@ -19,6 +19,44 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from src.rag.config import DEFAULT_TOP_K
 from src.rag.core.context_manager import get_context_manager
 from src.rag.core.cache import get_vector_cache
+
+
+# ==================== 类型定义 ====================
+
+CONTENT_PREVIEW_LENGTH = 300
+
+
+class KnowledgeSource(TypedDict):
+    """知识切片结构化数据"""
+    source: str
+    page: int
+    doc_type: str
+    content: str
+
+
+def extract_sources_from_documents(docs: List[Document]) -> List[KnowledgeSource]:
+    """
+    从 Document 对象提取知识切片信息
+
+    Args:
+        docs: LangChain Document 对象列表
+
+    Returns:
+        结构化的 KnowledgeSource 列表
+    """
+    sources = []
+    for doc in docs:
+        content = doc.page_content[:CONTENT_PREVIEW_LENGTH]
+        if len(doc.page_content) > CONTENT_PREVIEW_LENGTH:
+            content += "..."
+
+        sources.append({
+            "source": doc.metadata.get("source", "未知来源"),
+            "page": doc.metadata.get("page", 0) or 0,
+            "doc_type": doc.metadata.get("type", ""),
+            "content": content,
+        })
+    return sources
 
 
 # ==================== 辅助函数 ====================
@@ -36,6 +74,8 @@ def _build_metadata_filter(
     dimension: Optional[str] = None,
     terrain: Optional[str] = None,
     doc_type: Optional[str] = None,
+    task_id: Optional[str] = None,
+    include_summaries: bool = False,
 ) -> Optional[Dict]:
     """
     构建 ChromaDB metadata 过滤器
@@ -43,13 +83,28 @@ def _build_metadata_filter(
     Args:
         dimension: 维度标识（如 "traffic", "land_use"）
         terrain: 地形类型（"mountain", "plain", "hill", "all"）
-        doc_type: 文档类型（"policy", "standard", "case"）
+        doc_type: 文档类型（"policy", "standard", "case", "dimension_summary"）
+        task_id: 任务ID（用于会话隔离，检索摘要时必须提供）
+        include_summaries: 是否包含摘要类型（混合检索模式）
 
     Returns:
         ChromaDB filter dict，如果无过滤条件则返回 None
     """
     filter_dict = {}
 
+    # 混合检索模式：公共政策 + 本任务摘要
+    if include_summaries and task_id:
+        # 使用 $or 逻辑：公共政策 OR 本任务摘要
+        filter_dict["$or"] = [
+            {"doc_type": "policy"},  # 公共政策
+            {
+                "doc_type": "dimension_summary",
+                "task_id": task_id  # 本任务摘要（会话隔离）
+            }
+        ]
+        return filter_dict
+
+    # 单类型检索模式
     # 维度过滤：使用 $in 操作符匹配 dimension_tags 数组
     if dimension:
         filter_dict["dimension_tags"] = {"$in": [dimension]}
@@ -60,7 +115,11 @@ def _build_metadata_filter(
 
     # 文档类型过滤
     if doc_type:
-        filter_dict["document_type"] = doc_type
+        filter_dict["doc_type"] = doc_type
+
+    # 任务ID过滤（摘要检索专用）
+    if task_id:
+        filter_dict["task_id"] = task_id
 
     return filter_dict if filter_dict else None
 
@@ -212,15 +271,18 @@ def search_knowledge(
     dimension: Optional[str] = None,
     terrain: Optional[str] = None,
     doc_type: Optional[str] = None,
+    task_id: Optional[str] = None,
+    include_summaries: bool = False,
 ) -> str:
     """
-    检索知识库（支持多种上下文模式 + 元数据过滤）
+    检索知识库（支持多种上下文模式 + 元数据过滤 + 会话隔离）
 
     **何时使用：**
     - 需要查找特定信息时
     - 获取相关片段的上下文
     - 探索知识库中的相关内容
     - 按维度/地形/文档类型过滤检索
+    - 检索摘要索引（Layer间关联检索）
 
     **参数：**
     - query (str | required): 查询问题或关键词
@@ -231,7 +293,9 @@ def search_knowledge(
       - "expanded": 片段 + 长上下文（500 字）- 最详细
     - dimension (str | optional): 维度标识过滤（如 "traffic", "land_use"）
     - terrain (str | optional): 地形类型过滤（"mountain", "plain", "hill", "all"）
-    - doc_type (str | optional): 文档类型过滤（"policy", "standard", "case"）
+    - doc_type (str | optional): 文档类型过滤（"policy", "standard", "case", "dimension_summary"）
+    - task_id (str | optional): 任务ID（会话隔离，检索摘要时必须提供）
+    - include_summaries (bool | optional): 是否启用混合检索模式（公共政策 + 本任务摘要）
 
     **返回：**
     - 匹配的文档片段列表，包含来源、位置、内容
@@ -244,6 +308,8 @@ def search_knowledge(
             "dimension": dimension,
             "terrain": terrain,
             "doc_type": doc_type,
+            "task_id": task_id,
+            "include_summaries": include_summaries,
         }
 
         # ✅ 尝试从缓存获取
@@ -257,8 +323,14 @@ def search_knowledge(
             # 缓存未命中，执行检索
             db = get_vectorstore()
 
-            # 构建 metadata filter
-            filter_dict = _build_metadata_filter(dimension, terrain, doc_type)
+            # 构建 metadata filter（支持会话隔离和混合检索）
+            filter_dict = _build_metadata_filter(
+                dimension=dimension,
+                terrain=terrain,
+                doc_type=doc_type,
+                task_id=task_id,
+                include_summaries=include_summaries,
+            )
 
             # 使用 filter 进行检索
             if filter_dict:

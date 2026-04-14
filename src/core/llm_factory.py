@@ -401,6 +401,92 @@ def get_zhipuai_llm(
                               callbacks=callbacks, metadata=metadata, **kwargs)
 
 
+def create_flash_llm(
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    callbacks: Optional[List[Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    **kwargs
+) -> Any:
+    """
+    Create a Flash model instance for lightweight tasks (summaries, keyword extraction).
+
+    Uses DashScope's OpenAI-compatible endpoint (compatible-mode) for unified calling.
+    This is optimized for fast, low-cost operations that don't need full model capabilities.
+
+    Args:
+        model: Model name. Default: "qwen-flash" from FLASH_MODEL_NAME env
+        temperature: Sampling temperature. Default: 0.3 for deterministic summaries
+        max_tokens: Maximum tokens. Default: 500 (sufficient for summaries)
+        callbacks: Optional callback handlers
+        metadata: Optional metadata for tracing
+        **kwargs: Additional parameters
+
+    Returns:
+        ChatOpenAI instance configured for DashScope Flash model
+
+    Examples:
+        >>> llm = create_flash_llm()
+        >>> response = llm.invoke("Summarize: The village has...")
+        >>> print(response.content)  # Concise summary
+
+        >>> # Custom model
+        >>> llm = create_flash_llm(model="qwen-plus", max_tokens=1000)
+    """
+    try:
+        from langchain_openai import ChatOpenAI
+    except ImportError:
+        from langchain_community.chat_models import ChatOpenAI
+
+    from .config import (
+        FLASH_MODEL_NAME,
+        FLASH_MODEL_MAX_TOKENS,
+        FLASH_MODEL_TEMPERATURE,
+        DASHSCOPE_API_KEY,
+        DASHSCOPE_API_BASE,
+        LLM_REQUEST_TIMEOUT
+    )
+
+    # Use defaults from config
+    model = model or FLASH_MODEL_NAME
+    temperature = temperature or FLASH_MODEL_TEMPERATURE
+    max_tokens = max_tokens or FLASH_MODEL_MAX_TOKENS
+
+    # Validate API key
+    if not DASHSCOPE_API_KEY:
+        raise ValueError(
+            "DASHSCOPE_API_KEY not found. Flash model requires DashScope API key. "
+            "Set it in your .env file or environment variables."
+        )
+
+    # Merge callbacks with LangSmith callbacks
+    all_callbacks = _merge_callbacks(callbacks)
+
+    # Build kwargs
+    flash_kwargs = {
+        "model": model,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "api_key": DASHSCOPE_API_KEY,
+        "base_url": DASHSCOPE_API_BASE,
+        "request_timeout": LLM_REQUEST_TIMEOUT,
+        **kwargs
+    }
+
+    # Add callbacks if present
+    if all_callbacks:
+        flash_kwargs["callbacks"] = all_callbacks
+
+    # Add metadata if provided
+    if metadata:
+        flash_kwargs["metadata"] = metadata
+
+    logger.debug(f"[LLM Factory] Creating Flash LLM: model={model}, max_tokens={max_tokens}")
+
+    return ChatOpenAI(**flash_kwargs)
+
+
 def create_multimodal_llm(
     model: Optional[str] = None,
     temperature: float = 0.7,

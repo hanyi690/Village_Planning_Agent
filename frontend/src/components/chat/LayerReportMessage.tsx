@@ -120,6 +120,7 @@ function LayerReportMessage({
         content={message.fullReportContent || ''}
         dimensions={dimensions}
         dimensionGisData={message.dimensionGisData}
+        dimensionKnowledgeSources={message.dimensionKnowledgeSources}
         mode="chat"
         defaultExpanded={true}
         maxHeight="none"

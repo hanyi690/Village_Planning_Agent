@@ -25,6 +25,7 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
 
   const taskIdFromUrl = searchParams.get('taskId');
   const taskId = usePlanningStore((state) => state.taskId);
+  const status = usePlanningStore((state) => state.status);
   const setTaskId = usePlanningStore((state) => state.setTaskId);
   const setMessages = usePlanningStore((state) => state.setMessages);
   const syncBackendState = usePlanningStore((state) => state.syncBackendState);
@@ -33,6 +34,7 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
 
   const restoringRef = useRef(false);
   const restoredTaskIdRef = useRef<string | null>(null);
+  const resetProtectionRef = useRef(false);
 
   // Update URL with taskId (without triggering navigation)
   const updateUrlWithTaskId = useCallback((newTaskId: string) => {
@@ -126,11 +128,17 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
   useEffect(() => {
     if (!enabled) return;
 
+    // Clear resetProtection when taskIdFromUrl becomes null (URL cleared)
+    if (!taskIdFromUrl) {
+      resetProtectionRef.current = false;
+    }
+
     // Only restore if:
     // 1. taskId in URL
     // 2. Store has no taskId (fresh page load)
     // 3. Not already restoring
-    if (taskIdFromUrl && !taskId && !restoringRef.current) {
+    // 4. Not protected by reset (prevents restore after clicking "New Task")
+    if (taskIdFromUrl && !taskId && !restoringRef.current && !resetProtectionRef.current) {
       restoreSession(taskIdFromUrl);
     }
 
@@ -149,6 +157,18 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
 
     updateUrlWithTaskId(taskId);
   }, [enabled, taskId, updateUrlWithTaskId]);
+
+  // Detect reset: when taskId becomes null and status becomes 'idle'
+  // Set resetProtection to prevent session restore from re-triggering
+  useEffect(() => {
+    if (!enabled) return;
+
+    // When store is reset to idle state, activate protection
+    if (taskId === null && status === 'idle') {
+      resetProtectionRef.current = true;
+      logger.context.info('Reset protection activated');
+    }
+  }, [enabled, taskId, status]);
 
   return {
     isRestoring: restoringRef.current,

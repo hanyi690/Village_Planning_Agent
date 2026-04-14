@@ -679,6 +679,33 @@ class SSEManager:
             return len(cls._session_subscribers.get(session_id, set()))
 
     @classmethod
+    async def wait_for_subscriber(cls, session_id: str, timeout: float = 5.0) -> bool:
+        """
+        Wait for at least one subscriber to connect.
+
+        This ensures SSE connection is established before streaming starts,
+        preventing early dimension_delta events from being lost.
+
+        Args:
+            session_id: Session identifier
+            timeout: Maximum wait time in seconds (default 5.0)
+
+        Returns:
+            True if subscriber connected within timeout, False otherwise
+        """
+        start_time = asyncio.get_event_loop().time()
+        check_interval = 0.1  # Check every 100ms
+
+        while asyncio.get_event_loop().time() - start_time < timeout:
+            if cls.get_subscriber_count(session_id) > 0:
+                logger.info(f"[SSEManager] Session {session_id}: Subscriber connected after {asyncio.get_event_loop().time() - start_time:.2f}s")
+                return True
+            await asyncio.sleep(check_interval)
+
+        logger.warning(f"[SSEManager] Session {session_id}: No subscriber after {timeout}s timeout, proceeding anyway")
+        return False
+
+    @classmethod
     async def publish(cls, session_id: str, event: Dict[str, Any]) -> None:
         """
         Publish event to all subscribers (async version).

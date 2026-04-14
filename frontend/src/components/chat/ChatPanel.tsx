@@ -63,6 +63,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   const completedDimensions = usePlanningStore((state) => state.completedDimensions);
   const toolStatusMap = usePlanningStore((state) => state.toolStatuses);
   const checkpoints = usePlanningStore((state) => state.checkpoints);
+  const layerDimensionCount = usePlanningStore((state) => state.layerDimensionCount);
 
   // Get actions
   const actions = usePlanningActions();
@@ -83,6 +84,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   const [isPlanning, setIsPlanning] = useState(false);
   const [isRollingBack, setIsRollingBack] = useState(false);
   const [uploadedFileContent, setUploadedFileContent] = useState<string | null>(null);
+  const [uploadedImages, setUploadedImages] = useState<import('@/lib/api/types').ImageData[]>([]);
   const [stepMode, setStepMode] = useState<boolean>(PLANNING_DEFAULTS.stepMode);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -702,7 +704,9 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
         enableReview: PLANNING_DEFAULTS.enableReview,
         stepMode,
         streamMode: PLANNING_DEFAULTS.streamMode,
+        images: uploadedImages.length > 0 ? uploadedImages : undefined,
       });
+      setUploadedImages([]);  // Clear images after use
       logger.chatPanel.info('规划启动成功', { status: 'planning' });
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error, '未知错误');
@@ -724,7 +728,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     } finally {
       setIsPlanning(false);
     }
-  }, [villageFormData, uploadedFileContent, startPlanning, addMessage, stepMode]);
+  }, [villageFormData, uploadedFileContent, uploadedImages, startPlanning, addMessage, stepMode]);
 
   // Handler: Reset rate limit for a project
   const handleResetRateLimit = useCallback(
@@ -791,7 +795,8 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
             `🔄 Revising based on feedback${dimensionsToSubmit ? '...' : ' (auto-detecting dimensions)...'} `
           )
         );
-        await reject(userText, dimensionsToSubmit);
+        await reject(userText, dimensionsToSubmit, uploadedImages.length > 0 ? uploadedImages : undefined);
+        setUploadedImages([]);  // Clear images after use
       } catch (error: unknown) {
         addMessage(
           createErrorMessage(`Revision failed: ${getErrorMessage(error, 'Unknown error')}`)
@@ -828,7 +833,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       setIsTyping(false);
       typingTimeoutRef.current = null;
     }, 500);
-  }, [inputText, addMessage, isPaused, pendingReviewLayer, approve, reject, selectedDimensions]);
+  }, [inputText, addMessage, isPaused, pendingReviewLayer, approve, reject, selectedDimensions, uploadedImages]);
 
   // File selection handler
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -849,6 +854,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       // 合并所有文件内容
       const allContents: string[] = [];
       const messagesToAdd: Message[] = [];
+      const collectedImages: import('@/lib/api/types').ImageData[] = [];
 
       for (const { file, response } of results) {
         allContents.push(response.content);
@@ -868,6 +874,31 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
           imageHeight: response.imageHeight,
           embeddedImages: response.embeddedImages,
         } as FileMessage);
+
+        // Collect images for multimodal processing
+        if (response.imageBase64 && response.imageFormat) {
+          collectedImages.push({
+            image_base64: response.imageBase64,
+            image_format: response.imageFormat,
+            source_type: 'upload',
+            source_filename: file.name,
+            width: response.imageWidth,
+            height: response.imageHeight,
+          });
+        }
+
+        if (response.embeddedImages && response.embeddedImages.length > 0) {
+          for (const embedded of response.embeddedImages) {
+            collectedImages.push({
+              image_base64: embedded.imageBase64,
+              image_format: embedded.imageFormat,
+              source_type: 'embedded',
+              source_filename: file.name,
+              width: embedded.imageWidth,
+              height: embedded.imageHeight,
+            });
+          }
+        }
 
         const encodingInfo = response.encoding ? `\n编码: ${response.encoding}` : '';
         messagesToAdd.push(
@@ -894,6 +925,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       // 批量添加所有消息（只触发一次渲染）
       addMessages(messagesToAdd);
       setUploadedFileContent(combinedContent);
+      setUploadedImages(collectedImages);
 
       e.target.value = '';
     } catch (error: unknown) {
@@ -1105,6 +1137,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
             currentPhase={currentPhase}
             dimensionProgress={dimensionProgress}
             executingDimensions={executingDimensions}
+            layerDimensionCount={layerDimensionCount}
             onClose={() => setProgressPanelVisible(false)}
           />
 

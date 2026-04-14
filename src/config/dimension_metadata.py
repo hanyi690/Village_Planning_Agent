@@ -84,7 +84,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "tool": "wfs_data_fetch",
         "tool_params": {
             "location": {"source": "config", "path": "village_name"},
-            "buffer_km": {"source": "literal", "value": 5.0}
+            "buffer_km": {"source": "literal", "value": 1.0}
         },
         "description": "分析村庄的气候、水文、地形、生态等自然环境条件",
         "prompt_key": "natural_environment_analysis"
@@ -101,7 +101,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "tool": "gis_coverage_calculator",
         "tool_params": {
             "location": {"source": "config", "path": "village_name"},
-            "buffer_km": {"source": "literal", "value": 5.0}
+            "buffer_km": {"source": "literal", "value": 1.0}
         },
         "description": "分析村庄各类用地的分布、规模和利用效率",
         "prompt_key": "land_use_analysis"
@@ -136,7 +136,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "tool_params": {
             "keyword": {"source": "literal", "value": "学校|医院|超市|银行"},
             "center": {"source": "gis_cache", "path": "_auto_fetched.center"},
-            "radius": {"source": "literal", "value": 5000}
+            "radius": {"source": "literal", "value": 1500}
         },
         "description": "分析村庄教育、医疗、文化等公共服务设施配置",
         "prompt_key": "public_services_analysis"

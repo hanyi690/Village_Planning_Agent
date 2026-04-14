@@ -1,0 +1,88 @@
+# Docker Compose for Production Deployment
+# Includes Nginx reverse proxy for unified entry point
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# SSL Configuration:
+#   1. Place certificates in nginx/ssl/ directory:
+#      - fullchain.pem (certificate chain)
+#      - privkey.pem (private key)
+#   2. Uncomment SSL sections in nginx/nginx.conf
+#   3. Restart: docker-compose restart nginx
+
+version: '3.8'
+
+services:
+  # ============================================
+  # Nginx Reverse Proxy
+  # ============================================
+  nginx:
+    image: nginx:alpine
+    container_name: village-planning-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+      - frontend
+    networks:
+      - village-planning-network
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 32M
+    # Log rotation
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ============================================
+  # Backend Service (extends base config)
+  # ============================================
+  backend:
+    # Use existing service from docker-compose.yml
+    extends:
+      file: docker-compose.yml
+      service: backend
+    # Remove port mapping (Nginx handles external access)
+    ports: []
+    # Additional production environment
+    environment:
+      - ENVIRONMENT=production
+      - BEHIND_PROXY=true
+      - TRUSTED_PROXY_COUNT=1
+
+  # ============================================
+  # Frontend Service (extends base config)
+  # ============================================
+  frontend:
+    # Use existing service from docker-compose.yml
+    extends:
+      file: docker-compose.yml
+      service: frontend
+    # Remove port mapping (Nginx handles external access)
+    ports: []
+    # Additional production environment
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://nginx/api
+
+# Networks are defined in docker-compose.yml
+# No need to redefine here when using extends

@@ -51,6 +51,9 @@ from ..utils.logger import get_logger
 from ..utils.sse_publisher import SSEPublisher
 from ..tools.registry import ToolRegistry
 
+from ..config.dimension_metadata import get_dimension_config
+from .nodes.dimension_node import _execute_gis_tool, _extract_gis_data_for_sse
+
 # 编排层组件
 from .state import (
     UnifiedPlanningState,
@@ -97,7 +100,7 @@ _graph_checkpointer_ref = None
 # 工具定义（从共享常量导入）
 # ==========================================
 
-from src.constants.tools import ADVANCE_PLANNING_TOOL
+from src.constants.tools import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL
 
 
 # ==========================================
@@ -128,7 +131,7 @@ async def conversation_node(state: UnifiedPlanningState) -> Dict[str, Any]:
 
     # 获取 LLM 并绑定工具
     llm = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS)
-    llm_with_tools = llm.bind_tools([ADVANCE_PLANNING_TOOL])
+    llm_with_tools = llm.bind_tools([ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL])
 
     # 构建消息
     full_messages = [SystemMessage(content=system_prompt)] + messages
@@ -187,12 +190,25 @@ def _build_system_prompt(
 约束条件：{config.get('constraints', '无特殊约束')}
 {f"已有成果：{reports_summary}" if reports_summary else ""}
 
-你可以：
-1. 回答用户关于规划的问题
-2. 调用工具获取数据（使用标准工具调用格式）
-3. 推进规划进度（调用 AdvancePlanningIntent 工具）
+## 可用工具
 
-请根据用户意图自然地响应。如果用户表示要"继续规划"、"开始分析"、"下一步"等，请调用 AdvancePlanningIntent 工具。"""
+你拥有以下工具能力：
+
+1. **AdvancePlanningIntent**: 推进规划流程到下一阶段
+   - 当用户说"继续规划"、"开始分析"、"下一步"、"继续"时调用
+   - 当系统提示需要恢复执行时调用
+
+2. **GISAnalysis**: 将规划方案转换为 GIS 可视化图层
+   - 当用户请求可视化分析时调用（如"分析用地布局"、"生成交通规划图"、"显示设施覆盖范围"）
+   - 参数：dimension_key（维度标识，如 traffic, land_use, natural_environment）
+
+## 响应规则
+
+- 用户表示"继续规划"等推进意图 → 调用 AdvancePlanningIntent 工具
+- 用户请求 GIS 可视化分析 → 调用 GISAnalysis 工具
+- 其他问题 → 直接回复，不调用工具
+
+请根据用户意图选择正确的响应方式。"""
 
 
 # ==========================================
@@ -205,9 +221,15 @@ async def execute_tools_node(state: UnifiedPlanningState) -> Dict[str, Any]:
 
     执行 LLM 返回的工具调用，发送完整的工具事件流：
     tool_call -> tool_progress -> tool_result
+
+    特别处理 GISAnalysis 工具：
+    - 根据 dimension_key 获取对应的 GIS 工具
+    - 执行 GIS 工具并发送 gis_result SSE 事件
     """
     messages = state.get("messages", [])
     session_id = state.get("session_id", "")
+    config = state.get("config", {})
+    reports = state.get("reports", {})
 
     last_message = messages[-1] if messages else None
     if not last_message or not hasattr(last_message, "tool_calls"):
@@ -218,7 +240,7 @@ async def execute_tools_node(state: UnifiedPlanningState) -> Dict[str, Any]:
         return {"messages": []}
 
     # 过滤掉 AdvancePlanningIntent（已由 intent_router 处理）
-    regular_tool_calls = [tc for tc in tool_calls if tc.get("name") != "AdvancePlanningIntent"]
+    regular_tool_calls = [tc for tc in tool_calls if tc.get("name") != ADVANCE_PLANNING_TOOL["function"]["name"]]
 
     if not regular_tool_calls:
         return {"messages": []}
@@ -230,6 +252,19 @@ async def execute_tools_node(state: UnifiedPlanningState) -> Dict[str, Any]:
         tool_args = tool_call.get("args", {})
 
         logger.info(f"[工具执行] 执行工具: {tool_name}")
+
+        # 特殊处理 GISAnalysis 工具
+        if tool_name == GIS_ANALYSIS_TOOL["function"]["name"]:
+            result_msg = await _execute_gis_analysis(
+                state=state,
+                session_id=session_id,
+                dimension_key=tool_args.get("dimension_key", ""),
+                village_name=tool_args.get("village_name") or config.get("village_name", ""),
+                analysis_type=tool_args.get("analysis_type"),
+                tool_call_id=tool_call.get("id", "")
+            )
+            tool_results.append(result_msg)
+            continue
 
         # 单次查找获取所有工具元数据
         tool_info = ToolRegistry.get_tool_info(tool_name)
@@ -293,6 +328,146 @@ async def execute_tools_node(state: UnifiedPlanningState) -> Dict[str, Any]:
             )
 
     return {"messages": tool_results}
+
+
+async def _execute_gis_analysis(
+    state: UnifiedPlanningState,
+    session_id: str,
+    dimension_key: str,
+    village_name: str,
+    analysis_type: Optional[str],
+    tool_call_id: str
+) -> ToolMessage:
+    """
+    执行 GISAnalysis 工具调用的内部函数
+
+    根据 dimension_key 获取配置的 GIS 工具，执行并发送 gis_result SSE 事件。
+
+    Args:
+        state: 当前状态
+        session_id: 会话 ID
+        dimension_key: 维度标识
+        village_name: 村庄名称
+        analysis_type: 分析类型（可选）
+        tool_call_id: 工具调用 ID
+
+    Returns:
+        ToolMessage 响应
+    """
+    config = state.get("config", {})
+    reports = state.get("reports", {})
+    village_data = config.get("village_data", "")
+
+    # 获取维度配置
+    dimension_config = get_dimension_config(dimension_key)
+    if not dimension_config:
+        return ToolMessage(
+            content=f"未找到维度配置: {dimension_key}",
+            tool_call_id=tool_call_id
+        )
+
+    dimension_name = DIMENSION_NAMES.get(dimension_key, dimension_key)
+    gis_tool_name = dimension_config.get("tool")
+    tool_params_config = dimension_config.get("tool_params")
+
+    if not gis_tool_name:
+        return ToolMessage(
+            content=f"维度 {dimension_name} 未配置 GIS 工具",
+            tool_call_id=tool_call_id
+        )
+
+    # 发送工具开始事件
+    SSEPublisher.send_tool_started(
+        session_id=session_id,
+        tool_name=gis_tool_name,
+        tool_display_name=f"{dimension_name} GIS 分析",
+        description=f"执行 {dimension_name} 的 GIS 可视化分析",
+        estimated_time=30
+    )
+
+    try:
+        # 构建 GIS 工具上下文
+        context = {
+            "village_data": village_data,
+            "village_name": village_name,
+            "dimension_key": dimension_key,
+            "config": config,
+            "reports": reports,
+            "gis_analysis_results": {},  # 规划阶段不预获取，这里为空
+        }
+
+        # 如果指定了 analysis_type，覆盖 tool_params
+        if analysis_type and tool_params_config:
+            # 创建新的 tool_params，覆盖 analysis_type
+            tool_params_config = {**tool_params_config, "analysis_type": {"source": "literal", "value": analysis_type}}
+
+        # 执行 GIS 工具
+        gis_result = _execute_gis_tool(
+            tool_name=gis_tool_name,
+            context=context,
+            tool_params_config=tool_params_config
+        )
+
+        if gis_result and gis_result.success:
+            # 提取 SSE 事件数据
+            gis_data_for_event = _extract_gis_data_for_sse(gis_result)
+
+            # 发送 gis_result SSE 事件
+            if gis_data_for_event:
+                SSEPublisher.send_gis_result(
+                    session_id=session_id,
+                    dimension_key=dimension_key,
+                    dimension_name=dimension_name,
+                    summary=f"{dimension_name} GIS 分析已完成",
+                    layers=gis_data_for_event.get("layers", []),
+                    map_options=gis_data_for_event.get("mapOptions"),
+                    analysis_data=gis_data_for_event.get("analysisData")
+                )
+
+            # 发送工具成功事件
+            SSEPublisher.send_tool_status(
+                session_id=session_id,
+                tool_name=gis_tool_name,
+                status="success",
+                summary=f"{dimension_name} GIS 分析成功完成"
+            )
+
+            return ToolMessage(
+                content=f"{dimension_name} GIS 分析已完成，结果已发送到地图",
+                tool_call_id=tool_call_id
+            )
+        else:
+            error_msg = gis_result.error if gis_result else "GIS 工具执行失败"
+            logger.error(f"[GISAnalysis] {dimension_key} 工具执行失败: {error_msg}")
+
+            # 发送工具错误事件
+            SSEPublisher.send_tool_status(
+                session_id=session_id,
+                tool_name=gis_tool_name,
+                status="error",
+                error=error_msg
+            )
+
+            return ToolMessage(
+                content=f"GIS 分析失败: {error_msg}",
+                tool_call_id=tool_call_id
+            )
+
+    except Exception as e:
+        logger.error(f"[GISAnalysis] {dimension_key} 异常: {e}")
+
+        # 发送工具错误事件
+        SSEPublisher.send_tool_status(
+            session_id=session_id,
+            tool_name=gis_tool_name,
+            status="error",
+            error=str(e)
+        )
+
+        return ToolMessage(
+            content=f"GIS 分析异常: {str(e)}",
+            tool_call_id=tool_call_id
+        )
 
 
 # ==========================================

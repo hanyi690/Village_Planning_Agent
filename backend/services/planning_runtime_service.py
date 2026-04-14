@@ -21,7 +21,7 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from fastapi import BackgroundTasks, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
@@ -37,7 +37,7 @@ from backend.database.operations_async import (
 )
 from backend.schemas import TaskStatus
 from backend.services.sse_manager import sse_manager
-from backend.services.checkpoint_service import checkpoint_service
+from backend.services.checkpoint_service import checkpoint_service, checkpoint_persistence_manager
 from backend.constants import MAX_SESSION_EVENTS
 from src.orchestration.main_graph import create_unified_planning_graph
 from src.orchestration.state import (
@@ -218,8 +218,20 @@ class PlanningRuntimeService:
         enable_review: bool = False,
         stream_mode: bool = True,
         step_mode: bool = False,
+        images: Optional[List] = None,
     ) -> Dict[str, Any]:
         """Build initial state for main graph execution."""
+        # Convert images to dict format for serialization
+        images_data = []
+        if images:
+            for img in images:
+                if hasattr(img, 'model_dump'):
+                    images_data.append(img.model_dump())
+                elif hasattr(img, 'dict'):
+                    images_data.append(img.dict())
+                else:
+                    images_data.append(img)
+
         state = {
             "messages": [],  # Will be set by _trigger_planning_execution
             "session_id": session_id,
@@ -229,8 +241,10 @@ class PlanningRuntimeService:
                 "village_name": village_name or project_name,
                 "task_description": task_description,
                 "constraints": constraints,
-                "knowledge_cache": {}
+                "knowledge_cache": {},
+                # images 移至顶层，不再放在 config 内部
             },
+            "images": images_data,  # 图片作为顶层属性，仅 Layer 1 使用
             "phase": "init",
             "current_wave": 1,
             "reports": {"layer1": {}, "layer2": {}, "layer3": {}},
@@ -265,6 +279,7 @@ class PlanningRuntimeService:
         step_mode: bool = False,
         background_tasks: BackgroundTasks = None,
         rate_limiter=None,
+        images: Optional[List] = None,
     ) -> Dict[str, Any]:
         """
         Start a new planning session.
@@ -280,6 +295,7 @@ class PlanningRuntimeService:
             step_mode: Enable step-by-step execution
             background_tasks: FastAPI BackgroundTasks
             rate_limiter: Optional rate limiter instance
+            images: Optional list of uploaded images for multimodal analysis
 
         Returns:
             Dict with session details
@@ -318,6 +334,7 @@ class PlanningRuntimeService:
             enable_review=enable_review,
             stream_mode=stream_mode,
             step_mode=step_mode,
+            images=images,
         )
 
         # Create session state for database
@@ -461,6 +478,12 @@ class PlanningRuntimeService:
         """
         await cls.ensure_initialized()
 
+        # Wait for SSE subscriber to connect before starting execution
+        # This prevents early dimension_delta events from being lost
+        subscriber_ready = await sse_manager.wait_for_subscriber(session_id, timeout=5.0)
+        if not subscriber_ready:
+            logger.warning(f"[PlanningRuntimeService] [{session_id}] No SSE subscriber, streaming may be delayed")
+
         # 1. If initial_state (Layer 1 new session), create checkpoint first
         if initial_state:
             # Remove messages, we don't trigger through LLM
@@ -553,6 +576,9 @@ class PlanningRuntimeService:
                         elif isinstance(data, dict):
                             checkpoint_id = data.get('config', {}).get('configurable', {}).get('checkpoint_id', '')
 
+                        # Mark checkpoint write complete for synchronization
+                        await checkpoint_persistence_manager.mark_write_complete(session_id)
+
                         if last_completed_layer > 0 and checkpoint_id:
                             logger.info(f"[PlanningRuntimeService] [{session_id}] checkpoints mode: checkpoint_id={checkpoint_id} for {'Revision' if is_revision else 'Layer'} {last_completed_layer}")
 
@@ -633,13 +659,17 @@ class PlanningRuntimeService:
 
         # Send layer_started event
         need_revision = full_state.get("need_revision", False)
+        logger.debug(f"[PlanningRuntimeService] [{session_id}] resume: phase={phase}, current_layer={current_layer}, need_revision={need_revision}")
         if current_layer in [1, 2, 3] and not need_revision:
+            logger.info(f"[PlanningRuntimeService] [{session_id}] Sending layer_started for Layer {current_layer}")
             SSEPublisher.send_layer_start(
                 session_id=session_id,
                 layer=current_layer,
                 layer_name=get_layer_name(current_layer),
                 dimension_count=len(get_layer_dimensions(current_layer))
             )
+        else:
+            logger.debug(f"[PlanningRuntimeService] [{session_id}] Skipping layer_started: current_layer={current_layer}, need_revision={need_revision}")
 
         await set_stream_state_async(session_id, "active")
 

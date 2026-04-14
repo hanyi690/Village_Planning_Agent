@@ -183,7 +183,8 @@ class SSEPublisher:
     def send_dimension_complete(session_id: str, layer: int, dimension_key: str,
                                  dimension_name: str, full_content: str,
                                  is_revision: bool = False,
-                                 gis_data: Optional[Dict[str, Any]] = None) -> None:
+                                 gis_data: Optional[Dict[str, Any]] = None,
+                                 knowledge_sources: Optional[List[Dict[str, Any]]] = None) -> None:
         """发送维度完成事件"""
         event_data = {
             "layer": layer,
@@ -194,6 +195,8 @@ class SSEPublisher:
         }
         if gis_data:
             event_data["gis_data"] = gis_data
+        if knowledge_sources:
+            event_data["knowledge_sources"] = knowledge_sources
 
         SSEPublisher.send_event(
             session_id=session_id,
@@ -202,12 +205,14 @@ class SSEPublisher:
         )
         if gis_data:
             logger.info(f"[SSEPublisher] sent dimension_complete with gis_data for {dimension_key}")
+        if knowledge_sources:
+            logger.debug(f"[SSEPublisher] sent dimension_complete with {len(knowledge_sources)} knowledge_sources for {dimension_key}")
 
     @staticmethod
     def send_tool_call(session_id: str, tool_name: str, tool_display_name: str,
                        description: str, estimated_time: Optional[float] = None) -> None:
         """
-        发送工具调用开始事件
+        发送工具调用开始事件 (Legacy - 使用 send_tool_started 替代)
 
         Args:
             session_id: 会话 ID
@@ -224,6 +229,112 @@ class SSEPublisher:
             description=description,
             estimated_time=estimated_time
         )
+
+    # ============================================
+    # New Unified Tool Events (simplified)
+    # ============================================
+
+    @staticmethod
+    def send_tool_started(session_id: str, tool_name: str, tool_display_name: str,
+                          description: str, estimated_time: Optional[float] = None) -> None:
+        """
+        发送工具开始事件 (新版统一接口)
+
+        Args:
+            session_id: 会话 ID
+            tool_name: 工具名称（内部标识）
+            tool_display_name: 工具显示名称（用户可见）
+            description: 工具描述
+            estimated_time: 预估执行时间（秒）
+        """
+        SSEPublisher.send_event(
+            session_id=session_id,
+            event_type=SSEEventType.TOOL_STARTED,
+            tool_name=tool_name,
+            tool_display_name=tool_display_name,
+            description=description,
+            estimated_time=estimated_time,
+            status="pending",
+            started_at=datetime.now().isoformat()
+        )
+
+    @staticmethod
+    def send_tool_status(session_id: str, tool_name: str, status: str,
+                         progress: Optional[float] = None,
+                         stage: Optional[str] = None,
+                         stage_message: Optional[str] = None,
+                         summary: Optional[str] = None,
+                         error: Optional[str] = None) -> None:
+        """
+        发送工具状态更新事件 (新版统一接口)
+
+        Args:
+            session_id: 会话 ID
+            tool_name: 工具名称
+            status: 执行状态（"pending", "running", "success", "error"）
+            progress: 进度值（0.0 - 1.0）
+            stage: 当前阶段名称
+            stage_message: 阶段消息
+            summary: 完成摘要（成功时）
+            error: 错误信息（失败时）
+        """
+        event_data = {
+            "tool_name": tool_name,
+            "status": status,
+        }
+        if progress is not None:
+            event_data["progress"] = progress
+        if stage:
+            event_data["stage"] = stage
+        if stage_message:
+            event_data["stage_message"] = stage_message
+        if summary:
+            event_data["summary"] = summary
+        if error:
+            event_data["error"] = error
+        if status in ("success", "error"):
+            event_data["completed_at"] = datetime.now().isoformat()
+
+        SSEPublisher.send_event(
+            session_id=session_id,
+            event_type=SSEEventType.TOOL_STATUS,
+            **event_data
+        )
+
+    @staticmethod
+    def send_gis_result(session_id: str, dimension_key: str, dimension_name: str,
+                        summary: str, layers: List[Dict[str, Any]],
+                        map_options: Optional[Dict[str, Any]] = None,
+                        analysis_data: Optional[Dict[str, Any]] = None) -> None:
+        """
+        发送 GIS 分析结果事件
+
+        Args:
+            session_id: 会话 ID
+            dimension_key: 维度键名
+            dimension_name: 维度显示名称
+            summary: 结果摘要
+            layers: GIS 图层配置列表
+            map_options: 地图选项（center, zoom）
+            analysis_data: 分析数据（评分、建议等）
+        """
+        event_data = {
+            "dimension_key": dimension_key,
+            "dimension_name": dimension_name,
+            "summary": summary,
+            "layers": layers,
+        }
+        if map_options:
+            event_data["map_options"] = map_options
+        if analysis_data:
+            event_data["analysis_data"] = analysis_data
+
+        SSEPublisher.send_event(
+            session_id=session_id,
+            event_type=SSEEventType.GIS_RESULT,
+            **event_data
+        )
+        logger.info(f"[SSEPublisher] sent gis_result for {dimension_key}")
 
     @staticmethod
     def send_tool_progress(session_id: str, tool_name: str, stage: str,
@@ -432,6 +543,103 @@ def append_tool_result_event(
     )
 
 
+# ============================================
+# New Unified Tool Event Functions
+# ============================================
+
+def append_tool_started_event(
+    session_id: str,
+    tool_name: str,
+    tool_display_name: str,
+    description: str,
+    estimated_time: Optional[float] = None
+) -> None:
+    """
+    发送工具开始事件 (新版统一接口)
+
+    Args:
+        session_id: 会话ID
+        tool_name: 工具名称（内部标识）
+        tool_display_name: 工具显示名称（用户可见）
+        description: 工具执行描述
+        estimated_time: 预估执行时间（秒）
+    """
+    SSEPublisher.send_tool_started(
+        session_id=session_id,
+        tool_name=tool_name,
+        tool_display_name=tool_display_name,
+        description=description,
+        estimated_time=estimated_time
+    )
+
+
+def append_tool_status_event(
+    session_id: str,
+    tool_name: str,
+    status: str,
+    progress: Optional[float] = None,
+    stage: Optional[str] = None,
+    stage_message: Optional[str] = None,
+    summary: Optional[str] = None,
+    error: Optional[str] = None
+) -> None:
+    """
+    发送工具状态更新事件 (新版统一接口)
+
+    Args:
+        session_id: 会话ID
+        tool_name: 工具名称
+        status: 执行状态
+        progress: 进度值
+        stage: 阶段名称
+        stage_message: 阶段消息
+        summary: 完成摘要
+        error: 错误信息
+    """
+    SSEPublisher.send_tool_status(
+        session_id=session_id,
+        tool_name=tool_name,
+        status=status,
+        progress=progress,
+        stage=stage,
+        stage_message=stage_message,
+        summary=summary,
+        error=error
+    )
+
+
+def append_gis_result_event(
+    session_id: str,
+    dimension_key: str,
+    dimension_name: str,
+    summary: str,
+    layers: List[Dict[str, Any]],
+    map_options: Optional[Dict[str, Any]] = None,
+    analysis_data: Optional[Dict[str, Any]] = None
+) -> None:
+    """
+    发送 GIS 分析结果事件
+
+    Args:
+        session_id: 会话ID
+        dimension_key: 维度键名
+        dimension_name: 维度显示名称
+        summary: 结果摘要
+        layers: GIS 图层配置列表
+        map_options: 地图选项
+        analysis_data: 分析数据
+    """
+    SSEPublisher.send_gis_result(
+        session_id=session_id,
+        dimension_key=dimension_key,
+        dimension_name=dimension_name,
+        summary=summary,
+        layers=layers,
+        map_options=map_options,
+        analysis_data=analysis_data
+    )
+
+
 __all__ = [
     "SSEPublisher",
     "send_layer_event",
@@ -439,6 +647,9 @@ __all__ = [
     "append_tool_call_event",
     "append_tool_progress_event",
     "append_tool_result_event",
+    "append_tool_started_event",
+    "append_tool_status_event",
+    "append_gis_result_event",
     "TOOL_STATUS_RUNNING",
     "TOOL_STATUS_SUCCESS",
     "TOOL_STATUS_ERROR",

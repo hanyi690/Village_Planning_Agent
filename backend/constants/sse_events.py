@@ -33,10 +33,16 @@ class SSEEventType(str):
     CHECKPOINT_SAVED = "checkpoint_saved"
     REVISION_COMPLETED = "revision_completed"
 
-    # Tool events
+    # Tool events (simplified: 3 -> 2)
+    TOOL_STARTED = "tool_started"
+    TOOL_STATUS = "tool_status"
+    # Legacy events (deprecated, kept for backward compatibility)
     TOOL_CALL = "tool_call"
     TOOL_PROGRESS = "tool_progress"
     TOOL_RESULT = "tool_result"
+
+    # GIS events
+    GIS_RESULT = "gis_result"
 
 
 __all__ = ["SSEEventType"]

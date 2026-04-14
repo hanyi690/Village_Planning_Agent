@@ -14,6 +14,7 @@ import type {
   LayerCompletedMessage,
   DimensionReportMessage,
   GisResultMessage,
+  ToolStatusMessage,
 } from './message-types';
 
 /**
@@ -53,3 +54,9 @@ export const isDimensionReportMessage = (msg: Message): msg is DimensionReportMe
  */
 export const isGisResultMessage = (msg: Message): msg is GisResultMessage =>
   msg.type === 'gis_result';
+
+/**
+ * Check if message is a tool status message
+ */
+export const isToolStatusMessage = (msg: Message): msg is ToolStatusMessage =>
+  msg.type === 'tool_status';

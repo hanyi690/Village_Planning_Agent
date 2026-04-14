@@ -1,127 +1,163 @@
 #!/bin/bash
-# 村庄规划系统启动脚本
-# 每次启动自动清空日志文件
+# Village Planning System Startup Script
+# Cross-platform compatible (Linux and Windows/Git Bash)
 
 set -e
 
 echo "==================================="
-echo "  村庄规划系统 - 服务启动"
+echo "  Village Planning System - Start"
 echo "==================================="
 echo ""
 
-# 颜色定义
+# Detect OS
+IS_WINDOWS=false
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" || "$OSTYPE" == "cygwin" ]]; then
+  IS_WINDOWS=true
+fi
+
+# Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# 1. 清空日志文件
-echo "📝 初始化日志目录..."
+# Function: Check if process is running
+is_process_running() {
+  local pid=$1
+  if [ "$IS_WINDOWS" = true ]; then
+    tasklist //FI "PID eq $pid" 2>&1 | grep -q "$pid" 2>/dev/null
+  else
+    ps -p "$pid" >/dev/null 2>&1
+  fi
+}
+
+# Function: Kill process by PID
+kill_process() {
+  local pid=$1
+  if [ "$IS_WINDOWS" = true ]; then
+    taskkill //F //PID "$pid" > /dev/null 2>&1 || true
+  else
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+}
+
+# Function: Check if port is listening
+is_port_listening() {
+  local port=$1
+  if [ "$IS_WINDOWS" = true ]; then
+    netstat -ano 2>/dev/null | grep -q ":$port.*LISTENING"
+  else
+    ss -tlnp 2>/dev/null | grep -q ":$port" || lsof -i ":$port" >/dev/null 2>&1
+  fi
+}
+
+# 1. Initialize logs directory
+echo "Initializing logs directory..."
 mkdir -p logs
 rm -f logs/backend_*.log logs/frontend_*.log
-echo -e "  ${GREEN}✓${NC} 日志目录已准备"
+echo -e "  ${GREEN}done${NC} Logs directory ready"
 echo ""
 
-# 2. 停止旧进程（如果存在）
-echo "🛑 检查并停止旧进程..."
+# 2. Stop old processes (if exist)
+echo "Checking and stopping old processes..."
 if [ -f logs/backend.pid ]; then
   OLD_PID=$(cat logs/backend.pid)
-  if tasklist //FI "PID eq $OLD_PID" 2>&1 | grep -q $OLD_PID 2>/dev/null; then
-    echo "  停止旧后端进程 (PID: $OLD_PID)"
-    taskkill //F //PID $OLD_PID > /dev/null 2>&1 || true
+  if is_process_running "$OLD_PID"; then
+    echo "  Stopping old backend process (PID: $OLD_PID)"
+    kill_process "$OLD_PID"
   fi
   rm -f logs/backend.pid
 fi
 
 if [ -f logs/frontend.pid ]; then
   OLD_PID=$(cat logs/frontend.pid)
-  if tasklist //FI "PID eq $OLD_PID" 2>&1 | grep -q $OLD_PID 2>/dev/null; then
-    echo "  停止旧前端进程 (PID: $OLD_PID)"
-    taskkill //F //PID $OLD_PID > /dev/null 2>&1 || true
+  if is_process_running "$OLD_PID"; then
+    echo "  Stopping old frontend process (PID: $OLD_PID)"
+    kill_process "$OLD_PID"
   fi
   rm -f logs/frontend.pid
 fi
-echo -e "  ${GREEN}✓${NC} 旧进程已清理"
+echo -e "  ${GREEN}done${NC} Old processes cleaned"
 echo ""
 
-# 3. 启动后端服务
-echo -e "${BLUE}🚀 启动后端服务...${NC}"
+# 3. Start backend service
+echo -e "${BLUE}Starting backend service...${NC}"
 cd backend
 nohup python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000 --no-access-log > ../logs/backend_stdout.log 2> ../logs/backend_stderr.log &
 BACKEND_PID=$!
 echo $BACKEND_PID > ../logs/backend.pid
-echo -e "  ${GREEN}✓${NC} 后端启动中... (PID: $BACKEND_PID)"
+echo -e "  ${GREEN}done${NC} Backend starting... (PID: $BACKEND_PID)"
 cd ..
 
-# 等待后端启动
-echo "  等待后端就绪..."
+# Wait for backend to start
+echo "  Waiting for backend to be ready..."
 for i in {1..15}; do
   sleep 1
-  if netstat -ano 2>/dev/null | grep ":8000.*LISTENING" > /dev/null; then
-    echo -e "  ${GREEN}✓${NC} 后端服务已启动: http://localhost:8000"
+  if is_port_listening 8000; then
+    echo -e "  ${GREEN}done${NC} Backend service started: http://localhost:8000"
     break
   fi
   if [ $i -eq 15 ]; then
-    echo -e "  ${RED}✗${NC} 后端启动超时，查看日志:"
+    echo -e "  ${RED}failed${NC} Backend startup timeout, check logs:"
     echo "  ===== stderr ====="
-    tail -n 20 logs/backend_stderr.log 2>/dev/null || echo "  (无stderr输出)"
+    tail -n 20 logs/backend_stderr.log 2>/dev/null || echo "  (no stderr output)"
     echo "  ===== stdout ====="
-    tail -n 20 logs/backend_stdout.log 2>/dev/null || echo "  (无stdout输出)"
+    tail -n 20 logs/backend_stdout.log 2>/dev/null || echo "  (no stdout output)"
     exit 1
   fi
 done
 echo ""
 
-# 4. 启动前端服务
-echo -e "${BLUE}🎨 启动前端服务...${NC}"
+# 4. Start frontend service
+echo -e "${BLUE}Starting frontend service...${NC}"
 cd frontend
 nohup npm run dev > ../logs/frontend_stdout.log 2> ../logs/frontend_stderr.log &
 FRONTEND_PID=$!
 echo $FRONTEND_PID > ../logs/frontend.pid
-echo -e "  ${GREEN}✓${NC} 前端启动中... (PID: $FRONTEND_PID)"
+echo -e "  ${GREEN}done${NC} Frontend starting... (PID: $FRONTEND_PID)"
 cd ..
 
-# 等待前端启动
-echo "  等待前端就绪..."
+# Wait for frontend to start
+echo "  Waiting for frontend to be ready..."
 FRONTEND_PORT=""
 for i in {1..20}; do
   sleep 1
-  # 从日志中提取端口号
+  # Extract port from log
   FRONTEND_PORT=$(grep -o "Local:.*http://localhost:[0-9]*" logs/frontend_stdout.log 2>/dev/null | grep -o "[0-9]*$" | head -1)
   if [ -n "$FRONTEND_PORT" ]; then
-    echo -e "  ${GREEN}✓${NC} 前端服务已启动: http://localhost:$FRONTEND_PORT"
+    echo -e "  ${GREEN}done${NC} Frontend service started: http://localhost:$FRONTEND_PORT"
     break
   fi
   if [ $i -eq 20 ]; then
-    echo -e "  ${YELLOW}⚠${NC}  前端可能仍在启动中，默认端口: 3001"
+    echo -e "  ${YELLOW}warning${NC}  Frontend may still be starting, default port: 3001"
     FRONTEND_PORT=3001
   fi
 done
 echo ""
 
-# 5. 显示服务状态
+# 5. Show service status
 echo "==================================="
-echo -e "  ${GREEN}✓${NC} 服务启动成功！"
+echo -e "  ${GREEN}done${NC} Services started successfully!"
 echo "==================================="
 echo ""
-echo "🌐 访问地址:"
-echo "  前端: ${BLUE}http://localhost:$FRONTEND_PORT${NC}"
-echo "  后端: ${BLUE}http://localhost:8000${NC}"
-echo "  API文档: ${BLUE}http://localhost:8000/docs${NC}"
+echo "Access URLs:"
+echo "  Frontend: ${BLUE}http://localhost:$FRONTEND_PORT${NC}"
+echo "  Backend:  ${BLUE}http://localhost:8000${NC}"
+echo "  API Docs: ${BLUE}http://localhost:8000/docs${NC}"
 echo ""
-echo "📋 进程信息:"
-echo "  后端 PID: ${GREEN}$BACKEND_PID${NC}"
-echo "  前端 PID: ${GREEN}$FRONTEND_PID${NC}"
+echo "Process Info:"
+echo "  Backend PID:  ${GREEN}$BACKEND_PID${NC}"
+echo "  Frontend PID: ${GREEN}$FRONTEND_PID${NC}"
 echo ""
-echo "📝 日志文件:"
-echo "  后端: ${BLUE}tail -f logs/backend_stdout.log${NC}"
-echo "       ${BLUE}tail -f logs/backend_stderr.log${NC}"
-echo "  前端: ${BLUE}tail -f logs/frontend_stdout.log${NC}"
-echo "       ${BLUE}tail -f logs/frontend_stderr.log${NC}"
+echo "Log Files:"
+echo "  Backend: ${BLUE}tail -f logs/backend_stdout.log${NC}"
+echo "           ${BLUE}tail -f logs/backend_stderr.log${NC}"
+echo "  Frontend: ${BLUE}tail -f logs/frontend_stdout.log${NC}"
+echo "            ${BLUE}tail -f logs/frontend_stderr.log${NC}"
 echo ""
-echo "🛑 停止服务:"
+echo "Stop Services:"
 echo "  ${YELLOW}./stop-services.sh${NC}"
-echo "  或: kill \$(cat logs/backend.pid) && kill \$(cat logs/frontend.pid)"
+echo "  Or: kill \$(cat logs/backend.pid) && kill \$(cat logs/frontend.pid)"
 echo ""
 echo "==================================="

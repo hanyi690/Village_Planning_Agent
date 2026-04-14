@@ -3,13 +3,18 @@ Checkpoint Service - Shared LangGraph Checkpoint Access
 
 This service provides centralized access to LangGraph checkpoints.
 Uses lazy import to avoid circular dependency with PlanningRuntimeService.
+
+Includes async persistence with checkpoint synchronization:
+- Writes don't block execution flow
+- Reads can wait for latest checkpoint write completion
 """
 
 import asyncio
 import logging
+import time
 from collections import deque
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 
 from backend.constants import MAX_SESSION_EVENTS
 from src.orchestration.state import get_layer_dimensions, get_layer_name, _phase_to_layer
@@ -30,6 +35,84 @@ def _get_dimension_names():
     return _DIMENSION_NAMES
 
 
+class CheckpointPersistenceManager:
+    """
+    Manages async checkpoint persistence with synchronization.
+
+    Ensures:
+    - Writes don't block execution (async fire-and-forget)
+    - Reads can wait for latest write completion (checkpoint sync)
+
+    This is a lightweight wrapper that tracks pending writes via Futures.
+    Includes TTL-based cleanup to prevent memory leaks.
+    """
+
+    _pending_writes: Dict[str, Tuple[asyncio.Future, float]] = {}  # (future, start_time)
+    _lock = asyncio.Lock()
+    MAX_TTL = 300.0  # 5 minutes max wait for a write to complete
+
+    @classmethod
+    async def mark_write_complete(cls, session_id: str) -> None:
+        """
+        Mark that a checkpoint write has completed.
+        Also cleans up any stale entries (TTL expired).
+        """
+        async with cls._lock:
+            # Clean up stale entries first
+            current_time = time.time()
+            stale_keys = [
+                k for k, (_, start_time) in cls._pending_writes.items()
+                if current_time - start_time > cls.MAX_TTL
+            ]
+            for k in stale_keys:
+                future, _ = cls._pending_writes[k]
+                if not future.done():
+                    future.set_exception(asyncio.TimeoutError(f"Write TTL expired after {cls.MAX_TTL}s"))
+                del cls._pending_writes[k]
+                logger.warning(f"[CheckpointPersistence] Session {k}: cleaned up stale entry (TTL expired)")
+
+            # Mark current session complete
+            if session_id in cls._pending_writes:
+                future, _ = cls._pending_writes[session_id]
+                if not future.done():
+                    future.set_result(True)
+                del cls._pending_writes[session_id]
+
+    @classmethod
+    async def wait_for_write(cls, session_id: str, timeout: float = 5.0) -> bool:
+        """
+        Wait for pending checkpoint write to complete.
+
+        Args:
+            session_id: Session identifier
+            timeout: Maximum wait time in seconds
+
+        Returns:
+            True if write completed (or no pending write), False if timeout
+        """
+        async with cls._lock:
+            entry = cls._pending_writes.get(session_id)
+            if entry is None:
+                return True
+            future, start_time = entry
+            if future.done():
+                return True
+            # Check if already TTL expired
+            if time.time() - start_time > cls.MAX_TTL:
+                del cls._pending_writes[session_id]
+                return False
+
+        try:
+            await asyncio.wait_for(future, timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(f"[CheckpointPersistence] Session {session_id}: write wait timeout after {timeout}s")
+            return False
+
+
+checkpoint_persistence_manager = CheckpointPersistenceManager()
+
+
 class CheckpointService:
     """
     Centralized checkpoint access service.
@@ -43,10 +126,23 @@ class CheckpointService:
     """
 
     @classmethod
-    async def get_state(cls, session_id: str) -> Optional[Dict[str, Any]]:
-        """Get the full checkpoint state for a session."""
+    async def get_state(cls, session_id: str, wait_for_write: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Get the full checkpoint state for a session.
+
+        Args:
+            session_id: Session identifier
+            wait_for_write: If True, wait for any pending checkpoint write to complete
+
+        Returns:
+            State dict or None if not found
+        """
         from backend.services.planning_runtime_service import PlanningRuntimeService
         try:
+            # Optionally wait for pending write completion
+            if wait_for_write:
+                await checkpoint_persistence_manager.wait_for_write(session_id)
+
             return await PlanningRuntimeService.aget_state_values(session_id)
         except Exception as e:
             logger.error(f"[CheckpointService] Failed to get state for {session_id}: {e}")
@@ -331,4 +427,4 @@ class CheckpointService:
 checkpoint_service = CheckpointService()
 
 
-__all__ = ["CheckpointService", "checkpoint_service"]
+__all__ = ["CheckpointService", "checkpoint_service", "CheckpointPersistenceManager", "checkpoint_persistence_manager"]

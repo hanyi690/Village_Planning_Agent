@@ -134,6 +134,7 @@ class ReviewService:
         feedback: str,
         dimensions: Optional[List[str]] = None,
         review_id: Optional[str] = None,
+        images: Optional[List[Dict]] = None,
     ) -> RejectResponse:
         """
         Reject the current planning step with feedback.
@@ -143,6 +144,7 @@ class ReviewService:
             feedback: Feedback message for revision
             dimensions: Optional list of dimensions to revise
             review_id: Optional review ID for WebReviewTool
+            images: Optional list of images for multimodal revision
 
         Returns:
             RejectResponse with result
@@ -161,6 +163,7 @@ class ReviewService:
             "need_revision": True,
             "revision_target_dimensions": dimensions or [],
             "human_feedback": feedback,
+            "revision_images": images or [],
             "pause_after_step": False,
         })
 

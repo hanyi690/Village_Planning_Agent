@@ -9,7 +9,7 @@
 
 import React, { useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getDimensionConfigsByLayer } from '@/config/dimensions';
+import { getDimensionConfigsByLayer, getDimensionsByLayer } from '@/config/dimensions';
 import type { DimensionProgressItem, DimensionStatus } from '@/types';
 
 interface ProgressPanelProps {
@@ -18,6 +18,7 @@ interface ProgressPanelProps {
   currentPhase: 'idle' | '现状分析' | '规划思路' | '详细规划' | '修复中';
   dimensionProgress: Record<string, DimensionProgressItem>;
   executingDimensions: string[];
+  layerDimensionCount: Record<number, number>;
   onClose: () => void;
 }
 
@@ -64,20 +65,33 @@ function ProgressPanel({
   currentPhase,
   dimensionProgress,
   executingDimensions,
+  layerDimensionCount,
   onClose,
 }: ProgressPanelProps) {
   // Memoize dimension derivation to avoid O(n*m) nested loop on every render
-  const { allDimensions, effectiveLayer } = useMemo(() => {
+  const { allDimensions, effectiveLayer, isTransitioning } = useMemo(() => {
     if (currentLayer) {
       return {
         allDimensions: getDimensionConfigsByLayer(currentLayer),
         effectiveLayer: currentLayer,
+        isTransitioning: false,
       };
     }
 
+    // Compute keys once and reuse for all checks
     const progressKeys = Object.keys(dimensionProgress);
-    if (progressKeys.length === 0) {
-      return { allDimensions: [], effectiveLayer: 1 };
+    const isEmpty = progressKeys.length === 0;
+
+    // Detect transitioning state: waiting for layer_started event
+    // When we have expected dimension count, we are ready (not transitioning)
+    const transitioning = isEmpty && currentPhase === 'idle';
+
+    if (isEmpty) {
+      return {
+        allDimensions: [],
+        effectiveLayer: 1, // Default layer for key computation
+        isTransitioning: transitioning,
+      };
     }
 
     // Fallback: derive from dimensionProgress with O(n) lookup
@@ -96,22 +110,30 @@ function ProgressPanel({
     return {
       allDimensions: Array.from(uniqueKeys.values()),
       effectiveLayer: progressValues[0]?.layer || 1,
+      isTransitioning: false,
     };
-  }, [currentLayer, dimensionProgress]);
+  }, [currentLayer, dimensionProgress, currentPhase]);
 
   // Memoize completion stats
+  // Priority: use dimension_count from layer_started event, fallback to static config
   const { completedCount, totalCount, progressPercent } = useMemo(() => {
     const count = allDimensions.filter((dim) => {
       const key = `${effectiveLayer}_${dim.key}`;
       return dimensionProgress[key]?.status === 'completed';
     }).length;
-    const total = allDimensions.length;
+
+    // Prefer dimension_count from event, then static config
+    const total =
+      layerDimensionCount[effectiveLayer] ||
+      allDimensions.length ||
+      getDimensionsByLayer(effectiveLayer).length;
+
     return {
       completedCount: count,
       totalCount: total,
       progressPercent: total > 0 ? (count / total) * 100 : 0,
     };
-  }, [allDimensions, dimensionProgress, effectiveLayer]);
+  }, [allDimensions, dimensionProgress, effectiveLayer, layerDimensionCount]);
 
   // 统计执行中的维度数量
   const executingCount = executingDimensions.length;
@@ -221,9 +243,11 @@ function ProgressPanel({
             </div>
           )}
 
-          {/* 空状态 */}
+          {/* Empty state */}
           {allDimensions.length === 0 && (
-            <div className="px-4 py-4 text-center text-sm text-slate-400">等待规划任务开始...</div>
+            <div className="px-4 py-4 text-center text-sm text-slate-400">
+              {isTransitioning ? '正在启动下一阶段...' : '等待规划任务开始...'}
+            </div>
           )}
         </motion.div>
       )}

@@ -1606,7 +1606,8 @@ def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_re
                           planning_concept: str = "", constraints: str = "",
                           professional_data: dict = None,
                           dimension_plans: str = "",
-                          knowledge_context: str = "") -> str:
+                          knowledge_context: str = "",
+                          summary_context: str = "") -> str:  # Phase 4: 添加 summary_context
     """
     获取指定维度的 Prompt
 
@@ -1619,6 +1620,7 @@ def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_re
         professional_data: 来自黑板的专业数据（可选）
         dimension_plans: 前序详细规划（project_bank 专用）
         knowledge_context: RAG 知识上下文（可选）
+        summary_context: 摘要背景上下文（Phase 4，可选）
 
     Returns:
         格式化后的 Prompt 字符串
@@ -1647,6 +1649,11 @@ def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_re
     # 生成专业数据部分
     professional_data_section = _generate_professional_data_section(dimension_key, professional_data)
 
+    # Phase 4: 构建摘要背景部分（XML 标签显式区分）
+    summary_section = ""
+    if summary_context:
+        summary_section = f"\n{summary_context}\n"
+
     # 基础参数
     format_params = {
         "project_name": project_name,
@@ -1654,7 +1661,8 @@ def get_dimension_prompt(dimension_key: str, project_name: str = "", analysis_re
         "planning_concept": planning_concept,
         "constraints": constraints,
         "professional_data_section": professional_data_section,
-        "knowledge_context": knowledge_context  # 新增 RAG 知识上下文
+        "knowledge_context": knowledge_context,  # RAG 知识上下文
+        "summary_section": summary_section,  # Phase 4
     }
 
     # 只有 project_bank 维度需要 dimension_plans

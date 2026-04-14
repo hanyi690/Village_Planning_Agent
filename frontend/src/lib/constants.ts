@@ -173,3 +173,68 @@ export function agentPhaseToStatus(
   if (phase === AgentPhase.COMPLETED) return 'completed';
   return 'planning';
 }
+
+// ============================================
+// Tool Icon Constants
+// ============================================
+
+/**
+ * Tool icon configuration - centralized mapping for tool name to icons
+ */
+export const TOOL_ICONS_EMOJI: Record<string, string> = {
+  gis_data_fetch: '🗺️',
+  gis_analysis: '📊',
+  poi_search: '🔍',
+  route_planning: '🚗',
+  accessibility_analysis: '🚶',
+  population_prediction: '👥',
+  network_analysis: '🌐',
+  wfs_data_fetch: '📡',
+  reverse_geocode: '📍',
+  knowledge_search: '📚',
+  web_search: '🔎',
+  spatial_overlay: '📐',
+  spatial_query: '🔎',
+  isochrone_analysis: '⏱️',
+  planning_vectorizer: '✏️',
+  facility_validator: '🏢',
+  ecological_sensitivity: '🌿',
+  map_renderer: '🖼️',
+  gis_coverage_calculator: '📈',
+};
+
+export const TOOL_ICONS_FA: Record<string, string> = {
+  gis_data_fetch: 'fa-map',
+  gis_analysis: 'fa-chart-bar',
+  poi_search: 'fa-search-location',
+  route_planning: 'fa-route',
+  accessibility_analysis: 'fa-walking',
+  population_prediction: 'fa-users',
+  network_analysis: 'fa-project-diagram',
+  wfs_data_fetch: 'fa-database',
+  reverse_geocode: 'fa-map-marker-alt',
+  knowledge_search: 'fa-book',
+  web_search: 'fa-globe',
+  spatial_overlay: 'fa-vector-square',
+  spatial_query: 'fa-search',
+  isochrone_analysis: 'fa-clock',
+  planning_vectorizer: 'fa-pencil-alt',
+  facility_validator: 'fa-building',
+  ecological_sensitivity: 'fa-leaf',
+  map_renderer: 'fa-image',
+  gis_coverage_calculator: 'fa-chart-line',
+};
+
+/**
+ * Get emoji icon for a tool name
+ */
+export function getToolIconEmoji(toolName: string): string {
+  return TOOL_ICONS_EMOJI[toolName] || '⚙️';
+}
+
+/**
+ * Get FontAwesome icon class for a tool name
+ */
+export function getToolIconFA(toolName: string): string {
+  return TOOL_ICONS_FA[toolName] || 'fa-cog';
+}

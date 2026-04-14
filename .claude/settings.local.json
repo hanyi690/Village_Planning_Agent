@@ -137,7 +137,11 @@
       "Bash(cd frontend:*)",
       "mcp__plugin_context7_context7__resolve-library-id",
       "mcp__plugin_context7_context7__query-docs",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(pip list:*)",
+      "Bash(pkill:*)",
+      "Bash(PYTHONPATH=. python scripts/debug_tile_chain.py)",
+      "mcp__zai-mcp-server__analyze_image"
     ]
   }
 }

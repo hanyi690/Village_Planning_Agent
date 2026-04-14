@@ -33,6 +33,29 @@ class TaskStatus(str, Enum):
 
 
 # ============================================
+# Multimodal Schemas
+# ============================================
+
+class ImageSourceType(str, Enum):
+    """图片来源类型"""
+    upload = "upload"       # 用户直接上传
+    embedded = "embedded"   # 文档内嵌图片（如 Word 中的图片）
+
+
+class ImageData(BaseModel):
+    """图片数据模型（用于多模态消息）"""
+    image_base64: str = Field(..., description="Base64 编码的图片数据")
+    image_format: str = Field(..., description="图片格式: jpeg, png, gif, webp")
+    source_type: ImageSourceType = Field(
+        default=ImageSourceType.upload,
+        description="图片来源: upload (直接上传) | embedded (文档内嵌)"
+    )
+    source_filename: Optional[str] = Field(None, description="源文件名（如有）")
+    width: Optional[int] = Field(None, description="图片宽度（像素）")
+    height: Optional[int] = Field(None, description="图片高度（像素）")
+
+
+# ============================================
 # Task Schemas
 # ============================================
 
@@ -46,6 +69,10 @@ class StartPlanningRequest(BaseModel):
     enable_review: bool = Field(default=DEFAULT_ENABLE_REVIEW, description="启用交互式审查")
     stream_mode: bool = Field(default=DEFAULT_STREAM_MODE, description="启用流式输出")
     step_mode: bool = Field(default=DEFAULT_STEP_MODE, description="启用分步执行模式")
+    images: Optional[List[ImageData]] = Field(
+        default=None,
+        description="上传的图片列表（用于多模态分析）"
+    )
 
 
 # ============================================
@@ -58,6 +85,10 @@ class ReviewActionRequest(BaseModel):
     feedback: str = Field("", description="驳回反馈（reject 时必填）")
     dimensions: Optional[List[str]] = Field(None, description="需要修订的维度列表")
     checkpoint_id: Optional[str] = Field(None, description="回滚目标检查点（rollback 时必填）")
+    images: Optional[List[ImageData]] = Field(
+        default=None,
+        description="上传的图片列表（用于多模态修复）"
+    )
 
 
 class ResumeRequest(BaseModel):
@@ -172,6 +203,10 @@ class CreateUIMessageRequest(BaseModel):
 class ChatMessageRequest(BaseModel):
     """对话消息请求"""
     message: str = Field(..., description="用户消息内容")
+    images: Optional[List[ImageData]] = Field(
+        default=None,
+        description="上传的图片列表（用于多模态对话）"
+    )
 
 
 class RunDimensionsRequest(BaseModel):
