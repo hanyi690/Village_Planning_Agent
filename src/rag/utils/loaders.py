@@ -419,9 +419,13 @@ class MarkItDownLoader(BaseDocumentLoader):
             file_ext = '.docx'
         
         print(f"📄 正在使用 MarkItDown 读取: {self.file_path.name} ({file_ext}) ...")
-        
+
         try:
-            markdown_content = self._convert_with_markitdown(actual_file)
+            # PDF 文件使用 Fallback 链（MarkItDown 失败时自动切换备用解析器）
+            if file_ext == '.pdf':
+                markdown_content = self._convert_pdf_with_fallback(actual_file)
+            else:
+                markdown_content = self._convert_with_markitdown(actual_file)
             return self._parse_markdown(markdown_content, file_ext)
         except ImportError:
             raise Exception(
@@ -440,13 +444,30 @@ class MarkItDownLoader(BaseDocumentLoader):
         return DocToDocxConverter.convert(self.file_path, timeout=self.timeout)
 
     def _convert_with_markitdown(self, file_path: Optional[Path] = None) -> str:
-        """使用 MarkItDown 转换文档为 Markdown（带超时保护）"""
+        """使用 MarkItDown 转换文档为 Markdown（带超时保护，支持 OCR）"""
         try:
             from markitdown import MarkItDown
         except ImportError:
             raise ImportError("markitdown 未安装")
-        
-        md = MarkItDown(enable_plugins=False)
+
+        # 启用 OCR 插件（使用 DashScope API）
+        from src.core.config import DASHSCOPE_API_KEY, DASHSCOPE_API_BASE, OCR_MODEL_NAME
+
+        llm_client = None
+        llm_model = None
+        if DASHSCOPE_API_KEY:
+            from openai import OpenAI
+            llm_client = OpenAI(
+                api_key=DASHSCOPE_API_KEY,
+                base_url=DASHSCOPE_API_BASE,
+            )
+            llm_model = OCR_MODEL_NAME
+
+        md = MarkItDown(
+            enable_plugins=True,
+            llm_client=llm_client,
+            llm_model=llm_model,
+        )
         target_path = file_path or self.file_path
         
         # 尝试使用 func_timeout 实现超时保护
@@ -468,6 +489,52 @@ class MarkItDownLoader(BaseDocumentLoader):
             # func_timeout 未安装，使用无超时方式（保持向后兼容）
             result = md.convert(str(target_path))
             return result.markdown
+
+    def _convert_pdf_with_fallback(self, file_path: Path) -> str:
+        """
+        PDF 文件 Fallback 解析链
+
+        优先级：
+        1. MarkItDown (pdfminer.six) → 原生方案
+        2. PyMuPDF → 复杂字体/布局容错
+        3. pdfplumber → 表格/结构化内容
+
+        Args:
+            file_path: PDF 文件路径
+
+        Returns:
+            解析后的 Markdown 内容
+
+        Raises:
+            Exception: 所有解析器都失败时抛出详细错误
+        """
+        from .pdf_fallback import pdf_fallback_chain, check_parsers
+
+        # 1. 先尝试 MarkItDown
+        try:
+            content = self._convert_with_markitdown(file_path)
+            if content and len(content.strip()) >= 100:
+                print(f"✅ MarkItDown 解析 PDF 成功")
+                return content
+            print("⚠️  MarkItDown 返回内容过少，尝试备用解析器...")
+        except TimeoutError:
+            print("⚠️  MarkItDown 解析 PDF 超时，尝试备用解析器...")
+        except Exception as e:
+            print(f"⚠️  MarkItDown 解析 PDF 失败: {e}")
+            print("🔄 尝试备用解析器...")
+
+        # 2. 调用 Fallback 链
+        parsers_status = check_parsers()
+        if not parsers_status['pymupdf'] and not parsers_status['pdfplumber']:
+            raise Exception(
+                "PDF 解析失败。\n"
+                "MarkItDown 解析失败/超时，且备用解析器未安装。\n"
+                "请安装备用解析器: pip install pymupdf pdfplumber\n"
+                "或检查 PDF 文件是否为扫描版（需要 OCR）。"
+            )
+
+        content, parser_name = pdf_fallback_chain(file_path)
+        return content
 
     def _parse_markdown(self, content: str, file_ext: str) -> list[Document]:
         """解析 Markdown 内容为 Document 列表"""

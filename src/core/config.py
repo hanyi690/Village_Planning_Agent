@@ -141,3 +141,9 @@ FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "qwen-flash")
 FLASH_MODEL_MAX_TOKENS = int(os.getenv("FLASH_MODEL_MAX_TOKENS", "500"))
 FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
 
+# ==========================================
+# OCR Model Configuration (DashScope Vision)
+# ==========================================
+# 用于 MarkItDown OCR 插件处理扫描版 PDF
+OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "qwen-vl-ocr-2025-11-20")
+
