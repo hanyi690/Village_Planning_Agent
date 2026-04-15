@@ -9,6 +9,7 @@
 """
 from pathlib import Path
 from typing import Optional, Dict, List, TypedDict
+from dataclasses import dataclass
 
 from langchain_core.documents import Document
 from langchain_core.tools import Tool, tool
@@ -24,6 +25,22 @@ from src.rag.core.cache import get_vector_cache
 # ==================== 类型定义 ====================
 
 CONTENT_PREVIEW_LENGTH = 1000
+
+
+@dataclass
+class MetadataFilterParams:
+    """元数据过滤参数"""
+    dimension: Optional[str] = None
+    terrain: Optional[str] = None
+    doc_type: Optional[str] = None
+    regions: Optional[str] = None
+    task_id: Optional[str] = None
+    include_summaries: bool = False
+
+
+def _parse_comma_separated(value: str) -> List[str]:
+    """解析逗号分隔字符串为列表（去除空白项）"""
+    return [s.strip() for s in value.split(",") if s.strip()]
 
 
 class KnowledgeSource(TypedDict):
@@ -70,56 +87,36 @@ def format_error(message: str, error: Exception) -> str:
     """格式化错误消息"""
     return f"❌ {message}时发生错误: {error}"
 
-def _build_metadata_filter(
-    dimension: Optional[str] = None,
-    terrain: Optional[str] = None,
-    doc_type: Optional[str] = None,
-    task_id: Optional[str] = None,
-    include_summaries: bool = False,
-) -> Optional[Dict]:
-    """
-    构建 ChromaDB metadata 过滤器
-
-    Args:
-        dimension: 维度标识（如 "traffic", "land_use"）
-        terrain: 地形类型（"mountain", "plain", "hill", "all"）
-        doc_type: 文档类型（"policy", "standard", "case", "dimension_summary"）
-        task_id: 任务ID（用于会话隔离，检索摘要时必须提供）
-        include_summaries: 是否包含摘要类型（混合检索模式）
-
-    Returns:
-        ChromaDB filter dict，如果无过滤条件则返回 None
-    """
+def _build_metadata_filter(params: MetadataFilterParams) -> Optional[Dict]:
+    """构建 ChromaDB 过滤器（从数据类）"""
     filter_dict = {}
 
-    # 混合检索模式：公共政策 + 本任务摘要
-    if include_summaries and task_id:
-        # 使用 $or 逻辑：公共政策 OR 本任务摘要
+    if params.include_summaries and params.task_id:
         filter_dict["$or"] = [
-            {"doc_type": "policy"},  # 公共政策
-            {
-                "doc_type": "dimension_summary",
-                "task_id": task_id  # 本任务摘要（会话隔离）
-            }
+            {"doc_type": "policy"},
+            {"doc_type": "dimension_summary", "task_id": params.task_id}
         ]
         return filter_dict
 
-    # 单类型检索模式
-    # 维度过滤：使用 $in 操作符匹配 dimension_tags 数组
-    if dimension:
-        filter_dict["dimension_tags"] = {"$in": [dimension]}
+    if params.dimension:
+        filter_dict["dimension_tags"] = {"$regex": f"(^|,)({params.dimension})(,|$)"}
 
-    # 地形过滤
-    if terrain and terrain != "all":
-        filter_dict["terrain"] = terrain
+    if params.terrain and params.terrain != "all":
+        filter_dict["terrain"] = params.terrain
 
-    # 文档类型过滤
-    if doc_type:
-        filter_dict["doc_type"] = doc_type
+    if params.doc_type:
+        filter_dict["doc_type"] = params.doc_type
 
-    # 任务ID过滤（摘要检索专用）
-    if task_id:
-        filter_dict["task_id"] = task_id
+    if params.regions:
+        region_list = _parse_comma_separated(params.regions)
+        if region_list:
+            filter_dict["$or"] = [
+                {"regions": {"$regex": f"(^|,)({r})(,|$)"}}
+                for r in region_list
+            ]
+
+    if params.task_id:
+        filter_dict["task_id"] = params.task_id
 
     return filter_dict if filter_dict else None
 
@@ -271,6 +268,7 @@ def search_knowledge(
     dimension: Optional[str] = None,
     terrain: Optional[str] = None,
     doc_type: Optional[str] = None,
+    regions: Optional[str] = None,
     task_id: Optional[str] = None,
     include_summaries: bool = False,
 ) -> str:
@@ -281,7 +279,7 @@ def search_knowledge(
     - 需要查找特定信息时
     - 获取相关片段的上下文
     - 探索知识库中的相关内容
-    - 按维度/地形/文档类型过滤检索
+    - 按维度/地形/文档类型/地区过滤检索
     - 检索摘要索引（Layer间关联检索）
 
     **参数：**
@@ -294,6 +292,7 @@ def search_knowledge(
     - dimension (str | optional): 维度标识过滤（如 "traffic", "land_use"）
     - terrain (str | optional): 地形类型过滤（"mountain", "plain", "hill", "all"）
     - doc_type (str | optional): 文档类型过滤（"policy", "standard", "case", "dimension_summary"）
+    - regions (str | optional): 地区名称过滤（逗号分隔，如 "梅州,广东"）
     - task_id (str | optional): 任务ID（会话隔离，检索摘要时必须提供）
     - include_summaries (bool | optional): 是否启用混合检索模式（公共政策 + 本任务摘要）
 
@@ -308,6 +307,7 @@ def search_knowledge(
             "dimension": dimension,
             "terrain": terrain,
             "doc_type": doc_type,
+            "regions": regions,
             "task_id": task_id,
             "include_summaries": include_summaries,
         }
@@ -324,13 +324,15 @@ def search_knowledge(
             db = get_vectorstore()
 
             # 构建 metadata filter（支持会话隔离和混合检索）
-            filter_dict = _build_metadata_filter(
+            filter_params = MetadataFilterParams(
                 dimension=dimension,
                 terrain=terrain,
                 doc_type=doc_type,
+                regions=regions,
                 task_id=task_id,
                 include_summaries=include_summaries,
             )
+            filter_dict = _build_metadata_filter(filter_params)
 
             # 使用 filter 进行检索
             if filter_dict:
@@ -528,11 +530,18 @@ def chapter_content_tool(source: str, chapter_pattern: str, detail_level: str = 
     return get_chapter_content(source, chapter_pattern, detail_level)
 
 @tool
-def knowledge_search_tool(query: str, top_k: int = 5, context_mode: str = "standard") -> str:
+def knowledge_search_tool(
+    query: str,
+    top_k: int = 5,
+    context_mode: str = "standard",
+    dimension: str = "",
+    doc_type: str = "",
+    regions: str = "",
+) -> str:
     """
-    检索知识库（支持多种上下文模式）。
+    检索知识库（支持多种上下文模式 + 元数据过滤）。
 
-    基于查询检索相关文档片段，支持不同详细程度的上下文。
+    基于查询检索相关文档片段，支持按维度、文档类型、地区过滤。
 
     Args:
         query: 查询问题或关键词（必需）
@@ -541,11 +550,21 @@ def knowledge_search_tool(query: str, top_k: int = 5, context_mode: str = "stand
             - "minimal": 仅匹配片段（最少 Token）
             - "standard": 片段 + 短上下文（300 字，默认）
             - "expanded": 片段 + 长上下文（500 字）
+        dimension: 维度标识（可选，如 "traffic", "land_use"）
+        doc_type: 文档类型（可选，如 "policy", "standard", "case"）
+        regions: 地区名称（可选，逗号分隔，如 "梅州,广东"）
 
     Returns:
         匹配的文档片段列表，包含来源、位置、内容
     """
-    return search_knowledge(query, top_k, context_mode)
+    return search_knowledge(
+        query=query,
+        top_k=top_k,
+        context_mode=context_mode,
+        dimension=dimension if dimension else None,
+        doc_type=doc_type if doc_type else None,
+        regions=regions if regions else None,
+    )
 
 @tool
 def key_points_search_tool(query: str, sources: Optional[str] = None) -> str:
@@ -562,9 +581,7 @@ def key_points_search_tool(query: str, sources: Optional[str] = None) -> str:
         匹配的要点列表，包含来源文档和具体内容
     """
     # 处理 sources 参数：将逗号分隔的字符串转换为列表
-    sources_list = None
-    if sources:
-        sources_list = [s.strip() for s in sources.split(",") if s.strip()]
+    sources_list = _parse_comma_separated(sources) if sources else None
 
     # 直接调用原始函数，传递解析后的参数
     cm = get_context_manager()
