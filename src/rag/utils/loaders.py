@@ -541,7 +541,14 @@ class MarkItDownLoader(BaseDocumentLoader):
         if not content or not content.strip():
             print(f"⚠️  文档内容为空")
             return []
-        
+
+        # OCR 输出预处理（扫描版教材 PDF）
+        if self._is_ocr_output(content):
+            from .ocr_preprocessor import OCRPreProcessor
+            preprocessor = OCRPreProcessor()
+            content = preprocessor.preprocess(content)
+            print(f"🔄 OCR 输出预处理完成")
+
         # 清理内容
         content = self.cleaner.clean_text(content)
         
@@ -623,6 +630,10 @@ class MarkItDownLoader(BaseDocumentLoader):
                     documents.append(doc)
         
         return documents
+
+    def _is_ocr_output(self, content: str) -> bool:
+        """检测是否为 OCR 输出格式"""
+        return bool(re.search(r'## Page \d+.*\*\[Image OCR\]', content))
 
 
 # ==================== 保留旧加载器作为别名（向后兼容）====================

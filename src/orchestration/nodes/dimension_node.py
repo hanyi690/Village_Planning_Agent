@@ -80,7 +80,6 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     from ...rag.core.tools import search_knowledge, extract_sources_from_documents
     from ...rag.core.cache import get_vector_cache
-    from ...rag.service.api.routes import extract_knowledge_sources  # fallback for cached dims
 
     knowledge_cache = {}
     knowledge_sources_cache = {}
@@ -101,9 +100,6 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
         knowledge_cache[dim_key] = existing_cache[dim_key]
         if dim_key in existing_sources_cache:
             knowledge_sources_cache[dim_key] = existing_sources_cache[dim_key]
-        else:
-            sources = extract_knowledge_sources(existing_cache[dim_key])
-            knowledge_sources_cache[dim_key] = sources
         success_details.append(f"{dim_key}(cached)")
 
     # Parallel fetch for non-cached dimensions with semaphore

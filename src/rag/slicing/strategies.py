@@ -3,15 +3,43 @@
 
 针对政策/案例/标准/指南等不同类型文档，提供定制化的切片策略。
 """
+import logging
 import re
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 
+logger = logging.getLogger(__name__)
+
 
 class SlicingStrategy(ABC):
     """切片策略抽象基类"""
+
+    MAX_CHUNK_LEN = 2000  # 安全最大切片长度（考虑中文 Token 比例）
+
+    def _preprocess(self, text: str) -> str:
+        """预处理文本：统一换行符、压缩空行"""
+        text = re.sub(r'\r\n|\r', '\n', text)  # 统一换行符
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)  # 压缩多余空行
+        return text.strip()
+
+    def _check_chunk_lengths(self, slices: List[str], content: str) -> List[str]:
+        """检查切片长度，超长时强制重新分割"""
+        if not slices:
+            return slices
+
+        oversized = [s for s in slices if len(s) > self.MAX_CHUNK_LEN]
+        if not oversized:
+            return slices
+
+        logger.warning(f"发现 {len(oversized)} 个超长切片，强制重新分割")
+        return self._fallback_split(content)
+
+    @abstractmethod
+    def _fallback_split(self, content: str) -> List[str]:
+        """默认分割方法，子类必须实现"""
+        pass
 
     @abstractmethod
     def slice(self, content: str, metadata: Optional[Dict] = None) -> List[str]:
@@ -41,56 +69,58 @@ class PolicySlicer(SlicingStrategy):
     - 按"第 X 条"分割，保持条款完整性
     - 按章节分割，保持政策结构
     - 最小切片长度 50 字符，避免碎片化
+    - 最大切片长度 2500 字符，避免切片过大
     """
 
+    # 配置常量
+    MAX_CHUNK_LEN = 2500  # 最大切片长度
+    MIN_CHUNK_LEN = 50    # 最小切片长度
+
     def slice(self, content: str, metadata: Optional[Dict] = None) -> List[str]:
+        content = self._preprocess(content)
         slices = []
 
-        # 策略 1: 按"第 X 条"分割（保持条款完整性）
-        clause_pattern = r'\n(?=(?:第 [一二三四五六七八九十百千万 0-9]+条))'
+        # 策略 1: 按"第 X 条"分割（放宽空格匹配）
+        clause_pattern = r'\n(?=第\s*[一二三四五六七八九十百千万0-9]+\s*条)'
         clauses = re.split(clause_pattern, content)
 
         if len(clauses) > 1:
-            # 有条款分割，合并过小片段
-            current_clause = ""
+            current = ""
             for clause in clauses:
                 clause = clause.strip()
                 if not clause:
                     continue
-
-                if len(current_clause) + len(clause) < 500:
-                    # 合并到当前条款
-                    current_clause += "\n" + clause
+                # 合并时检查最大长度限制
+                if len(current) + len(clause) < self.MAX_CHUNK_LEN:
+                    current += "\n" + clause
                 else:
-                    # 保存当前条款并开始新的
-                    if current_clause and len(current_clause) >= 50:
-                        slices.append(current_clause.strip())
-                    current_clause = clause
+                    if current and len(current) >= self.MIN_CHUNK_LEN:
+                        slices.append(current.strip())
+                    current = clause
+            # 保存最后一个
+            if current and len(current) >= self.MIN_CHUNK_LEN:
+                slices.append(current.strip())
 
-            # 保存最后一个条款
-            if current_clause and len(current_clause) >= 50:
-                slices.append(current_clause.strip())
-
-        if len(slices) < 2:
-            # 策略 2: 按章节标题分割（一、二、三...或 1.2.3....）
+        # 回退条件：无结果时才尝试下一策略
+        if not slices:
             slices = self._split_by_sections(content)
-
-        if len(slices) < 2:
-            # 策略 3: 使用默认的 RecursiveCharacterTextSplitter
+        if not slices:
             slices = self._fallback_split(content)
+
+        # 检查切片长度，防止超长
+        slices = self._check_chunk_lengths(slices, content)
 
         return slices
 
     def _split_by_sections(self, content: str) -> List[str]:
         """按章节标题分割"""
-        # 匹配中文数字章节：一、二、三...
         section_pattern = r'\n(?=[一二三四五六七八九十]+[、.])'
         sections = re.split(section_pattern, content)
 
         result = []
         for section in sections:
             section = section.strip()
-            if len(section) >= 100:  # 章节至少 100 字符
+            if len(section) >= 100:
                 result.append(section)
 
         return result if result else []
@@ -119,11 +149,12 @@ class CaseSlicer(SlicingStrategy):
     """
 
     def slice(self, content: str, metadata: Optional[Dict] = None) -> List[str]:
-        # 策略 1: 按阶段标题分割
+        content = self._preprocess(content)
+
+        # 策略 1: 按阶段标题分割（放宽匹配，移除关键词硬匹配）
         stage_patterns = [
-            r'\n(?=[一二三四五六七八九十]+[、.].*(?:背景 | 思路 | 目标 | 措施 | 效果 | 总结))',
-            r'\n(?=(?:一、|二、|三、|四、|五、|六、))',
-            r'\n(?=\d+\.(?:\s|$))',  # 1. 2. 3....
+            r'\n(?=[一二三四五六七八九十]+[、.])',  # 一、二、
+            r'\n(?=\d+\.[^\d])',  # 1. 开头（非数字编号）
         ]
 
         sections = content
@@ -133,22 +164,15 @@ class CaseSlicer(SlicingStrategy):
                 sections = result
                 break
 
-        # 如果 sections 是列表，直接使用；否则说明没有成功分割
-        if isinstance(sections, list):
-            pass  # 已经是列表
-        else:
-            # 回退到默认分割
+        if isinstance(sections, str):
             return self._fallback_split(content)
 
-        result = []
-        for section in sections:
-            section = section.strip()
-            if len(section) >= 200:  # 案例切片至少 200 字符
-                result.append(section)
+        result = [s.strip() for s in sections if len(s.strip()) >= 200]
+        if not result:
+            return self._fallback_split(content)
 
-        if len(result) < 2:
-            # 回退到默认分割
-            result = self._fallback_split(content)
+        # 检查切片长度，防止超长
+        result = self._check_chunk_lengths(result, content)
 
         return result
 
@@ -176,38 +200,34 @@ class StandardSlicer(SlicingStrategy):
     """
 
     def slice(self, content: str, metadata: Optional[Dict] = None) -> List[str]:
+        content = self._preprocess(content)
         slices = []
 
-        # 策略 1: 按标准章节编号分割（如 4.1, 4.2 或 3.1.2）
-        standard_pattern = r'\n(?=\d+\.\d+(?:\.\d+)?\s)'
+        # 策略 1: 按标准章节编号分割（放宽空格要求）
+        standard_pattern = r'\n(?=\d+\.\d+(?:\.\d+)?)'  # 不强制空格
         sections = re.split(standard_pattern, content)
 
         if len(sections) > 1:
-            for section in sections:
-                section = section.strip()
-                if len(section) >= 100:  # 标准条款至少 100 字符
-                    slices.append(section)
+            slices = [s.strip() for s in sections if len(s.strip()) >= 100]
 
-        if len(slices) < 2:
-            # 策略 2: 按条分割（第 X 条）
-            clause_pattern = r'\n(?=第 [0-9]+条)'
+        if not slices:
+            # 策略 2: 按条分割（放宽空格匹配）
+            clause_pattern = r'\n(?=第\s*\d+\s*条)'
             clauses = re.split(clause_pattern, content)
+            slices = [c.strip() for c in clauses if len(c.strip()) >= 80]
 
-            for clause in clauses:
-                clause = clause.strip()
-                if len(clause) >= 80:
-                    slices.append(clause)
-
-        if len(slices) < 2:
-            # 策略 3: 使用较小的 chunk_size，保持技术参数完整
+        if not slices:
             slices = self._fallback_split(content)
+
+        # 检查切片长度，防止超长
+        slices = self._check_chunk_lengths(slices, content)
 
         return slices
 
     def _fallback_split(self, content: str) -> List[str]:
         """默认分割，使用较小的 chunk_size"""
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1500,  # 标准文档使用较小的 chunk
+            chunk_size=1500,
             chunk_overlap=300,
             length_function=len,
         )
@@ -219,30 +239,43 @@ class StandardSlicer(SlicingStrategy):
 
 class GuideSlicer(SlicingStrategy):
     """
-    指南/手册类文档切片策略
+    指南/教材类文档切片策略
 
     特点：
-    - 按知识点分割
-    - 保持操作说明的完整性
-    - 适合教程类文档
+    - 按 Markdown 标题分割（# ## ###）
+    - 支持教材章节结构（第一章、第一节）
+    - OCR 输出预处理（移除 ## Page N 标记）
+    - 最小切片长度 150 字符
     """
 
+    # OCR 页面标记（需排除，不当作标题）
+    OCR_PAGE_MARKER = r'^#{1,6}\s+Page\s+\d+'
+
     def slice(self, content: str, metadata: Optional[Dict] = None) -> List[str]:
-        # 策略 1: 按标题分割（## 或 ###）
+        # 预处理：统一换行符、压缩空行
+        content = self._preprocess(content)
+        # 移除 OCR 页面标记和包装
+        content = self._remove_ocr_markers(content)
+
+        # 策略 1: 按标题分割（#{1,3}）
         header_pattern = r'\n(?=#{1,3}\s)'
         sections = re.split(header_pattern, content)
 
-        result = []
-        for section in sections:
-            section = section.strip()
-            if len(section) >= 150:  # 知识点至少 150 字符
-                result.append(section)
-
-        if len(result) < 2:
-            # 回退到默认分割
+        result = [s.strip() for s in sections if len(s.strip()) >= 150]
+        if not result:
             result = self._fallback_split(content)
 
+        # 检查切片长度，防止超长
+        result = self._check_chunk_lengths(result, content)
+
         return result
+
+    def _remove_ocr_markers(self, content: str) -> str:
+        """移除 OCR 页面标记，避免被误判为标题"""
+        content = re.sub(self.OCR_PAGE_MARKER, '', content, flags=re.MULTILINE)
+        content = re.sub(r'\*\[Image OCR\]\n|\n\[End OCR\]\*\s*', '', content)
+        content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)
+        return content.strip()
 
     def _fallback_split(self, content: str) -> List[str]:
         """默认分割"""
@@ -280,6 +313,10 @@ class DefaultSlicer(SlicingStrategy):
     def slice(self, content: str, metadata: Optional[Dict] = None) -> List[str]:
         return self.splitter.split_text(content)
 
+    def _fallback_split(self, content: str) -> List[str]:
+        """默认分割"""
+        return self.splitter.split_text(content)
+
     def get_name(self) -> str:
         return "default_slicer"
 
@@ -297,6 +334,8 @@ class SlicingStrategyFactory:
         "standard": StandardSlicer(),
         "guide": GuideSlicer(),
         "report": DefaultSlicer(chunk_size=2000, chunk_overlap=400),
+        "domain": GuideSlicer(),
+        "textbook": GuideSlicer(),
     }
 
     @classmethod
@@ -331,7 +370,16 @@ class SlicingStrategyFactory:
             切片列表
         """
         strategy = cls.get_strategy(doc_type)
-        return strategy.slice(content, metadata)
+        slices = strategy.slice(content, metadata)
+
+        # 记录切片结果
+        logger.info(f"[{strategy.get_name()}] {doc_type}: {len(slices)} slices")
+        if len(slices) == 1 and len(content) > 500:
+            logger.warning(
+                f"单切片警告: {doc_type} 可能回退到默认分割"
+            )
+
+        return slices
 
     @classmethod
     def register_strategy(

@@ -16,7 +16,7 @@
 
 import hashlib
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -36,9 +36,52 @@ from src.rag.core.context_manager import DocumentContextManager
 from src.rag.utils.loaders import load_documents_from_directory, _create_loader, FileTypeDetector
 from src.rag.metadata.injector import MetadataInjector
 from src.rag.slicing.strategies import SlicingStrategyFactory
+from src.rag.utils.ocr_preprocessor import OCRPreProcessor
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def infer_doc_type(filename: str, content: str = "") -> str:
+    """
+    根据文件名关键词推断文档类型
+
+    Args:
+        filename: 文件名（含扩展名）
+        content: 文档内容（可选，用于辅助判断）
+
+    Returns:
+        文档类型标识：textbook/guide/policy/standard/case/report
+    """
+    name_lower = filename.lower()
+
+    # 教材类关键词（优先级最高）
+    textbook_keywords = ["教材", "原理", "教程", "导论", "基础", "入门", "读本"]
+    if any(kw in filename for kw in textbook_keywords):
+        return "textbook"
+
+    # 指南/手册类
+    guide_keywords = ["指南", "手册", "指导", "操作", "规程"]
+    if any(kw in filename for kw in guide_keywords):
+        return "guide"
+
+    # 政策类
+    policy_keywords = ["条例", "规定", "办法", "通知", "意见", "决定", "批复"]
+    if any(kw in filename for kw in policy_keywords):
+        return "policy"
+
+    # 标准规范类
+    standard_keywords = ["标准", "规范", "gb", "cjj", "cj", "hg", "jc", "jg", "jt"]
+    for kw in standard_keywords:
+        if kw in name_lower:
+            return "standard"
+
+    # 案例/规划类
+    case_keywords = ["规划", "设计", "方案", "案例", "实例", "工程"]
+    if any(kw in filename for kw in case_keywords):
+        return "case"
+
+    return "report"
 
 
 class KnowledgeBaseManager:
@@ -183,12 +226,27 @@ class KnowledgeBaseManager:
             
             # 3. 合并文档内容
             full_content = "\n\n".join(doc.page_content for doc in documents)
-            
-            # 4. 切分文档
-            splits = self.text_splitter.split_text(full_content)
-            logger.info(f"切分为 {len(splits)} 个片段")
-            
-            # 5. 创建 Document 对象并添加元数据
+
+            # 4. OCR 预处理（扫描版 PDF）
+            ocr_processor = OCRPreProcessor()
+            if ocr_processor.is_ocr_output(full_content):
+                logger.info("  检测到 OCR 输出格式，执行预处理...")
+                full_content = ocr_processor.preprocess(full_content)
+                logger.info(f"  OCR 预处理完成，内容长度: {len(full_content)} chars")
+
+            # 5. 推断或使用指定的文档类型
+            if doc_type is None:
+                inferred_type = infer_doc_type(source_name, full_content)
+                logger.info(f"  推断文档类型: {inferred_type}")
+                doc_type = inferred_type
+
+            # 6. 使用差异化切片策略切分文档
+            splits = SlicingStrategyFactory.slice_document(
+                full_content, doc_type, {"source": source_name}
+            )
+            logger.info(f"  切分为 {len(splits)} 个片段 (策略: {doc_type})")
+
+            # 7. 创建 Document 对象并添加元数据
             split_docs = []
             for idx, split in enumerate(splits):
                 # 计算起始位置
@@ -207,8 +265,8 @@ class KnowledgeBaseManager:
                     }
                 )
                 split_docs.append(doc)
-            
-            # 6. 注入元数据（新增：维度标签、地形类型等）
+
+            # 8. 注入元数据（维度标签、地形类型等）
             # 若用户手动指定了元数据则使用手动指定的，否则自动标注
             logger.info("   注入元数据...")
             injector = MetadataInjector()
@@ -259,7 +317,162 @@ class KnowledgeBaseManager:
                 "status": "error",
                 "message": f"添加文档失败: {str(e)}"
             }
-    
+
+    def add_document_with_progress(
+        self,
+        file_path: str,
+        progress_callback: Callable[[float, str], None],
+        category: Optional[str] = None,
+        doc_type: Optional[str] = None,
+        dimension_tags: Optional[list[str]] = None,
+        terrain: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        增量添加文档到知识库（带进度回调）
+
+        用于异步任务管理器调用，支持进度追踪。
+
+        Args:
+            file_path: 文档路径
+            progress_callback: 进度回调函数 (progress: float, step: str)
+            category: 文档类别
+            doc_type: 文档类型
+            dimension_tags: 维度标签
+            terrain: 地形类型
+
+        Returns:
+            添加结果
+        """
+        path = Path(file_path)
+
+        if not path.exists():
+            return {"status": "error", "message": f"文件不存在: {file_path}"}
+
+        source_name = path.name
+
+        # 检查是否已存在
+        existing = self._check_document_exists(source_name)
+        if existing:
+            progress_callback(5.0, "删除旧版本")
+            self.delete_document(source_name)
+
+        try:
+            # 1. 文件类型检测 (~5%)
+            progress_callback(5.0, "文件类型检测")
+            real_type = FileTypeDetector.detect(path)
+            logger.info(f"类型: {real_type}")
+
+            # 2. 加载文档 (~15%)
+            progress_callback(15.0, "加载文档")
+            loader = _create_loader(path, real_type, category=category)
+            if loader is None:
+                return {"status": "error", "message": f"不支持的文件类型: {real_type}"}
+
+            documents = loader.load()
+            if not documents:
+                return {"status": "error", "message": "文档内容为空或无法解析"}
+
+            logger.info(f"加载了 {len(documents)} 个文档片段")
+
+            # 3. 合并内容 (~20%)
+            progress_callback(20.0, "合并文档内容")
+            full_content = "\n\n".join(doc.page_content for doc in documents)
+
+            # 4. OCR 预处理 (~25%)
+            progress_callback(25.0, "OCR 预处理")
+            ocr_processor = OCRPreProcessor()
+            if ocr_processor.is_ocr_output(full_content):
+                logger.info("  检测到 OCR 输出格式，执行预处理...")
+                full_content = ocr_processor.preprocess(full_content)
+                logger.info(f"  OCR 预处理完成，内容长度: {len(full_content)} chars")
+
+            # 5. 推断文档类型 (~30%)
+            progress_callback(30.0, "推断文档类型")
+            if doc_type is None:
+                inferred_type = infer_doc_type(source_name, full_content)
+                logger.info(f"  推断文档类型: {inferred_type}")
+                doc_type = inferred_type
+
+            # 6. 文档切片 (~50%)
+            progress_callback(40.0, "文档切片")
+            splits = SlicingStrategyFactory.slice_document(
+                full_content, doc_type, {"source": source_name}
+            )
+            logger.info(f"  切分为 {len(splits)} 个片段 (策略: {doc_type})")
+            progress_callback(50.0, "切片完成")
+
+            # 7. 创建 Document 对象 (~55%)
+            progress_callback(55.0, "创建文档对象")
+            split_docs = []
+            for idx, split in enumerate(splits):
+                start_index = full_content.find(split) if idx == 0 else 0
+                doc = Document(
+                    page_content=split,
+                    metadata={
+                        "source": source_name,
+                        "type": real_type,
+                        "chunk_index": idx,
+                        "total_chunks": len(splits),
+                        "category": category or "policies",
+                        "start_index": start_index,
+                        "file_hash": self._compute_file_hash(path),
+                    }
+                )
+                split_docs.append(doc)
+
+            # 8. 元数据注入 (~70%)
+            progress_callback(60.0, "注入元数据")
+            injector = MetadataInjector()
+            injector.inject_batch(
+                split_docs,
+                category=category,
+                doc_type=doc_type,
+                dimension_tags=dimension_tags,
+                terrain=terrain,
+            )
+            progress_callback(70.0, "元数据注入完成")
+
+            # 打印元数据信息
+            injected_dimension_tags = set()
+            injected_terrains = set()
+            for doc in split_docs:
+                dim_tags = doc.metadata.get("dimension_tags", "")
+                if isinstance(dim_tags, str):
+                    dim_tags = dim_tags.split(",") if dim_tags else []
+                injected_dimension_tags.update(dim_tags)
+                injected_terrains.add(doc.metadata.get("terrain", "all"))
+
+            logger.info(f"维度标签：{list(injected_dimension_tags)}")
+            logger.info(f"地形类型：{list(injected_terrains)}")
+
+            # 9. Embedding (~85%)
+            progress_callback(75.0, "生成向量")
+            self.vectorstore.add_documents(split_docs)
+            progress_callback(85.0, "向量生成完成")
+            logger.info(f"已添加 {len(split_docs)} 个向量")
+
+            # 10. 更新索引 (~95%)
+            progress_callback(90.0, "更新文档索引")
+            self._update_document_index(source_name, documents, split_docs)
+
+            # 11. 清除缓存 (~100%)
+            progress_callback(95.0, "清除缓存")
+            self.cache.clear_cache()
+
+            progress_callback(100.0, "完成")
+            return {
+                "status": "success",
+                "message": f"成功添加文档: {source_name}",
+                "source": source_name,
+                "chunks_added": len(split_docs),
+                "doc_type": real_type,
+            }
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"status": "error", "message": f"添加文档失败: {str(e)}"}
+
     def delete_document(self, source_name: str) -> Dict[str, Any]:
         """
         从知识库删除指定文档

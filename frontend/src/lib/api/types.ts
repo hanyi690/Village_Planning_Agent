@@ -387,6 +387,52 @@ export interface SyncResponse {
 }
 
 // ============================================
+// Task Progress Types (Async Upload)
+// ============================================
+
+export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'retrying';
+
+export interface TaskProgress {
+  taskId: string;
+  filename: string;
+  status: TaskStatus;
+  progress: number;
+  currentStep: string;
+  errorMessage?: string;
+  retryCount: number;
+  createdAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface AsyncUploadResponse {
+  taskId: string;
+  filename: string;
+  status: string;
+  message: string;
+}
+
+export interface BackendTaskProgress {
+  task_id: string;
+  filename: string;
+  status: string;
+  progress: number;
+  current_step: string;
+  error_message?: string;
+  retry_count: number;
+  created_at?: string;
+  started_at?: string;
+  completed_at?: string;
+}
+
+export interface BackendAsyncUploadResponse {
+  task_id: string;
+  filename: string;
+  status: string;
+  message: string;
+}
+
+// ============================================
 // Review Types
 // ============================================
 

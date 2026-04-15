@@ -53,7 +53,6 @@ interface DimensionSectionProps {
   defaultExpanded?: boolean;
   expanded?: boolean;
   onCopy?: () => void;
-  onExport?: () => void;
   onToggle?: (expanded: boolean) => void;
 }
 
@@ -67,7 +66,6 @@ function DimensionSection({
   defaultExpanded = false,
   expanded: controlledExpanded,
   onCopy,
-  onExport,
   onToggle,
 }: DimensionSectionProps) {
   const [internalExpanded, setInternalExpanded] = useState(defaultExpanded);
@@ -137,20 +135,6 @@ function DimensionSection({
                 title="复制内容"
               >
                 <i className="fas fa-copy text-xs" />
-              </motion.button>
-            )}
-            {onExport && (
-              <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onExport();
-                }}
-                className="w-7 h-7 flex items-center justify-center text-gray-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                title="导出"
-              >
-                <i className="fas fa-download text-xs" />
               </motion.button>
             )}
           </div>

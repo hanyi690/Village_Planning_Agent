@@ -554,6 +554,10 @@ class GenericPlanner:
         """构建 Layer 3 的 Prompt（函数式）"""
         try:
             from ..subgraphs.detailed_plan_prompts import get_dimension_prompt
+            from datetime import datetime
+
+            # 生成当前日期
+            current_date = datetime.now().strftime("%Y年%m月")
 
             project_name = params.get("project_name", "村庄")
             filtered_analysis = params.get("filtered_analysis", "")
@@ -572,7 +576,8 @@ class GenericPlanner:
                 planning_concept=filtered_concept,
                 constraints=constraints,
                 dimension_plans=params.get("dimension_plans", ""),
-                knowledge_context=knowledge_context
+                knowledge_context=knowledge_context,
+                current_date=current_date
             )
 
         except ImportError as e:

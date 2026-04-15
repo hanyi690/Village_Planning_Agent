@@ -11,7 +11,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ParsedDimension, parseLayerReport, getDimensionKey } from '@/lib/layerReportParser';
 import DimensionSection from './DimensionSection';
 import type { GISData, KnowledgeSource } from '@/types/message/message-types';
-import { getDimensionName, getDimensionIcon } from '@/config/dimensions';
+import { getDimensionName, getDimensionIcon, getDimensionsByLayer } from '@/config/dimensions';
 
 interface LayerReportCardProps {
   layerNumber: number;
@@ -59,16 +59,31 @@ export default function LayerReportCard({
   const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
   const prevDimensionKeys = useRef<string[]>([]);
 
+  // Sort dimensions by config order (defined before useMemo so it can be used inside)
+  const sortDimensionsByConfig = (dims: ParsedDimension[]): ParsedDimension[] => {
+    const order = getDimensionsByLayer(layerNumber);
+    return [...dims].sort((a, b) => {
+      const indexA = order.indexOf(a.key || '');
+      const indexB = order.indexOf(b.key || '');
+      // Dimensions not in config go last
+      if (indexA === -1) return 1;
+      if (indexB === -1) return -1;
+      return indexA - indexB;
+    });
+  };
+
   const dimensions = useMemo(() => {
+    let parsed: ParsedDimension[] = [];
+
     // 1. 优先使用 propDimensions（如果带 key）
     if (propDimensions && propDimensions.length > 0) {
-      return propDimensions;
+      parsed = propDimensions;
     }
     // 2. 从 dimensionReports 构建（使用 dimension_key）
-    if (dimensionReports) {
+    else if (dimensionReports) {
       const entries = Object.entries(dimensionReports);
       if (entries.length > 0) {
-        return entries
+        parsed = entries
           .filter(([, content]) => content && content.length > 0)
           .map(([key, content]) => ({
             key,
@@ -80,8 +95,13 @@ export default function LayerReportCard({
       }
     }
     // 3. 回退：解析 markdown（旧数据兼容）
-    return parseLayerReport(content);
-  }, [content, propDimensions, dimensionReports]);
+    else {
+      parsed = parseLayerReport(content);
+    }
+
+    // Sort by config order
+    return sortDimensionsByConfig(parsed);
+  }, [content, propDimensions, dimensionReports, layerNumber]);
 
   // 🔧 计算实际字符数（从 dimensions 内容计算，而非使用 content.length）
   const actualCharCount = useMemo(() => {
@@ -147,14 +167,19 @@ export default function LayerReportCard({
     navigator.clipboard.writeText(textToCopy);
   };
 
-  const handleExportDimension = (dimensionName: string, dimensionContent: string) => {
-    const blob = new Blob([`## ${dimensionName}\n\n${dimensionContent}`], {
-      type: 'text/markdown',
-    });
+  const handleExportFullReport = () => {
+    // dimensions are already sorted by config order
+    const fullContent = dimensions
+      .map((dim) => `## ${dim.name}\n\n${dim.content}`)
+      .join('\n\n---\n\n');
+
+    const header = `# Layer ${layerNumber} 规划报告\n\n共 ${dimensions.length} 个维度 · ${actualCharCount} 字\n\n---\n\n`;
+
+    const blob = new Blob([header + fullContent], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `layer${layerNumber}_${dimensionName}.md`;
+    a.download = `layer${layerNumber}_完整报告.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -232,27 +257,38 @@ export default function LayerReportCard({
               <p className="text-sm text-gray-500 mt-1">
                 {dimensions.length} 个维度 · {actualCharCount} 字
               </p>
-              {/* Chat mode expand/collapse toggle button */}
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => handleToggleAll(!allExpanded)}
-                className={
-                  allExpanded
-                    ? 'flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg'
-                    : 'flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white rounded-lg shadow-sm'
-                }
-                style={
-                  !allExpanded
-                    ? {
-                        background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
-                      }
-                    : undefined
-                }
-              >
-                <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
-                {allExpanded ? '折叠全部' : '展开全部'}
-              </motion.button>
+              {/* Chat mode action buttons */}
+              <div className="flex gap-2 mt-2">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => handleToggleAll(!allExpanded)}
+                  className={
+                    allExpanded
+                      ? 'flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg'
+                      : 'flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white rounded-lg shadow-sm'
+                  }
+                  style={
+                    !allExpanded
+                      ? {
+                          background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+                        }
+                      : undefined
+                  }
+                >
+                  <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
+                  {allExpanded ? '折叠全部' : '展开全部'}
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={handleExportFullReport}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50"
+                >
+                  <i className="fas fa-download" />
+                  下载完整报告
+                </motion.button>
+              </div>
             </div>
           ) : (
             <div className="flex justify-between items-center mb-5 pb-4 border-b border-cyan-200/50">
@@ -267,29 +303,40 @@ export default function LayerReportCard({
               </div>
 
               {/* Action buttons - Sidebar only */}
-              {actualShowExpandAll && (
+              <div className="flex gap-2">
+                {actualShowExpandAll && (
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => handleToggleAll(!allExpanded)}
+                    className={
+                      allExpanded
+                        ? 'flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors'
+                        : 'flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md'
+                    }
+                    style={
+                      !allExpanded
+                        ? {
+                            background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+                            boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
+                          }
+                        : undefined
+                    }
+                  >
+                    <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
+                    {allExpanded ? '折叠全部' : '展开全部'}
+                  </motion.button>
+                )}
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={() => handleToggleAll(!allExpanded)}
-                  className={
-                    allExpanded
-                      ? 'flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors'
-                      : 'flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md'
-                  }
-                  style={
-                    !allExpanded
-                      ? {
-                          background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
-                          boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
-                        }
-                      : undefined
-                  }
+                  onClick={handleExportFullReport}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50"
                 >
-                  <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
-                  {allExpanded ? '折叠全部' : '展开全部'}
+                  <i className="fas fa-download" />
+                  下载完整报告
                 </motion.button>
-              )}
+              </div>
             </div>
           )}
         </>
@@ -317,7 +364,6 @@ export default function LayerReportCard({
               expanded={expandedMap[expandedKey] ?? actualDefaultExpanded}
               onToggle={(expanded) => handleDimensionToggle(expandedKey, expanded)}
               onCopy={() => handleCopyDimension(dimension.name, dimension.content)}
-              onExport={() => handleExportDimension(dimension.name, dimension.content)}
             />
           );
         })}

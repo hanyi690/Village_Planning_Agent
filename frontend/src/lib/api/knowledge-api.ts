@@ -13,6 +13,11 @@ import type {
   BackendAddDocumentResponse,
   EmbeddedImage,
   BackendEmbeddedImage,
+  AddDocumentOptions,
+  TaskProgress,
+  AsyncUploadResponse,
+  BackendTaskProgress,
+  BackendAsyncUploadResponse,
 } from './types';
 
 // ============================================
@@ -79,8 +84,6 @@ export const fileApi = {
 // ============================================
 // Knowledge API
 // ============================================
-
-import type { AddDocumentOptions } from './types';
 
 export const knowledgeApi = {
   /**
@@ -168,5 +171,89 @@ export const knowledgeApi = {
       message: data.message,
       addedCount: data.added_count,
     };
+  },
+
+  /**
+   * 异步上传文档（并行处理）
+   * POST /api/knowledge/documents/async
+   */
+  async addDocumentAsync(file: File, options?: AddDocumentOptions): Promise<AsyncUploadResponse> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (options?.category) {
+      formData.append('category', options.category);
+    }
+    if (options?.doc_type) {
+      formData.append('doc_type', options.doc_type);
+    }
+    if (options?.dimension_tags && options.dimension_tags.length > 0) {
+      formData.append('dimension_tags', options.dimension_tags.join(','));
+    }
+    if (options?.terrain) {
+      formData.append('terrain', options.terrain);
+    }
+    if (options?.regions && options.regions.length > 0) {
+      formData.append('regions', options.regions.join(','));
+    }
+
+    const response = await fetch(`${API_BASE_URL}/api/knowledge/documents/async`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({
+        message: response.statusText || 'Upload failed',
+      }));
+      throw new Error((error as { message?: string; detail?: string }).message || (error as { detail?: string }).detail || 'Upload failed');
+    }
+
+    const data = await response.json() as BackendAsyncUploadResponse;
+    return {
+      taskId: data.task_id,
+      filename: data.filename,
+      status: data.status,
+      message: data.message,
+    };
+  },
+
+  /**
+   * 获取单个任务状态
+   * GET /api/knowledge/tasks/{task_id}
+   */
+  async getTaskStatus(taskId: string): Promise<TaskProgress> {
+    const data = await apiRequest<BackendTaskProgress>(`/api/knowledge/tasks/${taskId}`);
+    return {
+      taskId: data.task_id,
+      filename: data.filename,
+      status: data.status as TaskProgress['status'],
+      progress: data.progress,
+      currentStep: data.current_step,
+      errorMessage: data.error_message,
+      retryCount: data.retry_count,
+      createdAt: data.created_at,
+      startedAt: data.started_at,
+      completedAt: data.completed_at,
+    };
+  },
+
+  /**
+   * 列出所有任务
+   * GET /api/knowledge/tasks
+   */
+  async listTasks(): Promise<TaskProgress[]> {
+    const data = await apiRequest<BackendTaskProgress[]>('/api/knowledge/tasks');
+    return data.map((t) => ({
+      taskId: t.task_id,
+      filename: t.filename,
+      status: t.status as TaskProgress['status'],
+      progress: t.progress,
+      currentStep: t.current_step,
+      errorMessage: t.error_message,
+      retryCount: t.retry_count,
+      createdAt: t.created_at,
+      startedAt: t.started_at,
+      completedAt: t.completed_at,
+    }));
   },
 };

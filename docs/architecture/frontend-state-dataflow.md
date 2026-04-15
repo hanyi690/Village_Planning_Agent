@@ -616,6 +616,169 @@ sequenceDiagram
 
 ---
 
+## 前端组件架构
+
+### 组件目录结构
+
+```
+frontend/src/components/
+├── chat/                    # 聊天相关组件
+│   ├── ChatPanel.tsx        # 主聊天面板
+│   ├── MessageList.tsx      # 消息列表容器
+│   ├── MessageBubble.tsx    # 消息气泡包装器
+│   ├── MessageContent.tsx   # 消息内容渲染器
+│   ├── StreamingText.tsx    # 流式文本展示
+│   ├── LayerReportMessage.tsx   # 层级报告消息
+│   ├── LayerReportCard.tsx      # 层级报告卡片
+│   ├── DimensionSection.tsx     # 维度报告区块
+│   ├── DimensionReportStreaming.tsx  # 维度报告流式渲染
+│   ├── ReviewPanel.tsx      # 审查面板（approve/reject）
+│   ├── ProgressPanel.tsx    # 规划进度面板
+│   ├── ToolStatusCard.tsx   # 工具状态卡片
+│   ├── ToolStatusPanel.tsx  # 工具状态面板
+│   ├── GisResultCard.tsx    # GIS分析结果卡片
+│   ├── KnowledgeSliceCard.tsx   # 知识切片展示卡片
+│   ├── FileViewerSidebar.tsx    # 文件查看侧边栏
+│   └── CheckpointMarker.tsx     # 检查点标记
+│
+├── layout/                  # 布局组件
+│   ├── UnifiedLayout.tsx    # 统一布局容器
+│   ├── UnifiedContentSwitcher.tsx  # 内容切换器
+│   ├── Header.tsx           # 头部导航
+│   ├── HistoryPanel.tsx     # 历史会话面板
+│   ├── KnowledgePanel.tsx   # 知识库面板
+│   └── LayerSidebar.tsx     # 层级侧边栏
+│
+├── gis/                     # GIS组件
+│   ├── MapView.tsx          # 地图视图
+│   └── DataUpload.tsx       # 数据上传组件
+│
+├── report/                  # 报告相关
+│   └ KnowledgeReference.tsx # 知识引用展示
+│
+├── ui/                      # UI基础组件
+│   ├── SegmentedControl.tsx # 分段控制器
+│   └ ImagePreview.tsx       # 图片预览
+│
+└── VillageInputForm.tsx     # 村庄信息输入表单
+```
+
+### 核心组件职责
+
+| 组件 | 职责 | 关键Props |
+|------|------|----------|
+| ChatPanel | 聊天面板主容器 | messages, taskId, status |
+| MessageList | 消息列表渲染 | messages, scroll管理 |
+| MessageBubble | 消息样式包装 | message, isUser |
+| MessageContent | 消息内容分发 | message (类型守卫) |
+| StreamingText | 实时流式文本 | streamingContent, onComplete |
+| LayerReportCard | 层级报告展示 | layer, reports, onApprove |
+| DimensionSection | 单维度报告展示 | dimensionKey, content, gisData |
+| ReviewPanel | 用户审查交互 | layer, onApprove, onReject |
+| ProgressPanel | 规划进度展示 | phase, dimensionProgress |
+| GisResultCard | GIS分析结果 | layers, mapOptions |
+
+---
+
+## 消息类型系统补充
+
+### GisResultMessage
+
+GIS分析结果消息，用于展示空间分析产生的GeoJSON数据：
+
+```typescript
+// frontend/src/types/message/message-types.ts
+export interface GisResultMessage extends BaseMessage {
+  type: 'gis_result';
+  dimensionKey: string;
+  dimensionName: string;
+  summary: string;
+  layers: GISLayerConfig[];
+  mapOptions?: {
+    center: [number, number];
+    zoom: number;
+  };
+  analysisData?: {
+    overallScore?: number;
+    suitabilityLevel?: string;
+    sensitivityClass?: string;
+    recommendations?: string[];
+  };
+}
+
+export interface GISLayerConfig {
+  geojson: GeoJsonFeatureCollection;
+  layerType: 'boundary' | 'function_zone' | 'facility_point' |
+             'development_axis' | 'sensitivity_zone' | 'isochrone';
+  layerName: string;
+  color?: string;
+  style?: {
+    fillColor?: string;
+    fillOpacity?: number;
+    color?: string;
+    weight?: number;
+  };
+}
+```
+
+### KnowledgeSliceCard
+
+知识切片展示，用于RAG知识库引用：
+
+```typescript
+export interface KnowledgeSource {
+  source: string;      // 文档来源
+  page: number;        // 页码
+  doc_type: string;    // 文档类型
+  content: string;     // 内容预览
+}
+
+// DimensionReportMessage中的知识引用
+export interface DimensionReportMessage extends BaseMessage {
+  // ...
+  knowledgeSources?: KnowledgeSource[];
+}
+```
+
+### ToolStatusMessage
+
+统一工具执行状态消息：
+
+```typescript
+export interface ToolStatusMessage extends BaseMessage {
+  type: 'tool_status';
+  toolName: string;
+  toolDisplayName: string;
+  description: string;
+  status: 'pending' | 'running' | 'success' | 'error';
+  progress?: number;
+  stage?: string;
+  stageMessage?: string;
+  summary?: string;
+  error?: string;
+  estimatedTime?: number;
+}
+```
+
+---
+
+## 关键文件路径汇总
+
+| 类别 | 文件路径 |
+|------|----------|
+| 入口页面 | frontend/src/app/page.tsx |
+| 状态管理 | frontend/src/stores/planningStore.ts |
+| SSE连接 | frontend/src/hooks/planning/useSSEConnection.ts |
+| 规划API | frontend/src/lib/api/planning-api.ts |
+| 消息类型 | frontend/src/types/message/message-types.ts |
+| 维度配置 | frontend/src/config/dimensions.ts |
+| 消息工具 | frontend/src/lib/utils/message-helpers.ts |
+| 布局组件 | frontend/src/components/layout/UnifiedLayout.tsx |
+| 聊天面板 | frontend/src/components/chat/ChatPanel.tsx |
+| 层级报告 | frontend/src/components/chat/LayerReportCard.tsx |
+
+---
+
 ## 相关文档
 
 - [后端API与数据流](./backend-api-dataflow.md) - 后端 API 路由和 SSE 管理
