@@ -134,7 +134,7 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
             context_params = {
                 "top_k": 3,
                 "context_mode": "standard",
-                "dimension": None,
+                "dimension": dim_key,
                 "terrain": None,
                 "doc_type": None,
                 "task_id": None,
@@ -146,7 +146,8 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
                     search_knowledge,
                     query=query,
                     top_k=3,
-                    context_mode="standard"
+                    context_mode="standard",
+                    dimension=dim_key,
                 )
                 final_query = query
 
@@ -156,7 +157,8 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
                         search_knowledge,
                         query=fallback_query,
                         top_k=3,
-                        context_mode="standard"
+                        context_mode="standard",
+                        dimension=dim_key,
                     )
                     final_query = fallback_query
 
