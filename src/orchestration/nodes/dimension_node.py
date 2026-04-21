@@ -24,6 +24,11 @@ from ...tools.types import normalize_tool_result, NormalizedToolResult, ResultDa
 
 logger = get_logger(__name__)
 
+# ==========================================
+# 全局 LLM 并发控制 - Send API 跨节点共享
+# ==========================================
+_LLM_SEMAPHORE = asyncio.Semaphore(LLM_MAX_CONCURRENT)
+
 
 # ==========================================
 # ParamSource 枚举 - 工具参数来源类型
@@ -427,11 +432,14 @@ async def analyze_dimension_for_send(
         return collected_result
 
     try:
-        # Use asyncio.wait_for for timeout protection
-        result = await asyncio.wait_for(
-            collect_stream(),
-            timeout=LLM_STREAM_TIMEOUT
-        )
+        # Use global semaphore to limit concurrent LLM calls
+        async with _LLM_SEMAPHORE:
+            logger.debug(f"[维度节点-Send] {dimension_name} 获取 semaphore，开始 LLM 调用")
+            # Use asyncio.wait_for for timeout protection
+            result = await asyncio.wait_for(
+                collect_stream(),
+                timeout=LLM_STREAM_TIMEOUT
+            )
 
         elapsed = asyncio.get_event_loop().time() - start_time
         logger.info(f"[维度节点-Send] LLM 调用完成: {dimension_name}, 耗时: {elapsed:.1f}s")
