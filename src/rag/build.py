@@ -1,7 +1,7 @@
 """
 知识库构建脚本
 符合 LangChain 最佳实践，支持 Docker 部署
-针对 Planning Agent 优化：更大的 chunk_size 保留上下文
+针对 Planning Agent 优化：使用统一切片策略
 """
 import os
 import sys
@@ -12,7 +12,6 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from langchain_chroma import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.rag.config import (
     CHUNK_OVERLAP,
@@ -37,7 +36,8 @@ from src.rag.visualize import SliceInspector
 from src.rag.core.context_manager import DocumentContextManager
 from src.rag.core.summarization import DocumentSummarizer, DocumentSummary
 from src.rag.metadata.injector import MetadataInjector, CategoryDetector, InjectionParams
-from src.rag.slicing.strategies import SlicingStrategyFactory
+from src.rag.slicing.slicer import SlicingStrategyFactory
+from src.rag.core.kb_manager import infer_doc_type
 
 
 def load_documents():
@@ -64,22 +64,43 @@ def load_documents():
         return []
 
 
-def split_documents(documents):
-    """切分文档"""
+def slice_documents(documents):
+    """使用统一切片策略切分文档"""
     print("\n✂️  正在切分文档...")
-    print(f"   配置: chunk_size={CHUNK_SIZE}, chunk_overlap={CHUNK_OVERLAP}")
+    print(f"   配置: 使用 UnifiedMarkdownSlicer（差异化策略）")
 
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        length_function=len,
-        add_start_index=True,
-    )
+    from langchain_core.documents import Document
 
-    splits = text_splitter.split_documents(documents)
-    print(f"✅ 切分完成，共 {len(splits)} 个切片")
+    all_splits = []
+    for doc in documents:
+        source = doc.metadata.get("source", "")
+        content = doc.page_content
 
-    return splits
+        # 推断文档类型
+        doc_type = infer_doc_type(source, content)
+        print(f"   [{doc_type}] {source}")
+
+        # 使用统一切片策略
+        slices = SlicingStrategyFactory.slice_document(
+            content, doc_type, {"source": source}
+        )
+
+        # 创建 Document 对象
+        for idx, slice_text in enumerate(slices):
+            split_doc = Document(
+                page_content=slice_text,
+                metadata={
+                    "source": source,
+                    "chunk_index": idx,
+                    "total_chunks": len(slices),
+                    "type": doc_type,
+                    **doc.metadata,
+                },
+            )
+            all_splits.append(split_doc)
+
+    print(f"✅ 切分完成，共 {len(all_splits)} 个切片")
+    return all_splits
 
 
 def visualize_splits(splits):
@@ -231,7 +252,7 @@ def main(use_semantic: bool = False):
         print("\n❌ 没有加载到文档，退出构建")
         return
 
-    splits = split_documents(documents)
+    splits = slice_documents(documents)
     inspector = visualize_splits(splits)
 
     print("\n" + "=" * 60)

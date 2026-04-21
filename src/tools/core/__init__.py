@@ -15,6 +15,17 @@ from .isochrone_analysis import generate_isochrones, calculate_isochrone_coverag
 from .vector_editor import create_function_zones, create_facility_points, create_development_axis
 from .map_renderer import render_planning_map, PLANNING_STYLES
 from .gis_tool_wrappers import GIS_TOOL_WRAPPERS, get_gis_tool_wrapper
+from .planning_schema import (
+    VillagePlanningScheme,
+    PlanningZone,
+    FacilityPoint,
+    DevelopmentAxis,
+    LocationBias,
+    AdjacencyRule,
+    ZONE_TYPE_COLORS,
+    ZONE_TYPE_CODES,
+)
+from .spatial_layout_generator import generate_spatial_layout_from_json
 
 __all__ = [
     "run_gis_analysis",
@@ -41,4 +52,15 @@ __all__ = [
     # GIS Tool Wrappers
     "GIS_TOOL_WRAPPERS",
     "get_gis_tool_wrapper",
+    # Planning Schema
+    "VillagePlanningScheme",
+    "PlanningZone",
+    "FacilityPoint",
+    "DevelopmentAxis",
+    "LocationBias",
+    "AdjacencyRule",
+    "ZONE_TYPE_COLORS",
+    "ZONE_TYPE_CODES",
+    # Spatial Layout Generator
+    "generate_spatial_layout_from_json",
 ]

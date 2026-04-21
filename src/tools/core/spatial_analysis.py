@@ -443,4 +443,5 @@ __all__ = [
     "geojson_to_geodataframe",
     "geodataframe_to_geojson",
     "format_spatial_analysis_result",
+    "_get_geometry_coords",  # Shared utility for geometry coordinate extraction
 ]

@@ -145,5 +145,6 @@ FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
 # OCR Model Configuration (DashScope Vision)
 # ==========================================
 # 用于 MarkItDown OCR 插件处理扫描版 PDF
-OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "qwen-vl-ocr-2025-11-20")
+# qwen-vl-max: 通用视觉模型，支持文字识别
+OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "qwen-vl-max")
 

@@ -35,8 +35,7 @@ from src.rag.core.cache import get_vector_cache
 from src.rag.core.context_manager import DocumentContextManager
 from src.rag.utils.loaders import load_documents_from_directory, _create_loader, FileTypeDetector
 from src.rag.metadata.injector import MetadataInjector
-from src.rag.slicing.strategies import SlicingStrategyFactory
-from src.rag.utils.ocr_preprocessor import OCRPreProcessor
+from src.rag.slicing.slicer import SlicingStrategyFactory
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -227,14 +226,7 @@ class KnowledgeBaseManager:
             # 3. 合并文档内容
             full_content = "\n\n".join(doc.page_content for doc in documents)
 
-            # 4. OCR 预处理（扫描版 PDF）
-            ocr_processor = OCRPreProcessor()
-            if ocr_processor.is_ocr_output(full_content):
-                logger.info("  检测到 OCR 输出格式，执行预处理...")
-                full_content = ocr_processor.preprocess(full_content)
-                logger.info(f"  OCR 预处理完成，内容长度: {len(full_content)} chars")
-
-            # 5. 推断或使用指定的文档类型
+            # 4. 推断或使用指定的文档类型
             if doc_type is None:
                 inferred_type = infer_doc_type(source_name, full_content)
                 logger.info(f"  推断文档类型: {inferred_type}")
@@ -378,15 +370,7 @@ class KnowledgeBaseManager:
             progress_callback(20.0, "合并文档内容")
             full_content = "\n\n".join(doc.page_content for doc in documents)
 
-            # 4. OCR 预处理 (~25%)
-            progress_callback(25.0, "OCR 预处理")
-            ocr_processor = OCRPreProcessor()
-            if ocr_processor.is_ocr_output(full_content):
-                logger.info("  检测到 OCR 输出格式，执行预处理...")
-                full_content = ocr_processor.preprocess(full_content)
-                logger.info(f"  OCR 预处理完成，内容长度: {len(full_content)} chars")
-
-            # 5. 推断文档类型 (~30%)
+            # 4. 推断文档类型 (~30%)
             progress_callback(30.0, "推断文档类型")
             if doc_type is None:
                 inferred_type = infer_doc_type(source_name, full_content)

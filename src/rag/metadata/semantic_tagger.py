@@ -12,28 +12,10 @@ import hashlib
 
 from ...core.config import LLM_MAX_CONCURRENT
 from ...core.llm_factory import create_flash_llm
+from .definitions import get_dimension_definitions, DIMENSION_KEYS
 
-# 维度定义（复用 tagging_rules.py）
-DIMENSION_DEFINITIONS: Dict[str, str] = {
-    # Layer 1: 基础现状维度
-    "land_use": "土地利用、建设用地、宅基地、三区三线相关",
-    "infrastructure": "给排水、电力、通信、环卫设施相关",
-    "ecological_green": "生态保护、绿地景观、绿化规划相关",
-    "historical_culture": "文物古迹、历史文化、传统村落相关",
-    "traffic": "道路交通、路网规划、交通设施相关",
-    # Layer 2: 综合分析维度
-    "location": "区位条件、地理位置、行政区划相关",
-    "socio_economic": "社会经济、产业发展、人口收入相关",
-    "villager_wishes": "村民意愿、诉求需求、民意调查相关",
-    "superior_planning": "上位规划、政策法规、规划纲要相关",
-    "natural_environment": "自然环境、气候地形、地质水文相关",
-    "public_services": "公共服务设施、教育医疗、文化体育相关",
-    "architecture": "建筑风貌、房屋质量、民居改造相关",
-    # Layer 3: 专项分析维度
-    "disaster_prevention": "防灾减灾、消防防洪、应急预案相关",
-    "industry_development": "产业发展、特色产业、农业旅游相关",
-    "governance": "乡村治理、党建组织、村规民约相关",
-}
+# 导入统一定义（向后兼容）
+DIMENSION_DEFINITIONS: Dict[str, str] = get_dimension_definitions()
 
 
 class SemanticDimensionTagger:

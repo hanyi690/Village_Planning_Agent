@@ -7,16 +7,19 @@
 // Layer Constants
 // ============================================
 
-export const LAYER_ID_MAP: Record<number, 'layer_1_analysis' | 'layer_2_concept' | 'layer_3_detailed'> = {
+export const LAYER_ID_MAP: Record<
+  number,
+  'layer_1_analysis' | 'layer_2_concept' | 'layer_3_detailed'
+> = {
   1: 'layer_1_analysis',
   2: 'layer_2_concept',
   3: 'layer_3_detailed',
 } as const;
 
 export const LAYER_LABEL_MAP: Record<string, number> = {
-  '现状分析': 1,
-  '规划思路': 2,
-  '详细规划': 3,
+  现状分析: 1,
+  规划思路: 2,
+  详细规划: 3,
 };
 
 export const LAYER_VALUE_MAP: Record<number, string> = {
@@ -66,7 +69,8 @@ export function getLayerPhase(layer: number): LayerPhase {
 // ============================================
 
 export const MIN_FILE_CONTENT_LENGTH = 50;
-export const FILE_ACCEPT = '.docx,.doc,.pdf,.pptx,.ppt,.xlsx,.xls,.txt,.md,.jpg,.jpeg,.png,.gif,.webp,.bmp';
+export const FILE_ACCEPT =
+  '.docx,.doc,.pdf,.pptx,.ppt,.xlsx,.xls,.txt,.md,.jpg,.jpeg,.png,.gif,.webp,.bmp';
 
 export const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
 export const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
@@ -76,10 +80,7 @@ export const DEFAULT_IMAGE_FORMAT = 'jpeg' as const;
 // Status Constants
 // ============================================
 
-export const DISABLE_INPUT_STATUSES = new Set([
-  'planning',
-  'revising',
-] as const);
+export const DISABLE_INPUT_STATUSES = new Set(['planning', 'revising'] as const);
 
 export type PlanningStatus =
   | 'idle'
@@ -193,14 +194,12 @@ export const TOOL_ICONS_EMOJI: Record<string, string> = {
   reverse_geocode: '📍',
   knowledge_search: '📚',
   web_search: '🔎',
-  spatial_overlay: '📐',
-  spatial_query: '🔎',
   isochrone_analysis: '⏱️',
   planning_vectorizer: '✏️',
   facility_validator: '🏢',
   ecological_sensitivity: '🌿',
-  map_renderer: '🖼️',
   gis_coverage_calculator: '📈',
+  spatial_layout_generator: '🏗️',
 };
 
 export const TOOL_ICONS_FA: Record<string, string> = {
@@ -215,14 +214,12 @@ export const TOOL_ICONS_FA: Record<string, string> = {
   reverse_geocode: 'fa-map-marker-alt',
   knowledge_search: 'fa-book',
   web_search: 'fa-globe',
-  spatial_overlay: 'fa-vector-square',
-  spatial_query: 'fa-search',
   isochrone_analysis: 'fa-clock',
   planning_vectorizer: 'fa-pencil-alt',
   facility_validator: 'fa-building',
   ecological_sensitivity: 'fa-leaf',
-  map_renderer: 'fa-image',
   gis_coverage_calculator: 'fa-chart-line',
+  spatial_layout_generator: 'fa-layer-group',
 };
 
 /**

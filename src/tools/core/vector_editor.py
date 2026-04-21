@@ -469,38 +469,6 @@ def create_planning_boundary(
         return {"success": False, "error": f"Boundary creation failed: {str(e)}"}
 
 
-def create_planning_layers_from_text(
-    planning_text: str,
-    village_center: Tuple[float, float],
-    **kwargs
-) -> Dict[str, Any]:
-    """
-    Create vector layers from planning text description
-
-    Parses planning text to extract zone/facility definitions and creates
-    corresponding vector layers. This is a placeholder for LLM-based parsing.
-
-    Args:
-        planning_text: Planning description text
-        village_center: Village center coordinates for positioning
-        **kwargs: Additional parameters
-
-    Returns:
-        Dict with success status and created layers
-    """
-    # This function would use LLM to parse planning text
-    # For now, return placeholder
-    return {
-        "success": True,
-        "data": {
-            "note": "LLM-based text parsing not yet implemented",
-            "planning_text_length": len(planning_text),
-            "village_center": village_center,
-        },
-        "implementation_needed": "Integrate with LLM for text-to-vector conversion"
-    }
-
-
 def merge_vector_layers(
     layers: List[Dict[str, Any]],
     **kwargs
@@ -573,7 +541,6 @@ __all__ = [
     "create_development_axis",
     "create_facility_points",
     "create_planning_boundary",
-    "create_planning_layers_from_text",
     "merge_vector_layers",
     "format_vector_result",
     "ZONE_TYPE_DEFINITIONS",

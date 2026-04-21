@@ -84,6 +84,7 @@ from .nodes.dimension_node import (
     get_layer_from_dimension,
 )
 from .nodes.revision_node import revision_node
+from .nodes.spatial_layout_node import spatial_layout_node, should_trigger_spatial_layout
 
 logger = get_logger(__name__)
 
@@ -497,10 +498,14 @@ def emit_events(state: UnifiedPlanningState) -> Dict[str, Any]:
     return emit_sse_events(state)
 
 
-def check_completion(state: UnifiedPlanningState) -> Literal["continue", "advance", "complete", "revision", "pause"]:
+def check_completion(state: UnifiedPlanningState) -> Literal["continue", "advance", "complete", "revision", "pause", "spatial_layout"]:
     """检查阶段完成状态"""
     if state.get("need_revision"):
         return "revision"
+
+    # Check if spatial_layout should be triggered after spatial_structure completion
+    if should_trigger_spatial_layout(state):
+        return "spatial_layout"
 
     result = check_phase_completion(state)
 
@@ -593,6 +598,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_node("collect_results", collect_results)
     builder.add_node("advance_phase", advance_phase)
     builder.add_node("revision", revision_node)
+    builder.add_node("spatial_layout", spatial_layout_node)
 
     # 路由节点（空操作，仅用于触发条件路由）
     def route_planning_node(state: UnifiedPlanningState) -> Dict[str, Any]:
@@ -668,9 +674,13 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
             "advance": "advance_phase",  # 推进到下一阶段
             "complete": END,             # 规划完成
             "revision": "revision",      # 进入修订
-            "pause": END                 # 暂停等待审查
+            "pause": END,                # 暂停等待审查
+            "spatial_layout": "spatial_layout",  # 空间布局生成
         }
     )
+
+    # 空间布局生成 -> 继续检查完成状态
+    builder.add_edge("spatial_layout", "route_planning")
 
     # 阶段推进 -> 路由分发
     builder.add_edge("advance_phase", "route_planning")

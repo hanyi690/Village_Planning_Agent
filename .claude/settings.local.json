@@ -142,7 +142,8 @@
       "Bash(pkill:*)",
       "Bash(PYTHONPATH=. python scripts/debug_tile_chain.py)",
       "mcp__zai-mcp-server__analyze_image",
-      "Bash(pip index:*)"
+      "Bash(pip index:*)",
+      "Bash(ssh:*)"
     ]
   }
 }

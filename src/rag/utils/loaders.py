@@ -6,6 +6,7 @@
 所有格式都会统一转换为 Markdown，并自动清理冗余信息。
 """
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional, Literal
@@ -137,17 +138,9 @@ class DocToDocxConverter:
         except ImportError:
             pass
         
-        # Linux/Docker: 检查 LibreOffice
-        try:
-            result = subprocess.run(
-                ['which', 'soffice'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
+        # Linux/Docker: 检查 LibreOffice (跨平台检测)
+        soffice_path = shutil.which('soffice')
+        return soffice_path is not None
 
     @staticmethod
     def convert(
@@ -372,14 +365,15 @@ MARKITDOWN_EXTENSIONS = {
 class MarkItDownLoader(BaseDocumentLoader):
     """
     使用 MarkItDown 统一加载多种文档格式
-    
+
     支持格式: doc, docx, pdf, ppt, pptx, xls, xlsx, epub, html
-    
+
     特性:
     - 超时保护机制，防止大文件卡死
     - 旧版 .doc (OLE格式) 自动转换为 .docx 后再解析
     - 跨平台支持（Windows win32com + Linux LibreOffice）
-    
+    - OCR 输出预处理（扫描版教材 PDF）
+
     优势:
     - 跨平台兼容
     - 统一输出 Markdown 格式
@@ -389,6 +383,24 @@ class MarkItDownLoader(BaseDocumentLoader):
 
     # 默认超时配置
     DEFAULT_TIMEOUT = 120  # 秒
+
+    # ==================== 预编译正则表达式（类级别常量）====================
+    # OCR 相关模式
+    OCR_PAGE_MARKER_RE = re.compile(r'^#{1,6}\s+Page\s+\d+', re.MULTILINE)
+    OCR_BLOCK_PATTERN_RE = re.compile(r'\*\[Image OCR\]\n(.*?)\n\[End OCR\]\*\*', re.DOTALL)
+    HEADER_COUNT_RE = re.compile(r'^#{1,3}\s', re.MULTILINE)
+
+    # 章节转换规则（预编译）
+    CHAPTER_TO_HEADER_RE = [
+        # 英文章节
+        (re.compile(r'^(Chapter\s+\d+[^\n]*)', re.MULTILINE), r'# \1'),
+        (re.compile(r'^(Section\s+\d+\.\d+[^\n]*)', re.MULTILINE), r'## \1'),
+        # 中文章节
+        (re.compile(r'^(第[一二三四五六七八九十百]+章[^\n]*)', re.MULTILINE), r'# \1'),
+        (re.compile(r'^(第\s*\d+\s*章[^\n]*)', re.MULTILINE), r'# \1'),
+        (re.compile(r'^(第[一二三四五六七八九十]+节[^\n]*)', re.MULTILINE), r'## \1'),
+        (re.compile(r'^(\d+\.\d+[^\n]*)', re.MULTILINE), r'### \1'),
+    ]
 
     def __init__(
         self,
@@ -542,11 +554,9 @@ class MarkItDownLoader(BaseDocumentLoader):
             print(f"⚠️  文档内容为空")
             return []
 
-        # OCR 输出预处理（扫描版教材 PDF）
+        # OCR 输出预处理（扫描版教材 PDF）- 内嵌实现
         if self._is_ocr_output(content):
-            from .ocr_preprocessor import OCRPreProcessor
-            preprocessor = OCRPreProcessor()
-            content = preprocessor.preprocess(content)
+            content = self._preprocess_ocr_output(content)
             print(f"🔄 OCR 输出预处理完成")
 
         # 清理内容
@@ -630,6 +640,55 @@ class MarkItDownLoader(BaseDocumentLoader):
                     documents.append(doc)
         
         return documents
+
+    def _preprocess_ocr_output(self, content: str) -> str:
+        """
+        OCR 输出预处理（合并自 ocr_preprocessor.py）
+
+        处理 MarkItDown + DashScope qwen-vl-ocr 产生的扫描版 PDF 输出格式：
+        - 移除 ## Page N 页面标记（避免被误判为标题）
+        - 移除 *[Image OCR] 和 [End OCR]* 包装标记
+        - 将教材章节标题转换为 Markdown 格式
+
+        Args:
+            content: OCR 输出的原始内容
+
+        Returns:
+            清理后的内容，章节标题已转换为 Markdown 格式
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # 记录原始状态（使用预编译模式）
+        header_count_before = len(self.HEADER_COUNT_RE.findall(content))
+        page_markers = len(self.OCR_PAGE_MARKER_RE.findall(content))
+
+        # 2. 提取 OCR 内容块（移除包装标记，保持内容结构）
+        ocr_blocks_content = self.OCR_BLOCK_PATTERN_RE.findall(content)
+        ocr_blocks = len(ocr_blocks_content)
+
+        logger.info(f"  OCR预处理: 页面标记 {page_markers} 个, OCR块 {ocr_blocks} 个")
+        logger.info(f"  Markdown标题: {header_count_before} 个")
+
+        # 1. 移除页面标记（## Page N）
+        content = self.OCR_PAGE_MARKER_RE.sub('', content)
+
+        content = '\n\n'.join(ocr_blocks_content) if ocr_blocks_content else content
+
+        # 3. 转换教材章节标题为 Markdown 格式（使用预编译规则）
+        for compiled_pattern, replacement in self.CHAPTER_TO_HEADER_RE:
+            matches = compiled_pattern.findall(content)
+            if matches:
+                logger.info(f"  章节匹配: {len(matches)} 处 -> {matches[:3]}...")
+            content = compiled_pattern.sub(replacement, content)
+
+        header_count_after = len(self.HEADER_COUNT_RE.findall(content))
+        logger.info(f"  转换后Markdown标题: {header_count_before} -> {header_count_after}")
+
+        # 4. 清理多余空行
+        content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)
+
+        return content.strip()
 
     def _is_ocr_output(self, content: str) -> bool:
         """检测是否为 OCR 输出格式"""
