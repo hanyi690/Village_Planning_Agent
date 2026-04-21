@@ -20,7 +20,7 @@ from fastapi import APIRouter
 
 from backend.api.planning import router as planning_router
 from backend.api.data import router as data_router
-from backend.api import files, knowledge
+from backend.api import files, knowledge, gis_upload
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ router.include_router(planning_router, tags=["Planning"])
 router.include_router(data_router, tags=["Data"])
 router.include_router(files.router, prefix="/api/files", tags=["Files"])
 router.include_router(knowledge.router, prefix="/api/knowledge", tags=["Knowledge"])
+router.include_router(gis_upload.router, prefix="/api/gis", tags=["GIS"])
 
 
 # ============================================

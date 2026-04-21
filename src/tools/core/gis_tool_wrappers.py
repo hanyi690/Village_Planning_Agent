@@ -240,8 +240,13 @@ def wrap_poi_search(context: Dict[str, Any]) -> str:
 
 
 def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
-    """Wrapper for GIS coverage calculator tool."""
+    """
+    Wrapper for GIS coverage calculator tool.
+
+    数据获取优先级：用户上传 > 会话缓存 > 自动获取（天地图 WFS）
+    """
     from .gis_data_fetcher import get_fetcher
+    from ..gis.data_manager import GISDataManager
 
     fetcher = get_fetcher()
     location = context.get("location") or context.get("village_name", "")
@@ -250,15 +255,60 @@ def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
     if not location:
         return _format_error_response("缺少 location 或 village_name 参数")
 
-    result = fetcher.fetch_all_gis_data(location, buffer_km, max_features=100)
+    # 数据来源追踪
+    data_sources = {}
 
-    water_success = result.get("water", {}).get("success", False)
-    road_success = result.get("road", {}).get("success", False)
-    residential_success = result.get("residential", {}).get("success", False)
+    # 优先检查用户上传数据
+    user_boundary = GISDataManager.get_data("boundary", location, auto_fetch=False)
+    user_water = GISDataManager.get_data("water", location, auto_fetch=False)
+    user_road = GISDataManager.get_data("road", location, auto_fetch=False)
+    user_residential = GISDataManager.get_data("residential", location, auto_fetch=False)
 
-    water_count = _count_geojson_features(result, "water")
-    road_count = _count_geojson_features(result, "road")
-    residential_count = _count_geojson_features(result, "residential")
+    # 如果有用户数据，优先使用
+    if user_boundary or user_water or user_road or user_residential:
+        logger.info(f"[GISCoverage] 使用用户上传数据: {location}")
+
+    # 自动获取数据（仅在没有用户数据时）
+    auto_result = fetcher.fetch_all_gis_data(location, buffer_km, max_features=100)
+
+    # 合并数据源：用户数据覆盖自动获取数据
+    def get_geojson_with_source(data_type: str, user_data: Optional[Dict], auto_data: Optional[Dict]) -> tuple[Optional[Dict], str]:
+        """获取 GeoJSON 数据并标记来源"""
+        if user_data:
+            return user_data, "user_upload"
+        if auto_data and auto_data.get("success") and auto_data.get("geojson"):
+            return auto_data.get("geojson"), "auto_fetch"
+        return None, "missing"
+
+    boundary_geojson, boundary_source = get_geojson_with_source(
+        "boundary", user_boundary, auto_result.get("boundary")
+    )
+    water_geojson, water_source = get_geojson_with_source(
+        "water", user_water, auto_result.get("water")
+    )
+    road_geojson, road_source = get_geojson_with_source(
+        "road", user_road, auto_result.get("road")
+    )
+    residential_geojson, residential_source = get_geojson_with_source(
+        "residential", user_residential, auto_result.get("residential")
+    )
+
+    data_sources = {
+        "boundary": boundary_source,
+        "water": water_source,
+        "road": road_source,
+        "residential": residential_source,
+    }
+
+    # 统计可用数据和特征数
+    water_success = water_geojson is not None
+    road_success = road_geojson is not None
+    residential_success = residential_geojson is not None
+    boundary_success = boundary_geojson is not None
+
+    water_count = len(water_geojson.get("features", [])) if water_geojson else 0
+    road_count = len(road_geojson.get("features", [])) if road_geojson else 0
+    residential_count = len(residential_geojson.get("features", [])) if residential_geojson else 0
 
     coverage_rate = sum([water_success, road_success, residential_success]) / 3
 
@@ -270,30 +320,39 @@ def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
         "residential": {"layerType": "function_zone", "layerName": "居民地", "color": "#FFD700"},
     }
 
-    boundary_data = result.get("boundary", {})
-    if boundary_data.get("success") and boundary_data.get("geojson"):
-        boundary_geojson = boundary_data["geojson"]
-        if boundary_geojson.get("features"):
-            layers.append({
-                "geojson": boundary_geojson,
-                "layerType": "boundary",
-                "layerName": "行政边界",
-                "color": "#333333",
-            })
+    # 添加边界层
+    if boundary_success and boundary_geojson and boundary_geojson.get("features"):
+        layers.append({
+            "geojson": boundary_geojson,
+            "layerType": "boundary",
+            "layerName": "行政边界",
+            "color": "#333333",
+            "source": boundary_source,
+        })
 
+    # 添加其他图层
     for category, mapping in type_mapping.items():
         if category == "boundary":
             continue
-        cat_data = result.get(category, {})
-        if cat_data.get("success") and cat_data.get("geojson"):
-            geojson = cat_data["geojson"]
-            if geojson.get("features"):
-                layers.append({
-                    "geojson": geojson,
-                    "layerType": mapping["layerType"],
-                    "layerName": mapping["layerName"],
-                    "color": mapping["color"],
-                })
+
+        geojson = None
+        source = data_sources.get(category, "missing")
+
+        if category == "water":
+            geojson = water_geojson
+        elif category == "road":
+            geojson = road_geojson
+        elif category == "residential":
+            geojson = residential_geojson
+
+        if geojson and geojson.get("features"):
+            layers.append({
+                "geojson": geojson,
+                "layerType": mapping["layerType"],
+                "layerName": mapping["layerName"],
+                "color": mapping["color"],
+                "source": source,
+            })
 
     return _format_success_response({
         "location": location,
@@ -301,15 +360,17 @@ def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
         "layers_available": {
             "water": water_success,
             "road": road_success,
-            "residential": residential_success
+            "residential": residential_success,
+            "boundary": boundary_success,
         },
         "feature_counts": {
             "water": water_count,
             "road": road_count,
-            "residential": residential_count
+            "residential": residential_count,
         },
-        "center": result.get("center"),
+        "center": auto_result.get("center"),
         "layers": layers,
+        "data_sources": data_sources,  # 添加数据来源信息
     })
 
 

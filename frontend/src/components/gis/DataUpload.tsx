@@ -13,6 +13,13 @@ import type { FeatureCollection, GeoJsonProperties, Geometry } from 'geojson';
 // 支持的文件扩展名（用于 input accept 属性）
 const ACCEPTED_EXTENSIONS = '.geojson,.json,.shp,.kml,.kmz,.tif,.tiff';
 
+// 不支持的文件扩展名（需要友好提示）
+const UNSUPPORTED_EXTENSIONS: Record<string, string> = {
+  '.mpk': '不支持 ArcGIS Map Package (.mpk) 格式，请使用 ArcGIS Pro 导出为 Shapefile 或 GeoJSON',
+  '.mxd': '不支持 ArcGIS Map Document (.mxd) 格式，请导出为 Shapefile 或 GeoJSON',
+  '.aprx': '不支持 ArcGIS Pro Project (.aprx) 格式，请导出为 Shapefile 或 GeoJSON',
+};
+
 // 数据类型推断关键词
 const DATA_TYPE_KEYWORDS = {
   boundary: ['行政代码', 'boundary_type', '行政级别', '行政区划', '行政边界', '规划范围', '村界'],
@@ -57,6 +64,12 @@ function detectFileType(fileName: string): string {
     'tiff': 'geotiff',
   };
   return extToType[ext || ''] || 'unknown';
+}
+
+// 检查是否是不支持的格式
+function checkUnsupportedFormat(fileName: string): string | null {
+  const ext = '.' + fileName.toLowerCase().split('.').pop();
+  return UNSUPPORTED_EXTENSIONS[ext] || null;
 }
 
 // 推断数据类型
@@ -144,6 +157,12 @@ export default function DataUpload({
       // 检查文件大小
       if (file.size > maxFileSize) {
         throw new Error(`文件大小超过限制 (${maxSizeMB}MB)`);
+      }
+
+      // 检查是否是不支持的格式（如 MPK）
+      const unsupportedError = checkUnsupportedFormat(file.name);
+      if (unsupportedError) {
+        throw new Error(unsupportedError);
       }
 
       const fileType = detectFileType(file.name);
@@ -314,4 +333,4 @@ export default function DataUpload({
 }
 
 // 导出便捷函数
-export { detectFileType, inferDataType, buildFeatureCollection };
+export { detectFileType, inferDataType, buildFeatureCollection, checkUnsupportedFormat };
