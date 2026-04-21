@@ -433,8 +433,9 @@ async def analyze_dimension_for_send(
 
     try:
         # Use global semaphore to limit concurrent LLM calls
+        logger.info(f"[维度节点-Send] {dimension_name} 等待获取并发锁 (semaphore={LLM_MAX_CONCURRENT})...")
         async with _LLM_SEMAPHORE:
-            logger.debug(f"[维度节点-Send] {dimension_name} 获取 semaphore，开始 LLM 调用")
+            logger.info(f"[维度节点-Send] {dimension_name} 获取并发锁成功，开始 LLM 调用")
             # Use asyncio.wait_for for timeout protection
             result = await asyncio.wait_for(
                 collect_stream(),
