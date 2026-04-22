@@ -28,7 +28,9 @@ import ProgressPanel from './ProgressPanel';
 import ToolStatusPanel from './ToolStatusPanel';
 import DimensionSelector from './DimensionSelector';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { faLayerGroup } from '@fortawesome/free-solid-svg-icons';
+import { faLayerGroup, faMap } from '@fortawesome/free-solid-svg-icons';
+import GISUploadSidebar from '@/components/gis/GISUploadSidebar';
+import type { UploadResult } from '@/components/gis/DataUpload';
 import { getDimensionName, getDimensionsByLayer, DIMENSION_NAMES } from '@/config/dimensions';
 import { PLANNING_DEFAULTS } from '@/config/planning';
 import {
@@ -84,6 +86,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   const [isRollingBack, setIsRollingBack] = useState(false);
   const [uploadedFileContent, setUploadedFileContent] = useState<string | null>(null);
   const [stepMode, setStepMode] = useState<boolean>(PLANNING_DEFAULTS.stepMode);
+  const [showGISUploadSidebar, setShowGISUploadSidebar] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Track typing timeout for cleanup
@@ -1171,6 +1174,18 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
               <i className={`fas ${isUploadingFile ? 'fa-spinner fa-spin' : 'fa-paperclip'}`} />
             </motion.label>
 
+            {/* GIS Upload Button - map icon */}
+            <motion.button
+              type="button"
+              onClick={() => setShowGISUploadSidebar(true)}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              className="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-full text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+              title="上传 GIS 数据"
+            >
+              <FontAwesomeIcon icon={faMap} />
+            </motion.button>
+
             {/* Step Mode Toggle - Gemini style pill switch */}
             <div className="flex items-center p-0.5 bg-gray-100 rounded-full flex-shrink-0">
               <motion.button
@@ -1278,6 +1293,20 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
           <p className="text-center text-xs text-gray-400 mt-2">Enter 发送 · Shift+Enter 换行</p>
         </div>
       </div>
+
+      {/* GIS Upload Sidebar */}
+      <GISUploadSidebar
+        isOpen={showGISUploadSidebar}
+        onClose={() => setShowGISUploadSidebar(false)}
+        onDataUploaded={(result: UploadResult) => {
+          // 添加系统消息通知用户
+          const systemMsg = createSystemMessage(
+            `GIS 数据已上传: ${result.metadata.fileName} (${result.metadata.featureCount} 个特征，类型: ${result.dataType})`
+          );
+          addMessage(systemMsg);
+          setShowGISUploadSidebar(false);
+        }}
+      />
     </div>
   );
 }

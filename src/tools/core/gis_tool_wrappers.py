@@ -72,41 +72,6 @@ def _wrap_tool_response(result: Dict[str, Any], success_fields: List[str]) -> st
         return _format_error_response(result.get("error", "Unknown error"))
 
 
-def wrap_spatial_overlay(context: Dict[str, Any]) -> str:
-    """Wrapper for spatial overlay analysis tool."""
-    from .spatial_analysis import run_spatial_overlay
-
-    result = run_spatial_overlay(
-        operation=context.get("operation", "intersect"),
-        layer_a=context.get("layer_a", {}),
-        layer_b=context.get("layer_b", {})
-    )
-
-    if result.get("success"):
-        data = result.get("data", {})
-        return _format_success_response({
-            "feature_count": data.get("feature_count", 0),
-            "total_area_km2": data.get("total_area_km2", 0),
-            "geojson": data.get("geojson")
-        })
-    return _format_error_response(result.get("error", "Unknown error"))
-
-
-def wrap_spatial_query(context: Dict[str, Any]) -> str:
-    """Wrapper for spatial query tool."""
-    from .spatial_analysis import run_spatial_query
-
-    result = run_spatial_query(
-        query_type=context.get("query_type", "intersects"),
-        geometry=context.get("geometry", {}),
-        target_layer=context.get("target_layer", {}),
-        max_distance=context.get("max_distance", 1000),
-        limit=context.get("limit", 100)
-    )
-
-    return _wrap_tool_response(result, ["match_count", "returned_count", "geojson"])
-
-
 def wrap_isochrone_analysis(context: Dict[str, Any]) -> str:
     """Wrapper for isochrone analysis tool."""
     from .isochrone_analysis import generate_isochrones
@@ -178,28 +143,6 @@ def wrap_ecological_sensitivity(context: Dict[str, Any]) -> str:
         "study_area_km2", "sensitive_area_km2", "sensitivity_class",
         "sensitivity_zones", "recommendations"
     ])
-
-
-def wrap_map_renderer(context: Dict[str, Any]) -> str:
-    """Wrapper for map rendering tool."""
-    from .map_renderer import render_planning_map
-
-    center = _ensure_tuple_coord(context.get("center"))
-
-    result = render_planning_map(
-        layers=context.get("layers", []),
-        title=context.get("title", "村庄规划图"),
-        center=center
-    )
-
-    if result.get("success"):
-        data = result.get("data", {})
-        return _format_success_response({
-            "map_html_length": len(data.get("map_html", "")),
-            "layer_info": data.get("layer_info", []),
-            "center": data.get("center")
-        })
-    return _format_error_response(result.get("error", "Unknown error"))
 
 
 def wrap_gis_data_fetch(context: Dict[str, Any]) -> str:
@@ -289,16 +232,21 @@ def wrap_poi_search(context: Dict[str, Any]) -> str:
             "pois": pois,
             "total_count": len(pois),
             "geojson": result.get("geojson"),
-            "layer_type": "facility_point",  # POI 应为设施点类型
-            "layer_name": "公共服务设施",     # 图层名称
+            "layer_type": "facility_point",
+            "layer_name": "公共服务设施",
             "source": result.get("source", "unknown")
         })
     return _format_error_response(result.get("error", "POI search failed"))
 
 
 def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
-    """Wrapper for GIS coverage calculator tool."""
+    """
+    Wrapper for GIS coverage calculator tool.
+
+    数据获取优先级：用户上传 > 会话缓存 > 自动获取（天地图 WFS）
+    """
     from .gis_data_fetcher import get_fetcher
+    from ..gis.data_manager import GISDataManager
 
     fetcher = get_fetcher()
     location = context.get("location") or context.get("village_name", "")
@@ -307,20 +255,64 @@ def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
     if not location:
         return _format_error_response("缺少 location 或 village_name 参数")
 
-    result = fetcher.fetch_all_gis_data(location, buffer_km, max_features=100)
+    # 数据来源追踪
+    data_sources = {}
 
-    # Calculate coverage statistics using helper
-    water_success = result.get("water", {}).get("success", False)
-    road_success = result.get("road", {}).get("success", False)
-    residential_success = result.get("residential", {}).get("success", False)
+    # 优先检查用户上传数据
+    user_boundary = GISDataManager.get_data("boundary", location, auto_fetch=False)
+    user_water = GISDataManager.get_data("water", location, auto_fetch=False)
+    user_road = GISDataManager.get_data("road", location, auto_fetch=False)
+    user_residential = GISDataManager.get_data("residential", location, auto_fetch=False)
 
-    water_count = _count_geojson_features(result, "water")
-    road_count = _count_geojson_features(result, "road")
-    residential_count = _count_geojson_features(result, "residential")
+    # 如果有用户数据，优先使用
+    if user_boundary or user_water or user_road or user_residential:
+        logger.info(f"[GISCoverage] 使用用户上传数据: {location}")
+
+    # 自动获取数据（仅在没有用户数据时）
+    auto_result = fetcher.fetch_all_gis_data(location, buffer_km, max_features=100)
+
+    # 合并数据源：用户数据覆盖自动获取数据
+    def get_geojson_with_source(data_type: str, user_data: Optional[Dict], auto_data: Optional[Dict]) -> tuple[Optional[Dict], str]:
+        """获取 GeoJSON 数据并标记来源"""
+        if user_data:
+            return user_data, "user_upload"
+        if auto_data and auto_data.get("success") and auto_data.get("geojson"):
+            return auto_data.get("geojson"), "auto_fetch"
+        return None, "missing"
+
+    boundary_geojson, boundary_source = get_geojson_with_source(
+        "boundary", user_boundary, auto_result.get("boundary")
+    )
+    water_geojson, water_source = get_geojson_with_source(
+        "water", user_water, auto_result.get("water")
+    )
+    road_geojson, road_source = get_geojson_with_source(
+        "road", user_road, auto_result.get("road")
+    )
+    residential_geojson, residential_source = get_geojson_with_source(
+        "residential", user_residential, auto_result.get("residential")
+    )
+
+    data_sources = {
+        "boundary": boundary_source,
+        "water": water_source,
+        "road": road_source,
+        "residential": residential_source,
+    }
+
+    # 统计可用数据和特征数
+    water_success = water_geojson is not None
+    road_success = road_geojson is not None
+    residential_success = residential_geojson is not None
+    boundary_success = boundary_geojson is not None
+
+    water_count = len(water_geojson.get("features", [])) if water_geojson else 0
+    road_count = len(road_geojson.get("features", [])) if road_geojson else 0
+    residential_count = len(residential_geojson.get("features", [])) if residential_geojson else 0
 
     coverage_rate = sum([water_success, road_success, residential_success]) / 3
 
-    # 提取 GIS 图层数据（用于地图渲染）
+    layers = []
     type_mapping = {
         "boundary": {"layerType": "boundary", "layerName": "行政边界", "color": "#333333"},
         "water": {"layerType": "sensitivity_zone", "layerName": "水系", "color": "#87CEEB"},
@@ -328,33 +320,39 @@ def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
         "residential": {"layerType": "function_zone", "layerName": "居民地", "color": "#FFD700"},
     }
 
-    layers = []
-    # 首先添加边界图层（作为参考区域）
-    boundary_data = result.get("boundary", {})
-    if boundary_data.get("success") and boundary_data.get("geojson"):
-        boundary_geojson = boundary_data["geojson"]
-        if boundary_geojson.get("features"):
-            layers.append({
-                "geojson": boundary_geojson,
-                "layerType": "boundary",
-                "layerName": "行政边界",
-                "color": "#333333",
-            })
+    # 添加边界层
+    if boundary_success and boundary_geojson and boundary_geojson.get("features"):
+        layers.append({
+            "geojson": boundary_geojson,
+            "layerType": "boundary",
+            "layerName": "行政边界",
+            "color": "#333333",
+            "source": boundary_source,
+        })
 
+    # 添加其他图层
     for category, mapping in type_mapping.items():
-        # boundary 已单独处理，跳过
         if category == "boundary":
             continue
-        cat_data = result.get(category, {})
-        if cat_data.get("success") and cat_data.get("geojson"):
-            geojson = cat_data["geojson"]
-            if geojson.get("features"):
-                layers.append({
-                    "geojson": geojson,
-                    "layerType": mapping["layerType"],
-                    "layerName": mapping["layerName"],
-                    "color": mapping["color"],
-                })
+
+        geojson = None
+        source = data_sources.get(category, "missing")
+
+        if category == "water":
+            geojson = water_geojson
+        elif category == "road":
+            geojson = road_geojson
+        elif category == "residential":
+            geojson = residential_geojson
+
+        if geojson and geojson.get("features"):
+            layers.append({
+                "geojson": geojson,
+                "layerType": mapping["layerType"],
+                "layerName": mapping["layerName"],
+                "color": mapping["color"],
+                "source": source,
+            })
 
     return _format_success_response({
         "location": location,
@@ -362,32 +360,80 @@ def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
         "layers_available": {
             "water": water_success,
             "road": road_success,
-            "residential": residential_success
+            "residential": residential_success,
+            "boundary": boundary_success,
         },
         "feature_counts": {
             "water": water_count,
             "road": road_count,
-            "residential": residential_count
+            "residential": residential_count,
         },
-        "center": result.get("center"),
-        "layers": layers,  # 新增：GIS 图层数据
+        "center": auto_result.get("center"),
+        "layers": layers,
+        "data_sources": data_sources,  # 添加数据来源信息
     })
+
+
+def wrap_spatial_layout_generator(context: Dict[str, Any]) -> str:
+    """Wrapper for spatial layout generator tool."""
+    from .spatial_layout_generator import generate_spatial_layout_from_json
+    from .planning_schema import VillagePlanningScheme
+
+    village_boundary = context.get("village_boundary")
+    road_network = context.get("road_network")
+    planning_scheme_dict = context.get("planning_scheme")
+
+    planning_scheme = None
+    if planning_scheme_dict:
+        try:
+            if isinstance(planning_scheme_dict, dict):
+                planning_scheme = VillagePlanningScheme(**planning_scheme_dict)
+            else:
+                planning_scheme = planning_scheme_dict
+        except Exception as e:
+            return _format_error_response(f"Invalid planning scheme: {str(e)}")
+
+    if planning_scheme is None:
+        return _format_error_response("Missing planning_scheme parameter")
+
+    result = generate_spatial_layout_from_json(
+        village_boundary=village_boundary,
+        road_network=road_network,
+        planning_scheme=planning_scheme,
+        fallback_grid=context.get("fallback_grid", True),
+        merge_threshold=context.get("merge_threshold", 0.01)
+    )
+
+    if result.get("success"):
+        data = result.get("data", {})
+        stats = data.get("statistics", {})
+        return _format_success_response({
+            "geojson": data.get("geojson"),
+            "zones_geojson": data.get("zones_geojson"),
+            "facilities_geojson": data.get("facilities_geojson"),
+            "axes_geojson": data.get("axes_geojson"),
+            "zone_count": stats.get("zone_count", 0),
+            "facility_count": stats.get("facility_count", 0),
+            "axis_count": stats.get("axis_count", 0),
+            "total_area_km2": stats.get("total_area_km2", 0),
+            "center": data.get("center"),
+        })
+
+    return _format_error_response(result.get("error", "Spatial layout generation failed"))
 
 
 # Tool name to wrapper mapping
 GIS_TOOL_WRAPPERS = {
-    "spatial_overlay": wrap_spatial_overlay,
-    "spatial_query": wrap_spatial_query,
     "isochrone_analysis": wrap_isochrone_analysis,
     "planning_vectorizer": wrap_planning_vectorizer,
     "facility_validator": wrap_facility_validator,
     "ecological_sensitivity": wrap_ecological_sensitivity,
-    "map_renderer": wrap_map_renderer,
     "gis_data_fetch": wrap_gis_data_fetch,
     "wfs_data_fetch": wrap_gis_data_fetch,
     "accessibility_analysis": wrap_accessibility_analysis,
     "poi_search": wrap_poi_search,
     "gis_coverage_calculator": wrap_gis_coverage_calculator,
+    "spatial_layout_generator": wrap_spatial_layout_generator,
 }
 
 
@@ -399,15 +445,13 @@ def get_gis_tool_wrapper(tool_name: str):
 __all__ = [
     "GIS_TOOL_WRAPPERS",
     "get_gis_tool_wrapper",
-    "wrap_spatial_overlay",
-    "wrap_spatial_query",
     "wrap_isochrone_analysis",
     "wrap_planning_vectorizer",
     "wrap_facility_validator",
     "wrap_ecological_sensitivity",
-    "wrap_map_renderer",
     "wrap_gis_data_fetch",
     "wrap_accessibility_analysis",
     "wrap_poi_search",
     "wrap_gis_coverage_calculator",
+    "wrap_spatial_layout_generator",
 ]
