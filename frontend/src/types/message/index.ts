@@ -144,6 +144,7 @@ export interface PlanningParams {
   enableReview?: boolean;
   stepMode?: boolean;
   streamMode?: boolean;
+  images?: import('@/lib/api/types').ImageData[];
 }
 
 // ============================================================================
@@ -153,14 +154,14 @@ export interface PlanningParams {
 // Import specific message types and create union
 import type {
   EmbeddedImage,
+  KnowledgeSource,
+  ImageAttachment,
   TextMessage,
   FileMessage,
   ProgressMessage,
   DimensionReportMessage,
   LayerCompletedMessage,
-  ToolCallMessage,
-  ToolProgressMessage,
-  ToolResultMessage,
+  ToolStatusMessage,
   GisResultMessage,
 } from './message-types';
 
@@ -170,22 +171,20 @@ export type Message =
   | ProgressMessage
   | DimensionReportMessage
   | LayerCompletedMessage
-  | ToolCallMessage
-  | ToolProgressMessage
-  | ToolResultMessage
+  | ToolStatusMessage
   | GisResultMessage;
 
 // Re-export message types for convenience
 export type {
   EmbeddedImage,
+  KnowledgeSource,
+  ImageAttachment,
   TextMessage,
   FileMessage,
   ProgressMessage,
   DimensionReportMessage,
   LayerCompletedMessage,
-  ToolCallMessage,
-  ToolProgressMessage,
-  ToolResultMessage,
+  ToolStatusMessage,
   GisResultMessage,
 };
 

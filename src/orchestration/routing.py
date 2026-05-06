@@ -22,9 +22,11 @@ from .state import (
 )
 from .nodes.dimension_node import create_dimension_state, DIMENSION_NAMES
 from ..config.dimension_metadata import get_dimension_layer
+from ..constants.tools import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL
 from ..utils.logger import get_logger
 from ..utils.event_factory import create_layer_completed_event, create_pause_event
 from ..utils.sse_publisher import SSEPublisher
+from ..utils.summary_generator import generate_layer_summaries, index_layer_summaries_to_vectorstore
 
 logger = get_logger(__name__)
 
@@ -38,7 +40,7 @@ def intent_router(state: Dict[str, Any]) -> str:
     意图路由 - 根据最后一条消息决定下一步
 
     Returns:
-        "execute_tools": 执行工具调用
+        "execute_tools": 执行工具调用（包括 GISAnalysis）
         "route_planning": 推进规划流程
         END: 普通对话，结束本轮
     """
@@ -53,9 +55,12 @@ def intent_router(state: Dict[str, Any]) -> str:
         # 检查是否是 AdvancePlanningIntent
         for tool_call in last_msg.tool_calls:
             tool_name = tool_call.get("name", "")
-            if tool_name == "AdvancePlanningIntent":
+            if tool_name == ADVANCE_PLANNING_TOOL["function"]["name"]:
                 logger.info("[意图路由] 检测到 AdvancePlanningIntent，推进规划")
                 return "route_planning"
+            elif tool_name == GIS_ANALYSIS_TOOL["function"]["name"]:
+                logger.info("[意图路由] 检测到 GISAnalysis，执行 GIS 工具")
+                return "execute_tools"
         # 其他工具调用
         logger.info(f"[意图路由] 检测到工具调用: {[tc.get('name') for tc in last_msg.tool_calls]}")
         return "execute_tools"
@@ -182,6 +187,12 @@ def _route_wave_layer(state: Dict[str, Any], layer: int, current_wave: int) -> U
     wave_dims = get_wave_dimensions(layer, current_wave)
     wave_completed = all(d in completed for d in wave_dims)
 
+    # [调试] 详细记录波次路由状态
+    pending_dims = [d for d in wave_dims if d not in completed]
+    logger.info(f"[路由] Layer {layer} Wave {current_wave}/{total_waves}: "
+                f"wave_dims={wave_dims}, completed={completed}, "
+                f"pending={pending_dims}, wave_completed={wave_completed}")
+
     if wave_completed:
         if current_wave >= total_waves:
             # 当前层完成
@@ -218,6 +229,7 @@ def _send_layer_completion_events(
     phase: str,
     reports: Dict[str, Any],
     step_mode: bool,
+    state: Dict[str, Any] = None,
 ) -> None:
     """统一发送层级完成的 SSE 事件
 
@@ -227,12 +239,19 @@ def _send_layer_completion_events(
         phase: 当前阶段
         reports: 报告数据
         step_mode: 是否分步模式
+        state: 当前状态（用于获取 knowledge_sources_cache）
 
     Note:
         checkpoint_saved 事件由 _trigger_planning_execution 在 checkpoint 持久化后发送，
         此函数只发送 layer_completed 和 pause 事件。
     """
     sse_events = []
+
+    # Extract knowledge sources from state config
+    knowledge_sources_cache = None
+    if state:
+        config = state.get("config", {})
+        knowledge_sources_cache = config.get("knowledge_sources_cache")
 
     # 发送 layer_completed 事件
     sse_events.append(create_layer_completed_event(
@@ -242,6 +261,7 @@ def _send_layer_completion_events(
         pause_after_step=True,
         previous_layer=layer,
         session_id=session_id,
+        knowledge_sources_cache=knowledge_sources_cache,
     ))
 
     # step_mode 下额外发送 pause 事件
@@ -318,6 +338,33 @@ async def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 检查是否需要推进波次或阶段
     if completed_count >= len(total_dims):
+        # 层级完成时，批量生成摘要（供后续审查和追问使用）
+        dimension_summaries = dict(state.get("dimension_summaries", {}))
+        try:
+            new_summaries = await generate_layer_summaries(
+                reports=reports,
+                layer=layer,
+                dimension_names=DIMENSION_NAMES
+            )
+            dimension_summaries.update(new_summaries)
+            updates["dimension_summaries"] = dimension_summaries
+            logger.info(f"[收集] Layer {layer} 摘要生成完成: {len(new_summaries)} 个维度")
+
+            # Phase 1: 摘要索引到向量库（异步执行，不阻塞主流程）
+            task_id = state.get("session_id", "")
+            if task_id and new_summaries:
+                try:
+                    indexed_count = await index_layer_summaries_to_vectorstore(
+                        summaries=new_summaries,
+                        task_id=task_id,
+                    )
+                    logger.info(f"[收集] Layer {layer} 摘要索引完成: {indexed_count}/{len(new_summaries)}")
+                except Exception as idx_e:
+                    logger.warning(f"[收集] Layer {layer} 摘要索引失败: {idx_e}")
+        except Exception as e:
+            logger.warning(f"[收集] Layer {layer} 摘要生成失败 ({type(e).__name__}): {e}，继续执行")
+            # 摘要生成失败不影响主流程，继续执行
+
         # 当前层完成
         if layer and layer < 3:
             # Layer 1/2 完成时，根据 step_mode 决定行为
@@ -368,6 +415,7 @@ async def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
                 phase=phase,
                 reports=reports,
                 step_mode=state.get("step_mode", False),
+                state=state,
             )
 
             updates["sse_events"] = []
@@ -403,6 +451,7 @@ async def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
                 phase=phase,
                 reports=reports,
                 step_mode=state.get("step_mode", False),
+                state=state,
             )
 
             updates["sse_events"] = []
@@ -413,6 +462,11 @@ async def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
             total_waves = get_total_waves(layer)
             wave_dims = get_wave_dimensions(layer, current_wave)
             wave_completed = all(d in completed_dimensions.get(layer_key, []) for d in wave_dims)
+
+            # [调试] 详细记录波次推进检查
+            logger.info(f"[收集] Layer {layer} Wave {current_wave}/{total_waves}: "
+                       f"wave_dims={wave_dims}, completed={completed_dimensions.get(layer_key, [])}, "
+                       f"wave_completed={wave_completed}")
 
             if wave_completed and current_wave < total_waves:
                 updates["current_wave"] = current_wave + 1

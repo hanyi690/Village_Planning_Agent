@@ -1,0 +1,11 @@
+{
+  "target_dimension": "planning_positioning",
+  "wave_allocation": {},
+  "completed_dimensions": [
+    "full_report",
+    "full_report",
+    "full_report"
+  ],
+  "total_waves": 0,
+  "pending_dimensions": 0
+}

@@ -5,6 +5,7 @@ RAG 核心模块
 - context_manager: 文档上下文管理器
 - summarization: 层次化摘要系统
 - tools: Agent 工具集
+- vector_store: Small-to-Big 向量存储架构
 """
 
 from src.rag.core.context_manager import (
@@ -18,6 +19,12 @@ from src.rag.core.summarization import (
     DocumentSummary,
     ChapterSummary,
     summarize_document,
+)
+
+from src.rag.core.vector_store import (
+    ParentChildVectorStore,
+    ParentChildChunk,
+    get_parent_child_store,
 )
 
 from src.rag.core.tools import (
@@ -42,6 +49,10 @@ __all__ = [
     "DocumentSummary",
     "ChapterSummary",
     "summarize_document",
+    # Vector Store (Small-to-Big)
+    "ParentChildVectorStore",
+    "ParentChildChunk",
+    "get_parent_child_store",
     # Tools (阶段1)
     "planning_knowledge_tool",
     "full_document_tool",

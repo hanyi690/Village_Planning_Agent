@@ -1,0 +1,120 @@
+{
+  "target_dimension": "planning_positioning",
+  "impact_tree": {
+    "0": [
+      "planning_positioning"
+    ],
+    "1": [
+      "industry",
+      "spatial_structure",
+      "land_use_planning",
+      "development_goals",
+      "planning_strategies"
+    ],
+    "2": [
+      "settlement_planning",
+      "traffic_planning",
+      "public_service",
+      "infrastructure_planning",
+      "ecological",
+      "disaster_prevention",
+      "heritage",
+      "landscape",
+      "project_bank"
+    ]
+  },
+  "total_downstream": 15,
+  "max_wave": 2,
+  "dimension_metadata": {
+    "planning_positioning": {
+      "key": "planning_positioning",
+      "name": "规划定位分析",
+      "layer": 2,
+      "description": "确定村庄的发展定位"
+    },
+    "industry": {
+      "key": "industry",
+      "name": "产业规划",
+      "layer": 3,
+      "description": "制定村庄产业发展规划"
+    },
+    "spatial_structure": {
+      "key": "spatial_structure",
+      "name": "空间结构规划",
+      "layer": 3,
+      "description": "制定村庄空间结构规划方案"
+    },
+    "land_use_planning": {
+      "key": "land_use_planning",
+      "name": "土地利用规划",
+      "layer": 3,
+      "description": "制定村庄土地利用规划方案"
+    },
+    "development_goals": {
+      "key": "development_goals",
+      "name": "发展目标分析",
+      "layer": 2,
+      "description": "制定一句简洁的语句"
+    },
+    "planning_strategies": {
+      "key": "planning_strategies",
+      "name": "规划策略分析",
+      "layer": 2,
+      "description": "制定系统性的规划策略"
+    },
+    "settlement_planning": {
+      "key": "settlement_planning",
+      "name": "居民点规划",
+      "layer": 3,
+      "description": "制定村庄居民点规划方案"
+    },
+    "traffic_planning": {
+      "key": "traffic_planning",
+      "name": "道路交通规划",
+      "layer": 3,
+      "description": "制定村庄道路交通系统详细规划"
+    },
+    "public_service": {
+      "key": "public_service",
+      "name": "公共服务设施规划",
+      "layer": 3,
+      "description": "制定村庄公共服务设施配置规划"
+    },
+    "infrastructure_planning": {
+      "key": "infrastructure_planning",
+      "name": "基础设施规划",
+      "layer": 3,
+      "description": "制定村庄基础设施系统规划"
+    },
+    "ecological": {
+      "key": "ecological",
+      "name": "生态绿地规划",
+      "layer": 3,
+      "description": "制定村庄生态绿地系统规划"
+    },
+    "disaster_prevention": {
+      "key": "disaster_prevention",
+      "name": "防震减灾规划",
+      "layer": 3,
+      "description": "制定村庄防震减灾规划"
+    },
+    "heritage": {
+      "key": "heritage",
+      "name": "历史文保规划",
+      "layer": 3,
+      "description": "制定村庄历史文化遗产保护规划"
+    },
+    "landscape": {
+      "key": "landscape",
+      "name": "村庄风貌指引",
+      "layer": 3,
+      "description": "制定村庄风貌控制和引导规划"
+    },
+    "project_bank": {
+      "key": "project_bank",
+      "name": "建设项目库",
+      "layer": 3,
+      "description": "整合各专业规划，建立建设项目库"
+    }
+  }
+}

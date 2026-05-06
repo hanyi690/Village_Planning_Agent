@@ -1,0 +1,5 @@
+
+// LibreCAD script to convert DWG to DXF
+open("F:\project\Village_Planning_Agent\docs\references\村庄规划总图\金田村村庄规划工程文件\3.村庄建设项目布局规划图\03金田村建设项目布局规划图.dwg")
+saveas("F:\project\Village_Planning_Agent\docs\gis\jintian_dxf\03金田村建设项目布局规划图.dxf", "DXF 2018")
+quit

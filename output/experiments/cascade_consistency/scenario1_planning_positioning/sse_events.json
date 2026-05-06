@@ -1,0 +1,15 @@
+[
+  {
+    "type": "reject_received",
+    "session_id": "scenario1_1e74d58d_20260505161048",
+    "target_dimension": "planning_positioning",
+    "feedback": "金田村常住人口仅500人，不具备承接大规模旅游的基础设施条件。\n千年古檀树、古茶亭遗址等核心历史资源应划定为绝对保护对象，剥离重度商业开发权。\n规划定位应转向生态保育优先、客家文化微改造的渐进式发展路径。",
+    "timestamp": "2026-05-05T16:10:48.501986"
+  },
+  {
+    "type": "revision_completed",
+    "session_id": "scenario1_1e74d58d_20260505161048",
+    "revised_dimensions": [],
+    "timestamp": "2026-05-05T16:10:48.501991"
+  }
+]

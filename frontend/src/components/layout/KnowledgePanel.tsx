@@ -26,7 +26,7 @@ import {
   faGlobe,
   faPlus,
 } from '@fortawesome/free-solid-svg-icons';
-import { knowledgeApi, KnowledgeDocument, KnowledgeStats, AddDocumentOptions } from '@/lib/api';
+import { knowledgeApi, KnowledgeDocument, KnowledgeStats, AddDocumentOptions, TaskProgress } from '@/lib/api';
 import { getDimensionName, DIMENSIONS_BY_LAYER } from '@/config/dimensions';
 import { getErrorMessage } from '@/lib/utils';
 
@@ -139,6 +139,10 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
   // 存储待处理的文件（使用 state 统一管理）
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
 
+  // 任务状态管理（异步上传）
+  const [tasks, setTasks] = useState<TaskProgress[]>([]);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
   // setTimeout 清理
   const refreshTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -176,10 +180,14 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
       if (refreshTimerRef.current) {
         clearTimeout(refreshTimerRef.current);
       }
+      // 清理轮询定时器
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
     };
   }, [loadData]);
 
-  // 统一的上传处理函数
+  // 统一的上传处理函数（异步上传，支持进度追踪）
   const processFileUpload = async (files: File[], options?: AddDocumentOptions) => {
     if (files.length === 0) return;
 
@@ -188,7 +196,7 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
 
     const uploadOptions: AddDocumentOptions = options || { category: 'policies' };
 
-    // 先添加所有临时文档
+    // 先添加所有临时文档（用于 UI 显示）
     const tempDocs: DocumentWithStatus[] = files.map((file) => ({
       source: file.name,
       doc_type: uploadOptions.doc_type || file.name.split('.').pop() || 'unknown',
@@ -201,20 +209,25 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
     }));
     setDocuments((prev) => [...tempDocs, ...prev]);
 
-    // 并行上传所有文件
+    // 异步并行上传所有文件
     const results = await Promise.allSettled(
-      files.map((file) => knowledgeApi.addDocument(file, uploadOptions))
+      files.map((file) => knowledgeApi.addDocumentAsync(file, uploadOptions))
     );
 
-    // 处理结果
+    // 处理结果，收集成功的 task_id
+    const newTasks: TaskProgress[] = [];
     results.forEach((result, index) => {
       const fileName = files[index].name;
       if (result.status === 'fulfilled') {
-        setDocuments((prev) =>
-          prev.map((d) =>
-            d.source === fileName ? { ...d, uiStatus: 'ready' as DocumentStatus } : d
-          )
-        );
+        const taskData = result.value;
+        newTasks.push({
+          taskId: taskData.taskId,
+          filename: fileName,
+          status: 'pending',
+          progress: 0,
+          currentStep: '等待处理',
+          retryCount: 0,
+        });
       } else {
         setDocuments((prev) =>
           prev.map((d) =>
@@ -226,13 +239,69 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
       }
     });
 
-    setUploading(false);
+    // 添加新任务到状态
+    if (newTasks.length > 0) {
+      setTasks((prev) => [...prev, ...newTasks]);
 
-    // 等待后台处理完成后刷新数据
-    refreshTimerRef.current = setTimeout(async () => {
-      await loadData();
-    }, 1500);
+      // 启动轮询检查任务状态
+      startPolling();
+    }
+
+    setUploading(false);
   };
+
+  // 轮询任务状态
+  const startPolling = useCallback(() => {
+    // 如果已有轮询，先停止
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+
+    const poll = async () => {
+      try {
+        const currentTasks = await knowledgeApi.listTasks();
+        setTasks(currentTasks);
+
+        // 检查是否所有任务都完成了
+        const activeTasks = currentTasks.filter(
+          (t) => t.status !== 'completed' && t.status !== 'failed'
+        );
+
+        if (activeTasks.length === 0) {
+          // 所有任务完成，停止轮询并刷新数据
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+
+          // 更新文档状态
+          currentTasks.forEach((task) => {
+            setDocuments((prev) =>
+              prev.map((d) =>
+                d.source === task.filename
+                  ? { ...d, uiStatus: task.status === 'completed' ? 'ready' : 'error' }
+                  : d
+              )
+            );
+          });
+
+          // 刷新文档列表
+          setTimeout(async () => {
+            await loadData();
+            // 清理完成的任务
+            setTasks([]);
+          }, 500);
+        }
+      } catch (err) {
+        console.error('[KnowledgePanel] Poll failed:', err);
+      }
+    };
+
+    // 每 2 秒轮询一次
+    pollIntervalRef.current = setInterval(poll, 2000);
+    // 立即执行一次
+    poll();
+  }, [loadData]);
 
   // 处理文件上传（从拖拽或直接上传触发）
   const handleFileUpload = (files: FileList | null) => {
@@ -642,14 +711,20 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium text-gray-800 truncate">{doc.source}</p>
                           <p className="text-xs text-gray-400">
-                            {doc.chunk_count} 个切片 · {doc.doc_type?.toUpperCase() || 'UNKNOWN'}
+                            {doc.uiStatus === 'processing'
+                              ? tasks.find(t => t.filename === doc.source)?.currentStep || '处理中...'
+                              : `${doc.chunk_count} 个切片 · ${doc.doc_type?.toUpperCase() || 'UNKNOWN'}`}
                           </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="text-xs flex items-center gap-1.5">
                           {getStatusIcon(doc.uiStatus)}
-                          <span className="text-gray-400">{getStatusText(doc.uiStatus)}</span>
+                          <span className="text-gray-400">
+                            {doc.uiStatus === 'processing'
+                              ? `${Math.round(tasks.find(t => t.filename === doc.source)?.progress || 0)}%`
+                              : getStatusText(doc.uiStatus)}
+                          </span>
                         </span>
                         {doc.uiStatus !== 'processing' && (
                           <motion.button
@@ -664,6 +739,20 @@ export default function KnowledgePanel({ onClose }: KnowledgePanelProps) {
                         )}
                       </div>
                     </div>
+
+                    {/* 进度条（仅处理中的文档显示） */}
+                    {doc.uiStatus === 'processing' && (
+                      <div className="ml-9 mr-3">
+                        <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                          <motion.div
+                            initial={{ width: 0 }}
+                            animate={{ width: `${tasks.find(t => t.filename === doc.source)?.progress || 0}%` }}
+                            transition={{ duration: 0.3 }}
+                            className="h-full bg-gradient-to-r from-violet-500 to-blue-500 rounded-full"
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     {/* 元数据标签展示 */}
                     {(doc.dimension_tags || doc.terrain || doc.category) && (

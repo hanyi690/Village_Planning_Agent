@@ -14,6 +14,8 @@ import asyncio
 import logging
 from typing import Dict, Any, List, Tuple
 
+from src.core.config import LLM_MAX_CONCURRENT
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,10 +91,18 @@ class DimensionExecutor:
 
             return dim_key, content
 
-        # 并行执行所有维度
-        logger.info(f"[DimensionExecutor] [{session_id}] 开始执行 {len(dimension_keys)} 个维度: {dimension_keys}")
+        # 并行执行所有维度（使用 Semaphore 限制并发）
+        logger.info(f"[DimensionExecutor] [{session_id}] 开始执行 {len(dimension_keys)} 个维度，并发限制: {LLM_MAX_CONCURRENT}")
 
-        results = await asyncio.gather(*[run_one(dim) for dim in dimension_keys])
+        semaphore = asyncio.Semaphore(LLM_MAX_CONCURRENT)
+
+        async def run_with_semaphore(dim_key: str) -> Tuple[str, str]:
+            """带并发控制的维度执行"""
+            async with semaphore:
+                logger.debug(f"[DimensionExecutor] [{session_id}] 开始维度: {dim_key}")
+                return await run_one(dim_key)
+
+        results = await asyncio.gather(*[run_with_semaphore(dim) for dim in dimension_keys])
 
         result_dict = {dim: content for dim, content in results}
         logger.info(f"[DimensionExecutor] [{session_id}] 完成，成功: {len([c for c in result_dict.values() if c])} 个")

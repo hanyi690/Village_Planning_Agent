@@ -49,10 +49,12 @@ export default function UnifiedContentSwitcher({ onOpenLayerSidebar }: UnifiedCo
       setVillageFormData(data);
       setProjectName(data.projectName);
 
-      // Add confirmation message
+      // Add confirmation message with constraints and file count
+      const fileCount = (data.taskDescriptionFiles?.length ?? 0) + (data.constraintsFiles?.length ?? 0);
+      const fileInfo = fileCount > 0 ? `\n上传文件: ${fileCount} 个` : '';
       addMessage(
         createSystemMessage(
-          `✅ Planning task set\n\nVillage: ${data.projectName}\nRequirement: ${data.taskDescription}`
+          `✅ 规划任务已设置\n\n村庄: ${data.projectName}\n需求: ${data.taskDescription || '(未填写)'}\n约束: ${data.constraints || '(未填写)'}${fileInfo}`
         )
       );
 

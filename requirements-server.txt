@@ -55,9 +55,13 @@ aiosqlite>=0.19.0
 # File Processing
 # ============================================
 markitdown[docx,pdf,xlsx,pptx]
+markitdown-ocr>=0.1.0
 filetype>=1.2.0
 chardet>=5.0.0
 func-timeout>=4.3.5  # 超时保护，防止大文件处理卡死
+# PDF 备用解析器（当 MarkItDown 失败时自动切换）
+pymupdf>=1.24.0     # 复杂字体/布局容错，扫描版 PDF 检测
+pdfplumber>=0.11.0  # 表格/结构化内容提取
 
 # ============================================
 # Terminal Output
@@ -76,6 +80,13 @@ typing-extensions>=4.12.0
 # LangSmith Tracing
 # ============================================
 langsmith>=0.1.0
+
+# ============================================
+# GIS Dependencies (空间分析)
+# ============================================
+geopandas>=0.14.0
+shapely>=2.0.0
+networkx>=3.0
 
 # ============================================
 # 注意: 移除的依赖（本地 Embedding 模式专用）

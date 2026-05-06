@@ -334,18 +334,23 @@ def calculate_population(context: Dict[str, Any]) -> str:
 
 ### 内置工具列表
 
-| 工具名称 | 显示名称 | 功能 | 预估时间 |
-|----------|----------|------|----------|
-| `knowledge_search` | 知识检索 | RAG 知识库检索 | 2.0s |
-| `web_search` | 网络搜索 | 互联网实时搜索 | 4.0s |
-| `population_model_v1` | 人口预测 | 人口趋势预测 | 3.0s |
-| `gis_data_fetch` | GIS 数据获取 | 天地图 WFS 数据获取（水系/道路/居民地） | 5.0s |
-| `poi_search` | POI 搜索 | 高德优先 POI 搜索，自动坐标转换 | 3.0s |
-| `accessibility_analysis` | 可达性分析 | 设施可达性计算 | 6.0s |
-| `isochrone_analysis` | 等时圈分析 | 出行时间圈分析 | 5.0s |
-| `spatial_overlay` | 空间叠加 | 图层叠加分析 | 4.0s |
-| `facility_validator` | 设施验证 | 设施选址适宜性评估 | 3.0s |
-| `ecological_sensitivity` | 生态敏感性 | 生态敏感区评估 | 4.0s |
+# 核心注册工具（@ToolRegistry.register）
+| 工具名称 | 显示名称 | 注册位置 |
+|----------|----------|----------|
+| population_prediction | 人口预测 | src/tools/builtin/population.py |
+| knowledge_search | 知识检索 | src/rag/core/tools.py |
+| web_search | 网络搜索 | src/tools/search_tool.py |
+
+# 维度绑定工具（dimension_metadata.py tool 字段）
+| 维度 | 绑定工具 |
+|------|----------|
+| socio_economic | population_prediction |
+| natural_environment | wfs_data_fetch |
+| traffic | accessibility_analysis |
+| public_services | poi_search |
+| spatial_structure | planning_vectorizer |
+| traffic_planning | isochrone_analysis |
+| ecological | ecological_sensitivity |
 
 ### GIS 工具详解
 
@@ -405,6 +410,29 @@ result = ToolRegistry.execute_tool("poi_search", {
     "geojson": {...}   # GeoJSON 格式
 }
 ```
+
+---
+
+## GIS 工具架构
+
+GIS 工具位于 `src/tools/core/` 目录：
+
+```
+src/tools/
+├── core/
+│   ├── gis_core.py           # 核心分析函数
+│   ├── gis_tool_wrappers.py  # 工具包装器
+│   └── gis_data_fetcher.py   # WFS 数据获取
+├── geocoding/
+│   ├── amap/provider.py      # 高德API（含GCJ-02→WGS-84转换）
+│   ├── tianditu/provider.py  # 天地图WFS
+│   └── poi_provider.py       # POI 搜索
+```
+
+### 坐标转换
+
+高德API使用GCJ-02坐标系，天地图使用WGS-84。
+`gcj02_to_wgs84()` 函数在 `src/tools/geocoding/amap/provider.py:76-101` 实现坐标转换。
 
 ---
 
@@ -805,6 +833,346 @@ sequenceDiagram
 | 坐标转换 | `src/tools/geocoding/amap/provider.py` | `gcj02_to_wgs84` |
 | SSE 发布 | `src/utils/sse_publisher.py` | `send_tool_*` 系列方法 |
 | 工具节点 | `src/orchestration/main_graph.py` | `execute_tools_node` |
+
+---
+
+## 完整GIS工具列表
+
+### 空间分析工具
+
+| 工具名称 | 功能描述 | 文件路径 |
+|----------|----------|----------|
+| spatial_overlay | 空间叠加分析（intersect, union, difference, clip） | src/tools/core/spatial_analysis.py |
+| spatial_query | 空间查询（contains, intersects, within, nearest） | src/tools/core/spatial_analysis.py |
+| geojson_to_geodataframe | GeoJSON 转 GeoDataFrame | src/tools/core/spatial_analysis.py |
+
+### GIS数据获取工具
+
+| 工具名称 | 功能描述 | 文件路径 |
+|----------|----------|----------|
+| wfs_data_fetch | 天地图WFS数据获取（水系、道路、居民地） | src/tools/core/gis_data_fetcher.py |
+| poi_search | POI搜索（高德优先策略） | src/tools/geocoding/poi_provider.py |
+| gis_coverage_calculator | GIS覆盖率计算 | src/tools/core/gis_core.py |
+
+### 规划分析工具
+
+| 工具名称 | 功能描述 | 维度绑定 |
+|----------|----------|----------|
+| isochrone_analysis | 等时圈分析（步行/驾车可达范围） | traffic_planning |
+| planning_vectorizer | 规划矢量化（生成GeoJSON图层） | spatial_structure |
+| facility_validator | 设施选址验证（服务半径、容量评估） | public_service |
+| ecological_sensitivity | 生态敏感性分析 | ecological |
+| accessibility_analysis | 可达性分析（服务覆盖范围） | traffic |
+
+### 其他工具
+
+| 工具名称 | 功能描述 |
+|----------|----------|
+| population_model_v1 | 人口预测（村庄规划标准模型） |
+| knowledge_search | RAG知识检索 |
+| web_search | 网络搜索（Tavily后端） |
+
+---
+
+## 结果规范化层
+
+### NormalizedToolResult
+
+统一的工具结果格式，确保前端展示一致性：
+
+```python
+# src/tools/types.py
+from dataclasses import dataclass
+from enum import Enum
+
+class ResultDataType(Enum):
+    """结果数据类型枚举"""
+    GEOJSON = "geojson"       # GIS数据（地图展示）
+    ANALYSIS = "analysis"     # 分析结果（图表/表格）
+    TEXT = "text"             # 纯文本内容
+    ERROR = "error"           # 错误信息
+
+@dataclass
+class NormalizedToolResult:
+    """规范化工具结果"""
+    success: bool
+    data_type: ResultDataType
+    data: Dict[str, Any]          # 实际数据内容
+    summary: str                  # 结果摘要
+    metadata: Dict[str, Any]      # 元数据（耗时、来源等）
+    error: Optional[str] = None   # 错误信息
+
+    def to_frontend_format(self) -> Dict[str, Any]:
+        """转换为前端展示格式"""
+        if self.data_type == ResultDataType.GEOJSON:
+            return {
+                "gisData": {
+                    "layers": self.data.get("layers", []),
+                    "mapOptions": self.data.get("mapOptions"),
+                    "analysisData": self.data.get("analysisData")
+                }
+            }
+        elif self.data_type == ResultDataType.ANALYSIS:
+            return {
+                "analysisData": self.data,
+                "summary": self.summary
+            }
+        else:
+            return {"content": self.summary}
+```
+
+### normalize_tool_result函数
+
+```python
+def normalize_tool_result(
+    raw_result: Any,
+    tool_name: str
+) -> NormalizedToolResult:
+    """
+    将原始工具结果规范化
+
+    自动识别数据类型：
+    - 包含 geojson/layers → GEOJSON
+    - 包含 analysisData/scores → ANALYSIS
+    - 其他 → TEXT
+    """
+    if isinstance(raw_result, dict):
+        if "geojson" in raw_result or "layers" in raw_result:
+            return NormalizedToolResult(
+                success=True,
+                data_type=ResultDataType.GEOJSON,
+                data=raw_result,
+                summary=raw_result.get("summary", "GIS分析完成")
+            )
+        elif "analysisData" in raw_result or "scores" in raw_result:
+            return NormalizedToolResult(
+                success=True,
+                data_type=ResultDataType.ANALYSIS,
+                data=raw_result,
+                summary=raw_result.get("summary", "分析完成")
+            )
+
+    # 文本结果
+    return NormalizedToolResult(
+        success=True,
+        data_type=ResultDataType.TEXT,
+        data={},
+        summary=str(raw_result)[:500]
+    )
+```
+
+---
+
+## POI Provider高德优先策略
+
+### 架构设计
+
+POI搜索采用高德优先策略，失败时回退天地图：
+
+```
+src/tools/geocoding/
+├── amap/provider.py      # 高德API（30 QPS，数据丰富）
+│   ├── gcj02_to_wgs84()  # 坐标转换
+│   └── search_poi_*()    # POI搜索方法
+├── tianditu/provider.py  # 天地图WFS（回退）
+└── poi_provider.py       # 统一接口（高德优先）
+```
+
+### 高德优先策略
+
+```python
+# src/tools/geocoding/poi_provider.py
+class POIProvider:
+    """POI服务统一接口 - 高德优先策略"""
+
+    @classmethod
+    def search_poi_nearby(cls, keyword, center, radius, page_size):
+        """周边POI搜索（高德优先）"""
+        # 1. 优先高德（30 QPS，POI数据丰富）
+        amap = cls.get_amap_provider()
+        result = amap.search_poi_nearby(keyword, center, radius, page_size)
+
+        if result.success:
+            return {
+                "pois": result.data.get("pois", []),
+                "geojson": cls._build_geojson(result.data.get("pois", [])),
+                "source": "amap",  # 标记来源
+                # 高德坐标已转换为WGS-84
+            }
+
+        # 2. 回退天地图
+        logger.warning(f"[POIProvider] 高德搜索失败，回退天地图")
+        tianditu = cls.get_tianditu_provider()
+        result = tianditu.search_poi(keyword, center, radius, page_size)
+
+        if result.success:
+            return {
+                "pois": result.data.get("pois", []),
+                "geojson": result.data.get("geojson"),
+                "source": "tianditu",
+            }
+
+        return {"success": False, "error": "POI搜索失败"}
+
+    @classmethod
+    def search_public_services(cls, center, radius, categories):
+        """按类型码搜索公共服务设施（高德专用功能）"""
+        # 使用高德POI类型码批量搜索
+        # POI_TYPES_PUBLIC_SERVICE = {"幼儿园": "141100", "小学": "141200", ...}
+        pass
+```
+
+### 数据来源标记
+
+返回结果包含 `source` 字段标记数据来源：
+
+```python
+{
+    "success": True,
+    "pois": [...],
+    "geojson": {...},
+    "source": "amap",  # 或 "tianditu"
+    "center": (116.04, 24.82),
+    "radius": 1000
+}
+```
+
+---
+
+## ParamSource枚举
+
+工具参数来源类型，定义参数值的获取方式：
+
+```python
+# src/orchestration/nodes/dimension_node.py
+class ParamSource(str, Enum):
+    """工具参数来源枚举"""
+    LITERAL = "literal"       # 固定值（硬编码）
+    GIS_CACHE = "gis_cache"   # 从GIS分析结果缓存取值
+    CONFIG = "config"         # 从state.config取值
+    CONTEXT = "context"       # 从context直接取值
+```
+
+### tool_params配置示例
+
+```python
+# src/config/dimension_metadata.py
+"traffic": {
+    "tool": "accessibility_analysis",
+    "tool_params": {
+        "analysis_type": {
+            "source": "literal",
+            "value": "service_coverage"
+        },
+        "center": {
+            "source": "gis_cache",
+            "path": "_auto_fetched.center"
+        }
+    }
+}
+
+"public_services": {
+    "tool": "poi_search",
+    "tool_params": {
+        "keyword": {
+            "source": "literal",
+            "value": "学校|医院|超市|银行"
+        },
+        "center": {
+            "source": "gis_cache",
+            "path": "_auto_fetched.center"
+        },
+        "radius": {
+            "source": "literal",
+            "value": 1500
+        }
+    }
+}
+```
+
+---
+
+## 工具与Agent协作补充
+
+### 意图路由逻辑
+
+当LLM返回工具调用时，`intent_router` 进行分流：
+
+```python
+# src/orchestration/routing.py
+def intent_router(state: Dict[str, Any]) -> str:
+    """
+    意图路由
+
+    Returns:
+        "execute_tools"  - 执行常规工具调用
+        "route_planning" - 推进规划流程（AdvancePlanningIntent）
+        END              - 普通对话
+    """
+    last_msg = state.get("messages", [])[-1]
+
+    if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+        for tc in last_msg.tool_calls:
+            if tc["name"] == "AdvancePlanningIntent":
+                return "route_planning"  # 特殊处理
+        return "execute_tools"  # 常规工具
+
+    return END  # 普通对话
+```
+
+### 维度工具参数来源
+
+维度分析时，工具参数从 `tool_params` 配置解析：
+
+```python
+# src/orchestration/nodes/dimension_node.py
+def resolve_tool_params(tool_params_config: Dict, state: Dict) -> Dict:
+    """
+    解析工具参数配置
+
+    根据 ParamSource 确定参数值：
+    - LITERAL: 直接使用配置中的 value
+    - GIS_CACHE: 从 gis_cache 按路径取值
+    - CONFIG: 从 state.config 取值
+    - CONTEXT: 从 context 直接取值
+    """
+    params = {}
+    for param_name, param_config in tool_params_config.items():
+        source = param_config.get("source")
+        if source == "literal":
+            params[param_name] = param_config.get("value")
+        elif source == "gis_cache":
+            gis_cache = state.get("gis_cache", {})
+            path = param_config.get("path")
+            params[param_name] = gis_cache.get(path)
+        elif source == "config":
+            config = state.get("config", {})
+            path = param_config.get("path")
+            params[param_name] = config.get(path)
+        elif source == "context":
+            params[param_name] = state.get(param_config.get("key"))
+    return params
+```
+
+---
+
+## 关键文件路径汇总
+
+| 类别 | 文件路径 |
+|------|----------|
+| 注册中心 | src/tools/registry.py |
+| 类型定义 | src/tools/types.py |
+| GIS核心 | src/tools/core/gis_core.py |
+| 空间分析 | src/tools/core/spatial_analysis.py |
+| 数据获取 | src/tools/core/gis_data_fetcher.py |
+| 工具包装 | src/tools/core/gis_tool_wrappers.py |
+| 等时圈 | src/tools/core/isochrone_analysis.py |
+| 高德API | src/tools/geocoding/amap/provider.py |
+| 天地图API | src/tools/geocoding/tianditu/provider.py |
+| POI接口 | src/tools/geocoding/poi_provider.py |
+| 内置工具 | src/tools/builtin/__init__.py |
+| 人口预测 | src/tools/builtin/population.py |
+| 维度节点 | src/orchestration/nodes/dimension_node.py |
 
 ---
 

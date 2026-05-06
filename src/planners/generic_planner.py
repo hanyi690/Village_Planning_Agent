@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage
@@ -19,6 +19,7 @@ from langchain_core.messages import HumanMessage
 from ..core.llm_factory import create_llm
 from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..core.langsmith_integration import get_langsmith_manager
+from ..core.message_builder import build_multimodal_message
 from ..utils.logger import get_logger
 from ..config.dimension_metadata import get_dimension_config, get_detailed_dimension_names
 
@@ -239,7 +240,7 @@ class GenericPlanner:
 
     def _invoke_llm(
         self,
-        prompt: str,
+        prompt: str | HumanMessage | List[HumanMessage],
         state: dict[str, Any],
         model: str | None = None,
         temperature: float = 0.7,
@@ -249,10 +250,10 @@ class GenericPlanner:
         on_token_callback: Callable[[str, str], None] | None = None
     ) -> str:
         """
-        调用LLM（支持流式和非流式）
+        调用LLM（支持流式和非流式，支持多模态）
 
         Args:
-            prompt: 完整的prompt
+            prompt: 完整的prompt（str、单个HumanMessage 或多模态消息列表）
             state: 当前状态（用于LangSmith metadata）
             model: 模型名称
             temperature: 温度参数
@@ -293,12 +294,22 @@ class GenericPlanner:
             callbacks=[callback_handler] if callback_handler else None
         )
 
+        # 构建 prompt 参数（支持 str、HumanMessage 或 List[HumanMessage])
+        prompt_arg: List[HumanMessage]
+        if isinstance(prompt, str):
+            prompt_arg = [HumanMessage(content=prompt)]
+        elif isinstance(prompt, HumanMessage):
+            prompt_arg = [prompt]
+        else:
+            # 已经是 List[HumanMessage]，直接使用
+            prompt_arg = prompt
+
         # 调用LLM（流式或阻塞）
         if streaming:
             accumulated = ""
             chunk_count = 0
             logger.info(f"[{self.dimension_name}] streaming LLM, callback={'set' if on_token_callback else 'none'}")
-            for chunk in llm.stream([HumanMessage(content=prompt)]):
+            for chunk in llm.stream(prompt_arg):
                 chunk_count += 1
                 if hasattr(chunk, 'content') and chunk.content:
                     accumulated += chunk.content
@@ -310,7 +321,7 @@ class GenericPlanner:
             logger.info(f"[{self.dimension_name}] streaming done, chunks={chunk_count}, len={len(accumulated)}")
             return accumulated
         else:
-            response = llm.invoke([HumanMessage(content=prompt)])
+            response = llm.invoke(prompt_arg)
             return response.content
 
     def _build_error_result(self, error_message: str) -> dict[str, Any]:
@@ -334,7 +345,8 @@ class GenericPlanner:
         original_result: str,
         revision_count: int = 0,
         streaming: bool = False,
-        on_token_callback: Callable[[str, str], None] | None = None
+        on_token_callback: Callable[[str, str], None] | None = None,
+        images: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
         基于反馈重新执行（用于人工审核流程）
@@ -346,6 +358,7 @@ class GenericPlanner:
             revision_count: 修改次数
             streaming: 是否启用流式输出（默认: False）
             on_token_callback: token回调函数，接收 (token, accumulated)
+            images: 图片列表（用于多模态修复）
 
         Returns:
             修改后的结果
@@ -358,9 +371,24 @@ class GenericPlanner:
             revision_count=revision_count
         )
 
+        # 构建多模态消息
+        llm_input: str | HumanMessage = revision_prompt
+        if images:
+            # Note: Currently only first image is processed
+            if len(images) > 1:
+                logger.warning(f"[{self.dimension_name}] {len(images)} images provided, only first will be used")
+            first_image = images[0]
+            llm_input = build_multimodal_message(
+                text_content=revision_prompt,
+                image_base64=first_image.get("image_base64"),
+                image_format=first_image.get("image_format", "jpeg"),
+                role="human"
+            )
+            logger.info(f"[{self.dimension_name}] revision with image")
+
         try:
             result = self._invoke_llm(
-                prompt=revision_prompt,
+                prompt=llm_input,
                 state=state,
                 enable_langsmith=True,
                 streaming=streaming,
@@ -544,6 +572,10 @@ def _clean_prompt_artifacts(content: str) -> str:
         """构建 Layer 3 的 Prompt（函数式）"""
         try:
             from ..subgraphs.detailed_plan_prompts import get_dimension_prompt
+            from datetime import datetime
+
+            # 生成当前日期
+            current_date = datetime.now().strftime("%Y年%m月")
 
             project_name = params.get("project_name", "村庄")
             filtered_analysis = params.get("filtered_analysis", "")
@@ -562,7 +594,8 @@ def _clean_prompt_artifacts(content: str) -> str:
                 planning_concept=filtered_concept,
                 constraints=constraints,
                 dimension_plans=params.get("dimension_plans", ""),
-                knowledge_context=knowledge_context
+                knowledge_context=knowledge_context,
+                current_date=current_date
             )
 
         except ImportError as e:

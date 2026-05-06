@@ -37,19 +37,12 @@ function UnifiedLayoutComponent({ taskId, children, onOpenLayerSidebar }: Unifie
   }, []);
 
   const handleNewTask = useCallback(() => {
-    // Step 1: Clear taskId from URL FIRST to prevent race condition
-    // useSessionRestore's useEffect may trigger before router.push updates the URL
-    const url = new URL(window.location.href);
-    if (url.searchParams.has('taskId')) {
-      url.searchParams.delete('taskId');
-      window.history.replaceState({}, '', url.toString());
-    }
-
-    // Step 2: Clear current session state
+    // Step 1: Clear current session state first
     actions.resetConversation();
 
-    // Step 3: Navigate to root to create new task
-    router.push('/');
+    // Step 2: Use router.replace to clear URL and navigate
+    // router.replace updates Next.js internal URL state so useSearchParams can detect changes immediately
+    router.replace('/', { scroll: false });
   }, [actions, router]);
 
   return (

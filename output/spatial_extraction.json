@@ -1,0 +1,566 @@
+{
+  "zones": [
+    {
+      "name": "村庄建设区",
+      "zone_type": "村庄建设区",
+      "percentage": 1.5,
+      "area_ha": null,
+      "description": "\n\n### 2.2 功能分区划定\n| 分区名称 | 主要范围 | 主导功能 | 用地占比预估 |\n| :--- | :--- | :--- | :--- |\n| **村庄建设区** | 园寨、马头段、"
+    },
+    {
+      "name": "农业生产区",
+      "zone_type": "农业生产区",
+      "percentage": 15.0,
+      "area_ha": null,
+      "description": " |\n| **农业生产区** | 河谷水田、缓坡园地及林下种植区 | 粮食生产、林下药材、特色种植 | "
+    },
+    {
+      "name": "生态保护区",
+      "zone_type": "生态保护区",
+      "percentage": 83.0,
+      "area_ha": null,
+      "description": " |\n| **生态保护区** | 生态林、地质灾害隐患区、水源保护地 | 生态涵养、灾害防治、水源保护 | "
+    },
+    {
+      "name": "生态绿地",
+      "zone_type": "生态绿地",
+      "percentage": 90.0,
+      "area_ha": null,
+      "description": "\n\n---\n\n## 生态绿地规划\n\n# 平远县泗水镇金田村生态绿地系统规划 (2026-2035)\n\n**规划编制日期**：2026 年 04 月  \n**规划期限**：2026 年—2035 年  "
+    },
+    {
+      "name": "产业用地",
+      "zone_type": "产业用地",
+      "percentage": null,
+      "area_ha": null,
+      "description": null
+    },
+    {
+      "name": "水域",
+      "zone_type": "水域",
+      "percentage": null,
+      "area_ha": null,
+      "description": null
+    },
+    {
+      "name": "农业用地",
+      "zone_type": "农业用地",
+      "percentage": null,
+      "area_ha": null,
+      "description": null
+    },
+    {
+      "name": "居住用地",
+      "zone_type": "居住用地",
+      "percentage": null,
+      "area_ha": null,
+      "description": null
+    }
+  ],
+  "facilities": [
+    {
+      "name": "村委会",
+      "facility_type": "村委会",
+      "status": "规划新建",
+      "location_hint": "园寨村村",
+      "description": null
+    },
+    {
+      "name": "广场",
+      "facility_type": "广场",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "公园",
+      "facility_type": "公园",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "小学",
+      "facility_type": "小学",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "候车亭",
+      "facility_type": "候车亭",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "停车场",
+      "facility_type": "停车场",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "垃圾收集点",
+      "facility_type": "垃圾收集点",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "村委会",
+      "facility_type": "村委会",
+      "status": "现状保留",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "卫生站",
+      "facility_type": "卫生站",
+      "status": "现状保留",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "村委会",
+      "facility_type": "村委会",
+      "status": "规划改扩建",
+      "location_hint": "园寨村",
+      "description": null
+    },
+    {
+      "name": "卫生站",
+      "facility_type": "卫生站",
+      "status": "规划改扩建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "超市",
+      "facility_type": "超市",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "小学",
+      "facility_type": "小学",
+      "status": "规划改扩建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "公交站",
+      "facility_type": "公交站",
+      "status": "现状保留",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "候车亭",
+      "facility_type": "候车亭",
+      "status": "现状保留",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "公交站",
+      "facility_type": "公交站",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "便民服务中心",
+      "facility_type": "便民服务中心",
+      "status": "规划改扩建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "便民服务中心",
+      "facility_type": "便民服务中心",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "幼儿园",
+      "facility_type": "幼儿园",
+      "status": "现状保留",
+      "location_hint": "园寨村",
+      "description": null
+    },
+    {
+      "name": "小学",
+      "facility_type": "小学",
+      "status": "现状保留",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "广场",
+      "facility_type": "广场",
+      "status": "规划改扩建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "公厕",
+      "facility_type": "公厕",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "消防站",
+      "facility_type": "消防站",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "文化站",
+      "facility_type": "文化站",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "广场",
+      "facility_type": "广场",
+      "status": "现状保留",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "幼儿园",
+      "facility_type": "幼儿园",
+      "status": "规划新建",
+      "location_hint": null,
+      "description": null
+    },
+    {
+      "name": "公厕",
+      "facility_type": "公厕",
+      "status": "规划改扩建",
+      "location_hint": null,
+      "description": null
+    }
+  ],
+  "axes": [
+    {
+      "name": "布局步道 主轴",
+      "axis_type": "主轴",
+      "path_hint": "布局步道",
+      "description": "、祠堂等节点，布局步道、观景台、民宿及餐饮设施，形成乡村旅游主轴。\n\n### 5.3 三区：产业功能分区\n1.  **林下经济示范区**：\n    -   **范围**：村域内坡度平缓、无地质灾害隐患"
+    },
+    {
+      "name": "Y122 发展主轴",
+      "axis_type": "发展主轴",
+      "path_hint": "Y122",
+      "description": "动轴）**：依托**Y122 乡道**，构建东西向交通与产业发展主轴，连接各自然村与对外交通节点。\n- **两带支撑（生态安全带）**：\n  - **金田河生态景观带**：沿金田河两岸进行河道修复与景"
+    },
+    {
+      "name": "景观轴线 景观轴线",
+      "axis_type": "景观轴线",
+      "path_hint": "景观轴线",
+      "description": ". 景观系统与村庄绿化\n\n### 4.1 景观结构\n- **景观轴线**：沿 Y122 乡道及金田河两岸打造主要景观视线廊道。\n- **景观节点**：\n  - **村口标识节点**：利用景石与乡土大树"
+    }
+  ],
+  "sensitivities": [
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "隐患点",
+      "sensitivity_level": "中敏感区",
+      "count": 40,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "隐患点",
+      "sensitivity_level": "中敏感区",
+      "count": 40,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "滑坡",
+      "sensitivity_level": "高敏感区",
+      "count": 35,
+      "description": null
+    },
+    {
+      "zone_type": "崩塌",
+      "sensitivity_level": "高敏感区",
+      "count": 5,
+      "description": null
+    },
+    {
+      "zone_type": "隐患点",
+      "sensitivity_level": "中敏感区",
+      "count": 40,
+      "description": null
+    },
+    {
+      "zone_type": "敏感区",
+      "sensitivity_level": "低敏感区",
+      "count": null,
+      "description": null
+    }
+  ],
+  "settlements": [
+    {
+      "name": "引导分散农户向中心村",
+      "settlement_type": "中心村",
+      "description": null
+    },
+    {
+      "name": "通过引导分散农户向中心村",
+      "settlement_type": "中心村",
+      "description": null
+    },
+    {
+      "name": "金田村",
+      "settlement_type": "中心村",
+      "description": null
+    },
+    {
+      "name": "新增宅基地优先安排在中心村及保留发展类村",
+      "settlement_type": "中心村",
+      "description": null
+    },
+    {
+      "name": "对搬迁撤并类村",
+      "settlement_type": "搬迁撤并类",
+      "description": null
+    }
+  ],
+  "raw_data": {
+    "report_length": 51563,
+    "zones_count": 8,
+    "facilities_count": 27,
+    "axes_count": 3,
+    "sensitivities_count": 43,
+    "settlements_count": 5
+  }
+}

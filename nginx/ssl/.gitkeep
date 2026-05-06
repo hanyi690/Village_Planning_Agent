@@ -1,0 +1,5 @@
+# This file ensures the ssl directory is tracked by git
+# SSL certificates should NOT be committed to the repository
+# Place your certificates here:
+#   - fullchain.pem (certificate chain)
+#   - privkey.pem (private key)

@@ -18,6 +18,7 @@ from backend.schemas import (
     StartPlanningRequest,
     ResumeRequest,
     SessionStatusResponse,
+    ImageData,
 )
 from backend.services import (
     PlanningRuntimeService,
@@ -80,6 +81,7 @@ async def start_planning(
         step_mode=request.step_mode,
         background_tasks=background_tasks,
         rate_limiter=limiter,
+        images=request.images,
     )
     return result
 

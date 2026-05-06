@@ -11,7 +11,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { ParsedSubsection } from '@/lib/layerReportParser';
 import MarkdownRenderer from '../MarkdownRenderer';
 import MapView from '@/components/gis/MapView';
-import type { GISData, GISAnalysisData } from '@/types/message/message-types';
+import type { GISData, GISAnalysisData, KnowledgeSource } from '@/types/message/message-types';
+import KnowledgeSliceCard from './KnowledgeSliceCard';
 
 // Metric card configuration for data-driven rendering
 const METRIC_CONFIG: Array<{
@@ -48,10 +49,10 @@ interface DimensionSectionProps {
   icon: string;
   subsections?: ParsedSubsection[];
   gisData?: GISData;
+  knowledgeSources?: KnowledgeSource[];
   defaultExpanded?: boolean;
   expanded?: boolean;
   onCopy?: () => void;
-  onExport?: () => void;
   onToggle?: (expanded: boolean) => void;
 }
 
@@ -61,10 +62,10 @@ function DimensionSection({
   icon,
   subsections = [],
   gisData,
+  knowledgeSources,
   defaultExpanded = false,
   expanded: controlledExpanded,
   onCopy,
-  onExport,
   onToggle,
 }: DimensionSectionProps) {
   const [internalExpanded, setInternalExpanded] = useState(defaultExpanded);
@@ -136,20 +137,6 @@ function DimensionSection({
                 <i className="fas fa-copy text-xs" />
               </motion.button>
             )}
-            {onExport && (
-              <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onExport();
-                }}
-                className="w-7 h-7 flex items-center justify-center text-gray-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors"
-                title="导出"
-              >
-                <i className="fas fa-download text-xs" />
-              </motion.button>
-            )}
           </div>
 
           {/* Chevron icon */}
@@ -193,18 +180,19 @@ function DimensionSection({
                   )}
 
                   {/* 建议 */}
-                  {gisData.analysisData?.recommendations && gisData.analysisData.recommendations.length > 0 && (
-                    <div className="text-sm text-gray-600">
-                      <div className="font-medium mb-2 text-emerald-700">建议</div>
-                      <ul className="list-disc list-inside space-y-1">
-                        {gisData.analysisData.recommendations.slice(0, 3).map((rec, i) => (
-                          <li key={i} className="text-gray-600">
-                            {rec}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
+                  {gisData.analysisData?.recommendations &&
+                    gisData.analysisData.recommendations.length > 0 && (
+                      <div className="text-sm text-gray-600">
+                        <div className="font-medium mb-2 text-emerald-700">建议</div>
+                        <ul className="list-disc list-inside space-y-1">
+                          {gisData.analysisData.recommendations.slice(0, 3).map((rec, i) => (
+                            <li key={i} className="text-gray-600">
+                              {rec}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
 
                   {/* GIS 地图 */}
                   {gisData.layers && gisData.layers.length > 0 && (
@@ -213,7 +201,7 @@ function DimensionSection({
                       <div className="mb-2 p-2 bg-blue-50 rounded-lg flex items-center gap-2">
                         <i className="fas fa-layer-group text-blue-500" />
                         <span className="text-sm text-gray-700">
-                          分析图层：{gisData.layers.map(l => l.layerName).join('、')}
+                          分析图层：{gisData.layers.map((l) => l.layerName).join('、')}
                         </span>
                       </div>
                       <MapView
@@ -247,6 +235,11 @@ function DimensionSection({
                 <div className="text-sm text-gray-600 leading-relaxed">
                   <MarkdownRenderer content={content} />
                 </div>
+              )}
+
+              {/* Knowledge Sources Card */}
+              {knowledgeSources && knowledgeSources.length > 0 && (
+                <KnowledgeSliceCard sources={knowledgeSources} />
               )}
             </div>
           </motion.div>

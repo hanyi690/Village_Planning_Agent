@@ -209,10 +209,11 @@ async def global_exception_handler(request, exc: Exception) -> JSONResponse:
 
 if __name__ == "__main__":
     import uvicorn
+    BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=BACKEND_PORT,
         reload=True,
         log_level="info"
     )

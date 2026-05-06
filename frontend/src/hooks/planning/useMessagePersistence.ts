@@ -20,9 +20,7 @@ import type {
   LayerCompletedMessage,
   FileMessage,
   ProgressMessage,
-  ToolCallMessage,
-  ToolProgressMessage,
-  ToolResultMessage,
+  ToolStatusMessage,
 } from '@/types';
 
 interface UseMessagePersistenceOptions {
@@ -69,6 +67,7 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       metadata.fullReportContent = layerMsg.fullReportContent;
       metadata.dimensionReports = layerMsg.dimensionReports;
       metadata.dimensionGisData = layerMsg.dimensionGisData;
+      metadata.dimensionKnowledgeSources = layerMsg.dimensionKnowledgeSources;
     } else if (msg.type === 'file') {
       const fileMsg = msg as FileMessage;
       metadata.filename = fileMsg.filename;
@@ -88,27 +87,20 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       metadata.progress = progressMsg.progress;
       metadata.currentLayer = progressMsg.currentLayer;
       metadata.taskId = progressMsg.taskId;
-    } else if (msg.type === 'tool_call') {
-      const toolMsg = msg as ToolCallMessage;
+    } else if (msg.type === 'tool_status') {
+      const toolMsg = msg as ToolStatusMessage;
       metadata.toolName = toolMsg.toolName;
       metadata.toolDisplayName = toolMsg.toolDisplayName;
       metadata.description = toolMsg.description;
-      metadata.estimatedTime = toolMsg.estimatedTime;
-      metadata.stage = toolMsg.stage;
-    } else if (msg.type === 'tool_progress') {
-      const toolMsg = msg as ToolProgressMessage;
-      metadata.toolName = toolMsg.toolName;
-      metadata.stage = toolMsg.stage;
-      metadata.progress = toolMsg.progress;
-      metadata.message = toolMsg.message;
-    } else if (msg.type === 'tool_result') {
-      const toolMsg = msg as ToolResultMessage;
-      metadata.toolName = toolMsg.toolName;
       metadata.status = toolMsg.status;
+      metadata.progress = toolMsg.progress;
+      metadata.stage = toolMsg.stage;
+      metadata.stageMessage = toolMsg.stageMessage;
       metadata.summary = toolMsg.summary;
-      metadata.displayHints = toolMsg.displayHints;
-      metadata.dataPreview = toolMsg.dataPreview;
-      metadata.stages = toolMsg.stages;
+      metadata.error = toolMsg.error;
+      metadata.startedAt = toolMsg.startedAt;
+      metadata.completedAt = toolMsg.completedAt;
+      metadata.estimatedTime = toolMsg.estimatedTime;
     }
 
     return metadata;

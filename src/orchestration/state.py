@@ -12,6 +12,25 @@ from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
 
+# ==========================================
+# 摘要类型定义 - 仅用于记忆和检索，不参与维度分析
+# ==========================================
+
+class DimensionSummary(TypedDict):
+    """维度摘要 - 仅用于记忆存储、检索索引和UI预览
+
+    注意：此摘要不替代完整报告。维度依赖分析仍使用 State.reports 的完整内容。
+    """
+    dimension_key: str          # 维度标识
+    dimension_name: str         # 维度名称
+    layer: int                  # 所属层级 (1-3)
+    summary: str                # 执行摘要（200字以内）
+    key_points: List[str]       # 关键要点（5-10条）
+    metrics: Dict[str, Any]     # 数据指标（量化数据，如面积、覆盖率等）
+    tags: List[str]             # 检索标签（便于关键词匹配）
+    created_at: str             # 创建时间（ISO格式）
+
+
 def merge_dicts(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
     """Merge two dicts for LangGraph concurrent updates.
 
@@ -19,6 +38,23 @@ def merge_dicts(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
     gis_analysis_results and planning_layers simultaneously.
     """
     return {**left, **right}
+
+
+def clearable_add(left: List[Dict], right: List[Dict]) -> List[Dict]:
+    """
+    可清空的累加 reducer，专为 SSE 事件设计。
+
+    规则：
+    - right 非空时：累加到 left（新事件入队）
+    - right 为空时：清空 left（发送完成信号）
+
+    这解决了 operator.add 无法清空已累加事件的问题。
+    当 emit_sse_events 发送完事件后返回空列表，此 reducer
+    会清空累积的旧事件，避免 Layer 2 执行时重发 Layer 1 的事件。
+    """
+    if not right:
+        return []
+    return left + right
 
 # 复用 dimension_metadata.py 的波次配置
 from ..config.dimension_metadata import (
@@ -121,6 +157,7 @@ class PlanningConfig(TypedDict):
     task_description: str
     constraints: str
     knowledge_cache: Dict[str, str]
+    # images 移至 UnifiedPlanningState 顶层，只在 Layer 1 使用
 
 
 class UnifiedPlanningState(TypedDict):
@@ -131,6 +168,10 @@ class UnifiedPlanningState(TypedDict):
     1. 单一 State 消灭双写问题
     2. Checkpoint 完整记录聊天+规划
     3. Send API 实现维度并行分发
+
+    字段用途区分：
+    - reports: 维度依赖传递、完整分析（原始生成）
+    - dimension_summaries: 记忆存储、检索索引、UI预览（Flash模型压缩）
     """
     # 核心驱动
     messages: Annotated[List[BaseMessage], add_messages]
@@ -140,15 +181,21 @@ class UnifiedPlanningState(TypedDict):
     project_name: str
     config: PlanningConfig
 
+    # 图片数据（多模态分析）- 仅 Layer 1 使用
+    images: List[Dict[str, Any]]
+
     # 执行进度
     phase: str
     current_wave: int
     reports: Dict[str, Dict[str, str]]
     completed_dimensions: Dict[str, List[str]]
 
+    # 维度摘要索引（仅用于记忆和检索，不参与分析）
+    dimension_summaries: Dict[str, DimensionSummary]
+
     # Send API 自动合并
     dimension_results: Annotated[List[Dict], operator.add]
-    sse_events: Annotated[List[Dict], operator.add]
+    sse_events: Annotated[List[Dict], clearable_add]
 
     # 交互控制
     pending_review: bool
@@ -175,7 +222,8 @@ def create_initial_state(
     project_name: str,
     village_data: str,
     task_description: str = "制定村庄总体规划方案",
-    constraints: str = "无特殊约束"
+    constraints: str = "无特殊约束",
+    images: Optional[List[Dict[str, Any]]] = None,
 ) -> UnifiedPlanningState:
     """创建初始规划状态"""
     return UnifiedPlanningState(
@@ -187,11 +235,14 @@ def create_initial_state(
         reports={"layer1": {}, "layer2": {}, "layer3": {}},
         config=PlanningConfig(
             village_data=village_data,
+            village_name=project_name,
             task_description=task_description,
             constraints=constraints,
-            knowledge_cache={}
+            knowledge_cache={},
         ),
+        images=images or [],  # 图片作为顶层属性，仅 Layer 1 使用
         completed_dimensions={"layer1": [], "layer2": [], "layer3": []},
+        dimension_summaries={},  # 维度摘要索引（层级完成后生成）
         dimension_results=[],
         sse_events=[],
         pending_review=False,
@@ -365,6 +416,7 @@ __all__ = [
     "PlanningPhase",
     "PlanningConfig",
     "UnifiedPlanningState",
+    "DimensionSummary",
     "create_initial_state",
     "_phase_to_layer",
     "_layer_to_phase",
@@ -378,4 +430,5 @@ __all__ = [
     "PHASE_DESCRIPTIONS",
     "state_to_ui_status",
     "merge_dicts",
+    "clearable_add",
 ]

@@ -17,6 +17,11 @@ from .loaders import (
     load_documents_from_directory,
     load_knowledge_base,
 )
+from .pdf_fallback import (
+    pdf_fallback_chain,
+    check_parsers,
+    get_parser_info,
+)
 
 __all__ = [
     "MarkdownLoader",
@@ -29,4 +34,8 @@ __all__ = [
     "MarkdownCleaner",
     "load_documents_from_directory",
     "load_knowledge_base",
+    # PDF Fallback
+    "pdf_fallback_chain",
+    "check_parsers",
+    "get_parser_info",
 ]

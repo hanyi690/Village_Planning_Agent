@@ -1,0 +1,97 @@
+{
+  "source": "金田村村庄规划工程文件",
+  "extracted_at": "2026-04-25T23:36:53.171822",
+  "coordinate_system": "EPSG:4326 (WGS84)",
+  "source_crs": "EPSG:4527 (CGCS2000 / 3-degree GK zone 7)",
+  "village": {
+    "name": "金田村委会",
+    "code": "441426108004",
+    "area_km2": 23.53
+  },
+  "files": {
+    "boundary_current.geojson": {
+      "source_gdb": "现状",
+      "source_layer": "JT_行政区划_PBL_20220925",
+      "records": 1,
+      "geometry_type": "MultiPolygon"
+    },
+    "road_current.geojson": {
+      "source_gdb": "现状",
+      "source_layer": "JT_农村居民点外道路_LJJ_202201004",
+      "records": 131,
+      "geometry_type": "MultiLineString"
+    },
+    "landuse_current.geojson": {
+      "source_gdb": "现状",
+      "source_layer": "JT_现状地类图斑_LJJ_20221018",
+      "records": 660,
+      "geometry_type": "MultiPolygon"
+    },
+    "admin_boundary_line.geojson": {
+      "source_gdb": "现状",
+      "source_layer": "PY_行政区划界线_LJJ_20220925",
+      "records": 561,
+      "geometry_type": "MultiLineString"
+    },
+    "annotation_current.geojson": {
+      "source_gdb": "现状",
+      "source_layer": "JT_现状注记_LJJ_20221216",
+      "records": 34,
+      "geometry_type": "Point"
+    },
+    "boundary.geojson": {
+      "source_gdb": "规划",
+      "source_layer": "JT_行政区划_PBL_20220925",
+      "records": 1,
+      "geometry_type": "MultiPolygon"
+    },
+    "landuse_planned.geojson": {
+      "source_gdb": "规划",
+      "source_layer": "JT_期末地类_LJJ_20221212",
+      "records": 582,
+      "geometry_type": "MultiPolygon"
+    },
+    "road_planned.geojson": {
+      "source_gdb": "规划",
+      "source_layer": "JT_农村居民点外道路_LJJ_20221108",
+      "records": 170,
+      "geometry_type": "MultiLineString"
+    },
+    "geological_hazard_points.geojson": {
+      "source_gdb": "规划",
+      "source_layer": "JT_地质灾害点_LJJ_20221212",
+      "records": 40,
+      "geometry_type": "Point"
+    },
+    "construction_zone.geojson": {
+      "source_gdb": "规划",
+      "source_layer": "JT_有条件建设区_LJJ_20221212",
+      "records": 139,
+      "geometry_type": "MultiPolygon"
+    },
+    "farmland_protection.geojson": {
+      "source_gdb": "规划",
+      "source_layer": "JT_永久基本农田保护红线_LJJ_20221212",
+      "records": 88,
+      "geometry_type": "MultiPolygon"
+    },
+    "historical_protection.geojson": {
+      "source_gdb": "规划",
+      "source_layer": "JT_历史文化保护线_LJJ_20221212",
+      "records": 3,
+      "geometry_type": "MultiPolygon"
+    },
+    "ecological_protection.geojson": {
+      "source_gdb": "规划",
+      "source_layer": "JT_生态保护红线_LJJ_20221212",
+      "records": 5,
+      "geometry_type": "MultiPolygon"
+    },
+    "annotation_planned.geojson": {
+      "source_gdb": "规划",
+      "source_layer": "JT_注记_LJJ_20221216",
+      "records": 71,
+      "geometry_type": "Point"
+    }
+  }
+}

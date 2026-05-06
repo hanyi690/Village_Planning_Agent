@@ -1,8 +1,4 @@
 # Docker Compose for Village Planning Agent
-# Usage: docker-compose up -d
-# For faster builds, use: DOCKER_BUILDKIT=1 docker-compose up -d
-
-version: '3.8'
 
 services:
   # ============================================
@@ -19,39 +15,35 @@ services:
     container_name: village-planning-backend
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "${BACKEND_PORT:-8000}:8000"
     environment:
       - ENVIRONMENT=production
       - USE_ASYNC_DATABASE=true
       # LLM Configuration
-      - ZHIPUAI_API_KEY=${ZHIPUAI_API_KEY}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_API_BASE=${OPENAI_API_BASE}
-      - LLM_MODEL=${LLM_MODEL:-deepseek-chat}
+      - LLM_MODEL=${LLM_MODEL:-qwen3.5-plus}
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8000}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - MAX_TOKENS=${MAX_TOKENS:-65536}
+      - MULTIMODAL_ENABLED=${MULTIMODAL_ENABLED:-true}
+      - OCR_MODEL_NAME=${OCR_MODEL_NAME:-qwen-vl-max}
+      # LLM Concurrency Control
+      - LLM_MAX_CONCURRENT=${LLM_MAX_CONCURRENT:-4}
+      - LLM_STREAM_TIMEOUT=${LLM_STREAM_TIMEOUT:-300}
+      # GIS API Keys
+      - TIANDITU_API_KEY=${TIANDITU_API_KEY}
+      - AMAP_API_KEY=${AMAP_API_KEY}
       # Embedding Model Configuration
-      # Provider: local (HuggingFace) 或 aliyun (阿里云 DashScope API)
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-aliyun}
-      - EMBEDDING_MODEL_NAME=${EMBEDDING_MODEL_NAME:-BAAI/bge-small-zh-v1.5}
-      - EMBEDDING_DEVICE=${EMBEDDING_DEVICE:-cpu}
-      # Aliyun DashScope Embedding API
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - ALIYUN_EMBEDDING_MODEL=${ALIYUN_EMBEDDING_MODEL:-text-embedding-v4}
-      # HuggingFace Configuration (仅 EMBEDDING_PROVIDER=local 时需要)
-      - HF_HOME=/app/models
-      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
-      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-}
-      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-}
+      - EMBEDDING_DIMENSIONS=${EMBEDDING_DIMENSIONS:-1024}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./results:/app/results
       - ./knowledge_base:/app/knowledge_base
-      # Models directory (仅 EMBEDDING_PROVIDER=local 时需要)
-      # 使用阿里云在线 Embedding 时可以注释掉此行
-      - ./models:/app/models
     # Resource limits (使用在线 API 后内存需求降低)
     # local embedding: 需要 4G 内存
     # aliyun embedding: 只需要 2G 内存
@@ -93,7 +85,7 @@ services:
     container_name: village-planning-frontend
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}

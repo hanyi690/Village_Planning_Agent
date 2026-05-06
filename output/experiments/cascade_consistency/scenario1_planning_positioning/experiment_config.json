@@ -1,0 +1,46 @@
+{
+  "session_id": "scenario1_1e74d58d_20260505161048",
+  "scenario_name": "scenario1",
+  "config": {
+    "name": "驳回规划定位（Layer 2）",
+    "target_dimension": "planning_positioning",
+    "target_layer": 2,
+    "feedback": "金田村常住人口仅500人，不具备承接大规模旅游的基础设施条件。\n千年古檀树、古茶亭遗址等核心历史资源应划定为绝对保护对象，剥离重度商业开发权。\n规划定位应转向生态保育优先、客家文化微改造的渐进式发展路径。",
+    "expected_impact": {
+      "total_downstream": 8,
+      "max_wave": 2,
+      "wave_distribution": {
+        "0": [
+          "planning_positioning"
+        ],
+        "1": [
+          "development_goals",
+          "planning_strategies",
+          "industry",
+          "spatial_structure",
+          "land_use_planning"
+        ],
+        "2": [
+          "project_bank"
+        ]
+      }
+    },
+    "keywords": {
+      "positive": [
+        "生态保育",
+        "渐进式发展",
+        "客家文化微改造",
+        "绝对保护",
+        "保护优先",
+        "微改造"
+      ],
+      "negative": [
+        "大规模旅游",
+        "商业开发",
+        "景区化",
+        "旅游开发"
+      ]
+    }
+  },
+  "created_at": "2026-05-05T16:10:48.501995"
+}

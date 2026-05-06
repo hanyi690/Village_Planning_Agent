@@ -6,23 +6,20 @@
  * 使用 Tailwind CSS + Framer Motion
  */
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ParsedDimension, parseLayerReport } from '@/lib/layerReportParser';
+import { ParsedDimension, parseLayerReport, getDimensionKey } from '@/lib/layerReportParser';
 import DimensionSection from './DimensionSection';
-import type { GISData } from '@/types/message/message-types';
-import { DIMENSION_NAMES } from '@/config/dimensions';
-
-// Build reverse mapping: name -> key
-const NAME_TO_KEY: Record<string, string> = Object.fromEntries(
-  Object.entries(DIMENSION_NAMES).map(([key, name]) => [name, key])
-);
+import type { GISData, KnowledgeSource } from '@/types/message/message-types';
+import { getDimensionName, getDimensionIcon, getDimensionsByLayer } from '@/config/dimensions';
 
 interface LayerReportCardProps {
   layerNumber: number;
   content: string;
   dimensions?: ParsedDimension[];
+  dimensionReports?: Record<string, string>; // ✅ 新增：直接使用 dimension_key
   dimensionGisData?: Record<string, GISData>;
+  dimensionKnowledgeSources?: Record<string, KnowledgeSource[]>;
   mode?: 'chat' | 'sidebar';
   defaultExpanded?: boolean;
   maxHeight?: string;
@@ -38,7 +35,9 @@ export default function LayerReportCard({
   layerNumber,
   content,
   dimensions: propDimensions,
+  dimensionReports,
   dimensionGisData,
+  dimensionKnowledgeSources,
   mode = 'sidebar',
   defaultExpanded,
   maxHeight,
@@ -50,20 +49,59 @@ export default function LayerReportCard({
   simplified = false,
 }: LayerReportCardProps) {
   const actualDefaultExpanded =
-    defaultExpanded ?? (simplified ? false : (mode === 'sidebar' || isActive || hasStreamingDimensions));
+    defaultExpanded ??
+    (simplified ? false : mode === 'sidebar' || isActive || hasStreamingDimensions);
   const actualMaxHeight = maxHeight ?? (mode === 'chat' ? '800px' : 'none');
   const actualShowExpandAll = showExpandAll ?? (mode === 'sidebar' && !simplified);
 
   const [allExpanded, setAllExpanded] = useState(false);
   const [localExpanded, setLocalExpanded] = useState(actualDefaultExpanded);
   const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
+  const prevDimensionKeys = useRef<string[]>([]);
+
+  // Sort dimensions by config order (defined before useMemo so it can be used inside)
+  const sortDimensionsByConfig = (dims: ParsedDimension[]): ParsedDimension[] => {
+    const order = getDimensionsByLayer(layerNumber);
+    return [...dims].sort((a, b) => {
+      const indexA = order.indexOf(a.key || '');
+      const indexB = order.indexOf(b.key || '');
+      // Dimensions not in config go last
+      if (indexA === -1) return 1;
+      if (indexB === -1) return -1;
+      return indexA - indexB;
+    });
+  };
 
   const dimensions = useMemo(() => {
+    let parsed: ParsedDimension[] = [];
+
+    // 1. 优先使用 propDimensions（如果带 key）
     if (propDimensions && propDimensions.length > 0) {
-      return propDimensions;
+      parsed = propDimensions;
     }
-    return parseLayerReport(content);
-  }, [content, propDimensions]);
+    // 2. 从 dimensionReports 构建（使用 dimension_key）
+    else if (dimensionReports) {
+      const entries = Object.entries(dimensionReports);
+      if (entries.length > 0) {
+        parsed = entries
+          .filter(([, content]) => content && content.length > 0)
+          .map(([key, content]) => ({
+            key,
+            name: getDimensionName(key),
+            content,
+            subsections: [],
+            icon: getDimensionIcon(key),
+          }));
+      }
+    }
+    // 3. 回退：解析 markdown（旧数据兼容）
+    else {
+      parsed = parseLayerReport(content);
+    }
+
+    // Sort by config order
+    return sortDimensionsByConfig(parsed);
+  }, [content, propDimensions, dimensionReports, layerNumber]);
 
   // 🔧 计算实际字符数（从 dimensions 内容计算，而非使用 content.length）
   const actualCharCount = useMemo(() => {
@@ -72,33 +110,38 @@ export default function LayerReportCard({
 
   // Initialize expandedMap when dimensions change
   useEffect(() => {
-    if (dimensions.length > 0) {
-      setExpandedMap((prev) => {
-        // Only initialize if empty or new dimensions added
-        if (Object.keys(prev).length === 0) {
-          const initial: Record<string, boolean> = {};
-          dimensions.forEach((dim) => {
-            initial[dim.name] = actualDefaultExpanded;
-          });
-          return initial;
-        }
-        // Add new dimensions with default value
-        const updated = { ...prev };
-        dimensions.forEach((dim) => {
-          if (!(dim.name in updated)) {
-            updated[dim.name] = actualDefaultExpanded;
-          }
-        });
-        return updated;
-      });
+    if (dimensions.length === 0) return;
+
+    const currentKeys = dimensions.map(getDimensionKey);
+    const prevKeysStr = prevDimensionKeys.current.join(',');
+    const currentKeysStr = currentKeys.join(',');
+
+    // Skip if keys haven't changed (avoid unnecessary re-runs)
+    if (prevKeysStr === currentKeysStr && expandedMap[currentKeys[0]] !== undefined) {
+      return;
     }
-  }, [dimensions, actualDefaultExpanded]);
+    prevDimensionKeys.current = currentKeys;
+
+    setExpandedMap((prev) => {
+      const updated = { ...prev };
+      currentKeys.forEach((key) => {
+        if (!(key in updated)) {
+          updated[key] = actualDefaultExpanded;
+        }
+      });
+      return updated;
+    });
+
+    // Derive allExpanded after state update (outside setter)
+    const allDimsExpanded = currentKeys.every((_key) => actualDefaultExpanded);
+    setAllExpanded(allDimsExpanded);
+  }, [dimensions, actualDefaultExpanded, expandedMap]);
 
   // Handle toggle all dimensions
   const handleToggleAll = (expand: boolean) => {
     const newMap: Record<string, boolean> = {};
     dimensions.forEach((dim) => {
-      newMap[dim.name] = expand;
+      newMap[getDimensionKey(dim)] = expand;
     });
     setExpandedMap(newMap);
     setAllExpanded(expand);
@@ -106,19 +149,17 @@ export default function LayerReportCard({
   };
 
   // Handle single dimension toggle
-  const handleDimensionToggle = (dimensionName: string, expanded: boolean) => {
-    setExpandedMap((prev) => {
-      const newMap = {
-        ...prev,
-        [dimensionName]: expanded,
-      };
-      // Update allExpanded state based on new state
-      const allDimsExpanded = dimensions.every(
-        (dim) => newMap[dim.name] ?? actualDefaultExpanded
-      );
-      setAllExpanded(allDimsExpanded);
-      return newMap;
+  const handleDimensionToggle = (dimensionKey: string, expanded: boolean) => {
+    setExpandedMap((prev) => ({
+      ...prev,
+      [dimensionKey]: expanded,
+    }));
+    // Derive allExpanded outside the setter
+    const allDimsExpanded = dimensions.every((dim) => {
+      const key = getDimensionKey(dim);
+      return key === dimensionKey ? expanded : (expandedMap[key] ?? actualDefaultExpanded);
     });
+    setAllExpanded(allDimsExpanded);
   };
 
   const handleCopyDimension = (dimensionName: string, dimensionContent: string) => {
@@ -126,14 +167,19 @@ export default function LayerReportCard({
     navigator.clipboard.writeText(textToCopy);
   };
 
-  const handleExportDimension = (dimensionName: string, dimensionContent: string) => {
-    const blob = new Blob([`## ${dimensionName}\n\n${dimensionContent}`], {
-      type: 'text/markdown',
-    });
+  const handleExportFullReport = () => {
+    // dimensions are already sorted by config order
+    const fullContent = dimensions
+      .map((dim) => `## ${dim.name}\n\n${dim.content}`)
+      .join('\n\n---\n\n');
+
+    const header = `# Layer ${layerNumber} 规划报告\n\n共 ${dimensions.length} 个维度 · ${actualCharCount} 字\n\n---\n\n`;
+
+    const blob = new Blob([header + fullContent], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `layer${layerNumber}_${dimensionName}.md`;
+    a.download = `layer${layerNumber}_完整报告.md`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -211,22 +257,38 @@ export default function LayerReportCard({
               <p className="text-sm text-gray-500 mt-1">
                 {dimensions.length} 个维度 · {actualCharCount} 字
               </p>
-              {/* Chat mode expand/collapse toggle button */}
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => handleToggleAll(!allExpanded)}
-                className={allExpanded
-                  ? "flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg"
-                  : "flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white rounded-lg shadow-sm"
-                }
-                style={!allExpanded ? {
-                  background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
-                } : undefined}
-              >
-                <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
-                {allExpanded ? '折叠全部' : '展开全部'}
-              </motion.button>
+              {/* Chat mode action buttons */}
+              <div className="flex gap-2 mt-2">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => handleToggleAll(!allExpanded)}
+                  className={
+                    allExpanded
+                      ? 'flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg'
+                      : 'flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white rounded-lg shadow-sm'
+                  }
+                  style={
+                    !allExpanded
+                      ? {
+                          background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+                        }
+                      : undefined
+                  }
+                >
+                  <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
+                  {allExpanded ? '折叠全部' : '展开全部'}
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={handleExportFullReport}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50"
+                >
+                  <i className="fas fa-download" />
+                  下载完整报告
+                </motion.button>
+              </div>
             </div>
           ) : (
             <div className="flex justify-between items-center mb-5 pb-4 border-b border-cyan-200/50">
@@ -241,24 +303,40 @@ export default function LayerReportCard({
               </div>
 
               {/* Action buttons - Sidebar only */}
-              {actualShowExpandAll && (
+              <div className="flex gap-2">
+                {actualShowExpandAll && (
+                  <motion.button
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => handleToggleAll(!allExpanded)}
+                    className={
+                      allExpanded
+                        ? 'flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors'
+                        : 'flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md'
+                    }
+                    style={
+                      !allExpanded
+                        ? {
+                            background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
+                            boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
+                          }
+                        : undefined
+                    }
+                  >
+                    <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
+                    {allExpanded ? '折叠全部' : '展开全部'}
+                  </motion.button>
+                )}
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={() => handleToggleAll(!allExpanded)}
-                  className={allExpanded
-                    ? "flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50 transition-colors"
-                    : "flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-lg shadow-md"
-                  }
-                  style={!allExpanded ? {
-                    background: 'linear-gradient(135deg, #0891B2 0%, #06B6D4 100%)',
-                    boxShadow: '0 4px 12px rgba(8, 145, 178, 0.3)',
-                  } : undefined}
+                  onClick={handleExportFullReport}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-cyan-600 bg-white border border-cyan-200 rounded-lg hover:bg-cyan-50"
                 >
-                  <i className={`fas ${allExpanded ? 'fa-compress-alt' : 'fa-expand-alt'}`} />
-                  {allExpanded ? '折叠全部' : '展开全部'}
+                  <i className="fas fa-download" />
+                  下载完整报告
                 </motion.button>
-              )}
+              </div>
             </div>
           )}
         </>
@@ -267,21 +345,25 @@ export default function LayerReportCard({
       {/* Dimension sections */}
       <div className="space-y-3">
         {dimensions.map((dimension, index) => {
-          const dimensionKey = NAME_TO_KEY[dimension.name];
+          const dimensionKey = dimension.key;
           const gisData = dimensionKey ? dimensionGisData?.[dimensionKey] : undefined;
+          const knowledgeSources = dimensionKey
+            ? dimensionKnowledgeSources?.[dimensionKey]
+            : undefined;
+          const expandedKey = getDimensionKey(dimension);
 
           return (
             <DimensionSection
-              key={index}
+              key={dimensionKey || index}
               name={dimension.name}
               content={dimension.content}
               icon={dimension.icon}
               subsections={dimension.subsections}
               gisData={gisData}
-              expanded={expandedMap[dimension.name] ?? actualDefaultExpanded}
-              onToggle={(expanded) => handleDimensionToggle(dimension.name, expanded)}
+              knowledgeSources={knowledgeSources}
+              expanded={expandedMap[expandedKey] ?? actualDefaultExpanded}
+              onToggle={(expanded) => handleDimensionToggle(expandedKey, expanded)}
               onCopy={() => handleCopyDimension(dimension.name, dimension.content)}
-              onExport={() => handleExportDimension(dimension.name, dimension.content)}
             />
           );
         })}

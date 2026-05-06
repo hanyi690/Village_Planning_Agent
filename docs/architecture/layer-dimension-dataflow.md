@@ -50,14 +50,14 @@
 
 ### Layer 2: 规划思路
 
-4个维度，存在依赖关系，按 Wave 执行:
+4个维度，存在依赖关系，按 Wave 执行：
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Layer 2: 规划思路                          │
 ├─────────────────────────────────────────────────────────────────┤
 │ Wave 1:                                                          │
-│   resource_endowment    │ 资源禀赋分析 (依赖多个 Layer 1 维度)    │
+│   resource_endowment    │ 资源禀赋分析 (无同层依赖)              │
 │                        │                                          │
 │ Wave 2:                                                          │
 │   planning_positioning  │ 规划定位分析 (依赖 resource_endowment)  │
@@ -65,10 +65,19 @@
 │ Wave 3:                                                          │
 │   development_goals     │ 发展目标分析 (依赖 resource_endowment,  │
 │                        │                   planning_positioning)   │
+│                        │                                          │
+│ Wave 4:                                                          │
 │   planning_strategies   │ 规划策略分析 (依赖前3个维度)            │
 └─────────────────────────────────────────────────────────────────┘
           ↓ (全部完成后进入 Layer 3)
 ```
+
+| Wave | 维度 | 依赖关系 |
+|------|------|----------|
+| Wave 1 | resource_endowment | 无同层依赖 |
+| Wave 2 | planning_positioning | 依赖 resource_endowment |
+| Wave 3 | development_goals | 依赖 resource_endowment, planning_positioning |
+| Wave 4 | planning_strategies | 依赖前3个维度 |
 
 ### Layer 3: 详细规划
 
@@ -509,94 +518,245 @@ async def revision_node(state: UnifiedPlanningState) -> Dict[str, Any]:
 
 ---
 
+## 详细跨层依赖关系
+
+### Layer 2 维度依赖 Layer 1 详情
+
+每个 Layer 2 维度依赖特定的 Layer 1 分析结果：
+
+| Layer 2 维度 | 依赖的 Layer 1 维度 | 说明 |
+|-------------|-------------------|------|
+| **resource_endowment** | natural_environment, land_use, socio_economic, historical_culture, architecture, public_services | 综合分析村庄资源，需要自然环境、土地、社会经济、历史文化、建筑、公服等现状数据 |
+| **planning_positioning** | location, socio_economic, superior_planning | 确定发展定位需要区位、社会经济、上位规划信息 |
+| **development_goals** | socio_economic, superior_planning | 制定目标依赖社会经济数据和上位规划要求 |
+| **planning_strategies** | traffic, infrastructure | 规划策略需要道路交通和基础设施分析支撑 |
+
+### Layer 2 同层依赖详情
+
+| Layer 2 维度 | 同层依赖 | Wave |
+|-------------|---------|------|
+| **resource_endowment** | 无 | 1 |
+| **planning_positioning** | resource_endowment | 2 |
+| **development_goals** | resource_endowment, planning_positioning | 3 |
+| **planning_strategies** | resource_endowment, planning_positioning, development_goals | 4 |
+
+```
+依赖链：
+natural_environment ─┐
+land_use ─┤
+socio_economic ─┤──────────► resource_endowment (Wave 1)
+historical_culture ─┤              │
+architecture ─┤                    ↓
+public_services ─┘        planning_positioning (Wave 2)
+                                  │
+location ─────────────────────────┤
+socio_economic ───────────────────┤
+superior_planning ────────────────┤
+                                  ↓
+                          development_goals (Wave 3)
+                                  │
+traffic ──────────────────────────┤
+infrastructure ───────────────────┤
+                                  ↓
+                          planning_strategies (Wave 4)
+```
+
+---
+
+### Layer 3 维度依赖详情
+
+每个 Layer 3 维度依赖特定的 Layer 1 和 Layer 2 结果：
+
+| Layer 3 维度 | Layer 1 依赖 | Layer 2 依赖 | Wave |
+|-------------|-------------|-------------|------|
+| **industry** | socio_economic, land_use | resource_endowment, planning_positioning, planning_strategies | 1 |
+| **spatial_structure** | natural_environment, land_use, traffic, architecture | planning_positioning, planning_strategies | 1 |
+| **land_use_planning** | land_use, natural_environment | planning_positioning, planning_strategies | 1 |
+| **settlement_planning** | architecture, infrastructure, land_use | planning_strategies | 1 |
+| **traffic_planning** | traffic, land_use | planning_strategies | 1 |
+| **public_service** | public_services, socio_economic | planning_strategies | 1 |
+| **infrastructure_planning** | infrastructure, natural_environment | planning_strategies | 1 |
+| **ecological** | natural_environment, ecological_green, land_use | planning_strategies | 1 |
+| **disaster_prevention** | natural_environment, infrastructure | planning_strategies | 1 |
+| **heritage** | historical_culture, architecture | planning_strategies | 1 |
+| **landscape** | architecture, historical_culture, ecological_green | planning_strategies | 1 |
+| **project_bank** | 无跨层依赖 | 无跨层依赖 | 2（依赖上述11个） |
+
+### Layer 3 同层依赖
+
+只有 **project_bank** 依赖其他 Layer 3 维度：
+
+```python
+"project_bank": {
+    "dependencies": {
+        "layer3_plans": [
+            "industry",
+            "spatial_structure",
+            "land_use_planning",
+            "settlement_planning",
+            "traffic_planning",
+            "public_service",
+            "infrastructure_planning",
+            "ecological",
+            "disaster_prevention",
+            "heritage",
+            "landscape"
+        ]
+    }
+}
+```
+
+### Layer 3 依赖来源分析
+
+统计各 Layer 1 维度被 Layer 3 引用的次数：
+
+| Layer 1 维度 | 被 Layer 3 引用次数 | 引用的 Layer 3 维度 |
+|-------------|-------------------|-------------------|
+| natural_environment | 5 | spatial_structure, land_use_planning, infrastructure_planning, ecological, disaster_prevention |
+| land_use | 4 | industry, spatial_structure, land_use_planning, settlement_planning, traffic_planning |
+| socio_economic | 2 | industry, public_service |
+| architecture | 4 | spatial_structure, settlement_planning, heritage, landscape |
+| traffic | 2 | spatial_structure, traffic_planning |
+| infrastructure | 3 | settlement_planning, infrastructure_planning, disaster_prevention |
+| public_services | 1 | public_service |
+| ecological_green | 2 | ecological, landscape |
+| historical_culture | 2 | heritage, landscape |
+
+---
+
 ## 依赖关系图
 
-### 跨层依赖关系
+### 完整三层依赖关系图
 
 ```mermaid
 graph TB
-    subgraph Layer1["Layer 1: 现状分析"]
-        L1_1[location]
-        L1_2[socio_economic]
-        L1_3[natural_environment]
-        L1_4[land_use]
-        L1_5[traffic]
-        L1_6[public_services]
-        L1_7[infrastructure]
-        L1_8[ecological_green]
-        L1_9[architecture]
-        L1_10[historical_culture]
-        L1_11[villager_wishes]
-        L1_12[superior_planning]
+    subgraph Layer1["Layer 1: 现状分析 (12维度并行)"]
+        L1_loc[location<br/>区位交通]
+        L1_se[socio_economic<br/>社会经济]
+        L1_vw[villager_wishes<br/>村民诉求]
+        L1_sp[superior_planning<br/>上位规划]
+        L1_ne[natural_environment<br/>自然环境]
+        L1_lu[land_use<br/>土地利用]
+        L1_tr[traffic<br/>道路交通]
+        L1_ps[public_services<br/>公共服务]
+        L1_if[infrastructure<br/>基础设施]
+        L1_eg[ecological_green<br/>生态绿地]
+        L1_ar[architecture<br/>建筑]
+        L1_hc[historical_culture<br/>历史文化]
     end
 
-    subgraph Layer2["Layer 2: 规划思路"]
-        L2_1[resource_endowment]
-        L2_2[planning_positioning]
-        L2_3[development_goals]
-        L2_4[planning_strategies]
+    subgraph Layer2["Layer 2: 规划思路 (4波次)"]
+        L2_re[resource_endowment<br/>资源禀赋<br/>Wave 1]
+        L2_pp[planning_positioning<br/>规划定位<br/>Wave 2]
+        L2_dg[development_goals<br/>发展目标<br/>Wave 3]
+        L2_pst[planning_strategies<br/>规划策略<br/>Wave 4]
     end
 
-    subgraph Layer3["Layer 3: 详细规划"]
-        L3_1[industry]
-        L3_2[spatial_structure]
-        L3_3[land_use_planning]
-        L3_4[traffic_planning]
-        L3_5[public_service]
-        L3_6[ecological]
-        L3_7[disaster_prevention]
-        L3_8[heritage]
-        L3_9[landscape]
-        L3_10[settlement_planning]
-        L3_11[infrastructure_planning]
-        L3_12[project_bank]
+    subgraph Layer3["Layer 3: 详细规划 (2波次)"]
+        L3_ind[industry<br/>产业规划]
+        L3_ss[spatial_structure<br/>空间结构]
+        L3_lup[land_use_planning<br/>土地利用规划]
+        L3_set[settlement_planning<br/>居民点规划]
+        L3_trp[traffic_planning<br/>道路交通规划]
+        L3_pub[public_service<br/>公共服务规划]
+        L3_ifp[infrastructure_planning<br/>基础设施规划]
+        L3_eco[ecological<br/>生态绿地规划]
+        L3_dp[disaster_prevention<br/>防震减灾]
+        L3_her[heritage<br/>历史文保]
+        L3_lsc[landscape<br/>村庄风貌]
+        L3_pb[project_bank<br/>项目库<br/>Wave 2]
     end
 
-    %% Layer 1 -> Layer 2 依赖
-    L1_3 --> L2_1
-    L1_4 --> L2_1
-    L1_2 --> L2_1
-    L1_10 --> L2_1
-    L1_9 --> L2_1
-    L1_6 --> L2_1
+    %% Layer 1 -> Layer 2 详细依赖
+    L1_ne --> L2_re
+    L1_lu --> L2_re
+    L1_se --> L2_re
+    L1_hc --> L2_re
+    L1_ar --> L2_re
+    L1_ps --> L2_re
 
-    L1_1 --> L2_2
-    L1_2 --> L2_2
-    L1_12 --> L2_2
-    L2_1 --> L2_2
+    L1_loc --> L2_pp
+    L1_se --> L2_pp
+    L1_sp --> L2_pp
+    L2_re --> L2_pp
 
-    L1_2 --> L2_3
-    L1_12 --> L2_3
-    L2_1 --> L2_3
-    L2_2 --> L2_3
+    L1_se --> L2_dg
+    L1_sp --> L2_dg
+    L2_re --> L2_dg
+    L2_pp --> L2_dg
 
-    L2_1 --> L2_4
-    L2_2 --> L2_4
-    L2_3 --> L2_4
+    L1_tr --> L2_pst
+    L1_if --> L2_pst
+    L2_re --> L2_pst
+    L2_pp --> L2_pst
+    L2_dg --> L2_pst
 
-    %% Layer 2 -> Layer 3 依赖 (部分示例)
-    L2_1 --> L3_1
-    L2_2 --> L3_1
-    L2_4 --> L3_1
+    %% Layer 1+2 -> Layer 3 详细依赖
+    L1_se --> L3_ind
+    L1_lu --> L3_ind
+    L2_re --> L3_ind
+    L2_pp --> L3_ind
+    L2_pst --> L3_ind
 
-    L2_2 --> L3_2
-    L2_4 --> L3_2
+    L1_ne --> L3_ss
+    L1_lu --> L3_ss
+    L1_tr --> L3_ss
+    L1_ar --> L3_ss
+    L2_pp --> L3_ss
+    L2_pst --> L3_ss
 
-    L2_2 --> L3_3
-    L2_4 --> L3_3
+    L1_lu --> L3_lup
+    L1_ne --> L3_lup
+    L2_pp --> L3_lup
+    L2_pst --> L3_lup
 
-    %% Layer 3 同层依赖
-    L3_1 --> L3_12
-    L3_2 --> L3_12
-    L3_3 --> L3_12
-    L3_4 --> L3_12
-    L3_5 --> L3_12
-    L3_6 --> L3_12
-    L3_7 --> L3_12
-    L3_8 --> L3_12
-    L3_9 --> L3_12
-    L3_10 --> L3_12
-    L3_11 --> L3_12
+    L1_ar --> L3_set
+    L1_if --> L3_set
+    L1_lu --> L3_set
+    L2_pst --> L3_set
+
+    L1_tr --> L3_trp
+    L1_lu --> L3_trp
+    L2_pst --> L3_trp
+
+    L1_ps --> L3_pub
+    L1_se --> L3_pub
+    L2_pst --> L3_pub
+
+    L1_if --> L3_ifp
+    L1_ne --> L3_ifp
+    L2_pst --> L3_ifp
+
+    L1_ne --> L3_eco
+    L1_eg --> L3_eco
+    L1_lu --> L3_eco
+    L2_pst --> L3_eco
+
+    L1_ne --> L3_dp
+    L1_if --> L3_dp
+    L2_pst --> L3_dp
+
+    L1_hc --> L3_her
+    L1_ar --> L3_her
+    L2_pst --> L3_her
+
+    L1_ar --> L3_lsc
+    L1_hc --> L3_lsc
+    L1_eg --> L3_lsc
+    L2_pst --> L3_lsc
+
+    %% Layer 3 同层依赖 - project_bank
+    L3_ind --> L3_pb
+    L3_ss --> L3_pb
+    L3_lup --> L3_pb
+    L3_set --> L3_pb
+    L3_trp --> L3_pb
+    L3_pub --> L3_pb
+    L3_ifp --> L3_pb
+    L3_eco --> L3_pb
+    L3_dp --> L3_pb
+    L3_her --> L3_pb
+    L3_lsc --> L3_pb
 ```
 
 ### Layer 2 波次执行图
@@ -604,39 +764,184 @@ graph TB
 ```mermaid
 graph LR
     subgraph Wave1["Wave 1"]
-        W1_1[resource_endowment]
+        W1_1[resource_endowment<br/>依赖6个L1维度]
     end
 
     subgraph Wave2["Wave 2"]
-        W2_1[planning_positioning]
+        W2_1[planning_positioning<br/>依赖L1+resource_endowment]
     end
 
     subgraph Wave3["Wave 3"]
-        W3_1[development_goals]
-        W3_2[planning_strategies]
+        W3_1[development_goals<br/>依赖L1+前2个L2]
+    end
+
+    subgraph Wave4["Wave 4"]
+        W4_1[planning_strategies<br/>依赖L1+前3个L2]
     end
 
     W1_1 --> W2_1
     W1_1 --> W3_1
     W2_1 --> W3_1
-    W1_1 --> W3_2
-    W2_1 --> W3_2
-    W3_1 --> W3_2
+    W1_1 --> W4_1
+    W2_1 --> W4_1
+    W3_1 --> W4_1
+```
+
+### Layer 3 波次执行图
+
+```mermaid
+graph TB
+    subgraph Wave1["Wave 1 (11维度并行)"]
+        W1_1[industry]
+        W1_2[spatial_structure]
+        W1_3[land_use_planning]
+        W1_4[settlement_planning]
+        W1_5[traffic_planning]
+        W1_6[public_service]
+        W1_7[infrastructure_planning]
+        W1_8[ecological]
+        W1_9[disaster_prevention]
+        W1_10[heritage]
+        W1_11[landscape]
+    end
+
+    subgraph Wave2["Wave 2"]
+        W2_1[project_bank<br/>依赖上述11个]
+    end
+
+    W1_1 --> W2_1
+    W1_2 --> W2_1
+    W1_3 --> W2_1
+    W1_4 --> W2_1
+    W1_5 --> W2_1
+    W1_6 --> W2_1
+    W1_7 --> W2_1
+    W1_8 --> W2_1
+    W1_9 --> W2_1
+    W1_10 --> W2_1
+    W1_11 --> W2_1
 ```
 
 ---
 
-## 关键代码路径
+## 影响树示例
+
+当修改某维度时，需要级联更新所有下游维度。以下是典型维度的影响树：
+
+### natural_environment 修改的影响树
+
+```python
+# 修改 natural_environment 会触发以下级联更新
+get_impact_tree("natural_environment") = {
+    1: ["resource_endowment", "spatial_structure", "land_use_planning",
+        "infrastructure_planning", "ecological", "disaster_prevention"],
+    2: ["planning_positioning", "planning_strategies"],
+    3: ["development_goals", "project_bank"]
+}
+```
+
+**影响分析**：
+- Wave 1: 6个维度直接依赖 natural_environment
+- Wave 2: planning_positioning（通过 resource_endowment）和 planning_strategies
+- Wave 3: development_goals 和 project_bank
+
+### socio_economic 修改的影响树
+
+```python
+get_impact_tree("socio_economic") = {
+    1: ["resource_endowment", "planning_positioning", "development_goals",
+        "industry", "public_service"],
+    2: ["planning_strategies", "project_bank"],
+    3: ["project_bank"]  # 通过 industry/public_service
+}
+```
+
+**影响分析**：
+- Wave 1: 5个维度直接依赖 socio_economic
+- Wave 2: planning_strategies（通过前序 L2 维度）
+- Wave 3: project_bank
+
+### planning_strategies 修改的影响树
+
+```python
+get_impact_tree("planning_strategies") = {
+    1: ["industry", "spatial_structure", "land_use_planning", "settlement_planning",
+        "traffic_planning", "public_service", "infrastructure_planning",
+        "ecological", "disaster_prevention", "heritage", "landscape"],
+    2: ["project_bank"]
+}
+```
+
+**影响分析**：
+- Wave 1: 11个 Layer 3 维度全部依赖 planning_strategies
+- Wave 2: project_bank 依赖上述所有维度
+
+---
+
+## 关键文件路径
 
 | 功能 | 文件路径 | 关键函数 |
 |------|----------|----------|
-| 维度元数据 | `src/config/dimension_metadata.py` | `DIMENSIONS_METADATA` |
-| 完整依赖链 | `src/config/dimension_metadata.py` | `get_full_dependency_chain` |
-| Wave 计算 | `src/config/dimension_metadata.py` | `_calculate_wave` |
-| 影响树 | `src/config/dimension_metadata.py` | `get_impact_tree` |
-| 下游依赖 | `src/config/dimension_metadata.py` | `get_downstream_dependencies` |
+| 维度元数据定义 | `src/config/dimension_metadata.py` | `DIMENSIONS_METADATA` |
+| 完整依赖链计算 | `src/config/dimension_metadata.py` | `get_full_dependency_chain` |
+| Wave拓扑排序 | `src/config/dimension_metadata.py` | `_calculate_wave` |
+| 影响树计算 | `src/config/dimension_metadata.py` | `get_impact_tree` |
+| 修订波次维度 | `src/config/dimension_metadata.py` | `get_revision_wave_dimensions` |
+| 下游依赖查询 | `src/config/dimension_metadata.py` | `get_downstream_dependencies` |
+| 层级维度列表 | `src/config/dimension_metadata.py` | `get_layer_dimensions` |
+| 波次维度列表 | `src/config/dimension_metadata.py` | `get_dimensions_by_wave` |
 | 维度状态创建 | `src/orchestration/nodes/dimension_node.py` | `create_dimension_state` |
-| 层级维度获取 | `src/orchestration/state.py` | `get_layer_dimensions`, `get_wave_dimensions` |
+| 状态定义 | `src/orchestration/state.py` | `UnifiedPlanningState` |
+| 规划路由 | `src/orchestration/routing.py` | `route_by_phase` |
+| 修订节点 | `src/orchestration/nodes/revision_node.py` | `revision_node` |
+| 报告筛选辅助 | `src/config/dimension_metadata.py` | `filter_reports_by_dependency` |
+
+---
+
+## 28维度完整配置参考
+
+### Layer 1 完整配置
+
+| 维度键 | 名称 | 工具 | RAG | 依赖 |
+|--------|------|------|-----|------|
+| location | 区位与对外交通分析 | - | ✓ | [] |
+| socio_economic | 社会经济分析 | population_model_v1 | ✓ | [] |
+| villager_wishes | 村民意愿与诉求分析 | - | ✓ | [] |
+| superior_planning | 上位规划与政策导向分析 | - | ✓ | [] |
+| natural_environment | 自然环境分析 | wfs_data_fetch | ✓ | [] |
+| land_use | 土地利用分析 | gis_coverage_calculator | ✓ | [] |
+| traffic | 道路交通分析 | accessibility_analysis | ✓ | [] |
+| public_services | 公共服务设施分析 | poi_search | ✓ | [] |
+| infrastructure | 基础设施分析 | - | ✓ | [] |
+| ecological_green | 生态绿地分析 | - | ✓ | [] |
+| architecture | 建筑分析 | - | ✓ | [] |
+| historical_culture | 历史文化与乡愁保护分析 | - | ✓ | [] |
+
+### Layer 2 完整配置
+
+| 维度键 | 名称 | Wave | L1依赖 | L2同层依赖 |
+|--------|------|------|--------|-----------|
+| resource_endowment | 资源禀赋分析 | 1 | natural_environment, land_use, socio_economic, historical_culture, architecture, public_services | [] |
+| planning_positioning | 规划定位分析 | 2 | location, socio_economic, superior_planning | resource_endowment |
+| development_goals | 发展目标分析 | 3 | socio_economic, superior_planning | resource_endowment, planning_positioning |
+| planning_strategies | 规划策略分析 | 4 | traffic, infrastructure | resource_endowment, planning_positioning, development_goals |
+
+### Layer 3 完整配置
+
+| 维度键 | 名称 | Wave | L1依赖 | L2依赖 | L3同层依赖 |
+|--------|------|------|--------|--------|-----------|
+| industry | 产业规划 | 1 | socio_economic, land_use | resource_endowment, planning_positioning, planning_strategies | [] |
+| spatial_structure | 空间结构规划 | 1 | natural_environment, land_use, traffic, architecture | planning_positioning, planning_strategies | [] |
+| land_use_planning | 土地利用规划 | 1 | land_use, natural_environment | planning_positioning, planning_strategies | [] |
+| settlement_planning | 居民点规划 | 1 | architecture, infrastructure, land_use | planning_strategies | [] |
+| traffic_planning | 道路交通规划 | 1 | traffic, land_use | planning_strategies | [] |
+| public_service | 公共服务设施规划 | 1 | public_services, socio_economic | planning_strategies | [] |
+| infrastructure_planning | 基础设施规划 | 1 | infrastructure, natural_environment | planning_strategies | [] |
+| ecological | 生态绿地规划 | 1 | natural_environment, ecological_green, land_use | planning_strategies | [] |
+| disaster_prevention | 防震减灾规划 | 1 | natural_environment, infrastructure | planning_strategies | [] |
+| heritage | 历史文保规划 | 1 | historical_culture, architecture | planning_strategies | [] |
+| landscape | 村庄风貌指引 | 1 | architecture, historical_culture, ecological_green | planning_strategies | [] |
+| project_bank | 建设项目库 | 2 | - | - | industry, spatial_structure, land_use_planning, settlement_planning, traffic_planning, public_service, infrastructure_planning, ecological, disaster_prevention, heritage, landscape |
 
 ---
 

@@ -25,7 +25,7 @@ def calculate_population(context: Dict[str, Any]) -> str:
         context: 包含人口相关数据的上下文
             - socio_economic: 社会经济分析文本（提取基期人口）
             - baseline_population: 基期人口（可选，优先使用）
-            - baseline_year: 基期年份（可选，默认2024）
+            - baseline_year: 基期年份（可选，默认当前年份）
             - target_year: 目标年份（可选，默认2035）
             - natural_growth_rate: 自然增长率‰（可选，默认4‰）
             - mechanical_growth: 机械增长人口（可选，默认0）

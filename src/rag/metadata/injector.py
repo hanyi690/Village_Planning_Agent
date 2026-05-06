@@ -2,10 +2,13 @@
 元数据注入器
 
 在文档入库时自动注入结构化元数据，支持维度标签、地形类型、文档类型等自动识别。
+支持关键词标注（快速）和语义标注（精准）两种模式。
 """
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+from dataclasses import dataclass, field
 from langchain_core.documents import Document
+import asyncio
 
 from .tagging_rules import (
     DimensionTagger,
@@ -13,6 +16,25 @@ from .tagging_rules import (
     DocumentTypeTagger,
     extract_regions_from_text,
 )
+from .semantic_tagger import get_semantic_tagger
+
+
+@dataclass
+class InjectionParams:
+    """元数据注入参数封装"""
+    doc: Document
+    full_content: str = ""
+    idx: int = 0
+    total: int = 1
+    category: Optional[str] = None
+    manual_doc_type: Optional[str] = None
+    manual_dimension_tags: Optional[List[str]] = None
+    manual_terrain: Optional[str] = None
+    # 计算结果（处理过程中填充）
+    dimension_tags: List[str] = field(default_factory=list)
+    terrain: str = "all"
+    doc_type: str = ""
+    regions: List[str] = field(default_factory=list)
 
 
 class MetadataInjector:
@@ -30,142 +52,155 @@ class MetadataInjector:
     - chunk_index: 切片在文档中的索引
     - total_chunks: 文档总切片数
     - regions: 涉及的地区列表
+
+    支持两种标注模式：
+    - use_semantic=False: 关键词匹配（快速，适合批量处理）
+    - use_semantic=True: Flash模型语义标注（精准，适合重要文档）
     """
 
-    def __init__(self):
+    def __init__(self, use_semantic: bool = False):
         self.dimension_tagger = DimensionTagger()
         self.terrain_tagger = TerrainTagger()
         self.doc_type_tagger = DocumentTypeTagger()
+        self.semantic_tagger = get_semantic_tagger() if use_semantic else None
+        self.use_semantic = use_semantic
 
-    def inject(
-        self,
-        doc: Document,
-        full_content: str = "",
-        idx: int = 0,
-        total: int = 1,
-        category: Optional[str] = None,
-        # 新增：手动指定的元数据（若不指定则自动标注）
-        manual_doc_type: Optional[str] = None,
-        manual_dimension_tags: Optional[list[str]] = None,
-        manual_terrain: Optional[str] = None,
-    ) -> Document:
-        """
-        为文档切片注入元数据
+    def _prepare_common_fields(self, params: InjectionParams) -> None:
+        """填充共享字段：terrain, doc_type, regions"""
+        source = params.doc.metadata.get("source", "")
+        content = params.doc.page_content
+        analysis_content = params.full_content if params.idx == 0 and params.full_content else content
 
-        Args:
-            doc: 文档对象（会被修改）
-            full_content: 完整文档内容（用于全局元数据识别）
-            idx: 当前切片索引
-            total: 总切片数
-            category: 文档类别（policies/cases/standards/domain/local）
+        # 地形检测
+        params.terrain = self.terrain_tagger.detect_terrain(analysis_content)
+        if params.terrain == "all":
+            params.terrain = self.terrain_tagger.detect_terrain_from_filename(source)
 
-        Returns:
-            注入元数据后的文档对象
-        """
-        source = doc.metadata.get("source", "")
-        content = doc.page_content
+        # 文档类型检测
+        params.doc_type = self.doc_type_tagger.detect_doc_type(content=analysis_content, filename=source)
 
-        # 使用完整内容进行全局元数据识别（只对第一个切片）
-        analysis_content = full_content if idx == 0 and full_content else content
+        # 地区识别
+        if params.idx == 0:
+            params.regions = extract_regions_from_text(analysis_content)
 
-        # 1. 维度标签识别
-        dimension_tags = self.dimension_tagger.detect_dimensions(analysis_content)
+    def _inject_core(self, params: InjectionParams) -> Document:
+        """核心注入逻辑 - 共享于 sync/async 方法"""
+        source = params.doc.metadata.get("source", "")
+        params.doc.metadata.update({
+            "dimension_tags": ",".join(params.manual_dimension_tags) if params.manual_dimension_tags
+                              else (",".join(params.dimension_tags) if params.dimension_tags else "general"),
+            "terrain": params.manual_terrain if params.manual_terrain else params.terrain,
+            "document_type": params.manual_doc_type if params.manual_doc_type else params.doc_type,
+            "source": source,
+            "category": params.category or params.doc.metadata.get("category", "policies"),
+            "chunk_index": params.idx,
+            "total_chunks": params.total,
+            "regions": ",".join(params.regions) if params.regions else "",
+        })
+        return params.doc
 
-        # 同时检查文件名
+    def inject(self, params: InjectionParams) -> Document:
+        """同步注入（关键词标注）"""
+        source = params.doc.metadata.get("source", "")
+        content = params.doc.page_content
+        analysis_content = params.full_content if params.idx == 0 and params.full_content else content
+
+        # 维度标注（关键词）
+        params.dimension_tags = self.dimension_tagger.detect_dimensions(analysis_content)
+
+        # 添加文件名检测的维度
         filename_dims = self.dimension_tagger.detect_dimensions_for_filename(source)
         for dim in filename_dims:
-            if dim not in dimension_tags and dim != "general":
-                dimension_tags.append(dim)
+            if dim not in params.dimension_tags and dim != "general":
+                params.dimension_tags.append(dim)
 
-        # 2. 地形类型识别
-        terrain = self.terrain_tagger.detect_terrain(analysis_content)
+        self._prepare_common_fields(params)
+        return self._inject_core(params)
 
-        # 如果内容中未检测到地形，尝试从文件名识别
-        if terrain == "all":
-            terrain = self.terrain_tagger.detect_terrain_from_filename(source)
+    async def inject_async(self, params: InjectionParams, use_semantic: Optional[bool] = None) -> Document:
+        """异步注入（可选语义标注）"""
+        should_use_semantic = use_semantic if use_semantic is not None else self.use_semantic
+        source = params.doc.metadata.get("source", "")
+        content = params.doc.page_content
+        analysis_content = params.full_content if params.idx == 0 and params.full_content else content
 
-        # 3. 文档类型识别
-        doc_type = self.doc_type_tagger.detect_doc_type(
-            content=analysis_content,
-            filename=source
-        )
+        # 维度标注（语义或关键词）
+        if should_use_semantic and self.semantic_tagger and not params.manual_dimension_tags:
+            params.dimension_tags = await self.semantic_tagger.tag_chunk_async(content)
+        else:
+            params.dimension_tags = self.dimension_tagger.detect_dimensions(analysis_content)
 
-        # 4. 地区识别（只对第一个切片）
-        regions = []
-        if idx == 0:
-            regions = extract_regions_from_text(analysis_content)
+        # 添加文件名检测的维度
+        filename_dims = self.dimension_tagger.detect_dimensions_for_filename(source)
+        for dim in filename_dims:
+            if dim not in params.dimension_tags and dim != "general":
+                params.dimension_tags.append(dim)
 
-        # 更新元数据（ChromaDB 不支持列表类型，需转换为逗号分隔的字符串）
-        doc.metadata.update({
-            "dimension_tags": ",".join(manual_dimension_tags) if manual_dimension_tags else (",".join(dimension_tags) if dimension_tags else "general"),
-            "terrain": manual_terrain if manual_terrain else terrain,
-            "document_type": manual_doc_type if manual_doc_type else doc_type,
-            "source": source,
-            "category": category or doc.metadata.get("category", "policies"),
-            "chunk_index": idx,
-            "total_chunks": total,
-            "regions": ",".join(regions) if regions else "",
-        })
+        self._prepare_common_fields(params)
+        return self._inject_core(params)
 
-        return doc
+    async def inject_batch_async(
+        self,
+        documents: List[Document],
+        category: Optional[str] = None,
+        use_semantic: Optional[bool] = None,
+        doc_type: Optional[str] = None,
+        dimension_tags: Optional[list[str]] = None,
+        terrain: Optional[str] = None,
+    ) -> List[Document]:
+        """批量异步注入元数据（支持语义标注）"""
+        if not documents:
+            return []
+
+        full_content = "\n\n".join(doc.page_content for doc in documents)
+        total = len(documents)
+
+        tasks = [
+            self.inject_async(
+                InjectionParams(
+                    doc=doc, full_content=full_content, idx=idx, total=total,
+                    category=category,
+                    manual_doc_type=doc_type,
+                    manual_dimension_tags=dimension_tags,
+                    manual_terrain=terrain,
+                ),
+                use_semantic=use_semantic,
+            )
+            for idx, doc in enumerate(documents)
+        ]
+
+        return await asyncio.gather(*tasks)
 
     def inject_batch(
         self,
         documents: List[Document],
         category: Optional[str] = None,
-        # 新增：手动指定的元数据
         doc_type: Optional[str] = None,
         dimension_tags: Optional[list[str]] = None,
         terrain: Optional[str] = None,
     ) -> List[Document]:
-        """
-        批量注入元数据
-
-        Args:
-            documents: 文档切片列表
-            category: 文档类别
-            doc_type: 文档类型（手动指定，可选）
-            dimension_tags: 维度标签（手动指定，可选）
-            terrain: 地形类型（手动指定，可选）
-
-        Returns:
-            注入元数据后的文档列表
-        """
+        """批量注入元数据"""
         if not documents:
             return []
 
-        # 合并所有内容为完整文档（用于全局元数据识别）
         full_content = "\n\n".join(doc.page_content for doc in documents)
         total = len(documents)
 
         for idx, doc in enumerate(documents):
-            self.inject(
-                doc=doc,
-                full_content=full_content,
-                idx=idx,
-                total=total,
+            params = InjectionParams(
+                doc=doc, full_content=full_content, idx=idx, total=total,
                 category=category,
                 manual_doc_type=doc_type,
                 manual_dimension_tags=dimension_tags,
                 manual_terrain=terrain,
             )
+            self.inject(params)
 
         return documents
 
 
 class CategoryDetector:
-    """
-    文档类别检测器
-
-    基于目录结构和文件路径自动识别文档类别。
-
-    支持的类别：
-    - policies: 政策导向库
-    - standards: 通用规范库
-    - cases: 案例参考库
-    - domain: 专业领域库
-    - local: 本地实地库
-    """
+    """文档类别检测器"""
 
     from src.core.config import KB_CATEGORIES
 
@@ -179,42 +214,23 @@ class CategoryDetector:
 
     @staticmethod
     def detect_from_path(file_path: Path) -> str:
-        """
-        从文件路径检测类别
-
-        Args:
-            file_path: 文件路径
-
-        Returns:
-            类别标识，默认返回 "policies"
-        """
+        """从文件路径检测类别"""
         path_str = str(file_path).lower()
 
-        # 检查是否包含类别目录
         for category in KB_CATEGORIES:
             if f"/{category}/" in path_str or f"\\{category}\\" in path_str:
                 return category
 
-        # 检查文件名是否包含类别关键词
         filename = file_path.name
         for category, keywords in CategoryDetector.CATEGORY_KEYWORDS.items():
             if any(kw in filename for kw in keywords):
                 return category
 
-        # 默认返回 policies
         return "policies"
 
     @staticmethod
     def detect_from_directory(data_dir: Path) -> Dict[str, List[Path]]:
-        """
-        扫描目录，按类别分组文件
-
-        Args:
-            data_dir: 数据目录
-
-        Returns:
-            {category: [file_paths]}
-        """
+        """扫描目录，按类别分组文件"""
         result: Dict[str, List[Path]] = {
             "policies": [],
             "standards": [],
@@ -226,7 +242,6 @@ class CategoryDetector:
         if not data_dir.exists():
             return result
 
-        # 扫描所有支持的文件
         extensions = [".pdf", ".doc", ".docx", ".ppt", ".pptx", ".txt", ".md"]
 
         for ext in extensions:
@@ -234,5 +249,4 @@ class CategoryDetector:
                 category = CategoryDetector.detect_from_path(file_path)
                 result[category].append(file_path)
 
-        # 过滤空列表
         return {k: v for k, v in result.items() if v}

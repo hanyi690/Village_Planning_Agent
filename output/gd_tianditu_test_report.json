@@ -1,0 +1,80 @@
+{
+  "test_date": "2026-04-27",
+  "village": {
+    "village_name": "金田村委会",
+    "village_code": "441426108004",
+    "bbox": [
+      115.9,
+      24.7,
+      116.2,
+      24.95
+    ],
+    "center": [
+      116.04,
+      24.82
+    ]
+  },
+  "services": {
+    "SQSXWPSJ": {
+      "name": "三区三线专题图",
+      "available": true,
+      "error": null
+    },
+    "GDSTBHHX": {
+      "name": "生态保护红线",
+      "available": true,
+      "error": null
+    },
+    "gdsyjjbntbhtb_mercator": {
+      "name": "基本农田保护图斑",
+      "available": true,
+      "error": null
+    },
+    "DZZHD": {
+      "name": "地质灾害隐患点",
+      "available": true,
+      "error": null
+    },
+    "dzzhyhd_mercator": {
+      "name": "地质灾害隐患点(墨卡托)",
+      "available": true,
+      "error": null
+    },
+    "SWDTZ_50W": {
+      "name": "50万水文地质图",
+      "available": true,
+      "error": null
+    },
+    "dom2023": {
+      "name": "2023年影像电子地图",
+      "available": true,
+      "error": null
+    }
+  },
+  "results": {
+    "three_zones_three_lines": {
+      "success": true,
+      "data_type": "tile_service",
+      "feature_count": 0,
+      "error": null
+    },
+    "ecological_protection": {
+      "success": true,
+      "data_type": "tile_service",
+      "feature_count": 0,
+      "error": null
+    },
+    "farmland_protection": {
+      "success": true,
+      "data_type": "tile_service",
+      "feature_count": 0,
+      "error": null
+    },
+    "geological_hazard_points": {
+      "success": true,
+      "data_type": "tile_service",
+      "feature_count": 0,
+      "error": null
+    }
+  }
+}

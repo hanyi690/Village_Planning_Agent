@@ -1,0 +1,100 @@
+{
+  "generated_at": "2026-05-05T16:11:29.982710",
+  "experiment_name": "级联一致性检验实验",
+  "scenarios": [
+    {
+      "scenario_name": "scenario1",
+      "target_dimension": "planning_positioning",
+      "target_layer": 2,
+      "total_downstream_dimensions": 15,
+      "total_waves": 2,
+      "revised_dimension_count": 0,
+      "consistency_rate": "0.0%",
+      "sse_event_count": 2,
+      "revision_duration_seconds": 5e-06,
+      "annotation_rows": [],
+      "impact_tree": {
+        "0": [
+          "planning_positioning"
+        ],
+        "1": [
+          "industry",
+          "spatial_structure",
+          "land_use_planning",
+          "development_goals",
+          "planning_strategies"
+        ],
+        "2": [
+          "settlement_planning",
+          "traffic_planning",
+          "public_service",
+          "infrastructure_planning",
+          "ecological",
+          "disaster_prevention",
+          "heritage",
+          "landscape",
+          "project_bank"
+        ]
+      },
+      "wave_allocation": {}
+    },
+    {
+      "scenario_name": "scenario2",
+      "target_dimension": "natural_environment",
+      "target_layer": 1,
+      "total_downstream_dimensions": 17,
+      "total_waves": 2,
+      "revised_dimension_count": 0,
+      "consistency_rate": "0.0%",
+      "sse_event_count": 2,
+      "revision_duration_seconds": 4e-06,
+      "annotation_rows": [],
+      "impact_tree": {
+        "0": [
+          "natural_environment"
+        ],
+        "1": [
+          "resource_endowment",
+          "spatial_structure",
+          "land_use_planning",
+          "infrastructure_planning",
+          "ecological",
+          "disaster_prevention",
+          "planning_strategies"
+        ],
+        "2": [
+          "industry",
+          "settlement_planning",
+          "traffic_planning",
+          "public_service",
+          "heritage",
+          "landscape",
+          "planning_positioning",
+          "project_bank",
+          "development_goals"
+        ]
+      },
+      "wave_allocation": {}
+    }
+  ],
+  "comparison": {
+    "comparison": {
+      "scenario1_downstream": 15,
+      "scenario2_downstream": 17,
+      "scenario1_waves": 2,
+      "scenario2_waves": 2,
+      "scenario1_consistency": "0.0%",
+      "scenario2_consistency": "0.0%"
+    },
+    "analysis": {
+      "同层传播复杂度": "scenario1 (Layer 2 → Layer 2/3) 相对简单",
+      "跨层传播复杂度": "scenario2 (Layer 1 → Layer 2 → Layer 3) 更复杂",
+      "预期差异": "跨层传播可能产生更大的语义漂移风险"
+    }
+  },
+  "data_sources": {
+    "baseline_dir": "F:\\project\\Village_Planning_Agent\\output\\experiments\\cascade_consistency\\baseline",
+    "scenario1_dir": "F:\\project\\Village_Planning_Agent\\output\\experiments\\cascade_consistency\\scenario1_planning_positioning",
+    "scenario2_dir": "F:\\project\\Village_Planning_Agent\\output\\experiments\\cascade_consistency\\scenario2_natural_environment"
+  }
+}

@@ -2,6 +2,7 @@
 
 import { useState, useCallback, Suspense } from 'react';
 import { PlanningProvider, usePlanningStore, usePlanningActions } from '@/stores';
+import { useTaskId } from '@/hooks/planning/usePlanningSelectors';
 import UnifiedLayout from '@/components/layout/UnifiedLayout';
 import UnifiedContentSwitcher from '@/components/layout/UnifiedContentSwitcher';
 import LayerSidebar from '@/components/layer/LayerSidebar';
@@ -32,8 +33,12 @@ function FileViewerWrapper() {
   return <FileViewerSidebar file={viewingFile} onClose={actions.hideFileViewer} />;
 }
 
-// Main content component - uses Suspense for useSearchParams
+// Main content component - uses Suspense for useSearchParams (in PlanningProvider)
 function MainContent() {
+  // Get taskId from store (useSessionRestore in PlanningProvider handles URL extraction)
+  const storeTaskId = useTaskId();
+  const taskId = storeTaskId || 'new';
+
   // Layer sidebar state
   const [layerSidebarOpen, setLayerSidebarOpen] = useState(false);
   const [activeLayer, setActiveLayer] = useState<number | null>(null);
@@ -49,7 +54,7 @@ function MainContent() {
   }, []);
 
   return (
-    <UnifiedLayout taskId="new" onOpenLayerSidebar={handleLayerSidebarOpen}>
+    <UnifiedLayout taskId={taskId} onOpenLayerSidebar={handleLayerSidebarOpen}>
       {/* Smart container - automatically shows Form or Chat based on state */}
       <UnifiedContentSwitcher onOpenLayerSidebar={handleLayerSidebarOpen} />
       {/* Layer Sidebar */}

@@ -15,11 +15,19 @@ export interface ParsedSubsection {
 }
 
 export interface ParsedDimension {
+  key?: string; // dimension_key (e.g., 'location', 'socio_economic')
   name: string;
   content: string;
   subsections: ParsedSubsection[];
   icon: string;
 }
+
+/**
+ * Get stable dimension key from ParsedDimension
+ * @param dim - ParsedDimension object
+ * @returns dimension key (prefer key field, fallback to name)
+ */
+export const getDimensionKey = (dim: ParsedDimension): string => dim.key || dim.name;
 
 /**
  * Extract subsections from dimension content

@@ -1,0 +1,15 @@
+[
+  {
+    "type": "reject_received",
+    "session_id": "scenario2_4b28fb20_20260505161118",
+    "target_dimension": "natural_environment",
+    "feedback": "现状报告中明确记载金田村存在5处崩塌隐患点和35处滑坡隐患点，\n但当前分析未对隐患点的空间分布与影响范围进行充分评估，需强化地质灾害风险的分析深度。",
+    "timestamp": "2026-05-05T16:11:18.187688"
+  },
+  {
+    "type": "revision_completed",
+    "session_id": "scenario2_4b28fb20_20260505161118",
+    "revised_dimensions": [],
+    "timestamp": "2026-05-05T16:11:18.187692"
+  }
+]

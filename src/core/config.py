@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
+
+# Project root directory (cross-platform)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # API Keys
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -14,18 +18,23 @@ DASHSCOPE_API_BASE = os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs
 # LLM Configuration
 # LLM_PROVIDER: 必填，可选值: "deepseek", "openai", "zhipuai"
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")
-LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen3.5-plus")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
 # LLM Request Timeout (seconds)
 LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "180"))  # 3 minutes
 LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "300"))  # 5 minutes
 
+# LLM Max Concurrent Requests (for asyncio.gather)
+# DashScope limit: ~5-10 concurrent requests
+# Recommended: 3-4 for stability
+LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "4"))
+
 # OpenAI-compatible API base URL (for DeepSeek, etc.)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")
 
 # RAG / Vector store settings
-VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", "f:\\project\\Village_Planning_Agent\\vectordb")
+VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", str(PROJECT_ROOT / "vectordb"))
 VECTORDB_PERSIST = os.getenv("VECTORDB_PERSIST", "true").lower() in ("1", "true", "yes")
 RAG_ENABLED = os.getenv("RAG_ENABLED", "true").lower() in ("1", "true", "yes")
 
@@ -134,4 +143,22 @@ MULTIMODAL_ENABLED = os.getenv("MULTIMODAL_ENABLED", "false").lower() == "true"
 MULTIMODAL_MODEL = os.getenv("MULTIMODAL_MODEL", "gpt-4o")
 IMAGE_DETAIL_LEVEL = os.getenv("IMAGE_DETAIL_LEVEL", "auto")  # "low", "high", or "auto"
 MAX_IMAGE_SIZE_MULTIMODAL = int(os.getenv("MAX_IMAGE_SIZE_MULTIMODAL", "10_000_000"))  # 10MB
+DEFAULT_IMAGE_FORMAT = os.getenv("DEFAULT_IMAGE_FORMAT", "jpeg")  # jpeg, png, gif, webp
+
+# ==========================================
+# Flash Model Configuration (OpenAI-compatible format via DashScope)
+# ==========================================
+# Flash model is used for lightweight tasks: summaries, keyword extraction, etc.
+# Uses DashScope's OpenAI-compatible endpoint for unified calling pattern.
+
+FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "qwen-flash")
+FLASH_MODEL_MAX_TOKENS = int(os.getenv("FLASH_MODEL_MAX_TOKENS", "500"))
+FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
+
+# ==========================================
+# OCR Model Configuration (DashScope Vision)
+# ==========================================
+# 用于 MarkItDown OCR 插件处理扫描版 PDF
+# qwen-vl-max: 通用视觉模型，支持文字识别
+OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "qwen-vl-max")
 

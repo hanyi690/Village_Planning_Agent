@@ -1,0 +1,41 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "金田村委会",
+        "category": "政府机构及社会团体;政府机关;乡镇以下级政府及事业单位",
+        "address": "泗水镇",
+        "distance": 525,
+        "typecode": "130106",
+        "tel": []
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.04079420022093,
+          24.816837306489955
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "泗水镇金田村退役军人服务站",
+        "category": "政府机构及社会团体;政府机关;乡镇以下级政府及事业单位",
+        "address": "122乡道园寨小组1号",
+        "distance": 526,
+        "typecode": "130106",
+        "tel": "13727623219"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          116.04097483452719,
+          24.816872902328793
+        ]
+      }
+    }
+  ]
+}

@@ -6,6 +6,7 @@
 所有格式都会统一转换为 Markdown，并自动清理冗余信息。
 """
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional, Literal
@@ -137,17 +138,9 @@ class DocToDocxConverter:
         except ImportError:
             pass
         
-        # Linux/Docker: 检查 LibreOffice
-        try:
-            result = subprocess.run(
-                ['which', 'soffice'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            return result.returncode == 0
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            return False
+        # Linux/Docker: 检查 LibreOffice (跨平台检测)
+        soffice_path = shutil.which('soffice')
+        return soffice_path is not None
 
     @staticmethod
     def convert(
@@ -372,14 +365,15 @@ MARKITDOWN_EXTENSIONS = {
 class MarkItDownLoader(BaseDocumentLoader):
     """
     使用 MarkItDown 统一加载多种文档格式
-    
+
     支持格式: doc, docx, pdf, ppt, pptx, xls, xlsx, epub, html
-    
+
     特性:
     - 超时保护机制，防止大文件卡死
     - 旧版 .doc (OLE格式) 自动转换为 .docx 后再解析
     - 跨平台支持（Windows win32com + Linux LibreOffice）
-    
+    - OCR 输出预处理（扫描版教材 PDF）
+
     优势:
     - 跨平台兼容
     - 统一输出 Markdown 格式
@@ -389,6 +383,24 @@ class MarkItDownLoader(BaseDocumentLoader):
 
     # 默认超时配置
     DEFAULT_TIMEOUT = 120  # 秒
+
+    # ==================== 预编译正则表达式（类级别常量）====================
+    # OCR 相关模式
+    OCR_PAGE_MARKER_RE = re.compile(r'^#{1,6}\s+Page\s+\d+', re.MULTILINE)
+    OCR_BLOCK_PATTERN_RE = re.compile(r'\*\[Image OCR\]\n(.*?)\n\[End OCR\]\*\*', re.DOTALL)
+    HEADER_COUNT_RE = re.compile(r'^#{1,3}\s', re.MULTILINE)
+
+    # 章节转换规则（预编译）
+    CHAPTER_TO_HEADER_RE = [
+        # 英文章节
+        (re.compile(r'^(Chapter\s+\d+[^\n]*)', re.MULTILINE), r'# \1'),
+        (re.compile(r'^(Section\s+\d+\.\d+[^\n]*)', re.MULTILINE), r'## \1'),
+        # 中文章节
+        (re.compile(r'^(第[一二三四五六七八九十百]+章[^\n]*)', re.MULTILINE), r'# \1'),
+        (re.compile(r'^(第\s*\d+\s*章[^\n]*)', re.MULTILINE), r'# \1'),
+        (re.compile(r'^(第[一二三四五六七八九十]+节[^\n]*)', re.MULTILINE), r'## \1'),
+        (re.compile(r'^(\d+\.\d+[^\n]*)', re.MULTILINE), r'### \1'),
+    ]
 
     def __init__(
         self,
@@ -419,9 +431,13 @@ class MarkItDownLoader(BaseDocumentLoader):
             file_ext = '.docx'
         
         print(f"📄 正在使用 MarkItDown 读取: {self.file_path.name} ({file_ext}) ...")
-        
+
         try:
-            markdown_content = self._convert_with_markitdown(actual_file)
+            # PDF 文件使用 Fallback 链（MarkItDown 失败时自动切换备用解析器）
+            if file_ext == '.pdf':
+                markdown_content = self._convert_pdf_with_fallback(actual_file)
+            else:
+                markdown_content = self._convert_with_markitdown(actual_file)
             return self._parse_markdown(markdown_content, file_ext)
         except ImportError:
             raise Exception(
@@ -440,13 +456,30 @@ class MarkItDownLoader(BaseDocumentLoader):
         return DocToDocxConverter.convert(self.file_path, timeout=self.timeout)
 
     def _convert_with_markitdown(self, file_path: Optional[Path] = None) -> str:
-        """使用 MarkItDown 转换文档为 Markdown（带超时保护）"""
+        """使用 MarkItDown 转换文档为 Markdown（带超时保护，支持 OCR）"""
         try:
             from markitdown import MarkItDown
         except ImportError:
             raise ImportError("markitdown 未安装")
-        
-        md = MarkItDown(enable_plugins=False)
+
+        # 启用 OCR 插件（使用 DashScope API）
+        from src.core.config import DASHSCOPE_API_KEY, DASHSCOPE_API_BASE, OCR_MODEL_NAME
+
+        llm_client = None
+        llm_model = None
+        if DASHSCOPE_API_KEY:
+            from openai import OpenAI
+            llm_client = OpenAI(
+                api_key=DASHSCOPE_API_KEY,
+                base_url=DASHSCOPE_API_BASE,
+            )
+            llm_model = OCR_MODEL_NAME
+
+        md = MarkItDown(
+            enable_plugins=True,
+            llm_client=llm_client,
+            llm_model=llm_model,
+        )
         target_path = file_path or self.file_path
         
         # 尝试使用 func_timeout 实现超时保护
@@ -469,12 +502,63 @@ class MarkItDownLoader(BaseDocumentLoader):
             result = md.convert(str(target_path))
             return result.markdown
 
+    def _convert_pdf_with_fallback(self, file_path: Path) -> str:
+        """
+        PDF 文件 Fallback 解析链
+
+        优先级：
+        1. MarkItDown (pdfminer.six) → 原生方案
+        2. PyMuPDF → 复杂字体/布局容错
+        3. pdfplumber → 表格/结构化内容
+
+        Args:
+            file_path: PDF 文件路径
+
+        Returns:
+            解析后的 Markdown 内容
+
+        Raises:
+            Exception: 所有解析器都失败时抛出详细错误
+        """
+        from .pdf_fallback import pdf_fallback_chain, check_parsers
+
+        # 1. 先尝试 MarkItDown
+        try:
+            content = self._convert_with_markitdown(file_path)
+            if content and len(content.strip()) >= 100:
+                print(f"✅ MarkItDown 解析 PDF 成功")
+                return content
+            print("⚠️  MarkItDown 返回内容过少，尝试备用解析器...")
+        except TimeoutError:
+            print("⚠️  MarkItDown 解析 PDF 超时，尝试备用解析器...")
+        except Exception as e:
+            print(f"⚠️  MarkItDown 解析 PDF 失败: {e}")
+            print("🔄 尝试备用解析器...")
+
+        # 2. 调用 Fallback 链
+        parsers_status = check_parsers()
+        if not parsers_status['pymupdf'] and not parsers_status['pdfplumber']:
+            raise Exception(
+                "PDF 解析失败。\n"
+                "MarkItDown 解析失败/超时，且备用解析器未安装。\n"
+                "请安装备用解析器: pip install pymupdf pdfplumber\n"
+                "或检查 PDF 文件是否为扫描版（需要 OCR）。"
+            )
+
+        content, parser_name = pdf_fallback_chain(file_path)
+        return content
+
     def _parse_markdown(self, content: str, file_ext: str) -> list[Document]:
         """解析 Markdown 内容为 Document 列表"""
         if not content or not content.strip():
             print(f"⚠️  文档内容为空")
             return []
-        
+
+        # OCR 输出预处理（扫描版教材 PDF）- 内嵌实现
+        if self._is_ocr_output(content):
+            content = self._preprocess_ocr_output(content)
+            print(f"🔄 OCR 输出预处理完成")
+
         # 清理内容
         content = self.cleaner.clean_text(content)
         
@@ -556,6 +640,59 @@ class MarkItDownLoader(BaseDocumentLoader):
                     documents.append(doc)
         
         return documents
+
+    def _preprocess_ocr_output(self, content: str) -> str:
+        """
+        OCR 输出预处理（合并自 ocr_preprocessor.py）
+
+        处理 MarkItDown + DashScope qwen-vl-ocr 产生的扫描版 PDF 输出格式：
+        - 移除 ## Page N 页面标记（避免被误判为标题）
+        - 移除 *[Image OCR] 和 [End OCR]* 包装标记
+        - 将教材章节标题转换为 Markdown 格式
+
+        Args:
+            content: OCR 输出的原始内容
+
+        Returns:
+            清理后的内容，章节标题已转换为 Markdown 格式
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # 记录原始状态（使用预编译模式）
+        header_count_before = len(self.HEADER_COUNT_RE.findall(content))
+        page_markers = len(self.OCR_PAGE_MARKER_RE.findall(content))
+
+        # 2. 提取 OCR 内容块（移除包装标记，保持内容结构）
+        ocr_blocks_content = self.OCR_BLOCK_PATTERN_RE.findall(content)
+        ocr_blocks = len(ocr_blocks_content)
+
+        logger.info(f"  OCR预处理: 页面标记 {page_markers} 个, OCR块 {ocr_blocks} 个")
+        logger.info(f"  Markdown标题: {header_count_before} 个")
+
+        # 1. 移除页面标记（## Page N）
+        content = self.OCR_PAGE_MARKER_RE.sub('', content)
+
+        content = '\n\n'.join(ocr_blocks_content) if ocr_blocks_content else content
+
+        # 3. 转换教材章节标题为 Markdown 格式（使用预编译规则）
+        for compiled_pattern, replacement in self.CHAPTER_TO_HEADER_RE:
+            matches = compiled_pattern.findall(content)
+            if matches:
+                logger.info(f"  章节匹配: {len(matches)} 处 -> {matches[:3]}...")
+            content = compiled_pattern.sub(replacement, content)
+
+        header_count_after = len(self.HEADER_COUNT_RE.findall(content))
+        logger.info(f"  转换后Markdown标题: {header_count_before} -> {header_count_after}")
+
+        # 4. 清理多余空行
+        content = re.sub(r'\n\s*\n\s*\n+', '\n\n', content)
+
+        return content.strip()
+
+    def _is_ocr_output(self, content: str) -> bool:
+        """检测是否为 OCR 输出格式"""
+        return bool(re.search(r'## Page \d+.*\*\[Image OCR\]', content))
 
 
 # ==================== 保留旧加载器作为别名（向后兼容）====================

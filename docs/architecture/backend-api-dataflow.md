@@ -22,11 +22,17 @@
 |------|------|------|------|
 | `/api/planning/start` | POST | 启动规划会话 | `startup.py` |
 | `/api/planning/stream/{session_id}` | GET | SSE 事件流 | `stream.py` |
+| `/api/planning/stream/{session_id}/sync` | GET | SSE重连同步（from_seq） | `stream.py` |
 | `/api/planning/review/{session_id}` | POST | 审查操作 (approve/reject) | `review.py` |
+| `/api/planning/resume` | POST | 从checkpoint恢复执行 | `session.py` |
 | `/api/planning/chat/{session_id}` | POST | 对话交互 | `chat.py` |
 | `/api/planning/status/{session_id}` | GET | 状态查询 | `session.py` |
 | `/api/planning/checkpoint/{session_id}` | GET | 检查点列表 | `checkpoint.py` |
 | `/api/planning/message/{session_id}` | GET/POST | 消息管理 | `message.py` |
+| `/api/planning/sessions/{session_id}/layer/{layer}/reports` | GET | 获取层级报告 | `session.py` |
+| `/api/planning/sessions/{session_id}/dimensions/run` | POST | 手动触发维度分析 | `dimension.py` |
+| `/api/planning/sessions/{session_id}/dimensions/{dimension_key}` | GET | 获取维度内容 | `dimension.py` |
+| `/api/planning/sessions/{session_id}/dimensions/{dimension_key}/revisions` | GET | 维度修订历史 | `dimension.py` |
 
 ### 启动规划会话
 
@@ -126,6 +132,23 @@ async def stream_planning(session_id: str):
         }
     )
 ```
+
+### SSE 重连同步端点
+
+客户端可通过 `/api/planning/stream/{session_id}/sync?from_seq=N` 获取错过的事件：
+
+```python
+@router.get("/api/planning/stream/{session_id}/sync")
+async def sync_events(session_id: str, from_seq: int = 0):
+    events = sse_manager.get_events_from_seq(session_id, from_seq)
+    return {"events": events, "last_seq": sse_manager.get_last_seq(session_id)}
+```
+
+**重连流程**：
+1. SSE连接断开
+2. 前端记录 lastProcessedSeq
+3. 重连时调用 sync 端点获取错过的事件
+4. 合并事件后继续正常处理
 
 ### 终止事件处理机制
 
@@ -622,7 +645,14 @@ class SSEEventType(str):
     CHECKPOINT_SAVED = "checkpoint_saved"
     REVISION_COMPLETED = "revision_completed"
 
-    # 工具事件
+    # 新增工具事件（简化版）
+    TOOL_STARTED = "tool_started"
+    TOOL_STATUS = "tool_status"
+
+    # 新增 GIS 事件
+    GIS_RESULT = "gis_result"
+
+    # Legacy 事件（向后兼容，已弃用）
     TOOL_CALL = "tool_call"
     TOOL_PROGRESS = "tool_progress"
     TOOL_RESULT = "tool_result"

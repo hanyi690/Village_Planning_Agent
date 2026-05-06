@@ -1,0 +1,107 @@
+{
+  "source_file": "docs\\references\\村庄规划总图\\金田村村庄规划工程文件\\3.村庄建设项目布局规划图\\ImageToStl.com_03金田村建设项目布局规划图.dxf",
+  "total_entities": 1315,
+  "layers": {
+    "TX-图框": {
+      "count": 56,
+      "types": [
+        "MTEXT",
+        "LWPOLYLINE",
+        "LINE",
+        "HATCH",
+        "TEXT"
+      ]
+    },
+    "图例": {
+      "count": 225,
+      "types": [
+        "HATCH",
+        "MTEXT",
+        "TEXT",
+        "LWPOLYLINE"
+      ]
+    },
+    "基本农田": {
+      "count": 92,
+      "types": [
+        "HATCH",
+        "LWPOLYLINE"
+      ]
+    },
+    "房屋": {
+      "count": 726,
+      "types": [
+        "HATCH",
+        "LWPOLYLINE"
+      ]
+    },
+    "保留公共服务设施": {
+      "count": 20,
+      "types": [
+        "HATCH",
+        "LWPOLYLINE"
+      ]
+    },
+    "建设项目红线": {
+      "count": 29,
+      "types": [
+        "LINE",
+        "LWPOLYLINE"
+      ]
+    },
+    "村界": {
+      "count": 2,
+      "types": [
+        "HATCH",
+        "LWPOLYLINE"
+      ]
+    },
+    "0": {
+      "count": 1,
+      "types": [
+        "IMAGE"
+      ]
+    },
+    "引线": {
+      "count": 63,
+      "types": [
+        "LWPOLYLINE"
+      ]
+    },
+    "TX-图例": {
+      "count": 189,
+      "types": [
+        "MTEXT",
+        "CIRCLE",
+        "HATCH"
+      ]
+    },
+    "新增公共服务设施": {
+      "count": 24,
+      "types": [
+        "LINE",
+        "HATCH",
+        "LWPOLYLINE"
+      ]
+    },
+    "污水处理池": {
+      "count": 4,
+      "types": [
+        "LWPOLYLINE"
+      ]
+    },
+    "规划道路": {
+      "count": 24,
+      "types": [
+        "LINE",
+        "LWPOLYLINE"
+      ]
+    },
+    "自然村名": {
+      "count": 12,
+      "types": [
+        "MTEXT"
+      ]
+    }
+  }
+}

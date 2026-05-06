@@ -179,6 +179,8 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     # ... 添加边
 ```
 
+**注意**：emit_events 节点负责从 `sse_events` 字段批量发送维度分析产生的事件。层级完成事件（layer_completed、pause）由 `collect_layer_results` 函数直接发送。
+
 ### 条件边路由
 
 ```python
@@ -437,6 +439,17 @@ def create_initial_state(
 
 ### Layer 2 波次执行
 
+Layer 2 波次基于依赖关系动态计算：
+
+| Wave | 维度 | 依赖关系 |
+|------|------|----------|
+| Wave 1 | resource_endowment | 无同层依赖 |
+| Wave 2 | planning_positioning | 依赖 resource_endowment |
+| Wave 3 | development_goals | 依赖 resource_endowment, planning_positioning |
+| Wave 4 | planning_strategies | 依赖前3个维度 |
+
+TOTAL_WAVES 通过 `_calculate_wave()` 动态计算，而非硬编码。
+
 Layer 2 使用波次执行，因为维度间存在依赖关系:
 
 ```python
@@ -532,6 +545,28 @@ async def revision_node(state: UnifiedPlanningState) -> Dict[str, Any]:
 
 ---
 
+## 双模式 Stream 机制
+
+PlanningRuntimeService 使用双模式 stream 同时监控状态变化和 checkpoint 持久化：
+
+```python
+# backend/services/planning_runtime_service.py
+async def _trigger_planning_execution(cls, session_id: str, ...) -> None:
+    async for event in graph.astream(
+        initial_state,
+        config={"configurable": {"thread_id": session_id}},
+        stream_mode=["values", "checkpoints"]  # 双模式
+    ):
+        # values: 状态变化事件
+        # checkpoints: 持久化事件（checkpoint_saved）
+```
+
+**设计要点**：
+- `values` 模式：监控状态变化，触发 dimension_delta 等事件
+- `checkpoints` 模式：监控持久化，准确关联 checkpoint_saved 到对应层级
+
+---
+
 ## 状态机图
 
 ### 完整状态机
@@ -619,15 +654,356 @@ sequenceDiagram
 
 ## 关键代码路径
 
-| 功能 | 文件路径 | 关键函数/类 |
-|------|----------|-------------|
-| 图定义 | `src/orchestration/main_graph.py` | `create_unified_planning_graph` |
-| 状态定义 | `src/orchestration/state.py` | `UnifiedPlanningState` |
-| 意图路由 | `src/orchestration/routing.py` | `intent_router` |
-| 规划路由 | `src/orchestration/routing.py` | `route_by_phase` |
-| 维度分析 | `src/orchestration/nodes/dimension_node.py` | `analyze_dimension_for_send` |
-| 结果收集 | `src/orchestration/routing.py` | `collect_layer_results` |
-| 修订节点 | `src/orchestration/nodes/revision_node.py` | `revision_node` |
+| 功能     | 文件路径                                      | 关键函数/类                       |
+| -------- | --------------------------------------------- | --------------------------------- |
+| 图定义   | `src/orchestration/main_graph.py`           | `create_unified_planning_graph` |
+| 状态定义 | `src/orchestration/state.py`                | `UnifiedPlanningState`          |
+| 意图路由 | `src/orchestration/routing.py`              | `intent_router`                 |
+| 规划路由 | `src/orchestration/routing.py`              | `route_by_phase`                |
+| 维度分析 | `src/orchestration/nodes/dimension_node.py` | `analyze_dimension_for_send`    |
+| 结果收集 | `src/orchestration/routing.py`              | `collect_layer_results`         |
+| 修订节点 | `src/orchestration/nodes/revision_node.py`  | `revision_node`                 |
+
+---
+
+## GenericPlanner统一规划器
+
+### 架构概述
+
+GenericPlanner 是统一的规划器类，支持所有28个维度（Layer 1/2/3）：
+
+```
+src/planners/generic_planner.py
+├── GenericPlanner         # 核心规划器类
+├── StreamingCallback      # 流式Token回调
+├── GenericPlannerFactory  # 工厂类
+└── [向后兼容别名]
+    ├── AnalysisPlannerFactory
+    ├── ConceptPlannerFactory
+    └── DetailedPlannerFactory
+```
+
+### 核心特性
+
+1. **Python模块驱动** - 不依赖YAML配置
+2. **动态状态筛选** - 根据层级自动选择参数
+3. **工具钩子支持** - `_execute_tool_hook()` 自动执行绑定的工具
+4. **专业数据Hook** - `_get_specialized_data_from_module()` 提供维度特定数据
+5. **统一架构** - Layer 1/2/3 使用同一类
+6. **流式输出** - `streaming=True` + `on_token_callback`
+7. **RAG预加载** - `get_cached_knowledge()` 从状态缓存读取
+
+### 核心方法
+
+```python
+# src/planners/generic_planner.py
+class GenericPlanner:
+    def __init__(self, dimension_key: str):
+        """初始化规划器，从DIMENSIONS_METADATA加载配置"""
+        config = get_dimension_config(dimension_key)
+        self.dimension_key = dimension_key
+        self.layer = config["layer"]
+        self.tool_name = config.get("tool")  # 工具钩子
+        self.rag_enabled = config.get("rag_enabled", True)
+
+    def execute(self, state: dict, streaming: bool = False,
+                on_token_callback: Callable = None) -> dict:
+        """
+        执行规划器的标准流程：
+        1. validate_state() - 验证状态
+        2. build_prompt() - 构建Prompt
+        3. _invoke_llm() - 调用LLM（流式/非流式）
+        4. 返回结果字典
+        """
+        pass
+
+    def execute_with_feedback(self, state: dict, feedback: str,
+                               original_result: str) -> str:
+        """基于反馈的修复执行（用于Revision流程）"""
+        pass
+
+    def build_prompt(self, state: dict) -> str:
+        """
+        根据层级动态构建Prompt：
+        - Layer 1: 从 analysis_prompts.py 加载模板
+        - Layer 2: 从 concept_prompts.py 加载模板
+        - Layer 3: 使用 get_dimension_prompt() 函数式构建
+        """
+        params = self._prepare_prompt_params(state)
+        params["tool_output"] = self._execute_tool_hook(state)
+        params["knowledge_context"] = self.get_cached_knowledge(state)
+        return self.prompt_template.format(**params)
+
+    def _execute_tool_hook(self, state: dict) -> str:
+        """执行配置的tool字段绑定的工具"""
+        if self.tool_name:
+            context = self._prepare_tool_context(state)
+            result = ToolRegistry.execute_tool(self.tool_name, context)
+            return f"\n【参考数据 - {self.tool_name}】\n{result}\n"
+        return ""
+```
+
+### 关键维度（需RAG原文）
+
+涉及法规条文、技术指标的维度需要保留知识库原文：
+
+```python
+CRITICAL_DIMENSIONS = {
+    "land_use",           # 土地利用
+    "historical_culture", # 历史文化
+    "infrastructure",     # 基础设施
+    "ecological_green",   # 生态绿地
+    "disaster_prevention" # 防震减灾
+}
+```
+
+---
+
+## 知识预加载节点
+
+### 并行预加载机制
+
+知识预加载节点在维度分析前批量检索相关知识，使用 `asyncio.gather` 并行执行：
+
+```python
+# src/orchestration/nodes/dimension_node.py
+async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    知识预加载节点（并行版本）
+
+    流程：
+    1. 获取当前层级所有维度
+    2. 检查已有缓存，跳过已缓存的维度
+    3. 使用 asyncio.gather 并行检索未缓存的维度
+    4. 更新 state.config.knowledge_cache
+
+    优势：
+    - 总时间从串行之和降至 max(各维度时间)
+    - 使用 Semaphore 控制并发数（LLM_MAX_CONCURRENT）
+    """
+    layer = _phase_to_layer(state.get("phase"))
+    dimensions = get_layer_dimensions(layer)
+
+    # 并行检索
+    semaphore = asyncio.Semaphore(LLM_MAX_CONCURRENT)
+
+    async def fetch_one(dim_key: str) -> tuple:
+        async with semaphore:
+            query = build_dynamic_query(dim_key, layer, state)
+            result = await asyncio.to_thread(
+                search_knowledge, query=query, top_k=3, dimension=dim_key
+            )
+            return (dim_key, result)
+
+    results = await asyncio.gather(*[fetch_one(d) for d in fetch_dims])
+
+    # 更新缓存
+    knowledge_cache = {dim: result for dim, result in results}
+    return {"config": {"knowledge_cache": knowledge_cache}}
+```
+
+### 知识缓存使用
+
+维度分析时从缓存读取：
+
+```python
+# GenericPlanner.get_cached_knowledge()
+def get_cached_knowledge(self, state: Dict[str, Any]) -> str:
+    """
+    从状态缓存获取预加载的知识上下文
+
+    预加载模式下避免每个维度重复调用RAG。
+    """
+    knowledge_cache = state.get("knowledge_cache", {})
+    return knowledge_cache.get(self.dimension_key, "")
+```
+
+---
+
+## 28维度元数据
+
+### 维度分布
+
+| Layer | 维度数 | 描述 |
+|-------|--------|------|
+| Layer 1 | 12 | 现状分析（区位、人口、用地、设施等） |
+| Layer 2 | 4 | 规划思路（资源禀赋、定位、目标、策略） |
+| Layer 3 | 12 | 详细规划（产业、空间结构、用地规划等） |
+
+### Layer 1 维度（现状分析）
+
+| 维度键 | 名称 | 绑定工具 |
+|--------|------|----------|
+| location | 区位与对外交通分析 | - |
+| socio_economic | 社会经济分析 | population_model_v1 |
+| villager_wishes | 村民意愿与诉求分析 | - |
+| superior_planning | 上位规划与政策导向分析 | - |
+| natural_environment | 自然环境分析 | wfs_data_fetch |
+| land_use | 土地利用分析 | gis_coverage_calculator |
+| traffic | 道路交通分析 | accessibility_analysis |
+| public_services | 公共服务设施分析 | poi_search |
+| infrastructure | 基础设施分析 | - |
+| ecological_green | 生态绿地分析 | - |
+| architecture | 建筑分析 | - |
+| historical_culture | 历史文化与乡愁保护分析 | - |
+
+### Layer 2 维度（规划思路）
+
+| 维度键 | 名称 | 同层依赖 |
+|--------|------|----------|
+| resource_endowment | 资源禀赋分析 | 无 |
+| planning_positioning | 规划定位分析 | resource_endowment |
+| development_goals | 发展目标分析 | resource_endowment, planning_positioning |
+| planning_strategies | 规划策略分析 | 前3个维度 |
+
+### Layer 3 维度（详细规划）
+
+| 维度键 | 名称 | 绑定工具 |
+|--------|------|----------|
+| industry | 产业规划 | - |
+| spatial_structure | 空间结构规划 | planning_vectorizer |
+| land_use_planning | 土地利用规划 | - |
+| settlement_planning | 居民点规划 | - |
+| traffic_planning | 道路交通规划 | isochrone_analysis |
+| public_service | 公共服务设施规划 | facility_validator |
+| infrastructure_planning | 基础设施规划 | - |
+| ecological | 生态绿地规划 | ecological_sensitivity |
+| disaster_prevention | 防震减灾规划 | - |
+| heritage | 历史文保规划 | - |
+| landscape | 村庄风貌指引 | - |
+| project_bank | 建设项目库 | - |
+
+---
+
+## 波次计算机制
+
+### 自动波次计算
+
+波次通过 `_calculate_wave()` 拓扑排序动态计算，而非硬编码：
+
+```python
+# src/config/dimension_metadata.py
+def _calculate_wave(dimension_key: str, chain: Dict) -> int:
+    """
+    递归计算维度的执行波次
+
+    Wave = 1 + max(wave of dependencies within same layer)
+
+    示例：
+    - resource_endowment: 无同层依赖 → Wave 1
+    - planning_positioning: 依赖 resource_endowment → Wave 2
+    - development_goals: 依赖 Wave 2 维度 → Wave 3
+    """
+    deps = chain[dimension_key]
+    same_layer_deps = deps.get("depends_on_same_layer", [])
+
+    if not same_layer_deps:
+        return 1
+
+    max_dep_wave = max(
+        _calculate_wave(dep, chain) for dep in same_layer_deps
+    )
+    return max_dep_wave + 1
+```
+
+### 波次执行示例
+
+Layer 2 波次执行：
+
+```
+Wave 1: [resource_endowment]  # 无依赖，并行执行
+Wave 2: [planning_positioning]  # 依赖 Wave 1
+Wave 3: [development_goals]  # 依赖 Wave 1 + Wave 2
+Wave 4: [planning_strategies]  # 依赖前3波次
+```
+
+---
+
+## 修订节点级联更新
+
+### RevisionState
+
+修订流程使用专用状态：
+
+```python
+class RevisionState(TypedDict):
+    revision_target_dimensions: List[str]  # 用户选择的维度
+    human_feedback: str                    # 修改意见
+    revision_wave: int                     # 当前执行波次
+    revision_results: Dict[str, str]       # 修订结果
+```
+
+### 影响树计算
+
+当修改某维度时，自动计算需要级联更新的下游维度：
+
+```python
+# src/config/dimension_metadata.py
+def get_revision_wave_dimensions(
+    target_dimensions: List[str],
+    completed_dimensions: List[str]
+) -> Dict[int, List[str]]:
+    """
+    获取修复任务中按波次分组的维度
+
+    合并多个目标维度的影响树：
+    - Wave 0: 目标维度本身
+    - Wave 1: 直接依赖目标的维度（可并行）
+    - Wave 2: 依赖 Wave 1 的维度
+    - ...
+
+    示例：
+    >>> get_revision_wave_dimensions(["natural_environment"], completed)
+    {
+        0: ["natural_environment"],
+        1: ["resource_endowment", "ecological", "spatial_structure"],
+        2: ["planning_positioning", "planning_strategies"],
+        3: ["project_bank"]
+    }
+    """
+    pass
+```
+
+### 级联更新流程
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant Revision as revision_node
+    participant Impact as get_impact_tree
+    participant Dimension as analyze_dimension
+
+    User->>Revision: 选择维度 + 反馈意见
+
+    Revision->>Impact: get_revision_wave_dimensions(targets, completed)
+    Impact-->>Revision: {wave: [dimensions]}
+
+    loop 每个波次
+        Revision->>Dimension: Send(dim) [并行]
+        Dimension-->>Revision: revision_result
+    end
+
+    Revision->>Revision: 更新 reports
+    Revision-->>User: 完成修订
+```
+
+---
+
+## 关键文件路径汇总
+
+| 类别 | 文件路径 |
+|------|----------|
+| 主入口 | src/agent.py |
+| 状态图定义 | src/orchestration/main_graph.py |
+| 统一规划器 | src/planners/generic_planner.py |
+| 维度元数据 | src/config/dimension_metadata.py |
+| 状态定义 | src/orchestration/state.py |
+| 意图路由 | src/orchestration/routing.py |
+| 维度节点 | src/orchestration/nodes/dimension_node.py |
+| 修订节点 | src/orchestration/nodes/revision_node.py |
+| Layer 1 Prompt | src/subgraphs/analysis_prompts.py |
+| Layer 2 Prompt | src/subgraphs/concept_prompts.py |
+| Layer 3 Prompt | src/subgraphs/detailed_plan_prompts.py |
 
 ---
 
@@ -636,3 +1012,4 @@ sequenceDiagram
 - [前端状态管理](./frontend-state-dataflow.md) - 前端如何响应 Agent 状态
 - [后端API与数据流](./backend-api-dataflow.md) - API 层与 Agent 的交互
 - [维度与层级数据流](./layer-dimension-dataflow.md) - 三层规划架构详解
+- [工具系统实现](./tool-system-implementation.md) - Tool-Dimension 绑定机制

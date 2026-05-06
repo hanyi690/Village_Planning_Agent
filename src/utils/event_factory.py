@@ -21,6 +21,7 @@ def create_layer_completed_event(
     pause_after_step: bool,
     previous_layer: int = 0,
     session_id: Optional[str] = None,
+    knowledge_sources_cache: Optional[Dict[str, List[Dict]]] = None,
 ) -> Dict[str, Any]:
     """创建层级完成事件
 
@@ -31,6 +32,7 @@ def create_layer_completed_event(
         pause_after_step: 是否暂停等待审查
         previous_layer: 刚完成的层级编号（前端依赖此字段）
         session_id: 可选的 session ID
+        knowledge_sources_cache: 各维度知识来源缓存
 
     Returns:
         标准化的 layer_completed 事件字典
@@ -43,12 +45,22 @@ def create_layer_completed_event(
     total_chars = sum(len(v) for v in dimension_reports.values()) if dimension_reports else 0
     has_data = dimension_count > 0 and total_chars > 0
 
+    # Extract knowledge sources for dimensions in this layer
+    dimension_knowledge_sources: Dict[str, List[Dict]] = {}
+    if knowledge_sources_cache:
+        dimension_knowledge_sources = {
+            dim_key: knowledge_sources_cache[dim_key]
+            for dim_key in dimension_reports.keys()
+            if dim_key in knowledge_sources_cache
+        }
+
     return {
         "type": "layer_completed",
         "layer": layer,
         "layer_name": get_layer_name(layer),
         "phase": phase,
         "dimension_reports": dimension_reports,
+        "dimension_knowledge_sources": dimension_knowledge_sources,
         "has_data": has_data,
         "dimension_count": dimension_count,
         "total_chars": total_chars,
