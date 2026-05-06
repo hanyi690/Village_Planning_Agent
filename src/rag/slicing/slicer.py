@@ -165,8 +165,33 @@ class UnifiedMarkdownSlicer:
         return chunks
 
     def _preprocess(self, text: str) -> str:
-        """预处理文本：统一换行符、压缩空行（使用预编译模式）"""
+        """预处理文本：统一换行符、压缩空行、清理表格乱码、清理书脊文字"""
         text = self.NEWLINE_NORMALIZE_RE.sub('\n', text)
+        text = self.MULTIPLE_NEWLINES_RE.sub('\n\n', text)
+    
+        lines = text.split('\n')
+        cleaned = []
+        for line in lines:
+            stripped = line.strip()
+            # 跳过表格行
+            if stripped.count('|') > 3:
+                continue
+            # 跳过书脊文字：单个中文字符独占一行
+            if len(stripped) == 1 and '\u4e00' <= stripped <= '\u9fff':
+                continue
+            # 跳过纯点线（目录分隔符）
+            if stripped and all(c in '．。·.…' for c in stripped):
+                continue
+            # 跳过噪音行
+            if len(stripped) > 20:
+                chinese_count = sum(1 for c in stripped if '\u4e00' <= c <= '\u9fff')
+                ascii_count = sum(1 for c in stripped if c.isascii() and c.isalpha())
+                total_alpha = chinese_count + ascii_count
+                if total_alpha > 0 and (1 - total_alpha / len(stripped)) > 0.6:
+                    continue
+            cleaned.append(line)
+    
+        text = '\n'.join(cleaned)
         text = self.MULTIPLE_NEWLINES_RE.sub('\n\n', text)
         return text.strip()
 
@@ -315,12 +340,36 @@ class UnifiedMarkdownSlicer:
         slices: List[str],
         metadata: Optional[Dict] = None,
     ) -> List[Chunk]:
-        """将切片文本转换为 Chunk 对象"""
-        return [
-            Chunk(content=s, metadata={**(metadata or {}), "chunk_index": idx})
-            for idx, s in enumerate(slices)
-        ]
+        """将切片文本转换为 Chunk 对象，过滤低质量切片"""
+        result = []
+        idx = 0
+        for s in slices:
+            if self._is_quality_chunk(s):
+                result.append(
+                    Chunk(content=s, metadata={**(metadata or {}), "chunk_index": idx})
+                )
+                idx += 1
+        return result
 
+    def _is_quality_chunk(self, text: str) -> bool:
+        if len(text.strip()) < 30:
+            return False
+        chinese_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+        ratio = chinese_count / len(text)
+        if ratio < 0.05:
+            return False
+        # 过滤书脊文字
+        lines = [l for l in text.split('\n') if l.strip()]
+        if lines:
+            single_char_lines = sum(1 for l in lines if len(l.strip()) == 1)
+            if single_char_lines / len(lines) > 0.4:
+                return False
+            # 过滤目录页：大量短行（section numbers like "5.3.1", page numbers）
+            short_lines = sum(1 for l in lines if len(l.strip()) < 8)
+            if short_lines / len(lines) > 0.6:
+                return False
+        return True
+    
     def _check_chunk_lengths(
         self,
         chunks: List[Chunk],

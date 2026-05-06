@@ -13,7 +13,7 @@
 - collection.add() 增量插入
 - collection.delete(where={"source": name}) 删除
 """
-
+import re
 import hashlib
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
@@ -44,17 +44,15 @@ logger = get_logger(__name__)
 def infer_doc_type(filename: str, content: str = "") -> str:
     """
     根据文件名关键词推断文档类型
-
-    Args:
-        filename: 文件名（含扩展名）
-        content: 文档内容（可选，用于辅助判断）
-
-    Returns:
-        文档类型标识：textbook/guide/policy/standard/case/report
+    Returns: textbook/guide/policy/standard/case/report
     """
     name_lower = filename.lower()
 
-    # 教材类关键词（优先级最高）
+    # 基于内容判断：有章节标题的是教材（支持中文数字和阿拉伯数字）
+    if content and re.search(r'第[一二三四五六七八九十\d]+章', content):
+        return "textbook"
+
+    # 教材类关键词
     textbook_keywords = ["教材", "原理", "教程", "导论", "基础", "入门", "读本"]
     if any(kw in filename for kw in textbook_keywords):
         return "textbook"
