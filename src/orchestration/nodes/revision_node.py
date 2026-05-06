@@ -388,8 +388,8 @@ def _build_cascade_feedback(
         filtered_detail_summary: 上游摘要内容（推荐使用）
         user_feedback: 原始用户反馈
     """
-    # Use summary if available, otherwise fallback to truncated full content
-    upstream_content = filtered_detail_summary or (filtered_detail[:3000] if filtered_detail else "（无上游内容）")
+    # Use summary if available, otherwise fallback to truncated full content (8000 chars for upstream context)
+    upstream_content = filtered_detail_summary or (filtered_detail[:8000] if filtered_detail else "（无上游内容）")
 
     return f"""
 【级联更新任务】

@@ -1,5 +1,5 @@
 {
-  "session_id": "scenario1_1e74d58d_20260505161048",
+  "session_id": "scenario1_fd6416ec_20260506214441",
   "scenario_name": "scenario1",
   "config": {
     "name": "驳回规划定位（Layer 2）",
@@ -42,5 +42,5 @@
       ]
     }
   },
-  "created_at": "2026-05-05T16:10:48.501995"
+  "created_at": "2026-05-06T21:44:41.062378"
 }

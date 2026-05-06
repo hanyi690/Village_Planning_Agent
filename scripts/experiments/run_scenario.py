@@ -442,7 +442,7 @@ def save_scenario_results(results: Dict[str, Any], output_dir: Path):
 # Main Entry Point
 # ============================================
 
-async def run_scenario(scenario_name: str, timeout: int = 600, use_mock: bool = True):
+async def run_scenario(scenario_name: str, timeout: int = 600, use_mock: bool = False):
     """
     Run scenario experiment.
 

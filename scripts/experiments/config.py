@@ -3,24 +3,64 @@ Experiment Configuration
 实验配置
 
 定义实验场景、关键词检测列表、输出路径等配置。
+
+实验一：RAG开启/关闭条件下的法规引用幻觉率对比
+实验二：级联一致性检验
 """
 
 from pathlib import Path
 from typing import Dict, List, Any
 
 # ============================================
-# Output Paths
+# Output Paths - 实验一（RAG幻觉率）
 # ============================================
 
-OUTPUT_BASE = Path(__file__).parent.parent.parent / "output" / "experiments" / "cascade_consistency"
-BASELINE_DIR = OUTPUT_BASE / "baseline"
-SCENARIO1_DIR = OUTPUT_BASE / "scenario1_planning_positioning"
-SCENARIO2_DIR = OUTPUT_BASE / "scenario2_natural_environment"
-ANALYSIS_DIR = OUTPUT_BASE / "analysis"
+RAG_HALLUCINATION_DIR = Path(__file__).parent.parent.parent / "output" / "experiments" / "rag_hallucination"
+RAG_ON_DIR = RAG_HALLUCINATION_DIR / "rag_on"
+RAG_OFF_DIR = RAG_HALLUCINATION_DIR / "rag_off"
+FIXED_CONTEXT_DIR = RAG_HALLUCINATION_DIR / "fixed_context"
+ANNOTATION_DIR = RAG_HALLUCINATION_DIR / "annotation"
+
+# ============================================
+# Output Paths - 实验二（级联一致性）
+# ============================================
+
+CASCADE_DIR = Path(__file__).parent.parent.parent / "output" / "experiments" / "cascade_consistency"
+BASELINE_DIR = CASCADE_DIR / "baseline"
+SCENARIO1_DIR = CASCADE_DIR / "scenario1_planning_positioning"
+SCENARIO2_DIR = CASCADE_DIR / "scenario2_natural_environment"
+ANALYSIS_DIR = CASCADE_DIR / "analysis"
 
 
 # ============================================
-# Scenario Definitions
+# 实验一：RAG 幻觉率实验配置
+# ============================================
+
+# Layer 3 中启用 RAG 的 5 个关键维度
+RAG_ENABLED_DIMENSIONS = [
+    "land_use_planning",      # 土地利用规划
+    "infrastructure_planning", # 基础设施规划
+    "ecological",             # 生态绿地规划
+    "disaster_prevention",    # 防震减灾规划
+    "heritage",               # 历史文保规划
+]
+
+# 法规引用标注字段
+REGULATION_ANNOTATION_FIELDS = [
+    {"field": "reference_id", "label": "引用序号", "type": "number"},
+    {"field": "reference_text", "label": "引用原文", "type": "text"},
+    {"field": "reference_type", "label": "引用类型", "type": "select",
+     "options": ["法规文件名", "条款编号", "技术指标数值", "其他"]},
+    {"field": "is_correct", "label": "是否正确", "type": "select",
+     "options": ["正确", "虚构", "部分错误"]},
+    {"field": "error_type", "label": "错误分类", "type": "select",
+     "options": ["A-文件名虚构", "B-条款编号不符", "C-指标数值错误", "D-条款内容张冠李戴", "无错误"]},
+    {"field": "verification_source", "label": "核查依据", "type": "text"},
+]
+
+
+# ============================================
+# 实验二：级联一致性场景定义
 # ============================================
 
 SCENARIOS: Dict[str, Dict[str, Any]] = {
@@ -104,10 +144,22 @@ ANNOTATION_FIELDS = [
 # Utility Functions
 # ============================================
 
-def ensure_output_dirs():
-    """Ensure all output directories exist."""
-    for dir_path in [BASELINE_DIR, SCENARIO1_DIR, SCENARIO2_DIR, ANALYSIS_DIR]:
+def ensure_rag_experiment_dirs():
+    """Ensure RAG hallucination experiment directories exist."""
+    for dir_path in [RAG_HALLUCINATION_DIR, RAG_ON_DIR, RAG_OFF_DIR, FIXED_CONTEXT_DIR, ANNOTATION_DIR]:
         dir_path.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_cascade_dirs():
+    """Ensure cascade consistency experiment directories exist."""
+    for dir_path in [CASCADE_DIR, BASELINE_DIR, SCENARIO1_DIR, SCENARIO2_DIR, ANALYSIS_DIR]:
+        dir_path.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_output_dirs():
+    """Ensure all experiment directories exist."""
+    ensure_rag_experiment_dirs()
+    ensure_cascade_dirs()
 
 
 def get_scenario_config(scenario_name: str) -> Dict[str, Any]:
@@ -129,3 +181,53 @@ def get_output_dir(scenario_name: str) -> Path:
         return ANALYSIS_DIR
     else:
         raise ValueError(f"Unknown scenario: {scenario_name}")
+
+
+# ============================================
+# Knowledge Base Status Check
+# ============================================
+
+def check_kb_status(required_docs: List[str] = None) -> Dict[str, Any]:
+    """
+    Check if knowledge base contains necessary documents.
+
+    Args:
+        required_docs: List of required document names (optional)
+
+    Returns:
+        Status dict with total_chunks, total_docs, missing_docs, is_ready
+    """
+    try:
+        from src.rag.core.vector_store import get_parent_child_store
+
+        store = get_parent_child_store()
+        stats = store.get_stats()
+
+        total_chunks = stats.get("total_chunks", 0)
+        total_docs = stats.get("total_docs", 0)
+
+        # Check required documents
+        missing = []
+        if required_docs:
+            available_docs = stats.get("documents", [])
+            for doc in required_docs:
+                # Check if doc name appears in available docs
+                if not any(doc in d for d in available_docs):
+                    missing.append(doc)
+
+        return {
+            "total_chunks": total_chunks,
+            "total_docs": total_docs,
+            "missing_docs": missing,
+            "is_ready": len(missing) == 0 and total_chunks > 100,
+        }
+
+    except Exception as e:
+        # If RAG module not available, return unavailable status
+        return {
+            "total_chunks": 0,
+            "total_docs": 0,
+            "missing_docs": required_docs if required_docs else [],
+            "is_ready": False,
+            "error": str(e),
+        }

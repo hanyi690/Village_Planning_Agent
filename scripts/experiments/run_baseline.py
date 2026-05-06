@@ -221,7 +221,7 @@ def save_reports(state: Dict[str, Any], output_dir: Path):
 # Main Entry Point
 # ============================================
 
-async def run_baseline(timeout: int = 1800, use_mock: bool = True):
+async def run_baseline(timeout: int = 1800, use_mock: bool = False):
     """
     Run baseline experiment.
 
