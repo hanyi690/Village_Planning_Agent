@@ -16,7 +16,6 @@ import {
   faMap,
   faCheckCircle,
   faExclamationTriangle,
-  faSpinner,
   faTrash,
   faInfoCircle,
 } from '@fortawesome/free-solid-svg-icons';
@@ -27,8 +26,11 @@ import type { FeatureCollection, Geometry, GeoJsonProperties } from 'geojson';
 // 数据类型标签颜色映射
 const DATA_TYPE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
   boundary: { bg: 'bg-gray-100', text: 'text-gray-700', border: 'border-gray-300' },
+  landuse: { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-300' },
+  protection_zone: { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-400' },
+  geological_hazard: { bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-400' },
   water: { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-300' },
-  road: { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-300' },
+  road: { bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-300' },
   residential: { bg: 'bg-yellow-100', text: 'text-yellow-700', border: 'border-yellow-300' },
   poi: { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-300' },
   custom: { bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-300' },
@@ -37,6 +39,9 @@ const DATA_TYPE_COLORS: Record<string, { bg: string; text: string; border: strin
 // 数据类型名称映射
 const DATA_TYPE_NAMES: Record<string, string> = {
   boundary: '行政边界',
+  landuse: '土地利用',
+  protection_zone: '保护红线',
+  geological_hazard: '地质灾害',
   water: '水系',
   road: '道路',
   residential: '居民地',

@@ -45,7 +45,7 @@ class GISUploadResponse(BaseModel):
     """GIS upload response"""
     success: bool = Field(..., description="Upload success status")
     village_name: str = Field(..., description="Village name for data association")
-    data_type: str = Field(..., description="Inferred data type: boundary/water/road/residential/poi/custom")
+    data_type: str = Field(..., description="Inferred data type: boundary/landuse/protection_zone/geological_hazard/water/road/residential/poi/custom")
     geojson: Dict[str, Any] = Field(..., description="Parsed GeoJSON data")
     metadata: GISUploadMetadata = Field(..., description="Upload metadata")
     source: str = Field("user_upload", description="Data source identifier")
@@ -70,7 +70,8 @@ GIS_EXTENSIONS = {
     '.geojson': 'geojson',
     '.json': 'geojson',
     '.shp': 'shapefile',
-    '.zip': 'shapefile',  # ZIP 包含 Shapefile
+    '.zip': 'shapefile',  # ZIP 包含 Shapefile 或 GDB
+    '.gdb': 'gdb',  # ArcGIS File Geodatabase
     '.kml': 'kml',
     '.kmz': 'kmz',
     '.tif': 'geotiff',
@@ -272,6 +273,7 @@ async def get_supported_formats():
         "supported": [
             {"ext": ".geojson, .json", "type": "geojson", "description": "GeoJSON 格式，前端直接解析"},
             {"ext": ".zip (含 .shp)", "type": "shapefile", "description": "Shapefile ZIP 包，包含 .shp/.dbf/.prj"},
+            {"ext": ".zip (含 .gdb)", "type": "gdb", "description": "ArcGIS File Geodatabase ZIP 包"},
             {"ext": ".kml", "type": "kml", "description": "Google KML 格式"},
             {"ext": ".kmz", "type": "kmz", "description": "Google KMZ 压缩格式"},
             {"ext": ".tif, .tiff", "type": "geotiff", "description": "GeoTIFF 栅格格式"},

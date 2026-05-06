@@ -16,6 +16,10 @@ from .revision_node import (
     create_revision_subgraph,
     call_revision_subgraph,
 )
+from .spatial_layout_node import (
+    spatial_layout_node,
+    should_trigger_spatial_layout,
+)
 
 __all__ = [
     "analyze_dimension_node",
@@ -28,4 +32,6 @@ __all__ = [
     "RevisionDimensionState",
     "create_revision_subgraph",
     "call_revision_subgraph",
+    "spatial_layout_node",
+    "should_trigger_spatial_layout",
 ]

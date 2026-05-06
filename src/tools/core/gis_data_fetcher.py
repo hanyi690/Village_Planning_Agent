@@ -5,7 +5,7 @@
 
 import re
 from typing import Dict, Any, Tuple, Optional, List
-from ..geocoding import TiandituProvider, WfsService, WFS_LAYERS
+from ..geocoding import TiandituProvider, WfsService, WFS_LAYERS, OSMProvider
 from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -334,6 +334,144 @@ class GISDataFetcher:
             "success": True,
             "geojson": result.data.get("geojson"),
             "metadata": result.metadata
+        }
+
+    def fetch_road_data_osm(
+        self,
+        location: str,
+        buffer_km: float = 2.0,
+        network_type: str = "drive",
+        use_boundary_polygon: bool = False
+    ) -> Dict[str, Any]:
+        """使用 OSM 获取道路数据（补充村级道路）
+
+        天地图 WFS 仅提供县级以上道路，OSM 可补充村级道路（residential,
+        unclassified, track 等）。
+
+        Args:
+            location: 行政区名称（支持村级地址）
+            buffer_km: 缓冲距离（村级默认 2km）
+            network_type: OSM 网络类型 (all/drive/bike/walk)
+            use_boundary_polygon: 是否使用多边形边界（需有边界 GeoJSON）
+
+        Returns:
+            道路 GeoJSON 数据，包含 metadata.highway_stats 道路类型统计
+        """
+        osm_provider = OSMProvider()
+
+        # 检查 OSMnx 是否可用
+        if not osm_provider.is_available():
+            return {
+                "success": False,
+                "error": "osmnx 库未安装，请运行: pip install osmnx",
+                "data": None,
+                "metadata": {"source": "osm"}
+            }
+
+        if use_boundary_polygon:
+            # 通过多边形边界获取（更精确）
+            # 尝试获取边界 GeoJSON
+            boundary_result = self.provider.get_boundary(location)
+            if boundary_result.success and boundary_result.data:
+                polygon_geojson = boundary_result.data.get("geometry")
+                if polygon_geojson:
+                    result = osm_provider.get_roads_by_polygon(
+                        polygon_geojson,
+                        network_type=network_type
+                    )
+                else:
+                    # fallback to bbox
+                    bbox = self.get_boundary_bbox(location, buffer_km)
+                    result = osm_provider.get_road_network(bbox, network_type)
+            else:
+                bbox = self.get_boundary_bbox(location, buffer_km)
+                result = osm_provider.get_road_network(bbox, network_type)
+        else:
+            # 通过 bbox 获取
+            bbox = self.get_boundary_bbox(location, buffer_km)
+            result = osm_provider.get_road_network(bbox, network_type)
+
+        if not result.success:
+            return {
+                "success": False,
+                "error": result.error,
+                "data": None,
+                "metadata": {"source": "osm", "location": location}
+            }
+
+        return {
+            "success": True,
+            "geojson": result.data,
+            "metadata": {
+                "source": "osm",
+                "location": location,
+                "network_type": network_type,
+                "total_features": result.total_features,
+                "highway_stats": result.highway_stats,
+                "village_relevant_count": sum(
+                    result.highway_stats.get(h, 0)
+                    for h in ["residential", "unclassified", "track", "tertiary"]
+                )
+            }
+        }
+
+    def fetch_road_data_combined(
+        self,
+        location: str,
+        buffer_km: float = 2.0,
+        max_features: int = 500,
+        include_osm: bool = True
+    ) -> Dict[str, Any]:
+        """获取道路数据（天地图 WFS + OSM 补充）
+
+        组合天地图 WFS（县级以上道路）和 OSM（村级道路）数据源。
+
+        Args:
+            location: 行政区名称
+            buffer_km: 缓冲距离
+            max_features: WFS 最大要素数量
+            include_osm: 是否包含 OSM 数据
+
+        Returns:
+            组合道路 GeoJSON 数据
+        """
+        # 天地图 WFS 数据
+        wfs_result = self.fetch_road_data(location, buffer_km, max_features)
+
+        combined_features = []
+        metadata = {
+            "sources": [],
+            "wfs_features": 0,
+            "osm_features": 0,
+        }
+
+        # 添加 WFS 数据
+        if wfs_result.get("success") and wfs_result.get("geojson"):
+            wfs_geojson = wfs_result["geojson"]
+            combined_features.extend(wfs_geojson.get("features", []))
+            metadata["wfs_features"] = len(wfs_geojson.get("features", []))
+            metadata["sources"].append("tianditu_wfs")
+            metadata["wfs_metadata"] = wfs_result.get("metadata")
+
+        # 添加 OSM 数据
+        if include_osm:
+            osm_result = self.fetch_road_data_osm(location, buffer_km)
+            if osm_result.get("success") and osm_result.get("geojson"):
+                osm_geojson = osm_result["geojson"]
+                combined_features.extend(osm_geojson.get("features", []))
+                metadata["osm_features"] = len(osm_geojson.get("features", []))
+                metadata["sources"].append("osm")
+                metadata["osm_highway_stats"] = osm_result.get("metadata", {}).get("highway_stats")
+
+        metadata["total_features"] = len(combined_features)
+
+        return {
+            "success": True,
+            "geojson": {
+                "type": "FeatureCollection",
+                "features": combined_features,
+            },
+            "metadata": metadata
         }
 
     def fetch_residential_data(

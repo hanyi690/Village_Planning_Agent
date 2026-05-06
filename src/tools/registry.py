@@ -91,11 +91,13 @@ TOOL_PARAMETER_SCHEMAS = {
         "properties": {
             "analysis_type": {
                 "type": "string",
-                "enum": ["driving_accessibility", "walking_accessibility", "service_coverage", "poi_coverage"],
+                "enum": ["driving_accessibility", "walking_accessibility", "service_coverage", "poi_coverage", "isochrone"],
                 "description": "分析类型"
             },
             "origin": {"type": "array", "items": {"type": "number"}, "description": "起点坐标 [lon, lat]"},
             "center": {"type": "array", "items": {"type": "number"}, "description": "中心坐标 [lon, lat]"},
+            "include_isochrone": {"type": "boolean", "description": "包含等时圈分析"},
+            "include_poi": {"type": "boolean", "description": "包含 POI 搜索"},
         },
         "required": ["analysis_type"]
     },
@@ -166,6 +168,8 @@ TOOL_PARAMETER_SCHEMAS = {
             "facility_type": {"type": "string", "description": "设施类型"},
             "location": {"type": "array", "items": {"type": "number"}, "description": "设施位置 [lon, lat]"},
             "analysis_params": {"type": "object", "description": "分析参数"},
+            "check_protection_constraints": {"type": "boolean", "description": "检查保护约束"},
+            "check_hazard_zones": {"type": "boolean", "description": "检查灾害区域"},
         },
         "required": ["facility_type", "location"]
     },
@@ -174,6 +178,7 @@ TOOL_PARAMETER_SCHEMAS = {
         "properties": {
             "study_area": {"type": "object", "description": "研究区域 (GeoJSON)"},
             "water_features": {"type": "object", "description": "水系要素 (GeoJSON)"},
+            "hazard_points": {"type": "object", "description": "地质灾害点 (GeoJSON)"},
         },
         "required": ["study_area"]
     },
@@ -185,6 +190,53 @@ TOOL_PARAMETER_SCHEMAS = {
             "center": {"type": "array", "items": {"type": "number"}, "description": "地图中心"},
         },
         "required": ["layers"]
+    },
+    # 新增工具
+    "landuse_change_analysis": {
+        "type": "object",
+        "properties": {
+            "current_landuse": {"type": "object", "description": "现状用地 GeoJSON"},
+            "planned_landuse": {"type": "object", "description": "规划用地 GeoJSON"},
+            "change_threshold": {"type": "number", "description": "变化识别阈值"},
+        },
+        "required": ["current_landuse", "planned_landuse"]
+    },
+    "constraint_validator": {
+        "type": "object",
+        "properties": {
+            "planning_zones": {"type": "object", "description": "规划方案 GeoJSON"},
+            "protection_zones": {"type": "object", "description": "保护区域字典"},
+            "construction_zone": {"type": "object", "description": "建设区 GeoJSON"},
+        },
+        "required": ["planning_zones"]
+    },
+    "hazard_buffer_generator": {
+        "type": "object",
+        "properties": {
+            "hazard_points": {"type": "object", "description": "地质灾害点 GeoJSON"},
+            "buffer_meters": {"type": "integer", "description": "缓冲距离（米）"},
+            "study_area": {"type": "object", "description": "研究区域 GeoJSON"},
+        },
+        "required": ["hazard_points"]
+    },
+    "boundary_fallback": {
+        "type": "object",
+        "properties": {
+            "center": {"type": "array", "items": {"type": "number"}, "description": "中心点坐标"},
+            "village_name": {"type": "string", "description": "村庄名称"},
+            "gis_data": {"type": "object", "description": "GIS 数据"},
+        },
+        "required": ["center", "village_name"]
+    },
+    "spatial_layout_generator": {
+        "type": "object",
+        "properties": {
+            "village_boundary": {"type": "object", "description": "村庄边界 GeoJSON"},
+            "road_network": {"type": "object", "description": "道路网络 GeoJSON"},
+            "planning_scheme": {"type": "object", "description": "规划方案"},
+            "constraint_zones": {"type": "object", "description": "约束区域"},
+        },
+        "required": ["planning_scheme"]
     },
 }
 
@@ -210,7 +262,7 @@ TOOL_METADATA_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "accessibility_analysis": {
         "display_name": "可达性分析",
-        "description": "分析设施可达性，计算服务覆盖范围和出行时间。",
+        "description": "分析设施可达性，计算服务覆盖范围和出行时间。支持等时圈和 POI 搜索。",
         "estimated_time": 6.0,
         "display_hints": {"primary_view": "table", "priority_fields": ["coverage_rate", "accessibility_matrix"]}
     },
@@ -253,13 +305,13 @@ TOOL_METADATA_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     },
     "facility_validator": {
         "display_name": "设施选址验证",
-        "description": "验证设施选址合理性，评估服务覆盖、人口可达性。",
+        "description": "验证设施选址合理性，评估服务覆盖、人口可达性和保护约束。",
         "estimated_time": 6.0,
         "display_hints": {"primary_view": "text", "priority_fields": ["overall_score", "suitability_level"]}
     },
     "ecological_sensitivity": {
         "display_name": "生态敏感性评估",
-        "description": "评估区域生态敏感性，识别生态保护区域。",
+        "description": "评估区域生态敏感性，识别生态保护区域和地质灾害敏感区。",
         "estimated_time": 7.0,
         "display_hints": {"primary_view": "map", "priority_fields": ["sensitivity_class", "sensitive_area_km2"]}
     },
@@ -268,6 +320,51 @@ TOOL_METADATA_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         "description": "渲染规划专题地图，支持符号化和图例。",
         "estimated_time": 3.0,
         "display_hints": {"primary_view": "map", "priority_fields": ["map_html", "layer_info"]}
+    },
+    # Layer 0: 基础数据层
+    "boundary_fallback": {
+        "display_name": "边界兜底生成",
+        "description": "生成代理边界数据，支持多策略兜底。",
+        "estimated_time": 3.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["geojson", "strategy_used"]}
+    },
+    "gis_data_fetch": {
+        "display_name": "GIS 数据获取",
+        "description": "获取 GIS 基础数据（水系、道路、居民点）。",
+        "estimated_time": 5.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["data", "center"]}
+    },
+    "gis_coverage_calculator": {
+        "display_name": "数据覆盖率计算",
+        "description": "计算 GIS 数据覆盖率和完整性。",
+        "estimated_time": 2.0,
+        "display_hints": {"primary_view": "text", "priority_fields": ["coverage_rate", "layers_available"]}
+    },
+    # Layer 1: 空间分析层（新增）
+    "landuse_change_analysis": {
+        "display_name": "用地变化分析",
+        "description": "分析现状用地与规划用地的变化，生成变化统计和热力图。",
+        "estimated_time": 6.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["change_statistics", "total_area_change"]}
+    },
+    "hazard_buffer_generator": {
+        "display_name": "灾害缓冲区生成",
+        "description": "生成地质灾害缓冲区，识别安全区域。",
+        "estimated_time": 4.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["buffer_zones", "affected_area_km2"]}
+    },
+    # Layer 2: 规划决策层（新增）
+    "constraint_validator": {
+        "display_name": "保护约束验证",
+        "description": "验证规划方案是否符合保护约束（农田/生态/历史保护红线）。",
+        "estimated_time": 5.0,
+        "display_hints": {"primary_view": "text", "priority_fields": ["compliance_score", "conflicts"]}
+    },
+    "spatial_layout_generator": {
+        "display_name": "空间布局生成",
+        "description": "生成规划空间布局，支持道路分割和约束避让。",
+        "estimated_time": 8.0,
+        "display_hints": {"primary_view": "map", "priority_fields": ["geojson", "zone_count"]}
     },
 }
 

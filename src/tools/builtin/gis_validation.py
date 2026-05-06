@@ -153,6 +153,8 @@ def validate_facility_location(
     - Service radius coverage analysis
     - Population accessibility analysis
     - Siting constraint verification
+    - Protection zone conflict check (新增)
+    - Hazard zone avoidance check (新增)
     - Overall suitability scoring
 
     Args:
@@ -163,6 +165,8 @@ def validate_facility_location(
             - existing_facilities: List of existing facilities of same type
             - land_use_data: Current land use GeoJSON
             - water_features: Water body GeoJSON for constraint check
+            - protection_zones: 保护区域字典 (新增)
+            - hazard_zones: 灾害区域 GeoJSON (新增)
         **kwargs: Additional parameters
 
     Returns:
@@ -248,12 +252,39 @@ def validate_facility_location(
             else:
                 validation_results["scores"]["constraints"] = 100
 
-        # 5. Calculate overall score
+        # 5. Protection zone conflict check (新增)
+        protection_zones = analysis_params.get("protection_zones", {})
+        if protection_zones and SPATIAL_AVAILABLE:
+            protection_result = _check_protection_zones(location, protection_zones, facility_type)
+            validation_results["checks"]["protection"] = protection_result
+
+            # Protection score (0 if in protected zone)
+            if protection_result.get("in_protected_zone"):
+                validation_results["scores"]["protection"] = 0
+            else:
+                validation_results["scores"]["protection"] = 100
+
+        # 6. Hazard zone avoidance check (新增)
+        hazard_zones = analysis_params.get("hazard_zones")
+        if hazard_zones and SPATIAL_AVAILABLE:
+            hazard_result = _check_hazard_zones(location, hazard_zones)
+            validation_results["checks"]["hazard"] = hazard_result
+
+            # Hazard score (降低分数 if in hazard zone)
+            if hazard_result.get("in_hazard_zone"):
+                validation_results["scores"]["hazard"] = 20  # Low score for hazard area
+            elif hazard_result.get("near_hazard_zone"):
+                validation_results["scores"]["hazard"] = 60  # Moderate score for nearby
+            else:
+                validation_results["scores"]["hazard"] = 100
+
+        # 7. Calculate overall score
         scores = validation_results["scores"]
-        weights = {"coverage": 0.3, "population": 0.25, "proximity": 0.2, "constraints": 0.25}
+        weights = {"coverage": 0.3, "population": 0.25, "proximity": 0.2, "constraints": 0.15,
+                   "protection": 0.05, "hazard": 0.05}
 
         overall_score = sum(
-            scores.get(k, 50) * weights.get(k, 0.25)
+            scores.get(k, 50) * weights.get(k, 0.15)
             for k in weights
         ) / sum(weights.values())
 
@@ -390,6 +421,117 @@ def _check_constraint_zones(
     }
 
 
+def _check_protection_zones(
+    location: Tuple[float, float],
+    protection_zones: Dict[str, Dict[str, Any]],
+    facility_type: str
+) -> Dict[str, Any]:
+    """
+    Check if location conflicts with protection zones (新增).
+
+    Args:
+        location: Facility location
+        protection_zones: 保护区域字典 {
+            "farmland": GeoJSON,
+            "ecological": GeoJSON,
+            "historical": GeoJSON,
+        }
+        facility_type: 设施类型
+
+    Returns:
+        Dict with protection check results
+    """
+    from ..core.spatial_analysis import run_spatial_query
+
+    conflicts = []
+    in_protected_zone = False
+
+    point_geom = {"type": "Point", "coordinates": list(location)}
+
+    for zone_type, zone_geojson in protection_zones.items():
+        if not zone_geojson or not zone_geojson.get("features"):
+            continue
+
+        try:
+            result = run_spatial_query(
+                query_type="contains",
+                geometry=point_geom,
+                target_layer=zone_geojson,
+                limit=1,
+            )
+
+            if result.get("success") and result.get("data", {}).get("match_count", 0) > 0:
+                conflicts.append({
+                    "zone_type": zone_type,
+                    "severity": "high" if zone_type == "farmland" else "medium",
+                })
+                in_protected_zone = True
+
+        except Exception:
+            pass
+
+    return {
+        "checked": True,
+        "in_protected_zone": in_protected_zone,
+        "conflicts": conflicts,
+        "zone_types_checked": list(protection_zones.keys()),
+    }
+
+
+def _check_hazard_zones(
+    location: Tuple[float, float],
+    hazard_zones: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Check if location is within or near hazard zones (新增).
+
+    Args:
+        location: Facility location
+        hazard_zones: 灾害区域 GeoJSON (缓冲区)
+
+    Returns:
+        Dict with hazard check results
+    """
+    from ..core.spatial_analysis import run_spatial_query
+
+    if not hazard_zones or not hazard_zones.get("features"):
+        return {"checked": False, "reason": "No hazard zones provided"}
+
+    point_geom = {"type": "Point", "coordinates": list(location)}
+
+    try:
+        # Check if in hazard zone
+        result = run_spatial_query(
+            query_type="contains",
+            geometry=point_geom,
+            target_layer=hazard_zones,
+            limit=1,
+        )
+
+        in_hazard_zone = result.get("success") and result.get("data", {}).get("match_count", 0) > 0
+
+        # Check if near hazard zone (within 500m)
+        near_result = run_spatial_query(
+            query_type="nearest",
+            geometry=point_geom,
+            target_layer=hazard_zones,
+            max_distance=500,
+            limit=1,
+        )
+
+        near_hazard_zone = near_result.get("success") and near_result.get("data", {}).get("match_count", 0) > 0
+
+        return {
+            "checked": True,
+            "in_hazard_zone": in_hazard_zone,
+            "near_hazard_zone": near_hazard_zone and not in_hazard_zone,
+            "hazard_zone_name": "地质灾害缓冲区",
+        }
+
+    except Exception as e:
+        return {"checked": False, "error": str(e)}
+
+
 def _get_suitability_level(score: float) -> str:
     """Convert score to suitability level"""
     if score >= 80:
@@ -444,6 +586,30 @@ def _generate_facility_recommendations(results: Dict[str, Any]) -> List[str]:
             "Location is within a forbidden zone (e.g., water buffer). "
             "This location is NOT suitable for this facility type."
         )
+
+    # Protection recommendations (新增)
+    if scores.get("protection", 0) == 0:
+        protection = checks.get("protection", {})
+        conflicts = protection.get("conflicts", [])
+        conflict_types = [c.get("zone_type", "unknown") for c in conflicts]
+        recommendations.append(
+            f"Location conflicts with protection zones: {', '.join(conflict_types)}. "
+            "Must relocate to avoid protected areas."
+        )
+
+    # Hazard recommendations (新增)
+    if scores.get("hazard", 0) < 70:
+        hazard = checks.get("hazard", {})
+        if hazard.get("in_hazard_zone"):
+            recommendations.append(
+                "Location is within a geological hazard zone. "
+                "This is a high-risk location. Consider relocation."
+            )
+        elif hazard.get("near_hazard_zone"):
+            recommendations.append(
+                "Location is near a geological hazard zone. "
+                "Consider further assessment or slight relocation."
+            )
 
     if not recommendations:
         recommendations.append(

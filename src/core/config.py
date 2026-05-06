@@ -86,6 +86,20 @@ TIANDITU_MAX_RETRIES: int = int(os.getenv("TIANDITU_MAX_RETRIES", "3"))
 GIS_TIMEOUT: int = int(os.getenv("GIS_TIMEOUT", "30"))
 
 # ==========================================
+# 广东省天地图专题服务配置
+# ==========================================
+
+# 广东省天地图Token（可选，若全国Key无法访问则使用）
+GD_TIANDITU_TOKEN: str = os.getenv("GD_TIANDITU_TOKEN", TIANDITU_API_KEY)
+
+# 广东省天地图服务基础URL（可配置）
+# 每个服务有独立路径: /server/{service_id}/wmts, /server/{service_id}/wms
+GD_TIANDITU_BASE_URL: str = os.getenv(
+    "GD_TIANDITU_BASE_URL",
+    "https://guangdong.tianditu.gov.cn"
+)
+
+# ==========================================
 # 高德地图地理服务配置
 # ==========================================
 

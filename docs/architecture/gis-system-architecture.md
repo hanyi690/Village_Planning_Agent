@@ -1,10 +1,13 @@
 # GIS 数据系统架构
 
-本文档详细说明 GIS 数据获取、坐标系统、瓦片服务和前端可视化的完整链路。
+本文档详细说明 GIS 数据获取、上传解析、坐标系统、瓦片服务和前端可视化的完整链路。
 
 ## 目录
 
 - [系统概览](#系统概览)
+- [数据来源与优先级](#数据来源与优先级)
+- [用户上传系统](#用户上传系统)
+- [边界兜底机制](#边界兜底机制)
 - [维度与 GIS 工具绑定](#维度与-gis-工具绑定)
 - [数据源配置](#数据源配置)
 - [坐标系统](#坐标系统)
@@ -21,47 +24,235 @@
 ### 架构图
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        数据源层                                  │
-├──────────────────┬──────────────────┬──────────────────────────┤
-│   天地图 API     │    高德 API      │       其他数据源          │
-│  - WFS 服务      │   - POI 搜索     │    - 路径规划            │
-│  - 地理编码      │   - 地理编码     │    - 等时圈分析          │
-│  - POI 搜索      │   - 路径规划     │                          │
-└────────┬─────────┴────────┬─────────┴──────────┬───────────────┘
-         │                  │                    │
-         ▼                  ▼                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      数据获取层                                 │
-├──────────────────┬──────────────────┬──────────────────────────┤
-│  GISDataFetcher  │   POIProvider    │   TiandituProvider       │
-│  - WFS 数据      │   - 高德优先     │    - 地理编码            │
-│  - 村级定位      │   - 坐标转换     │    - 边界查询            │
-└────────┬─────────┴────────┬─────────┴──────────┬───────────────┘
-         │                  │                    │
-         ▼                  ▼                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      工具封装层                                 │
-├──────────────────┬──────────────────┬──────────────────────────┤
-│ gis_tool_wrappers│   ToolRegistry   │   dimension_node         │
-│ - wrap_gis_data  │   - 工具注册     │    - SSE 数据提取        │
-│ - wrap_poi_search│   - 统一接口     │    - 维度工具绑定        │
-└────────┬─────────┴────────┬─────────┴──────────┬───────────────┘
-         │                  │                    │
-         ▼                  ▼                    ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      SSE 事件层                                 │
-│   dimension_complete → gis_data → Frontend                      │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           数据源层                                            │
+├────────────────┬────────────────┬────────────────┬──────────────────────────┤
+│   用户上传     │   天地图 API    │    高德 API     │     其他数据源           │
+│  - GeoJSON     │   - WFS 服务    │   - POI 搜索    │    - 路径规划           │
+│  - Shapefile   │   - 地理编码    │   - 地理编码    │    - 等时圈分析         │
+│  - KML/GDB     │   - POI 搜索    │   - 路径规划    │                          │
+└────────┬───────┴────────┬───────┴────────┬───────┴──────────┬───────────────┤
+         │                │                │                  │
+         ▼                ▼                ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         数据解析与管理层                                       │
+├────────────────┬────────────────┬────────────────┬──────────────────────────┤
+│ GISDataParser  │ GISDataManager │SharedGISContext│   GISDataFetcher        │
+│ - 格式解析     │ - 内存缓存     │ - 上下文管理    │    - WFS 数据           │
+│ - CRS 转换     │ - 状态追踪     │ - 数据注入     │    - 村级定位           │
+│ - 类型推断     │ - 按村庄组织   │ - 边界生成     │                          │
+└────────┬───────┴────────┬───────┴────────┬───────┴──────────┬───────────────┘
+         │                │                │                  │
+         ▼                ▼                ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         工具封装层                                            │
+├────────────────┬────────────────┬────────────────┬──────────────────────────┤
+│gis_tool_wrappers│ BoundaryFallback│ToolRegistry  │   dimension_node        │
+│- wrap_*_tools   │ - 5级兜底策略   │   - 工具注册   │    - SSE 数据提取       │
+│- 数据优先级融合 │ - 代理边界生成 │   - 统一接口   │    - 维度工具绑定       │
+└────────┬───────┴────────┬───────┴────────┬───────┴──────────┬───────────────┘
+         │                │                │                  │
+         ▼                ▼                ▼                  ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SSE 事件层                                            │
+│   dimension_complete → gis_data → Frontend                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
          │
          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      前端可视化层                               │
-├──────────────────┬──────────────────┬──────────────────────────┤
-│    MapView.tsx   │ DimensionSection │   LayerReportCard        │
-│   - 瓦片渲染     │   - 地图组件     │    - 图层展示            │
-│   - GeoJSON 图层 │   - 交互控制     │    - 数据可视化          │
-└──────────────────┴──────────────────┴──────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         前端可视化层                                          │
+├────────────────┬────────────────┬────────────────┬──────────────────────────┤
+│   MapView.tsx  │ DataUpload.tsx │DimensionSection│   LayerReportCard        │
+│   - 瓦片渲染   │   - 文件上传   │   - 地图组件   │    - 图层展示            │
+│- GeoJSON 图层  │   - 类型推断   │   - 交互控制   │    - 数据可视化          │
+└────────────────┴────────────────┴────────────────┴──────────────────────────┘
+```
+
+---
+
+## 数据来源与优先级
+
+### 数据获取优先级
+
+系统采用三级优先级策略获取 GIS 数据：
+
+| 优先级 | 来源 | 说明 | 适用场景 |
+|--------|------|------|----------|
+| 1 (最高) | 用户上传 | 用户通过 `/api/gis/upload` 上传的 GIS 文件 | 精确边界、自定义数据 |
+| 2 | 会话缓存 | GISDataManager 内存缓存 | 同一村庄重复操作 |
+| 3 (最低) | API 自动获取 | 天地图 WFS / 高德 POI API | 数据缺失时兜底 |
+
+### 数据类型
+
+| 数据类型 | 标识符 | 典型来源 | 用途 |
+|----------|--------|----------|------|
+| 行政边界 | `boundary` | 用户上传 / 兜底生成 | 规划范围界定 |
+| 水系 | `water` | 天地图 WFS (HYDA/HYDL) | 生态敏感区分析 |
+| 道路 | `road` | 天地图 WFS (LRDL) / 高德 | 交通可达性分析 |
+| 居民地 | `residential` | 天地图 WFS (RESA/RESP) | 人口分布分析 |
+| POI 设施 | `poi` | 高德 POI API | 公共服务覆盖分析 |
+| 土地利用 | `landuse` | 用户上传 | 用地结构分析 |
+| 保护红线 | `protection_zone` | 用户上传 | 生态农田保护 |
+| 地质灾害 | `geological_hazard` | 用户上传 | 安全风险评估 |
+
+---
+
+## 用户上传系统
+
+### 支持的 GIS 格式
+
+| 格式 | 扩展名 | 解析库 | 说明 |
+|------|--------|--------|------|
+| GeoJSON | `.geojson`, `.json` | JSON 内置 | 前端可直接渲染 |
+| Shapefile | `.zip` (含 `.shp`) | geopandas | 需完整文件集打包 |
+| GDB | `.zip` (含 `.gdb`) | geopandas | ArcGIS File Geodatabase |
+| KML | `.kml` | fastkml | Google Earth 格式 |
+| KMZ | `.kmz` | fastkml + zipfile | KML 压缩格式 |
+| GeoTIFF | `.tif`, `.tiff` | rasterio | 栅格数据矢量化 |
+
+**不支持格式：**
+- `.mpk` (ArcGIS Map Package) - 请导出为 Shapefile
+- `.mxd` (ArcGIS Map Document) - 请导出为 Shapefile
+
+### 上传解析流程
+
+```
+用户上传文件
+    │
+    ▼
+GISDataParser.parse_from_bytes()
+    ├── GeoJSON → JSON.loads() → 直接返回
+    ├── Shapefile ZIP → 解压 → geopandas.read_file() → CRS 转换
+    ├── GDB ZIP → 解压 → geopandas.list_layers() → 合并图层
+    ├── KML → fastkml 解析 → Placemark 提取
+    └── GeoTIFF → rasterio 矢量化 → CRS 转换
+    │
+    ▼
+infer_data_type() → 智能类型推断
+    │
+    ▼
+GISDataManager.set_user_data() → 内存缓存存储
+```
+
+### API 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/gis/upload` | POST | 上传 GIS 文件 |
+| `/api/gis/status/{village_name}` | GET | 查询数据状态 |
+| `/api/gis/clear/{village_name}/{data_type}` | DELETE | 清除指定数据 |
+| `/api/gis/supported-formats` | GET | 获取支持格式列表 |
+
+### 智能类型推断
+
+`GISDataParser.infer_data_type()` 根据属性字段关键词推断数据类型：
+
+```python
+# 关键词映射（与前端 DataUpload.tsx 保持同步）
+LAYER_TYPE_KEYWORDS = {
+    'boundary': ['边界', '行政区划', '行政村', '村界', 'boundary', 'XZDM', 'XZMC'],
+    'landuse': ['土地利用', '用地', '图斑', '地类', 'DLBM', 'DLMC', '耕地', '林地'],
+    'road': ['道路', '路网', '交通', 'road', '公路', '村道', '省道', '国道'],
+    'water': ['水系', '河流', '水域', 'water', 'HYD', '河流名称', '湖泊'],
+    'residential': ['居民点', '居住', '村庄', 'residential', '人口', '户数'],
+    'poi': ['设施', 'POI', '公共', '服务', '学校', '医院', 'facility_type'],
+    'protection_zone': ['红线', '保护', '农田', '生态', '基本农田', '生态红线'],
+    'geological_hazard': ['地质', '灾害', '隐患', '滑坡', '崩塌', '泥石流'],
+}
+```
+
+---
+
+## 边界兜底机制
+
+当用户未上传边界数据时，系统采用多级兜底策略生成代理边界。
+
+### 5 级兜底策略
+
+| 优先级 | 策略名称 | 数据依赖 | 精度 | 说明 |
+|--------|----------|----------|------|------|
+| 1 | `user_uploaded` | GISDataManager 缓存 | 最高 | 用户上传的精确边界 |
+| 2 | `isochrone` | 村庄中心点 | 中高 | 15 分钟步行等时圈 |
+| 3 | `polygonize_fusion` | 道路+水系线要素 | 中 | 自然边界融合 |
+| 4 | `morphological_convex` | 居民地 RESA 特征 | 中低 | 凸包/凹包形态 |
+| 5 | `bbox_buffer` | 仅中心点 | 低 | 2km 矩形缓冲（保底） |
+
+### 策略详细说明
+
+#### 1. user_uploaded（用户上传）
+
+```python
+# 检查 GISDataManager 缓存
+cached = GISDataManager.get_user_data(village_name, "boundary")
+if cached and cached.geojson:
+    return cached.geojson  # 返回用户上传边界
+```
+
+#### 2. isochrone（等时圈）
+
+```python
+# 生成 15 分钟步行等时圈（圆形近似）
+result = generate_isochrones(
+    center=center,
+    time_minutes=[15],
+    travel_mode="walk",
+    use_route_api=False  # 使用圆形近似，提高可靠性
+)
+# 返回半径约 1.25 km 的圆形边界
+```
+
+#### 3. polygonize_fusion（自然边界融合）
+
+```python
+# 使用道路和水系线要素裁剪等时圈
+trim_result = trim_polygon_with_lines(
+    base_polygon=isochrone_polygon,
+    natural_lines=[road_features + water_features],
+    core_point=center,
+)
+# 生成更贴合自然地理的边界
+```
+
+#### 4. morphological_convex（形态包络）
+
+```python
+# 从居民地特征计算凸包或凹包
+if use_concave:
+    result = compute_concave_hull(
+        geometries=residential_features,
+        alpha=0.5,  # 凹包参数
+    )
+else:
+    result = compute_convex_hull(geometries=residential_features)
+```
+
+#### 5. bbox_buffer（矩形缓冲）
+
+```python
+# 保底策略：生成 2km × 2km 矩形
+buffer_km = 2.0
+coords = [
+    [center_lon - buffer_deg, center_lat - buffer_deg],
+    [center_lon + buffer_deg, center_lat - buffer_deg],
+    [center_lon + buffer_deg, center_lat + buffer_deg],
+    [center_lon - buffer_deg, center_lat + buffer_deg],
+]
+# 始终成功返回
+```
+
+### 边界生成 API
+
+```python
+# SharedGISContext.get_or_generate_boundary()
+boundary = gis_context.get_or_generate_boundary(
+    force_generate=False,  # True 则跳过用户数据
+    config=BoundaryFallbackConfig(
+        isochrone_time_minutes=15,
+        polygonize_min_lines=3,
+        morphological_min_features=5,
+        bbox_buffer_km=2.0,
+    )
+)
 ```
 
 ---
@@ -70,61 +261,47 @@
 
 ### Layer 1: 现状分析（12 个维度）
 
-| 维度 | 维度名称 | GIS 工具 | 分析目的 | 分析结果 |
+| 维度 | 维度名称 | GIS 工具 | 数据来源 | 分析结果 |
 |------|----------|----------|----------|----------|
-| `natural_environment` | 自然环境分析 | `wfs_data_fetch` | 获取水系、道路、居民地空间数据 | 水系/道路/居民地 GeoJSON 图层 + 村庄中心坐标 |
-| `land_use` | 土地利用分析 | `gis_coverage_calculator` | 计算各类用地覆盖率 | 用地结构统计 + GeoJSON 图层 |
-| `traffic` | 道路交通分析 | `accessibility_analysis` | 交通可达性分析 | 服务覆盖分析 + 可达性矩阵 |
-| `public_services` | 公共服务设施分析 | `poi_search` | 周边公共服务设施搜索 | POI 列表 + GeoJSON 点图层 |
-| `socio_economic` | 社会经济分析 | `population_model_v1` | 人口趋势预测 | 人口预测数据 |
+| `natural_environment` | 自然环境分析 | `gis_coverage_calculator` | 用户上传 + WFS | 水系/道路/居民地 GeoJSON + 村庄中心坐标 |
+| `land_use` | 土地利用分析 | `gis_coverage_calculator` | 用户上传 | 用地结构统计 + GeoJSON 图层 |
+| `traffic` | 道路交通分析 | `accessibility_analysis` | 用户上传 + WFS + 高德 | 服务覆盖分析 + 可达性矩阵 |
+| `public_services` | 公共服务设施分析 | `poi_search` | 高德 POI API | POI 列表 + GeoJSON 点图层 |
+| `socio_economic` | 社会经济分析 | `population_model_v1` | 无 GIS | 人口预测数据 |
 
 ### Layer 3: 详细规划（12 个维度）
 
-| 维度 | 维度名称 | GIS 工具 | 分析目的 | 分析结果 |
+| 维度 | 维度名称 | GIS 工具 | 数据来源 | 分析结果 |
 |------|----------|----------|----------|----------|
-| `spatial_structure` | 空间结构规划 | `planning_vectorizer` | 规划方案矢量化 | 空间结构 GeoJSON 图层 |
-| `traffic_planning` | 道路交通规划 | `isochrone_analysis` | 等时圈分析 | 5/10/15 分钟等时圈 GeoJSON |
-| `public_service` | 公共服务设施规划 | `facility_validator` | 设施配置验证 | 设施覆盖评估 + 建议优化点 |
-| `ecological` | 生态绿地规划 | `ecological_sensitivity` | 生态敏感性分析 | 敏感区分布 GeoJSON + 分级评估 |
+| `spatial_structure` | 空间结构规划 | `spatial_layout_generator` | 边界 + 规划方案 | 空间结构 GeoJSON 图层 |
+| `traffic_planning` | 道路交通规划 | `isochrone_analysis` | 村庄中心 | 5/10/15 分钟等时圈 GeoJSON |
+| `public_service` | 公共服务设施规划 | `facility_validator` | 规划设施位置 | 设施覆盖评估 + 建议优化点 |
+| `ecological` | 生态绿地规划 | `ecological_sensitivity` | 水系 + 规划边界 | 敏感区分布 GeoJSON + 分级评估 |
 
-### 工具参数配置示例
+### gis_coverage_calculator 数据融合
 
 ```python
-# dimension_metadata.py 中的工具参数配置
+def wrap_gis_coverage_calculator(context: Dict[str, Any]) -> str:
+    """
+    数据获取优先级：用户上传 > 会话缓存 > 自动获取（天地图 WFS）
+    """
+    # 1. 检查用户上传数据
+    user_water = context.get("user_uploaded_data", {}).get("water")
+    user_road = context.get("user_uploaded_data", {}).get("road")
+    user_residential = context.get("user_uploaded_data", {}).get("residential")
 
-"natural_environment": {
-    "tool": "wfs_data_fetch",
-    "tool_params": {
-        "location": {"source": "config", "path": "village_name"},
-        "buffer_km": {"source": "literal", "value": 5.0}
-    }
-}
+    # 2. 自动获取（作为兜底）
+    auto_result = fetcher.fetch_all_gis_data(location, buffer_km)
 
-"traffic": {
-    "tool": "accessibility_analysis",
-    "tool_params": {
-        "analysis_type": {"source": "literal", "value": "service_coverage"},
-        "center": {"source": "gis_cache", "path": "_auto_fetched.center"}
-    }
-}
+    # 3. 合并数据源：用户数据覆盖自动数据
+    def get_geojson_with_source(data_type, user_data, auto_data):
+        if user_data:
+            return user_data, "user_upload"
+        if auto_data and auto_data.get("success"):
+            return auto_data.get("geojson"), "auto_fetch"
+        return None, "missing"
 
-"public_services": {
-    "tool": "poi_search",
-    "tool_params": {
-        "keyword": {"source": "literal", "value": "学校|医院|超市|银行"},
-        "center": {"source": "gis_cache", "path": "_auto_fetched.center"},
-        "radius": {"source": "literal", "value": 5000}
-    }
-}
-
-"traffic_planning": {
-    "tool": "isochrone_analysis",
-    "tool_params": {
-        "center": {"source": "gis_cache", "path": "_auto_fetched.center"},
-        "time_minutes": {"source": "literal", "value": [5, 10, 15]},
-        "travel_mode": {"source": "literal", "value": "walk"}
-    }
-}
+    # 返回结果包含 data_sources 字段标记来源
 ```
 
 ---
@@ -183,19 +360,19 @@ NEXT_PUBLIC_TIANDITU_KEY=your_browser_key
 | GCJ-02 | 高德地图 | 中国加密坐标系，偏移 50-500m |
 | CGCS2000 | 天地图 | 中国大地坐标系，与 WGS84 兼容 |
 
-### 坐标转换
+### 坐标转换流程
 
-高德 POI 数据使用 GCJ-02 坐标系，需转换为 WGS84：
-
-```python
-# src/tools/geocoding/amap/provider.py
-
-def gcj02_to_wgs84(lon: float, lat: float) -> Tuple[float, float]:
-    """GCJ-02 转 WGS-84"""
-    if _out_of_china(lon, lat):
-        return lon, lat
-    # 坐标转换计算...
-    return wgs_lon, wgs_lat
+```
+高德 POI 数据 (GCJ-02)
+    │
+    ▼
+gcj02_to_wgs84() 坐标转换
+    │
+    ▼
+GeoJSON (WGS84)
+    │
+    ▼
+前端 MapLibre 渲染
 ```
 
 ### 数据源坐标系统
@@ -206,33 +383,32 @@ def gcj02_to_wgs84(lon: float, lat: float) -> Tuple[float, float]:
 | 天地图 POI | CGCS2000 | 无需转换 | 与 WGS84 兼容 |
 | 天地图瓦片 | 经纬度投影 | 无需转换 | 与 WGS84 兼容 |
 | 高德 POI | GCJ-02 | WGS84 | 自动转换 |
+| 用户上传 | 可能非 WGS84 | WGS84 | geopandas 自动转换 |
 
 ---
 
 ## GIS 分析工具详解
 
-### 1. WFS 数据获取 (`wfs_data_fetch`)
+### 1. GIS Coverage Calculator (`gis_coverage_calculator`)
 
-**用途**: 获取天地图 WFS 服务的空间数据
+**用途**: 获取并融合 GIS 空间数据，支持用户上传优先
 
-**数据源**: 天地图 WFS 服务 (`gisserver.tianditu.gov.cn/TDTService/wfs`)
-
-**可用图层**:
-| WFS 图层 | 说明 | 几何类型 |
-|----------|------|----------|
-| TDTService:HYDA | 水系面 | Polygon |
-| TDTService:HYDL | 水系线 | LineString |
-| TDTService:LRDL | 公路 | LineString |
-| TDTService:LRRL | 铁路 | LineString |
-| TDTService:RESA | 居民地面 | Polygon |
-| TDTService:RESP | 居民地点 | Point |
+**数据来源优先级**:
+```
+用户上传 > GISDataManager 缓存 > 天地图 WFS 自动获取
+```
 
 **输入参数**:
 ```python
 {
-    "location": "平远县泗水镇金田村",  # 行政区名称
-    "buffer_km": 5.0,                 # 缓冲距离（公里）
-    "max_features": 500               # 各类要素最大数量
+    "location": "平远县泗水镇金田村",
+    "buffer_km": 5.0,
+    "user_uploaded_data": {  # 可选，用户上传数据注入
+        "boundary": {...},
+        "water": {...},
+        "road": {...},
+        "residential": {...}
+    }
 }
 ```
 
@@ -241,36 +417,19 @@ def gcj02_to_wgs84(lon: float, lat: float) -> Tuple[float, float]:
 {
     "success": True,
     "location": "平远县泗水镇金田村",
-    "center": [116.04, 24.82],        # 村庄中心坐标
-    "is_village_level": True,
-    "water": {
-        "success": True,
-        "geojson": {...},              # 水系 GeoJSON
-        "metadata": {"feature_count": 12}
-    },
-    "road": {
-        "success": True,
-        "geojson": {...},              # 道路 GeoJSON
-        "metadata": {"feature_count": 8}
-    },
-    "residential": {
-        "success": True,
-        "geojson": {...},              # 居民地 GeoJSON
-        "metadata": {"feature_count": 25}
+    "coverage_rate": 0.67,
+    "layers": [
+        {"geojson": {...}, "layerType": "boundary", "source": "user_upload"},
+        {"geojson": {...}, "layerType": "water", "source": "auto_fetch"},
+        {"geojson": {...}, "layerType": "road", "source": "user_upload"}
+    ],
+    "data_sources": {
+        "boundary": "user_upload",
+        "water": "auto_fetch",
+        "road": "user_upload",
+        "residential": "missing"
     }
 }
-```
-
-**实现逻辑**:
-```
-1. 解析地址层级（省/市/县/镇/村）
-2. 如果是村级地址：
-   a. 先获取县级边界作为参考
-   b. 地理编码定位村级中心
-   c. 失败则 POI 搜索定位
-   d. 失败则使用县级中心
-3. 根据中心坐标计算缓冲 bbox
-4. 并行获取水系、道路、居民地数据
 ```
 
 ---
@@ -279,116 +438,14 @@ def gcj02_to_wgs84(lon: float, lat: float) -> Tuple[float, float]:
 
 **用途**: 搜索周边公共服务设施
 
-**数据源**: 高德地图 POI API（优先） / 天地图 POI API（备选）
+**数据源**: 高德地图 POI API（优先）
 
 **输入参数**:
 ```python
 {
-    "keyword": "学校|医院|超市|银行",  # 搜索关键词（支持多类型）
-    "center": [116.04, 24.82],        # 中心坐标
-    "radius": 5000                    # 搜索半径（米）
-}
-```
-
-**输出结果**:
-```python
-{
-    "success": True,
-    "pois": [
-        {
-            "id": "B0FFAB1234",
-            "name": "某某学校",
-            "lon": 115.892285,        # WGS-84 经度（已转换）
-            "lat": 24.559714,         # WGS-84 纬度（已转换）
-            "lon_gcj02": 115.893000,  # 原始 GCJ-02 坐标
-            "lat_gcj02": 24.560000,
-            "address": "广东省梅州市平远县",
-            "distance": 500,
-            "category": "科教文化服务;学校"
-        }
-    ],
-    "geojson": {
-        "type": "FeatureCollection",
-        "features": [...]
-    },
-    "source": "amap"                  # 数据来源
-}
-```
-
-**高德优先策略**:
-- 高德 QPS 限制 30，天地图 QPS 限制 5
-- 高德 POI 数据更丰富
-- 自动进行 GCJ-02 → WGS84 坐标转换
-
----
-
-### 3. 可达性分析 (`accessibility_analysis`)
-
-**用途**: 分析交通可达性和服务覆盖
-
-**数据源**: 天地图路径规划 API
-
-**分析类型**:
-| 类型 | 说明 | 适用场景 |
-|------|------|----------|
-| `driving_accessibility` | 驾车可达性 | 对外交通分析 |
-| `walking_accessibility` | 步行可达性 | 村内交通分析 |
-| `service_coverage` | 服务半径覆盖 | 设施覆盖分析 |
-| `poi_coverage` | POI 设施覆盖 | 多类型设施分析 |
-
-**服务半径标准**:
-```python
-SERVICE_RADIUS_STANDARDS = {
-    "幼儿园": 300,
-    "小学": 500,
-    "中学": 1000,
-    "医院": 1000,
-    "诊所": 500,
-    "公园": 500,
-    "公交站": 300,
-    "超市": 500,
-}
-```
-
-**输出结果**:
-```python
-{
-    "success": True,
-    "data": {
-        "geojson": {...},              # 设施点 GeoJSON
-        "facilities": [...],           # 设施列表
-        "covered_points": [...],       # 覆盖点
-        "uncovered_points": [...],     # 未覆盖点
-        "summary": {
-            "total_facilities": 12,
-            "covered_count": 8,
-            "coverage_rate": 0.67
-        }
-    }
-}
-```
-
----
-
-### 4. 等时圈分析 (`isochrone_analysis`)
-
-**用途**: 生成基于时间的可达性区域
-
-**数据源**: 天地图路径规划 API（驾车模式）/ 圆形近似（步行模式）
-
-**旅行速度**:
-| 模式 | 速度 | 说明 |
-|------|------|------|
-| walk | 5 km/h | 步行 |
-| bike | 15 km/h | 骑行 |
-| drive | 40 km/h | 驾车（城市平均） |
-
-**输入参数**:
-```python
-{
+    "keyword": "学校|医院|超市|银行",
     "center": [116.04, 24.82],
-    "time_minutes": [5, 10, 15],      # 时间区间（分钟）
-    "travel_mode": "walk"              # 步行/驾车/骑行
+    "radius": 5000
 }
 ```
 
@@ -396,92 +453,36 @@ SERVICE_RADIUS_STANDARDS = {
 ```python
 {
     "success": True,
-    "data": {
-        "geojson": {
-            "type": "FeatureCollection",
-            "features": [
-                {
-                    "type": "Feature",
-                    "properties": {
-                        "time_minutes": 5,
-                        "travel_mode": "walk",
-                        "radius_km": 0.42
-                    },
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": [...]
-                    }
-                },
-                // 10分钟、15分钟等时圈...
-            ]
-        },
-        "isochrones": [...],
-        "center": [116.04, 24.82]
-    }
+    "pois": [...],
+    "geojson": {"type": "FeatureCollection", "features": [...]},
+    "source": "amap"  # 数据来源标记
 }
 ```
 
-**实现逻辑**:
-```
-1. 计算理论半径: radius = (time / 60) * speed
-2. 对于驾车模式：
-   a. 在 16 个方向上采样
-   b. 调用路径规划 API 获取实际可达点
-   c. 根据实际时间调整半径
-3. 对于步行模式：
-   a. 使用圆形近似
-   b. 生成 16 个采样点
-4. 构建多边形 GeoJSON
-```
-
 ---
 
-### 5. 空间分析 (`spatial_analysis`)
+### 3. Spatial Layout Generator (`spatial_layout_generator`)
 
-**用途**: 空间叠加分析和查询
+**用途**: 根据规划方案生成空间布局 GeoJSON
 
-**依赖**: GeoPandas + Shapely
-
-**操作类型**:
-| 操作 | 说明 | 适用场景 |
-|------|------|----------|
-| `intersect` | 交集 | 两图层重叠区域 |
-| `union` | 并集 | 合并两图层 |
-| `difference` | 差集 | A 中不在 B 的部分 |
-| `clip` | 裁剪 | 用 B 边界裁剪 A |
-
-**查询类型**:
-| 查询 | 说明 | 适用场景 |
-|------|------|----------|
-| `contains` | 包含 | 查找包含查询几何的要素 |
-| `intersects` | 相交 | 查找与查询几何相交的要素 |
-| `within` | 在内部 | 查找在查询几何内部的要素 |
-| `nearest` | 最近 | 查找最近的要素 |
-
----
-
-### 6. 生态敏感性分析 (`ecological_sensitivity`)
-
-**用途**: 评估区域生态敏感程度
-
-**分析因素**:
-- 水系缓冲区
-- 坡度分析
-- 植被覆盖
-- 地质条件
+**数据依赖**:
+- `village_boundary`: 村庄边界（用户上传或代理生成）
+- `road_network`: 道路网络
+- `planning_scheme`: 规划方案 JSON
 
 **输出结果**:
 ```python
 {
     "success": True,
-    "data": {
-        "geojson": {...},              # 敏感区分布 GeoJSON
-        "sensitivity_levels": {
-            "high": {"area_km2": 2.5, "percentage": 15},
-            "medium": {"area_km2": 5.0, "percentage": 30},
-            "low": {"area_km2": 9.2, "percentage": 55}
-        },
-        "recommendations": [...]
+    "geojson": {...},           # 合并布局
+    "zones_geojson": {...},     # 功能分区
+    "facilities_geojson": {...}, # 设施点位
+    "axes_geojson": {...},      # 发展轴线
+    "center": [116.04, 24.82],
+    "statistics": {
+        "zone_count": 5,
+        "facility_count": 12,
+        "total_area_km2": 3.2
     }
 }
 ```
@@ -496,17 +497,14 @@ SERVICE_RADIUS_STANDARDS = {
 // frontend/src/components/gis/MapView.tsx
 
 const TILE_SOURCES = {
-  // GeoQ ArcGIS - 国内可用，无需密钥，EPSG:3857
   geoq: {
     url: 'https://map.geoq.cn/ArcGIS/rest/services/ChinaOnlineCommunity/MapServer/tile/{z}/{y}/{x}',
     attribution: 'GeoQ',
   },
-  // 天地图 - 需要前端密钥，EPSG:3857 (TILEMATRIXSET=w)
   tianditu: {
     url: `https://t0.tianditu.gov.cn/vec_w/wmts?...TILEMATRIXSET=w...`,
     attribution: '天地图',
   },
-  // OpenStreetMap - 默认备选（国内可能不稳定）
   openstreetmap: {
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     attribution: 'OpenStreetMap',
@@ -533,40 +531,28 @@ const TILE_SOURCES = {
 
 interface MapViewProps {
   layers: GISLayerConfig[];
-  center?: [number, number];  // [longitude, latitude]
+  center?: [number, number];
   zoom?: number;
   height?: string;
-  title?: string;
 }
 
 interface GISLayerConfig {
-  geojson: GeoJSON;      // GeoJSON 数据
-  layerType: string;     // 图层类型: water/road/residential/facility_point/isochrone
-  layerName: string;     // 图层名称
-  color?: string;        // 颜色
+  geojson: GeoJSON;
+  layerType: string;     // boundary/water/road/residential/facility_point
+  layerName: string;
+  color?: string;
+  source?: string;       // user_upload | auto_fetch | missing
 }
 ```
 
-### 规划符号样式
+### DataUpload 组件
 
 ```typescript
-// frontend/src/lib/constants/gis.ts
+// frontend/src/components/gis/DataUpload.tsx
 
-const PLANNING_COLORS = {
-  function_zone: {
-    '居住用地': { fill: '#FFD700', stroke: '#B8860B' },
-    '产业用地': { fill: '#FF6B6B', stroke: '#CC5555' },
-    '公共服务用地': { fill: '#4A90D9', stroke: '#3A70A9' },
-  },
-  water: { fill: '#3b82f6', stroke: '#2563eb' },
-  road: { stroke: '#ef4444', width: 2 },
-  residential: { fill: '#f97316', stroke: '#ea580c' },
-  isochrone: {
-    '5min': { fill: '#22c55e', stroke: '#16a34a' },
-    '10min': { fill: '#eab308', stroke: '#ca8a04' },
-    '15min': { fill: '#f97316', stroke: '#ea580c' },
-  },
-};
+// 支持拖拽上传和点击上传
+// 自动推断数据类型（与后端 LAYER_TYPE_KEYWORDS 同步）
+// 上传成功后调用 GISDataManager 存储
 ```
 
 ---
@@ -580,16 +566,10 @@ const PLANNING_COLORS = {
 
 def _extract_gis_data_for_sse(gis_tool_result: NormalizedToolResult) -> Optional[Dict]:
     """从 GIS 工具结果提取 SSE 事件所需的 GIS 数据"""
-    if not gis_tool_result or not gis_tool_result.success:
-        return None
-
     result = {}
 
     if gis_tool_result.has_geojson:
         result["layers"] = gis_tool_result.layers_data or []
-
-    if gis_tool_result.has_analysis:
-        result["analysisData"] = gis_tool_result.analysis_data
 
     if gis_tool_result.center:
         result["mapOptions"] = {
@@ -606,21 +586,13 @@ def _extract_gis_data_for_sse(gis_tool_result: NormalizedToolResult) -> Optional
 {
   "type": "dimension_complete",
   "dimension_key": "natural_environment",
-  "dimension_name": "自然环境分析",
-  "layer": 1,
   "gis_data": {
     "layers": [
       {
         "geojson": {"type": "FeatureCollection", "features": [...]},
         "layerType": "water",
         "layerName": "水系",
-        "color": "#3b82f6"
-      },
-      {
-        "geojson": {"type": "FeatureCollection", "features": [...]},
-        "layerType": "road",
-        "layerName": "道路",
-        "color": "#ef4444"
+        "source": "user_upload"
       }
     ],
     "mapOptions": {
@@ -631,31 +603,16 @@ def _extract_gis_data_for_sse(gis_tool_result: NormalizedToolResult) -> Optional
 }
 ```
 
-### 数据流转链路图
-
-```
-gis_data_fetcher.py
-    │ fetch_all_gis_data() → {water, road, residential}
-    ▼
-gis_tool_wrappers.py
-    │ wrap_gis_data_fetch() → NormalizedToolResult
-    ▼
-dimension_node.py
-    │ _extract_gis_data_for_sse() → 提取 layers 和 mapOptions
-    ▼
-sse_publisher.py
-    │ send_dimension_complete(gis_data=...)
-    ▼
-前端 DimensionSection.tsx
-    │ 接收 SSE 事件，解析 gis_data
-    ▼
-MapView.tsx
-    │ 渲染 GeoJSON 图层
-```
-
 ---
 
 ## 诊断与调试
+
+### 测试端点（开发环境）
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/dev/gis/test/spatial-layout` | POST | 测试空间布局生成 |
+| `/api/dev/gis/test/boundary-fallback` | POST | 测试边界兜底机制 |
 
 ### 诊断脚本
 
@@ -664,34 +621,25 @@ MapView.tsx
 python scripts/debug_full_gis_chain.py
 ```
 
-### 诊断内容
-
-| 模块 | 检查项 | 说明 |
-|------|--------|------|
-| WFS 数据 | API Key 配置 | 天地图密钥有效性 |
-| WFS 数据 | 数据获取 | 水系/道路/居民地数据 |
-| POI 数据 | 高德 API Key | 高德密钥有效性 |
-| POI 数据 | 坐标转换 | GCJ-02 → WGS84 |
-| 瓦片服务 | 前端配置 | 瓦片源和密钥 |
-
 ### 常见问题排查
+
+#### 用户上传数据不生效
+
+1. 检查 `GISDataManager.get_data_status(village_name)` 返回值
+2. 确认 `user_uploaded` 列表包含预期数据类型
+3. 检查上传时 `infer_data_type()` 推断结果
+
+#### 边界生成失败
+
+1. 查看边界生成结果的 `fallback_history` 字段
+2. 检查各策略失败原因（`reason` 字段）
+3. 确认村庄中心点已正确计算
 
 #### 地图显示灰色
 
 1. 检查瓦片服务配置（`NEXT_PUBLIC_TILE_SOURCE`）
-2. 检查天地图密钥是否配置域名白名单
-3. 检查浏览器控制台网络请求
-
-#### POI 点位偏移
-
-1. 确认高德 POI 坐标已转换（检查 `lon_gcj02` 字段存在）
-2. 检查 `gcj02_to_wgs84` 函数是否被调用
-
-#### WFS 数据不显示
-
-1. 检查 `_extract_gis_data_for_sse` 是否正确提取嵌套格式
-2. 检查 SSE 事件中 `gis_data.layers` 是否有数据
-3. 检查 `features` 数组是否非空
+2. 检查天地图密钥域名白名单
+3. 检查浏览器网络请求
 
 ---
 
@@ -699,19 +647,21 @@ python scripts/debug_full_gis_chain.py
 
 | 功能 | 后端路径 | 前端路径 |
 |------|----------|----------|
-| WFS 数据获取 | `src/tools/core/gis_data_fetcher.py` | - |
+| GIS 数据解析 | `src/tools/gis/data_parser.py` | - |
+| GIS 数据管理 | `src/tools/gis/data_manager.py` | - |
+| GIS 上传 API | `backend/api/gis_upload.py` | - |
+| GIS 测试 API | `backend/api/gis_test.py` | - |
 | GIS 工具包装 | `src/tools/core/gis_tool_wrappers.py` | - |
-| 可达性分析 | `src/tools/core/accessibility_core.py` | - |
-| 等时圈分析 | `src/tools/core/isochrone_analysis.py` | - |
-| 空间分析 | `src/tools/core/spatial_analysis.py` | - |
+| 边界兜底机制 | `src/tools/core/boundary_fallback.py` | - |
+| 共享 GIS 上下文 | `src/orchestration/shared_gis_context.py` | - |
+| WFS 数据获取 | `src/tools/core/gis_data_fetcher.py` | - |
 | POI 数据 | `src/tools/geocoding/poi_provider.py` | - |
 | 高德 API | `src/tools/geocoding/amap/provider.py` | - |
 | 天地图 API | `src/tools/geocoding/tianditu/provider.py` | - |
-| 维度元数据 | `src/config/dimension_metadata.py` | - |
-| 维度节点 | `src/orchestration/nodes/dimension_node.py` | - |
+| 路由注册 | `backend/api/routes.py` | - |
 | 地图渲染 | - | `frontend/src/components/gis/MapView.tsx` |
-| 维度展示 | - | `frontend/src/components/chat/DimensionSection.tsx` |
-| GIS 常量 | - | `frontend/src/lib/constants/gis.ts` |
+| 数据上传 | - | `frontend/src/components/gis/DataUpload.tsx` |
+| API 客户端 | - | `frontend/src/lib/api/data-api.ts` |
 
 ---
 

@@ -137,7 +137,25 @@
       "Bash(cd frontend:*)",
       "mcp__plugin_context7_context7__resolve-library-id",
       "mcp__plugin_context7_context7__query-docs",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(sleep:*)",
+      "mcp__filesystem__search_files",
+      "Bash(pip list:*)",
+      "Read(//c/Program Files/ODA/**)",
+      "Read(//c/Program Files \\(x86\\)/ODA/**)",
+      "Read(//c/Program Files/LibreCAD/**)",
+      "Read(//c/Program Files \\(x86\\)/LibreCAD/**)",
+      "Bash(winget search:*)",
+      "Bash(choco search:*)",
+      "Read(//tmp/**)",
+      "Bash(pip search:*)",
+      "Bash(winget install:*)",
+      "Bash(\"C:/Program Files/LibreCAD/LibreCAD.exe\" --help 2>&1 | head -30 || echo \"无命令行帮助\")",
+      "Bash(cd tools:*)",
+      "Bash(mkdir:*)",
+      "Bash(./tools/dwg2SVG.exe \"docs/references/村庄规划总图/金田村村庄规划工程文件/3.村庄建设项目布局规划图/03金田村建设项目布局规划图.dwg\" docs/gis/jintian_dxf/output.svg 2>&1)",
+      "Bash(./tools/dwg2SVG.exe \"docs/references/村庄规划总图/金田村村庄规划工程文件/3.村庄建设项目布局规划图/03金田村建设项目布局规划图.dwg\" 2>/dev/null > docs/gis/jintian_dxf/project_layout_clean.svg && tail -5 docs/gis/jintian_dxf/project_layout_clean.svg)",
+      "Bash(git fetch:*)"
     ]
   }
 }

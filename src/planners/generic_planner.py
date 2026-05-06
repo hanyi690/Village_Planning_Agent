@@ -366,11 +366,29 @@ class GenericPlanner:
                 streaming=streaming,
                 on_token_callback=on_token_callback
             )
+            # 清除可能残留的 prompt 结构标记
+            result = _clean_prompt_artifacts(result)
             logger.info(f"[{self.dimension_name}] revision done, len: {len(result)}")
             return result
         except Exception as e:
             logger.error(f"[{self.dimension_name}] revision failed: {e}")
             return original_result
+
+
+def _clean_prompt_artifacts(content: str) -> str:
+    """清除可能残留的 prompt 结构标记"""
+    artifacts = [
+        "【原规划内容】",
+        "【人工反馈】",
+        "【要求】",
+        "【级联更新】",
+        "【上游已更新的内容】",
+        "【原始修改背景（供参考）】",
+    ]
+    for artifact in artifacts:
+        if content.startswith(artifact):
+            content = content[len(artifact):].strip()
+    return content
 
     def _build_revision_prompt(
         self,
@@ -383,7 +401,7 @@ class GenericPlanner:
 请根据以下人工反馈，修复对应的规划内容：
 
 【原规划内容】
-{original_result[:2000]}
+{original_result}
 
 【人工反馈】
 {feedback}

@@ -32,6 +32,17 @@ from .amap import (
 # POI 统一接口（高德优先）
 from .poi_provider import POIProvider
 
+# OpenStreetMap 模块（补充村级道路数据）
+from .osm import (
+    OSMProvider,
+    OSMResult,
+    OSMRoadFeature,
+    OVERPASS_ENDPOINT,
+    NETWORK_TYPES,
+    HIGHWAY_CLASSES,
+    VILLAGE_RELEVANT_HIGHWAYS,
+)
+
 
 __all__ = [
     # 天地图
@@ -60,4 +71,12 @@ __all__ = [
     "TRAFFIC_STATUS_LEVELS",
     # POI 统一接口
     "POIProvider",
+    # OpenStreetMap
+    "OSMProvider",
+    "OSMResult",
+    "OSMRoadFeature",
+    "OVERPASS_ENDPOINT",
+    "NETWORK_TYPES",
+    "HIGHWAY_CLASSES",
+    "VILLAGE_RELEVANT_HIGHWAYS",
 ]

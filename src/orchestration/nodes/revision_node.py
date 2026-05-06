@@ -328,7 +328,7 @@ def _build_cascade_feedback(
 上游相关维度已完成修订，请根据上游更新内容调整本维度"{dimension_name}"。
 
 【上游已更新的内容】
-{filtered_detail[:3000] if filtered_detail else "（无上游内容）"}
+{filtered_detail[:8000] if filtered_detail else "（无上游内容）"}
 
 【原始修改背景（供参考）】
 {user_feedback[:500] if user_feedback else "（无用户反馈）"}

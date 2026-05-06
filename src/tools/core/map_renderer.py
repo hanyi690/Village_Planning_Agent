@@ -11,6 +11,12 @@ standardized symbols and styles.
 from typing import Dict, Any, List, Optional, Tuple, Literal
 import json
 from ...utils.logger import get_logger
+from ...config.gis_styles import (
+    PLANNING_STYLES,
+    LAYER_GEOMETRY_TYPES,
+    get_style_for_feature,
+    export_legend_json,
+)
 
 logger = get_logger(__name__)
 
@@ -63,6 +69,14 @@ PLANNING_STYLES = {
         "交通主轴": {"color": "#0000FF", "width": 3, "opacity": 0.7},
         "景观轴线": {"color": "#00FF00", "width": 2, "opacity": 0.5},
     },
+    # Infrastructure styles (line) - Roads, waterways
+    "infrastructure": {
+        "道路": {"color": "#666666", "width": 2, "opacity": 0.8},
+        "乡道": {"color": "#808080", "width": 1.5, "opacity": 0.8},
+        "县道": {"color": "#555555", "width": 2, "opacity": 0.8},
+        "水系": {"color": "#4169E1", "width": 2, "opacity": 0.7},
+        "河流": {"color": "#00BFFF", "width": 2.5, "opacity": 0.7},
+    },
     # Sensitivity zone styles
     "sensitivity_zone": {
         "高敏感区": {"fill_color": "#FF0000", "fill_opacity": 0.4},
@@ -75,7 +89,7 @@ PLANNING_STYLES = {
 
 def get_style_for_feature(
     feature: Dict[str, Any],
-    layer_type: Literal["function_zone", "facility_point", "development_axis", "sensitivity_zone"]
+    layer_type: Literal["function_zone", "facility_point", "development_axis", "sensitivity_zone", "infrastructure"]
 ) -> Dict[str, Any]:
     """
     Get style for a feature based on its type
@@ -99,6 +113,21 @@ def get_style_for_feature(
         subtype = properties.get("axis_type", "发展主轴")
     elif layer_type == "sensitivity_zone":
         subtype = properties.get("sensitivity_level", "中敏感区")
+    elif layer_type == "infrastructure":
+        # Infrastructure subtype from properties
+        infra_type = properties.get("infrastructure_type", "")
+        if infra_type:
+            subtype = infra_type
+        elif "RN" in properties:  # WFS road data
+            rn = properties.get("RN", "")
+            if rn.startswith("Y"):
+                subtype = "乡道"
+            elif rn.startswith("X"):
+                subtype = "县道"
+            else:
+                subtype = "道路"
+        else:
+            subtype = "道路"
     else:
         subtype = "default"
 
@@ -283,46 +312,98 @@ def _create_style_function(layer_type: str):
 
 def _get_tooltip_fields(layer_type: str) -> List[str]:
     """Get tooltip fields for layer type"""
+    # Use basic fields that are likely to exist in data
     if layer_type == "function_zone":
-        return ["name", "zone_type", "area_ha"]
+        return ["name", "zone_type"]
     elif layer_type == "facility_point":
         return ["name", "facility_type", "status"]
     elif layer_type == "development_axis":
-        return ["name", "axis_type", "length_km"]
+        return ["name", "axis_type"]
     elif layer_type == "sensitivity_zone":
         return ["zone_type", "sensitivity_level"]
+    elif layer_type == "infrastructure":
+        return ["name", "infrastructure_type"]
     else:
         return ["name"]
 
 
 def _create_legend_html(layers: List[Dict[str, Any]]) -> str:
-    """Create legend HTML for map"""
+    """Create legend HTML for map with all layer types"""
     legend_items = []
+    processed_types = set()
 
     for layer in layers:
         layer_type = layer.get("layer_type", "")
         layer_name = layer.get("layer_name", "")
 
-        if layer_type == "function_zone":
-            styles = PLANNING_STYLES["function_zone"]
-            for zone_type, style in styles.items():
+        if layer_type in processed_types:
+            continue
+
+        # Skip facility_type_icons (not a display layer)
+        if layer_type == "facility_type_icons":
+            continue
+
+        styles = PLANNING_STYLES.get(layer_type, {})
+        if not styles:
+            continue
+
+        geom_type = LAYER_GEOMETRY_TYPES.get(layer_type, "polygon")
+
+        # Add layer group header
+        legend_items.append(
+            f'<div style="font-weight: bold; margin-top: 10px; margin-bottom: 5px;">{layer_name}</div>'
+        )
+
+        # Add legend items for each subtype
+        for subtype, style in styles.items():
+            if geom_type == "line":
+                # Line style legend
+                color = style.get("color", "#000")
+                width = style.get("width", 2)
                 legend_items.append(
                     f'<div style="margin: 5px 0;">'
-                    f'<span style="background: {style["fill_color"]}; '
-                    f'opacity: {style["fill_opacity"]}; '
-                    f'width: 20px; height: 20px; display: inline-block; '
-                    f'border: 1px solid {style.get("border_color", "#000")}; '
-                    f'border-radius: 3px;"></span> '
-                    f'<span style="margin-left: 5px;">{zone_type}</span>'
+                    f'<span style="background: {color}; '
+                    f'width: {10 + width * 2}px; height: {width}px; '
+                    f'display: inline-block; '
+                    f'border-radius: 2px;"></span> '
+                    f'<span style="margin-left: 5px;">{subtype}</span>'
                     f'</div>'
                 )
-            break  # Only show function zones in legend
+            elif geom_type == "point":
+                # Point style legend
+                color = style.get("color", "#000")
+                legend_items.append(
+                    f'<div style="margin: 5px 0;">'
+                    f'<span style="background: {color}; '
+                    f'width: 16px; height: 16px; display: inline-block; '
+                    f'border: 2px solid {color}; '
+                    f'border-radius: 50%;"></span> '
+                    f'<span style="margin-left: 5px;">{subtype}</span>'
+                    f'</div>'
+                )
+            else:
+                # Polygon style legend
+                fill_color = style.get("fill_color", "#CCC")
+                border_color = style.get("border_color", "#666")
+                legend_items.append(
+                    f'<div style="margin: 5px 0;">'
+                    f'<span style="background: {fill_color}; '
+                    f'opacity: {style.get("fill_opacity", 0.5)}; '
+                    f'width: 20px; height: 20px; display: inline-block; '
+                    f'border: 1px solid {border_color}; '
+                    f'border-radius: 3px;"></span> '
+                    f'<span style="margin-left: 5px;">{subtype}</span>'
+                    f'</div>'
+                )
+
+        processed_types.add(layer_type)
 
     legend_html = f'''
     <div style="position: fixed; bottom: 50px; right: 50px; z-index: 9999;
-                background-color: white; padding: 10px; border-radius: 5px;
-                box-shadow: 0 0 10px rgba(0,0,0,0.3);">
-        <div style="font-weight: bold; margin-bottom: 10px;">用地类型</div>
+                background-color: white; padding: 10px 15px; border-radius: 5px;
+                box-shadow: 0 0 10px rgba(0,0,0,0.3); max-height: 400px;
+                overflow-y: auto;">
+        <div style="font-weight: bold; margin-bottom: 10px; font-size: 14px;">图例</div>
         {"".join(legend_items)}
     </div>
     '''

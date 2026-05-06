@@ -22,17 +22,20 @@ const UNSUPPORTED_EXTENSIONS: Record<string, string> = {
 
 // 数据类型推断关键词
 const DATA_TYPE_KEYWORDS = {
-  boundary: ['行政代码', 'boundary_type', '行政级别', '行政区划', '行政边界', '规划范围', '村界'],
-  water: ['水系名称', 'water_type', '河流名称', '湖泊名称', '河流', '湖泊', '水库', '水系'],
-  road: ['道路名称', 'road_level', '道路等级', '路名', '道路', '公路', '村道', '省道', '国道'],
-  residential: ['居民点', 'population', '人口', '户数', '居住区', '村庄', '聚落'],
-  poi: ['设施类型', 'facility_type', 'POI类型'],
+  boundary: ['行政代码', 'boundary_type', '行政级别', '行政区划', 'XZDM', 'XZMC', '行政边界', '规划范围', '村界', '行政村', '边界'],
+  landuse: ['地类代码', 'DLBM', '地类名称', 'DLMC', '用地性质', '土地利用', 'landuse_type', '耕地', '林地', '建设用地', '农用地', '图斑'],
+  protection_zone: ['保护级别', '红线类型', '保护类型', 'protection_level', '农田保护', '生态保护', '基本农田', '生态红线', '历史保护', '永久农田', '保护红线'],
+  geological_hazard: ['灾害类型', '隐患等级', '地质类型', 'hazard_type', '灾害名称', '滑坡', '崩塌', '泥石流', '地面塌陷', '地质灾害', '隐患点'],
+  water: ['水系名称', 'water_type', '河流名称', '湖泊名称', 'HYD_NM', '河流', '湖泊', '水库', '水系', '水渠', '池塘'],
+  road: ['道路名称', 'road_level', '道路等级', '路名', 'RN', '道路编码', '道路', '公路', '村道', '省道', '国道', '高速公路', '乡道'],
+  residential: ['居民点', 'population', '人口', '户数', '户数_人', '常住人口', '居住区', '村庄', '聚落', '居民地'],
+  poi: ['设施类型', 'facility_type', 'POI类型', '设施名称', '服务类型', '学校', '医院', '卫生院', '文化活动', '养老服务', '公共设施'],
 };
 
 // 上传结果类型
 export interface UploadResult {
   geojson: FeatureCollection<Geometry, GeoJsonProperties>;
-  dataType: 'boundary' | 'water' | 'road' | 'residential' | 'poi' | 'custom';
+  dataType: 'boundary' | 'landuse' | 'protection_zone' | 'geological_hazard' | 'water' | 'road' | 'residential' | 'poi' | 'custom';
   metadata: {
     fileName: string;
     fileSize: number;

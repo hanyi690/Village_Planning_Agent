@@ -320,16 +320,39 @@ async def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
     if completed_count >= len(total_dims):
         # 当前层完成
         if layer and layer < 3:
-            # Layer 1/2 完成时，设置暂停等待用户审查
-            # ⚠️ 不推进 phase，保持当前阶段表示"刚完成，等待审查"
-            # approve 时才推进 phase 到下一阶段
-            logger.info(f"[收集] {phase} 完成，设置暂停等待审查（phase 保持不变）")
-            updates["current_wave"] = 1
+            # Layer 1/2 完成时，根据 step_mode 决定行为
+            # step_mode=True：暂停等待用户审查
+            # step_mode=False：自动推进到下一层
+            step_mode = state.get("step_mode", False)
+            phase_map = {1: "layer2", 2: "layer3"}
 
-            # 设置暂停状态（等待用户批准后才发送 layer_started）
-            updates["pause_after_step"] = True
-            updates["previous_layer"] = layer
-            logger.info(f"[收集] Layer {layer} 完成，设置 pause_after_step=True，phase={phase}")
+            if step_mode:
+                # 步进模式：暂停等待审批
+                logger.info(f"[收集] {phase} 完成，步进模式暂停等待审查")
+                updates["pause_after_step"] = True
+                updates["previous_layer"] = layer
+                updates["current_wave"] = 1
+            else:
+                # 连续模式：自动推进到下一层
+                next_phase = phase_map.get(layer, "layer2")
+                next_layer = layer + 1
+                logger.info(f"[收集] 连续模式：Layer {layer} → Layer {next_layer}")
+                updates["phase"] = next_phase
+                updates["current_wave"] = 1
+                updates["previous_layer"] = 0
+                updates["pause_after_step"] = False
+
+                # 连续模式：发送下一层的 layer_started 事件
+                session_id = state.get("session_id", "")
+                next_layer_name = get_layer_name(next_layer)
+                next_layer_dims = get_layer_dimensions(next_layer)
+                SSEPublisher.send_layer_start(
+                    session_id=session_id,
+                    layer=next_layer,
+                    layer_name=next_layer_name,
+                    dimension_count=len(next_layer_dims)
+                )
+                logger.info(f"[收集] 连续模式：发送 layer_started for Layer {next_layer}")
 
             # 更新 metadata 中的进度
             current_metadata = dict(state.get("metadata", {}))
@@ -349,11 +372,22 @@ async def collect_layer_results(state: Dict[str, Any]) -> Dict[str, Any]:
 
             updates["sse_events"] = []
         elif layer == 3:
-            # Layer 3 completion: also pause for review
-            logger.info(f"[collect] Layer 3 completed, setting pause for review")
-            updates["current_wave"] = 1
-            updates["pause_after_step"] = True
-            updates["previous_layer"] = layer
+            # Layer 3 完成时，根据 step_mode 决定行为
+            step_mode = state.get("step_mode", False)
+
+            if step_mode:
+                # 步进模式：暂停等待审批
+                logger.info(f"[collect] Layer 3 completed, 步进模式暂停等待审查")
+                updates["current_wave"] = 1
+                updates["pause_after_step"] = True
+                updates["previous_layer"] = layer
+            else:
+                # 连续模式：推进到 completed
+                logger.info(f"[收集] 连续模式：Layer 3 → completed")
+                updates["phase"] = "completed"
+                updates["current_wave"] = 1
+                updates["previous_layer"] = 0
+                updates["pause_after_step"] = False
 
             # Update metadata
             current_metadata = dict(state.get("metadata", {}))

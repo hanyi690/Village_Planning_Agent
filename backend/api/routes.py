@@ -6,6 +6,7 @@ This module consolidates all API routes from:
 - data.py (data access)
 - files.py (file upload)
 - knowledge.py (knowledge base)
+- tiles.py (tile proxy)
 
 Architecture:
 - Services handle business logic (planning_runtime_service, sse_manager, checkpoint_service)
@@ -15,12 +16,13 @@ Architecture:
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import APIRouter
 
 from backend.api.planning import router as planning_router
 from backend.api.data import router as data_router
-from backend.api import files, knowledge, gis_upload
+from backend.api import files, knowledge, gis_upload, tiles, jintian_data
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,16 @@ router.include_router(data_router, tags=["Data"])
 router.include_router(files.router, prefix="/api/files", tags=["Files"])
 router.include_router(knowledge.router, prefix="/api/knowledge", tags=["Knowledge"])
 router.include_router(gis_upload.router, prefix="/api/gis", tags=["GIS"])
+router.include_router(tiles.router, prefix="/api/tiles", tags=["Tiles"])
+router.include_router(jintian_data.router, prefix="/api/jintian", tags=["Jintian Data"])
+
+# GIS Test endpoints
+try:
+    from backend.api import gis_test
+    router.include_router(gis_test.router, prefix="/api/dev/gis", tags=["GIS Test"])
+    logger.info("[Routes] GIS Test endpoints enabled")
+except ImportError as e:
+    logger.warning(f"[Routes] GIS Test module not available: {e}")
 
 
 # ============================================
