@@ -339,12 +339,28 @@ async def analyze_dimension_for_send(
     knowledge_sources_cache = config.get("knowledge_sources_cache", {})  # 新增：获取切片缓存
     images = state.get("images", [])  # 从顶层获取图片（仅 Layer 1 有）
 
-    # GIS 工具调用已移至审查后 bind_tools 触发，规划阶段不再调用
-    # 保留 dimension_config 读取以供后续 bind_tools 使用
+    # 区分工具类型：GIS 工具审查后触发，计算工具规划阶段执行
     dimension_config = get_dimension_config(dimension_key)
-    gis_tool_name = dimension_config.get("tool") if dimension_config else None
-    if gis_tool_name:
-        logger.debug(f"[维度节点] {dimension_key} 配置了工具: {gis_tool_name}（审查后触发）")
+    tool_name = dimension_config.get("tool") if dimension_config else None
+    professional_data = None  # 计算工具执行结果，注入 prompt
+
+    if tool_name:
+        if tool_name.startswith("gis_") or tool_name.startswith("wfs_"):
+            # GIS 工具：审查后 bind_tools 触发，规划阶段不执行
+            logger.debug(f"[维度节点] {dimension_key} GIS工具: {tool_name}（审查后触发）")
+        else:
+            # 计算工具：规划阶段执行，结果注入 prompt
+            try:
+                from ...tools.registry import ToolRegistry
+                tool_context = {
+                    "socio_economic": village_data,
+                    "baseline_year": 2023,
+                    "target_year": 2035,
+                }
+                professional_data = ToolRegistry.execute_tool(tool_name, tool_context)
+                logger.info(f"[维度节点] {dimension_key} 计算工具执行成功: {tool_name}")
+            except Exception as e:
+                logger.warning(f"[维度节点] {dimension_key} 计算工具执行失败: {tool_name}, 错误: {e}")
 
     # 区分层级数据来源
     if layer == 2:
@@ -360,7 +376,7 @@ async def analyze_dimension_for_send(
     else:
         logger.debug(f"[维度节点] Layer 1 使用 village_data")
 
-    # 构建 prompt（规划阶段不传入 gis_tool_result）
+    # 构建 prompt（计算工具结果注入）
     prompt = _build_dimension_prompt(
         dimension_key=dimension_key,
         dimension_name=dimension_name,
@@ -371,6 +387,7 @@ async def analyze_dimension_for_send(
         reports=reports,
         knowledge_cache=knowledge_cache,
         images=images,
+        professional_data=professional_data,  # 计算工具执行结果
         dimension_summaries=state.get("dimension_summaries", {})  # Phase 3
     )
 
