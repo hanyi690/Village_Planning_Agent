@@ -498,7 +498,7 @@ def emit_events(state: UnifiedPlanningState) -> Dict[str, Any]:
     return emit_sse_events(state)
 
 
-def check_completion(state: UnifiedPlanningState) -> Literal["continue", "advance", "complete", "revision", "pause", "spatial_layout"]:
+def check_completion(state: UnifiedPlanningState) -> Literal["continue", "complete", "revision", "pause", "spatial_layout"]:
     """检查阶段完成状态"""
     if state.get("need_revision"):
         return "revision"
@@ -511,27 +511,10 @@ def check_completion(state: UnifiedPlanningState) -> Literal["continue", "advanc
 
     if result == "complete":
         return "complete"
-    elif result == "advance":
-        return "advance"
     elif result == "pause":
         return "pause"
     else:
         return "continue"
-
-
-def advance_phase(state: UnifiedPlanningState) -> Dict[str, Any]:
-    """推进到下一阶段"""
-    phase = state.get("phase", PlanningPhase.INIT.value)
-    next_phase = get_next_phase(phase)
-
-    if next_phase:
-        logger.info(f"[阶段推进] {phase} -> {next_phase}")
-        return {
-            "phase": next_phase,
-            "current_wave": 1
-        }
-
-    return {}
 
 
 # ==========================================
@@ -596,33 +579,46 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_node("analyze_dimension", analyze_dimension)
     builder.add_node("emit_events", emit_events)
     builder.add_node("collect_results", collect_results)
-    builder.add_node("advance_phase", advance_phase)
     builder.add_node("revision", revision_node)
     builder.add_node("spatial_layout", spatial_layout_node)
 
     # 路由节点（空操作，仅用于触发条件路由）
     def route_planning_node(state: UnifiedPlanningState) -> Dict[str, Any]:
         """
-        规划路由节点 - 为 AdvancePlanningIntent 添加 ToolMessage 响应
+        规划路由节点 - 处理 INIT 推进和 ToolMessage 响应
+
+        功能：
+        1. INIT 阶段：直接推进到 layer1
+        2. 为 AdvancePlanningIntent 添加 ToolMessage 响应
 
         解决 OpenAI API 报错：tool_call 后必须有 ToolMessage
         """
+        phase = state.get("phase", PlanningPhase.INIT.value)
         messages = state.get("messages", [])
         last_msg = messages[-1] if messages else None
 
+        updates = {}
+
+        # INIT 阶段：直接推进到 layer1（合并 advance_phase 功能）
+        if phase == PlanningPhase.INIT.value:
+            logger.info("[规划路由] INIT 阶段，推进到 layer1")
+            updates["phase"] = PlanningPhase.LAYER1.value
+            updates["current_wave"] = 1
+
+        # 为 AdvancePlanningIntent 添加 ToolMessage
         if last_msg and hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
             for tool_call in last_msg.tool_calls:
                 if tool_call.get("name") == "AdvancePlanningIntent":
                     logger.info("[规划路由] 为 AdvancePlanningIntent 添加 ToolMessage")
-                    return {
-                        "messages": [
-                            ToolMessage(
-                                content="规划流程已启动，开始分析维度...",
-                                tool_call_id=tool_call.get("id", "")
-                            )
-                        ]
-                    }
-        return {}
+                    updates["messages"] = [
+                        ToolMessage(
+                            content="规划流程已启动，开始分析维度...",
+                            tool_call_id=tool_call.get("id", "")
+                        )
+                    ]
+                    break
+
+        return updates
     builder.add_node("route_planning", route_planning_node)
 
     # 入口：对话节点
@@ -651,7 +647,6 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
             "analyze_dimension": "analyze_dimension",
             "revision": "revision",
             "collect_results": "collect_results",
-            "advance_phase": "advance_phase",
             END: END
         }
     )
@@ -671,7 +666,6 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
         check_completion,
         {
             "continue": "route_planning",  # 波次/维度推进后自动继续执行
-            "advance": "advance_phase",  # 推进到下一阶段
             "complete": END,             # 规划完成
             "revision": "revision",      # 进入修订
             "pause": END,                # 暂停等待审查
@@ -681,9 +675,6 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
 
     # 空间布局生成 -> 继续检查完成状态
     builder.add_edge("spatial_layout", "route_planning")
-
-    # 阶段推进 -> 路由分发
-    builder.add_edge("advance_phase", "route_planning")
 
     # 修订 -> 条件路由（pause_after_step 时直接结束）
     builder.add_conditional_edges(

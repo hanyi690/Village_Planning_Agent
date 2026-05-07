@@ -109,10 +109,7 @@ def route_by_phase(state: Dict[str, Any]) -> Union[List[Send], str]:
 
     layer = _phase_to_layer(phase)
 
-    # INIT 阶段需要推进到 layer1
-    if layer == 0:
-        logger.info("[路由] INIT 阶段，返回 advance_phase")
-        return "advance_phase"
+    # INIT 阶段已由 route_planning_node 推进到 layer1，这里检查是否需要预加载
 
     # 知识预加载检测：如果缓存为空，先预加载
     if not knowledge_cache:
@@ -515,13 +512,12 @@ def emit_sse_events(state: Dict[str, Any]) -> Dict[str, Any]:
 # 阶段推进检查
 # ==========================================
 
-def check_phase_completion(state: Dict[str, Any]) -> Literal["continue", "advance", "complete", "pause"]:
+def check_phase_completion(state: Dict[str, Any]) -> Literal["continue", "complete", "pause"]:
     """
     检查当前阶段是否完成
 
     Returns:
         "continue": 继续执行下一维度/波次（自动回到 route_planning）
-        "advance": 推进到下一阶段
         "complete": 规划完成
         "pause": 暂停等待审查
     """
@@ -536,8 +532,6 @@ def check_phase_completion(state: Dict[str, Any]) -> Literal["continue", "advanc
         return "complete"
 
     layer = _phase_to_layer(phase)
-    if layer == 0:  # INIT
-        return "advance"
 
     completed = state.get("completed_dimensions", {}).get(f"layer{layer}", [])
     total = get_layer_dimensions(layer)
@@ -545,7 +539,8 @@ def check_phase_completion(state: Dict[str, Any]) -> Literal["continue", "advanc
     if len(completed) >= len(total):
         if layer >= 3:
             return "complete"
-        return "advance"
+        # Layer 1/2 完成时返回 continue（阶段推进由 collect_layer_results 处理）
+        return "continue"
 
     return "continue"
 
