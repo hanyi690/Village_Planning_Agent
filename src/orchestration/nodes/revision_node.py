@@ -33,7 +33,7 @@ from langgraph.types import Send
 import operator
 from datetime import datetime
 
-from ...config.dimension_metadata import (
+from ...config import (
     get_full_dependency_chain_func,
     get_dimension_layer,
     get_analysis_dimension_names,

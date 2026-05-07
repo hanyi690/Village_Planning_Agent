@@ -315,7 +315,7 @@ async def start_session_from_fixed_context(
     """
     from backend.services.planning_runtime_service import PlanningRuntimeService
     from backend.services.sse_manager import sse_manager
-    from src.config.dimension_metadata import DIMENSIONS_METADATA
+    from src.config import DIMENSIONS_METADATA
 
     # 1. Generate session_id
     session_id = f"rag_{('on' if rag_enabled else 'off')}_{uuid.uuid4().hex[:8]}"
@@ -511,7 +511,7 @@ async def generate_dimension_with_rag(
     Returns:
         Generated dimension result
     """
-    from src.config.dimension_metadata import get_dimension_config, DIMENSIONS_METADATA
+    from src.config import get_dimension_config, DIMENSIONS_METADATA
     from src.planners.generic_planner import GenericPlannerFactory
     from src.rag.core.tools import search_knowledge
 
@@ -577,8 +577,8 @@ async def generate_dimension_with_rag(
     }
 
     # Filter state for this dimension
-    from src.config.dimension_metadata import filter_reports_by_dependency, get_full_dependency_chain_func
-    from src.config.dimension_metadata import get_analysis_dimension_names, get_concept_dimension_names
+    from src.config import filter_reports_by_dependency, get_full_dependency_chain_func
+    from src.config import get_analysis_dimension_names, get_concept_dimension_names
 
     chain = get_full_dependency_chain_func(dimension_key)
     analysis_reports = planner_state["reports"]["layer1"]

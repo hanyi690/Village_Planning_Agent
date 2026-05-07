@@ -35,6 +35,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from scripts.experiments.config import (
     BASELINE_DIR,
     JINTIAN_VILLAGE_DATA,
+    DEFAULT_TASK_DESCRIPTION,
+    DEFAULT_CONSTRAINTS,
     ensure_output_dirs,
 )
 from scripts.experiments.layer_checkpoint_utils import (
@@ -125,6 +127,8 @@ async def run_planning_runtime(project_name: str, village_data: Dict, timeout: i
         project_name=project_name,
         village_data=village_data.get("status_report", ""),
         village_name=village_data.get("village_name", "金田村"),
+        task_description=DEFAULT_TASK_DESCRIPTION,
+        constraints=DEFAULT_CONSTRAINTS,
         step_mode=False,  # Auto-progress through layers
         background_tasks=background_tasks,
     )
@@ -244,6 +248,8 @@ async def run_planning_runtime_with_layer_checkpoints(
         project_name=project_name,
         village_data=village_data.get("status_report", ""),
         village_name=village_data.get("village_name", "金田村"),
+        task_description=DEFAULT_TASK_DESCRIPTION,
+        constraints=DEFAULT_CONSTRAINTS,
         step_mode=step_mode,
         background_tasks=background_tasks,
     )

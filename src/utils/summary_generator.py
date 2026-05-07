@@ -564,7 +564,7 @@ def build_dynamic_query(
     Returns:
         Enhanced query string with tags context
     """
-    from ..config.dimension_metadata import get_full_dependency_chain_func, get_dimension_config
+    from ..config import get_full_dependency_chain_func, get_dimension_config
 
     # Get dimension name
     dim_config = get_dimension_config(dim_key)

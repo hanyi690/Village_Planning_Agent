@@ -19,7 +19,7 @@ from typing import Any
 # Import dimension metadata helpers
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from src.config.dimension_metadata import get_dimension_layer
+from src.config import get_dimension_layer
 
 class BytesEncoder(json.JSONEncoder):
     """Custom JSON encoder that handles bytes and other non-serializable types."""

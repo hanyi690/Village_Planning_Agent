@@ -11,7 +11,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
 # Import from authoritative source
-from ...config.dimension_metadata import get_dimension_name
+from ...config import get_dimension_name
 
 # ==========================================
 # 特征槽定义（可枚举）

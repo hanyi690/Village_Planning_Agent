@@ -21,7 +21,7 @@ from ..core.config import LLM_MODEL, MAX_TOKENS
 from ..core.langsmith_integration import get_langsmith_manager
 from ..core.message_builder import build_multimodal_message
 from ..utils.logger import get_logger
-from ..config.dimension_metadata import get_dimension_config, get_detailed_dimension_names
+from ..config import get_dimension_config, get_detailed_dimension_names
 
 # RAG imports (conditional to avoid errors if RAG not available)
 try:
@@ -973,7 +973,7 @@ class GenericPlannerFactory:
     @classmethod
     def create_all_planners(cls, layer: Optional[int] = None) -> Dict[str, GenericPlanner]:
         """批量创建规划器"""
-        from ..config.dimension_metadata import DIMENSIONS_METADATA
+        from ..config import DIMENSIONS_METADATA
 
         planners = {}
 

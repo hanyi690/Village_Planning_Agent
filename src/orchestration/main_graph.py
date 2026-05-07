@@ -51,7 +51,7 @@ from ..utils.logger import get_logger
 from ..utils.sse_publisher import SSEPublisher
 from ..tools.registry import ToolRegistry
 
-from ..config.dimension_metadata import get_dimension_config
+from ..config import get_dimension_config
 from .nodes.dimension_node import _execute_gis_tool, _extract_gis_data_for_sse
 
 # 编排层组件

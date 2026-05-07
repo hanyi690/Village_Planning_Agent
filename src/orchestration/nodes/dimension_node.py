@@ -17,7 +17,7 @@ from langchain_core.messages import AIMessage
 from ...core.config import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT, RAG_ENABLED, DEFAULT_IMAGE_FORMAT, LLM_MAX_CONCURRENT
 from ...core.llm_factory import create_llm
 from ...core.message_builder import build_multimodal_message
-from ...config.dimension_metadata import get_dimension_config, get_dimension_layer
+from ...config import get_dimension_config, get_dimension_layer
 from ...utils.logger import get_logger
 from ..state import PlanningPhase, get_layer_dimensions, get_wave_dimensions, _phase_to_layer
 from ...tools.types import normalize_tool_result, NormalizedToolResult, ResultDataType
@@ -247,8 +247,8 @@ def _get_dimension_name(dimension_key: str) -> str:
 # 缓存 DIMENSION_NAMES 用于快速查找
 def _build_dimension_names() -> Dict[str, str]:
     """构建维度名称映射表"""
-    from ...config.dimension_metadata import list_dimensions
-    return {dim["key"]: dim["name"] for dim in list_dimensions()}
+    from ...config import list_dimensions
+    return {dim.key: dim.name for dim in list_dimensions()}
 
 
 DIMENSION_NAMES = _build_dimension_names()
@@ -729,7 +729,7 @@ def _build_summary_context(
     if not dimension_summaries:
         return ""
 
-    from ...config.dimension_metadata import get_full_dependency_chain_func
+    from ...config import get_full_dependency_chain_func
 
     chain = get_full_dependency_chain_func(dimension_key)
     layer1_deps = chain.get("layer1_analyses", [])
@@ -836,7 +836,7 @@ def _build_dimension_prompt(
     # Layer 2: 使用 concept_prompts 模板（按依赖配置筛选）
     elif layer == 2:
         from ...subgraphs.concept_prompts import get_dimension_prompt
-        from ...config.dimension_metadata import (
+        from ...config import (
             get_full_dependency_chain_func,
             get_analysis_dimension_names,
             get_concept_dimension_names,
@@ -878,7 +878,7 @@ def _build_dimension_prompt(
     # Layer 3: 使用 detailed_plan_prompts 模板（按依赖配置筛选）
     elif layer == 3:
         from ...subgraphs.detailed_plan_prompts import get_dimension_prompt
-        from ...config.dimension_metadata import (
+        from ...config import (
             get_full_dependency_chain_func,
             get_analysis_dimension_names,
             get_concept_dimension_names,

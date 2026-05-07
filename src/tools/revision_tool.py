@@ -348,7 +348,7 @@ class RevisionTool:
         """
         try:
             # 根据维度所属层级选择数据源（使用 dimension_metadata.py）
-            from ..config.dimension_metadata import get_dimension_layer
+            from ..config import get_dimension_layer
             
             layer = get_dimension_layer(dimension)
             

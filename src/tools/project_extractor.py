@@ -367,7 +367,7 @@ def format_shadow_cache_for_prompt(
         if not projects:
             continue
 
-        from src.config.dimension_metadata import get_detailed_dimension_names
+        from src.config import get_detailed_dimension_names
         dim_name = get_detailed_dimension_names().get(dim_key, dim_key)
 
         lines = [f"### {dim_name}"]

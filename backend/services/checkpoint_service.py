@@ -30,7 +30,7 @@ def _get_dimension_names():
     """Get dimension names mapping (lazy import)."""
     global _DIMENSION_NAMES
     if _DIMENSION_NAMES is None:
-        from src.config.dimension_metadata import get_dimension_config
+        from src.config import get_dimension_config
         from src.orchestration.nodes.dimension_node import DIMENSION_NAMES
         _DIMENSION_NAMES = DIMENSION_NAMES
     return _DIMENSION_NAMES

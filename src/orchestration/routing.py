@@ -21,7 +21,7 @@ from .state import (
     _layer_to_phase,
 )
 from .nodes.dimension_node import create_dimension_state, DIMENSION_NAMES
-from ..config.dimension_metadata import get_dimension_layer
+from ..config import get_dimension_layer
 from ..constants.tools import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL
 from ..utils.logger import get_logger
 from ..utils.event_factory import create_layer_completed_event, create_pause_event

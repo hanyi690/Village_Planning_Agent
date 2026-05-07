@@ -57,7 +57,7 @@ def clearable_add(left: List[Dict], right: List[Dict]) -> List[Dict]:
     return left + right
 
 # 复用 dimension_metadata.py 的波次配置
-from ..config.dimension_metadata import (
+from ..config import (
     get_layer_dimensions as _get_layer_dimensions,
     get_wave_config,
 )

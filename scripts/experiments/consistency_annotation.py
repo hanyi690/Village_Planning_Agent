@@ -123,7 +123,7 @@ def generate_annotation_table(
         analysis = analyze_keywords(new_content, analysis_keywords)
 
         # Get dimension name
-        from src.config.dimension_metadata import get_dimension_config
+        from src.config import get_dimension_config
         dim_config = get_dimension_config(dim)
         dimension_name = dim_config.get("name", dim) if dim_config else dim
 
