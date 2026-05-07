@@ -35,7 +35,7 @@ def merge_dicts(left: Dict[str, Any], right: Dict[str, Any]) -> Dict[str, Any]:
     """Merge two dicts for LangGraph concurrent updates.
 
     Used with Annotated to allow multiple dimension nodes to update
-    gis_analysis_results and planning_layers simultaneously.
+    gis_analysis_results simultaneously.
     """
     return {**left, **right}
 
@@ -198,7 +198,6 @@ class UnifiedPlanningState(TypedDict):
     sse_events: Annotated[List[Dict], clearable_add]
 
     # 交互控制
-    pending_review: bool
     need_revision: bool
     revision_target_dimensions: List[str]
     human_feedback: str  # 人工反馈（用户 reject 时提供）
@@ -212,7 +211,6 @@ class UnifiedPlanningState(TypedDict):
     # GIS analysis results (vectorization and spatial analysis)
     # Use Annotated with merge_dicts to support concurrent updates from Send API
     gis_analysis_results: Annotated[Dict[str, Any], merge_dicts]  # {dimension_key: result}
-    planning_layers: Annotated[Dict[str, Any], merge_dicts]       # {layer_name: GeoJSON}
 
     # 元数据
     metadata: Dict[str, Any]
@@ -246,7 +244,6 @@ def create_initial_state(
         dimension_summaries={},  # 维度摘要索引（层级完成后生成）
         dimension_results=[],
         sse_events=[],
-        pending_review=False,
         need_revision=False,
         revision_target_dimensions=[],
         human_feedback="",
@@ -255,7 +252,6 @@ def create_initial_state(
         pause_after_step=False,
         previous_layer=0,
         gis_analysis_results={},
-        planning_layers={},
         metadata={}
     )
 
