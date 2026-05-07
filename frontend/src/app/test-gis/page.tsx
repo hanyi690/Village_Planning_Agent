@@ -21,20 +21,6 @@ import MapControls, { type BasemapType } from './components/MapControls';
 import StandardLayersPanel from './components/StandardLayersPanel';
 import ToolTestPanel from './components/ToolTestPanel';
 
-export default function TestGISPage() {
-  // 生产环境保护
-  if (process.env.NODE_ENV === 'production') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center p-8 bg-white rounded-lg shadow-lg">
-          <h1 className="text-2xl font-bold text-gray-800 mb-4">页面不可访问</h1>
-          <p className="text-gray-600">此页面仅在开发环境可用</p>
-          <p className="text-sm text-gray-400 mt-2">请使用开发模式启动应用</p>
-        </div>
-      </div>
-    );
-  }
-
 // ============================================
 // Constants
 // ============================================
@@ -51,6 +37,19 @@ const LAYER_GROUP_NAMES: Record<string, string> = {
 // ============================================
 
 export default function TestGISPage() {
+  // 生产环境保护
+  if (process.env.NODE_ENV === 'production') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center p-8 bg-white rounded-lg shadow-lg">
+          <h1 className="text-2xl font-bold text-gray-800 mb-4">页面不可访问</h1>
+          <p className="text-gray-600">此页面仅在开发环境可用</p>
+          <p className="text-sm text-gray-400 mt-2">请使用开发模式启动应用</p>
+        </div>
+      </div>
+    );
+  }
+
   // Static layers from public test data
   const { layers: staticLayers, loading: staticLoading, error: staticError } = useTestLayers();
 
@@ -107,24 +106,26 @@ export default function TestGISPage() {
   const [basemap, setBasemap] = useState<BasemapType>('vector');
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
 
-  // Create boundary layer from fallback test
-  const boundaryLayer: GISLayerConfig[] = boundaryGeojson
-    ? [{
-        geojson: {
-          type: 'FeatureCollection' as const,
-          features: [{
-            type: 'Feature' as const,
-            properties: { name: '代理边界', strategy: strategyUsed },
-            geometry: boundaryGeojson as {
-              type: 'Polygon';
-              coordinates: unknown;
-            },
-          }],
-        },
-        layerType: 'boundary',
-        layerName: `代理边界 (${strategyUsed || 'unknown'})`,
-      }]
-    : [];
+  // Create boundary layer from fallback test (memoized)
+  const boundaryLayer = useMemo<GISLayerConfig[]>(() => {
+    return boundaryGeojson
+      ? [{
+          geojson: {
+            type: 'FeatureCollection' as const,
+            features: [{
+              type: 'Feature' as const,
+              properties: { name: '代理边界', strategy: strategyUsed },
+              geometry: boundaryGeojson as {
+                type: 'Polygon';
+                coordinates: unknown;
+              },
+            }],
+          },
+          layerType: 'boundary',
+          layerName: `代理边界 (${strategyUsed || 'unknown'})`,
+        }]
+      : [];
+  }, [boundaryGeojson, strategyUsed]);
 
   // Get visible standard layers
   const visibleStandardLayers = useMemo(() => {
@@ -203,10 +204,11 @@ export default function TestGISPage() {
   }, [clearLayoutTest, clearBoundaryTest]);
 
   // Handle tool test complete
-  const handleToolTestComplete = useCallback((toolId: string, result: any) => {
-    if (result.success && result.geojson) {
+  const handleToolTestComplete = useCallback((toolId: string, result: unknown) => {
+    const r = result as { success?: boolean; geojson?: unknown };
+    if (r.success && r.geojson) {
       const newLayer: GISLayerConfig = {
-        geojson: result.geojson,
+        geojson: r.geojson as GISLayerConfig['geojson'],
         layerType: 'function_zone',
         layerName: `${toolId} 测试结果`,
       };

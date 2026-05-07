@@ -3,6 +3,10 @@
  * 用于解析层级报告 markdown 内容
  */
 
+// 正则表达式提升到模块顶层，避免每次解析重新编译
+const DIMENSION_PATTERN = /^##\s+(.+)\n([\s\S]*?)(?=^##\s+|^$)/gm;
+const SUBSECTION_PATTERN = /^###\s+(.+)\n([\s\S]*?)(?=^###\s+|^##\s+|^$)/gm;
+
 /**
  * 子节内容
  */
@@ -43,38 +47,38 @@ export function parseLayerReport(content: string): ParsedDimension[] {
   }
 
   const dimensions: ParsedDimension[] = [];
-  // 匹配 ## 标题作为维度分隔
-  const dimensionPattern = /^##\s+(.+)\n([\s\S]*?)(?=^##\s+|^$)/gm;
+
+  // 重置正则表达式状态（重要：正则对象有内部状态）
+  DIMENSION_PATTERN.lastIndex = 0;
 
   let match;
-  while ((match = dimensionPattern.exec(content)) !== null) {
+  while ((match = DIMENSION_PATTERN.exec(content)) !== null) {
     const name = match[1].trim();
     const rawContent = match[2].trim();
 
     if (name && rawContent) {
       // 尝试解析子节（### 标题）
       const subsections: ParsedSubsection[] = [];
-      const subsectionPattern = /^###\s+(.+)\n([\s\S]*?)(?=^###\s+|^##\s+|^$)/gm;
-
-      let subMatch;
       let mainContent = rawContent;
 
-      // 检查是否有子节
-      if (rawContent.includes('### ')) {
+      // 优化：只使用 indexOf 一次判断
+      const firstSubsectionIndex = rawContent.indexOf('### ');
+      if (firstSubsectionIndex !== -1) {
+        // 重置子节正则状态
+        SUBSECTION_PATTERN.lastIndex = 0;
+
         // 提取子节内容
-        while ((subMatch = subsectionPattern.exec(rawContent)) !== null) {
+        let subMatch;
+        while ((subMatch = SUBSECTION_PATTERN.exec(rawContent)) !== null) {
           subsections.push({
             title: subMatch[1].trim(),
             content: subMatch[2].trim(),
           });
         }
         // 主内容为第一个 ### 之前的内容
-        const firstSubsectionIndex = rawContent.indexOf('### ');
-        if (firstSubsectionIndex > 0) {
-          mainContent = rawContent.substring(0, firstSubsectionIndex).trim();
-        } else {
-          mainContent = '';
-        }
+        mainContent = firstSubsectionIndex > 0
+          ? rawContent.substring(0, firstSubsectionIndex).trim()
+          : '';
       }
 
       dimensions.push({
