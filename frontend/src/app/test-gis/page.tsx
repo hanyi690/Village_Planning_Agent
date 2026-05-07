@@ -1,5 +1,11 @@
 'use client';
 
+/**
+ * GIS 测试页面 - 开发环境专用
+ *
+ * 注意：此页面仅在开发环境可用，生产环境会显示提示信息。
+ */
+
 import { useState, useCallback, useMemo } from 'react';
 import MapView from '@/components/gis/MapView';
 import type { GISLayerConfig } from '@/types/message/message-types';
@@ -14,6 +20,20 @@ import TestResultPanel from './components/TestResultPanel';
 import MapControls, { type BasemapType } from './components/MapControls';
 import StandardLayersPanel from './components/StandardLayersPanel';
 import ToolTestPanel from './components/ToolTestPanel';
+
+export default function TestGISPage() {
+  // 生产环境保护
+  if (process.env.NODE_ENV === 'production') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center p-8 bg-white rounded-lg shadow-lg">
+          <h1 className="text-2xl font-bold text-gray-800 mb-4">页面不可访问</h1>
+          <p className="text-gray-600">此页面仅在开发环境可用</p>
+          <p className="text-sm text-gray-400 mt-2">请使用开发模式启动应用</p>
+        </div>
+      </div>
+    );
+  }
 
 // ============================================
 // Constants
