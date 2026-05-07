@@ -14,6 +14,13 @@ from .loader import (
     get_phase_by_id,
     get_dimension_by_key,
 )
+from .dependency_calculator import (
+    calculate_waves,
+    get_wave_dimensions,
+    get_total_waves,
+    get_downstream_dependencies,
+    get_impact_tree,
+)
 
 __all__ = [
     'GISConfig',
@@ -30,4 +37,10 @@ __all__ = [
     'DimensionConfig',
     'get_phase_by_id',
     'get_dimension_by_key',
+    # 从 dependency_calculator 导入的内容
+    'calculate_waves',
+    'get_wave_dimensions',
+    'get_total_waves',
+    'get_downstream_dependencies',
+    'get_impact_tree',
 ]
