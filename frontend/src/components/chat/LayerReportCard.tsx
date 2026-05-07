@@ -8,7 +8,7 @@
 
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ParsedDimension, parseLayerReport, getDimensionKey } from '@/lib/layerReportParser';
+import { ParsedDimension, parseLayerReport, getDimensionKey } from '@/lib/report-parser';
 import DimensionSection from './DimensionSection';
 import type { GISData, KnowledgeSource } from '@/types/message/message-types';
 import { getDimensionName, getDimensionIcon, getDimensionsByLayer } from '@/config/dimensions';

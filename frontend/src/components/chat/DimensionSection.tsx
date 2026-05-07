@@ -8,7 +8,7 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ParsedSubsection } from '@/lib/layerReportParser';
+import { ParsedSubsection } from '@/lib/report-parser';
 import MarkdownRenderer from '../MarkdownRenderer';
 import MapView from '@/components/gis/MapView';
 import type { GISData, GISAnalysisData, KnowledgeSource } from '@/types/message/message-types';

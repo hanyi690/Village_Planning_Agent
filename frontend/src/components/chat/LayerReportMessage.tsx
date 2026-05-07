@@ -6,7 +6,7 @@
  */
 
 import { LayerCompletedMessage } from '@/types';
-import { parseLayerReport, ParsedDimension } from '@/lib/layerReportParser';
+import { parseLayerReport, ParsedDimension } from '@/lib/report-parser';
 import LayerReportCard from './LayerReportCard';
 import React, { useMemo } from 'react';
 import { getDimensionName, getDimensionIcon } from '@/config/dimensions';
