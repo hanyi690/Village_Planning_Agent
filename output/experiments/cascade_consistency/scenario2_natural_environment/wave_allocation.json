@@ -1,11 +1,31 @@
 {
   "target_dimension": "natural_environment",
-  "wave_allocation": {},
-  "completed_dimensions": [
-    "full_report",
-    "full_report",
-    "full_report"
-  ],
-  "total_waves": 0,
-  "pending_dimensions": 0
+  "wave_allocation": {
+    "0": [
+      "natural_environment"
+    ],
+    "1": [
+      "resource_endowment",
+      "spatial_structure",
+      "land_use_planning",
+      "infrastructure_planning",
+      "ecological",
+      "disaster_prevention"
+    ],
+    "2": [
+      "industry",
+      "planning_positioning",
+      "project_bank",
+      "development_goals",
+      "planning_strategies"
+    ],
+    "3": [
+      "settlement_planning",
+      "traffic_planning",
+      "public_service",
+      "heritage",
+      "landscape"
+    ]
+  },
+  "total_waves": 3
 }

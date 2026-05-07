@@ -98,8 +98,8 @@ def _build_metadata_filter(params: MetadataFilterParams) -> Optional[Dict]:
         ]
         return filter_dict
 
-    if params.dimension:
-        filter_dict["dimension_tags"] = {"$regex": f"(^|,)({params.dimension})(,|$)"}
+    # ChromaDB 不支持 $regex，dimension 和 regions 过滤已移除
+    # 依赖语义相似度检索即可满足需求
 
     if params.terrain and params.terrain != "all":
         filter_dict["terrain"] = params.terrain
@@ -107,13 +107,7 @@ def _build_metadata_filter(params: MetadataFilterParams) -> Optional[Dict]:
     if params.doc_type:
         filter_dict["doc_type"] = params.doc_type
 
-    if params.regions:
-        region_list = _parse_comma_separated(params.regions)
-        if region_list:
-            filter_dict["$or"] = [
-                {"regions": {"$regex": f"(^|,)({r})(,|$)"}}
-                for r in region_list
-            ]
+    # regions 过滤同样依赖 $regex，ChromaDB 不支持，已移除
 
     if params.task_id:
         filter_dict["task_id"] = params.task_id
@@ -279,7 +273,7 @@ def search_knowledge(
     - 需要查找特定信息时
     - 获取相关片段的上下文
     - 探索知识库中的相关内容
-    - 按维度/地形/文档类型/地区过滤检索
+    - 按地形/文档类型过滤检索
     - 检索摘要索引（Layer间关联检索）
 
     **参数：**
@@ -289,10 +283,10 @@ def search_knowledge(
       - "minimal": 仅匹配片段（最少 Token）- 最快
       - "standard": 片段 + 短上下文（300 字，默认）
       - "expanded": 片段 + 长上下文（500 字）- 最详细
-    - dimension (str | optional): 维度标识过滤（如 "traffic", "land_use"）
+    - dimension (str | optional): 维度标识（已废弃，ChromaDB 不支持 $regex）
     - terrain (str | optional): 地形类型过滤（"mountain", "plain", "hill", "all"）
     - doc_type (str | optional): 文档类型过滤（"policy", "standard", "case", "dimension_summary"）
-    - regions (str | optional): 地区名称过滤（逗号分隔，如 "梅州,广东"）
+    - regions (str | optional): 地区名称（已废弃，ChromaDB 不支持 $regex）
     - task_id (str | optional): 任务ID（会话隔离，检索摘要时必须提供）
     - include_summaries (bool | optional): 是否启用混合检索模式（公共政策 + 本任务摘要）
 

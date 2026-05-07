@@ -81,7 +81,7 @@ class RevisionState(TypedDict):
     dimension_summaries: Dict[str, Dict[str, Any]]  # {dimension_key: DimensionSummary}
 
     # 任务控制
-    completed_dimensions: List[str]        # 已完成的维度（用于过滤）
+    completed_dimensions: List[str]  # 扁平列表格式（修复流程内部使用）
     current_wave: int                      # 当前执行波次
     max_wave: int                          # 最大波次数
 
@@ -146,14 +146,18 @@ def initialize_revision(state: RevisionState) -> Dict[str, Any]:
     logger.info("[Revision-初始化] 开始初始化修复任务")
 
     target_dimensions = state.get("target_dimensions", [])
-    completed_dimensions = state.get("completed_dimensions", [])
+    completed_dimensions = _get_completed_dimensions(state)  # 获取扁平列表
     feedback = state.get("feedback", "")
 
     logger.info(f"[Revision-初始化] 目标维度: {target_dimensions}")
+    logger.info(f"[Revision-初始化] 已完成维度数量: {len(completed_dimensions)}")
+    logger.info(f"[Revision-初始化] 已完成维度: {completed_dimensions}")
     logger.info(f"[Revision-初始化] 用户反馈: {feedback[:100]}...")
 
     # 获取按 wave 分组的待修复维度
     wave_dimensions = get_revision_wave_dimensions(target_dimensions, completed_dimensions)
+
+    logger.info(f"[Revision-初始化] wave_dimensions: {wave_dimensions}")
 
     if not wave_dimensions:
         # 检查目标维度是否被过滤掉（未完成）
@@ -224,8 +228,9 @@ def route_by_wave(state: RevisionState) -> Union[List[Send], str]:
         logger.info(f"[Revision-路由] Wave {current_wave} 无待处理维度，推进")
         return "advance_wave"
 
-    # 过滤已处理的维度
-    processed = set(state.get("updated_reports", {}).keys())
+    # 过滤已处理的维度（使用 revision_history，比 updated_reports 更可靠）
+    # revision_history 使用 reducer (operator.add)，确保所有更新都被合并
+    processed = set(entry.get("dimension") for entry in state.get("revision_history", []))
     pending_dims = [d for d in current_wave_dims if d not in processed]
 
     if not pending_dims:
@@ -417,7 +422,7 @@ def _build_cascade_feedback(
 # 单维度修复节点
 # ==========================================
 
-def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
+async def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
     """
     修复单个维度
 
@@ -513,8 +518,8 @@ def revise_single_dimension(state: RevisionDimensionState) -> Dict[str, Any]:
                 is_revision=True
             )
 
-        # 执行修复（带流式输出）
-        revised_result = planner.execute_with_feedback(
+        # 执行修复（带流式输出，异步版本）
+        revised_result = await planner.aexecute_with_feedback(
             state=planner_state,
             feedback=feedback,
             original_result=original_content,
@@ -594,7 +599,7 @@ def reduce_revision_results(state: RevisionState) -> Dict[str, Any]:
             if dim not in completed_dimensions:
                 completed_dimensions.append(dim)
 
-            # 记录历史（包含维度类型信息）
+            # 记录历史（包含维度类型信息和 wave）
             revision_history.append({
                 "dimension": dim,
                 "dimension_name": result.get("dimension_name", dim),
@@ -604,6 +609,7 @@ def reduce_revision_results(state: RevisionState) -> Dict[str, Any]:
                 "revision_type": result.get("revision_type", ""),
                 "timestamp": datetime.now().isoformat(),
                 "layer": get_dimension_layer(dim),
+                "wave": state.get("current_wave", -1),  # 记录当前执行的 wave
                 "feedback": (state.get("feedback") or "")[:500]  # 防空处理，截断避免过长
             })
 
@@ -611,9 +617,9 @@ def reduce_revision_results(state: RevisionState) -> Dict[str, Any]:
 
     return {
         "updated_reports": updated_reports,
-        "completed_dimensions": completed_dimensions,
+        "completed_dimensions": completed_dimensions,  # 确保状态更新
         "revision_history": revision_history,
-        "revision_results": []  # 清空，为下一波次准备
+        "revision_results": []
     }
 
 
@@ -912,6 +918,7 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # 3. 更新主状态
     updated_reports = revision_result.get("updated_reports", {})
     revision_history = revision_result.get("revision_history", [])
+    revised_completed_dims = revision_result.get("completed_dimensions", [])
 
     # 更新 reports 结构
     reports = dict(state.get("reports", {}))
@@ -927,6 +934,21 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # 合并修订历史
     existing_history = list(state.get("revision_history", []))
     existing_history.extend(revision_history)
+
+    # 将扁平列表 completed_dimensions 转换为分层字典格式（主状态期望）
+    completed_dimensions_dict = dict(state.get("completed_dimensions", {}))
+    for layer_key in ["layer1", "layer2", "layer3"]:
+        if layer_key not in completed_dimensions_dict:
+            completed_dimensions_dict[layer_key] = []
+
+    # 将修订后的维度添加到对应层级
+    for dim in revised_completed_dims:
+        layer = get_dimension_layer(dim)
+        layer_key = f"layer{layer}"
+        if dim not in completed_dimensions_dict[layer_key]:
+            completed_dimensions_dict[layer_key].append(dim)
+
+    logger.info(f"[修复] 更新 completed_dimensions: {completed_dimensions_dict}")
 
     # 构建日志消息
     msg_parts = [f"已修复 {len(updated_reports)} 个维度（并行处理）"]
@@ -996,6 +1018,7 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     return StateBuilder()\
         .set("reports", reports)\
+        .set("completed_dimensions", completed_dimensions_dict)\
         .set("need_revision", False)\
         .set("pause_after_step", True)\
         .set("previous_layer", current_layer)\
@@ -1008,13 +1031,27 @@ async def revision_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _get_completed_dimensions(state: Dict[str, Any]) -> List[str]:
-    """获取已完成的维度列表"""
+    """从分层字典中提取已完成维度列表"""
     completed = []
+    completed_dims_dict = state.get("completed_dimensions", {})
 
-    reports = state.get("reports", {})
-    for layer_key in ["layer1", "layer2", "layer3"]:
-        layer_reports = reports.get(layer_key, {})
-        completed.extend(layer_reports.keys())
+    logger.info(f"[Revision-完成维度] completed_dimensions 类型: {type(completed_dims_dict)}")
+    logger.info(f"[Revision-完成维度] completed_dimensions 原始值: {completed_dims_dict}")
+
+    # 处理两种可能的输入格式
+    if isinstance(completed_dims_dict, dict):
+        # 分层字典格式 {"layer1": [...], ...}
+        for layer_key in ["layer1", "layer2", "layer3"]:
+            completed.extend(completed_dims_dict.get(layer_key, []))
+    elif isinstance(completed_dims_dict, list):
+        # 扁平列表格式（兼容旧数据）
+        completed = completed_dims_dict
+    else:
+        # 无数据或异常格式，从 reports 推导
+        reports = state.get("reports", {})
+        for layer_key in ["layer1", "layer2", "layer3"]:
+            layer_reports = reports.get(layer_key, {})
+            completed.extend(layer_reports.keys())
 
     return list(set(completed))
 

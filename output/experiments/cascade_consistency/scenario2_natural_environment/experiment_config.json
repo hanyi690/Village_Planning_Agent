@@ -1,36 +1,13 @@
 {
-  "session_id": "scenario2_4b28fb20_20260505161118",
+  "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
   "scenario_name": "scenario2",
   "config": {
     "name": "驳回自然环境分析（Layer 1）",
     "target_dimension": "natural_environment",
     "target_layer": 1,
     "feedback": "现状报告中明确记载金田村存在5处崩塌隐患点和35处滑坡隐患点，\n但当前分析未对隐患点的空间分布与影响范围进行充分评估，需强化地质灾害风险的分析深度。",
-    "expected_impact": {
-      "total_downstream": 12,
-      "max_wave": 3,
-      "wave_distribution": {
-        "0": [
-          "natural_environment"
-        ],
-        "1": [
-          "resource_endowment",
-          "ecological",
-          "spatial_structure",
-          "land_use_planning",
-          "disaster_prevention",
-          "infrastructure_planning"
-        ],
-        "2": [
-          "planning_positioning",
-          "planning_strategies"
-        ],
-        "3": [
-          "development_goals",
-          "project_bank"
-        ]
-      }
-    },
+    "checkpoint_restore": true,
+    "checkpoint_layer": 1,
     "keywords": {
       "positive": [
         "崩塌隐患",
@@ -43,5 +20,5 @@
       "negative": []
     }
   },
-  "created_at": "2026-05-05T16:11:18.187697"
+  "created_at": "2026-05-07T10:00:06.585428"
 }

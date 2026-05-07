@@ -338,6 +338,153 @@ class GenericPlanner:
     # 基于反馈的修复执行（原 UnifiedPlannerBase）
     # ==========================================
 
+    async def aexecute_with_feedback(
+        self,
+        state: Dict[str, Any],
+        feedback: str,
+        original_result: str,
+        revision_count: int = 0,
+        streaming: bool = False,
+        on_token_callback: Callable[[str, str], None] | None = None,
+        images: Optional[List[Dict[str, Any]]] = None,
+    ) -> str:
+        """
+        基于反馈重新执行（异步版本，用于人工审核流程）
+
+        Args:
+            state: 当前状态
+            feedback: 人工反馈意见
+            original_result: 原始执行结果
+            revision_count: 修改次数
+            streaming: 是否启用流式输出（默认: False）
+            on_token_callback: token回调函数，接收 (token, accumulated)
+            images: 图片列表（用于多模态修复）
+
+        Returns:
+            修改后的结果
+        """
+        logger.info(f"[{self.dimension_name}] revision (#{revision_count + 1})")
+
+        revision_prompt = self._build_revision_prompt(
+            original_result=original_result,
+            feedback=feedback,
+            revision_count=revision_count
+        )
+
+        # 构建多模态消息
+        llm_input: str | HumanMessage = revision_prompt
+        if images:
+            if len(images) > 1:
+                logger.warning(f"[{self.dimension_name}] {len(images)} images provided, only first will be used")
+            first_image = images[0]
+            llm_input = build_multimodal_message(
+                text_content=revision_prompt,
+                image_base64=first_image.get("image_base64"),
+                image_format=first_image.get("image_format", "jpeg"),
+                role="human"
+            )
+            logger.info(f"[{self.dimension_name}] revision with image")
+
+        try:
+            result = await self._ainvoke_llm(
+                prompt=llm_input,
+                state=state,
+                enable_langsmith=True,
+                streaming=streaming,
+                on_token_callback=on_token_callback
+            )
+            result = self._clean_prompt_artifacts(result)
+            logger.info(f"[{self.dimension_name}] revision done, len: {len(result)}")
+            return result
+        except Exception as e:
+            logger.error(f"[{self.dimension_name}] revision failed: {e}")
+            return original_result
+
+    async def _ainvoke_llm(
+        self,
+        prompt: str | HumanMessage | List[HumanMessage],
+        state: dict[str, Any],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+        enable_langsmith: bool = True,
+        streaming: bool = False,
+        on_token_callback: Callable[[str, str], None] | None = None
+    ) -> str:
+        """
+        异步调用LLM（支持流式和非流式，支持多模态）
+
+        Args:
+            prompt: 完整的prompt
+            state: 当前状态
+            model: 模型名称
+            temperature: 温度参数
+            max_tokens: 最大token数
+            enable_langsmith: 是否启用LangSmith
+            streaming: 是否启用流式输出
+            on_token_callback: token回调函数
+
+        Returns:
+            LLM响应内容
+        """
+        # 创建LangSmith metadata
+        metadata = None
+        if enable_langsmith:
+            try:
+                langsmith = get_langsmith_manager()
+                if langsmith.is_enabled():
+                    metadata = langsmith.create_run_metadata(
+                        project_name=state.get("project_name", "村庄"),
+                        dimension=self.dimension_key,
+                        layer=self.layer
+                    )
+            except Exception as e:
+                logger.debug(f"[{self.dimension_name}] LangSmith metadata创建失败: {e}")
+
+        # 创建回调处理器
+        callback_handler = None
+        if streaming and on_token_callback:
+            callback_handler = StreamingCallback(on_token_callback)
+
+        # 创建LLM实例
+        llm = create_llm(
+            model=model or LLM_MODEL,
+            temperature=temperature,
+            max_tokens=max_tokens or MAX_TOKENS,
+            metadata=metadata,
+            streaming=streaming,
+            callbacks=[callback_handler] if callback_handler else None
+        )
+
+        # 构建 prompt 参数
+        prompt_arg: List[HumanMessage]
+        if isinstance(prompt, str):
+            prompt_arg = [HumanMessage(content=prompt)]
+        elif isinstance(prompt, HumanMessage):
+            prompt_arg = [prompt]
+        else:
+            prompt_arg = prompt
+
+        # 调用LLM（异步版本）
+        if streaming:
+            accumulated = ""
+            chunk_count = 0
+            logger.info(f"[{self.dimension_name}] streaming LLM (async), callback={'set' if on_token_callback else 'none'}")
+            async for chunk in llm.astream(prompt_arg):
+                chunk_count += 1
+                if hasattr(chunk, 'content') and chunk.content:
+                    accumulated += chunk.content
+                    if on_token_callback:
+                        try:
+                            on_token_callback(chunk.content, accumulated)
+                        except Exception as cb_error:
+                            logger.warning(f"[{self.dimension_name}] token callback failed: {cb_error}")
+            logger.info(f"[{self.dimension_name}] streaming done, chunks={chunk_count}, len={len(accumulated)}")
+            return accumulated
+        else:
+            response = await llm.ainvoke(prompt_arg)
+            return response.content
+
     def execute_with_feedback(
         self,
         state: Dict[str, Any],
@@ -395,28 +542,27 @@ class GenericPlanner:
                 on_token_callback=on_token_callback
             )
             # 清除可能残留的 prompt 结构标记
-            result = _clean_prompt_artifacts(result)
+            result = self._clean_prompt_artifacts(result)
             logger.info(f"[{self.dimension_name}] revision done, len: {len(result)}")
             return result
         except Exception as e:
             logger.error(f"[{self.dimension_name}] revision failed: {e}")
             return original_result
 
-
-def _clean_prompt_artifacts(content: str) -> str:
-    """清除可能残留的 prompt 结构标记"""
-    artifacts = [
-        "【原规划内容】",
-        "【人工反馈】",
-        "【要求】",
-        "【级联更新】",
-        "【上游已更新的内容】",
-        "【原始修改背景（供参考）】",
-    ]
-    for artifact in artifacts:
-        if content.startswith(artifact):
-            content = content[len(artifact):].strip()
-    return content
+    def _clean_prompt_artifacts(self, content: str) -> str:
+        """清除可能残留的 prompt 结构标记"""
+        artifacts = [
+            "【原规划内容】",
+            "【人工反馈】",
+            "【要求】",
+            "【级联更新】",
+            "【上游已更新的内容】",
+            "【原始修改背景（供参考）】",
+        ]
+        for artifact in artifacts:
+            if content.startswith(artifact):
+                content = content[len(artifact):].strip()
+        return content
 
     def _build_revision_prompt(
         self,

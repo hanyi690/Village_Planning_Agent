@@ -165,7 +165,7 @@ class ReviewService:
             "human_feedback": feedback,
             "revision_images": images or [],
             "pause_after_step": False,
-        })
+        }, as_node="revision")  # 使用 revision 节点（而非不存在 review_service）
 
         logger.info(f"[ReviewService] [{session_id}] Rejected with feedback, dimensions={dimensions}")
 

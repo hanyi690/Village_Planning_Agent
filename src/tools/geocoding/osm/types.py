@@ -3,6 +3,8 @@
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 
+from ..base_types import GeoProviderResult
+
 
 @dataclass
 class OSMRoadFeature:
@@ -30,13 +32,8 @@ class OSMRoadFeature:
 
 
 @dataclass
-class OSMResult:
-    """OSM 查询结果"""
-
-    success: bool
-    data: Optional[Dict[str, Any]] = None  # GeoJSON FeatureCollection
-    error: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+class OSMResult(GeoProviderResult):
+    """OSM 查询结果 - 扩展统计字段"""
 
     # 统计信息
     total_features: int = 0
@@ -52,3 +49,6 @@ class OSMResult:
             "total_features": self.total_features,
             "highway_stats": self.highway_stats,
         }
+
+
+__all__ = ["OSMResult", "OSMRoadFeature"]

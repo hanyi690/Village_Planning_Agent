@@ -81,7 +81,20 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.info(f"[知识预加载] Layer {layer} 无维度，跳过")
         return {"config": {**existing_config, "knowledge_cache": existing_cache, "knowledge_sources_cache": existing_sources_cache}}
 
-    logger.info(f"[知识预加载] 开始预加载 Layer {layer} 知识，维度: {len(dimensions)} 个（并行执行）")
+    # Filter dimensions by rag_enabled flag
+    pending_rag_dims = []
+    for dim_key in dimensions:
+        dim_config = get_dimension_config(dim_key)
+        if dim_config and dim_config.get("rag_enabled", False):
+            pending_rag_dims.append(dim_key)
+        else:
+            logger.info(f"[知识预加载] {dim_key} rag_enabled=False，跳过")
+
+    if not pending_rag_dims:
+        logger.info(f"[知识预加载] Layer {layer} 无维度需要 RAG 检索（全部 rag_enabled=False）")
+        return {"config": {**existing_config, "knowledge_cache": existing_cache, "knowledge_sources_cache": existing_sources_cache}}
+
+    logger.info(f"[知识预加载] 开始预加载 Layer {layer} 知识，维度: {len(pending_rag_dims)} 个（并行执行，已过滤 {len(dimensions) - len(pending_rag_dims)} 个 rag_enabled=False）")
 
     from ...rag.core.tools import search_knowledge, extract_sources_from_documents
     from ...rag.core.cache import get_vector_cache
@@ -94,7 +107,7 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # Separate cached dimensions (skip) vs. dimensions needing fetch
     cached_dims = []
     fetch_dims = []
-    for dim_key in dimensions:
+    for dim_key in pending_rag_dims:
         if dim_key in existing_cache and existing_cache[dim_key]:
             cached_dims.append(dim_key)
         else:
@@ -111,26 +124,43 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
     semaphore = asyncio.Semaphore(LLM_MAX_CONCURRENT)
 
     async def fetch_one(dim_key: str) -> tuple:
-        """Fetch knowledge for one dimension with dynamic query enhancement"""
+        """Fetch knowledge for one dimension with structured query enhancement"""
         async with semaphore:
             dim_name = DIMENSION_NAMES.get(dim_key, dim_key)
+            dim_layer = get_dimension_layer(dim_key) or layer
 
-            # Dynamic query: use summary tags for Layer 2/3
+            # Import RAGQueryBuilder for structured queries
+            from ...rag.core.query_builder import RAGQueryBuilder
             from ...utils.summary_generator import build_dynamic_query
 
-            if layer >= 2:
-                # Use dynamic query with summary tags (Phase 2 enhancement)
-                enhanced_query = build_dynamic_query(dim_key, layer, state)
-                fallback_query = f"{dim_name} 规划标准 技术指标"
-                if task_description:
-                    fallback_query = f"{fallback_query} {task_description[:50]}"
-                query = enhanced_query
-            else:
-                # Layer 1: traditional query (no dependency summaries yet)
-                query = f"{dim_name} 规划标准 技术指标"
-                if task_description:
-                    query = f"{query} {task_description[:50]}"
-                fallback_query = None
+            builder = RAGQueryBuilder()
+
+            # Extract village features from config
+            village_data = config.get("village_data", "")
+            task_desc = config.get("task_description", "")
+            combined_profile = f"{village_data} {task_desc}"
+            village_features = builder.extract_features(combined_profile)
+
+            # Get layer2_summary for Layer 3 (planning positioning context)
+            layer2_summary = None
+            if dim_layer >= 3:
+                pos_summary = state.get("dimension_summaries", {}).get("planning_positioning")
+                layer2_summary = pos_summary.get("summary") if pos_summary else None
+
+            # Build structured query using RAGQueryBuilder
+            structured_query = builder.build_query(
+                dimension_key=dim_key,
+                dimension_name=dim_name,
+                layer=dim_layer,
+                village_features=village_features,
+                layer2_summary=layer2_summary
+            )
+
+            # Fallback query using build_dynamic_query
+            fallback_query = build_dynamic_query(dim_key, dim_layer, state)
+
+            # Use structured query if available, otherwise fallback
+            query = structured_query if structured_query else fallback_query
 
             context_params = {
                 "top_k": 3,
@@ -152,8 +182,9 @@ async def knowledge_preload_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 final_query = query
 
-                if layer >= 2 and fallback_query and (not result or result.startswith("❌") or len(result) < 100):
-                    logger.info(f"[知识预加载] {dim_key} 增强查询结果不足，尝试降级查询")
+                # Fallback mechanism: try build_dynamic_query if structured query fails
+                if (not result or result.startswith("❌") or len(result) < 100) and fallback_query:
+                    logger.info(f"[知识预加载] {dim_key} 结构化查询结果不足，尝试降级查询")
                     result = await asyncio.to_thread(
                         search_knowledge,
                         query=fallback_query,

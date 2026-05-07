@@ -203,6 +203,7 @@ class UnifiedPlanningState(TypedDict):
     revision_target_dimensions: List[str]
     human_feedback: str  # 人工反馈（用户 reject 时提供）
 
+
     # Step Mode 控制
     step_mode: bool              # 是否启用分步执行（层级完成后暂停）
     pause_after_step: bool       # 层级完成后暂停标志
@@ -249,6 +250,7 @@ def create_initial_state(
         need_revision=False,
         revision_target_dimensions=[],
         human_feedback="",
+
         step_mode=False,
         pause_after_step=False,
         previous_layer=0,

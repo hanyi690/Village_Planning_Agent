@@ -480,9 +480,10 @@ class PlanningRuntimeService:
 
         # Wait for SSE subscriber to connect before starting execution
         # This prevents early dimension_delta events from being lost
-        subscriber_ready = await sse_manager.wait_for_subscriber(session_id, timeout=5.0)
+        # Reduced timeout for script mode efficiency (1s instead of 5s)
+        subscriber_ready = await sse_manager.wait_for_subscriber(session_id, timeout=1.0)
         if not subscriber_ready:
-            logger.warning(f"[PlanningRuntimeService] [{session_id}] No SSE subscriber, streaming may be delayed")
+            logger.debug(f"[PlanningRuntimeService] [{session_id}] No SSE subscriber (script mode), proceeding immediately")
 
         # 1. If initial_state (Layer 1 new session), create checkpoint first
         if initial_state:

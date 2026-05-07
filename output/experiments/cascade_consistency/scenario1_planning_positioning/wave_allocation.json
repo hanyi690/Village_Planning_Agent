@@ -1,11 +1,27 @@
 {
   "target_dimension": "planning_positioning",
-  "wave_allocation": {},
-  "completed_dimensions": [
-    "full_report",
-    "full_report",
-    "full_report"
-  ],
-  "total_waves": 0,
-  "pending_dimensions": 0
+  "wave_allocation": {
+    "0": [
+      "planning_positioning"
+    ],
+    "1": [
+      "industry",
+      "spatial_structure",
+      "land_use_planning",
+      "development_goals",
+      "planning_strategies"
+    ],
+    "2": [
+      "settlement_planning",
+      "traffic_planning",
+      "public_service",
+      "infrastructure_planning",
+      "ecological",
+      "disaster_prevention",
+      "heritage",
+      "landscape",
+      "project_bank"
+    ]
+  },
+  "total_waves": 2
 }

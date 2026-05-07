@@ -28,7 +28,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "dependencies": [],
         "state_filter": None,
         "result_key": "analysis_result",
-        "rag_enabled": True,
+        "rag_enabled": False,  # 区位分析纯靠 GIS 数据
         "tool": None,
         "description": "分析村庄的地理位置、交通区位、区域关系等",
         "prompt_key": "location_analysis"
@@ -41,7 +41,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "dependencies": [],
         "state_filter": None,
         "result_key": "analysis_result",
-        "rag_enabled": True,
+        "rag_enabled": False,  # 现状人口产业数据，依赖统计年鉴
         "tool": "population_model_v1",  # 人口预测工具，提供人口趋势分析
         "description": "分析村庄人口、经济、产业等社会经济状况",
         "prompt_key": "socio_economic_analysis"
@@ -54,7 +54,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "dependencies": [],
         "state_filter": None,
         "result_key": "analysis_result",
-        "rag_enabled": True,
+        "rag_enabled": False,  # 纯靠调查问卷，查知识库无意义
         "tool": None,
         "description": "分析村民对村庄发展的期望、诉求和参与意愿",
         "prompt_key": "villager_wishes_analysis"
@@ -114,7 +114,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "dependencies": [],
         "state_filter": None,
         "result_key": "analysis_result",
-        "rag_enabled": True,
+        "rag_enabled": False,  # 道路现状靠 GIS + 现场数据
         "tool": "accessibility_analysis",
         "tool_params": {
             "analysis_type": {"source": "literal", "value": "service_coverage"},
@@ -131,7 +131,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "dependencies": [],
         "state_filter": None,
         "result_key": "analysis_result",
-        "rag_enabled": True,
+        "rag_enabled": False,  # 设施现状靠 POI 数据
         "tool": "poi_search",
         "tool_params": {
             "keyword": {"source": "literal", "value": "学校|医院|超市|银行"},
@@ -149,7 +149,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "dependencies": [],
         "state_filter": None,
         "result_key": "analysis_result",
-        "rag_enabled": True,
+        "rag_enabled": False,  # 基础设施现状靠调研数据
         "tool": None,
         "description": "分析村庄供水、供电、排水、通信、环卫等基础设施状况",
         "prompt_key": "infrastructure_analysis"
@@ -175,7 +175,7 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
         "dependencies": [],
         "state_filter": None,
         "result_key": "analysis_result",
-        "rag_enabled": True,
+        "rag_enabled": False,  # 建筑现状靠实地调查
         "tool": None,
         "description": "分析村庄建筑的质量、风格、年代、功能等特征",
         "prompt_key": "architecture_analysis"
@@ -501,14 +501,28 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
 def get_dimension_config(dimension_key: str) -> Optional[Dict[str, Any]]:
     """
     获取指定维度的配置
-    
+
     Args:
         dimension_key: 维度键名
-    
+
     Returns:
         维度配置字典，如果不存在则返回 None
     """
     return DIMENSIONS_METADATA.get(dimension_key)
+
+
+def get_dimension_name(dimension_key: str) -> str:
+    """
+    获取指定维度的显示名称
+
+    Args:
+        dimension_key: 维度键名
+
+    Returns:
+        维度显示名称，如果不存在则返回维度键名
+    """
+    config = get_dimension_config(dimension_key)
+    return config.get("name", dimension_key) if config else dimension_key
 
 
 def list_dimensions(layer: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -1145,6 +1159,7 @@ __all__ = [
     
     # 基础函数
     "get_dimension_config",
+    "get_dimension_name",
     "list_dimensions",
     "get_layer_dimensions",
     "get_dimension_layer",

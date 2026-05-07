@@ -1,15 +1,8 @@
 """天地图 API 返回结果类型"""
-from dataclasses import dataclass
-from typing import Dict, Any, Optional
 
+from ..base_types import GeoProviderResult
 
-@dataclass
-class TiandituResult:
-    """天地图 API 返回结果"""
-    success: bool
-    data: Dict[str, Any]
-    metadata: Dict[str, Any]
-    error: Optional[str] = None
-
+# 向后兼容别名
+TiandituResult = GeoProviderResult
 
 __all__ = ["TiandituResult"]

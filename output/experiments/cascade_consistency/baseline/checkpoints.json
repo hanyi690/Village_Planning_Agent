@@ -1,5 +1,22 @@
 {
-  "session_id": "baseline_cf7139fc_20260506214425",
-  "collected_at": "2026-05-06T21:44:25.754115",
-  "note": "Checkpoint history should be extracted from database"
+  "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+  "layer_checkpoints": {
+    "layer1": {
+      "checkpoint_id": "1f149913-e23b-6957-8007-ca432fbd91ae",
+      "phase": "layer1",
+      "state_fingerprint": "0155dad70d794dde"
+    },
+    "layer2": {
+      "checkpoint_id": "1f14991e-bb5a-64bd-8017-4e9b58fb4284",
+      "phase": "layer2",
+      "state_fingerprint": "f791b9e48a83ce22"
+    },
+    "layer3": {
+      "checkpoint_id": "1f149928-b319-6e64-801f-62f291349f26",
+      "phase": "layer3",
+      "state_fingerprint": "8c6a7a072bfaaf34"
+    }
+  },
+  "exported_from_db": true,
+  "collected_at": "2026-05-07T09:27:55.023422"
 }

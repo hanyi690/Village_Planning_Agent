@@ -423,7 +423,6 @@ class GDSpecializedService:
 
         # CGCS2000投影坐标系 与 WGS84 兼容，无需转换
         return bbox
-        return bbox
 
     def _transform_crs(
         self,

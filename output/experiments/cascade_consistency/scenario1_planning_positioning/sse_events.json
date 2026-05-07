@@ -1,15 +1,174 @@
 [
   {
-    "type": "reject_received",
-    "session_id": "scenario1_fd6416ec_20260506214441",
-    "target_dimension": "planning_positioning",
-    "feedback": "金田村常住人口仅500人，不具备承接大规模旅游的基础设施条件。\n千年古檀树、古茶亭遗址等核心历史资源应划定为绝对保护对象，剥离重度商业开发权。\n规划定位应转向生态保育优先、客家文化微改造的渐进式发展路径。",
-    "timestamp": "2026-05-06T21:44:41.062370"
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "planning_positioning",
+    "dimension_name": "规划定位分析",
+    "layer": 2,
+    "wave": 0,
+    "revision_type": "目标维度修复",
+    "timestamp": "2026-05-07T07:38:27.500433"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "development_goals",
+    "dimension_name": "发展目标分析",
+    "layer": 2,
+    "wave": 1,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.500806"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "industry",
+    "dimension_name": "产业规划",
+    "layer": 3,
+    "wave": 1,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.500507"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "land_use_planning",
+    "dimension_name": "土地利用规划",
+    "layer": 3,
+    "wave": 1,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.500758"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "planning_strategies",
+    "dimension_name": "规划策略分析",
+    "layer": 2,
+    "wave": 1,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.500856"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "spatial_structure",
+    "dimension_name": "空间结构规划",
+    "layer": 3,
+    "wave": 1,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.500649"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "disaster_prevention",
+    "dimension_name": "防震减灾规划",
+    "layer": 3,
+    "wave": 2,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.501287"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "ecological",
+    "dimension_name": "生态绿地规划",
+    "layer": 3,
+    "wave": 2,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.501243"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "heritage",
+    "dimension_name": "历史文保规划",
+    "layer": 3,
+    "wave": 2,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.501332"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "infrastructure_planning",
+    "dimension_name": "基础设施规划",
+    "layer": 3,
+    "wave": 2,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.501182"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "landscape",
+    "dimension_name": "村庄风貌指引",
+    "layer": 3,
+    "wave": 2,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.501376"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "project_bank",
+    "dimension_name": "建设项目库",
+    "layer": 3,
+    "wave": 2,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.501493"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "public_service",
+    "dimension_name": "公共服务设施规划",
+    "layer": 3,
+    "wave": 2,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.501118"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "settlement_planning",
+    "dimension_name": "居民点规划",
+    "layer": 3,
+    "wave": 2,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.500912"
+  },
+  {
+    "type": "dimension_revised",
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "dimension_key": "traffic_planning",
+    "dimension_name": "道路交通规划",
+    "layer": 3,
+    "wave": 2,
+    "revision_type": "级联更新",
+    "timestamp": "2026-05-07T07:38:27.501000"
   },
   {
     "type": "revision_completed",
-    "session_id": "scenario1_fd6416ec_20260506214441",
-    "revised_dimensions": [],
-    "timestamp": "2026-05-06T21:44:41.062374"
+    "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
+    "revised_dimensions": [
+      "planning_positioning",
+      "development_goals",
+      "industry",
+      "land_use_planning",
+      "planning_strategies",
+      "spatial_structure",
+      "disaster_prevention",
+      "ecological",
+      "heritage",
+      "infrastructure_planning",
+      "landscape",
+      "project_bank",
+      "public_service",
+      "settlement_planning",
+      "traffic_planning"
+    ],
+    "timestamp": "2026-05-07T07:47:53.868255"
   }
 ]

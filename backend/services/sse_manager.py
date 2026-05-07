@@ -692,15 +692,28 @@ class SSEManager:
 
         Returns:
             True if subscriber connected within timeout, False otherwise
+
+        Note:
+            Script mode optimization: If no subscribers after 1s, return early
+            to minimize overhead for non-SSE clients.
         """
         start_time = asyncio.get_event_loop().time()
         check_interval = 0.1  # Check every 100ms
+
+        # Early exit optimization: check at 1s if running in script mode
+        early_exit_time = 1.0
 
         while asyncio.get_event_loop().time() - start_time < timeout:
             if cls.get_subscriber_count(session_id) > 0:
                 logger.info(f"[SSEManager] Session {session_id}: Subscriber connected after {asyncio.get_event_loop().time() - start_time:.2f}s")
                 return True
             await asyncio.sleep(check_interval)
+
+            # Early exit for script mode (no SSE client expected)
+            if asyncio.get_event_loop().time() - start_time >= early_exit_time:
+                logger.debug(f"[SSEManager] Session {session_id}: No subscriber after 1s, likely script mode")
+                # Continue checking for remaining timeout but log less frequently
+                check_interval = 0.5  # Slow down checks
 
         logger.warning(f"[SSEManager] Session {session_id}: No subscriber after {timeout}s timeout, proceeding anyway")
         return False

@@ -6,6 +6,7 @@ RAG 核心模块
 - summarization: 层次化摘要系统
 - tools: Agent 工具集
 - vector_store: Small-to-Big 向量存储架构
+- query_builder: 结构化查询构建器
 """
 
 from src.rag.core.context_manager import (
@@ -39,6 +40,13 @@ from src.rag.core.tools import (
     key_points_search_tool,
 )
 
+from src.rag.core.query_builder import (
+    FEATURE_SLOTS,
+    VillageFeatures,
+    RAGQueryBuilder,
+    get_dimension_name,
+)
+
 __all__ = [
     # Context Manager
     "DocumentContextManager",
@@ -64,4 +72,9 @@ __all__ = [
     "chapter_summaries_list_tool",
     "chapter_summary_tool",
     "key_points_search_tool",
+    # Query Builder
+    "FEATURE_SLOTS",
+    "VillageFeatures",
+    "RAGQueryBuilder",
+    "get_dimension_name",
 ]

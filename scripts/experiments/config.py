@@ -71,16 +71,10 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
         "feedback": """金田村常住人口仅500人，不具备承接大规模旅游的基础设施条件。
 千年古檀树、古茶亭遗址等核心历史资源应划定为绝对保护对象，剥离重度商业开发权。
 规划定位应转向生态保育优先、客家文化微改造的渐进式发展路径。""",
-        # 预期影响范围（基于 get_impact_tree）
-        "expected_impact": {
-            "total_downstream": 8,  # 包括目标维度
-            "max_wave": 2,
-            "wave_distribution": {
-                0: ["planning_positioning"],  # 目标维度
-                1: ["development_goals", "planning_strategies", "industry", "spatial_structure", "land_use_planning"],
-                2: ["project_bank"],
-            },
-        },
+        # 预期影响范围由运行时动态计算（get_impact_tree + get_revision_wave_dimensions）
+        # Checkpoint配置
+        "checkpoint_restore": True,  # 是否从checkpoint恢复
+        "checkpoint_layer": 2,       # 恢复点layer
         # 关关键词检测
         "keywords": {
             "positive": ["生态保育", "渐进式发展", "客家文化微改造", "绝对保护", "保护优先", "微改造"],
@@ -93,16 +87,10 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
         "target_layer": 1,
         "feedback": """现状报告中明确记载金田村存在5处崩塌隐患点和35处滑坡隐患点，
 但当前分析未对隐患点的空间分布与影响范围进行充分评估，需强化地质灾害风险的分析深度。""",
-        "expected_impact": {
-            "total_downstream": 12,  # 包括目标维度
-            "max_wave": 3,
-            "wave_distribution": {
-                0: ["natural_environment"],
-                1: ["resource_endowment", "ecological", "spatial_structure", "land_use_planning", "disaster_prevention", "infrastructure_planning"],
-                2: ["planning_positioning", "planning_strategies"],
-                3: ["development_goals", "project_bank"],
-            },
-        },
+        # 预期影响范围由运行时动态计算（get_impact_tree + get_revision_wave_dimensions）
+        # Checkpoint配置
+        "checkpoint_restore": True,
+        "checkpoint_layer": 1,
         "keywords": {
             "positive": ["崩塌隐患", "滑坡隐患", "地质灾害风险", "隐患点分布", "风险管控", "风险评估"],
             "negative": [],
@@ -115,12 +103,44 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
 # Test Data Configuration
 # ============================================
 
+# Status report file path
+STATUS_REPORT_PATH = Path(__file__).parent.parent.parent / "docs" / "泗水镇金田村现状报告.docx"
+
+
+def load_status_report() -> str:
+    """
+    Load village status report from docx file.
+
+    Returns:
+        Status report content as string (empty if file not found)
+    """
+    if not STATUS_REPORT_PATH.exists():
+        print(f"[Config] Status report not found: {STATUS_REPORT_PATH}")
+        return ""
+
+    try:
+        from src.rag.utils.loaders import MarkItDownLoader
+
+        loader = MarkItDownLoader(STATUS_REPORT_PATH)
+        docs = loader.load()
+
+        # Combine all document pages/sections
+        content = "\n\n".join([doc.page_content for doc in docs])
+        print(f"[Config] Loaded status report: {len(content)} chars")
+        return content
+
+    except Exception as e:
+        print(f"[Config] Failed to load status report: {e}")
+        return ""
+
+
 JINTIAN_VILLAGE_DATA = {
     "village_name": "金田村委会",
     "area_km2": 23.53,
     "population": 500,
     "administrative": "梅州市梅县区水车镇",
     "coordinate_system": "EPSG:4326",
+    "status_report": load_status_report(),
 }
 
 
@@ -167,6 +187,26 @@ def get_scenario_config(scenario_name: str) -> Dict[str, Any]:
     if scenario_name not in SCENARIOS:
         raise ValueError(f"Unknown scenario: {scenario_name}")
     return SCENARIOS[scenario_name]
+
+
+def get_checkpoint_restore_config(scenario_name: str) -> Dict[str, Any]:
+    """
+    Get checkpoint restoration config for a scenario.
+
+    Args:
+        scenario_name: Scenario name (scenario1 or scenario2)
+
+    Returns:
+        {
+            "checkpoint_restore": bool,
+            "checkpoint_layer": int,
+        }
+    """
+    config = get_scenario_config(scenario_name)
+    return {
+        "checkpoint_restore": config.get("checkpoint_restore", True),
+        "checkpoint_layer": config.get("checkpoint_layer", config.get("target_layer", 2)),
+    }
 
 
 def get_output_dir(scenario_name: str) -> Path:

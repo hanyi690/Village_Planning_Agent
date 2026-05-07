@@ -22,6 +22,11 @@ RAG开启/关闭条件下的法规引用幻觉率对比实验
     python scripts/experiments/run_rag_hallucination.py --step all
     python scripts/experiments/run_rag_hallucination.py --step generate-fixed-context
     python scripts/experiments/run_rag_hallucination.py --step generate-rag-on
+
+
+    
+
+
     python scripts/experiments/run_rag_hallucination.py --step generate-rag-off
 """
 
@@ -47,6 +52,13 @@ from scripts.experiments.config import (
     ANNOTATION_DIR,
     JINTIAN_VILLAGE_DATA,
     ensure_rag_experiment_dirs,
+    BASELINE_DIR,
+    load_status_report,
+)
+from scripts.experiments.layer_checkpoint_utils import (
+    wait_for_layer_completion,
+    save_layer_checkpoint,
+    compute_state_fingerprint,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,9 +86,11 @@ async def run_full_planning_flow(project_name: str, village_data: Dict, timeout:
     logger.info(f"[FixedContext] Starting full planning: {project_name}")
 
     # Start session with step_mode=True to capture intermediate states
+    # Pass full status report content, not just village name
     session_id = await PlanningRuntimeService.start_session(
         project_name=project_name,
-        village_data=village_data.get("village_name", "金田村"),
+        village_data=village_data.get("status_report", ""),
+        village_name=village_data.get("village_name", "金田村"),
         step_mode=True,  # Manual approval needed to capture states
     )
 
@@ -94,49 +108,42 @@ async def run_full_planning_flow(project_name: str, village_data: Dict, timeout:
 
 async def wait_for_layer2_completion(session_id: str, timeout: int = 1800) -> Dict[str, Any]:
     """
-    Wait for Layer 2 completion.
+    Wait for Layer 2 completion using shared layer checkpoint utilities.
 
     Args:
         session_id: Session identifier
         timeout: Maximum wait time in seconds
 
     Returns:
-        State at Layer 2 completion
+        State at Layer 2 completion with checkpoint_id
     """
-    from backend.services.checkpoint_service import checkpoint_service
-
     logger.info(f"[FixedContext] Waiting for Layer 2 (timeout={timeout}s)")
 
-    start_time = datetime.now()
-    check_interval = 10
+    # Use shared utility with layer=2
+    snapshot = await wait_for_layer_completion(
+        session_id=session_id,
+        layer=2,
+        timeout=timeout,
+    )
 
-    while True:
-        elapsed = (datetime.now() - start_time).total_seconds()
-        if elapsed > timeout:
-            logger.warning(f"[FixedContext] Timeout after {elapsed}s")
-            break
-
-        state = await checkpoint_service.get_state(session_id)
-        if state:
-            phase = state.get("phase", "init")
-            pause_after_step = state.get("pause_after_step", False)
-            previous_layer = state.get("previous_layer", 0)
-
-            logger.info(f"[FixedContext] Phase: {phase}, pause: {pause_after_step}, prev_layer: {previous_layer}")
-
-            # Check if Layer 2 is complete (pause_after_step=True, previous_layer=2)
-            if pause_after_step and previous_layer == 2:
-                logger.info("[FixedContext] Layer 2 completed!")
-                return state
-
-            # Or if already in layer3 phase
-            if phase == "layer3":
-                logger.info("[FixedContext] Already in Layer 3 phase")
-                return state
-
-        await asyncio.sleep(check_interval)
-
-    return await checkpoint_service.get_state(session_id) or {}
+    if snapshot.get("success"):
+        logger.info(f"[FixedContext] Layer 2 completed! checkpoint_id={snapshot.get('checkpoint_id', 'N/A')}")
+        return {
+            "session_id": session_id,
+            "checkpoint_id": snapshot.get("checkpoint_id", ""),
+            "state_fingerprint": snapshot.get("state_fingerprint", ""),
+            "reports": snapshot.get("reports", {}),
+            "completed_dimensions": snapshot.get("completed_dimensions", {}),
+            "phase": snapshot.get("phase", ""),
+            "pause_after_step": True,
+            "previous_layer": 2,
+        }
+    else:
+        logger.warning(f"[FixedContext] Layer 2 wait failed: {snapshot.get('error', 'Unknown error')}")
+        # Fallback: return last known state
+        from backend.services.checkpoint_service import checkpoint_service
+        state = await checkpoint_service.get_state(session_id) or {}
+        return state
 
 
 def save_fixed_context(state: Dict[str, Any]):
@@ -144,15 +151,19 @@ def save_fixed_context(state: Dict[str, Any]):
     Save Layer 1 and 2 outputs as fixed context.
 
     Args:
-        state: Session state at Layer 2 completion
+        state: Session state at Layer 2 completion (with checkpoint_id)
     """
     session_id = state.get("session_id", "unknown")
+    checkpoint_id = state.get("checkpoint_id", "")
+    state_fingerprint = state.get("state_fingerprint", "")
     reports = state.get("reports", {})
     completed_dimensions = state.get("completed_dimensions", {})
 
-    # Save session metadata
+    # Save session metadata with checkpoint info
     session_meta = {
         "session_id": session_id,
+        "checkpoint_id": checkpoint_id,
+        "state_fingerprint": state_fingerprint,
         "project_name": state.get("project_name", ""),
         "phase": state.get("phase", ""),
         "created_at": datetime.now().isoformat(),
@@ -160,33 +171,34 @@ def save_fixed_context(state: Dict[str, Any]):
     }
     with open(FIXED_CONTEXT_DIR / "session_id.json", "w", encoding="utf-8") as f:
         json.dump(session_meta, f, indent=2, ensure_ascii=False)
-    logger.info(f"[FixedContext] Saved session_id.json")
+    logger.info(f"[FixedContext] Saved session_id.json (checkpoint_id={checkpoint_id})")
 
-    # Save Layer 1 reports
-    layer1_reports = reports.get("layer1", {})
-    layer1_completed = completed_dimensions.get("layer1", [])
-    layer1_data = {
+    # Build snapshot for save_layer_checkpoint utility
+    # Layer 1 snapshot
+    layer1_snapshot = {
         "layer": 1,
-        "reports": layer1_reports,
-        "completed_dimensions": layer1_completed,
-        "total_chars": sum(len(v) for v in layer1_reports.values()) if layer1_reports else 0,
+        "checkpoint_id": checkpoint_id,  # Same checkpoint for both layers
+        "phase": state.get("phase", ""),
+        "reports": reports,
+        "completed_dimensions": completed_dimensions,
+        "timestamp": datetime.now().isoformat(),
+        "state_fingerprint": state_fingerprint,
+        "success": True,
     }
-    with open(FIXED_CONTEXT_DIR / "layer1_reports.json", "w", encoding="utf-8") as f:
-        json.dump(layer1_data, f, indent=2, ensure_ascii=False)
-    logger.info(f"[FixedContext] Saved layer1_reports.json: {len(layer1_reports)} dimensions")
+    save_layer_checkpoint(layer1_snapshot, FIXED_CONTEXT_DIR, 1)
 
-    # Save Layer 2 reports
-    layer2_reports = reports.get("layer2", {})
-    layer2_completed = completed_dimensions.get("layer2", [])
-    layer2_data = {
+    # Layer 2 snapshot
+    layer2_snapshot = {
         "layer": 2,
-        "reports": layer2_reports,
-        "completed_dimensions": layer2_completed,
-        "total_chars": sum(len(v) for v in layer2_reports.values()) if layer2_reports else 0,
+        "checkpoint_id": checkpoint_id,
+        "phase": state.get("phase", ""),
+        "reports": reports,
+        "completed_dimensions": completed_dimensions,
+        "timestamp": datetime.now().isoformat(),
+        "state_fingerprint": state_fingerprint,
+        "success": True,
     }
-    with open(FIXED_CONTEXT_DIR / "layer2_reports.json", "w", encoding="utf-8") as f:
-        json.dump(layer2_data, f, indent=2, ensure_ascii=False)
-    logger.info(f"[FixedContext] Saved layer2_reports.json: {len(layer2_reports)} dimensions")
+    save_layer_checkpoint(layer2_snapshot, FIXED_CONTEXT_DIR, 2)
 
     # Save raw_data and other inputs
     raw_data = state.get("raw_data", "")
@@ -195,13 +207,66 @@ def save_fixed_context(state: Dict[str, Any]):
     logger.info(f"[FixedContext] Saved raw_data.json")
 
 
-def load_fixed_context() -> Dict[str, Any]:
+def load_fixed_context_from_baseline() -> Dict[str, Any]:
+    """
+    Load fixed context from baseline checkpoint directory.
+
+    This allows using existing baseline Layer 1/2 reports without
+    running the full planning flow again.
+
+    Returns:
+        Fixed context data from baseline
+    """
+    context = {}
+
+    # Load session metadata
+    session_file = BASELINE_DIR / "session_id.json"
+    if session_file.exists():
+        with open(session_file, "r", encoding="utf-8") as f:
+            context["session_meta"] = json.load(f)
+        logger.info(f"[Baseline] Loaded session_id.json")
+    else:
+        logger.warning(f"[Baseline] session_id.json not found")
+
+    # Load layer1 reports
+    layer1_file = BASELINE_DIR / "layer1_reports.json"
+    if layer1_file.exists():
+        with open(layer1_file, "r", encoding="utf-8") as f:
+            context["layer1"] = json.load(f)
+        logger.info(f"[Baseline] Loaded layer1_reports.json")
+    else:
+        logger.warning(f"[Baseline] layer1_reports.json not found")
+
+    # Load layer2 reports
+    layer2_file = BASELINE_DIR / "layer2_reports.json"
+    if layer2_file.exists():
+        with open(layer2_file, "r", encoding="utf-8") as f:
+            context["layer2"] = json.load(f)
+        logger.info(f"[Baseline] Loaded layer2_reports.json")
+    else:
+        logger.warning(f"[Baseline] layer2_reports.json not found")
+
+    # Load raw_data from status report
+    context["raw_data"] = load_status_report()
+    logger.info(f"[Baseline] Loaded raw_data: {len(context['raw_data'])} chars")
+
+    return context
+
+
+def load_fixed_context(from_baseline: bool = False) -> Dict[str, Any]:
     """
     Load fixed context from saved files.
+
+    Args:
+        from_baseline: If True, load from baseline checkpoint directory
+                       instead of rag_hallucination/fixed_context/
 
     Returns:
         Fixed context data
     """
+    if from_baseline:
+        return load_fixed_context_from_baseline()
+
     context = {}
 
     session_file = FIXED_CONTEXT_DIR / "session_id.json"
@@ -355,7 +420,8 @@ async def wait_for_layer3_completion(session_id: str, timeout: int = 600) -> Dic
 async def generate_all_dimensions_full_flow(
     rag_enabled: bool,
     output_dir: Path,
-    timeout: int = 600
+    timeout: int = 600,
+    from_baseline: bool = False,
 ) -> Dict[str, Any]:
     """
     Generate all RAG dimensions using full system flow.
@@ -367,6 +433,7 @@ async def generate_all_dimensions_full_flow(
         rag_enabled: RAG setting
         output_dir: Output directory
         timeout: Maximum wait time for Layer 3 completion
+        from_baseline: If True, load context from baseline checkpoint
 
     Returns:
         Generation results with Layer 3 reports
@@ -374,7 +441,7 @@ async def generate_all_dimensions_full_flow(
     ensure_rag_experiment_dirs()
 
     # Load fixed context
-    context = load_fixed_context()
+    context = load_fixed_context(from_baseline=from_baseline)
     if not context:
         logger.error("[FullFlow] Fixed context not found!")
         return {"error": "Fixed context not found"}
@@ -571,13 +638,14 @@ async def generate_dimension_with_rag(
             DIMENSIONS_METADATA[dimension_key]["rag_enabled"] = original_rag_enabled
 
 
-async def generate_all_dimensions(rag_enabled: bool, output_dir: Path) -> Dict[str, Any]:
+async def generate_all_dimensions(rag_enabled: bool, output_dir: Path, from_baseline: bool = False) -> Dict[str, Any]:
     """
     Generate all 5 RAG dimensions with specified RAG setting.
 
     Args:
         rag_enabled: RAG setting
         output_dir: Output directory
+        from_baseline: If True, load context from baseline checkpoint
 
     Returns:
         Generation results
@@ -585,7 +653,7 @@ async def generate_all_dimensions(rag_enabled: bool, output_dir: Path) -> Dict[s
     ensure_rag_experiment_dirs()
 
     # Load fixed context
-    context = load_fixed_context()
+    context = load_fixed_context(from_baseline=from_baseline)
     if not context:
         logger.error("[Generate] Fixed context not found! Run --step generate-fixed-context first.")
         return {"error": "Fixed context not found"}
@@ -759,7 +827,7 @@ async def mock_generate_dimension(dimension_key: str, rag_enabled: bool) -> Dict
 # Main Entry Point
 # ============================================
 
-async def run_experiment(step: str = "all", use_mock: bool = False, use_full_flow: bool = True):
+async def run_experiment(step: str = "all", use_mock: bool = False, use_full_flow: bool = True, from_baseline: bool = False):
     """
     Run RAG hallucination experiment.
 
@@ -773,6 +841,7 @@ async def run_experiment(step: str = "all", use_mock: bool = False, use_full_flo
         use_mock: Use mock data for testing
         use_full_flow: Use complete LangGraph flow (via _trigger_planning_execution)
                        If False, use simplified planner.execute() flow
+        from_baseline: Load context from baseline checkpoint instead of fixed_context directory
     """
     ensure_rag_experiment_dirs()
 
@@ -780,6 +849,7 @@ async def run_experiment(step: str = "all", use_mock: bool = False, use_full_flo
     logger.info("[RAG Hallucination] Starting experiment")
     logger.info(f"[RAG Hallucination] Step: {step}")
     logger.info(f"[RAG Hallucination] Full flow: {use_full_flow}")
+    logger.info(f"[RAG Hallucination] From baseline: {from_baseline}")
     logger.info("=" * 60)
 
     try:
@@ -803,9 +873,9 @@ async def run_experiment(step: str = "all", use_mock: bool = False, use_full_flo
                     with open(RAG_ON_DIR / f"{dim}.json", "w", encoding="utf-8") as f:
                         json.dump(result, f, indent=2, ensure_ascii=False)
             elif use_full_flow:
-                await generate_all_dimensions_full_flow(rag_enabled=True, output_dir=RAG_ON_DIR)
+                await generate_all_dimensions_full_flow(rag_enabled=True, output_dir=RAG_ON_DIR, from_baseline=from_baseline)
             else:
-                await generate_all_dimensions(rag_enabled=True, output_dir=RAG_ON_DIR)
+                await generate_all_dimensions(rag_enabled=True, output_dir=RAG_ON_DIR, from_baseline=from_baseline)
 
         if step == "all" or step == "generate-rag-off":
             logger.info("\n--- Step 3: Generate with RAG OFF ---")
@@ -815,9 +885,9 @@ async def run_experiment(step: str = "all", use_mock: bool = False, use_full_flo
                     with open(RAG_OFF_DIR / f"{dim}.json", "w", encoding="utf-8") as f:
                         json.dump(result, f, indent=2, ensure_ascii=False)
             elif use_full_flow:
-                await generate_all_dimensions_full_flow(rag_enabled=False, output_dir=RAG_OFF_DIR)
+                await generate_all_dimensions_full_flow(rag_enabled=False, output_dir=RAG_OFF_DIR, from_baseline=from_baseline)
             else:
-                await generate_all_dimensions(rag_enabled=False, output_dir=RAG_OFF_DIR)
+                await generate_all_dimensions(rag_enabled=False, output_dir=RAG_OFF_DIR, from_baseline=from_baseline)
 
         if step == "all" or step == "create-template":
             logger.info("\n--- Step 4: Create Annotation Template ---")
@@ -842,10 +912,12 @@ def main():
     parser.add_argument("--mock", action="store_true", help="Use mock data for testing")
     parser.add_argument("--simplified", action="store_true",
                         help="Use simplified planner.execute() flow instead of full LangGraph")
+    parser.add_argument("--from-baseline", action="store_true",
+                        help="Load fixed context from baseline checkpoint instead of fixed_context directory")
     parser.add_argument("--timeout", type=int, default=1800, help="Timeout in seconds")
     args = parser.parse_args()
 
-    asyncio.run(run_experiment(step=args.step, use_mock=args.mock, use_full_flow=not args.simplified))
+    asyncio.run(run_experiment(step=args.step, use_mock=args.mock, use_full_flow=not args.simplified, from_baseline=args.from_baseline))
 
 
 if __name__ == "__main__":

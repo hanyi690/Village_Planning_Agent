@@ -38,6 +38,12 @@ from scripts.experiments.config import (
     get_scenario_config,
     get_output_dir,
 )
+from scripts.experiments.layer_checkpoint_utils import (
+    restore_from_checkpoint,
+    load_layer_checkpoint,
+    verify_restoration_consistency,
+    compute_state_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -108,6 +114,60 @@ def get_dimension_metadata(dimension_key: str) -> Dict[str, Any]:
 
 
 # ============================================
+# Checkpoint Restoration
+# ============================================
+
+async def restore_baseline_checkpoint(
+    baseline_session_id: str,
+    restore_layer: int = 3,  # 级联更新实验应从 Layer3 完成态恢复
+    scenario_name: str = "",
+) -> Dict[str, Any]:
+    """
+    Restore baseline checkpoint for cascade consistency experiment.
+
+    级联更新实验必须从 Layer3 完成态恢复，然后触发驳回，
+    这样才能观察下游维度的级联更新效果。
+
+    Args:
+        baseline_session_id: Baseline session ID
+        restore_layer: Layer to restore from (default 3 for cascade experiments)
+        scenario_name: Scenario name (for new session prefix)
+
+    Returns:
+        Restoration result with new_session_id
+    """
+    logger.info(f"[Scenario] Restoring baseline checkpoint from Layer {restore_layer} (completed state)")
+
+    # Load layer checkpoint from baseline output
+    checkpoint_data = load_layer_checkpoint(BASELINE_DIR, restore_layer)
+    if not checkpoint_data:
+        raise ValueError(f"Layer {restore_layer} checkpoint not found in {BASELINE_DIR}")
+
+    target_checkpoint_id = checkpoint_data.get("checkpoint_id", "")
+    if not target_checkpoint_id:
+        # Fallback: use baseline session ID directly
+        logger.warning(f"[Scenario] No checkpoint_id found, using baseline session directly")
+        return {
+            "new_session_id": baseline_session_id,
+            "restored_state": {},
+            "source_checkpoint_id": "",
+            "baseline_session_id": baseline_session_id,
+            "restore_layer": restore_layer,
+        }
+
+    # Restore from checkpoint (use restore_layer, not target_dimension's layer)
+    restoration_result = await restore_from_checkpoint(
+        baseline_session_id=baseline_session_id,
+        target_checkpoint_id=target_checkpoint_id,
+        target_layer=restore_layer,  # 从 Layer3 完成态恢复
+        new_session_prefix=scenario_name,
+    )
+
+    logger.info(f"[Scenario] Restored to new session: {restoration_result.get('new_session_id')}")
+    return restoration_result
+
+
+# ============================================
 # Mock Scenario Execution
 # ============================================
 
@@ -136,10 +196,21 @@ async def mock_execute_scenario(
     logger.info(f"[Scenario] Executing {scenario_name}: {config['name']}")
     logger.info(f"[Scenario] Target dimension: {target_dimension}")
 
-    # Get completed dimensions from baseline
+    # Get completed dimensions from baseline (compatible with both dict and list formats)
+    completed_dims_raw = baseline_state.get("completed_dimensions", {})
     completed_dims = []
-    for layer_key in ["layer1", "layer2", "layer3"]:
-        completed_dims.extend(baseline_state.get("completed_dimensions", {}).get(layer_key, []))
+
+    if isinstance(completed_dims_raw, dict):
+        for layer_key in ["layer1", "layer2", "layer3"]:
+            completed_dims.extend(completed_dims_raw.get(layer_key, []))
+    elif isinstance(completed_dims_raw, list):
+        completed_dims = completed_dims_raw
+    else:
+        # Fallback: derive from reports
+        reports = baseline_state.get("reports", {})
+        for layer_key in ["layer1", "layer2", "layer3"]:
+            layer_reports = reports.get(layer_key, {})
+            completed_dims.extend(layer_reports.keys())
 
     # Calculate impact tree
     impact_tree = calculate_impact_tree(target_dimension)
@@ -245,7 +316,10 @@ async def mock_execute_scenario(
 async def execute_scenario_with_runtime(
     scenario_name: str,
     baseline_session_id: str,
-    timeout: int = 600
+    timeout: int = 600,
+    use_checkpoint_restore: bool = True,
+    use_sse: bool = True,
+    poll_interval: int = 5,
 ) -> Dict[str, Any]:
     """
     Execute scenario using actual planning runtime.
@@ -253,7 +327,10 @@ async def execute_scenario_with_runtime(
     Args:
         scenario_name: Scenario name (scenario1 or scenario2)
         baseline_session_id: Session ID from baseline run
-        timeout: Maximum wait time
+        timeout: Maximum wait time in seconds
+        use_checkpoint_restore: Whether to restore from checkpoint before execution
+        use_sse: Use SSE mode for waiting (default True)
+        poll_interval: Polling interval in seconds (only for polling mode)
 
     Returns:
         Experiment results
@@ -263,38 +340,104 @@ async def execute_scenario_with_runtime(
 
     config = get_scenario_config(scenario_name)
     target_dimension = config["target_dimension"]
+    target_layer = config["target_layer"]
     feedback = config["feedback"]
 
     logger.info(f"[Scenario] Executing {scenario_name} with runtime")
+    logger.info(f"[Scenario] Monitor mode: {'SSE' if use_sse else 'Polling'}")
     logger.info(f"[Scenario] Baseline session: {baseline_session_id}")
+    logger.info(f"[Scenario] Target layer: {target_layer}, dimension: {target_dimension}")
+    logger.info(f"[Scenario] Use checkpoint restore: {use_checkpoint_restore}")
+    logger.info(f"[Scenario] SSE mode: {use_sse}")
 
-    # Get baseline state
-    baseline_state = await checkpoint_service.get_state(baseline_session_id)
-    if not baseline_state:
-        raise ValueError(f"Baseline session not found: {baseline_session_id}")
+    # Determine execution session ID
+    execution_session_id = baseline_session_id
+    restoration_info = {}
 
-    # Get completed dimensions
+    if use_checkpoint_restore:
+        # Restore from Layer3 completed state (not target_layer!)
+        # 级联更新实验需要从完成态恢复，才能观察驳回后的级联更新效果
+        try:
+            restoration_result = await restore_baseline_checkpoint(
+                baseline_session_id=baseline_session_id,
+                restore_layer=3,  # Always restore from Layer3 completed state
+                scenario_name=scenario_name,
+            )
+            execution_session_id = restoration_result.get("new_session_id", baseline_session_id)
+            restoration_info = restoration_result
+
+            logger.info(f"[Scenario] Restored session: {execution_session_id}")
+
+            # Verify restoration consistency if checkpoint was used
+            if restoration_result.get("source_checkpoint_id"):
+                # Verify against Layer3 checkpoint
+                checkpoint_data = load_layer_checkpoint(BASELINE_DIR, 3)
+                if checkpoint_data:
+                    restored_state = await checkpoint_service.get_state(execution_session_id)
+                    if restored_state:
+                        try:
+                            verify_restoration_consistency(restored_state, checkpoint_data, 3)
+                            logger.info(f"[Scenario] Consistency verified: fingerprint match")
+                        except ValueError as e:
+                            logger.warning(f"[Scenario] Consistency check failed: {e}")
+        except Exception as e:
+            logger.warning(f"[Scenario] Checkpoint restore failed: {e}, using baseline session directly")
+            execution_session_id = baseline_session_id
+
+    # Get state for execution
+    execution_state = await checkpoint_service.get_state(execution_session_id)
+    if not execution_state:
+        raise ValueError(f"Execution session not found: {execution_session_id}")
+
+    # Get completed dimensions (compatible with both dict and list formats)
+    completed_dims_raw = execution_state.get("completed_dimensions", {})
     completed_dims = []
-    for layer_key in ["layer1", "layer2", "layer3"]:
-        completed_dims.extend(baseline_state.get("completed_dimensions", {}).get(layer_key, []))
+
+    if isinstance(completed_dims_raw, dict):
+        # 分层字典格式 {layer1: [...], layer2: [...], layer3: [...]}
+        for layer_key in ["layer1", "layer2", "layer3"]:
+            completed_dims.extend(completed_dims_raw.get(layer_key, []))
+    elif isinstance(completed_dims_raw, list):
+        # 扁平列表格式（兼容旧数据）
+        completed_dims = completed_dims_raw
+    else:
+        # 无数据或异常格式，从 reports 推导
+        from src.config.dimension_metadata import get_dimension_layer
+        reports = execution_state.get("reports", {})
+        for layer_key in ["layer1", "layer2", "layer3"]:
+            layer_reports = reports.get(layer_key, {})
+            completed_dims.extend(layer_reports.keys())
 
     # Calculate impact tree (before execution)
     impact_tree = calculate_impact_tree(target_dimension)
     wave_allocation = calculate_wave_allocation([target_dimension], completed_dims)
 
+    # DEBUG: Log completed dimensions
+    logger.info(f"[Scenario] completed_dims_raw type: {type(completed_dims_raw)}")
+    logger.info(f"[Scenario] completed_dims count: {len(completed_dims)}")
+    logger.info(f"[Scenario] completed_dims: {completed_dims}")
+    logger.info(f"[Scenario] wave_allocation: {wave_allocation}")
+
     # Execute reject
-    logger.info(f"[Scenario] Executing reject: {target_dimension}")
+    logger.info(f"[Scenario] Executing reject on session: {execution_session_id}")
+    logger.info(f"[Scenario] Target: {target_dimension}")
 
     reject_response = await review_service.reject(
-        session_id=baseline_session_id,
+        session_id=execution_session_id,
         feedback=feedback,
         dimensions=[target_dimension],
     )
 
     logger.info(f"[Scenario] Reject response: {reject_response}")
 
+    # Trigger revision execution (critical step!)
+    # reject 只设置状态，需要 resume_execution 触发级联更新
+    from backend.services.planning_runtime_service import PlanningRuntimeService
+    await PlanningRuntimeService.resume_execution(execution_session_id)
+    logger.info(f"[Scenario] Resume execution triggered for revision")
+
     # Wait for revision completion
-    state = await wait_for_revision_completion(baseline_session_id, timeout)
+    state = await wait_for_revision_completion(execution_session_id, timeout, use_sse=use_sse, poll_interval=poll_interval)
 
     # Extract results
     revision_history = state.get("revision_history", [])
@@ -305,7 +448,7 @@ async def execute_scenario_with_runtime(
     for entry in revision_history:
         sse_events.append({
             "type": "dimension_revised",
-            "session_id": baseline_session_id,
+            "session_id": execution_session_id,
             "dimension_key": entry.get("dimension"),
             "dimension_name": entry.get("dimension_name"),
             "layer": entry.get("layer"),
@@ -316,13 +459,15 @@ async def execute_scenario_with_runtime(
 
     sse_events.append({
         "type": "revision_completed",
-        "session_id": baseline_session_id,
+        "session_id": execution_session_id,
         "revised_dimensions": [e.get("dimension_key") for e in sse_events],
         "timestamp": datetime.now().isoformat(),
     })
 
     return {
-        "session_id": baseline_session_id,
+        "session_id": execution_session_id,
+        "baseline_session_id": baseline_session_id,
+        "restoration_info": restoration_info,
         "scenario_name": scenario_name,
         "config": config,
         "impact_data": {
@@ -342,9 +487,46 @@ async def execute_scenario_with_runtime(
     }
 
 
-async def wait_for_revision_completion(session_id: str, timeout: int = 600) -> Dict[str, Any]:
+async def wait_for_revision_completion(
+    session_id: str,
+    timeout: int = 600,
+    use_sse: bool = True,
+    poll_interval: int = 5,
+) -> Dict[str, Any]:
     """
     Wait for revision completion.
+
+    SSE模式（推荐）：
+    - 事件驱动等待 revision_completed 事件
+    - 几乎无延迟
+
+    Polling模式（后备）：
+    - 使用 wait_for_write=True 确保获取最新 checkpoint
+    - 检查 need_revision 和 last_revised_dimensions
+
+    Args:
+        session_id: Session identifier
+        timeout: Maximum wait time
+        use_sse: Use SSE mode (default True)
+        poll_interval: Polling interval in seconds (only for polling mode)
+
+    Returns:
+        Final state
+    """
+    from backend.services.checkpoint_service import checkpoint_service
+
+    if use_sse:
+        return await wait_for_revision_completion_sse(session_id, timeout)
+    else:
+        return await wait_for_revision_completion_polling(session_id, timeout, poll_interval)
+
+
+async def wait_for_revision_completion_sse(
+    session_id: str,
+    timeout: int = 600,
+) -> Dict[str, Any]:
+    """
+    使用 SSE 事件驱动等待 revision 完成。
 
     Args:
         session_id: Session identifier
@@ -354,28 +536,100 @@ async def wait_for_revision_completion(session_id: str, timeout: int = 600) -> D
         Final state
     """
     from backend.services.checkpoint_service import checkpoint_service
+    from scripts.experiments.sse_listener import SSEEventListener
+
+    logger.info(f"[Scenario] Waiting for revision (SSE mode, timeout={timeout}s)")
+
+    listener = SSEEventListener(session_id)
+    await listener.connect()
+
+    try:
+        # 等待 revision_completed 事件
+        await listener.wait_for_revision_completion(timeout=timeout)
+
+        logger.info("[Scenario] Revision completed (SSE event received)")
+
+        # 获取最终状态
+        state = await checkpoint_service.get_state(session_id, wait_for_write=True)
+        return state or {}
+
+    except asyncio.TimeoutError:
+        logger.warning(f"[Scenario] SSE timeout after {timeout}s")
+        return await checkpoint_service.get_state(session_id) or {}
+
+    finally:
+        await listener.disconnect()
+
+
+async def wait_for_revision_completion_polling(
+    session_id: str,
+    timeout: int = 600,
+    poll_interval: int = 5,
+) -> Dict[str, Any]:
+    """
+    使用轮询等待 revision 完成。
+
+    关键改进：
+    - 使用 wait_for_write=True 确保获取最新 checkpoint 状态
+    - 检查 last_revised_dimensions 作为额外完成标志（revision_node 设置）
+    - 添加 poll_interval 参数控制轮询频率
+
+    Args:
+        session_id: Session identifier
+        timeout: Maximum wait time in seconds
+        poll_interval: Polling interval in seconds
+
+    Returns:
+        Final state with revision_history and reports
+    """
+    from backend.services.checkpoint_service import checkpoint_service
 
     start_time = datetime.now()
-    check_interval = 5
+
+    logger.info(f"[Scenario] Waiting for revision (polling mode, interval={poll_interval}s, timeout={timeout}s)")
 
     while True:
         elapsed = (datetime.now() - start_time).total_seconds()
         if elapsed > timeout:
-            logger.warning(f"[Scenario] Timeout after {elapsed}s")
+            logger.warning(f"[Scenario] Polling timeout after {elapsed:.1f}s")
             break
 
-        state = await checkpoint_service.get_state(session_id)
+        # 使用 wait_for_write=True 确保获取最新 checkpoint 状态
+        state = await checkpoint_service.get_state(session_id, wait_for_write=True)
         if state:
             need_revision = state.get("need_revision", False)
             revision_history = state.get("revision_history", [])
+            last_revised_dimensions = state.get("last_revised_dimensions", [])
 
-            if not need_revision and len(revision_history) > 0:
-                logger.info(f"[Scenario] Revision completed: {len(revision_history)} dimensions")
-                return state
+            # 检查 revision 完成条件：
+            # 1. need_revision=False（revision_node 已完成）
+            # 2. revision_history 或 last_revised_dimensions 有内容
+            if not need_revision:
+                if len(revision_history) > 0:
+                    logger.info(f"[Scenario] Revision completed: {len(revision_history)} history entries")
+                    return state
+                elif len(last_revised_dimensions) > 0:
+                    logger.info(f"[Scenario] Revision completed: {len(last_revised_dimensions)} revised dimensions")
+                    return state
+                else:
+                    # need_revision=False 但无 revision 结果，可能是初始状态
+                    logger.debug(f"[Scenario] need_revision=False but no revision results yet, continuing...")
 
-        await asyncio.sleep(check_interval)
+            # 每 30 秒打印进度日志
+            if elapsed > 0 and elapsed % 30 < poll_interval:
+                logger.info(f"[Scenario] Polling progress: {elapsed:.1f}s elapsed, "
+                           f"need_revision={need_revision}, "
+                           f"revision_history_count={len(revision_history)}, "
+                           f"last_revised_count={len(last_revised_dimensions)}")
 
-    return await checkpoint_service.get_state(session_id) or {}
+        await asyncio.sleep(poll_interval)
+
+    # Timeout: 返回当前状态（可能部分完成）
+    final_state = await checkpoint_service.get_state(session_id, wait_for_write=True) or {}
+    logger.warning(f"[Scenario] Polling timeout, returning current state: "
+                  f"revision_history={len(final_state.get('revision_history', []))}, "
+                  f"last_revised={len(final_state.get('last_revised_dimensions', []))}")
+    return final_state
 
 
 # ============================================
@@ -442,14 +696,22 @@ def save_scenario_results(results: Dict[str, Any], output_dir: Path):
 # Main Entry Point
 # ============================================
 
-async def run_scenario(scenario_name: str, timeout: int = 600, use_mock: bool = False):
+async def run_scenario(
+    scenario_name: str,
+    timeout: int = 600,
+    use_mock: bool = False,
+    use_sse: bool = True,
+    poll_interval: int = 5,
+):
     """
     Run scenario experiment.
 
     Args:
         scenario_name: Scenario name (scenario1 or scenario2)
-        timeout: Maximum wait time
+        timeout: Maximum wait time in seconds
         use_mock: Whether to use mock data
+        use_sse: Use SSE mode (default True, use polling for experiments)
+        poll_interval: Polling interval in seconds (only for polling mode)
     """
     ensure_output_dirs()
 
@@ -458,6 +720,7 @@ async def run_scenario(scenario_name: str, timeout: int = 600, use_mock: bool = 
 
     logger.info("=" * 60)
     logger.info(f"[Scenario] Starting {scenario_name} experiment")
+    logger.info(f"[Scenario] Monitor mode: {'SSE' if use_sse else 'Polling (interval=' + str(poll_interval) + 's)'}")
     logger.info("=" * 60)
 
     # Load baseline state
@@ -465,7 +728,7 @@ async def run_scenario(scenario_name: str, timeout: int = 600, use_mock: bool = 
     if not baseline_file.exists():
         logger.warning("[Scenario] Baseline not found, running baseline first...")
         from scripts.experiments.run_baseline import run_baseline
-        await run_baseline(timeout=timeout, use_mock=use_mock)
+        await run_baseline(timeout=timeout, use_mock=use_mock, use_sse=use_sse)
 
     with open(baseline_file, "r", encoding="utf-8") as f:
         baseline_meta = json.load(f)
@@ -494,6 +757,8 @@ async def run_scenario(scenario_name: str, timeout: int = 600, use_mock: bool = 
                 scenario_name=scenario_name,
                 baseline_session_id=baseline_meta.get("session_id"),
                 timeout=timeout,
+                use_sse=use_sse,
+                poll_interval=poll_interval,
             )
 
         # Save results
@@ -520,9 +785,19 @@ def main():
     parser.add_argument("--scenario", required=True, choices=["scenario1", "scenario2"], help="Scenario name")
     parser.add_argument("--timeout", type=int, default=600, help="Timeout in seconds")
     parser.add_argument("--mock", action="store_true", help="Use mock data for testing")
+    parser.add_argument("--use-polling", action="store_true",
+                        help="Use polling mode instead of SSE (recommended for experiments)")
+    parser.add_argument("--poll-interval", type=int, default=5,
+                        help="Polling interval in seconds (only for polling mode)")
     args = parser.parse_args()
 
-    asyncio.run(run_scenario(scenario_name=args.scenario, timeout=args.timeout, use_mock=args.mock))
+    asyncio.run(run_scenario(
+        scenario_name=args.scenario,
+        timeout=args.timeout,
+        use_mock=args.mock,
+        use_sse=not args.use_polling,
+        poll_interval=args.poll_interval,
+    ))
 
 
 if __name__ == "__main__":
