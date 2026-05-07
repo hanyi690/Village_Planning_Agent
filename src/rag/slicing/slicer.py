@@ -114,6 +114,30 @@ class UnifiedMarkdownSlicer:
             min_chunk=150,
             semantic=False,  # 可扩展为语义切分
         ),
+        # 新增：法律法规切片（条款切分，类似 policy）
+        "laws": SlicerConfig(
+            split_on=[r'\n(?=第\s*[一二三四五六七八九十百千万0-9]+\s*条)'],
+            chunk_size=2500,
+            overlap=500,
+            min_chunk=50,
+            max_chunk=2500,
+        ),
+        # 新增：上位规划切片（章节切分）
+        "plans": SlicerConfig(
+            split_on=[r'\n(?=#{1,3}\s)', r'\n(?=第[一二三四五六七八九十百]+章)'],
+            chunk_size=2000,
+            overlap=400,
+            min_chunk=100,
+            max_chunk=2000,
+        ),
+        # 新增：专业教材切片（章节切分，使用 textbook 别名）
+        "domain": SlicerConfig(
+            split_on=[r'\n(?=#{1,3}\s)', r'\n(?=第[一二三四五六七八九十百]+章)'],
+            chunk_size=1800,
+            overlap=350,
+            min_chunk=150,
+            max_chunk=1800,
+        ),
         "default": SlicerConfig(
             chunk_size=2500,
             overlap=500,

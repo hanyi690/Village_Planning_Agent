@@ -223,6 +223,15 @@ def validate_config() -> None:
 validate_config()
 
 
+# ==================== OSS 云端同步配置 ====================
+# 阿里云 OSS 配置（用于向量库云端备份）
+OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "")
+OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "")
+OSS_ENDPOINT = os.getenv("OSS_ENDPOINT", "oss-cn-shenzhen.aliyuncs.com")
+OSS_BUCKET_NAME = os.getenv("OSS_BUCKET_NAME", "")
+OSS_KB_PATH = os.getenv("OSS_KB_PATH", "knowledge_base/chroma_db")  # OSS上的存储路径
+
+
 # ==================== 结构化元数据 Schema（未来优化预留）====================
 # 用于 Phase 1 知识库重构：在入库时注入结构化元数据
 # 支持 Phase 2 动态检索：基于维度、地形等元数据过滤
@@ -236,6 +245,20 @@ METADATA_SCHEMA = {
     "document_type": str,      # 文档类型 ["policy", "standard", "case", "guide"]
     "effective_date": str,     # 生效日期（政策文件）
     "region": list,            # 适用地区 ["广东省", "梅州市", "平远县"]
+    # 新增：层级标识（用于 policies/laws/standards 的子分类）
+    "level": str,              # national/local/administrative
+    "region_level": str,       # province/city/county
+}
+
+# 类别到文档类型的映射
+CATEGORY_DOC_TYPE_MAPPING = {
+    "policies": "policy",
+    "laws": "policy",          # 法律法规使用 policy 切片策略
+    "standards": "standard",
+    "cases": "case",
+    "domain": "textbook",
+    "plans": "report",
+    "local": "guide",
 }
 
 # 维度-章节映射（用于 Phase 3 依赖矩阵切片）

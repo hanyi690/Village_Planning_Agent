@@ -205,11 +205,15 @@ class CategoryDetector:
     from src.core.config import KB_CATEGORIES
 
     CATEGORY_KEYWORDS: Dict[str, List[str]] = {
-        "policies": ["政策", "policy", "十四五", "乡村", "振兴", "战略", "规划"],
-        "standards": ["标准", "standard", "规范", "规程", "GB", "DB", "技术"],
-        "cases": ["案例", "case", "示范", "典型", "经验", "模式"],
-        "domain": ["领域", "domain", "专业", "专项", "交通", "生态", "水利"],
+        "policies": ["政策", "policy", "十四五", "乡村", "振兴", "战略", "规划", "意见", "通知", "方案"],
+        "standards": ["标准", "standard", "规范", "规程", "GB", "DB", "技术", "指南", "导则"],
+        "cases": ["案例", "case", "示范", "典型", "经验", "模式", "实践", "样本"],
+        "domain": ["领域", "domain", "专业", "专项", "教材", "手册", "交通", "生态", "水利", "教程"],
         "local": ["本地", "local", "实地", "调研", "访谈", "问卷"],
+        # 新增：法律法规关键词
+        "laws": ["法律", "law", "法规", "条例", "法", "中华人民共和国", "城乡规划法", "土地管理法"],
+        # 新增：上位规划关键词
+        "plans": ["规划", "plan", "上位", "总体规划", "国土空间", "省级", "市级", "县级"],
     }
 
     @staticmethod
@@ -237,6 +241,8 @@ class CategoryDetector:
             "cases": [],
             "domain": [],
             "local": [],
+            "laws": [],
+            "plans": [],
         }
 
         if not data_dir.exists():
@@ -250,3 +256,25 @@ class CategoryDetector:
                 result[category].append(file_path)
 
         return {k: v for k, v in result.items() if v}
+
+    @staticmethod
+    def detect_from_chinese_dir(file_path: Path) -> str:
+        """
+        从中文目录名检测类别（用于 docs/RAG 知识库）
+
+        Args:
+            file_path: 文件路径
+
+        Returns:
+            英文类别标识（如 policies, laws, standards 等）
+        """
+        from src.core.config import KB_CATEGORY_MAPPING
+
+        path_str = str(file_path)
+
+        for chinese_dir, mapping in KB_CATEGORY_MAPPING.items():
+            if chinese_dir in path_str:
+                return mapping["category"]
+
+        # 回退到关键词检测
+        return CategoryDetector.detect_from_path(file_path)

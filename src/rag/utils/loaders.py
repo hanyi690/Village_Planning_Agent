@@ -9,7 +9,8 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional, Literal, Dict, List
+from pathlib import Path
 
 from langchain_core.documents import Document
 import filetype
@@ -309,10 +310,13 @@ class MarkdownCleaner:
 class BaseDocumentLoader:
     """文档加载器基类，提供公共方法"""
 
+    # 支持的知识库类别（与 KB_CATEGORIES 保持一致）
+    SUPPORTED_CATEGORIES = Literal["policies", "cases", "standards", "domain", "local", "laws", "plans"]
+
     def __init__(
         self,
         file_path: str | Path,
-        category: Optional[Literal["policies", "cases"]] = None,
+        category: Optional[SUPPORTED_CATEGORIES] = None,
     ):
         self.file_path = Path(file_path)
         self.category = category
@@ -382,7 +386,7 @@ class MarkItDownLoader(BaseDocumentLoader):
     """
 
     # 默认超时配置
-    DEFAULT_TIMEOUT = 120  # 秒
+    DEFAULT_TIMEOUT = 60  # 秒（本地解析器）
 
     # ==================== 预编译正则表达式（类级别常量）====================
     # OCR 相关模式
@@ -405,10 +409,11 @@ class MarkItDownLoader(BaseDocumentLoader):
     def __init__(
         self,
         file_path: str | Path,
-        category: Optional[Literal["policies", "cases"]] = None,
+        category: Optional[BaseDocumentLoader.SUPPORTED_CATEGORIES] = None,
         timeout: Optional[int] = None,
     ):
         super().__init__(file_path, category)
+        # 本地解析器默认60秒超时
         self.timeout = timeout or self.DEFAULT_TIMEOUT
 
     def load(self) -> list[Document]:
@@ -456,59 +461,39 @@ class MarkItDownLoader(BaseDocumentLoader):
         return DocToDocxConverter.convert(self.file_path, timeout=self.timeout)
 
     def _convert_with_markitdown(self, file_path: Optional[Path] = None) -> str:
-        """使用 MarkItDown 转换文档为 Markdown（带超时保护，支持 OCR）"""
+        """使用 MarkItDown 转换文档为 Markdown（本地解析器，不带OCR）"""
         try:
             from markitdown import MarkItDown
         except ImportError:
             raise ImportError("markitdown 未安装")
 
-        # 启用 OCR 插件（使用 DashScope API）
-        from src.core.config import DASHSCOPE_API_KEY, DASHSCOPE_API_BASE, OCR_MODEL_NAME
-
-        llm_client = None
-        llm_model = None
-        if DASHSCOPE_API_KEY:
-            from openai import OpenAI
-            llm_client = OpenAI(
-                api_key=DASHSCOPE_API_KEY,
-                base_url=DASHSCOPE_API_BASE,
-            )
-            llm_model = OCR_MODEL_NAME
-
-        md = MarkItDown(
-            enable_plugins=True,
-            llm_client=llm_client,
-            llm_model=llm_model,
-        )
+        # 禁用 OCR 插件，仅使用本地解析器
+        md = MarkItDown(enable_plugins=False)
         target_path = file_path or self.file_path
-        
-        # 尝试使用 func_timeout 实现超时保护
+
+        # 使用 func_timeout 实现超时保护
+        from func_timeout import func_timeout, FunctionTimedOut
+
+        def _convert():
+            return md.convert(str(target_path))
+
+        effective_timeout = min(self.timeout, 60)  # 本地解析器最多60秒
+
         try:
-            from func_timeout import func_timeout, FunctionTimedOut
-            
-            def _convert():
-                return md.convert(str(target_path))
-            
-            try:
-                result = func_timeout(self.timeout, _convert)
-                return result.markdown
-            except FunctionTimedOut:
-                raise TimeoutError(
-                    f"MarkItDown 处理超时 (>{self.timeout}s): {target_path.name}"
-                )
-                
-        except ImportError:
-            # func_timeout 未安装，使用无超时方式（保持向后兼容）
-            result = md.convert(str(target_path))
+            result = func_timeout(effective_timeout, _convert)
             return result.markdown
+        except FunctionTimedOut:
+            raise TimeoutError(
+                f"MarkItDown 处理超时 (>{effective_timeout}s): {target_path.name}"
+            )
 
     def _convert_pdf_with_fallback(self, file_path: Path) -> str:
         """
-        PDF 文件 Fallback 解析链
+        PDF 文件 Fallback 解析链（本地优先）
 
         优先级：
-        1. MarkItDown (pdfminer.six) → 原生方案
-        2. PyMuPDF → 复杂字体/布局容错
+        1. MarkItDown → pdfminer.six，输出 Markdown（优先，方便切片）
+        2. PyMuPDF → 纯文本备用
         3. pdfplumber → 表格/结构化内容
 
         Args:
@@ -520,33 +505,49 @@ class MarkItDownLoader(BaseDocumentLoader):
         Raises:
             Exception: 所有解析器都失败时抛出详细错误
         """
-        from .pdf_fallback import pdf_fallback_chain, check_parsers
+        from .pdf_fallback import convert_with_pymupdf, extract_with_pdfplumber, check_parsers
 
-        # 1. 先尝试 MarkItDown
+        parsers_status = check_parsers()
+
+        # 1. 先尝试 MarkItDown（输出 Markdown 格式，方便切片）
         try:
+            print("🔄 尝试 MarkItDown 解析...")
             content = self._convert_with_markitdown(file_path)
             if content and len(content.strip()) >= 100:
-                print(f"✅ MarkItDown 解析 PDF 成功")
+                print(f"✅ MarkItDown 解析成功，内容长度: {len(content)}")
                 return content
-            print("⚠️  MarkItDown 返回内容过少，尝试备用解析器...")
         except TimeoutError:
-            print("⚠️  MarkItDown 解析 PDF 超时，尝试备用解析器...")
+            print("⚠️ MarkItDown 解析超时，尝试备用解析器...")
         except Exception as e:
-            print(f"⚠️  MarkItDown 解析 PDF 失败: {e}")
-            print("🔄 尝试备用解析器...")
+            print(f"⚠️ MarkItDown 解析失败: {e}")
 
-        # 2. 调用 Fallback 链
-        parsers_status = check_parsers()
-        if not parsers_status['pymupdf'] and not parsers_status['pdfplumber']:
-            raise Exception(
-                "PDF 解析失败。\n"
-                "MarkItDown 解析失败/超时，且备用解析器未安装。\n"
-                "请安装备用解析器: pip install pymupdf pdfplumber\n"
-                "或检查 PDF 文件是否为扫描版（需要 OCR）。"
-            )
+        # 2. PyMuPDF 备用（纯文本）
+        if parsers_status['pymupdf']:
+            print("🔄 尝试 PyMuPDF 解析...")
+            try:
+                content = convert_with_pymupdf(file_path)
+                if content and len(content.strip()) >= 100:
+                    print(f"✅ PyMuPDF 解析成功，内容长度: {len(content)}")
+                    return content
+            except Exception as e:
+                print(f"⚠️ PyMuPDF 解析失败: {e}")
 
-        content, parser_name = pdf_fallback_chain(file_path)
-        return content
+        # 3. pdfplumber 备用（表格处理）
+        if parsers_status['pdfplumber']:
+            print("🔄 尝试 pdfplumber 解析...")
+            content, error = extract_with_pdfplumber(file_path)
+            if content and len(content.strip()) >= 100:
+                print(f"✅ pdfplumber 解析成功")
+                return content
+            if error:
+                print(f"⚠️ pdfplumber: {error}")
+
+        # 所有解析器都失败
+        raise Exception(
+            f"PDF 解析失败: {file_path.name}\n"
+            f"解析器状态: pymupdf={parsers_status['pymupdf']}, pdfplumber={parsers_status['pdfplumber']}\n"
+            "建议：检查文件是否损坏，或手动转换为 .docx 格式"
+        )
 
     def _parse_markdown(self, content: str, file_ext: str) -> list[Document]:
         """解析 Markdown 内容为 Document 列表"""
@@ -713,7 +714,7 @@ class MarkdownLoader(BaseDocumentLoader):
         self,
         file_path: str | Path,
         encoding: str = "utf-8",
-        category: Optional[Literal["policies", "cases"]] = None,
+        category: Optional[BaseDocumentLoader.SUPPORTED_CATEGORIES] = None,
     ):
         super().__init__(file_path, category)
         self.encoding = encoding
@@ -789,7 +790,7 @@ class TextFileLoader(BaseDocumentLoader):
         self,
         file_path: str | Path,
         encoding: str = "utf-8",
-        category: Optional[Literal["policies", "cases"]] = None,
+        category: Optional[BaseDocumentLoader.SUPPORTED_CATEGORIES] = None,
     ):
         super().__init__(file_path, category)
         self.encoding = encoding
@@ -824,7 +825,7 @@ class TextFileLoader(BaseDocumentLoader):
 def load_documents_from_directory(
     directory: str | Path,
     file_extensions: Optional[list[str]] = None,
-    category: Optional[Literal["policies", "cases"]] = None,
+    category: Optional[BaseDocumentLoader.SUPPORTED_CATEGORIES] = None,
 ) -> list[Document]:
     """从目录批量加载文档，自动检测真实文件类型
     
@@ -880,7 +881,7 @@ def load_documents_from_directory(
 def _create_loader(
     file_path: Path,
     file_type: str,
-    category: Optional[Literal["policies", "cases"]],
+    category: Optional[BaseDocumentLoader.SUPPORTED_CATEGORIES],
 ) -> Optional[BaseDocumentLoader]:
     """根据文件类型创建对应的加载器
     
@@ -913,10 +914,20 @@ def _create_loader(
 
 def load_knowledge_base(
     data_dir: str | Path,
-    categories: Optional[list[Literal["policies", "cases"]]] = None,
+    categories: Optional[list[str]] = None,
+    source_type: Literal["data", "docs"] = "data",
+    skip_scanned: bool = True,
 ) -> list[Document]:
-    """加载知识库（支持分类）
-    
+    """加载知识库（支持分类和多种数据源）
+
+    Args:
+        data_dir: 数据目录路径
+        categories: 要加载的类别列表，默认自动检测
+        source_type: 数据源类型
+            - "data": data/ 目录（英文分类名，单层结构）
+            - "docs": docs/RAG 知识库 目录（中文分类名，多层结构）
+        skip_scanned: 是否排除扫描版PDF（非文字PDF），仅对 source_type="docs" 生效
+
     支持格式:
     - Word: .doc, .docx
     - PDF: .pdf
@@ -924,10 +935,15 @@ def load_knowledge_base(
     - Excel: .xls, .xlsx
     - 其他: .epub, .html, .md, .txt
     """
-    from src.core.config import KB_CATEGORIES
+    from src.core.config import KB_CATEGORIES, KB_CATEGORY_MAPPING
 
     data_dir = Path(data_dir)
 
+    if source_type == "docs":
+        # 使用多层扫描函数处理 docs/RAG 知识库
+        return _load_multi_level_kb(data_dir, categories, skip_scanned=skip_scanned)
+
+    # source_type == "data" 时，使用原有逻辑
     if categories is None:
         categories = [
             item.name
@@ -937,7 +953,7 @@ def load_knowledge_base(
 
     if not categories:
         raise FileNotFoundError(
-            f"未找到任何类别目录。请在 {data_dir} 下创建 'policies' 和/或 'cases' 目录。"
+            f"未找到任何类别目录。请在 {data_dir} 下创建有效的分类目录。"
         )
 
     all_documents = []
@@ -964,6 +980,183 @@ def load_knowledge_base(
             category=category,
         )
         all_documents.extend(documents)
+
+    print(f"\n{'='*60}")
+    print(f"✅ 知识库加载完成！")
+    print(f"   - 总文档数: {len(all_documents)}")
+    print(f"   - 类别: {', '.join(categories)}")
+    print(f"{'='*60}\n")
+
+    return all_documents
+
+
+def is_scanned_pdf(file_path: Path, sample_pages: int = 3, min_chars_per_page: int = 50) -> bool:
+    """
+    检测PDF是否是扫描版（非文字PDF）
+
+    Args:
+        file_path: PDF文件路径
+        sample_pages: 检测的样本页数（前几页）
+        min_chars_per_page: 每页最小字符数阈值，低于此值视为扫描版
+
+    Returns:
+        True 如果是扫描版PDF（非文字），False 如果是文字PDF
+
+    检测方法：
+    使用 PyMuPDF 提取前几页文本，如果平均每页字符数低于阈值，则认为是扫描版。
+    """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        # PyMuPDF 未安装，无法检测，默认返回 False（不排除）
+        print(f"⚠️  PyMuPDF 未安装，无法检测扫描版PDF: {file_path.name}")
+        return False
+
+    try:
+        doc = fitz.open(str(file_path))
+        total_pages = len(doc)
+
+        if total_pages == 0:
+            return True  # 空PDF视为扫描版
+
+        # 检测前几页
+        pages_to_check = min(sample_pages, total_pages)
+        total_chars = 0
+
+        for page_num in range(pages_to_check):
+            page = doc[page_num]
+            text = page.get_text()
+            total_chars += len(text.strip())
+
+        doc.close()
+
+        # 平均每页字符数
+        avg_chars = total_chars / pages_to_check
+
+        # 低于阈值则视为扫描版
+        is_scanned = avg_chars < min_chars_per_page
+
+        if is_scanned:
+            print(f"  🔍 检测为扫描版PDF（平均{avg_chars:.1f}字符/页）：{file_path.name}")
+
+        return is_scanned
+
+    except Exception as e:
+        print(f"⚠️  PDF检测失败: {file_path.name} - {e}")
+        return False  # 检测失败时不排除
+
+
+def scan_multi_level_kb(
+    docs_dir: str | Path,
+    skip_scanned: bool = True,
+    scanned_threshold: int = 50,
+) -> Dict[str, List[Path]]:
+    """
+    扫描多层目录结构的知识库（docs/RAG 知识库）
+
+    Args:
+        docs_dir: docs/RAG 知识库 目录路径
+        skip_scanned: 是否排除扫描版PDF（非文字PDF）
+        scanned_threshold: 扫描版PDF检测阈值（每页最小字符数）
+
+    Returns:
+        按英文 category 分组的文件路径字典
+    """
+    from src.core.config import KB_CATEGORY_MAPPING
+
+    docs_dir = Path(docs_dir)
+    if not docs_dir.exists():
+        return {}
+
+    result: Dict[str, List[Path]] = {}
+    scanned_files: List[str] = []  # 记录被排除的扫描版PDF
+
+    # 支持的文件格式
+    supported_extensions = {".pdf", ".doc", ".docx", ".md", ".txt", ".ppt", ".pptx"}
+
+    for chinese_dir, mapping in KB_CATEGORY_MAPPING.items():
+        category = mapping["category"]
+        result[category] = []
+
+        category_dir = docs_dir / chinese_dir
+        if not category_dir.exists():
+            continue
+
+        # 递归搜索所有文件
+        for file_path in category_dir.rglob("*"):
+            if file_path.is_file() and file_path.suffix.lower() in supported_extensions:
+                # 检测扫描版PDF
+                if skip_scanned and file_path.suffix.lower() == ".pdf":
+                    if is_scanned_pdf(file_path, min_chars_per_page=scanned_threshold):
+                        scanned_files.append(str(file_path))
+                        continue  # 排除扫描版PDF
+
+                result[category].append(file_path)
+
+    # 输出扫描版PDF排除汇总
+    if skip_scanned and scanned_files:
+        print(f"\n📋 排除 {len(scanned_files)} 个扫描版PDF（非文字PDF）：")
+        for f in scanned_files[:5]:  # 只显示前5个
+            print(f"   - {Path(f).name}")
+        if len(scanned_files) > 5:
+            print(f"   ... 及其他 {len(scanned_files) - 5} 个文件")
+
+    # 过滤空类别
+    return {k: v for k, v in result.items() if v}
+
+
+def _load_multi_level_kb(
+    docs_dir: Path,
+    categories: Optional[list[str]] = None,
+    skip_scanned: bool = True,
+) -> list[Document]:
+    """
+    加载多层目录结构的知识库（内部函数）
+
+    Args:
+        docs_dir: docs/RAG 知识库 目录路径
+        categories: 要加载的类别列表，默认加载所有
+        skip_scanned: 是否排除扫描版PDF
+
+    Returns:
+        文档列表
+    """
+    from src.core.config import KB_CATEGORY_MAPPING
+
+    # 扫描获取文件分组
+    files_by_category = scan_multi_level_kb(docs_dir, skip_scanned=skip_scanned)
+
+    if categories is None:
+        categories = list(files_by_category.keys())
+
+    if not categories:
+        print(f"⚠️  docs/RAG 知识库 目录下未找到任何文档")
+        return []
+
+    all_documents = []
+
+    for category in categories:
+        if category not in files_by_category:
+            print(f"⚠️  类别 {category} 无文件，跳过")
+            continue
+
+        file_paths = files_by_category[category]
+        print(f"\n{'='*60}")
+        print(f"正在加载类别: {category} ({len(file_paths)} 个文件)")
+        print(f"{'='*60}")
+
+        for file_path in file_paths:
+            try:
+                real_type = FileTypeDetector.detect(file_path)
+                loader = _create_loader(file_path, real_type, category)
+                if loader is None:
+                    continue
+
+                documents = loader.load()
+                all_documents.extend(documents)
+            except Exception as e:
+                print(f"⚠️  加载文件 {file_path.name} 时出错: {e}")
+                continue
 
     print(f"\n{'='*60}")
     print(f"✅ 知识库加载完成！")

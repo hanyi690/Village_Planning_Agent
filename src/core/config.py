@@ -27,8 +27,8 @@ LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "300"))  # 5 minutes
 
 # LLM Max Concurrent Requests (for asyncio.gather)
 # DashScope limit: ~5-10 concurrent requests
-# Recommended: 3-4 for stability
-LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "4"))
+# Updated from 4 to 8 for better parallelism
+LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "8"))
 
 # OpenAI-compatible API base URL (for DeepSeek, etc.)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")
@@ -126,8 +126,21 @@ AMAP_MAX_RETRIES: int = int(os.getenv("AMAP_MAX_RETRIES", "3"))
 # ==========================================
 
 # 知识库类别
-KB_CATEGORIES = ["policies", "cases", "standards", "domain", "local"]
+KB_CATEGORIES = ["policies", "cases", "standards", "domain", "local", "laws", "plans"]
 KB_DEFAULT_CATEGORY = "policies"
+
+# 知识库中文目录到英文标识的映射
+KB_CATEGORY_MAPPING: dict = {
+    "01 专业教材": {"category": "domain", "doc_type": "textbook"},
+    "02 法律法规": {"category": "laws", "has_subcategories": True},
+    "03 政策文件": {"category": "policies", "has_subcategories": True},
+    "04 技术规范": {"category": "standards", "has_subcategories": True},
+    "05 上位规划": {"category": "plans", "doc_type": "report"},
+    "06 相关案例": {"category": "cases", "doc_type": "case"},
+}
+
+# 知识库层级标识（用于 policies/laws/standards 的子分类）
+KB_LEVELS: list = ["national", "local", "administrative"]
 
 # ==========================================
 # Logging Configuration
@@ -155,10 +168,4 @@ FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "qwen-flash")
 FLASH_MODEL_MAX_TOKENS = int(os.getenv("FLASH_MODEL_MAX_TOKENS", "500"))
 FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
 
-# ==========================================
-# OCR Model Configuration (DashScope Vision)
-# ==========================================
-# 用于 MarkItDown OCR 插件处理扫描版 PDF
-# qwen-vl-max: 通用视觉模型，支持文字识别
-OCR_MODEL_NAME = os.getenv("OCR_MODEL_NAME", "qwen-vl-max")
 
