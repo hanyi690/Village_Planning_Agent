@@ -2,6 +2,9 @@
 chcp 65001 >nul
 REM Village Planning System - Service Startup Script (Windows)
 
+REM 切换到脚本所在目录（解决开机启动时路径问题）
+cd /d "%~dp0"
+
 echo ===================================
 echo   Village Planning System - Start
 echo ===================================
@@ -16,10 +19,10 @@ del /f /q logs\*.pid 2>nul
 echo   [OK] Log directory ready
 echo.
 
-REM Save path variables
-set "BACKEND_DIR=%CD%\backend"
-set "FRONTEND_DIR=%CD%\frontend"
-set "LOGS_DIR=%CD%\logs"
+REM Save path variables (使用脚本所在目录)
+set "BACKEND_DIR=%~dp0backend"
+set "FRONTEND_DIR=%~dp0frontend"
+set "LOGS_DIR=%~dp0logs"
 
 REM Port configuration (check environment variables, otherwise use defaults)
 if not defined BACKEND_PORT set BACKEND_PORT=8000
