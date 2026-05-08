@@ -81,6 +81,19 @@ export const PLANNING_COLORS = {
     '10min': { fill: '#FFFF00', stroke: '#CCCC00' },
     '15min': { fill: '#FFA500', stroke: '#CC8400' },
   },
+  // Settlement zone styles (居民点分类)
+  settlement_zone: {
+    '保留村庄': { fill: '#228B22', stroke: '#006400' },
+    '迁并村庄': { fill: '#FF6B6B', stroke: '#CC0000' },
+    '新建村庄': { fill: '#4A90D9', stroke: '#1E3A5F' },
+  },
+  // Infrastructure styles (基础设施)
+  infrastructure: {
+    '供水管线': { stroke: '#00CED1', width: 2 },
+    '排水管线': { stroke: '#8B4513', width: 2 },
+    '电力线路': { stroke: '#FFD700', width: 2 },
+    '通信线路': { stroke: '#800080', width: 1 },
+  },
 } as const;
 
 // Default fallback colors
@@ -97,3 +110,50 @@ export const ZONE_TYPES = {
 // Type helper for feature colors
 export type FeatureColors = { fill: string; stroke: string };
 export type LineColors = { stroke: string; width: number };
+
+// Layer type definition (keys of PLANNING_COLORS)
+export type LayerType = keyof typeof PLANNING_COLORS;
+
+// Legend item interface (matching LegendPanel component expectations)
+export interface LegendItem {
+  label: string;
+  color: string;
+  type: 'polygon' | 'line' | 'point';
+  borderColor?: string;
+  lineWidth?: number;
+}
+
+// Get legend items for a layer type
+export function getLegendForLayerType(layerType: LayerType): LegendItem[] {
+  const items: LegendItem[] = [];
+  const layerColors = PLANNING_COLORS[layerType];
+
+  if (!layerColors) return items;
+
+  // Determine geometry type based on layer type
+  const type: 'polygon' | 'line' | 'point' =
+    layerType === 'boundary' || layerType === 'development_axis' || layerType === 'infrastructure' ? 'line' :
+    layerType === 'facility_point' ? 'point' : 'polygon';
+
+  for (const [label, colors] of Object.entries(layerColors)) {
+    const colorConfig = colors as FeatureColors | LineColors;
+
+    if ('fill' in colorConfig) {
+      items.push({
+        label,
+        color: colorConfig.fill,
+        type,
+        borderColor: colorConfig.stroke,
+      });
+    } else {
+      items.push({
+        label,
+        color: colorConfig.stroke,
+        type: 'line',
+        lineWidth: colorConfig.width,
+      });
+    }
+  }
+
+  return items;
+}

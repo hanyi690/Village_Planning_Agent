@@ -5,7 +5,7 @@
  * Combines message types, SSE event types, and state types.
  */
 
-// Message Types
+// Base Types (from base.ts)
 export type {
   BaseMessage,
   MessageRole,
@@ -15,11 +15,11 @@ export type {
   DimensionProgressItem,
   DimensionStatus,
   ActionButton,
-  SSEEventResult,
-  SSEEvent,
-  ConversationState,
   PlanningParams,
-  Message,
+} from './base';
+
+// Message Types (from messages.ts)
+export type {
   EmbeddedImage,
   KnowledgeSource,
   ImageAttachment,
@@ -30,10 +30,9 @@ export type {
   LayerCompletedMessage,
   ToolStatusMessage,
   GisResultMessage,
-} from './messages';
-
-// GIS Types
-export type {
+  Message,
+  SSEEvent,
+  SSEEventResult,
   GISAnalysisData,
   GISData,
   GISLayerConfig,
@@ -42,11 +41,12 @@ export type {
   ToolExecutionStatus,
 } from './messages';
 
-// SSE Event Types (new)
+// SSE Event Types (from events.ts)
 export type { GisLayerUpdateEvent, SSEEventType } from './events';
 
-// Re-export guards and helpers
+// Re-export guards (from guards.ts)
 export {
+  isUserMessage,
   isTextMessage,
   isFileMessage,
   isProgressMessage,
@@ -54,14 +54,7 @@ export {
   isLayerCompletedMessage,
   isToolStatusMessage,
   isGisResultMessage,
-  getMessageType,
 } from './guards';
 
-export {
-  createBaseMessage,
-  buildLayerReportId,
-  buildRevisionReportId,
-  buildDimensionProgressKey,
-  formatDimensionReportsAsContent,
-  calculateReportSummary,
-} from './helpers';
+// Note: createBaseMessage, buildLayerReportId, etc. are in @/lib/utils/message-helpers.ts
+// Import directly from there if needed

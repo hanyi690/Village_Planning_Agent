@@ -37,7 +37,6 @@ export { default as HistoryPanel } from './layout/HistoryPanel';
 export { default as KnowledgePanel } from './layout/KnowledgePanel';
 export { default as UnifiedLayout } from './layout/UnifiedLayout';
 export { default as UnifiedContentSwitcher } from './layout/UnifiedContentSwitcher';
-export { default as LayerSidebar } from './layout/LayerSidebar';
 
 // UI Components
 export { default as SegmentedControl } from './ui/SegmentedControl';

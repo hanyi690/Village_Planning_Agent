@@ -6,7 +6,7 @@
  * Use these to safely check message types before accessing type-specific properties.
  */
 
-import type { Message } from './index';
+import type { Message } from './messages';
 import type {
   TextMessage,
   FileMessage,
@@ -15,7 +15,7 @@ import type {
   DimensionReportMessage,
   GisResultMessage,
   ToolStatusMessage,
-} from './message-types';
+} from './messages';
 
 /**
  * Check if message is from user

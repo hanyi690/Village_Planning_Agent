@@ -6,7 +6,7 @@
  * Each type represents a different kind of message in the conversational UI.
  */
 
-import type { BaseMessage, ActionButton, KnowledgeReference } from './index';
+import type { BaseMessage, ActionButton, KnowledgeReference } from './base';
 
 // ============================================================================
 // Core Message Types (实际使用的5种类型)
@@ -243,4 +243,48 @@ export interface GisResultMessage extends BaseMessage {
     sensitivityClass?: string;
     recommendations?: string[];
   };
+}
+
+// ============================================================================
+// Message Union Type
+// ============================================================================
+
+/**
+ * Message - Union type of all message types
+ */
+export type Message =
+  | TextMessage
+  | FileMessage
+  | ProgressMessage
+  | DimensionReportMessage
+  | LayerCompletedMessage
+  | ToolStatusMessage
+  | GisResultMessage;
+
+// ============================================================================
+// SSE Event Types (for helpers)
+// ============================================================================
+
+/**
+ * SSE Event Result
+ */
+export interface SSEEventResult {
+  status?: string;
+  message?: string;
+  data?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * SSE Event
+ */
+export interface SSEEvent {
+  event_type?: string;
+  status?: string;
+  progress?: number;
+  current_layer?: string;
+  message?: string;
+  task_id?: string;
+  result?: SSEEventResult;
+  error?: string;
 }

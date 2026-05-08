@@ -5,8 +5,8 @@
  */
 
 // Store
-export { usePlanningStore, usePlanningActions } from './planningStore';
-export type { PlanningState, PlanningActions } from './planningStore';
+export { usePlanningStore } from './planningStore';
+export type { PlanningState } from './planningStore';
 
 // Provider
 export { PlanningProvider } from './planning-context';
