@@ -1,0 +1,280 @@
+# 村庄规划阶段配置
+# 此文件是28维度配置的唯一来源
+
+phases:
+  # Layer 1: 现状分析（12维度，并行执行）
+  - id: layer1
+    name: "现状分析"
+    execution: parallel
+    dimensions:
+      - key: location
+        name: "区位与对外交通分析"
+        tools: []
+        rag_query: "区位 交通"
+        depends_on: []
+
+      - key: socio_economic
+        name: "社会经济分析"
+        tools: ["population_model_v1"]
+        rag_query: "人口 预测 经济"
+        depends_on: []
+
+      - key: villager_wishes
+        name: "村民意愿与诉求分析"
+        tools: []
+        rag_query: "村民 意愿 诉求"
+        depends_on: []
+
+      - key: superior_planning
+        name: "上位规划与政策导向分析"
+        tools: []
+        rag_query: "上位规划 政策"
+        depends_on: []
+
+      - key: natural_environment
+        name: "自然环境分析"
+        tools: ["gis_data_fetch"]
+        rag_query: "自然环境 地形"
+        depends_on: []
+
+      - key: land_use
+        name: "土地利用分析"
+        tools: ["gis_coverage_calculator"]
+        rag_query: "土地利用 标准"
+        depends_on: []
+
+      - key: traffic
+        name: "道路交通分析"
+        tools: ["accessibility_analysis"]
+        rag_query: "道路 交通"
+        depends_on: []
+
+      - key: public_services
+        name: "公共服务设施分析"
+        tools: ["poi_search"]
+        rag_query: "公共服务 设施"
+        depends_on: []
+
+      - key: infrastructure
+        name: "基础设施分析"
+        tools: []
+        rag_query: "基础设施"
+        depends_on: []
+
+      - key: ecological_green
+        name: "生态绿地分析"
+        tools: []
+        rag_query: "生态 绿地"
+        depends_on: []
+
+      - key: architecture
+        name: "建筑分析"
+        tools: []
+        rag_query: "建筑"
+        depends_on: []
+
+      - key: historical_culture
+        name: "历史文化与乡愁保护分析"
+        tools: []
+        rag_query: "历史 文化 乡愁"
+        depends_on: []
+
+  # Layer 2: 规划思路（4维度，Wave波次执行）
+  - id: layer2
+    name: "规划思路"
+    execution: wave
+    dimensions:
+      - key: resource_endowment
+        name: "资源禀赋分析"
+        tools: ["gis_coverage_calculator"]
+        rag_query: "资源禀赋"
+        depends_on: []
+        layer_depends_on:
+          - "natural_environment"
+          - "land_use"
+          - "socio_economic"
+          - "historical_culture"
+          - "architecture"
+          - "public_services"
+
+      - key: planning_positioning
+        name: "规划定位分析"
+        tools: ["spatial_query"]
+        rag_query: "规划定位"
+        depends_on: ["resource_endowment"]
+        layer_depends_on:
+          - "location"
+          - "socio_economic"
+          - "superior_planning"
+
+      - key: development_goals
+        name: "发展目标分析"
+        tools: ["population_model_v1"]
+        rag_query: "发展目标"
+        depends_on: ["resource_endowment", "planning_positioning"]
+        layer_depends_on:
+          - "socio_economic"
+          - "superior_planning"
+
+      - key: planning_strategies
+        name: "规划策略分析"
+        tools: ["accessibility_analysis"]
+        rag_query: "规划策略"
+        depends_on: ["resource_endowment", "planning_positioning", "development_goals"]
+        layer_depends_on:
+          - "traffic"
+          - "infrastructure"
+
+  # Layer 3: 详细规划（12维度，Wave波次执行）
+  - id: layer3
+    name: "详细规划"
+    execution: wave
+    dimensions:
+      - key: industry
+        name: "产业规划"
+        tools: []
+        rag_query: "产业规划 农村"
+        depends_on: []
+        layer_depends_on:
+          - "socio_economic"
+          - "land_use"
+        phase_depends_on:
+          - "resource_endowment"
+          - "planning_positioning"
+          - "planning_strategies"
+
+      - key: spatial_structure
+        name: "空间结构规划"
+        tools: ["spatial_layout_generator"]
+        rag_query: "空间结构"
+        depends_on: []
+        layer_depends_on:
+          - "natural_environment"
+          - "land_use"
+          - "traffic"
+          - "architecture"
+        phase_depends_on:
+          - "planning_positioning"
+          - "planning_strategies"
+
+      - key: land_use_planning
+        name: "土地利用规划"
+        tools: ["landuse_change_analysis"]
+        rag_query: "土地利用规划"
+        depends_on: []
+        layer_depends_on:
+          - "land_use"
+          - "natural_environment"
+        phase_depends_on:
+          - "planning_positioning"
+          - "planning_strategies"
+
+      - key: settlement_planning
+        name: "居民点规划"
+        tools: []
+        rag_query: "居民点"
+        depends_on: []
+        layer_depends_on:
+          - "architecture"
+          - "infrastructure"
+          - "land_use"
+        phase_depends_on:
+          - "planning_strategies"
+
+      - key: traffic_planning
+        name: "道路交通规划"
+        tools: ["accessibility_analysis"]
+        rag_query: "道路交通规划"
+        depends_on: []
+        layer_depends_on:
+          - "traffic"
+          - "land_use"
+        phase_depends_on:
+          - "planning_strategies"
+
+      - key: public_service
+        name: "公共服务设施规划"
+        tools: ["facility_validator"]
+        rag_query: "公共服务设施规划"
+        depends_on: []
+        layer_depends_on:
+          - "public_services"
+          - "socio_economic"
+        phase_depends_on:
+          - "planning_strategies"
+
+      - key: infrastructure_planning
+        name: "基础设施规划"
+        tools: []
+        rag_query: "基础设施规划"
+        depends_on: []
+        layer_depends_on:
+          - "infrastructure"
+          - "natural_environment"
+        phase_depends_on:
+          - "planning_strategies"
+
+      - key: ecological
+        name: "生态绿地规划"
+        tools: ["ecological_sensitivity"]
+        rag_query: "生态绿地规划"
+        depends_on: []
+        layer_depends_on:
+          - "natural_environment"
+          - "ecological_green"
+          - "land_use"
+        phase_depends_on:
+          - "planning_strategies"
+
+      - key: disaster_prevention
+        name: "防震减灾规划"
+        tools: ["hazard_buffer_generator"]
+        rag_query: "防震减灾"
+        depends_on: []
+        layer_depends_on:
+          - "natural_environment"
+          - "infrastructure"
+        phase_depends_on:
+          - "planning_strategies"
+
+      - key: heritage
+        name: "历史文保规划"
+        tools: []
+        rag_query: "历史文保"
+        depends_on: []
+        layer_depends_on:
+          - "historical_culture"
+          - "architecture"
+        phase_depends_on:
+          - "planning_strategies"
+
+      - key: landscape
+        name: "村庄风貌指引"
+        tools: []
+        rag_query: "村庄风貌"
+        depends_on: []
+        layer_depends_on:
+          - "architecture"
+          - "historical_culture"
+          - "ecological_green"
+        phase_depends_on:
+          - "planning_strategies"
+
+      - key: project_bank
+        name: "建设项目库"
+        tools: []
+        rag_query: "建设项目"
+        depends_on:
+          - "industry"
+          - "spatial_structure"
+          - "land_use_planning"
+          - "settlement_planning"
+          - "traffic_planning"
+          - "public_service"
+          - "infrastructure_planning"
+          - "ecological"
+          - "disaster_prevention"
+          - "heritage"
+          - "landscape"
+        layer_depends_on: []
+        phase_depends_on: []

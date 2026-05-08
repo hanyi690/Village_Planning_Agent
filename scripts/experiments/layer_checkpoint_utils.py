@@ -99,6 +99,10 @@ async def wait_for_layer_completion_sse(
     - 实时响应：事件驱动，无需轮询等待
     - 低延迟：几乎与前端同步
 
+    退出条件：
+    - layer_completed 事件（目标 layer）
+    - completed 事件（全局完成，提前退出）
+
     Args:
         session_id: Session identifier
         layer: Target layer (1, 2, or 3)
@@ -123,12 +127,71 @@ async def wait_for_layer_completion_sse(
         await sse_listener.connect()
 
     try:
-        # 等待 layer_completed 事件
-        event = await sse_listener.wait_for_layer_completion(layer, timeout=timeout)
+        # 等待 layer_completed 或 completed 事件
+        start_time = time.time()
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                logger.warning(f"[LayerCheckpoint] SSE timeout after {timeout}s")
+                # Fallback: 轮询验证当前状态
+                state = await checkpoint_service.get_state(session_id, wait_for_write=True)
+                if state:
+                    phase = state.get("phase", "")
+                    if phase == "completed":
+                        logger.info("[LayerCheckpoint] Fallback: detected completed phase")
+                        fingerprint = compute_state_fingerprint(state)
+                        return {
+                            "layer": layer,
+                            "checkpoint_id": "",
+                            "phase": phase,
+                            "reports": state.get("reports", {}),
+                            "completed_dimensions": state.get("completed_dimensions", {}),
+                            "timestamp": datetime.now().isoformat(),
+                            "state_fingerprint": fingerprint,
+                            "success": True,
+                            "error": None,
+                            "fallback": True,
+                        }
+                return {
+                    "layer": layer,
+                    "checkpoint_id": "",
+                    "phase": "",
+                    "reports": {},
+                    "completed_dimensions": {},
+                    "timestamp": datetime.now().isoformat(),
+                    "state_fingerprint": "",
+                    "success": False,
+                    "error": f"Timeout after {timeout}s",
+                }
 
-        logger.info(
-            f"[LayerCheckpoint] Layer {layer} completed (SSE event received)"
-        )
+            try:
+                # 非阻塞检查队列
+                event = await asyncio.wait_for(
+                    sse_listener._events_queue.get(),
+                    timeout=min(5, timeout - elapsed),
+                )
+            except asyncio.TimeoutError:
+                continue
+
+            event_type = event.get("type")
+
+            # 退出条件1: layer_completed 且 layer 匹配
+            if event_type == "layer_completed":
+                if event.get("data", {}).get("layer") == layer:
+                    logger.info(
+                        f"[LayerCheckpoint] Layer {layer} completed (SSE event received)"
+                    )
+                    break
+
+            # 退出条件2: completed 事件（全局完成）
+            if event_type == "completed":
+                logger.info(
+                    f"[LayerCheckpoint] Received completed event, all layers done"
+                )
+                break
+
+            # 其他事件，放回队列
+            await sse_listener._events_queue.put(event)
 
         # 等待 checkpoint 持久化完成
         # SSE 的 checkpoint_saved 事件可以替代 wait_for_write
@@ -170,20 +233,6 @@ async def wait_for_layer_completion_sse(
             "state_fingerprint": fingerprint,
             "success": True,
             "error": None,
-        }
-
-    except asyncio.TimeoutError:
-        logger.warning(f"[LayerCheckpoint] SSE timeout after {timeout}s")
-        return {
-            "layer": layer,
-            "checkpoint_id": "",
-            "phase": "",
-            "reports": {},
-            "completed_dimensions": {},
-            "timestamp": datetime.now().isoformat(),
-            "state_fingerprint": "",
-            "success": False,
-            "error": f"Timeout after {timeout}s",
         }
 
     finally:

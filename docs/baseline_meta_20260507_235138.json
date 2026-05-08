@@ -1,0 +1,43 @@
+{
+  "session_id": "a998f717-e219-4e72-835b-f3309413178c",
+  "timestamp": "20260507_235138",
+  "task_description": "制定金田村村庄总体规划（2022-2035年）",
+  "project_name": "金田村基线实验",
+  "phase": "completed",
+  "completed_dimensions": {
+    "layer1": [
+      "location",
+      "socio_economic",
+      "villager_wishes",
+      "superior_planning",
+      "natural_environment",
+      "land_use",
+      "traffic",
+      "public_services",
+      "infrastructure",
+      "ecological_green",
+      "architecture",
+      "historical_culture"
+    ],
+    "layer2": [
+      "resource_endowment",
+      "planning_positioning",
+      "development_goals",
+      "planning_strategies"
+    ],
+    "layer3": [
+      "industry",
+      "spatial_structure",
+      "land_use_planning",
+      "settlement_planning",
+      "traffic_planning",
+      "public_service",
+      "infrastructure_planning",
+      "ecological",
+      "disaster_prevention",
+      "heritage",
+      "landscape",
+      "project_bank"
+    ]
+  }
+}

@@ -238,8 +238,8 @@ def generate_layer1_report(raw_data: str) -> str:
 
 def generate_layer2_report(raw_data: str) -> str:
     """Generate Layer 2 report using new format."""
-    from src.subgraphs.concept_prompts import CONCEPT_SUMMARY_PROMPT
-
+    # Layer 2 不再使用 SUMMARY_PROMPT，直接返回模拟的规划思路报告
+    # 新架构中各维度独立生成，由下游节点合并
     dimension_reports = """
 民俗资源：黄粄、船灯舞、仙人粄
 自然资源：古檀林、山溪、杉木林
@@ -249,26 +249,8 @@ def generate_layer2_report(raw_data: str) -> str:
 发展目标：梅州市特色南药综合开发示范村
 """
 
-    from string import Template
-    prompt_template = Template(CONCEPT_SUMMARY_PROMPT.replace("{project_name}", "$project_name").replace("{task_description}", "$task_description").replace("{dimension_reports}", "$dimension_reports"))
-    prompt = prompt_template.substitute(
-        project_name="广东省梅州市平远县泗水镇金田村",
-        task_description="制定村庄规划",
-        dimension_reports=dimension_reports,
-    )
-
-    logger.info("Generating Layer 2 report with new format...")
-
-    try:
-        from src.core.llm_factory import create_llm
-        from langchain_core.messages import HumanMessage
-
-        llm = create_llm(max_tokens=3000, temperature=0.7)
-        response = llm.invoke([HumanMessage(content=prompt)])
-        return response.content
-    except Exception as e:
-        logger.error(f"LLM generation failed: {e}")
-        return f"[LLM Error: {e}]\n\nPrompt used:\n{prompt[:500]}..."
+    logger.info("Layer 2 uses per-dimension prompts, returning simulated report for format test...")
+    return f"# 广东省梅州市平远县泗水镇金田村 规划思路\n\n{dimension_reports}"
 
 
 def generate_layer3_report(raw_data: str) -> str:

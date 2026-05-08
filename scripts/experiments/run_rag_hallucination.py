@@ -513,7 +513,7 @@ async def generate_dimension_with_rag(
     """
     from src.config import get_dimension_config, DIMENSIONS_METADATA
     from src.planners.generic_planner import GenericPlannerFactory
-    from src.rag.core.tools import search_knowledge
+    from src.tools.builtin.knowledge_search import search_knowledge
 
     logger.info(f"[Generate] {dimension_key} with RAG={rag_enabled}")
 

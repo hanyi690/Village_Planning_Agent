@@ -99,7 +99,7 @@ EMBEDDING_PROVIDER=aliyun
 
 ### 3. 检索示例
 ```python
-from src.rag.core.tools import search_knowledge
+from src.tools.builtin.knowledge_search import search_knowledge
 
 # 基础检索
 result = search_knowledge("城乡规划法", top_k=5)

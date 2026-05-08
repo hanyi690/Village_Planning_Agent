@@ -155,7 +155,20 @@
       "Bash(mkdir:*)",
       "Bash(./tools/dwg2SVG.exe \"docs/references/村庄规划总图/金田村村庄规划工程文件/3.村庄建设项目布局规划图/03金田村建设项目布局规划图.dwg\" docs/gis/jintian_dxf/output.svg 2>&1)",
       "Bash(./tools/dwg2SVG.exe \"docs/references/村庄规划总图/金田村村庄规划工程文件/3.村庄建设项目布局规划图/03金田村建设项目布局规划图.dwg\" 2>/dev/null > docs/gis/jintian_dxf/project_layout_clean.svg && tail -5 docs/gis/jintian_dxf/project_layout_clean.svg)",
-      "Bash(git fetch:*)"
+      "Bash(git fetch:*)",
+      "Bash(ssh:*)",
+      "Bash(sshpass:*)",
+      "Bash(sqlite3:*)",
+      "Bash(\"C:/Program Files/GitHub CLI/gh.exe\" auth status 2>&1 || \"C:/Program Files/gh/bin/gh.exe\" auth status 2>&1 || cmd.exe /c \"gh auth status\" 2>&1)",
+      "Bash(pytest:*)",
+      "Bash(PYTHONPATH=. pytest tests/ -v 2>&1)",
+      "Bash(PYTHONPATH=. python -c \"\nfrom src.orchestration.main_graph import create_unified_planning_graph\nfrom backend.services.checkpoint_service import CheckpointService\nfrom backend.services.review_service import ReviewService\nfrom backend.services.planning_runtime_service import PlanningRuntimeService\nfrom backend.api.routes import router\nfrom src.utils.summary_generator import SummaryGenerator\nprint\\('All imports successful'\\)\n\" 2>&1 | tail -5)",
+      "Bash(PYTHONPATH=. python -c \"\nfrom src.orchestration.main_graph import create_unified_planning_graph, run_unified_planning_async\nfrom src.orchestration.routing import route_by_phase, check_phase_completion\nprint\\('All imports OK'\\)\n\" 2>&1 | tail -3)",
+      "Bash(PYTHONPATH=. python -c \"from src.planners.pure_functions import validate_layer_state, build_error_result, format_detailed_plans; print\\('pure_functions import OK'\\)\" 2>&1)"
     ]
-  }
+  },
+  "enabledPlugins": {
+    "claude-mem@thedotmack": true
+  },
+  "permissionMode": "bypassPermissions"
 }

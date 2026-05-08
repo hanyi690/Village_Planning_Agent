@@ -24,7 +24,7 @@ from dataclasses import dataclass, asdict
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from src.rag.core.tools import (
+from src.tools.builtin.knowledge_search import (
     search_knowledge,
     list_available_documents,
     get_document_overview,
