@@ -5,8 +5,8 @@
  * Individual message type renderers
  */
 
-import { Message, ProgressMessage, DimensionReportMessage } from '@/types';
-import { isProgressMessage, isLayerCompletedMessage, isDimensionReportMessage } from '@/types';
+import { Message, ProgressMessage, DimensionReportMessage } from '../../types';
+import { isProgressMessage, isLayerCompletedMessage, isDimensionReportMessage } from '../../types';
 import StreamingText from './StreamingText';
 import LayerReportMessage from './LayerReportMessage';
 import MarkdownRenderer from '@/components/MarkdownRenderer';

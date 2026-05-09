@@ -19,8 +19,8 @@ import {
   faTrash,
   faInfoCircle,
 } from '@fortawesome/free-solid-svg-icons';
-import DataUpload, { type UploadResult } from '@/components/gis/DataUpload';
-import { usePlanningStore } from '@/stores';
+import DataUpload, { type UploadResult } from './DataUpload';
+import { usePlanningStore } from '../../store';
 import type { FeatureCollection, Geometry, GeoJsonProperties } from 'geojson';
 
 // 数据类型标签颜色映射

@@ -23,8 +23,8 @@ from datetime import datetime
 from threading import Lock, RLock
 from typing import Any, Dict, List, Optional, Set
 
-from app.core.sse_events import SSEEventType
-from app.core.config import SSE_QUEUE_SIZE, SSE_QUEUE_WAIT_TIMEOUT
+from app.core.events import SSEEventType
+from app.core.settings import SSE_QUEUE_SIZE, SSE_QUEUE_WAIT_TIMEOUT
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,8 @@
 # GIS 数据系统架构
 
+> **更新日期**: 2026-05-08
+> **版本**: v2.0 (重组后架构)
+
 本文档详细说明 GIS 数据获取、上传解析、坐标系统、瓦片服务和前端可视化的完整链路。
 
 ## 目录
@@ -562,7 +565,7 @@ interface GISLayerConfig {
 ### 数据提取函数
 
 ```python
-# src/orchestration/nodes/dimension_node.py
+# backend/app/agent/nodes/analysis.py
 
 def _extract_gis_data_for_sse(gis_tool_result: NormalizedToolResult) -> Optional[Dict]:
     """从 GIS 工具结果提取 SSE 事件所需的 GIS 数据"""
@@ -647,17 +650,17 @@ python scripts/debug_full_gis_chain.py
 
 | 功能 | 后端路径 | 前端路径 |
 |------|----------|----------|
-| GIS 数据解析 | `src/tools/gis/data_parser.py` | - |
-| GIS 数据管理 | `src/tools/gis/data_manager.py` | - |
+| GIS 数据解析 | `backend/app/modules/gis/parser.py` | - |
+| GIS 数据管理 | `backend/app/modules/gis/manager.py` | - |
 | GIS 上传 API | `backend/api/gis_upload.py` | - |
 | GIS 测试 API | `backend/api/gis_test.py` | - |
-| GIS 工具包装 | `src/tools/core/gis_tool_wrappers.py` | - |
-| 边界兜底机制 | `src/tools/core/boundary_fallback.py` | - |
-| 共享 GIS 上下文 | `src/orchestration/shared_gis_context.py` | - |
-| WFS 数据获取 | `src/tools/core/gis_data_fetcher.py` | - |
-| POI 数据 | `src/tools/geocoding/poi_provider.py` | - |
-| 高德 API | `src/tools/geocoding/amap/provider.py` | - |
-| 天地图 API | `src/tools/geocoding/tianditu/provider.py` | - |
+| GIS 工具包装 | `backend/app/modules/gis/tools.py` | - |
+| 边界兜底机制 | `backend/app/modules/gis/fallback.py` | - |
+| 共享 GIS 上下文 | `backend/app/agent/gis_context.py` | - |
+| WFS 数据获取 | `backend/app/modules/gis/fetcher.py` | - |
+| POI 数据 | `backend/app/modules/gis/providers/poi.py` | - |
+| 高德 API | `backend/app/modules/gis/providers/amap/provider.py` | - |
+| 天地图 API | `backend/app/modules/gis/providers/tianditu/provider.py` | - |
 | 路由注册 | `backend/api/routes.py` | - |
 | 地图渲染 | - | `frontend/src/components/gis/MapView.tsx` |
 | 数据上传 | - | `frontend/src/components/gis/DataUpload.tsx` |

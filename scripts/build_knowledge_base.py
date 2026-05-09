@@ -21,16 +21,16 @@ from typing import Dict
 # 确保 src 在 Python 路径中
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.core.settings import (
+from backend.app.core.settings import (
     CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_COLLECTION_NAME,
     CHROMA_PERSIST_DIR, DATA_DIR, EMBEDDING_PROVIDER,
     EMBEDDING_MODEL_NAME, EMBEDDING_DEVICE, EMBEDDING_DIMENSIONS,
     DASHSCOPE_API_KEY, ALIYUN_EMBEDDING_BASE_URL, ALIYUN_EMBEDDING_MODEL,
     DEFAULT_PROVIDER,
 )
-from src.utils.logger import get_logger
-from src.utils.text_splitter import SlicingStrategyFactory
-from src.utils.context_manager import DocumentContextManager
+from backend.app.utils.logger import get_logger
+from backend.app.utils.text_splitter import SlicingStrategyFactory
+from backend.app.utils.context_manager import DocumentContextManager
 
 logger = get_logger(__name__)
 
@@ -89,7 +89,7 @@ def load_documents():
         return []
 
     try:
-        from src.utils.document_loader import load_documents_from_directory as load_knowledge_base
+        from backend.app.utils.document_loader import load_documents_from_directory as load_knowledge_base
         documents = load_knowledge_base(DATA_DIR)
         return documents
     except ImportError as e:
@@ -162,7 +162,7 @@ def slice_documents(documents):
 def _init_local_embedding():
     """初始化本地 HuggingFace Embedding 模型"""
     try:
-        from src.core.settings import setup_huggingface_env
+        from backend.app.core.settings import setup_huggingface_env
         setup_huggingface_env()
     except ImportError:
         pass
@@ -297,7 +297,7 @@ async def inject_metadata(splits, use_semantic: bool = False):
     print(f"   切片数: {len(splits)}")
 
     try:
-        from src.services.metadata_injector import MetadataInjector
+        from backend.app.services.metadata_injector import MetadataInjector
         injector = MetadataInjector(use_semantic=use_semantic)
 
         if use_semantic:
@@ -370,7 +370,7 @@ def main(use_semantic: bool = False, skip_confirm: bool = False, skip_summary: b
     print(f"   ⏱️  切片耗时: {timing.slicing:.2f}秒")
 
     try:
-        from src.utils.slice_inspector import SliceInspector
+        from backend.app.utils.slice_inspector import SliceInspector
         inspector = SliceInspector(splits)
         inspector.print_summary()
         inspector.print_issues(max_issues=10)
@@ -402,7 +402,7 @@ def main(use_semantic: bool = False, skip_confirm: bool = False, skip_summary: b
     if not skip_summary:
         print("\n📝 正在生成文档摘要...")
         try:
-            from src.services.document_summarizer import DocumentSummarizer
+            from backend.app.services.document_summarizer import DocumentSummarizer
             summarizer = DocumentSummarizer(provider=DEFAULT_PROVIDER)
 
             for doc in documents:

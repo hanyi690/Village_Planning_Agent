@@ -1,5 +1,8 @@
 # RAG知识库架构
 
+> **更新日期**: 2026-05-08
+> **版本**: v2.0 (重组后架构)
+
 本文档详细说明RAG系统的架构设计。
 
 ## 目录
@@ -15,15 +18,15 @@
 ## RAG架构分层
 
 ```
-应用层: GenericPlanner.build_prompt() -> get_cached_knowledge()
+应用层: Agent Nodes() -> get_cached_knowledge()
     ↓
-检索层: query_builder.py -> search_knowledge()
+检索层: backend/app/modules/rag/service.py -> search_knowledge()
     ↓
-存储层: vector_store.py -> ChromaDB Collection
+存储层: backend/app/modules/rag/vector_store.py -> ChromaDB
     ↓
-切片层: slicer.py -> RecursiveCharacterTextSplitter
+切片层: backend/app/utils/text_splitter.py -> RecursiveCharacterTextSplitter
     ↓
-数据层: data/knowledge_base/regulations/, cases/, standards/
+数据层: data/knowledge_base/
 ```
 
 ---
@@ -33,7 +36,7 @@
 ### KnowledgeBaseManager
 
 ```python
-# src/rag/core/kb_manager.py
+# backend/app/modules/rag/service.py
 class KnowledgeBaseManager:
     """知识库增量管理器"""
 
@@ -75,7 +78,7 @@ def infer_doc_type(filename: str, content: str = "") -> str:
 ### ChromaDB配置
 
 ```python
-# src/rag/config.py
+# backend/app/core/settings.py
 CHROMA_COLLECTION_NAME = "village_planning"
 CHROMA_PERSIST_DIR = "data/chroma_db"
 CHUNK_SIZE = 500
@@ -89,7 +92,7 @@ CHUNK_OVERLAP = 50
 ### QueryBuilder
 
 ```python
-# src/rag/core/query_builder.py
+# backend/app/modules/rag/service.py
 class QueryBuilder:
     """查询构建器"""
     def build_query(self, dimension_key: str, layer: int) -> str:
@@ -136,10 +139,10 @@ data/knowledge_base/
 
 | 功能 | 文件路径 |
 |------|----------|
-| 知识库管理 | `src/rag/core/kb_manager.py` |
-| 向量存储 | `src/rag/core/vector_store.py` |
-| 查询构建 | `src/rag/core/query_builder.py` |
-| 切片器 | `src/rag/slicing/slicer.py` |
+| 知识库管理 | `backend/app/modules/rag/service.py` |
+| 向量存储 | `backend/app/modules/rag/vector_store.py` |
+| 查询构建 | `backend/app/modules/rag/service.py` |
+| 切片器 | `backend/app/utils/text_splitter.py` |
 
 完整文件索引：[file-index.md](./file-index.md)
 

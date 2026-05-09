@@ -11,11 +11,11 @@ import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faFileAlt, faCopy, faCheck, faImage } from '@fortawesome/free-solid-svg-icons';
-import type { FileMessage } from '@/types';
+import type { FileMessage } from '../../types';
 import { DEFAULT_IMAGE_FORMAT } from '@/lib/constants';
 import { formatFileSize } from '@/lib/utils';
-import MarkdownRenderer from '@/components/MarkdownRenderer';
-import ImagePreview from '@/components/ui/ImagePreview';
+import MarkdownRenderer from '../ui/MarkdownRenderer';
+import ImagePreview from '../ui/ImagePreview';
 
 interface FileViewerSidebarProps {
   file: FileMessage | null;

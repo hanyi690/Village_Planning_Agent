@@ -12,10 +12,10 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from backend.schemas import TaskStatus, SessionStatusResponse
-from app.services.sse_manager import sse_manager
-from app.services.checkpoint_service import checkpoint_service
-from app.database.operations_async import (
+from app.api.schemas import TaskStatus, SessionStatusResponse
+from app.services.sse import sse_manager
+from app.services.checkpoint import checkpoint_service
+from app.database.operations import (
     create_planning_session_async,
     get_planning_session_async,
     update_planning_session_async,
@@ -181,7 +181,7 @@ class SessionService:
         # 4. Delete LangGraph checkpoint
         if project_name:
             try:
-                from app.agent.main_graph import create_unified_planning_graph
+                from app.agent.graph import create_unified_planning_graph
                 from app.database.engine import get_global_checkpointer
 
                 checkpointer = await get_global_checkpointer()

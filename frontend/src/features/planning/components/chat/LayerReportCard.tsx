@@ -357,7 +357,7 @@ export default function LayerReportCard({
               key={dimensionKey || index}
               name={dimension.name}
               content={dimension.content}
-              icon={dimension.icon}
+              icon={dimension.icon || 'fa-file-alt'}
               subsections={dimension.subsections}
               gisData={gisData}
               knowledgeSources={knowledgeSources}

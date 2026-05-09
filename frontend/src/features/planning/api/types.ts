@@ -113,33 +113,51 @@ export interface LayerContent {
  * SSE Event type union for better type safety
  */
 export type PlanningSSEEventType =
-  | 'layer_started'
-  | 'dimension_start'
-  | 'dimension_error'
-  | 'layer_completed'
-  | 'checkpoint_saved'
-  | 'pause'
-  | 'progress'
-  | 'completed'
-  | 'error'
-  | 'resumed'
-  | 'dimension_delta'
-  | 'dimension_complete'
-  | 'dimension_revised'
-  | 'complete'
-  | 'text_chunk'
-  | 'thinking_start'
-  | 'thinking'
-  | 'thinking_end'
-  | 'review_request'
-  | 'content_delta'
-  | 'stream_paused'
-  | 'connected'
+  // Tool Events (NEW System)
+  | 'tool_started'
+  | 'tool_status'
+  // Tool Events (Legacy - kept for compatibility)
   | 'tool_call'
   | 'tool_progress'
   | 'tool_result'
+  // Layer & Dimension Events
+  | 'layer_started'
+  | 'layer_completed'
+  | 'dimension_start'
+  | 'dimension_complete'
+  | 'dimension_error'
+  | 'dimension_delta'
+  | 'dimension_revised'
+  | 'dimension_reset'
+  | 'dimension_reset_complete'
+  // Progress Events
+  | 'progress'
+  | 'checkpoint_saved'
+  | 'pause'
+  | 'resumed'
+  | 'completed'
+  | 'complete'
+  | 'error'
+  // Streaming Events
+  | 'text_chunk'
+  | 'content_delta'
   | 'ai_response_delta'
-  | 'ai_response_complete';
+  | 'ai_response_complete'
+  | 'thinking_start'
+  | 'thinking'
+  | 'thinking_end'
+  | 'stream_paused'
+  // Review Events
+  | 'review_request'
+  // RAG & Cascade Events (Demo System)
+  | 'rag_query'
+  | 'rag_result'
+  | 'cascade_impact'
+  | 'cascade_complete'
+  // State Events
+  | 'state_sync'
+  | 'layer_paused'
+  | 'connected';
 
 /**
  * SSE Event 数据基础类型

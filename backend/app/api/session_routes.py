@@ -23,15 +23,14 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from backend.schemas import TaskStatus, ImageData
-from app.services.planning_runtime_service import PlanningRuntimeService
-from app.services.sse_manager import sse_manager
-from app.services.checkpoint_service import checkpoint_service
-from app.services.rate_limiter import rate_limiter, RateLimiter
+from app.api.schemas import TaskStatus, ImageData
+from app.services.runtime import PlanningRuntimeService
+from app.services.sse import sse_manager
+from app.services.checkpoint import checkpoint_service
 from app.agent.state import get_layer_dimensions, get_layer_name, state_to_ui_status
 
 logger = logging.getLogger(__name__)
@@ -64,15 +63,10 @@ class SessionCreateResponse(BaseModel):
     status: str = "running"
 
 
-def get_rate_limiter() -> RateLimiter:
-    return rate_limiter
-
-
 @router.post("/api/sessions", response_model=SessionCreateResponse)
 async def create_session(
     request: SessionCreateRequest,
     background_tasks: BackgroundTasks,
-    limiter: RateLimiter = Depends(get_rate_limiter)
 ):
     """创建新规划会话"""
     if not request.project_name.strip():
@@ -81,14 +75,7 @@ async def create_session(
     if len(request.village_data.strip()) < 10:
         raise HTTPException(status_code=400, detail="村庄数据不能为空或过短")
 
-    allowed, message = limiter.check_rate_limit(project_name=request.project_name, session_id="")
-    if not allowed:
-        retry_after = limiter.get_retry_after(request.project_name)
-        raise HTTPException(status_code=429, detail=message,
-            headers={"Retry-After": str(retry_after)} if retry_after else {})
-
     session_id = str(uuid4())
-    limiter.mark_task_started(request.project_name)
 
     initial_state = PlanningRuntimeService.build_initial_state(
         project_name=request.project_name,
@@ -124,7 +111,7 @@ async def create_session(
 async def stream_events(session_id: str):
     """SSE 事件流端点"""
     if not sse_manager.session_exists(session_id):
-        from app.database.operations_async import get_planning_session_async
+        from app.database.operations import get_planning_session_async
         rebuilt = await checkpoint_service.rebuild_session_from_db(session_id, get_planning_session_async, sse_manager)
         if not rebuilt:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
@@ -250,7 +237,7 @@ async def get_dimension_report(session_id: str, dim_key: str):
 @router.delete("/api/sessions/{session_id}")
 async def delete_session(session_id: str):
     """删除会话"""
-    from app.services.session_service import session_service
+    from app.services.session import session_service
     result = await session_service.delete_session(session_id)
     return {"message": f"Session {session_id} deleted", "deleted_checkpoints": result.get("checkpoint", False)}
 
@@ -258,7 +245,7 @@ async def delete_session(session_id: str):
 @router.get("/api/sessions/{session_id}/status")
 async def get_session_status(session_id: str):
     """获取会话状态"""
-    from app.database.operations_async import get_planning_session_async
+    from app.database.operations import get_planning_session_async
     db_session = await get_planning_session_async(session_id)
     if not db_session:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")

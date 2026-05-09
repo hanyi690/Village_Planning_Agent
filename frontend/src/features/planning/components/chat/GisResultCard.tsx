@@ -5,10 +5,10 @@
  */
 
 import React from 'react';
-import type { GisResultMessage } from '@/types';
+import type { GisResultMessage } from '../../types';
 import { parseTimestamp } from '@/lib/utils';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
-import { MapView } from '@/components/gis';
+import { MapView } from '../gis';
 
 interface GisResultCardProps {
   message: GisResultMessage;

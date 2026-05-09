@@ -12,8 +12,8 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { planningApi } from '@/lib/api';
-import { usePlanningStore } from '@/stores/planningStore';
+import { planningApi } from '../api';
+import { usePlanningStore } from '../store/planningStore';
 import type {
   Message,
   DimensionReportMessage,
@@ -21,7 +21,7 @@ import type {
   FileMessage,
   ProgressMessage,
   ToolStatusMessage,
-} from '@/types';
+} from '../types';
 
 interface UseMessagePersistenceOptions {
   enabled?: boolean;

@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.messages import AIMessage
 
 from ...config import get_dimension_config, get_dimension_layer, list_dimensions
-from ...core.llm_factory import create_llm
+from ...core.llm import create_llm
 from ...core.settings import LLM_MODEL, MAX_TOKENS
 from app.utils.logger import get_logger
 
@@ -65,7 +65,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     from ...services.gis_service import GisService
     from ...services.rag_service import RagService
-    from ...services.sse_manager import SSEManager
+    from ...services.sse import SSEManager
     from ...services.report_store import ReportStore
 
     dim_key = state.get("dimension_key")

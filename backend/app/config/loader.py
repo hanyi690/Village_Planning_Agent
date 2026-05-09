@@ -35,13 +35,18 @@ class PlanningConfig(BaseModel):
     phases: List[PhaseConfig]
 
 
-def load_config(path: str = "backend/app/config/phases.yaml") -> PlanningConfig:
+def load_config(path: str = None) -> PlanningConfig:
     """加载 YAML 配置文件"""
-    config_path = Path(path)
-    if not config_path.exists():
+    if path is None:
+        # 使用相对于此文件的路径（loader.py 所在目录）
+        path = Path(__file__).parent / "phases.yaml"
+    else:
+        path = Path(path)
+
+    if not path.exists():
         raise FileNotFoundError(f"Configuration file not found: {path}")
 
-    with open(config_path, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         raw_data = yaml.safe_load(f)
 
     return PlanningConfig(**raw_data)

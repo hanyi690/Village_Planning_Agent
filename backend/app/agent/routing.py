@@ -17,7 +17,7 @@ from langchain_core.messages import AIMessage
 from .state import PlanningPhase, get_layer_dimensions, _phase_to_layer
 from ..config import get_dimension_layer
 from ..config.dependency import get_impact_tree_compat
-from ..constants.tools import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL
+from ..tools.constants import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL
 from ..utils.logger import get_logger
 from ..utils.sse_publisher import SSEPublisher
 

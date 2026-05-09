@@ -12,7 +12,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn, formatWordCount } from '@/lib/utils';
 import { getDimensionConfigsByLayer, getDimensionsByLayer } from '@/config/dimensions';
-import type { DimensionProgressItem, DimensionStatus } from '@/types';
+import type { DimensionProgressItem, DimensionStatus } from '../../types';
 
 interface LayerProgressSnapshot {
   completedAt: string;

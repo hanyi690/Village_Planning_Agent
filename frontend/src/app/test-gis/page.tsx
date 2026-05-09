@@ -7,7 +7,7 @@
  */
 
 import { useState, useCallback, useMemo } from 'react';
-import MapView from '@/components/gis/MapView';
+import MapView from '@/features/planning/components/gis/MapView';
 import type { GISLayerConfig } from '@/types/message/message-types';
 import { JINTIAN_CENTER } from './constants/jintian-planning';
 import { useTestLayers } from './hooks/useTestLayers';

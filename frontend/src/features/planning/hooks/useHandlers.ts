@@ -10,12 +10,12 @@
  */
 
 import { useRef, useCallback } from 'react';
-import { usePlanningStore } from '@/stores/planningStore';
-import { planningApi } from '@/lib/api';
+import { usePlanningStore } from '../store/planningStore';
+import { planningApi } from '../api';
 import { createBaseMessage } from '@/lib/utils';
 import { getDimensionName, getDimensionsByLayer } from '@/config/dimensions';
 import { MIN_SSE_DATA_CHARS, LAYER_VALUE_MAP } from '@/lib/constants';
-import type { Message, ProgressMessage, LayerCompletedMessage } from '@/types';
+import type { Message, ProgressMessage, LayerCompletedMessage } from '../types';
 
 // ============================================
 // Types

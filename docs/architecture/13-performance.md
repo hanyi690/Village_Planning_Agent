@@ -22,7 +22,7 @@ async with semaphore:
 | 缓存 | 内容 | 位置 |
 |------|------|------|
 | KnowledgeCache | RAG预加载结果 | state.config.knowledge_cache |
-| VectorCache | 向量检索结果 | src/rag/core/cache.py |
+| VectorCache | 向量检索结果 | backend/app/modules/rag/cache.py |
 | CheckpointCache | 状态快照 | LangGraph Checkpointer |
 
 ---

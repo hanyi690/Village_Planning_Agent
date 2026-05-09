@@ -21,10 +21,10 @@ import type {
   LayerCompletedMessage,
   DimensionReportMessage,
   KnowledgeSource,
-} from '@/types';
-import type { GisResultMessage, ToolStatusMessage } from '@/types/message/message-types';
+} from '../types';
+import type { GisResultMessage, ToolStatusMessage, GISLayerConfig } from '@/types/message/message-types';
 import type { VillageInputData } from '@/components/VillageInputForm';
-import type { VillageInfo, VillageSession, SessionStatusResponse } from '@/lib/api';
+import type { VillageInfo, VillageSession, SessionStatusResponse } from '../api';
 import { getLayerPhase, PlanningStatus, LayerPhase, AgentPhase } from '@/lib/constants';
 import {
   createBaseMessage,
@@ -69,6 +69,35 @@ interface ToolStatus {
   progress?: number;
   message?: string;
   summary?: string;
+}
+
+// ============================================
+// RAG & Cascade Types (New for Demo System)
+// ============================================
+
+/**
+ * RAG document source for dimension analysis
+ */
+interface RagDocument {
+  title: string;
+  snippet: string;
+  source?: string;
+}
+
+/**
+ * RAG sources tracked per dimension
+ */
+interface DimensionRagSource {
+  query: string;
+  documents: RagDocument[];
+}
+
+/**
+ * Cascade repair chain visualization
+ */
+interface CascadeChain {
+  trigger: string;
+  impacted: string[];
 }
 
 // Internal event type for store handling
@@ -118,6 +147,22 @@ export interface PlanningState {
     layer3?: LayerProgressSnapshot;
   };
 
+  // ============================================
+  // NEW: RAG & Cascade Tracking (Demo System)
+  // ============================================
+  /** RAG sources per dimension key (e.g., "1_resource_endowment") */
+  dimensionRagSources: Record<string, DimensionRagSource>;
+  /** Current cascade repair chain being displayed */
+  cascadeChain: CascadeChain | null;
+  /** Version count per dimension (incremented on revision) */
+  dimensionVersions: Record<string, number>;
+  /** Streaming text content per dimension (temporary) */
+  streamingContent: Record<string, string>;
+  /** Dimensions currently being reset (cascade repair) */
+  resettingDimensions: string[];
+  /** Simplified running tool names (replaces full toolStatuses) */
+  runningTools: string[];
+
   // UI State
   viewerVisible: boolean;
   referencedSection?: string;
@@ -141,8 +186,11 @@ export interface PlanningState {
   loadingContent: boolean;
   deletingSessionId: string | null;
 
-  // Tools
+  // Tools (kept for backward compatibility, but runningTools is preferred)
   toolStatuses: Record<string, ToolStatus>;
+
+  // GIS Layers (SSE-driven, no REST API needed)
+  gisLayers: Record<string, GISLayerConfig[]>;
 }
 
 // ============================================
@@ -245,6 +293,14 @@ function createInitialState(conversationId: string): PlanningState {
     executingDimensions: [],
     layerDimensionCount: {},
     layerProgressHistory: {},
+    runningTools: [],
+    resettingDimensions: [],
+
+    // NEW: RAG & Cascade Tracking
+    dimensionRagSources: {},
+    cascadeChain: null,
+    dimensionVersions: {},
+    streamingContent: {},
 
     // UI State
     viewerVisible: false,
@@ -271,6 +327,8 @@ function createInitialState(conversationId: string): PlanningState {
 
     // Tools
     toolStatuses: {},
+    // GIS Layers (SSE-driven)
+    gisLayers: {},
   };
 }
 
@@ -305,6 +363,27 @@ export interface PlanningActions {
 
   // Backend sync
   syncBackendState: (backendData: Partial<SessionStatusResponse> & { version?: number }) => void;
+  hydrateFromStateSync: (data: Record<string, unknown>) => void;
+
+  // ============================================
+  // NEW: RAG & Cascade Actions
+  // ============================================
+  setRagQuery: (dimKey: string, query: string) => void;
+  setRagDocuments: (dimKey: string, documents: RagDocument[]) => void;
+  clearRagSources: (dimKey: string) => void;
+  showCascadeChain: (trigger: string, impacted: string[]) => void;
+  clearCascadeChain: () => void;
+  incrementDimensionVersion: (dimKey: string) => void;
+  setStreamingContent: (dimKey: string, content: string) => void;
+  clearStreamingContent: (dimKey: string) => void;
+  markDimensionResetting: (dimKey: string) => void;
+  finishDimensionResetting: (dimKey: string) => void;
+
+  // ============================================
+  // NEW: Simplified Tool Tracking
+  // ============================================
+  addRunningTool: (toolName: string) => void;
+  removeRunningTool: (toolName: string) => void;
 
   // UI State
   setViewerVisible: (visible: boolean) => void;
@@ -326,7 +405,7 @@ export interface PlanningActions {
   setCheckpoints: (checkpoints: Checkpoint[]) => void;
   setSelectedCheckpoint: (checkpointId: string | null) => void;
 
-  // Tools
+  // Tools (legacy, prefer addRunningTool/removeRunningTool)
   setToolStatus: (toolName: string, status: ToolStatus) => void;
   clearToolStatus: (toolName: string) => void;
 
@@ -1065,6 +1144,123 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       }
       break;
     }
+    // ============================================
+    // NEW: RAG Events for Demo System
+    // ============================================
+    case 'rag_query': {
+      const ragData = data as {
+        dimension_key?: string;
+        query?: string;
+        layer?: number;
+      };
+      const dimKey = ragData.dimension_key || '';
+      if (dimKey && ragData.query) {
+        const fullKey = `${ragData.layer || 1}_${dimKey}`;
+        state.dimensionRagSources[fullKey] = {
+          query: ragData.query,
+          documents: state.dimensionRagSources[fullKey]?.documents || [],
+        };
+      }
+      break;
+    }
+    case 'rag_result': {
+      const ragData = data as {
+        dimension_key?: string;
+        documents?: Array<{ title: string; snippet: string; source?: string }>;
+        layer?: number;
+      };
+      const dimKey = ragData.dimension_key || '';
+      if (dimKey && ragData.documents) {
+        const fullKey = `${ragData.layer || 1}_${dimKey}`;
+        const existing = state.dimensionRagSources[fullKey];
+        state.dimensionRagSources[fullKey] = {
+          query: existing?.query || '',
+          documents: ragData.documents,
+        };
+      }
+      break;
+    }
+    // ============================================
+    // NEW: Cascade Events for Demo System
+    // ============================================
+    case 'cascade_impact': {
+      const cascadeData = data as {
+        trigger_dim?: string;
+        impacted_dimensions?: string[];
+      };
+      if (cascadeData.trigger_dim && cascadeData.impacted_dimensions) {
+        state.cascadeChain = {
+          trigger: cascadeData.trigger_dim,
+          impacted: cascadeData.impacted_dimensions,
+        };
+      }
+      break;
+    }
+    case 'cascade_complete': {
+      state.cascadeChain = null;
+      break;
+    }
+    // ============================================
+    // NEW: Dimension Reset Events for Demo System
+    // ============================================
+    case 'dimension_reset': {
+      const resetData = data as {
+        dimension_key?: string;
+        layer?: number;
+      };
+      const dimKey = resetData.dimension_key || '';
+      if (dimKey) {
+        const fullKey = `${resetData.layer || 1}_${dimKey}`;
+        // Add to resetting dimensions list
+        if (!state.resettingDimensions.includes(fullKey)) {
+          state.resettingDimensions.push(fullKey);
+        }
+        // Increment version count
+        state.dimensionVersions[fullKey] = (state.dimensionVersions[fullKey] || 0) + 1;
+      }
+      break;
+    }
+    case 'dimension_reset_complete': {
+      const resetData = data as {
+        dimension_key?: string;
+        layer?: number;
+      };
+      const dimKey = resetData.dimension_key || '';
+      if (dimKey) {
+        const fullKey = `${resetData.layer || 1}_${dimKey}`;
+        // Remove from resetting dimensions list
+        state.resettingDimensions = state.resettingDimensions.filter((k) => k !== fullKey);
+        // Clear streaming content
+        delete state.streamingContent[fullKey];
+      }
+      break;
+    }
+    // ============================================
+    // NEW: State Sync Event (for reconnect)
+    // ============================================
+    case 'state_sync': {
+      const syncData = data as Record<string, unknown>;
+      // Hydrate state from backend sync
+      if (syncData.phase) state.phase = syncData.phase as string;
+      if (syncData.current_wave) state.currentWave = syncData.current_wave as number;
+      if (syncData.reports) state.reports = syncData.reports as Reports;
+      if (syncData.pause_after_step !== undefined) state.pause_after_step = syncData.pause_after_step as boolean;
+      if (syncData.previous_layer !== undefined) state.previous_layer = syncData.previous_layer as number;
+      deriveUIStateInStore(state);
+      break;
+    }
+    case 'gis_layer_update': {
+      const gisUpdateData = data as {
+        layer?: number;
+        dimension_key?: string;
+        layers?: unknown[];
+      };
+      const key = `${gisUpdateData.layer}_${gisUpdateData.dimension_key}`;
+      if (gisUpdateData.layers) {
+        state.gisLayers[key] = gisUpdateData.layers as GISLayerConfig[];
+      }
+      break;
+    }
   }
 }
 
@@ -1267,6 +1463,117 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           state.selectedCheckpoint = backendData.last_checkpoint_id;
 
         deriveUIStateInStore(state);
+      }),
+
+    // ============================================
+    // NEW: hydrateFromStateSync (for SSE reconnect)
+    // ============================================
+    hydrateFromStateSync: (data) =>
+      set((state) => {
+        // Hydrate from state_sync SSE event
+        if (data.phase) state.phase = data.phase as string;
+        if (data.current_wave) state.currentWave = data.current_wave as number;
+        if (data.reports) {
+          const reportsData = data.reports as Record<string, Record<string, string>>;
+          if (reportsData.layer1) state.reports.layer1 = reportsData.layer1;
+          if (reportsData.layer2) state.reports.layer2 = reportsData.layer2;
+          if (reportsData.layer3) state.reports.layer3 = reportsData.layer3;
+        }
+        if (data.pause_after_step !== undefined) {
+          state.pause_after_step = data.pause_after_step as boolean;
+        }
+        if (data.previous_layer !== undefined) {
+          state.previous_layer = data.previous_layer as number;
+        }
+        if (data.step_mode !== undefined) {
+          state.step_mode = data.step_mode as boolean;
+        }
+        deriveUIStateInStore(state);
+      }),
+
+    // ============================================
+    // NEW: RAG Actions
+    // ============================================
+    setRagQuery: (dimKey, query) =>
+      set((state) => {
+        const existing = state.dimensionRagSources[dimKey];
+        state.dimensionRagSources[dimKey] = {
+          query,
+          documents: existing?.documents || [],
+        };
+      }),
+
+    setRagDocuments: (dimKey, documents) =>
+      set((state) => {
+        const existing = state.dimensionRagSources[dimKey];
+        state.dimensionRagSources[dimKey] = {
+          query: existing?.query || '',
+          documents,
+        };
+      }),
+
+    clearRagSources: (dimKey) =>
+      set((state) => {
+        delete state.dimensionRagSources[dimKey];
+      }),
+
+    // ============================================
+    // NEW: Cascade Actions
+    // ============================================
+    showCascadeChain: (trigger, impacted) =>
+      set((state) => {
+        state.cascadeChain = { trigger, impacted };
+      }),
+
+    clearCascadeChain: () =>
+      set((state) => {
+        state.cascadeChain = null;
+      }),
+
+    // ============================================
+    // NEW: Dimension Version & Streaming Actions
+    // ============================================
+    incrementDimensionVersion: (dimKey) =>
+      set((state) => {
+        state.dimensionVersions[dimKey] = (state.dimensionVersions[dimKey] || 0) + 1;
+      }),
+
+    setStreamingContent: (dimKey, content) =>
+      set((state) => {
+        state.streamingContent[dimKey] = content;
+      }),
+
+    clearStreamingContent: (dimKey) =>
+      set((state) => {
+        delete state.streamingContent[dimKey];
+      }),
+
+    markDimensionResetting: (dimKey) =>
+      set((state) => {
+        if (!state.resettingDimensions.includes(dimKey)) {
+          state.resettingDimensions.push(dimKey);
+        }
+      }),
+
+    finishDimensionResetting: (dimKey) =>
+      set((state) => {
+        state.resettingDimensions = state.resettingDimensions.filter((k) => k !== dimKey);
+        delete state.streamingContent[dimKey];
+      }),
+
+    // ============================================
+    // NEW: Simplified Tool Actions
+    // ============================================
+    addRunningTool: (toolName) =>
+      set((state) => {
+        if (!state.runningTools.includes(toolName)) {
+          state.runningTools.push(toolName);
+        }
+      }),
+
+    removeRunningTool: (toolName) =>
+      set((state) => {
+        state.runningTools = state.runningTools.filter((t) => t !== toolName);
       }),
 
     // UI State

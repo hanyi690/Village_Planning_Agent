@@ -77,10 +77,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy application code
-COPY backend/ ./backend/
-COPY src/ ./src/
-COPY requirements.txt .
+# Copy application code (unified backend/app structure)
+COPY backend/app/ ./app/
+COPY backend/requirements.txt .
 
 # Create non-root user and directories
 RUN useradd --create-home --shell /bin/bash appuser && \
@@ -120,5 +119,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the application
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the application (unified backend/app structure)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

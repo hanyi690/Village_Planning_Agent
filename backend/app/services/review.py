@@ -14,10 +14,10 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
-from backend.schemas import TaskStatus
-from app.services.sse_manager import sse_manager
-from app.services.checkpoint_service import checkpoint_service
-from app.database.operations_async import (
+from app.api.schemas import TaskStatus
+from app.services.sse import sse_manager
+from app.services.checkpoint import checkpoint_service
+from app.database.operations import (
     update_planning_session_async,
     get_planning_session_async,
 )

@@ -11,8 +11,8 @@
 
 import { useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { usePlanningStore } from '@/stores/planningStore';
-import { planningApi } from '@/lib/api';
+import { usePlanningStore } from '../store/planningStore';
+import { planningApi } from '../api';
 import { logger } from '@/lib/logger';
 import { transformBackendMessages } from '@/lib/utils/message-transform';
 

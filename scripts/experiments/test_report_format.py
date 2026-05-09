@@ -30,7 +30,7 @@ from scripts.experiments.config import (
     load_status_report,
     JINTIAN_VILLAGE_DATA,
 )
-from src.utils.report_format_spec import (
+from backend.app.utils.report_format_spec import (
     LAYER_FORMATS,
     MISSING_DATA_ALTERNATIVES,
     FORBIDDEN_MISSING_PHRASES,

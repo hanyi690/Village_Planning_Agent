@@ -23,7 +23,7 @@ from langchain_core.tools import Tool, tool
 
 from ..registry import ToolRegistry
 from app.utils.logger import get_logger
-from ...utils.context_manager import get_context_manager
+from ...services.modules.rag.context import get_context_manager
 from ...core.settings import DEFAULT_TOP_K
 
 logger = get_logger(__name__)

@@ -2,7 +2,8 @@
 
 本文档详细说明工具注册机制和Tool-Dimension绑定。
 
-## 目录
+> **更新日期**: 2026-05-08
+> **版本**: v2.0 (重组后架构)
 
 - [ToolRegistry注册机制](#toolregistry注册机制)
 - [工具分类](#工具分类)
@@ -16,7 +17,7 @@
 ### 类设计
 
 ```python
-# src/tools/registry.py
+# backend/app/tools/registry.py
 class ToolRegistry:
     """工具注册中心"""
 
@@ -92,7 +93,7 @@ class ToolMetadata:
 ### 配置示例
 
 ```python
-# src/config/dimension_metadata.py
+# backend/app/config/phases.yaml
 "socio_economic": {
     "key": "socio_economic",
     "name": "社会经济分析",
@@ -109,7 +110,7 @@ class ToolMetadata:
 ### GenericPlanner中的工具钩子
 
 ```python
-# src/planners/generic_planner.py
+# backend/app/agent/nodes/analysis.py
 class GenericPlanner:
     def _execute_tool_hook(self, state: dict) -> str:
         """执行配置的tool字段绑定的工具"""
@@ -150,10 +151,10 @@ LLM调用
 
 | 功能 | 文件路径 |
 |------|----------|
-| 工具注册 | `src/tools/registry.py` |
-| 内置工具 | `src/tools/builtin/__init__.py` |
-| 人口预测 | `src/tools/builtin/population.py` |
-| 工具绑定配置 | `src/config/dimension_metadata.py` |
+| 工具注册 | `backend/app/tools/registry.py` |
+| 内置工具 | `backend/app/tools/protocol.py` |
+| 人口预测 | `backend/app/tools/analytics/population.py` |
+| 工具绑定配置 | `backend/app/config/phases.yaml` |
 
 完整文件索引：[file-index.md](./file-index.md)
 

@@ -23,7 +23,7 @@ from datetime import datetime
 
 sys.path.append(str(Path(__file__).parent.parent))
 
-from src.core.settings import (
+from backend.app.core.settings import (
     CHROMA_PERSIST_DIR,
     OSS_ACCESS_KEY_ID,
     OSS_ACCESS_KEY_SECRET,
@@ -237,7 +237,7 @@ def verify_vector_store(vector_dir: Path):
     print(f"\n   进行检索测试...")
     try:
         from langchain_chroma import Chroma
-        from src.services.vector_store import get_vector_cache
+        from backend.app.services.vector_store import get_vector_cache
 
         embedding_model = get_vector_cache().get_embedding_model()
         vectorstore = Chroma(

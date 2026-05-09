@@ -9,7 +9,9 @@
 export {
   usePlanningStore,
   PlanningProvider,
+  usePlanningActions,
   type PlanningState,
+  type PlanningActions,
 } from './store';
 
 // Hooks
@@ -43,6 +45,17 @@ export {
   useStreamingAccumulator,
   useMessagePersistence,
   useSessionRestore,
+  // NEW: RAG & Cascade Selectors
+  useDimensionRagSources,
+  useAllRagSources,
+  useCascadeChain,
+  useDimensionVersions,
+  useDimensionVersion,
+  useStreamingContent,
+  useResettingDimensions,
+  useIsDimensionResetting,
+  useRunningTools,
+  useIsToolRunning,
 } from './hooks';
 
 // Types

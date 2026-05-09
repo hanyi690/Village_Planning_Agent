@@ -79,35 +79,9 @@ export function transformBackendMessages(messages: unknown[]): Message[] {
           taskId: msgMeta.taskId as string | undefined,
         };
 
-      case 'tool_call':
-        return {
-          ...baseMsg,
-          type: 'tool_call' as const,
-          toolName: (msgMeta.toolName as string) || '',
-          toolDisplayName: (msgMeta.toolDisplayName as string) || '',
-          description: (msgMeta.description as string) || '',
-          estimatedTime: msgMeta.estimatedTime as number | undefined,
-          stage: msgMeta.stage as string | undefined,
-        };
-
-      case 'tool_progress':
-        return {
-          ...baseMsg,
-          type: 'tool_progress' as const,
-          toolName: (msgMeta.toolName as string) || '',
-          stage: (msgMeta.stage as string) || '',
-          progress: (msgMeta.progress as number) || 0,
-          message: (msgMeta.message as string) || '',
-        };
-
-      case 'tool_result':
-        return {
-          ...baseMsg,
-          type: 'tool_result' as const,
-          toolName: (msgMeta.toolName as string) || '',
-          status: (msgMeta.status === 'error' ? 'error' : 'success') as 'error' | 'success',
-          summary: (msgMeta.summary as string) || '',
-        };
+      // Note: tool_call/tool_progress/tool_result cases removed
+      // These types are not in Message union - frontend handles tool events
+      // via SSE directly to store (tool_started/tool_status events)
 
       default:
         return {

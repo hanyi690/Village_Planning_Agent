@@ -46,7 +46,7 @@ async def get_async_engine() -> create_async_engine:
     
     if async_engine is None:
         # Ensure data directory exists
-        DB_DIR.mkdir(parents=True, exist_ok=True)
+        DATABASE_DIR.mkdir(parents=True, exist_ok=True)
         
         # Create async engine with SQLite configuration
         async_engine = create_async_engine(

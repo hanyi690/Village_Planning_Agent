@@ -8,7 +8,7 @@ from typing import Dict, Any
 from langchain_core.messages import SystemMessage
 
 from app.core.settings import LLM_MODEL, MAX_TOKENS
-from ...core.llm_factory import create_llm
+from ...core.llm import create_llm
 from app.utils.logger import get_logger
 from ..state import PlanningPhase, PHASE_DESCRIPTIONS
 from app.tools.constants import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL

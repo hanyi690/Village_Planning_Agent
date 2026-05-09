@@ -5,7 +5,7 @@
  * 使用 LayerReportCard 组件实现双模显示
  */
 
-import { LayerCompletedMessage } from '@/types';
+import { LayerCompletedMessage } from '../../types';
 import { parseLayerReport, ParsedDimension } from '@/lib/report-parser';
 import LayerReportCard from './LayerReportCard';
 import React, { useMemo } from 'react';

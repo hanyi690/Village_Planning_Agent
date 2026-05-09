@@ -65,7 +65,7 @@ def calculate_impact_tree(target_dimension: str) -> Dict[int, List[str]]:
     Returns:
         {wave: [dimension_keys]} grouped by wave
     """
-    from src.config import get_impact_tree
+    from backend.app.config import get_impact_tree
 
     tree = get_impact_tree(target_dimension)
 
@@ -93,14 +93,14 @@ def calculate_wave_allocation(
     Returns:
         {wave: [dimension_keys]} grouped by wave
     """
-    from src.config import get_revision_wave_dimensions
+    from backend.app.config import get_revision_wave_dimensions
 
     return get_revision_wave_dimensions(target_dimensions, completed_dimensions)
 
 
 def get_dimension_metadata(dimension_key: str) -> Dict[str, Any]:
     """Get metadata for a dimension."""
-    from src.config import get_dimension_config, get_dimension_layer
+    from backend.app.config import get_dimension_config, get_dimension_layer
 
     config = get_dimension_config(dimension_key)
     layer = get_dimension_layer(dimension_key)
@@ -402,7 +402,7 @@ async def execute_scenario_with_runtime(
         completed_dims = completed_dims_raw
     else:
         # 无数据或异常格式，从 reports 推导
-        from src.config import get_dimension_layer
+        from backend.app.config import get_dimension_layer
         reports = execution_state.get("reports", {})
         for layer_key in ["layer1", "layer2", "layer3"]:
             layer_reports = reports.get(layer_key, {})

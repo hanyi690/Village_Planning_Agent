@@ -33,7 +33,7 @@ from rich.prompt import Prompt, IntPrompt
 from rich import print as rprint
 
 # 导入 RAG 配置
-from src.core.settings import (
+from backend.app.core.settings import (
     CHROMA_COLLECTION_NAME,
     CHROMA_PERSIST_DIR,
     DATA_DIR,
@@ -318,7 +318,7 @@ def show_search(
 ):
     """检索测试"""
     try:
-        from src.services.vector_store import get_vector_cache
+        from backend.app.services.vector_store import get_vector_cache
 
         cache = get_vector_cache()
         vectorstore = cache.get_vectorstore()

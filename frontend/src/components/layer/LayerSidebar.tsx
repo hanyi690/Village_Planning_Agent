@@ -11,8 +11,8 @@ import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faLayerGroup } from '@fortawesome/free-solid-svg-icons';
-import { usePlanningStore } from '@/stores';
-import DimensionSection from '@/components/chat/DimensionSection';
+import { usePlanningStore } from '@/features/planning';
+import DimensionSection from '@/features/planning/components/chat/DimensionSection';
 import { getDimensionConfigsByLayer } from '@/config/dimensions';
 import { LAYER_VALUE_MAP } from '@/lib/constants';
 

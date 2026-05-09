@@ -8,12 +8,12 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { usePlanningStore, usePlanningActions } from '@/stores';
+import { usePlanningStore, usePlanningActions } from '../../store';
 import { useStreamingRender } from '@/hooks/utils';
 import { useThrottleCallback } from '@/hooks/utils';
-import { usePlanningHandlers } from '@/hooks/planning';
-import type { Message, FileMessage, Checkpoint } from '@/types';
-import { planningApi, fileApi } from '@/lib/api';
+import { usePlanningHandlers } from '../../hooks';
+import type { Message, FileMessage, Checkpoint } from '../../types';
+import { planningApi, fileApi } from '../../api';
 import {
   createBaseMessage,
   createSystemMessage,
@@ -21,7 +21,7 @@ import {
   getErrorMessage,
 } from '@/lib/utils';
 import { logger } from '@/lib/logger';
-import SegmentedControl from '@/components/ui/SegmentedControl';
+import SegmentedControl from '../ui/SegmentedControl';
 import MessageList from './MessageList';
 import ReviewPanel from './ReviewPanel';
 import ProgressPanel from './ProgressPanel';
@@ -29,8 +29,8 @@ import ToolStatusPanel from './ToolStatusPanel';
 import DimensionSelector from './DimensionSelector';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faLayerGroup, faMap } from '@fortawesome/free-solid-svg-icons';
-import GISUploadSidebar from '@/components/gis/GISUploadSidebar';
-import type { UploadResult } from '@/components/gis/DataUpload';
+import GISUploadSidebar from '../gis/GISUploadSidebar';
+import type { UploadResult } from '../gis/DataUpload';
 import { getDimensionName, getDimensionsByLayer, DIMENSION_NAMES } from '@/config/dimensions';
 import { PLANNING_DEFAULTS } from '@/config/planning';
 import {

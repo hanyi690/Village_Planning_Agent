@@ -22,8 +22,8 @@ from rich.table import Table
 from rich.panel import Panel
 from rich import print as rPrint
 
-from src.core.settings import CHROMA_PERSIST_DIR
-from src.utils.logger import get_logger
+from backend.app.core.settings import CHROMA_PERSIST_DIR
+from backend.app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 console = Console()
@@ -190,7 +190,7 @@ class SliceInspector:
 def load_slices_from_chroma(persist_dir: Path = None) -> list[Document]:
     """从 Chroma 加载切片数据"""
     from langchain_chroma import Chroma
-    from src.core.settings import CHROMA_COLLECTION_NAME
+    from backend.app.core.settings import CHROMA_COLLECTION_NAME
 
     persist_dir = persist_dir or CHROMA_PERSIST_DIR
 
@@ -199,7 +199,7 @@ def load_slices_from_chroma(persist_dir: Path = None) -> list[Document]:
         return []
 
     try:
-        from src.services.rag_service import RagService
+        from backend.app.services.rag_service import RagService
         rag_service = RagService.get_instance()
         vectorstore = rag_service.vectorstore
     except ImportError:

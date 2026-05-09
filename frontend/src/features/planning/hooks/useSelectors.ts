@@ -16,9 +16,9 @@
  */
 
 import { useMemo } from 'react';
-import { usePlanningStore, type PlanningState } from '@/stores/planningStore';
-import type { Message, DimensionProgressItem, Checkpoint } from '@/types';
-import type { VillageInfo, VillageSession } from '@/lib/api';
+import { usePlanningStore, type PlanningState } from '../store/planningStore';
+import type { Message, DimensionProgressItem, Checkpoint } from '../types';
+import type { VillageInfo, VillageSession } from '../api';
 
 // ============================================
 // Core State Selectors
@@ -260,6 +260,80 @@ export function useLayerReportVisible(): boolean {
  */
 export function useActiveReportLayer(): number {
   return usePlanningStore((state) => state.activeReportLayer);
+}
+
+// ============================================
+// NEW: RAG & Cascade Selectors (Demo System)
+// ============================================
+
+/**
+ * Select RAG sources for a specific dimension
+ */
+export function useDimensionRagSources(dimKey: string): PlanningState['dimensionRagSources'][string] | undefined {
+  return usePlanningStore((state) => state.dimensionRagSources[dimKey]);
+}
+
+/**
+ * Select all RAG sources
+ */
+export function useAllRagSources(): PlanningState['dimensionRagSources'] {
+  return usePlanningStore((state) => state.dimensionRagSources);
+}
+
+/**
+ * Select cascade chain
+ */
+export function useCascadeChain(): PlanningState['cascadeChain'] {
+  return usePlanningStore((state) => state.cascadeChain);
+}
+
+/**
+ * Select dimension versions
+ */
+export function useDimensionVersions(): PlanningState['dimensionVersions'] {
+  return usePlanningStore((state) => state.dimensionVersions);
+}
+
+/**
+ * Select dimension version for specific key
+ */
+export function useDimensionVersion(dimKey: string): number {
+  return usePlanningStore((state) => state.dimensionVersions[dimKey] || 0);
+}
+
+/**
+ * Select streaming content for a dimension
+ */
+export function useStreamingContent(dimKey: string): string | undefined {
+  return usePlanningStore((state) => state.streamingContent[dimKey]);
+}
+
+/**
+ * Select resetting dimensions
+ */
+export function useResettingDimensions(): string[] {
+  return usePlanningStore((state) => state.resettingDimensions);
+}
+
+/**
+ * Check if dimension is resetting
+ */
+export function useIsDimensionResetting(dimKey: string): boolean {
+  return usePlanningStore((state) => state.resettingDimensions.includes(dimKey));
+}
+
+/**
+ * Select running tools (simplified)
+ */
+export function useRunningTools(): string[] {
+  return usePlanningStore((state) => state.runningTools);
+}
+
+/**
+ * Check if tool is running
+ */
+export function useIsToolRunning(toolName: string): boolean {
+  return usePlanningStore((state) => state.runningTools.includes(toolName));
 }
 
 // ============================================

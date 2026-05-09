@@ -1,5 +1,8 @@
 # 数据库Schema
 
+> **更新日期**: 2026-05-08
+> **版本**: v2.0 (重组后架构)
+
 本文档详细说明数据库表结构和关系。
 
 ## 目录
@@ -25,7 +28,7 @@
 ### 表结构
 
 ```python
-# backend/database/models.py
+# backend/app/database/models.py
 class PlanningSession(SQLModel, table=True):
     """规划会话表"""
     __tablename__ = "planning_sessions"
@@ -73,7 +76,7 @@ LangGraph AsyncSqliteSaver自动管理：
 ## WAL模式配置
 
 ```python
-# backend/database/engine.py
+# backend/app/database/engine.py
 # 启用WAL模式
 conn.execute(text("PRAGMA journal_mode=WAL"))
 conn.execute(text("PRAGMA synchronous=NORMAL"))
@@ -85,9 +88,9 @@ conn.execute(text("PRAGMA synchronous=NORMAL"))
 
 | 功能 | 文件路径 |
 |------|----------|
-| 模型定义 | `backend/database/models.py` |
-| 数据库引擎 | `backend/database/engine.py` |
-| 异步操作 | `backend/database/operations_async.py` |
+| 模型定义 | `backend/app/database/models.py` |
+| 数据库引擎 | `backend/app/database/engine.py` |
+| 异步操作 | `backend/app/database/operations.py` |
 
 完整文件索引：[file-index.md](./file-index.md)
 

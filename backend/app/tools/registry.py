@@ -478,10 +478,11 @@ class ToolRegistry:
         return cls.get_tool_info(tool_name)["estimated_time"]
 
 
-# from builtin module
-from .builtin import knowledge_search_tool, web_search_tool
-from .builtin.population import calculate_population
-from .builtin.knowledge_search import (
+# from analytics module
+from .analytics import (
+    knowledge_search_tool,
+    web_search_tool,
+    calculate_population,
     document_overview_registry_wrapper,
     chapter_content_registry_wrapper,
     PLANNING_TOOLS,
@@ -494,8 +495,9 @@ ToolRegistry._tools["population_model_v1"] = calculate_population
 ToolRegistry._tools["document_overview"] = document_overview_registry_wrapper
 ToolRegistry._tools["chapter_content"] = chapter_content_registry_wrapper
 
-# Register GIS tools
-from .core.gis_tool_wrappers import GIS_TOOL_WRAPPERS
+# Register GIS tools (placeholder - GIS modules moved to services/modules/gis)
+# from .core.gis_tool_wrappers import GIS_TOOL_WRAPPERS
+GIS_TOOL_WRAPPERS = {}
 for tool_name, wrapper_func in GIS_TOOL_WRAPPERS.items():
     ToolRegistry._tools[tool_name] = wrapper_func
     logger.info(f"[ToolRegistry] GIS tool registered: {tool_name}")

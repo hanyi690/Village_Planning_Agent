@@ -43,7 +43,6 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./results:/app/results
-      - ./knowledge_base:/app/knowledge_base
     # Resource limits (使用在线 API 后内存需求降低)
     # local embedding: 需要 4G 内存
     # aliyun embedding: 只需要 2G 内存

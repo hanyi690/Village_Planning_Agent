@@ -119,7 +119,7 @@ def load_status_report() -> str:
         return ""
 
     try:
-        from src.utils.document_loader import MarkItDownLoader
+        from backend.app.utils.document_loader import MarkItDownLoader
 
         loader = MarkItDownLoader(STATUS_REPORT_PATH)
         docs = loader.load()
@@ -251,7 +251,7 @@ def check_kb_status(required_docs: List[str] = None) -> Dict[str, Any]:
         Status dict with total_chunks, total_docs, missing_docs, is_ready
     """
     try:
-        from src.services.vector_store import get_parent_child_store
+        from backend.app.services.vector_store import get_parent_child_store
 
         store = get_parent_child_store()
         stats = store.get_stats()

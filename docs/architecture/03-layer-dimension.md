@@ -2,6 +2,9 @@
 
 本文档是**28维度配置的唯一来源**，其他文档应引用此表。
 
+> **更新日期**: 2026-05-08
+> **版本**: v2.0 (重组后架构)
+
 ## 目录
 
 - [三层架构概览](#三层架构概览)
@@ -98,7 +101,7 @@ Wave 2: [project_bank]               # 依赖 Wave 1 全部
 ### 波次路由代码
 
 ```python
-# src/orchestration/routing.py
+# backend/app/agent/routing.py
 def _route_wave_layer(state: Dict, layer: int, current_wave: int) -> Union[List[Send], str]:
     """路由到波次执行的层级"""
     completed = state.get("completed_dimensions", {}).get(f"layer{layer}", [])
@@ -170,7 +173,7 @@ Layer 3 Wave 2: project_bank ← L3全部11维度
 当维度修改时，需要级联更新所有下游维度：
 
 ```python
-# src/config/dimension_metadata.py
+# backend/app/config/dependency.py
 def get_impact_tree(dimension_key: str) -> Dict[int, List[str]]:
     """
     获取维度修改后的影响树
@@ -218,33 +221,27 @@ def get_impact_tree(dimension_key: str) -> Dict[int, List[str]]:
 
 ## 配置源文件
 
-维度配置定义在 `src/config/dimension_metadata.py`：
+维度配置定义在 `backend/app/config/phases.yaml`：
 
-```python
-DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
-    "location": {
-        "key": "location",
-        "name": "区位与对外交通分析",
-        "layer": 1,
-        "dependencies": [],
-        "rag_enabled": True,
-        "tool": None,
-    },
+```yaml
+layer1:
+  dimensions:
+    - key: location
+      name: 区位与对外交通分析
+      rag_enabled: true
+      tool: null
     # ... 其他28维度
-}
 ```
 
 ### 关键函数
 
 | 函数 | 职责 |
 |------|------|
+| `load_planning_config()` | 加载YAML配置 |
 | `get_layer_dimensions(layer)` | 获取层级维度列表 |
 | `get_wave_dimensions(layer, wave)` | 获取波次维度列表 |
 | `get_total_waves(layer)` | 获取层级总波次数 |
-| `_calculate_wave(dim_key, chain)` | 计算维度执行波次 |
 | `get_impact_tree(dim_key)` | 获取修改影响树 |
-| `get_downstream_dependencies(dim_key)` | 获取下游依赖 |
-| `get_full_dependency_chain()` | 获取完整依赖链 |
 
 ---
 
@@ -252,10 +249,10 @@ DIMENSIONS_METADATA: Dict[str, Dict[str, Any]] = {
 
 | 功能 | 文件路径 |
 |------|----------|
-| 维度元数据定义 | `src/config/dimension_metadata.py` |
-| 波次路由 | `src/orchestration/routing.py` |
-| 维度状态创建 | `src/orchestration/nodes/dimension_node.py` |
-| 修订影响计算 | `src/orchestration/nodes/revision_node.py` |
+| 维度配置定义 | `backend/app/config/phases.yaml` |
+| 配置加载器 | `backend/app/config/loader.py` |
+| 波次计算 | `backend/app/config/dependency.py` |
+| 波次路由 | `backend/app/agent/routing.py` |
 
 完整文件索引：[file-index.md](./file-index.md)
 

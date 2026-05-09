@@ -22,7 +22,7 @@ import {
   faCircle,
 } from '@fortawesome/free-solid-svg-icons';
 import { formatFullTimestamp, parseTimestamp } from '@/lib/utils';
-import type { Checkpoint } from '@/types';
+import type { Checkpoint } from '../../types';
 
 interface CheckpointMarkerProps {
   checkpoint: Checkpoint;

@@ -276,7 +276,7 @@ def evaluate_kb_quality(kb_dir: Optional[Path] = None) -> SlicingQualityMetrics:
                 content = f.read()
             # Use slicer to get chunks for comparison
             try:
-                from src.utils.text_splitter import UnifiedMarkdownSlicer
+                from backend.app.utils.text_splitter import UnifiedMarkdownSlicer
                 slicer = UnifiedMarkdownSlicer()
                 # Detect document type from filename
                 doc_type = "guide"  # default

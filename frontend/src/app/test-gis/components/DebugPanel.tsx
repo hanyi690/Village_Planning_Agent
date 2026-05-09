@@ -41,27 +41,34 @@ export default function DebugPanel({ layers }: DebugPanelProps) {
             <div className="mt-2">
               <p className="text-xs text-gray-500 mb-1">样式映射:</p>
               <div className="flex flex-wrap gap-2">
-                {layer.layerType === 'infrastructure' && (
+                {layer.layerType === 'development_axis' && (
                   <>
                     <span className="text-xs bg-gray-200 px-2 py-0.5 rounded">
-                      道路: {PLANNING_COLORS.infrastructure['道路']?.stroke}
+                      发展主轴: {PLANNING_COLORS.development_axis?.['发展主轴']?.stroke || 'N/A'}
                     </span>
                     <span className="text-xs bg-gray-300 px-2 py-0.5 rounded">
-                      乡道: {PLANNING_COLORS.infrastructure['乡道']?.stroke}
+                      交通主轴: {PLANNING_COLORS.development_axis?.['交通主轴']?.stroke || 'N/A'}
                     </span>
+                  </>
+                )}
+                {layer.layerType === 'infrastructure' && (
+                  <>
                     <span className="text-xs bg-blue-200 px-2 py-0.5 rounded">
-                      河流: {PLANNING_COLORS.infrastructure['河流']?.stroke}
+                      供水管线: {PLANNING_COLORS.infrastructure?.['供水管线']?.stroke || 'N/A'}
+                    </span>
+                    <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">
+                      排水管线: {PLANNING_COLORS.infrastructure?.['排水管线']?.stroke || 'N/A'}
                     </span>
                   </>
                 )}
                 {layer.layerType === 'facility_point' && (
                   <span className="text-xs bg-green-200 px-2 py-0.5 rounded">
-                    现状保留: {PLANNING_COLORS.facility_point['现状保留']?.fill}
+                    现状保留: {PLANNING_COLORS.facility_point?.['现状保留']?.fill || 'N/A'}
                   </span>
                 )}
                 {layer.layerType === 'boundary' && (
                   <span className="text-xs bg-gray-400 px-2 py-0.5 rounded">
-                    行政边界: {PLANNING_COLORS.boundary['行政边界']?.stroke}
+                    行政边界: {PLANNING_COLORS.boundary?.['行政边界']?.stroke || 'N/A'}
                   </span>
                 )}
               </div>

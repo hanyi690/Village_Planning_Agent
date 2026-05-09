@@ -14,7 +14,7 @@ import asyncio
 import logging
 from typing import Dict, Any, List, Tuple
 
-from app.core.config import LLM_MAX_CONCURRENT
+from app.core.settings import LLM_MAX_CONCURRENT
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +192,7 @@ class DimensionExecutor:
         Returns:
             是否成功
         """
-        from app.services.planning_runtime_service import PlanningRuntimeService
+        from app.services.runtime import PlanningRuntimeService
 
         layer_key = f"layer{layer}"
 

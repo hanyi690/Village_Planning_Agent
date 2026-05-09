@@ -16,7 +16,7 @@ from collections import deque
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Tuple
 
-from app.core import MAX_SESSION_EVENTS
+from app.core.settings import MAX_SESSION_EVENTS
 from app.agent.state import get_layer_dimensions, get_layer_name, _phase_to_layer
 from app.utils.event_factory import create_layer_completed_event
 
@@ -138,7 +138,7 @@ class CheckpointService:
         Returns:
             State dict or None if not found
         """
-        from app.services.planning_runtime_service import PlanningRuntimeService
+        from app.services.runtime import PlanningRuntimeService
         try:
             # Optionally wait for pending write completion
             if wait_for_write:
@@ -225,7 +225,7 @@ class CheckpointService:
     @classmethod
     async def update_state(cls, session_id: str, updates: Dict[str, Any], as_node: Optional[str] = None) -> bool:
         """Update the checkpoint state for a session."""
-        from app.services.planning_runtime_service import PlanningRuntimeService
+        from app.services.runtime import PlanningRuntimeService
         try:
             return await PlanningRuntimeService.aupdate_state(session_id, updates, as_node=as_node)
         except Exception as e:
@@ -279,7 +279,7 @@ class CheckpointService:
     @classmethod
     async def get_checkpoint_history(cls, session_id: str) -> List[Dict[str, Any]]:
         """Get checkpoint history for a session."""
-        from app.services.planning_runtime_service import PlanningRuntimeService
+        from app.services.runtime import PlanningRuntimeService
         try:
             history = []
             async for state_snapshot in PlanningRuntimeService.aget_state_history(session_id):
@@ -297,7 +297,7 @@ class CheckpointService:
     @classmethod
     async def rebuild_events(cls, session_id: str) -> List[Dict[str, Any]]:
         """Rebuild key events from checkpoint state."""
-        from app.services.planning_runtime_service import PlanningRuntimeService
+        from app.services.runtime import PlanningRuntimeService
         events = []
 
         try:
@@ -397,8 +397,8 @@ class CheckpointService:
         sse_manager,
     ) -> Optional[Dict[str, Any]]:
         """Rebuild memory session from database and checkpoint."""
-        from app.services.planning_runtime_service import PlanningRuntimeService
-        from app.services.sse_manager import sse_manager as sse_mgr
+        from app.services.runtime import PlanningRuntimeService
+        from app.services.sse import sse_manager as sse_mgr
 
         db_session = await get_session_async_func(session_id)
         if not db_session:

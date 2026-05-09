@@ -12,10 +12,10 @@
  */
 
 import { useEffect, useRef, useCallback } from 'react';
-import { planningApi } from '@/lib/api';
-import { usePlanningStore } from '@/stores/planningStore';
+import { planningApi } from '../api';
+import { usePlanningStore } from '../store/planningStore';
 import { buildDimensionProgressKey } from '@/lib/utils/message-helpers';
-import type { PlanningSSEEvent } from '@/lib/api/types';
+import type { PlanningSSEEvent } from '../api/types';
 
 // Internal batch event representation
 interface BatchEvent {
@@ -66,7 +66,25 @@ export function useSSEConnection({
     if (events.length === 0) return;
 
     // Critical event types that should never be merged/deferred
-    const criticalEventTypes = ['dimension_start', 'dimension_complete', 'layer_completed', 'layer_started'];
+    // NEW: Add RAG & Cascade events for immediate processing
+    // NEW: Add tool_started/tool_status for real-time display
+    const criticalEventTypes = [
+      'dimension_start',
+      'dimension_complete',
+      'layer_completed',
+      'layer_started',
+      'tool_started',
+      'tool_status',
+      // NEW: RAG & Cascade events for Demo System
+      'rag_query',
+      'rag_result',
+      'cascade_impact',
+      'cascade_complete',
+      'dimension_reset',
+      'dimension_reset_complete',
+      'state_sync',
+      'layer_paused',
+    ];
 
     // Keep last N delta events per key for better accumulated content accuracy
     const MAX_DELTA_PER_KEY = 3;

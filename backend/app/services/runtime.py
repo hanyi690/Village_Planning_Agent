@@ -29,17 +29,17 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph
 
 from app.database.engine import get_global_checkpointer
-from app.database.operations_async import (
+from app.database.operations import (
     create_planning_session_async,
     update_planning_session_async,
     set_stream_state_async,
     add_session_event_async,
 )
-from backend.schemas import TaskStatus
-from app.services.sse_manager import sse_manager
-from app.services.checkpoint_service import checkpoint_service, checkpoint_persistence_manager
-from app.core import MAX_SESSION_EVENTS
-from app.agent.main_graph import create_unified_planning_graph
+from app.api.schemas import TaskStatus
+from app.services.sse import sse_manager
+from app.services.checkpoint import checkpoint_service, checkpoint_persistence_manager
+from app.core.settings import MAX_SESSION_EVENTS
+from app.agent.graph import create_unified_planning_graph
 from app.agent.state import (
     get_layer_dimensions,
     get_layer_name,
@@ -406,7 +406,7 @@ class PlanningRuntimeService:
         Returns:
             UI-ready status dictionary
         """
-        from app.database.operations_async import get_planning_session_async, get_ui_messages_async
+        from app.database.operations import get_planning_session_async, get_ui_messages_async
 
         db_session = await get_planning_session_async(session_id)
         if not db_session:

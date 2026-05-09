@@ -26,7 +26,7 @@ import {
   faGlobe,
   faPlus,
 } from '@fortawesome/free-solid-svg-icons';
-import { knowledgeApi, KnowledgeDocument, KnowledgeStats, AddDocumentOptions, TaskProgress } from '@/lib/api';
+import { knowledgeApi, KnowledgeDocument, KnowledgeStats, AddDocumentOptions, TaskProgress } from '../../api';
 import { getDimensionName, DIMENSIONS_BY_LAYER } from '@/config/dimensions';
 import { getErrorMessage } from '@/lib/utils';
 

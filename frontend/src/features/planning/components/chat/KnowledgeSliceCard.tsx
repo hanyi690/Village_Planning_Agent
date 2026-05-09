@@ -13,7 +13,7 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { KnowledgeSource } from '@/types';
+import type { KnowledgeSource } from '../../types';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
 
 interface KnowledgeSliceCardProps {

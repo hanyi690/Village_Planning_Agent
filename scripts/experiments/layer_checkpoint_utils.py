@@ -275,7 +275,7 @@ async def wait_for_layer_completion_polling(
         }
     """
     from backend.services.checkpoint_service import checkpoint_service
-    from src.orchestration.state import get_layer_dimensions, _phase_to_layer
+    from backend.app.agent.state import get_layer_dimensions, _phase_to_layer
 
     logger.info(f"[LayerCheckpoint] Waiting for Layer {layer} (session={session_id}, timeout={timeout}s)")
 

@@ -44,7 +44,7 @@ mkdir -p $PROJECT_DIR
 mkdir -p $PROJECT_DIR/data
 mkdir -p $PROJECT_DIR/logs
 mkdir -p $PROJECT_DIR/results
-mkdir -p $PROJECT_DIR/knowledge_base
+mkdir -p $PROJECT_DIR/data/knowledge_base
 mkdir -p $PROJECT_DIR/models
 echo -e "${GREEN}Directories created${NC}"
 

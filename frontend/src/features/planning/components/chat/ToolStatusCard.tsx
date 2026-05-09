@@ -6,7 +6,7 @@
 
 import React from 'react';
 import { motion } from 'framer-motion';
-import type { ToolStatusMessage } from '@/types';
+import type { ToolStatusMessage } from '../../types';
 import { parseTimestamp } from '@/lib/utils';
 import { getToolIconFA } from '@/lib/constants';
 

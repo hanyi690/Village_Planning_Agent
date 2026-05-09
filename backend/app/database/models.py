@@ -25,7 +25,7 @@ from sqlmodel import (
 )
 from sqlalchemy import Index, UniqueConstraint
 
-from app.core.config import (
+from app.core.settings import (
     DEFAULT_TASK_DESCRIPTION,
     DEFAULT_CONSTRAINTS,
 )

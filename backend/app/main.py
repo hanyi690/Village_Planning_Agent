@@ -13,7 +13,9 @@ from __future__ import annotations
 import os
 os.environ['HF_ENDPOINT'] = os.getenv('HF_ENDPOINT', 'https://hf-mirror.com')
 
+import asyncio
 import logging
+import os
 import sys
 import uuid
 from contextlib import asynccontextmanager
@@ -26,9 +28,9 @@ from fastapi.responses import JSONResponse
 # Add parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.api.validate_config import validate_config
-from app.utils.paths import ensure_working_directory, get_project_root, get_results_dir
-from app.core.config import LOG_LEVEL
+# from app.api.validate_config import validate_config  # 移除：模块不存在
+# from app.utils.paths import ...  # 移除：使用 settings.PROJECT_ROOT
+from app.core.settings import LOG_LEVEL
 
 # Configure logging
 logging.basicConfig(
@@ -58,24 +60,14 @@ ALLOWED_ORIGINS = os.getenv(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle management"""
-    ensure_working_directory()
-    project_root = get_project_root()
+    from app.core.settings import PROJECT_ROOT, setup_huggingface_env
 
     # Setup HuggingFace environment
-    from app.core.settings import setup_huggingface_env
     setup_huggingface_env()
 
     logger.info(f"🚀 村庄规划智能体后端启动中...")
-    logger.info(f"📁 Project root: {project_root}")
+    logger.info(f"📁 Project root: {PROJECT_ROOT}")
     logger.info(f"📁 Working directory: {os.getcwd()}")
-    logger.info(f"📁 Results directory: {get_results_dir()}")
-
-    # Validate configuration
-    config_check = validate_config()
-    if not config_check["valid"]:
-        logger.error(f"❌ 配置验证失败: {config_check['errors']}")
-        for warning in config_check["warnings"]:
-            logger.warning(f"⚠️  {warning}")
 
     # Initialize async database
     logger.info("🗄️  Initializing database...")
@@ -91,16 +83,16 @@ async def lifespan(app: FastAPI):
     # Initialize PlanningRuntimeService (LangGraph runtime singleton)
     logger.info("🔧 Initializing PlanningRuntimeService...")
     try:
-        from app.services.planning_runtime_service import PlanningRuntimeService
+        from app.services.runtime import PlanningRuntimeService
         await PlanningRuntimeService.initialize()
         logger.info("✅ PlanningRuntimeService initialized successfully")
     except Exception as e:
         logger.error(f"❌ PlanningRuntimeService initialization failed: {e}", exc_info=True)
 
-    # Save event loop for cross-thread SSE publishing and start cleanup
-    from app.api.planning import on_startup, on_shutdown
-    await on_startup()
-    logger.info("🧹 SSE event loop saved, session cleanup task started")
+    # Save event loop for cross-thread SSE publishing
+    from app.services.sse import sse_manager
+    sse_manager.save_event_loop(asyncio.get_running_loop())
+    logger.info("🧹 SSE event loop saved")
 
     logger.info("✅ 后端服务启动完成")
     yield
@@ -114,9 +106,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Failed to dispose database engine: {e}", exc_info=True)
 
-    # Stop cleanup task via on_shutdown
-    await on_shutdown()
-    logger.info("🧹 Session cleanup task stopped")
     logger.info("👋 后端服务关闭")
 
 

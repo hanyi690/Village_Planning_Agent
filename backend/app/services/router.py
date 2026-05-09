@@ -15,8 +15,8 @@ from enum import Enum
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
-from app.core.config import LLM_MODEL, MAX_TOKENS
-from app.core.llm_factory import create_llm
+from app.core.settings import LLM_MODEL, MAX_TOKENS
+from app.core.llm import create_llm
 from app.tools.constants import ADVANCE_PLANNING_TOOL
 
 logger = logging.getLogger(__name__)

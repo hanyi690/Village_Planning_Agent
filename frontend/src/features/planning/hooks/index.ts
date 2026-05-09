@@ -43,6 +43,17 @@ export {
   useProgressSummary,
   usePlanningState,
   useStoreActions,
+  // NEW: RAG & Cascade Selectors
+  useDimensionRagSources,
+  useAllRagSources,
+  useCascadeChain,
+  useDimensionVersions,
+  useDimensionVersion,
+  useStreamingContent,
+  useResettingDimensions,
+  useIsDimensionResetting,
+  useRunningTools,
+  useIsToolRunning,
 } from './useSelectors';
 
 // Handlers

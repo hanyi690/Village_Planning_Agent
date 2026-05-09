@@ -13,7 +13,7 @@ import {
   Checkpoint,
   GisResultMessage,
   ToolStatusMessage,
-} from '@/types';
+} from '../../types';
 import { isGisResultMessage, isToolStatusMessage } from '@/types/message/message-guards';
 import ThinkingIndicator from './ThinkingIndicator';
 import MessageBubble from './MessageBubble';

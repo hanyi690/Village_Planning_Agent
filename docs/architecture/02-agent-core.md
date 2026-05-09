@@ -2,6 +2,9 @@
 
 本文档详细说明 Router Agent 架构、StateGraph 设计和执行流程。
 
+> **更新日期**: 2026-05-08
+> **版本**: v2.0 (重组后架构)
+
 ## 目录
 
 - [Router Agent架构](#router-agent架构)
@@ -46,7 +49,7 @@ conversation_node (LLM: bind_tools)
 中央路由节点是 Router Agent 的核心：
 
 ```python
-# src/orchestration/main_graph.py
+# backend/app/agent/nodes/conversation.py
 async def conversation_node(state: UnifiedPlanningState) -> Dict[str, Any]:
     """
     中央路由节点（大脑）
@@ -97,7 +100,6 @@ async def conversation_node(state: UnifiedPlanningState) -> Dict[str, Any]:
 | `emit_events` | 批量发送SSE事件 | 维度分析完成 |
 | `collect_results` | 收集维度结果 | 维度执行完成 |
 | `advance_phase` | 推进到下一阶段 | 层级完成 |
-| `revision` | 修订流程 | need_revision=True |
 
 ### 条件边路由
 
@@ -116,7 +118,6 @@ builder.add_conditional_edges("conversation", route_intent, {
 builder.add_conditional_edges("route_planning", route_planning, {
     "knowledge_preload": "knowledge_preload",
     "analyze_dimension": "analyze_dimension",
-    "revision": "revision",
     "collect_results": "collect_results",
     "advance_phase": "advance_phase",
     END: END
@@ -142,7 +143,7 @@ builder.add_conditional_edges("collect_results", check_completion, {
 ### UnifiedPlanningState核心字段
 
 ```python
-# src/orchestration/state.py
+# backend/app/agent/state.py
 class UnifiedPlanningState(TypedDict):
     # 核心驱动
     messages: Annotated[List[BaseMessage], add_messages]
@@ -161,12 +162,6 @@ class UnifiedPlanningState(TypedDict):
     # Send API自动合并
     dimension_results: Annotated[List[Dict], operator.add]
     sse_events: Annotated[List[Dict], operator.add]
-
-    # 交互控制
-    pending_review: bool
-    need_revision: bool
-    revision_target_dimensions: List[str]
-    human_feedback: str
 
     # Step Mode
     step_mode: bool
@@ -241,15 +236,14 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     流程:
     1. 获取维度配置和工具绑定
     2. 构建Prompt（从缓存读取知识）
-    3. 执行GenericPlanner
+    3. 执行LLM调用
     4. 发送dimension_delta SSE事件
     5. 返回dimension_results和sse_events
     """
     dimension_key = state.get("dimension_key")
-    planner = GenericPlanner(dimension_key)
 
     # 流式执行
-    result = await planner.execute(state, streaming=True, on_token_callback=...)
+    result = await execute_dimension_analysis(state, streaming=True)
 
     return {
         "dimension_results": [{dimension_key: result}],
@@ -298,17 +292,18 @@ def check_completion(state: Dict[str, Any]) -> str:
 LangGraph Checkpointer 自动持久化状态：
 
 ```python
-# backend/services/checkpoint_service.py
-class CheckpointService:
-    def save_checkpoint(self, session_id: str, state: Dict) -> str:
-        """保存检查点"""
-        checkpoint_id = generate_checkpoint_id()
-        # 存储到SQLite
-        return checkpoint_id
+# backend/app/database/engine.py
+async def get_global_checkpointer():
+    """
+    获取全局 AsyncSqliteSaver 实例（单例模式）
 
-    def load_checkpoint(self, session_id: str, checkpoint_id: str) -> Dict:
-        """加载检查点恢复执行"""
-        return load_from_db(session_id, checkpoint_id)
+    使用单例模式避免重复连接创建和setup()调用
+    """
+    conn = await aiosqlite.connect(get_db_path(), check_same_thread=False)
+    await conn.execute("PRAGMA journal_mode=WAL")
+    checkpointer = AsyncSqliteSaver(conn)
+    await checkpointer.setup()
+    return checkpointer
 ```
 
 ### 双模式Stream
@@ -321,49 +316,17 @@ async for event in graph.astream(state, stream_mode=["values", "checkpoints"]):
 
 ---
 
-## GenericPlanner统一规划器
-
-### 架构
-
-```
-src/planners/generic_planner.py
-├── GenericPlanner         # 核心规划器类
-├── StreamingCallback      # 流式Token回调
-└── GenericPlannerFactory  # 工厂类
-```
-
-### 核心方法
-
-```python
-class GenericPlanner:
-    def execute(self, state: dict, streaming: bool = False) -> dict:
-        """执行规划器的标准流程"""
-        # 1. validate_state()
-        # 2. build_prompt()
-        # 3. _invoke_llm()
-        # 4. 返回结果
-
-    def build_prompt(self, state: dict) -> str:
-        """根据层级动态构建Prompt"""
-        params = self._prepare_prompt_params(state)
-        params["tool_output"] = self._execute_tool_hook(state)
-        params["knowledge_context"] = self.get_cached_knowledge(state)
-        return self.prompt_template.format(**params)
-```
-
----
-
 ## 关键文件路径
 
 | 功能 | 文件路径 |
 |------|----------|
-| 主图定义 | `src/orchestration/main_graph.py` |
-| 状态定义 | `src/orchestration/state.py` |
-| 意图路由 | `src/orchestration/routing.py` |
-| 维度节点 | `src/orchestration/nodes/dimension_node.py` |
-| 修订节点 | `src/orchestration/nodes/revision_node.py` |
-| 统一规划器 | `src/planners/generic_planner.py` |
-| 维度元数据 | `src/config/dimension_metadata.py` |
+| 主图定义 | `backend/app/agent/graph.py` |
+| 状态定义 | `backend/app/agent/state.py` |
+| 意图路由 | `backend/app/agent/routing.py` |
+| 对话节点 | `backend/app/agent/nodes/conversation.py` |
+| 工具节点 | `backend/app/agent/nodes/tools.py` |
+| 分析节点 | `backend/app/agent/nodes/analysis.py` |
+| 维度配置 | `backend/app/config/phases.yaml` |
 
 完整文件索引：[file-index.md](./file-index.md)
 

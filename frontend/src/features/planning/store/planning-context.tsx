@@ -14,14 +14,14 @@
  */
 
 import { useEffect, useCallback, ReactNode, Suspense } from 'react';
-import { usePlanningStore } from '@/stores/planningStore';
-import { useSSEConnection, useMessagePersistence, useSessionRestore } from '@/hooks/planning';
-import { planningApi, dataApi, VillageInfo, VillageSession, ImageData } from '@/lib/api';
+import { usePlanningStore } from '../store/planningStore';
+import { useSSEConnection, useMessagePersistence, useSessionRestore } from '../hooks';
+import { planningApi, dataApi, VillageInfo, VillageSession, ImageData } from '../api';
 import { createSystemMessage, createErrorMessage, getErrorMessage } from '@/lib/utils';
 import { transformBackendMessages } from '@/lib/utils/message-transform';
 import { logger } from '@/lib/logger';
 import { PLANNING_DEFAULTS } from '@/config/planning';
-import type { PlanningParams } from '@/types';
+import type { PlanningParams } from '../types';
 
 // ============================================
 // Provider Props
@@ -358,5 +358,5 @@ export function PlanningProvider({ children, conversationId }: PlanningProviderP
 // Exports
 // ============================================
 
-export { usePlanningStore } from '@/stores/planningStore';
-export type { PlanningState } from '@/stores/planningStore';
+export { usePlanningStore } from '../store/planningStore';
+export type { PlanningState } from '../store/planningStore';

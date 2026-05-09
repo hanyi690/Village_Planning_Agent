@@ -32,9 +32,9 @@ echo.
 REM Create logs directory
 if not exist logs mkdir logs
 
-REM Start backend
+REM Start backend (unified backend/app structure)
 echo Starting backend...
-start "Backend-8000" cmd /k "cd /d %~dp0backend && python -m uvicorn main:app --host 0.0.0.0 --port 8000"
+start "Backend-8000" cmd /k "cd /d %~dp0backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
 REM Wait 5 seconds
 ping -n 6 127.0.0.1 >nul

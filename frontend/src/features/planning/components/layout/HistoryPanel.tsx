@@ -20,7 +20,7 @@ import {
   faTrash,
   faExclamationTriangle,
 } from '@fortawesome/free-solid-svg-icons';
-import { usePlanningStore, usePlanningActions } from '@/stores';
+import { usePlanningStore, usePlanningActions } from '../../store';
 import { formatFullTimestamp } from '@/lib/utils';
 
 interface DeleteConfirmModalProps {

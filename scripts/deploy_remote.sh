@@ -33,7 +33,7 @@ echo ""
 echo "步骤1: 停止现有服务..."
 
 # 查找并停止后端进程
-BACKEND_PID=$(pgrep -f "uvicorn main:app" || true)
+BACKEND_PID=$(pgrep -f "uvicorn app.main:app" || true)
 if [ -n "$BACKEND_PID" ]; then
     echo "  停止后端进程 (PID: $BACKEND_PID)"
     kill $BACKEND_PID 2>/dev/null || true
@@ -124,7 +124,7 @@ mkdir -p logs
 # 启动后端
 echo "  启动后端服务..."
 cd backend
-nohup python -m uvicorn main:app --host 0.0.0.0 --port 8000 > ../logs/backend.log 2>&1 &
+nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > ../logs/backend.log 2>&1 &
 BACKEND_PID=$!
 cd ..
 echo "  后端 PID: $BACKEND_PID"
