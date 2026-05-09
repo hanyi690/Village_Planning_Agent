@@ -12,9 +12,9 @@
 import { useRef, useCallback } from 'react';
 import { usePlanningStore } from '../store/planningStore';
 import { planningApi } from '../api';
-import { createBaseMessage } from '@/lib/utils';
-import { getDimensionName, getDimensionsByLayer } from '@/config/dimensions';
-import { MIN_SSE_DATA_CHARS, LAYER_VALUE_MAP } from '@/lib/constants';
+import { createBaseMessage } from '@/features/planning/utils';
+import { getDimensionName, getDimensionsByLayer } from '../config/dimensions';
+import { MIN_SSE_DATA_CHARS, LAYER_VALUE_MAP } from '@/features/planning/constants';
 import type { Message, ProgressMessage, LayerCompletedMessage } from '../types';
 
 // ============================================
@@ -46,7 +46,7 @@ export function usePlanningHandlers({
   showViewer,
 }: UsePlanningHandlersOptions) {
   // Store access
-  const taskId = usePlanningStore((state) => state.taskId);
+  const sessionId = usePlanningStore((state) => state.sessionId);
   const currentLayer = usePlanningStore((state) => state.currentLayer);
   const completedLayers = usePlanningStore((state) => state.completedLayers);
   const messages = usePlanningStore((state) => state.messages);
@@ -69,13 +69,13 @@ export function usePlanningHandlers({
 
   const fetchLayerReportsFromBackend = useCallback(
     async (layer: number): Promise<LayerReportData | null> => {
-      if (!taskId) {
-        console.warn('[usePlanningHandlers] No taskId, cannot fetch layer reports');
+      if (!sessionId) {
+        console.warn('[usePlanningHandlers] No sessionId, cannot fetch layer reports');
         return null;
       }
 
       try {
-        const response = await planningApi.getLayerReports(taskId, layer);
+        const response = await planningApi.getLayerReports(sessionId, layer);
 
         return {
           reports: response.reports,
@@ -86,7 +86,7 @@ export function usePlanningHandlers({
         return null;
       }
     },
-    [taskId]
+    [sessionId]
   );
 
   // ============================================
@@ -299,31 +299,8 @@ export function usePlanningHandlers({
         setMessages(updatedMessages);
       }
 
-      // Save layer report to backend (upsert)
-      if (taskId) {
-        try {
-          await planningApi.createMessage(taskId, {
-            id: layerReportId,
-            role: 'assistant',
-            content: finalReportContent,
-            message_type: 'layer_completed',
-            metadata: {
-              layer: layer,
-              summary: {
-                word_count: finalWordCount,
-                key_points: [],
-                dimension_count: Object.keys(finalReports).length,
-              },
-              fullReportContent: finalReportContent,
-              dimensionReports: finalReports,
-            },
-          });
-        } catch (error) {
-          console.error(`[usePlanningHandlers] Failed to save layer_report_${layer}:`, error);
-        }
-      }
     },
-    [flushBatch, fetchLayerReportsFromBackend, setLayerCompleted, setReports, addMessage, setMessages, showViewer, taskId]
+    [flushBatch, fetchLayerReportsFromBackend, setLayerCompleted, setReports, addMessage, setMessages, showViewer, sessionId]
   );
 
   // ============================================

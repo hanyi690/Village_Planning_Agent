@@ -16,13 +16,13 @@ from .constants import (
 from .tiles import TileService
 from .wfs import WfsService
 from ..rate_limiter import RateLimiter
-from ....core.config import (
+from app.core.settings import (
     TIANDITU_API_KEY,
     TIANDITU_RATE_LIMIT,
     TIANDITU_MAX_RETRIES,
     GIS_TIMEOUT
 )
-from ....utils.logger import get_logger
+from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -20,13 +20,13 @@ from .constants import (
     DRIVING_STRATEGY,
 )
 from ..rate_limiter import RateLimiter
-from ....core.config import (
+from app.core.settings import (
     AMAP_API_KEY,
     AMAP_RATE_LIMIT,
     AMAP_MAX_RETRIES,
     GIS_TIMEOUT,
 )
-from ....utils.logger import get_logger
+from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

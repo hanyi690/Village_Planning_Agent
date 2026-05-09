@@ -6,12 +6,12 @@ from typing import Dict, Any, Tuple
 from .types import TiandituResult
 from .constants import WFS_URL, WFS_LAYERS
 from ..rate_limiter import RateLimiter
-from ....core.config import (
+from app.core.settings import (
     TIANDITU_API_KEY,
     TIANDITU_RATE_LIMIT,
     GIS_TIMEOUT
 )
-from ....utils.logger import get_logger
+from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

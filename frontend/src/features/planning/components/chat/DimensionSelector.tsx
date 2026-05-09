@@ -13,7 +13,7 @@ import {
   getDimensionConfigsByLayer,
   getDimensionIcon,
   getDimensionName,
-} from '@/config/dimensions';
+} from '../../config/dimensions';
 
 interface DimensionSelectorProps {
   layer: number;

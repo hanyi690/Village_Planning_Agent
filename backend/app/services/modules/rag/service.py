@@ -23,9 +23,9 @@ from dataclasses import dataclass
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from ..utils.logger import get_logger
+from app.utils.logger import get_logger
 from .context import DocumentContextManager, DocumentIndex
-from app.core.llm import create_llm
+from app.core.llm import create_flash_llm
 from app.core.settings import (
     CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_COLLECTION_NAME,
     CHROMA_PERSIST_DIR, DATA_DIR, DEFAULT_PROVIDER,
@@ -62,7 +62,7 @@ class RagService:
     def __init__(self):
         """Initialize RAG service"""
         try:
-            from ..services.vector_store import ParentChildVectorStore, get_vector_cache
+            from .vector_store import ParentChildVectorStore, get_vector_cache
             self._vector_store = ParentChildVectorStore()
             self._cache = get_vector_cache()
             logger.info("[RagService] Vector store initialized")
@@ -135,7 +135,7 @@ Previous Context:
 Generate only the search query, no explanation:"""
 
         try:
-            llm = create_llm(model="flash", temperature=0.3, max_tokens=50)
+            llm = create_flash_llm(temperature=0.3, max_tokens=50)
             response = await llm.ainvoke(query_prompt)
             query = response.content.strip()
             logger.info(f"[RagService] Generated query for {dim_key}: {query}")
@@ -190,7 +190,7 @@ Generate only the search query, no explanation:"""
         """
         if cfg is None:
             try:
-                from ..config import get_dimension_config
+                from app.config import get_dimension_config
                 cfg = get_dimension_config(dim_key)
             except Exception:
                 cfg = None
@@ -318,9 +318,9 @@ Generate only the search query, no explanation:"""
         Returns:
             Result with status, chunks_added, message
         """
-        from ..utils.document_loader import FileTypeDetector, _create_loader
-        from ..utils.text_splitter import SlicingStrategyFactory
-        from ..services.metadata_injector import MetadataInjector
+        from .utils.document_loader import FileTypeDetector, _create_loader
+        from .utils.text_splitter import SlicingStrategyFactory
+        from .injector import MetadataInjector
 
         path = Path(file_path)
         if not path.exists():
@@ -414,9 +414,9 @@ Generate only the search query, no explanation:"""
         terrain: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add document with progress callback (for async task manager)"""
-        from ..utils.document_loader import FileTypeDetector, _create_loader
-        from ..utils.text_splitter import SlicingStrategyFactory
-        from ..services.metadata_injector import MetadataInjector
+        from .utils.document_loader import FileTypeDetector, _create_loader
+        from .utils.text_splitter import SlicingStrategyFactory
+        from .injector import MetadataInjector
 
         path = Path(file_path)
         if not path.exists():

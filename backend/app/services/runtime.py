@@ -21,6 +21,7 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional, List
 
 from fastapi import BackgroundTasks, HTTPException
@@ -218,7 +219,9 @@ class PlanningRuntimeService:
         enable_review: bool = False,
         stream_mode: bool = True,
         step_mode: bool = False,
+        rag_enabled: bool = True,
         image_ids: Optional[List[str]] = None,
+        uploaded_files: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
         """Build initial state for main graph execution."""
         # image_ids are simple strings, no conversion needed
@@ -231,9 +234,12 @@ class PlanningRuntimeService:
                 "village_name": village_name or project_name,
                 "task_description": task_description,
                 "constraints": constraints,
+                "rag_enabled": rag_enabled,
                 "knowledge_cache": {},
+                "upload_dir": str(Path("data") / "uploads" / session_id) if (uploaded_files) else None,
             },
             "image_ids": image_ids or [],  # 图片ID引用，仅 Layer 1 使用
+            "uploaded_files": uploaded_files or [],  # 上传文件元数据列表
             "phase": "init",
             "current_wave": 1,
             "reports": {"layer1": {}, "layer2": {}, "layer3": {}},

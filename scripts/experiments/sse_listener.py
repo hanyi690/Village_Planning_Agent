@@ -19,7 +19,7 @@ SSE Event Listener for Experiment Scripts
 - completed: 全部流程完成
 - error: 错误事件
 
-SSE 端点: /api/planning/stream/{session_id}
+SSE 端点: /api/sessions/{session_id}/stream
 """
 
 import asyncio
@@ -99,7 +99,7 @@ class SSEEventListener:
             logger.warning("[SSEListener] Already connected")
             return True
 
-        url = f"{self.base_url}/api/planning/stream/{self.session_id}"
+        url = f"{self.base_url}/api/sessions/{self.session_id}/stream"
         logger.info(f"[SSEListener] Connecting to SSE stream: {url}")
 
         try:
@@ -121,7 +121,7 @@ class SSEEventListener:
         event: <event_type>
         data: <json_data>
         """
-        url = f"{self.base_url}/api/planning/stream/{self.session_id}"
+        url = f"{self.base_url}/api/sessions/{self.session_id}/stream"
 
         try:
             async with self._client.stream("GET", url) as response:

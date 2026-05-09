@@ -22,14 +22,14 @@ from .gd_constants import (
     GD_WMS_PARAMS,
 )
 from ..rate_limiter import RateLimiter
-from ....core.config import (
+from app.core.settings import (
     TIANDITU_API_KEY,
     TIANDITU_RATE_LIMIT,
     GIS_TIMEOUT,
     GD_TIANDITU_TOKEN,
     GD_TIANDITU_BASE_URL as CONFIG_GD_BASE_URL,
 )
-from ....utils.logger import get_logger
+from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

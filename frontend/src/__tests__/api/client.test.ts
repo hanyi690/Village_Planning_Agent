@@ -3,7 +3,7 @@
  * API 客户端测试
  */
 
-import { apiRequest, createApiError, API_BASE_URL } from '@/lib/api/client';
+import { apiRequest, createApiError, API_BASE_URL } from '@/features/planning/api';
 
 // Mock fetch globally
 const mockFetch = jest.fn();

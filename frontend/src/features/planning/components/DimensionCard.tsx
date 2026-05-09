@@ -10,7 +10,7 @@
  * - RAG检索折叠面板
  * - 级联修复标记
  *
- * Brutalist aesthetic: 2px borders, no rounded corners, high contrast colors
+ * Gemini aesthetic: rounded corners, shadow, emerald colors, smooth transitions
  */
 
 import React, { useState, useCallback, useMemo } from 'react';
@@ -21,13 +21,13 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { useDimensionRagSources, useIsDimensionResetting, useDimensionVersion } from '../hooks';
 import type { DimensionStatus } from '../types';
 
-// Status color mapping
+// Status color mapping - Gemini style
 const STATUS_COLORS: Record<string, string> = {
-  pending: '#1A1A1A',
-  streaming: '#FF3D00',  // Orange-red for executing
-  completed: '#00FFB3',  // Neon green for done
-  failed: '#FF0000',
-  resetting: '#FFB800', // Amber for cascade repair
+  pending: '#CBD5E1',      // slate-300
+  streaming: '#10B981',    // emerald-500
+  completed: '#34D399',    // emerald-400
+  failed: '#EF4444',       // red-500
+  resetting: '#F59E0B',    // amber-500
 };
 
 // Dimension name mapping (can be imported from config)
@@ -101,25 +101,24 @@ export default function DimensionCard({
 
   return (
     <motion.div
-      className={`relative border-2 ${
-        highlightMode ? 'border-[#00FFB3]' : 'border-[#333]'
-      } bg-[#1A1A1A] ${
+      className={`relative rounded-lg border ${
+        highlightMode ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-white'
+      } shadow-sm ${
         isResetting ? 'animate-pulse' : ''
-      } transition-all duration-200`}
+      } transition-all duration-200 hover:shadow-md hover:border-emerald-200`}
       onClick={handleClick}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      whileHover={{ borderColor: '#00FFB3' }}
     >
       {/* Left status bar */}
       <div
-        className="absolute left-0 top-0 bottom-0 w-[2px]"
+        className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l-lg"
         style={{ backgroundColor: statusColor }}
       />
 
       {/* Reset badge */}
       {isResetting && (
-        <div className="absolute top-0 right-0 px-2 py-0.5 bg-[#FFB800] text-[#0D0D0D] text-xs font-bold">
+        <div className="absolute top-0 right-0 px-2 py-0.5 rounded-bl-lg bg-amber-100 text-amber-700 text-xs font-bold">
           待修复
         </div>
       )}
@@ -130,18 +129,18 @@ export default function DimensionCard({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             {/* Dimension name */}
-            <span className="font-display text-sm text-[#E5E5E5]">{displayName}</span>
+            <span className="font-display text-sm text-slate-700">{displayName}</span>
 
             {/* Version tag */}
             {showVersionTag && (
-              <span className="px-1.5 py-0.5 bg-[#FF3D00]/20 text-[#FF3D00] text-xs font-mono">
+              <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-600 text-xs font-mono">
                 v{version}
               </span>
             )}
 
             {/* Revision tag */}
             {isRevision && (
-              <span className="px-1.5 py-0.5 bg-[#00FFB3]/20 text-[#00FFB3] text-xs">
+              <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-500 text-xs">
                 修订
               </span>
             )}
@@ -152,7 +151,7 @@ export default function DimensionCard({
             {/* Executing indicator */}
             {isStreaming && (
               <motion.div
-                className="w-2 h-2 bg-[#FF3D00]"
+                className="w-2 h-2 rounded-full bg-emerald-500"
                 animate={{ scale: [1, 1.2, 1] }}
                 transition={{ repeat: Infinity, duration: 0.5 }}
               />
@@ -160,7 +159,7 @@ export default function DimensionCard({
 
             {/* Word count */}
             {wordCount && wordCount > 0 && (
-              <span className="text-xs text-[#666] font-mono">{wordCount}字</span>
+              <span className="text-xs text-slate-500 font-mono">{wordCount}字</span>
             )}
 
             {/* RAG indicator */}
@@ -170,7 +169,7 @@ export default function DimensionCard({
                   e.stopPropagation();
                   setRagExpanded((prev) => !prev);
                 }}
-                className="flex items-center gap-1 px-1.5 py-0.5 bg-[#333] text-[#888] text-xs hover:text-[#00FFB3] transition-colors"
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-xs hover:bg-emerald-50 hover:text-emerald-600 transition-colors"
               >
                 <FontAwesomeIcon icon={faLink} style={{ width: 10, height: 10 }} />
                 <span>{ragSources.documents.length}条</span>
@@ -186,23 +185,23 @@ export default function DimensionCard({
         {/* RAG panel (collapsible) */}
         {ragExpanded && ragSources && (
           <motion.div
-            className="mt-2 pt-2 border-t border-[#333]"
+            className="mt-2 pt-2 border-t border-slate-200"
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
           >
             {/* Query */}
             <div className="mb-1">
-              <span className="text-xs text-[#666]">检索词：</span>
-              <span className="text-xs text-[#00FFB3] font-mono">{ragSources.query}</span>
+              <span className="text-xs text-slate-500">检索词：</span>
+              <span className="text-xs text-emerald-600 font-mono">{ragSources.query}</span>
             </div>
 
             {/* Documents */}
             <div className="space-y-1">
               {ragSources.documents.map((doc, idx) => (
-                <div key={idx} className="px-2 py-1 bg-[#0D0D0D] border border-[#333]">
-                  <span className="text-xs text-[#888]">{doc.title}</span>
+                <div key={idx} className="px-2 py-1 rounded bg-slate-50 border border-slate-200">
+                  <span className="text-xs text-slate-600">{doc.title}</span>
                   {doc.snippet && (
-                    <p className="text-xs text-[#666] mt-0.5 line-clamp-2">{doc.snippet}</p>
+                    <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{doc.snippet}</p>
                   )}
                 </div>
               ))}
@@ -211,7 +210,7 @@ export default function DimensionCard({
         )}
 
         {/* Status text */}
-        <div className="mt-1 text-xs text-[#666]">
+        <div className="mt-1 text-xs text-slate-500">
           {isResetting && '级联修复中...'}
           {isStreaming && '正在分析...'}
           {status === 'completed' && !isRevision && '已完成'}

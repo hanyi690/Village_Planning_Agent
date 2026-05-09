@@ -86,7 +86,7 @@ def extract_sources_from_documents(docs: List[Document]) -> List[KnowledgeSource
 
 def get_vectorstore():
     """获取向量数据库（使用 RagService 单例）"""
-    from ...services.rag_service import RagService
+    from ...services import RagService
     return RagService.get_instance().vectorstore
 
 
@@ -678,14 +678,6 @@ PLANNING_TOOLS = [
     full_document_tool,
     check_technical_indicators,
 ]
-
-# 向后兼容：别名
-planning_knowledge_tool = knowledge_search_tool
-executive_summary_tool = document_overview_tool
-chapter_summaries_list_tool = document_overview_tool
-chapter_summary_tool = chapter_content_tool
-chapter_context_tool = chapter_content_tool
-context_around_tool = knowledge_search_tool
 
 
 # ==================== 旧版工具（兼容性）====================

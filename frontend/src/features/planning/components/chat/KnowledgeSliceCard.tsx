@@ -14,7 +14,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { KnowledgeSource } from '../../types';
-import MarkdownRenderer from '@/components/MarkdownRenderer';
+import MarkdownRenderer from '@/features/planning/components/ui/MarkdownRenderer';
 
 interface KnowledgeSliceCardProps {
   sources: KnowledgeSource[];

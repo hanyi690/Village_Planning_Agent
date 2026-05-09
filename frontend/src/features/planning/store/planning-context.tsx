@@ -17,10 +17,9 @@ import { useEffect, useCallback, ReactNode, Suspense } from 'react';
 import { usePlanningStore } from '../store/planningStore';
 import { useSSEConnection, useMessagePersistence, useSessionRestore } from '../hooks';
 import { planningApi, dataApi, VillageInfo, VillageSession, ImageData } from '../api';
-import { createSystemMessage, createErrorMessage, getErrorMessage } from '@/lib/utils';
-import { transformBackendMessages } from '@/lib/utils/message-transform';
-import { logger } from '@/lib/logger';
-import { PLANNING_DEFAULTS } from '@/config/planning';
+import { createSystemMessage, createErrorMessage, getErrorMessage } from '@/features/planning/utils';
+import { logger } from '@/features/planning/utils/logger';
+import { PLANNING_DEFAULTS } from '../config/planning';
 import type { PlanningParams } from '../types';
 
 // ============================================
@@ -58,13 +57,16 @@ export function usePlanningActions() {
           step_mode: params.stepMode ?? PLANNING_DEFAULTS.stepMode,
           stream_mode: PLANNING_DEFAULTS.streamMode,
           images: params.images,
+          villageDataFiles: params.villageDataFiles,
+          taskFiles: params.taskFiles,
+          constraintFiles: params.constraintFiles,
         });
 
-        if (!response || typeof response.task_id !== 'string') {
-          throw new Error('Server response missing task ID');
+        if (!response || typeof response.session_id !== 'string') {
+          throw new Error('Server response missing session ID');
         }
 
-        store.setTaskId(response.task_id);
+        store.setSessionId(response.session_id);
         store.setStatus('planning');
 
         // Build initialization message with planning context
@@ -86,7 +88,7 @@ export function usePlanningActions() {
 任务: ${truncate(taskDesc)}
 约束: ${truncate(constraintsText)}
 
-Task ID: ${response.task_id.slice(0, 8)}...`;
+Session ID: ${response.session_id.slice(0, 8)}...`;
 
         store.addMessage(createSystemMessage(initMessage));
       } catch (error: unknown) {
@@ -100,10 +102,10 @@ Task ID: ${response.task_id.slice(0, 8)}...`;
   );
 
   const approve = useCallback(async () => {
-    if (!store.taskId) throw new Error('No task ID');
-    logger.context.info('Approving review', { taskId: store.taskId });
+    if (!store.sessionId) throw new Error('No session ID');
+    logger.context.info('Approving review', { sessionId: store.sessionId });
     try {
-      await planningApi.approveReview(store.taskId);
+      await planningApi.approveReview(store.sessionId);
       store.setPaused(false);
       store.setPendingReviewLayer(null);
       store.clearProgressState();
@@ -118,15 +120,15 @@ Task ID: ${response.task_id.slice(0, 8)}...`;
 
   const reject = useCallback(
     async (feedback: string, dimensions?: string[], images?: ImageData[]) => {
-      if (!store.taskId) throw new Error('No task ID');
+      if (!store.sessionId) throw new Error('No session ID');
       if (!feedback.trim()) throw new Error('Feedback is required');
       logger.context.info('Rejecting review', {
-        taskId: store.taskId,
+        sessionId: store.sessionId,
         feedback: feedback.slice(0, 50),
         hasImages: (images?.length ?? 0) > 0,
       });
       try {
-        await planningApi.rejectReview(store.taskId, feedback, dimensions, images);
+        await planningApi.rejectReview(store.sessionId, feedback, dimensions, images);
         store.setPaused(false);
 
         // Use clearRevisionProgress to preserve other completed dimensions
@@ -150,12 +152,12 @@ Task ID: ${response.task_id.slice(0, 8)}...`;
 
   const rollback = useCallback(
     async (checkpointId: string) => {
-      if (!store.taskId) throw new Error('No task ID');
-      await planningApi.rollbackCheckpoint(store.taskId, checkpointId);
+      if (!store.sessionId) throw new Error('No session ID');
+      await planningApi.rollbackCheckpoint(store.sessionId, checkpointId);
       store.setSelectedCheckpoint(checkpointId);
 
       // Sync state after rollback
-      const statusData = await planningApi.getStatus(store.taskId);
+      const statusData = await planningApi.getStatus(store.sessionId);
       store.syncBackendState(statusData);
 
       store.addMessage(
@@ -200,7 +202,7 @@ Task ID: ${response.task_id.slice(0, 8)}...`;
       store.setCheckpoints([]);
       store.setSelectedCheckpoint(null);
       store.setProjectName(villageName);
-      store.setTaskId(sessionId);
+      store.setSessionId(sessionId);
       store.setStatus('completed');
 
       try {
@@ -210,16 +212,7 @@ Task ID: ${response.task_id.slice(0, 8)}...`;
         const statusData = await planningApi.getStatus(sessionId);
         store.syncBackendState(statusData);
 
-        // Load historical messages
-        try {
-          const messagesResponse = await planningApi.getMessages(sessionId);
-          if (messagesResponse.success && messagesResponse.messages.length > 0) {
-            const transformedMessages = transformBackendMessages(messagesResponse.messages);
-            store.setMessages(transformedMessages);
-          }
-        } catch (msgError) {
-          console.error('[PlanningProvider] Failed to load messages:', msgError);
-        }
+        // Messages are restored from backend session status (ui_messages field)
       } catch (error: unknown) {
         const errorMessage = getErrorMessage(error, 'Failed to load session');
         store.setHistoryError(errorMessage);
@@ -271,8 +264,8 @@ Task ID: ${response.task_id.slice(0, 8)}...`;
 
   const sendChatMessage = useCallback(
     async (message: string) => {
-      if (!store.taskId) throw new Error('No task ID');
-      return planningApi.sendChatMessage(store.taskId, message);
+      if (!store.sessionId) throw new Error('No session ID');
+      return planningApi.sendChatMessage(store.sessionId, message);
     },
     [store]
   );
@@ -310,7 +303,7 @@ function SessionRestoreWrapper() {
 }
 
 export function PlanningProvider({ children, conversationId }: PlanningProviderProps) {
-  const taskId = usePlanningStore((state) => state.taskId);
+  const sessionId = usePlanningStore((state) => state.sessionId);
   const isPaused = usePlanningStore((state) => state.isPaused);
   const sseResumeTrigger = usePlanningStore((state) => state.sseResumeTrigger);
   const initConversation = usePlanningStore((state) => state.initConversation);
@@ -322,16 +315,16 @@ export function PlanningProvider({ children, conversationId }: PlanningProviderP
   }, [conversationId, initConversation]);
 
   // SSE connection with reconnect trigger
-  useSSEConnection({ taskId, resumeTrigger: sseResumeTrigger });
+  useSSEConnection({ sessionId, resumeTrigger: sseResumeTrigger });
 
   // Message persistence
   useMessagePersistence();
 
   // Checkpoint sync when paused
   useEffect(() => {
-    if (isPaused && taskId) {
+    if (isPaused && sessionId) {
       planningApi
-        .getStatus(taskId)
+        .getStatus(sessionId)
         .then((statusData) => {
           if (statusData.checkpoints) {
             setCheckpoints(statusData.checkpoints);
@@ -341,7 +334,7 @@ export function PlanningProvider({ children, conversationId }: PlanningProviderP
           console.error('[PlanningProvider] Failed to sync checkpoints:', err);
         });
     }
-  }, [isPaused, taskId, setCheckpoints]);
+  }, [isPaused, sessionId, setCheckpoints]);
 
   return (
     <>

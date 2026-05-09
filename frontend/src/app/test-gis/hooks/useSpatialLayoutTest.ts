@@ -3,7 +3,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { GISLayerConfig, GeoJsonFeatureCollection } from '@/types/message/message-types';
 import type { VillagePlanningScheme } from '../types/planning';
-import { dataApi } from '@/lib/api/data-api';
+import { dataApi } from '@/features/planning/api';
 
 // ============================================
 // Constants

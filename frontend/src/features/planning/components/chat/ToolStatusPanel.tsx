@@ -8,7 +8,7 @@
 
 import React, { useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getToolIconEmoji } from '@/lib/constants';
+import { getToolIconEmoji } from '@/features/planning/constants';
 
 // Simplified ToolStatus type
 export interface SimpleToolStatus {

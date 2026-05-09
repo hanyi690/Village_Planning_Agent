@@ -9,8 +9,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { usePlanningStore, usePlanningActions } from '../../store';
-import { useStreamingRender } from '@/hooks/utils';
-import { useThrottleCallback } from '@/hooks/utils';
+import { useStreamingRender } from '../../hooks/utils/useStreamingRender';
+import { useThrottleCallback } from '../../hooks/utils/useThrottleCallback';
 import { usePlanningHandlers } from '../../hooks';
 import type { Message, FileMessage, Checkpoint } from '../../types';
 import { planningApi, fileApi } from '../../api';
@@ -19,8 +19,8 @@ import {
   createSystemMessage,
   createErrorMessage,
   getErrorMessage,
-} from '@/lib/utils';
-import { logger } from '@/lib/logger';
+} from '@/features/planning/utils';
+import { logger } from '@/features/planning/utils/logger';
 import SegmentedControl from '../ui/SegmentedControl';
 import MessageList from './MessageList';
 import ReviewPanel from './ReviewPanel';
@@ -31,8 +31,8 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faLayerGroup, faMap } from '@fortawesome/free-solid-svg-icons';
 import GISUploadSidebar from '../gis/GISUploadSidebar';
 import type { UploadResult } from '../gis/DataUpload';
-import { getDimensionName, getDimensionsByLayer, DIMENSION_NAMES } from '@/config/dimensions';
-import { PLANNING_DEFAULTS } from '@/config/planning';
+import { getDimensionName, getDimensionsByLayer, DIMENSION_NAMES } from '../../config/dimensions';
+import { PLANNING_DEFAULTS } from '../../config/planning';
 import {
   LAYER_OPTIONS_ARRAY,
   LAYER_LABEL_MAP,
@@ -42,7 +42,7 @@ import {
   FILE_ACCEPT,
   isInputDisabled,
   getStatusBadge,
-} from '@/lib/constants';
+} from '@/features/planning/constants';
 
 interface ChatPanelProps {
   className?: string;
@@ -53,7 +53,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   // Get state from Zustand store
   const messages = usePlanningStore((state) => state.messages);
   const status = usePlanningStore((state) => state.status);
-  const taskId = usePlanningStore((state) => state.taskId);
+  const sessionId = usePlanningStore((state) => state.sessionId);
   const villageFormData = usePlanningStore((state) => state.villageFormData);
   const currentLayer = usePlanningStore((state) => state.currentLayer);
   const isPaused = usePlanningStore((state) => state.isPaused);
@@ -87,7 +87,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   const [isPlanning, setIsPlanning] = useState(false);
   const [isRollingBack, setIsRollingBack] = useState(false);
   const [uploadedFileContent, setUploadedFileContent] = useState<string | null>(null);
-  const [uploadedImages, setUploadedImages] = useState<import('@/lib/api/types').ImageData[]>([]);
+  const [uploadedImages, setUploadedImages] = useState<import('../../api/types').ImageData[]>([]);
   const [stepMode, setStepMode] = useState<boolean>(PLANNING_DEFAULTS.stepMode);
   const [showGISUploadSidebar, setShowGISUploadSidebar] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -419,16 +419,11 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
 
       try {
         // ✅ Signal-Fetch 模式：调用 REST API 获取维度内容
-        const dimensionData = await planningApi.getDimensionContent(taskId || '', data.dimension);
-
-        if (!dimensionData.exists) {
-          console.warn(`[ChatPanel] Dimension ${data.dimension} content not found`);
-          return;
-        }
+        const dimensionData = await planningApi.getDimensionReport(sessionId || '', data.dimension);
 
         const newContent = dimensionData.content;
-        const previousContent = dimensionData.previous_content;
-        const version = dimensionData.version || 1;
+        const previousContent = undefined;
+        const version = 1;
 
         // 添加修复后的维度报告
         const dimensionReportMsg = {
@@ -462,7 +457,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
         );
       }
     },
-    [addMessage, taskId, setDimensionContents]
+    [addMessage, sessionId, setDimensionContents]
   );
 
   // SSE 连接成功回调 - 连接成功后触发状态恢复检查
@@ -526,10 +521,10 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
     async (layer: string) => {
       const layerNumber = LAYER_LABEL_MAP[layer];
 
-      if (layerNumber !== undefined && taskId) {
+      if (layerNumber !== undefined && sessionId) {
         // 1. Fetch latest reports from backend
         try {
-          const reports = await planningApi.getLayerReports(taskId, layerNumber);
+          const reports = await planningApi.getLayerReports(sessionId, layerNumber);
 
           // 2. Update reports in state
           const layerKey = `layer${layerNumber}` as 'layer1' | 'layer2' | 'layer3';
@@ -544,7 +539,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
         onOpenLayerSidebar?.(layerNumber);
       }
     },
-    [onOpenLayerSidebar, taskId]
+    [onOpenLayerSidebar, sessionId]
   );
 
   // ❌ DELETED: useLayoutEffect that causes status bounce
@@ -583,23 +578,23 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
 
   // ✅ 新增：从 TaskController 同步状态到 Context
   useEffect(() => {
-    if (!taskId) return;
+    if (!sessionId) return;
 
     // 直接将 taskState 同步到 Context
     // Controller 只负责数据搬运,不做任何业务逻辑判断
     syncBackendState(taskState);
-  }, [taskId, taskState, syncBackendState]);
+  }, [sessionId, taskState, syncBackendState]);
 
   // SSE 断线重连后的层级状态恢复机制（备用保护）
   // 主要恢复逻辑在 handleConnected 回调中执行
   useEffect(() => {
-    if (!taskId || status === 'idle' || !sseConnectedRef.current) return;
+    if (!sessionId || status === 'idle' || !sseConnectedRef.current) return;
 
     // 串行处理，避免并发竞态
     for (const layer of LAYER_IDS) {
       restoreLayerData(layer);
     }
-  }, [taskId, status, restoreLayerData]);
+  }, [sessionId, status, restoreLayerData]);
 
   // Determine if input should be disabled
   const inputDisabled = isInputDisabled(status);
@@ -714,16 +709,8 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
   // Handler: Reset rate limit for a project
   const handleResetRateLimit = useCallback(
     async (projectName: string) => {
-      try {
-        logger.chatPanel.info(`Resetting rate limit for project: ${projectName}`);
-        await planningApi.resetProject(projectName);
-        setRateLimitError(null);
-        addMessage(createSystemMessage(`✅ 已重置项目 "${projectName}" 的限流状态，请重试`));
-      } catch (error: unknown) {
-        const errorMessage = getErrorMessage(error, '未知错误');
-        logger.chatPanel.error('Failed to reset rate limit', { error: errorMessage });
-        addMessage(createErrorMessage(`重置限流失败: ${errorMessage}`));
-      }
+      setRateLimitError(null);
+      addMessage(createSystemMessage(`已清除项目 "${projectName}" 的限流错误，请重试`));
     },
     [addMessage]
   );
@@ -848,7 +835,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
       // 合并所有文件内容
       const allContents: string[] = [];
       const messagesToAdd: Message[] = [];
-      const collectedImages: import('@/lib/api/types').ImageData[] = [];
+      const collectedImages: import('../../api/types').ImageData[] = [];
 
       for (const { file, response } of results) {
         allContents.push(response.content);
@@ -1001,7 +988,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
 
       {/* Middle: Message list - Centered container + max width */}
       {/* Layer Segmented Control - 固定在 ChatPanel 顶部，不随消息滚动 */}
-      {taskId && taskId !== 'new' && (
+      {sessionId && sessionId !== 'new' && (
         <div className="sticky top-0 bg-[#F9FBF9] border-b border-gray-200 z-10">
           <div className="max-w-6xl mx-auto p-4">
             <SegmentedControl
@@ -1083,7 +1070,7 @@ export default function ChatPanel({ className = '', onOpenLayerSidebar }: ChatPa
           )}
 
           {/* Planning ready indicator with Start Planning button */}
-          {status === 'collecting' && villageFormData && !taskId && (
+          {status === 'collecting' && villageFormData && !sessionId && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}

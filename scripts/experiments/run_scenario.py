@@ -65,9 +65,9 @@ def calculate_impact_tree(target_dimension: str) -> Dict[int, List[str]]:
     Returns:
         {wave: [dimension_keys]} grouped by wave
     """
-    from backend.app.config import get_impact_tree
+    from backend.app.config.dependency import get_impact_tree_compat
 
-    tree = get_impact_tree(target_dimension)
+    tree = get_impact_tree_compat(target_dimension)
 
     # Add target dimension as wave 0
     full_tree = {0: [target_dimension]}
@@ -93,7 +93,7 @@ def calculate_wave_allocation(
     Returns:
         {wave: [dimension_keys]} grouped by wave
     """
-    from backend.app.config import get_revision_wave_dimensions
+    from backend.app.config.dependency import get_revision_wave_dimensions
 
     return get_revision_wave_dimensions(target_dimensions, completed_dimensions)
 
@@ -107,9 +107,9 @@ def get_dimension_metadata(dimension_key: str) -> Dict[str, Any]:
 
     return {
         "key": dimension_key,
-        "name": config.get("name", dimension_key) if config else dimension_key,
+        "name": config.name if config else dimension_key,
         "layer": layer,
-        "description": config.get("description", "") if config else "",
+        "description": getattr(config, 'description', '') if config else "",
     }
 
 
@@ -335,8 +335,8 @@ async def execute_scenario_with_runtime(
     Returns:
         Experiment results
     """
-    from backend.services.review_service import review_service
-    from backend.services.checkpoint_service import checkpoint_service
+    from backend.app.services.review import review_service
+    from backend.app.services.checkpoint import checkpoint_service
 
     config = get_scenario_config(scenario_name)
     target_dimension = config["target_dimension"]
@@ -432,7 +432,7 @@ async def execute_scenario_with_runtime(
 
     # Trigger revision execution (critical step!)
     # reject 只设置状态，需要 resume_execution 触发级联更新
-    from backend.services.planning_runtime_service import PlanningRuntimeService
+    from backend.app.services.runtime import PlanningRuntimeService
     await PlanningRuntimeService.resume_execution(execution_session_id)
     logger.info(f"[Scenario] Resume execution triggered for revision")
 
@@ -513,7 +513,7 @@ async def wait_for_revision_completion(
     Returns:
         Final state
     """
-    from backend.services.checkpoint_service import checkpoint_service
+    from backend.app.services.checkpoint import checkpoint_service
 
     if use_sse:
         return await wait_for_revision_completion_sse(session_id, timeout)
@@ -535,7 +535,7 @@ async def wait_for_revision_completion_sse(
     Returns:
         Final state
     """
-    from backend.services.checkpoint_service import checkpoint_service
+    from backend.app.services.checkpoint import checkpoint_service
     from scripts.experiments.sse_listener import SSEEventListener
 
     logger.info(f"[Scenario] Waiting for revision (SSE mode, timeout={timeout}s)")
@@ -582,7 +582,7 @@ async def wait_for_revision_completion_polling(
     Returns:
         Final state with revision_history and reports
     """
-    from backend.services.checkpoint_service import checkpoint_service
+    from backend.app.services.checkpoint import checkpoint_service
 
     start_time = datetime.now()
 

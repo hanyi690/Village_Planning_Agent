@@ -12,7 +12,7 @@ import asyncio
 import json
 import hashlib
 
-from ..config.document_types import get_dimension_definitions, DIMENSION_KEYS
+from app.config.document_types import get_dimension_definitions, DIMENSION_KEYS
 from app.core.settings import LLM_MAX_CONCURRENT
 
 DIMENSION_DEFINITIONS: Dict[str, str] = get_dimension_definitions()

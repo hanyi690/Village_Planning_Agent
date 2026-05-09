@@ -12,7 +12,7 @@ import { motion } from 'framer-motion';
 import { Message } from '../../types';
 import { isUserMessage } from '../../types';
 import MessageContent from './MessageContent';
-import { formatMessageTimestamp } from '@/lib/utils';
+import { formatMessageTimestamp } from '@/features/planning/utils';
 import KnowledgeReference from '../ui/KnowledgeReference';
 
 interface MessageBubbleProps {

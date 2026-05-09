@@ -17,6 +17,16 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Cached LLM instance — reused across all dimension analyses
+_llm_cache: Optional[Any] = None
+
+
+def _get_llm():
+    global _llm_cache
+    if _llm_cache is None:
+        _llm_cache = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
+    return _llm_cache
+
 
 class ParamSource(str, Enum):
     """工具参数来源"""
@@ -63,9 +73,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     6. 保存版本
     7. 返回状态更新
     """
-    from ...services.gis_service import GisService
-    from ...services.rag_service import RagService
-    from ...services.sse import SSEManager
+    from ...services import GisService, RagService
+    from ...services.sse import sse_manager
     from ...services.report_store import ReportStore
 
     dim_key = state.get("dimension_key")
@@ -96,18 +105,28 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         }
         tool_results = await GisService.run_parallel(tools, context)
 
-    # 3. RAG 查询
-    rag_context = await RagService.get_context(dim_key, state, cfg)
+    # 3. RAG 查询（两级开关：会话级 rag_enabled + 维度级 rag_query）
+    rag_context = ""
+    rag_enabled = state.get("config", {}).get("rag_enabled", True)
+    dim_rag_query = getattr(cfg, 'rag_query', '')
+    if rag_enabled and dim_rag_query:
+        rag_context = await RagService.get_instance().get_context(dim_key, state, cfg)
+        if rag_context:
+            logger.info(f"[analyze_dimension] {dim_key}: RAG 检索到 {len(rag_context)} 字符上下文")
+        else:
+            logger.info(f"[analyze_dimension] {dim_key}: RAG 检索无结果")
+    else:
+        reason = "会话级 RAG 已关闭" if not rag_enabled else f"维度 rag_query 为空"
+        logger.info(f"[analyze_dimension] {dim_key}: 跳过 RAG（{reason}）")
 
     # 4. 组装 Prompt
     prompt = _build_prompt(cfg, state, tool_results, rag_context)
 
     # 5. 流式 LLM + SSE
-    sse = SSEManager.get_instance()
-    llm = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
+    llm = _get_llm()
 
     llm_response = ""
-    await sse.emit(session_id, {
+    await sse_manager.publish(session_id, {
         "type": "dimension_start",
         "dimension_key": dim_key,
         "dimension_name": dim_name,
@@ -118,10 +137,13 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         async for chunk in llm.astream(prompt):
             if hasattr(chunk, 'content') and chunk.content:
                 llm_response += chunk.content
-                await sse.emit(session_id, {
+                await sse_manager.publish(session_id, {
                     "type": "dimension_delta",
                     "dimension_key": dim_key,
-                    "content": chunk.content,
+                    "dimension_name": dim_name,
+                    "layer": dim_layer,
+                    "delta": chunk.content,
+                    "accumulated": llm_response,
                 })
     except Exception as e:
         logger.error(f"[analyze_dimension] LLM 失败: {e}")
@@ -150,10 +172,11 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "data": getattr(r, 'data', None),
             })
 
-    await sse.emit(session_id, {
+    await sse_manager.publish(session_id, {
         "type": "dimension_complete",
         "dimension_key": dim_key,
         "dimension_name": dim_name,
+        "full_content": llm_response,
         "report_id": report_id,
         "version": next_version,
         "summary": llm_response[:200],
@@ -161,39 +184,37 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "layer": dim_layer,
     })
 
-    # 8. 状态更新
+    # 8. 状态更新 - 仅返回增量，reducer 负责合并
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    summary_excerpt = llm_response[:200]
     phase_key = f"layer{dim_layer}"
-    completed = dict(state.get("completed_dimensions", {}))
-    completed.setdefault(phase_key, [])
-    if dim_key not in completed[phase_key]:
-        completed[phase_key].append(dim_key)
-
-    versions = dict(state.get("report_versions", {}))
-    versions[dim_key] = versions.get(dim_key, []) + [
-        {"version": next_version, "report_id": report_id, "summary": llm_response[:200],
-         "generated_at": datetime.utcnow().isoformat() + "Z", "revision_trigger": revision_reason}
-    ]
-
-    summaries = dict(state.get("summaries", {}))
-    summaries[dim_key] = {
-        "dimension_key": dim_key, "dimension_name": dim_name, "layer": dim_layer,
-        "summary": llm_response[:200], "key_points": [], "metrics": {},
-        "tags": [], "created_at": datetime.utcnow().isoformat() + "Z",
-    }
 
     return {
         "messages": [AIMessage(content=llm_response, metadata={"dimension_key": dim_key})],
-        "report_versions": versions,
-        "summaries": summaries,
-        "completed_dimensions": completed,
+        "completed_dimensions": {phase_key: [dim_key]},
+        "report_versions": {
+            dim_key: [{
+                "version": next_version, "report_id": report_id,
+                "summary": summary_excerpt,
+                "generated_at": now_iso,
+                "revision_trigger": revision_reason,
+            }]
+        },
+        "summaries": {
+            dim_key: {
+                "dimension_key": dim_key, "dimension_name": dim_name, "layer": dim_layer,
+                "summary": summary_excerpt, "key_points": [], "metrics": {},
+                "tags": [], "created_at": now_iso,
+            }
+        },
     }
 
 
 def _build_prompt(cfg, state, tool_results, rag_context) -> str:
     """组装 Prompt - 使用 prompts 模块模板"""
-    from ...prompts.analysis_prompts import get_dimension_prompt as get_layer1_prompt
-    from ...prompts.concept_prompts import get_dimension_prompt as get_layer2_prompt
-    from ...prompts.detailed_plan_prompts import get_dimension_prompt as get_layer3_prompt
+    from ...services.modules.prompts.analysis import get_dimension_prompt as get_layer1_prompt
+    from ...services.modules.prompts.concept import get_dimension_prompt as get_layer2_prompt
+    from ...services.modules.prompts.detailed import get_dimension_prompt as get_layer3_prompt
 
     dim_key = getattr(cfg, 'key', state.get("dimension_key", ""))
     layer = getattr(cfg, 'layer', get_dimension_layer(dim_key) or 1)

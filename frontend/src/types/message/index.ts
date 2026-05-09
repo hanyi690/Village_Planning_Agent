@@ -144,7 +144,7 @@ export interface PlanningParams {
   enableReview?: boolean;
   stepMode?: boolean;
   streamMode?: boolean;
-  images?: import('@/lib/api/types').ImageData[];
+  images?: import('@/features/planning/api/types').ImageData[];
 }
 
 // ============================================================================

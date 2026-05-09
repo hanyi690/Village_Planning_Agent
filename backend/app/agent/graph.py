@@ -34,7 +34,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
         return _cached_graph
 
     logger.info("[图构建] 构建3节点图")
-    builder = StateGraph(dict)
+    builder = StateGraph(AgentState)
 
     builder.add_node("conversation", conversation_node)
     builder.add_node("execute_tools", execute_tools_node)

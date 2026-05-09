@@ -90,7 +90,7 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
     completed = state.get("completed_dimensions", {}).get(f"layer{layer}", [])
     total_dims = get_layer_dimensions(layer)
 
-    if set(completed) == set(total_dims):
+    if len(total_dims) > 0 and set(completed) == set(total_dims):
         if state.get("pause_after_layer"):
             return "conversation"
 

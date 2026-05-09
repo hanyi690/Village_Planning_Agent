@@ -10,8 +10,8 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { cn, formatWordCount } from '@/lib/utils';
-import { getDimensionConfigsByLayer, getDimensionsByLayer } from '@/config/dimensions';
+import { cn, formatWordCount } from '@/features/planning/utils';
+import { getDimensionConfigsByLayer, getDimensionsByLayer } from '../../config/dimensions';
 import type { DimensionProgressItem, DimensionStatus } from '../../types';
 
 interface LayerProgressSnapshot {

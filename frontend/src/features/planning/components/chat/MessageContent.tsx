@@ -9,8 +9,8 @@ import { Message, ProgressMessage, DimensionReportMessage } from '../../types';
 import { isProgressMessage, isLayerCompletedMessage, isDimensionReportMessage } from '../../types';
 import StreamingText from './StreamingText';
 import LayerReportMessage from './LayerReportMessage';
-import MarkdownRenderer from '@/components/MarkdownRenderer';
-import { formatWordCount } from '@/lib/utils';
+import MarkdownRenderer from '@/features/planning/components/ui/MarkdownRenderer';
+import { formatWordCount } from '@/features/planning/utils';
 
 interface MessageContentProps {
   message: Message;

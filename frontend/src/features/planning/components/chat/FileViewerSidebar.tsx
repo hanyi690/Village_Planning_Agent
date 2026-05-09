@@ -12,8 +12,8 @@ import { motion } from 'framer-motion';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faTimes, faFileAlt, faCopy, faCheck, faImage } from '@fortawesome/free-solid-svg-icons';
 import type { FileMessage } from '../../types';
-import { DEFAULT_IMAGE_FORMAT } from '@/lib/constants';
-import { formatFileSize } from '@/lib/utils';
+import { DEFAULT_IMAGE_FORMAT } from '@/features/planning/constants';
+import { formatFileSize } from '@/features/planning/utils';
 import MarkdownRenderer from '../ui/MarkdownRenderer';
 import ImagePreview from '../ui/ImagePreview';
 
@@ -109,7 +109,7 @@ export default function FileViewerSidebar({ file, onClose }: FileViewerSidebarPr
             <div>
               <h2 className="text-lg font-bold text-white">{file.filename}</h2>
               <p className="text-xs text-white/80">
-                {formatFileSize(file.fileSize)} • 上传于 {new Date(file.timestamp).toLocaleTimeString()}
+                {formatFileSize(file.fileSize ?? 0)} • 上传于 {new Date(file.timestamp).toLocaleTimeString()}
               </p>
             </div>
           </div>

@@ -2,8 +2,8 @@
 
 本文档提供 Village Planning Agent 系统的整体架构概览。
 
-> **更新日期**: 2026-05-08
-> **版本**: v2.0 (重组后架构)
+> **更新日期**: 2026-05-09
+> **版本**: v3.0 (Session 统一架构)
 
 ## 目录
 
@@ -201,9 +201,12 @@ Layer 3 (详细规划)
 
 | 文件 | 职责 |
 |------|------|
+| `backend/app/api/session_routes.py` | 10 个核心 Session 端点 |
+| `backend/app/api/routes.py` | 路由聚合 + 健康检查 |
+| `backend/app/api/schemas.py` | Pydantic 数据模型 |
 | `backend/app/services/sse.py` | SSE 推送管理 |
-| `backend/app/api/routes.py` | 统一路由入口 |
-| `backend/app/database/engine.py` | 数据库引擎与Checkpointer |
+| `backend/app/services/checkpoint.py` | Checkpoint 持久化 |
+| `backend/app/database/engine.py` | 数据库引擎与 Checkpointer |
 
 ### 前端核心 [搁置]
 

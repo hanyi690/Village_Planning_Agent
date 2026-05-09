@@ -1,19 +1,19 @@
 # 前端状态与组件架构
 
-> **更新日期**: 2026-05-09
-> **版本**: v3.0 (Feature-based 重构后)
+> **更新日期**: 2026-05-10
+> **版本**: v3.1 (三栏工作台布局)
 > **状态**: ✅ 已完整实现
 
-本文档详细说明前端状态管理架构和SSE事件处理机制。
+本文档详细说明前端状态管理架构、三栏工作台布局和 SSE 事件处理机制。
 
 ## 目录
 
 - [Feature Module 结构](#feature-module-结构)
 - [状态管理架构](#状态管理架构)
-- [PlanningState接口](#planningstate接口)
-- [SSE批处理机制](#sse批处理机制)
-- [Dashboard布局架构](#dashboard布局架构)
-- [组件使用状态](#组件使用状态)
+- [PlanningState 接口](#planningstate-接口)
+- [三栏工作台布局](#三栏工作台布局)
+- [组件层级图](#组件层级图)
+- [SSE 批处理机制](#sse-批处理机制)
 - [关键文件路径](#关键文件路径)
 
 ---
@@ -27,43 +27,61 @@
 ```
 frontend/src/features/planning/
 ├── api/                    # API 客户端和类型定义
-│   ├── types.ts            # 统一 API 类型（588行）
+│   ├── types.ts            # 统一 API 类型
 │   ├── planning-api.ts     # 规划流程 API
 │   └── index.ts            # API 导出
 ├── components/             # UI 组件
-│   ├── Dashboard.tsx       # 主布局（Brutalist 风格）
-│   ├── DimensionCard.tsx   # 维度状态卡片
+│   ├── Dashboard.tsx       # 主布局（三栏工作台）
 │   ├── CascadePanel.tsx    # 级联修复可视化
-│   ├── MessagePanel.tsx    # 消息侧边栏
+│   ├── MessagePanel.tsx    # 消息面板
 │   ├── ChatInput.tsx       # 简化输入框
-│   ├── chat/               # 聊天相关组件
+│   ├── DimensionCard.tsx   # 维度状态卡片
+│   ├── VillageInputForm.tsx# 村庄信息输入表单
+│   ├── chat/               # 对话相关组件
+│   │   ├── MessageBubble.tsx
+│   │   ├── MessageList.tsx
+│   │   ├── StreamingText.tsx
+│   │   ├── ToolStatusPanel.tsx
+│   │   ├── ReviewPanel.tsx
+│   │   ├── ProgressPanel.tsx
+│   │   └── ...
 │   ├── gis/                # GIS 组件
-│   ├── layout/             # 布局组件（Header 等）
-│   └── ui/                 # UI 工具组件
+│   │   ├── MapView.tsx
+│   │   ├── LegendPanel.tsx
+│   │   ├── DataUpload.tsx
+│   │   └── index.ts
+│   └── layout/             # 三栏布局组件
+│       ├── AppHeader.tsx       # 顶部导航栏 (56px)
+│       ├── LayerNav.tsx        # 左侧导航 (280px)
+│       ├── ContextPanel.tsx    # 右侧上下文面板 (280px)
+│       ├── FocusArea.tsx       # 中央工作区
+│       ├── BottomActionBar.tsx # 底部操作栏 (64px)
+│       └── index.ts
 ├── hooks/                  # 自定义 Hooks
 │   ├── useSSE.ts           # SSE 连接（批处理优化）
 │   ├── useSelectors.ts     # 状态选择器
 │   ├── useHandlers.ts      # 事件处理器
 │   ├── usePersistence.ts   # 消息持久化
-│   ├── useSessionRestore.ts # Session 恢复
+│   ├── useSessionRestore.ts# Session 恢复
+│   ├── useApprovalActions.ts# 审批操作
 │   └── index.ts            # Hooks 导出
 ├── store/                  # 状态管理
-│   ├── planningStore.ts    # Zustand Store（~1600行）
+│   ├── planningStore.ts    # Zustand Store
 │   └── planning-context.tsx # Context Provider
 ├── types/                  # 类型定义
+│   ├── base.ts
+│   └── index.ts
 ├── config/                 # 配置
+│   ├── dimensions.ts
+│   └── planning.ts
+├── constants/              # 常量
+│   └── index.ts            # LAYER_IDS, NAV_KEYS 等
 └── utils/                  # 工具函数
+    ├── message-helpers.ts
+    ├── cn.ts
+    ├── logger.ts
+    └── report-parser.ts
 ```
-
-### 已删除的旧目录
-
-以下旧目录已完全删除：
-
-| 目录 | 原路径 | 说明 |
-|------|--------|------|
-| stores | `frontend/src/stores/` | 已迁移到 `features/planning/store/` |
-| hooks/planning | `frontend/src/hooks/planning/` | 已迁移到 `features/planning/hooks/` |
-| components/chat | `frontend/src/components/chat/` | 已迁移到 `features/planning/components/chat/` |
 
 ---
 
@@ -78,24 +96,16 @@ import { immer } from 'zustand/middleware/immer';
 
 export const usePlanningStore = create<PlanningState & PlanningActions>()(
   immer((set, get) => ({
-    // Session 状态
     conversationId: '',
-    taskId: null,
+    sessionId: null,
     projectName: null,
     status: 'idle',
-
-    // Agent状态（SSOT）
     phase: 'init',
     currentWave: 1,
     reports: {},
     pause_after_step: false,
     previous_layer: 0,
-
-    // Actions
-    setStatus: (status) => set({ status }),
-    handleSSEEvent: (event) => set((state) => {
-      // 根据事件类型更新状态
-    }),
+    step_mode: false,
   }))
 );
 ```
@@ -105,7 +115,6 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
 为优化性能，使用细粒度选择器避免不必要的重渲染：
 
 ```typescript
-// frontend/src/features/planning/hooks/useSelectors.ts
 export function useStatus(): Status {
   return usePlanningStore((state) => state.status);
 }
@@ -129,16 +138,16 @@ export function useDimensionProgressAll(): Record<string, DimensionProgressItem>
 
 ---
 
-## PlanningState接口
+## PlanningState 接口
 
 ### 核心字段
 
 ```typescript
-// frontend/src/features/planning/store/planningStore.ts
 export interface PlanningState {
-  // Session
   conversationId: string;
-  taskId: string | null;
+
+  // Session
+  sessionId: string | null;
   projectName: string | null;
   status: Status;
 
@@ -148,6 +157,7 @@ export interface PlanningState {
   reports: Reports;
   pause_after_step: boolean;
   previous_layer: number;
+  step_mode: boolean;
 
   // Derived UI State
   completedDimensions: CompletedDimensions;
@@ -157,63 +167,224 @@ export interface PlanningState {
   isPaused: boolean;
   pendingReviewLayer: number | null;
 
+  // SSE Reconnect
+  sseResumeTrigger: number;
+  lastProcessedSeq: number;
+
   // Messages
   messages: Message[];
 
   // Progress
   dimensionProgress: Record<string, DimensionProgressItem>;
   executingDimensions: string[];
+  layerDimensionCount: Record<number, number>;
+  layerProgressHistory: { layer1?: LayerProgressSnapshot; ... };
 
-  // RAG & Cascade Tracking (Demo System)
-  dimensionRagSources: Record<string, KnowledgeSource[]>;  // 维度文档来源
-  cascadeChain: CascadeChain | null;                       // 级联修复链
-  dimensionVersions: Record<string, number>;               // 维度版本计数
-
-  // Streaming State
-  streamingContent: Record<string, string>;                // 流式内容临时存储
-  resettingDimensions: string[];                           // 正在重置的维度
-
-  // Simplified Tool Tracking
-  runningTools: string[];                                  // 运行工具名称列表
+  // RAG & Cascade (Demo System)
+  dimensionRagSources: Record<string, DimensionRagSource>;
+  cascadeChain: CascadeChain | null;
+  dimensionVersions: Record<string, number>;
+  streamingContent: Record<string, string>;
+  resettingDimensions: string[];
+  runningTools: string[];
 
   // UI State
   viewerVisible: boolean;
+  referencedSection?: string;
+  viewingFile: FileMessage | null;
+  viewMode: 'WELCOME_FORM' | 'SESSION_ACTIVE';
+  villageFormData: VillageInputData | null;
+  progressPanelVisible: boolean;
+  layerReportVisible: boolean;
+  activeReportLayer: number;
+
+  // History
+  villages: VillageInfo[];
+  selectedVillage: VillageInfo | null;
+  selectedSession: VillageSession | null;
+
+  // Checkpoints
+  checkpoints: Checkpoint[];
+  selectedCheckpoint: string | null;
+
+  // Tools
+  toolStatuses: Record<string, ToolStatus>;
   gisLayers: Record<string, GISLayerConfig[]>;
+
+  // Three-Panel Layout Navigation State
+  selectedNavigationKey: NavigationKey | null;
+  isRightPanelExpanded: boolean;
+  isLeftNavCollapsed: boolean;
 }
 ```
 
-### 新增字段说明
+### 三栏布局相关字段
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `dimensionRagSources` | `Record<string, KnowledgeSource[]>` | 每个维度的RAG文档来源追踪 |
-| `cascadeChain` | `CascadeChain | null` | 级联修复链可视化数据 |
-| `dimensionVersions` | `Record<string, number>` | 维度版本计数，修订时递增 |
-| `streamingContent` | `Record<string, string>` | 流式内容临时存储 |
-| `resettingDimensions` | `string[]` | 正在重置的维度列表 |
-| `runningTools` | `string[]` | 简化的运行工具名称列表 |
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `selectedNavigationKey` | `NavigationKey \| null` | `null` | 当前选中导航键 |
+| `isRightPanelExpanded` | `boolean` | `true` | 右侧上下文面板展开状态 |
+| `isLeftNavCollapsed` | `boolean` | `false` | 左侧导航折叠状态 |
 
-### 状态派生
+### NavigationKey 类型
 
 ```typescript
-// 从Agent状态派生UI状态
-function deriveUIState(state: AgentState): UIState {
-  return {
-    currentLayer: _phaseToLayer(state.phase),
-    completedLayers: {
-      1: checkLayerComplete(state, 1),
-      2: checkLayerComplete(state, 2),
-      3: checkLayerComplete(state, 3),
-    },
-    isPaused: state.pause_after_step,
-    pendingReviewLayer: state.pause_after_step ? state.previous_layer : null,
-  };
+export const NAV_KEYS = {
+  OVERVIEW: 'overview',
+  CHAT: 'chat',
+  APPROVAL: 'approval',
+  dim: (key: string) => `dim:${key}`,
+} as const;
+
+export type NavigationKey = (typeof NAV_KEYS)[keyof typeof NAV_KEYS] | `dim:${string}`;
+```
+
+---
+
+## 三栏工作台布局
+
+### 设计风格
+
+- **配色**: 白色背景 + slate 中性色 + emerald 强调色
+  - 主背景: `bg-white` / `bg-slate-50`
+  - 边框: `border-slate-200`
+  - 强调色: `emerald-50`/`emerald-500`/`emerald-700`
+- **形状**: 8px-12px `rounded-lg/xl` 圆角
+- **字体**: 全局 `text-sm`(14px) / `text-base`(16px) / `text-xl`(20px)
+- **响应式**: `lg:` 断点（1024px）区分桌面和移动端
+
+### 布局结构
+
+```
+┌───────────────────────────────────────────────────────────┐
+│ AppHeader (56px)  项目名 | L1 L2 L3 进度 | 导出 新会话    │
+├──────────┬──────────────────────────────┬─────────────────┤
+│          │                              │                 │
+│ LayerNav │        FocusArea             │  ContextPanel   │
+│ (280px)  │        (flex:1)              │  (280px)        │
+│          │                              │                 │
+│  总览    │   idle → VillageInputForm   │  GIS 地图       │
+│  对话    │   chat → MessagePanel       │  级联修复链     │
+│  L1 资源 │   dim  → 分析报告           │  运行中工具     │
+│  L2 产业 │   review → ReviewPanel      │  知识来源       │
+│  L3 设施 │   overview → 规划总览       │                 │
+│          │                              │                 │
+├──────────┴──────────────────────────────┴─────────────────┤
+│ BottomActionBar (64px)  审查 / 打开对话                   │
+└───────────────────────────────────────────────────────────┘
+```
+
+### 布局尺寸（桌面端 lg:）
+
+| 区域 | 尺寸 | 说明 |
+|------|------|------|
+| AppHeader | `h-[56px]` | 固定顶部，半透明背景 |
+| LayerNav | `w-[280px]` | 内联边栏，可折叠 |
+| FocusArea | `flex:1` | 中央内容区，`max-w-4xl` |
+| ContextPanel | `w-[280px]` | 右侧上下文面板，可展开/折叠 |
+| BottomActionBar | `h-[64px]` | 条件渲染底部栏 |
+
+### 响应式行为
+
+- **桌面端 (lg: 1024px+)**: 三栏并排内联布局
+- **移动端 (<lg)**: LayerNav 切换为固定定位 overlay + 半透明 backdrop
+
+```tsx
+{/* Desktop: inline sidebar */}
+<div className="hidden lg:block shrink-0">
+  {!isLeftNavCollapsed && <LayerNav />}
+</div>
+{/* Mobile: overlay drawer */}
+{!isLeftNavCollapsed && (
+  <div className="lg:hidden fixed inset-0 z-30">
+    <div className="fixed inset-0 bg-black/30" onClick={handleToggleLeftNav} />
+    <div className="fixed left-0 top-[56px] bottom-0 z-40 w-[280px] shadow-xl">
+      <LayerNav />
+    </div>
+  </div>
+)}
+```
+
+### FocusArea 内容切换
+
+FocusArea 根据 `selectedNavigationKey` 和 `status` 渲染不同内容：
+
+| 条件 | 渲染组件 |
+|------|----------|
+| `status === 'idle'` | `VillageInputForm` |
+| `cascadeChain && !selectedNavigationKey` | `CascadePanel` + `ChatInput` |
+| `selectedNavigationKey === NAV_KEYS.CHAT` | `MessagePanel` + `ChatInput` |
+| `selectedNavigationKey === NAV_KEYS.APPROVAL` | `ReviewPanel` |
+| `selectedNavigationKey?.startsWith('dim:')` | Markdown 分析报告 |
+| 默认（总览） | 规划总览 + Layer 摘要 |
+
+### 页面集成
+
+```typescript
+// frontend/src/app/page.tsx
+import { PlanningProvider } from '@/features/planning';
+import Dashboard from '@/features/planning/components/Dashboard';
+
+export default function HomePage() {
+  return (
+    <PlanningProvider conversationId="default-session">
+      <Dashboard />
+    </PlanningProvider>
+  );
 }
 ```
 
 ---
 
-## SSE批处理机制
+## 组件层级图
+
+```
+page.tsx
+└── PlanningProvider
+    └── Dashboard
+        ├── AppHeader
+        │   ├── 汉堡按钮
+        │   ├── 项目名称
+        │   ├── L1/L2/L3 进度条
+        │   ├── 导出按钮
+        │   └── 新会话按钮
+        ├── [Desktop] LayerNav (hidden lg:block)
+        │   ├── 导航项（总览/对话）
+        │   └── Layer 展开列表（L1/L2/L3）
+        │       └── 维度项 + 状态圆点
+        ├── [Mobile] LayerNav (lg:hidden overlay)
+        ├── FocusArea (flex:1)
+        │   └── 按 navigationKey 切换
+        ├── ContextPanel (w-[280px])
+        │   ├── GIS MapView
+        │   ├── CascadePanel
+        │   ├── 运行中工具
+        │   └── 知识来源
+        └── BottomActionBar
+            ├── [审查] 批准/驳回/反馈
+            └── [默认] 打开对话
+```
+
+### 组件使用状态
+
+| 组件 | 文件路径 | 使用状态 |
+|------|----------|----------|
+| `Dashboard` | `components/Dashboard.tsx` | page.tsx 使用 |
+| `AppHeader` | `components/layout/AppHeader.tsx` | Dashboard 使用 |
+| `LayerNav` | `components/layout/LayerNav.tsx` | Dashboard 使用 |
+| `FocusArea` | `components/layout/FocusArea.tsx` | Dashboard 使用 |
+| `ContextPanel` | `components/layout/ContextPanel.tsx` | Dashboard 使用 |
+| `BottomActionBar` | `components/layout/BottomActionBar.tsx` | Dashboard 使用 |
+| `CascadePanel` | `components/CascadePanel.tsx` | ContextPanel/FocusArea |
+| `MessagePanel` | `components/MessagePanel.tsx` | FocusArea |
+| `ChatInput` | `components/ChatInput.tsx` | FocusArea |
+| `ReviewPanel` | `components/chat/ReviewPanel.tsx` | FocusArea |
+| `VillageInputForm` | `components/VillageInputForm.tsx` | FocusArea |
+| `MapView` | `components/gis/MapView.tsx` | ContextPanel |
+
+---
+
+## SSE 批处理机制
 
 ### 批处理参数
 
@@ -225,259 +396,61 @@ const MAX_DELTA_PER_KEY = 3;  // 每维度保留最新3个delta
 
 ### 关键事件类型（跳过队列）
 
-以下事件类型立即处理，不进入批处理队列：
-
 ```typescript
 const criticalEventTypes = [
-  // Layer & Dimension Events
-  'dimension_start',
-  'dimension_complete',
-  'layer_started',
-  'layer_completed',
-  // Tool Events (NEW System)
-  'tool_started',
-  'tool_status',
-  // RAG & Cascade Events (Demo System)
-  'rag_query',
-  'rag_result',
-  'cascade_impact',
-  'cascade_complete',
-  // Reset Events
-  'dimension_reset',
-  'dimension_reset_complete',
-  // State Events
-  'state_sync',
-  'layer_paused',
+  'dimension_start', 'dimension_complete',
+  'layer_started', 'layer_completed',
+  'tool_started', 'tool_status',
+  'rag_query', 'rag_result',
+  'cascade_impact', 'cascade_complete',
+  'dimension_reset', 'dimension_reset_complete',
+  'state_sync', 'layer_paused',
 ];
 ```
 
-### Override机制
+### Override 机制
 
 当 `dimension_complete` 事件到达时，跳过该维度所有待处理的 `dimension_delta` 事件：
 
 ```typescript
-// Track dimensions that have received complete events
 const completedDimensionKeysRef = useRef<Set<string>>(new Set());
-
-// Skip delta if dimension already received complete event
-if (completedKeys.has(key)) {
-  continue;
-}
+if (completedKeys.has(key)) continue;
 ```
 
-### Delta合并策略
+### Delta 合并策略
 
-对于同一维度的多个delta事件，只保留最新的（包含完整accumulated内容）：
+对于同一维度的多个 delta 事件，只保留最新的（包含完整 accumulated 内容）：
 
 ```typescript
-// Keep last N events for each dimension key
 let deltaList = dimensionDeltaMap.get(key);
 if (!deltaList) {
   deltaList = [];
   dimensionDeltaMap.set(key, deltaList);
 }
 deltaList.push(event);
-if (deltaList.length > MAX_DELTA_PER_KEY) {
-  deltaList.shift();
-}
-// 使用 deltaList[deltaList.length - 1] (最新一个)
+if (deltaList.length > MAX_DELTA_PER_KEY) deltaList.shift();
 ```
 
 ---
 
-## Dashboard布局架构
-
-### Brutalist/Raw 设计风格
-
-- 深色背景: `#0D0D0D`
-- 强调色: `#00FFB3`（青绿）、`#FF3D00`（橙红）
-- 2px 粗边框，无圆角
-- 30/70 分屏布局
-
-### 布局结构
-
-```
-┌─────────────────────────────────────────────────────┐
-│ Header (60px fixed)                                 │
-│   项目名称 | 状态指示器 | 进度条 | 控制按钮          │
-├──────────────────┬──────────────────────────────────┤
-│ 左面板 (30%)     │ 右面板 (70%)                     │
-│ Layer 维度卡片   │ MapView (GIS可视化)              │
-│  - Layer 1       │                                  │
-│  - Layer 2       │                                  │
-│  - Layer 3       │                                  │
-├──────────────────┴──────────────────────────────────┤
-│ CascadePanel (条件渲染，级联修复时显示)             │
-├─────────────────────────────────────────────────────┤
-│ ChatInput (60px fixed bottom)                       │
-└─────────────────────────────────────────────────────┘
-```
-
-### MessagePanel 滑入动画
+## SSE 事件类型
 
 ```typescript
-// 右侧滑入动画配置
-<motion.div
-  className="fixed top-[60px] right-0 bottom-[60px] w-[40%]"
-  initial={{ x: '100%' }}
-  animate={{ x: 0 }}
-  exit={{ x: '100%' }}
-  transition={{ duration: 0.3, ease: 'easeOut' }}
->
-  <MessagePanel messages={messages} onClose={...} />
-</motion.div>
-```
-
----
-
-## 组件使用状态
-
-### 新组件（Dashboard 系统）
-
-| 组件 | 文件路径 | 使用状态 | 说明 |
-|------|----------|----------|------|
-| `Dashboard` | `components/Dashboard.tsx` | 主页面使用 | Brutalist 风格主布局 |
-| `DimensionCard` | `components/DimensionCard.tsx` | Dashboard 使用 | 维度状态卡片 |
-| `CascadePanel` | `components/CascadePanel.tsx` | Dashboard 使用 | 级联修复可视化 |
-| `MessagePanel` | `components/MessagePanel.tsx` | Dashboard 使用 | 消息侧边栏 |
-| `ChatInput` | `components/ChatInput.tsx` | Dashboard 使用 | 简化输入框 |
-
-### 复用组件（chat 子目录）
-
-| 组件 | 文件路径 | 使用状态 | 说明 |
-|------|----------|----------|------|
-| `MessageBubble` | `components/chat/MessageBubble.tsx` | MessagePanel 使用 | 消息气泡 |
-| `MessageList` | `components/chat/MessageList.tsx` | 消息列表渲染 | 消息列表容器 |
-| `StreamingText` | `components/chat/StreamingText.tsx` | 流式文本 | 流式内容显示 |
-| `ToolStatusCard` | `components/chat/ToolStatusCard.tsx` | 工具状态 | 工具状态卡片 |
-| `LayerReportCard` | `components/chat/LayerReportCard.tsx` | 层级报告 | 层级报告卡片 |
-
-### 冗余组件（保留但未使用）
-
-| 组件 | 文件路径 | 状态 | 说明 |
-|------|----------|------|------|
-| `ChatPanel` | `components/chat/ChatPanel.tsx` | 仅导出 | 旧聊天面板，Dashboard 不使用 |
-| `ProgressPanel` | `components/chat/ProgressPanel.tsx` | 仅被 ChatPanel 导入 | 进度面板 |
-| `ReviewPanel` | `components/chat/ReviewPanel.tsx` | 仅被 ChatPanel 导入 | 审核面板 |
-| `DimensionSelector` | `components/chat/DimensionSelector.tsx` | 仅被 ChatPanel 导入 | 维度选择器 |
-
----
-
-## SSE事件类型
-
-### 完整事件类型列表
-
-```typescript
-// frontend/src/features/planning/api/types.ts
 export type PlanningSSEEventType =
-  // Tool Events (NEW System)
-  | 'tool_started'
-  | 'tool_status'
-  // Tool Events (Legacy)
-  | 'tool_call'
-  | 'tool_progress'
-  | 'tool_result'
-  // Layer & Dimension Events
-  | 'layer_started'
-  | 'layer_completed'
-  | 'dimension_start'
-  | 'dimension_complete'
-  | 'dimension_error'
-  | 'dimension_delta'
-  | 'dimension_revised'
-  | 'dimension_reset'
-  | 'dimension_reset_complete'
-  // Progress Events
-  | 'progress'
-  | 'checkpoint_saved'
-  | 'pause'
-  | 'resumed'
-  | 'completed'
-  | 'complete'
-  | 'error'
-  // Streaming Events
-  | 'text_chunk'
-  | 'content_delta'
-  | 'ai_response_delta'
-  | 'ai_response_complete'
-  | 'thinking_start'
-  | 'thinking'
-  | 'thinking_end'
-  | 'stream_paused'
-  // Review Events
+  | 'tool_started' | 'tool_status'
+  | 'tool_call' | 'tool_progress' | 'tool_result'       // Legacy
+  | 'layer_started' | 'layer_completed'
+  | 'dimension_start' | 'dimension_complete' | 'dimension_error'
+  | 'dimension_delta' | 'dimension_revised'
+  | 'dimension_reset' | 'dimension_reset_complete'
+  | 'progress' | 'checkpoint_saved'
+  | 'pause' | 'resumed' | 'completed' | 'complete' | 'error'
+  | 'text_chunk' | 'content_delta'
+  | 'ai_response_delta' | 'ai_response_complete'
+  | 'thinking_start' | 'thinking' | 'thinking_end' | 'stream_paused'
   | 'review_request'
-  // RAG & Cascade Events (Demo System)
-  | 'rag_query'
-  | 'rag_result'
-  | 'cascade_impact'
-  | 'cascade_complete'
-  // State Events
-  | 'state_sync'
-  | 'layer_paused'
-  | 'connected';
-```
-
-### 事件数据结构
-
-```typescript
-export interface PlanningSSEEvent {
-  type: PlanningSSEEventType;
-  session_id?: string;
-  data: PlanningSSEDataBase;
-}
-
-export interface PlanningSSEDataBase {
-  progress?: number;
-  current_layer?: number;
-  layer_number?: number;
-  layer_name?: string;
-  message?: string;
-  error?: string;
-  dimension_key?: string;
-  layer?: number;
-  delta?: string;
-  accumulated?: string;
-  full_content?: string;
-}
-```
-
----
-
-## Signal-Fetch模式
-
-### 概念
-
-SSE发送信号（signal），REST API获取完整数据（fetch）：
-
-```
-SSE: dimension_complete信号（仅dimension_key）
-    ↓
-前端: 检测信号 -> 发送REST请求
-    ↓
-REST API: 返回完整report内容
-    ↓
-前端: 更新状态
-```
-
-### 实现
-
-```typescript
-// SSE事件处理
-es.addEventListener('dimension_complete', (e) => {
-  const { dimension_key } = parseSSEEvent(e);
-
-  // Signal: 触发完整数据获取
-  fetchDimensionReport(sessionId, dimension_key);
-});
-
-// REST API获取完整数据
-async function fetchDimensionReport(sessionId: string, key: string) {
-  const response = await fetch(
-    `/api/planning/sessions/${sessionId}/dimensions/${key}`
-  );
-  const report = await response.json();
-  store.setReport(key, report);
-}
+  | 'rag_query' | 'rag_result' | 'cascade_impact' | 'cascade_complete'
+  | 'state_sync' | 'layer_paused' | 'connected';
 ```
 
 ---
@@ -488,38 +461,15 @@ async function fetchDimensionReport(sessionId: string, key: string) {
 |------|----------|
 | 状态管理 | `frontend/src/features/planning/store/planningStore.ts` |
 | Context Provider | `frontend/src/features/planning/store/planning-context.tsx` |
-| SSE连接 | `frontend/src/features/planning/hooks/useSSE.ts` |
+| SSE 连接 | `frontend/src/features/planning/hooks/useSSE.ts` |
 | 状态选择器 | `frontend/src/features/planning/hooks/useSelectors.ts` |
-| API类型 | `frontend/src/features/planning/api/types.ts` |
-| API客户端 | `frontend/src/features/planning/api/planning-api.ts` |
+| API 类型 | `frontend/src/features/planning/api/types.ts` |
+| API 客户端 | `frontend/src/features/planning/api/planning-api.ts` |
 | 主布局 | `frontend/src/features/planning/components/Dashboard.tsx` |
-| 维度卡片 | `frontend/src/features/planning/components/DimensionCard.tsx` |
-| 级联面板 | `frontend/src/features/planning/components/CascadePanel.tsx` |
-
----
-
-## 页面集成
-
-### page.tsx 使用
-
-```typescript
-// frontend/src/app/page.tsx
-import { PlanningProvider } from '@/features/planning';
-import Dashboard from '@/features/planning/components/Dashboard';
-
-export default function Home() {
-  return (
-    <PlanningProvider>
-      <Dashboard onOpenLayerSidebar={...} />
-    </PlanningProvider>
-  );
-}
-```
-
----
-
-## 相关文档
-
-- [04-backend-api](./04-backend-api.md) - SSE端点设计
-- [02-agent-core](./02-agent-core.md) - Agent状态定义
-- [terminology](./terminology.md) - SSE事件类型
+| 顶部导航 | `frontend/src/features/planning/components/layout/AppHeader.tsx` |
+| 左侧导航 | `frontend/src/features/planning/components/layout/LayerNav.tsx` |
+| 中央工作区 | `frontend/src/features/planning/components/layout/FocusArea.tsx` |
+| 右侧面板 | `frontend/src/features/planning/components/layout/ContextPanel.tsx` |
+| 底部操作栏 | `frontend/src/features/planning/components/layout/BottomActionBar.tsx` |
+| 常量定义 | `frontend/src/features/planning/constants/index.ts` |
+| 层级配置 | `frontend/src/features/planning/config/planning.ts` |

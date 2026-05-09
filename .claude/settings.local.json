@@ -1,4 +1,14 @@
 {
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "sk-ecd03f76859d4449b231ebd2edc5944a",
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro[1m]",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4-flash",
+    "CLAUDE_CODE_EFFORT_LEVEL": "max"
+  },
   "permissions": {
     "allow": [
       "mcp__langgraph-docs__brave_web_search",
@@ -164,7 +174,9 @@
       "Bash(PYTHONPATH=. pytest tests/ -v 2>&1)",
       "Bash(PYTHONPATH=. python -c \"\nfrom src.orchestration.main_graph import create_unified_planning_graph\nfrom backend.services.checkpoint_service import CheckpointService\nfrom backend.services.review_service import ReviewService\nfrom backend.services.planning_runtime_service import PlanningRuntimeService\nfrom backend.api.routes import router\nfrom src.utils.summary_generator import SummaryGenerator\nprint\\('All imports successful'\\)\n\" 2>&1 | tail -5)",
       "Bash(PYTHONPATH=. python -c \"\nfrom src.orchestration.main_graph import create_unified_planning_graph, run_unified_planning_async\nfrom src.orchestration.routing import route_by_phase, check_phase_completion\nprint\\('All imports OK'\\)\n\" 2>&1 | tail -3)",
-      "Bash(PYTHONPATH=. python -c \"from src.planners.pure_functions import validate_layer_state, build_error_result, format_detailed_plans; print\\('pure_functions import OK'\\)\" 2>&1)"
+      "Bash(PYTHONPATH=. python -c \"from src.planners.pure_functions import validate_layer_state, build_error_result, format_detailed_plans; print\\('pure_functions import OK'\\)\" 2>&1)",
+      "Bash(pkill:*)",
+      "mcp__plugin_everything-claude-code_sequential-thinking__sequentialthinking"
     ]
   },
   "enabledPlugins": {

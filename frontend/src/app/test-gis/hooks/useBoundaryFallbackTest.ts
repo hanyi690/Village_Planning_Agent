@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { dataApi } from '@/lib/api/data-api';
+import { dataApi } from '@/features/planning/api';
 
 // ============================================
 // Types

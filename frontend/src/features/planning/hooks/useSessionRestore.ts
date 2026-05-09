@@ -1,20 +1,19 @@
 /**
  * useSessionRestore Hook
  *
- * Handles session restoration from URL taskId parameter.
- * When page refreshes with taskId in URL, automatically:
- * 1. Sets taskId in store
+ * Handles session restoration from URL sessionId parameter.
+ * When page refreshes with sessionId in URL, automatically:
+ * 1. Sets sessionId in store
  * 2. Fetches and syncs backend state
  * 3. Loads historical messages
- * 4. Updates URL with taskId
+ * 4. Updates URL with sessionId
  */
 
 import { useEffect, useCallback, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { usePlanningStore } from '../store/planningStore';
 import { planningApi } from '../api';
-import { logger } from '@/lib/logger';
-import { transformBackendMessages } from '@/lib/utils/message-transform';
+import { logger } from '@/features/planning/utils/logger';
 
 interface UseSessionRestoreOptions {
   enabled?: boolean;
@@ -23,54 +22,54 @@ interface UseSessionRestoreOptions {
 export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions = {}) {
   const searchParams = useSearchParams();
 
-  const taskIdFromUrl = searchParams.get('taskId');
-  const taskId = usePlanningStore((state) => state.taskId);
+  const sessionIdFromUrl = searchParams.get('sessionId');
+  const sessionId = usePlanningStore((state) => state.sessionId);
   const status = usePlanningStore((state) => state.status);
-  const setTaskId = usePlanningStore((state) => state.setTaskId);
+  const setSessionId = usePlanningStore((state) => state.setSessionId);
   const setMessages = usePlanningStore((state) => state.setMessages);
   const syncBackendState = usePlanningStore((state) => state.syncBackendState);
   const setStatus = usePlanningStore((state) => state.setStatus);
   const resetConversation = usePlanningStore((state) => state.resetConversation);
 
   const restoringRef = useRef(false);
-  const restoredTaskIdRef = useRef<string | null>(null);
+  const restoredSessionIdRef = useRef<string | null>(null);
   const resetProtectionRef = useRef(false);
 
-  // Update URL with taskId (without triggering navigation)
-  const updateUrlWithTaskId = useCallback((newTaskId: string) => {
+  // Update URL with sessionId (without triggering navigation)
+  const updateUrlWithSessionId = useCallback((newSessionId: string) => {
     const currentUrl = new URL(window.location.href);
-    const currentTaskIdInUrl = currentUrl.searchParams.get('taskId');
+    const currentSessionIdInUrl = currentUrl.searchParams.get('sessionId');
 
-    if (currentTaskIdInUrl !== newTaskId) {
-      currentUrl.searchParams.set('taskId', newTaskId);
+    if (currentSessionIdInUrl !== newSessionId) {
+      currentUrl.searchParams.set('sessionId', newSessionId);
       window.history.replaceState({}, '', currentUrl.toString());
-      logger.context.info('URL updated with taskId', { taskId: newTaskId });
+      logger.context.info('URL updated with sessionId', { sessionId: newSessionId });
     }
   }, []);
 
   // Restore session from backend
-  const restoreSession = useCallback(async (targetTaskId: string) => {
+  const restoreSession = useCallback(async (targetSessionId: string) => {
     // Skip if already restoring
     if (restoringRef.current) {
       return;
     }
 
-    // Check if store already has correct taskId
-    const currentTaskId = usePlanningStore.getState().taskId;
-    if (currentTaskId === targetTaskId) {
-      restoredTaskIdRef.current = targetTaskId;
+    // Check if store already has correct sessionId
+    const currentSessionId = usePlanningStore.getState().sessionId;
+    if (currentSessionId === targetSessionId) {
+      restoredSessionIdRef.current = targetSessionId;
       return;
     }
 
     restoringRef.current = true;
-    logger.context.info('Starting session restoration', { taskId: targetTaskId });
+    logger.context.info('Starting session restoration', { sessionId: targetSessionId });
 
     try {
-      // 1. Set taskId first
-      setTaskId(targetTaskId);
+      // 1. Set sessionId first
+      setSessionId(targetSessionId);
 
       // 2. Fetch session status
-      const statusData = await planningApi.getStatus(targetTaskId);
+      const statusData = await planningApi.getStatus(targetSessionId);
 
       // 3. Sync backend state
       syncBackendState(statusData);
@@ -88,93 +87,79 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
         setStatus('planning');
       }
 
-      // 6. Clear existing messages before loading history (avoid SSE queue conflict)
+      // 6. Clear existing messages
       setMessages([]);
 
-      // 7. Load historical messages
-      const messagesResponse = await planningApi.getMessages(targetTaskId);
-      if (messagesResponse.success && messagesResponse.messages.length > 0) {
-        const transformedMessages = transformBackendMessages(messagesResponse.messages);
-        // Sort by created_at to ensure correct order
-        const sortedMessages = transformedMessages.sort((a, b) => {
-          const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
-          const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
-          return timeA - timeB;
-        });
-        setMessages(sortedMessages);
-        logger.context.info('Messages restored', { count: sortedMessages.length });
-      }
-
-      // 8. Mark as restored
-      restoredTaskIdRef.current = targetTaskId;
+      // 7. Mark as restored
+      restoredSessionIdRef.current = targetSessionId;
       logger.context.info('Session restoration completed', {
-        taskId: targetTaskId,
+        sessionId: targetSessionId,
         status: statusData.status,
         phase: statusData.phase,
       });
     } catch (error) {
-      logger.context.error('Session restoration failed', { error, taskId: targetTaskId });
-      // Clear invalid taskId from URL
+      logger.context.error('Session restoration failed', { error, sessionId: targetSessionId });
+      // Clear invalid sessionId from URL
       const url = new URL(window.location.href);
-      url.searchParams.delete('taskId');
+      url.searchParams.delete('sessionId');
       window.history.replaceState({}, '', url.toString());
       resetConversation();
     } finally {
       restoringRef.current = false;
     }
-  }, [setTaskId, syncBackendState, setStatus, setMessages, resetConversation]);
+  }, [setSessionId, syncBackendState, setStatus, setMessages, resetConversation]);
 
-  // On mount: check if taskId in URL and restore
+  // On mount: check if sessionId in URL and restore
   useEffect(() => {
     if (!enabled) return;
 
-    // Clear resetProtection when taskIdFromUrl becomes null (URL cleared)
-    if (!taskIdFromUrl) {
+    // Clear resetProtection when sessionIdFromUrl becomes null (URL cleared)
+    if (!sessionIdFromUrl) {
       resetProtectionRef.current = false;
     }
 
     // Only restore if:
-    // 1. taskId in URL
-    // 2. Store has no taskId (fresh page load)
+    // 1. sessionId in URL
+    // 2. Store has no sessionId (fresh page load)
     // 3. Not already restoring
     // 4. Not protected by reset (prevents restore after clicking "New Task")
-    if (taskIdFromUrl && !taskId && !restoringRef.current && !resetProtectionRef.current) {
-      restoreSession(taskIdFromUrl);
+    if (sessionIdFromUrl && !sessionId && !restoringRef.current && !resetProtectionRef.current) {
+      restoreSession(sessionIdFromUrl);
     }
 
     // StrictMode cleanup: reset ref so remount can restore
     return () => {
       restoringRef.current = false;
     };
-  }, [enabled, taskIdFromUrl, taskId, restoreSession]);
+  }, [enabled, sessionIdFromUrl, sessionId, restoreSession]);
 
-  // When taskId changes in store, update URL
+  // When sessionId changes in store, update URL
   useEffect(() => {
-    if (!enabled || !taskId) return;
+    if (!enabled || !sessionId) return;
 
-    // Don't update URL if this is the taskId we just restored
-    if (taskId === restoredTaskIdRef.current) return;
+    // Don't update URL if this is the sessionId we just restored
+    if (sessionId === restoredSessionIdRef.current) return;
 
-    updateUrlWithTaskId(taskId);
-  }, [enabled, taskId, updateUrlWithTaskId]);
+    updateUrlWithSessionId(sessionId);
+  }, [enabled, sessionId, updateUrlWithSessionId]);
 
-  // Detect reset: when taskId becomes null and status becomes 'idle'
+  // Detect reset: when sessionId becomes null and status becomes 'idle'
   // Set resetProtection to prevent session restore from re-triggering
   useEffect(() => {
     if (!enabled) return;
 
     // When store is reset to idle state, activate protection
-    if (taskId === null && status === 'idle') {
+    if (sessionId === null && status === 'idle') {
       resetProtectionRef.current = true;
       logger.context.info('Reset protection activated');
     }
-  }, [enabled, taskId, status]);
+  }, [enabled, sessionId, status]);
 
   return {
     isRestoring: restoringRef.current,
-    taskIdFromUrl,
+    sessionIdFromUrl,
     restoreSession,
-    updateUrlWithTaskId,
+    updateUrlWithSessionId,
   };
 }
 

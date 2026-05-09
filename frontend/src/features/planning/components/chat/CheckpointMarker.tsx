@@ -21,7 +21,7 @@ import {
   faExclamationTriangle,
   faCircle,
 } from '@fortawesome/free-solid-svg-icons';
-import { formatFullTimestamp, parseTimestamp } from '@/lib/utils';
+import { formatFullTimestamp, parseTimestamp } from '@/features/planning/utils';
 import type { Checkpoint } from '../../types';
 
 interface CheckpointMarkerProps {

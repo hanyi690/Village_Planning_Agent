@@ -4,8 +4,11 @@
 """
 
 import re
+import json
+from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
-from ..geocoding import TiandituProvider, WfsService, WFS_LAYERS, OSMProvider
+from .providers.tianditu import TiandituProvider, WfsService, WFS_LAYERS
+from .providers.osm import OSMProvider
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -22,6 +25,49 @@ _CITY_PATTERN = re.compile(r'(.+市)')
 _PROVINCE_PATTERN = re.compile(r'(.+省)')
 
 
+def infer_geojson_data_type(geojson: Dict[str, Any]) -> Optional[str]:
+    """Infer GIS data type from GeoJSON properties/geometry
+
+    Args:
+        geojson: GeoJSON FeatureCollection dict
+
+    Returns:
+        Inferred type: "boundary" | "road" | "water" | "residential" | None
+    """
+    features = geojson.get("features", [])
+    if not features:
+        return None
+    first = features[0]
+    geom_type = first.get("geometry", {}).get("type", "")
+    props = first.get("properties", {})
+
+    # Polygon/MultiPolygon likely boundary or water area
+    if geom_type in ("Polygon", "MultiPolygon"):
+        if props.get("boundary") or props.get("admin_level"):
+            return "boundary"
+        if props.get("water") or props.get("waterway"):
+            return "water"
+        if props.get("highway"):
+            return "road"
+        return "boundary"
+
+    # LineString likely road or waterway
+    if geom_type in ("LineString", "MultiLineString"):
+        if props.get("highway") or props.get("railway"):
+            return "road"
+        if props.get("waterway"):
+            return "water"
+        return "road"
+
+    # Point likely POI or residential
+    if geom_type == "Point":
+        if props.get("place") or props.get("building"):
+            return "residential"
+        return None
+
+    return None
+
+
 class GISDataFetcher:
     """GIS 数据自动获取器"""
 
@@ -31,6 +77,43 @@ class GISDataFetcher:
     def _get_wfs_service(self) -> WfsService:
         """获取 WFS 服务实例（使用 TiandituProvider 共享的实例）"""
         return self.provider.wfs_service
+
+    def _load_uploaded_geojson(
+        self,
+        upload_dir: Optional[Path],
+        data_type_hint: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Load GeoJSON from upload directory
+
+        Priority: upload_dir/*.geojson over Tianditu WFS.
+
+        Args:
+            upload_dir: Upload directory path
+            data_type_hint: Expected data type (boundary/road/water/etc.)
+
+        Returns:
+            GeoJSON FeatureCollection dict, or None
+        """
+        if not upload_dir or not Path(upload_dir).exists():
+            return None
+
+        upload_dir = Path(upload_dir)
+        for f in sorted(upload_dir.glob("*.geojson")):
+            try:
+                with open(f, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                if data.get("type") == "FeatureCollection":
+                    if data_type_hint:
+                        inferred = infer_geojson_data_type(data)
+                        if inferred == data_type_hint:
+                            logger.info(f"[GISDataFetcher] Using uploaded {data_type_hint}: {f.name}")
+                            return data
+                    else:
+                        logger.info(f"[GISDataFetcher] Using uploaded GeoJSON: {f.name}")
+                        return data
+            except Exception as e:
+                logger.warning(f"[GISDataFetcher] Failed to load {f.name}: {e}")
+        return None
 
     def get_boundary_bbox(
         self,

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { dataApi } from '@/lib/api/data-api';
+import { dataApi } from '@/features/planning/api';
 
 interface ToolConfig {
   id: string;

@@ -19,7 +19,7 @@ export {
   useSSEConnection,
   useMessages,
   useStatus,
-  useTaskId,
+  useSessionId,
   useProjectName,
   useCurrentLayer,
   useCurrentPhase,

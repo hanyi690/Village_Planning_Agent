@@ -8,7 +8,7 @@
 
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faCheck } from '@fortawesome/free-solid-svg-icons';
-import { LAYER_VALUE_MAP } from '@/lib/constants';
+import { LAYER_VALUE_MAP } from '@/features/planning/constants';
 
 interface ReviewPanelProps {
   layer: number;

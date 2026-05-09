@@ -16,7 +16,7 @@ import type { FeatureCollection, Geometry, Position, Feature, GeoJsonProperties 
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import type { GISLayerConfig, GeoJsonFeatureCollection } from '@/types/message/message-types';
-import { PLANNING_COLORS, DEFAULT_COLORS, TILE_SOURCES, BASE_MAP_TYPES, BaseMapType, LineColors, FeatureColors, LayerType } from '@/lib/constants/gis';
+import { PLANNING_COLORS, DEFAULT_COLORS, TILE_SOURCES, BASE_MAP_TYPES, BaseMapType, LineColors, FeatureColors, LayerType } from '@/features/planning/constants/gis';
 import LegendPanel from './LegendPanel';
 
 // Layer type display names（规划输出图层类型，区别于 GISUploadSidebar 的 DATA_TYPE_NAMES）

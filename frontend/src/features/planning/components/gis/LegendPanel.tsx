@@ -13,7 +13,7 @@ import {
   LegendItem,
   LayerType,
   PLANNING_COLORS,
-} from '@/lib/constants/gis';
+} from '@/features/planning/constants/gis';
 
 interface LegendPanelProps {
   /** List of active layer types to display */

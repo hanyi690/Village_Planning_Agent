@@ -21,10 +21,10 @@ import LayerReportMessage from './LayerReportMessage';
 import CheckpointMarker from './CheckpointMarker';
 import ToolStatusCard from './ToolStatusCard';
 import GisResultCard from './GisResultCard';
-import { parseTimestamp } from '@/lib/utils';
-import { formatFileSize } from '@/lib/utils';
-import { DEFAULT_IMAGE_FORMAT } from '@/lib/constants';
-import MarkdownRenderer from '@/components/MarkdownRenderer';
+import { parseTimestamp } from '@/features/planning/utils';
+import { formatFileSize } from '@/features/planning/utils';
+import { DEFAULT_IMAGE_FORMAT } from '@/features/planning/constants';
+import MarkdownRenderer from '@/features/planning/components/ui/MarkdownRenderer';
 
 interface MessageListProps {
   messages: Message[];
@@ -213,7 +213,7 @@ export default function MessageList({
                       ({fileMsg.imageWidth}x{fileMsg.imageHeight})
                     </span>
                   )}
-                  <span className="text-xs opacity-75">({formatFileSize(fileMsg.fileSize)})</span>
+                  <span className="text-xs opacity-75">({formatFileSize(fileMsg.fileSize ?? 0)})</span>
                 </div>
 
                 {/* 图片缩略图 */}

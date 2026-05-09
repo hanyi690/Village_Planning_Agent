@@ -11,8 +11,8 @@ Design:
 import asyncio
 from typing import Any, Dict, List, Optional
 
-from ..tools.protocol import ToolResult  # Unified ToolResult
-from ..utils.logger import get_logger
+from app.tools.protocol import ToolResult
+from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -45,7 +45,7 @@ class GisService:
             ToolResult with status, data, error, metadata
         """
         try:
-            from ..tools.registry import ToolRegistry
+            from app.tools.registry import ToolRegistry
 
             logger.info(f"[GisService] Executing tool: {tool_name}")
 
@@ -157,7 +157,7 @@ class GisService:
             Boundary GeoJSON or None (never raises exception)
         """
         try:
-            from ..tools.geocoding import TiandituProvider
+            from .providers.tianditu.provider import TiandituProvider
 
             provider = TiandituProvider()
             result = provider.get_boundary(village_name)
@@ -187,7 +187,7 @@ class GisService:
             (center_lon, center_lat) or None
         """
         try:
-            from ..tools.core.gis_data_fetcher import GISDataFetcher
+            from .fetcher import GISDataFetcher
 
             fetcher = GISDataFetcher()
             center, _ = fetcher.get_village_center(village_name, buffer_km)

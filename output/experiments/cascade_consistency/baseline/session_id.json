@@ -1,9 +1,8 @@
 {
-  "session_id": "23bb7190-49cc-4432-91d8-b1e8eee3fbf9",
-  "checkpoint_id": "1f149928-b319-6e64-801f-62f291349f26",
+  "session_id": "baseline_97d9465b_20260509173630",
   "project_name": "金田村基线实验",
-  "phase": "layer3",
-  "created_at": "2026-05-07T09:27:55.028400",
-  "state_fingerprint": "8c6a7a072bfaaf34",
-  "exported_from_db": true
+  "phase": "completed",
+  "created_at": "2026-05-09T17:36:30.915628",
+  "state_fingerprint": "ba3977c24e2cc25d0810bab7a026d9e2",
+  "final_checkpoint_id": ""
 }

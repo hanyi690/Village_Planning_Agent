@@ -6,10 +6,10 @@
  */
 
 import { LayerCompletedMessage } from '../../types';
-import { parseLayerReport, ParsedDimension } from '@/lib/report-parser';
+import { parseLayerReport, ParsedDimension } from '@/features/planning/utils/report-parser';
 import LayerReportCard from './LayerReportCard';
 import React, { useMemo } from 'react';
-import { getDimensionName, getDimensionIcon } from '@/config/dimensions';
+import { getDimensionName, getDimensionIcon } from '../../config/dimensions';
 
 interface LayerReportMessageProps {
   message: LayerCompletedMessage;

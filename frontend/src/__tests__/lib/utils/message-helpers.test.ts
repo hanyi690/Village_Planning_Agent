@@ -11,7 +11,7 @@ import {
   createErrorMessage,
   createWarningMessage,
   createActionButtons,
-} from '@/lib/utils/message-helpers';
+} from '@/features/planning/utils/message-helpers';
 
 describe('Message Helpers', () => {
   describe('generateMessageId', () => {

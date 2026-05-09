@@ -1,7 +1,7 @@
 'use client';
 
 import type { GISLayerConfig } from '@/types/message/message-types';
-import { PLANNING_COLORS } from '@/lib/constants/gis';
+import { PLANNING_COLORS } from '@/features/planning/constants/gis';
 
 interface DebugPanelProps {
   layers: GISLayerConfig[];

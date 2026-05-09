@@ -224,20 +224,32 @@ export interface StartPlanningRequest {
   stream_mode?: boolean;
   input_mode?: 'file' | 'text';
   images?: ImageData[];
+  villageDataFiles?: File[];
+  taskFiles?: File[];
+  constraintFiles?: File[];
 }
 
 export interface StartPlanningResponse {
-  task_id: string;
+  session_id: string;
+  stream_url: string;
   status: string;
-  message: string;
 }
 
+/** @deprecated 使用 FeedbackRequest 替代 */
 export interface ReviewActionRequest {
   action: 'approve' | 'reject' | 'rollback';
   feedback?: string;
   dimensions?: string[];
   checkpoint_id?: string;
   review_id?: string;
+  images?: ImageData[];
+}
+
+export interface FeedbackRequest {
+  feedback?: string;
+  dimensions?: string[];
+  message?: string;
+  approve?: boolean;
   images?: ImageData[];
 }
 
@@ -297,6 +309,16 @@ export interface UIMessage {
   message_metadata?: Record<string, unknown>;
   created_at?: string;
   timestamp: string;
+}
+
+/**
+ * 维度报告响应类型
+ */
+export interface DimensionReportResponse {
+  session_id: string;
+  dimension_key: string;
+  layer: number;
+  content: string;
 }
 
 /**

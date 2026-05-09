@@ -8,4 +8,18 @@ export { useThrottleCallback } from './throttle';
 
 export { formatFileSize, truncateText } from './format';
 
-// Message helpers - import from @/lib/utils/message-helpers.ts directly
+export {
+  createBaseMessage,
+  createSystemMessage,
+  createErrorMessage,
+  createWarningMessage,
+  getErrorMessage,
+  formatFullTimestamp,
+  parseTimestamp,
+  formatMessageTimestamp,
+  formatWordCount,
+  buildDimensionProgressKey,
+  buildLayerReportId,
+} from './message-helpers';
+
+export { cn } from './cn';

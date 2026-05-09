@@ -56,5 +56,5 @@ export {
   isGisResultMessage,
 } from './guards';
 
-// Note: createBaseMessage, buildLayerReportId, etc. are in @/lib/utils/message-helpers.ts
+// Note: createBaseMessage, buildLayerReportId, etc. are in @/features/planning/utils/message-helpers.ts
 // Import directly from there if needed

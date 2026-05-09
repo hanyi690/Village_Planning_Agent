@@ -83,4 +83,7 @@ export interface PlanningParams {
   stepMode?: boolean;
   streamMode?: boolean;
   images?: import('../api/types').ImageData[];
+  villageDataFiles?: File[];
+  taskFiles?: File[];
+  constraintFiles?: File[];
 }

@@ -4,7 +4,7 @@
  * CascadePanel - 级联修复可视化组件
  *
  * SVG路径绘制影响链，CSS流动动画，节点入场动画
- * Brutalist aesthetic: dark background, high contrast, rough borders
+ * Gemini aesthetic: amber gradient background, rounded corners, smooth transitions
  */
 
 import React, { useMemo } from 'react';
@@ -48,11 +48,11 @@ export default function CascadePanel({ trigger, impacted }: CascadePanelProps) {
   }, [allNodes]);
 
   return (
-    <div className="w-full px-4 py-4 bg-[#0D0D0D] border-t-2 border-b-2 border-[#FF3D00]">
+    <div className="w-full px-4 py-4 bg-gradient-to-r from-amber-50 to-orange-50 border-t border-amber-200">
       {/* Header */}
       <div className="flex items-center gap-2 mb-4">
-        <span className="text-xs text-[#FF3D00] uppercase tracking-wider">级联修复链</span>
-        <span className="text-xs text-[#666]">用户反馈触发</span>
+        <span className="text-xs text-amber-700 uppercase tracking-wider font-medium">级联修复链</span>
+        <span className="text-xs text-slate-500">用户反馈触发</span>
       </div>
 
       {/* SVG chain visualization */}
@@ -72,7 +72,7 @@ export default function CascadePanel({ trigger, impacted }: CascadePanelProps) {
                 y1={pos.y}
                 x2={nextPos.x}
                 y2={nextPos.y}
-                stroke="#FF3D00"
+                stroke="#F59E0B"
                 strokeWidth="2"
                 strokeDasharray="4 4"
                 initial={{ pathLength: 0 }}
@@ -102,8 +102,8 @@ export default function CascadePanel({ trigger, impacted }: CascadePanelProps) {
                   cx={pos.x}
                   cy={pos.y}
                   r={8}
-                  fill={isTrigger ? '#FF3D00' : '#FFB800'}
-                  stroke={isTrigger ? '#FF3D00' : '#FFB800'}
+                  fill={isTrigger ? '#F59E0B' : '#FBBF24'}
+                  stroke={isTrigger ? '#F59E0B' : '#FBBF24'}
                   strokeWidth="2"
                 />
 
@@ -112,9 +112,9 @@ export default function CascadePanel({ trigger, impacted }: CascadePanelProps) {
                   x={pos.x}
                   y={pos.y + 20}
                   textAnchor="middle"
-                  fill="#888"
+                  fill="#64748B"
                   fontSize="6"
-                  fontFamily="monospace"
+                  fontFamily="system-ui"
                 >
                   {getDisplayName(node)}
                 </text>
@@ -125,7 +125,7 @@ export default function CascadePanel({ trigger, impacted }: CascadePanelProps) {
                     x={pos.x}
                     y={pos.y - 15}
                     textAnchor="middle"
-                    fill="#FF3D00"
+                    fill="#F59E0B"
                     fontSize="8"
                   >
                     触发
@@ -145,11 +145,11 @@ export default function CascadePanel({ trigger, impacted }: CascadePanelProps) {
       </div>
 
       {/* Text description */}
-      <div className="mt-2 text-xs text-[#888]">
-        <span className="text-[#FF3D00]">{getDisplayName(trigger)}</span>
-        <span className="text-[#666]"> 的修改将影响 </span>
-        <span className="text-[#FFB800]">{impacted.length}</span>
-        <span className="text-[#666]"> 个相关维度</span>
+      <div className="mt-2 text-xs text-slate-600">
+        <span className="text-amber-600 font-medium">{getDisplayName(trigger)}</span>
+        <span className="text-slate-500"> 的修改将影响 </span>
+        <span className="text-amber-500 font-medium">{impacted.length}</span>
+        <span className="text-slate-500"> 个相关维度</span>
       </div>
     </div>
   );

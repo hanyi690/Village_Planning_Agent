@@ -39,6 +39,27 @@ class DimensionSummary(TypedDict):
     created_at: str
 
 
+def _merge_dict_of_lists(a: Dict[str, List], b: Dict[str, List]) -> Dict[str, List]:
+    """合并两个 {key: list} 字典，对同 key 的 list 去重拼接。用于并行 fan-in。"""
+    result = {}
+    all_keys = set(a.keys()) | set(b.keys())
+    for k in all_keys:
+        a_list = a.get(k, [])
+        b_list = b.get(k, [])
+        combined = a_list + b_list
+        deduped = []
+        for item in combined:
+            if item not in deduped:
+                deduped.append(item)
+        result[k] = deduped
+    return result
+
+
+def _merge_dict_of_dicts(a: Dict[str, Dict], b: Dict[str, Dict]) -> Dict[str, Dict]:
+    """合并两个 {key: dict} 字典，同 key 时后者覆盖。用于并行 fan-in。"""
+    return {**a, **b}
+
+
 class AgentState(TypedDict, total=False):
     """
     核心状态 - 精简版
@@ -47,8 +68,10 @@ class AgentState(TypedDict, total=False):
     - messages: 消息流
     - session_id, project_name: 标识
     - phase, current_wave: 进度
-    - completed_dimensions: 完成追踪
-    - reports: 报告存储
+    - completed_dimensions: 完成追踪 (Annotated: 并行合并)
+    - reports: 报告存储 (Annotated: 并行合并)
+    - report_versions: 版本追踪 (Annotated: 并行合并)
+    - summaries: 摘要 (Annotated: 并行合并)
     - config: 配置信息
     - feedback: 交互
     - dimension_key: Send API 注入
@@ -59,8 +82,10 @@ class AgentState(TypedDict, total=False):
     project_name: str
     phase: str
     current_wave: int
-    completed_dimensions: Dict[str, List[str]]
-    reports: Dict[str, Dict[str, str]]
+    completed_dimensions: Annotated[Dict[str, List[str]], _merge_dict_of_lists]
+    reports: Annotated[Dict[str, Dict[str, str]], _merge_dict_of_dicts]
+    report_versions: Annotated[Dict[str, List], _merge_dict_of_lists]
+    summaries: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]
     config: Dict[str, Any]
     feedback: Optional[str]
     pause_after_layer: bool

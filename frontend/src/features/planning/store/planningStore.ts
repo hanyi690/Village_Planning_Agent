@@ -23,9 +23,10 @@ import type {
   KnowledgeSource,
 } from '../types';
 import type { GisResultMessage, ToolStatusMessage, GISLayerConfig } from '@/types/message/message-types';
-import type { VillageInputData } from '@/components/VillageInputForm';
+import type { VillageInputData } from '../components/VillageInputForm';
 import type { VillageInfo, VillageSession, SessionStatusResponse } from '../api';
-import { getLayerPhase, PlanningStatus, LayerPhase, AgentPhase } from '@/lib/constants';
+import { getLayerPhase, PlanningStatus, LayerPhase, AgentPhase, NAV_KEYS } from '@/features/planning/constants';
+import type { NavigationKey } from '@/features/planning/constants';
 import {
   createBaseMessage,
   buildLayerReportId,
@@ -33,8 +34,8 @@ import {
   buildDimensionProgressKey,
   formatDimensionReportsAsContent,
   calculateReportSummary,
-} from '@/lib/utils/message-helpers';
-import { DIMENSION_NAMES } from '@/config/dimensions';
+} from '@/features/planning/utils/message-helpers';
+import { DIMENSION_NAMES } from '../config/dimensions';
 
 // ============================================
 // State Types
@@ -110,7 +111,7 @@ export interface PlanningState {
   conversationId: string;
 
   // Session
-  taskId: string | null;
+  sessionId: string | null;
   projectName: string | null;
   status: Status;
 
@@ -191,6 +192,11 @@ export interface PlanningState {
 
   // GIS Layers (SSE-driven, no REST API needed)
   gisLayers: Record<string, GISLayerConfig[]>;
+
+  // Three-Panel Layout Navigation State
+  selectedNavigationKey: NavigationKey | null;
+  isRightPanelExpanded: boolean;
+  isLeftNavCollapsed: boolean;
 }
 
 // ============================================
@@ -263,7 +269,7 @@ function shallowEqualReports(incoming: Reports | undefined, current: Reports): b
 function createInitialState(conversationId: string): PlanningState {
   return {
     conversationId,
-    taskId: null,
+    sessionId: null,
     projectName: null,
     status: 'idle',
 
@@ -329,6 +335,11 @@ function createInitialState(conversationId: string): PlanningState {
     toolStatuses: {},
     // GIS Layers (SSE-driven)
     gisLayers: {},
+
+    // Three-Panel Layout
+    selectedNavigationKey: null,
+    isRightPanelExpanded: true,
+    isLeftNavCollapsed: false,
   };
 }
 
@@ -338,7 +349,7 @@ function createInitialState(conversationId: string): PlanningState {
 
 export interface PlanningActions {
   // Core setters
-  setTaskId: (taskId: string | null) => void;
+  setSessionId: (sessionId: string | null) => void;
   setProjectName: (projectName: string | null) => void;
   setStatus: (status: Status) => void;
   setPhase: (phase: string) => void;
@@ -421,6 +432,11 @@ export interface PlanningActions {
   // Clear only revision dimensions progress (preserve other completed dimensions)
   clearRevisionProgress: (layer: number, dimensionsToRevise: string[]) => void;
 
+  // Navigation
+  setSelectedNavigationKey: (key: NavigationKey | null) => void;
+  setRightPanelExpanded: (expanded: boolean) => void;
+  setLeftNavCollapsed: (collapsed: boolean) => void;
+
   // Reset
   resetConversation: () => void;
   initConversation: (conversationId: string) => void;
@@ -449,8 +465,8 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     case 'connected': {
       state.status = 'planning';
       const connData = data as { task_id?: string };
-      if (connData.task_id && !state.taskId) {
-        state.taskId = connData.task_id;
+      if (connData.task_id && !state.sessionId) {
+        state.sessionId = connData.task_id;
       }
       break;
     }
@@ -619,6 +635,15 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const dimensionKey = dimData.dimension_key || '';
       const key = buildDimensionProgressKey(layer, dimensionKey);
 
+      // Guard: retain delta-accumulated content when full_content is empty
+      if (!dimData.full_content) {
+        const lk = `layer${layer}` as keyof Reports;
+        const existing = state.reports[lk]?.[dimensionKey];
+        if (existing) {
+          dimData.full_content = existing;
+        }
+      }
+
       // Update dimensionProgress
       state.dimensionProgress[key] = {
         dimensionKey,
@@ -770,6 +795,11 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       }
       // If message exists (history restore or SSE reconnect), preserve its content unchanged
 
+      // Auto-navigate to overview when new layer starts (guard against no-op)
+      if (state.selectedNavigationKey !== NAV_KEYS.OVERVIEW) {
+        state.selectedNavigationKey = NAV_KEYS.OVERVIEW;
+      }
+
       // Derive UI state from phase (currentLayer, currentPhase, completedLayers, etc.)
       deriveUIStateInStore(state);
       break;
@@ -786,8 +816,8 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         task_id?: string;
       };
 
-      if (layerData.task_id && !state.taskId) {
-        state.taskId = layerData.task_id;
+      if (layerData.task_id && !state.sessionId) {
+        state.sessionId = layerData.task_id;
       }
 
       const layerNum = layerData.layer || 1;
@@ -1054,14 +1084,19 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         task_id?: string;
       };
 
-      if (pauseData.task_id && !state.taskId) {
-        state.taskId = pauseData.task_id;
+      if (pauseData.task_id && !state.sessionId) {
+        state.sessionId = pauseData.task_id;
       }
 
       state.pause_after_step = true;
       state.previous_layer =
         pauseData.current_layer || pauseData.previous_layer || state.previous_layer;
       state.status = 'paused';
+
+      // Auto-navigate to approval when paused (guard against no-op)
+      if (state.selectedNavigationKey !== NAV_KEYS.APPROVAL) {
+        state.selectedNavigationKey = NAV_KEYS.APPROVAL;
+      }
 
       // Note: checkpoint_saved event (sent before pause) already creates the checkpoint
       // This is a fallback in case checkpoint_saved was missed
@@ -1301,9 +1336,9 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     ...createInitialState('default'),
 
     // Core setters
-    setTaskId: (taskId) =>
+    setSessionId: (sessionId) =>
       set((state) => {
-        state.taskId = taskId;
+        state.sessionId = sessionId;
       }),
 
     setProjectName: (projectName) =>
@@ -1707,6 +1742,23 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         // Preserve currentLayer and currentPhase for UI display
       }),
 
+    // Navigation
+    setSelectedNavigationKey: (key) =>
+      set((state) => {
+        if (state.selectedNavigationKey === key) return;
+        state.selectedNavigationKey = key;
+      }),
+
+    setRightPanelExpanded: (expanded) =>
+      set((state) => {
+        state.isRightPanelExpanded = expanded;
+      }),
+
+    setLeftNavCollapsed: (collapsed) =>
+      set((state) => {
+        state.isLeftNavCollapsed = collapsed;
+      }),
+
     // Reset
     resetConversation: () =>
       set((state) => {
@@ -1717,9 +1769,9 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
 
     initConversation: (conversationId) =>
       set((state) => {
-        // Prevent re-initialization if conversationId matches and taskId exists
-        // This protects against StrictMode double-mount clearing restored taskId
-        if (state.conversationId === conversationId && state.taskId) {
+        // Prevent re-initialization if conversationId matches and sessionId exists
+        // This protects against StrictMode double-mount clearing restored sessionId
+        if (state.conversationId === conversationId && state.sessionId) {
           return;
         }
 

@@ -20,21 +20,68 @@ Session Routes - 统一的会话 API (新架构)
 import asyncio
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.api.schemas import TaskStatus, ImageData
+from app.api.schemas import TaskStatus, ImageData, UploadedFileMeta
 from app.services.runtime import PlanningRuntimeService
+from app.database.operations import create_planning_session_async
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service
 from app.agent.state import get_layer_dimensions, get_layer_name, state_to_ui_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+# ============================================
+# Module-level file processing helpers
+# ============================================
+
+def _save_uploaded_file(file: UploadFile, upload_dir: Path, subdir: str = "") -> Path:
+    """Save uploaded file to disk, return saved path."""
+    target_dir = upload_dir / subdir if subdir else upload_dir
+    return target_dir / (file.filename or "unknown")
+
+
+async def _parse_uploaded_document(saved_path: Path, filename: str) -> str:
+    """Parse a saved document file, return extracted text."""
+    from app.utils.document_loader import classify_file_type, MarkItDownLoader
+    file_type = classify_file_type(filename)
+    if file_type == "document":
+        try:
+            loader = MarkItDownLoader(saved_path)
+            docs = loader.load()
+            if docs:
+                return docs[0].page_content
+        except Exception as e:
+            logger.warning(f"[SessionRoutes] 文档解析失败 {filename}: {e}")
+    return ""
+
+
+async def _process_uploaded_file(
+    file: UploadFile,
+    upload_dir: Path,
+    subdir: str = "",
+) -> Dict[str, Any]:
+    """Process single uploaded file: save, return metadata dict."""
+    filename = file.filename or "unknown"
+    saved_path = _save_uploaded_file(file, upload_dir, subdir)
+    content = await file.read()
+    with open(saved_path, "wb") as f:
+        f.write(content)
+    doc_text = await _parse_uploaded_document(saved_path, filename)
+    return {
+        "filename": filename,
+        "saved_path": saved_path,
+        "content": content,
+        "doc_text": doc_text,
+    }
 
 
 class FeedbackRequest(BaseModel):
@@ -65,36 +112,90 @@ class SessionCreateResponse(BaseModel):
 
 @router.post("/api/sessions", response_model=SessionCreateResponse)
 async def create_session(
-    request: SessionCreateRequest,
     background_tasks: BackgroundTasks,
+    project_name: str = Form(..., description="项目名称"),
+    village_name: str = Form("", description="村庄名称"),
+    task_description: str = Form("制定村庄发展规划", description="任务描述"),
+    constraints: str = Form("无特殊约束", description="约束条件"),
+    step_mode: bool = Form(False, description="分步执行模式"),
+    rag_enabled: bool = Form(True, description="启用 RAG 知识检索（实验对比用）"),
+    village_data: str = Form("", description="村庄基础数据（文本）"),
+    village_data_files: List[UploadFile] = File(None, description="村庄数据文件"),
+    task_files: List[UploadFile] = File(None, description="任务描述文件"),
+    constraint_files: List[UploadFile] = File(None, description="约束条件文件"),
 ):
-    """创建新规划会话"""
-    if not request.project_name.strip():
+    """创建新规划会话 - 支持 multipart/form-data 文件上传（按来源区分）"""
+    if not project_name.strip():
         raise HTTPException(status_code=400, detail="项目名称不能为空")
 
-    if len(request.village_data.strip()) < 10:
+    session_id = str(uuid4())
+    upload_dir = Path(f"data/uploads/{session_id}")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    uploaded_files: List[Dict] = []
+    parsed_content = village_data
+
+    # 文件分组处理配置: (file_group, file_type_label, subdir)
+    file_groups = [
+        (village_data_files, "village_data", ""),
+        (task_files, "task_description", ""),
+        (constraint_files, "constraint", ""),
+    ]
+
+    for file_group, file_type, subdir in file_groups:
+        if not file_group:
+            continue
+        results = await asyncio.gather(*[
+            _process_uploaded_file(f, upload_dir, subdir) for f in file_group
+        ])
+        for r in results:
+            meta = {
+                "filename": r["filename"],
+                "file_type": file_type,
+                "path": str(r["saved_path"]),
+                "size_bytes": len(r["content"]),
+            }
+            uploaded_files.append(meta)
+
+            if file_type == "village_data" and r["doc_text"]:
+                parsed_content += f"\n\n--- 村庄数据: {r['filename']} ---\n{r['doc_text']}"
+            elif file_type == "task_description" and r["doc_text"]:
+                if not task_description or task_description == "制定村庄发展规划":
+                    task_description = r["doc_text"].strip()
+            elif file_type == "constraint" and r["doc_text"]:
+                if not constraints or constraints == "无特殊约束":
+                    constraints = r["doc_text"].strip()
+
+    # 验证数据
+    if len(parsed_content.strip()) < 10:
         raise HTTPException(status_code=400, detail="村庄数据不能为空或过短")
 
-    session_id = str(uuid4())
-
     initial_state = PlanningRuntimeService.build_initial_state(
-        project_name=request.project_name,
-        village_data=request.village_data,
-        village_name=request.village_name,
-        task_description=request.task_description,
-        constraints=request.constraints,
+        project_name=project_name,
+        village_data=parsed_content,
+        village_name=village_name,
+        task_description=task_description,
+        constraints=constraints,
         session_id=session_id,
         stream_mode=True,
-        step_mode=request.step_mode,
-        image_ids=[img.image_base64[:50] for img in request.images] if request.images else [],
+        step_mode=step_mode,
+        rag_enabled=rag_enabled,
+        uploaded_files=uploaded_files if uploaded_files else None,
     )
 
     sse_manager.init_session(session_id, {
         "session_id": session_id,
-        "project_name": request.project_name,
+        "project_name": project_name,
         "created_at": datetime.now().isoformat(),
     })
     sse_manager.set_execution_active(session_id, True)
+
+    await create_planning_session_async({
+        "session_id": session_id,
+        "project_name": project_name,
+        "village_data": parsed_content,
+        "task_description": task_description,
+        "constraints": constraints,
+    })
 
     await PlanningRuntimeService.ensure_initialized()
 
@@ -120,10 +221,6 @@ async def stream_events(session_id: str):
         queue = await PlanningRuntimeService.subscribe_with_history(session_id)
         try:
             yield sse_manager.format_sse({"type": "connected", "session_id": session_id, "timestamp": datetime.now().isoformat()})
-
-            state = await PlanningRuntimeService.aget_state_values(session_id)
-            if state:
-                yield sse_manager.format_sse({"type": "state_sync", "data": state, "timestamp": datetime.now().isoformat()})
 
             while True:
                 try:

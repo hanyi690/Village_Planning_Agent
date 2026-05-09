@@ -11,13 +11,13 @@ from dataclasses import dataclass, field
 from langchain_core.documents import Document
 import asyncio
 
-from ..config.document_types import (
+from app.config.document_types import (
     DimensionTagger,
     TerrainTagger,
     DocumentTypeTagger,
     extract_regions_from_text,
 )
-from ..utils.semantic_tagger import get_semantic_tagger
+from .tagger import get_semantic_tagger
 
 
 @dataclass

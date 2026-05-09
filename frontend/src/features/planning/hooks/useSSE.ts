@@ -5,7 +5,7 @@
  * Extracted from PlanningProvider for better separation of concerns.
  *
  * Features:
- * - Automatic connection/disconnection based on taskId
+ * - Automatic connection/disconnection based on sessionId
  * - Batch processing for dimension_delta events (50ms window)
  * - Reconnection with exponential backoff
  * - State sync on reconnect
@@ -14,7 +14,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { planningApi } from '../api';
 import { usePlanningStore } from '../store/planningStore';
-import { buildDimensionProgressKey } from '@/lib/utils/message-helpers';
+import { buildDimensionProgressKey } from '@/features/planning/utils/message-helpers';
 import type { PlanningSSEEvent } from '../api/types';
 
 // Internal batch event representation
@@ -24,7 +24,7 @@ interface BatchEvent {
 }
 
 interface UseSSEConnectionOptions {
-  taskId: string | null;
+  sessionId: string | null;
   enabled?: boolean;
   onReconnect?: () => void;
   resumeTrigger?: number; // Value changes trigger SSE reconnect
@@ -35,14 +35,14 @@ const BATCH_WINDOW = 50; // ms
 const MAX_BATCH_SIZE = 50; // Maximum events in queue before forced flush
 
 export function useSSEConnection({
-  taskId,
+  sessionId,
   enabled = true,
   onReconnect,
   resumeTrigger = 0,
 }: UseSSEConnectionOptions): void {
   // Refs for connection management
   const sseConnectionRef = useRef<EventSource | null>(null);
-  const prevTaskIdRef = useRef<string | null>(null);
+  const prevSessionIdRef = useRef<string | null>(null);
   const prevResumeTriggerRef = useRef<number>(0);
   const reconnectAttemptsRef = useRef(0);
 
@@ -127,6 +127,7 @@ export function useSSEConnection({
           completedKeys.clear();
         }
       } else if (event.type === 'dimension_delta') {
+        if (!event.data) continue;
         const data = event.data as { layer?: number; dimension_key?: string };
         const key = buildDimensionProgressKey(data.layer || 1, data.dimension_key || '');
 
@@ -199,7 +200,7 @@ export function useSSEConnection({
 
   // Connect to SSE
   const connectSSE = useCallback(
-    (taskIdParam: string) => {
+    (sessionIdParam: string) => {
       // Close old connection first to prevent race conditions
       if (sseConnectionRef.current) {
         const oldEs = sseConnectionRef.current;
@@ -209,7 +210,7 @@ export function useSSEConnection({
       }
 
       const es = planningApi.createStream(
-        taskIdParam,
+        sessionIdParam,
         (event: PlanningSSEEvent) => {
           reconnectAttemptsRef.current = 0;
 
@@ -225,35 +226,30 @@ export function useSSEConnection({
             reconnectAttemptsRef.current++;
             const delay = Math.min(1000 * reconnectAttemptsRef.current, 5000);
             setTimeout(() => {
-              const currentTaskId = usePlanningStore.getState().taskId;
-              if (currentTaskId) {
-                connectSSE(currentTaskId);
+              const currentSessionId = usePlanningStore.getState().sessionId;
+              if (currentSessionId) {
+                connectSSE(currentSessionId);
               }
             }, delay);
           }
         },
         () => {
-          const currentTaskId = usePlanningStore.getState().taskId;
-          if (currentTaskId) {
-            // Sync missed events using seq-based sync API
+          const currentSessionId = usePlanningStore.getState().sessionId;
+          if (currentSessionId) {
+            // Serialize: 1) get baseline state, 2) catch up missed events
             const lastSeq = usePlanningStore.getState().lastProcessedSeq;
-            planningApi.syncEvents(currentTaskId, lastSeq).then((syncResult) => {
-              if (syncResult.events.length > 0) {
-                console.log(`[useSSEConnection] Synced ${syncResult.events.length} missed events from seq ${lastSeq}`);
-                // Process missed events
+            planningApi.getStatus(currentSessionId).then((statusData) => {
+              syncBackendState(statusData);
+              return planningApi.syncEvents(currentSessionId, lastSeq);
+            }).then((syncResult) => {
+              if (syncResult && syncResult.events.length > 0) {
+                console.log(`[useSSEConnection] Synced ${syncResult.events.length} missed events`);
                 for (const event of syncResult.events) {
-                  enqueueEvent({
-                    type: event.type,
-                    data: event.data,
-                  });
+                  enqueueEvent({ type: event.type, data: event.data });
                 }
               }
             }).catch((err) => {
-              console.warn('[useSSEConnection] Sync API failed, falling back to status sync:', err);
-            });
-            // Also sync backend state for non-event data
-            planningApi.getStatus(currentTaskId).then((statusData) => {
-              syncBackendState(statusData);
+              console.warn('[useSSEConnection] Reconnect sync failed:', err);
             });
           }
           onReconnect?.();
@@ -268,7 +264,7 @@ export function useSSEConnection({
 
   // Connection lifecycle
   useEffect(() => {
-    if (!enabled || !taskId) {
+    if (!enabled || !sessionId) {
       if (sseConnectionRef.current) {
         sseConnectionRef.current.close();
         sseConnectionRef.current = null;
@@ -276,16 +272,16 @@ export function useSSEConnection({
       return;
     }
 
-    // Reconnect trigger: taskId change or resumeTrigger change
-    const taskIdChanged = prevTaskIdRef.current !== taskId;
+    // Reconnect trigger: sessionId change or resumeTrigger change
+    const sessionIdChanged = prevSessionIdRef.current !== sessionId;
     const resumeTriggered = prevResumeTriggerRef.current !== resumeTrigger;
-    const shouldReconnect = taskIdChanged || resumeTriggered;
+    const shouldReconnect = sessionIdChanged || resumeTriggered;
 
     if (shouldReconnect) {
-      prevTaskIdRef.current = taskId;
+      prevSessionIdRef.current = sessionId;
       prevResumeTriggerRef.current = resumeTrigger;
 
-      connectSSE(taskId);
+      connectSSE(sessionId);
     }
 
     return () => {
@@ -294,7 +290,7 @@ export function useSSEConnection({
         sseConnectionRef.current = null;
       }
     };
-  }, [taskId, enabled, resumeTrigger, connectSSE]);
+  }, [sessionId, enabled, resumeTrigger, connectSSE]);
 
   // Cleanup batch timeout on unmount
   useEffect(() => {

@@ -6,8 +6,8 @@
 
 import React from 'react';
 import type { GisResultMessage } from '../../types';
-import { parseTimestamp } from '@/lib/utils';
-import MarkdownRenderer from '@/components/MarkdownRenderer';
+import { parseTimestamp } from '@/features/planning/utils';
+import MarkdownRenderer from '@/features/planning/components/ui/MarkdownRenderer';
 import { MapView } from '../gis';
 
 interface GisResultCardProps {

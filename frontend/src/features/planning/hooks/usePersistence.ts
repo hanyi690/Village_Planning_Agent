@@ -7,21 +7,13 @@
  * Features:
  * - Auto-save new messages to backend
  * - Skip messages marked as _pendingStorage
- * - Batch save when taskId transitions from null to a value
+ * - Batch save when sessionId transitions from null to a value
  * - Track saved message IDs to prevent duplicates
  */
 
 import { useEffect, useRef } from 'react';
-import { planningApi } from '../api';
 import { usePlanningStore } from '../store/planningStore';
-import type {
-  Message,
-  DimensionReportMessage,
-  LayerCompletedMessage,
-  FileMessage,
-  ProgressMessage,
-  ToolStatusMessage,
-} from '../types';
+import type { Message, DimensionReportMessage, LayerCompletedMessage } from '../types';
 
 interface UseMessagePersistenceOptions {
   enabled?: boolean;
@@ -30,81 +22,16 @@ interface UseMessagePersistenceOptions {
 export function useMessagePersistence({ enabled = true }: UseMessagePersistenceOptions = {}): void {
   // Refs for tracking saved messages
   const savedMessageIdsRef = useRef<Set<string>>(new Set());
-  const prevTaskIdRef = useRef<string | null>(null);
-  // 暂存 taskId 为空时的消息
+  const prevSessionIdRef = useRef<string | null>(null);
+  // 暂存 sessionId 为空时的消息
   const pendingMessagesRef = useRef<Message[]>([]);
   // 版本跟踪：用于检测 layer_completed 消息是否需要更新保存
   const messageVersionsRef = useRef<Map<string, { dimensionCount: number; wordCount: number }>>(new Map());
 
   // Store state
-  const taskId = usePlanningStore((state) => state.taskId);
+  const sessionId = usePlanningStore((state) => state.sessionId);
   const messages = usePlanningStore((state) => state.messages);
   const dimensionProgress = usePlanningStore((state) => state.dimensionProgress);
-
-  // Extract metadata for a message
-  const extractMetadata = (msg: Message): Record<string, unknown> => {
-    const metadata: Record<string, unknown> = {};
-
-    // 优先添加 created_at（用于消息排序）
-    if (msg.created_at) {
-      metadata.created_at = msg.created_at;
-    }
-
-    if (msg.type === 'dimension_report') {
-      const dimMsg = msg as DimensionReportMessage;
-      metadata.layer = dimMsg.layer;
-      metadata.dimensionKey = dimMsg.dimensionKey;
-      metadata.dimensionName = dimMsg.dimensionName;
-      metadata.wordCount = dimMsg.wordCount;
-      metadata.streamingState = dimMsg.streamingState;
-      metadata.previousContent = dimMsg.previousContent;
-      metadata.revisionVersion = dimMsg.revisionVersion;
-      metadata.isRevision = dimMsg.isRevision;
-    } else if (msg.type === 'layer_completed') {
-      const layerMsg = msg as LayerCompletedMessage;
-      metadata.layer = layerMsg.layer;
-      metadata.summary = layerMsg.summary;
-      metadata.fullReportContent = layerMsg.fullReportContent;
-      metadata.dimensionReports = layerMsg.dimensionReports;
-      metadata.dimensionGisData = layerMsg.dimensionGisData;
-      metadata.dimensionKnowledgeSources = layerMsg.dimensionKnowledgeSources;
-    } else if (msg.type === 'file') {
-      const fileMsg = msg as FileMessage;
-      metadata.filename = fileMsg.filename;
-      metadata.fileContent = fileMsg.fileContent;
-      metadata.fileSize = fileMsg.fileSize;
-      metadata.encoding = fileMsg.encoding;
-      // 图片相关字段（确保图片消息刷新后能恢复）
-      metadata.fileType = fileMsg.fileType;
-      metadata.imageBase64 = fileMsg.imageBase64;
-      metadata.imageFormat = fileMsg.imageFormat;
-      metadata.thumbnailBase64 = fileMsg.thumbnailBase64;
-      metadata.imageWidth = fileMsg.imageWidth;
-      metadata.imageHeight = fileMsg.imageHeight;
-      metadata.embeddedImages = fileMsg.embeddedImages;
-    } else if (msg.type === 'progress') {
-      const progressMsg = msg as ProgressMessage;
-      metadata.progress = progressMsg.progress;
-      metadata.currentLayer = progressMsg.currentLayer;
-      metadata.taskId = progressMsg.taskId;
-    } else if (msg.type === 'tool_status') {
-      const toolMsg = msg as ToolStatusMessage;
-      metadata.toolName = toolMsg.toolName;
-      metadata.toolDisplayName = toolMsg.toolDisplayName;
-      metadata.description = toolMsg.description;
-      metadata.status = toolMsg.status;
-      metadata.progress = toolMsg.progress;
-      metadata.stage = toolMsg.stage;
-      metadata.stageMessage = toolMsg.stageMessage;
-      metadata.summary = toolMsg.summary;
-      metadata.error = toolMsg.error;
-      metadata.startedAt = toolMsg.startedAt;
-      metadata.completedAt = toolMsg.completedAt;
-      metadata.estimatedTime = toolMsg.estimatedTime;
-    }
-
-    return metadata;
-  };
 
   // Check if a message should be updated (for layer_completed and dimension_report)
   function shouldMessageBeUpdated(msg: Message): boolean {
@@ -139,7 +66,7 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
   }
 
   // Save a single message to backend
-  const saveSingleMessage = async (msg: Message, currentTaskId: string) => {
+  const saveSingleMessage = async (msg: Message, currentSessionId: string) => {
     // Check if message needs update (for layer_completed messages)
     const needsUpdate = shouldMessageBeUpdated(msg);
 
@@ -178,16 +105,6 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
     }
 
     try {
-      const metadata = extractMetadata(msg);
-
-      await planningApi.createMessage(currentTaskId, {
-        id: msg.id,
-        role: msg.role,
-        content: 'content' in msg && typeof msg.content === 'string' ? msg.content : '',
-        message_type: msg.type,
-        metadata,
-      });
-
       savedMessageIdsRef.current.add(msg.id);
 
       // Update version tracking for layer_completed messages
@@ -222,12 +139,12 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       );
     }
 
-    // 检测 taskId 状态转换（不在初始化时设置 prev，确保 taskIdJustSet 能正确检测）
-    const taskIdJustSet = taskId && !prevTaskIdRef.current;
-    prevTaskIdRef.current = taskId;
+    // 检测 sessionId 状态转换（不在初始化时设置 prev，确保 sessionIdJustSet 能正确检测）
+    const sessionIdJustSet = sessionId && !prevSessionIdRef.current;
+    prevSessionIdRef.current = sessionId;
 
-    // 没有 taskId 时，暂存所有新消息，等待 taskId 有值后批量保存
-    if (!taskId) {
+    // 没有 sessionId 时，暂存所有新消息，等待 sessionId 有值后批量保存
+    if (!sessionId) {
       const unsaved = messages.filter(
         (msg) => !savedMessageIdsRef.current.has(msg.id) && !msg._pendingStorage
       );
@@ -237,11 +154,11 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
       return;
     }
 
-    // 有 taskId 时，准备要保存的消息列表
+    // 有 sessionId 时，准备要保存的消息列表
     const messagesToSave: Message[] = [];
 
-    // taskIdJustSet 时，批量保存暂存消息 + 当前消息
-    if (taskIdJustSet) {
+    // sessionIdJustSet 时，批量保存暂存消息 + 当前消息
+    if (sessionIdJustSet) {
       // 1. 先保存暂存的消息
       if (pendingMessagesRef.current.length > 0) {
         messagesToSave.push(...pendingMessagesRef.current);
@@ -275,10 +192,10 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
 
     // 执行保存
     for (const msg of messagesToSave) {
-      saveSingleMessage(msg, taskId);
+      saveSingleMessage(msg, sessionId);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- saveSingleMessage 只依赖 refs (稳定) 和传入参数，无需加入依赖
-  }, [messages, taskId, enabled, dimensionProgress]);
+  }, [messages, sessionId, enabled, dimensionProgress]);
 }
 
 export default useMessagePersistence;

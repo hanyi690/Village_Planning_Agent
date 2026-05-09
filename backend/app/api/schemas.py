@@ -5,7 +5,7 @@ Pydantic Schemas for API Request/Response - API请求/响应的Pydantic数据模
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -153,6 +153,21 @@ class FileUploadResponse(BaseModel):
     content: str = Field(..., description="文件内容")
     size: int = Field(..., description="文件大小（字节）")
     message: str = Field(..., description="响应消息")
+
+
+UploadedFileType = Literal[
+    "document", "geojson", "shapefile", "kml", "gis_file",
+    "status_data", "task_description", "constraint", "other",
+]
+
+
+class UploadedFileMeta(BaseModel):
+    """上传文件元数据"""
+    filename: str
+    file_type: UploadedFileType
+    path: str
+    data_type: Optional[str] = None
+    size_bytes: int
 
 
 # ============================================

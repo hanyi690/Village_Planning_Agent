@@ -20,7 +20,7 @@ from app.core.settings import (
     CHROMA_COLLECTION_NAME, CHROMA_PERSIST_DIR, EMBEDDING_PROVIDER,
     EMBEDDING_MODEL_NAME, DASHSCOPE_API_KEY, HF_ENDPOINT,
 )
-from ..utils.logger import get_logger
+from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -52,6 +52,7 @@ export interface DataUploadProps {
   onError?: (error: string) => void;
   className?: string;
   maxSizeMB?: number;
+  onFileNeedUpload?: (file: File) => void;
 }
 
 // 检测文件类型
@@ -142,6 +143,7 @@ export default function DataUpload({
   onError,
   className = '',
   maxSizeMB = 50,
+  onFileNeedUpload,
 }: DataUploadProps) {
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -203,24 +205,13 @@ export default function DataUpload({
         return;
       }
 
-      // 其他格式 - 发送到后端解析
+      // 其他格式 - 向上传递 File 对象，由父组件统一处理
       if (['shapefile', 'kml', 'kmz', 'geotiff'].includes(fileType)) {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('village_name', villageName);
-
-        const response = await fetch('/api/gis/upload', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || `上传失败: ${response.status}`);
+        if (onFileNeedUpload) {
+          onFileNeedUpload(file);
+        } else {
+          throw new Error(`不支持的文件格式: ${file.name}（未设置 onFileNeedUpload 回调）`);
         }
-
-        const data = await response.json();
-        onDataUploaded(data);
         return;
       }
 
@@ -234,7 +225,7 @@ export default function DataUpload({
       setUploading(false);
       setSelectedFile(null);
     }
-  }, [maxFileSize, maxSizeMB, villageName, onDataUploaded, onError]);
+  }, [maxFileSize, maxSizeMB, villageName, onDataUploaded, onError, onFileNeedUpload]);
 
   // 文件选择处理
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {

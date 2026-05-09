@@ -39,10 +39,10 @@ export function useStatus(): PlanningState['status'] {
 }
 
 /**
- * Select taskId - only re-renders when taskId changes
+ * Select sessionId - only re-renders when sessionId changes
  */
-export function useTaskId(): string | null {
-  return usePlanningStore((state) => state.taskId);
+export function useSessionId(): string | null {
+  return usePlanningStore((state) => state.sessionId);
 }
 
 /**
@@ -396,7 +396,7 @@ export function usePlanningState(): PlanningState {
  */
 export function useStoreActions() {
   return usePlanningStore((state) => ({
-    setTaskId: state.setTaskId,
+    setSessionId: state.setSessionId,
     setProjectName: state.setProjectName,
     setStatus: state.setStatus,
     setPhase: state.setPhase,

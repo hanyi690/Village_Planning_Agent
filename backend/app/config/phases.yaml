@@ -87,7 +87,7 @@ phases:
       - key: resource_endowment
         name: "资源禀赋分析"
         tools: ["gis_coverage_calculator"]
-        rag_query: "资源禀赋"
+        rag_query: ""
         depends_on: []
         layer_depends_on:
           - "natural_environment"
@@ -100,7 +100,7 @@ phases:
       - key: planning_positioning
         name: "规划定位分析"
         tools: ["spatial_query"]
-        rag_query: "规划定位"
+        rag_query: ""
         depends_on: ["resource_endowment"]
         layer_depends_on:
           - "location"
@@ -110,7 +110,7 @@ phases:
       - key: development_goals
         name: "发展目标分析"
         tools: ["population_model_v1"]
-        rag_query: "发展目标"
+        rag_query: ""
         depends_on: ["resource_endowment", "planning_positioning"]
         layer_depends_on:
           - "socio_economic"
@@ -119,7 +119,7 @@ phases:
       - key: planning_strategies
         name: "规划策略分析"
         tools: ["accessibility_analysis"]
-        rag_query: "规划策略"
+        rag_query: ""
         depends_on: ["resource_endowment", "planning_positioning", "development_goals"]
         layer_depends_on:
           - "traffic"
@@ -263,7 +263,7 @@ phases:
       - key: project_bank
         name: "建设项目库"
         tools: []
-        rag_query: "建设项目"
+        rag_query: ""
         depends_on:
           - "industry"
           - "spatial_structure"

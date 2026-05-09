@@ -251,7 +251,7 @@ def check_kb_status(required_docs: List[str] = None) -> Dict[str, Any]:
         Status dict with total_chunks, total_docs, missing_docs, is_ready
     """
     try:
-        from backend.app.services.vector_store import get_parent_child_store
+        from backend.app.services.modules.rag.vector_store import get_parent_child_store
 
         store = get_parent_child_store()
         stats = store.get_stats()

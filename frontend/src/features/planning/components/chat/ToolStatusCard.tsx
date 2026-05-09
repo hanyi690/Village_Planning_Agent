@@ -7,8 +7,8 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import type { ToolStatusMessage } from '../../types';
-import { parseTimestamp } from '@/lib/utils';
-import { getToolIconFA } from '@/lib/constants';
+import { parseTimestamp } from '@/features/planning/utils';
+import { getToolIconFA } from '@/features/planning/constants';
 
 interface ToolStatusCardProps {
   message: ToolStatusMessage;

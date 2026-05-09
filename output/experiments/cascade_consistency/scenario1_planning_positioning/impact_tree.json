@@ -24,5 +24,97 @@
     ]
   },
   "total_downstream": 15,
-  "max_wave": 2
+  "max_wave": 2,
+  "dimension_metadata": {
+    "planning_positioning": {
+      "key": "planning_positioning",
+      "name": "规划定位分析",
+      "layer": 2,
+      "description": ""
+    },
+    "industry": {
+      "key": "industry",
+      "name": "产业规划",
+      "layer": 3,
+      "description": ""
+    },
+    "spatial_structure": {
+      "key": "spatial_structure",
+      "name": "空间结构规划",
+      "layer": 3,
+      "description": ""
+    },
+    "land_use_planning": {
+      "key": "land_use_planning",
+      "name": "土地利用规划",
+      "layer": 3,
+      "description": ""
+    },
+    "development_goals": {
+      "key": "development_goals",
+      "name": "发展目标分析",
+      "layer": 2,
+      "description": ""
+    },
+    "planning_strategies": {
+      "key": "planning_strategies",
+      "name": "规划策略分析",
+      "layer": 2,
+      "description": ""
+    },
+    "settlement_planning": {
+      "key": "settlement_planning",
+      "name": "居民点规划",
+      "layer": 3,
+      "description": ""
+    },
+    "traffic_planning": {
+      "key": "traffic_planning",
+      "name": "道路交通规划",
+      "layer": 3,
+      "description": ""
+    },
+    "public_service": {
+      "key": "public_service",
+      "name": "公共服务设施规划",
+      "layer": 3,
+      "description": ""
+    },
+    "infrastructure_planning": {
+      "key": "infrastructure_planning",
+      "name": "基础设施规划",
+      "layer": 3,
+      "description": ""
+    },
+    "ecological": {
+      "key": "ecological",
+      "name": "生态绿地规划",
+      "layer": 3,
+      "description": ""
+    },
+    "disaster_prevention": {
+      "key": "disaster_prevention",
+      "name": "防震减灾规划",
+      "layer": 3,
+      "description": ""
+    },
+    "heritage": {
+      "key": "heritage",
+      "name": "历史文保规划",
+      "layer": 3,
+      "description": ""
+    },
+    "landscape": {
+      "key": "landscape",
+      "name": "村庄风貌指引",
+      "layer": 3,
+      "description": ""
+    },
+    "project_bank": {
+      "key": "project_bank",
+      "name": "建设项目库",
+      "layer": 3,
+      "description": ""
+    }
+  }
 }

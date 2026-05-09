@@ -7,7 +7,7 @@
  * 完整消息历史列表，可滚动
  * 使用现有MessageBubble样式（复用）
  *
- * Brutalist aesthetic: dark background, no rounded corners
+ * Gemini aesthetic: light background, rounded corners, glass effect
  */
 
 import React from 'react';
@@ -25,13 +25,13 @@ interface MessagePanelProps {
 
 export default function MessagePanel({ messages, onClose }: MessagePanelProps) {
   return (
-    <div className="h-full flex flex-col bg-[#0D0D0D]">
+    <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b-2 border-[#333]">
-        <span className="text-sm text-[#00FFB3] uppercase tracking-wider">消息记录</span>
+      <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-200 rounded-t-xl">
+        <span className="text-sm text-emerald-600 uppercase tracking-wider font-medium">消息记录</span>
         <button
           onClick={onClose}
-          className="p-1 text-[#888] hover:text-[#FF3D00] transition-colors"
+          className="p-1 text-slate-400 hover:text-amber-500 transition-colors"
         >
           <FontAwesomeIcon icon={faXmark} style={{ width: 14, height: 14 }} />
         </button>
@@ -41,7 +41,7 @@ export default function MessagePanel({ messages, onClose }: MessagePanelProps) {
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-2">
         {/* System message placeholder */}
         {messages.length === 0 && (
-          <div className="px-3 py-2 text-sm text-[#666] border-2 border-[#333] bg-[#1A1A1A]">
+          <div className="px-3 py-2 text-sm text-slate-500 rounded-lg border border-slate-200 bg-white">
             暂无消息记录
           </div>
         )}
@@ -65,11 +65,11 @@ export default function MessagePanel({ messages, onClose }: MessagePanelProps) {
           width: 6px;
         }
         .overflow-y-auto::-webkit-scrollbar-track {
-          background: #1A1A1A;
+          background: #F1F5F9;
         }
         .overflow-y-auto::-webkit-scrollbar-thumb {
-          background: #00FFB3;
-          border-radius: 0;
+          background: #10B981;
+          border-radius: 3px;
         }
       `}</style>
     </div>

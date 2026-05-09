@@ -12,7 +12,7 @@ export { useSSEConnection } from './useSSE';
 export {
   useMessages,
   useStatus,
-  useTaskId,
+  useSessionId,
   useProjectName,
   useCurrentLayer,
   useCurrentPhase,
@@ -61,6 +61,9 @@ export { usePlanningHandlers } from './useHandlers';
 
 // Streaming
 export { useStreamingText, useStreamingAccumulator } from './useStreaming';
+
+// Approval
+export { useApprovalActions } from './useApprovalActions';
 
 // Persistence & Session
 export { useMessagePersistence } from './usePersistence';
