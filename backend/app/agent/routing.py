@@ -20,6 +20,7 @@ from ..config.dependency import get_impact_tree_compat
 from ..tools.constants import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL
 from ..utils.logger import get_logger
 from ..utils.sse_publisher import SSEPublisher
+from ..core.events import SSEEventType
 
 logger = get_logger(__name__)
 
@@ -91,6 +92,25 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
     total_dims = get_layer_dimensions(layer)
 
     if len(total_dims) > 0 and set(completed) == set(total_dims):
+        session_id = state.get("session_id", "")
+        layer_reports = state.get("reports", {}).get(f"layer{layer}", {})
+        total_chars = sum(len(v) for v in layer_reports.values()) if layer_reports else 0
+
+        # Emit layer_completed event so frontend can show approval UI
+        SSEPublisher.send_event(
+            session_id=session_id,
+            event_type=SSEEventType.LAYER_COMPLETED,
+            layer=layer,
+            layer_name=f"Layer {layer}",
+            dimension_count=len(completed),
+            total_chars=total_chars,
+            dimension_reports=layer_reports,
+            pause_after_step=state.get("pause_after_layer", False),
+            previous_layer=state.get("previous_layer", 0),
+            phase=state.get("phase", f"layer{layer}"),
+            task_id=session_id,
+        )
+
         if state.get("pause_after_layer"):
             return "conversation"
 
@@ -98,7 +118,6 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
         if next_layer > 3:
             return END
 
-        session_id = state.get("session_id", "")
         SSEPublisher.send_layer_start(
             session_id=session_id,
             layer=next_layer,

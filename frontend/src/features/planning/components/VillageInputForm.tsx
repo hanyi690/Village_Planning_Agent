@@ -1,8 +1,10 @@
 'use client';
 
-import { useState, useCallback, FormEvent } from 'react';
+import { useState, useCallback, useEffect, FormEvent } from 'react';
 import { motion } from 'framer-motion';
 import { FILE_ACCEPT } from '@/features/planning/constants';
+import { useVillages } from '../hooks';
+import { usePlanningActions } from '../store';
 
 export interface UploadedFileInfo {
   filename: string;
@@ -24,9 +26,10 @@ export interface VillageInputData {
 
 interface VillageInputFormProps {
   onSubmit: (data: VillageInputData) => void;
+  onLoadSession?: (villageName: string, sessionId: string) => void;
 }
 
-export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
+export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInputFormProps) {
   const [projectName, setProjectName] = useState('');
   const [taskDescription, setTaskDescription] = useState('');
   const [constraints, setConstraints] = useState('');
@@ -36,6 +39,14 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
   const [taskFiles, setTaskFiles] = useState<File[]>([]);
   const [constraintFiles, setConstraintFiles] = useState<File[]>([]);
   const [villageDataFiles, setVillageDataFiles] = useState<File[]>([]);
+
+  const villages = useVillages();
+  const { loadVillagesHistory } = usePlanningActions();
+
+  // Load history on mount
+  useEffect(() => {
+    loadVillagesHistory();
+  }, [loadVillagesHistory]);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -348,6 +359,88 @@ export default function VillageInputForm({ onSubmit }: VillageInputFormProps) {
           AI 将基于您的输入生成专业的村庄规划方案
         </motion.p>
       </motion.form>
+
+      {/* History sessions */}
+      {villages.length > 0 && (
+        <motion.div
+          variants={containerVariants}
+          initial="hidden"
+          animate="visible"
+          className="w-full max-w-xl mt-10"
+        >
+          <motion.div variants={itemVariants} className="text-center mb-6">
+            <h2 className="text-lg font-semibold text-slate-700">
+              最近会话
+            </h2>
+            <p className="text-xs text-slate-400 mt-1">
+              点击恢复之前的规划会话
+            </p>
+          </motion.div>
+
+          <div className="space-y-4">
+            {villages.map((village) =>
+              village.sessions.length > 0 ? (
+                <motion.div
+                  key={village.name}
+                  variants={itemVariants}
+                  className="bg-white rounded-2xl shadow-md shadow-cyan-100/30 border border-slate-100 p-4"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-medium text-slate-700">
+                      {village.display_name || village.name}
+                    </h3>
+                    <span className="text-xs text-slate-400">
+                      {village.session_count} 次会话
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {village.sessions.slice(0, 5).map((session) => {
+                      const date = new Date(session.timestamp);
+                      const formattedDate = isNaN(date.getTime())
+                        ? session.timestamp
+                        : date.toLocaleDateString('zh-CN', {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          });
+
+                      return (
+                        <div
+                          key={session.session_id}
+                          className="flex items-center justify-between px-3 py-2 rounded-xl bg-slate-50 border border-slate-100 hover:border-emerald-200 hover:bg-emerald-50/30 transition-all cursor-pointer group"
+                          onClick={() => onLoadSession?.(village.name, session.session_id)}
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <span className="text-xs text-slate-500 whitespace-nowrap">
+                              {formattedDate}
+                            </span>
+                            {session.has_final_report && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-600">
+                                已完结
+                              </span>
+                            )}
+                            {session.checkpoint_count > 0 && (
+                              <span className="text-[10px] text-slate-400">
+                                {session.checkpoint_count} 个节点
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-xs text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                            恢复
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              ) : null
+            )}
+          </div>
+        </motion.div>
+      )}
     </div>
   );
 }

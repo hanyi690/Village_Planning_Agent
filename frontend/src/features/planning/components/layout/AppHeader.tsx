@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { faBars, faFileExport, faPlus } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
-import { usePlanningStore } from '../../store';
+import { usePlanningStore, usePlanningActions } from '../../store';
 import { useStatus, useCurrentLayer, useDimensionProgressAll } from '../../hooks';
 import { LAYER_IDS } from '@/features/planning/constants';
 
@@ -18,6 +18,16 @@ export default function AppHeader({ onToggleLeftNav }: AppHeaderProps) {
   const currentLayer = useCurrentLayer();
   const dimensionProgress = useDimensionProgressAll();
   const status = useStatus();
+
+  const { resetConversation } = usePlanningActions();
+
+  const handleNewSession = useCallback(() => {
+    resetConversation();
+    // Also clear sessionId from URL
+    const url = new URL(window.location.href);
+    url.searchParams.delete('sessionId');
+    window.history.replaceState({}, '', url.toString());
+  }, [resetConversation]);
 
   const layerProgress = useMemo(() => {
     const result: Record<number, { done: number; total: number }> = {
@@ -87,7 +97,10 @@ export default function AppHeader({ onToggleLeftNav }: AppHeaderProps) {
             <span>导出</span>
           </button>
         )}
-        <button className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-200 text-emerald-600 text-sm hover:bg-emerald-50 transition-colors">
+        <button
+          onClick={handleNewSession}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-200 text-emerald-600 text-sm hover:bg-emerald-50 transition-colors"
+        >
           <FontAwesomeIcon icon={faPlus} style={{ width: 14, height: 14 }} />
           <span>新会话</span>
         </button>

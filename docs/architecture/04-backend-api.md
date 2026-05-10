@@ -3,7 +3,7 @@
 本文档详细说明后端 API 路由结构和 SSE 管理机制。
 
 > **更新日期**: 2026-05-10
-> **版本**: v3.3 (SSE 架构优化 — 消除 state_sync)
+> **版本**: v3.4 (报告端点扩展 — 历史版本 + 跨会话查询)
 
 ## 目录
 
@@ -28,9 +28,11 @@
 | `/api/sessions/{id}/feedback` | POST | 反馈接口（审批/修订/对话） |
 | `/api/sessions/{id}/checkpoints` | GET | 检查点列表 |
 | `/api/sessions/{id}/resume/{checkpoint_id}` | POST | 从检查点恢复 |
-| `/api/sessions/{id}/reports/{dim_key}` | GET | 维度报告全文 |
+| `/api/sessions/{id}/reports/{dim_key}` | GET | 维度报告全文（支持 `?version=N` 查历史版本） |
+| `/api/sessions/{id}/reports/{dim_key}/versions` | GET | 维度版本历史摘要列表 |
 | `/api/sessions/{id}/layer/{layer}/reports` | GET | 层级报告批量获取 |
 | `/api/sessions/{id}` | DELETE | 删除会话 |
+| `/api/projects/{name}/reports/{dim_key}` | GET | 按项目名跨会话查询报告 |
 
 ### 基础端点
 
@@ -326,8 +328,26 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
 
 ```python
 @router.get("/api/sessions/{session_id}/reports/{dim_key}")
-async def get_dimension_report(session_id: str, dim_key: str):
-    """获取维度报告全文"""
+async def get_dimension_report(session_id: str, dim_key: str, version: Optional[int] = None):
+    """获取维度报告全文，支持历史版本查询（?version=N）"""
+    # 查历史版本：优先使用 DimensionRevision 表
+    if version is not None:
+        revisions = await get_dimension_revisions_async(
+            session_id=session_id, dimension_key=dim_key, limit=100
+        )
+        for rev in revisions:
+            if rev.get("version") == version:
+                return {
+                    "session_id": session_id,
+                    "dimension_key": dim_key,
+                    "layer": rev.get("layer"),
+                    "content": rev.get("content"),
+                    "version": version,
+                    "created_at": rev.get("created_at"),
+                }
+        raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
+
+    # 默认：从 checkpoint 读取当前内容（保持向后兼容）
     state = await PlanningRuntimeService.aget_state_values(session_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
@@ -345,9 +365,141 @@ async def get_dimension_report(session_id: str, dim_key: str):
     raise HTTPException(status_code=404, detail=f"Report not found: {dim_key}")
 ```
 
+**查询参数**：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `version` | int (query) | 否 | 历史版本号，不传则返回当前 checkpoint 中的报告 |
+
+**数据源优先级**：
+- 不传 `version`：从 LangGraph checkpoint 读取（现有行为）
+- 传 `version=N`：从 `DimensionRevision` 数据库表读取指定版本
+
 ---
 
-### 8. 删除会话
+### 8. 维度版本历史列表
+
+```python
+@router.get("/api/sessions/{session_id}/reports/{dim_key}/versions")
+async def get_dimension_report_versions(session_id: str, dim_key: str):
+    """列出指定维度所有历史版本摘要（不含完整内容）"""
+    revisions = await get_dimension_revisions_async(
+        session_id=session_id, dimension_key=dim_key
+    )
+    if not revisions:
+        raise HTTPException(status_code=404, detail=f"No revisions found for dimension: {dim_key}")
+
+    return {
+        "session_id": session_id,
+        "dimension_key": dim_key,
+        "versions": [
+            {
+                "version": r["version"],
+                "layer": r["layer"],
+                "created_at": r["created_at"],
+                "reason": r["reason"],
+            }
+            for r in revisions
+        ],
+    }
+```
+
+**响应格式**（不含完整 content，仅摘要）：
+
+```json
+{
+  "session_id": "...",
+  "dimension_key": "location",
+  "versions": [
+    {"version": 3, "layer": 1, "created_at": "2026-05-10T...", "reason": "用户反馈修订"},
+    {"version": 2, "layer": 1, "created_at": "2026-05-10T...", "reason": "AI 自动优化"},
+    {"version": 1, "layer": 1, "created_at": "2026-05-10T...", "reason": "初始生成"}
+  ]
+}
+```
+
+**数据源**：`DimensionRevision` 表 → `get_dimension_revisions_async()` (operations.py:896)
+
+---
+
+### 9. 按项目名跨会话查询报告
+
+```python
+@router.get("/api/projects/{project_name}/reports/{dim_key}")
+async def get_project_dimension_report(
+    project_name: str,
+    dim_key: str,
+    session_id: Optional[str] = None,
+    version: Optional[int] = None,
+):
+    """通过项目名跨会话查询维度报告，可选指定 session_id 和 version"""
+    if version is not None and not session_id:
+        raise HTTPException(status_code=400, detail="version parameter requires session_id")
+
+    if session_id:
+        # 指定会话 + 可选版本
+        if version is not None:
+            revisions = await get_dimension_revisions_async(
+                session_id=session_id, dimension_key=dim_key, limit=100
+            )
+            for rev in revisions:
+                if rev.get("version") == version:
+                    return {
+                        "project_name": project_name,
+                        "session_id": session_id,
+                        "dimension_key": dim_key,
+                        "layer": rev.get("layer"),
+                        "content": rev.get("content"),
+                        "version": version,
+                        "created_at": rev.get("created_at"),
+                    }
+            raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
+
+        # 指定会话 + 当前 checkpoint
+        state = await PlanningRuntimeService.aget_state_values(session_id)
+        # ... 查找并返回报告 ...
+
+    # 默认：取该项目最新会话的当前 checkpoint 报告
+    sessions = await list_planning_sessions_async(project_name=project_name, limit=1)
+    if not sessions:
+        raise HTTPException(status_code=404, detail=f"No sessions found for project: {project_name}")
+
+    latest_session_id = sessions[0]["session_id"]
+    # ... 查找并返回报告 ...
+```
+
+**查询参数**：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `session_id` | str (query) | 否 | 指定会话 ID |
+| `version` | int (query) | 否 | 历史版本号，需同时传 `session_id` |
+
+**查询优先级**：
+1. 传 `session_id` + `version=N` → `DimensionRevision` 表
+2. 传 `session_id` 不传 `version` → 该会话 checkpoint
+3. 都不传 → 该项目最新会话的 checkpoint
+
+**复用函数**：
+- `list_planning_sessions_async(project_name=...)` (operations.py:243)
+- `PlanningRuntimeService.aget_state_values()`
+- `get_dimension_revisions_async()` (operations.py:896)
+
+**curl 示例**：
+```bash
+# 按项目名取最新报告
+curl "http://localhost:8000/api/projects/金田村/reports/location"
+
+# 指定会话
+curl "http://localhost:8000/api/projects/金田村/reports/location?session_id={id}"
+
+# 指定会话 + 历史版本
+curl "http://localhost:8000/api/projects/金田村/reports/location?session_id={id}&version=2"
+```
+
+---
+
+### 10. 删除会话
 
 ```python
 @router.delete("/api/sessions/{session_id}")
@@ -363,7 +515,7 @@ async def delete_session(session_id: str):
 
 ---
 
-### 9. 会话状态查询
+### 11. 会话状态查询
 
 ```python
 @router.get("/api/sessions/{session_id}/status")
@@ -381,7 +533,7 @@ async def get_session_status(session_id: str):
 
 ---
 
-### 10. 层级报告批量获取
+### 12. 层级报告批量获取
 
 ```python
 @router.get("/api/sessions/{session_id}/layer/{layer}/reports")
@@ -601,6 +753,7 @@ class SSEManager:
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v3.4 | 2026-05-10 | 报告端点扩展：`?version=N` 历史版本查询 + `/versions` 版本列表 + `/api/projects/{name}/reports/{key}` 跨会话查询 |
 | v3.3 | 2026-05-10 | SSE 架构优化：删除 `state_sync` 事件（消除 AIMessage 序列化崩溃）；前端重连串行化 `getStatus` → `syncEvents` |
 | v3.2 | 2026-05-09 | `status_files`/`other_files` 表单字段合并为 `village_data_files`，删除 `other` 子目录 |
 | v3.1 | 2026-05-09 | Services 模块改为 `__getattr__` 懒加载；删除 `gis_service.py`/`rag_service.py` shim 文件 |

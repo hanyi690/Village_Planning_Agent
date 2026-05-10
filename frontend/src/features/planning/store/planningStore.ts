@@ -27,6 +27,8 @@ import type { VillageInputData } from '../components/VillageInputForm';
 import type { VillageInfo, VillageSession, SessionStatusResponse } from '../api';
 import { getLayerPhase, PlanningStatus, LayerPhase, AgentPhase, NAV_KEYS } from '@/features/planning/constants';
 import type { NavigationKey } from '@/features/planning/constants';
+
+export type ProcessPanelTab = 'messages' | 'tools' | 'map' | 'cascade';
 import {
   createBaseMessage,
   buildLayerReportId,
@@ -197,6 +199,10 @@ export interface PlanningState {
   selectedNavigationKey: NavigationKey | null;
   isRightPanelExpanded: boolean;
   isLeftNavCollapsed: boolean;
+
+  // ChatBar & ProcessPanel
+  chatBarExpanded: boolean;
+  processPanelTab: ProcessPanelTab;
 }
 
 // ============================================
@@ -340,6 +346,10 @@ function createInitialState(conversationId: string): PlanningState {
     selectedNavigationKey: null,
     isRightPanelExpanded: true,
     isLeftNavCollapsed: false,
+
+    // ChatBar & ProcessPanel
+    chatBarExpanded: true,
+    processPanelTab: 'messages',
   };
 }
 
@@ -436,6 +446,10 @@ export interface PlanningActions {
   setSelectedNavigationKey: (key: NavigationKey | null) => void;
   setRightPanelExpanded: (expanded: boolean) => void;
   setLeftNavCollapsed: (collapsed: boolean) => void;
+
+  // ChatBar & ProcessPanel
+  setChatBarExpanded: (expanded: boolean) => void;
+  setProcessPanelTab: (tab: ProcessPanelTab) => void;
 
   // Reset
   resetConversation: () => void;
@@ -900,6 +914,10 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         stage: toolData.stage,
         message: toolData.description,
       };
+
+      // Auto-switch to tools tab and expand right panel
+      state.processPanelTab = 'tools';
+      state.isRightPanelExpanded = true;
       break;
     }
 
@@ -1093,10 +1111,8 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         pauseData.current_layer || pauseData.previous_layer || state.previous_layer;
       state.status = 'paused';
 
-      // Auto-navigate to approval when paused (guard against no-op)
-      if (state.selectedNavigationKey !== NAV_KEYS.APPROVAL) {
-        state.selectedNavigationKey = NAV_KEYS.APPROVAL;
-      }
+      // Expand ChatBar for approval actions when paused
+      state.chatBarExpanded = true;
 
       // Note: checkpoint_saved event (sent before pause) already creates the checkpoint
       // This is a fallback in case checkpoint_saved was missed
@@ -1316,7 +1332,7 @@ function deriveUIStateInStore(state: PlanningState): void {
   };
 
   // Derive pause state
-  state.isPaused = state.pause_after_step === true;
+  state.isPaused = state.pause_after_step === true || state.status === 'paused';
   state.pendingReviewLayer =
     state.isPaused && state.previous_layer > 0 ? state.previous_layer : null;
 
@@ -1757,6 +1773,17 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     setLeftNavCollapsed: (collapsed) =>
       set((state) => {
         state.isLeftNavCollapsed = collapsed;
+      }),
+
+    // ChatBar & ProcessPanel
+    setChatBarExpanded: (expanded) =>
+      set((state) => {
+        state.chatBarExpanded = expanded;
+      }),
+
+    setProcessPanelTab: (tab) =>
+      set((state) => {
+        state.processPanelTab = tab;
       }),
 
     // Reset

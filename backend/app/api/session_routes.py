@@ -30,7 +30,11 @@ from pydantic import BaseModel, Field
 
 from app.api.schemas import TaskStatus, ImageData, UploadedFileMeta
 from app.services.runtime import PlanningRuntimeService
-from app.database.operations import create_planning_session_async
+from app.database.operations import (
+    create_planning_session_async,
+    get_dimension_revisions_async,
+    list_planning_sessions_async,
+)
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service
 from app.agent.state import get_layer_dimensions, get_layer_name, state_to_ui_status
@@ -316,8 +320,24 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
 
 
 @router.get("/api/sessions/{session_id}/reports/{dim_key}")
-async def get_dimension_report(session_id: str, dim_key: str):
-    """获取维度报告全文"""
+async def get_dimension_report(session_id: str, dim_key: str, version: Optional[int] = None):
+    """获取维度报告全文，支持历史版本查询（?version=N）"""
+    if version is not None:
+        revisions = await get_dimension_revisions_async(
+            session_id=session_id, dimension_key=dim_key, limit=100
+        )
+        for rev in revisions:
+            if rev.get("version") == version:
+                return {
+                    "session_id": session_id,
+                    "dimension_key": dim_key,
+                    "layer": rev.get("layer"),
+                    "content": rev.get("content"),
+                    "version": version,
+                    "created_at": rev.get("created_at"),
+                }
+        raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
+
     state = await PlanningRuntimeService.aget_state_values(session_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
@@ -329,6 +349,98 @@ async def get_dimension_report(session_id: str, dim_key: str):
                 "layer": int(layer_key[-1]), "content": reports[layer_key][dim_key]}
 
     raise HTTPException(status_code=404, detail=f"Report not found: {dim_key}")
+
+
+@router.get("/api/sessions/{session_id}/reports/{dim_key}/versions")
+async def get_dimension_report_versions(session_id: str, dim_key: str):
+    """列出指定维度所有历史版本摘要（不含完整内容）"""
+    revisions = await get_dimension_revisions_async(
+        session_id=session_id, dimension_key=dim_key
+    )
+    if not revisions:
+        raise HTTPException(status_code=404, detail=f"No revisions found for dimension: {dim_key}")
+
+    return {
+        "session_id": session_id,
+        "dimension_key": dim_key,
+        "versions": [
+            {
+                "version": r["version"],
+                "layer": r["layer"],
+                "created_at": r["created_at"],
+                "reason": r["reason"],
+            }
+            for r in revisions
+        ],
+    }
+
+
+@router.get("/api/projects/{project_name}/reports/{dim_key}")
+async def get_project_dimension_report(
+    project_name: str,
+    dim_key: str,
+    session_id: Optional[str] = None,
+    version: Optional[int] = None,
+):
+    """通过项目名跨会话查询维度报告，可选指定 session_id 和 version"""
+    if version is not None and not session_id:
+        raise HTTPException(status_code=400, detail="version parameter requires session_id")
+
+    if session_id:
+        if version is not None:
+            revisions = await get_dimension_revisions_async(
+                session_id=session_id, dimension_key=dim_key, limit=100
+            )
+            for rev in revisions:
+                if rev.get("version") == version:
+                    return {
+                        "project_name": project_name,
+                        "session_id": session_id,
+                        "dimension_key": dim_key,
+                        "layer": rev.get("layer"),
+                        "content": rev.get("content"),
+                        "version": version,
+                        "created_at": rev.get("created_at"),
+                    }
+            raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
+
+        state = await PlanningRuntimeService.aget_state_values(session_id)
+        if not state:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+        reports = state.get("reports", {})
+        for layer_key in ["layer1", "layer2", "layer3"]:
+            if dim_key in reports.get(layer_key, {}):
+                return {
+                    "project_name": project_name,
+                    "session_id": session_id,
+                    "dimension_key": dim_key,
+                    "layer": int(layer_key[-1]),
+                    "content": reports[layer_key][dim_key],
+                }
+        raise HTTPException(status_code=404, detail=f"Report not found: {dim_key} in session {session_id}")
+
+    sessions = await list_planning_sessions_async(project_name=project_name, limit=1)
+    if not sessions:
+        raise HTTPException(status_code=404, detail=f"No sessions found for project: {project_name}")
+
+    latest_session_id = sessions[0]["session_id"]
+    state = await PlanningRuntimeService.aget_state_values(latest_session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"State not available for session: {latest_session_id}")
+
+    reports = state.get("reports", {})
+    for layer_key in ["layer1", "layer2", "layer3"]:
+        if dim_key in reports.get(layer_key, {}):
+            return {
+                "project_name": project_name,
+                "session_id": latest_session_id,
+                "dimension_key": dim_key,
+                "layer": int(layer_key[-1]),
+                "content": reports[layer_key][dim_key],
+            }
+
+    raise HTTPException(status_code=404, detail=f"Report not found: {dim_key} in project {project_name}")
 
 
 @router.delete("/api/sessions/{session_id}")

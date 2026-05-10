@@ -1,29 +1,38 @@
 'use client';
 
 /**
- * Dashboard - Three-Panel Workbench Layout
+ * Dashboard - Report Workbench Layout
  *
  * Layout:
  * - AppHeader (56px top bar)
- * - LayerNav (280px left) + FocusArea (flex:1) + ContextPanel (280px right, collapsible)
- * - BottomActionBar (64px conditional bottom)
+ * - LayerNav (280px left) + ReportViewer (flex:1) + ProcessPanel (320px right, collapsible)
+ * - ChatBar (fixed bottom-0, always rendered)
  * - Responsive: mobile overlay drawer for LayerNav at lg breakpoint
  */
 
 import React, { useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { faChevronLeft } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
 import { usePlanningStore } from '../store';
-import { useStatus } from '../hooks';
-import { AppHeader, LayerNav, FocusArea, ContextPanel, BottomActionBar } from './layout';
+import { AppHeader, LayerNav, FocusArea, ProcessPanel, ChatBar } from './layout';
 
 export default function Dashboard() {
-  const status = useStatus();
   const isLeftNavCollapsed = usePlanningStore((state) => state.isLeftNavCollapsed);
   const setLeftNavCollapsed = usePlanningStore((state) => state.setLeftNavCollapsed);
+  const isRightPanelExpanded = usePlanningStore((state) => state.isRightPanelExpanded);
+  const setRightPanelExpanded = usePlanningStore((state) => state.setRightPanelExpanded);
+  const setProcessPanelTab = usePlanningStore((state) => state.setProcessPanelTab);
 
   const handleToggleLeftNav = useCallback(() => {
     setLeftNavCollapsed(!isLeftNavCollapsed);
   }, [isLeftNavCollapsed, setLeftNavCollapsed]);
+
+  const handleOpenRightPanel = useCallback(() => {
+    setProcessPanelTab('messages');
+    setRightPanelExpanded(true);
+  }, [setProcessPanelTab, setRightPanelExpanded]);
 
   return (
     <div className="h-screen overflow-hidden bg-slate-50">
@@ -44,10 +53,30 @@ export default function Dashboard() {
           </div>
         )}
         <FocusArea />
-        <ContextPanel />
+        <ProcessPanel />
       </div>
 
-      {status !== 'idle' && <BottomActionBar />}
+      {/* Right panel reopen button */}
+      <AnimatePresence>
+        {!isRightPanelExpanded && (
+          <motion.button
+            onClick={handleOpenRightPanel}
+            className="fixed right-4 top-1/2 -translate-y-1/2 z-40 w-8 h-20 rounded-l-lg bg-white border border-slate-200 shadow-md hover:bg-slate-50 transition-colors flex items-center justify-center group"
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 20 }}
+            title="打开过程面板"
+          >
+            <FontAwesomeIcon
+              icon={faChevronLeft}
+              className="text-slate-400 group-hover:text-emerald-500 transition-colors"
+              style={{ width: 14, height: 14 }}
+            />
+          </motion.button>
+        )}
+      </AnimatePresence>
+
+      <ChatBar />
     </div>
   );
 }

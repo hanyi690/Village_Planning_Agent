@@ -51,7 +51,7 @@ DATABASE_DIR = DATA_DIR / "database"
 VECTOR_DB_TYPE = os.getenv("VECTOR_DB_TYPE", "chroma")
 
 # Chroma configuration
-CHROMA_PERSIST_DIR = DATA_DIR / "chroma_db"
+CHROMA_PERSIST_DIR = KNOWLEDGE_BASE_DIR / "chroma_db"
 CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "rural_planning")
 
 # FAISS configuration
