@@ -32,16 +32,16 @@ echo.
 REM Create logs directory
 if not exist logs mkdir logs
 
-REM Start backend (unified backend/app structure)
-echo Starting backend...
-start "Backend-8000" cmd /k "cd /d %~dp0backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+REM 生成带时间戳的日志文件名
+for /f "tokens=2-4 delims=/ " %%a in ('date /t') do (set TODAY=%%a%%b%%c)
+set BK_LOG=logs\backend-%TODAY%.log
+set FE_LOG=logs\frontend-%TODAY%.log
 
-REM Wait 5 seconds
-ping -n 6 127.0.0.1 >nul
+REM 启动后台，所有输出写入日志文件（窗口不再弹出）
+start "Backend-8000" /min cmd /c "cd /d %~dp0backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > %~dp0%BK_LOG% 2>&1"
 
-REM Start frontend
-echo Starting frontend...
-start "Frontend-3000" cmd /k "cd /d %~dp0frontend && npm run dev"
+REM 启动前端，同样写入日志
+start "Frontend-3000" /min cmd /c "cd /d %~dp0frontend && npm run dev > %~dp0%FE_LOG% 2>&1"
 
 echo.
 echo ===================================

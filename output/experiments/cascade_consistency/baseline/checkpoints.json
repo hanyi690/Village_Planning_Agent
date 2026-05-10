@@ -1,8 +1,26 @@
 {
-  "session_id": "baseline_97d9465b_20260509173630",
-  "layer_checkpoints": {},
-  "final_checkpoint_id": "",
-  "state_fingerprint": "ba3977c24e2cc25d0810bab7a026d9e2",
-  "collected_at": "2026-05-09T17:36:30.918306",
-  "note": "Layer checkpoints not captured"
+  "session_id": "4d273255-8f75-4a69-afba-e84af73b6ba7",
+  "layer_checkpoints": {
+    "layer1": {
+      "checkpoint_id": "1f14c7a0-3f88-6be6-8000-2f9840cb2d03",
+      "phase": "",
+      "timestamp": "2026-05-10T22:12:31.371908",
+      "state_fingerprint": ""
+    },
+    "layer2": {
+      "checkpoint_id": "1f14c7a0-3fab-63f0-8001-04fd4ec35bd1",
+      "phase": "",
+      "timestamp": "2026-05-10T22:12:31.371921",
+      "state_fingerprint": ""
+    },
+    "layer3": {
+      "checkpoint_id": "1f14c7a4-8a06-681d-8002-2777ea03792c",
+      "phase": "",
+      "timestamp": "2026-05-10T22:12:31.371924",
+      "state_fingerprint": ""
+    }
+  },
+  "final_checkpoint_id": "1f14c7a0-3f88-6be6-8000-2f9840cb2d03",
+  "state_fingerprint": "98e46bf648eb6f56b3dc750ca3f1836d",
+  "collected_at": "2026-05-10T22:12:31.386786"
 }

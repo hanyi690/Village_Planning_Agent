@@ -113,6 +113,7 @@ async def wait_for_layer_completion_sse(
         Same format as wait_for_layer_completion_polling()
     """
     from backend.app.services.checkpoint import checkpoint_service
+    from backend.app.services.runtime import PlanningRuntimeService
     from scripts.experiments.sse_listener import SSEEventListener
 
     logger.info(
@@ -175,8 +176,26 @@ async def wait_for_layer_completion_sse(
 
             event_type = event.get("type")
 
+            # 错误事件：累计，超过阈值后退出等待
+            if event_type == "error":
+                error_count = getattr(sse_listener, '_error_count', 0) + 1
+                sse_listener._error_count = error_count
+                logger.error(
+                    f"[LayerCheckpoint] SSE error event (#{error_count}): "
+                    f"{event.get('data', {}).get('error', 'unknown')}"
+                )
+                if error_count >= 1 or not sse_listener.is_connected:
+                    logger.error(
+                        f"[LayerCheckpoint] SSE connection lost, raising to trigger polling fallback"
+                    )
+                    raise RuntimeError(
+                        f"SSE connection failed: "
+                        f"{event.get('data', {}).get('error', 'unknown')}"
+                    )
+                # 不把错误事件放回队列，避免无限循环
+
             # 退出条件1: layer_completed 且 layer 匹配
-            if event_type == "layer_completed":
+            elif event_type == "layer_completed":
                 if event.get("data", {}).get("layer") == layer:
                     logger.info(
                         f"[LayerCheckpoint] Layer {layer} completed (SSE event received)"
@@ -184,14 +203,14 @@ async def wait_for_layer_completion_sse(
                     break
 
             # 退出条件2: completed 事件（全局完成）
-            if event_type == "completed":
+            elif event_type == "completed":
                 logger.info(
                     f"[LayerCheckpoint] Received completed event, all layers done"
                 )
                 break
 
-            # 其他事件，放回队列
-            await sse_listener._events_queue.put(event)
+            # 其他事件（dimension_complete 等），静默丢弃
+            # 不再放回队列，避免非目标事件导致无限循环
 
         # 等待 checkpoint 持久化完成
         # SSE 的 checkpoint_saved 事件可以替代 wait_for_write
@@ -343,6 +362,11 @@ async def wait_for_layer_completion_polling(
             layer_complete = True
             logger.info(f"[LayerCheckpoint] Layer {layer} completed (all dimensions done)")
 
+        # 条件4：全局完成状态
+        if phase == "completed":
+            layer_complete = True
+            logger.info(f"[LayerCheckpoint] Layer {layer} completed (global completion)")
+
         if layer_complete:
             # 等待checkpoint写入完成
             await checkpoint_service.get_state(session_id, wait_for_write=True)
@@ -461,6 +485,7 @@ async def wait_for_all_layers_sse(
         }
     """
     from backend.app.services.checkpoint import checkpoint_service
+    from backend.app.services.runtime import PlanningRuntimeService
     from scripts.experiments.sse_listener import SSEEventListener
 
     logger.info(f"[LayerCheckpoint] Waiting for all layers via SSE (session={session_id})")
@@ -487,6 +512,28 @@ async def wait_for_all_layers_sse(
                 logger.warning(
                     f"[LayerCheckpoint] Layer {layer} failed: {snapshot.get('error')}"
                 )
+
+            # Auto-resume if pause detected and not last layer
+            if layer < 3 and snapshot.get("success"):
+                state = await checkpoint_service.get_state(session_id, wait_for_write=True)
+                if state and state.get("pause_after_step", False) and state.get("previous_layer", 0) == layer:
+                    logger.info(f"[LayerCheckpoint] Layer {layer} paused, preparing resume to Layer {layer + 1}")
+                    updates = {
+                        "pause_after_step": False,
+                        "previous_layer": 0,
+                        "phase": f"layer{layer + 1}",
+                        "current_wave": 1,
+                    }
+                    await checkpoint_service.update_state(session_id, updates)
+
+                    from backend.app.services.checkpoint import checkpoint_persistence_manager
+                    await checkpoint_persistence_manager.wait_for_write(session_id, timeout=5.0)
+
+                    try:
+                        await PlanningRuntimeService.resume_execution(session_id)
+                        logger.info(f"[LayerCheckpoint] Resumed execution for Layer {layer + 1}")
+                    except Exception as e:
+                        logger.warning(f"[LayerCheckpoint] Failed to resume: {e}")
 
         # 获取最终 checkpoint
         final_state = await checkpoint_service.get_state(
@@ -527,6 +574,7 @@ async def wait_for_all_layers(
     等待所有 layer 完成（统一接口）。
 
     默认使用 SSE 事件驱动模式（use_sse=True）。
+    当 SSE 连接失败时自动 fallback 到轮询模式。
 
     Args:
         session_id: Session identifier
@@ -539,18 +587,26 @@ async def wait_for_all_layers(
         Same as wait_for_all_layers_sse or polling version
     """
     if use_sse:
-        return await wait_for_all_layers_sse(
-            session_id=session_id,
-            timeout_per_layer=timeout_per_layer,
-            listener=listener,
-        )
-    else:
-        # 轮询版本保留 auto_resume 支持
-        return await wait_for_all_layers_polling(
-            session_id=session_id,
-            timeout_per_layer=timeout_per_layer,
-            auto_resume=auto_resume,
-        )
+        try:
+            return await wait_for_all_layers_sse(
+                session_id=session_id,
+                timeout_per_layer=timeout_per_layer,
+                listener=listener,
+            )
+        except Exception as e:
+            logger.warning(
+                f"[LayerCheckpoint] SSE mode failed ({e}), "
+                f"falling back to polling mode"
+            )
+            # Fall through to polling mode
+            use_sse = False
+
+    # 轮询版本保留 auto_resume 支持
+    return await wait_for_all_layers_polling(
+        session_id=session_id,
+        timeout_per_layer=timeout_per_layer,
+        auto_resume=auto_resume,
+    )
 
 
 async def wait_for_all_layers_polling(

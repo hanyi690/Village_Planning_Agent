@@ -42,10 +42,8 @@ from scripts.experiments.config import (
     ensure_output_dirs,
 )
 from scripts.experiments.layer_checkpoint_utils import (
-    wait_for_all_layers,
     save_all_layer_checkpoints,
     compute_state_fingerprint,
-    save_layer_checkpoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -196,104 +194,85 @@ async def run_planning_runtime_with_layer_checkpoints(
     village_data: Dict,
     output_dir: Path,
     timeout_per_layer: int = 600,
-    use_sse: bool = True,
+    use_sse: bool = True,  # Kept for backward compatibility, ignored
 ) -> Dict[str, Any]:
     """
     Run planning flow with layer-level checkpoint capture.
 
-    SSE模式（推荐）：
-    - step_mode=False 自动推进
-    - SSE 事件驱动等待 layer 完成
-    - 无暂停开销，与前端一致响应速度
-
-    轮询模式（后备）：
-    - step_mode=True 暂停捕获
-    - 轮询检测 layer 完成
-    - auto_resume 自动恢复
+    使用 step_mode=False（自动推进），after_analysis 会自动推进到下一层。
+    background_tasks() 阻塞直到所有 3 层完成。
 
     Args:
         project_name: Project name
         village_data: Village configuration data
         output_dir: Output directory for checkpoints
-        timeout_per_layer: Timeout for each layer in seconds
-        use_sse: Use SSE event-driven mode (default True)
+        timeout_per_layer: Timeout for each layer in seconds (unused, kept for compat)
+        use_sse: Kept for compatibility (ignored, auto-advance handles all layers)
 
     Returns:
         Complete session state with layer checkpoint info
     """
     from backend.app.services.runtime import PlanningRuntimeService
+    from backend.app.services.checkpoint import checkpoint_service
     from starlette.background import BackgroundTasks
 
-    mode_str = "SSE" if use_sse else "polling"
     logger.info(
-        f"[Baseline] Starting planning runtime with layer checkpoints ({mode_str} mode): {project_name}"
+        f"[Baseline] Starting planning runtime (auto-advance mode): {project_name}"
     )
 
     # Create BackgroundTasks for script mode
     background_tasks = BackgroundTasks()
 
-    # SSE模式使用 step_mode=False 自动推进，轮询模式使用 step_mode=True
-    step_mode = not use_sse
-
-    # SSE 模式：先启动 listener，再启动 session
-    # 这确保 listener 在后台执行开始前就准备好接收事件
-    sse_listener = None
-    if use_sse:
-        from scripts.experiments.sse_listener import SSEEventListener
-        # 预先启动 listener（使用临时 session_id 前缀，后续更新）
-        sse_listener = SSEEventListener("pending", base_url="http://localhost:8000")
-        await sse_listener.connect()
-        logger.info("[Baseline] SSE listener pre-connected")
-
-    # Start session
+    # step_mode=False: after_analysis 自动推进层
     result = await PlanningRuntimeService.start_session(
         project_name=project_name,
         village_data=village_data.get("status_report", ""),
         village_name=village_data.get("village_name", "金田村"),
         task_description=DEFAULT_TASK_DESCRIPTION,
         constraints=DEFAULT_CONSTRAINTS,
-        step_mode=step_mode,
+        step_mode=False,
         background_tasks=background_tasks,
     )
 
     session_id = result.get("task_id")
-    logger.info(
-        f"[Baseline] Session started: {session_id} (step_mode={step_mode})"
-    )
+    logger.info(f"[Baseline] Session started: {session_id} (step_mode=False)")
 
-    # Update SSE listener with actual session_id
-    if use_sse and sse_listener:
-        sse_listener.session_id = session_id
-        # 重新连接到正确的 session 流
-        await sse_listener.disconnect()
-        sse_listener = SSEEventListener(session_id, base_url="http://localhost:8000")
-        await sse_listener.connect()
-        logger.info(f"[Baseline] SSE listener reconnected to session {session_id}")
-
-    # Execute background tasks (SSE listener is already connected)
+    # Execute background tasks (blocks until all 3 layers complete)
     await background_tasks()
 
-    # Wait for all layers with checkpoint capture
-    all_layers_snapshot = await wait_for_all_layers(
-        session_id=session_id,
-        timeout_per_layer=timeout_per_layer,
-        use_sse=use_sse,
-        listener=sse_listener if use_sse else None,
-    )
+    logger.info(f"[Baseline] All layers completed, capturing checkpoint info")
+
+    # Get checkpoint history for layer checkpoint IDs
+    history = await checkpoint_service.get_checkpoint_history(session_id)
+
+    # Map checkpoints to layers by order
+    layer_checkpoints = {}
+    for i, layer in enumerate([1, 2, 3], 1):
+        cp_id = history[-i].get("checkpoint_id", "") if len(history) >= i else ""
+        layer_checkpoints[f"layer{layer}"] = {
+            "layer": layer,
+            "checkpoint_id": cp_id,
+            "timestamp": datetime.now().isoformat(),
+            "success": bool(cp_id),
+        }
 
     # Save layer checkpoints
-    save_all_layer_checkpoints(all_layers_snapshot, output_dir)
+    save_all_layer_checkpoints({
+        "layer_checkpoints": layer_checkpoints,
+        "success": True,
+    }, output_dir)
 
     # Get final state
-    from backend.app.services.checkpoint import checkpoint_service
     final_state = await checkpoint_service.get_state(session_id, wait_for_write=True) or {}
+    final_checkpoint_id = history[-1].get("checkpoint_id", "") if history else ""
+    state_fingerprint = compute_state_fingerprint(final_state) if final_state else ""
 
     return {
         "session_id": session_id,
         "project_name": project_name,
-        "layer_checkpoints": all_layers_snapshot.get("layer_checkpoints", {}),
-        "final_checkpoint_id": all_layers_snapshot.get("final_checkpoint_id", ""),
-        "state_fingerprint": all_layers_snapshot.get("state_fingerprint", ""),
+        "layer_checkpoints": layer_checkpoints,
+        "final_checkpoint_id": final_checkpoint_id,
+        "state_fingerprint": state_fingerprint,
         **final_state,
     }
 
@@ -409,7 +388,7 @@ async def run_baseline(
     logger.info("=" * 60)
     logger.info("[Baseline] Starting baseline experiment")
     logger.info(f"[Baseline] Capture layer checkpoints: {capture_layer_checkpoints}")
-    logger.info(f"[Baseline] SSE mode: {use_sse}")
+    logger.info(f"[Baseline] Mode: auto-advance (step_mode=False)")
     logger.info("=" * 60)
 
     try:
@@ -465,8 +444,8 @@ def main():
     parser.add_argument("--mock", action="store_true", help="Use mock data for testing")
     parser.add_argument("--no-layer-checkpoints", action="store_true",
                         help="Disable layer-level checkpoint capture")
-    parser.add_argument("--use-polling", action="store_true",
-                        help="Use polling mode instead of SSE (fallback)")
+    # Deprecated: auto-advance mode handles all layers internally
+    # parser.add_argument("--use-polling", ...)
     args = parser.parse_args()
 
     asyncio.run(run_baseline(

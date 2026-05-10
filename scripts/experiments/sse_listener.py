@@ -127,6 +127,7 @@ class SSEEventListener:
             async with self._client.stream("GET", url) as response:
                 if response.status_code != 200:
                     logger.error(f"[SSEListener] SSE stream returned {response.status_code}")
+                    self._connected = False
                     return
 
                 buffer = ""
@@ -174,6 +175,7 @@ class SSEEventListener:
 
         except asyncio.CancelledError:
             logger.info("[SSEListener] Stream consumption cancelled")
+            return
         except Exception as e:
             logger.error(f"[SSEListener] Stream error: {e}")
             # 将错误事件放入队列
@@ -182,6 +184,8 @@ class SSEEventListener:
                 "data": {"error": str(e)},
                 "session_id": self.session_id,
             })
+        finally:
+            self._connected = False
 
     async def _dispatch_event(self, event_type: str, event: Dict[str, Any]):
         """

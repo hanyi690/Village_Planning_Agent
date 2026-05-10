@@ -144,7 +144,6 @@ class AgentState(TypedDict, total=False):
     # 辅助字段
     image_ids: List[str]
     step_mode: bool
-    pause_after_layer: bool       # 层级完成后暂停等待审批
     metadata: Dict[str, Any]
     dimension_results: Annotated[List[Dict], operator.add]  # Send API 自动合并
 ```
@@ -157,8 +156,7 @@ class AgentState(TypedDict, total=False):
 | `human_feedback` | str | 移除 | 合并为 `feedback` |
 | `need_revision` | bool | 移除 | 通过 feedback 非空判断 |
 | `revision_target_dimensions` | List[str] | 移除 | 通过影响树自动计算 |
-| `previous_layer` | int | 移除 | 通过 metadata 或 phase 推断 |
-| `pause_after_step` | bool | `pause_after_layer` | 语义更清晰 |
+| `pause_after_step` | bool | 保留 | 前端暂停标志 |
 | `report_versions` | 无 | Dict | 新增，存储版本历史 |
 | `summaries` | 无 | Dict | 新增，维度摘要 |
 
@@ -249,7 +247,7 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
     if set(completed) == set(total_dims):
         # 层级完成
-        if state.get("pause_after_layer"):
+        if state.get("pause_after_step"):
             return "conversation"  # 等待用户审批
         # 推进到下一层
         return [Send("analyze_dimension", {...}) for d in pending_next_layer]

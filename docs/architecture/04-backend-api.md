@@ -225,16 +225,28 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
     """提交反馈"""
     state = await PlanningRuntimeService.aget_state_values(session_id)
 
-    # 审批：批准当前层级继续执行
-    if request.approve and state.get("pause_after_step", False):
-        await PlanningRuntimeService.aupdate_state(session_id, {
-            "pause_after_step": False,
-            "previous_layer": 0
-        })
-        asyncio.create_task(
-            PlanningRuntimeService._trigger_planning_execution(session_id)
-        )
-        return {"status": "approved"}
+    # 审批：批准当前层级继续执行（基于 completed_dimensions 判断层完成）
+    if request.approve:
+        current_phase = state.get("phase", "layer1")
+        layer = _phase_to_layer(current_phase)
+        if layer:
+            completed = state.get("completed_dimensions", {}).get(f"layer{layer}", [])
+            total = get_layer_dimensions(layer)
+            layer_complete = (set(completed) == set(total) and len(total) > 0)
+        else:
+            layer_complete = False
+
+        if layer_complete:
+            next_phase = get_next_phase(current_phase)
+            await PlanningRuntimeService.aupdate_state(session_id, {
+                "pause_after_step": False,
+                "previous_layer": 0,
+                "phase": next_phase or current_phase,
+            })
+            asyncio.create_task(
+                PlanningRuntimeService._trigger_planning_execution(session_id)
+            )
+            return {"status": "approved", "next_phase": next_phase}
 
     # 修订：触发指定维度重分析
     if request.feedback and request.dimensions:
