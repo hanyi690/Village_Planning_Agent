@@ -347,4 +347,12 @@ export const planningApi = {
       method: 'DELETE',
     });
   },
+
+  /**
+   * Get checkpoints for a session
+   * GET /api/sessions/{session_id}/checkpoints
+   */
+  async getCheckpoints(sessionId: string): Promise<{ session_id: string; checkpoints: { checkpoint_id: string; phase: string; layer: number }[]; count: number }> {
+    return apiRequest(`/api/sessions/${sessionId}/checkpoints`);
+  },
 };

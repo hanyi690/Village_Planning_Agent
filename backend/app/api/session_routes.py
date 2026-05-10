@@ -34,6 +34,8 @@ from app.database.operations import (
     create_planning_session_async,
     get_dimension_revisions_async,
     list_planning_sessions_async,
+    list_projects_async,
+    list_project_sessions_async,
 )
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service
@@ -373,6 +375,20 @@ async def get_dimension_report_versions(session_id: str, dim_key: str):
             for r in revisions
         ],
     }
+
+
+@router.get("/api/projects")
+async def list_projects():
+    """获取项目列表"""
+    projects = await list_projects_async()
+    return {"projects": projects}
+
+
+@router.get("/api/projects/{project_name}/sessions")
+async def list_project_sessions(project_name: str):
+    """获取指定项目的所有会话"""
+    sessions = await list_project_sessions_async(project_name)
+    return {"sessions": sessions}
 
 
 @router.get("/api/projects/{project_name}/reports/{dim_key}")

@@ -4,10 +4,8 @@
 
 import { apiRequest } from './client';
 import type {
-  VillageInfo,
-  VillageSession,
-  LayerContent,
   Checkpoint,
+  LayerContent,
 } from './types';
 
 // ============================================
@@ -16,22 +14,23 @@ import type {
 
 export const dataApi = {
   /**
-   * List all villages
-   * GET /api/data/villages
+   * List all projects
+   * GET /api/projects
    */
-  async listVillages(): Promise<VillageInfo[]> {
-    const response = await apiRequest<{ villages: VillageInfo[] }>('/api/data/villages');
-    return response.villages || [];
+  async listVillages(): Promise<{ name: string; display_name: string; session_count: number }[]> {
+    const response = await apiRequest<{ projects: { name: string; display_name: string; session_count: number }[] }>('/api/projects');
+    return response.projects || [];
   },
 
   /**
-   * Get sessions for a village
-   * GET /api/data/villages/{name}/sessions
+   * Get sessions for a project
+   * GET /api/projects/{name}/sessions
    */
-  async getVillageSessions(villageName: string): Promise<VillageSession[]> {
-    return apiRequest<VillageSession[]>(
-      `/api/data/villages/${encodeURIComponent(villageName)}/sessions`
+  async getVillageSessions(villageName: string): Promise<{ session_id: string; created_at: string; completed_at: string | null }[]> {
+    const response = await apiRequest<{ sessions: { session_id: string; created_at: string; completed_at: string | null }[] }>(
+      `/api/projects/${encodeURIComponent(villageName)}/sessions`
     );
+    return response.sessions || [];
   },
 
   /**
@@ -49,23 +48,6 @@ export const dataApi = {
 
     return apiRequest<LayerContent>(
       `/api/data/villages/${encodeURIComponent(villageName)}/layers/${layerId}?${params}`
-    );
-  },
-
-  /**
-   * Get checkpoints for a village
-   * GET /api/data/villages/{name}/checkpoints
-   */
-  async getCheckpoints(
-    villageName: string,
-    session?: string
-  ): Promise<{ checkpoints: Checkpoint[]; count: number; project_name: string; session?: string }> {
-    const params = new URLSearchParams();
-    if (session) params.append('session', session);
-
-    const query = params.toString() ? `?${params}` : '';
-    return apiRequest<{ checkpoints: Checkpoint[]; count: number; project_name: string; session?: string }>(
-      `/api/data/villages/${encodeURIComponent(villageName)}/checkpoints${query}`
     );
   },
 

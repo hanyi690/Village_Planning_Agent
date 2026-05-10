@@ -171,8 +171,24 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
     store.setHistoryLoading(true);
     store.setHistoryError(null);
     try {
-      const data = await dataApi.listVillages();
-      store.setVillages(data);
+      const projects = await dataApi.listVillages();
+      const villages: VillageInfo[] = await Promise.all(
+        projects.map(async (p) => {
+          const sessions = await dataApi.getVillageSessions(p.name);
+          return {
+            name: p.name,
+            display_name: p.display_name,
+            session_count: p.session_count,
+            sessions: sessions.map((s) => ({
+              session_id: s.session_id,
+              timestamp: s.created_at,
+              checkpoint_count: 0,
+              has_final_report: s.completed_at !== null,
+            })),
+          };
+        })
+      );
+      store.setVillages(villages);
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error, 'Failed to load history');
       store.setHistoryError(errorMessage);
@@ -206,8 +222,15 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
       store.setStatus('completed');
 
       try {
-        const response = await dataApi.getCheckpoints(villageName, sessionId);
-        store.setCheckpoints(response.checkpoints);
+        const response = await planningApi.getCheckpoints(sessionId);
+        store.setCheckpoints(
+          response.checkpoints.map((cp) => ({
+            checkpoint_id: cp.checkpoint_id,
+            description: cp.phase || '',
+            timestamp: '',
+            layer: cp.layer,
+          }))
+        );
 
         const statusData = await planningApi.getStatus(sessionId);
         store.syncBackendState(statusData);

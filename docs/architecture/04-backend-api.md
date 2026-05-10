@@ -3,7 +3,7 @@
 本文档详细说明后端 API 路由结构和 SSE 管理机制。
 
 > **更新日期**: 2026-05-10
-> **版本**: v3.4 (报告端点扩展 — 历史版本 + 跨会话查询)
+> **版本**: v3.5 (项目列表与项目会话 API)
 
 ## 目录
 
@@ -32,6 +32,8 @@
 | `/api/sessions/{id}/reports/{dim_key}/versions` | GET | 维度版本历史摘要列表 |
 | `/api/sessions/{id}/layer/{layer}/reports` | GET | 层级报告批量获取 |
 | `/api/sessions/{id}` | DELETE | 删除会话 |
+| `/api/projects` | GET | 项目列表（含会话统计） |
+| `/api/projects/{name}/sessions` | GET | 指定项目的所有会话 |
 | `/api/projects/{name}/reports/{dim_key}` | GET | 按项目名跨会话查询报告 |
 
 ### 基础端点
@@ -546,6 +548,81 @@ async def get_layer_reports(session_id: str, layer: int):
 
 ---
 
+---
+
+### 13. 项目列表
+
+```python
+@router.get("/api/projects")
+async def list_projects():
+    """获取项目列表"""
+    projects = await list_projects_async()
+    return {"projects": projects}
+```
+
+**响应格式**：
+
+```json
+{
+  "projects": [
+    {
+      "name": "金田村",
+      "display_name": "金田村",
+      "session_count": 5,
+      "last_session_at": "2026-05-10T12:00:00"
+    }
+  ]
+}
+```
+
+**复用函数**：
+- `list_projects_async()` (operations.py:276) — 按 `project_name` 分组聚合查询
+
+---
+
+### 14. 项目会话列表
+
+```python
+@router.get("/api/projects/{project_name}/sessions")
+async def list_project_sessions(project_name: str):
+    """获取指定项目的所有会话"""
+    sessions = await list_project_sessions_async(project_name)
+    return {"sessions": sessions}
+```
+
+**响应格式**：
+
+```json
+{
+  "sessions": [
+    {
+      "session_id": "uuid-...",
+      "project_name": "金田村",
+      "created_at": "2026-05-10T12:00:00",
+      "completed_at": "2026-05-10T14:30:00",
+      "village_data": "...",
+      "task_description": "...",
+      "constraints": "..."
+    }
+  ]
+}
+```
+
+**curl 示例**：
+```bash
+# 获取项目列表
+curl "http://localhost:8000/api/projects"
+
+# 获取指定项目的所有会话
+curl "http://localhost:8000/api/projects/金田村/sessions"
+```
+
+**复用函数**：
+- `list_project_sessions_async(project_name)` (operations.py:312) — 委托 `list_planning_sessions_async(project_name=...)`
+- 每个 session 字典由 `_planning_session_to_dict()` (operations.py:56) 转换
+
+---
+
 ### 健康检查端点
 
 ```python
@@ -753,6 +830,7 @@ class SSEManager:
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v3.5 | 2026-05-10 | 新增项目列表和项目会话 API：`GET /api/projects` + `GET /api/projects/{name}/sessions` |
 | v3.4 | 2026-05-10 | 报告端点扩展：`?version=N` 历史版本查询 + `/versions` 版本列表 + `/api/projects/{name}/reports/{key}` 跨会话查询 |
 | v3.3 | 2026-05-10 | SSE 架构优化：删除 `state_sync` 事件（消除 AIMessage 序列化崩溃）；前端重连串行化 `getStatus` → `syncEvents` |
 | v3.2 | 2026-05-09 | `status_files`/`other_files` 表单字段合并为 `village_data_files`，删除 `other` 子目录 |
