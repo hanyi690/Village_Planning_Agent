@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { memo, useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { faLink, faChevronDown, faChevronUp } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -30,10 +30,9 @@ interface ReportViewerProps {
     constraintFiles?: File[];
   }) => void;
   onViewProcess: () => void;
-  onLoadSession?: (villageName: string, sessionId: string) => void;
 }
 
-export default function ReportViewer({ onStartPlanning, onViewProcess, onLoadSession }: ReportViewerProps) {
+const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess }: ReportViewerProps) {
   const selectedNavigationKey = usePlanningStore((state) => state.selectedNavigationKey);
   const streamingContent = usePlanningStore((state) => state.streamingContent);
   const status = useStatus();
@@ -50,24 +49,25 @@ export default function ReportViewer({ onStartPlanning, onViewProcess, onLoadSes
     : '';
   const ragSources = useDimensionRagSources(dimProgressKey);
 
+  const handleSubmit = useCallback(
+    (data: { projectName: string; villageData?: string; taskDescription?: string; constraints?: string; villageDataFiles?: File[]; taskFiles?: File[]; constraintFiles?: File[] }) =>
+      onStartPlanning({
+        projectName: data.projectName,
+        villageData: data.villageData || '',
+        villageName: data.projectName,
+        taskDescription: data.taskDescription,
+        constraints: data.constraints,
+        villageDataFiles: data.villageDataFiles,
+        taskFiles: data.taskFiles,
+        constraintFiles: data.constraintFiles,
+      }),
+    [onStartPlanning]
+  );
+
   if ((status as string) === 'idle') {
     return (
       <div className="flex-1 h-full bg-slate-50">
-        <VillageInputForm
-          onSubmit={(data) =>
-            onStartPlanning({
-              projectName: data.projectName,
-              villageData: data.villageData || '',
-              villageName: data.projectName,
-              taskDescription: data.taskDescription,
-              constraints: data.constraints,
-              villageDataFiles: data.villageDataFiles,
-              taskFiles: data.taskFiles,
-              constraintFiles: data.constraintFiles,
-            })
-          }
-          onLoadSession={onLoadSession}
-        />
+        <VillageInputForm onSubmit={handleSubmit} />
       </div>
     );
   }
@@ -217,4 +217,6 @@ export default function ReportViewer({ onStartPlanning, onViewProcess, onLoadSes
       </div>
     </div>
   );
-}
+});
+
+export default ReportViewer;

@@ -1,18 +1,18 @@
 'use client';
 
-import React, { useCallback } from 'react';
+import React, { memo, useCallback } from 'react';
 
 import { usePlanningStore, usePlanningActions } from '../../store';
 import { useStatus, useCascadeChain } from '../../hooks';
 import CascadePanel from '../CascadePanel';
 import ReportViewer from './ReportViewer';
 
-export default function FocusArea() {
+const FocusArea = memo(function FocusArea() {
   const status = useStatus();
   const cascadeChain = useCascadeChain();
   const setRightPanelExpanded = usePlanningStore((state) => state.setRightPanelExpanded);
   const setProcessPanelTab = usePlanningStore((state) => state.setProcessPanelTab);
-  const { startPlanning, loadHistoricalSession } = usePlanningActions();
+  const { startPlanning } = usePlanningActions();
 
   const handleStartPlanning = useCallback(
     (data: {
@@ -44,19 +44,11 @@ export default function FocusArea() {
     setRightPanelExpanded(true);
   }, [setProcessPanelTab, setRightPanelExpanded]);
 
-  const handleLoadSession = useCallback(
-    (villageName: string, sessionId: string) => {
-      loadHistoricalSession(villageName, sessionId);
-    },
-    [loadHistoricalSession]
-  );
-
   return (
     <div className="flex-1 h-full relative">
       <ReportViewer
         onStartPlanning={handleStartPlanning}
         onViewProcess={handleViewProcess}
-        onLoadSession={handleLoadSession}
       />
 
       {/* Cascade chain emergency overlay */}
@@ -69,4 +61,6 @@ export default function FocusArea() {
       )}
     </div>
   );
-}
+});
+
+export default FocusArea;

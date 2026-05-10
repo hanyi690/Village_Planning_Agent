@@ -106,3 +106,4 @@ tile_cache/
 nginx/ssl/*.pem
 !nginx/ssl/.gitkeep
 .env.production
+.claude/settings.local.json

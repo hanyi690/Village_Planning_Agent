@@ -13,7 +13,7 @@
  * 4. Provides high-level actions for planning workflow
  */
 
-import { useEffect, useCallback, ReactNode, Suspense } from 'react';
+import { useEffect, useCallback, useMemo, ReactNode, Suspense } from 'react';
 import { usePlanningStore } from '../store/planningStore';
 import { useSSEConnection, useMessagePersistence, useSessionRestore } from '../hooks';
 import { planningApi, dataApi, VillageInfo, VillageSession, ImageData } from '../api';
@@ -36,10 +36,13 @@ interface PlanningProviderProps {
 // ============================================
 
 export function usePlanningActions() {
-  const store = usePlanningStore();
+  const addMessage = usePlanningStore((s) => s.addMessage);
+  const addMessages = usePlanningStore((s) => s.addMessages);
+  const setMessages = usePlanningStore((s) => s.setMessages);
 
   const startPlanning = useCallback(
     async (params: PlanningParams) => {
+      const store = usePlanningStore.getState();
       logger.context.info('Starting planning', { projectName: params.projectName });
 
       try {
@@ -98,37 +101,42 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         throw error;
       }
     },
-    [store]
+    []
   );
 
   const approve = useCallback(async () => {
-    if (!store.sessionId) throw new Error('No session ID');
-    logger.context.info('Approving review', { sessionId: store.sessionId });
+    const store = usePlanningStore.getState();
+    const sessionId = store.sessionId;
+    if (!sessionId) throw new Error('No session ID');
+    console.log('[approve] sessionId=%s isPaused=%s status=%s execPaused=%s',
+        sessionId, store.isPaused, store.status, store.execution_paused);
+    logger.context.info('Approving review', { sessionId });
     try {
-      await planningApi.approveReview(store.sessionId);
+      await planningApi.approveReview(sessionId);
       store.setPaused(false);
       store.setPendingReviewLayer(null);
       store.clearProgressState();
-      store.triggerSseReconnect();
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error, 'Unknown error');
       logger.context.error('Failed to approve review', { error: errorMessage });
       store.addMessage(createErrorMessage(`批准失败: ${errorMessage}`));
       throw error;
     }
-  }, [store]);
+  }, []);
 
   const reject = useCallback(
     async (feedback: string, dimensions?: string[], images?: ImageData[]) => {
-      if (!store.sessionId) throw new Error('No session ID');
+      const store = usePlanningStore.getState();
+      const sessionId = store.sessionId;
+      if (!sessionId) throw new Error('No session ID');
       if (!feedback.trim()) throw new Error('Feedback is required');
       logger.context.info('Rejecting review', {
-        sessionId: store.sessionId,
+        sessionId,
         feedback: feedback.slice(0, 50),
         hasImages: (images?.length ?? 0) > 0,
       });
       try {
-        await planningApi.rejectReview(store.sessionId, feedback, dimensions, images);
+        await planningApi.rejectReview(sessionId, feedback, dimensions, images);
         store.setPaused(false);
 
         // Use clearRevisionProgress to preserve other completed dimensions
@@ -147,29 +155,32 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         throw error;
       }
     },
-    [store]
+    []
   );
 
   const rollback = useCallback(
     async (checkpointId: string) => {
-      if (!store.sessionId) throw new Error('No session ID');
-      await planningApi.rollbackCheckpoint(store.sessionId, checkpointId);
+      const store = usePlanningStore.getState();
+      const sessionId = store.sessionId;
+      if (!sessionId) throw new Error('No session ID');
+      await planningApi.rollbackCheckpoint(sessionId, checkpointId);
       store.setSelectedCheckpoint(checkpointId);
 
       // Sync state after rollback
-      const statusData = await planningApi.getStatus(store.sessionId);
+      const statusData = await planningApi.getStatus(sessionId);
       store.syncBackendState(statusData);
 
       store.addMessage(
         createSystemMessage(`Rolled back to checkpoint ${checkpointId.slice(0, 8)}...`)
       );
     },
-    [store]
+    []
   );
 
   const loadVillagesHistory = useCallback(async () => {
-    store.setHistoryLoading(true);
-    store.setHistoryError(null);
+    const state = usePlanningStore.getState();
+    state.setHistoryLoading(true);
+    state.setHistoryError(null);
     try {
       const projects = await dataApi.listVillages();
       const villages: VillageInfo[] = await Promise.all(
@@ -188,32 +199,33 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
           };
         })
       );
-      store.setVillages(villages);
+      state.setVillages(villages);
     } catch (error: unknown) {
       const errorMessage = getErrorMessage(error, 'Failed to load history');
-      store.setHistoryError(errorMessage);
-      store.setVillages([]);
+      state.setHistoryError(errorMessage);
+      state.setVillages([]);
     } finally {
-      store.setHistoryLoading(false);
+      state.setHistoryLoading(false);
     }
-  }, [store]);
+  }, []);
 
   const selectVillage = useCallback(
     (village: VillageInfo) => {
-      store.setSelectedVillage(village);
+      usePlanningStore.getState().setSelectedVillage(village);
     },
-    [store]
+    []
   );
 
   const selectSession = useCallback(
     (session: VillageSession) => {
-      store.setSelectedSession(session);
+      usePlanningStore.getState().setSelectedSession(session);
     },
-    [store]
+    []
   );
 
   const loadHistoricalSession = useCallback(
     async (villageName: string, sessionId: string) => {
+      const store = usePlanningStore.getState();
       store.clearMessages();
       store.setCheckpoints([]);
       store.setSelectedCheckpoint(null);
@@ -241,7 +253,7 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         store.setHistoryError(errorMessage);
       }
     },
-    [store]
+    []
   );
 
   const deleteSession = useCallback(
@@ -253,66 +265,91 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         return true;
       } catch (error: unknown) {
         const errorMessage = getErrorMessage(error, 'Failed to delete session');
-        store.setHistoryError(errorMessage);
+        usePlanningStore.getState().setHistoryError(errorMessage);
         return false;
       }
     },
-    [store, loadVillagesHistory]
+    [loadVillagesHistory]
   );
 
   const showViewer = useCallback(() => {
-    store.setViewerVisible(true);
-  }, [store]);
+    usePlanningStore.getState().setViewerVisible(true);
+  }, []);
 
   const hideViewer = useCallback(() => {
-    store.setViewerVisible(false);
-  }, [store]);
+    usePlanningStore.getState().setViewerVisible(false);
+  }, []);
 
   const showFileViewer = useCallback(
-    (file: Parameters<typeof store.setViewingFile>[0]) => {
-      store.setViewingFile(file as Parameters<typeof store.setViewingFile>[0]);
+    (file: Parameters<ReturnType<typeof usePlanningStore.getState>['setViewingFile']>[0]) => {
+      const store = usePlanningStore.getState();
+      store.setViewingFile(file);
       store.setViewerVisible(true);
     },
-    [store]
+    []
   );
 
   const hideFileViewer = useCallback(() => {
+    const store = usePlanningStore.getState();
     store.setViewingFile(null);
     store.setViewerVisible(false);
-  }, [store]);
+  }, []);
 
   const resetConversation = useCallback(() => {
-    store.resetConversation();
-  }, [store]);
+    usePlanningStore.getState().resetConversation();
+  }, []);
 
   const sendChatMessage = useCallback(
     async (message: string) => {
-      if (!store.sessionId) throw new Error('No session ID');
-      return planningApi.sendChatMessage(store.sessionId, message);
+      const sessionId = usePlanningStore.getState().sessionId;
+      if (!sessionId) throw new Error('No session ID');
+      return planningApi.sendChatMessage(sessionId, message);
     },
-    [store]
+    []
   );
 
-  return {
-    startPlanning,
-    approve,
-    reject,
-    rollback,
-    loadVillagesHistory,
-    selectVillage,
-    selectSession,
-    loadHistoricalSession,
-    deleteSession,
-    showViewer,
-    hideViewer,
-    showFileViewer,
-    hideFileViewer,
-    resetConversation,
-    sendChatMessage,
-    addMessage: store.addMessage,
-    addMessages: store.addMessages,
-    setMessages: store.setMessages,
-  };
+  return useMemo(
+    () => ({
+      startPlanning,
+      approve,
+      reject,
+      rollback,
+      loadVillagesHistory,
+      selectVillage,
+      selectSession,
+      loadHistoricalSession,
+      deleteSession,
+      showViewer,
+      hideViewer,
+      showFileViewer,
+      hideFileViewer,
+      resetConversation,
+      sendChatMessage,
+      addMessage,
+      addMessages,
+      setMessages,
+    }),
+    [
+      startPlanning,
+      approve,
+      reject,
+      rollback,
+      loadVillagesHistory,
+      selectVillage,
+      selectSession,
+      loadHistoricalSession,
+      deleteSession,
+      showViewer,
+      hideViewer,
+      showFileViewer,
+      hideFileViewer,
+      resetConversation,
+      sendChatMessage,
+      addMessage,
+      addMessages,
+      setMessages,
+    ]
+  );
 }
 
 // ============================================

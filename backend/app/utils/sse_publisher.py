@@ -151,6 +151,25 @@ class SSEPublisher:
         )
 
     @staticmethod
+    def send_layer_paused(session_id: str, layer: int, layer_name: str) -> None:
+        """发送层级暂停事件（等待审批）"""
+        SSEPublisher.send_event(
+            session_id=session_id,
+            event_type=SSEEventType.LAYER_PAUSED,
+            layer=layer,
+            layer_name=layer_name,
+        )
+
+    @staticmethod
+    def send_execution_resumed(session_id: str, layer: int) -> None:
+        """发送执行恢复事件（审批通过）"""
+        SSEPublisher.send_event(
+            session_id=session_id,
+            event_type=SSEEventType.EXECUTION_RESUMED,
+            layer=layer,
+        )
+
+    @staticmethod
     def send_dimension_start(session_id: str, layer: int, dimension_key: str,
                              dimension_name: str, is_revision: bool = False) -> None:
         """发送维度开始事件"""

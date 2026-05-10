@@ -19,6 +19,8 @@ class SSEEventType(str):
     # Layer events
     LAYER_STARTED = "layer_started"
     LAYER_COMPLETED = "layer_completed"
+    LAYER_PAUSED = "layer_paused"
+    EXECUTION_RESUMED = "execution_resumed"
 
     # Dimension events
     DIMENSION_START = "dimension_start"

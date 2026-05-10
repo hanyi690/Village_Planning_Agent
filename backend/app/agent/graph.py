@@ -12,7 +12,7 @@ from langgraph.graph import StateGraph, END, START
 
 from .state import AgentState, PlanningPhase, create_initial_state, get_layer_dimensions
 from .routing import after_conversation, after_analysis
-from .nodes import conversation_node, execute_tools_node, analyze_dimension, DIMENSION_NAMES
+from .nodes import conversation_node, execute_tools_node, analyze_dimension, layer_completion_check, DIMENSION_NAMES
 
 from ..utils.logger import get_logger
 logger = get_logger(__name__)
@@ -39,12 +39,14 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     builder.add_node("conversation", conversation_node)
     builder.add_node("execute_tools", execute_tools_node)
     builder.add_node("analyze_dimension", analyze_dimension_node)
+    builder.add_node("layer_completion_check", layer_completion_check)
 
     builder.add_edge(START, "conversation")
     builder.add_conditional_edges("conversation", after_conversation,
         {"execute_tools": "execute_tools", "analyze_dimension": "analyze_dimension", END: END})
     builder.add_edge("execute_tools", "conversation")
-    builder.add_conditional_edges("analyze_dimension", after_analysis,
+    builder.add_edge("analyze_dimension", "layer_completion_check")
+    builder.add_conditional_edges("layer_completion_check", after_analysis,
         {"analyze_dimension": "analyze_dimension", "conversation": "conversation", END: END})
 
     graph = builder.compile(checkpointer=checkpointer)

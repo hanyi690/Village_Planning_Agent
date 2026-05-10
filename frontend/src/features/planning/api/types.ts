@@ -271,6 +271,7 @@ export interface SessionStatusResponse {
   pause_after_step: boolean;
   previous_layer: number;
   step_mode: boolean;
+  execution_paused: boolean;
 
   // Other metadata
   current_layer: number;

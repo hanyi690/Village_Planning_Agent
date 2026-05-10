@@ -140,7 +140,7 @@ conversation_node (LLM: bind_tools)
 | `dimension_start` | 维度开始分析 | [Agent核心](docs/architecture/agent-core-implementation.md) |
 | `dimension_delta` | 维度内容增量 (Token级) | [前端状态](docs/architecture/frontend-state-dataflow.md) |
 | `dimension_complete` | 维度分析完成 | [维度数据流](docs/architecture/layer-dimension-dataflow.md) |
-| `layer_completed` | 层级执行完成 | [后端API](docs/architecture/backend-api-dataflow.md) |
+| `layer_completed` | 层级完成(前端检测触发) | [后端API](docs/architecture/backend-api-dataflow.md) |
 | `tool_call` | 工具开始执行 | [工具系统](docs/architecture/tool-system-implementation.md) |
 | `tool_progress` | 工具执行进度 | [工具系统](docs/architecture/tool-system-implementation.md) |
 | `tool_result` | 工具执行结果 | [工具系统](docs/architecture/tool-system-implementation.md) |

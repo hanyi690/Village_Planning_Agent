@@ -495,9 +495,8 @@ ToolRegistry._tools["population_model_v1"] = calculate_population
 ToolRegistry._tools["document_overview"] = document_overview_registry_wrapper
 ToolRegistry._tools["chapter_content"] = chapter_content_registry_wrapper
 
-# Register GIS tools (placeholder - GIS modules moved to services/modules/gis)
-# from .core.gis_tool_wrappers import GIS_TOOL_WRAPPERS
-GIS_TOOL_WRAPPERS = {}
+# Register GIS tools
+from .core.gis_tool_wrappers import GIS_TOOL_WRAPPERS
 for tool_name, wrapper_func in GIS_TOOL_WRAPPERS.items():
     ToolRegistry._tools[tool_name] = wrapper_func
     logger.info(f"[ToolRegistry] GIS tool registered: {tool_name}")

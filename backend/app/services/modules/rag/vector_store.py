@@ -206,10 +206,19 @@ class ParentChildVectorStore:
         return len(chunks)
 
     def retrieve(self, query: str, k: int = 5, return_parents: bool = True) -> List[Dict]:
-        """Small-to-Big 检索：检索子块，返回父块"""
+        """Small-to-Big 检索：检索子块，返回父块
+
+        当 _parent_cache 为空或 child doc 缺少 parent_id 元数据时，
+        自动 fallback 返回子块结果（兼容 add_documents() 直接入库的数据）。
+        """
         child_results = self.child_store.similarity_search(query, k=k)
 
         if not return_parents:
+            return [{"content": doc.page_content, "metadata": doc.metadata, "score": 0} for doc in child_results]
+
+        # Fallback: _parent_cache 为空时直接返回子块结果
+        if not self._parent_cache:
+            logger.info("[ParentChildVectorStore] _parent_cache 为空，fallback 返回子块结果")
             return [{"content": doc.page_content, "metadata": doc.metadata, "score": 0} for doc in child_results]
 
         parent_ids_seen = set()
@@ -235,13 +244,27 @@ class ParentChildVectorStore:
                         "parent_id": parent_id,
                     })
 
+        # Fallback: 所有 child doc 都缺少 parent_id 时，直接返回子块结果
+        if not parent_results:
+            logger.info("[ParentChildVectorStore] parent_id 缺失，fallback 返回子块结果")
+            return [{"content": doc.page_content, "metadata": doc.metadata, "score": 0} for doc in child_results]
+
         return parent_results
 
     def retrieve_with_scores(self, query: str, k: int = 5, return_parents: bool = True) -> List[Tuple[Dict, float]]:
-        """带分数的检索"""
+        """带分数的检索
+
+        当 _parent_cache 为空或 child doc 缺少 parent_id 元数据时，
+        自动 fallback 返回子块结果。
+        """
         child_results = self.child_store.similarity_search_with_score(query, k=k)
 
         if not return_parents:
+            return [({"content": doc.page_content, "metadata": doc.metadata}, score) for doc, score in child_results]
+
+        # Fallback: _parent_cache 为空时直接返回子块结果
+        if not self._parent_cache:
+            logger.info("[ParentChildVectorStore] _parent_cache 为空，fallback 返回子块结果")
             return [({"content": doc.page_content, "metadata": doc.metadata}, score) for doc, score in child_results]
 
         parent_ids_seen: Dict[str, Tuple[Dict, float]] = {}
@@ -260,7 +283,12 @@ class ParentChildVectorStore:
                             score,
                         )
 
-        return sorted(parent_ids_seen.values(), key=lambda x: x[1])[:k]
+        if parent_ids_seen:
+            return sorted(parent_ids_seen.values(), key=lambda x: x[1])[:k]
+
+        # Fallback: 所有 child doc 都缺少 parent_id 时，直接返回子块结果
+        logger.info("[ParentChildVectorStore] parent_id 缺失，fallback 返回子块结果")
+        return [({"content": doc.page_content, "metadata": doc.metadata}, score) for doc, score in child_results]
 
     def search(self, query: str, k: int = 5) -> List[Dict]:
         """简化搜索方法（向后兼容）"""

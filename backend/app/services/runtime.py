@@ -487,8 +487,9 @@ class PlanningRuntimeService:
         if initial_state:
             # Remove messages, we don't trigger through LLM
             clean_state = {k: v for k, v in initial_state.items() if k != "messages"}
+            clean_state["phase"] = "layer1"
             await cls.aupdate_state(session_id, clean_state)
-            logger.info(f"[PlanningRuntimeService] [{session_id}] Initial checkpoint created")
+            logger.info("[PlanningRuntimeService] [%s] Initial checkpoint phase=%s", session_id, clean_state.get("phase"))
 
         # 2. Create synthetic AIMessage with AdvancePlanningIntent tool call
         synthetic_ai_message = AIMessage(
@@ -605,8 +606,10 @@ class PlanningRuntimeService:
                     # This branch handles the case where event is not a tuple
                     pass
 
-            # Send completed event
-            await cls._append_event(session_id, create_completed_event(session_id))
+            # Only send completed event when all 3 layers are done
+            final_state = await cls.aget_state_values(session_id)
+            if final_state and final_state.get("phase") == "completed":
+                await cls._append_event(session_id, create_completed_event(session_id))
             sse_manager.set_execution_active(session_id, False)
 
             logger.info(f"[PlanningRuntimeService] [{session_id}] Background execution completed")

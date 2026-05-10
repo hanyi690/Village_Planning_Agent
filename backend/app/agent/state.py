@@ -56,8 +56,14 @@ def _merge_dict_of_lists(a: Dict[str, List], b: Dict[str, List]) -> Dict[str, Li
 
 
 def _merge_dict_of_dicts(a: Dict[str, Dict], b: Dict[str, Dict]) -> Dict[str, Dict]:
-    """合并两个 {key: dict} 字典，同 key 时后者覆盖。用于并行 fan-in。"""
-    return {**a, **b}
+    """递归合并两个 {key: dict} 字典，同 key 时自动合并嵌套 dict。用于并行 fan-in。"""
+    result = {**a}
+    for k, v in b.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = {**result[k], **v}
+        else:
+            result[k] = v
+    return result
 
 
 class AgentState(TypedDict, total=False):
@@ -88,11 +94,13 @@ class AgentState(TypedDict, total=False):
     summaries: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]
     config: Dict[str, Any]
     feedback: Optional[str]
-    pause_after_layer: bool
     dimension_key: Optional[str]
     image_ids: List[str]
     dimension_results: Annotated[List[Dict], operator.add]
     step_mode: bool
+    execution_paused: bool
+    pause_after_step: bool
+    previous_layer: int
     metadata: Dict[str, Any]
 
 
@@ -206,8 +214,10 @@ def create_initial_state(
         "completed_dimensions": {"layer1": [], "layer2": [], "layer3": []},
         "dimension_results": [],
         "feedback": None,
-        "pause_after_layer": False,
         "step_mode": False,
+        "execution_paused": False,
+        "pause_after_step": False,
+        "previous_layer": 0,
         "metadata": {},
     }
 
@@ -282,6 +292,7 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
         "completed_dimensions": state.get("completed_dimensions", {}),
         "pause_after_step": state.get("pause_after_step", False),
         "step_mode": state.get("step_mode", False),
+        "execution_paused": state.get("execution_paused", False),
         "previous_layer": state.get("previous_layer", 0),
     }
 

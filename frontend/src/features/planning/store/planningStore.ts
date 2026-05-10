@@ -28,7 +28,7 @@ import type { VillageInfo, VillageSession, SessionStatusResponse } from '../api'
 import { getLayerPhase, PlanningStatus, LayerPhase, AgentPhase, NAV_KEYS } from '@/features/planning/constants';
 import type { NavigationKey } from '@/features/planning/constants';
 
-export type ProcessPanelTab = 'messages' | 'tools' | 'map' | 'cascade';
+export type ProcessPanelTab = 'messages' | 'tools' | 'map' | 'cascade' | 'history';
 import {
   createBaseMessage,
   buildLayerReportId,
@@ -37,7 +37,7 @@ import {
   formatDimensionReportsAsContent,
   calculateReportSummary,
 } from '@/features/planning/utils/message-helpers';
-import { DIMENSION_NAMES } from '../config/dimensions';
+import { DIMENSION_NAMES, getDimensionsByLayer } from '../config/dimensions';
 
 // ============================================
 // State Types
@@ -124,6 +124,7 @@ export interface PlanningState {
   pause_after_step: boolean;
   previous_layer: number;
   step_mode: boolean;
+  execution_paused: boolean;
 
   // Derived UI State
   completedDimensions: CompletedDimensions;
@@ -286,6 +287,7 @@ function createInitialState(conversationId: string): PlanningState {
     pause_after_step: false,
     previous_layer: 0,
     step_mode: false,
+    execution_paused: false,
 
     // Derived UI State
     completedDimensions: { layer1: [], layer2: [], layer3: [] },
@@ -482,6 +484,11 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       if (connData.task_id && !state.sessionId) {
         state.sessionId = connData.task_id;
       }
+      break;
+    }
+
+    case 'completed': {
+      state.status = 'completed';
       break;
     }
 
@@ -734,6 +741,23 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
       // Derive UI state from phase (currentLayer, currentPhase, completedLayers, etc.)
       deriveUIStateInStore(state);
+
+      // 检测当前层是否所有维度已完成，自动触发暂停状态
+      const completedCountForLayer = state.completedDimensions[layerKey]?.length || 0;
+      const expectedCount =
+        state.layerDimensionCount[layer] || getDimensionsByLayer(layer).length;
+
+      if (
+        completedCountForLayer >= expectedCount &&
+        expectedCount > 0 &&
+        !state.pause_after_step &&
+        state.status !== 'paused'
+      ) {
+        state.pause_after_step = true;
+        state.previous_layer = layer;
+        state.status = 'paused';
+        deriveUIStateInStore(state); // 重新派生 isPaused / pendingReviewLayer
+      }
       break;
     }
 
@@ -844,6 +868,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       state.phase = layerData.phase || state.phase;
       state.pause_after_step = layerData.pause_after_step ?? state.pause_after_step;
       state.previous_layer = layerData.previous_layer ?? state.previous_layer;
+      state.status = 'paused';
 
       // Finalize layer_report message (merge any remaining dimension_reports from SSE)
       const layerReportId = buildLayerReportId(layerNum);
@@ -893,6 +918,28 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       }
 
       // Derive UI state from phase and pause state (currentLayer, currentPhase, etc.)
+      deriveUIStateInStore(state);
+      break;
+    }
+
+    case 'layer_paused': {
+      const pausedData = data as {
+        layer?: number;
+        layer_name?: string;
+      };
+      state.execution_paused = true;
+      state.pause_after_step = true;
+      state.status = 'paused';
+      deriveUIStateInStore(state);
+      break;
+    }
+
+    case 'execution_resumed': {
+      state.execution_paused = false;
+      state.pause_after_step = false;
+      state.isPaused = false;
+      state.pendingReviewLayer = null;
+      state.status = 'planning';
       deriveUIStateInStore(state);
       break;
     }
@@ -1488,6 +1535,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         const hasStatusChange = backendData.status !== state.status;
         const hasPhaseChange = backendData.phase !== state.phase;
         const hasPauseChange = backendData.pause_after_step !== state.pause_after_step;
+        const hasExecutionPausedChange = backendData.execution_paused !== state.execution_paused;
         const hasPreviousLayerChange = backendData.previous_layer !== state.previous_layer;
         const hasReportsChange = !shallowEqualReports(backendData.reports, state.reports);
 
@@ -1495,6 +1543,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           !hasStatusChange &&
           !hasPhaseChange &&
           !hasPauseChange &&
+          !hasExecutionPausedChange &&
           !hasPreviousLayerChange &&
           !hasReportsChange
         ) {
@@ -1507,9 +1556,15 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         }
         if (backendData.phase) state.phase = backendData.phase;
         if (backendData.reports) state.reports = backendData.reports;
-        state.pause_after_step = backendData.pause_after_step === true;
+        if (state.isPaused && backendData.pause_after_step === false) {
+          state.pause_after_step = true;
+        } else {
+          state.pause_after_step = backendData.pause_after_step === true;
+        }
         if (backendData.previous_layer) state.previous_layer = backendData.previous_layer;
         state.step_mode = backendData.step_mode ?? state.step_mode;
+        if (backendData.execution_paused !== undefined)
+          state.execution_paused = backendData.execution_paused;
         if (backendData.last_checkpoint_id)
           state.selectedCheckpoint = backendData.last_checkpoint_id;
 
@@ -1538,6 +1593,9 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         }
         if (data.step_mode !== undefined) {
           state.step_mode = data.step_mode as boolean;
+        }
+        if (data.execution_paused !== undefined) {
+          state.execution_paused = data.execution_paused as boolean;
         }
         deriveUIStateInStore(state);
       }),

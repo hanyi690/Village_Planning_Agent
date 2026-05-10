@@ -192,6 +192,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "messages": [AIMessage(content=llm_response, metadata={"dimension_key": dim_key})],
         "completed_dimensions": {phase_key: [dim_key]},
+        "reports": {phase_key: {dim_key: llm_response}},
         "report_versions": {
             dim_key: [{
                 "version": next_version, "report_id": report_id,

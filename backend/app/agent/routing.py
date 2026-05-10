@@ -19,8 +19,7 @@ from ..config import get_dimension_layer
 from ..config.dependency import get_impact_tree_compat
 from ..tools.constants import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL
 from ..utils.logger import get_logger
-from ..utils.sse_publisher import SSEPublisher
-from ..core.events import SSEEventType
+
 
 logger = get_logger(__name__)
 
@@ -77,11 +76,15 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
     处理：
     1. completed -> END
-    2. 层级完成 -> 推进或暂停
-    3. 波次推进 -> 继续执行
+    2. execution_paused -> END（等待审批）
+    3. 待处理维度 -> Send 分发
     """
     phase = state.get("phase", "layer1")
     if phase == "completed":
+        return END
+
+    # Paused waiting for user approval — stop graph execution
+    if state.get("execution_paused"):
         return END
 
     layer = _phase_to_layer(phase)
@@ -90,50 +93,19 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
     completed = state.get("completed_dimensions", {}).get(f"layer{layer}", [])
     total_dims = get_layer_dimensions(layer)
-
-    if len(total_dims) > 0 and set(completed) == set(total_dims):
-        session_id = state.get("session_id", "")
-        layer_reports = state.get("reports", {}).get(f"layer{layer}", {})
-        total_chars = sum(len(v) for v in layer_reports.values()) if layer_reports else 0
-
-        # Emit layer_completed event so frontend can show approval UI
-        SSEPublisher.send_event(
-            session_id=session_id,
-            event_type=SSEEventType.LAYER_COMPLETED,
-            layer=layer,
-            layer_name=f"Layer {layer}",
-            dimension_count=len(completed),
-            total_chars=total_chars,
-            dimension_reports=layer_reports,
-            pause_after_step=state.get("pause_after_layer", False),
-            previous_layer=state.get("previous_layer", 0),
-            phase=state.get("phase", f"layer{layer}"),
-            task_id=session_id,
-        )
-
-        if state.get("pause_after_layer"):
-            return "conversation"
-
-        next_layer = layer + 1
-        if next_layer > 3:
-            return END
-
-        SSEPublisher.send_layer_start(
-            session_id=session_id,
-            layer=next_layer,
-            layer_name=f"Layer {next_layer}",
-            dimension_count=len(get_layer_dimensions(next_layer))
-        )
-
-        pending = [d for d in get_layer_dimensions(next_layer)
-                   if d not in state.get("completed_dimensions", {}).get(f"layer{next_layer}", [])]
-        return [Send("analyze_dimension", {
-            **state, "dimension_key": d, "phase": f"layer{next_layer}", "current_wave": 1
-        }) for d in pending]
-
-    # 波次未完成，继续执行
     pending = [d for d in total_dims if d not in completed]
-    return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in pending]
+
+    logger.info(
+        "[after_analysis] phase=%s layer=%s completed=%d/%d pending=%d",
+        phase, layer, len(completed), len(total_dims), len(pending),
+    )
+
+    # Dispatch pending dimensions
+    if pending:
+        return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in pending]
+
+    logger.info("[after_analysis] No pending dims, returning END")
+    return END
 
 
 def _infer_dim_from_feedback(state: Dict[str, Any]) -> Optional[str]:
@@ -161,6 +133,8 @@ def _dispatch_current(state: Dict[str, Any]) -> Union[List[Send], str]:
     phase = state.get("phase", PlanningPhase.INIT.value)
     if phase == PlanningPhase.INIT.value:
         phase = PlanningPhase.LAYER1.value
+
+    logger.info("[_dispatch_current] input phase=%s step_mode=%s", phase, state.get("step_mode"))
 
     layer = _phase_to_layer(phase)
     if layer is None:

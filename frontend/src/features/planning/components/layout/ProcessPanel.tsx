@@ -8,6 +8,7 @@ import {
   faWrench,
   faMap,
   faProjectDiagram,
+  faHistory,
 } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
@@ -17,6 +18,9 @@ import {
   useMessages,
   useCascadeChain,
   useDimensionProgressAll,
+  useVillages,
+  useHistoryLoading,
+  useStatus,
 } from '../../hooks';
 import MapView from '../gis/MapView';
 import CascadePanel from '../CascadePanel';
@@ -24,7 +28,8 @@ import MessageList from '../chat/MessageList';
 import ChatInput from '../ChatInput';
 import DimensionCard from '../DimensionCard';
 import ToolStatusCard from '../chat/ToolStatusCard';
-import { planningApi } from '../../api';
+import { planningApi, dataApi } from '../../api';
+import { usePlanningActions } from '../../store';
 import { isToolStatusMessage } from '@/types/message/message-guards';
 
 const TABS: { key: ProcessPanelTab; label: string; icon: typeof faComments }[] = [
@@ -32,6 +37,7 @@ const TABS: { key: ProcessPanelTab; label: string; icon: typeof faComments }[] =
   { key: 'tools', label: '工具', icon: faWrench },
   { key: 'map', label: '地图', icon: faMap },
   { key: 'cascade', label: '级联', icon: faProjectDiagram },
+  { key: 'history', label: '历史', icon: faHistory },
 ];
 
 const MIN_WIDTH = 280;
@@ -101,6 +107,23 @@ export default function ProcessPanel() {
     },
     [sessionId]
   );
+
+  const villages = useVillages();
+  const historyLoading = useHistoryLoading();
+  const status = useStatus();
+  const { loadVillagesHistory, loadHistoricalSession } = usePlanningActions();
+
+  // Auto-switch to history tab when idle
+  useEffect(() => {
+    if (status === 'idle') {
+      setProcessPanelTab('history');
+    }
+  }, [status, setProcessPanelTab]);
+
+  // Load history on mount
+  useEffect(() => {
+    loadVillagesHistory();
+  }, [loadVillagesHistory]);
 
   const dimensionEntries = useMemo(
     () => Object.entries(dimensionProgress),
@@ -234,6 +257,73 @@ export default function ProcessPanel() {
                 ) : (
                   <div className="flex items-center justify-center h-32 text-sm text-slate-400">
                     暂无级联修复链
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* History tab */}
+            {processPanelTab === 'history' && (
+              <div className="flex-1 overflow-y-auto p-3">
+                {historyLoading ? (
+                  <div className="flex items-center justify-center h-32">
+                    <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : villages.length > 0 ? (
+                  <div className="space-y-3">
+                    {villages.map((village) =>
+                      village.sessions.length > 0 ? (
+                        <div key={village.name} className="bg-white rounded-lg border border-slate-100 p-3">
+                          <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-sm font-medium text-slate-700">
+                              {village.display_name || village.name}
+                            </h3>
+                            <span className="text-xs text-slate-400">
+                              {village.session_count} 次会话
+                            </span>
+                          </div>
+                          <div className="space-y-1.5">
+                            {village.sessions.slice(0, 5).map((session) => {
+                              const date = new Date(session.timestamp);
+                              const formattedDate = isNaN(date.getTime())
+                                ? session.timestamp
+                                : date.toLocaleDateString('zh-CN', {
+                                    year: 'numeric',
+                                    month: '2-digit',
+                                    day: '2-digit',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  });
+                              return (
+                                <div
+                                  key={session.session_id}
+                                  className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-100 hover:border-emerald-200 hover:bg-emerald-50/30 transition-all cursor-pointer group"
+                                  onClick={() => loadHistoricalSession(village.name, session.session_id)}
+                                >
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="text-xs text-slate-500 whitespace-nowrap">
+                                      {formattedDate}
+                                    </span>
+                                    {session.has_final_report && (
+                                      <span className="px-1 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-600">
+                                        已完结
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-xs text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                                    恢复
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-32 text-sm text-slate-400">
+                    暂无历史会话
                   </div>
                 )}
               </div>

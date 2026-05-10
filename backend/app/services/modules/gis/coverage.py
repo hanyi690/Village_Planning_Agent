@@ -7,7 +7,7 @@ Coverage Calculator - GIS 覆盖率计算（从 wrapper 分离）
 from typing import Dict, Any, Optional
 import json
 
-from ..gis_data_fetcher import get_fetcher
+from .fetcher import get_fetcher
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

@@ -1,10 +1,8 @@
 'use client';
 
-import { useState, useCallback, useEffect, FormEvent } from 'react';
+import { memo, useState, useCallback, useEffect, FormEvent } from 'react';
 import { motion } from 'framer-motion';
 import { FILE_ACCEPT } from '@/features/planning/constants';
-import { useVillages } from '../hooks';
-import { usePlanningActions } from '../store';
 
 export interface UploadedFileInfo {
   filename: string;
@@ -29,7 +27,170 @@ interface VillageInputFormProps {
   onLoadSession?: (villageName: string, sessionId: string) => void;
 }
 
-export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInputFormProps) {
+// ============================================
+// Extracted sub-components (stable identity)
+// ============================================
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 20 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: { type: 'spring' as const, stiffness: 100, damping: 12 },
+  },
+};
+
+type FileType = 'task' | 'constraint' | 'villageData';
+
+interface FileTagsProps {
+  files: File[];
+  type: FileType;
+  onRemove: (type: FileType, index: number) => void;
+}
+
+const FileTags = memo(function FileTags({ files, type, onRemove }: FileTagsProps) {
+  if (files.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      {files.map((file, index) => (
+        <span
+          key={index}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-cyan-50 text-cyan-700 text-xs rounded-full border border-cyan-200"
+        >
+          <i className="fas fa-file-alt text-cyan-500" />
+          <span className="max-w-[120px] truncate" title={file.name}>
+            {file.name}
+          </span>
+          <button
+            type="button"
+            onClick={() => onRemove(type, index)}
+            className="ml-1 w-4 h-4 flex items-center justify-center rounded-full hover:bg-cyan-200 transition-colors"
+            title="移除文件"
+          >
+            <i className="fas fa-times text-[10px] text-cyan-600" />
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+});
+
+interface InputFieldProps {
+  id: string;
+  label: string;
+  icon: string;
+  required?: boolean;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  isTextarea?: boolean;
+  rows?: number;
+  files?: File[];
+  fileType?: FileType;
+  isFocused: boolean;
+  onFocus: () => void;
+  onBlur: () => void;
+  onRemoveFile?: (type: FileType, index: number) => void;
+}
+
+const InputField = memo(function InputField({
+  id,
+  label,
+  icon,
+  required,
+  value,
+  onChange,
+  placeholder,
+  isTextarea = false,
+  rows = 3,
+  files,
+  fileType,
+  isFocused,
+  onFocus,
+  onBlur,
+  onRemoveFile,
+}: InputFieldProps) {
+  return (
+    <motion.div variants={itemVariants} className="w-full">
+      <label
+        htmlFor={id}
+        className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2"
+      >
+        <span>{icon}</span>
+        {label}
+        {required && <span className="text-red-400">*</span>}
+      </label>
+      <div className="relative group">
+        {isTextarea && fileType && (
+          <motion.label
+            htmlFor={`${id}-file-upload`}
+            whileHover={{ scale: 1.1 }}
+            whileTap={{ scale: 0.9 }}
+            className="absolute right-3 top-3 z-10 w-8 h-8 flex items-center justify-center rounded-full cursor-pointer transition-colors text-gray-400 hover:text-cyan-500 hover:bg-cyan-50"
+            title="上传文件"
+          >
+            <i className="fas fa-paperclip" />
+          </motion.label>
+        )}
+
+        {isTextarea ? (
+          <textarea
+            id={id}
+            rows={rows}
+            value={value}
+            onChange={(e) => {
+              if (!(e.nativeEvent as InputEvent).isComposing) {
+                onChange(e.target.value);
+              }
+            }}
+            onCompositionEnd={(e) => {
+              onChange((e.target as HTMLTextAreaElement).value);
+            }}
+            onFocus={onFocus}
+            onBlur={onBlur}
+            placeholder={placeholder}
+            className="w-full px-4 py-3 pr-12 bg-cyan-50/30 border-0 rounded-2xl text-gray-900 placeholder-gray-500 resize-none transition-all duration-300 focus:bg-white focus:ring-2 focus:ring-cyan-500/20 focus:shadow-[0_0_0_4px_rgba(8,145,178,0.1)]"
+          />
+        ) : (
+          <input
+            id={id}
+            type="text"
+            value={value}
+            onChange={(e) => {
+              if (!(e.nativeEvent as InputEvent).isComposing) {
+                onChange(e.target.value);
+              }
+            }}
+            onCompositionEnd={(e) => {
+              onChange((e.target as HTMLInputElement).value);
+            }}
+            onFocus={onFocus}
+            onBlur={onBlur}
+            placeholder={placeholder}
+            className="w-full px-4 py-3.5 bg-cyan-50/30 border-0 rounded-2xl text-gray-900 placeholder-gray-500 transition-all duration-300 focus:bg-white focus:ring-2 focus:ring-cyan-500/20 focus:shadow-[0_0_0_4px_rgba(8,145,178,0.1)]"
+          />
+        )}
+        <div
+          className={`absolute bottom-0 left-4 right-4 h-0.5 rounded-full transition-all duration-300 ${
+            isFocused
+              ? 'bg-gradient-to-r from-cyan-500 via-teal-500 to-emerald-500 opacity-100'
+              : 'opacity-0'
+          }`}
+        />
+      </div>
+
+      {isTextarea && files && onRemoveFile && (
+        <FileTags files={files} type={fileType!} onRemove={onRemoveFile} />
+      )}
+    </motion.div>
+  );
+});
+
+// ============================================
+// VillageInputForm
+// ============================================
+
+const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSession }: VillageInputFormProps) {
   const [projectName, setProjectName] = useState('');
   const [taskDescription, setTaskDescription] = useState('');
   const [constraints, setConstraints] = useState('');
@@ -40,13 +201,10 @@ export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInp
   const [constraintFiles, setConstraintFiles] = useState<File[]>([]);
   const [villageDataFiles, setVillageDataFiles] = useState<File[]>([]);
 
-  const villages = useVillages();
-  const { loadVillagesHistory } = usePlanningActions();
-
-  // Load history on mount
   useEffect(() => {
-    loadVillagesHistory();
-  }, [loadVillagesHistory]);
+    console.log('VillageInputForm mounted');
+    return () => console.log('VillageInputForm unmounted');
+  }, []);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -68,7 +226,7 @@ export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInp
   };
 
   const handleFileSelect = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>, type: 'task' | 'constraint' | 'villageData') => {
+    (e: React.ChangeEvent<HTMLInputElement>, type: FileType) => {
       const files = e.target.files;
       if (!files || files.length === 0) return;
 
@@ -86,7 +244,7 @@ export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInp
   );
 
   const removeFile = useCallback(
-    (type: 'task' | 'constraint' | 'villageData', index: number) => {
+    (type: FileType, index: number) => {
       const setFiles = {
         task: setTaskFiles,
         constraint: setConstraintFiles,
@@ -103,135 +261,6 @@ export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInp
       opacity: 1,
       transition: { staggerChildren: 0.1, delayChildren: 0.2 },
     },
-  };
-
-  const itemVariants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: {
-      opacity: 1,
-      y: 0,
-      transition: { type: 'spring' as const, stiffness: 100, damping: 12 },
-    },
-  };
-
-  const FileTags = ({
-    files,
-    type,
-  }: {
-    files: File[];
-    type: 'task' | 'constraint' | 'villageData';
-  }) => {
-    if (files.length === 0) return null;
-    return (
-      <div className="mt-2 flex flex-wrap gap-2">
-        {files.map((file, index) => (
-          <span
-            key={index}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-cyan-50 text-cyan-700 text-xs rounded-full border border-cyan-200"
-          >
-            <i className="fas fa-file-alt text-cyan-500" />
-            <span className="max-w-[120px] truncate" title={file.name}>
-              {file.name}
-            </span>
-            <button
-              type="button"
-              onClick={() => removeFile(type, index)}
-              className="ml-1 w-4 h-4 flex items-center justify-center rounded-full hover:bg-cyan-200 transition-colors"
-              title="移除文件"
-            >
-              <i className="fas fa-times text-[10px] text-cyan-600" />
-            </button>
-          </span>
-        ))}
-      </div>
-    );
-  };
-
-  const InputField = ({
-    id,
-    label,
-    icon,
-    required,
-    value,
-    onChange,
-    placeholder,
-    isTextarea = false,
-    rows = 3,
-    files,
-    fileType,
-  }: {
-    id: string;
-    label: string;
-    icon: string;
-    required?: boolean;
-    value: string;
-    onChange: (value: string) => void;
-    placeholder: string;
-    isTextarea?: boolean;
-    rows?: number;
-    files?: File[];
-    fileType?: 'task' | 'constraint' | 'villageData';
-  }) => {
-    const isFocused = focusedField === id;
-
-    return (
-      <motion.div variants={itemVariants} className="w-full">
-        <label
-          htmlFor={id}
-          className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2"
-        >
-          <span>{icon}</span>
-          {label}
-          {required && <span className="text-red-400">*</span>}
-        </label>
-        <div className="relative group">
-          {isTextarea && fileType && (
-            <motion.label
-              htmlFor={`${id}-file-upload`}
-              whileHover={{ scale: 1.1 }}
-              whileTap={{ scale: 0.9 }}
-              className="absolute right-3 top-3 z-10 w-8 h-8 flex items-center justify-center rounded-full cursor-pointer transition-colors text-gray-400 hover:text-cyan-500 hover:bg-cyan-50"
-              title="上传文件"
-            >
-              <i className="fas fa-paperclip" />
-            </motion.label>
-          )}
-
-          {isTextarea ? (
-            <textarea
-              id={id}
-              rows={rows}
-              value={value}
-              onChange={(e) => onChange(e.target.value)}
-              onFocus={() => setFocusedField(id)}
-              onBlur={() => setFocusedField(null)}
-              placeholder={placeholder}
-              className="w-full px-4 py-3 pr-12 bg-cyan-50/30 border-0 rounded-2xl text-gray-900 placeholder-gray-500 resize-none transition-all duration-300 focus:bg-white focus:ring-2 focus:ring-cyan-500/20 focus:shadow-[0_0_0_4px_rgba(8,145,178,0.1)]"
-            />
-          ) : (
-            <input
-              id={id}
-              type="text"
-              value={value}
-              onChange={(e) => onChange(e.target.value)}
-              onFocus={() => setFocusedField(id)}
-              onBlur={() => setFocusedField(null)}
-              placeholder={placeholder}
-              className="w-full px-4 py-3.5 bg-cyan-50/30 border-0 rounded-2xl text-gray-900 placeholder-gray-500 transition-all duration-300 focus:bg-white focus:ring-2 focus:ring-cyan-500/20 focus:shadow-[0_0_0_4px_rgba(8,145,178,0.1)]"
-            />
-          )}
-          <div
-            className={`absolute bottom-0 left-4 right-4 h-0.5 rounded-full transition-all duration-300 ${
-              isFocused
-                ? 'bg-gradient-to-r from-cyan-500 via-teal-500 to-emerald-500 opacity-100'
-                : 'opacity-0'
-            }`}
-          />
-        </div>
-
-        {isTextarea && files && <FileTags files={files} type={fileType!} />}
-      </motion.div>
-    );
   };
 
   return (
@@ -292,6 +321,9 @@ export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInp
               value={projectName}
               onChange={setProjectName}
               placeholder="例如：杭州市余杭区李家村"
+              isFocused={focusedField === 'projectName'}
+              onFocus={() => setFocusedField('projectName')}
+              onBlur={() => setFocusedField(null)}
             />
 
             <InputField
@@ -305,6 +337,10 @@ export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInp
               rows={3}
               files={villageDataFiles}
               fileType="villageData"
+              isFocused={focusedField === 'villageData'}
+              onRemoveFile={removeFile}
+              onFocus={() => setFocusedField('villageData')}
+              onBlur={() => setFocusedField(null)}
             />
 
             <InputField
@@ -318,6 +354,10 @@ export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInp
               rows={4}
               files={taskFiles}
               fileType="task"
+              isFocused={focusedField === 'taskDescription'}
+              onRemoveFile={removeFile}
+              onFocus={() => setFocusedField('taskDescription')}
+              onBlur={() => setFocusedField(null)}
             />
 
             <InputField
@@ -331,6 +371,10 @@ export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInp
               rows={3}
               files={constraintFiles}
               fileType="constraint"
+              isFocused={focusedField === 'constraints'}
+              onRemoveFile={removeFile}
+              onFocus={() => setFocusedField('constraints')}
+              onBlur={() => setFocusedField(null)}
             />
 
           </div>
@@ -359,88 +403,8 @@ export default function VillageInputForm({ onSubmit, onLoadSession }: VillageInp
           AI 将基于您的输入生成专业的村庄规划方案
         </motion.p>
       </motion.form>
-
-      {/* History sessions */}
-      {villages.length > 0 && (
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          animate="visible"
-          className="w-full max-w-xl mt-10"
-        >
-          <motion.div variants={itemVariants} className="text-center mb-6">
-            <h2 className="text-lg font-semibold text-slate-700">
-              最近会话
-            </h2>
-            <p className="text-xs text-slate-400 mt-1">
-              点击恢复之前的规划会话
-            </p>
-          </motion.div>
-
-          <div className="space-y-4">
-            {villages.map((village) =>
-              village.sessions.length > 0 ? (
-                <motion.div
-                  key={village.name}
-                  variants={itemVariants}
-                  className="bg-white rounded-2xl shadow-md shadow-cyan-100/30 border border-slate-100 p-4"
-                >
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-medium text-slate-700">
-                      {village.display_name || village.name}
-                    </h3>
-                    <span className="text-xs text-slate-400">
-                      {village.session_count} 次会话
-                    </span>
-                  </div>
-
-                  <div className="space-y-2">
-                    {village.sessions.slice(0, 5).map((session) => {
-                      const date = new Date(session.timestamp);
-                      const formattedDate = isNaN(date.getTime())
-                        ? session.timestamp
-                        : date.toLocaleDateString('zh-CN', {
-                            year: 'numeric',
-                            month: '2-digit',
-                            day: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          });
-
-                      return (
-                        <div
-                          key={session.session_id}
-                          className="flex items-center justify-between px-3 py-2 rounded-xl bg-slate-50 border border-slate-100 hover:border-emerald-200 hover:bg-emerald-50/30 transition-all cursor-pointer group"
-                          onClick={() => onLoadSession?.(village.name, session.session_id)}
-                        >
-                          <div className="flex items-center gap-3 min-w-0">
-                            <span className="text-xs text-slate-500 whitespace-nowrap">
-                              {formattedDate}
-                            </span>
-                            {session.has_final_report && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-600">
-                                已完结
-                              </span>
-                            )}
-                            {session.checkpoint_count > 0 && (
-                              <span className="text-[10px] text-slate-400">
-                                {session.checkpoint_count} 个节点
-                              </span>
-                            )}
-                          </div>
-                          <span className="text-xs text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                            恢复
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </motion.div>
-              ) : null
-            )}
-          </div>
-        </motion.div>
-      )}
     </div>
   );
-}
+});
+
+export default VillageInputForm;

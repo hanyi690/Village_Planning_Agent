@@ -39,7 +39,8 @@ from app.database.operations import (
 )
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service
-from app.agent.state import get_layer_dimensions, get_layer_name, state_to_ui_status
+from app.agent.state import get_layer_dimensions, get_layer_name, state_to_ui_status, get_next_phase, _phase_to_layer
+from app.utils.sse_publisher import SSEPublisher
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -205,7 +206,6 @@ async def create_session(
 
     await PlanningRuntimeService.ensure_initialized()
 
-    from app.utils.sse_publisher import SSEPublisher
     SSEPublisher.send_layer_start(session_id, 1, get_layer_name(1), len(get_layer_dimensions(1)))
 
     background_tasks.add_task(PlanningRuntimeService._trigger_planning_execution, session_id, initial_state)
@@ -263,10 +263,43 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
     if not state:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-    if request.approve and state.get("pause_after_step", False):
-        await PlanningRuntimeService.aupdate_state(session_id, {"pause_after_step": False, "previous_layer": 0})
+    if request.approve:
+        logger.info("[feedback/approve] session=%s execution_paused=%s phase=%s",
+            session_id, state.get("execution_paused"), state.get("phase"))
+        # Check if execution is paused (set by layer_completion_check node)
+        if not state.get("execution_paused"):
+            return {"status": "not_paused", "message": "Execution is not paused, nothing to approve"}
+
+        current_phase = state.get("phase", "layer1")
+        current_layer = _phase_to_layer(current_phase) or 1
+        next_phase = get_next_phase(current_phase)
+
+        # Single atomic state update: resume execution and advance phase
+        await PlanningRuntimeService.aupdate_state(session_id, {
+            "execution_paused": False,
+            "pause_after_step": False,
+            "previous_layer": 0,
+            "phase": next_phase or current_phase,
+        })
+
+        # Send execution_resumed SSE event before triggering execution
+        SSEPublisher.send_execution_resumed(
+            session_id=session_id,
+            layer=current_layer,
+        )
+
+        # Send layer_started for the next layer
+        if next_phase and next_phase != "completed":
+            next_layer = _phase_to_layer(next_phase)
+            if next_layer:
+                SSEPublisher.send_layer_start(
+                    session_id=session_id,
+                    layer=next_layer,
+                    layer_name=get_layer_name(next_layer),
+                    dimension_count=len(get_layer_dimensions(next_layer))
+                )
         asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
-        return {"status": "approved"}
+        return {"status": "approved", "next_phase": next_phase}
 
     if request.feedback and request.dimensions:
         await PlanningRuntimeService.aupdate_state(session_id, {
