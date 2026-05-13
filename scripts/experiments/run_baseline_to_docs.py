@@ -42,6 +42,47 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 DOCS_DIR = Path(__file__).parent.parent.parent / "docs"
 
+# 维度名称映射
+DIMENSION_NAMES = {
+    # Layer 1: 现状分析
+    "location": "区位与对外交通分析",
+    "socio_economic": "社会经济分析",
+    "villager_wishes": "村民意愿与诉求分析",
+    "superior_planning": "上位规划与政策导向分析",
+    "natural_environment": "自然环境分析",
+    "land_use": "土地利用分析",
+    "traffic": "道路交通分析",
+    "public_services": "公共服务设施分析",
+    "infrastructure": "基础设施分析",
+    "ecological_green": "生态绿地分析",
+    "architecture": "建筑分析",
+    "historical_culture": "历史文化与乡愁保护分析",
+    # Layer 2: 规划思路
+    "resource_endowment": "资源禀赋分析",
+    "planning_positioning": "规划定位分析",
+    "development_goals": "发展目标分析",
+    "planning_strategies": "规划策略分析",
+    # Layer 3: 详细规划
+    "industry": "产业规划",
+    "spatial_structure": "空间结构规划",
+    "land_use_planning": "土地利用规划",
+    "settlement_planning": "居民点规划",
+    "traffic_planning": "道路交通规划",
+    "public_service": "公共服务设施规划",
+    "infrastructure_planning": "基础设施规划",
+    "ecological": "生态绿地规划",
+    "disaster_prevention": "防震减灾规划",
+    "heritage": "历史文保规划",
+    "landscape": "村庄风貌指引",
+    "project_bank": "建设项目库",
+}
+
+LAYER_NAMES = {
+    1: "现状分析",
+    2: "规划思路",
+    3: "详细规划",
+}
+
 
 async def get_rag_references(rag_query: str, top_k: int = 3) -> list:
     """
@@ -62,7 +103,7 @@ async def get_rag_references(rag_query: str, top_k: int = 3) -> list:
 
 def format_rag_section(rag_refs: list) -> str:
     """
-    格式化 RAG 参考内容为 Markdown.
+    格式化 RAG 参考内容为 Markdown（表格 + 引用块格式）.
 
     Args:
         rag_refs: RAG 检索结果
@@ -71,9 +112,9 @@ def format_rag_section(rag_refs: list) -> str:
         Markdown 格式的 RAG 参考部分
     """
     if not rag_refs:
-        return "\n#### RAG 参考来源\n\n无相关法规或技术标准。\n"
+        return "\n### 参考依据\n\n> 该维度未检索到相关参考文档。\n"
 
-    section = "\n#### RAG 参考来源\n\n"
+    section = "\n### 参考依据\n\n"
     section += "| 序号 | 来源文件 | 文档类型 | 相关度 |\n"
     section += "|------|----------|----------|--------|\n"
 
@@ -93,6 +134,35 @@ def format_rag_section(rag_refs: list) -> str:
     return section
 
 
+def format_dimension_report(dim_key: str, dim_content: str) -> str:
+    """
+    格式化单个维度的报告（参考 docs/planning_export 格式）.
+
+    Args:
+        dim_key: 维度标识
+        dim_content: 维度内容
+
+    Returns:
+        Markdown 格式的维度报告
+    """
+    dim_name = DIMENSION_NAMES.get(dim_key, dim_key)
+
+    lines = [
+        f"## {dim_name}",
+        "",
+        f"**维度标识**: `{dim_key}`",
+        "",
+        "---",
+        "",
+        "### 规划内容",
+        "",
+        dim_content,
+        "",
+    ]
+
+    return "\n".join(lines)
+
+
 async def save_reports_to_docs(state: dict):
     """
     Save layer reports to docs directory.
@@ -104,6 +174,8 @@ async def save_reports_to_docs(state: dict):
     reports = state.get("reports", {})
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    export_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    village_name = state.get("project_name", "金田村")
 
     for layer in [1, 2, 3]:
         layer_key = f"layer{layer}"
@@ -116,39 +188,49 @@ async def save_reports_to_docs(state: dict):
         # Combine all dimension reports into one file
         combined_content = []
 
-        # Add chapter header
-        village_name = state.get("project_name", "金田村")
-        chapter_titles = {
-            1: f"第一章 {village_name} 村庄现状",
-            2: f"第二章 {village_name} 规划思路",
-            3: f"第三章 {village_name} 规划细化",
-        }
-
-        combined_content.append(chapter_titles[layer])
-        combined_content.append("")
+        # Add document header (参考 docs/planning_export 格式)
+        layer_name = LAYER_NAMES.get(layer, f"Layer {layer}")
+        combined_content.extend([
+            f"# {layer_name}",
+            "",
+            f"**项目名称**: {village_name}",
+            "",
+            f"**会话ID**: `{session_id[:24]}...`",
+            "",
+            f"**导出时间**: {export_time}",
+            "",
+            "---",
+            "",
+        ])
 
         # Add each dimension report with RAG references
         for dim_key, dim_content in layer_reports.items():
             if dim_content:
-                combined_content.append(dim_content)
-                combined_content.append("")
+                # 格式化维度报告（参考 docs/planning_export 格式）
+                combined_content.append(format_dimension_report(dim_key, dim_content))
 
                 # Add RAG references for this dimension
                 cfg = get_dimension_config(dim_key)
                 if cfg and cfg.rag_query:
                     rag_refs = await get_rag_references(cfg.rag_query)
                     combined_content.append(format_rag_section(rag_refs))
-                    combined_content.append("---\n")
+                else:
+                    combined_content.append("\n### 参考依据\n\n> 该维度未检索到相关参考文档。\n")
 
-        # Save to docs
-        output_file = DOCS_DIR / f"layer{layer}_法规式报告_{timestamp}.md"
+                combined_content.append("---\n")
+
+        # Save to docs/planning_export (与 export_planning_to_docs.py 一致)
+        output_dir = DOCS_DIR / "planning_export"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        layer_name = LAYER_NAMES.get(layer, f"Layer {layer}")
+        output_file = output_dir / f"layer{layer}_{layer_name}.md"
         with open(output_file, "w", encoding="utf-8") as f:
             f.write("\n".join(combined_content))
 
         logger.info(f"Saved {output_file}: {len(combined_content)} lines")
 
-    # Save metadata
-    meta_file = DOCS_DIR / f"baseline_meta_{timestamp}.json"
+    # Save metadata to docs/planning_export
+    meta_file = output_dir / f"baseline_meta_{timestamp}.json"
     meta = {
         "session_id": session_id,
         "timestamp": timestamp,

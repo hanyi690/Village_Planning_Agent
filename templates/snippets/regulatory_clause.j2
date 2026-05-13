@@ -1,0 +1,25 @@
+{#
+  条文段落模板 - 用于法规条文格式
+
+  参数:
+  - article_title: 条文标题（如"第九条 用地布局规划"）
+  - paragraphs: 段落列表
+  - clauses: 编号条款列表（可选，格式如"（一）xxx"）
+#}
+**{{ article_title }}**
+
+{% for para in paragraphs %}
+{{ para }}
+{% if not loop.last %}
+
+{% endif %}
+{% endfor %}
+
+{% if clauses %}
+{% for clause in clauses %}
+{{ clause }}
+{% if not loop.last %}
+
+{% endif %}
+{% endfor %}
+{% endif %}

@@ -521,4 +521,75 @@ async def get_layer_reports(session_id: str, layer: int):
     return await checkpoint_service.get_layer_reports(session_id, layer)
 
 
+# ============================================
+# Planning Document Export (V3.0)
+# ============================================
+
+class ExportRequest(BaseModel):
+    """导出请求"""
+    layer3_path: str = Field(..., description="Layer3 Markdown 文件路径")
+    project_name: str = Field(default="金田村", description="项目名称")
+
+
+class ExportResponse(BaseModel):
+    """导出响应"""
+    success: bool
+    markdown_path: str
+    article_count: int
+    errors: List[str] = []
+
+
+@router.post("/api/planning/export", response_model=ExportResponse)
+async def export_planning_document(request: ExportRequest):
+    """
+    导出法定规划文档（简化版）
+
+    直接从 Layer3 Markdown 提取内容，按条文编号组织输出。
+    不使用 LLM，保留原始表格和列表结构。
+    """
+    import sys
+    project_root = Path(__file__).parent.parent.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+    from scripts.llm_assisted.simple_export import export_planning_document
+
+    output_dir = Path("docs/planning_export/output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    result = export_planning_document(
+        layer3_path=request.layer3_path,
+        output_dir=str(output_dir),
+        project_name=request.project_name
+    )
+
+    return ExportResponse(
+        success=result.success,
+        markdown_path=result.markdown_path,
+        article_count=result.article_count,
+        errors=result.errors
+    )
+
+
+@router.get("/api/planning/export/{project_name}")
+async def get_exported_document(project_name: str):
+    """
+    获取已导出的规划文档
+
+    返回 Markdown 文件内容。
+    """
+    markdown_path = Path(f"docs/planning_export/output/{project_name}_规划文本.md")
+    if not markdown_path.exists():
+        raise HTTPException(status_code=404, detail=f"Document not found: {project_name}")
+
+    with open(markdown_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    return {
+        "project_name": project_name,
+        "content": content,
+        "path": str(markdown_path),
+    }
+
+
 __all__ = ["router"]
