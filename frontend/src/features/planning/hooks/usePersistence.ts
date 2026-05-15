@@ -66,7 +66,7 @@ export function useMessagePersistence({ enabled = true }: UseMessagePersistenceO
   }
 
   // Save a single message to backend
-  const saveSingleMessage = async (msg: Message, currentSessionId: string) => {
+  const saveSingleMessage = async (msg: Message, _currentSessionId: string) => {
     // Check if message needs update (for layer_completed messages)
     const needsUpdate = shouldMessageBeUpdated(msg);
 

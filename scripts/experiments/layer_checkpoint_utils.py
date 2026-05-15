@@ -1,7 +1,7 @@
 """
 Layer级Checkpoint通用工具
 
-供 run_rag_hallucination.py 和 run_baseline.py 共用。
+供 run_baseline.py 共用。
 
 提供：
 - wait_for_layer_completion(): 等待指定layer完成并捕获checkpoint_id
@@ -112,8 +112,8 @@ async def wait_for_layer_completion_sse(
     Returns:
         Same format as wait_for_layer_completion_polling()
     """
-    from backend.app.services.checkpoint import checkpoint_service
-    from backend.app.services.runtime import PlanningRuntimeService
+    from app.services.checkpoint import checkpoint_service
+    from app.services.runtime import PlanningRuntimeService
     from scripts.experiments.sse_listener import SSEEventListener
 
     logger.info(
@@ -293,8 +293,8 @@ async def wait_for_layer_completion_polling(
             "error": Optional[str],
         }
     """
-    from backend.app.services.checkpoint import checkpoint_service
-    from backend.app.agent.state import get_layer_dimensions, _phase_to_layer
+    from app.services.checkpoint import checkpoint_service
+    from app.agent.state import get_layer_dimensions, _phase_to_layer
 
     logger.info(f"[LayerCheckpoint] Waiting for Layer {layer} (session={session_id}, timeout={timeout}s)")
 
@@ -484,8 +484,8 @@ async def wait_for_all_layers_sse(
             "success": bool,
         }
     """
-    from backend.app.services.checkpoint import checkpoint_service
-    from backend.app.services.runtime import PlanningRuntimeService
+    from app.services.checkpoint import checkpoint_service
+    from app.services.runtime import PlanningRuntimeService
     from scripts.experiments.sse_listener import SSEEventListener
 
     logger.info(f"[LayerCheckpoint] Waiting for all layers via SSE (session={session_id})")
@@ -526,7 +526,7 @@ async def wait_for_all_layers_sse(
                     }
                     await checkpoint_service.update_state(session_id, updates)
 
-                    from backend.app.services.checkpoint import checkpoint_persistence_manager
+                    from app.services.checkpoint import checkpoint_persistence_manager
                     await checkpoint_persistence_manager.wait_for_write(session_id, timeout=5.0)
 
                     try:
@@ -635,8 +635,8 @@ async def wait_for_all_layers_polling(
             "success": bool,
         }
     """
-    from backend.app.services.checkpoint import checkpoint_service
-    from backend.app.services.runtime import PlanningRuntimeService
+    from app.services.checkpoint import checkpoint_service
+    from app.services.runtime import PlanningRuntimeService
 
     logger.info(f"[LayerCheckpoint] Waiting for all layers (session={session_id})")
 
@@ -673,7 +673,7 @@ async def wait_for_all_layers_polling(
 
                 # Step 1.5: Wait for checkpoint write to complete before resume
                 # This ensures resume_execution reads the updated state
-                from backend.app.services.checkpoint import checkpoint_persistence_manager
+                from app.services.checkpoint import checkpoint_persistence_manager
                 await checkpoint_persistence_manager.wait_for_write(session_id, timeout=5.0)
                 logger.info(f"[LayerCheckpoint] Checkpoint write completed, ready to resume")
 
@@ -946,8 +946,8 @@ async def restore_from_checkpoint(
 
     NOTE: 从导出的 checkpoint 文件恢复，避免读取被修改的当前状态。
     """
-    from backend.app.services.checkpoint import checkpoint_service
-    from backend.app.services.runtime import PlanningRuntimeService
+    from app.services.checkpoint import checkpoint_service
+    from app.services.runtime import PlanningRuntimeService
     import uuid
 
     logger.info(

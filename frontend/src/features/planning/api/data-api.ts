@@ -3,10 +3,6 @@
 // ============================================
 
 import { apiRequest } from './client';
-import type {
-  Checkpoint,
-  LayerContent,
-} from './types';
 
 // ============================================
 // Data API
@@ -33,54 +29,9 @@ export const dataApi = {
     return response.sessions || [];
   },
 
-  /**
-   * Get layer content
-   * GET /api/data/villages/{name}/layers/{layer}
-   */
-  async getLayerContent(
-    villageName: string,
-    layerId: string,
-    session?: string,
-    format: 'markdown' | 'html' | 'json' = 'markdown'
-  ): Promise<LayerContent> {
-    const params = new URLSearchParams({ format });
-    if (session) params.append('session', session);
-
-    return apiRequest<LayerContent>(
-      `/api/data/villages/${encodeURIComponent(villageName)}/layers/${layerId}?${params}`
-    );
-  },
-
-  /**
-   * Compare two checkpoints
-   * GET /api/data/villages/{name}/compare/{cp1}/{cp2}
-   */
-  async compareCheckpoints(
-    villageName: string,
-    cp1: string,
-    cp2: string
-  ): Promise<{ diff: string; summary: string }> {
-    return apiRequest(
-      `/api/data/villages/${encodeURIComponent(villageName)}/compare/${cp1}/${cp2}`
-    );
-  },
-
-  /**
-   * Get combined plan
-   * GET /api/data/villages/{name}/plan
-   */
-  async getCombinedPlan(
-    villageName: string,
-    session?: string,
-    format: 'markdown' | 'html' | 'pdf' = 'markdown'
-  ): Promise<{ content: string }> {
-    const params = new URLSearchParams({ format });
-    if (session) params.append('session', session);
-
-    return apiRequest(
-      `/api/data/villages/${encodeURIComponent(villageName)}/plan?${params}`
-    );
-  },
+  // ============================================
+  // GIS Tool Test API
+  // ============================================
 
   /**
    * Test spatial layout generation
@@ -142,114 +93,6 @@ export const dataApi = {
       }),
     });
   },
-
-  // ============================================
-  // Jintian Data API
-  // ============================================
-
-  /**
-   * Get Jintian village metadata
-   * GET /api/jintian/metadata
-   */
-  async getJintianMetadata(): Promise<{
-    success: boolean;
-    data: {
-      village: { name: string; code: string; area_km2: number };
-      coordinate_system: string;
-      files: Record<string, any>;
-    };
-    village_name: string;
-    area_km2: number;
-  }> {
-    return apiRequest('/api/jintian/metadata');
-  },
-
-  /**
-   * Get Jintian GeoJSON data file
-   * GET /api/jintian/data/{filename}
-   */
-  async getJintianData(filename: string): Promise<{
-    success: boolean;
-    filename: string;
-    feature_count: number;
-    geometry_types: string[];
-    geojson: any;
-  }> {
-    return apiRequest(`/api/jintian/data/${filename}`);
-  },
-
-  /**
-   * List all Jintian data files
-   * GET /api/jintian/files
-   */
-  async listJintianFiles(): Promise<{
-    success: boolean;
-    total_files: number;
-    files: Array<{
-      filename: string;
-      source_gdb: string;
-      source_layer: string;
-      records: number;
-      geometry_type: string;
-    }>;
-  }> {
-    return apiRequest('/api/jintian/files');
-  },
-
-  /**
-   * Get report content for a layer
-   * GET /api/jintian/report/{layer}
-   */
-  async getReportData(layer: number): Promise<{
-    success: boolean;
-    layer: number;
-    content: string;
-    word_count: number;
-  }> {
-    return apiRequest(`/api/jintian/report/${layer}`);
-  },
-
-  /**
-   * Get planning facilities from report
-   * GET /api/jintian/planning/facilities
-   */
-  async getPlanningFacilities(): Promise<{
-    success: boolean;
-    total: number;
-    facilities: Array<{
-      name: string;
-      content: string;
-      scale: string;
-      location: string;
-      function: string;
-    }>;
-  }> {
-    return apiRequest('/api/jintian/planning/facilities');
-  },
-
-  /**
-   * Get planning zones from report
-   * GET /api/jintian/planning/zones
-   */
-  async getPlanningZones(): Promise<{
-    success: boolean;
-    total: number;
-    zones: Array<{
-      zone_id: string;
-      name: string;
-      type: string;
-      description: string;
-      location_hint: string;
-      area_ratio: number;
-    }>;
-    structure: string;
-  }> {
-    return apiRequest('/api/jintian/planning/zones');
-  },
-
-  // ============================================
-  // GIS Tool Test API
-  // ============================================
 
   /**
    * Test isochrone analysis
@@ -409,10 +252,6 @@ export const dataApi = {
       body: JSON.stringify(params),
     });
   },
-
-  // ============================================
-  // 新增工具测试 API
-  // ============================================
 
   /**
    * Test landuse change analysis

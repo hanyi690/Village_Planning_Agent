@@ -16,7 +16,7 @@ import { faChevronLeft } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
 import { usePlanningStore } from '../store';
-import { AppHeader, LayerNav, FocusArea, ProcessPanel, ChatBar } from './layout';
+import { AppHeader, LayerNav, FocusArea, ProcessPanel } from './layout';
 
 export default function Dashboard() {
   const isLeftNavCollapsed = usePlanningStore((state) => state.isLeftNavCollapsed);
@@ -35,7 +35,7 @@ export default function Dashboard() {
   }, [setProcessPanelTab, setRightPanelExpanded]);
 
   return (
-    <div className="h-screen overflow-hidden bg-slate-50">
+    <div className="h-screen overflow-hidden bg-[#f8fafc]">
       <AppHeader onToggleLeftNav={handleToggleLeftNav} />
 
       <div className="flex" style={{ height: 'calc(100vh - 56px)' }}>
@@ -69,14 +69,12 @@ export default function Dashboard() {
           >
             <FontAwesomeIcon
               icon={faChevronLeft}
-              className="text-slate-400 group-hover:text-emerald-500 transition-colors"
+              className="text-slate-400 group-hover:text-[#0ea5e9] transition-colors"
               style={{ width: 14, height: 14 }}
             />
           </motion.button>
         )}
       </AnimatePresence>
-
-      <ChatBar />
     </div>
   );
 }

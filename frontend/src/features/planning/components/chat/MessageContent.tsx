@@ -91,7 +91,7 @@ function renderDimensionReportMessage(message: DimensionReportMessage) {
 
 // Main Message Content Renderer
 export default function MessageContent(props: MessageContentProps) {
-  const { message, enableStreaming = true, dimensionContents } = props;
+  const { message, enableStreaming = true } = props;
 
   switch (message.type) {
     case 'text':
@@ -114,7 +114,7 @@ export default function MessageContent(props: MessageContentProps) {
 
     case 'layer_completed':
       return isLayerCompletedMessage(message) ? (
-        <LayerReportMessage message={message} dimensionContents={dimensionContents} />
+        <LayerReportMessage message={message} />
       ) : null;
 
     case 'dimension_report':

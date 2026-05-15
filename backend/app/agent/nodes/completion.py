@@ -60,11 +60,11 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
 
     session_id = state.get("session_id", "")
 
-    # Calculate total chars for this layer
-    total_chars = sum(
-        len(state.get("reports", {}).get(f"layer{layer}", {}).get(d, ""))
-        for d in completed
-    )
+    # 从数据库获取报告计算总字符数
+    from ...services.report_store import ReportStore
+    store = ReportStore.get_instance()
+    layer_reports = await store.get_layer_reports(session_id, layer)
+    total_chars = sum(len(v) for v in layer_reports.values()) if layer_reports else 0
 
     # Send layer_completed SSE event
     SSEPublisher.send_layer_complete(

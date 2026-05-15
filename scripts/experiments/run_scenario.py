@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
 
 from scripts.experiments.config import (
     BASELINE_DIR,
@@ -65,7 +65,7 @@ def calculate_impact_tree(target_dimension: str) -> Dict[int, List[str]]:
     Returns:
         {wave: [dimension_keys]} grouped by wave
     """
-    from backend.app.config.dependency import get_impact_tree_compat
+    from app.config.dependency import get_impact_tree_compat
 
     tree = get_impact_tree_compat(target_dimension)
 
@@ -93,14 +93,14 @@ def calculate_wave_allocation(
     Returns:
         {wave: [dimension_keys]} grouped by wave
     """
-    from backend.app.config.dependency import get_revision_wave_dimensions
+    from app.config.dependency import get_revision_wave_dimensions
 
     return get_revision_wave_dimensions(target_dimensions, completed_dimensions)
 
 
 def get_dimension_metadata(dimension_key: str) -> Dict[str, Any]:
     """Get metadata for a dimension."""
-    from backend.app.config import get_dimension_config, get_dimension_layer
+    from app.config import get_dimension_config, get_dimension_layer
 
     config = get_dimension_config(dimension_key)
     layer = get_dimension_layer(dimension_key)
@@ -335,8 +335,8 @@ async def execute_scenario_with_runtime(
     Returns:
         Experiment results
     """
-    from backend.app.services.review import review_service
-    from backend.app.services.checkpoint import checkpoint_service
+    from app.services.review import review_service
+    from app.services.checkpoint import checkpoint_service
 
     config = get_scenario_config(scenario_name)
     target_dimension = config["target_dimension"]
@@ -402,7 +402,7 @@ async def execute_scenario_with_runtime(
         completed_dims = completed_dims_raw
     else:
         # 无数据或异常格式，从 reports 推导
-        from backend.app.config import get_dimension_layer
+        from app.config import get_dimension_layer
         reports = execution_state.get("reports", {})
         for layer_key in ["layer1", "layer2", "layer3"]:
             layer_reports = reports.get(layer_key, {})
@@ -432,7 +432,7 @@ async def execute_scenario_with_runtime(
 
     # Trigger revision execution (critical step!)
     # reject 只设置状态，需要 resume_execution 触发级联更新
-    from backend.app.services.runtime import PlanningRuntimeService
+    from app.services.runtime import PlanningRuntimeService
     await PlanningRuntimeService.resume_execution(execution_session_id)
     logger.info(f"[Scenario] Resume execution triggered for revision")
 
@@ -513,7 +513,7 @@ async def wait_for_revision_completion(
     Returns:
         Final state
     """
-    from backend.app.services.checkpoint import checkpoint_service
+    from app.services.checkpoint import checkpoint_service
 
     if use_sse:
         return await wait_for_revision_completion_sse(session_id, timeout)
@@ -535,7 +535,7 @@ async def wait_for_revision_completion_sse(
     Returns:
         Final state
     """
-    from backend.app.services.checkpoint import checkpoint_service
+    from app.services.checkpoint import checkpoint_service
     from scripts.experiments.sse_listener import SSEEventListener
 
     logger.info(f"[Scenario] Waiting for revision (SSE mode, timeout={timeout}s)")
@@ -582,7 +582,7 @@ async def wait_for_revision_completion_polling(
     Returns:
         Final state with revision_history and reports
     """
-    from backend.app.services.checkpoint import checkpoint_service
+    from app.services.checkpoint import checkpoint_service
 
     start_time = datetime.now()
 

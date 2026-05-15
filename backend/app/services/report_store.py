@@ -2,20 +2,21 @@
 Report Store - Report storage with version management
 
 Design:
-- File-based storage (dev) / Object storage (production)
+- Database-backed storage (SQLModel)
 - Version history for each dimension
-- Lightweight index in state, full content stored externally
+- Lightweight index in state, full content stored in DB
 - Supports time-travel (version rollback)
 """
 
-import json
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 
+from sqlmodel import select
+
+from ..database.models import DimensionReport
+from ..database.engine import get_async_session
 from ..utils.logger import get_logger
-from ..utils.paths import get_data_dir
 
 logger = get_logger(__name__)
 
@@ -41,25 +42,15 @@ class ReportStore:
     """
     Report Storage and Version Management
 
-    Storage pattern:
-        data/reports/{session_id}/{dim_key}/v{version}.md
-        data/reports/{session_id}/{dim_key}/metadata.json
-
-    Interface:
-        - save() -> report_id
-        - get() -> full content
-        - list_versions() -> [ReportVersion, ...]
+    Database-backed storage using SQLModel.
+    Replaces file-based storage for better query efficiency and consistency.
     """
 
     _instance: Optional["ReportStore"] = None
 
-    def __init__(self, base_dir: Optional[Path] = None):
-        """Initialize report store with base directory"""
-        if base_dir is None:
-            base_dir = get_data_dir() / "reports"
-        self.base_dir = base_dir
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"[ReportStore] Initialized at: {self.base_dir}")
+    def __init__(self):
+        """Initialize report store"""
+        logger.info("[ReportStore] Initialized with database backend")
 
     @classmethod
     def get_instance(cls) -> "ReportStore":
@@ -68,19 +59,16 @@ class ReportStore:
             cls._instance = cls()
         return cls._instance
 
-    def _get_dim_dir(self, session_id: str, dim_key: str) -> Path:
-        """Get dimension directory path"""
-        dim_dir = self.base_dir / session_id / dim_key
-        dim_dir.mkdir(parents=True, exist_ok=True)
-        return dim_dir
-
     async def save(
         self,
         session_id: str,
         dim_key: str,
         version: int,
         content: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        layer: int = 1,
+        knowledge_sources: Optional[List[Dict[str, Any]]] = None,
+        gis_data: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         """
         Save report and return report_id
@@ -91,40 +79,34 @@ class ReportStore:
             version: Version number (1-based)
             content: Full report content
             metadata: Optional metadata (revision_reason, etc.)
+            layer: Layer number (1/2/3)
+            knowledge_sources: RAG knowledge sources
+            gis_data: GIS tool results
 
         Returns:
             report_id: UUID for retrieving the report
         """
         report_id = str(uuid.uuid4())
-        dim_dir = self._get_dim_dir(session_id, dim_key)
-
-        # Save content
-        content_file = dim_dir / f"v{version}.md"
-        content_file.write_text(content, encoding="utf-8")
-
-        # Generate summary
         summary = content[:200] if len(content) > 200 else content
 
-        # Build version metadata
-        version_meta = ReportVersion(
+        db_report = DimensionReport(
+            session_id=session_id,
+            dimension_key=dim_key,
+            layer=layer,
             version=version,
             report_id=report_id,
+            content=content,
             summary=summary,
-            generated_at=datetime.utcnow().isoformat() + "Z",
             revision_trigger=metadata.get("revision_reason") if metadata else None,
+            knowledge_sources=knowledge_sources,
+            gis_data=gis_data,
+            generated_at=datetime.now(),
         )
 
-        # Update metadata.json
-        meta_file = dim_dir / "metadata.json"
-        versions = []
-        if meta_file.exists():
-            try:
-                versions = json.loads(meta_file.read_text())
-            except json.JSONDecodeError:
-                logger.warning(f"[ReportStore] Corrupted metadata: {meta_file}")
-
-        versions.append(version_meta)
-        meta_file.write_text(json.dumps(versions, ensure_ascii=False, indent=2), encoding="utf-8")
+        async with get_async_session() as db:
+            db.add(db_report)
+            await db.commit()
+            await db.refresh(db_report)
 
         logger.info(f"[ReportStore] Saved: {session_id}/{dim_key}/v{version} (id={report_id[:8]}...)")
         return report_id
@@ -139,29 +121,35 @@ class ReportStore:
         Returns:
             Full content or None if not found
         """
-        # Search for report_id across all sessions/dimensions
-        for session_dir in self.base_dir.iterdir():
-            if not session_dir.is_dir():
-                continue
-            for dim_dir in session_dir.iterdir():
-                if not dim_dir.is_dir():
-                    continue
-                meta_file = dim_dir / "metadata.json"
-                if not meta_file.exists():
-                    continue
-                try:
-                    versions = json.loads(meta_file.read_text())
-                    for v in versions:
-                        if v.get("report_id") == report_id:
-                            version = v.get("version")
-                            content_file = dim_dir / f"v{version}.md"
-                            if content_file.exists():
-                                return content_file.read_text(encoding="utf-8")
-                except json.JSONDecodeError:
-                    continue
+        async with get_async_session() as db:
+            statement = select(DimensionReport).where(
+                DimensionReport.report_id == report_id
+            )
+            result = await db.exec(statement)
+            report = result.first()
+
+            if report:
+                return report.content
 
         logger.warning(f"[ReportStore] Not found: {report_id[:8]}...")
         return None
+
+    async def get_report(self, report_id: str) -> Optional[DimensionReport]:
+        """
+        Get full report record by report_id
+
+        Args:
+            report_id: UUID from save()
+
+        Returns:
+            DimensionReport or None
+        """
+        async with get_async_session() as db:
+            statement = select(DimensionReport).where(
+                DimensionReport.report_id == report_id
+            )
+            result = await db.exec(statement)
+            return result.first()
 
     async def get_by_version(
         self,
@@ -180,10 +168,18 @@ class ReportStore:
         Returns:
             Full content or None
         """
-        dim_dir = self._get_dim_dir(session_id, dim_key)
-        content_file = dim_dir / f"v{version}.md"
-        if content_file.exists():
-            return content_file.read_text(encoding="utf-8")
+        async with get_async_session() as db:
+            statement = select(DimensionReport).where(
+                DimensionReport.session_id == session_id,
+                DimensionReport.dimension_key == dim_key,
+                DimensionReport.version == version,
+            )
+            result = await db.exec(statement)
+            report = result.first()
+
+            if report:
+                return report.content
+
         return None
 
     async def get_latest(
@@ -201,11 +197,49 @@ class ReportStore:
         Returns:
             Full content of latest version or None
         """
-        versions = await self.list_versions(session_id, dim_key)
-        if not versions:
-            return None
-        latest_version = versions[-1].get("version", 0)
-        return await self.get_by_version(session_id, dim_key, latest_version)
+        async with get_async_session() as db:
+            statement = (
+                select(DimensionReport)
+                .where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.dimension_key == dim_key,
+                )
+                .order_by(DimensionReport.version.desc())
+            )
+            result = await db.exec(statement)
+            report = result.first()
+
+            if report:
+                return report.content
+
+        return None
+
+    async def get_latest_report(
+        self,
+        session_id: str,
+        dim_key: str
+    ) -> Optional[DimensionReport]:
+        """
+        Get latest version report record
+
+        Args:
+            session_id: Session identifier
+            dim_key: Dimension key
+
+        Returns:
+            DimensionReport or None
+        """
+        async with get_async_session() as db:
+            statement = (
+                select(DimensionReport)
+                .where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.dimension_key == dim_key,
+                )
+                .order_by(DimensionReport.version.desc())
+            )
+            result = await db.exec(statement)
+            return result.first()
 
     async def list_versions(
         self,
@@ -222,19 +256,28 @@ class ReportStore:
         Returns:
             List of ReportVersion (sorted by version number)
         """
-        dim_dir = self.base_dir / session_id / dim_key
-        meta_file = dim_dir / "metadata.json"
+        async with get_async_session() as db:
+            statement = (
+                select(DimensionReport)
+                .where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.dimension_key == dim_key,
+                )
+                .order_by(DimensionReport.version)
+            )
+            result = await db.exec(statement)
+            reports = result.all()
 
-        if not meta_file.exists():
-            return []
-
-        try:
-            versions = json.loads(meta_file.read_text())
-            versions.sort(key=lambda v: v.get("version", 0))
-            return versions
-        except json.JSONDecodeError:
-            logger.warning(f"[ReportStore] Corrupted metadata: {meta_file}")
-            return []
+            return [
+                ReportVersion(
+                    version=r.version,
+                    report_id=r.report_id,
+                    summary=r.summary,
+                    generated_at=r.generated_at.isoformat() + "Z",
+                    revision_trigger=r.revision_trigger,
+                )
+                for r in reports
+            ]
 
     async def get_dependencies(
         self,
@@ -257,6 +300,69 @@ class ReportStore:
             if content:
                 deps[dep_key] = content
         return deps
+
+    async def get_layer_reports(
+        self,
+        session_id: str,
+        layer: int
+    ) -> Dict[str, str]:
+        """
+        Get all reports for a layer
+
+        Args:
+            session_id: Session identifier
+            layer: Layer number (1/2/3)
+
+        Returns:
+            Dict mapping dim_key -> latest content
+        """
+        async with get_async_session() as db:
+            statement = (
+                select(DimensionReport)
+                .where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.layer == layer,
+                )
+                .order_by(DimensionReport.dimension_key, DimensionReport.version.desc())
+            )
+            result = await db.exec(statement)
+            reports = result.all()
+
+            # Keep only latest version per dimension
+            result_dict = {}
+            seen_dims = set()
+            for r in reports:
+                if r.dimension_key not in seen_dims:
+                    result_dict[r.dimension_key] = r.content
+                    seen_dims.add(r.dimension_key)
+
+            return result_dict
+
+    async def delete_session_reports(self, session_id: str) -> int:
+        """
+        Delete all reports for a session
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            Number of deleted reports
+        """
+        async with get_async_session() as db:
+            statement = select(DimensionReport).where(
+                DimensionReport.session_id == session_id
+            )
+            result = await db.exec(statement)
+            reports = result.all()
+            count = len(reports)
+
+            for r in reports:
+                db.delete(r)
+
+            await db.commit()
+
+            logger.info(f"[ReportStore] Deleted {count} reports for session {session_id}")
+            return count
 
 
 __all__ = ["ReportStore", "ReportVersion"]

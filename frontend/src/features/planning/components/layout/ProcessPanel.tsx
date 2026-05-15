@@ -5,39 +5,31 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   faTimes,
   faComments,
-  faWrench,
   faMap,
-  faProjectDiagram,
   faHistory,
+  faCog,
 } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
-import { usePlanningStore } from '../../store';
+import { usePlanningStore, usePlanningActions } from '../../store';
 import type { ProcessPanelTab } from '../../store/planningStore';
 import {
   useMessages,
-  useCascadeChain,
-  useDimensionProgressAll,
   useVillages,
   useHistoryLoading,
   useStatus,
 } from '../../hooks';
 import MapView from '../gis/MapView';
-import CascadePanel from '../CascadePanel';
 import MessageList from '../chat/MessageList';
 import ChatInput from '../ChatInput';
-import DimensionCard from '../DimensionCard';
-import ToolStatusCard from '../chat/ToolStatusCard';
-import { planningApi, dataApi } from '../../api';
-import { usePlanningActions } from '../../store';
-import { isToolStatusMessage } from '@/types/message/message-guards';
+import { SettingsPanel } from '../settings';
+import { planningApi } from '../../api';
 
 const TABS: { key: ProcessPanelTab; label: string; icon: typeof faComments }[] = [
   { key: 'messages', label: '消息', icon: faComments },
-  { key: 'tools', label: '工具', icon: faWrench },
   { key: 'map', label: '地图', icon: faMap },
-  { key: 'cascade', label: '级联', icon: faProjectDiagram },
   { key: 'history', label: '历史', icon: faHistory },
+  { key: 'settings', label: '设置', icon: faCog },
 ];
 
 const MIN_WIDTH = 280;
@@ -53,8 +45,6 @@ export default function ProcessPanel() {
   const sessionId = usePlanningStore((state) => state.sessionId);
 
   const messages = useMessages();
-  const cascadeChain = useCascadeChain();
-  const dimensionProgress = useDimensionProgressAll();
 
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
   const [isDragging, setIsDragging] = useState(false);
@@ -63,12 +53,6 @@ export default function ProcessPanel() {
 
   const flatLayers = useMemo(() => Object.values(gisLayers).flat(), [gisLayers]);
   const hasGisLayers = gisLayers && Object.keys(gisLayers).length > 0;
-
-  const toolStatusMessages = useMemo(
-    () => messages.filter(isToolStatusMessage),
-    [messages]
-  );
-  const hasRunningTools = toolStatusMessages.length > 0;
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -113,22 +97,15 @@ export default function ProcessPanel() {
   const status = useStatus();
   const { loadVillagesHistory, loadHistoricalSession } = usePlanningActions();
 
-  // Auto-switch to history tab when idle
   useEffect(() => {
     if (status === 'idle') {
       setProcessPanelTab('history');
     }
   }, [status, setProcessPanelTab]);
 
-  // Load history on mount
   useEffect(() => {
     loadVillagesHistory();
   }, [loadVillagesHistory]);
-
-  const dimensionEntries = useMemo(
-    () => Object.entries(dimensionProgress),
-    [dimensionProgress]
-  );
 
   return (
     <AnimatePresence>
@@ -143,7 +120,7 @@ export default function ProcessPanel() {
           {/* Drag handle */}
           <div
             onMouseDown={handleMouseDown}
-            className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-emerald-200 transition-colors z-10"
+            className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-[#0ea5e9]/30 transition-colors z-10"
             style={{ userSelect: 'none' }}
           />
 
@@ -168,19 +145,16 @@ export default function ProcessPanel() {
                 onClick={() => setProcessPanelTab(tab.key)}
                 className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors relative ${
                   processPanelTab === tab.key
-                    ? 'text-emerald-600'
+                    ? 'text-[#0ea5e9]'
                     : 'text-slate-400 hover:text-slate-600'
                 }`}
               >
                 <FontAwesomeIcon icon={tab.icon} style={{ width: 12, height: 12 }} />
                 <span>{tab.label}</span>
-                {tab.key === 'cascade' && cascadeChain && (
-                  <span className="absolute -top-0.5 right-1 w-2 h-2 rounded-full bg-amber-400" />
-                )}
                 {processPanelTab === tab.key && (
                   <motion.div
                     layoutId="tab-indicator"
-                    className="absolute bottom-0 left-2 right-2 h-0.5 bg-emerald-500 rounded-full"
+                    className="absolute bottom-0 left-2 right-2 h-0.5 bg-[#0ea5e9] rounded-full"
                   />
                 )}
               </button>
@@ -192,14 +166,6 @@ export default function ProcessPanel() {
             {/* Messages tab */}
             {processPanelTab === 'messages' && (
               <div className="flex-1 flex flex-col min-h-0">
-                {dimensionEntries.length > 0 && (
-                  <div className="shrink-0 px-3 py-2 space-y-1.5 border-b border-slate-50 max-h-[200px] overflow-y-auto">
-                    {dimensionEntries.map(([key, progress]) => (
-                      <DimensionCard key={key} {...progress} />
-                    ))}
-                  </div>
-                )}
-
                 <div className="flex-1 overflow-y-auto min-h-0">
                   <MessageList messages={messages} />
                 </div>
@@ -210,21 +176,6 @@ export default function ProcessPanel() {
                     onSend={handleSendMessage}
                   />
                 </div>
-              </div>
-            )}
-
-            {/* Tools tab */}
-            {processPanelTab === 'tools' && (
-              <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                {hasRunningTools ? (
-                  toolStatusMessages.map((msg) => (
-                    <ToolStatusCard key={msg.toolName} message={msg} />
-                  ))
-                ) : (
-                  <div className="flex items-center justify-center h-32 text-sm text-slate-400">
-                    暂无运行中的工具
-                  </div>
-                )}
               </div>
             )}
 
@@ -239,24 +190,8 @@ export default function ProcessPanel() {
                     legendPosition="bottom-right"
                   />
                 ) : (
-                  <div className="flex items-center justify-center h-full text-sm text-slate-400">
+                  <div className="flex items-center justify-center h-full text-sm text-[#6e7681]">
                     暂无地图数据
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Cascade tab */}
-            {processPanelTab === 'cascade' && (
-              <div className="flex-1 overflow-y-auto p-3">
-                {cascadeChain ? (
-                  <CascadePanel
-                    trigger={cascadeChain.trigger}
-                    impacted={cascadeChain.impacted}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-32 text-sm text-slate-400">
-                    暂无级联修复链
                   </div>
                 )}
               </div>
@@ -267,15 +202,15 @@ export default function ProcessPanel() {
               <div className="flex-1 overflow-y-auto p-3">
                 {historyLoading ? (
                   <div className="flex items-center justify-center h-32">
-                    <div className="w-5 h-5 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+                    <div className="w-5 h-5 border-2 border-[#0ea5e9] border-t-transparent rounded-full animate-spin" />
                   </div>
                 ) : villages.length > 0 ? (
                   <div className="space-y-3">
                     {villages.map((village) =>
                       village.sessions.length > 0 ? (
-                        <div key={village.name} className="bg-white rounded-lg border border-slate-100 p-3">
+                        <div key={village.name} className="bg-slate-50 rounded-lg border border-slate-200 p-3">
                           <div className="flex items-center justify-between mb-2">
-                            <h3 className="text-sm font-medium text-slate-700">
+                            <h3 className="text-sm font-medium text-slate-800">
                               {village.display_name || village.name}
                             </h3>
                             <span className="text-xs text-slate-400">
@@ -297,7 +232,7 @@ export default function ProcessPanel() {
                               return (
                                 <div
                                   key={session.session_id}
-                                  className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-100 hover:border-emerald-200 hover:bg-emerald-50/30 transition-all cursor-pointer group"
+                                  className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-[#0ea5e9]/50 hover:bg-[#e0f2fe]/30 transition-all cursor-pointer group"
                                   onClick={() => loadHistoricalSession(village.name, session.session_id)}
                                 >
                                   <div className="flex items-center gap-2 min-w-0">
@@ -305,12 +240,12 @@ export default function ProcessPanel() {
                                       {formattedDate}
                                     </span>
                                     {session.has_final_report && (
-                                      <span className="px-1 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-600">
+                                      <span className="px-1 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700">
                                         已完结
                                       </span>
                                     )}
                                   </div>
-                                  <span className="text-xs text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                                  <span className="text-xs text-[#0ea5e9] opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                                     恢复
                                   </span>
                                 </div>
@@ -326,6 +261,13 @@ export default function ProcessPanel() {
                     暂无历史会话
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Settings tab */}
+            {processPanelTab === 'settings' && (
+              <div className="flex-1 overflow-hidden">
+                <SettingsPanel />
               </div>
             )}
           </div>

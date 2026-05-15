@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -276,7 +276,7 @@ def evaluate_kb_quality(kb_dir: Optional[Path] = None) -> SlicingQualityMetrics:
                 content = f.read()
             # Use slicer to get chunks for comparison
             try:
-                from backend.app.utils.text_splitter import UnifiedMarkdownSlicer
+                from app.utils.text_splitter import UnifiedMarkdownSlicer
                 slicer = UnifiedMarkdownSlicer()
                 # Detect document type from filename
                 doc_type = "guide"  # default

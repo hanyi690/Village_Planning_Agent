@@ -68,7 +68,7 @@ frontend/.next/
 frontend/out/
 frontend/node_modules/
 frontend/.env.local
-
+frontend/.next.bak
 # Testing
 .pytest_cache/
 .coverage

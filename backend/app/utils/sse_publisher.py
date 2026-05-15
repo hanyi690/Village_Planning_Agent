@@ -75,9 +75,9 @@ class SSEPublisher:
     @staticmethod
     def send_events_batch(session_id: str, events: List[Dict[str, Any]]) -> None:
         """
-        批量发送 SSE 事件
+    批量发送 SSE 事件
 
-        用于 Send API 状态驱动模式，从 dimension_results 和 sse_events 字段读取。
+    用于 Send API 状态驱动模式，从 sse_events 字段读取。
 
         Args:
             session_id: 会话 ID

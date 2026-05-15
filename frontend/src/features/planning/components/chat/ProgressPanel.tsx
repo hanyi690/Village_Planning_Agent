@@ -51,8 +51,8 @@ const STATUS_CONFIG: Record<
   DimensionStatus,
   { icon: string; colorClass: string; label: string; animate?: boolean }
 > = {
-  pending: { icon: '⏳', colorClass: 'text-gray-400', label: '等待中' },
-  streaming: { icon: '🔄', colorClass: 'text-blue-500', label: '执行中', animate: true },
+  pending: { icon: '⏳', colorClass: 'text-slate-400', label: '等待中' },
+  streaming: { icon: '🔄', colorClass: 'text-[#0ea5e9]', label: '执行中', animate: true },
   completed: { icon: '✅', colorClass: 'text-emerald-500', label: '已完成' },
   failed: { icon: '❌', colorClass: 'text-red-500', label: '失败' },
 };
@@ -187,9 +187,9 @@ function ProgressPanel({
                     className={cn(
                       'px-2 py-0.5 text-xs font-medium rounded-lg transition-all',
                       viewingLayer === layer
-                        ? 'bg-cyan-100 text-cyan-700 ring-1 ring-cyan-300'
+                        ? 'bg-[#e0f2fe] text-[#0369a1] ring-1 ring-[#0ea5e9]'
                         : completedLayers[layer as 1 | 2 | 3]
-                          ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
+                          ? 'bg-emerald-100/50 text-emerald-600 hover:bg-emerald-100'
                           : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
                       layer === currentLayer &&
                         !completedLayers[layer as 1 | 2 | 3] &&
@@ -206,10 +206,10 @@ function ProgressPanel({
             <div className="flex items-center gap-3">
               {/* 历史/当前标识 */}
               {displayData.type === 'history' && (
-                <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded">历史</span>
+                <span className="text-xs text-amber-600 bg-amber-100 px-2 py-0.5 rounded">历史</span>
               )}
               {displayData.type === 'current' && executingDimensions.length > 0 && (
-                <span className="text-xs text-blue-600 flex items-center gap-1">
+                <span className="text-xs text-[#0369a1] flex items-center gap-1">
                   <span className="animate-spin">🔄</span>
                   {executingDimensions.length} 执行中
                 </span>
@@ -237,7 +237,7 @@ function ProgressPanel({
                   'h-full',
                   displayData.type === 'history'
                     ? 'bg-gradient-to-r from-amber-400 to-amber-500'
-                    : 'bg-gradient-to-r from-emerald-400 to-emerald-500'
+                    : 'bg-gradient-to-r from-[#0ea5e9] to-[#10b981]'
                 )}
                 initial={{ width: 0 }}
                 animate={{ width: `${progressPercent}%` }}
@@ -266,7 +266,7 @@ function ProgressPanel({
                       className={cn(
                         'flex items-center justify-between px-2 py-1.5 rounded-md text-xs transition-colors',
                         isExecuting
-                          ? 'bg-blue-50 ring-1 ring-blue-300 shadow-sm'
+                          ? 'bg-[#e0f2fe]/50 ring-1 ring-[#0ea5e9] shadow-sm'
                           : status === 'completed'
                             ? 'bg-emerald-50/50'
                             : status === 'failed'
@@ -287,7 +287,7 @@ function ProgressPanel({
                         <span
                           className={cn(
                             'text-xs ml-1 flex-shrink-0',
-                            isExecuting ? 'text-blue-600 font-medium' : 'text-slate-400'
+                            isExecuting ? 'text-[#0369a1] font-medium' : 'text-slate-400'
                           )}
                         >
                           {formatWordCount(progress.wordCount)}字

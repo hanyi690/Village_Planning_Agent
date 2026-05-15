@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from app.api.schemas import TaskStatus, ImageData, UploadedFileMeta
 from app.services.runtime import PlanningRuntimeService
+from app.services.report_store import ReportStore
 from app.database.operations import (
     create_planning_session_async,
     get_dimension_revisions_async,
@@ -44,6 +45,21 @@ from app.utils.sse_publisher import SSEPublisher
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _get_report_from_db(session_id: str, dim_key: str) -> tuple[str, int, str]:
+    """Helper to fetch report content and layer from database.
+
+    Returns:
+        tuple of (content, layer, report_id) or raises HTTPException
+    """
+    store = ReportStore.get_instance()
+    report = await store.get_latest_report(session_id, dim_key)
+
+    if not report:
+        raise HTTPException(status_code=404, detail=f"Report not found: {dim_key}")
+
+    return report.content, report.layer, report.report_id
 
 
 # ============================================
@@ -322,12 +338,12 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
 @router.get("/api/sessions/{session_id}/checkpoints")
 async def get_checkpoints(session_id: str):
     """获取检查点列表"""
-    history = await checkpoint_service.get_checkpoint_history(session_id)
     checkpoints = []
-    for entry in history:
-        values = entry.get("values", {})
+    async for snapshot in PlanningRuntimeService.aget_state_history(session_id):
+        checkpoint_id = snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+        values = dict(snapshot.values) if snapshot.values else {}
         checkpoints.append({
-            "checkpoint_id": entry.get("checkpoint_id", ""),
+            "checkpoint_id": checkpoint_id,
             "phase": values.get("phase", "init"),
             "layer": values.get("previous_layer", 0),
         })
@@ -377,13 +393,14 @@ async def get_dimension_report(session_id: str, dim_key: str, version: Optional[
     if not state:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-    reports = state.get("reports", {})
-    for layer_key in ["layer1", "layer2", "layer3"]:
-        if dim_key in reports.get(layer_key, {}):
-            return {"session_id": session_id, "dimension_key": dim_key,
-                "layer": int(layer_key[-1]), "content": reports[layer_key][dim_key]}
-
-    raise HTTPException(status_code=404, detail=f"Report not found: {dim_key}")
+    # 从数据库获取报告
+    content, layer, _ = await _get_report_from_db(session_id, dim_key)
+    return {
+        "session_id": session_id,
+        "dimension_key": dim_key,
+        "layer": layer,
+        "content": content
+    }
 
 
 @router.get("/api/sessions/{session_id}/reports/{dim_key}/versions")
@@ -457,39 +474,31 @@ async def get_project_dimension_report(
         if not state:
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-        reports = state.get("reports", {})
-        for layer_key in ["layer1", "layer2", "layer3"]:
-            if dim_key in reports.get(layer_key, {}):
-                return {
-                    "project_name": project_name,
-                    "session_id": session_id,
-                    "dimension_key": dim_key,
-                    "layer": int(layer_key[-1]),
-                    "content": reports[layer_key][dim_key],
-                }
-        raise HTTPException(status_code=404, detail=f"Report not found: {dim_key} in session {session_id}")
+        # 从数据库获取报告
+        content, layer, _ = await _get_report_from_db(session_id, dim_key)
+        return {
+            "project_name": project_name,
+            "session_id": session_id,
+            "dimension_key": dim_key,
+            "layer": layer,
+            "content": content,
+        }
 
     sessions = await list_planning_sessions_async(project_name=project_name, limit=1)
     if not sessions:
         raise HTTPException(status_code=404, detail=f"No sessions found for project: {project_name}")
 
     latest_session_id = sessions[0]["session_id"]
-    state = await PlanningRuntimeService.aget_state_values(latest_session_id)
-    if not state:
-        raise HTTPException(status_code=404, detail=f"State not available for session: {latest_session_id}")
 
-    reports = state.get("reports", {})
-    for layer_key in ["layer1", "layer2", "layer3"]:
-        if dim_key in reports.get(layer_key, {}):
-            return {
-                "project_name": project_name,
-                "session_id": latest_session_id,
-                "dimension_key": dim_key,
-                "layer": int(layer_key[-1]),
-                "content": reports[layer_key][dim_key],
-            }
-
-    raise HTTPException(status_code=404, detail=f"Report not found: {dim_key} in project {project_name}")
+    # 从数据库获取报告
+    content, layer, _ = await _get_report_from_db(latest_session_id, dim_key)
+    return {
+        "project_name": project_name,
+        "session_id": latest_session_id,
+        "dimension_key": dim_key,
+        "layer": layer,
+        "content": content,
+    }
 
 
 @router.delete("/api/sessions/{session_id}")
@@ -502,7 +511,7 @@ async def delete_session(session_id: str):
 
 @router.get("/api/sessions/{session_id}/status")
 async def get_session_status(session_id: str):
-    """获取会话状态"""
+    """Get session status"""
     from app.database.operations import get_planning_session_async
     db_session = await get_planning_session_async(session_id)
     if not db_session:
@@ -511,6 +520,85 @@ async def get_session_status(session_id: str):
     checkpoint_state = await PlanningRuntimeService.aget_state(session_id)
     state = dict(checkpoint_state.values) if checkpoint_state and checkpoint_state.values else {}
     return state_to_ui_status(state, db_session)
+
+
+# ============================================
+# RAG Configuration API
+# ============================================
+
+class RagConfigRequest(BaseModel):
+    """RAG configuration request"""
+    rag_layer_config: Optional[Dict[int, bool]] = Field(None, description="Layer-level RAG config")
+    rag_enabled: Optional[bool] = Field(None, description="Global RAG switch")
+
+
+class RagConfigResponse(BaseModel):
+    """RAG configuration response"""
+    session_id: str
+    rag_enabled: bool
+    rag_layer_config: Dict[int, bool]
+
+
+@router.get("/api/sessions/{session_id}/rag-config", response_model=RagConfigResponse)
+async def get_rag_config(session_id: str):
+    """Get current RAG configuration"""
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    config = state.get("config", {})
+    return RagConfigResponse(
+        session_id=session_id,
+        rag_enabled=config.get("rag_enabled", True),
+        rag_layer_config=config.get("rag_layer_config", {1: True, 2: True, 3: True}),
+    )
+
+
+@router.patch("/api/sessions/{session_id}/rag-config", response_model=RagConfigResponse)
+async def update_rag_config(session_id: str, request: RagConfigRequest):
+    """Update RAG configuration (runtime modification)
+
+    Example:
+        PATCH /api/sessions/{id}/rag-config
+        {"rag_layer_config": {1: true, 2: false, 3: true}}
+    """
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    config = state.get("config", {})
+    current_rag_enabled = config.get("rag_enabled", True)
+    current_layer_config = config.get("rag_layer_config", {1: True, 2: True, 3: True})
+
+    new_rag_enabled = request.rag_enabled if request.rag_enabled is not None else current_rag_enabled
+    new_layer_config = request.rag_layer_config if request.rag_layer_config is not None else current_layer_config
+
+    for layer in [1, 2, 3]:
+        if layer not in new_layer_config:
+            new_layer_config[layer] = new_rag_enabled
+
+    await PlanningRuntimeService.aupdate_state(session_id, {
+        "config": {
+            **config,
+            "rag_enabled": new_rag_enabled,
+            "rag_layer_config": new_layer_config,
+        }
+    })
+
+    logger.info(f"[rag-config] Updated {session_id}: enabled={new_rag_enabled}, layers={new_layer_config}")
+
+    await sse_manager.publish(session_id, {
+        "type": "rag_config_updated",
+        "session_id": session_id,
+        "rag_enabled": new_rag_enabled,
+        "rag_layer_config": new_layer_config,
+    })
+
+    return RagConfigResponse(
+        session_id=session_id,
+        rag_enabled=new_rag_enabled,
+        rag_layer_config=new_layer_config,
+    )
 
 
 @router.get("/api/sessions/{session_id}/layer/{layer}/reports")

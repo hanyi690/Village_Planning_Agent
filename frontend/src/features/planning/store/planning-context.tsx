@@ -247,7 +247,24 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
         const statusData = await planningApi.getStatus(sessionId);
         store.syncBackendState(statusData);
 
-        // Messages are restored from backend session status (ui_messages field)
+        // Load layer reports for completed layers
+        const completedDimensions = statusData.completed_dimensions;
+        if (completedDimensions) {
+          const layers = [1, 2, 3] as const;
+          for (const layer of layers) {
+            const dims = completedDimensions[`layer${layer}`];
+            if (dims && dims.length > 0) {
+              try {
+                const reportsData = await planningApi.getLayerReports(sessionId, layer);
+                if (reportsData.reports && Object.keys(reportsData.reports).length > 0) {
+                  store.setReports({ [`layer${layer}`]: reportsData.reports });
+                }
+              } catch (error) {
+                console.warn(`Failed to load layer ${layer} reports:`, error);
+              }
+            }
+          }
+        }
       } catch (error: unknown) {
         const errorMessage = getErrorMessage(error, 'Failed to load session');
         store.setHistoryError(errorMessage);

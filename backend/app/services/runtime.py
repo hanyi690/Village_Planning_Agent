@@ -220,11 +220,26 @@ class PlanningRuntimeService:
         stream_mode: bool = True,
         step_mode: bool = False,
         rag_enabled: bool = True,
+        rag_layer_config: Optional[Dict[int, bool]] = None,
         image_ids: Optional[List[str]] = None,
         uploaded_files: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
-        """Build initial state for main graph execution."""
-        # image_ids are simple strings, no conversion needed
+        """Build initial state for main graph execution.
+
+        Args:
+            rag_enabled: Global RAG switch (backward compatible)
+            rag_layer_config: Layer-level RAG config, e.g. {1: True, 2: False, 3: True}
+                             Unspecified layers use rag_enabled as default
+        """
+        # Build Layer-level RAG config
+        if rag_layer_config is None:
+            rag_layer_config = {1: rag_enabled, 2: rag_enabled, 3: rag_enabled}
+        else:
+            # Fill unspecified layers
+            for layer in [1, 2, 3]:
+                if layer not in rag_layer_config:
+                    rag_layer_config[layer] = rag_enabled
+
         state = {
             "messages": [],  # Will be set by _trigger_planning_execution
             "session_id": session_id,
@@ -234,7 +249,8 @@ class PlanningRuntimeService:
                 "village_name": village_name or project_name,
                 "task_description": task_description,
                 "constraints": constraints,
-                "rag_enabled": rag_enabled,
+                "rag_enabled": rag_enabled,  # Keep global switch (backward compatible)
+                "rag_layer_config": rag_layer_config,  # NEW: Layer-level switch
                 "knowledge_cache": {},
                 "upload_dir": str(Path("data") / "uploads" / session_id) if (uploaded_files) else None,
             },
@@ -245,7 +261,6 @@ class PlanningRuntimeService:
             "reports": {"layer1": {}, "layer2": {}, "layer3": {}},
             "completed_dimensions": {"layer1": [], "layer2": [], "layer3": []},
             "dimension_summaries": {},  # 新架构：摘要索引
-            "dimension_results": [],
             "sse_events": [],
             "need_revision": False,
             "revision_target_dimensions": [],

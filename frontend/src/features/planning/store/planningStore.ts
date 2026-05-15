@@ -28,7 +28,7 @@ import type { VillageInfo, VillageSession, SessionStatusResponse } from '../api'
 import { getLayerPhase, PlanningStatus, LayerPhase, AgentPhase, NAV_KEYS } from '@/features/planning/constants';
 import type { NavigationKey } from '@/features/planning/constants';
 
-export type ProcessPanelTab = 'messages' | 'tools' | 'map' | 'cascade' | 'history';
+export type ProcessPanelTab = 'messages' | 'map' | 'history' | 'settings';
 import {
   createBaseMessage,
   buildLayerReportId,
@@ -201,9 +201,14 @@ export interface PlanningState {
   isRightPanelExpanded: boolean;
   isLeftNavCollapsed: boolean;
 
-  // ChatBar & ProcessPanel
-  chatBarExpanded: boolean;
+  // ProcessPanel
   processPanelTab: ProcessPanelTab;
+
+  // ============================================
+  // NEW: Layer-level RAG Configuration
+  // ============================================
+  /** Layer-level RAG switch config: { 1: true, 2: false, 3: true } */
+  ragLayerConfig: Record<number, boolean>;
 }
 
 // ============================================
@@ -248,22 +253,6 @@ function shallowEqualCompletedDimensions(
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
       if (a[i] !== b[i]) return false;
-    }
-  }
-  return true;
-}
-
-function shallowEqualReports(incoming: Reports | undefined, current: Reports): boolean {
-  if (!incoming) return true;
-  const layers = ['layer1', 'layer2', 'layer3'] as const;
-  for (const layer of layers) {
-    const a = incoming[layer] || {};
-    const b = current[layer] || {};
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
-    if (keysA.length !== keysB.length) return false;
-    for (const key of keysA) {
-      if (a[key] !== b[key]) return false;
     }
   }
   return true;
@@ -349,9 +338,11 @@ function createInitialState(conversationId: string): PlanningState {
     isRightPanelExpanded: true,
     isLeftNavCollapsed: false,
 
-    // ChatBar & ProcessPanel
-    chatBarExpanded: true,
+    // ProcessPanel
     processPanelTab: 'messages',
+
+    // Layer-level RAG config (default: all enabled)
+    ragLayerConfig: { 1: true, 2: true, 3: true },
   };
 }
 
@@ -449,9 +440,14 @@ export interface PlanningActions {
   setRightPanelExpanded: (expanded: boolean) => void;
   setLeftNavCollapsed: (collapsed: boolean) => void;
 
-  // ChatBar & ProcessPanel
-  setChatBarExpanded: (expanded: boolean) => void;
+  // ProcessPanel
   setProcessPanelTab: (tab: ProcessPanelTab) => void;
+
+  // ============================================
+  // NEW: Layer-level RAG Configuration
+  // ============================================
+  setRagLayerConfig: (config: Record<number, boolean>) => void;
+  toggleLayerRag: (layer: number) => void;
 
   // Reset
   resetConversation: () => void;
@@ -648,6 +644,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         dimension_key?: string;
         dimension_name?: string;
         full_content?: string;
+        word_count?: number;
         layer?: number;
         is_revision?: boolean;
         knowledge_sources?: KnowledgeSource[];
@@ -656,14 +653,9 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const dimensionKey = dimData.dimension_key || '';
       const key = buildDimensionProgressKey(layer, dimensionKey);
 
-      // Guard: retain delta-accumulated content when full_content is empty
-      if (!dimData.full_content) {
-        const lk = `layer${layer}` as keyof Reports;
-        const existing = state.reports[lk]?.[dimensionKey];
-        if (existing) {
-          dimData.full_content = existing;
-        }
-      }
+      // 获取内容：优先使用 full_content，否则从 reports 状态获取（dimension_delta 已累积）
+      const lk = `layer${layer}` as keyof Reports;
+      const content = dimData.full_content || state.reports[lk]?.[dimensionKey] || '';
 
       // Update dimensionProgress
       state.dimensionProgress[key] = {
@@ -671,7 +663,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         dimensionName: dimData.dimension_name || '',
         layer,
         status: 'completed' as DimensionStatus,
-        wordCount: (dimData.full_content || '').length,
+        wordCount: dimData.word_count || content.length,
         completedAt: new Date().toISOString(),
         isRevision: dimData.is_revision || false,
       };
@@ -687,19 +679,19 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         );
         if (msgIdx >= 0) {
           const msg = state.messages[msgIdx] as DimensionReportMessage;
-          msg.content = dimData.full_content || '';
-          msg.wordCount = (dimData.full_content || '').length;
+          msg.content = content;
+          msg.wordCount = content.length;
           msg.streamingState = 'completed';
         }
         // Update reports state for revision as well
         const layerKey = `layer${layer}` as keyof Reports;
-        state.reports[layerKey][dimensionKey] = dimData.full_content || '';
+        state.reports[layerKey][dimensionKey] = content;
         break;
       }
 
       // Update reports
       const layerKey = `layer${layer}` as keyof Reports;
-      state.reports[layerKey][dimensionKey] = dimData.full_content || '';
+      state.reports[layerKey][dimensionKey] = content;
 
       // Update layer_report message (no longer create standalone dimension_report)
       const layerReportId = buildLayerReportId(layer);
@@ -713,7 +705,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         if (!layerMsg.dimensionReports) {
           layerMsg.dimensionReports = {};
         }
-        layerMsg.dimensionReports[dimensionKey] = dimData.full_content || '';
+        layerMsg.dimensionReports[dimensionKey] = content;
 
         // Update fullReportContent and summary using utility functions
         layerMsg.fullReportContent = formatDimensionReportsAsContent(layerMsg.dimensionReports);
@@ -923,10 +915,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     }
 
     case 'layer_paused': {
-      const pausedData = data as {
-        layer?: number;
-        layer_name?: string;
-      };
       state.execution_paused = true;
       state.pause_after_step = true;
       state.status = 'paused';
@@ -962,8 +950,8 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         message: toolData.description,
       };
 
-      // Auto-switch to tools tab and expand right panel
-      state.processPanelTab = 'tools';
+      // Auto-switch to messages tab and expand right panel
+      state.processPanelTab = 'messages';
       state.isRightPanelExpanded = true;
       break;
     }
@@ -1158,9 +1146,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         pauseData.current_layer || pauseData.previous_layer || state.previous_layer;
       state.status = 'paused';
 
-      // Expand ChatBar for approval actions when paused
-      state.chatBarExpanded = true;
-
       // Note: checkpoint_saved event (sent before pause) already creates the checkpoint
       // This is a fallback in case checkpoint_saved was missed
       const layer = pauseData.current_layer || pauseData.previous_layer || 0;
@@ -1341,7 +1326,14 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       // Hydrate state from backend sync
       if (syncData.phase) state.phase = syncData.phase as string;
       if (syncData.current_wave) state.currentWave = syncData.current_wave as number;
-      if (syncData.reports) state.reports = syncData.reports as Reports;
+      // Note: reports 不再从后端同步，前端通过 SSE dimension_delta/dimension_complete 累积
+      // 或通过 getLayerReports API 按需获取
+      if (syncData.completed_dimensions) {
+        const completedData = syncData.completed_dimensions as Record<string, string[]>;
+        if (completedData.layer1) state.completedDimensions.layer1 = completedData.layer1;
+        if (completedData.layer2) state.completedDimensions.layer2 = completedData.layer2;
+        if (completedData.layer3) state.completedDimensions.layer3 = completedData.layer3;
+      }
       if (syncData.pause_after_step !== undefined) state.pause_after_step = syncData.pause_after_step as boolean;
       if (syncData.previous_layer !== undefined) state.previous_layer = syncData.previous_layer as number;
       deriveUIStateInStore(state);
@@ -1356,6 +1348,16 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const key = `${gisUpdateData.layer}_${gisUpdateData.dimension_key}`;
       if (gisUpdateData.layers) {
         state.gisLayers[key] = gisUpdateData.layers as GISLayerConfig[];
+      }
+      break;
+    }
+
+    case 'rag_config_updated': {
+      const ragData = data as {
+        rag_layer_config?: Record<number, boolean>;
+      };
+      if (ragData.rag_layer_config) {
+        state.ragLayerConfig = ragData.rag_layer_config;
       }
       break;
     }
@@ -1537,15 +1539,13 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         const hasPauseChange = backendData.pause_after_step !== state.pause_after_step;
         const hasExecutionPausedChange = backendData.execution_paused !== state.execution_paused;
         const hasPreviousLayerChange = backendData.previous_layer !== state.previous_layer;
-        const hasReportsChange = !shallowEqualReports(backendData.reports, state.reports);
 
         if (
           !hasStatusChange &&
           !hasPhaseChange &&
           !hasPauseChange &&
           !hasExecutionPausedChange &&
-          !hasPreviousLayerChange &&
-          !hasReportsChange
+          !hasPreviousLayerChange
         ) {
           return;
         }
@@ -1555,7 +1555,13 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           state.status = backendData.status as Status;
         }
         if (backendData.phase) state.phase = backendData.phase;
-        if (backendData.reports) state.reports = backendData.reports;
+        // Note: reports 不再从后端同步，前端通过 SSE 或 API 获取
+        if (backendData.completed_dimensions) {
+          const completedData = backendData.completed_dimensions as Record<string, string[]>;
+          if (completedData.layer1) state.completedDimensions.layer1 = completedData.layer1;
+          if (completedData.layer2) state.completedDimensions.layer2 = completedData.layer2;
+          if (completedData.layer3) state.completedDimensions.layer3 = completedData.layer3;
+        }
         if (state.isPaused && backendData.pause_after_step === false) {
           state.pause_after_step = true;
         } else {
@@ -1834,14 +1840,22 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
       }),
 
     // ChatBar & ProcessPanel
-    setChatBarExpanded: (expanded) =>
-      set((state) => {
-        state.chatBarExpanded = expanded;
-      }),
-
     setProcessPanelTab: (tab) =>
       set((state) => {
         state.processPanelTab = tab;
+      }),
+
+    // ============================================
+    // Layer-level RAG Configuration
+    // ============================================
+    setRagLayerConfig: (config) =>
+      set((state) => {
+        state.ragLayerConfig = config;
+      }),
+
+    toggleLayerRag: (layer) =>
+      set((state) => {
+        state.ragLayerConfig[layer] = !state.ragLayerConfig[layer];
       }),
 
     // Reset

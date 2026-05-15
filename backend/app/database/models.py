@@ -204,9 +204,65 @@ class DimensionRevision(SQLModel, table=True):
     )
 
 
+# ==========================================
+# Dimension Report Models
+# ==========================================
+
+class DimensionReport(SQLModel, table=True):
+    """
+    Dimension report table
+    维度报告表
+
+    替代文件存储，统一使用数据库存储报告内容。
+    支持版本历史、知识来源追踪。
+    """
+    __tablename__ = "dimension_reports"
+
+    # Primary key (auto-increment)
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Session and dimension identification
+    session_id: str = Field(foreign_key="planning_sessions.session_id", index=True)
+    dimension_key: str = Field(index=True)
+    layer: int = Field(index=True)
+
+    # Version management
+    version: int = Field(default=1, index=True)
+    report_id: str = Field(unique=True, index=True)  # UUID for external reference
+
+    # Content
+    content: str = Field(sa_column=Text())
+    summary: str = Field(sa_column=Text())  # First 200 chars
+
+    # Metadata
+    revision_trigger: Optional[str] = None
+
+    # Knowledge sources (RAG references)
+    knowledge_sources: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        sa_column=Column(JSON)
+    )
+
+    # GIS data references
+    gis_data: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        sa_column=Column(JSON)
+    )
+
+    # Timestamps
+    generated_at: datetime = Field(default_factory=datetime.now)
+
+    # Table options
+    __table_args__ = (
+        Index("idx_report_session_dim", "session_id", "dimension_key"),
+        Index("idx_report_session_version", "session_id", "dimension_key", "version"),
+    )
+
+
 __all__ = [
     "PlanningSession",
     "UISession",
     "UIMessage",
     "DimensionRevision",
+    "DimensionReport",
 ]

@@ -27,6 +27,7 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
   const status = usePlanningStore((state) => state.status);
   const setSessionId = usePlanningStore((state) => state.setSessionId);
   const setMessages = usePlanningStore((state) => state.setMessages);
+  const setReports = usePlanningStore((state) => state.setReports);
   const syncBackendState = usePlanningStore((state) => state.syncBackendState);
   const setStatus = usePlanningStore((state) => state.setStatus);
   const resetConversation = usePlanningStore((state) => state.resetConversation);
@@ -90,7 +91,29 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
       // 6. Clear existing messages
       setMessages([]);
 
-      // 7. Mark as restored
+      // 7. Load layer reports for completed layers
+      const completedDimensions = statusData.completed_dimensions;
+      if (completedDimensions) {
+        const layers = [1, 2, 3] as const;
+        for (const layer of layers) {
+          const dims = completedDimensions[`layer${layer}`];
+          if (dims && dims.length > 0) {
+            try {
+              const reportsData = await planningApi.getLayerReports(targetSessionId, layer);
+              if (reportsData.reports && Object.keys(reportsData.reports).length > 0) {
+                setReports({ [`layer${layer}`]: reportsData.reports });
+                logger.context.info(`Loaded layer ${layer} reports`, {
+                  dimensionCount: Object.keys(reportsData.reports).length,
+                });
+              }
+            } catch (error) {
+              logger.context.warn(`Failed to load layer ${layer} reports`, { error });
+            }
+          }
+        }
+      }
+
+      // 8. Mark as restored
       restoredSessionIdRef.current = targetSessionId;
       logger.context.info('Session restoration completed', {
         sessionId: targetSessionId,
@@ -107,7 +130,7 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
     } finally {
       restoringRef.current = false;
     }
-  }, [setSessionId, syncBackendState, setStatus, setMessages, resetConversation]);
+  }, [setSessionId, syncBackendState, setStatus, setMessages, setReports, resetConversation]);
 
   // On mount: check if sessionId in URL and restore
   useEffect(() => {

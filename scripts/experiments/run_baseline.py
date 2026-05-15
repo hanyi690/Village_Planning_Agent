@@ -30,9 +30,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend" / "app"))
 
 from scripts.experiments.config import (
     BASELINE_DIR,
@@ -113,7 +111,7 @@ async def run_planning_runtime(project_name: str, village_data: Dict, timeout: i
     Returns:
         Session state with reports and completion status
     """
-    from backend.app.services.runtime import PlanningRuntimeService
+    from app.services.runtime import PlanningRuntimeService
     from starlette.background import BackgroundTasks
 
     logger.info(f"[Baseline] Starting planning runtime: {project_name}")
@@ -160,7 +158,7 @@ async def wait_for_completion(session_id: str, timeout: int = 1800) -> Dict[str,
     Returns:
         Final state snapshot
     """
-    from backend.app.services.checkpoint import checkpoint_service
+    from app.services.checkpoint import checkpoint_service
 
     logger.info(f"[Baseline] Waiting for completion (timeout={timeout}s)")
 
@@ -212,8 +210,8 @@ async def run_planning_runtime_with_layer_checkpoints(
     Returns:
         Complete session state with layer checkpoint info
     """
-    from backend.app.services.runtime import PlanningRuntimeService
-    from backend.app.services.checkpoint import checkpoint_service
+    from app.services.runtime import PlanningRuntimeService
+    from app.services.checkpoint import checkpoint_service
     from starlette.background import BackgroundTasks
 
     logger.info(

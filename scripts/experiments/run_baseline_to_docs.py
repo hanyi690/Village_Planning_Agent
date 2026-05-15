@@ -22,9 +22,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend" / "app"))
 
 from scripts.experiments.config import (
     BASELINE_DIR,
@@ -34,7 +32,7 @@ from scripts.experiments.config import (
     ensure_output_dirs,
 )
 from scripts.experiments.run_baseline import run_baseline
-from backend.app.config.loader import get_dimension_config
+from app.config.loader import get_dimension_config
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -95,7 +93,7 @@ async def get_rag_references(rag_query: str, top_k: int = 3) -> list:
     Returns:
         List of {content, metadata, score}
     """
-    from backend.app.services.modules.rag.service import RagService
+    from app.services.modules.rag.service import RagService
     rag_service = RagService.get_instance()
     results = await rag_service.search(rag_query, top_k=top_k)
     return results

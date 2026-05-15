@@ -1,20 +1,19 @@
 """
-Checkpoint Service - Shared LangGraph Checkpoint Access
+Checkpoint Service - Business Logic for Checkpoint Operations
 
-This service provides centralized access to LangGraph checkpoints.
-Uses lazy import to avoid circular dependency with PlanningRuntimeService.
+This service provides checkpoint-related business logic methods.
+Runtime operations are handled directly by PlanningRuntimeService.
 
-Includes async persistence with checkpoint synchronization:
-- Writes don't block execution flow
-- Reads can wait for latest checkpoint write completion
+Architecture:
+    API Layer → CheckpointService (business logic)
+    API Layer → PlanningRuntimeService (runtime operations)
 """
 
 import asyncio
 import logging
-import time
 from collections import deque
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional
 
 from app.core.settings import MAX_SESSION_EVENTS
 from app.agent.state import get_layer_dimensions, get_layer_name, _phase_to_layer
@@ -48,7 +47,7 @@ class CheckpointPersistenceManager:
     Includes TTL-based cleanup to prevent memory leaks.
     """
 
-    _pending_writes: Dict[str, Tuple[asyncio.Future, float]] = {}  # (future, start_time)
+    _pending_writes: Dict[str, tuple] = {}  # (future, start_time)
     _lock = asyncio.Lock()
     MAX_TTL = 300.0  # 5 minutes max wait for a write to complete
 
@@ -60,6 +59,7 @@ class CheckpointPersistenceManager:
         """
         async with cls._lock:
             # Clean up stale entries first
+            import time
             current_time = time.time()
             stale_keys = [
                 k for k, (_, start_time) in cls._pending_writes.items()
@@ -99,6 +99,7 @@ class CheckpointPersistenceManager:
             if future.done():
                 return True
             # Check if already TTL expired
+            import time
             if time.time() - start_time > cls.MAX_TTL:
                 del cls._pending_writes[session_id]
                 return False
@@ -116,38 +117,11 @@ checkpoint_persistence_manager = CheckpointPersistenceManager()
 
 class CheckpointService:
     """
-    Centralized checkpoint access service.
+    Checkpoint business logic service.
 
-    Uses lazy import for PlanningRuntimeService to avoid circular dependencies.
-
-    Provides a single point of access for:
-    - Getting checkpoint state
-    - Extracting layer reports
-    - Checking layer completion status
+    Provides business logic methods for checkpoint operations.
+    Runtime operations (get_state, update_state) are handled by PlanningRuntimeService.
     """
-
-    @classmethod
-    async def get_state(cls, session_id: str, wait_for_write: bool = False) -> Optional[Dict[str, Any]]:
-        """
-        Get the full checkpoint state for a session.
-
-        Args:
-            session_id: Session identifier
-            wait_for_write: If True, wait for any pending checkpoint write to complete
-
-        Returns:
-            State dict or None if not found
-        """
-        from app.services.runtime import PlanningRuntimeService
-        try:
-            # Optionally wait for pending write completion
-            if wait_for_write:
-                await checkpoint_persistence_manager.wait_for_write(session_id)
-
-            return await PlanningRuntimeService.aget_state_values(session_id)
-        except Exception as e:
-            logger.error(f"[CheckpointService] Failed to get state for {session_id}: {e}")
-            return None
 
     @classmethod
     async def get_layer_reports(
@@ -156,7 +130,8 @@ class CheckpointService:
         layer: int
     ) -> Dict[str, Any]:
         """Get reports for a specific layer."""
-        state = await cls.get_state(session_id)
+        from app.services.runtime import PlanningRuntimeService
+        state = await PlanningRuntimeService.aget_state_values(session_id)
         if not state:
             return {
                 "layer": layer,
@@ -169,7 +144,12 @@ class CheckpointService:
         completed_dims = state.get("completed_dimensions", {})
 
         layer_key = f"layer{layer}"
-        reports = reports_raw.get(layer_key, {})
+
+        # 从数据库获取报告
+        from app.services.report_store import ReportStore
+        store = ReportStore.get_instance()
+        reports = await store.get_layer_reports(session_id, layer)
+
         completed_dims_list = completed_dims.get(layer_key, [])
         expected_dims = get_layer_dimensions(layer)
 
@@ -193,8 +173,9 @@ class CheckpointService:
         state: Optional[Dict[str, Any]] = None
     ) -> Dict[str, bool]:
         """Get the completion status for all layers."""
+        from app.services.runtime import PlanningRuntimeService
         if state is None:
-            state = await cls.get_state(session_id)
+            state = await PlanningRuntimeService.aget_state_values(session_id)
         if not state:
             return {"layer1": False, "layer2": False, "layer3": False}
 
@@ -209,7 +190,8 @@ class CheckpointService:
     @classmethod
     async def get_phase(cls, session_id: str) -> str:
         """Get the current phase for a session."""
-        state = await cls.get_state(session_id)
+        from app.services.runtime import PlanningRuntimeService
+        state = await PlanningRuntimeService.aget_state_values(session_id)
         if not state:
             return "init"
         return state.get("phase", "init")
@@ -217,37 +199,11 @@ class CheckpointService:
     @classmethod
     async def get_project_name(cls, session_id: str) -> str:
         """Get the project name for a session."""
-        state = await cls.get_state(session_id)
+        from app.services.runtime import PlanningRuntimeService
+        state = await PlanningRuntimeService.aget_state_values(session_id)
         if not state:
             return "村庄规划"
         return state.get("project_name", state.get("config", {}).get("village_data", "村庄规划")[:50])
-
-    @classmethod
-    async def update_state(cls, session_id: str, updates: Dict[str, Any], as_node: Optional[str] = None) -> bool:
-        """Update the checkpoint state for a session."""
-        from app.services.runtime import PlanningRuntimeService
-        try:
-            return await PlanningRuntimeService.aupdate_state(session_id, updates, as_node=as_node)
-        except Exception as e:
-            logger.error(f"[CheckpointService] Failed to update state for {session_id}: {e}")
-            return False
-
-    @classmethod
-    async def validate_session(cls, session_id: str) -> Dict[str, Any]:
-        """Get and validate session state, raise ValueError if not found."""
-        state = await cls.get_state(session_id)
-        if not state:
-            raise ValueError(f"Session {session_id} not found in checkpoint")
-        return state
-
-    @classmethod
-    async def clear_pause_flags(cls, session_id: str) -> bool:
-        """Clear pause flags and reset wave for next layer."""
-        return await cls.update_state(session_id, {
-            "pause_after_step": False,
-            "previous_layer": 0,
-            "current_wave": 1,  # Reset wave for next layer execution
-        })
 
     @classmethod
     async def calculate_next_layer(
@@ -256,8 +212,9 @@ class CheckpointService:
         state: Optional[Dict[str, Any]] = None
     ) -> tuple[int, str]:
         """Calculate next layer and phase based on completion status."""
+        from app.services.runtime import PlanningRuntimeService
         if state is None:
-            state = await cls.get_state(session_id)
+            state = await PlanningRuntimeService.aget_state_values(session_id)
 
         phase = state.get("phase", "init")
         previous_layer = state.get("previous_layer", 0)
@@ -277,22 +234,14 @@ class CheckpointService:
         return next_layer, next_phase
 
     @classmethod
-    async def get_checkpoint_history(cls, session_id: str) -> List[Dict[str, Any]]:
-        """Get checkpoint history for a session."""
+    async def clear_pause_flags(cls, session_id: str) -> bool:
+        """Clear pause flags and reset wave for next layer."""
         from app.services.runtime import PlanningRuntimeService
-        try:
-            history = []
-            async for state_snapshot in PlanningRuntimeService.aget_state_history(session_id):
-                checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
-                history.append({
-                    "checkpoint_id": checkpoint_id,
-                    "values": state_snapshot.values,
-                    "config": state_snapshot.config,
-                })
-            return history
-        except Exception as e:
-            logger.error(f"[CheckpointService] Failed to get history for {session_id}: {e}")
-            return []
+        return await PlanningRuntimeService.aupdate_state(session_id, {
+            "pause_after_step": False,
+            "previous_layer": 0,
+            "current_wave": 1,  # Reset wave for next layer execution
+        })
 
     @classmethod
     async def rebuild_events(cls, session_id: str) -> List[Dict[str, Any]]:
@@ -310,7 +259,6 @@ class CheckpointService:
             state = checkpoint_state.values
 
             metadata = state.get("metadata", {})
-            reports = state.get("reports", {})
             completed_dims = state.get("completed_dimensions", {})
             phase = state.get("phase", "init")
 
@@ -324,6 +272,18 @@ class CheckpointService:
             # Pre-compute current layer from phase (efficiency: avoid repeated calls)
             current_layer_from_phase = _phase_to_layer(phase)
 
+            # 从数据库获取报告 - 一次性获取所有层
+            from app.services.report_store import ReportStore
+            store = ReportStore.get_instance()
+            all_layer_reports = {}
+            if current_layer_from_phase and current_layer_from_phase >= 1:
+                layers_to_fetch = [l for l in [1, 2, 3] if l <= (current_layer_from_phase or 0)]
+                results = await asyncio.gather(*[
+                    store.get_layer_reports(session_id, layer_num)
+                    for layer_num in layers_to_fetch
+                ])
+                all_layer_reports = dict(zip(layers_to_fetch, results))
+
             for layer_num in [1, 2, 3]:
                 # Filter by phase: skip layers that haven't been reached yet
                 if current_layer_from_phase is not None and layer_num > current_layer_from_phase:
@@ -333,18 +293,22 @@ class CheckpointService:
                 layer_completed = len(completed_dims.get(layer_key, [])) >= len(get_layer_dimensions(layer_num))
 
                 if layer_completed:
-                    dimension_reports = reports.get(layer_key, {})
+                    # 从预加载的报告数据获取
+                    dimension_reports = all_layer_reports.get(layer_num, {})
 
                     # Use event factory for consistent event creation
                     event = create_layer_completed_event(
                         layer=layer_num,
                         phase=phase,
-                        reports=reports,
+                        reports={"layer1": {}, "layer2": {}, "layer3": {}},  # 占位，实际数据从数据库获取
                         pause_after_step=state.get("pause_after_step", False),
                         previous_layer=layer_num,
                         session_id=session_id,
                         knowledge_sources_cache=knowledge_sources_cache,
                     )
+                    # 更新事件中的报告数据
+                    event["report_count"] = len(dimension_reports)
+                    event["total_chars"] = sum(len(v) for v in dimension_reports.values())
                     event["_rebuild"] = True
                     events.append(event)
                     logger.info(f"[CheckpointService] Session {session_id}: rebuilt layer_completed event Layer {layer_num}")

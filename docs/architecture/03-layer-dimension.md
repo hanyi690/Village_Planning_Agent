@@ -2,8 +2,8 @@
 
 本文档是**28维度配置的唯一来源**，其他文档应引用此表。
 
-> **更新日期**: 2026-05-08
-> **版本**: v2.0 (重组后架构)
+> **更新日期**: 2026-05-14
+> **版本**: v3.0 (与 phases.yaml 同步)
 
 ## 目录
 
@@ -35,7 +35,7 @@
 | socio_economic | 社会经济分析 | population_model_v1 | ✓ | 人口、经济、产业 |
 | villager_wishes | 村民意愿与诉求分析 | - | ✓ | 村民需求和诉求 |
 | superior_planning | 上位规划与政策导向分析 | - | ✓ | 上位规划要求 |
-| natural_environment | 自然环境分析 | wfs_data_fetch | ✓ | 自然环境条件 |
+| natural_environment | 自然环境分析 | gis_data_fetch | ✓ | 自然环境条件 |
 | land_use | 土地利用分析 | gis_coverage_calculator | ✓ | 土地利用现状 |
 | traffic | 道路交通分析 | accessibility_analysis | ✓ | 道路交通状况 |
 | public_services | 公共服务设施分析 | poi_search | ✓ | 公共服务设施 |

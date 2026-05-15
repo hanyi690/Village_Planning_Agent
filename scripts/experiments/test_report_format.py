@@ -24,13 +24,13 @@ from typing import Dict, List, Any, Tuple
 from datetime import datetime
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
 
 from scripts.experiments.config import (
     load_status_report,
     JINTIAN_VILLAGE_DATA,
 )
-from backend.app.utils.report_format_spec import (
+from app.utils.report_format_spec import (
     LAYER_FORMATS,
     MISSING_DATA_ALTERNATIVES,
     FORBIDDEN_MISSING_PHRASES,

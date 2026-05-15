@@ -33,23 +33,10 @@ const LAYER_GROUP_NAMES: Record<string, string> = {
 };
 
 // ============================================
-// Main Component
+// Main Content Component (hooks must be called unconditionally)
 // ============================================
 
-export default function TestGISPage() {
-  // 生产环境保护
-  if (process.env.NODE_ENV === 'production') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center p-8 bg-white rounded-lg shadow-lg">
-          <h1 className="text-2xl font-bold text-gray-800 mb-4">页面不可访问</h1>
-          <p className="text-gray-600">此页面仅在开发环境可用</p>
-          <p className="text-sm text-gray-400 mt-2">请使用开发模式启动应用</p>
-        </div>
-      </div>
-    );
-  }
-
+function TestGISPageContent() {
   // Static layers from public test data
   const { layers: staticLayers, loading: staticLoading, error: staticError } = useTestLayers();
 
@@ -384,4 +371,25 @@ export default function TestGISPage() {
       </main>
     </div>
   );
+}
+
+// ============================================
+// Export Component (with production guard)
+// ============================================
+
+export default function TestGISPage() {
+  // 生产环境保护
+  if (process.env.NODE_ENV === 'production') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center p-8 bg-white rounded-lg shadow-lg">
+          <h1 className="text-2xl font-bold text-gray-800 mb-4">页面不可访问</h1>
+          <p className="text-gray-600">此页面仅在开发环境可用</p>
+          <p className="text-sm text-gray-400 mt-2">请使用开发模式启动应用</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <TestGISPageContent />;
 }

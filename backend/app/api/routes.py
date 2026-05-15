@@ -31,14 +31,6 @@ router = APIRouter()
 # Core session API (新架构)
 router.include_router(session_router, tags=["Session"])
 
-# GIS Test endpoints (development only)
-try:
-    from app.api import gis_test
-    router.include_router(gis_test.router, prefix="/api/dev/gis", tags=["GIS Test"])
-    logger.info("[Routes] GIS Test endpoints enabled")
-except ImportError as e:
-    logger.warning(f"[Routes] GIS Test module not available: {e}")
-
 
 # ============================================
 # Health Check
@@ -51,7 +43,7 @@ async def unified_health_check():
         "status": "healthy",
         "service": "village-planning-backend",
         "version": "2.0.0",
-        "modules": ["session", "data", "files", "knowledge"],
+        "modules": ["session"],
         "architecture": "SSE-single-channel"
     }
 

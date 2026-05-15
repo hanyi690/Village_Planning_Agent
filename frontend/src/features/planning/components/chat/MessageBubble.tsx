@@ -13,7 +13,6 @@ import { Message } from '../../types';
 import { isUserMessage } from '../../types';
 import MessageContent from './MessageContent';
 import { formatMessageTimestamp } from '@/features/planning/utils';
-import KnowledgeReference from '../ui/KnowledgeReference';
 
 interface MessageBubbleProps {
   message: Message;
@@ -62,7 +61,7 @@ function MessageBubble({
     <div
       className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shadow-sm"
       style={{
-        background: 'linear-gradient(135deg, #10b981 0%, #14b8a6 50%, #0891b2 100%)',
+        background: 'linear-gradient(135deg, #0ea5e9 0%, #06b6d4 50%, #0891b2 100%)',
       }}
     >
       <i className="fas fa-sparkles text-[10px]" />
@@ -80,7 +79,7 @@ function MessageBubble({
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
-        <div className="max-w-[75%] bg-gradient-to-br from-emerald-100/80 to-teal-50 border border-emerald-200 text-gray-900 rounded-2xl rounded-br-md px-4 py-3 shadow-sm">
+        <div className="max-w-[75%] bg-gradient-to-br from-[#e0f2fe]/80 to-[#f0f9ff] border border-[#0ea5e9]/30 text-slate-800 rounded-2xl rounded-br-md px-4 py-3 shadow-sm">
           {/* Message Content */}
           {children || (
             <MessageContent
@@ -91,7 +90,7 @@ function MessageBubble({
           )}
 
           {/* Timestamp */}
-          <div className="text-[10px] text-gray-500 text-right mt-1.5 font-medium">
+          <div className="text-[10px] text-[#6e7681] text-right mt-1.5 font-medium">
             {formatMessageTimestamp(message.timestamp)}
           </div>
         </div>
@@ -119,7 +118,7 @@ function MessageBubble({
         {/* AI Label */}
         {message.type !== 'progress' && (
           <div className="flex items-center gap-2 mb-1.5">
-            <span className="text-xs font-medium text-transparent bg-clip-text bg-gradient-to-r from-emerald-500 to-teal-500">
+            <span className="text-xs font-medium text-transparent bg-clip-text bg-gradient-to-r from-[#0ea5e9] to-[#10b981]">
               AI 助手
             </span>
           </div>
@@ -131,10 +130,10 @@ function MessageBubble({
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: isHovered ? 1 : 0 }}
-            className="absolute -right-2 top-0 flex items-center gap-1 bg-white rounded-lg shadow-md border border-gray-100 p-1 -translate-y-1/2 z-10"
+            className="absolute -right-2 top-0 flex items-center gap-1 bg-white rounded-lg shadow-md border border-slate-200 p-1 -translate-y-1/2 z-10"
           >
             <button
-              className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+              className="w-7 h-7 flex items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
               title="复制"
               onClick={handleCopy}
               aria-label="复制消息"
@@ -143,7 +142,7 @@ function MessageBubble({
             </button>
             {message.type === 'text' && (
               <button
-                className="w-7 h-7 flex items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+                className="w-7 h-7 flex items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
                 title="重新生成"
                 onClick={handleRegenerate}
                 aria-label="重新生成"
@@ -154,7 +153,7 @@ function MessageBubble({
           </motion.div>
 
           {/* Content - with background and border for visibility */}
-          <div className="text-gray-800 leading-relaxed bg-white border border-gray-200 rounded-2xl px-4 py-3 shadow-sm">
+          <div className="text-slate-700 leading-relaxed bg-white border border-slate-200 rounded-2xl px-4 py-3 shadow-sm">
             {children || (
               <MessageContent
                 message={message}
@@ -164,17 +163,8 @@ function MessageBubble({
             )}
           </div>
 
-          {/* Knowledge References */}
-          {message.type === 'text' &&
-            message.knowledgeReferences &&
-            message.knowledgeReferences.length > 0 && (
-              <div className="mt-3">
-                <KnowledgeReference references={message.knowledgeReferences} />
-              </div>
-            )}
-
           {/* Timestamp */}
-          <div className="text-[10px] text-gray-400 mt-2">
+          <div className="text-[10px] text-[#6e7681] mt-2">
             {formatMessageTimestamp(message.timestamp)}
           </div>
         </div>

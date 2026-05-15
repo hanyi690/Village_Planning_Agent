@@ -75,13 +75,15 @@ class AgentState(TypedDict, total=False):
     - session_id, project_name: 标识
     - phase, current_wave: 进度
     - completed_dimensions: 完成追踪 (Annotated: 并行合并)
-    - reports: 报告存储 (Annotated: 并行合并)
-    - report_versions: 版本追踪 (Annotated: 并行合并)
-    - summaries: 摘要 (Annotated: 并行合并)
     - config: 配置信息
     - feedback: 交互
     - dimension_key: Send API 注入
     - image_ids: 图片引用
+
+    已移除冗余字段（数据存储在数据库 DimensionReport 表）：
+    - reports: 完整报告内容（已移除，使用 ReportStore）
+    - report_versions: 版本追踪（已移除，使用 ReportStore）
+    - summaries: 摘要（已移除，使用 ReportStore）
     """
     messages: Annotated[List[BaseMessage], add_messages]
     session_id: str
@@ -89,19 +91,14 @@ class AgentState(TypedDict, total=False):
     phase: str
     current_wave: int
     completed_dimensions: Annotated[Dict[str, List[str]], _merge_dict_of_lists]
-    reports: Annotated[Dict[str, Dict[str, str]], _merge_dict_of_dicts]
-    report_versions: Annotated[Dict[str, List], _merge_dict_of_lists]
-    summaries: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]
     config: Dict[str, Any]
     feedback: Optional[str]
     dimension_key: Optional[str]
     image_ids: List[str]
-    dimension_results: Annotated[List[Dict], operator.add]
-    step_mode: bool
+    metadata: Dict[str, Any]
     execution_paused: bool
     pause_after_step: bool
     previous_layer: int
-    metadata: Dict[str, Any]
 
 
 # ==========================================
@@ -202,7 +199,6 @@ def create_initial_state(
         "messages": [],
         "phase": PlanningPhase.INIT.value,
         "current_wave": 1,
-        "reports": {"layer1": {}, "layer2": {}, "layer3": {}},
         "config": {
             "village_data": village_data,
             "village_name": project_name,
@@ -212,7 +208,6 @@ def create_initial_state(
         },
         "image_ids": image_ids or [],
         "completed_dimensions": {"layer1": [], "layer2": [], "layer3": []},
-        "dimension_results": [],
         "feedback": None,
         "step_mode": False,
         "execution_paused": False,
@@ -273,9 +268,11 @@ def get_next_phase(current_phase: str) -> Optional[str]:
 
 
 def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None) -> Dict[str, Any]:
-    """状态转 UI 格式"""
+    """状态转 UI 格式
+
+    注意：reports 字段已移除，前端应从数据库 API 获取报告内容
+    """
     phase = state.get("phase", "init")
-    reports = state.get("reports", {})
     current_layer = _phase_to_layer(phase)
     if current_layer is None:
         current_layer = 3 if phase == "completed" else 0
@@ -286,7 +283,6 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
     return {
         "phase": phase,
         "current_wave": state.get("current_wave", 1),
-        "reports": reports,
         "current_layer": current_layer,
         "progress": progress,
         "completed_dimensions": state.get("completed_dimensions", {}),

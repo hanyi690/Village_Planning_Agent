@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
 
 from scripts.experiments.config import (
     SCENARIOS,
@@ -123,7 +123,7 @@ def generate_annotation_table(
         analysis = analyze_keywords(new_content, analysis_keywords)
 
         # Get dimension name
-        from backend.app.config import get_dimension_config
+        from app.config import get_dimension_config
         dim_config = get_dimension_config(dim)
         dimension_name = dim_config.get("name", dim) if dim_config else dim
 

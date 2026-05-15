@@ -2,24 +2,27 @@
 
 import React, { useCallback, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { faComments, faCompass, faChevronDown } from '@fortawesome/free-solid-svg-icons';
+import { faCompass, faChevronDown, faChevronUp } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
 import { usePlanningStore } from '../../store';
+import type { DimensionProgressItem } from '../../types';
 import {
   useDimensionProgressAll,
   useCurrentLayer,
   useCompletedLayers,
   useExecutingDimensions,
+  useLayerProgressHistory,
 } from '../../hooks';
 import { getDimensionName } from '../../config/dimensions';
 import { LAYER_VALUE_MAP, LAYER_IDS, NAV_KEYS } from '@/features/planning/constants';
+import ToolStatusPanel from '../chat/ToolStatusPanel';
 
 function getStatusColor(status: string, isExecuting: boolean): string {
   if (isExecuting) return 'bg-amber-400 animate-pulse';
-  if (status === 'completed') return 'bg-emerald-400';
-  if (status === 'streaming') return 'bg-blue-400 animate-pulse';
-  return 'bg-slate-300';
+  if (status === 'completed') return 'bg-emerald-500';
+  if (status === 'streaming') return 'bg-[#0ea5e9] animate-pulse';
+  return 'bg-slate-400';
 }
 
 export default function LayerNav() {
@@ -29,8 +32,11 @@ export default function LayerNav() {
   const currentLayer = useCurrentLayer();
   const completedLayers = useCompletedLayers();
   const executingDimensions = useExecutingDimensions();
+  const layerProgressHistory = useLayerProgressHistory();
+  const toolStatuses = usePlanningStore((state) => state.toolStatuses);
 
   const [expandedLayers, setExpandedLayers] = useState<Set<number>>(new Set([1, 2, 3]));
+  const [showTools, setShowTools] = useState(false);
 
   const toggleLayer = useCallback((layer: number) => {
     setExpandedLayers((prev) => {
@@ -47,6 +53,7 @@ export default function LayerNav() {
       2: [],
       3: [],
     };
+
     Object.entries(dimensionProgress).forEach(([key, item]) => {
       const layer = item.layer;
       if (layer >= 1 && layer <= 3) {
@@ -57,12 +64,31 @@ export default function LayerNav() {
         });
       }
     });
+
+    (Object.entries(layerProgressHistory) as [string, { dimensionDetails: DimensionProgressItem[] }][]).forEach(
+      ([layerKey, history]) => {
+        const layerNum = parseInt(layerKey.replace('layer', ''), 10);
+        if (layerNum >= 1 && layerNum <= 3 && history?.dimensionDetails) {
+          const existingKeys = result[layerNum].map((d) => d.key);
+          history.dimensionDetails.forEach((item) => {
+            const key = `${item.layer}_${item.dimensionKey}`;
+            if (!existingKeys.includes(key)) {
+              result[layerNum].push({
+                key,
+                name: getDimensionName(item.dimensionKey),
+                status: 'completed',
+              });
+            }
+          });
+        }
+      }
+    );
+
     return result;
-  }, [dimensionProgress]);
+  }, [dimensionProgress, layerProgressHistory]);
 
   const navItems = [
     { key: NAV_KEYS.OVERVIEW, icon: faCompass, label: '总览' },
-    { key: NAV_KEYS.CHAT, icon: faComments, label: '对话' },
   ];
 
   return (
@@ -74,7 +100,7 @@ export default function LayerNav() {
             onClick={() => setSelectedNavigationKey(item.key)}
             className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-base transition-colors ${
               selectedNavigationKey === item.key
-                ? 'bg-emerald-50 text-emerald-700 font-medium'
+                ? 'bg-[#e0f2fe] text-[#0369a1] font-medium'
                 : 'text-slate-600 hover:bg-slate-50'
             }`}
           >
@@ -98,7 +124,7 @@ export default function LayerNav() {
               <button
                 onClick={() => toggleLayer(layer)}
                 className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${
-                  isCurrentLayer ? 'bg-emerald-50/70 text-emerald-700' : 'hover:bg-slate-50 text-slate-500'
+                  isCurrentLayer ? 'bg-[#e0f2fe]/70 text-[#0369a1]' : 'hover:bg-slate-50 text-slate-600'
                 }`}
               >
                 <div className="flex items-center gap-1.5">
@@ -110,7 +136,7 @@ export default function LayerNav() {
                   </motion.span>
                   <span className="font-medium uppercase tracking-wider">L{layer}</span>
                   <span className="text-slate-400">{LAYER_VALUE_MAP[layer]}</span>
-                  {layerComplete && <span className="text-xs text-emerald-400">OK</span>}
+                  {layerComplete && <span className="text-xs text-emerald-600">OK</span>}
                 </div>
                 {dimensions.length > 0 && (
                   <span className="text-xs text-slate-400">{dimensions.length}</span>
@@ -140,7 +166,7 @@ export default function LayerNav() {
                             onClick={() => setSelectedNavigationKey(navKey)}
                             className={`w-full flex items-center gap-2 pl-10 pr-3 py-2 rounded-md text-sm transition-colors ${
                               isSelected
-                                ? 'bg-emerald-50 text-emerald-700 font-medium'
+                                ? 'bg-[#e0f2fe] text-[#0369a1] font-medium'
                                 : 'text-slate-600 hover:bg-slate-50'
                             }`}
                           >
@@ -162,6 +188,39 @@ export default function LayerNav() {
           );
         })}
       </div>
+
+      {/* Bottom: Tool Status Panel */}
+      {Object.keys(toolStatuses).length > 0 && (
+        <div className="shrink-0 border-t border-slate-200">
+          <button
+            onClick={() => setShowTools(!showTools)}
+            className="w-full flex items-center justify-between px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
+          >
+            <span className="flex items-center gap-2">
+              <span>🔧 工具</span>
+              <span className="text-xs text-slate-400">{Object.keys(toolStatuses).length}</span>
+            </span>
+            <FontAwesomeIcon
+              icon={showTools ? faChevronUp : faChevronDown}
+              style={{ width: 12, height: 12 }}
+            />
+          </button>
+          <AnimatePresence>
+            {showTools && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="px-2 pb-2">
+                  <ToolStatusPanel tools={toolStatuses} maxVisible={3} />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
     </nav>
   );
 }

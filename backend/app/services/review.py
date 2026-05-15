@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from app.api.schemas import TaskStatus
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service
+from app.services.runtime import PlanningRuntimeService
 from app.database.operations import (
     update_planning_session_async,
     get_planning_session_async,
@@ -82,8 +83,10 @@ class ReviewService:
         """
         from app.agent.state import get_layer_dimensions, get_layer_name
 
-        # Use CheckpointService for state validation
-        state = await checkpoint_service.validate_session(session_id)
+        # Get state directly from PlanningRuntimeService
+        state = await PlanningRuntimeService.aget_state_values(session_id)
+        if not state:
+            raise ValueError(f"Session {session_id} not found in checkpoint")
 
         # Calculate next layer using CheckpointService
         next_layer, next_phase = await checkpoint_service.calculate_next_layer(session_id, state)
@@ -92,7 +95,7 @@ class ReviewService:
 
         # Update checkpoint state - clear pause flags and set next phase
         # ⚠️ 推进 phase 到下一阶段（Agent 自治：恢复执行后自动发送 layer_started）
-        await checkpoint_service.update_state(session_id, {
+        await PlanningRuntimeService.aupdate_state(session_id, {
             "pause_after_step": False,
             "previous_layer": 0,
             "phase": next_phase,
@@ -156,10 +159,12 @@ class ReviewService:
             raise ValueError("Feedback is required for rejection")
 
         # Validate session exists
-        await checkpoint_service.validate_session(session_id)
+        state = await PlanningRuntimeService.aget_state_values(session_id)
+        if not state:
+            raise ValueError(f"Session {session_id} not found in checkpoint")
 
-        # Update checkpoint state using CheckpointService
-        await checkpoint_service.update_state(session_id, {
+        # Update checkpoint state using PlanningRuntimeService
+        await PlanningRuntimeService.aupdate_state(session_id, {
             "need_revision": True,
             "revision_target_dimensions": dimensions or [],
             "human_feedback": feedback,
@@ -220,10 +225,19 @@ class ReviewService:
         from app.agent.state import get_layer_dimensions
 
         # Validate session exists
-        await checkpoint_service.validate_session(session_id)
+        state = await PlanningRuntimeService.aget_state_values(session_id)
+        if not state:
+            raise ValueError(f"Session {session_id} not found in checkpoint")
 
-        # Get checkpoint history using CheckpointService
-        history = await checkpoint_service.get_checkpoint_history(session_id)
+        # Get checkpoint history using PlanningRuntimeService
+        history = []
+        async for state_snapshot in PlanningRuntimeService.aget_state_history(session_id):
+            snapshot_checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+            history.append({
+                "checkpoint_id": snapshot_checkpoint_id,
+                "values": state_snapshot.values,
+                "config": state_snapshot.config,
+            })
 
         # Find target checkpoint
         target_snapshot = None
@@ -321,8 +335,8 @@ class ReviewService:
                 "revision_from_checkpoint_id": rollback_checkpoint_id,
             }
 
-        # Apply rollback state using CheckpointService with as_node=None
-        await checkpoint_service.update_state(session_id, rollback_state, as_node=None)
+        # Apply rollback state using PlanningRuntimeService with as_node=None
+        await PlanningRuntimeService.aupdate_state(session_id, rollback_state, as_node=None)
 
         # Update database status
         await update_planning_session_async(session_id, {

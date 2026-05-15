@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.api.schemas import TaskStatus, SessionStatusResponse
+from app.api.schemas import TaskStatus
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service
 from app.database.operations import (
@@ -92,48 +92,6 @@ class SessionService:
         except Exception as e:
             logger.error(f"[SessionService] [{session_id}] Failed to create session: {e}")
             return False
-
-    @staticmethod
-    async def get_session_status(session_id: str) -> Optional[SessionStatusResponse]:
-        """
-        Get session status from checkpoint and database.
-
-        Args:
-            session_id: Session identifier
-
-        Returns:
-            SessionStatusResponse or None if not found
-        """
-        # Get from database for basic info
-        db_session = await get_planning_session_async(session_id)
-        if not db_session:
-            return None
-
-        # Get from checkpoint for execution state (single query)
-        state = await checkpoint_service.get_state(session_id)
-        completion_status = await checkpoint_service.get_completion_status(session_id, state)
-
-        # Calculate progress
-        from backend.utils.progress_helper import calculate_progress
-        progress = calculate_progress(
-            state.get("phase", "init") if state else "init",
-            completion_status if state else {}
-        )
-
-        return SessionStatusResponse(
-            session_id=session_id,
-            status=db_session.get("status", TaskStatus.running),
-            current_layer=state.get("current_layer") if state else None,
-            previous_layer=state.get("previous_layer") if state else None,
-            created_at=db_session.get("created_at"),
-            progress=progress,
-            layer_1_completed=completion_status.get("layer1", False),
-            layer_2_completed=completion_status.get("layer2", False),
-            layer_3_completed=completion_status.get("layer3", False),
-            pause_after_step=state.get("pause_after_step", False) if state else False,
-            execution_complete=state.get("phase") == "completed" if state else False,
-            execution_error=db_session.get("execution_error"),
-        )
 
     @staticmethod
     async def delete_session(session_id: str) -> Dict[str, bool]:
@@ -226,4 +184,4 @@ class SessionService:
 session_service = SessionService()
 
 
-__all__ = ["SessionService", "session_service", "SessionStatusResponse", "LayerReportsResponse"]
+__all__ = ["SessionService", "session_service", "LayerReportsResponse"]

@@ -35,7 +35,7 @@ export default function AppHeader({ onToggleLeftNav }: AppHeaderProps) {
       2: { done: 0, total: 0 },
       3: { done: 0, total: 0 },
     };
-    Object.entries(dimensionProgress).forEach(([key, item]) => {
+    Object.entries(dimensionProgress).forEach(([_key, item]) => {
       const layer = item.layer;
       if (layer >= 1 && layer <= 3) {
         result[layer].total += 1;

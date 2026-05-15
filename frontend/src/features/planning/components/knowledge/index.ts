@@ -1,0 +1,1 @@
+// Knowledge components removed - RAG knowledge panel is redundant per user request

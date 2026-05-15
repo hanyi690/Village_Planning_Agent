@@ -91,7 +91,7 @@ export {
 } from './config';
 
 // API
-export { planningApi, dataApi, gisApi, fileApi, knowledgeApi } from './api';
+export { planningApi, dataApi } from './api';
 
 // Components (optional - usually imported directly)
 // export * from './components';

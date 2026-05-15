@@ -2,8 +2,8 @@
 
 本文档详细说明后端 API 路由结构和 SSE 管理机制。
 
-> **更新日期**: 2026-05-10
-> **版本**: v3.5 (项目列表与项目会话 API)
+> **更新日期**: 2026-05-14
+> **版本**: v3.7 (Services 简化与导入关系优化)
 
 ## 目录
 
@@ -32,9 +32,21 @@
 | `/api/sessions/{id}/reports/{dim_key}/versions` | GET | 维度版本历史摘要列表 |
 | `/api/sessions/{id}/layer/{layer}/reports` | GET | 层级报告批量获取 |
 | `/api/sessions/{id}` | DELETE | 删除会话 |
+
+### 项目端点
+
+| 端点 | 方法 | 功能 |
+|------|------|------|
 | `/api/projects` | GET | 项目列表（含会话统计） |
 | `/api/projects/{name}/sessions` | GET | 指定项目的所有会话 |
 | `/api/projects/{name}/reports/{dim_key}` | GET | 按项目名跨会话查询报告 |
+
+### 导出端点
+
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `/api/planning/export` | POST | 导出法定规划文档 |
+| `/api/planning/export/{project_name}` | GET | 获取已导出的规划文档 |
 
 ### 基础端点
 
@@ -58,6 +70,7 @@ async def create_session(
     task_description: str = Form("制定村庄发展规划", description="任务描述"),
     constraints: str = Form("无特殊约束", description="约束条件"),
     step_mode: bool = Form(False, description="分步执行模式"),
+    rag_enabled: bool = Form(True, description="启用 RAG 知识检索"),
     village_data: str = Form("", description="村庄基础数据（文本）"),
     village_data_files: List[UploadFile] = File(None, description="村庄数据文件"),
     task_files: List[UploadFile] = File(None, description="任务描述文件"),
@@ -78,6 +91,7 @@ async def create_session(
 | `task_description` | str (Form) | 否 | 任务描述（默认"制定村庄发展规划"） |
 | `constraints` | str (Form) | 否 | 约束条件（默认"无特殊约束"） |
 | `step_mode` | bool (Form) | 否 | 分步执行模式 |
+| `rag_enabled` | bool (Form) | 否 | 启用 RAG 知识检索（默认 True） |
 | `village_data_files` | File[] | 否 | 村庄数据文件（docx/pdf/txt 等，内容合并到 village_data） |
 | `task_files` | File[] | 否 | 任务描述文件（覆盖 task_description 文本） |
 | `constraint_files` | File[] | 否 | 约束条件文件（覆盖 constraints 文本） |
@@ -94,31 +108,6 @@ async def create_session(
 
 **数据验证**：合并后 `village_data` 必须 ≥ 10 字符，否则返回 400
 
-```
-    initial_state = PlanningRuntimeService.build_initial_state(
-        project_name=project_name,
-        village_data=parsed_content,
-        village_name=village_name,
-        task_description=task_description,
-        constraints=constraints,
-        session_id=session_id,
-        stream_mode=True,
-        step_mode=step_mode,
-        uploaded_files=uploaded_files if uploaded_files else None,
-    )
-
-    background_tasks.add_task(
-        PlanningRuntimeService._trigger_planning_execution,
-        session_id, initial_state
-    )
-
-    return SessionCreateResponse(
-        session_id=session_id,
-        stream_url=f"/api/sessions/{session_id}/stream",
-        status=TaskStatus.running
-    )
-```
-
 ---
 
 ### 2. SSE 事件流
@@ -127,20 +116,23 @@ async def create_session(
 @router.get("/api/sessions/{session_id}/stream")
 async def stream_events(session_id: str):
     """SSE 事件流端点"""
+    # 会话不存在时尝试从数据库重建
+    if not sse_manager.session_exists(session_id):
+        rebuilt = await checkpoint_service.rebuild_session_from_db(
+            session_id, get_planning_session_async, sse_manager
+        )
+        if not rebuilt:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
     async def event_generator():
         queue = await PlanningRuntimeService.subscribe_with_history(session_id)
         try:
-            # 发送连接确认
             yield sse_manager.format_sse({
                 "type": "connected",
                 "session_id": session_id,
                 "timestamp": datetime.now().isoformat()
             })
 
-            # 状态同步已移除 — 前端通过 REST GET /status 获取基准状态
-            # 重连时通过 GET /sync?from_seq=N 追补遗漏的增量事件
-
-            # 事件循环
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=30.0)
@@ -161,11 +153,7 @@ async def stream_events(session_id: str):
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no"
-        }
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
     )
 ```
 
@@ -204,9 +192,6 @@ async def sync_events(session_id: str, from_seq: int = 0):
    - **再** `GET /api/sessions/{id}/sync?from_seq={last_seq}` → 追补遗漏的增量事件
 3. SSE 重连 → 继续实时流
 
-> **架构决策**: 重连时 `getStatus` 和 `syncEvents` 必须串行执行，先获取基准状态再追补增量事件。
-> 此前并行调用导致 checkpoint 空状态覆盖事件数据，造成 UI 闪烁/内容消失。
-
 ---
 
 ### 4. 反馈接口（整合端点）
@@ -225,28 +210,29 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
     """提交反馈"""
     state = await PlanningRuntimeService.aget_state_values(session_id)
 
-    # 审批：批准当前层级继续执行（基于 completed_dimensions 判断层完成）
+    # 审批：批准当前层级继续执行
     if request.approve:
-        current_phase = state.get("phase", "layer1")
-        layer = _phase_to_layer(current_phase)
-        if layer:
-            completed = state.get("completed_dimensions", {}).get(f"layer{layer}", [])
-            total = get_layer_dimensions(layer)
-            layer_complete = (set(completed) == set(total) and len(total) > 0)
-        else:
-            layer_complete = False
+        if not state.get("execution_paused"):
+            return {"status": "not_paused", "message": "Execution is not paused"}
 
-        if layer_complete:
-            next_phase = get_next_phase(current_phase)
-            await PlanningRuntimeService.aupdate_state(session_id, {
-                "pause_after_step": False,
-                "previous_layer": 0,
-                "phase": next_phase or current_phase,
-            })
-            asyncio.create_task(
-                PlanningRuntimeService._trigger_planning_execution(session_id)
-            )
-            return {"status": "approved", "next_phase": next_phase}
+        current_phase = state.get("phase", "layer1")
+        next_phase = get_next_phase(current_phase)
+
+        # 原子更新：恢复执行并推进阶段
+        await PlanningRuntimeService.aupdate_state(session_id, {
+            "execution_paused": False,
+            "pause_after_step": False,
+            "previous_layer": 0,
+            "phase": next_phase or current_phase,
+        })
+
+        # 发送 SSE 事件
+        SSEPublisher.send_execution_resumed(session_id, current_layer)
+        if next_phase and next_phase != "completed":
+            SSEPublisher.send_layer_start(session_id, next_layer, ...)
+
+        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+        return {"status": "approved", "next_phase": next_phase}
 
     # 修订：触发指定维度重分析
     if request.feedback and request.dimensions:
@@ -255,20 +241,15 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
             "need_revision": True,
             "revision_target_dimensions": request.dimensions,
         })
-        asyncio.create_task(
-            PlanningRuntimeService._trigger_planning_execution(session_id)
-        )
+        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
         return {"status": "revision_started", "dimensions": request.dimensions}
 
     # 对话：追加消息到会话
     if request.message:
-        from langchain_core.messages import HumanMessage
         await PlanningRuntimeService.aupdate_state(session_id, {
             "messages": [HumanMessage(content=request.message)]
         })
-        asyncio.create_task(
-            PlanningRuntimeService._trigger_planning_execution(session_id)
-        )
+        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
         return {"status": "message_accepted"}
 
     return {"status": "no_action"}
@@ -290,20 +271,16 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
 @router.get("/api/sessions/{session_id}/checkpoints")
 async def get_checkpoints(session_id: str):
     """获取检查点列表"""
-    history = await checkpoint_service.get_checkpoint_history(session_id)
     checkpoints = []
-    for entry in history:
-        values = entry.get("values", {})
+    async for snapshot in PlanningRuntimeService.aget_state_history(session_id):
+        checkpoint_id = snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+        values = dict(snapshot.values) if snapshot.values else {}
         checkpoints.append({
-            "checkpoint_id": entry.get("checkpoint_id", ""),
+            "checkpoint_id": checkpoint_id,
             "phase": values.get("phase", "init"),
             "layer": values.get("previous_layer", 0),
         })
-    return {
-        "session_id": session_id,
-        "checkpoints": checkpoints,
-        "count": len(checkpoints)
-    }
+    return {"session_id": session_id, "checkpoints": checkpoints, "count": len(checkpoints)}
 ```
 
 ---
@@ -324,15 +301,10 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
         raise HTTPException(status_code=404, detail=f"Checkpoint not found: {checkpoint_id}")
 
     layer = target_state.values.get("previous_layer", 1) or 1
-    sse_manager.append_event(session_id, {
-        "type": "resumed",
-        "checkpoint_id": checkpoint_id,
-        "layer": layer
-    })
+    sse_manager.append_event(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id, "layer": layer})
+    sse_manager.publish_sync(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id})
 
-    asyncio.create_task(
-        PlanningRuntimeService._trigger_planning_execution(session_id)
-    )
+    asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
     return {"status": "resumed", "checkpoint_id": checkpoint_id, "layer": layer}
 ```
 
@@ -361,7 +333,7 @@ async def get_dimension_report(session_id: str, dim_key: str, version: Optional[
                 }
         raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
 
-    # 默认：从 checkpoint 读取当前内容（保持向后兼容）
+    # 默认：从 checkpoint 读取当前内容
     state = await PlanningRuntimeService.aget_state_values(session_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
@@ -384,10 +356,6 @@ async def get_dimension_report(session_id: str, dim_key: str, version: Optional[
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `version` | int (query) | 否 | 历史版本号，不传则返回当前 checkpoint 中的报告 |
-
-**数据源优先级**：
-- 不传 `version`：从 LangGraph checkpoint 读取（现有行为）
-- 传 `version=N`：从 `DimensionRevision` 数据库表读取指定版本
 
 ---
 
@@ -432,8 +400,6 @@ async def get_dimension_report_versions(session_id: str, dim_key: str):
 }
 ```
 
-**数据源**：`DimensionRevision` 表 → `get_dimension_revisions_async()` (operations.py:896)
-
 ---
 
 ### 9. 按项目名跨会话查询报告
@@ -453,25 +419,11 @@ async def get_project_dimension_report(
     if session_id:
         # 指定会话 + 可选版本
         if version is not None:
-            revisions = await get_dimension_revisions_async(
-                session_id=session_id, dimension_key=dim_key, limit=100
-            )
-            for rev in revisions:
-                if rev.get("version") == version:
-                    return {
-                        "project_name": project_name,
-                        "session_id": session_id,
-                        "dimension_key": dim_key,
-                        "layer": rev.get("layer"),
-                        "content": rev.get("content"),
-                        "version": version,
-                        "created_at": rev.get("created_at"),
-                    }
-            raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
-
+            revisions = await get_dimension_revisions_async(...)
+            # ... 查找并返回指定版本
         # 指定会话 + 当前 checkpoint
         state = await PlanningRuntimeService.aget_state_values(session_id)
-        # ... 查找并返回报告 ...
+        # ... 查找并返回报告
 
     # 默认：取该项目最新会话的当前 checkpoint 报告
     sessions = await list_planning_sessions_async(project_name=project_name, limit=1)
@@ -479,7 +431,7 @@ async def get_project_dimension_report(
         raise HTTPException(status_code=404, detail=f"No sessions found for project: {project_name}")
 
     latest_session_id = sessions[0]["session_id"]
-    # ... 查找并返回报告 ...
+    # ... 查找并返回报告
 ```
 
 **查询参数**：
@@ -488,28 +440,6 @@ async def get_project_dimension_report(
 |------|------|------|------|
 | `session_id` | str (query) | 否 | 指定会话 ID |
 | `version` | int (query) | 否 | 历史版本号，需同时传 `session_id` |
-
-**查询优先级**：
-1. 传 `session_id` + `version=N` → `DimensionRevision` 表
-2. 传 `session_id` 不传 `version` → 该会话 checkpoint
-3. 都不传 → 该项目最新会话的 checkpoint
-
-**复用函数**：
-- `list_planning_sessions_async(project_name=...)` (operations.py:243)
-- `PlanningRuntimeService.aget_state_values()`
-- `get_dimension_revisions_async()` (operations.py:896)
-
-**curl 示例**：
-```bash
-# 按项目名取最新报告
-curl "http://localhost:8000/api/projects/金田村/reports/location"
-
-# 指定会话
-curl "http://localhost:8000/api/projects/金田村/reports/location?session_id={id}"
-
-# 指定会话 + 历史版本
-curl "http://localhost:8000/api/projects/金田村/reports/location?session_id={id}&version=2"
-```
 
 ---
 
@@ -560,8 +490,6 @@ async def get_layer_reports(session_id: str, layer: int):
 
 ---
 
----
-
 ### 13. 项目列表
 
 ```python
@@ -587,9 +515,6 @@ async def list_projects():
 }
 ```
 
-**复用函数**：
-- `list_projects_async()` (operations.py:276) — 按 `project_name` 分组聚合查询
-
 ---
 
 ### 14. 项目会话列表
@@ -602,36 +527,48 @@ async def list_project_sessions(project_name: str):
     return {"sessions": sessions}
 ```
 
-**响应格式**：
+---
 
-```json
-{
-  "sessions": [
-    {
-      "session_id": "uuid-...",
-      "project_name": "金田村",
-      "created_at": "2026-05-10T12:00:00",
-      "completed_at": "2026-05-10T14:30:00",
-      "village_data": "...",
-      "task_description": "...",
-      "constraints": "..."
-    }
-  ]
-}
+### 15. 导出规划文档
+
+```python
+class ExportRequest(BaseModel):
+    """导出请求"""
+    layer3_path: str = Field(..., description="Layer3 Markdown 文件路径")
+    project_name: str = Field(default="金田村", description="项目名称")
+
+
+@router.post("/api/planning/export", response_model=ExportResponse)
+async def export_planning_document(request: ExportRequest):
+    """导出法定规划文档（简化版）"""
+    from scripts.llm_assisted.simple_export import export_planning_document
+
+    result = export_planning_document(
+        layer3_path=request.layer3_path,
+        output_dir=str(output_dir),
+        project_name=request.project_name
+    )
+
+    return ExportResponse(
+        success=result.success,
+        markdown_path=result.markdown_path,
+        article_count=result.article_count,
+        errors=result.errors
+    )
+
+
+@router.get("/api/planning/export/{project_name}")
+async def get_exported_document(project_name: str):
+    """获取已导出的规划文档"""
+    markdown_path = Path(f"docs/planning_export/output/{project_name}_规划文本.md")
+    if not markdown_path.exists():
+        raise HTTPException(status_code=404, detail=f"Document not found: {project_name}")
+
+    with open(markdown_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    return {"project_name": project_name, "content": content, "path": str(markdown_path)}
 ```
-
-**curl 示例**：
-```bash
-# 获取项目列表
-curl "http://localhost:8000/api/projects"
-
-# 获取指定项目的所有会话
-curl "http://localhost:8000/api/projects/金田村/sessions"
-```
-
-**复用函数**：
-- `list_project_sessions_async(project_name)` (operations.py:312) — 委托 `list_planning_sessions_async(project_name=...)`
-- 每个 session 字典由 `_planning_session_to_dict()` (operations.py:56) 转换
 
 ---
 
@@ -690,10 +627,9 @@ class ImageData(BaseModel):
 ### 文件上传模型
 
 ```python
-# 文件类型标识
 UploadedFileType = Literal[
     "document", "geojson", "shapefile", "kml", "gis_file",
-    "village_data", "task_description", "constraint",
+    "status_data", "task_description", "constraint", "other",
 ]
 
 
@@ -715,39 +651,9 @@ class FileUploadResponse(BaseModel):
     message: str
 ```
 
-**文件类型说明**：
-
-| file_type | 对应请求参数 | 用途 |
-|-----------|-------------|------|
-| `village_data` | `village_data_files` | 村庄基础数据、村情台账、调查报告等 |
-| `task_description` | `task_files` | 任务书、设计委托书等 |
-| `constraint` | `constraint_files` | 上位规划、政策文件、法规标准等 |
-| `document` | (文档解析后) | 通用文档类型 |
-| `gis_file` | (间接) | 空间数据文件 |
-
 ### 会话创建/状态模型
 
 ```python
-class StartPlanningRequest(BaseModel):
-    """启动规划会话请求 (JSON 模式，保留兼容)"""
-    project_name: str
-    village_data: str
-    village_name: str
-    task_description: str
-    constraints: str
-    enable_review: bool
-    stream_mode: bool
-    step_mode: bool
-    images: Optional[List[ImageData]]
-
-
-class SessionCreateResponse(BaseModel):
-    """创建会话响应"""
-    session_id: str
-    stream_url: str
-    status: str
-
-
 class SessionStatusResponse(BaseModel):
     """会话状态响应"""
     session_id: str
@@ -779,19 +685,29 @@ class SessionStatusResponse(BaseModel):
 class SSEManager:
     """SSE 事件管理器"""
 
-    def __init__(self):
-        self._queues: Dict[str, List[asyncio.Queue]] = {}
-        self._events: Dict[str, List[Dict]] = {}
-        self._seq: Dict[str, int] = {}
+    # 缓存配置（关键事件防丢失）
+    CACHE_CONFIG = {
+        SSEEventType.DIMENSION_START: ("_last_dimension_start", "dimension_key"),
+        SSEEventType.DIMENSION_COMPLETE: ("_last_dimension_complete", "dimension_key"),
+        SSEEventType.LAYER_COMPLETED: ("_last_layer_completed", "layer"),
+        SSEEventType.LAYER_STARTED: ("_last_layer_started", "layer"),
+        SSEEventType.RESUMED: ("_last_resumed", None),
+    }
+
+    # 全局状态（类变量）
+    _sessions: Dict[str, Dict[str, Any]] = {}
+    _session_subscribers: Dict[str, Set[asyncio.Queue]] = {}
+    _session_seq: Dict[str, int] = {}
+    _seq_buffer: Dict[str, deque] = {}
 
     async def subscribe(self, session_id: str) -> asyncio.Queue:
-        """订阅事件队列"""
+        """订阅事件队列（含历史事件同步）"""
 
     async def unsubscribe(self, session_id: str, queue: asyncio.Queue):
         """取消订阅"""
 
-    async def emit(self, session_id: str, event: Dict):
-        """发送事件到所有订阅者"""
+    async def publish(self, session_id: str, event: Dict):
+        """发送事件到所有订阅者（含缓存）"""
 
     def format_sse(self, event: Dict) -> str:
         """格式化为 SSE 消息"""
@@ -800,7 +716,10 @@ class SSEManager:
         return f"event: {event_type}\ndata: {data}\n\n"
 
     def get_events_from_seq(self, session_id: str, from_seq: int) -> List[Dict]:
-        """获取指定序列号之后的事件"""
+        """获取指定序列号之后的事件（重连用）"""
+
+    def get_last_seq(self, session_id: str) -> int:
+        """获取最新序列号"""
 ```
 
 ### SSE 事件类型
@@ -822,6 +741,8 @@ class SSEManager:
 | SSE 管理 | `backend/app/services/sse.py` |
 | Checkpoint 服务 | `backend/app/services/checkpoint.py` |
 | 运行时服务 | `backend/app/services/runtime.py` |
+| Review 服务 | `backend/app/services/review.py` |
+| Session 服务 | `backend/app/services/session.py` |
 
 > **注意**: `GisService` 和 `RagService` 通过 `__init__.py` 的 `__getattr__` 懒加载导出。
 > 不要直接 import 子模块路径；使用 `from app.services import GisService, RagService`。
@@ -842,11 +763,13 @@ class SSEManager:
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v3.7 | 2026-05-14 | Services 简化：删除 router.py/executor.py；CheckpointService 移除代理方法；SessionService 移除重复方法；review.py 直接使用 PlanningRuntimeService |
+| v3.6 | 2026-05-14 | 新增导出端点：`POST /api/planning/export` + `GET /api/planning/export/{project_name}` |
 | v3.5 | 2026-05-10 | 新增项目列表和项目会话 API：`GET /api/projects` + `GET /api/projects/{name}/sessions` |
 | v3.4 | 2026-05-10 | 报告端点扩展：`?version=N` 历史版本查询 + `/versions` 版本列表 + `/api/projects/{name}/reports/{key}` 跨会话查询 |
-| v3.3 | 2026-05-10 | SSE 架构优化：删除 `state_sync` 事件（消除 AIMessage 序列化崩溃）；前端重连串行化 `getStatus` → `syncEvents` |
-| v3.2 | 2026-05-09 | `status_files`/`other_files` 表单字段合并为 `village_data_files`，删除 `other` 子目录 |
-| v3.1 | 2026-05-09 | Services 模块改为 `__getattr__` 懒加载；删除 `gis_service.py`/`rag_service.py` shim 文件 |
-| v3.0 | 2026-05-09 | 路径前缀从 `/api/planning/` 改为 `/api/sessions/`；整合 chat/review 为 feedback；新增 delete/status 端点 |
+| v3.3 | 2026-05-10 | SSE 架构优化：删除 `state_sync` 事件；前端重连串行化 `getStatus` → `syncEvents` |
+| v3.2 | 2026-05-09 | `status_files`/`other_files` 表单字段合并为 `village_data_files` |
+| v3.1 | 2026-05-09 | Services 模块改为 `__getattr__` 懒加载 |
+| v3.0 | 2026-05-09 | 路径前缀从 `/api/planning/` 改为 `/api/sessions/` |
 | v2.0 | 2026-05-08 | 架构重组，统一 Session API |
 | v1.0 | 2026-05-07 | 初始版本 |

@@ -131,6 +131,13 @@ export function useIsLayerCompleted(layer: 1 | 2 | 3): boolean {
   return usePlanningStore((state) => state.completedLayers[layer]);
 }
 
+/**
+ * Select layer progress history for completed layers
+ */
+export function useLayerProgressHistory(): PlanningState['layerProgressHistory'] {
+  return usePlanningStore((state) => state.layerProgressHistory);
+}
+
 // ============================================
 // Reports Selectors
 // ============================================

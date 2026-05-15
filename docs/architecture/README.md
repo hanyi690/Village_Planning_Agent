@@ -67,7 +67,7 @@ village-planner/
 │       ├── tools/
 │       └── utils/
 │
-├── frontend/                      [搁置 - 待完善]
+├── frontend/                      [已实现]
 │
 ├── data/
 │   ├── knowledge_base/
@@ -88,10 +88,11 @@ village-planner/
 | [02-agent-core](./02-agent-core.md) | Router Agent、StateGraph | ✅ |
 | [03-layer-dimension](./03-layer-dimension.md) | 28维度配置 | ✅ |
 | [04-backend-api](./04-backend-api.md) | API端点、SSE | ✅ |
-| [05-frontend-state](./05-frontend-state.md) | Zustand状态、组件 | ⏸️ 搁置 |
+| [05-frontend-state](./05-frontend-state.md) | Zustand状态、组件 | ✅ 已实现 |
 | [06-tool-system](./06-tool-system.md) | 工具注册 | ✅ |
 | [gis-system-architecture](./gis-system-architecture.md) | GIS系统 | ✅ |
 | [08-rag-system](./08-rag-system.md) | 知识库 | ✅ |
+| [10-frontend-components](./10-frontend-components.md) | 前端组件架构 | ✅ |
 | [file-index](./file-index.md) | 文件路径索引 | ✅ |
 
 ## 核心概念速查
@@ -107,7 +108,7 @@ village-planner/
 ### 五层技术架构
 
 ```
-用户层 (React + Zustand)          [搁置]
+用户层 (React + Zustand)          [已实现]
     ↓ SSE
 后端层 (FastAPI + SSEManager)
     ↓ LangGraph

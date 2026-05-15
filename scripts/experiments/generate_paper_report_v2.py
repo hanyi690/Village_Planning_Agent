@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Dict, List, Any
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
 
 from scripts.experiments.config import (
     BASELINE_DIR,
@@ -434,7 +434,6 @@ Wave 3: {', '.join(impact2_waves.get('3', [])[:5])}（三级依赖）
 |----------|------|
 | `output/experiments/cascade_consistency/baseline/layer3_reports.json` | RAG开启组报告源数据 |
 | `output/experiments/cascade_consistency/scenario*_*/impact_tree.json` | 级联影响树 |
-| `scripts/experiments/run_rag_hallucination.py` | RAG对照组生成 |
 | `scripts/experiments/run_scenario.py` | 级联修复执行 |
 
 ---

@@ -55,7 +55,6 @@ def create_dimension_state(dimension_key: str, parent_state: Dict[str, Any]) -> 
         "project_name": parent_state.get("project_name", ""),
         "config": parent_state.get("config", {}),
         "image_ids": parent_state.get("image_ids", []) if layer == 1 else [],
-        "reports": parent_state.get("reports", {}),
         "completed_dimensions": parent_state.get("completed_dimensions", {}),
     }
 
@@ -101,28 +100,62 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "session_id": session_id,
             "project_name": state.get("project_name", ""),
             "village_data": state.get("config", {}).get("village_data", ""),
-            "reports": state.get("reports", {}),
         }
         tool_results = await GisService.run_parallel(tools, context)
 
-    # 3. RAG 查询（两级开关：会话级 rag_enabled + 维度级 rag_query）
+    # 3. RAG query (three-level switch: Layer > Session > Dimension)
     rag_context = ""
-    rag_enabled = state.get("config", {}).get("rag_enabled", True)
+    config = state.get("config", {})
+
+    # Layer-level switch (highest priority)
+    rag_layer_config = config.get("rag_layer_config", {})
+    layer_rag_enabled = rag_layer_config.get(dim_layer, True)
+
+    # Session-level switch (backward compatible)
+    global_rag_enabled = config.get("rag_enabled", True)
+
+    # Dimension-level switch
     dim_rag_query = getattr(cfg, 'rag_query', '')
+
+    # Combined decision: Layer && Session && Dimension
+    rag_enabled = layer_rag_enabled and global_rag_enabled
+
     if rag_enabled and dim_rag_query:
         rag_context = await RagService.get_instance().get_context(dim_key, state, cfg)
         if rag_context:
-            logger.info(f"[analyze_dimension] {dim_key}: RAG 检索到 {len(rag_context)} 字符上下文")
+            logger.info(f"[analyze_dimension] {dim_key}: RAG retrieved {len(rag_context)} chars context")
         else:
-            logger.info(f"[analyze_dimension] {dim_key}: RAG 检索无结果")
+            logger.info(f"[analyze_dimension] {dim_key}: RAG no results")
     else:
-        reason = "会话级 RAG 已关闭" if not rag_enabled else f"维度 rag_query 为空"
-        logger.info(f"[analyze_dimension] {dim_key}: 跳过 RAG（{reason}）")
+        reasons = []
+        if not layer_rag_enabled:
+            reasons.append(f"Layer{dim_layer} RAG disabled")
+        if not global_rag_enabled:
+            reasons.append("Session RAG disabled")
+        if not dim_rag_query:
+            reasons.append("Dimension rag_query empty")
+        logger.info(f"[analyze_dimension] {dim_key}: Skipped RAG ({', '.join(reasons)})")
 
-    # 4. 组装 Prompt
-    prompt = _build_prompt(cfg, state, tool_results, rag_context)
+    # 4. 从数据库加载依赖报告
+    store = ReportStore.get_instance()
+    deps = ""
+    if dim_layer == 2:
+        # Layer 2 依赖 Layer 1 报告
+        layer1_reports = await store.get_layer_reports(session_id, 1)
+        deps = "\n".join([f"【{k}】{v[:800]}..." for k, v in layer1_reports.items() if v])
+    elif dim_layer == 3:
+        # Layer 3 依赖 Layer 1 和 Layer 2 - 并行查询
+        layer1_reports, layer2_reports = await asyncio.gather(
+            store.get_layer_reports(session_id, 1),
+            store.get_layer_reports(session_id, 2),
+        )
+        deps = "\n".join([f"【{k}】{v[:500]}..." for k, v in layer1_reports.items() if v])
+        deps += "\n" + "\n".join([f"【{k}】{v[:500]}..." for k, v in layer2_reports.items() if v])
 
-    # 5. 流式 LLM + SSE
+    # 5. 组装 Prompt
+    prompt = _build_prompt(cfg, state, tool_results, rag_context, deps)
+
+    # 6. 流式 LLM + SSE
     llm = _get_llm()
 
     llm_response = ""
@@ -149,11 +182,24 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"[analyze_dimension] LLM 失败: {e}")
         return {"messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")]}
 
-    # 6. 保存版本
-    store = ReportStore.get_instance()
+    # 7. 保存版本
     current_versions = state.get("report_versions", {}).get(dim_key, [])
     next_version = len(current_versions) + 1
     revision_reason = state.get("feedback")
+
+    # Format knowledge sources for storage
+    knowledge_source_list = None
+    if rag_context:
+        knowledge_source_list = [{"context": rag_context[:500], "dimension": dim_key}]
+
+    # Format GIS data for storage
+    gis_data_list = []
+    for r in tool_results:
+        if r and getattr(r, 'success', False):
+            gis_data_list.append({
+                "tool": getattr(r, 'tool_name', 'unknown'),
+                "data": getattr(r, 'data', None),
+            })
 
     report_id = await store.save(
         session_id=session_id,
@@ -161,58 +207,42 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         version=next_version,
         content=llm_response,
         metadata={"revision_reason": revision_reason},
+        layer=dim_layer,
+        knowledge_sources=knowledge_source_list,
+        gis_data=gis_data_list if gis_data_list else None,
     )
 
-    # 7. 发送完成事件 (含 GIS 数据)
-    gis_data = []
-    for r in tool_results:
-        if r and getattr(r, 'success', False):
-            gis_data.append({
-                "tool": getattr(r, 'tool_name', 'unknown'),
-                "data": getattr(r, 'data', None),
-            })
-
+    # 8. 发送完成事件 (含 GIS 数据)
     await sse_manager.publish(session_id, {
         "type": "dimension_complete",
         "dimension_key": dim_key,
         "dimension_name": dim_name,
-        "full_content": llm_response,
+        "word_count": len(llm_response),  # 仅传递元数据，内容已通过 dimension_delta 累积
         "report_id": report_id,
         "version": next_version,
-        "summary": llm_response[:200],
-        "gis_data": gis_data,
+        "gis_data": gis_data_list,
         "layer": dim_layer,
     })
 
-    # 8. 状态更新 - 仅返回增量，reducer 负责合并
-    now_iso = datetime.utcnow().isoformat() + "Z"
-    summary_excerpt = llm_response[:200]
+    # 9. 状态更新 - 仅返回增量，reducer 负责合并
     phase_key = f"layer{dim_layer}"
 
     return {
         "messages": [AIMessage(content=llm_response, metadata={"dimension_key": dim_key})],
         "completed_dimensions": {phase_key: [dim_key]},
-        "reports": {phase_key: {dim_key: llm_response}},
-        "report_versions": {
-            dim_key: [{
-                "version": next_version, "report_id": report_id,
-                "summary": summary_excerpt,
-                "generated_at": now_iso,
-                "revision_trigger": revision_reason,
-            }]
-        },
-        "summaries": {
-            dim_key: {
-                "dimension_key": dim_key, "dimension_name": dim_name, "layer": dim_layer,
-                "summary": summary_excerpt, "key_points": [], "metrics": {},
-                "tags": [], "created_at": now_iso,
-            }
-        },
     }
 
 
-def _build_prompt(cfg, state, tool_results, rag_context) -> str:
-    """组装 Prompt - 使用 prompts 模块模板"""
+def _build_prompt(cfg, state, tool_results, rag_context, deps: str = "") -> str:
+    """组装 Prompt - 使用 prompts 模块模板
+
+    Args:
+        cfg: 维度配置
+        state: 当前状态
+        tool_results: GIS 工具结果
+        rag_context: RAG 检索上下文
+        deps: 前序依赖报告（从数据库加载）
+    """
     from ...services.modules.prompts.analysis import get_dimension_prompt as get_layer1_prompt
     from ...services.modules.prompts.concept import get_dimension_prompt as get_layer2_prompt
     from ...services.modules.prompts.detailed import get_dimension_prompt as get_layer3_prompt
@@ -232,23 +262,6 @@ def _build_prompt(cfg, state, tool_results, rag_context) -> str:
         if r and getattr(r, 'success', False):
             tool_section += f"\n【GIS数据】\n{str(getattr(r, 'data', r))[:1000]}\n"
 
-    # 前序依赖
-    reports = state.get("reports", {})
-    deps = ""
-    if layer == 1:
-        # Layer 1 无依赖，直接传入 village_data
-        pass
-    elif layer == 2:
-        # Layer 2 依赖 Layer 1 报告
-        layer1_reports = reports.get("layer1", {})
-        deps = "\n".join([f"【{k}】{v[:800]}..." for k, v in layer1_reports.items() if v])
-    elif layer == 3:
-        # Layer 3 依赖 Layer 1 和 Layer 2
-        layer1_reports = reports.get("layer1", {})
-        layer2_reports = reports.get("layer2", {})
-        deps = "\n".join([f"【{k}】{v[:500]}..." for k, v in layer1_reports.items() if v])
-        deps += "\n" + "\n".join([f"【{k}】{v[:500]}..." for k, v in layer2_reports.items() if v])
-
     # 根据层级选择 Prompt 模板
     if layer == 1:
         return get_layer1_prompt(
@@ -267,19 +280,14 @@ def _build_prompt(cfg, state, tool_results, rag_context) -> str:
             task_description=task_desc,
             constraints=constraints,
             knowledge_context=rag_context or "",
-            layer2_contexts="\n".join([
-                f"【{k}】{v[:400]}" for k, v in reports.get("layer2", {}).items()
-                if v and k != dim_key
-            ]),
+            layer2_contexts="",  # 同层其他维度上下文暂不传递
         )
     elif layer == 3:
         return get_layer3_prompt(
             dimension_key=dim_key,
             project_name=project_name,
             analysis_report=deps,
-            planning_concept="\n".join([
-                f"【{k}】{v[:600]}" for k, v in reports.get("layer2", {}).items() if v
-            ]),
+            planning_concept=deps,  # 使用相同的依赖报告
             constraints=constraints,
             knowledge_context=rag_context or "",
             professional_data_section=tool_section,
