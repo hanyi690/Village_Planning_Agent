@@ -6,13 +6,11 @@ import { faCompass, faChevronDown, faChevronUp } from '@fortawesome/free-solid-s
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
 import { usePlanningStore } from '../../store';
-import type { DimensionProgressItem } from '../../types';
 import {
   useDimensionProgressAll,
   useCurrentLayer,
   useCompletedLayers,
   useExecutingDimensions,
-  useLayerProgressHistory,
 } from '../../hooks';
 import { getDimensionName } from '../../config/dimensions';
 import { LAYER_VALUE_MAP, LAYER_IDS, NAV_KEYS } from '@/features/planning/constants';
@@ -32,8 +30,8 @@ export default function LayerNav() {
   const currentLayer = useCurrentLayer();
   const completedLayers = useCompletedLayers();
   const executingDimensions = useExecutingDimensions();
-  const layerProgressHistory = useLayerProgressHistory();
   const toolStatuses = usePlanningStore((state) => state.toolStatuses);
+  const reports = usePlanningStore((state) => state.reports);
 
   const [expandedLayers, setExpandedLayers] = useState<Set<number>>(new Set([1, 2, 3]));
   const [showTools, setShowTools] = useState(false);
@@ -54,6 +52,7 @@ export default function LayerNav() {
       3: [],
     };
 
+    // 1. From dimensionProgress (executing or completed dimensions)
     Object.entries(dimensionProgress).forEach(([key, item]) => {
       const layer = item.layer;
       if (layer >= 1 && layer <= 3) {
@@ -65,27 +64,26 @@ export default function LayerNav() {
       }
     });
 
-    (Object.entries(layerProgressHistory) as [string, { dimensionDetails: DimensionProgressItem[] }][]).forEach(
-      ([layerKey, history]) => {
-        const layerNum = parseInt(layerKey.replace('layer', ''), 10);
-        if (layerNum >= 1 && layerNum <= 3 && history?.dimensionDetails) {
-          const existingKeys = result[layerNum].map((d) => d.key);
-          history.dimensionDetails.forEach((item) => {
-            const key = `${item.layer}_${item.dimensionKey}`;
-            if (!existingKeys.includes(key)) {
-              result[layerNum].push({
-                key,
-                name: getDimensionName(item.dimensionKey),
-                status: 'completed',
-              });
-            }
+    // 2. From reports (defensive: handle page refresh where dimensionProgress is empty)
+    for (const layer of [1, 2, 3] as const) {
+      const layerKey = `layer${layer}` as const;
+      const layerReports = reports[layerKey] || {};
+      const existingKeys = result[layer].map((d) => d.key);
+      for (const dimKey of Object.keys(layerReports)) {
+        const key = `${layer}_${dimKey}`;
+        const content = layerReports[dimKey];
+        if (!existingKeys.includes(key) && content && typeof content === 'string' && content.length > 0) {
+          result[layer].push({
+            key,
+            name: getDimensionName(dimKey),
+            status: 'completed',
           });
         }
       }
-    );
+    }
 
     return result;
-  }, [dimensionProgress, layerProgressHistory]);
+  }, [dimensionProgress, reports]);
 
   const navItems = [
     { key: NAV_KEYS.OVERVIEW, icon: faCompass, label: '总览' },

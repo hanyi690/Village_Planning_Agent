@@ -125,6 +125,20 @@ export const planningApi = {
           if (accumulated.length <= 10 || isMilestone) {
             console.log(`[SSE] dimension_delta: ${dimKey} (layer=${layer}, accumulated=${accumulated.length}, delta=${delta.length})`);
           }
+        } else if (type === 'dimension_start') {
+          const dimKey = data.dimension_key || '?';
+          const dimName = data.dimension_name || '?';
+          const layer = data.layer ?? '?';
+          console.log(`[SSE] dimension_start: ${dimKey} (${dimName}), layer=${layer}`);
+        } else if (type === 'rag_result') {
+          const dimKey = data.dimension_key || '?';
+          const totalResults = data.total_results || 0;
+          const query = data.query || '?';
+          console.log(`[SSE] rag_result: ${dimKey}, query="${query}", results=${totalResults}`);
+        } else if (type === 'gis_result') {
+          const dimKey = data.dimension_key || '?';
+          const dimName = data.dimension_name || '?';
+          console.log(`[SSE] gis_result: ${dimKey} (${dimName})`);
         }
 
         onEvent({ type, data, session_id: sessionId });
@@ -154,6 +168,8 @@ export const planningApi = {
       'tool_result',
       'ai_response_delta',
       'ai_response_complete',
+      'rag_result',
+      'gis_result',
     ];
 
     for (const eventType of eventTypes) {

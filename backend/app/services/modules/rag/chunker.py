@@ -55,14 +55,14 @@ class UnifiedMarkdownSlicer:
 
     CONFIGS: Dict[str, SlicerConfig] = {
         "policy": SlicerConfig(split_on=[r'\n(?=第\s*[一二三四五六七八九十百千万0-9]+\s*条)'], chunk_size=2500, overlap=500, min_chunk=50, max_chunk=2500),
-        "case": SlicerConfig(split_on=[r'\n(?=[一二三四五六七八九十]+[、.])', r'\n(?=\d+\.[^\d])'], chunk_size=2000, overlap=400, min_chunk=200, max_chunk=2000),
+        "case": SlicerConfig(parent_child=True, child_size=400, parent_size=2000, chunk_size=2000, overlap=400, min_chunk=200),
         "standard": SlicerConfig(split_on=[r'\n(?=\d+\.\d+(?:\.\d+)?)', r'\n(?=第\s*\d+\s*条)'], chunk_size=1500, overlap=300, min_chunk=80, max_chunk=1500),
-        "guide": SlicerConfig(split_on=[r'\n(?=#{1,3}\s)'], chunk_size=1800, overlap=350, min_chunk=150, max_chunk=1800),
+        "guide": SlicerConfig(parent_child=True, child_size=400, parent_size=1800, chunk_size=1800, overlap=350, min_chunk=150),
         "report": SlicerConfig(parent_child=True, child_size=400, parent_size=2000, chunk_size=2000, overlap=400, min_chunk=100),
-        "textbook": SlicerConfig(split_on=[r'\n(?=#{1,3}\s)', r'\n(?=第[一二三四五六七八九十百]+章)'], chunk_size=1800, overlap=350, min_chunk=150),
+        "textbook": SlicerConfig(parent_child=True, child_size=400, parent_size=1800, chunk_size=1800, overlap=350, min_chunk=150),
         "laws": SlicerConfig(split_on=[r'\n(?=第\s*[一二三四五六七八九十百千万0-9]+\s*条)'], chunk_size=2500, overlap=500, min_chunk=50, max_chunk=2500),
-        "plans": SlicerConfig(split_on=[r'\n(?=#{1,3}\s)', r'\n(?=第[一二三四五六七八九十百]+章)'], chunk_size=2000, overlap=400, min_chunk=100, max_chunk=2000),
-        "domain": SlicerConfig(split_on=[r'\n(?=#{1,3}\s)', r'\n(?=第[一二三四五六七八九十百]+章)'], chunk_size=1800, overlap=350, min_chunk=150, max_chunk=1800),
+        "plans": SlicerConfig(parent_child=True, child_size=400, parent_size=2000, chunk_size=2000, overlap=400, min_chunk=100),
+        "domain": SlicerConfig(parent_child=True, child_size=400, parent_size=1800, chunk_size=1800, overlap=350, min_chunk=150),
         "default": SlicerConfig(chunk_size=2500, overlap=500, min_chunk=100, max_chunk=2500),
     }
 
@@ -173,4 +173,226 @@ class SlicingStrategyFactory:
         cls._slicer.CONFIGS[doc_type] = config
 
 
-__all__ = ["Chunk", "SlicerConfig", "UnifiedMarkdownSlicer", "SlicingStrategyFactory"]
+__all__ = ["Chunk", "SlicerConfig", "UnifiedMarkdownSlicer", "SlicingStrategyFactory", "LLMBoundaryDetector", "SemanticChunkScorer", "EnhancedMarkdownSlicer"]
+
+
+# ==========================================
+# LLM 辅助切分（v5.0 新增）
+# ==========================================
+
+class LLMBoundaryDetector:
+    """LLM 辅助语义边界检测"""
+
+    def __init__(self):
+        from app.core.llm import create_flash_llm
+        self.llm = create_flash_llm(max_tokens=300, temperature=0.1)
+
+    async def validate_boundary_async(self, left_context: str, right_context: str) -> dict:
+        """
+        校验边界是否合理
+
+        Returns:
+            {"should_split": bool, "reason": str}
+        """
+        prompt = f"""判断以下两段文本是否应该在它们之间切分。
+
+左侧文本结尾：
+{left_context[-300:]}
+
+右侧文本开头：
+{right_context[:300]}
+
+判断标准：
+1. 主题是否转换（从一个主题转向另一个主题）
+2. 论述是否完整（左侧是否有完整结尾，右侧是否有完整开头）
+3. 语义连贯性（两段是否属于同一论述）
+
+返回 JSON 格式：{{"should_split": true/false, "reason": "简短理由"}}"""
+
+        try:
+            response = await self.llm.ainvoke(prompt)
+            import json
+            # 尝试解析 JSON
+            content = response.content.strip()
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            result = json.loads(content)
+            return result
+        except Exception as e:
+            logger.warning(f"[LLMBoundaryDetector] Validation failed: {e}")
+            return {"should_split": True, "reason": "fallback to split"}
+
+    async def suggest_boundary_async(self, context: str) -> int:
+        """
+        建议新的边界位置
+
+        Returns:
+            相对于 context 开头的偏移量
+        """
+        prompt = f"""在以下文本中找到最佳切分位置。
+
+文本：
+{context}
+
+要求：
+1. 找到语义完整的切分点（如段落结束、论述完成）
+2. 返回切分点的字符偏移量（从 0 开始）
+
+返回 JSON 格式：{{"boundary_offset": 数字}}"""
+
+        try:
+            response = await self.llm.ainvoke(prompt)
+            import json
+            content = response.content.strip()
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            result = json.loads(content)
+            return result.get("boundary_offset", len(context) // 2)
+        except Exception as e:
+            logger.warning(f"[LLMBoundaryDetector] Suggestion failed: {e}")
+            return len(context) // 2
+
+
+class SemanticChunkScorer:
+    """切片语义完整性评分"""
+
+    def __init__(self):
+        from app.core.llm import create_flash_llm
+        self.llm = create_flash_llm(max_tokens=200, temperature=0.1)
+
+    async def score_chunk_async(self, chunk: str) -> dict:
+        """
+        评估 chunk 的语义完整性
+
+        Returns:
+            {"score": float, "issues": List[str]}
+        """
+        prompt = f"""评估以下文本片段的语义完整性（0-1分）。
+
+文本片段：
+{chunk[:1500]}
+
+评分标准：
+1. 主题一致性（是否围绕单一主题）- 0.4分
+2. 论述完整性（是否有完整的开头和结尾）- 0.3分
+3. 信息密度（是否包含有效信息）- 0.3分
+
+返回 JSON 格式：{{"score": 0.85, "issues": ["问题描述1", "问题描述2"]}}"""
+
+        try:
+            response = await self.llm.ainvoke(prompt)
+            import json
+            content = response.content.strip()
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            result = json.loads(content)
+            return result
+        except Exception as e:
+            logger.warning(f"[SemanticChunkScorer] Scoring failed: {e}")
+            return {"score": 0.5, "issues": ["scoring failed"]}
+
+
+class EnhancedMarkdownSlicer(UnifiedMarkdownSlicer):
+    """
+    增强版切分器：支持 LLM 辅助
+
+    流程：
+    1. 正则初切
+    2. LLM 边界校验（可选）
+    3. 语义评分（可选）
+    4. 返回高质量 chunks
+    """
+
+    def __init__(self, use_llm: bool = False):
+        super().__init__()
+        self.use_llm = use_llm
+        self.llm_detector = LLMBoundaryDetector() if use_llm else None
+        self.chunk_scorer = SemanticChunkScorer() if use_llm else None
+
+    async def slice_async(
+        self,
+        content: str,
+        doc_type: str,
+        metadata: Optional[Dict] = None,
+        validate_boundaries: bool = True,
+        score_chunks: bool = False
+    ) -> List[Chunk]:
+        """
+        异步切分（支持 LLM 辅助）
+
+        Args:
+            content: 文档内容
+            doc_type: 文档类型
+            metadata: 元数据
+            validate_boundaries: 是否校验边界
+            score_chunks: 是否评分
+
+        Returns:
+            Chunk 列表
+        """
+        # 1. 正则初切
+        chunks = self.slice(content, doc_type, metadata)
+
+        if not self.use_llm or not self.llm_detector:
+            return chunks
+
+        # 2. LLM 边界校验
+        if validate_boundaries and len(chunks) > 1:
+            chunks = await self._validate_boundaries_async(content, chunks)
+
+        # 3. 语义评分
+        if score_chunks and self.chunk_scorer:
+            chunks = await self._score_and_filter_async(chunks)
+
+        return chunks
+
+    async def _validate_boundaries_async(self, content: str, chunks: List[Chunk]) -> List[Chunk]:
+        """校验边界并调整"""
+        validated_chunks = []
+
+        for i, chunk in enumerate(chunks):
+            # 检查与前一个 chunk 的边界
+            if i > 0 and chunks[i-1]:
+                left_context = chunks[i-1].content
+                right_context = chunk.content
+
+                result = await self.llm_detector.validate_boundary_async(left_context, right_context)
+
+                if not result.get("should_split", True):
+                    # 边界不合理，合并
+                    logger.info(f"[EnhancedSlicer] Merging chunks at boundary {i}: {result.get('reason')}")
+                    # 合并到前一个 chunk
+                    if validated_chunks:
+                        validated_chunks[-1] = Chunk(
+                            content=validated_chunks[-1].content + "\n" + chunk.content,
+                            metadata=chunk.metadata,
+                            parent_id=chunk.parent_id
+                        )
+                        continue
+
+            validated_chunks.append(chunk)
+
+        return validated_chunks
+
+    async def _score_and_filter_async(self, chunks: List[Chunk], threshold: float = 0.5) -> List[Chunk]:
+        """评分并过滤低质量 chunks"""
+        from app.core.settings import LLM_CHUNK_THRESHOLD
+        threshold = threshold or LLM_CHUNK_THRESHOLD
+
+        scored_chunks = []
+        for chunk in chunks:
+            result = await self.chunk_scorer.score_chunk_async(chunk.content)
+            score = result.get("score", 0.5)
+
+            if score >= threshold:
+                scored_chunks.append(chunk)
+            else:
+                logger.info(f"[EnhancedSlicer] Low score chunk filtered: {score:.2f}, issues: {result.get('issues')}")
+
+        return scored_chunks

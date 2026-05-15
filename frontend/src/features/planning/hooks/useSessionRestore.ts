@@ -14,6 +14,8 @@ import { useSearchParams } from 'next/navigation';
 import { usePlanningStore } from '../store/planningStore';
 import { planningApi } from '../api';
 import { logger } from '@/features/planning/utils/logger';
+import { DIMENSION_NAMES } from '../config/dimensions';
+import type { DimensionProgressItem } from '../types';
 
 interface UseSessionRestoreOptions {
   enabled?: boolean;
@@ -31,6 +33,7 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
   const syncBackendState = usePlanningStore((state) => state.syncBackendState);
   const setStatus = usePlanningStore((state) => state.setStatus);
   const resetConversation = usePlanningStore((state) => state.resetConversation);
+  const setDimensionProgressBatch = usePlanningStore((state) => state.setDimensionProgressBatch);
 
   const restoringRef = useRef(false);
   const restoredSessionIdRef = useRef<string | null>(null);
@@ -102,6 +105,26 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
               const reportsData = await planningApi.getLayerReports(targetSessionId, layer);
               if (reportsData.reports && Object.keys(reportsData.reports).length > 0) {
                 setReports({ [`layer${layer}`]: reportsData.reports });
+
+                // Restore dimensionProgress from reports for completed dimensions
+                const progressUpdates: Record<string, DimensionProgressItem> = {};
+                for (const [dimKey, content] of Object.entries(reportsData.reports)) {
+                  if (content && typeof content === 'string' && content.length > 0) {
+                    const progressKey = `${layer}_${dimKey}`;
+                    progressUpdates[progressKey] = {
+                      dimensionKey: dimKey,
+                      dimensionName: DIMENSION_NAMES[dimKey] || dimKey,
+                      layer,
+                      status: 'completed',
+                      wordCount: content.length,
+                      completedAt: new Date().toISOString(),
+                    };
+                  }
+                }
+                if (Object.keys(progressUpdates).length > 0) {
+                  setDimensionProgressBatch(progressUpdates);
+                }
+
                 logger.context.info(`Loaded layer ${layer} reports`, {
                   dimensionCount: Object.keys(reportsData.reports).length,
                 });
@@ -130,7 +153,7 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
     } finally {
       restoringRef.current = false;
     }
-  }, [setSessionId, syncBackendState, setStatus, setMessages, setReports, resetConversation]);
+  }, [setSessionId, syncBackendState, setStatus, setMessages, setReports, resetConversation, setDimensionProgressBatch]);
 
   // On mount: check if sessionId in URL and restore
   useEffect(() => {

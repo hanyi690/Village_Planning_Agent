@@ -810,6 +810,8 @@ class SSEManager:
 
         if event_type in [SSEEventType.LAYER_COMPLETED, SSEEventType.DIMENSION_COMPLETE]:
             logger.info(f"[SSEManager] Session {session_id}: {event_type} sent to {success_count} subscribers")
+        elif event_type == SSEEventType.RAG_RESULT:
+            logger.info(f"[SSEManager] Session {session_id}: {event_type} sent to {success_count} subscribers")
         else:
             logger.debug(f"[SSEManager] Session {session_id}: {event_type} sent to {success_count} subscribers")
 

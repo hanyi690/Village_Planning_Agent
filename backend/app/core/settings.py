@@ -93,6 +93,11 @@ DEFAULT_TOP_K = int(os.getenv("DEFAULT_TOP_K", "5"))
 RETRIEVE_SCORE_THRESHOLD = float(os.getenv("RETRIEVE_SCORE_THRESHOLD", "0.7"))
 QUERY_CACHE_TTL = int(os.getenv("QUERY_CACHE_TTL", "0"))
 
+# LLM Chunking Configuration
+LLM_CHUNK_ENABLED = os.getenv("LLM_CHUNK_ENABLED", "false").lower() == "true"
+LLM_CHUNK_THRESHOLD = float(os.getenv("LLM_CHUNK_THRESHOLD", "0.7"))
+LLM_CHUNK_MAX_DOC_SIZE = int(os.getenv("LLM_CHUNK_MAX_DOC_SIZE", "10000"))
+
 # Default LLM provider for summarization tasks
 DEFAULT_PROVIDER = os.getenv("MODEL_PROVIDER", LLM_PROVIDER)
 

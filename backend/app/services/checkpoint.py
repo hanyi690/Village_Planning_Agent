@@ -30,7 +30,7 @@ def _get_dimension_names():
     global _DIMENSION_NAMES
     if _DIMENSION_NAMES is None:
         from app.config import get_dimension_config
-        from app.agent.nodes.dimension_node import DIMENSION_NAMES
+        from app.agent.nodes import DIMENSION_NAMES
         _DIMENSION_NAMES = DIMENSION_NAMES
     return _DIMENSION_NAMES
 

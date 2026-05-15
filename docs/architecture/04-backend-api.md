@@ -2,8 +2,8 @@
 
 本文档详细说明后端 API 路由结构和 SSE 管理机制。
 
-> **更新日期**: 2026-05-14
-> **版本**: v3.7 (Services 简化与导入关系优化)
+> **更新日期**: 2026-05-15
+> **版本**: v3.8 (文档与实现对齐)
 
 ## 目录
 
@@ -31,6 +31,8 @@
 | `/api/sessions/{id}/reports/{dim_key}` | GET | 维度报告全文（支持 `?version=N` 查历史版本） |
 | `/api/sessions/{id}/reports/{dim_key}/versions` | GET | 维度版本历史摘要列表 |
 | `/api/sessions/{id}/layer/{layer}/reports` | GET | 层级报告批量获取 |
+| `/api/sessions/{id}/rag-config` | GET | 获取 RAG 配置 |
+| `/api/sessions/{id}/rag-config` | PATCH | 更新 RAG 配置 |
 | `/api/sessions/{id}` | DELETE | 删除会话 |
 
 ### 项目端点
@@ -333,29 +335,26 @@ async def get_dimension_report(session_id: str, dim_key: str, version: Optional[
                 }
         raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
 
-    # 默认：从 checkpoint 读取当前内容
+    # 默认：从数据库获取最新版本
     state = await PlanningRuntimeService.aget_state_values(session_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
-    reports = state.get("reports", {})
-    for layer_key in ["layer1", "layer2", "layer3"]:
-        if dim_key in reports.get(layer_key, {}):
-            return {
-                "session_id": session_id,
-                "dimension_key": dim_key,
-                "layer": int(layer_key[-1]),
-                "content": reports[layer_key][dim_key]
-            }
-
-    raise HTTPException(status_code=404, detail=f"Report not found: {dim_key}")
+    # 从数据库获取报告（ReportStore -> DimensionReport 表）
+    content, layer, _ = await _get_report_from_db(session_id, dim_key)
+    return {
+        "session_id": session_id,
+        "dimension_key": dim_key,
+        "layer": layer,
+        "content": content
+    }
 ```
 
 **查询参数**：
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `version` | int (query) | 否 | 历史版本号，不传则返回当前 checkpoint 中的报告 |
+| `version` | int (query) | 否 | 历史版本号，不传则返回数据库中最新版本 |
 
 ---
 
@@ -490,7 +489,61 @@ async def get_layer_reports(session_id: str, layer: int):
 
 ---
 
-### 13. 项目列表
+### 13. RAG 配置管理
+
+```python
+class RagConfigRequest(BaseModel):
+    """RAG 配置请求"""
+    enabled: Optional[bool] = Field(None, description="是否启用 RAG")
+    knowledge_sources: Optional[List[str]] = Field(None, description="知识源列表")
+
+
+@router.get("/api/sessions/{session_id}/rag-config")
+async def get_rag_config(session_id: str):
+    """获取会话的 RAG 配置"""
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    config = state.get("config", {})
+    return {
+        "session_id": session_id,
+        "rag_enabled": config.get("rag_enabled", True),
+        "knowledge_sources": config.get("knowledge_sources", []),
+    }
+
+
+@router.patch("/api/sessions/{session_id}/rag-config")
+async def update_rag_config(session_id: str, request: RagConfigRequest):
+    """更新会话的 RAG 配置"""
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    updates = {}
+    if request.enabled is not None:
+        updates["config.rag_enabled"] = request.enabled
+    if request.knowledge_sources is not None:
+        updates["config.knowledge_sources"] = request.knowledge_sources
+
+    if updates:
+        await PlanningRuntimeService.aupdate_state(session_id, updates)
+
+    return {"status": "updated", "session_id": session_id}
+```
+
+**PATCH 请求体**：
+
+```json
+{
+  "enabled": true,
+  "knowledge_sources": ["village_planning_guide", "policy_database"]
+}
+```
+
+---
+
+### 14. 项目列表
 
 ```python
 @router.get("/api/projects")
@@ -517,7 +570,7 @@ async def list_projects():
 
 ---
 
-### 14. 项目会话列表
+### 15. 项目会话列表
 
 ```python
 @router.get("/api/projects/{project_name}/sessions")
@@ -529,7 +582,7 @@ async def list_project_sessions(project_name: str):
 
 ---
 
-### 15. 导出规划文档
+### 16. 导出规划文档
 
 ```python
 class ExportRequest(BaseModel):
@@ -586,6 +639,128 @@ async def unified_health_check():
         "modules": ["session", "data", "files", "knowledge"],
         "architecture": "SSE-single-channel"
     }
+```
+
+---
+
+## 会话恢复机制
+
+### 后端恢复流程
+
+当 SSE 连接断开后重连，或页面刷新时，后端通过以下机制恢复会话：
+
+```python
+# backend/app/services/checkpoint.py
+
+class CheckpointService:
+    @classmethod
+    async def rebuild_session_from_db(cls, session_id: str, ...):
+        """从数据库和 checkpoint 重建内存会话"""
+        # 1. 从数据库获取会话元数据
+        db_session = await get_session_async_func(session_id)
+
+        # 2. 从 checkpoint 获取状态
+        initial_state = await PlanningRuntimeService.aget_state_values(session_id)
+
+        # 3. 初始化 SSE 内存会话
+        session_data = {
+            "session_id": db_session["session_id"],
+            "project_name": db_session["project_name"],
+            "events": deque(maxlen=MAX_SESSION_EVENTS),
+            "initial_state": initial_state,
+        }
+        sse_manager.init_session(session_id, session_data)
+
+    @classmethod
+    async def rebuild_events(cls, session_id: str) -> List[Dict]:
+        """从 checkpoint 状态重建关键 SSE 事件"""
+        # 1. 获取 checkpoint 状态
+        checkpoint_state = await PlanningRuntimeService.aget_state(session_id)
+        state = checkpoint_state.values
+
+        # 2. 从数据库批量获取所有层级报告
+        store = ReportStore.get_instance()
+        all_layer_reports = await asyncio.gather(*[
+            store.get_layer_reports(session_id, layer_num)
+            for layer_num in [1, 2, 3]
+        ])
+
+        # 3. 根据已完成层级重建 layer_completed 事件
+        for layer_num in [1, 2, 3]:
+            if layer_completed:
+                event = create_layer_completed_event(...)
+                events.append(event)
+
+                # 4. 为每个完成的维度重建 dimension_complete 事件
+                for dim_key, dim_content in dimension_reports.items():
+                    dim_event = {"type": "dimension_complete", ...}
+                    events.append(dim_event)
+
+        # 5. 处理暂停状态
+        if state.get("pause_after_step"):
+            pause_event = {"type": "pause", ...}
+            events.append(pause_event)
+
+        return events
+```
+
+### 前端恢复流程
+
+前端通过 `useSessionRestore` hook 实现页面刷新后的状态恢复：
+
+```typescript
+// frontend/src/features/planning/hooks/useSessionRestore.ts
+
+const restoreSession = async (targetSessionId: string) => {
+  // 1. 设置 sessionId
+  setSessionId(targetSessionId);
+
+  // 2. 获取会话状态
+  const statusData = await planningApi.getStatus(targetSessionId);
+  syncBackendState(statusData);
+
+  // 3. 加载已完成层级的报告
+  for (const layer of [1, 2, 3]) {
+    const reportsData = await planningApi.getLayerReports(targetSessionId, layer);
+    setReports({ [`layer${layer}`]: reportsData.reports });
+
+    // 4. 恢复 dimensionProgress 状态
+    for (const [dimKey, content] of Object.entries(reportsData.reports)) {
+      progressUpdates[progressKey] = {
+        dimensionKey: dimKey,
+        status: 'completed',
+        wordCount: content.length,
+      };
+    }
+  }
+};
+```
+
+### 加载旧会话报告
+
+通过层级报告批量获取 API 加载历史会话的所有报告：
+
+```python
+@router.get("/api/sessions/{session_id}/layer/{layer}/reports")
+async def get_layer_reports(session_id: str, layer: int):
+    """获取指定层级的所有维度报告"""
+    store = ReportStore.get_instance()
+    reports = await store.get_layer_reports(session_id, layer)
+    return {"session_id": session_id, "layer": layer, "reports": reports}
+```
+
+**响应格式**：
+
+```json
+{
+  "session_id": "abc123",
+  "layer": 1,
+  "reports": {
+    "location": "区位分析报告内容...",
+    "population": "人口分析报告内容...",
+    "land_use": "土地利用报告内容..."
+  }
+}
 ```
 
 ---
@@ -673,6 +848,33 @@ class SessionStatusResponse(BaseModel):
     revision_history: List[Dict[str, Any]]
     last_checkpoint_id: str
 ```
+
+### 报告存储架构
+
+系统使用双表存储机制管理报告数据：
+
+| 表名 | 用途 | 关键字段 |
+|------|------|----------|
+| `DimensionReport` | 存储最新报告内容 | `session_id`, `dimension_key`, `layer`, `content`, `version` |
+| `DimensionRevision` | 存储版本历史 | `session_id`, `dimension_key`, `layer`, `content`, `version`, `reason` |
+
+**关系说明**：
+
+- `DimensionReport`：主存储，通过 `ReportStore` 服务访问，存储每个维度的最新版本
+- `DimensionRevision`：版本历史，通过 `get_dimension_revisions_async` 访问，记录每次修订
+
+**查询流程**：
+
+```python
+# 获取最新版本：ReportStore
+store = ReportStore.get_instance()
+content, layer, version = await store.get_latest_report(session_id, dim_key)
+
+# 获取历史版本：DimensionRevision
+revisions = await get_dimension_revisions_async(session_id, dim_key)
+```
+
+**数据一致性**：报告生成时同时写入两表，确保版本追踪完整。
 
 ---
 
@@ -763,6 +965,7 @@ class SSEManager:
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v3.8 | 2026-05-15 | 文档与实现对齐：更新报告获取逻辑（从数据库而非checkpoint）；新增 RAG 配置 API；补充会话恢复机制和存储架构说明 |
 | v3.7 | 2026-05-14 | Services 简化：删除 router.py/executor.py；CheckpointService 移除代理方法；SessionService 移除重复方法；review.py 直接使用 PlanningRuntimeService |
 | v3.6 | 2026-05-14 | 新增导出端点：`POST /api/planning/export` + `GET /api/planning/export/{project_name}` |
 | v3.5 | 2026-05-10 | 新增项目列表和项目会话 API：`GET /api/projects` + `GET /api/projects/{name}/sessions` |

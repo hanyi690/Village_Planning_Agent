@@ -152,6 +152,7 @@ export type PlanningSSEEventType =
   // RAG & Cascade Events (Demo System)
   | 'rag_query'
   | 'rag_result'
+  | 'gis_result'
   | 'cascade_impact'
   | 'cascade_complete'
   // State Events
@@ -184,12 +185,22 @@ export interface PlanningSSEDataBase {
   timestamp?: number;
   // 维度相关字段
   dimension_key?: string;
+  dimension_name?: string;
   layer?: number;
   has_data?: boolean;
   dimension_count?: number;
   total_chars?: number;
   full_content?: string;
   dimension_reports?: Record<string, string>;
+  // RAG 相关字段
+  query?: string;
+  total_results?: number;
+  documents?: Array<{
+    title?: string;
+    snippet?: string;
+    source?: string;
+    score?: number;
+  }>;
 }
 
 /**

@@ -87,7 +87,7 @@ class ReportStore:
             report_id: UUID for retrieving the report
         """
         report_id = str(uuid.uuid4())
-        summary = content[:200] if len(content) > 200 else content
+        summary = await self._generate_summary(content)
 
         db_report = DimensionReport(
             session_id=session_id,
@@ -111,6 +111,47 @@ class ReportStore:
         logger.info(f"[ReportStore] Saved: {session_id}/{dim_key}/v{version} (id={report_id[:8]}...)")
         return report_id
 
+    async def _generate_summary(self, content: str) -> str:
+        """
+        生成摘要 - 智能策略：短文直接返回，长文用 LLM 生成
+
+        Args:
+            content: 报告内容
+
+        Returns:
+            摘要内容
+        """
+        if not content:
+            return ""
+
+        # 简单清理
+        cleaned = " ".join(content.split())
+
+        # 短报告（< 1000 字）直接返回
+        if len(cleaned) <= 1000:
+            return cleaned
+
+        # 长报告使用 LLM-Flash 生成摘要
+        from app.core.llm import create_flash_llm
+
+        llm = create_flash_llm(max_tokens=300, temperature=0.3)
+
+        prompt = f"""请用300字以内概括以下规划分析报告的核心内容，包括：
+1. 主要发现
+2. 关键结论
+3. 核心建议（如有）
+
+报告内容：
+{cleaned[:3000]}"""
+
+        try:
+            result = await llm.ainvoke(prompt)
+            logger.info(f"[ReportStore] Generated summary via LLM ({len(cleaned)} -> {len(result.content)} chars)")
+            return result.content.strip()
+        except Exception as e:
+            logger.warning(f"[ReportStore] Summary generation failed, using truncation: {e}")
+            return cleaned[:500]
+
     async def get(self, report_id: str) -> Optional[str]:
         """
         Get full report content by report_id
@@ -125,8 +166,8 @@ class ReportStore:
             statement = select(DimensionReport).where(
                 DimensionReport.report_id == report_id
             )
-            result = await db.exec(statement)
-            report = result.first()
+            result = await db.execute(statement)
+            report = result.scalar_one_or_none()
 
             if report:
                 return report.content
@@ -148,8 +189,8 @@ class ReportStore:
             statement = select(DimensionReport).where(
                 DimensionReport.report_id == report_id
             )
-            result = await db.exec(statement)
-            return result.first()
+            result = await db.execute(statement)
+            return result.scalar_one_or_none()
 
     async def get_by_version(
         self,
@@ -174,8 +215,8 @@ class ReportStore:
                 DimensionReport.dimension_key == dim_key,
                 DimensionReport.version == version,
             )
-            result = await db.exec(statement)
-            report = result.first()
+            result = await db.execute(statement)
+            report = result.scalar_one_or_none()
 
             if report:
                 return report.content
@@ -206,8 +247,8 @@ class ReportStore:
                 )
                 .order_by(DimensionReport.version.desc())
             )
-            result = await db.exec(statement)
-            report = result.first()
+            result = await db.execute(statement)
+            report = result.scalar_one_or_none()
 
             if report:
                 return report.content
@@ -238,8 +279,8 @@ class ReportStore:
                 )
                 .order_by(DimensionReport.version.desc())
             )
-            result = await db.exec(statement)
-            return result.first()
+            result = await db.execute(statement)
+            return result.scalar_one_or_none()
 
     async def list_versions(
         self,
@@ -265,8 +306,8 @@ class ReportStore:
                 )
                 .order_by(DimensionReport.version)
             )
-            result = await db.exec(statement)
-            reports = result.all()
+            result = await db.execute(statement)
+            reports = result.scalars().all()
 
             return [
                 ReportVersion(
@@ -325,8 +366,8 @@ class ReportStore:
                 )
                 .order_by(DimensionReport.dimension_key, DimensionReport.version.desc())
             )
-            result = await db.exec(statement)
-            reports = result.all()
+            result = await db.execute(statement)
+            reports = result.scalars().all()
 
             # Keep only latest version per dimension
             result_dict = {}
@@ -352,8 +393,8 @@ class ReportStore:
             statement = select(DimensionReport).where(
                 DimensionReport.session_id == session_id
             )
-            result = await db.exec(statement)
-            reports = result.all()
+            result = await db.execute(statement)
+            reports = result.scalars().all()
             count = len(reports)
 
             for r in reports:

@@ -85,6 +85,7 @@ interface RagDocument {
   title: string;
   snippet: string;
   source?: string;
+  score?: number;
 }
 
 /**
@@ -145,11 +146,6 @@ export interface PlanningState {
   dimensionProgress: Record<string, DimensionProgressItem>;
   executingDimensions: string[];
   layerDimensionCount: Record<number, number>;
-  layerProgressHistory: {
-    layer1?: LayerProgressSnapshot;
-    layer2?: LayerProgressSnapshot;
-    layer3?: LayerProgressSnapshot;
-  };
 
   // ============================================
   // NEW: RAG & Cascade Tracking (Demo System)
@@ -295,7 +291,6 @@ function createInitialState(conversationId: string): PlanningState {
     dimensionProgress: {},
     executingDimensions: [],
     layerDimensionCount: {},
-    layerProgressHistory: {},
     runningTools: [],
     resettingDimensions: [],
 
@@ -369,6 +364,7 @@ export interface PlanningActions {
   setDimensionStreaming: (layer: number, dimensionKey: string, dimensionName: string) => void;
   setDimensionCompleted: (layer: number, dimensionKey: string, wordCount: number) => void;
   clearDimensionProgress: () => void;
+  setDimensionProgressBatch: (updates: Record<string, DimensionProgressItem>) => void;
 
   // Layer & Reports
   setLayerCompleted: (layer: number, completed: boolean) => void;
@@ -761,25 +757,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       };
       const layerNum = layerData.layer || layerData.layer_number || 1;
 
-      // Save history snapshot before resetting (preserve previous layer progress)
-      const prevLayer = state.currentLayer;
-      if (prevLayer && prevLayer !== layerNum && Object.keys(state.dimensionProgress).length > 0) {
-        const prevItems = Object.values(state.dimensionProgress).filter(
-          (p) => p.layer === prevLayer
-        );
-
-        if (prevItems.length > 0) {
-          const layerKey = `layer${prevLayer}` as keyof typeof state.layerProgressHistory;
-          state.layerProgressHistory[layerKey] = {
-            completedAt: new Date().toISOString(),
-            dimensionCount: state.layerDimensionCount[prevLayer] || prevItems.length,
-            completedCount: prevItems.filter((p) => p.status === 'completed').length,
-            totalWordCount: prevItems.reduce((sum, p) => sum + p.wordCount, 0),
-            dimensionDetails: prevItems,
-          };
-        }
-      }
-
       // Core: Update phase first, then derive UI state from it
       state.phase = `layer${layerNum}`;
 
@@ -791,10 +768,16 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         state.layerDimensionCount[layerNum] = layerData.dimension_count;
       }
 
-      // Reset dimensionProgress and executingDimensions for new layer
-      // Note: This only resets progress tracking, not the actual message content
-      state.dimensionProgress = {};
-      state.executingDimensions = [];
+      // Reset dimensionProgress and executingDimensions for current layer only
+      // Preserve other layers' progress so LayerNav can display all dimensions
+      state.dimensionProgress = Object.fromEntries(
+        Object.entries(state.dimensionProgress).filter(
+          ([key]) => !key.startsWith(`${layerNum}_`)
+        )
+      );
+      state.executingDimensions = state.executingDimensions.filter(
+        (k) => !k.startsWith(`${layerNum}_`)
+      );
 
       // Create layer_report message framework for real-time streaming
       // Key: Do NOT overwrite existing message - protect content from history restore or SSE reconnect
@@ -1249,16 +1232,20 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     case 'rag_result': {
       const ragData = data as {
         dimension_key?: string;
-        documents?: Array<{ title: string; snippet: string; source?: string }>;
+        query?: string;
+        query_generation_method?: string;
+        retrieval_latency_ms?: number;
+        total_results?: number;
+        documents?: Array<{ title: string; snippet: string; source?: string; score?: number }>;
         layer?: number;
       };
       const dimKey = ragData.dimension_key || '';
-      if (dimKey && ragData.documents) {
+      if (dimKey) {
         const fullKey = `${ragData.layer || 1}_${dimKey}`;
-        const existing = state.dimensionRagSources[fullKey];
+        console.log(`[RAG] Received rag_result for ${fullKey}:`, ragData.query, ragData.documents?.length, 'documents');
         state.dimensionRagSources[fullKey] = {
-          query: existing?.query || '',
-          documents: ragData.documents,
+          query: ragData.query || '',
+          documents: ragData.documents || [],
         };
       }
       break;
@@ -1512,6 +1499,11 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         state.dimensionProgress = {};
         state.executingDimensions = [];
         state.currentPhase = 'idle';
+      }),
+
+    setDimensionProgressBatch: (updates) =>
+      set((state) => {
+        Object.assign(state.dimensionProgress, updates);
       }),
 
     // Layer & Reports

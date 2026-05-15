@@ -394,16 +394,38 @@ async def execute_scenario_with_runtime(
     completed_dims = []
 
     if isinstance(completed_dims_raw, dict):
-        # 分层字典格式 {layer1: [...], layer2: [...], layer3: [...]}
-        for layer_key in ["layer1", "layer2", "layer3"]:
-            completed_dims.extend(completed_dims_raw.get(layer_key, []))
+        # 检查是否是旧格式 {"full_report": ...}
+        if "full_report" in completed_dims_raw:
+            # 从 reports 推导
+            from app.config import get_dimension_layer
+            reports = execution_state.get("reports", {})
+            completed_dims = []
+            for layer_key in ["layer1", "layer2", "layer3"]:
+                layer_reports = reports.get(layer_key, {})
+                completed_dims.extend(layer_reports.keys())
+            logger.info(f"[Scenario] Converted 'full_report' format to {len(completed_dims)} dimensions")
+        else:
+            # 分层字典格式 {layer1: [...], layer2: [...], layer3: [...]}
+            for layer_key in ["layer1", "layer2", "layer3"]:
+                completed_dims.extend(completed_dims_raw.get(layer_key, []))
     elif isinstance(completed_dims_raw, list):
         # 扁平列表格式（兼容旧数据）
-        completed_dims = completed_dims_raw
+        # 检查是否包含 "full_report"
+        if "full_report" in completed_dims_raw:
+            from app.config import get_dimension_layer
+            reports = execution_state.get("reports", {})
+            completed_dims = []
+            for layer_key in ["layer1", "layer2", "layer3"]:
+                layer_reports = reports.get(layer_key, {})
+                completed_dims.extend(layer_reports.keys())
+            logger.info(f"[Scenario] Converted 'full_report' list to {len(completed_dims)} dimensions")
+        else:
+            completed_dims = completed_dims_raw
     else:
         # 无数据或异常格式，从 reports 推导
         from app.config import get_dimension_layer
         reports = execution_state.get("reports", {})
+        completed_dims = []
         for layer_key in ["layer1", "layer2", "layer3"]:
             layer_reports = reports.get(layer_key, {})
             completed_dims.extend(layer_reports.keys())
@@ -442,6 +464,19 @@ async def execute_scenario_with_runtime(
     # Extract results
     revision_history = state.get("revision_history", [])
     updated_reports = state.get("reports", {})
+
+    # Verify revision execution
+    all_impacted = [target_dimension]
+    for wave_dims in impact_tree.values():
+        all_impacted.extend(wave_dims)
+
+    verification_result = await verify_revision_execution(
+        session_id=execution_session_id,
+        expected_dims=all_impacted,
+        baseline_reports=execution_state.get("reports", {}),
+    )
+    logger.info(f"[Scenario] Verification result: success={verification_result.get('success')}, "
+               f"match_rate={verification_result.get('match_rate', 0):.1%}")
 
     # Build SSE events from revision history
     sse_events = []
@@ -484,6 +519,7 @@ async def execute_scenario_with_runtime(
         "sse_events": sse_events,
         "revision_history": revision_history,
         "updated_reports": updated_reports,
+        "verification": verification_result,
     }
 
 
@@ -630,6 +666,94 @@ async def wait_for_revision_completion_polling(
                   f"revision_history={len(final_state.get('revision_history', []))}, "
                   f"last_revised={len(final_state.get('last_revised_dimensions', []))}")
     return final_state
+
+
+# ============================================
+# Revision Execution Verification
+# ============================================
+
+async def verify_revision_execution(
+    session_id: str,
+    expected_dims: List[str],
+    baseline_reports: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """
+    验证修订是否真正执行
+
+    Args:
+        session_id: 会话ID
+        expected_dims: 预期修订的维度列表
+        baseline_reports: 基线报告（用于对比）
+
+    Returns:
+        验证结果字典
+    """
+    from app.services.checkpoint import checkpoint_service
+    from app.services.report_store import ReportStore
+
+    # 获取最终状态
+    final_state = await checkpoint_service.get_state(session_id, wait_for_write=True)
+
+    if not final_state:
+        return {
+            "success": False,
+            "error": "Session not found",
+            "expected": expected_dims,
+            "actual": [],
+        }
+
+    # 检查 revision_history
+    revision_history = final_state.get("revision_history", [])
+    actual_revised = [entry.get("dimension") for entry in revision_history if entry.get("dimension")]
+
+    # 检查报告版本变化
+    store = ReportStore.get_instance()
+    version_changes = {}
+    for dim in expected_dims:
+        try:
+            versions = await store.get_versions(session_id, dim)
+            version_changes[dim] = {
+                "version_count": len(versions) if versions else 0,
+                "has_revision": len(versions) > 1 if versions else False,
+            }
+        except Exception as e:
+            version_changes[dim] = {"error": str(e)}
+
+    # 计算匹配率
+    expected_set = set(expected_dims)
+    actual_set = set(actual_revised)
+    match_rate = len(expected_set & actual_set) / len(expected_set) if expected_set else 0
+
+    # 检查内容变化（如果有基线报告）
+    content_changes = {}
+    if baseline_reports:
+        final_reports = final_state.get("reports", {})
+        for dim in expected_dims:
+            # 查找维度在哪个layer
+            for layer_key in ["layer1", "layer2", "layer3"]:
+                layer_reports = final_reports.get(layer_key, {})
+                if dim in layer_reports:
+                    new_content = layer_reports.get(dim, "")
+                    old_content = baseline_reports.get(dim, "")
+                    if new_content and old_content:
+                        # 简单的内容变化检测
+                        content_changes[dim] = {
+                            "old_length": len(old_content),
+                            "new_length": len(new_content),
+                            "length_diff": len(new_content) - len(old_content),
+                            "content_changed": new_content != old_content,
+                        }
+                    break
+
+    return {
+        "success": match_rate >= 0.8,  # 80%以上匹配视为成功
+        "expected_dimensions": expected_dims,
+        "actual_revised_dimensions": actual_revised,
+        "match_rate": match_rate,
+        "version_changes": version_changes,
+        "content_changes": content_changes,
+        "revision_history_count": len(revision_history),
+    }
 
 
 # ============================================

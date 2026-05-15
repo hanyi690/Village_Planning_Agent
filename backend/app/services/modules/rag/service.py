@@ -97,52 +97,96 @@ class RagService:
             cls._instance = cls()
         return cls._instance
 
+    async def generate_queries(
+        self,
+        cfg: Any,
+        state: Dict[str, Any]
+    ) -> List[str]:
+        """
+        使用 LLM-Flash 基于依赖信息动态生成多条 RAG 查询
+
+        Args:
+            cfg: Dimension config (has name, rag_query, depends_on, etc.)
+            state: Current agent state (has session_id, completed_dimensions, etc.)
+
+        Returns:
+            多条检索查询字符串
+        """
+        from app.services.report_store import ReportStore
+
+        dim_key = cfg.key if hasattr(cfg, 'key') else "unknown"
+        dim_name = cfg.name if hasattr(cfg, 'name') else dim_key
+        task_desc = cfg.rag_query if hasattr(cfg, 'rag_query') else ""
+        session_id = state.get("session_id", "")
+
+        # 加载依赖摘要
+        depends_on = getattr(cfg, 'depends_on', [])
+        layer_depends_on = getattr(cfg, 'layer_depends_on', [])
+        phase_depends_on = getattr(cfg, 'phase_depends_on', [])
+
+        all_deps = depends_on + layer_depends_on + phase_depends_on
+        store = ReportStore.get_instance()
+
+        # 批量加载依赖摘要（避免 N+1 查询）
+        if all_deps:
+            layer_reports = await store.get_layer_reports(session_id, 1)
+            layer_reports_2 = await store.get_layer_reports(session_id, 2) if phase_depends_on else {}
+            layer_reports_3 = await store.get_layer_reports(session_id, 3) if depends_on else {}
+
+            dependency_summaries = []
+            for dep_key in all_deps:
+                summary = layer_reports.get(dep_key) or layer_reports_2.get(dep_key) or layer_reports_3.get(dep_key)
+                if summary:
+                    dependency_summaries.append(f"【{dep_key}】{summary}")
+        else:
+            dependency_summaries = []
+
+        if not dependency_summaries:
+            # 无依赖时，使用维度名称生成简单查询
+            logger.info(f"[RagService] No dependencies for {dim_key}, using fallback query")
+            return [f"{dim_name} 规划 技术标准"]
+
+        # 使用 Flash LLM 生成查询
+        llm = create_flash_llm(max_tokens=200, temperature=0.3)
+
+        prompt = f"""你是一个专业的规划信息检索助手。根据以下背景信息，为规划任务生成 5-8 条中文检索查询。
+
+## 规划任务
+- 维度：{dim_name}
+- 描述：{task_desc}
+
+## 背景信息
+{chr(10).join(dependency_summaries)}
+
+## 生成要求
+生成 5-8 条中文查询，覆盖不同侧面（政策法规、技术标准、地方规划、相似案例），直接输出查询（每行一条），不要编号或解释。"""
+
+        try:
+            response = await llm.ainvoke(prompt)
+            queries = [q.strip() for q in response.content.split("\n") if q.strip()]
+            logger.info(f"[RagService] Generated {len(queries)} queries for {dim_key}: {queries[:3]}...")
+            return queries[:8]
+        except Exception as e:
+            logger.error(f"[RagService] Query generation failed: {e}")
+            return [f"{dim_name} 规划 技术标准"]
+
     async def generate_query(
         self,
         cfg: Any,
         state: Dict[str, Any]
     ) -> str:
         """
-        Generate search query using LLM
+        Generate single search query (backward compatible)
 
         Args:
-            cfg: Dimension config (has prompt_hint, tools, etc.)
-            state: Current agent state (has phase, summaries, etc.)
+            cfg: Dimension config
+            state: Current agent state
 
         Returns:
-            Optimized search query string
+            Single search query string
         """
-        dim_key = cfg.key if hasattr(cfg, 'key') else "unknown"
-        dim_name = cfg.name if hasattr(cfg, 'name') else dim_key
-        prompt_hint = cfg.prompt_hint if hasattr(cfg, 'prompt_hint') else ""
-        phase = state.get("phase", "")
-        summaries = state.get("summaries", {})
-
-        context_str = ""
-        for key, summary in summaries.items():
-            if summary:
-                context_str += f"- {key}: {summary.get('summary', '')[:100]}...\n"
-
-        query_prompt = f"""Based on the dimension analysis requirements, generate a concise search query (max 20 words) to find relevant regulations and technical standards.
-
-Dimension: {dim_name}
-Phase: {phase}
-Analysis Focus: {prompt_hint}
-
-Previous Context:
-{context_str if context_str else "None (first dimension in layer)"}
-
-Generate only the search query, no explanation:"""
-
-        try:
-            llm = create_flash_llm(temperature=0.3, max_tokens=50)
-            response = await llm.ainvoke(query_prompt)
-            query = response.content.strip()
-            logger.info(f"[RagService] Generated query for {dim_key}: {query}")
-            return query
-        except Exception as e:
-            logger.error(f"[RagService] Query generation failed: {e}")
-            return f"{dim_name} 规划 技术标准"
+        queries = await self.generate_queries(cfg, state)
+        return queries[0] if queries else f"{cfg.name if hasattr(cfg, 'name') else 'unknown'} 规划 技术标准"
 
     async def search(
         self,
@@ -384,8 +428,21 @@ Generate only the search query, no explanation:"""
                 terrain=terrain,
             )
 
-            self.vectorstore.add_documents(split_docs)
-            logger.info(f"Added {len(split_docs)} vectors")
+            # 根据配置判断是否使用 Parent-Child 架构
+            if self._should_use_parent_child(doc_type):
+                parent_child_chunks = self._create_parent_child_chunks(
+                    split_docs, source_name, real_type, category
+                )
+                from .vector_store import ParentChildVectorStore
+                if isinstance(self._vector_store, ParentChildVectorStore):
+                    self._vector_store.add_chunks(parent_child_chunks)
+                    logger.info(f"Added {len(parent_child_chunks)} child chunks (Parent-Child mode for {doc_type})")
+                else:
+                    self.vectorstore.add_documents(split_docs)
+                    logger.info(f"Added {len(split_docs)} vectors (fallback mode)")
+            else:
+                self.vectorstore.add_documents(split_docs)
+                logger.info(f"Added {len(split_docs)} vectors (standard mode for {doc_type})")
             self._update_document_index(source_name, documents, split_docs)
 
             if self._cache:
@@ -487,7 +544,20 @@ Generate only the search query, no explanation:"""
             progress_callback(70.0, "Metadata injection complete")
 
             progress_callback(75.0, "Generating vectors")
-            self.vectorstore.add_documents(split_docs)
+            # 根据配置判断是否使用 Parent-Child 架构
+            if self._should_use_parent_child(doc_type):
+                parent_child_chunks = self._create_parent_child_chunks(
+                    split_docs, source_name, real_type, category
+                )
+                from .vector_store import ParentChildVectorStore
+                if isinstance(self._vector_store, ParentChildVectorStore):
+                    self._vector_store.add_chunks(parent_child_chunks)
+                    logger.info(f"Added {len(parent_child_chunks)} child chunks (Parent-Child mode for {doc_type})")
+                else:
+                    self.vectorstore.add_documents(split_docs)
+            else:
+                self.vectorstore.add_documents(split_docs)
+                logger.info(f"Added {len(split_docs)} vectors (standard mode for {doc_type})")
             progress_callback(85.0, "Vector generation complete")
 
             progress_callback(90.0, "Updating index")
@@ -580,6 +650,65 @@ Generate only the search query, no explanation:"""
 
         except Exception as e:
             logger.warning(f"Update index failed: {e}")
+
+    def _should_use_parent_child(self, doc_type: str) -> bool:
+        """根据文档类型配置判断是否启用 Parent-Child"""
+        from .chunker import UnifiedMarkdownSlicer
+        config = UnifiedMarkdownSlicer.CONFIGS.get(doc_type, UnifiedMarkdownSlicer.CONFIGS["default"])
+        return config.parent_child
+
+    def _create_parent_child_chunks(
+        self,
+        parent_docs: List[Document],
+        source_name: str,
+        real_type: str,
+        category: Optional[str] = None,
+    ) -> List[Any]:
+        """
+        将父块切分为子块，创建 ParentChildChunk 列表
+
+        Args:
+            parent_docs: 父块文档列表
+            source_name: 文档来源名称
+            real_type: 文档类型
+            category: 文档分类
+
+        Returns:
+            ParentChildChunk 列表
+        """
+        from .vector_store import ParentChildChunk
+
+        CHILD_SIZE = 400  # 子块大小
+        CHILD_OVERLAP = 100  # 子块重叠
+
+        all_chunks = []
+
+        for parent_idx, parent_doc in enumerate(parent_docs):
+            parent_content = parent_doc.page_content
+            parent_id = f"{source_name}_{parent_idx}_{hashlib.md5(parent_content.encode()).hexdigest()[:8]}"
+
+            # 切分父块为子块
+            child_splits = self.text_splitter.split_text(parent_content)
+
+            for child_idx, child_content in enumerate(child_splits):
+                child_id = f"{parent_id}_child_{child_idx}"
+                chunk = ParentChildChunk(
+                    child_content=child_content,
+                    child_id=child_id,
+                    parent_content=parent_content,
+                    parent_id=parent_id,
+                    child_index=child_idx,
+                    total_children=len(child_splits),
+                    metadata={
+                        "source": source_name,
+                        "type": real_type,
+                        "category": category or "policies",
+                        **parent_doc.metadata,
+                    },
+                )
+                all_chunks.append(chunk)
+
+        return all_chunks
 
     def _compute_file_hash(self, file_path: Path) -> str:
         """Compute file MD5 hash"""

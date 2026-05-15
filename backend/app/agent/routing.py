@@ -40,21 +40,44 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
     last_msg = messages[-1]
 
-    # 1. 级联修订
-    if state.get("feedback"):
-        target_dim = _infer_dim_from_feedback(state)
-        if not target_dim:
+    # 1. 级联修订 - 修复：同时检查feedback和human_feedback，以及need_revision标志
+    feedback = state.get("feedback") or state.get("human_feedback")
+    need_revision = state.get("need_revision", False)
+
+    if need_revision and feedback:
+        # 从revision_target_dimensions获取目标维度，或从反馈推断
+        target_dims = state.get("revision_target_dimensions", [])
+        if not target_dims:
+            target_dim = _infer_dim_from_feedback(state)
+            if target_dim:
+                target_dims = [target_dim]
+
+        if not target_dims:
+            logger.warning("[after_conversation] No target dimensions for revision")
             return END
-        impacted = get_impact_tree_compat(target_dim)
-        all_dims = [target_dim]
-        for wave_dims in impacted.values():
-            all_dims.extend(wave_dims)
+
+        # 计算所有受影响的维度（包括下游）
+        all_dims = []
+        for target_dim in target_dims:
+            impacted = get_impact_tree_compat(target_dim)
+            all_dims.append(target_dim)
+            for wave_dims in impacted.values():
+                all_dims.extend(wave_dims)
+
+        # 去重
+        all_dims = list(set(all_dims))
+        logger.info(f"[after_conversation] Cascade revision: targets={target_dims}, all_impacted={all_dims}")
 
         new_completed = _reset_dimensions(state.get("completed_dimensions", {}), all_dims)
+
+        # 清除修订标志，分发维度分析
         return [Send("analyze_dimension", {
             **state, "dimension_key": dim,
             "completed_dimensions": new_completed,
-            "feedback": None
+            "feedback": None,
+            "human_feedback": None,
+            "need_revision": False,
+            "revision_target_dimensions": [],
         }) for dim in all_dims]
 
     # 2. 推进意图检测
@@ -77,7 +100,7 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
     处理：
     1. completed -> END
     2. execution_paused -> END（等待审批）
-    3. 待处理维度 -> Send 分发
+    3. 待处理维度 -> Send 分发（检查同层依赖）
     """
     phase = state.get("phase", "layer1")
     if phase == "completed":
@@ -93,18 +116,29 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
     completed = state.get("completed_dimensions", {}).get(f"layer{layer}", [])
     total_dims = get_layer_dimensions(layer)
-    pending = [d for d in total_dims if d not in completed]
+
+    # 检查同层依赖，只分发依赖已完成的 dimensions
+    from ..config.loader import list_dimensions
+
+    dim_configs = list_dimensions(layer)
+    ready_dims = []
+    for dim in dim_configs:
+        if dim.key in completed:
+            continue
+        # 检查同层依赖是否都已完成
+        if all(dep in completed for dep in dim.depends_on):
+            ready_dims.append(dim.key)
 
     logger.info(
-        "[after_analysis] phase=%s layer=%s completed=%d/%d pending=%d",
-        phase, layer, len(completed), len(total_dims), len(pending),
+        "[after_analysis] phase=%s layer=%s completed=%s ready=%s",
+        phase, layer, completed, ready_dims,
     )
 
-    # Dispatch pending dimensions
-    if pending:
-        return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in pending]
+    # Dispatch ready dimensions (dependencies satisfied)
+    if ready_dims:
+        return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in ready_dims]
 
-    logger.info("[after_analysis] No pending dims, returning END")
+    logger.info("[after_analysis] No ready dims, returning END")
     return END
 
 

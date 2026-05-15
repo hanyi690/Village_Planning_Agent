@@ -24,7 +24,6 @@ export {
   useIsDimensionExecuting,
   useCompletedLayers,
   useIsLayerCompleted,
-  useLayerProgressHistory,
   useReports,
   useLayerReports,
   useToolStatuses,

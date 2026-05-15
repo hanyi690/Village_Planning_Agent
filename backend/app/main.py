@@ -32,16 +32,38 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # from app.utils.paths import ...  # 移除：使用 settings.PROJECT_ROOT
 from app.core.settings import LOG_LEVEL
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+# Configure logging with dictConfig to avoid duplicate handlers
+import logging.config
 
-# Reduce third-party log noise
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+            "stream": sys.stdout
+        }
+    },
+    "root": {
+        "level": getattr(logging, LOG_LEVEL, logging.INFO),
+        "handlers": ["console"]
+    },
+    "loggers": {
+        "uvicorn": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "uvicorn.error": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "uvicorn.access": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "httpx": {"level": "WARNING"},
+        "httpcore": {"level": "WARNING"}
+    }
+}
+
+logging.config.dictConfig(LOGGING_CONFIG)
 
 logger = logging.getLogger(__name__)
 

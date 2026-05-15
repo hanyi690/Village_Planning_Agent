@@ -46,5 +46,8 @@ class SSEEventType(str):
     # GIS events
     GIS_RESULT = "gis_result"
 
+    # RAG events
+    RAG_RESULT = "rag_result"
+
 
 __all__ = ["SSEEventType"]
