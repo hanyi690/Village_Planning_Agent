@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from app.api.schemas import TaskStatus, ImageData, UploadedFileMeta
 from app.services.runtime import PlanningRuntimeService
 from app.services.report_store import ReportStore
+from app.database.models import DimensionReport
 from app.database.operations import (
     create_planning_session_async,
     get_dimension_revisions_async,
@@ -47,11 +48,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-async def _get_report_from_db(session_id: str, dim_key: str) -> tuple[str, int, str]:
-    """Helper to fetch report content and layer from database.
+async def _get_report_from_db(session_id: str, dim_key: str) -> dict:
+    """Helper to fetch full report from database.
 
     Returns:
-        tuple of (content, layer, report_id) or raises HTTPException
+        dict with layer, content, knowledge_sources or raises HTTPException
     """
     store = ReportStore.get_instance()
     report = await store.get_latest_report(session_id, dim_key)
@@ -59,7 +60,7 @@ async def _get_report_from_db(session_id: str, dim_key: str) -> tuple[str, int, 
     if not report:
         raise HTTPException(status_code=404, detail=f"Report not found: {dim_key}")
 
-    return report.content, report.layer, report.report_id
+    return report
 
 
 # ============================================
@@ -394,12 +395,13 @@ async def get_dimension_report(session_id: str, dim_key: str, version: Optional[
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
     # 从数据库获取报告
-    content, layer, _ = await _get_report_from_db(session_id, dim_key)
+    report = await _get_report_from_db(session_id, dim_key)
     return {
         "session_id": session_id,
         "dimension_key": dim_key,
-        "layer": layer,
-        "content": content
+        "layer": report.layer,
+        "content": report.content,
+        "knowledge_sources": report.knowledge_sources or [],
     }
 
 
@@ -475,13 +477,12 @@ async def get_project_dimension_report(
             raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
         # 从数据库获取报告
-        content, layer, _ = await _get_report_from_db(session_id, dim_key)
+        report = await _get_report_from_db(session_id, dim_key)
         return {
             "project_name": project_name,
             "session_id": session_id,
             "dimension_key": dim_key,
-            "layer": layer,
-            "content": content,
+            **report,
         }
 
     sessions = await list_planning_sessions_async(project_name=project_name, limit=1)
@@ -491,13 +492,12 @@ async def get_project_dimension_report(
     latest_session_id = sessions[0]["session_id"]
 
     # 从数据库获取报告
-    content, layer, _ = await _get_report_from_db(latest_session_id, dim_key)
+    report = await _get_report_from_db(latest_session_id, dim_key)
     return {
         "project_name": project_name,
         "session_id": latest_session_id,
         "dimension_key": dim_key,
-        "layer": layer,
-        "content": content,
+        **report,
     }
 
 
@@ -603,10 +603,11 @@ async def update_rag_config(session_id: str, request: RagConfigRequest):
 
 @router.get("/api/sessions/{session_id}/layer/{layer}/reports")
 async def get_layer_reports(session_id: str, layer: int):
-    """获取层级报告"""
+    """获取层级报告（包含知识来源）"""
     if layer not in [1, 2, 3]:
         raise HTTPException(status_code=400, detail=f"Invalid layer: {layer}")
-    return await checkpoint_service.get_layer_reports(session_id, layer)
+    store = ReportStore.get_instance()
+    return await store.get_layer_reports_with_sources(session_id, layer)
 
 
 # ============================================

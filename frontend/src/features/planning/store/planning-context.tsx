@@ -17,6 +17,7 @@ import { useEffect, useCallback, useMemo, ReactNode, Suspense } from 'react';
 import { usePlanningStore } from '../store/planningStore';
 import { useSSEConnection, useMessagePersistence, useSessionRestore } from '../hooks';
 import { planningApi, dataApi, VillageInfo, VillageSession, ImageData } from '../api';
+import type { RetrievedChunk } from '../api/types';
 import { createSystemMessage, createErrorMessage, getErrorMessage } from '@/features/planning/utils';
 import { logger } from '@/features/planning/utils/logger';
 import { PLANNING_DEFAULTS } from '../config/planning';
@@ -218,7 +219,9 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
 
   const selectSession = useCallback(
     (session: VillageSession) => {
-      usePlanningStore.getState().setSelectedSession(session);
+      const store = usePlanningStore.getState();
+      store.setSelectedSession(session);
+      store.clearAllRagSources();
     },
     []
   );
@@ -256,8 +259,75 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
             if (dims && dims.length > 0) {
               try {
                 const reportsData = await planningApi.getLayerReports(sessionId, layer);
-                if (reportsData.reports && Object.keys(reportsData.reports).length > 0) {
-                  store.setReports({ [`layer${layer}`]: reportsData.reports });
+                console.log('[loadHistoricalSession] Layer', layer, 'reportsData:', reportsData);
+
+                // Handle both formats (same as useSessionRestore):
+                // 1. New format: {dim_key: {content, knowledge_sources}} (direct dict)
+                // 2. Old format: {layer, reports: {dim_key: {...}}} (wrapped)
+                const reportsDict = (reportsData as unknown as Record<string, unknown>).reports || reportsData;
+                const reportKeys = Object.keys(reportsDict as Record<string, unknown>);
+
+                console.log('[loadHistoricalSession] reportKeys for layer', layer, ':', reportKeys);
+
+                if (reportKeys.length > 0) {
+                  const reportsContent: Record<string, string> = {};
+
+                  for (const [dimKey, reportData] of Object.entries(reportsDict as Record<string, unknown>)) {
+                    console.log('[loadHistoricalSession] Processing dimKey:', dimKey, 'reportData type:', typeof reportData, 'has content:', reportData && typeof reportData === 'object' && 'content' in (reportData as object));
+                    if (typeof reportData === 'string') {
+                      reportsContent[dimKey] = reportData;
+                    } else if (reportData && typeof reportData === 'object' && 'content' in (reportData as object)) {
+                      const reportObj = reportData as { content: string; knowledge_sources?: unknown };
+                      reportsContent[dimKey] = reportObj.content;
+
+                      // Extract RAG knowledge sources
+                      console.log('[loadHistoricalSession] Checking knowledge_sources for', dimKey, ':', reportObj.knowledge_sources);
+                      if (reportObj.knowledge_sources) {
+                        const ks = reportObj.knowledge_sources;
+                        interface KnowledgeSourceLocal {
+                          source: string;
+                          page: number;
+                          doc_type: string;
+                          content: string;
+                        }
+                        let sources: KnowledgeSourceLocal[] = [];
+                        let query = '';
+
+                        const ksObj = ks as Record<string, unknown>;
+                        if ('retrieved_chunks' in ksObj && Array.isArray(ksObj.retrieved_chunks)) {
+                          console.log('[loadHistoricalSession] Found retrieved_chunks, count:', ksObj.retrieved_chunks.length);
+                          sources = (ksObj.retrieved_chunks as RetrievedChunk[]).map((chunk: RetrievedChunk) => ({
+                            source: chunk.source || 'unknown',
+                            page: 0,
+                            doc_type: '',
+                            content: chunk.content_preview || '',
+                          }));
+                          if ('query' in ksObj && typeof ksObj.query === 'string') {
+                            query = ksObj.query;
+                          }
+                        } else {
+                          console.log('[loadHistoricalSession] No retrieved_chunks, ks keys:', Object.keys(ksObj));
+                        }
+
+                        if (sources.length > 0) {
+                          const fullKey = `layer${layer}_${dimKey}`;
+                          const ragDocuments = sources.map(s => ({
+                            title: s.source,
+                            snippet: s.content,
+                            source: s.source,
+                            score: 0,
+                          }));
+                          console.log('[loadHistoricalSession] Setting RAG documents for', fullKey, ':', ragDocuments.length, 'docs, query:', query);
+                          store.setRagDocuments(fullKey, ragDocuments);
+                          if (query) {
+                            store.setRagQuery(fullKey, query);
+                          }
+                        }
+                      }
+                    }
+                  }
+
+                  store.setReports({ [`layer${layer}`]: reportsContent });
                 }
               } catch (error) {
                 console.warn(`Failed to load layer ${layer} reports:`, error);

@@ -259,16 +259,16 @@ class ReportStore:
         self,
         session_id: str,
         dim_key: str
-    ) -> Optional[DimensionReport]:
+    ) -> Optional[dict]:
         """
-        Get latest version report record
+        Get latest version report record as dict (avoid DetachedInstanceError)
 
         Args:
             session_id: Session identifier
             dim_key: Dimension key
 
         Returns:
-            DimensionReport or None
+            dict with layer, content, knowledge_sources or None
         """
         async with get_async_session() as db:
             statement = (
@@ -280,7 +280,14 @@ class ReportStore:
                 .order_by(DimensionReport.version.desc())
             )
             result = await db.execute(statement)
-            return result.scalar_one_or_none()
+            report = result.scalar_one_or_none()
+            if report:
+                return {
+                    "layer": report.layer,
+                    "content": report.content,
+                    "knowledge_sources": report.knowledge_sources or [],
+                }
+            return None
 
     async def list_versions(
         self,
@@ -375,6 +382,46 @@ class ReportStore:
             for r in reports:
                 if r.dimension_key not in seen_dims:
                     result_dict[r.dimension_key] = r.content
+                    seen_dims.add(r.dimension_key)
+
+            return result_dict
+
+    async def get_layer_reports_with_sources(
+        self,
+        session_id: str,
+        layer: int
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Get all reports for a layer with knowledge sources
+
+        Args:
+            session_id: Session identifier
+            layer: Layer number (1/2/3)
+
+        Returns:
+            Dict mapping dim_key -> {content, knowledge_sources}
+        """
+        async with get_async_session() as db:
+            statement = (
+                select(DimensionReport)
+                .where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.layer == layer,
+                )
+                .order_by(DimensionReport.dimension_key, DimensionReport.version.desc())
+            )
+            result = await db.execute(statement)
+            reports = result.scalars().all()
+
+            # Keep only latest version per dimension
+            result_dict: Dict[str, Dict[str, Any]] = {}
+            seen_dims = set()
+            for r in reports:
+                if r.dimension_key not in seen_dims:
+                    result_dict[r.dimension_key] = {
+                        "content": r.content,
+                        "knowledge_sources": r.knowledge_sources or [],
+                    }
                     seen_dims.add(r.dimension_key)
 
             return result_dict

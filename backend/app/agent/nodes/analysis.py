@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 class RetrievedChunk:
     """单个检索到的切片"""
     chunk_id: str
-    content_preview: str  # 前200字符
+    content_preview: str  # 切片内容
     source: str
     score: float
     dimension_tags: List[str]
@@ -165,15 +165,15 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             queries = await RagService.get_instance().generate_queries(cfg, state)
             query_method = "llm_multi"
 
-            # 并行执行所有查询
-            search_tasks = [RagService.get_instance().search(query, top_k=2) for query in queries]
+            # 并行执行所有查询（每条查询取更多结果，后续去重）
+            search_tasks = [RagService.get_instance().search(query, top_k=5) for query in queries]
             all_results_nested = await asyncio.gather(*search_tasks)
             all_results = [r for results in all_results_nested for r in results]
 
-            # 去重并排序（按 score）
+            # 去重并排序（按 score，L2距离越小越相似）
             seen_content = set()
             unique_results = []
-            for r in sorted(all_results, key=lambda x: x.get("score", 0), reverse=True):
+            for r in sorted(all_results, key=lambda x: x.get("score", 999)):
                 content_key = r.get("content", "")[:100]
                 if content_key not in seen_content:
                     seen_content.add(content_key)
@@ -190,7 +190,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             for r in results:
                 chunk = RetrievedChunk(
                     chunk_id=str(hash(r.get("content", "")[:100])),
-                    content_preview=r.get("content", "")[:200],
+                    content_preview=r.get("content", ""),
                     source=r.get("metadata", {}).get("source", "unknown"),
                     score=r.get("score", 0.0),
                     dimension_tags=r.get("metadata", {}).get("dimension_tags", []),
@@ -213,28 +213,27 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 skip_reason="",
             )
 
-            # Send rag_result SSE event for frontend knowledge panel
-            if results:
-                from ...services.sse import sse_manager
-                await sse_manager.publish(session_id, {
-                    "type": "rag_result",
-                    "dimension_key": dim_key,
-                    "layer": dim_layer,
-                    "query": queries,
-                    "query_generation_method": query_method,
-                    "retrieval_latency_ms": latency_ms,
-                    "total_results": len(results),
-                    "documents": [
-                        {
-                            "title": r.get("metadata", {}).get("source", "unknown"),
-                            "snippet": r.get("content", "")[:200],
-                            "source": r.get("metadata", {}).get("source"),
-                            "score": r.get("score", 0.0),
-                        }
-                        for r in results
-                    ],
-                })
-                logger.info(f"[analyze_dimension] {dim_key}: Sent rag_result SSE event with {len(results)} documents")
+            # Send rag_result SSE event for frontend knowledge panel (always send to clear old data)
+            from ...services.sse import sse_manager
+            await sse_manager.publish(session_id, {
+                "type": "rag_result",
+                "dimension_key": dim_key,
+                "layer": dim_layer,
+                "query": queries[0] if queries else "",
+                "query_generation_method": query_method,
+                "retrieval_latency_ms": latency_ms,
+                "total_results": len(results),
+                "documents": [
+                    {
+                        "title": r.get("metadata", {}).get("source", "unknown"),
+                        "snippet": r.get("content", ""),
+                        "source": r.get("metadata", {}).get("source"),
+                        "score": r.get("score", 0.0),
+                    }
+                    for r in results
+                ],
+            })
+            logger.info(f"[analyze_dimension] {dim_key}: Sent rag_result SSE event with {len(results)} documents")
 
             if rag_context:
                 logger.info(f"[analyze_dimension] {dim_key}: RAG retrieved {len(rag_context)} chars, {len(results)} chunks, {latency_ms:.1f}ms")
@@ -255,6 +254,20 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 rag_enabled=True,
                 skip_reason=f"Error: {str(e)}",
             )
+
+            # Send empty rag_result SSE event to clear old data on frontend
+            from ...services.sse import sse_manager
+            await sse_manager.publish(session_id, {
+                "type": "rag_result",
+                "dimension_key": dim_key,
+                "layer": dim_layer,
+                "query": "",
+                "query_generation_method": "error",
+                "retrieval_latency_ms": 0,
+                "total_results": 0,
+                "documents": [],
+            })
+            logger.info(f"[analyze_dimension] {dim_key}: Sent empty rag_result SSE event (RAG error)")
     else:
         reasons = []
         if not layer_rag_enabled:
@@ -278,6 +291,20 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             rag_enabled=False,
             skip_reason=skip_reason,
         )
+
+        # Send empty rag_result SSE event to clear old data on frontend
+        from ...services.sse import sse_manager
+        await sse_manager.publish(session_id, {
+            "type": "rag_result",
+            "dimension_key": dim_key,
+            "layer": dim_layer,
+            "query": "",
+            "query_generation_method": "skipped",
+            "retrieval_latency_ms": 0,
+            "total_results": 0,
+            "documents": [],
+        })
+        logger.info(f"[analyze_dimension] {dim_key}: Sent empty rag_result SSE event (RAG skipped)")
 
     # 4. 从数据库加载依赖报告（按配置过滤）
     store = ReportStore.get_instance()

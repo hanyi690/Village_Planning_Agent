@@ -23,7 +23,7 @@ from langchain_core.tools import Tool, tool
 
 from ..registry import ToolRegistry
 from app.utils.logger import get_logger
-from ...services.modules.rag.context import get_context_manager
+from ...services.modules.rag.context import get_context_provider
 from ...core.settings import DEFAULT_TOP_K
 
 logger = get_logger(__name__)
@@ -141,7 +141,7 @@ def list_available_documents(query: str = "") -> str:
     - 文档名称、类型、切片数量、内容预览
     """
     try:
-        cm = get_context_manager()
+        cm = get_context_provider()
         cm._ensure_loaded()
 
         if not cm.doc_index:
@@ -182,7 +182,7 @@ def get_document_overview(source: str, include_chapters: bool = True) -> str:
     - 章节标题列表（如果 include_chapters=True）
     """
     try:
-        cm = get_context_manager()
+        cm = get_context_provider()
         result = cm.get_executive_summary(source)
 
         if "error" in result:
@@ -232,7 +232,7 @@ def get_chapter_content(source: str, chapter_pattern: str, detail_level: str = "
     - 根据 detail_level 返回不同详细程度的章节内容
     """
     try:
-        cm = get_context_manager()
+        cm = get_context_provider()
 
         if detail_level == "summary":
             result = cm.get_chapter_summary(source, chapter_pattern)
@@ -375,7 +375,7 @@ def search_knowledge(
                 fragment.append(f"内容: {doc.page_content}")
             elif context_chars > 0 and start_index > 0:
                 try:
-                    cm = get_context_manager()
+                    cm = get_context_provider()
                     ctx = cm.get_context_around_chunk(source, start_index, context_chars)
 
                     if "error" not in ctx and (ctx.get('before') or ctx.get('after')):
@@ -421,7 +421,7 @@ def search_key_points(query: str, sources: Optional[list[str]] = None) -> str:
             query = query.get("query", "")
             sources = query.get("sources")
 
-        cm = get_context_manager()
+        cm = get_context_provider()
 
         sources_list = None
         if sources:
@@ -467,7 +467,7 @@ def get_full_document(source: str) -> str:
     - 谨慎使用，优先考虑 get_document_overview 或 get_chapter_content
     """
     try:
-        cm = get_context_manager()
+        cm = get_context_provider()
         result = cm.get_full_document(source)
 
         if "error" in result:
@@ -592,7 +592,7 @@ def key_points_search_tool(query: str, sources: Optional[str] = None) -> str:
     """
     sources_list = _parse_comma_separated(sources) if sources else None
 
-    cm = get_context_manager()
+    cm = get_context_provider()
     result = cm.search_key_points(query, sources_list)
 
     if result['total_matches'] == 0:

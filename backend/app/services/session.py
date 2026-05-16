@@ -20,7 +20,6 @@ from app.database.operations import (
     get_planning_session_async,
     update_planning_session_async,
     delete_planning_session_async,
-    delete_ui_messages_async,
 )
 
 logger = logging.getLogger(__name__)
@@ -101,8 +100,7 @@ class SessionService:
         Removes session from:
         1. Memory (via SSEManager)
         2. Database (planning_sessions table)
-        3. UI messages (ui_messages table)
-        4. LangGraph checkpoints
+        3. LangGraph checkpoints
 
         Args:
             session_id: Session identifier
@@ -113,7 +111,6 @@ class SessionService:
         result = {
             "memory": False,
             "database": False,
-            "ui_messages": False,
             "checkpoint": False,
         }
 
@@ -129,14 +126,7 @@ class SessionService:
         db_deleted = await delete_planning_session_async(session_id)
         result["database"] = db_deleted
 
-        # 3. Delete UI messages
-        try:
-            await delete_ui_messages_async(session_id)
-            result["ui_messages"] = True
-        except Exception as e:
-            logger.warning(f"[SessionService] [{session_id}] Failed to delete UI messages: {e}")
-
-        # 4. Delete LangGraph checkpoint
+        # 3. Delete LangGraph checkpoint
         if project_name:
             try:
                 from app.agent.graph import create_unified_planning_graph

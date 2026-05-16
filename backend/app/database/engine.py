@@ -136,7 +136,7 @@ async def init_async_db() -> bool:
 
         # Import all models to ensure they are registered with SQLModel
         # Note: Checkpoint is excluded because it's now managed by LangGraph's AsyncSqliteSaver
-        from .models import PlanningSession, UISession, UIMessage, DimensionReport
+        from .models import PlanningSession, UISession, DimensionReport
 
         # Create all tables (except checkpoints, which is managed by LangGraph)
         async with engine.begin() as conn:

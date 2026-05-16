@@ -3,33 +3,33 @@ RAG Service - Dynamic knowledge retrieval and management
 
 Design:
 - LLM-generated query based on dimension config and state
-- Uses ParentChildVectorStore for retrieval
+- Uses HierarchyVectorStore for retrieval
 - Small-to-Big architecture: retrieve child, return parent
 - Returns formatted context string for prompt injection
 - Knowledge base management: add/delete/list documents
 
-来源合并：
-- src/services/rag_service.py (原有检索功能)
-- src/rag/core/kb_manager.py (知识库管理)
-- src/rag/core/summarization.py (摘要生成)
+2026-05-16: 重写，集成层级切片
 """
 
 import re
 import hashlib
+import time
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass
 
+from cachetools import TTLCache
+
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.utils.logger import get_logger
-from .context import DocumentContextManager, DocumentIndex
 from app.core.llm import create_flash_llm
 from app.core.settings import (
-    CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_COLLECTION_NAME,
-    CHROMA_PERSIST_DIR, DATA_DIR, DEFAULT_PROVIDER,
+    CHROMA_COLLECTION_NAME,
+    CHROMA_PERSIST_DIR, DATA_DIR, DEFAULT_PROVIDER, OUTLINE_INDEX_DIR,
 )
+from .utils.metadata_extractor import MetadataExtractor, ExtractedMetadata
 
 logger = get_logger(__name__)
 
@@ -55,47 +55,132 @@ class RagService:
     """
 
     _instance: Optional["RagService"] = None
+    _lock: threading.Lock = threading.Lock()
     _vector_store = None
     _cache = None
-    _text_splitter = None
+    _query_cache: TTLCache = TTLCache(maxsize=1000, ttl=3600)
 
     def __init__(self):
         """Initialize RAG service"""
         try:
-            from .vector_store import ParentChildVectorStore, get_vector_cache
-            self._vector_store = ParentChildVectorStore()
+            from .vector_store import HierarchyVectorStore, get_vector_cache
+            self._vector_store = HierarchyVectorStore()
             self._cache = get_vector_cache()
-            logger.info("[RagService] Vector store initialized")
+            logger.info("[RagService] HierarchyVectorStore initialized")
         except ImportError as e:
             logger.warning(f"[RagService] Vector store unavailable: {e}")
             self._vector_store = None
             self._cache = None
 
-        self._context_manager = DocumentContextManager()
-
-    @property
-    def vectorstore(self):
-        """Get vector store"""
-        if self._cache:
-            return self._cache.get_vectorstore()
-        return self._vector_store
-
-    @property
-    def text_splitter(self):
-        """Get text splitter"""
-        if self._text_splitter is None:
-            self._text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP,
-                length_function=len, add_start_index=True,
-            )
-        return self._text_splitter
-
     @classmethod
     def get_instance(cls) -> "RagService":
-        """Get singleton instance"""
+        """Get singleton instance (thread-safe)"""
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
+
+    def _build_query_prompt(self, dim_name: str, task_desc: str, layer: int,
+                            dependency_summaries: List[str]) -> str:
+        """根据 Layer 构建不同的 Prompt
+
+        Args:
+            dim_name: 维度名称
+            task_desc: 任务描述（rag_query）
+            layer: 层级（1=现状分析, 2=规划思路, 3=详细规划）
+            dependency_summaries: 依赖摘要列表
+
+        Returns:
+            定制化的 Prompt
+        """
+        if layer == 1:
+            # Layer 1: 现状分析 - 侧重分析方法和技术标准
+            return f"""你是一个专业的村庄规划现状分析专家。为以下分析任务生成精准的检索查询。
+
+## 分析任务
+- 维度：{dim_name}
+- 关键词：{task_desc}
+
+## 检索目标
+检索村庄规划现状分析所需的：
+1. 技术规范和标准（如《村庄规划技术规范》）
+2. 数据采集和分析方法
+3. 评价指标和计算公式
+
+## 生成要求
+生成 4-6 条精准查询（每条 10-20 字），要求：
+1. 使用专业术语（如"人均建设用地指标""村庄人口规模预测"）
+2. 侧重技术方法和标准规范
+3. 避免泛化查询（如"村庄规划""经济发展"）
+
+直接输出查询（每行一条），不要编号或解释。"""
+
+        elif layer == 3:
+            # Layer 3: 详细规划 - 侧重规划编制标准和案例
+            deps_text = chr(10).join(dependency_summaries[:3]) if dependency_summaries else "无"
+            return f"""你是一个专业的村庄规划编制专家。根据以下背景信息，生成精准的检索查询。
+
+## 规划任务
+- 维度：{dim_name}
+- 关键词：{task_desc}
+
+## 已知背景
+{deps_text}
+
+## 检索目标
+检索村庄规划编制所需的：
+1. 规划编制技术标准（用地指标、设施配置标准等）
+2. 政策法规要求（审批流程、用地政策等）
+3. 相似案例参考（其他村庄规划实践）
+
+## 生成要求
+生成 4-6 条精准查询（每条 10-20 字），要求：
+1. 使用专业术语（如"村庄建设用地指标""公共服务设施配置标准"）
+2. 结合背景信息中的村庄特点
+3. 覆盖技术标准和政策要求
+
+直接输出查询（每行一条），不要编号或解释。"""
+
+        else:
+            # Layer 2 或其他：通用 Prompt
+            deps_text = chr(10).join(dependency_summaries[:2]) if dependency_summaries else "无"
+            return f"""你是一个专业的规划信息检索专家。根据以下信息生成检索查询。
+
+## 任务
+- 维度：{dim_name}
+- 描述：{task_desc}
+
+## 背景
+{deps_text}
+
+生成 3-5 条精准查询，直接输出（每行一条），不要编号或解释。"""
+
+    def _expand_query(self, query: str) -> List[str]:
+        """查询扩展：生成同义查询
+
+        Args:
+            query: 原始查询
+
+        Returns:
+            扩展后的查询列表（包含原始查询）
+        """
+        # 领域同义词词典
+        SYNONYMS = {
+            "村庄": ["农村", "乡村", "村镇"],
+            "规划": ["规划编制", "规划设计", "空间规划"],
+            "用地": ["土地", "建设用地", "用地分类"],
+            "标准": ["规范", "技术规范", "标准规范"],
+            "指标": ["控制指标", "规划指标", "技术指标"],
+        }
+
+        expanded = [query]
+        for term, synonyms in SYNONYMS.items():
+            if term in query:
+                for syn in synonyms[:2]:  # 每个词最多扩展2个
+                    expanded.append(query.replace(term, syn))
+
+        return expanded[:3]  # 最多返回3条
 
     async def generate_queries(
         self,
@@ -119,12 +204,31 @@ class RagService:
         task_desc = cfg.rag_query if hasattr(cfg, 'rag_query') else ""
         session_id = state.get("session_id", "")
 
+        # 获取 Layer 信息
+        dim_layer = 1  # 默认 Layer 1
+        if hasattr(cfg, 'phase_id'):
+            phase_id = getattr(cfg, 'phase_id', 'layer1')
+            if phase_id.startswith('layer'):
+                try:
+                    dim_layer = int(phase_id.replace('layer', ''))
+                except ValueError:
+                    pass
+
         # 加载依赖摘要
         depends_on = getattr(cfg, 'depends_on', [])
         layer_depends_on = getattr(cfg, 'layer_depends_on', [])
         phase_depends_on = getattr(cfg, 'phase_depends_on', [])
 
         all_deps = depends_on + layer_depends_on + phase_depends_on
+
+        # 生成缓存键：维度 + rag_query + 依赖列表 + layer
+        # 关键修复：包含 rag_query 以区分不同的检索词
+        cache_key = self._make_query_cache_key(dim_key, task_desc, all_deps + [f"layer{dim_layer}"])
+        cached = self._get_cached_queries(cache_key)
+        if cached:
+            logger.info(f"[RagService] Using cached queries for {dim_key}")
+            return cached
+
         store = ReportStore.get_instance()
 
         # 批量加载依赖摘要（避免 N+1 查询）
@@ -141,34 +245,53 @@ class RagService:
         else:
             dependency_summaries = []
 
-        if not dependency_summaries:
-            # 无依赖时，使用维度名称生成简单查询
-            logger.info(f"[RagService] No dependencies for {dim_key}, using fallback query")
-            return [f"{dim_name} 规划 技术标准"]
+        # 使用分 Layer Prompt
+        prompt = self._build_query_prompt(dim_name, task_desc, dim_layer, dependency_summaries)
 
         # 使用 Flash LLM 生成查询
         llm = create_flash_llm(max_tokens=200, temperature=0.3)
 
-        prompt = f"""你是一个专业的规划信息检索助手。根据以下背景信息，为规划任务生成 5-8 条中文检索查询。
-
-## 规划任务
-- 维度：{dim_name}
-- 描述：{task_desc}
-
-## 背景信息
-{chr(10).join(dependency_summaries)}
-
-## 生成要求
-生成 5-8 条中文查询，覆盖不同侧面（政策法规、技术标准、地方规划、相似案例），直接输出查询（每行一条），不要编号或解释。"""
-
         try:
             response = await llm.ainvoke(prompt)
             queries = [q.strip() for q in response.content.split("\n") if q.strip()]
-            logger.info(f"[RagService] Generated {len(queries)} queries for {dim_key}: {queries[:3]}...")
+            logger.info(f"[RagService] Generated {len(queries)} queries for {dim_key} (layer={dim_layer}): {queries[:3]}...")
+            # 缓存结果
+            self._cache_queries(cache_key, queries[:8])
             return queries[:8]
         except Exception as e:
             logger.error(f"[RagService] Query generation failed: {e}")
             return [f"{dim_name} 规划 技术标准"]
+
+    def _make_query_cache_key(self, dim_key: str, task_desc: str, deps: List[str]) -> str:
+        """生成查询缓存键
+
+        Args:
+            dim_key: 维度键
+            task_desc: rag_query 检索词（关键：区分不同检索词）
+            deps: 依赖列表
+        """
+        deps_str = ",".join(sorted(deps))
+        # 包含 task_desc 以确保不同检索词有不同的缓存
+        return hashlib.md5(f"{dim_key}:{task_desc}:{deps_str}".encode()).hexdigest()
+
+    def _get_cached_queries(self, cache_key: str) -> Optional[List[str]]:
+        """从缓存获取查询"""
+        if cache_key in self._query_cache:
+            cached_data = self._query_cache[cache_key]
+            if isinstance(cached_data, dict):
+                if time.time() - cached_data["timestamp"] < self._query_cache_ttl:
+                    return cached_data["queries"]
+                else:
+                    del self._query_cache[cache_key]
+        return None
+
+    def _cache_queries(self, cache_key: str, queries: List[str]) -> None:
+        """缓存查询结果"""
+        self._query_cache[cache_key] = {
+            "queries": queries,
+            "timestamp": time.time()
+        }
+        logger.debug(f"[RagService] Cached queries: {cache_key[:8]}...")
 
     async def generate_query(
         self,
@@ -208,7 +331,7 @@ class RagService:
             return []
 
         try:
-            results = self._vector_store.search(query, k=top_k)
+            results = self._vector_store.retrieve(query, k=top_k)
             logger.info(f"[RagService] Found {len(results)} results for: {query[:50]}")
             return results
         except Exception as e:
@@ -252,9 +375,6 @@ class RagService:
             source = metadata.get("source", "Unknown")
             doc_type = metadata.get("doc_type", "法规")
 
-            if len(content) > 500:
-                content = content[:500] + "..."
-
             context_parts.append(f"【参考{i+1} - {doc_type}】\n来源: {source}\n内容:\n{content}\n")
 
         return "\n".join(context_parts)
@@ -278,7 +398,7 @@ class RagService:
             content = result.get("content", "")
             source = result.get("metadata", {}).get("source", "未知")
             parts.append(f"\n### 参考 {i+1}: {source}")
-            parts.append(content[:300])
+            parts.append(content)
 
         return "\n".join(parts)
 
@@ -289,24 +409,9 @@ class RagService:
     def list_documents(self) -> List[Dict[str, Any]]:
         """List all documents in knowledge base"""
         try:
-            if self._cache is None:
+            if self._vector_store is None:
                 return []
-            collection = self.vectorstore._collection
-            results = collection.get(include=["metadatas"])
-            if not results or not results.get("ids"):
-                return []
-            doc_stats: Dict[str, Dict] = {}
-            for idx, doc_id in enumerate(results["ids"]):
-                metadata = results["metadatas"][idx] if results.get("metadatas") else {}
-                source = metadata.get("source", "unknown")
-                if source not in doc_stats:
-                    doc_stats[source] = {
-                        "source": source,
-                        "chunk_count": 0,
-                        "doc_type": metadata.get("document_type", "unknown"),
-                    }
-                doc_stats[source]["chunk_count"] += 1
-            return list(doc_stats.values())
+            return self._vector_store.list_sources()
         except Exception as e:
             logger.error(f"[RagService] List documents failed: {e}")
             return []
@@ -328,13 +433,26 @@ class RagService:
     def delete_document(self, source_name: str) -> Dict[str, Any]:
         """Delete document from knowledge base"""
         try:
-            collection = self.vectorstore._collection
-            collection.delete(where={"source": source_name})
-            if source_name in self._context_manager.doc_index:
-                del self._context_manager.doc_index[source_name]
-                self._context_manager.save()
+            # 1. 删除向量库数据
+            if self._vector_store:
+                self._vector_store.delete_by_source(source_name)
+                # 清理内存中的树索引
+                if source_name in self._vector_store._tree_indices:
+                    del self._vector_store._tree_indices[source_name]
+
+            # 2. 删除 JSON 缓存文件
+            from .context import OutlineIndexManager
+            OutlineIndexManager().delete(source_name)
+
+            # 3. 删除临时 MD 文件（如果存在）
+            temp_md = OUTLINE_INDEX_DIR / f"{Path(source_name).stem}.md"
+            if temp_md.exists():
+                temp_md.unlink()
+
+            # 4. 清理查询缓存
             if self._cache:
                 self._cache.clear_cache()
+
             return {"status": "success", "message": f"Deleted: {source_name}"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -363,17 +481,28 @@ class RagService:
             Result with status, chunks_added, message
         """
         from .utils.document_loader import FileTypeDetector, _create_loader
-        from .utils.text_splitter import SlicingStrategyFactory
-        from .injector import MetadataInjector
+        from .chunker import HierarchySlicer
 
         path = Path(file_path)
         if not path.exists():
             return {"status": "error", "message": f"File not found: {file_path}"}
 
         source_name = path.name
-        existing = self._check_document_exists(source_name)
-        if existing:
-            logger.warning(f"Document exists, deleting old version: {source_name}")
+        file_hash = self._compute_file_hash(path)
+
+        # 增量更新：检查文件是否变化
+        if not self._should_update_document(source_name, file_hash):
+            logger.info(f"Document unchanged, skipping: {source_name}")
+            return {
+                "status": "skipped",
+                "message": f"Document unchanged: {source_name}",
+                "source": source_name,
+                "chunks_added": 0,
+            }
+
+        # 删除旧版本（如果存在）
+        if self._check_document_exists(source_name):
+            logger.info(f"Document changed, updating: {source_name}")
             self.delete_document(source_name)
 
         try:
@@ -396,54 +525,36 @@ class RagService:
                 doc_type = self._infer_doc_type(source_name, full_content)
                 logger.info(f"Inferred doc_type: {doc_type}")
 
-            splits = SlicingStrategyFactory.slice_document(
-                full_content, doc_type, {"source": source_name}
-            )
-            logger.info(f"Sliced into {len(splits)} fragments (strategy: {doc_type})")
+            # 将内容保存为临时 Markdown 文件以使用缓存
+            temp_md_path = OUTLINE_INDEX_DIR / f"{source_name}.md"
+            OUTLINE_INDEX_DIR.mkdir(parents=True, exist_ok=True)
+            temp_md_path.write_text(full_content, encoding="utf-8")
 
-            split_docs = []
-            for idx, split in enumerate(splits):
-                start_index = full_content.find(split) if idx == 0 else 0
-                doc = Document(
-                    page_content=split,
-                    metadata={
-                        "source": source_name,
-                        "type": real_type,
-                        "chunk_index": idx,
-                        "total_chunks": len(splits),
-                        "category": category or "policies",
-                        "start_index": start_index,
-                        "file_hash": self._compute_file_hash(path),
-                    }
-                )
-                split_docs.append(doc)
+            # 使用层级切片器（带缓存）
+            slicer = HierarchySlicer()
+            chunks, index = slicer.slice_with_cache(str(temp_md_path), source_name)
+            logger.info(f"Hierarchy sliced into {len(chunks)} chunks (with cache)")
 
-            logger.info("Injecting metadata...")
-            injector = MetadataInjector()
-            injector.inject_batch(
-                split_docs,
-                category=category,
-                doc_type=doc_type,
-                dimension_tags=dimension_tags,
-                terrain=terrain,
-            )
+            # 注入元数据
+            for chunk in chunks:
+                chunk.metadata["doc_type"] = doc_type
+                chunk.metadata["category"] = category or "policies"
+                if dimension_tags:
+                    chunk.metadata["dimension_tags"] = dimension_tags
+                if terrain:
+                    chunk.metadata["terrain"] = terrain
 
-            # 根据配置判断是否使用 Parent-Child 架构
-            if self._should_use_parent_child(doc_type):
-                parent_child_chunks = self._create_parent_child_chunks(
-                    split_docs, source_name, real_type, category
-                )
-                from .vector_store import ParentChildVectorStore
-                if isinstance(self._vector_store, ParentChildVectorStore):
-                    self._vector_store.add_chunks(parent_child_chunks)
-                    logger.info(f"Added {len(parent_child_chunks)} child chunks (Parent-Child mode for {doc_type})")
-                else:
-                    self.vectorstore.add_documents(split_docs)
-                    logger.info(f"Added {len(split_docs)} vectors (fallback mode)")
+            # 添加到层级向量存储
+            from .vector_store import HierarchyVectorStore
+            if isinstance(self._vector_store, HierarchyVectorStore):
+                self._vector_store.add_hierarchy_chunks(chunks)
+                logger.info(f"Added {len(chunks)} hierarchy chunks")
             else:
-                self.vectorstore.add_documents(split_docs)
-                logger.info(f"Added {len(split_docs)} vectors (standard mode for {doc_type})")
-            self._update_document_index(source_name, documents, split_docs)
+                # Fallback: 直接添加文档
+                docs = [Document(page_content=c.content, metadata=c.metadata) for c in chunks]
+                if self._cache:
+                    self._cache.get_vectorstore().add_documents(docs)
+                logger.info(f"Added {len(docs)} documents (fallback mode)")
 
             if self._cache:
                 self._cache.clear_cache()
@@ -452,7 +563,7 @@ class RagService:
                 "status": "success",
                 "message": f"Successfully added: {source_name}",
                 "source": source_name,
-                "chunks_added": len(split_docs),
+                "chunks_added": len(chunks),
                 "doc_type": real_type,
             }
 
@@ -460,6 +571,115 @@ class RagService:
             import traceback
             traceback.print_exc()
             return {"status": "error", "message": f"Add document failed: {str(e)}"}
+
+    async def add_markdown_document(
+        self,
+        file_path: str,
+        use_llm_inference: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Add Markdown document directly to knowledge base
+
+        This method is optimized for pre-parsed Markdown files in _doc_md/.
+        It extracts metadata from file path and uses LLM Flash for doc_type inference.
+
+        Args:
+            file_path: Path to Markdown file
+            use_llm_inference: Whether to use LLM Flash for doc_type inference
+
+        Returns:
+            Result with status, chunks_added, message
+        """
+        from .chunker import HierarchySlicer
+        from .vector_store import HierarchyVectorStore
+
+        path = Path(file_path)
+        if not path.exists():
+            return {"status": "error", "message": f"File not found: {file_path}"}
+
+        if path.suffix.lower() != ".md":
+            return {"status": "error", "message": f"Not a Markdown file: {path.suffix}"}
+
+        source_name = path.name
+        file_hash = self._compute_file_hash(path)
+
+        # Check if document needs update
+        if not self._should_update_document(source_name, file_hash):
+            logger.info(f"Document unchanged, skipping: {source_name}")
+            return {
+                "status": "skipped",
+                "message": f"Document unchanged: {source_name}",
+                "source": source_name,
+                "chunks_added": 0,
+            }
+
+        # Delete old version if exists
+        if self._check_document_exists(source_name):
+            logger.info(f"Document changed, updating: {source_name}")
+            self.delete_document(source_name)
+
+        try:
+            logger.info(f"Processing Markdown document: {source_name}")
+
+            # Read content
+            content = path.read_text(encoding="utf-8")
+            if not content or len(content.strip()) < 10:
+                return {"status": "error", "message": "Document content empty or too short"}
+
+            # Extract metadata from path and filename
+            extracted = MetadataExtractor.extract(path, content)
+            logger.info(f"Extracted metadata: category={extracted.category}, title={extracted.title}")
+
+            # Use LLM Flash to infer doc_type from title
+            if use_llm_inference and extracted.title:
+                inferred = await MetadataExtractor.infer_doc_type_with_llm(
+                    extracted.title, content[:500]
+                )
+                extracted.doc_type = inferred.get("doc_type", "report")
+                extracted.keywords = inferred.get("keywords", [])
+                logger.info(f"LLM inferred doc_type: {extracted.doc_type}")
+            elif not extracted.doc_type:
+                # Fallback to rule-based inference
+                inferred = MetadataExtractor._infer_doc_type_rules(extracted.title, content[:500])
+                extracted.doc_type = inferred.get("doc_type", "report")
+
+            # Hierarchy slicing with cache
+            slicer = HierarchySlicer()
+            chunks, index = slicer.slice_with_cache(str(path), source_name)
+            logger.info(f"Hierarchy sliced into {len(chunks)} chunks")
+
+            # Merge extracted metadata into each chunk
+            extracted_dict = extracted.to_dict()
+            for chunk in chunks:
+                chunk.metadata.update(extracted_dict)
+
+            # Add to vector store
+            if isinstance(self._vector_store, HierarchyVectorStore):
+                self._vector_store.add_hierarchy_chunks(chunks)
+                logger.info(f"Added {len(chunks)} hierarchy chunks")
+            else:
+                docs = [Document(page_content=c.content, metadata=c.metadata) for c in chunks]
+                if self._cache:
+                    self._cache.get_vectorstore().add_documents(docs)
+                logger.info(f"Added {len(docs)} documents (fallback mode)")
+
+            if self._cache:
+                self._cache.clear_cache()
+
+            return {
+                "status": "success",
+                "message": f"Successfully added: {source_name}",
+                "source": source_name,
+                "chunks_added": len(chunks),
+                "doc_type": extracted.doc_type,
+                "category": extracted.category,
+                "title": extracted.title,
+            }
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return {"status": "error", "message": f"Add Markdown document failed: {str(e)}"}
 
     def add_document_with_progress(
         self,
@@ -472,8 +692,7 @@ class RagService:
     ) -> Dict[str, Any]:
         """Add document with progress callback (for async task manager)"""
         from .utils.document_loader import FileTypeDetector, _create_loader
-        from .utils.text_splitter import SlicingStrategyFactory
-        from .injector import MetadataInjector
+        from .chunker import HierarchySlicer
 
         path = Path(file_path)
         if not path.exists():
@@ -508,60 +727,31 @@ class RagService:
                 doc_type = self._infer_doc_type(source_name, full_content)
                 logger.info(f"Inferred doc_type: {doc_type}")
 
-            progress_callback(40.0, "Slicing document")
-            splits = SlicingStrategyFactory.slice_document(
-                full_content, doc_type, {"source": source_name}
-            )
-            progress_callback(50.0, "Slicing complete")
+            progress_callback(40.0, "Hierarchy slicing")
+            slicer = HierarchySlicer()
+            chunks = slicer.slice(full_content, source_name)
+            progress_callback(50.0, f"Sliced into {len(chunks)} chunks")
 
-            progress_callback(55.0, "Creating documents")
-            split_docs = []
-            for idx, split in enumerate(splits):
-                start_index = full_content.find(split) if idx == 0 else 0
-                doc = Document(
-                    page_content=split,
-                    metadata={
-                        "source": source_name,
-                        "type": real_type,
-                        "chunk_index": idx,
-                        "total_chunks": len(splits),
-                        "category": category or "policies",
-                        "start_index": start_index,
-                        "file_hash": self._compute_file_hash(path),
-                    }
-                )
-                split_docs.append(doc)
+            progress_callback(55.0, "Injecting metadata")
+            for chunk in chunks:
+                chunk.metadata["doc_type"] = doc_type
+                chunk.metadata["category"] = category or "policies"
+                if dimension_tags:
+                    chunk.metadata["dimension_tags"] = dimension_tags
+                if terrain:
+                    chunk.metadata["terrain"] = terrain
+            progress_callback(60.0, "Metadata injection complete")
 
-            progress_callback(60.0, "Injecting metadata")
-            injector = MetadataInjector()
-            injector.inject_batch(
-                split_docs,
-                category=category,
-                doc_type=doc_type,
-                dimension_tags=dimension_tags,
-                terrain=terrain,
-            )
-            progress_callback(70.0, "Metadata injection complete")
-
-            progress_callback(75.0, "Generating vectors")
-            # 根据配置判断是否使用 Parent-Child 架构
-            if self._should_use_parent_child(doc_type):
-                parent_child_chunks = self._create_parent_child_chunks(
-                    split_docs, source_name, real_type, category
-                )
-                from .vector_store import ParentChildVectorStore
-                if isinstance(self._vector_store, ParentChildVectorStore):
-                    self._vector_store.add_chunks(parent_child_chunks)
-                    logger.info(f"Added {len(parent_child_chunks)} child chunks (Parent-Child mode for {doc_type})")
-                else:
-                    self.vectorstore.add_documents(split_docs)
+            progress_callback(70.0, "Generating vectors")
+            from .vector_store import HierarchyVectorStore
+            if isinstance(self._vector_store, HierarchyVectorStore):
+                self._vector_store.add_hierarchy_chunks(chunks)
+                logger.info(f"Added {len(chunks)} hierarchy chunks")
             else:
-                self.vectorstore.add_documents(split_docs)
-                logger.info(f"Added {len(split_docs)} vectors (standard mode for {doc_type})")
+                docs = [Document(page_content=c.content, metadata=c.metadata) for c in chunks]
+                if self._cache:
+                    self._cache.get_vectorstore().add_documents(docs)
             progress_callback(85.0, "Vector generation complete")
-
-            progress_callback(90.0, "Updating index")
-            self._update_document_index(source_name, documents, split_docs)
 
             progress_callback(95.0, "Clearing cache")
             if self._cache:
@@ -572,7 +762,7 @@ class RagService:
                 "status": "success",
                 "message": f"Successfully added: {source_name}",
                 "source": source_name,
-                "chunks_added": len(split_docs),
+                "chunks_added": len(chunks),
                 "doc_type": real_type,
             }
 
@@ -585,6 +775,35 @@ class RagService:
         """Check if document exists in knowledge base"""
         docs = self.list_documents()
         return any(d["source"] == source_name for d in docs)
+
+    def _get_document_hash(self, source_name: str) -> Optional[str]:
+        """Get stored file hash for document"""
+        if self._vector_store is None:
+            return None
+        try:
+            collection = self._vector_store.vectorstore._collection
+            results = collection.get(
+                where={"source": source_name},
+                limit=1,
+                include=["metadatas"]
+            )
+            if results and results.get("metadatas"):
+                return results["metadatas"][0].get("file_hash")
+        except Exception:
+            pass
+        return None
+
+    def _should_update_document(self, source_name: str, new_hash: str) -> bool:
+        """Check if document needs update (hash changed or not exists)"""
+        existing = self._check_document_exists(source_name)
+        if not existing:
+            return True  # 新文档，需要添加
+
+        stored_hash = self._get_document_hash(source_name)
+        if not stored_hash:
+            return True  # 无哈希记录，需要更新
+
+        return stored_hash != new_hash  # 哈希变化，需要更新
 
     def _infer_doc_type(self, filename: str, content: str = "") -> str:
         """Infer document type from filename keywords"""
@@ -617,106 +836,13 @@ class RagService:
 
         return "report"
 
-    def _update_document_index(
-        self,
-        source_name: str,
-        original_docs: List[Document],
-        split_docs: List[Document]
-    ) -> None:
-        """Update document index"""
-        try:
-            self._context_manager._ensure_loaded()
-
-            from .context import ChunkInfo
-            chunks_info = []
-            for idx, split in enumerate(split_docs):
-                chunks_info.append(ChunkInfo(
-                    chunk_index=idx,
-                    start_index=split.metadata.get("start_index", 0),
-                    content_preview=split.page_content[:100] + "..." if len(split.page_content) > 100 else split.page_content,
-                ))
-
-            doc_type = split_docs[0].metadata.get("type", "unknown") if split_docs else "unknown"
-
-            self._context_manager.doc_index[source_name] = DocumentIndex(
-                source=source_name,
-                doc_type=doc_type,
-                total_chunks=len(split_docs),
-                chunks_info=chunks_info,
-            )
-
-            self._context_manager.save()
-            logger.info("Document index updated")
-
-        except Exception as e:
-            logger.warning(f"Update index failed: {e}")
-
-    def _should_use_parent_child(self, doc_type: str) -> bool:
-        """根据文档类型配置判断是否启用 Parent-Child"""
-        from .chunker import UnifiedMarkdownSlicer
-        config = UnifiedMarkdownSlicer.CONFIGS.get(doc_type, UnifiedMarkdownSlicer.CONFIGS["default"])
-        return config.parent_child
-
-    def _create_parent_child_chunks(
-        self,
-        parent_docs: List[Document],
-        source_name: str,
-        real_type: str,
-        category: Optional[str] = None,
-    ) -> List[Any]:
-        """
-        将父块切分为子块，创建 ParentChildChunk 列表
-
-        Args:
-            parent_docs: 父块文档列表
-            source_name: 文档来源名称
-            real_type: 文档类型
-            category: 文档分类
-
-        Returns:
-            ParentChildChunk 列表
-        """
-        from .vector_store import ParentChildChunk
-
-        CHILD_SIZE = 400  # 子块大小
-        CHILD_OVERLAP = 100  # 子块重叠
-
-        all_chunks = []
-
-        for parent_idx, parent_doc in enumerate(parent_docs):
-            parent_content = parent_doc.page_content
-            parent_id = f"{source_name}_{parent_idx}_{hashlib.md5(parent_content.encode()).hexdigest()[:8]}"
-
-            # 切分父块为子块
-            child_splits = self.text_splitter.split_text(parent_content)
-
-            for child_idx, child_content in enumerate(child_splits):
-                child_id = f"{parent_id}_child_{child_idx}"
-                chunk = ParentChildChunk(
-                    child_content=child_content,
-                    child_id=child_id,
-                    parent_content=parent_content,
-                    parent_id=parent_id,
-                    child_index=child_idx,
-                    total_children=len(child_splits),
-                    metadata={
-                        "source": source_name,
-                        "type": real_type,
-                        "category": category or "policies",
-                        **parent_doc.metadata,
-                    },
-                )
-                all_chunks.append(chunk)
-
-        return all_chunks
-
     def _compute_file_hash(self, file_path: Path) -> str:
-        """Compute file MD5 hash"""
+        """Compute file MD5 hash (full 32-char hexdigest)"""
         hash_md5 = hashlib.md5()
         with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(4096), b""):
                 hash_md5.update(chunk)
-        return hash_md5.hexdigest()[:8]
+        return hash_md5.hexdigest()
 
 
 __all__ = ["RagService", "DocumentSummary"]

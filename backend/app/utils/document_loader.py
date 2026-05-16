@@ -315,11 +315,50 @@ def _create_loader(
     file_path: Path,
     real_type: str,
     category: Optional[str] = None,
+    parser: Optional[str] = None,
 ):
+    """创建文档加载器
+
+    Args:
+        file_path: 文件路径
+        real_type: 文件类型
+        category: 文档类别
+        parser: 解析器选择（"mineru"、"docling"、"markitdown"）
+                None 时使用全局配置 DOCUMENT_PARSER
+
+    Returns:
+        文档加载器实例
+    """
+    from app.core.settings import DOCUMENT_PARSER
+
     supported = {'pdf', 'docx', 'doc', 'pptx', 'xlsx', 'epub', 'html', 'txt', 'md'}
-    if real_type in supported:
-        return MarkItDownLoader(file_path, category=category)
-    return None
+    if real_type not in supported:
+        return None
+
+    # 确定使用的解析器
+    use_parser = parser or DOCUMENT_PARSER
+
+    # MinerU 支持所有格式（通过云端 API）
+    if use_parser == "mineru":
+        try:
+            from .mineru_loader import MinerULoader
+            logger.info(f"[_create_loader] Using MinerU for: {file_path.name}")
+            return MinerULoader(file_path, category=category)
+        except ImportError:
+            logger.warning("[_create_loader] MinerU not available, trying Docling")
+
+    # Docling 支持的格式（本地解析）
+    docling_supported = {'pdf', 'docx', 'pptx'}
+    if use_parser in ("mineru", "docling") and real_type in docling_supported:
+        try:
+            from .docling_loader import DoclingLoader
+            logger.info(f"[_create_loader] Using Docling for: {file_path.name}")
+            return DoclingLoader(file_path, category=category)
+        except ImportError:
+            logger.warning("[_create_loader] Docling not available, using MarkItDown")
+
+    # 默认使用 MarkItDown
+    return MarkItDownLoader(file_path, category=category)
 
 
 # ==========================================

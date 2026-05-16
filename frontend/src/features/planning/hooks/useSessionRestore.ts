@@ -15,7 +15,9 @@ import { usePlanningStore } from '../store/planningStore';
 import { planningApi } from '../api';
 import { logger } from '@/features/planning/utils/logger';
 import { DIMENSION_NAMES } from '../config/dimensions';
-import type { DimensionProgressItem } from '../types';
+import type { DimensionProgressItem, KnowledgeSource } from '../types';
+import type { LayerCompletedMessage, Message } from '../types/messages';
+import type { RAGRetrievalLog, RetrievedChunk, KnowledgeSourceItem } from '../api/types';
 
 interface UseSessionRestoreOptions {
   enabled?: boolean;
@@ -34,6 +36,7 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
   const setStatus = usePlanningStore((state) => state.setStatus);
   const resetConversation = usePlanningStore((state) => state.resetConversation);
   const setDimensionProgressBatch = usePlanningStore((state) => state.setDimensionProgressBatch);
+  const setRagDocuments = usePlanningStore((state) => state.setRagDocuments);
 
   const restoringRef = useRef(false);
   const restoredSessionIdRef = useRef<string | null>(null);
@@ -91,25 +94,128 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
         setStatus('planning');
       }
 
-      // 6. Clear existing messages
-      setMessages([]);
+      // 6. Restore messages from backend - rebuild LayerCompletedMessage from reports
+      // Note: We don't restore LLM messages (statusData.messages), instead we rebuild UI messages
+      // from the persisted dimension_reports data
+      const restoredMessages: Message[] = [];
 
       // 7. Load layer reports for completed layers
       const completedDimensions = statusData.completed_dimensions;
+      console.log('[SessionRestore] completedDimensions:', completedDimensions);
       if (completedDimensions) {
         const layers = [1, 2, 3] as const;
         for (const layer of layers) {
           const dims = completedDimensions[`layer${layer}`];
+          console.log('[SessionRestore] Layer', layer, 'dims:', dims);
           if (dims && dims.length > 0) {
             try {
+              console.log('[SessionRestore] Fetching reports for layer', layer);
               const reportsData = await planningApi.getLayerReports(targetSessionId, layer);
-              if (reportsData.reports && Object.keys(reportsData.reports).length > 0) {
-                setReports({ [`layer${layer}`]: reportsData.reports });
+              console.log('[SessionRestore] reportsData for layer', layer, ':', reportsData);
+
+              // Handle both formats:
+              // 1. New format: {dim_key: {content, knowledge_sources}} (direct dict)
+              // 2. Old format: {layer, reports: {dim_key: {...}}} (wrapped)
+              const reportsDict = reportsData.reports || reportsData;
+              const reportKeys = Object.keys(reportsDict);
+
+              console.log('[SessionRestore] reportKeys for layer', layer, ':', reportKeys);
+
+              if (reportKeys.length > 0) {
+                // Convert new format to old format for setReports compatibility
+                const reportsContent: Record<string, string> = {};
+                const knowledgeSourcesMap: Record<string, KnowledgeSource[]> = {};
+
+                for (const [dimKey, reportData] of Object.entries(reportsDict)) {
+                  // Handle both new format (object) and old format (string)
+                  if (typeof reportData === 'string') {
+                    reportsContent[dimKey] = reportData;
+                  } else if (reportData && typeof reportData === 'object' && 'content' in reportData) {
+                    reportsContent[dimKey] = reportData.content;
+
+                    // Extract RAG knowledge sources from RAGRetrievalLog format
+                    if (reportData.knowledge_sources) {
+                      const ks = reportData.knowledge_sources as RAGRetrievalLog | KnowledgeSourceItem[];
+                      console.log('[SessionRestore] knowledge_sources for', dimKey, ':', ks);
+
+                      // Backend stores RAGRetrievalLog object with retrieved_chunks
+                      if ('retrieved_chunks' in ks && Array.isArray(ks.retrieved_chunks)) {
+                        console.log('[SessionRestore] retrieved_chunks found, count:', ks.retrieved_chunks.length);
+                        const fullKey = `${layer}_${dimKey}`;
+
+                        // Direct conversion: RetrievedChunk -> RagDocument (preserve score)
+                        const ragDocuments = ks.retrieved_chunks.map((chunk: RetrievedChunk) => ({
+                          title: chunk.source || 'unknown',
+                          snippet: chunk.content_preview || '',
+                          source: chunk.source,
+                          score: chunk.score,
+                          chunk_id: chunk.chunk_id,
+                          dimension_tags: chunk.dimension_tags,
+                        }));
+
+                        if (ragDocuments.length > 0) {
+                          // Set query first, then documents
+                          if (ks.query) {
+                            usePlanningStore.getState().setRagQuery(fullKey, ks.query);
+                          }
+                          setRagDocuments(fullKey, ragDocuments);
+                          console.log('[SessionRestore] Set RAG sources for', fullKey, ':', {
+                            query: ks.query,
+                            documentCount: ragDocuments.length,
+                          });
+                        }
+                      } else if (Array.isArray(ks)) {
+                        console.log('[SessionRestore] knowledge_sources is array, count:', ks.length);
+                        // Fallback: direct array format (KnowledgeSourceItem[])
+                        const fullKey = `${layer}_${dimKey}`;
+                        const ragDocuments = ks.map((item: KnowledgeSourceItem) => ({
+                          title: item.title || item.source || 'unknown',
+                          snippet: item.snippet || '',
+                          source: item.source,
+                          score: item.score,
+                        }));
+
+                        if (ragDocuments.length > 0) {
+                          setRagDocuments(fullKey, ragDocuments);
+                          console.log('[SessionRestore] Set RAG sources for', fullKey, ':', {
+                            documentCount: ragDocuments.length,
+                          });
+                        }
+                      } else {
+                        console.log('[SessionRestore] knowledge_sources format not recognized');
+                      }
+                    } else {
+                      console.log('[SessionRestore] No knowledge_sources for', dimKey);
+                    }
+                  }
+                }
+                setReports({ [`layer${layer}`]: reportsContent });
+
+                // Build LayerCompletedMessage for this layer
+                const totalChars = Object.values(reportsContent).reduce((sum, c) => sum + c.length, 0);
+                const layerMsg: LayerCompletedMessage = {
+                  id: `layer_report_${layer}`,
+                  type: 'layer_completed',
+                  layer,
+                  content: '',
+                  summary: {
+                    word_count: totalChars,
+                    key_points: [],
+                    dimension_count: Object.keys(reportsContent).length,
+                  },
+                  fullReportContent: '',
+                  dimensionReports: reportsContent,
+                  dimensionKnowledgeSources: knowledgeSourcesMap,
+                  actions: [],
+                  timestamp: new Date(),
+                  role: 'assistant',
+                };
+                restoredMessages.push(layerMsg);
 
                 // Restore dimensionProgress from reports for completed dimensions
                 const progressUpdates: Record<string, DimensionProgressItem> = {};
-                for (const [dimKey, content] of Object.entries(reportsData.reports)) {
-                  if (content && typeof content === 'string' && content.length > 0) {
+                for (const [dimKey, content] of Object.entries(reportsContent)) {
+                  if (content && content.length > 0) {
                     const progressKey = `${layer}_${dimKey}`;
                     progressUpdates[progressKey] = {
                       dimensionKey: dimKey,
@@ -136,6 +242,13 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
         }
       }
 
+      // Set rebuilt messages
+      if (restoredMessages.length > 0) {
+        setMessages(restoredMessages);
+      } else {
+        setMessages([]);
+      }
+
       // 8. Mark as restored
       restoredSessionIdRef.current = targetSessionId;
       logger.context.info('Session restoration completed', {
@@ -153,7 +266,7 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
     } finally {
       restoringRef.current = false;
     }
-  }, [setSessionId, syncBackendState, setStatus, setMessages, setReports, resetConversation, setDimensionProgressBatch]);
+  }, [setSessionId, syncBackendState, setStatus, setMessages, setReports, resetConversation, setDimensionProgressBatch, setRagDocuments]);
 
   // On mount: check if sessionId in URL and restore
   useEffect(() => {

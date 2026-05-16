@@ -335,11 +335,51 @@ export interface DimensionReportResponse {
 }
 
 /**
+ * 知识来源项类型
+ */
+export interface KnowledgeSourceItem {
+  title: string;
+  snippet: string;
+  source?: string;
+  score?: number;
+}
+
+/**
+ * RAG 检索切片（后端 RetrievedChunk 格式）
+ */
+export interface RetrievedChunk {
+  chunk_id: string;
+  content_preview: string;
+  source: string;
+  score: number;
+  dimension_tags: string[];
+}
+
+/**
+ * RAG 检索日志（后端 RAGRetrievalLog 格式）
+ */
+export interface RAGRetrievalLog {
+  dimension_key: string;
+  query: string;
+  query_generation_method: string;
+  retrieved_chunks: RetrievedChunk[];
+  total_results: number;
+  retrieval_latency_ms: number;
+  context_length: number;
+  context_truncated: boolean;
+  rag_enabled: boolean;
+  skip_reason: string;
+}
+
+/**
  * 层级报告响应类型
  */
 export interface LayerReportsResponse {
   layer: number;
-  reports: Record<string, string>;
+  reports: Record<string, {
+    content: string;
+    knowledge_sources?: RAGRetrievalLog | KnowledgeSourceItem[];
+  }>;
   report_content: string;
   project_name: string;
   completed: boolean;
@@ -395,4 +435,42 @@ export interface ReviewData {
   };
   available_dimensions: string[];
   checkpoints: Checkpoint[];
+}
+
+// ============================================
+// Report Comparison Types
+// ============================================
+
+/**
+ * 维度版本历史项
+ */
+export interface DimensionVersion {
+  version: number;
+  layer: number;
+  created_at: string;
+  reason: string | null;
+}
+
+/**
+ * 跨会话报告响应
+ */
+export interface CrossSessionReport {
+  project_name: string;
+  session_id: string;
+  dimension_key: string;
+  layer: number;
+  content: string;
+  version?: number;
+  created_at?: string;
+  knowledge_sources?: KnowledgeSourceItem[];
+}
+
+/**
+ * 对比会话信息
+ */
+export interface CompareSession {
+  id: string;
+  name: string;
+  timestamp: string;
+  isCompleted: boolean;
 }

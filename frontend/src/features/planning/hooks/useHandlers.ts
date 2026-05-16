@@ -16,6 +16,7 @@ import { createBaseMessage } from '@/features/planning/utils';
 import { getDimensionName, getDimensionsByLayer } from '../config/dimensions';
 import { MIN_SSE_DATA_CHARS, LAYER_VALUE_MAP } from '@/features/planning/constants';
 import type { Message, ProgressMessage, LayerCompletedMessage } from '../types';
+import type { RAGRetrievalLog, KnowledgeSourceItem } from '../api/types';
 
 // ============================================
 // Types
@@ -30,7 +31,7 @@ interface UsePlanningHandlersOptions {
 }
 
 interface LayerReportData {
-  reports: Record<string, string>;
+  reports: Record<string, { content: string; knowledge_sources?: RAGRetrievalLog | KnowledgeSourceItem[] }>;
   reportContent: string;
 }
 
@@ -210,7 +211,14 @@ export function usePlanningHandlers({
         const backendData = await fetchLayerReportsFromBackend(layer);
 
         if (backendData?.reports && Object.keys(backendData.reports).length > 0) {
-          finalReports = backendData.reports;
+          // Convert new format to old format for compatibility
+          for (const [dimKey, reportData] of Object.entries(backendData.reports)) {
+            if (typeof reportData === 'string') {
+              finalReports[dimKey] = reportData;
+            } else if (reportData && typeof reportData === 'object' && 'content' in reportData) {
+              finalReports[dimKey] = reportData.content;
+            }
+          }
           finalReportContent = backendData.reportContent;
         } else {
           // Fallback: merge dimensionContents
@@ -325,7 +333,16 @@ export function usePlanningHandlers({
       try {
         const backendData = await fetchLayerReportsFromBackend(layer);
         if (backendData?.reports && Object.keys(backendData.reports).length > 0) {
-          await handleLayerCompleted(layer, backendData.reportContent, backendData.reports);
+          // Convert new format to old format for handleLayerCompleted
+          const reportsContent: Record<string, string> = {};
+          for (const [dimKey, reportData] of Object.entries(backendData.reports)) {
+            if (typeof reportData === 'string') {
+              reportsContent[dimKey] = reportData;
+            } else if (reportData && typeof reportData === 'object' && 'content' in reportData) {
+              reportsContent[dimKey] = reportData.content;
+            }
+          }
+          await handleLayerCompleted(layer, backendData.reportContent, reportsContent);
         }
       } catch (error) {
         console.error(`[usePlanningHandlers] Layer ${layer} restore failed:`, error);

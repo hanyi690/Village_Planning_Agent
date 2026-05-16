@@ -419,6 +419,20 @@
   text-align: right;
 }
 
+/* Rowspan/colspan cell styles */
+.markdown-content td[rowspan],
+.markdown-content th[rowspan] {
+  vertical-align: middle;
+  text-align: center;
+  background-color: #f5f5f5;
+  font-weight: 500;
+}
+
+.markdown-content td[colspan],
+.markdown-content th[colspan] {
+  text-align: center;
+}
+
 /* 维度报告消息样式 - 实时流式显示 */
 .dimension-report-message {
   background: #f0f9ff;

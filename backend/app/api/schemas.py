@@ -117,7 +117,6 @@ class SessionStatusResponse(BaseModel):
     execution_complete: bool = Field(False, description="执行是否完成")
     execution_error: Optional[str] = Field(None, description="执行错误信息")
     messages: List[Dict[str, Any]] = Field(default_factory=list, description="消息列表")
-    ui_messages: List[Dict[str, Any]] = Field(default_factory=list, description="UI消息列表")
     revision_history: List[Dict[str, Any]] = Field(default_factory=list, description="修订历史")
     last_checkpoint_id: str = Field("", description="最后一个检查点ID")
 

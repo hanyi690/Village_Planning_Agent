@@ -280,6 +280,23 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
     metadata = state.get("metadata", {})
     progress = metadata.get("progress", (current_layer / 3) * 100 if current_layer else 0)
 
+    # Convert messages to UI format
+    messages_raw = state.get("messages", [])
+    messages_ui = []
+    for msg in messages_raw:
+        if hasattr(msg, "content") and hasattr(msg, "type"):
+            messages_ui.append({
+                "type": msg.type,
+                "content": msg.content,
+                "role": getattr(msg, "role", msg.type),
+            })
+        elif isinstance(msg, dict):
+            messages_ui.append({
+                "type": msg.get("type", "unknown"),
+                "content": msg.get("content", ""),
+                "role": msg.get("role", msg.get("type", "unknown")),
+            })
+
     return {
         "phase": phase,
         "current_wave": state.get("current_wave", 1),
@@ -290,6 +307,7 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
         "step_mode": state.get("step_mode", False),
         "execution_paused": state.get("execution_paused", False),
         "previous_layer": state.get("previous_layer", 0),
+        "messages": messages_ui,
     }
 
 

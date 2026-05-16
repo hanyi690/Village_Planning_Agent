@@ -427,7 +427,7 @@ class PlanningRuntimeService:
         Returns:
             UI-ready status dictionary
         """
-        from app.database.operations import get_planning_session_async, get_ui_messages_async
+        from app.database.operations import get_planning_session_async
 
         db_session = await get_planning_session_async(session_id)
         if not db_session:
@@ -450,7 +450,6 @@ class PlanningRuntimeService:
                     "role": "assistant" if "ai" in msg.__class__.__name__.lower() else "user"
                 })
         ui_status["messages"] = messages
-        ui_status["ui_messages"] = await get_ui_messages_async(session_id)
         ui_status["revision_history"] = state.get("revision_history", [])
         ui_status["last_checkpoint_id"] = checkpoint_state.config.get("configurable", {}).get("checkpoint_id", "") if checkpoint_state else ""
 

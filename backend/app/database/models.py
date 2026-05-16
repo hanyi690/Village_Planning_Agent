@@ -109,53 +109,6 @@ class UISession(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 
-    # Relationships
-    messages: List["UIMessage"] = Relationship(back_populates="session")
-
-
-class UIMessage(SQLModel, table=True):
-    """
-    UI message table
-    UI 消息表
-
-    Stores messages in UI conversations.
-
-    支持 Upsert：使用 (session_id, message_id) 作为唯一标识
-    """
-    __tablename__ = "ui_messages"
-
-    # Primary key (auto-increment)
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    # Foreign key
-    session_id: str = Field(foreign_key="ui_sessions.conversation_id", index=True)
-
-    # 前端消息 ID（唯一标识，用于 upsert）
-    message_id: str = Field(index=True)
-
-    # Message content
-    role: str = Field(index=True)  # user/assistant/system
-    content: str = Field(sa_column=Text())
-    message_type: str = Field(default="text")  # text/file/progress/action/result/error/system
-
-    # Message metadata (JSON)
-    message_metadata: Optional[Dict[str, Any]] = Field(
-        default=None,
-        sa_column=Column(JSON)
-    )
-
-    # Timestamps
-    created_at: datetime = Field(default_factory=datetime.now)
-    timestamp: datetime = Field(default_factory=datetime.now)
-
-    # Relationships
-    session: UISession = Relationship(back_populates="messages")
-
-    # 唯一约束：(session_id, message_id) 必须唯一
-    __table_args__ = (
-        UniqueConstraint("session_id", "message_id", name="uq_session_message"),
-    )
-
 
 # ==========================================
 # Dimension Revision Models

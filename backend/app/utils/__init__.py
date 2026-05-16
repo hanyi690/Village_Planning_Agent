@@ -14,6 +14,9 @@ from .document_loader import (
     _create_loader,
 )
 
+from .mineru_loader import MinerULoader
+from .docling_loader import DoclingLoader
+
 from .pdf_fallback import (
     PDFFallbackParser,
     PyPDF2Extractor,
@@ -24,6 +27,8 @@ from .pdf_fallback import (
 __all__ = [
     "FileTypeDetector",
     "MarkItDownLoader",
+    "MinerULoader",
+    "DoclingLoader",
     "MarkdownCleaner",
     "DocToDocxConverter",
     "classify_file_type",

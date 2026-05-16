@@ -1,833 +1,623 @@
-# RAG 知识库架构
+# RAG 知识检索系统
 
-本文档详细说明 RAG 知识检索系统的架构设计及在维度执行中的使用方式。
+> **更新日期**: 2026-05-17
+> **版本**: v7.0
 
-> **更新日期**: 2026-05-15
-> **版本**: v5.0
+## 一、系统概述
 
-## 目录
+RAG（Retrieval-Augmented Generation）知识检索系统为乡村规划智能体提供动态知识支持。系统采用 **Small-to-Big + 层级感知** 架构，实现从精确检索到上下文返回的智能检索流程。
 
-- [概述](#概述)
-- [文档切片策略](#文档切片策略)
-- [知识库组成](#知识库组成)
-- [向量存储架构](#向量存储架构)
-- [检索 Query 生成](#检索-query-生成)
-- [分层检索机制](#分层检索机制)
-- [元数据注入](#元数据注入)
-- [知识检索工具集](#知识检索工具集)
-- [关键文件路径](#关键文件路径)
+### 1.1 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| 层级切片 | 利用 Markdown 标题结构构建层级树（HierarchySlicer） |
+| Small-to-Big 检索 | 检索子块，返回合并内容（含完整上下文） |
+| LLM 大纲矫正 | Flash LLM 推断标题层级，修复格式错误 |
+| 树形索引 | O(1) 查找父块，支持子块内容合并 |
+| 元数据自动提取 | 从文件路径、文件名提取分类信息 |
+| LLM Flash 类型推断 | 根据标题自动推断文档类型 |
+
+### 1.2 系统架构图
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        RAG 知识检索系统                                  │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐              │
+│  │  文档导入    │    │  层级切片    │    │  向量存储    │              │
+│  │  MinerU      │ →  │  Hierarchy   │ →  │  ChromaDB    │              │
+│  │  Docling     │    │  Slicer      │    │              │              │
+│  │  MarkItDown  │    │              │    │              │              │
+│  └──────────────┘    └──────────────┘    └──────────────┘              │
+│         ↓                   ↓                   ↓                       │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐              │
+│  │  元数据提取  │    │  树形索引    │    │  父块缓存    │              │
+│  │  Metadata    │    │  by_id       │    │  JSON Cache  │              │
+│  │  Extractor   │    │  children    │    │              │              │
+│  └──────────────┘    └──────────────┘    └──────────────┘              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 概述
+## 二、目录结构
 
-RAG（Retrieval-Augmented Generation）系统为村庄规划 Agent 提供专业知识检索能力，支持法规标准引用、技术指标查询、案例参考等功能。
-
-### 知识检索的两种路径
+### 2.1 模块文件
 
 ```
-路径1: 自动注入（分析节点）
-analyze_dimension() → RagService.get_context() → 注入 LLM Prompt
-                                              ↓
-                              generate_query(LLM) → search(ChromaDB)
+backend/app/services/modules/rag/
+├── service.py               # RAG 服务核心（查询生成、检索入口）
+├── chunker.py               # 层级切片器（LLM 矫正 + LangChain 切片）
+├── vector_store.py          # 层级向量存储（Small-to-Big + 树形索引）
+├── context.py               # 文档上下文管理器
+├── knowledge_manager.py     # 异步任务管理
+└── utils/
+    ├── document_loader.py   # 文档加载器（重导出）
+    └── metadata_extractor.py # 元数据提取器
+```
 
-路径2: 工具调用（Agent Tool Calling）
-Agent → knowledge_search_tool() → search_knowledge() → ChromaDB
-Agent → document_overview_tool() → DocumentContextManager
-Agent → chapter_content_tool() → DocumentContextManager
+### 2.2 数据目录
+
+```
+data/RAG_doc/
+├── 01_专业教材/
+├── 02_法律法规/01_法律/
+├── 03_政策文件/01_国家层面/
+├── 04_技术规范/01_国家层面/
+├── 05_上位规划/01_广东省/
+├── 06_相关案例/
+├── _doc_md/                 # 解析后的 Markdown 文件
+└── _cache/                  # 缓存目录（统一管理）
+    ├── outline_index/       # 层级索引缓存（JSON）
+    │   └── *_index.json     # 每个文档一个索引
+    ├── chroma_db/           # ChromaDB 向量数据库
+    │   ├── chroma.sqlite3
+    │   └── d13d545a-.../
+    └── hierarchy_chunks_cache.json  # 父块缓存
 ```
 
 ---
 
-## 文档切片策略
+## 三、核心组件详解
 
-### 统一切片器设计
+### 3.1 文档加载器
 
-项目使用 `UnifiedMarkdownSlicer` 统一切片器，支持基于文档类型的差异化切片策略。
+**文件**: `backend/app/utils/document_loader.py`
 
-**文件路径**: `backend/app/services/modules/rag/chunker.py`
+解析器选择优先级：
+
+| 优先级 | 解析器 | 适用场景 | 特点 |
+|--------|--------|----------|------|
+| 1 | MinerU | 扫描版 PDF | 云端 API，高质量，支持所有格式 |
+| 2 | Docling | PDF/DOCX/PPTX | 本地解析，速度快 |
+| 3 | MarkItDown | 通用格式 | 降级兜底，快速解析 |
+
+**关键函数**: `_create_loader()` 根据配置 `DOCUMENT_PARSER` 选择解析器。
+
+```python
+# 配置选择
+DOCUMENT_PARSER = "mineru"  # mineru | docling | markitdown
+
+# 使用示例
+from app.utils.document_loader import _create_loader, FileTypeDetector
+
+real_type = FileTypeDetector.detect(file_path)
+loader = _create_loader(file_path, real_type, category="policies")
+documents = loader.load()
+```
+
+### 3.2 层级切片器
+
+**文件**: `backend/app/services/modules/rag/chunker.py`
+
+#### 核心数据结构
 
 ```python
 @dataclass
-class SlicerConfig:
-    split_on: List[str] = None      # 正则分割模式
-    chunk_size: int = 2000           # 切片大小
-    overlap: int = 400               # 重叠字符数
-    min_chunk: int = 100             # 最小切片长度
-    parent_child: bool = False       # 是否启用父子模式
-    child_size: int = 400            # 子块大小
-    parent_size: int = 2000          # 父块大小
-    semantic: bool = False           # 语义切分（预留）
-    max_chunk: int = 2500            # 最大切片长度
+class HierarchyChunk:
+    content: str              # 切片内容
+    chunk_id: str             # 唯一 ID（source_index_hash）
+    depth: int                # 标题层级 (1=章, 2=节, 3=条, 4=项)
+    parent_id: Optional[str]  # 直接父块的 chunk_id
+    ancestors: List[str]      # 祖先标题路径 ["章", "节", "条"]
+    section_title: str        # 当前标题
+    metadata: Dict            # 元数据（source, has_table, char_count, is_placeholder）
 ```
 
-### 差异化切片策略
-
-| 文档类型 | chunk_size | overlap | min_chunk | max_chunk | 分割模式 | Parent-Child |
-|---------|-----------|---------|-----------|-----------|---------|-------------|
-| `policy` | 2500 | 500 | 50 | 2500 | 按条款 (`第X条`) | ❌ |
-| `case` | 2000 | 400 | 200 | - | Parent-Child | ✅ |
-| `standard` | 1500 | 300 | 80 | 1500 | 按标准编号 (`X.X.X`) | ❌ |
-| `guide` | 1800 | 350 | 150 | - | Parent-Child | ✅ |
-| `report` | 2000 | 400 | 100 | - | Parent-Child | ✅ |
-| `textbook` | 1800 | 350 | 150 | - | Parent-Child | ✅ |
-| `laws` | 2500 | 500 | 50 | 2500 | 按条款 | ❌ |
-| `plans` | 2000 | 400 | 100 | - | Parent-Child | ✅ |
-| `domain` | 1800 | 350 | 150 | - | Parent-Child | ✅ |
-| `default` | 2500 | 500 | 100 | 2500 | 递归字符分割 | ❌ |
-
-**Parent-Child 启用说明**：
-- ✅ 启用：内容连贯性强，需要完整上下文理解（textbook、plans、domain、case、guide、report）
-- ❌ 不启用：内容天然独立，子块本身已足够（policy、standard、laws）
-
-### 正则分割模式
+#### 树形索引结构
 
 ```python
-SPLIT_PATTERNS_RE: Dict[str, List] = {
-    "policy": [re.compile(r'\n(?=第\s*[一二三四五六七八九十百千万0-9]+\s*条)')],
-    "case": [re.compile(r'\n(?=[一二三四五六七八九十]+[、.])'), re.compile(r'\n(?=\d+\.[^\d])')],
-    "standard": [re.compile(r'\n(?=\d+\.\d+(?:\.\d+)?)'), re.compile(r'\n(?=第\s*\d+\s*条)')],
-    "guide": [re.compile(r'\n(?=#{1,3}\s)')],
-    "textbook": [re.compile(r'\n(?=#{1,3}\s)'), re.compile(r'\n(?=第[一二三四五六七八九十百]+章)')],
+@dataclass
+class HierarchyTreeIndex:
+    by_id: Dict[str, Dict]      # chunk_id -> chunk_dict（O(1) 查找）
+    children: Dict[str, List]   # parent_id -> [child_ids]（子块列表）
+    by_section: Dict[str, str]  # section_title -> chunk_id（标题查找）
+```
+
+#### LLM 大纲矫正
+
+`LLMOutlineCorrector` 使用 Flash LLM 推断标题层级：
+
+1. **提取候选标题**：支持多种格式
+   - Markdown 标题（`# ## ###`）
+   - 中文章节（第一章、第二节）
+   - 中文数字条款（第一条、第二款）
+   - 阿拉伯数字编号（1.1、2.3.4）
+   - 罗马数字编号（I.、II.）
+
+2. **LLM 推断层级**：批量处理（每批 100 个标题）
+   ```python
+   # 输出格式
+   [{"index": 0, "level": 1, "type": "chapter"}, ...]
+   ```
+
+3. **重写 Markdown 标题**：统一为 `#` 格式
+
+#### 缓存机制
+
+`OutlineIndexManager` 管理 `outline_index/` 目录：
+
+```python
+@dataclass
+class OutlineIndex:
+    source_name: str           # 文档名称
+    source_path: str           # 原始路径
+    file_hash: str             # MD5 哈希（增量更新）
+    created_at: str            # 创建时间
+    heading_count: int         # 标题数量
+    chunk_count: int           # 切片数量
+    level_distribution: Dict   # 层级分布 {1: 5, 2: 12, 3: 20}
+    corrected_content: str     # 矫正后的 Markdown
+    chunks: List[Dict]         # 切片列表
+    tree_index: Dict           # 树形索引（by_id, children, by_section）
+```
+
+**增量更新**：文件哈希变化时才重新处理。
+
+#### 空标题节点修复
+
+`_fix_orphan_headings()` 方法处理层级结构缺陷：
+
+1. **检测条件**：
+   - `char_count < 50`（内容很短）
+   - 无子节点
+   - 内容仅标题
+
+2. **修复策略**：
+   - 利用编号连续性（2 → 2.1）判断父子关系
+   - 将短标题与后续节点合并
+   - 更新 `ancestors` 和 `parent_id`
+
+### 3.3 层级向量存储
+
+**文件**: `backend/app/services/modules/rag/vector_store.py`
+
+#### Small-to-Big 检索流程
+
+```
+Query → 向量搜索 → 命中子块 → 树形索引查找 → 合并内容 → 返回
+```
+
+#### 核心检索方法 `retrieve()`
+
+```python
+def retrieve(self, query: str, k: int = 5, score_threshold: float = 1.5) -> List[Dict]:
+    """
+    Small-to-Big 检索
+    
+    流程：
+    1. 向量搜索命中子块
+    2. 从树形索引获取完整信息
+    3. 判断是否需要合并子块内容：
+       - is_placeholder=True：占位切片，需合并
+       - char_count < 50：只有标题，需合并
+    4. 合并所有子块内容返回
+    """
+```
+
+#### 树形索引加载
+
+```python
+def load_all_tree_indices(self) -> None:
+    """加载所有 outline_index 中的树形索引"""
+    # 合并所有 *_index.json 的 tree_index
+    combined_by_id = {}
+    combined_children = {}
+    combined_by_section = {}
+```
+
+#### 父块缓存
+
+```python
+# 内存缓存
+_parent_cache: OrderedDict[str, str]  # chunk_id -> content
+_parent_metadata: OrderedDict[str, Dict]  # chunk_id -> metadata
+
+# LRU 淘汰
+MAX_PARENT_CACHE_SIZE = 2000
+
+# 持久化
+PARENT_CACHE_FILE = "hierarchy_chunks_cache.json"
+```
+
+### 3.4 元数据提取器
+
+**文件**: `backend/app/services/modules/rag/utils/metadata_extractor.py`
+
+#### 提取来源
+
+| 来源 | 字段 | 示例 |
+|------|------|------|
+| 目录路径 | category, subcategory, level | 专业教材、法律法规/法律/国家 |
+| 文件名 | seq, title, standard_no | 01、村庄规划用地分类指南、GB/T 32000-2024 |
+| 文档内容 | parser, parse_time | mineru、2.5s |
+| LLM Flash | doc_type, keywords | textbook、["用地分类", "规划指标"] |
+
+#### 类别映射
+
+```python
+CATEGORY_MAPPING = {
+    "01_专业教材": ("专业教材", "", ""),
+    "02_法律法规/01_法律": ("法律法规", "法律", "国家"),
+    "02_法律法规/02_地方性法规": ("法律法规", "地方性法规", "地方"),
+    "03_政策文件/01_国家层面": ("政策文件", "国家政策", "国家"),
+    "04_技术规范/01_国家层面": ("技术规范", "国家标准", "国家"),
+    "05_上位规划/01_广东省": ("上位规划", "", "广东省"),
+    "06_相关案例": ("相关案例", "", ""),
 }
 ```
 
-### Parent-Child 模式（Small-to-Big）
-
-用于 `report` 类型文档，实现高精度检索 + 完整上下文返回：
-
-```
-Small-to-Big 架构:
-  ┌─────────────────────────────┐
-  │  Parent Chunk (~2000 chars) │  ← 返回给 LLM 的上下文
-  │  ┌───────────────────────┐  │
-  │  │  Child (~400 chars)   │  │  ← 用于向量检索匹配
-  │  └───────────────────────┘  │
-  └─────────────────────────────┘
-
-检索流程:
-  用户查询 → 匹配 Child (高精度) → 返回 Parent (完整上下文)
-```
-
-**关键参数**：
-
-- 子块大小：400 字符（用于精确向量匹配）
-- 父块大小：2000 字符（用于返回完整上下文）
-- 子块重叠：100 字符
-
-### LLM 智能切分（v5.0 新增）
-
-针对正则切分效果差的文档，支持使用 LLM 进行语义边界检测和切片质量评分。
-
-**配置项**：
+#### LLM Flash 类型推断
 
 ```python
-# backend/app/core/settings.py
-LLM_CHUNK_ENABLED = False  # 是否启用 LLM 切分
-LLM_CHUNK_THRESHOLD = 0.7  # 语义评分阈值
-LLM_CHUNK_MAX_DOC_SIZE = 10000  # 启用 LLM 切分的文档大小阈值
-```
-
-**核心类**：
-
-```python
-# backend/app/services/modules/rag/chunker.py
-
-class LLMBoundaryDetector:
-    """LLM 辅助语义边界检测"""
-
-    async def validate_boundary_async(self, left_context: str, right_context: str) -> dict:
-        """校验边界是否合理，返回 {"should_split": bool, "reason": str}"""
-
-    async def suggest_boundary_async(self, context: str) -> int:
-        """建议新的边界位置，返回字符偏移量"""
-
-
-class SemanticChunkScorer:
-    """切片语义完整性评分"""
-
-    async def score_chunk_async(self, chunk: str) -> dict:
-        """评估 chunk 的语义完整性，返回 {"score": float, "issues": List[str]}"""
-
-
-class EnhancedMarkdownSlicer(UnifiedMarkdownSlicer):
-    """增强版切分器：支持 LLM 辅助"""
-
-    async def slice_async(self, content: str, doc_type: str, ...) -> List[Chunk]:
-        """异步切分（支持 LLM 辅助）"""
-        # 1. 正则初切
-        # 2. LLM 边界校验
-        # 3. 语义评分
-        # 4. 返回高质量 chunks
-```
-
-**流程图**：
-
-```
-文档入库
-    │
-    ├─ 1. 正则初切
-    │     按文档类型使用对应正则模式
-    │
-    ├─ 2. LLM 边界校验（可选）
-    │     validate_boundary_async()
-    │     ├─ 合理 → 保留边界
-    │     └─ 不合理 → 合并相邻 chunks
-    │
-    ├─ 3. 语义评分（可选）
-    │     score_chunk_async()
-    │     ├─ score >= threshold → 保留
-    │     └─ score < threshold → 过滤
-    │
-    └─ 4. 入库
-```
-
-**成本分析**：
-
-| 项目 | 数据 |
-|------|------|
-| 模型 | qwen-flash（阿里云） |
-| 单文档成本 | ~0.008元（50,000字符） |
-| 50个文档批量 | ~0.4元 |
-
-### 切片质量检测
-
-切片器内置质量检测逻辑，过滤低质量切片：
-
-```python
-def _is_quality_chunk(self, text: str) -> bool:
-    # 最小长度检测
-    if len(text.strip()) < 30:
-        return False
-    # 中文比例检测（至少 5%）
-    if sum(1 for c in text if '一' <= c <= '鿿') / len(text) < 0.05:
-        return False
-    return True
-```
-
-### 文档预处理
-
-切片前自动执行以下预处理：
-
-1. **换行符标准化**：`\r\n` → `\n`
-2. **多余空行压缩**：连续空行压缩为两个
-3. **OCR 标记清理**：移除 `#[Page N]`、`*[Image OCR]` 等
-4. **表格行过滤**：过滤 `|` 超过 3 个的行
-5. **单字中文行过滤**：过滤单字中文行
-
----
-
-## 知识库组成
-
-### 知识库分类体系
-
-```python
-# backend/app/core/settings.py
-KB_CATEGORIES = ["policies", "cases", "standards", "domain", "local", "laws", "plans"]
-```
-
-### 目录映射关系
-
-| 目录名          | category      | doc_type     | 说明                     |
-| --------------- | ------------- | ------------ | ------------------------ |
-| `01 专业教材` | `domain`    | `textbook` | 规划专业教材             |
-| `02 法律法规` | `laws`      | -            | 法律法规文件（含子分类） |
-| `03 政策文件` | `policies`  | -            | 政策文件（含子分类）     |
-| `04 技术规范` | `standards` | -            | 技术规范标准             |
-| `05 上位规划` | `plans`     | `report`   | 上位规划文件             |
-| `06 相关案例` | `cases`     | `case`     | 规划案例                 |
-
-### 向量存储配置
-
-```python
-# backend/app/core/settings.py
-CHROMA_COLLECTION_NAME = "village_planning"
-CHROMA_PERSIST_DIR = "data/knowledge_base/chroma_db"
-```
-
-### 嵌入模型配置
-
-系统支持嵌入模型：
-
-| 属性     |  | 阿里云模式                        |
-| -------- | - | --------------------------------- |
-| 配置项   |  | `EMBEDDING_PROVIDER = "aliyun"` |
-| 模型     |  | `text-embedding-v4`             |
-| 向量维度 |  | 1024                              |
-| 语言支持 |  | 多语言                            |
-| 加载方式 |  | OpenAI 兼容 API                   |
-
-```python
-# backend/app/core/settings.py
-EMBEDDING_PROVIDER = "local"  # 或 "aliyun"
-EMBEDDING_MODEL_NAME = "BAAI/bge-small-zh-v1.5"
-DASHSCOPE_API_KEY = ""  # 阿里云模式需要
-```
-
----
-
-## 向量存储架构
-
-### ParentChildVectorStore 设计
-
-**文件路径**: `backend/app/services/modules/rag/vector_store.py`
-
-```python
-class ParentChildVectorStore:
+async def infer_doc_type_with_llm(title: str, content: str) -> Dict:
     """
-    Small-to-Big 检索架构
-
-    流程：
-    1. 添加文档时：切分为父块 → 父块再切分为子块 → 子块存向量，父块存缓存
-    2. 检索时：检索子块 → 获取子块的 parent_id → 返回对应的父块内容
+    使用 LLM Flash 推断文档类型
+    
+    类型规则：
+    - textbook: 教材、原理、教程、导论
+    - guide: 指南、手册、指导、规程
+    - policy: 条例、规定、办法、通知、意见
+    - standard: 标准、规范（GB、CJJ 等）
+    - case: 规划、设计、方案、案例
+    - report: 一般报告
     """
-
-    PARENT_CACHE_FILE = "parent_chunks_cache.json"
-    MAX_PARENT_CACHE_SIZE = 1000  # LRU 淘汰上限
 ```
 
-### 文档添加流程（v5.0 修复）
+### 3.5 RAG 服务
 
-**文件路径**: `backend/app/services/modules/rag/service.py`
+**文件**: `backend/app/services/modules/rag/service.py`
+
+#### 核心方法
+
+| 方法 | 功能 | 参数 |
+|------|------|------|
+| `generate_queries()` | LLM 生成多条检索查询 | cfg, state |
+| `search()` | 向量搜索 | query, top_k, parent_level |
+| `add_document()` | 添加文档（增量） | file_path, category, doc_type |
+| `add_markdown_document()` | 导入 Markdown | file_path, use_llm_inference |
+| `get_context()` | 获取格式化上下文 | dim_key, state, cfg |
+| `format_for_prompt()` | 格式化检索结果 | results |
+
+#### 分层查询生成
 
 ```python
-def add_document(self, file_path: str, ...):
-    # 1. 加载文档并切分为父块
-    splits = SlicingStrategyFactory.slice_document(full_content, doc_type, ...)
-
-    # 2. 创建 ParentChildChunk 列表（父块 → 子块）
-    parent_child_chunks = self._create_parent_child_chunks(split_docs, ...)
-
-    # 3. 使用 add_chunks() 添加（而非 add_documents()）
-    self._vector_store.add_chunks(parent_child_chunks)
-
-def _create_parent_child_chunks(self, parent_docs: List[Document], ...):
-    """将父块切分为子块"""
-    CHILD_SIZE = 400  # 子块大小
-    CHILD_OVERLAP = 100  # 子块重叠
-
-    for parent_doc in parent_docs:
-        parent_content = parent_doc.page_content
-        parent_id = f"{source_name}_{parent_idx}_{hash}"
-
-        # 切分父块为子块
-        child_splits = self.text_splitter.split_text(parent_content)
-
-        for child_idx, child_content in enumerate(child_splits):
-            chunk = ParentChildChunk(
-                child_content=child_content,
-                child_id=f"{parent_id}_child_{child_idx}",
-                parent_content=parent_content,  # 完整父块内容
-                parent_id=parent_id,
-                child_index=child_idx,
-                total_children=len(child_splits),
-                metadata={...},
-            )
-            all_chunks.append(chunk)
-
-    return all_chunks
-```
-
-### 检索流程
-
-```
-用户查询
-    │
-    ├─ 1. 向量相似度搜索（子块）
-    │     ChromaDB.similarity_search(query, k=5)
-    │
-    ├─ 2. 获取 parent_id
-    │     从子块 metadata 中提取
-    │
-    ├─ 3. 查询父块缓存
-    │     _parent_cache[parent_id]
-    │
-    └─ 4. 返回父块内容
-          完整上下文（~2000 chars）
-```
-
-### Fallback 机制
-
-当父块缓存为空或子块缺少 `parent_id` 时，自动降级返回子块结果：
-
-```python
-def retrieve(self, query: str, k: int = 5, return_parents: bool = True) -> List[Dict]:
-    child_results = self.child_store.similarity_search(query, k=k)
-
-    # Fallback 1: _parent_cache 为空时直接返回子块结果
-    if not self._parent_cache:
-        logger.info("[ParentChildVectorStore] _parent_cache 为空，fallback 返回子块结果")
-        return [{"content": doc.page_content, "metadata": doc.metadata, "score": 0} for doc in child_results]
-
-    # ... 尝试获取父块 ...
-
-    # Fallback 2: 所有 child doc 都缺少 parent_id 时，直接返回子块结果
-    if not parent_results:
-        logger.info("[ParentChildVectorStore] parent_id 缺失，fallback 返回子块结果")
-        return [{"content": doc.page_content, "metadata": doc.metadata, "score": 0} for doc in child_results]
-```
-
-### 关键参数
-
-| 参数         | 值         | 说明               |
-| ------------ | ---------- | ------------------ |
-| 子块大小     | 400 字符   | 用于精确向量匹配   |
-| 子块重叠     | 100 字符   | 避免边界信息丢失   |
-| 父块大小     | ~2000 字符 | 用于返回完整上下文 |
-| 父块缓存上限 | 1000 条    | LRU 淘汰策略       |
-
-### 父块缓存管理
-
-- **存储位置**: `{CHROMA_PERSIST_DIR}/parent_chunks_cache.json`
-- **缓存结构**: `OrderedDict[parent_id, parent_content]`
-- **淘汰策略**: LRU（最近最少使用），最大 1000 条
-- **持久化**: 每次添加文档后自动保存
-
----
-
-## 检索 Query 生成
-
-### 多查询动态生成（v5.0 新架构）
-
-**文件路径**: `backend/app/services/modules/rag/service.py`
-
-```python
-async def generate_queries(
-    self,
-    cfg: Any,
-    state: Dict[str, Any]
-) -> List[str]:
+def _build_query_prompt(dim_name, task_desc, layer, dependency_summaries) -> str:
     """
-    使用 LLM-Flash 基于依赖信息动态生成多条 RAG 查询
-
-    流程：
-    1. 加载依赖维度摘要（depends_on + layer_depends_on + phase_depends_on）
-    2. 使用 Flash LLM 生成 5-8 条中文查询
-    3. 返回多条查询用于并行检索
+    根据 Layer 构建不同的 Prompt
+    
+    Layer 1（现状分析）：
+    - 侧重技术方法和标准规范
+    - 检索：技术规范、数据采集方法、评价指标
+    
+    Layer 3（详细规划）：
+    - 侧重规划编制标准和案例
+    - 检索：用地指标、设施配置标准、政策法规
     """
-    # 加载依赖摘要（批量加载避免 N+1）
-    depends_on = getattr(cfg, 'depends_on', [])
-    layer_depends_on = getattr(cfg, 'layer_depends_on', [])
-    phase_depends_on = getattr(cfg, 'phase_depends_on', [])
-
-    all_deps = depends_on + layer_depends_on + phase_depends_on
-
-    # 批量加载各层报告
-    layer_reports = await store.get_layer_reports(session_id, 1)
-    layer_reports_2 = await store.get_layer_reports(session_id, 2) if phase_depends_on else {}
-    layer_reports_3 = await store.get_layer_reports(session_id, 3) if depends_on else {}
-
-    # 组装依赖摘要
-    dependency_summaries = []
-    for dep_key in all_deps:
-        summary = layer_reports.get(dep_key) or layer_reports_2.get(dep_key) or layer_reports_3.get(dep_key)
-        if summary:
-            dependency_summaries.append(f"【{dep_key}】{summary}")
-
-    # 使用 Flash LLM 生成查询
-    llm = create_flash_llm(max_tokens=200, temperature=0.3)
-    prompt = f"""你是一个专业的规划信息检索助手。根据以下背景信息，为规划任务生成 5-8 条中文检索查询。
-
-## 规划任务
-- 维度：{dim_name}
-- 描述：{task_desc}
-
-## 背景信息
-{chr(10).join(dependency_summaries)}
-
-## 生成要求
-生成 5-8 条中文查询，覆盖不同侧面（政策法规、技术标准、地方规划、相似案例），直接输出查询（每行一条），不要编号或解释。"""
-
-    response = await llm.ainvoke(prompt)
-    queries = [q.strip() for q in response.content.split("\n") if q.strip()]
-    return queries[:8]
 ```
 
-### 关键特点
-
-| 特性        | 说明                                    |
-| ----------- | --------------------------------------- |
-| 模型        | Flash 模型（qwen-flash，低延迟）        |
-| max_tokens  | 200（多条查询词）                       |
-| temperature | 0.3（稳定输出）                         |
-| 依赖传递    | 同层 + 跨层依赖摘要（完整内容，不截断） |
-| 查询数量    | 5-8 条中文查询                          |
-| 执行方式    | 并行检索（`asyncio.gather()`）        |
-| Fallback    | `"{dim_name} 规划 技术标准"`          |
-
-### 依赖摘要加载流程
-
-```
-维度分析开始
-    │
-    ├─ 1. 获取依赖配置
-    │     depends_on (同层依赖)
-    │     layer_depends_on (Layer 1 依赖)
-    │     phase_depends_on (Layer 2 依赖)
-    │
-    ├─ 2. 批量加载各层报告（避免 N+1）
-    │     get_layer_reports(session_id, 1)
-    │     get_layer_reports(session_id, 2)
-    │     get_layer_reports(session_id, 3)
-    │
-    ├─ 3. 组装依赖摘要
-    │     【{dep_key}】{完整摘要内容}
-    │
-    └─ 4. Flash LLM 生成查询
-          5-8 条中文查询
-```
-
-### 并行检索执行
-
-**文件路径**: `backend/app/agent/nodes/analysis.py`
+#### 查询缓存
 
 ```python
-# 生成多条查询
-queries = await RagService.get_instance().generate_queries(cfg, state)
+_query_cache: Dict[str, List[str]] = {}
+_query_cache_ttl: int = 3600  # 1 小时
 
-# 并行执行所有查询
-search_tasks = [RagService.get_instance().search(query, top_k=2) for query in queries]
-all_results_nested = await asyncio.gather(*search_tasks)
-all_results = [r for results in all_results_nested for r in results]
-
-# 去重并排序（按 score）
-seen_content = set()
-unique_results = []
-for r in sorted(all_results, key=lambda x: x.get("score", 0), reverse=True):
-    content_key = r.get("content", "")[:100]
-    if content_key not in seen_content:
-        seen_content.add(content_key)
-        unique_results.append(r)
-
-# 取 top-k
-results = unique_results[:5]
+# 缓存键：维度 + 依赖列表 + layer
+cache_key = hashlib.md5(f"{dim_key}:{deps_str}".encode()).hexdigest()
 ```
 
 ---
 
-## 分层检索机制
+## 四、完整处理流程
 
-### 三级开关控制
-
-**文件路径**: `backend/app/agent/nodes/analysis.py`
-
-```python
-# 三级开关: Layer > Session > Dimension
-rag_layer_config = config.get("rag_layer_config", {})
-layer_rag_enabled = rag_layer_config.get(dim_layer, True)  # Layer 级
-global_rag_enabled = config.get("rag_enabled", True)        # Session 级
-dim_rag_query = getattr(cfg, 'rag_query', '')               # Dimension 级
-
-# 组合决策: Layer && Session && Dimension
-rag_enabled = layer_rag_enabled and global_rag_enabled
-
-if rag_enabled and dim_rag_query:
-    # 执行多查询并行检索
-    queries = await RagService.get_instance().generate_queries(cfg, state)
-    search_tasks = [RagService.get_instance().search(query, top_k=2) for query in queries]
-    all_results_nested = await asyncio.gather(*search_tasks)
-    # 去重合并
-    results = _deduplicate_and_merge(all_results_nested)[:5]
-```
-
-### 三级开关流程图
+### 4.1 构建（入库）流程
 
 ```
-维度分析开始
-    │
-    ├─ 1. Layer 级开关（最高优先级）
-    │     rag_layer_config.get(dim_layer, True)
-    │     ├─ True  → 继续
-    │     └─ False → 跳过 RAG
-    │
-    ├─ 2. Session 级开关
-    │     config.get("rag_enabled", True)
-    │     ├─ True  → 继续
-    │     └─ False → 跳过 RAG
-    │
-    ├─ 3. Dimension 级开关
-    │     cfg.rag_query
-    │     ├─ 非空 → 执行 RAG 检索
-    │     └─ 空字符串 → 跳过 RAG
-    │
-    ├─ 4. 多查询生成
-    │     generate_queries(cfg, state)
-    │     └─ Flash LLM 生成 5-8 条中文查询
-    │
-    ├─ 5. 并行检索执行
-    │     asyncio.gather(*search_tasks)
-    │     └ 每条查询 top_k=2
-    │
-    └─ 6. 去重合并取 top-5
-          组装 Prompt（传入 rag_context）
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           文档入库流程                                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  1. 文档加载                                                            │
+│     ┌──────────┐    ┌──────────┐    ┌──────────┐                       │
+│     │ 原始文件 │ →  │ 解析器   │ →  │ Markdown │                       │
+│     │ PDF/DOCX │    │ MinerU   │    │ 内容     │                       │
+│     └──────────┘    └──────────┘    └──────────┘                       │
+│                                                                         │
+│  2. 元数据提取                                                          │
+│     ┌──────────┐    ┌──────────┐    ┌──────────┐                       │
+│     │ 文件路径 │ →  │ Metadata │ →  │ category │                       │
+│     │ 文件名   │    │ Extractor│    │ title    │                       │
+│     └──────────┘    └──────────┘    │ doc_type │                       │
+│                                      └──────────┘                       │
+│                                                                         │
+│  3. 层级切片                                                            │
+│     ┌──────────┐    ┌──────────┐    ┌──────────┐                       │
+│     │ Markdown │ →  │ LLM 矫正 │ →  │ LangChain│                       │
+│     │ 内容     │    │ 大纲层级 │    │ 切片     │                       │
+│     └──────────┘    └──────────┘    └──────────┘                       │
+│          ↓                                    ↓                          │
+│     ┌──────────┐                       ┌──────────┐                    │
+│     │ 清理噪声 │                       │ 树形索引 │                    │
+│     │ 目录/注释│                       │ by_id   │                    │
+│     └──────────┘                       │ children │                    │
+│                                        └──────────┘                    │
+│                                                                         │
+│  4. 向量存储                                                            │
+│     ┌──────────┐    ┌──────────┐    ┌──────────┐                       │
+│     │ 切片列表 │ →  │ Embedding │ →  │ ChromaDB │                       │
+│     │ Hierarchy│    │ Model    │    │ 向量库   │                       │
+│     │ Chunk    │    └──────────┘    └──────────┘                       │
+│     └──────────┘          ↓                ↓                            │
+│                     ┌──────────┐    ┌──────────┐                       │
+│                     │ 向量缓存 │    │ 父块缓存 │                       │
+│                     └──────────┘    └──────────┘                       │
+│                                                                         │
+│  5. 索引持久化                                                          │
+│     ┌──────────────────────────────────────────┐                        │
+│     │ outline_index/*.json                    │                        │
+│     │ - file_hash（增量更新）                 │                        │
+│     │ - tree_index（by_id, children）         │                        │
+│     │ - chunks 列表                           │                        │
+│     └──────────────────────────────────────────┘                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 组合逻辑矩阵
+### 4.2 检索流程
 
-| Layer 级  | Session 级 | Dimension 级 | 结果                    |
-| --------- | ---------- | ------------ | ----------------------- |
-| `true`  | `true`   | 非空字符串   | ✅ 执行 RAG 检索        |
-| `true`  | `true`   | `""`       | ❌ 跳过（维度级关闭）   |
-| `true`  | `false`  | 任意值       | ❌ 跳过（会话级关闭）   |
-| `false` | 任意值     | 任意值       | ❌ 跳过（Layer 级关闭） |
-
-### RAG 禁用维度清单
-
-#### Layer 2（规划思路）— 全部 4 维度关闭
-
-| 维度 Key                 | 维度名称     | rag_query | 关闭原因                                |
-| ------------------------ | ------------ | --------- | --------------------------------------- |
-| `resource_endowment`   | 资源禀赋分析 | `""`    | 依赖内部知识+前序报告，无需技术标准检索 |
-| `planning_positioning` | 规划定位分析 | `""`    | 同上                                    |
-| `development_goals`    | 发展目标分析 | `""`    | 同上                                    |
-| `planning_strategies`  | 规划策略分析 | `""`    | 同上                                    |
-
-**关闭理由**：Layer 2（规划思路层）本质是对 Layer 1 分析结果的综合提炼，输出规划理念和方向性判断。其知识来源主要是：
-
-- Layer 1 各维度的分析报告（通过 `reports` 状态传递）
-- LLM 自身的规划领域知识
-
-外部知识检索对此类归纳性任务不仅收益有限，反而可能引入不相关的技术标准，干扰规划理念的生成。
-
-#### Layer 3 — `project_bank` 关闭
-
-| 维度 Key         | 维度名称   | rag_query | 关闭原因                         |
-| ---------------- | ---------- | --------- | -------------------------------- |
-| `project_bank` | 建设项目库 | `""`    | 建设项目目录性质，不需要知识检索 |
-
-**关闭理由**：建设项目库本质是对 Layer 3 其他维度规划产出（产业规划、土地利用规划、道路交通规划等）的项目化汇总和投资估算，属于"目录整理"型任务，不涉及新的技术标准引用。
-
-### 检索上下文模式
-
-| context_mode | 说明                | Token 消耗   |
-| ------------ | ------------------- | ------------ |
-| `minimal`  | 仅匹配片段          | 最少         |
-| `standard` | 片段 + 300 字上下文 | 中等（默认） |
-| `expanded` | 片段 + 500 字上下文 | 最大         |
-
----
-
-## 维度摘要生成
-
-### 智能摘要策略
-
-**文件路径**: `backend/app/services/report_store.py`
-
-维度摘要用于 RAG 查询生成的上下文传递，采用智能策略：
-
-```python
-async def _generate_summary(self, content: str) -> str:
-    """生成摘要 - 智能策略：短文直接返回，长文用 LLM 生成"""
-    if not content:
-        return ""
-
-    # 简单清理
-    cleaned = " ".join(content.split())
-
-    # 短报告（< 1000 字）直接返回
-    if len(cleaned) <= 1000:
-        return cleaned
-
-    # 长报告使用 LLM-Flash 生成摘要
-    from app.core.llm import create_flash_llm
-
-    llm = create_flash_llm(max_tokens=300, temperature=0.3)
-
-    prompt = f"""请用300字以内概括以下规划分析报告的核心内容，包括：
-1. 主要发现
-2. 关键结论
-3. 核心建议（如有）
-
-报告内容：
-{cleaned[:3000]}"""
-
-    try:
-        result = await llm.ainvoke(prompt)
-        return result.content.strip()
-    except Exception as e:
-        logger.warning(f"摘要生成失败，使用截断: {e}")
-        return cleaned[:500]
 ```
-
-### 策略说明
-
-| 报告长度   | 处理方式       | 说明                     |
-| ---------- | -------------- | ------------------------ |
-| < 1000 字  | 直接返回       | 简单清洗，保留完整内容   |
-| >= 1000 字 | LLM-Flash 生成 | 300 字摘要，提取核心内容 |
-| 生成失败   | 截断前 500 字  | 降级策略                 |
-
-### 摘要使用场景
-
-1. **RAG 查询生成**：作为依赖上下文传递给 Flash LLM
-2. **消息队列**：用于前端展示维度摘要
-3. **版本历史**：存储在 `DimensionReport.summary` 字段
-
----
-
-## 元数据注入
-
-### 注入字段说明
-
-**文件路径**: `backend/app/services/modules/rag/injector.py`
-
-| 字段               | 类型   | 说明                 | 来源                |
-| ------------------ | ------ | -------------------- | ------------------- |
-| `dimension_tags` | string | 维度标签（逗号分隔） | 关键词匹配/语义标注 |
-| `terrain`        | string | 地形类型             | 文档内容/文件名     |
-| `document_type`  | string | 文档类型             | 内容分析            |
-| `regions`        | string | 地区名称（逗号分隔） | 内容提取            |
-| `category`       | string | 知识库分类           | 参数传入            |
-| `chunk_index`    | int    | 切片序号             | 自动生成            |
-| `total_chunks`   | int    | 总切片数             | 自动生成            |
-| `source`         | string | 文档来源             | 文件名              |
-| `file_hash`      | string | 文件 MD5             | 自动计算            |
-
-### 两种标注模式
-
-#### 1. 关键词匹配（快速）
-
-```python
-# backend/app/config/document_types.py
-class DimensionTagger:
-    """维度标签关键词匹配"""
-
-    DIMENSION_KEYWORDS = {
-        "location": ["区位", "交通", "对外联系", "可达性"],
-        "socio_economic": ["人口", "经济", "产业", "收入"],
-        "land_use": ["土地利用", "用地", "耕地", "建设用地"],
-        # ...
-    }
-
-    def detect_dimensions(self, content: str) -> List[str]:
-        """从内容中检测相关维度"""
-        detected = []
-        for dim, keywords in self.DIMENSION_KEYWORDS.items():
-            if any(kw in content for kw in keywords):
-                detected.append(dim)
-        return detected if detected else ["general"]
-```
-
-#### 2. 语义标注（精准）
-
-```python
-# backend/app/services/modules/rag/tagger.py
-class SemanticDimensionTagger:
-    """使用 LLM 进行语义维度标注"""
-
-    async def tag_chunk_async(self, content: str) -> List[str]:
-        """使用 Flash 模型进行语义维度标注"""
-        prompt = f"""分析以下规划文档片段，判断其最相关的分析维度。
-
-文档内容：
-{content[:500]}
-
-可选维度：区位分析、社会经济、土地利用、道路交通、公共服务、基础设施、生态绿地、建筑分析、历史文化
-
-请返回最相关的 1-3 个维度，用逗号分隔："""
-
-        llm = create_flash_llm(temperature=0.1, max_tokens=50)
-        response = await llm.ainvoke(prompt)
-        return self._parse_response(response.content)
-```
-
-### 批量注入流程
-
-```python
-# backend/app/services/modules/rag/injector.py
-class MetadataInjector:
-    def inject_batch(
-        self,
-        documents: List[Document],
-        category: Optional[str] = None,
-        doc_type: Optional[str] = None,
-        dimension_tags: Optional[list] = None,
-        terrain: Optional[str] = None,
-    ) -> List[Document]:
-        """批量注入元数据"""
-        full_content = "\n\n".join(doc.page_content for doc in documents)
-        total = len(documents)
-
-        for idx, doc in enumerate(documents):
-            params = InjectionParams(
-                doc=doc,
-                full_content=full_content,
-                idx=idx,
-                total=total,
-                category=category,
-                manual_doc_type=doc_type,
-                manual_dimension_tags=dimension_tags,
-                manual_terrain=terrain,
-            )
-            self.inject(params)
-
-        return documents
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           知识检索流程                                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  1. 查询生成                                                            │
+│     ┌──────────┐    ┌──────────┐    ┌──────────┐                       │
+│     │ 维度配置 │ →  │ LLM Flash│ →  │ 多条查询 │                       │
+│     │ 依赖状态 │    │ 生成查询 │    │ 4-8 条   │                       │
+│     └──────────┘    └──────────┘    └──────────┘                       │
+│                                                                         │
+│  2. 向量搜索                                                            │
+│     ┌──────────┐    ┌──────────┐    ┌──────────┐                       │
+│     │ 查询文本 │ →  │ Embedding │ →  │ ChromaDB │                       │
+│     │         │    │ 向量化   │    │ 相似搜索 │                       │
+│     └──────────┘    └──────────┘    └──────────┘                       │
+│                                            ↓                            │
+│                                     ┌──────────┐                        │
+│                                     │ 命中子块 │                        │
+│                                     │ + 分数   │                        │
+│                                     └──────────┘                        │
+│                                                                         │
+│  3. 树形索引查找                                                        │
+│     ┌──────────┐    ┌──────────┐    ┌──────────┐                       │
+│     │ 子块 ID  │ →  │ tree_index│ →  │ 完整信息 │                       │
+│     │         │    │ by_id    │    │ ancestors│                       │
+│     └──────────┘    └──────────┘    │ children │                       │
+│                                      └──────────┘                       │
+│                                                                         │
+│  4. 内容合并（Small-to-Big）                                            │
+│     ┌──────────────────────────────────────────┐                        │
+│     │ 判断是否需要合并：                       │                        │
+│     │ - is_placeholder=True → 合并子块         │                        │
+│     │ - char_count < 50 → 合并子块             │                        │
+│     │ - 否则 → 返回子块本身                    │                        │
+│     └──────────────────────────────────────────┘                        │
+│                     ↓                                                    │
+│     ┌──────────────────────────────────────────┐                        │
+│     │ 合并逻辑：                               │                        │
+│     │ merged_content = chunk.content           │                        │
+│     │ for child_id in children[chunk_id]:      │                        │
+│     │     merged_content += child.content      │                        │
+│     └──────────────────────────────────────────┘                        │
+│                                                                         │
+│  5. 结果格式化                                                          │
+│     ┌──────────────────────────────────────────┐                        │
+│     │ {                                       │                        │
+│     │   "content": "合并后的内容",            │                        │
+│     │   "score": 0.85,                        │                        │
+│     │   "metadata": {                         │                        │
+│     │     "ancestors": ["章", "节"],          │                        │
+│     │     "depth": 3,                         │                        │
+│     │     "section_title": "2.1.1 条款",      │                        │
+│     │     "source": "文档名.md"                │                        │
+│     │   }                                     │                        │
+│     │ }                                       │                        │
+│     └──────────────────────────────────────────┘                        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 知识检索工具集
+## 五、使用指南
 
-以下工具注册到 `ToolRegistry`，供 LangChain Agent 通过 function calling 调用：
+### 5.1 命令行导入
 
-**文件路径**: `backend/app/tools/analytics/knowledge_search.py`
+```bash
+# 预览文件列表（不导入）
+python scripts/import_rag_documents.py --dry-run
 
-| 工具名                         | 函数                             | 功能                        |
-| ------------------------------ | -------------------------------- | --------------------------- |
-| `knowledge_search`           | `search_knowledge()`           | 向量检索，支持 context_mode |
-| `list_documents`             | `list_available_documents()`   | 列出知识库所有文档          |
-| `document_overview`          | `get_document_overview()`      | 文档执行摘要 + 章节列表     |
-| `chapter_content`            | `get_chapter_content()`        | 章节内容（三级详情）        |
-| `key_points_search`          | `search_key_points()`          | 关键要点搜索                |
-| `full_document`              | `get_full_document()`          | 完整文档内容                |
-| `check_technical_indicators` | `check_technical_indicators()` | 技术指标/规范标准检索       |
+# 导入所有文档
+python scripts/import_rag_documents.py
 
-### 元数据过滤
+# 限制导入数量
+python scripts/import_rag_documents.py --limit 10
+
+# 指定导入目录
+python scripts/import_rag_documents.py --dir data/RAG_doc/04_技术规范
+
+# 不使用 LLM Flash 推断类型
+python scripts/import_rag_documents.py --no-llm
+```
+
+### 5.2 API 使用
 
 ```python
-def _build_metadata_filter(params: MetadataFilterParams) -> Optional[Dict]:
-    """构建 ChromaDB 过滤器"""
-    filter_dict = {}
+from app.services.modules.rag.service import RagService
 
-    if params.terrain and params.terrain != "all":
-        filter_dict["terrain"] = params.terrain
+# 获取单例实例
+rag = RagService.get_instance()
 
-    if params.doc_type:
-        filter_dict["doc_type"] = params.doc_type
+# 导入 Markdown 文档
+result = await rag.add_markdown_document(
+    "data/RAG_doc/_doc_md/01_专业教材/01 村庄规划原理.md",
+    use_llm_inference=True,
+)
 
-    if params.task_id:
-        filter_dict["task_id"] = params.task_id  # 会话隔离
+# 向量搜索
+results = await rag.search("历史文化保护规划技术规范", top_k=5)
 
-    return filter_dict if filter_dict else None
+# 获取格式化上下文（用于 Prompt 注入）
+context = rag.format_for_prompt(results)
+
+# 获取知识库统计
+stats = rag.get_stats()
+```
+
+### 5.3 分层检索控制
+
+```python
+# Layer 级别控制（最高优先级）
+# 在 phases.yaml 中配置
+layer1:
+  rag_enabled: true   # 现状分析层：启用
+layer2:
+  rag_enabled: false  # 规划思路层：禁用
+layer3:
+  rag_enabled: true   # 详细规划层：启用
+
+# Session 级别控制
+session.rag_enabled = False
+
+# Dimension 级别控制
+dimension.rag_query = "用地分类标准"
 ```
 
 ---
 
-## 关键文件路径
+## 六、配置说明
 
-| 功能                   | 文件路径                                                    |
-| ---------------------- | ----------------------------------------------------------- |
-| 统一切片器             | `backend/app/services/modules/rag/chunker.py`             |
-| LLM 边界检测器         | `backend/app/services/modules/rag/chunker.py`             |
-| 语义评分器             | `backend/app/services/modules/rag/chunker.py`             |
-| 文本切片策略工厂       | `backend/app/services/modules/rag/utils/text_splitter.py` |
-| 向量存储               | `backend/app/services/modules/rag/vector_store.py`        |
-| RAG 服务（多查询生成） | `backend/app/services/modules/rag/service.py`             |
-| 文档上下文管理器       | `backend/app/services/modules/rag/context.py`             |
-| 元数据注入器           | `backend/app/services/modules/rag/injector.py`            |
-| 语义维度标注器         | `backend/app/services/modules/rag/tagger.py`              |
-| 知识检索工具集         | `backend/app/tools/analytics/knowledge_search.py`         |
-| 分析节点（并行检索）   | `backend/app/agent/nodes/analysis.py`                     |
-| 路由逻辑（依赖检查）   | `backend/app/agent/routing.py`                            |
-| 报告存储（智能摘要）   | `backend/app/services/report_store.py`                    |
-| 维度 RAG 配置          | `backend/app/config/phases.yaml`                          |
-| 系统配置               | `backend/app/core/settings.py`                            |
-| 知识库构建脚本         | `scripts/build_knowledge_base.py`                         |
+### 6.1 环境变量
+
+```bash
+# 文档解析器
+DOCUMENT_PARSER=mineru          # mineru | docling | markitdown
+MINERU_TOKEN=xxx                # MinerU API Token
+
+# Embedding 配置
+EMBEDDING_PROVIDER=local        # local | aliyun
+EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
+EMBEDDING_DEVICE=cpu            # cpu | cuda | mps
+
+# 阿里云 Embedding
+DASHSCOPE_API_KEY=xxx
+ALIYUN_EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_DIMENSIONS=1024
+
+# 向量数据库
+CHROMA_COLLECTION_NAME=rural_planning
+CHROMA_PERSIST_DIR=data/RAG_doc/_cache/chroma_db
+
+# 切片配置
+CHUNK_SIZE=2500
+CHUNK_OVERLAP=500
+
+# 查询缓存
+QUERY_CACHE_TTL=3600            # 秒
+```
+
+### 6.2 目录路径映射
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `RAG_DOC_DIR` | `data/RAG_doc` | 知识库根目录 |
+| `OUTLINE_INDEX_DIR` | `data/RAG_doc/_cache/outline_index` | 层级索引缓存 |
+| `CHROMA_PERSIST_DIR` | `data/RAG_doc/_cache/chroma_db` | 向量数据库 |
 
 ---
 
-## 相关文档
+## 七、关键文件索引
 
-- [02-agent-core](./02-agent-core.md) - analyze_dimension 节点设计
-- [03-layer-dimension](./03-layer-dimension.md) - 维度 RAG 配置
-- [06-tool-system](./06-tool-system.md) - ToolRegistry 工具注册
+| 功能 | 文件路径 | 核心类/函数 |
+|------|----------|-------------|
+| 层级切片器 | `chunker.py` | `HierarchySlicer`, `LLMOutlineCorrector` |
+| 树形索引 | `chunker.py` | `HierarchyTreeIndex`, `OutlineIndexManager` |
+| 向量存储 | `vector_store.py` | `HierarchyVectorStore`, `retrieve()` |
+| RAG 服务 | `service.py` | `RagService`, `generate_queries()` |
+| 元数据提取 | `utils/metadata_extractor.py` | `MetadataExtractor` |
+| 文档加载 | `app/utils/document_loader.py` | `_create_loader()`, `MarkItDownLoader` |
+| 导入脚本 | `scripts/import_rag_documents.py` | `import_document()` |
+
+---
+
+## 八、已知问题与解决方案
+
+### 8.1 空标题节点问题
+
+**现象**: 检索返回只有标题的切片（如 `2 历史文化街区保护规划`）
+
+**原因**: 
+- Markdown 标题标记错误（`# 2` 和 `# 2.1` 被误设为同级）
+- LLM 大纲矫正未能正确推断父级关系
+
+**解决方案**: `_fix_orphan_headings()` 方法（chunker.py 第 888-953 行）
+- 检测短标题节点（char_count < 50）
+- 利用编号连续性判断父子关系
+- 合并到后续节点
+
+### 8.2 检索词不匹配问题
+
+**现象**: 查询词与实际检索词不符
+
+**原因**: 
+- LLM 查询生成结果被缓存
+- 查询缓存键未包含足够上下文
+
+**解决方案**:
+- 检查 `_query_cache` 是否过期
+- 确认缓存键包含维度 + 依赖 + layer
+
+### 8.3 内容截断问题
+
+**现象**: 返回内容只有前 200 字符
+
+**原因**: 
+- `RetrievedChunk.content_preview` 截断
+- SSE 事件中 `snippet` 截断
+
+**解决方案**: 
+- 检查 `vector_store.py` 的 `retrieve()` 方法
+- 确认返回的是 `content` 而非 `content_preview`
+
+---
+
+## 九、更新历史
+
+| 日期 | 版本 | 更新内容 |
+|------|------|----------|
+| 2026-05-17 | v7.0 | 完整重写文档，补充树形索引、Small-to-Big 流程 |
+| 2026-05-16 | v6.0 | 重写层级切片，集成 LLM 大纲矫正 |
+| 2026-05-16 | v5.0 | 新增 MetadataExtractor + LLM Flash |
+| 2026-05-16 | v4.0 | 删除不适配文件，简化架构 |

@@ -234,6 +234,16 @@ export default function ProcessPanel() {
                                   key={session.session_id}
                                   className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 hover:border-[#0ea5e9]/50 hover:bg-[#e0f2fe]/30 transition-all cursor-pointer group"
                                   onClick={() => loadHistoricalSession(village.name, session.session_id)}
+                                  draggable
+                                  onDragStart={(e) => {
+                                    e.dataTransfer.setData('application/json', JSON.stringify({
+                                      sessionId: session.session_id,
+                                      villageName: village.name,
+                                      villageDisplayName: village.display_name,
+                                      timestamp: session.timestamp,
+                                    }));
+                                    e.dataTransfer.effectAllowed = 'copy';
+                                  }}
                                 >
                                   <div className="flex items-center gap-2 min-w-0">
                                     <span className="text-xs text-slate-500 whitespace-nowrap">

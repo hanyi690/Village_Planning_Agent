@@ -114,6 +114,7 @@ DOCLING_FORCE_OCR = os.getenv("DOCLING_FORCE_OCR", "false").lower() == "true"
 # ==========================================
 DEFAULT_TOP_K = int(os.getenv("DEFAULT_TOP_K", "5"))
 RETRIEVE_SCORE_THRESHOLD = float(os.getenv("RETRIEVE_SCORE_THRESHOLD", "0.7"))
+MAX_MERGE_CONTENT_LENGTH = int(os.getenv("MAX_MERGE_CONTENT_LENGTH", "8000"))
 QUERY_CACHE_TTL = int(os.getenv("QUERY_CACHE_TTL", "0"))
 
 # LLM Chunking Configuration

@@ -86,6 +86,8 @@ interface RagDocument {
   snippet: string;
   source?: string;
   score?: number;
+  chunk_id?: string;
+  dimension_tags?: string[];
 }
 
 /**
@@ -381,6 +383,7 @@ export interface PlanningActions {
   setRagQuery: (dimKey: string, query: string) => void;
   setRagDocuments: (dimKey: string, documents: RagDocument[]) => void;
   clearRagSources: (dimKey: string) => void;
+  clearAllRagSources: () => void;
   showCascadeChain: (trigger: string, impacted: string[]) => void;
   clearCascadeChain: () => void;
   incrementDimensionVersion: (dimKey: string) => void;
@@ -1622,6 +1625,11 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     clearRagSources: (dimKey) =>
       set((state) => {
         delete state.dimensionRagSources[dimKey];
+      }),
+
+    clearAllRagSources: () =>
+      set((state) => {
+        state.dimensionRagSources = {};
       }),
 
     // ============================================

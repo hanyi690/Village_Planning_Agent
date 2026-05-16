@@ -145,23 +145,23 @@ class CheckpointService:
 
         layer_key = f"layer{layer}"
 
-        # 从数据库获取报告
+        # 从数据库获取报告（包含 knowledge_sources）
         from app.services.report_store import ReportStore
         store = ReportStore.get_instance()
-        reports = await store.get_layer_reports(session_id, layer)
+        reports_with_sources = await store.get_layer_reports_with_sources(session_id, layer)
 
         completed_dims_list = completed_dims.get(layer_key, [])
         expected_dims = get_layer_dimensions(layer)
 
         layer_completed = len(completed_dims_list) >= len(expected_dims)
-        total_chars = sum(len(v) for v in reports.values()) if reports else 0
+        total_chars = sum(len(v.get("content", "")) for v in reports_with_sources.values()) if reports_with_sources else 0
 
         return {
             "layer": layer,
-            "reports": reports,
+            "reports": reports_with_sources,  # Dict[str, {content, knowledge_sources}]
             "completed": layer_completed,
             "stats": {
-                "dimension_count": len(reports),
+                "dimension_count": len(reports_with_sources),
                 "total_chars": total_chars
             }
         }
@@ -272,14 +272,14 @@ class CheckpointService:
             # Pre-compute current layer from phase (efficiency: avoid repeated calls)
             current_layer_from_phase = _phase_to_layer(phase)
 
-            # 从数据库获取报告 - 一次性获取所有层
+            # 从数据库获取报告（包含 knowledge_sources）- 一次性获取所有层
             from app.services.report_store import ReportStore
             store = ReportStore.get_instance()
             all_layer_reports = {}
             if current_layer_from_phase and current_layer_from_phase >= 1:
                 layers_to_fetch = [l for l in [1, 2, 3] if l <= (current_layer_from_phase or 0)]
                 results = await asyncio.gather(*[
-                    store.get_layer_reports(session_id, layer_num)
+                    store.get_layer_reports_with_sources(session_id, layer_num)
                     for layer_num in layers_to_fetch
                 ])
                 all_layer_reports = dict(zip(layers_to_fetch, results))
@@ -293,7 +293,7 @@ class CheckpointService:
                 layer_completed = len(completed_dims.get(layer_key, [])) >= len(get_layer_dimensions(layer_num))
 
                 if layer_completed:
-                    # 从预加载的报告数据获取
+                    # 从预加载的报告数据获取（包含 content 和 knowledge_sources）
                     dimension_reports = all_layer_reports.get(layer_num, {})
 
                     # Use event factory for consistent event creation
@@ -308,22 +308,25 @@ class CheckpointService:
                     )
                     # 更新事件中的报告数据
                     event["report_count"] = len(dimension_reports)
-                    event["total_chars"] = sum(len(v) for v in dimension_reports.values())
+                    event["total_chars"] = sum(len(v.get("content", "")) for v in dimension_reports.values())
                     event["_rebuild"] = True
                     events.append(event)
                     logger.info(f"[CheckpointService] Session {session_id}: rebuilt layer_completed event Layer {layer_num}")
 
                     # Rebuild dimension_complete events for each completed dimension
-                    for dim_key, dim_content in dimension_reports.items():
+                    for dim_key, dim_data in dimension_reports.items():
+                        dim_content = dim_data.get("content", "")
                         if dim_content and len(dim_content) > 50:
                             dim_name = DIMENSION_NAMES.get(dim_key, dim_key)
+                            # 从数据库获取知识来源，fallback 到缓存
+                            dim_knowledge_sources = dim_data.get("knowledge_sources") or knowledge_sources_cache.get(dim_key, [])
                             dim_event = {
                                 "type": "dimension_complete",
                                 "layer": layer_num,
                                 "dimension_key": dim_key,
                                 "dimension_name": dim_name,
                                 "full_content": dim_content,
-                                "knowledge_sources": knowledge_sources_cache.get(dim_key, []),
+                                "knowledge_sources": dim_knowledge_sources,
                                 "session_id": session_id,
                                 "timestamp": metadata.get("last_signal_timestamp", datetime.now().isoformat()),
                                 "_rebuild": True,

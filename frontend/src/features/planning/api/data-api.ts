@@ -3,6 +3,7 @@
 // ============================================
 
 import { apiRequest } from './client';
+import type { CrossSessionReport, DimensionVersion } from './types';
 
 // ============================================
 // Data API
@@ -27,6 +28,37 @@ export const dataApi = {
       `/api/projects/${encodeURIComponent(villageName)}/sessions`
     );
     return response.sessions || [];
+  },
+
+  /**
+   * Get cross-session dimension report
+   * GET /api/projects/{name}/reports/{dim_key}?session_id={id}&version={n}
+   */
+  async getCrossSessionReport(
+    projectName: string,
+    dimKey: string,
+    sessionId?: string,
+    version?: number
+  ): Promise<CrossSessionReport> {
+    const params = new URLSearchParams();
+    if (sessionId) params.append('session_id', sessionId);
+    if (version !== undefined) params.append('version', String(version));
+
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return apiRequest<CrossSessionReport>(
+      `/api/projects/${encodeURIComponent(projectName)}/reports/${dimKey}${query}`
+    );
+  },
+
+  /**
+   * Get dimension version history
+   * GET /api/sessions/{id}/reports/{dim_key}/versions
+   */
+  async getDimensionVersions(sessionId: string, dimKey: string): Promise<DimensionVersion[]> {
+    const response = await apiRequest<{ versions: DimensionVersion[] }>(
+      `/api/sessions/${sessionId}/reports/${dimKey}/versions`
+    );
+    return response.versions || [];
   },
 
   // ============================================
