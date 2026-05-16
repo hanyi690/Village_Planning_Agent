@@ -15,6 +15,25 @@ interface MarkdownRendererProps {
 }
 
 /**
+ * Preprocess HTML tables to convert math syntax for rehype-katex
+ * Converts $...$ to <span class="math-inline">...</span>
+ * Converts $$...$$ to <div class="math-display">...</div>
+ */
+function preprocessMathInHtml(content: string): string {
+  // Process display math first ($$...$$) to avoid conflicts with inline math
+  let result = content.replace(
+    /\$\$([\s\S]*?)\$\$/g,
+    '<div class="math-display">$1</div>'
+  );
+  // Then process inline math ($...$)
+  result = result.replace(
+    /\$([^\$\n]+?)\$/g,
+    '<span class="math-inline">$1</span>'
+  );
+  return result;
+}
+
+/**
  * Markdown Renderer
  * Uses react-markdown with remark-gfm plugin for full markdown support including tables
  */
@@ -25,14 +44,20 @@ export default function MarkdownRenderer({
 }: MarkdownRendererProps) {
   // Process content to remove first header if suppressFirstHeader is enabled
   const processedContent = React.useMemo(() => {
-    if (!suppressFirstHeader || !content) return content;
+    if (!content) return '';
 
-    let html = content;
-    // Remove first header (level 1 or 2)
-    html = html.replace(/^#\s+.*$\n?/m, '');
-    html = html.replace(/^##\s+.*$\n?/m, '');
+    let result = content;
 
-    return html;
+    // Preprocess math in HTML tables
+    result = preprocessMathInHtml(result);
+
+    if (suppressFirstHeader) {
+      // Remove first header (level 1 or 2)
+      result = result.replace(/^#\s+.*$\n?/m, '');
+      result = result.replace(/^##\s+.*$\n?/m, '');
+    }
+
+    return result;
   }, [content, suppressFirstHeader]);
 
   return (
@@ -49,7 +74,7 @@ export default function MarkdownRenderer({
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex, rehypeRaw]}
+        rehypePlugins={[rehypeRaw, rehypeKatex]}
         components={{
           // Customize link rendering to open in new tab
           a: ({ href, children }) => (
