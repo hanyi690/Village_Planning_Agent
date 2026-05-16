@@ -37,21 +37,27 @@ OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")
 # ==========================================
 # RAG / Vector Store Configuration
 # ==========================================
-# Basic settings
-VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", str(PROJECT_ROOT / "vectordb"))
-VECTORDB_PERSIST = os.getenv("VECTORDB_PERSIST", "true").lower() in ("1", "true", "yes")
-RAG_ENABLED = os.getenv("RAG_ENABLED", "true").lower() in ("1", "true", "yes")
-
-# Data directory structure
+# Data directory structure (must be defined first)
 DATA_DIR = PROJECT_ROOT / "data"
 KNOWLEDGE_BASE_DIR = DATA_DIR / "knowledge_base"
 DATABASE_DIR = DATA_DIR / "database"
+
+# RAG Document Cache (unified under data/RAG_doc/_cache/)
+RAG_DOC_DIR = DATA_DIR / "RAG_doc"
+RAG_CACHE_DIR = RAG_DOC_DIR / "_cache"
+OUTLINE_INDEX_DIR = RAG_CACHE_DIR / "outline_index"
+VECTOR_CACHE_DIR = RAG_CACHE_DIR / "vector_cache"
+CHROMA_PERSIST_DIR = RAG_CACHE_DIR / "chroma_db"
+
+# Basic settings
+VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", str(CHROMA_PERSIST_DIR))
+VECTORDB_PERSIST = os.getenv("VECTORDB_PERSIST", "true").lower() in ("1", "true", "yes")
+RAG_ENABLED = os.getenv("RAG_ENABLED", "true").lower() in ("1", "true", "yes")
 
 # Vector database type: chroma (default), faiss, qdrant
 VECTOR_DB_TYPE = os.getenv("VECTOR_DB_TYPE", "chroma")
 
 # Chroma configuration
-CHROMA_PERSIST_DIR = KNOWLEDGE_BASE_DIR / "chroma_db"
 CHROMA_COLLECTION_NAME = os.getenv("CHROMA_COLLECTION_NAME", "rural_planning")
 
 # FAISS configuration
@@ -87,6 +93,23 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "500"))
 ADD_START_INDEX = os.getenv("ADD_START_INDEX", "true").lower() == "true"
 
 # ==========================================
+# Document Parser Configuration
+# ==========================================
+
+# Parser selection: "mineru" (default, best quality), "docling" (local), "markitdown" (fast)
+DOCUMENT_PARSER = os.getenv("DOCUMENT_PARSER", "mineru")
+
+# MinerU Configuration (cloud API, best quality)
+MINERU_USE_AGENT_API = os.getenv("MINERU_USE_AGENT_API", "true").lower() == "true"
+MINERU_TOKEN = os.getenv("MINERU_TOKEN", "")  # Required for Precise API (large files)
+MINERU_TIMEOUT = int(os.getenv("MINERU_TIMEOUT", "300"))  # Poll timeout in seconds
+
+# Docling Configuration (local, fallback)
+DOCLING_USE_CUDA = os.getenv("DOCLING_USE_CUDA", "false").lower() == "true"
+DOCLING_BATCH_SIZE = int(os.getenv("DOCLING_BATCH_SIZE", "50"))  # pages per batch
+DOCLING_FORCE_OCR = os.getenv("DOCLING_FORCE_OCR", "false").lower() == "true"
+
+# ==========================================
 # Retrieval Configuration
 # ==========================================
 DEFAULT_TOP_K = int(os.getenv("DEFAULT_TOP_K", "5"))
@@ -109,7 +132,7 @@ OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "")
 OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "")
 OSS_ENDPOINT = os.getenv("OSS_ENDPOINT", "oss-cn-shenzhen.aliyuncs.com")
 OSS_BUCKET_NAME = os.getenv("OSS_BUCKET_NAME", "")
-OSS_KB_PATH = os.getenv("OSS_KB_PATH", "knowledge_base/chroma_db")
+OSS_KB_PATH = os.getenv("OSS_KB_PATH", "RAG_doc/_cache/chroma_db")
 
 # ==========================================
 # LangSmith 追踪配置
