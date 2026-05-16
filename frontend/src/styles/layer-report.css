@@ -433,6 +433,37 @@
   text-align: center;
 }
 
+/* Knowledge slice preview - collapsed state */
+.preview-clamp {
+  max-height: 60px;
+  overflow: hidden;
+  position: relative;
+}
+
+.preview-clamp::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  background: linear-gradient(transparent, #f5f5f5);
+}
+
+.preview-content {
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.preview-content p {
+  margin: 0;
+}
+
+.preview-content table {
+  font-size: 0.7rem;
+  margin: 4px 0;
+}
+
 /* 维度报告消息样式 - 实时流式显示 */
 .dimension-report-message {
   background: #f0f9ff;

@@ -93,11 +93,13 @@ export default function KnowledgeSliceCard({ sources, className = '' }: Knowledg
                     <div className="text-xs text-gray-500 mb-1">第 {source.page} 页</div>
                   )}
 
-                  {/* Content preview (collapsed) */}
+                  {/* Content preview (collapsed) - render markdown */}
                   {source.content && expandedSliceIndex !== idx && (
-                    <div className="text-xs text-gray-600 bg-gray-50 p-1.5 rounded italic line-clamp-2">
-                      &quot;{source.content.substring(0, 150)}
-                      {source.content.length > 150 ? '...' : ''}&quot;
+                    <div className="text-xs text-gray-600 bg-gray-50 p-1.5 rounded prose prose-sm max-w-none preview-clamp">
+                      <MarkdownRenderer
+                        content={source.content.length > 200 ? source.content.substring(0, 200) + '...' : source.content}
+                        className="preview-content"
+                      />
                     </div>
                   )}
 
