@@ -100,13 +100,6 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
     : '';
   const ragSources = useDimensionRagSources(dimProgressKeyForRag);
 
-  // Debug: log ragSources state
-  useEffect(() => {
-    if (dimProgressKeyForRag) {
-      console.log('[ReportViewer] ragSources for', dimProgressKeyForRag, ':', ragSources);
-    }
-  }, [dimProgressKeyForRag, ragSources]);
-
   // Fetch sessions when entering compare mode
   useEffect(() => {
     if (compareMode && projectName) {
@@ -134,10 +127,7 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
       const dimKey = dimProgressKeyForRag.split('_').slice(1).join('_') || dimProgressKeyForRag;
       setIsLoadingVersions(true);
       dataApi.getDimensionVersions(sessionId, dimKey)
-        .then(versions => {
-          console.log('[Compare] versions fetched:', versions);
-          setAvailableVersions(versions);
-        })
+        .then(setAvailableVersions)
         .catch(console.error)
         .finally(() => setIsLoadingVersions(false));
     }
@@ -147,15 +137,8 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
   const handleSessionSelect = useCallback(async (targetSessionId: string, version?: number) => {
     if (!projectName || !dimProgressKeyForRag) return;
 
-    // Extract pure dimKey from format "layer_dimKey" (e.g., "1_infrastructure" -> "infrastructure")
+    // Extract pure dimKey from format "layer_dimKey"
     const dimKey = dimProgressKeyForRag.split('_').slice(1).join('_') || dimProgressKeyForRag;
-    console.log('[Compare] handleSessionSelect:', {
-      targetSessionId,
-      dimProgressKeyForRag,
-      dimKey,
-      projectName,
-      version,
-    });
 
     setSelectedSessionId(targetSessionId);
     setIsLoadingCompare(true);
@@ -167,7 +150,6 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
         targetSessionId,
         version
       );
-      console.log('[Compare] report fetched:', report);
       setCompareContent(report.content || '');
       setCompareKnowledgeSources(report.knowledge_sources || []);
     } catch (error) {
@@ -222,7 +204,6 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
 
     try {
       const data = JSON.parse(e.dataTransfer.getData('application/json'));
-      console.log('[Compare] Dropped session data:', data);
 
       if (data.sessionId && data.villageName) {
         // Enter compare mode and select the dropped session
@@ -533,6 +514,11 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
                                           </span>
                                         )}
                                       </div>
+                                      {doc.matched_query && (
+                                        <div className="text-xs text-cyan-600 mt-1 truncate">
+                                          匹配: {doc.matched_query}
+                                        </div>
+                                      )}
                                       {doc.snippet && (
                                         <p className="text-xs text-slate-500 mt-1 line-clamp-2">{doc.snippet}</p>
                                       )}

@@ -1,7 +1,7 @@
 # RAG 知识检索系统
 
-> **更新日期**: 2026-05-17
-> **版本**: v7.0
+> **更新日期**: 2026-05-18
+> **版本**: v7.1
 
 ## 一、系统概述
 
@@ -617,7 +617,81 @@ QUERY_CACHE_TTL=3600            # 秒
 
 | 日期 | 版本 | 更新内容 |
 |------|------|----------|
+| 2026-05-18 | v7.1 | 修复 Layer 2+ 依赖报告加载竞态条件；修复前端 RAG 知识面板历史会话加载问题 |
 | 2026-05-17 | v7.0 | 完整重写文档，补充树形索引、Small-to-Big 流程 |
 | 2026-05-16 | v6.0 | 重写层级切片，集成 LLM 大纲矫正 |
 | 2026-05-16 | v5.0 | 新增 MetadataExtractor + LLM Flash |
 | 2026-05-16 | v4.0 | 删除不适配文件，简化架构 |
+
+---
+
+## 十、常见问题排查
+
+### 10.1 Layer 2+ 维度依赖报告加载失败
+
+**现象**: 日志显示 `依赖报告加载失败（等待120s后）: ['resource_endowment']`
+
+**原因**: 
+- LangGraph Send API 并行执行同层维度
+- 上游维度（如 `resource_endowment`）完成后报告放入 `pending_reports`（内存）
+- 下游维度（如 `planning_positioning`）等待数据库中的报告
+- 但报告要等所有维度完成才写入数据库（`layer_completion_check` 批量保存）
+- 导致下游维度等待超时
+
+**解决方案**: `analysis.py` 第 315-360 行
+- 优先从 `pending_reports`（内存状态）加载依赖报告
+- 内存不存在时再查数据库
+- 两者都不存在时等待并轮询重试
+
+```python
+# 优先从内存加载
+pending_reports = state.get("pending_reports", [])
+pending_report = next(
+    (r.get("content") for r in pending_reports
+     if r.get("dimension_key") == dep_key and r.get("layer") == dim_layer),
+    None
+)
+if pending_report:
+    report = pending_report
+    break
+
+# 再查数据库
+db_report = await store.get_latest(session_id, dep_key)
+if db_report:
+    report = db_report
+    break
+```
+
+### 10.2 前端历史会话 RAG 知识面板不更新
+
+**现象**: 历史面板加载会话后，RAG 知识面板不显示数据，刷新页面后才显示
+
+**原因**: 
+- Zustand store 的 `setRagDocuments` 直接修改嵌套对象
+- 没有创建新的对象引用
+- Zustand 浅比较无法检测到变化
+- 组件不重新渲染
+
+**解决方案**: `planningStore.ts` 第 1619-1629 行
+- 使用展开运算符创建新的对象引用
+
+```typescript
+// 修改前（不触发重渲染）
+setRagDocuments: (dimKey, documents) =>
+  set((state) => {
+    state.dimensionRagSources[dimKey] = { query: '', documents };
+  }),
+
+// 修改后（触发重渲染）
+setRagDocuments: (dimKey, documents) =>
+  set((state) => {
+    state.dimensionRagSources = {
+      ...state.dimensionRagSources,
+      [dimKey]: { query: '', documents },
+    };
+  }),
+```
+
+**相关修改**:
+- `setRagQuery` - 同样创建新对象引用
+- `clearRagSources` - 使用解构赋值创建新对象

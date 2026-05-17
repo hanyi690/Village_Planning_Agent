@@ -342,6 +342,7 @@ export interface KnowledgeSourceItem {
   snippet: string;
   source?: string;
   score?: number;
+  matched_query?: string;
 }
 
 /**

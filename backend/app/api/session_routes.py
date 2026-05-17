@@ -18,6 +18,7 @@ Session Routes - 统一的会话 API (新架构)
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -143,6 +144,7 @@ async def create_session(
     constraints: str = Form("无特殊约束", description="约束条件"),
     step_mode: bool = Form(False, description="分步执行模式"),
     rag_enabled: bool = Form(True, description="启用 RAG 知识检索（实验对比用）"),
+    rag_layer_config: str = Form("", description="Layer-level RAG config (JSON, e.g. '{\"1\":true,\"2\":false,\"3\":true}')"),
     village_data: str = Form("", description="村庄基础数据（文本）"),
     village_data_files: List[UploadFile] = File(None, description="村庄数据文件"),
     task_files: List[UploadFile] = File(None, description="任务描述文件"),
@@ -151,6 +153,16 @@ async def create_session(
     """创建新规划会话 - 支持 multipart/form-data 文件上传（按来源区分）"""
     if not project_name.strip():
         raise HTTPException(status_code=400, detail="项目名称不能为空")
+
+    # 解析 rag_layer_config JSON
+    parsed_rag_layer_config = None
+    if rag_layer_config.strip():
+        try:
+            parsed_rag_layer_config = json.loads(rag_layer_config)
+            # 转换 key 为 int
+            parsed_rag_layer_config = {int(k): v for k, v in parsed_rag_layer_config.items()}
+        except json.JSONDecodeError:
+            logger.warning(f"[create_session] Invalid rag_layer_config JSON: {rag_layer_config}")
 
     session_id = str(uuid4())
     upload_dir = Path(f"data/uploads/{session_id}")
@@ -203,6 +215,7 @@ async def create_session(
         stream_mode=True,
         step_mode=step_mode,
         rag_enabled=rag_enabled,
+        rag_layer_config=parsed_rag_layer_config,
         uploaded_files=uploaded_files if uploaded_files else None,
     )
 
@@ -336,24 +349,50 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
     return {"status": "no_action"}
 
 
+def _is_stable_checkpoint(values: Dict[str, Any]) -> tuple:
+    """判断检查点是否为稳定完成快照（非并行中间态）
+
+    并行 Send API 每完成一个节点就保存检查点，这些中间检查点状态不完整。
+    只有 layer_completion_check 执行后的检查点才是真正的完成快照。
+
+    Returns:
+        (is_stable: bool, kind: str)  kind ∈ {"layer", "revision", "completed", "intermediate"}
+    """
+    if not values:
+        return False, "intermediate"
+    if values.get("phase") == "completed":
+        return True, "completed"
+    if (values.get("last_revised_dimensions")
+            and not values.get("is_revision", False)):
+        return True, "revision"
+    if (values.get("pause_after_step")
+            and values.get("previous_layer", 0) > 0
+            and values.get("execution_paused", False)):
+        return True, "layer"
+    return False, "intermediate"
+
+
 @router.get("/api/sessions/{session_id}/checkpoints")
 async def get_checkpoints(session_id: str):
-    """获取检查点列表"""
+    """获取检查点列表，标记稳定完成检查点"""
     checkpoints = []
     async for snapshot in PlanningRuntimeService.aget_state_history(session_id):
         checkpoint_id = snapshot.config.get("configurable", {}).get("checkpoint_id", "")
         values = dict(snapshot.values) if snapshot.values else {}
+        is_stable, kind = _is_stable_checkpoint(values)
         checkpoints.append({
             "checkpoint_id": checkpoint_id,
             "phase": values.get("phase", "init"),
             "layer": values.get("previous_layer", 0),
+            "stable": is_stable,
+            "kind": kind,
         })
     return {"session_id": session_id, "checkpoints": checkpoints, "count": len(checkpoints)}
 
 
 @router.post("/api/sessions/{session_id}/resume/{checkpoint_id}")
 async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
-    """从检查点恢复"""
+    """从检查点恢复 — 仅允许稳定完成检查点"""
     target_state = None
     async for snapshot in PlanningRuntimeService.aget_state_history(session_id):
         if snapshot.config.get("configurable", {}).get("checkpoint_id", "") == checkpoint_id:
@@ -363,12 +402,23 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
     if not target_state:
         raise HTTPException(status_code=404, detail=f"Checkpoint not found: {checkpoint_id}")
 
-    layer = target_state.values.get("previous_layer", 1) or 1
-    sse_manager.append_event(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id, "layer": layer})
+    values = dict(target_state.values) if target_state.values else {}
+    is_stable, kind = _is_stable_checkpoint(values)
+    if not is_stable:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Checkpoint {checkpoint_id} is an intermediate state (kind={kind}), "
+                   f"not a stable completion checkpoint. Restore from a 'layer' or 'revision' checkpoint.",
+        )
+
+    layer = values.get("previous_layer", 1) or 1
+    sse_manager.append_event(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id, "layer": layer, "kind": kind})
     sse_manager.publish_sync(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id})
 
-    asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
-    return {"status": "resumed", "checkpoint_id": checkpoint_id, "layer": layer}
+    asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(
+        session_id, checkpoint_id=checkpoint_id
+    ))
+    return {"status": "resumed", "checkpoint_id": checkpoint_id, "layer": layer, "kind": kind}
 
 
 @router.get("/api/sessions/{session_id}/reports/{dim_key}")

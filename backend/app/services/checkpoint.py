@@ -197,6 +197,15 @@ class CheckpointService:
         return state.get("phase", "init")
 
     @classmethod
+    async def validate_session(cls, session_id: str) -> Dict[str, Any]:
+        """Validate session exists and return full state values."""
+        from app.services.runtime import PlanningRuntimeService
+        state = await PlanningRuntimeService.aget_state_values(session_id)
+        if not state:
+            raise ValueError(f"Session {session_id} not found in checkpoint")
+        return state
+
+    @classmethod
     async def get_project_name(cls, session_id: str) -> str:
         """Get the project name for a session."""
         from app.services.runtime import PlanningRuntimeService

@@ -88,6 +88,7 @@ interface RagDocument {
   score?: number;
   chunk_id?: string;
   dimension_tags?: string[];
+  matched_query?: string;  // 匹配的查询语句
 }
 
 /**
@@ -1239,13 +1240,12 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         query_generation_method?: string;
         retrieval_latency_ms?: number;
         total_results?: number;
-        documents?: Array<{ title: string; snippet: string; source?: string; score?: number }>;
+        documents?: Array<{ title: string; snippet: string; source?: string; score?: number; matched_query?: string }>;
         layer?: number;
       };
       const dimKey = ragData.dimension_key || '';
       if (dimKey) {
         const fullKey = `${ragData.layer || 1}_${dimKey}`;
-        console.log(`[RAG] Received rag_result for ${fullKey}:`, ragData.query, ragData.documents?.length, 'documents');
         state.dimensionRagSources[fullKey] = {
           query: ragData.query || '',
           documents: ragData.documents || [],
@@ -1602,22 +1602,20 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
       }),
 
     // ============================================
-    // NEW: RAG Actions
+    // RAG Actions
     // ============================================
     setRagQuery: (dimKey, query) =>
       set((state) => {
-        const existing = state.dimensionRagSources[dimKey];
         state.dimensionRagSources[dimKey] = {
           query,
-          documents: existing?.documents || [],
+          documents: state.dimensionRagSources[dimKey]?.documents || [],
         };
       }),
 
     setRagDocuments: (dimKey, documents) =>
       set((state) => {
-        const existing = state.dimensionRagSources[dimKey];
         state.dimensionRagSources[dimKey] = {
-          query: existing?.query || '',
+          query: state.dimensionRagSources[dimKey]?.query || '',
           documents,
         };
       }),

@@ -16,7 +16,7 @@ from langchain_core.messages import AIMessage
 
 from .state import PlanningPhase, get_layer_dimensions, _phase_to_layer
 from ..config import get_dimension_layer
-from ..config.dependency import get_impact_tree_compat
+from ..config.dependency import get_impact_tree_compat, get_next_revision_wave
 from ..tools.constants import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL
 from ..utils.logger import get_logger
 
@@ -56,29 +56,39 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
             logger.warning("[after_conversation] No target dimensions for revision")
             return END
 
-        # 计算所有受影响的维度（包括下游）
-        all_dims = []
+        # 计算影响树（wave 0 = 目标维度，wave 1+ = 下游波次）
+        impact_tree: Dict[int, List[str]] = {}
         for target_dim in target_dims:
-            impacted = get_impact_tree_compat(target_dim)
-            all_dims.append(target_dim)
-            for wave_dims in impacted.values():
-                all_dims.extend(wave_dims)
+            tree = get_impact_tree_compat(target_dim)
+            for wave, dims in tree.items():
+                impact_tree.setdefault(wave + 1, []).extend(dims)
 
-        # 去重
-        all_dims = list(set(all_dims))
-        logger.info(f"[after_conversation] Cascade revision: targets={target_dims}, all_impacted={all_dims}")
+        wave0_dims = list(set(target_dims))
+        final_tree = {0: wave0_dims}
+        for wave in sorted(impact_tree.keys()):
+            final_tree[wave] = list(set(impact_tree[wave]))
 
+        logger.info(
+            "[after_conversation] Cascade revision: targets=%s, impact_tree waves=%s dims=%s",
+            target_dims, len(final_tree),
+            {w: len(d) for w, d in final_tree.items()},
+        )
+
+        all_dims = [d for dims in final_tree.values() for d in dims]
         new_completed = _reset_dimensions(state.get("completed_dimensions", {}), all_dims)
 
-        # 清除修订标志，分发维度分析
+        # 仅分发 Wave 0（目标维度），保留 feedback 供下游读取
         return [Send("analyze_dimension", {
-            **state, "dimension_key": dim,
+            **state, "dimension_key": d,
             "completed_dimensions": new_completed,
+            "is_revision": True,
+            "revision_impact_tree": final_tree,
+            "revision_feedback": feedback,
+            "revision_completed_dims": {},
             "feedback": None,
-            "human_feedback": None,
             "need_revision": False,
             "revision_target_dimensions": [],
-        }) for dim in all_dims]
+        }) for d in wave0_dims]
 
     # 2. 推进意图检测
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
@@ -102,6 +112,19 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
     2. execution_paused -> END（等待审批）
     3. 待处理维度 -> Send 分发（检查同层依赖）
     """
+    # 级联修订波次推进：按 impact_tree 波次顺序分发
+    is_revision = state.get("is_revision", False)
+    if is_revision:
+        impact_tree = state.get("revision_impact_tree", {})
+        completed = state.get("revision_completed_dims", {})
+        all_completed = [d for dims in completed.values() for d in dims]
+        next_wave = get_next_revision_wave(impact_tree, all_completed)
+        if next_wave:
+            logger.info("[after_analysis] Revision wave dispatch: %s", next_wave)
+            return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in next_wave]
+        logger.info("[after_analysis] All revision waves complete")
+        return END
+
     phase = state.get("phase", "layer1")
     if phase == "completed":
         return END

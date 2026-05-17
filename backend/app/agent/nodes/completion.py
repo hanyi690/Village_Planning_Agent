@@ -34,6 +34,40 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
     from app.utils.sse_publisher import SSEPublisher
     from app.services.report_store import ReportStore
 
+    # 级联修订完成检测：检查所有修订波次是否完成
+    if state.get("is_revision"):
+        impact_tree = state.get("revision_impact_tree", {})
+        completed = state.get("revision_completed_dims", {})
+        all_completed = [d for dims in completed.values() for d in dims]
+        all_dims = [d for dims in impact_tree.values() for d in dims]
+
+        # 即使修订未完成，也要将 pending_reports 写入 DB
+        # 否则下游 wave 的跨层依赖加载会读到旧版本
+        pending_reports = state.get("pending_reports", [])
+        if pending_reports:
+            store = ReportStore.get_instance()
+            all_dims_set = set(all_dims)
+            revision_reports = [r for r in pending_reports if r.get("dimension_key") in all_dims_set]
+            if revision_reports:
+                await store.bulk_save(revision_reports)
+                logger.info(
+                    "[layer_completion_check] Revision: saved %d reports to DB",
+                    len(revision_reports),
+                )
+
+        if set(all_completed) == set(all_dims):
+            logger.info(
+                "[layer_completion_check] Revision complete: %d dimensions",
+                len(all_dims),
+            )
+            return {
+                "is_revision": False,
+                "revision_impact_tree": None,
+                "last_revised_dimensions": all_dims,
+                "pending_reports": [],
+            }
+        return {}
+
     phase = state.get("phase", "layer1")
     if phase == "completed":
         return {}

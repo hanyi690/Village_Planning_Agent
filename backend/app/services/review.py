@@ -168,6 +168,8 @@ class ReviewService:
             "need_revision": True,
             "revision_target_dimensions": dimensions or [],
             "human_feedback": feedback,
+            "revision_feedback": feedback,
+            "is_revision": True,
             "revision_images": images or [],
             "pause_after_step": False,
         }, as_node="revision")  # 使用 revision 节点（而非不存在 review_service）

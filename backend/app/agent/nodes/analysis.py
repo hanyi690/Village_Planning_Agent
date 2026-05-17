@@ -97,6 +97,16 @@ def create_dimension_state(dimension_key: str, parent_state: Dict[str, Any]) -> 
     }
 
 
+def _build_revision_completed(state: Dict[str, Any], dim_key: str) -> Dict[int, List[str]]:
+    """根据 impact_tree 反查维度所属 wave，构建 revision_completed_dims 更新"""
+    impact_tree = state.get("revision_impact_tree", {})
+    result: Dict[int, List[str]] = {}
+    for wave, dims in impact_tree.items():
+        if dim_key in dims:
+            result[wave] = [dim_key]
+    return result
+
+
 async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     维度分析节点 - 直接执行
@@ -160,115 +170,158 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     rag_enabled = layer_rag_enabled and global_rag_enabled
 
     if rag_enabled and dim_rag_query:
-        start_time = time.time()
-        try:
-            # 生成多条查询
-            queries = await RagService.get_instance().generate_queries(cfg, state)
-            query_method = "llm_multi"
-
-            # 并行执行所有查询（每条查询取更多结果，后续去重）
-            search_tasks = [RagService.get_instance().search(query, top_k=5) for query in queries]
-            all_results_nested = await asyncio.gather(*search_tasks)
-            all_results = [r for results in all_results_nested for r in results]
-
-            # 去重并排序（按 score，L2距离越小越相似）
-            seen_content = set()
-            unique_results = []
-            for r in sorted(all_results, key=lambda x: x.get("score", 999)):
-                content_key = r.get("content", "")[:100]
-                if content_key not in seen_content:
-                    seen_content.add(content_key)
-                    unique_results.append(r)
-
-            # 取 top-k
-            results = unique_results[:5]
-
-            # 计算延迟
-            latency_ms = (time.time() - start_time) * 1000
-
-            # 构建检索日志
-            retrieved_chunks = []
-            for r in results:
-                chunk = RetrievedChunk(
-                    chunk_id=str(hash(r.get("content", "")[:100])),
-                    content_preview=r.get("content", ""),
-                    source=r.get("metadata", {}).get("source", "unknown"),
-                    score=r.get("score", 0.0),
-                    dimension_tags=r.get("metadata", {}).get("dimension_tags", []),
-                )
-                retrieved_chunks.append(chunk)
-
-            # 格式化上下文
-            rag_context = RagService.format_for_prompt(results)
-
+        # 修订时复用首次检索结果（法规库/村庄数据不变）
+        knowledge_cache = config.get("knowledge_cache", {})
+        if state.get("is_revision") and dim_key in knowledge_cache:
+            cached = knowledge_cache[dim_key]
+            rag_context = cached.get("context", "")
+            logger.info(f"[analyze_dimension] {dim_key}: RAG cache hit ({len(rag_context)} chars)")
             rag_log = RAGRetrievalLog(
                 dimension_key=dim_key,
-                query=queries[0] if queries else "",
-                query_generation_method=query_method,
-                retrieved_chunks=retrieved_chunks,
-                total_results=len(results),
-                retrieval_latency_ms=latency_ms,
+                query=cached.get("query", ""),
+                query_generation_method="cached",
+                retrieved_chunks=[],
+                total_results=cached.get("total_results", 0),
+                retrieval_latency_ms=0,
                 context_length=len(rag_context),
-                context_truncated=len(rag_context) > 1500,
+                context_truncated=False,
                 rag_enabled=True,
                 skip_reason="",
             )
-
-            # Send rag_result SSE event for frontend knowledge panel (always send to clear old data)
-            from ...services.sse import sse_manager
             await sse_manager.publish(session_id, {
                 "type": "rag_result",
                 "dimension_key": dim_key,
                 "layer": dim_layer,
-                "query": queries[0] if queries else "",
-                "query_generation_method": query_method,
-                "retrieval_latency_ms": latency_ms,
-                "total_results": len(results),
-                "documents": [
-                    {
-                        "title": r.get("metadata", {}).get("source", "unknown"),
-                        "snippet": r.get("content", ""),
-                        "source": r.get("metadata", {}).get("source"),
-                        "score": r.get("score", 0.0),
-                    }
-                    for r in results
-                ],
-            })
-            logger.info(f"[analyze_dimension] {dim_key}: Sent rag_result SSE event with {len(results)} documents")
-
-            if rag_context:
-                logger.info(f"[analyze_dimension] {dim_key}: RAG retrieved {len(rag_context)} chars, {len(results)} chunks, {latency_ms:.1f}ms")
-            else:
-                logger.info(f"[analyze_dimension] {dim_key}: RAG no results, {latency_ms:.1f}ms")
-
-        except Exception as e:
-            logger.error(f"[analyze_dimension] {dim_key}: RAG error: {e}")
-            rag_log = RAGRetrievalLog(
-                dimension_key=dim_key,
-                query="",
-                query_generation_method="error",
-                retrieved_chunks=[],
-                total_results=0,
-                retrieval_latency_ms=0,
-                context_length=0,
-                context_truncated=False,
-                rag_enabled=True,
-                skip_reason=f"Error: {str(e)}",
-            )
-
-            # Send empty rag_result SSE event to clear old data on frontend
-            from ...services.sse import sse_manager
-            await sse_manager.publish(session_id, {
-                "type": "rag_result",
-                "dimension_key": dim_key,
-                "layer": dim_layer,
-                "query": "",
-                "query_generation_method": "error",
+                "query": cached.get("query", ""),
+                "query_generation_method": "cached",
                 "retrieval_latency_ms": 0,
-                "total_results": 0,
-                "documents": [],
+                "total_results": cached.get("total_results", 0),
+                "documents": cached.get("documents", []),
             })
-            logger.info(f"[analyze_dimension] {dim_key}: Sent empty rag_result SSE event (RAG error)")
+        else:
+            start_time = time.time()
+            try:
+                # 生成多条查询
+                queries = await RagService.get_instance().generate_queries(cfg, state)
+                query_method = "llm_multi"
+
+                # 并行执行所有查询（每条查询取更多结果，后续去重）
+                search_tasks = [RagService.get_instance().search(query, top_k=5) for query in queries]
+                all_results_nested = await asyncio.gather(*search_tasks)
+
+                # Bind query origin to each result for frontend display
+                all_results = [
+                    {**r, "matched_query": queries[query_idx]}
+                    for query_idx, query_results in enumerate(all_results_nested)
+                    for r in query_results
+                ]
+
+                # 去重并排序（按 score，L2距离越小越相似）
+                seen_content = set()
+                unique_results = []
+                for r in sorted(all_results, key=lambda x: x.get("score", 999)):
+                    content_key = r.get("content", "")[:100]
+                    if content_key not in seen_content:
+                        seen_content.add(content_key)
+                        unique_results.append(r)
+
+                # 取 top-k
+                results = unique_results[:5]
+
+                # 计算延迟
+                latency_ms = (time.time() - start_time) * 1000
+
+                # 构建检索日志
+                retrieved_chunks = []
+                for r in results:
+                    chunk = RetrievedChunk(
+                        chunk_id=str(hash(r.get("content", "")[:100])),
+                        content_preview=r.get("content", ""),
+                        source=r.get("metadata", {}).get("source", "unknown"),
+                        score=r.get("score", 0.0),
+                        dimension_tags=r.get("metadata", {}).get("dimension_tags", []),
+                    )
+                    retrieved_chunks.append(chunk)
+
+                # 格式化上下文
+                rag_context = RagService.format_for_prompt(results)
+
+                rag_log = RAGRetrievalLog(
+                    dimension_key=dim_key,
+                    query=queries[0] if queries else "",
+                    query_generation_method=query_method,
+                    retrieved_chunks=retrieved_chunks,
+                    total_results=len(results),
+                    retrieval_latency_ms=latency_ms,
+                    context_length=len(rag_context),
+                    context_truncated=len(rag_context) > 1500,
+                    rag_enabled=True,
+                    skip_reason="",
+                )
+
+                # 缓存检索结果供修订时复用
+                knowledge_cache[dim_key] = {
+                    "context": rag_context,
+                    "query": queries[0] if queries else "",
+                    "total_results": len(results),
+                    "documents": [
+                        {
+                            "title": r.get("metadata", {}).get("source", "unknown"),
+                            "snippet": r.get("content", "")[:500],
+                            "source": r.get("metadata", {}).get("source"),
+                            "score": r.get("score", 0.0),
+                            "matched_query": r.get("matched_query", ""),
+                        }
+                        for r in results
+                    ],
+                }
+
+                # Send rag_result SSE event for frontend knowledge panel
+                await sse_manager.publish(session_id, {
+                    "type": "rag_result",
+                    "dimension_key": dim_key,
+                    "layer": dim_layer,
+                    "query": queries[0] if queries else "",
+                    "query_generation_method": query_method,
+                    "retrieval_latency_ms": latency_ms,
+                    "total_results": len(results),
+                    "documents": knowledge_cache[dim_key]["documents"],
+                })
+                logger.info(f"[analyze_dimension] {dim_key}: Sent rag_result SSE event with {len(results)} documents")
+
+                if rag_context:
+                    logger.info(f"[analyze_dimension] {dim_key}: RAG retrieved {len(rag_context)} chars, {len(results)} chunks, {latency_ms:.1f}ms")
+                else:
+                    logger.info(f"[analyze_dimension] {dim_key}: RAG no results, {latency_ms:.1f}ms")
+
+            except Exception as e:
+                logger.error(f"[analyze_dimension] {dim_key}: RAG error: {e}")
+                rag_log = RAGRetrievalLog(
+                    dimension_key=dim_key,
+                    query="",
+                    query_generation_method="error",
+                    retrieved_chunks=[],
+                    total_results=0,
+                    retrieval_latency_ms=0,
+                    context_length=0,
+                    context_truncated=False,
+                    rag_enabled=True,
+                    skip_reason=f"Error: {str(e)}",
+                )
+
+                # Send empty rag_result SSE event on error
+                await sse_manager.publish(session_id, {
+                    "type": "rag_result",
+                    "dimension_key": dim_key,
+                    "layer": dim_layer,
+                    "query": "",
+                    "query_generation_method": "error",
+                    "retrieval_latency_ms": 0,
+                    "total_results": 0,
+                    "documents": [],
+                })
+                logger.info(f"[analyze_dimension] {dim_key}: Sent empty rag_result SSE event (RAG error)")
+    
     else:
         reasons = []
         if not layer_rag_enabled:
@@ -293,8 +346,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             skip_reason=skip_reason,
         )
 
-        # Send empty rag_result SSE event to clear old data on frontend
-        from ...services.sse import sse_manager
+        # Send empty rag_result SSE event when skipped
         await sse_manager.publish(session_id, {
             "type": "rag_result",
             "dimension_key": dim_key,
@@ -312,11 +364,11 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     deps = ""
     same_layer_contexts = ""
 
-    # 同层依赖加载 - 添加等待机制解决竞态条件
-    # LangGraph Send API 的 state 快照可能过时，导致下游维度启动时上游报告尚未保存
+    # 同层依赖加载 - 优先从内存状态加载，解决并行执行的竞态条件
+    # LangGraph Send API 并行执行同层维度，上游报告在 pending_reports 中
+    # 下游维度需要从内存状态获取，而非等待数据库（数据库写入在 layer_completion_check）
     same_layer_deps = getattr(cfg, 'depends_on', [])
     if same_layer_deps:
-        layer_reports = await store.get_layer_reports(session_id, dim_layer)
         contexts = []
         missing_deps = []
 
@@ -325,23 +377,39 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         check_interval = 2
 
         for dep_key in same_layer_deps:
-            if dep_key in layer_reports and layer_reports[dep_key]:
-                contexts.append(f"【{dep_key}】分析结果：\n{layer_reports[dep_key]}")
-            else:
-                # 等待依赖报告保存完成
-                waited = 0
-                report = None
-                while waited < max_wait_seconds:
-                    await asyncio.sleep(check_interval)
-                    waited += check_interval
-                    report = await store.get_latest(session_id, dep_key)
-                    if report:
-                        contexts.append(f"【{dep_key}】分析结果：\n{report}")
-                        logger.info(f"[analyze_dimension] {dim_key}: 等待 {waited}s 后获取到依赖 {dep_key}")
-                        break
+            report = None
+            waited = 0
 
-                if not report:
-                    missing_deps.append(dep_key)
+            # 轮询等待：优先内存，再数据库
+            while waited < max_wait_seconds:
+                # 1. 优先从 pending_reports（内存状态）加载
+                pending_reports = state.get("pending_reports", [])
+                pending_report = next(
+                    (r.get("content") for r in pending_reports
+                     if r.get("dimension_key") == dep_key and r.get("layer") == dim_layer),
+                    None
+                )
+
+                if pending_report:
+                    report = pending_report
+                    contexts.append(f"【{dep_key}】分析结果：\n{report}")
+                    logger.info(f"[analyze_dimension] {dim_key}: 从内存获取依赖 {dep_key}（等待 {waited}s）")
+                    break
+
+                # 2. 再查数据库（可能已由其他路径保存）
+                db_report = await store.get_latest(session_id, dep_key)
+                if db_report:
+                    report = db_report
+                    contexts.append(f"【{dep_key}】分析结果：\n{report}")
+                    logger.info(f"[analyze_dimension] {dim_key}: 从数据库获取依赖 {dep_key}（等待 {waited}s）")
+                    break
+
+                # 3. 等待后重试
+                await asyncio.sleep(check_interval)
+                waited += check_interval
+
+            if not report:
+                missing_deps.append(dep_key)
 
         if missing_deps:
             logger.error(f"[analyze_dimension] {dim_key}: 依赖报告加载失败（等待{max_wait_seconds}s后）: {missing_deps}")
@@ -411,7 +479,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 7. 准备报告数据（累积到 pending_reports，由 completion.py 批量写入）
     current_versions = state.get("report_versions", {}).get(dim_key, [])
     next_version = len(current_versions) + 1
-    revision_reason = state.get("feedback")
+    revision_reason = state.get("revision_feedback") or state.get("feedback")
 
     # Format GIS data for storage
     gis_data_list = []
@@ -455,12 +523,20 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "generated_at": datetime.now(),
     }
 
-    return {
+    result = {
         "messages": [AIMessage(content=llm_response, metadata={"dimension_key": dim_key})],
         "completed_dimensions": {phase_key: [dim_key]},
         "pending_reports": [pending_report],  # Accumulate for batch write
         "layer_char_counts": {dim_layer: len(llm_response)},  # Cache char count
     }
+
+    # 级联修订：记录本维度完成的波次
+    if state.get("is_revision"):
+        rev_completed = _build_revision_completed(state, dim_key)
+        if rev_completed:
+            result["revision_completed_dims"] = rev_completed
+
+    return result
 
 
 def _build_prompt(cfg, state, tool_results, rag_context, deps: str = "", same_layer_contexts: str = "") -> str:
@@ -493,6 +569,16 @@ def _build_prompt(cfg, state, tool_results, rag_context, deps: str = "", same_la
         if r and getattr(r, 'success', False):
             tool_section += f"\n【GIS数据】\n{str(getattr(r, 'data', r))[:1000]}\n"
 
+    # 级联修订指令：仅传递原始反馈（WHY），上游修订后的完整报告通过依赖机制传入（WHAT）
+    revision_section = ""
+    if state.get("is_revision"):
+        revision_feedback = state.get("revision_feedback", "")
+        revision_section = f"""\n【级联修订指令】
+驳回反馈：{revision_feedback}
+
+上游维度已基于上述反馈完成修订，完整报告已作为依赖参考传入。
+请在报告末尾添加【修订摘要】章节，说明本维度的关键调整点。\n"""
+
     # 根据层级选择 Prompt 模板
     if layer == 1:
         return get_layer1_prompt(
@@ -501,7 +587,7 @@ def _build_prompt(cfg, state, tool_results, rag_context, deps: str = "", same_la
             village_name=project_name,
             task_description=task_desc,
             constraints=constraints,
-            knowledge_context=rag_context or "",
+            knowledge_context=revision_section + (rag_context or ""),
             has_images=bool(state.get("image_ids")),
         )
     elif layer == 2:
@@ -510,7 +596,7 @@ def _build_prompt(cfg, state, tool_results, rag_context, deps: str = "", same_la
             analysis_report=deps,
             task_description=task_desc,
             constraints=constraints,
-            knowledge_context=rag_context or "",
+            knowledge_context=revision_section + (rag_context or ""),
             layer2_contexts=same_layer_contexts,  # 传递同层依赖报告
         )
     elif layer == 3:
@@ -520,7 +606,7 @@ def _build_prompt(cfg, state, tool_results, rag_context, deps: str = "", same_la
             analysis_report=deps,
             planning_concept=deps,  # 使用相同的依赖报告
             constraints=constraints,
-            knowledge_context=rag_context or "",
+            knowledge_context=revision_section + (rag_context or ""),
             professional_data_section=tool_section,
         )
 

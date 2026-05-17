@@ -47,7 +47,7 @@ RAG_DOC_DIR = DATA_DIR / "RAG_doc"
 RAG_CACHE_DIR = RAG_DOC_DIR / "_cache"
 OUTLINE_INDEX_DIR = RAG_CACHE_DIR / "outline_index"
 VECTOR_CACHE_DIR = RAG_CACHE_DIR / "vector_cache"
-CHROMA_PERSIST_DIR = RAG_CACHE_DIR / "chroma_db"
+CHROMA_PERSIST_DIR = RAG_CACHE_DIR / "chroma_db_new"
 
 # Basic settings
 VECTOR_STORE_DIR = os.getenv("VECTOR_STORE_DIR", str(CHROMA_PERSIST_DIR))
@@ -133,7 +133,7 @@ OSS_ACCESS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID", "")
 OSS_ACCESS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET", "")
 OSS_ENDPOINT = os.getenv("OSS_ENDPOINT", "oss-cn-shenzhen.aliyuncs.com")
 OSS_BUCKET_NAME = os.getenv("OSS_BUCKET_NAME", "")
-OSS_KB_PATH = os.getenv("OSS_KB_PATH", "RAG_doc/_cache/chroma_db")
+OSS_KB_PATH = os.getenv("OSS_KB_PATH", "RAG_doc/_cache/chroma_db_new")
 
 # ==========================================
 # LangSmith 追踪配置

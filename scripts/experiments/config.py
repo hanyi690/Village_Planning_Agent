@@ -82,6 +82,7 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
             "positive": ["生态保育", "渐进式发展", "客家文化微改造", "绝对保护", "保护优先", "微改造"],
             "negative": ["大规模旅游", "商业开发", "景区化", "旅游开发"],
         },
+        "min_consistency_threshold": 0.6,
     },
     "scenario2": {
         "name": "驳回自然环境分析（Layer 1）",
@@ -97,6 +98,7 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
             "positive": ["崩塌隐患", "滑坡隐患", "地质灾害风险", "隐患点分布", "风险管控", "风险评估"],
             "negative": [],
         },
+        "min_consistency_threshold": 0.6,
     },
 }
 

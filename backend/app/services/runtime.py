@@ -117,9 +117,12 @@ class PlanningRuntimeService:
             await cls.initialize()
 
     @classmethod
-    def get_thread_config(cls, session_id: str) -> Dict[str, Any]:
+    def get_thread_config(cls, session_id: str, checkpoint_id: str = None) -> Dict[str, Any]:
         """Build thread_id configuration for LangGraph operations."""
-        return {"configurable": {"thread_id": session_id}}
+        configurable = {"thread_id": session_id}
+        if checkpoint_id:
+            configurable["checkpoint_id"] = checkpoint_id
+        return {"configurable": configurable}
 
     @classmethod
     async def astream(
@@ -477,7 +480,8 @@ class PlanningRuntimeService:
     async def _trigger_planning_execution(
         cls,
         session_id: str,
-        initial_state: Optional[Dict[str, Any]] = None
+        initial_state: Optional[Dict[str, Any]] = None,
+        checkpoint_id: str = None,
     ) -> None:
         """
         Unified trigger for planning execution (skip conversation_node).
@@ -487,6 +491,7 @@ class PlanningRuntimeService:
         Args:
             session_id: Session identifier
             initial_state: Optional initial state (only for Layer 1 start)
+            checkpoint_id: Optional checkpoint ID to resume from
         """
         await cls.ensure_initialized()
 
@@ -526,7 +531,7 @@ class PlanningRuntimeService:
         logger.info(f"[PlanningRuntimeService] [{session_id}] Synthetic AIMessage added as conversation output")
 
         # 4. Build config with optional streaming callback
-        config = cls.get_thread_config(session_id)
+        config = cls.get_thread_config(session_id, checkpoint_id=checkpoint_id)
 
         streaming_enabled = (initial_state.get("_streaming_enabled", True) if initial_state else True)
         if streaming_enabled:
@@ -563,24 +568,30 @@ class PlanningRuntimeService:
                     mode, data = event
 
                     if mode == 'values':
-                        # From values mode: detect layer completion by checking pause_after_step
                         state = data
+
+                        # 级联修订完成检测（独立于正常层完成检测）
+                        last_revised_dimensions = state.get('last_revised_dimensions', [])
+                        if last_revised_dimensions and not state.get('is_revision', False):
+                            is_revision = True
+                            revision_dimensions = last_revised_dimensions
+                            last_completed_layer = state.get('previous_layer', 0)
+                            last_phase = state.get('phase', '')
+                            logger.info(
+                                "[PlanningRuntimeService] [%s] Revision completed: %d dims",
+                                session_id, len(revision_dimensions),
+                            )
+
+                        # Normal layer completion detection
                         if state.get('pause_after_step') and state.get('previous_layer'):
                             layer = state.get('previous_layer', 0)
-                            if layer > 0:
+                            if layer > 0 and not is_revision:
                                 last_completed_layer = layer
                                 last_phase = state.get('phase', '')
+                                is_revision = False
+                                revision_dimensions = []
 
-                                # Detect if this is a revision completion
-                                last_revised_dimensions = state.get('last_revised_dimensions', [])
-                                if last_revised_dimensions:
-                                    is_revision = True
-                                    revision_dimensions = last_revised_dimensions
-                                else:
-                                    is_revision = False
-                                    revision_dimensions = []
-
-                                logger.info(f"[PlanningRuntimeService] [{session_id}] {'Revision' if is_revision else 'Layer'} {layer} completed")
+                                logger.info(f"[PlanningRuntimeService] [{session_id}] Layer {layer} completed")
 
                     elif mode == 'checkpoints':
                         # From checkpoints mode: checkpoint persisted, now send checkpoint_saved event
@@ -608,6 +619,16 @@ class PlanningRuntimeService:
 
                             sse_manager.append_event(session_id, checkpoint_saved_event)
                             sse_manager.publish_sync(session_id, checkpoint_saved_event)
+
+                            # 修订完成后清除 last_revised_dimensions，防止后续正常检查点被误判
+                            if is_revision:
+                                await cls.aupdate_state(session_id, {
+                                    "last_revised_dimensions": [],
+                                })
+                                logger.info(
+                                    "[PlanningRuntimeService] [%s] Cleared last_revised_dimensions after revision checkpoint",
+                                    session_id,
+                                )
 
                             # Reset tracking for next layer
                             last_completed_layer = 0

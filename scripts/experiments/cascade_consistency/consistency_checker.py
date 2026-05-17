@@ -181,29 +181,102 @@ class ConsistencyChecker:
 
     # 语义对齐关键词映射（作为补充）
     ALIGNMENT_KEYWORDS = {
-        "planning_positioning": {
-            "development_orientation": ["生态保育", "渐进式发展", "微改造"],
-            "population_scale": ["500人", "小规模"],
-            "industry_planning": ["特色南药", "林下经济", "客家文化"],
-        },
+        # Layer 1 → Layer 2 mappings
         "natural_environment": {
-            "disaster_prevention": ["地质灾害", "隐患点", "风险评估"],
-            "ecological": ["生态保护", "生态红线"],
+            "resource_endowment": ["自然资源", "地形地貌", "气候条件"],
+            "spatial_structure": ["地形条件", "自然环境", "生态基底"],
+            "disaster_prevention": ["地质灾害", "隐患点", "风险评估", "地质条件"],
+            "ecological": ["生态保护", "生态红线", "自然环境"],
         },
         "resource_endowment": {
-            "planning_positioning": ["资源禀赋", "发展定位"],
-            "development_goals": ["发展目标", "规划策略"],
+            "planning_positioning": ["资源禀赋", "发展定位", "特色资源"],
+            "industry": ["特色资源", "南药", "林下经济"],
+            "development_goals": ["资源条件", "发展基础"],
+        },
+        "population_economy": {
+            "planning_positioning": ["人口规模", "经济水平"],
+            "public_service": ["人口分布", "服务需求"],
+            "settlement_planning": ["人口规模", "聚居特征"],
+        },
+        "land_use": {
+            "land_use_planning": ["土地利用", "用地现状"],
+            "spatial_structure": ["用地布局", "空间格局"],
+        },
+        "transportation": {
+            "traffic_planning": ["交通条件", "道路网络"],
+            "spatial_structure": ["交通可达性", "路网结构"],
+        },
+        "infrastructure": {
+            "infrastructure_planning": ["基础设施", "市政设施"],
+            "public_service": ["设施配置", "服务能力"],
+        },
+        "public_facilities": {
+            "public_service": ["公共服务", "设施配置"],
+            "settlement_planning": ["公共服务", "设施布局"],
+        },
+        "historical_culture": {
+            "heritage": ["历史文化", "文保单位", "古树", "古茶亭"],
+            "landscape": ["文化景观", "历史风貌"],
+        },
+        # Layer 2 → Layer 3 mappings
+        "planning_positioning": {
+            "industry": ["发展定位", "产业方向"],
+            "spatial_structure": ["规划定位", "空间策略"],
+            "land_use_planning": ["定位方向", "用地策略"],
+            "development_goals": ["发展目标", "规划愿景"],
+            "planning_strategies": ["规划策略", "发展路径"],
+        },
+        "industry": {
+            "spatial_structure": ["产业布局", "产业空间"],
+            "land_use_planning": ["产业用地", "用地需求"],
+        },
+        "spatial_structure": {
+            "settlement_planning": ["空间结构", "布局框架"],
+            "traffic_planning": ["空间结构", "交通骨架"],
+            "land_use_planning": ["空间格局", "用地布局"],
+        },
+        "land_use_planning": {
+            "settlement_planning": ["用地规划", "建设用地"],
+            "infrastructure_planning": ["用地布局", "设施用地"],
+            "ecological": ["生态用地", "绿地系统"],
+        },
+        "development_goals": {
+            "planning_strategies": ["发展目标", "实施路径"],
+            "project_bank": ["目标导向", "项目策划"],
+        },
+        "planning_strategies": {
+            "project_bank": ["规划策略", "实施计划"],
+            "ecological": ["生态策略", "保护措施"],
+            "disaster_prevention": ["防灾策略", "减灾措施"],
+        },
+        "ecological": {
+            "landscape": ["生态景观", "绿地系统"],
+            "disaster_prevention": ["生态防护", "灾害缓冲"],
         },
     }
 
-    def __init__(self, embedding_provider: EmbeddingProvider = None):
+    def __init__(self, embedding_provider: EmbeddingProvider = None, auto_calibrate: bool = True):
         """
         初始化检验器
 
         Args:
             embedding_provider: Embedding服务实例
+            auto_calibrate: 是否自动校准Embedding参数
         """
         self.embedding_provider = embedding_provider or EmbeddingProvider()
+        if auto_calibrate:
+            self._auto_calibrate()
+
+    def _auto_calibrate(self):
+        """使用预设样本对自动校准 Embedding 归一化参数"""
+        sample_pairs = [
+            ("生态保育优先，渐进式发展", "以保护为主，逐步推进"),
+            ("地质灾害风险评估", "滑坡隐患点分布分析"),
+            ("客家文化微改造", "历史资源保护修缮"),
+            ("特色南药产业", "林下经济发展"),
+            ("村庄总体规划", "土地利用详细规划"),
+        ]
+        self.embedding_provider.calibrate(sample_pairs)
 
     def check_feedback_response(
         self,
@@ -420,6 +493,97 @@ class ConsistencyChecker:
                 "forbidden_found": forbidden_found,
             },
         )
+
+
+@dataclass
+class StatisticalReport:
+    """统计检验报告"""
+    mean_score: float
+    std_score: float
+    ci_95: tuple
+    cohens_d: float
+    p_value: float
+    interpretation: str = ""
+
+
+def run_statistical_tests(
+    scores: Dict[str, float],
+    baseline_scores: Dict[str, float] = None
+) -> StatisticalReport:
+    """对一致性评分进行统计检验
+
+    Args:
+        scores: 实验组一致性评分 {dim_key: score}
+        baseline_scores: 基线组评分（可选，用于对比检验）
+
+    Returns:
+        StatisticalReport 包含均值、标准差、95%CI、Cohen's d、p值
+    """
+    import numpy as np
+
+    values = list(scores.values())
+    mean_score = float(np.mean(values))
+    std_score = float(np.std(values, ddof=1))
+
+    # 95% 置信区间
+    try:
+        from scipy import stats
+        n = len(values)
+        ci = stats.t.interval(0.95, n - 1, loc=mean_score, scale=std_score / np.sqrt(n))
+        ci_95 = (float(ci[0]), float(ci[1]))
+    except ImportError:
+        ci_95 = (mean_score - 1.96 * std_score / np.sqrt(len(values)),
+                 mean_score + 1.96 * std_score / np.sqrt(len(values)))
+
+    cohens_d = 0.0
+    p_value = 1.0
+    interpretation = ""
+
+    if baseline_scores:
+        baseline_values = list(baseline_scores.values())
+        try:
+            from scipy import stats
+            # Cohen's d
+            b_mean = np.mean(baseline_values)
+            b_std = np.std(baseline_values, ddof=1)
+            pooled_std = np.sqrt((std_score ** 2 + b_std ** 2) / 2)
+            if pooled_std > 0:
+                cohens_d = float((mean_score - b_mean) / pooled_std)
+            # Paired t-test (truncate to min length)
+            min_len = min(len(values), len(baseline_values))
+            _, p_value = stats.ttest_rel(values[:min_len], baseline_values[:min_len])
+            p_value = float(p_value)
+        except ImportError:
+            cohens_d = 0.0
+            p_value = 1.0
+
+    # Interpretation
+    if cohens_d >= 0.8:
+        effect = "大效应量"
+    elif cohens_d >= 0.5:
+        effect = "中等效应量"
+    elif cohens_d >= 0.2:
+        effect = "小效应量"
+    else:
+        effect = "效应量可忽略"
+
+    if p_value < 0.01:
+        sig = "极显著 (p < 0.01)"
+    elif p_value < 0.05:
+        sig = "显著 (p < 0.05)"
+    else:
+        sig = f"不显著 (p = {p_value:.3f})"
+
+    interpretation = f"级联修订一致性均值 {mean_score:.2%}，{effect} (d={cohens_d:.3f})，{sig}"
+
+    return StatisticalReport(
+        mean_score=mean_score,
+        std_score=std_score,
+        ci_95=ci_95,
+        cohens_d=cohens_d,
+        p_value=p_value,
+        interpretation=interpretation,
+    )
 
 
 def check_semantic_alignment(

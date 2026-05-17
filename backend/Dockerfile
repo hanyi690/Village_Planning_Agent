@@ -32,10 +32,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy all requirements files
+# Copy requirements files
 COPY requirements.txt .
 COPY requirements-server.txt .
-COPY backend/requirements.txt ./backend/
 
 # 使用阿里云 PyPI 镜像源加速（国内部署优化）
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
@@ -48,8 +47,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     else \
         echo "Installing SERVER requirements (aliyun embedding, no local models)..." && \
         pip install --no-cache-dir -r requirements-server.txt; \
-    fi && \
-    pip install --no-cache-dir -r backend/requirements.txt
+    fi
 
 # ============================================
 # Stage 2: Production
@@ -79,11 +77,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy application code (unified backend/app structure)
 COPY backend/app/ ./app/
-COPY backend/requirements.txt .
 
 # Create non-root user and directories
 RUN useradd --create-home --shell /bin/bash appuser && \
-    mkdir -p /app/data /app/logs /app/results /app/knowledge_base /app/models && \
+    mkdir -p /app/data /app/logs /app/results && \
     chown -R appuser:appuser /app
 
 # Set environment variables

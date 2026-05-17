@@ -4,7 +4,7 @@
 计算维度的 Wave 波次（基于同层依赖关系）。
 """
 
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
 
 from .loader import PlanningConfig, PhaseConfig, DimensionConfig, _get_cached_config
 
@@ -174,6 +174,18 @@ def get_impact_tree_compat(dimension_key: str) -> Dict[int, List[str]]:
         current_wave_dims = next_wave_dims
 
     return impact_tree
+
+
+def get_next_revision_wave(
+    impact_tree: Dict[int, List[str]],
+    completed_dims: List[str]
+) -> Optional[List[str]]:
+    """获取修订影响树中下一个待执行的波次"""
+    for wave in sorted(impact_tree.keys()):
+        wave_dims = impact_tree[wave]
+        if not all(d in completed_dims for d in wave_dims):
+            return wave_dims
+    return None
 
 
 def get_analysis_to_concept_mapping() -> Dict[str, List[str]]:

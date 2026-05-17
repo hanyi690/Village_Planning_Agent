@@ -113,6 +113,15 @@ class AgentState(TypedDict, total=False):
     execution_paused: bool
     pause_after_step: bool
     previous_layer: int
+    # Revision cascade
+    need_revision: bool
+    revision_target_dimensions: List[str]
+    human_feedback: str
+    is_revision: bool
+    revision_impact_tree: Optional[Dict[int, List[str]]]
+    revision_completed_dims: Annotated[Dict[int, List[str]], _merge_dict_of_lists]
+    revision_feedback: Optional[str]
+    last_revised_dimensions: List[str]
     # Performance optimization: batch write and char count cache
     pending_reports: Annotated[List[Dict[str, Any]], _merge_lists]  # Buffer for batch DB writes
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
@@ -231,6 +240,14 @@ def create_initial_state(
         "pause_after_step": False,
         "previous_layer": 0,
         "metadata": {},
+        "need_revision": False,
+        "revision_target_dimensions": [],
+        "human_feedback": "",
+        "is_revision": False,
+        "revision_impact_tree": None,
+        "revision_completed_dims": {},
+        "revision_feedback": None,
+        "last_revised_dimensions": [],
         "pending_reports": [],  # Buffer for batch DB writes
         "layer_char_counts": {},  # Cached char counts per layer
     }

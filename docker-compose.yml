@@ -8,9 +8,6 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-      # Enable BuildKit for better caching
-      args:
-        - BUILDKIT_INLINE_CACHE=1
     image: village-planning-backend:latest
     container_name: village-planning-backend
     restart: unless-stopped
@@ -43,25 +40,8 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./results:/app/results
-    # Resource limits (使用在线 API 后内存需求降低)
-    # local embedding: 需要 4G 内存
-    # aliyun embedding: 只需要 2G 内存
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '0.25'
-          memory: 512M
-    # Log rotation
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -76,10 +56,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      # Enable BuildKit for better caching
       args:
-        - BUILDKIT_INLINE_CACHE=1
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        - NEXT_PUBLIC_API_URL=http://backend:8000
     image: village-planning-frontend:latest
     container_name: village-planning-frontend
     restart: unless-stopped
@@ -87,22 +65,7 @@ services:
       - "${FRONTEND_PORT:-3000}:3000"
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-    # Resource limits
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-    # Log rotation
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      - NEXT_PUBLIC_API_URL=http://backend:8000
     depends_on:
       backend:
         condition: service_healthy
@@ -115,9 +78,6 @@ services:
     networks:
       - village-planning-network
 
-# ============================================
-# Networks
-# ============================================
 networks:
   village-planning-network:
     driver: bridge

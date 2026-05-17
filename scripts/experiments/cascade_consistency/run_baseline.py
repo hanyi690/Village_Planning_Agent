@@ -4,6 +4,8 @@ Baseline Runner - Generate baseline reports for cascade experiment
 
 运行完整的规划流程，生成28维度报告作为实验基线。
 
+参考 run_4group_experiment.py 的进程内直接执行 + SSE 事件驱动模式。
+
 Usage:
     python scripts/experiments/cascade_consistency/run_baseline.py
 """
@@ -12,11 +14,18 @@ import asyncio
 import json
 import logging
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "backend"))
+script_dir = Path(__file__).parent.resolve()
+project_root = script_dir.parent.parent.parent.resolve()
+backend_root = (project_root / "backend").resolve()
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+if str(backend_root) not in sys.path:
+    sys.path.insert(0, str(backend_root))
 
 from scripts.experiments.config import (
     BASELINE_DIR,
@@ -30,59 +39,92 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-async def run_baseline() -> Dict[str, str]:
-    """
-    运行基线规划流程
-
-    Returns:
-        各维度报告内容 {dimension_key: content}
-    """
+async def _run_graph(session_id: str, listener) -> str:
+    """进程内直接执行规划图，事件驱动等待"""
     from app.services.runtime import PlanningRuntimeService
-    from app.services.checkpoint import checkpoint_service
-    from starlette.background import BackgroundTasks
+    from app.services.sse import sse_manager
+    from app.utils.sse_publisher import SSEPublisher
+    from app.agent.state import get_layer_dimensions, get_layer_name
 
-    ensure_cascade_dirs()
+    village_data = JINTIAN_VILLAGE_DATA.get("status_report", "")
+    village_name = JINTIAN_VILLAGE_DATA.get("village_name", "金田村")
 
-    logger.info("[Baseline] Starting baseline planning flow")
-
-    background_tasks = BackgroundTasks()
-
-    result = await PlanningRuntimeService.start_session(
+    initial_state = PlanningRuntimeService.build_initial_state(
         project_name="金田村基线实验",
-        village_data=JINTIAN_VILLAGE_DATA.get("status_report", ""),
-        village_name=JINTIAN_VILLAGE_DATA.get("village_name", "金田村"),
+        village_data=village_data,
+        village_name=village_name,
         task_description=DEFAULT_TASK_DESCRIPTION,
         constraints=DEFAULT_CONSTRAINTS,
+        session_id=session_id,
+        stream_mode=True,
         step_mode=False,
-        background_tasks=background_tasks,
     )
 
-    session_id = result.get("task_id")
-    logger.info(f"[Baseline] Session started: {session_id}")
+    sse_manager.init_session(session_id, {
+        "session_id": session_id,
+        "project_name": "金田村基线实验",
+    })
+    sse_manager.set_execution_active(session_id, True)
 
-    # 等待完成
-    await background_tasks()
+    await listener.connect()
 
-    # 获取最终状态
-    state = await checkpoint_service.get_state(session_id, wait_for_write=True)
+    SSEPublisher.send_layer_start(
+        session_id=session_id, layer=1,
+        layer_name=get_layer_name(1),
+        dimension_count=len(get_layer_dimensions(1)),
+    )
 
-    # 提取各维度报告
+    task = asyncio.create_task(
+        PlanningRuntimeService._trigger_planning_execution(session_id, initial_state)
+    )
+
+    logger.info("[Baseline] Graph execution started (SSE-driven)")
+
+    for layer in [1, 2, 3]:
+        event = await listener.wait_for_any_event(
+            event_types=["layer_completed", "error"],
+            timeout=900,
+            filter_func=lambda e, l=layer: (
+                e.get("type") == "error"
+                or e.get("data", {}).get("layer") == l
+            ),
+        )
+        if event.get("type") == "error":
+            raise RuntimeError(f"Layer {layer} failed: {event.get('data', {}).get('message', 'unknown')}")
+        logger.info(f"[Baseline] Layer {layer} completed")
+
+    await task
+    await listener.disconnect()
+    return session_id
+
+
+async def run_baseline() -> Dict[str, str]:
+    from app.services.runtime import PlanningRuntimeService
+    from app.services.report_store import ReportStore
+    from scripts.experiments.sse_listener import InProcessEventListener
+
+    ensure_cascade_dirs()
+    await PlanningRuntimeService.ensure_initialized()
+
+    session_id = f"baseline_{uuid.uuid4().hex[:8]}"
+    listener = InProcessEventListener(session_id)
+
+    logger.info(f"[Baseline] Starting: {session_id}")
+    await _run_graph(session_id, listener)
+    logger.info("[Baseline] Execution complete")
+
+    store = ReportStore.get_instance()
     reports = {}
-    if state:
-        for layer_key in ["layer1", "layer2", "layer3"]:
-            layer_reports = state.get("reports", {}).get(layer_key, {})
-            reports.update(layer_reports)
+    for layer in [1, 2, 3]:
+        layer_reports = await store.get_layer_reports(session_id, layer)
+        reports.update(layer_reports)
 
-    logger.info(f"[Baseline] Generated {len(reports)} dimension reports")
-
-    # 保存基线
+    logger.info(f"[Baseline] Retrieved {len(reports)} dimension reports")
     save_baseline(reports, session_id)
-
     return reports
 
 
 def save_baseline(reports: Dict[str, str], session_id: str):
-    """保存基线报告"""
     baseline_file = BASELINE_DIR / "baseline_reports.json"
     baseline_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -100,7 +142,6 @@ def save_baseline(reports: Dict[str, str], session_id: str):
 
 
 def main():
-    """CLI入口"""
     logger.info("=" * 60)
     logger.info("[Baseline] Running baseline experiment")
     logger.info("=" * 60)
@@ -111,7 +152,6 @@ def main():
     print(f"基线报告生成完成: {len(reports)} 维度")
     print("=" * 60)
 
-    # 打印各维度长度
     for dim, content in sorted(reports.items()):
         print(f"  {dim}: {len(content)} 字符")
 
