@@ -32,6 +32,7 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
         get_layer_name,
     )
     from app.utils.sse_publisher import SSEPublisher
+    from app.services.report_store import ReportStore
 
     phase = state.get("phase", "layer1")
     if phase == "completed":
@@ -60,11 +61,19 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
 
     session_id = state.get("session_id", "")
 
-    # 从数据库获取报告计算总字符数
-    from ...services.report_store import ReportStore
-    store = ReportStore.get_instance()
-    layer_reports = await store.get_layer_reports(session_id, layer)
-    total_chars = sum(len(v) for v in layer_reports.values()) if layer_reports else 0
+    # Performance optimization: Use cached char count instead of DB query
+    layer_char_counts = state.get("layer_char_counts", {})
+    total_chars = layer_char_counts.get(layer, 0)
+
+    # Performance optimization: Batch write pending reports
+    pending_reports = state.get("pending_reports", [])
+    if pending_reports:
+        store = ReportStore.get_instance()
+        # Filter reports for current layer only
+        layer_reports = [r for r in pending_reports if r.get("layer") == layer]
+        if layer_reports:
+            await store.bulk_save(layer_reports)
+            logger.info(f"[layer_completion_check] Batch saved {len(layer_reports)} reports for layer {layer}")
 
     # Send layer_completed SSE event
     SSEPublisher.send_layer_complete(
@@ -92,6 +101,7 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
             "execution_paused": True,
             "pause_after_step": True,
             "previous_layer": layer,
+            "pending_reports": [],  # Clear buffer after batch write
         }
 
     # Auto mode: advance to next layer
@@ -113,11 +123,15 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
                 "execution_paused": False,
                 "pause_after_step": False,
                 "previous_layer": layer,
+                "pending_reports": [],  # Clear buffer after batch write
             }
 
     # Layer 3 complete in auto mode -> mark completed
     logger.info("[layer_completion_check] All layers complete (auto mode)")
-    return {"phase": "completed"}
+    return {
+        "phase": "completed",
+        "pending_reports": [],  # Clear buffer after batch write
+    }
 
 
 __all__ = ["layer_completion_check"]

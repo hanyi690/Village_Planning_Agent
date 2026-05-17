@@ -112,6 +112,54 @@ class ReportStore:
         logger.info(f"[ReportStore] Saved: {session_id}/{dim_key}/v{version} (id={report_id[:8]}...)")
         return report_id
 
+    async def bulk_save(self, reports: List[Dict[str, Any]]) -> List[str]:
+        """
+        批量保存报告（单事务）
+
+        性能优化：将多个报告在一次事务中写入数据库，
+        减少 N transactions -> 1 transaction。
+
+        Args:
+            reports: 报告数据列表，每个元素包含：
+                - session_id: Session identifier
+                - dimension_key: Dimension key
+                - layer: Layer number
+                - version: Version number
+                - report_id: UUID
+                - content: Full report content
+                - summary: Summary text
+                - knowledge_sources: Optional RAG sources
+                - gis_data: Optional GIS data
+                - generated_at: Timestamp
+
+        Returns:
+            List of report_ids
+        """
+        if not reports:
+            return []
+
+        async with get_async_session() as db:
+            for report_data in reports:
+                db_report = DimensionReport(
+                    session_id=report_data["session_id"],
+                    dimension_key=report_data["dimension_key"],
+                    layer=report_data["layer"],
+                    version=report_data["version"],
+                    report_id=report_data["report_id"],
+                    content=report_data["content"],
+                    summary=report_data.get("summary", report_data["content"][:500]),
+                    revision_trigger=report_data.get("revision_trigger"),
+                    knowledge_sources=report_data.get("knowledge_sources"),
+                    gis_data=report_data.get("gis_data"),
+                    generated_at=report_data.get("generated_at", datetime.now()),
+                )
+                db.add(db_report)
+            await db.commit()
+
+        report_ids = [r["report_id"] for r in reports]
+        logger.info(f"[ReportStore] Bulk saved {len(reports)} reports: {[r['dimension_key'] for r in reports]}")
+        return report_ids
+
     async def _generate_summary(self, content: str) -> str:
         """
         生成摘要 - 智能策略：短文直接返回，长文用 LLM 生成

@@ -66,6 +66,19 @@ def _merge_dict_of_dicts(a: Dict[str, Dict], b: Dict[str, Dict]) -> Dict[str, Di
     return result
 
 
+def _merge_lists(a: List, b: List) -> List:
+    """合并两个列表。用于并行 fan-in。"""
+    return a + b
+
+
+def _merge_layer_char_counts(a: Dict[int, int], b: Dict[int, int]) -> Dict[int, int]:
+    """合并两个 layer 字符数字典，同 layer 时累加。用于并行 fan-in。"""
+    result = dict(a)
+    for layer, count in b.items():
+        result[layer] = result.get(layer, 0) + count
+    return result
+
+
 class AgentState(TypedDict, total=False):
     """
     核心状态 - 精简版
@@ -100,6 +113,9 @@ class AgentState(TypedDict, total=False):
     execution_paused: bool
     pause_after_step: bool
     previous_layer: int
+    # Performance optimization: batch write and char count cache
+    pending_reports: Annotated[List[Dict[str, Any]], _merge_lists]  # Buffer for batch DB writes
+    layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
 
 
 # ==========================================
@@ -215,6 +231,8 @@ def create_initial_state(
         "pause_after_step": False,
         "previous_layer": 0,
         "metadata": {},
+        "pending_reports": [],  # Buffer for batch DB writes
+        "layer_char_counts": {},  # Cached char counts per layer
     }
 
 
@@ -322,4 +340,5 @@ __all__ = [
     "LAYER_DIMENSIONS", "WAVE_DIMENSIONS", "TOTAL_WAVES",
     "LAYER_NAMES", "LAYER_NAMES_BY_NUMBER", "PHASE_DESCRIPTIONS",
     "state_to_ui_status",
+    "_merge_lists", "_merge_layer_char_counts",  # Performance optimization reducers
 ]

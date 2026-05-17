@@ -6,6 +6,7 @@
 
 import asyncio
 import time
+import uuid
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from enum import Enum
@@ -407,7 +408,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"[analyze_dimension] LLM 失败: {e}")
         return {"messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")]}
 
-    # 7. 保存版本
+    # 7. 准备报告数据（累积到 pending_reports，由 completion.py 批量写入）
     current_versions = state.get("report_versions", {}).get(dim_key, [])
     next_version = len(current_versions) + 1
     revision_reason = state.get("feedback")
@@ -421,16 +422,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "data": getattr(r, 'data', None),
             })
 
-    report_id = await store.save(
-        session_id=session_id,
-        dim_key=dim_key,
-        version=next_version,
-        content=llm_response,
-        metadata={"revision_reason": revision_reason},
-        layer=dim_layer,
-        knowledge_sources=asdict(rag_log) if rag_log and rag_log.rag_enabled else None,
-        gis_data=gis_data_list if gis_data_list else None,
-    )
+    # Generate report_id for pending_reports
+    report_id = str(uuid.uuid4())
 
     # 8. 发送完成事件 (含 GIS 数据)
     await sse_manager.publish(session_id, {
@@ -444,12 +437,29 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "layer": dim_layer,
     })
 
-    # 9. 状态更新 - 仅返回增量，reducer 负责合并
+    # 9. 状态更新 - 累积到 pending_reports，reducer 负责合并
     phase_key = f"layer{dim_layer}"
+
+    # Prepare pending report data for batch write
+    pending_report = {
+        "session_id": session_id,
+        "dimension_key": dim_key,
+        "layer": dim_layer,
+        "version": next_version,
+        "report_id": report_id,
+        "content": llm_response,
+        "summary": llm_response[:500],  # Simplified summary
+        "revision_trigger": revision_reason,
+        "knowledge_sources": asdict(rag_log) if rag_log and rag_log.rag_enabled else None,
+        "gis_data": gis_data_list if gis_data_list else None,
+        "generated_at": datetime.now(),
+    }
 
     return {
         "messages": [AIMessage(content=llm_response, metadata={"dimension_key": dim_key})],
         "completed_dimensions": {phase_key: [dim_key]},
+        "pending_reports": [pending_report],  # Accumulate for batch write
+        "layer_char_counts": {dim_layer: len(llm_response)},  # Cache char count
     }
 
 
