@@ -10,9 +10,18 @@ import argparse
 import asyncio
 import json
 import time
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List
+
+# 配置日志输出到控制台
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 # 添加 backend 到路径
 backend_path = Path(__file__).parent.parent / "backend"
@@ -20,9 +29,6 @@ import sys
 sys.path.insert(0, str(backend_path))
 
 from app.services.modules.rag.service import RagService
-from app.utils.logger import get_logger
-
-logger = get_logger(__name__)
 
 # 路径配置
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -57,15 +63,20 @@ class IngestState:
                 if "source" in m:
                     existing_sources.add(m["source"])
 
-            # 同步状态
+            # 同步状态 - 查找匹配的文件路径
+            all_files = get_md_files(MD_DIR)
             for source in existing_sources:
-                file_path = str(MD_DIR / source)
-                if file_path not in self.state["files"]:
-                    self.state["files"][file_path] = {
-                        "status": "completed",
-                        "synced_from": "chromadb",
-                        "updated_at": datetime.now().isoformat(),
-                    }
+                # 查找匹配的文件
+                for f in all_files:
+                    if f.name == source:
+                        file_path = str(f)
+                        if file_path not in self.state["files"]:
+                            self.state["files"][file_path] = {
+                                "status": "completed",
+                                "synced_from": "chromadb",
+                                "updated_at": datetime.now().isoformat(),
+                            }
+                        break
 
             if existing_sources:
                 logger.info(f"从 ChromaDB 同步 {len(existing_sources)} 个已入库文档")

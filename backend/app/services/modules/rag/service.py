@@ -526,7 +526,8 @@ class RagService:
                 logger.info(f"Inferred doc_type: {doc_type}")
 
             # 将内容保存为临时 Markdown 文件以使用缓存
-            temp_md_path = OUTLINE_INDEX_DIR / f"{source_name}.md"
+            # 注意：source_name 可能已经包含 .md 后缀，需要处理
+            temp_md_path = OUTLINE_INDEX_DIR / source_name
             OUTLINE_INDEX_DIR.mkdir(parents=True, exist_ok=True)
             temp_md_path.write_text(full_content, encoding="utf-8")
 

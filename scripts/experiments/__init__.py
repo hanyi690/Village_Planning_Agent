@@ -1,18 +1,27 @@
 """
-Cascade Consistency Experiment Scripts
-级联一致性检验实验
+Experiment Scripts
+实验脚本模块
 
-验证级联修复机制在同层传播和跨层传播两种路径下能否保持语义一致性。
+包含两个独立子模块：
 
-实验场景:
-- 场景一: 驳回"规划定位"(Layer 2)
-- 场景二: 驳回"自然环境分析"(Layer 1)
+1. rag_hallucination - RAG幻觉率实验
+   - reference_extractor: 引用提取器
+   - hallucination_validator: 幻觉验证器
+   - experiment_runner: 实验运行器
+   - generate_experiment_outputs: 输出生成器
+
+2. cascade_consistency - 级联一致性实验
+   - run_baseline: 基线运行脚本
+   - run_scenario: 场景运行脚本
+   - consistency_annotation: 一致性标注工具
+   - layer_checkpoint_utils: 层级检查点工具
+
+公共配置：
+- config: 实验配置（路径、场景定义等）
 """
 
 __all__ = [
     "config",
-    "run_baseline",
-    "run_scenario",
-    "consistency_annotation",
-    "generate_metrics",
+    "rag_hallucination",
+    "cascade_consistency",
 ]

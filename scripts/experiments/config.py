@@ -19,6 +19,8 @@ RAG_HALLUCINATION_DIR = Path(__file__).parent.parent.parent / "output" / "experi
 RAG_ON_DIR = RAG_HALLUCINATION_DIR / "rag_on"
 RAG_OFF_DIR = RAG_HALLUCINATION_DIR / "rag_off"
 FIXED_CONTEXT_DIR = RAG_HALLUCINATION_DIR / "fixed_context"
+FIXED_CONTEXT_RAG_ON = FIXED_CONTEXT_DIR / "fixed_context_rag_on.json"
+FIXED_CONTEXT_RAG_OFF = FIXED_CONTEXT_DIR / "fixed_context_rag_off.json"
 ANNOTATION_DIR = RAG_HALLUCINATION_DIR / "annotation"
 
 # ============================================

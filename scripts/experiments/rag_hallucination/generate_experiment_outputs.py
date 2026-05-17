@@ -1,25 +1,26 @@
 """
-RAG Experiment Output Generator
+RAG Experiment Output Generator (Refactored)
 Generate experiment output documents: Excel, Word, KB summary
 
 Outputs:
-1. Excel: Hallucination rate summary per dimension
+1. Excel: Hallucination rate summary per dimension (3 runs each)
 2. Word: Typical reference contrast paragraphs
 3. KB Summary: Document count, source types, categories
 
 Usage:
-    python scripts/experiments/generate_experiment_outputs.py
-    python scripts/experiments/generate_experiment_outputs.py --mock
+    python scripts/experiments/rag_hallucination/generate_experiment_outputs.py
+    python scripts/experiments/rag_hallucination/generate_experiment_outputs.py --from-results
 """
 
 import json
 import sys
+import re
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "backend"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "backend"))
 
 from scripts.experiments.config import (
     RAG_HALLUCINATION_DIR,
@@ -33,6 +34,7 @@ from scripts.experiments.config import (
 
 @dataclass
 class HallucinationStats:
+    """幻觉率统计数据"""
     dimension_key: str
     dimension_name: str
     rag_on_total_refs: int
@@ -46,6 +48,7 @@ class HallucinationStats:
 
 @dataclass
 class ContrastParagraph:
+    """对比段落"""
     dimension_key: str
     dimension_name: str
     rag_off_text: str
@@ -56,6 +59,7 @@ class ContrastParagraph:
 
 @dataclass
 class KnowledgeBaseDoc:
+    """知识库文档"""
     source: str
     doc_type: str
     chunk_count: int
@@ -71,7 +75,176 @@ DIMENSION_NAMES = {
 }
 
 
+def load_comparison_results() -> Optional[Dict[str, Any]]:
+    """加载对比结果"""
+    comparison_file = RAG_HALLUCINATION_DIR / "comparison_results.json"
+    if comparison_file.exists():
+        with open(comparison_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def load_single_run_results(mode: str, run_id: int) -> Dict[str, Any]:
+    """加载单次运行结果"""
+    output_dir = RAG_ON_DIR if mode == "rag_on" else RAG_OFF_DIR
+    result_file = output_dir / f"run_{run_id}_results.json"
+    if result_file.exists():
+        with open(result_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def get_hallucination_stats_from_results() -> List[HallucinationStats]:
+    """从实验结果获取幻觉率统计"""
+    comparison = load_comparison_results()
+    if not comparison:
+        print("[Warning] No comparison results found, using empty stats")
+        return []
+    stats_list = []
+    for dim in comparison.get("dimensions", []):
+        stats_list.append(HallucinationStats(
+            dimension_key=dim.get("dimension_key", ""),
+            dimension_name=dim.get("dimension_name", ""),
+            rag_on_total_refs=int(dim.get("rag_on_total_refs", 0)),
+            rag_on_hallucinations=int(dim.get("rag_on_hallucinations", 0)),
+            rag_on_hallucination_rate=dim.get("rag_on_rate", 0.0),
+            rag_off_total_refs=int(dim.get("rag_off_total_refs", 0)),
+            rag_off_hallucinations=int(dim.get("rag_off_hallucinations", 0)),
+            rag_off_hallucination_rate=dim.get("rag_off_rate", 0.0),
+            rate_reduction=dim.get("rate_reduction", 0.0),
+        ))
+    return stats_list
+
+
+def get_contrast_paragraphs_from_results() -> List[ContrastParagraph]:
+    """从实验结果获取对比段落"""
+    paragraphs = []
+    rag_on_results = load_single_run_results("rag_on", 1)
+    rag_off_results = load_single_run_results("rag_off", 1)
+    for dim_key in RAG_ENABLED_DIMENSIONS:
+        rag_on_report = rag_on_results.get(dim_key, {}).get("report_content", "")
+        rag_off_report = rag_off_results.get(dim_key, {}).get("report_content", "")
+        if not rag_on_report or not rag_off_report:
+            continue
+        contrast = find_best_contrast_paragraph(
+            dim_key, DIMENSION_NAMES.get(dim_key, dim_key),
+            rag_on_report, rag_off_report
+        )
+        if contrast:
+            paragraphs.append(contrast)
+    return paragraphs
+
+
+def find_best_contrast_paragraph(dim_key: str, dim_name: str,
+                                  rag_on_report: str,
+                                  rag_off_report: str) -> Optional[ContrastParagraph]:
+    """寻找最佳对比段落"""
+    rag_on_paragraphs = [p.strip() for p in rag_on_report.split("\n\n") if p.strip()]
+    rag_off_paragraphs = [p.strip() for p in rag_off_report.split("\n\n") if p.strip()]
+
+    def calculate_specificity(text: str) -> float:
+        score = 0.0
+        if "第" in text and "条" in text:
+            score += 2.0
+        if "米" in text or "%" in text or "年一遇" in text:
+            score += 3.0
+        if "《" in text and "》" in text:
+            score += 1.0
+        if "GB" in text or "DB" in text:
+            score += 2.0
+        return score
+
+    best_rag_on = None
+    best_rag_on_score = -1
+    for para in rag_on_paragraphs:
+        score = calculate_specificity(para)
+        if score > best_rag_on_score:
+            best_rag_on_score = score
+            best_rag_on = para
+
+    best_rag_off = None
+    best_rag_off_score = float("inf")
+    for para in rag_off_paragraphs:
+        score = calculate_specificity(para)
+        if score < best_rag_off_score and len(para) > 50:
+            best_rag_off_score = score
+            best_rag_off = para
+
+    if not best_rag_on or not best_rag_off:
+        return None
+
+    sources = re.findall(r"《[^》]+》", best_rag_on)
+    regulation_source = sources[0] if sources else "未知来源"
+
+    return ContrastParagraph(
+        dimension_key=dim_key,
+        dimension_name=dim_name,
+        rag_off_text=best_rag_off[:300] + "..." if len(best_rag_off) > 300 else best_rag_off,
+        rag_on_text=best_rag_on[:500] + "..." if len(best_rag_on) > 500 else best_rag_on,
+        regulation_source=regulation_source,
+        explanation=f"RAG ON特异性评分: {best_rag_on_score:.1f}, RAG OFF特异性评分: {best_rag_off_score:.1f}",
+    )
+
+
+def get_kb_documents_from_kb() -> List[KnowledgeBaseDoc]:
+    """从知识库获取文档列表"""
+    docs = []
+    try:
+        from app.services.modules.rag.service import RagService
+        rag_service = RagService()
+        kb_stats = rag_service.get_stats()
+        for doc in kb_stats.get("documents", []):
+            source = doc.get("source", "")
+            doc_type = infer_doc_type(source)
+            category = infer_category(source)
+            docs.append(KnowledgeBaseDoc(
+                source=source,
+                doc_type=doc_type,
+                chunk_count=doc.get("chunk_count", 0),
+                category=category,
+            ))
+    except Exception as e:
+        print(f"[Warning] Failed to load KB documents: {e}")
+    return docs
+
+
+def infer_doc_type(source: str) -> str:
+    """推断文档类型"""
+    source_lower = source.lower()
+    if "法》" in source or "条例" in source:
+        return "法规"
+    elif "标准" in source or "gb" in source_lower or "db" in source_lower:
+        return "技术标准"
+    elif "规划" in source and ("省" in source or "市" in source):
+        return "上位规划"
+    elif "案例" in source or "实例" in source:
+        return "案例"
+    elif "教材" in source or "原理" in source:
+        return "专业教材"
+    else:
+        return "政策文件"
+
+
+def infer_category(source: str) -> str:
+    """推断文档分类"""
+    if "01_专业教材" in source:
+        return "专业教材"
+    elif "02_法律法规" in source:
+        return "法律法规"
+    elif "03_政策文件" in source:
+        return "政策文件"
+    elif "04_技术规范" in source:
+        return "技术规范"
+    elif "05_上位规划" in source:
+        return "上位规划"
+    elif "06_相关案例" in source:
+        return "相关案例"
+    else:
+        return "其他"
+
+
 def generate_excel_summary(stats_list: List[HallucinationStats], output_dir: Path) -> Path:
+    """生成Excel汇总表"""
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
@@ -138,6 +311,7 @@ def generate_excel_summary(stats_list: List[HallucinationStats], output_dir: Pat
 
 
 def generate_csv_summary(stats_list: List[HallucinationStats], output_dir: Path) -> Path:
+    """生成CSV汇总表"""
     import csv
     output_path = output_dir / "hallucination_summary.csv"
     with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -160,6 +334,7 @@ def generate_csv_summary(stats_list: List[HallucinationStats], output_dir: Path)
 
 
 def generate_word_contrast(paragraphs: List[ContrastParagraph], output_dir: Path) -> Path:
+    """生成Word对比文档"""
     try:
         from docx import Document
         from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -198,6 +373,7 @@ def generate_word_contrast(paragraphs: List[ContrastParagraph], output_dir: Path
 
 
 def generate_markdown_contrast(paragraphs: List[ContrastParagraph], output_dir: Path) -> Path:
+    """生成Markdown对比文档"""
     output_path = output_dir / "contrast_analysis.md"
     content = "# RAG Reference Contrast Analysis\n\n"
     content += f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
@@ -216,6 +392,7 @@ def generate_markdown_contrast(paragraphs: List[ContrastParagraph], output_dir: 
 
 
 def generate_kb_summary(docs: List[KnowledgeBaseDoc], output_dir: Path) -> Path:
+    """生成知识库说明表"""
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, Alignment, PatternFill
@@ -265,6 +442,7 @@ def generate_kb_summary(docs: List[KnowledgeBaseDoc], output_dir: Path) -> Path:
 
 
 def generate_kb_summary_csv(docs: List[KnowledgeBaseDoc], output_dir: Path) -> Path:
+    """生成知识库说明表CSV"""
     import csv
     output_path = output_dir / "kb_summary.csv"
     with open(output_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -276,70 +454,8 @@ def generate_kb_summary_csv(docs: List[KnowledgeBaseDoc], output_dir: Path) -> P
     return output_path
 
 
-def get_mock_hallucination_stats() -> List[HallucinationStats]:
-    return [
-        HallucinationStats("land_use_planning", "土地利用规划", 12, 2, 0.167, 8, 5, 0.625, 0.458),
-        HallucinationStats("infrastructure_planning", "基础设施规划", 10, 1, 0.10, 6, 4, 0.667, 0.567),
-        HallucinationStats("ecological", "生态绿地规划", 15, 2, 0.133, 10, 7, 0.70, 0.567),
-        HallucinationStats("disaster_prevention", "防震减灾规划", 18, 1, 0.056, 12, 9, 0.75, 0.694),
-        HallucinationStats("heritage", "历史文保规划", 14, 2, 0.143, 9, 6, 0.667, 0.524),
-    ]
-
-
-def get_mock_contrast_paragraphs() -> List[ContrastParagraph]:
-    return [
-        ContrastParagraph(
-            "disaster_prevention", "防震减灾规划",
-            "规划区应避开地质灾害易发区域，确保居民安全。",
-            "根据《广东省地质灾害防治条例》第十八条规定：崩塌隐患点避让距离不少于50米，滑坡隐患点避让距离不少于100米。规划区内5处崩塌隐患点应设置不少于50米的防护距离。",
-            "《广东省地质灾害防治条例》第十八条",
-            "RAG ON精准引用了具体条款编号和技术指标（50米、100米），而RAG OFF仅泛泛提及'避开灾害区域'。"
-        ),
-        ContrastParagraph(
-            "heritage", "历史文保规划",
-            "应保护历史文化资源，划定保护范围。",
-            "依据《历史文化名城名镇名村保护条例》第二十七条：核心保护范围内不得进行新建、扩建活动。千年古檀树、古茶亭遗址应划为核心保护区，保护范围不少于周边20米。",
-            "《历史文化名城名镇名村保护条例》第二十七条",
-            "RAG ON准确引用了核心保护区的建设管控要求，并给出了具体的保护范围（20米）。"
-        ),
-        ContrastParagraph(
-            "land_use_planning", "土地利用规划",
-            "土地利用应符合相关规划要求，合理布局各类用地。",
-            "根据《广东省村庄规划编制导则》第5.2条：村庄建设用地人均指标控制在100-150平方米。金田村现状人口500人，规划建设用地规模应控制在5-7.5公顷。",
-            "《广东省村庄规划编制导则》第5.2条",
-            "RAG ON引用了具体的技术指标（100-150平方米/人），并据此计算出村庄建设用地规模。"
-        ),
-        ContrastParagraph(
-            "infrastructure_planning", "基础设施规划",
-            "应完善基础设施建设，满足村民生活需求。",
-            "依据《农村生活污水处理设施水污染物排放标准》（DB44/2209-2019）表1规定：出水排入环境水体时，CODcr≤60mg/L，氨氮≤8mg/L（水温>12℃）。",
-            "DB44/2209-2019",
-            "RAG ON精准引用了地方排放标准的具体编号和技术指标。"
-        ),
-        ContrastParagraph(
-            "ecological", "生态绿地规划",
-            "应加强生态保护，构建绿地系统。",
-            "根据《广东省生态保护红线管理办法》第六条：生态保护红线内禁止工业化城镇化建设。金田村北部林地已划入生态保护红线，面积约8.5公顷，应严格保护。",
-            "《广东省生态保护红线管理办法》第六条",
-            "RAG ON引用了生态保护红线的管控要求，并给出了具体面积数据。"
-        ),
-    ]
-
-
-def get_mock_kb_documents() -> List[KnowledgeBaseDoc]:
-    return [
-        KnowledgeBaseDoc("广东省地质灾害防治条例.pdf", "法规", 45, "laws"),
-        KnowledgeBaseDoc("历史文化名城名镇名村保护条例.pdf", "法规", 38, "laws"),
-        KnowledgeBaseDoc("广东省村庄规划编制导则.pdf", "技术标准", 52, "standards"),
-        KnowledgeBaseDoc("农村生活污水处理设施水污染物排放标准.pdf", "技术标准", 28, "standards"),
-        KnowledgeBaseDoc("广东省生态保护红线管理办法.pdf", "法规", 32, "laws"),
-        KnowledgeBaseDoc("梅州市国土空间总体规划.pdf", "上位规划", 65, "plans"),
-        KnowledgeBaseDoc("村庄规划编制技术指南.pdf", "技术标准", 42, "standards"),
-        KnowledgeBaseDoc("农村人居环境整治技术规范.pdf", "技术标准", 35, "standards"),
-    ]
-
-
-def main(use_mock: bool = True):
+def main(from_results: bool = True):
+    """主函数"""
     print("=" * 60)
     print("RAG Experiment Output Generator")
     print("=" * 60)
@@ -348,16 +464,28 @@ def main(use_mock: bool = True):
     output_dir = RAG_HALLUCINATION_DIR / "outputs"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("\n[1] Generating Excel summary...")
-    stats_list = get_mock_hallucination_stats() if use_mock else []
+    if from_results:
+        print("\n[1] Loading hallucination stats from results...")
+        stats_list = get_hallucination_stats_from_results()
+
+        print("\n[2] Loading contrast paragraphs from results...")
+        paragraphs = get_contrast_paragraphs_from_results()
+
+        print("\n[3] Loading KB documents from knowledge base...")
+        kb_docs = get_kb_documents_from_kb()
+    else:
+        print("\n[Warning] No results available, generating empty outputs")
+        stats_list = []
+        paragraphs = []
+        kb_docs = []
+
+    print("\n[4] Generating Excel summary...")
     generate_excel_summary(stats_list, output_dir)
 
-    print("\n[2] Generating Word contrast document...")
-    paragraphs = get_mock_contrast_paragraphs() if use_mock else []
+    print("\n[5] Generating Word contrast document...")
     generate_word_contrast(paragraphs, output_dir)
 
-    print("\n[3] Generating Knowledge Base summary...")
-    kb_docs = get_mock_kb_documents() if use_mock else []
+    print("\n[6] Generating Knowledge Base summary...")
     generate_kb_summary(kb_docs, output_dir)
 
     print("\n" + "=" * 60)
@@ -369,6 +497,7 @@ def main(use_mock: bool = True):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mock", action="store_true", help="Use mock data")
+    parser.add_argument("--from-results", action="store_true", default=True,
+                        help="Load data from experiment results")
     args = parser.parse_args()
-    main(use_mock=args.mock)
+    main(from_results=args.from_results)

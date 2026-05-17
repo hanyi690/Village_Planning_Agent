@@ -503,8 +503,262 @@ class HierarchySlicer:
                 },
             ))
 
+        # 对超长切片进行智能二次切分
+        results = self._split_long_chunks(results, source_name, max_chars=5000)
+
         logger.info(f"[HierarchySlicer] 切片完成: {len(results)} 切片")
         return results
+
+    def _split_long_chunks(
+        self,
+        chunks: List[HierarchyChunk],
+        source_name: str,
+        max_chars: int = 5000
+    ) -> List[HierarchyChunk]:
+        """对超长切片进行智能二次切分
+
+        策略：
+        - 普通文本：按段落、句子边界切分
+        - HTML 表格：按行切分，保留表头
+        - 代码块/Mermaid：提取摘要
+
+        Args:
+            chunks: 原始切片列表
+            source_name: 文档名称
+            max_chars: 最大字符数限制
+
+        Returns:
+            处理后的切片列表
+        """
+        results = []
+
+        for chunk in chunks:
+            if len(chunk.content) <= max_chars:
+                results.append(chunk)
+                continue
+
+            # 超长切片需要二次切分
+            logger.info(f"[HierarchySlicer] 二次切分: {chunk.section_title} ({len(chunk.content)} 字符)")
+
+            # 判断内容类型并选择切分策略
+            if "<table>" in chunk.content:
+                sub_chunks = self._split_table_chunk(chunk, source_name, max_chars)
+            elif "```" in chunk.content and len(re.findall(r'```[\s\S]*?```', chunk.content)) > 0:
+                sub_chunks = self._split_code_chunk(chunk, source_name, max_chars)
+            else:
+                sub_chunks = self._split_text_chunk(chunk, source_name, max_chars)
+
+            results.extend(sub_chunks)
+
+        return results
+
+    def _split_table_chunk(
+        self,
+        chunk: HierarchyChunk,
+        source_name: str,
+        max_chars: int
+    ) -> List[HierarchyChunk]:
+        """切分包含 HTML 表格的超长切片
+
+        策略：按表格行切分，保留表头
+
+        Args:
+            chunk: 原始切片
+            source_name: 文档名称
+            max_chars: 最大字符数
+
+        Returns:
+            切分后的子切片列表
+        """
+        content = chunk.content
+        results = []
+
+        # 提取表格前后的文本
+        table_start = content.find("<table>")
+        table_end = content.rfind("</table>") + len("</table>") if "</table>" in content else len(content)
+
+        prefix_text = content[:table_start].strip() if table_start > 0 else ""
+        suffix_text = content[table_end:].strip() if table_end < len(content) else ""
+        table_content = content[table_start:table_end] if table_start >= 0 else content
+
+        # 提取表头（第一行）
+        header_match = re.search(r'<tr>(.*?)</tr>', table_content, re.DOTALL)
+        header = header_match.group(0) if header_match else ""
+
+        # 提取所有数据行
+        rows = re.findall(r'<tr>.*?</tr>', table_content, re.DOTALL)
+        data_rows = rows[1:] if len(rows) > 1 else rows
+
+        if not data_rows:
+            # 无法切分，保留原内容但截断
+            return [self._create_sub_chunk(chunk, content[:max_chars], source_name, 0)]
+
+        # 按行组合切分
+        current_content = prefix_text + ("\n<table>" + header if header else "<table>")
+        sub_index = 0
+
+        for row in data_rows:
+            test_content = current_content + "\n" + row
+            if len(test_content) > max_chars and len(current_content) > len(prefix_text) + 10:
+                # 当前内容已超限，保存并开始新切片
+                results.append(self._create_sub_chunk(
+                    chunk, current_content + "\n</table>", source_name, sub_index
+                ))
+                sub_index += 1
+                current_content = "<table>" + header + "\n" + row
+            else:
+                current_content = test_content
+
+        # 添加最后一个表格切片
+        current_content += "\n</table>"
+        if current_content.strip() and len(current_content) <= max_chars:
+            results.append(self._create_sub_chunk(chunk, current_content, source_name, sub_index))
+        elif current_content.strip():
+            # 如果最后一个表格切片超限，需要进一步切分
+            # 先保存当前内容（不含后缀）
+            results.append(self._create_sub_chunk(
+                chunk, current_content[:max_chars], source_name, sub_index
+            ))
+
+        # 处理表格后的内容（suffix_text）
+        if suffix_text:
+            if len(suffix_text) > max_chars:
+                # suffix_text 也需要切分
+                if "```" in suffix_text:
+                    suffix_chunks = self._split_code_chunk(
+                        HierarchyChunk(
+                            content=suffix_text,
+                            chunk_id=chunk.chunk_id,
+                            depth=chunk.depth,
+                            parent_id=chunk.parent_id,
+                            ancestors=chunk.ancestors,
+                            section_title=f"{chunk.section_title} (后缀)",
+                            metadata=chunk.metadata,
+                        ), source_name, max_chars
+                    )
+                else:
+                    suffix_chunks = self._split_text_chunk(
+                        HierarchyChunk(
+                            content=suffix_text,
+                            chunk_id=chunk.chunk_id,
+                            depth=chunk.depth,
+                            parent_id=chunk.parent_id,
+                            ancestors=chunk.ancestors,
+                            section_title=f"{chunk.section_title} (后缀)",
+                            metadata=chunk.metadata,
+                        ), source_name, max_chars
+                    )
+                results.extend(suffix_chunks)
+            else:
+                results.append(self._create_sub_chunk(chunk, suffix_text, source_name, sub_index + 1))
+
+        return results if results else [chunk]
+
+    def _split_code_chunk(
+        self,
+        chunk: HierarchyChunk,
+        source_name: str,
+        max_chars: int
+    ) -> List[HierarchyChunk]:
+        """切分包含代码块的超长切片
+
+        策略：代码块保持完整，超出则提取摘要
+
+        Args:
+            chunk: 原始切片
+            source_name: 文档名称
+            max_chars: 最大字符数
+
+        Returns:
+            切分后的子切片列表
+        """
+        content = chunk.content
+
+        # 统计代码块占比
+        code_blocks = re.findall(r'```[\s\S]*?```', content)
+        total_code_len = sum(len(b) for b in code_blocks)
+
+        if total_code_len > max_chars * 0.7:
+            # 代码块占比大，提取摘要
+            summary = f"[代码块摘要: {len(code_blocks)} 个代码块, 共 {total_code_len} 字符]"
+            # 保留代码块前后的文本
+            non_code = re.sub(r'```[\s\S]*?```', '', content).strip()
+            if non_code:
+                summary = non_code[:max_chars - len(summary) - 100] + "\n\n" + summary
+
+            return [self._create_sub_chunk(chunk, summary[:max_chars], source_name, 0)]
+
+        # 否则按普通文本处理
+        return self._split_text_chunk(chunk, source_name, max_chars)
+
+    def _split_text_chunk(
+        self,
+        chunk: HierarchyChunk,
+        source_name: str,
+        max_chars: int
+    ) -> List[HierarchyChunk]:
+        """切分普通文本超长切片
+
+        策略：按段落边界切分，保持句子完整
+
+        Args:
+            chunk: 原始切片
+            source_name: 文档名称
+            max_chars: 最大字符数
+
+        Returns:
+            切分后的子切片列表
+        """
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+        # 使用递归字符切分器，优先按段落、句子边界切分
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=max_chars,
+            chunk_overlap=200,  # 重叠部分保持上下文
+            separators=["\n\n", "\n", "。", "；", "，", " ", ""],
+            length_function=len,
+        )
+
+        texts = splitter.split_text(chunk.content)
+        results = []
+
+        for i, text in enumerate(texts):
+            results.append(self._create_sub_chunk(chunk, text, source_name, i))
+
+        return results
+
+    def _create_sub_chunk(
+        self,
+        parent: HierarchyChunk,
+        content: str,
+        source_name: str,
+        sub_index: int
+    ) -> HierarchyChunk:
+        """创建子切片
+
+        Args:
+            parent: 父切片
+            content: 子切片内容
+            source_name: 文档名称
+            sub_index: 子切片索引
+
+        Returns:
+            新的子切片
+        """
+        return HierarchyChunk(
+            content=content,
+            chunk_id=f"{parent.chunk_id}_{sub_index}",
+            depth=parent.depth,
+            parent_id=parent.parent_id,
+            ancestors=parent.ancestors,
+            section_title=f"{parent.section_title} (部分{sub_index + 1})" if sub_index > 0 else parent.section_title,
+            metadata={
+                **parent.metadata,
+                "char_count": len(content),
+                "is_sub_chunk": True,
+                "parent_chunk_id": parent.chunk_id,
+            },
+        )
 
     def _fix_orphan_headings(self, chunks: List[HierarchyChunk]) -> List[HierarchyChunk]:
         """

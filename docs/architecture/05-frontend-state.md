@@ -1,7 +1,7 @@
 # 前端状态与组件架构
 
-> **更新日期**: 2026-05-15
-> **版本**: v4.0 (简化重构版)
+> **更新日期**: 2026-05-17
+> **版本**: v5.0 (完整版)
 > **状态**: ✅ 已完整实现
 
 本文档详细说明前端状态管理架构、三栏工作台布局和 SSE 事件处理机制。
@@ -29,6 +29,8 @@ frontend/src/features/planning/
 ├── api/                    # API 客户端和类型定义
 │   ├── types.ts            # 统一 API 类型
 │   ├── client.ts           # SSE 连接与请求封装
+│   ├── planning-api.ts     # 规划 API
+│   ├── data-api.ts         # 数据 API（村庄历史等）
 │   └── index.ts            # API 导出
 ├── components/
 │   ├── layout/             # 布局组件
@@ -36,7 +38,8 @@ frontend/src/features/planning/
 │   │   ├── LayerNav.tsx        # 左侧维度导航
 │   │   ├── FocusArea.tsx       # 中央工作区
 │   │   ├── ReportViewer.tsx    # 报告查看器
-│   │   └── ProcessPanel.tsx    # 右侧处理面板
+│   │   ├── ProcessPanel.tsx    # 右侧处理面板
+│   │   └── index.ts            # 布局组件导出
 │   ├── chat/               # 聊天组件
 │   │   ├── MessageList.tsx     # 消息列表
 │   │   ├── MessageBubble.tsx   # 消息气泡
@@ -44,30 +47,77 @@ frontend/src/features/planning/
 │   │   ├── LayerReportMessage.tsx # 层级完成消息
 │   │   ├── ProgressPanel.tsx   # 执行进度面板
 │   │   ├── ToolStatusPanel.tsx # 工具状态面板
-│   │   └── CheckpointMarker.tsx # 检查点标记
+│   │   ├── ToolStatusCard.tsx  # 工具状态卡片
+│   │   ├── CheckpointMarker.tsx # 检查点标记
+│   │   ├── StreamingText.tsx   # 流式文本渲染
+│   │   ├── ThinkingIndicator.tsx # 思考指示器
+│   │   ├── GisResultCard.tsx   # GIS 结果卡片
+│   │   ├── KnowledgeSliceCard.tsx # 知识切片卡片
+│   │   └── FileViewerSidebar.tsx # 文件查看侧边栏
 │   ├── gis/                # GIS 地图组件
 │   │   ├── MapView.tsx
-│   │   └── LegendPanel.tsx
+│   │   ├── LegendPanel.tsx
+│   │   └── index.ts
 │   ├── compare/            # 对比组件
 │   │   ├── ReportComparePanel.tsx
-│   │   └── ReportCompareModal.tsx
-│   └── ui/                 # UI 通用组件
-│       ├── MarkdownRenderer.tsx
-│       └── KnowledgeReference.tsx
+│   │   ├── ReportCompareModal.tsx
+│   │   └── index.ts
+│   ├── settings/           # 设置组件
+│   │   ├── SettingsPanel.tsx
+│   │   └── index.ts
+│   ├── ui/                 # UI 通用组件
+│   │   ├── MarkdownRenderer.tsx
+│   │   ├── ImagePreview.tsx
+│   │   └── index.ts
+│   ├── knowledge/          # 知识组件（预留）
+│   │   └── index.ts
+│   ├── Dashboard.tsx       # 主布局容器
+│   ├── VillageInputForm.tsx # 村庄输入表单
+│   ├── ChatInput.tsx       # 聊天输入框
+│   ├── MessagePanel.tsx    # 消息面板
+│   ├── CascadePanel.tsx    # 级联修复面板
+│   ├── DimensionCard.tsx   # 维度状态卡片
+│   └── index.ts            # 组件导出
 ├── store/                  # Zustand 状态管理
-│   └── planningStore.ts
+│   ├── planningStore.ts    # 主状态存储
+│   ├── planning-context.tsx # React Context 包装
+│   └── index.ts
 ├── hooks/                  # 自定义 Hooks
-│   ├── useSSE.ts
-│   ├── useSelectors.ts
-│   └── useHandlers.ts
+│   ├── useSSE.ts           # SSE 连接管理
+│   ├── useSelectors.ts     # 状态选择器
+│   ├── useHandlers.ts      # 事件处理器
+│   ├── useStreaming.ts     # 流式渲染
+│   ├── usePersistence.ts    # 持久化
+│   ├── useSessionRestore.ts # 会话恢复
+│   ├── useApprovalActions.ts # 审批操作
+│   ├── ui/                 # UI 相关 Hooks
+│   ├── utils/              # Hook 工具
+│   │   └── useStreamingRender.ts
+│   └── index.ts
 ├── config/                 # 配置
-│   └── dimensions.ts
+│   ├── dimensions.ts       # 维度配置
+│   ├── phases.ts           # 阶段配置
+│   ├── planning.ts         # 规划配置
+│   └── index.ts
 ├── constants/              # 常量
-│   └── index.ts
+│   ├── gis.ts              # GIS 常量
+│   └── index.ts            # 通用常量
 ├── types/                  # 类型定义
+│   ├── base.ts             # 基础类型
+│   ├── events.ts           # SSE 事件类型
+│   ├── messages.ts         # 消息类型
+│   ├── guards.ts           # 类型守卫
+│   ├── helpers.ts          # 类型辅助函数
 │   └── index.ts
-└── utils/                  # 工具函数
-    └── index.ts
+├── utils/                  # 工具函数
+│   ├── cn.ts               # 类名合并
+│   ├── format.ts           # 格式化工具
+│   ├── logger.ts           # 日志工具
+│   ├── message-helpers.ts  # 消息辅助函数
+│   ├── report-parser.ts    # 报告解析
+│   ├── throttle.ts         # 节流工具
+│   └── index.ts
+└── index.ts                # 模块导出
 ```
 
 ---
@@ -93,6 +143,8 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     pause_after_step: false,
     previous_layer: 0,
     step_mode: false,
+    execution_paused: false,
+    // ... 更多状态
   }))
 );
 ```
@@ -116,6 +168,10 @@ export function useIsPaused(): boolean {
 
 export function useDimensionRagSources(dimKey: string): DimensionRagSource | null {
   return usePlanningStore((state) => state.dimensionRagSources[dimKey] || null);
+}
+
+export function useProcessPanelTab(): ProcessPanelTab {
+  return usePlanningStore((state) => state.processPanelTab);
 }
 ```
 
@@ -141,6 +197,7 @@ export interface PlanningState {
   pause_after_step: boolean;
   previous_layer: number;
   step_mode: boolean;
+  execution_paused: boolean;
 
   // Derived UI State
   completedDimensions: CompletedDimensions;
@@ -161,7 +218,6 @@ export interface PlanningState {
   dimensionProgress: Record<string, DimensionProgressItem>;
   executingDimensions: string[];
   layerDimensionCount: Record<number, number>;
-  layerProgressHistory: { layer1?: LayerProgressSnapshot; ... };
 
   // RAG & Cascade (Demo System)
   dimensionRagSources: Record<string, DimensionRagSource>;
@@ -186,19 +242,30 @@ export interface PlanningState {
   selectedVillage: VillageInfo | null;
   selectedSession: VillageSession | null;
   historyLoading: boolean;
+  historyError: string | null;
 
   // Checkpoints
   checkpoints: Checkpoint[];
   selectedCheckpoint: string | null;
+  loadingContent: boolean;
+  deletingSessionId: string | null;
 
   // Tools
   toolStatuses: Record<string, ToolStatus>;
+
+  // GIS Layers (SSE-driven, no REST API needed)
   gisLayers: Record<string, GISLayerConfig[]>;
 
   // Three-Panel Layout Navigation State
   selectedNavigationKey: NavigationKey | null;
   isRightPanelExpanded: boolean;
   isLeftNavCollapsed: boolean;
+
+  // ProcessPanel
+  processPanelTab: ProcessPanelTab;
+
+  // Layer-level RAG Configuration
+  ragLayerConfig: Record<number, boolean>;
 }
 ```
 
@@ -208,23 +275,27 @@ export interface PlanningState {
 |------|------|--------|------|
 | `selectedNavigationKey` | `NavigationKey \| null` | `null` | 当前选中导航键 |
 | `isRightPanelExpanded` | `boolean` | `true` | 右侧处理面板展开状态 |
+| `isLeftNavCollapsed` | `boolean` | `false` | 左侧导航折叠状态 |
 | `processPanelTab` | `ProcessPanelTab` | `'messages'` | 处理面板当前标签页 |
+| `ragLayerConfig` | `Record<number, boolean>` | `{1:true,2:true,3:true}` | RAG 层级开关配置 |
 
 ### NavigationKey 类型
 
 ```typescript
+export type NavigationKey = 'overview' | 'chat' | 'approval' | `dim:${string}`;
+
 export const NAV_KEYS = {
   OVERVIEW: 'overview',
-  dim: (key: string) => `dim:${key}`,
+  CHAT: 'chat',
+  APPROVAL: 'approval',
+  dim: (key: string) => `dim:${key}` as NavigationKey,
 } as const;
-
-export type NavigationKey = (typeof NAV_KEYS)[keyof typeof NAV_KEYS] | `dim:${string}`;
 ```
 
 ### ProcessPanelTab 类型
 
 ```typescript
-export type ProcessPanelTab = 'messages' | 'map' | 'history';
+export type ProcessPanelTab = 'messages' | 'map' | 'history' | 'settings';
 ```
 
 ---
@@ -257,14 +328,15 @@ export type ProcessPanelTab = 'messages' | 'map' | 'history';
 │ (280px)  │           (flex:1)               │      (320px)         │
 │          │                                  │                      │
 │ ┌──────┐ │  ┌────────────────────────────┐  │  ┌────────────────┐  │
-│ │导航  │ │  │      ReportViewer          │  │  │ [消息][地图][历史]│ │
+│ │导航  │ │  │      ReportViewer          │  │  │[消息][地图][历史][设置]│
 │ │总览  │ │  │  ┌──────────────────────┐  │  │  ├────────────────┤  │
-│ │      │ │  │  │   MarkdownRenderer   │  │  │  │   MessageList   │  │
-│ │L1    │ │  │  │   (报告内容)         │  │  │  │                │  │
-│ │L2    │ │  │  └──────────────────────┘  │  │  └────────────────┘  │
-│ │L3    │ │  │  ┌──────────────────────┐  │  │  ┌────────────────┐  │
-│ │      │ │  │  │  [知识来源] (可折叠) │  │  │  │   ChatInput    │  │
-│ └──────┘ │  │  └──────────────────────┘  │  │  └────────────────┘  │
+│ │聊天  │ │  │  │   MarkdownRenderer   │  │  │  │   MessageList   │  │
+│ │      │ │  │  │   (报告内容)         │  │  │  │                │  │
+│ │L1    │ │  │  └──────────────────────┘  │  │  └────────────────┘  │
+│ │L2    │ │  │  ┌──────────────────────┐  │  │  ┌────────────────┐  │
+│ │L3    │ │  │  │ KnowledgeSliceCard   │  │  │  │   ChatInput    │  │
+│ │      │ │  │  │ (知识切片)           │  │  │  └────────────────┘  │
+│ └──────┘ │  │  └──────────────────────┘  │  │                      │
 │ ┌──────┐ │  └────────────────────────────┘  │                      │
 │ │工具  │ │                                  │                      │
 │ │状态  │ │                                  │                      │
@@ -303,6 +375,7 @@ ReportViewer 根据 `selectedNavigationKey` 和 `status` 渲染不同内容：
 | `messages` | MessageList + ChatInput |
 | `map` | MapView GIS 数据 |
 | `history` | 历史会话列表 |
+| `settings` | SettingsPanel 设置面板 |
 
 ---
 
@@ -316,7 +389,7 @@ Dashboard (主容器)
 │   └── ActionButtons
 ├── <三栏布局>
 │   ├── LayerNav (左侧 280px)
-│   │   ├── 导航项（总览）
+│   │   ├── 导航项（总览/聊天）
 │   │   ├── Layer 展开列表
 │   │   │   └── 维度项 + 状态圆点
 │   │   └── ToolStatusPanel (底部折叠)
@@ -325,11 +398,11 @@ Dashboard (主容器)
 │   │       ├── [idle] VillageInputForm
 │   │       ├── [dim:*] 维度详情视图
 │   │       │   ├── MarkdownRenderer (报告内容)
-│   │       │   ├── RagKnowledgePanel (底部可折叠)
-│   │       │   └── KnowledgeDetailDrawer (右侧抽屉)
+│   │       │   ├── KnowledgeSliceCard (知识切片)
+│   │       │   └── FileViewerSidebar (文件侧边栏)
 │   │       └── [默认] 规划总览
 │   └── ProcessPanel (右侧 320px)
-│       ├── TabNavigation (消息/地图/历史)
+│       ├── TabNavigation (消息/地图/历史/设置)
 │       ├── MessageList
 │       └── ChatInput
 └── ChatBar (底部输入栏)
@@ -348,6 +421,10 @@ Dashboard (主容器)
 | `MessageList` | `components/chat/MessageList.tsx` | ProcessPanel 使用 |
 | `MapView` | `components/gis/MapView.tsx` | ProcessPanel 使用 |
 | `VillageInputForm` | `components/VillageInputForm.tsx` | ReportViewer 使用 |
+| `SettingsPanel` | `components/settings/SettingsPanel.tsx` | ProcessPanel 使用 |
+| `KnowledgeSliceCard` | `components/chat/KnowledgeSliceCard.tsx` | ReportViewer 使用 |
+| `StreamingText` | `components/chat/StreamingText.tsx` | MessageContent 使用 |
+| `ThinkingIndicator` | `components/chat/ThinkingIndicator.tsx` | MessageList 使用 |
 
 ---
 
@@ -417,7 +494,9 @@ export type PlanningSSEEventType =
   | 'thinking_start' | 'thinking' | 'thinking_end' | 'stream_paused'
   | 'review_request'
   | 'rag_query' | 'rag_result' | 'cascade_impact' | 'cascade_complete'
-  | 'state_sync' | 'layer_paused' | 'connected';
+  | 'state_sync' | 'layer_paused' | 'connected'
+  | 'gis_result' | 'gis_layer_update'
+  | 'rag_config_updated' | 'execution_resumed' | 'revision_completed';
 ```
 
 ---
@@ -427,18 +506,32 @@ export type PlanningSSEEventType =
 | 功能 | 文件路径 |
 |------|----------|
 | 状态管理 | `frontend/src/features/planning/store/planningStore.ts` |
+| Context 包装 | `frontend/src/features/planning/store/planning-context.tsx` |
 | SSE 连接 | `frontend/src/features/planning/hooks/useSSE.ts` |
 | 状态选择器 | `frontend/src/features/planning/hooks/useSelectors.ts` |
+| 流式渲染 | `frontend/src/features/planning/hooks/useStreaming.ts` |
+| 会话恢复 | `frontend/src/features/planning/hooks/useSessionRestore.ts` |
+| 审批操作 | `frontend/src/features/planning/hooks/useApprovalActions.ts` |
 | API 类型 | `frontend/src/features/planning/api/types.ts` |
 | API 客户端 | `frontend/src/features/planning/api/client.ts` |
+| 规划 API | `frontend/src/features/planning/api/planning-api.ts` |
+| 数据 API | `frontend/src/features/planning/api/data-api.ts` |
 | 主布局 | `frontend/src/features/planning/components/Dashboard.tsx` |
 | 顶部导航 | `frontend/src/features/planning/components/layout/AppHeader.tsx` |
 | 左侧导航 | `frontend/src/features/planning/components/layout/LayerNav.tsx` |
 | 中央工作区 | `frontend/src/features/planning/components/layout/FocusArea.tsx` |
 | 报告查看器 | `frontend/src/features/planning/components/layout/ReportViewer.tsx` |
 | 右侧面板 | `frontend/src/features/planning/components/layout/ProcessPanel.tsx` |
+| 设置面板 | `frontend/src/features/planning/components/settings/SettingsPanel.tsx` |
 | 常量定义 | `frontend/src/features/planning/constants/index.ts` |
+| GIS 常量 | `frontend/src/features/planning/constants/gis.ts` |
 | 维度配置 | `frontend/src/features/planning/config/dimensions.ts` |
+| 阶段配置 | `frontend/src/features/planning/config/phases.ts` |
+| 类型定义 | `frontend/src/features/planning/types/index.ts` |
+| SSE 事件类型 | `frontend/src/features/planning/types/events.ts` |
+| 消息类型 | `frontend/src/features/planning/types/messages.ts` |
+| 工具函数 | `frontend/src/features/planning/utils/index.ts` |
+| 消息辅助 | `frontend/src/features/planning/utils/message-helpers.ts` |
 
 ---
 

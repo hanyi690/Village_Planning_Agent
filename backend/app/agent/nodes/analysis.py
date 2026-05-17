@@ -364,10 +364,9 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         # Layer 3 依赖 Layer 1 和 Layer 2（按配置过滤）
         layer1_deps = getattr(cfg, 'layer_depends_on', [])
         layer2_deps = getattr(cfg, 'phase_depends_on', [])
-        layer1_reports, layer2_reports = await asyncio.gather(
-            store.get_layer_reports(session_id, 1),
-            store.get_layer_reports(session_id, 2),
-        )
+        # 顺序调用避免 SQLite aiosqlite 连接管理问题
+        layer1_reports = await store.get_layer_reports(session_id, 1)
+        layer2_reports = await store.get_layer_reports(session_id, 2)
         deps_parts = []
         for k in layer1_deps:
             if layer1_reports.get(k):

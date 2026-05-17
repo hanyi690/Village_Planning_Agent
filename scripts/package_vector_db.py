@@ -1,152 +1,167 @@
 """
-向量库优化打包脚本
+向量库打包脚本
 
 功能：
-1. 清理临时缓存文件
-2. 压缩JSON文件（移除冗余数据）
-3. 打包为可共享的压缩文件
+1. 打包 ChromaDB 向量库为压缩文件
+2. 可选清理缓存文件
+3. 显示打包统计信息
+
+使用方式：
+    python scripts/package_vector_db.py [--clean-cache]
 """
 import os
 import json
 import shutil
-import zipfile
+import tarfile
 from pathlib import Path
 from datetime import datetime
 
-PROJECT_ROOT = Path(__file__).parent.parent
-CHROMA_DIR = PROJECT_ROOT / "knowledge_base" / "chroma_db"
+# 添加 backend 到路径
+backend_path = Path(__file__).parent.parent / "backend"
+import sys
+sys.path.insert(0, str(backend_path))
+
+from app.core.settings import CHROMA_PERSIST_DIR, DATA_DIR
 
 
-def clean_cache():
-    """清理查询缓存"""
-    cache_dir = CHROMA_DIR / "cache"
-    if cache_dir.exists():
-        cache_size = sum(f.stat().st_size for f in cache_dir.rglob("*") if f.is_file())
-        shutil.rmtree(cache_dir)
-        print(f"✅ 清理缓存: {cache_size / 1024:.1f} KB")
+def get_vector_db_size(vector_dir: Path) -> int:
+    """计算目录大小"""
+    return sum(f.stat().st_size for f in vector_dir.rglob("*") if f.is_file())
+
+
+def clean_cache_files(vector_dir: Path):
+    """清理缓存文件"""
+    cache_patterns = ["*.cache", "*.tmp", "__pycache__"]
+    cleaned_size = 0
+    cleaned_count = 0
+
+    for pattern in cache_patterns:
+        for f in vector_dir.rglob(pattern):
+            if f.is_file():
+                cleaned_size += f.stat().st_size
+                f.unlink()
+                cleaned_count += 1
+            elif f.is_dir():
+                dir_size = sum(x.stat().st_size for x in f.rglob("*") if x.is_file())
+                cleaned_size += dir_size
+                shutil.rmtree(f)
+                cleaned_count += 1
+
+    if cleaned_count > 0:
+        print(f"✅ 清理缓存: {cleaned_count} 个文件/目录, {cleaned_size / 1024:.1f} KB")
     else:
-        print("ℹ️  缓存目录不存在")
+        print("ℹ️  无需清理缓存")
 
 
-def optimize_document_index():
-    """优化文档索引JSON - 移除冗余字段"""
-    index_file = CHROMA_DIR / "document_index.json"
-    if not index_file.exists():
-        print("ℹ️  document_index.json 不存在")
-        return
-
-    # 读取原文件
-    with open(index_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    original_size = index_file.stat().st_size
-
-    # 优化：移除空字段、压缩章节摘要
-    optimized = {}
-    for source, info in data.items():
-        optimized[source] = {
-            "total_chunks": info.get("total_chunks", 0),
-            "category": info.get("category", "unknown"),
-            # 保留必要的元数据，移除大量内容
-        }
-
-    # 写入优化后的文件
-    with open(index_file, "w", encoding="utf-8") as f:
-        json.dump(optimized, f, ensure_ascii=False, indent=2)
-
-    new_size = index_file.stat().st_size
-    print(f"✅ 优化 document_index.json: {original_size / 1024 / 1024:.1f}MB -> {new_size / 1024:.1f}KB")
-
-
-def remove_analysis_report():
-    """移除切片分析报告（可选，不影响检索）"""
-    analysis_file = CHROMA_DIR / "slices_analysis.json"
-    if analysis_file.exists():
-        size = analysis_file.stat().st_size
-        # 移动到备份目录而非删除
-        backup_dir = PROJECT_ROOT / "knowledge_base" / "backup"
-        backup_dir.mkdir(exist_ok=True)
-        shutil.move(str(analysis_file), str(backup_dir / "slices_analysis.json.bak"))
-        print(f"✅ 移动 slices_analysis.json 到备份目录: {size / 1024 / 1024:.1f}MB")
-    else:
-        print("ℹ️  slices_analysis.json 不存在")
-
-
-def package_vector_db(output_name: str = None):
+def package_vector_db(output_name: str = None, include_outline_index: bool = True):
     """打包向量库为压缩文件"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     if output_name is None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        output_name = f"chroma_db_{timestamp}.zip"
+        output_name = f"chroma_db_{timestamp}.tar.gz"
 
-    output_path = PROJECT_ROOT / "knowledge_base" / output_name
-
-    # 计算打包前大小
-    total_size = sum(f.stat().st_size for f in CHROMA_DIR.rglob("*") if f.is_file())
+    output_path = DATA_DIR.parent / "backups" / output_name
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"\n📦 打包向量库...")
-    print(f"   源目录: {CHROMA_DIR}")
+    print(f"   源目录: {CHROMA_PERSIST_DIR}")
     print(f"   输出文件: {output_path}")
 
-    with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in CHROMA_DIR.rglob("*"):
-            if file_path.is_file():
-                # 保持相对路径结构
-                arcname = file_path.relative_to(CHROMA_DIR)
-                zf.write(file_path, arcname)
-                print(f"   添加: {arcname} ({file_path.stat().st_size / 1024:.1f}KB)")
+    if not CHROMA_PERSIST_DIR.exists():
+        print(f"❌ 向量库目录不存在: {CHROMA_PERSIST_DIR}")
+        return None
 
-    compressed_size = output_path.stat().st_size
-    compression_ratio = (1 - compressed_size / total_size) * 100
+    total_size = get_vector_db_size(CHROMA_PERSIST_DIR)
+    print(f"   目录大小: {total_size / 1024 / 1024:.2f} MB")
 
-    print(f"\n✅ 打包完成!")
-    print(f"   原始大小: {total_size / 1024 / 1024:.1f}MB")
-    print(f"   压缩大小: {compressed_size / 1024 / 1024:.1f}MB")
-    print(f"   压缩率: {compression_ratio:.1f}%")
-    print(f"   输出路径: {output_path}")
+    try:
+        with tarfile.open(output_path, "w:gz") as tar:
+            tar.add(CHROMA_PERSIST_DIR, arcname=CHROMA_PERSIST_DIR.name)
 
-    return output_path
+            outline_index_dir = DATA_DIR / "RAG_doc" / "_cache" / "outline_index"
+            if include_outline_index and outline_index_dir.exists():
+                tar.add(outline_index_dir, arcname="outline_index")
+
+        compressed_size = output_path.stat().st_size
+        compression_ratio = (1 - compressed_size / total_size) * 100 if total_size > 0 else 0
+
+        print(f"\n✅ 打包完成!")
+        print(f"   原始大小: {total_size / 1024 / 1024:.2f} MB")
+        print(f"   压缩大小: {compressed_size / 1024 / 1024:.2f} MB")
+        print(f"   压缩率: {compression_ratio:.1f}%")
+        print(f"   输出路径: {output_path}")
+
+        return output_path
+
+    except Exception as e:
+        print(f"❌ 打包失败: {e}")
+        return None
+
+
+def verify_package(package_path: Path):
+    """验证打包文件完整性"""
+    print(f"\n🔍 验证打包文件...")
+    print(f"   文件: {package_path}")
+
+    if not package_path.exists():
+        print(f"❌ 文件不存在")
+        return False
+
+    try:
+        with tarfile.open(package_path, "r:gz") as tar:
+            members = tar.getmembers()
+            print(f"   ✅ 文件数量: {len(members)}")
+
+            has_sqlite = any("chroma.sqlite3" in m.name for m in members)
+            if has_sqlite:
+                print(f"   ✅ 包含 chroma.sqlite3")
+            else:
+                print(f"   ⚠️  缺少 chroma.sqlite3")
+
+        return True
+
+    except Exception as e:
+        print(f"❌ 验证失败: {e}")
+        return False
 
 
 def main():
-    """执行优化和打包"""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="向量库打包工具")
+    parser.add_argument("--clean-cache", action="store_true", help="打包前清理缓存文件")
+    parser.add_argument("--output", type=str, help="输出文件名")
+    parser.add_argument("--verify", type=str, help="验证指定的打包文件")
+    args = parser.parse_args()
+
     print("=" * 60)
-    print("🔧 向量库优化打包")
+    print("📦 向量库打包工具")
     print("=" * 60)
 
-    # 检查向量库状态
-    if not CHROMA_DIR.exists():
-        print(f"❌ 向量库目录不存在: {CHROMA_DIR}")
+    if args.verify:
+        verify_package(Path(args.verify))
         return
 
-    # 统计当前状态
-    total_size = sum(f.stat().st_size for f in CHROMA_DIR.rglob("*") if f.is_file())
+    if not CHROMA_PERSIST_DIR.exists():
+        print(f"❌ 向量库目录不存在: {CHROMA_PERSIST_DIR}")
+        return
+
+    total_size = get_vector_db_size(CHROMA_PERSIST_DIR)
     print(f"\n📊 当前状态:")
-    print(f"   目录: {CHROMA_DIR}")
-    print(f"   总大小: {total_size / 1024 / 1024:.1f}MB")
+    print(f"   目录: {CHROMA_PERSIST_DIR}")
+    print(f"   总大小: {total_size / 1024 / 1024:.2f} MB")
 
-    # 1. 清理缓存
-    print(f"\n🧹 步骤1: 清理缓存")
-    clean_cache()
+    if args.clean_cache:
+        print(f"\n🧹 清理缓存...")
+        clean_cache_files(CHROMA_PERSIST_DIR)
 
-    # 2. 优化文档索引
-    print(f"\n📝 步骤2: 优化文档索引")
-    optimize_document_index()
+    output_path = package_vector_db(args.output)
 
-    # 3. 移除分析报告
-    print(f"\n📊 步骤3: 移除分析报告")
-    remove_analysis_report()
+    if output_path:
+        verify_package(output_path)
 
-    # 4. 打包
-    output_path = package_vector_db()
-
-    # 最终统计
-    final_size = sum(f.stat().st_size for f in CHROMA_DIR.rglob("*") if f.is_file())
-    print(f"\n" + "=" * 60)
-    print(f"📋 优化结果:")
-    print(f"   原始大小: {total_size / 1024 / 1024:.1f}MB")
-    print(f"   优化后大小: {final_size / 1024 / 1024:.1f}MB")
-    print(f"   压缩包大小: {output_path.stat().st_size / 1024 / 1024:.1f}MB")
-    print(f"=" * 60)
+    print("\n" + "=" * 60)
+    print("✅ 操作完成")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

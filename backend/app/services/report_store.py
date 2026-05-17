@@ -9,6 +9,7 @@ Design:
 """
 
 import uuid
+import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TypedDict
 
@@ -352,39 +353,56 @@ class ReportStore:
     async def get_layer_reports(
         self,
         session_id: str,
-        layer: int
+        layer: int,
+        max_retries: int = 3,
+        retry_delay: float = 0.5,
     ) -> Dict[str, str]:
         """
-        Get all reports for a layer
+        Get all reports for a layer (with retry for SQLite connection issues)
 
         Args:
             session_id: Session identifier
             layer: Layer number (1/2/3)
+            max_retries: Maximum retry attempts for connection errors
+            retry_delay: Delay between retries in seconds
 
         Returns:
             Dict mapping dim_key -> latest content
         """
-        async with get_async_session() as db:
-            statement = (
-                select(DimensionReport)
-                .where(
-                    DimensionReport.session_id == session_id,
-                    DimensionReport.layer == layer,
-                )
-                .order_by(DimensionReport.dimension_key, DimensionReport.version.desc())
-            )
-            result = await db.execute(statement)
-            reports = result.scalars().all()
+        for attempt in range(max_retries):
+            try:
+                async with get_async_session() as db:
+                    statement = (
+                        select(DimensionReport)
+                        .where(
+                            DimensionReport.session_id == session_id,
+                            DimensionReport.layer == layer,
+                        )
+                        .order_by(DimensionReport.dimension_key, DimensionReport.version.desc())
+                    )
+                    result = await db.execute(statement)
+                    reports = result.scalars().all()
 
-            # Keep only latest version per dimension
-            result_dict = {}
-            seen_dims = set()
-            for r in reports:
-                if r.dimension_key not in seen_dims:
-                    result_dict[r.dimension_key] = r.content
-                    seen_dims.add(r.dimension_key)
+                    # Keep only latest version per dimension
+                    result_dict = {}
+                    seen_dims = set()
+                    for r in reports:
+                        if r.dimension_key not in seen_dims:
+                            result_dict[r.dimension_key] = r.content
+                            seen_dims.add(r.dimension_key)
 
-            return result_dict
+                    return result_dict
+            except Exception as e:
+                if "no active connection" in str(e) or "OperationalError" in str(e):
+                    if attempt < max_retries - 1:
+                        logger.warning(f"[ReportStore] SQLite connection error, retrying ({attempt + 1}/{max_retries}): {e}")
+                        await asyncio.sleep(retry_delay * (attempt + 1))
+                    else:
+                        logger.error(f"[ReportStore] Failed after {max_retries} retries: {e}")
+                        raise
+                else:
+                    raise
+        return {}
 
     async def get_layer_reports_with_sources(
         self,

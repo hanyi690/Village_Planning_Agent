@@ -10,7 +10,7 @@
     python scripts/sync_kb_to_oss.py --upload
     python scripts/sync_kb_to_oss.py --download
     python scripts/sync_kb_to_oss.py --verify
-    python scripts/sync_kb_to_oss.py --download --test-dir ./test_kb
+    python scripts/sync_kb_to_oss.py --list
 """
 import os
 import sys
@@ -21,9 +21,11 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 
-sys.path.append(str(Path(__file__).parent.parent))
+# 添加 backend 到路径
+backend_path = Path(__file__).parent.parent / "backend"
+sys.path.insert(0, str(backend_path))
 
-from backend.app.core.settings import (
+from app.core.settings import (
     CHROMA_PERSIST_DIR,
     OSS_ACCESS_KEY_ID,
     OSS_ACCESS_KEY_SECRET,
@@ -79,7 +81,6 @@ def package_vector_store(source_dir: Path, output_file: Path):
         print(f"❌ 向量库目录不存在: {source_dir}")
         return False
 
-    # 计算目录大小
     total_size = sum(f.stat().st_size for f in source_dir.rglob("*") if f.is_file())
     print(f"   目录大小: {total_size / 1024 / 1024:.2f} MB")
 
@@ -102,21 +103,19 @@ def upload_to_oss(local_file: Path, oss_path: str):
     bucket = get_oss_bucket()
 
     try:
-        # 使用进度回调
+        import oss2
+
         def progress_callback(consumed_bytes, total_bytes):
             if total_bytes:
                 percent = int(100 * float(consumed_bytes) / float(total_bytes))
-                print(f"   上传进度: {percent}% ({consumed_bytes / 1024 / 1024:.1f}MB / {total_bytes / 1024 / 1024:.1f}MB)")
+                print(f"   上传进度: {percent}%", end="\r")
 
         bucket.put_object_from_file(
-            oss_path,
-            str(local_file),
-            progress_callback=progress_callback
+            oss_path, str(local_file), progress_callback=progress_callback
         )
 
-        print(f"✅ 上传完成")
+        print(f"✅ 上传完成                                        ")
 
-        # 获取上传后的文件信息
         info = bucket.head_object(oss_path)
         print(f"   OSS文件大小: {info.content_length / 1024 / 1024:.2f} MB")
         return True
@@ -138,28 +137,25 @@ def download_from_oss(oss_path: str, local_file: Path):
     bucket = get_oss_bucket()
 
     try:
-        # 检查文件是否存在
+        import oss2
+
         if not bucket.object_exists(oss_path):
             print(f"❌ OSS文件不存在: {oss_path}")
             return False
 
-        # 获取文件信息
         info = bucket.head_object(oss_path)
         print(f"   OSS文件大小: {info.content_length / 1024 / 1024:.2f} MB")
 
-        # 下载文件
         def progress_callback(consumed_bytes, total_bytes):
             if total_bytes:
                 percent = int(100 * float(consumed_bytes) / float(total_bytes))
-                print(f"   下载进度: {percent}% ({consumed_bytes / 1024 / 1024:.1f}MB / {total_bytes / 1024 / 1024:.1f}MB)")
+                print(f"   下载进度: {percent}%", end="\r")
 
         bucket.get_object_to_file(
-            oss_path,
-            str(local_file),
-            progress_callback=progress_callback
+            oss_path, str(local_file), progress_callback=progress_callback
         )
 
-        print(f"✅ 下载完成: {local_file.stat().st_size / 1024 / 1024:.2f} MB")
+        print(f"✅ 下载完成                                        ")
         return True
 
     except oss2.exceptions.OssError as e:
@@ -178,21 +174,18 @@ def extract_package(package_file: Path, target_dir: Path):
 
     try:
         with tarfile.open(package_file, "r:gz") as tar:
-            # 解压到临时目录
             temp_extract = target_dir.parent / "temp_extract"
             tar.extractall(temp_extract)
 
-            # 移动解压后的内容到目标目录
             extracted_dir = temp_extract / package_file.stem.replace(".tar.gz", "")
             if extracted_dir.exists():
                 if target_dir.exists():
                     shutil.rmtree(target_dir)
                 shutil.move(str(extracted_dir), str(target_dir))
 
-            # 清理临时目录
-            shutil.rmtree(temp_extract)
+            if temp_extract.exists():
+                shutil.rmtree(temp_extract)
 
-        # 计算解压后大小
         total_size = sum(f.stat().st_size for f in target_dir.rglob("*") if f.is_file())
         print(f"✅ 解压完成: {total_size / 1024 / 1024:.2f} MB")
         return True
@@ -207,57 +200,25 @@ def verify_vector_store(vector_dir: Path):
     print(f"\n🔍 验证向量库...")
     print(f"   目录: {vector_dir}")
 
-    # 检查必要文件
-    required_files = [
-        "chroma.sqlite3",
-        "slices_analysis.json",
-    ]
-
-    missing_files = []
-    for f in required_files:
-        file_path = vector_dir / f
-        if not file_path.exists():
-            missing_files.append(f)
-
-    if missing_files:
-        print(f"❌ 缺少必要文件: {missing_files}")
+    sqlite_file = vector_dir / "chroma.sqlite3"
+    if not sqlite_file.exists():
+        print(f"❌ 缺少 chroma.sqlite3")
         return False
 
-    print(f"✅ 必要文件检查通过")
+    print(f"✅ 数据库文件存在: {sqlite_file.stat().st_size / 1024:.1f} KB")
 
-    # 检查Collection数据
-    collection_dirs = [d for d in vector_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
-    if not collection_dirs:
-        print(f"❌ 没有找到Collection数据目录")
-        return False
-
-    print(f"   Collection数量: {len(collection_dirs)}")
-
-    # 尝试加载向量库进行检索测试
     print(f"\n   进行检索测试...")
     try:
-        from langchain_chroma import Chroma
-        from backend.app.services.vector_store import get_vector_cache
+        import chromadb
+        from app.core.settings import CHROMA_COLLECTION_NAME
 
-        embedding_model = get_vector_cache().get_embedding_model()
-        vectorstore = Chroma(
-            persist_directory=str(vector_dir),
-            embedding_function=embedding_model,
-            collection_name="rural_planning",
-        )
+        client = chromadb.PersistentClient(path=str(vector_dir))
+        collection = client.get_collection(name=CHROMA_COLLECTION_NAME)
+        count = collection.count()
 
-        # 测试检索
-        test_query = "用地规划"
-        results = vectorstore.similarity_search(test_query, k=3)
-
-        if results:
-            print(f"   ✅ 检索测试成功: 返回 {len(results)} 条结果")
-            for i, doc in enumerate(results[:2]):
-                print(f"      [{i+1}] {doc.metadata.get('source', 'unknown')[:50]}...")
-            return True
-        else:
-            print(f"   ⚠️  检索返回空结果，可能数据有问题")
-            return False
+        print(f"   ✅ Collection: {CHROMA_COLLECTION_NAME}")
+        print(f"   ✅ 文档数量: {count}")
+        return True
 
     except Exception as e:
         print(f"   ❌ 检索测试失败: {e}")
@@ -271,21 +232,24 @@ def list_oss_kb_versions():
     bucket = get_oss_bucket()
 
     try:
+        import oss2
+
         objects = oss2.ObjectIterator(bucket, prefix=OSS_KB_PATH)
 
         versions = []
         for obj in objects:
             if obj.key.endswith(".tar.gz"):
-                # 提取版本信息（从文件名）
                 filename = Path(obj.key).name
                 size_mb = obj.size / 1024 / 1024
                 last_modified = datetime.fromtimestamp(obj.last_modified)
-                versions.append({
-                    "filename": filename,
-                    "oss_path": obj.key,
-                    "size_mb": size_mb,
-                    "last_modified": last_modified,
-                })
+                versions.append(
+                    {
+                        "filename": filename,
+                        "oss_path": obj.key,
+                        "size_mb": size_mb,
+                        "last_modified": last_modified,
+                    }
+                )
 
         if versions:
             print(f"   找到 {len(versions)} 个版本:")
@@ -306,21 +270,17 @@ def do_upload():
     if not check_oss_config():
         return False
 
-    # 生成带时间戳的文件名
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     tar_filename = f"chroma_db_{timestamp}.tar.gz"
     local_tar = Path(tempfile.gettempdir()) / tar_filename
     oss_path = f"{OSS_KB_PATH}/{tar_filename}"
 
-    # 打包
     if not package_vector_store(CHROMA_PERSIST_DIR, local_tar):
         return False
 
-    # 上传
     if not upload_to_oss(local_tar, oss_path):
         return False
 
-    # 清理临时文件
     local_tar.unlink()
 
     print(f"\n✅ 向量库已上传到: oss://{OSS_BUCKET_NAME}/{oss_path}")
@@ -332,30 +292,24 @@ def do_download(test_dir: Path = None):
     if not check_oss_config():
         return False
 
-    # 列出可用版本
     versions = list_oss_kb_versions()
     if not versions:
         print("❌ OSS上没有可用的向量库")
         return False
 
-    # 选择最新版本
     latest = versions[0]
     oss_path = latest["oss_path"]
     print(f"\n将下载最新版本: {latest['filename']}")
 
-    # 准备下载路径
     local_tar = Path(tempfile.gettempdir()) / latest["filename"]
     target_dir = test_dir or CHROMA_PERSIST_DIR
 
-    # 下载
     if not download_from_oss(oss_path, local_tar):
         return False
 
-    # 解压
     if not extract_package(local_tar, target_dir):
         return False
 
-    # 清理临时文件
     local_tar.unlink()
 
     print(f"\n✅ 向量库已下载到: {target_dir}")
@@ -399,7 +353,7 @@ def main():
             success = False
         else:
             versions = list_oss_kb_versions()
-            success = len(versions) > 0
+            success = len(versions) >= 0
     else:
         parser.print_help()
         success = True

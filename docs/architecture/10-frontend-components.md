@@ -2,8 +2,8 @@
 
 本文档详细说明前端每个文件的功能及组件间的对应关系。
 
-> **更新日期**: 2026-05-15
-> **版本**: v2.0 (简化重构版)
+> **更新日期**: 2026-05-17
+> **版本**: v3.0 (完整版)
 
 ## 目录
 
@@ -12,6 +12,7 @@
 - [聊天组件](#聊天组件)
 - [GIS 组件](#gis-组件)
 - [对比组件](#对比组件)
+- [设置组件](#设置组件)
 - [UI 通用组件](#ui-通用组件)
 - [状态管理层](#状态管理层)
 - [Hooks 层](#hooks-层)
@@ -25,14 +26,19 @@
 ```
 frontend/src/features/planning/
 ├── api/                    # API 客户端
-│   └── client.ts           # SSE 连接与请求封装
+│   ├── client.ts           # SSE 连接与请求封装
+│   ├── data-api.ts         # 数据 API（村庄历史等）
+│   ├── planning-api.ts     # 规划 API
+│   ├── types.ts            # API 类型定义
+│   └── index.ts            # API 导出
 ├── components/
 │   ├── layout/             # 布局组件
 │   │   ├── AppHeader.tsx       # 顶部导航
 │   │   ├── LayerNav.tsx        # 左侧维度导航
 │   │   ├── FocusArea.tsx       # 中央工作区
 │   │   ├── ReportViewer.tsx    # 报告查看器
-│   │   └── ProcessPanel.tsx    # 右侧处理面板
+│   │   ├── ProcessPanel.tsx    # 右侧处理面板
+│   │   └── index.ts            # 布局组件导出
 │   ├── chat/               # 聊天组件
 │   │   ├── MessageList.tsx     # 消息列表
 │   │   ├── MessageBubble.tsx   # 消息气泡
@@ -40,30 +46,77 @@ frontend/src/features/planning/
 │   │   ├── LayerReportMessage.tsx # 层级完成消息
 │   │   ├── ProgressPanel.tsx   # 执行进度面板
 │   │   ├── ToolStatusPanel.tsx # 工具状态面板
-│   │   └── CheckpointMarker.tsx # 检查点标记
+│   │   ├── ToolStatusCard.tsx  # 工具状态卡片
+│   │   ├── CheckpointMarker.tsx # 检查点标记
+│   │   ├── StreamingText.tsx   # 流式文本渲染
+│   │   ├── ThinkingIndicator.tsx # 思考指示器
+│   │   ├── GisResultCard.tsx   # GIS 结果卡片
+│   │   ├── KnowledgeSliceCard.tsx # 知识切片卡片
+│   │   └── FileViewerSidebar.tsx # 文件查看侧边栏
 │   ├── gis/                # GIS 地图组件
 │   │   ├── MapView.tsx
-│   │   └── LegendPanel.tsx
+│   │   ├── LegendPanel.tsx
+│   │   └── index.ts
 │   ├── compare/            # 对比组件
 │   │   ├── ReportComparePanel.tsx
-│   │   └── ReportCompareModal.tsx
-│   └── ui/                 # UI 通用组件
-│       ├── MarkdownRenderer.tsx
-│       └── KnowledgeReference.tsx
+│   │   ├── ReportCompareModal.tsx
+│   │   └── index.ts
+│   ├── settings/           # 设置组件
+│   │   ├── SettingsPanel.tsx
+│   │   └── index.ts
+│   ├── ui/                 # UI 通用组件
+│   │   ├── MarkdownRenderer.tsx
+│   │   ├── ImagePreview.tsx
+│   │   └── index.ts
+│   ├── knowledge/          # 知识组件（预留）
+│   │   └── index.ts
+│   ├── Dashboard.tsx       # 主布局容器
+│   ├── VillageInputForm.tsx # 村庄输入表单
+│   ├── ChatInput.tsx       # 聊天输入框
+│   ├── MessagePanel.tsx    # 消息面板
+│   ├── CascadePanel.tsx    # 级联修复面板
+│   ├── DimensionCard.tsx   # 维度状态卡片
+│   └── index.ts            # 组件导出
 ├── store/                  # Zustand 状态管理
-│   └── planningStore.ts
+│   ├── planningStore.ts    # 主状态存储
+│   ├── planning-context.tsx # React Context 包装
+│   └── index.ts
 ├── hooks/                  # 自定义 Hooks
-│   ├── useSSE.ts
-│   ├── useSelectors.ts
-│   └── useHandlers.ts
+│   ├── useSSE.ts           # SSE 连接管理
+│   ├── useSelectors.ts     # 状态选择器
+│   ├── useHandlers.ts      # 事件处理器
+│   ├── useStreaming.ts     # 流式渲染
+│   ├── usePersistence.ts    # 持久化
+│   ├── useSessionRestore.ts # 会话恢复
+│   ├── useApprovalActions.ts # 审批操作
+│   ├── ui/                 # UI 相关 Hooks
+│   ├── utils/              # Hook 工具
+│   │   └── useStreamingRender.ts
+│   └── index.ts
 ├── config/                 # 配置
-│   └── dimensions.ts
+│   ├── dimensions.ts       # 维度配置
+│   ├── phases.ts           # 阶段配置
+│   ├── planning.ts         # 规划配置
+│   └── index.ts
 ├── constants/              # 常量
-│   └── index.ts
+│   ├── gis.ts              # GIS 常量
+│   └── index.ts            # 通用常量
 ├── types/                  # 类型定义
+│   ├── base.ts             # 基础类型
+│   ├── events.ts           # SSE 事件类型
+│   ├── messages.ts         # 消息类型
+│   ├── guards.ts           # 类型守卫
+│   ├── helpers.ts          # 类型辅助函数
 │   └── index.ts
-└── utils/                  # 工具函数
-    └── index.ts
+├── utils/                  # 工具函数
+│   ├── cn.ts               # 类名合并
+│   ├── format.ts           # 格式化工具
+│   ├── logger.ts           # 日志工具
+│   ├── message-helpers.ts  # 消息辅助函数
+│   ├── report-parser.ts    # 报告解析
+│   ├── throttle.ts         # 节流工具
+│   └── index.ts
+└── index.ts                # 模块导出
 ```
 
 ---
@@ -80,7 +133,7 @@ Dashboard (主容器)
 │   └── ActionButtons
 ├── <三栏布局>
 │   ├── LayerNav (左侧 280px)
-│   │   ├── 导航项（总览）
+│   │   ├── 导航项（总览/聊天）
 │   │   ├── Layer 展开列表
 │   │   │   └── 维度项 + 状态圆点
 │   │   └── ToolStatusPanel (底部折叠)
@@ -89,11 +142,11 @@ Dashboard (主容器)
 │   │       ├── [idle] VillageInputForm
 │   │       ├── [dim:*] 维度详情视图
 │   │       │   ├── MarkdownRenderer (报告内容)
-│   │       │   ├── RagKnowledgePanel (底部可折叠)
-│   │       │   └── KnowledgeDetailDrawer (右侧抽屉)
+│   │       │   ├── KnowledgeSliceCard (知识切片)
+│   │       │   └── FileViewerSidebar (文件侧边栏)
 │   │       └── [默认] 规划总览
 │   └── ProcessPanel (右侧 320px)
-│       ├── TabNavigation (消息/地图/历史)
+│       ├── TabNavigation (消息/地图/历史/设置)
 │       ├── MessageList
 │       └── ChatInput
 └── ChatBar (底部输入栏)
@@ -169,12 +222,13 @@ Dashboard (主容器)
 
 ### `ProcessPanel.tsx`
 
-**功能**: 右侧处理面板，三个标签页
+**功能**: 右侧处理面板，四个标签页
 
 **标签页**:
 1. **消息**: MessageList + ChatInput
 2. **地图**: MapView GIS 数据
 3. **历史**: 执行历史记录
+4. **设置**: SettingsPanel 设置面板
 
 ---
 
@@ -196,6 +250,7 @@ Dashboard (主容器)
 switch (message.type) {
   case 'text': return <MessageBubble />;
   case 'layer_completed': return <LayerReportMessage />;
+  case 'dimension_report': return <DimensionReportMessage />;
   case 'file': return <FileMessage />;
   case 'gis_result': return <GisResultCard />;
   case 'tool_status': return <ToolStatusCard />;
@@ -232,6 +287,40 @@ switch (message.type) {
 
 **位置**: LayerNav 底部，可折叠
 
+### `StreamingText.tsx`
+
+**功能**: 流式文本渲染组件
+
+**特性**:
+- 支持打字机效果
+- 自动滚动到底部
+- 支持 Markdown 实时渲染
+
+### `ThinkingIndicator.tsx`
+
+**功能**: 思考指示器，显示 AI 思考状态
+
+**视觉**: 动态圆点动画
+
+### `KnowledgeSliceCard.tsx`
+
+**功能**: 知识切片卡片，显示 RAG 检索结果
+
+**Props**:
+- `title`: 文档标题
+- `snippet`: 内容片段
+- `source`: 来源
+- `score`: 相关性分数
+
+### `FileViewerSidebar.tsx`
+
+**功能**: 文件查看侧边栏
+
+**特性**:
+- 支持图片预览
+- 支持文档预览
+- 可折叠侧边栏
+
 ---
 
 ## GIS 组件
@@ -260,6 +349,19 @@ switch (message.type) {
 
 ---
 
+## 设置组件
+
+### `SettingsPanel.tsx`
+
+**功能**: 设置面板
+
+**设置项**:
+- RAG 层级开关配置
+- 步进模式开关
+- 其他系统设置
+
+---
+
 ## UI 通用组件
 
 ### `MarkdownRenderer.tsx`
@@ -270,6 +372,16 @@ switch (message.type) {
 - 支持 GFM (GitHub Flavored Markdown)
 - 表格支持
 - 图片懒加载
+- 数学公式支持
+
+### `ImagePreview.tsx`
+
+**功能**: 图片预览组件
+
+**特性**:
+- 全屏预览
+- 缩放支持
+- 旋转支持
 
 ### `DimensionCard.tsx`
 
@@ -309,6 +421,18 @@ switch (message.type) {
 | `cascadeChain` | 级联修复链 |
 | `streamingContent` | 流式内容 |
 | `toolStatuses` | 工具状态 |
+| `runningTools` | 运行中工具列表 |
+| `resettingDimensions` | 重置中维度列表 |
+| `dimensionVersions` | 维度版本号 |
+| `ragLayerConfig` | RAG 层级开关配置 |
+| `processPanelTab` | 处理面板当前标签页 |
+| `selectedNavigationKey` | 当前选中导航键 |
+| `isRightPanelExpanded` | 右侧面板展开状态 |
+| `isLeftNavCollapsed` | 左侧导航折叠状态 |
+
+### `planning-context.tsx`
+
+**功能**: React Context 包装器，提供兼容层
 
 ---
 
@@ -333,6 +457,26 @@ switch (message.type) {
 - `useDimensionProgressAll()`: 所有维度进度
 - `useDimensionRagSources()`: RAG 知识来源
 
+### `useHandlers.ts`
+
+**功能**: 事件处理器集合
+
+### `useStreaming.ts`
+
+**功能**: 流式渲染管理
+
+### `usePersistence.ts`
+
+**功能**: 状态持久化
+
+### `useSessionRestore.ts`
+
+**功能**: 会话恢复逻辑
+
+### `useApprovalActions.ts`
+
+**功能**: 审批操作（通过/拒绝）
+
 ---
 
 ## 组件关系可视化
@@ -351,14 +495,15 @@ switch (message.type) {
 │ (280px)  │           (flex:1)               │      (320px)         │
 │          │                                  │                      │
 │ ┌──────┐ │  ┌────────────────────────────┐  │  ┌────────────────┐  │
-│ │导航  │ │  │      ReportViewer          │  │  │ [消息][地图][历史]│ │
+│ │导航  │ │  │      ReportViewer          │  │  │[消息][地图][历史][设置]│
 │ │总览  │ │  │  ┌──────────────────────┐  │  │  ├────────────────┤  │
-│ │      │ │  │  │   MarkdownRenderer   │  │  │  │   MessageList   │  │
-│ │L1    │ │  │  │   (报告内容)         │  │  │  │                │  │
-│ │L2    │ │  │  └──────────────────────┘  │  │  └────────────────┘  │
-│ │L3    │ │  │  ┌──────────────────────┐  │  │  ┌────────────────┐  │
-│ │      │ │  │  │  [知识来源] (可折叠) │  │  │  │   ChatInput    │  │
-│ └──────┘ │  │  └──────────────────────┘  │  │  └────────────────┘  │
+│ │聊天  │ │  │  │   MarkdownRenderer   │  │  │  │   MessageList   │  │
+│ │      │ │  │  │   (报告内容)         │  │  │  │                │  │
+│ │L1    │ │  │  └──────────────────────┘  │  │  └────────────────┘  │
+│ │L2    │ │  │  ┌──────────────────────┐  │  │  ┌────────────────┐  │
+│ │L3    │ │  │  │ KnowledgeSliceCard   │  │  │  │   ChatInput    │  │
+│ │      │ │  │  │ (知识切片)           │  │  │  └────────────────┘  │
+│ └──────┘ │  │  └──────────────────────┘  │  │                      │
 │ ┌──────┐ │  └────────────────────────────┘  │                      │
 │ │工具  │ │                                  │                      │
 │ │状态  │ │                                  │                      │
@@ -405,14 +550,16 @@ const MAX_BATCH_SIZE = 50;
 
 ### 5. RAG 知识面板模式
 
-知识来源显示在报告下方，点击打开右侧抽屉：
+知识切片显示在报告下方：
 
 ```typescript
-// 可折叠面板
-const [ragExpanded, setRagExpanded] = useState(true);
-
-// 右侧详情抽屉
-const [selectedDocIndex, setSelectedDocIndex] = useState<number | null>(null);
+// KnowledgeSliceCard 显示检索到的知识来源
+<KnowledgeSliceCard
+  title={doc.title}
+  snippet={doc.snippet}
+  source={doc.source}
+  score={doc.score}
+/>
 ```
 
 ---

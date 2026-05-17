@@ -96,6 +96,7 @@ class AgentState(TypedDict, total=False):
     dimension_key: Optional[str]
     image_ids: List[str]
     metadata: Dict[str, Any]
+    step_mode: bool  # Enable step-by-step execution (pause after each layer)
     execution_paused: bool
     pause_after_step: bool
     previous_layer: int

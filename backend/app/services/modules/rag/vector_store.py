@@ -24,23 +24,88 @@ logger = get_logger(__name__)
 
 
 class AliyunEmbeddings:
-    """阿里云 Embedding API 封装类（OpenAI 兼容格式）"""
+    """阿里云 Embedding API 封装类（OpenAI 兼容格式）
+
+    2026-05-17: 添加输入长度限制处理（API 限制 8192 tokens）
+    """
     BATCH_SIZE = 10
+    MAX_TOKENS = 8192  # API 限制
+    MAX_CHARS = 7500   # 估算：1 token ≈ 1 字符（中文），留安全余量
 
     def __init__(self, api_key: str, base_url: str, model: str = "text-embedding-v4"):
         from openai import OpenAI
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
 
+    def _split_long_text(self, text: str) -> List[str]:
+        """对超长文本进行二次切分
+
+        Args:
+            text: 原始文本
+
+        Returns:
+            切分后的文本列表（长度均不超过 MAX_CHARS）
+        """
+        if len(text) <= self.MAX_CHARS:
+            return [text]
+
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.MAX_CHARS,
+            chunk_overlap=200,
+            separators=["\n\n", "\n", "。", "；", "，", " ", ""],
+        )
+        chunks = splitter.split_text(text)
+        logger.warning(f"[AliyunEmbeddings] 超长文本切分: {len(text)} 字符 -> {len(chunks)} 片")
+        return chunks
+
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """批量生成 Embedding
+
+        Args:
+            texts: 文本列表（可能包含超长文本）
+
+        Returns:
+            Embedding 向量列表（与输入长度一致，超长文本的多个切片共享同一个 embedding）
+        """
         all_embeddings = []
         for i in range(0, len(texts), self.BATCH_SIZE):
             batch = texts[i:i + self.BATCH_SIZE]
-            response = self.client.embeddings.create(model=self.model, input=batch)
-            all_embeddings.extend([item.embedding for item in response.data])
+
+            # 对超长文本进行二次切分
+            expanded_texts = []
+            text_to_original = []  # 记录每个切片对应的原始文本索引
+            for orig_idx, text in enumerate(batch):
+                split_texts = self._split_long_text(text)
+                for split_text in split_texts:
+                    expanded_texts.append(split_text)
+                    text_to_original.append(i + orig_idx)
+
+            # 分批调用 API
+            batch_embeddings = []
+            for j in range(0, len(expanded_texts), self.BATCH_SIZE):
+                sub_batch = expanded_texts[j:j + self.BATCH_SIZE]
+                response = self.client.embeddings.create(model=self.model, input=sub_batch)
+                batch_embeddings.extend([item.embedding for item in response.data])
+
+            # 将切片的 embedding 映射回原始文本（取第一个切片的 embedding）
+            orig_embeddings = {}
+            for split_idx, orig_idx in enumerate(text_to_original):
+                if orig_idx not in orig_embeddings:
+                    orig_embeddings[orig_idx] = batch_embeddings[split_idx]
+
+            # 按原始顺序返回
+            for orig_idx in range(len(batch)):
+                all_embeddings.append(orig_embeddings[i + orig_idx])
+
         return all_embeddings
 
     def embed_query(self, text: str) -> List[float]:
+        """单个查询的 Embedding"""
+        # 查询通常较短，但仍需检查
+        if len(text) > self.MAX_CHARS:
+            text = text[:self.MAX_CHARS]
+            logger.warning(f"[AliyunEmbeddings] 查询文本截断: {len(text)} 字符")
         response = self.client.embeddings.create(model=self.model, input=text)
         return response.data[0].embedding
 
