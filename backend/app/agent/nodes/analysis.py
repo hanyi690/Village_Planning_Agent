@@ -311,21 +311,39 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     deps = ""
     same_layer_contexts = ""
 
-    # 同层依赖加载（直接从数据库加载，不检查 completed_dimensions）
-    # 因为 LangGraph Send API 的 state 快照可能过时，导致竞态条件
+    # 同层依赖加载 - 添加等待机制解决竞态条件
+    # LangGraph Send API 的 state 快照可能过时，导致下游维度启动时上游报告尚未保存
     same_layer_deps = getattr(cfg, 'depends_on', [])
     if same_layer_deps:
         layer_reports = await store.get_layer_reports(session_id, dim_layer)
         contexts = []
         missing_deps = []
+
+        # 等待依赖报告可用（最多等待 120 秒）
+        max_wait_seconds = 120
+        check_interval = 2
+
         for dep_key in same_layer_deps:
             if dep_key in layer_reports and layer_reports[dep_key]:
                 contexts.append(f"【{dep_key}】分析结果：\n{layer_reports[dep_key]}")
             else:
-                missing_deps.append(dep_key)
+                # 等待依赖报告保存完成
+                waited = 0
+                report = None
+                while waited < max_wait_seconds:
+                    await asyncio.sleep(check_interval)
+                    waited += check_interval
+                    report = await store.get_latest(session_id, dep_key)
+                    if report:
+                        contexts.append(f"【{dep_key}】分析结果：\n{report}")
+                        logger.info(f"[analyze_dimension] {dim_key}: 等待 {waited}s 后获取到依赖 {dep_key}")
+                        break
+
+                if not report:
+                    missing_deps.append(dep_key)
 
         if missing_deps:
-            logger.error(f"[analyze_dimension] {dim_key}: 依赖报告加载失败: {missing_deps}")
+            logger.error(f"[analyze_dimension] {dim_key}: 依赖报告加载失败（等待{max_wait_seconds}s后）: {missing_deps}")
             raise DependencyError(f"维度 {dim_key} 的依赖报告加载失败: {missing_deps}")
 
         same_layer_contexts = "\n\n".join(contexts)
