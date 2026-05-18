@@ -15,7 +15,7 @@ from langchain_core.messages import AIMessage
 
 from ...config import get_dimension_config, get_dimension_layer, list_dimensions
 from ...core.llm import create_llm
-from ...core.settings import LLM_MODEL, MAX_TOKENS
+from ...core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -140,16 +140,22 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     dim_name = getattr(cfg, 'name', dim_key)
     dim_layer = getattr(cfg, 'layer', get_dimension_layer(dim_key) or 3)
 
-    # 2. 并行 GIS 工具
+    # 2. 并行 GIS 工具（仅执行已完整实现的工具，跳过 STUB/MOCK/DISABLED）
     tool_results = []
     tools = getattr(cfg, 'tools', [])
     if tools:
-        context = {
-            "session_id": session_id,
-            "project_name": state.get("project_name", ""),
-            "village_data": state.get("config", {}).get("village_data", ""),
-        }
-        tool_results = await GisService.run_parallel(tools, context)
+        from ...tools.protocol import IMPL_STATUS, ImplStatus
+        safe_tools = [t for t in tools if IMPL_STATUS.get(t) == ImplStatus.IMPLEMENTED]
+        skipped = set(tools) - set(safe_tools)
+        if skipped:
+            logger.info(f"[analyze_dimension] {dim_key}: Skipped non-implemented tools: {skipped}")
+        if safe_tools:
+            context = {
+                "session_id": session_id,
+                "project_name": state.get("project_name", ""),
+                "village_data": state.get("config", {}).get("village_data", ""),
+            }
+            tool_results = await GisService.run_parallel(safe_tools, context)
 
     # 3. RAG query (three-level switch: Layer > Session > Dimension)
     rag_context = ""
@@ -461,19 +467,23 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     })
 
     try:
-        async for chunk in llm.astream(prompt):
-            if hasattr(chunk, 'content') and chunk.content:
-                llm_response += chunk.content
-                await sse_manager.publish(session_id, {
-                    "type": "dimension_delta",
-                    "dimension_key": dim_key,
-                    "dimension_name": dim_name,
-                    "layer": dim_layer,
-                    "delta": chunk.content,
-                    "accumulated": llm_response,
-                })
+        async with asyncio.timeout(LLM_STREAM_TIMEOUT):
+            async for chunk in llm.astream(prompt):
+                if hasattr(chunk, 'content') and chunk.content:
+                    llm_response += chunk.content
+                    await sse_manager.publish(session_id, {
+                        "type": "dimension_delta",
+                        "dimension_key": dim_key,
+                        "dimension_name": dim_name,
+                        "layer": dim_layer,
+                        "delta": chunk.content,
+                        "accumulated": llm_response,
+                    })
+    except asyncio.TimeoutError:
+        logger.error(f"[analyze_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
+        return {"messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")]}
     except Exception as e:
-        logger.error(f"[analyze_dimension] LLM 失败: {e}")
+        logger.error(f"[analyze_dimension] {dim_key}: LLM 失败: {e}")
         return {"messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")]}
 
     # 7. 准备报告数据（累积到 pending_reports，由 completion.py 批量写入）
@@ -559,6 +569,7 @@ def _build_prompt(cfg, state, tool_results, rag_context, deps: str = "", same_la
     dim_name = getattr(cfg, 'name', DIMENSION_NAMES.get(dim_key, dim_key))
 
     project_name = state.get("project_name", "村庄")
+    village_name = state.get("config", {}).get("village_name", project_name)
     village_data = state.get("config", {}).get("village_data", "")
     task_desc = state.get("config", {}).get("task_description", "制定村庄发展规划")
     constraints = state.get("config", {}).get("constraints", "无特殊约束")
@@ -584,7 +595,7 @@ def _build_prompt(cfg, state, tool_results, rag_context, deps: str = "", same_la
         return get_layer1_prompt(
             dimension_key=dim_key,
             raw_data=village_data + tool_section,
-            village_name=project_name,
+            village_name=village_name,
             task_description=task_desc,
             constraints=constraints,
             knowledge_context=revision_section + (rag_context or ""),

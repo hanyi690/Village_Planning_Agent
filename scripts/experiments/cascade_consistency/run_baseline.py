@@ -120,16 +120,21 @@ async def run_baseline() -> Dict[str, str]:
         reports.update(layer_reports)
 
     logger.info(f"[Baseline] Retrieved {len(reports)} dimension reports")
-    save_baseline(reports, session_id)
+
+    baseline = await PlanningRuntimeService.aget_state(session_id)
+    checkpoint_id = baseline.config["configurable"].get("checkpoint_id", "") if baseline else ""
+
+    save_baseline(reports, session_id, checkpoint_id)
     return reports
 
 
-def save_baseline(reports: Dict[str, str], session_id: str):
+def save_baseline(reports: Dict[str, str], session_id: str, checkpoint_id: str = ""):
     baseline_file = BASELINE_DIR / "baseline_reports.json"
     baseline_file.parent.mkdir(parents=True, exist_ok=True)
 
     data = {
         "session_id": session_id,
+        "checkpoint_id": checkpoint_id,
         "generated_at": datetime.now().isoformat(),
         "dimension_count": len(reports),
         "reports": reports,

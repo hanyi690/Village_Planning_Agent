@@ -85,7 +85,7 @@ class ExperimentResult:
     target_dimension: str
     impact_tree: Dict[int, List[str]]
     revision_diffs: List[RevisionDiff]
-    consistency_scores: Dict[str, float]
+    consistency_scores: Dict[str, ConsistencyResult]
     overall_consistency: float
     from_cache: bool = False
     generated_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -141,7 +141,7 @@ class CascadeExperimentRunner:
         consistency_scores = self._check_consistency(revision_diffs)
 
         # 7. 计算总体一致性
-        overall = sum(consistency_scores.values()) / len(consistency_scores) if consistency_scores else 0.0
+        overall = sum(s.score for s in consistency_scores.values()) / len(consistency_scores) if consistency_scores else 0.0
 
         return ExperimentResult(
             scenario_name=self.scenario_name,
@@ -229,12 +229,21 @@ class CascadeExperimentRunner:
         with open(baseline_file, "r", encoding="utf-8") as f:
             baseline_data = json.load(f)
         baseline_session_id = baseline_data["session_id"]
+        baseline_checkpoint_id = baseline_data.get("checkpoint_id", "")
 
-        baseline = await PlanningRuntimeService.aget_state(baseline_session_id)
+        # 使用精确 checkpoint_id 避免读到修订后的最新 checkpoint
+        if baseline_checkpoint_id:
+            config = PlanningRuntimeService.get_thread_config(baseline_session_id, baseline_checkpoint_id)
+            graph = PlanningRuntimeService.get_graph()
+            baseline = await graph.aget_state(config)
+        else:
+            baseline = await PlanningRuntimeService.aget_state(baseline_session_id)
+
         if not baseline or not baseline.values:
             raise RuntimeError("Baseline checkpoint state not found")
 
         fork_cfg = baseline.config  # {thread_id, checkpoint_id}
+        fork_cfg.setdefault("configurable", {})["checkpoint_ns"] = ""
         logger.info(
             f"[Experiment] Forking from baseline: session={baseline_session_id}, "
             f"checkpoint={fork_cfg['configurable'].get('checkpoint_id', '?')}"
@@ -248,7 +257,7 @@ class CascadeExperimentRunner:
             "human_feedback": feedback,
             "revision_feedback": feedback,
             "is_revision": True,
-        }, as_node="revision")
+        }, as_node="conversation")
 
         # 3. Fork: 注入合成 AIMessage 触发 after_conversation 路由
         msg = AIMessage(content="", tool_calls=[{
@@ -382,28 +391,32 @@ class CascadeExperimentRunner:
 
         return diffs
 
-    def _check_consistency(self, diffs: List[RevisionDiff]) -> Dict[str, float]:
+    def _check_consistency(self, diffs: List[RevisionDiff]) -> Dict[str, ConsistencyResult]:
         scores = {}
 
         for diff in diffs:
             if diff.is_target:
-                score = self.checker.check_feedback_response(
+                fb_score = self.checker.check_feedback_response(
                     diff.old_content, diff.new_content,
                     self.config.get("feedback", ""),
                     self.config.get("keywords", {}),
                 )
+                result = ConsistencyResult(
+                    dimension_key=diff.dimension_key,
+                    score=fb_score,
+                )
             else:
                 target_diff = next((d for d in diffs if d.is_target), None)
                 if target_diff:
-                    score = self.checker.check_semantic_alignment(
+                    result = self.checker.check_semantic_alignment(
                         target_diff.new_content,
                         diff.new_content,
                         diff.dimension_key,
                     )
                 else:
-                    score = 0.0
+                    result = ConsistencyResult(dimension_key=diff.dimension_key, score=0.0)
 
-            scores[diff.dimension_key] = score
+            scores[diff.dimension_key] = result
 
         return scores
 
@@ -418,7 +431,7 @@ class CascadeExperimentRunner:
 
         scores_file = output_dir / f"consistency_scores{run_tag}.json"
         with open(scores_file, "w", encoding="utf-8") as f:
-            json.dump(result.consistency_scores, f, indent=2, ensure_ascii=False)
+            json.dump({k: asdict(v) for k, v in result.consistency_scores.items()}, f, indent=2, ensure_ascii=False)
 
         logger.info(f"[Experiment] Run {self.run_number}: saved results to {output_dir}")
 
@@ -457,8 +470,8 @@ async def run_cascade_experiment(
         # 聚合各维度评分
         all_dim_scores: Dict[str, list] = {}
         for result in results:
-            for dim, score in result.consistency_scores.items():
-                all_dim_scores.setdefault(dim, []).append(score)
+            for dim, cs in result.consistency_scores.items():
+                all_dim_scores.setdefault(dim, []).append(cs.score)
         print("\n各维度聚合评分:")
         for dim in sorted(all_dim_scores):
             scores = all_dim_scores[dim]
@@ -468,8 +481,8 @@ async def run_cascade_experiment(
         print(f"来自缓存: {r.from_cache}")
         print(f"总体一致性: {r.overall_consistency:.2%}")
         print("\n各维度一致性评分:")
-        for dim, score in sorted(r.consistency_scores.items(), key=lambda x: -x[1]):
-            print(f"  {dim}: {score:.2%}")
+        for dim, cs in sorted(r.consistency_scores.items(), key=lambda x: -x[1].score):
+            print(f"  {dim}: {cs.score:.2%}")
 
     print("=" * 60)
     return results

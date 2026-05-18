@@ -119,7 +119,7 @@ class PlanningRuntimeService:
     @classmethod
     def get_thread_config(cls, session_id: str, checkpoint_id: str = None) -> Dict[str, Any]:
         """Build thread_id configuration for LangGraph operations."""
-        configurable = {"thread_id": session_id}
+        configurable = {"thread_id": session_id, "checkpoint_ns": ""}
         if checkpoint_id:
             configurable["checkpoint_id"] = checkpoint_id
         return {"configurable": configurable}
@@ -224,6 +224,7 @@ class PlanningRuntimeService:
         step_mode: bool = False,
         rag_enabled: bool = True,
         rag_layer_config: Optional[Dict[int, bool]] = None,
+        disable_tools: bool = False,
         image_ids: Optional[List[str]] = None,
         uploaded_files: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:

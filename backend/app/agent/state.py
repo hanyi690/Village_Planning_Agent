@@ -217,6 +217,7 @@ def create_initial_state(
     task_description: str = "制定村庄总体规划方案",
     constraints: str = "无特殊约束",
     image_ids: Optional[List[str]] = None,
+    village_name: str = "",
 ) -> Dict[str, Any]:
     """创建初始状态"""
     return {
@@ -227,7 +228,7 @@ def create_initial_state(
         "current_wave": 1,
         "config": {
             "village_data": village_data,
-            "village_name": project_name,
+            "village_name": village_name or project_name,
             "task_description": task_description,
             "constraints": constraints,
             "knowledge_cache": {},
