@@ -138,12 +138,12 @@ export interface DimensionReportMessage extends BaseMessage {
  * Layer Completed Message - Shown when a planning layer is completed
  */
 export interface DimensionStructuredSummary {
-  dimension_key: string;
-  layer: number;
-  word_count: number;
-  key_points: string[];
-  text_summary: string;
-  metrics: Record<string, unknown>;
+  dimension_key?: string;
+  layer?: number;
+  word_count?: number;
+  key_points?: string[];
+  text_summary?: string;
+  metrics?: Record<string, unknown>;
 }
 
 export interface LayerCompletedMessage extends BaseMessage {

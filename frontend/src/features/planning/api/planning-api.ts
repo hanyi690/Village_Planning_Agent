@@ -38,6 +38,11 @@ export const planningApi = {
     formData.append('task_description', request.task_description || '');
     formData.append('constraints', request.constraints || '');
     formData.append('step_mode', String(request.step_mode || false));
+    // RAG Configuration
+    formData.append('rag_enabled', String(request.rag_enabled ?? true));
+    if (request.rag_layer_config) {
+      formData.append('rag_layer_config', request.rag_layer_config);
+    }
 
     if (request.villageDataFiles) {
       for (const f of request.villageDataFiles) formData.append('village_data_files', f, f.name);
@@ -155,24 +160,36 @@ export const planningApi = {
     }
 
     const eventTypes: PlanningSSEEventType[] = [
+      // Connection Events
+      'connected',
+      'heartbeat',
+      'error',
+      // Layer Events
       'layer_started',
-      'dimension_start',
-      'dimension_error',
       'layer_completed',
-      'checkpoint_saved',
-      'review_request',
-      'content_delta',
-      'resumed',
-      'progress',
+      'layer_paused',
+      'execution_resumed',
+      // Dimension Events
+      'dimension_start',
       'dimension_delta',
       'dimension_complete',
-      'dimension_revised',
-      'connected',
+      // Progress Events
+      'checkpoint_saved',
+      'pause',
+      'resumed',
+      'completed',
+      'revision_completed',
+      // Tool Events (NEW)
+      'tool_started',
+      'tool_status',
+      // Tool Events (Legacy)
       'tool_call',
       'tool_progress',
       'tool_result',
+      // AI Response Events
       'ai_response_delta',
       'ai_response_complete',
+      // GIS & RAG Events
       'rag_result',
       'gis_result',
     ];

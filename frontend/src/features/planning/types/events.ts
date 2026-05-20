@@ -89,12 +89,12 @@ export interface DimensionCompleteData {
 }
 
 export interface DimensionStructuredSummary {
-  dimension_key: string;
-  layer: number;
-  word_count: number;
-  key_points: string[];
-  text_summary: string;
-  metrics: Record<string, unknown>;
+  dimension_key?: string;
+  layer?: number;
+  word_count?: number;
+  key_points?: string[];
+  text_summary?: string;
+  metrics?: Record<string, unknown>;
 }
 
 export interface LayerStartedData {

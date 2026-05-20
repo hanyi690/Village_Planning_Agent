@@ -122,6 +122,7 @@ interface InputFieldProps {
   onBlur: () => void;
   onRemoveFile?: (type: FileType, index: number) => void;
   helpText?: string;
+  compact?: boolean;
 }
 
 const InputField = memo(function InputField({
@@ -141,12 +142,25 @@ const InputField = memo(function InputField({
   onBlur,
   onRemoveFile,
   helpText,
+  compact = false,
 }: InputFieldProps) {
+  const inputClasses = compact
+    ? "w-full px-3 py-2 text-sm bg-slate-50/50 border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 transition-all duration-200 focus:bg-white focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+    : "w-full px-5 py-4 bg-slate-50/50 border-2 border-slate-200 rounded-2xl text-slate-900 placeholder-slate-400 transition-all duration-300 focus:bg-white focus:border-amber-300 focus:ring-4 focus:ring-amber-100";
+
+  const textareaClasses = compact
+    ? "w-full px-3 py-2 text-sm bg-slate-50/50 border border-slate-200 rounded-lg text-slate-900 placeholder-slate-400 resize-none transition-all duration-200 focus:bg-white focus:border-amber-300 focus:ring-2 focus:ring-amber-100"
+    : "w-full px-5 py-4 pr-14 bg-slate-50/50 border-2 border-slate-200 rounded-2xl text-slate-900 placeholder-slate-400 resize-none transition-all duration-300 focus:bg-white focus:border-amber-300 focus:ring-4 focus:ring-amber-100";
+
+  const labelClasses = compact
+    ? "flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-1"
+    : "flex items-center gap-2 text-sm font-medium text-slate-700 mb-2";
+
   return (
     <motion.div variants={itemVariants} className="w-full">
       <label
         htmlFor={id}
-        className="flex items-center gap-2 text-sm font-medium text-slate-700 mb-2"
+        className={labelClasses}
       >
         {icon}
         <span>{label}</span>
@@ -182,7 +196,7 @@ const InputField = memo(function InputField({
             onFocus={onFocus}
             onBlur={onBlur}
             placeholder={placeholder}
-            className="w-full px-5 py-4 pr-14 bg-slate-50/50 border-2 border-slate-200 rounded-2xl text-slate-900 placeholder-slate-400 resize-none transition-all duration-300 focus:bg-white focus:border-amber-300 focus:ring-4 focus:ring-amber-100"
+            className={textareaClasses}
           />
         ) : (
           <input
@@ -200,7 +214,7 @@ const InputField = memo(function InputField({
             onFocus={onFocus}
             onBlur={onBlur}
             placeholder={placeholder}
-            className="w-full px-5 py-4 bg-slate-50/50 border-2 border-slate-200 rounded-2xl text-slate-900 placeholder-slate-400 transition-all duration-300 focus:bg-white focus:border-amber-300 focus:ring-4 focus:ring-amber-100"
+            className={inputClasses}
           />
         )}
       </div>
@@ -360,67 +374,67 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
               />
 
               {/* 行政区划和规划期限 */}
-              <div className="grid grid-cols-5 gap-3 mt-4">
-                <div>
-                  <InputField
-                    id="province"
-                    label="省份"
-                    value={province}
-                    onChange={setProvince}
-                    placeholder="广东省"
-                    isFocused={focusedField === 'province'}
-                    onFocus={() => setFocusedField('province')}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </div>
-                <div>
-                  <InputField
-                    id="city"
-                    label="地级市"
-                    value={city}
-                    onChange={setCity}
-                    placeholder="梅州市"
-                    isFocused={focusedField === 'city'}
-                    onFocus={() => setFocusedField('city')}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </div>
-                <div>
-                  <InputField
-                    id="county"
-                    label="县/区"
-                    value={county}
-                    onChange={setCounty}
-                    placeholder="平远县"
-                    isFocused={focusedField === 'county'}
-                    onFocus={() => setFocusedField('county')}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </div>
-                <div>
-                  <InputField
-                    id="township"
-                    label="乡镇"
-                    value={township}
-                    onChange={setTownship}
-                    placeholder="泗水镇"
-                    isFocused={focusedField === 'township'}
-                    onFocus={() => setFocusedField('township')}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </div>
-                <div>
-                  <InputField
-                    id="planningPeriod"
-                    label="规划期限"
-                    value={planningPeriod}
-                    onChange={setPlanningPeriod}
-                    placeholder="2022-2035年"
-                    isFocused={focusedField === 'planningPeriod'}
-                    onFocus={() => setFocusedField('planningPeriod')}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-4">
+                <InputField
+                  id="province"
+                  label="省份"
+                  icon={<FontAwesomeIcon icon={faMapMarkerAlt} className="text-blue-500" style={{ width: 12, height: 12 }} />}
+                  value={province}
+                  onChange={setProvince}
+                  placeholder="广东省"
+                  isFocused={focusedField === 'province'}
+                  onFocus={() => setFocusedField('province')}
+                  onBlur={() => setFocusedField(null)}
+                  compact
+                />
+                <InputField
+                  id="city"
+                  label="地级市"
+                  icon={<FontAwesomeIcon icon={faMapMarkerAlt} className="text-blue-400" style={{ width: 12, height: 12 }} />}
+                  value={city}
+                  onChange={setCity}
+                  placeholder="梅州市"
+                  isFocused={focusedField === 'city'}
+                  onFocus={() => setFocusedField('city')}
+                  onBlur={() => setFocusedField(null)}
+                  compact
+                />
+                <InputField
+                  id="county"
+                  label="县/区"
+                  icon={<FontAwesomeIcon icon={faMapMarkerAlt} className="text-blue-300" style={{ width: 12, height: 12 }} />}
+                  value={county}
+                  onChange={setCounty}
+                  placeholder="平远县"
+                  isFocused={focusedField === 'county'}
+                  onFocus={() => setFocusedField('county')}
+                  onBlur={() => setFocusedField(null)}
+                  compact
+                />
+                <InputField
+                  id="township"
+                  label="乡镇"
+                  icon={<FontAwesomeIcon icon={faMapMarkerAlt} className="text-blue-200" style={{ width: 12, height: 12 }} />}
+                  value={township}
+                  onChange={setTownship}
+                  placeholder="泗水镇"
+                  isFocused={focusedField === 'township'}
+                  onFocus={() => setFocusedField('township')}
+                  onBlur={() => setFocusedField(null)}
+                  compact
+                />
+                <InputField
+                  id="planningPeriod"
+                  label="规划期限"
+                  icon={<FontAwesomeIcon icon={faClipboardList} className="text-purple-500" style={{ width: 12, height: 12 }} />}
+                  value={planningPeriod}
+                  onChange={setPlanningPeriod}
+                  placeholder="2022-2035年"
+                  isFocused={focusedField === 'planningPeriod'}
+                  onFocus={() => setFocusedField('planningPeriod')}
+                  onBlur={() => setFocusedField(null)}
+                  compact
+                />
               </div>
             </div>
 

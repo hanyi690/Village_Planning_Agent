@@ -317,6 +317,17 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
     metadata = state.get("metadata", {})
     progress = metadata.get("progress", (current_layer / 3) * 100 if current_layer else 0)
 
+    # Determine status based on phase and execution state
+    execution_paused = state.get("execution_paused", False)
+    if phase == "completed":
+        status = "completed"
+    elif execution_paused:
+        status = "paused"
+    elif phase == "init":
+        status = "pending"
+    else:
+        status = "running"
+
     # Convert messages to UI format
     messages_raw = state.get("messages", [])
     messages_ui = []
@@ -335,6 +346,14 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
             })
 
     return {
+        # Core status fields
+        "session_id": state.get("session_id", ""),
+        "status": status,
+        "created_at": db_session.get("created_at") if db_session else metadata.get("created_at", ""),
+        "execution_error": metadata.get("execution_error"),
+        "execution_complete": phase == "completed",
+        "last_checkpoint_id": metadata.get("last_checkpoint_id", ""),
+        # Agent State (Single Source of Truth)
         "phase": phase,
         "current_wave": state.get("current_wave", 1),
         "current_layer": current_layer,
@@ -342,7 +361,7 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
         "completed_dimensions": state.get("completed_dimensions", {}),
         "pause_after_step": state.get("pause_after_step", False),
         "step_mode": state.get("step_mode", False),
-        "execution_paused": state.get("execution_paused", False),
+        "execution_paused": execution_paused,
         "previous_layer": state.get("previous_layer", 0),
         "messages": messages_ui,
         # 项目上下文（优先使用 db_session 数据，因为是持久化的）

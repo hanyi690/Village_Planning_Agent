@@ -137,13 +137,35 @@ class ContentExtractor:
 
     def _parse_bracket_sections(self, text: str) -> Dict[str, str]:
         sections: Dict[str, str] = {}
-        pattern = re.compile(r'【(.+?)】\s*\n?')
-        parts = list(pattern.finditer(text))
-        for i, match in enumerate(parts):
+
+        # Pattern 1: 【标题】格式
+        bracket_pattern = re.compile(r'【(.+?)】\s*\n?')
+        bracket_parts = list(bracket_pattern.finditer(text))
+
+        # Pattern 2: Markdown标题格式 (## 标题 或 ### 标题)
+        md_pattern = re.compile(r'^(#{1,3})\s+(.+?)\s*$', re.MULTILINE)
+        md_parts = list(md_pattern.finditer(text))
+
+        # 合并两种格式的匹配结果
+        all_parts = []
+
+        for match in bracket_parts:
             title = match.group(1).strip()
-            start = match.end()
-            end = parts[i + 1].start() if i + 1 < len(parts) else len(text)
-            content = text[start:end].strip()
+            all_parts.append((match.start(), match.end(), title))
+
+        for match in md_parts:
+            title = match.group(2).strip()
+            # 过滤掉可能是列表项的短标题
+            if len(title) >= 2 and not title.startswith(('-', '*', '•')):
+                all_parts.append((match.start(), match.end(), title))
+
+        # 按位置排序
+        all_parts.sort(key=lambda x: x[0])
+
+        for i, (start, end, title) in enumerate(all_parts):
+            content_start = end
+            content_end = all_parts[i + 1][0] if i + 1 < len(all_parts) else len(text)
+            content = text[content_start:content_end].strip()
             content = re.sub(r'\n{3,}', '\n\n', content)
 
             lines = content.split('\n')
@@ -203,27 +225,30 @@ class ContentExtractor:
         return tables
 
     def _extract_village_names(self):
-        loc = self.reports.get('location', '')
         socio = self.reports.get('socio_economic', '')
-        combined = loc + '\n' + socio
+        # 优先从 socio_economic 提取，避免 location 边界描述干扰
+        match = re.search(r'完整名单[：:]\s*([^。\n]+)', socio)
+        if not match:
+            match = re.search(r'下辖\s*\d+\s*个自然村[，,：:\s]*(.+?)(?:\n|$)', socio)
+        if not match:
+            loc = self.reports.get('location', '')
+            match = re.search(r'包括(.+?)等\s*\d+\s*个自然村', loc + '\n' + socio)
 
-        for pat in [
-            r'完整名单[：:]\s*(.+?)(?:\n|$)',
-            r'下辖(.+?)(?:共|等)?\d+\s*个自然村',
-            r'包括(.+?)等\d+个自然村',
-            r'分别为(.+?)，其中',
-        ]:
-            match = re.search(pat, combined)
-            if match:
-                names_str = match.group(1)
-                names = re.split(r'[、，,]', names_str)
-                names = [n.strip() for n in names if n.strip() and len(n.strip()) <= 6]
-                if names:
-                    names[-1] = re.sub(r'[共等\s\d]+.*$', '', names[-1]).strip()
-                if names:
-                    self.data.village_names = names
-                    self.data.village_count = len(names)
-                    return
+        if match:
+            names_str = match.group(1)
+            # 在句号处截断，避免匹配到后续描述
+            if '。' in names_str:
+                names_str = names_str.split('。')[0]
+            names = re.split(r'[、，,]', names_str)
+            # 过滤：长度2-6，不含方位词（至/接/靠/连），不含数字计数
+            names = [
+                n.strip() for n in names
+                if n.strip() and 2 <= len(n.strip()) <= 6
+                and not re.search(r'[至接靠连]|^\d+$', n.strip())
+            ]
+            if names:
+                self.data.village_names = names
+                self.data.village_count = len(names)
 
     def _extract_location_info(self):
         loc = self.reports.get('location', '')

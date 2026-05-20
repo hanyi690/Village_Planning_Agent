@@ -42,6 +42,11 @@ interface ReportViewerProps {
     projectName: string;
     villageData?: string;
     villageName?: string;
+    province?: string;
+    city?: string;
+    county?: string;
+    township?: string;
+    planningPeriod?: string;
     taskDescription?: string;
     constraints?: string;
     villageDataFiles?: File[];

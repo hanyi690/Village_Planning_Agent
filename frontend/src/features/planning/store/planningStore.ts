@@ -732,7 +732,12 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
           if (!layerMsg.dimensionSummaries) {
             layerMsg.dimensionSummaries = {};
           }
-          layerMsg.dimensionSummaries[dimensionKey] = dimData.structured_summary;
+          // Ensure dimension_key is set, fallback to current dimensionKey
+          const summary = {
+            ...dimData.structured_summary,
+            dimension_key: dimData.structured_summary.dimension_key || dimensionKey,
+          };
+          layerMsg.dimensionSummaries[dimensionKey] = summary;
           // Merge key_points into layer summary
           layerMsg.summary.key_points = Object.values(layerMsg.dimensionSummaries)
             .flatMap(s => s.key_points || [])
@@ -1563,13 +1568,15 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         const hasPauseChange = backendData.pause_after_step !== state.pause_after_step;
         const hasExecutionPausedChange = backendData.execution_paused !== state.execution_paused;
         const hasPreviousLayerChange = backendData.previous_layer !== state.previous_layer;
+        const hasWaveChange = backendData.current_wave !== state.currentWave;
 
         if (
           !hasStatusChange &&
           !hasPhaseChange &&
           !hasPauseChange &&
           !hasExecutionPausedChange &&
-          !hasPreviousLayerChange
+          !hasPreviousLayerChange &&
+          !hasWaveChange
         ) {
           return;
         }
@@ -1579,6 +1586,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           state.status = backendData.status as Status;
         }
         if (backendData.phase) state.phase = backendData.phase;
+        if (backendData.current_wave) state.currentWave = backendData.current_wave;
         // Note: reports 不再从后端同步，前端通过 SSE 或 API 获取
         if (backendData.completed_dimensions) {
           const completedData = backendData.completed_dimensions as Record<string, string[]>;

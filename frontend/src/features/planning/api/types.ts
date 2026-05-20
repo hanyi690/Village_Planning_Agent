@@ -111,8 +111,28 @@ export interface LayerContent {
 
 /**
  * SSE Event type union for better type safety
+ * 只包含后端已实现的事件类型
  */
 export type PlanningSSEEventType =
+  // Connection Events
+  | 'connected'
+  | 'heartbeat'
+  | 'error'
+  // Layer Events
+  | 'layer_started'
+  | 'layer_completed'
+  | 'layer_paused'
+  | 'execution_resumed'
+  // Dimension Events
+  | 'dimension_start'
+  | 'dimension_complete'
+  | 'dimension_delta'
+  // Progress Events
+  | 'checkpoint_saved'
+  | 'pause'
+  | 'resumed'
+  | 'completed'
+  | 'revision_completed'
   // Tool Events (NEW System)
   | 'tool_started'
   | 'tool_status'
@@ -120,45 +140,42 @@ export type PlanningSSEEventType =
   | 'tool_call'
   | 'tool_progress'
   | 'tool_result'
-  // Layer & Dimension Events
-  | 'layer_started'
-  | 'layer_completed'
-  | 'dimension_start'
-  | 'dimension_complete'
+  // AI Response Events
+  | 'ai_response_delta'
+  | 'ai_response_complete'
+  // GIS & RAG Events
+  | 'gis_result'
+  | 'rag_result';
+
+/**
+ * 后端未实现的SSE事件类型 - 保留用于向后兼容或未来实现
+ * @deprecated 这些事件类型后端尚未实现，请勿在生产代码中使用
+ */
+export type DeprecatedSSEEventType =
+  // Dimension Events (未实现)
   | 'dimension_error'
-  | 'dimension_delta'
   | 'dimension_revised'
   | 'dimension_reset'
   | 'dimension_reset_complete'
-  // Progress Events
+  // Progress Events (未实现)
   | 'progress'
-  | 'checkpoint_saved'
-  | 'pause'
-  | 'resumed'
-  | 'completed'
-  | 'complete'
-  | 'error'
-  // Streaming Events
+  // Streaming Events (未实现)
   | 'text_chunk'
   | 'content_delta'
-  | 'ai_response_delta'
-  | 'ai_response_complete'
   | 'thinking_start'
   | 'thinking'
   | 'thinking_end'
   | 'stream_paused'
-  // Review Events
+  // Review Events (未实现)
   | 'review_request'
-  // RAG & Cascade Events (Demo System)
+  // RAG & Cascade Events (未实现)
   | 'rag_query'
-  | 'rag_result'
-  | 'gis_result'
   | 'cascade_impact'
   | 'cascade_complete'
-  // State Events
+  // State Events (未实现)
   | 'state_sync'
-  | 'layer_paused'
-  | 'connected';
+  // Legacy (未实现)
+  | 'complete';
 
 /**
  * SSE Event 数据基础类型
@@ -226,12 +243,12 @@ export interface PlanningSSEEvent {
 export interface StartPlanningRequest {
   project_name: string;
   village_data: string;
-  village_name?: string;
-  province?: string;       // 省份
-  city?: string;           // 地级市
-  county?: string;         // 县/区
-  township?: string;       // 乡镇
-  planning_period?: string; // 规划期限，如 "2022-2035年"
+  village_name?: string;       // 省份
+  province?: string;           // 地级市
+  city?: string;               // 县/区
+  county?: string;             // 乡镇
+  township?: string;           // 规划期限，如 "2022-2035年"
+  planning_period?: string;
   task_description?: string;
   constraints?: string;
   enable_review?: boolean;
@@ -239,6 +256,9 @@ export interface StartPlanningRequest {
   need_human_review?: boolean;
   stream_mode?: boolean;
   input_mode?: 'file' | 'text';
+  // RAG Configuration
+  rag_enabled?: boolean;       // 是否启用RAG检索
+  rag_layer_config?: string;   // RAG层级配置 (JSON string)
   images?: ImageData[];
   villageDataFiles?: File[];
   taskFiles?: File[];
