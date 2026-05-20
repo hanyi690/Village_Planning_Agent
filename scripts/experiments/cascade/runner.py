@@ -130,11 +130,15 @@ class CascadeRunner(ExperimentRunner):
             rag_config=rag_config,
         )
 
+        # Get checkpoint_id for cascade revision fork
+        checkpoint_id = await self.get_checkpoint_id(session_id)
+
         await self.save_baseline(
             session_id=session_id,
             reports=reports,
             output_dir=baseline_dir,
             project_name="金田村村庄规划",
+            checkpoint_id=checkpoint_id,
         )
         self.cache.save_reports("baseline", "jintian", reports)
         return reports

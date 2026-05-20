@@ -417,9 +417,11 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # 6. 组装 Prompt
     prompt = _build_prompt(cfg, state, rag_context, deps, same_layer_contexts, professional_data_section=professional_data_section)
+    logger.info(f"[analyze_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
 
-    # 6. 流式 LLM + SSE
+    # 7. 流式 LLM + SSE
     llm = _get_llm()
+    llm_start_time = time.time()
 
     llm_response = ""
     await sse_manager.publish(session_id, {
@@ -449,7 +451,10 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         logger.error(f"[analyze_dimension] {dim_key}: LLM 失败: {e}")
         return {"messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")]}
 
-    # 7. 准备报告数据（累积到 pending_reports，由 completion.py 批量写入）
+    llm_elapsed = time.time() - llm_start_time
+    logger.info(f"[analyze_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
+
+    # 8. 准备报告数据（累积到 pending_reports，由 completion.py 批量写入）
     store = ReportStore.get_instance()
     latest_version = await store.get_latest_version(session_id, dim_key)
     next_version = latest_version + 1
