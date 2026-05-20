@@ -142,6 +142,9 @@ async def init_async_db() -> bool:
         async with engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.create_all)
 
+        # Run schema migrations for existing tables
+        await _run_migrations(engine)
+
         logger.info("[Async DB] Database tables initialized successfully")
         return True
     except Exception as e:
@@ -158,6 +161,35 @@ def get_db_path() -> Path:
         Path: Database file path
     """
     return DB_PATH
+
+
+async def _run_migrations(engine) -> None:
+    """Run schema migrations for existing tables (idempotent)."""
+    from sqlalchemy import text
+
+    migrations = [
+        ("village_name", "ALTER TABLE planning_sessions ADD COLUMN village_name TEXT DEFAULT ''"),
+        ("province", "ALTER TABLE planning_sessions ADD COLUMN province TEXT DEFAULT ''"),
+        ("city", "ALTER TABLE planning_sessions ADD COLUMN city TEXT DEFAULT ''"),
+        ("county", "ALTER TABLE planning_sessions ADD COLUMN county TEXT DEFAULT ''"),
+        ("township", "ALTER TABLE planning_sessions ADD COLUMN township TEXT DEFAULT ''"),
+        ("planning_period", "ALTER TABLE planning_sessions ADD COLUMN planning_period TEXT DEFAULT '2022-2035年'"),
+    ]
+
+    async with engine.begin() as conn:
+        # Get existing columns
+        result = await conn.run_sync(
+            lambda sync_conn: sync_conn.execute(text("PRAGMA table_info(planning_sessions)"))
+        )
+        existing = {row[1] for row in result.fetchall()}
+
+        for col_name, sql in migrations:
+            if col_name not in existing:
+                try:
+                    await conn.execute(text(sql))
+                    logger.info(f"[Migration] Added column: {col_name}")
+                except Exception as e:
+                    logger.warning(f"[Migration] Column {col_name} may already exist: {e}")
 
 
 # ==========================================

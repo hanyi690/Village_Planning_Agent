@@ -137,6 +137,15 @@ export interface DimensionReportMessage extends BaseMessage {
 /**
  * Layer Completed Message - Shown when a planning layer is completed
  */
+export interface DimensionStructuredSummary {
+  dimension_key: string;
+  layer: number;
+  word_count: number;
+  key_points: string[];
+  text_summary: string;
+  metrics: Record<string, unknown>;
+}
+
 export interface LayerCompletedMessage extends BaseMessage {
   type: 'layer_completed';
   layer: number;
@@ -150,10 +159,12 @@ export interface LayerCompletedMessage extends BaseMessage {
   fullReportContent?: string;
   dimensionReports?: Record<string, string>;
   actions: ActionButton[];
-  // GIS 数据：每个维度的 GIS 分析结果
+  // GIS
   dimensionGisData?: Record<string, GISData>;
-  // 知识库切片：每个维度的知识来源
+  // Knowledge sources
   dimensionKnowledgeSources?: Record<string, KnowledgeSource[]>;
+  // Structured summaries
+  dimensionSummaries?: Record<string, DimensionStructuredSummary>;
 }
 
 // ============================================================================

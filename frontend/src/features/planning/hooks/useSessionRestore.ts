@@ -150,7 +150,6 @@ export function useSessionRestore({ enabled = true }: UseSessionRestoreOptions =
                           source: chunk.source,
                           score: chunk.score,
                           chunk_id: chunk.chunk_id,
-                          dimension_tags: chunk.dimension_tags,
                         }));
 
                         if (ragDocuments.length > 0) {

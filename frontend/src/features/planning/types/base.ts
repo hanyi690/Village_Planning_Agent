@@ -77,6 +77,12 @@ export interface PlanningParams {
   projectName: string;
   villageData: string;
   villageName?: string;
+  // 行政区划和规划期限
+  province?: string;
+  city?: string;
+  county?: string;
+  township?: string;
+  planningPeriod?: string;
   taskDescription?: string;
   constraints?: string;
   enableReview?: boolean;

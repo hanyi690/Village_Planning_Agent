@@ -22,6 +22,12 @@ export interface UploadedFileInfo {
 
 export interface VillageInputData {
   projectName: string;
+  // 行政区划和规划期限
+  province?: string;
+  city?: string;
+  county?: string;
+  township?: string;
+  planningPeriod?: string;
   taskDescription: string;
   constraints: string;
   villageData?: string;
@@ -216,6 +222,12 @@ const InputField = memo(function InputField({
 
 const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSession: _onLoadSession }: VillageInputFormProps) {
   const [projectName, setProjectName] = useState('');
+  // 行政区划字段
+  const [province, setProvince] = useState('');
+  const [city, setCity] = useState('');
+  const [county, setCounty] = useState('');
+  const [township, setTownship] = useState('');
+  const [planningPeriod, setPlanningPeriod] = useState('2022-2035年');
   const [taskDescription, setTaskDescription] = useState('');
   const [constraints, setConstraints] = useState('');
   const [villageData, setVillageData] = useState('');
@@ -240,6 +252,12 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
 
     onSubmit({
       projectName: projectName.trim(),
+      // 行政区划和规划期限
+      province: province.trim(),
+      city: city.trim(),
+      county: county.trim(),
+      township: township.trim(),
+      planningPeriod: planningPeriod.trim(),
       taskDescription: taskDescription.trim(),
       constraints: constraints.trim(),
       villageData: villageData.trim() || undefined,
@@ -330,7 +348,7 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
 
               <InputField
                 id="projectName"
-                label="村庄名称"
+                label="项目名称"
                 icon={<FontAwesomeIcon icon={faMapMarkerAlt} className="text-amber-500" style={{ width: 14, height: 14 }} />}
                 required
                 value={projectName}
@@ -340,6 +358,70 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
                 onFocus={() => setFocusedField('projectName')}
                 onBlur={() => setFocusedField(null)}
               />
+
+              {/* 行政区划和规划期限 */}
+              <div className="grid grid-cols-5 gap-3 mt-4">
+                <div>
+                  <InputField
+                    id="province"
+                    label="省份"
+                    value={province}
+                    onChange={setProvince}
+                    placeholder="广东省"
+                    isFocused={focusedField === 'province'}
+                    onFocus={() => setFocusedField('province')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </div>
+                <div>
+                  <InputField
+                    id="city"
+                    label="地级市"
+                    value={city}
+                    onChange={setCity}
+                    placeholder="梅州市"
+                    isFocused={focusedField === 'city'}
+                    onFocus={() => setFocusedField('city')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </div>
+                <div>
+                  <InputField
+                    id="county"
+                    label="县/区"
+                    value={county}
+                    onChange={setCounty}
+                    placeholder="平远县"
+                    isFocused={focusedField === 'county'}
+                    onFocus={() => setFocusedField('county')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </div>
+                <div>
+                  <InputField
+                    id="township"
+                    label="乡镇"
+                    value={township}
+                    onChange={setTownship}
+                    placeholder="泗水镇"
+                    isFocused={focusedField === 'township'}
+                    onFocus={() => setFocusedField('township')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </div>
+                <div>
+                  <InputField
+                    id="planningPeriod"
+                    label="规划期限"
+                    value={planningPeriod}
+                    onChange={setPlanningPeriod}
+                    placeholder="2022-2035年"
+                    isFocused={focusedField === 'planningPeriod'}
+                    onFocus={() => setFocusedField('planningPeriod')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </div>
+              </div>
             </div>
 
             {/* Section: 村庄数据 */}

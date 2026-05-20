@@ -29,6 +29,11 @@ export const planningApi = {
     const formData = new FormData();
     formData.append('project_name', request.project_name);
     formData.append('village_name', request.village_name || '');
+    formData.append('province', request.province || '');
+    formData.append('city', request.city || '');
+    formData.append('county', request.county || '');
+    formData.append('township', request.township || '');
+    formData.append('planning_period', request.planning_period || '');
     formData.append('village_data', request.village_data);
     formData.append('task_description', request.task_description || '');
     formData.append('constraints', request.constraints || '');

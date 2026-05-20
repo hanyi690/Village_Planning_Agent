@@ -6,7 +6,9 @@ Small-to-Big 检索架构 + 层级感知。
 
 2026-05-16: 重写，删除旧的 ParentChildVectorStore 实现
 """
+import asyncio
 import hashlib
+import threading
 from collections import OrderedDict
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
@@ -27,8 +29,9 @@ class AliyunEmbeddings:
     """阿里云 Embedding API 封装类（OpenAI 兼容格式）
 
     2026-05-17: 添加输入长度限制处理（API 限制 8192 tokens）
+    2026-05-18: 添加速率限制和重试机制
     """
-    BATCH_SIZE = 10
+    BATCH_SIZE = 25
     MAX_TOKENS = 8192  # API 限制
     MAX_CHARS = 7500   # 估算：1 token ≈ 1 字符（中文），留安全余量
 
@@ -36,6 +39,14 @@ class AliyunEmbeddings:
         from openai import OpenAI
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = model
+        self._rate_limiter = None
+        self._retry_fn = None
+
+    def set_rate_limiter(self, rate_limiter) -> None:
+        self._rate_limiter = rate_limiter
+
+    def set_retry_fn(self, retry_fn) -> None:
+        self._retry_fn = retry_fn
 
     def _split_long_text(self, text: str) -> List[str]:
         """对超长文本进行二次切分
@@ -60,45 +71,62 @@ class AliyunEmbeddings:
         return chunks
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """批量生成 Embedding
+        """批量生成 Embedding（带速率限制和重试）"""
+        import asyncio as _asyncio
+        import concurrent.futures
 
-        Args:
-            texts: 文本列表（可能包含超长文本）
+        async def _embed():
+            all_embeddings = []
+            for i in range(0, len(texts), self.BATCH_SIZE):
+                batch = texts[i:i + self.BATCH_SIZE]
 
-        Returns:
-            Embedding 向量列表（与输入长度一致，超长文本的多个切片共享同一个 embedding）
-        """
-        all_embeddings = []
-        for i in range(0, len(texts), self.BATCH_SIZE):
-            batch = texts[i:i + self.BATCH_SIZE]
+                expanded_texts = []
+                text_to_original = []
+                for orig_idx, text in enumerate(batch):
+                    split_texts = self._split_long_text(text)
+                    for split_text in split_texts:
+                        expanded_texts.append(split_text)
+                        text_to_original.append(i + orig_idx)
 
-            # 对超长文本进行二次切分
-            expanded_texts = []
-            text_to_original = []  # 记录每个切片对应的原始文本索引
-            for orig_idx, text in enumerate(batch):
-                split_texts = self._split_long_text(text)
-                for split_text in split_texts:
-                    expanded_texts.append(split_text)
-                    text_to_original.append(i + orig_idx)
+                batch_embeddings = []
+                for j in range(0, len(expanded_texts), self.BATCH_SIZE):
+                    sub_batch = expanded_texts[j:j + self.BATCH_SIZE]
 
-            # 分批调用 API
-            batch_embeddings = []
-            for j in range(0, len(expanded_texts), self.BATCH_SIZE):
-                sub_batch = expanded_texts[j:j + self.BATCH_SIZE]
-                response = self.client.embeddings.create(model=self.model, input=sub_batch)
-                batch_embeddings.extend([item.embedding for item in response.data])
+                    async def _call_api():
+                        if self._rate_limiter:
+                            await self._rate_limiter.acquire()
+                            try:
+                                response = self.client.embeddings.create(model=self.model, input=sub_batch)
+                                return [item.embedding for item in response.data]
+                            finally:
+                                self._rate_limiter.release()
+                        else:
+                            response = self.client.embeddings.create(model=self.model, input=sub_batch)
+                            return [item.embedding for item in response.data]
 
-            # 将切片的 embedding 映射回原始文本（取第一个切片的 embedding）
-            orig_embeddings = {}
-            for split_idx, orig_idx in enumerate(text_to_original):
-                if orig_idx not in orig_embeddings:
-                    orig_embeddings[orig_idx] = batch_embeddings[split_idx]
+                    if self._retry_fn:
+                        embeddings = await self._retry_fn(_call_api)
+                    else:
+                        embeddings = await _call_api()
+                    batch_embeddings.extend(embeddings)
 
-            # 按原始顺序返回
-            for orig_idx in range(len(batch)):
-                all_embeddings.append(orig_embeddings[i + orig_idx])
+                orig_embeddings = {}
+                for split_idx, orig_idx in enumerate(text_to_original):
+                    if orig_idx not in orig_embeddings:
+                        orig_embeddings[orig_idx] = batch_embeddings[split_idx]
 
-        return all_embeddings
+                for orig_idx in range(len(batch)):
+                    all_embeddings.append(orig_embeddings[i + orig_idx])
+
+            return all_embeddings
+
+        try:
+            _asyncio.get_running_loop()
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(_asyncio.run, _embed())
+                return future.result()
+        except RuntimeError:
+            return _asyncio.run(_embed())
 
     def embed_query(self, text: str) -> List[float]:
         """单个查询的 Embedding"""
@@ -118,21 +146,53 @@ class VectorStoreCache:
         self._embedding_model = None
         self._vectorstore = None
         self._query_cache: Dict = {}
+        self._embedding_lock = threading.Lock()
+        self._vectorstore_lock = threading.Lock()
+        self._cache_lock = threading.Lock()
 
     def get_embedding_model(self):
-        """懒加载并缓存 Embedding 模型"""
+        """懒加载并缓存 Embedding 模型（双重检查锁定）"""
         if self._embedding_model is None:
-            if EMBEDDING_PROVIDER == "aliyun":
-                if not DASHSCOPE_API_KEY:
-                    raise ValueError("EMBEDDING_PROVIDER=aliyun 但未设置 DASHSCOPE_API_KEY")
-                self._embedding_model = AliyunEmbeddings(
-                    api_key=DASHSCOPE_API_KEY,
-                    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                    model="text-embedding-v4",
-                )
-                logger.info(f"[VectorStore] 阿里云 Embedding 已就绪")
-            else:
-                self._init_local_embedding()
+            with self._embedding_lock:
+                if self._embedding_model is None:
+                    if EMBEDDING_PROVIDER == "aliyun":
+                        if not DASHSCOPE_API_KEY:
+                            raise ValueError("EMBEDDING_PROVIDER=aliyun 但未设置 DASHSCOPE_API_KEY")
+                        model = AliyunEmbeddings(
+                            api_key=DASHSCOPE_API_KEY,
+                            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                            model="text-embedding-v4",
+                        )
+                        from app.core.settings import EMBEDDING_MAX_CONCURRENT, EMBEDDING_RATE_LIMIT_RPS
+                        from app.utils.rate_limiter import get_embedding_rate_limiter
+                        from app.utils.retry import async_retry_with_backoff
+
+                        def _init_limiter_sync():
+                            try:
+                                loop = asyncio.get_running_loop()
+                            except RuntimeError:
+                                return asyncio.run(get_embedding_rate_limiter(
+                                    requests_per_second=EMBEDDING_RATE_LIMIT_RPS,
+                                    max_concurrent=EMBEDDING_MAX_CONCURRENT,
+                                ))
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                future = executor.submit(
+                                    asyncio.run,
+                                    get_embedding_rate_limiter(
+                                        requests_per_second=EMBEDDING_RATE_LIMIT_RPS,
+                                        max_concurrent=EMBEDDING_MAX_CONCURRENT,
+                                    )
+                                )
+                                return future.result()
+
+                        limiter = _init_limiter_sync()
+                        model.set_rate_limiter(limiter)
+                        model.set_retry_fn(async_retry_with_backoff)
+                        self._embedding_model = model
+                        logger.info(f"[VectorStore] 阿里云 Embedding 已就绪（限流: {EMBEDDING_RATE_LIMIT_RPS} rps, {EMBEDDING_MAX_CONCURRENT} 并发）")
+                    else:
+                        self._init_local_embedding()
 
         return self._embedding_model
 
@@ -150,15 +210,17 @@ class VectorStoreCache:
         logger.info(f"[VectorStore] 本地 Embedding 模型已缓存: {EMBEDDING_MODEL_NAME}")
 
     def get_vectorstore(self):
-        """懒加载并缓存向量数据库"""
+        """懒加载并缓存向量数据库（双重检查锁定）"""
         if self._vectorstore is None:
-            from langchain_chroma import Chroma
-            self._vectorstore = Chroma(
-                persist_directory=str(CHROMA_PERSIST_DIR),
-                embedding_function=self.get_embedding_model(),
-                collection_name=CHROMA_COLLECTION_NAME,
-            )
-            logger.info(f"[VectorStore] 向量数据库已缓存: {CHROMA_COLLECTION_NAME}")
+            with self._vectorstore_lock:
+                if self._vectorstore is None:
+                    from langchain_chroma import Chroma
+                    self._vectorstore = Chroma(
+                        persist_directory=str(CHROMA_PERSIST_DIR),
+                        embedding_function=self.get_embedding_model(),
+                        collection_name=CHROMA_COLLECTION_NAME,
+                    )
+                    logger.info(f"[VectorStore] 向量数据库已缓存: {CHROMA_COLLECTION_NAME}")
 
         return self._vectorstore
 
@@ -224,6 +286,8 @@ class HierarchyVectorStore:
         self._parent_metadata: OrderedDict[str, Dict] = OrderedDict()
         # 树形索引：按文档隔离存储（source_name -> tree_index）
         self._tree_indices: Dict[str, Dict] = {}
+        # 并发安全锁（RLock 支持可重入，避免 load_all_tree_indices 内部二次获取死锁）
+        self._lock = threading.RLock()
         self._load_parent_cache()
 
     @property
@@ -364,23 +428,22 @@ class HierarchyVectorStore:
         from langchain_core.documents import Document
 
         # 缓存父块（层级更低的块）
-        for chunk in chunks:
-            # LRU 淘汰
-            while len(self._parent_cache) >= self.MAX_PARENT_CACHE_SIZE:
-                oldest_id = next(iter(self._parent_cache))
-                del self._parent_cache[oldest_id]
-                del self._parent_metadata[oldest_id]
+        with self._lock:
+            for chunk in chunks:
+                while len(self._parent_cache) >= self.MAX_PARENT_CACHE_SIZE:
+                    oldest_id = next(iter(self._parent_cache))
+                    del self._parent_cache[oldest_id]
+                    del self._parent_metadata[oldest_id]
 
-            # 存储当前块作为潜在的父块
-            self._parent_cache[chunk.chunk_id] = chunk.content
-            self._parent_metadata[chunk.chunk_id] = {
-                "source": chunk.metadata.get("source", ""),
-                "depth": chunk.depth,
-                "section_title": chunk.section_title,
-                "ancestors": chunk.ancestors,
-                "parent_id": chunk.parent_id,
-                **chunk.metadata,
-            }
+                self._parent_cache[chunk.chunk_id] = chunk.content
+                self._parent_metadata[chunk.chunk_id] = {
+                    "source": chunk.metadata.get("source", ""),
+                    "depth": chunk.depth,
+                    "section_title": chunk.section_title,
+                    "ancestors": chunk.ancestors,
+                    "parent_id": chunk.parent_id,
+                    **chunk.metadata,
+                }
 
         # 创建向量文档
         docs = []
@@ -393,8 +456,12 @@ class HierarchyVectorStore:
                     "section_title": chunk.section_title,
                     "ancestors": json.dumps(chunk.ancestors, ensure_ascii=False),
                     "parent_id": chunk.parent_id or "",
+                    "subcategory": chunk.metadata.get("subcategory", ""),
                     "source": chunk.metadata.get("source", ""),
                     "has_table": chunk.metadata.get("has_table", False),
+                    "doc_type": chunk.metadata.get("doc_type", ""),
+                    "title": chunk.metadata.get("title", ""),
+                    "category": chunk.metadata.get("category", ""),
                 },
             )
             docs.append(doc)
@@ -408,7 +475,8 @@ class HierarchyVectorStore:
 
     def retrieve(self, query: str, k: int = 5, score_threshold: float = None,
                  return_parents: bool = True, parent_level: int = -1,
-                 max_merge_length: int = None) -> List[Dict]:
+                 max_merge_length: int = None,
+                 doc_types: Optional[List[str]] = None) -> List[Dict]:
         """Small-to-Big 检索：返回子块 + ancestors 上下文
 
         Args:
@@ -434,12 +502,28 @@ class HierarchyVectorStore:
             score_threshold = RETRIEVE_SCORE_THRESHOLD
         if max_merge_length is None:
             max_merge_length = MAX_MERGE_CONTENT_LENGTH
-        # 确保树形索引已加载
-        if not self._tree_indices:
-            self.load_all_tree_indices()
+        # 确保树形索引已加载（锁定保护）
+        with self._lock:
+            if not self._tree_indices:
+                self.load_all_tree_indices()
 
-        # 使用带分数的检索
-        child_results = self.vectorstore.similarity_search_with_score(query, k=k * 2)
+        # 使用带分数的检索（支持 doc_type 过滤）
+        chroma_filter = None
+        if doc_types:
+            chroma_filter = {"doc_type": {"$in": list(doc_types)}}
+        child_results = self.vectorstore.similarity_search_with_score(
+            query, k=k * 2, filter=chroma_filter
+        )
+        # 回退：过滤后结果不足 k 个时，补充全类型结果
+        if doc_types and len(child_results) < k:
+            fallback = self.vectorstore.similarity_search_with_score(query, k=k)
+            seen_ids = {doc.metadata.get("chunk_id") for doc, _ in child_results}
+            for doc, score in fallback:
+                if doc.metadata.get("chunk_id") not in seen_ids:
+                    child_results.append((doc, score))
+                    seen_ids.add(doc.metadata.get("chunk_id"))
+                if len(child_results) >= k * 2:
+                    break
 
         # 过滤距离大的结果（L2距离越小越相似）
         filtered_results = [(doc, score) for doc, score in child_results if score <= score_threshold]
@@ -526,6 +610,10 @@ class HierarchyVectorStore:
                     "section_title": chunk.get("section_title", child_doc.metadata.get("section_title", "")),
                     "is_placeholder": is_placeholder,
                     "source": chunk.get("metadata", {}).get("source", child_doc.metadata.get("source", "")),
+                    "doc_type": child_doc.metadata.get("doc_type", ""),
+                    "title": child_doc.metadata.get("title", ""),
+                    "subcategory": child_doc.metadata.get("subcategory", ""),
+                    "category": child_doc.metadata.get("category", ""),
                 },
             })
 
@@ -638,30 +726,29 @@ class HierarchyVectorStore:
         collection = self.vectorstore._collection
         collection.delete(where={"source": source})
 
-        # 清理缓存
-        to_delete = [cid for cid, meta in self._parent_metadata.items() if meta.get("source") == source]
-        for cid in to_delete:
-            if cid in self._parent_cache:
-                del self._parent_cache[cid]
-            if cid in self._parent_metadata:
-                del self._parent_metadata[cid]
+        with self._lock:
+            to_delete = [cid for cid, meta in self._parent_metadata.items() if meta.get("source") == source]
+            for cid in to_delete:
+                if cid in self._parent_cache:
+                    del self._parent_cache[cid]
+                if cid in self._parent_metadata:
+                    del self._parent_metadata[cid]
 
-        self._save_parent_cache()
+            self._save_parent_cache()
         logger.info(f"[HierarchyVectorStore] 已删除来源 {source} 的 {len(to_delete)} 个切片")
         return len(to_delete)
 
     def clear_all(self) -> int:
         """清空所有数据"""
-        count = len(self._parent_cache)
+        with self._lock:
+            count = len(self._parent_cache)
 
-        # 清空向量存储
-        collection = self.vectorstore._collection
-        collection.delete()
+            collection = self.vectorstore._collection
+            collection.delete()
 
-        # 清空缓存
-        self._parent_cache.clear()
-        self._parent_metadata.clear()
-        self._save_parent_cache()
+            self._parent_cache.clear()
+            self._parent_metadata.clear()
+            self._save_parent_cache()
 
         logger.info(f"[HierarchyVectorStore] 已清空所有数据（{count} 个切片）")
         return count

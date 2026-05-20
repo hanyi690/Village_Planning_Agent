@@ -50,6 +50,14 @@ class PlanningSession(SQLModel, table=True):
 
     # Basic info
     project_name: str = Field(index=True)
+    village_name: str = Field(default="", index=True)
+
+    # 行政区划信息
+    province: str = Field(default="")      # 省份
+    city: str = Field(default="")          # 地级市
+    county: str = Field(default="")        # 县/区
+    township: str = Field(default="")      # 乡镇
+    planning_period: str = Field(default="2022-2035年")  # 规划期限
 
     # User input
     village_data: Optional[str] = Field(
@@ -185,7 +193,7 @@ class DimensionReport(SQLModel, table=True):
 
     # Content
     content: str = Field(sa_column=Text())
-    summary: str = Field(sa_column=Text())  # First 200 chars
+    summary: str = Field(sa_column=Text())  # Structured JSON summary
 
     # Metadata
     revision_trigger: Optional[str] = None

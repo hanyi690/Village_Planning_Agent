@@ -6,6 +6,7 @@ Provider is determined by LLM_PROVIDER environment variable or explicit paramete
 Includes automatic LangSmith tracing support.
 """
 
+import asyncio
 import os
 from enum import Enum
 from typing import Optional, Any, List, Dict
@@ -13,6 +14,20 @@ from typing import Optional, Any, List, Dict
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Global LLM semaphore (lazy init)
+_llm_semaphore: Optional[asyncio.Semaphore] = None
+_semaphore_lock = asyncio.Lock()
+
+
+async def get_llm_semaphore(max_concurrent: int = 20) -> asyncio.Semaphore:
+    global _llm_semaphore
+    if _llm_semaphore is None:
+        async with _semaphore_lock:
+            if _llm_semaphore is None:
+                _llm_semaphore = asyncio.Semaphore(max_concurrent)
+                logger.info(f"[LLM] Global semaphore created: max_concurrent={max_concurrent}")
+    return _llm_semaphore
 
 
 class LLMProvider(Enum):
@@ -99,7 +114,25 @@ def _create_openai_llm(
     if metadata:
         kwargs['metadata'] = metadata
 
-    return ChatOpenAI(
+    # Build rate limiter callbacks for observability (NOT dynamic adjustment)
+    # Dynamic adjustment of shared max_bucket_size is unsafe under concurrency.
+    # Instead, log rate limit headers for monitoring; keep fixed requests_per_second.
+    llm_rate_limiter = kwargs.pop('rate_limiter', None)
+
+    def _on_ratelimit_info(response) -> None:
+        try:
+            headers = getattr(response, 'headers', {})
+            remaining_req = headers.get('x-ratelimit-remaining-requests', 'N/A')
+            remaining_tok = headers.get('x-ratelimit-remaining-tokens', 'N/A')
+            reset_time = headers.get('x-ratelimit-reset-requests', 'N/A')
+            logger.debug(
+                f"[LLM RateLimit] remaining_requests={remaining_req}, "
+                f"remaining_tokens={remaining_tok}, reset={reset_time}"
+            )
+        except Exception:
+            pass
+
+    llm = ChatOpenAI(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
@@ -107,6 +140,15 @@ def _create_openai_llm(
         streaming=streaming,
         **kwargs
     )
+
+    if llm_rate_limiter:
+        llm.rate_limiter = llm_rate_limiter._rpm_limiter
+        logger.debug(f"[LLM] Rate limiter attached to LLM instance")
+
+    if hasattr(llm, 'on_llm_ratelimit_info'):
+        llm.on_llm_ratelimit_info = _on_ratelimit_info
+
+    return llm
 
 
 def _create_zhipuai_llm(
@@ -169,23 +211,13 @@ def create_llm(
 
     if selected_provider == LLMProvider.ZHIPUAI:
         return _create_zhipuai_llm(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            callbacks=callbacks,
-            metadata=metadata,
-            streaming=streaming,
-            **kwargs
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            callbacks=callbacks, metadata=metadata, streaming=streaming, **kwargs
         )
     else:
         return _create_openai_llm(
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            callbacks=callbacks,
-            metadata=metadata,
-            streaming=streaming,
-            **kwargs
+            model=model, temperature=temperature, max_tokens=max_tokens,
+            callbacks=callbacks, metadata=metadata, streaming=streaming, **kwargs
         )
 
 

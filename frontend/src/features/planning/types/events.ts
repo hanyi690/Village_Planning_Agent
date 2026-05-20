@@ -85,6 +85,16 @@ export interface DimensionCompleteData {
   word_count: number;
   gis_data?: import('./messages').GISData;
   knowledge_sources?: import('./messages').KnowledgeSource[];
+  structured_summary?: DimensionStructuredSummary;
+}
+
+export interface DimensionStructuredSummary {
+  dimension_key: string;
+  layer: number;
+  word_count: number;
+  key_points: string[];
+  text_summary: string;
+  metrics: Record<string, unknown>;
 }
 
 export interface LayerStartedData {

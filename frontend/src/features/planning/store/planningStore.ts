@@ -87,7 +87,6 @@ interface RagDocument {
   source?: string;
   score?: number;
   chunk_id?: string;
-  dimension_tags?: string[];
   matched_query?: string;  // 匹配的查询语句
 }
 
@@ -119,6 +118,13 @@ export interface PlanningState {
   // Session
   sessionId: string | null;
   projectName: string | null;
+  // 行政区划和规划期限（从后端恢复）
+  villageName?: string;
+  province?: string;
+  city?: string;
+  county?: string;
+  township?: string;
+  planningPeriod?: string;
   status: Status;
 
   // Agent State (Single Source of Truth)
@@ -648,6 +654,14 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         layer?: number;
         is_revision?: boolean;
         knowledge_sources?: KnowledgeSource[];
+        structured_summary?: {
+          dimension_key?: string;
+          layer?: number;
+          word_count?: number;
+          key_points?: string[];
+          text_summary?: string;
+          metrics?: Record<string, unknown>;
+        };
       };
       const layer = dimData.layer || 1;
       const dimensionKey = dimData.dimension_key || '';
@@ -709,9 +723,21 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
         // Update fullReportContent and summary using utility functions
         layerMsg.fullReportContent = formatDimensionReportsAsContent(layerMsg.dimensionReports);
-        const summary = calculateReportSummary(layerMsg.dimensionReports);
+        const summary = calculateReportSummary(layerMsg.dimensionReports, layerMsg.dimensionSummaries);
         layerMsg.summary.word_count = summary.word_count;
         layerMsg.summary.dimension_count = summary.dimension_count;
+
+        // Extract key_points from structured_summary and store in dimensionSummaries
+        if (dimData.structured_summary?.key_points?.length) {
+          if (!layerMsg.dimensionSummaries) {
+            layerMsg.dimensionSummaries = {};
+          }
+          layerMsg.dimensionSummaries[dimensionKey] = dimData.structured_summary;
+          // Merge key_points into layer summary
+          layerMsg.summary.key_points = Object.values(layerMsg.dimensionSummaries)
+            .flatMap(s => s.key_points || [])
+            .slice(0, 10);
+        }
 
         // GIS data is now sent via independent gis_result events after review
         // Remove gis_data handling from dimension_complete
@@ -865,9 +891,12 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
         // Update fullReportContent and summary using utility functions
         layerMsg.fullReportContent = formatDimensionReportsAsContent(layerMsg.dimensionReports);
-        const summary = calculateReportSummary(layerMsg.dimensionReports);
+        const summary = calculateReportSummary(layerMsg.dimensionReports, layerMsg.dimensionSummaries);
         layerMsg.summary.word_count = summary.word_count;
         layerMsg.summary.dimension_count = summary.dimension_count;
+        if (summary.key_points.length > 0) {
+          layerMsg.summary.key_points = summary.key_points;
+        }
 
         // Update knowledge sources if provided
         if (layerData.dimension_knowledge_sources) {
@@ -1568,6 +1597,17 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           state.execution_paused = backendData.execution_paused;
         if (backendData.last_checkpoint_id)
           state.selectedCheckpoint = backendData.last_checkpoint_id;
+
+        // 同步项目上下文（页面刷新后恢复）
+        if (backendData.project_name && !state.projectName) {
+          state.projectName = backendData.project_name;
+        }
+        if (backendData.village_name) state.villageName = backendData.village_name;
+        if (backendData.province) state.province = backendData.province;
+        if (backendData.city) state.city = backendData.city;
+        if (backendData.county) state.county = backendData.county;
+        if (backendData.township) state.township = backendData.township;
+        if (backendData.planning_period) state.planningPeriod = backendData.planning_period;
 
         deriveUIStateInStore(state);
       }),

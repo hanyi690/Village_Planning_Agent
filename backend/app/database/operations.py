@@ -57,6 +57,12 @@ def _planning_session_to_dict(db_session: PlanningSession) -> Dict[str, Any]:
     return {
         "session_id": db_session.session_id,
         "project_name": db_session.project_name,
+        "village_name": db_session.village_name,
+        "province": db_session.province,
+        "city": db_session.city,
+        "county": db_session.county,
+        "township": db_session.township,
+        "planning_period": db_session.planning_period,
         "execution_error": db_session.execution_error,
         "village_data": db_session.village_data,
         "task_description": db_session.task_description,
@@ -101,10 +107,19 @@ async def create_planning_session_async(state: Dict[str, Any]) -> str:
     task_desc = clean_state.get("task_description") or request.get("task_description", "制定村庄总体规划方案")
     constraints = clean_state.get("constraints") or request.get("constraints", "无特殊约束")
 
+    # Extract config from state
+    config = clean_state.get("config", {})
+
     async with get_async_session() as session:
         db_session = PlanningSession(
             session_id=clean_state["session_id"],
             project_name=clean_state.get("project_name", ""),
+            village_name=config.get("village_name", ""),
+            province=config.get("province", ""),
+            city=config.get("city", ""),
+            county=config.get("county", ""),
+            township=config.get("township", ""),
+            planning_period=config.get("planning_period", "2022-2035年"),
             village_data=clean_state.get("village_data") or "",
             task_description=task_desc,
             constraints=constraints,

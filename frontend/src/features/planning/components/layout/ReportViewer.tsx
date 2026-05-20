@@ -217,11 +217,16 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
   }, [handleSessionSelect]);
 
   const handleSubmit = useCallback(
-    (data: { projectName: string; villageData?: string; taskDescription?: string; constraints?: string; villageDataFiles?: File[]; taskFiles?: File[]; constraintFiles?: File[] }) =>
+    (data: { projectName: string; province?: string; city?: string; county?: string; township?: string; planningPeriod?: string; villageData?: string; taskDescription?: string; constraints?: string; villageDataFiles?: File[]; taskFiles?: File[]; constraintFiles?: File[] }) =>
       onStartPlanning({
         projectName: data.projectName,
         villageData: data.villageData || '',
         villageName: data.projectName,
+        province: data.province,
+        city: data.city,
+        county: data.county,
+        township: data.township,
+        planningPeriod: data.planningPeriod,
         taskDescription: data.taskDescription,
         constraints: data.constraints,
         villageDataFiles: data.villageDataFiles,

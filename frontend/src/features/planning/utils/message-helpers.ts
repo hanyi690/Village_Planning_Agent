@@ -259,14 +259,24 @@ export function formatDimensionReportsAsContent(
  * Returns word count and dimension count for progress tracking
  */
 export function calculateReportSummary(
-  dimensionReports: Record<string, string>
-): { word_count: number; dimension_count: number } {
+  dimensionReports: Record<string, string>,
+  dimensionSummaries?: Record<string, { key_points?: string[] }>
+): { word_count: number; dimension_count: number; key_points: string[] } {
+  const keyPoints: string[] = [];
+  if (dimensionSummaries) {
+    for (const summary of Object.values(dimensionSummaries)) {
+      if (summary.key_points) {
+        keyPoints.push(...summary.key_points);
+      }
+    }
+  }
   return {
     word_count: Object.values(dimensionReports).reduce(
       (sum, content) => sum + (content?.length || 0),
       0
     ),
     dimension_count: Object.keys(dimensionReports).length,
+    key_points: keyPoints.slice(0, 10),
   };
 }
 

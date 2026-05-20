@@ -26,10 +26,23 @@ MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "180"))  # 3 minutes
 LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "300"))  # 5 minutes
 
-# LLM Max Concurrent Requests (for asyncio.gather)
-# DashScope limit: ~5-10 concurrent requests
-# Updated from 4 to 8 for better parallelism
-LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "8"))
+# LLM Max Concurrent Requests (for asyncio.gather + asyncio.Semaphore)
+# qwen3.5-plus hard limit: 500 RPS / 30,000 RPM. 50 is safe with monitoring.
+# Can be tuned up to 100 with cold start.
+LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "50"))
+
+# LLM Rate Limit (requests_per_second for InMemoryRateLimiter)
+LLM_RATE_LIMIT_RPS = float(os.getenv("LLM_RATE_LIMIT_RPS", "500"))
+
+# Cold start duration: linearly ramp concurrency from 1 to max over this period
+LLM_WARMUP_SECONDS = float(os.getenv("LLM_WARMUP_SECONDS", "5.0"))
+
+# Embedding API rate limits (text-embedding-v4 ~30 QPS)
+EMBEDDING_MAX_CONCURRENT = int(os.getenv("EMBEDDING_MAX_CONCURRENT", "10"))
+EMBEDDING_RATE_LIMIT_RPS = float(os.getenv("EMBEDDING_RATE_LIMIT_RPS", "25"))
+
+# LangGraph Send API parallel node limit (prevents 28-dimension full-parallel burst)
+GRAPH_MAX_CONCURRENCY = int(os.getenv("GRAPH_MAX_CONCURRENCY", "50"))
 
 # OpenAI-compatible API base URL (for DeepSeek, etc.)
 OPENAI_API_BASE = os.getenv("OPENAI_API_BASE")

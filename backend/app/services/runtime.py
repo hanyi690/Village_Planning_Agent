@@ -39,7 +39,7 @@ from app.database.operations import (
 from app.api.schemas import TaskStatus
 from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service, checkpoint_persistence_manager
-from app.core.settings import MAX_SESSION_EVENTS
+from app.core.settings import MAX_SESSION_EVENTS, GRAPH_MAX_CONCURRENCY
 from app.agent.graph import create_unified_planning_graph
 from app.agent.state import (
     get_layer_dimensions,
@@ -76,6 +76,7 @@ class PlanningRuntimeService:
     _graph: Optional[StateGraph] = None
     _initialized: bool = False
     _lock: Optional[asyncio.Lock] = None
+    _execution_locks: Dict[str, asyncio.Lock] = {}
 
     # ==========================================
     # LangGraph Runtime Operations
@@ -219,6 +220,11 @@ class PlanningRuntimeService:
         constraints: str,
         session_id: str,
         village_name: str = "",
+        province: str = "",
+        city: str = "",
+        county: str = "",
+        township: str = "",
+        planning_period: str = "2022-2035年",
         enable_review: bool = False,
         stream_mode: bool = True,
         step_mode: bool = False,
@@ -251,6 +257,11 @@ class PlanningRuntimeService:
             "config": {
                 "village_data": village_data,
                 "village_name": village_name or project_name,
+                "province": province,
+                "city": city,
+                "county": county,
+                "township": township,
+                "planning_period": planning_period,
                 "task_description": task_description,
                 "constraints": constraints,
                 "rag_enabled": rag_enabled,  # Keep global switch (backward compatible)
@@ -496,6 +507,28 @@ class PlanningRuntimeService:
         """
         await cls.ensure_initialized()
 
+        # Execution guard: prevent duplicate execution for the same session
+        if session_id not in cls._execution_locks:
+            cls._execution_locks[session_id] = asyncio.Lock()
+
+        if cls._execution_locks[session_id].locked():
+            logger.warning(
+                "[PlanningRuntimeService] [%s] Execution already running, skipping duplicate trigger",
+                session_id,
+            )
+            return
+
+        async with cls._execution_locks[session_id]:
+            await cls._execute_planning(session_id, initial_state, checkpoint_id)
+
+    @classmethod
+    async def _execute_planning(
+        cls,
+        session_id: str,
+        initial_state: Optional[Dict[str, Any]] = None,
+        checkpoint_id: str = None,
+    ) -> None:
+        """Internal execution method called within the session lock."""
         # Wait for SSE subscriber to connect before starting execution
         # This prevents early dimension_delta events from being lost
         # Reduced timeout for script mode efficiency (1s instead of 5s)
@@ -531,8 +564,9 @@ class PlanningRuntimeService:
         )
         logger.info(f"[PlanningRuntimeService] [{session_id}] Synthetic AIMessage added as conversation output")
 
-        # 4. Build config with optional streaming callback
+        # 4. Build config with max_concurrency + optional streaming callback
         config = cls.get_thread_config(session_id, checkpoint_id=checkpoint_id)
+        config["max_concurrency"] = GRAPH_MAX_CONCURRENCY
 
         streaming_enabled = (initial_state.get("_streaming_enabled", True) if initial_state else True)
         if streaming_enabled:

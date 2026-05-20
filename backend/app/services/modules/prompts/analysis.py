@@ -14,7 +14,15 @@ ANALYSIS_RULES = """
 - 使用自然段落，不用编号列表（1.2.3.）
 - 基于输入数据，不编造信息
 - 缺失数据标注"数据中未提供"
-- 村名强制使用：**{village_name}**
+- 村名：**{village_name}**
+- 数值必须具体，带单位（公顷、人、㎡、km等）
+- 需要用表格呈现的数据使用markdown表格，必须含分隔行（| :--- |）
+**格式禁止**：
+- 禁止使用"第一章""第二章"等章节编号
+- 禁止使用"第一条""第二条"等条目编号
+- 禁止使用"（一）（二）"等分项编号
+- 禁止使用"1.""2.""3."等数字编号作为小标题
+- 使用【主题】格式标记段落主题，用自然段落叙述内容
 """
 
 # ==========================================
@@ -27,6 +35,9 @@ ANALYSIS_DIMENSIONS = {
         "prompt": """你是区位分析专家。
 
 **任务**：分析村庄地理位置与交通区位。
+
+**参考规范**：
+{knowledge_context}
 
 **输入数据**：
 {raw_data}
@@ -47,7 +58,10 @@ ANALYSIS_DIMENSIONS = {
         "name": "社会经济分析",
         "prompt": """你是社会经济分析专家。
 
-**任务**：分析村庄人口、经济、产业状况。
+**任务**：分析村庄人口、经济、产业状况。你的输出将被用于提取规划文本第5条（规划范围）的村庄名称和第8条（规划指标）的人口数据。
+
+**参考规范**：
+{knowledge_context}
 
 **输入数据**：
 {raw_data}
@@ -57,9 +71,25 @@ ANALYSIS_DIMENSIONS = {
 """ + ANALYSIS_RULES + """
 
 **输出骨架**：
-行政区划：下辖自然村名单（完整列出）
-人口情况：户籍/常住人口、劳动力流失、老龄化程度
-产业构成：第一/二/三产业描述，区分传统农业与特色农产品
+行政区划：下辖[X]个自然村，完整名单：[村名1]、[村名2]、[村名3]…（逐一完整列出，用顿号分隔）
+
+人口结构表（必须含分隔行）：
+| 指标 | 数值 |
+| :--- | :--- |
+| 户籍人口 | [X]人 |
+| 常住人口 | [X]人 |
+| 户数 | [X]户 |
+| 劳动力 | [X]人 |
+| 外出务工 | [X]人 |
+| 老龄化率 | [X]% |
+
+产业构成：
+第一产业：[具体作物/养殖类型]，种植面积[X]亩/公顷，年产量[X]，年产值[X]万元
+第二产业：[具体加工类型]，企业/作坊[X]家，年产值[X]万元，带动就业[X]人
+第三产业：[具体服务业类型]，年接待/服务量[X]，年收入[X]万元
+特色农产品：[名称]（种植[X]亩，年产值[X]万元，品牌/认证情况）
+收入水平：人均纯收入[X]元/年，主要收入来源分布（农业[X]%/务工[X]%/经营[X]%）
+劳动力情况：劳动力[X]人（占总人口[X]%），外出务工[X]人（占劳动力[X]%），本地就业[X]人
 
 请开始分析："""
     },
@@ -68,20 +98,35 @@ ANALYSIS_DIMENSIONS = {
         "name": "村民意愿与诉求分析",
         "prompt": """你是村民意愿分析专家。
 
-**任务**：分析村民发展期望与诉求。
+**任务**：分析村民发展期望与诉求。参照村庄现状台账和需求台账的结构化格式输出。
 
 **规划任务**：{task_description}
+
+**参考规范**：
+{knowledge_context}
 
 **输入数据**：
 {raw_data}
 
 """ + ANALYSIS_RULES + """
 
-**输出骨架**：
-诉求迫切性排序：按第一至第四层级排序（生活保障→环境改善→增收致富→公共服务）
-生活环境改善诉求：道路硬化、路灯、垃圾处理等具体需求
-增收致富诉求：产业引入、就业机会等
-参与意愿：参与积极性、投工投劳能力
+**输出结构**：
+
+【村庄发展诉求】
+
+产业发展诉求：
+【现状问题】[具体描述产业结构单一、经济效益不高等问题]
+【发展诉求】[具体诉求，如发展XX种植、结合XX资源发展XX产业]
+
+环境美化诉求：
+【现状问题】[具体描述道路硬化不足、景观缺乏等问题]
+【发展诉求】[具体诉求，如推进道路硬化、河道修复、生态修复等]
+
+配套设施诉求：
+【现状问题】[具体描述公共服务与基础设施缺乏、维护不善等问题]
+【发展诉求】[具体诉求，如盘活废弃设施、建设综合服务中心、加强设施管理维护等]
+
+诉求迫切性排序：生活保障→环境改善→增收致富→公共服务（按优先级排列）
 
 请开始分析："""
     },
@@ -115,7 +160,10 @@ ANALYSIS_DIMENSIONS = {
         "name": "自然环境分析",
         "prompt": """你是自然环境分析专家。
 
-**任务**：分析气候、地形、林地、水文条件。
+**任务**：分析气候、地形、林地、水文条件。地质灾害数据将被用于规划文本第17条（村庄安全和防灾减灾）。
+
+**参考规范**：
+{knowledge_context}
 
 **输入数据**：
 {raw_data}
@@ -125,10 +173,16 @@ ANALYSIS_DIMENSIONS = {
 """ + ANALYSIS_RULES + """
 
 **输出骨架**（四个子主题）：
-气候：气候类型、降水、温度、光照
-地质与地形地貌：地形类型、地质灾害隐患点
-林地资源：林地面积、类型、森林覆盖率
-水文与田园资源：河流、水库、灌溉水源
+气候：气候类型、年均降水[X]mm、年均温度[X]℃、日照时数[X]h
+地质与地形地貌：地形类型（山地/丘陵/平原）、海拔范围[X]-[X]m
+地质灾害隐患点（必须含表格，含分隔行）：
+| 灾害类型 | 数量(处) | 影响范围 | 主要分布位置 |
+| :--- | :--- | :--- | :--- |
+| 滑坡 | [X] | [自然村/道路/农田] | [具体位置] |
+| 崩塌 | [X] | [自然村/道路/农田] | [具体位置] |
+| 泥石流 | [X] | [自然村/道路/农田] | [具体位置] |
+林地资源：林地面积[X]公顷（占比[X]%）、主要树种、森林覆盖率[X]%
+水文与田园资源：主要河流[X]条、水库[X]座（总库容[X]万m³）、灌溉水源类型
 
 请开始分析："""
     },
@@ -137,7 +191,7 @@ ANALYSIS_DIMENSIONS = {
         "name": "土地利用分析",
         "prompt": """你是土地利用分析专家。
 
-**任务**：分析各类用地分布与利用效率。
+**任务**：分析各类用地分布与利用效率。你的输出将被用于规划文本的规划指标表（表2-1）和土地利用结构调整表（表3-X）。
 
 **参考规范**：
 {knowledge_context}
@@ -148,8 +202,21 @@ ANALYSIS_DIMENSIONS = {
 """ + ANALYSIS_RULES + """
 
 **输出骨架**：
-用地结构：农业/建设/生态用地面积与占比
-空间分布特征：建设用地形态（条带状/团块状/点状）
+土地总用地面积：[X]公顷
+
+用地结构表（必须含分隔行）：
+| 用地类型 | 面积(公顷) | 占比(%) |
+| :--- | :--- | :--- |
+| 农业用地 | [X] | [X] |
+| 建设用地 | [X] | [X] |
+| 生态用地 | [X] | [X] |
+| 水域 | [X] | [X] |
+| 合计 | [X] | 100 |
+
+耕地详情：耕地总面积[X]公顷（水田[X]公顷、旱地[X]公顷）、人均耕地[X]亩
+林地详情：林地总面积[X]公顷（商业林[X]公顷、生态公益林[X]公顷）、森林覆盖率[X]%
+建设用地详情：村庄建设用地[X]公顷（宅基地[X]公顷、公共设施用地[X]公顷、道路交通用地[X]公顷）
+空间分布特征：建设用地形态（条带状/团块状/点状），描述分布规律
 土地破碎化与闲置：耕地破碎度、闲置建设用地位置与原因
 利用效率：建筑密度、容积率、土地利用强度
 
@@ -161,6 +228,9 @@ ANALYSIS_DIMENSIONS = {
         "prompt": """你是道路交通分析专家。
 
 **任务**：分析对外与内部道路系统。
+
+**参考规范**：
+{knowledge_context}
 
 **输入数据**：
 {raw_data}
@@ -181,6 +251,9 @@ ANALYSIS_DIMENSIONS = {
         "prompt": """你是公共服务设施分析专家。
 
 **任务**：分析教育、医疗、文化等设施配置。
+
+**参考规范**：
+{knowledge_context}
 
 **输入数据**：
 {raw_data}
@@ -254,6 +327,9 @@ ANALYSIS_DIMENSIONS = {
 
 **任务**：分析建筑质量、年代、高度、功能特征。
 
+**参考规范**：
+{knowledge_context}
+
 **输入数据**：
 {raw_data}
 
@@ -286,7 +362,7 @@ ANALYSIS_DIMENSIONS = {
 
 **输出骨架**（六个子主题）：
 传统风貌建筑：祠堂数量位置规模、特色民居类型
-历史环境要素：古树名木树种树龄、古驿道古桥位置
+历史环境要素：古树名木树种树龄、古道古桥等遗存位置
 非物质文化遗产：传统技艺、民俗表演、节庆习俗
 传统美食与习俗：特色小吃、制作工艺传承
 民间信仰：伯公坛、公王庙位置、祭祀活动
@@ -330,12 +406,11 @@ def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: s
     effective_village_name = village_name or "该村"
     prompt = prompt.replace("{village_name}", effective_village_name)
 
-    # 生成专业数据部分
-    professional_data_section = _generate_professional_data_section(dimension_key, professional_data)
+    # Professional data section is now injected by DataPipeline upstream
 
     result = prompt.format(
         raw_data=raw_data,
-        professional_data_section=professional_data_section,
+        professional_data_section=professional_data if professional_data else "",
         task_description=task_description if task_description else "未提供具体规划任务",
         constraints=constraints if constraints else "无特殊约束",
         knowledge_context=knowledge_context if knowledge_context else "暂无相关规范标准参考"
@@ -347,82 +422,6 @@ def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: s
 
     return result
 
-
-def _generate_professional_data_section(dimension_key: str, professional_data: dict = None) -> str:
-    """
-    生成专业数据部分的 Prompt 文本
-
-    Args:
-        dimension_key: 维度键名
-        professional_data: 来自黑板的专业数据
-
-    Returns:
-        专业数据部分的 Prompt 文本
-    """
-    if not professional_data:
-        return ""
-
-    # 处理字符串输入
-    if isinstance(professional_data, str):
-        return f"\n**【专业数据】**：\n{professional_data}\n"
-
-    sections = []
-
-    # 自然环境维度的专业数据
-    if dimension_key == "natural_environment":
-        if professional_data.get("soil_analysis"):
-            soil = professional_data["soil_analysis"]
-            sections.append(f"""
-**【专业数据 - 土壤分析】**：
-- 土壤类型：{', '.join([s['type'] for s in soil.get('soil_types', [])])}
-- 土壤质量指数：{soil.get('soil_quality_index', 'N/A')}
-""")
-
-        if professional_data.get("hydrology_analysis"):
-            hydro = professional_data["hydrology_analysis"]
-            sections.append(f"""
-**【专业数据 - 水文分析】**：
-- 主要水系：{', '.join([w['name'] for w in hydro.get('water_systems', [])])}
-""")
-
-    # 社会经济维度的专业数据
-    elif dimension_key == "socio_economic":
-        if professional_data.get("population_structure"):
-            pop = professional_data["population_structure"]
-            sections.append(f"""
-**【专业数据 - 人口结构】**：
-- 劳动参与率：{pop.get('labor_force_participation_rate', 'N/A')}%
-""")
-
-        if professional_data.get("labor_force_analysis"):
-            labor = professional_data["labor_force_analysis"]
-            sections.append(f"""
-**【专业数据 - 劳动力】**：
-- 劳动力规模：{labor.get('labor_force_size', 'N/A')} 人
-""")
-
-    # 土地利用维度的专业数据
-    elif dimension_key == "land_use":
-        if professional_data.get("land_use_analysis"):
-            land_use = professional_data["land_use_analysis"]
-            sections.append(f"""
-**【专业数据 - 土地利用】**：
-- 总面积：{land_use.get('total_area', 'N/A')} 平方公里
-""")
-
-    # 道路交通维度的专业数据
-    elif dimension_key == "traffic":
-        if professional_data.get("connectivity_metrics"):
-            conn = professional_data["connectivity_metrics"]
-            sections.append(f"""
-**【专业数据 - 路网连通度】**：
-- 路网密度：{conn.get('network_density', 'N/A')} 公里/平方公里
-""")
-
-    if sections:
-        return "\n".join(sections)
-
-    return ""
 
 
 def list_dimensions():
@@ -436,18 +435,6 @@ def list_dimensions():
     ]
 
 
-def get_specialized_data(dimension_key: str, state: dict) -> dict:
-    """
-    获取专业数据（占位函数）
-
-    Args:
-        dimension_key: 维度键名
-        state: 当前状态字典
-
-    Returns:
-        专业数据字典
-    """
-    return {}
 
 
 # ==========================================
@@ -459,5 +446,4 @@ __all__ = [
     "ANALYSIS_RULES",
     "get_dimension_prompt",
     "list_dimensions",
-    "get_specialized_data",
 ]

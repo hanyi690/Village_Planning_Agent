@@ -17,6 +17,7 @@ class DimensionConfig(BaseModel):
     name: str
     tools: List[str] = Field(default_factory=list)
     rag_query: str = ""
+    prefer_doc_types: List[str] = Field(default_factory=list)
     depends_on: List[str] = Field(default_factory=list)
     layer_depends_on: List[str] = Field(default_factory=list)
     phase_depends_on: List[str] = Field(default_factory=list)

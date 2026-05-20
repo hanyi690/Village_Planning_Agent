@@ -788,32 +788,16 @@ class SSEManager:
                 logger.warning(f"[SSEManager] Session {session_id}: No subscribers, event cached")
             return
 
-        success_count = 0
+        # Blocking put: when queue is full, publisher waits → backpressure upstream
         for queue in list(subscribers):
-            try:
-                queue.put_nowait(event)
-                success_count += 1
-            except asyncio.QueueFull:
-                # Try blocking wait with timeout before falling back to cache
-                try:
-                    await asyncio.wait_for(queue.put(event), timeout=SSE_QUEUE_WAIT_TIMEOUT)
-                    success_count += 1
-                except asyncio.TimeoutError:
-                    # Cache to pending_events for later retry
-                    with cls._pending_events_lock:
-                        cls._pending_events.setdefault(session_id, []).append(event)
-                        pending_count = len(cls._pending_events[session_id])
-                    logger.warning(
-                        f"[SSEManager] Session {session_id}: Queue full after {SSE_QUEUE_WAIT_TIMEOUT}s wait, "
-                        f"event cached to pending (total pending: {pending_count})"
-                    )
+            await queue.put(event)
 
         if event_type in [SSEEventType.LAYER_COMPLETED, SSEEventType.DIMENSION_COMPLETE]:
-            logger.info(f"[SSEManager] Session {session_id}: {event_type} sent to {success_count} subscribers")
+            logger.info(f"[SSEManager] Session {session_id}: {event_type} sent to {len(subscribers)} subscribers")
         elif event_type == SSEEventType.RAG_RESULT:
-            logger.info(f"[SSEManager] Session {session_id}: {event_type} sent to {success_count} subscribers")
-        else:
-            logger.debug(f"[SSEManager] Session {session_id}: {event_type} sent to {success_count} subscribers")
+            logger.info(f"[SSEManager] Session {session_id}: {event_type} sent to {len(subscribers)} subscribers")
+        elif len(subscribers) > 0:
+            logger.debug(f"[SSEManager] Session {session_id}: {event_type} sent to {len(subscribers)} subscribers")
 
     @classmethod
     def publish_sync(cls, session_id: str, event: Dict[str, Any]) -> None:

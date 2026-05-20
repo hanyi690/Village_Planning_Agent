@@ -19,8 +19,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Callable
 from dataclasses import dataclass
 
-from cachetools import TTLCache
-
 from langchain_core.documents import Document
 
 from app.utils.logger import get_logger
@@ -58,7 +56,6 @@ class RagService:
     _lock: threading.Lock = threading.Lock()
     _vector_store = None
     _cache = None
-    _query_cache: TTLCache = TTLCache(maxsize=1000, ttl=3600)
 
     def __init__(self):
         """Initialize RAG service"""
@@ -82,18 +79,36 @@ class RagService:
         return cls._instance
 
     def _build_query_prompt(self, dim_name: str, task_desc: str, layer: int,
-                            dependency_summaries: List[str]) -> str:
-        """根据 Layer 构建不同的 Prompt
+                            dependency_summaries: List[str],
+                            dim_key: str = "",
+                            village_context: str = "",
+                            extra_keywords: str = "") -> str:
+        """根据 Layer 和维度构建不同的 Prompt"""
+        # Special case: superior_planning needs planning documents, not tech standards
+        if dim_key == "superior_planning" and layer == 1:
+            loc_line = f"\n## 村庄位置\n{village_context}\n" if village_context else ""
+            kw_line = f"\n## 已知上位规划关键词\n{extra_keywords}\n" if extra_keywords else ""
+            return f"""你是一个专业的国土空间规划专家。为村庄规划的上位规划分析生成精准的检索查询。
+{loc_line}{kw_line}
+## 分析任务
+- 维度：{dim_name}
+- 关键词：{task_desc}
 
-        Args:
-            dim_name: 维度名称
-            task_desc: 任务描述（rag_query）
-            layer: 层级（1=现状分析, 2=规划思路, 3=详细规划）
-            dependency_summaries: 依赖摘要列表
+## 检索目标（按优先级）
+检索村庄上位规划分析所需的：
+1. 省/市/县各级国土空间总体规划文本
+2. 上级政府对乡镇总体规划的批复文件
+3. 与村庄规划相关的省级/市级专项规划和政策文件
+4. 三区三线划定方案和规划管控要求
 
-        Returns:
-            定制化的 Prompt
-        """
+## 生成要求
+生成 4-6 条精准查询（每条 10-20 字），要求：
+1. 包含具体的地名（如省/市/县名称），以检索到地方性规划文件
+2. 使用上位规划专业术语（如"国土空间总体规划""三区三线""镇村体系规划"）
+3. 侧重规划文件本身而非技术指标
+
+直接输出查询（每行一条），不要编号或解释。"""
+
         if layer == 1:
             # Layer 1: 现状分析 - 侧重分析方法和技术标准
             return f"""你是一个专业的村庄规划现状分析专家。为以下分析任务生成精准的检索查询。
@@ -221,14 +236,6 @@ class RagService:
 
         all_deps = depends_on + layer_depends_on + phase_depends_on
 
-        # 生成缓存键：维度 + rag_query + 依赖列表 + layer
-        # 关键修复：包含 rag_query 以区分不同的检索词
-        cache_key = self._make_query_cache_key(dim_key, task_desc, all_deps + [f"layer{dim_layer}"])
-        cached = self._get_cached_queries(cache_key)
-        if cached:
-            logger.info(f"[RagService] Using cached queries for {dim_key}")
-            return cached
-
         store = ReportStore.get_instance()
 
         # 批量加载依赖摘要（避免 N+1 查询）
@@ -245,8 +252,49 @@ class RagService:
         else:
             dependency_summaries = []
 
+        # Extract village location context from state config (structured fields)
+        village_context = ""
+        extra_keywords = ""
+        if dim_key == "superior_planning":
+            config = state.get("config", {})
+            province = config.get("province", "")
+            city = config.get("city", "")
+            county = config.get("county", "")
+            township = config.get("township", "")
+            location_parts = [province, city, county, township]
+            village_context = ''.join(p for p in location_parts if p)
+
+            # Fallback: regex extraction from village_data
+            if not village_context:
+                village_data = config.get("village_data", "")
+                if village_data:
+                    loc_match = re.search(r'([^\s]+省)([^\s]+市)([^\s]+县)([^\s]+镇)', village_data[:2000])
+                    if loc_match:
+                        village_context = f"{loc_match.group(1)}{loc_match.group(2)}{loc_match.group(3)}{loc_match.group(4)}"
+
+            if not village_context:
+                village_name = state.get("village_name", "") or config.get("village_name", "")
+                village_context = village_name
+
+            # Flash LLM preprocessing: extract superior planning keywords
+            village_data = config.get("village_data", "")
+            if village_data:
+                try:
+                    kw_prompt = f"""从以下村庄现状报告中提取所有涉及上位规划的文档名称和关键词。只输出名称，每行一个，不要解释。
+
+{village_data[:2000]}
+
+上位规划文档名称和关键词："""
+                    flash_llm = create_flash_llm(max_tokens=150, temperature=0.1)
+                    kw_response = await flash_llm.ainvoke(kw_prompt)
+                    extra_keywords = kw_response.content.strip()[:300] if hasattr(kw_response, 'content') else ""
+                except Exception:
+                    pass
+
         # 使用分 Layer Prompt
-        prompt = self._build_query_prompt(dim_name, task_desc, dim_layer, dependency_summaries)
+        prompt = self._build_query_prompt(dim_name, task_desc, dim_layer, dependency_summaries,
+                                          dim_key=dim_key, village_context=village_context,
+                                          extra_keywords=extra_keywords)
 
         # 使用 Flash LLM 生成查询
         llm = create_flash_llm(max_tokens=200, temperature=0.3)
@@ -255,43 +303,10 @@ class RagService:
             response = await llm.ainvoke(prompt)
             queries = [q.strip() for q in response.content.split("\n") if q.strip()]
             logger.info(f"[RagService] Generated {len(queries)} queries for {dim_key} (layer={dim_layer}): {queries[:3]}...")
-            # 缓存结果
-            self._cache_queries(cache_key, queries[:8])
             return queries[:8]
         except Exception as e:
             logger.error(f"[RagService] Query generation failed: {e}")
             return [f"{dim_name} 规划 技术标准"]
-
-    def _make_query_cache_key(self, dim_key: str, task_desc: str, deps: List[str]) -> str:
-        """生成查询缓存键
-
-        Args:
-            dim_key: 维度键
-            task_desc: rag_query 检索词（关键：区分不同检索词）
-            deps: 依赖列表
-        """
-        deps_str = ",".join(sorted(deps))
-        # 包含 task_desc 以确保不同检索词有不同的缓存
-        return hashlib.md5(f"{dim_key}:{task_desc}:{deps_str}".encode()).hexdigest()
-
-    def _get_cached_queries(self, cache_key: str) -> Optional[List[str]]:
-        """从缓存获取查询"""
-        if cache_key in self._query_cache:
-            cached_data = self._query_cache[cache_key]
-            if isinstance(cached_data, dict):
-                if time.time() - cached_data["timestamp"] < self._query_cache_ttl:
-                    return cached_data["queries"]
-                else:
-                    del self._query_cache[cache_key]
-        return None
-
-    def _cache_queries(self, cache_key: str, queries: List[str]) -> None:
-        """缓存查询结果"""
-        self._query_cache[cache_key] = {
-            "queries": queries,
-            "timestamp": time.time()
-        }
-        logger.debug(f"[RagService] Cached queries: {cache_key[:8]}...")
 
     async def generate_query(
         self,
@@ -314,7 +329,8 @@ class RagService:
     async def search(
         self,
         query: str,
-        top_k: int = 3
+        top_k: int = 3,
+        prefer_doc_types: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Search vector store for relevant documents
@@ -322,6 +338,7 @@ class RagService:
         Args:
             query: Search query
             top_k: Number of results
+            prefer_doc_types: Optional list of doc_types to prefer (e.g. ["policy", "standard"])
 
         Returns:
             List of {content, metadata, score}
@@ -331,7 +348,9 @@ class RagService:
             return []
 
         try:
-            results = self._vector_store.retrieve(query, k=top_k)
+            results = self._vector_store.retrieve(
+                query, k=top_k, doc_types=prefer_doc_types
+            )
             logger.info(f"[RagService] Found {len(results)} results for: {query[:50]}")
             return results
         except Exception as e:
@@ -463,7 +482,6 @@ class RagService:
         category: Optional[str] = None,
         skip_summary: bool = True,
         doc_type: Optional[str] = None,
-        dimension_tags: Optional[list] = None,
         terrain: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
@@ -474,7 +492,6 @@ class RagService:
             category: Document category (policies/cases)
             skip_summary: Skip summary generation
             doc_type: Document type (textbook/guide/policy/standard/case/report)
-            dimension_tags: Dimension tags to inject
             terrain: Terrain type to inject
 
         Returns:
@@ -540,8 +557,6 @@ class RagService:
             for chunk in chunks:
                 chunk.metadata["doc_type"] = doc_type
                 chunk.metadata["category"] = category or "policies"
-                if dimension_tags:
-                    chunk.metadata["dimension_tags"] = dimension_tags
                 if terrain:
                     chunk.metadata["terrain"] = terrain
 
@@ -688,7 +703,6 @@ class RagService:
         progress_callback: Callable[[float, str], None],
         category: Optional[str] = None,
         doc_type: Optional[str] = None,
-        dimension_tags: Optional[list] = None,
         terrain: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add document with progress callback (for async task manager)"""
@@ -737,8 +751,6 @@ class RagService:
             for chunk in chunks:
                 chunk.metadata["doc_type"] = doc_type
                 chunk.metadata["category"] = category or "policies"
-                if dimension_tags:
-                    chunk.metadata["dimension_tags"] = dimension_tags
                 if terrain:
                     chunk.metadata["terrain"] = terrain
             progress_callback(60.0, "Metadata injection complete")

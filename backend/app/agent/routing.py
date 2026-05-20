@@ -152,14 +152,41 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
         if all(dep in completed for dep in dim.depends_on):
             ready_dims.append(dim.key)
 
+    # Continuous mode: check next-layer dims whose cross-layer deps are ready
+    # Must run even when current-layer has no ready dims (all dispatched)
+    cross_ready = []
+    next_layer = layer + 1
+    if next_layer <= 3 and not state.get("step_mode"):
+        next_dims = list_dimensions(next_layer)
+        next_completed = state.get("completed_dimensions", {}).get(f"layer{next_layer}", [])
+        completed_all = state.get("completed_dimensions", {})
+        for dim in next_dims:
+            if dim.key in next_completed:
+                continue
+            if not all(dep in next_completed for dep in dim.depends_on):
+                continue
+            cross_deps = list(getattr(dim, 'layer_depends_on', []) or [])
+            if not all(dep in completed for dep in cross_deps):
+                continue
+            phase_deps = list(getattr(dim, 'phase_depends_on', []) or [])
+            prev_layer_key = f"layer{layer}"
+            prev_completed = completed_all.get(prev_layer_key, [])
+            if not all(dep in prev_completed for dep in phase_deps):
+                continue
+            cross_ready.append(dim.key)
+            logger.info(
+                "[after_analysis] Cross-layer early dispatch: %s (layer=%s, cross_deps=%s)",
+                dim.key, next_layer, cross_deps + phase_deps,
+            )
+
     logger.info(
-        "[after_analysis] phase=%s layer=%s completed=%s ready=%s",
-        phase, layer, completed, ready_dims,
+        "[after_analysis] phase=%s layer=%s completed=%s ready=%s cross_ready=%s",
+        phase, layer, completed, ready_dims, cross_ready,
     )
 
-    # Dispatch ready dimensions (dependencies satisfied)
-    if ready_dims:
-        return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in ready_dims]
+    all_ready = ready_dims + cross_ready
+    if all_ready:
+        return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in all_ready]
 
     logger.info("[after_analysis] No ready dims, returning END")
     return END

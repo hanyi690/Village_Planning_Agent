@@ -345,6 +345,14 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
         "execution_paused": state.get("execution_paused", False),
         "previous_layer": state.get("previous_layer", 0),
         "messages": messages_ui,
+        # 项目上下文（优先使用 db_session 数据，因为是持久化的）
+        "project_name": db_session.get("project_name") if db_session else state.get("project_name", ""),
+        "village_name": db_session.get("village_name") if db_session else state.get("config", {}).get("village_name", ""),
+        "province": db_session.get("province") if db_session else state.get("config", {}).get("province", ""),
+        "city": db_session.get("city") if db_session else state.get("config", {}).get("city", ""),
+        "county": db_session.get("county") if db_session else state.get("config", {}).get("county", ""),
+        "township": db_session.get("township") if db_session else state.get("config", {}).get("township", ""),
+        "planning_period": db_session.get("planning_period") if db_session else state.get("config", {}).get("planning_period", "2022-2035年"),
     }
 
 

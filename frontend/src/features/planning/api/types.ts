@@ -227,6 +227,11 @@ export interface StartPlanningRequest {
   project_name: string;
   village_data: string;
   village_name?: string;
+  province?: string;       // 省份
+  city?: string;           // 地级市
+  county?: string;         // 县/区
+  township?: string;       // 乡镇
+  planning_period?: string; // 规划期限，如 "2022-2035年"
   task_description?: string;
   constraints?: string;
   enable_review?: boolean;
@@ -292,6 +297,15 @@ export interface SessionStatusResponse {
   execution_complete: boolean;
   checkpoints?: Checkpoint[];
 
+  // 项目上下文（用于页面刷新后恢复）
+  project_name?: string;
+  village_name?: string;
+  province?: string;
+  city?: string;
+  county?: string;
+  township?: string;
+  planning_period?: string;
+
   // Messages
   messages?: Array<{
     type: string;
@@ -353,7 +367,6 @@ export interface RetrievedChunk {
   content_preview: string;
   source: string;
   score: number;
-  dimension_tags: string[];
 }
 
 /**

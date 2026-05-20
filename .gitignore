@@ -95,6 +95,7 @@ knowledge_base/
 *.docx
 *.doc
 *.pdf
+*.zip
 
 # Reference code repositories (for learning purposes only)
 docs/references/

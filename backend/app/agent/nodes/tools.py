@@ -55,7 +55,9 @@ async def execute_tools_node(state: Dict[str, Any]) -> Dict[str, Any]:
             result = ToolRegistry.execute_tool(tool_name, {
                 **tool_args,
                 "session_id": session_id,
-                "project_name": state.get("project_name", "")
+                "project_name": state.get("project_name", ""),
+                "_dep_metrics": state.get("_dep_metrics", {}),
+                "structured_summary": state.get("structured_summary"),
             })
 
             tool_results.append(ToolMessage(
