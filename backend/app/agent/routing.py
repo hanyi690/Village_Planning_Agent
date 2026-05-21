@@ -57,16 +57,18 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
             return END
 
         # 计算影响树（wave 0 = 目标维度，wave 1+ = 下游波次）
-        impact_tree: Dict[int, List[str]] = {}
+        # get_impact_tree_compat 返回 {1: [...], 2: [...]}（从 Wave 1 开始）
+        # 我们需要将其转换为 {1: [...], 2: [...]} 并添加 Wave 0
+        downstream_tree: Dict[int, List[str]] = {}
         for target_dim in target_dims:
             tree = get_impact_tree_compat(target_dim)
             for wave, dims in tree.items():
-                impact_tree.setdefault(wave + 1, []).extend(dims)
+                downstream_tree.setdefault(wave, []).extend(dims)
 
         wave0_dims = list(set(target_dims))
         final_tree = {0: wave0_dims}
-        for wave in sorted(impact_tree.keys()):
-            final_tree[wave] = list(set(impact_tree[wave]))
+        for wave in sorted(downstream_tree.keys()):
+            final_tree[wave] = list(set(downstream_tree[wave]))
 
         logger.info(
             "[after_conversation] Cascade revision: targets=%s, impact_tree waves=%s dims=%s",
@@ -78,6 +80,13 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
         new_completed = _reset_dimensions(state.get("completed_dimensions", {}), all_dims)
 
         # 仅分发 Wave 0（目标维度），保留 feedback 供下游读取
+        logger.info(
+            "[after_conversation] Wave 0 dispatch: %s -> analyze_dimension, final_tree=%s",
+            wave0_dims,
+            final_tree,
+        )
+        for d in wave0_dims:
+            logger.debug("[after_conversation] Sending dimension: %s", d)
         return [Send("analyze_dimension", {
             **state, "dimension_key": d,
             "completed_dimensions": new_completed,
@@ -112,17 +121,98 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
     2. execution_paused -> END（等待审批）
     3. 待处理维度 -> Send 分发（检查同层依赖）
     """
-    # 级联修订波次推进：按 impact_tree 波次顺序分发
     is_revision = state.get("is_revision", False)
+
+    # 级联修订：使用依赖检查逻辑，而非简单波次分发
     if is_revision:
         impact_tree = state.get("revision_impact_tree", {})
         completed = state.get("revision_completed_dims", {})
-        all_completed = [d for dims in completed.values() for d in dims]
-        next_wave = get_next_revision_wave(impact_tree, all_completed)
-        if next_wave:
-            logger.info("[after_analysis] Revision wave dispatch: %s", next_wave)
-            return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in next_wave]
-        logger.info("[after_analysis] All revision waves complete")
+        revision_completed = [d for dims in completed.values() for d in dims]
+        target_dims = state.get("revision_target_dimensions", [])
+
+        logger.info(
+            "[after_analysis] Revision state: impact_tree=%s, completed=%s, revision_completed=%s, target_dims=%s",
+            {w: len(d) for w, d in impact_tree.items()} if impact_tree else {},
+            completed,
+            revision_completed,
+            target_dims,
+        )
+
+        # 获取所有需要修订的维度（目标 + 下游）
+        # 注意：impact_tree 包含 Wave 0，所以不需要再加 target_dims
+        impact_tree = state.get("revision_impact_tree", {})
+        all_revision_dims = [d for dims in impact_tree.values() for d in dims]
+        # 去重
+        all_revision_dims = list(set(all_revision_dims))
+
+        # 基线已完成的维度（不受修订影响的维度，作为依赖检查的基准）
+        baseline_completed = state.get("completed_dimensions", {})
+        logger.info("[after_analysis] baseline_completed type=%s, keys=%s", type(baseline_completed).__name__, list(baseline_completed.keys()) if isinstance(baseline_completed, dict) else "N/A")
+        baseline_dims = [d for dims in baseline_completed.values() for d in dims]
+
+        # 合并：基线完成 + 修订完成
+        all_completed = baseline_dims + revision_completed
+
+        # 检查哪些维度的依赖已完成
+        from ..config.loader import list_dimensions, get_dimension_layer
+
+        logger.info(
+            "[after_analysis] Checking deps: all_completed=%s",
+            all_completed,
+        )
+
+        ready_dims = []
+        for dim_key in all_revision_dims:
+            # 跳过已修订完成的维度（不是基线完成的维度！）
+            if dim_key in revision_completed:
+                logger.info("[after_analysis] %s already revision_completed, skipping", dim_key)
+                continue
+
+            # 获取维度配置
+            dim_layer = get_dimension_layer(dim_key)
+            dim_configs = list_dimensions(dim_layer)
+            dim_config = next((d for d in dim_configs if d.key == dim_key), None)
+
+            if not dim_config:
+                logger.info("[after_analysis] %s config not found", dim_key)
+                continue
+
+            # 检查同层依赖是否完成
+            same_layer_deps = dim_config.depends_on or []
+            cross_layer_deps = list(dim_config.layer_depends_on or []) + list(dim_config.phase_depends_on or [])
+
+            same_layer_ok = all(dep in all_completed for dep in same_layer_deps)
+            cross_layer_ok = all(dep in all_completed for dep in cross_layer_deps)
+
+            logger.info(
+                "[after_analysis] %s check: same_layer_deps=%s cross_layer_deps=%s, same_layer_ok=%s cross_layer_ok=%s",
+                dim_key, same_layer_deps, cross_layer_deps, same_layer_ok, cross_layer_ok,
+            )
+
+            if same_layer_ok and cross_layer_ok:
+                ready_dims.append(dim_key)
+            else:
+                # Debug: why not ready
+                missing_same = [d for d in same_layer_deps if d not in all_completed]
+                missing_cross = [d for d in cross_layer_deps if d not in all_completed]
+                if missing_same or missing_cross:
+                    logger.info(
+                        "[after_analysis] %s not ready: missing_same=%s missing_cross=%s",
+                        dim_key, missing_same, missing_cross,
+                    )
+
+        if ready_dims:
+            logger.info("[after_analysis] Revision ready dims (dependency-checked): %s", ready_dims)
+            return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in ready_dims]
+
+        # 检查是否所有修订维度都已完成（只检查 revision_completed，不含基线）
+        if set(revision_completed) >= set(all_revision_dims):
+            logger.info("[after_analysis] All revision dims complete")
+            return END
+
+        # 还有维度未完成但依赖未就绪，等待
+        pending = [d for d in all_revision_dims if d not in revision_completed]
+        logger.info("[after_analysis] Revision waiting for deps: %s", pending)
         return END
 
     phase = state.get("phase", "layer1")

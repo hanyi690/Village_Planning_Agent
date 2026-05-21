@@ -147,31 +147,97 @@ def get_downstream_dependencies_compat(dimension_key: str) -> List[str]:
 
 
 def get_impact_tree_compat(dimension_key: str) -> Dict[int, List[str]]:
-    """获取维度修改后的影响树"""
-    impact_tree: Dict[int, List[str]] = {}
+    """获取维度修改后的影响树（正确计算 Wave 编号）
+
+    Wave 编号基于依赖维度的最大 Wave + 1，而非简单的 BFS 层级。
+    例如：
+    - project_bank 依赖 industry(Wave 1) 和 traffic_planning(Wave 2)
+    - project_bank 应在 Wave 3 (max(1, 2) + 1)
+    """
+    # 获取所有下游维度
+    all_downstream: Set[str] = set()
     visited = {dimension_key}
-    current_wave_dims = [dimension_key]
-    wave = 0
+    queue = [dimension_key]
 
-    while current_wave_dims:
-        next_wave_dims = []
-        for dim in current_wave_dims:
-            downstream = get_downstream_dependencies_compat(dim)
-            for dep_dim in downstream:
-                if dep_dim not in visited:
-                    visited.add(dep_dim)
-                    next_wave_dims.append(dep_dim)
+    while queue:
+        current = queue.pop(0)
+        downstream = get_downstream_dependencies_compat(current)
+        for dep_dim in downstream:
+            if dep_dim not in visited:
+                visited.add(dep_dim)
+                all_downstream.add(dep_dim)
+                queue.append(dep_dim)
 
-        if next_wave_dims:
-            wave += 1
-            chain = get_full_dependency_chain()
-            sorted_dims = sorted(
-                next_wave_dims,
-                key=lambda d: chain.get(d, {}).get("wave", 1)
+    if not all_downstream:
+        return {}
+
+    # 获取完整依赖链（包含每个维度的依赖关系）
+    chain = get_full_dependency_chain()
+
+    # 计算每个下游维度的正确 Wave 编号
+    # Wave = max(依赖维度的 Wave) + 1
+    # 需要迭代计算，直到所有维度的 Wave 都稳定
+    dim_waves: Dict[str, int] = {}
+
+    # 初始化：目标维度 Wave = 0
+    dim_waves[dimension_key] = 0
+
+    # 迭代计算直到稳定
+    max_iterations = len(all_downstream) + 1
+    for _ in range(max_iterations):
+        changed = False
+        for dim in all_downstream:
+            if dim in dim_waves:
+                continue
+
+            # 获取该维度的所有依赖
+            deps = chain.get(dim, {})
+            all_deps = (
+                deps.get("depends_on_same_layer", []) +
+                deps.get("layer_depends_on", []) +
+                deps.get("phase_depends_on", [])
             )
-            impact_tree[wave] = sorted_dims
 
-        current_wave_dims = next_wave_dims
+            # 检查是否所有依赖都已计算 Wave
+            # 如果依赖在 all_downstream 中但未计算，跳过
+            # 如果依赖不在 all_downstream 中（如基线维度），Wave = 0
+            deps_ready = True
+            max_dep_wave = 0
+            for dep in all_deps:
+                if dep in all_downstream:
+                    if dep not in dim_waves:
+                        deps_ready = False
+                        break
+                    max_dep_wave = max(max_dep_wave, dim_waves[dep])
+                # 基线维度（不在 all_downstream 中）Wave = 0
+
+            if deps_ready:
+                dim_waves[dim] = max_dep_wave + 1
+                changed = True
+
+        if not changed:
+            break
+
+    # 未计算的维度（循环依赖等）设为 Wave 1
+    for dim in all_downstream:
+        if dim not in dim_waves:
+            dim_waves[dim] = 1
+
+    # 按 Wave 分组
+    impact_tree: Dict[int, List[str]] = {}
+    for dim, wave in dim_waves.items():
+        if dim == dimension_key:
+            continue  # 不包含目标维度本身
+        if wave not in impact_tree:
+            impact_tree[wave] = []
+        impact_tree[wave].append(dim)
+
+    # 按 Wave 编号排序每个波次内的维度
+    for wave in impact_tree:
+        impact_tree[wave] = sorted(
+            impact_tree[wave],
+            key=lambda d: chain.get(d, {}).get("wave", 1)
+        )
 
     return impact_tree
 

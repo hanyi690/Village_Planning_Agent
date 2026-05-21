@@ -127,6 +127,14 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     from ...services import RagService
     from ...services.sse import sse_manager
+
+    # Debug: log revision_impact_tree at entry
+    if state.get("is_revision"):
+        logger.info(
+            "[analyze_dimension] Revision entry: dim=%s, impact_tree=%s",
+            state.get("dimension_key"),
+            state.get("revision_impact_tree"),
+        )
     from ...services.report_store import ReportStore
 
     dim_key = state.get("dimension_key")
@@ -511,6 +519,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         rev_completed = _build_revision_completed(state, dim_key)
         if rev_completed:
             result["revision_completed_dims"] = rev_completed
+        # 注意：不再返回 revision_impact_tree，因为它是只读的
+        # 多个并发节点同时返回会导致 LangGraph 合并冲突
 
     return result
 
@@ -557,11 +567,12 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
 
     # Professional data from DataPipeline (tool results formatted for prompt)
 
-    # 级联修订指令：要求LLM根据驳回反馈实质性重写报告内容
-    revision_section = ""
+    # 根据层级选择 Prompt 模板
+    # 级联修订指令：独立参数，不再混入 knowledge_context
+    revision_instruction = ""
     if state.get("is_revision"):
         revision_feedback = state.get("revision_feedback", "")
-        revision_section = f"""\n【级联修订指令 - 必须执行】
+        revision_instruction = f"""【级联修订指令 - 必须执行】
 你的上级专家对你的报告提出了以下驳回意见：
 
 "{revision_feedback}"
@@ -571,9 +582,8 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
 2. 在报告正文中体现驳回意见要求的调整方向
 3. 修改后的报告应能体现出与修改前的明确差异
 4. 保留原有报告格式和结构框架
-5. 不要添加"修订摘要"章节，直接在正文中修改相关内容\n"""
+5. 不要添加"修订摘要"章节，直接在正文中修改相关内容"""
 
-    # 根据层级选择 Prompt 模板
     if layer == 1:
         return get_layer1_prompt(
             dimension_key=dim_key,
@@ -581,7 +591,8 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             village_name=village_name,
             task_description=task_desc,
             constraints=constraints,
-            knowledge_context=revision_section + (rag_context or ""),
+            knowledge_context=rag_context or "",
+            revision_instruction=revision_instruction,
             has_images=bool(state.get("image_ids")),
         )
     elif layer == 2:
@@ -590,7 +601,8 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             analysis_report=deps,
             task_description=task_desc,
             constraints=constraints,
-            knowledge_context=revision_section + (rag_context or ""),
+            knowledge_context=rag_context or "",
+            revision_instruction=revision_instruction,
             layer2_contexts=same_layer_contexts,  # 传递同层依赖报告
             professional_data=professional_data_section,  # 注入工具计算结果
         )
@@ -601,7 +613,8 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             analysis_report=deps,
             planning_concept=deps,  # 使用相同的依赖报告
             constraints=constraints,
-            knowledge_context=revision_section + (rag_context or ""),
+            knowledge_context=rag_context or "",
+            revision_instruction=revision_instruction,
             professional_data_section=professional_data_section,
         )
 

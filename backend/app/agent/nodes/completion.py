@@ -27,6 +27,14 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
     3. If layer complete + step_mode=False -> auto-advance phase,
        send layer_completed + layer_started for next layer
     """
+    # Debug: log entry to confirm execution
+    is_revision = state.get("is_revision", False)
+    pending_count = len(state.get("pending_reports", []))
+    logger.info(
+        "[layer_completion_check] entry: is_revision=%s pending_reports=%d",
+        is_revision, pending_count,
+    )
+
     from app.agent.state import (
         _phase_to_layer, get_layer_dimensions, get_next_phase,
         get_layer_name,
@@ -41,6 +49,10 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
         all_completed = [d for dims in completed.values() for d in dims]
         all_dims = [d for dims in impact_tree.values() for d in dims]
 
+        # 添加目标维度到 all_dims（impact_tree 不包含 Wave 0 目标维度）
+        target_dims = state.get("revision_target_dimensions", [])
+        all_dims.extend(target_dims)
+
         # 即使修订未完成，也要将 pending_reports 写入 DB
         # 否则下游 wave 的跨层依赖加载会读到旧版本
         pending_reports = state.get("pending_reports", [])
@@ -48,11 +60,19 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
             store = ReportStore.get_instance()
             all_dims_set = set(all_dims)
             revision_reports = [r for r in pending_reports if r.get("dimension_key") in all_dims_set]
-            if revision_reports:
-                await store.bulk_save(revision_reports)
+            # 去重：按 report_id 去重，避免重复插入
+            seen_report_ids = set()
+            unique_reports = []
+            for r in revision_reports:
+                rid = r.get("report_id")
+                if rid not in seen_report_ids:
+                    seen_report_ids.add(rid)
+                    unique_reports.append(r)
+            if unique_reports:
+                await store.bulk_save(unique_reports)
                 logger.info(
-                    "[layer_completion_check] Revision: saved %d reports to DB",
-                    len(revision_reports),
+                    "[layer_completion_check] Revision: saved %d reports to DB (deduped from %d)",
+                    len(unique_reports), len(revision_reports),
                 )
 
         if set(all_completed) == set(all_dims):
