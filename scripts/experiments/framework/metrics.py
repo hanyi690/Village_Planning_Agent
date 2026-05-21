@@ -29,7 +29,7 @@ class MetricsSuite:
     ) -> Dict[str, Any]:
         """Evaluate faithfulness + content depth."""
         if self._text_quality is None:
-            from scripts.experiments.rag_text_quality.text_quality_metrics import TextQualityMetrics
+            from scripts.experiments.rag.text_quality import TextQualityMetrics
             self._text_quality = TextQualityMetrics()
         return await self._text_quality.evaluate(text, context, dim_key)
 
@@ -39,12 +39,28 @@ class MetricsSuite:
         self,
         text: str,
         dim_key: str,
+        kb_context: str = "",
     ) -> Dict[str, Any]:
-        """Evaluate citation quality in a report."""
-        if self._citation_quality is None:
-            from scripts.experiments.rag_text_quality.citation_quality import CitationQualityEvaluator
-            self._citation_quality = CitationQualityEvaluator()
-        return self._citation_quality.evaluate(text, dim_key)
+        """Evaluate citation quality in a report.
+
+        Args:
+            text: Report text
+            dim_key: Dimension key
+            kb_context: Knowledge base context for existence check
+
+        Returns:
+            Citation quality metrics
+        """
+        from scripts.experiments.rag.citation import CitationQualityEvaluator
+        evaluator = CitationQualityEvaluator(kb_context=kb_context)
+        result = evaluator.evaluate_citations(text, dim_key)
+        return {
+            "total_citations": result.total_citations,
+            "existing_citations": result.existing_citations,
+            "existence_rate": result.existence_rate,
+            "accuracy_rate": result.accuracy_rate,
+            "supportive_rate": result.supportive_rate,
+        }
 
     # ---- consistency (cascade experiment) ----
 
@@ -57,7 +73,7 @@ class MetricsSuite:
     ) -> float:
         """Check cascade consistency between old and new reports."""
         if self._consistency is None:
-            from scripts.experiments.cascade.consistency_checker import ConsistencyChecker
+            from scripts.experiments.cascade.checker import ConsistencyChecker
             self._consistency = ConsistencyChecker()
         return self._consistency.check(old_text, new_text, feedback, keywords)
 
@@ -70,7 +86,7 @@ class MetricsSuite:
     ) -> Dict[str, Any]:
         """Detailed consistency check with per-keyword breakdown."""
         if self._consistency is None:
-            from scripts.experiments.cascade.consistency_checker import ConsistencyChecker
+            from scripts.experiments.cascade.checker import ConsistencyChecker
             self._consistency = ConsistencyChecker()
         return self._consistency.check_detailed(old_text, new_text, feedback, keywords)
 
@@ -93,7 +109,7 @@ class MetricsSuite:
             Response score (0-1)
         """
         if self._consistency is None:
-            from scripts.experiments.cascade.consistency_checker import ConsistencyChecker
+            from scripts.experiments.cascade.checker import ConsistencyChecker
             self._consistency = ConsistencyChecker()
         return self._consistency.check_feedback_response(old_text, new_text, feedback, keywords)
 
@@ -114,7 +130,7 @@ class MetricsSuite:
             Alignment score (0-1)
         """
         if self._consistency is None:
-            from scripts.experiments.cascade.consistency_checker import ConsistencyChecker
+            from scripts.experiments.cascade.checker import ConsistencyChecker
             self._consistency = ConsistencyChecker()
         result = self._consistency.check_semantic_alignment(
             target_content, downstream_content, downstream_dim

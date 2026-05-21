@@ -33,34 +33,52 @@ class ExperimentDataAccessor:
         """Get reports from ReportStore, optionally cached to file.
 
         Returns {dimension_key: content_string}.
+
+        Note: Cache stores ALL reports for a session. Layer filtering is applied
+        on cache hit to return only the requested layers.
         """
-        # Try file cache first
+        from app.config.loader import get_layer_dimensions
+
+        target_layers = layers or [1, 2, 3]
+
+        # Try file cache first (contains ALL reports for the session)
         cache_key = self.cache.key_for("reports", session_id)
         cached = self.cache.load(cache_key)
         if cached is not None:
-            reports = cached.get("reports", {})
+            all_reports = cached.get("reports", {})
+            # Filter by layer
+            layer_dims = set()
+            for layer in target_layers:
+                layer_dims.update(get_layer_dimensions(layer))
+            reports = {k: v for k, v in all_reports.items() if k in layer_dims}
             if dimension_filter:
                 reports = {k: v for k, v in reports.items() if k in dimension_filter}
+            logger.info("[DataAccessor] Cache hit: %d reports (layers %s)", len(reports), target_layers)
             return reports
 
-        # Read from DB
+        # Read from DB - always fetch ALL layers for caching
         from app.services.report_store import ReportStore
 
         store = ReportStore.get_instance()
-        target_layers = layers or [1, 2, 3]
-        reports: Dict[str, str] = {}
+        all_reports: Dict[str, str] = {}
 
-        for layer in target_layers:
+        for layer in [1, 2, 3]:  # Always fetch all layers
             layer_reports = await store.get_layer_reports(session_id, layer)
-            reports.update(layer_reports)
+            all_reports.update(layer_reports)
+
+        # Cache ALL reports to file
+        self.cache.save(cache_key, {"session_id": session_id, "reports": all_reports})
+
+        # Filter for return
+        layer_dims = set()
+        for layer in target_layers:
+            layer_dims.update(get_layer_dimensions(layer))
+        reports = {k: v for k, v in all_reports.items() if k in layer_dims}
 
         if dimension_filter:
             reports = {k: v for k, v in reports.items() if k in dimension_filter}
 
-        # Cache to file for future reads
-        self.cache.save(cache_key, {"session_id": session_id, "reports": reports})
-
-        logger.info("[DataAccessor] Retrieved %d reports for %s", len(reports), session_id)
+        logger.info("[DataAccessor] Retrieved %d reports for %s (layers %s)", len(reports), session_id, target_layers)
         return reports
 
     async def get_reports_with_sources(

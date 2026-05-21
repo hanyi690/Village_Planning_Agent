@@ -28,8 +28,19 @@ class ResultExporter:
         layers: Optional[List[int]] = None,
         include_rag: bool = True,
         include_planning_text: bool = True,
+        include_layer_docs: bool = True,
     ) -> Path:
-        """Full export: layer reports + RAG knowledge + planning text."""
+        """Full export: layer reports + RAG knowledge + planning text + layer markdown docs.
+
+        Args:
+            session_id: Session identifier
+            output_dir: Output directory
+            project_name: Project name for planning text
+            layers: Layers to export (default: [1, 2, 3])
+            include_rag: Include RAG knowledge JSON
+            include_planning_text: Generate planning text MD/JSON
+            include_layer_docs: Export L1/L2/L3 as separate markdown files
+        """
         output_dir.mkdir(parents=True, exist_ok=True)
         target_layers = layers or [1, 2, 3]
 
@@ -45,6 +56,10 @@ class ResultExporter:
                 encoding="utf-8",
             )
             logger.info("[Exporter] Layer %d: %d reports → %s", layer, len(reports), layer_path)
+
+            # Export layer markdown document
+            if include_layer_docs and reports:
+                await self._export_layer_markdown(layer, reports, output_dir)
 
         if include_rag:
             await self._export_rag_knowledge(session_id, output_dir)
@@ -74,6 +89,36 @@ class ResultExporter:
 
         logger.info("[Exporter] Session %s exported to %s", session_id, output_dir)
         return output_dir
+
+    async def _export_layer_markdown(
+        self,
+        layer: int,
+        reports: Dict[str, str],
+        output_dir: Path,
+    ) -> None:
+        """Export layer reports as a single markdown file."""
+        try:
+            from app.agent.state import get_layer_name, LAYER_NAMES_BY_NUMBER
+
+            layer_name = LAYER_NAMES_BY_NUMBER.get(layer, f"Layer{layer}")
+            lines = [f"# {layer_name} 报告\n"]
+
+            for dim_key, content in reports.items():
+                try:
+                    from app.config.loader import get_dimension_name
+                    dim_name = get_dimension_name(dim_key)
+                except Exception:
+                    dim_name = dim_key
+
+                lines.append(f"## {dim_name}\n")
+                lines.append(content)
+                lines.append("\n")
+
+            md_path = output_dir / f"{layer_name}_报告.md"
+            md_path.write_text("\n".join(lines), encoding="utf-8")
+            logger.info("[Exporter] Layer %d MD → %s", layer, md_path)
+        except Exception as e:
+            logger.warning("[Exporter] Layer markdown export failed: %s", e)
 
     async def _export_rag_knowledge(self, session_id: str, output_dir: Path) -> None:
         """Export RAG knowledge sources per layer."""

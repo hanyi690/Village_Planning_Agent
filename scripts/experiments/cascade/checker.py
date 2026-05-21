@@ -8,7 +8,7 @@ Consistency Checker - Semantic consistency validation
 3. 关键词覆盖率：检验期望关键词是否出现在修订内容中（补充）
 
 Usage:
-    from scripts.experiments.cascade_consistency.consistency_checker import ConsistencyChecker
+    from scripts.experiments.cascade.checker import ConsistencyChecker
 
     checker = ConsistencyChecker()
     score = checker.check_feedback_response(old, new, feedback, keywords)

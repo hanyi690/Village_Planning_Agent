@@ -16,7 +16,7 @@ class ParallelExperimentScheduler:
 
     Each runner uses a unique session_id, so SQLite WAL + SSE per-session
     queues + LangGraph thread_id isolation ensure safe parallelism.
-    The global LLM_SEMAPHORE(3) caps total API concurrency.
+    The global LLM_MAX_CONCURRENT (default 50) caps total API concurrency.
     """
 
     def __init__(self, config: ExperimentConfig, max_parallel: int = 2):

@@ -53,6 +53,14 @@ class ExperimentRunner(ABC):
 
         await PlanningRuntimeService.ensure_initialized()
 
+        logger.info(
+            "[EXP] session=%s project=%s rag_config=%s",
+            session_id, project_name, rag_config
+        )
+
+        # Create PlanningSession record (experiment bypasses normal flow)
+        await self._create_planning_session(session_id, project_name, rag_config)
+
         initial_state = PlanningRuntimeService.build_initial_state(
             project_name=project_name,
             village_data=village_data or self.config.village.status_report,
@@ -87,6 +95,7 @@ class ExperimentRunner(ABC):
         )
 
         logger.info("[Runner] Planning execution started: %s", session_id)
+        start_time = __import__("time").time()
 
         for layer in [1, 2, 3]:
             event = await listener.wait_for_any_event(
@@ -101,10 +110,16 @@ class ExperimentRunner(ABC):
                 raise RuntimeError(
                     f"Layer {layer} failed: {event.get('data', {}).get('message', 'unknown')}"
                 )
-            logger.info("[Runner] Layer %d completed", layer)
+            layer_time = __import__("time").time() - start_time
+            logger.info("[PERF] session=%s layer=%d completed in %.2fs", session_id, layer, layer_time)
 
         await task
         await listener.disconnect()
+
+        # Clean up SSE session state to prevent memory leaks
+        from app.services.sse import sse_manager
+        cleanup_result = sse_manager.delete_session_all_states(session_id)
+        logger.info("[Runner] Session %s cleanup: %s", session_id, cleanup_result)
 
         reports = await self.data_accessor.get_reports(session_id)
         logger.info("[Runner] Retrieved %d reports for %s", len(reports), session_id)
@@ -145,7 +160,7 @@ class ExperimentRunner(ABC):
         project_name: str,
         checkpoint_id: str = "",
     ) -> Path:
-        """Save baseline: JSON reports + planning text."""
+        """Save baseline: JSON reports + layer MD + planning text."""
         output_dir.mkdir(parents=True, exist_ok=True)
 
         baseline = {
@@ -161,6 +176,26 @@ class ExperimentRunner(ABC):
             encoding="utf-8",
         )
         logger.info("[Runner] Baseline saved: %s", baseline_path)
+
+        # Export L1, L2, L3 reports as markdown
+        try:
+            from app.agent.state import get_layer_dimensions, get_layer_name, LAYER_NAMES_BY_NUMBER
+
+            for layer in [1, 2, 3]:
+                dims = get_layer_dimensions(layer)
+                layer_reports = {d: reports[d] for d in dims if d in reports}
+                if layer_reports:
+                    layer_name = LAYER_NAMES_BY_NUMBER.get(layer, f"Layer{layer}")
+                    md_lines = [f"# {layer_name} 报告\n"]
+                    for dim_key, content in layer_reports.items():
+                        md_lines.append(f"## {dim_key}\n")
+                        md_lines.append(content)
+                        md_lines.append("\n")
+                    md_path = output_dir / f"{layer_name}_报告.md"
+                    md_path.write_text("\n".join(md_lines), encoding="utf-8")
+                    logger.info("[Runner] %s MD: %s", layer_name, md_path)
+        except Exception as e:
+            logger.warning("[Runner] Layer MD export skipped: %s", e)
 
         try:
             await self.generate_planning_text(session_id, output_dir, project_name)
@@ -193,3 +228,42 @@ class ExperimentRunner(ABC):
     def new_session_id(tag: str = "") -> str:
         prefix = f"{tag}_" if tag else ""
         return f"{prefix}{uuid.uuid4().hex[:8]}"
+
+    # ---- planning session creation ----
+
+    async def _create_planning_session(
+        self,
+        session_id: str,
+        project_name: str,
+        rag_config: Optional[Dict[int, bool]] = None,
+    ) -> None:
+        """Create PlanningSession record in database.
+
+        Experiments bypass the normal start_planning_session flow,
+        so we need to create the session record directly.
+        """
+        from app.database.operations import create_planning_session_async
+
+        session_state = {
+            "session_id": session_id,
+            "project_name": project_name,
+            "village_data": self.config.village.status_report,
+            "request": {
+                "project_name": project_name,
+                "village_data": self.config.village.status_report,
+                "village_name": self.config.village.village_name,
+                "task_description": self.config.village.task_description,
+                "constraints": self.config.village.constraints,
+            },
+            "config": {
+                "village_name": self.config.village.village_name,
+                "rag_enabled": rag_config is not None,
+                "rag_layer_config": rag_config or {},
+            },
+        }
+
+        try:
+            await create_planning_session_async(session_state)
+            logger.info("[Runner] PlanningSession created: %s", session_id)
+        except Exception as e:
+            logger.warning("[Runner] PlanningSession creation failed (may already exist): %s", e)

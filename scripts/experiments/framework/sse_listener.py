@@ -403,7 +403,7 @@ class InProcessEventListener:
                 self._dispatch_to_bucket(event_type, normalized)
                 await self._dispatch_event(event_type, normalized)
 
-                if event_type in ("completed", "error"):
+                if event_type in ("completed", "error", "revision_completed"):
                     self._stream_ended = True
                     logger.info(
                         f"[InProcessListener] Terminal event: {event_type}"
