@@ -39,7 +39,7 @@ class LLMStyler:
         return await self._call_llm(prompt)
 
     async def generate_all(self) -> Dict[int, str]:
-        article_nums = [1, 7, 19, 20, 21, 22]
+        article_nums = [1, 2, 7, 19, 20, 21, 22]
         tasks = [self.generate(num) for num in article_nums]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         output = {}
@@ -73,6 +73,15 @@ class LLMStyler:
             # 规划定位（可选）
             if self.data.planning_positioning:
                 parts.append(f"规划定位：{self.data.planning_positioning[:200]}")
+        elif num == 2:
+            if self.data.planning_positioning:
+                parts.append(f"规划定位：{self.data.planning_positioning[:500]}")
+            if self.data.development_goal:
+                parts.append(f"发展目标：{self.data.development_goal[:300]}")
+            if self.data.planning_strategies:
+                parts.append(f"规划策略：{self.data.planning_strategies[:500]}")
+            if self.data.resource_endowment:
+                parts.append(f"资源禀赋：{self.data.resource_endowment[:500]}")
         elif num == 7:
             if self.data.planning_positioning:
                 parts.append(f"规划定位：\n{self.data.planning_positioning[:800]}")
@@ -105,7 +114,7 @@ class LLMStyler:
 
     def _build_prompt(self, num: int, ctx: str) -> str:
         rules = '\n'.join(f"- {k}: {v}" for k, v in _BUILTIN_RULES.items())
-        titles = {1: "规划背景", 7: "村庄发展定位和目标", 19: "加强组织领导", 20: "驻村编制规划",
+        titles = {1: "规划背景", 2: "规划原则", 7: "村庄发展定位和目标", 19: "加强组织领导", 20: "驻村编制规划",
                   21: "严格用途管制", 22: "加强监督检查"}
         title = titles.get(num, "")
         return f"""你是乡村规划专家，请撰写村庄规划法定文本的一条条文。

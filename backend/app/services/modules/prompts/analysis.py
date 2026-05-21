@@ -380,6 +380,7 @@ def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: s
                         professional_data: dict = None,
                         task_description: str = "", constraints: str = "",
                         knowledge_context: str = "",
+                        revision_instruction: str = "",
                         has_images: bool = False) -> str:
     """
     获取指定维度的 Prompt 模板
@@ -392,6 +393,7 @@ def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: s
         task_description: 规划任务描述（用于 villager_wishes 维度）
         constraints: 约束条件（用于 superior_planning 维度）
         knowledge_context: 知识库检索内容（可选）
+        revision_instruction: 级联修订指令（可选）
         has_images: 是否有上传图片（用于多模态分析提示）
 
     Returns:
@@ -415,6 +417,10 @@ def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: s
         constraints=constraints if constraints else "无特殊约束",
         knowledge_context=knowledge_context if knowledge_context else "暂无相关规范标准参考"
     )
+
+    # 添加修订指令（级联修订场景）
+    if revision_instruction:
+        result = revision_instruction + "\n\n" + result
 
     # 添加图片分析提示（多模态场景）
     if has_images:

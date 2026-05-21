@@ -116,10 +116,12 @@ class ReportStore:
 
     async def bulk_save(self, reports: List[Dict[str, Any]]) -> List[str]:
         """
-        批量保存报告（单事务）
+        批量保存报告（单事务，upsert 语义）
 
         性能优化：将多个报告在一次事务中写入数据库，
         减少 N transactions -> 1 transaction。
+
+        使用 INSERT OR REPLACE 处理重复 report_id，避免 UNIQUE constraint 失败。
 
         Args:
             reports: 报告数据列表，每个元素包含：
@@ -142,20 +144,42 @@ class ReportStore:
 
         async with get_async_session() as db:
             for report_data in reports:
-                db_report = DimensionReport(
-                    session_id=report_data["session_id"],
-                    dimension_key=report_data["dimension_key"],
-                    layer=report_data["layer"],
-                    version=report_data["version"],
-                    report_id=report_data["report_id"],
-                    content=report_data["content"],
-                    summary=report_data.get("summary", report_data["content"][:500]),
-                    revision_trigger=report_data.get("revision_trigger"),
-                    knowledge_sources=report_data.get("knowledge_sources"),
-                    gis_data=report_data.get("gis_data"),
-                    generated_at=report_data.get("generated_at", datetime.now()),
+                # Check if report_id already exists
+                existing = await db.execute(
+                    select(DimensionReport).where(
+                        DimensionReport.report_id == report_data["report_id"]
+                    )
                 )
-                db.add(db_report)
+                existing_report = existing.scalar_one_or_none()
+
+                if existing_report:
+                    # Update existing report
+                    existing_report.session_id = report_data["session_id"]
+                    existing_report.dimension_key = report_data["dimension_key"]
+                    existing_report.layer = report_data["layer"]
+                    existing_report.version = report_data["version"]
+                    existing_report.content = report_data["content"]
+                    existing_report.summary = report_data.get("summary", report_data["content"][:500])
+                    existing_report.revision_trigger = report_data.get("revision_trigger")
+                    existing_report.knowledge_sources = report_data.get("knowledge_sources")
+                    existing_report.gis_data = report_data.get("gis_data")
+                    existing_report.generated_at = report_data.get("generated_at", datetime.now())
+                else:
+                    # Insert new report
+                    db_report = DimensionReport(
+                        session_id=report_data["session_id"],
+                        dimension_key=report_data["dimension_key"],
+                        layer=report_data["layer"],
+                        version=report_data["version"],
+                        report_id=report_data["report_id"],
+                        content=report_data["content"],
+                        summary=report_data.get("summary", report_data["content"][:500]),
+                        revision_trigger=report_data.get("revision_trigger"),
+                        knowledge_sources=report_data.get("knowledge_sources"),
+                        gis_data=report_data.get("gis_data"),
+                        generated_at=report_data.get("generated_at", datetime.now()),
+                    )
+                    db.add(db_report)
             await db.commit()
 
         report_ids = [r["report_id"] for r in reports]

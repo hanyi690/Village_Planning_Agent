@@ -761,8 +761,14 @@ SETTLEMENT_PLANNING_PROMPT = """你是乡村规划专家，精通农村住宅设
 # 辅助函数
 # ==========================================
 
-def get_dimension_prompt(dimension_key: str, **kwargs) -> str:
-    """获取指定维度的格式化Prompt"""
+def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **kwargs) -> str:
+    """获取指定维度的格式化Prompt
+
+    Args:
+        dimension_key: 维度键名
+        revision_instruction: 级联修订指令（可选）
+        **kwargs: 其他模板参数
+    """
     dimension_map = {
         "industry": INDUSTRY_PLANNING_PROMPT,
         "spatial_structure": SPATIAL_STRUCTURE_PROMPT,
@@ -805,7 +811,13 @@ def get_dimension_prompt(dimension_key: str, **kwargs) -> str:
         if param not in kwargs:
             kwargs[param] = ""
 
-    return template.format(**kwargs)
+    result = template.format(**kwargs)
+
+    # 添加修订指令（级联修订场景）
+    if revision_instruction:
+        result = revision_instruction + "\n\n" + result
+
+    return result
 
 
 

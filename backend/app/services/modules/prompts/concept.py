@@ -134,6 +134,7 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
                          task_description: str = "", constraints: str = "",
                          professional_data: dict = None,
                          knowledge_context: str = "",
+                         revision_instruction: str = "",
                          summary_context: str = "",
                          layer2_contexts: str = "") -> str:
     """
@@ -146,6 +147,7 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
         constraints: 约束条件
         professional_data: 专业数据（可选）
         knowledge_context: RAG 知识上下文（可选）
+        revision_instruction: 级联修订指令（可选）
         summary_context: 摘要背景上下文（Phase 4，可选）
 
     Returns:
@@ -203,6 +205,10 @@ def get_dimension_prompt(dimension_key: str, analysis_report: str = "",
 
     # 注入全局写作规则
     formatted += GLOBAL_CONCEPT_RULES
+
+    # 添加修订指令（级联修订场景）
+    if revision_instruction:
+        formatted = revision_instruction + "\n\n" + formatted
 
     return formatted
 
