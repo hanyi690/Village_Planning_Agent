@@ -2,24 +2,23 @@
 
 本文档提供关键代码路径的完整索引，按模块分类。
 
-> **更新日期**: 2026-05-08
-> **版本**: v2.0 (重组后架构)
+> **更新日期**: 2026-05-21
+> **版本**: v3.0 (统一架构)
 
 **本节是文件路径的唯一来源**，其他文档应引用此表。
 
 ---
 
-## Agent核心
+## Agent 核心
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/agent/graph.py` | StateGraph定义，节点和边 |
-| `backend/app/agent/state.py` | UnifiedPlanningState定义 |
-| `backend/app/agent/routing.py` | intent_router, route_by_phase |
-| `backend/app/agent/message_builder.py` | 消息构建器 |
-| `backend/app/agent/nodes/conversation.py` | conversation_node中央路由节点 |
-| `backend/app/agent/nodes/tools.py` | execute_tools节点 |
-| `backend/app/agent/nodes/analysis.py` | analyze_dimension维度分析节点 |
+| `backend/app/agent/graph.py` | StateGraph 定义，4 节点（conversation, execute_tools, analyze_dimension, layer_completion_check） |
+| `backend/app/agent/state.py` | AgentState 定义，Annotated merge 函数 |
+| `backend/app/agent/routing.py` | after_conversation, after_analysis 路由逻辑 |
+| `backend/app/agent/nodes/conversation.py` | conversation_node 中央路由节点 |
+| `backend/app/agent/nodes/tools.py` | execute_tools 节点 |
+| `backend/app/agent/nodes/analysis.py` | analyze_dimension 维度分析节点 |
 
 ---
 
@@ -27,9 +26,9 @@
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/config/phases.yaml` | 28维度唯一来源（YAML） |
-| `backend/app/config/loader.py` | YAML → Pydantic配置加载器 |
-| `backend/app/config/dependency.py` | Wave波次计算、依赖链管理 |
+| `backend/app/config/phases.yaml` | 28 维度唯一来源（YAML） |
+| `backend/app/config/loader.py` | YAML → Pydantic 配置加载器 |
+| `backend/app/config/dependency.py` | Wave 波次计算、依赖链管理、影响树 |
 | `backend/app/config/document_types.py` | 维度标签、地形标签、文档类型标签 |
 
 ---
@@ -39,27 +38,29 @@
 | 文件 | 职责 |
 |------|------|
 | `backend/app/core/settings.py` | 环境变量、路径配置、密钥 |
-| `backend/app/core/llm.py` | LLM工厂（OpenAI、ZhipuAI、DeepSeek） |
-| `backend/app/core/tracing.py` | LangSmith/LangFuse集成 |
-| `backend/app/core/events.py` | SSE事件类型常量 |
+| `backend/app/core/llm.py` | LLM 工厂（OpenAI、ZhipuAI、DeepSeek） |
+| `backend/app/core/tracing.py` | LangSmith/LangFuse 集成 |
+| `backend/app/core/events.py` | SSE 事件类型常量 |
 
 ---
 
-## 后端API
+## 后端 API
 
 ### 路由
 
-| 文件 | 職责 |
+| 文件 | 职责 |
 |------|------|
-| `backend/app/api/routes.py` | 统一路由入口（7个精简端点） |
+| `backend/app/api/routes.py` | 统一路由入口 |
+| `backend/app/api/session_routes.py` | 7 个核心端点（sessions, stream, sync, feedback, checkpoints, resume, reports） |
+| `backend/app/api/schemas.py` | 请求/响应 Pydantic 模型 |
 
 ### 服务层
 
 | 文件 | 职责 |
 |------|------|
 | `backend/app/services/sse.py` | SSEManager，事件推送管理 |
-| `backend/app/services/runtime.py` | LangGraph运行时服务 |
-| `backend/app/services/checkpoint.py` | Checkpoint加载/保存 |
+| `backend/app/services/runtime.py` | LangGraph 运行时服务 |
+| `backend/app/services/checkpoint.py` | Checkpoint 加载/保存 |
 | `backend/app/services/session.py` | 会话管理 |
 | `backend/app/services/report_store.py` | 报告存储与版本历史 |
 
@@ -69,8 +70,8 @@
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/database/engine.py` | SQLite异步引擎、WAL模式、Checkpointer |
-| `backend/app/database/models.py` | SQLAlchemy/SQLModel模型定义 |
+| `backend/app/database/engine.py` | SQLite 异步引擎、WAL 模式、AsyncSqliteSaver |
+| `backend/app/database/models.py` | SQLModel 模型定义（PlanningSession, DimensionReport, DimensionRevision） |
 | `backend/app/database/operations.py` | 异步数据库操作 |
 
 ---
@@ -81,98 +82,145 @@
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/tools/protocol.py` | ToolResult、Tool协议定义 |
-| `backend/app/tools/registry.py` | ToolRegistry工具注册中心 |
-| `backend/app/tools/adapters/langchain.py` | Tool → LangChain适配器 |
+| `backend/app/tools/registry.py` | ToolRegistry 工具注册中心、ToolMetadata、参数 Schema |
+| `backend/app/tools/constants.py` | 工具常量定义 |
 
 ### 分析工具
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/tools/analytics/population.py` | 人口预测模型 |
-| `backend/app/tools/analytics/knowledge_search.py` | 知识检索工具 |
+| `backend/app/tools/analytics/population.py` | 人口预测模型（省级增长率/自回归/综合加权） |
+| `backend/app/tools/analytics/knowledge_search.py` | 知识检索工具（knowledge_search, document_overview, chapter_content） |
 
 ---
 
-## 领域模块 (modules/)
+## 服务模块 (services/modules/)
 
-### GIS模块
-
-| 文件 | 职责 |
-|------|------|
-| `backend/app/modules/gis/service.py` | GIS业务门面 |
-| `backend/app/modules/gis/fetcher.py` | GIS数据获取协调器 |
-| `backend/app/modules/gis/fallback.py` | 边界兜底数据 |
-| `backend/app/modules/gis/coverage.py` | 覆盖率计算 |
-| `backend/app/modules/gis/isochrone.py` | 等时圈分析 |
-| `backend/app/modules/gis/providers/amap/` | 高德API封装 |
-| `backend/app/modules/gis/providers/tianditu/` | 天地图WFS |
-| `backend/app/modules/gis/providers/osm/` | OSM道路数据 |
-
-### RAG模块
+### GIS 模块
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/modules/rag/service.py` | RAG检索服务 |
-| `backend/app/modules/rag/vector_store.py` | ChromaDB向量存储 |
-| `backend/app/modules/rag/knowledge_manager.py` | 文档管理 |
-| `backend/app/modules/rag/context.py` | 上下文管理 |
+| `backend/app/services/modules/gis/service.py` | GisService 业务门面，run_parallel 并行执行 |
+| `backend/app/services/modules/gis/fetcher.py` | GISDataFetcher 数据获取协调器 |
+| `backend/app/services/modules/gis/coverage.py` | 覆盖率计算 |
+| `backend/app/services/modules/gis/accessibility.py` | 可达性分析 |
+| `backend/app/services/modules/gis/isochrone.py` | 等时圈分析 |
+| `backend/app/services/modules/gis/validators.py` | 数据验证 |
+| `backend/app/services/modules/gis/providers/amap/provider.py` | 高德 API 封装（POI、地理编码、路径规划） |
+| `backend/app/services/modules/gis/providers/tianditu/provider.py` | 天地图 API 封装 |
+| `backend/app/services/modules/gis/providers/tianditu/wfs.py` | 天地图 WFS 服务 |
+| `backend/app/services/modules/gis/providers/tianditu/tiles.py` | 天地图瓦片服务 |
+| `backend/app/services/modules/gis/providers/tianditu/gd_service.py` | 广东省天地图服务 |
+| `backend/app/services/modules/gis/providers/osm/provider.py` | OSM 道路数据获取 |
+| `backend/app/services/modules/gis/providers/poi.py` | POI 数据统一接口 |
+| `backend/app/services/modules/gis/utils/coord_utils.py` | 坐标转换（GCJ-02 → WGS-84） |
 
-### Prompts模块
+### RAG 模块
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/modules/prompts/analysis.py` | Layer1维度分析提示词 |
-| `backend/app/modules/prompts/concept.py` | Layer2规划思路提示词 |
-| `backend/app/modules/prompts/detailed.py` | Layer3详细规划提示词 |
-| `backend/app/modules/prompts/spatial.py` | 空间布局提示词 |
+| `backend/app/services/modules/rag/service.py` | RagService 检索服务，generate_queries, get_context |
+| `backend/app/services/modules/rag/vector_store.py` | HierarchyVectorStore，Small-to-Big 检索，树形索引 |
+| `backend/app/services/modules/rag/chunker.py` | HierarchySlicer 层级切片，LLMOutlineCorrector 大纲矫正 |
+| `backend/app/services/modules/rag/context.py` | DocumentContextManager 文档上下文管理 |
+| `backend/app/services/modules/rag/utils/metadata_extractor.py` | MetadataExtractor 元数据提取 |
+| `backend/app/services/modules/rag/utils/document_loader.py` | 文档加载器（MinerU/Docling/MarkItDown） |
+
+### Prompts 模块
+
+| 文件 | 职责 |
+|------|------|
+| `backend/app/services/modules/prompts/analysis.py` | Layer 1 维度分析提示词 |
+| `backend/app/services/modules/prompts/concept.py` | Layer 2 规划思路提示词 |
+| `backend/app/services/modules/prompts/detailed.py` | Layer 3 详细规划提示词 |
+| `backend/app/services/modules/prompts/spatial.py` | 空间布局提示词 |
+
+### Planning Text 模块
+
+| 文件 | 职责 |
+|------|------|
+| `backend/app/services/modules/planning_text/generator.py` | 规划文本生成器 |
+| `backend/app/services/modules/planning_text/layer_exporter.py` | 层级导出器 |
+| `backend/app/services/modules/planning_text/section_builder.py` | 章节构建器 |
+| `backend/app/services/modules/planning_text/content_extractor.py` | 内容提取器 |
+| `backend/app/services/modules/planning_text/llm_styler.py` | LLM 润色器 |
+| `backend/app/services/modules/planning_text/rag_appender.py` | RAG 内容追加器 |
+| `backend/app/services/modules/planning_text/json_exporter.py` | JSON 导出器 |
+
+### Summary 模块
+
+| 文件 | 职责 |
+|------|------|
+| `backend/app/services/modules/summary/generator.py` | 摘要生成器 |
+| `backend/app/services/modules/summary/parser.py` | 摘要解析器 |
+| `backend/app/services/modules/summary/schema.py` | 摘要 Schema 定义 |
+
+### Data 模块
+
+| 文件 | 职责 |
+|------|------|
+| `backend/app/services/modules/data/pipeline.py` | 数据处理管道 |
+| `backend/app/services/modules/data/formatters.py` | 数据格式化器 |
 
 ---
 
-## 前端 [搁置]
+## 前端
+
+### Feature Module 结构
+
+| 目录 | 职责 |
+|------|------|
+| `frontend/src/features/planning/api/` | API 客户端和类型定义 |
+| `frontend/src/features/planning/components/` | React 组件 |
+| `frontend/src/features/planning/config/` | 前端配置 |
+| `frontend/src/features/planning/constants/` | 常量定义 |
+| `frontend/src/features/planning/hooks/` | React Hooks |
+| `frontend/src/features/planning/store/` | Zustand Store |
+| `frontend/src/features/planning/types/` | TypeScript 类型 |
+| `frontend/src/features/planning/utils/` | 工具函数 |
 
 ### 状态管理
 
 | 文件 | 职责 |
 |------|------|
-| `frontend/src/stores/planningStore.ts` | Zustand状态管理，PlanningState |
-| `frontend/src/stores/uiStore.ts` | UI状态(侧边栏、模态框) |
+| `frontend/src/features/planning/store/planningStore.ts` | Zustand 状态管理，PlanningState |
+| `frontend/src/features/planning/store/planning-context.tsx` | React Context 包装 |
 
 ### Hooks
 
 | 文件 | 职责 |
 |------|------|
-| `frontend/src/hooks/planning/useSSEConnection.ts` | SSE连接和事件处理 |
-| `frontend/src/hooks/planning/usePlanningAPI.ts` | API调用封装 |
-| `frontend/src/hooks/planning/useDimensionProgress.ts` | 维度进度追踪 |
+| `frontend/src/features/planning/hooks/useSSE.ts` | SSE 连接和事件处理 |
+| `frontend/src/features/planning/hooks/useSelectors.ts` | 状态选择器 |
+| `frontend/src/features/planning/hooks/useHandlers.ts` | 事件处理器 |
+| `frontend/src/features/planning/hooks/useStreaming.ts` | 流式渲染 |
+| `frontend/src/features/planning/hooks/useSessionRestore.ts` | 会话恢复 |
+| `frontend/src/features/planning/hooks/useApprovalActions.ts` | 审批操作 |
 
 ### 类型定义
 
 | 文件 | 职责 |
 |------|------|
-| `frontend/src/types/message/message-types.ts` | 消息类型定义 |
-| `frontend/src/types/planning/planning-types.ts` | 规划状态类型 |
-| `frontend/src/types/sse/sse-events.ts` | SSE事件类型 |
+| `frontend/src/features/planning/types/events.ts` | SSE 事件类型 |
+| `frontend/src/features/planning/types/messages.ts` | 消息类型 |
+| `frontend/src/features/planning/types/base.ts` | 基础类型 |
+| `frontend/src/features/planning/types/guards.ts` | 类型守卫 |
 
 ### 组件
 
 | 文件 | 职责 |
 |------|------|
-| `frontend/src/components/planning/PlanningProvider.tsx` | 规划上下文Provider |
-| `frontend/src/components/chat/ChatPanel.tsx` | 对话面板 |
-| `frontend/src/components/planning/LayerProgress.tsx` | 层级进度显示 |
-| `frontend/src/components/planning/DimensionCard.tsx` | 维度卡片 |
-
----
-
-## Utils工具
-
-| 文件 | 职责 |
-|------|------|
-| `backend/app/utils/logger.py` | 日志工具 |
-| `backend/app/utils/text_splitter.py` | 文档切片 |
-| `backend/app/utils/semantic_tagger.py` | 语义标签 |
-| `backend/app/utils/context_manager.py` | 上下文收集 |
+| `frontend/src/features/planning/components/Dashboard.tsx` | 主布局容器 |
+| `frontend/src/features/planning/components/layout/AppHeader.tsx` | 顶部导航 |
+| `frontend/src/features/planning/components/layout/LayerNav.tsx` | 左侧维度导航 |
+| `frontend/src/features/planning/components/layout/FocusArea.tsx` | 中央工作区 |
+| `frontend/src/features/planning/components/layout/ReportViewer.tsx` | 报告查看器 |
+| `frontend/src/features/planning/components/layout/ProcessPanel.tsx` | 右侧处理面板 |
+| `frontend/src/features/planning/components/chat/MessageList.tsx` | 消息列表 |
+| `frontend/src/features/planning/components/chat/StreamingText.tsx` | 流式文本渲染 |
+| `frontend/src/features/planning/components/chat/KnowledgeSliceCard.tsx` | 知识切片卡片 |
+| `frontend/src/features/planning/components/gis/MapView.tsx` | 地图渲染 |
+| `frontend/src/features/planning/components/settings/SettingsPanel.tsx` | 设置面板 |
 
 ---
 
@@ -180,16 +228,19 @@
 
 | 目录 | 内容 |
 |------|------|
-| `data/knowledge_base/` | 知识库原始文件 |
-| `data/database/` | SQLite数据库文件 |
-| `data/chroma_db/` | ChromaDB向量存储 |
+| `data/RAG_doc/` | 知识库原始文件 |
+| `data/RAG_doc/_cache/chroma_db/` | ChromaDB 向量存储 |
+| `data/RAG_doc/_cache/outline_index/` | 层级索引缓存 |
+| `data/database/` | SQLite 数据库文件 |
+| `data/results/` | 规划结果输出 |
 
 ---
 
 ## 相关文档
 
 - [01-system-overview](./01-system-overview.md) - 系统总览
-- [02-agent-core](./02-agent-core.md) - Agent核心架构
+- [02-agent-core](./02-agent-core.md) - Agent 核心架构
 - [06-tool-system](./06-tool-system.md) - 工具系统
-- [08-rag-system](./08-rag-system.md) - RAG系统
+- [08-rag-system](./08-rag-system.md) - RAG 系统
+- [gis-system-architecture](./gis-system-architecture.md) - GIS 系统架构
 - [terminology](./terminology.md) - 术语定义

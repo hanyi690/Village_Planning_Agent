@@ -7,44 +7,52 @@ planning reports for use in article assembly.
 
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
 
 @dataclass
 class ExtractedData:
-    total_area_ha: float = 0.0
-    population_household: int = 0
-    population_registered: int = 0
-    population_resident: int = 0
-    farmland_ha: float = 0.0
-    paddy_ha: float = 0.0
-    construction_land_ha: float = 0.0
-    ecological_land_ha: float = 0.0
-    forest_coverage_pct: float = 0.0
-    commercial_forest_ha: float = 0.0
-    ecological_forest_ha: float = 0.0
-    water_ha: float = 0.0
-    village_count: int = 0
-    village_names: List[str] = field(default_factory=list)
-    building_count: int = 0
-    collapse_points: int = 0
-    landslide_points: int = 0
-    development_goal: str = ""
-    planning_positioning: str = ""
-    planning_strategies: str = ""
-    resource_endowment: str = ""
+    """从L1/L2/L3报告提取的结构化数据。
+
+    数值字段由摘要注入，用于 llm_styler.py 等场景。
+    表格数据只从 layer3_sections 直接复制，不进行正则组装。
+    """
+    # 区位字段（从 config 注入）
     province: str = ""
     city: str = ""
     county: str = ""
     town: str = ""
+
+    # L2 内容（直接复制）
+    development_goal: str = ""
+    planning_positioning: str = ""
+    planning_strategies: str = ""
+    resource_endowment: str = ""
+
+    # 数值字段（从摘要注入，用于 llm_styler）
+    total_area_ha: float = 0.0
+    population_registered: int = 0
+    population_resident: int = 0
+    population_household: int = 0
+    village_count: int = 0
+    farmland_ha: float = 0.0
+    construction_land_ha: float = 0.0
+    ecological_land_ha: float = 0.0
+    forest_coverage_pct: float = 0.0
+
+    # L3 结构化数据（表格只从这里复制）
+    layer3_sections: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    layer3_tables: Dict[str, List[Dict]] = field(default_factory=dict)
+    _raw_reports: Dict[str, str] = field(default_factory=dict, repr=False)
+
+    # 法律依据（从 superior_planning 提取）
     legal_basis_national: List[str] = field(default_factory=list)
     legal_basis_provincial: List[str] = field(default_factory=list)
     legal_basis_planning: List[str] = field(default_factory=list)
-    layer3_sections: Dict[str, Dict[str, str]] = field(default_factory=dict)
-    layer3_tables: Dict[str, List[Dict]] = field(default_factory=dict)
-    raw_numbers: Dict[str, float] = field(default_factory=dict)
-    _raw_reports: Dict[str, str] = field(default_factory=dict, repr=False)
+
+    # 村名列表（从 socio_economic 提取）
+    village_names: List[str] = field(default_factory=list)
 
     def get_full(self, dim: str) -> str:
         return self._raw_reports.get(dim, "")
@@ -59,49 +67,12 @@ class ContentExtractor:
         'spatial_structure', 'land_use_planning', 'settlement_planning',
     ]
 
-    NUM_PATTERNS = [
-        (r'土地总[用]?面积[约]*\s*([\d.]+)\s*公顷', 'total_area_ha', 1.0),
-        (r'户籍人口\s*(\d+)\s*人', 'population_registered', 1),
-        (r'常住人口[约]?\s*(\d+)\s*人', 'population_resident', 1),
-        (r'(\d+)\s*户', 'population_household', 1),
-        (r'耕地面积[约]*\s*([\d.]+)\s*公顷', 'farmland_ha', 1.0),
-        (r'水田面积[达]?\s*([\d.]+)\s*公顷', 'paddy_ha', 1.0),
-        (r'建设用地[总面积]?\s*([\d.]+)\s*公顷', 'construction_land_ha', 1.0),
-        (r'生态用地[总面积]?\s*([\d.]+)\s*公顷', 'ecological_land_ha', 1.0),
-        (r'林地[面积]*[在占比达]?\s*(\d+)\s*%', 'forest_coverage_pct', 1.0),
-        (r'商业林[面积约]*\s*([\d.]+)\s*公顷', 'commercial_forest_ha', 1.0),
-        (r'生态林[面积约]*\s*([\d.]+)\s*公顷', 'ecological_forest_ha', 1.0),
-        (r'水域面积\s*([\d.]+)\s*公顷', 'water_ha', 1.0),
-        (r'(\d+)\s*个自然村', 'village_count', 1),
-        (r'建筑\s*(\d+)\s*处', 'building_count', 1),
-        (r'(\d+)\s*处崩塌', 'collapse_points', 1),
-        (r'(\d+)\s*处滑坡', 'landslide_points', 1),
-    ]
-
     def __init__(self, reports: Dict[str, str]):
         self.reports = reports
         self.data = ExtractedData()
 
     def extract_all(self) -> ExtractedData:
-        land_use = self.reports.get('land_use', '')
-        m = re.search(r'土地总用地面积[约]*\s*([\d.]+)\s*公顷', land_use)
-        if m:
-            self.data.total_area_ha = float(m.group(1))
-            self.data.raw_numbers['total_area_ha'] = self.data.total_area_ha
-
-        all_text = '\n'.join(self.reports.values())
-        for pattern, field, mult in self.NUM_PATTERNS:
-            if field == 'total_area_ha' and self.data.total_area_ha > 0:
-                continue
-            match = re.search(pattern, all_text)
-            if match:
-                try:
-                    val = float(match.group(1)) * mult
-                    setattr(self.data, field, val)
-                    self.data.raw_numbers[field] = val
-                except (ValueError, AttributeError):
-                    pass
-
+        # 只提取结构化内容，不进行数值正则提取
         self._extract_layer2()
         self._extract_layer3_sections()
         self._extract_layer3_tables()
@@ -248,22 +219,6 @@ class ContentExtractor:
             ]
             if names:
                 self.data.village_names = names
-                self.data.village_count = len(names)
-
-    def _extract_location_info(self):
-        loc = self.reports.get('location', '')
-        if not loc:
-            return
-        patterns = [
-            (r'([^\s，,]+省)', 'province'),
-            (r'([^\s，,]+市)', 'city'),
-            (r'([^\s，,]+县)', 'county'),
-            (r'([^\s，,]+镇)', 'town'),
-        ]
-        for pat, field in patterns:
-            match = re.search(pat, loc)
-            if match:
-                setattr(self.data, field, match.group(1))
 
     def _extract_superior_planning_citations(self):
         sp_text = self.reports.get('superior_planning', '')
@@ -376,10 +331,18 @@ def create_extracted_data(
     county: str = "",
     township: str = "",
 ) -> ExtractedData:
+    """从L1/L2/L3报告提取结构化内容。
+
+    表格只从L3报告直接复制，数值字段从摘要注入（用于llm_styler）。
+    """
     all_reports = {**layer1_reports, **layer2_reports, **layer3_reports}
     data = ContentExtractor(all_reports).extract_all()
 
-    # 从 config 注入区位（优先级最高，替代 _extract_location_info 正则）
+    # 从摘要注入数值字段（用于 llm_styler）
+    if summaries:
+        _inject_from_summaries(data, summaries)
+
+    # 从 config 注入位置
     if province:
         data.province = province
     if city:
@@ -389,56 +352,41 @@ def create_extracted_data(
     if township:
         data.town = township
 
-    # 从维度摘要注入数值字段（优先于正则提取的结果）
-    if summaries:
-        _inject_from_summaries(data, summaries)
-
     return data
 
 
 def _inject_from_summaries(data: ExtractedData, summaries: Dict[str, Dict[str, Any]]) -> None:
-    """从维度摘要注入数值字段，仅覆盖正则提取为零值的字段。"""
-    # 区位（如果 config 未提供，从摘要补充）
-    loc_s = summaries.get("location", {})
-    if not data.province and loc_s.get("province"):
-        data.province = loc_s["province"]
-    if not data.city and loc_s.get("city"):
-        data.city = loc_s["city"]
-    if not data.county and loc_s.get("county"):
-        data.county = loc_s["county"]
-    if not data.town and loc_s.get("town"):
-        data.town = loc_s["town"]
+    """从维度摘要注入数值字段（用于 llm_styler）。
 
+    注意：表格数据不从摘要注入，只从 L3 报告直接复制。
+    """
     # 社会经济
-    socio_s = summaries.get("socio_economic", {})
-    if socio_s.get("registered_population") and not data.population_registered:
-        data.population_registered = int(socio_s["registered_population"])
-    if socio_s.get("resident_population") and not data.population_resident:
-        data.population_resident = int(socio_s["resident_population"])
-    if socio_s.get("households") and not data.population_household:
-        data.population_household = int(socio_s["households"])
+    socio_m = summaries.get("socio_economic", {}).get("metrics", {})
+    if socio_m.get("registered_population"):
+        data.population_registered = int(socio_m["registered_population"])
+    if socio_m.get("resident_population"):
+        data.population_resident = int(socio_m["resident_population"])
+    if socio_m.get("households"):
+        data.population_household = int(socio_m["households"])
 
     # 土地利用
-    land_s = summaries.get("land_use", {})
-    if land_s.get("total_area_ha") and not data.total_area_ha:
-        data.total_area_ha = float(land_s["total_area_ha"])
-    if land_s.get("farmland_area_ha") and not data.farmland_ha:
-        data.farmland_ha = float(land_s["farmland_area_ha"])
-    if land_s.get("construction_area_ha") and not data.construction_land_ha:
-        data.construction_land_ha = float(land_s["construction_area_ha"])
-    if land_s.get("ecological_area_ha") and not data.ecological_land_ha:
-        data.ecological_land_ha = float(land_s["ecological_area_ha"])
-    if land_s.get("water_area_ha") and not data.water_ha:
-        data.water_ha = float(land_s["water_area_ha"])
-    if land_s.get("forest_coverage_rate") and not data.forest_coverage_pct:
-        data.forest_coverage_pct = float(land_s["forest_coverage_rate"])
+    land_m = summaries.get("land_use", {}).get("metrics", {})
+    if land_m.get("total_area_ha"):
+        data.total_area_ha = float(land_m["total_area_ha"])
+    if land_m.get("farmland_area_ha"):
+        data.farmland_ha = float(land_m["farmland_area_ha"])
+    if land_m.get("construction_area_ha"):
+        data.construction_land_ha = float(land_m["construction_area_ha"])
+    if land_m.get("ecological_area_ha"):
+        data.ecological_land_ha = float(land_m["ecological_area_ha"])
+    if land_m.get("forest_coverage_rate"):
+        data.forest_coverage_pct = float(land_m["forest_coverage_rate"])
 
     # 自然环境（补充森林覆盖率）
-    nat_s = summaries.get("natural_environment", {})
-    if nat_s.get("forest_coverage_rate") and not data.forest_coverage_pct:
-        data.forest_coverage_pct = float(nat_s["forest_coverage_rate"])
+    nat_m = summaries.get("natural_environment", {}).get("metrics", {})
+    if nat_m.get("forest_coverage_rate"):
+        data.forest_coverage_pct = float(nat_m["forest_coverage_rate"])
 
-    # 建筑
-    arch_s = summaries.get("architecture", {})
-    if arch_s.get("total_buildings") and not data.building_count:
-        data.building_count = int(arch_s["total_buildings"])
+    # 村庄数量
+    if data.village_names:
+        data.village_count = len(data.village_names)

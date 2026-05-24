@@ -14,6 +14,12 @@ import type {
   PlanningSSEEventType,
   PlanningSSEDataBase,
   ImageData,
+  ExportRequest,
+  ExportResponse,
+  PlanningTextDocument,
+  PlanningTextVersionList,
+  GeneratePlanningTextRequest,
+  GeneratePlanningTextResponse,
 } from './types';
 
 // ============================================
@@ -392,5 +398,151 @@ export const planningApi = {
    */
   async getCheckpoints(sessionId: string): Promise<{ session_id: string; checkpoints: { checkpoint_id: string; phase: string; layer: number }[]; count: number }> {
     return apiRequest(`/api/sessions/${sessionId}/checkpoints`);
+  },
+
+  /**
+   * Export layer report as DOCX (direct file stream)
+   * POST /api/sessions/{session_id}/export?layer=N
+   */
+  async exportLayerDocx(
+    sessionId: string,
+    layer: number,
+    includeSummaries: boolean = false
+  ): Promise<string> {
+    const url = `${API_BASE_URL}/api/sessions/${sessionId}/export?layer=${layer}&include_summaries=${includeSummaries}`;
+    const response = await fetch(url, { method: 'POST' });
+
+    if (!response.ok) {
+      throw new Error(`导出失败: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const filename = this.extractFilename(response);
+
+    // Trigger download
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(objectUrl);
+
+    return filename;
+  },
+
+  /**
+   * Export planning text as DOCX (direct file stream)
+   * POST /api/sessions/{session_id}/export?planning_text=true
+   */
+  async exportPlanningTextDocx(
+    sessionId: string,
+    projectName: string = '村庄规划'
+  ): Promise<string> {
+    const url = `${API_BASE_URL}/api/sessions/${sessionId}/export?planning_text=true&project_name=${encodeURIComponent(projectName)}`;
+    const response = await fetch(url, { method: 'POST' });
+
+    if (!response.ok) {
+      throw new Error(`导出失败: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const filename = `${projectName}_规划文本.docx`;
+
+    // Trigger download
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(objectUrl);
+
+    return filename;
+  },
+
+  /**
+   * Extract filename from Content-Disposition header
+   */
+  extractFilename(response: Response): string {
+    const disposition = response.headers.get('Content-Disposition');
+    if (disposition) {
+      const match = disposition.match(/filename="(.+)"/);
+      if (match) return decodeURIComponent(match[1]);
+    }
+    return 'export.docx';
+  },
+
+  /**
+   * Export session documents (legacy, returns file list)
+   * POST /api/sessions/{session_id}/export
+   * @deprecated Use exportLayerDocx or exportPlanningTextDocx instead
+   */
+  async exportSession(sessionId: string, request: ExportRequest): Promise<ExportResponse> {
+    return apiRequest<ExportResponse>(`/api/sessions/${sessionId}/export`, {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  },
+
+  /**
+   * Download exported file (legacy)
+   * GET /api/sessions/{session_id}/export/{filename}
+   * @deprecated No longer needed - files are returned directly
+   */
+  async downloadExportFile(sessionId: string, filename: string): Promise<Blob> {
+    const response = await fetch(
+      `${API_BASE_URL}/api/sessions/${sessionId}/export/${filename}`
+    );
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.status}`);
+    }
+    return response.blob();
+  },
+
+  // ============================================
+  // Planning Text API
+  // ============================================
+
+  /**
+   * Get planning text document (latest or specific version)
+   * GET /api/sessions/{session_id}/planning-text
+   * GET /api/sessions/{session_id}/planning-text/versions/{version}
+   */
+  async getPlanningText(sessionId: string, version?: number): Promise<PlanningTextDocument | null> {
+    const url = version
+      ? `/api/sessions/${sessionId}/planning-text/versions/${version}`
+      : `/api/sessions/${sessionId}/planning-text`;
+    return apiRequest<PlanningTextDocument | null>(url);
+  },
+
+  /**
+   * Get all planning text versions
+   * GET /api/sessions/{session_id}/planning-text/versions
+   */
+  async getPlanningTextVersions(sessionId: string, limit?: number): Promise<PlanningTextVersionList> {
+    const url = limit
+      ? `/api/sessions/${sessionId}/planning-text/versions?limit=${limit}`
+      : `/api/sessions/${sessionId}/planning-text/versions`;
+    return apiRequest<PlanningTextVersionList>(url);
+  },
+
+  /**
+   * Generate planning text document
+   * POST /api/sessions/{session_id}/planning-text
+   */
+  async generatePlanningText(
+    sessionId: string,
+    request?: GeneratePlanningTextRequest
+  ): Promise<GeneratePlanningTextResponse> {
+    return apiRequest<GeneratePlanningTextResponse>(
+      `/api/sessions/${sessionId}/planning-text`,
+      {
+        method: 'POST',
+        body: JSON.stringify(request || { trigger_reason: 'initial' }),
+      }
+    );
   },
 };

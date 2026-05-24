@@ -84,19 +84,9 @@ QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "rural_planning")
 # ==========================================
 # Embedding Model Configuration
 # ==========================================
-# Provider: local (HuggingFace) or aliyun (DashScope API)
-EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local")
-
-# Local model (EMBEDDING_PROVIDER=local)
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-small-zh-v1.5")
-EMBEDDING_DEVICE = os.getenv("EMBEDDING_DEVICE", "cpu")  # cuda, mps
-
-# Aliyun DashScope (EMBEDDING_PROVIDER=aliyun)
+# 使用阿里云 DashScope Embedding API
 ALIYUN_EMBEDDING_MODEL = os.getenv("ALIYUN_EMBEDDING_MODEL", "text-embedding-v4")
 EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", "1024"))
-
-# HuggingFace mirror
-HF_ENDPOINT = os.getenv("HF_ENDPOINT", "https://hf-mirror.com")
 
 # ==========================================
 # Text Splitting Configuration
@@ -295,94 +285,3 @@ DEFAULT_IMAGE_FORMAT = os.getenv("DEFAULT_IMAGE_FORMAT", "jpeg")  # jpeg, png, g
 FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "qwen-flash")
 FLASH_MODEL_MAX_TOKENS = int(os.getenv("FLASH_MODEL_MAX_TOKENS", "500"))
 FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
-
-
-# ==========================================
-# HuggingFace Environment Setup
-# ==========================================
-
-def get_huggingface_cache_dir() -> Path:
-    """
-    Get HuggingFace cache directory.
-    Priority: HF_HOME > HF_HUB_CACHE > default ~/.cache/huggingface
-    """
-    hf_home = os.getenv("HF_HOME")
-    if hf_home:
-        return Path(hf_home)
-
-    hf_hub_cache = os.getenv("HF_HUB_CACHE")
-    if hf_hub_cache:
-        return Path(hf_hub_cache)
-
-    return Path.home() / ".cache" / "huggingface"
-
-
-def check_model_cached(model_name: str = None) -> bool:
-    """
-    Check if model is cached locally.
-
-    Args:
-        model_name: Model name, defaults to EMBEDDING_MODEL_NAME
-
-    Returns:
-        True if model is cached and complete
-    """
-    model_name = model_name or EMBEDDING_MODEL_NAME
-
-    cache_dir = get_huggingface_cache_dir()
-    model_cache_name = "models--" + model_name.replace("/", "--")
-    model_cache_path = cache_dir / "hub" / model_cache_name
-
-    if not model_cache_path.exists():
-        return False
-
-    snapshots_dir = model_cache_path / "snapshots"
-    if not snapshots_dir.exists():
-        return False
-
-    no_exist_path = model_cache_path / ".no_exist"
-    for snapshot in snapshots_dir.iterdir():
-        if snapshot.is_dir():
-            has_model = list(snapshot.glob("*.bin")) or list(snapshot.glob("*.safetensors"))
-            if has_model:
-                if no_exist_path.exists():
-                    try:
-                        no_exist_path.unlink()
-                    except Exception:
-                        pass
-                return True
-
-    return False
-
-
-def setup_huggingface_env(force_offline: bool = None, force_online: bool = False):
-    """
-    Configure HuggingFace environment.
-    Auto-detect model cache, decide offline mode or mirror download.
-
-    Args:
-        force_offline: Force offline mode (None = auto-detect)
-        force_online: Force online mode (for first download)
-    """
-    model_cached = check_model_cached()
-
-    if force_online:
-        use_offline = False
-    elif force_offline is not None:
-        use_offline = force_offline
-    else:
-        use_offline = model_cached
-
-    if use_offline:
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        os.environ["TRANSFORMERS_OFFLINE"] = "1"
-        print(f"Model cached, offline mode enabled: {EMBEDDING_MODEL_NAME}")
-    else:
-        os.environ.pop("HF_HUB_OFFLINE", None)
-        os.environ.pop("TRANSFORMERS_OFFLINE", None)
-
-        if HF_ENDPOINT:
-            os.environ["HF_ENDPOINT"] = HF_ENDPOINT
-            print(f"Model not cached, using mirror: {HF_ENDPOINT}")
-        else:
-            print(f"Model not cached, downloading from HuggingFace official")

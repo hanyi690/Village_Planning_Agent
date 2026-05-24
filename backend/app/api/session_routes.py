@@ -68,44 +68,155 @@ async def _get_report_from_db(session_id: str, dim_key: str) -> dict:
 # Module-level file processing helpers
 # ============================================
 
-def _save_uploaded_file(file: UploadFile, upload_dir: Path, subdir: str = "") -> Path:
-    """Save uploaded file to disk, return saved path."""
-    target_dir = upload_dir / subdir if subdir else upload_dir
-    return target_dir / (file.filename or "unknown")
+import tempfile
+from app.database.operations import create_uploaded_file_async
+from app.utils.document_loader import classify_file_type, MarkItDownLoader
 
 
-async def _parse_uploaded_document(saved_path: Path, filename: str) -> str:
-    """Parse a saved document file, return extracted text."""
-    from app.utils.document_loader import classify_file_type, MarkItDownLoader
-    file_type = classify_file_type(filename)
-    if file_type == "document":
-        try:
-            loader = MarkItDownLoader(saved_path)
-            docs = loader.load()
-            if docs:
-                return docs[0].page_content
-        except Exception as e:
-            logger.warning(f"[SessionRoutes] 文档解析失败 {filename}: {e}")
-    return ""
+def _infer_geojson_data_type(geojson: Dict[str, Any]) -> Optional[str]:
+    """Infer GIS data type from GeoJSON properties."""
+    if not geojson or geojson.get("type") != "FeatureCollection":
+        return None
+
+    features = geojson.get("features", [])
+    if not features:
+        return None
+
+    # Check first feature properties
+    props = features[0].get("properties", {})
+
+    # Common property keys for data type inference
+    name = props.get("name", "").lower()
+    layer = props.get("layer", "").lower()
+
+    if "边界" in name or "boundary" in layer:
+        return "boundary"
+    if "道路" in name or "road" in layer:
+        return "road"
+    if "水" in name or "water" in layer or "河流" in name:
+        return "water"
+    if "住宅" in name or "residential" in layer:
+        return "residential"
+
+    return None
 
 
-async def _process_uploaded_file(
+async def _parse_file_in_memory(
     file: UploadFile,
-    upload_dir: Path,
-    subdir: str = "",
+    content: bytes,
 ) -> Dict[str, Any]:
-    """Process single uploaded file: save, return metadata dict."""
+    """Parse uploaded file content in memory without writing to disk.
+
+    Returns:
+        Dict with parsed_text, gis_data, gis_data_type, parse_status, parse_error
+    """
     filename = file.filename or "unknown"
-    saved_path = _save_uploaded_file(file, upload_dir, subdir)
+    file_type = classify_file_type(filename)
+
+    result = {
+        "file_type": file_type,
+        "parsed_text": None,
+        "gis_data": None,
+        "gis_data_type": None,
+        "parse_status": "pending",
+        "parse_error": None,
+    }
+
+    try:
+        if file_type == "geojson":
+            # Parse GeoJSON directly from bytes
+            try:
+                geojson = json.loads(content.decode('utf-8'))
+                if geojson.get("type") == "FeatureCollection":
+                    result["gis_data"] = geojson
+                    result["gis_data_type"] = _infer_geojson_data_type(geojson)
+                    result["parse_status"] = "success"
+                else:
+                    result["parse_status"] = "failed"
+                    result["parse_error"] = "Not a valid GeoJSON FeatureCollection"
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                result["parse_status"] = "failed"
+                result["parse_error"] = f"GeoJSON parse error: {e}"
+
+        elif file_type == "document":
+            # Write to temporary file for MarkItDown parsing, then delete
+            with tempfile.NamedTemporaryFile(suffix=Path(filename).suffix, delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = Path(tmp.name)
+
+            try:
+                loader = MarkItDownLoader(tmp_path)
+                docs = loader.load()
+                if docs:
+                    result["parsed_text"] = docs[0].page_content
+                    result["parse_status"] = "success"
+                else:
+                    result["parse_status"] = "failed"
+                    result["parse_error"] = "No content extracted"
+            finally:
+                # Immediately delete temp file
+                tmp_path.unlink(missing_ok=True)
+        else:
+            # Other file types - mark as success (raw storage)
+            result["parse_status"] = "success"
+
+    except Exception as e:
+        logger.warning(f"[SessionRoutes] File parse failed {filename}: {e}")
+        result["parse_status"] = "failed"
+        result["parse_error"] = str(e)
+
+    return result
+
+
+async def _process_uploaded_file_db(
+    file: UploadFile,
+    session_id: str,
+    file_category: str,
+) -> Dict[str, Any]:
+    """Process single uploaded file: parse in memory, store to database.
+
+    Args:
+        file: FastAPI UploadFile object
+        session_id: Session identifier
+        file_category: "village_data", "task_description", or "constraint"
+
+    Returns:
+        Dict with file metadata and parsed content
+    """
+    filename = file.filename or "unknown"
     content = await file.read()
-    with open(saved_path, "wb") as f:
-        f.write(content)
-    doc_text = await _parse_uploaded_document(saved_path, filename)
+
+    # Parse file in memory
+    parse_result = await _parse_file_in_memory(file, content)
+
+    # Store to database
+    file_id = await create_uploaded_file_async(
+        session_id=session_id,
+        file_category=file_category,
+        file_type=parse_result["file_type"],
+        filename=filename,
+        original_filename=filename,
+        file_size=len(content),
+        content_type=file.content_type or "application/octet-stream",
+        parsed_text=parse_result["parsed_text"],
+        gis_data=parse_result["gis_data"],
+        gis_data_type=parse_result["gis_data_type"],
+        parse_status=parse_result["parse_status"],
+        parse_error=parse_result["parse_error"],
+    )
+
+    logger.info(f"[SessionRoutes] Stored file {filename} (id={file_id}) in database")
+
     return {
+        "id": file_id,
         "filename": filename,
-        "saved_path": saved_path,
-        "content": content,
-        "doc_text": doc_text,
+        "file_category": file_category,
+        "file_type": parse_result["file_type"],
+        "size_bytes": len(content),
+        "parse_status": parse_result["parse_status"],
+        "parsed_text": parse_result["parsed_text"],
+        "gis_data": parse_result["gis_data"],
+        "gis_data_type": parse_result["gis_data_type"],
     }
 
 
@@ -170,41 +281,41 @@ async def create_session(
             logger.warning(f"[create_session] Invalid rag_layer_config JSON: {rag_layer_config}")
 
     session_id = str(uuid4())
-    upload_dir = Path(f"data/uploads/{session_id}")
-    upload_dir.mkdir(parents=True, exist_ok=True)
     uploaded_files: List[Dict] = []
     parsed_content = village_data
 
-    # 文件分组处理配置: (file_group, file_type_label, subdir)
+    # Process uploaded files and store to database
     file_groups = [
-        (village_data_files, "village_data", ""),
-        (task_files, "task_description", ""),
-        (constraint_files, "constraint", ""),
+        (village_data_files, "village_data"),
+        (task_files, "task_description"),
+        (constraint_files, "constraint"),
     ]
 
-    for file_group, file_type, subdir in file_groups:
+    for file_group, file_category in file_groups:
         if not file_group:
             continue
         results = await asyncio.gather(*[
-            _process_uploaded_file(f, upload_dir, subdir) for f in file_group
+            _process_uploaded_file_db(f, session_id, file_category) for f in file_group
         ])
-        for r in results:
-            meta = {
-                "filename": r["filename"],
-                "file_type": file_type,
-                "path": str(r["saved_path"]),
-                "size_bytes": len(r["content"]),
-            }
-            uploaded_files.append(meta)
 
-            if file_type == "village_data" and r["doc_text"]:
-                parsed_content += f"\n\n--- 村庄数据: {r['filename']} ---\n{r['doc_text']}"
-            elif file_type == "task_description" and r["doc_text"]:
+        for r in results:
+            uploaded_files.append({
+                "id": r["id"],
+                "filename": r["filename"],
+                "file_category": r["file_category"],
+                "file_type": r["file_type"],
+                "size_bytes": r["size_bytes"],
+            })
+
+            # Merge parsed text into initial state
+            if file_category == "village_data" and r.get("parsed_text"):
+                parsed_content += f"\n\n--- 村庄数据: {r['filename']} ---\n{r['parsed_text']}"
+            elif file_category == "task_description" and r.get("parsed_text"):
                 if not task_description or task_description == "制定村庄发展规划":
-                    task_description = r["doc_text"].strip()
-            elif file_type == "constraint" and r["doc_text"]:
+                    task_description = r["parsed_text"].strip()
+            elif file_category == "constraint" and r.get("parsed_text"):
                 if not constraints or constraints == "无特殊约束":
-                    constraints = r["doc_text"].strip()
+                    constraints = r["parsed_text"].strip()
 
     # 验证数据
     if len(parsed_content.strip()) < 10:
@@ -680,71 +791,365 @@ async def get_layer_reports(session_id: str, layer: int):
 # Planning Document Export (V3.0)
 # ============================================
 
-class ExportRequest(BaseModel):
-    """导出请求"""
-    layer3_path: str = Field(..., description="Layer3 Markdown 文件路径")
-    project_name: str = Field(default="金田村", description="项目名称")
-
-
-class ExportResponse(BaseModel):
-    """导出响应"""
-    success: bool
-    markdown_path: str
-    article_count: int
-    errors: List[str] = []
-
-
-@router.post("/api/planning/export", response_model=ExportResponse)
-async def export_planning_document(request: ExportRequest):
+@router.post("/api/sessions/{session_id}/export/planning-text")
+async def export_planning_text_document(
+    session_id: str,
+    project_name: str = "村庄规划",
+):
     """
-    导出法定规划文档（简化版）
+    导出规划文本为 DOCX 文件。
 
-    直接从 Layer3 Markdown 提取内容，按条文编号组织输出。
-    不使用 LLM，保留原始表格和列表结构。
+    直接返回文件流，不在服务器保存文件。
+
+    Args:
+        session_id: Session ID
+        project_name: 项目名称（用于文档标题）
     """
+    from fastapi.responses import Response
     import sys
+
     project_root = Path(__file__).parent.parent.parent.parent
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-    from scripts.llm_assisted.simple_export import export_planning_document
+    from scripts.llm_assisted.simple_export import export_planning_document_to_bytes
 
-    output_dir = Path("docs/planning_export/output")
+    result = export_planning_document_to_bytes(session_id, project_name)
+
+    if not result.success or not result.docx_bytes:
+        raise HTTPException(
+            status_code=500,
+            detail=f"导出失败: {result.errors}"
+        )
+
+    filename = f"{project_name}_规划文本.docx"
+
+    return Response(
+        content=result.docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+
+# ============================================
+# Session Export (V4.0)
+# ============================================
+
+from fastapi.responses import FileResponse
+
+from app.services.modules.planning_text.export_service import (
+    ExportFormat,
+    ExportLayer,
+    SessionExportRequest,
+    SessionExportResponse,
+    ExportService,
+)
+
+
+@router.post("/api/sessions/{session_id}/export")
+async def export_session_document(
+    session_id: str,
+    layer: Optional[int] = None,
+    planning_text: bool = False,
+    project_name: str = "村庄规划",
+    include_summaries: bool = False,
+):
+    """
+    导出会话文档。
+
+    直接返回 DOCX 文件流，不在服务器保存文件。
+
+    Args:
+        session_id: Session ID
+        layer: 层级 (1/2/3)，与 planning_text 二选一
+        planning_text: 是否导出规划文本
+        project_name: 项目名称（用于规划文本标题）
+        include_summaries: 是否包含摘要（仅用于分层报告）
+    """
+    from fastapi.responses import Response
+
+    if planning_text:
+        # 导出规划文本
+        import sys
+        project_root = Path(__file__).parent.parent.parent.parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+
+        from scripts.llm_assisted.simple_export import export_planning_document_to_bytes
+
+        result = export_planning_document_to_bytes(session_id, project_name)
+
+        if not result.success or not result.docx_bytes:
+            raise HTTPException(
+                status_code=500,
+                detail=f"导出失败: {result.errors}"
+            )
+
+        filename = f"{project_name}_规划文本.docx"
+
+        return Response(
+            content=result.docx_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    elif layer in (1, 2, 3):
+        # 导出分层报告
+        from app.services.modules.planning_text.layer_exporter import LayerExporter, LayerExportConfig
+
+        config = LayerExportConfig(
+            session_id=session_id,
+            output_dir="output/export",
+            output_formats=("docx",),
+            include_summaries=include_summaries,
+        )
+
+        exporter = LayerExporter(config)
+        docx_bytes = await exporter.export_layer_to_bytes(layer)
+
+        if not docx_bytes:
+            raise HTTPException(
+                status_code=500,
+                detail=f"导出 Layer {layer} 失败"
+            )
+
+        layer_names = {1: "现状分析", 2: "规划思路", 3: "详细规划"}
+        filename = f"L{layer}_{layer_names[layer]}.docx"
+
+        return Response(
+            content=docx_bytes,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="请指定 layer (1/2/3) 或 planning_text=true"
+        )
+
+
+# ============================================
+# Planning Text Document Endpoints
+# ============================================
+
+from app.database.operations import (
+    create_planning_text_document_async,
+    get_planning_text_document_async,
+    list_planning_text_versions_async,
+    update_planning_text_status_async,
+)
+from app.services.modules.planning_text.generator import PlanningTextGenerator
+from app.services.modules.planning_text.config import PlanningTextConfig
+
+
+class PlanningTextResponse(BaseModel):
+    """Planning text document response."""
+    session_id: str
+    version: int
+    document_id: str
+    markdown_content: str
+    json_content: Optional[Dict[str, Any]] = None
+    article_count: int
+    generated_at: str
+    generation_duration_seconds: Optional[float] = None
+    status: str
+    trigger_reason: Optional[str] = None
+    changed_dimensions: Optional[List[str]] = None
+
+
+class PlanningTextVersion(BaseModel):
+    """Planning text version metadata."""
+    id: int
+    version: int
+    document_id: str
+    article_count: int
+    generated_at: str
+    generation_duration_seconds: Optional[float] = None
+    status: str
+    trigger_reason: Optional[str] = None
+    changed_dimensions: Optional[List[str]] = None
+
+
+class PlanningTextVersionList(BaseModel):
+    """List of planning text versions."""
+    session_id: str
+    versions: List[PlanningTextVersion]
+    total: int
+
+
+class GeneratePlanningTextRequest(BaseModel):
+    """Request to generate planning text."""
+    trigger_reason: Optional[str] = "initial"
+    changed_dimensions: Optional[List[str]] = None
+
+
+class GeneratePlanningTextResponse(BaseModel):
+    """Response for planning text generation."""
+    session_id: str
+    version: int
+    document_id: str
+    markdown_content: str
+    article_count: int
+    generated_at: str
+    generation_duration_seconds: float
+    status: str
+    trigger_reason: str
+
+
+@router.get("/api/sessions/{session_id}/planning-text", response_model=Optional[PlanningTextResponse])
+async def get_planning_text(session_id: str, version: Optional[int] = None):
+    """
+    Get planning text document.
+
+    Args:
+        session_id: Session ID
+        version: Version number (optional, defaults to latest)
+
+    Returns:
+        Planning text document or None if not found
+    """
+    doc = await get_planning_text_document_async(session_id, version)
+
+    if not doc:
+        return None
+
+    return PlanningTextResponse(**doc)
+
+
+@router.get("/api/sessions/{session_id}/planning-text/versions", response_model=PlanningTextVersionList)
+async def get_planning_text_versions(session_id: str, limit: int = 20):
+    """
+    Get all planning text versions for a session.
+
+    Args:
+        session_id: Session ID
+        limit: Maximum number of versions to return
+
+    Returns:
+        List of version metadata
+    """
+    versions = await list_planning_text_versions_async(session_id, limit)
+
+    return PlanningTextVersionList(
+        session_id=session_id,
+        versions=[PlanningTextVersion(**v) for v in versions],
+        total=len(versions),
+    )
+
+
+@router.get("/api/sessions/{session_id}/planning-text/versions/{version}", response_model=Optional[PlanningTextResponse])
+async def get_planning_text_version(session_id: str, version: int):
+    """
+    Get a specific version of planning text.
+
+    Args:
+        session_id: Session ID
+        version: Version number
+
+    Returns:
+        Planning text document or None if not found
+    """
+    doc = await get_planning_text_document_async(session_id, version)
+
+    if not doc:
+        return None
+
+    return PlanningTextResponse(**doc)
+
+
+@router.post("/api/sessions/{session_id}/planning-text", response_model=GeneratePlanningTextResponse)
+async def generate_planning_text(session_id: str, request: GeneratePlanningTextRequest):
+    """
+    Generate planning text document.
+
+    This endpoint:
+    1. Fetches all L3 reports from DimensionReport table
+    2. Uses PlanningTextGenerator to assemble the document
+    3. Stores the result in PlanningTextDocument table (new version)
+
+    Args:
+        session_id: Session ID
+        request: Generation request with trigger_reason and changed_dimensions
+
+    Returns:
+        Generated document metadata and content
+    """
+    import time
+
+    start_time = time.time()
+
+    # Get session metadata
+    session = await get_planning_session_async(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    project_name = session.get("project_name", "村庄规划")
+    village_name = session.get("village_name") or session.get("township", "")
+
+    # Create output directory
+    output_dir = Path(f"output/export/{session_id}")  # 统一到项目根目录
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    result = export_planning_document(
-        layer3_path=request.layer3_path,
+    # Configure generator
+    config = PlanningTextConfig(
+        session_id=session_id,
+        project_name=project_name,
+        village_name=village_name,
         output_dir=str(output_dir),
-        project_name=request.project_name
+        output_formats=("md", "json"),
+        append_rag=True,
+        generate_tier3=False,  # Skip LLM generation, use existing reports
     )
 
-    return ExportResponse(
-        success=result.success,
-        markdown_path=result.markdown_path,
-        article_count=result.article_count,
-        errors=result.errors
-    )
+    generator = PlanningTextGenerator(config)
 
+    try:
+        # Generate document
+        result = await generator.generate()
 
-@router.get("/api/planning/export/{project_name}")
-async def get_exported_document(project_name: str):
-    """
-    获取已导出的规划文档
+        duration = time.time() - start_time
 
-    返回 Markdown 文件内容。
-    """
-    markdown_path = Path(f"docs/planning_export/output/{project_name}_规划文本.md")
-    if not markdown_path.exists():
-        raise HTTPException(status_code=404, detail=f"Document not found: {project_name}")
+        # Read generated content
+        markdown_content = ""
+        json_content = None
 
-    with open(markdown_path, "r", encoding="utf-8") as f:
-        content = f.read()
+        if result.md_path:
+            with open(result.md_path, "r", encoding="utf-8") as f:
+                markdown_content = f.read()
 
-    return {
-        "project_name": project_name,
-        "content": content,
-        "path": str(markdown_path),
-    }
+        if result.json_path:
+            with open(result.json_path, "r", encoding="utf-8") as f:
+                json_content = json.load(f)
+
+        # Store in database
+        doc = await create_planning_text_document_async(
+            session_id=session_id,
+            markdown_content=markdown_content,
+            json_content=json_content,
+            article_count=result.article_count or 0,
+            generation_duration_seconds=duration,
+            trigger_reason=request.trigger_reason,
+            changed_dimensions=request.changed_dimensions,
+        )
+
+        return GeneratePlanningTextResponse(
+            session_id=doc["session_id"],
+            version=doc["version"],
+            document_id=doc["document_id"],
+            markdown_content=doc["markdown_content"],
+            article_count=doc["article_count"],
+            generated_at=doc["generated_at"],
+            generation_duration_seconds=duration,
+            status=doc["status"],
+            trigger_reason=doc["trigger_reason"],
+        )
+
+    except Exception as e:
+        logger.error(f"[Planning Text] Generation failed for {session_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Planning text generation failed: {e}")
 
 
 __all__ = ["router"]

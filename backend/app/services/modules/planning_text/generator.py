@@ -63,8 +63,7 @@ class PlanningTextGenerator:
                 f"No reports found for session {self.config.session_id}"
             )
 
-        # Phase 2: Extract structured data and inject RAG legal titles
-        # Fetch dimension summaries for structured field injection
+        # Phase 2: Extract structured data and inject summaries
         s1, s2, s3 = await asyncio.gather(
             self.store.get_layer_summaries(self.config.session_id, 1),
             self.store.get_layer_summaries(self.config.session_id, 2),

@@ -121,7 +121,7 @@ phases:
 
       - key: development_goals
         name: "发展目标分析"
-        tools: ["population_model_v1"]
+        tools: []
         rag_query: ""
         depends_on: ["resource_endowment", "planning_positioning"]
         layer_depends_on:
@@ -130,10 +130,11 @@ phases:
 
       - key: planning_strategies
         name: "规划策略分析"
-        tools: []
+        tools: ["population_model_v1"]
         rag_query: ""
         depends_on: ["resource_endowment", "planning_positioning", "development_goals"]
         layer_depends_on:
+          - "socio_economic"
           - "natural_environment"
           - "land_use"
           - "traffic"

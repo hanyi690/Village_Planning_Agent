@@ -263,7 +263,7 @@ class CascadeExperimentRunner:
         # 4. SSE 监听器（复用基线 session_id）
         sse_manager.init_session(baseline_session_id, {
             "session_id": baseline_session_id,
-            "project_name": f"金田村级联实验_{self.scenario_name}",
+            "project_name": f"金田村规划_{self.scenario_name}",
         })
         sse_manager.set_execution_active(baseline_session_id, True)
 
@@ -490,3 +490,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# Alias for backward compatibility
+CascadeRunner = CascadeExperimentRunner

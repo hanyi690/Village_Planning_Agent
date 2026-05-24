@@ -427,6 +427,14 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     prompt = _build_prompt(cfg, state, rag_context, deps, same_layer_contexts, professional_data_section=professional_data_section)
     logger.info(f"[analyze_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
 
+    # 6.5 统计收集 - 开始维度
+    from ...utils.stats_collector import StatsCollector
+    stats = StatsCollector.get_instance()
+    stats.start_dimension(session_id, dim_key, dim_name, dim_layer)
+    stats.record_prompt(session_id, dim_key, len(prompt))
+    if rag_log:
+        stats.record_rag_time(session_id, dim_key, rag_log.retrieval_latency_ms, rag_log.total_results)
+
     # 7. 流式 LLM + SSE
     llm = _get_llm()
     llm_start_time = time.time()
@@ -461,6 +469,10 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     llm_elapsed = time.time() - llm_start_time
     logger.info(f"[analyze_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
+
+    # 7.5 统计收集 - 记录 LLM 时间和输出
+    stats.record_llm_time(session_id, dim_key, llm_elapsed, len(llm_response))
+    stats.end_dimension(session_id, dim_key)
 
     # 8. 准备报告数据（累积到 pending_reports，由 completion.py 批量写入）
     store = ReportStore.get_instance()

@@ -385,35 +385,63 @@ class SectionBuilder:
 
     def _asm_article5(self) -> str:
         d = self.data
-        area = d.total_area_ha or 2352.89
+        # 从摘要注入的数值获取面积，如果没有则从报告文本提取
+        if d.total_area_ha and d.total_area_ha > 0:
+            area = d.total_area_ha
+        else:
+            # 从土地利用报告提取总面积
+            land_use = d._raw_reports.get("land_use", "")
+            import re
+            m = re.search(r'土地总用地面积[约]*\s*([\d.]+)\s*公顷', land_use)
+            area = float(m.group(1)) if m else 0.0
         village = self.village_name or "本村"
-        return f"本次规划范围为{village}村域全部国土空间，总面积{area:.2f}公顷。"
+        if area > 0:
+            return f"本次规划范围为{village}村域全部国土空间，总面积{area:.2f}公顷。"
+        else:
+            return f"本次规划范围为{village}村域全部国土空间。（总面积数据缺失）"
 
     def _asm_article8(self) -> str:
-        d = self.data
-        rp = int(d.population_resident) or 500
-        reg = int(d.population_registered) or 1403
-        farm = d.farmland_ha or 85.20
-        ef = d.ecological_forest_ha or 325.92
-        cl = d.construction_land_ha or 30.17
-        fc = d.forest_coverage_pct or 90
-        tf = d.commercial_forest_ha + d.ecological_forest_ha or 2117.60
+        """第八条 规划指标 - 从 planning_strategies 维度获取核心指标和预测内容。
 
-        return (
-            "在不突破土地利用总体规划确定的建设用地规模和耕地保有量、"
-            "不突破生态保护红线和永久基本农田保护红线的前提下，合理确定各项规划指标。\n\n"
-            "表 2-1 规划指标表\n\n"
-            "| 规划指标体系 | 基期年 | 目标年 | 属性 |\n"
-            "| :--- | :--- | :--- | :--- |\n"
-            f"| 户籍人口规模（人） | {reg} | - | 预期性 |\n"
-            f"| 常住人口规模（人） | {rp} | {rp} | 预期性 |\n"
-            f"| 耕地保有量（公顷） | {farm:.2f} | {farm:.2f} | 约束性 |\n"
-            f"| 永久基本农田保护面积（公顷） | {farm:.2f} | {farm:.2f} | 约束性 |\n"
-            f"| 生态保护红线面积（公顷） | {ef:.2f} | {ef:.2f} | 约束性 |\n"
-            f"| 村庄建设用地规模（公顷） | {cl:.2f} | {cl:.2f} | 约束性 |\n"
-            f"| 林地保有量（公顷） | {tf:.2f} | {tf:.2f} | 预期性 |\n"
-            f"| 森林覆盖率（%） | {fc} | ≥{fc} | 预期性 |"
-        )
+        核心指标目标、人口规模预测、用地规模预测在规划策略阶段生成。
+        """
+        # 从 planning_strategies 维度获取内容
+        strategies_content = self.data._raw_reports.get("planning_strategies", "")
+
+        if strategies_content and len(strategies_content) > 100:
+            # 提取【核心指标目标】【人口规模预测】【用地规模预测】部分
+            sections = self.data.layer3_sections.get("planning_strategies", {})
+            if sections:
+                # 按顺序提取指标相关内容
+                parts = []
+                for key in ["核心指标目标", "人口规模预测", "用地规模预测"]:
+                    if key in sections:
+                        parts.append(f"【{key}】\n{sections[key]}")
+                if parts:
+                    return "\n\n".join(parts)
+
+            # 如果没有特定章节，尝试从原文提取
+            import re
+            indicator_match = re.search(r'【核心指标目标】(.*?)(?=【|$)', strategies_content, re.DOTALL)
+            pop_match = re.search(r'【人口规模预测】(.*?)(?=【|$)', strategies_content, re.DOTALL)
+            land_match = re.search(r'【用地规模预测】(.*?)(?=【|$)', strategies_content, re.DOTALL)
+
+            parts = []
+            if indicator_match:
+                parts.append(f"【核心指标目标】{indicator_match.group(1).strip()}")
+            if pop_match:
+                parts.append(f"【人口规模预测】{pop_match.group(1).strip()}")
+            if land_match:
+                parts.append(f"【用地规模预测】{land_match.group(1).strip()}")
+
+            if parts:
+                return "\n\n".join(parts)
+
+            # 返回原始内容
+            return strategies_content
+
+        # 如果没有内容，返回占位说明
+        return "（规划指标内容待从规划策略阶段补充）"
 
     # ---- S-TEMPLATE ----
 

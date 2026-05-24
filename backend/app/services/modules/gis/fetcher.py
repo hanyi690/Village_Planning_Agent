@@ -78,41 +78,42 @@ class GISDataFetcher:
         """获取 WFS 服务实例（使用 TiandituProvider 共享的实例）"""
         return self.provider.wfs_service
 
-    def _load_uploaded_geojson(
+    async def _load_uploaded_geojson(
         self,
-        upload_dir: Optional[Path],
+        session_id: Optional[str],
         data_type_hint: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Load GeoJSON from upload directory
+        """Load GeoJSON from database (uploaded files).
 
-        Priority: upload_dir/*.geojson over Tianditu WFS.
+        Priority: Database uploaded files > Tianditu WFS.
 
         Args:
-            upload_dir: Upload directory path
+            session_id: Session identifier (required for DB lookup)
             data_type_hint: Expected data type (boundary/road/water/etc.)
 
         Returns:
             GeoJSON FeatureCollection dict, or None
         """
-        if not upload_dir or not Path(upload_dir).exists():
+        if not session_id:
             return None
 
-        upload_dir = Path(upload_dir)
-        for f in sorted(upload_dir.glob("*.geojson")):
-            try:
-                with open(f, "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                if data.get("type") == "FeatureCollection":
-                    if data_type_hint:
-                        inferred = infer_geojson_data_type(data)
-                        if inferred == data_type_hint:
-                            logger.info(f"[GISDataFetcher] Using uploaded {data_type_hint}: {f.name}")
-                            return data
-                    else:
-                        logger.info(f"[GISDataFetcher] Using uploaded GeoJSON: {f.name}")
-                        return data
-            except Exception as e:
-                logger.warning(f"[GISDataFetcher] Failed to load {f.name}: {e}")
+        try:
+            from app.database.operations import get_uploaded_geojson_data_async
+
+            # Get uploaded GeoJSON data from database
+            geojson_list = await get_uploaded_geojson_data_async(
+                session_id=session_id,
+                data_type_hint=data_type_hint,
+            )
+
+            if geojson_list:
+                # Return first matching GeoJSON
+                logger.info(f"[GISDataFetcher] Using uploaded GeoJSON from DB (type={data_type_hint})")
+                return geojson_list[0]
+
+        except Exception as e:
+            logger.warning(f"[GISDataFetcher] Failed to load from DB: {e}")
+
         return None
 
     def get_boundary_bbox(

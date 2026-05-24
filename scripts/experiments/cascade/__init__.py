@@ -1,5 +1,5 @@
 """Cascade experiment module — inherits ExperimentRunner framework."""
 
-from .runner import CascadeRunner
+from .runner import CascadeExperimentRunner as CascadeRunner
 
 __all__ = ["CascadeRunner"]

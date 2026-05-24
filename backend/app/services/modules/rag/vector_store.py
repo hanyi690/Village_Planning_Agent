@@ -16,8 +16,8 @@ from dataclasses import dataclass
 import json
 
 from app.core.settings import (
-    CHROMA_COLLECTION_NAME, CHROMA_PERSIST_DIR, EMBEDDING_PROVIDER,
-    EMBEDDING_MODEL_NAME, DASHSCOPE_API_KEY, HF_ENDPOINT, OUTLINE_INDEX_DIR,
+    CHROMA_COLLECTION_NAME, CHROMA_PERSIST_DIR,
+    DASHSCOPE_API_KEY, OUTLINE_INDEX_DIR,
     RETRIEVE_SCORE_THRESHOLD, MAX_MERGE_CONTENT_LENGTH,
 )
 from app.utils.logger import get_logger
@@ -155,59 +155,43 @@ class VectorStoreCache:
         if self._embedding_model is None:
             with self._embedding_lock:
                 if self._embedding_model is None:
-                    if EMBEDDING_PROVIDER == "aliyun":
-                        if not DASHSCOPE_API_KEY:
-                            raise ValueError("EMBEDDING_PROVIDER=aliyun 但未设置 DASHSCOPE_API_KEY")
-                        model = AliyunEmbeddings(
-                            api_key=DASHSCOPE_API_KEY,
-                            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-                            model="text-embedding-v4",
-                        )
-                        from app.core.settings import EMBEDDING_MAX_CONCURRENT, EMBEDDING_RATE_LIMIT_RPS
-                        from app.utils.rate_limiter import get_embedding_rate_limiter
-                        from app.utils.retry import async_retry_with_backoff
+                    if not DASHSCOPE_API_KEY:
+                        raise ValueError("未设置 DASHSCOPE_API_KEY")
+                    model = AliyunEmbeddings(
+                        api_key=DASHSCOPE_API_KEY,
+                        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                        model="text-embedding-v4",
+                    )
+                    from app.core.settings import EMBEDDING_MAX_CONCURRENT, EMBEDDING_RATE_LIMIT_RPS
+                    from app.utils.rate_limiter import get_embedding_rate_limiter
+                    from app.utils.retry import async_retry_with_backoff
 
-                        def _init_limiter_sync():
-                            try:
-                                loop = asyncio.get_running_loop()
-                            except RuntimeError:
-                                return asyncio.run(get_embedding_rate_limiter(
+                    def _init_limiter_sync():
+                        try:
+                            loop = asyncio.get_running_loop()
+                        except RuntimeError:
+                            return asyncio.run(get_embedding_rate_limiter(
+                                requests_per_second=EMBEDDING_RATE_LIMIT_RPS,
+                                max_concurrent=EMBEDDING_MAX_CONCURRENT,
+                            ))
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(
+                                asyncio.run,
+                                get_embedding_rate_limiter(
                                     requests_per_second=EMBEDDING_RATE_LIMIT_RPS,
                                     max_concurrent=EMBEDDING_MAX_CONCURRENT,
-                                ))
-                            import concurrent.futures
-                            with concurrent.futures.ThreadPoolExecutor() as executor:
-                                future = executor.submit(
-                                    asyncio.run,
-                                    get_embedding_rate_limiter(
-                                        requests_per_second=EMBEDDING_RATE_LIMIT_RPS,
-                                        max_concurrent=EMBEDDING_MAX_CONCURRENT,
-                                    )
                                 )
-                                return future.result()
+                            )
+                            return future.result()
 
-                        limiter = _init_limiter_sync()
-                        model.set_rate_limiter(limiter)
-                        model.set_retry_fn(async_retry_with_backoff)
-                        self._embedding_model = model
-                        logger.info(f"[VectorStore] 阿里云 Embedding 已就绪（限流: {EMBEDDING_RATE_LIMIT_RPS} rps, {EMBEDDING_MAX_CONCURRENT} 并发）")
-                    else:
-                        self._init_local_embedding()
+                    limiter = _init_limiter_sync()
+                    model.set_rate_limiter(limiter)
+                    model.set_retry_fn(async_retry_with_backoff)
+                    self._embedding_model = model
+                    logger.info(f"[VectorStore] 阿里云 Embedding 已就绪（限流: {EMBEDDING_RATE_LIMIT_RPS} rps, {EMBEDDING_MAX_CONCURRENT} 并发）")
 
         return self._embedding_model
-
-    def _init_local_embedding(self):
-        """初始化本地 HuggingFace Embedding 模型"""
-        import os
-        if HF_ENDPOINT:
-            os.environ["HF_ENDPOINT"] = HF_ENDPOINT
-
-        from langchain_huggingface import HuggingFaceEmbeddings
-        self._embedding_model = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL_NAME,
-            encode_kwargs={"normalize_embeddings": True},
-        )
-        logger.info(f"[VectorStore] 本地 Embedding 模型已缓存: {EMBEDDING_MODEL_NAME}")
 
     def get_vectorstore(self):
         """懒加载并缓存向量数据库（双重检查锁定）"""

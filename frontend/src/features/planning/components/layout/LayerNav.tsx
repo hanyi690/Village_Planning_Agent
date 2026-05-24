@@ -2,7 +2,7 @@
 
 import React, { useCallback, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { faCompass, faChevronDown, faChevronUp } from '@fortawesome/free-solid-svg-icons';
+import { faCompass, faChevronDown, faChevronUp, faFileAlt } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
 import { usePlanningStore } from '../../store';
@@ -89,6 +89,9 @@ export default function LayerNav() {
     { key: NAV_KEYS.OVERVIEW, icon: faCompass, label: '总览' },
   ];
 
+  // 规划文本导航项（L3 完成后显示）
+  const showPlanningTextNav = completedLayers[3];
+
   return (
     <nav className="w-[280px] h-full bg-white border-r border-slate-200 flex flex-col shrink-0 overflow-y-auto">
       <div className="px-4 py-3 space-y-0.5 border-b border-slate-100">
@@ -106,6 +109,20 @@ export default function LayerNav() {
             <span>{item.label}</span>
           </button>
         ))}
+        {/* Planning Text Navigation Item */}
+        {showPlanningTextNav && (
+          <button
+            onClick={() => setSelectedNavigationKey(NAV_KEYS.PLANNING_TEXT)}
+            className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-base transition-colors ${
+              selectedNavigationKey === NAV_KEYS.PLANNING_TEXT
+                ? 'bg-[#e0f2fe] text-[#0369a1] font-medium'
+                : 'text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            <FontAwesomeIcon icon={faFileAlt} style={{ width: 16, height: 16 }} />
+            <span>规划文本</span>
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-3">

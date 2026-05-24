@@ -303,10 +303,12 @@ METRICS_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
         "intangible_heritage_items": "非物质文化遗产列表",
     },
     "development_goals": {
-        "target_population": "规划目标人口",
+        "target_registered_population": "规划目标户籍人口",
+        "target_resident_population": "规划目标常住人口",
         "farmland_protection_ha": "耕地保护(ha)",
         "ecological_redline_ha": "生态红线(ha)",
         "forest_coverage_target_rate": "森林覆盖率目标(%)",
+        "construction_land_target_ha": "村庄建设用地规模(ha)",
     },
     "settlement_planning": {
         "current_population": "现状人口",

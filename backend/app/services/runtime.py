@@ -267,7 +267,6 @@ class PlanningRuntimeService:
                 "rag_enabled": rag_enabled,  # Keep global switch (backward compatible)
                 "rag_layer_config": rag_layer_config,  # NEW: Layer-level switch
                 "knowledge_cache": {},
-                "upload_dir": str(Path("data") / "uploads" / session_id) if (uploaded_files) else None,
             },
             "image_ids": image_ids or [],  # 图片ID引用，仅 Layer 1 使用
             "uploaded_files": uploaded_files or [],  # 上传文件元数据列表

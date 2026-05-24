@@ -27,6 +27,7 @@ export interface VillageInputData {
   city?: string;
   county?: string;
   township?: string;
+  villageName?: string;  // 村名
   planningPeriod?: string;
   taskDescription: string;
   constraints: string;
@@ -241,6 +242,7 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
   const [city, setCity] = useState('');
   const [county, setCounty] = useState('');
   const [township, setTownship] = useState('');
+  const [villageName, setVillageName] = useState('');  // 村名
   const [planningPeriod, setPlanningPeriod] = useState('2022-2035年');
   const [taskDescription, setTaskDescription] = useState('');
   const [constraints, setConstraints] = useState('');
@@ -271,6 +273,7 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
       city: city.trim(),
       county: county.trim(),
       township: township.trim(),
+      villageName: villageName.trim(),
       planningPeriod: planningPeriod.trim(),
       taskDescription: taskDescription.trim(),
       constraints: constraints.trim(),
@@ -374,7 +377,7 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
               />
 
               {/* 行政区划和规划期限 */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-4">
                 <InputField
                   id="province"
                   label="省份"
@@ -420,6 +423,18 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
                   placeholder="泗水镇"
                   isFocused={focusedField === 'township'}
                   onFocus={() => setFocusedField('township')}
+                  onBlur={() => setFocusedField(null)}
+                  compact
+                />
+                <InputField
+                  id="villageName"
+                  label="村名"
+                  icon={<FontAwesomeIcon icon={faMapMarkerAlt} className="text-emerald-400" style={{ width: 12, height: 12 }} />}
+                  value={villageName}
+                  onChange={setVillageName}
+                  placeholder="金田村"
+                  isFocused={focusedField === 'villageName'}
+                  onFocus={() => setFocusedField('villageName')}
                   onBlur={() => setFocusedField(null)}
                   compact
                 />

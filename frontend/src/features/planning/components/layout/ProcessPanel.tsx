@@ -8,6 +8,7 @@ import {
   faMap,
   faHistory,
   faCog,
+  faTrash,
 } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
@@ -95,7 +96,7 @@ export default function ProcessPanel() {
   const villages = useVillages();
   const historyLoading = useHistoryLoading();
   const status = useStatus();
-  const { loadVillagesHistory, loadHistoricalSession } = usePlanningActions();
+  const { loadVillagesHistory, loadHistoricalSession, deleteSession } = usePlanningActions();
 
   useEffect(() => {
     if (status === 'idle') {
@@ -255,9 +256,23 @@ export default function ProcessPanel() {
                                       </span>
                                     )}
                                   </div>
-                                  <span className="text-xs text-[#0ea5e9] opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                                    恢复
-                                  </span>
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      className="p-1 rounded hover:bg-red-100 text-slate-400 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (window.confirm('确定要删除此会话吗？此操作不可撤销。')) {
+                                          deleteSession(session.session_id, village.name);
+                                        }
+                                      }}
+                                      title="删除会话"
+                                    >
+                                      <FontAwesomeIcon icon={faTrash} className="w-3 h-3" />
+                                    </button>
+                                    <span className="text-xs text-[#0ea5e9] opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                                      恢复
+                                    </span>
+                                  </div>
                                 </div>
                               );
                             })}

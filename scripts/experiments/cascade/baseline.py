@@ -45,12 +45,17 @@ async def _run_graph(session_id: str, listener) -> str:
     from app.services.sse import sse_manager
     from app.utils.sse_publisher import SSEPublisher
     from app.agent.state import get_layer_dimensions, get_layer_name
+    from app.utils.stats_collector import StatsCollector
 
     village_data = JINTIAN_VILLAGE_DATA.get("status_report", "")
     village_name = JINTIAN_VILLAGE_DATA.get("village_name", "金田村")
 
+    # 初始化统计收集器
+    stats = StatsCollector.get_instance()
+    stats.start_session(session_id, "金田村规划")
+
     initial_state = PlanningRuntimeService.build_initial_state(
-        project_name="金田村基线实验",
+        project_name="金田村规划",
         village_data=village_data,
         village_name=village_name,
         task_description=DEFAULT_TASK_DESCRIPTION,
@@ -62,7 +67,7 @@ async def _run_graph(session_id: str, listener) -> str:
 
     sse_manager.init_session(session_id, {
         "session_id": session_id,
-        "project_name": "金田村基线实验",
+        "project_name": "金田村规划",
     })
     sse_manager.set_execution_active(session_id, True)
 
@@ -102,6 +107,7 @@ async def run_baseline() -> Dict[str, str]:
     from app.services.runtime import PlanningRuntimeService
     from app.services.report_store import ReportStore
     from scripts.experiments.framework.sse_listener import InProcessEventListener
+    from app.utils.stats_collector import StatsCollector, format_stats_report
 
     ensure_cascade_dirs()
     await PlanningRuntimeService.ensure_initialized()
@@ -121,6 +127,22 @@ async def run_baseline() -> Dict[str, str]:
 
     logger.info(f"[Baseline] Retrieved {len(reports)} dimension reports")
     save_baseline(reports, session_id)
+
+    # 保存统计报告
+    stats = StatsCollector.get_instance()
+    stats_path = BASELINE_DIR / "generation_stats.json"
+    stats.save_session_stats(session_id, stats_path)
+    logger.info(f"[Baseline] Stats saved to {stats_path}")
+
+    # 输出可读统计报告
+    session_stats = stats.get_session_stats(session_id)
+    if session_stats:
+        report_text = format_stats_report(session_stats)
+        report_path = BASELINE_DIR / "generation_stats_report.txt"
+        report_path.write_text(report_text, encoding="utf-8")
+        logger.info(f"[Baseline] Stats report saved to {report_path}")
+        print("\n" + report_text)
+
     return reports
 
 

@@ -16,7 +16,7 @@ class PlanningTextConfig:
     township: str = ""
     planning_period: str = "2022-2035年"
     generate_tier3: bool = True
-    output_dir: str = "output/planning_text"
+    output_dir: str = "output/export"  # 统一到项目根目录
     output_formats: Tuple[str, ...] = ("md", "json")
     append_rag: bool = True
 

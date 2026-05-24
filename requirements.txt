@@ -1,4 +1,10 @@
 # ============================================
+# Village Planning Agent - Python Dependencies
+# ============================================
+# 使用阿里云 DashScope Embedding API，无需本地模型
+# Docker 镜像大小: ~2GB
+
+# ============================================
 # LangChain Ecosystem (v1.x)
 # ============================================
 langchain>=1.1.0
@@ -7,7 +13,7 @@ langchain-community>=0.4.1
 langchain-openai>=1.1.0
 langchain-text-splitters>=1.0.0
 langchain-chroma>=1.0.0
-langchain-huggingface>=0.1.0
+# 注意: 移除了 langchain-huggingface（本地模型依赖）
 
 # ============================================
 # LangGraph (v1.x)
@@ -25,8 +31,9 @@ openai>=2.0.0
 zhipuai>=2.1.4
 
 # ============================================
-# Vector Database
+# Vector Database (精简版)
 # ============================================
+# chromadb 会安装一些 ML 依赖，但比 sentence-transformers 小很多
 chromadb>=1.0.0
 
 # ============================================
@@ -46,21 +53,23 @@ aiosqlite>=0.19.0
 # ============================================
 # File Processing
 # ============================================
-# MarkItDown - Microsoft文档解析库
 markitdown[docx,pdf,xlsx,pptx]
-# 文件类型检测
+markitdown-ocr>=0.1.0
+# Pandoc 文档转换（Markdown→DOCX 表格支持）
+pypandoc>=1.11
+# python-docx 作为 Pandoc 失败时的 fallback
+python-docx>=0.8.11
 filetype>=1.2.0
-# 编码检测
 chardet>=5.0.0
-# 超时保护（防止大文件卡死）
-func-timeout>=4.3.5
+func-timeout>=4.3.5  # 超时保护，防止大文件处理卡死
+# PDF 备用解析器（当 MarkItDown 失败时自动切换）
+PyPDF2>=3.0.0       # 简单 PDF 文本提取
+pymupdf>=1.24.0     # 复杂字体/布局容错，扫描版 PDF 检测
+pdfplumber>=0.11.0  # 表格/结构化内容提取
 # 图片处理
 Pillow>=10.0.0
-
-# ============================================
-# Embedding Models
-# ============================================
-sentence-transformers>=2.2.0
+# Docling - 高级文档解析（MinerU fallback）
+docling>=2.15.0
 
 # ============================================
 # Terminal Output
@@ -76,26 +85,20 @@ pydantic-settings>=2.0.0
 typing-extensions>=4.12.0
 
 # ============================================
-# GIS Dependencies
+# LangSmith Tracing
 # ============================================
-# OpenStreetMap 数据获取（补充村级道路）
-osmnx>=1.5.0
-geopandas>=0.14.0
-shapely>=2.0.0
+langsmith>=0.1.0
 
 # ============================================
-# Testing
+# GIS Dependencies (空间分析)
 # ============================================
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
-httpx>=0.24.0
+geopandas>=0.14.0
+shapely>=2.0.0
+networkx>=3.0
+# OpenStreetMap 数据获取（补充村级道路）
+osmnx>=1.5.0
 
 # ============================================
 # Caching
 # ============================================
 cachetools>=5.3.0
-
-# ============================================
-# LangSmith Tracing
-# ============================================
-langsmith>=0.1.0

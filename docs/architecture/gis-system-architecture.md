@@ -1,9 +1,9 @@
 # GIS 数据系统架构
 
-> **更新日期**: 2026-05-08
-> **版本**: v2.0 (重组后架构)
+> **更新日期**: 2026-05-21
+> **版本**: v3.0 (统一架构)
 
-本文档详细说明 GIS 数据获取、上传解析、坐标系统、瓦片服务和前端可视化的完整链路。
+本文档详细说明 GIS 数据获取、坐标系统、瓦片服务和前端可视化的完整链路。
 
 ## 目录
 
@@ -650,26 +650,29 @@ python scripts/debug_full_gis_chain.py
 
 | 功能 | 后端路径 | 前端路径 |
 |------|----------|----------|
-| GIS 数据解析 | `backend/app/modules/gis/parser.py` | - |
-| GIS 数据管理 | `backend/app/modules/gis/manager.py` | - |
-| GIS 上传 API | `backend/api/gis_upload.py` | - |
-| GIS 测试 API | `backend/api/gis_test.py` | - |
-| GIS 工具包装 | `backend/app/modules/gis/tools.py` | - |
-| 边界兜底机制 | `backend/app/modules/gis/fallback.py` | - |
-| 共享 GIS 上下文 | `backend/app/agent/gis_context.py` | - |
-| WFS 数据获取 | `backend/app/modules/gis/fetcher.py` | - |
-| POI 数据 | `backend/app/modules/gis/providers/poi.py` | - |
-| 高德 API | `backend/app/modules/gis/providers/amap/provider.py` | - |
-| 天地图 API | `backend/app/modules/gis/providers/tianditu/provider.py` | - |
-| 路由注册 | `backend/api/routes.py` | - |
-| 地图渲染 | - | `frontend/src/components/gis/MapView.tsx` |
-| 数据上传 | - | `frontend/src/components/gis/DataUpload.tsx` |
-| API 客户端 | - | `frontend/src/lib/api/data-api.ts` |
+| GIS 服务门面 | `backend/app/services/modules/gis/service.py` | - |
+| GIS 数据获取 | `backend/app/services/modules/gis/fetcher.py` | - |
+| 覆盖率计算 | `backend/app/services/modules/gis/coverage.py` | - |
+| 可达性分析 | `backend/app/services/modules/gis/accessibility.py` | - |
+| 等时圈分析 | `backend/app/services/modules/gis/isochrone.py` | - |
+| 高德 API | `backend/app/services/modules/gis/providers/amap/provider.py` | - |
+| 高德交通 | `backend/app/services/modules/gis/providers/amap/traffic.py` | - |
+| 天地图 API | `backend/app/services/modules/gis/providers/tianditu/provider.py` | - |
+| 天地图 WFS | `backend/app/services/modules/gis/providers/tianditu/wfs.py` | - |
+| 天地图瓦片 | `backend/app/services/modules/gis/providers/tianditu/tiles.py` | - |
+| 广东省天地图 | `backend/app/services/modules/gis/providers/tianditu/gd_service.py` | - |
+| OSM 道路 | `backend/app/services/modules/gis/providers/osm/provider.py` | - |
+| POI 统一接口 | `backend/app/services/modules/gis/providers/poi.py` | - |
+| 坐标转换 | `backend/app/services/modules/gis/utils/coord_utils.py` | - |
+| GeoJSON 工具 | `backend/app/services/modules/gis/utils/geojson_utils.py` | - |
+| 地图渲染 | - | `frontend/src/features/planning/components/gis/MapView.tsx` |
+| API 客户端 | - | `frontend/src/features/planning/api/data-api.ts` |
 
 ---
 
 ## 相关文档
 
-- [工具系统实现](./tool-system-implementation.md) - 工具注册与执行
-- [后端API与数据流](./backend-api-dataflow.md) - SSE 事件类型
-- [前端状态与数据流](./frontend-state-dataflow.md) - 前端状态管理
+- [06-tool-system](./06-tool-system.md) - 工具注册与执行
+- [04-backend-api](./04-backend-api.md) - SSE 事件类型
+- [05-frontend-state](./05-frontend-state.md) - 前端状态管理
+- [file-index](./file-index.md) - 文件路径索引

@@ -101,6 +101,9 @@ class SessionService:
         1. Memory (via SSEManager)
         2. Database (planning_sessions table)
         3. LangGraph checkpoints
+        4. Uploaded files (cascade via FK, but explicit cleanup for logging)
+        5. Dimension reports (cascade via FK, but explicit cleanup for logging)
+        6. UI sessions and dimension revisions
 
         Args:
             session_id: Session identifier
@@ -112,6 +115,9 @@ class SessionService:
             "memory": False,
             "database": False,
             "checkpoint": False,
+            "uploaded_files": False,
+            "dimension_reports": False,
+            "ui_sessions": False,
         }
 
         # Get session info for checkpoint deletion
@@ -122,11 +128,43 @@ class SessionService:
         memory_result = sse_manager.delete_session_all_states(session_id)
         result["memory"] = any(memory_result.values())
 
-        # 2. Delete database record
+        # 2. Delete uploaded files (explicit cleanup before CASCADE)
+        try:
+            from app.database.operations import delete_uploaded_files_async
+            file_count = await delete_uploaded_files_async(session_id)
+            result["uploaded_files"] = True
+            logger.info(f"[SessionService] [{session_id}] Deleted {file_count} uploaded files")
+        except Exception as e:
+            logger.warning(f"[SessionService] [{session_id}] Uploaded files cleanup warning: {e}")
+
+        # 3. Delete dimension reports (explicit cleanup before CASCADE)
+        try:
+            from app.services.report_store import ReportStore
+            store = ReportStore.get_instance()
+            report_count = await store.delete_session_reports(session_id)
+            result["dimension_reports"] = True
+            logger.info(f"[SessionService] [{session_id}] Deleted {report_count} dimension reports")
+        except Exception as e:
+            logger.warning(f"[SessionService] [{session_id}] Dimension reports cleanup warning: {e}")
+
+        # 4. Delete UI sessions and associated dimension revisions
+        try:
+            from app.database.operations import delete_ui_session_async, get_dimension_revisions_async
+            # Find UI sessions linked to this planning session via task_id
+            from app.database.operations import list_ui_sessions_async
+            ui_sessions = await list_ui_sessions_async(task_id=session_id)
+            for ui_session in ui_sessions:
+                await delete_ui_session_async(ui_session["conversation_id"])
+            result["ui_sessions"] = True
+            logger.info(f"[SessionService] [{session_id}] Deleted {len(ui_sessions)} UI sessions")
+        except Exception as e:
+            logger.warning(f"[SessionService] [{session_id}] UI sessions cleanup warning: {e}")
+
+        # 5. Delete database record (CASCADE will handle remaining FK records)
         db_deleted = await delete_planning_session_async(session_id)
         result["database"] = db_deleted
 
-        # 3. Delete LangGraph checkpoint
+        # 6. Delete LangGraph checkpoint
         if project_name:
             try:
                 from app.agent.graph import create_unified_planning_graph

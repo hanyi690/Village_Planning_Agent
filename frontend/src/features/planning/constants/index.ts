@@ -128,12 +128,13 @@ export type ViewMode = 'WELCOME_FORM' | 'SESSION_ACTIVE';
 /**
  * Navigation key for three-panel workbench focus area routing
  */
-export type NavigationKey = 'overview' | 'chat' | 'approval' | `dim:${string}`;
+export type NavigationKey = 'overview' | 'chat' | 'approval' | 'planning_text' | `dim:${string}`;
 
 export const NAV_KEYS = {
   OVERVIEW: 'overview',
   CHAT: 'chat',
   APPROVAL: 'approval',
+  PLANNING_TEXT: 'planning_text',
   dim: (key: string) => `dim:${key}` as NavigationKey,
 } as const;
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { faBars, faFileExport, faPlus } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
@@ -8,16 +8,19 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { usePlanningStore, usePlanningActions } from '../../store';
 import { useStatus, useCurrentLayer, useDimensionProgressAll } from '../../hooks';
 import { LAYER_IDS } from '@/features/planning/constants';
+import ExportDialog from '../ExportDialog';
 
 interface AppHeaderProps {
   onToggleLeftNav: () => void;
 }
 
 export default function AppHeader({ onToggleLeftNav }: AppHeaderProps) {
+  const sessionId = usePlanningStore((state) => state.sessionId);
   const projectName = usePlanningStore((state) => state.projectName);
   const currentLayer = useCurrentLayer();
   const dimensionProgress = useDimensionProgressAll();
   const status = useStatus();
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
 
   const { resetConversation } = usePlanningActions();
 
@@ -92,7 +95,10 @@ export default function AppHeader({ onToggleLeftNav }: AppHeaderProps) {
 
       <div className="flex items-center gap-2">
         {status !== 'idle' && (
-          <button className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-slate-500 text-sm hover:bg-slate-50 transition-colors">
+          <button
+            onClick={() => setIsExportDialogOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-slate-500 text-sm hover:bg-slate-50 transition-colors"
+          >
             <FontAwesomeIcon icon={faFileExport} style={{ width: 14, height: 14 }} />
             <span>导出</span>
           </button>
@@ -105,6 +111,15 @@ export default function AppHeader({ onToggleLeftNav }: AppHeaderProps) {
           <span>新会话</span>
         </button>
       </div>
+
+      {/* Export Dialog */}
+      {sessionId && (
+        <ExportDialog
+          sessionId={sessionId}
+          isOpen={isExportDialogOpen}
+          onClose={() => setIsExportDialogOpen(false)}
+        />
+      )}
     </header>
   );
 }

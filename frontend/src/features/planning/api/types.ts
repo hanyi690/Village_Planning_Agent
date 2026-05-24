@@ -508,3 +508,119 @@ export interface CompareSession {
   timestamp: string;
   isCompleted: boolean;
 }
+
+// ============================================
+// Export Types
+// ============================================
+
+/**
+ * Export format options
+ */
+export type ExportFormat = 'json' | 'md' | 'docx' | 'planning_text';
+
+/**
+ * Export layer options
+ */
+export type ExportLayer = '1' | '2' | '3' | 'all';
+
+/**
+ * Export request
+ */
+export interface ExportRequest {
+  formats: ExportFormat[];
+  layers: ExportLayer[];
+  include_rag_details?: boolean;
+  include_summaries?: boolean;
+}
+
+/**
+ * Export file info
+ */
+export interface ExportFile {
+  format: ExportFormat;
+  layer?: number;
+  filename: string;
+  download_url: string;
+  size_bytes?: number;
+}
+
+/**
+ * Export response
+ */
+export interface ExportResponse {
+  session_id: string;
+  project_name: string;
+  files: ExportFile[];
+  generated_at: string;
+  errors: string[];
+}
+
+// ============================================
+// Planning Text Types
+// ============================================
+
+/**
+ * Planning text document
+ */
+export interface PlanningTextDocument {
+  id: number;
+  session_id: string;
+  version: number;
+  document_id: string;
+  markdown_content: string;
+  json_content?: Record<string, unknown>;
+  article_count: number;
+  generated_at: string;
+  generation_duration_seconds?: number;
+  status: 'pending' | 'generating' | 'completed' | 'failed';
+  error_message?: string;
+  trigger_reason?: 'initial' | 'dimension_change' | 'manual';
+  changed_dimensions?: string[];
+}
+
+/**
+ * Planning text version metadata
+ */
+export interface PlanningTextVersion {
+  id: number;
+  version: number;
+  document_id: string;
+  article_count: number;
+  generated_at: string;
+  generation_duration_seconds?: number;
+  status: string;
+  trigger_reason?: string;
+  changed_dimensions?: string[];
+}
+
+/**
+ * Planning text version list response
+ */
+export interface PlanningTextVersionList {
+  session_id: string;
+  versions: PlanningTextVersion[];
+  total: number;
+}
+
+/**
+ * Generate planning text request
+ */
+export interface GeneratePlanningTextRequest {
+  trigger_reason?: 'initial' | 'dimension_change' | 'manual';
+  changed_dimensions?: string[];
+}
+
+/**
+ * Generate planning text response
+ */
+export interface GeneratePlanningTextResponse {
+  session_id: string;
+  version: number;
+  document_id: string;
+  markdown_content: string;
+  article_count: number;
+  generated_at: string;
+  generation_duration_seconds: number;
+  status: string;
+  trigger_reason: string;
+}

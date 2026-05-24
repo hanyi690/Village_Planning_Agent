@@ -2,6 +2,9 @@
 
 本文档提供系统术语定义，确保概念一致性。
 
+> **更新日期**: 2026-05-21
+> **版本**: v3.0 (统一架构)
+
 ## 目录
 
 - [会话与状态](#会话与状态)
@@ -137,15 +140,13 @@
 
 | 端点 | 方法 | 功能 |
 |------|------|------|
-| `/api/planning/start` | POST | 启动新规划会话 |
-| `/api/planning/stream/{session_id}` | GET | SSE事件流 |
-| `/api/planning/stream/{session_id}/sync` | GET | SSE重连同步 |
-| `/api/planning/status/{session_id}` | GET | 获取会话状态 |
-| `/api/planning/chat/{session_id}` | POST | 发送对话消息 |
-| `/api/planning/review/{session_id}` | POST | 审查操作 |
-| `/api/planning/checkpoint/{session_id}` | GET | 检查点列表 |
-| `/api/planning/message/{session_id}` | GET/POST | 消息管理 |
-| `/api/planning/resume` | POST | 从checkpoint恢复 |
+| `/api/sessions` | POST | 创建会话 |
+| `/api/sessions/{id}/stream` | GET | SSE 事件流 |
+| `/api/sessions/{id}/sync` | GET | 断线重连同步 |
+| `/api/sessions/{id}/feedback` | POST | 反馈/审批 |
+| `/api/sessions/{id}/checkpoints` | GET | 检查点列表 |
+| `/api/sessions/{id}/resume/{cp}` | POST | 恢复执行 |
+| `/api/sessions/{id}/reports/{dim}` | GET | 报告全文 |
 
 ---
 

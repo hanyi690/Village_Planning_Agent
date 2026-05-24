@@ -18,6 +18,8 @@ from .models import (
     PlanningSession,
     UISession,
     DimensionRevision,
+    UploadedFile,
+    PlanningTextDocument,
 )
 
 logger = logging.getLogger(__name__)
@@ -846,3 +848,417 @@ async def get_previous_dimension_version_async(
     except Exception as e:
         logger.error(f"[Async DB] Failed to get previous dimension version: {e}", exc_info=True)
         return None
+
+
+# ==========================================
+# Uploaded File Operations
+# ==========================================
+
+async def create_uploaded_file_async(
+    session_id: str,
+    file_category: str,
+    file_type: str,
+    filename: str,
+    original_filename: str,
+    file_size: int,
+    content_type: str,
+    parsed_text: Optional[str] = None,
+    gis_data: Optional[Dict[str, Any]] = None,
+    gis_data_type: Optional[str] = None,
+    parse_status: str = "success",
+    parse_error: Optional[str] = None,
+) -> int:
+    """
+    Create an uploaded file record (async)
+    创建上传文件记录
+
+    Args:
+        session_id: Session identifier
+        file_category: "village_data", "task_description", or "constraint"
+        file_type: "document", "geojson", "shapefile", etc.
+        filename: Stored filename
+        original_filename: Original uploaded filename
+        file_size: File size in bytes
+        content_type: MIME type
+        parsed_text: Parsed text content (for documents)
+        gis_data: GeoJSON data (for geojson files)
+        gis_data_type: Inferred GIS data type
+        parse_status: "pending", "success", or "failed"
+        parse_error: Error message if parse failed
+
+    Returns:
+        int: File database ID
+    """
+    try:
+        async with get_async_session() as session:
+            db_file = UploadedFile(
+                session_id=session_id,
+                file_category=file_category,
+                file_type=file_type,
+                filename=filename,
+                original_filename=original_filename,
+                file_size=file_size,
+                content_type=content_type,
+                parsed_text=parsed_text,
+                gis_data=gis_data,
+                gis_data_type=gis_data_type,
+                parse_status=parse_status,
+                parse_error=parse_error,
+                created_at=datetime.now(),
+            )
+            session.add(db_file)
+            await session.commit()
+            await session.refresh(db_file)
+            logger.info(f"[Async DB] Created uploaded file: {filename} (id={db_file.id})")
+            return db_file.id
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to create uploaded file: {e}", exc_info=True)
+        raise
+
+
+async def get_uploaded_files_by_session_async(
+    session_id: str,
+    file_category: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Get all uploaded files for a session (async)
+    获取会话的所有上传文件
+
+    Args:
+        session_id: Session identifier
+        file_category: Filter by category (optional)
+
+    Returns:
+        List of file dictionaries
+    """
+    try:
+        async with get_async_session() as session:
+            query = select(UploadedFile).where(
+                UploadedFile.session_id == session_id
+            )
+            if file_category:
+                query = query.where(UploadedFile.file_category == file_category)
+            query = query.order_by(UploadedFile.created_at)
+
+            result = await session.execute(query)
+            files = result.scalars().all()
+
+            return [
+                {
+                    "id": f.id,
+                    "session_id": f.session_id,
+                    "file_category": f.file_category,
+                    "file_type": f.file_type,
+                    "filename": f.filename,
+                    "original_filename": f.original_filename,
+                    "file_size": f.file_size,
+                    "content_type": f.content_type,
+                    "parsed_text": f.parsed_text,
+                    "gis_data": f.gis_data,
+                    "gis_data_type": f.gis_data_type,
+                    "parse_status": f.parse_status,
+                    "parse_error": f.parse_error,
+                    "created_at": f.created_at.isoformat() if f.created_at else None,
+                }
+                for f in files
+            ]
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to get uploaded files: {e}", exc_info=True)
+        return []
+
+
+async def get_uploaded_geojson_data_async(
+    session_id: str,
+    data_type_hint: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Get uploaded GIS data (GeoJSON) for a session (async)
+    获取会话的上传 GIS 数据
+
+    Args:
+        session_id: Session identifier
+        data_type_hint: Optional filter by inferred GIS data type
+
+    Returns:
+        List of GeoJSON FeatureCollection dicts
+    """
+    try:
+        async with get_async_session() as session:
+            query = select(UploadedFile).where(
+                UploadedFile.session_id == session_id,
+                UploadedFile.file_type == "geojson",
+                UploadedFile.gis_data.isnot(None),
+            )
+            if data_type_hint:
+                query = query.where(UploadedFile.gis_data_type == data_type_hint)
+
+            result = await session.execute(query)
+            files = result.scalars().all()
+
+            return [f.gis_data for f in files if f.gis_data]
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to get uploaded geojson data: {e}", exc_info=True)
+        return []
+
+
+async def delete_uploaded_files_async(session_id: str) -> int:
+    """
+    Delete all uploaded files for a session (async)
+    删除会话的所有上传文件
+
+    Note: This is automatically handled by CASCADE on foreign key,
+    but provided for explicit cleanup if needed.
+
+    Args:
+        session_id: Session identifier
+
+    Returns:
+        int: Number of files deleted
+    """
+    try:
+        async with get_async_session() as session:
+            statement = select(UploadedFile).where(
+                UploadedFile.session_id == session_id
+            )
+            result = await session.execute(statement)
+            files = result.scalars().all()
+            count = len(files)
+
+            for f in files:
+                session.delete(f)
+
+            await session.commit()
+            logger.info(f"[Async DB] Deleted {count} uploaded files for session {session_id}")
+            return count
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to delete uploaded files: {e}", exc_info=True)
+        return 0
+
+
+# ==========================================
+# Planning Text Document Operations
+# ==========================================
+
+async def create_planning_text_document_async(
+    session_id: str,
+    markdown_content: str,
+    json_content: Optional[Dict[str, Any]] = None,
+    article_count: int = 0,
+    generation_duration_seconds: Optional[float] = None,
+    trigger_reason: Optional[str] = None,
+    changed_dimensions: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Create a planning text document (async)
+    创建规划文本文档（新版本）
+
+    Args:
+        session_id: Session identifier
+        markdown_content: Markdown content
+        json_content: JSON structured content
+        article_count: Number of articles
+        generation_duration_seconds: Generation duration
+        trigger_reason: "initial", "dimension_change", "manual"
+        changed_dimensions: List of changed dimension keys
+
+    Returns:
+        Dict with created document data
+    """
+    from uuid import uuid4
+
+    try:
+        async with get_async_session() as session:
+            # Get the latest version number for this session
+            version_result = await session.execute(
+                select(func.max(PlanningTextDocument.version)).where(
+                    PlanningTextDocument.session_id == session_id,
+                )
+            )
+            latest_version = version_result.scalar() or 0
+            new_version = latest_version + 1
+
+            # Create new document
+            doc = PlanningTextDocument(
+                session_id=session_id,
+                version=new_version,
+                document_id=str(uuid4()),
+                markdown_content=markdown_content,
+                json_content=json_content,
+                article_count=article_count,
+                generation_duration_seconds=generation_duration_seconds,
+                status="completed",
+                trigger_reason=trigger_reason or "initial",
+                changed_dimensions=changed_dimensions,
+                generated_at=datetime.now(),
+            )
+            session.add(doc)
+            await session.commit()
+            await session.refresh(doc)
+
+            logger.info(
+                f"[Async DB] Created planning text document v{new_version} for session {session_id}"
+            )
+            return {
+                "id": doc.id,
+                "session_id": doc.session_id,
+                "version": doc.version,
+                "document_id": doc.document_id,
+                "markdown_content": doc.markdown_content,
+                "json_content": doc.json_content,
+                "article_count": doc.article_count,
+                "generated_at": doc.generated_at.isoformat(),
+                "generation_duration_seconds": doc.generation_duration_seconds,
+                "status": doc.status,
+                "trigger_reason": doc.trigger_reason,
+                "changed_dimensions": doc.changed_dimensions,
+            }
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to create planning text document: {e}", exc_info=True)
+        raise
+
+
+async def get_planning_text_document_async(
+    session_id: str,
+    version: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Get planning text document (async)
+    获取规划文本文档
+
+    Args:
+        session_id: Session identifier
+        version: Version number (optional, defaults to latest)
+
+    Returns:
+        Dict with document data or None
+    """
+    try:
+        async with get_async_session() as session:
+            if version is not None:
+                query = select(PlanningTextDocument).where(
+                    PlanningTextDocument.session_id == session_id,
+                    PlanningTextDocument.version == version,
+                )
+            else:
+                # Get latest version
+                query = (
+                    select(PlanningTextDocument)
+                    .where(PlanningTextDocument.session_id == session_id)
+                    .order_by(PlanningTextDocument.version.desc())
+                    .limit(1)
+                )
+
+            result = await session.execute(query)
+            doc = result.scalar_one_or_none()
+
+            if not doc:
+                return None
+
+            return {
+                "id": doc.id,
+                "session_id": doc.session_id,
+                "version": doc.version,
+                "document_id": doc.document_id,
+                "markdown_content": doc.markdown_content,
+                "json_content": doc.json_content,
+                "article_count": doc.article_count,
+                "generated_at": doc.generated_at.isoformat(),
+                "generation_duration_seconds": doc.generation_duration_seconds,
+                "status": doc.status,
+                "error_message": doc.error_message,
+                "trigger_reason": doc.trigger_reason,
+                "changed_dimensions": doc.changed_dimensions,
+            }
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to get planning text document: {e}", exc_info=True)
+        return None
+
+
+async def list_planning_text_versions_async(
+    session_id: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """
+    List planning text document versions (async)
+    列出规划文本文档版本历史
+
+    Args:
+        session_id: Session identifier
+        limit: Maximum number of results
+
+    Returns:
+        List of version metadata dicts
+    """
+    try:
+        async with get_async_session() as session:
+            query = (
+                select(PlanningTextDocument)
+                .where(PlanningTextDocument.session_id == session_id)
+                .order_by(PlanningTextDocument.version.desc())
+                .limit(limit)
+            )
+
+            result = await session.execute(query)
+            docs = result.scalars().all()
+
+            return [
+                {
+                    "id": d.id,
+                    "version": d.version,
+                    "document_id": d.document_id,
+                    "article_count": d.article_count,
+                    "generated_at": d.generated_at.isoformat(),
+                    "generation_duration_seconds": d.generation_duration_seconds,
+                    "status": d.status,
+                    "trigger_reason": d.trigger_reason,
+                    "changed_dimensions": d.changed_dimensions,
+                }
+                for d in docs
+            ]
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to list planning text versions: {e}", exc_info=True)
+        return []
+
+
+async def update_planning_text_status_async(
+    session_id: str,
+    version: int,
+    status: str,
+    error_message: Optional[str] = None,
+) -> bool:
+    """
+    Update planning text document status (async)
+    更新规划文本文档状态
+
+    Args:
+        session_id: Session identifier
+        version: Version number
+        status: New status ("pending", "generating", "completed", "failed")
+        error_message: Error message if failed
+
+    Returns:
+        bool: True if successful
+    """
+    try:
+        async with get_async_session() as session:
+            query = select(PlanningTextDocument).where(
+                PlanningTextDocument.session_id == session_id,
+                PlanningTextDocument.version == version,
+            )
+            result = await session.execute(query)
+            doc = result.scalar_one_or_none()
+
+            if not doc:
+                logger.error(f"[Async DB] Planning text document not found: {session_id} v{version}")
+                return False
+
+            doc.status = status
+            if error_message:
+                doc.error_message = error_message
+
+            await session.commit()
+            logger.info(f"[Async DB] Updated planning text status: {session_id} v{version} -> {status}")
+            return True
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to update planning text status: {e}", exc_info=True)
+        return False

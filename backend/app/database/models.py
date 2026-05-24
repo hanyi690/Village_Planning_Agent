@@ -23,7 +23,7 @@ from sqlmodel import (
     Integer,
     DateTime
 )
-from sqlalchemy import Index, UniqueConstraint
+from sqlalchemy import Index, UniqueConstraint, ForeignKey
 
 from app.core.settings import (
     DEFAULT_TASK_DESCRIPTION,
@@ -137,8 +137,14 @@ class DimensionRevision(SQLModel, table=True):
     # Primary key (auto-increment)
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    # Session and dimension identification
-    session_id: str = Field(foreign_key="ui_sessions.conversation_id", index=True)
+    # Session and dimension identification (cascade delete)
+    session_id: str = Field(
+        sa_column=Column(
+            String,
+            ForeignKey("ui_sessions.conversation_id", ondelete="CASCADE"),
+            index=True,
+        )
+    )
     layer: int = Field(index=True)  # 层级 (1/2/3)
     dimension_key: str = Field(index=True)  # 维度标识
 
@@ -182,8 +188,14 @@ class DimensionReport(SQLModel, table=True):
     # Primary key (auto-increment)
     id: Optional[int] = Field(default=None, primary_key=True)
 
-    # Session and dimension identification
-    session_id: str = Field(foreign_key="planning_sessions.session_id", index=True)
+    # Session and dimension identification (cascade delete)
+    session_id: str = Field(
+        sa_column=Column(
+            String,
+            ForeignKey("planning_sessions.session_id", ondelete="CASCADE"),
+            index=True,
+        )
+    )
     dimension_key: str = Field(index=True)
     layer: int = Field(index=True)
 
@@ -220,10 +232,135 @@ class DimensionReport(SQLModel, table=True):
     )
 
 
+# ==========================================
+# Uploaded File Models
+# ==========================================
+
+class UploadedFile(SQLModel, table=True):
+    """
+    Uploaded file storage table
+    上传文件存储表
+
+    Replaces disk-based file storage with database storage.
+    Supports automatic cleanup via foreign key cascade.
+    """
+    __tablename__ = "uploaded_files"
+
+    # Primary key (auto-increment)
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Session relationship with cascade delete
+    session_id: str = Field(
+        sa_column=Column(
+            String,
+            ForeignKey("planning_sessions.session_id", ondelete="CASCADE"),
+            index=True,
+        ),
+    )
+
+    # File classification
+    file_category: str = Field(index=True)  # "village_data", "task_description", "constraint"
+    file_type: str = Field(index=True)       # "document", "geojson", "shapefile", etc.
+
+    # File metadata
+    filename: str = Field(max_length=255)
+    original_filename: str = Field(max_length=255)
+    file_size: int                           # Size in bytes
+    content_type: str = Field(max_length=100)  # MIME type
+
+    # Parsed content
+    parsed_text: Optional[str] = Field(
+        default=None,
+        sa_column=Text()  # For doc/docx/pdf/pptx parsed text
+    )
+
+    # GIS data (JSON column for GeoJSON FeatureCollection)
+    gis_data: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON)
+    )
+
+    # GIS data type inference (for geojson files)
+    gis_data_type: Optional[str] = None  # "boundary", "water", "road", "residential", etc.
+
+    # Processing status
+    parse_status: str = Field(default="pending")  # "pending", "success", "failed"
+    parse_error: Optional[str] = None
+
+    # Timestamps
+    created_at: datetime = Field(default_factory=datetime.now)
+
+    # Table options
+    __table_args__ = (
+        Index("idx_uploaded_session_category", "session_id", "file_category"),
+        Index("idx_uploaded_session_type", "session_id", "file_type"),
+    )
+
+
+# ==========================================
+# Planning Text Document Models
+# ==========================================
+
+class PlanningTextDocument(SQLModel, table=True):
+    """
+    Planning text document table
+    规划文本文档表
+
+    Stores generated planning documents with version history.
+    支持历史版本，每次重新生成创建新版本。
+    """
+    __tablename__ = "planning_text_documents"
+
+    # Primary key (auto-increment)
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Session relationship with cascade delete
+    session_id: str = Field(
+        sa_column=Column(
+            String,
+            ForeignKey("planning_sessions.session_id", ondelete="CASCADE"),
+            index=True,
+        )
+    )
+
+    # Version management
+    version: int = Field(default=1, index=True)
+    document_id: str = Field(unique=True, index=True)  # UUID for external reference
+
+    # Content
+    markdown_content: str = Field(sa_column=Text())
+    json_content: Optional[Dict[str, Any]] = Field(
+        default=None,
+        sa_column=Column(JSON)
+    )
+
+    # Metadata
+    article_count: int = Field(default=0)
+    generated_at: datetime = Field(default_factory=datetime.now)
+    generation_duration_seconds: Optional[float] = None
+
+    # Status
+    status: str = Field(default="completed")  # pending, generating, completed, failed
+    error_message: Optional[str] = None
+
+    # Version metadata (记录生成触发原因)
+    trigger_reason: Optional[str] = None  # "initial", "dimension_change", "manual"
+    changed_dimensions: Optional[List[str]] = Field(
+        default=None,
+        sa_column=Column(JSON)
+    )
+
+    # Table options
+    __table_args__ = (
+        Index("idx_planning_text_session_version", "session_id", "version"),
+    )
+
+
 __all__ = [
     "PlanningSession",
     "UISession",
-    "UIMessage",
     "DimensionRevision",
     "DimensionReport",
+    "UploadedFile",
+    "PlanningTextDocument",
 ]

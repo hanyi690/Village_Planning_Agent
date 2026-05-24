@@ -9,10 +9,6 @@ Architecture:
 
 from __future__ import annotations
 
-# CRITICAL: Set HuggingFace mirror before any imports
-import os
-os.environ['HF_ENDPOINT'] = os.getenv('HF_ENDPOINT', 'https://hf-mirror.com')
-
 import asyncio
 import logging
 import os
@@ -28,9 +24,7 @@ from fastapi.responses import JSONResponse
 # Add parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# from app.api.validate_config import validate_config  # 移除：模块不存在
-# from app.utils.paths import ...  # 移除：使用 settings.PROJECT_ROOT
-from app.core.settings import LOG_LEVEL
+from app.core.settings import LOG_LEVEL, PROJECT_ROOT
 
 # Configure logging with dictConfig to avoid duplicate handlers
 import logging.config
@@ -82,11 +76,6 @@ ALLOWED_ORIGINS = os.getenv(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle management"""
-    from app.core.settings import PROJECT_ROOT, setup_huggingface_env
-
-    # Setup HuggingFace environment
-    setup_huggingface_env()
-
     logger.info(f"🚀 村庄规划智能体后端启动中...")
     logger.info(f"📁 Project root: {PROJECT_ROOT}")
     logger.info(f"📁 Working directory: {os.getcwd()}")

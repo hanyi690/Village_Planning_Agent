@@ -24,26 +24,67 @@ if str(_BACKEND_ROOT) not in sys.path:
 
 
 # ---------------------------------------------------------------------------
+# Output directories
+# ---------------------------------------------------------------------------
+_BASELINE_DIR = _PROJECT_ROOT / "output" / "experiments" / "baseline"
+CASCADE_DIR = _PROJECT_ROOT / "output" / "experiments" / "cascade"
+
+BASELINE_DIR = _BASELINE_DIR
+
+# Scenario directories (for cascade experiments)
+SCENARIO1_DIR = CASCADE_DIR / "scenario1"
+SCENARIO2_DIR = CASCADE_DIR / "scenario2"
+SCENARIOS = ["scenario1", "scenario2", "scenario3"]
+
+
+def ensure_cascade_dirs():
+    """Ensure cascade experiment directories exist."""
+    CASCADE_DIR.mkdir(parents=True, exist_ok=True)
+    _BASELINE_DIR.mkdir(parents=True, exist_ok=True)
+    SCENARIO1_DIR.mkdir(parents=True, exist_ok=True)
+    SCENARIO2_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_scenario_config(scenario_name: str) -> "CascadeScenario":
+    """Get scenario configuration by name."""
+    return CASCADE_SCENARIOS.get(scenario_name)
+
+
+def get_output_dir(experiment_id: str, scenario_name: str = None) -> Path:
+    """Get output directory for an experiment or scenario."""
+    if scenario_name:
+        return CASCADE_DIR / scenario_name / experiment_id
+    return _BASELINE_DIR / experiment_id
+
+
+# ---------------------------------------------------------------------------
 # Village data
 # ---------------------------------------------------------------------------
 _STATUS_REPORT_PATH = _PROJECT_ROOT / "docs" / "MinerU_markdown_泗水镇金田村现状报告_2056637054755487744.md"
 
-JINTIAN_VILLAGE_DATA: str = ""
+JINTIAN_VILLAGE_DATA: Dict[str, str] = {}
 if _STATUS_REPORT_PATH.exists():
-    JINTIAN_VILLAGE_DATA = _STATUS_REPORT_PATH.read_text(encoding="utf-8")
+    JINTIAN_VILLAGE_DATA = {
+        "status_report": _STATUS_REPORT_PATH.read_text(encoding="utf-8"),
+        "village_name": "金田村",
+    }
 
-JINTIAN_TASK_DESCRIPTION = (
+DEFAULT_TASK_DESCRIPTION = (
     "编制梅州市金田村村庄规划，"
     "涵盖国土空间布局、产业发展、人居环境、设施配套、历史文化保护等方面。"
 )
 
-JINTIAN_CONSTRAINTS = (
+DEFAULT_CONSTRAINTS = (
     "1. 耕地保有量不低于85.2公顷，永久基本农田78.83公顷；\n"
     "2. 生态保护红线362.02公顷；\n"
     "3. 村庄建设用地规模30.5公顷；\n"
     "4. 林地保有量不低于423.6公顷；\n"
     "5. 符合梅州市国土空间总体规划要求。"
 )
+
+# Aliases for backward compatibility
+JINTIAN_TASK_DESCRIPTION = DEFAULT_TASK_DESCRIPTION
+JINTIAN_CONSTRAINTS = DEFAULT_CONSTRAINTS
 
 
 # ---------------------------------------------------------------------------
