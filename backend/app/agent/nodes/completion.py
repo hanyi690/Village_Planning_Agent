@@ -103,7 +103,6 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
                 "need_revision": False,
                 "revision_feedback": None,
                 "revision_impact_tree": None,
-                "revision_completed_dims": {},
                 "last_revised_dimensions": all_dims,
                 "pending_reports": [],
             }

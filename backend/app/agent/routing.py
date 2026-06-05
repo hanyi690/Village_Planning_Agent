@@ -126,6 +126,11 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
     # 级联修订：使用依赖检查逻辑，而非简单波次分发
     if is_revision:
+        # need_revision=False 表示 layer_completion_check 已判定修订完成
+        if not state.get("need_revision", False):
+            logger.info("[after_analysis] Revision completed, END")
+            return END
+
         impact_tree = state.get("revision_impact_tree") or {}
         completed = state.get("revision_completed_dims", {})
         all_revision_dims_set = {d for dims in impact_tree.values() for d in dims}
