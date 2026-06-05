@@ -17,7 +17,11 @@ import logging
 import sys
 import time
 import requests
-import fitz  # PyMuPDF
+try:
+    import fitz  # PyMuPDF
+except ImportError:
+    print("错误: PyMuPDF (fitz) 未安装。请运行: pip install pymupdf")
+    sys.exit(1)
 from pathlib import Path
 from typing import List, Tuple
 

@@ -70,6 +70,8 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
             for wave in sorted(downstream_tree.keys()):
                 final_tree[wave] = list(set(downstream_tree[wave]))
 
+        wave0_dims = final_tree.get(0, target_dims)
+
         logger.info(
             "[after_conversation] Cascade revision: targets=%s, impact_tree waves=%s dims=%s",
             target_dims, len(final_tree),

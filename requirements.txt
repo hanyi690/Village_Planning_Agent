@@ -94,6 +94,7 @@ langsmith>=0.1.0
 # ============================================
 geopandas>=0.14.0
 shapely>=2.0.0
+pyproj>=3.6.0
 networkx>=3.0
 # OpenStreetMap 数据获取（补充村级道路）
 osmnx>=1.5.0

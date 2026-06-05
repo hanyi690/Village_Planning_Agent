@@ -18,15 +18,6 @@ const FocusArea = memo(function FocusArea() {
   const setProcessPanelTab = usePlanningStore((state) => state.setProcessPanelTab);
   const { startPlanning } = usePlanningActions();
 
-  // Planning Text view
-  if (selectedNavigationKey === NAV_KEYS.PLANNING_TEXT && sessionId) {
-    return (
-      <div className="flex-1 h-full relative">
-        <PlanningTextViewer sessionId={sessionId} />
-      </div>
-    );
-  }
-
   const handleStartPlanning = useCallback(
     (data: {
       projectName: string;
@@ -66,6 +57,15 @@ const FocusArea = memo(function FocusArea() {
     setProcessPanelTab('messages');
     setRightPanelExpanded(true);
   }, [setProcessPanelTab, setRightPanelExpanded]);
+
+  // Planning Text view (after all hooks)
+  if (selectedNavigationKey === NAV_KEYS.PLANNING_TEXT && sessionId) {
+    return (
+      <div className="flex-1 h-full relative">
+        <PlanningTextViewer sessionId={sessionId} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 h-full relative">

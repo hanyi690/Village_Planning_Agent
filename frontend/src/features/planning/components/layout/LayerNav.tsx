@@ -12,7 +12,7 @@ import {
   useCompletedLayers,
   useExecutingDimensions,
 } from '../../hooks';
-import { getDimensionName } from '../../config/dimensions';
+import { DIMENSIONS_BY_LAYER, getDimensionName } from '../../config/dimensions';
 import { LAYER_VALUE_MAP, LAYER_IDS, NAV_KEYS } from '@/features/planning/constants';
 import ToolStatusPanel from '../chat/ToolStatusPanel';
 

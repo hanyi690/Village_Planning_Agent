@@ -47,22 +47,17 @@ WORKDIR /app
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources || \
     sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
-# Install runtime dependencies (including GDAL for geopandas, LibreOffice for .doc conversion, Pandoc for MD→DOCX, Docling dependencies)
+# Install runtime dependencies (GDAL runtime, LibreOffice for .doc conversion, Pandoc for MD→DOCX, Tesseract for OCR)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gdal-bin \
-    libgdal-dev \
     libreoffice-writer \
     libreoffice-core \
     libreoffice-common \
     pandoc \
-    # Docling OCR dependencies
     tesseract-ocr \
     tesseract-ocr-chi-sim \
     tesseract-ocr-eng \
-    libtesseract-dev \
-    libleptonica-dev \
-    # OpenCV headless dependency
     libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
