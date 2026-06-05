@@ -543,8 +543,14 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         isRevision: dimData.is_revision || false,
       };
 
-      // If this is a revision, create a standalone revision_report message
+      // If this is a revision, clear old report content and prepare for new analysis
       if (dimData.is_revision && dimensionKey) {
+        // Clear old report so UI shows empty/refreshing state
+        const layerKey = `layer${layer}` as keyof Reports;
+        state.reports[layerKey][dimensionKey] = '';
+        // Clear streaming content from previous runs
+        delete state.streamingContent[key];
+
         const revisionReportId = buildRevisionReportId(layer, dimensionKey);
         const existingMessage = state.messages.find(
           (m) => m.id === revisionReportId && m.type === 'dimension_report'
