@@ -1338,6 +1338,12 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         }
         // Increment version count
         state.dimensionVersions[fullKey] = (state.dimensionVersions[fullKey] || 0) + 1;
+        // Mark dimension as streaming (re-analyzing) instead of completed
+        const progress = state.dimensionProgress[fullKey];
+        if (progress && progress.status === 'completed') {
+          progress.status = 'streaming' as DimensionStatus;
+          progress.isRevision = true;
+        }
       }
       break;
     }
