@@ -44,15 +44,27 @@ def _merge_dict_of_lists(a: Dict[str, List], b: Dict[str, List]) -> Dict[str, Li
     result = {}
     all_keys = set(a.keys()) | set(b.keys())
     for k in all_keys:
-        a_list = a.get(k, [])
-        b_list = b.get(k, [])
-        combined = a_list + b_list
+        combined = a.get(k, []) + b.get(k, [])
         deduped = []
         for item in combined:
             if item not in deduped:
                 deduped.append(item)
         result[k] = deduped
     return result
+
+
+def _merge_revision_completed(
+    a: Dict[int, List[str]], b: Dict[int, List[str]]
+) -> Dict[int, List[str]]:
+    """Revision completed dims reducer.
+
+    - b={} (explicit reset) -> return {} (clear all stale entries)
+    - Otherwise -> merge and dedupe (normal fan-in accumulation)
+    """
+    if b == {}:
+        return {}
+
+    return _merge_dict_of_lists(a, b)
 
 
 def _merge_dict_of_dicts(a: Dict[str, Dict], b: Dict[str, Dict]) -> Dict[str, Dict]:
@@ -71,6 +83,17 @@ def _merge_lists(a: List, b: List) -> List:
     return a + b
 
 
+def _replace_or_merge_lists(a: List, b: List) -> List:
+    """List reducer for pending_reports.
+
+    - b=[] (explicit reset) -> return [] (clear buffer after batch write)
+    - Otherwise -> merge (normal fan-in accumulation)
+    """
+    if b == []:
+        return []
+    return a + b
+
+
 def _merge_layer_char_counts(a: Dict[int, int], b: Dict[int, int]) -> Dict[int, int]:
     """合并两个 layer 字符数字典，同 layer 时累加。用于并行 fan-in。"""
     result = dict(a)
@@ -83,6 +106,13 @@ def _merge_is_revision(a: bool, b: bool) -> bool:
     """Merge is_revision using logical OR. If any node sets True, keep True.
     Ensures revision flag survives parallel fan-in reducer merge."""
     return a or b
+
+
+def _preserve_impact_tree(a: Optional[Dict[int, List[str]]], b: Optional[Dict[int, List[str]]]) -> Optional[Dict[int, List[str]]]:
+    """fan-in 时保留有值的一方，防止被 None 覆盖。"""
+    if b is not None:
+        return b
+    return a
 
 
 class AgentState(TypedDict, total=False):
@@ -124,12 +154,12 @@ class AgentState(TypedDict, total=False):
     revision_target_dimensions: List[str]
     human_feedback: str
     is_revision: Annotated[bool, _merge_is_revision]
-    revision_impact_tree: Optional[Dict[int, List[str]]]
-    revision_completed_dims: Annotated[Dict[int, List[str]], _merge_dict_of_lists]
+    revision_impact_tree: Annotated[Optional[Dict[int, List[str]]], _preserve_impact_tree]
+    revision_completed_dims: Annotated[Dict[int, List[str]], _merge_revision_completed]
     revision_feedback: Optional[str]
     last_revised_dimensions: List[str]
     # Performance optimization: batch write and char count cache
-    pending_reports: Annotated[List[Dict[str, Any]], _merge_lists]  # Buffer for batch DB writes
+    pending_reports: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # Buffer for batch DB writes
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
 
 

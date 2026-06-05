@@ -28,13 +28,14 @@ import {
   useDimensionRagSources,
   useProjectName,
   usePendingReviewLayer,
+  useCompletedLayers,
 } from '../../hooks';
 import { dataApi } from '../../api';
 import type { CompareSession, KnowledgeSourceItem, DimensionVersion } from '../../api/types';
 import VillageInputForm from '../VillageInputForm';
 import MarkdownRenderer from '../ui/MarkdownRenderer';
-import { LAYER_VALUE_MAP, LAYER_IDS } from '@/features/planning/constants';
-import { DIMENSION_NAMES, DIMENSIONS_BY_LAYER } from '../../config/dimensions';
+import { LAYER_VALUE_MAP, LAYER_IDS, NAV_KEYS } from '@/features/planning/constants';
+import { DIMENSION_NAMES, DIMENSIONS_BY_LAYER, getDimensionLayer } from '../../config/dimensions';
 import { cn } from '../../utils/cn';
 
 interface ReportViewerProps {
@@ -95,18 +96,21 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
 
   // Get completed dimensions for current review layer
   const pendingReviewLayer = usePendingReviewLayer();
+  const completedLayers = useCompletedLayers();
   const completedDimensions = usePlanningStore((state) => state.completedDimensions);
   const currentLayerCompletedDims = pendingReviewLayer
     ? completedDimensions[`layer${pendingReviewLayer}` as 'layer1' | 'layer2' | 'layer3'] || []
     : [];
 
   // All completed dimensions across all finished layers (for cascade revision)
+  // Use DIMENSIONS_BY_LAYER order instead of completedDimensions order
   const allCompletedDimsByLayer = useMemo(() => {
     const result: { layer: number; dims: string[] }[] = [];
     for (let l = 1; l <= 3; l++) {
-      const dims = completedDimensions[`layer${l}` as 'layer1' | 'layer2' | 'layer3'] || [];
-      if (dims.length > 0) {
-        result.push({ layer: l, dims });
+      const completed = new Set(completedDimensions[`layer${l}` as 'layer1' | 'layer2' | 'layer3'] || []);
+      const orderedDims = (DIMENSIONS_BY_LAYER[l] || []).filter(d => completed.has(d));
+      if (orderedDims.length > 0) {
+        result.push({ layer: l, dims: orderedDims });
       }
     }
     return result;
@@ -266,11 +270,33 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
     if (!sessionId || isSubmitting) return;
     try {
       const { planningApi } = await import('../../api');
+      const targetDims = selectedDimensions.length > 0 ? selectedDimensions : undefined;
       await planningApi.submitFeedback(sessionId, {
         approve: false,
         feedback: feedback.trim() || '需要修改',
-        dimensions: selectedDimensions.length > 0 ? selectedDimensions : undefined,
+        dimensions: targetDims,
       });
+
+      // 即时反馈：跳转到第一个目标维度 + 批量清空旧内容
+      if (targetDims && targetDims.length > 0) {
+        const firstDim = targetDims[0];
+        const layer = getDimensionLayer(firstDim);
+        usePlanningStore.setState((state) => {
+          state.selectedNavigationKey = NAV_KEYS.dim(`${layer}_${firstDim}`);
+          for (const dim of targetDims) {
+            const dimLayer = getDimensionLayer(dim);
+            const layerKey = `layer${dimLayer}` as 'layer1' | 'layer2' | 'layer3';
+            if (state.reports[layerKey]) {
+              delete state.reports[layerKey][dim];
+            }
+            delete state.streamingContent[`${dimLayer}_${dim}`];
+          }
+          state.status = 'revising';
+        });
+      } else {
+        usePlanningStore.getState().setStatus('revising');
+      }
+
       setFeedback('');
       setSelectedDimensions([]);
       setShowDimensionSelector(false);
@@ -342,7 +368,7 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
                       <option value="">当前版本</option>
                       {availableVersions.map((v) => (
                         <option key={v.version} value={v.version}>
-                          v{v.version} ({new Date(v.created_at).toLocaleDateString('zh-CN')})
+                          v{v.version} ({new Date(v.generated_at).toLocaleDateString('zh-CN')})
                         </option>
                       ))}
                     </select>
@@ -355,9 +381,7 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
                       setSelectedVersion(null);
                       setCompareContent('');
                       setCompareKnowledgeSources([]);
-                      if (val === sessionId) {
-                        setSelectedSessionId(val);
-                      } else if (val) {
+                      if (val) {
                         setSelectedSessionId(val);
                         handleSessionSelect(val);
                       } else {
@@ -695,7 +719,14 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
             );
           })}
 
-          {isPaused && currentLayer && (
+          {/* 审查面板 - 常驻显示 */}
+          {currentLayer && (
+            (() => {
+              const hasReports = Object.keys(reports[`layer${currentLayer}` as keyof typeof reports] || {}).length > 0;
+              const layerCompleted = completedLayers[currentLayer as 1 | 2 | 3];
+              const showReviewActions = isPaused || (layerCompleted && sessionId);
+              if (!hasReports) return null;
+              return (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -707,11 +738,14 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
                 </div>
                 <div>
                   <h3 className="text-base font-semibold text-amber-800">Layer {currentLayer} 审查</h3>
-                  <p className="text-sm text-amber-600">规划已暂停，请审批后继续</p>
+                  <p className="text-sm text-amber-600">{isPaused ? '规划已暂停，请审批后继续' : layerCompleted ? '该层已完成，可随时提交修订意见' : '报告生成中...'}</p>
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-3">
+              {showReviewActions && (
+              <>
+              <div className="flex flex-wrap items-start gap-3">
+                {isPaused && (
                 <button
                   onClick={approve}
                   disabled={isSubmitting}
@@ -720,36 +754,34 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
                   <FontAwesomeIcon icon={faCheck} style={{ width: 14, height: 14 }} />
                   <span>批准继续</span>
                 </button>
+                )}
 
-                <button
-                  onClick={reject}
-                  disabled={isSubmitting}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl border border-red-300 bg-white text-red-600 text-sm font-medium hover:bg-red-50 transition-colors disabled:opacity-50"
-                >
-                  <FontAwesomeIcon icon={faTimes} style={{ width: 14, height: 14 }} />
-                  <span>需要修订</span>
-                </button>
-
-                <div className="flex-1 min-w-[200px] flex items-center gap-2">
-                  <input
-                    type="text"
+                <div className="flex-1 min-w-[280px] flex items-start gap-2">
+                  <textarea
                     value={feedback}
-                    onChange={(e) => setFeedback(e.target.value)}
+                    onChange={(e) => {
+                      setFeedback(e.target.value);
+                      // Auto-resize
+                      e.target.style.height = 'auto';
+                      e.target.style.height = e.target.scrollHeight + 'px';
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         handleRejectWithFeedback();
                       }
                     }}
-                    placeholder="输入修订意见..."
-                    className="flex-1 px-4 py-2.5 rounded-xl border border-amber-200 bg-white text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-300"
+                    placeholder="输入修订意见...（Enter 提交，Shift+Enter 换行）"
+                    rows={1}
+                    className="flex-1 px-4 py-2.5 rounded-xl border border-amber-200 bg-white text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none overflow-hidden min-h-[40px]"
+                    style={{ height: feedback ? 'auto' : '40px' }}
                   />
                   <button
                     onClick={handleRejectWithFeedback}
-                    disabled={isSubmitting || !feedback.trim()}
-                    className="px-4 py-2.5 rounded-xl bg-amber-100 text-amber-700 text-sm font-medium hover:bg-amber-200 transition-colors disabled:opacity-50"
+                    disabled={isSubmitting}
+                    className="px-4 py-2.5 rounded-xl bg-amber-100 text-amber-700 text-sm font-medium hover:bg-amber-200 transition-colors disabled:opacity-50 whitespace-nowrap"
                   >
-                    提交反馈
+                    提交修订
                   </button>
                 </div>
               </div>
@@ -843,7 +875,11 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
                   </AnimatePresence>
                 </div>
               )}
+              </>
+              )}
             </motion.div>
+              );
+            })()
           )}
         </div>
       </div>

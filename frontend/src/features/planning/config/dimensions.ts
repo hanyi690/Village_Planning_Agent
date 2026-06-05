@@ -155,3 +155,13 @@ export const getDimensionConfigsByLayer = (
     icon: getDimensionIcon(key),
   }));
 };
+
+/**
+ * 根据维度键名获取所属层级
+ */
+export function getDimensionLayer(dimKey: string): number {
+  for (const layer of [1, 2, 3]) {
+    if (DIMENSIONS_BY_LAYER[layer]?.includes(dimKey)) return layer;
+  }
+  return 1;
+}

@@ -56,19 +56,19 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
             logger.warning("[after_conversation] No target dimensions for revision")
             return END
 
-        # 计算影响树（wave 0 = 目标维度，wave 1+ = 下游波次）
-        # get_impact_tree_compat 返回 {1: [...], 2: [...]}（从 Wave 1 开始）
-        # 我们需要将其转换为 {1: [...], 2: [...]} 并添加 Wave 0
-        downstream_tree: Dict[int, List[str]] = {}
-        for target_dim in target_dims:
-            tree = get_impact_tree_compat(target_dim)
-            for wave, dims in tree.items():
-                downstream_tree.setdefault(wave, []).extend(dims)
+        # Use pre-computed impact_tree from submit_feedback, or compute if missing
+        final_tree = state.get("revision_impact_tree")
+        if not final_tree:
+            downstream_tree: Dict[int, List[str]] = {}
+            for target_dim in target_dims:
+                tree = get_impact_tree_compat(target_dim)
+                for wave, dims in tree.items():
+                    downstream_tree.setdefault(wave, []).extend(dims)
 
-        wave0_dims = list(set(target_dims))
-        final_tree = {0: wave0_dims}
-        for wave in sorted(downstream_tree.keys()):
-            final_tree[wave] = list(set(downstream_tree[wave]))
+            wave0_dims = list(set(target_dims))
+            final_tree = {0: wave0_dims}
+            for wave in sorted(downstream_tree.keys()):
+                final_tree[wave] = list(set(downstream_tree[wave]))
 
         logger.info(
             "[after_conversation] Cascade revision: targets=%s, impact_tree waves=%s dims=%s",
@@ -124,8 +124,9 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
     # 级联修订：使用依赖检查逻辑，而非简单波次分发
     if is_revision:
-        impact_tree = state.get("revision_impact_tree", {})
+        impact_tree = state.get("revision_impact_tree") or {}
         completed = state.get("revision_completed_dims", {})
+        all_revision_dims_set = {d for dims in impact_tree.values() for d in dims}
         revision_completed = [d for dims in completed.values() for d in dims]
         target_dims = state.get("revision_target_dimensions", [])
 
@@ -139,10 +140,8 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
         # 获取所有需要修订的维度（目标 + 下游）
         # 注意：impact_tree 包含 Wave 0，所以不需要再加 target_dims
-        impact_tree = state.get("revision_impact_tree", {})
-        all_revision_dims = [d for dims in impact_tree.values() for d in dims]
-        # 去重
-        all_revision_dims = list(set(all_revision_dims))
+        # all_revision_dims 已在上面计算并去重
+        all_revision_dims = list(all_revision_dims_set)
 
         # 基线已完成的维度（不受修订影响的维度，作为依赖检查的基准）
         baseline_completed = state.get("completed_dimensions", {})
@@ -202,7 +201,7 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
         if ready_dims:
             logger.info("[after_analysis] Revision ready dims (dependency-checked): %s", ready_dims)
-            return [Send("analyze_dimension", {**state, "dimension_key": d, "is_revision": True}) for d in ready_dims]
+            return [Send("analyze_dimension", {**state, "dimension_key": d, "is_revision": True, "revision_impact_tree": impact_tree}) for d in ready_dims]
 
         # 检查是否所有修订维度都已完成（只检查 revision_completed，不含基线）
         if set(revision_completed) >= set(all_revision_dims):

@@ -39,6 +39,7 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
         _phase_to_layer, get_layer_dimensions, get_next_phase,
         get_layer_name,
     )
+    from app.config.loader import get_dimension_layer as _get_dim_layer
     from app.utils.sse_publisher import SSEPublisher
     from app.services.report_store import ReportStore
 
@@ -54,13 +55,14 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
         all_dims.extend(target_dims)
 
         # 即使修订未完成，也要将 pending_reports 写入 DB
-        # 否则下游 wave 的跨层依赖加载会读到旧版本
+        # 作为 analyze_dimension 即时保存失败时的兜底
+        # 注意：analyze_dimension 已即时保存，这里只处理兜底
         pending_reports = state.get("pending_reports", [])
         if pending_reports:
             store = ReportStore.get_instance()
             all_dims_set = set(all_dims)
             revision_reports = [r for r in pending_reports if r.get("dimension_key") in all_dims_set]
-            # 去重：按 report_id 去重，避免重复插入
+            # 按 report_id 去重
             seen_report_ids = set()
             unique_reports = []
             for r in revision_reports:
@@ -69,6 +71,7 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
                     seen_report_ids.add(rid)
                     unique_reports.append(r)
             if unique_reports:
+                # bulk_save 内部按 version 去重，已保存的会跳过
                 await store.bulk_save(unique_reports)
                 logger.info(
                     "[layer_completion_check] Revision: saved %d reports to DB (deduped from %d)",
@@ -80,11 +83,27 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
                 "[layer_completion_check] Revision complete: %d dimensions",
                 len(all_dims),
             )
+            # Emit SSE events to clear frontend revision indicators
+            session_id = state.get("session_id", "")
+            for dim_key in all_dims:
+                dim_layer = _get_dim_layer(dim_key) or 1
+                SSEPublisher.send_event(
+                    session_id=session_id,
+                    event_type="dimension_reset_complete",
+                    dimension_key=dim_key,
+                    layer=dim_layer,
+                )
+            SSEPublisher.send_event(
+                session_id=session_id,
+                event_type="cascade_complete",
+                revised_dimensions=all_dims,
+            )
             return {
                 "is_revision": False,
                 "need_revision": False,
                 "revision_feedback": None,
                 "revision_impact_tree": None,
+                "revision_completed_dims": {},
                 "last_revised_dimensions": all_dims,
                 "pending_reports": [],
             }

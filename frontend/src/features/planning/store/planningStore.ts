@@ -379,6 +379,7 @@ export interface PlanningActions {
   setLayerCompleted: (layer: number, completed: boolean) => void;
   setReports: (reports: Partial<Reports>) => void;
   setCompletedDimensions: (completedDimensions: CompletedDimensions) => void;
+  clearDimensionReport: (layer: number, dimensionKey: string) => void;
 
   // Backend sync
   syncBackendState: (backendData: Partial<SessionStatusResponse> & { version?: number }) => void;
@@ -582,6 +583,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const key = buildDimensionProgressKey(layer, dimensionKey);
 
       // If this is a revision, update the standalone revision_report message
+      // Then also fall through to normal path for reports/layerMsg updates
       if (dimData.is_revision && dimensionKey && dimData.accumulated) {
         const revisionReportId = buildRevisionReportId(layer, dimensionKey);
         const msgIdx = state.messages.findIndex(
@@ -597,7 +599,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         if (existing) {
           existing.wordCount = dimData.accumulated.length;
         }
-        break;
       }
 
       // 1. Update reports state
@@ -686,6 +687,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       state.executingDimensions = state.executingDimensions.filter((k) => k !== key);
 
       // If this is a revision, complete the standalone revision_report message
+      // Then also fall through to normal path for layer_completed message updates
       if (dimData.is_revision && dimensionKey) {
         const revisionReportId = buildRevisionReportId(layer, dimensionKey);
         const msgIdx = state.messages.findIndex(
@@ -697,10 +699,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
           msg.wordCount = content.length;
           msg.streamingState = 'completed';
         }
-        // Update reports state for revision as well
-        const layerKey = `layer${layer}` as keyof Reports;
-        state.reports[layerKey][dimensionKey] = content;
-        break;
       }
 
       // Update reports
@@ -1584,6 +1582,15 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     setCompletedDimensions: (completedDimensions) =>
       set((state) => {
         state.completedDimensions = completedDimensions;
+      }),
+
+    clearDimensionReport: (layer, dimensionKey) =>
+      set((state) => {
+        const layerKey = `layer${layer}` as 'layer1' | 'layer2' | 'layer3';
+        if (state.reports[layerKey]) {
+          delete state.reports[layerKey][dimensionKey];
+        }
+        delete state.streamingContent[`${layer}_${dimensionKey}`];
       }),
 
     // Backend sync

@@ -141,6 +141,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     if not dim_key:
         return {"messages": [AIMessage(content="[执行失败] 缺少维度标识")]}
 
+    is_revision = state.get("is_revision", False)
+
     session_id = state.get("session_id", "")
     phase = state.get("phase", "layer1")
     logger.info(f"[analyze_dimension] {dim_key} (phase={phase})")
@@ -163,6 +165,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "dimension_key": dim_key,
         "dimension_name": dim_name,
         "layer": dim_layer,
+        "is_revision": is_revision,
     })
 
 
@@ -317,7 +320,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         contexts = []
         missing_deps = []
 
-        max_wait_seconds = 120
+        max_wait_seconds = 30 if is_revision else 120
         check_interval = 2
 
         for dep_key in same_layer_deps:
@@ -340,8 +343,28 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 missing_deps.append(dep_key)
 
         if missing_deps:
-            logger.error(f"[analyze_dimension] {dim_key}: 依赖报告加载失败（等待{max_wait_seconds}s后）: {missing_deps}")
-            raise DependencyError(f"维度 {dim_key} 的依赖报告加载失败: {missing_deps}")
+            # Fallback: retry each missing dep individually
+            logger.warning(
+                f"[analyze_dimension] {dim_key}: DB 中依赖报告缺失 {missing_deps}，尝试回退获取"
+            )
+            recovered_deps = []
+            still_missing = []
+            for dep_key in missing_deps:
+                dep_report = await store.get_latest_report(session_id, dep_key)
+                if dep_report:
+                    contexts.append(f"【{dep_key}】分析结果：\n{dep_report['content']}")
+                    recovered_deps.append(dep_key)
+                    logger.info(f"[analyze_dimension] {dim_key}: 从回退获取依赖 {dep_key}")
+                else:
+                    still_missing.append(dep_key)
+
+            if still_missing:
+                logger.error(
+                    f"[analyze_dimension] {dim_key}: 依赖报告加载失败（DB + 回退均失败）: {still_missing}"
+                )
+                raise DependencyError(f"维度 {dim_key} 的依赖报告加载失败: {still_missing}")
+            else:
+                logger.info(f"[analyze_dimension] {dim_key}: 通过回退恢复依赖 {recovered_deps}")
 
         same_layer_contexts = "\n\n".join(contexts)
         logger.info(f"[analyze_dimension] {dim_key}: 加载同层依赖 {len(same_layer_deps)} 个")
@@ -456,6 +479,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                             "layer": dim_layer,
                             "delta": chunk.content,
                             "accumulated": llm_response,
+                            "is_revision": is_revision,
                         })
                         _last_publish_time = now
     except asyncio.TimeoutError:
@@ -474,6 +498,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             "layer": dim_layer,
             "delta": "",
             "accumulated": llm_response,
+            "is_revision": is_revision,
         })
 
     llm_elapsed = time.time() - llm_start_time
@@ -525,6 +550,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "report_id": report_id,
         "version": next_version,
         "layer": dim_layer,
+        "is_revision": is_revision,
     })
 
     # 11. State update - accumulate into pending_reports, reducer handles merge
@@ -548,8 +574,12 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         if rev_completed:
             result["revision_completed_dims"] = rev_completed
             result["is_revision"] = True
-        # 注意：不再返回 revision_impact_tree，因为它是只读的
-        # 多个并发节点同时返回会导致 LangGraph 合并冲突
+        # 返回 revision_impact_tree 以确保 fan-in reducer 能保留该值
+        # _preserve_impact_tree(a, b): b 有值则用 b，否则保留 a
+        # 所有并行节点从同一 Send payload 获取相同 final_tree，不会冲突
+        impact_tree = state.get("revision_impact_tree")
+        if impact_tree:
+            result["revision_impact_tree"] = impact_tree
 
     return result
 
