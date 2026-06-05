@@ -13,15 +13,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
 from app.services.report_store import ReportStore
+from app.agent.state import LAYER_NAMES_BY_NUMBER
 
 logger = logging.getLogger(__name__)
 
-# Layer names
-LAYER_NAMES = {
-    1: "现状分析",
-    2: "规划思路",
-    3: "详细规划",
-}
+# Layer names (reuses LAYER_NAMES_BY_NUMBER from state)
+LAYER_NAMES = LAYER_NAMES_BY_NUMBER
 
 _TYPE_LABELS = {
     "policy": "法规",
@@ -344,6 +341,130 @@ class LayerExporter:
         except Exception as e:
             logger.warning(f"[LayerExporter] Failed to export to bytes: {e}")
             return None
+
+    async def export_layer_to_json_bytes(self, layer: int) -> Optional[bytes]:
+        """Export a single layer report as JSON bytes (no file saved).
+
+        Reuses export_layer to fetch and build data, then serializes
+        the same JSON structure that _export_json produces.
+        """
+        result = await self.export_layer(layer)
+        if result.errors or not result.dimensions:
+            return None
+
+        data = {
+            "meta": {
+                "session_id": self.config.session_id,
+                "layer": result.layer,
+                "layer_name": result.layer_name,
+                "dimension_count": len(result.dimensions),
+                "generated_at": datetime.now().isoformat(),
+            },
+            "dimensions": [],
+        }
+
+        for dim in result.dimensions:
+            dim_data = {
+                "key": dim.dimension_key,
+                "name": dim.dimension_name,
+                "layer": dim.layer,
+                "content": dim.content,
+            }
+            if dim.summary:
+                dim_data["summary"] = dim.summary
+            data["dimensions"].append(dim_data)
+
+        return json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
+
+    async def export_layer_to_md_bytes(self, layer: int) -> Optional[bytes]:
+        """Export a single layer report as Markdown bytes (no file saved).
+
+        Reuses export_layer to fetch and build data, then renders
+        the same Markdown content that _export_md produces.
+        """
+        result = await self.export_layer(layer)
+        if result.errors or not result.dimensions:
+            return None
+
+        lines = [
+            f"# {result.layer_name}报告",
+            "",
+            f"**项目**: {self.config.session_id}",
+            f"**层级**: Layer {result.layer} - {result.layer_name}",
+            f"**维度数**: {len(result.dimensions)}",
+            f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "",
+            "---",
+            "",
+        ]
+
+        for dim in result.dimensions:
+            lines.append(f"## {dim.dimension_name}")
+            lines.append("")
+            lines.append(self._fix_table_format(dim.content))
+            lines.append("")
+            lines.append("---")
+            lines.append("")
+
+        return "\n".join(lines).encode('utf-8')
+
+    async def export_planning_text_to_bytes(
+        self,
+        project_name: str = "村庄规划",
+        village_name: str = "",
+    ) -> Optional[bytes]:
+        """Export complete planning text as DOCX bytes (no file saved).
+
+        Uses PlanningTextGenerator to generate Markdown, then converts
+        to DOCX via md_to_docx.
+        """
+        import sys
+        import tempfile
+
+        from .generator import PlanningTextGenerator
+        from .config import PlanningTextConfig
+
+        config = PlanningTextConfig(
+            session_id=self.config.session_id,
+            project_name=project_name,
+            village_name=village_name,
+            output_dir=str(Path(self.config.output_dir) / "planning_text"),
+            output_formats=("md",),
+            append_rag=True,
+            generate_tier3=False,
+        )
+
+        generator = PlanningTextGenerator(config)
+        result = await generator.generate()
+
+        md_content = getattr(result, 'markdown', None)
+        if not md_content and getattr(result, 'md_path', None):
+            md_path = Path(result.md_path)
+            if md_path.exists():
+                md_content = md_path.read_text(encoding='utf-8')
+
+        if not md_content:
+            logger.warning("[LayerExporter] No markdown content from PlanningTextGenerator")
+            return None
+
+        # Write MD to temp file, convert to DOCX via md_to_docx
+        script_dir = Path(__file__).parent.parent.parent.parent.parent / "scripts"
+        if str(script_dir) not in sys.path:
+            sys.path.insert(0, str(script_dir))
+
+        from md_to_docx import create_docx_from_md
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            md_tmp = Path(tmp_dir) / "planning_text.md"
+            docx_tmp = Path(tmp_dir) / "planning_text.docx"
+            md_tmp.write_text(md_content, encoding='utf-8')
+
+            try:
+                create_docx_from_md(md_tmp, docx_tmp)
+                return docx_tmp.read_bytes()
+            except Exception as e:
+                logger.warning(f"[LayerExporter] MD->DOCX conversion failed: {e}")
+                return None
 
     def _apply_docx_styles(self, docx_path: Path) -> None:
         """Apply page margins and paragraph styles to DOCX."""

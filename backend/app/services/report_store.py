@@ -15,7 +15,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TypedDict
 
-from sqlmodel import select
+from sqlalchemy import func, select
 
 from ..database.models import DimensionReport
 from ..database.engine import get_async_session
@@ -312,21 +312,29 @@ class ReportStore:
             Full content of latest version or None
         """
         async with get_async_session() as db:
-            statement = (
-                select(DimensionReport)
+            max_version_stmt = (
+                select(func.max(DimensionReport.version))
                 .where(
                     DimensionReport.session_id == session_id,
                     DimensionReport.dimension_key == dim_key,
                 )
-                .order_by(DimensionReport.version.desc())
+            )
+            max_ver_result = await db.execute(max_version_stmt)
+            max_version = max_ver_result.scalar()
+            if max_version is None:
+                return None
+
+            statement = (
+                select(DimensionReport.content)
+                .where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.dimension_key == dim_key,
+                    DimensionReport.version == max_version,
+                )
+                .limit(1)
             )
             result = await db.execute(statement)
-            report = result.scalar_one_or_none()
-
-            if report:
-                return report.content
-
-        return None
+            return result.scalar()
 
     async def get_latest_version(
         self,
@@ -337,18 +345,19 @@ class ReportStore:
         Get the latest version number for a dimension.
 
         Returns 0 if no reports exist (so next_version = latest + 1 = 1).
+        Uses func.max() which guarantees a single result row, avoiding
+        MultipleResultsFound even when duplicate rows exist.
         """
         async with get_async_session() as db:
             statement = (
-                select(DimensionReport.version)
+                select(func.max(DimensionReport.version))
                 .where(
                     DimensionReport.session_id == session_id,
                     DimensionReport.dimension_key == dim_key,
                 )
-                .order_by(DimensionReport.version.desc())
             )
             result = await db.execute(statement)
-            version = result.scalar_one_or_none()
+            version = result.scalar()
             return version if version is not None else 0
 
     async def get_latest_report(
@@ -367,16 +376,29 @@ class ReportStore:
             dict with layer, content, knowledge_sources or None
         """
         async with get_async_session() as db:
+            max_version_stmt = (
+                select(func.max(DimensionReport.version))
+                .where(
+                    DimensionReport.session_id == session_id,
+                    DimensionReport.dimension_key == dim_key,
+                )
+            )
+            max_ver_result = await db.execute(max_version_stmt)
+            max_version = max_ver_result.scalar()
+            if max_version is None:
+                return None
+
             statement = (
                 select(DimensionReport)
                 .where(
                     DimensionReport.session_id == session_id,
                     DimensionReport.dimension_key == dim_key,
+                    DimensionReport.version == max_version,
                 )
-                .order_by(DimensionReport.version.desc())
+                .limit(1)
             )
             result = await db.execute(statement)
-            report = result.scalar_one_or_none()
+            report = result.scalar()
             if report:
                 return {
                     "layer": report.layer,

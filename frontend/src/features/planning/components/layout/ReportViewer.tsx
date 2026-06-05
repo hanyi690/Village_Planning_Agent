@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useCallback, useState, useEffect } from 'react';
+import React, { memo, useCallback, useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   faLayerGroup,
@@ -34,7 +34,7 @@ import type { CompareSession, KnowledgeSourceItem, DimensionVersion } from '../.
 import VillageInputForm from '../VillageInputForm';
 import MarkdownRenderer from '../ui/MarkdownRenderer';
 import { LAYER_VALUE_MAP, LAYER_IDS } from '@/features/planning/constants';
-import { DIMENSION_NAMES } from '../../config/dimensions';
+import { DIMENSION_NAMES, DIMENSIONS_BY_LAYER } from '../../config/dimensions';
 import { cn } from '../../utils/cn';
 
 interface ReportViewerProps {
@@ -100,6 +100,19 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
     ? completedDimensions[`layer${pendingReviewLayer}` as 'layer1' | 'layer2' | 'layer3'] || []
     : [];
 
+  // All completed dimensions across all finished layers (for cascade revision)
+  const allCompletedDimsByLayer = useMemo(() => {
+    const result: { layer: number; dims: string[] }[] = [];
+    for (let l = 1; l <= 3; l++) {
+      const dims = completedDimensions[`layer${l}` as 'layer1' | 'layer2' | 'layer3'] || [];
+      if (dims.length > 0) {
+        result.push({ layer: l, dims });
+      }
+    }
+    return result;
+  }, [completedDimensions]);
+  const allCompletedDimsCount = allCompletedDimsByLayer.reduce((sum, g) => sum + g.dims.length, 0);
+
   const dimProgressKeyForRag = selectedNavigationKey?.startsWith('dim:')
     ? selectedNavigationKey.slice(4)
     : '';
@@ -126,14 +139,22 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
     }
   }, [compareMode, projectName, sessionId]);
 
-  // Fetch version history when entering compare mode with current session
+  // Fetch version history when entering compare mode
   useEffect(() => {
     if (compareMode && sessionId && dimProgressKeyForRag) {
       const dimKey = dimProgressKeyForRag.split('_').slice(1).join('_') || dimProgressKeyForRag;
       setIsLoadingVersions(true);
       dataApi.getDimensionVersions(sessionId, dimKey)
-        .then(setAvailableVersions)
-        .catch(console.error)
+        .then(versions => {
+          // Exclude the latest version from the dropdown (it's the "current" shown on the left)
+          if (versions.length > 1) {
+            const maxVer = Math.max(...versions.map(v => v.version));
+            setAvailableVersions(versions.filter(v => v.version < maxVer));
+          } else {
+            setAvailableVersions([]);
+          }
+        })
+        .catch(() => setAvailableVersions([]))
         .finally(() => setIsLoadingVersions(false));
     }
   }, [compareMode, sessionId, dimProgressKeyForRag]);
@@ -330,8 +351,18 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
                   <select
                     value={selectedSessionId || ''}
                     onChange={(e) => {
+                      const val = e.target.value;
                       setSelectedVersion(null);
-                      handleSessionSelect(e.target.value);
+                      setCompareContent('');
+                      setCompareKnowledgeSources([]);
+                      if (val === sessionId) {
+                        setSelectedSessionId(val);
+                      } else if (val) {
+                        setSelectedSessionId(val);
+                        handleSessionSelect(val);
+                      } else {
+                        setSelectedSessionId(null);
+                      }
                     }}
                     className="px-4 py-2 rounded-lg text-sm bg-white border border-slate-200 text-slate-700 focus:outline-none focus:ring-2 focus:ring-cyan-300"
                     disabled={isLoadingSessions}
@@ -724,7 +755,7 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
               </div>
 
               {/* Dimension Selector for Cascade Revision */}
-              {currentLayerCompletedDims.length > 0 && (
+              {allCompletedDimsCount > 0 && (
                 <div className="mt-3">
                   <button
                     onClick={() => setShowDimensionSelector(!showDimensionSelector)}
@@ -738,7 +769,7 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
                     <span>
                       {selectedDimensions.length > 0
                         ? `已选择 ${selectedDimensions.length} 个维度进行修订`
-                        : `选择修订维度 (${currentLayerCompletedDims.length} 个已完成)`}
+                        : `选择修订维度 (${allCompletedDimsCount} 个已完成)`}
                     </span>
                   </button>
 
@@ -758,46 +789,54 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
                             </span>
                             <button
                               onClick={() => {
-                                if (selectedDimensions.length === currentLayerCompletedDims.length) {
+                                const allDims = allCompletedDimsByLayer.flatMap(g => g.dims);
+                                if (selectedDimensions.length === allDims.length) {
                                   setSelectedDimensions([]);
                                 } else {
-                                  setSelectedDimensions([...currentLayerCompletedDims]);
+                                  setSelectedDimensions(allDims);
                                 }
                               }}
                               className="text-xs text-amber-500 hover:text-amber-600 underline"
                             >
-                              {selectedDimensions.length === currentLayerCompletedDims.length ? '取消全选' : '全选'}
+                              {selectedDimensions.length === allCompletedDimsCount ? '取消全选' : '全选'}
                             </button>
                           </div>
-                          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-                            {currentLayerCompletedDims.map((dimKey) => (
-                              <label
-                                key={dimKey}
-                                className={cn(
-                                  "flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all",
-                                  selectedDimensions.includes(dimKey)
-                                    ? "bg-amber-100 border border-amber-300"
-                                    : "bg-slate-50 border border-slate-200 hover:border-amber-200"
-                                )}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={selectedDimensions.includes(dimKey)}
-                                  onChange={(e) => {
-                                    if (e.target.checked) {
-                                      setSelectedDimensions([...selectedDimensions, dimKey]);
-                                    } else {
-                                      setSelectedDimensions(selectedDimensions.filter(d => d !== dimKey));
-                                    }
-                                  }}
-                                  className="w-4 h-4 rounded border-amber-300 text-amber-500 focus:ring-amber-300"
-                                />
-                                <span className="text-sm text-slate-700 truncate">
-                                  {DIMENSION_NAMES[dimKey] || dimKey}
-                                </span>
-                              </label>
-                            ))}
-                          </div>
+                          {allCompletedDimsByLayer.map(({ layer, dims }) => (
+                            <div key={layer} className="mb-3 last:mb-0">
+                              <span className="text-xs font-medium text-slate-500 mb-2 block">
+                                Layer {layer} ({dims.length} 个维度)
+                              </span>
+                              <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+                                {dims.map((dimKey) => (
+                                  <label
+                                    key={dimKey}
+                                    className={cn(
+                                      "flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all",
+                                      selectedDimensions.includes(dimKey)
+                                        ? "bg-amber-100 border border-amber-300"
+                                        : "bg-slate-50 border border-slate-200 hover:border-amber-200"
+                                    )}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedDimensions.includes(dimKey)}
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedDimensions([...selectedDimensions, dimKey]);
+                                        } else {
+                                          setSelectedDimensions(selectedDimensions.filter(d => d !== dimKey));
+                                        }
+                                      }}
+                                      className="w-4 h-4 rounded border-amber-300 text-amber-500 focus:ring-amber-300"
+                                    />
+                                    <span className="text-sm text-slate-700 truncate">
+                                      {DIMENSION_NAMES[dimKey] || dimKey}
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </motion.div>
                     )}

@@ -3,17 +3,20 @@
 import React from 'react';
 import { usePlanningStore } from '../../store';
 import { LAYER_VALUE_MAP, LAYER_IDS } from '@/features/planning/constants';
+import { planningApi } from '../../api';
 
 function Toggle({
   label,
   description,
   enabled,
   onToggle,
+  loading,
 }: {
   label: string;
   description?: string;
   enabled: boolean;
   onToggle: () => void;
+  loading?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-slate-50 transition-colors">
@@ -25,9 +28,10 @@ function Toggle({
       </div>
       <button
         onClick={onToggle}
+        disabled={loading}
         className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${
           enabled ? 'bg-[#0ea5e9]' : 'bg-slate-300'
-        }`}
+        } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
         aria-label={`切换 ${label}`}
       >
         <span
@@ -45,11 +49,13 @@ function LayerToggle({
   label,
   enabled,
   onToggle,
+  loading,
 }: {
   layer: number;
   label: string;
   enabled: boolean;
   onToggle: () => void;
+  loading?: boolean;
 }) {
   return (
     <div className="flex items-center justify-between py-2.5 px-3 rounded-lg hover:bg-slate-50 transition-colors">
@@ -61,9 +67,10 @@ function LayerToggle({
       </div>
       <button
         onClick={onToggle}
+        disabled={loading}
         className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${
           enabled ? 'bg-[#0ea5e9]' : 'bg-slate-300'
-        }`}
+        } ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
         aria-label={`切换 ${label} 知识检索`}
       >
         <span
@@ -81,6 +88,44 @@ export default function SettingsPanel() {
   const toggleLayerRag = usePlanningStore((state) => state.toggleLayerRag);
   const stepMode = usePlanningStore((state) => state.step_mode);
   const setStepMode = usePlanningStore((state) => state.setStepMode);
+  const sessionId = usePlanningStore((state) => state.sessionId);
+
+  const [ragLoading, setRagLoading] = React.useState(false);
+  const [stepLoading, setStepLoading] = React.useState(false);
+
+  const handleRagToggle = async (layer: number) => {
+    if (!sessionId) return;
+
+    const newConfig = { ...ragLayerConfig, [layer]: !ragLayerConfig[layer] };
+    toggleLayerRag(layer);
+    setRagLoading(true);
+
+    try {
+      await planningApi.updateRagConfig(sessionId, { rag_layer_config: newConfig });
+    } catch (error) {
+      console.error('[Settings] Failed to sync RAG config:', error);
+      toggleLayerRag(layer);
+    } finally {
+      setRagLoading(false);
+    }
+  };
+
+  const handleStepModeToggle = async () => {
+    if (!sessionId) return;
+
+    const newStepMode = !stepMode;
+    setStepMode(newStepMode);
+    setStepLoading(true);
+
+    try {
+      await planningApi.updateStepMode(sessionId, { step_mode: newStepMode });
+    } catch (error) {
+      console.error('[Settings] Failed to sync step mode:', error);
+      setStepMode(!newStepMode);
+    } finally {
+      setStepLoading(false);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -101,7 +146,8 @@ export default function SettingsPanel() {
               label="步骤模式"
               description="启用后将在每个层级完成后暂停，等待用户确认"
               enabled={stepMode}
-              onToggle={() => setStepMode(!stepMode)}
+              onToggle={handleStepModeToggle}
+              loading={stepLoading}
             />
           </div>
         </div>
@@ -118,7 +164,8 @@ export default function SettingsPanel() {
                 layer={layer}
                 label={LAYER_VALUE_MAP[layer]}
                 enabled={ragLayerConfig[layer] ?? true}
-                onToggle={() => toggleLayerRag(layer)}
+                onToggle={() => handleRagToggle(layer)}
+                loading={ragLoading}
               />
             ))}
           </div>

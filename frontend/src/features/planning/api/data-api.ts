@@ -55,10 +55,14 @@ export const dataApi = {
    * GET /api/sessions/{id}/reports/{dim_key}/versions
    */
   async getDimensionVersions(sessionId: string, dimKey: string): Promise<DimensionVersion[]> {
-    const response = await apiRequest<{ versions: DimensionVersion[] }>(
-      `/api/sessions/${sessionId}/reports/${dimKey}/versions`
-    );
-    return response.versions || [];
+    try {
+      const response = await apiRequest<{ versions: DimensionVersion[] }>(
+        `/api/sessions/${sessionId}/reports/${dimKey}/versions`
+      );
+      return response.versions || [];
+    } catch {
+      return [];
+    }
   },
 
   // ============================================

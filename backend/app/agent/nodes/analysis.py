@@ -157,6 +157,14 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 2+3. GIS 和 RAG 并行执行（两者访问独立数据源，无逻辑依赖）
     config = state.get("config", {})
 
+    # Send dimension_start early so frontend shows progress during RAG
+    await sse_manager.publish(session_id, {
+        "type": "dimension_start",
+        "dimension_key": dim_key,
+        "dimension_name": dim_name,
+        "layer": dim_layer,
+    })
+
 
     async def _run_rag():
         rag_layer_config = config.get("rag_layer_config", {})
@@ -193,6 +201,14 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         try:
             queries = await RagService.get_instance().generate_queries(cfg, state)
             query_method = "llm_multi"
+
+            # Notify frontend that RAG queries have been generated
+            await sse_manager.publish(session_id, {
+                "type": "rag_query",
+                "dimension_key": dim_key,
+                "layer": dim_layer,
+                "query": queries[0] if queries else "",
+            })
 
             # Cross-dimension query result cache
             _query_cache = config.setdefault("_query_result_cache", {})
@@ -265,8 +281,10 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 "retrieval_latency_ms": latency_ms,
                 "total_results": len(results),
                 "documents": [{
+                    "title": r.get("metadata", {}).get("title", "") or r.get("metadata", {}).get("source", "未知"),
+                    "snippet": (r.get("content", "") or "")[:300],
                     "source": r.get("metadata", {}).get("source", "未知"),
-                    "query": r.get("matched_query", ""),
+                    "matched_query": r.get("matched_query", ""),
                     "ancestors": r.get("metadata", {}).get("ancestors", []),
                     "section_title": r.get("metadata", {}).get("section_title", ""),
                     "parent_section_title": r.get("metadata", {}).get("parent_section_title", ""),
@@ -293,15 +311,12 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     deps = ""
     same_layer_contexts = ""
 
-    # 同层依赖加载 - 优先从内存状态加载，解决并行执行的竞态条件
-    # LangGraph Send API 并行执行同层维度，上游报告在 pending_reports 中
-    # 下游维度需要从内存状态获取，而非等待数据库（数据库写入在 layer_completion_check）
+    # 同层依赖加载 - 通过 DB 获取（并行节点无法通过状态快照看到彼此的 pending_reports）
     same_layer_deps = getattr(cfg, 'depends_on', [])
     if same_layer_deps:
         contexts = []
         missing_deps = []
 
-        # 等待依赖报告可用（最多等待 120 秒）
         max_wait_seconds = 120
         check_interval = 2
 
@@ -309,31 +324,15 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
             report = None
             waited = 0
 
-            # 轮询等待：优先内存，再数据库
+            # 轮询等待：从 DB 获取（上游节点完成后会立即写入 DB）
             while waited < max_wait_seconds:
-                # 1. 优先从 pending_reports（内存状态）加载
-                pending_reports = state.get("pending_reports", [])
-                pending_report = next(
-                    (r.get("content") for r in pending_reports
-                     if r.get("dimension_key") == dep_key and r.get("layer") == dim_layer),
-                    None
-                )
-
-                if pending_report:
-                    report = pending_report
-                    contexts.append(f"【{dep_key}】分析结果：\n{report}")
-                    logger.info(f"[analyze_dimension] {dim_key}: 从内存获取依赖 {dep_key}（等待 {waited}s）")
-                    break
-
-                # 2. 再查数据库（可能已由其他路径保存）
                 db_report = await store.get_latest(session_id, dep_key)
                 if db_report:
                     report = db_report
                     contexts.append(f"【{dep_key}】分析结果：\n{report}")
-                    logger.info(f"[analyze_dimension] {dim_key}: 从数据库获取依赖 {dep_key}（等待 {waited}s）")
+                    logger.info(f"[analyze_dimension] {dim_key}: 从DB获取依赖 {dep_key}（等待 {waited}s）")
                     break
 
-                # 3. 等待后重试
                 await asyncio.sleep(check_interval)
                 waited += check_interval
 
@@ -440,32 +439,42 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     llm_start_time = time.time()
 
     llm_response = ""
-    await sse_manager.publish(session_id, {
-        "type": "dimension_start",
-        "dimension_key": dim_key,
-        "dimension_name": dim_name,
-        "layer": dim_layer,
-    })
+    _last_publish_time = 0.0
+    _PUBLISH_INTERVAL = 0.1  # 100ms throttle
 
     try:
         async with asyncio.timeout(LLM_STREAM_TIMEOUT):
             async for chunk in llm.astream(prompt):
                 if hasattr(chunk, 'content') and chunk.content:
                     llm_response += chunk.content
-                    await sse_manager.publish(session_id, {
-                        "type": "dimension_delta",
-                        "dimension_key": dim_key,
-                        "dimension_name": dim_name,
-                        "layer": dim_layer,
-                        "delta": chunk.content,
-                        "accumulated": llm_response,
-                    })
+                    now = time.time()
+                    if now - _last_publish_time >= _PUBLISH_INTERVAL:
+                        await sse_manager.publish(session_id, {
+                            "type": "dimension_delta",
+                            "dimension_key": dim_key,
+                            "dimension_name": dim_name,
+                            "layer": dim_layer,
+                            "delta": chunk.content,
+                            "accumulated": llm_response,
+                        })
+                        _last_publish_time = now
     except asyncio.TimeoutError:
         logger.error(f"[analyze_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
         return {"messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")]}
     except Exception as e:
         logger.error(f"[analyze_dimension] {dim_key}: LLM 失败: {e}")
         return {"messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")]}
+
+    # Flush remaining delta (throttle may have skipped the last chunk)
+    if llm_response and _last_publish_time > 0:
+        await sse_manager.publish(session_id, {
+            "type": "dimension_delta",
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "delta": "",
+            "accumulated": llm_response,
+        })
 
     llm_elapsed = time.time() - llm_start_time
     logger.info(f"[analyze_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
@@ -526,11 +535,19 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "layer_char_counts": {dim_layer: len(llm_response)},
     }
 
+    # 立即写入 DB，使并行节点可通过 DB 回退路径获取依赖报告
+    try:
+        await store.bulk_save([pending_report])
+        logger.info(f"[analyze_dimension] {dim_key}: Report saved to DB immediately (v{next_version})")
+    except Exception as e:
+        logger.warning(f"[analyze_dimension] {dim_key}: Immediate DB save failed (will retry in completion): {e}")
+
     # 级联修订：记录本维度完成的波次
     if state.get("is_revision"):
         rev_completed = _build_revision_completed(state, dim_key)
         if rev_completed:
             result["revision_completed_dims"] = rev_completed
+            result["is_revision"] = True
         # 注意：不再返回 revision_impact_tree，因为它是只读的
         # 多个并发节点同时返回会导致 LangGraph 合并冲突
 

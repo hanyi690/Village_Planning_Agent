@@ -243,7 +243,7 @@ class PlanningRuntimeService:
         """
         # Build Layer-level RAG config
         if rag_layer_config is None:
-            rag_layer_config = {1: rag_enabled, 2: rag_enabled, 3: rag_enabled}
+            rag_layer_config = {1: rag_enabled, 2: False, 3: rag_enabled}
         else:
             # Fill unspecified layers
             for layer in [1, 2, 3]:

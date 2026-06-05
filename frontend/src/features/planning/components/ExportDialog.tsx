@@ -8,6 +8,7 @@
  */
 
 import React, { memo, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   faFileExport,
@@ -55,6 +56,10 @@ const ExportDialog = memo(function ExportDialog({
   const [isExporting, setIsExporting] = useState(false);
   const [downloadedFiles, setDownloadedFiles] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
+
+  // Prevent SSR mismatch
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => { setMounted(true); }, []);
 
   // Handle escape key
   React.useEffect(() => {
@@ -119,37 +124,56 @@ const ExportDialog = memo(function ExportDialog({
     const failed: string[] = [];
 
     try {
-      // Determine layers to export
       const layersToExport = selectedLayers.includes('all')
         ? [1, 2, 3]
         : selectedLayers.map(Number);
 
-      // Export DOCX layers
-      if (selectedFormats.includes('docx')) {
-        for (const layer of layersToExport) {
-          try {
-            const filename = await planningApi.exportLayerDocx(sessionId, layer, false);
-            succeeded.push(filename);
-          } catch {
-            failed.push(`导出 L${layer} DOCX 失败`);
-          }
+      // Collect all export promises for parallel execution
+      const tasks: Promise<string>[] = [];
+
+      for (const layer of layersToExport) {
+        if (selectedFormats.includes('json')) {
+          tasks.push(
+            planningApi.exportLayerJson(sessionId, layer).catch((e) => {
+              failed.push(`导出 L${layer} JSON 失败`);
+              return '';
+            })
+          );
+        }
+        if (selectedFormats.includes('md')) {
+          tasks.push(
+            planningApi.exportLayerMd(sessionId, layer).catch(() => {
+              failed.push(`导出 L${layer} MD 失败`);
+              return '';
+            })
+          );
+        }
+        if (selectedFormats.includes('docx')) {
+          tasks.push(
+            planningApi.exportLayerDocx(sessionId, layer, false).catch(() => {
+              failed.push(`导出 L${layer} DOCX 失败`);
+              return '';
+            })
+          );
         }
       }
 
-      // Export planning text
       if (selectedFormats.includes('planning_text')) {
-        try {
-          const filename = await planningApi.exportPlanningTextDocx(sessionId, '村庄规划');
-          succeeded.push(filename);
-        } catch {
-          failed.push('导出规划文本失败');
-        }
+        tasks.push(
+          planningApi.exportPlanningTextDocx(sessionId, '村庄规划').catch(() => {
+            failed.push('导出规划文本失败');
+            return '';
+          })
+        );
+      }
+
+      const results = await Promise.all(tasks);
+      for (const filename of results) {
+        if (filename) succeeded.push(filename);
       }
 
       setDownloadedFiles(succeeded);
-      if (failed.length > 0) {
-        setErrors(failed);
-      }
+      if (failed.length > 0) setErrors(failed);
     } catch {
       setErrors(['导出失败，请稍后重试']);
     } finally {
@@ -162,7 +186,9 @@ const ExportDialog = memo(function ExportDialog({
     setSelectedLayers(['all']);
   }, []);
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal(
     <AnimatePresence>
       {isOpen && (
         <>
@@ -172,7 +198,7 @@ const ExportDialog = memo(function ExportDialog({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50"
+            className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[9998]"
             onClick={onClose}
           />
 
@@ -182,7 +208,7 @@ const ExportDialog = memo(function ExportDialog({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] max-w-[90vw] bg-white rounded-2xl shadow-2xl z-50 overflow-hidden"
+            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] max-w-[90vw] bg-white rounded-2xl shadow-2xl z-[9999] overflow-hidden"
           >
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100 shrink-0">
@@ -317,7 +343,8 @@ const ExportDialog = memo(function ExportDialog({
           </motion.div>
         </>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body
   );
 });
 

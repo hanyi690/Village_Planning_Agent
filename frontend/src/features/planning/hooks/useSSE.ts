@@ -31,7 +31,7 @@ interface UseSSEConnectionOptions {
 }
 
 const MAX_RECONNECT_ATTEMPTS = 5;
-const BATCH_WINDOW = 50; // ms
+const BATCH_WINDOW = 30; // ms
 const MAX_BATCH_SIZE = 50; // Maximum events in queue before forced flush
 
 export function useSSEConnection({

@@ -280,7 +280,7 @@ function createInitialState(conversationId: string): PlanningState {
     reports: { layer1: {}, layer2: {}, layer3: {} },
     pause_after_step: false,
     previous_layer: 0,
-    step_mode: false,
+    step_mode: true,
     execution_paused: false,
 
     // Derived UI State
@@ -346,7 +346,7 @@ function createInitialState(conversationId: string): PlanningState {
     processPanelTab: 'messages',
 
     // Layer-level RAG config (default: all enabled)
-    ragLayerConfig: { 1: true, 2: true, 3: true },
+    ragLayerConfig: { 1: true, 2: false, 3: true },
   };
 }
 
@@ -880,6 +880,10 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       state.previous_layer = layerData.previous_layer ?? state.previous_layer;
       state.status = 'paused';
 
+      if (state.step_mode && state.selectedNavigationKey !== NAV_KEYS.OVERVIEW) {
+        state.selectedNavigationKey = NAV_KEYS.OVERVIEW;
+      }
+
       // Finalize layer_report message (merge any remaining dimension_reports from SSE)
       const layerReportId = buildLayerReportId(layerNum);
       const layerMsgIdx = state.messages.findIndex(
@@ -1167,6 +1171,10 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         pauseData.current_layer || pauseData.previous_layer || state.previous_layer;
       state.status = 'paused';
 
+      if (state.step_mode && state.selectedNavigationKey !== NAV_KEYS.OVERVIEW) {
+        state.selectedNavigationKey = NAV_KEYS.OVERVIEW;
+      }
+
       // Note: checkpoint_saved event (sent before pause) already creates the checkpoint
       // This is a fallback in case checkpoint_saved was missed
       const layer = pauseData.current_layer || pauseData.previous_layer || 0;
@@ -1274,15 +1282,23 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         query_generation_method?: string;
         retrieval_latency_ms?: number;
         total_results?: number;
-        documents?: Array<{ title: string; snippet: string; source?: string; score?: number; matched_query?: string }>;
+        documents?: Array<{ title?: string; snippet?: string; source?: string; score?: number; matched_query?: string; query?: string; chunk_id?: string }>;
         layer?: number;
       };
       const dimKey = ragData.dimension_key || '';
       if (dimKey) {
         const fullKey = `${ragData.layer || 1}_${dimKey}`;
+        const documents = (ragData.documents || []).map((doc) => ({
+          title: doc.title || doc.source || '未知',
+          snippet: doc.snippet || '',
+          source: doc.source,
+          score: doc.score,
+          chunk_id: doc.chunk_id,
+          matched_query: doc.matched_query || doc.query || '',
+        }));
         state.dimensionRagSources[fullKey] = {
           query: ragData.query || '',
-          documents: ragData.documents || [],
+          documents,
         };
       }
       break;
@@ -1382,6 +1398,16 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       };
       if (ragData.rag_layer_config) {
         state.ragLayerConfig = ragData.rag_layer_config;
+      }
+      break;
+    }
+
+    case 'step_mode_updated': {
+      const stepData = data as {
+        step_mode?: boolean;
+      };
+      if (stepData.step_mode !== undefined) {
+        state.step_mode = stepData.step_mode;
       }
       break;
     }

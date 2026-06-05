@@ -145,7 +145,10 @@ export type PlanningSSEEventType =
   | 'ai_response_complete'
   // GIS & RAG Events
   | 'gis_result'
-  | 'rag_result';
+  | 'rag_result'
+  // Settings Events
+  | 'rag_config_updated'
+  | 'step_mode_updated';
 
 /**
  * 后端未实现的SSE事件类型 - 保留用于向后兼容或未来实现
@@ -217,6 +220,8 @@ export interface PlanningSSEDataBase {
     snippet?: string;
     source?: string;
     score?: number;
+    matched_query?: string;
+    chunk_id?: string;
   }>;
 }
 
@@ -623,4 +628,28 @@ export interface GeneratePlanningTextResponse {
   generation_duration_seconds: number;
   status: string;
   trigger_reason: string;
+}
+
+// ============================================
+// Settings API Types
+// ============================================
+
+export interface RagConfigRequest {
+  rag_enabled?: boolean;
+  rag_layer_config?: Record<number, boolean>;
+}
+
+export interface RagConfigResponse {
+  session_id: string;
+  rag_enabled: boolean;
+  rag_layer_config: Record<number, boolean>;
+}
+
+export interface StepModeRequest {
+  step_mode: boolean;
+}
+
+export interface StepModeResponse {
+  session_id: string;
+  step_mode: boolean;
 }

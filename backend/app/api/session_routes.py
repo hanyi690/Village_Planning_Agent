@@ -437,6 +437,8 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
             "pause_after_step": False,
             "previous_layer": 0,
             "phase": next_phase or current_phase,
+            "need_revision": False,
+            "human_feedback": None,
         })
 
         # Send execution_resumed SSE event before triggering execution
@@ -463,6 +465,8 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
             "human_feedback": request.feedback,
             "need_revision": True,
             "revision_target_dimensions": request.dimensions,
+            "is_revision": True,
+            "revision_feedback": request.feedback,
         })
         asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
         return {"status": "revision_started", "dimensions": request.dimensions}
@@ -584,12 +588,10 @@ async def get_dimension_report(session_id: str, dim_key: str, version: Optional[
 
 @router.get("/api/sessions/{session_id}/reports/{dim_key}/versions")
 async def get_dimension_report_versions(session_id: str, dim_key: str):
-    """列出指定维度所有历史版本摘要（不含完整内容）"""
+    """列出指定维度所有版本（含当前版本），不再 404"""
     revisions = await get_dimension_revisions_async(
         session_id=session_id, dimension_key=dim_key
     )
-    if not revisions:
-        raise HTTPException(status_code=404, detail=f"No revisions found for dimension: {dim_key}")
 
     return {
         "session_id": session_id,
@@ -716,6 +718,17 @@ class RagConfigResponse(BaseModel):
     rag_layer_config: Dict[int, bool]
 
 
+class StepModeRequest(BaseModel):
+    """Step mode configuration request"""
+    step_mode: bool = Field(..., description="Enable/disable step mode")
+
+
+class StepModeResponse(BaseModel):
+    """Step mode configuration response"""
+    session_id: str
+    step_mode: bool
+
+
 @router.get("/api/sessions/{session_id}/rag-config", response_model=RagConfigResponse)
 async def get_rag_config(session_id: str):
     """Get current RAG configuration"""
@@ -727,7 +740,7 @@ async def get_rag_config(session_id: str):
     return RagConfigResponse(
         session_id=session_id,
         rag_enabled=config.get("rag_enabled", True),
-        rag_layer_config=config.get("rag_layer_config", {1: True, 2: True, 3: True}),
+        rag_layer_config=config.get("rag_layer_config", {1: True, 2: False, 3: True}),
     )
 
 
@@ -745,7 +758,7 @@ async def update_rag_config(session_id: str, request: RagConfigRequest):
 
     config = state.get("config", {})
     current_rag_enabled = config.get("rag_enabled", True)
-    current_layer_config = config.get("rag_layer_config", {1: True, 2: True, 3: True})
+    current_layer_config = config.get("rag_layer_config", {1: True, 2: False, 3: True})
 
     new_rag_enabled = request.rag_enabled if request.rag_enabled is not None else current_rag_enabled
     new_layer_config = request.rag_layer_config if request.rag_layer_config is not None else current_layer_config
@@ -778,6 +791,31 @@ async def update_rag_config(session_id: str, request: RagConfigRequest):
     )
 
 
+@router.patch("/api/sessions/{session_id}/step-mode", response_model=StepModeResponse)
+async def update_step_mode(session_id: str, request: StepModeRequest):
+    """Update step mode (runtime modification)"""
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    await PlanningRuntimeService.aupdate_state(session_id, {
+        "step_mode": request.step_mode,
+    })
+
+    logger.info(f"[step-mode] Updated {session_id}: step_mode={request.step_mode}")
+
+    await sse_manager.publish(session_id, {
+        "type": "step_mode_updated",
+        "session_id": session_id,
+        "step_mode": request.step_mode,
+    })
+
+    return StepModeResponse(
+        session_id=session_id,
+        step_mode=request.step_mode,
+    )
+
+
 @router.get("/api/sessions/{session_id}/layer/{layer}/reports")
 async def get_layer_reports(session_id: str, layer: int):
     """获取层级报告（包含知识来源）"""
@@ -797,40 +835,11 @@ async def export_planning_text_document(
     project_name: str = "村庄规划",
 ):
     """
-    导出规划文本为 DOCX 文件。
+    导出规划文本为 DOCX 文件 (V3.0 兼容端点)。
 
     直接返回文件流，不在服务器保存文件。
-
-    Args:
-        session_id: Session ID
-        project_name: 项目名称（用于文档标题）
     """
-    from fastapi.responses import Response
-    import sys
-
-    project_root = Path(__file__).parent.parent.parent.parent
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-
-    from scripts.llm_assisted.simple_export import export_planning_document_to_bytes
-
-    result = export_planning_document_to_bytes(session_id, project_name)
-
-    if not result.success or not result.docx_bytes:
-        raise HTTPException(
-            status_code=500,
-            detail=f"导出失败: {result.errors}"
-        )
-
-    filename = f"{project_name}_规划文本.docx"
-
-    return Response(
-        content=result.docx_bytes,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"'
-        }
-    )
+    return await _export_planning_text(session_id, project_name)
 
 
 # ============================================
@@ -846,6 +855,27 @@ from app.services.modules.planning_text.export_service import (
     SessionExportResponse,
     ExportService,
 )
+from app.services.modules.planning_text.layer_exporter import LayerExporter
+
+
+async def _export_planning_text(session_id: str, project_name: str):
+    """Shared logic for planning text DOCX export."""
+    from fastapi.responses import Response
+    from app.services.modules.planning_text.layer_exporter import LayerExporter, LayerExportConfig
+
+    config = LayerExportConfig(session_id=session_id, output_dir="output/export")
+    exporter = LayerExporter(config)
+    docx_bytes = await exporter.export_planning_text_to_bytes(project_name=project_name)
+
+    if not docx_bytes:
+        raise HTTPException(status_code=500, detail="导出规划文本失败")
+
+    filename = f"{project_name}_规划文本.docx"
+    return Response(
+        content=docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
 
 
 @router.post("/api/sessions/{session_id}/export")
@@ -853,76 +883,69 @@ async def export_session_document(
     session_id: str,
     layer: Optional[int] = None,
     planning_text: bool = False,
+    format: str = "docx",
     project_name: str = "村庄规划",
     include_summaries: bool = False,
 ):
     """
     导出会话文档。
 
-    直接返回 DOCX 文件流，不在服务器保存文件。
+    直接返回文件流，不在服务器保存文件。
 
     Args:
         session_id: Session ID
         layer: 层级 (1/2/3)，与 planning_text 二选一
         planning_text: 是否导出规划文本
+        format: 导出格式 (docx/json/md)，默认 docx
         project_name: 项目名称（用于规划文本标题）
         include_summaries: 是否包含摘要（仅用于分层报告）
     """
-    from fastapi.responses import Response
+    if format not in ("docx", "json", "md"):
+        raise HTTPException(status_code=400, detail="format 必须为 docx/json/md")
 
     if planning_text:
-        # 导出规划文本
-        import sys
-        project_root = Path(__file__).parent.parent.parent.parent
-        if str(project_root) not in sys.path:
-            sys.path.insert(0, str(project_root))
-
-        from scripts.llm_assisted.simple_export import export_planning_document_to_bytes
-
-        result = export_planning_document_to_bytes(session_id, project_name)
-
-        if not result.success or not result.docx_bytes:
-            raise HTTPException(
-                status_code=500,
-                detail=f"导出失败: {result.errors}"
-            )
-
-        filename = f"{project_name}_规划文本.docx"
-
-        return Response(
-            content=result.docx_bytes,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-        )
+        return await _export_planning_text(session_id, project_name)
 
     elif layer in (1, 2, 3):
-        # 导出分层报告
+        from fastapi.responses import Response
         from app.services.modules.planning_text.layer_exporter import LayerExporter, LayerExportConfig
 
         config = LayerExportConfig(
             session_id=session_id,
             output_dir="output/export",
-            output_formats=("docx",),
             include_summaries=include_summaries,
         )
-
         exporter = LayerExporter(config)
-        docx_bytes = await exporter.export_layer_to_bytes(layer)
 
-        if not docx_bytes:
-            raise HTTPException(
-                status_code=500,
-                detail=f"导出 Layer {layer} 失败"
+        layer_name = get_layer_name(layer)
+
+        if format == "json":
+            json_bytes = await exporter.export_layer_to_json_bytes(layer)
+            if not json_bytes:
+                raise HTTPException(status_code=500, detail=f"导出 Layer {layer} JSON 失败")
+            return Response(
+                content=json_bytes,
+                media_type="application/json",
+                headers={"Content-Disposition": f'attachment; filename="L{layer}_{layer_name}.json"'}
             )
-
-        layer_names = {1: "现状分析", 2: "规划思路", 3: "详细规划"}
-        filename = f"L{layer}_{layer_names[layer]}.docx"
-
-        return Response(
-            content=docx_bytes,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-        )
+        elif format == "md":
+            md_bytes = await exporter.export_layer_to_md_bytes(layer)
+            if not md_bytes:
+                raise HTTPException(status_code=500, detail=f"导出 Layer {layer} MD 失败")
+            return Response(
+                content=md_bytes,
+                media_type="text/markdown; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="L{layer}_{layer_name}.md"'}
+            )
+        else:
+            docx_bytes = await exporter.export_layer_to_bytes(layer)
+            if not docx_bytes:
+                raise HTTPException(status_code=500, detail=f"导出 Layer {layer} DOCX 失败")
+            return Response(
+                content=docx_bytes,
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                headers={"Content-Disposition": f'attachment; filename="L{layer}_{layer_name}.docx"'}
+            )
 
     else:
         raise HTTPException(

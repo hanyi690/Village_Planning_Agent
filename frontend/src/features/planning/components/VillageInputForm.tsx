@@ -284,6 +284,33 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
     });
   };
 
+  const handleLoadDemo = async () => {
+    setProjectName('金田村规划');
+    setProvince('广东省');
+    setCity('梅州市');
+    setCounty('平远县');
+    setTownship('泗水镇');
+    setVillageName('金田村');
+    setPlanningPeriod('2022-2035年');
+    setTaskDescription(
+      '编制梅州市金田村村庄规划，涵盖国土空间布局、产业发展、人居环境、设施配套、历史文化保护等方面。'
+    );
+    setConstraints(
+      '1. 耕地保有量不低于85.2公顷，永久基本农田78.83公顷；\n' +
+      '2. 生态保护红线362.02公顷；\n' +
+      '3. 村庄建设用地规模30.5公顷；\n' +
+      '4. 林地保有量不低于423.6公顷；\n' +
+      '5. 符合梅州市国土空间总体规划要求。'
+    );
+    try {
+      const res = await fetch('/demo/jintian_village.md');
+      if (res.ok) {
+        const text = await res.text();
+        setVillageData(text);
+      }
+    } catch {}
+  };
+
   const handleFileSelect = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>, type: FileType) => {
       const files = e.target.files;
@@ -360,6 +387,13 @@ const VillageInputForm = memo(function VillageInputForm({ onSubmit, onLoadSessio
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-6 h-px bg-gradient-to-r from-amber-300 to-transparent" />
                 <span className="text-xs font-medium text-amber-600 uppercase tracking-wider">基本信息</span>
+                <button
+                  type="button"
+                  onClick={handleLoadDemo}
+                  className="ml-1 px-2 py-0.5 text-xs font-medium bg-cyan-50 text-cyan-700 hover:bg-cyan-100 border border-cyan-200 rounded transition-colors"
+                >
+                  加载示例数据
+                </button>
                 <div className="flex-1 h-px bg-gradient-to-l from-amber-300 to-transparent" />
               </div>
 

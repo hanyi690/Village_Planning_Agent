@@ -82,6 +82,8 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             return {
                 "is_revision": False,
+                "need_revision": False,
+                "revision_feedback": None,
                 "revision_impact_tree": None,
                 "last_revised_dimensions": all_dims,
                 "pending_reports": [],
@@ -119,15 +121,8 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
     layer_char_counts = state.get("layer_char_counts", {})
     total_chars = layer_char_counts.get(layer, 0)
 
-    # Performance optimization: Batch write pending reports
+    # Reports already saved to DB by analyze_dimension immediately after completion
     pending_reports = state.get("pending_reports", [])
-    if pending_reports:
-        store = ReportStore.get_instance()
-        # Filter reports for current layer only
-        layer_reports = [r for r in pending_reports if r.get("layer") == layer]
-        if layer_reports:
-            await store.bulk_save(layer_reports)
-            logger.info(f"[layer_completion_check] Batch saved {len(layer_reports)} reports for layer {layer}")
 
     # Send layer_completed SSE event
     SSEPublisher.send_layer_complete(

@@ -3,6 +3,7 @@
 // ============================================
 
 import { apiRequest, API_BASE_URL } from './client';
+import { downloadBlob } from '../utils/download';
 import type {
   StartPlanningRequest,
   StartPlanningResponse,
@@ -20,6 +21,10 @@ import type {
   PlanningTextVersionList,
   GeneratePlanningTextRequest,
   GeneratePlanningTextResponse,
+  RagConfigRequest,
+  RagConfigResponse,
+  StepModeRequest,
+  StepModeResponse,
 } from './types';
 
 // ============================================
@@ -198,6 +203,9 @@ export const planningApi = {
       // GIS & RAG Events
       'rag_result',
       'gis_result',
+      // Settings Events
+      'rag_config_updated',
+      'step_mode_updated',
     ];
 
     for (const eventType of eventTypes) {
@@ -401,65 +409,50 @@ export const planningApi = {
   },
 
   /**
-   * Export layer report as DOCX (direct file stream)
-   * POST /api/sessions/{session_id}/export?layer=N
+   * Export layer report in a given format (direct file stream)
+   * POST /api/sessions/{session_id}/export?layer=N&format=...
    */
-  async exportLayerDocx(
+  async exportLayerFormat(
     sessionId: string,
     layer: number,
-    includeSummaries: boolean = false
+    format: 'docx' | 'json' | 'md',
+    extraParams: string = '',
   ): Promise<string> {
-    const url = `${API_BASE_URL}/api/sessions/${sessionId}/export?layer=${layer}&include_summaries=${includeSummaries}`;
+    const url = `${API_BASE_URL}/api/sessions/${sessionId}/export?layer=${layer}&format=${format}${extraParams}`;
     const response = await fetch(url, { method: 'POST' });
-
-    if (!response.ok) {
-      throw new Error(`导出失败: ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`导出失败: ${response.status}`);
     const blob = await response.blob();
     const filename = this.extractFilename(response);
-
-    // Trigger download
-    const objectUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objectUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(objectUrl);
-
+    downloadBlob(blob, filename);
     return filename;
   },
 
-  /**
-   * Export planning text as DOCX (direct file stream)
-   * POST /api/sessions/{session_id}/export?planning_text=true
-   */
+  async exportLayerDocx(
+    sessionId: string,
+    layer: number,
+    includeSummaries: boolean = false,
+  ): Promise<string> {
+    return this.exportLayerFormat(sessionId, layer, 'docx', `&include_summaries=${includeSummaries}`);
+  },
+
+  async exportLayerJson(sessionId: string, layer: number): Promise<string> {
+    return this.exportLayerFormat(sessionId, layer, 'json');
+  },
+
+  async exportLayerMd(sessionId: string, layer: number): Promise<string> {
+    return this.exportLayerFormat(sessionId, layer, 'md');
+  },
+
   async exportPlanningTextDocx(
     sessionId: string,
-    projectName: string = '村庄规划'
+    projectName: string = '村庄规划',
   ): Promise<string> {
     const url = `${API_BASE_URL}/api/sessions/${sessionId}/export?planning_text=true&project_name=${encodeURIComponent(projectName)}`;
     const response = await fetch(url, { method: 'POST' });
-
-    if (!response.ok) {
-      throw new Error(`导出失败: ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`导出失败: ${response.status}`);
     const blob = await response.blob();
     const filename = `${projectName}_规划文本.docx`;
-
-    // Trigger download
-    const objectUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objectUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(objectUrl);
-
+    downloadBlob(blob, filename);
     return filename;
   },
 
@@ -542,6 +535,44 @@ export const planningApi = {
       {
         method: 'POST',
         body: JSON.stringify(request || { trigger_reason: 'initial' }),
+      }
+    );
+  },
+
+  // ============================================
+  // Settings API
+  // ============================================
+
+  /**
+   * Update RAG configuration (runtime)
+   * PATCH /api/sessions/{session_id}/rag-config
+   */
+  async updateRagConfig(
+    sessionId: string,
+    request: RagConfigRequest
+  ): Promise<RagConfigResponse> {
+    return apiRequest<RagConfigResponse>(
+      `/api/sessions/${sessionId}/rag-config`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(request),
+      }
+    );
+  },
+
+  /**
+   * Update step mode (runtime)
+   * PATCH /api/sessions/{session_id}/step-mode
+   */
+  async updateStepMode(
+    sessionId: string,
+    request: StepModeRequest
+  ): Promise<StepModeResponse> {
+    return apiRequest<StepModeResponse>(
+      `/api/sessions/${sessionId}/step-mode`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(request),
       }
     );
   },

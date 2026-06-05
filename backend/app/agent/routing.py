@@ -96,7 +96,6 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
             "revision_completed_dims": {},
             "feedback": None,
             "need_revision": False,
-            "revision_target_dimensions": [],
         }) for d in wave0_dims]
 
     # 2. 推进意图检测
@@ -203,7 +202,7 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
         if ready_dims:
             logger.info("[after_analysis] Revision ready dims (dependency-checked): %s", ready_dims)
-            return [Send("analyze_dimension", {**state, "dimension_key": d}) for d in ready_dims]
+            return [Send("analyze_dimension", {**state, "dimension_key": d, "is_revision": True}) for d in ready_dims]
 
         # 检查是否所有修订维度都已完成（只检查 revision_completed，不含基线）
         if set(revision_completed) >= set(all_revision_dims):
@@ -303,7 +302,7 @@ def _reset_dimensions(completed: Dict[str, List[str]], impacted: List[str]) -> D
 
 
 def _dispatch_current(state: Dict[str, Any]) -> Union[List[Send], str]:
-    """分发当前 phase 的维度"""
+    """分发当前 phase 的维度（同层依赖感知）"""
     phase = state.get("phase", PlanningPhase.INIT.value)
     if phase == PlanningPhase.INIT.value:
         phase = PlanningPhase.LAYER1.value
@@ -320,7 +319,21 @@ def _dispatch_current(state: Dict[str, Any]) -> Union[List[Send], str]:
     if not pending:
         return END
 
-    return [Send("analyze_dimension", {**state, "dimension_key": d, "phase": phase}) for d in pending]
+    # 只分发同层依赖已完成的维度
+    from ..config.loader import list_dimensions
+    dim_configs = list_dimensions(layer)
+    config_map = {d.key: d for d in dim_configs}
+
+    ready = []
+    for dim_key in pending:
+        cfg = config_map.get(dim_key)
+        if cfg and all(dep in completed for dep in (cfg.depends_on or [])):
+            ready.append(dim_key)
+
+    if not ready:
+        return END
+
+    return [Send("analyze_dimension", {**state, "dimension_key": d, "phase": phase}) for d in ready]
 
 
 __all__ = ["after_conversation", "after_analysis"]

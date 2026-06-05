@@ -79,6 +79,12 @@ def _merge_layer_char_counts(a: Dict[int, int], b: Dict[int, int]) -> Dict[int, 
     return result
 
 
+def _merge_is_revision(a: bool, b: bool) -> bool:
+    """Merge is_revision using logical OR. If any node sets True, keep True.
+    Ensures revision flag survives parallel fan-in reducer merge."""
+    return a or b
+
+
 class AgentState(TypedDict, total=False):
     """
     核心状态 - 精简版
@@ -117,7 +123,7 @@ class AgentState(TypedDict, total=False):
     need_revision: bool
     revision_target_dimensions: List[str]
     human_feedback: str
-    is_revision: bool
+    is_revision: Annotated[bool, _merge_is_revision]
     revision_impact_tree: Optional[Dict[int, List[str]]]
     revision_completed_dims: Annotated[Dict[int, List[str]], _merge_dict_of_lists]
     revision_feedback: Optional[str]
