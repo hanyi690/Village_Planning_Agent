@@ -22,7 +22,6 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
 import { planningApi } from '../api/planning-api';
-import { downloadBlob } from '../utils/download';
 import { usePlanningStore } from '../store';
 import MarkdownRenderer from './ui/MarkdownRenderer';
 import type {
@@ -117,24 +116,13 @@ const PlanningTextViewer = memo(function PlanningTextViewer({ sessionId }: Plann
   }, [sessionId, isGenerating, document]);
 
   // Handle export
-  const handleExport = useCallback(async (format: 'md' | 'json') => {
+  const handleExport = useCallback(async () => {
     if (!document || isExporting) return;
 
     setIsExporting(true);
 
     try {
-      const response = await planningApi.exportSession(sessionId, {
-        formats: [format === 'md' ? 'md' : 'json'],
-        layers: ['all'],
-        include_rag_details: true,
-        include_summaries: true,
-      });
-
-      // Download files
-      for (const file of response.files) {
-        const blob = await planningApi.downloadExportFile(sessionId, file.filename);
-        downloadBlob(blob, file.filename);
-      }
+      await planningApi.exportPlanningTextDocx(sessionId, '村庄规划');
     } catch (err) {
       console.error('[PlanningText] Failed to export:', err);
       setError('导出失败');
@@ -262,24 +250,14 @@ const PlanningTextViewer = memo(function PlanningTextViewer({ sessionId }: Plann
             </div>
           )}
 
-          {/* Export MD */}
-          <button
-            onClick={() => handleExport('md')}
-            disabled={isExporting}
-            className="px-3 py-2 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors disabled:opacity-50 flex items-center gap-2"
-          >
-            <FontAwesomeIcon icon={faDownload} style={{ width: 12, height: 12 }} />
-            <span>MD</span>
-          </button>
-
           {/* Export DOCX */}
           <button
-            onClick={() => handleExport('json')}
+            onClick={() => handleExport()}
             disabled={isExporting}
             className="px-3 py-2 rounded-lg text-sm bg-slate-100 text-slate-600 hover:bg-slate-200 transition-colors disabled:opacity-50 flex items-center gap-2"
           >
             <FontAwesomeIcon icon={faDownload} style={{ width: 12, height: 12 }} />
-            <span>JSON</span>
+            <span>DOCX</span>
           </button>
 
           {/* Regenerate */}

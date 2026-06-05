@@ -23,6 +23,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
@@ -35,7 +36,6 @@ from app.services.report_store import ReportStore
 from app.database.models import DimensionReport
 from app.database.operations import (
     create_planning_session_async,
-    get_dimension_revisions_async,
     list_planning_sessions_async,
     list_projects_async,
     list_project_sessions_async,
@@ -461,13 +461,53 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
         return {"status": "approved", "next_phase": next_phase}
 
     if request.feedback and request.dimensions:
+        # Compute impact tree once — reuse for both state update and SSE events
+        from app.config.dependency import get_impact_tree_compat
+
+        final_tree: Dict[int, List[str]] = {0: list(request.dimensions)}
+        for target_dim in request.dimensions:
+            tree = get_impact_tree_compat(target_dim)
+            for wave, dims in tree.items():
+                final_tree.setdefault(wave, []).extend(dims)
+        # Dedupe each wave
+        for wave in final_tree:
+            final_tree[wave] = list(set(final_tree[wave]))
+
         await PlanningRuntimeService.aupdate_state(session_id, {
             "human_feedback": request.feedback,
             "need_revision": True,
             "revision_target_dimensions": request.dimensions,
             "is_revision": True,
             "revision_feedback": request.feedback,
-        })
+            "revision_impact_tree": final_tree,
+            "revision_completed_dims": {},
+        }, as_node="conversation")
+
+        # Emit SSE events for immediate visual feedback
+        try:
+            from app.config import get_dimension_layer as _get_dim_layer
+
+            all_impacted = set(d for dims in final_tree.values() for d in dims)
+
+            for dim_key in all_impacted:
+                dim_layer = _get_dim_layer(dim_key) or 1
+                SSEPublisher.send_event(
+                    session_id=session_id,
+                    event_type="dimension_reset",
+                    dimension_key=dim_key,
+                    layer=dim_layer,
+                )
+
+            for target_dim in request.dimensions:
+                SSEPublisher.send_event(
+                    session_id=session_id,
+                    event_type="cascade_impact",
+                    trigger_dim=target_dim,
+                    impacted_dimensions=list(all_impacted),
+                )
+        except Exception as e:
+            logger.warning(f"[feedback] SSE cascade events failed: {e}")
+
         asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
         return {"status": "revision_started", "dimensions": request.dimensions}
 
@@ -556,19 +596,17 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
 async def get_dimension_report(session_id: str, dim_key: str, version: Optional[int] = None):
     """获取维度报告全文，支持历史版本查询（?version=N）"""
     if version is not None:
-        revisions = await get_dimension_revisions_async(
-            session_id=session_id, dimension_key=dim_key, limit=100
-        )
-        for rev in revisions:
-            if rev.get("version") == version:
-                return {
-                    "session_id": session_id,
-                    "dimension_key": dim_key,
-                    "layer": rev.get("layer"),
-                    "content": rev.get("content"),
-                    "version": version,
-                    "created_at": rev.get("created_at"),
-                }
+        store = ReportStore.get_instance()
+        report = await store.get_report_by_version(session_id, dim_key, version)
+        if report:
+            return {
+                "session_id": session_id,
+                "dimension_key": dim_key,
+                "layer": report["layer"],
+                "content": report["content"],
+                "version": version,
+                "created_at": report["generated_at"],
+            }
         raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
 
     state = await PlanningRuntimeService.aget_state_values(session_id)
@@ -588,23 +626,14 @@ async def get_dimension_report(session_id: str, dim_key: str, version: Optional[
 
 @router.get("/api/sessions/{session_id}/reports/{dim_key}/versions")
 async def get_dimension_report_versions(session_id: str, dim_key: str):
-    """列出指定维度所有版本（含当前版本），不再 404"""
-    revisions = await get_dimension_revisions_async(
-        session_id=session_id, dimension_key=dim_key
-    )
+    """列出指定维度所有版本"""
+    store = ReportStore.get_instance()
+    versions = await store.list_versions(session_id, dim_key)
 
     return {
         "session_id": session_id,
         "dimension_key": dim_key,
-        "versions": [
-            {
-                "version": r["version"],
-                "layer": r["layer"],
-                "created_at": r["created_at"],
-                "reason": r["reason"],
-            }
-            for r in revisions
-        ],
+        "versions": versions,
     }
 
 
@@ -635,20 +664,18 @@ async def get_project_dimension_report(
 
     if session_id:
         if version is not None:
-            revisions = await get_dimension_revisions_async(
-                session_id=session_id, dimension_key=dim_key, limit=100
-            )
-            for rev in revisions:
-                if rev.get("version") == version:
-                    return {
-                        "project_name": project_name,
-                        "session_id": session_id,
-                        "dimension_key": dim_key,
-                        "layer": rev.get("layer"),
-                        "content": rev.get("content"),
-                        "version": version,
-                        "created_at": rev.get("created_at"),
-                    }
+            store = ReportStore.get_instance()
+            report = await store.get_report_by_version(session_id, dim_key, version)
+            if report:
+                return {
+                    "project_name": project_name,
+                    "session_id": session_id,
+                    "dimension_key": dim_key,
+                    "layer": report["layer"],
+                    "content": report["content"],
+                    "version": version,
+                    "created_at": report["generated_at"],
+                }
             raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
 
         state = await PlanningRuntimeService.aget_state_values(session_id)
@@ -826,55 +853,66 @@ async def get_layer_reports(session_id: str, layer: int):
 
 
 # ============================================
-# Planning Document Export (V3.0)
-# ============================================
-
-@router.post("/api/sessions/{session_id}/export/planning-text")
-async def export_planning_text_document(
-    session_id: str,
-    project_name: str = "村庄规划",
-):
-    """
-    导出规划文本为 DOCX 文件 (V3.0 兼容端点)。
-
-    直接返回文件流，不在服务器保存文件。
-    """
-    return await _export_planning_text(session_id, project_name)
-
-
-# ============================================
 # Session Export (V4.0)
 # ============================================
 
 from fastapi.responses import FileResponse
 
-from app.services.modules.planning_text.export_service import (
-    ExportFormat,
-    ExportLayer,
-    SessionExportRequest,
-    SessionExportResponse,
-    ExportService,
-)
 from app.services.modules.planning_text.layer_exporter import LayerExporter
 
 
+def _content_disposition_header(filename: str) -> str:
+    ascii_fallback = filename.encode('ascii', 'replace').decode('ascii').replace('?', '_')
+    encoded = quote(filename, safe='')
+    return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded}'
+
+
 async def _export_planning_text(session_id: str, project_name: str):
-    """Shared logic for planning text DOCX export."""
+    """Export planning text as DOCX from the latest stored version."""
     from fastapi.responses import Response
-    from app.services.modules.planning_text.layer_exporter import LayerExporter, LayerExportConfig
 
-    config = LayerExportConfig(session_id=session_id, output_dir="output/export")
-    exporter = LayerExporter(config)
-    docx_bytes = await exporter.export_planning_text_to_bytes(project_name=project_name)
+    doc = await get_planning_text_document_async(session_id)
+    if not doc:
+        raise HTTPException(
+            status_code=400,
+            detail="尚未生成规划文本，请先点击「生成规划文本」",
+        )
 
-    if not docx_bytes:
-        raise HTTPException(status_code=500, detail="导出规划文本失败")
+    markdown_content = doc.get("markdown_content", "")
+    if not markdown_content:
+        raise HTTPException(status_code=500, detail="规划文本内容为空")
+
+    # Convert Markdown to DOCX via md_to_docx
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    script_dir = Path(__file__).parent.parent.parent.parent / "scripts"
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
+
+    try:
+        from md_to_docx import create_docx_from_md
+    except ImportError:
+        raise HTTPException(status_code=500, detail="md_to_docx 模块不可用")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        md_tmp = Path(tmp_dir) / "planning_text.md"
+        docx_tmp = Path(tmp_dir) / "planning_text.docx"
+        md_tmp.write_text(markdown_content, encoding='utf-8')
+
+        try:
+            create_docx_from_md(md_tmp, docx_tmp)
+            docx_bytes = docx_tmp.read_bytes()
+        except Exception as e:
+            logger.error(f"[Export] MD->DOCX conversion failed: {e}")
+            raise HTTPException(status_code=500, detail="DOCX 转换失败")
 
     filename = f"{project_name}_规划文本.docx"
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        headers={"Content-Disposition": _content_disposition_header(filename)}
     )
 
 
@@ -926,7 +964,7 @@ async def export_session_document(
             return Response(
                 content=json_bytes,
                 media_type="application/json",
-                headers={"Content-Disposition": f'attachment; filename="L{layer}_{layer_name}.json"'}
+                headers={"Content-Disposition": _content_disposition_header(f"L{layer}_{layer_name}.json")}
             )
         elif format == "md":
             md_bytes = await exporter.export_layer_to_md_bytes(layer)
@@ -935,7 +973,7 @@ async def export_session_document(
             return Response(
                 content=md_bytes,
                 media_type="text/markdown; charset=utf-8",
-                headers={"Content-Disposition": f'attachment; filename="L{layer}_{layer_name}.md"'}
+                headers={"Content-Disposition": _content_disposition_header(f"L{layer}_{layer_name}.md")}
             )
         else:
             docx_bytes = await exporter.export_layer_to_bytes(layer)
@@ -944,7 +982,7 @@ async def export_session_document(
             return Response(
                 content=docx_bytes,
                 media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                headers={"Content-Disposition": f'attachment; filename="L{layer}_{layer_name}.docx"'}
+                headers={"Content-Disposition": _content_disposition_header(f"L{layer}_{layer_name}.docx")}
             )
 
     else:
@@ -959,6 +997,7 @@ async def export_session_document(
 # ============================================
 
 from app.database.operations import (
+    get_planning_session_async,
     create_planning_text_document_async,
     get_planning_text_document_async,
     list_planning_text_versions_async,
@@ -1104,7 +1143,6 @@ async def generate_planning_text(session_id: str, request: GeneratePlanningTextR
 
     start_time = time.time()
 
-    # Get session metadata
     session = await get_planning_session_async(session_id)
     if not session:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
@@ -1112,47 +1150,30 @@ async def generate_planning_text(session_id: str, request: GeneratePlanningTextR
     project_name = session.get("project_name", "村庄规划")
     village_name = session.get("village_name") or session.get("township", "")
 
-    # Create output directory
-    output_dir = Path(f"output/export/{session_id}")  # 统一到项目根目录
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Configure generator
     config = PlanningTextConfig(
         session_id=session_id,
         project_name=project_name,
         village_name=village_name,
-        output_dir=str(output_dir),
-        output_formats=("md", "json"),
+        output_dir="",
+        output_formats=(),
         append_rag=True,
-        generate_tier3=False,  # Skip LLM generation, use existing reports
+        generate_tier3=True,
     )
 
     generator = PlanningTextGenerator(config)
 
     try:
-        # Generate document
         result = await generator.generate()
-
         duration = time.time() - start_time
 
-        # Read generated content
-        markdown_content = ""
-        json_content = None
+        markdown_content = result.markdown
+        article_count = len(result.build_report.articles) if result.build_report else 0
 
-        if result.md_path:
-            with open(result.md_path, "r", encoding="utf-8") as f:
-                markdown_content = f.read()
-
-        if result.json_path:
-            with open(result.json_path, "r", encoding="utf-8") as f:
-                json_content = json.load(f)
-
-        # Store in database
         doc = await create_planning_text_document_async(
             session_id=session_id,
             markdown_content=markdown_content,
-            json_content=json_content,
-            article_count=result.article_count or 0,
+            json_content=None,
+            article_count=article_count,
             generation_duration_seconds=duration,
             trigger_reason=request.trigger_reason,
             changed_dimensions=request.changed_dimensions,

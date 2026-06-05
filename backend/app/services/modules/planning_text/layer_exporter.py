@@ -144,6 +144,54 @@ class LayerExporter:
 
         return result
 
+    async def _fetch_layer_data(self, layer: int) -> LayerExportResult:
+        """Fetch layer report data from database without writing files to disk."""
+        result = LayerExportResult(
+            layer=layer,
+            layer_name=LAYER_NAMES.get(layer, f"Layer {layer}"),
+            dimensions=[],
+        )
+
+        reports = await self.store.get_layer_reports(
+            self.config.session_id, layer
+        )
+        if not reports:
+            result.errors.append(f"Layer {layer} 无数据")
+            return result
+
+        summaries = {}
+        if self.config.include_summaries:
+            try:
+                summaries = await self.store.get_layer_summaries(
+                    self.config.session_id, layer
+                )
+            except Exception as e:
+                logger.warning(f"[LayerExporter] Failed to fetch summaries: {e}")
+
+        rag_sources = {}
+        if self.config.include_rag_details:
+            rag_sources = await self._fetch_rag_sources(layer)
+
+        dim_names, dim_order = self._get_dimension_names_and_order()
+        sorted_dim_keys = sorted(
+            reports.keys(),
+            key=lambda k: dim_order.get(k, (layer, 999))
+        )
+
+        for dim_key in sorted_dim_keys:
+            content = reports[dim_key]
+            dim_report = DimensionReport(
+                dimension_key=dim_key,
+                dimension_name=dim_names.get(dim_key, dim_key),
+                layer=layer,
+                content=content,
+                summary=summaries.get(dim_key),
+                rag_sources=rag_sources.get(dim_key, []),
+            )
+            result.dimensions.append(dim_report)
+
+        return result
+
     async def export_all_layers(self) -> Dict[int, LayerExportResult]:
         """Export all three layer reports.
 
@@ -298,7 +346,7 @@ class LayerExporter:
         Returns:
             DOCX file as bytes, or None if export failed
         """
-        result = await self.export_layer(layer)
+        result = await self._fetch_layer_data(layer)
         if result.errors or not result.dimensions:
             return None
 
@@ -348,7 +396,7 @@ class LayerExporter:
         Reuses export_layer to fetch and build data, then serializes
         the same JSON structure that _export_json produces.
         """
-        result = await self.export_layer(layer)
+        result = await self._fetch_layer_data(layer)
         if result.errors or not result.dimensions:
             return None
 
@@ -382,7 +430,7 @@ class LayerExporter:
         Reuses export_layer to fetch and build data, then renders
         the same Markdown content that _export_md produces.
         """
-        result = await self.export_layer(layer)
+        result = await self._fetch_layer_data(layer)
         if result.errors or not result.dimensions:
             return None
 
@@ -429,9 +477,9 @@ class LayerExporter:
             project_name=project_name,
             village_name=village_name,
             output_dir=str(Path(self.config.output_dir) / "planning_text"),
-            output_formats=("md",),
+            output_formats=(),
             append_rag=True,
-            generate_tier3=False,
+            generate_tier3=True,
         )
 
         generator = PlanningTextGenerator(config)
@@ -448,7 +496,7 @@ class LayerExporter:
             return None
 
         # Write MD to temp file, convert to DOCX via md_to_docx
-        script_dir = Path(__file__).parent.parent.parent.parent.parent / "scripts"
+        script_dir = Path(__file__).parent.parent.parent.parent.parent.parent / "scripts"
         if str(script_dir) not in sys.path:
             sys.path.insert(0, str(script_dir))
 

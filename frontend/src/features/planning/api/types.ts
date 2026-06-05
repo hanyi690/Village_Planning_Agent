@@ -486,8 +486,11 @@ export interface ReviewData {
 export interface DimensionVersion {
   version: number;
   layer: number;
-  created_at: string;
-  reason: string | null;
+  dimension_key: string;
+  report_id: string;
+  summary: string;
+  generated_at: string;
+  revision_trigger: string | null;
 }
 
 /**
@@ -517,48 +520,6 @@ export interface CompareSession {
 // ============================================
 // Export Types
 // ============================================
-
-/**
- * Export format options
- */
-export type ExportFormat = 'json' | 'md' | 'docx' | 'planning_text';
-
-/**
- * Export layer options
- */
-export type ExportLayer = '1' | '2' | '3' | 'all';
-
-/**
- * Export request
- */
-export interface ExportRequest {
-  formats: ExportFormat[];
-  layers: ExportLayer[];
-  include_rag_details?: boolean;
-  include_summaries?: boolean;
-}
-
-/**
- * Export file info
- */
-export interface ExportFile {
-  format: ExportFormat;
-  layer?: number;
-  filename: string;
-  download_url: string;
-  size_bytes?: number;
-}
-
-/**
- * Export response
- */
-export interface ExportResponse {
-  session_id: string;
-  project_name: string;
-  files: ExportFile[];
-  generated_at: string;
-  errors: string[];
-}
 
 // ============================================
 // Planning Text Types

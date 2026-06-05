@@ -119,59 +119,6 @@ class UISession(SQLModel, table=True):
 
 
 # ==========================================
-# Dimension Revision Models
-# ==========================================
-
-class DimensionRevision(SQLModel, table=True):
-    """
-    Dimension revision table
-    维度修订表
-
-    Stores revision history for each dimension.
-
-    SSOT: Checkpoint 仍是维度当前内容的唯一真实源
-    此表仅作为历史日志，不影响当前状态
-    """
-    __tablename__ = "dimension_revisions"
-
-    # Primary key (auto-increment)
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    # Session and dimension identification (cascade delete)
-    session_id: str = Field(
-        sa_column=Column(
-            String,
-            ForeignKey("ui_sessions.conversation_id", ondelete="CASCADE"),
-            index=True,
-        )
-    )
-    layer: int = Field(index=True)  # 层级 (1/2/3)
-    dimension_key: str = Field(index=True)  # 维度标识
-
-    # Content
-    content: str = Field(sa_column=Text())
-    previous_content: Optional[str] = Field(
-        default=None,
-        sa_column=Text()
-    )
-    previous_content_hash: Optional[str] = None
-
-    # Metadata
-    reason: Optional[str] = None
-    created_by: Optional[str] = None
-    version: int = Field(default=1, index=True)
-
-    # Timestamp
-    created_at: datetime = Field(default_factory=datetime.now)
-
-    # Table options for composite indexes
-    __table_args__ = (
-        Index("idx_revision_session_dim", "session_id", "dimension_key"),
-        Index("idx_revision_session_version", "session_id", "layer", "dimension_key", "version"),
-    )
-
-
-# ==========================================
 # Dimension Report Models
 # ==========================================
 
@@ -359,7 +306,6 @@ class PlanningTextDocument(SQLModel, table=True):
 __all__ = [
     "PlanningSession",
     "UISession",
-    "DimensionRevision",
     "DimensionReport",
     "UploadedFile",
     "PlanningTextDocument",

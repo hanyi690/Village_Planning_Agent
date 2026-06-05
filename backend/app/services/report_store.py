@@ -35,6 +35,8 @@ class ReportVersion(TypedDict):
     summary: str              # Structured JSON summary
     generated_at: str         # ISO timestamp
     revision_trigger: Optional[str]  # Reason for revision (e.g., "user feedback")
+    layer: int                # Layer number
+    dimension_key: str        # Dimension key
 
 
 # ==========================================
@@ -296,6 +298,36 @@ class ReportStore:
 
         return None
 
+    async def get_report_by_version(
+        self,
+        session_id: str,
+        dim_key: str,
+        version: int
+    ) -> Optional[Dict[str, Any]]:
+        """Get full report dict by version number.
+
+        Returns:
+            dict with layer, content, knowledge_sources, version, generated_at or None
+        """
+        async with get_async_session() as db:
+            statement = select(DimensionReport).where(
+                DimensionReport.session_id == session_id,
+                DimensionReport.dimension_key == dim_key,
+                DimensionReport.version == version,
+            )
+            result = await db.execute(statement)
+            report = result.scalar_one_or_none()
+
+            if report:
+                return {
+                    "layer": report.layer,
+                    "content": report.content,
+                    "knowledge_sources": report.knowledge_sources or [],
+                    "version": report.version,
+                    "generated_at": report.generated_at.isoformat() + "Z",
+                }
+        return None
+
     async def get_latest(
         self,
         session_id: str,
@@ -441,6 +473,8 @@ class ReportStore:
                     summary=r.summary,
                     generated_at=r.generated_at.isoformat() + "Z",
                     revision_trigger=r.revision_trigger,
+                    layer=r.layer,
+                    dimension_key=r.dimension_key,
                 )
                 for r in reports
             ]

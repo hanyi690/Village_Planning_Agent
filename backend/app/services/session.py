@@ -147,9 +147,9 @@ class SessionService:
         except Exception as e:
             logger.warning(f"[SessionService] [{session_id}] Dimension reports cleanup warning: {e}")
 
-        # 4. Delete UI sessions and associated dimension revisions
+        # 4. Delete UI sessions
         try:
-            from app.database.operations import delete_ui_session_async, get_dimension_revisions_async
+            from app.database.operations import delete_ui_session_async
             # Find UI sessions linked to this planning session via task_id
             from app.database.operations import list_ui_sessions_async
             ui_sessions = await list_ui_sessions_async(task_id=session_id)

@@ -3,8 +3,9 @@
 /**
  * ExportDialog - Export planning documents dialog
  *
- * Allows user to select layers (L1/L2/L3) and formats (JSON/MD/DOCX/Planning Text)
- * and trigger batch export/download.
+ * Two export modes:
+ * 1. Layer reports: select layer + format (JSON/MD/DOCX)
+ * 2. Planning text: export complete planning document as DOCX
  */
 
 import React, { memo, useState, useCallback } from 'react';
@@ -19,12 +20,35 @@ import {
   faFileWord,
   faBook,
   faDownload,
+  faLayerGroup,
+  faFileLines,
 } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
 import { planningApi } from '../api/planning-api';
 import { getFormatDisplayName } from '../utils/download';
-import type { ExportFormat, ExportLayer } from '../api/types';
+
+type ExportMode = 'layer' | 'planning_text';
+type LayerFormat = 'json' | 'md' | 'docx';
+type LayerOption = '1' | '2' | '3' | 'all';
+
+const FORMAT_OPTIONS: { format: LayerFormat; icon: typeof faFileCode; description: string }[] = [
+  { format: 'json', icon: faFileCode, description: '结构化数据' },
+  { format: 'md', icon: faFileAlt, description: 'Markdown格式' },
+  { format: 'docx', icon: faFileWord, description: 'Word文档' },
+];
+
+const LAYER_OPTIONS: { layer: LayerOption; label: string }[] = [
+  { layer: '1', label: 'L1 现状分析' },
+  { layer: '2', label: 'L2 规划思路' },
+  { layer: '3', label: 'L3 详细规划' },
+  { layer: 'all', label: '全部层级' },
+];
+
+const MODE_OPTIONS: { mode: ExportMode; icon: typeof faLayerGroup; label: string; description: string }[] = [
+  { mode: 'layer', icon: faLayerGroup, label: '分层报告', description: '按层级导出各维度报告' },
+  { mode: 'planning_text', icon: faBook, label: '规划文本', description: '导出完整规划文档 (DOCX)' },
+];
 
 interface ExportDialogProps {
   sessionId: string;
@@ -32,27 +56,14 @@ interface ExportDialogProps {
   onClose: () => void;
 }
 
-const FORMAT_OPTIONS: { format: ExportFormat; icon: typeof faFileCode; description: string }[] = [
-  { format: 'json', icon: faFileCode, description: '结构化数据' },
-  { format: 'md', icon: faFileAlt, description: 'Markdown格式' },
-  { format: 'docx', icon: faFileWord, description: 'Word文档' },
-  { format: 'planning_text', icon: faBook, description: '完整规划文档' },
-];
-
-const LAYER_OPTIONS: { layer: ExportLayer; label: string }[] = [
-  { layer: '1', label: 'L1 现状分析' },
-  { layer: '2', label: 'L2 规划思路' },
-  { layer: '3', label: 'L3 详细规划' },
-  { layer: 'all', label: '全部层级' },
-];
-
 const ExportDialog = memo(function ExportDialog({
   sessionId,
   isOpen,
   onClose,
 }: ExportDialogProps) {
-  const [selectedFormats, setSelectedFormats] = useState<ExportFormat[]>(['json']);
-  const [selectedLayers, setSelectedLayers] = useState<ExportLayer[]>(['all']);
+  const [exportMode, setExportMode] = useState<ExportMode>('planning_text');
+  const [selectedFormats, setSelectedFormats] = useState<LayerFormat[]>(['docx']);
+  const [selectedLayers, setSelectedLayers] = useState<LayerOption[]>(['all']);
   const [isExporting, setIsExporting] = useState(false);
   const [downloadedFiles, setDownloadedFiles] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
@@ -92,7 +103,7 @@ const ExportDialog = memo(function ExportDialog({
     }
   }, [isOpen]);
 
-  const toggleFormat = useCallback((format: ExportFormat) => {
+  const toggleFormat = useCallback((format: LayerFormat) => {
     setSelectedFormats((prev) =>
       prev.includes(format)
         ? prev.filter((f) => f !== format)
@@ -100,7 +111,7 @@ const ExportDialog = memo(function ExportDialog({
     );
   }, []);
 
-  const toggleLayer = useCallback((layer: ExportLayer) => {
+  const toggleLayer = useCallback((layer: LayerOption) => {
     if (layer === 'all') {
       setSelectedLayers((prev) => (prev.includes('all') ? [] : ['all']));
       return;
@@ -113,8 +124,11 @@ const ExportDialog = memo(function ExportDialog({
     });
   }, []);
 
+  const canExport = exportMode === 'planning_text'
+    || (selectedFormats.length > 0 && selectedLayers.length > 0);
+
   const handleExport = useCallback(async () => {
-    if (!sessionId || selectedFormats.length === 0) return;
+    if (!sessionId) return;
 
     setIsExporting(true);
     setDownloadedFiles([]);
@@ -124,52 +138,50 @@ const ExportDialog = memo(function ExportDialog({
     const failed: string[] = [];
 
     try {
-      const layersToExport = selectedLayers.includes('all')
-        ? [1, 2, 3]
-        : selectedLayers.map(Number);
-
-      // Collect all export promises for parallel execution
-      const tasks: Promise<string>[] = [];
-
-      for (const layer of layersToExport) {
-        if (selectedFormats.includes('json')) {
-          tasks.push(
-            planningApi.exportLayerJson(sessionId, layer).catch((e) => {
-              failed.push(`导出 L${layer} JSON 失败`);
-              return '';
-            })
-          );
-        }
-        if (selectedFormats.includes('md')) {
-          tasks.push(
-            planningApi.exportLayerMd(sessionId, layer).catch(() => {
-              failed.push(`导出 L${layer} MD 失败`);
-              return '';
-            })
-          );
-        }
-        if (selectedFormats.includes('docx')) {
-          tasks.push(
-            planningApi.exportLayerDocx(sessionId, layer, false).catch(() => {
-              failed.push(`导出 L${layer} DOCX 失败`);
-              return '';
-            })
-          );
-        }
-      }
-
-      if (selectedFormats.includes('planning_text')) {
-        tasks.push(
-          planningApi.exportPlanningTextDocx(sessionId, '村庄规划').catch(() => {
-            failed.push('导出规划文本失败');
-            return '';
-          })
-        );
-      }
-
-      const results = await Promise.all(tasks);
-      for (const filename of results) {
+      if (exportMode === 'planning_text') {
+        const filename = await planningApi.exportPlanningTextDocx(sessionId, '村庄规划').catch(() => {
+          failed.push('导出规划文本失败');
+          return '';
+        });
         if (filename) succeeded.push(filename);
+      } else {
+        const layersToExport = selectedLayers.includes('all')
+          ? [1, 2, 3]
+          : selectedLayers.map(Number);
+
+        const tasks: Promise<string>[] = [];
+
+        for (const layer of layersToExport) {
+          if (selectedFormats.includes('json')) {
+            tasks.push(
+              planningApi.exportLayerJson(sessionId, layer).catch((_e) => {
+                failed.push(`导出 L${layer} JSON 失败`);
+                return '';
+              })
+            );
+          }
+          if (selectedFormats.includes('md')) {
+            tasks.push(
+              planningApi.exportLayerMd(sessionId, layer).catch(() => {
+                failed.push(`导出 L${layer} MD 失败`);
+                return '';
+              })
+            );
+          }
+          if (selectedFormats.includes('docx')) {
+            tasks.push(
+              planningApi.exportLayerDocx(sessionId, layer, false).catch(() => {
+                failed.push(`导出 L${layer} DOCX 失败`);
+                return '';
+              })
+            );
+          }
+        }
+
+        const results = await Promise.all(tasks);
+        for (const filename of results) {
+          if (filename) succeeded.push(filename);
+        }
       }
 
       setDownloadedFiles(succeeded);
@@ -179,12 +191,7 @@ const ExportDialog = memo(function ExportDialog({
     } finally {
       setIsExporting(false);
     }
-  }, [sessionId, selectedFormats, selectedLayers]);
-
-  const handleExportAll = useCallback(() => {
-    setSelectedFormats(['json', 'md', 'docx', 'planning_text']);
-    setSelectedLayers(['all']);
-  }, []);
+  }, [sessionId, exportMode, selectedFormats, selectedLayers]);
 
   if (!mounted) return null;
 
@@ -218,7 +225,7 @@ const ExportDialog = memo(function ExportDialog({
                 </div>
                 <div>
                   <h2 className="text-base font-semibold text-slate-800">导出文档</h2>
-                  <p className="text-xs text-slate-400">选择层级和格式导出</p>
+                  <p className="text-xs text-slate-400">选择导出类型和格式</p>
                 </div>
               </div>
               <button
@@ -231,58 +238,96 @@ const ExportDialog = memo(function ExportDialog({
 
             {/* Content */}
             <div className="px-5 py-4 space-y-4">
-              {/* Layer Selection */}
+              {/* Export Mode Selection */}
               <div>
-                <label className="text-sm font-medium text-slate-600 mb-2 block">层级</label>
-                <div className="flex flex-wrap gap-2">
-                  {LAYER_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.layer}
-                      onClick={() => toggleLayer(opt.layer)}
-                      className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
-                        selectedLayers.includes(opt.layer)
-                          ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Format Selection */}
-              <div>
-                <label className="text-sm font-medium text-slate-600 mb-2 block">格式</label>
+                <label className="text-sm font-medium text-slate-600 mb-2 block">导出类型</label>
                 <div className="grid grid-cols-2 gap-2">
-                  {FORMAT_OPTIONS.map((opt) => (
+                  {MODE_OPTIONS.map((opt) => (
                     <button
-                      key={opt.format}
-                      onClick={() => toggleFormat(opt.format)}
+                      key={opt.mode}
+                      onClick={() => setExportMode(opt.mode)}
                       className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all ${
-                        selectedFormats.includes(opt.format)
+                        exportMode === opt.mode
                           ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
                           : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
                     >
                       <FontAwesomeIcon
                         icon={opt.icon}
-                        className={selectedFormats.includes(opt.format) ? 'text-emerald-500' : 'text-slate-400'}
+                        className={exportMode === opt.mode ? 'text-emerald-500' : 'text-slate-400'}
                         style={{ width: 14, height: 14 }}
                       />
-                      <span>{getFormatDisplayName(opt.format)}</span>
+                      <span>{opt.label}</span>
                     </button>
                   ))}
                 </div>
+                <p className="text-xs text-slate-400 mt-1.5">
+                  {exportMode === 'planning_text'
+                    ? '导出已生成的完整规划文本文档 (DOCX)'
+                    : '按层级导出各维度分析报告'}
+                </p>
               </div>
 
-              {/* Quick Select All */}
-              <button
-                onClick={handleExportAll}
-                className="w-full py-2 rounded-lg text-sm text-emerald-600 bg-emerald-50 hover:bg-emerald-100 transition-colors"
-              >
-                选择全部
-              </button>
+              {/* Layer + Format options (only for layer mode) */}
+              {exportMode === 'layer' && (
+                <>
+                  {/* Layer Selection */}
+                  <div>
+                    <label className="text-sm font-medium text-slate-600 mb-2 block">层级</label>
+                    <div className="flex flex-wrap gap-2">
+                      {LAYER_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.layer}
+                          onClick={() => toggleLayer(opt.layer)}
+                          className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
+                            selectedLayers.includes(opt.layer)
+                              ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Format Selection */}
+                  <div>
+                    <label className="text-sm font-medium text-slate-600 mb-2 block">格式</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {FORMAT_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.format}
+                          onClick={() => toggleFormat(opt.format)}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all ${
+                            selectedFormats.includes(opt.format)
+                              ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          <FontAwesomeIcon
+                            icon={opt.icon}
+                            className={selectedFormats.includes(opt.format) ? 'text-emerald-500' : 'text-slate-400'}
+                            style={{ width: 14, height: 14 }}
+                          />
+                          <span>{getFormatDisplayName(opt.format)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Planning text mode info */}
+              {exportMode === 'planning_text' && (
+                <div className="bg-emerald-50 rounded-lg px-4 py-3 flex items-center gap-3">
+                  <FontAwesomeIcon icon={faFileLines} className="text-emerald-500" style={{ width: 20, height: 20 }} />
+                  <div>
+                    <p className="text-sm text-emerald-700 font-medium">完整规划文本</p>
+                    <p className="text-xs text-emerald-600">导出已存储的最新版本为 DOCX 格式</p>
+                  </div>
+                </div>
+              )}
 
               {/* Downloaded Files */}
               {downloadedFiles.length > 0 && (
@@ -324,7 +369,7 @@ const ExportDialog = memo(function ExportDialog({
               </button>
               <button
                 onClick={handleExport}
-                disabled={isExporting || selectedFormats.length === 0}
+                disabled={isExporting || !canExport}
                 className="flex-1 py-2.5 rounded-lg text-sm text-white bg-emerald-500 hover:bg-emerald-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {isExporting ? (

@@ -116,27 +116,28 @@ class PlanningTextGenerator:
         result.rag_data = rag_data
 
         # Phase 7: Export files
-        out_dir = Path(self.config.output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
+        if self.config.output_formats:
+            out_dir = Path(self.config.output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
 
-        if "md" in self.config.output_formats:
-            md_path = out_dir / f"{self.config.project_name}_规划文本.md"
-            md_path.write_text(markdown, encoding='utf-8')
-            result.md_path = str(md_path)
-            logger.info(f"[Generator] Markdown saved: {md_path}")
+            if "md" in self.config.output_formats:
+                md_path = out_dir / f"{self.config.project_name}_规划文本.md"
+                md_path.write_text(markdown, encoding="utf-8")
+                result.md_path = str(md_path)
+                logger.info(f"[Generator] Markdown saved: {md_path}")
 
-        if "json" in self.config.output_formats:
-            s1, s2, s3 = await asyncio.gather(
-                self.store.get_layer_summaries(self.config.session_id, 1),
-                self.store.get_layer_summaries(self.config.session_id, 2),
-                self.store.get_layer_summaries(self.config.session_id, 3),
-            )
-            dim_summaries = {"layer1": s1, "layer2": s2, "layer3": s3}
-            exporter = JsonExporter(self.config.session_id, self.config.project_name)
-            json_path = out_dir / f"{self.config.project_name}_规划文本.json"
-            exporter.write(build_report, markdown, rag_data, result.layer_reports, str(json_path), dim_summaries)
-            result.json_path = str(json_path)
-            logger.info(f"[Generator] JSON saved: {json_path}")
+            if "json" in self.config.output_formats:
+                s1, s2, s3 = await asyncio.gather(
+                    self.store.get_layer_summaries(self.config.session_id, 1),
+                    self.store.get_layer_summaries(self.config.session_id, 2),
+                    self.store.get_layer_summaries(self.config.session_id, 3),
+                )
+                dim_summaries = {"layer1": s1, "layer2": s2, "layer3": s3}
+                exporter = JsonExporter(self.config.session_id, self.config.project_name)
+                json_path = out_dir / f"{self.config.project_name}_规划文本.json"
+                exporter.write(build_report, markdown, rag_data, result.layer_reports, str(json_path), dim_summaries)
+                result.json_path = str(json_path)
+                logger.info(f"[Generator] JSON saved: {json_path}")
 
         result.errors = build_report.errors
 

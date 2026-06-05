@@ -15,8 +15,6 @@ import type {
   PlanningSSEEventType,
   PlanningSSEDataBase,
   ImageData,
-  ExportRequest,
-  ExportResponse,
   PlanningTextDocument,
   PlanningTextVersionList,
   GeneratePlanningTextRequest,
@@ -420,7 +418,14 @@ export const planningApi = {
   ): Promise<string> {
     const url = `${API_BASE_URL}/api/sessions/${sessionId}/export?layer=${layer}&format=${format}${extraParams}`;
     const response = await fetch(url, { method: 'POST' });
-    if (!response.ok) throw new Error(`导出失败: ${response.status}`);
+    if (!response.ok) {
+      let detail = `导出失败: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        if (errorData.detail) detail = errorData.detail;
+      } catch { /* response body may not be JSON */ }
+      throw new Error(detail);
+    }
     const blob = await response.blob();
     const filename = this.extractFilename(response);
     downloadBlob(blob, filename);
@@ -449,9 +454,16 @@ export const planningApi = {
   ): Promise<string> {
     const url = `${API_BASE_URL}/api/sessions/${sessionId}/export?planning_text=true&project_name=${encodeURIComponent(projectName)}`;
     const response = await fetch(url, { method: 'POST' });
-    if (!response.ok) throw new Error(`导出失败: ${response.status}`);
+    if (!response.ok) {
+      let detail = `导出失败: ${response.status}`;
+      try {
+        const errorData = await response.json();
+        if (errorData.detail) detail = errorData.detail;
+      } catch { /* response body may not be JSON */ }
+      throw new Error(detail);
+    }
     const blob = await response.blob();
-    const filename = `${projectName}_规划文本.docx`;
+    const filename = this.extractFilename(response);
     downloadBlob(blob, filename);
     return filename;
   },
@@ -462,37 +474,15 @@ export const planningApi = {
   extractFilename(response: Response): string {
     const disposition = response.headers.get('Content-Disposition');
     if (disposition) {
-      const match = disposition.match(/filename="(.+)"/);
-      if (match) return decodeURIComponent(match[1]);
+      const utf8Match = disposition.match(/filename\*=UTF-8''(.+?)(?:;|$)/i);
+      if (utf8Match) return decodeURIComponent(utf8Match[1]);
+      const quotedMatch = disposition.match(/filename="(.+?)"/);
+      if (quotedMatch) {
+        try { return decodeURIComponent(quotedMatch[1]); }
+        catch { return quotedMatch[1]; }
+      }
     }
     return 'export.docx';
-  },
-
-  /**
-   * Export session documents (legacy, returns file list)
-   * POST /api/sessions/{session_id}/export
-   * @deprecated Use exportLayerDocx or exportPlanningTextDocx instead
-   */
-  async exportSession(sessionId: string, request: ExportRequest): Promise<ExportResponse> {
-    return apiRequest<ExportResponse>(`/api/sessions/${sessionId}/export`, {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
-  },
-
-  /**
-   * Download exported file (legacy)
-   * GET /api/sessions/{session_id}/export/{filename}
-   * @deprecated No longer needed - files are returned directly
-   */
-  async downloadExportFile(sessionId: string, filename: string): Promise<Blob> {
-    const response = await fetch(
-      `${API_BASE_URL}/api/sessions/${sessionId}/export/${filename}`
-    );
-    if (!response.ok) {
-      throw new Error(`Download failed: ${response.status}`);
-    }
-    return response.blob();
   },
 
   // ============================================

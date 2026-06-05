@@ -2,7 +2,7 @@
  * Download utilities for file export.
  */
 
-import type { ExportFormat } from '../api/types';
+type LayerFormat = 'json' | 'md' | 'docx';
 
 /**
  * Trigger browser download for a Blob.
@@ -21,12 +21,11 @@ export function downloadBlob(blob: Blob, filename: string): void {
 /**
  * Get file extension for export format.
  */
-export function getFileExtension(format: ExportFormat): string {
-  const extMap: Record<ExportFormat, string> = {
+export function getFileExtension(format: LayerFormat): string {
+  const extMap: Record<LayerFormat, string> = {
     json: '.json',
     md: '.md',
     docx: '.docx',
-    planning_text: '_规划文本.md',
   };
   return extMap[format];
 }
@@ -34,12 +33,11 @@ export function getFileExtension(format: ExportFormat): string {
 /**
  * Get display name for export format.
  */
-export function getFormatDisplayName(format: ExportFormat): string {
-  const nameMap: Record<ExportFormat, string> = {
+export function getFormatDisplayName(format: LayerFormat): string {
+  const nameMap: Record<LayerFormat, string> = {
     json: 'JSON',
     md: 'Markdown',
     docx: 'Word',
-    planning_text: '规划文本',
   };
   return nameMap[format];
 }
