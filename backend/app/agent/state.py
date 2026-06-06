@@ -14,6 +14,9 @@ from langgraph.graph.message import add_messages
 from ..config import get_layer_dimensions as _get_layer_dimensions, get_wave_config
 
 
+DEFAULT_RAG_LAYER_CONFIG = {1: True, 2: False, 3: True}
+
+
 # ==========================================
 # 状态定义
 # ==========================================
@@ -412,6 +415,8 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
         "pause_after_step": state.get("pause_after_step", False),
         "step_mode": state.get("step_mode", False),
         "execution_paused": execution_paused,
+        "rag_enabled": state.get("config", {}).get("rag_enabled", True),
+        "rag_layer_config": state.get("config", {}).get("rag_layer_config", DEFAULT_RAG_LAYER_CONFIG),
         "previous_layer": state.get("previous_layer", 0),
         "messages": messages_ui,
         # 项目上下文（优先使用 db_session 数据，因为是持久化的）

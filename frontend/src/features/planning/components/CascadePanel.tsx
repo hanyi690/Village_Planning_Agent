@@ -2,18 +2,12 @@
 
 import React, { useMemo } from "react";
 import { motion } from "framer-motion";
-import { getDimensionName } from "../config/dimensions";
-
-interface CompletedDimensions {
-  layer1: string[];
-  layer2: string[];
-  layer3: string[];
-}
+import { getDimensionName, getDimensionLayer } from "../config/dimensions";
 
 interface CascadePanelProps {
   trigger: string;
   impacted: string[];
-  completedDimensions?: CompletedDimensions;
+  revisionCompletedKeys: string[];
 }
 
 type LayoutType = "singleRow" | "twoRows" | "grid";
@@ -88,34 +82,51 @@ function truncateLabel(name: string, maxLen: number): string {
 export default function CascadePanel({
   trigger,
   impacted,
-  completedDimensions,
+  revisionCompletedKeys,
 }: CascadePanelProps) {
-  const { pendingNodes, completedCount } = useMemo(() => {
-    const allCompleted = completedDimensions
-      ? new Set([
-          ...completedDimensions.layer1,
-          ...completedDimensions.layer2,
-          ...completedDimensions.layer3,
-        ])
-      : new Set<string>();
+  const { allNodes, pendingNodes, completedNodes, completedCount } =
+    useMemo(() => {
+      const completedSet = new Set(revisionCompletedKeys);
 
-    const pendingImpacted = impacted.filter((d) => !allCompleted.has(d));
-    const completedImpacted = impacted.filter((d) => allCompleted.has(d));
+      const allDims = [trigger, ...impacted];
+      const pending = allDims.filter((d) => {
+        const layer = getDimensionLayer(d);
+        return !completedSet.has(`${layer}_${d}`);
+      });
+      const completed = impacted.filter((d) => {
+        const layer = getDimensionLayer(d);
+        return completedSet.has(`${layer}_${d}`);
+      });
 
-    return {
-      pendingNodes: [trigger, ...pendingImpacted],
-      completedCount: completedImpacted.length,
-    };
-  }, [trigger, impacted, completedDimensions]);
+      return {
+        allNodes: allDims,
+        pendingNodes: pending,
+        completedNodes: completed,
+        completedCount: completed.length,
+      };
+    }, [trigger, impacted, revisionCompletedKeys]);
 
-  const totalNodes = pendingNodes.length;
+  const totalNodes = allNodes.length;
   const layout = useMemo(
-    () => computeLayout(totalNodes, pendingNodes),
-    [totalNodes, pendingNodes],
+    () => computeLayout(totalNodes, allNodes),
+    [totalNodes, allNodes],
   );
 
   const maxLabelLen =
     layout.type === "singleRow" ? 6 : layout.type === "twoRows" ? 5 : 4;
+
+  // Build a set of completed dimension keys for quick lookup
+  const completedDimSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const key of revisionCompletedKeys) {
+      // key format: "layer_dimKey" -> extract dimKey
+      const parts = key.split("_");
+      if (parts.length >= 2) {
+        set.add(parts.slice(1).join("_"));
+      }
+    }
+    return set;
+  }, [revisionCompletedKeys]);
 
   return (
     <div className="w-full px-4 py-3 bg-gradient-to-r from-amber-50 to-orange-50">
@@ -125,10 +136,10 @@ export default function CascadePanel({
           级联修复链
         </span>
         <span className="text-xs text-slate-500">
-          {pendingNodes.length} 个维度待更新
+          {pendingNodes.length} 个维度待修复
           {completedCount > 0 && (
-            <span className="text-slate-400 ml-1">
-              ({completedCount} 个已完成无需重修)
+            <span className="text-emerald-500 ml-1">
+              ({completedCount} 个已修复完成)
             </span>
           )}
         </span>
@@ -146,7 +157,6 @@ export default function CascadePanel({
           {layout.type !== "grid" &&
             layout.positions.slice(0, -1).map((pos, idx) => {
               const nextPos = layout.positions[idx + 1];
-              // Skip line between two rows
               if (layout.type === "twoRows") {
                 const firstRowCount = Math.ceil(totalNodes / 2);
                 if (idx === firstRowCount - 1) return null;
@@ -170,10 +180,23 @@ export default function CascadePanel({
             })}
 
           {/* Nodes */}
-          {pendingNodes.map((node, idx) => {
+          {allNodes.map((node, idx) => {
             const pos = layout.positions[idx];
-            const isTrigger = idx === 0;
+            const isTrigger = node === trigger;
+            const isCompleted = completedDimSet.has(node);
             const label = truncateLabel(getDimensionName(node), maxLabelLen);
+
+            // Color: green for completed revision, amber for trigger, yellow for pending
+            const fillColor = isCompleted
+              ? "#10B981"
+              : isTrigger
+                ? "#F59E0B"
+                : "#FBBF24";
+            const strokeColor = isCompleted
+              ? "#059669"
+              : isTrigger
+                ? "#D97706"
+                : "#F59E0B";
 
             return (
               <motion.g
@@ -186,21 +209,21 @@ export default function CascadePanel({
                   cx={pos.x}
                   cy={pos.y}
                   r={layout.nodeRadius}
-                  fill={isTrigger ? "#F59E0B" : "#FBBF24"}
-                  stroke={isTrigger ? "#D97706" : "#F59E0B"}
+                  fill={fillColor}
+                  stroke={strokeColor}
                   strokeWidth="1.5"
                 />
                 <text
                   x={pos.x}
                   y={pos.y + layout.nodeRadius + layout.fontSize + 2}
                   textAnchor="middle"
-                  fill="#64748B"
+                  fill={isCompleted ? "#059669" : "#64748B"}
                   fontSize={layout.fontSize}
                   fontFamily="system-ui"
                 >
                   {label}
                 </text>
-                {isTrigger && (
+                {isTrigger && !isCompleted && (
                   <text
                     x={pos.x}
                     y={pos.y - layout.nodeRadius - 3}
@@ -210,6 +233,18 @@ export default function CascadePanel({
                     fontWeight="bold"
                   >
                     触发
+                  </text>
+                )}
+                {isCompleted && (
+                  <text
+                    x={pos.x}
+                    y={pos.y - layout.nodeRadius - 3}
+                    textAnchor="middle"
+                    fill="#059669"
+                    fontSize={layout.fontSize}
+                    fontWeight="bold"
+                  >
+                    ✓
                   </text>
                 )}
               </motion.g>
@@ -230,10 +265,13 @@ export default function CascadePanel({
           {getDimensionName(trigger)}
         </span>
         <span className="text-slate-500"> 的修改将影响 </span>
-        <span className="text-amber-500 font-medium">
-          {pendingNodes.length - 1}
-        </span>
+        <span className="text-amber-500 font-medium">{impacted.length}</span>
         <span className="text-slate-500"> 个相关维度</span>
+        {completedCount > 0 && (
+          <span className="text-slate-400 ml-2">
+            已修复 {completedCount} 个
+          </span>
+        )}
       </div>
     </div>
   );

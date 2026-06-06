@@ -10,8 +10,8 @@
  * - SSE event handling with batch optimization
  */
 
-import { create } from 'zustand';
-import { immer } from 'zustand/middleware/immer';
+import { create } from "zustand";
+import { immer } from "zustand/middleware/immer";
 import type {
   Message,
   DimensionProgressItem,
@@ -21,14 +21,28 @@ import type {
   LayerCompletedMessage,
   DimensionReportMessage,
   KnowledgeSource,
-} from '../types';
-import type { GisResultMessage, ToolStatusMessage, GISLayerConfig } from '@/types/message/message-types';
-import type { VillageInputData } from '../components/VillageInputForm';
-import type { VillageInfo, VillageSession, SessionStatusResponse } from '../api';
-import { getLayerPhase, PlanningStatus, LayerPhase, AgentPhase, NAV_KEYS } from '@/features/planning/constants';
-import type { NavigationKey } from '@/features/planning/constants';
+} from "../types";
+import type {
+  GisResultMessage,
+  ToolStatusMessage,
+  GISLayerConfig,
+} from "@/types/message/message-types";
+import type { VillageInputData } from "../components/VillageInputForm";
+import type {
+  VillageInfo,
+  VillageSession,
+  SessionStatusResponse,
+} from "../api";
+import {
+  getLayerPhase,
+  PlanningStatus,
+  LayerPhase,
+  AgentPhase,
+  NAV_KEYS,
+} from "@/features/planning/constants";
+import type { NavigationKey } from "@/features/planning/constants";
 
-export type ProcessPanelTab = 'messages' | 'map' | 'history' | 'settings';
+export type ProcessPanelTab = "messages" | "map" | "history" | "settings";
 import {
   createBaseMessage,
   buildLayerReportId,
@@ -36,8 +50,12 @@ import {
   buildDimensionProgressKey,
   formatDimensionReportsAsContent,
   calculateReportSummary,
-} from '@/features/planning/utils/message-helpers';
-import { DIMENSION_NAMES, getDimensionsByLayer } from '../config/dimensions';
+} from "@/features/planning/utils/message-helpers";
+import {
+  DIMENSION_NAMES,
+  getDimensionsByLayer,
+  getDimensionLayer,
+} from "../config/dimensions";
 
 // ============================================
 // State Types
@@ -59,7 +77,7 @@ interface CompletedDimensions {
 
 interface ToolStatus {
   toolName: string;
-  status: 'running' | 'success' | 'error';
+  status: "running" | "success" | "error";
   stage?: string;
   progress?: number;
   message?: string;
@@ -79,7 +97,7 @@ interface RagDocument {
   source?: string;
   score?: number;
   chunk_id?: string;
-  matched_query?: string;  // 匹配的查询语句
+  matched_query?: string; // 匹配的查询语句
 }
 
 /**
@@ -131,7 +149,7 @@ export interface PlanningState {
   // Derived UI State
   completedDimensions: CompletedDimensions;
   currentLayer: number | null;
-  currentPhase: LayerPhase | '修复中';
+  currentPhase: LayerPhase | "修复中";
   completedLayers: { 1: boolean; 2: boolean; 3: boolean };
   isPaused: boolean;
   pendingReviewLayer: number | null;
@@ -155,6 +173,8 @@ export interface PlanningState {
   dimensionRagSources: Record<string, DimensionRagSource>;
   /** Current cascade repair chain being displayed */
   cascadeChain: CascadeChain | null;
+  /** Dimensions that have completed revision (format: "layer_dimKey", e.g., "1_resource_endowment") */
+  revisionCompletedKeys: string[];
   /** Streaming text content per dimension (temporary) */
   streamingContent: Record<string, string>;
   /** Simplified running tool names (replaces full toolStatuses) */
@@ -164,7 +184,7 @@ export interface PlanningState {
   viewerVisible: boolean;
   referencedSection?: string;
   viewingFile: FileMessage | null;
-  viewMode: 'WELCOME_FORM' | 'SESSION_ACTIVE';
+  viewMode: "WELCOME_FORM" | "SESSION_ACTIVE";
   villageFormData: VillageInputData | null;
   progressPanelVisible: boolean;
   layerReportVisible: boolean;
@@ -237,9 +257,9 @@ function deriveCompletedDimensions(reports: Reports): CompletedDimensions {
 
 function shallowEqualCompletedDimensions(
   incoming: CompletedDimensions,
-  current: CompletedDimensions
+  current: CompletedDimensions,
 ): boolean {
-  const layers = ['layer1', 'layer2', 'layer3'] as const;
+  const layers = ["layer1", "layer2", "layer3"] as const;
   for (const layer of layers) {
     const a = incoming[layer] || [];
     const b = current[layer] || [];
@@ -260,10 +280,10 @@ function createInitialState(conversationId: string): PlanningState {
     conversationId,
     sessionId: null,
     projectName: null,
-    status: 'idle',
+    status: "idle",
 
     // Agent State
-    phase: 'init',
+    phase: "init",
     currentWave: 1,
     reports: { layer1: {}, layer2: {}, layer3: {} },
     pause_after_step: false,
@@ -274,7 +294,7 @@ function createInitialState(conversationId: string): PlanningState {
     // Derived UI State
     completedDimensions: { layer1: [], layer2: [], layer3: [] },
     currentLayer: null,
-    currentPhase: 'idle',
+    currentPhase: "idle",
     completedLayers: { 1: false, 2: false, 3: false },
     isPaused: false,
     pendingReviewLayer: null,
@@ -293,13 +313,14 @@ function createInitialState(conversationId: string): PlanningState {
     // NEW: RAG & Cascade Tracking
     dimensionRagSources: {},
     cascadeChain: null,
+    revisionCompletedKeys: [],
     streamingContent: {},
 
     // UI State
     viewerVisible: false,
     referencedSection: undefined,
     viewingFile: null,
-    viewMode: 'WELCOME_FORM',
+    viewMode: "WELCOME_FORM",
     villageFormData: null,
     progressPanelVisible: false,
     layerReportVisible: false,
@@ -329,7 +350,7 @@ function createInitialState(conversationId: string): PlanningState {
     isLeftNavCollapsed: false,
 
     // ProcessPanel
-    processPanelTab: 'messages',
+    processPanelTab: "messages",
 
     // Layer-level RAG config (default: all enabled)
     ragLayerConfig: { 1: true, 2: false, 3: true },
@@ -355,11 +376,24 @@ export interface PlanningActions {
   clearMessages: () => void;
 
   // Progress
-  updateDimensionProgress: (key: string, updates: Partial<DimensionProgressItem>) => void;
-  setDimensionStreaming: (layer: number, dimensionKey: string, dimensionName: string) => void;
-  setDimensionCompleted: (layer: number, dimensionKey: string, wordCount: number) => void;
+  updateDimensionProgress: (
+    key: string,
+    updates: Partial<DimensionProgressItem>,
+  ) => void;
+  setDimensionStreaming: (
+    layer: number,
+    dimensionKey: string,
+    dimensionName: string,
+  ) => void;
+  setDimensionCompleted: (
+    layer: number,
+    dimensionKey: string,
+    wordCount: number,
+  ) => void;
   clearDimensionProgress: () => void;
-  setDimensionProgressBatch: (updates: Record<string, DimensionProgressItem>) => void;
+  setDimensionProgressBatch: (
+    updates: Record<string, DimensionProgressItem>,
+  ) => void;
 
   // Layer & Reports
   setLayerCompleted: (layer: number, completed: boolean) => void;
@@ -368,7 +402,9 @@ export interface PlanningActions {
   clearDimensionReport: (layer: number, dimensionKey: string) => void;
 
   // Backend sync
-  syncBackendState: (backendData: Partial<SessionStatusResponse> & { version?: number }) => void;
+  syncBackendState: (
+    backendData: Partial<SessionStatusResponse> & { version?: number },
+  ) => void;
   hydrateFromStateSync: (data: Record<string, unknown>) => void;
 
   // ============================================
@@ -464,8 +500,8 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
   }
 
   switch (eventType) {
-    case 'connected': {
-      state.status = 'planning';
+    case "connected": {
+      state.status = "planning";
       const connData = data as { task_id?: string };
       if (connData.task_id && !state.sessionId) {
         state.sessionId = connData.task_id;
@@ -473,12 +509,12 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
-    case 'completed': {
-      state.status = 'completed';
+    case "completed": {
+      state.status = "completed";
       break;
     }
 
-    case 'dimension_error': {
+    case "dimension_error": {
       const errData = data as {
         dimension_key?: string;
         dimension_name?: string;
@@ -487,22 +523,24 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         layer?: number;
       };
       const layer = errData.layer || 1;
-      const key = `${layer}_${errData.dimension_key || ''}`;
+      const key = `${layer}_${errData.dimension_key || ""}`;
 
       state.dimensionProgress[key] = {
-        dimensionKey: errData.dimension_key || '',
-        dimensionName: errData.dimension_name || '',
+        dimensionKey: errData.dimension_key || "",
+        dimensionName: errData.dimension_name || "",
         layer,
-        status: 'failed' as DimensionStatus,
+        status: "failed" as DimensionStatus,
         wordCount: 0,
-        error: errData.error || 'Unknown error',
+        error: errData.error || "Unknown error",
       };
 
-      state.executingDimensions = state.executingDimensions.filter((k) => k !== key);
+      state.executingDimensions = state.executingDimensions.filter(
+        (k) => k !== key,
+      );
       break;
     }
 
-    case 'dimension_start': {
+    case "dimension_start": {
       const dimData = data as {
         dimension_key?: string;
         dimension_name?: string;
@@ -510,7 +548,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         is_revision?: boolean;
       };
       const layer = dimData.layer || 1;
-      const dimensionKey = dimData.dimension_key || '';
+      const dimensionKey = dimData.dimension_key || "";
       const key = buildDimensionProgressKey(layer, dimensionKey);
 
       // Track executing dimension (no longer create standalone message)
@@ -519,9 +557,9 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       // Initialize dimensionProgress for progress tracking
       state.dimensionProgress[key] = {
         dimensionKey,
-        dimensionName: dimData.dimension_name || '',
+        dimensionName: dimData.dimension_name || "",
         layer,
-        status: 'streaming' as DimensionStatus,
+        status: "streaming" as DimensionStatus,
         wordCount: 0,
         isRevision: dimData.is_revision || false,
       };
@@ -530,25 +568,25 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       if (dimData.is_revision && dimensionKey) {
         // Clear old report so UI shows empty/refreshing state
         const layerKey = `layer${layer}` as keyof Reports;
-        state.reports[layerKey][dimensionKey] = '';
+        state.reports[layerKey][dimensionKey] = "";
         // Clear streaming content from previous runs
         delete state.streamingContent[key];
 
         const revisionReportId = buildRevisionReportId(layer, dimensionKey);
         const existingMessage = state.messages.find(
-          (m) => m.id === revisionReportId && m.type === 'dimension_report'
+          (m) => m.id === revisionReportId && m.type === "dimension_report",
         );
         if (!existingMessage) {
-          const baseMsg = createBaseMessage('assistant');
+          const baseMsg = createBaseMessage("assistant");
           const newMessage: DimensionReportMessage = {
             ...baseMsg,
             id: revisionReportId,
-            type: 'dimension_report',
+            type: "dimension_report",
             layer: layer,
             dimensionKey,
-            dimensionName: dimData.dimension_name || '',
-            content: '',
-            streamingState: 'streaming',
+            dimensionName: dimData.dimension_name || "",
+            content: "",
+            streamingState: "streaming",
             wordCount: 0,
             isRevision: true,
           };
@@ -558,7 +596,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
-    case 'dimension_delta': {
+    case "dimension_delta": {
       const dimData = data as {
         dimension_key?: string;
         dimension_name?: string;
@@ -568,7 +606,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         is_revision?: boolean;
       };
       const layer = dimData.layer || 1;
-      const dimensionKey = dimData.dimension_key || '';
+      const dimensionKey = dimData.dimension_key || "";
       const key = buildDimensionProgressKey(layer, dimensionKey);
 
       // If this is a revision, update the standalone revision_report message
@@ -576,7 +614,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       if (dimData.is_revision && dimensionKey && dimData.accumulated) {
         const revisionReportId = buildRevisionReportId(layer, dimensionKey);
         const msgIdx = state.messages.findIndex(
-          (m) => m.id === revisionReportId && m.type === 'dimension_report'
+          (m) => m.id === revisionReportId && m.type === "dimension_report",
         );
         if (msgIdx >= 0) {
           const msg = state.messages[msgIdx] as DimensionReportMessage;
@@ -599,7 +637,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       // 2. Update layer_report message's dimensionReports for real-time display
       const layerReportId = buildLayerReportId(layer);
       const layerMsgIdx = state.messages.findIndex(
-        (m) => m.id === layerReportId && m.type === 'layer_completed'
+        (m) => m.id === layerReportId && m.type === "layer_completed",
       );
 
       if (layerMsgIdx >= 0 && dimensionKey && dimData.accumulated) {
@@ -624,7 +662,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
             dimensionKey,
             dimensionName: dimData.dimension_name || dimensionKey,
             layer,
-            status: 'streaming' as DimensionStatus,
+            status: "streaming" as DimensionStatus,
             wordCount: dimData.accumulated.length,
           };
           if (!state.executingDimensions.includes(key)) {
@@ -635,7 +673,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
-    case 'dimension_complete': {
+    case "dimension_complete": {
       const dimData = data as {
         dimension_key?: string;
         dimension_name?: string;
@@ -654,39 +692,47 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         };
       };
       const layer = dimData.layer || 1;
-      const dimensionKey = dimData.dimension_key || '';
+      const dimensionKey = dimData.dimension_key || "";
       const key = buildDimensionProgressKey(layer, dimensionKey);
 
       // 获取内容：优先使用 full_content，否则从 reports 状态获取（dimension_delta 已累积）
       const lk = `layer${layer}` as keyof Reports;
-      const content = dimData.full_content || state.reports[lk]?.[dimensionKey] || '';
+      const content =
+        dimData.full_content || state.reports[lk]?.[dimensionKey] || "";
 
       // Update dimensionProgress
       state.dimensionProgress[key] = {
         dimensionKey,
-        dimensionName: dimData.dimension_name || '',
+        dimensionName: dimData.dimension_name || "",
         layer,
-        status: 'completed' as DimensionStatus,
+        status: "completed" as DimensionStatus,
         wordCount: dimData.word_count || content.length,
         completedAt: new Date().toISOString(),
         isRevision: dimData.is_revision || false,
       };
 
       // Remove from executing
-      state.executingDimensions = state.executingDimensions.filter((k) => k !== key);
+      state.executingDimensions = state.executingDimensions.filter(
+        (k) => k !== key,
+      );
 
       // If this is a revision, complete the standalone revision_report message
       // Then also fall through to normal path for layer_completed message updates
       if (dimData.is_revision && dimensionKey) {
+        // Track revision completion for cascade panel
+        const revKey = `${layer}_${dimensionKey}`;
+        if (!state.revisionCompletedKeys.includes(revKey)) {
+          state.revisionCompletedKeys.push(revKey);
+        }
         const revisionReportId = buildRevisionReportId(layer, dimensionKey);
         const msgIdx = state.messages.findIndex(
-          (m) => m.id === revisionReportId && m.type === 'dimension_report'
+          (m) => m.id === revisionReportId && m.type === "dimension_report",
         );
         if (msgIdx >= 0) {
           const msg = state.messages[msgIdx] as DimensionReportMessage;
           msg.content = content;
           msg.wordCount = content.length;
-          msg.streamingState = 'completed';
+          msg.streamingState = "completed";
         }
       }
 
@@ -697,7 +743,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       // Update layer_report message (no longer create standalone dimension_report)
       const layerReportId = buildLayerReportId(layer);
       const layerMsgIdx = state.messages.findIndex(
-        (m) => m.id === layerReportId && m.type === 'layer_completed'
+        (m) => m.id === layerReportId && m.type === "layer_completed",
       );
 
       if (layerMsgIdx >= 0) {
@@ -709,8 +755,13 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         layerMsg.dimensionReports[dimensionKey] = content;
 
         // Update fullReportContent and summary using utility functions
-        layerMsg.fullReportContent = formatDimensionReportsAsContent(layerMsg.dimensionReports);
-        const summary = calculateReportSummary(layerMsg.dimensionReports, layerMsg.dimensionSummaries);
+        layerMsg.fullReportContent = formatDimensionReportsAsContent(
+          layerMsg.dimensionReports,
+        );
+        const summary = calculateReportSummary(
+          layerMsg.dimensionReports,
+          layerMsg.dimensionSummaries,
+        );
         layerMsg.summary.word_count = summary.word_count;
         layerMsg.summary.dimension_count = summary.dimension_count;
 
@@ -722,12 +773,15 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
           // Ensure dimension_key is set, fallback to current dimensionKey
           const summary = {
             ...dimData.structured_summary,
-            dimension_key: dimData.structured_summary.dimension_key || dimensionKey,
+            dimension_key:
+              dimData.structured_summary.dimension_key || dimensionKey,
           };
           layerMsg.dimensionSummaries[dimensionKey] = summary;
           // Merge key_points into layer summary
-          layerMsg.summary.key_points = Object.values(layerMsg.dimensionSummaries)
-            .flatMap(s => s.key_points || [])
+          layerMsg.summary.key_points = Object.values(
+            layerMsg.dimensionSummaries,
+          )
+            .flatMap((s) => s.key_points || [])
             .slice(0, 10);
         }
 
@@ -739,7 +793,8 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
           if (!layerMsg.dimensionKnowledgeSources) {
             layerMsg.dimensionKnowledgeSources = {};
           }
-          layerMsg.dimensionKnowledgeSources[dimensionKey] = dimData.knowledge_sources;
+          layerMsg.dimensionKnowledgeSources[dimensionKey] =
+            dimData.knowledge_sources;
         }
       }
 
@@ -753,7 +808,8 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       deriveUIStateInStore(state);
 
       // 检测当前层是否所有维度已完成，自动触发暂停状态
-      const completedCountForLayer = state.completedDimensions[layerKey]?.length || 0;
+      const completedCountForLayer =
+        state.completedDimensions[layerKey]?.length || 0;
       const expectedCount =
         state.layerDimensionCount[layer] || getDimensionsByLayer(layer).length;
 
@@ -761,17 +817,17 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         completedCountForLayer >= expectedCount &&
         expectedCount > 0 &&
         !state.pause_after_step &&
-        state.status !== 'paused'
+        state.status !== "paused"
       ) {
         state.pause_after_step = true;
         state.previous_layer = layer;
-        state.status = 'paused';
+        state.status = "paused";
         deriveUIStateInStore(state); // 重新派生 isPaused / pendingReviewLayer
       }
       break;
     }
 
-    case 'layer_started': {
+    case "layer_started": {
       const layerData = data as {
         layer?: number;
         layer_number?: number;
@@ -794,35 +850,35 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       // Preserve other layers' progress so LayerNav can display all dimensions
       state.dimensionProgress = Object.fromEntries(
         Object.entries(state.dimensionProgress).filter(
-          ([key]) => !key.startsWith(`${layerNum}_`)
-        )
+          ([key]) => !key.startsWith(`${layerNum}_`),
+        ),
       );
       state.executingDimensions = state.executingDimensions.filter(
-        (k) => !k.startsWith(`${layerNum}_`)
+        (k) => !k.startsWith(`${layerNum}_`),
       );
 
       // Create layer_report message framework for real-time streaming
       // Key: Do NOT overwrite existing message - protect content from history restore or SSE reconnect
       const layerReportId = buildLayerReportId(layerNum);
       const existingMessage = state.messages.find(
-        (m) => m.id === layerReportId && m.type === 'layer_completed'
+        (m) => m.id === layerReportId && m.type === "layer_completed",
       );
 
       if (!existingMessage) {
         // Only create new message framework if it doesn't exist
-        const baseMsg = createBaseMessage('assistant');
+        const baseMsg = createBaseMessage("assistant");
         const newMessage: LayerCompletedMessage = {
           ...baseMsg,
           id: layerReportId,
-          type: 'layer_completed',
+          type: "layer_completed",
           layer: layerNum,
-          content: '',
+          content: "",
           summary: {
             word_count: 0,
             key_points: [],
             dimension_count: 0,
           },
-          fullReportContent: '',
+          fullReportContent: "",
           dimensionReports: {},
           actions: [],
         };
@@ -840,7 +896,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
-    case 'layer_completed': {
+    case "layer_completed": {
       const layerData = data as {
         layer?: number;
         phase?: string;
@@ -858,23 +914,30 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const layerNum = layerData.layer || 1;
       const layerKey = `layer${layerNum}` as keyof Reports;
 
-      if (layerData.dimension_reports && Object.keys(layerData.dimension_reports).length > 0) {
+      if (
+        layerData.dimension_reports &&
+        Object.keys(layerData.dimension_reports).length > 0
+      ) {
         Object.assign(state.reports[layerKey], layerData.dimension_reports);
       }
 
       state.phase = layerData.phase || state.phase;
-      state.pause_after_step = layerData.pause_after_step ?? state.pause_after_step;
+      state.pause_after_step =
+        layerData.pause_after_step ?? state.pause_after_step;
       state.previous_layer = layerData.previous_layer ?? state.previous_layer;
-      state.status = 'paused';
+      state.status = "paused";
 
-      if (state.step_mode && state.selectedNavigationKey !== NAV_KEYS.OVERVIEW) {
+      if (
+        state.step_mode &&
+        state.selectedNavigationKey !== NAV_KEYS.OVERVIEW
+      ) {
         state.selectedNavigationKey = NAV_KEYS.OVERVIEW;
       }
 
       // Finalize layer_report message (merge any remaining dimension_reports from SSE)
       const layerReportId = buildLayerReportId(layerNum);
       const layerMsgIdx = state.messages.findIndex(
-        (m) => m.id === layerReportId && m.type === 'layer_completed'
+        (m) => m.id === layerReportId && m.type === "layer_completed",
       );
 
       if (layerMsgIdx >= 0 && layerData.dimension_reports) {
@@ -886,8 +949,13 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         Object.assign(layerMsg.dimensionReports, layerData.dimension_reports);
 
         // Update fullReportContent and summary using utility functions
-        layerMsg.fullReportContent = formatDimensionReportsAsContent(layerMsg.dimensionReports);
-        const summary = calculateReportSummary(layerMsg.dimensionReports, layerMsg.dimensionSummaries);
+        layerMsg.fullReportContent = formatDimensionReportsAsContent(
+          layerMsg.dimensionReports,
+        );
+        const summary = calculateReportSummary(
+          layerMsg.dimensionReports,
+          layerMsg.dimensionSummaries,
+        );
         layerMsg.summary.word_count = summary.word_count;
         layerMsg.summary.dimension_count = summary.dimension_count;
         if (summary.key_points.length > 0) {
@@ -896,8 +964,12 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
         // Update knowledge sources if provided
         if (layerData.dimension_knowledge_sources) {
-          layerMsg.dimensionKnowledgeSources = layerMsg.dimensionKnowledgeSources ?? {};
-          Object.assign(layerMsg.dimensionKnowledgeSources, layerData.dimension_knowledge_sources);
+          layerMsg.dimensionKnowledgeSources =
+            layerMsg.dimensionKnowledgeSources ?? {};
+          Object.assign(
+            layerMsg.dimensionKnowledgeSources,
+            layerData.dimension_knowledge_sources,
+          );
         }
       }
 
@@ -910,14 +982,14 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
             dimensionKey: dimKey,
             dimensionName: DIMENSION_NAMES[dimKey] || dimKey,
             layer: layerNum,
-            status: 'completed' as DimensionStatus,
-            wordCount: (layerData.dimension_reports[dimKey] || '').length,
+            status: "completed" as DimensionStatus,
+            wordCount: (layerData.dimension_reports[dimKey] || "").length,
             completedAt: new Date().toISOString(),
           };
         }
         // Clear executing dimensions for this layer
         state.executingDimensions = state.executingDimensions.filter(
-          (k) => !k.startsWith(`${layerNum}_`)
+          (k) => !k.startsWith(`${layerNum}_`),
         );
       }
 
@@ -926,25 +998,25 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
-    case 'layer_paused': {
+    case "layer_paused": {
       state.execution_paused = true;
       state.pause_after_step = true;
-      state.status = 'paused';
+      state.status = "paused";
       deriveUIStateInStore(state);
       break;
     }
 
-    case 'execution_resumed': {
+    case "execution_resumed": {
       state.execution_paused = false;
       state.pause_after_step = false;
       state.isPaused = false;
       state.pendingReviewLayer = null;
-      state.status = 'planning';
+      state.status = "planning";
       deriveUIStateInStore(state);
       break;
     }
 
-    case 'tool_call': {
+    case "tool_call": {
       const toolData = data as {
         tool_name?: string;
         tool_display_name?: string;
@@ -952,30 +1024,30 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         estimated_time?: number;
         stage?: string;
       };
-      const toolName = toolData.tool_name || '';
+      const toolName = toolData.tool_name || "";
       if (!toolName) return;
 
       state.toolStatuses[toolName] = {
         toolName,
-        status: 'running',
+        status: "running",
         stage: toolData.stage,
         message: toolData.description,
       };
 
       // Auto-switch to messages tab and expand right panel
-      state.processPanelTab = 'messages';
+      state.processPanelTab = "messages";
       state.isRightPanelExpanded = true;
       break;
     }
 
-    case 'tool_progress': {
+    case "tool_progress": {
       const toolData = data as {
         tool_name?: string;
         stage?: string;
         progress?: number;
         message?: string;
       };
-      const toolName = toolData.tool_name || '';
+      const toolName = toolData.tool_name || "";
       if (!toolName) return;
 
       const existing = state.toolStatuses[toolName];
@@ -987,19 +1059,19 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
-    case 'tool_result': {
+    case "tool_result": {
       const toolData = data as {
         tool_name?: string;
         status?: string;
         summary?: string;
       };
-      const toolName = toolData.tool_name || '';
+      const toolName = toolData.tool_name || "";
       if (!toolName) return;
 
       const existing = state.toolStatuses[toolName];
       if (!existing) return;
 
-      existing.status = toolData.status === 'error' ? 'error' : 'success';
+      existing.status = toolData.status === "error" ? "error" : "success";
       existing.summary = toolData.summary;
       break;
     }
@@ -1008,7 +1080,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     // New Unified Tool Events (tool_started, tool_status)
     // ============================================
 
-    case 'tool_started': {
+    case "tool_started": {
       const toolData = data as {
         tool_name?: string;
         tool_display_name?: string;
@@ -1017,18 +1089,18 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         status?: string;
         started_at?: string;
       };
-      const toolName = toolData.tool_name || '';
+      const toolName = toolData.tool_name || "";
       if (!toolName) return;
 
-      const baseMsg = createBaseMessage('assistant');
+      const baseMsg = createBaseMessage("assistant");
       const newMessage: ToolStatusMessage = {
         ...baseMsg,
         id: `tool_${toolName}_${Date.now()}`,
-        type: 'tool_status',
+        type: "tool_status",
         toolName,
         toolDisplayName: toolData.tool_display_name || toolName,
-        description: toolData.description || '',
-        status: 'running',
+        description: toolData.description || "",
+        status: "running",
         estimatedTime: toolData.estimated_time,
         startedAt: toolData.started_at,
       };
@@ -1036,13 +1108,13 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
       state.toolStatuses[toolName] = {
         toolName,
-        status: 'running',
+        status: "running",
         message: toolData.description,
       };
       break;
     }
 
-    case 'tool_status': {
+    case "tool_status": {
       const toolData = data as {
         tool_name?: string;
         status?: string;
@@ -1053,16 +1125,19 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         error?: string;
         completed_at?: string;
       };
-      const toolName = toolData.tool_name || '';
+      const toolName = toolData.tool_name || "";
       if (!toolName) return;
 
       const msgIdx = state.messages.findIndex(
-        (m) => m.type === 'tool_status' && (m as ToolStatusMessage).toolName === toolName
+        (m) =>
+          m.type === "tool_status" &&
+          (m as ToolStatusMessage).toolName === toolName,
       );
 
       if (msgIdx >= 0) {
         const msg = state.messages[msgIdx] as ToolStatusMessage;
-        msg.status = (toolData.status as ToolStatusMessage['status']) || msg.status;
+        msg.status =
+          (toolData.status as ToolStatusMessage["status"]) || msg.status;
         if (toolData.progress !== undefined) msg.progress = toolData.progress;
         if (toolData.stage) msg.stage = toolData.stage;
         if (toolData.stage_message) msg.stageMessage = toolData.stage_message;
@@ -1074,12 +1149,13 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const existing = state.toolStatuses[toolName];
       if (existing) {
         existing.status =
-          toolData.status === 'error'
-            ? 'error'
-            : toolData.status === 'success'
-              ? 'success'
-              : 'running';
-        if (toolData.progress !== undefined) existing.progress = toolData.progress;
+          toolData.status === "error"
+            ? "error"
+            : toolData.status === "success"
+              ? "success"
+              : "running";
+        if (toolData.progress !== undefined)
+          existing.progress = toolData.progress;
         if (toolData.stage) existing.stage = toolData.stage;
         if (toolData.stage_message) existing.message = toolData.stage_message;
         if (toolData.summary) existing.summary = toolData.summary;
@@ -1091,7 +1167,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     // GIS Result Event
     // ============================================
 
-    case 'gis_result': {
+    case "gis_result": {
       const gisData = data as {
         dimension_key?: string;
         dimension_name?: string;
@@ -1105,21 +1181,24 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
           recommendations?: string[];
         };
       };
-      const dimensionKey = gisData.dimension_key || '';
+      const dimensionKey = gisData.dimension_key || "";
       if (!dimensionKey) return;
 
-      const baseMsg = createBaseMessage('assistant');
+      const baseMsg = createBaseMessage("assistant");
       const newMessage: GisResultMessage = {
         ...baseMsg,
         id: `gis_${dimensionKey}_${Date.now()}`,
-        type: 'gis_result',
+        type: "gis_result",
         dimensionKey,
         dimensionName: gisData.dimension_name || dimensionKey,
-        summary: gisData.summary || '',
-        layers: (gisData.layers as GisResultMessage['layers']) || [],
+        summary: gisData.summary || "",
+        layers: (gisData.layers as GisResultMessage["layers"]) || [],
         mapOptions:
           gisData.map_options?.center && gisData.map_options?.zoom
-            ? { center: gisData.map_options.center, zoom: gisData.map_options.zoom }
+            ? {
+                center: gisData.map_options.center,
+                zoom: gisData.map_options.zoom,
+              }
             : undefined,
         analysisData: gisData.analysis_data,
       };
@@ -1127,20 +1206,20 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
-    case 'ai_response_complete': {
+    case "ai_response_complete": {
       const aiData = data as { content?: string };
       const aiMessage = {
         id: `ai_${Date.now()}`,
         timestamp: new Date(),
-        role: 'assistant' as const,
-        type: 'text' as const,
-        content: aiData.content || '',
+        role: "assistant" as const,
+        type: "text" as const,
+        content: aiData.content || "",
       };
       state.messages.push(aiMessage);
       break;
     }
 
-    case 'pause': {
+    case "pause": {
       const pauseData = data as {
         current_layer?: number;
         checkpoint_id?: string;
@@ -1155,10 +1234,15 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
       state.pause_after_step = true;
       state.previous_layer =
-        pauseData.current_layer || pauseData.previous_layer || state.previous_layer;
-      state.status = 'paused';
+        pauseData.current_layer ||
+        pauseData.previous_layer ||
+        state.previous_layer;
+      state.status = "paused";
 
-      if (state.step_mode && state.selectedNavigationKey !== NAV_KEYS.OVERVIEW) {
+      if (
+        state.step_mode &&
+        state.selectedNavigationKey !== NAV_KEYS.OVERVIEW
+      ) {
         state.selectedNavigationKey = NAV_KEYS.OVERVIEW;
       }
 
@@ -1173,7 +1257,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
             layer: layer,
             timestamp: new Date().toISOString(),
             description: `Layer ${layer} checkpoint`,
-            type: 'key',
+            type: "key",
             phase: state.phase,
           });
         }
@@ -1183,16 +1267,16 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
-    case 'resumed': {
+    case "resumed": {
       state.pause_after_step = false;
       state.previous_layer = 0;
-      state.status = 'planning';
+      state.status = "planning";
 
       deriveUIStateInStore(state);
       break;
     }
 
-    case 'revision_completed': {
+    case "revision_completed": {
       const revData = data as {
         layer?: number;
         revised_dimensions?: string[];
@@ -1201,13 +1285,13 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
       state.pause_after_step = true;
       state.previous_layer = revData.previous_layer || revData.layer || 0;
-      state.status = 'paused';
+      state.status = "paused";
 
       deriveUIStateInStore(state);
       break;
     }
 
-    case 'checkpoint_saved': {
+    case "checkpoint_saved": {
       const cpData = data as {
         checkpoint_id?: string;
         layer?: number;
@@ -1219,11 +1303,14 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       };
 
       const layer = cpData.layer || 0;
-      const cpType: 'key' | 'regular' = cpData.checkpoint_type === 'key' ? 'key' : 'regular';
+      const cpType: "key" | "regular" =
+        cpData.checkpoint_type === "key" ? "key" : "regular";
 
-      const existingIndex = state.checkpoints.findIndex((cp) => cp.layer === layer);
+      const existingIndex = state.checkpoints.findIndex(
+        (cp) => cp.layer === layer,
+      );
       const newCheckpoint = {
-        checkpoint_id: cpData.checkpoint_id || '',
+        checkpoint_id: cpData.checkpoint_id || "",
         layer: layer,
         timestamp: new Date().toISOString(),
         description: cpData.description || `Checkpoint at layer ${layer}`,
@@ -1246,13 +1333,13 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     // ============================================
     // NEW: RAG Events for Demo System
     // ============================================
-    case 'rag_query': {
+    case "rag_query": {
       const ragData = data as {
         dimension_key?: string;
         query?: string;
         layer?: number;
       };
-      const dimKey = ragData.dimension_key || '';
+      const dimKey = ragData.dimension_key || "";
       if (dimKey && ragData.query) {
         const fullKey = `${ragData.layer || 1}_${dimKey}`;
         state.dimensionRagSources[fullKey] = {
@@ -1262,29 +1349,37 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       }
       break;
     }
-    case 'rag_result': {
+    case "rag_result": {
       const ragData = data as {
         dimension_key?: string;
         query?: string;
         query_generation_method?: string;
         retrieval_latency_ms?: number;
         total_results?: number;
-        documents?: Array<{ title?: string; snippet?: string; source?: string; score?: number; matched_query?: string; query?: string; chunk_id?: string }>;
+        documents?: Array<{
+          title?: string;
+          snippet?: string;
+          source?: string;
+          score?: number;
+          matched_query?: string;
+          query?: string;
+          chunk_id?: string;
+        }>;
         layer?: number;
       };
-      const dimKey = ragData.dimension_key || '';
+      const dimKey = ragData.dimension_key || "";
       if (dimKey) {
         const fullKey = `${ragData.layer || 1}_${dimKey}`;
         const documents = (ragData.documents || []).map((doc) => ({
-          title: doc.title || doc.source || '未知',
-          snippet: doc.snippet || '',
+          title: doc.title || doc.source || "未知",
+          snippet: doc.snippet || "",
           source: doc.source,
           score: doc.score,
           chunk_id: doc.chunk_id,
-          matched_query: doc.matched_query || doc.query || '',
+          matched_query: doc.matched_query || doc.query || "",
         }));
         state.dimensionRagSources[fullKey] = {
-          query: ragData.query || '',
+          query: ragData.query || "",
           documents,
         };
       }
@@ -1293,7 +1388,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     // ============================================
     // NEW: Cascade Events for Demo System
     // ============================================
-    case 'cascade_impact': {
+    case "cascade_impact": {
       const cascadeData = data as {
         trigger_dim?: string;
         impacted_dimensions?: string[];
@@ -1303,35 +1398,61 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
           trigger: cascadeData.trigger_dim,
           impacted: cascadeData.impacted_dimensions,
         };
+        state.revisionCompletedKeys = [];
       }
       break;
     }
-    case 'cascade_complete': {
+    case "cascade_complete": {
+      const ccData = data as { revised_dimensions?: string[] };
       state.cascadeChain = null;
+      state.revisionCompletedKeys = [];
+      // Restore status from 'revising' to 'paused' so reports display correctly
+      if (state.status === "revising") {
+        state.status = "paused";
+        state.pause_after_step = true;
+      }
+      // Auto-navigate to first revised dimension report
+      if (ccData.revised_dimensions && ccData.revised_dimensions.length > 0) {
+        const firstDim = ccData.revised_dimensions[0];
+        const dimLayer = getDimensionLayer(firstDim);
+        if (dimLayer) {
+          state.selectedNavigationKey = NAV_KEYS.dim(`${dimLayer}_${firstDim}`);
+        }
+      }
+      deriveUIStateInStore(state);
       break;
     }
     // ============================================
     // NEW: State Sync Event (for reconnect)
     // ============================================
-    case 'state_sync': {
+    case "state_sync": {
       const syncData = data as Record<string, unknown>;
       // Hydrate state from backend sync
       if (syncData.phase) state.phase = syncData.phase as string;
-      if (syncData.current_wave) state.currentWave = syncData.current_wave as number;
+      if (syncData.current_wave)
+        state.currentWave = syncData.current_wave as number;
       // Note: reports 不再从后端同步，前端通过 SSE dimension_delta/dimension_complete 累积
       // 或通过 getLayerReports API 按需获取
       if (syncData.completed_dimensions) {
-        const completedData = syncData.completed_dimensions as Record<string, string[]>;
-        if (completedData.layer1) state.completedDimensions.layer1 = completedData.layer1;
-        if (completedData.layer2) state.completedDimensions.layer2 = completedData.layer2;
-        if (completedData.layer3) state.completedDimensions.layer3 = completedData.layer3;
+        const completedData = syncData.completed_dimensions as Record<
+          string,
+          string[]
+        >;
+        if (completedData.layer1)
+          state.completedDimensions.layer1 = completedData.layer1;
+        if (completedData.layer2)
+          state.completedDimensions.layer2 = completedData.layer2;
+        if (completedData.layer3)
+          state.completedDimensions.layer3 = completedData.layer3;
       }
-      if (syncData.pause_after_step !== undefined) state.pause_after_step = syncData.pause_after_step as boolean;
-      if (syncData.previous_layer !== undefined) state.previous_layer = syncData.previous_layer as number;
+      if (syncData.pause_after_step !== undefined)
+        state.pause_after_step = syncData.pause_after_step as boolean;
+      if (syncData.previous_layer !== undefined)
+        state.previous_layer = syncData.previous_layer as number;
       deriveUIStateInStore(state);
       break;
     }
-    case 'gis_layer_update': {
+    case "gis_layer_update": {
       const gisUpdateData = data as {
         layer?: number;
         dimension_key?: string;
@@ -1344,7 +1465,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
-    case 'rag_config_updated': {
+    case "rag_config_updated": {
       const ragData = data as {
         rag_layer_config?: Record<number, boolean>;
       };
@@ -1354,7 +1475,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
 
-    case 'step_mode_updated': {
+    case "step_mode_updated": {
       const stepData = data as {
         step_mode?: boolean;
       };
@@ -1371,7 +1492,12 @@ function deriveUIStateInStore(state: PlanningState): void {
   const newCompletedDimensions = deriveCompletedDimensions(state.reports);
 
   // Use stable reference if dimensions haven't changed
-  if (!shallowEqualCompletedDimensions(newCompletedDimensions, state.completedDimensions)) {
+  if (
+    !shallowEqualCompletedDimensions(
+      newCompletedDimensions,
+      state.completedDimensions,
+    )
+  ) {
     state.completedDimensions = newCompletedDimensions;
   }
 
@@ -1383,14 +1509,16 @@ function deriveUIStateInStore(state: PlanningState): void {
   };
 
   // Derive pause state
-  state.isPaused = state.pause_after_step === true || state.status === 'paused';
+  state.isPaused = state.pause_after_step === true || state.status === "paused";
   state.pendingReviewLayer =
     state.isPaused && state.previous_layer > 0 ? state.previous_layer : null;
 
   // Derive currentLayer: prefer pendingReviewLayer when paused, else from phase
   const layerFromPhase = phaseToLayer(state.phase);
   state.currentLayer = state.pendingReviewLayer || layerFromPhase;
-  state.currentPhase = state.currentLayer ? getLayerPhase(state.currentLayer) : 'idle';
+  state.currentPhase = state.currentLayer
+    ? getLayerPhase(state.currentLayer)
+    : "idle";
 }
 
 // ============================================
@@ -1400,7 +1528,7 @@ function deriveUIStateInStore(state: PlanningState): void {
 export const usePlanningStore = create<PlanningState & PlanningActions>()(
   immer((set, _get) => ({
     // Initial state
-    ...createInitialState('default'),
+    ...createInitialState("default"),
 
     // Core setters
     setSessionId: (sessionId) =>
@@ -1457,7 +1585,10 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         const existing = state.dimensionProgress[key];
         if (existing) {
           // Skip update for small wordCount changes
-          if (updates.wordCount !== undefined && existing.wordCount !== undefined) {
+          if (
+            updates.wordCount !== undefined &&
+            existing.wordCount !== undefined
+          ) {
             if (Math.abs(existing.wordCount - (updates.wordCount || 0)) < 50) {
               return;
             }
@@ -1465,10 +1596,10 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           Object.assign(existing, updates);
         } else {
           state.dimensionProgress[key] = {
-            dimensionKey: updates.dimensionKey || '',
-            dimensionName: updates.dimensionName || '',
+            dimensionKey: updates.dimensionKey || "",
+            dimensionName: updates.dimensionName || "",
             layer: updates.layer || 0,
-            status: updates.status || 'pending',
+            status: updates.status || "pending",
             wordCount: updates.wordCount || 0,
             ...updates,
           };
@@ -1485,7 +1616,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           dimensionKey,
           dimensionName,
           layer,
-          status: 'streaming' as DimensionStatus,
+          status: "streaming" as DimensionStatus,
           wordCount: 0,
           startedAt: new Date().toISOString(),
         };
@@ -1502,18 +1633,20 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         const existing = state.dimensionProgress[key];
         if (!existing) return;
 
-        existing.status = 'completed' as DimensionStatus;
+        existing.status = "completed" as DimensionStatus;
         existing.wordCount = wordCount;
         existing.completedAt = new Date().toISOString();
 
-        state.executingDimensions = state.executingDimensions.filter((k) => k !== key);
+        state.executingDimensions = state.executingDimensions.filter(
+          (k) => k !== key,
+        );
       }),
 
     clearDimensionProgress: () =>
       set((state) => {
         state.dimensionProgress = {};
         state.executingDimensions = [];
-        state.currentPhase = 'idle';
+        state.currentPhase = "idle";
       }),
 
     setDimensionProgressBatch: (updates) =>
@@ -1540,7 +1673,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
 
     clearDimensionReport: (layer, dimensionKey) =>
       set((state) => {
-        const layerKey = `layer${layer}` as 'layer1' | 'layer2' | 'layer3';
+        const layerKey = `layer${layer}` as "layer1" | "layer2" | "layer3";
         if (state.reports[layerKey]) {
           delete state.reports[layerKey][dimensionKey];
         }
@@ -1552,10 +1685,18 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
       set((state) => {
         const hasStatusChange = backendData.status !== state.status;
         const hasPhaseChange = backendData.phase !== state.phase;
-        const hasPauseChange = backendData.pause_after_step !== state.pause_after_step;
-        const hasExecutionPausedChange = backendData.execution_paused !== state.execution_paused;
-        const hasPreviousLayerChange = backendData.previous_layer !== state.previous_layer;
+        const hasPauseChange =
+          backendData.pause_after_step !== state.pause_after_step;
+        const hasExecutionPausedChange =
+          backendData.execution_paused !== state.execution_paused;
+        const hasPreviousLayerChange =
+          backendData.previous_layer !== state.previous_layer;
         const hasWaveChange = backendData.current_wave !== state.currentWave;
+        const hasRagConfigChange =
+          backendData.rag_layer_config &&
+          (backendData.rag_layer_config[1] !== state.ragLayerConfig[1] ||
+            backendData.rag_layer_config[2] !== state.ragLayerConfig[2] ||
+            backendData.rag_layer_config[3] !== state.ragLayerConfig[3]);
 
         if (
           !hasStatusChange &&
@@ -1563,7 +1704,8 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           !hasPauseChange &&
           !hasExecutionPausedChange &&
           !hasPreviousLayerChange &&
-          !hasWaveChange
+          !hasWaveChange &&
+          !hasRagConfigChange
         ) {
           return;
         }
@@ -1573,23 +1715,37 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           state.status = backendData.status as Status;
         }
         if (backendData.phase) state.phase = backendData.phase;
-        if (backendData.current_wave) state.currentWave = backendData.current_wave;
+        if (backendData.current_wave)
+          state.currentWave = backendData.current_wave;
         // Note: reports 不再从后端同步，前端通过 SSE 或 API 获取
         if (backendData.completed_dimensions) {
-          const completedData = backendData.completed_dimensions as Record<string, string[]>;
-          if (completedData.layer1) state.completedDimensions.layer1 = completedData.layer1;
-          if (completedData.layer2) state.completedDimensions.layer2 = completedData.layer2;
-          if (completedData.layer3) state.completedDimensions.layer3 = completedData.layer3;
+          const completedData = backendData.completed_dimensions as Record<
+            string,
+            string[]
+          >;
+          if (completedData.layer1)
+            state.completedDimensions.layer1 = completedData.layer1;
+          if (completedData.layer2)
+            state.completedDimensions.layer2 = completedData.layer2;
+          if (completedData.layer3)
+            state.completedDimensions.layer3 = completedData.layer3;
         }
         if (state.isPaused && backendData.pause_after_step === false) {
           state.pause_after_step = true;
         } else {
           state.pause_after_step = backendData.pause_after_step === true;
         }
-        if (backendData.previous_layer) state.previous_layer = backendData.previous_layer;
+        if (backendData.previous_layer)
+          state.previous_layer = backendData.previous_layer;
         state.step_mode = backendData.step_mode ?? state.step_mode;
         if (backendData.execution_paused !== undefined)
           state.execution_paused = backendData.execution_paused;
+        if (hasRagConfigChange) {
+          state.ragLayerConfig = {
+            ...state.ragLayerConfig,
+            ...backendData.rag_layer_config!,
+          };
+        }
         if (backendData.last_checkpoint_id)
           state.selectedCheckpoint = backendData.last_checkpoint_id;
 
@@ -1597,12 +1753,14 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         if (backendData.project_name && !state.projectName) {
           state.projectName = backendData.project_name;
         }
-        if (backendData.village_name) state.villageName = backendData.village_name;
+        if (backendData.village_name)
+          state.villageName = backendData.village_name;
         if (backendData.province) state.province = backendData.province;
         if (backendData.city) state.city = backendData.city;
         if (backendData.county) state.county = backendData.county;
         if (backendData.township) state.township = backendData.township;
-        if (backendData.planning_period) state.planningPeriod = backendData.planning_period;
+        if (backendData.planning_period)
+          state.planningPeriod = backendData.planning_period;
 
         deriveUIStateInStore(state);
       }),
@@ -1616,7 +1774,10 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         if (data.phase) state.phase = data.phase as string;
         if (data.current_wave) state.currentWave = data.current_wave as number;
         if (data.reports) {
-          const reportsData = data.reports as Record<string, Record<string, string>>;
+          const reportsData = data.reports as Record<
+            string,
+            Record<string, string>
+          >;
           if (reportsData.layer1) state.reports.layer1 = reportsData.layer1;
           if (reportsData.layer2) state.reports.layer2 = reportsData.layer2;
           if (reportsData.layer3) state.reports.layer3 = reportsData.layer3;
@@ -1650,7 +1811,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     setRagDocuments: (dimKey, documents) =>
       set((state) => {
         state.dimensionRagSources[dimKey] = {
-          query: state.dimensionRagSources[dimKey]?.query || '',
+          query: state.dimensionRagSources[dimKey]?.query || "",
           documents,
         };
       }),
@@ -1804,7 +1965,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     clearProgressState: () =>
       set((state) => {
         state.currentLayer = null;
-        state.currentPhase = 'idle';
+        state.currentPhase = "idle";
         state.dimensionProgress = {};
         state.executingDimensions = [];
       }),
@@ -1815,7 +1976,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         if (!dimensionsToRevise || dimensionsToRevise.length === 0) {
           // If no dimensions specified, only clear executing state for this layer
           state.executingDimensions = state.executingDimensions.filter(
-            (k) => !k.startsWith(`${layer}_`)
+            (k) => !k.startsWith(`${layer}_`),
           );
           return;
         }
@@ -1827,9 +1988,11 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         }
 
         // Clear executing state for specified dimensions only (preserve other executing)
-        const keysToRemove = dimensionsToRevise.map((dim) => buildDimensionProgressKey(layer, dim));
+        const keysToRemove = dimensionsToRevise.map((dim) =>
+          buildDimensionProgressKey(layer, dim),
+        );
         state.executingDimensions = state.executingDimensions.filter(
-          (k) => !keysToRemove.includes(k)
+          (k) => !keysToRemove.includes(k),
         );
         // Preserve currentLayer and currentPhase for UI display
       }),
@@ -1890,7 +2053,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         newState.villages = state.villages;
         Object.assign(state, newState);
       }),
-  }))
+  })),
 );
 
 // ============================================

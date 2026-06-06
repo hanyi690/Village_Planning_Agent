@@ -15,10 +15,10 @@
  * ```
  */
 
-import { useMemo } from 'react';
-import { usePlanningStore, type PlanningState } from '../store/planningStore';
-import type { Message, DimensionProgressItem, Checkpoint } from '../types';
-import type { VillageInfo, VillageSession } from '../api';
+import { useMemo } from "react";
+import { usePlanningStore, type PlanningState } from "../store/planningStore";
+import type { Message, DimensionProgressItem, Checkpoint } from "../types";
+import type { VillageInfo, VillageSession } from "../api";
 
 // ============================================
 // Core State Selectors
@@ -34,7 +34,7 @@ export function useMessages(): Message[] {
 /**
  * Select status - only re-renders when status changes
  */
-export function useStatus(): PlanningState['status'] {
+export function useStatus(): PlanningState["status"] {
   return usePlanningStore((state) => state.status);
 }
 
@@ -62,7 +62,7 @@ export function useCurrentLayer(): number | null {
 /**
  * Select currentPhase - only re-renders when currentPhase changes
  */
-export function useCurrentPhase(): PlanningState['currentPhase'] {
+export function useCurrentPhase(): PlanningState["currentPhase"] {
   return usePlanningStore((state) => state.currentPhase);
 }
 
@@ -87,7 +87,10 @@ export function usePendingReviewLayer(): number | null {
 /**
  * Select all dimension progress - use sparingly, prefer useDimensionProgress
  */
-export function useDimensionProgressAll(): Record<string, DimensionProgressItem> {
+export function useDimensionProgressAll(): Record<
+  string,
+  DimensionProgressItem
+> {
   return usePlanningStore((state) => state.dimensionProgress);
 }
 
@@ -95,7 +98,9 @@ export function useDimensionProgressAll(): Record<string, DimensionProgressItem>
  * Select specific dimension progress by key
  * Only re-renders when that specific dimension's progress changes
  */
-export function useDimensionProgress(key: string): DimensionProgressItem | undefined {
+export function useDimensionProgress(
+  key: string,
+): DimensionProgressItem | undefined {
   return usePlanningStore((state) => state.dimensionProgress[key]);
 }
 
@@ -138,7 +143,7 @@ export function useIsLayerCompleted(layer: 1 | 2 | 3): boolean {
 /**
  * Select all reports - use sparingly
  */
-export function useReports(): PlanningState['reports'] {
+export function useReports(): PlanningState["reports"] {
   return usePlanningStore((state) => state.reports);
 }
 
@@ -159,14 +164,16 @@ export function useLayerReports(layer: 1 | 2 | 3): Record<string, string> {
 /**
  * Select all tool statuses
  */
-export function useToolStatuses(): PlanningState['toolStatuses'] {
+export function useToolStatuses(): PlanningState["toolStatuses"] {
   return usePlanningStore((state) => state.toolStatuses);
 }
 
 /**
  * Select specific tool status
  */
-export function useToolStatus(toolName: string): PlanningState['toolStatuses'][string] | undefined {
+export function useToolStatus(
+  toolName: string,
+): PlanningState["toolStatuses"][string] | undefined {
   return usePlanningStore((state) => state.toolStatuses[toolName]);
 }
 
@@ -176,7 +183,8 @@ export function useToolStatus(toolName: string): PlanningState['toolStatuses'][s
 export function useRunningToolsCount(): number {
   const toolStatuses = usePlanningStore((state) => state.toolStatuses);
   return useMemo(() => {
-    return Object.values(toolStatuses).filter((t) => t?.status === 'running').length;
+    return Object.values(toolStatuses).filter((t) => t?.status === "running")
+      .length;
   }, [toolStatuses]);
 }
 
@@ -237,7 +245,7 @@ export function useSelectedCheckpointId(): string | null {
 /**
  * Select view mode
  */
-export function useViewMode(): PlanningState['viewMode'] {
+export function useViewMode(): PlanningState["viewMode"] {
   return usePlanningStore((state) => state.viewMode);
 }
 
@@ -269,22 +277,31 @@ export function useActiveReportLayer(): number {
 /**
  * Select RAG sources for a specific dimension
  */
-export function useDimensionRagSources(dimKey: string): PlanningState['dimensionRagSources'][string] | undefined {
+export function useDimensionRagSources(
+  dimKey: string,
+): PlanningState["dimensionRagSources"][string] | undefined {
   return usePlanningStore((state) => state.dimensionRagSources[dimKey]);
 }
 
 /**
  * Select all RAG sources
  */
-export function useAllRagSources(): PlanningState['dimensionRagSources'] {
+export function useAllRagSources(): PlanningState["dimensionRagSources"] {
   return usePlanningStore((state) => state.dimensionRagSources);
 }
 
 /**
  * Select cascade chain
  */
-export function useCascadeChain(): PlanningState['cascadeChain'] {
+export function useCascadeChain(): PlanningState["cascadeChain"] {
   return usePlanningStore((state) => state.cascadeChain);
+}
+
+/**
+ * Select revision completed dimension keys
+ */
+export function useRevisionCompletedKeys(): string[] {
+  return usePlanningStore((state) => state.revisionCompletedKeys);
 }
 
 /**
@@ -329,7 +346,7 @@ export function usePlanningStatusInfo() {
       currentPhase,
       currentLayer,
     }),
-    [status, isPaused, currentPhase, currentLayer]
+    [status, isPaused, currentPhase, currentLayer],
   );
 }
 
@@ -337,15 +354,21 @@ export function usePlanningStatusInfo() {
  * Select progress summary for current layer
  */
 export function useProgressSummary(layer: number | null) {
-  const completedDimensions = usePlanningStore((state) => state.completedDimensions);
-  const executingDimensions = usePlanningStore((state) => state.executingDimensions);
+  const completedDimensions = usePlanningStore(
+    (state) => state.completedDimensions,
+  );
+  const executingDimensions = usePlanningStore(
+    (state) => state.executingDimensions,
+  );
 
   return useMemo(() => {
     if (!layer) return { completed: 0, total: 0, executing: 0 };
 
-    const layerKey = `layer${layer}` as 'layer1' | 'layer2' | 'layer3';
+    const layerKey = `layer${layer}` as "layer1" | "layer2" | "layer3";
     const completed = completedDimensions[layerKey]?.length || 0;
-    const executing = executingDimensions.filter((k) => k.startsWith(`${layer}_`)).length;
+    const executing = executingDimensions.filter((k) =>
+      k.startsWith(`${layer}_`),
+    ).length;
 
     return { completed, executing };
   }, [layer, completedDimensions, executingDimensions]);

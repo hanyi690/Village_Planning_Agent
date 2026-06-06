@@ -1,35 +1,36 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
-import { useCascadeChain, useStatus } from "../hooks";
-import { usePlanningStore } from "../store";
+import { useCascadeChain, useRevisionCompletedKeys, useStatus } from "../hooks";
+import { getDimensionLayer } from "../config/dimensions";
 import CascadePanel from "./CascadePanel";
 
 export default function CascadeNotificationBanner() {
   const cascadeChain = useCascadeChain();
   const status = useStatus();
-  const completedDimensions = usePlanningStore((s) => s.completedDimensions);
-  const clearCascadeChain = usePlanningStore((s) => s.clearCascadeChain);
+  const revisionCompletedKeys = useRevisionCompletedKeys();
 
   const [expanded, setExpanded] = useState(false);
   const [dismissed, setDismissed] = useState(false);
 
-  // Count pending dimensions (excluding completed)
+  // Auto-dismiss when cascade completes (cascadeChain becomes null)
+  useEffect(() => {
+    if (!cascadeChain) {
+      setDismissed(true);
+    }
+  }, [cascadeChain]);
+
+  // Count pending dimensions based on revision completion (not first-time generation)
   const pendingCount = useMemo(() => {
     if (!cascadeChain) return 0;
-    const allCompleted = new Set([
-      ...completedDimensions.layer1,
-      ...completedDimensions.layer2,
-      ...completedDimensions.layer3,
-    ]);
-    const triggerPending = allCompleted.has(cascadeChain.trigger) ? 0 : 1;
-    const impactedPending = cascadeChain.impacted.filter(
-      (d) => !allCompleted.has(d),
-    ).length;
-    return triggerPending + impactedPending;
-  }, [cascadeChain, completedDimensions]);
+    const allDims = [cascadeChain.trigger, ...cascadeChain.impacted];
+    return allDims.filter((d) => {
+      const layer = getDimensionLayer(d);
+      return !revisionCompletedKeys.includes(`${layer}_${d}`);
+    }).length;
+  }, [cascadeChain, revisionCompletedKeys]);
 
   const visible = cascadeChain && status !== "idle" && !dismissed;
 
@@ -64,7 +65,7 @@ export default function CascadeNotificationBanner() {
                 />
               </svg>
               <span className="text-sm font-medium">
-                级联修复进行中：{pendingCount} 个维度待更新
+                级联修复进行中：{pendingCount} 个维度待修复
               </span>
             </div>
             <div className="flex items-center gap-1">
@@ -87,10 +88,7 @@ export default function CascadeNotificationBanner() {
                 </svg>
               </button>
               <button
-                onClick={() => {
-                  setDismissed(true);
-                  clearCascadeChain();
-                }}
+                onClick={() => setDismissed(true)}
                 className="p-1.5 rounded hover:bg-white/20 transition-colors"
                 title="关闭"
               >
@@ -126,7 +124,7 @@ export default function CascadeNotificationBanner() {
                   <CascadePanel
                     trigger={cascadeChain!.trigger}
                     impacted={cascadeChain!.impacted}
-                    completedDimensions={completedDimensions}
+                    revisionCompletedKeys={revisionCompletedKeys}
                   />
                 </div>
               </motion.div>

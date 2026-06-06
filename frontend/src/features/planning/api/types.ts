@@ -314,6 +314,9 @@ export interface SessionStatusResponse {
   step_mode: boolean;
   execution_paused: boolean;
 
+  rag_enabled?: boolean;
+  rag_layer_config?: Record<number, boolean>;
+
   // Other metadata
   current_layer: number;
   progress: number | null;

@@ -6,7 +6,7 @@
  */
 
 // SSE Connection
-export { useSSEConnection } from './useSSE';
+export { useSSEConnection } from "./useSSE";
 
 // Selectors
 export {
@@ -47,20 +47,21 @@ export {
   useDimensionRagSources,
   useAllRagSources,
   useCascadeChain,
+  useRevisionCompletedKeys,
   useStreamingContent,
   useRunningTools,
   useIsToolRunning,
-} from './useSelectors';
+} from "./useSelectors";
 
 // Handlers
-export { usePlanningHandlers } from './useHandlers';
+export { usePlanningHandlers } from "./useHandlers";
 
 // Streaming
-export { useStreamingText, useStreamingAccumulator } from './useStreaming';
+export { useStreamingText, useStreamingAccumulator } from "./useStreaming";
 
 // Approval
-export { useApprovalActions } from './useApprovalActions';
+export { useApprovalActions } from "./useApprovalActions";
 
 // Persistence & Session
-export { useMessagePersistence } from './usePersistence';
-export { useSessionRestore } from './useSessionRestore';
+export { useMessagePersistence } from "./usePersistence";
+export { useSessionRestore } from "./useSessionRestore";

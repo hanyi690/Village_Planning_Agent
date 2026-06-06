@@ -94,10 +94,11 @@ export default function SettingsPanel() {
   const [stepLoading, setStepLoading] = React.useState(false);
 
   const handleRagToggle = async (layer: number) => {
+    toggleLayerRag(layer);
+
     if (!sessionId) return;
 
     const newConfig = { ...ragLayerConfig, [layer]: !ragLayerConfig[layer] };
-    toggleLayerRag(layer);
     setRagLoading(true);
 
     try {
@@ -111,10 +112,11 @@ export default function SettingsPanel() {
   };
 
   const handleStepModeToggle = async () => {
-    if (!sessionId) return;
-
     const newStepMode = !stepMode;
     setStepMode(newStepMode);
+
+    if (!sessionId) return;
+
     setStepLoading(true);
 
     try {
