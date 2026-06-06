@@ -26,9 +26,10 @@ services:
       - MAX_TOKENS=${MAX_TOKENS:-65536}
       - MULTIMODAL_ENABLED=${MULTIMODAL_ENABLED:-true}
       - OCR_MODEL_NAME=${OCR_MODEL_NAME:-qwen-vl-max}
-      # LLM Concurrency Control
-      - LLM_MAX_CONCURRENT=${LLM_MAX_CONCURRENT:-4}
+      # LLM Concurrency Control (DashScope qwen3.5-plus: 500 rps, 30000 rpm)
+      - LLM_MAX_CONCURRENT=${LLM_MAX_CONCURRENT:-50}
       - LLM_STREAM_TIMEOUT=${LLM_STREAM_TIMEOUT:-300}
+      - GRAPH_MAX_CONCURRENCY=${GRAPH_MAX_CONCURRENCY:-50}
       - MINERU_TOKEN=${MINERU_TOKEN}
       # GIS API Keys
       - TIANDITU_API_KEY=${TIANDITU_API_KEY}
