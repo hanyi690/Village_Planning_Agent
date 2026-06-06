@@ -78,6 +78,20 @@ def _merge_dict_of_dicts(a: Dict[str, Dict], b: Dict[str, Dict]) -> Dict[str, Di
     return result
 
 
+def _merge_config(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    """Deep-merge config dicts. PATCH updates (b) take precedence over frozen state (a).
+    Prevents Send-frozen snapshots from overwriting runtime PATCH updates."""
+    if not b:
+        return a
+    result = {**a}
+    for k, v in b.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = {**result[k], **v}
+        else:
+            result[k] = v
+    return result
+
+
 def _merge_lists(a: List, b: List) -> List:
     """合并两个列表。用于并行 fan-in。"""
     return a + b
@@ -140,7 +154,7 @@ class AgentState(TypedDict, total=False):
     phase: str
     current_wave: int
     completed_dimensions: Annotated[Dict[str, List[str]], _merge_dict_of_lists]
-    config: Dict[str, Any]
+    config: Annotated[Dict[str, Any], _merge_config]
     feedback: Optional[str]
     dimension_key: Optional[str]
     image_ids: List[str]

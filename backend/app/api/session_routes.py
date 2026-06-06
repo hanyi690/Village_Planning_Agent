@@ -827,6 +827,40 @@ async def update_step_mode(session_id: str, request: StepModeRequest):
 
     logger.info(f"[step-mode] Updated {session_id}: step_mode={request.step_mode}")
 
+    # If turning OFF step_mode while execution is paused, auto-approve
+    # to resume execution to the next layer
+    if not request.step_mode and state.get("execution_paused"):
+        current_phase = state.get("phase", "layer1")
+        current_layer = _phase_to_layer(current_phase) or 1
+        next_phase = get_next_phase(current_phase)
+
+        await PlanningRuntimeService.aupdate_state(session_id, {
+            "execution_paused": False,
+            "pause_after_step": False,
+            "previous_layer": 0,
+            "phase": next_phase or current_phase,
+            "need_revision": False,
+            "human_feedback": None,
+        })
+
+        SSEPublisher.send_execution_resumed(
+            session_id=session_id,
+            layer=current_layer,
+        )
+
+        if next_phase and next_phase != "completed":
+            next_layer = _phase_to_layer(next_phase)
+            if next_layer:
+                SSEPublisher.send_layer_start(
+                    session_id=session_id,
+                    layer=next_layer,
+                    layer_name=get_layer_name(next_layer),
+                    dimension_count=len(get_layer_dimensions(next_layer))
+                )
+
+        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+        logger.info(f"[step-mode] Auto-approved paused session {session_id}, advancing to {next_phase}")
+
     await sse_manager.publish(session_id, {
         "type": "step_mode_updated",
         "session_id": session_id,
