@@ -259,6 +259,17 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                     seen_content.add(content_key)
                     unique_results.append(r)
             results = unique_results[:5]
+
+            # 过滤无效结果：只有标题标记且无实质内容的切片
+            valid_results = []
+            for r in results:
+                content = r.get("content", "").strip()
+                if len(content) < 50 and content.startswith("#"):
+                    logger.debug(f"[analyze_dimension] 过滤无效标题切片: {content[:50]}")
+                    continue
+                valid_results.append(r)
+            results = valid_results
+
             latency_ms = (time.time() - start_time) * 1000
 
             retrieved_chunks = []

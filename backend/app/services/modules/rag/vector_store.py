@@ -564,9 +564,19 @@ class HierarchyVectorStore:
 
                     content = merged_content
                 else:
-                    content = chunk.get("content", child_doc.page_content)
-                    if children_map == {}:
-                        logger.warning(f"[HierarchyVectorStore] children_map 为空，占位切片合并失效: {child_chunk_id}")
+                    # 无子节点可合并 → 沿祖先链向上查找有实质内容的节点
+                    resolved_content = self._resolve_via_ancestors(
+                        child_chunk_id, by_id, max_merge_length
+                    )
+                    if resolved_content:
+                        content = resolved_content
+                    else:
+                        # 祖先链上也无实质内容，跳过此切片
+                        logger.debug(
+                            f"[HierarchyVectorStore] 跳过无效占位切片(无子节点且祖先无实质内容): "
+                            f"{child_chunk_id}, section={chunk.get('section_title', '')}"
+                        )
+                        continue
             else:
                 # 非占位切片：返回子块本身的内容
                 content = child_doc.page_content
@@ -602,6 +612,34 @@ class HierarchyVectorStore:
             })
 
         return results[:k]
+
+    def _resolve_via_ancestors(
+        self, chunk_id: str, by_id: dict, max_length: int = 3000
+    ) -> str:
+        """沿祖先链向上查找有实质内容的节点，合并返回
+
+        当占位切片/短切片无子节点可合并时，向上遍历祖先链，
+        找到第一个有实质内容（>= 50 字符）的祖先，返回其内容。
+
+        Args:
+            chunk_id: 当前切片 ID
+            by_id: 树形索引的 by_id 映射
+            max_length: 合并内容的最大长度
+
+        Returns:
+            合并后的内容，如果祖先链上无实质内容则返回空字符串
+        """
+        current_id = by_id.get(chunk_id, {}).get("parent_id")
+        steps = 0
+        while current_id and current_id in by_id and steps < 5:
+            steps += 1
+            ancestor = by_id[current_id]
+            ancestor_content = ancestor.get("content", "").strip()
+            if len(ancestor_content) >= 50:
+                # 找到有实质内容的祖先，返回其内容
+                return ancestor_content[:max_length]
+            current_id = ancestor.get("parent_id")
+        return ""
 
     def retrieve_with_scores(self, query: str, k: int = 5, return_parents: bool = True,
                              parent_level: int = -1) -> List[Tuple[Dict, float]]:
