@@ -14,6 +14,7 @@ services:
     ports:
       - "${BACKEND_PORT:-8003}:8000"
     environment:
+      - PROJECT_ROOT=/app
       - ENVIRONMENT=production
       - USE_ASYNC_DATABASE=true
       # LLM Configuration

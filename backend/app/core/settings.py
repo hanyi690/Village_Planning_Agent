@@ -6,7 +6,8 @@ load_dotenv(override=True)
 
 # Project root directory (cross-platform)
 # backend/app/core/settings.py -> PROJECT_ROOT = project root
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# Support PROJECT_ROOT env var override (for Docker where file layout differs)
+PROJECT_ROOT = Path(os.getenv("PROJECT_ROOT", "")).resolve() if os.getenv("PROJECT_ROOT") else Path(__file__).resolve().parent.parent.parent.parent
 
 # API Keys
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
