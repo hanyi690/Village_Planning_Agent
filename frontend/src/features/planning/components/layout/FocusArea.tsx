@@ -3,14 +3,12 @@
 import React, { memo, useCallback } from "react";
 
 import { usePlanningStore, usePlanningActions } from "../../store";
-import { useStatus } from "../../hooks";
 import CascadeNotificationBanner from "../CascadeNotificationBanner";
 import ReportViewer from "./ReportViewer";
 import PlanningTextViewer from "../PlanningTextViewer";
 import { NAV_KEYS } from "@/features/planning/constants";
 
 const FocusArea = memo(function FocusArea() {
-  const status = useStatus();
   const sessionId = usePlanningStore((state) => state.sessionId);
   const selectedNavigationKey = usePlanningStore(
     (state) => state.selectedNavigationKey,
