@@ -12,7 +12,7 @@ services:
     container_name: village-planning-backend
     restart: unless-stopped
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${BACKEND_PORT:-8003}:8000"
     environment:
       - ENVIRONMENT=production
       - USE_ASYNC_DATABASE=true
@@ -28,6 +28,7 @@ services:
       # LLM Concurrency Control
       - LLM_MAX_CONCURRENT=${LLM_MAX_CONCURRENT:-4}
       - LLM_STREAM_TIMEOUT=${LLM_STREAM_TIMEOUT:-300}
+      - MINERU_TOKEN=${MINERU_TOKEN}
       # GIS API Keys
       - TIANDITU_API_KEY=${TIANDITU_API_KEY}
       - AMAP_API_KEY=${AMAP_API_KEY}
@@ -57,15 +58,15 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=http://backend:8000
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8003}
     image: village-planning-frontend:latest
     container_name: village-planning-frontend
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${FRONTEND_PORT:-3003}:3000"
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_API_URL=http://backend:8000
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8003}
     depends_on:
       backend:
         condition: service_healthy
