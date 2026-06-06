@@ -27,7 +27,6 @@ import {
   useApprovalActions,
   useDimensionRagSources,
   useProjectName,
-  usePendingReviewLayer,
   useCompletedLayers,
 } from '../../hooks';
 import { dataApi } from '../../api';
@@ -66,7 +65,7 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
   const currentLayer = useCurrentLayer();
   const reports = useReports();
   const dimensionProgress = useDimensionProgressAll();
-  const { approve, reject, isSubmitting } = useApprovalActions();
+  const { approve, isSubmitting } = useApprovalActions();
   const projectName = useProjectName();
 
   // Compare mode state
@@ -95,12 +94,8 @@ const ReportViewer = memo(function ReportViewer({ onStartPlanning, onViewProcess
   const [showDimensionSelector, setShowDimensionSelector] = useState(false);
 
   // Get completed dimensions for current review layer
-  const pendingReviewLayer = usePendingReviewLayer();
   const completedLayers = useCompletedLayers();
   const completedDimensions = usePlanningStore((state) => state.completedDimensions);
-  const currentLayerCompletedDims = pendingReviewLayer
-    ? completedDimensions[`layer${pendingReviewLayer}` as 'layer1' | 'layer2' | 'layer3'] || []
-    : [];
 
   // All completed dimensions across all finished layers (for cascade revision)
   // Use DIMENSIONS_BY_LAYER order instead of completedDimensions order

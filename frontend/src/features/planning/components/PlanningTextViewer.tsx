@@ -22,7 +22,6 @@ import {
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
 import { planningApi } from '../api/planning-api';
-import { usePlanningStore } from '../store';
 import MarkdownRenderer from './ui/MarkdownRenderer';
 import type {
   PlanningTextDocument,
@@ -97,7 +96,7 @@ const PlanningTextViewer = memo(function PlanningTextViewer({ sessionId }: Plann
     setError(null);
 
     try {
-      const result = await planningApi.generatePlanningText(sessionId, {
+      await planningApi.generatePlanningText(sessionId, {
         trigger_reason: document ? 'manual' : 'initial',
       });
 

@@ -57,14 +57,6 @@ interface CompletedDimensions {
   layer3: string[];
 }
 
-interface LayerProgressSnapshot {
-  completedAt: string;
-  dimensionCount: number;
-  completedCount: number;
-  totalWordCount: number;
-  dimensionDetails: DimensionProgressItem[];
-}
-
 interface ToolStatus {
   toolName: string;
   status: 'running' | 'success' | 'error';
