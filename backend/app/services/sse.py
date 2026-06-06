@@ -51,6 +51,7 @@ class SSEManager:
     CACHE_CONFIG = {
         SSEEventType.DIMENSION_START: ("_last_dimension_start", "dimension_key"),
         SSEEventType.DIMENSION_COMPLETE: ("_last_dimension_complete", "dimension_key"),
+        SSEEventType.RAG_RESULT: ("_last_rag_result", "dimension_key"),
         SSEEventType.LAYER_COMPLETED: ("_last_layer_completed", "layer"),
         SSEEventType.LAYER_STARTED: ("_last_layer_started", "layer"),
         SSEEventType.RESUMED: ("_last_resumed", None),
@@ -140,6 +141,9 @@ class SSEManager:
 
     # Cache cascade_complete events: session_id -> event
     _last_cascade_complete: Dict[str, Dict[str, Any]] = {}
+
+    # Cache rag_result events: session_id -> dimension_key -> event
+    _last_rag_result: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     # Unified RLock for all cache operations (prevents deadlock from lock ordering issues)
     # RLock allows same thread to acquire lock multiple times without blocking
@@ -653,6 +657,18 @@ class SSEManager:
                         logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached dim event")
                         break
 
+        # 4.5. cached_rag_result
+        cached_rag_count = 0
+        with cls._cache_lock:
+            if session_id in cls._last_rag_result:
+                for dim_key, event in cls._last_rag_result[session_id].items():
+                    try:
+                        queue.put_nowait(event)
+                        cached_rag_count += 1
+                    except asyncio.QueueFull:
+                        logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached rag_result event")
+                        break
+
         # 5. historical events (最低优先级)
         # 注意：过滤掉终端事件（completed, error），防止历史遗留导致连接立即关闭
         TERMINAL_EVENTS = {"completed", "error"}
@@ -671,10 +687,10 @@ class SSEManager:
                         logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping historical event")
                         break
 
-        total_synced = historical_count + cached_dim_count + cached_dimension_start_count + cached_layer_count + cached_layer_started_count + cached_resumed_count + cached_cascade_impact_count + cached_cascade_complete_count + pending_flush_count
+        total_synced = historical_count + cached_dim_count + cached_dimension_start_count + cached_layer_count + cached_layer_started_count + cached_resumed_count + cached_cascade_impact_count + cached_cascade_complete_count + cached_rag_count + pending_flush_count
         logger.info(
             f"[SSEManager] Session {session_id}: Subscribed, "
-            f"pending_flush={pending_flush_count}, historical={historical_count}, cached_dim_start={cached_dimension_start_count}, cached_dim={cached_dim_count}, cached_layer={cached_layer_count}, "
+            f"pending_flush={pending_flush_count}, historical={historical_count}, cached_dim_start={cached_dimension_start_count}, cached_dim={cached_dim_count}, cached_rag={cached_rag_count}, cached_layer={cached_layer_count}, "
             f"cached_layer_started={cached_layer_started_count}, cached_resumed={cached_resumed_count}, cached_cascade_impact={cached_cascade_impact_count}, cached_cascade_complete={cached_cascade_complete_count}, total={total_synced}"
         )
         return queue
@@ -822,6 +838,14 @@ class SSEManager:
             with cls._cascade_complete_cache_lock:
                 cls._last_cascade_complete[session_id] = event
                 logger.info(f"[SSEManager] Cached cascade_complete for {session_id}")
+
+        elif event_type == SSEEventType.RAG_RESULT:
+            dimension_key = event.get("dimension_key", "")
+            if dimension_key:
+                with cls._cache_lock:
+                    if session_id not in cls._last_rag_result:
+                        cls._last_rag_result[session_id] = {}
+                    cls._last_rag_result[session_id][dimension_key] = event
 
         # If no subscribers, skip sending (events are already cached above)
         if not subscribers:
@@ -1291,6 +1315,16 @@ class SSEManager:
                 del cls._last_cascade_complete[sid]
                 cleaned["cascade_complete_caches"] += 1
 
+        # Clean orphan rag_result caches
+        with cls._cache_lock:
+            orphan_rag = [
+                sid for sid in cls._last_rag_result
+                if sid not in current_session_ids
+            ]
+            for sid in orphan_rag:
+                del cls._last_rag_result[sid]
+                cleaned["rag_caches"] += 1
+
         # Clean orphan pending events
         with cls._pending_events_lock:
             orphan_pending = [
@@ -1401,6 +1435,13 @@ class SSEManager:
                 result["cascade_complete_cache"] = True
             else:
                 result["cascade_complete_cache"] = False
+
+        with cls._cache_lock:
+            if session_id in cls._last_rag_result:
+                del cls._last_rag_result[session_id]
+                result["rag_cache"] = True
+            else:
+                result["rag_cache"] = False
 
         with cls._pending_events_lock:
             if session_id in cls._pending_events:

@@ -170,9 +170,15 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
     async def _run_rag():
-        rag_layer_config = config.get("rag_layer_config", {})
+        # Re-read config from checkpoint (Send freezes state at dispatch time,
+        # so PATCH updates to rag_layer_config would be invisible otherwise)
+        from ...services.runtime import PlanningRuntimeService
+        _latest = await PlanningRuntimeService.aget_state_values(session_id)
+        live_config = _latest.get("config", {}) if _latest else config
+
+        rag_layer_config = live_config.get("rag_layer_config", {})
         layer_rag_enabled = rag_layer_config.get(dim_layer, True)
-        global_rag_enabled = config.get("rag_enabled", True)
+        global_rag_enabled = live_config.get("rag_enabled", True)
         dim_rag_query = getattr(cfg, 'rag_query', '')
         rag_enabled = layer_rag_enabled and global_rag_enabled
 

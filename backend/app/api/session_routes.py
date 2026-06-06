@@ -466,13 +466,19 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
         from app.config.dependency import get_impact_tree_compat
 
         final_tree: Dict[int, List[str]] = {0: list(request.dimensions)}
+        # Only include dimensions that have already been executed in this session
+        state_data = await PlanningRuntimeService.aget_state_values(session_id)
+        completed_dims = state_data.get("completed_dimensions", {}) if state_data else {}
+        all_completed_keys = set(d for dims in completed_dims.values() for d in dims)
+
         for target_dim in request.dimensions:
             tree = get_impact_tree_compat(target_dim)
             for wave, dims in tree.items():
-                final_tree.setdefault(wave, []).extend(dims)
-        # Dedupe each wave
-        for wave in final_tree:
-            final_tree[wave] = list(set(final_tree[wave]))
+                already_executed = [d for d in dims if d in all_completed_keys]
+                if already_executed:
+                    final_tree.setdefault(wave, []).extend(already_executed)
+        # Dedupe each wave and remove empty waves
+        final_tree = {w: list(set(dims)) for w, dims in final_tree.items() if dims}
 
         await PlanningRuntimeService.aupdate_state(session_id, {
             "human_feedback": request.feedback,
