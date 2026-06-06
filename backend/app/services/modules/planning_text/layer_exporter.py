@@ -7,13 +7,27 @@ in MD/JSON/DOCX formats with optional RAG dimension-level details.
 
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
+from docx.shared import Pt, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.enum.table import WD_TABLE_ALIGNMENT
+
 from app.services.report_store import ReportStore
 from app.agent.state import LAYER_NAMES_BY_NUMBER
+from .docx_styles import (
+    setup_document_styles,
+    setup_page_margins,
+    fix_heading_fonts,
+    set_run_font,
+    set_cell_font,
+    CN_FONT,
+    EN_FONT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -352,22 +366,16 @@ class LayerExporter:
 
         try:
             from docx import Document
-            from docx.shared import Pt, Cm
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
-            from docx.enum.table import WD_TABLE_ALIGNMENT
             from io import BytesIO
 
             doc = Document()
-
-            # 设置页边距
-            for section in doc.sections:
-                section.top_margin = Cm(2.54)
-                section.bottom_margin = Cm(2.54)
-                section.left_margin = Cm(2.54)
-                section.right_margin = Cm(2.54)
+            setup_page_margins(doc)
+            setup_document_styles(doc)
 
             title = doc.add_heading(f"{result.layer_name}报告", level=1)
-            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            fix_heading_fonts(title)
+            for run in title.runs:
+                run.bold = True
 
             doc.add_paragraph(f"项目: {self.config.session_id}")
             doc.add_paragraph(f"层级: Layer {result.layer} - {result.layer_name}")
@@ -376,7 +384,10 @@ class LayerExporter:
             doc.add_paragraph("")
 
             for dim in result.dimensions:
-                doc.add_heading(dim.dimension_name, level=2)
+                h2 = doc.add_heading(dim.dimension_name, level=2)
+                fix_heading_fonts(h2)
+                for run in h2.runs:
+                    run.bold = False
                 if dim.content:
                     self._add_content_with_tables(doc, dim.content)
 
@@ -514,51 +525,6 @@ class LayerExporter:
                 logger.warning(f"[LayerExporter] MD->DOCX conversion failed: {e}")
                 return None
 
-    def _apply_docx_styles(self, docx_path: Path) -> None:
-        """Apply page margins and paragraph styles to DOCX."""
-        try:
-            from docx import Document
-            from docx.shared import Cm, Pt
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
-            from docx.oxml.ns import qn
-            from docx.oxml import OxmlElement
-
-            doc = Document(str(docx_path))
-
-            # 设置页边距：上下左右各 2.54 cm (1 英寸)
-            for section in doc.sections:
-                section.top_margin = Cm(2.54)
-                section.bottom_margin = Cm(2.54)
-                section.left_margin = Cm(2.54)
-                section.right_margin = Cm(2.54)
-
-            # 设置段落格式
-            for para in doc.paragraphs:
-                # 正文段落：首行缩进 2 字符
-                if para.style.name.startswith('Normal') or para.style.name == '':
-                    para.paragraph_format.first_line_indent = Cm(0.74)  # 约 2 字符
-                    para.paragraph_format.line_spacing = 1.5
-                # 标题不缩进
-                elif 'Heading' in para.style.name:
-                    para.paragraph_format.first_line_indent = Cm(0)
-                    para.paragraph_format.space_before = Pt(12)
-                    para.paragraph_format.space_after = Pt(6)
-
-            # 设置表格单元格内边距
-            for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        cell.paragraphs[0].paragraph_format.space_before = Pt(2)
-                        cell.paragraphs[0].paragraph_format.space_after = Pt(2)
-
-            doc.save(str(docx_path))
-            logger.debug(f"[LayerExporter] Applied styles to {docx_path}")
-
-        except ImportError:
-            logger.warning("[LayerExporter] python-docx not installed, skipping style application")
-        except Exception as e:
-            logger.warning(f"[LayerExporter] Failed to apply styles: {e}")
-
     def _build_docx_markdown(self, result: LayerExportResult) -> str:
         """Build Markdown content for Pandoc conversion."""
         lines = [
@@ -625,23 +591,15 @@ class LayerExporter:
         """Fallback DOCX export using python-docx with table support."""
         try:
             from docx import Document
-            from docx.shared import Pt, Cm, Inches
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
-            from docx.enum.table import WD_TABLE_ALIGNMENT
-            from docx.oxml.ns import nsdecls
-            from docx.oxml import parse_xml
 
             doc = Document()
-
-            # 设置页边距
-            for section in doc.sections:
-                section.top_margin = Cm(2.54)
-                section.bottom_margin = Cm(2.54)
-                section.left_margin = Cm(2.54)
-                section.right_margin = Cm(2.54)
+            setup_page_margins(doc)
+            setup_document_styles(doc)
 
             title = doc.add_heading(f"{result.layer_name}报告", level=1)
-            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            fix_heading_fonts(title)
+            for run in title.runs:
+                run.bold = True
 
             doc.add_paragraph(f"项目: {self.config.session_id}")
             doc.add_paragraph(f"层级: Layer {result.layer} - {result.layer_name}")
@@ -650,24 +608,33 @@ class LayerExporter:
             doc.add_paragraph("")
 
             for dim in result.dimensions:
-                doc.add_heading(dim.dimension_name, level=2)
+                h2 = doc.add_heading(dim.dimension_name, level=2)
+                fix_heading_fonts(h2)
+                for run in h2.runs:
+                    run.bold = False
 
                 if dim.content:
                     self._add_content_with_tables(doc, dim.content)
 
                 if self.config.include_rag_details and dim.rag_sources:
-                    doc.add_heading("参考知识来源", level=3)
+                    h3 = doc.add_heading("参考知识来源", level=3)
+                    fix_heading_fonts(h3)
+                    for run in h3.runs:
+                        run.bold = True
                     for src in dim.rag_sources:
-                        doc.add_paragraph(
-                            f"[{src['label']}] {src['title']}",
-                            style='List Bullet',
-                        )
+                        p = doc.add_paragraph(f"[{src['label']}] {src['title']}")
+                        set_run_font(p.runs[0]) if p.runs else None
 
                 if self.config.include_summaries and dim.summary:
-                    doc.add_heading("结构化摘要", level=3)
-                    doc.add_paragraph(
+                    h3 = doc.add_heading("结构化摘要", level=3)
+                    fix_heading_fonts(h3)
+                    for run in h3.runs:
+                        run.bold = True
+                    p = doc.add_paragraph(
                         json.dumps(dim.summary, ensure_ascii=False, indent=2)
                     )
+                    if p.runs:
+                        set_run_font(p.runs[0], font_size=10.5)
 
             docx_path = out_dir / f"L{result.layer}_{result.layer_name}.docx"
             doc.save(str(docx_path))
@@ -725,10 +692,6 @@ class LayerExporter:
 
     def _add_markdown_table(self, doc, table_lines: List[str]) -> None:
         """Parse Markdown table and add to document."""
-        import re
-        from docx.shared import Pt
-        from docx.enum.table import WD_TABLE_ALIGNMENT
-
         # 过滤空行
         table_lines = [l for l in table_lines if l.strip()]
 
@@ -740,15 +703,11 @@ class LayerExporter:
         # 解析表格
         rows_data = []
         for line in table_lines:
-            # 跳过分隔行（如 | :--- | :--- | 或 | :— | :— |）
-            # 分隔行特征：包含 | 且只有 : - — 空格字符
+            # 跳过分隔行
             stripped = line.strip()
-            # 检查是否是分隔行：包含 :- 或 :— 模式
             if '|' in stripped and re.search(r':-+|:—+', stripped):
                 continue
-            # 解析单元格
             cells = [c.strip() for c in line.split('|')]
-            # 移除首尾空单元格（由边缘 | 产生）
             if cells and cells[0] == '':
                 cells = cells[1:]
             if cells and cells[-1] == '':
@@ -765,8 +724,6 @@ class LayerExporter:
 
         table = doc.add_table(rows=num_rows, cols=num_cols)
         table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-        # 设置表格样式
         table.style = 'Table Grid'
 
         # 填充数据
@@ -775,51 +732,53 @@ class LayerExporter:
             for j, cell_text in enumerate(row_data):
                 if j < num_cols:
                     cell = row.cells[j]
-                    cell.text = cell_text
-                    # 设置单元格字体
-                    for paragraph in cell.paragraphs:
-                        paragraph.paragraph_format.space_before = Pt(2)
-                        paragraph.paragraph_format.space_after = Pt(2)
-                        for run in paragraph.runs:
-                            run.font.size = Pt(10)
+                    cell.text = ''
+                    p = cell.paragraphs[0]
+                    run = p.add_run(cell_text)
+                    # 首行为表头：仿宋 11pt 加粗居中
+                    if i == 0:
+                        set_run_font(run, font_size=11, bold=True)
+                    else:
+                        set_run_font(run, font_size=10.5)
 
         # 添加空行分隔
         doc.add_paragraph("")
 
     def _add_formatted_paragraph(self, doc, text: str) -> None:
         """Add paragraph with basic formatting (bold, headers)."""
-        import re
-        from docx.shared import Pt, Cm
-
         # 检查是否是标题行
         if text.startswith('【') and text.endswith('】'):
-            # 小标题
+            # 小标题：仿宋 12pt 加粗
             para = doc.add_paragraph()
             run = para.add_run(text)
-            run.bold = True
-            run.font.size = Pt(11)
+            set_run_font(run, bold=True)
             para.paragraph_format.space_before = Pt(6)
             para.paragraph_format.space_after = Pt(3)
+            para.paragraph_format.first_line_indent = Pt(0)
         elif re.match(r'^#+\s+', text):
             # Markdown 标题，提取内容
             level_match = re.match(r'^#+', text)
             level = len(level_match.group()) if level_match else 2
             content = re.sub(r'^#+\s+', '', text)
             heading = doc.add_heading(content, level=min(level, 3))
+            fix_heading_fonts(heading)
+            # Heading 2 不加粗，Heading 1/3 加粗
+            for run in heading.runs:
+                run.bold = (level != 2)
         else:
             # 普通段落，处理加粗
             para = doc.add_paragraph()
-            para.paragraph_format.first_line_indent = Cm(0.74)
-            para.paragraph_format.line_spacing = 1.5
+            # Font/alignment/line spacing inherited from Normal style
 
             # 处理 **bold** 格式
             parts = re.split(r'\*\*(.+?)\*\*', text)
             for i, part in enumerate(parts):
                 if i % 2 == 1:  # 奇数索引是加粗内容
                     run = para.add_run(part)
-                    run.bold = True
+                    set_run_font(run, bold=True)
                 elif part:  # 非空普通文本
-                    para.add_run(part)
+                    run = para.add_run(part)
+                    set_run_font(run)
 
     def _get_dimension_names_and_order(self) -> Tuple[Dict[str, str], Dict[str, Tuple[int, int]]]:
         """Get dimension names and order from config."""
