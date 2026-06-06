@@ -65,9 +65,8 @@ export function useSSEConnection({
 
     if (events.length === 0) return;
 
-    // Critical event types that should never be merged/deferred
-    // NEW: Add RAG & Cascade events for immediate processing
-    // NEW: Add tool_started/tool_status for real-time display
+    // ⚠️ IMPORTANT: See SSEPublisher docstring for the full checklist when adding new SSE events.
+    // Critical event types that should never be merged/deferred by batch processing
     const criticalEventTypes = [
       'dimension_start',
       'dimension_complete',
@@ -80,8 +79,6 @@ export function useSSEConnection({
       'rag_result',
       'cascade_impact',
       'cascade_complete',
-      'dimension_reset',
-      'dimension_reset_complete',
       'state_sync',
       'layer_paused',
       'execution_resumed',

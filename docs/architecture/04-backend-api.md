@@ -33,7 +33,18 @@
 | `/api/sessions/{id}/layer/{layer}/reports` | GET | 层级报告批量获取 |
 | `/api/sessions/{id}/rag-config` | GET | 获取 RAG 配置 |
 | `/api/sessions/{id}/rag-config` | PATCH | 更新 RAG 配置 |
+| `/api/sessions/{id}/step-mode` | PATCH | 切换步进模式 |
 | `/api/sessions/{id}` | DELETE | 删除会话 |
+
+### 规划文本端点
+
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `/api/sessions/{id}/planning-text` | POST | 生成规划文本 |
+| `/api/sessions/{id}/planning-text` | GET | 获取最新规划文本 |
+| `/api/sessions/{id}/planning-text/versions` | GET | 版本列表 |
+| `/api/sessions/{id}/planning-text/versions/{version}` | GET | 获取指定版本 |
+| `/api/sessions/{id}/export` | POST | 导出文档（DOCX/JSON/MD） |
 
 ### 项目端点
 
@@ -45,10 +56,7 @@
 
 ### 导出端点
 
-| 端点 | 方法 | 功能 |
-|------|------|------|
-| `/api/planning/export` | POST | 导出法定规划文档 |
-| `/api/planning/export/{project_name}` | GET | 获取已导出的规划文档 |
+> 导出功能已整合到 Session 端点中，详见上方「规划文本端点」和 `/api/sessions/{id}/export`。
 
 ### 基础端点
 
@@ -318,21 +326,19 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
 @router.get("/api/sessions/{session_id}/reports/{dim_key}")
 async def get_dimension_report(session_id: str, dim_key: str, version: Optional[int] = None):
     """获取维度报告全文，支持历史版本查询（?version=N）"""
-    # 查历史版本：优先使用 DimensionRevision 表
+    # 查历史版本：通过 DimensionReport 的 version 字段
     if version is not None:
-        revisions = await get_dimension_revisions_async(
-            session_id=session_id, dimension_key=dim_key, limit=100
+        report = await report_store.get_report_by_version(
+            session_id=session_id, dimension_key=dim_key, version=version
         )
-        for rev in revisions:
-            if rev.get("version") == version:
-                return {
-                    "session_id": session_id,
-                    "dimension_key": dim_key,
-                    "layer": rev.get("layer"),
-                    "content": rev.get("content"),
-                    "version": version,
-                    "created_at": rev.get("created_at"),
-                }
+        if report:
+            return {
+                "session_id": session_id,
+                "dimension_key": dim_key,
+                "layer": report.get("layer"),
+                "content": report.get("content"),
+                "version": version,
+            }
         raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
 
     # 默认：从数据库获取最新版本
@@ -364,7 +370,7 @@ async def get_dimension_report(session_id: str, dim_key: str, version: Optional[
 @router.get("/api/sessions/{session_id}/reports/{dim_key}/versions")
 async def get_dimension_report_versions(session_id: str, dim_key: str):
     """列出指定维度所有历史版本摘要（不含完整内容）"""
-    revisions = await get_dimension_revisions_async(
+    revisions = await report_store.get_reports_by_dimension(
         session_id=session_id, dimension_key=dim_key
     )
     if not revisions:
@@ -418,7 +424,7 @@ async def get_project_dimension_report(
     if session_id:
         # 指定会话 + 可选版本
         if version is not None:
-            revisions = await get_dimension_revisions_async(...)
+            revisions = await report_store.get_reports_by_dimension(...)
             # ... 查找并返回指定版本
         # 指定会话 + 当前 checkpoint
         state = await PlanningRuntimeService.aget_state_values(session_id)
@@ -851,30 +857,22 @@ class SessionStatusResponse(BaseModel):
 
 ### 报告存储架构
 
-系统使用双表存储机制管理报告数据：
+系统使用 DimensionReport 表管理报告数据，支持版本历史：
 
 | 表名 | 用途 | 关键字段 |
 |------|------|----------|
-| `DimensionReport` | 存储最新报告内容 | `session_id`, `dimension_key`, `layer`, `content`, `version` |
-| `DimensionRevision` | 存储版本历史 | `session_id`, `dimension_key`, `layer`, `content`, `version`, `reason` |
-
-**关系说明**：
-
-- `DimensionReport`：主存储，通过 `ReportStore` 服务访问，存储每个维度的最新版本
-- `DimensionRevision`：版本历史，通过 `get_dimension_revisions_async` 访问，记录每次修订
+| `DimensionReport` | 存储报告内容（多版本） | `session_id`, `dimension_key`, `layer`, `content`, `version`, `report_id` |
 
 **查询流程**：
 
 ```python
-# 获取最新版本：ReportStore
+# 获取最新版本
 store = ReportStore.get_instance()
 content, layer, version = await store.get_latest_report(session_id, dim_key)
 
-# 获取历史版本：DimensionRevision
-revisions = await get_dimension_revisions_async(session_id, dim_key)
+# 获取历史版本（通过 version 字段过滤）
+reports = await store.get_layer_reports_with_sources(session_id, layer)
 ```
-
-**数据一致性**：报告生成时同时写入两表，确保版本追踪完整。
 
 ---
 

@@ -19,6 +19,10 @@ docs/architecture/
 ├── 08-rag-system.md              # RAG知识库架构
 ├── 09-database-schema.md         # 数据库Schema
 ├── 10-deployment-guide.md        # 配置与部署指南
+├── 10-frontend-components.md     # 前端组件架构
+├── 12-error-handling.md          # 错误处理
+├── 13-performance.md             # 性能优化
+├── 14-testing.md                 # 测试架构
 ├── terminology.md                # 术语表
 ├── file-index.md                 # 文件路径索引
 └── gis-system-architecture.md    # GIS系统架构
@@ -35,7 +39,7 @@ village-planner/
 │   │   ├── main.py              # FastAPI 入口
 │   │   ├── api/                 # API 路由层
 │   │   │   ├── routes.py        # 统一路由
-│   │   │   ├── session_routes.py # 7个核心端点
+│   │   │   ├── session_routes.py # API端点
 │   │   │   └── schemas.py       # 请求/响应模型
 │   │   ├── agent/               # LangGraph Agent
 │   │   │   ├── graph.py         # StateGraph 定义
@@ -91,8 +95,8 @@ village-planner/
 │               └── utils/       # 工具函数
 │
 ├── data/
-│   ├── knowledge_base/          # 知识库文档
-│   └── uploads/                 # 上传文件
+│   ├── RAG_doc/                  # 知识库文档与缓存
+│   └── database/                 # SQLite 数据库文件
 │
 ├── scripts/                     # 脚本工具
 ├── docs/                        # 文档
@@ -106,13 +110,16 @@ village-planner/
 | [01-system-overview](./01-system-overview.md) | 五层架构、技术栈 | `main.py`, `layout.tsx` |
 | [02-agent-core](./02-agent-core.md) | StateGraph、节点、路由 | `agent/graph.py`, `routing.py` |
 | [03-layer-dimension](./03-layer-dimension.md) | 28维度、依赖配置 | `config/phases.yaml` |
-| [04-backend-api](./04-backend-api.md) | 7端点API、SSE | `api/session_routes.py` |
+| [04-backend-api](./04-backend-api.md) | API端点、SSE | `api/session_routes.py` |
 | [05-frontend-state](./05-frontend-state.md) | Zustand、组件 | `store/planningStore.ts` |
 | [06-tool-system](./06-tool-system.md) | 工具注册、执行 | `tools/registry.py` |
-| [gis-system-architecture](./gis-system-architecture.md) | GIS系统 | `services/modules/gis/` |
 | [08-rag-system](./08-rag-system.md) | 知识检索 | `services/modules/rag/` |
 | [09-database-schema](./09-database-schema.md) | 数据模型 | `database/models.py` |
 | [10-deployment-guide](./10-deployment-guide.md) | 配置部署 | `.env`, `docker-compose.yml` |
+| [10-frontend-components](./10-frontend-components.md) | 前端组件 | `components/` |
+| [12-error-handling](./12-error-handling.md) | 错误处理 | - |
+| [13-performance](./13-performance.md) | 性能优化 | - |
+| [14-testing](./14-testing.md) | 测试架构 | - |
 
 ## 核心概念速查
 
@@ -132,10 +139,10 @@ village-planner/
 │    ↓ SSE EventSource                                 │
 ├─────────────────────────────────────────────────────┤
 │  后端层 (FastAPI + SSEManager)                       │
-│    ↓ 7个核心端点                                     │
+│    ↓ 22个API端点                                     │
 ├─────────────────────────────────────────────────────┤
 │  Agent层 (LangGraph StateGraph)                      │
-│    ↓ conversation → execute_tools → analyze_dimension│
+│    ↓ conversation → execute_tools → analyze_dimension → layer_completion_check │
 ├─────────────────────────────────────────────────────┤
 │  工具层 (ToolRegistry + Adapters)                    │
 │    ↓ GIS / RAG / Analysis                            │
@@ -144,7 +151,7 @@ village-planner/
 └─────────────────────────────────────────────────────┘
 ```
 
-### 7个核心API端点
+### 核心API端点
 
 | 端点 | 方法 | 功能 |
 |------|------|------|
@@ -155,6 +162,12 @@ village-planner/
 | `/api/sessions/{id}/checkpoints` | GET | 检查点列表 |
 | `/api/sessions/{id}/resume/{cp}` | POST | 恢复执行 |
 | `/api/sessions/{id}/reports/{dim}` | GET | 报告全文 |
+| `/api/sessions/{id}/step-mode` | PATCH | 切换步进模式 |
+| `/api/sessions/{id}/planning-text` | POST/GET | 生成/获取规划文本 |
+| `/api/sessions/{id}/planning-text/versions` | GET | 版本列表 |
+| `/api/sessions/{id}/export` | POST | 导出文档 |
+
+> 完整端点列表见 [04-backend-api.md](./04-backend-api.md)
 
 ### 关键设计原则
 

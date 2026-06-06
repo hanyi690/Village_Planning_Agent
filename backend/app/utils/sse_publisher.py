@@ -49,7 +49,16 @@ def _send_sse_event(session_id: str, event_data: Dict[str, Any]) -> None:
 
 
 class SSEPublisher:
-    """SSE 事件发布器"""
+    """SSE 事件发布器
+
+    ⚠️ Adding a new SSE event type requires updates in ALL of these places:
+      1. backend/app/core/events.py          - SSEEventType constant
+      2. backend/app/services/sse.py         - CACHE_CONFIG (if critical for reconnect)
+      3. frontend/src/.../api/planning-api.ts - eventTypes array (MUST, or event is silently dropped)
+      4. frontend/src/.../store/planningStore.ts - handleSSEEvent switch case
+      5. frontend/src/.../hooks/useSSE.ts    - criticalEventTypes (if it should skip batch delay)
+      6. frontend/src/.../api/types.ts        - PlanningSSEEventType union
+    """
 
     @staticmethod
     def send_event(session_id: str, event_type: str, **kwargs) -> None:

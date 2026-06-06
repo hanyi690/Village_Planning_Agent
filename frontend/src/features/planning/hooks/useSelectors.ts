@@ -288,38 +288,10 @@ export function useCascadeChain(): PlanningState['cascadeChain'] {
 }
 
 /**
- * Select dimension versions
- */
-export function useDimensionVersions(): PlanningState['dimensionVersions'] {
-  return usePlanningStore((state) => state.dimensionVersions);
-}
-
-/**
- * Select dimension version for specific key
- */
-export function useDimensionVersion(dimKey: string): number {
-  return usePlanningStore((state) => state.dimensionVersions[dimKey] || 0);
-}
-
-/**
  * Select streaming content for a dimension
  */
 export function useStreamingContent(dimKey: string): string | undefined {
   return usePlanningStore((state) => state.streamingContent[dimKey]);
-}
-
-/**
- * Select resetting dimensions
- */
-export function useResettingDimensions(): string[] {
-  return usePlanningStore((state) => state.resettingDimensions);
-}
-
-/**
- * Check if dimension is resetting
- */
-export function useIsDimensionResetting(dimKey: string): boolean {
-  return usePlanningStore((state) => state.resettingDimensions.includes(dimKey));
 }
 
 /**

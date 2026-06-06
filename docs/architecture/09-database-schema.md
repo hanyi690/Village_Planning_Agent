@@ -9,8 +9,10 @@
 
 - [表结构概览](#表结构概览)
 - [PlanningSession表](#planningsession表)
+- [UISession表](#uisession表)
 - [DimensionReport表](#dimensionreport表)
-- [DimensionRevision表](#dimensionrevision表)
+- [UploadedFile表](#uploadedfile表)
+- [PlanningTextDocument表](#planningtextdocument表)
 - [LangGraph Checkpoint表](#langgraph-checkpoint表)
 
 ---
@@ -20,8 +22,10 @@
 | 表名 | 职责 | 管理方式 |
 |------|------|----------|
 | planning_sessions | 规划会话业务元数据 | SQLModel |
+| ui_sessions | UI会话管理 | SQLModel |
 | dimension_reports | 维度报告内容存储 | SQLModel |
-| dimension_revisions | 维度版本历史 | SQLModel |
+| uploaded_files | 上传文件存储 | SQLModel |
+| planning_text_documents | 规划文本文档（版本化） | SQLModel |
 | checkpoints | LangGraph状态快照 | AsyncSqliteSaver |
 | checkpoint_blobs | 状态二进制数据 | LangGraph |
 
@@ -143,27 +147,65 @@ class DimensionReport(SQLModel, table=True):
 
 ---
 
-## DimensionRevision表
+## UISession表
 
 ### 表结构
 
 ```python
-class DimensionRevision(SQLModel, table=True):
-    """维度修订表（历史日志）"""
-    __tablename__ = "dimension_revisions"
+class UISession(SQLModel, table=True):
+    """UI 会话表"""
+    __tablename__ = "ui_sessions"
+
+    conversation_id: str = Field(primary_key=True)
+    status: str = Field(default="idle", index=True)
+    project_name: Optional[str] = None
+    task_id: Optional[str] = Field(index=True)  # Links to planning session
+
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+```
+
+### 字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| conversation_id | str | 主键，UI会话ID |
+| status | str | 会话状态（idle/active/completed） |
+| project_name | str | 项目名称 |
+| task_id | str | 关联的规划会话ID |
+
+---
+
+## UploadedFile表
+
+### 表结构
+
+```python
+class UploadedFile(SQLModel, table=True):
+    """上传文件存储表"""
+    __tablename__ = "uploaded_files"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    session_id: str = Field(foreign_key="ui_sessions.conversation_id", index=True)
-    layer: int = Field(index=True)
-    dimension_key: str = Field(index=True)
+    session_id: str = Field(foreign_key="planning_sessions.session_id", ondelete="CASCADE", index=True)
 
-    content: str = Field(sa_column=Text())
-    previous_content: Optional[str] = Field(default=None, sa_column=Text())
-    previous_content_hash: Optional[str] = None
+    # File classification
+    file_category: str = Field(index=True)  # "village_data", "task_description", "constraint"
+    file_type: str = Field(index=True)       # "document", "geojson", "shapefile", etc.
 
-    reason: Optional[str] = None
-    created_by: Optional[str] = None
-    version: int = Field(default=1, index=True)
+    # File metadata
+    filename: str = Field(max_length=255)
+    original_filename: str = Field(max_length=255)
+    file_size: int
+    content_type: str = Field(max_length=100)
+
+    # Parsed content
+    parsed_text: Optional[str] = Field(default=None, sa_column=Text())
+    gis_data: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
+    gis_data_type: Optional[str] = None  # "boundary", "water", "road", "residential", etc.
+
+    # Processing status
+    parse_status: str = Field(default="pending")  # "pending", "success", "failed"
+    parse_error: Optional[str] = None
 
     created_at: datetime = Field(default_factory=datetime.now)
 ```
@@ -173,13 +215,68 @@ class DimensionRevision(SQLModel, table=True):
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | int | 自增主键 |
-| session_id | str | 会话ID |
-| layer | int | 层级 |
-| dimension_key | str | 维度标识 |
-| content | Text | 当前版本内容 |
-| previous_content | Text | 前一版本内容 |
+| session_id | str | 会话ID（外键，级联删除） |
+| file_category | str | 文件分类 |
+| file_type | str | 文件类型 |
+| filename | str | 存储文件名 |
+| original_filename | str | 原始文件名 |
+| file_size | int | 文件大小（字节） |
+| content_type | str | MIME类型 |
+| parsed_text | Text | 解析后的文本内容 |
+| gis_data | JSON | GIS数据（GeoJSON格式） |
+| gis_data_type | str | GIS数据类型推断 |
+| parse_status | str | 解析状态 |
+
+---
+
+## PlanningTextDocument表
+
+### 表结构
+
+```python
+class PlanningTextDocument(SQLModel, table=True):
+    """规划文本文档表（版本化）"""
+    __tablename__ = "planning_text_documents"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: str = Field(foreign_key="planning_sessions.session_id", ondelete="CASCADE", index=True)
+
+    # Version management
+    version: int = Field(default=1, index=True)
+    document_id: str = Field(unique=True, index=True)  # UUID
+
+    # Content
+    markdown_content: str = Field(sa_column=Text())
+    json_content: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))
+
+    # Metadata
+    article_count: int = Field(default=0)
+    generated_at: datetime = Field(default_factory=datetime.now)
+    generation_duration_seconds: Optional[float] = None
+
+    # Status
+    status: str = Field(default="completed")  # pending, generating, completed, failed
+    error_message: Optional[str] = None
+
+    # Version metadata
+    trigger_reason: Optional[str] = None  # "initial", "dimension_change", "manual"
+    changed_dimensions: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))
+```
+
+### 字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | int | 自增主键 |
+| session_id | str | 会话ID（外键，级联删除） |
 | version | int | 版本号 |
-| reason | str | 修订原因 |
+| document_id | str | UUID（外部引用） |
+| markdown_content | Text | Markdown格式规划文本 |
+| json_content | JSON | JSON格式结构化内容 |
+| article_count | int | 文章条目数 |
+| status | str | 生成状态 |
+| trigger_reason | str | 生成触发原因 |
+| changed_dimensions | JSON | 变更的维度列表 |
 
 ---
 
@@ -222,6 +319,16 @@ Checkpoint 中存储的 AgentState 结构：
     "execution_paused": false,
     "pause_after_step": false,
     "previous_layer": 0,
+    # Cascade revision fields
+    "need_revision": false,
+    "is_revision": false,
+    "revision_impact_tree": {0: ["dim_a"], 1: ["dim_b", "dim_c"]},
+    "revision_completed_dims": ["dim_a"],
+    "revision_feedback": "...",
+    "last_revised_dimensions": ["dim_a"],
+    # Performance fields
+    "pending_reports": [],
+    "layer_char_counts": {},
     "messages": [...],
     "metadata": {...}
 }

@@ -58,10 +58,6 @@ frontend/src/features/planning/
 │   │   ├── MapView.tsx
 │   │   ├── LegendPanel.tsx
 │   │   └── index.ts
-│   ├── compare/            # 对比组件
-│   │   ├── ReportComparePanel.tsx
-│   │   ├── ReportCompareModal.tsx
-│   │   └── index.ts
 │   ├── settings/           # 设置组件
 │   │   ├── SettingsPanel.tsx
 │   │   └── index.ts
@@ -77,6 +73,8 @@ frontend/src/features/planning/
 │   ├── MessagePanel.tsx    # 消息面板
 │   ├── CascadePanel.tsx    # 级联修复面板
 │   ├── DimensionCard.tsx   # 维度状态卡片
+│   ├── PlanningTextViewer.tsx # 规划文本查看器
+│   ├── ExportDialog.tsx    # 导出对话框
 │   └── index.ts            # 组件导出
 ├── store/                  # Zustand 状态管理
 │   ├── planningStore.ts    # 主状态存储

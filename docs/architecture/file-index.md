@@ -19,6 +19,9 @@
 | `backend/app/agent/nodes/conversation.py` | conversation_node 中央路由节点 |
 | `backend/app/agent/nodes/tools.py` | execute_tools 节点 |
 | `backend/app/agent/nodes/analysis.py` | analyze_dimension 维度分析节点 |
+| `backend/app/agent/nodes/completion.py` | layer_completion_check 层级完成检测节点 |
+| `backend/app/agent/gis_context.py` | SharedGISContext 上下文管理 |
+| `backend/app/agent/message_builder.py` | 多模态消息构建（图片+文本） |
 
 ---
 
@@ -51,7 +54,7 @@
 | 文件 | 职责 |
 |------|------|
 | `backend/app/api/routes.py` | 统一路由入口 |
-| `backend/app/api/session_routes.py` | 7 个核心端点（sessions, stream, sync, feedback, checkpoints, resume, reports） |
+| `backend/app/api/session_routes.py` | 22个API端点（sessions, stream, sync, feedback, checkpoints, resume, reports, step-mode, export, planning-text等） |
 | `backend/app/api/schemas.py` | 请求/响应 Pydantic 模型 |
 
 ### 服务层
@@ -63,6 +66,7 @@
 | `backend/app/services/checkpoint.py` | Checkpoint 加载/保存 |
 | `backend/app/services/session.py` | 会话管理 |
 | `backend/app/services/report_store.py` | 报告存储与版本历史 |
+| `backend/app/services/review.py` | 审批服务（approve/reject/rollback） |
 
 ---
 
@@ -71,7 +75,7 @@
 | 文件 | 职责 |
 |------|------|
 | `backend/app/database/engine.py` | SQLite 异步引擎、WAL 模式、AsyncSqliteSaver |
-| `backend/app/database/models.py` | SQLModel 模型定义（PlanningSession, DimensionReport, DimensionRevision） |
+| `backend/app/database/models.py` | SQLModel 模型定义（PlanningSession, UISession, DimensionReport, UploadedFile, PlanningTextDocument） |
 | `backend/app/database/operations.py` | 异步数据库操作 |
 
 ---
@@ -84,6 +88,11 @@
 |------|------|
 | `backend/app/tools/registry.py` | ToolRegistry 工具注册中心、ToolMetadata、参数 Schema |
 | `backend/app/tools/constants.py` | 工具常量定义 |
+| `backend/app/tools/protocol.py` | 工具协议/基类定义 |
+| `backend/app/tools/types.py` | 工具类型系统 |
+| `backend/app/tools/tools.py` | 工具实现 |
+| `backend/app/tools/web_review_tool.py` | Web 搜索/审查工具 |
+| `backend/app/tools/core/gis_tool_wrappers.py` | GIS 工具包装函数 |
 
 ### 分析工具
 
@@ -140,6 +149,7 @@
 | 文件 | 职责 |
 |------|------|
 | `backend/app/services/modules/planning_text/generator.py` | 规划文本生成器 |
+| `backend/app/services/modules/planning_text/config.py` | 规划文本策略配置 |
 | `backend/app/services/modules/planning_text/layer_exporter.py` | 层级导出器 |
 | `backend/app/services/modules/planning_text/section_builder.py` | 章节构建器 |
 | `backend/app/services/modules/planning_text/content_extractor.py` | 内容提取器 |
@@ -221,6 +231,8 @@
 | `frontend/src/features/planning/components/chat/KnowledgeSliceCard.tsx` | 知识切片卡片 |
 | `frontend/src/features/planning/components/gis/MapView.tsx` | 地图渲染 |
 | `frontend/src/features/planning/components/settings/SettingsPanel.tsx` | 设置面板 |
+| `frontend/src/features/planning/components/PlanningTextViewer.tsx` | 规划文本查看器 |
+| `frontend/src/features/planning/components/ExportDialog.tsx` | 导出对话框 |
 
 ---
 
@@ -229,10 +241,9 @@
 | 目录 | 内容 |
 |------|------|
 | `data/RAG_doc/` | 知识库原始文件 |
-| `data/RAG_doc/_cache/chroma_db/` | ChromaDB 向量存储 |
+| `data/RAG_doc/_cache/chroma_db_new/` | ChromaDB 向量存储 |
 | `data/RAG_doc/_cache/outline_index/` | 层级索引缓存 |
 | `data/database/` | SQLite 数据库文件 |
-| `data/results/` | 规划结果输出 |
 
 ---
 

@@ -163,12 +163,8 @@ export interface PlanningState {
   dimensionRagSources: Record<string, DimensionRagSource>;
   /** Current cascade repair chain being displayed */
   cascadeChain: CascadeChain | null;
-  /** Version count per dimension (incremented on revision) */
-  dimensionVersions: Record<string, number>;
   /** Streaming text content per dimension (temporary) */
   streamingContent: Record<string, string>;
-  /** Dimensions currently being reset (cascade repair) */
-  resettingDimensions: string[];
   /** Simplified running tool names (replaces full toolStatuses) */
   runningTools: string[];
 
@@ -301,12 +297,10 @@ function createInitialState(conversationId: string): PlanningState {
     executingDimensions: [],
     layerDimensionCount: {},
     runningTools: [],
-    resettingDimensions: [],
 
     // NEW: RAG & Cascade Tracking
     dimensionRagSources: {},
     cascadeChain: null,
-    dimensionVersions: {},
     streamingContent: {},
 
     // UI State
@@ -394,11 +388,8 @@ export interface PlanningActions {
   clearAllRagSources: () => void;
   showCascadeChain: (trigger: string, impacted: string[]) => void;
   clearCascadeChain: () => void;
-  incrementDimensionVersion: (dimKey: string) => void;
   setStreamingContent: (dimKey: string, content: string) => void;
   clearStreamingContent: (dimKey: string) => void;
-  markDimensionResetting: (dimKey: string) => void;
-  finishDimensionResetting: (dimKey: string) => void;
 
   // ============================================
   // NEW: Simplified Tool Tracking
@@ -1328,47 +1319,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       break;
     }
     // ============================================
-    // NEW: Dimension Reset Events for Demo System
-    // ============================================
-    case 'dimension_reset': {
-      const resetData = data as {
-        dimension_key?: string;
-        layer?: number;
-      };
-      const dimKey = resetData.dimension_key || '';
-      if (dimKey) {
-        const fullKey = `${resetData.layer || 1}_${dimKey}`;
-        // Add to resetting dimensions list
-        if (!state.resettingDimensions.includes(fullKey)) {
-          state.resettingDimensions.push(fullKey);
-        }
-        // Increment version count
-        state.dimensionVersions[fullKey] = (state.dimensionVersions[fullKey] || 0) + 1;
-        // Mark dimension as streaming (re-analyzing) instead of completed
-        const progress = state.dimensionProgress[fullKey];
-        if (progress && progress.status === 'completed') {
-          progress.status = 'streaming' as DimensionStatus;
-          progress.isRevision = true;
-        }
-      }
-      break;
-    }
-    case 'dimension_reset_complete': {
-      const resetData = data as {
-        dimension_key?: string;
-        layer?: number;
-      };
-      const dimKey = resetData.dimension_key || '';
-      if (dimKey) {
-        const fullKey = `${resetData.layer || 1}_${dimKey}`;
-        // Remove from resetting dimensions list
-        state.resettingDimensions = state.resettingDimensions.filter((k) => k !== fullKey);
-        // Clear streaming content
-        delete state.streamingContent[fullKey];
-      }
-      break;
-    }
-    // ============================================
     // NEW: State Sync Event (for reconnect)
     // ============================================
     case 'state_sync': {
@@ -1736,14 +1686,6 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         state.cascadeChain = null;
       }),
 
-    // ============================================
-    // NEW: Dimension Version & Streaming Actions
-    // ============================================
-    incrementDimensionVersion: (dimKey) =>
-      set((state) => {
-        state.dimensionVersions[dimKey] = (state.dimensionVersions[dimKey] || 0) + 1;
-      }),
-
     setStreamingContent: (dimKey, content) =>
       set((state) => {
         state.streamingContent[dimKey] = content;
@@ -1751,19 +1693,6 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
 
     clearStreamingContent: (dimKey) =>
       set((state) => {
-        delete state.streamingContent[dimKey];
-      }),
-
-    markDimensionResetting: (dimKey) =>
-      set((state) => {
-        if (!state.resettingDimensions.includes(dimKey)) {
-          state.resettingDimensions.push(dimKey);
-        }
-      }),
-
-    finishDimensionResetting: (dimKey) =>
-      set((state) => {
-        state.resettingDimensions = state.resettingDimensions.filter((k) => k !== dimKey);
         delete state.streamingContent[dimKey];
       }),
 

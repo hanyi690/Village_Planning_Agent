@@ -65,9 +65,9 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         前端可视化层                                          │
 ├────────────────┬────────────────┬────────────────┬──────────────────────────┤
-│   MapView.tsx  │ DataUpload.tsx │DimensionSection│   LayerReportCard        │
-│   - 瓦片渲染   │   - 文件上传   │   - 地图组件   │    - 图层展示            │
-│- GeoJSON 图层  │   - 类型推断   │   - 交互控制   │    - 数据可视化          │
+│   MapView.tsx  │ LegendPanel.tsx│DimensionSection│   LayerReportCard        │
+│   - 瓦片渲染   │   - 图例面板   │   - 地图组件   │    - 图层展示            │
+│- GeoJSON 图层  │   - 图层控制   │   - 交互控制   │    - 数据可视化          │
 └────────────────┴────────────────┴────────────────┴──────────────────────────┘
 ```
 
@@ -151,7 +151,7 @@ GISDataManager.set_user_data() → 内存缓存存储
 `GISDataParser.infer_data_type()` 根据属性字段关键词推断数据类型：
 
 ```python
-# 关键词映射（与前端 DataUpload.tsx 保持同步）
+# 关键词映射（与后端 GISDataParser 保持同步）
 LAYER_TYPE_KEYWORDS = {
     'boundary': ['边界', '行政区划', '行政村', '村界', 'boundary', 'XZDM', 'XZMC'],
     'landuse': ['土地利用', '用地', '图斑', '地类', 'DLBM', 'DLMC', '耕地', '林地'],
@@ -497,7 +497,7 @@ GeoJSON (WGS84)
 ### 前端瓦片配置
 
 ```typescript
-// frontend/src/components/gis/MapView.tsx
+// frontend/src/features/planning/components/gis/MapView.tsx
 
 const TILE_SOURCES = {
   geoq: {
@@ -530,7 +530,7 @@ const TILE_SOURCES = {
 ### MapView 组件
 
 ```typescript
-// frontend/src/components/gis/MapView.tsx
+// frontend/src/features/planning/components/gis/MapView.tsx
 
 interface MapViewProps {
   layers: GISLayerConfig[];
@@ -548,14 +548,14 @@ interface GISLayerConfig {
 }
 ```
 
-### DataUpload 组件
+### VillageInputForm 文件上传
 
 ```typescript
-// frontend/src/components/gis/DataUpload.tsx
+// frontend/src/features/planning/components/VillageInputForm.tsx
 
 // 支持拖拽上传和点击上传
-// 自动推断数据类型（与后端 LAYER_TYPE_KEYWORDS 同步）
-// 上传成功后调用 GISDataManager 存储
+// 文件类型分类：village_data / task_description / constraint
+// 上传后通过 /api/sessions 端点提交，后端自动解析并推断GIS数据类型
 ```
 
 ---
@@ -617,11 +617,14 @@ def _extract_gis_data_for_sse(gis_tool_result: NormalizedToolResult) -> Optional
 | `/api/dev/gis/test/spatial-layout` | POST | 测试空间布局生成 |
 | `/api/dev/gis/test/boundary-fallback` | POST | 测试边界兜底机制 |
 
-### 诊断脚本
+### 诊断方法
 
 ```bash
-# 运行完整 GIS 链路诊断
-python scripts/debug_full_gis_chain.py
+# 通过 API 端点测试 GIS 数据链路
+# 1. 查看会话的 GIS 数据状态
+curl http://localhost:8000/api/sessions/{session_id}/reports/{dim_key}
+# 2. 检查 GIS 服务日志
+# 后端日志中搜索 "gis" 相关关键词
 ```
 
 ### 常见问题排查

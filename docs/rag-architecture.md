@@ -1,5 +1,8 @@
 # RAG 系统架构文档
 
+> **DEPRECATED**: 本文档已被 [docs/architecture/08-rag-system.md](./architecture/08-rag-system.md) 取代。
+> 本文件仅保留作历史参考，请勿使用。最新 RAG 架构文档包含完整的 Small-to-Big + 层级感知架构、LLM 大纲矫正、元数据追踪等内容。
+
 ## 概述
 
 Village Planning Agent 的 RAG（Retrieval-Augmented Generation）系统为规划代理提供专业知识检索能力，支持法规标准引用、技术指标查询、案例参考等功能。

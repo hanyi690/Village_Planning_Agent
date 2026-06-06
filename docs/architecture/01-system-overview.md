@@ -34,7 +34,7 @@ Village Planning Agent 是一个基于 LangGraph 的智能村庄规划助手系�
 | 状态管理 | Zustand + Immer | 4.x |
 | 后端框架 | FastAPI | 0.100+ |
 | Agent框架 | LangGraph | 0.2+ |
-| LLM | Claude/Qwen | - |
+| LLM | DeepSeek / OpenAI / ZhipuAI (GLM) | - |
 | 向量数据库 | ChromaDB | - |
 | 关系数据库 | SQLite (WAL) | - |
 | GIS库 | GeoPandas, OSMnx | - |
@@ -56,14 +56,14 @@ Village Planning Agent 是一个基于 LangGraph 的智能村庄规划助手系�
 │                        后端层 (Backend Layer)                     │
 │  FastAPI + SSEManager + PlanningRuntimeService                  │
 │  文件: backend/app/api/, backend/app/services/                   │
-│  端点: 7个核心API                                                  │
+│  端点: 22个API端点                                                  │
 └─────────────────────────────────────────────────────────────────┘
                               ↓ LangGraph API
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Agent层 (Agent Layer)                      │
 │  Router Agent + StateGraph + Send API                           │
 │  文件: backend/app/agent/                                        │
-│  节点: conversation → execute_tools → analyze_dimension          │
+│  节点: conversation → execute_tools → analyze_dimension → layer_completion_check │
 └─────────────────────────────────────────────────────────────────┘
                               ↓ ToolRegistry
 ┌─────────────────────────────────────────────────────────────────┐
@@ -76,7 +76,7 @@ Village Planning Agent 是一个基于 LangGraph 的智能村庄规划助手系�
 │                        数据层 (Data Layer)                        │
 │  SQLite + ChromaDB + File Storage + GIS Data                    │
 │  文件: backend/app/database/, data/                              │
-│  模型: PlanningSession, DimensionReport                          │
+│  模型: PlanningSession, DimensionReport, PlanningTextDocument, UploadedFile │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -192,7 +192,7 @@ Layer 3 (详细规划)
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/agent/graph.py` | StateGraph 定义（3节点） |
+| `backend/app/agent/graph.py` | StateGraph 定义（4节点） |
 | `backend/app/agent/state.py` | AgentState 定义 |
 | `backend/app/agent/routing.py` | after_conversation, after_analysis |
 | `backend/app/config/phases.yaml` | 28维度配置（唯一来源） |
@@ -201,7 +201,7 @@ Layer 3 (详细规划)
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/api/session_routes.py` | 7个核心 Session 端点 |
+| `backend/app/api/session_routes.py` | 22个API端点 |
 | `backend/app/api/routes.py` | 路由聚合 + 健康检查 |
 | `backend/app/services/sse.py` | SSE 推送管理 |
 | `backend/app/services/runtime.py` | 规划运行时服务 |

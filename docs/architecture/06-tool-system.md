@@ -262,8 +262,14 @@ Agent 在推理过程中可通过 function calling 自行调用 ToolRegistry 中
 | 文件 | 职责 |
 |------|------|
 | `backend/app/tools/registry.py` | ToolRegistry 类、ToolMetadata、参数 Schema、元数据定义 |
+| `backend/app/tools/protocol.py` | 工具协议与基类定义 |
+| `backend/app/tools/types.py` | 工具类型系统（ToolInput, ToolOutput等） |
+| `backend/app/tools/tools.py` | 工具实现与注册辅助函数 |
+| `backend/app/tools/constants.py` | 工具常量定义 |
+| `backend/app/tools/web_review_tool.py` | Web 搜索/审查工具 |
 | `backend/app/tools/analytics/knowledge_search.py` | 知识检索工具函数（7 个工具 + ToolRegistry 包装器） |
 | `backend/app/tools/analytics/population.py` | 人口预测模型实现 |
+| `backend/app/tools/core/gis_tool_wrappers.py` | GIS 工具包装函数 |
 | `backend/app/agent/nodes/analysis.py` | 维度分析节点（调用 GIS 工具 + RAG） |
 | `backend/app/services/modules/gis/service.py` | GIS 工具并行执行（GisService.run_parallel） |
 | `backend/app/services/modules/rag/service.py` | RAG 检索服务（RagService.get_context） |

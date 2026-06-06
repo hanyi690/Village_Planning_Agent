@@ -11,7 +11,7 @@
 - [布局组件](#布局组件)
 - [聊天组件](#聊天组件)
 - [GIS 组件](#gis-组件)
-- [对比组件](#对比组件)
+- [导出与文档组件](#导出与文档组件)
 - [设置组件](#设置组件)
 - [UI 通用组件](#ui-通用组件)
 - [状态管理层](#状态管理层)
@@ -57,10 +57,6 @@ frontend/src/features/planning/
 │   │   ├── MapView.tsx
 │   │   ├── LegendPanel.tsx
 │   │   └── index.ts
-│   ├── compare/            # 对比组件
-│   │   ├── ReportComparePanel.tsx
-│   │   ├── ReportCompareModal.tsx
-│   │   └── index.ts
 │   ├── settings/           # 设置组件
 │   │   ├── SettingsPanel.tsx
 │   │   └── index.ts
@@ -76,6 +72,8 @@ frontend/src/features/planning/
 │   ├── MessagePanel.tsx    # 消息面板
 │   ├── CascadePanel.tsx    # 级联修复面板
 │   ├── DimensionCard.tsx   # 维度状态卡片
+│   ├── PlanningTextViewer.tsx # 规划文本查看器
+│   ├── ExportDialog.tsx    # 导出对话框
 │   └── index.ts            # 组件导出
 ├── store/                  # Zustand 状态管理
 │   ├── planningStore.ts    # 主状态存储
@@ -336,16 +334,25 @@ switch (message.type) {
 
 ---
 
-## 对比组件
+## 导出与文档组件
 
-### `ReportCompareModal.tsx`
+### `PlanningTextViewer.tsx`
 
-**功能**: 模态框对比组件
+**功能**: 规划文本文档查看器
 
 **特性**:
-- 全屏模态框
-- 会话选择器
-- 双栏对比显示
+- 版本切换（历史版本列表）
+- DOCX/JSON 导出
+- 重新生成触发
+- Markdown 内容渲染
+
+### `ExportDialog.tsx`
+
+**功能**: 双模式导出对话框
+
+**两种导出模式**:
+- **层级报告导出**: 导出各维度报告（JSON/MD/DOCX）
+- **规划文本导出**: 导出完整规划文档（DOCX）
 
 ---
 
@@ -401,9 +408,10 @@ switch (message.type) {
 
 ## 状态管理层
 
-### `usePlanningStore.ts`
+### `planningStore.ts`
 
 **技术**: Zustand + Immer 中间件
+**导出**: `usePlanningStore` hook
 
 **状态切片**:
 

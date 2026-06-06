@@ -146,6 +146,9 @@ export type PlanningSSEEventType =
   // GIS & RAG Events
   | 'gis_result'
   | 'rag_result'
+  // Cascade Events
+  | 'cascade_impact'
+  | 'cascade_complete'
   // Settings Events
   | 'rag_config_updated'
   | 'step_mode_updated';
@@ -158,8 +161,6 @@ export type DeprecatedSSEEventType =
   // Dimension Events (未实现)
   | 'dimension_error'
   | 'dimension_revised'
-  | 'dimension_reset'
-  | 'dimension_reset_complete'
   // Progress Events (未实现)
   | 'progress'
   // Streaming Events (未实现)
@@ -173,8 +174,6 @@ export type DeprecatedSSEEventType =
   | 'review_request'
   // RAG & Cascade Events (未实现)
   | 'rag_query'
-  | 'cascade_impact'
-  | 'cascade_complete'
   // State Events (未实现)
   | 'state_sync'
   // Legacy (未实现)

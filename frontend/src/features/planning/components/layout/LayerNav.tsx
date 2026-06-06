@@ -82,6 +82,21 @@ export default function LayerNav() {
       }
     }
 
+    // Sort by YAML-defined order from DIMENSIONS_BY_LAYER
+    for (const layer of [1, 2, 3] as const) {
+      const order = DIMENSIONS_BY_LAYER[layer] || [];
+      result[layer].sort((a, b) => {
+        const aDimKey = a.key.substring(String(layer).length + 1);
+        const bDimKey = b.key.substring(String(layer).length + 1);
+        const aIdx = order.indexOf(aDimKey);
+        const bIdx = order.indexOf(bDimKey);
+        if (aIdx === -1 && bIdx === -1) return 0;
+        if (aIdx === -1) return 1;
+        if (bIdx === -1) return -1;
+        return aIdx - bIdx;
+      });
+    }
+
     return result;
   }, [dimensionProgress, reports]);
 

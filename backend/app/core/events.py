@@ -27,6 +27,10 @@ class SSEEventType(str):
     DIMENSION_COMPLETE = "dimension_complete"
     DIMENSION_DELTA = "dimension_delta"
 
+    # Cascade events
+    CASCADE_IMPACT = "cascade_impact"
+    CASCADE_COMPLETE = "cascade_complete"
+
     # AI response events
     AI_RESPONSE_DELTA = "ai_response_delta"
     AI_RESPONSE_COMPLETE = "ai_response_complete"

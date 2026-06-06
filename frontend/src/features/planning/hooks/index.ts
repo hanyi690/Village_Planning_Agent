@@ -47,11 +47,7 @@ export {
   useDimensionRagSources,
   useAllRagSources,
   useCascadeChain,
-  useDimensionVersions,
-  useDimensionVersion,
   useStreamingContent,
-  useResettingDimensions,
-  useIsDimensionResetting,
   useRunningTools,
   useIsToolRunning,
 } from './useSelectors';

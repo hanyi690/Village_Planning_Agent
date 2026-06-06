@@ -39,7 +39,6 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
         _phase_to_layer, get_layer_dimensions, get_next_phase,
         get_layer_name,
     )
-    from app.config.loader import get_dimension_layer as _get_dim_layer
     from app.utils.sse_publisher import SSEPublisher
     from app.services.report_store import ReportStore
 
@@ -83,16 +82,8 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
                 "[layer_completion_check] Revision complete: %d dimensions",
                 len(all_dims),
             )
-            # Emit SSE events to clear frontend revision indicators
             session_id = state.get("session_id", "")
-            for dim_key in all_dims:
-                dim_layer = _get_dim_layer(dim_key) or 1
-                SSEPublisher.send_event(
-                    session_id=session_id,
-                    event_type="dimension_reset_complete",
-                    dimension_key=dim_key,
-                    layer=dim_layer,
-                )
+            # removed dimension_reset_complete (covered by dimension_complete)
             SSEPublisher.send_event(
                 session_id=session_id,
                 event_type="cascade_complete",

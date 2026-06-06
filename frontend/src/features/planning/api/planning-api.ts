@@ -168,6 +168,14 @@ export const planningApi = {
       }
     }
 
+    // ⚠️ IMPORTANT: Every SSE event type MUST be listed here, otherwise the
+    // frontend will silently drop it (EventSource only fires for registered types).
+    // When adding a new SSE event:
+    //   1. Add the type constant in backend/app/core/events.py
+    //   2. Add cache config in backend/app/services/sse.py CACHE_CONFIG (if critical)
+    //   3. Add the handler in planningStore.ts handleSSEEvent switch
+    //   4. Add to useSSE.ts criticalEventTypes (if it should skip batch delay)
+    //   5. Add the type string HERE
     const eventTypes: PlanningSSEEventType[] = [
       // Connection Events
       'connected',
@@ -201,6 +209,9 @@ export const planningApi = {
       // GIS & RAG Events
       'rag_result',
       'gis_result',
+      // Cascade Events
+      'cascade_impact',
+      'cascade_complete',
       // Settings Events
       'rag_config_updated',
       'step_mode_updated',

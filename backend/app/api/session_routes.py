@@ -44,6 +44,7 @@ from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service
 from app.agent.state import get_layer_dimensions, get_layer_name, state_to_ui_status, get_next_phase, _phase_to_layer
 from app.utils.sse_publisher import SSEPublisher
+from app.core.events import SSEEventType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -485,23 +486,12 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
 
         # Emit SSE events for immediate visual feedback
         try:
-            from app.config import get_dimension_layer as _get_dim_layer
-
             all_impacted = set(d for dims in final_tree.values() for d in dims)
-
-            for dim_key in all_impacted:
-                dim_layer = _get_dim_layer(dim_key) or 1
-                SSEPublisher.send_event(
-                    session_id=session_id,
-                    event_type="dimension_reset",
-                    dimension_key=dim_key,
-                    layer=dim_layer,
-                )
 
             for target_dim in request.dimensions:
                 SSEPublisher.send_event(
                     session_id=session_id,
-                    event_type="cascade_impact",
+                    event_type=SSEEventType.CASCADE_IMPACT,
                     trigger_dim=target_dim,
                     impacted_dimensions=list(all_impacted),
                 )

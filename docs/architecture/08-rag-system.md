@@ -56,7 +56,6 @@ backend/app/services/modules/rag/
 ├── chunker.py               # 层级切片器（LLM 矫正 + LangChain 切片）
 ├── vector_store.py          # 层级向量存储（Small-to-Big + 树形索引）
 ├── context.py               # 文档上下文管理器
-├── knowledge_manager.py     # 异步任务管理
 └── utils/
     ├── document_loader.py   # 文档加载器（重导出）
     └── metadata_extractor.py # 元数据提取器
@@ -76,7 +75,7 @@ data/RAG_doc/
 └── _cache/                  # 缓存目录（统一管理）
     ├── outline_index/       # 层级索引缓存（JSON）
     │   └── *_index.json     # 每个文档一个索引
-    ├── chroma_db/           # ChromaDB 向量数据库
+    ├── chroma_db_new/       # ChromaDB 向量数据库
     │   ├── chroma.sqlite3
     │   └── d13d545a-.../
     └── hierarchy_chunks_cache.json  # 父块缓存
@@ -604,20 +603,11 @@ def retrieve(self, query, k=5, doc_types=None, ...):
 ### 5.1 命令行导入
 
 ```bash
-# 预览文件列表（不导入）
-python scripts/import_rag_documents.py --dry-run
+# 打包向量数据库
+python scripts/package_vector_db.py
 
-# 导入所有文档
-python scripts/import_rag_documents.py
-
-# 限制导入数量
-python scripts/import_rag_documents.py --limit 10
-
-# 指定导入目录
-python scripts/import_rag_documents.py --dir data/RAG_doc/04_技术规范
-
-# 不使用 LLM Flash 推断类型
-python scripts/import_rag_documents.py --no-llm
+# 或通过 API 端点触发导入
+# POST /api/sessions/{id}/planning-text
 ```
 
 ### 5.2 API 使用
@@ -716,7 +706,7 @@ QUERY_CACHE_TTL=3600            # 秒
 | RAG 服务 | `service.py` | `RagService`, `generate_queries()` |
 | 元数据提取 | `utils/metadata_extractor.py` | `MetadataExtractor` |
 | 文档加载 | `app/utils/document_loader.py` | `_create_loader()`, `MarkItDownLoader` |
-| 导入脚本 | `scripts/import_rag_documents.py` | `import_document()` |
+| 导入脚本 | `scripts/package_vector_db.py` | 向量数据库打包/导入 |
 
 ---
 
