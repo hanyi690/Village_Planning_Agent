@@ -41,6 +41,11 @@ class ExtractedData:
     ecological_land_ha: float = 0.0
     forest_coverage_pct: float = 0.0
 
+    # 来源追踪（记录每个数值字段的来源维度，避免静默覆盖）
+    _field_sources: Dict[str, str] = field(default_factory=dict, repr=False)
+    # 限定键名存储（保留所有来源的值，key 格式: "dimension.field"）
+    _qualified_metrics: Dict[str, float] = field(default_factory=dict, repr=False)
+
     # L3 结构化数据（表格只从这里复制）
     layer3_sections: Dict[str, Dict[str, str]] = field(default_factory=dict)
     layer3_tables: Dict[str, List[Dict]] = field(default_factory=dict)
@@ -359,33 +364,66 @@ def _inject_from_summaries(data: ExtractedData, summaries: Dict[str, Dict[str, A
     """从维度摘要注入数值字段（用于 llm_styler）。
 
     注意：表格数据不从摘要注入，只从 L3 报告直接复制。
+
+    使用限定键名存储所有来源的值，避免静默覆盖。
+    同时记录 _field_sources 追踪简单字段的来源维度。
     """
     # 社会经济
     socio_m = summaries.get("socio_economic", {}).get("metrics", {})
     if socio_m.get("registered_population"):
         data.population_registered = int(socio_m["registered_population"])
+        data._field_sources["population_registered"] = "socio_economic"
     if socio_m.get("resident_population"):
         data.population_resident = int(socio_m["resident_population"])
+        data._field_sources["population_resident"] = "socio_economic"
     if socio_m.get("households"):
         data.population_household = int(socio_m["households"])
+        data._field_sources["population_household"] = "socio_economic"
 
-    # 土地利用
+    # 土地利用（使用语义限定字段名 current_）
     land_m = summaries.get("land_use", {}).get("metrics", {})
     if land_m.get("total_area_ha"):
         data.total_area_ha = float(land_m["total_area_ha"])
-    if land_m.get("farmland_area_ha"):
-        data.farmland_ha = float(land_m["farmland_area_ha"])
-    if land_m.get("construction_area_ha"):
-        data.construction_land_ha = float(land_m["construction_area_ha"])
+        data._field_sources["total_area_ha"] = "land_use"
+        data._qualified_metrics["land_use.total_area_ha"] = float(land_m["total_area_ha"])
+
+    # 兼容旧字段名 farmland_area_ha 和新字段名 current_farmland_ha
+    farmland_val = land_m.get("current_farmland_ha") or land_m.get("farmland_area_ha")
+    if farmland_val:
+        data.farmland_ha = float(farmland_val)
+        data._field_sources["farmland_ha"] = "land_use"
+        data._qualified_metrics["land_use.current_farmland_ha"] = float(farmland_val)
+
+    # 兼容旧字段名 construction_area_ha 和新字段名 current_construction_ha
+    construction_val = land_m.get("current_construction_ha") or land_m.get("construction_area_ha")
+    if construction_val:
+        data.construction_land_ha = float(construction_val)
+        data._field_sources["construction_land_ha"] = "land_use"
+        data._qualified_metrics["land_use.current_construction_ha"] = float(construction_val)
+
     if land_m.get("ecological_area_ha"):
         data.ecological_land_ha = float(land_m["ecological_area_ha"])
-    if land_m.get("forest_coverage_rate"):
-        data.forest_coverage_pct = float(land_m["forest_coverage_rate"])
+        data._field_sources["ecological_land_ha"] = "land_use"
+        data._qualified_metrics["land_use.ecological_area_ha"] = float(land_m["ecological_area_ha"])
 
-    # 自然环境（补充森林覆盖率）
+    if land_m.get("forest_coverage_rate"):
+        rate = float(land_m["forest_coverage_rate"])
+        data._qualified_metrics["land_use.forest_coverage_rate"] = rate
+        # 只在未被其他来源设置时写入简单字段
+        if "forest_coverage_pct" not in data._field_sources:
+            data.forest_coverage_pct = rate
+            data._field_sources["forest_coverage_pct"] = "land_use"
+
+    # 自然环境（不再静默覆盖，保留所有来源）
     nat_m = summaries.get("natural_environment", {}).get("metrics", {})
     if nat_m.get("forest_coverage_rate"):
-        data.forest_coverage_pct = float(nat_m["forest_coverage_rate"])
+        rate = float(nat_m["forest_coverage_rate"])
+        data._qualified_metrics["natural_environment.forest_coverage_rate"] = rate
+        # 如果 land_use 已设置且值不同，保留 land_use 作为主来源
+        # 自然环境的值仅存在限定键名中，冲突检测器会比较
+        if "forest_coverage_pct" not in data._field_sources:
+            data.forest_coverage_pct = rate
+            data._field_sources["forest_coverage_pct"] = "natural_environment"
 
     # 村庄数量
     if data.village_names:

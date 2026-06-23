@@ -258,8 +258,8 @@ def format_facility_location_prompt(
 # Zone Type Colors - Import from planning_schema
 # ==========================================
 
-# Avoid duplicate definition - import from planning_schema
-from ..tools.core.planning_schema import (
+# Avoid duplicate definition - import from layout colors
+from ..gis.layout.colors import (
     ZONE_TYPE_COLORS as ZONE_TYPE_COLORS,
     FACILITY_STATUS_COLORS as FACILITY_STATUS_COLORS,
 )

@@ -7,9 +7,11 @@ Each dimension has a Pydantic model with:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Type
+from typing import Annotated, Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field
+
+from .semantics import SemanticField, ValueSemantics
 
 
 class BaseDimensionSummary(BaseModel):
@@ -52,9 +54,21 @@ class VillagerWishesSummary(BaseDimensionSummary):
 
 class SuperiorPlanningSummary(BaseDimensionSummary):
     planning_positioning_type: Optional[str] = Field(default=None, description="规划定位类型")
-    ecological_redline_ha: Optional[float] = Field(default=None, description="生态红线面积(ha)")
-    farmland_protection_ha: Optional[float] = Field(default=None, description="耕地保护面积(ha)")
-    urban_boundary_ha: Optional[float] = Field(default=None, description="城镇开发边界面积(ha)")
+    min_ecological_redline_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.CONSTRAINT_LOWER, "ha", "上位规划", True),
+        Field(default=None, description="生态红线面积(ha) [约束下限值]")
+    ]
+    min_farmland_protection_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.CONSTRAINT_LOWER, "ha", "上位规划", True),
+        Field(default=None, description="耕地保护面积(ha) [约束下限值]")
+    ]
+    max_construction_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.CONSTRAINT_UPPER, "ha", "上位规划", True),
+        Field(default=None, description="城镇开发边界面积(ha) [约束上限值]")
+    ]
 
 class NaturalEnvironmentSummary(BaseDimensionSummary):
     climate_type: Optional[str] = Field(default=None, description="气候类型")
@@ -68,12 +82,24 @@ class NaturalEnvironmentSummary(BaseDimensionSummary):
 
 class LandUseSummary(BaseDimensionSummary):
     total_area_ha: Optional[float] = Field(default=None, description="总用地面积(ha)")
-    farmland_area_ha: Optional[float] = Field(default=None, description="耕地面积(ha)")
-    construction_area_ha: Optional[float] = Field(default=None, description="建设用地面积(ha)")
+    current_farmland_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.CURRENT_OBSERVED, "ha", "三调", True),
+        Field(default=None, description="现状耕地面积(ha) [现状观测值]")
+    ]
+    current_construction_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.CURRENT_OBSERVED, "ha", "三调", True),
+        Field(default=None, description="现状建设用地面积(ha) [现状观测值]")
+    ]
     ecological_area_ha: Optional[float] = Field(default=None, description="生态用地面积(ha)")
     water_area_ha: Optional[float] = Field(default=None, description="水域面积(ha)")
     per_capita_farmland_mu: Optional[float] = Field(default=None, description="人均耕地(亩)")
-    forest_coverage_rate: Optional[float] = Field(default=None, description="森林覆盖率(%)")
+    forest_coverage_rate: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.CURRENT_OBSERVED, "%", "调查数据", True),
+        Field(default=None, description="森林覆盖率(%) [现状观测值]")
+    ]
 
 class TrafficSummary(BaseDimensionSummary):
     external_road_level: Optional[str] = Field(default=None, description="对外连接道路等级")
@@ -128,40 +154,104 @@ class PlanningStrategiesSummary(BaseDimensionSummary):
 # ---- Layer 3: Detailed planning (12) ----
 
 class IndustrySummary(BaseDimensionSummary):
-    pass
+    primary_industry_type: Optional[str] = Field(default=None, description="主导产业类型")
+    industry_area_ha: Optional[float] = Field(default=None, description="产业用地面积(ha)")
+    planned_industry_area_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.PLANNED_TARGET, "ha", "规划编制", True),
+        Field(default=None, description="规划产业用地面积(ha) [规划目标值]")
+    ]
+    layout_direction: Optional[str] = Field(default=None, description="产业布局方向")
+    zone_count: Optional[int] = Field(default=None, description="产业分区数量")
 
 class SpatialStructureSummary(BaseDimensionSummary):
-    pass
+    structure_pattern: Optional[str] = Field(default=None, description="空间结构模式(如一核一带三区)")
+    core_count: Optional[int] = Field(default=None, description="核心数量")
+    axis_count: Optional[int] = Field(default=None, description="发展轴数量")
+    zone_names: List[str] = Field(default_factory=list, description="分区名称列表")
+    zone_directions: Dict[str, str] = Field(default_factory=dict, description="分区方向映射")
 
 class LandUsePlanningSummary(BaseDimensionSummary):
-    pass
+    current_construction_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.CURRENT_OBSERVED, "ha", "三调", True),
+        Field(default=None, description="现状建设用地面积(ha) [现状观测值]")
+    ]
+    planned_construction_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.PLANNED_TARGET, "ha", "规划编制", True),
+        Field(default=None, description="规划建设用地面积(ha) [规划目标值]")
+    ]
+    planned_farmland_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.PLANNED_TARGET, "ha", "规划编制", True),
+        Field(default=None, description="规划耕地面积(ha) [规划目标值]")
+    ]
+    planned_ecological_ha: Optional[float] = Field(default=None, description="规划生态用地面积(ha)")
+    planned_residential_ha: Optional[float] = Field(default=None, description="规划居住用地面积(ha)")
+    planned_industry_ha: Optional[float] = Field(default=None, description="规划产业用地面积(ha)")
+    planned_public_service_ha: Optional[float] = Field(default=None, description="规划公共服务用地面积(ha)")
+    planned_traffic_ha: Optional[float] = Field(default=None, description="规划交通用地面积(ha)")
 
 class SettlementPlanningSummary(BaseDimensionSummary):
-    pass
+    current_construction_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.CURRENT_OBSERVED, "ha", "规划编制", True),
+        Field(default=None, description="现状建设用地面积(ha) [现状观测值]")
+    ]
+    planned_construction_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.PLANNED_TARGET, "ha", "规划编制", True),
+        Field(default=None, description="规划建设用地面积(ha) [规划目标值]")
+    ]
+    per_capita_construction_sqm: Optional[float] = Field(default=None, description="人均建设用地(m2/人)")
+    planned_population: Annotated[
+        Optional[int],
+        SemanticField(ValueSemantics.PLANNED_TARGET, "人", "规划编制", True),
+        Field(default=None, description="规划人口(人) [规划目标值]")
+    ]
+    residential_area_ha: Optional[float] = Field(default=None, description="居住用地面积(ha)")
+    expansion_direction: Optional[str] = Field(default=None, description="村庄扩展方向")
 
 class TrafficPlanningSummary(BaseDimensionSummary):
-    pass
+    planned_road_length_km: Optional[float] = Field(default=None, description="规划道路总长度(km)")
+    planned_road_count: Optional[int] = Field(default=None, description="规划道路数量(条)")
+    main_road_names: List[str] = Field(default_factory=list, description="主要道路名称")
 
 class PublicServicePlanningSummary(BaseDimensionSummary):
-    pass
+    planned_facility_count: Optional[int] = Field(default=None, description="规划设施数量(个)")
+    planned_facility_types: List[str] = Field(default_factory=list, description="规划设施类型列表")
 
 class InfrastructurePlanningSummary(BaseDimensionSummary):
-    pass
+    planned_water_supply_type: Optional[str] = Field(default=None, description="规划供水方式")
+    planned_power_capacity_kva: Optional[float] = Field(default=None, description="规划变压器容量(kVA)")
 
 class EcologicalPlanningSummary(BaseDimensionSummary):
-    pass
+    planned_ecological_area_ha: Optional[float] = Field(default=None, description="规划生态用地面积(ha)")
+    min_ecological_redline_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.CONSTRAINT_LOWER, "ha", "上位规划", True),
+        Field(default=None, description="生态保护红线面积(ha) [约束下限值]")
+    ]
+    protection_zone_names: List[str] = Field(default_factory=list, description="保护区名称列表")
 
 class DisasterPreventionSummary(BaseDimensionSummary):
-    pass
+    hazard_points_count: Optional[int] = Field(default=None, description="地质灾害隐患点数量(处)")
+    hazard_buffer_zone_ha: Optional[float] = Field(default=None, description="地质灾害缓冲区面积(ha)")
+    evacuation_routes: List[str] = Field(default_factory=list, description="疏散路线列表")
 
 class HeritagePlanningSummary(BaseDimensionSummary):
-    pass
+    protection_zone_ha: Optional[float] = Field(default=None, description="文物保护用地面积(ha)")
+    heritage_items: List[str] = Field(default_factory=list, description="文物保护项目列表")
 
 class LandscapeSummary(BaseDimensionSummary):
-    pass
+    landscape_area_ha: Optional[float] = Field(default=None, description="景观绿地面积(ha)")
+    landscape_nodes: List[str] = Field(default_factory=list, description="景观节点列表")
 
 class ProjectBankSummary(BaseDimensionSummary):
-    pass
+    total_projects: Optional[int] = Field(default=None, description="项目总数(个)")
+    total_investment_wan_yuan: Optional[float] = Field(default=None, description="总投资(万元)")
+    short_term_projects: Optional[int] = Field(default=None, description="近期项目数(个)")
 
 
 # ---- Registry ----
@@ -245,9 +335,9 @@ METRICS_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
     },
     "superior_planning": {
         "planning_positioning_type": "规划定位类型",
-        "ecological_redline_ha": "生态红线面积(ha)",
-        "farmland_protection_ha": "耕地保护面积(ha)",
-        "urban_boundary_ha": "城镇开发边界面积(ha)",
+        "min_ecological_redline_ha": "生态红线面积(ha) [约束下限值]",
+        "min_farmland_protection_ha": "耕地保护面积(ha) [约束下限值]",
+        "max_construction_ha": "城镇开发边界面积(ha) [约束上限值]",
     },
     "natural_environment": {
         "climate_type": "气候类型",
@@ -261,12 +351,12 @@ METRICS_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
     },
     "land_use": {
         "total_area_ha": "总面积(ha)",
-        "farmland_area_ha": "耕地(ha)",
-        "construction_area_ha": "建设用地(ha)",
+        "current_farmland_ha": "现状耕地(ha) [现状观测值]",
+        "current_construction_ha": "现状建设用地(ha) [现状观测值]",
         "ecological_area_ha": "生态用地(ha)",
         "water_area_ha": "水域(ha)",
         "per_capita_farmland_mu": "人均耕地(亩)",
-        "forest_coverage_rate": "森林覆盖率(%)",
+        "forest_coverage_rate": "森林覆盖率(%) [现状观测值]",
     },
     "traffic": {
         "external_road_level": "对外连接道路等级",
@@ -319,6 +409,40 @@ METRICS_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
         "total_projects": "项目总数",
         "total_investment_wan_yuan": "总投资(万元)",
         "short_term_projects": "近期项目数",
+    },
+    "industry": {
+        "primary_industry_type": "主导产业类型",
+        "industry_area_ha": "产业用地面积(ha)",
+        "planned_industry_area_ha": "规划产业用地面积(ha) [规划目标值]",
+        "layout_direction": "产业布局方向",
+        "zone_count": "产业分区数量",
+    },
+    "spatial_structure": {
+        "structure_pattern": "空间结构模式",
+        "core_count": "核心数量",
+        "axis_count": "发展轴数量",
+        "zone_names": "分区名称列表",
+        "zone_directions": "分区方向映射",
+    },
+    "land_use_planning": {
+        "current_construction_ha": "现状建设用地(ha) [现状观测值]",
+        "planned_construction_ha": "规划建设用地(ha) [规划目标值]",
+        "planned_farmland_ha": "规划耕地(ha) [规划目标值]",
+        "planned_ecological_ha": "规划生态用地(ha)",
+        "planned_residential_ha": "规划居住用地(ha)",
+        "planned_industry_ha": "规划产业用地(ha)",
+        "planned_public_service_ha": "规划公共服务用地(ha)",
+        "planned_traffic_ha": "规划交通用地(ha)",
+    },
+    "ecological": {
+        "planned_ecological_area_ha": "规划生态用地(ha)",
+        "min_ecological_redline_ha": "生态红线(ha) [约束下限值]",
+        "protection_zone_names": "保护区名称列表",
+    },
+    "disaster_prevention": {
+        "hazard_points_count": "地质灾害隐患点数量(处)",
+        "hazard_buffer_zone_ha": "地质灾害缓冲区面积(ha)",
+        "evacuation_routes": "疏散路线列表",
     },
 }
 
