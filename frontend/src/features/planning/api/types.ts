@@ -169,7 +169,6 @@ export type DeprecatedSSEEventType =
   | 'thinking_start'
   | 'thinking'
   | 'thinking_end'
-  | 'stream_paused'
   // Review Events (未实现)
   | 'review_request'
   // RAG & Cascade Events (未实现)

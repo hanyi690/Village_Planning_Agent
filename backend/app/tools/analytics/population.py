@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Any
 
-from ..registry import ToolRegistry
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,7 +41,6 @@ class PopulationPredictionConfig:
 DEFAULT_POP_CONFIG = PopulationPredictionConfig()
 
 
-@ToolRegistry.register("population_model_v1")
 def calculate_population(context: Dict[str, Any]) -> str:
     """
     人口预测模型
@@ -71,7 +69,7 @@ def calculate_population(context: Dict[str, Any]) -> str:
             logger.info(f"[population_model_v1] 从结构化摘要获取基期人口: {baseline_population}")
 
     if baseline_population is None:
-        dep_metrics = context.get("dep_metrics") or context.get("_dep_metrics") or {}
+        dep_metrics = context.get("dep_metrics") or {}
         if "registered_population" in dep_metrics:
             baseline_population = dep_metrics["registered_population"]
             logger.info(f"[population_model_v1] 从依赖指标获取基期人口: {baseline_population}")

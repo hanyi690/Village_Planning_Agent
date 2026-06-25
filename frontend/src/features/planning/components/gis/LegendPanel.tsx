@@ -46,6 +46,7 @@ const LAYER_TYPE_NAMES: Record<LayerType, string> = {
   boundary: '边界',
   settlement_zone: '居民点分类',
   infrastructure: '基础设施',
+  planning_zone: '规划分区',
 };
 
 export default function LegendPanel({

@@ -17,7 +17,7 @@ from langchain_core.messages import AIMessage
 from .state import PlanningPhase, get_layer_dimensions, _phase_to_layer
 from ..config import get_dimension_layer
 from ..config.dependency import get_impact_tree_compat, get_next_revision_wave
-from ..tools.constants import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL
+from ..tools.intent_tools import advance_planning_intent, gis_analysis
 from ..utils.logger import get_logger
 
 
@@ -104,10 +104,10 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
         for tc in last_msg.tool_calls:
             name = tc.get("name", "")
-            if name == ADVANCE_PLANNING_TOOL["function"]["name"]:
+            if name == advance_planning_intent.name:
                 return _dispatch_current(state)
-            if name == GIS_ANALYSIS_TOOL["function"]["name"]:
-                return "execute_tools"
+            if name == gis_analysis.name:
+                return "gis_agent"
         return "execute_tools"
 
     return END

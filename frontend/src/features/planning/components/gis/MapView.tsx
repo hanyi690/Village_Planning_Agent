@@ -27,6 +27,7 @@ const LAYER_TYPE_NAMES: Record<string, string> = {
   sensitivity_zone: '敏感区',
   infrastructure: '基础设施',
   isochrone: '等时圈',
+  planning_zone: '规划分区',
   development_axis: '发展轴',
   custom: '自定义',
 };
@@ -144,13 +145,14 @@ interface LayerStyle {
 
 // Layer rendering priority (numerical order, higher = top layer)
 const LAYER_PRIORITY: Record<string, number> = {
-  'boundary': 0,           // Administrative boundary (bottom layer, reference area)
-  'infrastructure': 1,      // Infrastructure (roads, waterways)
-  'sensitivity_zone': 2,   // Sensitivity zones
-  'function_zone': 3,      // Functional zones
-  'isochrone': 4,          // Isochrones
-  'development_axis': 5,   // Development axes
-  'facility_point': 6,     // Facility points (top layer)
+  'boundary': 0,
+  'infrastructure': 1,
+  'sensitivity_zone': 2,
+  'function_zone': 3,
+  'planning_zone': 4,
+  'isochrone': 5,
+  'development_axis': 6,
+  'facility_point': 7,
 };
 
 // Get feature colors - prioritize backend color
@@ -202,6 +204,9 @@ function getFeatureColors(
     if (timeMinutes) {
       subtype = `${timeMinutes}min`;
     }
+  } else if (layerType === 'planning_zone') {
+    colorsMap = PLANNING_COLORS.planning_zone;
+    subtype = (props.zone_type as string) || (props.assigned_zone as string) || '一般农地区';
   } else {
     // Fallback for unknown layer types
     return DEFAULT_COLORS;
@@ -396,6 +401,56 @@ export default function MapView({
           },
         };
         return [infraLayer];
+      } else if (layer.layerType === 'planning_zone') {
+        // 规划分区：半透明填充 + 虚线描边，与现状功能区视觉区分
+        const hasFeatureColors = layer.geojson?.features?.some(
+          f => (f.properties as Record<string, unknown>)?.color
+        );
+        if (hasFeatureColors) {
+          const fillLayer: FillLayerSpecification = {
+            id: `${sourceId}-fill`,
+            type: 'fill',
+            source: sourceId,
+            paint: {
+              'fill-color': ['get', 'color'],
+              'fill-opacity': 0.35,
+            },
+          };
+          const lineLayer: LineLayerSpecification = {
+            id: `${sourceId}-line`,
+            type: 'line',
+            source: sourceId,
+            paint: {
+              'line-color': ['get', 'stroke'],
+              'line-width': 2.5,
+              'line-dasharray': [3, 2],
+              'line-opacity': 0.9,
+            },
+          };
+          return [fillLayer, lineLayer];
+        }
+        // Fallback: use PLANNING_COLORS.planning_zone
+        const colors = getFeatureColors(layer.geojson, layer.layerType, { color: styleColor }, directColor);
+        const fillLayer: FillLayerSpecification = {
+          id: `${sourceId}-fill`,
+          type: 'fill',
+          source: sourceId,
+          paint: {
+            'fill-color': colors.fill,
+            'fill-opacity': 0.35,
+          },
+        };
+        const lineLayer: LineLayerSpecification = {
+          id: `${sourceId}-line`,
+          type: 'line',
+          source: sourceId,
+          paint: {
+            'line-color': colors.stroke,
+            'line-width': 2.5,
+            'line-dasharray': [3, 2],
+          },
+        };
+        return [fillLayer, lineLayer];
       } else {
         // Polygon features - fill + line layers
         // Check if features have color property (from backend spatial_layout_generator)

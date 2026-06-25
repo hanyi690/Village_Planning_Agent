@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Dict, List, Optional, Type
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .semantics import SemanticField, ValueSemantics
 
@@ -70,6 +70,20 @@ class SuperiorPlanningSummary(BaseDimensionSummary):
         Field(default=None, description="城镇开发边界面积(ha) [约束上限值]")
     ]
 
+    @field_validator("max_construction_ha")
+    @classmethod
+    def construction_cap_must_be_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("max_construction_ha must be positive")
+        return v
+
+    @field_validator("min_ecological_redline_ha", "min_farmland_protection_ha")
+    @classmethod
+    def constraint_lower_must_be_positive(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("constraint lower bound must be non-negative")
+        return v
+
 class NaturalEnvironmentSummary(BaseDimensionSummary):
     climate_type: Optional[str] = Field(default=None, description="气候类型")
     annual_precipitation_mm: Optional[float] = Field(default=None, description="年均降水量(mm)")
@@ -120,7 +134,11 @@ class InfrastructureSummary(BaseDimensionSummary):
 class EcologicalGreenSummary(BaseDimensionSummary):
     green_area_ha: Optional[float] = Field(default=None, description="绿地面积(ha)")
     green_rate: Optional[float] = Field(default=None, description="绿地率(%)")
-    ecological_redline_ha: Optional[float] = Field(default=None, description="生态红线面积(ha)")
+    min_ecological_redline_ha: Annotated[
+        Optional[float],
+        SemanticField(ValueSemantics.CONSTRAINT_LOWER, "ha", "上位规划", True),
+        Field(default=None, description="生态红线面积(ha) [约束下限值]")
+    ]
 
 class ArchitectureSummary(BaseDimensionSummary):
     total_buildings: Optional[int] = Field(default=None, description="建筑总量(栋)")
@@ -193,10 +211,21 @@ class LandUsePlanningSummary(BaseDimensionSummary):
     planned_public_service_ha: Optional[float] = Field(default=None, description="规划公共服务用地面积(ha)")
     planned_traffic_ha: Optional[float] = Field(default=None, description="规划交通用地面积(ha)")
 
+    @field_validator("planned_construction_ha")
+    @classmethod
+    def planned_construction_sanity(cls, v, info):
+        """规划值不应远小于现状值（≤50% 可能是提取错误）。"""
+        current = info.data.get("current_construction_ha")
+        if v is not None and current is not None and current > 0 and v < current * 0.5:
+            raise ValueError(
+                f"planned_construction_ha ({v}) 远小于 current_construction_ha ({current})"
+            )
+        return v
+
 class SettlementPlanningSummary(BaseDimensionSummary):
     current_construction_ha: Annotated[
         Optional[float],
-        SemanticField(ValueSemantics.CURRENT_OBSERVED, "ha", "规划编制", True),
+        SemanticField(ValueSemantics.CURRENT_OBSERVED, "ha", "调查数据", True),
         Field(default=None, description="现状建设用地面积(ha) [现状观测值]")
     ]
     planned_construction_ha: Annotated[
@@ -377,7 +406,7 @@ METRICS_DESCRIPTIONS: Dict[str, Dict[str, str]] = {
     "ecological_green": {
         "green_area_ha": "绿地面积(ha)",
         "green_rate": "绿地率(%)",
-        "ecological_redline_ha": "生态红线面积(ha)",
+        "min_ecological_redline_ha": "生态红线面积(ha) [约束下限值]",
     },
     "architecture": {
         "total_buildings": "建筑总量(栋)",

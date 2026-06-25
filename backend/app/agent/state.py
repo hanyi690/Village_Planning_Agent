@@ -178,6 +178,7 @@ class AgentState(TypedDict, total=False):
     # Performance optimization: batch write and char count cache
     pending_reports: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # Buffer for batch DB writes
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
+    gis_layout_configs: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # GIS Agent输出的图层配置
 
 
 # ==========================================
@@ -304,6 +305,7 @@ def create_initial_state(
         "last_revised_dimensions": [],
         "pending_reports": [],  # Buffer for batch DB writes
         "layer_char_counts": {},  # Cached char counts per layer
+        "gis_layout_configs": [],  # GIS Agent输出的图层配置
     }
 
 

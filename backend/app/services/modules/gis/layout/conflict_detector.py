@@ -320,34 +320,28 @@ class ConflictDetector:
         dimension: str,
         field_name: str,
     ) -> Optional[float]:
-        """Extract a metric value from summaries.
+        """Extract a metric value from summaries — supports nested format.
 
-        Tries multiple sources:
-        1. summary.metrics (structured JSON from generate_structured_summary)
-        2. Direct field on summary object
+        Accepts both flat {dk: {"metrics": ...}} and nested
+        {dk: {"summary": {"metrics": ...}}} formats.
         """
-        dim_summary = summaries.get(dimension, {})
+        dim_summary = summaries.get(dimension)
         if not dim_summary:
             return None
 
-        # Try metrics dict first
-        metrics = dim_summary.get("metrics", {})
-        if field_name in metrics:
-            val = metrics[field_name]
-            if val is not None:
-                try:
-                    return float(val)
-                except (TypeError, ValueError):
-                    return None
+        # Nested format: dim_summary.summary.metrics
+        summary_obj = dim_summary.get("summary", {})
+        metrics = summary_obj.get("metrics") if summary_obj else None
+        if metrics is None:
+            # Flat format fallback: dim_summary.metrics
+            metrics = dim_summary.get("metrics", {})
 
-        # Try direct field
-        if hasattr(dim_summary, field_name):
-            val = getattr(dim_summary, field_name)
-            if val is not None:
-                try:
-                    return float(val)
-                except (TypeError, ValueError):
-                    return None
+        val = metrics.get(field_name)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return None
 
         return None
 

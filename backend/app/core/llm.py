@@ -160,11 +160,22 @@ def _create_zhipuai_llm(
     streaming: bool = False,
     **kwargs
 ) -> Any:
-    """Create a ZhipuAI (GLM) LLM instance."""
+    """Create a ZhipuAI (GLM) LLM instance.
+
+    Uses langchain-classic (community packages' new home) with
+    langchain-community fallback while it is still available.
+    Long-term: migrate to ChatOpenAI + GLM OpenAI-compatible endpoint.
+    """
     try:
-        from langchain_community.chat_models import ChatZhipuAI
+        from langchain_classic.chat_models import ChatZhipuAI
     except ImportError:
-        raise ImportError("langchain-community required for ZhipuAI support.")
+        try:
+            from langchain_community.chat_models import ChatZhipuAI
+        except ImportError:
+            raise ImportError(
+                "ChatZhipuAI requires langchain-classic or langchain-community. "
+                "Install with: pip install langchain-classic>=1.0.8"
+            )
 
     api_key = get_api_key(LLMProvider.ZHIPUAI)
 

@@ -388,7 +388,7 @@ async def stream_events(session_id: str):
 
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
                     if event.get("type") in ["completed", "error"]:
                         yield sse_manager.format_sse(event)
                         break

@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from langchain_core.documents import Document
 from langchain_core.tools import Tool, tool
 
-from ..registry import ToolRegistry
 from app.utils.logger import get_logger
 from ...services.modules.rag.context import get_context_provider
 from ...core.settings import DEFAULT_TOP_K
@@ -715,23 +714,14 @@ def retrieve_knowledge_detailed(query: str) -> tuple[str, list[Document]]:
     return serialized, retrieved_docs
 
 
-# ==================== ToolRegistry 注册 ====================
+# ==================== Backward-compat plain wrappers ====================
+# These thin wrappers are kept as plain functions for any legacy consumer
+# that still calls them with a context dict. New code should invoke the
+# @tool-decorated functions (knowledge_search_tool, etc.) directly.
 
-# 注册为 ToolRegistry 工具（供 LangGraph Agent 使用）
-@ToolRegistry.register("knowledge_search")
+
 def knowledge_search_registry_wrapper(context: Dict[str, Any]) -> str:
-    """
-    ToolRegistry 包装版知识检索
-
-    Args:
-        context: 包含 query 和可选参数的上下文字典
-            - query: 查询字符串（必需）
-            - top_k: 返回结果数量（可选，默认 5）
-            - context_mode: 上下文模式（可选，默认 "standard")
-
-    Returns:
-        格式化的知识检索结果
-    """
+    """Context-dict wrapper around search_knowledge."""
     query = context.get("query", "")
     top_k = context.get("top_k", 5)
     context_mode = context.get("context_mode", "standard")
@@ -742,19 +732,8 @@ def knowledge_search_registry_wrapper(context: Dict[str, Any]) -> str:
     return search_knowledge(query, top_k, context_mode)
 
 
-@ToolRegistry.register("document_overview")
 def document_overview_registry_wrapper(context: Dict[str, Any]) -> str:
-    """
-    ToolRegistry 包装版文档概览
-
-    Args:
-        context: 包含 source 和可选参数的上下文字典
-            - source: 文档名称（必需）
-            - include_chapters: 是否包含章节列表（可选，默认 True）
-
-    Returns:
-        文档概览结果
-    """
+    """Context-dict wrapper around get_document_overview."""
     source = context.get("source", "")
     include_chapters = context.get("include_chapters", True)
 
@@ -764,20 +743,8 @@ def document_overview_registry_wrapper(context: Dict[str, Any]) -> str:
     return get_document_overview(source, include_chapters)
 
 
-@ToolRegistry.register("chapter_content")
 def chapter_content_registry_wrapper(context: Dict[str, Any]) -> str:
-    """
-    ToolRegistry 包装版章节内容
-
-    Args:
-        context: 包含参数的上下文字典
-            - source: 文档名称（必需）
-            - chapter_pattern: 章节标题关键词（必需）
-            - detail_level: 详细程度（可选，默认 "medium")
-
-    Returns:
-        章节内容结果
-    """
+    """Context-dict wrapper around get_chapter_content."""
     source = context.get("source", "")
     chapter_pattern = context.get("chapter_pattern", "")
     detail_level = context.get("detail_level", "medium")
@@ -799,7 +766,6 @@ __all__ = [
     "document_list_tool",
     "retrieve_planning_knowledge",
     "retrieve_knowledge_detailed",
-    # ToolRegistry wrappers
     "knowledge_search_registry_wrapper",
     "document_overview_registry_wrapper",
     "chapter_content_registry_wrapper",

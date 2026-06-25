@@ -162,7 +162,7 @@ phases:
 
       - key: spatial_structure
         name: "空间结构规划"
-        tools: ["spatial_layout_generator"]
+        tools: ["gis_agent"]
         rag_query: "村庄空间结构规划 空间布局模式 一核多点布局"
         prefer_doc_types: [standard, case]
         depends_on: []

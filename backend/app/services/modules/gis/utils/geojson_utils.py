@@ -14,7 +14,6 @@ logger = get_logger(__name__)
 # Check geopandas availability
 try:
     import geopandas as gpd
-    import shapely.geometry as geom
     GEOPANDAS_AVAILABLE = True
 except ImportError:
     GEOPANDAS_AVAILABLE = False
@@ -35,6 +34,8 @@ def geojson_to_geodataframe(geojson: Dict[str, Any]) -> Optional[gpd.GeoDataFram
         return None
 
     try:
+        from shapely import from_geojson
+
         features = geojson.get("features", [])
         if not features:
             return None
@@ -46,25 +47,9 @@ def geojson_to_geodataframe(geojson: Dict[str, Any]) -> Optional[gpd.GeoDataFram
             geom_data = feature.get("geometry", {})
             props = feature.get("properties", {})
 
-            geom_type = geom_data.get("type", "")
-            coords = geom_data.get("coordinates", [])
-
             try:
-                if geom_type == "Point":
-                    geometries.append(geom.Point(coords))
-                elif geom_type == "LineString":
-                    geometries.append(geom.LineString(coords))
-                elif geom_type == "Polygon":
-                    # Polygon coords is [shell, hole1, hole2, ...]
-                    geometries.append(geom.Polygon(coords[0], coords[1:]))
-                elif geom_type == "MultiPoint":
-                    geometries.append(geom.MultiPoint(coords))
-                elif geom_type == "MultiLineString":
-                    geometries.append(geom.MultiLineString(coords))
-                elif geom_type == "MultiPolygon":
-                    geometries.append(geom.MultiPolygon(coords))
-                else:
-                    geometries.append(None)
+                geom_obj = from_geojson(json.dumps(geom_data))
+                geometries.append(geom_obj)
             except Exception as e:
                 logger.warning(f"[geojson_utils] Failed to create geometry: {e}")
                 geometries.append(None)

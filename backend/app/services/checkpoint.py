@@ -30,7 +30,7 @@ def _get_dimension_names():
     global _DIMENSION_NAMES
     if _DIMENSION_NAMES is None:
         from app.config import get_dimension_config
-        from app.agent.nodes import DIMENSION_NAMES
+        from app.agent.analysis import DIMENSION_NAMES
         _DIMENSION_NAMES = DIMENSION_NAMES
     return _DIMENSION_NAMES
 
@@ -256,6 +256,7 @@ class CheckpointService:
     async def rebuild_events(cls, session_id: str) -> List[Dict[str, Any]]:
         """Rebuild key events from checkpoint state."""
         from app.services.runtime import PlanningRuntimeService
+        from app.services.sse import sse_manager
         events = []
 
         try:
@@ -317,8 +318,10 @@ class CheckpointService:
                     )
                     # 更新事件中的报告数据
                     event["report_count"] = len(dimension_reports)
+                    event["dimension_count"] = len(dimension_reports)
                     event["total_chars"] = sum(len(v.get("content", "")) for v in dimension_reports.values())
                     event["_rebuild"] = True
+                    event["seq"] = sse_manager._get_next_seq(session_id)
                     events.append(event)
                     logger.info(f"[CheckpointService] Session {session_id}: rebuilt layer_completed event Layer {layer_num}")
 
@@ -339,6 +342,7 @@ class CheckpointService:
                                 "session_id": session_id,
                                 "timestamp": metadata.get("last_signal_timestamp", datetime.now().isoformat()),
                                 "_rebuild": True,
+                                "seq": sse_manager._get_next_seq(session_id),
                             }
                             events.append(dim_event)
                             logger.debug(f"[CheckpointService] Session {session_id}: rebuilt dimension_complete {dim_key}")
@@ -354,6 +358,7 @@ class CheckpointService:
                     "reason": "step_mode",
                     "timestamp": datetime.now().isoformat(),
                     "_rebuild": True,
+                    "seq": sse_manager._get_next_seq(session_id),
                 }
                 events.append(pause_event)
                 logger.info(f"[CheckpointService] Session {session_id}: rebuilt pause event Layer {previous_layer}")

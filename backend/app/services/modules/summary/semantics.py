@@ -196,6 +196,10 @@ CROSS_DIMENSION_METRICS: Dict[MetricConcept, List[FieldRef]] = {
             ValueSemantics.CONSTRAINT_LOWER, "ha",
         ),
         FieldRef(
+            "ecological_green", "min_ecological_redline_ha",
+            ValueSemantics.CONSTRAINT_LOWER, "ha",
+        ),
+        FieldRef(
             "ecological", "min_ecological_redline_ha",
             ValueSemantics.CONSTRAINT_LOWER, "ha",
         ),

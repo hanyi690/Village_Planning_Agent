@@ -87,6 +87,13 @@ export const PLANNING_COLORS = {
     '迁并村庄': { fill: '#FF6B6B', stroke: '#CC0000' },
     '新建村庄': { fill: '#4A90D9', stroke: '#1E3A5F' },
   },
+  // Planning zone styles (规划分区 — 与现状功能区色系不同)
+  planning_zone: {
+    '永久基本农田保护区': { fill: '#D4A574', stroke: '#8B6914' },
+    '村庄建设区': { fill: '#E8637A', stroke: '#B83060' },
+    '生态保护区': { fill: '#2E8B57', stroke: '#1A5632' },
+    '一般农地区': { fill: '#7CCD7C', stroke: '#4A8B4A' },
+  },
   // Infrastructure styles (基础设施)
   infrastructure: {
     '供水管线': { stroke: '#00CED1', width: 2 },
@@ -105,6 +112,7 @@ export const ZONE_TYPES = {
   facility_status: ['现状保留', '规划新建', '规划改扩建', '规划迁建'],
   development_axis: ['发展主轴', '发展副轴', '交通主轴', '景观轴线'],
   sensitivity_level: ['高敏感区', '中敏感区', '低敏感区', '缓冲区'],
+  planning_zone: ['永久基本农田保护区', '村庄建设区', '生态保护区', '一般农地区'],
 } as const;
 
 // Type helper for feature colors

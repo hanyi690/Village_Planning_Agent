@@ -687,6 +687,9 @@ class PlanningRuntimeService:
             logger.error(f"[PlanningRuntimeService] [{session_id}] Execution failed: {e}", exc_info=True)
             await cls._append_event(session_id, create_error_event(session_id, str(e)))
             sse_manager.set_execution_active(session_id, False)
+        finally:
+            # Clean up execution lock to prevent memory leak
+            cls._execution_locks.pop(session_id, None)
 
     @classmethod
     async def resume_execution(cls, session_id: str) -> Dict[str, Any]:

@@ -26,6 +26,7 @@ class SSEEventType(str):
     DIMENSION_START = "dimension_start"
     DIMENSION_COMPLETE = "dimension_complete"
     DIMENSION_DELTA = "dimension_delta"
+    DIMENSION_ERROR = "dimension_error"
 
     # Cascade events
     CASCADE_IMPACT = "cascade_impact"
@@ -51,7 +52,12 @@ class SSEEventType(str):
     GIS_RESULT = "gis_result"
 
     # RAG events
+    RAG_QUERY = "rag_query"
     RAG_RESULT = "rag_result"
+
+    # Config events
+    RAG_CONFIG_UPDATED = "rag_config_updated"
+    STEP_MODE_UPDATED = "step_mode_updated"
 
 
 __all__ = ["SSEEventType"]

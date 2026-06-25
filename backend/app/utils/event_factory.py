@@ -87,6 +87,7 @@ def create_layer_completed_event(
         "layer": layer,
         "phase": phase,
         "report_count": len(layer_reports),
+        "dimension_count": len(layer_reports),
         "total_chars": total_chars,
         "pause_after_step": pause_after_step,
         "previous_layer": previous_layer,

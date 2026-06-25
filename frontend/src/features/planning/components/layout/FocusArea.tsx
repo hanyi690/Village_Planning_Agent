@@ -3,7 +3,6 @@
 import React, { memo, useCallback } from "react";
 
 import { usePlanningStore, usePlanningActions } from "../../store";
-import CascadeNotificationBanner from "../CascadeNotificationBanner";
 import ReportViewer from "./ReportViewer";
 import PlanningTextViewer from "../PlanningTextViewer";
 import { NAV_KEYS } from "@/features/planning/constants";
@@ -76,8 +75,6 @@ const FocusArea = memo(function FocusArea() {
         onStartPlanning={handleStartPlanning}
         onViewProcess={handleViewProcess}
       />
-
-      <CascadeNotificationBanner />
     </div>
   );
 });

@@ -18,6 +18,7 @@ from langchain_core.messages import AIMessage
 from ...config import get_dimension_config, get_dimension_layer, list_dimensions
 from ...core.llm import create_llm
 from ...core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
+from ...core.events import SSEEventType
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -161,7 +162,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # Send dimension_start early so frontend shows progress during RAG
     await sse_manager.publish(session_id, {
-        "type": "dimension_start",
+        "type": SSEEventType.DIMENSION_START,
         "dimension_key": dim_key,
         "dimension_name": dim_name,
         "layer": dim_layer,
@@ -198,7 +199,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 rag_enabled=True, skip_reason="",
             )
             await sse_manager.publish(session_id, {
-                "type": "rag_result", "dimension_key": dim_key, "layer": dim_layer,
+                "type": SSEEventType.RAG_RESULT, "dimension_key": dim_key, "layer": dim_layer,
                 "query": cached.get("query", ""),
                 "query_generation_method": "cached", "retrieval_latency_ms": 0,
                 "total_results": cached.get("total_results", 0),
@@ -213,7 +214,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
             # Notify frontend that RAG queries have been generated
             await sse_manager.publish(session_id, {
-                "type": "rag_query",
+                "type": SSEEventType.RAG_QUERY,
                 "dimension_key": dim_key,
                 "layer": dim_layer,
                 "query": queries[0] if queries else "",
@@ -295,7 +296,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 rag_enabled=True, skip_reason="",
             )
             await sse_manager.publish(session_id, {
-                "type": "rag_result", "dimension_key": dim_key, "layer": dim_layer,
+                "type": SSEEventType.RAG_RESULT, "dimension_key": dim_key, "layer": dim_layer,
                 "query": queries[0] if queries else "",
                 "query_generation_method": query_method,
                 "retrieval_latency_ms": latency_ms,
@@ -490,7 +491,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                     now = time.time()
                     if now - _last_publish_time >= _PUBLISH_INTERVAL:
                         await sse_manager.publish(session_id, {
-                            "type": "dimension_delta",
+                            "type": SSEEventType.DIMENSION_DELTA,
                             "dimension_key": dim_key,
                             "dimension_name": dim_name,
                             "layer": dim_layer,
@@ -501,15 +502,29 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                         _last_publish_time = now
     except asyncio.TimeoutError:
         logger.error(f"[analyze_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_ERROR,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "error": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
+        })
         return {"messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")]}
     except Exception as e:
         logger.error(f"[analyze_dimension] {dim_key}: LLM 失败: {e}")
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_ERROR,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "error": str(e),
+        })
         return {"messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")]}
 
     # Flush remaining delta (throttle may have skipped the last chunk)
     if llm_response and _last_publish_time > 0:
         await sse_manager.publish(session_id, {
-            "type": "dimension_delta",
+            "type": SSEEventType.DIMENSION_DELTA,
             "dimension_key": dim_key,
             "dimension_name": dim_name,
             "layer": dim_layer,
@@ -559,7 +574,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     except json.JSONDecodeError:
         structured_summary_obj = None
     await sse_manager.publish(session_id, {
-        "type": "dimension_complete",
+        "type": SSEEventType.DIMENSION_COMPLETE,
         "dimension_key": dim_key,
         "dimension_name": dim_name,
         "word_count": len(llm_response),

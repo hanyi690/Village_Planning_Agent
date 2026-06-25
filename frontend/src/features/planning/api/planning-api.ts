@@ -226,11 +226,6 @@ export const planningApi = {
       console.log('[SSE] pause event received, keeping connection open for resume');
     });
 
-    es.addEventListener('stream_paused', (e) => {
-      parseEvent(e, 'pause');
-      console.log('[SSE] stream_paused event received, keeping connection open for resume');
-    });
-
     es.addEventListener('completed', (e) => {
       parseEvent(e, 'completed');
       shouldSuppressReconnect = true;

@@ -73,6 +73,17 @@ ALLOWED_ORIGINS = os.getenv(
 # Application Lifecycle
 # ============================================
 
+async def _sse_cleanup_loop():
+    """Periodic SSE session cleanup — removes expired session data every 10 minutes."""
+    while True:
+        await asyncio.sleep(600)
+        try:
+            from app.services.sse import sse_manager
+            sse_manager.cleanup_expired_sessions()
+        except Exception as e:
+            logger.error(f"SSE cleanup failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifecycle management"""
@@ -106,7 +117,18 @@ async def lifespan(app: FastAPI):
     logger.info("🧹 SSE event loop saved")
 
     logger.info("✅ 后端服务启动完成")
+
+    # Periodic SSE session cleanup (every 10 minutes)
+    sse_cleanup_task = asyncio.create_task(_sse_cleanup_loop())
+
     yield
+
+    # Cancel periodic cleanup
+    sse_cleanup_task.cancel()
+    try:
+        await sse_cleanup_task
+    except asyncio.CancelledError:
+        pass
 
     # Clean up resources
     logger.info("🧹 Cleaning up resources...")

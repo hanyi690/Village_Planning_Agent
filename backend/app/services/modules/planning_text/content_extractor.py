@@ -360,6 +360,19 @@ def create_extracted_data(
     return data
 
 
+def _get_metrics(summaries: Dict[str, Dict[str, Any]], dimension: str) -> Dict[str, Any]:
+    """Extract metrics dict from summaries — supports both flat and nested formats.
+
+    Nested: {dk: {"summary": {"metrics": ...}}} (PlanningKG format)
+    Flat:   {dk: {"metrics": ...}} (legacy format)
+    """
+    dim = summaries.get(dimension, {})
+    summary_obj = dim.get("summary", {})
+    if summary_obj and "metrics" in summary_obj:
+        return summary_obj["metrics"]
+    return dim.get("metrics", {})
+
+
 def _inject_from_summaries(data: ExtractedData, summaries: Dict[str, Dict[str, Any]]) -> None:
     """从维度摘要注入数值字段（用于 llm_styler）。
 
@@ -369,7 +382,7 @@ def _inject_from_summaries(data: ExtractedData, summaries: Dict[str, Dict[str, A
     同时记录 _field_sources 追踪简单字段的来源维度。
     """
     # 社会经济
-    socio_m = summaries.get("socio_economic", {}).get("metrics", {})
+    socio_m = _get_metrics(summaries, "socio_economic")
     if socio_m.get("registered_population"):
         data.population_registered = int(socio_m["registered_population"])
         data._field_sources["population_registered"] = "socio_economic"
@@ -381,7 +394,7 @@ def _inject_from_summaries(data: ExtractedData, summaries: Dict[str, Dict[str, A
         data._field_sources["population_household"] = "socio_economic"
 
     # 土地利用（使用语义限定字段名 current_）
-    land_m = summaries.get("land_use", {}).get("metrics", {})
+    land_m = _get_metrics(summaries, "land_use")
     if land_m.get("total_area_ha"):
         data.total_area_ha = float(land_m["total_area_ha"])
         data._field_sources["total_area_ha"] = "land_use"
@@ -415,7 +428,7 @@ def _inject_from_summaries(data: ExtractedData, summaries: Dict[str, Dict[str, A
             data._field_sources["forest_coverage_pct"] = "land_use"
 
     # 自然环境（不再静默覆盖，保留所有来源）
-    nat_m = summaries.get("natural_environment", {}).get("metrics", {})
+    nat_m = _get_metrics(summaries, "natural_environment")
     if nat_m.get("forest_coverage_rate"):
         rate = float(nat_m["forest_coverage_rate"])
         data._qualified_metrics["natural_environment.forest_coverage_rate"] = rate
@@ -428,3 +441,53 @@ def _inject_from_summaries(data: ExtractedData, summaries: Dict[str, Dict[str, A
     # 村庄数量
     if data.village_names:
         data.village_count = len(data.village_names)
+
+    # ---- L3 维度指标注入（用于冲突检测） ----
+
+    # 上位规划（约束值）
+    sup_m = _get_metrics(summaries, "superior_planning")
+    _inject_qualified(data, sup_m, "superior_planning", "min_ecological_redline_ha")
+    _inject_qualified(data, sup_m, "superior_planning", "min_farmland_protection_ha")
+    _inject_qualified(data, sup_m, "superior_planning", "max_construction_ha")
+
+    # 土地利用规划（规划目标值 + 现状值）
+    lup_m = _get_metrics(summaries, "land_use_planning")
+    _inject_qualified(data, lup_m, "land_use_planning", "current_construction_ha")
+    _inject_qualified(data, lup_m, "land_use_planning", "planned_construction_ha")
+    _inject_qualified(data, lup_m, "land_use_planning", "planned_farmland_ha")
+    _inject_qualified(data, lup_m, "land_use_planning", "planned_ecological_ha")
+    _inject_qualified(data, lup_m, "land_use_planning", "planned_residential_ha")
+    _inject_qualified(data, lup_m, "land_use_planning", "planned_industry_ha")
+
+    # 村庄建设规划（规划目标值 + 现状值）
+    sp_m = _get_metrics(summaries, "settlement_planning")
+    _inject_qualified(data, sp_m, "settlement_planning", "current_construction_ha")
+    _inject_qualified(data, sp_m, "settlement_planning", "planned_construction_ha")
+    _inject_qualified(data, sp_m, "settlement_planning", "planned_population")
+
+    # 产业
+    ind_m = _get_metrics(summaries, "industry")
+    _inject_qualified(data, ind_m, "industry", "planned_industry_area_ha")
+
+    # 生态（约束值）
+    eco_m = _get_metrics(summaries, "ecological")
+    _inject_qualified(data, eco_m, "ecological", "min_ecological_redline_ha")
+
+
+def _inject_qualified(
+    data: ExtractedData,
+    metrics: Dict[str, Any],
+    dimension: str,
+    field_name: str,
+) -> None:
+    """Inject a metric value into _qualified_metrics if present.
+
+    Uses qualified key format "dimension.field_name" so all sources
+    are preserved without silent overwrites.
+    """
+    val = metrics.get(field_name)
+    if val is not None:
+        try:
+            data._qualified_metrics[f"{dimension}.{field_name}"] = float(val)
+        except (TypeError, ValueError):
+            pass
