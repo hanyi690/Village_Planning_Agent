@@ -12,6 +12,7 @@ const FocusArea = memo(function FocusArea() {
   const selectedNavigationKey = usePlanningStore(
     (state) => state.selectedNavigationKey,
   );
+  const stepMode = usePlanningStore((state) => state.step_mode);
   const setRightPanelExpanded = usePlanningStore(
     (state) => state.setRightPanelExpanded,
   );
@@ -50,9 +51,10 @@ const FocusArea = memo(function FocusArea() {
         villageDataFiles: data.villageDataFiles,
         taskFiles: data.taskFiles,
         constraintFiles: data.constraintFiles,
+        stepMode,
       });
     },
-    [startPlanning],
+    [startPlanning, stepMode],
   );
 
   const handleViewProcess = useCallback(() => {

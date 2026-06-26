@@ -10,11 +10,12 @@
 缓存由 `PlanningRuntimeService._graph` 单例负责。
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import AIMessage
 
 from .state import AgentState, PlanningPhase, create_initial_state, get_layer_dimensions
+from .context import PlanningContext
 from .routing import after_conversation, after_analysis
 from .conversation import conversation_node
 from .tools import execute_tools_node
@@ -72,7 +73,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     缓存责任由调用方承担（`PlanningRuntimeService._graph` 单例）。
     """
     logger.info("[图构建] 构建 5 节点图")
-    builder = StateGraph(AgentState)
+    builder = StateGraph(AgentState, context_schema=PlanningContext)
 
     builder.add_node("conversation", conversation_node)
     builder.add_node("execute_tools", execute_tools_node)

@@ -458,10 +458,8 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
                     layer_name=get_layer_name(next_layer),
                     dimension_count=len(get_layer_dimensions(next_layer))
                 )
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id, state_values=state))
         return {"status": "approved", "next_phase": next_phase}
-
-    if request.feedback and request.dimensions:
         # Compute impact tree once — reuse for both state update and SSE events
         from app.config.dependency import get_impact_tree_compat
 
@@ -583,7 +581,7 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
     sse_manager.publish_sync(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id})
 
     asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(
-        session_id, checkpoint_id=checkpoint_id
+        session_id, checkpoint_id=checkpoint_id, state_values=values
     ))
     return {"status": "resumed", "checkpoint_id": checkpoint_id, "layer": layer, "kind": kind}
 

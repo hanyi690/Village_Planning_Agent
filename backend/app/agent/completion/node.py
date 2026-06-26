@@ -8,12 +8,18 @@ Handles step_mode (pause) vs auto-advance (continuous) branching.
 
 from typing import Dict, Any
 
+from langgraph.runtime import Runtime
+
+from app.agent.context import PlanningContext
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
+async def layer_completion_check(
+    state: Dict[str, Any],
+    runtime: Runtime[PlanningContext],
+) -> Dict[str, Any]:
     """
     Check if current layer is complete after reducer merges parallel results.
 
@@ -142,7 +148,7 @@ async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
         total_chars=total_chars,
     )
 
-    step_mode = state.get("step_mode", False)  # Default to False for auto-advance
+    step_mode = runtime.context.step_mode  # Read from context, not state
 
     if step_mode:
         # Step mode: pause and wait for user approval
