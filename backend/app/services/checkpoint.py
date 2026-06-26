@@ -321,7 +321,7 @@ class CheckpointService:
                     event["dimension_count"] = len(dimension_reports)
                     event["total_chars"] = sum(len(v.get("content", "")) for v in dimension_reports.values())
                     event["_rebuild"] = True
-                    event["seq"] = sse_manager._get_next_seq(session_id)
+                    event["seq"] = sse_manager.get_next_seq(session_id)
                     events.append(event)
                     logger.info(f"[CheckpointService] Session {session_id}: rebuilt layer_completed event Layer {layer_num}")
 
@@ -342,7 +342,7 @@ class CheckpointService:
                                 "session_id": session_id,
                                 "timestamp": metadata.get("last_signal_timestamp", datetime.now().isoformat()),
                                 "_rebuild": True,
-                                "seq": sse_manager._get_next_seq(session_id),
+                                "seq": sse_manager.get_next_seq(session_id),
                             }
                             events.append(dim_event)
                             logger.debug(f"[CheckpointService] Session {session_id}: rebuilt dimension_complete {dim_key}")
@@ -358,7 +358,7 @@ class CheckpointService:
                     "reason": "step_mode",
                     "timestamp": datetime.now().isoformat(),
                     "_rebuild": True,
-                    "seq": sse_manager._get_next_seq(session_id),
+                    "seq": sse_manager.get_next_seq(session_id),
                 }
                 events.append(pause_event)
                 logger.info(f"[CheckpointService] Session {session_id}: rebuilt pause event Layer {previous_layer}")

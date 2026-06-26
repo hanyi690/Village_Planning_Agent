@@ -446,6 +446,44 @@ const ReportViewer = memo(function ReportViewer({
 
   const showInputForm = (status as string) === "idle";
 
+  // All useMemo hooks must be before any conditional return (React hooks rule)
+  const allDimensionCount = Object.keys(dimensionProgress).length;
+  const totalDims = useMemo(
+    () =>
+      [1, 2, 3].reduce(
+        (sum, l) => sum + (DIMENSIONS_BY_LAYER[l]?.length || 0),
+        0,
+      ),
+    [],
+  );
+  const completedDimsCount = useMemo(
+    () =>
+      [1, 2, 3].reduce((sum, l) => {
+        const lr = reports[`layer${l}` as keyof typeof reports] || {};
+        return sum + Object.keys(lr).length;
+      }, 0),
+    [reports],
+  );
+
+  const cascadeSet = useMemo(() => {
+    const set = new Set<string>();
+    if (cascadeChain) {
+      set.add(cascadeChain.trigger);
+      cascadeChain.impacted.forEach((d) => set.add(d));
+    }
+    return set;
+  }, [cascadeChain]);
+
+  const revisionCompletedSet = useMemo(
+    () => new Set(revisionCompletedKeys),
+    [revisionCompletedKeys],
+  );
+
+  const executingSet = useMemo(
+    () => new Set(executingDimensions),
+    [executingDimensions],
+  );
+
   if (selectedNavigationKey?.startsWith("dim:") && !showInputForm) {
     const dimKey = selectedNavigationKey.slice(4);
     const layer = parseInt(dimKey.split("_")[0], 10);
@@ -875,44 +913,6 @@ const ReportViewer = memo(function ReportViewer({
       </div>
     );
   }
-
-  const allDimensionCount = Object.keys(dimensionProgress).length;
-  const totalDims = useMemo(
-    () =>
-      [1, 2, 3].reduce(
-        (sum, l) => sum + (DIMENSIONS_BY_LAYER[l]?.length || 0),
-        0,
-      ),
-    [],
-  );
-  const completedDimsCount = useMemo(
-    () =>
-      [1, 2, 3].reduce((sum, l) => {
-        const lr = reports[`layer${l}` as keyof typeof reports] || {};
-        return sum + Object.keys(lr).length;
-      }, 0),
-    [reports],
-  );
-
-  // Cascade/revision lookup sets (shared across all layer cards)
-  const cascadeSet = useMemo(() => {
-    const set = new Set<string>();
-    if (cascadeChain) {
-      set.add(cascadeChain.trigger);
-      cascadeChain.impacted.forEach((d) => set.add(d));
-    }
-    return set;
-  }, [cascadeChain]);
-
-  const revisionCompletedSet = useMemo(
-    () => new Set(revisionCompletedKeys),
-    [revisionCompletedKeys],
-  );
-
-  const executingSet = useMemo(
-    () => new Set(executingDimensions),
-    [executingDimensions],
-  );
 
   return (
     <div className="flex-1 h-full flex flex-col bg-[#faf9f6]">
