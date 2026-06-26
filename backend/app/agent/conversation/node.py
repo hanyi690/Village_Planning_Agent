@@ -30,15 +30,15 @@ SYSTEM_TEMPLATE = """你是村庄规划助手，正在进行 {project_name} 的�
 约束条件：{constraints}
 
 可用工具：
-- AdvancePlanningIntent: 推进规划流程
-- GISAnalysis: GIS可视化分析
+- advance_planning_intent: 推进规划流程
+- gis_analysis: GIS可视化分析
 - population_prediction: 人口预测
 - knowledge_search: 知识检索
 - web_search: 网络搜索
 
 响应规则：
-- 用户说"继续规划"或"下一步" -> 调用 AdvancePlanningIntent
-- 用户请求GIS分析或地图 -> 调用 GISAnalysis
+- 用户说"继续规划"或"下一步" -> 调用 advance_planning_intent
+- 用户请求GIS分析或地图 -> 调用 gis_analysis
 - 其他对话 -> 直接回复"""
 
 

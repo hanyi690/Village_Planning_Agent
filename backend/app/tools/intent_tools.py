@@ -36,7 +36,7 @@ def advance_planning_intent(reason: Optional[str] = None) -> str:
 
     当用户表示要继续规划、开始分析、下一步时调用。
     """
-    return f"AdvancePlanningIntent: reason={reason or '未说明'}"
+    return f"advance_planning_intent: reason={reason or '未说明'}"
 
 
 @tool(args_schema=GisAnalysisInput)
@@ -47,7 +47,7 @@ def gis_analysis(dimension_key: str, village_name: Optional[str] = None) -> str:
     分区分配、布局生成等工具。当用户请求空间分析、用地布局、GIS
     可视化时调用。
     """
-    return f"GISAnalysis: dimension_key={dimension_key}, village_name={village_name or '默认'}"
+    return f"gis_analysis: dimension_key={dimension_key}, village_name={village_name or '默认'}"
 
 
 __all__ = [

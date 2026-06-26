@@ -19,6 +19,17 @@ logger = get_logger(__name__)
 
 _ROUTING_NAMES = frozenset({advance_planning_intent.name, gis_analysis.name})
 
+# LLM may emit PascalCase names from old prompts; map them to snake_case
+_NAME_ALIASES = {
+    "AdvancePlanningIntent": advance_planning_intent.name,
+    "GISAnalysis": gis_analysis.name,
+}
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize tool name: resolve PascalCase aliases to registered snake_case."""
+    return _NAME_ALIASES.get(name, name)
+
 
 async def _invoke_single(
     tc: Dict[str, Any],
@@ -26,7 +37,7 @@ async def _invoke_single(
     state: Dict[str, Any],
 ) -> ToolMessage:
     """Invoke a single tool call with SSE publishing."""
-    tool_name = tc.get("name", "")
+    tool_name = _normalize_name(tc.get("name", ""))
     tool_args = tc.get("args", {}) or {}
     tool_id = tc.get("id", "")
 
@@ -70,7 +81,7 @@ async def execute_tools_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     regular_calls = [
         tc for tc in getattr(last_msg, "tool_calls", [])
-        if tc.get("name") not in _ROUTING_NAMES
+        if _normalize_name(tc.get("name")) not in _ROUTING_NAMES
     ]
     if not regular_calls:
         return {"messages": []}

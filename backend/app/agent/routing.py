@@ -12,9 +12,11 @@
 from typing import Union, List, Dict, Any, Optional
 from langgraph.graph import END
 from langgraph.types import Send
+from langgraph.runtime import Runtime
 from langchain_core.messages import AIMessage
 
 from .state import PlanningPhase, get_layer_dimensions, _phase_to_layer
+from .context import PlanningContext
 from ..config import get_dimension_layer
 from ..config.dependency import get_impact_tree_compat, get_next_revision_wave
 from ..tools.intent_tools import advance_planning_intent, gis_analysis
@@ -24,7 +26,10 @@ from ..utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
+def after_conversation(
+    state: Dict[str, Any],
+    runtime: Runtime[PlanningContext],
+) -> Union[str, List[Send]]:
     """
     对话后路由 - 新架构核心
 
@@ -104,16 +109,20 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
         for tc in last_msg.tool_calls:
             name = tc.get("name", "")
-            if name == advance_planning_intent.name:
+            # Normalize: LLM may emit PascalCase from old prompts
+            if name in (advance_planning_intent.name, "AdvancePlanningIntent"):
                 return _dispatch_current(state)
-            if name == gis_analysis.name:
+            if name in (gis_analysis.name, "GISAnalysis"):
                 return "gis_agent"
         return "execute_tools"
 
     return END
 
 
-def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
+def after_analysis(
+    state: Dict[str, Any],
+    runtime: Runtime[PlanningContext],
+) -> Union[str, List[Send]]:
     """
     分析后路由 - 波次推进逻辑
 
@@ -251,7 +260,7 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
     # Must run even when current-layer has no ready dims (all dispatched)
     cross_ready = []
     next_layer = layer + 1
-    if next_layer <= 3 and not state.get("step_mode"):
+    if next_layer <= 3 and not runtime.context.step_mode:
         next_dims = list_dimensions(next_layer)
         next_completed = state.get("completed_dimensions", {}).get(f"layer{next_layer}", [])
         completed_all = state.get("completed_dimensions", {})
@@ -313,7 +322,7 @@ def _dispatch_current(state: Dict[str, Any]) -> Union[List[Send], str]:
     if phase == PlanningPhase.INIT.value:
         phase = PlanningPhase.LAYER1.value
 
-    logger.info("[_dispatch_current] input phase=%s step_mode=%s", phase, state.get("step_mode"))
+    logger.info("[_dispatch_current] input phase=%s", phase)
 
     layer = _phase_to_layer(phase)
     if layer is None:

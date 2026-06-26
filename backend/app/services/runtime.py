@@ -41,6 +41,7 @@ from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service, checkpoint_persistence_manager
 from app.core.settings import MAX_SESSION_EVENTS, GRAPH_MAX_CONCURRENCY
 from app.agent.graph import create_unified_planning_graph
+from app.agent.context import PlanningContext
 from app.agent.state import (
     get_layer_dimensions,
     get_layer_name,
@@ -493,6 +494,7 @@ class PlanningRuntimeService:
         session_id: str,
         initial_state: Optional[Dict[str, Any]] = None,
         checkpoint_id: str = None,
+        state_values: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Unified trigger for planning execution (skip conversation_node).
@@ -503,6 +505,7 @@ class PlanningRuntimeService:
             session_id: Session identifier
             initial_state: Optional initial state (only for Layer 1 start)
             checkpoint_id: Optional checkpoint ID to resume from
+            state_values: Optional pre-fetched state values (avoids redundant checkpoint read)
         """
         await cls.ensure_initialized()
 
@@ -518,7 +521,7 @@ class PlanningRuntimeService:
             return
 
         async with cls._execution_locks[session_id]:
-            await cls._execute_planning(session_id, initial_state, checkpoint_id)
+            await cls._execute_planning(session_id, initial_state, checkpoint_id, state_values)
 
     @classmethod
     async def _execute_planning(
@@ -526,6 +529,7 @@ class PlanningRuntimeService:
         session_id: str,
         initial_state: Optional[Dict[str, Any]] = None,
         checkpoint_id: str = None,
+        state_values: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Internal execution method called within the session lock."""
         # Wait for SSE subscriber to connect before starting execution
@@ -543,14 +547,14 @@ class PlanningRuntimeService:
             await cls.aupdate_state(session_id, clean_state)
             logger.info("[PlanningRuntimeService] [%s] Initial checkpoint phase=%s", session_id, clean_state.get("phase"))
 
-        # 2. Create synthetic AIMessage with AdvancePlanningIntent tool call
+        # 2. Create synthetic AIMessage with advance_planning_intent tool call
         synthetic_ai_message = AIMessage(
             content="",
             tool_calls=[
                 {
-                    "name": "AdvancePlanningIntent",
+                    "name": "advance_planning_intent",
                     "id": f"call_{session_id[:8]}",
-                    "args": {}
+                    "args": {"reason": "用户启动规划"}
                 }
             ]
         )
@@ -586,6 +590,19 @@ class PlanningRuntimeService:
         # 5. Resume from checkpoint, go directly to intent_router -> route_planning
         logger.info(f"[PlanningRuntimeService] [{session_id}] Background execution started")
 
+        # Build PlanningContext from latest state (step_mode may have been PATCHed)
+        if initial_state:
+            ctx_state = initial_state
+        elif state_values is not None:
+            ctx_state = state_values
+        else:
+            ctx_state = await cls.aget_state_values(session_id) or {}
+        planning_context = PlanningContext(step_mode=ctx_state.get("step_mode", False))
+        logger.info(
+            "[PlanningRuntimeService] [%s] PlanningContext: step_mode=%s",
+            session_id, planning_context.step_mode,
+        )
+
         # Track last completed layer from values mode
         # This is used to correlate checkpoint_saved events with the correct layer
         last_completed_layer = 0
@@ -595,7 +612,7 @@ class PlanningRuntimeService:
 
         try:
             # Use dual stream mode: 'values' for state updates, 'checkpoints' for checkpoint persistence
-            stream_iterator = cls._graph.astream(None, config, stream_mode=['values', 'checkpoints'])
+            stream_iterator = cls._graph.astream(None, config, stream_mode=['values', 'checkpoints'], context=planning_context)
 
             async for event in stream_iterator:
                 if isinstance(event, tuple) and len(event) == 2:
@@ -748,7 +765,7 @@ class PlanningRuntimeService:
         await set_stream_state_async(session_id, "active")
 
         # Start background execution
-        asyncio.create_task(cls._trigger_planning_execution(session_id))
+        asyncio.create_task(cls._trigger_planning_execution(session_id, state_values=full_state))
 
         return {
             "message": "Execution resumed",
