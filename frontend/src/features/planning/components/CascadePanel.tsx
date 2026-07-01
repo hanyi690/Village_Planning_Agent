@@ -84,7 +84,7 @@ export default function CascadePanel({
   impacted,
   revisionCompletedKeys,
 }: CascadePanelProps) {
-  const { allNodes, pendingNodes, completedNodes, completedCount } =
+  const { allNodes, pendingNodes, completedCount } =
     useMemo(() => {
       const completedSet = new Set(revisionCompletedKeys);
 
@@ -101,7 +101,6 @@ export default function CascadePanel({
       return {
         allNodes: allDims,
         pendingNodes: pending,
-        completedNodes: completed,
         completedCount: completed.length,
       };
     }, [trigger, impacted, revisionCompletedKeys]);

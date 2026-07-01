@@ -308,7 +308,7 @@ export function usePlanningHandlers({
       }
 
     },
-    [flushBatch, fetchLayerReportsFromBackend, setLayerCompleted, setReports, addMessage, setMessages, showViewer, sessionId]
+    [flushBatch, fetchLayerReportsFromBackend, setLayerCompleted, setReports, addMessage, setMessages, showViewer]
   );
 
   // ============================================

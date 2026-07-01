@@ -447,7 +447,6 @@ const ReportViewer = memo(function ReportViewer({
   const showInputForm = (status as string) === "idle";
 
   // All useMemo hooks must be before any conditional return (React hooks rule)
-  const allDimensionCount = Object.keys(dimensionProgress).length;
   const totalDims = useMemo(
     () =>
       [1, 2, 3].reduce(

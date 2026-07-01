@@ -155,13 +155,70 @@ const LAYER_PRIORITY: Record<string, number> = {
   'facility_point': 7,
 };
 
-// Get feature colors - prioritize backend color
+// DLBM (地类编码) to zone type mapping (GB/T 21010-2017)
+const DLBM_TO_ZONE_TYPE: Record<string, string> = {
+  // 01 耕地 → 农业用地
+  '0100': '农业用地', '0101': '农业用地', '0102': '农业用地', '0103': '农业用地',
+  '0110': '农业用地', '0120': '农业用地', '0130': '农业用地',
+  // 02 园地 → 农业用地
+  '0200': '农业用地', '0201': '农业用地', '0202': '农业用地', '0203': '农业用地', '0204': '农业用地',
+  '0210': '农业用地', '0220': '农业用地',
+  // 03 林地 → 生态绿地
+  '0300': '生态绿地', '0301': '生态绿地', '0302': '生态绿地', '0303': '生态绿地', '0304': '生态绿地',
+  '0305': '生态绿地', '0306': '生态绿地', '0307': '生态绿地',
+  '0310': '生态绿地', '0330': '生态绿地',
+  // 04 草地 → 生态绿地
+  '0400': '生态绿地', '0401': '生态绿地', '0402': '生态绿地', '0403': '生态绿地', '0404': '生态绿地',
+  '1400': '生态绿地',
+  // 05 商服用地 → 商业用地
+  '0500': '商业用地',
+  // 06 工矿用地 → 产业用地
+  '0600': '产业用地', '0601': '产业用地', '0602': '产业用地', '0603': '产业用地',
+  '0610': '产业用地', '0620': '产业用地',
+  // 07 住宅用地 → 居住用地
+  '0700': '居住用地', '0701': '居住用地', '0702': '居住用地',
+  // 08 公共管理与公共服务 → 公共服务用地
+  '0800': '公共服务用地', '0801': '公共服务用地', '0802': '公共服务用地', '0803': '公共服务用地',
+  '0806': '公共服务用地', '0810': '公共服务用地',
+  // 09 特殊用地 → 公共服务用地
+  '0900': '公共服务用地',
+  // 10 交通运输 → 交通用地
+  '1000': '交通用地', '1001': '交通用地', '1002': '交通用地', '1003': '交通用地',
+  '1004': '交通用地', '1005': '交通用地', '1006': '交通用地',
+  '1040': '交通用地',
+  // 11 水域 → 水域
+  '1101': '水域', '1102': '水域', '1103': '水域', '1104': '水域',
+  '1105': '水域', '1106': '水域', '1109': '水域',
+  '1110': '水域', '1140': '水域', '1180': '水域',
+  '3100': '水域',
+  // 12 其他土地 → 农业用地
+  '1200': '农业用地', '1201': '农业用地',
+  // 三调村庄规划专用编码
+  '1100': '农业用地', '1340': '生态绿地', '1350': '生态绿地',
+  '1510': '农业用地', '2030': '居住用地', '2100': '产业用地',
+  '2121': '居住用地', '2122': '公共服务用地', '2124': '产业用地',
+  '2125': '公共服务用地', '2126': '交通用地', '2200': '交通用地',
+  '2270': '农业用地', '3200': '农业用地',
+};
+
+// Get zone type from DLBM code
+function getZoneTypeFromDLBM(dlbm: string | null | undefined): string {
+  if (!dlbm) return '农业用地';
+  const code = String(dlbm).trim();
+  return DLBM_TO_ZONE_TYPE[code] || '农业用地';
+}
+
+// Get feature colors - supports per-feature coloring for landuse_current
 function getFeatureColors(
   geojson: GeoJsonFeatureCollection | undefined,
   layerType: string,
   layerStyle?: LayerStyle,
-  directColor?: string
+  directColor?: string,
+  featureProperties?: Record<string, unknown> // Optional: per-feature properties
 ): { fill: string; stroke: string } {
+  // Use per-feature properties if provided (for data-driven styling)
+  const props = featureProperties || {};
+
   // Priority 1: Use direct color field (backend sends color at top level)
   if (directColor) {
     return { fill: directColor, stroke: directColor };
@@ -172,26 +229,23 @@ function getFeatureColors(
     return { fill: layerStyle.color, stroke: layerStyle.color };
   }
 
-  // Priority 3: Use feature's style.color from geojson properties
-  const geojsonProps = geojson?.features?.[0]?.properties as Record<string, unknown> | undefined;
-  const geojsonColor = geojsonProps?.style as Record<string, unknown> | undefined;
-  const colorValue = geojsonColor?.color as string | undefined;
-  if (colorValue) {
-    return { fill: colorValue, stroke: colorValue };
+  // Priority 3: Use feature's color from geojson properties (data-driven)
+  const featureColor = props.color as string | undefined;
+  if (featureColor) {
+    return { fill: featureColor, stroke: props.stroke as string || featureColor };
   }
 
-  // Priority 4: Use PLANNING_COLORS lookup
+  // Priority 4: Use PLANNING_COLORS lookup based on zone_type or DLBM
   // Note: development_axis handled separately in layerStyles, not here
-  const props = geojsonProps || {};
-
-  // Map layerType to correct PLANNING_COLORS sub-object
   let subtype = 'default';
   let colorsMap: Record<string, FeatureColors>;
 
   // Note: boundary is handled separately in layerStyles (line layer, not fill)
   if (layerType === 'function_zone') {
     colorsMap = PLANNING_COLORS.function_zone;
-    subtype = (props.zone_type as string) || '居住用地';
+    // Try zone_type first, then derive from DLBM (for landuse_current)
+    const zoneType = (props.zone_type as string) || getZoneTypeFromDLBM(props.DLBM as string);
+    subtype = zoneType || '居住用地';
   } else if (layerType === 'facility_point') {
     colorsMap = PLANNING_COLORS.facility_point;
     subtype = (props.status as string) || '规划新建';
@@ -213,6 +267,51 @@ function getFeatureColors(
   }
 
   return colorsMap[subtype] || DEFAULT_COLORS;
+}
+
+// Get feature-specific paint properties for data-driven styling
+function getFeaturePaintProperties(
+  layer: GISLayerConfig,
+  featureIndex: number
+): { 'fill-color'?: string; 'fill-opacity'?: number; 'line-color'?: string } {
+  const features = layer.geojson?.features;
+  if (!features || featureIndex >= features.length) {
+    return {};
+  }
+
+  const feature = features[featureIndex];
+  const props = feature.properties as Record<string, unknown> | undefined;
+  if (!props) {
+    return {};
+  }
+
+  // Check if feature has color property (from backend)
+  const featureColor = props.color as string | undefined;
+  if (featureColor) {
+    return {
+      'fill-color': featureColor,
+      'fill-opacity': 0.6,
+      'line-color': (props.stroke as string) || featureColor,
+    };
+  }
+
+  // Derive color from DLBM for landuse_current
+  if (layer.layerType === 'function_zone') {
+    const dlbm = props.DLBM as string;
+    if (dlbm) {
+      const zoneType = getZoneTypeFromDLBM(dlbm);
+      const colors = PLANNING_COLORS.function_zone[zoneType as keyof typeof PLANNING_COLORS.function_zone];
+      if (colors) {
+        return {
+          'fill-color': colors.fill,
+          'fill-opacity': 0.6,
+          'line-color': colors.stroke,
+        };
+      }
+    }
+  }
+
+  return {};
 }
 
 export default function MapView({
@@ -273,15 +372,35 @@ export default function MapView({
   useEffect(() => {
     if (!mounted || !mapRef.current) return;
 
-    const boundaryLayer = layers.find(l => l.layerType === 'boundary');
-    if (boundaryLayer) {
-      const bounds = getBoundsFromGeoJSON(boundaryLayer.geojson);
-      if (bounds) {
-        mapRef.current.fitBounds(
-          [bounds[0], bounds[1]],
-          { padding: 40, duration: 1000 }
-        );
+    // Prefer village-level boundary (fewer features, more local)
+    // over county-level admin boundaries
+    const boundaryLayers = layers.filter(l => l.layerType === 'boundary');
+    if (boundaryLayers.length === 0) return;
+
+    // Find the best boundary: prefer layers with fewer features (village > town > county)
+    // and layers with 'boundary' or 'village' in the name
+    let bestBoundary = boundaryLayers[0];
+    let bestScore = Infinity;
+    for (const layer of boundaryLayers) {
+      const featureCount = layer.geojson?.features?.length || 0;
+      const name = (layer.layerName || '').toLowerCase();
+      // Score: prefer village/current boundary (lower is better)
+      let score = featureCount;
+      if (name.includes('village') || name.includes('current')) score *= 0.5;
+      if (name.includes('admin') || name.includes('county')) score *= 10;
+      if (name.includes('pingyuan')) score *= 100; // county-level
+      if (score < bestScore) {
+        bestScore = score;
+        bestBoundary = layer;
       }
+    }
+
+    const bounds = getBoundsFromGeoJSON(bestBoundary.geojson);
+    if (bounds) {
+      mapRef.current.fitBounds(
+        [bounds[0], bounds[1]],
+        { padding: 40, duration: 1000 }
+      );
     }
   }, [mounted, layers]);
 
@@ -330,16 +449,27 @@ export default function MapView({
         };
         return [boundaryLayer];
       } else if (layer.layerType === 'facility_point') {
-        // Point features - circle layer
+        // Point features - circle layer with zoom-adaptive radius
         const colors = getFeatureColors(layer.geojson, layer.layerType, { color: styleColor }, directColor);
         const circleLayer: CircleLayerSpecification = {
           id: `${sourceId}-circle`,
           type: 'circle',
           source: sourceId,
           paint: {
-            'circle-radius': 8,
+            // Zoom-adaptive radius: 4px at zoom 10, 6px at zoom 14, 10px at zoom 18
+            'circle-radius': [
+              'interpolate', ['linear'], ['zoom'],
+              10, 4,
+              14, 6,
+              18, 10,
+            ],
             'circle-color': colors.fill,
-            'circle-stroke-width': 2,
+            'circle-stroke-width': [
+              'interpolate', ['linear'], ['zoom'],
+              10, 1,
+              14, 2,
+              18, 3,
+            ],
             'circle-stroke-color': colors.stroke,
             'circle-opacity': 0.8,
           },
@@ -451,9 +581,9 @@ export default function MapView({
           },
         };
         return [fillLayer, lineLayer];
-      } else {
-        // Polygon features - fill + line layers
-        // Check if features have color property (from backend spatial_layout_generator)
+      } else if (layer.layerType === 'function_zone') {
+        // Function zone - support per-feature coloring for landuse_current
+        // Check if features have color property (from backend ZoneGenerator)
         const hasFeatureColors = layer.geojson?.features?.some(
           f => (f.properties as Record<string, unknown>)?.color
         );
@@ -469,49 +599,97 @@ export default function MapView({
               'fill-opacity': 0.6,
             },
           };
-          // Soft outline using same color family
           const lineLayer: LineLayerSpecification = {
             id: `${sourceId}-line`,
             type: 'line',
             source: sourceId,
             paint: {
-              'line-color': ['get', 'color'],
+              'line-color': ['get', 'stroke'],
               'line-width': 1.5,
               'line-opacity': 0.8,
             },
           };
           return [fillLayer, lineLayer];
-        } else {
-          // Fallback: use static colors from PLANNING_COLORS
-          const colors = getFeatureColors(layer.geojson, layer.layerType, { color: styleColor }, directColor);
-          const fillLayer: FillLayerSpecification = {
-            id: `${sourceId}-fill`,
-            type: 'fill',
-            source: sourceId,
-            paint: {
-              'fill-color': colors.fill,
-              'fill-opacity': 0.5,
-            },
-          };
-          const lineLayer: LineLayerSpecification = {
-            id: `${sourceId}-line`,
-            type: 'line',
-            source: sourceId,
-            paint: {
-              'line-color': colors.stroke,
-              'line-width': 2,
-            },
-          };
-          return [fillLayer, lineLayer];
         }
+
+        // No feature colors - build ['match'] expression for DLBM-based coloring
+        // This handles landuse_current where features only have DLBM codes
+        const zoneTypeColors = PLANNING_COLORS.function_zone;
+        const colorCases: (string | number)[] = [];
+        const defaultColor = DEFAULT_COLORS.fill;
+
+        // Build match expression: ['match', ['get', 'zone_type'], '农业用地', '#F5F8DC', '生态绿地', '#68B167', ..., defaultColor]
+        for (const [zoneType, colors] of Object.entries(zoneTypeColors)) {
+          colorCases.push(zoneType, (colors as FeatureColors).fill);
+        }
+
+        const fillLayer: FillLayerSpecification = {
+          id: `${sourceId}-fill`,
+          type: 'fill',
+          source: sourceId,
+          paint: {
+            // First try zone_type, then derive from DLBM
+            'fill-color': [
+              'match',
+              ['get', 'zone_type'],
+              ...colorCases,
+              defaultColor,
+            ],
+            'fill-opacity': 0.6,
+          },
+        };
+
+        // Stroke expression matching fill
+        const strokeCases: (string | number)[] = [];
+        for (const [zoneType, colors] of Object.entries(zoneTypeColors)) {
+          strokeCases.push(zoneType, (colors as FeatureColors).stroke);
+        }
+
+        const lineLayer: LineLayerSpecification = {
+          id: `${sourceId}-line`,
+          type: 'line',
+          source: sourceId,
+          paint: {
+            'line-color': [
+              'match',
+              ['get', 'zone_type'],
+              ...strokeCases,
+              DEFAULT_COLORS.stroke,
+            ],
+            'line-width': 1.5,
+          },
+        };
+
+        return [fillLayer, lineLayer];
       }
+      // Default: fill + line for unknown layer types
+      const colors = getFeatureColors(layer.geojson, layer.layerType, { color: styleColor }, directColor);
+      const defaultFill: FillLayerSpecification = {
+        id: `${sourceId}-fill`,
+        type: 'fill',
+        source: sourceId,
+        paint: {
+          'fill-color': colors.fill,
+          'fill-opacity': 0.5,
+        },
+      };
+      const defaultLine: LineLayerSpecification = {
+        id: `${sourceId}-line`,
+        type: 'line',
+        source: sourceId,
+        paint: {
+          'line-color': colors.stroke,
+          'line-width': 1.5,
+        },
+      };
+      return [defaultFill, defaultLine];
     });
   }, [geojsonSources]);
 
   // Memoize interactive layer IDs for click handling
   const interactiveLayerIds = useMemo(() =>
     geojsonSources.flatMap(
-      (_, index) => layerStyles[index].map(ls => ls.id)
+      (_, index) => (layerStyles[index] || []).map(ls => ls.id)
     ).filter(Boolean),
     [geojsonSources, layerStyles]
   );
@@ -588,6 +766,7 @@ export default function MapView({
       <div style={{ height, position: 'relative' }}>
         <Map
           ref={mapRef}
+          reuseMaps
           initialViewState={{
             longitude: center[0],
             latitude: center[1],
@@ -605,7 +784,7 @@ export default function MapView({
               type="geojson"
               data={data as FeatureCollection<Geometry>}
             >
-              {layerStyles[index].map((layerStyle) => (
+              {(layerStyles[index] || []).map((layerStyle) => (
                 <Layer key={layerStyle.id} {...layerStyle} />
               ))}
             </Source>

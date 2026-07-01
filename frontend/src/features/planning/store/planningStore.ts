@@ -1169,19 +1169,19 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
     case "gis_result": {
       const gisData = data as {
-        dimension_key?: string;
-        dimension_name?: string;
+        dimensionKey?: string;
+        dimensionName?: string;
         summary?: string;
         layers?: unknown[];
-        map_options?: { center?: [number, number]; zoom?: number };
-        analysis_data?: {
-          overall_score?: number;
-          suitability_level?: string;
-          sensitivity_class?: string;
+        mapOptions?: { center?: [number, number]; zoom?: number };
+        analysisData?: {
+          overallScore?: number;
+          suitabilityLevel?: string;
+          sensitivityClass?: string;
           recommendations?: string[];
         };
       };
-      const dimensionKey = gisData.dimension_key || "";
+      const dimensionKey = gisData.dimensionKey || "";
       if (!dimensionKey) return;
 
       const baseMsg = createBaseMessage("assistant");
@@ -1190,17 +1190,17 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         id: `gis_${dimensionKey}_${Date.now()}`,
         type: "gis_result",
         dimensionKey,
-        dimensionName: gisData.dimension_name || dimensionKey,
+        dimensionName: gisData.dimensionName || dimensionKey,
         summary: gisData.summary || "",
         layers: (gisData.layers as GisResultMessage["layers"]) || [],
         mapOptions:
-          gisData.map_options?.center && gisData.map_options?.zoom
+          gisData.mapOptions?.center && gisData.mapOptions?.zoom
             ? {
-                center: gisData.map_options.center,
-                zoom: gisData.map_options.zoom,
+                center: gisData.mapOptions.center,
+                zoom: gisData.mapOptions.zoom,
               }
             : undefined,
-        analysisData: gisData.analysis_data,
+        analysisData: gisData.analysisData,
       };
       state.messages.push(newMessage);
       break;
@@ -1455,10 +1455,10 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     case "gis_layer_update": {
       const gisUpdateData = data as {
         layer?: number;
-        dimension_key?: string;
+        dimensionKey?: string;
         layers?: unknown[];
       };
-      const key = `${gisUpdateData.layer}_${gisUpdateData.dimension_key}`;
+      const key = `${gisUpdateData.layer}_${gisUpdateData.dimensionKey}`;
       if (gisUpdateData.layers) {
         state.gisLayers[key] = gisUpdateData.layers as GISLayerConfig[];
       }

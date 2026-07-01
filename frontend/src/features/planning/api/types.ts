@@ -145,6 +145,7 @@ export type PlanningSSEEventType =
   | 'ai_response_complete'
   // GIS & RAG Events
   | 'gis_result'
+  | 'gis_layer_update'
   | 'rag_result'
   // Cascade Events
   | 'cascade_impact'
@@ -201,9 +202,12 @@ export interface PlanningSSEDataBase {
   accumulated?: string;
   dimension?: string;
   timestamp?: number;
-  // 维度相关字段
+  // 维度相关字段 (snake_case - 通用维度事件)
   dimension_key?: string;
   dimension_name?: string;
+  // 维度相关字段 (camelCase - GIS 事件，后端 Pydantic schema 输出)
+  dimensionKey?: string;
+  dimensionName?: string;
   layer?: number;
   has_data?: boolean;
   dimension_count?: number;
@@ -310,6 +314,7 @@ export interface SessionStatusResponse {
   };
   pause_after_step: boolean;
   previous_layer: number;
+  gis_layout_configs?: Array<Record<string, unknown>>;
   step_mode: boolean;
   execution_paused: boolean;
 

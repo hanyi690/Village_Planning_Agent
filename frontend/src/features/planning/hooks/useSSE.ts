@@ -83,10 +83,10 @@ export function useSSEConnection({
       'layer_paused',
       'execution_resumed',
       'completed',
+      // GIS events —图层渲染必须立即可见
+      'gis_result',
+      'gis_layer_update',
     ];
-
-    // Track whether a completed event was received (need to sync backend state after)
-    let hasCompletedEvent = false;
 
     // Keep last N delta events per key for better accumulated content accuracy
     const MAX_DELTA_PER_KEY = 3;
@@ -108,11 +108,6 @@ export function useSSEConnection({
           const data = event.data as { layer?: number; dimension_key?: string };
           const key = buildDimensionProgressKey(data.layer || 1, data.dimension_key || '');
           completedKeys.add(key);
-        }
-
-        // Mark completed event for backend state sync after batch processing
-        if (event.type === 'completed') {
-          hasCompletedEvent = true;
         }
 
         // Override mechanism: clear all layer deltas when layer_completed arrives
@@ -178,15 +173,7 @@ export function useSSEConnection({
     for (const event of otherEvents) {
       handleSSEEvent(event);
     }
-
-    // completed event: no longer triggers syncBackendState
-    // syncBackendState unconditionally overwrites pause_after_step,
-    // which would clear the layer_completed pause flag.
-    // Layer completion is now handled exclusively through layer_completed SSE.
-    if (hasCompletedEvent) {
-      // No-op: completed is handled in handleSSEEvent (sets status='completed')
-    }
-  }, [handleSSEEvent, syncBackendState]);
+  }, [handleSSEEvent]);
 
   // Enqueue event for batch processing
   const enqueueEvent = useCallback(

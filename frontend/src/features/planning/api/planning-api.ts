@@ -155,8 +155,8 @@ export const planningApi = {
           const query = data.query || '?';
           console.log(`[SSE] rag_result: ${dimKey}, query="${query}", results=${totalResults}`);
         } else if (type === 'gis_result') {
-          const dimKey = data.dimension_key || '?';
-          const dimName = data.dimension_name || '?';
+          const dimKey = data.dimensionKey || '?';
+          const dimName = data.dimensionName || '?';
           console.log(`[SSE] gis_result: ${dimKey} (${dimName})`);
         }
 
@@ -209,6 +209,7 @@ export const planningApi = {
       // GIS & RAG Events
       'rag_result',
       'gis_result',
+      'gis_layer_update',
       // Cascade Events
       'cascade_impact',
       'cascade_complete',

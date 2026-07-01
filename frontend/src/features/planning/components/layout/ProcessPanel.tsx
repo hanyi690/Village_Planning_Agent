@@ -186,7 +186,7 @@ export default function ProcessPanel() {
                 {hasGisLayers ? (
                   <MapView
                     height="100%"
-                    layers={flatLayers as any[]}
+                    layers={flatLayers}
                     showLegend={true}
                     legendPosition="bottom-right"
                   />
