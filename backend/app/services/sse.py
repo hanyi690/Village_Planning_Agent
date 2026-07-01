@@ -58,6 +58,7 @@ class SSEManager:
         SSEEventType.RESUMED: ("_last_resumed", None),
         SSEEventType.CASCADE_IMPACT: ("_last_cascade_impact", None),
         SSEEventType.CASCADE_COMPLETE: ("_last_cascade_complete", None),
+        SSEEventType.GIS_RESULT: ("_last_gis_result", "dimension_key"),
     }
 
     # ============================================
@@ -151,6 +152,9 @@ class SSEManager:
 
     # Cache rag_query events: session_id -> dimension_key -> event
     _last_rag_query: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    # Cache gis_result events: session_id -> dimension_key -> event
+    _last_gis_result: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     # Delta coalescing index: session_id -> dimension_key -> last delta event in queue
     # Avoids scanning the entire queue on overflow coalescing
@@ -623,6 +627,7 @@ class SSEManager:
             SSEEventType.CASCADE_COMPLETE,
             SSEEventType.DIMENSION_COMPLETE,
             SSEEventType.RAG_RESULT,
+            SSEEventType.GIS_RESULT,
             SSEEventType.DIMENSION_ERROR,
             SSEEventType.RAG_QUERY,
         ]
