@@ -235,3 +235,33 @@ class TestValidationReport:
         validator = LayoutValidator()
         report = validator.validate(layout)
         assert report.total_violations > 0
+
+
+class TestGeoJSONStructuralInValidator:
+    """Verify geojson_structural check is integrated into validate()."""
+
+    def test_structural_check_appears_in_validate(self):
+        layout = _complete_layout()
+        validator = LayoutValidator()
+        report = validator.validate(layout)
+        check_names = {c.check_name for c in report.checks}
+        assert "geojson_structural" in check_names, \
+            f"geojson_structural check missing, got: {check_names}"
+
+    def test_structural_check_passes_for_valid_layout(self):
+        layout = _complete_layout()
+        validator = LayoutValidator()
+        report = validator.validate(layout)
+        geo_check = next(
+            (c for c in report.checks if c.check_name == "geojson_structural"), None
+        )
+        assert geo_check is not None, "geojson_structural check should exist"
+        assert geo_check.passed, \
+            f"Valid layout should pass geojson_structural, violations: {geo_check.violations}"
+
+    def test_validate_has_6_checks(self):
+        layout = _complete_layout()
+        validator = LayoutValidator()
+        report = validator.validate(layout)
+        assert len(report.checks) == 6, \
+            f"Expected 6 checks (including geojson_structural), got {len(report.checks)}"

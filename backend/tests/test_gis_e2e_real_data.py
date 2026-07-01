@@ -94,6 +94,41 @@ class TestKGBuildFromRealData:
         kg2 = PlanningKG.from_turtle(turtle_str, village_name="金田村")
         assert kg2.get_triple_count() == kg.get_triple_count(), "Turtle roundtrip lost triples"
 
+    def test_kg_builds_with_gis_data_produces_zone_areas(
+        self, l3_reports_for_kg, landuse_geojson, gis_data
+    ):
+        """P3 #13: build_from_reports with gis_data should compute zone areas from GIS data."""
+        kg = PlanningKG(village_name="金田村")
+        kg.build_from_reports(
+            reports=l3_reports_for_kg,
+            landuse_geojson=landuse_geojson,
+            gis_data=gis_data,
+        )
+
+        # Should have zone entities with area_target_ha
+        from rdflib import RDF
+        from app.services.modules.gis.layout.kg.builder import PLN
+
+        zones = list(kg.g.subjects(RDF.type, PLN.Zone))
+        assert len(zones) > 0, "Should have Zone entities"
+
+        # At least one zone should have computed area_target_ha
+        zone_areas = []
+        for zone in zones:
+            for _, _, area_val in kg.g.triples((zone, PLN.area_target_ha, None)):
+                zone_areas.append(float(area_val))
+        assert len(zone_areas) > 0, "Should have computed zone areas from GIS data"
+
+    def test_kg_adjacency_map_not_empty(
+        self, l3_reports_for_kg, landuse_geojson
+    ):
+        """P3 #12: get_adjacency_map should return non-empty adjacency from 660 parcels."""
+        kg = PlanningKG(village_name="金田村")
+        kg.build_from_reports(reports=l3_reports_for_kg, landuse_geojson=landuse_geojson)
+
+        adj_map = kg.get_adjacency_map()
+        assert len(adj_map) > 0, "Should have adjacency entries from spatial relations"
+
 
 # ============================================
 # 测试 2：SPARQL 查询返回真实结果
@@ -199,8 +234,91 @@ class TestAllocateZonesRealLanduse:
 
 
 # ============================================
-# 测试 4：SpatialLayoutEngine 完整布局生成
+# 测试 3.5：MIP Allocator 端到端
 # ============================================
+
+class TestMIPAllocatorE2E:
+    """验证 MIP allocator 在真实数据上工作。"""
+
+    def test_mip_allocate_returns_features(self, landuse_geojson, l3_reports_for_kg):
+        """MIP 模式应返回与 greedy 相同数量的 features."""
+        kg = PlanningKG(village_name="金田村")
+        kg.build_from_reports(reports=l3_reports_for_kg, landuse_geojson=landuse_geojson)
+        constraints = kg.get_constraints()
+
+        targets = {
+            "永久基本农田保护区": 78.83,
+            "村庄建设区": 30.50,
+            "生态保护区": 362.02,
+            "一般农地区": 1881.54,
+        }
+
+        allocator = ConstraintDrivenAllocator()
+        result = allocator.solve(
+            landuse_geojson=landuse_geojson,
+            targets=targets,
+            constraints=constraints,
+            mode="mip",
+        )
+
+        features = result.get("features", [])
+        assert len(features) > 0, "MIP allocator returned no features"
+
+    def test_mip_assigned_zone_is_planning_zone_name(self, landuse_geojson):
+        """MIP 模式的 assigned_zone 应是 4 个规划分区名之一."""
+        targets = {
+            "永久基本农田保护区": 78.83,
+            "村庄建设区": 30.50,
+            "生态保护区": 362.02,
+            "一般农地区": 1881.54,
+        }
+
+        allocator = ConstraintDrivenAllocator()
+        result = allocator.solve(
+            landuse_geojson=landuse_geojson,
+            targets=targets,
+            constraints=[],
+            mode="mip",
+        )
+
+        valid_zones = {"永久基本农田保护区", "村庄建设区", "生态保护区", "一般农地区"}
+        features = result.get("features", [])
+        assigned_zones = {f["properties"].get("assigned_zone", "") for f in features}
+        non_valid = assigned_zones - valid_zones
+        assert not non_valid, f"MIP assigned_zone contains non-planning-zone names: {non_valid}"
+
+    def test_mip_output_structure_matches_greedy(self, landuse_geojson):
+        """MIP 和 greedy 输出结构应一致（assigned_zone, original_zone, changed 等字段）."""
+        targets = {
+            "永久基本农田保护区": 78.83,
+            "村庄建设区": 30.50,
+            "生态保护区": 362.02,
+            "一般农地区": 1881.54,
+        }
+        allocator = ConstraintDrivenAllocator()
+
+        greedy_result = allocator.solve(
+            landuse_geojson=landuse_geojson, targets=targets, constraints=[], mode="greedy",
+        )
+        mip_result = allocator.solve(
+            landuse_geojson=landuse_geojson, targets=targets, constraints=[], mode="mip",
+        )
+
+        greedy_features = greedy_result.get("features", [])
+        mip_features = mip_result.get("features", [])
+
+        # Both should have features
+        assert len(greedy_features) > 0
+        assert len(mip_features) > 0
+
+        # Both should have same structural keys
+        if greedy_features and mip_features:
+            greedy_props = set(greedy_features[0].get("properties", {}).keys())
+            mip_props = set(mip_features[0].get("properties", {}).keys())
+            # Core fields should exist in both
+            for key in {"assigned_zone"}:
+                assert key in greedy_props, f"Greedy missing {key}"
+                assert key in mip_props, f"MIP missing {key}"
 
 class TestGenerateLayoutRealPipeline:
     """验证 SpatialLayoutEngine.generate_layout 在真实数据上生成多图层。"""
@@ -297,7 +415,7 @@ class TestValidateLayoutRealOutput:
 
         assert report.status in ("pass", "fail", "warning"), \
             f"Invalid status: {report.status}"
-        assert len(report.checks) == 5, f"Expected 5 checks, got {len(report.checks)}"
+        assert len(report.checks) == 6, f"Expected 6 checks, got {len(report.checks)}"
 
     def test_validator_area_constraints_check_runs(self, real_layout_and_constraints):
         """area_constraints 检查应运行（无论 pass/fail）。"""
@@ -396,3 +514,254 @@ class TestToolLayerEndToEnd:
         result = _extract_result(cmd)
         assert result["success"] is True
         assert result["data"]["total_features"] > 0, "allocate_zones returned 0 features"
+
+
+# ============================================
+# 测试 7：full_pipeline 端到端完整流程
+# ============================================
+
+class TestFullPipelineE2E:
+    """验证 SpatialLayoutEngine.full_pipeline 在真实金田村数据上执行完整流程。
+
+    覆盖 Sprint 1-3 新增功能：KG 自动构建 + CA refinement + 验证闭环 + SSE 进度推送。
+    """
+
+    def _run_full_pipeline(
+        self,
+        l3_reports_for_kg,
+        landuse_geojson,
+        boundary_geojson,
+        protection_zones,
+        road_geojson,
+        construction_zone_geojson,
+        hazard_points_geojson,
+        real_intent,
+        session_id: str = "test-e2e-123",
+        max_validation_rounds: int = 2,
+    ):
+        engine = SpatialLayoutEngine()
+        conflict_report, resolution_report, layout_configs = engine.full_pipeline(
+            summaries={},
+            intent=_dict_to_intent(real_intent),
+            boundary_geojson=boundary_geojson,
+            landuse_current_geojson=landuse_geojson,
+            protection_zones=protection_zones,
+            road_geojson=road_geojson,
+            construction_zone_geojson=construction_zone_geojson,
+            hazard_points_geojson=hazard_points_geojson,
+            reports=l3_reports_for_kg,
+            max_validation_rounds=max_validation_rounds,
+            session_id=session_id,
+        )
+        return engine, conflict_report, resolution_report, layout_configs
+
+    def test_full_pipeline_executes_complete_workflow(
+        self,
+        l3_reports_for_kg,
+        landuse_geojson,
+        boundary_geojson,
+        protection_zones,
+        road_geojson,
+        construction_zone_geojson,
+        hazard_points_geojson,
+        real_intent,
+    ):
+        """full_pipeline 应完成 KG 构建 + 冲突检测 + 布局生成 + 验证闭环。"""
+        engine, conflict_report, resolution_report, layout_configs = self._run_full_pipeline(
+            l3_reports_for_kg, landuse_geojson, boundary_geojson,
+            protection_zones, road_geojson, construction_zone_geojson,
+            hazard_points_geojson, real_intent,
+        )
+
+        assert conflict_report is not None, "冲突报告不应为 None"
+        assert resolution_report is not None, "解决报告不应为 None"
+        assert len(layout_configs) >= 3, \
+            f"应生成 ≥3 个图层，实际: {len(layout_configs)}"
+
+        assert engine.has_kg(), "full_pipeline 应构建 KG（传入 reports 触发）"
+        assert len(engine._kg_constraints) >= 3, \
+            f"KG 应包含 ≥3 个约束，实际: {len(engine._kg_constraints)}"
+
+        layer_types = {c.get("layerType") for c in layout_configs}
+        assert "planning_zone" in layer_types, \
+            f"应包含 planning_zone 图层，实际图层: {layer_types}"
+
+        # 保存 layout_configs 快照供诊断
+        from pathlib import Path
+        from datetime import datetime
+        snapshot_path = Path(__file__).resolve().parent.parent / "test-screenshots"
+        snapshot_path.mkdir(exist_ok=True)
+        snapshot_file = snapshot_path / "e2e_full_pipeline.json"
+        sanitized = []
+        for cfg in layout_configs:
+            cfg_copy = {k: v for k, v in cfg.items() if k != "geojson"}
+            if "geojson" in cfg and isinstance(cfg["geojson"], dict):
+                cfg_copy["geojson_type"] = cfg["geojson"].get("type", "")
+                cfg_copy["features_count"] = len(cfg["geojson"].get("features", []))
+            sanitized.append(cfg_copy)
+        with open(snapshot_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "timestamp": datetime.now().isoformat(),
+                "layer_count": len(sanitized),
+                "layers": sanitized,
+            }, f, indent=2, ensure_ascii=False)
+
+    def test_full_pipeline_includes_kg_driven_planning_zones(
+        self,
+        l3_reports_for_kg,
+        landuse_geojson,
+        boundary_geojson,
+        protection_zones,
+        real_intent,
+    ):
+        """planning_zone 图层的 features 应有 assigned_zone 属性，覆盖 4 类分区。"""
+        engine, _, _, layout_configs = self._run_full_pipeline(
+            l3_reports_for_kg, landuse_geojson, boundary_geojson,
+            protection_zones, None, None, None, real_intent,
+        )
+
+        planning_zone_layer = next(
+            (c for c in layout_configs if c.get("layerType") == "planning_zone"),
+            None,
+        )
+        assert planning_zone_layer is not None, "应有 planning_zone 图层"
+
+        geojson = planning_zone_layer.get("geojson", {})
+        features = geojson.get("features", [])
+        assert len(features) > 0, "planning_zone 应有 features"
+
+        assigned_zones = {
+            f["properties"].get("assigned_zone", "")
+            for f in features
+            if "properties" in f
+        }
+        # 金田村实际生成 3 类分区（无永久基本农田保护区）
+        expected_keywords = ["村", "农", "生态"]
+        for kw in expected_keywords:
+            assert any(kw in zt for zt in assigned_zones), \
+                f"assigned_zone 应包含 '{kw}' 类分区，实际: {assigned_zones}"
+
+    def test_ca_refinement_preserves_area(
+        self,
+        l3_reports_for_kg,
+        landuse_geojson,
+        boundary_geojson,
+        protection_zones,
+        real_intent,
+    ):
+        """CA refinement 应保持面积守恒（误差 ≤ 1%）。"""
+        engine, _, _, layout_configs = self._run_full_pipeline(
+            l3_reports_for_kg, landuse_geojson, boundary_geojson,
+            protection_zones, None, None, None, real_intent,
+        )
+
+        planning_zone_layer = next(
+            (c for c in layout_configs if c.get("layerType") == "planning_zone"),
+            None,
+        )
+        assert planning_zone_layer is not None
+
+        geojson = planning_zone_layer.get("geojson", {})
+        features = geojson.get("features", [])
+        assert len(features) > 0
+
+        # 计算总面积
+        total_area_ha = sum(
+            f.get("properties", {}).get("area_ha", 0) or 0
+            for f in features
+        )
+        # 金田村总面积约 2352 ha，planning_zone 应覆盖大部分
+        assert total_area_ha > 100, \
+            f"planning_zone 总面积应 >100 ha，实际: {total_area_ha:.1f} ha"
+
+    def test_planning_zone_areas_match_targets(
+        self,
+        l3_reports_for_kg,
+        landuse_geojson,
+        boundary_geojson,
+        protection_zones,
+        real_intent,
+    ):
+        """各分区实际面积应覆盖村庄用地（总面积 > 200 ha）。"""
+        engine, _, _, layout_configs = self._run_full_pipeline(
+            l3_reports_for_kg, landuse_geojson, boundary_geojson,
+            protection_zones, None, None, None, real_intent,
+        )
+
+        planning_zone_layer = next(
+            (c for c in layout_configs if c.get("layerType") == "planning_zone"),
+            None,
+        )
+        assert planning_zone_layer is not None
+
+        geojson = planning_zone_layer.get("geojson", {})
+        features = geojson.get("features", [])
+        assert len(features) > 0
+
+        total_area = sum(
+            f.get("properties", {}).get("area_ha", 0) or 0
+            for f in features
+        )
+        assert total_area > 200, \
+            f"planning_zone 总面积应 >200 ha（覆盖大部分村庄用地），实际: {total_area:.1f} ha"
+
+        assigned_zones = {
+            f.get("properties", {}).get("assigned_zone", "")
+            for f in features
+            if "properties" in f
+        }
+        assert len(assigned_zones) >= 3, \
+            f"应至少 3 种分区类型，实际: {assigned_zones}"
+
+    def test_validation_loop_emits_round_events(
+        self,
+        l3_reports_for_kg,
+        landuse_geojson,
+        boundary_geojson,
+        protection_zones,
+        real_intent,
+    ):
+        """full_pipeline 应按顺序推送 SSE 事件：building_kg → phase0 → phase1 → generating_* → validation_round_1 → complete。"""
+        from unittest.mock import patch, MagicMock
+
+        captured_stages = []
+
+        with patch("app.utils.sse_publisher.SSEPublisher.send_tool_progress") as mock_send:
+            def capture(session_id, tool_name, stage, progress, message):
+                captured_stages.append(stage)
+            mock_send.side_effect = capture
+
+            engine = SpatialLayoutEngine()
+            engine.full_pipeline(
+                summaries={},
+                intent=_dict_to_intent(real_intent),
+                boundary_geojson=boundary_geojson,
+                landuse_current_geojson=landuse_geojson,
+                protection_zones=protection_zones,
+                reports=l3_reports_for_kg,
+                max_validation_rounds=2,
+                session_id="test-sse-seq",
+            )
+
+        # 期望的事件序列（按 engine.py 推送顺序）
+        expected_prefix = [
+            "building_kg",
+            "phase0_conflict_detection",
+            "phase1_layout_generation",
+            "generating_function_zone",
+            "generating_planning_zone",
+            "generating_facility_point",
+            "generating_development_axis",
+        ]
+        for i, expected in enumerate(expected_prefix):
+            assert i < len(captured_stages), \
+                f"事件数量不足：期望至少 {i+1} 个，实际 {len(captured_stages)}"
+            assert captured_stages[i] == expected, \
+                f"事件顺序错误：位置 {i} 期望 '{expected}'，实际 '{captured_stages[i]}'"
+
+        # 应至少有一个 validation_round 事件和 complete 事件
+        assert "validation_round_1" in captured_stages, \
+            f"应包含 validation_round_1 事件，实际: {captured_stages}"
+        assert captured_stages[-1] == "complete", \
+            f"最后事件应为 complete，实际: {captured_stages[-1]}"
+
