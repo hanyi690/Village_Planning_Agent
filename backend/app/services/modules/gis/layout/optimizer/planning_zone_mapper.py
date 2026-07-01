@@ -15,11 +15,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-# 基本农田 DLBM 编码（水田/旱地/水浇地）
-BASIC_FARMLAND_DLBMS = {"0110", "0120", "0130"}
+from ..colors import BASIC_FARMLAND_CODES, GENERAL_AGRICULTURE_CODES, CONSTRUCTION_ZONE_TYPES as _CONSTRUCTION_ZONE_TYPES
 
-# 一般农地区 DLBM（园地/其他耕地）
-GENERAL_AGRICULTURE_DLBMS = {"0200", "0210", "0220", "1100", "1200", "1510", "2270", "1180", "0100"}
+# 基本农田 DLBM（仅耕地 01 类，同步自 colors.BASIC_FARMLAND_CODES）
+# 永久基本农田划定应基于 YJJBNTTB 图层，非 DLBM 简单映射
+BASIC_FARMLAND_DLBMS = BASIC_FARMLAND_CODES
+
+# 一般农地区 DLBM（园地 + 设施农用地 + 其他，同步自 colors.GENERAL_AGRICULTURE_CODES）
+GENERAL_AGRICULTURE_DLBMS = GENERAL_AGRICULTURE_CODES
 
 # 4 个规划分区 → 7 类 zone_type 的目标映射
 PLANNING_ZONE_TO_ZONE_TYPES: Dict[str, List[str]] = {
@@ -43,23 +46,28 @@ ZONE_TYPE_TO_PLANNING_ZONE: Dict[str, str] = {
 
 # 4 个规划分区 DLBM 偏好（用于 allocator 按规划分区名分配）
 PLANNING_ZONE_DLBM_PREFERENCE: Dict[str, List[str]] = {
-    "永久基本农田保护区": ["0110", "0120", "0130"],
+    "永久基本农田保护区": ["0101", "0102", "0103", "0110", "0120", "0130"],
     "村庄建设区": ["2121", "2030", "2124", "0600", "0610", "0620",
                 "2122", "2125", "0800", "0900", "2126", "2200", "1040", "1000", "0500"],
     "生态保护区": ["1340", "1350", "0310", "0330", "1400", "0300", "0400",
                 "3100", "1110", "1140"],
-    "一般农地区": ["0200", "0210", "0220", "1100", "1200", "1510", "2270", "1180", "0100"],
+    "一般农地区": ["0200", "0201", "0202", "0203", "0204", "1100", "1200",
+                "1510", "2270", "0100"],
 }
 
 
 def map_planning_zone_targets_to_zone_types(
     planning_targets: Dict[str, float],
+    landuse_geojson: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, float]:
     """将 4 个规划分区目标转为 7 类 zone_type 目标。
 
     农业用地目标 = 永久基本农田 + 一般农地区（合并）
     村庄建设区目标 = 5 类建设用地的任一个（取最大）
     生态保护区目标 = 生态绿地 + 水域（合并）
+
+    When landuse_geojson is provided, construction sub-type ratios are
+    computed from current land use statistics; otherwise defaults are used.
     """
     zone_type_targets: Dict[str, float] = {}
     agri_total = 0.0
@@ -79,17 +87,73 @@ def map_planning_zone_targets_to_zone_types(
     if agri_total > 0:
         zone_type_targets["农业用地"] = agri_total
     if construction_total > 0:
-        # 建设用地分散到 5 类，但 allocator 按目标总量分配
-        zone_type_targets["居住用地"] = construction_total * 0.6
-        zone_type_targets["产业用地"] = construction_total * 0.15
-        zone_type_targets["公共服务用地"] = construction_total * 0.15
-        zone_type_targets["交通用地"] = construction_total * 0.08
-        zone_type_targets["商业用地"] = construction_total * 0.02
+        # Compute construction sub-type ratios from current land use if available
+        ratios = _compute_construction_ratios(landuse_geojson) if landuse_geojson else {}
+        zone_type_targets["居住用地"] = construction_total * ratios.get("居住用地", 0.6)
+        zone_type_targets["产业用地"] = construction_total * ratios.get("产业用地", 0.15)
+        zone_type_targets["公共服务用地"] = construction_total * ratios.get("公共服务用地", 0.15)
+        zone_type_targets["交通用地"] = construction_total * ratios.get("交通用地", 0.08)
+        zone_type_targets["商业用地"] = construction_total * ratios.get("商业用地", 0.02)
     if eco_total > 0:
-        zone_type_targets["生态绿地"] = eco_total * 0.9
-        zone_type_targets["水域"] = eco_total * 0.1
+        eco_ratios = _compute_ecological_ratios(landuse_geojson) if landuse_geojson else {}
+        zone_type_targets["生态绿地"] = eco_total * eco_ratios.get("生态绿地", 0.9)
+        zone_type_targets["水域"] = eco_total * eco_ratios.get("水域", 0.1)
 
     return zone_type_targets
+
+
+def _compute_ecological_ratios(
+    landuse_geojson: Dict[str, Any],
+) -> Dict[str, float]:
+    """Compute ecological split ratios from current land-use data.
+
+    Measures actual 生态绿地 vs 水域 area from parcels, falling back
+    to the default 0.9 / 0.1 split if data is unavailable.
+    """
+    from ..colors import ZONE_TYPE_TO_DLBMS
+    green_dlbms = set(ZONE_TYPE_TO_DLBMS.get("生态绿地", []))
+    water_dlbms = set(ZONE_TYPE_TO_DLBMS.get("水域", []))
+    eco_dlbms = green_dlbms | water_dlbms
+
+    green_area = 0.0
+    water_area = 0.0
+    for ft in landuse_geojson.get("features", []):
+        dlbm = str(ft.get("properties", {}).get("DLBM", "")).strip()
+        if dlbm not in eco_dlbms:
+            continue
+        area = ft.get("properties", {}).get("area_ha", 0.0)
+        if area <= 0:
+            continue
+        if dlbm in green_dlbms:
+            green_area += area
+        elif dlbm in water_dlbms:
+            water_area += area
+
+    total = green_area + water_area
+    if total > 0:
+        return {"生态绿地": green_area / total, "水域": water_area / total}
+    return {"生态绿地": 0.9, "水域": 0.1}
+
+
+def _compute_construction_ratios(landuse_geojson: Dict[str, Any]) -> Dict[str, float]:
+    """Compute construction sub-type ratios from current land use statistics."""
+    from collections import defaultdict
+    from ..colors import DLBM_TO_ZONE_TYPE
+
+    zone_areas: Dict[str, float] = defaultdict(float)
+    for feat in landuse_geojson.get("features", []):
+        props = feat.get("properties", {})
+        dlbm = str(props.get("DLBM", "")).strip()
+        zone_type = DLBM_TO_ZONE_TYPE.get(dlbm, "")
+        if zone_type in _CONSTRUCTION_ZONE_TYPES:
+            area = (props.get("DLMJ", 0) or props.get("SHAPE_Area", 0) or 0) / 10000
+            zone_areas[zone_type] += area
+
+    total = sum(zone_areas.values())
+    if total <= 0:
+        return {}
+
+    return {zt: area / total for zt, area in zone_areas.items()}
 
 
 def map_zone_type_to_planning_zone(

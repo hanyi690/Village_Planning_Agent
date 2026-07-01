@@ -10,7 +10,10 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Required planning zones that must exist in a valid layout
-REQUIRED_ZONE_TYPES = {"永久基本农田保护区", "村庄建设区", "生态保护区", "一般农地区"}
+# 永久基本农田保护区 is optional — villages without basic farmland (e.g. 金田村)
+# won't have this zone, which is correct per YJJBNTTB designation
+REQUIRED_ZONE_TYPES = {"村庄建设区", "生态保护区", "一般农地区"}
+OPTIONAL_ZONE_TYPES = {"永久基本农田保护区"}
 
 # Minimum area (ha) for each zone type
 MIN_ZONE_AREA_HA = {
@@ -52,6 +55,34 @@ class ValidationReport:
     def total_violations(self) -> int:
         return len(self.violations)
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "passed": self.status == "pass",
+            "status": self.status,
+            "total_violations": self.total_violations,
+            "violations": [
+                {"check": v.check, "severity": v.severity, "message": v.message, "details": v.details}
+                for v in self.violations[:10]
+            ],
+            "warnings": self.warnings[:5],
+        }
+
+
+@dataclass
+class RetryValidationReport(ValidationReport):
+    attempt: int = 0
+    retry_suggestion: Optional[Dict[str, Any]] = None
+    final_state: str = ""  # "best_effort" | ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = super().to_dict()
+        d["attempt"] = self.attempt
+        if self.retry_suggestion:
+            d["retry_suggestion"] = self.retry_suggestion
+        if self.final_state:
+            d["final_state"] = self.final_state
+        return d
+
 
 class LayoutValidator:
     """Validates spatial layout against constraint and completeness rules.
@@ -61,7 +92,8 @@ class LayoutValidator:
     2. Zone completeness — all required zone types present
     3. Overlap detection — no geometric overlaps in same layer
     4. Protected parcels — basic farmland / ecological parcels not in construction zone
-    5. Minimum area — each zone meets minimum area threshold
+    5. Minimum area - each zone meets minimum area threshold
+    6. GeoJSON RFC 7946 structural validation
     """
 
     def validate(
@@ -75,6 +107,7 @@ class LayoutValidator:
             self._check_overlap(layout_configs),
             self._check_protected_parcels(layout_configs),
             self._check_min_zone_area(layout_configs),
+            self._check_geojson_structural(layout_configs),
         ]
 
         all_violations = []
@@ -104,8 +137,12 @@ class LayoutValidator:
 
         for c in constraints:
             field = c.get("field", "")
-            op = c.get("operator", "")
+            op = c.get("operator", c.get("op", ""))
             value = c.get("value", 0)
+            try:
+                value = float(value)
+            except (ValueError, TypeError):
+                continue
 
             if "construction" in field and op in ("<=", "lte"):
                 actual = zone_areas.get("村庄建设区", 0)
@@ -165,6 +202,15 @@ class LayoutValidator:
                 details={"missing_zone": zt},
             ))
 
+        missing_optional = OPTIONAL_ZONE_TYPES - zone_types
+        for zt in missing_optional:
+            violations.append(Violation(
+                check="zone_completeness",
+                severity="warning",
+                message=f"缺少可选分区: {zt}（村庄无基本农田划定时不产生此分区）",
+                details={"missing_zone": zt},
+            ))
+
         return CheckResult(
             check_name="zone_completeness",
             passed=len(violations) == 0,
@@ -176,8 +222,8 @@ class LayoutValidator:
         violations = []
 
         try:
-            from shapely import from_geojson
-            import json as _json
+            import shapely.geometry
+            from shapely.strtree import STRtree
         except ImportError:
             return CheckResult(check_name="overlap", passed=True)
 
@@ -194,17 +240,34 @@ class LayoutValidator:
                 g = feat.get("geometry", {})
                 if g and g.get("coordinates"):
                     try:
-                        geom = from_geojson(_json.dumps(g))
-                        geoms.append((feat, geom))
+                        geom = shapely.geometry.shape(g)
+                        if not geom.is_empty:
+                            geoms.append((feat, geom))
                     except Exception:
                         continue
 
+            if len(geoms) < 2:
+                continue
+
+            # Build spatial index for efficient overlap detection
+            geom_list = [g for _, g in geoms]
+            tree = STRtree(geom_list)
+
             overlap_count = 0
-            for i in range(len(geoms)):
-                for j in range(i + 1, min(i + 10, len(geoms))):
+            checked = set()
+            for i, (_, geom_i) in enumerate(geoms):
+                candidates = tree.query(geom_i)
+                for j in candidates:
+                    j = int(j)
+                    if j <= i:
+                        continue
+                    pair = (i, j)
+                    if pair in checked:
+                        continue
+                    checked.add(pair)
                     try:
-                        if geoms[i][1].intersects(geoms[j][1]):
-                            intersection = geoms[i][1].intersection(geoms[j][1])
+                        if geom_i.intersects(geom_list[j]):
+                            intersection = geom_i.intersection(geom_list[j])
                             if intersection.area > 0:
                                 overlap_count += 1
                     except Exception:
@@ -283,6 +346,254 @@ class LayoutValidator:
             violation_count=len(violations),
             violations=violations,
         )
+
+    def _check_geojson_structural(self, layout_configs: List[Dict]) -> CheckResult:
+        """Validate GeoJSON follows RFC 7946 structure for each layer config."""
+        violations = []
+        VALID_GEOM_TYPES = {
+            "Point", "MultiPoint", "LineString", "MultiLineString",
+            "Polygon", "MultiPolygon",
+        }
+
+        for layer_idx, config in enumerate(layout_configs):
+            geojson = config.get("data", config.get("geojson", {}))
+            if not geojson or not isinstance(geojson, dict):
+                continue
+
+            # Top-level: must have type: FeatureCollection and features array
+            if geojson.get("type") != "FeatureCollection":
+                violations.append(Violation(
+                    check="geojson_structural", severity="warning",
+                    message=f"图层 {layer_idx} GeoJSON type 应为 FeatureCollection",
+                    details={"layer": layer_idx, "expected": "FeatureCollection"},
+                ))
+                continue
+
+            features = geojson.get("features")
+            if not isinstance(features, list):
+                violations.append(Violation(
+                    check="geojson_structural", severity="warning",
+                    message=f"图层 {layer_idx} features 应为数组",
+                    details={"layer": layer_idx},
+                ))
+                continue
+
+            # Forbidden: top-level crs member
+            if "crs" in geojson:
+                violations.append(Violation(
+                    check="geojson_structural", severity="warning",
+                    message=f"图层 {layer_idx} GeoJSON 不应包含 crs 成员",
+                    details={"layer": layer_idx},
+                ))
+
+            for fi, feat in enumerate(features):
+                if not isinstance(feat, dict):
+                    violations.append(Violation(
+                        check="geojson_structural", severity="warning",
+                        message=f"图层 {layer_idx} feature {fi} 应为对象",
+                        details={"layer": layer_idx, "feature": fi},
+                    ))
+                    continue
+
+                if feat.get("type") != "Feature":
+                    violations.append(Violation(
+                        check="geojson_structural", severity="warning",
+                        message=f"图层 {layer_idx} feature {fi} type 应为 Feature",
+                        details={"layer": layer_idx, "feature": fi},
+                    ))
+
+                props = feat.get("properties")
+                if props is not None and not isinstance(props, dict):
+                    violations.append(Violation(
+                        check="geojson_structural", severity="warning",
+                        message=f"图层 {layer_idx} feature {fi} properties 应为对象或 null",
+                        details={"layer": layer_idx, "feature": fi},
+                    ))
+
+                geom = feat.get("geometry")
+                if geom is None:
+                    continue
+                if not isinstance(geom, dict):
+                    violations.append(Violation(
+                        check="geojson_structural", severity="warning",
+                        message=f"图层 {layer_idx} feature {fi} geometry 应为对象或 null",
+                        details={"layer": layer_idx, "feature": fi},
+                    ))
+                    continue
+
+                gtype = geom.get("type", "")
+                if gtype and gtype not in VALID_GEOM_TYPES:
+                    violations.append(Violation(
+                        check="geojson_structural", severity="warning",
+                        message=f"图层 {layer_idx} feature {fi} 无效 geometry type: {gtype}",
+                        details={"layer": layer_idx, "feature": fi, "type": gtype},
+                    ))
+
+                # Validate coordinate ranges
+                coords = geom.get("coordinates")
+                if coords is not None:
+                    flat = []
+                    self._flatten_coords(coords, flat)
+                    for ci, pt in enumerate(flat):
+                        if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+                            continue
+                        lon, lat = pt[0], pt[1]
+                        if isinstance(lon, (int, float)) and not (-180 <= lon <= 180):
+                            violations.append(Violation(
+                                check="geojson_structural", severity="warning",
+                                message=f"图层 {layer_idx} feature {fi} 经度越界: {lon}",
+                                details={"layer": layer_idx, "feature": fi, "lon": lon},
+                            ))
+                            break
+                        if isinstance(lat, (int, float)) and not (-90 <= lat <= 90):
+                            violations.append(Violation(
+                                check="geojson_structural", severity="warning",
+                                message=f"图层 {layer_idx} feature {fi} 纬度越界: {lat}",
+                                details={"layer": layer_idx, "feature": fi, "lat": lat},
+                            ))
+                            break
+
+                # Validate polygon ring closure
+                if gtype in ("Polygon", "MultiPolygon") and coords is not None:
+                    self._validate_ring_closure(coords, gtype, violations, layer_idx, fi)
+
+        return CheckResult(
+            check_name="geojson_structural",
+            passed=len(violations) == 0,
+            violation_count=len(violations),
+            violations=violations,
+        )
+
+    @staticmethod
+    def _flatten_coords(coords: Any, flat: List) -> None:
+        """Recursively flatten coordinate arrays to [lon, lat] pairs."""
+        if isinstance(coords, (list, tuple)) and coords:
+            if isinstance(coords[0], (list, tuple)):
+                for item in coords:
+                    LayoutValidator._flatten_coords(item, flat)
+            else:
+                flat.append(coords)
+
+    @staticmethod
+    def _validate_ring_closure(
+        coords: Any, geom_type: str,
+        violations: List[Violation], layer_idx: int, feat_idx: int,
+    ) -> None:
+        """Check polygon rings are closed (first == last coordinate)."""
+        rings = coords if geom_type == "Polygon" else coords
+        if not isinstance(rings, (list, tuple)):
+            return
+        for ring in rings:
+            if geom_type == "MultiPolygon":
+                # MultiPolygon: coords = [[ring1, ring2...], [ring1...]]
+                if isinstance(ring, (list, tuple)) and ring and isinstance(ring[0], (list, tuple)):
+                    for sub_ring in ring:
+                        LayoutValidator._check_ring(sub_ring, violations, layer_idx, feat_idx)
+                else:
+                    LayoutValidator._check_ring(ring, violations, layer_idx, feat_idx)
+            else:
+                LayoutValidator._check_ring(ring, violations, layer_idx, feat_idx)
+
+    @staticmethod
+    def _check_ring(
+        ring: Any, violations: List[Violation], layer_idx: int, feat_idx: int,
+    ) -> None:
+        """Check a single polygon ring for closure."""
+        if not isinstance(ring, (list, tuple)) or len(ring) < 4:
+            return
+        first, last = ring[0], ring[-1]
+        if not (isinstance(first, (list, tuple)) and isinstance(last, (list, tuple))):
+            return
+        if len(first) >= 2 and len(last) >= 2:
+            if (abs(first[0] - last[0]) > 1e-10 or abs(first[1] - last[1]) > 1e-10):
+                violations.append(Violation(
+                    check="geojson_structural", severity="warning",
+                    message=f"图层 {layer_idx} feature {feat_idx} 边界环未闭合",
+                    details={"layer": layer_idx, "feature": feat_idx},
+                ))
+
+    def validate_with_retry(
+        self,
+        layout_configs: List[Dict[str, Any]],
+        constraints: Optional[List[Dict[str, Any]]] = None,
+        max_retries: int = 3,
+    ) -> RetryValidationReport:
+        """Validate layout and generate adjustment suggestions on failure."""
+        constraints = constraints or []
+
+        for attempt in range(max_retries):
+            report = self.validate(layout_configs, constraints)
+
+            if report.status == "pass":
+                return RetryValidationReport(
+                    status=report.status,
+                    checks=report.checks,
+                    violations=report.violations,
+                    warnings=report.warnings,
+                    attempt=attempt + 1,
+                )
+
+            suggestion = self._generate_adjustment(report.violations)
+            logger.info(
+                f"[Validator] Attempt {attempt + 1}/{max_retries} failed "
+                f"({report.total_violations} violations)"
+            )
+
+            # Last attempt — return with suggestion
+            if attempt == max_retries - 1:
+                return RetryValidationReport(
+                    status=report.status,
+                    checks=report.checks,
+                    violations=report.violations,
+                    warnings=report.warnings,
+                    attempt=attempt + 1,
+                    retry_suggestion=suggestion,
+                    final_state="best_effort",
+                )
+
+        # Should not reach here, but safety
+        return RetryValidationReport(status="fail", attempt=max_retries)
+
+    def _generate_adjustment(
+        self, violations: List[Violation]
+    ) -> Dict[str, Any]:
+        """Generate target adjustment suggestions from violations."""
+        adjustments = []
+
+        for v in violations:
+            if v.check == "area_constraint":
+                details = v.details
+                zone = details.get("zone", "")
+                if "超过上限" in v.message:
+                    adjustments.append({
+                        "action": "reduce_area_ratio",
+                        "zone": zone,
+                        "reason": f"{zone} 面积超标，建议降低面积比例",
+                    })
+                elif "低于下限" in v.message:
+                    adjustments.append({
+                        "action": "increase_area_ratio",
+                        "zone": zone,
+                        "reason": f"{zone} 面积不足，建议提高面积比例",
+                    })
+            elif v.check == "zone_completeness":
+                missing = v.details.get("missing_zone", "")
+                adjustments.append({
+                    "action": "add_missing_zone",
+                    "zone": missing,
+                    "reason": f"缺少必需分区 {missing}，需添加",
+                })
+            elif v.check == "protected_parcels":
+                adjustments.append({
+                    "action": "reassign_protected",
+                    "zone": "村庄建设区",
+                    "reason": "受保护地块被分配到建设区，需重新分配至农业或生态区",
+                })
+
+        return {
+            "adjustments": adjustments,
+            "summary": f"共 {len(adjustments)} 项调整建议",
+        }
 
     @staticmethod
     def _get_zone_areas(layout_configs: List[Dict]) -> Dict[str, float]:

@@ -12,8 +12,9 @@ from .planning_zone_mapper import (
 )
 from .procedural import (
     merge_parcels, split_by_area, simplify_boundary, buffer_zone,
-    geojson_to_geodataframe, geodataframe_to_geojson,
 )
+from ...utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
+from .ca_refiner import ZoneCARefiner
 
 __all__ = [
     "ConstraintDrivenAllocator", "MIPZoneAllocator",
@@ -23,4 +24,5 @@ __all__ = [
     "map_zone_type_to_planning_zone", "remap_assigned_zones",
     "merge_parcels", "split_by_area", "simplify_boundary", "buffer_zone",
     "geojson_to_geodataframe", "geodataframe_to_geojson",
+    "ZoneCARefiner",
 ]

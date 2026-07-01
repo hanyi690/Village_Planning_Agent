@@ -68,14 +68,8 @@ DLBM_ZONE_PREFERENCE: Dict[str, Dict[str, int]] = {
     "0900": {"公共服务用地": 0, "居住用地": 5, "产业用地": 10, "农业用地": 30},
 }
 
-# DLBM codes that are protected (farmland/ecological) — cannot go to construction
-PROTECTED_DLBM_CODES = {
-    "0110", "0120", "0130", "0100", "0200", "0210", "0220",
-    "1100", "1200", "1510", "1180", "2270",
-    "1340", "1350", "0310", "0330", "1400", "0300", "0400",
-}
-
-CONSTRUCTION_ZONE_TYPES = {"居住用地", "产业用地", "公共服务用地", "交通用地", "商业用地"}
+# Protected DLBM codes and construction zone types — single source from colors.py
+from ..colors import PROTECTED_DLBM_CODES, CONSTRUCTION_ZONE_TYPES
 
 # Default cost for DLBM-zone pairs not in preference table
 DEFAULT_PREFERENCE_COST = 15
@@ -131,21 +125,34 @@ class MIPZoneAllocator:
 
         # Build parcel data
         parcels = []
+        duplicate_bsms = set()
+        seen_bsms = set()
         for ft in features:
             props = ft.get("properties", {})
-            bsm = str(props.get("BSM", ""))
+            bsm = str(props.get("BSM", "")).strip()
+            dlbm = str(props.get("DLBM", "")).strip()
             if not bsm:
                 continue
-            area = (props.get("DLMJ", 0) or props.get("SHAPE_Area", 0)) / 10000
-            dlbm = str(props.get("DLBM", "")).strip()
+            shape_area = props.get("SHAPE_Area", 0) or 0
+            composite_key = f"{bsm}_{dlbm}_{int(shape_area)}"
+            if bsm in seen_bsms:
+                duplicate_bsms.add(bsm)
+            seen_bsms.add(bsm)
+            area = (props.get("DLMJ", 0) or shape_area) / 10000
             current_zone = resolve_zone_type_for_dlbm(dlbm)
             parcels.append({
-                "bsm": bsm,
+                "composite_key": composite_key,
+                "bsm_bare": bsm,
                 "area_ha": area,
                 "dlbm": dlbm,
                 "current_zone": current_zone,
                 "feature": ft,
             })
+
+        if duplicate_bsms:
+            logger.info(
+                f"[MIP] Found {len(duplicate_bsms)} BSMs with multiple DLBM codes"
+            )
 
         zone_types = list(targets.keys())
         n_parcels = len(parcels)
@@ -250,24 +257,26 @@ class MIPZoneAllocator:
                 assigned_zt = zone_types[best_j]
             else:
                 assigned_zt = p["current_zone"]
-            assignments[p["bsm"]] = assigned_zt
+            assignments[p["composite_key"]] = assigned_zt
             zone_areas[assigned_zt] += p["area_ha"]
 
         # Build output GeoJSON
         output_features = []
         for p in parcels:
             ft = dict(p["feature"])
-            assigned = assignments.get(p["bsm"], p["current_zone"])
+            assigned = assignments.get(p["composite_key"], p["current_zone"])
             ft.setdefault("properties", {})
             ft["properties"]["assigned_zone"] = assigned
             ft["properties"]["original_zone"] = p["current_zone"]
             ft["properties"]["changed"] = assigned != p["current_zone"]
             ft["properties"]["area_ha"] = p["area_ha"]
+            ft["properties"]["composite_key"] = p["composite_key"]
+            ft["properties"]["bsm_raw"] = p["bsm_bare"]
             output_features.append(ft)
 
         # Log results
         changed = sum(1 for p in parcels
-                      if assignments.get(p["bsm"], p["current_zone"]) != p["current_zone"])
+                      if assignments.get(p["composite_key"], p["current_zone"]) != p["current_zone"])
         total_deviation = sum(
             abs(zone_areas.get(zt, 0) - targets.get(zt, 0))
             for zt in zone_types

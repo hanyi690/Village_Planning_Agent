@@ -16,6 +16,9 @@ import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
+from ..utils.crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
+from ..utils.area_engine import calculate_area_ha
+from ..utils.geo_utils import safe_geo_series_union
 
 logger = get_logger(__name__)
 
@@ -80,20 +83,25 @@ class AxisBuilder:
 
         # Compute village center from parcels for reference
         geoms = []
+        dlbms = []
         for ft in landuse_geojson["features"]:
             g = ft.get("geometry", {})
+            props = ft.get("properties", {})
             if g and g.get("coordinates"):
                 try:
                     geoms.append(from_geojson(json.dumps(g)))
+                    dlbms.append(str(props.get("DLBM", "")).strip())
                 except Exception:
                     continue
 
         if not geoms:
             return None
 
-        gdf = gpd.GeoDataFrame(geometry=geoms, crs="EPSG:4326").to_crs("EPSG:3857")
-        center = gdf.geometry.union_all().centroid
-        center_4326 = gpd.GeoSeries([center], crs="EPSG:3857").to_crs("EPSG:4326")[0]
+        gdf = gpd.GeoDataFrame({"DLBM": dlbms}, geometry=geoms, crs="EPSG:4326")
+        gdf = project_to_metric(gdf)
+        center = safe_geo_series_union(gdf.geometry).centroid
+        metric_crs = get_metric_crs(center.x)
+        center_4326 = project_to_wgs84(gpd.GeoSeries([center], crs=metric_crs))[0]
 
         features = []
 
@@ -177,15 +185,17 @@ class AxisBuilder:
         if not geoms:
             return None
 
-        gdf = gpd.GeoDataFrame(props, geometry=geoms, crs="EPSG:4326").to_crs("EPSG:3857")
+        gdf = gpd.GeoDataFrame(props, geometry=geoms, crs="EPSG:4326")
+        gdf = project_to_metric(gdf)
+        metric_crs = get_metric_crs(safe_geo_series_union(gdf.geometry).centroid.x)
         gdf["cx"] = gdf.geometry.centroid.x
         gdf["cy"] = gdf.geometry.centroid.y
 
         # 一核: Village center
         build = gdf[gdf["DLBM"].apply(lambda x: str(x).strip() in BUILDING_DLBM_CODES)]
         if len(build) > 0:
-            center = build.geometry.union_all().centroid
-            center_4326 = gpd.GeoSeries([center], crs="EPSG:3857").to_crs("EPSG:4326")[0]
+            center = safe_geo_series_union(build.geometry).centroid
+            center_4326 = project_to_wgs84(gpd.GeoSeries([center], crs=metric_crs))[0]
             features.append({
                 "type": "Feature",
                 "properties": {
@@ -210,7 +220,7 @@ class AxisBuilder:
                 if simplified[-1] != coords[-1]:
                     simplified.append(coords[-1])
                 line_3857 = LineString(simplified)
-                line_4326 = gpd.GeoSeries([line_3857], crs="EPSG:3857").to_crs("EPSG:4326")[0]
+                line_4326 = project_to_wgs84(gpd.GeoSeries([line_3857], crs=metric_crs))[0]
                 features.append({
                     "type": "Feature",
                     "properties": {
@@ -243,12 +253,12 @@ class AxisBuilder:
         for name, parcels, direction in zone_defs:
             if len(parcels) == 0:
                 continue
-            geom = parcels.geometry.union_all()
+            geom = safe_geo_series_union(parcels.geometry)
             if geom.is_empty:
                 continue
             simplified = geom.simplify(50, preserve_topology=True)
-            geom_4326 = gpd.GeoSeries([simplified], crs="EPSG:3857").to_crs("EPSG:4326")[0]
-            area_ha = parcels.to_crs("EPSG:3857").geometry.area.sum() / 10000
+            geom_4326 = project_to_wgs84(gpd.GeoSeries([simplified], crs=metric_crs))[0]
+            area_ha = calculate_area_ha(safe_geo_series_union(parcels.geometry), metric_crs=metric_crs)
             features.append({
                 "type": "Feature",
                 "properties": {
@@ -260,7 +270,7 @@ class AxisBuilder:
                 },
                 "geometry": {
                     "type": "Polygon" if geom_4326.geom_type == "Polygon" else "MultiPolygon",
-                    "coordinates": json.loads(json.dumps(geom_4326.__geo_interface__))["coordinates"],
+                    "coordinates": geom_4326.__geo_interface__["coordinates"],
                 },
             })
 
@@ -294,7 +304,8 @@ class AxisBuilder:
             simplified.append(coords[-1])
 
         line_3857 = LineString(simplified)
-        line_4326 = gpd.GeoSeries([line_3857], crs="EPSG:3857").to_crs("EPSG:4326")[0]
+        metric_crs = get_metric_crs(line_3857.centroid.x)
+        line_4326 = project_to_wgs84(gpd.GeoSeries([line_3857], crs=metric_crs))[0]
 
         return {
             "type": "LineString",

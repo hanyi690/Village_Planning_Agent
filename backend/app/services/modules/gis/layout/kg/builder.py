@@ -20,6 +20,7 @@ from rdflib import Graph, Namespace, Literal, RDF, URIRef, BNode
 from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
+from ...utils.crs_engine import project_to_metric, get_metric_crs
 
 logger = get_logger(__name__)
 
@@ -92,7 +93,7 @@ INDICATOR_PATTERNS = [
 # Zone definitions extracted from land_use_planning report tables
 ZONE_TYPE_PATTERNS = {
     "永久基本农田保护区": {"color": "#FFE4B5", "restrictions": ["禁止非农化", "禁止非粮化"]},
-    "村庄建设区": {"color": "#FF6347", "restrictions": ["建设用地规模上限30.5ha"]},
+    "村庄建设区": {"color": "#FF6347", "restrictions": ["建设用地规模受控"]},
     "生态保护区": {"color": "#2E8B57", "restrictions": ["禁止工业开发", "禁止城镇化"]},
     "一般农地区": {"color": "#98FB98", "restrictions": ["限制大规模非农建设"]},
 }
@@ -157,6 +158,7 @@ class PlanningKG:
         reports: Dict[str, Dict[str, Any]],
         landuse_geojson: Optional[Dict[str, Any]] = None,
         boundary_geojson: Optional[Dict[str, Any]] = None,
+        gis_data: Optional[Dict[str, Any]] = None,
     ) -> "PlanningKG":
         """一键构建完整知识图谱。
 
@@ -164,6 +166,7 @@ class PlanningKG:
             reports: {dimension_key: {summary: {...}, content: "..."}}
             landuse_geojson: 现状用地图斑 GeoJSON (660 parcels)
             boundary_geojson: 村界 GeoJSON
+            gis_data: Full GIS data dict (used to compute zone areas from actual data)
 
         Returns:
             self (for chaining)
@@ -172,6 +175,9 @@ class PlanningKG:
         self.g.bind("pln", PLN)
         self._parcel_count = 0
         self._constraint_count = 0
+
+        # Compute zone areas from GIS data (replaces hardcoded values)
+        zone_areas = self._compute_zone_areas_from_gis(gis_data)
 
         # 1. Add village entity
         village = PLN.village
@@ -183,13 +189,13 @@ class PlanningKG:
             self._add_parcels(landuse_geojson)
 
         # 3. Add constraints from reports
-        self._add_constraints(reports)
+        self._add_constraints(reports, zone_areas)
 
         # 4. Add indicators from reports
         self._add_indicators(reports)
 
         # 5. Add zones from report content
-        self._add_zones(reports)
+        self._add_zones(reports, zone_areas)
 
         # 6. Build spatial adjacency
         if landuse_geojson:
@@ -202,15 +208,80 @@ class PlanningKG:
         )
         return self
 
+    def _compute_zone_areas_from_gis(
+        self, gis_data: Optional[Dict[str, Any]]
+    ) -> Dict[str, float]:
+        """Compute zone areas from GIS landuse data, replacing hardcoded values.
+
+        Loads landuse_current GeoJSON, projects to metric CRS, dissolves by
+        zone_type, and computes area in hectares.
+
+        Returns:
+            {zone_type: area_ha} e.g. {"农业用地": 1960.7, "生态绿地": 362.0}
+        """
+        if not gis_data:
+            return {}
+
+        landuse_geojson = gis_data.get("landuse_current_geojson")
+        if not landuse_geojson or not landuse_geojson.get("features"):
+            return {}
+
+        try:
+            from ...utils.geojson_utils import geojson_to_geodataframe
+            from ..colors import get_zone_type_for_dlbm
+
+            gdf = geojson_to_geodataframe(landuse_geojson)
+            if gdf is None or len(gdf) == 0:
+                return {}
+
+            # Add zone_type column from DLBM
+            gdf["zone_type"] = gdf["DLBM"].apply(
+                lambda d: get_zone_type_for_dlbm(str(d).strip())
+            )
+
+            # Project to metric CRS for accurate area calculation
+            gdf_proj = project_to_metric(gdf)
+
+            # Fix invalid geometries before dissolve to prevent TopologyException
+            gdf_proj["geometry"] = gdf_proj.geometry.apply(
+                lambda g: g.buffer(0) if g is not None and not g.is_valid else g
+            )
+            gdf_proj = gdf_proj[~gdf_proj.is_empty]
+
+            # Dissolve by zone_type and compute area
+            dissolved = gdf_proj.dissolve(by="zone_type", aggfunc="sum")
+            dissolved["area_ha"] = dissolved.geometry.area / 10000.0
+
+            zone_areas = {}
+            for zone_type, row in dissolved.iterrows():
+                zone_areas[str(zone_type)] = round(float(row["area_ha"]), 2)
+
+            logger.info(
+                f"[PlanningKG] Computed zone areas from GIS: {zone_areas}"
+            )
+            return zone_areas
+
+        except Exception as e:
+            logger.warning(f"[PlanningKG] Zone area computation failed: {e}")
+            return {}
+
     def _add_parcels(self, geojson: Dict[str, Any]):
-        """Add all parcels as PLN:Parcel entities."""
+        """Add all parcels as PLN:Parcel entities.
+
+        Uses composite key f"{BSM}_{DLBM}_{SHAPE_Area}" as entity name because
+        BSM is NOT unique — 80 BSMs have 2 different DLBM codes, and 38 BSM+DLBM
+        pairs have multiple features with different geometries/areas.
+        Three-level key ensures all 660 parcels are preserved.
+        """
         features = geojson.get("features", [])
         from ..colors import get_zone_type_for_dlbm
         from ..zone_generator import resolve_zone_type_for_dlbm
 
+        duplicate_bsms = set()
+        seen_bsms = set()
         for ft in features:
             props = ft.get("properties", {})
-            bsm = str(props.get("BSM", ""))
+            bsm = str(props.get("BSM", "")).strip()
             dlbm = str(props.get("DLBM", "")).strip()
             dlmc = str(props.get("DLMC", "")).strip()
             area = props.get("DLMJ", 0) or props.get("SHAPE_Area", 0)
@@ -218,7 +289,13 @@ class PlanningKG:
             if not bsm:
                 continue
 
-            parcel = PLN[f"parcel_{bsm}"]
+            shape_area = props.get("SHAPE_Area", 0) or 0
+            composite_key = f"{bsm}_{dlbm}_{int(shape_area)}"
+            if bsm in seen_bsms:
+                duplicate_bsms.add(bsm)
+            seen_bsms.add(bsm)
+
+            parcel = PLN[f"parcel_{composite_key}"]
             self.g.add((parcel, RDF.type, PLN.Parcel))
             self.g.add((parcel, PLN.bsm, Literal(bsm)))
             self.g.add((parcel, PLN.dlbm, Literal(dlbm)))
@@ -232,7 +309,16 @@ class PlanningKG:
 
             self._parcel_count += 1
 
-    def _add_constraints(self, reports: Dict[str, Dict[str, Any]]):
+        if duplicate_bsms:
+            logger.info(
+                f"[PlanningKG] Found {len(duplicate_bsms)} BSMs with multiple DLBM codes"
+            )
+
+    def _add_constraints(
+        self,
+        reports: Dict[str, Dict[str, Any]],
+        zone_areas: Optional[Dict[str, float]] = None,
+    ):
         """Extract constraints from report summaries using patterns.
 
         Matches both Chinese metric keys (e.g. 建设用地规模_公顷) and
@@ -267,19 +353,30 @@ class PlanningKG:
                                                 mapping["operator"], float(value),
                                                 mapping["description"], dk)
 
-        # Also parse spatial structure constraints from content
-        for dk, report in reports.items():
-            content = report.get("content", "")
-            if "生态保护红线" in content and "362.02" in content:
-                c = PLN.ecological_redline_protection
-                self.g.add((c, RDF.type, PLN.Constraint))
-                self.g.add((c, PLN.field, Literal("ecological_redline_ha")))
-                self.g.add((c, PLN.operator, Literal(">=")))
-                self.g.add((c, PLN.value, Literal(362.02, datatype=XSD.double)))
-                self.g.add((c, PLN.prohibits, Literal("industrial_development")))
-                self.g.add((c, PLN.prohibits, Literal("urbanization")))
-                self.g.add((c, PLN.source, Literal(dk)))
-                self._constraint_count += 1
+        # Add ecological redline constraint from GIS data or report metrics
+        eco_area = None
+        if zone_areas:
+            eco_area = zone_areas.get("生态绿地")
+        if eco_area is None:
+            # Fallback: try report metrics
+            for dk, report in reports.items():
+                metrics = report.get("summary", {}).get("metrics", {})
+                for key in ("生态保护红线面积", "min_ecological_redline_ha"):
+                    if key in metrics and metrics[key] is not None:
+                        eco_area = float(metrics[key])
+                        break
+                if eco_area is not None:
+                    break
+        if eco_area is not None:
+            c = PLN.ecological_redline_protection
+            self.g.add((c, RDF.type, PLN.Constraint))
+            self.g.add((c, PLN.field, Literal("ecological_redline_ha")))
+            self.g.add((c, PLN.operator, Literal(">=")))
+            self.g.add((c, PLN.value, Literal(eco_area, datatype=XSD.double)))
+            self.g.add((c, PLN.prohibits, Literal("industrial_development")))
+            self.g.add((c, PLN.prohibits, Literal("urbanization")))
+            self.g.add((c, PLN.source, Literal("gis_data")))
+            self._constraint_count += 1
 
     def _add_constraint_triple(
         self, cid: str, field: str, operator: str,
@@ -314,8 +411,16 @@ class PlanningKG:
                 self.g.add((indicator, PLN.source, Literal(dk)))
                 self.g.add((PLN.village, PLN.has_indicator, indicator))
 
-    def _add_zones(self, reports: Dict[str, Dict[str, Any]]):
-        """Add planning zone definitions from report content."""
+    def _add_zones(
+        self,
+        reports: Dict[str, Dict[str, Any]],
+        zone_areas: Optional[Dict[str, float]] = None,
+    ):
+        """Add planning zone definitions from report content.
+
+        Zone area targets are computed from GIS data when available,
+        falling back to report metrics, then omitting if neither exists.
+        """
         for name, props in ZONE_TYPE_PATTERNS.items():
             zone = PLN[f"zone_{name}"]
             self.g.add((zone, RDF.type, PLN.Zone))
@@ -325,24 +430,62 @@ class PlanningKG:
                 self.g.add((zone, PLN.restriction, Literal(restriction)))
             self.g.add((PLN.village, PLN.has_zone, zone))
 
-        # Add spatial structure zones from report
+        # Zone name → zone_type mapping for area lookup
+        ZONE_NAME_TO_TYPE = {
+            "生态农业发展区": "农业用地",
+            "生态保育屏障区": "生态绿地",
+            "宜居生活建设区": "居住用地",
+        }
+
+        # Add spatial structure zones with computed areas
+        # GIS data zones: create zone entities from zone_areas regardless of report keywords
+        GIS_ZONE_MAP = [
+            ("农业用地", "zone_gis_farmland"),
+            ("生态绿地", "zone_gis_ecological"),
+            ("居住用地", "zone_gis_residential"),
+            ("建设用地", "zone_gis_construction"),
+        ]
+        if zone_areas:
+            for zone_type, zone_uri_name in GIS_ZONE_MAP:
+                if zone_type not in zone_areas:
+                    continue
+                zone = PLN[zone_uri_name]
+                self.g.add((zone, RDF.type, PLN.Zone))
+                self.g.add((zone, PLN.name, Literal(zone_type)))
+                self.g.add((zone, PLN.area_target_ha, Literal(zone_areas[zone_type], datatype=XSD.double)))
+                self.g.add((PLN.village, PLN.has_zone, zone))
+
+        # Report-content zones: create from keyword matches in report text
         for dk, report in reports.items():
             content = report.get("content", "")
-            if "生态农业发展区" in content:
-                zone = PLN.zone_eco_agriculture
+            metrics = report.get("summary", {}).get("metrics", {})
+
+            for zone_name, zone_uri_name, zone_type in [
+                ("生态农业发展区", "zone_eco_agriculture", "农业用地"),
+                ("生态保育屏障区", "zone_eco_barrier", "生态绿地"),
+                ("宜居生活建设区", "zone_livable", "居住用地"),
+            ]:
+                if zone_name not in content:
+                    continue
+
+                zone = PLN[zone_uri_name]
                 self.g.add((zone, RDF.type, PLN.Zone))
-                self.g.add((zone, PLN.name, Literal("生态农业发展区")))
-                self.g.add((zone, PLN.area_target_ha, Literal(1960.70, datatype=XSD.double)))
-            if "生态保育屏障区" in content:
-                zone = PLN.zone_eco_barrier
-                self.g.add((zone, RDF.type, PLN.Zone))
-                self.g.add((zone, PLN.name, Literal("生态保育屏障区")))
-                self.g.add((zone, PLN.area_target_ha, Literal(362.02, datatype=XSD.double)))
-            if "宜居生活建设区" in content:
-                zone = PLN.zone_livable
-                self.g.add((zone, RDF.type, PLN.Zone))
-                self.g.add((zone, PLN.name, Literal("宜居生活建设区")))
-                self.g.add((zone, PLN.area_target_ha, Literal(30.50, datatype=XSD.double)))
+                self.g.add((zone, PLN.name, Literal(zone_name)))
+
+                # Area: GIS data > report metrics > omit
+                area_ha = None
+                if zone_areas and zone_type in zone_areas:
+                    area_ha = zone_areas[zone_type]
+                if area_ha is None:
+                    for metric_key, metric_val in metrics.items():
+                        if zone_type in metric_key and metric_val is not None:
+                            try:
+                                area_ha = float(metric_val)
+                                break
+                            except (ValueError, TypeError):
+                                continue
+                if area_ha is not None:
+                    self.g.add((zone, PLN.area_target_ha, Literal(area_ha, datatype=XSD.double)))
 
     def _add_spatial_relations(self, geojson: Dict[str, Any]):
         """Build parcel adjacency graph from GeoDataFrame spatial joins."""
@@ -352,7 +495,7 @@ class PlanningKG:
             if gdf is None or len(gdf) < 2:
                 return
 
-            gdf_proj = gdf.to_crs("EPSG:3857")
+            gdf_proj = project_to_metric(gdf)
             # Spatial join: find parcels within 10m of each other
             gdf_proj["geometry_buffered"] = gdf_proj.geometry.buffer(10)
             joined = gdf_proj.sjoin(
@@ -363,16 +506,30 @@ class PlanningKG:
 
             # Add adjacent_to relations for touching parcels
             edge_count = 0
+            seen_edges = set()
             for _, row in joined.iterrows():
-                bsm_a = str(row.get("BSM_left", ""))
-                bsm_b = str(row.get("BSM_right", ""))
-                if bsm_a and bsm_b and bsm_a != bsm_b:
-                    parcel_a = PLN[f"parcel_{bsm_a}"]
-                    parcel_b = PLN[f"parcel_{bsm_b}"]
+                bsm_a = str(row.get("BSM_left", "")).strip()
+                bsm_b = str(row.get("BSM_right", "")).strip()
+                dlbm_a = str(row.get("DLBM_left", "")).strip()
+                dlbm_b = str(row.get("DLBM_right", "")).strip()
+                if not (bsm_a and bsm_b and dlbm_a and dlbm_b):
+                    continue
+                ck_a = f"{bsm_a}_{dlbm_a}_{int(row.get('SHAPE_Area_left', 0) or 0)}"
+                ck_b = f"{bsm_b}_{dlbm_b}_{int(row.get('SHAPE_Area_right', 0) or 0)}"
+                if ck_a == ck_b:
+                    continue
+                edge_key = tuple(sorted([ck_a, ck_b]))
+                if edge_key in seen_edges:
+                    continue
+                seen_edges.add(edge_key)
+                parcel_a = PLN[f"parcel_{ck_a}"]
+                parcel_b = PLN[f"parcel_{ck_b}"]
+                if (parcel_a, RDF.type, PLN.Parcel) in self.g and \
+                   (parcel_b, RDF.type, PLN.Parcel) in self.g:
                     self.g.add((parcel_a, PLN.adjacent_to, parcel_b))
                     edge_count += 1
-                    if edge_count >= 5000:  # Limit for performance
-                        break
+                if edge_count >= 5000:
+                    break
 
             logger.info(f"[PlanningKG] Added {edge_count} adjacency edges")
         except Exception as e:
@@ -417,6 +574,29 @@ class PlanningKG:
             }
         """
         return self.query(query_str)
+
+    def get_adjacency_map(self) -> Dict[str, set]:
+        """Get parcel adjacency map from KG triples.
+
+        SPARQL-queries pln:adjacent_to triples and returns a dict mapping
+        each parcel composite key to the set of adjacent parcel composite keys.
+
+        Returns:
+            {composite_key: {adjacent_composite_key, ...}}
+        """
+        adj_map: Dict[str, set] = {}
+        for s, _, o in self.g.triples((None, PLN.adjacent_to, None)):
+            # Extract composite key from URI: pln:parcel_BSM_DLBM_Area
+            key_s = str(s)
+            key_o = str(o)
+            prefix = str(PLN) + "parcel_"
+            if key_s.startswith(prefix) and key_o.startswith(prefix):
+                ck_s = key_s[len(prefix):]
+                ck_o = key_o[len(prefix):]
+                adj_map.setdefault(ck_s, set()).add(ck_o)
+                adj_map.setdefault(ck_o, set()).add(ck_s)
+        logger.info(f"[PlanningKG] Adjacency map: {len(adj_map)} parcels with neighbors")
+        return adj_map
 
     def get_parcel_count(self) -> int:
         return self._parcel_count

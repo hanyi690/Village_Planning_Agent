@@ -23,16 +23,17 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Priority order for assigning parcels: DLBM directly matching zone type
-DLBM_PREFERENCE = {
-    "居住用地": ["2121", "2030"],
-    "产业用地": ["2124", "0600", "0610", "0620"],
-    "公共服务用地": ["2122", "2125", "0800", "0900"],
-    "农业用地": ["1100", "0110", "0120", "0130", "1200", "1510", "2270", "0200", "0210", "0220", "1180", "0100"],
-    "生态绿地": ["1340", "1350", "0310", "0330", "1400", "0300", "0400"],
-    "水域": ["3100", "1110", "1140"],
-    "交通用地": ["2126", "2200", "1040", "1000"],
-    "商业用地": ["0500"],
-}
+# Imported from colors.py ZONE_TYPE_TO_DLBMS (single source of truth)
+from ..colors import ZONE_TYPE_TO_DLBMS as DLBM_PREFERENCE, PROTECTED_DLBM_CODES, CONSTRUCTION_ZONE_TYPES
+
+# Precomputed DLBM category sets (avoid rebuilding per _preference_cost call)
+_AGRI_DLBM_SET: set = set()
+_ECO_DLBM_SET: set = set()
+for _zt, _dlbms in DLBM_PREFERENCE.items():
+    if _zt == "农业用地":
+        _AGRI_DLBM_SET.update(_dlbms)
+    if _zt in ("生态绿地", "水域"):
+        _ECO_DLBM_SET.update(_dlbms)
 
 # Constraints translate to parcel-level rules
 CONSTRAINT_NAMES = {
@@ -72,10 +73,11 @@ class ConstraintDrivenAllocator:
       5. Repeat until stable or max iterations
     """
 
-    def __init__(self):
+    def __init__(self, adjacency_map: Optional[Dict[str, set]] = None):
         self.assignments: Dict[str, str] = {}  # bsm → zone_type
         self.zone_areas: Dict[str, float] = defaultdict(float)
         self.constraints: List[Dict] = []
+        self.adjacency_map: Dict[str, set] = adjacency_map or {}
 
     def solve(
         self,
@@ -84,6 +86,7 @@ class ConstraintDrivenAllocator:
         constraints: Optional[List[Dict]] = None,
         kg=None,
         mode: str = "greedy",
+        protection_zones: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Run constraint-driven allocation.
 
@@ -106,7 +109,22 @@ class ConstraintDrivenAllocator:
             allocator = MIPZoneAllocator()
             return allocator.solve(landuse_geojson, targets, constraints, kg)
 
+        # Reset state from any prior solve() call
+        self.assignments = {}
+        self.zone_areas = defaultdict(float)
         self.constraints = constraints or []
+
+        # Convert protection zones to hard constraints
+        if protection_zones:
+            for zone_name, geojson in protection_zones.items():
+                if geojson and geojson.get("features"):
+                    self.constraints.append({
+                        "id": f"protection_{zone_name}",
+                        "op": "forbidden",
+                        "zone_name": zone_name,
+                        "geojson": geojson,
+                    })
+
         features = landuse_geojson.get("features", [])
         if not features:
             return landuse_geojson
@@ -124,26 +142,42 @@ class ConstraintDrivenAllocator:
             k in PLANNING_ZONE_TO_ZONE_TYPES for k in targets
         )
         if uses_planning_zones:
-            zone_type_targets = map_planning_zone_targets_to_zone_types(targets)
+            zone_type_targets = map_planning_zone_targets_to_zone_types(targets, landuse_geojson)
         else:
             zone_type_targets = targets
 
-        # Build parcel index: bsm → (area_ha, dlbm, current_zone, geometry)
+        # Build parcel index: composite_key (BSM_DLBM_SHAPEArea) → parcel info
+        # BSM is NOT unique — 80 BSMs have 2 different DLBM codes, and 38 BSM+DLBM
+        # pairs have multiple features with different geometries/areas.
+        # Three-level key (BSM_DLBM_SHAPEArea) ensures all 660 parcels are preserved.
         parcel_db = {}
+        duplicate_bsms = set()
+        seen_bsms = set()
         for ft in features:
             props = ft.get("properties", {})
-            bsm = str(props.get("BSM", ""))
+            bsm = str(props.get("BSM", "")).strip()
+            dlbm = str(props.get("DLBM", "")).strip()
             if not bsm:
                 continue
-            area = (props.get("DLMJ", 0) or props.get("SHAPE_Area", 0)) / 10000
-            dlbm = str(props.get("DLBM", "")).strip()
+            shape_area = props.get("SHAPE_Area", 0) or 0
+            composite_key = f"{bsm}_{dlbm}_{int(shape_area)}"
+            if bsm in seen_bsms:
+                duplicate_bsms.add(bsm)
+            seen_bsms.add(bsm)
+            area = (props.get("DLMJ", 0) or shape_area) / 10000
             current_zone = resolve_zone_type_for_dlbm(dlbm)
-            parcel_db[bsm] = {
+            parcel_db[composite_key] = {
                 "area_ha": area,
                 "dlbm": dlbm,
+                "bsm_bare": bsm,
                 "current_zone": current_zone,
                 "feature": ft,
             }
+
+        if duplicate_bsms:
+            logger.info(
+                f"[Allocator] Found {len(duplicate_bsms)} BSMs with multiple DLBM codes"
+            )
 
         total_area = sum(p["area_ha"] for p in parcel_db.values())
         logger.info(
@@ -162,14 +196,16 @@ class ConstraintDrivenAllocator:
 
         # Build output GeoJSON
         output_features = []
-        for bsm, info in parcel_db.items():
+        for composite_key, info in parcel_db.items():
             ft = dict(info["feature"])
-            assigned = self.assignments.get(bsm, info["current_zone"])
+            assigned = self.assignments.get(composite_key, info["current_zone"])
             ft.setdefault("properties", {})
             ft["properties"]["assigned_zone"] = assigned
             ft["properties"]["original_zone"] = info["current_zone"]
             ft["properties"]["changed"] = assigned != info["current_zone"]
             ft["properties"]["area_ha"] = info["area_ha"]
+            ft["properties"]["composite_key"] = composite_key
+            ft["properties"]["bsm_raw"] = info["bsm_bare"]
             output_features.append(ft)
 
         # Remap assigned_zone from 7-class zone_type to 4-class planning zone
@@ -177,8 +213,8 @@ class ConstraintDrivenAllocator:
             remap_assigned_zones(output_features)
 
         # Log statistics
-        changed = sum(1 for bsm in self.assignments
-                      if self.assignments[bsm] != parcel_db[bsm]["current_zone"])
+        changed = sum(1 for ck in self.assignments
+                      if self.assignments[ck] != parcel_db[ck]["current_zone"])
         logger.info(
             f"[Allocator] Complete: {len(output_features)} features, "
             f"{changed} changed ({changed/len(output_features)*100:.1f}%)"
@@ -186,8 +222,8 @@ class ConstraintDrivenAllocator:
 
         # Zone area summary
         zone_summary = defaultdict(float)
-        for bsm, zt in self.assignments.items():
-            zone_summary[zt] += parcel_db[bsm]["area_ha"]
+        for ck, zt in self.assignments.items():
+            zone_summary[zt] += parcel_db[ck]["area_ha"]
         for zt in sorted(zone_summary.keys()):
             target = targets.get(zt, 0)
             logger.info(f"  {zt}: {zone_summary[zt]:.1f}ha (target={target:.1f}ha)")
@@ -216,20 +252,70 @@ class ConstraintDrivenAllocator:
                 if bsm in self.assignments:
                     continue
                 if info["dlbm"] in preferred_dlbms:
-                    candidates.append((bsm, info["area_ha"]))
+                    # Adjacency score: count of adjacent parcels already in this zone
+                    adj_score = 0
+                    if self.adjacency_map and bsm in self.adjacency_map:
+                        for neighbor in self.adjacency_map[bsm]:
+                            if self.assignments.get(neighbor) == zone_type:
+                                adj_score += 1
+                    candidates.append((bsm, info["area_ha"], adj_score))
 
-            # Sort by area (larger first for spatial coherence)
-            candidates.sort(key=lambda x: -x[1])
+            # Sort by adjacency score descending (compact zones), then area descending
+            candidates.sort(key=lambda x: (-x[2], -x[1]))
 
             # Assign until target met (or slightly over)
             assigned_area = 0.0
-            for bsm, area in candidates:
-                if assigned_area >= target * 1.1:  # Allow 10% overshoot
+            for bsm, area, _adj_score in candidates:
+                if assigned_area >= target * 1.05:  # Allow 5% overshoot
                     break
                 self.assignments[bsm] = zone_type
                 assigned_area += area
 
             self.zone_areas[zone_type] = assigned_area
+
+        # Overflow stage: assign unassigned parcels to zones still under 90% of target
+        for zone_type in zone_order:
+            target = targets[zone_type]
+            current = self.zone_areas.get(zone_type, 0)
+            if current >= target * 0.9:
+                continue
+            shortfall = target - current
+            candidates = []
+            for bsm, info in parcel_db.items():
+                if bsm in self.assignments:
+                    continue
+                cost = self._preference_cost(info["dlbm"], zone_type)
+                candidates.append((bsm, info["area_ha"], cost))
+            candidates.sort(key=lambda x: x[2])
+            for bsm, area, cost in candidates:
+                if shortfall <= 0:
+                    break
+                if cost >= 1000:
+                    break
+                self.assignments[bsm] = zone_type
+                self.zone_areas[zone_type] = \
+                    self.zone_areas.get(zone_type, 0) + area
+                shortfall -= area
+
+    def _preference_cost(self, dlbm: str, zone_type: str) -> float:
+        """Return DLBM preference cost for assigning dlbm to zone_type.
+
+        Cost 0 = preferred DLBM, 5 = same category, 10-15 = cross-category,
+        1000 = absolutely forbidden (non-agricultural red line).
+        """
+        # Hard constraint: protected DLBM cannot go to construction zones
+        if dlbm in PROTECTED_DLBM_CODES and zone_type in CONSTRUCTION_ZONE_TYPES:
+            return 1000.0
+
+        preferred = DLBM_PREFERENCE.get(zone_type, [])
+        if dlbm in preferred:
+            return 0.0
+        # Check if DLBM belongs to the same broad category
+        if zone_type == "农业用地" and dlbm in _ECO_DLBM_SET:
+            return 10.0
+        if zone_type in ("生态绿地", "水域") and dlbm in _AGRI_DLBM_SET:
+            return 10.0
+        return 15.0
 
     def _enforce_constraints(self, parcel_db: dict, targets: dict):
         """Check KG constraints and re-allocate violating parcels."""
@@ -269,16 +355,15 @@ class ConstraintDrivenAllocator:
                 for bsm, area in candidates:
                     if reassigned_area >= excess:
                         break
+                    old_zone = self.assignments.get(bsm, parcel_db[bsm]["current_zone"])
                     current_zone = parcel_db[bsm]["current_zone"]
                     if current_zone not in constrained_zones:
-                        self.assignments[bsm] = current_zone
+                        new_zone = current_zone
                     else:
-                        self.assignments[bsm] = "农业用地"  # Safe fallback
-                    # Update zone areas
-                    old_zone = self.assignments.get(bsm, current_zone)
+                        new_zone = "农业用地"  # Safe fallback
+                    self.assignments[bsm] = new_zone
                     self.zone_areas[old_zone] = self.zone_areas.get(old_zone, 0) - area
-                    self.zone_areas[self.assignments[bsm]] = \
-                        self.zone_areas.get(self.assignments[bsm], 0) + area
+                    self.zone_areas[new_zone] = self.zone_areas.get(new_zone, 0) + area
                     reassigned_area += area
 
             elif op == ">=" and current_total < limit:
@@ -305,14 +390,44 @@ class ConstraintDrivenAllocator:
         return ["农业用地"]  # Default safe zone
 
     def _fill_unassigned(self, parcel_db: dict, targets: dict):
-        """Assign remaining unassigned parcels to nearest zone by DLBM preference."""
+        """Assign remaining unassigned parcels, respecting DLBM-zone compatibility."""
         unassigned = [bsm for bsm in parcel_db if bsm not in self.assignments]
         if not unassigned:
             return
 
+        # Compute area gaps per zone (positive = under target)
+        gaps = {}
+        for zone_type, target in targets.items():
+            current = self.zone_areas.get(zone_type, 0)
+            if current < target:
+                gaps[zone_type] = target - current
+
+        # Sort zones by gap descending (largest deficit first)
+        sorted_zones = sorted(gaps.keys(), key=lambda z: -gaps[z])
+
         for bsm in unassigned:
             info = parcel_db[bsm]
-            current_zone = info["current_zone"]
-            self.assignments[bsm] = current_zone
-            self.zone_areas[current_zone] = \
-                self.zone_areas.get(current_zone, 0) + info["area_ha"]
+            dlbm = info["dlbm"]
+            assigned = False
+            # Try zones with largest gap first, but check DLBM compatibility
+            for zone_type in sorted_zones:
+                if gaps.get(zone_type, 0) <= 0:
+                    continue
+                # Hard constraint: protected DLBM cannot go to construction
+                if dlbm in PROTECTED_DLBM_CODES and zone_type in CONSTRUCTION_ZONE_TYPES:
+                    continue
+                cost = self._preference_cost(dlbm, zone_type)
+                if cost >= 1000:
+                    continue
+                self.assignments[bsm] = zone_type
+                self.zone_areas[zone_type] = \
+                    self.zone_areas.get(zone_type, 0) + info["area_ha"]
+                gaps[zone_type] -= info["area_ha"]
+                assigned = True
+                break
+            if not assigned:
+                # Fallback: assign to DLBM default zone (never cross red lines)
+                current_zone = info["current_zone"]
+                self.assignments[bsm] = current_zone
+                self.zone_areas[current_zone] = \
+                    self.zone_areas.get(current_zone, 0) + info["area_ha"]

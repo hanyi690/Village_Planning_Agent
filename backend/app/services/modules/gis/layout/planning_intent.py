@@ -29,6 +29,8 @@ class Direction(str, Enum):
     SOUTHEAST = "southeast"
     SOUTHWEST = "southwest"
     PERIPHERY = "periphery"
+    EAST_WEST = "east-west"
+    NORTH_SOUTH = "north-south"
 
 
 class Density(str, Enum):

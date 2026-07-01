@@ -9,10 +9,12 @@ Maps FacilityIntent (from LLM) to GeoJSON Point features based on:
 
 from __future__ import annotations
 
-import json
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
+from ..utils.crs_engine import project_to_metric, project_to_wgs84
+from ..utils.geo_utils import safe_geo_series_union
 
 logger = get_logger(__name__)
 
@@ -40,18 +42,18 @@ FACILITY_COLORS = {
     "停车场": "#696969",
 }
 
-# Direction → offset in degrees (approximate, for placement near centroid)
-DIRECTION_OFFSET = {
+# Direction → offset in meters (converted to degrees at runtime with cos(lat) correction)
+DIRECTION_OFFSET_M = {
     "center": (0.0, 0.0),
-    "north": (0.0, 0.003),
-    "south": (0.0, -0.003),
-    "east": (0.003, 0.0),
-    "west": (-0.003, 0.0),
-    "northeast": (0.002, 0.002),
-    "northwest": (-0.002, 0.002),
-    "southeast": (0.002, -0.002),
-    "southwest": (-0.002, -0.002),
-    "periphery": (0.004, 0.0),
+    "north": (0.0, 300.0),
+    "south": (0.0, -300.0),
+    "east": (300.0, 0.0),
+    "west": (-300.0, 0.0),
+    "northeast": (200.0, 200.0),
+    "northwest": (-200.0, 200.0),
+    "southeast": (200.0, -200.0),
+    "southwest": (-200.0, -200.0),
+    "periphery": (400.0, 0.0),
 }
 
 
@@ -181,9 +183,11 @@ class FacilityPlacer:
         if centroid is None:
             return None
 
-        # Apply direction offset
-        offset = DIRECTION_OFFSET.get(str(direction), (0.0, 0.0))
-        return [centroid[0] + offset[0], centroid[1] + offset[1]]
+        # Apply direction offset (meters → degrees with cos(lat) correction)
+        offset_m = DIRECTION_OFFSET_M.get(str(direction), (0.0, 0.0))
+        deg_lon = offset_m[0] / (111_000.0 * math.cos(math.radians(centroid[1])))
+        deg_lat = offset_m[1] / 111_000.0
+        return [centroid[0] + deg_lon, centroid[1] + deg_lat]
 
     def _place_upgraded(
         self,
@@ -225,7 +229,7 @@ class FacilityPlacer:
 
         try:
             import geopandas as gpd
-            from shapely import from_geojson as shapely_from_geojson
+            import shapely.geometry
 
             geoms = []
             dlbms = []
@@ -233,7 +237,7 @@ class FacilityPlacer:
                 g = ft.get("geometry", {})
                 if g and g.get("coordinates"):
                     try:
-                        geom = shapely_from_geojson(json.dumps(g))
+                        geom = shapely.geometry.shape(g)
                         if not geom.is_empty:
                             geoms.append(geom)
                             dlbms.append(str(ft.get("properties", {}).get("DLBM", "")).strip())
@@ -245,10 +249,20 @@ class FacilityPlacer:
 
             gdf = gpd.GeoDataFrame({"DLBM": dlbms}, geometry=geoms, crs="EPSG:4326")
 
-            # Compute centroid per DLBM group
-            for dlbm, group in gdf.groupby("DLBM"):
-                center = group.geometry.union_all().centroid
-                centroids[dlbm] = (center.x, center.y)
+            # Compute centroid in metric CRS, then project back for accuracy
+            gdf_m = project_to_metric(gdf)
+            # Fix invalid geometries to prevent TopologyException in union_all
+            gdf_m["geometry"] = gdf_m.geometry.apply(
+                lambda g: g.buffer(0) if g is not None and not g.is_valid else g
+            )
+            gdf_m = gdf_m[~gdf_m.is_empty]
+            for dlbm, group in gdf_m.groupby("DLBM"):
+                try:
+                    center_m = safe_geo_series_union(group.geometry).centroid
+                except Exception:
+                    center_m = safe_geo_series_union(group.geometry).convex_hull.centroid
+                center_4326 = project_to_wgs84(gpd.GeoSeries([center_m], crs=gdf_m.crs)).iloc[0]
+                centroids[dlbm] = (center_4326.x, center_4326.y)
 
         except ImportError:
             # Fallback: simple average of feature coordinates
@@ -275,19 +289,22 @@ class FacilityPlacer:
 
         try:
             import geopandas as gpd
-            from shapely import from_geojson as shapely_from_geojson
+            import shapely.geometry
 
             geoms = []
             for ft in boundary_geojson["features"]:
                 g = ft.get("geometry", {})
                 if g and g.get("coordinates"):
-                    geom = shapely_from_geojson(json.dumps(g))
+                    geom = shapely.geometry.shape(g)
                     if not geom.is_empty:
                         geoms.append(geom)
 
             if geoms:
-                center = gpd.GeoSeries(geoms, crs="EPSG:4326").union_all().centroid
-                return [center.x, center.y]
+                gs = gpd.GeoSeries(geoms, crs="EPSG:4326")
+                gs_m = project_to_metric(gs)
+                center_m = safe_geo_series_union(gs_m).centroid
+                center_4326 = project_to_wgs84(gpd.GeoSeries([center_m], crs=gs_m.crs)).iloc[0]
+                return [center_4326.x, center_4326.y]
         except (ImportError, Exception):
             pass
 
