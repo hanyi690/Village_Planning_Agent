@@ -57,21 +57,21 @@ cp .env.example .env
 
 **必须修改的配置项**:
 
-| 配置项 | 值 | 原因 |
-|--------|-----|------|
-| NEXT_PUBLIC_API_URL | http://183.36.243.124:8000 | 浏览器需要访问外部IP |
-| ALLOWED_ORIGINS | http://183.36.243.124:3000,http://localhost:3000 | CORS允许前端来源 |
+| 配置项              | 值                                               | 原因                 |
+| ------------------- | ------------------------------------------------ | -------------------- |
+| NEXT_PUBLIC_API_URL | http://183.36.243.124:8000                       | 浏览器需要访问外部IP |
+| ALLOWED_ORIGINS     | http://183.36.243.124:3000,http://localhost:3000 | CORS允许前端来源     |
 
 **API密钥配置** (与本地相同，直接复制 .env):
 
-| 配置项 | 说明 |
-|--------|------|
-| OPENAI_API_KEY | DashScope API Key (qwen3.5-plus) |
-| OPENAI_API_BASE | https://dashscope.aliyuncs.com/compatible-mode/v1 |
-| DASHSCOPE_API_KEY | Embedding API Key (text-embedding-v4) |
-| TIANDITU_API_KEY | 天地图 API Key |
-| AMAP_API_KEY | 高德 API Key |
-| MINERU_TOKEN | MinerU 文档解析 Token |
+| 配置项            | 说明                                              |
+| ----------------- | ------------------------------------------------- |
+| OPENAI_API_KEY    | DashScope API Key (qwen3.5-plus)                  |
+| OPENAI_API_BASE   | https://dashscope.aliyuncs.com/compatible-mode/v1 |
+| DASHSCOPE_API_KEY | Embedding API Key (text-embedding-v4)             |
+| TIANDITU_API_KEY  | 天地图 API Key                                    |
+| AMAP_API_KEY      | 高德 API Key                                      |
+| MINERU_TOKEN      | MinerU 文档解析 Token                             |
 
 ### Step 3: 拷贝 ChromaDB 数据
 
@@ -83,6 +83,7 @@ scp -r data/RAG_doc/_cache/ zhong@183.36.243.124:~/village-planning/Village_Plan
 ```
 
 包含内容:
+
 - chroma_db_new/ (~229MB, 向量数据库)
 - outline_index/ (树形索引 JSON 缓存)
 - hierarchy_chunks_cache.json (父块缓存)
@@ -181,6 +182,7 @@ Next.js 的 `NEXT_PUBLIC_*` 环境变量在**构建时**烧入前端 JavaScript�
 当前问题: docker-compose.yml 中 `NEXT_PUBLIC_API_URL=http://backend:8000` 使用 Docker 内部域名，浏览器无法解析。
 
 解决方案:
+
 1. 构建时传入外部IP: `NEXT_PUBLIC_API_URL=http://183.36.243.124:8000`
 2. 前端 `next.config.js` 的 rewrites 配置了 `/api/*` → backend 作为内部代理备用
 
@@ -190,11 +192,11 @@ Next.js 的 `NEXT_PUBLIC_*` 环境变量在**构建时**烧入前端 JavaScript�
 
 docker-compose.yml 已配置 volumes:
 
-| 宿主机路径 | 容器路径 | 内容 |
-|-----------|---------|------|
-| ./data | /app/data | ChromaDB + SQLite + knowledge_base |
-| ./logs | /app/logs | 应用日志 |
-| ./results | /app/results | 规划结果输出 |
+| 宿主机路径 | 容器路径     | 内容                               |
+| ---------- | ------------ | ---------------------------------- |
+| ./data     | /app/data    | ChromaDB + SQLite + knowledge_base |
+| ./logs     | /app/logs    | 应用日志                           |
+| ./results  | /app/results | 规划结果输出                       |
 
 容器重启/重建不会丢失数据。`docker compose down` 不会删除 volumes 映射的宿主机目录。
 
@@ -224,22 +226,22 @@ docker stats
 
 ## 故障排查
 
-| 问题 | 检查方法 | 解决方案 |
-|------|---------|---------|
-| 后端启动失败 | `docker compose logs backend` | 检查 .env 配置、端口占用 |
-| 前端无法连接后端 | 浏览器 F12 Network | 检查 NEXT_PUBLIC_API_URL 是否为外部IP |
-| RAG 返回空结果 | `curl /api/knowledge/stats` | 检查 ChromaDB 数据是否完整 |
-| Embedding 报错 | `docker compose logs backend \| grep Embedding` | 检查 DASHSCOPE_API_KEY |
-| LLM 超时 | `docker compose logs backend \| grep timeout` | 检查网络连接到 DashScope |
-| CORS 错误 | 浏览器 F12 Console | 检查 ALLOWED_ORIGINS 配置 |
+| 问题             | 检查方法                                         | 解决方案                              |
+| ---------------- | ------------------------------------------------ | ------------------------------------- |
+| 后端启动失败     | `docker compose logs backend`                  | 检查 .env 配置、端口占用              |
+| 前端无法连接后端 | 浏览器 F12 Network                               | 检查 NEXT_PUBLIC_API_URL 是否为外部IP |
+| RAG 返回空结果   | `curl /api/knowledge/stats`                    | 检查 ChromaDB 数据是否完整            |
+| Embedding 报错   | `docker compose logs backend \| grep Embedding` | 检查 DASHSCOPE_API_KEY                |
+| LLM 超时         | `docker compose logs backend \| grep timeout`   | 检查网络连接到 DashScope              |
+| CORS 错误        | 浏览器 F12 Console                               | 检查 ALLOWED_ORIGINS 配置             |
 
 ## 服务器资源需求
 
-| 资源 | 最低要求 | 推荐配置 |
-|------|---------|---------|
-| CPU | 2 核 | 4 核 |
-| 内存 | 4 GB | 8 GB |
-| 磁盘 | 10 GB (代码+镜像+数据) | 20 GB |
-| 网络 | 需访问 DashScope API | 稳定外网连接 |
+| 资源 | 最低要求               | 推荐配置     |
+| ---- | ---------------------- | ------------ |
+| CPU  | 2 核                   | 4 核         |
+| 内存 | 4 GB                   | 8 GB         |
+| 磁盘 | 10 GB (代码+镜像+数据) | 20 GB        |
+| 网络 | 需访问 DashScope API   | 稳定外网连接 |
 
 当前服务器: 412GB 磁盘 (131GB 已用, 261GB 可用)，资源充足。

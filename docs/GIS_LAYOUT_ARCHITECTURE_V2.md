@@ -486,33 +486,36 @@ app/services/modules/gis/layout/  ← Service 层（Layer 1 + Layer 3）
 
 ### 保留并增强的模块
 
-| 现有模块                 | 新架构中的角色                                 | 改动              |
-| ------------------------ | ---------------------------------------------- | ----------------- |
-| `ConflictDetector`     | → Tool:`detect_conflicts`                   | summaries 从 InjectedState 注入 |
-| `ConflictResolver`     | Phase 0 内部调用（非独立工具）              | 保持现有          |
-| `ZoneGenerator`        | → Tool:`allocate_zones` (function_zone层)   | 保留 DLBM 重分类路径 |
-| `MapRenderer`          | → engine.generate_layout() 内部调用         | 保持现有          |
-| `planning_intent.py`   | Tool 参数 schema                            | 字段对齐 KG schema |
-| `semantics.py`         | KG 构建时消费                                | 融入 builder      |
-| `colors.py`            | 保持                                         | 无需改动          |
-| `content_extractor.py` | KG 构建前预处理                              | 保持现有          |
+| 现有模块                 | 新架构中的角色                               | 改动                            |
+| ------------------------ | -------------------------------------------- | ------------------------------- |
+| `ConflictDetector`     | → Tool:`detect_conflicts`                 | summaries 从 InjectedState 注入 |
+| `ConflictResolver`     | Phase 0 内部调用（非独立工具）               | 保持现有                        |
+| `ZoneGenerator`        | → Tool:`allocate_zones` (function_zone层) | 保留 DLBM 重分类路径            |
+| `MapRenderer`          | → engine.generate_layout() 内部调用         | 保持现有                        |
+| `planning_intent.py`   | Tool 参数 schema                             | 字段对齐 KG schema              |
+| `semantics.py`         | KG 构建时消费                                | 融入 builder                    |
+| `colors.py`            | 保持                                         | 无需改动                        |
+| `content_extractor.py` | KG 构建前预处理                              | 保持现有                        |
+
+
+
 
 ### 新增模块
 
-| 新模块                                      | 说明                     |
-| ------------------------------------------- | ------------------------ |
-| `gis/layout/kg/ontology.py`               | OWL 本体定义 (RDF/OWL)   |
-| `gis/layout/kg/builder.py`                | 报告→KG 构建器 + to_turtle/from_turtle |
-| `gis/layout/kg/query.py`                  | SPARQL 查询模板 + query_kg |
-| `agent/gis/graph.py`                      | create_react_agent + state_schema |
-| `agent/gis/state.py`                      | GISAgentState TypedDict |
-| `tools/gis/layout_tools.py`               | 6 个 @tool（InjectedState + Command） |
-| `gis/layout/optimizer/mip_allocator.py`   | PuLP 混合整数规划求解器 |
-| `gis/layout/optimizer/mip_solver.py`      | ConstraintDrivenAllocator (greedy + MIP 路由) |
-| `gis/layout/optimizer/procedural.py`      | merge/split/simplify/buffer 几何工具 |
-| `gis/layout/facility_placer.py`           | 4 种设施选址策略 |
-| `gis/layout/axis_builder.py`              | 一核一带三区 + AxisIntent |
-| `gis/layout/validator.py`                 | 5 类验证（面积/完整性/重叠/保护地块/最小面积）|
+| 新模块                                    | 说明                                           |
+| ----------------------------------------- | ---------------------------------------------- |
+| `gis/layout/kg/ontology.py`             | OWL 本体定义 (RDF/OWL)                         |
+| `gis/layout/kg/builder.py`              | 报告→KG 构建器 + to_turtle/from_turtle        |
+| `gis/layout/kg/query.py`                | SPARQL 查询模板 + query_kg                     |
+| `agent/gis/graph.py`                    | create_react_agent + state_schema              |
+| `agent/gis/state.py`                    | GISAgentState TypedDict                        |
+| `tools/gis/layout_tools.py`             | 6 个 @tool（InjectedState + Command）          |
+| `gis/layout/optimizer/mip_allocator.py` | PuLP 混合整数规划求解器                        |
+| `gis/layout/optimizer/mip_solver.py`    | ConstraintDrivenAllocator (greedy + MIP 路由)  |
+| `gis/layout/optimizer/procedural.py`    | merge/split/simplify/buffer 几何工具           |
+| `gis/layout/facility_placer.py`         | 4 种设施选址策略                               |
+| `gis/layout/axis_builder.py`            | 一核一带三区 + AxisIntent                      |
+| `gis/layout/validator.py`               | 5 类验证（面积/完整性/重叠/保护地块/最小面积） |
 
 ---
 
@@ -570,6 +573,7 @@ def generate_layout(intent: dict, ...) -> Command:
 ```
 
 **关键约束**：
+
 - `Command` 没有 `result=` 参数（V1 计划设计错误，V2 已修正）
 - LLM 可见内容必须通过 `update["messages"]` 里的 `ToolMessage` 传递
 - `ToolMessage.tool_call_id` 必须匹配调用 id（由 `InjectedToolCallId` 注入）
