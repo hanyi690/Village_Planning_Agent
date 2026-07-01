@@ -387,19 +387,9 @@ class SharedGISContext:
             logger.debug(f"[SharedGISContext] 返回用户上传数据: {layer_type}")
             return self.get_data_by_type(layer_type)
 
-        # 尝试从 GISDataManager 获取
-        try:
-            from ..tools.gis.data_manager import GISDataManager
-            cached = GISDataManager.get_geojson(self.village_name, layer_type)
-            if cached:
-                logger.debug(f"[SharedGISContext] 返回缓存数据: {layer_type}")
-                return cached
-        except ImportError:
-            pass
-
         # 尝试从广东省天地图专题服务获取
         try:
-            from ..tools.geocoding.tianditu.gd_service import GDSpecializedService
+            from ..services.modules.gis.providers.tianditu import GDSpecializedService
             gd_service = GDSpecializedService()
 
             # 使用当前 bbox 获取数据

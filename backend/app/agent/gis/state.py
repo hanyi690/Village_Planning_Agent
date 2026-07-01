@@ -29,6 +29,8 @@ class GISAgentState(TypedDict, total=False):
 
     # Agent shared state (tools read/write)
     layout_configs: List[Dict[str, Any]]
+    allocated_geojson: Dict[str, Any]           # Zone allocation result from allocate_zones
+    allocation_summary: Dict[str, Any]          # Summary stats from allocate_zones
 
     # ReAct loop state (required by create_react_agent)
     messages: Annotated[List[BaseMessage], add_messages]

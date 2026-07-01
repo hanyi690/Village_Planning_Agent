@@ -59,8 +59,8 @@ class OSMProvider:
         """获取道路网络数据
 
         Args:
-            bbox: 边界框 (south, west, north, east) WGS84
-                  注意：OSMnx 使用 (north, south, east, west) 顺序
+            bbox: 边界框 (min_lon, min_lat, max_lon, max_lat) WGS84
+                  与 OSMnx 2.x 的 (left, bottom, right, top) 格式一致
             network_type: 网络类型
                 - "all": 所有道路
                 - "drive": 机动车道路
@@ -79,19 +79,18 @@ class OSMProvider:
                 metadata={"bbox": bbox},
             )
 
-        south, west, north, east = bbox
-
-        # OSMnx 2.x: bbox 格式为 (left, bottom, right, top) = (west, south, east, north)
-        # 所有参数都是 keyword-only
+        # OSMnx 2.x: bbox 格式为 (left, bottom, right, top)
+        # fetcher.get_boundary_bbox() 返回 (min_lon, min_lat, max_lon, max_lat)
+        # 两者格式一致，直接传入
         try:
             logger.info(f"[OSMProvider] 获取道路网络: bbox={bbox}, type={network_type}")
 
             G = ox.graph_from_bbox(
-                bbox=(west, south, east, north),
+                bbox=bbox,
                 network_type=network_type,
                 simplify=simplify,
                 retain_all=retain_all,
-                truncate_by_edge=True,  # 按边界截断
+                truncate_by_edge=True,
             )
 
             # 转换为 GeoDataFrame
@@ -109,21 +108,11 @@ class OSMProvider:
             geojson = {
                 "type": "FeatureCollection",
                 "features": features,
-                "metadata": {
-                    "source": "osm",
-                    "bbox": bbox,
-                    "network_type": network_type,
-                    "feature_count": len(features),
-                    "highway_stats": highway_stats,
-                    "village_relevant_count": sum(
-                        highway_stats.get(h, 0) for h in VILLAGE_RELEVANT_HIGHWAYS
-                    ),
-                },
             }
 
             logger.info(
                 f"[OSMProvider] 成功获取 {len(features)} 条道路, "
-                f"村级相关道路 {geojson['metadata']['village_relevant_count']} 条"
+                f"村级相关道路 {sum(highway_stats.get(h, 0) for h in VILLAGE_RELEVANT_HIGHWAYS)} 条"
             )
 
             return OSMResult(
@@ -195,14 +184,6 @@ class OSMProvider:
             geojson = {
                 "type": "FeatureCollection",
                 "features": features,
-                "metadata": {
-                    "source": "osm",
-                    "place_name": place_name,
-                    "network_type": network_type,
-                    "feature_count": len(features),
-                    "highway_stats": highway_stats,
-                    "bbox": [bbox[1], bbox[0], bbox[3], bbox[2]],  # (south, west, north, east)
-                },
             }
 
             return OSMResult(
@@ -266,15 +247,6 @@ class OSMProvider:
             geojson = {
                 "type": "FeatureCollection",
                 "features": features,
-                "metadata": {
-                    "source": "osm",
-                    "network_type": network_type,
-                    "feature_count": len(features),
-                    "highway_stats": highway_stats,
-                    "village_relevant_count": sum(
-                        highway_stats.get(h, 0) for h in VILLAGE_RELEVANT_HIGHWAYS
-                    ),
-                },
             }
 
             return OSMResult(

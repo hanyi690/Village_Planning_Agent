@@ -49,17 +49,40 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "landuse_current_geojson": gis_context.get_data_by_type("landuse_current"),
             "protection_zones": gis_context.get_protection_zones(),
             "road_geojson": gis_context.get_data_by_type("road"),
-            "hazard_points_geojson": gis_context.get_data_by_type("hazard"),
+            "hazard_points_geojson": gis_context.get_data_by_type("geological_hazard_points"),
+            "construction_zone_geojson": gis_context.get_data_by_type("construction_zone"),
         },
         "kg_turtle": "",
         "kg_constraints": [],
         "layout_configs": [],
+        "allocated_geojson": {},
+        "allocation_summary": {},
         "messages": [],
     }
 
     result = await gis_graph.ainvoke(gis_input)
 
     layout_configs = result.get("layout_configs", [])
+
+    # Publish GIS layout result via SSE
+    # NOTE: Individual layers were already pushed via gis_layer_update events
+    # from SpatialLayoutEngine._emit_layer_update(). This gis_result event
+    # only sends a lightweight summary (no layers data) to avoid redundant
+    # transfer of large GeoJSON payloads.
+    session_id = state.get("session_id", "")
+    if layout_configs and session_id:
+        try:
+            from app.utils.sse_publisher import SSEPublisher
+            layer_types = [c.get("layerType", "unknown") for c in layout_configs]
+            SSEPublisher.send_gis_result(
+                session_id=session_id,
+                dimension_key="spatial_layout",
+                dimension_name="空间布局",
+                summary=f"生成 {len(layout_configs)} 个图层: {', '.join(layer_types)}",
+                layers=[],  # Empty: layers already sent via gis_layer_update
+            )
+        except Exception as e:
+            logger.warning(f"[gis_agent_node] SSE publish failed: {e}")
 
     return {
         "messages": [AIMessage(content=_format_gis_result(result, layout_configs))],

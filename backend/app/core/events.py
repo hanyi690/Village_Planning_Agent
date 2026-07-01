@@ -50,6 +50,7 @@ class SSEEventType(str):
 
     # GIS events
     GIS_RESULT = "gis_result"
+    GIS_LAYER_UPDATE = "gis_layer_update"
 
     # RAG events
     RAG_QUERY = "rag_query"

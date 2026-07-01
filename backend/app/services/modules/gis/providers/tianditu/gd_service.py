@@ -398,6 +398,12 @@ class GDSpecializedService:
     ) -> Tuple[float, float, float, float]:
         """将 WGS84 bbox 转换为目标坐标系
 
+        CGCS2000 (EPSG:4490) 与 WGS-84 (EPSG:4326) 使用相同的 GRS80 椭球参数
+        (长半轴 6378137.0m, 扁率倒数 298.257222101)，两者之间的 Helmert 变换
+        残差小于 1 米，在村级规划（公顷级精度）下可视为等价（偏差 < 0.01%）
+        GB/T 21010-2017 强制使用 CGCS2000，而 GeoJSON RFC 7946 要求 WGS-84
+        因此代码不执行显式转换，直接存储为 WGS84 格式
+
         Args:
             bbox: WGS84 边界框 (min_lon, min_lat, max_lon, max_lat)
             target_epsg: 目标坐标系 EPSG 代码
@@ -405,7 +411,7 @@ class GDSpecializedService:
         Returns:
             转换后的 bbox
         """
-        # CGCS2000地理坐标(EPSG:4490) 与 WGS84(EPSG:4326) 兼容，无需转换
+        # CGCS2000 地理坐标(EPSG:4490) 与 WGS84(EPSG:4326) 兼容，无需转换
         if target_epsg in ("EPSG:4490", "EPSG:4326"):
             return bbox
 
@@ -430,6 +436,12 @@ class GDSpecializedService:
         source_epsg: str
     ) -> Dict[str, Any]:
         """坐标系转换: CGCS2000/Web墨卡托 -> WGS84
+
+        CGCS2000 (EPSG:4490) 与 WGS-84 (EPSG:4326) 使用相同的 GRS80 椭球参数
+        (长半轴 6378137.0m, 扁率倒数 298.257222101)，两者之间的 Helmert 变换
+        残差小于 1 米，在村级规划（公顷级精度）下可视为等价（偏差 < 0.01%）
+        GB/T 21010-2017 强制使用 CGCS2000，而 GeoJSON RFC 7946 要求 WGS-84
+        因此代码不执行显式转换，直接存储为 WGS84 格式
 
         Args:
             geojson: 源 GeoJSON 数据

@@ -5,6 +5,7 @@
 
 import re
 import json
+import math
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
 from .providers.tianditu import TiandituProvider, WfsService, WFS_LAYERS
@@ -140,9 +141,10 @@ class GISDataFetcher:
             logger.info(f"[GISDataFetcher] 县级以下地址，跳过边界API: {location}")
             center, _ = self.get_village_center(location, buffer_km)
             if center:
-                buffer_deg = buffer_km / 111.0
-                return (center[0] - buffer_deg, center[1] - buffer_deg,
-                        center[0] + buffer_deg, center[1] + buffer_deg)
+                buffer_deg_lat = buffer_km / 111.0
+                buffer_deg_lon = buffer_km / (111.0 * math.cos(math.radians(center[1])))
+                return (center[0] - buffer_deg_lon, center[1] - buffer_deg_lat,
+                        center[0] + buffer_deg_lon, center[1] + buffer_deg_lat)
             # fallback
             logger.warning(f"[GISDataFetcher] 无法获取县级以下中心，使用默认 bbox")
             return (100.0, 20.0, 120.0, 40.0)
@@ -157,13 +159,14 @@ class GISDataFetcher:
 
         center = result.metadata.get("center", (116.4, 39.9))
 
-        # 计算缓冲 bbox
-        buffer_deg = buffer_km / 111.0  # 纬度约 111km/度
+        # 计算缓冲 bbox (cos(lat) 修正经度方向)
+        buffer_deg_lat = buffer_km / 111.0
+        buffer_deg_lon = buffer_km / (111.0 * math.cos(math.radians(center[1])))
         bbox = (
-            center[0] - buffer_deg,
-            center[1] - buffer_deg,
-            center[0] + buffer_deg,
-            center[1] + buffer_deg
+            center[0] - buffer_deg_lon,
+            center[1] - buffer_deg_lat,
+            center[0] + buffer_deg_lon,
+            center[1] + buffer_deg_lat
         )
 
         return bbox
@@ -330,13 +333,14 @@ class GISDataFetcher:
             logger.warning(f"[GISDataFetcher] 无法获取村级中心，使用默认 bbox")
             return (100.0, 20.0, 120.0, 40.0)
 
-        # 计算缓冲 bbox
-        buffer_deg = buffer_km / 111.0
+        # 计算缓冲 bbox (cos(lat) 修正经度方向)
+        buffer_deg_lat = buffer_km / 111.0
+        buffer_deg_lon = buffer_km / (111.0 * math.cos(math.radians(center[1])))
         bbox = (
-            center[0] - buffer_deg,
-            center[1] - buffer_deg,
-            center[0] + buffer_deg,
-            center[1] + buffer_deg
+            center[0] - buffer_deg_lon,
+            center[1] - buffer_deg_lat,
+            center[0] + buffer_deg_lon,
+            center[1] + buffer_deg_lat
         )
 
         logger.info(f"[GISDataFetcher] 村级 bbox: {bbox}, strategy={metadata.get('strategy_used')}")
@@ -625,12 +629,13 @@ class GISDataFetcher:
 
             # 直接用已获取的 center 计算 bbox，避免重复 API 调用
             if center:
-                buffer_deg = buffer_km / 111.0
+                buffer_deg_lat = buffer_km / 111.0
+                buffer_deg_lon = buffer_km / (111.0 * math.cos(math.radians(center[1])))
                 bbox = (
-                    center[0] - buffer_deg,
-                    center[1] - buffer_deg,
-                    center[0] + buffer_deg,
-                    center[1] + buffer_deg
+                    center[0] - buffer_deg_lon,
+                    center[1] - buffer_deg_lat,
+                    center[0] + buffer_deg_lon,
+                    center[1] + buffer_deg_lat
                 )
             else:
                 bbox = (100.0, 20.0, 120.0, 40.0)  # 默认 bbox

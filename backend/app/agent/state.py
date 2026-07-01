@@ -179,6 +179,7 @@ class AgentState(TypedDict, total=False):
     pending_reports: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # Buffer for batch DB writes
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
     gis_layout_configs: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # GIS Agent输出的图层配置
+    user_uploaded_data: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]  # 用户上传的GIS数据
 
 
 # ==========================================
@@ -306,6 +307,7 @@ def create_initial_state(
         "pending_reports": [],  # Buffer for batch DB writes
         "layer_char_counts": {},  # Cached char counts per layer
         "gis_layout_configs": [],  # GIS Agent输出的图层配置
+        "user_uploaded_data": {},  # 用户上传的GIS数据
     }
 
 
@@ -429,6 +431,7 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
         "county": db_session.get("county") if db_session else state.get("config", {}).get("county", ""),
         "township": db_session.get("township") if db_session else state.get("config", {}).get("township", ""),
         "planning_period": db_session.get("planning_period") if db_session else state.get("config", {}).get("planning_period", "2022-2035年"),
+        "gis_layout_configs": state.get("gis_layout_configs", []),
     }
 
 

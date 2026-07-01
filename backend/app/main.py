@@ -63,9 +63,10 @@ logger = logging.getLogger(__name__)
 
 # Environment configuration
 IS_PRODUCTION = os.getenv("ENVIRONMENT") == "production"
+# Development origins: 3000/3001/3002 are common Next.js ports
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:3000,http://localhost:8000"
+    "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:8000"
 ).split(",")
 
 
@@ -156,9 +157,10 @@ app = FastAPI(
 )
 
 # CORS configuration
+# Note: allow_credentials=True requires explicit origins (not ["*"])
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS if IS_PRODUCTION else ["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
