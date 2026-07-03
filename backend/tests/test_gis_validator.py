@@ -48,10 +48,10 @@ def _complete_layout():
     """A layout with all 4 required zones and sufficient area, non-overlapping."""
     return [
         _make_planning_zone_config([
-            _make_zone_feature("永久基本农田保护区", 80.0, "0110", slot=0),
+            _make_zone_feature("农田保护区", 80.0, "0110", slot=0),
             _make_zone_feature("村庄建设区", 30.0, "2122", slot=1),
             _make_zone_feature("生态保护区", 400.0, "1340", slot=2),
-            _make_zone_feature("一般农地区", 1800.0, "0200", slot=3),
+            _make_zone_feature("一般农业区", 1800.0, "0200", slot=3),
         ])
     ]
 
@@ -89,7 +89,7 @@ class TestAreaConstraints:
         ]
         layout = [
             _make_planning_zone_config([
-                _make_zone_feature("永久基本农田保护区", 50.0),
+                _make_zone_feature("农田保护区", 50.0),
             ])
         ]
         validator = LayoutValidator()
@@ -115,9 +115,9 @@ class TestZoneCompleteness:
     def test_fail_with_missing_zone(self):
         layout = [
             _make_planning_zone_config([
-                _make_zone_feature("永久基本农田保护区", 80.0),
+                _make_zone_feature("农田保护区", 80.0),
                 _make_zone_feature("村庄建设区", 30.0),
-                # Missing: 生态保护区, 一般农地区
+                # Missing: 生态保护区, 一般农业区
             ])
         ]
         validator = LayoutValidator()
@@ -130,10 +130,10 @@ class TestZoneCompleteness:
         layout = [
             {"layerType": "boundary", "data": {"type": "FeatureCollection", "features": []}},
             _make_planning_zone_config([
-                _make_zone_feature("永久基本农田保护区", 80.0),
+                _make_zone_feature("农田保护区", 80.0),
                 _make_zone_feature("村庄建设区", 30.0),
                 _make_zone_feature("生态保护区", 400.0),
-                _make_zone_feature("一般农地区", 1800.0),
+                _make_zone_feature("一般农业区", 1800.0),
             ]),
         ]
         validator = LayoutValidator()
@@ -169,7 +169,7 @@ class TestProtectedParcels:
     def test_pass_when_protected_dlbm_in_correct_zone(self):
         layout = [
             _make_planning_zone_config([
-                _make_zone_feature("永久基本农田保护区", 80.0, "0110", "农业用地"),
+                _make_zone_feature("农田保护区", 80.0, "0110", "农业用地"),
             ])
         ]
         validator = LayoutValidator()
@@ -263,5 +263,5 @@ class TestGeoJSONStructuralInValidator:
         layout = _complete_layout()
         validator = LayoutValidator()
         report = validator.validate(layout)
-        assert len(report.checks) == 6, \
-            f"Expected 6 checks (including geojson_structural), got {len(report.checks)}"
+        assert len(report.checks) == 8, \
+            f"Expected 8 checks (including adjacency + compactness), got {len(report.checks)}"

@@ -10,10 +10,23 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
-from .colors import get_zone_color, ZONE_TYPE_COLORS, FACILITY_STATUS_COLORS
+from .zone_schema import get_zone_color, ZONE_TYPE_COLORS, FACILITY_STATUS_COLORS
 from ..utils.geojson_utils import reduce_coordinate_precision, simplify_geojson
 
 logger = get_logger(__name__)
+
+# Infrastructure color by road/water type (synced with frontend PLANNING_COLORS.infrastructure)
+INFRA_COLORS = {
+    "县道": {"color": "#555555", "stroke": "#333333"},
+    "乡道": {"color": "#808080", "stroke": "#606060"},
+    "村道": {"color": "#A0A0A0", "stroke": "#808080"},
+    "道路": {"color": "#666666", "stroke": "#444444"},
+    "河流": {"color": "#00BFFF", "stroke": "#0099CC"},
+    "水系": {"color": "#00BFFF", "stroke": "#0099CC"},
+}
+
+# Isochrone colors by time_minutes (synced with frontend PLANNING_COLORS.isochrone)
+ISOCHRONE_COLORS = {5: "#00FF00", 10: "#FFFF00", 15: "#FFA500"}
 
 
 # Layer type priority for rendering order (matches frontend LAYER_PRIORITY)
@@ -150,7 +163,7 @@ class MapRenderer:
                     zone_type = props.get("land_use", "")
                     # If no land_use, derive from DLBM (for landuse_current)
                     if not zone_type:
-                        from .colors import get_zone_type_for_dlbm
+                        from .zone_schema import get_zone_type_for_dlbm
                         dlbm = props.get("DLBM", "")
                         zone_type = get_zone_type_for_dlbm(dlbm)
 
@@ -163,7 +176,7 @@ class MapRenderer:
                     if props.get("land_use"):
                         props["zone_type"] = props.get("land_use", "")
                     elif props.get("DLBM"):
-                        from .colors import get_zone_type_for_dlbm
+                        from .zone_schema import get_zone_type_for_dlbm
                         props["zone_type"] = get_zone_type_for_dlbm(props.get("DLBM", ""))
                     else:
                         props["zone_type"] = "居住用地"
@@ -208,6 +221,28 @@ class MapRenderer:
                 colors = level_colors.get(level, {"fill": "#CCCCCC", "stroke": "#666666"})
                 props["color"] = colors["fill"]
                 props["stroke"] = colors["stroke"]
+
+            elif layer_type == "infrastructure":
+                if "color" not in props:
+                    infra_type = str(props.get("infrastructure_type", "")).strip()
+                    rn = str(props.get("RN", "")).strip()
+                    name = str(props.get("name", "")).strip()
+                    road_key = "道路"
+                    if infra_type in ("河流", "水系"):
+                        road_key = "河流"
+                    elif rn.startswith("X") or "县道" in name:
+                        road_key = "县道"
+                    elif rn.startswith("Y") or "乡道" in name or "村道" in name:
+                        road_key = "乡道"
+                    color_info = INFRA_COLORS.get(road_key, INFRA_COLORS["道路"])
+                    props["color"] = color_info["color"]
+                    props["stroke"] = color_info["stroke"]
+
+            elif layer_type == "isochrone":
+                if "color" not in props:
+                    mins = props.get("time_minutes", 10)
+                    props["color"] = ISOCHRONE_COLORS.get(mins, "#FFA500")
+                    props["stroke"] = props["color"]
 
     def _get_layer_style(self, layer_type: str) -> Optional[Dict[str, Any]]:
         """Get default style for a layer type. Returns None if no layer-level style."""

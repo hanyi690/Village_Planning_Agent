@@ -18,10 +18,10 @@ class TestForwardMapping:
     """4-class planning zone targets → 7-class zone type targets."""
 
     def test_agriculture_merged(self):
-        """永久基本农田 + 一般农地区 should merge into 农业用地."""
+        """永久基本农田 + 一般农业区 should merge into 农业用地."""
         targets = {
-            "永久基本农田保护区": 78.83,
-            "一般农地区": 1881.54,
+            "农田保护区": 78.83,
+            "一般农业区": 1881.54,
         }
         result = map_planning_zone_targets_to_zone_types(targets)
         assert "农业用地" in result
@@ -47,10 +47,10 @@ class TestForwardMapping:
     def test_full_targets(self):
         """All 4 planning zones produce 8 zone_type entries."""
         targets = {
-            "永久基本农田保护区": 78.83,
+            "农田保护区": 78.83,
             "村庄建设区": 30.50,
             "生态保护区": 362.02,
-            "一般农地区": 1881.54,
+            "一般农业区": 1881.54,
         }
         result = map_planning_zone_targets_to_zone_types(targets)
         assert len(result) == 8
@@ -77,23 +77,23 @@ class TestReverseMapping:
         assert map_zone_type_to_planning_zone("水域") == "生态保护区"
 
     def test_agriculture_basic_farmland(self):
-        """农业用地 with basic farmland DLBM → 永久基本农田保护区."""
+        """农业用地 with basic farmland DLBM → 农田保护区."""
         for dlbm in BASIC_FARMLAND_DLBMS:
-            assert map_zone_type_to_planning_zone("农业用地", dlbm=dlbm) == "永久基本农田保护区"
+            assert map_zone_type_to_planning_zone("农业用地", dlbm=dlbm) == "农田保护区"
 
     def test_agriculture_general_farming(self):
-        """农业用地 with non-farmland DLBM → 一般农地区."""
+        """农业用地 with non-farmland DLBM → 一般农业区."""
         result = map_zone_type_to_planning_zone("农业用地", dlbm="0200")
-        assert result == "一般农地区"
+        assert result == "一般农业区"
 
     def test_agriculture_empty_dlbm(self):
-        """农业用地 with no DLBM → 一般农地区 (safe default)."""
-        assert map_zone_type_to_planning_zone("农业用地") == "一般农地区"
-        assert map_zone_type_to_planning_zone("农业用地", dlbm="") == "一般农地区"
+        """农业用地 with no DLBM → 一般农业区 (safe default)."""
+        assert map_zone_type_to_planning_zone("农业用地") == "一般农业区"
+        assert map_zone_type_to_planning_zone("农业用地", dlbm="") == "一般农业区"
 
     def test_unknown_zone_type_defaults_to_general_agriculture(self):
-        """Unknown zone_type should default to 一般农地区."""
-        assert map_zone_type_to_planning_zone("未知类型") == "一般农地区"
+        """Unknown zone_type should default to 一般农业区."""
+        assert map_zone_type_to_planning_zone("未知类型") == "一般农业区"
 
 
 class TestRemapAssignedZones:
@@ -109,8 +109,8 @@ class TestRemapAssignedZones:
         result = remap_assigned_zones(features)
         assert result[0]["properties"]["assigned_zone"] == "村庄建设区"
         assert result[1]["properties"]["assigned_zone"] == "生态保护区"
-        assert result[2]["properties"]["assigned_zone"] == "永久基本农田保护区"
-        assert result[3]["properties"]["assigned_zone"] == "一般农地区"
+        assert result[2]["properties"]["assigned_zone"] == "农田保护区"
+        assert result[3]["properties"]["assigned_zone"] == "一般农业区"
 
     def test_preserves_original_zone_type(self):
         """Remapping should save original zone_type in zone_type_original."""
@@ -151,7 +151,7 @@ class TestMappingConsistency:
 
     def test_planning_zone_to_zone_types_keys_valid(self):
         """All keys in PLANNING_ZONE_TO_ZONE_TYPES should be 4-class names."""
-        expected = {"永久基本农田保护区", "村庄建设区", "生态保护区", "一般农地区"}
+        expected = {"农田保护区", "村庄建设区", "生态保护区", "一般农业区"}
         assert set(PLANNING_ZONE_TO_ZONE_TYPES.keys()) == expected
 
     def test_zone_type_to_planning_zone_values_valid(self):

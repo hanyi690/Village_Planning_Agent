@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from app.services.modules.gis.layout.colors import (
+from app.services.modules.gis.layout.zone_schema import (
     ZONE_TYPE_COLORS,
     PLANNING_ZONE_COLORS,
     FACILITY_STATUS_COLORS,
@@ -37,10 +37,10 @@ from app.database.engine import get_db_path
 # ── Color tables ──────────────────────────────────────────────
 
 PLANNING_ZONE_MPL = {
-    "永久基本农田保护区": {"fill": "#FFE4B5", "stroke": "#8B6914", "label": "Farmland Reserve"},
+    "农田保护区": {"fill": "#FFE4B5", "stroke": "#8B6914", "label": "Farmland Reserve"},
     "村庄建设区": {"fill": "#FF6347", "stroke": "#B83060", "label": "Village Construction"},
     "生态保护区": {"fill": "#2E8B57", "stroke": "#006400", "label": "Ecological Protection"},
-    "一般农地区": {"fill": "#98FB98", "stroke": "#2E8B57", "label": "General Agriculture"},
+    "一般农业区": {"fill": "#98FB98", "stroke": "#2E8B57", "label": "General Agriculture"},
 }
 
 FUNCTION_ZONE_MPL = {k: {"fill": v["fill"], "stroke": v["stroke"], "label": k}
@@ -555,7 +555,7 @@ def _build_default_intent() -> UnifiedSpatialIntent:
                 dlbm_aliases=["0200", "1340", "1350"],
             ),
             ZoneIntent(
-                zone_id="Z_agriculture", land_use="一般农地区", dlbm="0110",
+                zone_id="Z_agriculture", land_use="一般农业区", dlbm="0110",
                 area_ratio=0.05, direction=Direction.SOUTHWEST,
                 preserve_existing=True,
                 dlbm_aliases=["0120"],

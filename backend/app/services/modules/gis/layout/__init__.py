@@ -14,18 +14,22 @@ from .planning_intent import (
 )
 from .zone_generator import ZoneGenerator
 from .map_renderer import MapRenderer
-from .colors import (
+from .zone_schema import (
     ZONE_TYPE_COLORS,
     FACILITY_STATUS_COLORS,
     DLBM_TO_ZONE_TYPE,
     ZONE_TYPE_TO_DLBMS,
     PLANNED_DLBM_TO_ZONE_TYPE,
     GHYTMC_TO_ZONE_TYPE,
+    DLBM_TO_PLANNING_ZONE,
+    PLANNING_ZONE_RENDERING,
+    PLANNING_ZONE_COLORS,
     get_zone_color,
     get_zone_type_for_dlbm,
     get_zone_type_for_planned_dlbm,
     get_zone_type_for_ghytmc,
     get_dlbms_for_zone_type,
+    dlbm_to_planning_zone,
 )
 
 __all__ = [
@@ -49,9 +53,13 @@ __all__ = [
     "ZONE_TYPE_TO_DLBMS",
     "PLANNED_DLBM_TO_ZONE_TYPE",
     "GHYTMC_TO_ZONE_TYPE",
+    "DLBM_TO_PLANNING_ZONE",
+    "PLANNING_ZONE_RENDERING",
+    "PLANNING_ZONE_COLORS",
     "get_zone_color",
     "get_zone_type_for_dlbm",
     "get_zone_type_for_planned_dlbm",
     "get_zone_type_for_ghytmc",
     "get_dlbms_for_zone_type",
+    "dlbm_to_planning_zone",
 ]

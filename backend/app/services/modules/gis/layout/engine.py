@@ -18,7 +18,7 @@ from .zone_generator import ZoneGenerator
 from .map_renderer import MapRenderer
 from .facility_placer import FacilityPlacer
 from .axis_builder import AxisBuilder
-from .colors import PLANNING_ZONE_COLORS, DLBM_TO_ZONE_TYPE, ZONE_TYPE_COLORS, DEFAULT_ZONE_COLOR
+from .zone_schema import PLANNING_ZONE_COLORS, DLBM_TO_ZONE_TYPE, ZONE_TYPE_COLORS, DEFAULT_ZONE_COLOR
 
 logger = get_logger(__name__)
 
@@ -41,6 +41,7 @@ class SpatialLayoutEngine:
         self._allocator = None   # ConstraintDrivenAllocator (lazy init)
         self._kg_constraints: List[Dict[str, Any]] = []
         self._last_planning_targets: Dict[str, float] = {}
+        self._adjacency_graph = None  # AdjacencyGraph (lazy init)
 
     def build_kg(self, reports: Dict[str, Dict[str, Any]],
                  landuse_geojson: Dict[str, Any]) -> "SpatialLayoutEngine":
@@ -65,6 +66,18 @@ class SpatialLayoutEngine:
             from .optimizer import ConstraintDrivenAllocator
             self._allocator = ConstraintDrivenAllocator()
         return self._allocator
+
+    def _get_adjacency_graph(self, landuse_geojson: Dict[str, Any]):
+        """Lazy init adjacency graph from landuse data."""
+        if self._adjacency_graph is None:
+            from .optimizer.adjacency_graph import AdjacencyGraph
+            from ..utils.geojson_utils import build_parcel_index
+            from .zone_generator import resolve_zone_type_for_dlbm
+            parcel_db, _ = build_parcel_index(
+                landuse_geojson, zone_type_fn=resolve_zone_type_for_dlbm
+            )
+            self._adjacency_graph = AdjacencyGraph(parcel_db, max_distance_m=30.0)
+        return self._adjacency_graph
 
     def has_kg(self) -> bool:
         return self.kg is not None or bool(self._kg_constraints)
@@ -387,7 +400,7 @@ class SpatialLayoutEngine:
     ) -> Optional[Dict[str, Any]]:
         """Generate planning zone GeoJSON using KG-driven constraint allocation.
 
-        Produces a 4-zone planning layer (永久基本农田/村庄建设区/生态保护区/一般农地区)
+        Produces a 4-zone planning layer (农田保护区/村庄建设区/生态保护区/一般农业区)
         that DIFFERS from the DLBM-reclassified function_zone layer.
 
         The zones follow the 土地用途分区 from the land_use_planning report.
@@ -395,23 +408,12 @@ class SpatialLayoutEngine:
         if not self._kg_constraints:
             return None
 
-        # 4-zone targets from planning report (overridden by intent metadata if set)
-        metadata = getattr(intent, "metadata", {}) or {}
-        total_area = metadata.get("total_area_ha", 2352.56)
-        farmland_ha = metadata.get("farmland_ha", 78.83)
-        construction_ha = metadata.get("construction_ha", 30.50)
-        ecological_ha = metadata.get("ecological_ha", 362.02)
-        general_agri_ha = metadata.get(
-            "general_agriculture_ha",
-            round(total_area - farmland_ha - construction_ha - ecological_ha, 2),
-        )
-        targets = {
-            "永久基本农田保护区": farmland_ha,
-            "村庄建设区": construction_ha,
-            "生态保护区": ecological_ha,
-            "一般农地区": general_agri_ha,
-        }
+        # Compute targets from actual landuse DLBM data (no hardcoded defaults)
+        targets = self._compute_zone_targets(landuse_geojson, intent)
         self._last_planning_targets = targets
+
+        # Build adjacency graph for spatial constraints
+        adj_graph = self._get_adjacency_graph(landuse_geojson)
 
         allocator = self._get_allocator()
         result = allocator.solve(
@@ -420,6 +422,9 @@ class SpatialLayoutEngine:
             constraints=self._kg_constraints,
             kg=self.kg,
             protection_zones=protection_zones,
+            adjacency_graph=adj_graph,
+            adjacency_weight=0.5,
+            change_penalty_weight=0.3,
         )
 
         if not result.get("features"):
@@ -427,7 +432,7 @@ class SpatialLayoutEngine:
 
         # Add zone colors for rendering
         for feat in result["features"]:
-            zt = feat["properties"].get("assigned_zone", "一般农地区")
+            zt = feat["properties"].get("assigned_zone", "一般农业区")
             feat["properties"]["color"] = PLANNING_ZONE_COLORS.get(zt, "#CCCCCC")
             feat["properties"]["zone_type"] = zt
 
@@ -439,6 +444,54 @@ class SpatialLayoutEngine:
             f"{changed} changed ({changed/len(result['features'])*100:.1f}% vs current DLBM)"
         )
         return result
+
+    @staticmethod
+    def _compute_zone_targets(
+        landuse_geojson: Dict[str, Any],
+        intent: UnifiedSpatialIntent,
+    ) -> Dict[str, float]:
+        """Compute 4-zone area targets from actual DLBM data in landuse GeoJSON.
+
+        No hardcoded defaults — every target is derived from the parcel data.
+        Intent metadata can override individual zone targets when provided.
+        """
+        from .optimizer.mip_allocator import dlbm_to_planning_zone
+        from ..utils.geojson_utils import build_parcel_index
+        from .zone_generator import resolve_zone_type_for_dlbm
+        from collections import defaultdict
+
+        parcel_db, _ = build_parcel_index(
+            landuse_geojson, zone_type_fn=resolve_zone_type_for_dlbm
+        )
+
+        zone_areas = defaultdict(float)
+        for info in parcel_db.values():
+            zone_areas[dlbm_to_planning_zone(info["dlbm"])] += info["area_ha"]
+
+        targets = {
+            "农田保护区": zone_areas.get("农田保护区", 0.0),
+            "村庄建设区": zone_areas.get("村庄建设区", 0.0),
+            "生态保护区": zone_areas.get("生态保护区", 0.0),
+            "一般农业区": zone_areas.get("一般农业区", 0.0),
+        }
+
+        # Intent metadata overrides (only if explicitly provided)
+        metadata = getattr(intent, "metadata", {}) or {}
+        override_map = {
+            "farmland_ha": "农田保护区",
+            "construction_ha": "村庄建设区",
+            "ecological_ha": "生态保护区",
+            "general_agriculture_ha": "一般农业区",
+        }
+        for meta_key, zone_name in override_map.items():
+            if meta_key in metadata:
+                targets[zone_name] = float(metadata[meta_key])
+
+        logger.info(
+            f"[SpatialLayoutEngine] Zone targets from DLBM: "
+            + ", ".join(f"{k}={v:.1f}ha" for k, v in targets.items())
+        )
+        return targets
 
     def _violations_to_adjustments(
         self, violations: list,
@@ -497,18 +550,23 @@ class SpatialLayoutEngine:
         targets: Dict[str, float],
     ) -> Optional[Dict[str, Any]]:
         """Re-generate planning zones with adjusted targets."""
+        adj_graph = self._get_adjacency_graph(landuse_geojson)
+
         allocator = self._get_allocator()
         result = allocator.solve(
             landuse_geojson=landuse_geojson,
             targets=targets,
             constraints=self._kg_constraints,
             kg=self.kg,
+            adjacency_graph=adj_graph,
+            adjacency_weight=0.5,
+            change_penalty_weight=0.3,
         )
         if not result.get("features"):
             return None
 
         for feat in result["features"]:
-            zt = feat["properties"].get("assigned_zone", "一般农地区")
+            zt = feat["properties"].get("assigned_zone", "一般农业区")
             feat["properties"]["color"] = PLANNING_ZONE_COLORS.get(zt, "#CCCCCC")
             feat["properties"]["zone_type"] = zt
 

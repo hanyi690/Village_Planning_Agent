@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 
 # Priority order for assigning parcels: DLBM directly matching zone type
 # Imported from colors.py ZONE_TYPE_TO_DLBMS (single source of truth)
-from ..colors import ZONE_TYPE_TO_DLBMS as DLBM_PREFERENCE, PROTECTED_DLBM_CODES, CONSTRUCTION_ZONE_TYPES
+from ..zone_schema import ZONE_TYPE_TO_DLBMS as DLBM_PREFERENCE, PROTECTED_DLBM_CODES, CONSTRUCTION_ZONE_TYPES
 
 # Precomputed DLBM category sets (avoid rebuilding per _preference_cost call)
 _AGRI_DLBM_SET: set = set()
@@ -87,6 +87,9 @@ class ConstraintDrivenAllocator:
         kg=None,
         mode: str = "greedy",
         protection_zones: Optional[Dict[str, Dict[str, Any]]] = None,
+        adjacency_graph: Optional[Any] = None,
+        adjacency_weight: float = 0.5,
+        change_penalty_weight: float = 0.3,
     ) -> Dict[str, Any]:
         """Run constraint-driven allocation.
 
@@ -94,20 +97,29 @@ class ConstraintDrivenAllocator:
             landuse_geojson: Current land use parcels (FeatureCollection)
             targets: {zone_type_or_planning_zone: target_area_ha}
                      Accepts both 7-class zone_type keys (居住用地, 农业用地, etc.)
-                     and 4-class planning zone keys (永久基本农田保护区, etc.)
+                     and 4-class planning zone keys (农田保护区, etc.)
             constraints: list of constraint dicts from KG
             kg: Optional PlanningKG for spatial queries
             mode: "greedy" (default) or "mip" (PuLP-based MIP)
+            protection_zones: Dict of protection zone GeoJSONs by name
+            adjacency_graph: Optional AdjacencyGraph for MIP spatial constraints
+            adjacency_weight: Weight for adjacency compatibility in MIP mode
+            change_penalty_weight: Weight for change-from-current penalty in MIP mode
 
         Returns:
             GeoJSON FeatureCollection with 'assigned_zone' property on each feature.
             When planning zone targets are used, assigned_zone is remapped to
-            4-class planning zone names (永久基本农田保护区/村庄建设区/生态保护区/一般农地区).
+            4-class planning zone names (农田保护区/村庄建设区/生态保护区/一般农业区).
         """
         if mode == "mip":
             from .mip_allocator import MIPZoneAllocator
             allocator = MIPZoneAllocator()
-            return allocator.solve(landuse_geojson, targets, constraints, kg)
+            return allocator.solve(
+                landuse_geojson, targets, constraints, kg,
+                adjacency_graph=adjacency_graph,
+                adjacency_weight=adjacency_weight,
+                change_penalty_weight=change_penalty_weight,
+            )
 
         # Reset state from any prior solve() call
         self.assignments = {}
@@ -130,7 +142,8 @@ class ConstraintDrivenAllocator:
             return landuse_geojson
 
         from ..zone_generator import resolve_zone_type_for_dlbm
-        from ..colors import get_zone_type_for_planned_dlbm
+        from ..zone_schema import get_zone_type_for_planned_dlbm
+        from ...utils.geojson_utils import build_parcel_index
         from .planning_zone_mapper import (
             PLANNING_ZONE_TO_ZONE_TYPES,
             map_planning_zone_targets_to_zone_types,
@@ -146,38 +159,8 @@ class ConstraintDrivenAllocator:
         else:
             zone_type_targets = targets
 
-        # Build parcel index: composite_key (BSM_DLBM_SHAPEArea) → parcel info
-        # BSM is NOT unique — 80 BSMs have 2 different DLBM codes, and 38 BSM+DLBM
-        # pairs have multiple features with different geometries/areas.
-        # Three-level key (BSM_DLBM_SHAPEArea) ensures all 660 parcels are preserved.
-        parcel_db = {}
-        duplicate_bsms = set()
-        seen_bsms = set()
-        for ft in features:
-            props = ft.get("properties", {})
-            bsm = str(props.get("BSM", "")).strip()
-            dlbm = str(props.get("DLBM", "")).strip()
-            if not bsm:
-                continue
-            shape_area = props.get("SHAPE_Area", 0) or 0
-            composite_key = f"{bsm}_{dlbm}_{int(shape_area)}"
-            if bsm in seen_bsms:
-                duplicate_bsms.add(bsm)
-            seen_bsms.add(bsm)
-            area = (props.get("DLMJ", 0) or shape_area) / 10000
-            current_zone = resolve_zone_type_for_dlbm(dlbm)
-            parcel_db[composite_key] = {
-                "area_ha": area,
-                "dlbm": dlbm,
-                "bsm_bare": bsm,
-                "current_zone": current_zone,
-                "feature": ft,
-            }
-
-        if duplicate_bsms:
-            logger.info(
-                f"[Allocator] Found {len(duplicate_bsms)} BSMs with multiple DLBM codes"
-            )
+        # Build parcel index using shared utility
+        parcel_db, _dup = build_parcel_index(landuse_geojson, zone_type_fn=resolve_zone_type_for_dlbm)
 
         total_area = sum(p["area_ha"] for p in parcel_db.values())
         logger.info(

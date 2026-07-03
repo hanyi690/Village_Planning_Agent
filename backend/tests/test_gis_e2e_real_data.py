@@ -187,10 +187,10 @@ class TestAllocateZonesRealLanduse:
 
         # 使用 4 个规划分区名（engine.py 当前的做法）
         targets = {
-            "永久基本农田保护区": 78.83,
+            "农田保护区": 78.83,
             "村庄建设区": 30.50,
             "生态保护区": 362.02,
-            "一般农地区": 1881.54,
+            "一般农业区": 1881.54,
         }
 
         allocator = ConstraintDrivenAllocator()
@@ -211,10 +211,10 @@ class TestAllocateZonesRealLanduse:
     def test_allocate_assigned_zone_is_planning_zone_name(self, landuse_geojson):
         """Bug B 修复后：assigned_zone 应是 4 个规划分区名之一。"""
         targets = {
-            "永久基本农田保护区": 78.83,
+            "农田保护区": 78.83,
             "村庄建设区": 30.50,
             "生态保护区": 362.02,
-            "一般农地区": 1881.54,
+            "一般农业区": 1881.54,
         }
 
         allocator = ConstraintDrivenAllocator()
@@ -225,7 +225,7 @@ class TestAllocateZonesRealLanduse:
             mode="greedy",
         )
 
-        valid_zones = {"永久基本农田保护区", "村庄建设区", "生态保护区", "一般农地区"}
+        valid_zones = {"农田保护区", "村庄建设区", "生态保护区", "一般农业区"}
         features = result.get("features", [])
         assigned_zones = {f["properties"].get("assigned_zone", "") for f in features}
         # 修复后应全部是 4 个分区名
@@ -247,10 +247,10 @@ class TestMIPAllocatorE2E:
         constraints = kg.get_constraints()
 
         targets = {
-            "永久基本农田保护区": 78.83,
+            "农田保护区": 78.83,
             "村庄建设区": 30.50,
             "生态保护区": 362.02,
-            "一般农地区": 1881.54,
+            "一般农业区": 1881.54,
         }
 
         allocator = ConstraintDrivenAllocator()
@@ -267,10 +267,10 @@ class TestMIPAllocatorE2E:
     def test_mip_assigned_zone_is_planning_zone_name(self, landuse_geojson):
         """MIP 模式的 assigned_zone 应是 4 个规划分区名之一."""
         targets = {
-            "永久基本农田保护区": 78.83,
+            "农田保护区": 78.83,
             "村庄建设区": 30.50,
             "生态保护区": 362.02,
-            "一般农地区": 1881.54,
+            "一般农业区": 1881.54,
         }
 
         allocator = ConstraintDrivenAllocator()
@@ -281,7 +281,7 @@ class TestMIPAllocatorE2E:
             mode="mip",
         )
 
-        valid_zones = {"永久基本农田保护区", "村庄建设区", "生态保护区", "一般农地区"}
+        valid_zones = {"农田保护区", "村庄建设区", "生态保护区", "一般农业区"}
         features = result.get("features", [])
         assigned_zones = {f["properties"].get("assigned_zone", "") for f in features}
         non_valid = assigned_zones - valid_zones
@@ -290,10 +290,10 @@ class TestMIPAllocatorE2E:
     def test_mip_output_structure_matches_greedy(self, landuse_geojson):
         """MIP 和 greedy 输出结构应一致（assigned_zone, original_zone, changed 等字段）."""
         targets = {
-            "永久基本农田保护区": 78.83,
+            "农田保护区": 78.83,
             "村庄建设区": 30.50,
             "生态保护区": 362.02,
-            "一般农地区": 1881.54,
+            "一般农业区": 1881.54,
         }
         allocator = ConstraintDrivenAllocator()
 
@@ -415,7 +415,7 @@ class TestValidateLayoutRealOutput:
 
         assert report.status in ("pass", "fail", "warning"), \
             f"Invalid status: {report.status}"
-        assert len(report.checks) == 6, f"Expected 6 checks, got {len(report.checks)}"
+        assert len(report.checks) == 8, f"Expected 8 checks, got {len(report.checks)}"
 
     def test_validator_area_constraints_check_runs(self, real_layout_and_constraints):
         """area_constraints 检查应运行（无论 pass/fail）。"""
@@ -492,10 +492,10 @@ class TestToolLayerEndToEnd:
     def test_allocate_zones_via_tool(self, gis_data, l3_reports_for_kg):
         """allocate_zones 工具应在真实数据上工作。"""
         targets = {
-            "永久基本农田保护区": 78.83,
+            "农田保护区": 78.83,
             "村庄建设区": 30.50,
             "生态保护区": 362.02,
-            "一般农地区": 1881.54,
+            "一般农业区": 1881.54,
         }
         # 先构建 KG 获取约束
         kg = PlanningKG(village_name="金田村")
@@ -635,7 +635,7 @@ class TestFullPipelineE2E:
             for f in features
             if "properties" in f
         }
-        # 金田村实际生成 3 类分区（无永久基本农田保护区）
+        # 金田村实际生成 3 类分区（无农田保护区）
         expected_keywords = ["村", "农", "生态"]
         for kw in expected_keywords:
             assert any(kw in zt for zt in assigned_zones), \

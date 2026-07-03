@@ -90,6 +90,7 @@ def _prepare_parse_context(
 async def _aparse_reports_to_intent(
     reports: Dict[str, Dict[str, Any]],
     village_name: str,
+    gis_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Async: two-layer architecture — metric anchors + Instructor structured output.
 
@@ -103,8 +104,8 @@ async def _aparse_reports_to_intent(
     from app.services.modules.parsing.prompts import format_structured_parse_prompt, format_anchors_text
     from app.services.modules.parsing.validator import semantic_validate, normalize_area_ratios
 
-    # Layer 1: Extract metric anchors (deterministic)
-    anchors = extract_metric_anchors(reports)
+    # Layer 1: Extract metric anchors (GIS data > text metrics > regex)
+    anchors = extract_metric_anchors(reports, gis_data=gis_data)
 
     # Build prompt
     planning_context, err = _prepare_parse_context(reports)
@@ -152,6 +153,7 @@ async def _aparse_reports_to_intent(
 def _parse_reports_to_intent(
     reports: Dict[str, Dict[str, Any]],
     village_name: str,
+    gis_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Sync wrapper for _aparse_reports_to_intent (used by @tool)."""
     import asyncio
@@ -165,26 +167,27 @@ def _parse_reports_to_intent(
         with concurrent.futures.ThreadPoolExecutor() as pool:
             future = pool.submit(
                 asyncio.run,
-                _aparse_reports_to_intent(reports, village_name),
+                _aparse_reports_to_intent(reports, village_name, gis_data),
             )
             return future.result(timeout=_LLM_REQUEST_TIMEOUT)
     else:
-        return asyncio.run(_aparse_reports_to_intent(reports, village_name))
+        return asyncio.run(_aparse_reports_to_intent(reports, village_name, gis_data))
 
 
 @tool
 def parse_planning_text(
     reports: Annotated[Dict[str, Dict[str, Any]], InjectedState("reports")],
     village_name: Annotated[str, InjectedState("village_name")],
-    tool_call_id: Annotated[str, InjectedToolCallId],
+    gis_data: Annotated[Optional[Dict[str, Any]], InjectedState("gis_data")] = None,
+    tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
     """从规划报告自动解析空间布局意图(UnifiedSpatialIntent)。
     解析后的 intent 可直接传给 generate_layout 生成地图图层。
-    无需参数，报告数据自动从状态注入。
+    无需参数，报告数据和GIS数据自动从状态注入。
 
     解析内容：功能分区(zones)、设施布局(facilities)、发展轴(axes)、约束(constraints)。
     """
-    result = _parse_reports_to_intent(reports=reports, village_name=village_name)
+    result = _parse_reports_to_intent(reports=reports, village_name=village_name, gis_data=gis_data)
     return Command(update={"messages": [_to_tool_message(result, tool_call_id)]})
 
 

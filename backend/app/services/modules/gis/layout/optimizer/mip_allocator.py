@@ -1,13 +1,21 @@
 """PuLP-based Mixed Integer Programming zone allocator.
 
 Solves the zone assignment problem as a true MIP:
-  Variables: x[i][z] = 1 if parcel i assigned to zone z
+  Variables: x[i][z] = 1 if parcel i assigned to planning zone z
   Objective:  minimize total area deviation from targets
   Constraints:
-    - Each parcel assigned to exactly one zone
+    - Each parcel assigned to exactly one planning zone
     - Zone areas within target ± tolerance (soft via objective)
     - Protected DLBM parcels cannot go to construction zone
     - DLBM preference encoded as cost coefficient
+
+Planning zone classification (based on GB/T 21010 + 三区三线 national standard):
+  - 生态保护区 (Ecological Protection Zone): forests, wetlands, water bodies
+  - 农田保护区 (Farmland Protection Zone): permanent basic farmland (耕地 01)
+  - 村庄建设区 (Village Construction Zone): residential, industrial, public, transport, commercial
+  - 一般农业区 (General Agricultural Zone): gardens, general cropland, facility agriculture
+
+DLBM codes map DIRECTLY to planning zones — no intermediate zone_type layer.
 """
 
 from __future__ import annotations
@@ -19,60 +27,38 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# DLBM → preferred zone type mapping (lower cost = stronger preference)
-DLBM_ZONE_PREFERENCE: Dict[str, Dict[str, int]] = {
-    # Farmland DLBMs → strongly prefer agriculture
-    "0110": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "0120": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "0130": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "0100": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "0200": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "0210": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "0220": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "1100": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "1200": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "1510": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "1180": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    "2270": {"农业用地": 0, "生态绿地": 5, "居住用地": 50, "产业用地": 50},
-    # Construction DLBMs → strongly prefer construction zones
-    "2121": {"居住用地": 0, "公共服务用地": 5, "产业用地": 10, "农业用地": 30},
-    "2030": {"居住用地": 0, "公共服务用地": 5, "产业用地": 10, "农业用地": 30},
-    "2122": {"公共服务用地": 0, "居住用地": 5, "产业用地": 10, "农业用地": 30},
-    "2125": {"公共服务用地": 0, "居住用地": 5, "产业用地": 10, "农业用地": 30},
-    "2124": {"产业用地": 0, "居住用地": 5, "公共服务用地": 10, "农业用地": 30},
-    "2126": {"交通用地": 0, "居住用地": 10, "农业用地": 30},
-    # Ecological DLBMs → strongly prefer ecology
-    "1340": {"生态绿地": 0, "农业用地": 5, "居住用地": 50, "产业用地": 50},
-    "1350": {"生态绿地": 0, "农业用地": 5, "居住用地": 50, "产业用地": 50},
-    "0310": {"生态绿地": 0, "农业用地": 5, "居住用地": 50, "产业用地": 50},
-    "0330": {"生态绿地": 0, "农业用地": 5, "居住用地": 50, "产业用地": 50},
-    "1400": {"生态绿地": 0, "农业用地": 5, "居住用地": 50, "产业用地": 50},
-    "0300": {"生态绿地": 0, "农业用地": 5, "居住用地": 50, "产业用地": 50},
-    "0400": {"生态绿地": 0, "农业用地": 5, "居住用地": 50, "产业用地": 50},
-    # Water
-    "3100": {"水域": 0, "生态绿地": 5, "农业用地": 20},
-    "1110": {"水域": 0, "生态绿地": 5, "农业用地": 20},
-    "1140": {"水域": 0, "生态绿地": 5, "农业用地": 20},
-    # Roads
-    "2200": {"交通用地": 0, "居住用地": 10, "农业用地": 20},
-    "1040": {"交通用地": 0, "居住用地": 10, "农业用地": 20},
-    "1000": {"交通用地": 0, "居住用地": 10, "农业用地": 20},
-    # Commercial
-    "0500": {"商业用地": 0, "居住用地": 5, "产业用地": 10, "农业用地": 30},
-    # Industry
-    "0600": {"产业用地": 0, "居住用地": 10, "农业用地": 30},
-    "0610": {"产业用地": 0, "居住用地": 10, "农业用地": 30},
-    "0620": {"产业用地": 0, "居住用地": 10, "农业用地": 30},
-    # Public services
-    "0800": {"公共服务用地": 0, "居住用地": 5, "产业用地": 10, "农业用地": 30},
-    "0900": {"公共服务用地": 0, "居住用地": 5, "产业用地": 10, "农业用地": 30},
+# ---------------------------------------------------------------------------
+# DLBM → Planning Zone: import from single source (zone_schema.py)
+# ---------------------------------------------------------------------------
+from ..zone_schema import DLBM_TO_PLANNING_ZONE, PROTECTED_DLBM_CODES
+
+# Cross-zone preference cost matrix (symmetric-ish)
+# Same zone = 0, compatible zones = low cost, forbidden zones = high cost
+CROSS_ZONE_COST: Dict[tuple, int] = {
+    # 农田↔一般农业: compatible (both agricultural)
+    ("农田保护区", "一般农业区"): 3, ("一般农业区", "农田保护区"): 3,
+    # 生态↔一般农业: somewhat compatible
+    ("生态保护区", "一般农业区"): 5, ("一般农业区", "生态保护区"): 5,
+    # 农田↔生态: moderate conflict
+    ("农田保护区", "生态保护区"): 10, ("生态保护区", "农田保护区"): 10,
+    # 建设↔一般农业: significant conflict
+    ("村庄建设区", "一般农业区"): 30, ("一般农业区", "村庄建设区"): 30,
+    # 建设↔农田: strong conflict (基本农田保护)
+    ("村庄建设区", "农田保护区"): 40, ("农田保护区", "村庄建设区"): 40,
+    # 建设↔生态: strongest conflict
+    ("村庄建设区", "生态保护区"): 50, ("生态保护区", "村庄建设区"): 50,
 }
 
-# Protected DLBM codes and construction zone types — single source from colors.py
-from ..colors import PROTECTED_DLBM_CODES, CONSTRUCTION_ZONE_TYPES
+# Construction planning zones
+PLANNING_CONSTRUCTION_ZONES = {"村庄建设区"}
 
-# Default cost for DLBM-zone pairs not in preference table
-DEFAULT_PREFERENCE_COST = 15
+# Default cost for DLBM-zone pairs not in cross-zone matrix
+DEFAULT_PREFERENCE_COST = 20
+
+
+def dlbm_to_planning_zone(dlbm: str) -> str:
+    """Map DLBM code to its native planning zone (single source from zone_schema.py)."""
+    return DLBM_TO_PLANNING_ZONE.get(str(dlbm).strip(), "一般农业区")
 
 
 class MIPZoneAllocator:
@@ -96,14 +82,20 @@ class MIPZoneAllocator:
         targets: Dict[str, float],
         constraints: Optional[List[Dict]] = None,
         kg=None,
+        adjacency_graph: Optional[Any] = None,
+        adjacency_weight: float = 0.5,
+        change_penalty_weight: float = 0.3,
     ) -> Dict[str, Any]:
         """Run MIP allocation.
 
         Args:
             landuse_geojson: Current land use parcels (FeatureCollection)
-            targets: {zone_type: target_area_ha}
+            targets: {planning_zone: target_area_ha}
             constraints: KG constraint dicts (used for hard bounds)
             kg: Optional PlanningKG
+            adjacency_graph: Optional AdjacencyGraph for spatial constraints
+            adjacency_weight: Weight for adjacency compatibility reward (0 to disable)
+            change_penalty_weight: Weight for change-from-current penalty (0 to disable)
 
         Returns:
             GeoJSON FeatureCollection with 'assigned_zone' on each feature
@@ -122,41 +114,17 @@ class MIPZoneAllocator:
             return landuse_geojson
 
         from ..zone_generator import resolve_zone_type_for_dlbm
+        from ...utils.geojson_utils import build_parcel_index
 
-        # Build parcel data
-        parcels = []
-        duplicate_bsms = set()
-        seen_bsms = set()
-        for ft in features:
-            props = ft.get("properties", {})
-            bsm = str(props.get("BSM", "")).strip()
-            dlbm = str(props.get("DLBM", "")).strip()
-            if not bsm:
-                continue
-            shape_area = props.get("SHAPE_Area", 0) or 0
-            composite_key = f"{bsm}_{dlbm}_{int(shape_area)}"
-            if bsm in seen_bsms:
-                duplicate_bsms.add(bsm)
-            seen_bsms.add(bsm)
-            area = (props.get("DLMJ", 0) or shape_area) / 10000
-            current_zone = resolve_zone_type_for_dlbm(dlbm)
-            parcels.append({
-                "composite_key": composite_key,
-                "bsm_bare": bsm,
-                "area_ha": area,
-                "dlbm": dlbm,
-                "current_zone": current_zone,
-                "feature": ft,
-            })
+        parcel_db, _dup = build_parcel_index(landuse_geojson, zone_type_fn=resolve_zone_type_for_dlbm)
+        parcels = [
+            {**info, "composite_key": key}
+            for key, info in parcel_db.items()
+        ]
 
-        if duplicate_bsms:
-            logger.info(
-                f"[MIP] Found {len(duplicate_bsms)} BSMs with multiple DLBM codes"
-            )
-
-        zone_types = list(targets.keys())
+        planning_zones = list(targets.keys())
         n_parcels = len(parcels)
-        n_zones = len(zone_types)
+        n_zones = len(planning_zones)
 
         if n_parcels == 0 or n_zones == 0:
             return landuse_geojson
@@ -169,19 +137,19 @@ class MIPZoneAllocator:
         # ---- Build PuLP model ----
         prob = pulp.LpProblem("ZoneAllocation", pulp.LpMinimize)
 
-        # Binary variables: x[i][z] = 1 if parcel i assigned to zone z
+        # Binary variables: x[i][z] = 1 if parcel i assigned to planning zone z
         x = {}
         for i, p in enumerate(parcels):
-            for j, zt in enumerate(zone_types):
+            for j, zt in enumerate(planning_zones):
                 # Protected parcels cannot go to construction zones
-                if p["dlbm"] in PROTECTED_DLBM_CODES and zt in CONSTRUCTION_ZONE_TYPES:
+                if p["dlbm"] in PROTECTED_DLBM_CODES and zt in PLANNING_CONSTRUCTION_ZONES:
                     continue
                 x[i, j] = pulp.LpVariable(f"x_{i}_{j}", cat="Binary")
 
         # Deviation variables: dev_pos[z] and dev_neg[z]
         dev_pos = {}
         dev_neg = {}
-        for j, zt in enumerate(zone_types):
+        for j, zt in enumerate(planning_zones):
             dev_pos[j] = pulp.LpVariable(f"dev_pos_{j}", lowBound=0)
             dev_neg[j] = pulp.LpVariable(f"dev_neg_{j}", lowBound=0)
 
@@ -195,7 +163,7 @@ class MIPZoneAllocator:
 
         # C2: Area deviation definition
         # Σ_i area[i] * x[i][z] - target[z] = dev_pos[z] - dev_neg[z]
-        for j, zt in enumerate(zone_types):
+        for j, zt in enumerate(planning_zones):
             target = targets[zt]
             area_terms = []
             for i, p in enumerate(parcels):
@@ -207,32 +175,78 @@ class MIPZoneAllocator:
                     f"deviation_{j}"
                 )
 
-        # C3: Hard constraints from KG (if provided)
-        if constraints:
-            self._add_hard_constraints(pulp, prob, x, parcels, zone_types, constraints, targets)
-
         # ---- Objective ----
-        # Minimize: area deviation + DLBM preference cost
-        AREA_WEIGHT = 10.0  # Weight for area deviation vs preference cost
+        # Minimize: area deviation + DLBM preference cost + change penalty + adjacency reward
+        AREA_WEIGHT = 10.0
 
         obj_terms = []
 
-        # Area deviation penalty
+        # 1. Area deviation penalty
         for j in range(n_zones):
             obj_terms.append(AREA_WEIGHT * dev_pos[j])
             obj_terms.append(AREA_WEIGHT * dev_neg[j])
 
-        # DLBM preference cost
+        # C3: KG constraints (soft, with slack variables added to obj_terms)
+        if constraints:
+            self._add_hard_constraints(
+                pulp, prob, x, parcels, planning_zones, constraints, targets, obj_terms
+            )
+
+        # 2. DLBM → planning zone preference cost (direct, no mapping)
         for i, p in enumerate(parcels):
-            for j, zt in enumerate(zone_types):
+            for j, zt in enumerate(planning_zones):
                 if (i, j) in x:
                     cost = self._get_preference_cost(p["dlbm"], zt)
                     obj_terms.append(cost * x[i, j])
 
+        # 3. Change penalty: penalize assigning parcel to a zone different from its native zone
+        if change_penalty_weight > 0:
+            for i, p in enumerate(parcels):
+                native_zone = dlbm_to_planning_zone(p["dlbm"])
+                for j, zt in enumerate(planning_zones):
+                    if (i, j) in x and zt != native_zone:
+                        if (p["dlbm"] in PROTECTED_DLBM_CODES
+                                and zt in PLANNING_CONSTRUCTION_ZONES):
+                            continue  # Already forbidden by variable exclusion
+                        obj_terms.append(change_penalty_weight * x[i, j])
+
+        # 4. Adjacency compatibility: reward same-zone neighbors via linearized auxiliary vars
+        adj_index_pairs = []
+        if adjacency_graph is not None and adjacency_weight > 0:
+            adj_index_pairs = adjacency_graph.to_index_pairs()
+            if adj_index_pairs:
+                y = {}
+                for pair_id, (i_idx, j_idx) in enumerate(adj_index_pairs):
+                    for j, zt in enumerate(planning_zones):
+                        if (i_idx, j) in x and (j_idx, j) in x:
+                            y[pair_id, j] = pulp.LpVariable(
+                                f"y_{pair_id}_{j}", cat="Binary"
+                            )
+                            prob += (
+                                y[pair_id, j] <= x[i_idx, j],
+                                f"lin1_{pair_id}_{j}"
+                            )
+                            prob += (
+                                y[pair_id, j] <= x[j_idx, j],
+                                f"lin2_{pair_id}_{j}"
+                            )
+                            prob += (
+                                y[pair_id, j] >= x[i_idx, j] + x[j_idx, j] - 1,
+                                f"lin3_{pair_id}_{j}"
+                            )
+                            obj_terms.append(-adjacency_weight * y[pair_id, j])
+
+                logger.info(
+                    f"[MIP] Adjacency: {len(adj_index_pairs)} pairs, "
+                    f"{sum(1 for k in y)} auxiliary vars"
+                )
+
         prob += pulp.lpSum(obj_terms)
 
         # ---- Solve ----
-        solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=30)
+        has_adj = adjacency_graph is not None and adjacency_weight > 0
+        time_limit = 120 if has_adj else 30
+        solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=time_limit, gapRel=0.05)
         status = prob.solve(solver)
 
         if pulp.LpStatus[status] != "Optimal":
@@ -247,16 +261,16 @@ class MIPZoneAllocator:
         for i, p in enumerate(parcels):
             best_j = None
             best_val = 0.0
-            for j, zt in enumerate(zone_types):
+            for j, zt in enumerate(planning_zones):
                 if (i, j) in x:
                     val = pulp.value(x[i, j]) or 0.0
                     if val > best_val:
                         best_val = val
                         best_j = j
             if best_j is not None:
-                assigned_zt = zone_types[best_j]
+                assigned_zt = planning_zones[best_j]
             else:
-                assigned_zt = p["current_zone"]
+                assigned_zt = dlbm_to_planning_zone(p["dlbm"])
             assignments[p["composite_key"]] = assigned_zt
             zone_areas[assigned_zt] += p["area_ha"]
 
@@ -264,11 +278,12 @@ class MIPZoneAllocator:
         output_features = []
         for p in parcels:
             ft = dict(p["feature"])
-            assigned = assignments.get(p["composite_key"], p["current_zone"])
+            assigned = assignments.get(p["composite_key"], dlbm_to_planning_zone(p["dlbm"]))
+            native_zone = dlbm_to_planning_zone(p["dlbm"])
             ft.setdefault("properties", {})
             ft["properties"]["assigned_zone"] = assigned
             ft["properties"]["original_zone"] = p["current_zone"]
-            ft["properties"]["changed"] = assigned != p["current_zone"]
+            ft["properties"]["changed"] = assigned != native_zone
             ft["properties"]["area_ha"] = p["area_ha"]
             ft["properties"]["composite_key"] = p["composite_key"]
             ft["properties"]["bsm_raw"] = p["bsm_bare"]
@@ -276,10 +291,10 @@ class MIPZoneAllocator:
 
         # Log results
         changed = sum(1 for p in parcels
-                      if assignments.get(p["composite_key"], p["current_zone"]) != p["current_zone"])
+                      if assignments.get(p["composite_key"], dlbm_to_planning_zone(p["dlbm"])) != dlbm_to_planning_zone(p["dlbm"]))
         total_deviation = sum(
             abs(zone_areas.get(zt, 0) - targets.get(zt, 0))
-            for zt in zone_types
+            for zt in planning_zones
         )
         logger.info(
             f"[MIP] Complete: {len(output_features)} features, "
@@ -295,24 +310,45 @@ class MIPZoneAllocator:
         return {"type": "FeatureCollection", "features": output_features}
 
     @staticmethod
-    def _get_preference_cost(dlbm: str, zone_type: str) -> int:
-        """Get DLBM-zone preference cost. Lower = stronger preference."""
-        prefs = DLBM_ZONE_PREFERENCE.get(dlbm)
-        if prefs:
-            return prefs.get(zone_type, DEFAULT_PREFERENCE_COST)
-        return DEFAULT_PREFERENCE_COST
+    def _get_preference_cost(dlbm: str, planning_zone: str) -> int:
+        """Get DLBM→planning zone preference cost via cross-zone matrix.
 
-    @staticmethod
+        1. Look up DLBM's native zone from DLBM_TO_PLANNING_ZONE
+        2. If same zone → cost 0
+        3. If different → look up CROSS_ZONE_COST(native, target)
+        4. Fallback → DEFAULT_PREFERENCE_COST
+        """
+        native_zone = DLBM_TO_PLANNING_ZONE.get(str(dlbm).strip())
+        if native_zone is None:
+            return DEFAULT_PREFERENCE_COST
+        if native_zone == planning_zone:
+            return 0
+        return CROSS_ZONE_COST.get((native_zone, planning_zone), DEFAULT_PREFERENCE_COST)
+
     def _add_hard_constraints(
+        self,
         pulp_mod,
         prob,
         x: Dict,
         parcels: List[Dict],
-        zone_types: List[str],
+        planning_zones: List[str],
         constraints: List[Dict],
         targets: Dict[str, float],
+        obj_terms: list,
     ):
-        """Add KG-derived hard constraints to the MIP model."""
+        """Add KG-derived constraints as soft constraints with DLBM clipping.
+
+        KG constraints from report text often conflict with actual DLBM areas.
+        Strategy: clip values to DLBM-feasible bounds, then add as soft constraints
+        (slack variables) rather than hard constraints to avoid infeasibility.
+        """
+        native_zone_areas: Dict[str, float] = defaultdict(float)
+        for p in parcels:
+            native_zone_areas[dlbm_to_planning_zone(p["dlbm"])] += p["area_ha"]
+
+        KG_WEIGHT = 5.0
+        kg_cidx = 0
+
         for c in constraints:
             cid = c.get("id", "")
             op = c.get("operator", c.get("op", ""))
@@ -321,53 +357,77 @@ class MIPZoneAllocator:
             except (ValueError, TypeError):
                 continue
 
-            # Construction cap: Σ construction zones ≤ limit
+            # Construction cap: Σ 村庄建设区 ≤ limit (soft via slack)
             if "construction" in cid and op in ("<=", "lte"):
-                construction_indices = [
-                    j for j, zt in enumerate(zone_types)
-                    if zt in CONSTRUCTION_ZONE_TYPES
+                max_construction = native_zone_areas.get("村庄建设区", 0) * 3
+                value = min(value, max_construction)
+                construction_idx = next(
+                    (j for j, zt in enumerate(planning_zones)
+                     if zt in PLANNING_CONSTRUCTION_ZONES), None
+                )
+                if construction_idx is None:
+                    continue
+                area_terms = [
+                    p["area_ha"] * x[i, construction_idx]
+                    for i, p in enumerate(parcels)
+                    if (i, construction_idx) in x
                 ]
-                for j in construction_indices:
-                    area_terms = []
-                    for i, p in enumerate(parcels):
-                        if (i, j) in x:
-                            area_terms.append(p["area_ha"] * x[i, j])
-                    if area_terms:
-                        prob += (
-                            pulp_mod.lpSum(area_terms) <= value,
-                            f"kg_construction_cap_{j}"
-                        )
+                if area_terms:
+                    sl = pulp_mod.LpVariable(f"kg_sl_constr_{kg_cidx}", lowBound=0)
+                    prob += (
+                        pulp_mod.lpSum(area_terms) <= value + sl,
+                        f"kg_construction_cap_{kg_cidx}"
+                    )
+                    obj_terms.append(KG_WEIGHT * sl)
+                    kg_cidx += 1
 
-            # Farmland minimum: Σ agriculture zones ≥ limit
+            # Farmland minimum: Σ 农田保护区 + 一般农业区 ≥ limit (soft via slack)
             elif "farmland" in cid and op in (">=", "gte"):
+                max_farmland = (
+                    native_zone_areas.get("农田保护区", 0)
+                    + native_zone_areas.get("一般农业区", 0)
+                )
+                value = min(value, max_farmland)
+                if value <= 0:
+                    continue
                 ag_indices = [
-                    j for j, zt in enumerate(zone_types)
-                    if zt == "农业用地"
+                    j for j, zt in enumerate(planning_zones)
+                    if zt in ("农田保护区", "一般农业区")
                 ]
+                area_terms = []
                 for j in ag_indices:
-                    area_terms = []
                     for i, p in enumerate(parcels):
                         if (i, j) in x:
                             area_terms.append(p["area_ha"] * x[i, j])
-                    if area_terms:
-                        prob += (
-                            pulp_mod.lpSum(area_terms) >= value,
-                            f"kg_farmland_min_{j}"
-                        )
+                if area_terms:
+                    sl = pulp_mod.LpVariable(f"kg_sl_farm_{kg_cidx}", lowBound=0)
+                    prob += (
+                        pulp_mod.lpSum(area_terms) + sl >= value,
+                        f"kg_farmland_min_{kg_cidx}"
+                    )
+                    obj_terms.append(KG_WEIGHT * sl)
+                    kg_cidx += 1
 
-            # Ecological minimum
+            # Ecological minimum: Σ 生态保护区 ≥ limit (soft via slack)
             elif "ecological" in cid and op in (">=", "gte"):
+                max_eco = native_zone_areas.get("生态保护区", 0)
+                value = min(value, max_eco)
+                if value <= 0:
+                    continue
                 eco_indices = [
-                    j for j, zt in enumerate(zone_types)
-                    if zt == "生态绿地"
+                    j for j, zt in enumerate(planning_zones)
+                    if zt == "生态保护区"
                 ]
+                area_terms = []
                 for j in eco_indices:
-                    area_terms = []
                     for i, p in enumerate(parcels):
                         if (i, j) in x:
                             area_terms.append(p["area_ha"] * x[i, j])
-                    if area_terms:
-                        prob += (
-                            pulp_mod.lpSum(area_terms) >= value,
-                            f"kg_eco_min_{j}"
-                        )
+                if area_terms:
+                    sl = pulp_mod.LpVariable(f"kg_sl_eco_{kg_cidx}", lowBound=0)
+                    prob += (
+                        pulp_mod.lpSum(area_terms) + sl >= value,
+                        f"kg_eco_min_{kg_cidx}"
+                    )
+                    obj_terms.append(KG_WEIGHT * sl)
+                    kg_cidx += 1

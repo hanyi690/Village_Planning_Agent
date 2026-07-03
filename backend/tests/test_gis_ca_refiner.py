@@ -45,7 +45,7 @@ def _make_features_mixed() -> list:
     return (
         _make_features_same_type("村庄建设区", 3, spacing=0.005)
         + _make_features_same_type("生态保护区", 2, spacing=0.005)
-        + _make_features_same_type("一般农地区", 2, spacing=0.005)
+        + _make_features_same_type("一般农业区", 2, spacing=0.005)
     )
 
 
@@ -103,7 +103,7 @@ class TestCARefinerByTypeRebuild:
         features = (
             _make_features_same_type("村庄建设区", 10, spacing=0.003)
             + _make_features_same_type("生态保护区", 10, spacing=0.003)
-            + _make_features_same_type("一般农地区", 10, spacing=0.003)
+            + _make_features_same_type("一般农业区", 10, spacing=0.003)
         )
         refiner = ZoneCARefiner(iterations=3)
         result = refiner.refine(features)
@@ -160,4 +160,4 @@ class TestCARefinerMergePass:
         # All original types should still be present
         assert "村庄建设区" in result_types
         assert "生态保护区" in result_types
-        assert "一般农地区" in result_types
+        assert "一般农业区" in result_types

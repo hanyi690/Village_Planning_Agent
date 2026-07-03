@@ -27,7 +27,7 @@ router = APIRouter(prefix="/api/dev/gis", tags=["GIS Dev"])
 # GeoJSON color injection (per-feature DLBM/zone_type → color)
 # ============================================
 
-from app.services.modules.gis.layout.colors import (
+from app.services.modules.gis.layout.zone_schema import (
     get_zone_color, get_zone_type_for_dlbm, ZONE_TYPE_COLORS, DEFAULT_ZONE_COLOR,
     PLANNING_ZONE_COLORS,
 )
@@ -104,7 +104,7 @@ def inject_feature_colors(geojson: Dict[str, Any], layer_type: str) -> Dict[str,
         elif layer_type == "planning_zone":
             zone_type = str(props.get("zone_type", "") or props.get("assigned_zone", "")).strip()
             if not zone_type:
-                zone_type = "一般农地区"
+                zone_type = "一般农业区"
             pcolor = PLANNING_ZONE_COLORS.get(zone_type)
             if pcolor:
                 props["color"] = pcolor
@@ -128,7 +128,7 @@ def inject_feature_colors(geojson: Dict[str, Any], layer_type: str) -> Dict[str,
             if not color_info:
                 # Fallback by status
                 status = str(props.get("status", "规划新建")).strip()
-                from app.services.modules.gis.layout.colors import FACILITY_STATUS_COLORS
+                from app.services.modules.gis.layout.zone_schema import FACILITY_STATUS_COLORS
                 color_info = FACILITY_STATUS_COLORS.get(status, {"fill": "blue", "stroke": "#00008B"})
             props["color"] = color_info["fill"]
             props["stroke"] = color_info["stroke"]
@@ -597,15 +597,7 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
 
         engine = SpatialLayoutEngine()
         from app.services.modules.gis.layout.planning_intent import UnifiedSpatialIntent
-        intent = UnifiedSpatialIntent(
-            metadata={
-                "total_area_ha": 2352.56,
-                "farmland_ha": 78.83,
-                "construction_ha": 30.50,
-                "ecological_ha": 362.02,
-                "general_agriculture_ha": 1881.54,
-            }
-        )
+        intent = UnifiedSpatialIntent(metadata={})
         summaries = {
             "land_use": {"construction_area_ha": 30.5, "new_construction_ha": 0.33},
             "population": {"total": 2800},
@@ -1028,9 +1020,9 @@ def _get_jintian_planning_text() -> str:
 
 ## 用地规划
 
-根据上位规划要求，金田村应保持永久基本农田保护区78.83公顷，
+根据上位规划要求，金田村应保持农田保护区78.83公顷，
 划定村庄建设区30.50公顷用于居民点建设和公共服务设施。
-生态保护区362.02公顷需严格管控，一般农地区1881.54公顷可适度开发。
+生态保护区362.02公顷需严格管控，一般农业区1881.54公顷可适度开发。
 
 居住用地主要集中在村庄中心区域，沿主要道路分布。
 产业用地规划在村庄东部，远离居民区。

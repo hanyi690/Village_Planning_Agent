@@ -21,12 +21,9 @@ from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
 from ...utils.crs_engine import project_to_metric, get_metric_crs
+from .ontology import PLN, GEO, EntityTypes, Relations, FACILITY_TYPES, REGULATION_TYPES
 
 logger = get_logger(__name__)
-
-# Namespaces
-PLN = Namespace("http://village-planning.org/ontology#")
-GEO = Namespace("http://www.opengis.net/ont/geosparql#")
 
 # Predefined constraints extracted from L3 report patterns
 CONSTRAINT_PATTERNS = [
@@ -92,10 +89,10 @@ INDICATOR_PATTERNS = [
 
 # Zone definitions extracted from land_use_planning report tables
 ZONE_TYPE_PATTERNS = {
-    "永久基本农田保护区": {"color": "#FFE4B5", "restrictions": ["禁止非农化", "禁止非粮化"]},
+    "农田保护区": {"color": "#FFE4B5", "restrictions": ["禁止非农化", "禁止非粮化"]},
     "村庄建设区": {"color": "#FF6347", "restrictions": ["建设用地规模受控"]},
     "生态保护区": {"color": "#2E8B57", "restrictions": ["禁止工业开发", "禁止城镇化"]},
-    "一般农地区": {"color": "#98FB98", "restrictions": ["限制大规模非农建设"]},
+    "一般农业区": {"color": "#98FB98", "restrictions": ["限制大规模非农建设"]},
 }
 
 
@@ -201,6 +198,20 @@ class PlanningKG:
         if landuse_geojson:
             self._add_spatial_relations(landuse_geojson)
 
+        # 7. Add Project entities (from report content)
+        self._add_projects(reports)
+
+        # 8. Add Regulation entities (from constraints)
+        self._add_regulations()
+
+        # 9. Add designated_as relations (parcel → planning zone)
+        if landuse_geojson:
+            self._add_designated_as_relations(landuse_geojson)
+
+        # 10. Add spatial infrastructure (facilities, roads, water bodies)
+        if landuse_geojson:
+            self._add_spatial_infrastructure(landuse_geojson)
+
         logger.info(
             f"[PlanningKG] Built KG: {self._parcel_count} parcels, "
             f"{self._constraint_count} constraints, "
@@ -228,7 +239,7 @@ class PlanningKG:
 
         try:
             from ...utils.geojson_utils import geojson_to_geodataframe
-            from ..colors import get_zone_type_for_dlbm
+            from ..zone_schema import get_zone_type_for_dlbm
 
             gdf = geojson_to_geodataframe(landuse_geojson)
             if gdf is None or len(gdf) == 0:
@@ -274,7 +285,7 @@ class PlanningKG:
         Three-level key ensures all 660 parcels are preserved.
         """
         features = geojson.get("features", [])
-        from ..colors import get_zone_type_for_dlbm
+        from ..zone_schema import get_zone_type_for_dlbm
         from ..zone_generator import resolve_zone_type_for_dlbm
 
         duplicate_bsms = set()
@@ -306,6 +317,9 @@ class PlanningKG:
             # Current zone type (DLBM classification)
             zone_type = resolve_zone_type_for_dlbm(dlbm)
             self.g.add((parcel, PLN.current_zone_type, Literal(zone_type)))
+
+            # Parcel located_in Village
+            self.g.add((parcel, Relations.located_in, PLN.village))
 
             self._parcel_count += 1
 
@@ -621,6 +635,165 @@ class PlanningKG:
         kg._parcel_count = len(list(kg.g.subjects(RDF.type, PLN.Parcel)))
         kg._constraint_count = len(list(kg.g.subjects(RDF.type, PLN.Constraint)))
         return kg
+
+    # ============================================
+    # Phase 1: New entity and relation builders
+    # ============================================
+
+    def _add_projects(self, reports: Dict[str, Dict[str, Any]]):
+        """Add Project entities from report content.
+
+        Extracts project references from L3 report text using keyword patterns,
+        creates Project entities with achieves relations to indicators.
+        """
+        import re
+        project_patterns = [
+            (r"实施(.{2,20}项目)", "项目"),
+            (r"推进(.{2,20}工程)", "工程"),
+            (r"建设(.{2,20}项目)", "建设项目"),
+            (r"规划(.{2,15}设施)", "设施规划"),
+        ]
+        seen_projects = set()
+        for dk, report in reports.items():
+            content = report.get("content", "")
+            if not content:
+                continue
+            for pattern, suffix in project_patterns:
+                for match in re.finditer(pattern, content):
+                    name = match.group(1).strip()
+                    if len(name) < 4 or name in seen_projects:
+                        continue
+                    seen_projects.add(name)
+                    uri_name = f"project_{len(seen_projects)}"
+                    project = PLN[uri_name]
+                    self.g.add((project, RDF.type, EntityTypes.Project))
+                    self.g.add((project, PLN.name, Literal(name)))
+                    self.g.add((project, PLN.source, Literal(dk)))
+                    # Link project to village
+                    self.g.add((PLN.village, Relations.achieves, project))
+        if seen_projects:
+            logger.info(f"[PlanningKG] Added {len(seen_projects)} projects")
+
+    def _add_regulations(self):
+        """Add Regulation entities from existing constraints.
+
+        Converts high-level constraints into Regulation entities with
+        protects relations to the zones they safeguard.
+        """
+        for reg_name, reg_info in REGULATION_TYPES.items():
+            reg = PLN[f"regulation_{reg_name}"]
+            self.g.add((reg, RDF.type, EntityTypes.Regulation))
+            self.g.add((reg, PLN.name, Literal(reg_name)))
+
+            # Find the zone this regulation protects
+            protected_zone_name = reg_info["protects"]
+            zone_uri = PLN[f"zone_{protected_zone_name}"]
+            if (zone_uri, RDF.type, PLN.Zone) in self.g:
+                self.g.add((reg, Relations.protects, zone_uri))
+
+            # Link to relevant constraint via field
+            field = reg_info["field"]
+            for s in self.g.subjects(PLN.field, Literal(field)):
+                if (s, RDF.type, PLN.Constraint) in self.g:
+                    self.g.add((reg, Relations.constrained_by, s))
+
+        logger.info(f"[PlanningKG] Added {len(REGULATION_TYPES)} regulations")
+
+    def _add_designated_as_relations(self, landuse_geojson: Dict[str, Any]):
+        """Add designated_as relations: parcel → planning zone.
+
+        Uses the MIP allocator's DLBM → planning zone mapping to
+        establish the designated_as relationship between each parcel
+        and its native planning zone.
+        """
+        from ..optimizer.mip_allocator import dlbm_to_planning_zone
+
+        count = 0
+        for ft in landuse_geojson.get("features", []):
+            props = ft.get("properties", {})
+            bsm = str(props.get("BSM", "")).strip()
+            dlbm = str(props.get("DLBM", "")).strip()
+            if not bsm:
+                continue
+            shape_area = int(props.get("SHAPE_Area", 0) or 0)
+            composite_key = f"{bsm}_{dlbm}_{shape_area}"
+            parcel = PLN[f"parcel_{composite_key}"]
+            if (parcel, RDF.type, PLN.Parcel) not in self.g:
+                continue
+            zone_name = dlbm_to_planning_zone(dlbm)
+            zone = PLN[f"zone_{zone_name}"]
+            if (zone, RDF.type, PLN.Zone) in self.g:
+                self.g.add((parcel, Relations.designated_as, zone))
+                count += 1
+        if count > 0:
+            logger.info(f"[PlanningKG] Added {count} designated_as relations")
+
+    def _add_spatial_infrastructure(self, landuse_geojson: Dict[str, Any]):
+        """Add Facility, Road, WaterBody entities from land use data.
+
+        Classifies parcels by DLBM into infrastructure types and creates
+        corresponding entities with serves/connects relations.
+        """
+        road_dlbms = {"1000", "1001", "1002", "1003", "1004", "1005", "1006", "1040", "2126", "2200"}
+        water_dlbms = {"1101", "1102", "1103", "1104", "1105", "1106", "1109", "1110", "1140", "1180", "3100"}
+        facility_dlbms = {"0800", "0801", "0802", "0803", "0806", "0810", "0900", "2122", "2125"}
+
+        roads = []
+        water_bodies = []
+        facilities = []
+
+        for ft in landuse_geojson.get("features", []):
+            props = ft.get("properties", {})
+            dlbm = str(props.get("DLBM", "")).strip()
+            bsm = str(props.get("BSM", "")).strip()
+            if not bsm:
+                continue
+            if dlbm in road_dlbms:
+                roads.append((bsm, dlbm, props))
+            elif dlbm in water_dlbms:
+                water_bodies.append((bsm, dlbm, props))
+            elif dlbm in facility_dlbms:
+                facilities.append((bsm, dlbm, props))
+
+        # Add Road entities with connects relations
+        for i, (bsm, dlbm, props) in enumerate(roads):
+            road = PLN[f"road_{bsm}"]
+            self.g.add((road, RDF.type, EntityTypes.Road))
+            self.g.add((road, PLN.name, Literal(f"道路_{bsm}")))
+            self.g.add((road, PLN.dlbm, Literal(dlbm)))
+            self.g.add((PLN.village, Relations.connects, road))
+            # Road connects to village
+            self.g.add((road, Relations.located_in, PLN.village))
+
+        # Add WaterBody entities
+        for i, (bsm, dlbm, props) in enumerate(water_bodies):
+            water = PLN[f"water_{bsm}"]
+            self.g.add((water, RDF.type, EntityTypes.WaterBody))
+            self.g.add((water, PLN.name, Literal(f"水域_{bsm}")))
+            self.g.add((water, PLN.dlbm, Literal(dlbm)))
+            self.g.add((water, Relations.located_in, PLN.village))
+
+        # Add Facility entities with serves relations
+        for i, (bsm, dlbm, props) in enumerate(facilities):
+            facility = PLN[f"facility_{bsm}"]
+            self.g.add((facility, RDF.type, EntityTypes.Facility))
+            self.g.add((facility, PLN.name, Literal(f"设施_{bsm}")))
+            self.g.add((facility, PLN.dlbm, Literal(dlbm)))
+            self.g.add((facility, Relations.located_in, PLN.village))
+            # Determine who the facility serves based on DLBM
+            if dlbm in ("0801", "0802"):
+                self.g.add((facility, Relations.serves, Literal("教育服务")))
+            elif dlbm == "0803":
+                self.g.add((facility, Relations.serves, Literal("医疗服务")))
+            else:
+                self.g.add((facility, Relations.serves, Literal("公共服务")))
+
+        total = len(roads) + len(water_bodies) + len(facilities)
+        if total > 0:
+            logger.info(
+                f"[PlanningKG] Added infrastructure: {len(roads)} roads, "
+                f"{len(water_bodies)} water bodies, {len(facilities)} facilities"
+            )
 
     def print_summary(self):
         """Print KG statistics."""

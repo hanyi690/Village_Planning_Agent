@@ -192,11 +192,6 @@ def make_real_intent() -> Dict[str, Any]:
         ],
         "metadata": {
             "spatial_structure": "一核两带三区",
-            "total_area_ha": 2352.56,
-            "farmland_ha": 78.83,
-            "construction_ha": 30.50,
-            "ecological_ha": 362.02,
-            "general_agriculture_ha": 1881.54,
         },
     }
 
