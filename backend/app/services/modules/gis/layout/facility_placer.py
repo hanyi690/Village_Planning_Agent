@@ -82,9 +82,10 @@ class FacilityPlacer:
         """
         features = []
 
-        # Pre-compute parcel centroids if available
+        # Pre-compute parcel centroids and residential points if available
         parcel_centroids = self._compute_parcel_centroids(landuse_geojson)
         boundary_center = self._compute_boundary_center(boundary_geojson)
+        residential_points = self._compute_residential_points(landuse_geojson)
 
         for fac in facilities:
             # Convert dict to expected format if needed
@@ -106,14 +107,20 @@ class FacilityPlacer:
             if status in ("现状保留", "existing"):
                 point = self._place_existing(fac_type, existing_pois, parcel_centroids)
             elif status in ("规划新建", "planned"):
-                point = self._place_new(fac_type, direction, parcel_centroids, boundary_center)
+                point = self._place_new(fac_type, direction, parcel_centroids, boundary_center, residential_points)
             elif status in ("规划改扩建", "upgraded"):
                 point = self._place_upgraded(fac_type, existing_pois, parcel_centroids, boundary_center)
             elif status in ("规划迁建", "relocated"):
-                point = self._place_relocated(fac_type, parcel_centroids, boundary_center)
+                point = self._place_relocated(fac_type, parcel_centroids, boundary_center, residential_points)
 
             if point:
                 color = FACILITY_COLORS.get(fac_type, "#666666")
+                service_radius = self._get_service_radius(fac_type, status)
+                coverage_count = 0
+                if residential_points and status in ("规划新建", "规划迁建", "planned", "relocated"):
+                    coverage_count = self._count_within_radius(
+                        (point[0], point[1]), residential_points, service_radius
+                    )
                 features.append({
                     "type": "Feature",
                     "properties": {
@@ -122,7 +129,8 @@ class FacilityPlacer:
                         "status": status,
                         "location_hint": location_hint,
                         "color": color,
-                        "service_radius": self._get_service_radius(fac_type, status),
+                        "service_radius": service_radius,
+                        "coverage_count": coverage_count,
                     },
                     "geometry": {
                         "type": "Point",
@@ -172,20 +180,40 @@ class FacilityPlacer:
         direction: str,
         parcel_centroids: Dict[str, Tuple[float, float]],
         boundary_center: Optional[List[float]],
+        residential_points: Optional[List[Tuple[float, float]]] = None,
     ) -> Optional[List[float]]:
-        """Place new facility — centroid of preferred DLBM + direction offset."""
-        pref_dlbms = FACILITY_DLBM_MAP.get(fac_type, {}).get("preferred", [])
-        centroid = self._centroid_of_dlbm(pref_dlbms, parcel_centroids)
+        """Place new facility — maximize coverage of residential points.
 
-        if centroid is None:
-            centroid = boundary_center
+        Strategy:
+        1. Get candidate positions from preferred+acceptable DLBM parcel centroids
+        2. If residential_points available, pick candidate with max 800m coverage
+        3. Apply direction offset to the chosen position
+        """
+        fac_map = FACILITY_DLBM_MAP.get(fac_type, {})
+        pref_dlbms = fac_map.get("preferred", [])
+        accept_dlbms = fac_map.get("acceptable", [])
 
-        if centroid is None:
+        # Get all candidate centroids (preferred first, then acceptable)
+        candidates = self._centroids_of_dlbm(pref_dlbms, parcel_centroids)
+        if not candidates:
+            candidates = self._centroids_of_dlbm(accept_dlbms, parcel_centroids)
+        if not candidates and boundary_center:
+            candidates = [tuple(boundary_center)]
+        if not candidates:
             return None
+
+        # Pick best candidate by residential coverage
+        if residential_points and len(residential_points) > 0:
+            service_radius = self._get_service_radius(fac_type, "规划新建")
+            best = max(candidates, key=lambda c: self._count_within_radius(c, residential_points, service_radius))
+            centroid = list(best)
+        else:
+            centroid = list(candidates[0])
 
         # Apply direction offset (meters → degrees with cos(lat) correction)
         offset_m = DIRECTION_OFFSET_M.get(str(direction), (0.0, 0.0))
-        deg_lon = offset_m[0] / (111_000.0 * math.cos(math.radians(centroid[1])))
+        cos_lat = math.cos(math.radians(centroid[1]))
+        deg_lon = offset_m[0] / (111_000.0 * cos_lat)
         deg_lat = offset_m[1] / 111_000.0
         return [centroid[0] + deg_lon, centroid[1] + deg_lat]
 
@@ -204,18 +232,26 @@ class FacilityPlacer:
         fac_type: str,
         parcel_centroids: Dict[str, Tuple[float, float]],
         boundary_center: Optional[List[float]],
+        residential_points: Optional[List[Tuple[float, float]]] = None,
     ) -> Optional[List[float]]:
-        """Place relocated facility — find nearest suitable parcel centroid."""
+        """Place relocated facility — find best suitable parcel by coverage."""
         all_dlbms = []
         fac_map = FACILITY_DLBM_MAP.get(fac_type, {})
         all_dlbms.extend(fac_map.get("preferred", []))
         all_dlbms.extend(fac_map.get("acceptable", []))
 
-        centroid = self._centroid_of_dlbm(all_dlbms, parcel_centroids)
-        if centroid is None:
-            centroid = boundary_center
+        candidates = self._centroids_of_dlbm(all_dlbms, parcel_centroids)
+        if not candidates and boundary_center:
+            candidates = [tuple(boundary_center)]
+        if not candidates:
+            return None
 
-        return centroid
+        if residential_points and len(residential_points) > 0:
+            service_radius = self._get_service_radius(fac_type, "规划迁建")
+            best = max(candidates, key=lambda c: self._count_within_radius(c, residential_points, service_radius))
+            return list(best)
+
+        return list(candidates[0])
 
     @staticmethod
     def _compute_parcel_centroids(
@@ -311,15 +347,84 @@ class FacilityPlacer:
         return None
 
     @staticmethod
+    def _centroids_of_dlbm(
+        dlbms: List[str],
+        centroids: Dict[str, Tuple[float, float]],
+    ) -> List[Tuple[float, float]]:
+        """Get all available centroids for the given DLBM codes."""
+        result = []
+        for dlbm in dlbms:
+            if dlbm in centroids:
+                result.append(centroids[dlbm])
+        return result
+
+    @staticmethod
     def _centroid_of_dlbm(
         dlbms: List[str],
         centroids: Dict[str, Tuple[float, float]],
     ) -> Optional[List[float]]:
-        """Get centroid of the first available DLBM group."""
+        """Get centroid of the first available DLBM group (backward compat)."""
         for dlbm in dlbms:
             if dlbm in centroids:
                 return list(centroids[dlbm])
         return None
+
+    @staticmethod
+    def _compute_residential_points(
+        landuse_geojson: Optional[Dict[str, Any]],
+    ) -> List[Tuple[float, float]]:
+        """Extract residential parcel centroids for coverage calculation.
+
+        Uses DLBM codes for residential land (宅基地 2121, 住宅用地 0700/0701/0702).
+        """
+        residential_dlbms = {"2121", "0700", "0701", "0702", "2030"}
+        points: List[Tuple[float, float]] = []
+
+        if not landuse_geojson or not landuse_geojson.get("features"):
+            return points
+
+        for ft in landuse_geojson["features"]:
+            dlbm = str(ft.get("properties", {}).get("DLBM", "")).strip()
+            if dlbm not in residential_dlbms:
+                continue
+            g = ft.get("geometry", {})
+            if not g or not g.get("coordinates"):
+                continue
+            try:
+                import shapely.geometry
+                geom = shapely.geometry.shape(g)
+                if not geom.is_empty:
+                    c = geom.centroid
+                    points.append((c.x, c.y))
+            except Exception:
+                coords = g.get("coordinates", [[]])[0] if g.get("type") == "Polygon" else []
+                if coords:
+                    points.append((
+                        sum(c[0] for c in coords) / len(coords),
+                        sum(c[1] for c in coords) / len(coords),
+                    ))
+
+        return points
+
+    @staticmethod
+    def _count_within_radius(
+        center: Tuple[float, float],
+        points: List[Tuple[float, float]],
+        radius_m: float,
+    ) -> int:
+        """Count points within radius_m of center using Haversine approximation."""
+        count = 0
+        cx, cy = center
+        cos_lat = math.cos(math.radians(cy))
+        m_per_deg_lon = 111_000.0 * cos_lat
+        m_per_deg_lat = 111_000.0
+        r2 = radius_m * radius_m
+        for px, py in points:
+            dx = (px - cx) * m_per_deg_lon
+            dy = (py - cy) * m_per_deg_lat
+            if dx * dx + dy * dy <= r2:
+                count += 1
+        return count
 
     @staticmethod
     def _get_service_radius(fac_type: str, status: str) -> int:
