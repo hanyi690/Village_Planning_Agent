@@ -198,16 +198,14 @@ class ReportStore:
         if not content:
             return ""
 
-        # Use the new summary generator
-        from .modules.summary.generator import generate_structured_summary
+        from .modules.parsing.summary_generator import generate_structured_summary, _extract_key_points_regex
         try:
             return await generate_structured_summary(dim_key, layer, content)
         except Exception as e:
             logger.warning(f"[ReportStore] Structured summary failed: {e}")
-            # Fallback: regex-only
-            from .modules.summary.schema import BaseDimensionSummary
-            from .modules.summary.generator import _extract_metrics_regex, _extract_key_points_regex
-            metrics = _extract_metrics_regex(content, dim_key)
+            from .modules.parsing.schemas import BaseDimensionSummary
+            from .modules.parsing.metric_anchors import extract_dimension_anchors
+            metrics = extract_dimension_anchors(dim_key, content)
             key_points = _extract_key_points_regex(content)
             summary = BaseDimensionSummary(
                 dimension_key=dim_key, layer=layer,
@@ -606,7 +604,7 @@ class ReportStore:
         Returns Dict mapping dim_key -> parsed summary dict.
         Much lighter than get_layer_reports() for cross-layer dependency loading.
         """
-        from .modules.summary.parser import parse_summary
+        from .modules.parsing.summary_parser import parse_summary
         async with get_async_session() as db:
             statement = (
                 select(DimensionReport)

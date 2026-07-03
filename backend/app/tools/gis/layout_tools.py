@@ -28,6 +28,8 @@ from app.services.modules.gis.utils.geo_utils import safe_unary_union
 
 logger = get_logger(__name__)
 
+_LLM_REQUEST_TIMEOUT = 120
+
 SPATIAL_DIMS = [
     "spatial_structure",
     "land_use_planning",
@@ -70,97 +72,80 @@ def _safe_enum(enum_cls, value, default=None):
         return fallback
 
 
-def _prepare_parse_prompt(
+def _prepare_parse_context(
+    reports: Dict[str, Dict[str, Any]],
+) -> Tuple[str, str]:
+    """Build planning context text from reports for structured parse.
+
+    Returns (planning_context, error_message).
+    """
+    from app.services.modules.parsing.prompts import build_planning_context
+
+    context = build_planning_context(reports)
+    if not context:
+        return "", "无可用规划报告文本"
+    return context, ""
+
+
+async def _aparse_reports_to_intent(
     reports: Dict[str, Dict[str, Any]],
     village_name: str,
-) -> Tuple[str, str]:
-    """Extract planning text and format LLM prompt from reports.
+) -> Dict[str, Any]:
+    """Async: two-layer architecture — metric anchors + Instructor structured output.
 
-    Returns (prompt_text, error_message). If error_message is non-empty,
-    the prompt could not be prepared.
+    Layer 1: _extract_metric_anchors() — deterministic, zero LLM calls.
+    Layer 2: structured_parse(IntentOutput) — Instructor + Pydantic schema + max_retries=3.
+    Then: semantic validation + area_ratio normalization (if needed).
     """
-    from app.agent.gis.prompts import format_parse_prompt
+    from app.services.modules.parsing.metric_anchors import extract_metric_anchors
+    from app.services.modules.parsing.schemas import IntentOutput
+    from app.services.modules.parsing.structured_output import structured_parse_with_correction
+    from app.services.modules.parsing.prompts import format_structured_parse_prompt, format_anchors_text
+    from app.services.modules.parsing.validator import semantic_validate, normalize_area_ratios
 
-    planning_text_parts = []
-    total_area = "未知"
-    current_land_use = "未知"
+    # Layer 1: Extract metric anchors (deterministic)
+    anchors = extract_metric_anchors(reports)
 
-    for dim_key in SPATIAL_DIMS:
-        report = reports.get(dim_key, {})
-        if not report:
-            continue
-        summary = report.get("summary", {})
-        metrics = summary.get("metrics", {})
-        content = report.get("content", "")
-        text_summary = summary.get("text_summary", content[:800] if content else "")
+    # Build prompt
+    planning_context, err = _prepare_parse_context(reports)
+    if err:
+        return _make_result(False, error=err)
 
-        if text_summary:
-            planning_text_parts.append(f"## {dim_key}\n{text_summary}")
+    anchors_dict = anchors.to_anchor_dict()
+    anchors_text = format_anchors_text(anchors_dict)
 
-        if dim_key == "land_use_planning":
-            if metrics.get("total_area"):
-                total_area = str(metrics["total_area"])
-            land_parts = []
-            for k, v in metrics.items():
-                if "area" in k.lower() or "ratio" in k.lower() or "ha" in k.lower():
-                    land_parts.append(f"{k}: {v}")
-            if land_parts:
-                current_land_use = "; ".join(land_parts)
-
-    if not planning_text_parts:
-        return "", "无可用规划报告文本"
-
-    planning_text = "\n\n".join(planning_text_parts)
-    prompt_text = format_parse_prompt(
-        planning_text=planning_text,
+    prompt = format_structured_parse_prompt(
         village_name=village_name,
-        total_area=total_area,
-        current_land_use=current_land_use,
+        anchors=anchors_text,
+        planning_context=planning_context,
     )
-    return prompt_text, ""
 
-
-def _postprocess_llm_response(response_text: str) -> Dict[str, Any]:
-    """Parse LLM response text into structured intent result.
-
-    Returns {"success": True/False, "data": ..., "error": ...}
-    """
-    json_match = re.search(r'```json\s*(.*?)\s*```', response_text, re.DOTALL)
-    if not json_match:
-        json_match = re.search(r'(\{[\s\S]*\})', response_text)
-
-    if not json_match:
-        return _make_result(False, error="LLM响应中未找到JSON",
-                            data={"raw_response": response_text[:500]})
-
+    # Layer 2: Instructor structured parse with semantic validation
     try:
-        intent_dict = json.loads(json_match.group(1))
-    except json.JSONDecodeError as e:
-        return _make_result(False, error=f"JSON解析失败: {e}",
-                            data={"raw_json": json_match.group(1)[:300]})
+        intent_output: IntentOutput = await structured_parse_with_correction(
+            content=prompt,
+            output_schema=IntentOutput,
+            anchors=anchors_dict,
+            validate_fn=semantic_validate,
+        )
+    except Exception as e:
+        logger.error("_aparse_reports_to_intent structured parse failed: %s", e)
+        return _make_result(False, error=f"结构化解析失败: {e}")
 
-    zones = intent_dict.get("zones", [])
-    if zones:
-        total_ratio = sum(z.get("area_ratio", 0) for z in zones)
-        if abs(total_ratio - 1.0) > 0.05 and len(zones) > 0:
-            logger.info("[parse_intent] area_ratio sum=%.3f, adjusting", total_ratio)
-            for z in zones:
-                z["area_ratio"] = round(z.get("area_ratio", 0) / total_ratio, 4)
-            new_sum = sum(z["area_ratio"] for z in zones)
-            if abs(new_sum - 1.0) > 0.001 and zones:
-                diff = 1.0 - new_sum
-                zones[0]["area_ratio"] = round(zones[0].get("area_ratio", 0) + diff, 4)
+    # Normalize area_ratios if needed (preserved from old _postprocess_llm_response)
+    intent_output = normalize_area_ratios(intent_output)
 
-    intent = _dict_to_intent(intent_dict)
+    # Convert Pydantic -> dataclass
+    intent = _output_to_intent(intent_output)
     zone_summary = ", ".join(f"{z.land_use}({z.area_ratio:.1%})" for z in intent.zones)
 
     return _make_result(True, {
         "zone_count": len(intent.zones),
         "facility_count": len(intent.facilities),
         "axis_count": len(intent.axes),
-        "constraint_count": len(intent.constraints),
         "zones": zone_summary,
-        "intent_json": intent_dict,
+        "intent_json": intent_output.model_dump(),
+        "anchor_confidence": anchors.confidence,
     })
 
 
@@ -168,53 +153,23 @@ def _parse_reports_to_intent(
     reports: Dict[str, Dict[str, Any]],
     village_name: str,
 ) -> Dict[str, Any]:
-    """Core logic: reports -> LLM -> intent_dict.
-
-    Returns {"success": True, "data": {..., "intent_json": dict}}
-    or {"success": False, "error": str} on failure.
-    Callable independently from the @tool wrapper for testing.
-    """
-    from app.core.settings import LLM_MODEL
-
-    prompt_text, err = _prepare_parse_prompt(reports, village_name)
-    if err:
-        return _make_result(False, error=err)
-
+    """Sync wrapper for _aparse_reports_to_intent (used by @tool)."""
+    import asyncio
     try:
-        from langchain_openai import ChatOpenAI
-        llm = ChatOpenAI(model=LLM_MODEL, temperature=0, request_timeout=120)
-        response = llm.invoke(prompt_text)
-    except Exception as e:
-        logger.error("_parse_reports_to_intent LLM call failed: %s", e)
-        return _make_result(False, error=f"LLM调用失败: {e}")
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
 
-    return _postprocess_llm_response(response.content)
-
-
-async def _aparse_reports_to_intent(
-    reports: Dict[str, Dict[str, Any]],
-    village_name: str,
-) -> Dict[str, Any]:
-    """Async version: reports -> LLM -> intent_dict.
-
-    Uses llm.ainvoke() instead of llm.invoke() to avoid
-    blocking the event loop in FastAPI async endpoints.
-    """
-    from app.core.settings import LLM_MODEL
-
-    prompt_text, err = _prepare_parse_prompt(reports, village_name)
-    if err:
-        return _make_result(False, error=err)
-
-    try:
-        from langchain_openai import ChatOpenAI
-        llm = ChatOpenAI(model=LLM_MODEL, temperature=0, request_timeout=120)
-        response = await llm.ainvoke(prompt_text)
-    except Exception as e:
-        logger.error("_aparse_reports_to_intent LLM call failed: %s", e)
-        return _make_result(False, error=f"LLM调用失败: {e}")
-
-    return _postprocess_llm_response(response.content)
+    if loop and loop.is_running():
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(
+                asyncio.run,
+                _aparse_reports_to_intent(reports, village_name),
+            )
+            return future.result(timeout=_LLM_REQUEST_TIMEOUT)
+    else:
+        return asyncio.run(_aparse_reports_to_intent(reports, village_name))
 
 
 @tool
@@ -377,7 +332,7 @@ def allocate_zones(
     使用约束驱动分配器，确保分区满足知识图谱中的约束条件。
 
     Args:
-        targets: 分区面积目标 {"永久基本农田保护区": 78.83, "村庄建设区": 30.50, ...}
+        targets: 分区面积目标 {"农田保护区": 78.83, "村庄建设区": 30.50, ...}
         constraints: 约束列表（可使用 KG 缓存的约束，传入空列表则自动使用）
         mode: 分配模式 "greedy"(默认) 或 "mip"(混合整数规划)
     """
@@ -610,6 +565,59 @@ def measure_divergence(
         "zone_diffs": zone_diffs,
     })
     return Command(update={"messages": [_to_tool_message(result, tool_call_id)]})
+
+
+def _output_to_intent(output: Any) -> "UnifiedSpatialIntent":
+    """Convert Pydantic IntentOutput to UnifiedSpatialIntent dataclass.
+
+    Simpler than _dict_to_intent because schema guarantees valid values.
+    """
+    zones = [
+        ZoneIntent(
+            zone_id=z.zone_id,
+            land_use=z.land_use,
+            dlbm=z.dlbm,
+            area_ratio=z.area_ratio,
+            direction=_safe_enum(Direction, z.direction),
+            reference_feature=z.reference_feature,
+            adjacent_to=z.adjacent_to,
+            avoid_adjacent_to=z.avoid_adjacent_to,
+            density=_safe_enum(Density, z.density),
+            preserve_existing=True,
+            dlbm_aliases=[],
+        )
+        for z in output.zones
+    ]
+
+    facilities = [
+        FacilityIntent(
+            facility_id=f.facility_id,
+            facility_type=f.facility_type,
+            target_zone="",
+            location_hint=f.location_hint,
+            status=f.status,
+        )
+        for f in output.facilities
+    ]
+
+    axes = [
+        AxisIntent(
+            axis_id=a.axis_id,
+            axis_type=a.axis_type,
+            direction=_safe_enum(Direction, a.direction),
+            connects=[],
+            label=a.reference_feature,
+        )
+        for a in output.axes
+    ]
+
+    return UnifiedSpatialIntent(
+        zones=zones,
+        facilities=facilities,
+        axes=axes,
+        constraints=[],
+        metadata=output.metadata,
+    )
 
 
 def _dict_to_intent(intent_dict: dict) -> "UnifiedSpatialIntent":

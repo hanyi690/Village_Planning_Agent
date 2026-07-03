@@ -431,7 +431,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 dep_keys = getattr(cfg, "layer_depends_on", []) or []
                 if dep_keys:
                     layer_summaries = await store.get_layer_summaries(session_id, 1)
-                    from ...services.modules.summary.schema import get_dimension_schema
+                    from ...services.modules.parsing.schemas import get_dimension_schema
                     merged_metrics = {}
                     for dk in dep_keys:
                         raw = layer_summaries.get(dk)
@@ -593,6 +593,24 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "layer_char_counts": {dim_layer: len(llm_response)},
     }
 
+    # P0-1/P0-2: L1/L2 数据流闭环注入（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
+    # L1 完成后注入 _landuse_metrics（现状用地指标）
+    # L2 完成后注入 intent_targets（规划目标面积），供 L3 detailed.py GIS_TOOL_GUIDE 引用
+    if structured_summary_obj:
+        try:
+            if dim_layer == 1:
+                _lm = _extract_landuse_metrics(structured_summary_obj, dim_key)
+                if _lm:
+                    result["_landuse_metrics"] = _lm
+                    logger.info(f"[analyze_dimension] {dim_key}: injected _landuse_metrics = {_lm}")
+            elif dim_layer == 2:
+                _it = _extract_intent_targets(structured_summary_obj, dim_key)
+                if _it:
+                    result["intent_targets"] = _it
+                    logger.info(f"[analyze_dimension] {dim_key}: injected intent_targets = {_it}")
+        except Exception as e:
+            logger.warning(f"[analyze_dimension] {dim_key}: L1/L2 injection failed: {e}")
+
     # 立即写入 DB，使并行节点可通过 DB 回退路径获取依赖报告
     try:
         await store.bulk_save([pending_report])
@@ -617,14 +635,109 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
+def _extract_landuse_metrics(summary_obj: Any, dim_key: str) -> Dict[str, float]:
+    """P0-1: 从 L1 结构化摘要中提取现状用地指标。
+
+    优先从 land_use 维度提取 current_farmland_ha / current_construction_ha / ecological_area_ha，
+    fallback 到 superior_planning 的约束下限值，再 fallback 到 ecological 维度的 min_ecological_redline_ha。
+
+    Returns: {"farmland_ha": float, "construction_ha": float, "ecological_ha": float}
+    若全部为空则返回空 dict（调用方据此跳过注入）。
+    """
+    if not isinstance(summary_obj, dict):
+        return {}
+
+    def _safe_float(v: Any) -> Optional[float]:
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    farmland = _safe_float(summary_obj.get("current_farmland_ha"))
+    construction = _safe_float(summary_obj.get("current_construction_ha"))
+    ecological = _safe_float(summary_obj.get("ecological_area_ha"))
+
+    # Fallback 1: superior_planning 约束下限值
+    if farmland is None:
+        farmland = _safe_float(summary_obj.get("min_farmland_protection_ha"))
+    if ecological is None:
+        ecological = _safe_float(summary_obj.get("min_ecological_redline_ha"))
+
+    # Fallback 2: ecological 维度字段
+    if ecological is None:
+        ecological = _safe_float(summary_obj.get("planned_ecological_area_ha"))
+
+    result: Dict[str, float] = {}
+    if farmland is not None:
+        result["farmland_ha"] = farmland
+    if construction is not None:
+        result["construction_ha"] = construction
+    if ecological is not None:
+        result["ecological_ha"] = ecological
+
+    return result
+
+
+def _extract_intent_targets(summary_obj: Any, dim_key: str) -> Dict[str, float]:
+    """P0-2: 从 L2 结构化摘要中提取规划目标面积，映射到三区中文名。
+
+    优先字段：planned_farmland_ha / planned_construction_ha / planned_ecological_ha
+    Fallback 1：farmland_protection_ha / construction_land_target_ha / planned_ecological_area_ha
+    Fallback 2：L1 约束下限 min_farmland_protection_ha / min_ecological_redline_ha
+
+    Returns: {"农田保护区": float, "村庄建设区": float, "生态保护区": float}
+    全空则返回空 dict（调用方跳过注入）。
+    """
+    if not isinstance(summary_obj, dict):
+        return {}
+
+    def _safe_float(v: Any) -> Optional[float]:
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    farmland = _safe_float(summary_obj.get("planned_farmland_ha"))
+    construction = _safe_float(summary_obj.get("planned_construction_ha"))
+    ecological = _safe_float(summary_obj.get("planned_ecological_ha"))
+
+    # Fallback 1: L2 目标字段别名
+    if farmland is None:
+        farmland = _safe_float(summary_obj.get("farmland_protection_ha"))
+    if construction is None:
+        construction = _safe_float(summary_obj.get("construction_land_target_ha"))
+    if ecological is None:
+        ecological = _safe_float(summary_obj.get("planned_ecological_area_ha"))
+
+    # Fallback 2: L1 约束下限值（保底）
+    if farmland is None:
+        farmland = _safe_float(summary_obj.get("min_farmland_protection_ha"))
+    if ecological is None:
+        ecological = _safe_float(summary_obj.get("min_ecological_redline_ha"))
+
+    result: Dict[str, float] = {}
+    if farmland is not None:
+        result["农田保护区"] = farmland
+    if construction is not None:
+        result["村庄建设区"] = construction
+    if ecological is not None:
+        result["生态保护区"] = ecological
+
+    return result
+
+
 async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log) -> str:
     """Generate structured JSON summary for a dimension report."""
-    from ...services.modules.summary.generator import generate_structured_summary
+    from ...services.modules.parsing.summary_generator import generate_structured_summary
     try:
         return await generate_structured_summary(dim_key, dim_layer, content, rag_log)
     except Exception as e:
         logger.warning(f"[analyze_dimension] {dim_key}: Summary generation failed: {e}")
-        from ...services.modules.summary.schema import BaseDimensionSummary
+        from ...services.modules.parsing.schemas import BaseDimensionSummary
         fallback = BaseDimensionSummary(
             dimension_key=dim_key, layer=dim_layer,
             word_count=len(content), text_summary=content[:200],

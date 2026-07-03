@@ -22,7 +22,7 @@ project_root = backend_root.parent
 load_dotenv(project_root / ".env")
 
 from app.core.llm import create_flash_llm
-from app.services.modules.summary.schema import LocationSummary, SocioEconomicSummary
+from app.services.modules.parsing.schemas import LocationSummary, SocioEconomicSummary
 
 
 SAMPLE_LOCATION_TEXT = """
