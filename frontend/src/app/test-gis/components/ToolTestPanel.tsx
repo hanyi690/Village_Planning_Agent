@@ -143,6 +143,17 @@ const TOOL_GROUPS: ToolGroup[] = [
           { key: 'buffer_meters', label: '缓冲距离(米)', type: 'number', default: 200 },
         ],
       },
+      {
+        id: 'layout-validate',
+        name: '布局验证',
+        description: '验证布局方案的合规性和冲突',
+        params: [
+          { key: 'use_jintian_data', label: '使用金田数据', type: 'select', default: 'true', options: [
+            { value: 'true', label: '是' },
+            { value: 'false', label: '否' },
+          ]},
+        ],
+      },
     ],
   },
   {

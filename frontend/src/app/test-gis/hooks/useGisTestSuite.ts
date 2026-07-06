@@ -49,6 +49,7 @@ const TEST_RUNNERS: Record<string, TestRunner> = {
   'landuse-change': (p) => gisTestApi.analyzeLanduseChange(p),
   'constraint-validator': (p) => gisTestApi.validateConstraints(p),
   'hazard-buffer': (p) => gisTestApi.generateHazardBuffer(p),
+  'layout-validate': (p) => gisTestApi.validateLayout(p),
 };
 
 // Map test IDs to layer types for MapView rendering
@@ -64,6 +65,7 @@ const TEST_LAYER_TYPE_MAP: Record<string, GISLayerConfig['layerType']> = {
   'landuse-change': 'function_zone',
   'constraint-validator': 'sensitivity_zone',
   'hazard-buffer': 'sensitivity_zone',
+  'layout-validate': 'planning_zone',
 };
 
 // ============================================

@@ -23,6 +23,8 @@ import {
   useHasGisLayers,
 } from '../../hooks';
 import MapView from '../gis/MapView';
+import { ValidationPanel } from '../gis';
+import { gisTestApi, type LayoutValidationResult } from '@/features/gis-test/api/gis-test-api';
 import MessageList from '../chat/MessageList';
 import ChatInput from '../ChatInput';
 import { SettingsPanel } from '../settings';
@@ -46,6 +48,24 @@ export default function ProcessPanel() {
   const setProcessPanelTab = usePlanningStore((state) => state.setProcessPanelTab);
   const flatLayers = useGisLayers();
   const hasGisLayers = useHasGisLayers();
+
+  // Layout validation state
+  const [validationResult, setValidationResult] = useState<LayoutValidationResult | null>(null);
+  const [validationLoading, setValidationLoading] = useState(false);
+
+  // Auto-validate when planning_zone layers appear
+  useEffect(() => {
+    const planningLayers = flatLayers.filter(l => l.layerType === 'planning_zone');
+    if (planningLayers.length === 0) {
+      setValidationResult(null);
+      return;
+    }
+    setValidationLoading(true);
+    gisTestApi.validateLayout({ layout_configs: planningLayers, use_jintian_data: true })
+      .then(setValidationResult)
+      .catch(() => setValidationResult(null))
+      .finally(() => setValidationLoading(false));
+  }, [flatLayers]);
   const sessionId = usePlanningStore((state) => state.sessionId);
 
   const messages = useMessages();
@@ -182,14 +202,23 @@ export default function ProcessPanel() {
 
             {/* Map tab */}
             {processPanelTab === 'map' && (
-              <div className="flex-1 overflow-hidden">
+              <div className="flex-1 overflow-hidden flex flex-col">
                 {hasGisLayers ? (
-                  <MapView
-                    height="100%"
-                    layers={flatLayers}
-                    showLegend={true}
-                    legendPosition="bottom-right"
-                  />
+                  <>
+                    <div className="flex-1 min-h-0">
+                      <MapView
+                        height="100%"
+                        layers={flatLayers}
+                        showLegend={true}
+                        legendPosition="bottom-right"
+                      />
+                    </div>
+                    {(validationResult || validationLoading) && (
+                      <div className="shrink-0 border-t border-slate-100 p-2 max-h-[200px] overflow-y-auto">
+                        <ValidationPanel result={validationResult} loading={validationLoading} />
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="flex items-center justify-center h-full text-sm text-[#6e7681]">
                     暂无地图数据
