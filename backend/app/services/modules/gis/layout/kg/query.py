@@ -101,6 +101,109 @@ QUERY_TEMPLATES = {
         }
         LIMIT 100
     """,
+
+    # --- Phase 1: New query templates ---
+
+    "get_all_projects": PREFIX + """
+        SELECT ?project ?name ?source
+        WHERE {
+            ?project a pln:Project ;
+                     pln:name ?name .
+            OPTIONAL { ?project pln:source ?source . }
+        }
+    """,
+
+    "get_project_indicators": PREFIX + """
+        SELECT ?project ?project_name ?indicator ?ind_name ?value
+        WHERE {
+            ?village pln:achieves ?project .
+            ?project a pln:Project ;
+                     pln:name ?project_name .
+            ?indicator a pln:Indicator ;
+                       pln:name ?ind_name ;
+                       pln:value ?value ;
+                       pln:source ?source .
+            FILTER(CONTAINS(STR(?source), STR(?project_name)))
+        }
+    """,
+
+    "get_regulation_impacts": PREFIX + """
+        SELECT ?reg ?reg_name ?zone ?zone_name ?constraint ?field ?op ?value
+        WHERE {
+            ?reg a pln:Regulation ;
+                 pln:name ?reg_name .
+            OPTIONAL {
+                ?reg pln:protects ?zone .
+                ?zone pln:name ?zone_name .
+            }
+            OPTIONAL {
+                ?reg pln:constrained_by ?constraint .
+                ?constraint pln:field ?field ;
+                            pln:operator ?op ;
+                            pln:value ?value .
+            }
+        }
+    """,
+
+    "get_facility_serve_areas": PREFIX + """
+        SELECT ?facility ?name ?serves
+        WHERE {
+            ?facility a pln:Facility ;
+                      pln:name ?name ;
+                      pln:serves ?serves .
+        }
+    """,
+
+    "get_road_network": PREFIX + """
+        SELECT ?road ?name ?dlbm
+        WHERE {
+            ?road a pln:Road ;
+                  pln:name ?name .
+            OPTIONAL { ?road pln:dlbm ?dlbm . }
+        }
+    """,
+
+    "get_water_bodies": PREFIX + """
+        SELECT ?water ?name ?dlbm
+        WHERE {
+            ?water a pln:WaterBody ;
+                   pln:name ?name .
+            OPTIONAL { ?water pln:dlbm ?dlbm . }
+        }
+    """,
+
+    "get_parcels_by_facility": PREFIX + """
+        SELECT ?facility ?facility_name ?parcel ?bsm ?area
+        WHERE {
+            ?facility a pln:Facility ;
+                      pln:name ?facility_name ;
+                      pln:located_in ?village .
+            ?parcel a pln:Parcel ;
+                    pln:bsm ?bsm ;
+                    pln:area_ha ?area ;
+                    pln:located_in ?village .
+        }
+        LIMIT 50
+    """,
+
+    "get_designated_zones": PREFIX + """
+        SELECT ?parcel ?bsm ?zone_name
+        WHERE {
+            ?parcel a pln:Parcel ;
+                    pln:bsm ?bsm ;
+                    pln:designated_as ?zone .
+            ?zone pln:name ?zone_name .
+        }
+    """,
+
+    "count_entity_types": PREFIX + """
+        SELECT ?type (COUNT(?entity) as ?count)
+        WHERE {
+            ?entity a ?type .
+        }
+        GROUP BY ?type
+        ORDER BY DESC(?count)
+    """,
 }
 
 

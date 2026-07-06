@@ -215,6 +215,12 @@ class HazardBufferRequest(BaseModel):
     location: str = "金田村"
     buffer_meters: float = 200.0
 
+class LayoutValidateRequest(BaseModel):
+    """Request model for layout validation endpoint."""
+    layout_configs: List[Dict[str, Any]] = Field(default_factory=list)
+    constraints: Optional[List[Dict[str, Any]]] = None
+    use_jintian_data: bool = False
+
 # ============================================
 # Helpers
 # ============================================
@@ -597,7 +603,7 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
 
         engine = SpatialLayoutEngine()
         from app.services.modules.gis.layout.planning_intent import UnifiedSpatialIntent
-        intent = UnifiedSpatialIntent(metadata={})
+        intent = UnifiedSpatialIntent()
         summaries = {
             "land_use": {"construction_area_ha": 30.5, "new_construction_ha": 0.33},
             "population": {"total": 2800},
@@ -810,6 +816,83 @@ async def test_hazard_buffer(request: HazardBufferRequest):
         }
     except Exception as e:
         logger.error(f"[GIS Test] hazard-buffer failed: {e}")
+        return {"success": False, "error": str(e), "timing_ms": round((time.time() - t0) * 1000)}
+
+
+# ============================================
+# Layout Validation Endpoint
+# ============================================
+
+@router.post("/layout-validate", summary="Validate spatial layout configs")
+async def validate_layout(request: LayoutValidateRequest):
+    """Validate layout configs using LayoutValidator (8 checks).
+
+    Two modes:
+    1. Pass layout_configs directly (from spatial-layout or parse-text response)
+    2. Set use_jintian_data=True to generate + validate from jintian data
+    """
+    t0 = time.time()
+    try:
+        from app.services.modules.gis.layout.validator import LayoutValidator
+
+        layout_configs = request.layout_configs
+
+        # Mode 2: generate layout from jintian data then validate
+        if request.use_jintian_data and not layout_configs:
+            from app.services.modules.gis.layout.engine import SpatialLayoutEngine
+            from app.services.modules.gis.layout.planning_intent import UnifiedSpatialIntent
+
+            boundary = _load_jintian_geojson("boundary_current.geojson")
+            landuse = _load_jintian_geojson("landuse_current.geojson")
+            if not boundary:
+                return {"success": False, "error": "jintian boundary data not found", "timing_ms": round((time.time() - t0) * 1000)}
+
+            engine = SpatialLayoutEngine()
+            intent = UnifiedSpatialIntent()
+            summaries = {
+                "land_use": {"construction_area_ha": 30.5, "new_construction_ha": 0.33},
+                "population": {"total": 2800},
+            }
+            _, _, layout_configs = engine.full_pipeline(
+                summaries=summaries,
+                intent=intent,
+                boundary_geojson=boundary,
+                landuse_current_geojson=landuse,
+            )
+
+        if not layout_configs:
+            return {"success": False, "error": "No layout_configs provided and jintian generation failed", "timing_ms": round((time.time() - t0) * 1000)}
+
+        validator = LayoutValidator()
+        report = await asyncio.to_thread(
+            validator.validate, layout_configs, request.constraints
+        )
+
+        # Build check-level details for frontend
+        checks_detail = []
+        for c in report.checks:
+            checks_detail.append({
+                "name": c.check_name,
+                "passed": c.passed,
+                "violation_count": c.violation_count,
+                "violations": [
+                    {"check": v.check, "severity": v.severity, "message": v.message}
+                    for v in c.violations
+                ],
+            })
+
+        # Zone area summary
+        zone_areas = LayoutValidator._get_zone_areas(layout_configs)
+
+        return {
+            "success": True,
+            "validation": report.to_dict(),
+            "checks": checks_detail,
+            "zone_areas": zone_areas,
+            "timing_ms": round((time.time() - t0) * 1000),
+        }
+    except Exception as e:
+        logger.error(f"[GIS Test] layout-validate failed: {e}", exc_info=True)
         return {"success": False, "error": str(e), "timing_ms": round((time.time() - t0) * 1000)}
 
 

@@ -73,17 +73,17 @@ export const PLANNING_COLORS = {
   },
   // Development axis styles (line styles)
   development_axis: {
-    '发展主轴': { stroke: '#FF0000', width: 3 },
-    '发展副轴': { stroke: '#00AA00', width: 2 },
-    '交通主轴': { stroke: '#0000FF', width: 3 },
-    '景观轴线': { stroke: '#00FF00', width: 2 },
+    primary: { stroke: '#FF0000', width: 3, label: '发展主轴' },
+    secondary: { stroke: '#00AA00', width: 2, label: '发展副轴' },
+    traffic: { stroke: '#0000FF', width: 3, label: '交通主轴' },
+    corridor: { stroke: '#00FF00', width: 2, label: '景观轴线' },
   },
   // Sensitivity zone styles (polygon fill)
   sensitivity_zone: {
-    '高敏感区': { fill: '#FF0000', stroke: '#CC0000' },
-    '中敏感区': { fill: '#FFFF00', stroke: '#CCCC00' },
-    '低敏感区': { fill: '#00FF00', stroke: '#00CC00' },
-    '缓冲区': { fill: '#FFA500', stroke: '#CC8400' },
+    high: { fill: '#FF0000', stroke: '#CC0000', label: '高敏感区' },
+    medium: { fill: '#FFFF00', stroke: '#CCCC00', label: '中敏感区' },
+    low: { fill: '#00FF00', stroke: '#00CC00', label: '低敏感区' },
+    buffer: { fill: '#FFA500', stroke: '#CC8400', label: '缓冲区' },
   },
   // Isochrone styles (time-based)
   isochrone: {
@@ -99,31 +99,22 @@ export const PLANNING_COLORS = {
   },
   // Planning zone styles (规划分区 — 与现状功能区色系不同)
   planning_zone: {
-    '永久基本农田保护区': { fill: '#D4A574', stroke: '#8B6914' },
+    '农田保护区': { fill: '#D4A574', stroke: '#8B6914' },
     '村庄建设区': { fill: '#E8637A', stroke: '#B83060' },
     '生态保护区': { fill: '#2E8B57', stroke: '#1A5632' },
-    '一般农地区': { fill: '#7CCD7C', stroke: '#4A8B4A' },
+    '一般农业区': { fill: '#7CCD7C', stroke: '#4A8B4A' },
   },
   // Infrastructure styles (基础设施)
   infrastructure: {
-    '供水管线': { stroke: '#00CED1', width: 2 },
-    '排水管线': { stroke: '#8B4513', width: 2 },
-    '电力线路': { stroke: '#FFD700', width: 2 },
-    '通信线路': { stroke: '#800080', width: 1 },
+    '县道': { stroke: '#555555', width: 2, label: '县道' },
+    '乡道': { stroke: '#808080', width: 1.5, label: '乡道' },
+    '道路': { stroke: '#666666', width: 2, label: '道路' },
+    '河流': { stroke: '#00BFFF', width: 2.5, label: '河流' },
   },
 } as const;
 
 // Default fallback colors
 export const DEFAULT_COLORS = { fill: '#CCCCCC', stroke: '#666666' };
-
-// Zone type definitions
-export const ZONE_TYPES = {
-  function_zone: ['居住用地', '产业用地', '公共服务用地', '生态绿地', '交通用地', '水域', '农业用地', '商业用地'],
-  facility_status: ['现状保留', '规划新建', '规划改扩建', '规划迁建'],
-  development_axis: ['发展主轴', '发展副轴', '交通主轴', '景观轴线'],
-  sensitivity_level: ['高敏感区', '中敏感区', '低敏感区', '缓冲区'],
-  planning_zone: ['永久基本农田保护区', '村庄建设区', '生态保护区', '一般农地区'],
-} as const;
 
 // Type helper for feature colors
 export type FeatureColors = { fill: string; stroke: string };
@@ -153,19 +144,20 @@ export function getLegendForLayerType(layerType: LayerType): LegendItem[] {
     layerType === 'boundary' || layerType === 'development_axis' || layerType === 'infrastructure' ? 'line' :
     layerType === 'facility_point' ? 'point' : 'polygon';
 
-  for (const [label, colors] of Object.entries(layerColors)) {
+  for (const [key, colors] of Object.entries(layerColors)) {
     const colorConfig = colors as FeatureColors | LineColors;
+    const displayLabel = (colors as Record<string, unknown>).label as string || key;
 
     if ('fill' in colorConfig) {
       items.push({
-        label,
+        label: displayLabel,
         color: colorConfig.fill,
         type,
         borderColor: colorConfig.stroke,
       });
     } else {
       items.push({
-        label,
+        label: displayLabel,
         color: colorConfig.stroke,
         type: 'line',
         lineWidth: colorConfig.width,

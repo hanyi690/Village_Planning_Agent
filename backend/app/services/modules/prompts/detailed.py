@@ -41,6 +41,21 @@ WRITING_RULES = """
 """
 
 # ==========================================
+# GIS 工具与空间数据引导（P0-3 新增）
+# 引导 LLM 在涉及空间布局的维度中主动引用现状用地指标和规划目标，
+# 实现 L1/L2/L3 数据流闭环（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
+# ==========================================
+
+GIS_TOOL_GUIDE = """
+【空间数据与约束】
+- 现状用地指标：耕地 {landuse_metrics_farmland} 公顷，建设用地 {landuse_metrics_construction} 公顷，生态红线 {landuse_metrics_ecological} 公顷
+- 规划目标：农田保护区 {intent_targets_farmland} 公顷，村庄建设区 {intent_targets_construction} 公顷，生态保护区 {intent_targets_ecological} 公顷
+- 涉及空间布局的维度（产业/公共设施/生态/交通/空间结构/土地利用）必须引用上述数据
+- 生成设施清单时参考 facility_placer 服务半径标准：教育 500m、医疗 300m、养老 600m、村委会 500m、市场 1000m
+- 数值若为 N/A 表示 GIS 数据未注入，按常规规划经验给出合理数值并标注"待 GIS 校核"
+"""
+
+# ==========================================
 # 12个专业规划维度的 Prompt
 # ==========================================
 
@@ -64,6 +79,8 @@ INDUSTRY_PLANNING_PROMPT = """你是乡村规划专家，精通农业产业、�
 {knowledge_context}
 
 {WRITING_RULES}
+
+{GIS_TOOL_GUIDE}
 
 **输出结构**：
 
@@ -154,6 +171,8 @@ TRAFFIC_PLANNING_PROMPT = """你是乡村规划专家，精通农村公路设计
 
 {WRITING_RULES}
 
+{GIS_TOOL_GUIDE}
+
 **输出结构**：
 
 【道路交通规划】
@@ -194,6 +213,8 @@ PUBLIC_SERVICE_PROMPT = """你是乡村规划专家，精通教育、医疗、�
 
 {WRITING_RULES}
 
+{GIS_TOOL_GUIDE}
+
 **输出结构**：
 
 【公共服务设施规划】
@@ -228,6 +249,8 @@ INFRASTRUCTURE_PROMPT = """你是乡村规划专家，精通给水、排水、�
 {knowledge_context}
 
 {WRITING_RULES}
+
+{GIS_TOOL_GUIDE}
 
 **输出结构**：
 
@@ -290,6 +313,8 @@ ECOLOGICAL_PROMPT = """你是乡村规划专家，精通生态保护、景观设
 
 {WRITING_RULES}
 
+{GIS_TOOL_GUIDE}
+
 **输出结构**：
 
 【生态绿地规划】
@@ -346,6 +371,8 @@ DISASTER_PREVENTION_PROMPT = """你是乡村规划专家，精通灾害风险评
 
 {WRITING_RULES}
 
+{GIS_TOOL_GUIDE}
+
 **输出结构**：
 
 【防灾减灾规划】
@@ -391,6 +418,8 @@ HERITAGE_PROMPT = """你是乡村规划专家，精通文化遗产保护、文�
 {knowledge_context}
 
 {WRITING_RULES}
+
+{GIS_TOOL_GUIDE}
 
 **输出结构**：
 
@@ -464,6 +493,8 @@ LANDSCAPE_PROMPT = """你是乡村规划专家，精通建筑立面整治和乡�
 {knowledge_context}
 
 {WRITING_RULES}
+
+{GIS_TOOL_GUIDE}
 
 **输出结构**：
 
@@ -564,6 +595,8 @@ PROJECT_BANK_PROMPT = """你是乡村规划专家，精通项目策划与实施�
 
 {WRITING_RULES}
 
+{GIS_TOOL_GUIDE}
+
 **输出结构**：
 
 【建设项目库】
@@ -601,6 +634,8 @@ SPATIAL_STRUCTURE_PROMPT = """你是乡村规划专家，精通国土空间规�
 {knowledge_context}
 
 {WRITING_RULES}
+
+{GIS_TOOL_GUIDE}
 
 **输出结构**：
 
@@ -645,6 +680,8 @@ LAND_USE_PLANNING_PROMPT = """你是乡村规划专家，精通土地调查评�
 
 {WRITING_RULES}
 
+{GIS_TOOL_GUIDE}
+
 **输出结构**：
 
 【土地利用规划】
@@ -665,7 +702,7 @@ LAND_USE_PLANNING_PROMPT = """你是乡村规划专家，精通土地调查评�
 | 分区名称 | 面积(公顷) | 占比(%) | 管控要求 |
 | :--- | :--- | :--- | :--- |
 | [基本农田保护区] | [X] | [X] | [要求] |
-| [一般农地区] | [X] | [X] | [要求] |
+| [一般农业区] | [X] | [X] | [要求] |
 | [村庄建设区] | [X] | [X] | [要求] |
 | [生态保护区] | [X] | [X] | [要求] |
 
@@ -701,6 +738,8 @@ SETTLEMENT_PLANNING_PROMPT = """你是乡村规划专家，精通农村住宅设
 {knowledge_context}
 
 {WRITING_RULES}
+
+{GIS_TOOL_GUIDE}
 
 **输出结构**：
 
@@ -793,6 +832,18 @@ def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **k
     # 注入全局写作规则
     kwargs["WRITING_RULES"] = WRITING_RULES
 
+    # 注入 GIS 工具与空间数据引导（P0-3：L1/L2/L3 数据流闭环）
+    # 从 state._landuse_metrics 和 state.intent_targets 提取，若未注入则降级为 N/A
+    kwargs["GIS_TOOL_GUIDE"] = GIS_TOOL_GUIDE
+    _lm = kwargs.get("_landuse_metrics") or {}
+    _it = kwargs.get("intent_targets") or {}
+    kwargs["landuse_metrics_farmland"] = _lm.get("farmland_ha", "N/A")
+    kwargs["landuse_metrics_construction"] = _lm.get("construction_ha", "N/A")
+    kwargs["landuse_metrics_ecological"] = _lm.get("ecological_ha", "N/A")
+    kwargs["intent_targets_farmland"] = _it.get("农田保护区", "N/A")
+    kwargs["intent_targets_construction"] = _it.get("村庄建设区", "N/A")
+    kwargs["intent_targets_ecological"] = _it.get("生态保护区", "N/A")
+
     # 动态生成当前日期
     if not kwargs.get("current_date"):
         from datetime import datetime
@@ -867,6 +918,7 @@ def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **k
 
 __all__ = [
     "WRITING_RULES",
+    "GIS_TOOL_GUIDE",
     "INDUSTRY_PLANNING_PROMPT",
     "TRAFFIC_PLANNING_PROMPT",
     "PUBLIC_SERVICE_PROMPT",

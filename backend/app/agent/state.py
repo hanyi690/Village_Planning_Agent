@@ -180,6 +180,9 @@ class AgentState(TypedDict, total=False):
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
     gis_layout_configs: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # GIS Agent输出的图层配置
     user_uploaded_data: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]  # 用户上传的GIS数据
+    # P0: L1/L2/L3 数据流闭环字段（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
+    _landuse_metrics: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L1 注入的现状用地指标
+    intent_targets: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L2 持久化的规划目标面积
 
 
 # ==========================================
@@ -308,6 +311,8 @@ def create_initial_state(
         "layer_char_counts": {},  # Cached char counts per layer
         "gis_layout_configs": [],  # GIS Agent输出的图层配置
         "user_uploaded_data": {},  # 用户上传的GIS数据
+        "_landuse_metrics": {},  # P0: L1 注入的现状用地指标
+        "intent_targets": {},  # P0: L2 持久化的规划目标面积
     }
 
 

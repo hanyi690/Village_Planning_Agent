@@ -10,21 +10,21 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Required planning zones that must exist in a valid layout
-# 永久基本农田保护区 is optional — villages without basic farmland (e.g. 金田村)
+# 农田保护区 is optional — villages without basic farmland (e.g. 金田村)
 # won't have this zone, which is correct per YJJBNTTB designation
-REQUIRED_ZONE_TYPES = {"村庄建设区", "生态保护区", "一般农地区"}
-OPTIONAL_ZONE_TYPES = {"永久基本农田保护区"}
+REQUIRED_ZONE_TYPES = {"村庄建设区", "生态保护区", "一般农业区"}
+OPTIONAL_ZONE_TYPES = {"农田保护区"}
 
 # Minimum area (ha) for each zone type
 MIN_ZONE_AREA_HA = {
-    "永久基本农田保护区": 1.0,
+    "农田保护区": 1.0,
     "村庄建设区": 0.5,
     "生态保护区": 1.0,
-    "一般农地区": 5.0,
+    "一般农业区": 5.0,
 }
 
 # Zone types that must NOT contain protected parcels
-PROTECTED_ZONE_TYPES = {"永久基本农田保护区", "生态保护区"}
+PROTECTED_ZONE_TYPES = {"农田保护区", "生态保护区"}
 CONSTRUCTION_ZONE_TYPES = {"村庄建设区"}
 
 
@@ -100,6 +100,7 @@ class LayoutValidator:
         self,
         layout_configs: List[Dict[str, Any]],
         constraints: Optional[List[Dict[str, Any]]] = None,
+        adjacency_graph: Any = None,
     ) -> ValidationReport:
         checks = [
             self._check_area_constraints(constraints or [], layout_configs),
@@ -108,6 +109,8 @@ class LayoutValidator:
             self._check_protected_parcels(layout_configs),
             self._check_min_zone_area(layout_configs),
             self._check_geojson_structural(layout_configs),
+            self._check_adjacency_compatibility(layout_configs, adjacency_graph),
+            self._check_spatial_compactness(layout_configs),
         ]
 
         all_violations = []
@@ -154,13 +157,13 @@ class LayoutValidator:
                         details={"zone": "村庄建设区", "actual": actual, "limit": value, "operator": op},
                     ))
             elif "farmland" in field and op in (">=", "gte"):
-                actual = zone_areas.get("永久基本农田保护区", 0)
+                actual = zone_areas.get("农田保护区", 0)
                 if actual < value:
                     violations.append(Violation(
                         check="area_constraint",
                         severity="error",
                         message=f"基本农田面积 {actual:.1f}ha 低于下限 {value}ha",
-                        details={"zone": "永久基本农田保护区", "actual": actual, "limit": value, "operator": op},
+                        details={"zone": "农田保护区", "actual": actual, "limit": value, "operator": op},
                     ))
             elif "ecological" in field and op in (">=", "gte"):
                 actual = zone_areas.get("生态保护区", 0)
@@ -609,3 +612,127 @@ class LayoutValidator:
                 if zt:
                     zone_areas[zt] = zone_areas.get(zt, 0) + area
         return zone_areas
+
+    def _check_adjacency_compatibility(
+        self,
+        layout_configs: List[Dict],
+        adjacency_graph: Any = None,
+    ) -> CheckResult:
+        """Check adjacency compatibility rate (same-zone neighbors / total edges).
+
+        If adjacency_graph is provided, computes the actual rate from the
+        layout's zone assignments. Otherwise, skips this check.
+        Threshold: 30% (village-scale planning with area targets often forces
+        reassignment of large ecological blocks, creating boundary fragmentation).
+        """
+        if adjacency_graph is None:
+            return CheckResult(check_name="adjacency_compatibility", passed=True)
+
+        # Build assignment map from layout
+        assignments: Dict[str, str] = {}
+        for config in layout_configs:
+            if config.get("layerType") != "planning_zone":
+                continue
+            geojson = config.get("data", {})
+            for feat in geojson.get("features", []):
+                props = feat.get("properties", {})
+                ck = props.get("composite_key", "")
+                zone = props.get("assigned_zone", "")
+                if ck and zone:
+                    assignments[ck] = zone
+
+        if not assignments:
+            return CheckResult(check_name="adjacency_compatibility", passed=True)
+
+        # Compute rate
+        same_zone = 0
+        total = 0
+        adj_dict = getattr(adjacency_graph, "adjacency_dict", {})
+        for key_i, neighbors in adj_dict.items():
+            zone_i = assignments.get(key_i, "")
+            if not zone_i:
+                continue
+            for key_j in neighbors:
+                if key_j <= key_i:
+                    continue
+                total += 1
+                if assignments.get(key_j, "") == zone_i:
+                    same_zone += 1
+
+        rate = same_zone / total if total > 0 else 0.0
+        violations = []
+        if rate < 0.30:
+            violations.append(Violation(
+                check="adjacency_compatibility",
+                severity="warning",
+                message=f"邻接同类率 {rate:.1%} 低于建议阈值 30%",
+                details={"rate": round(rate, 4), "threshold": 0.30},
+            ))
+
+        return CheckResult(
+            check_name="adjacency_compatibility",
+            passed=len(violations) == 0,
+            violation_count=len(violations),
+            violations=violations,
+        )
+
+    def _check_spatial_compactness(
+        self,
+        layout_configs: List[Dict],
+    ) -> CheckResult:
+        """Check spatial compactness index (1 / (1 + CV of zone areas)).
+
+        Measures how evenly parcels are distributed across zones.
+        Higher compactness = more even distribution of parcel sizes within zones.
+        Threshold: 0.5 (minimum acceptable for village planning).
+        """
+        from collections import defaultdict
+
+        # Collect parcel areas by zone
+        zone_parcel_areas: Dict[str, List[float]] = defaultdict(list)
+        for config in layout_configs:
+            if config.get("layerType") != "planning_zone":
+                continue
+            geojson = config.get("data", {})
+            for feat in geojson.get("features", []):
+                props = feat.get("properties", {})
+                zone = props.get("assigned_zone", "") or props.get("zone_type", "")
+                area = props.get("area_ha", 0)
+                if zone and area > 0:
+                    zone_parcel_areas[zone].append(area)
+
+        if not zone_parcel_areas:
+            return CheckResult(check_name="spatial_compactness", passed=True)
+
+        # Compute compactness: 1/(1+CV) for each zone, then average
+        scores = []
+        for areas in zone_parcel_areas.values():
+            if len(areas) < 2:
+                continue
+            mean_a = sum(areas) / len(areas)
+            if mean_a <= 0:
+                continue
+            variance = sum((a - mean_a) ** 2 for a in areas) / len(areas)
+            std_a = variance ** 0.5
+            cv = std_a / mean_a
+            scores.append(1 / (1 + cv))
+
+        if not scores:
+            return CheckResult(check_name="spatial_compactness", passed=True)
+
+        compactness = sum(scores) / len(scores)
+        violations = []
+        if compactness < 0.5:
+            violations.append(Violation(
+                check="spatial_compactness",
+                severity="warning",
+                message=f"空间紧凑度 {compactness:.3f} 低于建议阈值 0.5",
+                details={"compactness": round(compactness, 4), "threshold": 0.5},
+            ))
+
+        return CheckResult(
+            check_name="spatial_compactness",
+            passed=len(violations) == 0,
+            violation_count=len(violations),
+            violations=violations,
+        )

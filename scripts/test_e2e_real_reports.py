@@ -192,8 +192,8 @@ def create_intent_from_report(reports: Dict[str, Dict[str, Any]]) -> UnifiedSpat
       - 其他土地: 7.90 ha (0.33%)
 
     The 土地用途分区 table:
-      - 永久基本农田保护区: 78.83 ha (3.35%)
-      - 一般农地区: 1881.54 ha (79.97%)
+      - 农田保护区: 78.83 ha (3.35%)
+      - 一般农业区: 1881.54 ha (79.97%)
       - 村庄建设区: 30.50 ha (1.30%)
       - 生态保护区: 362.02 ha (15.38%)
     """
@@ -235,7 +235,7 @@ def create_intent_from_report(reports: Dict[str, Dict[str, Any]]) -> UnifiedSpat
             zone_id="agriculture_1",
             land_use="农业用地",
             dlbm="1100",
-            area_ratio=1881.54 / total_area,  # 一般农地区
+            area_ratio=1881.54 / total_area,  # 一般农业区
             direction=Direction.SOUTH,
             density=Density.LOW,
             reference_feature="村域西南部生态农业发展区",

@@ -5,7 +5,7 @@ Utils Module - 公共工具函数
 """
 
 from .geo_utils import haversine_distance, calculate_area_km2, calculate_areas_batch, safe_unary_union, safe_geo_series_union
-from .geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
+from .geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson, build_parcel_index
 from .coord_utils import ensure_tuple_coord
 from .crs_engine import (
     get_metric_crs,
@@ -42,6 +42,7 @@ __all__ = [
     # geojson_utils
     'geojson_to_geodataframe',
     'geodataframe_to_geojson',
+    'build_parcel_index',
     # coord_utils
     'ensure_tuple_coord',
     # crs_engine

@@ -94,6 +94,32 @@ export interface HazardBufferResult extends TestResultBase {
   geojson?: unknown;
 }
 
+export interface LayoutValidationViolation {
+  check: string;
+  severity: 'error' | 'warning';
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface LayoutValidationCheck {
+  name: string;
+  passed: boolean;
+  violation_count: number;
+  violations: LayoutValidationViolation[];
+}
+
+export interface LayoutValidationResult extends TestResultBase {
+  validation?: {
+    passed: boolean;
+    status: 'pass' | 'fail' | 'warning';
+    total_violations: number;
+    violations: LayoutValidationViolation[];
+    warnings: string[];
+  };
+  checks?: LayoutValidationCheck[];
+  zone_areas?: Record<string, number>;
+}
+
 export interface JintianFile {
   filename: string;
   name: string;
@@ -252,6 +278,18 @@ export const gisTestApi = {
     buffer_meters?: number;
   }): Promise<HazardBufferResult> {
     return apiRequest(`${BASE}/hazard-buffer`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  },
+
+  /** POST /api/dev/gis/layout-validate */
+  async validateLayout(params: {
+    layout_configs?: unknown[];
+    constraints?: Record<string, unknown>[];
+    use_jintian_data?: boolean;
+  }): Promise<LayoutValidationResult> {
+    return apiRequest(`${BASE}/layout-validate`, {
       method: 'POST',
       body: JSON.stringify(params),
     });

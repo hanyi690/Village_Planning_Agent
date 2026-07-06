@@ -186,9 +186,67 @@ def simplify_geojson(geojson: Dict[str, Any], tolerance: float = 0.00005) -> Dic
         return geojson
 
 
+def build_parcel_index(
+    landuse_geojson: Dict[str, Any],
+    zone_type_fn=None,
+) -> tuple:
+    """Build parcel index from landuse GeoJSON for zone allocation.
+
+    Extracts BSM/DLBM/area from landuse features and resolves zone types.
+    Uses composite_key (BSM_DLBM_SHAPEArea) because BSM is NOT unique —
+    80 BSMs have 2 different DLBM codes, and 38 BSM+DLBM pairs have
+    multiple features with different geometries/areas.
+
+    Args:
+        landuse_geojson: GeoJSON FeatureCollection of land use parcels
+        zone_type_fn: Optional callable(dlbm: str) -> str for zone type resolution
+
+    Returns:
+        Tuple of (parcel_db: dict, duplicate_bsms: set)
+        parcel_db maps composite_key -> {area_ha, dlbm, bsm_bare, current_zone, feature}
+    """
+    from app.utils.logger import get_logger as _get_logger
+    _logger = _get_logger(__name__)
+
+    features = landuse_geojson.get("features", [])
+    parcel_db: Dict[str, Dict[str, Any]] = {}
+    duplicate_bsms: set = set()
+    seen_bsms: set = set()
+
+    for ft in features:
+        props = ft.get("properties", {})
+        bsm = str(props.get("BSM", "")).strip()
+        dlbm = str(props.get("DLBM", "")).strip()
+        if not bsm:
+            continue
+        shape_area = props.get("SHAPE_Area", 0) or 0
+        composite_key = f"{bsm}_{dlbm}_{int(shape_area)}"
+        if bsm in seen_bsms:
+            duplicate_bsms.add(bsm)
+        seen_bsms.add(bsm)
+        area = (props.get("DLMJ", 0) or shape_area) / 10000
+        current_zone = zone_type_fn(dlbm) if zone_type_fn else ""
+        parcel_db[composite_key] = {
+            "area_ha": area,
+            "dlbm": dlbm,
+            "bsm_bare": bsm,
+            "current_zone": current_zone,
+            "feature": ft,
+        }
+
+    if duplicate_bsms:
+        _logger.debug(
+            f"[ParcelIndex] {len(duplicate_bsms)} BSMs with multiple DLBM codes "
+            f"({len(parcel_db)} total parcels)"
+        )
+
+    return parcel_db, duplicate_bsms
+
+
 __all__ = [
     'geojson_to_geodataframe',
     'geodataframe_to_geojson',
     'reduce_coordinate_precision',
     'simplify_geojson',
+    'build_parcel_index',
 ]

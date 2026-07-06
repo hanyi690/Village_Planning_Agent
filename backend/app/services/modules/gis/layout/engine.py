@@ -160,6 +160,10 @@ class SpatialLayoutEngine:
                 protection_zones = gis_context.get_protection_zones()
 
         # Generate function_zone GeoJSON (DLBM reclassification - existing method)
+        # Auto-build zones from DLBM if intent has none
+        if not intent.zones and landuse_current_geojson:
+            intent.zones = self._build_default_zones(landuse_current_geojson)
+
         self._emit_progress(session_id, "generating_function_zone", "生成功能分区图层")
         function_zone_geojson = self.zone_generator.generate(
             intent=intent,
@@ -178,8 +182,8 @@ class SpatialLayoutEngine:
             # Incremental SSE: push function_zone as soon as generated
             self._emit_layer_update(session_id, "function_zone", function_zone_geojson, boundary_geojson)
 
-        # ---- KG-driven planning zone allocation (NEW) ----
-        if self.has_kg() and landuse_current_geojson:
+        # ---- Planning zone allocation (KG-driven or DLBM-only) ----
+        if landuse_current_geojson:
             self._emit_progress(session_id, "generating_planning_zone", "生成规划分区图层")
             planning_zone_geojson = self._generate_planning_zones(
                 intent, landuse_current_geojson, protection_zones
@@ -398,15 +402,18 @@ class SpatialLayoutEngine:
         landuse_geojson: Dict[str, Any],
         protection_zones: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Generate planning zone GeoJSON using KG-driven constraint allocation.
+        """Generate planning zone GeoJSON using constraint allocation.
 
         Produces a 4-zone planning layer (农田保护区/村庄建设区/生态保护区/一般农业区)
         that DIFFERS from the DLBM-reclassified function_zone layer.
 
-        The zones follow the 土地用途分区 from the land_use_planning report.
+        When KG constraints are available, they guide the allocation as soft
+        constraints. Without KG, the MIP allocator runs on DLBM preference
+        costs + adjacency + change penalty alone.
         """
-        if not self._kg_constraints:
-            return None
+        # Compute targets from actual landuse DLBM data (no hardcoded defaults)
+        mode = "KG-driven" if self._kg_constraints else "DLBM-only"
+        logger.info(f"[SpatialLayoutEngine] Planning zone mode: {mode}")
 
         # Compute targets from actual landuse DLBM data (no hardcoded defaults)
         targets = self._compute_zone_targets(landuse_geojson, intent)
@@ -492,6 +499,50 @@ class SpatialLayoutEngine:
             + ", ".join(f"{k}={v:.1f}ha" for k, v in targets.items())
         )
         return targets
+
+    @staticmethod
+    def _build_default_zones(
+        landuse_geojson: Dict[str, Any],
+    ) -> List["ZoneIntent"]:
+        """Build default ZoneIntent list from actual DLBM distribution.
+
+        Used when the caller provides no zone intents — derives zone_type
+        (7 categories) from the parcel data so ZoneGenerator can still produce
+        a function_zone layer. Uses zone_type names (not planning zone names)
+        because ZoneGenerator._build_zone_feature looks up parcels by zone_type.
+        """
+        from .planning_intent import ZoneIntent, Direction
+        from ..utils.geojson_utils import build_parcel_index
+        from .zone_generator import resolve_zone_type_for_dlbm
+        from collections import Counter
+
+        parcel_db, _ = build_parcel_index(
+            landuse_geojson, zone_type_fn=resolve_zone_type_for_dlbm
+        )
+
+        zone_counts: Counter = Counter()
+        for info in parcel_db.values():
+            zone_counts[info["current_zone"]] += 1
+
+        total = sum(zone_counts.values()) or 1
+        zones = []
+        for i, (zone_type, count) in enumerate(zone_counts.most_common()):
+            direction = Direction.CENTER if zone_type in (
+                "居住用地", "产业用地", "公共服务用地", "商业用地",
+            ) else Direction.PERIPHERY
+            zones.append(ZoneIntent(
+                zone_id=f"auto_z{i + 1}",
+                land_use=zone_type,
+                dlbm="0000",
+                area_ratio=round(count / total, 4),
+                direction=direction,
+            ))
+
+        logger.info(
+            f"[SpatialLayoutEngine] Auto-built {len(zones)} default zones from DLBM: "
+            + ", ".join(f"{z.land_use}({z.area_ratio:.1%})" for z in zones)
+        )
+        return zones
 
     def _violations_to_adjustments(
         self, violations: list,

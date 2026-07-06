@@ -107,6 +107,7 @@ _METRIC_KEY_TO_FIELD: Dict[str, str] = {
     "森林覆盖率_百分比": "forest_coverage_pct",
     "新增建设用地_公顷": "new_construction_ha",
     "林地保有量_公顷": "forest_land_ha",
+    "总用地面积_公顷": "total_area_ha",
 }
 
 # anchor field -> source field name on MetricAnchors
@@ -190,71 +191,89 @@ def normalize_metric_keys(
 
 # ---- Merged regex extraction from summary/generator.py ----
 
+# _CS = clause separator chars — prevent .*? from crossing clause boundaries
+# Includes 与/和/及 (conjunctions) that often separate different metrics in same sentence
+_CS = r"[^，。；、与和及\n]"
+
 DIMENSION_EXTRACTION_RULES: Dict[str, Dict[str, List[str]]] = {
     "land_use_planning": {
         "建设用地规模_公顷": [
-            r"建设用地.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"建设规模.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"村庄建设用地.*?(\d+\.?\d*)",
+            rf"建设用地{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"建设规模{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"村庄建设用地{_CS}*?(\d+\.?\d*)",
         ],
         "耕地保有量_公顷": [
-            r"耕地保有量.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"耕地保护.*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?耕地保有量",
+            rf"耕地保有量{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"耕地保护{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
         ],
         "永久基本农田_公顷": [
-            r"永久基本农田.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"基本农田.*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?永久基本农田",
+            rf"永久基本农田{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"基本农田{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
         ],
         "生态保护红线面积": [
-            r"生态保护红线.*?(\d+\.?\d*)",
-            r"生态红线.*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?生态保护红线",
+            rf"生态保护红线{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)?",
+            rf"生态红线{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
         ],
         "新增建设用地_公顷": [
-            r"新增建设.*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"新增建设{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
+        ],
+        "总用地面积_公顷": [
+            rf"总用地面积{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"总面积{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            r"\| 合计 \| (\d+\.?\d*)",  # markdown table: | 合计 | 2352.89 |
+            r"\| 总计 \| (\d+\.?\d*)",  # markdown table: | 总计 | xxx |
         ],
     },
     "ecological": {
         "生态保护红线面积": [
-            r"生态保护红线.*?(\d+\.?\d*)",
-            r"生态红线.*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?生态保护红线",
+            rf"生态保护红线{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)?",
+            rf"生态红线{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
         ],
         "林地保有量_公顷": [
-            r"林地保有量.*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?林地保有量",
+            rf"林地保有量{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
         ],
         "森林覆盖率_百分比": [
-            r"森林覆盖率.*?(\d+\.?\d*)\s*%",
+            rf"森林覆盖率{_CS}*?(\d+\.?\d*)\s*%",
         ],
     },
     "settlement_planning": {
         "建设用地规模_公顷": [
-            r"建设用地.*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"建设用地{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
         ],
         "规划期末人口": [
-            r"规划期末.*?人口.*?(\d+)",
-            r"规划人口.*?(\d+)",
-            r"常住人口.*?(\d+)\s*人",
+            rf"规划期末{_CS}*?人口{_CS}*?(\d+)",
+            rf"规划人口{_CS}*?(\d+)",
+            rf"常住人口{_CS}*?(\d+)\s*人",
         ],
         "人均建设用地": [
-            r"人均建设用地.*?(\d+\.?\d*)\s*m",
+            rf"人均建设用地{_CS}*?(\d+\.?\d*)\s*m",
         ],
     },
     "superior_planning": {
         "生态保护红线面积": [
-            r"生态保护红线.*?(\d+\.?\d*)",
+            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?生态保护红线",
+            rf"生态保护红线{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)?",
         ],
         "耕地保有量_公顷": [
-            r"耕地保有量.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"基本农田.*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?耕地保有量",
+            rf"耕地保有量{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"基本农田{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
         ],
         "建设用地规模_公顷": [
-            r"建设用地.*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"城镇开发边界.*?(\d+\.?\d*)",
+            rf"建设用地{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
+            rf"城镇开发边界{_CS}*?(\d+\.?\d*)",
         ],
     },
     "disaster_prevention": {
         "地质灾害隐患点_处": [
-            r"地质灾害隐患.*?(\d+)\s*处",
-            r"隐患点.*?(\d+)\s*处",
+            rf"地质灾害隐患{_CS}*?(\d+)\s*处",
+            rf"隐患点{_CS}*?(\d+)\s*处",
+            rf"(\d+)\s*处{_CS}*?地质灾害隐患",
         ],
     },
 }
@@ -262,23 +281,35 @@ DIMENSION_EXTRACTION_RULES: Dict[str, Dict[str, List[str]]] = {
 
 def extract_metric_anchors(
     reports: Dict[str, Dict[str, Any]],
+    gis_data: Optional[Dict[str, Any]] = None,
 ) -> MetricAnchors:
-    """Extract precise metric values from reports.
+    """Extract precise metric values from reports and GIS data.
 
-    Three-tier extraction:
-    1. Direct read from reports.metrics (schema-qualified field names)
-    2. Chinese regex from report content (DIMENSION_EXTRACTION_RULES)
-    3. Default values (none — caller should handle missing)
+    Four-tier extraction (highest priority first):
+    1. GIS GeoJSON direct computation (most accurate — spatial measurement)
+    2. Direct read from reports.metrics (schema-qualified field names)
+    3. Chinese regex from report content (DIMENSION_EXTRACTION_RULES)
+    4. Default values (none — caller should handle missing)
 
     Args:
         reports: Dict of dimension_key -> {content, summary: {metrics, text_summary, ...}}
+        gis_data: Optional GIS data dict with keys:
+            - boundary_geojson: Village boundary (MJ field for total area)
+            - landuse_current_geojson: Landuse parcels (DLMJ+DLBM for area by type)
+            - ecological_protection_geojson: Ecological redline (MJ field)
+            - construction_zone_geojson: Construction zone (MJ field)
+            - hazard_points_geojson: Hazard points (feature count)
 
     Returns:
         MetricAnchors with extracted values and source tracking.
     """
     anchors = MetricAnchors()
 
-    # Pass 1: Direct metrics read (most reliable)
+    # Pass 0: GIS GeoJSON direct computation (highest priority)
+    if gis_data:
+        _extract_from_gis(anchors, gis_data)
+
+    # Pass 1: Direct metrics read (most reliable text source)
     _extract_from_metrics(anchors, reports)
 
     # Pass 2: Regex from content (fill gaps)
@@ -379,6 +410,97 @@ def extract_dimension_anchors(
             result[key] = float(val) if '.' in val else int(val)
 
     return result
+
+
+# DLBM prefixes for land use classification (GB/T 21010-2017)
+_DLBM_FARMLAND = {"01", "11"}  # 耕地(01), 水浇地/旱地 subset; 水田(11)
+_DLBM_CONSTRUCTION = {"07", "08", "09", "21", "22"}  # 住宅/公共/交通/商服/工矿
+_DLBM_ECOLOGICAL = {"03", "31"}  # 林地(03), 生态(31)
+
+
+def _extract_from_gis(
+    anchors: MetricAnchors,
+    gis_data: Dict[str, Any],
+) -> None:
+    """Pass 0: Extract values from GIS GeoJSON (highest priority — spatial measurement)."""
+    # Total area from boundary GeoJSON
+    boundary = gis_data.get("boundary_geojson")
+    if boundary and anchors.total_area_ha is None:
+        total = _sum_geojson_field(boundary, "MJ")
+        if total and total > 0:
+            anchors.total_area_ha = total
+            anchors.total_area_source = "gis.boundary.MJ"
+
+    # Area breakdown from landuse_current GeoJSON (DLBM-based classification)
+    landuse = gis_data.get("landuse_current_geojson")
+    if landuse:
+        area_by_prefix = _sum_landuse_by_dlbm_prefix(landuse)
+
+        if anchors.construction_area_ha is None:
+            val = sum(area_by_prefix.get(p, 0) for p in _DLBM_CONSTRUCTION)
+            if val > 0:
+                anchors.construction_area_ha = val
+                anchors.construction_source = "gis.landuse_current.DLBM"
+
+        if anchors.farmland_area_ha is None:
+            val = sum(area_by_prefix.get(p, 0) for p in _DLBM_FARMLAND)
+            if val > 0:
+                anchors.farmland_area_ha = val
+                anchors.farmland_source = "gis.landuse_current.DLBM"
+
+        if anchors.ecological_area_ha is None:
+            val = sum(area_by_prefix.get(p, 0) for p in _DLBM_ECOLOGICAL)
+            if val > 0:
+                anchors.ecological_area_ha = val
+                anchors.ecological_source = "gis.landuse_current.DLBM"
+
+    # Ecological redline from protection zone GeoJSON
+    eco_protection = gis_data.get("ecological_protection_geojson")
+    if eco_protection and anchors.ecological_area_ha is None:
+        val = _sum_geojson_field(eco_protection, "MJ")
+        if val and val > 0:
+            anchors.ecological_area_ha = val
+            anchors.ecological_source = "gis.ecological_protection.MJ"
+
+    # Hazard points count
+    hazard = gis_data.get("hazard_points_geojson")
+    if hazard:
+        count = len(hazard.get("features", []))
+        if count > 0:
+            # Store in metrics dict (no dedicated anchor field for hazard count)
+            logger.info("[metric_anchors] GIS hazard_points count: %d", count)
+
+
+def _sum_geojson_field(geojson: Dict[str, Any], field: str) -> Optional[float]:
+    """Sum a numeric field from GeoJSON feature properties."""
+    total = 0.0
+    found = False
+    for feature in geojson.get("features", []):
+        val = feature.get("properties", {}).get(field)
+        if val is not None:
+            try:
+                total += float(val)
+                found = True
+            except (ValueError, TypeError):
+                pass
+    return total if found else None
+
+
+def _sum_landuse_by_dlbm_prefix(landuse_geojson: Dict[str, Any]) -> Dict[str, float]:
+    """Sum DLMJ (sqm) by DLBM 2-digit prefix, return as hectares."""
+    from collections import defaultdict
+    by_prefix: Dict[str, float] = defaultdict(float)
+    for feature in landuse_geojson.get("features", []):
+        props = feature.get("properties", {})
+        dlbm = str(props.get("DLBM", ""))
+        dlmj = props.get("DLMJ")
+        if dlbm and dlmj is not None:
+            try:
+                by_prefix[dlbm[:2]] += float(dlmj)
+            except (ValueError, TypeError):
+                pass
+    # Convert sqm to ha
+    return {k: v / 10000 for k, v in by_prefix.items()}
 
 
 def _extract_from_metrics(

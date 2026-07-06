@@ -73,7 +73,7 @@ def main():
     farm_parcels = ludf[farm_mask]
     # 村庄建设区: build parcels in center
     build_parcels = ludf[build_mask & center_mask]
-    # 一般农地区: everything else
+    # 一般农业区: everything else
     protected = set(eco_parcels.index) | set(farm_parcels.index) | set(build_parcels.index)
     general_agri = ludf[~ludf.index.isin(protected)]
 
@@ -84,7 +84,7 @@ def main():
     print(f'生态保护区: {len(eco_parcels)} parcels, {area_ha(eco_parcels):.1f} ha (target: 362.02)')
     print(f'永久基本农田: {len(farm_parcels)} parcels, {area_ha(farm_parcels):.1f} ha (target: 78.83)')
     print(f'村庄建设区: {len(build_parcels)} parcels, {area_ha(build_parcels):.1f} ha (target: 30.50)')
-    print(f'一般农地区: {len(general_agri)} parcels, {area_ha(general_agri):.1f} ha (target: 1881.54)')
+    print(f'一般农业区: {len(general_agri)} parcels, {area_ha(general_agri):.1f} ha (target: 1881.54)')
 
     # ==========================================
     # 4-panel figure
@@ -108,10 +108,10 @@ def main():
 
     # Panel 2: 规划土地用途分区 (4区)
     pz = [
-        ('永久基本农田保护区 (78.83ha)', farm_parcels, '#FFE4B5'),
+        ('农田保护区 (78.83ha)', farm_parcels, '#FFE4B5'),
         ('村庄建设区 (30.50ha)', build_parcels, '#FF6347'),
         ('生态保护区 (362.02ha)', eco_parcels, '#228B22'),
-        ('一般农地区 (1881.54ha)', general_agri, '#98FB98'),
+        ('一般农业区 (1881.54ha)', general_agri, '#98FB98'),
     ]
     for name, gdf, color in pz:
         if len(gdf) > 0:
