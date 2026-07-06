@@ -13,6 +13,7 @@ import {
   LegendItem,
   LayerType,
   PLANNING_COLORS,
+  LAYER_TYPE_LABELS,
 } from '@/features/planning/constants/gis';
 
 interface LegendPanelProps {
@@ -34,19 +35,6 @@ const POSITION_STYLES: Record<string, string> = {
   'bottom-left': 'bottom: 50px; left: 10px;',
   'top-right': 'top: 10px; right: 10px;',
   'top-left': 'top: 10px; left: 10px;',
-};
-
-// Layer type display names
-const LAYER_TYPE_NAMES: Record<LayerType, string> = {
-  function_zone: '功能区',
-  facility_point: '设施点',
-  development_axis: '发展轴线',
-  sensitivity_zone: '敏感区',
-  isochrone: '等时圈',
-  boundary: '边界',
-  settlement_zone: '居民点分类',
-  infrastructure: '基础设施',
-  planning_zone: '规划分区',
 };
 
 export default function LegendPanel({
@@ -127,7 +115,7 @@ export default function LegendPanel({
               color: '#666',
             }}
           >
-            {LAYER_TYPE_NAMES[layerType as LayerType] || layerType}
+            {LAYER_TYPE_LABELS[layerType as LayerType] || layerType}
           </div>
 
           {/* Legend items */}

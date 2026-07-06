@@ -123,6 +123,19 @@ export type LineColors = { stroke: string; width: number };
 // Layer type definition (keys of PLANNING_COLORS)
 export type LayerType = keyof typeof PLANNING_COLORS;
 
+// Layer type Chinese labels (single source, used by MapView + LegendPanel)
+export const LAYER_TYPE_LABELS: Record<LayerType, string> = {
+  boundary: '行政边界',
+  function_zone: '功能区',
+  facility_point: '设施点',
+  sensitivity_zone: '敏感区',
+  infrastructure: '基础设施',
+  isochrone: '等时圈',
+  planning_zone: '规划分区',
+  development_axis: '发展轴',
+  settlement_zone: '居民点分类',
+};
+
 // Legend item interface (matching LegendPanel component expectations)
 export interface LegendItem {
   label: string;

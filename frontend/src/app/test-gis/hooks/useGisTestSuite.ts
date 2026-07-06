@@ -67,17 +67,27 @@ const TEST_LAYER_TYPE_MAP: Record<string, GISLayerConfig['layerType']> = {
 };
 
 // ============================================
-// Store helper — write test layers into gisLayers
+// Store helpers — write test layers via setState for proper Immer integration
 // ============================================
 
 function setTestLayers(key: string, layerConfigs: GISLayerConfig[]) {
-  const store = usePlanningStore.getState();
-  store.gisLayers[`test_${key}`] = layerConfigs;
+  usePlanningStore.setState((state) => {
+    state.gisLayers[`test_${key}`] = layerConfigs;
+  });
 }
 
 function removeTestLayers(key: string) {
-  const store = usePlanningStore.getState();
-  delete store.gisLayers[`test_${key}`];
+  usePlanningStore.setState((state) => {
+    delete state.gisLayers[`test_${key}`];
+  });
+}
+
+function clearAllTestLayers() {
+  usePlanningStore.setState((state) => {
+    for (const k of Object.keys(state.gisLayers)) {
+      if (k.startsWith('test_')) delete state.gisLayers[k];
+    }
+  });
 }
 
 // ============================================
@@ -190,13 +200,7 @@ export function useGisTestSuite(): GisTestSuiteState {
 
   const clearAll = useCallback(() => {
     setResults({});
-    // Remove all test_ keys from store
-    const store = usePlanningStore.getState();
-    for (const key of Object.keys(store.gisLayers)) {
-      if (key.startsWith('test_')) {
-        delete store.gisLayers[key];
-      }
-    }
+    clearAllTestLayers();
     Object.values(abortRef.current).forEach(c => c.abort());
     abortRef.current = {};
   }, []);

@@ -16,21 +16,8 @@ import type { FeatureCollection, Geometry, Position, Feature, GeoJsonProperties 
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import type { GISLayerConfig, GeoJsonFeatureCollection } from '@/types/message/message-types';
-import { PLANNING_COLORS, DEFAULT_COLORS, TILE_SOURCES, BASE_MAP_TYPES, BaseMapType, LineColors, FeatureColors, LayerType } from '@/features/planning/constants/gis';
+import { PLANNING_COLORS, DEFAULT_COLORS, TILE_SOURCES, BASE_MAP_TYPES, BaseMapType, LineColors, FeatureColors, LayerType, LAYER_TYPE_LABELS } from '@/features/planning/constants/gis';
 import LegendPanel from './LegendPanel';
-
-// Layer type display names（规划输出图层类型，区别于 GISUploadSidebar 的 DATA_TYPE_NAMES）
-const LAYER_TYPE_NAMES: Record<string, string> = {
-  boundary: '行政边界',
-  function_zone: '功能区',
-  facility_point: '设施点',
-  sensitivity_zone: '敏感区',
-  infrastructure: '基础设施',
-  isochrone: '等时圈',
-  planning_zone: '规划分区',
-  development_axis: '发展轴',
-  custom: '自定义',
-};
 
 // Feature Popup Content Component
 function FeaturePopupContent({
@@ -52,7 +39,7 @@ function FeaturePopupContent({
   return (
     <div className="p-2 max-w-[280px]">
       <div className="font-semibold text-sm text-gray-800 mb-1 border-b border-gray-200 pb-1">
-        {LAYER_TYPE_NAMES[layerType] || layerType} - {layerName}
+        {(LAYER_TYPE_LABELS[layerType as LayerType] || layerType)} - {layerName}
       </div>
       <div className="space-y-1 text-xs">
         {displayProps.length > 0 ? (
