@@ -51,6 +51,10 @@ export {
   useStreamingContent,
   useRunningTools,
   useIsToolRunning,
+  // GIS
+  useGisLayers,
+  useHasGisLayers,
+  useGisLayersByType,
 } from "./useSelectors";
 
 // Handlers

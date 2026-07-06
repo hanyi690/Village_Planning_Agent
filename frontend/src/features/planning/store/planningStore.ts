@@ -1203,6 +1203,14 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         analysisData: gisData.analysisData,
       };
       state.messages.push(newMessage);
+
+      // Bridge: also populate gisLayers for Map tab
+      if (gisData.layers && Array.isArray(gisData.layers)) {
+        const layerConfigs = gisData.layers.filter(Boolean) as GISLayerConfig[];
+        if (layerConfigs.length > 0) {
+          state.gisLayers[`result_${dimensionKey}`] = layerConfigs;
+        }
+      }
       break;
     }
 

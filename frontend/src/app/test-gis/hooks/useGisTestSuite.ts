@@ -2,6 +2,8 @@
 
 import { useState, useCallback, useRef } from 'react';
 import { gisTestApi, type GisServiceStatus } from '@/features/gis-test/api/gis-test-api';
+import { useGisLayers } from '@/features/planning/hooks';
+import { usePlanningStore } from '@/features/planning/store';
 import type { GISLayerConfig } from '@/types/message/message-types';
 
 // ============================================
@@ -65,15 +67,31 @@ const TEST_LAYER_TYPE_MAP: Record<string, GISLayerConfig['layerType']> = {
 };
 
 // ============================================
+// Store helper — write test layers into gisLayers
+// ============================================
+
+function setTestLayers(key: string, layerConfigs: GISLayerConfig[]) {
+  const store = usePlanningStore.getState();
+  store.gisLayers[`test_${key}`] = layerConfigs;
+}
+
+function removeTestLayers(key: string) {
+  const store = usePlanningStore.getState();
+  delete store.gisLayers[`test_${key}`];
+}
+
+// ============================================
 // Hook
 // ============================================
 
 export function useGisTestSuite(): GisTestSuiteState {
   const [serviceStatus, setServiceStatus] = useState<GisServiceStatus | null>(null);
   const [results, setResults] = useState<Record<string, TestResult>>({});
-  const [layers, setLayers] = useState<GISLayerConfig[]>([]);
   const [runningTests, setRunningTests] = useState<Set<string>>(new Set());
   const abortRef = useRef<Record<string, AbortController>>({});
+
+  // Read layers from store (includes SSE + test layers)
+  const layers = useGisLayers();
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -111,7 +129,7 @@ export function useGisTestSuite(): GisTestSuiteState {
       };
       setResults(prev => ({ ...prev, [testId]: testResult }));
 
-      // Auto-add GeoJSON layers to map
+      // Auto-add GeoJSON layers to store
       const geojson = result.geojson;
       if (geojson && testResult.success) {
         const layerType = TEST_LAYER_TYPE_MAP[testId] || 'function_zone';
@@ -120,7 +138,7 @@ export function useGisTestSuite(): GisTestSuiteState {
           layerType,
           layerName: `${testId} (${timing_ms}ms)`,
         };
-        setLayers(prev => [...prev.filter(l => !l.layerName.startsWith(testId)), newLayer]);
+        setTestLayers(testId, [newLayer]);
       }
 
       // Special handling for spatial-layout: layout_configs contain multiple layers
@@ -132,7 +150,7 @@ export function useGisTestSuite(): GisTestSuiteState {
           layerName: cfg.layerName || `layout-${cfg.layerType}`,
           color: cfg.color,
         })).filter(l => l.geojson);
-        setLayers(prev => [...prev.filter(l => !l.layerName.startsWith('layout-')), ...layoutLayers]);
+        setTestLayers('layout', layoutLayers);
       }
 
       // Special handling for landuse-change: two geojsons
@@ -145,7 +163,7 @@ export function useGisTestSuite(): GisTestSuiteState {
         if (gj.planned) {
           newLayers.push({ geojson: gj.planned as GISLayerConfig['geojson'], layerType: 'planning_zone', layerName: 'landuse-change-planned' });
         }
-        setLayers(prev => [...prev.filter(l => !l.layerName.startsWith('landuse-change-')), ...newLayers]);
+        setTestLayers('landuse-change', newLayers);
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -165,12 +183,20 @@ export function useGisTestSuite(): GisTestSuiteState {
       delete next[testId];
       return next;
     });
-    setLayers(prev => prev.filter(l => !l.layerName.startsWith(testId) && !l.layerName.startsWith('layout-') && !l.layerName.startsWith('landuse-change-')));
+    removeTestLayers(testId);
+    removeTestLayers('layout');
+    removeTestLayers('landuse-change');
   }, []);
 
   const clearAll = useCallback(() => {
     setResults({});
-    setLayers([]);
+    // Remove all test_ keys from store
+    const store = usePlanningStore.getState();
+    for (const key of Object.keys(store.gisLayers)) {
+      if (key.startsWith('test_')) {
+        delete store.gisLayers[key];
+      }
+    }
     Object.values(abortRef.current).forEach(c => c.abort());
     abortRef.current = {};
   }, []);

@@ -19,6 +19,7 @@ import { useMemo } from "react";
 import { usePlanningStore, type PlanningState } from "../store/planningStore";
 import type { Message, DimensionProgressItem, Checkpoint } from "../types";
 import type { VillageInfo, VillageSession } from "../api";
+import type { GISLayerConfig } from "@/types/message/message-types";
 
 // ============================================
 // Core State Selectors
@@ -427,4 +428,29 @@ export function useStoreActions() {
     resetConversation: state.resetConversation,
     initConversation: state.initConversation,
   }));
+}
+
+// ============================================
+// GIS Selectors
+// ============================================
+
+/** Select all GIS layers (flat array) */
+export function useGisLayers(): GISLayerConfig[] {
+  const gisLayers = usePlanningStore((state) => state.gisLayers);
+  return useMemo(() => Object.values(gisLayers).flat(), [gisLayers]);
+}
+
+/** Check if any GIS layers exist */
+export function useHasGisLayers(): boolean {
+  const gisLayers = usePlanningStore((state) => state.gisLayers);
+  return Object.keys(gisLayers).length > 0;
+}
+
+/** Select GIS layers filtered by layerType (e.g., 'function_zone', 'planning_zone') */
+export function useGisLayersByType(layerType: string): GISLayerConfig[] {
+  const gisLayers = usePlanningStore((state) => state.gisLayers);
+  return useMemo(
+    () => Object.values(gisLayers).flat().filter((l) => l.layerType === layerType),
+    [gisLayers, layerType]
+  );
 }

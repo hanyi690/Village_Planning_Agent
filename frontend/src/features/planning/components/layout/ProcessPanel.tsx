@@ -19,6 +19,8 @@ import {
   useVillages,
   useHistoryLoading,
   useStatus,
+  useGisLayers,
+  useHasGisLayers,
 } from '../../hooks';
 import MapView from '../gis/MapView';
 import MessageList from '../chat/MessageList';
@@ -42,7 +44,8 @@ export default function ProcessPanel() {
   const setRightPanelExpanded = usePlanningStore((state) => state.setRightPanelExpanded);
   const processPanelTab = usePlanningStore((state) => state.processPanelTab);
   const setProcessPanelTab = usePlanningStore((state) => state.setProcessPanelTab);
-  const gisLayers = usePlanningStore((state) => state.gisLayers);
+  const flatLayers = useGisLayers();
+  const hasGisLayers = useHasGisLayers();
   const sessionId = usePlanningStore((state) => state.sessionId);
 
   const messages = useMessages();
@@ -51,9 +54,6 @@ export default function ProcessPanel() {
   const [isDragging, setIsDragging] = useState(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(DEFAULT_WIDTH);
-
-  const flatLayers = useMemo(() => Object.values(gisLayers).flat(), [gisLayers]);
-  const hasGisLayers = gisLayers && Object.keys(gisLayers).length > 0;
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
