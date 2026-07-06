@@ -646,7 +646,7 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
             except Exception as e_load:
                 logger.warning(f"[GIS Test] L3 reports load failed: {e_load}")
 
-        conflict_report, resolution_report, layout_configs = await asyncio.to_thread(
+        conflict_report, resolution_report, layout_configs, pipeline_trace = await asyncio.to_thread(
             engine.full_pipeline,
             summaries=summaries,
             intent=intent,
@@ -676,6 +676,7 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
                 "constraint_violations": len(conflict_report.constraint_violations) if hasattr(conflict_report, "constraint_violations") else 0,
             },
             "kg_built": engine.has_kg(),
+            "pipeline_trace": pipeline_trace.model_dump() if hasattr(pipeline_trace, "model_dump") else pipeline_trace,
             "timing_ms": round((time.time() - t0) * 1000),
         }
     except Exception as e:
@@ -967,6 +968,7 @@ async def parse_planning_text(request: ParseTextRequest):
                 return {"success": False, "error": result.get("error", "Unknown"), "timing_ms": round((time.time() - t0) * 1000)}
 
             intent_json = result["data"]["intent_json"]
+            parse_trace = result["data"].get("parse_trace")
 
         except Exception as e:
             import traceback
@@ -993,11 +995,19 @@ async def parse_planning_text(request: ParseTextRequest):
             current_land_use="农业用地为主，含居民点、林地、水域",
         )
 
+        parse_trace = None
         try:
             from langchain_openai import ChatOpenAI
             llm = ChatOpenAI(model=LLM_MODEL, temperature=0, request_timeout=120)
             response = await llm.ainvoke(prompt_text)
             response_text = response.content
+            from app.services.modules.gis.layout.trace import ParseTrace
+            parse_trace = ParseTrace(
+                source="jintian_reports" if request.use_jintian_reports else "planning_text",
+                llm_model=LLM_MODEL,
+                llm_prompt=prompt_text,
+                llm_response=response_text,
+            ).model_dump()
         except Exception as e:
             logger.error(f"[GIS Test] parse-text LLM failed: {e}")
             return {"success": False, "error": f"LLM failed: {e}", "timing_ms": round((time.time() - t0) * 1000)}
@@ -1078,6 +1088,7 @@ async def parse_planning_text(request: ParseTextRequest):
                 "layer_types": [c.get("layerType") for c in default_configs],
             },
             "intent_json": intent_json,
+            "parse_trace": parse_trace,
             "timing_ms": round((time.time() - t0) * 1000),
         }
 

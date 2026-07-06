@@ -90,7 +90,7 @@ class ConstraintDrivenAllocator:
         adjacency_graph: Optional[Any] = None,
         adjacency_weight: float = 0.5,
         change_penalty_weight: float = 0.3,
-    ) -> Dict[str, Any]:
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """Run constraint-driven allocation.
 
         Args:
@@ -139,7 +139,7 @@ class ConstraintDrivenAllocator:
 
         features = landuse_geojson.get("features", [])
         if not features:
-            return landuse_geojson
+            return landuse_geojson, {}
 
         from ..zone_generator import resolve_zone_type_for_dlbm
         from ..zone_schema import get_zone_type_for_planned_dlbm
@@ -211,7 +211,7 @@ class ConstraintDrivenAllocator:
             target = targets.get(zt, 0)
             logger.info(f"  {zt}: {zone_summary[zt]:.1f}ha (target={target:.1f}ha)")
 
-        return {"type": "FeatureCollection", "features": output_features}
+        return {"type": "FeatureCollection", "features": output_features}, {"mode": "greedy"}
 
     def _greedy_assign(self, parcel_db: dict, targets: dict):
         """Assign parcels to their preferred zone type by DLBM match.

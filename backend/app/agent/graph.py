@@ -80,6 +80,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 dimension_name="空间布局",
                 summary=f"生成 {len(layout_configs)} 个图层: {', '.join(layer_types)}",
                 layers=[],  # Empty: layers already sent via gis_layer_update
+                pipeline_trace=state.get("pipeline_trace"),
             )
         except Exception as e:
             logger.warning(f"[gis_agent_node] SSE publish failed: {e}")

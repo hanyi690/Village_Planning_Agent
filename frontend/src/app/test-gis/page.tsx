@@ -9,6 +9,8 @@
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import MapView from '@/features/planning/components/gis/MapView';
+import { TracePanel } from '@/features/planning/components/gis/TracePanel';
+import { usePlanningStore } from '@/features/planning/store';
 import type { GISLayerConfig } from '@/types/message/message-types';
 import { JINTIAN_CENTER } from './constants/jintian-planning';
 import { useTestLayers } from './hooks/useTestLayers';
@@ -40,6 +42,9 @@ function TestGISPageContent() {
   // Unified test suite
   const testSuite = useGisTestSuite();
   const { serviceStatus, results, layers: testLayers, runningTests, refreshStatus, clearAll } = testSuite;
+
+  // Pipeline trace from store (populated after spatial-layout test)
+  const pipelineTrace = usePlanningStore((s) => s.pipelineTrace);
 
   // Standard layers from jintian_boundary (loaded via new API)
   const [standardLayers, setStandardLayers] = useState<GISLayerConfig[]>([]);
@@ -301,6 +306,13 @@ function TestGISPageContent() {
             <ToolTestPanel testSuite={testSuite} />
           </div>
         </div>
+
+        {/* Pipeline Trace */}
+        {pipelineTrace && (
+          <div className="mt-4">
+            <TracePanel trace={pipelineTrace} />
+          </div>
+        )}
 
         {/* Debug Panel */}
         {allLayers.length > 0 && (

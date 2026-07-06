@@ -41,6 +41,7 @@ class SpatialLayoutEngine:
         self._allocator = None   # ConstraintDrivenAllocator (lazy init)
         self._kg_constraints: List[Dict[str, Any]] = []
         self._last_planning_targets: Dict[str, float] = {}
+        self._last_mip_trace: Dict[str, Any] = {}
         self._adjacency_graph = None  # AdjacencyGraph (lazy init)
 
     def build_kg(self, reports: Dict[str, Dict[str, Any]],
@@ -307,35 +308,68 @@ class SpatialLayoutEngine:
         reports: Optional[Dict[str, Dict[str, Any]]] = None,
         max_validation_rounds: int = 3,
         session_id: str = "",
-    ) -> Tuple[ConflictReport, ResolutionReport, List[Dict[str, Any]]]:
+    ) -> Tuple[ConflictReport, ResolutionReport, List[Dict[str, Any]], Any]:
         """Full Phase 0 + Phase 1 pipeline with KG-driven multi-layer output.
 
-        Args:
-            summaries: Dimension summaries for conflict detection
-            intent: Unified spatial intent
-            gis_context: Optional SharedGISContext
-            boundary_geojson: Village boundary
-            landuse_current_geojson: Current land use parcels
-            protection_zones: Dict of protection zone GeoJSONs
-            road_geojson: Road network GeoJSON
-            construction_zone_geojson: Construction zone GeoJSON
-            hazard_points_geojson: Geological hazard points GeoJSON
-            reports: Optional L3 dimension reports dict. If provided, builds KG
-                     and enables constraint-driven planning zone allocation.
-            max_validation_rounds: Max validate→adjust→regenerate cycles (default 3)
-            session_id: Optional session ID for SSE progress events
-
         Returns:
-            Tuple of (conflict_report, resolution_report, gis_layer_configs)
+            Tuple of (conflict_report, resolution_report, gis_layer_configs, pipeline_trace)
         """
+        import time as _time
+        from .trace import PipelineTrace, KGTrace, ConflictTrace, ValidationLoopTrace, ValidationRound
+
+        t0_pipeline = _time.time()
+        self._last_mip_trace = {}
+
         # Auto-build KG if reports provided and not already built
+        kg_trace = KGTrace()
         if reports and not self.has_kg() and landuse_current_geojson:
             self._emit_progress(session_id, "building_kg", "构建规划知识图谱")
+            t_kg = _time.time()
             self.build_kg(reports, landuse_current_geojson)
+            kg_trace.built = True
+            if self.kg:
+                kg_trace.parcel_count = getattr(self.kg, "parcel_count", 0)
+                kg_trace.triple_count = getattr(self.kg, "triple_count", 0)
+                kg_trace.constraint_count = len(self._kg_constraints)
+                kg_trace.constraints_detail = {
+                    c.get("id", f"constraint_{i}"): c
+                    for i, c in enumerate(self._kg_constraints)
+                }
+                if hasattr(self.kg, "get_all_triples"):
+                    kg_trace.triples_sample = self.kg.get_all_triples()
+            kg_trace.timing_ms = round((_time.time() - t_kg) * 1000)
 
         # Phase 0: Detect and resolve conflicts
         self._emit_progress(session_id, "phase0_conflict_detection", "检测维度间冲突")
+        t_conflict = _time.time()
         conflict_report, resolution_report = self.detect_and_resolve(summaries)
+
+        conflict_trace = ConflictTrace(
+            metric_conflicts=[
+                {
+                    "field": getattr(c, "field", ""),
+                    "dim_a": getattr(c, "dim_a", ""),
+                    "dim_b": getattr(c, "dim_b", ""),
+                    "value_a": getattr(c, "value_a", 0),
+                    "value_b": getattr(c, "value_b", 0),
+                    "threshold_pct": getattr(c, "threshold_pct", 0),
+                }
+                for c in getattr(conflict_report, "metric_conflicts", [])
+            ],
+            constraint_violations=[
+                {
+                    "constraint_id": getattr(v, "constraint_id", ""),
+                    "description": getattr(v, "description", ""),
+                    "severity": getattr(v, "severity", ""),
+                }
+                for v in getattr(conflict_report, "constraint_violations", [])
+            ],
+            resolution_applied=[
+                {"description": getattr(r, "description", ""), "adjustment": getattr(r, "adjustment", {})}
+                for r in getattr(resolution_report, "resolutions", [])
+            ],
+            timing_ms=round((_time.time() - t_conflict) * 1000),
+        )
 
         # Attach resolution to intent
         intent.conflicts_resolved = resolution_report
@@ -355,21 +389,45 @@ class SpatialLayoutEngine:
         )
 
         # Phase 1.5: Validate and re-optimize loop
+        validation_trace = ValidationLoopTrace()
         if self._kg_constraints and max_validation_rounds > 0:
             from .validator import LayoutValidator
             validator = LayoutValidator()
 
             for round_num in range(max_validation_rounds):
+                t_round = _time.time()
                 self._emit_progress(
                     session_id, f"validation_round_{round_num + 1}",
                     f"验证第 {round_num + 1} 轮",
                 )
                 report = validator.validate(configs, self._kg_constraints)
+
+                round_data = ValidationRound(
+                    round_number=round_num + 1,
+                    total_violations=report.total_violations,
+                    violations=[
+                        {
+                            "check": getattr(v, "check", ""),
+                            "severity": getattr(v, "severity", ""),
+                            "message": getattr(v, "message", ""),
+                        }
+                        for v in report.violations
+                    ],
+                    timing_ms=round((_time.time() - t_round) * 1000),
+                )
+
                 if report.status == "pass":
+                    validation_trace.final_status = "pass"
+                    round_data.damping = 0.2 / (round_num + 1)
+                    validation_trace.rounds.append(round_data)
                     logger.info("[Engine] Validation passed on round %d", round_num + 1)
                     break
 
                 adjustments = self._violations_to_adjustments(report.violations)
+                round_data.adjustments = {k: v.get("excess", v.get("shortfall", 0)) for k, v in adjustments.items()}
+                round_data.damping = 0.2 / (round_num + 1)
+                validation_trace.rounds.append(round_data)
+
                 violation_summary = "; ".join(
                     f"{v.check}: {v.message}" for v in report.violations[:5]
                 )
@@ -392,8 +450,23 @@ class SpatialLayoutEngine:
                     if new_planning:
                         configs = self._replace_planning_zone_layer(configs, new_planning)
 
+            if not validation_trace.final_status:
+                validation_trace.final_status = getattr(report, "status", "unknown")
+
+        # Build MIPTrace from last solver run
+        from .trace import MIPTrace
+        mip_trace = MIPTrace(**self._last_mip_trace) if self._last_mip_trace else MIPTrace()
+
+        pipeline_trace = PipelineTrace(
+            kg=kg_trace if kg_trace.built else None,
+            conflicts=conflict_trace,
+            mip=mip_trace,
+            validation=validation_trace if validation_trace.rounds else None,
+            total_timing_ms=round((_time.time() - t0_pipeline) * 1000),
+        )
+
         self._emit_progress(session_id, "complete", "布局生成完成")
-        return conflict_report, resolution_report, configs
+        return conflict_report, resolution_report, configs, pipeline_trace
 
 
     def _generate_planning_zones(
@@ -423,7 +496,7 @@ class SpatialLayoutEngine:
         adj_graph = self._get_adjacency_graph(landuse_geojson)
 
         allocator = self._get_allocator()
-        result = allocator.solve(
+        result, mip_trace_raw = allocator.solve(
             landuse_geojson=landuse_geojson,
             targets=targets,
             constraints=self._kg_constraints,
@@ -433,6 +506,7 @@ class SpatialLayoutEngine:
             adjacency_weight=0.5,
             change_penalty_weight=0.3,
         )
+        self._last_mip_trace = mip_trace_raw
 
         if not result.get("features"):
             return None
@@ -604,7 +678,7 @@ class SpatialLayoutEngine:
         adj_graph = self._get_adjacency_graph(landuse_geojson)
 
         allocator = self._get_allocator()
-        result = allocator.solve(
+        result, mip_trace_raw = allocator.solve(
             landuse_geojson=landuse_geojson,
             targets=targets,
             constraints=self._kg_constraints,
@@ -613,6 +687,7 @@ class SpatialLayoutEngine:
             adjacency_weight=0.5,
             change_penalty_weight=0.3,
         )
+        self._last_mip_trace = mip_trace_raw
         if not result.get("features"):
             return None
 

@@ -126,7 +126,7 @@ test.describe('Planning Pipeline', () => {
         if (planningZoneLayer?.data?.features) {
           const zoneTypes = new Set(
             planningZoneLayer.data.features.map(
-              (f: Record<string, unknown>) => f.properties?.assigned_zone
+              (f: Record<string, any>) => f.properties?.assigned_zone
             )
           );
           // Should have at least 3 of the 4 standard zones

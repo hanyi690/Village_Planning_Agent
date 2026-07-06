@@ -48,7 +48,7 @@ class MetricAnchors:
     forest_land_ha: Optional[float] = None
     forest_land_source: str = ""
 
-    # Computed zone ratios (set after extraction)
+    # Computed planning zone targets (4-zone 土地用途分区, set after extraction)
     zone_ratios: Dict[str, float] = field(default_factory=dict)
 
     @property
@@ -62,6 +62,16 @@ class MetricAnchors:
         ]
         found = sum(1 for v in key_fields if v is not None)
         return found / len(key_fields)
+
+    @property
+    def confidence_label(self) -> str:
+        """Confidence as qualitative label for ParseTrace."""
+        score = self.confidence
+        if score >= 0.75:
+            return "high"
+        elif score >= 0.5:
+            return "medium"
+        return "low"
 
     def to_anchor_dict(self) -> Dict[str, Any]:
         """Convert to dict suitable for prompt injection."""
@@ -79,9 +89,16 @@ class MetricAnchors:
         for key, (value, source) in mapping.items():
             if value is not None:
                 result[key] = {"value": value, "unit": "ha" if "率" not in key else "%", "source": source}
+        # Include 土地用途分区 targets (from DLBM re-mapping, not direct area)
         if self.zone_ratios:
             for zone, ratio in self.zone_ratios.items():
-                result[f"{zone}比例"] = {"value": f"{ratio:.4f}", "source": "计算值"}
+                result[f"{zone}比例"] = {"value": f"{ratio:.4f}", "source": "规划分区目标"}
+                if self.total_area_ha:
+                    result[f"{zone}面积"] = {
+                        "value": round(ratio * self.total_area_ha, 1),
+                        "unit": "ha",
+                        "source": "DLBM重分类",
+                    }
         return result
 
 
@@ -316,7 +333,7 @@ def extract_metric_anchors(
     _extract_from_regex(anchors, reports)
 
     # Compute zone ratios if we have the data
-    _compute_zone_ratios(anchors)
+    _compute_zone_ratios(anchors, gis_data)
 
     logger.info(
         "[metric_anchors] Extracted: total=%.1f, construction=%.1f, farmland=%.1f, eco=%.1f, confidence=%.2f",
@@ -591,15 +608,92 @@ def _extract_from_regex(
                     break
 
 
-def _compute_zone_ratios(anchors: MetricAnchors) -> None:
-    """Compute precise zone area ratios from anchors."""
-    if anchors.total_area_ha and anchors.total_area_ha > 0:
+def _compute_zone_ratios(anchors: MetricAnchors, gis_data: Optional[Dict[str, Any]] = None) -> None:
+    """Compute 土地用途分区(4区) targets by re-mapping DLBM to planning zones.
+
+    NOTE: This is NOT a direct mapping from DLBM area measurements!
+    - 耕地面积(DLBM 01/11) ≠ 农田保护区面积
+    - 建设用地面积(DLBM 07/08...) ≠ 村庄建设区面积
+    - 生态面积(DLBM 03/31) ≠ 生态保护区面积
+
+    Planning zones are defined by policy (三区三线), not just DLBM.
+    We compute targets by re-mapping each parcel via DLBM_TO_PLANNING_ZONE.
+    """
+    landuse = gis_data.get("landuse_current_geojson") if gis_data else None
+    if not landuse or not anchors.total_area_ha or anchors.total_area_ha <= 0:
+        # Fallback: use DLBM prefix-based approximation (less accurate)
         total = anchors.total_area_ha
-        if anchors.construction_area_ha is not None:
-            anchors.zone_ratios["村庄建设区"] = anchors.construction_area_ha / total
-        if anchors.farmland_area_ha is not None:
-            anchors.zone_ratios["农田保护区"] = anchors.farmland_area_ha / total
-        if anchors.ecological_area_ha is not None:
-            anchors.zone_ratios["生态保护区"] = anchors.ecological_area_ha / total
-        if anchors.permanent_farmland_ha is not None:
-            anchors.zone_ratios["永久基本农田"] = anchors.permanent_farmland_ha / total
+        if total and total > 0:
+            if anchors.farmland_area_ha is not None:
+                anchors.zone_ratios["农田保护区"] = anchors.farmland_area_ha / total
+            if anchors.ecological_area_ha is not None:
+                anchors.zone_ratios["生态保护区"] = anchors.ecological_area_ha / total
+            if anchors.construction_area_ha is not None:
+                anchors.zone_ratios["村庄建设区"] = anchors.construction_area_ha / total
+            # Fill 一般农业区 as remainder
+            known = sum(anchors.zone_ratios.values())
+            if known < 1.0:
+                anchors.zone_ratios["一般农业区"] = 1.0 - known
+        return
+
+    # Primary: re-map each parcel via DLBM_TO_PLANNING_ZONE for accurate 4-zone areas
+    from app.services.modules.gis.layout.zone_schema import dlbm_to_planning_zone
+
+    zone_areas: Dict[str, float] = {}
+    for feature in landuse.get("features", []):
+        props = feature.get("properties", {})
+        dlbm = str(props.get("DLBM", ""))
+        dlmj = props.get("DLMJ")
+        if not dlbm or dlmj is None:
+            continue
+        try:
+            area_ha = float(dlmj) / 10000  # DLMJ is in sqm
+            zone_name = dlbm_to_planning_zone(dlbm)
+            zone_areas[zone_name] = zone_areas.get(zone_name, 0.0) + area_ha
+        except (ValueError, TypeError):
+            continue
+
+    # Override ecological protection zone with MJ field if available
+    eco_protection = gis_data.get("ecological_protection_geojson") if gis_data else None
+    if eco_protection and eco_protection.get("features"):
+        eco_mj = 0.0
+        for feat in eco_protection.get("features", []):
+            mj = feat.get("properties", {}).get("MJ")
+            if mj is not None:
+                try:
+                    eco_mj += float(mj)
+                except (ValueError, TypeError):
+                    pass
+        if eco_mj > 0:
+            zone_areas["生态保护区"] = eco_mj / 10000
+
+    # Override farmland protection with MJ field if available
+    farmland_protection = gis_data.get("farmland_protection_geojson") if gis_data else None
+    if farmland_protection and farmland_protection.get("features"):
+        fp_mj = 0.0
+        for feat in farmland_protection.get("features", []):
+            mj = feat.get("properties", {}).get("MJ")
+            if mj is not None:
+                try:
+                    fp_mj += float(mj)
+                except (ValueError, TypeError):
+                    pass
+        if fp_mj > 0:
+            zone_areas["农田保护区"] = fp_mj / 10000
+
+    total = anchors.total_area_ha
+    anchors.zone_ratios = {}
+    for zone_name in ["农田保护区", "生态保护区", "村庄建设区", "一般农业区"]:
+        area = zone_areas.get(zone_name, 0.0)
+        anchors.zone_ratios[zone_name] = area / total if total > 0 else 0.0
+
+    # Normalize: ensure sum ≈ 1.0
+    ratio_sum = sum(anchors.zone_ratios.values())
+    if ratio_sum > 0 and abs(ratio_sum - 1.0) > 0.01:
+        for zone_name in anchors.zone_ratios:
+            anchors.zone_ratios[zone_name] /= ratio_sum
+
+    logger.info(
+        "[metric_anchors] Planning zone targets (4区): "
+        + ", ".join(f"{k}={v:.2%} ({v * total:.1f}ha)" for k, v in anchors.zone_ratios.items())
+    )

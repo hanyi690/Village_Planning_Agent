@@ -29,18 +29,17 @@ from app.services.modules.gis.layout.zone_schema import (
 )
 from app.services.modules.gis.layout.engine import SpatialLayoutEngine
 from app.services.modules.gis.layout.planning_intent import (
-    UnifiedSpatialIntent, ZoneIntent, FacilityIntent, AxisIntent,
-    ConstraintIntent, Direction, Density,
+    UnifiedSpatialIntent, ZoneIntent, Direction, Density,
 )
 from app.database.engine import get_db_path
 
 # ── Color tables ──────────────────────────────────────────────
 
 PLANNING_ZONE_MPL = {
-    "农田保护区": {"fill": "#FFE4B5", "stroke": "#8B6914", "label": "Farmland Reserve"},
-    "村庄建设区": {"fill": "#FF6347", "stroke": "#B83060", "label": "Village Construction"},
-    "生态保护区": {"fill": "#2E8B57", "stroke": "#006400", "label": "Ecological Protection"},
-    "一般农业区": {"fill": "#98FB98", "stroke": "#2E8B57", "label": "General Agriculture"},
+    "农田保护区": {"fill": "#FFE4B5", "stroke": "#DAA520", "label": "Farmland Reserve"},
+    "村庄建设区": {"fill": "#FF6347", "stroke": "#CC4F39", "label": "Village Construction"},
+    "生态保护区": {"fill": "#2E8B57", "stroke": "#1B5E20", "label": "Ecological Protection"},
+    "一般农业区": {"fill": "#98FB98", "stroke": "#66CD66", "label": "General Agriculture"},
 }
 
 FUNCTION_ZONE_MPL = {k: {"fill": v["fill"], "stroke": v["stroke"], "label": k}
@@ -532,87 +531,90 @@ def print_stats(configs: List[Dict], boundary_area_ha: float = 0):
     print("=" * 65)
 
 
-def _build_default_intent() -> UnifiedSpatialIntent:
-    """Build a default planning intent for Jintian village (bypasses LLM)."""
-    return UnifiedSpatialIntent(
-        zones=[
-            ZoneIntent(
-                zone_id="Z_farmland", land_use="农业用地", dlbm="0110",
-                area_ratio=0.35, direction=Direction.SOUTH,
-                preserve_existing=True,
-                dlbm_aliases=["0120", "0130"],
-            ),
-            ZoneIntent(
-                zone_id="Z_construction", land_use="居住用地", dlbm="0600",
-                area_ratio=0.05, direction=Direction.CENTER,
-                density=Density.MEDIUM, preserve_existing=True,
-                dlbm_aliases=["0700", "0900", "1000", "1200"],
-            ),
-            ZoneIntent(
-                zone_id="Z_ecological", land_use="生态绿地", dlbm="0300",
-                area_ratio=0.55, direction=Direction.NORTH,
-                preserve_existing=True,
-                dlbm_aliases=["0200", "1340", "1350"],
-            ),
-            ZoneIntent(
-                zone_id="Z_agriculture", land_use="一般农业区", dlbm="0110",
-                area_ratio=0.05, direction=Direction.SOUTHWEST,
-                preserve_existing=True,
-                dlbm_aliases=["0120"],
-            ),
-        ],
-        facilities=[
-            FacilityIntent(
-                facility_id="F_committee", facility_type="村委会",
-                target_zone="Z_construction", location_hint="village center",
-                status="existing",
-            ),
-            FacilityIntent(
-                facility_id="F_school", facility_type="学校",
-                target_zone="Z_construction", location_hint="near main road",
-                status="existing",
-            ),
-        ],
-        axes=[
-            AxisIntent(
-                axis_id="A_primary", axis_type="primary",
-                direction=Direction.EAST_WEST,
-                connects=["Z_construction", "Z_agriculture"],
-                label="主要发展轴",
-            ),
-            AxisIntent(
-                axis_id="A_secondary", axis_type="secondary",
-                direction=Direction.NORTH_SOUTH,
-                connects=["Z_construction", "Z_ecological"],
-                label="次要发展轴",
-            ),
-        ],
-        constraints=[
-            ConstraintIntent(
-                constraint_id="C_farmland", constraint_type="farmland_protection",
-                strict=True,
-            ),
-            ConstraintIntent(
-                constraint_id="C_ecological", constraint_type="ecological_redline",
-                strict=True,
-            ),
-        ],
-        metadata={
-            "enable_ca_refinement": True,
-            "village_name": "金田村",
-            "total_area_ha": 2868.4,
-            "farmland_ha": 180.0,
-            "construction_ha": 30.0,
-            "ecological_ha": 700.0,
-            "general_agriculture_ha": 1958.4,
-        },
+def _extract_village_name(reports: Dict) -> str:
+    """Extract village name from reports, fallback to default."""
+    import re
+    loc = reports.get("location", {})
+    summary = loc.get("summary", {})
+    text = summary.get("text_summary", "")
+    if text:
+        m = re.search(r"([^\s，。]+(?:村|社区|组))", text)
+        if m:
+            return m.group(1)
+    return "金田村"
+
+
+async def parse_intent_via_llm(
+    reports: Dict, village_name: str, gis_data: Optional[Dict] = None
+) -> UnifiedSpatialIntent:
+    """Call LLM to parse reports into UnifiedSpatialIntent."""
+    from app.tools.gis.layout_tools import _aparse_reports_to_intent, _output_to_intent
+    from app.services.modules.parsing.schemas import IntentOutput
+
+    result = await _aparse_reports_to_intent(
+        reports=reports, village_name=village_name, gis_data=gis_data
     )
+
+    if not result.get("success"):
+        raise RuntimeError(f"LLM parse failed: {result.get('error', 'unknown')}")
+
+    intent_output = IntentOutput.model_validate(result["data"]["intent_json"])
+    intent = _output_to_intent(intent_output)
+
+    print(f"LLM parse: {result['data']['zone_count']} zones, "
+          f"{result['data']['facility_count']} facilities, "
+          f"{result['data']['axis_count']} axes")
+    print(f"  zones: {result['data']['zones']}")
+    print(f"  anchor_confidence: {result['data'].get('anchor_confidence', 'N/A')}")
+
+    return intent
+
+
+def _build_intent_from_dlbm(landuse: Optional[Dict]) -> UnifiedSpatialIntent:
+    """Lightweight DLBM fallback — only zone area ratios, engine infers the rest."""
+    if not landuse:
+        return UnifiedSpatialIntent(zones=[], facilities=[], axes=[],
+                                    constraints=[], metadata={})
+
+    from app.services.modules.gis.layout.zone_schema import get_zone_type_for_dlbm
+
+    zone_counts: Dict[str, float] = {}
+    total = 0.0
+    for feat in landuse.get("features", []):
+        props = feat.get("properties", {})
+        dlbm = str(props.get("DLBM", ""))
+        mj = props.get("DLMJ")
+        if not dlbm or mj is None:
+            continue
+        try:
+            area = float(mj)
+            zt = get_zone_type_for_dlbm(dlbm)
+            zone_counts[zt] = zone_counts.get(zt, 0.0) + area
+            total += area
+        except (ValueError, TypeError):
+            continue
+
+    if total <= 0:
+        return UnifiedSpatialIntent(zones=[], facilities=[], axes=[],
+                                    constraints=[], metadata={})
+
+    zones = [
+        ZoneIntent(zone_id=f"Z_{i+1}", land_use=zt, dlbm="",
+                   area_ratio=round(area / total, 4),
+                   direction=Direction.CENTER, density=Density.MEDIUM,
+                   preserve_existing=True)
+        for i, (zt, area) in enumerate(sorted(zone_counts.items(),
+                                               key=lambda x: -x[1]))
+    ]
+    return UnifiedSpatialIntent(zones=zones, facilities=[], axes=[],
+                                constraints=[], metadata={"source": "dlbm_fallback"})
 
 
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
     import argparse
+    import asyncio
     parser = argparse.ArgumentParser(description="Render planning layout layers")
     parser.add_argument("--output", default="test-screenshots", help="Output directory")
     args = parser.parse_args()
@@ -626,8 +628,21 @@ def main():
         print("No reports found in DB, exiting")
         return
 
-    # Build intent directly (bypass LLM to avoid timeout)
-    intent = _build_default_intent()
+    village_name = _extract_village_name(reports)
+    gis_data = {
+        "landuse_current_geojson": landuse,
+        "boundary_current_geojson": boundary,
+    }
+
+    # Primary: LLM parsing from reports
+    try:
+        print(f"Parsing reports via LLM (village={village_name})...")
+        intent = asyncio.run(parse_intent_via_llm(reports, village_name, gis_data))
+    except Exception as e:
+        print(f"LLM parse failed: {e}")
+        print("Falling back to DLBM statistics")
+        intent = _build_intent_from_dlbm(landuse)
+
     print(f"Intent: {len(intent.zones)} zones, "
           f"{len(intent.facilities)} facilities, "
           f"{len(intent.axes)} axes")

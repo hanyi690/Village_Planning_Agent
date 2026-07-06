@@ -27,6 +27,82 @@ import type {
   ToolStatusMessage,
   GISLayerConfig,
 } from "@/types/message/message-types";
+
+// Pipeline trace types (mirrors backend trace.py)
+export interface ParseTrace {
+  source: string;
+  llm_model: string;
+  llm_prompt: string;
+  llm_response: string;
+  llm_retry_count: number;
+  correction_round: boolean;
+  correction_prompt: string;
+  correction_response: string;
+  anchors: Record<string, unknown>;
+  anchor_confidence: string;
+  semantic_validation_passed: boolean;
+  semantic_violations: string[];
+  timing_ms: number;
+}
+
+export interface KGTrace {
+  built: boolean;
+  parcel_count: number;
+  triple_count: number;
+  constraint_count: number;
+  indicator_count: number;
+  adjacency_edge_count: number;
+  triples_sample: Record<string, unknown>[];
+  constraints_detail: Record<string, unknown>;
+  timing_ms: number;
+}
+
+export interface ConflictTrace {
+  metric_conflicts: Record<string, unknown>[];
+  constraint_violations: Record<string, unknown>[];
+  resolution_applied: Record<string, unknown>[];
+  timing_ms: number;
+}
+
+export interface MIPTrace {
+  mode: string;
+  solver_status: string;
+  variable_count: number;
+  binary_variable_count: number;
+  objective_value: number;
+  time_limit_seconds: number;
+  zone_targets: Record<string, number>;
+  zone_actual: Record<string, number>;
+  zone_deviations: Record<string, number>;
+  kg_slack_values: Record<string, number>;
+  adjacency_pairs: number;
+  changed_parcels: number;
+  changed_pct: number;
+  timing_ms: number;
+}
+
+export interface ValidationRound {
+  round_number: number;
+  total_violations: number;
+  violations: Record<string, unknown>[];
+  adjustments: Record<string, number>;
+  damping: number;
+  timing_ms: number;
+}
+
+export interface ValidationLoopTrace {
+  rounds: ValidationRound[];
+  final_status: string;
+}
+
+export interface PipelineTrace {
+  parse?: ParseTrace;
+  kg?: KGTrace;
+  conflicts?: ConflictTrace;
+  mip?: MIPTrace;
+  validation?: ValidationLoopTrace;
+  total_timing_ms: number;
+}
 import type { VillageInputData } from "../components/VillageInputForm";
 import type {
   VillageInfo,
@@ -209,6 +285,9 @@ export interface PlanningState {
   // GIS Layers (SSE-driven, no REST API needed)
   gisLayers: Record<string, GISLayerConfig[]>;
 
+  // Pipeline trace (full process recording for parse→layout→validate)
+  pipelineTrace: PipelineTrace | null;
+
   // Three-Panel Layout Navigation State
   selectedNavigationKey: NavigationKey | null;
   isRightPanelExpanded: boolean;
@@ -343,6 +422,7 @@ function createInitialState(conversationId: string): PlanningState {
     toolStatuses: {},
     // GIS Layers (SSE-driven)
     gisLayers: {},
+    pipelineTrace: null,
 
     // Three-Panel Layout
     selectedNavigationKey: null,
@@ -1180,6 +1260,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
           sensitivityClass?: string;
           recommendations?: string[];
         };
+        pipeline_trace?: PipelineTrace;
       };
       const dimensionKey = gisData.dimensionKey || "";
       if (!dimensionKey) return;
@@ -1203,6 +1284,11 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         analysisData: gisData.analysisData,
       };
       state.messages.push(newMessage);
+
+      // Store pipeline_trace if present
+      if (gisData.pipeline_trace) {
+        state.pipelineTrace = gisData.pipeline_trace;
+      }
 
       // Bridge: also populate gisLayers for Map tab
       if (gisData.layers && Array.isArray(gisData.layers)) {

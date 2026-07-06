@@ -99,10 +99,10 @@ export const PLANNING_COLORS = {
   },
   // Planning zone styles (规划分区 — 与现状功能区色系不同)
   planning_zone: {
-    '农田保护区': { fill: '#D4A574', stroke: '#8B6914' },
-    '村庄建设区': { fill: '#E8637A', stroke: '#B83060' },
-    '生态保护区': { fill: '#2E8B57', stroke: '#1A5632' },
-    '一般农业区': { fill: '#7CCD7C', stroke: '#4A8B4A' },
+    '农田保护区': { fill: '#FFE4B5', stroke: '#DAA520' },
+    '村庄建设区': { fill: '#FF6347', stroke: '#CC4F39' },
+    '生态保护区': { fill: '#2E8B57', stroke: '#1B5E20' },
+    '一般农业区': { fill: '#98FB98', stroke: '#66CD66' },
   },
   // Infrastructure styles (基础设施)
   infrastructure: {

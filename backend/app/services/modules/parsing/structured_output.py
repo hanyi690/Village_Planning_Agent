@@ -10,7 +10,7 @@ This module provides a single entry point `structured_parse()` that:
 import asyncio
 import json
 import logging
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional, Tuple, Type
 
 from pydantic import BaseModel
 
@@ -32,27 +32,14 @@ async def structured_parse(
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     temperature: float = _DEFAULT_TEMPERATURE,
     model_name: Optional[str] = None,
-) -> BaseModel:
+) -> Tuple[BaseModel, Dict[str, Any]]:
     """Unified structured parse entry point.
 
     Uses Instructor + DashScope for Pydantic schema-enforced extraction.
     On schema violation, Instructor auto-retries up to max_retries times.
 
-    Args:
-        content: Input text to parse.
-        output_schema: Pydantic BaseModel class defining the output structure.
-        anchors: Optional metric anchors to inject into prompt as few-shot.
-        dimension_key: Optional dimension identifier (for summary generation).
-        max_retries: Auto-retry count on schema violation (default 3).
-        max_tokens: Max output tokens (default 2000).
-        temperature: Generation temperature (default 0).
-        model_name: Override model name (default: uses FLASH_MODEL_NAME).
-
     Returns:
-        Pydantic instance of output_schema.
-
-    Raises:
-        Exception: If Instructor fails after max_retries.
+        Tuple of (Pydantic instance, trace_info dict).
     """
     from app.core.instructor_client import get_instructor_client
 
@@ -60,6 +47,12 @@ async def structured_parse(
     model = model_name or _get_model_name()
 
     prompt = _build_prompt(content, anchors, dimension_key, output_schema)
+
+    trace_info: Dict[str, Any] = {
+        "llm_model": model,
+        "llm_prompt": prompt,
+        "llm_retry_count": max_retries,
+    }
 
     try:
         result = await asyncio.to_thread(
@@ -71,11 +64,12 @@ async def structured_parse(
             response_model=output_schema,
             messages=[{"role": "user", "content": prompt}],
         )
+        trace_info["llm_response"] = result.model_dump_json() if hasattr(result, "model_dump_json") else str(result)
     except Exception as e:
         logger.error("[structured_parse] Instructor failed: %s", e)
         raise
 
-    return result
+    return result, trace_info
 
 
 async def structured_parse_with_correction(
@@ -85,31 +79,25 @@ async def structured_parse_with_correction(
     dimension_key: str = "",
     validate_fn: Optional[Any] = None,
     max_retries: int = _DEFAULT_MAX_RETRIES,
-) -> BaseModel:
+) -> Tuple[BaseModel, Dict[str, Any]]:
     """Structured parse with semantic validation + single correction round.
 
-    1. Instructor parse (max_retries=3 handles format issues)
-    2. Semantic validation (area_ratio sum, anchor cross-check, required zones)
-    3. If validation fails: single correction round
-
-    Args:
-        content: Input text.
-        output_schema: Pydantic output schema.
-        anchors: Metric anchors for few-shot injection.
-        dimension_key: Dimension identifier.
-        validate_fn: Callable(result, anchors) -> ValidationResult.
-        max_retries: Instructor retry count.
-
     Returns:
-        Pydantic instance, possibly corrected.
+        Tuple of (Pydantic instance, trace_info dict).
     """
-    result = await structured_parse(
+    result, trace_info = await structured_parse(
         content, output_schema, anchors, dimension_key, max_retries=max_retries,
     )
+
+    trace_info["semantic_validation_passed"] = True
 
     if validate_fn is not None:
         validation = validate_fn(result, anchors)
         if not validation.passed:
+            trace_info["semantic_validation_passed"] = False
+            trace_info["semantic_violations"] = validation.violations
+            trace_info["correction_round"] = True
+
             logger.info(
                 "[structured_parse] Semantic validation failed: %s. Correcting.",
                 validation.violations,
@@ -117,12 +105,15 @@ async def structured_parse_with_correction(
             correction_prompt = _build_correction_prompt(
                 content, anchors, dimension_key, output_schema, result, validation,
             )
-            result = await structured_parse(
+            corrected, correction_trace = await structured_parse(
                 correction_prompt, output_schema, anchors, dimension_key,
                 max_retries=max_retries,
             )
+            trace_info["correction_prompt"] = correction_prompt
+            trace_info["correction_response"] = correction_trace.get("llm_response", "")
+            return corrected, trace_info
 
-    return result
+    return result, trace_info
 
 
 def _get_model_name() -> str:

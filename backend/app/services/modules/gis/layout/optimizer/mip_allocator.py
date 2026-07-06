@@ -20,7 +20,7 @@ DLBM codes map DIRECTLY to planning zones — no intermediate zone_type layer.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from collections import defaultdict
 
 from app.utils.logger import get_logger
@@ -85,29 +85,22 @@ class MIPZoneAllocator:
         adjacency_graph: Optional[Any] = None,
         adjacency_weight: float = 0.5,
         change_penalty_weight: float = 0.3,
-    ) -> Dict[str, Any]:
+    ) -> Tuple[Dict[str, Any], Any]:
         """Run MIP allocation.
 
-        Args:
-            landuse_geojson: Current land use parcels (FeatureCollection)
-            targets: {planning_zone: target_area_ha}
-            constraints: KG constraint dicts (used for hard bounds)
-            kg: Optional PlanningKG
-            adjacency_graph: Optional AdjacencyGraph for spatial constraints
-            adjacency_weight: Weight for adjacency compatibility reward (0 to disable)
-            change_penalty_weight: Weight for change-from-current penalty (0 to disable)
-
         Returns:
-            GeoJSON FeatureCollection with 'assigned_zone' on each feature
+            Tuple of (GeoJSON FeatureCollection, MIPTrace dict).
         """
+        from ..trace import MIPTrace
         try:
             import pulp
         except ImportError:
             logger.error("[MIP] PuLP not installed, falling back to greedy")
             from .mip_solver import ConstraintDrivenAllocator
-            return ConstraintDrivenAllocator().solve(
+            greedy_result = ConstraintDrivenAllocator().solve(
                 landuse_geojson, targets, constraints, kg, mode="greedy"
             )
+            return greedy_result, MIPTrace(mode="greedy-fallback").model_dump()
 
         features = landuse_geojson.get("features", [])
         if not features:
@@ -127,7 +120,7 @@ class MIPZoneAllocator:
         n_zones = len(planning_zones)
 
         if n_parcels == 0 or n_zones == 0:
-            return landuse_geojson
+            return landuse_geojson, MIPTrace().model_dump()
 
         logger.info(
             f"[MIP] Building model: {n_parcels} parcels × {n_zones} zones = "
@@ -307,7 +300,34 @@ class MIPZoneAllocator:
             dev = actual - target
             logger.info(f"  {zt}: {actual:.1f}ha (target={target:.1f}ha, dev={dev:+.1f}ha)")
 
-        return {"type": "FeatureCollection", "features": output_features}
+        # Build MIPTrace
+        solver_status = pulp.LpStatus[status]
+        objective_value = pulp.value(prob.objective) or 0.0
+        zone_deviations = {zt: zone_areas.get(zt, 0) - targets.get(zt, 0) for zt in planning_zones}
+
+        # Collect KG slack values (variables named kg_sl_*)
+        kg_slack_values = {}
+        for v in prob.variables():
+            if v.name.startswith("kg_sl_"):
+                kg_slack_values[v.name] = pulp.value(v) or 0.0
+
+        mip_trace = MIPTrace(
+            mode="KG-driven" if constraints else "DLBM-only",
+            solver_status=solver_status,
+            variable_count=n_parcels * n_zones,
+            binary_variable_count=len(x),
+            objective_value=objective_value,
+            time_limit_seconds=time_limit,
+            zone_targets=dict(targets),
+            zone_actual=dict(zone_areas),
+            zone_deviations=zone_deviations,
+            kg_slack_values=kg_slack_values,
+            adjacency_pairs=len(adj_index_pairs),
+            changed_parcels=changed,
+            changed_pct=changed / len(parcels) * 100 if parcels else 0,
+        )
+
+        return {"type": "FeatureCollection", "features": output_features}, mip_trace.model_dump()
 
     @staticmethod
     def _get_preference_cost(dlbm: str, planning_zone: str) -> int:

@@ -122,12 +122,28 @@ async def _aparse_reports_to_intent(
     )
 
     # Layer 2: Instructor structured parse with semantic validation
+    parse_trace = None
     try:
-        intent_output: IntentOutput = await structured_parse_with_correction(
+        intent_output, parse_trace_raw = await structured_parse_with_correction(
             content=prompt,
             output_schema=IntentOutput,
             anchors=anchors_dict,
             validate_fn=semantic_validate,
+        )
+        from app.services.modules.gis.layout.trace import ParseTrace
+        parse_trace = ParseTrace(
+            source="db_reports",
+            llm_model=parse_trace_raw.get("llm_model", ""),
+            llm_prompt=parse_trace_raw.get("llm_prompt", ""),
+            llm_response=parse_trace_raw.get("llm_response", ""),
+            llm_retry_count=parse_trace_raw.get("llm_retry_count", 0),
+            correction_round=parse_trace_raw.get("correction_round", False),
+            correction_prompt=parse_trace_raw.get("correction_prompt", ""),
+            correction_response=parse_trace_raw.get("correction_response", ""),
+            anchors=anchors_dict,
+            anchor_confidence=anchors.confidence_label,
+            semantic_validation_passed=parse_trace_raw.get("semantic_validation_passed", True),
+            semantic_violations=parse_trace_raw.get("semantic_violations", []),
         )
     except Exception as e:
         logger.error("_aparse_reports_to_intent structured parse failed: %s", e)
@@ -140,14 +156,18 @@ async def _aparse_reports_to_intent(
     intent = _output_to_intent(intent_output)
     zone_summary = ", ".join(f"{z.land_use}({z.area_ratio:.1%})" for z in intent.zones)
 
-    return _make_result(True, {
+    result_data = {
         "zone_count": len(intent.zones),
         "facility_count": len(intent.facilities),
         "axis_count": len(intent.axes),
         "zones": zone_summary,
         "intent_json": intent_output.model_dump(),
         "anchor_confidence": anchors.confidence,
-    })
+    }
+    if parse_trace is not None:
+        result_data["parse_trace"] = parse_trace.model_dump()
+
+    return _make_result(True, result_data)
 
 
 def _parse_reports_to_intent(

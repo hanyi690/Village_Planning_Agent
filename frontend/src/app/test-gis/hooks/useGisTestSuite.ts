@@ -163,6 +163,11 @@ export function useGisTestSuite(): GisTestSuiteState {
           color: cfg.color,
         })).filter(l => l.geojson);
         setTestLayers('layout', layoutLayers);
+
+        // Store pipeline_trace in planning store
+        if (result.pipeline_trace) {
+          usePlanningStore.setState({ pipelineTrace: result.pipeline_trace as any });
+        }
       }
 
       // Special handling for landuse-change: two geojsons

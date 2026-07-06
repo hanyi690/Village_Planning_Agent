@@ -14,6 +14,28 @@ from typing import Dict, List, Set, Tuple
 
 
 # ============================================
+# SEMANTIC NOTE: Two orthogonal classification systems
+#
+# 1. Function zones (7 types) — DLBM_TO_ZONE_TYPE
+#    Based on GB/T 21010 current land use classification.
+#    Used by: function_zone layer, render_planning_layout, _build_default_intent.
+#    Categories: 农业用地, 生态绿地, 居住用地, 产业用地,
+#                公共服务用地, 商业用地, 交通用地, 水域
+#
+# 2. Planning zones (4 zones) — DLBM_TO_PLANNING_ZONE
+#    Based on 国土空间规划 "三区三线" (three zones, three lines).
+#    Used by: planning_zone layer, metric_anchors zone_ratios,
+#             MIP allocator, PLANNING_ZONE_COLORS.
+#    Categories: 农田保护区, 生态保护区, 村庄建设区, 一般农业区
+#
+# Mapping: 7→4 is many-to-one (e.g. 居住+产业+公服+商业+交通 → 村庄建设区).
+# These two systems MUST NOT be mixed — a single DLBM code maps to
+# exactly one zone_type AND exactly one planning_zone, but the
+# aggregated areas are computed independently.
+# ============================================
+
+
+# ============================================
 # Zone type colors (synced with frontend PLANNING_COLORS.function_zone)
 # GB/T 21010 + 市级国土空间规划制图规范配色
 # ============================================

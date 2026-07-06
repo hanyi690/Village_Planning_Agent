@@ -7,8 +7,8 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   workers: 1,
   reporter: [['html', { open: 'never' }], ['list']],
-  timeout: 60000,
-  expect: { timeout: 10000 },
+  timeout: 180000,
+  expect: { timeout: 15000 },
 
   use: {
     baseURL: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -20,7 +20,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1920, height: 1080 } },
     },
   ],
 

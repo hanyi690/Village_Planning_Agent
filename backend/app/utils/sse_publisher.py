@@ -337,7 +337,8 @@ class SSEPublisher:
     def send_gis_result(session_id: str, dimension_key: str, dimension_name: str,
                         summary: str, layers: List[Dict[str, Any]],
                         map_options: Optional[Dict[str, Any]] = None,
-                        analysis_data: Optional[Dict[str, Any]] = None) -> None:
+                        analysis_data: Optional[Dict[str, Any]] = None,
+                        pipeline_trace: Optional[Dict[str, Any]] = None) -> None:
         """
         发送 GIS 分析结果事件
 
@@ -349,6 +350,7 @@ class SSEPublisher:
             layers: GIS 图层配置列表
             map_options: 地图选项（center, zoom）
             analysis_data: 分析数据（评分、建议等）
+            pipeline_trace: 规划→GIS 全过程记录
         """
         event = GisResultEvent(
             dimension_key=dimension_key,
@@ -359,6 +361,9 @@ class SSEPublisher:
             analysis_data=GISAnalysisData(**analysis_data) if analysis_data else None,
         )
         event_data = event.model_dump(by_alias=True, exclude_none=True)
+
+        if pipeline_trace:
+            event_data["pipeline_trace"] = pipeline_trace
 
         SSEPublisher.send_event(
             session_id=session_id,
