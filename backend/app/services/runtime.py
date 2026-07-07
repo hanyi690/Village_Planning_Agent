@@ -28,6 +28,7 @@ from fastapi import BackgroundTasks, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph
+from langgraph.types import Command
 
 from app.database.engine import get_global_checkpointer
 from app.database.operations import (
@@ -57,6 +58,16 @@ from app.utils.event_factory import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Known intent tool names that should not be overridden by synthetic messages
+_KNOWN_INTENT_NAMES = frozenset({"advance_planning_intent", "gis_analysis", "GISAnalysis"})
+
+
+def _has_existing_intent(last_msg) -> bool:
+    """Check if the last message already carries a known intent tool_call."""
+    if not last_msg or not hasattr(last_msg, "tool_calls") or not last_msg.tool_calls:
+        return False
+    return last_msg.tool_calls[0].get("name") in _KNOWN_INTENT_NAMES
 
 
 class PlanningRuntimeService:
@@ -234,6 +245,7 @@ class PlanningRuntimeService:
         disable_tools: bool = False,
         image_ids: Optional[List[str]] = None,
         uploaded_files: Optional[List[Dict]] = None,
+        user_uploaded_gis_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build initial state for main graph execution.
 
@@ -284,6 +296,7 @@ class PlanningRuntimeService:
             "pause_after_step": False,  # 新架构：暂停标志
             "previous_layer": 0,  # 新架构：刚完成的层级
             "gis_analysis_results": {},  # 新架构：GIS分析结果
+            "user_uploaded_data": user_uploaded_gis_data or {},
             "metadata": {
                 "published_layers": [],
                 "version": 0,
@@ -547,25 +560,36 @@ class PlanningRuntimeService:
             await cls.aupdate_state(session_id, clean_state)
             logger.info("[PlanningRuntimeService] [%s] Initial checkpoint phase=%s", session_id, clean_state.get("phase"))
 
-        # 2. Create synthetic AIMessage with advance_planning_intent tool call
-        synthetic_ai_message = AIMessage(
-            content="",
-            tool_calls=[
-                {
-                    "name": "advance_planning_intent",
-                    "id": f"call_{session_id[:8]}",
-                    "args": {"reason": "用户启动规划"}
-                }
-            ]
-        )
+        # 2. Check if last message already carries an intent (e.g., gis_analysis)
+        #    If so, skip synthetic message injection to avoid overriding user intent
+        state_values = state_values or await cls.aget_state_values(session_id)
+        messages = state_values.get("messages", [])
+        last_msg = messages[-1] if messages else None
+        has_existing_intent = _has_existing_intent(last_msg)
 
-        # 3. Use as_node="conversation" to skip conversation_node
-        await cls.aupdate_state(
-            session_id,
-            {"messages": [synthetic_ai_message]},
-            as_node="conversation"
-        )
-        logger.info(f"[PlanningRuntimeService] [{session_id}] Synthetic AIMessage added as conversation output")
+        if has_existing_intent:
+            logger.info(
+                "[PlanningRuntimeService] [%s] Last message already has intent '%s', skipping synthetic injection",
+                session_id, last_msg.tool_calls[0].get("name"),
+            )
+        else:
+            # Create synthetic AIMessage with advance_planning_intent tool call
+            synthetic_ai_message = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "advance_planning_intent",
+                        "id": f"call_{session_id[:8]}",
+                        "args": {"reason": "用户启动规划"}
+                    }
+                ]
+            )
+
+            await cls.aupdate_state(
+                session_id,
+                {"messages": [synthetic_ai_message]},
+            )
+            logger.info(f"[PlanningRuntimeService] [{session_id}] Synthetic AIMessage added to state")
 
         # 4. Build config with max_concurrency + optional streaming callback
         config = cls.get_thread_config(session_id, checkpoint_id=checkpoint_id)
@@ -611,8 +635,19 @@ class PlanningRuntimeService:
         revision_dimensions = []
 
         try:
-            # Use dual stream mode: 'values' for state updates, 'checkpoints' for checkpoint persistence
-            stream_iterator = cls._graph.astream(None, config, stream_mode=['values', 'checkpoints'], context=planning_context)
+            # Use Command(goto="conversation") to resume from conversation node,
+            # so after_conversation routing runs with Runtime context provided.
+            # For initial session creation, use None to start fresh.
+            if initial_state:
+                stream_input = None
+            else:
+                stream_input = Command(goto="conversation")
+
+            stream_iterator = cls._graph.astream(
+                stream_input, config,
+                stream_mode=['values', 'checkpoints'],
+                context=planning_context,
+            )
 
             async for event in stream_iterator:
                 if isinstance(event, tuple) and len(event) == 2:

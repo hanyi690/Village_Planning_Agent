@@ -172,7 +172,7 @@ class ReviewService:
             "is_revision": True,
             "revision_images": images or [],
             "pause_after_step": False,
-        }, as_node="revision")  # 使用 revision 节点（而非不存在 review_service）
+        })
 
         logger.info(f"[ReviewService] [{session_id}] Rejected with feedback, dimensions={dimensions}")
 
@@ -337,8 +337,8 @@ class ReviewService:
                 "revision_from_checkpoint_id": rollback_checkpoint_id,
             }
 
-        # Apply rollback state using PlanningRuntimeService with as_node=None
-        await PlanningRuntimeService.aupdate_state(session_id, rollback_state, as_node=None)
+        # Apply rollback state
+        await PlanningRuntimeService.aupdate_state(session_id, rollback_state)
 
         # Update database status
         await update_planning_session_async(session_id, {

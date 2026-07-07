@@ -301,6 +301,10 @@ export interface PlanningState {
   // ============================================
   /** Layer-level RAG switch config: { 1: true, 2: false, 3: true } */
   ragLayerConfig: Record<number, boolean>;
+
+  // GIS state
+  gisGenerating: boolean;
+  isFullMapOpen: boolean;
 }
 
 // ============================================
@@ -434,6 +438,10 @@ function createInitialState(conversationId: string): PlanningState {
 
     // Layer-level RAG config (default: all enabled)
     ragLayerConfig: { 1: true, 2: false, 3: true },
+
+    // GIS state
+    gisGenerating: false,
+    isFullMapOpen: false,
   };
 }
 
@@ -548,6 +556,9 @@ export interface PlanningActions {
 
   // ProcessPanel
   setProcessPanelTab: (tab: ProcessPanelTab) => void;
+
+  // GIS
+  setFullMapOpen: (open: boolean) => void;
 
   // ============================================
   // NEW: Layer-level RAG Configuration
@@ -1297,6 +1308,14 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
           state.gisLayers[`result_${dimensionKey}`] = layerConfigs;
         }
       }
+
+      // Auto-activate map tab on first GIS result
+      const hadNoGisData = Object.keys(state.gisLayers).length === 0;
+      if (hadNoGisData) {
+        state.isRightPanelExpanded = true;
+        state.processPanelTab = 'map';
+      }
+      state.gisGenerating = false;
       break;
     }
 
@@ -1556,6 +1575,13 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       if (gisUpdateData.layers) {
         state.gisLayers[key] = gisUpdateData.layers as GISLayerConfig[];
       }
+      // Auto-activate map tab on first GIS data arrival
+      const hadNoGisData = Object.keys(state.gisLayers).length === 0;
+      if (hadNoGisData) {
+        state.isRightPanelExpanded = true;
+        state.processPanelTab = 'map';
+      }
+      if (!state.gisGenerating) state.gisGenerating = true;
       break;
     }
 
@@ -1595,11 +1621,13 @@ function deriveUIStateInStore(state: PlanningState): void {
     state.completedDimensions = newCompletedDimensions;
   }
 
-  // Derive completedLayers
+  // Derive completedLayers: a layer is complete only when ALL dimensions are done
+  const totalDims = (layer: number) =>
+    state.layerDimensionCount[layer] || getDimensionsByLayer(layer).length;
   state.completedLayers = {
-    1: state.completedDimensions.layer1.length > 0,
-    2: state.completedDimensions.layer2.length > 0,
-    3: state.completedDimensions.layer3.length > 0,
+    1: state.completedDimensions.layer1.length >= totalDims(1) && totalDims(1) > 0,
+    2: state.completedDimensions.layer2.length >= totalDims(2) && totalDims(2) > 0,
+    3: state.completedDimensions.layer3.length >= totalDims(3) && totalDims(3) > 0,
   };
 
   // Derive pause state
@@ -2112,6 +2140,12 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     setProcessPanelTab: (tab) =>
       set((state) => {
         state.processPanelTab = tab;
+      }),
+
+    // GIS
+    setFullMapOpen: (open) =>
+      set((state) => {
+        state.isFullMapOpen = open;
       }),
 
     // ============================================

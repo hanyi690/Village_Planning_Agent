@@ -504,4 +504,10 @@ class SharedGISContext:
         else:
             instance.load_from_data_manager()
 
+        has_boundary = bool(instance.get_data_by_type("boundary"))
+        has_landuse = bool(instance.get_data_by_type("landuse_current"))
+        if not has_boundary and not has_landuse:
+            logger.info("[SharedGISContext] No boundary/landuse data found, loading jintian test data as fallback")
+            instance.load_jintian_test_data()
+
         return instance

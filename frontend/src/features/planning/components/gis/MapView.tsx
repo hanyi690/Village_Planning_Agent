@@ -123,6 +123,7 @@ interface MapViewProps {
   baseMapType?: BaseMapType; // Default: 'vector' (planning法定底图)
   showLegend?: boolean; // Whether to show legend panel
   legendPosition?: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
+  visibleLayerTypes?: Set<LayerType>; // Optional: filter which layers to render
 }
 
 // Layer rendering priority (numerical order, higher = top layer)
@@ -166,7 +167,15 @@ export default function MapView({
   baseMapType = 'vector',
   showLegend = true,
   legendPosition = 'bottom-right',
+  visibleLayerTypes,
 }: MapViewProps) {
+  // Filter layers by visible types if provided
+  const filteredLayers = useMemo(
+    () => visibleLayerTypes
+      ? layers.filter((l) => visibleLayerTypes.has(l.layerType as LayerType))
+      : layers,
+    [layers, visibleLayerTypes],
+  );
   const [mounted, setMounted] = useState(false);
   const mapRef = useRef<MapRef>(null);
 
@@ -195,7 +204,7 @@ export default function MapView({
     const sourceId = (feature.source as string) || '';
     const layerMatch = sourceId.match(/layer-\d+-(.+)/);
     const layerName = layerMatch?.[1] || '未知图层';
-    const layerType = layers.find(l => l.layerName === layerName)?.layerType || 'custom';
+    const layerType = filteredLayers.find(l => l.layerName === layerName)?.layerType || 'custom';
 
     setPopupInfo({
       longitude: coordinates.lng,
@@ -204,7 +213,7 @@ export default function MapView({
       layerName,
       layerType,
     });
-  }, [layers]);
+  }, [filteredLayers]);
 
   // Close popup
   const closePopup = useCallback(() => {
@@ -217,7 +226,7 @@ export default function MapView({
 
     // Prefer village-level boundary (fewer features, more local)
     // over county-level admin boundaries
-    const boundaryLayers = layers.filter(l => l.layerType === 'boundary');
+    const boundaryLayers = filteredLayers.filter(l => l.layerType === 'boundary');
     if (boundaryLayers.length === 0) return;
 
     // Find the best boundary: prefer layers with fewer features (village > town > county)
@@ -245,11 +254,11 @@ export default function MapView({
         { padding: 40, duration: 1000 }
       );
     }
-  }, [mounted, layers]);
+  }, [mounted, filteredLayers]);
 
-  // 构建 GeoJSON sources - 添加图层渲染优先级排序
+  // Build GeoJSON sources with layer priority sorting
   const geojsonSources = useMemo(() => {
-    return [...layers].sort((a, b) => {
+    return [...filteredLayers].sort((a, b) => {
       const pa = LAYER_PRIORITY[a.layerType] || 0;
       const pb = LAYER_PRIORITY[b.layerType] || 0;
       return pa - pb;
@@ -257,19 +266,19 @@ export default function MapView({
       const sourceId = `layer-${index}-${layer.layerName}`;
       return { sourceId, data: layer.geojson, layer };
     });
-  }, [layers]);
+  }, [filteredLayers]);
 
   // Extract active layer types for legend
   const activeLayerTypes = useMemo(() => {
     const types = new Set<LayerType>();
-    for (const layer of layers) {
+    for (const layer of filteredLayers) {
       const layerType = layer.layerType as LayerType;
       if (layerType && PLANNING_COLORS[layerType]) {
         types.add(layerType);
       }
     }
     return Array.from(types);
-  }, [layers]);
+  }, [filteredLayers]);
 
   // Build layer styles — unified: ['get', 'color'] with ['match'] fallback
   const layerStyles = useMemo(() => {

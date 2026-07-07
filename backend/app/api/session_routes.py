@@ -284,6 +284,7 @@ async def create_session(
     session_id = str(uuid4())
     uploaded_files: List[Dict] = []
     parsed_content = village_data
+    user_uploaded_gis_data: Dict[str, Any] = {}
 
     # Process uploaded files and store to database
     file_groups = [
@@ -318,6 +319,20 @@ async def create_session(
                 if not constraints or constraints == "无特殊约束":
                     constraints = r["parsed_text"].strip()
 
+            # Collect GeoJSON data for GIS pipeline
+            if r.get("gis_data"):
+                dtype = r.get("gis_data_type")
+                if dtype:
+                    user_uploaded_gis_data[dtype] = r["gis_data"]
+                else:
+                    fname = r.get("filename", "").lower()
+                    for target_type, keyword in [("boundary", "boundary"), ("landuse_current", "landuse"),
+                                                 ("road", "road"), ("water", "water"),
+                                                 ("construction_zone", "construction")]:
+                        if keyword in fname:
+                            user_uploaded_gis_data[target_type] = r["gis_data"]
+                            break
+
     # 验证数据
     if len(parsed_content.strip()) < 10:
         raise HTTPException(status_code=400, detail="村庄数据不能为空或过短")
@@ -339,6 +354,7 @@ async def create_session(
         rag_enabled=rag_enabled,
         rag_layer_config=parsed_rag_layer_config,
         uploaded_files=uploaded_files if uploaded_files else None,
+        user_uploaded_gis_data=user_uploaded_gis_data if user_uploaded_gis_data else None,
     )
 
     sse_manager.init_session(session_id, {
@@ -486,7 +502,7 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
             "revision_feedback": request.feedback,
             "revision_impact_tree": final_tree,
             "revision_completed_dims": {},
-        }, as_node="conversation")
+        })
 
         # Emit SSE events for immediate visual feedback
         try:
@@ -506,8 +522,29 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
         return {"status": "revision_started", "dimensions": request.dimensions}
 
     if request.message:
-        from langchain_core.messages import HumanMessage
-        await PlanningRuntimeService.aupdate_state(session_id, {"messages": [HumanMessage(content=request.message)]})
+        from langchain_core.messages import HumanMessage, AIMessage
+
+        GIS_KEYWORDS = ["空间布局", "gis分析", "布局分析", "地图分析"]
+        is_gis_request = any(kw in request.message.lower() for kw in GIS_KEYWORDS)
+
+        if is_gis_request:
+            # Inject synthetic gis_analysis AIMessage to route directly to gis_agent
+            synthetic_msg = AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "gis_analysis",
+                    "id": f"call_gis_{session_id[:8]}",
+                    "args": {"reason": request.message}
+                }],
+            )
+            await PlanningRuntimeService.aupdate_state(
+                session_id,
+                {"messages": [HumanMessage(content=request.message), synthetic_msg]},
+            )
+            logger.info("[feedback] [%s] GIS intent detected, injected gis_analysis synthetic message", session_id)
+        else:
+            await PlanningRuntimeService.aupdate_state(session_id, {"messages": [HumanMessage(content=request.message)]})
+
         asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
         return {"status": "message_accepted"}
 

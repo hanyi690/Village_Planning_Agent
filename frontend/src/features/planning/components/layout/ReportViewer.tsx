@@ -27,6 +27,8 @@ import {
   useApprovalActions,
   useDimensionRagSources,
   useProjectName,
+  usePendingReviewLayer,
+  useHasGisLayers,
   useCompletedLayers,
   useCascadeChain,
   useRevisionCompletedKeys,
@@ -154,6 +156,8 @@ const ReportViewer = memo(function ReportViewer({
   const status = useStatus();
   const isPaused = useIsPaused();
   const currentLayer = useCurrentLayer();
+  const pendingReviewLayer = usePendingReviewLayer();
+  const hasGisLayers = useHasGisLayers();
   const reports = useReports();
   const dimensionProgress = useDimensionProgressAll();
   const { approve, isSubmitting } = useApprovalActions();
@@ -944,6 +948,36 @@ const ReportViewer = memo(function ReportViewer({
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 lg:p-8">
         <div className="max-w-4xl mx-auto space-y-4">
+          {/* Pipeline progress: L1 -> L2 -> L3 -> GIS */}
+          {!showInputForm && (
+            <div className="flex items-center gap-2 px-4 py-2.5 bg-slate-50 rounded-xl border border-slate-100">
+              {([
+                { key: 'L1', label: '现状分析', done: completedLayers[1] },
+                { key: 'L2', label: '规划思路', done: completedLayers[2] },
+                { key: 'L3', label: '详细规划', done: completedLayers[3] },
+                { key: 'GIS', label: '空间布局', done: hasGisLayers },
+              ] as const).map((step, i) => (
+                <React.Fragment key={step.key}>
+                  {i > 0 && (
+                    <div className={'w-6 h-0.5 ' + (step.done ? 'bg-emerald-400' : 'bg-slate-200')} />
+                  )}
+                  <div className="flex items-center gap-1.5">
+                    <div
+                      className={'w-5 h-5 rounded-full text-[10px] font-medium flex items-center justify-center ' + (
+                        step.done
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-slate-200 text-slate-500'
+                      )}
+                    >
+                      {step.done ? '✓' : step.key}
+                    </div>
+                    <span className="text-xs text-slate-600">{step.label}</span>
+                  </div>
+                </React.Fragment>
+              ))}
+            </div>
+          )}
+
           {/* Input Form Card (idle state) */}
           {showInputForm && <VillageInputForm onSubmit={handleSubmit} />}
 
@@ -1081,16 +1115,16 @@ const ReportViewer = memo(function ReportViewer({
             </motion.div>
           )}
 
-          {/* 审查面板 - 常驻显示 */}
-          {currentLayer &&
+
+          {/* Review panel - only shown when paused for approval */}
+          {isPaused &&
+            pendingReviewLayer &&
             (() => {
+              const reviewLayer = pendingReviewLayer;
               const hasReports =
                 Object.keys(
-                  reports[`layer${currentLayer}` as keyof typeof reports] || {},
+                  reports[`layer${reviewLayer}` as keyof typeof reports] || {},
                 ).length > 0;
-              const layerCompleted = completedLayers[currentLayer as 1 | 2 | 3];
-              const showReviewActions =
-                isPaused || (layerCompleted && sessionId);
               if (!hasReports) return null;
               return (
                 <motion.div
@@ -1108,186 +1142,184 @@ const ReportViewer = memo(function ReportViewer({
                     </div>
                     <div>
                       <h3 className="text-base font-semibold text-amber-800">
-                        Layer {currentLayer} 审查
+                        Layer {reviewLayer} 审查
                       </h3>
                       <p className="text-sm text-amber-600">
-                        {isPaused
-                          ? "规划已暂停，请审批后继续"
-                          : layerCompleted
-                            ? "该层已完成，可随时提交修订意见"
-                            : "报告生成中..."}
+                        规划已暂停，请审批后继续
                       </p>
                     </div>
                   </div>
 
-                  {showReviewActions && (
-                    <>
-                      <div className="flex flex-wrap items-start gap-3">
-                        {isPaused && (
-                          <button
-                            onClick={approve}
-                            disabled={isSubmitting}
-                            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#0ea5e9] text-white text-sm font-medium hover:bg-[#0284c7] transition-colors disabled:opacity-50"
-                          >
-                            <FontAwesomeIcon
-                              icon={faCheck}
-                              style={{ width: 14, height: 14 }}
-                            />
-                            <span>批准继续</span>
-                          </button>
-                        )}
-
-                        <div className="flex-1 min-w-[280px] flex items-start gap-2">
-                          <textarea
-                            value={feedback}
-                            onChange={(e) => {
-                              setFeedback(e.target.value);
-                              // Auto-resize
-                              e.target.style.height = "auto";
-                              e.target.style.height =
-                                e.target.scrollHeight + "px";
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && !e.shiftKey) {
-                                e.preventDefault();
-                                handleRejectWithFeedback();
-                              }
-                            }}
-                            placeholder="输入修订意见...（Enter 提交，Shift+Enter 换行）"
-                            rows={1}
-                            className="flex-1 px-4 py-2.5 rounded-xl border border-amber-200 bg-white text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none overflow-hidden min-h-[40px]"
-                            style={{ height: feedback ? "auto" : "40px" }}
-                          />
-                          <button
-                            onClick={handleRejectWithFeedback}
-                            disabled={isSubmitting}
-                            className="px-4 py-2.5 rounded-xl bg-amber-100 text-amber-700 text-sm font-medium hover:bg-amber-200 transition-colors disabled:opacity-50 whitespace-nowrap"
-                          >
-                            提交修订
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Dimension Selector for Cascade Revision */}
-                      {allCompletedDimsCount > 0 && (
-                        <div className="mt-3">
-                          <button
-                            onClick={() =>
-                              setShowDimensionSelector(!showDimensionSelector)
-                            }
-                            className="text-xs text-amber-600 hover:text-amber-700 flex items-center gap-1 transition-colors"
-                          >
-                            <FontAwesomeIcon
-                              icon={faChevronDown}
-                              className={cn(
-                                "transition-transform",
-                                showDimensionSelector && "rotate-180",
-                              )}
-                              style={{ width: 10, height: 10 }}
-                            />
-                            <span>
-                              {selectedDimensions.length > 0
-                                ? `已选择 ${selectedDimensions.length} 个维度进行修订`
-                                : `选择修订维度 (${allCompletedDimsCount} 个已完成)`}
-                            </span>
-                          </button>
-
-                          <AnimatePresence initial={false}>
-                            {showDimensionSelector && (
-                              <motion.div
-                                initial={{ opacity: 0, height: 0 }}
-                                animate={{ opacity: 1, height: "auto" }}
-                                exit={{ opacity: 0, height: 0 }}
-                                transition={{ duration: 0.2 }}
-                                className="overflow-hidden"
-                              >
-                                <div className="mt-3 p-4 bg-white rounded-xl border border-amber-200">
-                                  <div className="flex items-center justify-between mb-3">
-                                    <span className="text-xs text-amber-600">
-                                      选择需要重新分析的维度（将自动级联修改下游依赖）
-                                    </span>
-                                    <button
-                                      onClick={() => {
-                                        const allDims =
-                                          allCompletedDimsByLayer.flatMap(
-                                            (g) => g.dims,
-                                          );
-                                        if (
-                                          selectedDimensions.length ===
-                                          allDims.length
-                                        ) {
-                                          setSelectedDimensions([]);
-                                        } else {
-                                          setSelectedDimensions(allDims);
-                                        }
-                                      }}
-                                      className="text-xs text-amber-500 hover:text-amber-600 underline"
-                                    >
-                                      {selectedDimensions.length ===
-                                      allCompletedDimsCount
-                                        ? "取消全选"
-                                        : "全选"}
-                                    </button>
-                                  </div>
-                                  {allCompletedDimsByLayer.map(
-                                    ({ layer, dims }) => (
-                                      <div
-                                        key={layer}
-                                        className="mb-3 last:mb-0"
-                                      >
-                                        <span className="text-xs font-medium text-slate-500 mb-2 block">
-                                          Layer {layer} ({dims.length} 个维度)
-                                        </span>
-                                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-                                          {dims.map((dimKey) => (
-                                            <label
-                                              key={dimKey}
-                                              className={cn(
-                                                "flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all",
-                                                selectedDimensions.includes(
-                                                  dimKey,
-                                                )
-                                                  ? "bg-amber-100 border border-amber-300"
-                                                  : "bg-slate-50 border border-slate-200 hover:border-amber-200",
-                                              )}
-                                            >
-                                              <input
-                                                type="checkbox"
-                                                checked={selectedDimensions.includes(
-                                                  dimKey,
-                                                )}
-                                                onChange={(e) => {
-                                                  if (e.target.checked) {
-                                                    setSelectedDimensions([
-                                                      ...selectedDimensions,
-                                                      dimKey,
-                                                    ]);
-                                                  } else {
-                                                    setSelectedDimensions(
-                                                      selectedDimensions.filter(
-                                                        (d) => d !== dimKey,
-                                                      ),
-                                                    );
-                                                  }
-                                                }}
-                                                className="w-4 h-4 rounded border-amber-300 text-amber-500 focus:ring-amber-300"
-                                              />
-                                              <span className="text-sm text-slate-700 truncate">
-                                                {getDimensionName(dimKey)}
-                                              </span>
-                                            </label>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    ),
-                                  )}
-                                </div>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-                        </div>
+                  <div className="flex flex-wrap items-start gap-3">
+                    <div className="flex flex-col gap-1">
+                      <button
+                        onClick={approve}
+                        disabled={isSubmitting}
+                        className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#0ea5e9] text-white text-sm font-medium hover:bg-[#0284c7] transition-colors disabled:opacity-50"
+                      >
+                        <FontAwesomeIcon
+                          icon={faCheck}
+                          style={{ width: 14, height: 14 }}
+                        />
+                        <span>
+                          {reviewLayer === 3 && !hasGisLayers
+                            ? "批准并生成空间布局"
+                            : "批准并进入下一阶段"}
+                        </span>
+                      </button>
+                      {reviewLayer === 3 && !hasGisLayers && (
+                        <span className="text-xs text-slate-500">
+                          批准后将自动触发 GIS 空间布局分析
+                        </span>
                       )}
-                    </>
+                    </div>
+
+                    <div className="flex-1 min-w-[280px] flex items-start gap-2">
+                      <textarea
+                        value={feedback}
+                        onChange={(e) => {
+                          setFeedback(e.target.value);
+                          e.target.style.height = "auto";
+                          e.target.style.height =
+                            e.target.scrollHeight + "px";
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            handleRejectWithFeedback();
+                          }
+                        }}
+                        placeholder="输入修订意见...（Enter 提交，Shift+Enter 换行）"
+                        rows={1}
+                        className="flex-1 px-4 py-2.5 rounded-xl border border-amber-200 bg-white text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-300 resize-none overflow-hidden min-h-[40px]"
+                        style={{ height: feedback ? "auto" : "40px" }}
+                      />
+                      <button
+                        onClick={handleRejectWithFeedback}
+                        disabled={isSubmitting}
+                        className="px-4 py-2.5 rounded-xl bg-amber-100 text-amber-700 text-sm font-medium hover:bg-amber-200 transition-colors disabled:opacity-50 whitespace-nowrap"
+                      >
+                        提交修订
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Dimension Selector for Cascade Revision */}
+                  {allCompletedDimsCount > 0 && (
+                    <div className="mt-3">
+                      <button
+                        onClick={() =>
+                          setShowDimensionSelector(!showDimensionSelector)
+                        }
+                        className="text-xs text-amber-600 hover:text-amber-700 flex items-center gap-1 transition-colors"
+                      >
+                        <FontAwesomeIcon
+                          icon={faChevronDown}
+                          className={cn(
+                            "transition-transform",
+                            showDimensionSelector && "rotate-180",
+                          )}
+                          style={{ width: 10, height: 10 }}
+                        />
+                        <span>
+                          {selectedDimensions.length > 0
+                            ? `已选择 ${selectedDimensions.length} 个维度进行修订`
+                            : `选择修订维度 (${allCompletedDimsCount} 个可修订)`}
+                        </span>
+                      </button>
+
+                      <AnimatePresence initial={false}>
+                        {showDimensionSelector && (
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: "auto" }}
+                            exit={{ opacity: 0, height: 0 }}
+                            transition={{ duration: 0.2 }}
+                            className="overflow-hidden"
+                          >
+                            <div className="mt-3 p-4 bg-white rounded-xl border border-amber-200">
+                              <div className="flex items-center justify-between mb-3">
+                                <span className="text-xs text-amber-600">
+                                  选择需要重新分析的已完维度（将自动级联修改下游依赖）
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    const allDims =
+                                      allCompletedDimsByLayer.flatMap(
+                                        (g) => g.dims,
+                                      );
+                                    if (
+                                      selectedDimensions.length ===
+                                      allDims.length
+                                    ) {
+                                      setSelectedDimensions([]);
+                                    } else {
+                                      setSelectedDimensions(allDims);
+                                    }
+                                  }}
+                                  className="text-xs text-amber-500 hover:text-amber-600 underline"
+                                >
+                                  {selectedDimensions.length > 0
+                                    ? "取消全选"
+                                    : "全选"}
+                                </button>
+                              </div>
+                              <div className="space-y-2">
+                                {allCompletedDimsByLayer.map(
+                                  (layerGroup) => (
+                                    <div key={layerGroup.layer}>
+                                      <div className="text-xs font-medium text-slate-500 mb-1">
+                                        Layer {layerGroup.layer} — 可修订维度
+                                      </div>
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {layerGroup.dims.map((dimKey) => (
+                                          <label
+                                            key={dimKey}
+                                            className={cn(
+                                              "flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all",
+                                              selectedDimensions.includes(
+                                                dimKey,
+                                              )
+                                                ? "bg-amber-100 border border-amber-300"
+                                                : "bg-slate-50 border border-slate-200 hover:border-amber-200",
+                                            )}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={selectedDimensions.includes(
+                                                dimKey,
+                                              )}
+                                              onChange={(e) => {
+                                                if (e.target.checked) {
+                                                  setSelectedDimensions([
+                                                    ...selectedDimensions,
+                                                    dimKey,
+                                                  ]);
+                                                } else {
+                                                  setSelectedDimensions(
+                                                    selectedDimensions.filter(
+                                                      (d) => d !== dimKey,
+                                                    ),
+                                                  );
+                                                }
+                                              }}
+                                              className="w-4 h-4 rounded border-amber-300 text-amber-500 focus:ring-amber-300"
+                                            />
+                                            <span className="text-sm text-slate-700 truncate">
+                                              {getDimensionName(dimKey)}
+                                            </span>
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ),
+                                )}
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
                   )}
                 </motion.div>
               );
