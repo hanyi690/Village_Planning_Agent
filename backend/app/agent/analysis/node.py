@@ -168,6 +168,10 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "layer": dim_layer,
         "is_revision": is_revision,
     })
+    logger.info(
+        "[analyze_dimension] START: dim=%s name=%s layer=%d revision=%s",
+        dim_key, dim_name, dim_layer, is_revision,
+    )
 
 
     async def _run_rag():
@@ -584,6 +588,10 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "layer": dim_layer,
         "is_revision": is_revision,
     })
+    logger.info(
+        "[analyze_dimension] COMPLETE: dim=%s layer=%d words=%d version=%d revision=%s",
+        dim_key, dim_layer, len(llm_response), next_version, is_revision,
+    )
 
     # 11. State update - accumulate into pending_reports, reducer handles merge
     result = {

@@ -3,14 +3,15 @@ Layer Completion Check Node
 
 Runs AFTER reducer merges parallel dimension results.
 Detects layer completion and sends SSE events (layer_completed, layer_paused).
-Handles step_mode (pause) vs auto-advance (continuous) branching.
+Handles step_mode (pause via interrupt()) vs auto-advance (continuous) branching.
+
+Key: interrupt() re-executes the entire node on resume, so SSE events
+must fire AFTER the interrupt point to avoid duplication.
 """
 
 from typing import Dict, Any
 
-from langgraph.runtime import Runtime
-
-from app.agent.context import PlanningContext
+from langgraph.types import interrupt
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -18,7 +19,6 @@ logger = get_logger(__name__)
 
 async def layer_completion_check(
     state: Dict[str, Any],
-    runtime: Runtime[PlanningContext],
 ) -> Dict[str, Any]:
     """
     Check if current layer is complete after reducer merges parallel results.
@@ -28,8 +28,8 @@ async def layer_completion_check(
 
     Logic:
     1. If layer NOT complete -> no-op, return {}
-    2. If layer complete + step_mode=True -> send layer_completed + layer_paused,
-       set execution_paused=True
+    2. If layer complete + step_mode=True -> interrupt() BEFORE any SSE events,
+       then fire events based on resume action (approve/reject)
     3. If layer complete + step_mode=False -> auto-advance phase,
        send layer_completed + layer_started for next layer
     """
@@ -139,7 +139,83 @@ async def layer_completion_check(
     # Reports already saved to DB by analyze_dimension immediately after completion
     pending_reports = state.get("pending_reports", [])
 
-    # Send layer_completed SSE event
+    step_mode = state.get("step_mode", False)
+
+    if step_mode:
+        # CRITICAL: interrupt() BEFORE any SSE side effects.
+        # On resume, the entire node re-executes from the top, so events
+        # placed before interrupt() would fire twice. By placing interrupt()
+        # first, we ensure events only fire once — after resume.
+        logger.info(
+            "[layer_completion_check] INTERRUPT: layer=%d phase=%s step_mode=True, awaiting human review",
+            layer, phase,
+        )
+        resume_data = interrupt({
+            "layer": layer,
+            "phase": phase,
+            "layer_name": get_layer_name(layer),
+            "reason": "step_mode_awaiting_review",
+        })
+        action = resume_data.get("action", "approve")
+        logger.info(
+            "[layer_completion_check] RESUME received: action=%s, layer=%d, feedback=%s",
+            action, layer, resume_data.get("feedback", "")[:100] if resume_data.get("feedback") else "none",
+        )
+
+        if action == "approve":
+            # Now safe to send SSE events — this code only runs after resume
+            SSEPublisher.send_layer_complete(
+                session_id=session_id,
+                layer=layer,
+                layer_name=get_layer_name(layer),
+                dimension_count=len(completed),
+                total_chars=total_chars,
+            )
+            if layer < 3:
+                next_phase = get_next_phase(phase)
+                next_layer = _phase_to_layer(next_phase) if next_phase else None
+                if next_phase and next_layer:
+                    SSEPublisher.send_layer_start(
+                        session_id=session_id,
+                        layer=next_layer,
+                        layer_name=get_layer_name(next_layer),
+                        dimension_count=len(get_layer_dimensions(next_layer)),
+                    )
+                    logger.info(
+                        "[layer_completion_check] Approved: advancing to layer %d", next_layer,
+                    )
+                    return {
+                        "phase": next_phase,
+                        "previous_layer": layer,
+                        "pending_reports": [],
+                    }
+            # Layer 3 complete after approval
+            logger.info("[layer_completion_check] Layer 3 approved, all layers complete")
+            return {"phase": "completed", "pending_reports": []}
+
+        elif action == "reject":
+            SSEPublisher.send_layer_complete(
+                session_id=session_id,
+                layer=layer,
+                layer_name=get_layer_name(layer),
+                dimension_count=len(completed),
+                total_chars=total_chars,
+            )
+            logger.info(
+                "[layer_completion_check] Rejected: starting revision for %s",
+                resume_data.get("dimensions", []),
+            )
+            return {
+                "need_revision": True,
+                "is_revision": True,
+                "revision_target_dimensions": resume_data.get("dimensions", []),
+                "human_feedback": resume_data.get("feedback", ""),
+                "revision_feedback": resume_data.get("feedback", ""),
+                "revision_images": resume_data.get("images", []),
+                "pending_reports": [],
+            }
+
+    # Auto mode: advance to next layer
     SSEPublisher.send_layer_complete(
         session_id=session_id,
         layer=layer,
@@ -147,28 +223,6 @@ async def layer_completion_check(
         dimension_count=len(completed),
         total_chars=total_chars,
     )
-
-    step_mode = runtime.context.step_mode  # Read from context, not state
-
-    if step_mode:
-        # Step mode: pause and wait for user approval
-        SSEPublisher.send_layer_paused(
-            session_id=session_id,
-            layer=layer,
-            layer_name=get_layer_name(layer),
-        )
-        logger.info(
-            "[layer_completion_check] Layer %d paused (step_mode), "
-            "waiting for approval", layer,
-        )
-        return {
-            "execution_paused": True,
-            "pause_after_step": True,
-            "previous_layer": layer,
-            "pending_reports": [],  # Clear buffer after batch write
-        }
-
-    # Auto mode: advance to next layer
     if layer < 3:
         next_phase = get_next_phase(phase)
         next_layer = _phase_to_layer(next_phase) if next_phase else None
@@ -184,17 +238,15 @@ async def layer_completion_check(
             )
             return {
                 "phase": next_phase,
-                "execution_paused": False,
-                "pause_after_step": False,
                 "previous_layer": layer,
-                "pending_reports": [],  # Clear buffer after batch write
+                "pending_reports": [],
             }
 
     # Layer 3 complete in auto mode -> mark completed
     logger.info("[layer_completion_check] All layers complete (auto mode)")
     return {
         "phase": "completed",
-        "pending_reports": [],  # Clear buffer after batch write
+        "pending_reports": [],
     }
 
 

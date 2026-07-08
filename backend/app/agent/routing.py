@@ -12,11 +12,9 @@
 from typing import Union, List, Dict, Any, Optional
 from langgraph.graph import END
 from langgraph.types import Send
-from langgraph.runtime import Runtime
 from langchain_core.messages import AIMessage
 
 from .state import PlanningPhase, get_layer_dimensions, _phase_to_layer
-from .context import PlanningContext
 from ..config import get_dimension_layer
 from ..config.dependency import get_impact_tree_compat, get_next_revision_wave
 from ..tools.intent_tools import advance_planning_intent, gis_analysis
@@ -28,7 +26,6 @@ logger = get_logger(__name__)
 
 def after_conversation(
     state: Dict[str, Any],
-    runtime: Runtime[PlanningContext],
 ) -> Union[str, List[Send]]:
     """
     对话后路由 - 新架构核心
@@ -41,6 +38,7 @@ def after_conversation(
     """
     messages = state.get("messages", [])
     if not messages:
+        logger.info("[after_conversation] No messages, returning END")
         return END
 
     last_msg = messages[-1]
@@ -111,24 +109,27 @@ def after_conversation(
             name = tc.get("name", "")
             # Normalize: LLM may emit PascalCase from old prompts
             if name in (advance_planning_intent.name, "AdvancePlanningIntent"):
+                logger.info("[after_conversation] ROUTE: advance_planning_intent detected -> _dispatch_current")
                 return _dispatch_current(state)
             if name in (gis_analysis.name, "GISAnalysis"):
+                logger.info("[after_conversation] ROUTE: gis_analysis detected -> gis_agent")
                 return "gis_agent"
+        logger.info("[after_conversation] ROUTE: unknown tool_call -> execute_tools (name=%s)", last_msg.tool_calls[0].get("name"))
         return "execute_tools"
 
+    logger.info("[after_conversation] ROUTE: no tool_calls, no revision -> END")
     return END
 
 
 def after_analysis(
     state: Dict[str, Any],
-    runtime: Runtime[PlanningContext],
 ) -> Union[str, List[Send]]:
     """
     分析后路由 - 波次推进逻辑
 
     处理：
     1. completed -> END
-    2. execution_paused -> END（等待审批）
+    2. interrupt -> END（等待审批）
     3. 待处理维度 -> Send 分发（检查同层依赖）
     """
     is_revision = state.get("is_revision", False)
@@ -233,10 +234,6 @@ def after_analysis(
     if phase == "completed":
         return END
 
-    # Paused waiting for user approval — stop graph execution
-    if state.get("execution_paused"):
-        return END
-
     layer = _phase_to_layer(phase)
     if layer is None:
         return END
@@ -260,7 +257,8 @@ def after_analysis(
     # Must run even when current-layer has no ready dims (all dispatched)
     cross_ready = []
     next_layer = layer + 1
-    if next_layer <= 3 and not runtime.context.step_mode:
+    step_mode = state.get("step_mode", False)
+    if next_layer <= 3 and not step_mode:
         next_dims = list_dimensions(next_layer)
         next_completed = state.get("completed_dimensions", {}).get(f"layer{next_layer}", [])
         completed_all = state.get("completed_dimensions", {})

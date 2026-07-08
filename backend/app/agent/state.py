@@ -11,6 +11,14 @@ from enum import Enum
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
+# DeltaChannel: store only incremental deltas in checkpoints (LangGraph v1.2 beta)
+# Falls back to add_messages if DeltaChannel is unavailable
+try:
+    from langgraph.channels import DeltaChannel
+    _messages_reducer = DeltaChannel(add_messages, snapshot_frequency=5)
+except ImportError:
+    _messages_reducer = add_messages
+
 from ..config import get_layer_dimensions as _get_layer_dimensions, get_wave_config
 
 
@@ -48,11 +56,7 @@ def _merge_dict_of_lists(a: Dict[str, List], b: Dict[str, List]) -> Dict[str, Li
     all_keys = set(a.keys()) | set(b.keys())
     for k in all_keys:
         combined = a.get(k, []) + b.get(k, [])
-        deduped = []
-        for item in combined:
-            if item not in deduped:
-                deduped.append(item)
-        result[k] = deduped
+        result[k] = list(dict.fromkeys(combined))  # O(n) dedup, preserves order
     return result
 
 
@@ -151,7 +155,7 @@ class AgentState(TypedDict, total=False):
     - report_versions: 版本追踪（已移除，使用 ReportStore）
     - summaries: 摘要（已移除，使用 ReportStore）
     """
-    messages: Annotated[List[BaseMessage], add_messages]
+    messages: Annotated[List[BaseMessage], _messages_reducer]
     session_id: str
     project_name: str
     phase: str
@@ -163,8 +167,6 @@ class AgentState(TypedDict, total=False):
     image_ids: List[str]
     metadata: Dict[str, Any]
     step_mode: bool  # Enable step-by-step execution (pause after each layer)
-    execution_paused: bool
-    pause_after_step: bool
     previous_layer: int
     # Revision cascade
     need_revision: bool
@@ -295,8 +297,6 @@ def create_initial_state(
         "completed_dimensions": {"layer1": [], "layer2": [], "layer3": []},
         "feedback": None,
         "step_mode": False,
-        "execution_paused": False,
-        "pause_after_step": False,
         "previous_layer": 0,
         "metadata": {},
         "need_revision": False,
@@ -366,7 +366,7 @@ def get_next_phase(current_phase: str) -> Optional[str]:
     return None
 
 
-def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None) -> Dict[str, Any]:
+def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None, *, is_interrupted: bool = False) -> Dict[str, Any]:
     """状态转 UI 格式
 
     注意：reports 字段已移除，前端应从数据库 API 获取报告内容
@@ -379,16 +379,25 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
     metadata = state.get("metadata", {})
     progress = metadata.get("progress", (current_layer / 3) * 100 if current_layer else 0)
 
-    # Determine status based on phase and execution state
-    execution_paused = state.get("execution_paused", False)
+    # Determine status based on phase and interrupt state
     if phase == "completed":
         status = "completed"
-    elif execution_paused:
+    elif is_interrupted:
         status = "paused"
     elif phase == "init":
         status = "pending"
     else:
         status = "running"
+
+    # Build interrupt_info from interrupt state
+    interrupt_info = None
+    if is_interrupted:
+        interrupt_info = {
+            "layer": state.get("previous_layer", 0),
+            "phase": phase,
+            "layer_name": get_layer_name(state.get("previous_layer", 0)) if state.get("previous_layer", 0) > 0 else None,
+            "reason": "step_mode" if state.get("step_mode", False) else "pause",
+        }
 
     # Convert messages to UI format
     messages_raw = state.get("messages", [])
@@ -421,9 +430,8 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
         "current_layer": current_layer,
         "progress": progress,
         "completed_dimensions": state.get("completed_dimensions", {}),
-        "pause_after_step": state.get("pause_after_step", False),
+        "interrupt_info": interrupt_info,
         "step_mode": state.get("step_mode", False),
-        "execution_paused": execution_paused,
         "rag_enabled": state.get("config", {}).get("rag_enabled", True),
         "rag_layer_config": state.get("config", {}).get("rag_layer_config", DEFAULT_RAG_LAYER_CONFIG),
         "previous_layer": state.get("previous_layer", 0),

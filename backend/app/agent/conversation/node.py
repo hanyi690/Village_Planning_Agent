@@ -84,7 +84,14 @@ async def conversation_node(state: Dict[str, Any]) -> Dict[str, Any]:
     chain = prompt | llm_with_tools
     response = await chain.ainvoke({"messages": messages})
 
-    logger.info(f"[对话] tool_calls={getattr(response, 'tool_calls', None)}")
+    tool_calls = getattr(response, 'tool_calls', None)
+    has_content = bool(getattr(response, 'content', None))
+    logger.info(
+        "[conversation] tool_calls=%s content=%s phase=%s",
+        tool_calls, has_content, state.get("phase"),
+    )
+    if not tool_calls and not has_content:
+        logger.warning("[conversation] LLM returned no tool_calls and no content — possible prompt issue")
     return {"messages": [response]}
 
 

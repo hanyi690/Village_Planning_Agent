@@ -432,57 +432,35 @@ async def sync_events(session_id: str, from_seq: int = 0):
 
 @router.post("/api/sessions/{session_id}/feedback")
 async def submit_feedback(session_id: str, request: FeedbackRequest):
-    """提交反馈"""
+    """提交反馈 — 使用 interrupt/resume 模式"""
     state = await PlanningRuntimeService.aget_state_values(session_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
     if request.approve:
-        logger.info("[feedback/approve] session=%s execution_paused=%s phase=%s",
-            session_id, state.get("execution_paused"), state.get("phase"))
-        # Check if execution is paused (set by layer_completion_check node)
-        if not state.get("execution_paused"):
-            return {"status": "not_paused", "message": "Execution is not paused, nothing to approve"}
-
         current_phase = state.get("phase", "layer1")
         current_layer = _phase_to_layer(current_phase) or 1
         next_phase = get_next_phase(current_phase)
+        logger.info("[feedback/approve] session=%s phase=%s", session_id, current_phase)
 
-        # Single atomic state update: resume execution and advance phase
-        await PlanningRuntimeService.aupdate_state(session_id, {
-            "execution_paused": False,
-            "pause_after_step": False,
-            "previous_layer": 0,
-            "phase": next_phase or current_phase,
-            "need_revision": False,
-            "human_feedback": None,
-        })
+        # Resume from interrupt: approve action handled in layer_completion_check
+        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+            session_id,
+            resume_data={"action": "approve"},
+        ))
+        return {
+            "status": "approved",
+            "next_phase": next_phase,
+            "current_layer": current_layer,
+            "review_layer": current_layer,
+        }
 
-        # Send execution_resumed SSE event before triggering execution
-        SSEPublisher.send_execution_resumed(
-            session_id=session_id,
-            layer=current_layer,
-        )
-
-        # Send layer_started for the next layer
-        if next_phase and next_phase != "completed":
-            next_layer = _phase_to_layer(next_phase)
-            if next_layer:
-                SSEPublisher.send_layer_start(
-                    session_id=session_id,
-                    layer=next_layer,
-                    layer_name=get_layer_name(next_layer),
-                    dimension_count=len(get_layer_dimensions(next_layer))
-                )
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id, state_values=state))
-        return {"status": "approved", "next_phase": next_phase}
-        # Compute impact tree once — reuse for both state update and SSE events
+    if request.dimensions and request.feedback:
+        # Reject with feedback: compute impact tree and resume from interrupt
         from app.config.dependency import get_impact_tree_compat
 
         final_tree: Dict[int, List[str]] = {0: list(request.dimensions)}
-        # Only include dimensions that have already been executed in this session
-        state_data = await PlanningRuntimeService.aget_state_values(session_id)
-        completed_dims = state_data.get("completed_dimensions", {}) if state_data else {}
+        completed_dims = state.get("completed_dimensions", {})
         all_completed_keys = set(d for dims in completed_dims.values() for d in dims)
 
         for target_dim in request.dimensions:
@@ -491,23 +469,25 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
                 already_executed = [d for d in dims if d in all_completed_keys]
                 if already_executed:
                     final_tree.setdefault(wave, []).extend(already_executed)
-        # Dedupe each wave and remove empty waves
-        final_tree = {w: list(set(dims)) for w, dims in final_tree.items() if dims}
+        final_tree = {w: list(set(dims)) for w, d in final_tree.items() if d}
 
-        await PlanningRuntimeService.aupdate_state(session_id, {
-            "human_feedback": request.feedback,
-            "need_revision": True,
-            "revision_target_dimensions": request.dimensions,
-            "is_revision": True,
-            "revision_feedback": request.feedback,
-            "revision_impact_tree": final_tree,
-            "revision_completed_dims": {},
-        })
+        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+            session_id,
+            resume_data={
+                "action": "reject",
+                "feedback": request.feedback,
+                "dimensions": request.dimensions,
+                "images": [],
+            },
+            state_updates={
+                "revision_impact_tree": final_tree,
+                "revision_completed_dims": {},
+            },
+        ))
 
         # Emit SSE events for immediate visual feedback
         try:
             all_impacted = set(d for dims in final_tree.values() for d in dims)
-
             for target_dim in request.dimensions:
                 SSEPublisher.send_event(
                     session_id=session_id,
@@ -518,7 +498,6 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
         except Exception as e:
             logger.warning(f"[feedback] SSE cascade events failed: {e}")
 
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
         return {"status": "revision_started", "dimensions": request.dimensions}
 
     if request.message:
@@ -527,25 +506,61 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
         GIS_KEYWORDS = ["空间布局", "gis分析", "布局分析", "地图分析"]
         is_gis_request = any(kw in request.message.lower() for kw in GIS_KEYWORDS)
 
-        if is_gis_request:
-            # Inject synthetic gis_analysis AIMessage to route directly to gis_agent
-            synthetic_msg = AIMessage(
-                content="",
-                tool_calls=[{
-                    "name": "gis_analysis",
-                    "id": f"call_gis_{session_id[:8]}",
-                    "args": {"reason": request.message}
-                }],
-            )
-            await PlanningRuntimeService.aupdate_state(
-                session_id,
-                {"messages": [HumanMessage(content=request.message), synthetic_msg]},
-            )
-            logger.info("[feedback] [%s] GIS intent detected, injected gis_analysis synthetic message", session_id)
-        else:
-            await PlanningRuntimeService.aupdate_state(session_id, {"messages": [HumanMessage(content=request.message)]})
+        # Check if graph is in interrupt state
+        snapshot = await PlanningRuntimeService.aget_state(session_id)
+        is_interrupted = snapshot and snapshot.next and len(snapshot.next) > 0
 
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+        if is_interrupted:
+            # Graph paused at interrupt — resume with message
+            if is_gis_request:
+                synthetic_msg = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "gis_analysis",
+                        "id": f"call_gis_{session_id[:8]}",
+                        "args": {"reason": request.message}
+                    }],
+                )
+                asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+                    session_id,
+                    resume_data={"action": "message_injected", "message": request.message},
+                    state_updates={"messages": [HumanMessage(content=request.message), synthetic_msg]},
+                ))
+                logger.info("[feedback] [%s] GIS intent detected, resumed from interrupt", session_id)
+            else:
+                asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+                    session_id,
+                    resume_data={"action": "message_injected", "message": request.message},
+                    state_updates={"messages": [HumanMessage(content=request.message)]},
+                ))
+        else:
+            # Graph not interrupted — inject message via aupdate_state + resume
+            # Official pattern: aupdate_state(as_node="__start__") sets checkpoint.next,
+            # then _trigger_planning_execution() resumes with astream(None, config)
+            if is_gis_request:
+                synthetic_msg = AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "gis_analysis",
+                        "id": f"call_gis_{session_id[:8]}",
+                        "args": {"reason": request.message}
+                    }],
+                )
+                await PlanningRuntimeService.aupdate_state(
+                    session_id,
+                    {"messages": [HumanMessage(content=request.message), synthetic_msg]},
+                    as_node="__start__",
+                )
+                asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+                logger.info("[feedback] [%s] GIS intent detected, new execution", session_id)
+            else:
+                await PlanningRuntimeService.aupdate_state(
+                    session_id,
+                    {"messages": [HumanMessage(content=request.message)]},
+                    as_node="__start__",
+                )
+                asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+
         return {"status": "message_accepted"}
 
     return {"status": "no_action"}
@@ -567,9 +582,8 @@ def _is_stable_checkpoint(values: Dict[str, Any]) -> tuple:
     if (values.get("last_revised_dimensions")
             and not values.get("is_revision", False)):
         return True, "revision"
-    if (values.get("pause_after_step")
-            and values.get("previous_layer", 0) > 0
-            and values.get("execution_paused", False)):
+    if (values.get("is_interrupted")
+            and values.get("previous_layer", 0) > 0):
         return True, "layer"
     return False, "intermediate"
 
@@ -756,7 +770,9 @@ async def get_session_status(session_id: str):
 
     checkpoint_state = await PlanningRuntimeService.aget_state(session_id)
     state = dict(checkpoint_state.values) if checkpoint_state and checkpoint_state.values else {}
-    return state_to_ui_status(state, db_session)
+    # Detect interrupt state from snapshot.next
+    is_interrupted = bool(checkpoint_state and checkpoint_state.next)
+    return state_to_ui_status(state, db_session, is_interrupted=is_interrupted)
 
 
 # ============================================
@@ -831,7 +847,7 @@ async def update_rag_config(session_id: str, request: RagConfigRequest):
             "rag_enabled": new_rag_enabled,
             "rag_layer_config": new_layer_config,
         }
-    })
+    }, as_node="conversation")
 
     logger.info(f"[rag-config] Updated {session_id}: enabled={new_rag_enabled}, layers={new_layer_config}")
 
@@ -858,43 +874,20 @@ async def update_step_mode(session_id: str, request: StepModeRequest):
 
     await PlanningRuntimeService.aupdate_state(session_id, {
         "step_mode": request.step_mode,
-    })
+    }, as_node="conversation")
 
     logger.info(f"[step-mode] Updated {session_id}: step_mode={request.step_mode}")
 
-    # If turning OFF step_mode while execution is paused, auto-approve
-    # to resume execution to the next layer
-    if not request.step_mode and state.get("execution_paused"):
-        current_phase = state.get("phase", "layer1")
-        current_layer = _phase_to_layer(current_phase) or 1
-        next_phase = get_next_phase(current_phase)
-
-        await PlanningRuntimeService.aupdate_state(session_id, {
-            "execution_paused": False,
-            "pause_after_step": False,
-            "previous_layer": 0,
-            "phase": next_phase or current_phase,
-            "need_revision": False,
-            "human_feedback": None,
-        })
-
-        SSEPublisher.send_execution_resumed(
-            session_id=session_id,
-            layer=current_layer,
-        )
-
-        if next_phase and next_phase != "completed":
-            next_layer = _phase_to_layer(next_phase)
-            if next_layer:
-                SSEPublisher.send_layer_start(
-                    session_id=session_id,
-                    layer=next_layer,
-                    layer_name=get_layer_name(next_layer),
-                    dimension_count=len(get_layer_dimensions(next_layer))
-                )
-
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
-        logger.info(f"[step-mode] Auto-approved paused session {session_id}, advancing to {next_phase}")
+    # If turning OFF step_mode while graph is interrupted, auto-approve
+    if not request.step_mode:
+        snapshot = await PlanningRuntimeService.aget_state(session_id)
+        is_interrupted = snapshot and snapshot.next and len(snapshot.next) > 0
+        if is_interrupted:
+            asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+                session_id,
+                resume_data={"action": "approve"},
+            ))
+            logger.info(f"[step-mode] Auto-approved interrupted session {session_id}")
 
     await sse_manager.publish(session_id, {
         "type": "step_mode_updated",
@@ -1259,6 +1252,142 @@ async def generate_planning_text(session_id: str, request: GeneratePlanningTextR
     except Exception as e:
         logger.error(f"[Planning Text] Generation failed for {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Planning text generation failed: {e}")
+
+
+@router.get("/api/sessions/{session_id}/geocode")
+async def geocode_village(
+    session_id: str,
+    village_name: str = "",
+    province: str = "",
+    city: str = "",
+    county: str = "",
+    township: str = "",
+):
+    """Geocode village address to center coordinates + boundary.
+
+    Uses GISDataFetcher's 4-tier strategy:
+    1. County boundary as reference
+    2. Geocode for village center
+    3. POI search fallback
+    4. County center fallback
+    """
+    from app.services.modules.gis.fetcher import GISDataFetcher
+
+    # Build full address from hierarchy
+    parts = [p for p in [province, city, county, township, village_name] if p]
+    location = "".join(parts)
+
+    if not location:
+        raise HTTPException(status_code=400, detail="No address provided")
+
+    try:
+        fetcher = GISDataFetcher()
+        center, metadata = fetcher.get_village_center(location)
+
+        result: Dict[str, Any] = {
+            "location": location,
+            "center": list(center) if center else None,
+            "strategy": metadata.get("strategy_used"),
+            "metadata": metadata,
+        }
+
+        # Also try to get county boundary for map display
+        county_name = county or metadata.get("hierarchy", {}).get("county", "")
+        if county_name:
+            try:
+                boundary_result = fetcher.provider.get_boundary(county_name)
+                if boundary_result.success and boundary_result.data.get("geojson"):
+                    result["boundary_geojson"] = boundary_result.data["geojson"]
+                    if not center and boundary_result.metadata.get("center"):
+                        result["center"] = list(boundary_result.metadata["center"])
+                        result["strategy"] = "county_boundary_fallback"
+            except Exception as e:
+                logger.warning(f"[Geocode] Boundary fetch failed for {county_name}: {e}")
+
+        if not result["center"]:
+            raise HTTPException(status_code=404, detail=f"Cannot geocode: {location}")
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Geocode] Failed for {location}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Geocode failed: {e}")
+
+
+@router.post("/api/sessions/{session_id}/gis-data")
+async def upload_gis_data(
+    session_id: str,
+    file: UploadFile = File(...),
+    data_type: Optional[str] = Form(None),
+):
+    """Upload GIS data (GeoJSON) to an existing session.
+
+    Args:
+        session_id: Session identifier
+        file: GeoJSON file upload
+        data_type: Optional data type hint (boundary/road/water/residential/landuse_current)
+                   If not provided, will be auto-inferred from GeoJSON properties.
+
+    Returns:
+        Upload result with file ID and inferred data type.
+    """
+    # Read file content
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    # Parse file using existing helper
+    parsed = await _parse_file_in_memory(file, content)
+
+    if parsed["file_type"] != "geojson":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only GeoJSON files are supported, got: {parsed['file_type']}"
+        )
+
+    if parsed["parse_status"] != "success":
+        raise HTTPException(
+            status_code=400,
+            detail=f"GeoJSON parse failed: {parsed.get('parse_error', 'unknown error')}"
+        )
+
+    # Determine data type: user hint > auto-inferred
+    final_data_type = data_type or parsed.get("gis_data_type")
+
+    # Store in database
+    try:
+        file_id = await create_uploaded_file_async(
+            session_id=session_id,
+            file_category="gis_data",
+            file_type="geojson",
+            filename=file.filename or "upload.geojson",
+            original_filename=file.filename,
+            file_size=len(content),
+            content_type=file.content_type or "application/geo+json",
+            parsed_text=None,
+            gis_data=parsed.get("gis_data"),
+            gis_data_type=final_data_type,
+            parse_status=parsed["parse_status"],
+            parse_error=parsed.get("parse_error"),
+        )
+    except Exception as e:
+        logger.error(f"[GIS Upload] Failed to store file: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to store file: {e}")
+
+    # Note: uploaded GIS data is stored in DB via UploadedFile model.
+    # The GIS agent will query it via get_uploaded_geojson_data_async() at execution time.
+
+    feature_count = len(parsed.get("gis_data", {}).get("features", []))
+
+    return {
+        "file_id": file_id,
+        "filename": file.filename,
+        "data_type": final_data_type,
+        "feature_count": feature_count,
+        "parse_status": parsed["parse_status"],
+    }
 
 
 __all__ = ["router"]

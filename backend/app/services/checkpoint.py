@@ -244,13 +244,12 @@ class CheckpointService:
 
     @classmethod
     async def clear_pause_flags(cls, session_id: str) -> bool:
-        """Clear pause flags and reset wave for next layer."""
-        from app.services.runtime import PlanningRuntimeService
-        return await PlanningRuntimeService.aupdate_state(session_id, {
-            "pause_after_step": False,
-            "previous_layer": 0,
-            "current_wave": 1,  # Reset wave for next layer execution
-        })
+        """Clear pause flags — no-op in interrupt mode.
+
+        In the interrupt() pattern, pause/resume is handled by LangGraph
+        natively. This method is kept for backward compatibility.
+        """
+        return True
 
     @classmethod
     async def rebuild_events(cls, session_id: str) -> List[Dict[str, Any]]:
@@ -311,7 +310,7 @@ class CheckpointService:
                         layer=layer_num,
                         phase=phase,
                         reports={"layer1": {}, "layer2": {}, "layer3": {}},  # 占位，实际数据从数据库获取
-                        pause_after_step=state.get("pause_after_step", False),
+                        is_interrupted=is_interrupted,
                         previous_layer=layer_num,
                         session_id=session_id,
                         knowledge_sources_cache=knowledge_sources_cache,
@@ -347,7 +346,12 @@ class CheckpointService:
                             events.append(dim_event)
                             logger.debug(f"[CheckpointService] Session {session_id}: rebuilt dimension_complete {dim_key}")
 
-            if state.get("pause_after_step", False):
+            # Detect interrupt state: snapshot.next contains pending node names
+            is_interrupted = (
+                checkpoint_state.next
+                and "layer_completion_check" in (checkpoint_state.next or [])
+            )
+            if is_interrupted:
                 previous_layer = state.get("previous_layer", 1)
                 checkpoint_id = checkpoint_state.config.get("configurable", {}).get("checkpoint_id", "")
                 pause_event = {

@@ -340,7 +340,7 @@ async def update_session_state_async(session_id: str, state: Dict[str, Any]) -> 
             for key, value in clean_state.items():
                 if hasattr(db_session, key) and key not in [
                     "current_layer", "layer_1_completed", "layer_2_completed",
-                    "layer_3_completed", "pause_after_step", "waiting_for_review"
+                    "layer_3_completed", "waiting_for_review"
                 ]:
                     setattr(db_session, key, value)
             

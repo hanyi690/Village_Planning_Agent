@@ -113,7 +113,6 @@ class SessionStatusResponse(BaseModel):
     layer_1_completed: bool = Field(False, description="Layer 1 是否完成")
     layer_2_completed: bool = Field(False, description="Layer 2 是否完成")
     layer_3_completed: bool = Field(False, description="Layer 3 是否完成")
-    pause_after_step: bool = Field(False, description="是否处于暂停状态")
     execution_complete: bool = Field(False, description="执行是否完成")
     execution_error: Optional[str] = Field(None, description="执行错误信息")
     messages: List[Dict[str, Any]] = Field(default_factory=list, description="消息列表")
