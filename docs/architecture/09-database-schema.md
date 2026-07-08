@@ -1,7 +1,7 @@
 # 数据库Schema
 
-> **更新日期**: 2026-05-21
-> **版本**: v3.0 (统一架构)
+> **更新日期**: 2026-07-08
+> **版本**: v4.0 (LangGraph 1.2 interrupt/resume)
 
 本文档详细说明数据库表结构和关系。
 
@@ -316,8 +316,6 @@ Checkpoint 中存储的 AgentState 结构：
         "rag_layer_config": {1: true, 2: true, 3: true}
     },
     "step_mode": false,
-    "execution_paused": false,
-    "pause_after_step": false,
     "previous_layer": 0,
     # Cascade revision fields
     "need_revision": false,

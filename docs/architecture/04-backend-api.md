@@ -2,8 +2,8 @@
 
 本文档详细说明后端 API 路由结构和 SSE 管理机制。
 
-> **更新日期**: 2026-05-21
-> **版本**: v3.9 (统一架构)
+> **更新日期**: 2026-07-08
+> **版本**: v4.0 (LangGraph 1.2 interrupt/resume)
 
 ## 目录
 
@@ -220,46 +220,52 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
     """提交反馈"""
     state = await PlanningRuntimeService.aget_state_values(session_id)
 
-    # 审批：批准当前层级继续执行
+    # 审批：通过 resume_from_interrupt 恢复执行
     if request.approve:
-        if not state.get("execution_paused"):
-            return {"status": "not_paused", "message": "Execution is not paused"}
-
         current_phase = state.get("phase", "layer1")
         next_phase = get_next_phase(current_phase)
 
-        # 原子更新：恢复执行并推进阶段
-        await PlanningRuntimeService.aupdate_state(session_id, {
-            "execution_paused": False,
-            "pause_after_step": False,
-            "previous_layer": 0,
-            "phase": next_phase or current_phase,
-        })
-
-        # 发送 SSE 事件
-        SSEPublisher.send_execution_resumed(session_id, current_layer)
-        if next_phase and next_phase != "completed":
-            SSEPublisher.send_layer_start(session_id, next_layer, ...)
-
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+        # 使用 LangGraph 官方 interrupt/resume 模式
+        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+            session_id,
+            resume_data={"action": "approve"},
+        ))
         return {"status": "approved", "next_phase": next_phase}
 
-    # 修订：触发指定维度重分析
+    # 修订：通过 resume_from_interrupt 触发级联重分析
     if request.feedback and request.dimensions:
-        await PlanningRuntimeService.aupdate_state(session_id, {
-            "human_feedback": request.feedback,
-            "need_revision": True,
-            "revision_target_dimensions": request.dimensions,
-        })
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+        # 计算影响树
+        final_tree = _compute_impact_tree(request.dimensions, state)
+
+        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+            session_id,
+            resume_data={
+                "action": "reject",
+                "feedback": request.feedback,
+                "dimensions": request.dimensions,
+            },
+            state_updates={
+                "revision_impact_tree": final_tree,
+                "revision_completed_dims": {},
+            },
+        ))
         return {"status": "revision_started", "dimensions": request.dimensions}
 
     # 对话：追加消息到会话
     if request.message:
-        await PlanningRuntimeService.aupdate_state(session_id, {
-            "messages": [HumanMessage(content=request.message)]
-        })
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+        # 检测 interrupt 状态，选择恢复或注入模式
+        is_interrupted = snapshot.next and len(snapshot.next) > 0
+        if is_interrupted:
+            await PlanningRuntimeService.resume_from_interrupt(session_id,
+                resume_data={"action": "message_injected", "message": request.message},
+                state_updates={"messages": [HumanMessage(content=request.message)]},
+            )
+        else:
+            # 图未暂停：aupdate_state + 触发执行
+            await PlanningRuntimeService.aupdate_state(session_id, {
+                "messages": [HumanMessage(content=request.message)]
+            }, as_node="__start__")
+            asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
         return {"status": "message_accepted"}
 
     return {"status": "no_action"}
@@ -702,8 +708,13 @@ class CheckpointService:
                     dim_event = {"type": "dimension_complete", ...}
                     events.append(dim_event)
 
-        # 5. 处理暂停状态
-        if state.get("pause_after_step"):
+        # 5. 处理 interrupt 暂停状态
+        # 检测 checkpoint_state.next 包含 "layer_completion_check" → 表示 interrupt 暂停
+        is_interrupted = (
+            checkpoint_state.next
+            and "layer_completion_check" in (checkpoint_state.next or [])
+        )
+        if is_interrupted:
             pause_event = {"type": "pause", ...}
             events.append(pause_event)
 
@@ -846,7 +857,7 @@ class SessionStatusResponse(BaseModel):
     layer_1_completed: bool
     layer_2_completed: bool
     layer_3_completed: bool
-    pause_after_step: bool
+    interrupt_info: Optional[Dict[str, Any]]  # 替代 pause_after_step
     execution_complete: bool
     execution_error: Optional[str]
     messages: List[Dict[str, Any]]

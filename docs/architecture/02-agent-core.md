@@ -2,8 +2,8 @@
 
 本文档详细说明 Router Agent 架构、StateGraph 设计和执行流程。
 
-> **更新日期**: 2026-05-21
-> **版本**: v3.2 (统一架构)
+> **更新日期**: 2026-07-08
+> **版本**: v4.0 (LangGraph 1.2 interrupt/resume)
 
 ## 目录
 
@@ -19,49 +19,54 @@
 
 ## 架构概览
 
-### 简化 4 节点图
+### 5 节点图
 
-Router Agent 采用简化架构，4 个核心节点 + Send API 动态分发：
+Router Agent 采用 5 个核心节点 + Send API 动态分发 + interrupt() 审批：
 
 ```
               START
                 │
                 ▼
-         ┌─────────────┐
-    ┌───│ conversation │◄──────────────────────┐
-    │   └──────┬──────┘                       │
-    │          │ after_conversation            │
-    │   ┌──────┼──────┬──────────┐            │
-    │   ▼      ▼      ▼          ▼            │
-    │  exec   Send[N] END       END           │
-    │  _tools   │     (闲聊)   (暂停)          │
-    │   │       ▼                             │
-    │   │  analyze_dimension                  │
-    │   │       │                             │
-    │   │       │ after_analysis              │
-    │   │  ┌────┼────┬──────────┐            │
-    │   │  ▼    ▼    ▼          ▼            │
-    │   │ Send END  conversation  END        │
-    │   │ (继续)(完成) (等待审批) (完成)       │
-    │   └────┼────────────────────┘            │
-    └────────┘                                │
+         ┌─────────────┐◄──────────────────┐┌──────────────┐
+    ┌───│ conversation │◄──────────────────││  gis_agent   │
+    │   └──────┬──────┘                    │└──────┬───────┘
+    │          │ after_conversation         │       │
+    │   ┌──────┼──────┬──────────┐         │       │
+    │   ▼      ▼      ▼          ▼         │       │
+    │  exec   Send[N] END       gis_agent  │       │
+    │  _tools   │     (闲聊)               │       │
+    │   │       ▼                          │       │
+    │   │  analyze_dimension               │       │
+    │   │       │                          │       │
+    │   │       ▼                          │       │
+    │   │  layer_completion_check          │       │
+    │   │       │ after_analysis           │       │
+    │   │  ┌────┼────┬──────────┐          │       │
+    │   │  ▼    ▼    ▼          ▼          │       │
+    │   │ Send END  conversation  END      │       │
+    │   │ (继续)(完成)(审批恢复) (完成)      │       │
+    │   └────┼─────────────────────────────┘       │
+    └────────┘                                     │
+              interrupt() → Command(resume=...) ───┘
 ```
 
-**4 节点一览**：
+**5 节点一览**：
 
 | 节点 | 职责 | 类型 |
 |------|------|------|
 | `conversation` | 中央路由，LLM 意图识别 | 普通节点 |
-| `execute_tools` | 执行 GIS 等工具调用 | 普通节点 |
+| `execute_tools` | 执行工具调用 | 普通节点 |
 | `analyze_dimension` | 维度分析（Send API 动态分发） | Send 目标节点 |
-| `layer_completion_check` | 层级完成检查与暂停控制 | 普通节点 |
+| `layer_completion_check` | 层级完成检查 + interrupt() 审批 | 普通节点 |
+| `gis_agent` | GIS 空间布局 ReAct Agent | 普通节点 (error_handler) |
 
 ### 设计原则
 
 1. **单一路由入口**: `conversation` 节点处理所有用户输入
 2. **Send API 并行**: 维度分析通过 `Send("analyze_dimension", ...)` 动态分发
-3. **路由纯函数**: `after_conversation` / `after_analysis` 是纯路由函数
-4. **依赖驱动**: 同层依赖检查决定分发顺序
+3. **interrupt 审批**: `layer_completion_check` 使用 `interrupt()` 实现官方 human-in-the-loop
+4. **路由纯函数**: `after_conversation` / `after_analysis` 是纯路由函数（无 Runtime 参数）
+5. **依赖驱动**: 同层依赖检查决定分发顺序
 
 ---
 
@@ -72,23 +77,26 @@ Router Agent 采用简化架构，4 个核心节点 + Send API 动态分发：
 ```python
 # backend/app/agent/graph.py
 def create_unified_planning_graph(checkpointer=None) -> StateGraph:
-    """创建统一规划图（4节点）"""
+    """创建统一规划图（5节点）"""
     builder = StateGraph(AgentState)
 
-    # 4 个节点
+    # 5 个节点
     builder.add_node("conversation", conversation_node)
     builder.add_node("execute_tools", execute_tools_node)
     builder.add_node("analyze_dimension", analyze_dimension_node)
     builder.add_node("layer_completion_check", layer_completion_check)
+    builder.add_node("gis_agent", gis_agent_node, error_handler=_gis_error_handler)
 
     # 边定义
     builder.add_edge(START, "conversation")
     builder.add_conditional_edges("conversation", after_conversation, {
         "execute_tools": "execute_tools",
         "analyze_dimension": "analyze_dimension",
+        "gis_agent": "gis_agent",
         END: END
     })
     builder.add_edge("execute_tools", "conversation")
+    builder.add_edge("gis_agent", "conversation")
     builder.add_edge("analyze_dimension", "layer_completion_check")
     builder.add_conditional_edges("layer_completion_check", after_analysis, {
         "analyze_dimension": "analyze_dimension",
@@ -104,16 +112,18 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
 ```
 1. START → conversation (LLM 处理用户输入)
 2. after_conversation 决定下一步:
-   - tool_calls(GIS) → execute_tools → 回到 conversation
+   - tool_calls(GIS) → gis_agent → conversation
+   - tool_calls(其他) → execute_tools → conversation
    - AdvancePlanningIntent → Send[N] → analyze_dimension × N
    - 级联修订(feedback) → Send[N] → analyze_dimension × N
    - 普通对话/无操作 → END
 3. analyze_dimension 完成后 → layer_completion_check
 4. after_analysis 决定:
    - 层级未完成 → Send[N] → 继续 analyze_dimension
-   - 层级完成 + execution_paused → END (等待审批)
-   - 层级完成 + 无暂停 → 推进下一层 → Send[N]
+   - 层级完成 + step_mode → interrupt() → END (等待审批)
+   - 层级完成 + 自动 → 推进下一层 → Send[N]
    - 全部完成 → END
+5. 审批恢复: Command(resume={"action": "approve/reject"}) → 重新执行 layer_completion_check
 ```
 
 ---
@@ -125,7 +135,7 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
 ```python
 # backend/app/agent/state.py
 class AgentState(TypedDict, total=False):
-    """核心状态 - 精简版"""
+    """核心状态"""
     # 消息流
     messages: Annotated[List[BaseMessage], add_messages]
 
@@ -134,34 +144,44 @@ class AgentState(TypedDict, total=False):
     project_name: str
 
     # 执行进度
-    phase: str                    # 当前阶段 (init/layer1/layer2/layer3)
+    phase: str                    # 当前阶段 (init/layer1/layer2/layer3/completed)
     current_wave: int             # 当前波次
     completed_dimensions: Annotated[Dict[str, List[str]], _merge_dict_of_lists]
 
     # 配置与交互
-    config: Dict[str, Any]        # {village_data, task_description, constraints, ...}
+    config: Annotated[Dict[str, Any], _merge_config]
     feedback: Optional[str]       # 级联修订反馈
 
     # Send API 注入
     dimension_key: Optional[str]  # 当前维度标识（Send API 动态注入）
+    image_ids: List[str]          # 图片引用
+    metadata: Dict[str, Any]      # 元数据
 
     # 执行控制
-    step_mode: bool               # 分步执行模式
-    execution_paused: bool        # 执行暂停标志
-    pause_after_step: bool        # 层级完成后暂停
+    step_mode: bool               # 分步执行模式（interrupt 审批）
     previous_layer: int           # 前一个完成的层级
 
     # 级联修订
     need_revision: bool
     revision_target_dimensions: List[str]
     human_feedback: str
-    is_revision: bool
-    revision_impact_tree: Optional[Dict[int, List[str]]]
-    revision_completed_dims: Annotated[Dict[int, List[str]], _merge_dict_of_lists]
+    is_revision: Annotated[bool, _merge_is_revision]
+    revision_impact_tree: Annotated[Optional[Dict[int, List[str]]], _preserve_impact_tree]
+    revision_completed_dims: Annotated[Dict[int, List[str]], _merge_revision_completed]
+    revision_feedback: Optional[str]
+    last_revised_dimensions: List[str]
 
     # 性能优化
-    pending_reports: Annotated[List[Dict], _merge_lists]  # 批量写入缓冲
+    pending_reports: Annotated[List[Dict], _replace_or_merge_lists]  # 批量写入缓冲
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]
+
+    # GIS
+    gis_layout_configs: Annotated[List[Dict], _replace_or_merge_lists]  # GIS 图层配置
+    user_uploaded_data: Annotated[Dict[str, Dict], _merge_dict_of_dicts]  # 用户上传 GIS 数据
+
+    # P0 数据流闭环
+    _landuse_metrics: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L1 现状用地指标
+    intent_targets: Annotated[Dict[str, float], _merge_dict_of_dicts]    # L2 规划目标面积
 ```
 
 ### 并行合并函数
@@ -171,10 +191,13 @@ class AgentState(TypedDict, total=False):
 ```python
 def _merge_dict_of_lists(a: Dict[str, List], b: Dict[str, List]) -> Dict[str, List]:
     """合并两个 {key: list} 字典，对同 key 的 list 去重拼接"""
+    # O(n) dedup via dict.fromkeys, preserves order
     ...
 
-def _merge_lists(a: List, b: List) -> List:
-    """合并两个列表"""
+def _replace_or_merge_lists(a: List, b: List) -> List:
+    """b=[] 时清空缓冲，否则合并（用于 pending_reports, gis_layout_configs）"""
+    if b == []:
+        return []
     return a + b
 ```
 
@@ -204,8 +227,9 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
     处理：
     1. 级联修订：feedback 存在时计算影响树
     2. 推进意图：AdvancePlanningIntent -> 分发维度
-    3. 工具执行：其他工具 -> execute_tools
-    4. 普通对话：END
+    3. GIS 分析：GISAnalysis -> gis_agent
+    4. 工具执行：其他工具 -> execute_tools
+    5. 普通对话：END
     """
     # 1. 级联修订
     feedback = state.get("feedback") or state.get("human_feedback")
@@ -224,7 +248,7 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
             if name == "AdvancePlanningIntent":
                 return _dispatch_current(state)
             if name == "GISAnalysis":
-                return "execute_tools"
+                return "gis_agent"
 
     return END
 ```
@@ -238,7 +262,7 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 
     处理：
     1. completed -> END
-    2. execution_paused -> END（等待审批）
+    2. interrupt 暂停 -> END（等待审批，由 LangGraph 自动处理）
     3. 待处理维度 -> Send 分发（检查同层依赖）
     """
     # 级联修订：使用依赖检查逻辑
@@ -253,8 +277,8 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
     if phase == "completed":
         return END
 
-    if state.get("execution_paused"):
-        return END
+    # step_mode 下 interrupt() 已在 layer_completion_check 中处理
+    # 恢复后由 Command(resume=...) 触发，无需在路由中检查暂停标志
 
     # 检查同层依赖，只分发依赖已完成的 dimensions
     ready_dims = _get_ready_dimensions(state)
@@ -273,19 +297,16 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
 中央路由节点，是 Agent 的"大脑"：
 
 ```python
-# backend/app/agent/nodes/conversation.py
+# backend/app/agent/conversation/node.py
 async def conversation_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """中央路由节点 - 解析用户意图并决定下一步"""
-    # 构建系统提示
-    system_prompt = f"""你是村庄规划助手，正在进行 {project_name} 的规划工作。
-
-当前阶段：{PHASE_DESCRIPTIONS.get(phase, '未知')}
-规划任务：{config.get('task_description', '制定村庄发展规划')}
-约束条件：{config.get('constraints', '无特殊约束')}
-
-可用工具：
-- AdvancePlanningIntent: 推进规划流程
-- GISAnalysis: GIS可视化分析"""
+    # 优化：如果最后一条消息已有已知 intent tool_call，跳过 LLM
+    last_msg = messages[-1] if messages else None
+    if last_msg and hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
+        known = {"advance_planning_intent", "gis_analysis", "GISAnalysis"}
+        for tc in last_msg.tool_calls:
+            if tc.get("name") in known:
+                return {}  # 直接路由，不调用 LLM
 
     # LLM 绑定工具
     llm_with_tools = llm.bind_tools([ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL])
@@ -331,30 +352,65 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
 ### layer_completion_check
 
-层级完成检查节点：
+层级完成检查节点，使用 interrupt() 实现官方 human-in-the-loop：
 
 ```python
-# backend/app/agent/nodes/completion.py
+# backend/app/agent/completion/node.py
 async def layer_completion_check(state: Dict[str, Any]) -> Dict[str, Any]:
-    """层级完成检查"""
+    """层级完成检查 + interrupt 审批
+
+    Key: interrupt() 恢复时整个节点从头重新执行，
+    所以 SSE 事件必须在 interrupt 之后触发，避免重复。
+    """
     layer = _phase_to_layer(phase)
     completed = state.get("completed_dimensions", {}).get(f"layer{layer}", [])
     total_dims = get_layer_dimensions(layer)
 
-    if set(completed) == set(total_dims):
-        # 层级完成
-        if state.get("step_mode"):
-            # 分步模式：暂停等待审批
-            return {
-                "execution_paused": True,
-                "pause_after_step": True,
-                "previous_layer": layer,
-            }
-        # 连续模式：推进下一层
-        next_phase = get_next_phase(phase)
-        return {"phase": next_phase}
+    if set(completed) != set(total_dims):
+        return {}  # 层级未完成，no-op
 
-    return {}
+    step_mode = state.get("step_mode", False)
+
+    if step_mode:
+        # CRITICAL: interrupt() BEFORE any SSE side effects
+        resume_data = interrupt({
+            "layer": layer,
+            "phase": phase,
+            "layer_name": get_layer_name(layer),
+            "reason": "step_mode_awaiting_review",
+        })
+        action = resume_data.get("action", "approve")
+
+        if action == "approve":
+            # 只在 approve 后发送 SSE 事件（避免重复）
+            SSEPublisher.send_layer_complete(session_id, layer, ...)
+            next_phase = get_next_phase(phase)
+            return {"phase": next_phase, "previous_layer": layer}
+        elif action == "reject":
+            SSEPublisher.send_layer_complete(session_id, layer, ...)
+            return {"need_revision": True, "is_revision": True, ...}
+
+    # 连续模式：自动推进
+    next_phase = get_next_phase(phase)
+    SSEPublisher.send_layer_complete(session_id, layer, ...)
+    return {"phase": next_phase, "previous_layer": layer}
+```
+
+### gis_agent
+
+GIS 空间布局 ReAct Agent，带 error_handler 容错：
+
+```python
+# backend/app/agent/graph.py
+def _gis_error_handler(state: Dict[str, Any], error: Exception) -> Command:
+    """GIS Agent 错误处理 — 返回错误消息到 conversation"""
+    logger.error("[gis_agent] Node failed: %s", error)
+    return Command(
+        update={"messages": [AIMessage(content=f"GIS 分析出错: {error}")]},
+        goto="conversation",
+    )
+
+builder.add_node("gis_agent", gis_agent_node, error_handler=_gis_error_handler)
 ```
 
 ---
@@ -381,24 +437,42 @@ async def get_global_checkpointer():
 ```
 1. GET /api/sessions/{id}/checkpoints → 获取检查点列表
 2. POST /api/sessions/{id}/resume/{checkpoint_id} → 恢复执行
-3. graph.invoke(None, {"configurable": {"checkpoint_id": ...}})
+3. aupdate_state(as_node="__start__") + astream(None, config)
+```
+
+### interrupt/resume 模式
+
+LangGraph 官方 human-in-the-loop 机制：
+
+```python
+# 暂停：在 layer_completion_check 中调用
+resume_data = interrupt({"layer": layer, "reason": "step_mode_awaiting_review"})
+
+# 恢复：通过 PlanningRuntimeService.resume_from_interrupt()
+await PlanningRuntimeService.resume_from_interrupt(
+    session_id,
+    resume_data={"action": "approve"},  # 或 "reject"
+)
+# 内部使用 Command(resume=resume_data) 作为 astream 输入
 ```
 
 ### 状态投影
 
-`state_to_ui_status()` 函数从 AgentState 投影出前端所需的 UI 状态：
+`state_to_ui_status()` 函数从 AgentState + checkpoint 中断状态投影出前端所需的 UI 状态：
 
 ```python
-def state_to_ui_status(state: Dict[str, Any], db_session=None) -> Dict[str, Any]:
+def state_to_ui_status(state: Dict[str, Any], db_session=None, *, is_interrupted: bool = False) -> Dict[str, Any]:
     """状态转 UI 格式"""
+    # is_interrupted 从 checkpoint_state.next 检测
+    # next 包含 "layer_completion_check" → 表示 interrupt 暂停
     return {
         "session_id": state.get("session_id"),
-        "status": status,
+        "status": status,  # paused when is_interrupted
         "phase": phase,
         "current_layer": current_layer,
         "progress": progress,
         "completed_dimensions": state.get("completed_dimensions"),
-        "execution_paused": state.get("execution_paused"),
+        "interrupt_info": interrupt_info,  # 替代 execution_paused/pause_after_step
         "step_mode": state.get("step_mode"),
     }
 ```
@@ -412,11 +486,12 @@ def state_to_ui_status(state: Dict[str, Any], db_session=None) -> Dict[str, Any]
 | 主图定义 | `backend/app/agent/graph.py` |
 | 状态定义 | `backend/app/agent/state.py` |
 | 路由逻辑 | `backend/app/agent/routing.py` |
-| 对话节点 | `backend/app/agent/nodes/conversation.py` |
-| 分析节点 | `backend/app/agent/nodes/analysis.py` |
-| 完成检查 | `backend/app/agent/nodes/completion.py` |
-| 工具节点 | `backend/app/agent/nodes/tools.py` |
+| 对话节点 | `backend/app/agent/conversation/node.py` |
+| 分析节点 | `backend/app/agent/analysis/node.py` |
+| 完成检查 | `backend/app/agent/completion/node.py` |
+| 工具节点 | `backend/app/agent/tools.py` |
 | GIS 上下文 | `backend/app/agent/gis_context.py` |
+| GIS Agent | `backend/app/agent/gis/` |
 | 消息构建 | `backend/app/agent/message_builder.py` |
 | 维度配置 | `backend/app/config/phases.yaml` |
 | 依赖配置 | `backend/app/config/dependency.py` |
