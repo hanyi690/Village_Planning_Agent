@@ -1,21 +1,22 @@
-"""村庄规划主图（4节点 + GIS Agent 子图）
+"""村庄规划主图（5节点 + GIS Agent 子图）
 
 节点：
 1. conversation: 中央路由（大脑）
 2. execute_tools: 工具执行
 3. analyze_dimension: 维度分析
-4. gis_agent: GIS 空间布局 ReAct Agent
+4. layer_completion_check: 层级完成检测 + interrupt 审批
+5. gis_agent: GIS 空间布局 ReAct Agent
 
 图构建以纯函数形式提供 — `create_unified_planning_graph` 每次返回新图，
 缓存由 `PlanningRuntimeService._graph` 单例负责。
 """
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Literal, Optional
 from langgraph.graph import StateGraph, END, START
+from langgraph.types import Command
 from langchain_core.messages import AIMessage
 
 from .state import AgentState, PlanningPhase, create_initial_state, get_layer_dimensions
-from .context import PlanningContext
 from .routing import after_conversation, after_analysis
 from .conversation import conversation_node
 from .tools import execute_tools_node
@@ -24,6 +25,23 @@ from .completion import layer_completion_check
 
 from ..utils.logger import get_logger
 logger = get_logger(__name__)
+
+
+# TimeoutPolicy + error_handler for node-level fault tolerance (LangGraph v1.2)
+try:
+    from langgraph.types import RetryPolicy
+    _HAS_RETRY_POLICY = True
+except ImportError:
+    _HAS_RETRY_POLICY = False
+
+
+def _gis_error_handler(state: Dict[str, Any], error: Exception) -> Command:
+    """GIS Agent error handler — return error message to conversation instead of crashing."""
+    logger.error("[gis_agent] Node failed: %s", error)
+    return Command(
+        update={"messages": [AIMessage(content=f"GIS 分析出错: {error}")]},
+        goto="conversation",
+    )
 
 
 async def analyze_dimension_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -43,7 +61,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "session_id": state.get("session_id", ""),
         "village_name": state.get("config", {}).get("village_name", ""),
         "reports": _get_reports(state),
-        "summaries": _get_summaries(state),
+        "summaries": _get_reports(state),
         "gis_data": {
             "boundary_geojson": gis_context.get_data_by_type("boundary"),
             "landuse_current_geojson": gis_context.get_data_by_type("landuse_current"),
@@ -97,13 +115,13 @@ def create_unified_planning_graph(checkpointer=None) -> StateGraph:
     缓存责任由调用方承担（`PlanningRuntimeService._graph` 单例）。
     """
     logger.info("[图构建] 构建 5 节点图")
-    builder = StateGraph(AgentState, context_schema=PlanningContext)
+    builder = StateGraph(AgentState)
 
     builder.add_node("conversation", conversation_node)
     builder.add_node("execute_tools", execute_tools_node)
     builder.add_node("analyze_dimension", analyze_dimension_node)
     builder.add_node("layer_completion_check", layer_completion_check)
-    builder.add_node("gis_agent", gis_agent_node)
+    builder.add_node("gis_agent", gis_agent_node, error_handler=_gis_error_handler)
 
     builder.add_edge(START, "conversation")
     builder.add_conditional_edges("conversation", after_conversation,
@@ -146,10 +164,6 @@ def _get_reports(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         }
     return reports
 
-
-def _get_summaries(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """同 _get_reports — 统一嵌套格式后两者等价。"""
-    return _get_reports(state)
 
 
 def _load_summaries_from_db(state: Dict[str, Any]) -> Optional[Dict[str, Dict[str, Any]]]:
