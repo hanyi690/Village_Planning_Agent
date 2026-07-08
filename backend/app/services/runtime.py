@@ -641,56 +641,37 @@ class PlanningRuntimeService:
         if not subscriber_ready:
             logger.debug(f"[PlanningRuntimeService] [{session_id}] No SSE subscriber (script mode), proceeding immediately")
 
-        # 1. stream_input already determined above:
-        #    For initial session: plain dict input (official LangGraph pattern)
-        #    For resume: None — aupdate_state(as_node="__start__") already set checkpoint.next
+        # 1. For initial_state, write all state + optional synthetic message
+        #    in a single aupdate_state call with as_node="__start__".
+        #    Per LangGraph docs: "Explicitly specify as_node when setting up state
+        #    on a fresh thread with no execution history."
+        #    LangGraph 1.2.8 fixes DeltaChannel fresh-thread aupdate_state bug (PR #8290).
         if initial_state:
-            # Initial session: pass state directly to astream as input dict.
-            # Use dict-format message to avoid add_messages reducer serialization
-            # issues with AIMessage objects containing tool_calls.
-            # See: LangGraph add_messages accepts {"type": "ai", "content": "...", "tool_calls": [...]}
             clean_state = {k: v for k, v in initial_state.items() if k != "messages"}
             clean_state["phase"] = "layer1"
-            stream_input = {
-                **clean_state,
-                "messages": [{
-                    "type": "ai",
-                    "content": "",
-                    "tool_calls": [{
-                        "name": "advance_planning_intent",
-                        "id": f"call_{session_id[:8]}",
-                        "args": {"reason": "用户启动规划"},
-                    }],
-                }],
-            }
-            logger.info("[PlanningRuntimeService] [%s] Initial session: direct astream(input) with dict-format message", session_id)
-        else:
-            # Resume from checkpoint: use aupdate_state + astream(None)
-            # Official LangGraph pattern: update_state(as_node="__start__") sets
-            # checkpoint.next to the __start__ node's successors, then
-            # astream(None, config) resumes from that checkpoint.
-            state_values = state_values or await cls.aget_state_values(session_id)
-            messages = state_values.get("messages", [])
-            last_msg = messages[-1] if messages else None
-            has_existing_intent = _has_existing_intent(last_msg)
 
-            if has_existing_intent:
+            # Inject synthetic AIMessage unless last message already has intent
+            state_values = state_values or await cls.aget_state_values(session_id)
+            messages = state_values.get("messages", []) if state_values else []
+            last_msg = messages[-1] if messages else None
+
+            if _has_existing_intent(last_msg):
                 logger.info(
-                    "[PlanningRuntimeService] [%s] Last message already has intent '%s', resuming from checkpoint",
+                    "[PlanningRuntimeService] [%s] Last message already has intent '%s', skipping synthetic injection",
                     session_id, last_msg.tool_calls[0].get("name"),
                 )
-                # No message injection needed — just update state to set next=conversation
-                await cls.aupdate_state(session_id, {}, as_node="__start__")
             else:
                 synthetic_ai_message = _build_synthetic_intent_message(session_id)
-                await cls.aupdate_state(
-                    session_id,
-                    {"messages": [synthetic_ai_message]},
-                    as_node="__start__",
-                )
-                logger.info(f"[PlanningRuntimeService] [{session_id}] Synthetic AIMessage injected via aupdate_state(as_node=__start__)")
+                clean_state["messages"] = [synthetic_ai_message]
+                logger.info("[PlanningRuntimeService] [%s] Synthetic AIMessage added", session_id)
 
-            stream_input = None  # Resume from checkpoint (official pattern)
+            await cls.aupdate_state(session_id, clean_state, as_node="__start__")
+            logger.info(
+                "[PlanningRuntimeService] [%s] Initial state written (as_node=__start__, has_messages=%s)",
+                session_id, "messages" in clean_state,
+            )
+
+        stream_input = None  # Resume from checkpoint
 
         # 4. Build config with max_concurrency + optional streaming callback
         config = cls.get_thread_config(session_id, checkpoint_id=checkpoint_id)
