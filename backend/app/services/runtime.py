@@ -645,21 +645,25 @@ class PlanningRuntimeService:
         #    For initial session: plain dict input (official LangGraph pattern)
         #    For resume: None — aupdate_state(as_node="__start__") already set checkpoint.next
         if initial_state:
-            # Build combined update: clean state + synthetic AIMessage
+            # Initial session: pass state directly to astream as input dict.
+            # Use dict-format message to avoid add_messages reducer serialization
+            # issues with AIMessage objects containing tool_calls.
+            # See: LangGraph add_messages accepts {"type": "ai", "content": "...", "tool_calls": [...]}
             clean_state = {k: v for k, v in initial_state.items() if k != "messages"}
-
-            synthetic_ai_message = _build_synthetic_intent_message(session_id)
-
-            # Use aupdate_state + astream(None) pattern to avoid reducer
-            # serialization issues with AIMessage in plain dict input.
-            # This matches the resume path pattern below.
             clean_state["phase"] = "layer1"
-            await cls.aupdate_state(session_id, {
+            stream_input = {
                 **clean_state,
-                "messages": [synthetic_ai_message],
-            }, as_node="__start__")
-            stream_input = None  # Resume from checkpoint
-            logger.info("[PlanningRuntimeService] [%s] Initial session: aupdate_state + astream(None) pattern", session_id)
+                "messages": [{
+                    "type": "ai",
+                    "content": "",
+                    "tool_calls": [{
+                        "name": "advance_planning_intent",
+                        "id": f"call_{session_id[:8]}",
+                        "args": {"reason": "用户启动规划"},
+                    }],
+                }],
+            }
+            logger.info("[PlanningRuntimeService] [%s] Initial session: direct astream(input) with dict-format message", session_id)
         else:
             # Resume from checkpoint: use aupdate_state + astream(None)
             # Official LangGraph pattern: update_state(as_node="__start__") sets
