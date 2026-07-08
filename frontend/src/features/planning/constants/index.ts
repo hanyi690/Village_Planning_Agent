@@ -170,7 +170,7 @@ export type AgentPhaseValue = (typeof AgentPhase)[keyof typeof AgentPhase];
  *
  * Agent 使用 phase + flags 组合表示状态：
  * - phase: init, layer1, layer2, layer3, completed
- * - pause_after_step: 层级完成后暂停标志
+ * - interrupt_info: interrupt 暂停信息（存在即表示暂停）
  * - need_revision: 是否需要修订
  *
  * 前端使用单一 PlanningStatus 枚举值。
@@ -178,10 +178,10 @@ export type AgentPhaseValue = (typeof AgentPhase)[keyof typeof AgentPhase];
  */
 export function agentPhaseToStatus(
   phase: string,
-  pause_after_step: boolean,
-  need_revision: boolean
+  interrupt_info?: { layer?: number; phase?: string; layer_name?: string; reason?: string },
+  need_revision?: boolean
 ): PlanningStatus {
-  if (pause_after_step) return 'paused';
+  if (interrupt_info) return 'paused';
   if (need_revision) return 'revising';
   if (phase === AgentPhase.INIT) return 'idle';
   if (phase === AgentPhase.COMPLETED) return 'completed';

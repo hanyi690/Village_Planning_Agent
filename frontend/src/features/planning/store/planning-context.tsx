@@ -102,6 +102,26 @@ export function usePlanningActions() {
 Session ID: ${response.session_id.slice(0, 8)}...`;
 
         store.addMessage(createSystemMessage(initMessage));
+
+        // Auto-geocode village address (fire-and-forget, non-blocking)
+        const addressParts = [params.province, params.city, params.county, params.township, villageName].filter(Boolean);
+        if (addressParts.length > 0) {
+          planningApi.geocodeVillage(response.session_id, {
+            village_name: villageName,
+            province: params.province || undefined,
+            city: params.city || undefined,
+            county: params.county || undefined,
+            township: params.township || undefined,
+          }).then((geo) => {
+            if (geo.center) {
+              usePlanningStore.setState({
+                villageCenter: geo.center as [number, number],
+              });
+            }
+          }).catch((err) => {
+            logger.context.warn('Geocode failed (non-critical)', { error: getErrorMessage(err, '') });
+          });
+        }
       } catch (error: unknown) {
         const errorMessage = getErrorMessage(error, 'Unknown error');
         logger.context.error('Planning failed to start', { error: errorMessage });
@@ -116,8 +136,8 @@ Session ID: ${response.session_id.slice(0, 8)}...`;
     const store = usePlanningStore.getState();
     const sessionId = store.sessionId;
     if (!sessionId) throw new Error('No session ID');
-    console.log('[approve] sessionId=%s isPaused=%s status=%s execPaused=%s',
-        sessionId, store.isPaused, store.status, store.execution_paused);
+    console.log('[approve] sessionId=%s isPaused=%s status=%s interruptInfo=%o',
+        sessionId, store.isPaused, store.status, store.interruptInfo);
     logger.context.info('Approving review', { sessionId });
     try {
       await planningApi.approveReview(sessionId);

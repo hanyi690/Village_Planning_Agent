@@ -250,11 +250,11 @@ export interface PlanningSSEEvent {
 export interface StartPlanningRequest {
   project_name: string;
   village_data: string;
-  village_name?: string;       // 省份
-  province?: string;           // 地级市
-  city?: string;               // 县/区
-  county?: string;             // 乡镇
-  township?: string;           // 规划期限，如 "2022-2035年"
+  village_name?: string;
+  province?: string;
+  city?: string;
+  county?: string;
+  township?: string;
   planning_period?: string;
   task_description?: string;
   constraints?: string;
@@ -312,11 +312,15 @@ export interface SessionStatusResponse {
     layer2: string[];
     layer3: string[];
   };
-  pause_after_step: boolean;
   previous_layer: number;
   gis_layout_configs?: Array<Record<string, unknown>>;
   step_mode: boolean;
-  execution_paused: boolean;
+  interrupt_info?: {
+    layer?: number;
+    phase?: string;
+    layer_name?: string;
+    reason?: string;
+  };
 
   rag_enabled?: boolean;
   rag_layer_config?: Record<number, boolean>;
@@ -619,4 +623,24 @@ export interface StepModeRequest {
 export interface StepModeResponse {
   session_id: string;
   step_mode: boolean;
+}
+
+// ============================================
+// Geocode Types
+// ============================================
+
+export interface GeocodeResponse {
+  location: string;
+  center: [number, number] | null;
+  strategy: string | null;
+  boundary_geojson?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface GisDataUploadResponse {
+  file_id: number;
+  filename: string;
+  data_type: string | null;
+  feature_count: number;
+  parse_status: string;
 }

@@ -18,24 +18,18 @@ export function useApprovalActions() {
     if (!sessionId || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      await planningApi.submitFeedback(sessionId, { approve: true });
-      setPaused(false);
-
-      // L3 approved → trigger GIS (delay to avoid execution lock race with approve)
-      if (currentLayer === 3 && !hasGisLayers) {
-        await new Promise(r => setTimeout(r, 500));
-        try {
-          await planningApi.sendChatMessage(sessionId, '请生成空间布局分析');
-        } catch (e) {
-          console.error('Failed to trigger GIS analysis:', e);
-        }
+      const result = await planningApi.submitFeedback(sessionId, { approve: true });
+      // Read current_layer from backend response for immediate UI sync
+      if (result?.current_layer) {
+        usePlanningStore.setState({ lastPauseLayer: result.current_layer });
       }
+      setPaused(false);
     } catch (error) {
       console.error('Approve failed:', error);
     } finally {
       setIsSubmitting(false);
     }
-  }, [sessionId, setPaused, currentLayer, hasGisLayers, isSubmitting]);
+  }, [sessionId, setPaused, isSubmitting]);
 
   const reject = useCallback(async () => {
     if (!sessionId || isSubmitting) return;

@@ -217,10 +217,14 @@ export interface PlanningState {
   phase: string;
   currentWave: number;
   reports: Reports;
-  pause_after_step: boolean;
   previous_layer: number;
   step_mode: boolean;
-  execution_paused: boolean;
+  interruptInfo?: {
+    layer?: number;
+    phase?: string;
+    layer_name?: string;
+    reason?: string;
+  };
 
   // Derived UI State
   completedDimensions: CompletedDimensions;
@@ -229,6 +233,7 @@ export interface PlanningState {
   completedLayers: { 1: boolean; 2: boolean; 3: boolean };
   isPaused: boolean;
   pendingReviewLayer: number | null;
+  lastPauseLayer: number;
 
   // SSE Reconnect
   sseResumeTrigger: number;
@@ -305,6 +310,8 @@ export interface PlanningState {
   // GIS state
   gisGenerating: boolean;
   isFullMapOpen: boolean;
+  gisTriggerPending: boolean;
+  villageCenter?: [number, number];
 }
 
 // ============================================
@@ -369,10 +376,9 @@ function createInitialState(conversationId: string): PlanningState {
     phase: "init",
     currentWave: 1,
     reports: { layer1: {}, layer2: {}, layer3: {} },
-    pause_after_step: false,
     previous_layer: 0,
     step_mode: true,
-    execution_paused: false,
+    interruptInfo: undefined,
 
     // Derived UI State
     completedDimensions: { layer1: [], layer2: [], layer3: [] },
@@ -381,6 +387,7 @@ function createInitialState(conversationId: string): PlanningState {
     completedLayers: { 1: false, 2: false, 3: false },
     isPaused: false,
     pendingReviewLayer: null,
+    lastPauseLayer: 0,
     sseResumeTrigger: 0,
     lastProcessedSeq: 0,
 
@@ -442,6 +449,8 @@ function createInitialState(conversationId: string): PlanningState {
     // GIS state
     gisGenerating: false,
     isFullMapOpen: false,
+    gisTriggerPending: false,
+    villageCenter: undefined,
   };
 }
 
@@ -545,6 +554,9 @@ export interface PlanningActions {
 
   // Clear progress state (for approve/reject transitions)
   clearProgressState: () => void;
+
+  // GIS layer management
+  addGisLayersFromUpload: (configs: Array<Record<string, unknown>>) => void;
 
   // Clear only revision dimensions progress (preserve other completed dimensions)
   clearRevisionProgress: (layer: number, dimensionsToRevise: string[]) => void;
@@ -907,10 +919,8 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       if (
         completedCountForLayer >= expectedCount &&
         expectedCount > 0 &&
-        !state.pause_after_step &&
         state.status !== "paused"
       ) {
-        state.pause_after_step = true;
         state.previous_layer = layer;
         state.status = "paused";
         deriveUIStateInStore(state); // 重新派生 isPaused / pendingReviewLayer
@@ -993,7 +1003,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         phase?: string;
         dimension_reports?: Record<string, string>;
         dimension_knowledge_sources?: Record<string, KnowledgeSource[]>;
-        pause_after_step?: boolean;
         previous_layer?: number;
         task_id?: string;
       };
@@ -1013,8 +1022,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       }
 
       state.phase = layerData.phase || state.phase;
-      state.pause_after_step =
-        layerData.pause_after_step ?? state.pause_after_step;
       state.previous_layer = layerData.previous_layer ?? state.previous_layer;
       state.status = "paused";
 
@@ -1090,18 +1097,19 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     }
 
     case "layer_paused": {
-      state.execution_paused = true;
-      state.pause_after_step = true;
+      const pauseData = data as {
+        layer?: number;
+        phase?: string;
+        layer_name?: string;
+      };
+      state.interruptInfo = pauseData;
       state.status = "paused";
       deriveUIStateInStore(state);
       break;
     }
 
     case "execution_resumed": {
-      state.execution_paused = false;
-      state.pause_after_step = false;
-      state.isPaused = false;
-      state.pendingReviewLayer = null;
+      state.interruptInfo = undefined;
       state.status = "planning";
       deriveUIStateInStore(state);
       break;
@@ -1316,6 +1324,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         state.processPanelTab = 'map';
       }
       state.gisGenerating = false;
+      state.gisTriggerPending = false;
       break;
     }
 
@@ -1345,11 +1354,11 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         state.sessionId = pauseData.task_id;
       }
 
-      state.pause_after_step = true;
       state.previous_layer =
         pauseData.current_layer ||
         pauseData.previous_layer ||
         state.previous_layer;
+      state.lastPauseLayer = pauseData.current_layer || pauseData.previous_layer || state.lastPauseLayer;
       state.status = "paused";
 
       if (
@@ -1381,10 +1390,9 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
     }
 
     case "resumed": {
-      state.pause_after_step = false;
+      state.interruptInfo = undefined;
       state.previous_layer = 0;
       state.status = "planning";
-
       deriveUIStateInStore(state);
       break;
     }
@@ -1396,7 +1404,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         previous_layer?: number;
       };
 
-      state.pause_after_step = true;
       state.previous_layer = revData.previous_layer || revData.layer || 0;
       state.status = "paused";
 
@@ -1522,7 +1529,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       // Restore status from 'revising' to 'paused' so reports display correctly
       if (state.status === "revising") {
         state.status = "paused";
-        state.pause_after_step = true;
       }
       // Auto-navigate to first revised dimension report
       if (ccData.revised_dimensions && ccData.revised_dimensions.length > 0) {
@@ -1558,8 +1564,8 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         if (completedData.layer3)
           state.completedDimensions.layer3 = completedData.layer3;
       }
-      if (syncData.pause_after_step !== undefined)
-        state.pause_after_step = syncData.pause_after_step as boolean;
+      if (syncData.interrupt_info !== undefined)
+        state.interruptInfo = syncData.interrupt_info as PlanningState['interruptInfo'];
       if (syncData.previous_layer !== undefined)
         state.previous_layer = syncData.previous_layer as number;
       deriveUIStateInStore(state);
@@ -1582,6 +1588,7 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         state.processPanelTab = 'map';
       }
       if (!state.gisGenerating) state.gisGenerating = true;
+      state.gisTriggerPending = false;
       break;
     }
 
@@ -1630,10 +1637,11 @@ function deriveUIStateInStore(state: PlanningState): void {
     3: state.completedDimensions.layer3.length >= totalDims(3) && totalDims(3) > 0,
   };
 
-  // Derive pause state
-  state.isPaused = state.pause_after_step === true || state.status === "paused";
+  // Derive pause state from status + interruptInfo
+  state.isPaused = state.status === "paused";
+  const pauseLayer = state.interruptInfo?.layer || (state.lastPauseLayer > 0 ? state.lastPauseLayer : state.previous_layer);
   state.pendingReviewLayer =
-    state.isPaused && state.previous_layer > 0 ? state.previous_layer : null;
+    state.isPaused && pauseLayer > 0 ? pauseLayer : null;
 
   // Derive currentLayer: prefer pendingReviewLayer when paused, else from phase
   const layerFromPhase = phaseToLayer(state.phase);
@@ -1807,10 +1815,9 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
       set((state) => {
         const hasStatusChange = backendData.status !== state.status;
         const hasPhaseChange = backendData.phase !== state.phase;
-        const hasPauseChange =
-          backendData.pause_after_step !== state.pause_after_step;
-        const hasExecutionPausedChange =
-          backendData.execution_paused !== state.execution_paused;
+        const hasInterruptInfoChange =
+          backendData.interrupt_info !== undefined &&
+          JSON.stringify(backendData.interrupt_info) !== JSON.stringify(state.interruptInfo);
         const hasPreviousLayerChange =
           backendData.previous_layer !== state.previous_layer;
         const hasWaveChange = backendData.current_wave !== state.currentWave;
@@ -1823,8 +1830,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         if (
           !hasStatusChange &&
           !hasPhaseChange &&
-          !hasPauseChange &&
-          !hasExecutionPausedChange &&
+          !hasInterruptInfoChange &&
           !hasPreviousLayerChange &&
           !hasWaveChange &&
           !hasRagConfigChange
@@ -1852,16 +1858,12 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           if (completedData.layer3)
             state.completedDimensions.layer3 = completedData.layer3;
         }
-        if (state.isPaused && backendData.pause_after_step === false) {
-          state.pause_after_step = true;
-        } else {
-          state.pause_after_step = backendData.pause_after_step === true;
+        if (backendData.interrupt_info !== undefined) {
+          state.interruptInfo = backendData.interrupt_info as PlanningState['interruptInfo'];
         }
         if (backendData.previous_layer)
           state.previous_layer = backendData.previous_layer;
         state.step_mode = backendData.step_mode ?? state.step_mode;
-        if (backendData.execution_paused !== undefined)
-          state.execution_paused = backendData.execution_paused;
         if (hasRagConfigChange) {
           state.ragLayerConfig = {
             ...state.ragLayerConfig,
@@ -1904,17 +1906,14 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
           if (reportsData.layer2) state.reports.layer2 = reportsData.layer2;
           if (reportsData.layer3) state.reports.layer3 = reportsData.layer3;
         }
-        if (data.pause_after_step !== undefined) {
-          state.pause_after_step = data.pause_after_step as boolean;
+        if (data.interrupt_info !== undefined) {
+          state.interruptInfo = data.interrupt_info as PlanningState['interruptInfo'];
         }
         if (data.previous_layer !== undefined) {
           state.previous_layer = data.previous_layer as number;
         }
         if (data.step_mode !== undefined) {
           state.step_mode = data.step_mode as boolean;
-        }
-        if (data.execution_paused !== undefined) {
-          state.execution_paused = data.execution_paused as boolean;
         }
         deriveUIStateInStore(state);
       }),
@@ -2000,6 +1999,10 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     setPaused: (paused) =>
       set((state) => {
         state.isPaused = paused;
+        if (!paused) {
+          state.lastPauseLayer = 0;
+        }
+        deriveUIStateInStore(state);
       }),
 
     setPendingReviewLayer: (layer) =>
@@ -2090,6 +2093,16 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         state.currentPhase = "idle";
         state.dimensionProgress = {};
         state.executingDimensions = [];
+      }),
+
+    addGisLayersFromUpload: (configs) =>
+      set((state) => {
+        for (const cfg of configs) {
+          const layers = cfg.layers as GISLayerConfig[] | undefined;
+          if (!layers || layers.length === 0) continue;
+          const key = `upload_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+          state.gisLayers[key] = layers;
+        }
       }),
 
     // Clear only revision dimensions progress, preserve other completed dimensions
@@ -2183,6 +2196,11 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
       }),
   })),
 );
+
+// Expose store to window for Playwright E2E tests (dev/test only)
+if (typeof window !== 'undefined' && process.env.NODE_ENV !== 'production') {
+  (window as any).__PLANNING_STORE__ = usePlanningStore;
+}
 
 // ============================================
 // Selector Hooks (for performance)
