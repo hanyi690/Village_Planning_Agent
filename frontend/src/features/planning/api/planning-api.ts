@@ -23,6 +23,8 @@ import type {
   RagConfigResponse,
   StepModeRequest,
   StepModeResponse,
+  GeocodeResponse,
+  GisDataUploadResponse,
 } from './types';
 
 // ============================================
@@ -310,6 +312,9 @@ export const planningApi = {
     status: string;
     dimensions?: string[];
     layer?: number;
+    current_layer?: number;
+    review_layer?: number;
+    next_phase?: string;
   }> {
     return apiRequest(`/api/sessions/${sessionId}/feedback`, {
       method: 'POST',
@@ -572,5 +577,57 @@ export const planningApi = {
         body: JSON.stringify(request),
       }
     );
+  },
+
+  /**
+   * Geocode village address to center coordinates + boundary
+   * GET /api/sessions/{session_id}/geocode
+   */
+  async geocodeVillage(
+    sessionId: string,
+    params: {
+      village_name?: string;
+      province?: string;
+      city?: string;
+      county?: string;
+      township?: string;
+    }
+  ): Promise<GeocodeResponse> {
+    const qs = new URLSearchParams();
+    if (params.village_name) qs.set('village_name', params.village_name);
+    if (params.province) qs.set('province', params.province);
+    if (params.city) qs.set('city', params.city);
+    if (params.county) qs.set('county', params.county);
+    if (params.township) qs.set('township', params.township);
+    return apiRequest<GeocodeResponse>(
+      `/api/sessions/${sessionId}/geocode?${qs.toString()}`
+    );
+  },
+
+  /**
+   * Upload GIS data (GeoJSON) to an existing session
+   * POST /api/sessions/{session_id}/gis-data
+   */
+  async uploadGisData(
+    sessionId: string,
+    file: File,
+    dataType?: string,
+  ): Promise<GisDataUploadResponse> {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    if (dataType) formData.append('data_type', dataType);
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/sessions/${sessionId}/gis-data`,
+      { method: 'POST', body: formData },
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const detail = errorData.detail || `HTTP ${response.status}`;
+      throw new Error(detail);
+    }
+
+    return response.json();
   },
 };

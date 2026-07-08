@@ -11,6 +11,7 @@ import {
   faTrash,
   faExpand,
   faCompress,
+  faUpload,
 } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 
@@ -49,6 +50,32 @@ const MAX_WIDTH = 480;
 // All layer types enabled by default
 const ALL_LAYER_TYPES = new Set(Object.keys(LAYER_TYPE_LABELS) as LayerType[]);
 
+function GisUploadButton({
+  uploading,
+  onClick,
+  size = 'sm',
+}: {
+  uploading: boolean;
+  onClick: () => void;
+  size?: 'sm' | 'md';
+}) {
+  const cls = size === 'md'
+    ? 'p-2 rounded-lg hover:bg-slate-100 text-slate-500 transition-colors disabled:opacity-50'
+    : 'p-1.5 rounded bg-white/90 border border-slate-200 hover:bg-white text-slate-500 hover:text-slate-700 transition-colors shadow-sm disabled:opacity-50';
+  const spinnerSize = size === 'md' ? 'w-4 h-4' : 'w-3 h-3';
+  const iconSize = size === 'md' ? 16 : 12;
+
+  return (
+    <button onClick={onClick} disabled={uploading} className={cls} title="上传 GIS 数据">
+      {uploading ? (
+        <div className={`${spinnerSize} border-2 border-slate-400 border-t-transparent rounded-full animate-spin`} />
+      ) : (
+        <FontAwesomeIcon icon={faUpload} style={{ width: iconSize, height: iconSize }} />
+      )}
+    </button>
+  );
+}
+
 export default function ProcessPanel() {
   const isRightPanelExpanded = usePlanningStore((state) => state.isRightPanelExpanded);
   const setRightPanelExpanded = usePlanningStore((state) => state.setRightPanelExpanded);
@@ -60,6 +87,7 @@ export default function ProcessPanel() {
   const isFullMapOpen = usePlanningStore((state) => state.isFullMapOpen);
   const setFullMapOpen = usePlanningStore((state) => state.setFullMapOpen);
   const pipelineTrace = usePlanningStore((state) => state.pipelineTrace);
+  const villageCenter = usePlanningStore((state) => state.villageCenter);
 
   // Layer visibility state
   const [visibleLayerTypes, setVisibleLayerTypes] = useState<Set<LayerType>>(ALL_LAYER_TYPES);
@@ -77,6 +105,31 @@ export default function ProcessPanel() {
   const [validationResult, setValidationResult] = useState<LayoutValidationResult | null>(null);
   const [validationLoading, setValidationLoading] = useState(false);
 
+  // GIS upload state
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const sessionId = usePlanningStore((state) => state.sessionId);
+
+  const handleGisUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !sessionId) return;
+    setUploading(true);
+    try {
+      await planningApi.uploadGisData(sessionId, file);
+      const statusData = await planningApi.getStatus(sessionId);
+      if (statusData.gis_layout_configs && statusData.gis_layout_configs.length > 0) {
+        usePlanningStore.getState().addGisLayersFromUpload(
+          statusData.gis_layout_configs as Array<Record<string, unknown>>,
+        );
+      }
+    } catch (err) {
+      console.error('GIS upload failed:', err);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, [sessionId]);
+
   // Auto-validate when planning_zone layers appear
   useEffect(() => {
     const planningLayers = flatLayers.filter(l => l.layerType === 'planning_zone');
@@ -90,7 +143,6 @@ export default function ProcessPanel() {
       .catch(() => setValidationResult(null))
       .finally(() => setValidationLoading(false));
   }, [flatLayers]);
-  const sessionId = usePlanningStore((state) => state.sessionId);
 
   const messages = useMessages();
 
@@ -167,6 +219,11 @@ export default function ProcessPanel() {
                 layers={flatLayers}
                 visibleTypes={visibleLayerTypes}
                 onToggle={handleLayerToggle}
+              />
+              <GisUploadButton
+                uploading={uploading}
+                onClick={() => fileInputRef.current?.click()}
+                size="md"
               />
               <button
                 onClick={() => setFullMapOpen(false)}
@@ -311,18 +368,25 @@ export default function ProcessPanel() {
                         <MapView
                           height="100%"
                           layers={flatLayers}
+                          center={villageCenter}
                           visibleLayerTypes={visibleLayerTypes}
                           showLegend={true}
                           legendPosition="bottom-right"
                         />
-                        {/* Fullscreen button */}
-                        <button
-                          onClick={() => setFullMapOpen(true)}
-                          className="absolute top-2 right-2 p-1.5 rounded bg-white/90 border border-slate-200 hover:bg-white text-slate-500 hover:text-slate-700 transition-colors shadow-sm z-20"
-                          title="全屏查看"
-                        >
-                          <FontAwesomeIcon icon={faExpand} style={{ width: 12, height: 12 }} />
-                        </button>
+                        {/* Upload + Fullscreen buttons */}
+                        <div className="absolute top-2 right-2 flex flex-col gap-1.5 z-20">
+                          <GisUploadButton
+                            uploading={uploading}
+                            onClick={() => fileInputRef.current?.click()}
+                          />
+                          <button
+                            onClick={() => setFullMapOpen(true)}
+                            className="p-1.5 rounded bg-white/90 border border-slate-200 hover:bg-white text-slate-500 hover:text-slate-700 transition-colors shadow-sm"
+                            title="全屏查看"
+                          >
+                            <FontAwesomeIcon icon={faExpand} style={{ width: 12, height: 12 }} />
+                          </button>
+                        </div>
                       </div>
                       {(validationResult || validationLoading) && (
                         <div className="shrink-0 border-t border-slate-100 p-2 max-h-[200px] overflow-y-auto">
@@ -331,15 +395,30 @@ export default function ProcessPanel() {
                       )}
                     </>
                   ) : (
-                    <div className="flex-1 flex flex-col items-center justify-center gap-2 px-6 text-center">
-                      <i className="fas fa-map text-2xl text-slate-300" />
-                      <p className="text-sm text-slate-400">
-                        完成L3详细规划审查后，点击"批准继续"生成空间布局
-                      </p>
-                      <p className="text-xs text-slate-300">
-                        或在对话中输入"生成空间布局分析"
-                      </p>
-                    </div>
+                    <>
+                      {/* No GIS layers yet — show base map with village center */}
+                      <div className="flex-1 min-h-0 relative">
+                        <MapView
+                          height="100%"
+                          layers={[]}
+                          center={villageCenter}
+                          zoom={villageCenter ? 13 : 4}
+                          showLegend={false}
+                        />
+                        {/* Upload button */}
+                        <div className="absolute top-2 right-2 z-20">
+                          <GisUploadButton
+                            uploading={uploading}
+                            onClick={() => fileInputRef.current?.click()}
+                          />
+                        </div>
+                      </div>
+                      <div className="shrink-0 px-3 py-2 border-t border-slate-100 text-center">
+                        <p className="text-xs text-slate-400">
+                          完成L3详细规划审查后，点击"生成空间布局"生成规划图层
+                        </p>
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -445,6 +524,15 @@ export default function ProcessPanel() {
           </motion.aside>
         )}
       </AnimatePresence>
+
+      {/* Hidden file input for GIS data upload */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".geojson,.json"
+        className="hidden"
+        onChange={handleGisUpload}
+      />
     </>
   );
 }

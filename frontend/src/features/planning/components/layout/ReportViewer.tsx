@@ -14,10 +14,11 @@ import {
   faExternalLinkAlt,
   faArrowLeft,
   faSpinner,
+  faMap,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 
-import { usePlanningStore } from "../../store";
+import { usePlanningStore, usePlanningActions } from "../../store";
 import {
   useStatus,
   useIsPaused,
@@ -55,6 +56,7 @@ import {
 } from "../../config/dimensions";
 import CascadePanel from "../CascadePanel";
 import { cn } from "../../utils/cn";
+import { createErrorMessage } from "../../utils";
 
 interface DimensionDisplayStatus {
   label: string;
@@ -158,6 +160,8 @@ const ReportViewer = memo(function ReportViewer({
   const currentLayer = useCurrentLayer();
   const pendingReviewLayer = usePendingReviewLayer();
   const hasGisLayers = useHasGisLayers();
+  const gisGenerating = usePlanningStore((state) => state.gisGenerating);
+  const gisTriggerPending = usePlanningStore((state) => state.gisTriggerPending);
   const reports = useReports();
   const dimensionProgress = useDimensionProgressAll();
   const { approve, isSubmitting } = useApprovalActions();
@@ -404,6 +408,21 @@ const ReportViewer = memo(function ReportViewer({
       }),
     [onStartPlanning],
   );
+
+  const handleTriggerGIS = useCallback(async () => {
+    if (!sessionId || gisTriggerPending || gisGenerating) return;
+    try {
+      const { planningApi } = await import("../../api");
+      usePlanningStore.setState({ gisTriggerPending: true });
+      await planningApi.sendChatMessage(sessionId, "请生成空间布局分析");
+    } catch (error) {
+      console.error("GIS trigger failed:", error);
+      usePlanningStore.setState({ gisTriggerPending: false });
+      usePlanningStore.getState().addMessage(
+        createErrorMessage(`空间布局生成请求失败: ${error instanceof Error ? error.message : "未知错误"}`)
+      );
+    }
+  }, [sessionId, gisTriggerPending, gisGenerating]);
 
   const handleRejectWithFeedback = useCallback(async () => {
     if (!sessionId || isSubmitting) return;
@@ -978,6 +997,44 @@ const ReportViewer = memo(function ReportViewer({
             </div>
           )}
 
+          {/* GIS trigger button: shown when L3 done but no GIS layers yet */}
+          {!showInputForm && completedLayers[3] && !hasGisLayers && !isPaused && (
+            <div className="flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-cyan-50 to-teal-50 rounded-xl border border-cyan-200">
+              <div className="w-8 h-8 rounded-lg bg-cyan-100 flex items-center justify-center">
+                <FontAwesomeIcon icon={faMap} className="text-cyan-600" style={{ width: 14, height: 14 }} />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-cyan-800">生成空间布局分析</p>
+                <p className="text-xs text-cyan-600">L3 详细规划已完成，点击确认生成 GIS 空间布局</p>
+              </div>
+              <button
+                onClick={handleTriggerGIS}
+                disabled={gisTriggerPending || gisGenerating}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0ea5e9] text-white text-sm font-medium hover:bg-[#0284c7] transition-colors disabled:opacity-50 shrink-0"
+              >
+                {(gisTriggerPending || gisGenerating) ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>生成中...</span>
+                  </>
+                ) : (
+                  <>
+                    <FontAwesomeIcon icon={faMap} style={{ width: 12, height: 12 }} />
+                    <span>确认生成</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* GIS generating indicator */}
+          {!showInputForm && gisGenerating && (
+            <div className="flex items-center gap-2 px-4 py-2 bg-cyan-50 rounded-lg border border-cyan-100">
+              <div className="w-4 h-4 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+              <span className="text-sm text-cyan-700">正在生成空间布局...</span>
+            </div>
+          )}
+
           {/* Input Form Card (idle state) */}
           {showInputForm && <VillageInputForm onSubmit={handleSubmit} />}
 
@@ -1161,17 +1218,9 @@ const ReportViewer = memo(function ReportViewer({
                           icon={faCheck}
                           style={{ width: 14, height: 14 }}
                         />
-                        <span>
-                          {reviewLayer === 3 && !hasGisLayers
-                            ? "批准并生成空间布局"
-                            : "批准并进入下一阶段"}
-                        </span>
+                        <span>批准并进入下一阶段</span>
                       </button>
-                      {reviewLayer === 3 && !hasGisLayers && (
-                        <span className="text-xs text-slate-500">
-                          批准后将自动触发 GIS 空间布局分析
-                        </span>
-                      )}
+
                     </div>
 
                     <div className="flex-1 min-w-[280px] flex items-start gap-2">

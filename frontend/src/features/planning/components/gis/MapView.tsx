@@ -114,6 +114,8 @@ const getTiandituUrls = (baseMapType: BaseMapType) => {
 const GEOQ_TILE_URL = 'https://map.geoq.cn/ArcGIS/rest/services/ChinaOnlineCommunity/MapServer/tile/{z}/{y}/{x}';
 const OSM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
+const DEFAULT_CENTER: [number, number] = [120.0, 30.0];
+
 interface MapViewProps {
   layers: GISLayerConfig[];
   center?: [number, number]; // [longitude, latitude] GeoJSON standard
@@ -160,7 +162,7 @@ function buildMatchExpression(
 
 export default function MapView({
   layers,
-  center = [120.0, 30.0],
+  center = DEFAULT_CENTER,
   zoom = 14,
   height = '400px',
   title,
@@ -219,6 +221,18 @@ export default function MapView({
   const closePopup = useCallback(() => {
     setPopupInfo(null);
   }, []);
+
+  // Fly to village center when no GIS layers present
+  useEffect(() => {
+    if (!mounted || !mapRef.current) return;
+    if (filteredLayers.length > 0) return;
+    if (!center || (center[0] === DEFAULT_CENTER[0] && center[1] === DEFAULT_CENTER[1])) return;
+    mapRef.current.flyTo({
+      center: center as [number, number],
+      zoom: 13,
+      duration: 1500,
+    });
+  }, [mounted, filteredLayers.length, center]);
 
   // Auto-fit bounds when boundary layer is present
   useEffect(() => {
