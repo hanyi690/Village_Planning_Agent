@@ -79,6 +79,19 @@ async def conversation_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     messages = list(state.get("messages", []))
 
+    # If the last message already carries a known intent tool_call
+    # (injected by _trigger_planning_execution), skip the LLM and route directly.
+    last_msg = messages[-1] if messages else None
+    if last_msg and hasattr(last_msg, 'tool_calls') and last_msg.tool_calls:
+        known = {"advance_planning_intent", "gis_analysis", "GISAnalysis"}
+        for tc in last_msg.tool_calls:
+            if tc.get("name") in known:
+                logger.info(
+                    "[conversation] Existing intent '%s' detected, bypassing LLM",
+                    tc.get("name"),
+                )
+                return {}
+
     llm_with_tools = _get_llm_with_tools()
     prompt = _build_prompt(state)
     chain = prompt | llm_with_tools
