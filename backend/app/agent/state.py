@@ -11,13 +11,11 @@ from enum import Enum
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
-# DeltaChannel: store only incremental deltas in checkpoints (LangGraph v1.2 beta)
-# Falls back to add_messages if DeltaChannel is unavailable
-try:
-    from langgraph.channels import DeltaChannel
-    _messages_reducer = DeltaChannel(add_messages, snapshot_frequency=5)
-except ImportError:
-    _messages_reducer = add_messages
+# Use plain add_messages reducer.
+# DeltaChannel is NOT supported with SqliteSaver (requires per-channel blob table,
+# only InMemorySaver / PostgresSaver support delta chains).
+# See: langgraph PR #7547
+_messages_reducer = add_messages
 
 from ..config import get_layer_dimensions as _get_layer_dimensions, get_wave_config
 
