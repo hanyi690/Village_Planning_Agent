@@ -28,7 +28,6 @@ from fastapi import BackgroundTasks, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import StateGraph
-from langgraph.types import Command
 
 from app.database.engine import get_global_checkpointer
 from app.database.operations import (
@@ -42,7 +41,6 @@ from app.services.sse import sse_manager
 from app.services.checkpoint import checkpoint_service, checkpoint_persistence_manager
 from app.core.settings import MAX_SESSION_EVENTS, GRAPH_MAX_CONCURRENCY
 from app.agent.graph import create_unified_planning_graph
-from app.agent.context import PlanningContext
 from app.agent.state import (
     get_layer_dimensions,
     get_layer_name,
@@ -68,6 +66,18 @@ def _has_existing_intent(last_msg) -> bool:
     if not last_msg or not hasattr(last_msg, "tool_calls") or not last_msg.tool_calls:
         return False
     return last_msg.tool_calls[0].get("name") in _KNOWN_INTENT_NAMES
+
+
+def _build_synthetic_intent_message(session_id: str, reason: str = "用户启动规划") -> AIMessage:
+    """Build synthetic AIMessage with advance_planning_intent tool call."""
+    return AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "advance_planning_intent",
+            "id": f"call_{session_id[:8]}",
+            "args": {"reason": reason},
+        }],
+    )
 
 
 class PlanningRuntimeService:
@@ -131,35 +141,11 @@ class PlanningRuntimeService:
 
     @classmethod
     def get_thread_config(cls, session_id: str, checkpoint_id: str = None) -> Dict[str, Any]:
-        """Build thread_id configuration for LangGraph operations."""
+        """Build configurable dict for LangGraph operations."""
         configurable = {"thread_id": session_id, "checkpoint_ns": ""}
         if checkpoint_id:
             configurable["checkpoint_id"] = checkpoint_id
         return {"configurable": configurable}
-
-    @classmethod
-    async def astream(
-        cls,
-        session_id: str,
-        input_state: Optional[Dict[str, Any]] = None,
-        stream_mode: str = "values"
-    ):
-        """Stream execution for planning workflow."""
-        await cls.ensure_initialized()
-        config = cls.get_thread_config(session_id)
-        return cls._graph.astream(input_state, config, stream_mode=stream_mode)
-
-    @classmethod
-    async def astream_events(
-        cls,
-        session_id: str,
-        input_state: Dict[str, Any],
-        version: str = "v2"
-    ):
-        """Event stream execution for conversation mode."""
-        await cls.ensure_initialized()
-        config = cls.get_thread_config(session_id)
-        return cls._graph.astream_events(input_state, config, version=version)
 
     @classmethod
     async def aget_state(cls, session_id: str) -> Optional[Any]:
@@ -183,11 +169,23 @@ class PlanningRuntimeService:
         updates: Dict[str, Any],
         as_node: Optional[str] = None
     ) -> bool:
-        """Update checkpoint state for a session."""
+        """Update checkpoint state for a session (no graph resumption).
+
+        Uses native graph.aupdate_state() — safe now that context_schema
+        has been removed (step_mode moved to AgentState).
+        """
         await cls.ensure_initialized()
         config = cls.get_thread_config(session_id)
+
         await cls._graph.aupdate_state(config, updates, as_node=as_node)
+
+        logger.info(
+            "[PlanningRuntimeService] [%s] aupdate_state: keys=%s, as_node=%s",
+            session_id, list(updates.keys()), as_node,
+        )
         return True
+
+    
 
     @classmethod
     async def aget_state_history(cls, session_id: str):
@@ -199,6 +197,95 @@ class PlanningRuntimeService:
         config = cls.get_thread_config(session_id)
         async for snapshot in cls._graph.aget_state_history(config):
             yield snapshot
+
+    @classmethod
+    async def resume_from_interrupt(
+        cls,
+        session_id: str,
+        resume_data: Dict[str, Any],
+        state_updates: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Resume graph after interrupt() using official Command(resume=...) pattern.
+
+        Args:
+            session_id: Session identifier
+            resume_data: Data passed back to interrupt() call site
+                         e.g. {"action": "approve"} or {"action": "reject", "feedback": "..."}
+            state_updates: Optional state updates combined with resume
+        """
+        from langgraph.types import Command
+
+        await cls.ensure_initialized()
+        config = cls.get_thread_config(session_id)
+
+        if state_updates:
+            command = Command(resume=resume_data, update=state_updates)
+        else:
+            command = Command(resume=resume_data)
+
+        async with cls._execution_locks.setdefault(session_id, asyncio.Lock()):
+            logger.info(
+                "[PlanningRuntimeService] [%s] RESUME from interrupt: resume_data=%s",
+                session_id, resume_data,
+            )
+            stream_iterator = cls._graph.astream(
+                command, config,
+                stream_mode=['values', 'checkpoints'],
+                version="v2",
+            )
+
+            last_completed_layer = 0
+            last_phase = ""
+
+            async for part in stream_iterator:
+                if part.get("type") == 'values':
+                    state = part["data"]
+                    # Detect layer completion for SSE events (correlate with checkpoint)
+                    if state.get('previous_layer') and state.get('previous_layer', 0) > 0:
+                        layer = state.get('previous_layer', 0)
+                        if layer > 0:
+                            last_completed_layer = layer
+                            last_phase = state.get('phase', '')
+
+                    # Detect revision completion
+                    last_revised = state.get('last_revised_dimensions', [])
+                    if last_revised and not state.get('is_revision', False):
+                        logger.info(
+                            "[PlanningRuntimeService] [%s] Revision completed after resume: %d dims",
+                            session_id, len(last_revised),
+                        )
+
+                elif part.get("type") == 'checkpoints':
+                    data = part["data"]
+                    await checkpoint_persistence_manager.mark_write_complete(session_id)
+                    if last_completed_layer > 0:
+                        checkpoint_id = None
+                        if hasattr(data, 'config'):
+                            checkpoint_id = data.config.get('configurable', {}).get('checkpoint_id', '')
+                        if checkpoint_id:
+                            checkpoint_saved_event = create_checkpoint_saved_event(
+                                checkpoint_id=checkpoint_id,
+                                layer=last_completed_layer,
+                                phase=last_phase,
+                                session_id=session_id,
+                            )
+                            sse_manager.append_event(session_id, checkpoint_saved_event)
+                            sse_manager.publish_sync(session_id, checkpoint_saved_event)
+                            last_completed_layer = 0
+
+            # Send resumed SSE event
+            sse_manager.append_event(session_id, {
+                "type": "resumed",
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat(),
+            })
+            sse_manager.publish_sync(session_id, {
+                "type": "execution_resumed",
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat(),
+            })
+
+            logger.info("[PlanningRuntimeService] [%s] Interrupt resumption complete", session_id)
 
     @classmethod
     def get_checkpointer(cls) -> Optional[BaseCheckpointSaver]:
@@ -293,7 +380,6 @@ class PlanningRuntimeService:
             "revision_target_dimensions": [],
             "human_feedback": "",
             "step_mode": step_mode,
-            "pause_after_step": False,  # 新架构：暂停标志
             "previous_layer": 0,  # 新架构：刚完成的层级
             "gis_analysis_results": {},  # 新架构：GIS分析结果
             "user_uploaded_data": user_uploaded_gis_data or {},
@@ -463,8 +549,9 @@ class PlanningRuntimeService:
 
         checkpoint_state = await cls.aget_state(session_id)
         state = dict(checkpoint_state.values) if checkpoint_state and checkpoint_state.values else {}
+        is_interrupted = bool(checkpoint_state and checkpoint_state.next)
 
-        ui_status = state_to_ui_status(state, db_session)
+        ui_status = state_to_ui_status(state, db_session, is_interrupted=is_interrupted)
         ui_status["session_id"] = session_id
 
         # Extract messages
@@ -545,6 +632,8 @@ class PlanningRuntimeService:
         state_values: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Internal execution method called within the session lock."""
+        from app.utils.logger import set_session_id as _set_sid
+        _set_sid(session_id)
         # Wait for SSE subscriber to connect before starting execution
         # This prevents early dimension_delta events from being lost
         # Reduced timeout for script mode efficiency (1s instead of 5s)
@@ -552,44 +641,52 @@ class PlanningRuntimeService:
         if not subscriber_ready:
             logger.debug(f"[PlanningRuntimeService] [{session_id}] No SSE subscriber (script mode), proceeding immediately")
 
-        # 1. If initial_state (Layer 1 new session), create checkpoint first
+        # 1. stream_input already determined above:
+        #    For initial session: plain dict input (official LangGraph pattern)
+        #    For resume: None — aupdate_state(as_node="__start__") already set checkpoint.next
         if initial_state:
-            # Remove messages, we don't trigger through LLM
+            # Build combined update: clean state + synthetic AIMessage
             clean_state = {k: v for k, v in initial_state.items() if k != "messages"}
+
+            synthetic_ai_message = _build_synthetic_intent_message(session_id)
+
+            # Use aupdate_state + astream(None) pattern to avoid reducer
+            # serialization issues with AIMessage in plain dict input.
+            # This matches the resume path pattern below.
             clean_state["phase"] = "layer1"
-            await cls.aupdate_state(session_id, clean_state)
-            logger.info("[PlanningRuntimeService] [%s] Initial checkpoint phase=%s", session_id, clean_state.get("phase"))
-
-        # 2. Check if last message already carries an intent (e.g., gis_analysis)
-        #    If so, skip synthetic message injection to avoid overriding user intent
-        state_values = state_values or await cls.aget_state_values(session_id)
-        messages = state_values.get("messages", [])
-        last_msg = messages[-1] if messages else None
-        has_existing_intent = _has_existing_intent(last_msg)
-
-        if has_existing_intent:
-            logger.info(
-                "[PlanningRuntimeService] [%s] Last message already has intent '%s', skipping synthetic injection",
-                session_id, last_msg.tool_calls[0].get("name"),
-            )
+            await cls.aupdate_state(session_id, {
+                **clean_state,
+                "messages": [synthetic_ai_message],
+            }, as_node="__start__")
+            stream_input = None  # Resume from checkpoint
+            logger.info("[PlanningRuntimeService] [%s] Initial session: aupdate_state + astream(None) pattern", session_id)
         else:
-            # Create synthetic AIMessage with advance_planning_intent tool call
-            synthetic_ai_message = AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "advance_planning_intent",
-                        "id": f"call_{session_id[:8]}",
-                        "args": {"reason": "用户启动规划"}
-                    }
-                ]
-            )
+            # Resume from checkpoint: use aupdate_state + astream(None)
+            # Official LangGraph pattern: update_state(as_node="__start__") sets
+            # checkpoint.next to the __start__ node's successors, then
+            # astream(None, config) resumes from that checkpoint.
+            state_values = state_values or await cls.aget_state_values(session_id)
+            messages = state_values.get("messages", [])
+            last_msg = messages[-1] if messages else None
+            has_existing_intent = _has_existing_intent(last_msg)
 
-            await cls.aupdate_state(
-                session_id,
-                {"messages": [synthetic_ai_message]},
-            )
-            logger.info(f"[PlanningRuntimeService] [{session_id}] Synthetic AIMessage added to state")
+            if has_existing_intent:
+                logger.info(
+                    "[PlanningRuntimeService] [%s] Last message already has intent '%s', resuming from checkpoint",
+                    session_id, last_msg.tool_calls[0].get("name"),
+                )
+                # No message injection needed — just update state to set next=conversation
+                await cls.aupdate_state(session_id, {}, as_node="__start__")
+            else:
+                synthetic_ai_message = _build_synthetic_intent_message(session_id)
+                await cls.aupdate_state(
+                    session_id,
+                    {"messages": [synthetic_ai_message]},
+                    as_node="__start__",
+                )
+                logger.info(f"[PlanningRuntimeService] [{session_id}] Synthetic AIMessage injected via aupdate_state(as_node=__start__)")
+
+            stream_input = None  # Resume from checkpoint (official pattern)
 
         # 4. Build config with max_concurrency + optional streaming callback
         config = cls.get_thread_config(session_id, checkpoint_id=checkpoint_id)
@@ -614,19 +711,6 @@ class PlanningRuntimeService:
         # 5. Resume from checkpoint, go directly to intent_router -> route_planning
         logger.info(f"[PlanningRuntimeService] [{session_id}] Background execution started")
 
-        # Build PlanningContext from latest state (step_mode may have been PATCHed)
-        if initial_state:
-            ctx_state = initial_state
-        elif state_values is not None:
-            ctx_state = state_values
-        else:
-            ctx_state = await cls.aget_state_values(session_id) or {}
-        planning_context = PlanningContext(step_mode=ctx_state.get("step_mode", False))
-        logger.info(
-            "[PlanningRuntimeService] [%s] PlanningContext: step_mode=%s",
-            session_id, planning_context.step_mode,
-        )
-
         # Track last completed layer from values mode
         # This is used to correlate checkpoint_saved events with the correct layer
         last_completed_layer = 0
@@ -635,92 +719,86 @@ class PlanningRuntimeService:
         revision_dimensions = []
 
         try:
-            # Use Command(goto="conversation") to resume from conversation node,
-            # so after_conversation routing runs with Runtime context provided.
-            # For initial session creation, use None to start fresh.
-            if initial_state:
-                stream_input = None
-            else:
-                stream_input = Command(goto="conversation")
+            # stream_input already set above:
+            #   - initial_state: plain dict with initial state + synthetic message
+            #   - resume: None (aupdate_state already injected messages, astream resumes from checkpoint)
 
             stream_iterator = cls._graph.astream(
                 stream_input, config,
                 stream_mode=['values', 'checkpoints'],
-                context=planning_context,
+                version="v2",
             )
 
-            async for event in stream_iterator:
-                if isinstance(event, tuple) and len(event) == 2:
-                    mode, data = event
+            async for part in stream_iterator:
+                if part.get("type") == 'values':
+                    state = part["data"]
 
-                    if mode == 'values':
-                        state = data
+                    # 级联修订完成检测（独立于正常层完成检测）
+                    last_revised_dimensions = state.get('last_revised_dimensions', [])
+                    if last_revised_dimensions and not state.get('is_revision', False):
+                        is_revision = True
+                        revision_dimensions = last_revised_dimensions
+                        last_completed_layer = state.get('previous_layer', 0)
+                        last_phase = state.get('phase', '')
+                        logger.info(
+                            "[PlanningRuntimeService] [%s] Revision completed: %d dims",
+                            session_id, len(revision_dimensions),
+                        )
 
-                        # 级联修订完成检测（独立于正常层完成检测）
-                        last_revised_dimensions = state.get('last_revised_dimensions', [])
-                        if last_revised_dimensions and not state.get('is_revision', False):
-                            is_revision = True
-                            revision_dimensions = last_revised_dimensions
-                            last_completed_layer = state.get('previous_layer', 0)
+                    # Normal layer completion detection (for SSE event correlation)
+                    if state.get('previous_layer') and state.get('previous_layer', 0) > 0 and not is_revision:
+                        layer = state.get('previous_layer', 0)
+                        if layer > 0 and not is_revision:
+                            last_completed_layer = layer
                             last_phase = state.get('phase', '')
-                            logger.info(
-                                "[PlanningRuntimeService] [%s] Revision completed: %d dims",
-                                session_id, len(revision_dimensions),
-                            )
-
-                        # Normal layer completion detection
-                        if state.get('pause_after_step') and state.get('previous_layer'):
-                            layer = state.get('previous_layer', 0)
-                            if layer > 0 and not is_revision:
-                                last_completed_layer = layer
-                                last_phase = state.get('phase', '')
-                                is_revision = False
-                                revision_dimensions = []
-
-                                logger.info(f"[PlanningRuntimeService] [{session_id}] Layer {layer} completed")
-
-                    elif mode == 'checkpoints':
-                        # From checkpoints mode: checkpoint persisted, now send checkpoint_saved event
-                        checkpoint_id = None
-                        if hasattr(data, 'config'):
-                            checkpoint_id = data.config.get('configurable', {}).get('checkpoint_id', '')
-                        elif isinstance(data, dict):
-                            checkpoint_id = data.get('config', {}).get('configurable', {}).get('checkpoint_id', '')
-
-                        # Mark checkpoint write complete for synchronization
-                        await checkpoint_persistence_manager.mark_write_complete(session_id)
-
-                        if last_completed_layer > 0 and checkpoint_id:
-                            logger.info(f"[PlanningRuntimeService] [{session_id}] checkpoints mode: checkpoint_id={checkpoint_id} for {'Revision' if is_revision else 'Layer'} {last_completed_layer}")
-
-                            # Build event using factory function
-                            checkpoint_saved_event = create_checkpoint_saved_event(
-                                checkpoint_id=checkpoint_id,
-                                layer=last_completed_layer,
-                                phase=last_phase,
-                                session_id=session_id,
-                                is_revision=is_revision,
-                                revised_dimensions=revision_dimensions,
-                            )
-
-                            sse_manager.append_event(session_id, checkpoint_saved_event)
-                            sse_manager.publish_sync(session_id, checkpoint_saved_event)
-
-                            # 修订完成后清除 last_revised_dimensions，防止后续正常检查点被误判
-                            if is_revision:
-                                await cls.aupdate_state(session_id, {
-                                    "last_revised_dimensions": [],
-                                })
-                                logger.info(
-                                    "[PlanningRuntimeService] [%s] Cleared last_revised_dimensions after revision checkpoint",
-                                    session_id,
-                                )
-
-                            # Reset tracking for next layer
-                            last_completed_layer = 0
-                            last_phase = ""
                             is_revision = False
                             revision_dimensions = []
+
+                            logger.info(f"[PlanningRuntimeService] [{session_id}] Layer {layer} completed")
+
+                elif part.get("type") == 'checkpoints':
+                    data = part["data"]
+                    # From checkpoints mode: checkpoint persisted, now send checkpoint_saved event
+                    checkpoint_id = None
+                    if hasattr(data, 'config'):
+                        checkpoint_id = data.config.get('configurable', {}).get('checkpoint_id', '')
+                    elif isinstance(data, dict):
+                        checkpoint_id = data.get('config', {}).get('configurable', {}).get('checkpoint_id', '')
+
+                    # Mark checkpoint write complete for synchronization
+                    await checkpoint_persistence_manager.mark_write_complete(session_id)
+
+                    if last_completed_layer > 0 and checkpoint_id:
+                        logger.info(f"[PlanningRuntimeService] [{session_id}] checkpoints mode: checkpoint_id={checkpoint_id} for {'Revision' if is_revision else 'Layer'} {last_completed_layer}")
+
+                        # Build event using factory function
+                        checkpoint_saved_event = create_checkpoint_saved_event(
+                            checkpoint_id=checkpoint_id,
+                            layer=last_completed_layer,
+                            phase=last_phase,
+                            session_id=session_id,
+                            is_revision=is_revision,
+                            revised_dimensions=revision_dimensions,
+                        )
+
+                        sse_manager.append_event(session_id, checkpoint_saved_event)
+                        sse_manager.publish_sync(session_id, checkpoint_saved_event)
+
+                        # 修订完成后清除 last_revised_dimensions，防止后续正常检查点被误判
+                        if is_revision:
+                            await cls.aupdate_state(session_id, {
+                                "last_revised_dimensions": [],
+                            }, as_node="layer_completion_check")
+                            logger.info(
+                                "[PlanningRuntimeService] [%s] Cleared last_revised_dimensions after revision checkpoint",
+                                session_id,
+                            )
+
+                        # Reset tracking for next layer
+                        last_completed_layer = 0
+                        last_phase = ""
+                        is_revision = False
+                        revision_dimensions = []
 
                 else:
                     # Legacy single-mode handling (if stream_mode=['values'] only)
@@ -778,10 +856,6 @@ class PlanningRuntimeService:
             "status": TaskStatus.running,
             "execution_error": None,
         })
-
-        # Clear pause flags
-        if full_state.get("pause_after_step", False):
-            await checkpoint_service.clear_pause_flags(session_id)
 
         # Send layer_started event
         need_revision = full_state.get("need_revision", False)
