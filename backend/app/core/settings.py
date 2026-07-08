@@ -248,6 +248,9 @@ KB_LEVELS: list = ["national", "local", "administrative"]
 # ==========================================
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_DIR = PROJECT_ROOT / "logs"
+LOG_FILE_MAX_BYTES = int(os.getenv("LOG_FILE_MAX_BYTES", str(10 * 1024 * 1024)))  # 10MB
+LOG_FILE_BACKUP_COUNT = int(os.getenv("LOG_FILE_BACKUP_COUNT", "7"))
 
 # ==========================================
 # Backend Session Configuration (from constants/config.py)
