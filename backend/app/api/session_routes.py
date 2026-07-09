@@ -229,6 +229,202 @@ class FeedbackRequest(BaseModel):
     approve: bool = Field(False, description="批准当前层级继续")
 
 
+def _format_chat_context(state: Dict[str, Any]) -> str:
+    """Build a compact context for the side-panel chat assistant."""
+    phase = state.get("phase", "unknown")
+    previous_layer = state.get("previous_layer", 0)
+    completed_dimensions = state.get("completed_dimensions", {}) or {}
+
+    completed_summary = []
+    if isinstance(completed_dimensions, dict):
+        for layer_key, dims in completed_dimensions.items():
+            if isinstance(dims, list) and dims:
+                completed_summary.append(f"{layer_key}: {', '.join(map(str, dims[:12]))}")
+
+    report_snippets: List[str] = []
+    reports = state.get("reports", {}) or {}
+    if isinstance(reports, dict):
+        for layer_key, layer_reports in reports.items():
+            if not isinstance(layer_reports, dict):
+                continue
+            for dim_key, content in layer_reports.items():
+                if not content:
+                    continue
+                text = str(content).replace("\n", " ").strip()
+                if text:
+                    report_snippets.append(f"{layer_key}/{dim_key}: {text[:420]}")
+                if len(report_snippets) >= 8:
+                    break
+            if len(report_snippets) >= 8:
+                break
+
+    return "\n".join([
+        f"当前 phase: {phase}",
+        f"已完成到 Layer: {previous_layer}",
+        "已完成维度: " + ("; ".join(completed_summary) if completed_summary else "暂无"),
+        "已生成内容摘要:\n" + ("\n".join(report_snippets) if report_snippets else "暂无"),
+    ])
+
+
+def _is_confirm_message(text: str) -> bool:
+    """判断用户是否在确认上一轮智能体建议。"""
+    normalized = (text or "").strip().lower()
+    return normalized in {"确定", "确认", "可以", "执行", "开始", "同意", "好的", "好", "ok", "yes", "y"}
+
+
+def _is_cancel_message(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    return normalized in {"取消", "不用", "不需要", "算了", "否", "不要", "no", "n"}
+
+
+def _all_dimension_candidates() -> List[Dict[str, Any]]:
+    """从 YAML 维度配置动态读取维度别名，避免手写键名和配置不一致。"""
+    candidates: List[Dict[str, Any]] = []
+    try:
+        from app.config.loader import list_dimensions
+        for layer in (1, 2, 3):
+            for dim in list_dimensions(layer):
+                name = getattr(dim, "name", "") or ""
+                key = getattr(dim, "key", "") or ""
+                aliases = {name, key}
+                for suffix in ("分析", "规划", "指引"):
+                    if name.endswith(suffix):
+                        aliases.add(name[:-len(suffix)])
+                synonym_map = {
+                    "traffic": ["道路", "交通", "道路交通"],
+                    "public_services": ["公共服务", "服务设施", "公共服务设施"],
+                    "infrastructure": ["基础设施", "市政设施"],
+                    "land_use": ["土地利用", "用地现状", "用地分析"],
+                    "socio_economic": ["社会经济", "人口", "产业收入", "村集体收入"],
+                    "resource_endowment": ["资源禀赋", "资源条件", "空间分布特征"],
+                    "spatial_structure": ["空间结构", "空间布局", "村域布局"],
+                    "land_use_planning": ["土地利用规划", "用地布局", "建设边界"],
+                    "industry": ["产业", "产业规划", "产业发展"],
+                }
+                aliases.update(synonym_map.get(key, []))
+                candidates.append({"key": key, "name": name, "layer": layer, "aliases": [a for a in aliases if a]})
+    except Exception as exc:
+        logger.warning("[chat-agent] failed to load dimension candidates: %s", exc)
+    return candidates
+
+
+def _infer_revision_dimensions(text: str, state: Dict[str, Any]) -> List[str]:
+    """根据用户自然语言推断需要修订的维度 key。"""
+    text = text or ""
+    candidates = _all_dimension_candidates()
+    matched: List[Dict[str, Any]] = []
+    for cand in candidates:
+        aliases = sorted(cand.get("aliases", []), key=len, reverse=True)
+        if any(alias and alias in text for alias in aliases):
+            matched.append(cand)
+    if not matched:
+        return []
+
+    completed = state.get("completed_dimensions", {}) or {}
+    completed_set = {d for dims in completed.values() for d in dims}
+    current_layer = _phase_to_layer(state.get("phase", "layer1")) or state.get("previous_layer", 1) or 1
+    prev_layer = state.get("previous_layer", 0) or 0
+
+    def score(c: Dict[str, Any]) -> int:
+        key = c.get("key")
+        layer = c.get("layer", 0)
+        score_value = 0
+        if key in completed_set:
+            score_value += 20
+        if prev_layer and layer == prev_layer:
+            score_value += 10
+        elif layer == current_layer:
+            score_value += 6
+        if "分析" in text and layer in (1, 2):
+            score_value += 3
+        if "规划" in text and layer == 3:
+            score_value += 3
+        if c.get("name") and c.get("name") in text:
+            score_value += 8
+        return score_value
+
+    matched = sorted(matched, key=score, reverse=True)
+    result: List[str] = []
+    for c in matched:
+        key = c.get("key")
+        if key and key not in result:
+            result.append(key)
+        if len(result) >= 3:
+            break
+    return result
+
+
+def _build_revision_feedback(user_message: str, dimensions: List[str]) -> str:
+    """生成可直接填入修订栏的草稿。"""
+    name_map = {c["key"]: c["name"] for c in _all_dimension_candidates()}
+    dim_names = [name_map.get(d, d) for d in dimensions]
+    dim_text = "、".join(dim_names) if dim_names else "相关维度"
+    return (
+        f"请根据以下用户意见重新生成【{dim_text}】：{user_message.strip()}\n"
+        "要求：补充更具体的数据、空间特征、问题判断和规划建议；避免空泛表述；"
+        "如涉及空间布局，请说明资源分布、用地关系、交通联系和限制条件。"
+    )
+
+
+def _fallback_chat_reply(user_message: str, state: Dict[str, Any]) -> str:
+    """LLM 不可用时的兜底回复；只说明已记录，不假装执行。"""
+    msg = user_message.strip()
+    phase = state.get("phase", "当前阶段")
+    previous_layer = state.get("previous_layer", 0)
+    return (
+        f"我收到你的反馈了。当前进度处于 {phase}，已完成到 Layer {previous_layer}。"
+        f"你刚才提到：“{msg}”。如果这是修订意见，我会先把它整理成修订草稿，"
+        "你可以在审查栏里编辑后点击“提交修订”，系统才会真正重新生成对应内容。"
+    )
+
+
+async def _generate_chat_reply(user_message: str, state: Dict[str, Any]) -> str:
+    """生成自然聊天回复。普通聊天只回复，不推进规划图。"""
+    try:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        from app.core.llm import create_llm
+        context = _format_chat_context(state)
+        system_prompt = (
+            "你是村庄规划智能体的右侧对话助手。请像真正的规划助理一样自然回答。"
+            "你可以给出修改建议，但不能假装已经执行重新生成；只有用户在审查栏提交修订后，系统才会实际重跑。"
+            "如果用户问为什么、怎么改、哪里不足，请结合当前 Layer 进度给出具体建议。"
+            "不要输出 token_usage、metadata、tool_calls 等技术信息。中文回答，100到250字。"
+        )
+        prompt = f"当前规划上下文：\n{context}\n\n用户消息：{user_message}\n\n请直接回复用户。"
+        llm = create_llm(temperature=0.55, max_tokens=1800)
+        response = await llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=prompt)])
+        content = getattr(response, "content", "")
+        if isinstance(content, list):
+            content = "\n".join(str(item.get("text", item)) if isinstance(item, dict) else str(item) for item in content)
+        content = str(content).strip()
+        blocked_words = ["additional_kwargs", "response_metadata", "token_usage", "completion_tokens", "tool_calls", "usage_metadata", "finish_reason"]
+        if not content or any(w in content for w in blocked_words):
+            return _fallback_chat_reply(user_message, state)
+        return content
+    except Exception as exc:
+        logger.warning("[feedback/chat] AI reply fallback used: %s", exc)
+        return _fallback_chat_reply(user_message, state)
+
+
+async def _start_gis_generation(session_id: str, reason: str) -> None:
+    """独立触发 GIS Agent，不再混在普通聊天逻辑里。"""
+    from langchain_core.messages import HumanMessage, AIMessage
+    synthetic_msg = AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "gis_analysis",
+            "id": f"call_gis_{session_id[:8]}",
+            "args": {"reason": reason or "用户点击生成空间布局"},
+        }],
+    )
+    await PlanningRuntimeService.aupdate_state(
+        session_id,
+        {"messages": [HumanMessage(content=reason or "请生成 GIS 空间布局。"), synthetic_msg]},
+        as_node="__start__",
+    )
+    asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+
+
 class SessionCreateRequest(BaseModel):
     """创建会话请求"""
     project_name: str = Field(..., description="项目名称")
@@ -236,7 +432,7 @@ class SessionCreateRequest(BaseModel):
     village_name: str = Field("", description="村庄名称")
     task_description: str = Field(default="制定村庄发展规划", description="任务描述")
     constraints: str = Field(default="无特殊约束", description="约束条件")
-    step_mode: bool = Field(default=False, description="分步执行模式")
+    step_mode: bool = Field(default=True, description="分步执行模式")
     images: Optional[List[ImageData]] = Field(None, description="图片列表")
 
 
@@ -259,7 +455,7 @@ async def create_session(
     planning_period: str = Form("2022-2035年", description="规划期限"),
     task_description: str = Form("制定村庄发展规划", description="任务描述"),
     constraints: str = Form("无特殊约束", description="约束条件"),
-    step_mode: bool = Form(False, description="分步执行模式"),
+    step_mode: bool = Form(True, description="分步执行模式"),
     rag_enabled: bool = Form(True, description="启用 RAG 知识检索（实验对比用）"),
     rag_layer_config: str = Form("", description="Layer-level RAG config (JSON, e.g. '{\"1\":true,\"2\":false,\"3\":true}')"),
     village_data: str = Form("", description="村庄基础数据（文本）"),
@@ -284,6 +480,7 @@ async def create_session(
     session_id = str(uuid4())
     uploaded_files: List[Dict] = []
     parsed_content = village_data
+    user_uploaded_gis_data: Dict[str, Any] = {}
 
     # Process uploaded files and store to database
     file_groups = [
@@ -318,6 +515,20 @@ async def create_session(
                 if not constraints or constraints == "无特殊约束":
                     constraints = r["parsed_text"].strip()
 
+            # Collect GeoJSON data for GIS pipeline
+            if r.get("gis_data"):
+                dtype = r.get("gis_data_type")
+                if dtype:
+                    user_uploaded_gis_data[dtype] = r["gis_data"]
+                else:
+                    fname = r.get("filename", "").lower()
+                    for target_type, keyword in [("boundary", "boundary"), ("landuse_current", "landuse"),
+                                                 ("road", "road"), ("water", "water"),
+                                                 ("construction_zone", "construction")]:
+                        if keyword in fname:
+                            user_uploaded_gis_data[target_type] = r["gis_data"]
+                            break
+
     # 验证数据
     if len(parsed_content.strip()) < 10:
         raise HTTPException(status_code=400, detail="村庄数据不能为空或过短")
@@ -339,6 +550,7 @@ async def create_session(
         rag_enabled=rag_enabled,
         rag_layer_config=parsed_rag_layer_config,
         uploaded_files=uploaded_files if uploaded_files else None,
+        user_uploaded_gis_data=user_uploaded_gis_data if user_uploaded_gis_data else None,
     )
 
     sse_manager.init_session(session_id, {
@@ -388,7 +600,7 @@ async def stream_events(session_id: str):
 
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
                     if event.get("type") in ["completed", "error"]:
                         yield sse_manager.format_sse(event)
                         break
@@ -416,59 +628,35 @@ async def sync_events(session_id: str, from_seq: int = 0):
 
 @router.post("/api/sessions/{session_id}/feedback")
 async def submit_feedback(session_id: str, request: FeedbackRequest):
-    """提交反馈"""
+    """提交反馈 — 使用 interrupt/resume 模式"""
     state = await PlanningRuntimeService.aget_state_values(session_id)
     if not state:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
 
     if request.approve:
-        logger.info("[feedback/approve] session=%s execution_paused=%s phase=%s",
-            session_id, state.get("execution_paused"), state.get("phase"))
-        # Check if execution is paused (set by layer_completion_check node)
-        if not state.get("execution_paused"):
-            return {"status": "not_paused", "message": "Execution is not paused, nothing to approve"}
-
         current_phase = state.get("phase", "layer1")
         current_layer = _phase_to_layer(current_phase) or 1
         next_phase = get_next_phase(current_phase)
+        logger.info("[feedback/approve] session=%s phase=%s", session_id, current_phase)
 
-        # Single atomic state update: resume execution and advance phase
-        await PlanningRuntimeService.aupdate_state(session_id, {
-            "execution_paused": False,
-            "pause_after_step": False,
-            "previous_layer": 0,
-            "phase": next_phase or current_phase,
-            "need_revision": False,
-            "human_feedback": None,
-        })
+        # Resume from interrupt: approve action handled in layer_completion_check
+        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+            session_id,
+            resume_data={"action": "approve"},
+        ))
+        return {
+            "status": "approved",
+            "next_phase": next_phase,
+            "current_layer": current_layer,
+            "review_layer": current_layer,
+        }
 
-        # Send execution_resumed SSE event before triggering execution
-        SSEPublisher.send_execution_resumed(
-            session_id=session_id,
-            layer=current_layer,
-        )
-
-        # Send layer_started for the next layer
-        if next_phase and next_phase != "completed":
-            next_layer = _phase_to_layer(next_phase)
-            if next_layer:
-                SSEPublisher.send_layer_start(
-                    session_id=session_id,
-                    layer=next_layer,
-                    layer_name=get_layer_name(next_layer),
-                    dimension_count=len(get_layer_dimensions(next_layer))
-                )
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
-        return {"status": "approved", "next_phase": next_phase}
-
-    if request.feedback and request.dimensions:
-        # Compute impact tree once — reuse for both state update and SSE events
+    if request.dimensions and request.feedback:
+        # Reject with feedback: compute impact tree and resume from interrupt
         from app.config.dependency import get_impact_tree_compat
 
         final_tree: Dict[int, List[str]] = {0: list(request.dimensions)}
-        # Only include dimensions that have already been executed in this session
-        state_data = await PlanningRuntimeService.aget_state_values(session_id)
-        completed_dims = state_data.get("completed_dimensions", {}) if state_data else {}
+        completed_dims = state.get("completed_dimensions", {})
         all_completed_keys = set(d for dims in completed_dims.values() for d in dims)
 
         for target_dim in request.dimensions:
@@ -477,23 +665,25 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
                 already_executed = [d for d in dims if d in all_completed_keys]
                 if already_executed:
                     final_tree.setdefault(wave, []).extend(already_executed)
-        # Dedupe each wave and remove empty waves
-        final_tree = {w: list(set(dims)) for w, dims in final_tree.items() if dims}
+        final_tree = {w: list(set(dims)) for w, d in final_tree.items() if d}
 
-        await PlanningRuntimeService.aupdate_state(session_id, {
-            "human_feedback": request.feedback,
-            "need_revision": True,
-            "revision_target_dimensions": request.dimensions,
-            "is_revision": True,
-            "revision_feedback": request.feedback,
-            "revision_impact_tree": final_tree,
-            "revision_completed_dims": {},
-        }, as_node="conversation")
+        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+            session_id,
+            resume_data={
+                "action": "reject",
+                "feedback": request.feedback,
+                "dimensions": request.dimensions,
+                "images": [],
+            },
+            state_updates={
+                "revision_impact_tree": final_tree,
+                "revision_completed_dims": {},
+            },
+        ))
 
         # Emit SSE events for immediate visual feedback
         try:
             all_impacted = set(d for dims in final_tree.values() for d in dims)
-
             for target_dim in request.dimensions:
                 SSEPublisher.send_event(
                     session_id=session_id,
@@ -504,16 +694,96 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
         except Exception as e:
             logger.warning(f"[feedback] SSE cascade events failed: {e}")
 
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
         return {"status": "revision_started", "dimensions": request.dimensions}
 
     if request.message:
-        from langchain_core.messages import HumanMessage
-        await PlanningRuntimeService.aupdate_state(session_id, {"messages": [HumanMessage(content=request.message)]})
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
-        return {"status": "message_accepted"}
+        text = request.message.strip()
+        if not text:
+            return {"status": "empty_message", "reply": "请输入具体问题或修订意见。"}
+
+        if _is_cancel_message(text):
+            await PlanningRuntimeService.aupdate_state(
+                session_id,
+                {"pending_chat_action": None},
+                as_node="conversation",
+            )
+            return {"status": "chat_cancelled", "reply": "已取消上一条待处理建议。你可以继续提出新的问题或修改意见。"}
+
+        pending_action = state.get("pending_chat_action")
+        if _is_confirm_message(text) and pending_action:
+            await PlanningRuntimeService.aupdate_state(
+                session_id,
+                {"pending_chat_action": None},
+                as_node="conversation",
+            )
+            return {
+                "status": "revision_draft_ready",
+                "reply": "已确认。我已经把上一条建议整理成修订草稿，并填入审查栏。你可以修改文字或调整维度，然后点击“提交修订”才会真正重新生成。",
+                "dimensions": pending_action.get("dimensions", []),
+                "draft_feedback": pending_action.get("feedback", ""),
+                "needs_confirm": False,
+            }
+
+        inferred_dims = _infer_revision_dimensions(text, state)
+        revision_words = ("不够", "重新", "修改", "调整", "补充", "优化", "加强", "细化", "完善", "问题", "不对", "错误", "改")
+        lower_text = text.lower()
+        gis_keywords = ["gis", "地图分析", "生成地图", "生成空间布局", "生成空间", "空间布局分析"]
+        is_revision_like = bool(inferred_dims) or any(word in text for word in revision_words)
+        if any(kw in lower_text for kw in gis_keywords) and not is_revision_like:
+            await _start_gis_generation(session_id, text)
+            return {
+                "status": "gis_started",
+                "reply": "已开始生成 GIS 空间布局。请切换到右侧“地图”标签查看图层生成结果；如果失败，请查看后端日志中的 GIS Agent 错误信息。",
+            }
+
+        if is_revision_like:
+            if not inferred_dims:
+                reply = await _generate_chat_reply(text, state)
+                return {
+                    "status": "chat_need_dimension",
+                    "reply": reply + "\n\n我还没有准确识别要修改的维度。你可以补充说明，例如：土地利用分析、社会经济分析、资源禀赋分析、空间结构规划等。",
+                }
+            draft_feedback = _build_revision_feedback(text, inferred_dims)
+            await PlanningRuntimeService.aupdate_state(
+                session_id,
+                {"pending_chat_action": {
+                    "type": "revise_dimension",
+                    "dimensions": inferred_dims,
+                    "feedback": draft_feedback,
+                    "source_message": text,
+                    "created_at": datetime.now().isoformat(),
+                }},
+                as_node="conversation",
+            )
+            name_map = {c["key"]: c["name"] for c in _all_dimension_candidates()}
+            dim_names = [name_map.get(d, d) for d in inferred_dims]
+            return {
+                "status": "revision_suggestion",
+                "reply": (
+                    f"我理解你想修订：{'、'.join(dim_names)}。"
+                    "我已经生成一条可编辑的修订草稿，并填入审查栏。"
+                    "请检查维度和文字，确认后点击“提交修订”，系统才会调用大模型重新生成对应内容。"
+                ),
+                "dimensions": inferred_dims,
+                "draft_feedback": draft_feedback,
+                "needs_confirm": False,
+            }
+
+        chat_reply = await _generate_chat_reply(text, state)
+        return {"status": "chat_replied", "reply": chat_reply}
+
 
     return {"status": "no_action"}
+
+
+@router.post("/api/sessions/{session_id}/gis/generate")
+async def generate_gis_layout(session_id: str):
+    """独立生成 GIS 空间布局。前端地图按钮调用这个接口，不再复用聊天接口。"""
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+    await _start_gis_generation(session_id, "请基于已完成规划成果生成 GIS 空间布局。")
+    return {"status": "gis_started"}
 
 
 def _is_stable_checkpoint(values: Dict[str, Any]) -> tuple:
@@ -532,9 +802,8 @@ def _is_stable_checkpoint(values: Dict[str, Any]) -> tuple:
     if (values.get("last_revised_dimensions")
             and not values.get("is_revision", False)):
         return True, "revision"
-    if (values.get("pause_after_step")
-            and values.get("previous_layer", 0) > 0
-            and values.get("execution_paused", False)):
+    if (values.get("is_interrupted")
+            and values.get("previous_layer", 0) > 0):
         return True, "layer"
     return False, "intermediate"
 
@@ -583,7 +852,7 @@ async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
     sse_manager.publish_sync(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id})
 
     asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(
-        session_id, checkpoint_id=checkpoint_id
+        session_id, checkpoint_id=checkpoint_id, state_values=values
     ))
     return {"status": "resumed", "checkpoint_id": checkpoint_id, "layer": layer, "kind": kind}
 
@@ -721,7 +990,9 @@ async def get_session_status(session_id: str):
 
     checkpoint_state = await PlanningRuntimeService.aget_state(session_id)
     state = dict(checkpoint_state.values) if checkpoint_state and checkpoint_state.values else {}
-    return state_to_ui_status(state, db_session)
+    # Detect interrupt state from snapshot.next
+    is_interrupted = bool(checkpoint_state and checkpoint_state.next)
+    return state_to_ui_status(state, db_session, is_interrupted=is_interrupted)
 
 
 # ============================================
@@ -796,7 +1067,7 @@ async def update_rag_config(session_id: str, request: RagConfigRequest):
             "rag_enabled": new_rag_enabled,
             "rag_layer_config": new_layer_config,
         }
-    })
+    }, as_node="conversation")
 
     logger.info(f"[rag-config] Updated {session_id}: enabled={new_rag_enabled}, layers={new_layer_config}")
 
@@ -823,43 +1094,20 @@ async def update_step_mode(session_id: str, request: StepModeRequest):
 
     await PlanningRuntimeService.aupdate_state(session_id, {
         "step_mode": request.step_mode,
-    })
+    }, as_node="conversation")
 
     logger.info(f"[step-mode] Updated {session_id}: step_mode={request.step_mode}")
 
-    # If turning OFF step_mode while execution is paused, auto-approve
-    # to resume execution to the next layer
-    if not request.step_mode and state.get("execution_paused"):
-        current_phase = state.get("phase", "layer1")
-        current_layer = _phase_to_layer(current_phase) or 1
-        next_phase = get_next_phase(current_phase)
-
-        await PlanningRuntimeService.aupdate_state(session_id, {
-            "execution_paused": False,
-            "pause_after_step": False,
-            "previous_layer": 0,
-            "phase": next_phase or current_phase,
-            "need_revision": False,
-            "human_feedback": None,
-        })
-
-        SSEPublisher.send_execution_resumed(
-            session_id=session_id,
-            layer=current_layer,
-        )
-
-        if next_phase and next_phase != "completed":
-            next_layer = _phase_to_layer(next_phase)
-            if next_layer:
-                SSEPublisher.send_layer_start(
-                    session_id=session_id,
-                    layer=next_layer,
-                    layer_name=get_layer_name(next_layer),
-                    dimension_count=len(get_layer_dimensions(next_layer))
-                )
-
-        asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
-        logger.info(f"[step-mode] Auto-approved paused session {session_id}, advancing to {next_phase}")
+    # If turning OFF step_mode while graph is interrupted, auto-approve
+    if not request.step_mode:
+        snapshot = await PlanningRuntimeService.aget_state(session_id)
+        is_interrupted = snapshot and snapshot.next and len(snapshot.next) > 0
+        if is_interrupted:
+            asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+                session_id,
+                resume_data={"action": "approve"},
+            ))
+            logger.info(f"[step-mode] Auto-approved interrupted session {session_id}")
 
     await sse_manager.publish(session_id, {
         "type": "step_mode_updated",
@@ -1224,6 +1472,142 @@ async def generate_planning_text(session_id: str, request: GeneratePlanningTextR
     except Exception as e:
         logger.error(f"[Planning Text] Generation failed for {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Planning text generation failed: {e}")
+
+
+@router.get("/api/sessions/{session_id}/geocode")
+async def geocode_village(
+    session_id: str,
+    village_name: str = "",
+    province: str = "",
+    city: str = "",
+    county: str = "",
+    township: str = "",
+):
+    """Geocode village address to center coordinates + boundary.
+
+    Uses GISDataFetcher's 4-tier strategy:
+    1. County boundary as reference
+    2. Geocode for village center
+    3. POI search fallback
+    4. County center fallback
+    """
+    from app.services.modules.gis.fetcher import GISDataFetcher
+
+    # Build full address from hierarchy
+    parts = [p for p in [province, city, county, township, village_name] if p]
+    location = "".join(parts)
+
+    if not location:
+        raise HTTPException(status_code=400, detail="No address provided")
+
+    try:
+        fetcher = GISDataFetcher()
+        center, metadata = fetcher.get_village_center(location)
+
+        result: Dict[str, Any] = {
+            "location": location,
+            "center": list(center) if center else None,
+            "strategy": metadata.get("strategy_used"),
+            "metadata": metadata,
+        }
+
+        # Also try to get county boundary for map display
+        county_name = county or metadata.get("hierarchy", {}).get("county", "")
+        if county_name:
+            try:
+                boundary_result = fetcher.provider.get_boundary(county_name)
+                if boundary_result.success and boundary_result.data.get("geojson"):
+                    result["boundary_geojson"] = boundary_result.data["geojson"]
+                    if not center and boundary_result.metadata.get("center"):
+                        result["center"] = list(boundary_result.metadata["center"])
+                        result["strategy"] = "county_boundary_fallback"
+            except Exception as e:
+                logger.warning(f"[Geocode] Boundary fetch failed for {county_name}: {e}")
+
+        if not result["center"]:
+            raise HTTPException(status_code=404, detail=f"Cannot geocode: {location}")
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Geocode] Failed for {location}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Geocode failed: {e}")
+
+
+@router.post("/api/sessions/{session_id}/gis-data")
+async def upload_gis_data(
+    session_id: str,
+    file: UploadFile = File(...),
+    data_type: Optional[str] = Form(None),
+):
+    """Upload GIS data (GeoJSON) to an existing session.
+
+    Args:
+        session_id: Session identifier
+        file: GeoJSON file upload
+        data_type: Optional data type hint (boundary/road/water/residential/landuse_current)
+                   If not provided, will be auto-inferred from GeoJSON properties.
+
+    Returns:
+        Upload result with file ID and inferred data type.
+    """
+    # Read file content
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    # Parse file using existing helper
+    parsed = await _parse_file_in_memory(file, content)
+
+    if parsed["file_type"] != "geojson":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only GeoJSON files are supported, got: {parsed['file_type']}"
+        )
+
+    if parsed["parse_status"] != "success":
+        raise HTTPException(
+            status_code=400,
+            detail=f"GeoJSON parse failed: {parsed.get('parse_error', 'unknown error')}"
+        )
+
+    # Determine data type: user hint > auto-inferred
+    final_data_type = data_type or parsed.get("gis_data_type")
+
+    # Store in database
+    try:
+        file_id = await create_uploaded_file_async(
+            session_id=session_id,
+            file_category="gis_data",
+            file_type="geojson",
+            filename=file.filename or "upload.geojson",
+            original_filename=file.filename,
+            file_size=len(content),
+            content_type=file.content_type or "application/geo+json",
+            parsed_text=None,
+            gis_data=parsed.get("gis_data"),
+            gis_data_type=final_data_type,
+            parse_status=parsed["parse_status"],
+            parse_error=parsed.get("parse_error"),
+        )
+    except Exception as e:
+        logger.error(f"[GIS Upload] Failed to store file: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to store file: {e}")
+
+    # Note: uploaded GIS data is stored in DB via UploadedFile model.
+    # The GIS agent will query it via get_uploaded_geojson_data_async() at execution time.
+
+    feature_count = len(parsed.get("gis_data", {}).get("features", []))
+
+    return {
+        "file_id": file_id,
+        "filename": file.filename,
+        "data_type": final_data_type,
+        "feature_count": feature_count,
+        "parse_status": parsed["parse_status"],
+    }
 
 
 __all__ = ["router"]

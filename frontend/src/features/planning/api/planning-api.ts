@@ -23,6 +23,8 @@ import type {
   RagConfigResponse,
   StepModeRequest,
   StepModeResponse,
+  GeocodeResponse,
+  GisDataUploadResponse,
 } from './types';
 
 // ============================================
@@ -46,7 +48,7 @@ export const planningApi = {
     formData.append('village_data', request.village_data);
     formData.append('task_description', request.task_description || '');
     formData.append('constraints', request.constraints || '');
-    formData.append('step_mode', String(request.step_mode || false));
+    formData.append('step_mode', String(request.step_mode ?? true));
     // RAG Configuration
     formData.append('rag_enabled', String(request.rag_enabled ?? true));
     if (request.rag_layer_config) {
@@ -155,8 +157,8 @@ export const planningApi = {
           const query = data.query || '?';
           console.log(`[SSE] rag_result: ${dimKey}, query="${query}", results=${totalResults}`);
         } else if (type === 'gis_result') {
-          const dimKey = data.dimension_key || '?';
-          const dimName = data.dimension_name || '?';
+          const dimKey = data.dimensionKey || '?';
+          const dimName = data.dimensionName || '?';
           console.log(`[SSE] gis_result: ${dimKey} (${dimName})`);
         }
 
@@ -190,6 +192,7 @@ export const planningApi = {
       'dimension_start',
       'dimension_delta',
       'dimension_complete',
+      'dimension_error',
       // Progress Events
       'checkpoint_saved',
       'pause',
@@ -207,8 +210,10 @@ export const planningApi = {
       'ai_response_delta',
       'ai_response_complete',
       // GIS & RAG Events
+      'rag_query',
       'rag_result',
       'gis_result',
+      'gis_layer_update',
       // Cascade Events
       'cascade_impact',
       'cascade_complete',
@@ -224,11 +229,6 @@ export const planningApi = {
     es.addEventListener('pause', (e) => {
       parseEvent(e, 'pause');
       console.log('[SSE] pause event received, keeping connection open for resume');
-    });
-
-    es.addEventListener('stream_paused', (e) => {
-      parseEvent(e, 'pause');
-      console.log('[SSE] stream_paused event received, keeping connection open for resume');
     });
 
     es.addEventListener('completed', (e) => {
@@ -314,6 +314,12 @@ export const planningApi = {
     status: string;
     dimensions?: string[];
     layer?: number;
+    current_layer?: number;
+    review_layer?: number;
+    next_phase?: string;
+    reply?: string;
+    draft_feedback?: string;
+    needs_confirm?: boolean;
   }> {
     return apiRequest(`/api/sessions/${sessionId}/feedback`, {
       method: 'POST',
@@ -343,7 +349,7 @@ export const planningApi = {
    * Send chat message to planning session
    * POST /api/sessions/{session_id}/feedback
    */
-  async sendChatMessage(sessionId: string, message: string, images?: ImageData[]): Promise<{ status: string }> {
+  async sendChatMessage(sessionId: string, message: string, images?: ImageData[]): Promise<{ status: string; reply?: string; dimensions?: string[]; draft_feedback?: string; needs_confirm?: boolean }> {
     return this.submitFeedback(sessionId, { message, images });
   },
 
@@ -576,5 +582,67 @@ export const planningApi = {
         body: JSON.stringify(request),
       }
     );
+  },
+
+  /**
+   * Geocode village address to center coordinates + boundary
+   * GET /api/sessions/{session_id}/geocode
+   */
+  async geocodeVillage(
+    sessionId: string,
+    params: {
+      village_name?: string;
+      province?: string;
+      city?: string;
+      county?: string;
+      township?: string;
+    }
+  ): Promise<GeocodeResponse> {
+    const qs = new URLSearchParams();
+    if (params.village_name) qs.set('village_name', params.village_name);
+    if (params.province) qs.set('province', params.province);
+    if (params.city) qs.set('city', params.city);
+    if (params.county) qs.set('county', params.county);
+    if (params.township) qs.set('township', params.township);
+    return apiRequest<GeocodeResponse>(
+      `/api/sessions/${sessionId}/geocode?${qs.toString()}`
+    );
+  },
+
+  /**
+   * Generate GIS spatial layout for an existing session
+   * POST /api/sessions/{session_id}/gis/generate
+   */
+  async generateGIS(sessionId: string): Promise<{ status: string }> {
+    return apiRequest(`/api/sessions/${sessionId}/gis/generate`, {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * Upload GIS data (GeoJSON) to an existing session
+   * POST /api/sessions/{session_id}/gis-data
+   */
+  async uploadGisData(
+    sessionId: string,
+    file: File,
+    dataType?: string,
+  ): Promise<GisDataUploadResponse> {
+    const formData = new FormData();
+    formData.append('file', file, file.name);
+    if (dataType) formData.append('data_type', dataType);
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/sessions/${sessionId}/gis-data`,
+      { method: 'POST', body: formData },
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const detail = errorData.detail || `HTTP ${response.status}`;
+      throw new Error(detail);
+    }
+
+    return response.json();
   },
 };

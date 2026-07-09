@@ -16,7 +16,7 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Import accessibility core for route planning
-from .accessibility_core import haversine_distance
+from .accessibility import haversine_distance
 from .providers.tianditu import TiandituProvider
 
 # Travel speeds (km/h) for isochrone estimation
@@ -341,7 +341,7 @@ def analyze_service_area_gap(
         Dict with success status and gap analysis
     """
     # Import service radius standards
-    from .accessibility_core import SERVICE_RADIUS_STANDARDS
+    from .accessibility import SERVICE_RADIUS_STANDARDS
 
     radius = kwargs.get("custom_radius")
     if radius is None:

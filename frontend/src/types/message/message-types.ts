@@ -213,14 +213,11 @@ export interface GeoJsonFeatureCollection {
  */
 export interface GISLayerConfig {
   geojson: GeoJsonFeatureCollection;
-  layerType: 'boundary' | 'function_zone' | 'facility_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone' | 'infrastructure';
+  layerType: 'boundary' | 'function_zone' | 'facility_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone' | 'infrastructure' | 'planning_zone' | 'settlement_zone';
   layerName: string;
-  color?: string; // Backend sends color at top level
+  color?: string;
   style?: {
-    fillColor?: string;
-    fillOpacity?: number;
     color?: string;
-    weight?: number;
   };
 }
 

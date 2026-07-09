@@ -20,6 +20,7 @@ from .constants import (
     DRIVING_STRATEGY,
 )
 from ..rate_limiter import RateLimiter
+from ...utils.coord_transform import gcj02_to_wgs84, wgs84_to_gcj02
 from app.core.settings import (
     AMAP_API_KEY,
     AMAP_RATE_LIMIT,
@@ -29,76 +30,6 @@ from app.core.settings import (
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-# ==========================================
-# GCJ-02 → WGS84 坐标转换
-# ==========================================
-
-# 定义一些常量
-_X_PI = 3.14159265358979324 * 3000.0 / 180.0
-_PI = 3.1415926535897932384626
-_A = 6378245.0  # 长半轴
-_EE = 0.00669342162296594323  # 偏心率平方
-
-
-def _out_of_china(lon: float, lat: float) -> bool:
-    """判断是否在国内，不在国内则不做偏移"""
-    return not (73.66 < lon < 135.05 and 3.86 < lat < 53.55)
-
-
-def _transform_lat(lon: float, lat: float) -> float:
-    """纬度转换"""
-    ret = -100.0 + 2.0 * lon + 3.0 * lat + 0.2 * lat * lat + \
-          0.1 * lon * lat + 0.2 * math.sqrt(abs(lon))
-    ret += (20.0 * math.sin(6.0 * lon * _PI) + 20.0 *
-            math.sin(2.0 * lon * _PI)) * 2.0 / 3.0
-    ret += (20.0 * math.sin(lat * _PI) + 40.0 *
-            math.sin(lat / 3.0 * _PI)) * 2.0 / 3.0
-    ret += (160.0 * math.sin(lat / 12.0 * _PI) + 320 *
-            math.sin(lat * _PI / 30.0)) * 2.0 / 3.0
-    return ret
-
-
-def _transform_lon(lon: float, lat: float) -> float:
-    """经度转换"""
-    ret = 300.0 + lon + 2.0 * lat + 0.1 * lon * lon + \
-          0.1 * lon * lat + 0.1 * math.sqrt(abs(lon))
-    ret += (20.0 * math.sin(6.0 * lon * _PI) + 20.0 *
-            math.sin(2.0 * lon * _PI)) * 2.0 / 3.0
-    ret += (20.0 * math.sin(lon * _PI) + 40.0 *
-            math.sin(lon / 3.0 * _PI)) * 2.0 / 3.0
-    ret += (150.0 * math.sin(lon / 12.0 * _PI) + 300.0 *
-            math.sin(lon / 30.0 * _PI)) * 2.0 / 3.0
-    return ret
-
-
-def gcj02_to_wgs84(lon: float, lat: float) -> Tuple[float, float]:
-    """GCJ-02 转 WGS-84
-
-    高德地图使用的 GCJ-02 坐标系转 WGS-84 坐标系。
-
-    Args:
-        lon: GCJ-02 经度
-        lat: GCJ-02 纬度
-
-    Returns:
-        (wgs_lon, wgs_lat): WGS-84 坐标
-    """
-    if _out_of_china(lon, lat):
-        return lon, lat
-
-    dlat = _transform_lat(lon - 105.0, lat - 35.0)
-    dlon = _transform_lon(lon - 105.0, lat - 35.0)
-    radlat = lat / 180.0 * _PI
-    magic = math.sin(radlat)
-    magic = 1 - _EE * magic * magic
-    sqrtmagic = math.sqrt(magic)
-    dlat = (dlat * 180.0) / ((_A * (1 - _EE)) / (magic * sqrtmagic) * _PI)
-    dlon = (dlon * 180.0) / (_A / sqrtmagic * math.cos(radlat) * _PI)
-    mglat = lat + dlat
-    mglon = lon + dlon
-    return lon * 2 - mglon, lat * 2 - mglat
 
 
 def _parse_route_steps(steps: List) -> Tuple[List[List[float]], List[Dict]]:
@@ -332,9 +263,11 @@ class AmapProvider:
         Returns:
             AmapResult with POI list and distances
         """
+        # 高德API需要GCJ-02坐标，将WGS-84输入转换为GCJ-02
+        gcj_lon, gcj_lat = wgs84_to_gcj02(location[0], location[1])
         params = {
             "keywords": keywords,
-            "location": f"{location[0]},{location[1]}",
+            "location": f"{gcj_lon},{gcj_lat}",
             "radius": str(radius),
             "extensions": POI_EXTENSIONS,
             "offset": str(page_size),
@@ -384,9 +317,11 @@ class AmapProvider:
         Returns:
             AmapResult with POI list
         """
+        # 高德API需要GCJ-02坐标，将WGS-84输入转换为GCJ-02
+        gcj_lon, gcj_lat = wgs84_to_gcj02(location[0], location[1])
         params = {
             "types": types,
-            "location": f"{location[0]},{location[1]}",
+            "location": f"{gcj_lon},{gcj_lat}",
             "radius": str(radius),
             "extensions": POI_EXTENSIONS,
             "offset": str(page_size),
@@ -519,7 +454,9 @@ class AmapProvider:
         Returns:
             AmapResult with address info
         """
-        params = {"location": f"{lon},{lat}"}
+        # 高德API需要GCJ-02坐标，将WGS-84输入转换为GCJ-02
+        gcj_lon, gcj_lat = wgs84_to_gcj02(lon, lat)
+        params = {"location": f"{gcj_lon},{gcj_lat}"}
 
         result = self._request(REGEOCODE_URL, params)
 
@@ -719,15 +656,19 @@ class AmapProvider:
         Returns:
             AmapResult with route data
         """
+        # 高德API需要GCJ-02坐标，将WGS-84输入转换为GCJ-02
+        gcj_origin = wgs84_to_gcj02(origin[0], origin[1])
+        gcj_dest = wgs84_to_gcj02(destination[0], destination[1])
         params = {
-            "origin": f"{origin[0]},{origin[1]}",
-            "destination": f"{destination[0]},{destination[1]}",
+            "origin": f"{gcj_origin[0]},{gcj_origin[1]}",
+            "destination": f"{gcj_dest[0]},{gcj_dest[1]}",
             "strategy": str(strategy),
             "extensions": "all",
         }
 
         if waypoints:
-            waypoint_strs = [f"{p[0]},{p[1]}" for p in waypoints]
+            gcj_waypoints = [wgs84_to_gcj02(p[0], p[1]) for p in waypoints]
+            waypoint_strs = [f"{p[0]},{p[1]}" for p in gcj_waypoints]
             params["waypoints"] = ";".join(waypoint_strs)
 
         result = self._request(DRIVING_URL, params)
@@ -803,9 +744,12 @@ class AmapProvider:
         Returns:
             AmapResult with route data
         """
+        # 高德API需要GCJ-02坐标，将WGS-84输入转换为GCJ-02
+        gcj_origin = wgs84_to_gcj02(origin[0], origin[1])
+        gcj_dest = wgs84_to_gcj02(destination[0], destination[1])
         params = {
-            "origin": f"{origin[0]},{origin[1]}",
-            "destination": f"{destination[0]},{destination[1]}",
+            "origin": f"{gcj_origin[0]},{gcj_origin[1]}",
+            "destination": f"{gcj_dest[0]},{gcj_dest[1]}",
         }
 
         result = self._request(WALKING_URL, params)
@@ -887,12 +831,11 @@ class AmapProvider:
         Returns:
             AmapResult with road data (包含道路POI列表和GeoJSON)
         """
-        # 注意：高德API输入需要GCJ-02坐标，我们需要将WGS-84转回GCJ-02
-        # 但由于我们通常使用高德获取的WGS-84坐标作为输入，这里需要反向转换
-        # 实际上，大多数情况下用户传入的坐标已经是从高德获取的（已转换），所以这里保持WGS-84输入
+        # 高德API需要GCJ-02坐标，将WGS-84输入转换为GCJ-02
+        gcj_lon, gcj_lat = wgs84_to_gcj02(center[0], center[1])
         params = {
             "keywords": keywords,
-            "location": f"{center[0]},{center[1]}",
+            "location": f"{gcj_lon},{gcj_lat}",
             "radius": str(radius),
             "extensions": "all",
         }
@@ -973,14 +916,16 @@ class AmapProvider:
         Returns:
             AmapResult with road network GeoJSON
         """
-        # 计算网格点坐标
-        radius_deg = radius_km / 111.0
+        # 计算网格点坐标（cos(lat)修正经度方向度数换算）
+        radius_deg_lat = radius_km / 111.0
+        radius_deg_lon = radius_km / (111.0 * math.cos(math.radians(center[1])))
         grid_coords = []
 
         # 在中心点周围生成网格点
-        offsets = [-radius_deg, 0, radius_deg]
-        for lon_offset in offsets:
-            for lat_offset in offsets:
+        offsets_lon = [-radius_deg_lon, 0, radius_deg_lon]
+        offsets_lat = [-radius_deg_lat, 0, radius_deg_lat]
+        for lon_offset in offsets_lon:
+            for lat_offset in offsets_lat:
                 grid_coords.append((
                     center[0] + lon_offset,
                     center[1] + lat_offset

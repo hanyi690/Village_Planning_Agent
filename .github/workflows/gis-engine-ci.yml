@@ -1,0 +1,146 @@
+name: GIS Engine CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - '.github/workflows/gis-engine-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+
+jobs:
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r ../requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run fast GIS tests
+        run: |
+          pytest tests/test_gis_*.py -v --ignore=tests/test_gis_performance.py -x
+        env:
+          PYTHONPATH: .
+
+      - name: Run MIP optimizer tests
+        run: |
+          pytest tests/test_gis_mip_optimizer.py -v -x
+        env:
+          PYTHONPATH: .
+
+      - name: Run E2E real data tests
+        run: |
+          pytest tests/test_gis_e2e_real_data.py tests/test_e2e_real_reports.py -v -x
+        env:
+          PYTHONPATH: .
+
+      - name: Run KG completeness tests
+        run: |
+          pytest tests/test_gis_kg_complete.py -v -x
+        env:
+          PYTHONPATH: .
+
+      - name: Run validation tests
+        run: |
+          pytest tests/test_gis_validator.py tests/test_gis_validator_extended.py -v -x
+        env:
+          PYTHONPATH: .
+
+  performance-benchmark:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r ../requirements.txt
+          pip install pytest
+
+      - name: Run performance benchmarks
+        run: |
+          pytest tests/test_gis_performance.py -v
+        env:
+          PYTHONPATH: .
+
+  frontend-tests:
+    name: Frontend Build & E2E
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run type-check
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E tests
+        run: npx playwright test
+        env:
+          FRONTEND_URL: http://localhost:3000
+          BACKEND_URL: http://localhost:8000
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t village-planning-backend ./backend/
+
+      - name: Build frontend image
+        run: docker build -t village-planning-frontend ./frontend/

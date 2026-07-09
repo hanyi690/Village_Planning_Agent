@@ -1,0 +1,857 @@
+"""
+维度分析节点 - 简化版
+
+直接执行维度分析，无需中间 executor 层。
+"""
+
+import asyncio
+import hashlib
+import time
+import uuid
+import json
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from enum import Enum
+from typing import Dict, Any, List, Optional
+from langchain_core.messages import AIMessage
+
+from ...config import get_dimension_config, get_dimension_layer, list_dimensions
+from ...core.llm import create_llm
+from ...core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
+from ...core.events import SSEEventType
+from app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+
+# ============================================
+# RAG Retrieval Logging
+# ============================================
+
+@dataclass
+class RetrievedChunk:
+    """单个检索到的切片"""
+    chunk_id: str
+    content_preview: str  # 切片内容
+    source: str
+    score: float
+    doc_type: str = ""
+    title: str = ""
+    category: str = ""
+    subcategory: str = ""
+
+
+@dataclass
+class RAGRetrievalLog:
+    """RAG检索日志"""
+    dimension_key: str
+    query: str
+    query_generation_method: str  # "llm" or "template"
+    retrieved_chunks: List[RetrievedChunk]
+    total_results: int
+    retrieval_latency_ms: float
+    context_length: int
+    context_truncated: bool
+    rag_enabled: bool
+    skip_reason: str  # 如果RAG被跳过，记录原因
+
+
+class DependencyError(Exception):
+    """依赖缺失异常"""
+    pass
+
+
+# Cached LLM instance — reused across all dimension analyses
+_llm_cache: Optional[Any] = None
+
+
+def _get_llm():
+    global _llm_cache
+    if _llm_cache is None:
+        _llm_cache = create_llm(model=LLM_MODEL, temperature=0.7, max_tokens=MAX_TOKENS, streaming=True)
+    return _llm_cache
+
+
+class ParamSource(str, Enum):
+    """工具参数来源"""
+    LITERAL = "literal"
+    GIS_CACHE = "gis_cache"
+    CONFIG = "config"
+    CONTEXT = "context"
+
+
+# 维度名称映射
+DIMENSION_NAMES = {dim.key: dim.name for dim in list_dimensions()}
+
+
+def get_layer_from_dimension(dimension_key: str) -> int:
+    layer = get_dimension_layer(dimension_key)
+    return layer if layer is not None else 3
+
+
+def create_dimension_state(dimension_key: str, parent_state: Dict[str, Any]) -> Dict[str, Any]:
+    """创建维度状态（Send API 用）"""
+    layer = get_dimension_layer(dimension_key) or 3
+    return {
+        "dimension_key": dimension_key,
+        "dimension_name": DIMENSION_NAMES.get(dimension_key, dimension_key),
+        "session_id": parent_state.get("session_id", ""),
+        "project_name": parent_state.get("project_name", ""),
+        "config": parent_state.get("config", {}),
+        "image_ids": parent_state.get("image_ids", []) if layer == 1 else [],
+        "completed_dimensions": parent_state.get("completed_dimensions", {}),
+    }
+
+
+def _build_revision_completed(state: Dict[str, Any], dim_key: str) -> Dict[int, List[str]]:
+    """根据 impact_tree 反查维度所属 wave，构建 revision_completed_dims 更新"""
+    impact_tree = state.get("revision_impact_tree", {})
+    result: Dict[int, List[str]] = {}
+    for wave, dims in impact_tree.items():
+        if dim_key in dims:
+            result[wave] = [dim_key]
+    return result
+
+
+async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    维度分析节点 - 直接执行
+
+    流程：
+    1. 获取配置
+    2. 并行 GIS 工具
+    3. RAG 查询
+    4. 组装 Prompt
+    5. 流式 LLM + SSE
+    6. 保存版本
+    7. 返回状态更新
+    """
+    from ...services import RagService
+    from ...services.sse import sse_manager
+
+    # Debug: log revision_impact_tree at entry
+    if state.get("is_revision"):
+        logger.info(
+            "[analyze_dimension] Revision entry: dim=%s, impact_tree=%s",
+            state.get("dimension_key"),
+            state.get("revision_impact_tree"),
+        )
+    from ...services.report_store import ReportStore
+
+    dim_key = state.get("dimension_key")
+    if not dim_key:
+        return {"messages": [AIMessage(content="[执行失败] 缺少维度标识")]}
+
+    is_revision = state.get("is_revision", False)
+
+    session_id = state.get("session_id", "")
+    phase = state.get("phase", "layer1")
+    logger.info(f"[analyze_dimension] {dim_key} (phase={phase})")
+
+    # 1. 获取配置
+    cfg = get_dimension_config(dim_key)
+    if not cfg:
+        return {"messages": [AIMessage(content=f"[执行失败] 配置缺失: {dim_key}")]}
+
+    dim_name = getattr(cfg, 'name', dim_key)
+    prefer_doc_types = getattr(cfg, "prefer_doc_types", None) or None
+    dim_layer = getattr(cfg, 'layer', get_dimension_layer(dim_key) or 3)
+
+    # 2+3. GIS 和 RAG 并行执行（两者访问独立数据源，无逻辑依赖）
+    config = state.get("config", {})
+
+    # Send dimension_start early so frontend shows progress during RAG
+    await sse_manager.publish(session_id, {
+        "type": SSEEventType.DIMENSION_START,
+        "dimension_key": dim_key,
+        "dimension_name": dim_name,
+        "layer": dim_layer,
+        "is_revision": is_revision,
+    })
+    logger.info(
+        "[analyze_dimension] START: dim=%s name=%s layer=%d revision=%s",
+        dim_key, dim_name, dim_layer, is_revision,
+    )
+
+
+    async def _run_rag():
+        # Re-read config from checkpoint (Send freezes state at dispatch time,
+        # so PATCH updates to rag_layer_config would be invisible otherwise)
+        from ...services.runtime import PlanningRuntimeService
+        _latest = await PlanningRuntimeService.aget_state_values(session_id)
+        live_config = _latest.get("config", {}) if _latest else config
+
+        rag_layer_config = live_config.get("rag_layer_config", {})
+        layer_rag_enabled = rag_layer_config.get(dim_layer, True)
+        global_rag_enabled = live_config.get("rag_enabled", True)
+        dim_rag_query = getattr(cfg, 'rag_query', '')
+        rag_enabled = layer_rag_enabled and global_rag_enabled
+
+        if not rag_enabled or not dim_rag_query:
+            return ("", None)
+
+        knowledge_cache = config.get("knowledge_cache", {})
+        if state.get("is_revision") and dim_key in knowledge_cache:
+            cached = knowledge_cache[dim_key]
+            ctx = cached.get("context", "")
+            logger.info(f"[analyze_dimension] {dim_key}: RAG cache hit ({len(ctx)} chars)")
+            rlog = RAGRetrievalLog(
+                dimension_key=dim_key, query=cached.get("query", ""),
+                query_generation_method="cached", retrieved_chunks=[],
+                total_results=cached.get("total_results", 0), retrieval_latency_ms=0,
+                context_length=len(ctx), context_truncated=False,
+                rag_enabled=True, skip_reason="",
+            )
+            await sse_manager.publish(session_id, {
+                "type": SSEEventType.RAG_RESULT, "dimension_key": dim_key, "layer": dim_layer,
+                "query": cached.get("query", ""),
+                "query_generation_method": "cached", "retrieval_latency_ms": 0,
+                "total_results": cached.get("total_results", 0),
+                "documents": cached.get("documents", []),
+            })
+            return (ctx, rlog)
+
+        start_time = time.time()
+        try:
+            queries = await RagService.get_instance().generate_queries(cfg, state)
+            query_method = "llm_multi"
+
+            # Notify frontend that RAG queries have been generated
+            await sse_manager.publish(session_id, {
+                "type": SSEEventType.RAG_QUERY,
+                "dimension_key": dim_key,
+                "layer": dim_layer,
+                "query": queries[0] if queries else "",
+            })
+
+            # Cross-dimension query result cache
+            _query_cache = config.setdefault("_query_result_cache", {})
+            uncached_queries = []
+            cached_results = []
+            for query in queries:
+                qhash = hashlib.md5(query.encode()).hexdigest()[:16]
+                if qhash in _query_cache:
+                    cached_results.extend(_query_cache[qhash])
+                else:
+                    uncached_queries.append((query, qhash))
+
+            search_tasks = [RagService.get_instance().search(q, top_k=5, prefer_doc_types=prefer_doc_types) for q, _ in uncached_queries]
+
+            fresh_results = await asyncio.gather(*search_tasks) if search_tasks else []
+
+            # Merge cached + fresh results
+            result_idx = 0
+            all_results_nested = []
+            for query in queries:
+                qhash = hashlib.md5(query.encode()).hexdigest()[:16]
+                if qhash in _query_cache:
+                    all_results_nested.append([{**r, "matched_query": query} for r in _query_cache[qhash]])
+                else:
+                    fresh = fresh_results[result_idx]
+                    result_idx += 1
+                    all_results_nested.append(fresh)
+                    _query_cache[qhash] = fresh
+            all_results = [
+                {**r, "matched_query": queries[query_idx]}
+                for query_idx, query_results in enumerate(all_results_nested)
+                for r in query_results
+            ]
+            seen_content = set()
+            unique_results = []
+            for r in sorted(all_results, key=lambda x: x.get("score", 999)):
+                content_key = r.get("content", "")[:100]
+                if content_key not in seen_content:
+                    seen_content.add(content_key)
+                    unique_results.append(r)
+            results = unique_results[:5]
+
+            # 过滤无效结果：只有标题标记且无实质内容的切片
+            valid_results = []
+            for r in results:
+                content = r.get("content", "").strip()
+                if len(content) < 50 and content.startswith("#"):
+                    logger.debug(f"[analyze_dimension] 过滤无效标题切片: {content[:50]}")
+                    continue
+                valid_results.append(r)
+            results = valid_results
+
+            latency_ms = (time.time() - start_time) * 1000
+
+            retrieved_chunks = []
+            for r in results:
+                chunk = RetrievedChunk(
+                    chunk_id=str(hash(r.get("content", "")[:100])),
+                    content_preview=r.get("content", ""),
+                    source=r.get("metadata", {}).get("source", "unknown"),
+                    score=r.get("score", 0.0),
+                    doc_type=r.get("metadata", {}).get("doc_type", ""),
+                    title=r.get("metadata", {}).get("title", ""),
+                    category=r.get("metadata", {}).get("category", ""),
+                    subcategory=r.get("metadata", {}).get("subcategory", ""),
+                )
+                retrieved_chunks.append(chunk)
+
+            ctx = RagService.format_for_prompt(results) if results else ""
+            rlog = RAGRetrievalLog(
+                dimension_key=dim_key, query=queries[0] if queries else "",
+                query_generation_method=query_method, retrieved_chunks=retrieved_chunks,
+                total_results=len(results), retrieval_latency_ms=latency_ms,
+                context_length=len(ctx), context_truncated=False,
+                rag_enabled=True, skip_reason="",
+            )
+            await sse_manager.publish(session_id, {
+                "type": SSEEventType.RAG_RESULT, "dimension_key": dim_key, "layer": dim_layer,
+                "query": queries[0] if queries else "",
+                "query_generation_method": query_method,
+                "retrieval_latency_ms": latency_ms,
+                "total_results": len(results),
+                "documents": [{
+                    "title": r.get("metadata", {}).get("title", "") or r.get("metadata", {}).get("source", "未知"),
+                    "snippet": (r.get("content", "") or "")[:300],
+                    "source": r.get("metadata", {}).get("source", "未知"),
+                    "matched_query": r.get("matched_query", ""),
+                    "ancestors": r.get("metadata", {}).get("ancestors", []),
+                    "section_title": r.get("metadata", {}).get("section_title", ""),
+                    "parent_section_title": r.get("metadata", {}).get("parent_section_title", ""),
+                    "score": r.get("score", 0),
+                } for r in results],
+            })
+            logger.info(
+                f"[analyze_dimension] {dim_key}: RAG retrieved {len(ctx)} chars, {len(results)} chunks, {latency_ms:.1f}ms"
+            )
+            return (ctx, rlog)
+        except Exception as e:
+            logger.error(f"[analyze_dimension] {dim_key}: RAG failed: {e}")
+            rlog = RAGRetrievalLog(
+                dimension_key=dim_key, query="", query_generation_method="failed",
+                retrieved_chunks=[], total_results=0, retrieval_latency_ms=0,
+                context_length=0, context_truncated=False, rag_enabled=False, skip_reason=str(e),
+            )
+            return ("", rlog)
+
+    rag_context, rag_log = await _run_rag()
+
+    # 4. 从数据库加载依赖报告（按配置过滤）
+    store = ReportStore.get_instance()
+    deps = ""
+    same_layer_contexts = ""
+
+    # 同层依赖加载 - 通过 DB 获取（并行节点无法通过状态快照看到彼此的 pending_reports）
+    same_layer_deps = getattr(cfg, 'depends_on', [])
+    if same_layer_deps:
+        contexts = []
+        missing_deps = []
+
+        max_wait_seconds = 30 if is_revision else 120
+        check_interval = 2
+
+        for dep_key in same_layer_deps:
+            report = None
+            waited = 0
+
+            # 轮询等待：从 DB 获取（上游节点完成后会立即写入 DB）
+            while waited < max_wait_seconds:
+                db_report = await store.get_latest(session_id, dep_key)
+                if db_report:
+                    report = db_report
+                    contexts.append(f"【{dep_key}】分析结果：\n{report}")
+                    logger.info(f"[analyze_dimension] {dim_key}: 从DB获取依赖 {dep_key}（等待 {waited}s）")
+                    break
+
+                await asyncio.sleep(check_interval)
+                waited += check_interval
+
+            if not report:
+                missing_deps.append(dep_key)
+
+        if missing_deps:
+            # Fallback: retry each missing dep individually
+            logger.warning(
+                f"[analyze_dimension] {dim_key}: DB 中依赖报告缺失 {missing_deps}，尝试回退获取"
+            )
+            recovered_deps = []
+            still_missing = []
+            for dep_key in missing_deps:
+                dep_report = await store.get_latest_report(session_id, dep_key)
+                if dep_report:
+                    contexts.append(f"【{dep_key}】分析结果：\n{dep_report['content']}")
+                    recovered_deps.append(dep_key)
+                    logger.info(f"[analyze_dimension] {dim_key}: 从回退获取依赖 {dep_key}")
+                else:
+                    still_missing.append(dep_key)
+
+            if still_missing:
+                logger.error(
+                    f"[analyze_dimension] {dim_key}: 依赖报告加载失败（DB + 回退均失败）: {still_missing}"
+                )
+                raise DependencyError(f"维度 {dim_key} 的依赖报告加载失败: {still_missing}")
+            else:
+                logger.info(f"[analyze_dimension] {dim_key}: 通过回退恢复依赖 {recovered_deps}")
+
+        same_layer_contexts = "\n\n".join(contexts)
+        logger.info(f"[analyze_dimension] {dim_key}: 加载同层依赖 {len(same_layer_deps)} 个")
+
+    # 跨层依赖加载（按配置过滤）
+    if dim_layer == 2:
+        # Layer 2 依赖 Layer 1 报告（按 layer_depends_on 配置）
+        layer1_deps = getattr(cfg, 'layer_depends_on', [])
+        layer1_reports = await store.get_layer_reports(session_id, 1)
+        if layer1_deps:
+            deps = "\n".join([f"【{k}】{layer1_reports.get(k, '')}" for k in layer1_deps if layer1_reports.get(k)])
+        else:
+            deps = "\n".join([f"【{k}】{v}" for k, v in layer1_reports.items() if v])
+        logger.info(f"[analyze_dimension] {dim_key}: 加载跨层依赖 {len(layer1_deps) if layer1_deps else len(layer1_reports)} 个")
+
+    elif dim_layer == 3:
+        # Layer 3 依赖 Layer 1 和 Layer 2（按配置过滤）
+        layer1_deps = getattr(cfg, 'layer_depends_on', [])
+        layer2_deps = getattr(cfg, 'phase_depends_on', [])
+        # 顺序调用避免 SQLite aiosqlite 连接管理问题
+        layer1_reports = await store.get_layer_reports(session_id, 1)
+        layer2_reports = await store.get_layer_reports(session_id, 2)
+        deps_parts = []
+        for k in layer1_deps:
+            if layer1_reports.get(k):
+                deps_parts.append(f"【{k}】{layer1_reports[k]}")
+        for k in layer2_deps:
+            if layer2_reports.get(k):
+                deps_parts.append(f"【{k}】{layer2_reports[k]}")
+        deps = "\n".join(deps_parts)
+        logger.info(f"[analyze_dimension] {dim_key}: 加载跨层依赖 L1={len(layer1_deps)} L2={len(layer2_deps)} 个")
+
+    # 5. DataPipeline: execute tools and format professional data
+    professional_data_section = ""
+    try:
+        from ...services.modules.data import DataPipeline, generate_professional_data_section
+        pipeline = DataPipeline()
+
+        # Only load dependency data if dimension has tools configured
+        tool_names = getattr(cfg, "tools", []) or []
+        structured_summary = None
+
+        if tool_names and dim_layer >= 2:
+            try:
+                # Load data from layer_depends_on dimensions
+                dep_keys = getattr(cfg, "layer_depends_on", []) or []
+                if dep_keys:
+                    layer_summaries = await store.get_layer_summaries(session_id, 1)
+                    from ...services.modules.parsing.schemas import get_dimension_schema
+                    merged_metrics = {}
+                    for dk in dep_keys:
+                        raw = layer_summaries.get(dk)
+                        if raw:
+                            schema_cls = get_dimension_schema(dk)
+                            try:
+                                parsed = schema_cls.model_validate(raw)
+                                if structured_summary is None:
+                                    structured_summary = parsed
+                                if hasattr(parsed, "metrics") and parsed.metrics:
+                                    merged_metrics.update(parsed.metrics)
+                                for fname, finfo in schema_cls.model_fields.items():
+                                    if fname in ("dimension_key", "layer", "word_count", "key_points", "text_summary", "metrics"):
+                                        continue
+                                    val = getattr(parsed, fname, None)
+                                    if val is not None:
+                                        merged_metrics[fname] = val
+                            except Exception:
+                                pass
+                    state["_dep_metrics"] = merged_metrics
+                    logger.info(f"[analyze_dimension] {dim_key}: loaded {len(merged_metrics)} metrics for tools {tool_names} from deps {dep_keys}")
+            except Exception as e:
+                logger.warning(f"[analyze_dimension] {dim_key}: failed to load prior summaries: {e}")
+
+        professional_data = await pipeline.get_professional_data(dim_key, structured_summary, state)
+        professional_data_section = generate_professional_data_section(dim_key, professional_data)
+        if professional_data_section:
+            logger.info(f"[analyze_dimension] {dim_key}: professional data injected ({len(professional_data_section)} chars)")
+    except Exception as e:
+        logger.warning(f"[analyze_dimension] {dim_key}: DataPipeline failed: {e}")
+
+    # 6. 组装 Prompt
+    prompt = _build_prompt(cfg, state, rag_context, deps, same_layer_contexts, professional_data_section=professional_data_section)
+    logger.info(f"[analyze_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
+
+    # 6.5 统计收集 - 开始维度
+    from ...utils.stats_collector import StatsCollector
+    stats = StatsCollector.get_instance()
+    stats.start_dimension(session_id, dim_key, dim_name, dim_layer)
+    stats.record_prompt(session_id, dim_key, len(prompt))
+    if rag_log:
+        stats.record_rag_time(session_id, dim_key, rag_log.retrieval_latency_ms, rag_log.total_results)
+
+    # 7. 流式 LLM + SSE
+    llm = _get_llm()
+    llm_start_time = time.time()
+
+    llm_response = ""
+    _last_publish_time = 0.0
+    _PUBLISH_INTERVAL = 0.1  # 100ms throttle
+
+    try:
+        async with asyncio.timeout(LLM_STREAM_TIMEOUT):
+            async for chunk in llm.astream(prompt):
+                if hasattr(chunk, 'content') and chunk.content:
+                    llm_response += chunk.content
+                    now = time.time()
+                    if now - _last_publish_time >= _PUBLISH_INTERVAL:
+                        await sse_manager.publish(session_id, {
+                            "type": SSEEventType.DIMENSION_DELTA,
+                            "dimension_key": dim_key,
+                            "dimension_name": dim_name,
+                            "layer": dim_layer,
+                            "delta": chunk.content,
+                            "accumulated": llm_response,
+                            "is_revision": is_revision,
+                        })
+                        _last_publish_time = now
+    except asyncio.TimeoutError:
+        logger.error(f"[analyze_dimension] {dim_key}: LLM stream timeout after {LLM_STREAM_TIMEOUT}s")
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_ERROR,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "error": f"LLM stream timeout ({LLM_STREAM_TIMEOUT}s)",
+        })
+        return {"messages": [AIMessage(content=f"[执行失败] LLM流式超时({LLM_STREAM_TIMEOUT}s)")]}
+    except Exception as e:
+        logger.error(f"[analyze_dimension] {dim_key}: LLM 失败: {e}")
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_ERROR,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "error": str(e),
+        })
+        return {"messages": [AIMessage(content=f"[执行失败] LLM错误: {e}")]}
+
+    # Flush remaining delta (throttle may have skipped the last chunk)
+    if llm_response and _last_publish_time > 0:
+        await sse_manager.publish(session_id, {
+            "type": SSEEventType.DIMENSION_DELTA,
+            "dimension_key": dim_key,
+            "dimension_name": dim_name,
+            "layer": dim_layer,
+            "delta": "",
+            "accumulated": llm_response,
+            "is_revision": is_revision,
+        })
+
+    llm_elapsed = time.time() - llm_start_time
+    logger.info(f"[analyze_dimension] {dim_key}: LLM completed in {llm_elapsed:.1f}s, output = {len(llm_response)} chars")
+
+    # 7.5 统计收集 - 记录 LLM 时间和输出
+    stats.record_llm_time(session_id, dim_key, llm_elapsed, len(llm_response))
+    stats.end_dimension(session_id, dim_key)
+
+    # 8. 准备报告数据（累积到 pending_reports，由 completion.py 批量写入）
+    store = ReportStore.get_instance()
+    latest_version = await store.get_latest_version(session_id, dim_key)
+    next_version = latest_version + 1
+    revision_reason = state.get("revision_feedback") or state.get("feedback")
+
+
+    # Generate report_id for pending_reports
+    report_id = str(uuid.uuid4())
+
+    # 8. Generate structured summary (before SSE event so it can reference it)
+    structured_summary_str = await _generate_summary(dim_key, dim_layer, llm_response, rag_log)
+
+    # 9. Prepare pending report data for batch write
+    phase_key = f"layer{dim_layer}"
+    pending_report = {
+        "session_id": session_id,
+        "dimension_key": dim_key,
+        "layer": dim_layer,
+        "version": next_version,
+        "report_id": report_id,
+        "content": llm_response,
+        "summary": structured_summary_str,
+        "revision_trigger": revision_reason,
+        "knowledge_sources": asdict(rag_log) if rag_log and rag_log.rag_enabled else None,
+        "generated_at": datetime.now(),
+    }
+
+    # 10. Send completion event (with structured_summary)
+    try:
+        structured_summary_obj = json.loads(structured_summary_str) if structured_summary_str else None
+    except json.JSONDecodeError:
+        structured_summary_obj = None
+    await sse_manager.publish(session_id, {
+        "type": SSEEventType.DIMENSION_COMPLETE,
+        "dimension_key": dim_key,
+        "dimension_name": dim_name,
+        "word_count": len(llm_response),
+        "structured_summary": structured_summary_obj,
+        "report_id": report_id,
+        "version": next_version,
+        "layer": dim_layer,
+        "is_revision": is_revision,
+    })
+    logger.info(
+        "[analyze_dimension] COMPLETE: dim=%s layer=%d words=%d version=%d revision=%s",
+        dim_key, dim_layer, len(llm_response), next_version, is_revision,
+    )
+
+    # 11. State update - accumulate into pending_reports, reducer handles merge
+    result = {
+        "messages": [AIMessage(content=llm_response, metadata={"dimension_key": dim_key})],
+        "completed_dimensions": {phase_key: [dim_key]},
+        "pending_reports": [pending_report],
+        "layer_char_counts": {dim_layer: len(llm_response)},
+    }
+
+    # P0-1/P0-2: L1/L2 数据流闭环注入（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
+    # L1 完成后注入 _landuse_metrics（现状用地指标）
+    # L2 完成后注入 intent_targets（规划目标面积），供 L3 detailed.py GIS_TOOL_GUIDE 引用
+    if structured_summary_obj:
+        try:
+            if dim_layer == 1:
+                _lm = _extract_landuse_metrics(structured_summary_obj, dim_key)
+                if _lm:
+                    result["_landuse_metrics"] = _lm
+                    logger.info(f"[analyze_dimension] {dim_key}: injected _landuse_metrics = {_lm}")
+            elif dim_layer == 2:
+                _it = _extract_intent_targets(structured_summary_obj, dim_key)
+                if _it:
+                    result["intent_targets"] = _it
+                    logger.info(f"[analyze_dimension] {dim_key}: injected intent_targets = {_it}")
+        except Exception as e:
+            logger.warning(f"[analyze_dimension] {dim_key}: L1/L2 injection failed: {e}")
+
+    # 立即写入 DB，使并行节点可通过 DB 回退路径获取依赖报告
+    try:
+        await store.bulk_save([pending_report])
+        logger.info(f"[analyze_dimension] {dim_key}: Report saved to DB immediately (v{next_version})")
+    except Exception as e:
+        logger.warning(f"[analyze_dimension] {dim_key}: Immediate DB save failed (will retry in completion): {e}")
+
+    # 级联修订：记录本维度完成的波次
+    if state.get("is_revision"):
+        rev_completed = _build_revision_completed(state, dim_key)
+        if rev_completed:
+            result["revision_completed_dims"] = rev_completed
+            result["is_revision"] = True
+        # 返回 revision_impact_tree 以确保 fan-in reducer 能保留该值
+        # _preserve_impact_tree(a, b): b 有值则用 b，否则保留 a
+        # 所有并行节点从同一 Send payload 获取相同 final_tree，不会冲突
+        impact_tree = state.get("revision_impact_tree")
+        if impact_tree:
+            result["revision_impact_tree"] = impact_tree
+
+    return result
+
+
+
+def _extract_landuse_metrics(summary_obj: Any, dim_key: str) -> Dict[str, float]:
+    """P0-1: 从 L1 结构化摘要中提取现状用地指标。
+
+    优先从 land_use 维度提取 current_farmland_ha / current_construction_ha / ecological_area_ha，
+    fallback 到 superior_planning 的约束下限值，再 fallback 到 ecological 维度的 min_ecological_redline_ha。
+
+    Returns: {"farmland_ha": float, "construction_ha": float, "ecological_ha": float}
+    若全部为空则返回空 dict（调用方据此跳过注入）。
+    """
+    if not isinstance(summary_obj, dict):
+        return {}
+
+    def _safe_float(v: Any) -> Optional[float]:
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    farmland = _safe_float(summary_obj.get("current_farmland_ha"))
+    construction = _safe_float(summary_obj.get("current_construction_ha"))
+    ecological = _safe_float(summary_obj.get("ecological_area_ha"))
+
+    # Fallback 1: superior_planning 约束下限值
+    if farmland is None:
+        farmland = _safe_float(summary_obj.get("min_farmland_protection_ha"))
+    if ecological is None:
+        ecological = _safe_float(summary_obj.get("min_ecological_redline_ha"))
+
+    # Fallback 2: ecological 维度字段
+    if ecological is None:
+        ecological = _safe_float(summary_obj.get("planned_ecological_area_ha"))
+
+    result: Dict[str, float] = {}
+    if farmland is not None:
+        result["farmland_ha"] = farmland
+    if construction is not None:
+        result["construction_ha"] = construction
+    if ecological is not None:
+        result["ecological_ha"] = ecological
+
+    return result
+
+
+def _extract_intent_targets(summary_obj: Any, dim_key: str) -> Dict[str, float]:
+    """P0-2: 从 L2 结构化摘要中提取规划目标面积，映射到三区中文名。
+
+    优先字段：planned_farmland_ha / planned_construction_ha / planned_ecological_ha
+    Fallback 1：farmland_protection_ha / construction_land_target_ha / planned_ecological_area_ha
+    Fallback 2：L1 约束下限 min_farmland_protection_ha / min_ecological_redline_ha
+
+    Returns: {"农田保护区": float, "村庄建设区": float, "生态保护区": float}
+    全空则返回空 dict（调用方跳过注入）。
+    """
+    if not isinstance(summary_obj, dict):
+        return {}
+
+    def _safe_float(v: Any) -> Optional[float]:
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    farmland = _safe_float(summary_obj.get("planned_farmland_ha"))
+    construction = _safe_float(summary_obj.get("planned_construction_ha"))
+    ecological = _safe_float(summary_obj.get("planned_ecological_ha"))
+
+    # Fallback 1: L2 目标字段别名
+    if farmland is None:
+        farmland = _safe_float(summary_obj.get("farmland_protection_ha"))
+    if construction is None:
+        construction = _safe_float(summary_obj.get("construction_land_target_ha"))
+    if ecological is None:
+        ecological = _safe_float(summary_obj.get("planned_ecological_area_ha"))
+
+    # Fallback 2: L1 约束下限值（保底）
+    if farmland is None:
+        farmland = _safe_float(summary_obj.get("min_farmland_protection_ha"))
+    if ecological is None:
+        ecological = _safe_float(summary_obj.get("min_ecological_redline_ha"))
+
+    result: Dict[str, float] = {}
+    if farmland is not None:
+        result["农田保护区"] = farmland
+    if construction is not None:
+        result["村庄建设区"] = construction
+    if ecological is not None:
+        result["生态保护区"] = ecological
+
+    return result
+
+
+async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log) -> str:
+    """Generate structured JSON summary for a dimension report."""
+    from ...services.modules.parsing.summary_generator import generate_structured_summary
+    try:
+        return await generate_structured_summary(dim_key, dim_layer, content, rag_log)
+    except Exception as e:
+        logger.warning(f"[analyze_dimension] {dim_key}: Summary generation failed: {e}")
+        from ...services.modules.parsing.schemas import BaseDimensionSummary
+        fallback = BaseDimensionSummary(
+            dimension_key=dim_key, layer=dim_layer,
+            word_count=len(content), text_summary=content[:200],
+        )
+        return fallback.model_dump_json(ensure_ascii=False)
+
+
+def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: str = "", professional_data_section: str = "") -> str:
+    """组装 Prompt - 使用 prompts 模块模板
+
+    Args:
+        cfg: 维度配置
+        state: 当前状态
+        rag_context: RAG 检索上下文
+        deps: 前序依赖报告（从数据库加载）
+        same_layer_contexts: 同层依赖报告
+    """
+    from ...services.modules.prompts.analysis import get_dimension_prompt as get_layer1_prompt
+    from ...services.modules.prompts.concept import get_dimension_prompt as get_layer2_prompt
+    from ...services.modules.prompts.detailed import get_dimension_prompt as get_layer3_prompt
+
+    dim_key = getattr(cfg, 'key', state.get("dimension_key", ""))
+    layer = getattr(cfg, 'layer', get_dimension_layer(dim_key) or 1)
+    dim_name = getattr(cfg, 'name', DIMENSION_NAMES.get(dim_key, dim_key))
+
+    project_name = state.get("project_name", "村庄")
+    village_name = state.get("config", {}).get("village_name", project_name)
+    village_data = state.get("config", {}).get("village_data", "")
+    task_desc = state.get("config", {}).get("task_description", "制定村庄发展规划")
+    constraints = state.get("config", {}).get("constraints", "无特殊约束")
+
+    # Professional data from DataPipeline (tool results formatted for prompt)
+
+    # 根据层级选择 Prompt 模板
+    # 级联修订指令：独立参数，不再混入 knowledge_context
+    revision_instruction = ""
+    if state.get("is_revision"):
+        revision_feedback = state.get("revision_feedback", "")
+        revision_instruction = f"""【级联修订指令 - 必须执行】
+你的上级专家对你的报告提出了以下驳回意见：
+
+"{revision_feedback}"
+
+你需要根据驳回意见对报告内容进行实质性修改：
+1. 仔细理解驳回意见中提出的问题和要求
+2. 在报告正文中体现驳回意见要求的调整方向
+3. 修改后的报告应能体现出与修改前的明确差异
+4. 保留原有报告格式和结构框架
+5. 不要添加"修订摘要"章节，直接在正文中修改相关内容"""
+
+    if layer == 1:
+        return get_layer1_prompt(
+            dimension_key=dim_key,
+            raw_data=village_data + professional_data_section,
+            village_name=village_name,
+            task_description=task_desc,
+            constraints=constraints,
+            knowledge_context=rag_context or "",
+            revision_instruction=revision_instruction,
+            has_images=bool(state.get("image_ids")),
+        )
+    elif layer == 2:
+        return get_layer2_prompt(
+            dimension_key=dim_key,
+            analysis_report=deps,
+            task_description=task_desc,
+            constraints=constraints,
+            knowledge_context=rag_context or "",
+            revision_instruction=revision_instruction,
+            layer2_contexts=same_layer_contexts,  # 传递同层依赖报告
+            professional_data=professional_data_section,  # 注入工具计算结果
+        )
+    elif layer == 3:
+        return get_layer3_prompt(
+            dimension_key=dim_key,
+            project_name=project_name,
+            analysis_report=deps,
+            planning_concept=deps,  # 使用相同的依赖报告
+            constraints=constraints,
+            knowledge_context=rag_context or "",
+            revision_instruction=revision_instruction,
+            professional_data_section=professional_data_section,
+        )
+
+    # 默认通用模板
+    return f"""请对 "{project_name}" 进行 {dim_name} 分析。
+
+## 基础数据
+{village_data[:2000]}
+
+## 规划任务
+{task_desc}
+
+{professional_data_section}
+
+{deps}
+
+{rag_context if rag_context else ""}
+
+请生成完整的分析报告："""
+
+
+__all__ = [
+    "analyze_dimension",
+    "create_dimension_state",
+    "DIMENSION_NAMES",
+    "get_layer_from_dimension",
+    "ParamSource",
+]

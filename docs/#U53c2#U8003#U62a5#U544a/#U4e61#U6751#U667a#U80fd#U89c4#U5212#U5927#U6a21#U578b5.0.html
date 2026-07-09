@@ -1,0 +1,1788 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>乡村智能规划大模型</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-green: #2e7d32;
+            --secondary-green: #388e3c;
+            --light-green: #8bc34a;
+            --background-green: #e8f5e9;
+            --dark-green: #1b5e20;
+            --text-dark: #333;
+            --text-light: #666;
+            --border-color: #c8e6c9;
+        }
+        
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #f5f9f5, #e8f5e9);
+            color: var(--text-dark);
+            padding-top: 20px;
+            min-height: 10vh;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, var(--primary-green), var(--dark-green));
+            color: white;
+            padding: 20px 0;
+            border-radius: 10px 10px 0 0;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            margin-bottom: 25px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .header::before {
+            content: "";
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 70%);
+            transform: rotate(30deg);
+        }
+        
+        .header h1 {
+            font-weight: 700;
+            margin-bottom: 5px;
+            letter-spacing: 1px;
+            position: relative;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1rem;
+            position: relative;
+        }
+        
+        .process-flow {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 30px auto;
+            max-width: 1000px;
+            position: relative;
+        }
+        
+        .flow-step {
+            text-align: center;
+            position: relative;
+            z-index: 2;
+            flex: 1;
+            transition: all 0.3s ease;
+        }
+        
+        .flow-step.active {
+            transform: scale(1.05);
+        }
+        
+        .flow-icon {
+            width: 70px;
+            height: 70px;
+            background: var(--light-green);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 15px;
+            color: white;
+            font-size: 24px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+            transition: all 0.3s ease;
+        }
+        
+        .flow-step.active .flow-icon {
+            background: var(--secondary-green);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.2);
+        }
+        
+        .flow-step h4 {
+            color: var(--dark-green);
+            font-weight: 600;
+            margin-bottom: 5px;
+            transition: color 0.3s ease;
+        }
+        
+        .flow-step.active h4 {
+            color: var(--primary-green);
+        }
+        
+        .flow-connector {
+            position: absolute;
+            top: 35px;
+            left: 10%;
+            width: 80%;
+            height: 4px;
+            background: var(--light-green);
+            z-index: 1;
+        }
+        
+        .nav-tabs {
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .nav-tabs .nav-link {
+            color: var(--text-dark);
+            font-weight: 600;
+            padding: 15px 20px;
+            border: none;
+            border-radius: 0;
+            position: relative;
+            transition: all 0.3s ease;
+            background: #f0f7f0;
+        }
+        
+        .nav-tabs .nav-link.active {
+            background: white;
+            color: var(--primary-green);
+            border-bottom: 3px solid var(--primary-green);
+            box-shadow: 0 -3px 10px rgba(0,0,0,0.05);
+        }
+        
+        .nav-tabs .nav-link:not(.active):hover {
+            color: var(--secondary-green);
+            background: #e8f5e9;
+        }
+        
+        .tab-content {
+            background: white;
+            border-radius: 0 0 10px 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
+            padding: 25px;
+            margin-bottom: 30px;
+            min-height: 600px;
+            border: 1px solid var(--border-color);
+            border-top: none;
+        }
+        
+        .section-card {
+            border: 1px solid var(--border-color);
+            background: white;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            overflow: hidden;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+        }
+        
+        .section-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+            border-color: var(--light-green);
+        }
+        
+        .section-header {
+            padding: 12px 20px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--background-green);
+            transition: background 0.3s ease;
+        }
+        
+        .section-card.expanded .section-header {
+            background: linear-gradient(90deg, var(--background-green), #e1f5e1);
+        }
+        
+        .section-title {
+            font-weight: 600;
+            color: var(--dark-green);
+            margin: 0;
+            font-size: 1.05rem;
+            display: flex;
+            align-items: center;
+        }
+        
+        .section-title i {
+            margin-right: 10px;
+            color: var(--primary-green);
+            font-size: 1.1rem;
+        }
+        
+        .section-content {
+            padding: 0 20px;
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s ease, padding 0.4s ease;
+        }
+        
+        .section-card.expanded .section-content {
+            padding: 15px 20px;
+            max-height: 1000px;
+        }
+        
+        .section-content p {
+            color: var(--text-light);
+            line-height: 1.7;
+            margin-bottom: 10px;
+            font-size: 0.95rem;
+        }
+        
+        .subsection {
+            margin: 12px 0;
+            padding: 10px 0 10px 15px;
+            border-left: 2px solid var(--border-color);
+        }
+        
+        .subsection-title {
+            font-weight: 600;
+            color: var(--primary-green);
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+        }
+        
+        .subsection-title i {
+            margin-right: 8px;
+            font-size: 0.9rem;
+        }
+        
+        .next-btn {
+            background: linear-gradient(135deg, var(--primary-green), var(--dark-green));
+            color: white;
+            border: none;
+            padding: 12px 35px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-radius: 50px;
+            display: block;
+            margin: 30px auto;
+            box-shadow: 0 5px 15px rgba(46, 125, 50, 0.4);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .next-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 7px 20px rgba(46, 125, 50, 0.5);
+        }
+        
+        .next-btn:active {
+            transform: translateY(1px);
+        }
+        
+        .next-btn::after {
+            content: "";
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: rgba(255, 255, 255, 0.1);
+            transform: rotate(30deg);
+            transition: all 0.6s;
+        }
+        
+        .next-btn:hover::after {
+            transform: rotate(30deg) translate(20%, 20%);
+        }
+        
+        .ai-thinking {
+            text-align: center;
+            padding: 20px;
+            color: var(--primary-green);
+            font-size: 1.1rem;
+            background: var(--background-green);
+            border-radius: 8px;
+            margin-top: 20px;
+            border: 1px dashed var(--light-green);
+            display: none;
+        }
+        
+        .ai-thinking.show {
+            display: block;
+        }
+        
+        .ai-thinking i {
+            font-size: 2rem;
+            margin-bottom: 15px;
+            display: block;
+            color: var(--secondary-green);
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-light);
+            font-size: 0.9rem;
+            margin-top: 30px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.05);
+        }
+        
+        .file-upload-area {
+            background: white;
+            border: 2px dashed var(--light-green);
+            border-radius: 10px;
+            padding: 25px;
+            text-align: center;
+            margin: 20px 0 30px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .file-upload-area:hover {
+            border-color: var(--primary-green);
+            background: var(--background-green);
+        }
+        
+        .file-upload-area i {
+            font-size: 3rem;
+            color: var(--light-green);
+            margin-bottom: 15px;
+            display: block;
+            transition: all 0.3s ease;
+        }
+        
+        .file-upload-text {
+            font-size: 1.1rem;
+            color: var(--text-dark);
+            margin-bottom: 15px;
+        }
+        
+        .file-upload-btn {
+            background: var(--light-green);
+            color: white;
+            border: none;
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .file-upload-btn:hover {
+            background: var(--primary-green);
+            transform: translateY(-2px);
+        }
+        
+        .ai-summary {
+            background: linear-gradient(135deg, #e1f5e1, #d0efd0);
+            border-left: 4px solid var(--primary-green);
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            border-radius: 0 8px 8px 0;
+            font-weight: 500;
+            color: var(--dark-green);
+        }
+        
+        .analysis-container {
+            display: none;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.6s ease;
+        }
+        
+        .analysis-container.show {
+            display: block;
+            opacity: 1;
+            transform: translateY(0);
+        }
+        
+        .next-btn-container {
+            text-align: center;
+            margin-top: 20px;
+            display: none;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.6s ease 0.3s;
+        }
+        
+        .next-btn-container.show {
+            display: block;
+            opacity: 1;
+            transform: translateY(0);
+        }
+        
+        .ai-process-bar {
+            height: 4px;
+            background: var(--light-green);
+            border-radius: 2px;
+            margin: 20px 0;
+            overflow: hidden;
+            position: relative;
+            display: none;
+        }
+        
+        .ai-process-bar.show {
+            display: block;
+        }
+        
+        .ai-process-bar::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 30%;
+            background: var(--primary-green);
+            border-radius: 2px;
+            animation: progressAnimation 2s infinite linear;
+        }
+        
+        .generate-plan-btn {
+            background: linear-gradient(135deg, var(--primary-green), var(--dark-green));
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 30px;
+            display: block;
+            margin: 20px auto;
+            box-shadow: 0 4px 10px rgba(46, 125, 50, 0.3);
+            transition: all 0.3s ease;
+        }
+        
+        .generate-plan-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 15px rgba(46, 125, 50, 0.4);
+        }
+        
+        /* 新增图片占位样式 */
+        .image-placeholder {
+            width: 100%;
+            height: 700px;
+            background-color: #f5f9f5;
+            border: 2px dashed #c8e6c9;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            margin: 20px 0;
+            color: var(--text-light);
+            transition: all 0.3s ease;
+        }
+        
+        .image-placeholder:hover {
+            border-color: var(--primary-green);
+            background-color: var(--background-green);
+        }
+        
+        .image-placeholder i {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            color: var(--light-green);
+        }
+        
+        .image-placeholder p {
+            font-size: 1rem;
+            margin: 0;
+        }
+        
+        .image-placeholder .image-note {
+            font-size: 0.85rem;
+            margin-top: 10px;
+            color: var(--text-light);
+            font-style: italic;
+        }
+        
+        @keyframes progressAnimation {
+            0% {
+                left: -30%;
+                width: 30%;
+            }
+            50% {
+                width: 50%;
+            }
+            100% {
+                left: 100%;
+                width: 30%;
+            }
+        }
+        
+        @media (max-width: 992px) {
+            .nav-tabs .nav-link {
+                padding: 12px 15px;
+                font-size: 0.9rem;
+            }
+            
+            .process-flow {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            
+            .flow-step {
+                flex: 0 0 33.333%;
+                margin-bottom: 20px;
+            }
+            
+            .flow-connector {
+                display: none;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .process-flow {
+                flex-direction: column;
+            }
+            
+            .flow-step {
+                margin-bottom: 30px;
+                width: 100%;
+            }
+            
+            .header h1 {
+                font-size: 1.6rem;
+            }
+            
+            .nav-tabs .nav-link {
+                padding: 10px 12px;
+                font-size: 0.85rem;
+            }
+        }
+        
+        .upload-success {
+            display: none;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.5s ease;
+        }
+        
+        .upload-success.show {
+            display: flex;
+            opacity: 1;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header text-center">
+            <h1><i class="fas fa-seedling me-2"></i>乡村智能规划大模型</h1>
+            <p class="mb-0">智能分析 · 科学规划 · 乡村振兴</p>
+        </div>
+        
+        <div class="process-flow">
+            <div class="flow-connector"></div>
+            
+            <div class="flow-step active" id="step1">
+                <div class="flow-icon">
+                    <i class="fas fa-file-alt"></i>
+                </div>
+                <h4>现状分析</h4>
+                <p>导入基础数据</p>
+            </div>
+            
+            <div class="flow-step" id="step2">
+                <div class="flow-icon">
+                    <i class="fas fa-lightbulb"></i>
+                </div>
+                <h4>规划思路</h4>
+                <p>AI生成方案</p>
+            </div>
+            
+            <div class="flow-step" id="step3">
+                <div class="flow-icon">
+                    <i class="fas fa-map-marked-alt"></i>
+                </div>
+                <h4>总体规划</h4>
+                <p>形成详细方案</p>
+            </div>
+            
+            <div class="flow-step" id="step4">
+                <div class="flow-icon">
+                    <i class="fas fa-download"></i>
+                </div>
+                <h4>生成报告</h4>
+                <p>导出规划成果</p>
+            </div>
+            
+            <div class="flow-step" id="step5">
+                <div class="flow-icon">
+                    <i class="fas fa-images"></i>
+                </div>
+                <h4>展示效果</h4>
+                <p>可视化呈现</p>
+            </div>
+        </div>
+        
+        <ul class="nav nav-tabs" id="myTab" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button class="nav-link active" id="current-tab" data-bs-toggle="tab" data-bs-target="#current" type="button" role="tab">
+                    <i class="fas fa-map-marked me-2"></i>现状分析
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="plan-tab" data-bs-toggle="tab" data-bs-target="#plan" type="button" role="tab">
+                    <i class="fas fa-brain me-2"></i>规划思路
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="overall-tab" data-bs-toggle="tab" data-bs-target="#overall" type="button" role="tab">
+                    <i class="fas fa-project-diagram me-2"></i>总体规划
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="report-tab" data-bs-toggle="tab" data-bs-target="#report" type="button" role="tab">
+                    <i class="fas fa-file-download me-2"></i>生成报告
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="visualization-tab" data-bs-toggle="tab" data-bs-target="#visualization" type="button" role="tab">
+                    <i class="fas fa-images me-2"></i>展示效果
+                </button>
+            </li>
+        </ul>
+        
+        <div class="tab-content" id="myTabContent">
+            <div class="tab-pane fade show active" id="current" role="tabpanel">
+               <h3 class="mb-4"><i class="fas fa-map-marked-alt me-2 text-success"></i>金田村现状分析</h3>
+                
+                <div class="file-upload-area" id="fileUploadArea">
+                    <i class="fas fa-cloud-upload-alt"></i>
+                    <div class="file-upload-text">拖放现状报告文件到此处或点击上传</div>
+                    <button class="file-upload-btn">
+                        <i class="fas fa-upload me-2"></i>选择文件
+                    </button>
+                    <input type="file" id="fileInput" style="display: none;" accept=".docx,.pdf,.txt">
+                    <div class="mt-2 text-muted small">支持 .docx, .pdf, .txt 格式</div>
+                </div>
+                
+                <div class="alert alert-success d-flex align-items-center upload-success" id="uploadSuccess">
+                    <i class="fas fa-check-circle me-2"></i>
+                    <div>文件上传成功！系统已开始分析金田村现状数据</div>
+                </div>
+                
+                <div class="ai-process-bar" id="aiProcessBar"></div>
+                
+                <div class="analysis-container" id="analysisContainer">
+                     <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-location-dot"></i>区位分析</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-map-pin"></i>梅州市在广东省的位置</div>
+                                <p>梅州市是闽粤赣边区域性中心城市，位于广东省东北部，地处闽粤赣三省交界。北与江西省赣州市相连，东与福建省龙岩市和漳州市相连，南与潮州市、揭阳市、汕尾市毗邻，西与河源市接壤。梅州境内现有10条13段建成高速，市区至县城基本实现高速直通。其中，济广高速与长深高速分别与广州和深圳两个大都市相连。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-map-pin"></i>平远县在梅州市的位置</div>
+                                <p>平远县是广东省梅州市下辖县，位于梅州市北部。平远县东连蕉岭县，南接梅州市梅县区、兴宁市，西邻江西寻乌县、北与福建武平县接壤，是粤闽赣边客家圈中心区域。206国道南北贯通全县，济广高速、梅平高速和规划中的瑞梅铁路途经平远，与珠三角、海西区、赣南等地区构成"3小时经济圈"。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-map-pin"></i>泗水镇在平远县的位置</div>
+                                <p>泗水镇位于平远县东北部山区，是两省三县交界之地。泗水镇西与上举镇、东石镇接壤，西南与东石镇、茅坪相连，东面及南面与蕉岭县毗邻，北端与福建省下坝乡接壤。泗水镇距离平远县城36公里，梅州市区80公里，X038东北-西南走向穿过泗水镇，沟通着东石镇和广福镇，次一级的乡道疏通各村，整体而言，泗水镇交通较为便利。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-map-pin"></i>金田村在泗水镇的位置</div>
+                                <p>金田村位于泗水镇最北端，北至福建省，西接上举镇，东靠广福镇，南连文贵村。金田村位于泗水镇北端，村驻地经Y122乡道与X038县道连接泗水镇中心。在村内多条村道与外界相连。</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-chart-line"></i>社会经济分析</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-sitemap"></i>行政区划</div>
+                                <p>金田村隶属广东省梅州市平远县泗水镇，下辖12个自然村：园寨、田坑、社前、分水、清明、塘笃、长塘、炉池、肩丰、营仔、新山、黄竹。其中园寨是行政村。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-users"></i>人口情况</div>
+                                <p>全村共有325户人口，其中户籍人口1403人，常住人口约500人。村内青壮年劳动力大多外出务工求学，常住村民多为老人小孩，人口流失问题较为严重，并且出现了老龄化问题。50岁以下劳动力较少。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-industry"></i>产业构成</div>
+                                <p>第一产业：农业是主导产业，包括水稻种植、药材(林芝20亩)、烤烟(60亩)和养殖业。第二产业：依托丰富的林木资源，发展杉木家具制造业，但产业规模小，家具产量不足。缺乏第三产业。</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-tree"></i>自然环境分析</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-cloud-sun"></i>气候</div>
+                                <p>处于南亚热带与中亚热带过渡的气候区，属于亚热带季风气候区，雨热同季，热量丰富，雨量充足，风力小，霜期短。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-mountain"></i>地形</div>
+                                <p>地处南岭与武夷山脉之间，以丘陵山地为主，东北高，西南低，地形起伏大，地势平缓地块比较破碎.</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-layer-group"></i>地质</div>
+                                <p>自然土壤以红壤为主，岩土由侵入岩、熔岩、混合岩组成。由于风化层厚、地形复杂，工程地质条件变化较大，属于地质灾害中易发生区，易发生崩塌、滑坡地质灾害。金田村存在5处崩塌隐患点和35处滑坡隐患点。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-tree"></i>林地资源</div>
+                                <p>林业资源丰富，林地面积在土地总面积中的占比达90%，其中商业林面积约1867.38公顷，生态林面积约325.92公顷。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-water"></i>水文资源</div>
+                                <p>水域面积35.99公顷，占土地总面积的1.53%。金田河由西南至东北贯穿金田村，汇入石窟河。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-tractor"></i>田园资源</div>
+                                <p>耕地面积85.2公顷，占土地总面积的3.63%。耕地形态以水田为主，水田面积达78.83公顷。但金田村耕地十分破碎，不利于规模发展。</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-layer-group"></i>土地利用分析</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-ruler-combined"></i>土地利用情况</div>
+                                <p>土地总用地面积约2352.89公顷，其中农业用地1960.70公顷(83.33%)，建设用地30.17公顷(1.28%)，生态用地362.02公顷(15.39%)。总体而言，金田村林地面积较大，但耕地比较破碎，建设用地分散。</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-road"></i>道路交通分析</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-exchange-alt"></i>对外交通</div>
+                                <p>金田村对外交通联系主要通过乡道和村道。122乡道是金田村主要的对外交通道路，也是金田与镇域相联系的主要通道。村民出行十分不便。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-road"></i>内部交通</div>
+                                <p>金田村内交通以村道为主，各村道沿122乡道呈梳向，南北纵向分布。122乡道是村中唯一的东西方向道路，缺乏其他东西向联系。目前，村内道路已基本实现了简单硬化，但部分道路仍为砂石路或机耕路，且村庄道路较窄（大部分不足8米），道路两旁景观较差。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-bus"></i>交通设施</div>
+                                <p>村内现有交通设施4处，其中停车场1处位于村委会，但村内停车基本以路边停车和宅旁停车为主，该停车场并未能发挥其作用；公交站点3处，均为临车上车点，仅有一处候车亭，分布于村庄西南部。总体而言，金田村交通设施并不充足，难以满足村民日常交通出行和车辆停泊的需求。</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-hospital"></i>公共服务设施分析</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-clinic-medical"></i>设施概况</div>
+                                <p>金田村内建有基本公共服务设施，集中分布于园寨村，且数量较少，较难全面满足村民生活需求。村委会设于园寨村，并设有1个公共文化服务中心（内有1间文化室），与卫生站、小学、幼儿园等其他公共服务设施形成组团，服务全金田村。</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-tools"></i>基础设施分析</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-bolt"></i>设施概况</div>
+                                <p>金田村现有3个水电站，主要沿石窟河布置。供水管道6000余米长，基本覆盖全村用水家庭。各家屋前自设排水设施。总体而言，金田村内现有基本市政服务设施种类不足、数量稀少，分布十分零散，较难全面满足村民生活需求。同时，现有设施建设欠规范，疏于维修。</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                   <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-seedling"></i>绿地与活动场地分析</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-square"></i>活动场地</div>
+                                <p>金田村公共活动场地以广场为主，共有2个文化广场。金田村村委会门前的广场面积最大，硬化程度较好。广场内设有篮球场，闲时也可起晒场的作用。但绿地和活动场地数量较少，分布零散，很难满足居民日常活动需求。</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-home"></i>建筑现状分析</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-th"></i>建筑整体布局</div>
+                                <p>金田村共12处自然村，现状建筑分布较为分散，主要集中于金田村中部的园寨、马头段，其余自然村分布较为分散且房屋数量不多。整体村落以旧建筑为主，且新建筑大多位于金田村东南部——马头段、社前以及园寨附近，整体村落新旧建筑穿插建造，影响村貌，且风格各异。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-ruler"></i>建筑质量与层高分析</div>
+                                <p>金田村下属共12处自然村，现有建筑583处，对建筑的主体和局部结构质量状况、是否有安全隐患等的评价，分为四类：一类建筑、二类建筑、三类建筑、四类建筑。</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-landmark"></i>历史文化资源分析</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-building"></i>传统风貌建筑</div>
+                                <p>阁楼：许多传统民居都有阁楼，传统的阁楼都是用木头组成，现如今村民为了让阁楼更加牢固，使用了铁加固。祠堂：在社前村，黄竹村，田坑村具有三座祠堂。其占地面积有950㎡，建筑面积达1450㎡。这些祠堂有着浓厚的客家文化元素。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-monument"></i>历史环境要素</div>
+                                <p>古驿道：在炉池村，现有南粤古驿道的古驿道遗存及相关节点，平远县政府正全面推进古驿道重点线路保护和修复利用工作。古茶亭：在炉池村，现有茶亭的遗址，茶亭多建于盐米古道，为过往行人提供遮风挡雨、休憩纳凉和提供茶水的场所。古檀树：金田村的千年古檀树直径达2.8米，周长为8.79米，树龄达1200多年，被认为是村中的风水树。蕈树：平远县泗水镇金田村的蕈树，树龄550年，树围8.2米，树高25米，平均冠幅达35米，树形高大优美，长势良好，被认为是村中的伯公树。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-music"></i>非物质文化遗产</div>
+                                <p>船灯舞：平远船灯舞在平远县流传已有200多年的历史，每逢春节、元宵、端午、中秋节以及喜庆丰收之时村民便由家族或村寨自发制作、排演船灯舞，以此来庆祝节日，表达丰收后的喜悦之情以及对美好生活的向往。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-utensils"></i>传统美食</div>
+                                <p>金田村拥有许多客家传统风味小吃，如：春节时，会制作兼具香、嫩、爽的黄粄，招待亲友；三伏天时，会食用清甜爽口的仙人粄，降温解暑。</p>
+                            </div>
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-gifts"></i>传统习俗</div>
+                                <p>新春伊始金田村村民在元宵前后会进行富有特色的添灯习俗，寓意为添丁，有生生不息、薪火相传之意。每年春秋两季，金田村村民还会供奉"公王"，还有迎送"公王"的习俗。</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="section-card">
+                        <div class="section-header" onclick="toggleSection(this)">
+                            <h4 class="section-title"><i class="fas fa-clipboard-list"></i>村庄发展诉求</h4>
+                            <i class="fas fa-chevron-down"></i>
+                        </div>
+                        <div class="section-content">
+                            <div class="subsection">
+                                <div class="subsection-title"><i class="fas fa-lightbulb"></i>主要诉求</div>
+                                <p>根据村民调研和现状分析，金田村主要发展诉求包括：改善交通条件，完善基础设施，提升公共服务设施，保护和利用历史文化资源，发展特色产业，提高村民收入，改善人居环境，吸引人口回流等。</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="next-btn-container" id="nextBtnContainer">
+                    <button class="btn next-btn" id="nextBtn">
+                        <i class="fas fa-arrow-right me-2"></i>下一步：生成规划思路
+                    </button>
+                </div>
+            </div>
+            
+            <div class="tab-pane fade" id="plan" role="tabpanel">
+               <h3 class="mb-4"><i class="fas fa-brain me-2 text-success"></i>金田村规划思路</h3>
+                
+                <div class="ai-summary">
+                    <i class="fas fa-robot me-2"></i>AI通过分析村庄现状数据，总结出以下规划思路
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-gem"></i>资源禀赋</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-landmark"></i>民俗资源</div>
+                            <p>黄粄、船灯</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-mountain"></i>自然资源</div>
+                            <p>古檀林、山溪</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-monument"></i>历史古迹</div>
+                            <p>茶亭、古驿道</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-industry"></i>特色产业</div>
+                            <p>杉木、中药材</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-bullseye"></i>发展目标</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-flag"></i>总体目标</div>
+                            <p>梅州市特色南药综合开发示范村</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-map-marker-alt"></i>规划定位</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-seedling"></i>产业定位</div>
+                            <p>特色南药生产示范基地</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-tree"></i>生态定位</div>
+                            <p>林下经济优质发展先行区</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-home"></i>乡村定位</div>
+                            <p>乡村风貌改善模范村落</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-chess-board"></i>规划策略</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-leaf"></i>生态优先</div>
+                            <p>生态保护网格化</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-industry"></i>产业振兴</div>
+                            <p>主导产业特色化</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-users-cog"></i>治理有效</div>
+                            <p>乡村治理现代化</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="text-center mt-4">
+                    <button class="btn generate-plan-btn" id="generatePlanBtn">
+                        <i class="fas fa-cogs me-2"></i>生成规划方案
+                    </button>
+                </div>
+                
+                <div class="ai-thinking" id="aiThinking">
+                    <i class="fas fa-cogs fa-spin"></i>
+                    <p>AI正在生成科学规划方案...</p>
+                </div>
+                
+                <div class="next-btn-container" id="planNextBtnContainer">
+                    <button class="btn next-btn" id="nextToOverallBtn">
+                        <i class="fas fa-arrow-right me-2"></i>下一步：查看总体规划
+                    </button>
+                </div>
+            </div>
+            
+            <div class="tab-pane fade" id="overall" role="tabpanel">
+                <h3 class="mb-4"><i class="fas fa-project-diagram me-2 text-success"></i>金田村总体规划</h3>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-industry"></i>产业规划</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-bullseye"></i>产业发展定位</div>
+                            <p>长链条、多环节、高效益的岭南特色南药产业示范基地</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-lightbulb"></i>产业发展思路</div>
+                            <p><strong>强链</strong>：强化现有环节，加大发展力度</p>
+                            <p><strong>补链</strong>：围绕四大环节，补全南药产业链</p>
+                            <p><strong>拓链</strong>：发展关联产业，提升产业链复杂度</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-sitemap"></i>产业体系构建</div>
+                            <p>构建以第一产业为基础、第二产业为支撑、第三产业为延伸的完整南药产业体系</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-map-marker-alt"></i>产业项目布局</div>
+                            <p>三心带动，五区联动：园寨加工中心、黄竹旅游中心、肩丰加工中心、农业生产区、林下开发区、休闲农业区、康养旅游区、森林保育区</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-map"></i>村庄总体规划</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-th-large"></i>空间格局</div>
+                            <p>"二心二轴四区"：园寨村民中心、黄竹游客中心、旅游休闲轴、综合发展轴、田园生活区、产业发展区、青山林海区、旅游观光区</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-ruler-combined"></i>土地利用规划</div>
+                            <p>土地总用地面积约2352.89公顷，其中农业用地1949.63公顷(82.83%)，建设用地34.03公顷(1.45%)，生态用地369.23公顷(15.69%)</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-draw-polygon"></i>村庄用地控制</div>
+                            <p>划定村庄增长边界线、生态保护红线和永久基本农田保护控制线，引导村庄集约发展，保障生态安全和农田质量</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-road"></i>道路交通规划</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-exchange-alt"></i>对外交通</div>
+                            <p>主要通过122乡道连接，对宽度不足8米的原有乡道进行拓宽</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-road"></i>内部交通</div>
+                            <p>村道划分为两个等级：一级村道宽度6米，二级村道宽度4米。对宽度不足6米的原有村道进行拓宽处理</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-parking"></i>交通设施</div>
+                            <p>保留和修缮原有停车场和公交车站，完善村内公共交通系统，新增路灯设施</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-hiking"></i>步道系统</div>
+                            <p>规划森林步道、农田步道与滨水步道，满足不同人群需求，增加游客体验自然的机会</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-hospital"></i>公共服务设施规划</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-building"></i>集约化建设</div>
+                            <p>在园寨改造废弃小学，集中建设村民服务综合体；在黄竹建设游客服务中心</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-basketball-ball"></i>普惠性设施</div>
+                            <p>补充篮球场、健身设施和垃圾收集点，满足村民日常生活需要</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-tools"></i>基础设施规划</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-water"></i>污水处理</div>
+                            <p>在黄竹、肩丰等村增设污水处理池，全村范围铺设污水处理管道</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-restroom"></i>公共卫生</div>
+                            <p>在肩丰、炉池、田坑增设公共厕所，改善村落基础服务设施分布不均的现状</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-seedling"></i>生态绿地规划</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-park"></i>绿地系统</div>
+                            <p>增设村民活动场地、公园绿地和活动广场，打造生态宜居、绿色和谐的金田村绿地系统</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-water"></i>水域生态修复</div>
+                            <p>砌河护坡、河道绿化与河底整治，在公王河黄竹、田坑、园寨河段开展生态整治工作，整治面积约54公顷</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-tree"></i>生态保育</div>
+                            <p>划定生态保育绿地区，禁止开发活动，减少人类活动干预，形成天然绿色的生态环境</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-forest"></i>古檀林保护</div>
+                            <p>将营子里部分林地划定为古檀林主题森林公园，规划林下观光步道，设置标识牌等必要设施</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-tractor"></i>耕地保护</div>
+                            <p>坚决遏制耕地"非农化"现象，实施严格的管控措施，深入推进耕地污染防治</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-house-damage"></i>防震减灾规划</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-water"></i>防洪排涝</div>
+                            <p>保留利用原有3处坑塘作为调蓄池，规划设计3处新调蓄池减缓洪水淹没风险</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-fire-extinguisher"></i>消防救援</div>
+                            <p>规划122乡道为主要逃生和消防救援道路，村道为次要道路。设立村庄微型消防站，选取调蓄池作为消防蓄水池</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-first-aid"></i>抗震设施</div>
+                            <p>将8处广场和2处村名公园作为抗震设施，完善河道整治措施，保证河道通畅</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-landmark"></i>历史文化保护规划</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-shield-alt"></i>保护思路</div>
+                            <p>深入挖掘乡村历史文化资源，提出整体保护措施，明确管制规则</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-hands-helping"></i>保护活化利用规划</div>
+                            <p>修缮祠堂建筑，保护千年古檀树和古檀林，传承传统文化习俗</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-paint-brush"></i>村庄风貌指引</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-image"></i>景观风貌指引</div>
+                            <p>耕地景观、林地景观、房前屋后景观、河流景观、坑塘景观、村庄入口景观、"四小园"、祠堂、村民活动交流场地、乡道、村道、巷道、步道</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-building"></i>建筑风貌指引</div>
+                            <p>风格定位：雅致、和谐的现代客家乡村风格</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-calendar-check"></i>近期建设项目库</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-list-ol"></i>重点项目</div>
+                            <p>包括南药种植基地建设、道路拓宽工程、污水处理设施建设、公共服务设施改造等优先实施项目</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-clock"></i>实施时序</div>
+                            <p>规划在未来1-3年内实施的建设项目，明确各项任务的优先级和时间节点</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-calendar-alt"></i>远期建设项目库</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-list-ol"></i>远景项目</div>
+                            <p>包括产业链完善、旅游设施升级、生态修复深化等中长期发展项目</p>
+                        </div>
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-clock"></i>实施时序</div>
+                            <p>规划在未来3-5年或更长时间实施的建设项目，为村庄可持续发展提供指引</p>
+                        </div>
+                    </div>
+                </div>
+                
+                
+                <div class="next-btn-container" id="overallNextBtnContainer">
+                    <button class="btn next-btn" id="nextToReportBtn">
+                        <i class="fas fa-arrow-right me-2"></i>下一步：生成规划报告
+                    </button>
+                </div>
+            </div>
+            
+            <div class="tab-pane fade" id="report" role="tabpanel">
+                <h3 class="mb-4"><i class="fas fa-file-download me-2 text-success"></i>生成规划报告</h3>
+                
+                <div class="ai-summary">
+                    <i class="fas fa-robot me-2"></i>AI已完成金田村的全面规划，请生成最终报告
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-info-circle"></i>报告说明</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <p>本报告包含金田村乡村振兴规划的完整内容，包括：</p>
+                        <ul>
+                            <li>村庄现状分析</li>
+                            <li>产业发展规划</li>
+                            <li>空间布局规划</li>
+                            <li>基础设施规划</li>
+                            <li>生态环境保护规划</li>
+                            <li>历史文化保护规划</li>
+                            <li>近期与远期实施计划</li>
+                        </ul>
+                        <p>报告格式为Word文档，可直接下载并使用。</p>
+                    </div>
+                </div>
+                
+                <div class="text-center mt-4">
+                    <button class="btn btn-lg next-btn" id="generateReportBtn">
+                        <i class="fas fa-file-download me-2"></i>一键生成规划报告
+                    </button>
+                </div>
+                
+                <div class="next-btn-container" id="viewVisualizationBtnContainer">
+                    <button class="btn next-btn" id="viewVisualizationBtn">
+                        <i class="fas fa-images me-2"></i>查看规划效果展示
+                    </button>
+                </div>
+            </div>
+            
+            <div class="tab-pane fade" id="visualization" role="tabpanel">
+                <h3 class="mb-4"><i class="fas fa-images me-2 text-success"></i>金田村规划效果展示</h3>
+                
+                <div class="ai-summary">
+                    <i class="fas fa-robot me-2"></i>AI生成的规划效果可视化展示
+                </div>
+            
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-map-marked-alt"></i>村庄总体格局</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <p>金田村村庄总体格局规划图展示了村庄未来的整体空间布局和功能分区。</p>
+                        
+                        <div class="image-placeholder">
+                            <img src="结构图.png" alt="村庄总体格局规划图" style="max-width: 100%; height: 650px;">
+                        </div>
+                        
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-info-circle"></i>图例说明</div>
+                            <p>图中展示了金田村"二心二轴四区"的空间格局：</p>
+                            <ul>
+                                <li>园寨村民中心 - 行政管理与公共服务核心</li>
+                                <li>黄竹游客中心 - 旅游服务与接待核心</li>
+                                <li>旅游休闲轴 - 串联主要旅游景点</li>
+                                <li>综合发展轴 - 连接产业发展区域</li>
+                                <li>四类功能区 - 田园生活区、产业发展区、青山林海区、旅游观光区</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-hospital"></i>公共服务设施规划</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <p>公共服务设施规划图展示了金田村未来公共服务设施的布局和功能分区。</p>
+
+                        <div class="image-placeholder">
+                            <img src="公服图.png" alt="公共服务设施规划图" style="max-width: 100%; height: 650px;">
+                        </div>
+                        
+                        <div class="subsection">
+                            <div class="subsection-title"><i class="fas fa-info-circle"></i>设施布局</div>
+                            <ul>
+                                <li>园寨村民服务综合体：改造废弃小学，集中建设公共服务设施</li>
+                                <li>黄竹游客服务中心：提供旅游咨询、特产销售等服务</li>
+                                <li>各自然村补充篮球场、健身设施和垃圾收集点</li>
+                                <li>新增公共厕所，改善基础服务设施分布不均的现状</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="section-card">
+                    <div class="section-header" onclick="toggleSection(this)">
+                        <h4 class="section-title"><i class="fas fa-chess-board"></i>总体规划效果</h4>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="section-content">
+                        <p>村庄总体规划效果图展示了金田村未来的鸟瞰效果图。</p>
+
+                        <div class="image-placeholder">
+                            <img src="鸟瞰图.png" alt="村庄总体规划效果图" style="max-width: 100%; height: 650px;">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="text-center mt-4">
+                    <button class="btn next-btn" id="backToReportBtn">
+                        <i class="fas fa-arrow-left me-2"></i>返回报告生成
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>乡村智能规划大模型 © 2025 | 城乡规划与计算机科学交叉研究平台</p>
+            <p class="mb-0">技术支持：深度学习 | 空间分析 | 乡村规划知识图谱</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 切换章节展开/折叠
+        function toggleSection(element) {
+            const card = element.closest('.section-card');
+            card.classList.toggle('expanded');
+            
+            const icon = element.querySelector('.fa-chevron-down, .fa-chevron-up');
+            if (card.classList.contains('expanded')) {
+                icon.classList.remove('fa-chevron-down');
+                icon.classList.add('fa-chevron-up');
+            } else {
+                icon.classList.remove('fa-chevron-up');
+                icon.classList.add('fa-chevron-down');
+            }
+        }
+        
+        // 文件上传功能
+        document.getElementById('fileUploadArea').addEventListener('click', function() {
+            document.getElementById('fileInput').click();
+        });
+        
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            if (e.target.files.length > 0) {
+                const fileName = e.target.files[0].name;
+                const uploadArea = document.getElementById('fileUploadArea');
+                const successAlert = document.getElementById('uploadSuccess');
+                const aiProcessBar = document.getElementById('aiProcessBar');
+                const analysisContainer = document.getElementById('analysisContainer');
+                const nextBtnContainer = document.getElementById('nextBtnContainer');
+                
+                // 更新上传区域显示
+                uploadArea.innerHTML = `
+                    <i class="fas fa-check-circle text-success"></i>
+                    <div class="file-upload-text">${fileName} 已成功上传</div>
+                    <div class="mt-2 text-success small">系统正在分析村庄现状数据...</div>
+                `;
+                uploadArea.style.borderColor = '#2e7d32';
+                uploadArea.style.background = '#e8f5e9';
+                
+                // 显示成功提示
+                successAlert.classList.add('show');
+                
+                // 显示AI分析进度条
+                aiProcessBar.classList.add('show');
+                
+                // 模拟分析过程
+                setTimeout(function() {
+                    // 显示现状分析内容
+                    analysisContainer.classList.add('show');
+                    
+                    // 显示下一步按钮
+                    setTimeout(function() {
+                        nextBtnContainer.classList.add('show');
+                    }, 500);
+                }, 2500);
+            }
+        });
+        
+        // 下一步按钮功能（现状分析 → 规划思路）
+        document.getElementById('nextBtn').addEventListener('click', function() {
+            // 激活规划思路步骤
+            document.getElementById('step2').classList.add('active');
+            document.getElementById('step1').classList.remove('active');
+            
+            // 切换到规划思路选项卡
+            document.getElementById('plan-tab').click();
+        });
+        
+        // 生成规划方案按钮功能
+        document.getElementById('generatePlanBtn').addEventListener('click', function() {
+            const btn = this;
+            const aiThinking = document.getElementById('aiThinking');
+            const nextBtnContainer = document.getElementById('planNextBtnContainer');
+            
+            // 显示加载状态
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>生成中...';
+            btn.disabled = true;
+            
+            // 显示AI思考状态
+            aiThinking.classList.add('show');
+            
+            // 模拟生成过程
+            setTimeout(function() {
+                btn.innerHTML = '<i class="fas fa-check me-2"></i>生成完成';
+                
+                // 显示下一步按钮
+                setTimeout(function() {
+                    nextBtnContainer.classList.add('show');
+                    btn.disabled = false;
+                }, 1000);
+            }, 3000);
+        });
+        
+        // 下一步按钮功能（规划思路 → 总体规划）
+        document.getElementById('nextToOverallBtn').addEventListener('click', function() {
+            // 激活总体规划步骤
+            document.getElementById('step3').classList.add('active');
+            document.getElementById('step2').classList.remove('active');
+            
+            // 切换到总体规划选项卡
+            document.getElementById('overall-tab').click();
+            
+            // 显示总体规划选项卡中的下一步按钮
+            document.getElementById('overallNextBtnContainer').classList.add('show');
+        });
+        
+        // 下一步按钮功能（总体规划 → 生成报告）
+        document.getElementById('nextToReportBtn').addEventListener('click', function() {
+            // 激活生成报告步骤
+            document.getElementById('step4').classList.add('active');
+            document.getElementById('step3').classList.remove('active');
+            
+            // 切换到生成报告选项卡
+            document.getElementById('report-tab').click();
+        });
+        
+        // 查看效果按钮功能（生成报告 → 展示效果）
+        document.getElementById('viewVisualizationBtn').addEventListener('click', function() {
+            // 激活展示效果步骤
+            document.getElementById('step5').classList.add('active');
+            document.getElementById('step4').classList.remove('active');
+            
+            // 切换到展示效果选项卡
+            document.getElementById('visualization-tab').click();
+        });
+        
+        // 返回报告按钮功能（展示效果 → 生成报告）
+        document.getElementById('backToReportBtn').addEventListener('click', function() {
+            // 激活生成报告步骤
+            document.getElementById('step4').classList.add('active');
+            document.getElementById('step5').classList.remove('active');
+            
+            // 切换到生成报告选项卡
+            document.getElementById('report-tab').click();
+        });
+        
+        // 一键生成报告按钮功能
+        document.getElementById('generateReportBtn').addEventListener('click', function() {
+            const btn = this;
+            const viewVisualizationBtnContainer = document.getElementById('viewVisualizationBtnContainer');
+            
+            // 显示加载状态
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>正在生成报告...';
+            btn.disabled = true;
+            
+            // 模拟报告生成过程
+            setTimeout(function() {
+                btn.innerHTML = '<i class="fas fa-check me-2"></i>报告生成成功！';
+                
+                // 创建并触发下载
+                const a = document.createElement('a');
+                
+                // 将文档内容转换为Blob
+                const fileContent = `# 广东省梅州市平远县泗水镇金田村 规划细化
+
+**【产业规划】**
+
+1.  **产业发展定位**
+
+    长链条、多环节、高效益的岭南特色南药产业示范基地
+
+2.  **产业发展思路**
+
+    **强链------强化现有环节，加大发展力度**
+
+    （统筹考虑村落现有产业的预期效益，选择最有发展潜力的南药产业作为抓手，结合村落现状，强化现有的生产种植环节，加大发展力度，实现规模化种植，让南药种得好、种得精。）
+
+    **补链------围绕四大环节，补全南药产业链**
+
+    （在加大现有生产环节发展力度后，补全上游的研发环节、中游的加工环节、下游的展销环节，围绕四大环节发展产业，形成完整的产业链条，提升产业竞争优势。）
+
+    **拓链------发展关联产业，提升产业链复杂度**
+
+    （结合村落南药产业，拓宽产业链条，发挥村落剩余产能，拓展出乡村农旅、研学教育、文创加工等关联产业，提升产业链复杂度，形成金田特色南药产业发展体系，实现经济效益最大化。）
+
+3.  **产业体系构建**
+
+4.  **产业项目细化**
+
+    **第一产业**
+
+1.  种植特色南药：
+
+    山地种植：牛大力、岗梅、五指毛桃
+
+    平地种植：红豆杉、金钱草、草珊瑚、石参、溪黄草、金银花
+
+2.  凭依南药养殖家禽：利用南药作为鸡饲料添加剂，提升鸡肉品质与产蛋率，预防鸡病，保障养殖效益。
+
+3.  农业废物利用发电：通过农业废弃物资源化利用，实现绿色能源生产。
+
+4.  南药特色农产品开发：结合南药种植与养殖，打造特色农产品品牌。
+
+    **第二产业**
+
+    1\.
+    药材加工：组建中药加工合作社，推动各自然村对特色药材进行粗加工（如杜前溪黄草加工园）。在肩丰、园寨、杜前村建设南药精加工工坊，构建集中药交易、饮片制剂生产、仓储物流为一体的现代中药加工产业体系。
+
+    2\. 加工企业溯源体系：建立药材加工溯源体系，确保产品质量与安全。
+
+    **第三产业**
+
+    1\. 特色农贸
+
+    农夫集市：汇集村内特色产品，打造线下交易市场、特产商店和市集活动，形成金田特色农贸品牌。
+
+    IP形象打造：设计金田特色IP形象，用于产品包装和纪念品，提升品牌辨识度。
+
+    乡村电商：利用网络直播、短视频带货，开设特色网店，完善物流仓储配套，降低物流成本。
+
+    2\. 休闲农业
+
+    农事体验：在黄竹村组织游客参与南药种植、家禽养殖、农业采摘等活动。
+
+    加工体验：在肩丰村发展旅游纪念品加工产业，增强游客互动体验。
+
+    3\. 生态旅游
+
+    田家民宿：改造营子里村民房屋，建设特色田间民宿。
+
+    南药养生：结合民宿分布，提供南药养生服务与产品。
+
+    森林康养：在自然林区设置森林驿站和森林公园，提供康养服务。
+
+    古树观光：保护古檀树林，打造观光线路和互动空间，讲好古檀故事。
+
+5.  **产业项目布局**
+
+    三心带动，五区联动。
+
+    园寨加工中心：主要发展南药与预制菜加工，同时，打造产研基地，助力成果，服务农业生产,带动金田西部发展。
+
+    黄竹旅游中心：金田村游客服务中心，主要提供餐饮、特产销售等服务。作为全村旅游业的核心区，带动金田中部、北部发展。
+
+    肩丰加工中心：以南药加工、林业加工为核心，带动金田东部发展。
+
+    农业生产区：以合作经营的形式进行规模化的农业生产。
+
+    林下开发区：以家庭农场为形态探索种养一体的林下经济模式
+
+    休闲农业区：综合特产销售、田园餐饮、农事体验，发展休闲农业，聚集乡村人气。
+
+    康养旅游区：依托金田森林、田园自然资源禀赋，以康养为目的，结合南药文化，发展乡村民宿，留住乡村人气。
+
+    森林保育区：十分珍惜，切实保护金田林业资源，守护好金田发展的金山银山。
+
+**【村庄总体规划】**
+
+1.  **空间格局**
+
+    "二心二轴四区"
+
+    园寨村民中心：位于金田中南部，主要面对村民提供服务，提供村庄治理、产业发展、医疗卫生等用地。
+
+    黄竹游客中心：位于金田中东部，主要面对游客提供服务，提供文化宣传、旅游服务等用地。
+
+    旅游休闲轴：依托优质生态资源和南药产业，形成以森林康养和休闲农业为代表的旅游休闲区域。
+
+    综合发展轴：沿122乡道，推动形成以南药种植为中心的集农业生产、农产加工为一体的产业聚集区域,，以及综合服务发展区域。
+
+    田园生活区：位于金田村中部，为村民聚居的区域，引导村庄宅基地集中建设，集约发展。
+
+    产业发展区：位于金田村东北部与西南部，布局生产加工中心，形成以南药种植为中心的产业发展区域。
+
+    青山林海区：位于金田村西部与东部，拥有丰富的林海资源，是金田村的生态基石。
+
+    旅游观光区：位于金田村中部和北部，发展集生态旅游、休闲农业的农旅发展区域。
+
+2.  **土地利用规划**
+
+    土地总用地面积约2352.89公顷，其中,
+
+    农业用地1949.63公顷，占比达 82.83%；
+
+    建设用地34.03公顷，占比达1.45%；
+
+    生态用地369.23公顷,占比达15.69%。
+
+3.  **村庄用地控制**
+
+    村庄增长边界线：在尊重现有村庄自然村分布情况的基础，合理划定村庄增长边界，引导村庄集约发展。
+
+    生态保护红线：属于严格控制保护开发区域，严禁开发建设，为保障村庄基本生态安全，维护生态系统的科学性、完整性和连续性，防止村庄建设无序蔓延，在尊重村庄自然生态系统和合理环境承载力的前提下，根据有关法律、法规，结台村庄实际情况划定的生态保护红线。
+
+    永久基本农田保护控制线：永久基本农田实行永久性保护，永久基本农田的划定和管护，必须采取行政、法律、经济、技术等综合手段，加强管理，以实现永久基本农田的质量、数量、生态等全方面管护。
+
+4.  **道路交通规划**
+
+    对外交通主要通过122乡道连接，同时对宽度不足8米的原有乡道进行拓宽。
+
+    内部交通主要通过村道相连接，本次道路交通规划将村道划分为两个等级,
+    一级村道宽度为6米，二级村道宽度为4米。同时对宽度不足6米的原有村道也进行了拓宽处理。
+
+    对于金田村原有的停车场和公交车站进行了保留和修缮。同时结合了村庄现有发展诉求和发展目标，完善了村内公共交通系统。同时,对村中的122乡道以及重要的村道进行保留和新增路灯设施。
+
+    依托金田村丰富的森林资源，在保护好森岭资源的前提下，根据地形的起伏，在田坑村西侧规划森林步道，营仔村作为森林步道最重要的起始服务点。森林步道通过穿越生态保护较好、原真性较好的森林区域，增加游客体验自然的机会。同时，利用金田村丰富的农田资源与水文条件，构建农田步道与滨水步道，满足不同人群对步道系统的需求。
+
+    农田步道穿越了园寨、营仔、黄竹三个主要农业生产区，并且沿途设置驿站、研学基地，让游客体验农事生产的乐趣。
+
+    滨水步道沿金田河园寨---黄竹段设立，并依据自然条件设立观景平台与亲水平台。
+
+5.  **公共服务设施规划**
+
+    基于村庄发展需求，对村庄公共服务设施进行集约化建设。在园寨，改造废弃小学，集中建设包括公共服务中心、文化服务中心、养老中心在内的村民服务综合体，与原有的村委会、卫生站等形成村庄公共服务的集聚区。在黄竹，结合地理区位，建设游客服务中心。
+
+    同时，基于公共服务的普惠性，考虑各自然村的现状，适当补充了一些篮球场、健身设施和垃圾收集点，更好满足村民日常生活的需要。
+
+6.  **基础设施规划**
+
+    拟在黄竹、肩丰等村增设污水处理池，全村范围铺设污水处理管道，在肩丰、炉池、田坑增设公共厕所。通过增设服务覆盖全村的基础服务设施，改善村落基础服务设施缺乏且分布不均的现状，从而提升村民居住体验，切实为村民生活带来便利。
+
+7.  **生态绿地规划**
+
+    根据实际情况，拟在每个自然村增设不同规模的村民活动场地。在建设用地范围内增设公园绿地和活动广场，在范围外划定森林公园区、生态保育绿地等区域，根据各自定位采取不同的保护措施。最终打造以村域整体保护为前提，以山林保护为主体，以村落风貌提升为抓手的生态宜居、绿色和谐的金田村绿地系统和村庄生态格局。
+
+    水域方面的生态修复保护措施主要为砌河护坡、河道绿化与河底整治，计划在公王河黄竹、田坑、园寨河段开展生态整治工作，整治面积约54公顷。通过土石堆砌达到巩固河堤的效果，考虑采用生态河岸、种植乡土植物等形式绿化河边人行道。通过河底清淤疏通，提升河道水质。由此重振金田村水生态。
+
+    将生态保护红线范围内的绿地及其外围一定范围的绿地规划成生态保育绿地区，区内多为林地，以保护、恢复金田村自然生态为主要功能。生态保育区内禁止开发活动，减少人类活动干预，以形成天然绿色的生态环境。
+
+    依托古檀林资源，坚持保护优先原则，将营子里部分林地划定为古檀林主题森林公园。充分利用与盘活林地和林下资源。通过规划林下观光步道、设置标识牌等必要设施等举措，满足游客观光、游乐等旅游活动要求，给游客以亲近自然、领略古檀之美的旅游体验。
+
+    除以上区域之外的林地，均划为一般林地。一般林地区面积较大，在日常生活中应坚持保护优先原则，不随意砍伐林木。营造生态绿色、自然和谐的林地格局，实现人与自然和谐相处，生态资源得到良好保护。
+
+    耕地保护：坚决遏制耕地"非农化"现象，对耕地实施严格的管控：严禁违规占用耕地进行绿化造林、超标准建设绿色通道、挖湖造景、从事非农建设、自建农房等行为。对于确有需要，不可避免占用耕地的项目，应经过专家论证，且严禁占用永久基本农田。深入推进耕地污染防治，采取严禁向耕地排放生活生产污水和垃圾，控制农药化肥使用，及时回收农膜等措施，避免在生产生活中对耕地土壤造成污染。同时，实行耕地轮作休耕制度，保护耕地地力。
+
+    根据实际情况，在建设用地范围内增设公园绿地、文化广场、活动场地。每个自然村增设不同规模、不同类型的村民活动场地。如在林木资源丰富的营子里建设面积超千平的古檀公园，在用地较为紧张的清明建设小范围活动场地。充分考虑建设可行性，竭力满足村民活动健体的日常需求。
+
+8.  **防震减灾规划**
+
+    保留利用原有的3处坑塘，将其作为调蓄池，作为储水空间。通过GIS软件进行水位上涨模拟，在村庄的低点规划设计了3处调蓄池，减缓村庄被洪水淹没。在村庄集聚区规划设计水渠，加快雨水的排放。完善河道整治措施，保证河道通畅。
+
+    规划122乡道为主要的逃生和消防救援道路，村道为次要的逃生和消防救援道路。将规划后拥有8处广场和2处村名公园作为抗震设施。黄竹作为122乡道金田段的中部区位，在此设立村庄微型消防站有利于村中的消防救援。选取防洪排涝规划中靠近自然村的调蓄池作为消防的蓄水池，为消防救援提供易得的水资源。
+
+9.  **近期建设项目库**
+
+10. **远期建设项目库**
+
+**【历史文化保护规划】**
+
+1.  **保护思路**
+
+    深入挖掘乡村历史文化资源，提出历史文化景观整体保护措施，明确管制规则。
+
+    保护历史建筑与文化的前提下提出整合串联沿线历史文化遗产、生态、旅游等资源的策略。
+
+2.  **保护活化利用规划**
+
+    对于金田村内的祠堂建筑应结合实际需要加以修缮。在修缮过程中应维护其原有的主体结构外部风貌不变的前提下，进行维护加固，并统一各时期祠堂的外貌风格和空间尺度、形态等方面设计。对于祠堂内部的活化，一方面，修缮祠堂满足村内的祭祀等活动需求；另一方面，将闲置的祠堂修缮活化利用，修建公共文化设施如小书屋、自习室、村民文化活动中心以及优秀传统文化价值和现代核心价值宣传中心。
+
+    对于金田村的千年古檀树和古檀林，一方面要加以妥善保护；对村内部的古树名木挂牌保护，并定期检查，在发现病虫害等情况后及时联系专业人员救治等。另一方面要规划以树冠投影向外5米为保护范围，结合原有的历史景观资源特征，突出原汁原味的乡土特色。在保护的基础上将古檀林设计为主题公园，介绍古檀与金田的前世今生，作为金田历史文化建设的一部分。
+
+    对于金田村的传统文化习俗，可推举村内有威望的乡贤作为添灯仪式的主持人，鼓励村内手艺人申请非遗专利，作为非遗传承人等，保护原生文化底蕴。一方面,改造废弃、闲置的祠堂成村内文化展示基地，在祠堂内举行添灯等具有金田特色的文化活动，彰显文化底蕴与特色。另一方面，将传统文化与现代元素相融合，策划举办如春日仙人粄文化节、添灯直播文化节等主题活动，吸引更多游客了解金田特色文化并参与其中，活化村内非物质文化。
+
+**【村庄风貌指引】**
+
+1.  **景观风貌指引**
+
+    耕地景观：禁止占用基本农田，减少对其他农田的占用。通过种植不同种类的作物增加农田多样性；采取轮耕、间种等耕种手法种植农作物；提升农业生产设施美学价值。根据时令在各区内的农田地块种植不同的药材，并补充种植观赏性较强的农作物。农民在自然环境等影响下种植农作物，修建景观小品，形成简易完整却富有层次感的生产面。
+
+    林地景观：在保护好生态环境的前提下依形就势有序安排种植山林，结合实际按季相种植乡土植物，在不影响经济型的前提下增强山林可观赏。顺应山地形势肌理，根据高程、海拔气温变化种植适宜气候的植株，丰富景观层次。在林区种植对比较为明显但与总体环境协调的植物如罗汉松、台湾相思、杉木等，增强可观赏性。结合实际需要发展林下经济。
+
+    房前屋后景观：宅旁和庭院绿化因充分尊重村民的意愿喜好。绿化植物必须具有易管理性和实用性，种植种类须采用乡土树种和攀缘植物，景观需保持一定的整体性。禁止房前屋后废弃杂物和垃圾的堆放，禁止随意粘贴广告或涂鸦，维持宅旁整洁。适当种植经济作物，发展庭院经济。庭院围墙的外墙可以用攀缘植物进行覆盖美化点缀。公共建筑可考虑种植观赏性植物进行美化。可根据村民发展意愿，结合村民的经济情况，适度发展屋顶绿化。花基、树池等物品需用富含乡土特色的材料进行建设。合理摆放农业工具杂物和家具小品进一步展现金田村的农家氛围。
+
+    河流景观：村中河流景观绿化需尽量保留、利用现有的自然形态，以生态护坡的方式整治边坡和岸线。在景观较好的河流空间应设置亲水景观平台，挖掘景观的生态服务价值。水深低于1.5米的水体宜种植挺水植物，水深高于1.5米的水体宜种植沉水植物，充分利用植物的净化作用和景观美化作用。村中河流绿化可采用村庄现有传统农业植物，选用经济树种，增加一定的经济收益。
+
+    坑塘景观：保护村中现有的坑塘，改善坑塘的水质，维持水流的汇入，保证坑塘的蓄水量。部分坑塘可以设置如荷花的水生植物，增加坑塘的净化能力，增加池塘的绿化效果。在池塘周围布置现有的乡土植物，保护坑塘的环境；在坑塘边坡采用生态驳岸设计，铺设保持水土的植物；在池塘中央设置荷花等观赏植物，增强景观效果。沿坑塘建设滨水步道或滨水公园，为人们提供休闲环境。
+
+    村庄入口景观：坚持整体出发原则，设计从金田村整体形象出发，彰显金田村特色，展现金田村魅力；坚持因地制宜原则，选用乡土材质，如瓦片、文化石、青砖、夯土等进行创意重构，融入乡村环境；坚持以人为本原则，入口景观小品和设施的空间布局应满足人体尺度和人的行为需求。与村落内部保持一定距离，保证村落内安静有序的生活环境；打造不同层次的入口景观，移步换景，与交通环境相匹配。
+
+    "四小园"：对村内房前屋后的小菜园、小果园、小花园、小游园进行改造，根据不同村落的定位方向打造不同形式的"四小园"风貌。以小微尺度建设"口袋公园"、小微绿地、美丽菜园；选用具有乡村特色的建材，如青砖、竹条等；增设相关基础设施和服务设施。
+
+    祠堂：对传统祠堂进行加固、外观整饬，保持和恢复传统风貌和特色，并赋予其新的功用。祠堂可活化为农家书屋、乡村历史文化展览馆、村民活动中心以及传统作坊等。充分尊重现状，保留祠堂现有古韵，在此基础上再进行功能赋予和场地活化。
+
+    村民活动交流场地：生态化建设，硬质铺装与生态透水铺装相结合，打造自然和谐生态化的植物景观；人本化建设，增设桌凳、健身、环卫等设施，符合人体工学。提高村民活动交流时的体验；集约化建设，打造集健体、交流、日常活动、晾晒等功能于一体的多功能活动场地，提高使用频率。优先选择粤北乡土植物进行种植，如紫薇、桂花等；在建设时应选择合适的铺装，注意防滑、儿童友好等要求。
+
+    乡道：基本实现乡道路面硬底化，逐步推进乡村道路面黑底化建设。根据道路原有的景观情况，宜保留和美化景观性较好的道路绿化的同时，采取清除杂草，裸地复绿，补植行道树等方式，优化道路景观；对于那些景观资源较好的路段，宜留出视觉通廊，与周围环境相呼应。修整山体切坡，建议采用植物型护坡与硬质型护坡相结合的方式进行护坡处理。对于道路的滨水空间，建议采用硬质化的驳岸处理方式，加配防护栏，保障行车安全。
+
+    村道：逐步实现村道硬底化。对原有植物景观不佳或土地裸露的路段进行绿化整治。位于村庄生活空间内的村道，可以打造集乡风、乡韵为一体的景观小品，提升道路景观的趣味性。建议结合金田南药种植特色，路旁种植既具景观性又易打理的南药草本，如：野菊花、蒲公英、溪黄草等。
+
+    巷道：巷道路面应因地制宜采用块石、预制混凝土方砖或当地传统铺装（如：麻石板、青砖）等进行硬化，体现乡土特色。建议利用巷道路旁的空置地块，打造小公园、小花园、小菜园，美化巷道景观的同时形成街巷的休闲交往空间。
+
+    步道：田间步道结合步道生产功能和路旁农田大地景观，打造既具景观观赏性又具实用性的田间步道。以森林康养为主题打造特色森林步道，建议采用既有康养功能，又具景观观赏功能的乡土树种（如：香樟、悬铃木、竹等）进行沿路绿化布置；同时，在适应处设置座椅、休息亭等以供人休憩。
+
+    建筑定位为小型家庭建筑，一楼有会客厅、餐厅、厨房、书房、卧室（老人房）、公共卫生间等；二楼主要是建筑主人私人空间，包括一个主卧室，两个次卧室，一个客厅，前后各一个露天阳台；三楼主要以居住功能为主，包括一个主卧室，两个次卧室。同时三楼设置一处露台。建筑外立面借鉴岭南地区传统居住建筑风格，建筑采用前庭后院式的设计，实现动静分离、食寝分离、干湿分离，满足日常生活习惯。本方案旨在打破常规的农村住宅的组成形式，追求居住环境与周围环境有机地结合在一起。设计在建筑三层的大露台，给予了住户非凡的视野，也可以在阳台上养花种草、晾晒。`;
+                
+                const blob = new Blob([fileContent], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+                const url = URL.createObjectURL(blob);
+                
+                a.href = url;
+                a.download = '泗水镇金田村规划报告.docx';
+                document.body.appendChild(a);
+                a.click();
+                
+                // 清理URL对象
+                setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }, 100);
+                
+                // 显示查看效果按钮
+                viewVisualizationBtnContainer.classList.add('show');
+                
+                // 恢复按钮状态
+                setTimeout(function() {
+                    btn.innerHTML = originalHtml;
+                    btn.disabled = false;
+                }, 1500);
+            }, 2500);
+        });
+        
+        // 选项卡切换时更新流程步骤
+        document.querySelectorAll('.nav-link').forEach(tab => {
+            tab.addEventListener('click', function() {
+                // 重置所有步骤
+                document.querySelectorAll('.flow-step').forEach(step => {
+                    step.classList.remove('active');
+                });
+                
+                // 根据当前选项卡激活相应步骤
+                if (this.id === 'current-tab') {
+                    document.getElementById('step1').classList.add('active');
+                } else if (this.id === 'plan-tab') {
+                    document.getElementById('step2').classList.add('active');
+                } else if (this.id === 'overall-tab') {
+                    document.getElementById('step3').classList.add('active');
+                } else if (this.id === 'report-tab') {
+                    document.getElementById('step4').classList.add('active');
+                } else if (this.id === 'visualization-tab') {
+                    document.getElementById('step5').classList.add('active');
+                }
+            });
+        });
+        
+        // 初始展开第一个卡片
+        document.addEventListener('DOMContentLoaded', function() {
+            // 激活第一个流程步骤
+            document.getElementById('step1').classList.add('active');
+        });
+    </script>
+</body>
+</html>

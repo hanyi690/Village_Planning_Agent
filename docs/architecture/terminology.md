@@ -2,8 +2,8 @@
 
 本文档提供系统术语定义，确保概念一致性。
 
-> **更新日期**: 2026-05-21
-> **版本**: v3.0 (统一架构)
+> **更新日期**: 2026-07-08
+> **版本**: v4.0 (LangGraph 1.2 interrupt/resume)
 
 ## 目录
 
@@ -87,6 +87,8 @@
 | StateGraph | StateGraph | LangGraph状态图，定义节点和边 | [02-agent-core](./02-agent-core.md) |
 | Send API | Send API | LangGraph并行分发机制 | [02-agent-core](./02-agent-core.md) |
 | Intent Router | Intent Router | 意图路由，根据LLM响应决定下一步 | [02-agent-core](./02-agent-core.md) |
+| interrupt() | interrupt | LangGraph 官方 human-in-the-loop 暂停机制 | [02-agent-core](./02-agent-core.md) |
+| Command(resume) | Command(resume) | LangGraph 恢复 interrupt 的官方 API | [02-agent-core](./02-agent-core.md) |
 
 ---
 
@@ -96,6 +98,7 @@
 |------|------|------|----------|
 | Zustand | Zustand | React状态管理库，配合Immer实现不可变更新 | [05-frontend-state](./05-frontend-state.md) |
 | PlanningState | PlanningState | 前端状态接口，包含所有规划相关状态 | [05-frontend-state](./05-frontend-state.md) |
+| interruptInfo | Interrupt Info | interrupt 暂停信息对象（替代 pause_after_step/execution_paused） | [05-frontend-state](./05-frontend-state.md) |
 | deriveUIState | Derive UI State | 从核心状态派生UI状态的函数 | [05-frontend-state](./05-frontend-state.md) |
 | Signal-Fetch | Signal-Fetch | SSE发信号、REST API获取完整数据的模式 | [05-frontend-state](./05-frontend-state.md) |
 
@@ -120,7 +123,7 @@
 | 维度键 | snake_case | `socio_economic`, `land_use_planning` |
 | 工具名称 | snake_case | `knowledge_search`, `accessibility_analysis` |
 | SSE事件类型 | snake_case | `dimension_start`, `layer_completed` |
-| 状态字段 | snake_case | `pause_after_step`, `previous_layer` |
+| 状态字段 | snake_case | `previous_layer`, `step_mode`, `interrupt_info` |
 | 函数名 | snake_case | `analyze_dimension`, `collect_layer_results` |
 | 类名 | PascalCase | `ToolRegistry`, `SSEManager` |
 | 接口名 | PascalCase | `PlanningState`, `ToolMetadata` |

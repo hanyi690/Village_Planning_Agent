@@ -14,6 +14,10 @@ from datetime import datetime
 
 from app.core.events import SSEEventType
 from ..utils.logger import get_logger
+from ..services.modules.gis.schema import (
+    GisResultEvent, GisLayerUpdateEvent, GISLayerConfig,
+    GISAnalysisData, GISMapOptions,
+)
 
 logger = get_logger(__name__)
 
@@ -333,7 +337,8 @@ class SSEPublisher:
     def send_gis_result(session_id: str, dimension_key: str, dimension_name: str,
                         summary: str, layers: List[Dict[str, Any]],
                         map_options: Optional[Dict[str, Any]] = None,
-                        analysis_data: Optional[Dict[str, Any]] = None) -> None:
+                        analysis_data: Optional[Dict[str, Any]] = None,
+                        pipeline_trace: Optional[Dict[str, Any]] = None) -> None:
         """
         发送 GIS 分析结果事件
 
@@ -345,17 +350,20 @@ class SSEPublisher:
             layers: GIS 图层配置列表
             map_options: 地图选项（center, zoom）
             analysis_data: 分析数据（评分、建议等）
+            pipeline_trace: 规划→GIS 全过程记录
         """
-        event_data = {
-            "dimension_key": dimension_key,
-            "dimension_name": dimension_name,
-            "summary": summary,
-            "layers": layers,
-        }
-        if map_options:
-            event_data["map_options"] = map_options
-        if analysis_data:
-            event_data["analysis_data"] = analysis_data
+        event = GisResultEvent(
+            dimension_key=dimension_key,
+            dimension_name=dimension_name,
+            summary=summary,
+            layers=[GISLayerConfig(**l) if isinstance(l, dict) else l for l in layers],
+            map_options=GISMapOptions(**map_options) if map_options else None,
+            analysis_data=GISAnalysisData(**analysis_data) if analysis_data else None,
+        )
+        event_data = event.model_dump(by_alias=True, exclude_none=True)
+
+        if pipeline_trace:
+            event_data["pipeline_trace"] = pipeline_trace
 
         SSEPublisher.send_event(
             session_id=session_id,
@@ -363,6 +371,29 @@ class SSEPublisher:
             **event_data
         )
         logger.info(f"[SSEPublisher] sent gis_result for {dimension_key}")
+
+    @staticmethod
+    def send_gis_layer_update(session_id: str, layer: int, dimension_key: str,
+                              dimension_name: str, layers: List[Dict[str, Any]],
+                              map_options: Optional[Dict[str, Any]] = None,
+                              analysis_data: Optional[Dict[str, Any]] = None) -> None:
+        """发送 GIS 图层增量更新事件"""
+        event = GisLayerUpdateEvent(
+            layer=layer,
+            dimension_key=dimension_key,
+            dimension_name=dimension_name,
+            layers=[GISLayerConfig(**l) if isinstance(l, dict) else l for l in layers],
+            map_options=GISMapOptions(**map_options) if map_options else None,
+            analysis_data=GISAnalysisData(**analysis_data) if analysis_data else None,
+        )
+        event_data = event.model_dump(by_alias=True, exclude_none=True)
+
+        SSEPublisher.send_event(
+            session_id=session_id,
+            event_type=SSEEventType.GIS_LAYER_UPDATE,
+            **event_data
+        )
+        logger.info(f"[SSEPublisher] sent gis_layer_update layer={layer} for {dimension_key}")
 
     @staticmethod
     def send_tool_progress(session_id: str, tool_name: str, stage: str,

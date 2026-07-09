@@ -53,7 +53,8 @@ def calculate_gis_coverage(
         logger.info(f"[CoverageCalculator] 使用用户上传数据: {location}")
 
     # 自动获取数据（补充缺失类型）
-    auto_result = fetcher.fetch_all_gis_data(location, buffer_km, max_features=max_features)
+    auto_result = fetcher.fetch_all_gis_data(
+        location, buffer_km, max_features=max_features)
 
     # 合并数据源：用户数据覆盖自动获取数据
     def get_geojson_with_source(data_type: str, user_data: Optional[Dict], auto_data: Optional[Dict]) -> tuple:

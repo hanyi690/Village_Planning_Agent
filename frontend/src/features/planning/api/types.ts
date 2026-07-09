@@ -127,6 +127,7 @@ export type PlanningSSEEventType =
   | 'dimension_start'
   | 'dimension_complete'
   | 'dimension_delta'
+  | 'dimension_error'
   // Progress Events
   | 'checkpoint_saved'
   | 'pause'
@@ -145,6 +146,8 @@ export type PlanningSSEEventType =
   | 'ai_response_complete'
   // GIS & RAG Events
   | 'gis_result'
+  | 'gis_layer_update'
+  | 'rag_query'
   | 'rag_result'
   // Cascade Events
   | 'cascade_impact'
@@ -159,7 +162,6 @@ export type PlanningSSEEventType =
  */
 export type DeprecatedSSEEventType =
   // Dimension Events (未实现)
-  | 'dimension_error'
   | 'dimension_revised'
   // Progress Events (未实现)
   | 'progress'
@@ -169,11 +171,8 @@ export type DeprecatedSSEEventType =
   | 'thinking_start'
   | 'thinking'
   | 'thinking_end'
-  | 'stream_paused'
   // Review Events (未实现)
   | 'review_request'
-  // RAG & Cascade Events (未实现)
-  | 'rag_query'
   // State Events (未实现)
   | 'state_sync'
   // Legacy (未实现)
@@ -202,9 +201,12 @@ export interface PlanningSSEDataBase {
   accumulated?: string;
   dimension?: string;
   timestamp?: number;
-  // 维度相关字段
+  // 维度相关字段 (snake_case - 通用维度事件)
   dimension_key?: string;
   dimension_name?: string;
+  // 维度相关字段 (camelCase - GIS 事件，后端 Pydantic schema 输出)
+  dimensionKey?: string;
+  dimensionName?: string;
   layer?: number;
   has_data?: boolean;
   dimension_count?: number;
@@ -247,11 +249,11 @@ export interface PlanningSSEEvent {
 export interface StartPlanningRequest {
   project_name: string;
   village_data: string;
-  village_name?: string;       // 省份
-  province?: string;           // 地级市
-  city?: string;               // 县/区
-  county?: string;             // 乡镇
-  township?: string;           // 规划期限，如 "2022-2035年"
+  village_name?: string;
+  province?: string;
+  city?: string;
+  county?: string;
+  township?: string;
   planning_period?: string;
   task_description?: string;
   constraints?: string;
@@ -309,10 +311,15 @@ export interface SessionStatusResponse {
     layer2: string[];
     layer3: string[];
   };
-  pause_after_step: boolean;
   previous_layer: number;
+  gis_layout_configs?: Array<Record<string, unknown>>;
   step_mode: boolean;
-  execution_paused: boolean;
+  interrupt_info?: {
+    layer?: number;
+    phase?: string;
+    layer_name?: string;
+    reason?: string;
+  };
 
   rag_enabled?: boolean;
   rag_layer_config?: Record<number, boolean>;
@@ -615,4 +622,24 @@ export interface StepModeRequest {
 export interface StepModeResponse {
   session_id: string;
   step_mode: boolean;
+}
+
+// ============================================
+// Geocode Types
+// ============================================
+
+export interface GeocodeResponse {
+  location: string;
+  center: [number, number] | null;
+  strategy: string | null;
+  boundary_geojson?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export interface GisDataUploadResponse {
+  file_id: number;
+  filename: string;
+  data_type: string | null;
+  feature_count: number;
+  parse_status: string;
 }

@@ -1,7 +1,7 @@
 # 前端状态与组件架构
 
-> **更新日期**: 2026-05-21
-> **版本**: v5.1 (统一架构)
+> **更新日期**: 2026-07-08
+> **版本**: v6.0 (interruptInfo 替代双暂停标志)
 > **状态**: ✅ 已完整实现
 
 本文档详细说明前端状态管理架构、三栏工作台布局和 SSE 事件处理机制。
@@ -138,10 +138,9 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     phase: 'init',
     currentWave: 1,
     reports: {},
-    pause_after_step: false,
     previous_layer: 0,
     step_mode: false,
-    execution_paused: false,
+    interruptInfo: undefined,  // 替代 pause_after_step + execution_paused
     // ... 更多状态
   }))
 );
@@ -192,10 +191,14 @@ export interface PlanningState {
   phase: string;
   currentWave: number;
   reports: Reports;
-  pause_after_step: boolean;
   previous_layer: number;
   step_mode: boolean;
-  execution_paused: boolean;
+  interruptInfo?: {
+    layer?: number;
+    phase?: string;
+    layer_name?: string;
+    reason?: string;
+  };
 
   // Derived UI State
   completedDimensions: CompletedDimensions;
@@ -204,6 +207,7 @@ export interface PlanningState {
   completedLayers: { 1: boolean; 2: boolean; 3: boolean };
   isPaused: boolean;
   pendingReviewLayer: number | null;
+  lastPauseLayer: number;
 
   // SSE Reconnect
   sseResumeTrigger: number;
@@ -253,6 +257,9 @@ export interface PlanningState {
 
   // GIS Layers (SSE-driven, no REST API needed)
   gisLayers: Record<string, GISLayerConfig[]>;
+  gisGenerating: boolean;
+  gisTriggerPending: boolean;
+  villageCenter?: [number, number];
 
   // Three-Panel Layout Navigation State
   selectedNavigationKey: NavigationKey | null;

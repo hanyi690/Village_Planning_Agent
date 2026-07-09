@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 # Import core analysis modules
 try:
-    from app.core.accessibility_core import (
+    from app.services.modules.gis.accessibility import (
         haversine_distance,
         SERVICE_RADIUS_STANDARDS,
         run_accessibility_analysis,
@@ -26,14 +26,14 @@ except ImportError:
     logger.warning("[gis_validation] accessibility_core not available")
 
 try:
-    from app.core.gis_core import run_gis_analysis
+    from app.services.modules.gis.gis_core import run_gis_analysis
     GIS_AVAILABLE = True
 except ImportError:
     GIS_AVAILABLE = False
     logger.warning("[gis_validation] gis_core not available")
 
 try:
-    from app.core.spatial_analysis import calculate_buffer_zones, geojson_to_geodataframe
+    from app.services.modules.gis.spatial_analysis import calculate_buffer_zones, geojson_to_geodataframe
     SPATIAL_AVAILABLE = True
 except ImportError:
     SPATIAL_AVAILABLE = False
@@ -441,7 +441,7 @@ def _check_protection_zones(
     Returns:
         Dict with protection check results
     """
-    from app.core.spatial_analysis import run_spatial_query
+    from app.services.modules.gis.spatial_analysis import run_spatial_query
 
     conflicts = []
     in_protected_zone = False
@@ -492,7 +492,7 @@ def _check_hazard_zones(
     Returns:
         Dict with hazard check results
     """
-    from app.core.spatial_analysis import run_spatial_query
+    from app.services.modules.gis.spatial_analysis import run_spatial_query
 
     if not hazard_zones or not hazard_zones.get("features"):
         return {"checked": False, "reason": "No hazard zones provided"}

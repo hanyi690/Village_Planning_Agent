@@ -2,8 +2,8 @@
 
 本文档提供 Village Planning Agent 系统的整体架构概览。
 
-> **更新日期**: 2026-05-21
-> **版本**: v3.2 (统一架构)
+> **更新日期**: 2026-07-08
+> **版本**: v4.0 (LangGraph 1.2 interrupt/resume)
 
 ## 目录
 
@@ -33,7 +33,7 @@ Village Planning Agent 是一个基于 LangGraph 的智能村庄规划助手系�
 | 前端框架 | Next.js + React | 15.x |
 | 状态管理 | Zustand + Immer | 4.x |
 | 后端框架 | FastAPI | 0.100+ |
-| Agent框架 | LangGraph | 0.2+ |
+| Agent框架 | LangGraph | 1.2.8+ |
 | LLM | DeepSeek / OpenAI / ZhipuAI (GLM) | - |
 | 向量数据库 | ChromaDB | - |
 | 关系数据库 | SQLite (WAL) | - |
@@ -61,9 +61,10 @@ Village Planning Agent 是一个基于 LangGraph 的智能村庄规划助手系�
                               ↓ LangGraph API
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Agent层 (Agent Layer)                      │
-│  Router Agent + StateGraph + Send API                           │
+│  Router Agent + StateGraph + Send API + interrupt()             │
 │  文件: backend/app/agent/                                        │
-│  节点: conversation → execute_tools → analyze_dimension → layer_completion_check │
+│  节点: conversation → execute_tools → analyze_dimension →        │
+│        layer_completion_check → gis_agent                        │
 └─────────────────────────────────────────────────────────────────┘
                               ↓ ToolRegistry
 ┌─────────────────────────────────────────────────────────────────┐
@@ -85,8 +86,8 @@ Village Planning Agent 是一个基于 LangGraph 的智能村庄规划助手系�
 | 层级 | 职责 | 关键组件 |
 |------|------|----------|
 | 用户层 | UI渲染、状态管理、SSE接收 | `planningStore.ts`, `useSSE.ts` |
-| 后端层 | API路由、SSE推送、状态持久化 | `SSEManager`, `PlanningRuntimeService` |
-| Agent层 | 意图路由、维度分析、状态流转 | `conversation_node`, `analyze_dimension` |
+| 后端层 | API路由、SSE推送、状态持久化、session日志 | `SSEManager`, `PlanningRuntimeService`, `SessionFilter` |
+| Agent层 | 意图路由、维度分析、interrupt审批、状态流转 | `conversation_node`, `layer_completion_check` |
 | 工具层 | GIS查询、知识检索、数据分析 | `ToolRegistry`, `modules/rag/` |
 | 数据层 | 数据存储、向量检索、文件管理 | `models.py`, `vector_store.py` |
 
@@ -110,21 +111,25 @@ Checkpoint (LangGraph AsyncSqliteSaver)
 React UI
 ```
 
-### 2. Router Agent 模式
+### 2. Router Agent + interrupt 模式
 
-采用中央路由模式，单一 StateGraph：
+采用中央路由模式，单一 StateGraph，interrupt() 实现人机交互审批：
 
 ```
 用户输入 → conversation_node (LLM处理)
                 ↓ after_conversation
          ├─ 闲聊/问答 → END
-         ├─ 工具调用 → execute_tools
-         └─ 推进规划 → Send(N维度)
+         ├─ 工具调用 → execute_tools → conversation
+         ├─ GIS分析 → gis_agent → conversation
+         └─ 推进规划 → Send(N维度) → layer_completion_check
+                                            ↓ interrupt() (step_mode)
+                                            ↓ Command(resume=...) (审批后恢复)
 ```
 
 **优势**：
 - 单一入口点，逻辑清晰
-- 状态流转可控
+- interrupt() 是 LangGraph 官方 human-in-the-loop 机制
+- 状态流转可控，checkpoint 自动保存
 - 易于调试和监控
 
 ### 3. Send API 并行机制
@@ -192,7 +197,7 @@ Layer 3 (详细规划)
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/agent/graph.py` | StateGraph 定义（4节点） |
+| `backend/app/agent/graph.py` | StateGraph 定义（5节点） |
 | `backend/app/agent/state.py` | AgentState 定义 |
 | `backend/app/agent/routing.py` | after_conversation, after_analysis |
 | `backend/app/config/phases.yaml` | 28维度配置（唯一来源） |

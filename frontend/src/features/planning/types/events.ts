@@ -32,8 +32,8 @@ export type SSEEventType =
 export interface GisLayerUpdateEvent {
   type: 'gis_layer_update';
   layer: number;           // Planning layer (1, 2, 3)
-  dimension_key: string;   // Dimension identifier
-  dimension_name: string;  // Human-readable name
+  dimensionKey: string;    // Dimension identifier
+  dimensionName: string;   // Human-readable name
   layers: import('./messages').GISLayerConfig[];
   mapOptions?: {
     center: [number, number];

@@ -23,6 +23,12 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen3.5-plus")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
+# DashScope / Qwen thinking mode control.
+# qwen3/qwen3.5 reasoning models may spend most output tokens on hidden reasoning;
+# for this web app we default to non-thinking mode for faster, visible answers.
+LLM_ENABLE_THINKING = os.getenv("LLM_ENABLE_THINKING", "false").lower() in ("1", "true", "yes")
+LLM_THINKING_BUDGET = int(os.getenv("LLM_THINKING_BUDGET", "0"))
+
 # LLM Request Timeout (seconds)
 LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "180"))  # 3 minutes
 LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "300"))  # 5 minutes
@@ -248,6 +254,9 @@ KB_LEVELS: list = ["national", "local", "administrative"]
 # ==========================================
 
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_DIR = PROJECT_ROOT / "logs"
+LOG_FILE_MAX_BYTES = int(os.getenv("LOG_FILE_MAX_BYTES", str(10 * 1024 * 1024)))  # 10MB
+LOG_FILE_BACKUP_COUNT = int(os.getenv("LOG_FILE_BACKUP_COUNT", "7"))
 
 # ==========================================
 # Backend Session Configuration (from constants/config.py)

@@ -103,9 +103,25 @@ def _create_openai_llm(
 
     api_key = get_api_key(LLMProvider.OPENAI)
 
-    from app.core.settings import OPENAI_API_BASE, LLM_REQUEST_TIMEOUT
+    from app.core.settings import (
+        OPENAI_API_BASE,
+        LLM_REQUEST_TIMEOUT,
+        LLM_ENABLE_THINKING,
+        LLM_THINKING_BUDGET,
+    )
     if OPENAI_API_BASE:
         kwargs['base_url'] = OPENAI_API_BASE
+
+    # DashScope OpenAI-compatible API: disable Qwen thinking mode by default.
+    # This prevents responses like content='' + token_usage metadata when small
+    # per-call max_tokens is consumed by hidden reasoning tokens.
+    if OPENAI_API_BASE and 'dashscope.aliyuncs.com' in OPENAI_API_BASE:
+        extra_body = dict(kwargs.pop('extra_body', {}) or {})
+        extra_body.setdefault('enable_thinking', LLM_ENABLE_THINKING)
+        if LLM_ENABLE_THINKING and LLM_THINKING_BUDGET > 0:
+            extra_body.setdefault('thinking_budget', LLM_THINKING_BUDGET)
+        kwargs['extra_body'] = extra_body
+
     kwargs['request_timeout'] = LLM_REQUEST_TIMEOUT
 
     all_callbacks = _merge_callbacks(callbacks)
@@ -160,11 +176,22 @@ def _create_zhipuai_llm(
     streaming: bool = False,
     **kwargs
 ) -> Any:
-    """Create a ZhipuAI (GLM) LLM instance."""
+    """Create a ZhipuAI (GLM) LLM instance.
+
+    Uses langchain-classic (community packages' new home) with
+    langchain-community fallback while it is still available.
+    Long-term: migrate to ChatOpenAI + GLM OpenAI-compatible endpoint.
+    """
     try:
-        from langchain_community.chat_models import ChatZhipuAI
+        from langchain_classic.chat_models import ChatZhipuAI
     except ImportError:
-        raise ImportError("langchain-community required for ZhipuAI support.")
+        try:
+            from langchain_community.chat_models import ChatZhipuAI
+        except ImportError:
+            raise ImportError(
+                "ChatZhipuAI requires langchain-classic or langchain-community. "
+                "Install with: pip install langchain-classic>=1.0.8"
+            )
 
     api_key = get_api_key(LLMProvider.ZHIPUAI)
 

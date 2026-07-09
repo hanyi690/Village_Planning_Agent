@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { usePlanningStore } from '../store';
-import { useSessionId } from './useSelectors';
+import { useSessionId, useCurrentLayer, useHasGisLayers } from './useSelectors';
 import { planningApi } from '../api';
 
 /**
@@ -9,6 +9,8 @@ import { planningApi } from '../api';
  */
 export function useApprovalActions() {
   const sessionId = useSessionId();
+  const currentLayer = useCurrentLayer();
+  const hasGisLayers = useHasGisLayers();
   const setPaused = usePlanningStore((state) => state.setPaused);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -16,7 +18,11 @@ export function useApprovalActions() {
     if (!sessionId || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      await planningApi.submitFeedback(sessionId, { approve: true });
+      const result = await planningApi.submitFeedback(sessionId, { approve: true });
+      // Read current_layer from backend response for immediate UI sync
+      if (result?.current_layer) {
+        usePlanningStore.setState({ lastPauseLayer: result.current_layer });
+      }
       setPaused(false);
     } catch (error) {
       console.error('Approve failed:', error);

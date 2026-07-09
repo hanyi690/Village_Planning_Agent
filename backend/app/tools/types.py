@@ -3,7 +3,7 @@ GIS 工具返回值类型定义和规范化函数
 
 解决工具返回值类型不统一问题：
 - population_model_v1 等工具返回 Markdown 文本字符串
-- gis_tool_wrappers 中工具返回 JSON 字符串（解析后为 dict）
+- GIS @tool 中工具返回 JSON 字符串（解析后为 dict）
 
 通过规范化层统一处理，下游代码无需关心类型差异。
 

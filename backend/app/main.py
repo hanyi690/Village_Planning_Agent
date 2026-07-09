@@ -24,7 +24,11 @@ from fastapi.responses import JSONResponse
 # Add parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.core.settings import LOG_LEVEL, PROJECT_ROOT
+from app.core.settings import LOG_LEVEL, LOG_DIR, LOG_FILE_MAX_BYTES, LOG_FILE_BACKUP_COUNT, PROJECT_ROOT
+from app.utils.logger import SessionFilter, ensure_log_dir
+
+# Ensure log directory exists before configuring handlers
+ensure_log_dir()
 
 # Configure logging with dictConfig to avoid duplicate handlers
 import logging.config
@@ -32,25 +36,43 @@ import logging.config
 LOGGING_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
+    "filters": {
+        "session_filter": {
+            "()": SessionFilter,
+        }
+    },
     "formatters": {
         "standard": {
             "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        },
+        "session_aware": {
+            "format": "%(asctime)s - %(name)s - %(levelname)s - [%(session_id)s] %(message)s"
         }
     },
     "handlers": {
         "console": {
             "class": "logging.StreamHandler",
-            "formatter": "standard",
+            "formatter": "session_aware",
+            "filters": ["session_filter"],
             "stream": sys.stdout
+        },
+        "file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(LOG_DIR / "planning.log"),
+            "maxBytes": LOG_FILE_MAX_BYTES,
+            "backupCount": LOG_FILE_BACKUP_COUNT,
+            "formatter": "session_aware",
+            "filters": ["session_filter"],
+            "encoding": "utf-8"
         }
     },
     "root": {
         "level": getattr(logging, LOG_LEVEL, logging.INFO),
-        "handlers": ["console"]
+        "handlers": ["console", "file"]
     },
     "loggers": {
-        "uvicorn": {"level": "INFO", "handlers": ["console"], "propagate": False},
-        "uvicorn.error": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "uvicorn": {"level": "INFO", "handlers": ["console", "file"], "propagate": False},
+        "uvicorn.error": {"level": "INFO", "handlers": ["console", "file"], "propagate": False},
         "uvicorn.access": {"level": "INFO", "handlers": ["console"], "propagate": False},
         "httpx": {"level": "WARNING"},
         "httpcore": {"level": "WARNING"}
@@ -63,15 +85,27 @@ logger = logging.getLogger(__name__)
 
 # Environment configuration
 IS_PRODUCTION = os.getenv("ENVIRONMENT") == "production"
+# Development origins: 3000/3001/3002 are common Next.js ports
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:3000,http://localhost:8000"
+    "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:8000"
 ).split(",")
 
 
 # ============================================
 # Application Lifecycle
 # ============================================
+
+async def _sse_cleanup_loop():
+    """Periodic SSE session cleanup — removes expired session data every 10 minutes."""
+    while True:
+        await asyncio.sleep(600)
+        try:
+            from app.services.sse import sse_manager
+            sse_manager.cleanup_expired_sessions()
+        except Exception as e:
+            logger.error(f"SSE cleanup failed: {e}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -106,7 +140,18 @@ async def lifespan(app: FastAPI):
     logger.info("🧹 SSE event loop saved")
 
     logger.info("✅ 后端服务启动完成")
+
+    # Periodic SSE session cleanup (every 10 minutes)
+    sse_cleanup_task = asyncio.create_task(_sse_cleanup_loop())
+
     yield
+
+    # Cancel periodic cleanup
+    sse_cleanup_task.cancel()
+    try:
+        await sse_cleanup_task
+    except asyncio.CancelledError:
+        pass
 
     # Clean up resources
     logger.info("🧹 Cleaning up resources...")
@@ -134,14 +179,34 @@ app = FastAPI(
 )
 
 # CORS configuration
+# Note: allow_credentials=True requires explicit origins (not ["*"])
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS if IS_PRODUCTION else ["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
     expose_headers=["Content-Disposition"],
 )
+
+# Session ID injection middleware — extracts session_id from URL path
+# so all downstream log records carry it automatically
+from app.utils.logger import set_session_id as _set_session_id
+from starlette.requests import Request
+from starlette.responses import Response
+
+
+@app.middleware("http")
+async def session_id_middleware(request: Request, call_next):
+    path = request.url.path
+    # Match /api/sessions/{session_id}/...
+    import re
+    m = re.search(r"/api/sessions/([^/]+)", path)
+    sid = m.group(1) if m else ""
+    _set_session_id(sid)
+    response: Response = await call_next(request)
+    _set_session_id("")
+    return response
 
 # Include unified router (aggregates all API routes)
 from app.api.routes import router

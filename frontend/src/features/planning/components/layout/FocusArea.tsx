@@ -3,7 +3,6 @@
 import React, { memo, useCallback } from "react";
 
 import { usePlanningStore, usePlanningActions } from "../../store";
-import CascadeNotificationBanner from "../CascadeNotificationBanner";
 import ReportViewer from "./ReportViewer";
 import PlanningTextViewer from "../PlanningTextViewer";
 import { NAV_KEYS } from "@/features/planning/constants";
@@ -13,6 +12,7 @@ const FocusArea = memo(function FocusArea() {
   const selectedNavigationKey = usePlanningStore(
     (state) => state.selectedNavigationKey,
   );
+  const stepMode = usePlanningStore((state) => state.step_mode);
   const setRightPanelExpanded = usePlanningStore(
     (state) => state.setRightPanelExpanded,
   );
@@ -51,9 +51,10 @@ const FocusArea = memo(function FocusArea() {
         villageDataFiles: data.villageDataFiles,
         taskFiles: data.taskFiles,
         constraintFiles: data.constraintFiles,
+        stepMode,
       });
     },
-    [startPlanning],
+    [startPlanning, stepMode],
   );
 
   const handleViewProcess = useCallback(() => {
@@ -76,8 +77,6 @@ const FocusArea = memo(function FocusArea() {
         onStartPlanning={handleStartPlanning}
         onViewProcess={handleViewProcess}
       />
-
-      <CascadeNotificationBanner />
     </div>
   );
 });

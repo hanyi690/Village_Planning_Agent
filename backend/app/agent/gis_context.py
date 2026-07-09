@@ -164,7 +164,7 @@ class SharedGISContext:
 
         # 尝试从 GISDataManager 获取
         try:
-            from ..tools.gis.data_manager import GISDataManager
+            from app.tools.gis.data_manager import GISDataManager
             cached = GISDataManager.get_geojson(self.village_name, data_type)
             if cached:
                 logger.debug(f"[SharedGISContext] 返回缓存数据: {data_type}")
@@ -252,7 +252,7 @@ class SharedGISContext:
         将 GISDataManager 中的缓存数据加载到当前上下文。
         """
         try:
-            from ..tools.gis.data_manager import GISDataManager
+            from app.tools.gis.data_manager import GISDataManager
             all_data = GISDataManager.get_all_user_data(self.village_name)
             for data_type, cached in all_data.items():
                 self._user_uploaded_data[data_type] = cached.geojson
@@ -284,8 +284,8 @@ class SharedGISContext:
 
         # 生成代理边界
         try:
-            from ..tools.core.boundary_fallback import generate_proxy_boundary_with_fallback
-            from ..config.boundary_fallback import BoundaryFallbackConfig
+            from app.tools.core.boundary_fallback import generate_proxy_boundary_with_fallback
+            from app.config.boundary_fallback import BoundaryFallbackConfig
 
             if config is None:
                 config = BoundaryFallbackConfig()
@@ -387,19 +387,9 @@ class SharedGISContext:
             logger.debug(f"[SharedGISContext] 返回用户上传数据: {layer_type}")
             return self.get_data_by_type(layer_type)
 
-        # 尝试从 GISDataManager 获取
-        try:
-            from ..tools.gis.data_manager import GISDataManager
-            cached = GISDataManager.get_geojson(self.village_name, layer_type)
-            if cached:
-                logger.debug(f"[SharedGISContext] 返回缓存数据: {layer_type}")
-                return cached
-        except ImportError:
-            pass
-
         # 尝试从广东省天地图专题服务获取
         try:
-            from ..tools.geocoding.tianditu.gd_service import GDSpecializedService
+            from app.services.modules.gis.providers.tianditu import GDSpecializedService
             gd_service = GDSpecializedService()
 
             # 使用当前 bbox 获取数据
@@ -460,7 +450,7 @@ class SharedGISContext:
         用于开发和测试环境。
         """
         try:
-            from ..backend.services.jintian_test_data_service import JintianTestDataService
+            from app.services.jintian_test_data_service import JintianTestDataService
             service = JintianTestDataService()
 
             # 加载所有数据类型
@@ -513,5 +503,11 @@ class SharedGISContext:
             instance._user_uploaded_data = user_data
         else:
             instance.load_from_data_manager()
+
+        has_boundary = bool(instance.get_data_by_type("boundary"))
+        has_landuse = bool(instance.get_data_by_type("landuse_current"))
+        if not has_boundary and not has_landuse:
+            logger.info("[SharedGISContext] No boundary/landuse data found, loading jintian test data as fallback")
+            instance.load_jintian_test_data()
 
         return instance

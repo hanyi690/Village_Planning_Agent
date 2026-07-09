@@ -14,7 +14,6 @@ All state is now consolidated here for SSOT (Single Source of Truth).
 """
 
 import asyncio
-import copy
 import json
 import logging
 import threading
@@ -51,12 +50,15 @@ class SSEManager:
     CACHE_CONFIG = {
         SSEEventType.DIMENSION_START: ("_last_dimension_start", "dimension_key"),
         SSEEventType.DIMENSION_COMPLETE: ("_last_dimension_complete", "dimension_key"),
+        SSEEventType.DIMENSION_ERROR: ("_last_dimension_error", "dimension_key"),
         SSEEventType.RAG_RESULT: ("_last_rag_result", "dimension_key"),
+        SSEEventType.RAG_QUERY: ("_last_rag_query", "dimension_key"),
         SSEEventType.LAYER_COMPLETED: ("_last_layer_completed", "layer"),
         SSEEventType.LAYER_STARTED: ("_last_layer_started", "layer"),
         SSEEventType.RESUMED: ("_last_resumed", None),
         SSEEventType.CASCADE_IMPACT: ("_last_cascade_impact", None),
         SSEEventType.CASCADE_COMPLETE: ("_last_cascade_complete", None),
+        SSEEventType.GIS_RESULT: ("_last_gis_result", "dimension_key"),
     }
 
     # ============================================
@@ -145,6 +147,19 @@ class SSEManager:
     # Cache rag_result events: session_id -> dimension_key -> event
     _last_rag_result: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
+    # Cache dimension_error events: session_id -> dimension_key -> event
+    _last_dimension_error: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    # Cache rag_query events: session_id -> dimension_key -> event
+    _last_rag_query: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    # Cache gis_result events: session_id -> dimension_key -> event
+    _last_gis_result: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    # Delta coalescing index: session_id -> dimension_key -> last delta event in queue
+    # Avoids scanning the entire queue on overflow coalescing
+    _delta_coalesce_index: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
     # Unified RLock for all cache operations (prevents deadlock from lock ordering issues)
     # RLock allows same thread to acquire lock multiple times without blocking
     _cache_lock = RLock()
@@ -173,7 +188,7 @@ class SSEManager:
     # ============================================
 
     @classmethod
-    def _get_next_seq(cls, session_id: str) -> int:
+    def get_next_seq(cls, session_id: str) -> int:
         """
         Get next sequence number for a session.
 
@@ -301,6 +316,31 @@ class SSEManager:
                 logger.info(f"[SSEManager] Cached {event_type} for {session_id}")
 
         return True
+
+    @classmethod
+    def _coalesce_delta_in_queue(cls, session_id: str, dimension_key: str, new_event: Dict[str, Any]) -> bool:
+        """Coalesce a delta event with the last same-dimension delta using the index.
+
+        Updates the indexed delta's accumulated content with the newer one,
+        avoiding queue growth while preserving content continuity.
+
+        Returns True if coalesced, False if no indexed delta found.
+        """
+        indexed = cls._delta_coalesce_index.get(session_id, {}).get(dimension_key)
+        if indexed is None:
+            return False
+
+        indexed["accumulated"] = new_event.get("accumulated", "")
+        indexed["delta"] = new_event.get("delta", "")
+        indexed["seq"] = new_event.get("seq", indexed.get("seq", 0))
+        return True
+
+    @classmethod
+    def _update_delta_index(cls, session_id: str, dimension_key: str, event: Dict[str, Any]) -> None:
+        """Update the delta coalescing index when a delta is successfully queued."""
+        if session_id not in cls._delta_coalesce_index:
+            cls._delta_coalesce_index[session_id] = {}
+        cls._delta_coalesce_index[session_id][dimension_key] = event
 
     @classmethod
     def _sync_cache_to_queue(cls, session_id: str, event_type: str, queue: asyncio.Queue) -> int:
@@ -502,18 +542,19 @@ class SSEManager:
     @classmethod
     def get_events_copy(cls, session_id: str) -> list:
         """
-        Get deep copy of session events (thread-safe).
+        Get copy of session events (thread-safe).
+        Events are read-only after creation, so shallow copy suffices.
 
         Args:
             session_id: Session identifier
 
         Returns:
-            Deep copy of events list
+            Copy of events list
         """
         with cls._sessions_lock:
             if session_id not in cls._sessions:
                 return []
-            return copy.deepcopy(list(cls._sessions[session_id].get("events", [])))
+            return list(cls._sessions[session_id].get("events", []))
 
     @classmethod
     def clear_session(cls, session_id: str) -> bool:
@@ -576,108 +617,31 @@ class SSEManager:
                     del cls._pending_events[session_id]
                     logger.info(f"[SSEManager] Session {session_id}: Flushed {pending_flush_count} pending events")
 
-        # ⚠️ 缓存事件优先同步（关键事件优先入队列，防止被大量历史事件挤出）
-        # 新同步顺序：layer_started > layer_completed > resumed > dimension_complete > historical
+        # Cache event sync (priority order: layer state > dimension state > RAG)
+        CACHE_SYNC_ORDER = [
+            SSEEventType.LAYER_STARTED,
+            SSEEventType.DIMENSION_START,
+            SSEEventType.LAYER_COMPLETED,
+            SSEEventType.RESUMED,
+            SSEEventType.CASCADE_IMPACT,
+            SSEEventType.CASCADE_COMPLETE,
+            SSEEventType.DIMENSION_COMPLETE,
+            SSEEventType.RAG_RESULT,
+            SSEEventType.GIS_RESULT,
+            SSEEventType.DIMENSION_ERROR,
+            SSEEventType.RAG_QUERY,
+        ]
+        cached_total = 0
+        for event_type in CACHE_SYNC_ORDER:
+            cached_total += cls._sync_cache_to_queue(session_id, event_type, queue)
 
-        # 1. cached_layer_started (最高优先级)
-        cached_layer_started_count = 0
-        with cls._layer_started_cache_lock:
-            if session_id in cls._last_layer_started:
-                for layer, event in cls._last_layer_started[session_id].items():
-                    try:
-                        queue.put_nowait(event)
-                        cached_layer_started_count += 1
-                    except asyncio.QueueFull:
-                        logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached layer_started event")
-                        break
-
-        # 1.5. cached_dimension_start (after layer_started)
-        cached_dimension_start_count = 0
-        with cls._dimension_start_cache_lock:
-            if session_id in cls._last_dimension_start:
-                for dim_key, event in cls._last_dimension_start[session_id].items():
-                    try:
-                        queue.put_nowait(event)
-                        cached_dimension_start_count += 1
-                    except asyncio.QueueFull:
-                        logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached dimension_start event")
-                        break
-
-        # 2. cached_layer_completed
-        cached_layer_count = 0
-        with cls._layer_cache_lock:
-            if session_id in cls._last_layer_completed:
-                for layer, event in cls._last_layer_completed[session_id].items():
-                    try:
-                        queue.put_nowait(event)
-                        cached_layer_count += 1
-                    except asyncio.QueueFull:
-                        logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached layer event")
-                        break
-
-        # 3. cached_resumed
-        cached_resumed_count = 0
-        with cls._resumed_cache_lock:
-            if session_id in cls._last_resumed:
-                try:
-                    queue.put_nowait(cls._last_resumed[session_id])
-                    cached_resumed_count += 1
-                except asyncio.QueueFull:
-                    logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached resumed event")
-
-        # 3.5. cached_cascade_impact
-        cached_cascade_impact_count = 0
-        with cls._cascade_impact_cache_lock:
-            if session_id in cls._last_cascade_impact:
-                try:
-                    queue.put_nowait(cls._last_cascade_impact[session_id])
-                    cached_cascade_impact_count += 1
-                except asyncio.QueueFull:
-                    logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached cascade_impact event")
-
-        # 3.6. cached_cascade_complete
-        cached_cascade_complete_count = 0
-        with cls._cascade_complete_cache_lock:
-            if session_id in cls._last_cascade_complete:
-                try:
-                    queue.put_nowait(cls._last_cascade_complete[session_id])
-                    cached_cascade_complete_count += 1
-                except asyncio.QueueFull:
-                    logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached cascade_complete event")
-
-        # 4. cached_dimension_complete
-        cached_dim_count = 0
-        with cls._dimension_cache_lock:
-            if session_id in cls._last_dimension_complete:
-                for dim_key, event in cls._last_dimension_complete[session_id].items():
-                    try:
-                        queue.put_nowait(event)
-                        cached_dim_count += 1
-                    except asyncio.QueueFull:
-                        logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached dim event")
-                        break
-
-        # 4.5. cached_rag_result
-        cached_rag_count = 0
-        with cls._cache_lock:
-            if session_id in cls._last_rag_result:
-                for dim_key, event in cls._last_rag_result[session_id].items():
-                    try:
-                        queue.put_nowait(event)
-                        cached_rag_count += 1
-                    except asyncio.QueueFull:
-                        logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping cached rag_result event")
-                        break
-
-        # 5. historical events (最低优先级)
-        # 注意：过滤掉终端事件（completed, error），防止历史遗留导致连接立即关闭
+        # Historical events (lowest priority)
         TERMINAL_EVENTS = {"completed", "error"}
         historical_count = 0
         with cls._sessions_lock:
             if session_id in cls._sessions:
                 events = cls._sessions[session_id].get("events", [])
                 for event in events:
-                    # 跳过终端事件，这些不应该在重连时发送
                     if event.get("type") in TERMINAL_EVENTS:
                         continue
                     try:
@@ -687,11 +651,11 @@ class SSEManager:
                         logger.warning(f"[SSEManager] Session {session_id}: Queue full, dropping historical event")
                         break
 
-        total_synced = historical_count + cached_dim_count + cached_dimension_start_count + cached_layer_count + cached_layer_started_count + cached_resumed_count + cached_cascade_impact_count + cached_cascade_complete_count + cached_rag_count + pending_flush_count
+        total_synced = historical_count + cached_total + pending_flush_count
         logger.info(
             f"[SSEManager] Session {session_id}: Subscribed, "
-            f"pending_flush={pending_flush_count}, historical={historical_count}, cached_dim_start={cached_dimension_start_count}, cached_dim={cached_dim_count}, cached_rag={cached_rag_count}, cached_layer={cached_layer_count}, "
-            f"cached_layer_started={cached_layer_started_count}, cached_resumed={cached_resumed_count}, cached_cascade_impact={cached_cascade_impact_count}, cached_cascade_complete={cached_cascade_complete_count}, total={total_synced}"
+            f"pending_flush={pending_flush_count}, historical={historical_count}, "
+            f"cached={cached_total}, total={total_synced}"
         )
         return queue
 
@@ -776,76 +740,20 @@ class SSEManager:
             session_id: Session identifier
             event: Event dictionary
         """
-        subscribers = cls._session_subscribers.get(session_id, set())
+        with cls._subscribers_lock:
+            subscribers = list(cls._session_subscribers.get(session_id, set()))
         event_type = event.get("type", "unknown")
 
-        # Add sequence number to event for ordering and dedup
-        seq = cls._get_next_seq(session_id)
-        event["seq"] = seq
+        # Create internal copy to avoid mutating caller's dict
+        event = dict(event)
+        event["seq"] = cls.get_next_seq(session_id)
         event["session_id"] = session_id
 
         # Add to seq buffer for reconnection sync
         cls._add_to_seq_buffer(session_id, event)
 
-        # Cache critical events regardless of subscriber status
-        if event_type == SSEEventType.DIMENSION_START:
-            dimension_key = event.get("dimension_key", "")
-            if dimension_key:
-                with cls._dimension_start_cache_lock:
-                    if session_id not in cls._last_dimension_start:
-                        cls._last_dimension_start[session_id] = {}
-                    cls._last_dimension_start[session_id][dimension_key] = event
-                    logger.info(f"[SSEManager] Cached dimension_start for {session_id}/{dimension_key}")
-
-        elif event_type == SSEEventType.DIMENSION_COMPLETE:
-            dimension_key = event.get("dimension_key", "")
-            if dimension_key:
-                with cls._dimension_cache_lock:
-                    if session_id not in cls._last_dimension_complete:
-                        cls._last_dimension_complete[session_id] = {}
-                    cls._last_dimension_complete[session_id][dimension_key] = event
-                    logger.info(f"[SSEManager] Cached dimension_complete for {session_id}/{dimension_key}")
-
-        elif event_type == SSEEventType.LAYER_COMPLETED:
-            layer = event.get("layer", 0)
-            if layer:
-                with cls._layer_cache_lock:
-                    if session_id not in cls._last_layer_completed:
-                        cls._last_layer_completed[session_id] = {}
-                    cls._last_layer_completed[session_id][layer] = event
-                    logger.info(f"[SSEManager] Cached layer_completed for {session_id}/Layer{layer}")
-
-        elif event_type == SSEEventType.LAYER_STARTED:
-            layer = event.get("layer", 0) or event.get("layer_number", 0)
-            if layer:
-                with cls._layer_started_cache_lock:
-                    if session_id not in cls._last_layer_started:
-                        cls._last_layer_started[session_id] = {}
-                    cls._last_layer_started[session_id][layer] = event
-                    logger.info(f"[SSEManager] Cached layer_started for {session_id}/Layer{layer}")
-
-        elif event_type == SSEEventType.RESUMED:
-            with cls._resumed_cache_lock:
-                cls._last_resumed[session_id] = event
-                logger.info(f"[SSEManager] Cached resumed for {session_id}")
-
-        elif event_type == SSEEventType.CASCADE_IMPACT:
-            with cls._cascade_impact_cache_lock:
-                cls._last_cascade_impact[session_id] = event
-                logger.info(f"[SSEManager] Cached cascade_impact for {session_id}")
-
-        elif event_type == SSEEventType.CASCADE_COMPLETE:
-            with cls._cascade_complete_cache_lock:
-                cls._last_cascade_complete[session_id] = event
-                logger.info(f"[SSEManager] Cached cascade_complete for {session_id}")
-
-        elif event_type == SSEEventType.RAG_RESULT:
-            dimension_key = event.get("dimension_key", "")
-            if dimension_key:
-                with cls._cache_lock:
-                    if session_id not in cls._last_rag_result:
-                        cls._last_rag_result[session_id] = {}
-                    cls._last_rag_result[session_id][dimension_key] = event
+        # Cache critical events using unified CACHE_CONFIG pattern
+        cls._cache_event(session_id, event)
 
         # If no subscribers, skip sending (events are already cached above)
         if not subscribers:
@@ -853,9 +761,32 @@ class SSEManager:
                 logger.warning(f"[SSEManager] Session {session_id}: No subscribers, event cached")
             return
 
-        # Blocking put: when queue is full, publisher waits → backpressure upstream
-        for queue in list(subscribers):
-            await queue.put(event)
+        # Non-blocking put with delta coalescing on overflow
+        for queue in subscribers:
+            try:
+                queue.put_nowait(event)
+                # Update delta index on successful queue
+                if event_type == SSEEventType.DIMENSION_DELTA:
+                    dim_key = event.get("dimension_key", "")
+                    if dim_key:
+                        cls._update_delta_index(session_id, dim_key, event)
+            except asyncio.QueueFull:
+                if event_type == SSEEventType.DIMENSION_DELTA:
+                    # Coalesce with the last same-dimension delta via index
+                    dim_key = event.get("dimension_key", "")
+                    if dim_key and cls._coalesce_delta_in_queue(session_id, dim_key, event):
+                        logger.debug(f"[SSEManager] Delta coalesced for {session_id}/{dim_key}")
+                    else:
+                        logger.debug(f"[SSEManager] Delta dropped for {session_id} (queue full)")
+                else:
+                    # Non-delta events: buffer for retry (with cap to prevent unbounded growth)
+                    MAX_PENDING_PER_SESSION = 100
+                    with cls._pending_events_lock:
+                        pending = cls._pending_events.setdefault(session_id, [])
+                        if len(pending) >= MAX_PENDING_PER_SESSION:
+                            pending.pop(0)
+                        pending.append(event)
+                    logger.warning(f"[SSEManager] Queue full for session {session_id}, {event_type} buffered")
 
         if event_type in [SSEEventType.LAYER_COMPLETED, SSEEventType.DIMENSION_COMPLETE]:
             logger.info(f"[SSEManager] Session {session_id}: {event_type} sent to {len(subscribers)} subscribers")
@@ -1175,28 +1106,26 @@ class SSEManager:
     # ============================================
 
     @classmethod
-    def cleanup_expired_sessions(cls, cutoff_time: datetime) -> Dict[str, int]:
+    def cleanup_expired_sessions(cls, cutoff_time: datetime = None) -> Dict[str, int]:
         """
         Clean up expired sessions and orphan states.
 
         Args:
-            cutoff_time: DateTime threshold for expiration
+            cutoff_time: DateTime threshold for expiration (defaults to 24h ago)
 
         Returns:
             Dict with cleanup counts for each category
         """
+        if cutoff_time is None:
+            from datetime import timedelta
+            cutoff_time = datetime.now() - timedelta(hours=24)
+
         cleaned = {
             "sessions": 0,
             "executions": 0,
             "streams": 0,
             "log_trackers": 0,
-            "dimension_caches": 0,
-            "dimension_start_caches": 0,
-            "layer_caches": 0,
-            "layer_started_caches": 0,
-            "resumed_caches": 0,
-            "cascade_impact_caches": 0,
-            "cascade_complete_caches": 0,
+            "cache_cleans": 0,
             "pending_events": 0,
             "seq_states": 0,
             "seq_buffers": 0,
@@ -1245,85 +1174,24 @@ class SSEManager:
                 del cls._status_log_tracker[sid]
                 cleaned["log_trackers"] += 1
 
-        # Clean orphan dimension_complete caches
-        with cls._dimension_cache_lock:
-            orphan_dim_caches = [
-                sid for sid in cls._last_dimension_complete
-                if sid not in current_session_ids
-            ]
-            for sid in orphan_dim_caches:
-                del cls._last_dimension_complete[sid]
-                cleaned["dimension_caches"] += 1
-
-        # Clean orphan dimension_start caches
-        with cls._dimension_start_cache_lock:
-            orphan_dim_start_caches = [
-                sid for sid in cls._last_dimension_start
-                if sid not in current_session_ids
-            ]
-            for sid in orphan_dim_start_caches:
-                del cls._last_dimension_start[sid]
-                cleaned["dimension_start_caches"] += 1
-
-        # Clean orphan layer_completed caches
-        with cls._layer_cache_lock:
-            orphan_layer_caches = [
-                sid for sid in cls._last_layer_completed
-                if sid not in current_session_ids
-            ]
-            for sid in orphan_layer_caches:
-                del cls._last_layer_completed[sid]
-                cleaned["layer_caches"] += 1
-
-        # Clean orphan layer_started caches
-        with cls._layer_started_cache_lock:
-            orphan_layer_started_caches = [
-                sid for sid in cls._last_layer_started
-                if sid not in current_session_ids
-            ]
-            for sid in orphan_layer_started_caches:
-                del cls._last_layer_started[sid]
-                cleaned["layer_started_caches"] += 1
-
-        # Clean orphan resumed caches
-        with cls._resumed_cache_lock:
-            orphan_resumed_caches = [
-                sid for sid in cls._last_resumed
-                if sid not in current_session_ids
-            ]
-            for sid in orphan_resumed_caches:
-                del cls._last_resumed[sid]
-                cleaned["resumed_caches"] += 1
-
-        # Clean orphan cascade_impact caches
-        with cls._cascade_impact_cache_lock:
-            orphan_cascade_impact = [
-                sid for sid in cls._last_cascade_impact
-                if sid not in current_session_ids
-            ]
-            for sid in orphan_cascade_impact:
-                del cls._last_cascade_impact[sid]
-                cleaned["cascade_impact_caches"] += 1
-
-        # Clean orphan cascade_complete caches
-        with cls._cascade_complete_cache_lock:
-            orphan_cascade_complete = [
-                sid for sid in cls._last_cascade_complete
-                if sid not in current_session_ids
-            ]
-            for sid in orphan_cascade_complete:
-                del cls._last_cascade_complete[sid]
-                cleaned["cascade_complete_caches"] += 1
-
-        # Clean orphan rag_result caches
+        # Clean orphan caches via CACHE_CONFIG
         with cls._cache_lock:
-            orphan_rag = [
-                sid for sid in cls._last_rag_result
-                if sid not in current_session_ids
-            ]
-            for sid in orphan_rag:
-                del cls._last_rag_result[sid]
-                cleaned["rag_caches"] += 1
+            for event_type, (cache_attr, _) in cls.CACHE_CONFIG.items():
+                cache_dict = getattr(cls, cache_attr, None)
+                if cache_dict is None:
+                    continue
+                orphans = [sid for sid in cache_dict if sid not in current_session_ids]
+                for sid in orphans:
+                    del cache_dict[sid]
+                cleaned["cache_cleans"] += len(orphans)
+
+        # Clean orphan delta coalesce index
+        orphan_delta_idx = [
+            sid for sid in cls._delta_coalesce_index
+            if sid not in current_session_ids
+        ]
+        for sid in orphan_delta_idx:
+            del cls._delta_coalesce_index[sid]
 
         # Clean orphan pending events
         with cls._pending_events_lock:
@@ -1356,15 +1224,7 @@ class SSEManager:
 
         total = sum(cleaned.values())
         if total > 0:
-            logger.info(
-                f"[SSEManager] Cleanup completed: "
-                f"sessions={cleaned['sessions']}, executions={cleaned['executions']}, "
-                f"streams={cleaned['streams']}, trackers={cleaned['log_trackers']}, "
-                f"dim_caches={cleaned['dimension_caches']}, dim_start_caches={cleaned['dimension_start_caches']}, "
-                f"layer_caches={cleaned['layer_caches']}, layer_started_caches={cleaned['layer_started_caches']}, "
-                f"resumed_caches={cleaned['resumed_caches']}, cascade_impact_caches={cleaned['cascade_impact_caches']}, cascade_complete_caches={cleaned['cascade_complete_caches']}, pending_events={cleaned['pending_events']}, "
-                f"seq_states={cleaned['seq_states']}, seq_buffers={cleaned['seq_buffers']}"
-            )
+            logger.info(f"[SSEManager] Cleanup completed: {cleaned}")
 
         return cleaned
 
@@ -1386,62 +1246,13 @@ class SSEManager:
             "log_tracker": cls.delete_status_log_tracker(session_id),
         }
 
-        # Clean up critical event caches
-        with cls._dimension_cache_lock:
-            if session_id in cls._last_dimension_complete:
-                del cls._last_dimension_complete[session_id]
-                result["dimension_cache"] = True
-            else:
-                result["dimension_cache"] = False
+        # Clean up all critical event caches via CACHE_CONFIG
+        for event_type in cls.CACHE_CONFIG:
+            result_key = f"{event_type}_cache"
+            result[result_key] = cls._clear_cache_for_session(session_id, event_type)
 
-        with cls._dimension_start_cache_lock:
-            if session_id in cls._last_dimension_start:
-                del cls._last_dimension_start[session_id]
-                result["dimension_start_cache"] = True
-            else:
-                result["dimension_start_cache"] = False
-
-        with cls._layer_cache_lock:
-            if session_id in cls._last_layer_completed:
-                del cls._last_layer_completed[session_id]
-                result["layer_cache"] = True
-            else:
-                result["layer_cache"] = False
-
-        with cls._layer_started_cache_lock:
-            if session_id in cls._last_layer_started:
-                del cls._last_layer_started[session_id]
-                result["layer_started_cache"] = True
-            else:
-                result["layer_started_cache"] = False
-
-        with cls._resumed_cache_lock:
-            if session_id in cls._last_resumed:
-                del cls._last_resumed[session_id]
-                result["resumed_cache"] = True
-            else:
-                result["resumed_cache"] = False
-
-        with cls._cascade_impact_cache_lock:
-            if session_id in cls._last_cascade_impact:
-                del cls._last_cascade_impact[session_id]
-                result["cascade_impact_cache"] = True
-            else:
-                result["cascade_impact_cache"] = False
-
-        with cls._cascade_complete_cache_lock:
-            if session_id in cls._last_cascade_complete:
-                del cls._last_cascade_complete[session_id]
-                result["cascade_complete_cache"] = True
-            else:
-                result["cascade_complete_cache"] = False
-
-        with cls._cache_lock:
-            if session_id in cls._last_rag_result:
-                del cls._last_rag_result[session_id]
-                result["rag_cache"] = True
-            else:
-                result["rag_cache"] = False
+        # Clean up delta coalesce index
+        cls._delta_coalesce_index.pop(session_id, None)
 
         with cls._pending_events_lock:
             if session_id in cls._pending_events:

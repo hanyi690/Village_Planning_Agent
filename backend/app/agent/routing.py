@@ -17,14 +17,16 @@ from langchain_core.messages import AIMessage
 from .state import PlanningPhase, get_layer_dimensions, _phase_to_layer
 from ..config import get_dimension_layer
 from ..config.dependency import get_impact_tree_compat, get_next_revision_wave
-from ..tools.constants import ADVANCE_PLANNING_TOOL, GIS_ANALYSIS_TOOL
+from ..tools.intent_tools import advance_planning_intent, gis_analysis
 from ..utils.logger import get_logger
 
 
 logger = get_logger(__name__)
 
 
-def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
+def after_conversation(
+    state: Dict[str, Any],
+) -> Union[str, List[Send]]:
     """
     对话后路由 - 新架构核心
 
@@ -36,6 +38,7 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
     """
     messages = state.get("messages", [])
     if not messages:
+        logger.info("[after_conversation] No messages, returning END")
         return END
 
     last_msg = messages[-1]
@@ -104,22 +107,29 @@ def after_conversation(state: Dict[str, Any]) -> Union[str, List[Send]]:
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
         for tc in last_msg.tool_calls:
             name = tc.get("name", "")
-            if name == ADVANCE_PLANNING_TOOL["function"]["name"]:
+            # Normalize: LLM may emit PascalCase from old prompts
+            if name in (advance_planning_intent.name, "AdvancePlanningIntent"):
+                logger.info("[after_conversation] ROUTE: advance_planning_intent detected -> _dispatch_current")
                 return _dispatch_current(state)
-            if name == GIS_ANALYSIS_TOOL["function"]["name"]:
-                return "execute_tools"
+            if name in (gis_analysis.name, "GISAnalysis"):
+                logger.info("[after_conversation] ROUTE: gis_analysis detected -> gis_agent")
+                return "gis_agent"
+        logger.info("[after_conversation] ROUTE: unknown tool_call -> execute_tools (name=%s)", last_msg.tool_calls[0].get("name"))
         return "execute_tools"
 
+    logger.info("[after_conversation] ROUTE: no tool_calls, no revision -> END")
     return END
 
 
-def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
+def after_analysis(
+    state: Dict[str, Any],
+) -> Union[str, List[Send]]:
     """
     分析后路由 - 波次推进逻辑
 
     处理：
     1. completed -> END
-    2. execution_paused -> END（等待审批）
+    2. interrupt -> END（等待审批）
     3. 待处理维度 -> Send 分发（检查同层依赖）
     """
     is_revision = state.get("is_revision", False)
@@ -224,10 +234,6 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
     if phase == "completed":
         return END
 
-    # Paused waiting for user approval — stop graph execution
-    if state.get("execution_paused"):
-        return END
-
     layer = _phase_to_layer(phase)
     if layer is None:
         return END
@@ -247,32 +253,10 @@ def after_analysis(state: Dict[str, Any]) -> Union[str, List[Send]]:
         if all(dep in completed for dep in dim.depends_on):
             ready_dims.append(dim.key)
 
-    # Continuous mode: check next-layer dims whose cross-layer deps are ready
-    # Must run even when current-layer has no ready dims (all dispatched)
-    cross_ready = []
-    next_layer = layer + 1
-    if next_layer <= 3 and not state.get("step_mode"):
-        next_dims = list_dimensions(next_layer)
-        next_completed = state.get("completed_dimensions", {}).get(f"layer{next_layer}", [])
-        completed_all = state.get("completed_dimensions", {})
-        for dim in next_dims:
-            if dim.key in next_completed:
-                continue
-            if not all(dep in next_completed for dep in dim.depends_on):
-                continue
-            cross_deps = list(getattr(dim, 'layer_depends_on', []) or [])
-            if not all(dep in completed for dep in cross_deps):
-                continue
-            phase_deps = list(getattr(dim, 'phase_depends_on', []) or [])
-            prev_layer_key = f"layer{layer}"
-            prev_completed = completed_all.get(prev_layer_key, [])
-            if not all(dep in prev_completed for dep in phase_deps):
-                continue
-            cross_ready.append(dim.key)
-            logger.info(
-                "[after_analysis] Cross-layer early dispatch: %s (layer=%s, cross_deps=%s)",
-                dim.key, next_layer, cross_deps + phase_deps,
-            )
+    # Strict layer-gated mode: do NOT dispatch next-layer dimensions before the
+    # current layer has been reviewed and approved. This prevents L2/L3 from
+    # running while the UI is still showing "Layer 1 审查".
+    cross_ready: List[str] = []
 
     logger.info(
         "[after_analysis] phase=%s layer=%s completed=%s ready=%s cross_ready=%s",
@@ -313,7 +297,7 @@ def _dispatch_current(state: Dict[str, Any]) -> Union[List[Send], str]:
     if phase == PlanningPhase.INIT.value:
         phase = PlanningPhase.LAYER1.value
 
-    logger.info("[_dispatch_current] input phase=%s step_mode=%s", phase, state.get("step_mode"))
+    logger.info("[_dispatch_current] input phase=%s", phase)
 
     layer = _phase_to_layer(phase)
     if layer is None:

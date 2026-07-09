@@ -51,7 +51,19 @@ def _parse_tianditu_pois(pois: List[Dict]) -> List[Dict]:
 
 
 class TiandituProvider:
-    """天地图 API 封装"""
+    """天地图 API 封装
+
+    坐标系统说明:
+        - Tianditu WFS/API 返回坐标系统：CGCS2000 (EPSG:4490)
+        - 代码内部存储格式：WGS-84 (EPSG:4326) 以符合 GeoJSON RFC 7946
+        - CGCS2000 与 WGS-84 共用 GRS80 椭球参数（长半轴 6378137.0m，
+          扁率倒数 298.257222101），两者间的 Helmert 变换残差小于 1 米
+        - 在村级规划场景（公顷级精度）下，此偏差可忽略（< 0.01%）
+        - 与高德地理信息服务不同，天地图数据无需坐标偏移修正（无 GCJ-02
+          混淆坐标系问题）
+        - 这种设计在精度要求不严密的村级规划中是可接受的权衡
+
+    """
 
     def __init__(self):
         self.api_key = TIANDITU_API_KEY
@@ -280,28 +292,74 @@ class TiandituProvider:
         )
 
     def _parse_wkt_multipolygon(self, wkt: str) -> List[List[List[List[float]]]]:
-        """解析 MULTIPOLYGON WKT 格式为 GeoJSON coordinates"""
+        """解析 MULTIPOLYGON WKT 格式为 GeoJSON coordinates
+
+        Uses bracket-level parsing to correctly preserve ring structure,
+        holes, and multi-part polygons — replacing the old regex approach
+        that flattened all coordinates into a single ring.
+        """
         if not wkt or not wkt.startswith("MULTIPOLYGON"):
             return [[]]
 
-        # 移除 MULTIPOLYGON 前缀
-        coords_str = wkt.replace("MULTIPOLYGON", "").strip()
-
-        # 解析多层括号结构
+        coords_str = wkt[len("MULTIPOLYGON"):].strip()
         polygons = []
 
+        # Parse by bracket nesting depth:
+        #   depth 3 = polygon, depth 2 = ring, depth 1 = coordinate pair
         try:
-            # 提取所有数字对
-            coord_pairs = re.findall(r'(\d+\.\d+)\s+(\d+\.\d+)', coords_str)
-            if coord_pairs:
-                # 转换为 [lng, lat] 格式
-                ring = [[float(lon), float(lat)] for lon, lat in coord_pairs]
-                polygons.append([ring])
+            # Extract individual polygons (outer bracket groups at depth 1)
+            depth = 0
+            polygon_start = None
+            for i, ch in enumerate(coords_str):
+                if ch == '(':
+                    depth += 1
+                    if depth == 1:
+                        polygon_start = i
+                elif ch == ')':
+                    if depth == 1 and polygon_start is not None:
+                        poly_str = coords_str[polygon_start:i + 1]
+                        rings = self._parse_wkt_rings(poly_str)
+                        if rings:
+                            polygons.append(rings)
+                    depth -= 1
+
+            # Fallback: if bracket parsing produced nothing, try regex
+            if not polygons:
+                coord_pairs = re.findall(
+                    r'(-?\d+\.?\d*)\s+(-?\d+\.?\d*)', coords_str
+                )
+                if coord_pairs:
+                    ring = [[float(lon), float(lat)] for lon, lat in coord_pairs]
+                    polygons.append([ring])
         except Exception as e:
             logger.warning(f"[TiandituProvider] WKT 解析失败: {e}")
             return [[]]
 
         return polygons if polygons else [[]]
+
+    def _parse_wkt_rings(self, poly_str: str) -> List[List[List[float]]]:
+        """Parse rings from a single polygon substring."""
+        rings = []
+        depth = 0
+        ring_start = None
+
+        for i, ch in enumerate(poly_str):
+            if ch == '(':
+                depth += 1
+                if depth == 1:
+                    ring_start = i
+            elif ch == ')':
+                if depth == 1 and ring_start is not None:
+                    ring_str = poly_str[ring_start + 1:i]
+                    coord_pairs = re.findall(
+                        r'(-?\d+\.?\d*)\s+(-?\d+\.?\d*)', ring_str
+                    )
+                    if coord_pairs:
+                        ring = [[float(lon), float(lat)] for lon, lat in coord_pairs]
+                        rings.append(ring)
+                depth -= 1
+
+        return rings
 
     def search_poi(
         self,

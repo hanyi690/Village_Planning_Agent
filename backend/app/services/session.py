@@ -167,14 +167,13 @@ class SessionService:
         # 6. Delete LangGraph checkpoint
         if project_name:
             try:
-                from app.agent.graph import create_unified_planning_graph
+                from app.services.runtime import PlanningRuntimeService
                 from app.database.engine import get_global_checkpointer
 
+                await PlanningRuntimeService.ensure_initialized()
                 checkpointer = await get_global_checkpointer()
-                graph = create_unified_planning_graph(checkpointer=checkpointer)
-                config = {"configurable": {"thread_id": session_id}}
+                config = PlanningRuntimeService.get_thread_config(session_id)
 
-                # Get all checkpoints and delete them
                 checkpoints = [c async for c in checkpointer.aget_tuple(config)]
                 for checkpoint in checkpoints:
                     await checkpointer.adelete(config)

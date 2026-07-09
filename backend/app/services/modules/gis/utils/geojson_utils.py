@@ -14,7 +14,6 @@ logger = get_logger(__name__)
 # Check geopandas availability
 try:
     import geopandas as gpd
-    import shapely.geometry as geom
     GEOPANDAS_AVAILABLE = True
 except ImportError:
     GEOPANDAS_AVAILABLE = False
@@ -35,6 +34,8 @@ def geojson_to_geodataframe(geojson: Dict[str, Any]) -> Optional[gpd.GeoDataFram
         return None
 
     try:
+        import shapely.geometry
+
         features = geojson.get("features", [])
         if not features:
             return None
@@ -46,25 +47,9 @@ def geojson_to_geodataframe(geojson: Dict[str, Any]) -> Optional[gpd.GeoDataFram
             geom_data = feature.get("geometry", {})
             props = feature.get("properties", {})
 
-            geom_type = geom_data.get("type", "")
-            coords = geom_data.get("coordinates", [])
-
             try:
-                if geom_type == "Point":
-                    geometries.append(geom.Point(coords))
-                elif geom_type == "LineString":
-                    geometries.append(geom.LineString(coords))
-                elif geom_type == "Polygon":
-                    # Polygon coords is [shell, hole1, hole2, ...]
-                    geometries.append(geom.Polygon(coords[0], coords[1:]))
-                elif geom_type == "MultiPoint":
-                    geometries.append(geom.MultiPoint(coords))
-                elif geom_type == "MultiLineString":
-                    geometries.append(geom.MultiLineString(coords))
-                elif geom_type == "MultiPolygon":
-                    geometries.append(geom.MultiPolygon(coords))
-                else:
-                    geometries.append(None)
+                geom_obj = shapely.geometry.shape(geom_data)
+                geometries.append(geom_obj)
             except Exception as e:
                 logger.warning(f"[geojson_utils] Failed to create geometry: {e}")
                 geometries.append(None)
@@ -130,8 +115,138 @@ def geodataframe_to_geojson(gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
 
 
 def _get_geometry_coords(geometry) -> List:
-    """从 Shapely 几何对象提取坐标"""
-    return json.loads(json.dumps(geometry.__geo_interface__))["coordinates"]
+    """Extract coordinates from a Shapely geometry via __geo_interface__."""
+    return geometry.__geo_interface__["coordinates"]
 
 
-__all__ = ['geojson_to_geodataframe', 'geodataframe_to_geojson']
+def reduce_coordinate_precision(geojson: Dict[str, Any], decimals: int = 6) -> Dict[str, Any]:
+    """Reduce coordinate precision in a GeoJSON FeatureCollection.
+
+    MapLibre GL JS official best practice: 6 decimal places ≈ 0.1m precision,
+    sufficient for village-level planning. Reduces 15-17 decimal places
+    (atomic scale) to practical precision, cutting data size ~40-50%.
+
+    Args:
+        geojson: GeoJSON FeatureCollection dict
+        decimals: Number of decimal places to keep (default 6)
+
+    Returns:
+        GeoJSON with rounded coordinates (mutated in-place for performance)
+    """
+    features = geojson.get("features", [])
+    for feature in features:
+        geom = feature.get("geometry")
+        if not geom:
+            continue
+        geom["coordinates"] = _round_coords(geom["coordinates"], decimals)
+    return geojson
+
+
+def _round_coords(coords, decimals: int):
+    """Recursively round coordinate values."""
+    if not coords:
+        return coords
+    if isinstance(coords[0], (int, float)):
+        return [round(c, decimals) for c in coords]
+    return [_round_coords(c, decimals) for c in coords]
+
+
+def simplify_geojson(geojson: Dict[str, Any], tolerance: float = 0.00005) -> Dict[str, Any]:
+    """Simplify GeoJSON geometries using Douglas-Peucker algorithm.
+
+    Args:
+        geojson: GeoJSON FeatureCollection dict
+        tolerance: Simplification tolerance in degrees (~0.00005° ≈ 5m)
+
+    Returns:
+        GeoJSON with simplified geometries (mutated in-place)
+    """
+    if not GEOPANDAS_AVAILABLE:
+        return geojson
+
+    try:
+        from shapely.geometry import shape, mapping
+        features = geojson.get("features", [])
+        for feature in features:
+            geom = feature.get("geometry")
+            if not geom:
+                continue
+            geom_type = geom.get("type", "")
+            if geom_type in ("Point", "MultiPoint"):
+                continue
+            try:
+                shapely_geom = shape(geom)
+                simplified = shapely_geom.simplify(tolerance, preserve_topology=True)
+                feature["geometry"] = mapping(simplified)
+            except Exception:
+                pass
+        return geojson
+    except Exception as e:
+        logger.warning(f"[geojson_utils] simplify_geojson failed: {e}")
+        return geojson
+
+
+def build_parcel_index(
+    landuse_geojson: Dict[str, Any],
+    zone_type_fn=None,
+) -> tuple:
+    """Build parcel index from landuse GeoJSON for zone allocation.
+
+    Extracts BSM/DLBM/area from landuse features and resolves zone types.
+    Uses composite_key (BSM_DLBM_SHAPEArea) because BSM is NOT unique —
+    80 BSMs have 2 different DLBM codes, and 38 BSM+DLBM pairs have
+    multiple features with different geometries/areas.
+
+    Args:
+        landuse_geojson: GeoJSON FeatureCollection of land use parcels
+        zone_type_fn: Optional callable(dlbm: str) -> str for zone type resolution
+
+    Returns:
+        Tuple of (parcel_db: dict, duplicate_bsms: set)
+        parcel_db maps composite_key -> {area_ha, dlbm, bsm_bare, current_zone, feature}
+    """
+    from app.utils.logger import get_logger as _get_logger
+    _logger = _get_logger(__name__)
+
+    features = landuse_geojson.get("features", [])
+    parcel_db: Dict[str, Dict[str, Any]] = {}
+    duplicate_bsms: set = set()
+    seen_bsms: set = set()
+
+    for ft in features:
+        props = ft.get("properties", {})
+        bsm = str(props.get("BSM", "")).strip()
+        dlbm = str(props.get("DLBM", "")).strip()
+        if not bsm:
+            continue
+        shape_area = props.get("SHAPE_Area", 0) or 0
+        composite_key = f"{bsm}_{dlbm}_{int(shape_area)}"
+        if bsm in seen_bsms:
+            duplicate_bsms.add(bsm)
+        seen_bsms.add(bsm)
+        area = (props.get("DLMJ", 0) or shape_area) / 10000
+        current_zone = zone_type_fn(dlbm) if zone_type_fn else ""
+        parcel_db[composite_key] = {
+            "area_ha": area,
+            "dlbm": dlbm,
+            "bsm_bare": bsm,
+            "current_zone": current_zone,
+            "feature": ft,
+        }
+
+    if duplicate_bsms:
+        _logger.debug(
+            f"[ParcelIndex] {len(duplicate_bsms)} BSMs with multiple DLBM codes "
+            f"({len(parcel_db)} total parcels)"
+        )
+
+    return parcel_db, duplicate_bsms
+
+
+__all__ = [
+    'geojson_to_geodataframe',
+    'geodataframe_to_geojson',
+    'reduce_coordinate_precision',
+    'simplify_geojson',
+    'build_parcel_index',
+]

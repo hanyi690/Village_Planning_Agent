@@ -14,6 +14,48 @@ interface ToolStatusCardProps {
   message: ToolStatusMessage;
 }
 
+// GIS layout engine stages (matches backend engine.py _emit_progress calls)
+const GIS_STAGES = [
+  { key: 'building_kg', label: '知识图谱' },
+  { key: 'phase0_conflict_detection', label: '冲突检测' },
+  { key: 'phase1_layout_generation', label: '布局生成' },
+  { key: 'generating_function_zone', label: '功能分区' },
+  { key: 'generating_planning_zone', label: '规划分区' },
+  { key: 'generating_facility_point', label: '设施点' },
+  { key: 'generating_development_axis', label: '发展轴' },
+  { key: 'complete', label: '完成' },
+];
+
+function GisStageProgress({ stage }: { stage: string }) {
+  const currentIdx = GIS_STAGES.findIndex(s => s.key === stage);
+  if (currentIdx === -1) return null;
+
+  return (
+    <div className="flex items-center gap-1 mt-2">
+      {GIS_STAGES.map((s, i) => {
+        const isComplete = i < currentIdx;
+        const isCurrent = i === currentIdx;
+        return (
+          <div key={s.key} className="flex items-center gap-0.5" title={s.label}>
+            <div
+              className={`w-2 h-2 rounded-full ${
+                isComplete ? 'bg-emerald-500' :
+                isCurrent ? 'bg-blue-500 ring-2 ring-blue-200' :
+                'bg-gray-300'
+              }`}
+            />
+            {isCurrent && (
+              <span className="text-[10px] text-blue-600 font-medium whitespace-nowrap">
+                {s.label}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Status styles
 const STATUS_STYLES: Record<string, { bg: string; border: string; icon: string }> = {
   pending: {
@@ -93,6 +135,9 @@ function ToolStatusCard({ message }: ToolStatusCardProps) {
               />
             </div>
             <div className="text-xs text-gray-500 mt-1">{Math.round(progress)}%</div>
+              {message.toolName === 'gis_layout_engine' && message.stage && (
+                <GisStageProgress stage={message.stage} />
+              )}
           </div>
         )}
 

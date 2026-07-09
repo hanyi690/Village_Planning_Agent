@@ -83,11 +83,11 @@ export default function ChatInput({ disabled, onSend }: ChatInputProps) {
       />
 
       {/* Main input */}
-      <div className="flex-1 flex items-center gap-2">
+      <div className="flex-1 min-w-0 flex items-center gap-2">
         {/* File upload button */}
         <label
           htmlFor="file-upload"
-          className={`w-10 h-10 flex items-center justify-center rounded-full cursor-pointer ${
+          className={`w-10 h-10 shrink-0 flex items-center justify-center rounded-full cursor-pointer ${
             disabled
               ? 'opacity-50 cursor-not-allowed'
               : 'hover:bg-slate-100'
@@ -107,21 +107,21 @@ export default function ChatInput({ disabled, onSend }: ChatInputProps) {
           onKeyDown={handleKeyDown}
           disabled={disabled}
           placeholder={disabled ? '等待规划开始...' : '输入反馈或问题...'}
-          className="flex-1 h-[40px] px-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-700 placeholder-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 focus:outline-none transition-colors disabled:opacity-50"
+          className="flex-1 min-w-0 h-[40px] px-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-700 placeholder-slate-400 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-100 focus:outline-none transition-colors disabled:opacity-50"
         />
 
         {/* Send button */}
         <button
           onClick={handleSend}
           disabled={disabled || !inputValue.trim()}
-          className="h-[40px] px-4 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-xl text-white hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 disabled:from-slate-300 disabled:to-slate-400 transition-all"
+          className="h-[40px] shrink-0 px-3 bg-gradient-to-r from-emerald-500 to-teal-500 rounded-xl text-white hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 disabled:from-slate-300 disabled:to-slate-400 transition-all"
         >
           <FontAwesomeIcon icon={faPaperPlane} style={{ width: 14, height: 14 }} />
         </button>
       </div>
 
       {/* Demo preset button */}
-      <div className="relative">
+      <div className="relative shrink-0">
         <button
           onClick={() => setShowPresets((prev) => !prev)}
           disabled={disabled}

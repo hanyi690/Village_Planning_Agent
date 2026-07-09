@@ -11,6 +11,12 @@ from enum import Enum
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
+# Use plain add_messages reducer.
+# DeltaChannel is NOT supported with SqliteSaver (requires per-channel blob table,
+# only InMemorySaver / PostgresSaver support delta chains).
+# See: langgraph PR #7547
+_messages_reducer = add_messages
+
 from ..config import get_layer_dimensions as _get_layer_dimensions, get_wave_config
 
 
@@ -48,11 +54,7 @@ def _merge_dict_of_lists(a: Dict[str, List], b: Dict[str, List]) -> Dict[str, Li
     all_keys = set(a.keys()) | set(b.keys())
     for k in all_keys:
         combined = a.get(k, []) + b.get(k, [])
-        deduped = []
-        for item in combined:
-            if item not in deduped:
-                deduped.append(item)
-        result[k] = deduped
+        result[k] = list(dict.fromkeys(combined))  # O(n) dedup, preserves order
     return result
 
 
@@ -151,7 +153,7 @@ class AgentState(TypedDict, total=False):
     - report_versions: 版本追踪（已移除，使用 ReportStore）
     - summaries: 摘要（已移除，使用 ReportStore）
     """
-    messages: Annotated[List[BaseMessage], add_messages]
+    messages: Annotated[List[BaseMessage], _messages_reducer]
     session_id: str
     project_name: str
     phase: str
@@ -163,8 +165,6 @@ class AgentState(TypedDict, total=False):
     image_ids: List[str]
     metadata: Dict[str, Any]
     step_mode: bool  # Enable step-by-step execution (pause after each layer)
-    execution_paused: bool
-    pause_after_step: bool
     previous_layer: int
     # Revision cascade
     need_revision: bool
@@ -178,6 +178,12 @@ class AgentState(TypedDict, total=False):
     # Performance optimization: batch write and char count cache
     pending_reports: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # Buffer for batch DB writes
     layer_char_counts: Annotated[Dict[int, int], _merge_layer_char_counts]  # Cached char counts per layer
+    gis_layout_configs: Annotated[List[Dict[str, Any]], _replace_or_merge_lists]  # GIS Agent输出的图层配置
+    user_uploaded_data: Annotated[Dict[str, Dict[str, Any]], _merge_dict_of_dicts]  # 用户上传的GIS数据
+    # P0: L1/L2/L3 数据流闭环字段（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
+    _landuse_metrics: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L1 注入的现状用地指标
+    intent_targets: Annotated[Dict[str, float], _merge_dict_of_dicts]  # L2 持久化的规划目标面积
+    pending_chat_action: Optional[Dict[str, Any]]  # 右侧智能体待确认/待填入修订栏的动作
 
 
 # ==========================================
@@ -289,9 +295,7 @@ def create_initial_state(
         "image_ids": image_ids or [],
         "completed_dimensions": {"layer1": [], "layer2": [], "layer3": []},
         "feedback": None,
-        "step_mode": False,
-        "execution_paused": False,
-        "pause_after_step": False,
+        "step_mode": True,
         "previous_layer": 0,
         "metadata": {},
         "need_revision": False,
@@ -304,6 +308,11 @@ def create_initial_state(
         "last_revised_dimensions": [],
         "pending_reports": [],  # Buffer for batch DB writes
         "layer_char_counts": {},  # Cached char counts per layer
+        "gis_layout_configs": [],  # GIS Agent输出的图层配置
+        "user_uploaded_data": {},  # 用户上传的GIS数据
+        "_landuse_metrics": {},  # P0: L1 注入的现状用地指标
+        "intent_targets": {},  # P0: L2 持久化的规划目标面积
+        "pending_chat_action": None,
     }
 
 
@@ -357,7 +366,7 @@ def get_next_phase(current_phase: str) -> Optional[str]:
     return None
 
 
-def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None) -> Dict[str, Any]:
+def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None, *, is_interrupted: bool = False) -> Dict[str, Any]:
     """状态转 UI 格式
 
     注意：reports 字段已移除，前端应从数据库 API 获取报告内容
@@ -370,16 +379,25 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
     metadata = state.get("metadata", {})
     progress = metadata.get("progress", (current_layer / 3) * 100 if current_layer else 0)
 
-    # Determine status based on phase and execution state
-    execution_paused = state.get("execution_paused", False)
+    # Determine status based on phase and interrupt state
     if phase == "completed":
         status = "completed"
-    elif execution_paused:
+    elif is_interrupted:
         status = "paused"
     elif phase == "init":
         status = "pending"
     else:
         status = "running"
+
+    # Build interrupt_info from interrupt state
+    interrupt_info = None
+    if is_interrupted:
+        interrupt_info = {
+            "layer": state.get("previous_layer", 0),
+            "phase": phase,
+            "layer_name": get_layer_name(state.get("previous_layer", 0)) if state.get("previous_layer", 0) > 0 else None,
+            "reason": "step_mode" if state.get("step_mode", False) else "pause",
+        }
 
     # Convert messages to UI format
     messages_raw = state.get("messages", [])
@@ -412,9 +430,8 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
         "current_layer": current_layer,
         "progress": progress,
         "completed_dimensions": state.get("completed_dimensions", {}),
-        "pause_after_step": state.get("pause_after_step", False),
+        "interrupt_info": interrupt_info,
         "step_mode": state.get("step_mode", False),
-        "execution_paused": execution_paused,
         "rag_enabled": state.get("config", {}).get("rag_enabled", True),
         "rag_layer_config": state.get("config", {}).get("rag_layer_config", DEFAULT_RAG_LAYER_CONFIG),
         "previous_layer": state.get("previous_layer", 0),
@@ -427,6 +444,7 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None)
         "county": db_session.get("county") if db_session else state.get("config", {}).get("county", ""),
         "township": db_session.get("township") if db_session else state.get("config", {}).get("township", ""),
         "planning_period": db_session.get("planning_period") if db_session else state.get("config", {}).get("planning_period", "2022-2035年"),
+        "gis_layout_configs": state.get("gis_layout_configs", []),
     }
 
 

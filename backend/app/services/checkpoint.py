@@ -30,7 +30,7 @@ def _get_dimension_names():
     global _DIMENSION_NAMES
     if _DIMENSION_NAMES is None:
         from app.config import get_dimension_config
-        from app.agent.nodes import DIMENSION_NAMES
+        from app.agent.analysis import DIMENSION_NAMES
         _DIMENSION_NAMES = DIMENSION_NAMES
     return _DIMENSION_NAMES
 
@@ -244,18 +244,18 @@ class CheckpointService:
 
     @classmethod
     async def clear_pause_flags(cls, session_id: str) -> bool:
-        """Clear pause flags and reset wave for next layer."""
-        from app.services.runtime import PlanningRuntimeService
-        return await PlanningRuntimeService.aupdate_state(session_id, {
-            "pause_after_step": False,
-            "previous_layer": 0,
-            "current_wave": 1,  # Reset wave for next layer execution
-        })
+        """Clear pause flags — no-op in interrupt mode.
+
+        In the interrupt() pattern, pause/resume is handled by LangGraph
+        natively. This method is kept for backward compatibility.
+        """
+        return True
 
     @classmethod
     async def rebuild_events(cls, session_id: str) -> List[Dict[str, Any]]:
         """Rebuild key events from checkpoint state."""
         from app.services.runtime import PlanningRuntimeService
+        from app.services.sse import sse_manager
         events = []
 
         try:
@@ -310,15 +310,17 @@ class CheckpointService:
                         layer=layer_num,
                         phase=phase,
                         reports={"layer1": {}, "layer2": {}, "layer3": {}},  # 占位，实际数据从数据库获取
-                        pause_after_step=state.get("pause_after_step", False),
+                        is_interrupted=is_interrupted,
                         previous_layer=layer_num,
                         session_id=session_id,
                         knowledge_sources_cache=knowledge_sources_cache,
                     )
                     # 更新事件中的报告数据
                     event["report_count"] = len(dimension_reports)
+                    event["dimension_count"] = len(dimension_reports)
                     event["total_chars"] = sum(len(v.get("content", "")) for v in dimension_reports.values())
                     event["_rebuild"] = True
+                    event["seq"] = sse_manager.get_next_seq(session_id)
                     events.append(event)
                     logger.info(f"[CheckpointService] Session {session_id}: rebuilt layer_completed event Layer {layer_num}")
 
@@ -339,11 +341,17 @@ class CheckpointService:
                                 "session_id": session_id,
                                 "timestamp": metadata.get("last_signal_timestamp", datetime.now().isoformat()),
                                 "_rebuild": True,
+                                "seq": sse_manager.get_next_seq(session_id),
                             }
                             events.append(dim_event)
                             logger.debug(f"[CheckpointService] Session {session_id}: rebuilt dimension_complete {dim_key}")
 
-            if state.get("pause_after_step", False):
+            # Detect interrupt state: snapshot.next contains pending node names
+            is_interrupted = (
+                checkpoint_state.next
+                and "layer_completion_check" in (checkpoint_state.next or [])
+            )
+            if is_interrupted:
                 previous_layer = state.get("previous_layer", 1)
                 checkpoint_id = checkpoint_state.config.get("configurable", {}).get("checkpoint_id", "")
                 pause_event = {
@@ -354,6 +362,7 @@ class CheckpointService:
                     "reason": "step_mode",
                     "timestamp": datetime.now().isoformat(),
                     "_rebuild": True,
+                    "seq": sse_manager.get_next_seq(session_id),
                 }
                 events.append(pause_event)
                 logger.info(f"[CheckpointService] Session {session_id}: rebuilt pause event Layer {previous_layer}")

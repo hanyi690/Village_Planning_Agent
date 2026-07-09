@@ -44,20 +44,20 @@ export default function DebugPanel({ layers }: DebugPanelProps) {
                 {layer.layerType === 'development_axis' && (
                   <>
                     <span className="text-xs bg-gray-200 px-2 py-0.5 rounded">
-                      发展主轴: {PLANNING_COLORS.development_axis?.['发展主轴']?.stroke || 'N/A'}
+                      发展主轴: {PLANNING_COLORS.development_axis?.primary?.stroke || 'N/A'}
                     </span>
                     <span className="text-xs bg-gray-300 px-2 py-0.5 rounded">
-                      交通主轴: {PLANNING_COLORS.development_axis?.['交通主轴']?.stroke || 'N/A'}
+                      交通主轴: {PLANNING_COLORS.development_axis?.traffic?.stroke || 'N/A'}
                     </span>
                   </>
                 )}
                 {layer.layerType === 'infrastructure' && (
                   <>
                     <span className="text-xs bg-blue-200 px-2 py-0.5 rounded">
-                      供水管线: {PLANNING_COLORS.infrastructure?.['供水管线']?.stroke || 'N/A'}
+                      县道: {PLANNING_COLORS.infrastructure?.['县道']?.stroke || 'N/A'}
                     </span>
                     <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">
-                      排水管线: {PLANNING_COLORS.infrastructure?.['排水管线']?.stroke || 'N/A'}
+                      河流: {PLANNING_COLORS.infrastructure?.['河流']?.stroke || 'N/A'}
                     </span>
                   </>
                 )}

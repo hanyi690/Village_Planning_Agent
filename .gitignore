@@ -55,6 +55,7 @@ results/
 
 # GIS output directories
 output/
+docs/gis/output/
 docs/gis_analysis_verification/
 docs/gis/geojson_data/*.geojson
 docs/gis/geojson_data/*.json
@@ -108,3 +109,18 @@ nginx/ssl/*.pem
 !nginx/ssl/.gitkeep
 .env.production
 .claude/settings.local.json
+
+# Playwright
+.playwright-mcp/
+frontend/playwright-report/
+frontend/test-results/
+
+# TypeScript build cache
+*.tsbuildinfo
+
+# Test artifacts
+backend/test-screenshots/
+backend/script.txt
+docs/test-reports/
+frontend/e2e/gis_*.spec.ts
+frontend/e2e/gis_shared_fixtures.ts

@@ -5,7 +5,11 @@ Geo Utilities - 地理计算工具函数
 """
 
 import math
-from typing import Tuple, List, Any, Optional
+from typing import Tuple, List, Any, Optional, Iterable
+
+from shapely.geometry import mapping
+from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 from app.utils.logger import get_logger
 
@@ -48,68 +52,148 @@ def haversine_distance(coord1: Tuple[float, float], coord2: Tuple[float, float])
     return R * c
 
 
-def calculate_area_km2(geometry: Any) -> float:
-    """
-    计算几何对象的面积（平方公里）
+def safe_unary_union(geometries: Iterable) -> Any:
+    """unary_union with make_valid() to prevent TopologyException.
+
+    Invalid geometries (self-intersections, side-location conflicts)
+    cause shapely unary_union to raise GEOSException. This helper
+    sanitizes each geometry before union.
 
     Args:
-        geometry: Shapely 几何对象
+        geometries: Iterable of Shapely geometry objects.
 
     Returns:
-        面积（平方公里）
+        Merged geometry (Polygon or MultiPolygon), or empty Polygon if all fail.
     """
-    if geometry is None:
-        return 0.0
+    from shapely.geometry import GeometryCollection
+
+    valid = []
+    for g in geometries:
+        if g is None or g.is_empty:
+            continue
+        if not g.is_valid:
+            try:
+                g = g.buffer(0)
+            except Exception:
+                try:
+                    g = make_valid(g)
+                except Exception:
+                    continue
+        if g is not None and not g.is_empty:
+            # make_valid may return GeometryCollection with mixed dimensions
+            if g.geom_type == "GeometryCollection":
+                areal = [p for p in g.geoms if p.area > 0]
+                if areal:
+                    g = unary_union(areal) if len(areal) > 1 else areal[0]
+                else:
+                    continue
+            if g is not None and not g.is_empty:
+                valid.append(g)
+
+    if not valid:
+        return GeometryCollection()
 
     try:
-        if GEOPANDAS_AVAILABLE:
-            # 使用投影坐标系进行精确计算
-            gdf_temp = gpd.GeoDataFrame([{"geometry": geometry}], crs="EPSG:4326")
-            gdf_proj = gdf_temp.to_crs(epsg=3857)
-            return gdf_proj.geometry.area.sum() / 1_000_000
-        else:
-            # 后备方案：使用近似计算
-            return geometry.area * 111 * 111  # 约 111km/度
-    except Exception as e:
-        logger.warning(f"[geo_utils] Area calculation failed: {e}")
-        # 后备方案
-        try:
-            return geometry.area * 111 * 111
-        except:
-            return 0.0
+        return unary_union(valid)
+    except Exception:
+        # Second attempt: buffer(0) each geometry then union
+        buffered = []
+        for g in valid:
+            try:
+                bg = g.buffer(0)
+                if bg is not None and not bg.is_empty:
+                    buffered.append(bg)
+            except Exception:
+                continue
+        if not buffered:
+            return GeometryCollection()
+        return unary_union(buffered)
+
+
+def safe_geo_series_union(geo_series: "gpd.GeoSeries") -> Any:
+    """Safe replacement for GeoSeries.union_all() with geometry validation.
+
+    Fixes invalid geometries before union to prevent TopologyException.
+
+    Args:
+        geo_series: GeoPandas GeoSeries.
+
+    Returns:
+        Merged geometry (Polygon or MultiPolygon), or empty Point.
+    """
+    from shapely.validation import make_valid
+    from shapely.geometry import Point
+
+    valid = []
+    for g in geo_series:
+        if g is None or g.is_empty:
+            continue
+        if not g.is_valid:
+            try:
+                g = g.buffer(0)
+            except Exception:
+                try:
+                    g = make_valid(g)
+                except Exception:
+                    continue
+        # make_valid may return GeometryCollection with mixed dimensions
+        # (e.g., Polygon + LineString); extract only 2D (areal) parts
+        if g is not None and not g.is_empty:
+            if g.geom_type == "GeometryCollection":
+                from shapely.ops import unary_union as _uu
+                areal = [p for p in g.geoms if p.area > 0]
+                if areal:
+                    g = _uu(areal) if len(areal) > 1 else areal[0]
+                else:
+                    continue
+            if g is not None and not g.is_empty and g.area > 0:
+                valid.append(g)
+
+    if not valid:
+        return Point()
+
+    try:
+        from shapely.ops import unary_union as _unary_union
+        return _unary_union(valid)
+    except Exception:
+        buffered = []
+        for g in valid:
+            try:
+                bg = g.buffer(0)
+                if bg is not None and not bg.is_empty:
+                    buffered.append(bg)
+            except Exception:
+                continue
+        if not buffered:
+            return Point()
+        from shapely.ops import unary_union as _unary_union
+        return _unary_union(buffered)
+
+
+def calculate_area_km2(geometry: Any) -> float:
+    """Calculate area of a geometry in km² (delegates to area_engine).
+
+    Args:
+        geometry: Shapely geometry object.
+
+    Returns:
+        Area in km².
+    """
+    from .area_engine import calculate_area_km2 as _calc_km2
+    return _calc_km2(geometry)
 
 
 def calculate_areas_batch(geometries: List[Any]) -> List[float]:
-    """
-    批量计算多个几何对象的面积（平方公里）
-
-    使用单次投影转换提高效率。
+    """Calculate areas for multiple geometries in km² (delegates to area_engine).
 
     Args:
-        geometries: Shapely 几何对象列表
+        geometries: Shapely geometry objects.
 
     Returns:
-        面积列表（平方公里）
+        List of areas in km².
     """
-    if not geometries:
-        return []
-
-    try:
-        if GEOPANDAS_AVAILABLE:
-            # 创建单个 GeoDataFrame 包含所有几何对象
-            gdf_temp = gpd.GeoDataFrame(
-                {"geometry": geometries},
-                crs="EPSG:4326"
-            )
-            # 单次投影转换所有几何对象
-            gdf_proj = gdf_temp.to_crs(epsg=3857)
-            return [area / 1_000_000 for area in gdf_proj.geometry.area.values]
-        else:
-            # 后备方案：逐个计算
-            return [g.area * 111 * 111 if g else 0.0 for g in geometries]
-    except Exception as e:
-        logger.warning(f"[geo_utils] Batch area calculation failed: {e}")
-        return [g.area * 111 * 111 if g else 0.0 for g in geometries]
+    from .area_engine import calculate_areas_batch_km2
+    return calculate_areas_batch_km2(geometries)
 
 
-__all__ = ['haversine_distance', 'calculate_area_km2', 'calculate_areas_batch']
+__all__ = ['haversine_distance', 'calculate_area_km2', 'calculate_areas_batch', 'safe_unary_union', 'safe_geo_series_union']
