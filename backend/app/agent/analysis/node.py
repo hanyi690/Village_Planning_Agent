@@ -581,6 +581,10 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "type": SSEEventType.DIMENSION_COMPLETE,
         "dimension_key": dim_key,
         "dimension_name": dim_name,
+        # Send the final full text again on completion. This prevents the UI
+        # from showing an apparently truncated report if the last delta event
+        # is throttled, delayed, or missed during SSE reconnect.
+        "full_content": llm_response,
         "word_count": len(llm_response),
         "structured_summary": structured_summary_obj,
         "report_id": report_id,

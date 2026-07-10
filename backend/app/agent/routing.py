@@ -37,13 +37,11 @@ def after_conversation(
     4. 普通对话：END
     """
     messages = state.get("messages", [])
-    if not messages:
-        logger.info("[after_conversation] No messages, returning END")
-        return END
 
-    last_msg = messages[-1]
-
-    # 1. 级联修订 - 修复：同时检查feedback和human_feedback，以及need_revision标志
+    # 1. 级联修订 - must be checked BEFORE the no-message early return.
+    # Direct revision fallback can mark need_revision=True without relying on a
+    # fresh tool-call message. The old ordering caused "提交修订后没反应" when
+    # the graph was not currently paused at interrupt().
     feedback = state.get("feedback") or state.get("human_feedback")
     need_revision = state.get("need_revision", False)
 
@@ -102,6 +100,12 @@ def after_conversation(
             "feedback": None,
             "need_revision": False,
         }) for d in wave0_dims]
+
+    if not messages:
+        logger.info("[after_conversation] No messages and no revision, returning END")
+        return END
+
+    last_msg = messages[-1]
 
     # 2. 推进意图检测
     if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:

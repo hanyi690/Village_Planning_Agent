@@ -28,6 +28,8 @@ import type {
   GISLayerConfig,
 } from "@/types/message/message-types";
 
+import { createErrorMessage } from "../utils";
+
 // Pipeline trace types (mirrors backend trace.py)
 export interface ParseTrace {
   source: string;
@@ -620,6 +622,15 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
 
     case "completed": {
       state.status = "completed";
+      break;
+    }
+
+    case "error": {
+      const errData = data as { message?: string; error?: string; detail?: string };
+      const message = errData.message || errData.error || errData.detail || "后端任务失败，请查看后端窗口日志。";
+      state.messages.push(createErrorMessage(message));
+      state.status = state.previous_layer > 0 || state.lastPauseLayer > 0 ? "paused" : "failed";
+      deriveUIStateInStore(state);
       break;
     }
 
@@ -1315,6 +1326,9 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         state.pipelineTrace = gisData.pipeline_trace;
       }
 
+      // Auto-activate map tab on first GIS result. Check BEFORE writing layers.
+      const hadNoGisData = Object.keys(state.gisLayers).length === 0;
+
       // Bridge: also populate gisLayers for Map tab
       if (gisData.layers && Array.isArray(gisData.layers)) {
         const layerConfigs = gisData.layers.filter(Boolean) as GISLayerConfig[];
@@ -1323,8 +1337,6 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
         }
       }
 
-      // Auto-activate map tab on first GIS result
-      const hadNoGisData = Object.keys(state.gisLayers).length === 0;
       if (hadNoGisData) {
         state.isRightPanelExpanded = true;
         state.processPanelTab = 'map';
@@ -1620,6 +1632,42 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
   }
 }
 
+function inferAwaitingReviewLayer(state: PlanningState): number | null {
+  if (!state.step_mode) return null;
+  if (state.status === "revising" || state.status === "completed" || state.status === "failed") return null;
+
+  const hasLayerReports = (layer: number) => {
+    const key = `layer${layer}` as keyof Reports;
+    return Object.keys(state.reports[key] || {}).length > 0;
+  };
+
+  const hasLayerProgress = (layer: number) =>
+    Object.keys(state.dimensionProgress || {}).some((key) => key.startsWith(`${layer}_`));
+
+  const hasExecuting = (state.executingDimensions || []).length > 0;
+  const phaseLayer = phaseToLayer(state.phase);
+
+  // Highest completed layer that has not been approved into the next layer yet.
+  // This fixes cases where backend/local restore lost the explicit layer_paused event:
+  // e.g. Layer 2 is fully complete, Layer 3 has not started, but the review panel vanished.
+  for (let layer = 3; layer >= 1; layer--) {
+    if (!state.completedLayers[layer as 1 | 2 | 3]) continue;
+
+    const nextLayer = layer + 1;
+    const nextLayerAlreadyStarted =
+      nextLayer <= 3 &&
+      (hasLayerReports(nextLayer) ||
+        hasLayerProgress(nextLayer) ||
+        (phaseLayer !== null && phaseLayer > layer));
+
+    if (!nextLayerAlreadyStarted && !hasExecuting) {
+      return layer;
+    }
+  }
+
+  return null;
+}
+
 function deriveUIStateInStore(state: PlanningState): void {
   // Derive completedDimensions from reports
   const newCompletedDimensions = deriveCompletedDimensions(state.reports);
@@ -1643,11 +1691,23 @@ function deriveUIStateInStore(state: PlanningState): void {
     3: state.completedDimensions.layer3.length >= totalDims(3) && totalDims(3) > 0,
   };
 
-  // Derive pause state from status + interruptInfo
-  state.isPaused = state.status === "paused";
-  const pauseLayer = state.interruptInfo?.layer || (state.lastPauseLayer > 0 ? state.lastPauseLayer : state.previous_layer);
+  // Derive pause state from explicit backend interrupt OR robust local inference.
+  // The inference is important when layer_paused/layer_completed SSE is missed or page state is restored:
+  // if a layer is complete and the next layer has not started, step mode means the UI must show review controls.
+  const explicitPauseLayer =
+    state.interruptInfo?.layer ||
+    (state.lastPauseLayer > 0 ? state.lastPauseLayer : state.previous_layer);
+  const inferredPauseLayer = inferAwaitingReviewLayer(state);
+
+  state.isPaused = state.status === "paused" || inferredPauseLayer !== null;
   state.pendingReviewLayer =
-    state.isPaused && pauseLayer > 0 ? pauseLayer : null;
+    explicitPauseLayer && state.status === "paused"
+      ? explicitPauseLayer
+      : inferredPauseLayer;
+
+  if (state.pendingReviewLayer && state.status !== "revising" && state.status !== "failed") {
+    state.status = "paused";
+  }
 
   // Derive currentLayer: prefer pendingReviewLayer when paused, else from phase
   const layerFromPhase = phaseToLayer(state.phase);
@@ -1680,6 +1740,7 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
     setStatus: (status) =>
       set((state) => {
         state.status = status;
+        deriveUIStateInStore(state);
       }),
 
     setPhase: (phase) =>

@@ -406,24 +406,267 @@ async def _generate_chat_reply(user_message: str, state: Dict[str, Any]) -> str:
         return _fallback_chat_reply(user_message, state)
 
 
+def _schedule_background_task(coro, session_id: str, task_name: str = "background_task") -> None:
+    """Run a background coroutine and publish errors to SSE.
+
+    This prevents the UI from staying in "revising" / "generating" forever when
+    resume_from_interrupt or GIS generation fails inside asyncio.create_task().
+    """
+    task = asyncio.create_task(coro)
+
+    def _on_done(t: asyncio.Task) -> None:
+        try:
+            t.result()
+        except Exception as exc:
+            logger.exception("[%s] failed for session=%s: %s", task_name, session_id, exc)
+            try:
+                SSEPublisher.send_event(
+                    session_id=session_id,
+                    event_type=SSEEventType.ERROR,
+                    message=f"{task_name} 失败：{exc}",
+                )
+            except Exception:
+                logger.exception("[%s] failed to publish SSE error", task_name)
+
+    task.add_done_callback(_on_done)
+
+
+async def _run_gis_generation_direct(session_id: str, reason: str) -> None:
+    """Run GIS generation directly instead of routing it through normal chat.
+
+    The previous implementation injected a synthetic tool call into the main
+    LangGraph. If that graph was currently paused or revising, GIS and revision
+    could interfere with each other. This direct runner isolates GIS generation
+    and still publishes gis_layer_update/gis_result SSE events.
+    """
+    from app.agent.graph import gis_agent_node
+
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    state = {**state, "session_id": session_id}
+    result = await gis_agent_node(state)
+    updates: Dict[str, Any] = {
+        "gis_layout_configs": result.get("gis_layout_configs", []),
+    }
+    if result.get("messages"):
+        updates["messages"] = result.get("messages")
+    await PlanningRuntimeService.aupdate_state(session_id, updates, as_node="conversation")
+
+
 async def _start_gis_generation(session_id: str, reason: str) -> None:
     """独立触发 GIS Agent，不再混在普通聊天逻辑里。"""
-    from langchain_core.messages import HumanMessage, AIMessage
-    synthetic_msg = AIMessage(
-        content="",
-        tool_calls=[{
-            "name": "gis_analysis",
-            "id": f"call_gis_{session_id[:8]}",
-            "args": {"reason": reason or "用户点击生成空间布局"},
-        }],
+    _schedule_background_task(
+        _run_gis_generation_direct(session_id, reason or "请生成 GIS 空间布局。"),
+        session_id=session_id,
+        task_name="gis_generation",
     )
-    await PlanningRuntimeService.aupdate_state(
-        session_id,
-        {"messages": [HumanMessage(content=reason or "请生成 GIS 空间布局。"), synthetic_msg]},
-        as_node="__start__",
-    )
-    asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
 
+
+async def _start_revision_task(
+    session_id: str,
+    state: Dict[str, Any],
+    target_dimensions: List[str],
+    feedback: str,
+    final_tree: Dict[int, List[str]],
+) -> None:
+    """Start revision robustly whether the graph is paused at interrupt or not."""
+    from langchain_core.messages import HumanMessage
+
+    async def _run_revision() -> None:
+        try:
+            snapshot = await PlanningRuntimeService.aget_state(session_id)
+            is_interrupted = bool(snapshot and getattr(snapshot, "next", None))
+        except Exception as exc:
+            logger.warning("[revision] failed to inspect interrupt state: %s", exc)
+            is_interrupted = False
+
+        resume_data = {
+            "action": "reject",
+            "feedback": feedback,
+            "dimensions": target_dimensions,
+            "images": [],
+        }
+        state_updates = {
+            "revision_impact_tree": final_tree,
+            "revision_completed_dims": {},
+        }
+
+        if is_interrupted:
+            await PlanningRuntimeService.resume_from_interrupt(
+                session_id,
+                resume_data=resume_data,
+                state_updates=state_updates,
+            )
+            return
+
+        # Fallback path: if the graph is not currently waiting at interrupt(),
+        # directly mark the state as needing revision and trigger execution.
+        await PlanningRuntimeService.aupdate_state(
+            session_id,
+            {
+                "need_revision": True,
+                "is_revision": False,
+                "feedback": feedback,
+                "human_feedback": feedback,
+                "revision_feedback": feedback,
+                "revision_target_dimensions": target_dimensions,
+                "revision_impact_tree": final_tree,
+                "revision_completed_dims": {},
+                "messages": [HumanMessage(content=feedback)],
+            },
+            as_node="conversation",
+        )
+        await PlanningRuntimeService._trigger_planning_execution(session_id)
+
+    _schedule_background_task(_run_revision(), session_id=session_id, task_name="revision")
+
+
+
+
+async def _start_approve_task(session_id: str, state: Dict[str, Any]) -> None:
+    """Approve the current review and reliably continue to the next layer.
+
+    The UI has a frontend fallback that can show the review panel even when the
+    LangGraph checkpoint is no longer sitting exactly at interrupt(). In that
+    case Command(resume={"action":"approve"}) may do nothing. This helper first
+    tries the official interrupt resume path; if it cannot prove the graph is
+    interrupted, it performs a deterministic phase advance and injects the normal
+    advance_planning_intent message so the next layer actually starts.
+    """
+    from langchain_core.messages import AIMessage
+
+    async def _direct_advance_or_resume_current(base_state: Dict[str, Any]) -> None:
+        phase = base_state.get("phase", "layer1")
+        layer = _phase_to_layer(phase) or base_state.get("previous_layer") or 1
+
+        if phase == "completed":
+            SSEPublisher.send_event(
+                session_id=session_id,
+                event_type=SSEEventType.ERROR,
+                message="当前规划已经完成，无需再次批准。",
+            )
+            return
+
+        completed_dims = list((base_state.get("completed_dimensions", {}) or {}).get(f"layer{layer}", []))
+        total_dims = list(get_layer_dimensions(layer))
+        layer_is_complete = bool(total_dims) and set(completed_dims) >= set(total_dims)
+
+        # If the current layer is complete, advance to the next layer explicitly.
+        if layer_is_complete:
+            try:
+                SSEPublisher.send_layer_complete(
+                    session_id=session_id,
+                    layer=layer,
+                    layer_name=get_layer_name(layer),
+                    dimension_count=len(completed_dims),
+                    total_chars=(base_state.get("layer_char_counts", {}) or {}).get(layer, 0),
+                )
+            except Exception as exc:
+                logger.warning("[approve] send_layer_complete failed: %s", exc)
+
+            if layer >= 3:
+                await PlanningRuntimeService.aupdate_state(
+                    session_id,
+                    {
+                        "phase": "completed",
+                        "previous_layer": layer,
+                        "pending_reports": [],
+                        "need_revision": False,
+                        "is_revision": False,
+                    },
+                    as_node="layer_completion_check",
+                )
+                SSEPublisher.send_event(
+                    session_id=session_id,
+                    event_type="completed",
+                    message="所有层级已完成。",
+                )
+                return
+
+            next_phase = get_next_phase(phase) or f"layer{layer + 1}"
+            next_layer = _phase_to_layer(next_phase) or (layer + 1)
+
+            try:
+                SSEPublisher.send_layer_start(
+                    session_id=session_id,
+                    layer=next_layer,
+                    layer_name=get_layer_name(next_layer),
+                    dimension_count=len(get_layer_dimensions(next_layer)),
+                )
+            except Exception as exc:
+                logger.warning("[approve] send_layer_start failed: %s", exc)
+
+            synthetic_ai_message = AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "advance_planning_intent",
+                    "id": f"call_approve_{session_id[:8]}",
+                    "args": {"reason": f"用户批准 Layer {layer}，进入 Layer {next_layer}"},
+                }],
+            )
+
+            await PlanningRuntimeService.aupdate_state(
+                session_id,
+                {
+                    "phase": next_phase,
+                    "previous_layer": layer,
+                    "pending_reports": [],
+                    "need_revision": False,
+                    "is_revision": False,
+                    "messages": [synthetic_ai_message],
+                },
+                as_node="conversation",
+            )
+            await PlanningRuntimeService._trigger_planning_execution(session_id)
+            return
+
+        # Recovery path: the UI showed an approval panel, but the backend does
+        # not see a completed layer. Do not silently fail; try to continue the
+        # current phase and publish an explanatory event.
+        synthetic_ai_message = AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "advance_planning_intent",
+                "id": f"call_resume_{session_id[:8]}",
+                "args": {"reason": "用户点击批准继续，但当前层尚未完全完成，尝试恢复当前阶段"},
+            }],
+        )
+        await PlanningRuntimeService.aupdate_state(
+            session_id,
+            {"messages": [synthetic_ai_message], "phase": phase},
+            as_node="conversation",
+        )
+        await PlanningRuntimeService._trigger_planning_execution(session_id)
+        SSEPublisher.send_event(
+            session_id=session_id,
+            event_type="message",
+            message="已尝试恢复当前阶段。如果仍无进展，请查看后端日志中是否有维度生成错误。",
+        )
+
+    async def _run_approve() -> None:
+        try:
+            snapshot = await PlanningRuntimeService.aget_state(session_id)
+            is_interrupted = bool(snapshot and getattr(snapshot, "next", None))
+        except Exception as exc:
+            logger.warning("[approve] failed to inspect interrupt state: %s", exc)
+            is_interrupted = False
+
+        if is_interrupted:
+            try:
+                await PlanningRuntimeService.resume_from_interrupt(
+                    session_id,
+                    resume_data={"action": "approve"},
+                )
+                return
+            except Exception as exc:
+                logger.warning("[approve] interrupt resume failed, falling back to direct advance: %s", exc)
+
+        fresh_state = await PlanningRuntimeService.aget_state_values(session_id) or state
+        await _direct_advance_or_resume_current(fresh_state)
+
+    _schedule_background_task(_run_approve(), session_id=session_id, task_name="approve")
 
 class SessionCreateRequest(BaseModel):
     """创建会话请求"""
@@ -639,52 +882,61 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
         next_phase = get_next_phase(current_phase)
         logger.info("[feedback/approve] session=%s phase=%s", session_id, current_phase)
 
-        # Resume from interrupt: approve action handled in layer_completion_check
-        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
-            session_id,
-            resume_data={"action": "approve"},
-        ))
+        # Robust approve: use interrupt resume when available; otherwise do a
+        # deterministic phase advance and trigger the next layer. This fixes the
+        # case where the review panel is shown by frontend fallback but the
+        # backend is no longer exactly at LangGraph interrupt().
+        await _start_approve_task(session_id=session_id, state=state)
         return {
-            "status": "approved",
+            "status": "approve_started",
             "next_phase": next_phase,
             "current_layer": current_layer,
             "review_layer": current_layer,
         }
 
-    if request.dimensions and request.feedback:
-        # Reject with feedback: compute impact tree and resume from interrupt
+    if request.feedback and not request.approve and not request.message:
+        # Reject with feedback: compute impact tree and resume from interrupt.
+        # If frontend did not send dimensions, infer from the feedback. If still
+        # unknown, do NOT set status to revising; ask user to select a dimension.
         from app.config.dependency import get_impact_tree_compat
 
-        final_tree: Dict[int, List[str]] = {0: list(request.dimensions)}
-        completed_dims = state.get("completed_dimensions", {})
+        target_dimensions = list(request.dimensions or [])
+        if not target_dimensions:
+            target_dimensions = _infer_revision_dimensions(request.feedback, state)
+
+        if not target_dimensions:
+            return {
+                "status": "need_dimension",
+                "reply": (
+                    "我收到了修订意见，但还没有确定要重新生成哪个维度。"
+                    "请在修订栏里选择具体维度，或在文字中明确写出如“土地利用分析”“社会经济分析”“资源禀赋分析”。"
+                ),
+            }
+
+        final_tree: Dict[int, List[str]] = {0: list(target_dimensions)}
+        completed_dims = state.get("completed_dimensions", {}) or {}
         all_completed_keys = set(d for dims in completed_dims.values() for d in dims)
 
-        for target_dim in request.dimensions:
+        for target_dim in target_dimensions:
             tree = get_impact_tree_compat(target_dim)
             for wave, dims in tree.items():
                 already_executed = [d for d in dims if d in all_completed_keys]
                 if already_executed:
                     final_tree.setdefault(wave, []).extend(already_executed)
-        final_tree = {w: list(set(dims)) for w, d in final_tree.items() if d}
+        final_tree = {w: list(set(dims)) for w, dims in final_tree.items() if dims}
 
-        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
-            session_id,
-            resume_data={
-                "action": "reject",
-                "feedback": request.feedback,
-                "dimensions": request.dimensions,
-                "images": [],
-            },
-            state_updates={
-                "revision_impact_tree": final_tree,
-                "revision_completed_dims": {},
-            },
-        ))
+        await _start_revision_task(
+            session_id=session_id,
+            state=state,
+            target_dimensions=target_dimensions,
+            feedback=request.feedback,
+            final_tree=final_tree,
+        )
 
         # Emit SSE events for immediate visual feedback
         try:
             all_impacted = set(d for dims in final_tree.values() for d in dims)
-            for target_dim in request.dimensions:
+            for target_dim in target_dimensions:
                 SSEPublisher.send_event(
                     session_id=session_id,
                     event_type=SSEEventType.CASCADE_IMPACT,
@@ -694,7 +946,7 @@ async def submit_feedback(session_id: str, request: FeedbackRequest):
         except Exception as e:
             logger.warning(f"[feedback] SSE cascade events failed: {e}")
 
-        return {"status": "revision_started", "dimensions": request.dimensions}
+        return {"status": "revision_started", "dimensions": target_dimensions}
 
     if request.message:
         text = request.message.strip()
@@ -1145,8 +1397,79 @@ def _content_disposition_header(filename: str) -> str:
     return f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded}'
 
 
+def _add_markdown_to_docx(document, markdown_content: str, title: str = "村庄规划文本") -> None:
+    """Small, dependency-light Markdown-to-DOCX fallback.
+
+    The repository does not always include scripts/md_to_docx.py in user builds.
+    This fallback keeps export working for generated planning text instead of
+    returning 500. It preserves headings, bullets, numbered lists and paragraphs.
+    """
+    import re
+
+    document.add_heading(title, level=0)
+    in_code_block = False
+    code_lines: List[str] = []
+
+    def flush_code() -> None:
+        nonlocal code_lines
+        if code_lines:
+            paragraph = document.add_paragraph()
+            run = paragraph.add_run("\n".join(code_lines))
+            run.font.name = "Consolas"
+            code_lines = []
+
+    for raw_line in (markdown_content or "").splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if stripped.startswith("```"):
+            if in_code_block:
+                flush_code()
+                in_code_block = False
+            else:
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            code_lines.append(line)
+            continue
+
+        if not stripped:
+            continue
+
+        if stripped.startswith("#"):
+            hashes = len(stripped) - len(stripped.lstrip("#"))
+            text = stripped[hashes:].strip()
+            if text:
+                document.add_heading(text, level=max(1, min(hashes, 4)))
+            continue
+
+        bullet_match = re.match(r"^[-*+]\s+(.*)$", stripped)
+        if bullet_match:
+            document.add_paragraph(bullet_match.group(1).strip(), style="List Bullet")
+            continue
+
+        numbered_match = re.match(r"^\d+[\.、)]\s+(.*)$", stripped)
+        if numbered_match:
+            document.add_paragraph(numbered_match.group(1).strip(), style="List Number")
+            continue
+
+        # Very light Markdown cleanup for bold markers and links.
+        cleaned = re.sub(r"\*\*(.*?)\*\*", r"\1", stripped)
+        cleaned = re.sub(r"\[(.*?)\]\((.*?)\)", r"\1", cleaned)
+        document.add_paragraph(cleaned)
+
+    flush_code()
+
+
 async def _export_planning_text(session_id: str, project_name: str):
-    """Export planning text as DOCX from the latest stored version."""
+    """Export planning text as DOCX from the latest stored version.
+
+    Robust behavior:
+    1. Prefer scripts/md_to_docx.py when it exists.
+    2. Fall back to python-docx if that helper is absent.
+    3. Return a clear error only if both methods fail.
+    """
     from fastapi.responses import Response
 
     doc = await get_planning_text_document_async(session_id)
@@ -1160,40 +1483,65 @@ async def _export_planning_text(session_id: str, project_name: str):
     if not markdown_content:
         raise HTTPException(status_code=500, detail="规划文本内容为空")
 
-    # Convert Markdown to DOCX via md_to_docx
-    import sys
-    import tempfile
-    from pathlib import Path
+    docx_bytes: Optional[bytes] = None
 
-    script_dir = Path(__file__).parent.parent.parent.parent / "scripts"
-    if str(script_dir) not in sys.path:
-        sys.path.insert(0, str(script_dir))
-
+    # Preferred converter if present in the repository.
     try:
-        from md_to_docx import create_docx_from_md
-    except ImportError:
-        raise HTTPException(status_code=500, detail="md_to_docx 模块不可用")
+        import sys
+        import tempfile
+        script_dir = Path(__file__).parent.parent.parent.parent / "scripts"
+        if str(script_dir) not in sys.path:
+            sys.path.insert(0, str(script_dir))
+        from md_to_docx import create_docx_from_md  # type: ignore
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        md_tmp = Path(tmp_dir) / "planning_text.md"
-        docx_tmp = Path(tmp_dir) / "planning_text.docx"
-        md_tmp.write_text(markdown_content, encoding='utf-8')
-
-        try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            md_tmp = Path(tmp_dir) / "planning_text.md"
+            docx_tmp = Path(tmp_dir) / "planning_text.docx"
+            md_tmp.write_text(markdown_content, encoding="utf-8")
             create_docx_from_md(md_tmp, docx_tmp)
             docx_bytes = docx_tmp.read_bytes()
-        except Exception as e:
-            logger.error(f"[Export] MD->DOCX conversion failed: {e}")
-            raise HTTPException(status_code=500, detail="DOCX 转换失败")
+    except Exception as exc:
+        logger.warning("[Export] md_to_docx unavailable/failed, using python-docx fallback: %s", exc)
+
+    # Dependency-light fallback. python-docx is already required by the layer exporter.
+    if not docx_bytes:
+        try:
+            from io import BytesIO
+            from docx import Document
+            from app.services.modules.planning_text.docx_styles import (
+                setup_document_styles,
+                setup_page_margins,
+                fix_heading_fonts,
+            )
+
+            document = Document()
+            try:
+                setup_document_styles(document)
+                setup_page_margins(document)
+            except Exception:
+                logger.debug("[Export] DOCX style setup skipped", exc_info=True)
+
+            _add_markdown_to_docx(document, markdown_content, f"{project_name}规划文本")
+            try:
+                fix_heading_fonts(document)
+            except Exception:
+                logger.debug("[Export] Heading font fix skipped", exc_info=True)
+
+            buffer = BytesIO()
+            document.save(buffer)
+            docx_bytes = buffer.getvalue()
+        except Exception as exc:
+            logger.exception("[Export] python-docx fallback failed: %s", exc)
+            raise HTTPException(status_code=500, detail=f"DOCX 转换失败：{exc}")
 
     filename = f"{project_name}_规划文本.docx"
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": _content_disposition_header(filename)}
+        headers={"Content-Disposition": _content_disposition_header(filename)},
     )
 
-
+@router.get("/api/sessions/{session_id}/export")
 @router.post("/api/sessions/{session_id}/export")
 async def export_session_document(
     session_id: str,

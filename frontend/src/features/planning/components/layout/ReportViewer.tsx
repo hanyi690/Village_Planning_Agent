@@ -162,6 +162,8 @@ const ReportViewer = memo(function ReportViewer({
   const hasGisLayers = useHasGisLayers();
   const gisGenerating = usePlanningStore((state) => state.gisGenerating);
   const gisTriggerPending = usePlanningStore((state) => state.gisTriggerPending);
+  const stepMode = usePlanningStore((state) => state.step_mode);
+  const executingDimensions = useExecutingDimensions();
   const revisionDraft = usePlanningStore((state) => state.revisionDraft);
   const clearRevisionDraft = usePlanningStore((state) => state.clearRevisionDraft);
   const reports = useReports();
@@ -216,9 +218,40 @@ const ReportViewer = memo(function ReportViewer({
   const completedDimensions = usePlanningStore(
     (state) => state.completedDimensions,
   );
+
+  // Robust fallback: sometimes the backend pause event arrives without a usable
+  // pendingReviewLayer after Layer 2/3. Keep the review/revision panel visible
+  // whenever the app is paused and at least one layer has reports.
+  const reviewLayerForPanel = useMemo(() => {
+    if (pendingReviewLayer) return pendingReviewLayer;
+
+    const hasLayerReports = (layer: number) => {
+      const layerReports =
+        reports[`layer${layer}` as "layer1" | "layer2" | "layer3"] || {};
+      return Object.keys(layerReports).length > 0;
+    };
+
+    // Direct paused fallback: show the latest layer that has reports.
+    if ((status as string) === "paused") {
+      for (let l = 3; l >= 1; l--) {
+        if (hasLayerReports(l)) return l;
+      }
+    }
+
+    // Step-mode safety net: if a layer is complete and the next layer has not started,
+    // the review/revision panel must still be visible even if the explicit pause event was missed.
+    if (stepMode && executingDimensions.length === 0) {
+      for (let l = 3; l >= 1; l--) {
+        if (!completedLayers[l as 1 | 2 | 3]) continue;
+        const nextStarted = l < 3 && (hasLayerReports(l + 1) || (currentLayer ?? 0) > l);
+        if (!nextStarted && hasLayerReports(l)) return l;
+      }
+    }
+
+    return null;
+  }, [pendingReviewLayer, status, reports, stepMode, executingDimensions.length, completedLayers, currentLayer]);
   const cascadeChain = useCascadeChain();
   const revisionCompletedKeys = useRevisionCompletedKeys();
-  const executingDimensions = useExecutingDimensions();
 
   // All completed dimensions across all finished layers (for cascade revision)
   // Use DIMENSIONS_BY_LAYER order instead of completedDimensions order
@@ -441,19 +474,41 @@ const ReportViewer = memo(function ReportViewer({
       const { planningApi } = await import("../../api");
       const targetDims =
         selectedDimensions.length > 0 ? selectedDimensions : undefined;
-      await planningApi.submitFeedback(sessionId, {
+      const result = await planningApi.submitFeedback(sessionId, {
         approve: false,
         feedback: feedback.trim() || "需要修改",
         dimensions: targetDims,
       });
 
+      if (result.status === "need_dimension") {
+        usePlanningStore.getState().addMessage(
+          createErrorMessage(result.reply || "请先选择需要重新生成的维度。")
+        );
+        usePlanningStore.getState().setStatus("paused");
+        setShowDimensionSelector(true);
+        return;
+      }
+
+      if (result.status !== "revision_started") {
+        usePlanningStore.getState().addMessage(
+          createErrorMessage(`修订没有启动：${result.status}`)
+        );
+        usePlanningStore.getState().setStatus("paused");
+        return;
+      }
+
+      const startedDims =
+        result.dimensions && result.dimensions.length > 0
+          ? result.dimensions
+          : targetDims;
+
       // 即时反馈：跳转到第一个目标维度 + 批量清空旧内容
-      if (targetDims && targetDims.length > 0) {
-        const firstDim = targetDims[0];
+      if (startedDims && startedDims.length > 0) {
+        const firstDim = startedDims[0];
         const layer = getDimensionLayer(firstDim);
         usePlanningStore.setState((state) => {
           state.selectedNavigationKey = NAV_KEYS.dim(`${layer}_${firstDim}`);
-          for (const dim of targetDims) {
+          for (const dim of startedDims) {
             const dimLayer = getDimensionLayer(dim);
             const layerKey = `layer${dimLayer}` as
               | "layer1"
@@ -475,6 +530,10 @@ const ReportViewer = memo(function ReportViewer({
       setShowDimensionSelector(false);
     } catch (error) {
       console.error("Reject with feedback failed:", error);
+      usePlanningStore.getState().addMessage(
+        createErrorMessage(`提交修订失败：${error instanceof Error ? error.message : "未知错误"}`)
+      );
+      usePlanningStore.getState().setStatus("paused");
     }
   }, [sessionId, isSubmitting, feedback, selectedDimensions]);
 
@@ -497,6 +556,13 @@ const ReportViewer = memo(function ReportViewer({
       }, 0),
     [reports],
   );
+
+  const l3ReadyForGis = useMemo(() => {
+    if (completedLayers[3]) return true;
+    const layer3Reports = reports.layer3 || {};
+    const layer3Total = DIMENSIONS_BY_LAYER[3]?.length || 0;
+    return layer3Total > 0 && Object.keys(layer3Reports).length >= layer3Total;
+  }, [completedLayers, reports.layer3]);
 
   const cascadeSet = useMemo(() => {
     const set = new Set<string>();
@@ -1008,8 +1074,10 @@ const ReportViewer = memo(function ReportViewer({
             </div>
           )}
 
-          {/* GIS trigger button: shown when L3 done but no GIS layers yet */}
-          {!showInputForm && completedLayers[3] && !hasGisLayers && !isPaused && (
+          {/* GIS trigger button: shown when L3 done but no GIS layers yet.
+              Do NOT hide it during step-mode pause; after Layer 3 completes the app may be paused
+              for review, but users still need an obvious entry to generate the spatial layout. */}
+          {!showInputForm && l3ReadyForGis && !hasGisLayers && (
             <div className="flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-cyan-50 to-teal-50 rounded-xl border border-cyan-200">
               <div className="w-8 h-8 rounded-lg bg-cyan-100 flex items-center justify-center">
                 <FontAwesomeIcon icon={faMap} className="text-cyan-600" style={{ width: 14, height: 14 }} />
@@ -1185,10 +1253,9 @@ const ReportViewer = memo(function ReportViewer({
 
 
           {/* Review panel - only shown when paused for approval */}
-          {isPaused &&
-            pendingReviewLayer &&
+          {reviewLayerForPanel &&
             (() => {
-              const reviewLayer = pendingReviewLayer;
+              const reviewLayer = reviewLayerForPanel;
               const hasReports =
                 Object.keys(
                   reports[`layer${reviewLayer}` as keyof typeof reports] || {},

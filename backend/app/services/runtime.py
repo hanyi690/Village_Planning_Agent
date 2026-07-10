@@ -326,7 +326,7 @@ class PlanningRuntimeService:
         planning_period: str = "2022-2035年",
         enable_review: bool = False,
         stream_mode: bool = True,
-        step_mode: bool = False,
+        step_mode: bool = True,
         rag_enabled: bool = True,
         rag_layer_config: Optional[Dict[int, bool]] = None,
         disable_tools: bool = False,
@@ -379,6 +379,7 @@ class PlanningRuntimeService:
             "need_revision": False,
             "revision_target_dimensions": [],
             "human_feedback": "",
+            "pending_chat_action": None,
             "step_mode": step_mode,
             "previous_layer": 0,  # 新架构：刚完成的层级
             "gis_analysis_results": {},  # 新架构：GIS分析结果
@@ -403,7 +404,7 @@ class PlanningRuntimeService:
         constraints: str = "",
         enable_review: bool = False,
         stream_mode: bool = True,
-        step_mode: bool = False,
+        step_mode: bool = True,
         background_tasks: BackgroundTasks = None,
         rate_limiter=None,
         image_ids: Optional[List[str]] = None,
