@@ -6,6 +6,7 @@ are published around each invocation.
 """
 
 import asyncio
+import json
 from typing import Dict, Any, Tuple
 from langchain_core.messages import ToolMessage
 
@@ -56,6 +57,11 @@ async def _invoke_single(
 
         result = await base_tool.ainvoke({**tool_args, "state": state})
 
+        logger.info(
+            "[execute_tools] %s completed: result_len=%d tool_id=%s",
+            tool_name, len(str(result)) if result else 0, tool_id,
+        )
+
         SSEPublisher.send_tool_status(
             session_id, tool_name, status="success",
             summary=str(result)[:200]
@@ -85,6 +91,15 @@ async def execute_tools_node(state: Dict[str, Any]) -> Dict[str, Any]:
     ]
     if not regular_calls:
         return {"messages": []}
+
+    tool_summary = [
+        f"{_normalize_name(tc.get('name', ' unknown '))}({json.dumps(tc.get('args', {}), ensure_ascii=False)[:200]})"
+        for tc in regular_calls
+    ]
+    logger.info(
+        "[execute_tools] session=%s tools=%d: %s",
+        session_id, len(regular_calls), "; ".join(tool_summary),
+    )
 
     results = await asyncio.gather(*[
         _invoke_single(tc, session_id, state) for tc in regular_calls

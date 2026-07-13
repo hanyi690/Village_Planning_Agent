@@ -117,7 +117,12 @@ def after_conversation(
         logger.info("[after_conversation] ROUTE: unknown tool_call -> execute_tools (name=%s)", last_msg.tool_calls[0].get("name"))
         return "execute_tools"
 
-    logger.info("[after_conversation] ROUTE: no tool_calls, no revision -> END")
+    phase = state.get("phase", "unknown")
+    layer = _phase_to_layer(phase)
+    logger.info(
+        "[after_conversation] ROUTE: no tool_calls, no revision -> END (phase=%s layer=%s)",
+        phase, layer,
+    )
     return END
 
 
@@ -282,8 +287,9 @@ def after_analysis(
             )
 
     logger.info(
-        "[after_analysis] phase=%s layer=%s completed=%s ready=%s cross_ready=%s",
-        phase, layer, completed, ready_dims, cross_ready,
+        "[after_analysis] phase=%s layer=%s completed=%s/%s ready=%s cross_ready=%s step_mode=%s is_revision=%s",
+        phase, layer, len(completed), len(total_dims),
+        ready_dims, cross_ready, step_mode, is_revision,
     )
 
     all_ready = ready_dims + cross_ready

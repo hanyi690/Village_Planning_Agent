@@ -427,11 +427,14 @@ class SharedGISContext:
         return None
 
     def get_protection_zones(self) -> Dict[str, Dict[str, Any]]:
-        """获取保护约束区域字典（用于约束验证）"""
+        """获取保护约束区域字典（用于约束验证）
+
+        Keys align with zone_schema.THREE_LINE_TYPES and gdb_schema layer names.
+        """
         return {
-            "farmland": self.get_data_by_type("farmland_protection") or {},
-            "ecological": self.get_data_by_type("ecological_protection") or {},
-            "historical": self.get_data_by_type("historical_protection") or {},
+            "farmland_protection": self.get_data_by_type("farmland_protection") or {},
+            "ecological_redline": self.get_data_by_type("ecological_protection") or {},
+            "historical_protection": self.get_data_by_type("historical_protection") or {},
         }
 
     def get_constraint_zones_for_layout(self) -> Dict[str, Dict[str, Any]]:
@@ -445,7 +448,7 @@ class SharedGISContext:
 
     def load_jintian_test_data(self) -> None:
         """
-        加载金田村测试数据（从 docs/gis/jintian_boundary/）
+        加载金田村测试数据（从 data/gis/jintian/）
 
         用于开发和测试环境。
         """
@@ -507,7 +510,7 @@ class SharedGISContext:
         has_boundary = bool(instance.get_data_by_type("boundary"))
         has_landuse = bool(instance.get_data_by_type("landuse_current"))
         if not has_boundary and not has_landuse:
-            logger.info("[SharedGISContext] No boundary/landuse data found, loading jintian test data as fallback")
-            instance.load_jintian_test_data()
+            logger.warning("[SharedGISContext] No boundary/landuse data found — GIS tools will report errors to user")
+        # 不再静默加载金田村测试数据，由工具层校验并返回明确错误
 
         return instance

@@ -5,6 +5,7 @@ AgentState: 核心状态定义
 辅助函数: phase/layer转换、维度查询
 """
 
+import math
 import operator
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
 from enum import Enum
@@ -364,6 +365,19 @@ def get_next_phase(current_phase: str) -> Optional[str]:
     return None
 
 
+def _sanitize_json(obj):
+    """Recursively replace inf/nan floats with None for JSON serialization."""
+    if isinstance(obj, float):
+        if math.isinf(obj) or math.isnan(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_json(v) for v in obj]
+    return obj
+
+
 def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None, *, is_interrupted: bool = False) -> Dict[str, Any]:
     """状态转 UI 格式
 
@@ -391,9 +405,9 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
     interrupt_info = None
     if is_interrupted:
         interrupt_info = {
-            "layer": state.get("previous_layer", 0),
+            "layer": current_layer or 0,
             "phase": phase,
-            "layer_name": get_layer_name(state.get("previous_layer", 0)) if state.get("previous_layer", 0) > 0 else None,
+            "layer_name": get_layer_name(current_layer or 0) if (current_layer or 0) > 0 else None,
             "reason": "step_mode" if state.get("step_mode", False) else "pause",
         }
 
@@ -414,9 +428,9 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
                 "role": msg.get("role", msg.get("type", "unknown")),
             })
 
-    return {
+    result = {
         # Core status fields
-        "session_id": state.get("session_id", ""),
+        "session_id": db_session.get("session_id") if db_session else state.get("session_id", ""),
         "status": status,
         "created_at": db_session.get("created_at") if db_session else metadata.get("created_at", ""),
         "execution_error": metadata.get("execution_error"),
@@ -444,6 +458,8 @@ def state_to_ui_status(state: Dict[str, Any], db_session: Optional[Dict] = None,
         "planning_period": db_session.get("planning_period") if db_session else state.get("config", {}).get("planning_period", "2022-2035年"),
         "gis_layout_configs": state.get("gis_layout_configs", []),
     }
+
+    return _sanitize_json(result)
 
 
 __all__ = [

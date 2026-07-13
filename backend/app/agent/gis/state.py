@@ -32,6 +32,10 @@ class GISAgentState(TypedDict, total=False):
     allocated_geojson: Dict[str, Any]           # Zone allocation result from allocate_zones
     allocation_summary: Dict[str, Any]          # Summary stats from allocate_zones
 
+    # Intent state (PARSE → LAYOUT bridge)
+    intent: Dict[str, Any]                     # Structured intent for generate_layout
+    intent_json: Dict[str, Any]                # Raw intent JSON from parse_planning_text
+
     # ReAct loop state (required by create_react_agent)
     messages: Annotated[List[BaseMessage], add_messages]
     remaining_steps: NotRequired[Annotated[int, RemainingStepsManager]]

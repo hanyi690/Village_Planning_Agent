@@ -50,44 +50,77 @@ async def analyze_dimension_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """GIS Agent 节点 — 调用 ReAct 子图生成空间布局"""
-    from .gis import create_gis_agent_graph
+    """GIS Agent 节点 — 双 Agent 架构：PARSE → LAYOUT
+
+    Step 1: PARSE Agent extracts structured intent from planning reports.
+    Step 2: LAYOUT Agent generates spatial layout using the parsed intent.
+    """
+    from .gis import create_parse_agent_graph, create_layout_agent_graph
     from .gis_context import SharedGISContext
 
-    gis_graph = create_gis_agent_graph()
-
     gis_context = SharedGISContext.from_state(state)
-    gis_input = {
-        "session_id": state.get("session_id", ""),
-        "village_name": state.get("config", {}).get("village_name", ""),
-        "reports": _get_reports(state),
-        "summaries": _get_reports(state),
-        "gis_data": {
-            "boundary_geojson": gis_context.get_data_by_type("boundary"),
-            "landuse_current_geojson": gis_context.get_data_by_type("landuse_current"),
-            "protection_zones": gis_context.get_protection_zones(),
-            "road_geojson": gis_context.get_data_by_type("road"),
-            "hazard_points_geojson": gis_context.get_data_by_type("geological_hazard_points"),
-            "construction_zone_geojson": gis_context.get_data_by_type("construction_zone"),
-        },
+    session_id = state.get("session_id", "")
+
+    # Preload uploaded GIS data from DB if context has none
+    if gis_context and not gis_context._user_uploaded_data and session_id:
+        try:
+            from app.database.operations import get_uploaded_files_by_session_async
+            uploads = await get_uploaded_files_by_session_async(
+                session_id=session_id, file_category="gis_data",
+            )
+            for item in uploads:
+                dtype = item.get("gis_data_type") or "unknown"
+                geojson = item.get("gis_data")
+                if geojson and geojson.get("features"):
+                    gis_context.set_user_data(dtype, geojson)
+            if uploads:
+                logger.info("[gis_agent_node] Preloaded %d uploaded files from DB", len(uploads))
+        except Exception as e:
+            logger.warning("[gis_agent_node] DB preload failed: %s", e)
+
+    gis_data = _build_gis_data(gis_context, state)
+    reports, summaries = await _get_reports_and_summaries(state)
+    village_name = state.get("config", {}).get("village_name", "")
+
+    # ── Step 1: PARSE Agent ──
+    parse_graph = create_parse_agent_graph()
+    parse_result = await parse_graph.ainvoke({
+        "session_id": session_id,
+        "village_name": village_name,
+        "reports": reports,
+        "summaries": summaries,
+        "gis_data": gis_data,
+        "messages": [],
+    })
+
+    intent_json = parse_result.get("intent_json", {})
+    if not intent_json:
+        logger.error("[gis_agent_node] PARSE Agent failed: no intent extracted")
+        return {
+            "messages": [AIMessage(content="规划意图解析失败，请检查规划报告是否包含明确的用地分区信息")],
+            "gis_layout_configs": [],
+        }
+
+    # ── Step 2: LAYOUT Agent (intent injected) ──
+    layout_graph = create_layout_agent_graph()
+    layout_result = await layout_graph.ainvoke({
+        "session_id": session_id,
+        "village_name": village_name,
+        "reports": reports,
+        "summaries": summaries,
+        "gis_data": gis_data,
+        "intent": intent_json,
         "kg_turtle": "",
         "kg_constraints": [],
         "layout_configs": [],
         "allocated_geojson": {},
         "allocation_summary": {},
         "messages": [],
-    }
+    })
 
-    result = await gis_graph.ainvoke(gis_input)
+    # ── Step 3: SSE + return ──
+    layout_configs = layout_result.get("layout_configs", [])
 
-    layout_configs = result.get("layout_configs", [])
-
-    # Publish GIS layout result via SSE
-    # NOTE: Individual layers were already pushed via gis_layer_update events
-    # from SpatialLayoutEngine._emit_layer_update(). This gis_result event
-    # only sends a lightweight summary (no layers data) to avoid redundant
-    # transfer of large GeoJSON payloads.
-    session_id = state.get("session_id", "")
     if layout_configs and session_id:
         try:
             from app.utils.sse_publisher import SSEPublisher
@@ -97,14 +130,14 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 dimension_key="spatial_layout",
                 dimension_name="空间布局",
                 summary=f"生成 {len(layout_configs)} 个图层: {', '.join(layer_types)}",
-                layers=[],  # Empty: layers already sent via gis_layer_update
+                layers=layout_configs,  # Full layers as fallback for missed gis_layer_update events
                 pipeline_trace=state.get("pipeline_trace"),
             )
         except Exception as e:
             logger.warning(f"[gis_agent_node] SSE publish failed: {e}")
 
     return {
-        "messages": [AIMessage(content=_format_gis_result(result, layout_configs))],
+        "messages": [AIMessage(content=_format_gis_result(layout_result, layout_configs))],
         "gis_layout_configs": layout_configs,
     }
 
@@ -143,17 +176,29 @@ __all__ = [
 ]
 
 
-def _get_reports(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """从数据库加载 L3 summaries，构造统一嵌套格式。
+async def _get_reports_and_summaries(
+    state: Dict[str, Any],
+) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """从 DB 加载 L3 summaries，返回 (reports, summaries)。
 
-    格式: {dk: {"summary": {"metrics": {...}}, "content": "..."}}
+    reports: 嵌套格式 {dk: {"summary": {"metrics": ...}, "content": ...}}
+    summaries: 扁平格式 {dk: {dimension_key, layer, metrics, key_points, text_summary}}
     """
-    summaries = _load_summaries_from_db(state)
-    if not summaries:
-        return _get_reports_fallback(state)
+    session_id = state.get("session_id", "")
+    flat_summaries: Dict[str, Dict[str, Any]] = {}
+
+    if session_id:
+        try:
+            from app.services.report_store import ReportStore
+            flat_summaries = await ReportStore().get_layer_summaries(session_id, layer=3) or {}
+        except Exception:
+            pass
+
+    if not flat_summaries:
+        return _get_reports_fallback(state), {}
 
     reports = {}
-    for dk, parsed in summaries.items():
+    for dk, parsed in flat_summaries.items():
         reports[dk] = {
             "summary": {
                 "metrics": parsed.get("metrics", {}),
@@ -162,20 +207,7 @@ def _get_reports(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             },
             "content": parsed.get("text_summary", ""),
         }
-    return reports
-
-
-
-def _load_summaries_from_db(state: Dict[str, Any]) -> Optional[Dict[str, Dict[str, Any]]]:
-    """从 ReportStore 加载 L3 summaries。"""
-    session_id = state.get("session_id", "")
-    if not session_id:
-        return None
-    try:
-        from app.services.report_store import ReportStore
-        return ReportStore().get_layer_summaries(session_id, layer=3)
-    except Exception:
-        return None
+    return reports, flat_summaries
 
 
 def _get_reports_fallback(state: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -192,3 +224,17 @@ def _format_gis_result(result: Dict[str, Any], layout_configs: List[Dict[str, An
     """格式化 GIS Agent 结果为对话消息"""
     layer_types = [c.get("layerType", "unknown") for c in layout_configs]
     return f"GIS 布局生成完成：{len(layout_configs)} 个图层 ({', '.join(layer_types)})"
+
+
+def _build_gis_data(gis_context: Any, state: Dict[str, Any]) -> Dict[str, Any]:
+    """从 SharedGISContext + 用户上传数据构建 gis_data 字典。"""
+    user_uploaded = state.get("user_uploaded_data", {})
+    return {
+        "boundary_geojson": gis_context.get_data_by_type("boundary"),
+        "landuse_current_geojson": gis_context.get_data_by_type("landuse_current"),
+        "protection_zones": gis_context.get_protection_zones(),
+        "road_geojson": gis_context.get_data_by_type("road"),
+        "hazard_points_geojson": gis_context.get_data_by_type("geological_hazard_points"),
+        "construction_zone_geojson": gis_context.get_data_by_type("construction_zone"),
+        **user_uploaded,
+    }

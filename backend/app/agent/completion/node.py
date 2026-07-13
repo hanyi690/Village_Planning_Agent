@@ -158,8 +158,12 @@ async def layer_completion_check(
         })
         action = resume_data.get("action", "approve")
         logger.info(
-            "[layer_completion_check] RESUME received: action=%s, layer=%d, feedback=%s",
-            action, layer, resume_data.get("feedback", "")[:100] if resume_data.get("feedback") else "none",
+            "[layer_completion_check] RESUME received: action=%s layer=%d feedback=%s dimensions=%s images_count=%d resume_data_keys=%s",
+            action, layer,
+            resume_data.get("feedback", "")[:100] if resume_data.get("feedback") else "none",
+            resume_data.get("dimensions", [])[:10],
+            len(resume_data.get("images", []) or []),
+            list(resume_data.keys()),
         )
 
         if action == "approve":
