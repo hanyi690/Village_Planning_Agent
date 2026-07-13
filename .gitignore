@@ -94,6 +94,10 @@ knowledge_base/
 *.pdf
 *.zip
 
+# Large documentation directories (RAG knowledge base, patent files)
+docs/RAG*/
+docs/专*/
+
 # Reference code repositories (for learning purposes only)
 docs/references/
 
@@ -118,5 +122,4 @@ frontend/test-results/
 backend/test-screenshots/
 backend/script.txt
 docs/test-reports/
-frontend/e2e/gis_*.spec.ts
 frontend/e2e/gis_shared_fixtures.ts
