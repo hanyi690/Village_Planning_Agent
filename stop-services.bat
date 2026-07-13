@@ -1,120 +1,83 @@
 @echo off
-REM 村庄规划系统停止脚本 (Windows)
+REM Village Planning System - Service Stop Script (Windows)
+REM Kills all backend (uvicorn/python) and frontend (next/npm/node) processes
+REM by port and process name, including child process trees.
 setlocal enabledelayedexpansion
 
 echo ===================================
-echo   村庄规划系统 - 服务停止
+echo   Village Planning System - Stop
 echo ===================================
 echo.
 
-set STOPPED=0
+set KILLED=0
 
-REM 1. 停止后端
-echo 🛑 检查后端服务...
-if exist logs\backend.pid (
-  set /p BACKEND_PID=<logs\backend.pid
-  echo   检查 PID 文件: !BACKEND_PID!
-
-  for /f "tokens=1" %%x in ('tasklist /FI "PID eq !BACKEND_PID!" 2^>nul ^| find /c "!BACKEND_PID!"') do set RUNNING=%%x
-  if !RUNNING! gtr 0 (
-    echo   停止后端服务 PID: !BACKEND_PID!
-    taskkill /F /PID !BACKEND_PID! > nul 2>&1
-    timeout /t 1 /nobreak > nul
-    echo   ✓ 后端已停止
-    set STOPPED=1
+REM 1. Kill backend processes on port 8000 (entire process tree)
+echo [Backend] Checking port 8000...
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8000 .*LISTENING"') do (
+  echo   Found PID %%a on port 8000
+  taskkill /F /T /PID %%a > nul 2>&1
+  if !errorlevel! equ 0 (
+    echo   OK: Killed process tree %%a
+    set KILLED=1
   ) else (
-    echo   ⚠ 后端进程未运行 (PID: !BACKEND_PID!)
+    echo   WARN: Failed to kill %%a
   )
-
-  del /f /q logs\backend.pid > nul 2>&1
-) else (
-  echo   ⚠ 后端PID文件不存在
 )
+
+REM 2. Kill frontend processes on port 3000/3001 (entire process tree)
+for %%p in (3000 3001) do (
+  echo [Frontend] Checking port %%p...
+  for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":%%p .*LISTENING"') do (
+    echo   Found PID %%a on port %%p
+    taskkill /F /T /PID %%a > nul 2>&1
+    if !errorlevel! equ 0 (
+      echo   OK: Killed process tree %%a
+      set KILLED=1
+    ) else (
+      echo   WARN: Failed to kill %%a
+    )
+  )
+)
+
+REM 3. Cleanup orphaned uvicorn/python processes under this project
+echo [Orphans] Checking leftover uvicorn/python processes...
+for /f "tokens=2" %%a in ('wmic process where "CommandLine like '%%uvicorn%%app.main%%' and not CommandLine like '%%wmic%%'" get ProcessId 2^>nul ^| findstr /r "[0-9]"') do (
+  echo   Found orphan uvicorn PID %%a
+  taskkill /F /T /PID %%a > nul 2>&1
+  if !errorlevel! equ 0 (
+    echo   OK: Killed orphan %%a
+    set KILLED=1
+  )
+)
+
+REM 4. Cleanup stale PID files (no longer used, but remove if present)
+if exist logs\backend.pid del /f /q logs\backend.pid > nul 2>&1
+if exist logs\frontend.pid del /f /q logs\frontend.pid > nul 2>&1
+
+REM 5. Verify ports are free
 echo.
-
-REM 2. 停止前端
-echo 🛑 检查前端服务...
-if exist logs\frontend.pid (
-  set /p FRONTEND_PID=<logs\frontend.pid
-  echo   检查 PID 文件: !FRONTEND_PID!
-
-  for /f "tokens=1" %%x in ('tasklist /FI "PID eq !FRONTEND_PID!" 2^>nul ^| find /c "!FRONTEND_PID!"') do set RUNNING=%%x
-  if !RUNNING! gtr 0 (
-    echo   停止前端服务 PID: !FRONTEND_PID!
-    taskkill /F /PID !FRONTEND_PID! > nul 2>&1
-    timeout /t 1 /nobreak > nul
-    echo   ✓ 前端已停止
-    set STOPPED=1
+echo [Verify] Port status:
+set PORT_BUSY=0
+for %%p in (8000 3000 3001) do (
+  netstat -ano 2>nul | findstr ":%%p .*LISTENING" > nul 2>&1
+  if !errorlevel! equ 0 (
+    echo   Port %%p: STILL IN USE
+    set PORT_BUSY=1
   ) else (
-    echo   ⚠ 前端进程未运行 (PID: !FRONTEND_PID!)
+    echo   Port %%p: free
   )
-
-  del /f /q logs\frontend.pid > nul 2>&1
-) else (
-  echo   ⚠ 前端PID文件不存在
 )
+
 echo.
-
-REM 3. 清理残留进程
-echo 🧹 检查残留进程...
-set FOUND=0
-
-REM 检查后端端口 8000
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8000.*LISTENING"') do (
-  set FOUND=1
-  echo   ⚠ 发现后端残留进程: PID %%a
-  set /p CONFIRM="  是否停止? (y/N): "
-  if /i "!CONFIRM!"=="y" (
-    taskkill /F /PID %%a > nul 2>&1
-    if !errorlevel! equ 0 (
-      echo   ✓ 已停止
-    ) else (
-      echo   × 停止失败
-    )
-  )
-)
-
-REM 检查前端端口 3000
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3000.*LISTENING"') do (
-  set FOUND=1
-  echo   ⚠ 发现前端残留进程: PID %%a
-  set /p CONFIRM="  是否停止? (y/N): "
-  if /i "!CONFIRM!"=="y" (
-    taskkill /F /PID %%a > nul 2>&1
-    if !errorlevel! equ 0 (
-      echo   ✓ 已停止
-    ) else (
-      echo   × 停止失败
-    )
-  )
-)
-
-REM 检查前端端口 3001
-for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3001.*LISTENING"') do (
-  set FOUND=1
-  echo   ⚠ 发现前端残留进程: PID %%a
-  set /p CONFIRM="  是否停止? (y/N): "
-  if /i "!CONFIRM!"=="y" (
-    taskkill /F /PID %%a > nul 2>&1
-    if !errorlevel! equ 0 (
-      echo   ✓ 已停止
-    ) else (
-      echo   × 停止失败
-    )
-  )
-)
-
-if !FOUND! equ 0 (
-  echo   ✓ 无残留进程
-)
-echo.
-
-REM 4. 最终状态
 echo ===================================
-if !STOPPED! equ 1 (
-  echo   ✓ 服务已停止
+if !KILLED! equ 1 (
+  echo   Services stopped
 ) else (
-  echo   ⚠ 没有运行中的服务
+  echo   No running services found
+)
+if !PORT_BUSY! equ 1 (
+  echo   WARNING: Some ports still in use
+  echo   Run again or check manually: netstat -ano ^| findstr ":8000 :3000 :3001"
 )
 echo ===================================
 echo.

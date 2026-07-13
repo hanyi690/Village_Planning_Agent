@@ -29,18 +29,21 @@ if not exist "frontend" (
 echo OK: directories found
 echo.
 
-REM Create logs directory
+REM Create logs directory (used by Python logging dictConfig)
 if not exist logs mkdir logs
 
-REM 生成带时间戳的日志文件名
+REM 生成带时间戳的前端日志文件名
 for /f "tokens=2-4 delims=/ " %%a in ('date /t') do (set TODAY=%%a%%b%%c)
-set BK_LOG=logs\backend-%TODAY%.log
 set FE_LOG=logs\frontend-%TODAY%.log
 
-REM 启动后台，所有输出写入日志文件（窗口不再弹出）
-start "Backend-8000" /min cmd /c "cd /d %~dp0backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > %~dp0%BK_LOG% 2>&1"
+REM 启动后端 — 不重定向 stdout/stderr
+REM Python logging dictConfig 已配置:
+REM   - logs/planning.log (全量日志，按日轮转)
+REM   - logs/planning.error.log (仅 ERROR+)
+REM   - console handler 仍输出到终端
+start "Backend-8000" /min cmd /c "cd /d %~dp0backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-config null"
 
-REM 启动前端，同样写入日志
+REM 启动前端，写入日志
 start "Frontend-3000" /min cmd /c "cd /d %~dp0frontend && npm run dev > %~dp0%FE_LOG% 2>&1"
 
 echo.
@@ -48,6 +51,12 @@ echo ===================================
 echo Services started in separate windows
 echo Backend: http://localhost:8000
 echo Frontend: http://localhost:3000
+echo.
+echo Backend logs (Python logging):
+echo   All:   logs\planning.log
+echo   Error: logs\planning.error.log
+echo Frontend log:
+echo   logs\frontend-%TODAY%.log
 echo ===================================
 echo.
 echo This window will close in 10 seconds...
