@@ -86,15 +86,12 @@ def load_all() -> Tuple[Dict, Optional[Dict], Optional[Dict], Optional[Dict]]:
             "content": parsed.get("text_summary", ""),
         }
 
-    data_dir = os.path.join(
-        os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")),
-        "docs", "gis", "jintian_boundary",
-    )
+    from app.core.settings import JINTIAN_GIS_DIR
+    data_dir = str(JINTIAN_GIS_DIR)
 
-    boundary = _load_geojson(os.path.join(data_dir, "boundary_current.geojson"))
-    landuse = _load_geojson(os.path.join(data_dir, "landuse_current.geojson"))
-    roads = _load_geojson(os.path.join(data_dir, "roads_osm.geojson")) or \
-            _load_geojson(os.path.join(data_dir, "road_current.geojson"))
+    boundary = _load_geojson(os.path.join(data_dir, "current", "boundary.geojson"))
+    landuse = _load_geojson(os.path.join(data_dir, "current", "landuse.geojson"))
+    roads = _load_geojson(os.path.join(data_dir, "current", "road.geojson"))
 
     return reports, boundary, landuse, roads
 

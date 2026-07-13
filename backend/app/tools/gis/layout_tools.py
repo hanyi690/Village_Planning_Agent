@@ -208,7 +208,11 @@ def parse_planning_text(
     解析内容：功能分区(zones)、设施布局(facilities)、发展轴(axes)、约束(constraints)。
     """
     result = _parse_reports_to_intent(reports=reports, village_name=village_name, gis_data=gis_data)
-    return Command(update={"messages": [_to_tool_message(result, tool_call_id)]})
+    intent_data = result.get("data", {}).get("intent_json", {})
+    return Command(update={
+        "intent_json": intent_data,
+        "messages": [_to_tool_message(result, tool_call_id)],
+    })
 
 
 @tool
@@ -216,10 +220,11 @@ def build_knowledge_graph(
     reports: Annotated[Dict[str, Dict[str, Any]], InjectedState("reports")],
     gis_data: Annotated[Dict[str, Optional[Dict[str, Any]]], InjectedState("gis_data")],
     village_name: Annotated[str, InjectedState("village_name")],
-    tool_call_id: Annotated[str, InjectedToolCallId],
+    intent: Annotated[Optional[Dict[str, Any]], InjectedState("intent")] = None,
+    tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
-    """从规划报告+用地数据构建知识图谱。只需调用一次。
-    构建后可使用 query_knowledge_graph 查询约束、指标和地块信息。
+    """从规划意图+用地数据构建知识图谱。只需调用一次。
+    当意图数据可用时优先从结构化意图构建，否则从原始报告构建。
 
     Args: 无需参数，数据自动从状态注入。
     """
@@ -228,7 +233,10 @@ def build_knowledge_graph(
     landuse_geojson = gis_data.get("landuse_current_geojson") if gis_data else None
 
     kg = PlanningKG(village_name=village_name)
-    kg.build_from_reports(reports=reports, landuse_geojson=landuse_geojson, gis_data=gis_data)
+    if intent:
+        kg.build_from_intent(intent=intent, landuse_geojson=landuse_geojson, gis_data=gis_data)
+    else:
+        kg.build_from_reports(reports=reports, landuse_geojson=landuse_geojson, gis_data=gis_data)
 
     triple_count = kg.get_triple_count()
     constraints = kg.get_constraints()
@@ -363,6 +371,14 @@ def allocate_zones(
     from app.services.modules.gis.layout.kg import PlanningKG
 
     landuse_geojson = (gis_data or {}).get("landuse_current_geojson", {})
+
+    # P0: 校验必需 GIS 数据
+    if not landuse_geojson:
+        error_msg = "GIS 用地分配失败：缺少必要数据 — landuse_current_geojson（现状用地）。请先通过地图面板上传对应的 GeoJSON 文件。"
+        logger.error("[allocate_zones] %s", error_msg)
+        result = _make_result(False, error=error_msg)
+        return Command(update={"messages": [_to_tool_message(result, tool_call_id)]})
+
     all_constraints = constraints if constraints else (kg_constraints or [])
 
     # Extract adjacency map from KG if available
@@ -375,12 +391,17 @@ def allocate_zones(
             logger.warning("Failed to extract adjacency from KG: %s", e)
 
     allocator = ConstraintDrivenAllocator(adjacency_map=adjacency_map)
-    result_geojson = allocator.solve(
+    solve_result = allocator.solve(
         landuse_geojson=landuse_geojson,
         targets=targets,
         constraints=all_constraints,
         mode=mode,
     )
+    # allocator.solve() may return (geojson, trace) tuple or just geojson
+    if isinstance(solve_result, tuple):
+        result_geojson, _trace = solve_result
+    else:
+        result_geojson = solve_result
 
     feature_count = len(result_geojson.get("features", []))
     changed = sum(1 for f in result_geojson.get("features", [])
@@ -401,29 +422,50 @@ def allocate_zones(
 
 @tool
 def generate_layout(
-    intent: dict,
+    intent: dict = None,
     gis_data: Annotated[Dict[str, Optional[Dict[str, Any]]], InjectedState("gis_data")] = None,
     kg_constraints: Annotated[List[Dict[str, Any]], InjectedState("kg_constraints")] = None,
+    injected_intent: Annotated[Optional[Dict[str, Any]], InjectedState("intent")] = None,
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
     """生成多图层空间布局。
     图层类型: boundary, function_zone, planning_zone, sensitivity_zone, infrastructure, facility_point, development_axis
 
     Args:
-        intent: 规划意图字典（zones, facilities, axes, constraints, metadata）
+        intent: 规划意图字典（zones, facilities, axes, constraints, metadata）。如未传入则从状态自动注入。
     """
     from app.services.modules.gis.layout.engine import SpatialLayoutEngine
+
+    effective_intent = intent or injected_intent or {}
+    if not effective_intent:
+        result = _make_result(False, error="缺少规划意图：请传入 intent 参数或确保 parse_planning_text 已执行")
+        return Command(update={"messages": [_to_tool_message(result, tool_call_id)]})
 
     engine = SpatialLayoutEngine()
     if kg_constraints:
         engine.set_kg_constraints(kg_constraints)
-    spatial_intent = _dict_to_intent(intent)
+    spatial_intent = _dict_to_intent(effective_intent)
 
     gd = gis_data or {}
+    boundary_geojson = gd.get("boundary_geojson")
+    landuse_current_geojson = gd.get("landuse_current_geojson")
+
+    # P0: 校验必需 GIS 数据
+    missing = []
+    if not boundary_geojson:
+        missing.append("boundary_geojson（行政边界）")
+    if not landuse_current_geojson:
+        missing.append("landuse_current_geojson（现状用地）")
+    if missing:
+        error_msg = f"GIS 空间布局生成失败：缺少必要数据 — {', '.join(missing)}。请先通过地图面板上传对应的 GeoJSON 文件。"
+        logger.error("[generate_layout] %s", error_msg)
+        result = _make_result(False, error=error_msg)
+        return Command(update={"messages": [_to_tool_message(result, tool_call_id)]})
+
     configs = engine.generate_layout(
         intent=spatial_intent,
-        boundary_geojson=gd.get("boundary_geojson"),
-        landuse_current_geojson=gd.get("landuse_current_geojson"),
+        boundary_geojson=boundary_geojson,
+        landuse_current_geojson=landuse_current_geojson,
         protection_zones=gd.get("protection_zones"),
         road_geojson=gd.get("road_geojson"),
         hazard_points_geojson=gd.get("hazard_points_geojson"),

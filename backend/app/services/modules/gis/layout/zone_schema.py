@@ -250,28 +250,13 @@ def get_dlbms_for_zone_type(zone_type: str) -> List[str]:
 # 与现状 DLBM 不同: 0110/0130/0310/2030 等
 # ============================================
 
-# 规划 DLBM → Zone type
-PLANNED_DLBM_TO_ZONE_TYPE: Dict[str, str] = {
-    # 耕地 → 农业用地
-    "0110": "农业用地",  # 水田
-    "0120": "农业用地",  # 水浇地
-    "0130": "农业用地",  # 旱地
-    # 园地 → 农业用地
-    "0210": "农业用地",  # 果园
-    "0220": "农业用地",  # 茶园
-    # 林地 → 生态绿地
-    "0310": "生态绿地",  # 乔木林地
-    "0330": "生态绿地",  # 其他林地
-    # 草地 → 生态绿地
-    "1040": "交通用地",  # 农村道路
-    # 水域
-    "1110": "水域",      # 河流水面
-    "1140": "水域",      # 坑塘水面
-    "1180": "水域",  # 水工建筑用地
-    # 建设用地
-    "2030": "居住用地",  # 村庄(宅基地)
-    "3100": "水域",      # 水域
-}
+def get_zone_type_for_planned_dlbm(dlbm: str) -> str:
+    """Get zone type for a planned DLBM code (规划编码体系).
+
+    Delegates to get_zone_type_for_dlbm — PLANNED_DLBM_TO_ZONE_TYPE
+    was a redundant subset of DLBM_TO_ZONE_TYPE and has been removed.
+    """
+    return get_zone_type_for_dlbm(dlbm)
 
 # 规划用途名称 (GHYTMC) → Zone type
 # GHYTMC 是 landuse_planned 中 planning-specific 的分类字段
@@ -330,8 +315,12 @@ GHYTMC_TO_DLMC: Dict[str, str] = {
 
 
 def get_zone_type_for_planned_dlbm(dlbm: str) -> str:
-    """Get zone type for a planned DLBM code (规划编码体系)."""
-    return PLANNED_DLBM_TO_ZONE_TYPE.get(str(dlbm).strip(), "农业用地")
+    """Get zone type for a planned DLBM code (规划编码体系).
+
+    Delegates to get_zone_type_for_dlbm — PLANNED_DLBM_TO_ZONE_TYPE
+    was a redundant subset of DLBM_TO_ZONE_TYPE and has been removed.
+    """
+    return get_zone_type_for_dlbm(dlbm)
 
 
 def get_zone_type_for_ghytmc(ghytmc: str) -> str:
@@ -372,7 +361,14 @@ for _zt in ("生态绿地", "水域"):
 PROTECTED_DLBM_CODES: Set[str] = BASIC_FARMLAND_CODES | GENERAL_AGRICULTURE_CODES | ECOLOGICAL_CODES
 
 # 建设用地 zone types
-CONSTRUCTION_ZONE_TYPES: Set[str] = {"居住用地", "产业用地", "公共服务用地", "交通用地", "商业用地"}
+# Construction-use zone types — the 5 zone types that constitute 建设用地
+# NOTE: This is different from CONSTRUCTION_ZONE_DEF which refers to the GDB layer
+# "有条件建设区" (conditional construction zone). This set refers to the
+# zone_type categories that are classified as construction land use.
+CONSTRUCTION_USE_TYPES: Set[str] = {"居住用地", "产业用地", "公共服务用地", "交通用地", "商业用地"}
+
+# Backward-compatible alias (deprecated: use CONSTRUCTION_USE_TYPES)
+CONSTRUCTION_ZONE_TYPES = CONSTRUCTION_USE_TYPES
 
 
 def is_basic_farmland(dlbm: str) -> bool:
@@ -477,6 +473,274 @@ def dlbm_to_planning_zone(dlbm: str) -> str:
     return DLBM_TO_PLANNING_ZONE.get(str(dlbm).strip(), "一般农业区")
 
 
+# ============================================
+# 规划分类编码体系 (GHFLBM / GHYTBM)
+# 来源：金田村 GDB JT_期末地类_LJJ_20221212 实测数据
+#
+# 三层编码体系：
+#   DLBM → 现状地类编码 (GB/T 21010-2017)
+#   GHFLBM → 规划分类编码 (国土空间规划用地分类)
+#   GHYTBM → 规划用途编码 (村庄规划用途分类，更细粒度)
+#
+# 关系：GHYTBM 比 GHFLBM 更细（如 GHFLBM=2120 对应多个 GHYTBM）
+# ============================================
+
+# GHFLBM → 含义
+GHFLBM_MEANING: Dict[str, str] = {
+    "1110": "耕地(规划)",
+    "1120": "园地(规划)",
+    "1130": "林地(规划)",
+    "1200": "草地(规划)",
+    "1310": "商品林(规划)",
+    "1330": "生态林(规划)",
+    "1520": "设施农用地(规划)",
+    "1530": "其他农用地(规划)",
+    "2120": "农村建设用地(规划)",
+    "2270": "水利设施用地(规划)",
+    "3110": "水域(规划)",
+}
+
+# GHYTBM(规划用途编码) → GHYTMC(规划用途名称)
+# Based on: DB64/T 1993-2024 (18一级类/77二级类/26三级类)
+#           国土空间调查用地用海分类指南(2023) 自然资发〔2023〕234号
+#           GB/T 21010-2017 土地利用现状分类
+# Covers: 18 一级类 + 77 二级类 + village-specific 21xx codes
+GHYTBM_TO_GHYTMC: Dict[str, str] = {
+    # ── 01 耕地 ──
+    "0100": "耕地", "0101": "水田", "0102": "水浇地", "0103": "旱地",
+    # ── 02 园地 ──
+    "0200": "园地", "0201": "果园", "0204": "油料园地", "0205": "其他园地",
+    # ── 03 林地 ──
+    "0300": "林地", "0301": "乔木林地", "0302": "竹林地",
+    "0303": "灌木林地", "0304": "其他林地",
+    "1340": "商品林", "1350": "生态林",
+    # ── 04 草地 ──
+    "0400": "草地", "0401": "天然牧草地", "0402": "人工牧草地", "0403": "其他草地",
+    # ── 05 湿地 ──
+    "0500": "湿地", "0501": "森林沼泽", "0502": "灌木沼泽",
+    "0503": "沼泽草地", "0506": "内陆滩涂",
+    # ── 06 农业设施建设用地 ──
+    "0600": "农业设施建设用地",
+    "0601": "农村道路", "0602": "设施农用地",
+    # ── 07 居住用地 ──
+    "0700": "居住用地", "0703": "农村宅基地", "0704": "农村社区服务设施用地",
+    "070301": "一类农村宅基地", "070302": "二类农村宅基地", "070303": "混合式住宅用地",
+    # ── 08 公共管理与公共服务 ──
+    "0800": "公共管理与公共服务用地",
+    "0801": "机关团体用地", "0802": "科研用地",
+    "0803": "文化用地", "0804": "教育用地",
+    "080402": "中等职业教育用地", "080403": "中小学用地", "080404": "幼儿园用地",
+    "0805": "体育用地", "0806": "医疗卫生用地",
+    "080601": "医院用地", "080602": "基层医疗卫生设施用地",
+    "0807": "社会福利用地",
+    # ── 09 商业服务业 ──
+    "0900": "商业服务业用地", "0901": "商业用地",
+    "0902": "商务金融用地", "0903": "娱乐用地",
+    # ── 10 工矿用地 ──
+    "1000": "工矿用地", "1001": "工业用地", "1002": "采矿用地",
+    # ── 11 仓储用地 ──
+    "1100": "仓储用地", "1101": "物流仓储用地",
+    # ── 12 交通运输用地 ──
+    "1200": "交通运输用地", "1201": "铁路用地", "1202": "公路用地",
+    "1207": "城镇村道路用地", "1208": "交通场站用地",
+    # ── 13 公用设施用地 ──
+    "1300": "公用设施用地",
+    "1301": "供水用地", "1302": "排水用地", "1303": "供电用地",
+    "1306": "通信用地", "1309": "环卫用地", "1310": "消防用地",
+    "1311": "水工设施用地",
+    # ── 14 绿地与开敞空间用地 ──
+    "1400": "绿地与开敞空间用地", "1401": "公园绿地", "1402": "防护绿地",
+    "1403": "广场用地",
+    # ── 村庄规划专用编码 (三调21xx + GHYTBM) ──
+    "2121": "宅基地", "2122": "公共服务设施用地",
+    "2123": "基础设施用地", "2124": "经营性建设用地",
+    "2125": "景观与绿化用地", "2126": "村内交通用地",
+    "2200": "对外交通用地", "2270": "水利设施用地",
+    "3100": "水域",
+    "1500": "特殊用地", "1510": "设施农用地",
+    # ── 16 留白用地 ──
+    "1600": "留白用地",
+    # ── 17 陆地水域 ──
+    "1700": "陆地水域", "1701": "河流水面", "1702": "湖泊水面",
+    "1703": "水库水面", "1704": "坑塘水面", "1705": "沟渠",
+    # ── 18 其他土地 ──
+    "1800": "其他土地", "1801": "空闲地", "1802": "田坎",
+    "1803": "盐碱地", "1804": "沙地", "1805": "裸土地",
+    "1806": "裸岩石砾地",
+}
+
+# GHYTBM → zone_type (比 GHYTMC 更精确的编码映射)
+# Synced with GHYTBM_TO_GHYTMC — every key must have a zone_type mapping
+GHYTBM_TO_ZONE_TYPE: Dict[str, str] = {
+    # ── 01 耕地 → 农业用地 ──
+    "0100": "农业用地", "0101": "农业用地", "0102": "农业用地", "0103": "农业用地",
+    # ── 02 园地 → 农业用地 ──
+    "0200": "农业用地", "0201": "农业用地", "0204": "农业用地", "0205": "农业用地",
+    # ── 03 林地 → 生态绿地 ──
+    "0300": "生态绿地", "0301": "生态绿地", "0302": "生态绿地",
+    "0303": "生态绿地", "0304": "生态绿地",
+    "1340": "生态绿地", "1350": "生态绿地",
+    # ── 04 草地 → 生态绿地 ──
+    "0400": "生态绿地", "0401": "生态绿地", "0402": "生态绿地", "0403": "生态绿地",
+    # ── 05 湿地 → 生态绿地 ──
+    "0500": "生态绿地", "0501": "生态绿地", "0502": "生态绿地",
+    "0503": "生态绿地", "0506": "生态绿地",
+    # ── 06 农业设施建设用地 ──
+    "0600": "交通用地", "0601": "交通用地", "0602": "农业用地",
+    # ── 07 居住用地 ──
+    "0700": "居住用地", "0703": "居住用地", "0704": "公共服务用地",
+    "070301": "居住用地", "070302": "居住用地", "070303": "居住用地",
+    # ── 08 公共管理与公共服务 ──
+    "0800": "公共服务用地", "0801": "公共服务用地", "0802": "公共服务用地",
+    "0803": "公共服务用地", "0804": "公共服务用地",
+    "080402": "公共服务用地", "080403": "公共服务用地", "080404": "公共服务用地",
+    "0805": "公共服务用地", "0806": "公共服务用地",
+    "080601": "公共服务用地", "080602": "公共服务用地",
+    "0807": "公共服务用地",
+    # ── 09 商业服务业 ──
+    "0900": "商业用地", "0901": "商业用地",
+    "0902": "商业用地", "0903": "商业用地",
+    # ── 10 工矿用地 ──
+    "1000": "产业用地", "1001": "产业用地", "1002": "产业用地",
+    # ── 11 仓储用地 ──
+    "1100": "产业用地", "1101": "产业用地",
+    # ── 12 交通运输用地 ──
+    "1200": "交通用地", "1201": "交通用地", "1202": "交通用地",
+    "1207": "交通用地", "1208": "交通用地",
+    # ── 13 公用设施用地 ──
+    "1300": "公共服务用地",
+    "1301": "公共服务用地", "1302": "公共服务用地", "1303": "公共服务用地",
+    "1306": "公共服务用地", "1309": "公共服务用地", "1310": "公共服务用地",
+    "1311": "农业用地",
+    # ── 村庄规划专用编码 ──
+    "2121": "居住用地", "2122": "公共服务用地",
+    "2123": "交通用地", "2124": "产业用地",
+    "2125": "生态绿地", "2126": "交通用地",
+    "2200": "交通用地", "2270": "农业用地",
+    "3100": "水域",
+    "1500": "产业用地", "1510": "农业用地",
+    # ── 14 绿地与开敞空间用地 → 生态绿地 ──
+    "1400": "生态绿地", "1401": "生态绿地", "1402": "生态绿地",
+    "1403": "生态绿地",
+    # ── 16 留白用地 → 农业用地 (未确定用途，暂归农业) ──
+    "1600": "农业用地",
+    # ── 17 陆地水域 → 水域 ──
+    "1700": "水域", "1701": "水域", "1702": "水域",
+    "1703": "水域", "1704": "水域", "1705": "水域",
+    # ── 18 其他土地 → 农业用地 ──
+    "1800": "农业用地", "1801": "农业用地", "1802": "农业用地",
+    "1803": "农业用地", "1804": "农业用地", "1805": "农业用地",
+    "1806": "农业用地",
+}
+
+
+def get_zone_type_for_ghytbm(ghytbm: str) -> str:
+    """Get zone type from GHYTBM planning use code."""
+    return GHYTBM_TO_ZONE_TYPE.get(str(ghytbm).strip(), "农业用地")
+
+
+def get_ghytmc_for_ghytbm(ghytbm: str) -> str:
+    """Get GHYTMC (name) from GHYTBM (code)."""
+    return GHYTBM_TO_GHYTMC.get(str(ghytbm).strip(), "")
+
+
+# ============================================
+# DB22/T 3407-2022 要素分类编码 (10位层次码)
+# 结构: XX(大类) X(亚类) X(小类) X(一级) X(二级) XX(三级) X(四级) X(五级)
+# 大类: 10=基础地理信息, 20=国土空间规划
+# 亚类: 9=国土空间规划业务
+# 小类: 6=村庄规划
+# 一级: 1=全域总体规划, 2=专项规划, 3=详细规划
+# ============================================
+
+ELEMENT_CODE_PREFIXES: Dict[str, str] = {
+    "base_geographic": "10",
+    "spatial_planning": "2096",
+    "current": "209631",
+    "planned": "209632",
+    "three_line": "20963201",
+    "planning_control": "20963202",
+    "protection": "20963203",
+    "infrastructure": "20963204",
+}
+
+
+def parse_element_code(code: str) -> Dict[str, str]:
+    """Parse a DB22/T 3407-2022 element classification code.
+
+    Returns dict with keys: category, major_class, sub_class, level info.
+    """
+    code = str(code).strip()
+    if len(code) < 10:
+        return {"code": code, "category": "unknown", "major_class": code[:2] if len(code) >= 2 else ""}
+    major = code[:2]
+    category = "base_geographic" if major == "10" else "spatial_planning" if major == "20" else "other"
+    result = {"code": code, "category": category, "major_class": major}
+    if category == "spatial_planning" and len(code) >= 4:
+        result["sub_class"] = code[2]
+        result["minor_class"] = code[3]
+        if code[3] == "6":
+            result["planning_level"] = "village"
+            if len(code) >= 5:
+                first_level = code[4]
+                level_map = {"1": "全域总体规划", "2": "专项规划", "3": "详细规划"}
+                result["first_level"] = level_map.get(first_level, first_level)
+    return result
+
+
+# ============================================
+# 三线管控图层定义
+# 三线 = 生态保护红线 + 永久基本农田 + 村庄建设边界
+# 对应 GDB 中的独立图层，非 sensitivity_zone 的聚合概念
+# ============================================
+
+THREE_LINE_TYPES: Dict[str, Dict[str, str]] = {
+    "ecological_redline": {
+        "color": "#FF0000",
+        "line_style": "dash",
+        "fill_opacity": "0.0",
+        "stroke_width": "2.5",
+        "label": "生态保护红线",
+        "gdb_key": "ecological_redline",
+    },
+    "farmland_protection": {
+        "color": "#00AA00",
+        "line_style": "solid",
+        "fill_opacity": "0.15",
+        "stroke_width": "2.0",
+        "label": "永久基本农田",
+        "gdb_key": "farmland_protection",
+    },
+    "historical_protection": {
+        "color": "#FF8800",
+        "line_style": "dot-dash",
+        "fill_opacity": "0.0",
+        "stroke_width": "2.0",
+        "label": "历史文化保护线",
+        "gdb_key": "historical_protection",
+    },
+}
+
+# 有条件建设区定义
+CONSTRUCTION_ZONE_DEF: Dict[str, str] = {
+    "color": "#FF4444",
+    "fill_opacity": "0.2",
+    "stroke_width": "1.5",
+    "line_style": "solid",
+    "label": "有条件建设区",
+    "lx_field": "有条件建设区",
+    "gdb_key": "construction_zone",
+}
+
+# 注记图层分类
+ANNOTATION_CATEGORIES: Dict[str, str] = {
+    "现状设施点": "current",
+    "规划设施点": "planned",
+    "地名": "toponym",
+    "水系": "hydrology",
+}
+
+
 __all__ = [
     "ZONE_TYPE_COLORS",
     "FACILITY_STATUS_COLORS",
@@ -488,8 +752,8 @@ __all__ = [
     "GENERAL_AGRICULTURE_CODES",
     "ECOLOGICAL_CODES",
     "PROTECTED_DLBM_CODES",
+    "CONSTRUCTION_USE_TYPES",
     "CONSTRUCTION_ZONE_TYPES",
-    "PLANNED_DLBM_TO_ZONE_TYPE",
     "GHYTMC_TO_ZONE_TYPE",
     "GHYTMC_TO_DLMC",
     "PLANNING_ZONE_COLORS",
@@ -503,4 +767,17 @@ __all__ = [
     "is_basic_farmland",
     "is_general_agriculture",
     "dlbm_to_planning_zone",
+    # Planning classification codes
+    "GHFLBM_MEANING",
+    "GHYTBM_TO_GHYTMC",
+    "GHYTBM_TO_ZONE_TYPE",
+    "get_zone_type_for_ghytbm",
+    "get_ghytmc_for_ghytbm",
+    # Three-line control
+    "THREE_LINE_TYPES",
+    "CONSTRUCTION_ZONE_DEF",
+    "ANNOTATION_CATEGORIES",
+    # Element classification codes (DB22/T 3407-2022)
+    "ELEMENT_CODE_PREFIXES",
+    "parse_element_code",
 ]

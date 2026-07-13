@@ -1,11 +1,7 @@
-"""Metric anchors — deterministic extraction of precise values from reports.
+"""Metric anchors — deterministic extraction of precise values from GIS data.
 
-Merges three previously separate extraction systems:
-1. kg/builder.py CONSTRAINT_PATTERNS (7 metric_key -> constraint_id mappings)
-2. summary/generator.py DIMENSION_EXTRACTION_RULES (Chinese regex per dimension)
-3. summary/generator.py _extract_metrics_regex (generic numeric regex)
-
-Priority: metrics field direct read > Chinese regex from text > hardcoded defaults.
+GIS GeoJSON computation is the primary extraction path (zero LLM, deterministic).
+Regex-based text extraction has been removed — Instructor handles text extraction.
 """
 
 import re
@@ -187,125 +183,15 @@ _LEGACY_FIELD_MAP: Dict[str, Dict[str, str]] = {
 }
 
 
-def normalize_metric_keys(
-    metrics: Dict[str, Any],
-    dimension_key: str,
-) -> Dict[str, Any]:
-    """Rename legacy field names to semantics-qualified names.
-
-    Priority: _LEGACY_FIELD_MAP (dimension-specific) > _SCHEMA_FIELD_TO_ANCHOR > keep as-is.
-    """
-    dim_map = _LEGACY_FIELD_MAP.get(dimension_key, {})
-    result = {}
-    for k, v in metrics.items():
-        if k in dim_map:
-            result[dim_map[k]] = v
-        elif k in _SCHEMA_FIELD_TO_ANCHOR:
-            result[_SCHEMA_FIELD_TO_ANCHOR[k]] = v
-        else:
-            result[k] = v
-    return result
-
-# ---- Merged regex extraction from summary/generator.py ----
-
-# _CS = clause separator chars — prevent .*? from crossing clause boundaries
-# Includes 与/和/及 (conjunctions) that often separate different metrics in same sentence
-_CS = r"[^，。；、与和及\n]"
-
-DIMENSION_EXTRACTION_RULES: Dict[str, Dict[str, List[str]]] = {
-    "land_use_planning": {
-        "建设用地规模_公顷": [
-            rf"建设用地{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            rf"建设规模{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            rf"村庄建设用地{_CS}*?(\d+\.?\d*)",
-        ],
-        "耕地保有量_公顷": [
-            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?耕地保有量",
-            rf"耕地保有量{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            rf"耕地保护{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "永久基本农田_公顷": [
-            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?永久基本农田",
-            rf"永久基本农田{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            rf"基本农田{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "生态保护红线面积": [
-            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?生态保护红线",
-            rf"生态保护红线{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)?",
-            rf"生态红线{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "新增建设用地_公顷": [
-            rf"新增建设{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "总用地面积_公顷": [
-            rf"总用地面积{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            rf"总面积{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            r"\| 合计 \| (\d+\.?\d*)",  # markdown table: | 合计 | 2352.89 |
-            r"\| 总计 \| (\d+\.?\d*)",  # markdown table: | 总计 | xxx |
-        ],
-    },
-    "ecological": {
-        "生态保护红线面积": [
-            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?生态保护红线",
-            rf"生态保护红线{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)?",
-            rf"生态红线{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "林地保有量_公顷": [
-            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?林地保有量",
-            rf"林地保有量{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "森林覆盖率_百分比": [
-            rf"森林覆盖率{_CS}*?(\d+\.?\d*)\s*%",
-        ],
-    },
-    "settlement_planning": {
-        "建设用地规模_公顷": [
-            rf"建设用地{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "规划期末人口": [
-            rf"规划期末{_CS}*?人口{_CS}*?(\d+)",
-            rf"规划人口{_CS}*?(\d+)",
-            rf"常住人口{_CS}*?(\d+)\s*人",
-        ],
-        "人均建设用地": [
-            rf"人均建设用地{_CS}*?(\d+\.?\d*)\s*m",
-        ],
-    },
-    "superior_planning": {
-        "生态保护红线面积": [
-            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?生态保护红线",
-            rf"生态保护红线{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)?",
-        ],
-        "耕地保有量_公顷": [
-            rf"(\d+\.?\d*)\s*(?:公顷|ha){_CS}*?耕地保有量",
-            rf"耕地保有量{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            rf"基本农田{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-        ],
-        "建设用地规模_公顷": [
-            rf"建设用地{_CS}*?(\d+\.?\d*)\s*(?:公顷|ha)",
-            rf"城镇开发边界{_CS}*?(\d+\.?\d*)",
-        ],
-    },
-    "disaster_prevention": {
-        "地质灾害隐患点_处": [
-            rf"地质灾害隐患{_CS}*?(\d+)\s*处",
-            rf"隐患点{_CS}*?(\d+)\s*处",
-            rf"(\d+)\s*处{_CS}*?地质灾害隐患",
-        ],
-    },
-}
-
-
 def extract_metric_anchors(
     reports: Dict[str, Dict[str, Any]],
     gis_data: Optional[Dict[str, Any]] = None,
 ) -> MetricAnchors:
     """Extract precise metric values from reports and GIS data.
 
-    Four-tier extraction (highest priority first):
+    Three-tier extraction (highest priority first):
     1. GIS GeoJSON direct computation (most accurate — spatial measurement)
     2. Direct read from reports.metrics (schema-qualified field names)
-    3. Chinese regex from report content (DIMENSION_EXTRACTION_RULES)
     4. Default values (none — caller should handle missing)
 
     Args:
@@ -330,7 +216,6 @@ def extract_metric_anchors(
     _extract_from_metrics(anchors, reports)
 
     # Pass 2: Regex from content (fill gaps)
-    _extract_from_regex(anchors, reports)
 
     # Compute zone ratios if we have the data
     _compute_zone_ratios(anchors, gis_data)
@@ -347,86 +232,72 @@ def extract_metric_anchors(
     return anchors
 
 
+def extract_gis_anchors(
+    dimension_key: str,
+    content: str = "",
+    gis_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Extract metric anchors from GIS GeoJSON only (Layer 0).
+
+    Returns a flat dict of metric_key -> value. Only computes values
+    from GeoJSON properties — no regex, no LLM.
+
+    Args:
+        dimension_key: Dimension key, e.g. "land_use_planning".
+        content: Report text (unused, kept for API compat).
+        gis_data: Optional GIS data dict. If None, returns empty dict.
+
+    Returns:
+        Dict of metric_key -> extracted value.
+    """
+    if not gis_data:
+        return {}
+
+    anchors = MetricAnchors()
+    _extract_from_gis(anchors, gis_data)
+    _compute_zone_ratios(anchors, gis_data)
+
+    result: Dict[str, Any] = {}
+    if anchors.total_area_ha is not None:
+        result["total_area_ha"] = anchors.total_area_ha
+    if anchors.construction_area_ha is not None:
+        result["construction_area_ha"] = anchors.construction_area_ha
+    if anchors.farmland_area_ha is not None:
+        result["farmland_area_ha"] = anchors.farmland_area_ha
+    if anchors.ecological_area_ha is not None:
+        result["ecological_area_ha"] = anchors.ecological_area_ha
+    if anchors.permanent_farmland_ha is not None:
+        result["permanent_farmland_ha"] = anchors.permanent_farmland_ha
+    if anchors.new_construction_ha is not None:
+        result["new_construction_ha"] = anchors.new_construction_ha
+    if anchors.forest_coverage_pct is not None:
+        result["forest_coverage_pct"] = anchors.forest_coverage_pct
+    if anchors.forest_land_ha is not None:
+        result["forest_land_ha"] = anchors.forest_land_ha
+    for zone, ratio in anchors.zone_ratios.items():
+        result[f"zone_ratio_{zone}"] = ratio
+        if anchors.total_area_ha:
+            result[f"zone_area_{zone}"] = round(ratio * anchors.total_area_ha, 1)
+
+    logger.info(
+        "[metric_anchors] GIS anchors for %s: %d metrics extracted",
+        dimension_key, len(result),
+    )
+    return result
+
+
 def extract_dimension_anchors(
     dimension_key: str,
     content: str,
     metrics: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Extract metric anchors for a single dimension.
+    """DEPRECATED: Use Instructor-based extraction via generate_structured_summary.
 
-    Used by summary/generator.py for seed_metrics generation.
-    Returns a flat dict of metric_key -> value (no MetricAnchors object).
-
-    Priority: metrics dict direct read > Chinese regex from content.
-
-    Args:
-        dimension_key: Dimension key, e.g. "land_use_planning".
-        content: Report text content.
-        metrics: Optional pre-extracted metrics dict from summary.
-
-    Returns:
-        Dict of metric_key -> extracted value.
+    This function is kept only for backward compatibility. It no longer
+    performs regex extraction — returns metrics dict as-is if provided.
+    Will be removed in a future version.
     """
-    result: Dict[str, Any] = {}
-
-    # Pass 1: Direct metrics read (Chinese metric_key names)
-    if metrics:
-        for pattern in CONSTRAINT_PATTERNS:
-            metric_key = pattern["metric_key"]
-            value = metrics.get(metric_key)
-            if value is not None:
-                try:
-                    result[metric_key] = float(value)
-                except (ValueError, TypeError):
-                    pass
-
-        # Also try schema-qualified field names
-        for schema_field, anchor_field in _SCHEMA_FIELD_TO_ANCHOR.items():
-            value = metrics.get(schema_field)
-            if value is not None:
-                # Store with anchor field name to avoid duplicates
-                if anchor_field not in result:
-                    try:
-                        result[anchor_field] = float(value)
-                    except (ValueError, TypeError):
-                        pass
-
-    # Pass 2: Chinese regex from content
-    rules = DIMENSION_EXTRACTION_RULES.get(dimension_key, {})
-    for metric_key, patterns in rules.items():
-        if metric_key in result:
-            continue  # Already found via metrics
-        for pattern in patterns:
-            m = re.search(pattern, content)
-            if m:
-                try:
-                    val = m.group(1)
-                    float_val = float(val) if "." in val else int(val)
-                    result[metric_key] = float(float_val)
-                except (ValueError, TypeError):
-                    pass
-                break
-
-    # Generic numeric regex (from old _extract_metrics_regex)
-    generic_patterns = [
-        (r'([\d.]+)\s*公顷', 'area_ha'),
-        (r'([\d.]+)\s*亩', 'area_mu'),
-        (r'(\d+)\s*人', 'population'),
-        (r'(\d+)\s*户', 'households'),
-        (r'([\d.]+)\s*%', 'percentage'),
-        (r'([\d.]+)\s*万元', 'amount_wan_yuan'),
-        (r'([\d.]+)\s*km', 'length_km'),
-        (r'([\d.]+)\s*m[²2]', 'area_sqm'),
-    ]
-    for pat, key in generic_patterns:
-        if key in result:
-            continue
-        m = re.search(pat, content)
-        if m:
-            val = m.group(1)
-            result[key] = float(val) if '.' in val else int(val)
-
-    return result
+    return dict(metrics) if metrics else {}
 
 
 # DLBM prefixes for land use classification (GB/T 21010-2017)
@@ -571,41 +442,6 @@ def _extract_from_metrics(
                     anchors.total_area_source = f"{dim_key}.metrics.total_area_ha"
                 except (ValueError, TypeError):
                     pass
-
-
-def _extract_from_regex(
-    anchors: MetricAnchors,
-    reports: Dict[str, Dict[str, Any]],
-) -> None:
-    """Pass 2: Extract values from report content using Chinese regex."""
-    for dim_key, report in reports.items():
-        content = report.get("content", "")
-        if not content:
-            continue
-
-        rules = DIMENSION_EXTRACTION_RULES.get(dim_key, {})
-        if not rules:
-            continue
-
-        for metric_key, patterns in rules.items():
-            anchor_field = _METRIC_KEY_TO_FIELD.get(metric_key)
-            if not anchor_field:
-                continue
-            if getattr(anchors, anchor_field) is not None:
-                continue  # Already found via metrics
-
-            for pattern in patterns:
-                m = re.search(pattern, content)
-                if m:
-                    try:
-                        val = m.group(1)
-                        float_val = float(val) if "." in val else int(val)
-                        setattr(anchors, anchor_field, float(float_val))
-                        source_field = _FIELD_TO_SOURCE[anchor_field]
-                        setattr(anchors, source_field, f"{dim_key}.regex.{metric_key}")
-                    except (ValueError, TypeError):
-                        pass
-                    break
 
 
 def _compute_zone_ratios(anchors: MetricAnchors, gis_data: Optional[Dict[str, Any]] = None) -> None:

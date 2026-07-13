@@ -189,28 +189,24 @@ class ReportStore:
         return report_ids
 
     async def _generate_summary(self, content: str, dim_key: str = "", layer: int = 1) -> str:
-        """
-        Generate structured JSON summary preserving key data for downstream use.
+        """Generate structured JSON summary preserving key data for downstream use.
 
         Returns JSON string with: dimension_key, layer, word_count, key_points,
-        text_summary, metrics. Falls back to regex extraction on failure.
+        text_summary, metrics. Falls back to minimal summary on failure.
         """
         if not content:
             return ""
 
-        from .modules.parsing.summary_generator import generate_structured_summary, _extract_key_points_regex
+        from .modules.parsing.summary_generator import generate_structured_summary
         try:
             return await generate_structured_summary(dim_key, layer, content)
         except Exception as e:
-            logger.warning(f"[ReportStore] Structured summary failed: {e}")
+            logger.warning("[ReportStore] Structured summary failed: %s", e)
             from .modules.parsing.schemas import BaseDimensionSummary
-            from .modules.parsing.metric_anchors import extract_dimension_anchors
-            metrics = extract_dimension_anchors(dim_key, content)
-            key_points = _extract_key_points_regex(content)
             summary = BaseDimensionSummary(
                 dimension_key=dim_key, layer=layer,
-                word_count=len(content), key_points=key_points[:5],
-                text_summary=content[:200], metrics=metrics,
+                word_count=len(content), key_points=[],
+                text_summary=content[:200], metrics={},
             )
             return summary.model_dump_json(ensure_ascii=False)
 

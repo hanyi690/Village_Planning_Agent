@@ -130,12 +130,17 @@ class SpatialLayoutEngine:
     ) -> List[Dict[str, Any]]:
         """Phase 1: Generate multi-layer layout from unified intent.
 
-        Produces up to 6 layer types in one call:
+        Produces up to 9+ layer types in one call:
           - boundary (village outline)
           - function_zone (generated zones from ZoneGenerator)
-          - sensitivity_zone (protection areas: farmland/ecological/historical)
-          - infrastructure (roads + construction zones)
-          - facility_point (hazard points)
+          - planning_zone (MIP-allocated planning zones)
+          - ecological_redline (ecological protection red line)
+          - farmland_protection (permanent basic farmland)
+          - historical_protection (historical-cultural protection)
+          - construction_zone (conditional construction area)
+          - sensitivity_zone (aggregate of three-line layers, deprecated)
+          - infrastructure (roads)
+          - facility_point (hazard points + planned facilities)
           - development_axis (spatial structure axes)
 
         Args:
@@ -197,16 +202,27 @@ class SpatialLayoutEngine:
                 # Incremental SSE: push planning_zone as soon as generated
                 self._emit_layer_update(session_id, "planning_zone", planning_zone_geojson, boundary_geojson)
 
-        # Protection zones → sensitivity_zone layer
+        # Protection zones → individual three-line layers + aggregate sensitivity_zone
         if protection_zones:
             sensitivity_features = []
             for zone_name, geojson in protection_zones.items():
                 if not geojson or not geojson.get("features"):
                     continue
+                # zone_name is now GDB-aligned (ecological_redline/farmland_protection/historical_protection)
+                layer_type = zone_name
+                individual_features = []
                 for feat in geojson["features"]:
                     feat = dict(feat)
                     feat.setdefault("properties", {})["protection_type"] = zone_name
-                    sensitivity_features.append(feat)
+                    individual_features.append(feat)
+                    sensitivity_features.append(feat)  # also collect for aggregate
+                if individual_features:
+                    layers[layer_type] = {
+                        "type": "FeatureCollection",
+                        "features": individual_features,
+                    }
+                    self._emit_layer_update(session_id, layer_type, layers[layer_type], boundary_geojson)
+            # Aggregate sensitivity_zone (backward compatible, deprecated)
             if sensitivity_features:
                 layers["sensitivity_zone"] = {
                     "type": "FeatureCollection",
@@ -214,7 +230,8 @@ class SpatialLayoutEngine:
                 }
                 self._emit_layer_update(session_id, "sensitivity_zone", layers["sensitivity_zone"], boundary_geojson)
 
-        # Roads + construction zone → infrastructure layer
+        # Roads + construction zone → infrastructure layer (roads only)
+        # construction_zone is output as a separate GDB-aligned layer
         INFRA_COLORS = {
             "县道": {"fill": "#555555", "stroke": "#333333"},
             "乡道": {"fill": "#808080", "stroke": "#606060"},
@@ -222,7 +239,6 @@ class SpatialLayoutEngine:
             "道路": {"fill": "#666666", "stroke": "#444444"},
             "河流": {"fill": "#00BFFF", "stroke": "#0099CC"},
             "水系": {"fill": "#00BFFF", "stroke": "#0099CC"},
-            "construction_zone": {"fill": "#CC9900", "stroke": "#996600"},
         }
         infra_features = []
         if road_geojson and road_geojson.get("features"):
@@ -242,21 +258,29 @@ class SpatialLayoutEngine:
                 props["color"] = infra_color["stroke"]
                 props["stroke"] = infra_color["stroke"]
                 infra_features.append(feat)
-        if construction_zone_geojson and construction_zone_geojson.get("features"):
-            for feat in construction_zone_geojson["features"]:
-                feat = dict(feat)
-                props = feat.setdefault("properties", {})
-                props["infra_type"] = "construction_zone"
-                infra_color = INFRA_COLORS["construction_zone"]
-                props["color"] = infra_color["stroke"]
-                props["stroke"] = infra_color["stroke"]
-                infra_features.append(feat)
         if infra_features:
             layers["infrastructure"] = {
                 "type": "FeatureCollection",
                 "features": infra_features,
             }
             self._emit_layer_update(session_id, "infrastructure", layers["infrastructure"], boundary_geojson)
+
+        # Construction zone → independent GDB-aligned layer
+        if construction_zone_geojson and construction_zone_geojson.get("features"):
+            cz_features = []
+            for feat in construction_zone_geojson["features"]:
+                feat = dict(feat)
+                props = feat.setdefault("properties", {})
+                props["infra_type"] = "construction_zone"
+                props.setdefault("LX", "有条件建设区")
+                props["color"] = "#FF4444"
+                props["stroke"] = "#FF0000"
+                cz_features.append(feat)
+            layers["construction_zone"] = {
+                "type": "FeatureCollection",
+                "features": cz_features,
+            }
+            self._emit_layer_update(session_id, "construction_zone", layers["construction_zone"], boundary_geojson)
 
         # Facility points → facility_point layer (via FacilityPlacer)
         self._emit_progress(session_id, "generating_facility_point", "生成设施点图层")

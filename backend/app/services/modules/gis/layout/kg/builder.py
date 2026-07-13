@@ -219,6 +219,251 @@ class PlanningKG:
         )
         return self
 
+    # Intent → constraint_type mapping
+    _INTENT_CONSTRAINT_MAP = {
+        "farmland_protection": {
+            "field": "farmland_area_ha",
+            "operator": ">=",
+            "description": "永久基本农田保护面积",
+        },
+        "ecological_redline": {
+            "field": "ecological_redline_ha",
+            "operator": ">=",
+            "description": "生态保护红线面积约束",
+        },
+        "historical": {
+            "field": "heritage_protection",
+            "operator": ">=",
+            "description": "历史文化遗产保护约束",
+        },
+        "hazard": {
+            "field": "geological_hazard_zone",
+            "operator": "exclude",
+            "description": "地质灾害避让约束",
+        },
+    }
+
+    def build_from_intent(
+        self,
+        intent: Dict[str, Any],
+        landuse_geojson: Optional[Dict[str, Any]] = None,
+        boundary_geojson: Optional[Dict[str, Any]] = None,
+        gis_data: Optional[Dict[str, Any]] = None,
+    ) -> "PlanningKG":
+        """Build KG from PARSE Agent's structured intent (instead of raw reports).
+
+        Skips all regex/text parsing — zones, facilities, axes, constraints
+        come directly from UnifiedSpatialIntent. GIS data (parcels, adjacency,
+        infrastructure) still built from gis_data.
+
+        Args:
+            intent: UnifiedSpatialIntent as dict (from parse_planning_text output)
+            landuse_geojson: Current landuse parcels GeoJSON
+            boundary_geojson: Village boundary GeoJSON
+            gis_data: Full GIS data dict
+
+        Returns:
+            self (for chaining)
+        """
+        self.g = Graph()
+        self.g.bind("pln", PLN)
+        self._parcel_count = 0
+        self._constraint_count = 0
+
+        zone_areas = self._compute_zone_areas_from_gis(gis_data)
+
+        # 1. Village entity
+        village = PLN.village
+        self.g.add((village, RDF.type, PLN.Village))
+        self.g.add((village, PLN.name, Literal(self.village_name or "unknown")))
+
+        # 2. Parcels from GIS (unchanged)
+        if landuse_geojson:
+            self._add_parcels(landuse_geojson)
+
+        # 3. Zones from intent
+        self._add_zones_from_intent(intent, zone_areas)
+
+        # 4. Constraints from intent
+        self._add_constraints_from_intent(intent, zone_areas)
+
+        # 5. Facilities from intent
+        self._add_facilities_from_intent(intent)
+
+        # 6. Axes from intent
+        self._add_axes_from_intent(intent)
+
+        # 7. Spatial adjacency (GIS, unchanged)
+        if landuse_geojson:
+            self._add_spatial_relations(landuse_geojson)
+
+        # 8. Regulations (from constraints already added)
+        self._add_regulations()
+
+        # 9. Designated relations (GIS, unchanged)
+        if landuse_geojson:
+            self._add_designated_as_relations(landuse_geojson)
+
+        # 10. Infrastructure (GIS, unchanged)
+        if landuse_geojson:
+            self._add_spatial_infrastructure(landuse_geojson)
+
+        logger.info(
+            f"[PlanningKG] Built KG from intent: {self._parcel_count} parcels, "
+            f"{self._constraint_count} constraints, "
+            f"{len(self.g)} total triples"
+        )
+        return self
+
+    def _add_zones_from_intent(
+        self,
+        intent: Dict[str, Any],
+        zone_areas: Optional[Dict[str, float]] = None,
+    ):
+        """Add zone entities from intent.zones."""
+        zones = intent.get("zones", [])
+        if not zones:
+            # Fallback: add standard zones from ZONE_TYPE_PATTERNS
+            for name, props in ZONE_TYPE_PATTERNS.items():
+                zone = PLN[f"zone_{name}"]
+                self.g.add((zone, RDF.type, PLN.Zone))
+                self.g.add((zone, PLN.name, Literal(name)))
+                self.g.add((zone, PLN.color, Literal(props["color"])))
+                for restriction in props["restrictions"]:
+                    self.g.add((zone, PLN.restriction, Literal(restriction)))
+                self.g.add((PLN.village, PLN.has_zone, zone))
+            return
+
+        for z in zones:
+            zone_id = z.get("zone_id", z.get("land_use", "unknown"))
+            zone = PLN[f"zone_{zone_id}"]
+            self.g.add((zone, RDF.type, PLN.Zone))
+            self.g.add((zone, PLN.name, Literal(z.get("land_use", zone_id))))
+
+            # Area: area_ratio × total GIS area > zone_areas > omit
+            area_ha = None
+            area_ratio = z.get("area_ratio")
+            if area_ratio and zone_areas:
+                total_area = sum(zone_areas.values())
+                if total_area > 0:
+                    area_ha = round(area_ratio * total_area, 2)
+            if area_ha is None and zone_areas:
+                land_use = z.get("land_use", "")
+                area_ha = zone_areas.get(land_use)
+            if area_ha is not None:
+                self.g.add((zone, PLN.area_target_ha, Literal(area_ha, datatype=XSD.double)))
+
+            # Color from ZONE_TYPE_PATTERNS if matching
+            land_use = z.get("land_use", "")
+            pattern = ZONE_TYPE_PATTERNS.get(land_use)
+            if pattern:
+                self.g.add((zone, PLN.color, Literal(pattern["color"])))
+                for restriction in pattern["restrictions"]:
+                    self.g.add((zone, PLN.restriction, Literal(restriction)))
+
+            # Direction as placement hint
+            direction = z.get("direction", "")
+            if direction:
+                self.g.add((zone, PLN.direction, Literal(direction)))
+
+            # Density
+            density = z.get("density", "")
+            if density:
+                self.g.add((zone, PLN.density, Literal(density)))
+
+            self.g.add((PLN.village, PLN.has_zone, zone))
+
+    def _add_constraints_from_intent(
+        self,
+        intent: Dict[str, Any],
+        zone_areas: Optional[Dict[str, float]] = None,
+    ):
+        """Add constraint entities from intent.constraints."""
+        constraints = intent.get("constraints", [])
+        for c in constraints:
+            ctype = c.get("constraint_type", "")
+            mapping = self._INTENT_CONSTRAINT_MAP.get(ctype)
+            if not mapping:
+                continue
+
+            cid = c.get("constraint_id", f"intent_{ctype}")
+            strict = c.get("strict", True)
+            self._add_constraint_triple(
+                cid=cid,
+                field=mapping["field"],
+                operator=mapping["operator"],
+                value=0.0,  # Actual value from GIS data below
+                description=mapping["description"],
+                source=f"intent:{ctype}",
+            )
+
+            # Add strictness as extra triple
+            constraint_uri = PLN[cid]
+            self.g.add((constraint_uri, PLN.strict, Literal(strict, datatype=XSD.boolean)))
+
+            # geometry_ref → link to GIS layer
+            geo_ref = c.get("geometry_ref", "")
+            if geo_ref:
+                self.g.add((constraint_uri, PLN.geometry_ref, Literal(geo_ref)))
+
+        # Add ecological redline from GIS zone_areas
+        eco_area = zone_areas.get("生态绿地") if zone_areas else None
+        if eco_area is not None:
+            c = PLN.ecological_redline_protection
+            self.g.add((c, RDF.type, PLN.Constraint))
+            self.g.add((c, PLN.field, Literal("ecological_redline_ha")))
+            self.g.add((c, PLN.operator, Literal(">=")))
+            self.g.add((c, PLN.value, Literal(eco_area, datatype=XSD.double)))
+            self.g.add((c, PLN.prohibits, Literal("industrial_development")))
+            self.g.add((c, PLN.prohibits, Literal("urbanization")))
+            self.g.add((c, PLN.source, Literal("gis_data")))
+            self._constraint_count += 1
+
+    def _add_facilities_from_intent(self, intent: Dict[str, Any]):
+        """Add facility entities from intent.facilities."""
+        facilities = intent.get("facilities", [])
+        for f in facilities:
+            fid = f.get("facility_id", f.get("facility_type", "unknown"))
+            facility = PLN[f"facility_{fid}"]
+            self.g.add((facility, RDF.type, PLN.Facility))
+            self.g.add((facility, PLN.name, Literal(f.get("facility_type", fid))))
+
+            target_zone = f.get("target_zone", "")
+            if target_zone:
+                zone_uri = PLN[f"zone_{target_zone}"]
+                self.g.add((facility, PLN.serves, zone_uri))
+
+            location_hint = f.get("location_hint", "")
+            if location_hint:
+                self.g.add((facility, PLN.location_hint, Literal(location_hint)))
+
+            status = f.get("status", "")
+            if status:
+                self.g.add((facility, PLN.status, Literal(status)))
+
+            self.g.add((PLN.village, PLN.has_facility, facility))
+
+    def _add_axes_from_intent(self, intent: Dict[str, Any]):
+        """Add axis entities from intent.axes."""
+        axes = intent.get("axes", [])
+        for a in axes:
+            aid = a.get("axis_id", "unknown")
+            axis = PLN[f"axis_{aid}"]
+            self.g.add((axis, RDF.type, PLN.Axis))
+            self.g.add((axis, PLN.name, Literal(a.get("label", aid))))
+            self.g.add((axis, PLN.axis_type, Literal(a.get("axis_type", "primary"))))
+
+            direction = a.get("direction", "")
+            if direction:
+                self.g.add((axis, PLN.direction, Literal(direction)))
+
+            # Connect to zones/facilities
+            for connected_id in a.get("connects", []):
+                target = PLN[f"zone_{connected_id}"]
+                self.g.add((axis, PLN.connects, target))
+
+            self.g.add((PLN.village, PLN.has_axis, axis))
+
     def _compute_zone_areas_from_gis(
         self, gis_data: Optional[Dict[str, Any]]
     ) -> Dict[str, float]:
@@ -444,20 +689,14 @@ class PlanningKG:
                 self.g.add((zone, PLN.restriction, Literal(restriction)))
             self.g.add((PLN.village, PLN.has_zone, zone))
 
-        # Zone name → zone_type mapping for area lookup
-        ZONE_NAME_TO_TYPE = {
-            "生态农业发展区": "农业用地",
-            "生态保育屏障区": "生态绿地",
-            "宜居生活建设区": "居住用地",
-        }
-
         # Add spatial structure zones with computed areas
         # GIS data zones: create zone entities from zone_areas regardless of report keywords
+        # zone_type names must match zone_schema.ZONE_TYPE_COLORS keys
         GIS_ZONE_MAP = [
             ("农业用地", "zone_gis_farmland"),
             ("生态绿地", "zone_gis_ecological"),
             ("居住用地", "zone_gis_residential"),
-            ("建设用地", "zone_gis_construction"),
+            ("产业用地", "zone_gis_construction"),
         ]
         if zone_areas:
             for zone_type, zone_uri_name in GIS_ZONE_MAP:

@@ -225,8 +225,9 @@ class PlanningRuntimeService:
 
         async with cls._execution_locks.setdefault(session_id, asyncio.Lock()):
             logger.info(
-                "[PlanningRuntimeService] [%s] RESUME from interrupt: resume_data=%s",
+                "[PlanningRuntimeService] [%s] RESUME from interrupt: resume_data=%s state_updates=%s",
                 session_id, resume_data,
+                {k: type(v).__name__ for k, v in state_updates.items()} if state_updates else None,
             )
             stream_iterator = cls._graph.astream(
                 command, config,

@@ -1,21 +1,19 @@
-"""Structured summary generation — Instructor + deterministic extraction.
+"""Structured summary generation — pure Instructor path.
 
-Three-layer pipeline:
-  Layer 1: Deterministic extraction via metric_anchors (zero LLM)
-  Layer 2: Instructor schema-enforced generation via structured_output
-  Layer 3: Fallback to regex-only on Instructor failure
+Two-layer pipeline:
+  Layer 0: GIS GeoJSON direct computation (deterministic, zero LLM)
+  Layer 2: Instructor schema-enforced generation (with retry)
+
+Layer 1 (extract_dimension_anchors regex) and Layer 3 (regex fallback)
+have been removed. Instructor is the sole text extraction path.
 """
 
 import json
-import re
 from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
 from app.services.modules.parsing.schemas import (
     get_dimension_schema, BaseDimensionSummary, get_metrics_description,
-)
-from app.services.modules.parsing.metric_anchors import (
-    extract_dimension_anchors, normalize_metric_keys,
 )
 
 logger = get_logger(__name__)
@@ -24,37 +22,56 @@ _BASE_SUMMARY_FIELDS = frozenset({
     "dimension_key", "layer", "word_count", "key_points", "text_summary", "metrics",
 })
 
+# GIS-relevant dimensions that benefit from GeoJSON direct computation
+_GIS_DIMENSIONS = frozenset({
+    "land_use", "spatial_structure", "land_use_planning",
+    "ecological", "ecological_green", "settlement_planning",
+})
+
 
 async def generate_structured_summary(
     dimension_key: str,
     layer: int,
     content: str,
     knowledge_sources: Optional[Any] = None,
+    max_retries: int = 2,
 ) -> str:
-    """Generate structured JSON summary for a dimension report."""
+    """Generate structured JSON summary — pure Instructor path.
+
+    Layer 0: GIS GeoJSON direct computation (if applicable)
+    Layer 2: Instructor schema-enforced generation (with retry)
+    Fallback: Empty key_points, metrics only from GIS computation
+    """
     if not content:
         return _default_summary_json(dimension_key, layer)
 
-    # Layer 1: Deterministic extraction
-    seed_metrics = extract_dimension_anchors(dimension_key, content)
-    regex_key_points = _extract_key_points_regex(content)
+    # Layer 0: GIS direct computation (deterministic, zero LLM)
+    gis_metrics = _extract_gis_metrics(dimension_key, content)
 
-    # Layer 2: Instructor schema-enforced generation
-    try:
-        result = await _instructor_generate(dimension_key, layer, content, seed_metrics)
-        if result:
-            return result
-    except Exception as e:
-        logger.warning(f"[summary] structured_parse failed for {dimension_key}: {e}")
+    # Layer 2: Instructor with retry
+    for attempt in range(max_retries + 1):
+        try:
+            result = await _instructor_generate(dimension_key, layer, content, gis_metrics)
+            if result:
+                return result
+        except Exception as e:
+            logger.warning(
+                "[summary] Instructor attempt %d/%d failed for %s: %s",
+                attempt + 1, max_retries + 1, dimension_key, e,
+            )
 
-    # Layer 3 fallback
+    # Fallback: empty key_points (no regex), GIS metrics only
+    logger.warning(
+        "[summary] All Instructor attempts failed for %s, using empty fallback",
+        dimension_key,
+    )
     summary = BaseDimensionSummary(
         dimension_key=dimension_key,
         layer=layer,
         word_count=len(content),
-        key_points=regex_key_points[:5],
+        key_points=[],
         text_summary=content[:200],
-        metrics=seed_metrics,
+        metrics=gis_metrics,
     )
     return summary.model_dump_json(ensure_ascii=False)
 
@@ -63,7 +80,7 @@ async def _instructor_generate(
     dimension_key: str,
     layer: int,
     content: str,
-    seed_metrics: Dict[str, Any],
+    gis_metrics: Dict[str, Any],
 ) -> Optional[str]:
     """Use structured_parse for Instructor-enforced summary generation."""
     from app.services.modules.parsing.structured_output import structured_parse
@@ -77,8 +94,8 @@ async def _instructor_generate(
 维度: {dimension_key} (Layer {layer})
 报告字数: {len(content)}
 
-规则提取已获得以下指标（请优先采用）:
-{json.dumps(seed_metrics, ensure_ascii=False, indent=2) if seed_metrics else "（无）"}
+GIS 计算已获得以下指标（请优先采用）:
+{json.dumps(gis_metrics, ensure_ascii=False, indent=2) if gis_metrics else "（无）"}
 
 还需提取的指标:
 {metrics_hint}
@@ -101,7 +118,7 @@ async def _instructor_generate(
             temperature=0.1,
         )
     except Exception as e:
-        logger.warning(f"[summary] structured_parse failed for {dimension_key}: {e}")
+        logger.warning("[summary] structured_parse failed for %s: %s", dimension_key, e)
         return None
 
     if not isinstance(summary, BaseDimensionSummary):
@@ -115,14 +132,34 @@ async def _instructor_generate(
     if len(summary.key_points) > 5:
         summary.key_points = summary.key_points[:5]
 
-    # Normalize + merge + sync
-    summary.metrics = normalize_metric_keys(summary.metrics, dimension_key)
-    for k, v in seed_metrics.items():
+    # GIS metrics fill gaps that Instructor couldn't extract
+    for k, v in gis_metrics.items():
         if k not in summary.metrics:
             summary.metrics[k] = v
+
     _sync_schema_fields_to_metrics(summary)
 
     return summary.model_dump_json(ensure_ascii=False)
+
+
+def _extract_gis_metrics(
+    dimension_key: str,
+    content: str,
+) -> Dict[str, Any]:
+    """Extract metrics from GIS GeoJSON data (Layer 0 only).
+
+    Only runs for GIS-relevant dimensions. Returns deterministic
+    area/coverage values computed from GeoJSON properties.
+    """
+    if dimension_key not in _GIS_DIMENSIONS:
+        return {}
+
+    try:
+        from app.services.modules.parsing.metric_anchors import extract_gis_anchors
+        return extract_gis_anchors(dimension_key, content)
+    except Exception as e:
+        logger.warning("[summary] GIS anchor extraction failed for %s: %s", dimension_key, e)
+        return {}
 
 
 def _sync_schema_fields_to_metrics(summary: BaseDimensionSummary) -> None:
@@ -133,20 +170,6 @@ def _sync_schema_fields_to_metrics(summary: BaseDimensionSummary) -> None:
         value = getattr(summary, field_name, None)
         if value is not None and field_name not in summary.metrics:
             summary.metrics[field_name] = value
-
-
-def _extract_key_points_regex(content: str) -> List[str]:
-    """Extract key points from markdown headings and bold text."""
-    points = []
-    for m in re.finditer(r'###\s+(.+)', content):
-        text = m.group(1).strip()
-        if 4 <= len(text) <= 50:
-            points.append(text)
-    for m in re.finditer(r'\*\*(.+?)\*\*', content):
-        text = m.group(1).strip()
-        if 4 <= len(text) <= 50 and text not in points:
-            points.append(text)
-    return points[:5]
 
 
 def _default_summary_json(dimension_key: str, layer: int) -> str:

@@ -432,9 +432,9 @@ def _check_protection_zones(
     Args:
         location: Facility location
         protection_zones: 保护区域字典 {
-            "farmland": GeoJSON,
-            "ecological": GeoJSON,
-            "historical": GeoJSON,
+            "farmland_protection": GeoJSON,
+            "ecological_redline": GeoJSON,
+            "historical_protection": GeoJSON,
         }
         facility_type: 设施类型
 
@@ -463,7 +463,7 @@ def _check_protection_zones(
             if result.get("success") and result.get("data", {}).get("match_count", 0) > 0:
                 conflicts.append({
                     "zone_type": zone_type,
-                    "severity": "high" if zone_type == "farmland" else "medium",
+                    "severity": "high" if zone_type == "farmland_protection" else "medium",
                 })
                 in_protected_zone = True
 

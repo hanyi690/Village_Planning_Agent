@@ -12,6 +12,7 @@ Design:
 """
 
 import re
+import json
 import hashlib
 import time
 import threading
@@ -239,16 +240,35 @@ class RagService:
         store = ReportStore.get_instance()
 
         # 批量加载依赖摘要（避免 N+1 查询）
+        # Full text + structured summary metrics for better RAG queries
         if all_deps:
             layer_reports = await store.get_layer_reports(session_id, 1)
             layer_reports_2 = await store.get_layer_reports(session_id, 2) if phase_depends_on else {}
             layer_reports_3 = await store.get_layer_reports(session_id, 3) if depends_on else {}
 
+            # Also load structured summaries for metrics/key_points supplement
+            layer_summaries = await store.get_layer_summaries(session_id, 1)
+            layer_summaries_2 = await store.get_layer_summaries(session_id, 2) if phase_depends_on else {}
+            layer_summaries_3 = await store.get_layer_summaries(session_id, 3) if depends_on else {}
+
             dependency_summaries = []
             for dep_key in all_deps:
-                summary = layer_reports.get(dep_key) or layer_reports_2.get(dep_key) or layer_reports_3.get(dep_key)
-                if summary:
-                    dependency_summaries.append(f"【{dep_key}】{summary}")
+                parts = []
+                # Full text (truncated to 2000 chars for prompt efficiency)
+                full_text = layer_reports.get(dep_key) or layer_reports_2.get(dep_key) or layer_reports_3.get(dep_key)
+                if full_text:
+                    parts.append(f"【{dep_key}】\n{full_text[:2000]}")
+                # Structured summary supplement (key metrics + key points)
+                structured = layer_summaries.get(dep_key) or layer_summaries_2.get(dep_key) or layer_summaries_3.get(dep_key)
+                if structured:
+                    metrics = structured.get("metrics", {})
+                    key_points = structured.get("key_points", [])
+                    if metrics:
+                        parts.append(f"关键指标: {json.dumps(metrics, ensure_ascii=False)}")
+                    if key_points:
+                        parts.append(f"核心发现: {'; '.join(key_points[:3])}")
+                if parts:
+                    dependency_summaries.append("\n".join(parts))
         else:
             dependency_summaries = []
 
