@@ -194,14 +194,14 @@ class TestAllocateZonesRealLanduse:
         }
 
         allocator = ConstraintDrivenAllocator()
-        result = allocator.solve(
+        result_geojson, _trace = allocator.solve(
             landuse_geojson=landuse_geojson,
             targets=targets,
             constraints=constraints,
             mode="greedy",
         )
 
-        features = result.get("features", [])
+        features = result_geojson.get("features", [])
         assert len(features) > 0, "Allocator returned no features"
 
         # 每个 feature 都应有 assigned_zone
@@ -218,7 +218,7 @@ class TestAllocateZonesRealLanduse:
         }
 
         allocator = ConstraintDrivenAllocator()
-        result = allocator.solve(
+        result_geojson, _trace = allocator.solve(
             landuse_geojson=landuse_geojson,
             targets=targets,
             constraints=[],
@@ -226,7 +226,7 @@ class TestAllocateZonesRealLanduse:
         )
 
         valid_zones = {"农田保护区", "村庄建设区", "生态保护区", "一般农业区"}
-        features = result.get("features", [])
+        features = result_geojson.get("features", [])
         assigned_zones = {f["properties"].get("assigned_zone", "") for f in features}
         # 修复后应全部是 4 个分区名
         non_valid = assigned_zones - valid_zones
@@ -254,14 +254,14 @@ class TestMIPAllocatorE2E:
         }
 
         allocator = ConstraintDrivenAllocator()
-        result = allocator.solve(
+        result_geojson, _trace = allocator.solve(
             landuse_geojson=landuse_geojson,
             targets=targets,
             constraints=constraints,
             mode="mip",
         )
 
-        features = result.get("features", [])
+        features = result_geojson.get("features", [])
         assert len(features) > 0, "MIP allocator returned no features"
 
     def test_mip_assigned_zone_is_planning_zone_name(self, landuse_geojson):
@@ -274,7 +274,7 @@ class TestMIPAllocatorE2E:
         }
 
         allocator = ConstraintDrivenAllocator()
-        result = allocator.solve(
+        result_geojson, _trace = allocator.solve(
             landuse_geojson=landuse_geojson,
             targets=targets,
             constraints=[],
@@ -282,7 +282,7 @@ class TestMIPAllocatorE2E:
         )
 
         valid_zones = {"农田保护区", "村庄建设区", "生态保护区", "一般农业区"}
-        features = result.get("features", [])
+        features = result_geojson.get("features", [])
         assigned_zones = {f["properties"].get("assigned_zone", "") for f in features}
         non_valid = assigned_zones - valid_zones
         assert not non_valid, f"MIP assigned_zone contains non-planning-zone names: {non_valid}"
@@ -297,10 +297,10 @@ class TestMIPAllocatorE2E:
         }
         allocator = ConstraintDrivenAllocator()
 
-        greedy_result = allocator.solve(
+        greedy_result, _ = allocator.solve(
             landuse_geojson=landuse_geojson, targets=targets, constraints=[], mode="greedy",
         )
-        mip_result = allocator.solve(
+        mip_result, _ = allocator.solve(
             landuse_geojson=landuse_geojson, targets=targets, constraints=[], mode="mip",
         )
 
@@ -540,7 +540,7 @@ class TestFullPipelineE2E:
         max_validation_rounds: int = 2,
     ):
         engine = SpatialLayoutEngine()
-        conflict_report, resolution_report, layout_configs = engine.full_pipeline(
+        conflict_report, resolution_report, layout_configs, pipeline_trace = engine.full_pipeline(
             summaries={},
             intent=_dict_to_intent(real_intent),
             boundary_geojson=boundary_geojson,

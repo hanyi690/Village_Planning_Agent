@@ -106,36 +106,36 @@ class TestMIPBasic:
     def test_mip_solves_without_adjacency(self, landuse_geojson, planning_targets):
         """MIP should solve without adjacency graph (backward compatible)."""
         allocator = MIPZoneAllocator()
-        result = allocator.solve(
+        geojson_result, mip_trace = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
         )
-        assert result is not None
-        assert len(result.get("features", [])) > 0
+        assert geojson_result is not None
+        assert len(geojson_result.get("features", [])) > 0
 
     def test_mip_solves_with_adjacency(self, landuse_geojson, planning_targets, adj_graph):
         """MIP should solve with adjacency graph enabled."""
         allocator = MIPZoneAllocator()
-        result = allocator.solve(
+        geojson_result, mip_trace = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
             adjacency_graph=adj_graph,
             adjacency_weight=0.5,
             change_penalty_weight=0.3,
         )
-        assert result is not None
-        assert len(result.get("features", [])) > 0
+        assert geojson_result is not None
+        assert len(geojson_result.get("features", [])) > 0
 
     def test_all_parcels_assigned(self, landuse_geojson, planning_targets, adj_graph):
         """Every parcel should have an assigned_zone."""
         allocator = MIPZoneAllocator()
-        result = allocator.solve(
+        geojson_result, mip_trace = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
             adjacency_graph=adj_graph,
             adjacency_weight=0.5,
         )
-        for feat in result.get("features", []):
+        for feat in geojson_result.get("features", []):
             assert feat["properties"].get("assigned_zone", "") != "", (
                 f"Parcel {feat['properties'].get('composite_key', '?')} unassigned"
             )
@@ -149,14 +149,14 @@ class TestMIPQuality:
                                            parcel_db, adj_graph):
         """Adjacency compatibility rate should be >= 60% with adjacency constraints."""
         allocator = MIPZoneAllocator()
-        result = allocator.solve(
+        geojson_result, mip_trace = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
             adjacency_graph=adj_graph,
             adjacency_weight=0.5,
             change_penalty_weight=0.3,
         )
-        assignments = extract_assignments(result, parcel_db)
+        assignments = extract_assignments(geojson_result, parcel_db)
         rate = calc_adjacency_compatibility(adj_graph, assignments)
         assert rate >= 0.30, f"Adjacency compatibility rate too low: {rate:.2%}"
 
@@ -171,21 +171,21 @@ class TestMIPQuality:
         allocator = MIPZoneAllocator()
 
         # Without adjacency
-        result_no_adj = allocator.solve(
+        geojson_result_no_adj, _ = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
         )
-        assignments_no = extract_assignments(result_no_adj, parcel_db)
+        assignments_no = extract_assignments(geojson_result_no_adj, parcel_db)
         rate_no = calc_adjacency_compatibility(adj_graph, assignments_no)
 
         # With adjacency
-        result_with_adj = allocator.solve(
+        geojson_result_with_adj, _ = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
             adjacency_graph=adj_graph,
             adjacency_weight=0.5,
         )
-        assignments_with = extract_assignments(result_with_adj, parcel_db)
+        assignments_with = extract_assignments(geojson_result_with_adj, parcel_db)
         rate_with = calc_adjacency_compatibility(adj_graph, assignments_with)
 
         assert rate_with >= rate_no - 0.05, (
@@ -195,13 +195,13 @@ class TestMIPQuality:
     def test_area_deviation_reasonable(self, landuse_geojson, planning_targets, adj_graph):
         """Area deviation should be reasonable (some zones have limited DLBM parcels)."""
         allocator = MIPZoneAllocator()
-        result = allocator.solve(
+        geojson_result, _ = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
             adjacency_graph=adj_graph,
             adjacency_weight=0.5,
         )
-        max_dev = calc_zone_area_deviation(result, planning_targets)
+        max_dev = calc_zone_area_deviation(geojson_result, planning_targets)
         # Relaxed threshold: village construction and farmland zones are constrained
         # by available DLBM parcels — 50% allows for realistic planning scenarios
         assert max_dev < 1.0, f"Max area deviation too high: {max_dev:.1%}"
@@ -212,7 +212,7 @@ class TestMIPQuality:
         from app.services.modules.gis.layout.zone_schema import PROTECTED_DLBM_CODES
 
         allocator = MIPZoneAllocator()
-        result = allocator.solve(
+        geojson_result, _ = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
             adjacency_graph=adj_graph,
@@ -220,7 +220,7 @@ class TestMIPQuality:
         )
 
         violations = 0
-        for feat in result.get("features", []):
+        for feat in geojson_result.get("features", []):
             props = feat.get("properties", {})
             dlbm = props.get("DLBM", "")
             assigned = props.get("assigned_zone", "")
@@ -234,14 +234,14 @@ class TestMIPQuality:
         from app.services.modules.gis.layout.optimizer.mip_allocator import dlbm_to_planning_zone
 
         allocator = MIPZoneAllocator()
-        result = allocator.solve(
+        geojson_result, _ = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
         )
 
         native_count = 0
         total = 0
-        for feat in result.get("features", []):
+        for feat in geojson_result.get("features", []):
             props = feat.get("properties", {})
             dlbm = props.get("DLBM", "")
             assigned = props.get("assigned_zone", "")
@@ -291,15 +291,15 @@ class TestMIPWeightSensitivity:
                                                        adj_graph):
         """Setting adjacency_weight=0 should produce same result as no adjacency."""
         allocator = MIPZoneAllocator()
-        result = allocator.solve(
+        geojson_result, _ = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
             adjacency_graph=adj_graph,
             adjacency_weight=0.0,
             change_penalty_weight=0.0,
         )
-        assert result is not None
-        assert len(result.get("features", [])) > 0
+        assert geojson_result is not None
+        assert len(geojson_result.get("features", [])) > 0
 
     def test_high_adjacency_weight_trend(self, landuse_geojson, planning_targets,
                                                            parcel_db, adj_graph):
@@ -310,22 +310,22 @@ class TestMIPWeightSensitivity:
         """
         allocator = MIPZoneAllocator()
 
-        result_low = allocator.solve(
+        geojson_result_low, _ = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
             adjacency_graph=adj_graph,
             adjacency_weight=0.1,
         )
-        assignments_low = extract_assignments(result_low, parcel_db)
+        assignments_low = extract_assignments(geojson_result_low, parcel_db)
         rate_low = calc_adjacency_compatibility(adj_graph, assignments_low)
 
-        result_high = allocator.solve(
+        geojson_result_high, _ = allocator.solve(
             landuse_geojson, planning_targets,
             constraints=[], kg=None,
             adjacency_graph=adj_graph,
             adjacency_weight=2.0,
         )
-        assignments_high = extract_assignments(result_high, parcel_db)
+        assignments_high = extract_assignments(geojson_result_high, parcel_db)
         rate_high = calc_adjacency_compatibility(adj_graph, assignments_high)
 
         assert rate_high >= rate_low - 0.05, (

@@ -265,3 +265,150 @@ class TestGeoJSONStructuralInValidator:
         report = validator.validate(layout)
         assert len(report.checks) == 8, \
             f"Expected 8 checks (including adjacency + compactness), got {len(report.checks)}"
+
+
+# ============================================
+# TestAdjacencyCompatibility (from test_gis_validator_extended.py)
+# ============================================
+
+class MockAdjacencyGraph:
+    """Minimal adjacency graph for testing."""
+
+    def __init__(self, adjacency_dict):
+        self.adjacency_dict = adjacency_dict
+
+
+def _make_ext_zone_feature(zone_name, area_ha, slot=0):
+    """Create a minimal planning zone feature for extended tests."""
+    return {
+        "type": "Feature",
+        "properties": {
+            "assigned_zone": zone_name,
+            "area_ha": area_ha,
+            "composite_key": f"test_{slot}",
+        },
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [_ZONE_OFFSETS[slot % len(_ZONE_OFFSETS)]],
+        },
+    }
+
+
+def _make_ext_layout(features):
+    return [{
+        "layerType": "planning_zone",
+        "data": {"type": "FeatureCollection", "features": features},
+    }]
+
+
+class TestAdjacencyCompatibility:
+
+    def test_no_adjacency_graph_skips_check(self):
+        layout = _make_ext_layout([
+            _make_ext_zone_feature("生态保护区", 100.0, 0),
+        ])
+        validator = LayoutValidator()
+        report = validator.validate(layout)
+        adj_check = next(c for c in report.checks if c.check_name == "adjacency_compatibility")
+        assert adj_check.passed
+
+    def test_high_compatibility_passes(self):
+        adj = MockAdjacencyGraph({
+            "a": {"b", "c"},
+            "b": {"a", "c"},
+            "c": {"a", "b"},
+        })
+        features = [
+            _make_ext_zone_feature("生态保护区", 100.0, 0),
+            _make_ext_zone_feature("生态保护区", 80.0, 1),
+            _make_ext_zone_feature("生态保护区", 90.0, 2),
+        ]
+        features[0]["properties"]["composite_key"] = "a"
+        features[1]["properties"]["composite_key"] = "b"
+        features[2]["properties"]["composite_key"] = "c"
+        layout = _make_ext_layout(features)
+
+        validator = LayoutValidator()
+        report = validator.validate(layout, adjacency_graph=adj)
+        adj_check = next(c for c in report.checks if c.check_name == "adjacency_compatibility")
+        assert adj_check.passed
+
+    def test_low_compatibility_warns(self):
+        adj = MockAdjacencyGraph({
+            "a": {"b"},
+            "b": {"a"},
+        })
+        features = [
+            _make_ext_zone_feature("生态保护区", 100.0, 0),
+            _make_ext_zone_feature("村庄建设区", 30.0, 1),
+        ]
+        features[0]["properties"]["composite_key"] = "a"
+        features[1]["properties"]["composite_key"] = "b"
+        layout = _make_ext_layout(features)
+
+        validator = LayoutValidator()
+        report = validator.validate(layout, adjacency_graph=adj)
+        adj_check = next(c for c in report.checks if c.check_name == "adjacency_compatibility")
+        assert not adj_check.passed
+        assert adj_check.violations[0].severity == "warning"
+
+    def test_compatibility_rate_calculation(self):
+        adj = MockAdjacencyGraph({
+            "a": {"b", "c", "d"},
+            "b": {"a", "c"},
+            "c": {"a", "b"},
+            "d": {"a"},
+        })
+        features = [
+            _make_ext_zone_feature("生态保护区", 100.0, 0),
+            _make_ext_zone_feature("生态保护区", 80.0, 1),
+            _make_ext_zone_feature("村庄建设区", 30.0, 2),
+            _make_ext_zone_feature("生态保护区", 90.0, 3),
+        ]
+        features[0]["properties"]["composite_key"] = "a"
+        features[1]["properties"]["composite_key"] = "b"
+        features[2]["properties"]["composite_key"] = "c"
+        features[3]["properties"]["composite_key"] = "d"
+        layout = _make_ext_layout(features)
+
+        validator = LayoutValidator()
+        report = validator.validate(layout, adjacency_graph=adj)
+        adj_check = next(c for c in report.checks if c.check_name == "adjacency_compatibility")
+        assert adj_check.passed  # 50% > 30% threshold
+
+
+class TestSpatialCompactness:
+
+    def test_uniform_distribution_passes(self):
+        features = [
+            _make_ext_zone_feature("生态保护区", 10.0, i)
+            for i in range(20)
+        ]
+        layout = _make_ext_layout(features)
+
+        validator = LayoutValidator()
+        report = validator.validate(layout)
+        compact_check = next(c for c in report.checks if c.check_name == "spatial_compactness")
+        assert compact_check.passed
+
+    def test_highly_skewed_warns(self):
+        features = [
+            _make_ext_zone_feature("生态保护区", 1000.0, 0),
+        ] + [
+            _make_ext_zone_feature("生态保护区", 0.01, i + 1)
+            for i in range(20)
+        ]
+        layout = _make_ext_layout(features)
+
+        validator = LayoutValidator()
+        report = validator.validate(layout)
+        compact_check = next(c for c in report.checks if c.check_name == "spatial_compactness")
+        if not compact_check.passed:
+            assert compact_check.violations[0].severity == "warning"
+
+    def test_empty_layout_skips(self):
+        layout = _make_ext_layout([])
+        validator = LayoutValidator()
+        report = validator.validate(layout)
+        compact_check = next(c for c in report.checks if c.check_name == "spatial_compactness")
+        assert compact_check.passed

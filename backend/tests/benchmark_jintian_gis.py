@@ -21,9 +21,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
+from app.core.settings import JINTIAN_GIS_DIR
+
 # 项目路径
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-JINTIAN_DIR = PROJECT_ROOT / "docs" / "gis" / "jintian_boundary"
+JINTIAN_DIR = JINTIAN_GIS_DIR
 L3_REPORT_PATH = (
     PROJECT_ROOT / "output" / "experiments" / "rag" / "g1" / "iter0" / "layer3_reports.json"
 )
@@ -79,16 +81,16 @@ def _load_geojson(path: Path) -> Dict[str, Any]:
 
 def load_gis_data() -> Dict[str, Any]:
     return {
-        "boundary_geojson": _load_geojson(JINTIAN_DIR / "boundary.geojson"),
-        "landuse_current_geojson": _load_geojson(JINTIAN_DIR / "landuse_current.geojson"),
+        "boundary_geojson": _load_geojson(JINTIAN_DIR / "current" / "boundary.geojson"),
+        "landuse_current_geojson": _load_geojson(JINTIAN_DIR / "current" / "landuse.geojson"),
         "protection_zones": {
-            "farmland": _load_geojson(JINTIAN_DIR / "farmland_protection.geojson"),
-            "ecological": _load_geojson(JINTIAN_DIR / "ecological_protection.geojson"),
-            "historical": _load_geojson(JINTIAN_DIR / "historical_protection.geojson"),
+            "farmland": _load_geojson(JINTIAN_DIR / "planned" / "farmland_protection.geojson"),
+            "ecological": _load_geojson(JINTIAN_DIR / "planned" / "ecological_protection.geojson"),
+            "historical": _load_geojson(JINTIAN_DIR / "planned" / "historical_protection.geojson"),
         },
-        "road_geojson": _load_geojson(JINTIAN_DIR / "road_current.geojson"),
-        "construction_zone_geojson": _load_geojson(JINTIAN_DIR / "construction_zone.geojson"),
-        "hazard_points_geojson": _load_geojson(JINTIAN_DIR / "geological_hazard_points.geojson"),
+        "road_geojson": _load_geojson(JINTIAN_DIR / "current" / "road.geojson"),
+        "construction_zone_geojson": _load_geojson(JINTIAN_DIR / "planned" / "construction_zone.geojson"),
+        "hazard_points_geojson": _load_geojson(JINTIAN_DIR / "planned" / "geological_hazard_points.geojson"),
     }
 
 

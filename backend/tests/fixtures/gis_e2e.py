@@ -1,6 +1,6 @@
 """GIS 端到端测试 fixtures — 真实金田村数据加载。
 
-加载 docs/gis/jintian_boundary/ 的 GeoJSON 和 output/experiments/rag/g1/iter0/layer3_reports.json，
+加载 data/gis/jintian/ 的 GeoJSON，
 转成 PlanningKG.build_from_reports 期望的格式 {dim_key: {"summary": {"metrics": {...}}, "content": "..."}}。
 """
 
@@ -12,9 +12,9 @@ from typing import Any, Dict, Optional
 
 import pytest
 
-# 项目根目录（backend/ 的父目录）
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-JINTIAN_DIR = PROJECT_ROOT / "docs" / "gis" / "jintian_boundary"
+from app.core.settings import JINTIAN_GIS_DIR, PROJECT_ROOT
+
+JINTIAN_DIR = JINTIAN_GIS_DIR
 L3_REPORT_PATH = PROJECT_ROOT / "output" / "experiments" / "rag" / "g1" / "iter0" / "layer3_reports.json"
 
 
@@ -26,12 +26,12 @@ def _load_geojson(path: Path) -> Dict[str, Any]:
 
 def load_landuse_current() -> Dict[str, Any]:
     """加载现状用地图斑（660 个地块，含 DLBM/DLMC/DLMJ）。"""
-    return _load_geojson(JINTIAN_DIR / "landuse_current.geojson")
+    return _load_geojson(JINTIAN_DIR / "current" / "landuse.geojson")
 
 
 def load_boundary() -> Dict[str, Any]:
     """加载村界边界（1 个 MultiPolygon，MJ=2352.89ha）。"""
-    return _load_geojson(JINTIAN_DIR / "boundary.geojson")
+    return _load_geojson(JINTIAN_DIR / "current" / "boundary.geojson")
 
 
 def load_protection_zones() -> Dict[str, Dict[str, Any]]:
@@ -41,25 +41,25 @@ def load_protection_zones() -> Dict[str, Dict[str, Any]]:
         {"farmland": {...}, "ecological": {...}, "historical": {...}}
     """
     return {
-        "farmland": _load_geojson(JINTIAN_DIR / "farmland_protection.geojson"),
-        "ecological": _load_geojson(JINTIAN_DIR / "ecological_protection.geojson"),
-        "historical": _load_geojson(JINTIAN_DIR / "historical_protection.geojson"),
+        "farmland": _load_geojson(JINTIAN_DIR / "planned" / "farmland_protection.geojson"),
+        "ecological": _load_geojson(JINTIAN_DIR / "planned" / "ecological_protection.geojson"),
+        "historical": _load_geojson(JINTIAN_DIR / "planned" / "historical_protection.geojson"),
     }
 
 
 def load_road_current() -> Dict[str, Any]:
     """加载现状道路（131 条 MultiLineString）。"""
-    return _load_geojson(JINTIAN_DIR / "road_current.geojson")
+    return _load_geojson(JINTIAN_DIR / "current" / "road.geojson")
 
 
 def load_construction_zone() -> Dict[str, Any]:
     """加载建设区（139 个 MultiPolygon）。"""
-    return _load_geojson(JINTIAN_DIR / "construction_zone.geojson")
+    return _load_geojson(JINTIAN_DIR / "planned" / "construction_zone.geojson")
 
 
 def load_hazard_points() -> Dict[str, Any]:
     """加载地质灾害点（40 个 Point）。"""
-    return _load_geojson(JINTIAN_DIR / "geological_hazard_points.geojson")
+    return _load_geojson(JINTIAN_DIR / "planned" / "geological_hazard_points.geojson")
 
 
 def load_l3_reports_raw() -> Dict[str, str]:
@@ -243,3 +243,19 @@ def gis_data() -> Dict[str, Optional[Dict[str, Any]]]:
 @pytest.fixture(scope="module")
 def real_intent() -> Dict[str, Any]:
     return make_real_intent()
+
+
+def build_gis_agent_state(
+    village_name: str = "金田村",
+    session_id: str = "test-gis-agent",
+) -> Dict[str, Any]:
+    """构建 gis_agent_node 期望的完整 state 字典。"""
+    return {
+        "config": {"village_name": village_name},
+        "session_id": session_id,
+        "session_id_raw": session_id,
+        "completed_dimensions": {},
+        "pipeline_trace": [],
+        "messages": [],
+        "user_uploaded_data": load_gis_data_for_agent(),
+    }

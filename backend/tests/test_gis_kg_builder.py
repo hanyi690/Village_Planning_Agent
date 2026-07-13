@@ -1,10 +1,14 @@
-"""Tests for PlanningKG P3 improvements — _compute_zone_areas_from_gis, get_adjacency_map, hardcoded elimination."""
+"""Tests for PlanningKG — zone area computation, adjacency, hardcoded elimination,
+entity/relationship completeness, reference chains, queries, serialization."""
 
 import pytest
 from unittest.mock import patch
 
-from app.services.modules.gis.layout.kg import PlanningKG
-from app.services.modules.gis.layout.kg.builder import ZONE_TYPE_PATTERNS
+from app.services.modules.gis.layout.kg import PlanningKG, EntityTypes, Relations
+from app.services.modules.gis.layout.kg.builder import ZONE_TYPE_PATTERNS, PLN
+from rdflib import RDF
+
+from tests.fixtures.gis_e2e import load_landuse_current
 
 
 # ============================================
@@ -259,3 +263,256 @@ class TestConstraintNoHardcodedValues:
         # (they may be close but not exact, since GIS computation differs)
         # At minimum, verify we have zone areas
         assert len(zone_areas) > 0, "Should have zone area values"
+
+
+# ============================================
+# Completeness Fixtures
+# ============================================
+
+@pytest.fixture(scope="module")
+def _minimal_reports_for_kg():
+    """Minimal L3 report data for KG completeness tests (matches original test_gis_kg_complete.py)."""
+    return {
+        "land_use_planning": {
+            "summary": {
+                "metrics": {
+                    "建设用地规模_公顷": 30.50,
+                    "耕地保有量_公顷": 78.83,
+                    "生态保护红线面积": 362.02,
+                    "规划期末人口": 1850,
+                    "人均建设用地": 164.86,
+                    "村集体年收入": 150000,
+                }
+            },
+            "content": (
+                "金田村规划实施农田整治项目，推进道路硬化工程，"
+                "建设公共服务设施项目，规划教育设施。"
+                "生态农业发展区和生态保育屏障区是重点区域。"
+            ),
+        }
+    }
+
+
+@pytest.fixture(scope="module")
+def kg_complete(landuse_geojson, _minimal_reports_for_kg, gis_data):
+    """Build a complete KG with all entity types for completeness tests."""
+    kg = PlanningKG(village_name="金田村")
+    kg.build_from_reports(
+        reports=_minimal_reports_for_kg,
+        landuse_geojson=landuse_geojson,
+        gis_data={"landuse_current_geojson": landuse_geojson},
+    )
+    return kg
+
+
+# ============================================
+# TestKGEntityTypes (from test_gis_kg_complete.py)
+# ============================================
+
+class TestKGEntityTypes:
+
+    def test_kg_has_parcel_entities(self, kg_complete):
+        parcels = list(kg_complete.g.subjects(RDF.type, EntityTypes.Parcel))
+        assert len(parcels) > 0
+
+    def test_kg_has_zone_entities(self, kg_complete):
+        zones = list(kg_complete.g.subjects(RDF.type, EntityTypes.Zone))
+        assert len(zones) > 0
+
+    def test_kg_has_constraint_entities(self, kg_complete):
+        constraints = list(kg_complete.g.subjects(RDF.type, EntityTypes.Constraint))
+        assert len(constraints) > 0
+
+    def test_kg_has_indicator_entities(self, kg_complete):
+        indicators = list(kg_complete.g.subjects(RDF.type, EntityTypes.Indicator))
+        assert len(indicators) > 0
+
+    def test_kg_has_project_entities(self, kg_complete):
+        projects = list(kg_complete.g.subjects(RDF.type, EntityTypes.Project))
+        assert len(projects) > 0
+
+    def test_kg_has_village_entity(self, kg_complete):
+        villages = list(kg_complete.g.subjects(RDF.type, EntityTypes.Village))
+        assert len(villages) >= 1
+
+    def test_kg_has_regulation_entities(self, kg_complete):
+        regulations = list(kg_complete.g.subjects(RDF.type, EntityTypes.Regulation))
+        assert len(regulations) > 0
+
+    def test_kg_has_facility_entities(self, kg_complete):
+        facilities = list(kg_complete.g.subjects(RDF.type, EntityTypes.Facility))
+        assert len(facilities) > 0
+
+    def test_kg_has_road_entities(self, kg_complete):
+        roads = list(kg_complete.g.subjects(RDF.type, EntityTypes.Road))
+        assert len(roads) > 0
+
+    def test_kg_has_water_body_entities(self, kg_complete):
+        waters = list(kg_complete.g.subjects(RDF.type, EntityTypes.WaterBody))
+        assert len(waters) > 0
+
+
+# ============================================
+# TestKGRelationshipTypes
+# ============================================
+
+class TestKGRelationshipTypes:
+
+    def test_kg_has_adjacent_to_relations(self, kg_complete):
+        triples = list(kg_complete.g.triples((None, Relations.adjacent_to, None)))
+        assert len(triples) > 0
+
+    def test_kg_has_located_in_relations(self, kg_complete):
+        triples = list(kg_complete.g.triples((None, Relations.located_in, None)))
+        assert len(triples) > 0
+
+    def test_kg_has_designated_as_relations(self, kg_complete):
+        triples = list(kg_complete.g.triples((None, Relations.designated_as, None)))
+        assert len(triples) > 0
+
+    def test_kg_has_achieves_relations(self, kg_complete):
+        triples = list(kg_complete.g.triples((None, Relations.achieves, None)))
+        assert len(triples) > 0
+
+    def test_kg_has_protects_relations(self, kg_complete):
+        triples = list(kg_complete.g.triples((None, Relations.protects, None)))
+        assert len(triples) > 0
+
+    def test_kg_has_serves_relations(self, kg_complete):
+        triples = list(kg_complete.g.triples((None, Relations.serves, None)))
+        assert len(triples) > 0
+
+    def test_kg_has_connects_relations(self, kg_complete):
+        triples = list(kg_complete.g.triples((None, Relations.connects, None)))
+        assert len(triples) > 0
+
+
+# ============================================
+# TestKGReferenceChains
+# ============================================
+
+class TestKGReferenceChains:
+
+    def test_project_indicator_chain(self, kg_complete):
+        achieves_triples = list(kg_complete.g.triples((None, Relations.achieves, None)))
+        assert len(achieves_triples) > 0
+
+    def test_regulation_zone_chain(self, kg_complete):
+        protects_triples = list(kg_complete.g.triples((None, Relations.protects, None)))
+        assert len(protects_triples) > 0
+
+    def test_parcel_zone_designated_chain(self, kg_complete):
+        designated = list(kg_complete.g.triples((None, Relations.designated_as, None)))
+        assert len(designated) > 0
+        for _, _, zone_uri in designated[:5]:
+            assert (zone_uri, RDF.type, EntityTypes.Zone) in kg_complete.g
+
+
+# ============================================
+# TestKGQueries
+# ============================================
+
+class TestKGQueries:
+
+    def test_get_all_projects_query(self, kg_complete):
+        results = kg_complete.query("""
+            PREFIX pln: <http://village-planning.org/ontology#>
+            SELECT ?project ?name ?source
+            WHERE {
+                ?project a pln:Project ;
+                         pln:name ?name .
+                OPTIONAL { ?project pln:source ?source . }
+            }
+        """)
+        assert len(results) > 0
+
+    def test_get_regulation_impacts_query(self, kg_complete):
+        results = kg_complete.query("""
+            PREFIX pln: <http://village-planning.org/ontology#>
+            SELECT ?reg ?reg_name ?zone_name
+            WHERE {
+                ?reg a pln:Regulation ;
+                     pln:name ?reg_name .
+                OPTIONAL {
+                    ?reg pln:protects ?zone .
+                    ?zone pln:name ?zone_name .
+                }
+            }
+        """)
+        assert len(results) > 0
+
+    def test_get_facility_serve_areas_query(self, kg_complete):
+        results = kg_complete.query("""
+            PREFIX pln: <http://village-planning.org/ontology#>
+            SELECT ?facility ?name ?serves
+            WHERE {
+                ?facility a pln:Facility ;
+                          pln:name ?name ;
+                          pln:serves ?serves .
+            }
+        """)
+        assert len(results) > 0
+
+    def test_get_road_network_query(self, kg_complete):
+        results = kg_complete.query("""
+            PREFIX pln: <http://village-planning.org/ontology#>
+            SELECT ?road ?name
+            WHERE {
+                ?road a pln:Road ;
+                      pln:name ?name .
+            }
+        """)
+        assert len(results) > 0
+
+    def test_get_designated_zones_query(self, kg_complete):
+        results = kg_complete.query("""
+            PREFIX pln: <http://village-planning.org/ontology#>
+            SELECT ?parcel ?bsm ?zone_name
+            WHERE {
+                ?parcel a pln:Parcel ;
+                        pln:bsm ?bsm ;
+                        pln:designated_as ?zone .
+                ?zone pln:name ?zone_name .
+            }
+            LIMIT 10
+        """)
+        assert len(results) > 0
+
+    def test_count_entity_types_query(self, kg_complete):
+        results = kg_complete.query("""
+            PREFIX pln: <http://village-planning.org/ontology#>
+            SELECT ?type (COUNT(?entity) as ?count)
+            WHERE {
+                ?entity a ?type .
+            }
+            GROUP BY ?type
+            ORDER BY DESC(?count)
+        """)
+        type_names = {r.get("type", "") for r in results}
+        assert len(type_names) >= 8, f"Expected 8+ entity types, got {len(type_names)}"
+
+
+# ============================================
+# TestKGTripleCount
+# ============================================
+
+class TestKGTripleCount:
+
+    def test_triple_count_increased(self, kg_complete):
+        count = kg_complete.get_triple_count()
+        assert count >= 1500, f"Triple count too low: {count} (expected 1500+)"
+
+
+# ============================================
+# TestKGSerialization
+# ============================================
+
+class TestKGSerialization:
+
+    def test_turtle_roundtrip_preserves_entity_types(self, kg_complete):
+        turtle = kg_complete.to_turtle()
+        kg2 = PlanningKG.from_turtle(turtle, village_name="金田村")
+        for etype in [EntityTypes.Parcel, EntityTypes.Zone, EntityTypes.Constraint,
+                      EntityTypes.Project, EntityTypes.Regulation, EntityTypes.Road]:
+            count = len(list(kg2.g.subjects(RDF.type, etype)))
+            assert count > 0, f"Entity type {etype} lost in roundtrip"
