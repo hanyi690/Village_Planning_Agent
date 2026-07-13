@@ -50,18 +50,14 @@ frontend/logs/
 
 # Database and data files
 data/
+!data/gis/
+data/gis/jintian/output/
 
 results/
 
 # GIS output directories
 output/
-docs/gis/output/
-docs/gis_analysis_verification/
-docs/gis/geojson_data/*.geojson
-docs/gis/geojson_data/*.json
-docs/gis/jintian_boundary/*.geojson
-docs/gis/jintian_boundary/*.json
-docs/gis/jintian_dxf/
+data/gis/jintian/output/
 frontend/public/test-data/
 
 # Next.js
