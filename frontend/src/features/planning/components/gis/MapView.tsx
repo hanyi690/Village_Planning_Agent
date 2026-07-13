@@ -10,7 +10,7 @@
 
 import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import Map, { Source, Layer, Popup } from 'react-map-gl/maplibre';
-import type { FillLayerSpecification, LineLayerSpecification, CircleLayerSpecification, StyleSpecification, ExpressionSpecification } from 'maplibre-gl';
+import type { FillLayerSpecification, LineLayerSpecification, CircleLayerSpecification, SymbolLayerSpecification, StyleSpecification, ExpressionSpecification } from 'maplibre-gl';
 import type { MapRef, MapLayerMouseEvent } from 'react-map-gl/maplibre';
 import type { FeatureCollection, Geometry, Position, Feature, GeoJsonProperties } from 'geojson';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -27,7 +27,7 @@ function FeaturePopupContent({
 }: {
   feature: Feature<Geometry, GeoJsonProperties>;
   layerName: string;
-  layerType: string;
+  layerType: LayerType;
 }) {
   const properties = feature.properties || {};
 
@@ -134,10 +134,15 @@ const LAYER_PRIORITY: Record<string, number> = {
   'infrastructure': 1,
   'sensitivity_zone': 2,
   'function_zone': 3,
+  'farmland_protection': 3.5,
+  'ecological_redline': 3.6,
+  'historical_protection': 3.7,
+  'construction_zone': 3.8,
   'planning_zone': 4,
   'isochrone': 5,
   'development_axis': 6,
   'facility_point': 7,
+  'annotation': 8,
 };
 
 // Helper: check if features have per-feature color
@@ -187,7 +192,7 @@ export default function MapView({
     latitude: number;
     feature: Feature<Geometry, GeoJsonProperties>;
     layerName: string;
-    layerType: string;
+    layerType: LayerType;
   } | null>(null);
 
   useEffect(() => {
@@ -206,7 +211,7 @@ export default function MapView({
     const sourceId = (feature.source as string) || '';
     const layerMatch = sourceId.match(/layer-\d+-(.+)/);
     const layerName = layerMatch?.[1] || '未知图层';
-    const layerType = filteredLayers.find(l => l.layerName === layerName)?.layerType || 'custom';
+    const layerType = filteredLayers.find(l => l.layerName === layerName)?.layerType || 'boundary' as LayerType;
 
     setPopupInfo({
       longitude: coordinates.lng,
@@ -471,6 +476,77 @@ export default function MapView({
           },
         };
         return [fillLayer, lineLayer];
+      } else if (layer.layerType === 'ecological_redline') {
+        const lineLayer: LineLayerSpecification = {
+          id: `${sourceId}-line`,
+          type: 'line',
+          source: sourceId,
+          paint: {
+            'line-color': '#FF0000',
+            'line-width': 2.5,
+            'line-dasharray': [6, 3],
+            'line-opacity': 0.9,
+          },
+        };
+        return [lineLayer];
+      } else if (layer.layerType === 'farmland_protection') {
+        const fillLayer: FillLayerSpecification = {
+          id: `${sourceId}-fill`,
+          type: 'fill',
+          source: sourceId,
+          paint: { 'fill-color': '#C8E6C9', 'fill-opacity': 0.15 },
+        };
+        const lineLayer: LineLayerSpecification = {
+          id: `${sourceId}-line`,
+          type: 'line',
+          source: sourceId,
+          paint: { 'line-color': '#00AA00', 'line-width': 2, 'line-opacity': 0.9 },
+        };
+        return [fillLayer, lineLayer];
+      } else if (layer.layerType === 'historical_protection') {
+        const lineLayer: LineLayerSpecification = {
+          id: `${sourceId}-line`,
+          type: 'line',
+          source: sourceId,
+          paint: {
+            'line-color': '#FF8800',
+            'line-width': 2,
+            'line-dasharray': [2, 3, 6, 3],
+            'line-opacity': 0.9,
+          },
+        };
+        return [lineLayer];
+      } else if (layer.layerType === 'construction_zone') {
+        const fillLayer: FillLayerSpecification = {
+          id: `${sourceId}-fill`,
+          type: 'fill',
+          source: sourceId,
+          paint: { 'fill-color': '#FF4444', 'fill-opacity': 0.2 },
+        };
+        const lineLayer: LineLayerSpecification = {
+          id: `${sourceId}-line`,
+          type: 'line',
+          source: sourceId,
+          paint: { 'line-color': '#FF0000', 'line-width': 1.5, 'line-opacity': 0.9 },
+        };
+        return [fillLayer, lineLayer];
+      } else if (layer.layerType === 'annotation') {
+        const symbolLayer: SymbolLayerSpecification = {
+          id: `${sourceId}-symbol`,
+          type: 'symbol',
+          source: sourceId,
+          layout: {
+            'text-field': ['get', '注记'] as ExpressionSpecification,
+            'text-size': 12,
+            'text-anchor': 'center',
+          },
+          paint: {
+            'text-color': '#333333',
+            'text-halo-color': '#FFFFFF',
+            'text-halo-width': 1,
+          },
+        };
+        return [symbolLayer];
       }
       // Default: fill + line for unknown layer types
       const defaultFill: FillLayerSpecification = {
@@ -566,13 +642,13 @@ export default function MapView({
   }
 
   return (
-    <div className="rounded-lg overflow-hidden border border-gray-200">
+    <div className="rounded-lg overflow-hidden border border-gray-200 flex flex-col" style={{ height }}>
       {title && (
         <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
           <h3 className="text-sm font-medium text-gray-700">{title}</h3>
         </div>
       )}
-      <div style={{ height, position: 'relative' }}>
+      <div className="flex-1 min-h-0 relative">
         <Map
           ref={mapRef}
           reuseMaps

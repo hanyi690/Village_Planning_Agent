@@ -53,10 +53,12 @@ const ALL_LAYER_TYPES = new Set(Object.keys(LAYER_TYPE_LABELS) as LayerType[]);
 function GisUploadButton({
   uploading,
   onClick,
+  uploadedTypes,
   size = 'sm',
 }: {
   uploading: boolean;
   onClick: () => void;
+  uploadedTypes?: string[];
   size?: 'sm' | 'md';
 }) {
   const cls = size === 'md'
@@ -64,15 +66,24 @@ function GisUploadButton({
     : 'p-1.5 rounded bg-white/90 border border-slate-200 hover:bg-white text-slate-500 hover:text-slate-700 transition-colors shadow-sm disabled:opacity-50';
   const spinnerSize = size === 'md' ? 'w-4 h-4' : 'w-3 h-3';
   const iconSize = size === 'md' ? 16 : 12;
+  const hasData = uploadedTypes && uploadedTypes.length > 0;
 
   return (
-    <button onClick={onClick} disabled={uploading} className={cls} title="上传 GIS 数据">
-      {uploading ? (
-        <div className={`${spinnerSize} border-2 border-slate-400 border-t-transparent rounded-full animate-spin`} />
-      ) : (
-        <FontAwesomeIcon icon={faUpload} style={{ width: iconSize, height: iconSize }} />
+    <div className="relative">
+      <button onClick={onClick} disabled={uploading} className={cls} title="上传 GIS 数据">
+        {uploading ? (
+          <div className={`${spinnerSize} border-2 border-slate-400 border-t-transparent rounded-full animate-spin`} />
+        ) : (
+          <FontAwesomeIcon icon={faUpload} style={{ width: iconSize, height: iconSize }} />
+        )}
+      </button>
+      {hasData && !uploading && (
+        <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-500 flex items-center justify-center ring-1 ring-white"
+              title={`已上传: ${uploadedTypes!.join(', ')}`}>
+          <span className="text-white text-[7px] leading-none">&#10003;</span>
+        </span>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -88,6 +99,8 @@ export default function ProcessPanel() {
   const setFullMapOpen = usePlanningStore((state) => state.setFullMapOpen);
   const pipelineTrace = usePlanningStore((state) => state.pipelineTrace);
   const villageCenter = usePlanningStore((state) => state.villageCenter);
+  const uploadedGisDataTypes = usePlanningStore((state) => state.uploadedGisDataTypes);
+  const setUploadedGisDataTypes = usePlanningStore((state) => state.setUploadedGisDataTypes);
 
   // Layer visibility state
   const [visibleLayerTypes, setVisibleLayerTypes] = useState<Set<LayerType>>(ALL_LAYER_TYPES);
@@ -115,12 +128,12 @@ export default function ProcessPanel() {
     if (!file || !sessionId) return;
     setUploading(true);
     try {
-      await planningApi.uploadGisData(sessionId, file);
-      const statusData = await planningApi.getStatus(sessionId);
-      if (statusData.gis_layout_configs && statusData.gis_layout_configs.length > 0) {
-        usePlanningStore.getState().addGisLayersFromUpload(
-          statusData.gis_layout_configs as Array<Record<string, unknown>>,
-        );
+      const uploadResult = await planningApi.uploadGisData(sessionId, file);
+      // Track uploaded data type in store (layers arrive via gis_layer_update SSE)
+      if (uploadResult && uploadResult.data_type) {
+        const currentTypes = usePlanningStore.getState().uploadedGisDataTypes;
+        const updated = [...new Set([...currentTypes, uploadResult.data_type])];
+        usePlanningStore.getState().setUploadedGisDataTypes(updated);
       }
     } catch (err) {
       console.error('GIS upload failed:', err);
@@ -378,6 +391,7 @@ export default function ProcessPanel() {
                           <GisUploadButton
                             uploading={uploading}
                             onClick={() => fileInputRef.current?.click()}
+                            uploadedTypes={uploadedGisDataTypes}
                           />
                           <button
                             onClick={() => setFullMapOpen(true)}
@@ -405,18 +419,33 @@ export default function ProcessPanel() {
                           zoom={villageCenter ? 13 : 4}
                           showLegend={false}
                         />
+                        {/* Data missing overlay */}
+                        {uploadedGisDataTypes.length === 0 && (
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                            <div className="bg-white/90 rounded-lg px-4 py-2 shadow-md text-sm text-slate-500">
+                              &#128206; 请上传村庄边界和现状用地 GeoJSON 数据
+                            </div>
+                          </div>
+                        )}
                         {/* Upload button */}
                         <div className="absolute top-2 right-2 z-20">
                           <GisUploadButton
                             uploading={uploading}
                             onClick={() => fileInputRef.current?.click()}
+                            uploadedTypes={uploadedGisDataTypes}
                           />
                         </div>
                       </div>
                       <div className="shrink-0 px-3 py-2 border-t border-slate-100 text-center">
-                        <p className="text-xs text-slate-400">
-                          完成L3详细规划审查后，点击"生成空间布局"生成规划图层
-                        </p>
+                        {uploadedGisDataTypes.length === 0 ? (
+                          <p className="text-xs text-slate-400">
+                            请上传村庄边界和现状用地数据，完成L3详细规划后可生成空间布局
+                          </p>
+                        ) : (
+                          <p className="text-xs text-slate-400">
+                            数据就绪（{uploadedGisDataTypes.includes('boundary') ? '边界' : ''}{uploadedGisDataTypes.includes('boundary') && uploadedGisDataTypes.includes('landuse_current') ? '、' : ''}{uploadedGisDataTypes.includes('landuse_current') ? '用地' : ''}），完成L3详细规划后可生成布局
+                          </p>
+                        )}
                       </div>
                     </>
                   )}

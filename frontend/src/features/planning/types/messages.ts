@@ -224,7 +224,7 @@ export interface GeoJsonFeatureCollection {
  */
 export interface GISLayerConfig {
   geojson: GeoJsonFeatureCollection;
-  layerType: 'boundary' | 'function_zone' | 'facility_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone' | 'infrastructure' | 'planning_zone' | 'settlement_zone';
+  layerType: 'boundary' | 'function_zone' | 'facility_point' | 'development_axis' | 'sensitivity_zone' | 'isochrone' | 'infrastructure' | 'planning_zone' | 'settlement_zone' | 'ecological_redline' | 'farmland_protection' | 'historical_protection' | 'construction_zone' | 'annotation';
   layerName: string;
   color?: string;
   style?: {

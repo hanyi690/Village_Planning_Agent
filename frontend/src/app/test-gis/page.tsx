@@ -338,7 +338,7 @@ function TestGISPageContent() {
             <li><strong>服务状态</strong>: 顶部指示器显示 API Key 和依赖可用性</li>
           </ul>
           <div className="mt-2 text-xs text-yellow-600">
-            后端: /api/dev/gis/* · 数据: docs/gis/jintian_boundary/
+            后端: /api/dev/gis/* · 数据: data/gis/jintian/
           </div>
         </div>
       </main>

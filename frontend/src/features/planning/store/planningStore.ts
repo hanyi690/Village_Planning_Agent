@@ -312,6 +312,7 @@ export interface PlanningState {
   isFullMapOpen: boolean;
   gisTriggerPending: boolean;
   villageCenter?: [number, number];
+  uploadedGisDataTypes: string[];  // 已上传的 GIS 数据类型
 }
 
 // ============================================
@@ -451,6 +452,7 @@ function createInitialState(conversationId: string): PlanningState {
     isFullMapOpen: false,
     gisTriggerPending: false,
     villageCenter: undefined,
+    uploadedGisDataTypes: [],
   };
 }
 
@@ -571,6 +573,7 @@ export interface PlanningActions {
 
   // GIS
   setFullMapOpen: (open: boolean) => void;
+  setUploadedGisDataTypes: (types: string[]) => void;
 
   // ============================================
   // NEW: Layer-level RAG Configuration
@@ -1580,6 +1583,14 @@ function handleSSEEventInStore(state: PlanningState, event: StoreEvent): void {
       const key = `${gisUpdateData.layer}_${gisUpdateData.dimensionKey}`;
       if (gisUpdateData.layers) {
         state.gisLayers[key] = gisUpdateData.layers as GISLayerConfig[];
+        // P2: Auto-detect uploaded data types from layer metadata
+        const layers = gisUpdateData.layers as GISLayerConfig[];
+        const detected = new Set(state.uploadedGisDataTypes);
+        for (const l of layers) {
+          if (l.layerType === 'boundary') detected.add('boundary');
+          else if (l.layerType === 'function_zone') detected.add('landuse_current');
+        }
+        state.uploadedGisDataTypes = [...detected];
       }
       // Auto-activate map tab on first GIS data arrival
       const hadNoGisData = Object.keys(state.gisLayers).length === 0;
@@ -2161,6 +2172,11 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
         state.isFullMapOpen = open;
       }),
 
+    setUploadedGisDataTypes: (types) =>
+      set((state) => {
+        state.uploadedGisDataTypes = types;
+      }),
+
     // ============================================
     // Layer-level RAG Configuration
     // ============================================
@@ -2179,6 +2195,8 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
       set((state) => {
         const newState = createInitialState(state.conversationId);
         newState.villages = state.villages;
+        // Preserve uploaded GIS data types across conversation resets
+        newState.uploadedGisDataTypes = state.uploadedGisDataTypes;
         Object.assign(state, newState);
       }),
 
@@ -2192,6 +2210,8 @@ export const usePlanningStore = create<PlanningState & PlanningActions>()(
 
         const newState = createInitialState(conversationId);
         newState.villages = state.villages;
+        // Preserve uploaded GIS data types across re-init
+        newState.uploadedGisDataTypes = state.uploadedGisDataTypes;
         Object.assign(state, newState);
       }),
   })),

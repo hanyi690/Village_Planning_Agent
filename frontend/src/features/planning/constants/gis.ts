@@ -111,6 +111,27 @@ export const PLANNING_COLORS = {
     '道路': { stroke: '#666666', width: 2, label: '道路' },
     '河流': { stroke: '#00BFFF', width: 2.5, label: '河流' },
   },
+  // Three-line control: ecological redline (生态保护红线 — 红色虚线，无填充)
+  ecological_redline: {
+    '生态保护红线': { stroke: '#FF0000', width: 2.5, fillOpacity: 0, label: '生态保护红线', lineStyle: 'dash' },
+  },
+  // Three-line control: permanent farmland (永久基本农田 — 绿色实线，浅绿填充)
+  farmland_protection: {
+    '永久基本农田': { fill: '#C8E6C9', stroke: '#00AA00', label: '永久基本农田', fillOpacity: 0.15 },
+  },
+  // Three-line control: historical protection (历史文化保护线 — 橙色点划线，无填充)
+  historical_protection: {
+    '历史文化保护线': { stroke: '#FF8800', width: 2, fillOpacity: 0, label: '历史文化保护线', lineStyle: 'dot-dash' },
+  },
+  // Construction zone (有条件建设区 — 红色填充+红色边框)
+  construction_zone: {
+    '有条件建设区': { fill: '#FF4444', stroke: '#FF0000', label: '有条件建设区', fillOpacity: 0.2 },
+  },
+  // Annotation styles (注记 — 文字标注)
+  annotation: {
+    '现状注记': { stroke: '#333333', width: 1, label: '现状注记' },
+    '规划注记': { stroke: '#0066CC', width: 1, label: '规划注记' },
+  },
 } as const;
 
 // Default fallback colors
@@ -134,6 +155,11 @@ export const LAYER_TYPE_LABELS: Record<LayerType, string> = {
   planning_zone: '规划分区',
   development_axis: '发展轴',
   settlement_zone: '居民点分类',
+  ecological_redline: '生态保护红线',
+  farmland_protection: '永久基本农田',
+  historical_protection: '历史文化保护线',
+  construction_zone: '有条件建设区',
+  annotation: '注记',
 };
 
 // Legend item interface (matching LegendPanel component expectations)
@@ -153,9 +179,14 @@ export function getLegendForLayerType(layerType: LayerType): LegendItem[] {
   if (!layerColors) return items;
 
   // Determine geometry type based on layer type
+  const lineLayerTypes: LayerType[] = [
+    'boundary', 'development_axis', 'infrastructure',
+    'ecological_redline', 'historical_protection', 'annotation',
+  ];
+  const pointLayerTypes: LayerType[] = ['facility_point'];
   const type: 'polygon' | 'line' | 'point' =
-    layerType === 'boundary' || layerType === 'development_axis' || layerType === 'infrastructure' ? 'line' :
-    layerType === 'facility_point' ? 'point' : 'polygon';
+    lineLayerTypes.includes(layerType) ? 'line' :
+    pointLayerTypes.includes(layerType) ? 'point' : 'polygon';
 
   for (const [key, colors] of Object.entries(layerColors)) {
     const colorConfig = colors as FeatureColors | LineColors;
