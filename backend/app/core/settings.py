@@ -56,6 +56,10 @@ DATA_DIR = PROJECT_ROOT / "data"
 KNOWLEDGE_BASE_DIR = DATA_DIR / "knowledge_base"
 DATABASE_DIR = DATA_DIR / "database"
 
+# GIS data directory (village-level spatial data organized by current/planned/api)
+GIS_DATA_DIR = DATA_DIR / "gis"
+JINTIAN_GIS_DIR = GIS_DATA_DIR / "jintian"
+
 # RAG Document Cache (unified under data/RAG_doc/_cache/)
 RAG_DOC_DIR = DATA_DIR / "RAG_doc"
 RAG_CACHE_DIR = RAG_DOC_DIR / "_cache"
@@ -251,6 +255,7 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_DIR = PROJECT_ROOT / "logs"
 LOG_FILE_MAX_BYTES = int(os.getenv("LOG_FILE_MAX_BYTES", str(10 * 1024 * 1024)))  # 10MB
 LOG_FILE_BACKUP_COUNT = int(os.getenv("LOG_FILE_BACKUP_COUNT", "7"))
+LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "30"))  # 自动清理 N 天前的日志
 
 # ==========================================
 # Backend Session Configuration (from constants/config.py)

@@ -99,6 +99,30 @@ def _infer_geojson_data_type(geojson: Dict[str, Any]) -> Optional[str]:
     if "住宅" in name or "residential" in layer:
         return "residential"
 
+    # Check common field names in Chinese GIS data
+    djzqmc = str(props.get("DJZQMC", "")).lower()
+    ysdm = str(props.get("YSDM", "")).lower()
+    if "村" in djzqmc or "委" in djzqmc:
+        return "boundary"
+    if "用地" in name or "landuse" in layer:
+        return "landuse_current"
+
+    return None
+
+
+def _infer_data_type_from_filename(filename: str) -> Optional[str]:
+    """Infer GIS data type from filename patterns."""
+    lower = filename.lower()
+    if "boundary" in lower or "边界" in lower:
+        return "boundary"
+    if "landuse" in lower or "用地" in lower or "现状" in lower:
+        return "landuse_current"
+    if "road" in lower or "道路" in lower:
+        return "road"
+    if "water" in lower or "水" in lower or "河流" in lower:
+        return "water"
+    if "residential" in lower or "住宅" in lower or "居民" in lower:
+        return "residential"
     return None
 
 
@@ -770,8 +794,15 @@ async def get_session_status(session_id: str):
 
     checkpoint_state = await PlanningRuntimeService.aget_state(session_id)
     state = dict(checkpoint_state.values) if checkpoint_state and checkpoint_state.values else {}
-    # Detect interrupt state from snapshot.next
-    is_interrupted = bool(checkpoint_state and checkpoint_state.next)
+    # Detect interrupt state from snapshot.tasks with non-empty interrupts.
+    # snapshot.next is truthy after aupdate_state(as_node="__start__") —
+    # it means nodes are scheduled, NOT that the graph is interrupted.
+    # Correct check: any PregelTask with non-empty interrupts.
+    is_interrupted = bool(
+        checkpoint_state
+        and checkpoint_state.tasks
+        and any(getattr(t, 'interrupts', None) for t in checkpoint_state.tasks)
+    )
     return state_to_ui_status(state, db_session, is_interrupted=is_interrupted)
 
 
@@ -1353,8 +1384,10 @@ async def upload_gis_data(
             detail=f"GeoJSON parse failed: {parsed.get('parse_error', 'unknown error')}"
         )
 
-    # Determine data type: user hint > auto-inferred
+    # Determine data type: user hint > auto-inferred from properties > from filename
     final_data_type = data_type or parsed.get("gis_data_type")
+    if not final_data_type and file.filename:
+        final_data_type = _infer_data_type_from_filename(file.filename)
 
     # Store in database
     try:
@@ -1378,6 +1411,46 @@ async def upload_gis_data(
 
     # Note: uploaded GIS data is stored in DB via UploadedFile model.
     # The GIS agent will query it via get_uploaded_geojson_data_async() at execution time.
+
+    # Push gis_layer_update SSE event so frontend renders uploaded data immediately
+    try:
+        from app.utils.sse_publisher import SSEPublisher
+
+        gis_geojson = parsed.get("gis_data")
+        if gis_geojson and final_data_type:
+            _LAYER_TYPE_MAP = {
+                "boundary": "boundary",
+                "landuse_current": "function_zone",
+                "road": "infrastructure",
+                "water": "infrastructure",
+                "residential": "function_zone",
+            }
+            _LAYER_NAME_MAP = {
+                "boundary": "村庄边界",
+                "landuse_current": "现状用地",
+                "road": "道路网络",
+                "water": "水系",
+                "residential": "居民点",
+            }
+            frontend_layer_type = _LAYER_TYPE_MAP.get(final_data_type, "function_zone")
+            layer_name = _LAYER_NAME_MAP.get(final_data_type, final_data_type)
+
+            configs = [{
+                "geojson": gis_geojson,
+                "layerType": frontend_layer_type,
+                "layerName": layer_name,
+                "color": "#4ade80" if final_data_type == "boundary" else "#f59e0b",
+            }]
+
+            SSEPublisher.send_gis_layer_update(
+                session_id=session_id,
+                layer=1,
+                dimension_key=f"upload_{final_data_type}",
+                dimension_name="上传数据",
+                layers=configs,
+            )
+    except Exception as e:
+        logger.warning(f"[GIS Upload] SSE push failed: {e}")
 
     feature_count = len(parsed.get("gis_data", {}).get("features", []))
 

@@ -226,14 +226,9 @@ class LayoutValidateRequest(BaseModel):
 # ============================================
 
 def _jintian_data_dir() -> Path:
-    """Return path to docs/gis/jintian_boundary/."""
-    # Resolve relative to project root
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        candidate = parent / "docs" / "gis" / "jintian_boundary"
-        if candidate.is_dir():
-            return candidate
-    return Path("docs/gis/jintian_boundary")
+    """Return path to data/gis/jintian/."""
+    from app.core.settings import JINTIAN_GIS_DIR
+    return JINTIAN_GIS_DIR
 
 
 def _load_jintian_geojson(filename: str) -> Optional[Dict[str, Any]]:
@@ -327,7 +322,7 @@ async def locate_center(request: CenterRequest):
         )
         # Fallback to jintian boundary center if geocoding fails
         if center is None:
-            boundary = _load_jintian_geojson("boundary_current.geojson")
+            boundary = _load_jintian_geojson("current/boundary.geojson")
             if boundary:
                 try:
                     from shapely.geometry import shape
@@ -494,10 +489,10 @@ async def test_facility_validation(request: FacilityValidationRequest):
         analysis_params = {
             "population_points": [],
             "existing_facilities": [],
-            "land_use_data": _load_jintian_geojson("landuse_current.geojson"),
+            "land_use_data": _load_jintian_geojson("current/landuse.geojson"),
             "protection_zones": {
-                "farmland": _load_jintian_geojson("farmland_protection.geojson"),
-                "ecological": _load_jintian_geojson("ecological_protection.geojson"),
+                "farmland_protection": _load_jintian_geojson("farmland_protection.geojson"),
+                "ecological_redline": _load_jintian_geojson("ecological_protection.geojson"),
             },
             "hazard_zones": _load_jintian_geojson("geological_hazard_points.geojson"),
         }
@@ -516,8 +511,8 @@ async def test_ecological(request: EcologicalRequest):
     t0 = time.time()
     try:
         if request.use_jintian_data:
-            study_area = _load_jintian_geojson("boundary_current.geojson")
-            water = _load_jintian_geojson("wfs_hyda.geojson") or _load_jintian_geojson("landuse_current.geojson")
+            study_area = _load_jintian_geojson("current/boundary.geojson")
+            water = _load_jintian_geojson("wfs_hyda.geojson") or _load_jintian_geojson("current/landuse.geojson")
             if not study_area:
                 return {"success": False, "error": "jintian boundary data not found", "timing_ms": round((time.time() - t0) * 1000)}
 
@@ -581,9 +576,9 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
         from app.services.modules.gis.layout.engine import SpatialLayoutEngine
 
         # Load jintian data for the pipeline
-        boundary = _load_jintian_geojson("boundary_current.geojson")
-        landuse = _load_jintian_geojson("landuse_current.geojson")
-        road = _load_jintian_geojson("road_current.geojson")
+        boundary = _load_jintian_geojson("current/boundary.geojson")
+        landuse = _load_jintian_geojson("current/landuse.geojson")
+        road = _load_jintian_geojson("current/road.geojson")
         farmland = _load_jintian_geojson("farmland_protection.geojson")
         ecological = _load_jintian_geojson("ecological_protection.geojson")
         historical = _load_jintian_geojson("historical_protection.geojson")
@@ -689,8 +684,8 @@ async def test_landuse_change(request: LanduseChangeRequest):
     """Compare current vs planned landuse from jintian data."""
     t0 = time.time()
     try:
-        current = _load_jintian_geojson("landuse_current.geojson")
-        planned = _load_jintian_geojson("landuse_planned.geojson")
+        current = _load_jintian_geojson("current/landuse.geojson")
+        planned = _load_jintian_geojson("planned/landuse.geojson")
 
         if not current or not planned:
             return {"success": False, "error": "jintian landuse data not found", "timing_ms": round((time.time() - t0) * 1000)}
@@ -843,8 +838,8 @@ async def validate_layout(request: LayoutValidateRequest):
             from app.services.modules.gis.layout.engine import SpatialLayoutEngine
             from app.services.modules.gis.layout.planning_intent import UnifiedSpatialIntent
 
-            boundary = _load_jintian_geojson("boundary_current.geojson")
-            landuse = _load_jintian_geojson("landuse_current.geojson")
+            boundary = _load_jintian_geojson("current/boundary.geojson")
+            landuse = _load_jintian_geojson("current/landuse.geojson")
             if not boundary:
                 return {"success": False, "error": "jintian boundary data not found", "timing_ms": round((time.time() - t0) * 1000)}
 
@@ -1052,8 +1047,8 @@ async def parse_planning_text(request: ParseTextRequest):
         intent = _dict_to_intent(intent_json)
         engine = SpatialLayoutEngine()
 
-        boundary = _load_jintian_geojson("boundary_current.geojson")
-        landuse = _load_jintian_geojson("landuse_current.geojson")
+        boundary = _load_jintian_geojson("current/boundary.geojson")
+        landuse = _load_jintian_geojson("current/landuse.geojson")
 
         configs = engine.generate_layout(
             intent=intent,
@@ -1149,36 +1144,39 @@ async def list_jintian_files():
     if not data_dir.is_dir():
         return {"success": False, "error": "jintian data directory not found", "files": []}
 
-    # Map filenames to layer groups
+    # Map filenames to layer groups (new path structure: current/xxx.geojson, planned/xxx.geojson)
     GROUP_MAP = {
-        "boundary_current": "status", "road_current": "status",
-        "landuse_current": "status", "annotation_current": "status",
-        "boundary": "status",
-        "landuse_planned": "planned", "road_planned": "planned",
-        "annotation_planned": "planned",
-        "farmland_protection": "protection",
-        "ecological_protection": "protection",
-        "historical_protection": "protection",
-        "construction_zone": "planned",
-        "geological_hazard_points": "status",
-        "project_polygons": "planned", "project_lines": "planned",
-        "project_points": "planned", "project_annotation": "planned",
+        "current/boundary": "status", "current/road": "status",
+        "current/landuse": "status", "current/annotation": "status",
+        "current/admin_boundary_line": "status",
+        "planned/boundary": "status",
+        "planned/landuse": "planned", "planned/road": "planned",
+        "planned/annotation": "planned",
+        "planned/farmland_protection": "protection",
+        "planned/ecological_protection": "protection",
+        "planned/historical_protection": "protection",
+        "planned/construction_zone": "planned",
+        "planned/geological_hazard_points": "status",
+        "project/polygons": "planned", "project/lines": "planned",
+        "project/points": "planned", "project/annotation": "planned",
     }
 
     LAYER_TYPE_MAP = {
-        "boundary": "boundary", "boundary_current": "boundary",
-        "road": "infrastructure", "road_current": "infrastructure", "road_planned": "infrastructure",
-        "landuse": "function_zone", "landuse_current": "function_zone", "landuse_planned": "planning_zone",
-        "farmland_protection": "sensitivity_zone",
-        "ecological_protection": "sensitivity_zone",
-        "historical_protection": "sensitivity_zone",
-        "geological_hazard": "facility_point", "geological_hazard_points": "facility_point",
-        "construction_zone": "planning_zone",
+        "current/boundary": "boundary", "planned/boundary": "boundary",
+        "current/road": "infrastructure", "planned/road": "infrastructure",
+        "current/landuse": "function_zone", "planned/landuse": "planning_zone",
+        "planned/farmland_protection": "sensitivity_zone",
+        "planned/ecological_protection": "sensitivity_zone",
+        "planned/historical_protection": "sensitivity_zone",
+        "planned/geological_hazard_points": "facility_point",
+        "planned/construction_zone": "planning_zone",
     }
 
     files = []
-    for f in sorted(data_dir.glob("*.geojson")):
-        name = f.stem
+    for f in sorted(data_dir.rglob("*.geojson")):
+        # Use relative path as key (e.g., "current/boundary")
+        rel_path = str(f.relative_to(data_dir).with_suffix(""))
+        name = rel_path.replace("\\", "/")
         group = GROUP_MAP.get(name, "status")
         layer_type = LAYER_TYPE_MAP.get(name, "function_zone")
 
@@ -1191,7 +1189,7 @@ async def list_jintian_files():
             feature_count = 0
 
         files.append({
-            "filename": f.name,
+            "filename": str(f.relative_to(data_dir)).replace("\\", "/"),
             "name": name,
             "group": group,
             "layer_type": layer_type,
@@ -1201,12 +1199,14 @@ async def list_jintian_files():
     return {"success": True, "files": files}
 
 
-@router.get("/jintian/data/{filename}", summary="Get jintian GeoJSON file")
+@router.get("/jintian/data/{filename:path}", summary="Get jintian GeoJSON file")
 async def get_jintian_data(filename: str):
-    """Return a GeoJSON file from jintian_boundary directory."""
-    # Security: only allow .geojson files in the jintian_boundary dir
+    """Return a GeoJSON file from data/gis/jintian/ directory."""
+    # Security: only allow .geojson files, no path traversal
     if not filename.endswith(".geojson"):
         return {"success": False, "error": "Only .geojson files allowed"}
+    if ".." in filename:
+        return {"success": False, "error": "Path traversal not allowed"}
 
     data = _load_jintian_geojson(filename)
     if data is None:

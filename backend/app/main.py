@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 # Add parent directory to Python path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.core.settings import LOG_LEVEL, LOG_DIR, LOG_FILE_MAX_BYTES, LOG_FILE_BACKUP_COUNT, PROJECT_ROOT
+from app.core.settings import LOG_LEVEL, LOG_DIR, LOG_FILE_MAX_BYTES, LOG_FILE_BACKUP_COUNT, LOG_RETENTION_DAYS, PROJECT_ROOT
 from app.utils.logger import SessionFilter, ensure_log_dir
 
 # Ensure log directory exists before configuring handlers
@@ -56,23 +56,37 @@ LOGGING_CONFIG = {
             "filters": ["session_filter"],
             "stream": sys.stdout
         },
+        # 全量日志：按日轮转，保留 LOG_RETENTION_DAYS 天
         "file": {
-            "class": "logging.handlers.RotatingFileHandler",
+            "class": "logging.handlers.TimedRotatingFileHandler",
             "filename": str(LOG_DIR / "planning.log"),
-            "maxBytes": LOG_FILE_MAX_BYTES,
-            "backupCount": LOG_FILE_BACKUP_COUNT,
+            "when": "midnight",
+            "interval": 1,
+            "backupCount": max(LOG_RETENTION_DAYS, 7),
             "formatter": "session_aware",
             "filters": ["session_filter"],
             "encoding": "utf-8"
+        },
+        # 错误日志：单独文件，只记录 ERROR 及以上
+        "error_file": {
+            "class": "logging.handlers.TimedRotatingFileHandler",
+            "filename": str(LOG_DIR / "planning.error.log"),
+            "when": "midnight",
+            "interval": 1,
+            "backupCount": max(LOG_RETENTION_DAYS, 7),
+            "formatter": "session_aware",
+            "filters": ["session_filter"],
+            "encoding": "utf-8",
+            "level": logging.ERROR
         }
     },
     "root": {
         "level": getattr(logging, LOG_LEVEL, logging.INFO),
-        "handlers": ["console", "file"]
+        "handlers": ["console", "file", "error_file"]
     },
     "loggers": {
-        "uvicorn": {"level": "INFO", "handlers": ["console", "file"], "propagate": False},
-        "uvicorn.error": {"level": "INFO", "handlers": ["console", "file"], "propagate": False},
+        "uvicorn": {"level": "INFO", "handlers": ["console", "file", "error_file"], "propagate": False},
+        "uvicorn.error": {"level": "INFO", "handlers": ["console", "file", "error_file"], "propagate": False},
         "uvicorn.access": {"level": "INFO", "handlers": ["console"], "propagate": False},
         "httpx": {"level": "WARNING"},
         "httpcore": {"level": "WARNING"}
@@ -96,6 +110,28 @@ ALLOWED_ORIGINS = os.getenv(
 # Application Lifecycle
 # ============================================
 
+def _cleanup_old_logs():
+    """Delete log files older than LOG_RETENTION_DAYS."""
+    import glob
+    import time
+
+    cutoff = time.time() - LOG_RETENTION_DAYS * 86400
+    patterns = ["planning.log*", "planning.error.log*"]
+    deleted = 0
+
+    for pattern in patterns:
+        for path in glob.glob(str(LOG_DIR / pattern)):
+            try:
+                if os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+                    deleted += 1
+            except OSError:
+                pass
+
+    if deleted:
+        logger.info("🧹 Log cleanup: removed %d old log files (retention=%d days)", deleted, LOG_RETENTION_DAYS)
+
+
 async def _sse_cleanup_loop():
     """Periodic SSE session cleanup — removes expired session data every 10 minutes."""
     while True:
@@ -105,6 +141,16 @@ async def _sse_cleanup_loop():
             sse_manager.cleanup_expired_sessions()
         except Exception as e:
             logger.error(f"SSE cleanup failed: {e}")
+
+
+async def _log_cleanup_loop():
+    """Periodic log cleanup — runs once per day."""
+    while True:
+        await asyncio.sleep(86400)  # 24 hours
+        try:
+            _cleanup_old_logs()
+        except Exception as e:
+            logger.error(f"Log cleanup failed: {e}")
 
 
 @asynccontextmanager
@@ -141,17 +187,24 @@ async def lifespan(app: FastAPI):
 
     logger.info("✅ 后端服务启动完成")
 
+    # Startup log cleanup
+    _cleanup_old_logs()
+
     # Periodic SSE session cleanup (every 10 minutes)
     sse_cleanup_task = asyncio.create_task(_sse_cleanup_loop())
+    # Periodic log cleanup (every 24 hours)
+    log_cleanup_task = asyncio.create_task(_log_cleanup_loop())
 
     yield
 
-    # Cancel periodic cleanup
-    sse_cleanup_task.cancel()
-    try:
-        await sse_cleanup_task
-    except asyncio.CancelledError:
-        pass
+    # Cancel periodic cleanups
+    for task in [sse_cleanup_task, log_cleanup_task]:
+        task.cancel()
+    for task in [sse_cleanup_task, log_cleanup_task]:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     # Clean up resources
     logger.info("🧹 Cleaning up resources...")
