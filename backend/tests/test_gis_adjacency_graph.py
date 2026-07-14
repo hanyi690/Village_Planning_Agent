@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.modules.gis.layout.optimizer.adjacency_graph import AdjacencyGraph
+from app.services.modules.gis.optimizer.adjacency_graph import AdjacencyGraph
 from app.services.modules.gis.utils.geojson_utils import build_parcel_index
 from app.services.modules.gis.layout.zone_generator import resolve_zone_type_for_dlbm
 

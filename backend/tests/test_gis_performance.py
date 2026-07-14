@@ -15,11 +15,11 @@ import time
 
 import pytest
 
-from app.services.modules.gis.layout.optimizer.adjacency_graph import AdjacencyGraph
-from app.services.modules.gis.layout.optimizer.mip_allocator import MIPZoneAllocator
+from app.services.modules.gis.optimizer.adjacency_graph import AdjacencyGraph
+from app.services.modules.gis.optimizer.mip_allocator import MIPZoneAllocator
 from app.services.modules.gis.utils.geojson_utils import build_parcel_index
 from app.services.modules.gis.layout.zone_generator import resolve_zone_type_for_dlbm
-from app.services.modules.gis.layout.kg import PlanningKG
+from app.services.modules.gis.kg import PlanningKG
 
 from tests.fixtures.gis_e2e import load_landuse_current
 

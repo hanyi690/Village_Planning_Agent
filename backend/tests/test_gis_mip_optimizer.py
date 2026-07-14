@@ -17,8 +17,8 @@ import time
 
 import pytest
 
-from app.services.modules.gis.layout.optimizer.adjacency_graph import AdjacencyGraph
-from app.services.modules.gis.layout.optimizer.mip_allocator import MIPZoneAllocator
+from app.services.modules.gis.optimizer.adjacency_graph import AdjacencyGraph
+from app.services.modules.gis.optimizer.mip_allocator import MIPZoneAllocator
 from app.services.modules.gis.utils.geojson_utils import build_parcel_index
 from app.services.modules.gis.layout.zone_generator import resolve_zone_type_for_dlbm
 
@@ -209,7 +209,7 @@ class TestMIPQuality:
     def test_no_protected_parcels_in_construction(self, landuse_geojson, planning_targets,
                                                     adj_graph):
         """Protected DLBM parcels should not be assigned to construction zones."""
-        from app.services.modules.gis.layout.zone_schema import PROTECTED_DLBM_CODES
+        from app.services.modules.gis.zone_schema import PROTECTED_DLBM_CODES
 
         allocator = MIPZoneAllocator()
         geojson_result, _ = allocator.solve(
@@ -231,7 +231,7 @@ class TestMIPQuality:
 
     def test_dlbm_preference_respected(self, landuse_geojson, planning_targets):
         """Most parcels should be assigned to their native (cost=0) planning zone."""
-        from app.services.modules.gis.layout.optimizer.mip_allocator import dlbm_to_planning_zone
+        from app.services.modules.gis.optimizer.mip_allocator import dlbm_to_planning_zone
 
         allocator = MIPZoneAllocator()
         geojson_result, _ = allocator.solve(

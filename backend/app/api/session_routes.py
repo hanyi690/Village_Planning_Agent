@@ -1302,7 +1302,7 @@ async def geocode_village(
     3. POI search fallback
     4. County center fallback
     """
-    from app.services.modules.gis.fetcher import GISDataFetcher
+    from app.services.modules.gis.data.fetcher import GISDataFetcher
 
     # Build full address from hierarchy
     parts = [p for p in [province, city, county, township, village_name] if p]

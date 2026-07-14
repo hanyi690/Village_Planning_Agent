@@ -115,7 +115,7 @@ def load_l3_reports() -> Dict[str, Dict[str, Any]]:
 
 
 def make_jintian_intent() -> "UnifiedSpatialIntent":
-    from app.services.modules.gis.layout.planning_intent import (
+    from app.services.modules.gis.planning_intent import (
         Direction,
         UnifiedSpatialIntent,
         ZoneIntent,
@@ -361,7 +361,7 @@ def run_full_pipeline(
     reports: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Run the full SpatialLayoutEngine pipeline and return configs."""
-    from app.services.modules.gis.layout.engine import SpatialLayoutEngine
+    from app.services.modules.gis.engine import SpatialLayoutEngine
 
     engine = SpatialLayoutEngine()
 
@@ -686,7 +686,7 @@ class TestValidationReport:
     """Verify LayoutValidator produces useful results on real data."""
 
     def test_validation_on_layout(self, layout_with_reports):
-        from app.services.modules.gis.layout.validator import LayoutValidator
+        from app.services.modules.gis.validation.layout_validator import LayoutValidator
 
         validator = LayoutValidator()
         report = validator.validate(layout_with_reports)
@@ -694,7 +694,7 @@ class TestValidationReport:
         assert len(report.checks) == 8, f"预期 8 项检查，实际 {len(report.checks)}"
 
     def test_validation_report_structure(self, layout_with_reports):
-        from app.services.modules.gis.layout.validator import LayoutValidator
+        from app.services.modules.gis.validation.layout_validator import LayoutValidator
 
         validator = LayoutValidator()
         report = validator.validate(layout_with_reports)

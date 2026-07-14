@@ -1,7 +1,7 @@
 """Tests for LayoutValidator — 5 validation checks."""
 
 import pytest
-from app.services.modules.gis.layout.validator import (
+from app.services.modules.gis.validation.layout_validator import (
     LayoutValidator, ValidationReport, CheckResult, Violation,
     REQUIRED_ZONE_TYPES, MIN_ZONE_AREA_HA,
 )

@@ -473,7 +473,7 @@ def _compute_zone_ratios(anchors: MetricAnchors, gis_data: Optional[Dict[str, An
         return
 
     # Primary: re-map each parcel via DLBM_TO_PLANNING_ZONE for accurate 4-zone areas
-    from app.services.modules.gis.layout.zone_schema import dlbm_to_planning_zone
+    from app.services.modules.gis.zone_schema import dlbm_to_planning_zone
 
     zone_areas: Dict[str, float] = {}
     for feature in landuse.get("features", []):

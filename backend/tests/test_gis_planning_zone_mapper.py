@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.modules.gis.layout.optimizer.planning_zone_mapper import (
+from app.services.modules.gis.optimizer.planning_zone_mapper import (
     BASIC_FARMLAND_DLBMS,
     PLANNING_ZONE_TO_ZONE_TYPES,
     ZONE_TYPE_TO_PLANNING_ZONE,

@@ -11,15 +11,10 @@ import pytest
 from langgraph.types import Command
 from langchain_core.messages import ToolMessage
 
-from app.tools.gis.layout_tools import (
-    _make_result,
-    _dict_to_intent,
-    _safe_enum,
-    build_knowledge_graph,
-    query_knowledge_graph,
-    detect_conflicts,
-    validate_layout,
-)
+from app.tools.gis.kg import build_knowledge_graph, query_knowledge_graph
+from app.tools.gis.conflict import detect_conflicts
+from app.tools.gis.validate import validate_layout
+from app.tools.gis.parse import _make_result, _dict_to_intent, _safe_enum
 
 
 def _extract_result(command: Command) -> dict:
@@ -50,17 +45,17 @@ class TestMakeResult:
 
 class TestSafeEnum:
     def test_valid_value(self):
-        from app.services.modules.gis.layout.planning_intent import Direction
+        from app.services.modules.gis.planning_intent import Direction
         result = _safe_enum(Direction, "north")
         assert result == Direction.NORTH
 
     def test_invalid_value_uses_default(self):
-        from app.services.modules.gis.layout.planning_intent import Direction
+        from app.services.modules.gis.planning_intent import Direction
         result = _safe_enum(Direction, "invalid_direction")
         assert isinstance(result, Direction)
 
     def test_invalid_value_uses_custom_default(self):
-        from app.services.modules.gis.layout.planning_intent import Direction
+        from app.services.modules.gis.planning_intent import Direction
         result = _safe_enum(Direction, "invalid", default=Direction.SOUTH)
         assert result == Direction.SOUTH
 
@@ -103,7 +98,7 @@ class TestDictToIntent:
             "zones": [{"zone_id": "z1", "land_use": "residential", "direction": "south"}],
         }
         intent = _dict_to_intent(intent_dict)
-        from app.services.modules.gis.layout.planning_intent import Direction
+        from app.services.modules.gis.planning_intent import Direction
         assert intent.zones[0].direction == Direction.SOUTH
 
 

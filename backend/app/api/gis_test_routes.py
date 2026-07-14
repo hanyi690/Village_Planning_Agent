@@ -27,7 +27,7 @@ router = APIRouter(prefix="/api/dev/gis", tags=["GIS Dev"])
 # GeoJSON color injection (per-feature DLBM/zone_type → color)
 # ============================================
 
-from app.services.modules.gis.layout.zone_schema import (
+from app.services.modules.gis.zone_schema import (
     get_zone_color, get_zone_type_for_dlbm, ZONE_TYPE_COLORS, DEFAULT_ZONE_COLOR,
     PLANNING_ZONE_COLORS,
 )
@@ -128,7 +128,7 @@ def inject_feature_colors(geojson: Dict[str, Any], layer_type: str) -> Dict[str,
             if not color_info:
                 # Fallback by status
                 status = str(props.get("status", "规划新建")).strip()
-                from app.services.modules.gis.layout.zone_schema import FACILITY_STATUS_COLORS
+                from app.services.modules.gis.zone_schema import FACILITY_STATUS_COLORS
                 color_info = FACILITY_STATUS_COLORS.get(status, {"fill": "blue", "stroke": "#00008B"})
             props["color"] = color_info["fill"]
             props["stroke"] = color_info["stroke"]
@@ -298,7 +298,7 @@ async def data_fetch(request: LocationRequest):
     """Fetch all GIS data (water, road, residential, boundary) for a location."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.fetcher import get_fetcher
+        from app.services.modules.gis.data.fetcher import get_fetcher
         fetcher = get_fetcher()
         result = await asyncio.to_thread(
             fetcher.fetch_all_gis_data,
@@ -315,7 +315,7 @@ async def locate_center(request: CenterRequest):
     """Locate village center using 4-tier fallback strategy."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.fetcher import get_fetcher
+        from app.services.modules.gis.data.fetcher import get_fetcher
         fetcher = get_fetcher()
         center, metadata = await asyncio.to_thread(
             fetcher.get_village_center, request.location, request.buffer_km
@@ -349,7 +349,7 @@ async def get_bbox(request: BBoxRequest):
     """Get boundary and expanded bbox for a location."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.fetcher import get_fetcher
+        from app.services.modules.gis.data.fetcher import get_fetcher
         fetcher = get_fetcher()
         result = await asyncio.to_thread(
             fetcher.get_boundary_bbox, request.location, request.buffer_km
@@ -421,7 +421,7 @@ async def test_accessibility(request: AccessibilityRequest):
     """Run accessibility analysis (driving, walking, service coverage)."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.accessibility import run_accessibility_analysis
+        from app.services.modules.gis.analysis.accessibility import run_accessibility_analysis
         origin = tuple(request.origin) if request.origin else None
         center = tuple(request.center) if request.center else (116.044146, 24.818629)
         result = await asyncio.to_thread(
@@ -465,7 +465,7 @@ async def test_coverage(request: CoverageRequest):
     """Calculate GIS data coverage rate for a location."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.coverage import calculate_gis_coverage
+        from app.services.modules.gis.analysis.coverage import calculate_gis_coverage
         result = await asyncio.to_thread(
             calculate_gis_coverage, request.location, request.buffer_km
         )
@@ -484,7 +484,7 @@ async def test_facility_validation(request: FacilityValidationRequest):
     """Validate facility location against planning standards."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.validators import validate_facility_location
+        from app.services.modules.gis.validation.facility_validator import validate_facility_location
         location_tuple = tuple(request.location)
         analysis_params = {
             "population_points": [],
@@ -518,7 +518,7 @@ async def test_ecological(request: EcologicalRequest):
 
             # Try full assessment first
             try:
-                from app.services.modules.gis.validators import assess_ecological_sensitivity, SPATIAL_AVAILABLE
+                from app.services.modules.gis.validation.facility_validator import assess_ecological_sensitivity, SPATIAL_AVAILABLE
                 if not SPATIAL_AVAILABLE:
                     raise ImportError("spatial_analysis module not available")
                 result = await asyncio.to_thread(assess_ecological_sensitivity, study_area, water)
@@ -573,7 +573,7 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
     """Run the full spatial layout pipeline for a village."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.layout.engine import SpatialLayoutEngine
+        from app.services.modules.gis.engine import SpatialLayoutEngine
 
         # Load jintian data for the pipeline
         boundary = _load_jintian_geojson("current/boundary.geojson")
@@ -597,7 +597,7 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
             protection_zones["historical_protection"] = historical
 
         engine = SpatialLayoutEngine()
-        from app.services.modules.gis.layout.planning_intent import UnifiedSpatialIntent
+        from app.services.modules.gis.planning_intent import UnifiedSpatialIntent
         intent = UnifiedSpatialIntent()
         summaries = {
             "land_use": {"construction_area_ha": 30.5, "new_construction_ha": 0.33},
@@ -733,7 +733,7 @@ async def test_constraint_validator(request: ConstraintValidatorRequest):
     """Run conflict detection on jintian data summaries."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.layout.conflict_detector import ConflictDetector
+        from app.services.modules.gis.conflict.detector import ConflictDetector
 
         # Use jintian-based summaries
         summaries = {
@@ -829,14 +829,14 @@ async def validate_layout(request: LayoutValidateRequest):
     """
     t0 = time.time()
     try:
-        from app.services.modules.gis.layout.validator import LayoutValidator
+        from app.services.modules.gis.validation.layout_validator import LayoutValidator
 
         layout_configs = request.layout_configs
 
         # Mode 2: generate layout from jintian data then validate
         if request.use_jintian_data and not layout_configs:
-            from app.services.modules.gis.layout.engine import SpatialLayoutEngine
-            from app.services.modules.gis.layout.planning_intent import UnifiedSpatialIntent
+            from app.services.modules.gis.engine import SpatialLayoutEngine
+            from app.services.modules.gis.planning_intent import UnifiedSpatialIntent
 
             boundary = _load_jintian_geojson("current/boundary.geojson")
             landuse = _load_jintian_geojson("current/landuse.geojson")
@@ -956,8 +956,8 @@ async def parse_planning_text(request: ParseTextRequest):
             dim_list = list(reports.keys())
             logger.info(f"[parse-text] Loaded {len(reports)} dims from DB session {session_id[:16]}...: {dim_list}")
 
-            from app.tools.gis.layout_tools import _aparse_reports_to_intent
-            result = await _aparse_reports_to_intent(reports=reports, village_name=request.village_name)
+            from app.tools.gis.parse import _parse_reports_to_intent
+            result = _parse_reports_to_intent(reports=reports, village_name=request.village_name)
 
             if not result.get("success"):
                 return {"success": False, "error": result.get("error", "Unknown"), "timing_ms": round((time.time() - t0) * 1000)}
@@ -996,7 +996,7 @@ async def parse_planning_text(request: ParseTextRequest):
             llm = ChatOpenAI(model=LLM_MODEL, temperature=0, request_timeout=120)
             response = await llm.ainvoke(prompt_text)
             response_text = response.content
-            from app.services.modules.gis.layout.trace import ParseTrace
+            from app.services.modules.gis.trace import ParseTrace
             parse_trace = ParseTrace(
                 source="jintian_reports" if request.use_jintian_reports else "planning_text",
                 llm_model=LLM_MODEL,
@@ -1041,10 +1041,10 @@ async def parse_planning_text(request: ParseTextRequest):
 
     # --- Common: Generate layout from intent_json ---
     try:
-        from app.tools.gis.layout_tools import _dict_to_intent
-        from app.services.modules.gis.layout.engine import SpatialLayoutEngine
+        from app.tools.gis.parse import _intent_to_dict
+        from app.services.modules.gis.engine import SpatialLayoutEngine
 
-        intent = _dict_to_intent(intent_json)
+        intent = _intent_to_dict(intent_json)
         engine = SpatialLayoutEngine()
 
         boundary = _load_jintian_geojson("current/boundary.geojson")
@@ -1056,7 +1056,7 @@ async def parse_planning_text(request: ParseTextRequest):
             landuse_current_geojson=landuse,
         )
 
-        from app.services.modules.gis.layout.planning_intent import UnifiedSpatialIntent as USI
+        from app.services.modules.gis.planning_intent import UnifiedSpatialIntent as USI
         default_intent = USI()
         default_configs = engine.generate_layout(
             intent=default_intent,
@@ -1213,3 +1213,147 @@ async def get_jintian_data(filename: str):
         return {"success": False, "error": f"File not found: {filename}"}
 
     return {"success": True, "geojson": data}
+
+
+# ============================================
+# Jin Tian Pipeline Test Endpoint
+# ============================================
+
+class JinTianPipelineRequest(BaseModel):
+    use_llm: bool = False
+    compare_to_planned: bool = True
+    planning_text: str = ""
+
+
+@router.post("/jintian/pipeline", summary="Run full pipeline with Jin Tian real data")
+async def jintian_pipeline(request: JinTianPipelineRequest):
+    """Run the complete GIS layout pipeline with Jin Tian village's 660 parcels.
+
+    Returns layout_configs, comparison with planned/ ground truth,
+    and key metrics. No Agent/LLM required — calls generate_layout internals.
+    """
+    t0 = time.time()
+    try:
+        from app.services.modules.gis.layout.data_loader import (
+            load_all, load_current, load_planned,
+            make_default_intent, get_data_summary,
+        )
+
+        # ── Load data ─────────────────────────────────────────────
+        gis_data = load_all()
+        current_data = load_current()
+        planned_data = load_planned() if request.compare_to_planned else {}
+        data_summary = get_data_summary(gis_data)
+
+        # ── Build intent ──────────────────────────────────────────
+        intent = make_default_intent()
+        parse_source = "default"
+
+        if request.use_llm and request.planning_text:
+            from app.agent.gis.prompts import format_parse_prompt
+            from app.core.settings import LLM_MODEL
+            from langchain_openai import ChatOpenAI
+            import re as _re
+
+            prompt_text = format_parse_prompt(
+                planning_text=request.planning_text,
+                village_name="金田村委会",
+                total_area="2352.56",
+                current_land_use="农业用地为主，含居民点、林地、水域",
+            )
+            llm = ChatOpenAI(model=LLM_MODEL, temperature=0, request_timeout=120)
+            response = await llm.ainvoke(prompt_text)
+            json_match = _re.search(r'```json\s*(.*?)\s*```', response.content, _re.DOTALL)
+            if not json_match:
+                json_match = _re.search(r'(\{[\s\S]*\})', response.content)
+            if json_match:
+                try:
+                    llm_intent = json.loads(json_match.group(1))
+                    if llm_intent.get("zones"):
+                        intent = llm_intent
+                        parse_source = "llm"
+                except json.JSONDecodeError:
+                    pass
+
+        # ── Generate layers ───────────────────────────────────────
+        from app.tools.gis.generate import (
+            _generate_function_zones,
+            _generate_planning_zones,
+            _generate_facilities,
+            _generate_axes,
+        )
+
+        layers: List[Dict[str, Any]] = []
+        fz = _generate_function_zones(intent, gis_data)
+        if fz:
+            layers.append(fz)
+        pz = _generate_planning_zones(None, gis_data, intent)
+        if pz:
+            layers.append(pz)
+        fp = _generate_facilities(intent, gis_data)
+        if fp:
+            layers.append(fp)
+        ax = _generate_axes(intent, gis_data)
+        if ax:
+            layers.append(ax)
+
+        layer_summary = []
+        for lyr in layers:
+            feats = lyr.get("data", {}).get("features", [])
+            layer_summary.append({
+                "layerType": lyr.get("layerType"),
+                "feature_count": len(feats),
+            })
+
+        # ── Compare with planned ──────────────────────────────────
+        comparison = None
+        if request.compare_to_planned and planned_data:
+            from app.services.modules.gis.layout.compare_layouts import compare
+
+            protection = {}
+            for key, name in [
+                ("farmland_protection_geojson", "farmland"),
+                ("ecological_protection_geojson", "ecological"),
+                ("historical_protection_geojson", "historical"),
+            ]:
+                val = gis_data.get(key)
+                if val and val.get("features"):
+                    protection[name] = val
+
+            report = compare(layers, planned_data, protection if protection else None)
+            comparison = report.to_dict()
+
+        # ── Export ─────────────────────────────────────────────────
+        export_info = None
+        try:
+            from app.tools.gis.export import export_gdb
+
+            export_result = export_gdb.func(
+                layout_configs=layers,
+                allocated_geojson=None,
+                village_name="金田村委会",
+                gis_data=gis_data,
+                tool_call_id="jintian-pipeline",
+            )
+            if hasattr(export_result, "update"):
+                export_info = {"status": "exported"}
+            else:
+                export_info = {"status": "exported"}
+        except Exception as e:
+            export_info = {"status": "failed", "error": str(e)}
+
+        elapsed = round((time.time() - t0) * 1000)
+        return {
+            "success": True,
+            "parse_source": parse_source,
+            "data_summary": data_summary,
+            "layers": layer_summary,
+            "layout_configs": layers,
+            "comparison": comparison,
+            "export": export_info,
+            "timing_ms": elapsed,
+        }
+
+    except Exception as e:
+        logger.error(f"[GIS Test] jintian-pipeline failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e), "timing_ms": round((time.time() - t0) * 1000)}

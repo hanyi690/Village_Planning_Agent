@@ -11,21 +11,18 @@ import pytest
 from langgraph.types import Command
 from langchain_core.messages import ToolMessage
 
-from app.services.modules.gis.layout.kg import PlanningKG
-from app.services.modules.gis.layout.kg.query import query_kg, QUERY_TEMPLATES
-from app.services.modules.gis.layout.optimizer import ConstraintDrivenAllocator
-from app.services.modules.gis.layout.engine import SpatialLayoutEngine
-from app.services.modules.gis.layout.validator import LayoutValidator
-from app.services.modules.gis.layout.planning_intent import Direction, Density
-from app.tools.gis.layout_tools import (
-    build_knowledge_graph,
-    query_knowledge_graph,
-    detect_conflicts,
-    allocate_zones,
-    generate_layout,
-    validate_layout,
-    _dict_to_intent,
-)
+from app.services.modules.gis.kg import PlanningKG
+from app.services.modules.gis.kg.query import query_kg, QUERY_TEMPLATES
+from app.services.modules.gis.optimizer import ConstraintDrivenAllocator
+from app.services.modules.gis.engine import SpatialLayoutEngine
+from app.services.modules.gis.validation.layout_validator import LayoutValidator
+from app.services.modules.gis.planning_intent import Direction, Density
+from app.tools.gis.kg import build_knowledge_graph, query_knowledge_graph
+from app.tools.gis.conflict import detect_conflicts
+from app.tools.gis.allocate import allocate_zones
+from app.tools.gis.generate import generate_layout
+from app.tools.gis.validate import validate_layout
+from app.tools.gis.parse import _dict_to_intent
 from tests.fixtures.gis_e2e import (
     load_landuse_current,
     load_boundary,
@@ -107,7 +104,7 @@ class TestKGBuildFromRealData:
 
         # Should have zone entities with area_target_ha
         from rdflib import RDF
-        from app.services.modules.gis.layout.kg.builder import PLN
+        from app.services.modules.gis.kg.builder import PLN
 
         zones = list(kg.g.subjects(RDF.type, PLN.Zone))
         assert len(zones) > 0, "Should have Zone entities"

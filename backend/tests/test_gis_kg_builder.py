@@ -4,8 +4,8 @@ entity/relationship completeness, reference chains, queries, serialization."""
 import pytest
 from unittest.mock import patch
 
-from app.services.modules.gis.layout.kg import PlanningKG, EntityTypes, Relations
-from app.services.modules.gis.layout.kg.builder import ZONE_TYPE_PATTERNS, PLN
+from app.services.modules.gis.kg import PlanningKG, EntityTypes, Relations
+from app.services.modules.gis.kg.builder import ZONE_TYPE_PATTERNS, PLN
 from rdflib import RDF
 
 from tests.fixtures.gis_e2e import load_landuse_current
@@ -63,12 +63,12 @@ class TestComputeZoneAreasFromGis:
     def test_fallback_on_compute_failure(self, gis_data):
         kg = PlanningKG(village_name="test")
         with patch(
-            "app.services.modules.gis.layout.kg.builder.geojson_to_geodataframe",
+            "app.services.modules.gis.kg.builder.geojson_to_geodataframe",
             create=True,
         ) as mock_gdf:
             # Import the module so the mock takes effect
             with patch(
-                "app.services.modules.gis.layout.kg.builder.project_to_metric",
+                "app.services.modules.gis.kg.builder.project_to_metric",
                 side_effect=Exception("test error"),
             ):
                 result = kg._compute_zone_areas_from_gis(gis_data)
@@ -94,7 +94,7 @@ class TestBuildFromReportsWithGisData:
 
         # Check that Zone entities exist with area_target_ha
         from rdflib import RDF
-        from app.services.modules.gis.layout.kg.builder import PLN
+        from app.services.modules.gis.kg.builder import PLN
 
         zones = list(kg.g.subjects(RDF.type, PLN.Zone))
         assert len(zones) > 0, "Should have Zone entities"
@@ -163,7 +163,7 @@ class TestGetAdjacencyMap:
 
     def test_adjacency_map_with_manual_triples(self):
         from rdflib import RDF
-        from app.services.modules.gis.layout.kg.builder import PLN
+        from app.services.modules.gis.kg.builder import PLN
 
         kg = PlanningKG(village_name="test")
 
@@ -211,7 +211,7 @@ class TestConstraintNoHardcodedValues:
     ):
         """When gis_data is provided, ecological constraint value should come from GIS, not hardcoded 362.02."""
         from rdflib import RDF
-        from app.services.modules.gis.layout.kg.builder import PLN
+        from app.services.modules.gis.kg.builder import PLN
 
         kg = PlanningKG(village_name="金田村")
         kg.build_from_reports(
@@ -243,7 +243,7 @@ class TestConstraintNoHardcodedValues:
     ):
         """Zone area_target_ha should come from GIS data, not hardcoded 1960.70/362.02/30.50."""
         from rdflib import RDF
-        from app.services.modules.gis.layout.kg.builder import PLN
+        from app.services.modules.gis.kg.builder import PLN
 
         kg = PlanningKG(village_name="金田村")
         kg.build_from_reports(

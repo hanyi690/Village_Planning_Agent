@@ -1,7 +1,7 @@
 """Tests for GeoJSON RFC 7946 structural validation — P3 #9."""
 
 import pytest
-from app.services.modules.gis.layout.validator import (
+from app.services.modules.gis.validation.layout_validator import (
     LayoutValidator, CheckResult, Violation,
 )
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.modules.gis.layout.optimizer.ca_refiner import ZoneCARefiner
+from app.services.modules.gis.optimizer.ca_refiner import ZoneCARefiner
 
 
 # --- Minimal GeoJSON feature helpers ---

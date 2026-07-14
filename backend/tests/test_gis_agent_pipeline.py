@@ -20,7 +20,7 @@ class TestStateTransformation:
 
     def test_parse_tool_returns_command_with_intent_json(self):
         """parse_planning_text 返回 Command 含 intent_json。"""
-        from app.tools.gis.layout_tools import parse_planning_text
+        from app.tools.gis.parse import parse_planning_text
 
         cmd = parse_planning_text.func(
             reports={"land_use": {"summary": {"metrics": {}}, "content": "测试"}},

@@ -222,7 +222,7 @@ class TestConflictDetectorRealData:
 
     def test_detect_all_no_crash(self):
         """Conflict detector runs without errors on real data."""
-        from app.services.modules.gis.layout.conflict_detector import ConflictDetector
+        from app.services.modules.gis.conflict.detector import ConflictDetector
 
         reports = _build_reports_dict()
         detector = ConflictDetector()
@@ -234,8 +234,8 @@ class TestConflictDetectorRealData:
 
     def test_conflict_resolver_with_real_data(self):
         """Conflict resolver processes real detected conflicts."""
-        from app.services.modules.gis.layout.conflict_detector import ConflictDetector
-        from app.services.modules.gis.layout.conflict_resolver import ConflictResolver
+        from app.services.modules.gis.conflict.detector import ConflictDetector
+        from app.services.modules.gis.conflict.resolver import ConflictResolver
 
         reports = _build_reports_dict()
         detector = ConflictDetector()
@@ -276,8 +276,8 @@ class TestParsingModuleImports:
         import importlib
 
         consumers = [
-            "app.services.modules.gis.layout.conflict_detector",
-            "app.services.modules.gis.layout.conflict_resolver",
+            "app.services.modules.gis.conflict.detector",
+            "app.services.modules.gis.conflict.resolver",
             "app.tools.gis.layout_tools",
             "app.agent.analysis.node",
             "app.services.report_store",
@@ -471,7 +471,7 @@ class TestStructuredParseRealData:
 
     async def test_parse_intent_from_real_reports(self):
         """Parse real L3 reports → IntentOutput with valid zones."""
-        from app.tools.gis.layout_tools import _aparse_reports_to_intent
+        from app.tools.gis.parse import _parse_reports_to_intent
 
         reports = _build_reports_dict()
         result = await _aparse_reports_to_intent(reports, "金田村")
@@ -484,7 +484,7 @@ class TestStructuredParseRealData:
 
     async def test_anchor_confidence_high_with_real_data(self):
         """Anchor confidence should be 1.0 with real L3 reports + GIS data."""
-        from app.tools.gis.layout_tools import _aparse_reports_to_intent
+        from app.tools.gis.parse import _parse_reports_to_intent
 
         reports = _build_reports_dict()
         gis_data = _load_gis_data()
@@ -501,12 +501,12 @@ class TestFullPipelineRealData:
 
     async def test_reports_to_layout(self):
         """Real L3 reports → KG build → layout generation."""
-        from app.services.modules.gis.layout.engine import SpatialLayoutEngine
+        from app.services.modules.gis.engine import SpatialLayoutEngine
         from app.services.modules.gis.layout.zone_generator import (
             UnifiedSpatialIntent,
             ZoneIntent,
         )
-        from app.services.modules.gis.layout.planning_intent import Direction
+        from app.services.modules.gis.planning_intent import Direction
         from tests.fixtures.gis_e2e import (
             load_l3_reports_for_kg,
             load_gis_data_for_agent,
