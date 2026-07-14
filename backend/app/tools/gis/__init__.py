@@ -1,40 +1,30 @@
 """GIS tools for the ReAct Agent.
 
-Exports all GIS @tool definitions as a unified GIS_TOOLS list.
+Pipeline: PARSE → KG → CONFLICT → ALLOCATE → GENERATE → VALIDATE → EXPORT → RENDER
 """
 
-from .data_tools import (
-    fetch_gis_data,
-    calculate_gis_coverage,
-    analyze_accessibility,
-    search_poi,
-)
-from .layout_tools import (
-    parse_planning_text,
-    build_knowledge_graph,
-    query_knowledge_graph,
-    detect_conflicts,
-    allocate_zones,
-    generate_layout,
-    validate_layout,
-    measure_divergence,
-)
+from .data import fetch_gis_data, search_poi
+from .analytics import calculate_gis_coverage, analyze_accessibility
+from .parse import parse_planning_text
+from .kg import build_knowledge_graph, query_knowledge_graph
+from .conflict import detect_conflicts
+from .allocate import allocate_zones
+from .generate import generate_layout
+from .validate import validate_layout
+from .export import export_gdb
+from .render import render_map
 
 GIS_TOOLS = [
-    # Data acquisition
-    fetch_gis_data,
-    calculate_gis_coverage,
-    analyze_accessibility,
-    search_poi,
-    # Layout planning
+    fetch_gis_data, search_poi,
+    calculate_gis_coverage, analyze_accessibility,
     parse_planning_text,
-    build_knowledge_graph,
-    query_knowledge_graph,
+    build_knowledge_graph, query_knowledge_graph,
     detect_conflicts,
     allocate_zones,
     generate_layout,
     validate_layout,
-    measure_divergence,
+    export_gdb,
+    render_map,
 ]
 
 __all__ = ["GIS_TOOLS"]
