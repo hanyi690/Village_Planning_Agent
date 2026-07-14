@@ -600,6 +600,14 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
             reports_for_kg = {}
 
         engine = SpatialLayoutEngine()
+
+        # 解析 intent — gen 路径（规划 markdown → LLM → intent）
+        from app.services.modules.gis.layout.intent_cache import resolve_gen_intent_cached
+        from app.services.modules.gis.planning_intent import UnifiedSpatialIntent
+        from app.tools.gis.parse import _dict_to_intent
+        intent_dict = resolve_gen_intent_cached("金田村委会", gis_data)
+        engine._intent = _dict_to_intent(intent_dict)
+
         layout_configs = await asyncio.to_thread(
             engine.full_pipeline,
             reports=reports_for_kg,
@@ -621,7 +629,7 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
         conflict_report = getattr(engine, "_conflict_report", None)
         resolution_report = getattr(engine, "_resolution_report", None)
 
-        return {
+        return _sanitize_floats({
             "success": True,
             "layout_configs": configs_data,
             "conflicts": {
@@ -630,7 +638,7 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
             },
             "kg_built": engine.kg is not None,
             "timing_ms": round((time.time() - t0) * 1000),
-        }
+        })
     except Exception as e:
         logger.error(f"[GIS Test] spatial-layout failed: {e}", exc_info=True)
         return {"success": False, "error": str(e), "timing_ms": round((time.time() - t0) * 1000)}
@@ -800,6 +808,13 @@ async def validate_layout(request: LayoutValidateRequest):
                 return {"success": False, "error": "jintian boundary data not found", "timing_ms": round((time.time() - t0) * 1000)}
 
             engine = SpatialLayoutEngine()
+
+            # 解析 intent — gen 路径（规划 markdown → LLM → intent）
+            from app.services.modules.gis.layout.intent_cache import resolve_gen_intent_cached
+            from app.tools.gis.parse import _dict_to_intent
+            intent_dict = resolve_gen_intent_cached("金田村委会", gis_data)
+            engine._intent = _dict_to_intent(intent_dict)
+
             summaries = GISMetricsCalculator.compute_summaries(gis_data)
             from app.services.modules.gis.layout.data_loader import load_l3_reports
             reports = load_l3_reports() or {}
@@ -835,13 +850,13 @@ async def validate_layout(request: LayoutValidateRequest):
         # Zone area summary
         zone_areas = LayoutValidator._get_zone_areas(layout_configs)
 
-        return {
+        return _sanitize_floats({
             "success": True,
             "validation": report.to_dict(),
             "checks": checks_detail,
             "zone_areas": zone_areas,
             "timing_ms": round((time.time() - t0) * 1000),
-        }
+        })
     except Exception as e:
         logger.error(f"[GIS Test] layout-validate failed: {e}", exc_info=True)
         return {"success": False, "error": str(e), "timing_ms": round((time.time() - t0) * 1000)}

@@ -28,10 +28,26 @@ logger = get_logger(__name__)
 # ── LLM Intent Parsing ────────────────────────────────────────
 
 def _safe_dataclass(cls, d: Dict[str, Any]):
-    """Construct a dataclass from dict, ignoring unknown fields from LLM output."""
-    import dataclasses
-    valid = {f.name for f in dataclasses.fields(cls)}
-    filtered = {k: v for k, v in d.items() if k in valid}
+    """Construct a dataclass from dict, ignoring unknown fields and converting enum values.
+
+    Uses typing.get_type_hints to resolve string annotations (from __future__ annotations).
+    """
+    import typing
+    from enum import Enum
+    hints = typing.get_type_hints(cls)
+    valid = set(hints.keys())
+    filtered = {}
+    for k, v in d.items():
+        if k not in valid:
+            continue
+        field_type = hints[k]
+        if isinstance(field_type, type) and issubclass(field_type, Enum):
+            try:
+                filtered[k] = field_type(v)
+            except (ValueError, KeyError):
+                filtered[k] = v
+        else:
+            filtered[k] = v
     return cls(**filtered)
 
 
@@ -187,10 +203,10 @@ def _dict_to_intent(data: Dict[str, Any]) -> UnifiedSpatialIntent:
         return v if isinstance(v, Density) else Density(v)
 
     return UnifiedSpatialIntent(
-        zones=[ZoneIntent(**{**z, "direction": _ensure_direction(z.get("direction", "center")), "density": _ensure_density(z.get("density", "medium"))}) for z in data.get("zones", [])],
-        facilities=[FacilityIntent(**f) for f in data.get("facilities", [])],
-        axes=[AxisIntent(**{**a, "direction": _ensure_direction(a.get("direction", "east-west"))}) for a in data.get("axes", [])],
-        constraints=[ConstraintIntent(**c) for c in data.get("constraints", [])],
+        zones=[_safe_dataclass(ZoneIntent, z) for z in data.get("zones", [])],
+        facilities=[_safe_dataclass(FacilityIntent, f) for f in data.get("facilities", [])],
+        axes=[_safe_dataclass(AxisIntent, a) for a in data.get("axes", [])],
+        constraints=[_safe_dataclass(ConstraintIntent, c) for c in data.get("constraints", [])],
         metadata=data.get("metadata", {}),
     )
 

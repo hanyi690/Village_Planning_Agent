@@ -13,7 +13,13 @@ Also supports AxisIntent-driven generation from LLM intent.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Dict, List, Optional, Tuple
+
+
+def _valid_coord(x: float, y: float) -> bool:
+    """Return True if both coordinates are finite numbers."""
+    return not (math.isinf(x) or math.isnan(x) or math.isinf(y) or math.isnan(y))
 
 from app.utils.logger import get_logger
 from ..utils.crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
@@ -126,7 +132,7 @@ class AxisBuilder:
                     },
                     "geometry": {
                         "type": "Point",
-                        "coordinates": [center_4326.x, center_4326.y],
+                        "coordinates": [center_4326.x, center_4326.y] if _valid_coord(center_4326.x, center_4326.y) else [0.0, 0.0],
                     },
                 })
             elif axis_type in ("corridor", "connector"):
@@ -204,7 +210,7 @@ class AxisBuilder:
                 },
                 "geometry": {
                     "type": "Point",
-                    "coordinates": [center_4326.x, center_4326.y],
+                    "coordinates": [center_4326.x, center_4326.y] if _valid_coord(center_4326.x, center_4326.y) else [0.0, 0.0],
                 },
             })
 
