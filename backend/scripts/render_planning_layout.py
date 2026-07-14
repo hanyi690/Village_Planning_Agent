@@ -22,13 +22,13 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from app.services.modules.gis.layout.zone_schema import (
+from app.services.modules.gis.zone_schema import (
     ZONE_TYPE_COLORS,
     PLANNING_ZONE_COLORS,
     FACILITY_STATUS_COLORS,
 )
-from app.services.modules.gis.layout.engine import SpatialLayoutEngine
-from app.services.modules.gis.layout.planning_intent import (
+from app.services.modules.gis.engine import SpatialLayoutEngine
+from app.services.modules.gis.planning_intent import (
     UnifiedSpatialIntent, ZoneIntent, Direction, Density,
 )
 from app.database.engine import get_db_path
@@ -573,7 +573,7 @@ def _build_intent_from_dlbm(landuse: Optional[Dict]) -> UnifiedSpatialIntent:
         return UnifiedSpatialIntent(zones=[], facilities=[], axes=[],
                                     constraints=[], metadata={})
 
-    from app.services.modules.gis.layout.zone_schema import get_zone_type_for_dlbm
+    from app.services.modules.gis.zone_schema import get_zone_type_for_dlbm
 
     zone_counts: Dict[str, float] = {}
     total = 0.0
