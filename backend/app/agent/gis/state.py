@@ -1,4 +1,4 @@
-"""GIS Agent state definition."""
+"""GIS Agent state definitions — merged from state.py + parse_state.py + layout_state.py."""
 
 from typing import Any, Dict, List, Optional, TypedDict
 from typing_extensions import Annotated, NotRequired
@@ -8,34 +8,47 @@ from langgraph.managed.is_last_step import RemainingStepsManager
 
 
 class GISAgentState(TypedDict, total=False):
-    """State for the GIS ReAct Agent subgraph.
-
-    Input fields are populated from the main graph state.
-    Intermediate fields are shared between tool calls within the ReAct loop.
-    """
-
-    # Input (from main graph)
+    """Unified state for the single GIS ReAct Agent (fallback)."""
     session_id: str
     village_name: str
     reports: Dict[str, Dict[str, Any]]
     summaries: Dict[str, Dict[str, Any]]
-
-    # GIS data (keyed by type: boundary, landuse_current, protection_zones, road, hazard)
     gis_data: Dict[str, Optional[Dict[str, Any]]]
-
-    # KG serialization — persisted across tool calls within ReAct loop
-    kg_turtle: str                            # RDFlib Graph serialized as Turtle
-    kg_constraints: List[Dict[str, Any]]      # Extracted constraints (avoid re-query)
-
-    # Agent shared state (tools read/write)
+    kg_turtle: str
+    kg_constraints: List[Dict[str, Any]]
     layout_configs: List[Dict[str, Any]]
-    allocated_geojson: Dict[str, Any]           # Zone allocation result from allocate_zones
-    allocation_summary: Dict[str, Any]          # Summary stats from allocate_zones
+    allocated_geojson: Dict[str, Any]
+    allocation_summary: Dict[str, Any]
+    intent: Dict[str, Any]
+    intent_json: Dict[str, Any]
+    messages: Annotated[List[BaseMessage], add_messages]
+    remaining_steps: NotRequired[Annotated[int, RemainingStepsManager]]
 
-    # Intent state (PARSE → LAYOUT bridge)
-    intent: Dict[str, Any]                     # Structured intent for generate_layout
-    intent_json: Dict[str, Any]                # Raw intent JSON from parse_planning_text
 
-    # ReAct loop state (required by create_react_agent)
+class ParseAgentState(TypedDict, total=False):
+    """State for PARSE Agent subgraph."""
+    session_id: str
+    village_name: str
+    reports: Dict[str, Dict[str, Any]]
+    summaries: Dict[str, Dict[str, Any]]
+    gis_data: Dict[str, Optional[Dict[str, Any]]]
+    intent_json: Dict[str, Any]
+    messages: Annotated[List[BaseMessage], add_messages]
+    remaining_steps: NotRequired[Annotated[int, RemainingStepsManager]]
+
+
+class LayoutAgentState(TypedDict, total=False):
+    """State for LAYOUT Agent subgraph."""
+    session_id: str
+    village_name: str
+    reports: Dict[str, Dict[str, Any]]
+    summaries: Dict[str, Dict[str, Any]]
+    gis_data: Dict[str, Optional[Dict[str, Any]]]
+    intent: Dict[str, Any]
+    kg_turtle: str
+    kg_constraints: List[Dict[str, Any]]
+    layout_configs: List[Dict[str, Any]]
+    allocated_geojson: Dict[str, Any]
+    allocation_summary: Dict[str, Any]
     messages: Annotated[List[BaseMessage], add_messages]
     remaining_steps: NotRequired[Annotated[int, RemainingStepsManager]]
