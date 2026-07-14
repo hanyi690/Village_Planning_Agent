@@ -31,22 +31,35 @@ logger = get_logger(__name__)
 # DLBM → Planning Zone: import from single source (zone_schema.py)
 # ---------------------------------------------------------------------------
 from ..zone_schema import DLBM_TO_PLANNING_ZONE, PROTECTED_DLBM_CODES
+from ..zone_schema.encodings import dlbm_to_planning_zone
 
 # Cross-zone preference cost matrix (symmetric-ish)
 # Same zone = 0, compatible zones = low cost, forbidden zones = high cost
 CROSS_ZONE_COST: Dict[tuple, int] = {
     # 农田↔一般农业: compatible (both agricultural)
     ("农田保护区", "一般农业区"): 3, ("一般农业区", "农田保护区"): 3,
+    # 生态保护区↔生态控制区: compatible (both ecological)
+    ("生态保护区", "生态控制区"): 2, ("生态控制区", "生态保护区"): 2,
+    # 生态保护区↔林业发展区: compatible (both ecological)
+    ("生态保护区", "林业发展区"): 3, ("林业发展区", "生态保护区"): 3,
+    # 生态控制区↔林业发展区: compatible
+    ("生态控制区", "林业发展区"): 3, ("林业发展区", "生态控制区"): 3,
     # 生态↔一般农业: somewhat compatible
     ("生态保护区", "一般农业区"): 5, ("一般农业区", "生态保护区"): 5,
+    ("生态控制区", "一般农业区"): 5, ("一般农业区", "生态控制区"): 5,
+    ("林业发展区", "一般农业区"): 4, ("一般农业区", "林业发展区"): 4,
     # 农田↔生态: moderate conflict
     ("农田保护区", "生态保护区"): 10, ("生态保护区", "农田保护区"): 10,
+    ("农田保护区", "生态控制区"): 8, ("生态控制区", "农田保护区"): 8,
+    ("农田保护区", "林业发展区"): 10, ("林业发展区", "农田保护区"): 10,
     # 建设↔一般农业: significant conflict
     ("村庄建设区", "一般农业区"): 30, ("一般农业区", "村庄建设区"): 30,
     # 建设↔农田: strong conflict (基本农田保护)
     ("村庄建设区", "农田保护区"): 40, ("农田保护区", "村庄建设区"): 40,
     # 建设↔生态: strongest conflict
     ("村庄建设区", "生态保护区"): 50, ("生态保护区", "村庄建设区"): 50,
+    ("村庄建设区", "生态控制区"): 45, ("生态控制区", "村庄建设区"): 45,
+    ("村庄建设区", "林业发展区"): 40, ("林业发展区", "村庄建设区"): 40,
 }
 
 # Construction planning zones
@@ -54,11 +67,6 @@ PLANNING_CONSTRUCTION_ZONES = {"村庄建设区"}
 
 # Default cost for DLBM-zone pairs not in cross-zone matrix
 DEFAULT_PREFERENCE_COST = 20
-
-
-def dlbm_to_planning_zone(dlbm: str) -> str:
-    """Map DLBM code to its native planning zone (single source from zone_schema.py)."""
-    return DLBM_TO_PLANNING_ZONE.get(str(dlbm).strip(), "一般农业区")
 
 
 class MIPZoneAllocator:
@@ -106,8 +114,8 @@ class MIPZoneAllocator:
         if not features:
             return landuse_geojson
 
-        from ..zone_generator import resolve_zone_type_for_dlbm
-        from ...utils.geojson_utils import build_parcel_index
+        from ..layout.zone_generator import resolve_zone_type_for_dlbm
+        from ..utils.geojson_utils import build_parcel_index
 
         parcel_db, _dup = build_parcel_index(landuse_geojson, zone_type_fn=resolve_zone_type_for_dlbm)
         parcels = [

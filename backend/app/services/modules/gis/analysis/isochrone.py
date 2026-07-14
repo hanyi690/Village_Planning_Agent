@@ -16,8 +16,8 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Import accessibility core for route planning
-from .accessibility_core import haversine_distance
-from .providers.tianditu import TiandituProvider
+from .accessibility import haversine_distance
+from ..providers.tianditu import TiandituProvider
 
 # Travel speeds (km/h) for isochrone estimation
 TRAVEL_SPEEDS = {

@@ -17,8 +17,8 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from .planning_intent import ZoneIntent, UnifiedSpatialIntent
-from .zone_schema import (
+from ..planning_intent import ZoneIntent, UnifiedSpatialIntent
+from ..zone_schema import (
     get_zone_color,
     get_zone_type_for_dlbm,
     get_dlbms_for_zone_type,

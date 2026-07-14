@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from .conflict_resolver import ResolutionReport
+from app.services.modules.gis.conflict.resolver import ResolutionReport
 
 
 class Direction(str, Enum):

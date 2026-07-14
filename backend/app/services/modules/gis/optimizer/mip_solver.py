@@ -141,9 +141,9 @@ class ConstraintDrivenAllocator:
         if not features:
             return landuse_geojson, {}
 
-        from ..zone_generator import resolve_zone_type_for_dlbm
+        from ..layout.zone_generator import resolve_zone_type_for_dlbm
         from ..zone_schema import get_zone_type_for_planned_dlbm
-        from ...utils.geojson_utils import build_parcel_index
+        from ..utils.geojson_utils import build_parcel_index
         from .planning_zone_mapper import (
             PLANNING_ZONE_TO_ZONE_TYPES,
             map_planning_zone_targets_to_zone_types,

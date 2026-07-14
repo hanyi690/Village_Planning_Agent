@@ -20,7 +20,7 @@ from rdflib import Graph, Namespace, Literal, RDF, URIRef, BNode
 from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
-from ...utils.crs_engine import project_to_metric, get_metric_crs
+from ..utils.crs_engine import project_to_metric, get_metric_crs
 from .ontology import PLN, GEO, EntityTypes, Relations, FACILITY_TYPES, REGULATION_TYPES
 
 logger = get_logger(__name__)
@@ -483,7 +483,7 @@ class PlanningKG:
             return {}
 
         try:
-            from ...utils.geojson_utils import geojson_to_geodataframe
+            from ..utils.geojson_utils import geojson_to_geodataframe
             from ..zone_schema import get_zone_type_for_dlbm
 
             gdf = geojson_to_geodataframe(landuse_geojson)
@@ -531,7 +531,7 @@ class PlanningKG:
         """
         features = geojson.get("features", [])
         from ..zone_schema import get_zone_type_for_dlbm
-        from ..zone_generator import resolve_zone_type_for_dlbm
+        from ..layout.zone_generator import resolve_zone_type_for_dlbm
 
         duplicate_bsms = set()
         seen_bsms = set()
@@ -743,7 +743,7 @@ class PlanningKG:
     def _add_spatial_relations(self, geojson: Dict[str, Any]):
         """Build parcel adjacency graph from GeoDataFrame spatial joins."""
         try:
-            from ...utils.geojson_utils import geojson_to_geodataframe
+            from ..utils.geojson_utils import geojson_to_geodataframe
             gdf = geojson_to_geodataframe(geojson)
             if gdf is None or len(gdf) < 2:
                 return

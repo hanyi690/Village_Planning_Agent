@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
-from .zone_schema import get_zone_color, ZONE_TYPE_COLORS, FACILITY_STATUS_COLORS
+from ..zone_schema import get_zone_color, ZONE_TYPE_COLORS, FACILITY_STATUS_COLORS, PLANNING_ZONE_COLORS
 from ..utils.geojson_utils import reduce_coordinate_precision, simplify_geojson
 
 logger = get_logger(__name__)
@@ -35,7 +35,7 @@ LAYER_PRIORITY = {
     "sensitivity_zone": 1,
     "isochrone": 2,
     "function_zone": 3,
-    "planning_zone": 4,       # KG-driven 4-zone planning layer
+    "planning_zone": 4,       # KG-driven 6-zone planning layer
     "development_axis": 5,
     "infrastructure": 6,
     "facility_point": 7,
@@ -163,7 +163,7 @@ class MapRenderer:
                     zone_type = props.get("land_use", "")
                     # If no land_use, derive from DLBM (for landuse_current)
                     if not zone_type:
-                        from .zone_schema import get_zone_type_for_dlbm
+                        from ..zone_schema import get_zone_type_for_dlbm
                         dlbm = props.get("DLBM", "")
                         zone_type = get_zone_type_for_dlbm(dlbm)
 
@@ -176,7 +176,7 @@ class MapRenderer:
                     if props.get("land_use"):
                         props["zone_type"] = props.get("land_use", "")
                     elif props.get("DLBM"):
-                        from .zone_schema import get_zone_type_for_dlbm
+                        from ..zone_schema import get_zone_type_for_dlbm
                         props["zone_type"] = get_zone_type_for_dlbm(props.get("DLBM", ""))
                     else:
                         props["zone_type"] = "居住用地"

@@ -102,6 +102,8 @@ GDB_LAYER_REGISTRY: Dict[str, LayerDef] = {
             ("YSDM", "str:10"),      # 要素代码
             ("DLBM", "str:4"),       # 地类编码 (GB/T 21010)
             ("DLMC", "str:20"),      # 地类名称
+            ("SDDLBM", "str:5"),     # 三调地类编码 (部分GDB缺失, DLBM≈SDDLBM可替代)
+            ("SDDLMC", "str:60"),    # 三调地类名称 (部分GDB缺失)
             ("DLMJ", "float64"),     # 地类面积
         ],
         "source": "current/landuse.geojson",
@@ -442,6 +444,10 @@ def enrich_gdb_fields(
                     props[field_name] = DLBM_TO_DLMC.get(dlbm, "")
                 else:
                     props[field_name] = ""
+            elif field_name == "SDDLBM":
+                props[field_name] = str(props.get("DLBM", "")).strip()
+            elif field_name == "SDDLMC":
+                props[field_name] = str(props.get("DLMC", "")).strip()
             elif field_name in ("MJ", "DLMJ", "JBNT_MJ"):
                 # Will be computed from geometry later
                 props[field_name] = 0.0

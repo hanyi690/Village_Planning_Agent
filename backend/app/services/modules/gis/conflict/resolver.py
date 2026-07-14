@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
-from .conflict_detector import (
+from .detector import (
     ConflictReport,
     ConstraintViolation,
     MetricConflict,

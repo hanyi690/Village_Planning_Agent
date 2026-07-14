@@ -14,7 +14,7 @@ from .planning_zone_mapper import (
 from .procedural import (
     merge_parcels, split_by_area, simplify_boundary, buffer_zone,
 )
-from ...utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
+from ..utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
 from .ca_refiner import ZoneCARefiner
 
 __all__ = [

@@ -8,8 +8,8 @@ import json
 import math
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional, List
-from .providers.tianditu import TiandituProvider, WfsService, WFS_LAYERS
-from .providers.osm import OSMProvider
+from ..providers.tianditu import TiandituProvider, WfsService, WFS_LAYERS
+from ..providers.osm import OSMProvider
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

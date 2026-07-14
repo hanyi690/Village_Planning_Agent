@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
+from ..zone_schema.encodings import PLANNING_ZONE_NAMES
 
 logger = get_logger(__name__)
 
@@ -13,7 +14,7 @@ logger = get_logger(__name__)
 # 农田保护区 is optional — villages without basic farmland (e.g. 金田村)
 # won't have this zone, which is correct per YJJBNTTB designation
 REQUIRED_ZONE_TYPES = {"村庄建设区", "生态保护区", "一般农业区"}
-OPTIONAL_ZONE_TYPES = {"农田保护区"}
+OPTIONAL_ZONE_TYPES = {"农田保护区", "生态控制区", "林业发展区"}
 
 # Minimum area (ha) for each zone type
 MIN_ZONE_AREA_HA = {
