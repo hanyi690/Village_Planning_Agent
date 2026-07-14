@@ -49,9 +49,9 @@ class ZoneIntent:
     """
     zone_id: str
     land_use: str          # Must match PLANNING_COLORS keys: 居住用地, 产业用地, etc.
-    dlbm: str              # Primary DLBM code: "2121", "0600", "0900", etc.
-    area_ratio: float      # Target area as fraction of total boundary area (0.0-1.0)
-    direction: Direction   # Preferred placement direction within boundary
+    dlbm: str = ""         # Primary DLBM code: "2121", "0600", "0900", etc.
+    area_ratio: float = 0.0  # Target area as fraction of total boundary area (0.0-1.0)
+    direction: Direction = Direction.CENTER  # Preferred placement direction
     reference_feature: str = ""   # Semantic anchor: "near village committee", etc.
     adjacent_to: List[str] = field(default_factory=list)
     avoid_adjacent_to: List[str] = field(default_factory=list)
@@ -63,30 +63,30 @@ class ZoneIntent:
 @dataclass
 class FacilityIntent:
     """Declarative intent for a facility point placement."""
-    facility_id: str
-    facility_type: str     # 村委会, 学校, 卫生站, etc.
-    target_zone: str       # zone_id of the zone this facility belongs to
-    location_hint: str = ""  # "village center", "near main road", etc.
-    status: str = "existing"  # existing / planned / upgraded
+    facility_id: str = ""
+    facility_type: str = ""
+    target_zone: str = ""
+    location_hint: str = ""
+    status: str = "existing"
 
 
 @dataclass
 class AxisIntent:
     """Declarative intent for a development axis."""
-    axis_id: str
-    axis_type: str         # primary / secondary / corridor
-    direction: Direction   # Overall axis orientation
-    connects: List[str] = field(default_factory=list)  # zone_ids or facility_ids
-    label: str = ""        # Display name: "主要发展轴", etc.
+    axis_id: str = ""
+    axis_type: str = ""
+    direction: Direction = Direction.CENTER
+    connects: List[str] = field(default_factory=list)
+    label: str = ""
 
 
 @dataclass
 class ConstraintIntent:
     """Declarative constraint for layout generation."""
-    constraint_id: str
-    constraint_type: str   # farmland_protection / ecological_redline / historical / hazard
-    geometry_ref: str = ""  # Reference to GIS data layer key
-    strict: bool = True    # If True, zone cannot overlap; if False, warn only
+    constraint_id: str = ""
+    constraint_type: str = ""
+    geometry_ref: str = ""
+    strict: bool = True
 
 
 @dataclass

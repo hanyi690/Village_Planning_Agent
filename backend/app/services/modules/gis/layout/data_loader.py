@@ -183,71 +183,215 @@ def _extract_metrics_regex(content: str) -> Dict[str, Any]:
     return metrics
 
 
-def make_default_intent() -> Dict[str, Any]:
-    """Build default planning intent for Jin Tian village (no LLM required).
+def compute_intent_from_gis(
+    gis_data: Dict[str, Any],
+    village_name: str = "金田村委会",
+) -> Dict[str, Any]:
+    """Compute spatial intent from actual GIS data (no LLM, no hardcoded values).
 
-    Zone ratios derived from actual landuse distribution:
-      - 农业用地 (0100/0110/0200): ~80%
-      - 居住用地 (2121/2122): ~1.3%
-      - 生态绿地 (0300/0400): ~15%
-      - 公共服务 (0800): ~3%
+    Last-resort fallback: derives zone ratios from real landuse distribution.
+    The primary flow should be L3 reports or planning markdown parsing.
+
+    Args:
+        gis_data: Dict from load_all() with landuse_current_geojson
+        village_name: Village name for metadata
+
+    Returns:
+        Dict with zones[], facilities[], axes[], constraints[] from real data
     """
+    from .metrics_calculator import GISMetricsCalculator
+    from ..zone_schema.encodings import get_zone_type_for_dlbm, ZONE_TYPE_TO_DLBMS
+
+    metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+    distribution = GISMetricsCalculator.compute_zone_distribution(gis_data)
+
+    # Build zones from computed distribution
+    zones = []
+    for zone_type, area_ratio in sorted(distribution.items(), key=lambda x: -x[1]):
+        if area_ratio < 0.001:
+            continue
+        dlbms = ZONE_TYPE_TO_DLBMS.get(zone_type, [])
+        primary_dlbm = dlbms[0] if dlbms else "0100"
+        direction = "center" if zone_type in ("居住用地", "公共服务用地", "商业用地") else "periphery"
+        zones.append({
+            "zone_id": f"z_{zone_type[:2]}",
+            "land_use": zone_type,
+            "dlbm": primary_dlbm,
+            "area_ratio": area_ratio,
+            "direction": direction,
+            "preserve_existing": True,
+        })
+
+    # Normalize ratios to sum to 1.0
+    total_ratio = sum(z["area_ratio"] for z in zones)
+    if total_ratio > 0 and abs(total_ratio - 1.0) > 0.001:
+        for z in zones:
+            z["area_ratio"] = round(z["area_ratio"] / total_ratio, 4)
+
+    # Build constraints from computed metrics
+    constraints = []
+    if metrics["construction_area_ha"] > 0:
+        constraints.append({
+            "constraint_id": "c1",
+            "type": "construction_cap",
+            "value": metrics["construction_area_ha"],
+            "unit": "公顷",
+        })
+    if metrics["farmland_area_ha"] > 0:
+        constraints.append({
+            "constraint_id": "c2",
+            "type": "farmland_min",
+            "value": metrics["farmland_area_ha"],
+            "unit": "公顷",
+        })
+    if metrics["ecological_area_ha"] > 0:
+        constraints.append({
+            "constraint_id": "c3",
+            "type": "ecological_redline",
+            "value": metrics["ecological_area_ha"],
+            "unit": "公顷",
+        })
+
     return {
-        "zones": [
-            {
-                "zone_id": "z_farm",
-                "land_use": "农业用地",
-                "dlbm": "0200",
-                "area_ratio": 0.80,
-                "direction": "periphery",
-                "preserve_existing": True,
-            },
-            {
-                "zone_id": "z_eco",
-                "land_use": "生态绿地",
-                "dlbm": "0300",
-                "area_ratio": 0.15,
-                "direction": "periphery",
-                "preserve_existing": True,
-            },
-            {
-                "zone_id": "z_farm2",
-                "land_use": "农业用地",
-                "dlbm": "0110",
-                "area_ratio": 0.03,
-                "direction": "center",
-                "preserve_existing": True,
-            },
-            {
-                "zone_id": "z_build",
-                "land_use": "居住用地",
-                "dlbm": "2121",
-                "area_ratio": 0.013,
-                "direction": "center",
-                "preserve_existing": True,
-            },
-        ],
-        "facilities": [
-            {"facility_id": "f1", "facility_type": "村委会", "status": "现状保留", "location_hint": "村庄中心", "direction": "center"},
-            {"facility_id": "f2", "facility_type": "学校", "status": "现状保留", "location_hint": "居住区", "direction": "center"},
-            {"facility_id": "f3", "facility_type": "卫生站", "status": "规划新建", "location_hint": "居住区南侧", "direction": "south"},
-            {"facility_id": "f4", "facility_type": "文化站", "status": "规划新建", "location_hint": "村庄中心", "direction": "center"},
-            {"facility_id": "f5", "facility_type": "养老服务", "status": "规划新建", "location_hint": "居住区", "direction": "center"},
-            {"facility_id": "f6", "facility_type": "产业服务中心", "status": "规划新建", "location_hint": "村庄入口", "direction": "east"},
-        ],
-        "axes": [
-            {"axis_id": "a1", "axis_type": "primary", "direction": "east-west", "label": "主要发展轴"},
-            {"axis_id": "a2", "axis_type": "corridor", "direction": "north-south", "label": "生态廊道"},
-        ],
-        "constraints": [
-            {"constraint_id": "c1", "type": "construction_cap", "value": 30.5, "unit": "公顷"},
-            {"constraint_id": "c2", "type": "farmland_min", "value": 78.83, "unit": "公顷"},
-            {"constraint_id": "c3", "type": "ecological_redline", "value": 0, "unit": "公顷"},
-        ],
+        "zones": zones,
+        "facilities": [],
+        "axes": [{"axis_id": "a1", "axis_type": "primary", "direction": "east-west", "label": "主要发展轴"}],
+        "constraints": constraints,
         "metadata": {
-            "spatial_structure": "一核一带三区",
-            "village_name": "金田村委会",
+            "village_name": village_name,
+            "source": "gis_data_computed",
+            "computed_from": "landuse_current_geojson",
         },
+    }
+
+
+def _build_gis_constraints_for_llm(gis_data: Optional[Dict[str, Any]]) -> str:
+    """Build GIS-measured constraints string for LLM prompt injection."""
+    if not gis_data:
+        return ""
+    from .metrics_calculator import GISMetricsCalculator
+    metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+    lines = [
+        "## GIS 实测约束（必须遵守）",
+        f"- 建设用地面积: {metrics['construction_area_ha']} 公顷（上限）",
+        f"- 耕地保有量: {metrics['farmland_area_ha']} 公顷（下限）",
+        f"- 生态保护红线: {metrics['ecological_area_ha']} 公顷（下限）",
+        f"- 森林覆盖率: {metrics['forest_coverage']}%",
+        f"- 水域面积: {metrics['water_area_ha']} 公顷",
+        f"- 村域总面积: {metrics['total_area_ha']} 公顷",
+        "",
+        "以上约束来自 GIS 实测数据，area_ratio 必须与这些面积一致。",
+    ]
+    return "\n".join(lines)
+
+
+def _parse_text_via_llm(
+    text: str,
+    village_name: str,
+    gis_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Parse planning markdown text into intent via LLM (delegates to tool layer)."""
+    from app.tools.gis.parse import parse_text_via_llm
+    return parse_text_via_llm(text, village_name, gis_data)
+
+
+def resolve_gen_intent(
+    village_name: str = "金田村委会",
+    gis_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Gen path: parse intent from planning markdown (with GIS constraint injection).
+
+    Fallback: compute_intent_from_gis() if no markdown available.
+    """
+    try:
+        from .planning_text_loader import PlanningTextLoader
+        text = PlanningTextLoader.load_village_planning_markdown(village_name)
+        intent = _parse_text_via_llm(text, village_name, gis_data)
+        intent.setdefault("metadata", {})["source"] = "planning_markdown_llm"
+        logger.info("[resolve_gen_intent] Parsed from planning markdown")
+        return intent
+    except FileNotFoundError:
+        logger.warning("[resolve_gen_intent] No planning markdown found — cannot resolve gen intent")
+    except Exception as e:
+        logger.warning(f"[resolve_gen_intent] Markdown parsing failed: {e}")
+
+    if gis_data:
+        logger.warning("[resolve_gen_intent] DEGRADED: falling back to GIS data computation (no LLM)")
+        intent = compute_intent_from_gis(gis_data, village_name)
+        intent.setdefault("metadata", {})["source"] = "gis_data_fallback"
+        intent["metadata"]["degraded"] = True
+        intent["metadata"]["degraded_reason"] = "planning_markdown_not_found_or_llm_failed"
+        return intent
+
+    raise ValueError("No planning markdown found for gen intent")
+
+
+def resolve_plan_intent(
+    village_name: str = "金田村委会",
+    gis_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Plan path: parse intent from L3 reports (with GIS constraint injection).
+
+    Fallback: compute_intent_from_gis() if no reports available.
+    """
+    reports = load_l3_reports()
+    if reports:
+        try:
+            from app.tools.gis.parse import _parse_reports_to_intent
+            result = _parse_reports_to_intent(reports, village_name, gis_data)
+            if result.get("success"):
+                intent_json = result.get("data", {}).get("intent_json", {})
+                if intent_json.get("zones"):
+                    intent_json.setdefault("metadata", {})["source"] = "l3_reports_llm"
+                    logger.info("[resolve_plan_intent] Parsed from L3 reports")
+                    return intent_json
+        except Exception as e:
+            logger.warning(f"[resolve_plan_intent] L3 reports parsing failed: {e}")
+
+    if gis_data:
+        logger.warning("[resolve_plan_intent] DEGRADED: falling back to GIS data computation (no LLM)")
+        intent = compute_intent_from_gis(gis_data, village_name)
+        intent.setdefault("metadata", {})["source"] = "gis_data_fallback"
+        intent["metadata"]["degraded"] = True
+        intent["metadata"]["degraded_reason"] = "l3_reports_not_found_or_llm_failed"
+        return intent
+
+    raise ValueError("No L3 reports found for plan intent")
+
+
+def get_village_params(gis_data: Dict[str, Any]) -> Dict[str, str]:
+    """Compute village parameters from GIS data (replaces hardcoded strings).
+
+    Returns:
+        {"total_area": str, "land_use_description": str, "village_name": str}
+    """
+    from .metrics_calculator import GISMetricsCalculator
+    from ..zone_schema.encodings import DLBM_TO_DLMC
+
+    metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+    total_area = str(round(metrics["total_area_ha"], 2))
+
+    # Derive land use description from top 3 zone types by area
+    zone_areas = metrics.get("zone_areas", {})
+    sorted_zones = sorted(zone_areas.items(), key=lambda x: -x[1])
+    top_zones = [z for z, _ in sorted_zones[:3]]
+
+    zone_names = {
+        "农业用地": "农业用地", "生态绿地": "林地", "居住用地": "居民点",
+        "水域": "水域", "交通用地": "交通", "产业用地": "产业",
+        "公共服务用地": "公服", "商业用地": "商业",
+    }
+    descriptions = [zone_names.get(z, z) for z in top_zones]
+
+    if descriptions:
+        land_use_description = descriptions[0] + "为主，含" + "、".join(descriptions[1:])
+    else:
+        land_use_description = "未知"
+
+    return {
+        "total_area": total_area,
+        "land_use_description": land_use_description,
+        "village_name": "金田村委会",
     }
 
 

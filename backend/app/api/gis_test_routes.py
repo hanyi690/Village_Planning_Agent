@@ -322,7 +322,8 @@ async def locate_center(request: CenterRequest):
         )
         # Fallback to jintian boundary center if geocoding fails
         if center is None:
-            boundary = _load_jintian_geojson("current/boundary.geojson")
+            from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+            boundary = _load_all_gis().get("boundary_geojson")
             if boundary:
                 try:
                     from shapely.geometry import shape
@@ -330,9 +331,11 @@ async def locate_center(request: CenterRequest):
                     c = geom.centroid
                     center = (c.x, c.y)
                     metadata["fallback"] = "jintian_boundary_centroid"
-                except Exception:
-                    center = (116.044146, 24.818629)
-                    metadata["fallback"] = "hardcoded_default"
+                except Exception as e:
+                    metadata["fallback"] = "boundary_centroid_failed"
+                    metadata["fallback_error"] = str(e)
+            else:
+                metadata["fallback"] = "no_boundary_data"
         return {
             "success": center is not None,
             "center": list(center) if center else None,
@@ -485,16 +488,18 @@ async def test_facility_validation(request: FacilityValidationRequest):
     t0 = time.time()
     try:
         from app.services.modules.gis.validation.facility_validator import validate_facility_location
+        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
         location_tuple = tuple(request.location)
+        gis_data = _load_all_gis()
         analysis_params = {
             "population_points": [],
             "existing_facilities": [],
-            "land_use_data": _load_jintian_geojson("current/landuse.geojson"),
+            "land_use_data": gis_data.get("landuse_current_geojson"),
             "protection_zones": {
-                "farmland_protection": _load_jintian_geojson("farmland_protection.geojson"),
-                "ecological_redline": _load_jintian_geojson("ecological_protection.geojson"),
+                "farmland_protection": gis_data.get("farmland_protection_geojson"),
+                "ecological_redline": gis_data.get("ecological_protection_geojson"),
             },
-            "hazard_zones": _load_jintian_geojson("geological_hazard_points.geojson"),
+            "hazard_zones": gis_data.get("geological_hazard_geojson"),
         }
         result = await asyncio.to_thread(
             validate_facility_location, request.facility_type, location_tuple, analysis_params
@@ -511,8 +516,10 @@ async def test_ecological(request: EcologicalRequest):
     t0 = time.time()
     try:
         if request.use_jintian_data:
-            study_area = _load_jintian_geojson("current/boundary.geojson")
-            water = _load_jintian_geojson("wfs_hyda.geojson") or _load_jintian_geojson("current/landuse.geojson")
+            from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+            gis_data = _load_all_gis()
+            study_area = gis_data.get("boundary_geojson")
+            water = gis_data.get("landuse_current_geojson")
             if not study_area:
                 return {"success": False, "error": "jintian boundary data not found", "timing_ms": round((time.time() - t0) * 1000)}
 
@@ -529,8 +536,8 @@ async def test_ecological(request: EcologicalRequest):
                 logger.warning(f"[GIS Test] ecological full assessment unavailable: {e}")
 
             # Fallback: simple area-based assessment from jintian data
-            ecological = _load_jintian_geojson("ecological_protection.geojson")
-            farmland = _load_jintian_geojson("farmland_protection.geojson")
+            ecological = gis_data.get("ecological_protection_geojson")
+            farmland = gis_data.get("farmland_protection_geojson")
             eco_area = sum(
                 f.get("properties", {}).get("MJ", 0) or 0
                 for f in ecological.get("features", []) if ecological
@@ -574,84 +581,32 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
     t0 = time.time()
     try:
         from app.services.modules.gis.engine import SpatialLayoutEngine
+        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
 
-        # Load jintian data for the pipeline
-        boundary = _load_jintian_geojson("current/boundary.geojson")
-        landuse = _load_jintian_geojson("current/landuse.geojson")
-        road = _load_jintian_geojson("current/road.geojson")
-        farmland = _load_jintian_geojson("farmland_protection.geojson")
-        ecological = _load_jintian_geojson("ecological_protection.geojson")
-        historical = _load_jintian_geojson("historical_protection.geojson")
-        construction = _load_jintian_geojson("construction_zone.geojson")
-        hazard = _load_jintian_geojson("geological_hazard_points.geojson")
+        gis_data = _load_all_gis()
+        boundary = gis_data.get("boundary_geojson")
+        landuse = gis_data.get("landuse_current_geojson")
 
         if not boundary:
             return {"success": False, "error": "jintian boundary data not found", "timing_ms": round((time.time() - t0) * 1000)}
 
-        protection_zones = {}
-        if farmland:
-            protection_zones["farmland_protection"] = farmland
-        if ecological:
-            protection_zones["ecological_protection"] = ecological
-        if historical:
-            protection_zones["historical_protection"] = historical
-
-        engine = SpatialLayoutEngine()
-        from app.services.modules.gis.planning_intent import UnifiedSpatialIntent
-        intent = UnifiedSpatialIntent()
-        summaries = {
-            "land_use": {"construction_area_ha": 30.5, "new_construction_ha": 0.33},
-            "population": {"total": 2800},
-        }
+        summaries = GISMetricsCalculator.compute_summaries(gis_data)
 
         # Load L3 reports to trigger KG build + CA refinement + validation loop
-        project_root = Path(__file__).resolve().parents[3]
-        l3_report_path = project_root / "output" / "experiments" / "rag" / "g1" / "iter0" / "layer3_reports.json"
-        reports_for_kg = None
-        if l3_report_path.exists():
-            try:
-                import re
-                with open(l3_report_path, encoding="utf-8") as f:
-                    raw_reports = json.load(f).get("reports", {})
+        from app.services.modules.gis.layout.data_loader import load_l3_reports
+        reports_for_kg = load_l3_reports()
+        if not reports_for_kg:
+            reports_for_kg = {}
 
-                def _extract_metrics(content: str) -> dict:
-                    metrics = {}
-                    patterns = [
-                        (r'建设用地.*?([\d.]+)\s*公顷', '建设用地规模_公顷'),
-                        (r'耕地.*?([\d.]+)\s*公顷', '耕地保有量_公顷'),
-                        (r'生态保护红线.*?([\d.]+)\s*公顷', '生态保护红线面积'),
-                        (r'永久基本农田.*?([\d.]+)\s*公顷', '永久基本农田_公顷'),
-                        (r'森林覆盖率.*?([\d.]+)\s*%', '森林覆盖率_百分比'),
-                        (r'林地.*?([\d.]+)\s*公顷', '林地保有量_公顷'),
-                    ]
-                    for pat, key in patterns:
-                        m = re.search(pat, content)
-                        if m:
-                            metrics[key] = float(m.group(1))
-                    return metrics
-
-                reports_for_kg = {
-                    dk: {
-                        "summary": {"metrics": _extract_metrics(content)},
-                        "content": content,
-                    }
-                    for dk, content in raw_reports.items()
-                    if isinstance(content, str)
-                }
-            except Exception as e_load:
-                logger.warning(f"[GIS Test] L3 reports load failed: {e_load}")
-
-        conflict_report, resolution_report, layout_configs, pipeline_trace = await asyncio.to_thread(
+        engine = SpatialLayoutEngine()
+        layout_configs = await asyncio.to_thread(
             engine.full_pipeline,
-            summaries=summaries,
-            intent=intent,
-            boundary_geojson=boundary,
-            landuse_current_geojson=landuse,
-            protection_zones=protection_zones if protection_zones else None,
-            road_geojson=road,
-            construction_zone_geojson=construction,
-            hazard_points_geojson=hazard,
             reports=reports_for_kg,
+            landuse_geojson=landuse,
+            boundary_geojson=boundary,
+            gis_data=gis_data,
+            summaries=summaries,
             max_validation_rounds=2,
         )
 
@@ -663,15 +618,17 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
                 cfg_dict["geojson"] = cfg["geojson"]
             configs_data.append(cfg_dict)
 
+        conflict_report = getattr(engine, "_conflict_report", None)
+        resolution_report = getattr(engine, "_resolution_report", None)
+
         return {
             "success": True,
             "layout_configs": configs_data,
             "conflicts": {
-                "metric_conflicts": len(conflict_report.metric_conflicts) if hasattr(conflict_report, "metric_conflicts") else 0,
-                "constraint_violations": len(conflict_report.constraint_violations) if hasattr(conflict_report, "constraint_violations") else 0,
+                "metric_conflicts": len(conflict_report.metric_conflicts) if conflict_report and hasattr(conflict_report, "metric_conflicts") else 0,
+                "constraint_violations": len(conflict_report.constraint_violations) if conflict_report and hasattr(conflict_report, "constraint_violations") else 0,
             },
-            "kg_built": engine.has_kg(),
-            "pipeline_trace": pipeline_trace.model_dump() if hasattr(pipeline_trace, "model_dump") else pipeline_trace,
+            "kg_built": engine.kg is not None,
             "timing_ms": round((time.time() - t0) * 1000),
         }
     except Exception as e:
@@ -684,8 +641,10 @@ async def test_landuse_change(request: LanduseChangeRequest):
     """Compare current vs planned landuse from jintian data."""
     t0 = time.time()
     try:
-        current = _load_jintian_geojson("current/landuse.geojson")
-        planned = _load_jintian_geojson("planned/landuse.geojson")
+        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+        gis_data = _load_all_gis()
+        current = gis_data.get("landuse_current_geojson")
+        planned = gis_data.get("landuse_planned_geojson")
 
         if not current or not planned:
             return {"success": False, "error": "jintian landuse data not found", "timing_ms": round((time.time() - t0) * 1000)}
@@ -734,18 +693,11 @@ async def test_constraint_validator(request: ConstraintValidatorRequest):
     t0 = time.time()
     try:
         from app.services.modules.gis.conflict.detector import ConflictDetector
+        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
 
-        # Use jintian-based summaries
-        summaries = {
-            "land_use": {
-                "construction_area_ha": 30.5,
-                "new_construction_ha": 0.33,
-                "farmland_area_ha": 120.0,
-                "ecological_area_ha": 80.0,
-            },
-            "population": {"total": 2800, "density": 700},
-            "natural_environment": {"forest_coverage": 0.65},
-        }
+        _gis_data_for_metrics = _load_all_gis()
+        summaries = GISMetricsCalculator.compute_summaries(_gis_data_for_metrics)
 
         detector = ConflictDetector()
         report = await asyncio.to_thread(detector.detect_all, summaries)
@@ -768,7 +720,9 @@ async def test_hazard_buffer(request: HazardBufferRequest):
     """Generate geological hazard buffer zones from jintian data."""
     t0 = time.time()
     try:
-        hazard_data = _load_jintian_geojson("geological_hazard_points.geojson")
+        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+        gis_data = _load_all_gis()
+        hazard_data = gis_data.get("geological_hazard_geojson")
 
         if not hazard_data:
             return {"success": False, "error": "jintian hazard data not found", "timing_ms": round((time.time() - t0) * 1000)}
@@ -836,24 +790,25 @@ async def validate_layout(request: LayoutValidateRequest):
         # Mode 2: generate layout from jintian data then validate
         if request.use_jintian_data and not layout_configs:
             from app.services.modules.gis.engine import SpatialLayoutEngine
-            from app.services.modules.gis.planning_intent import UnifiedSpatialIntent
+            from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+            from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
 
-            boundary = _load_jintian_geojson("current/boundary.geojson")
-            landuse = _load_jintian_geojson("current/landuse.geojson")
+            gis_data = _load_all_gis()
+            boundary = gis_data.get("boundary_geojson")
+            landuse = gis_data.get("landuse_current_geojson")
             if not boundary:
                 return {"success": False, "error": "jintian boundary data not found", "timing_ms": round((time.time() - t0) * 1000)}
 
             engine = SpatialLayoutEngine()
-            intent = UnifiedSpatialIntent()
-            summaries = {
-                "land_use": {"construction_area_ha": 30.5, "new_construction_ha": 0.33},
-                "population": {"total": 2800},
-            }
-            _, _, layout_configs = engine.full_pipeline(
-                summaries=summaries,
-                intent=intent,
+            summaries = GISMetricsCalculator.compute_summaries(gis_data)
+            from app.services.modules.gis.layout.data_loader import load_l3_reports
+            reports = load_l3_reports() or {}
+            layout_configs = engine.full_pipeline(
+                reports=reports,
+                landuse_geojson=landuse,
                 boundary_geojson=boundary,
-                landuse_current_geojson=landuse,
+                gis_data=gis_data,
+                summaries=summaries,
             )
 
         if not layout_configs:
@@ -957,7 +912,9 @@ async def parse_planning_text(request: ParseTextRequest):
             logger.info(f"[parse-text] Loaded {len(reports)} dims from DB session {session_id[:16]}...: {dim_list}")
 
             from app.tools.gis.parse import _parse_reports_to_intent
-            result = _parse_reports_to_intent(reports=reports, village_name=request.village_name)
+            from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+            _gis_data_for_parse = _load_all_gis()
+            result = _parse_reports_to_intent(reports=reports, village_name=request.village_name, gis_data=_gis_data_for_parse)
 
             if not result.get("success"):
                 return {"success": False, "error": result.get("error", "Unknown"), "timing_ms": round((time.time() - t0) * 1000)}
@@ -982,12 +939,16 @@ async def parse_planning_text(request: ParseTextRequest):
 
         from app.agent.gis.prompts import format_parse_prompt
         from app.core.settings import LLM_MODEL
+        from app.services.modules.gis.layout.data_loader import get_village_params, load_all as _load_all_gis
+
+        _gis_data_for_params = _load_all_gis()
+        _params = get_village_params(_gis_data_for_params)
 
         prompt_text = format_parse_prompt(
             planning_text=planning_text,
             village_name=request.village_name,
-            total_area="2352.56",
-            current_land_use="农业用地为主，含居民点、林地、水域",
+            total_area=_params["total_area"],
+            current_land_use=_params["land_use_description"],
         )
 
         parse_trace = None
@@ -1041,37 +1002,37 @@ async def parse_planning_text(request: ParseTextRequest):
 
     # --- Common: Generate layout from intent_json ---
     try:
-        from app.tools.gis.parse import _intent_to_dict
         from app.services.modules.gis.engine import SpatialLayoutEngine
+        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
 
-        intent = _intent_to_dict(intent_json)
         engine = SpatialLayoutEngine()
-
-        boundary = _load_jintian_geojson("current/boundary.geojson")
-        landuse = _load_jintian_geojson("current/landuse.geojson")
+        gis_data = _load_all_gis()
+        boundary = gis_data.get("boundary_geojson")
+        landuse = gis_data.get("landuse_current_geojson")
 
         configs = engine.generate_layout(
-            intent=intent,
+            intent=intent_json,
+            landuse_geojson=landuse,
             boundary_geojson=boundary,
-            landuse_current_geojson=landuse,
+            gis_data=gis_data,
         )
 
-        from app.services.modules.gis.planning_intent import UnifiedSpatialIntent as USI
-        default_intent = USI()
         default_configs = engine.generate_layout(
-            intent=default_intent,
+            intent=None,
+            landuse_geojson=landuse,
             boundary_geojson=boundary,
-            landuse_current_geojson=landuse,
+            gis_data=gis_data,
         )
 
-        zone_summary = ", ".join(f"{z.land_use}({z.area_ratio:.1%})" for z in intent.zones)
+        zones = intent_json.get("zones", [])
+        zone_summary = ", ".join(f"{z.get('land_use','?')}({z.get('area_ratio',0):.1%})" for z in zones)
 
         return {
             "success": True,
             "intent": {
-                "zone_count": len(intent.zones),
-                "facility_count": len(intent.facilities),
-                "axis_count": len(intent.axes),
+                "zone_count": len(zones),
+                "facility_count": len(intent_json.get("facilities", [])),
+                "axis_count": len(intent_json.get("axes", [])),
                 "zones": zone_summary,
             },
             "parsed_layout": {
@@ -1101,36 +1062,9 @@ async def parse_planning_text(request: ParseTextRequest):
 
 
 def _get_jintian_planning_text() -> str:
-    """Return a built-in planning text sample for Jintian village."""
-    return """## 金田村规划概况
-
-金田村位于广东省梅州市梅县区，总面积约23.5平方公里。村庄以农业生产为主，
-现有耕地约78.83公顷，生态保护面积362.02公顷，建设区约30.50公顷。
-
-## 用地规划
-
-根据上位规划要求，金田村应保持农田保护区78.83公顷，
-划定村庄建设区30.50公顷用于居民点建设和公共服务设施。
-生态保护区362.02公顷需严格管控，一般农业区1881.54公顷可适度开发。
-
-居住用地主要集中在村庄中心区域，沿主要道路分布。
-产业用地规划在村庄东部，远离居民区。
-公共服务用地包括村委会、卫生站、学校等，位于村庄中心。
-生态绿地主要分布在北部山体和水系周边。
-交通用地沿东西向主干道分布，连接周边村庄。
-水域包括金田河及山塘水库，需保护水源地。
-
-## 公共服务设施
-
-现状设施：村委会1处，卫生站1所，小学1所。
-规划新增：文化活动中心1处，养老服务站1处，停车场2处。
-设施布局原则：服务半径不超过500米，优先布局在村庄中心。
-
-## 发展轴线
-
-主要发展轴：沿东西向主干道（省道S223）布局，连接镇区与周边村庄。
-次要发展轴：沿南北向村道，连接北部生态区与南部农业区。
-空间结构：一心（村委会中心）、一轴（东西主轴）、两区（生态保护区与建设发展区）。"""
+    """Return planning text from actual markdown file."""
+    from app.services.modules.gis.layout.planning_text_loader import PlanningTextLoader
+    return PlanningTextLoader.load_village_planning_markdown("金田村")
 
 
 # ============================================
@@ -1218,142 +1152,417 @@ async def get_jintian_data(filename: str):
 # ============================================
 # Jin Tian Pipeline Test Endpoint
 # ============================================
+#
+# 三路对比架构：
+#   规划 markdown (人工规划文本) ──→ gen intent ──→ KG→CONFLICT→ALLOCATE→GENERATE ──→ gen layers
+#   L3 reports (系统L3报告)        ──→ plan intent ──→ KG→CONFLICT→ALLOCATE→GENERATE ──→ plan layers
+#   planned/ (人工绘制GIS图纸)      ───────────────────────────────────────────────────→ ground truth
+#
+# 对比矩阵：
+#   gen layers  vs planned/  =  「AI 解读人工规划文本」 vs 「人工绘制图纸」  — 测试 AI 能否准确理解规划文本
+#   plan layers vs planned/  =  「AI 基于 L3 报告生成」 vs 「人工绘制图纸」  — 测试 AI 能否匹配人工经验
+#   gen layers  vs plan layers = 「人工文本路径」        vs 「L3 报告路径」    — 测试两条路径一致性
+# ============================================
+
+def _sanitize_floats(obj: Any) -> Any:
+    """递归替换 inf/nan 为 None，确保 JSON 兼容。
+
+    MIP 求解器和 AxisBuilder 可能在几何坐标中产生 inf，
+    FastAPI 的 JSONResponse 无法序列化这些值。
+    Shapely 输出的 GeoJSON 坐标可能使用 tuple，需一并处理。
+    """
+    import math
+    if isinstance(obj, float):
+        if math.isinf(obj) or math.isnan(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
 
 class JinTianPipelineRequest(BaseModel):
+    """Jin Tian pipeline 请求参数。
+
+    默认运行双路径（gen + plan）并执行三路对比。
+    可切换为单路径或跳过对比以加快测试。
+    """
+    # 路径控制：gen = 人工规划 markdown, plan = L3 reports, both = 双路径对比
+    run_path: str = "both"       # "gen" | "plan" | "both"
+    # 是否使用实时 LLM 解析（否则走缓存）
     use_llm: bool = False
+    # 是否与 planned/ 人工绘制图纸对比
     compare_to_planned: bool = True
+    # 实时 LLM 解析时使用的规划文本（use_llm=True 时生效）
     planning_text: str = ""
 
 
-@router.post("/jintian/pipeline", summary="Run full pipeline with Jin Tian real data")
+@router.post("/jintian/pipeline", summary="双路径 pipeline：gen(人工文本) / plan(L3报告) + 三路对比")
 async def jintian_pipeline(request: JinTianPipelineRequest):
-    """Run the complete GIS layout pipeline with Jin Tian village's 660 parcels.
+    """完整的 GIS 布局管线 — 支持双路径并行 + 三路对比。
 
-    Returns layout_configs, comparison with planned/ ground truth,
-    and key metrics. No Agent/LLM required — calls generate_layout internals.
+    流程（每条路径独立执行）：
+      1. 解析 intent（gen: 人工规划 markdown → LLM, plan: L3 reports → LLM）
+      2. 构建 KG（注入 GIS 实测约束: 建设用地上限、耕地保有量下限等）
+      3. 冲突检测 & 消解（跨维度指标冲突 + 约束违规）
+      4. MIP 分配（PuLP 线性规划，引入 KG 约束 + 邻接奖励）
+      5. 生成图层（function_zone + planning_zone + facility_point + axis）
+
+    三路对比（compare_to_planned=True 时）：
+      - gen layers vs planned/  : 人工规划文本 → AI 生成 vs 人工绘制
+      - plan layers vs planned/ : L3 报告 → AI 生成 vs 人工绘制
+      - gen layers vs plan layers : 两条 AI 路径一致性评估
     """
     t0 = time.time()
     try:
         from app.services.modules.gis.layout.data_loader import (
             load_all, load_current, load_planned,
-            make_default_intent, get_data_summary,
+            get_village_params, get_data_summary,
         )
+        from app.services.modules.gis.layout.intent_cache import (
+            resolve_gen_intent_cached, resolve_plan_intent_cached,
+        )
+        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
 
-        # ── Load data ─────────────────────────────────────────────
+        # ── 加载数据（所有路径共用）───────────────────────────────
         gis_data = load_all()
         current_data = load_current()
         planned_data = load_planned() if request.compare_to_planned else {}
         data_summary = get_data_summary(gis_data)
 
-        # ── Build intent ──────────────────────────────────────────
-        intent = make_default_intent()
-        parse_source = "default"
+        # 执行状态容器
+        gen_result: Dict[str, Any] = {}
+        plan_result: Dict[str, Any] = {}
 
-        if request.use_llm and request.planning_text:
-            from app.agent.gis.prompts import format_parse_prompt
-            from app.core.settings import LLM_MODEL
-            from langchain_openai import ChatOpenAI
-            import re as _re
-
-            prompt_text = format_parse_prompt(
-                planning_text=request.planning_text,
-                village_name="金田村委会",
-                total_area="2352.56",
-                current_land_use="农业用地为主，含居民点、林地、水域",
-            )
-            llm = ChatOpenAI(model=LLM_MODEL, temperature=0, request_timeout=120)
-            response = await llm.ainvoke(prompt_text)
-            json_match = _re.search(r'```json\s*(.*?)\s*```', response.content, _re.DOTALL)
-            if not json_match:
-                json_match = _re.search(r'(\{[\s\S]*\})', response.content)
-            if json_match:
-                try:
-                    llm_intent = json.loads(json_match.group(1))
-                    if llm_intent.get("zones"):
-                        intent = llm_intent
-                        parse_source = "llm"
-                except json.JSONDecodeError:
-                    pass
-
-        # ── Generate layers ───────────────────────────────────────
-        from app.tools.gis.generate import (
-            _generate_function_zones,
-            _generate_planning_zones,
-            _generate_facilities,
-            _generate_axes,
-        )
-
-        layers: List[Dict[str, Any]] = []
-        fz = _generate_function_zones(intent, gis_data)
-        if fz:
-            layers.append(fz)
-        pz = _generate_planning_zones(None, gis_data, intent)
-        if pz:
-            layers.append(pz)
-        fp = _generate_facilities(intent, gis_data)
-        if fp:
-            layers.append(fp)
-        ax = _generate_axes(intent, gis_data)
-        if ax:
-            layers.append(ax)
-
-        layer_summary = []
-        for lyr in layers:
-            feats = lyr.get("data", {}).get("features", [])
-            layer_summary.append({
-                "layerType": lyr.get("layerType"),
-                "feature_count": len(feats),
-            })
-
-        # ── Compare with planned ──────────────────────────────────
-        comparison = None
-        if request.compare_to_planned and planned_data:
-            from app.services.modules.gis.layout.compare_layouts import compare
-
-            protection = {}
-            for key, name in [
-                ("farmland_protection_geojson", "farmland"),
-                ("ecological_protection_geojson", "ecological"),
-                ("historical_protection_geojson", "historical"),
-            ]:
-                val = gis_data.get(key)
-                if val and val.get("features"):
-                    protection[name] = val
-
-            report = compare(layers, planned_data, protection if protection else None)
-            comparison = report.to_dict()
-
-        # ── Export ─────────────────────────────────────────────────
-        export_info = None
-        try:
-            from app.tools.gis.export import export_gdb
-
-            export_result = export_gdb.func(
-                layout_configs=layers,
-                allocated_geojson=None,
-                village_name="金田村委会",
+        # ============================================================
+        # 路径 A: gen — 人工规划 markdown → LLM → intent → layers
+        #   数据源: data/gis/jintian/planning_text/金田村委会.md
+        #   含义: AI 解读人类规划师书写的规划文档，生成 GIS 图层
+        # ============================================================
+        if request.run_path in ("gen", "both"):
+            gen_result = await _run_pipeline_path(
+                request=request,
+                path_name="gen",
+                intent_resolver=lambda: resolve_gen_intent_cached("金田村委会", gis_data),
                 gis_data=gis_data,
-                tool_call_id="jintian-pipeline",
+                planned_data=planned_data,
+                village_name="金田村委会",
             )
-            if hasattr(export_result, "update"):
-                export_info = {"status": "exported"}
-            else:
-                export_info = {"status": "exported"}
-        except Exception as e:
-            export_info = {"status": "failed", "error": str(e)}
 
+        # ============================================================
+        # 路径 B: plan — L3 reports → LLM → intent → layers
+        #   数据源: output/experiments/rag/g1/iter0/layer3_reports.json
+        #   含义: AI 基于 Agent pipeline 产出的 L3 报告生成 GIS 图层
+        # ============================================================
+        if request.run_path in ("plan", "both"):
+            plan_result = await _run_pipeline_path(
+                request=request,
+                path_name="plan",
+                intent_resolver=lambda: resolve_plan_intent_cached("金田村委会", gis_data),
+                gis_data=gis_data,
+                planned_data=planned_data,
+                village_name="金田村委会",
+            )
+
+        # ============================================================
+        # 三路对比
+        #   gen vs planned/ : 「AI 解读人工规划文本」 vs 「人工绘制图纸」
+        #   plan vs planned/ : 「AI 基于 L3 报告」 vs 「人工绘制图纸」
+        #   gen vs plan     : 「人工文本路径」 vs 「L3 报告路径」
+        # ============================================================
+        comparison = None
+        if request.compare_to_planned:
+            comparison = _build_three_way_comparison(
+                gen_result=gen_result.get("layers"),
+                plan_result=plan_result.get("layers"),
+                planned_data=planned_data,
+                gis_data=gis_data,
+            )
+
+        # ── 汇总 ───────────────────────────────────────────────────
         elapsed = round((time.time() - t0) * 1000)
-        return {
+        response: Dict[str, Any] = {
             "success": True,
-            "parse_source": parse_source,
             "data_summary": data_summary,
-            "layers": layer_summary,
-            "layout_configs": layers,
-            "comparison": comparison,
-            "export": export_info,
             "timing_ms": elapsed,
         }
+
+        # 附加 gen 路径结果
+        if gen_result:
+            response["gen"] = {
+                "parse_source": gen_result.get("parse_source"),
+                "intent_zones": len(gen_result.get("intent", {}).get("zones", [])),
+                "layers": gen_result.get("layer_summary"),
+                "kg": gen_result.get("kg"),
+                "conflict": gen_result.get("conflict"),
+                "allocation": gen_result.get("allocation"),
+                "layout_configs": gen_result.get("layers"),
+            }
+
+        # 附加 plan 路径结果
+        if plan_result:
+            response["plan"] = {
+                "parse_source": plan_result.get("parse_source"),
+                "intent_zones": len(plan_result.get("intent", {}).get("zones", [])),
+                "layers": plan_result.get("layer_summary"),
+                "kg": plan_result.get("kg"),
+                "conflict": plan_result.get("conflict"),
+                "allocation": plan_result.get("allocation"),
+                "layout_configs": plan_result.get("layers"),
+            }
+
+        # 附加三路对比结果（sanitize inf/nan → None 以确保 JSON 兼容）
+        if comparison:
+            response["comparison"] = comparison
+
+        return _sanitize_floats(response)
 
     except Exception as e:
         logger.error(f"[GIS Test] jintian-pipeline failed: {e}", exc_info=True)
         return {"success": False, "error": str(e), "timing_ms": round((time.time() - t0) * 1000)}
+
+
+async def _run_pipeline_path(
+    request: "JinTianPipelineRequest",
+    path_name: str,
+    intent_resolver: Any,
+    gis_data: Dict[str, Any],
+    planned_data: Dict[str, Any],
+    village_name: str,
+) -> Dict[str, Any]:
+    """执行单条 pipeline 路径：PARSE → KG → CONFLICT → ALLOCATE → GENERATE。
+
+    Args:
+        path_name: "gen" (人工规划文本) 或 "plan" (L3系统报告)
+        intent_resolver: 返回 intent dict 的可调用对象（加密钥缓存命中/LLM 解析）
+        gis_data: load_all() 产出的全部 GIS 数据
+        planned_data: load_planned() 产出的 planned/ 数据
+        village_name: 村名
+    """
+    from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+
+    result: Dict[str, Any] = {}
+
+    # ── Step 1: 解析 intent ───────────────────────────────────────
+    # gen 路径: 加载 data/gis/jintian/planning_text/金田村委会.md → LLM 解析
+    # plan 路径: 加载 output/.../layer3_reports.json → LLM 解析
+    # 均注入 GIS 实测约束（建设用地上限/耕地保有量下限/生态红线）到 prompt
+    try:
+        intent = intent_resolver()
+        parse_source = intent.get("metadata", {}).get("source", f"{path_name}_cached")
+        result["parse_source"] = parse_source
+        result["intent"] = intent
+    except Exception as e:
+        logger.warning(f"[{path_name}] Intent resolution failed: {e}")
+        result["parse_source"] = "failed"
+        result["intent"] = {"zones": [], "facilities": [], "axes": [], "constraints": []}
+
+    # 如果用户提供了自定义规划文本且开启 use_llm，用实时 LLM 覆盖缓存
+    if request.use_llm and request.planning_text:
+        try:
+            from app.tools.gis.parse import parse_text_via_llm
+            llm_intent = parse_text_via_llm(
+                text=request.planning_text,
+                village_name=village_name,
+                gis_data=gis_data,
+            )
+            if llm_intent.get("zones"):
+                result["intent"] = llm_intent
+                result["parse_source"] = f"{path_name}_llm_live"
+        except Exception as e:
+            logger.warning(f"[{path_name}] Live LLM parsing failed: {e}")
+
+    intent = result["intent"]
+
+    # ── Step 2: 构建 KG（注入 GIS 实测约束）───────────────────────
+    # GIS 实测约束作为最高优先级数据源注入 RDF 三元组：
+    #   (pln:金田村委会, pln:constructionCap_ha, 21.66)  — 建设用地面积上限
+    #   (pln:金田村委会, pln:farmlandMin_ha, 98.54)       — 耕地保有量下限
+    #   (pln:金田村委会, pln:ecologicalMin_ha, 2232.66)   — 生态保护红线面积下限
+    kg_info = None
+    kg_constraints: List[Dict[str, Any]] = []
+    kg = None
+    try:
+        from app.services.modules.gis.kg import PlanningKG
+        landuse_geojson = gis_data.get("landuse_current_geojson")
+        kg = PlanningKG(village_name=village_name)
+        kg.build_from_intent(
+            intent=intent,
+            landuse_geojson=landuse_geojson,
+            gis_data=gis_data,
+        )
+        kg_constraints = kg.get_constraints()
+        kg_info = {
+            "triple_count": kg.get_triple_count(),
+            "constraint_count": len(kg_constraints),
+        }
+    except Exception as e:
+        kg_info = {"error": str(e)}
+    result["kg"] = kg_info
+
+    # ── Step 3: 冲突检测 & 消解 ───────────────────────────────────
+    # 检测三类冲突：
+    #   (a) 指标冲突 — 多维度对同一概念给出不同数值（e.g., 建设用地在 dim_a=30ha, dim_b=25ha）
+    #   (b) 约束违规 — 规划值超出 GIS 实测约束（e.g., 规划建设用地 50ha > 实测上限 21.66ha）
+    #   (c) 空间冲突 — 不同维度对空间结构定义不一致
+    conflict_info = None
+    try:
+        from app.services.modules.gis.conflict.detector import ConflictDetector
+        from app.services.modules.gis.conflict.resolver import ConflictResolver
+        summaries = GISMetricsCalculator.compute_summaries(gis_data)
+        conflict_report = ConflictDetector().detect_all(summaries)
+        resolution_report = ConflictResolver().resolve(conflict_report)
+        conflict_info = {
+            "metric_conflicts": len(conflict_report.metric_conflicts) if hasattr(conflict_report, 'metric_conflicts') else 0,
+            "constraint_violations": len(conflict_report.constraint_violations) if hasattr(conflict_report, 'constraint_violations') else 0,
+            "resolved_values": resolution_report.resolved_values if hasattr(resolution_report, 'resolved_values') else {},
+        }
+    except Exception as e:
+        conflict_info = {"error": str(e)}
+    result["conflict"] = conflict_info
+
+    # ── Step 4: MIP 分配 ──────────────────────────────────────────
+    # 将 intent 中的 area_ratio 目标转换为实际公顷数 → PuLP 线性规划求解
+    # MIP 目标函数: 最小化 (面积偏差 + DLBM 变更惩罚 + 邻接奖励)
+    # 硬约束: 受保护地类（基本农田/水域/生态林）不可划入建设区
+    allocated_geojson = None
+    try:
+        from app.services.modules.gis.optimizer.mip_allocator import MIPZoneAllocator
+        metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+        total_area_ha = metrics["total_area_ha"]
+
+        # 将 area_ratio (0.0-1.0) 转换为实际公顷目标
+        targets = {}
+        for z in intent.get("zones", []):
+            lu = z.get("land_use", "")
+            ratio = z.get("area_ratio", 0)
+            if lu and ratio:
+                targets[lu] = ratio * total_area_ha
+
+        if targets and landuse_geojson:
+            allocator = MIPZoneAllocator()
+            allocated_geojson, mip_trace = allocator.solve(
+                landuse_geojson=landuse_geojson,
+                targets=targets,
+                constraints=kg_constraints if kg_constraints else None,
+                kg=kg,
+            )
+            result["allocation"] = {
+                "mode": mip_trace.get("mode", "unknown"),
+                "changed_pct": mip_trace.get("changed_pct", 0),
+                "solver_status": mip_trace.get("solver_status", "unknown"),
+            }
+        else:
+            result["allocation"] = {"mode": "skipped", "reason": "no targets or landuse data"}
+    except Exception as e:
+        logger.warning(f"[{path_name}] Allocation failed: {e}")
+        result["allocation"] = {"mode": "failed", "error": str(e)}
+
+    # ── Step 5: 生成图层 ──────────────────────────────────────────
+    # 4 层 GIS 图层：
+    #   function_zone  — 功能分区（ZoneGenerator: DLBM→6类合并→面积约束→CA 精化）
+    #   planning_zone  — 规划分区（DLBM→4类：农田保护区/村庄建设区/生态保护区/一般农业区）
+    #   facility_point — 设施布点（FacilityPlacer: 4策略布点）
+    #   infrastructure — 发展轴线（AxisBuilder: 一核一带三区）
+    from app.tools.gis.generate import (
+        _generate_function_zones,
+        _make_planning_zone_layer,
+        _generate_facilities,
+        _generate_axes,
+    )
+
+    layers: List[Dict[str, Any]] = []
+    fz = _generate_function_zones(intent, gis_data)
+    if fz:
+        layers.append(fz)
+    # 使用分配后的 GeoJSON（如果有），否则使用原始 landuse
+    pz = _make_planning_zone_layer(allocated_geojson, gis_data)
+    if pz:
+        layers.append(pz)
+    fp = _generate_facilities(intent, gis_data)
+    if fp:
+        layers.append(fp)
+    ax = _generate_axes(intent, gis_data)
+    if ax:
+        layers.append(ax)
+
+    result["layers"] = layers
+    result["layer_summary"] = [
+        {
+            "layerType": lyr.get("layerType"),
+            "feature_count": len(lyr.get("data", {}).get("features", [])),
+        }
+        for lyr in layers
+    ]
+
+    return result
+
+
+def _build_three_way_comparison(
+    gen_result: Optional[List[Dict[str, Any]]],
+    plan_result: Optional[List[Dict[str, Any]]],
+    planned_data: Dict[str, Any],
+    gis_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    """构建三路对比报告。
+
+    对比维度:
+      1. gen vs planned/ : 「AI 解读人工规划文本」vs「人工绘制图纸」
+         — 测试 AI 能否准确理解人类规划师的规划文档
+      2. plan vs planned/ : 「AI 基于 L3 报告生成」vs「人工绘制图纸」
+         — 测试 Agent pipeline L3 报告产出能否匹配人工经验
+      3. gen vs plan      : 「人工文本路径」vs「L3 报告路径」
+         — 测试两条 AI 路径输出的一致性（同一套规划理念，不同输入源）
+
+    返回值结构:
+      {
+        "gen_vs_planned": {ComparisonReport.to_dict()},
+        "plan_vs_planned": {ComparisonReport.to_dict()},
+        "gen_vs_plan": {ComparisonReport.to_dict()},
+      }
+    """
+    from app.services.modules.gis.layout.compare_layouts import compare
+
+    # 提取保护区域（用于对比中的合规检查）
+    protection = {}
+    for key, name in [
+        ("farmland_protection_geojson", "farmland"),
+        ("ecological_protection_geojson", "ecological"),
+        ("historical_protection_geojson", "historical"),
+    ]:
+        val = gis_data.get(key)
+        if val and val.get("features"):
+            protection[name] = val
+
+    comparison: Dict[str, Any] = {}
+
+    # ── 对比 1: gen layers vs planned/ ──
+    # 「AI 解读人工规划文本」vs「人类绘制的规划图纸」
+    if gen_result and planned_data:
+        report = compare(gen_result, planned_data, protection if protection else None)
+        comparison["gen_vs_planned"] = report.to_dict()
+
+    # ── 对比 2: plan layers vs planned/ ──
+    # 「AI 基于 L3 报告生成」vs「人类绘制的规划图纸」
+    if plan_result and planned_data:
+        report = compare(plan_result, planned_data, protection if protection else None)
+        comparison["plan_vs_planned"] = report.to_dict()
+
+    # ── 对比 3: gen layers vs plan layers ──
+    # 两条 AI 路径一致性 — 将 plan layers 作为"模拟 planned/"对比
+    # 如果 gen 路径产出的图层与 plan 路径高一致，说明两条路径都可靠
+    if gen_result and plan_result:
+        # 构造 plan layers 为"伪 planned"数据
+        plan_landuse = None
+        for lyr in plan_result:
+            if lyr.get("layerType") == "planning_zone":
+                plan_landuse = lyr.get("data")
+                break
+        if plan_landuse:
+            fake_planned = {"landuse_planned_geojson": plan_landuse}
+            report = compare(gen_result, fake_planned, protection if protection else None)
+            comparison["gen_vs_plan"] = report.to_dict()
+
+    return comparison

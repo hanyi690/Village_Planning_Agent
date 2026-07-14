@@ -20,20 +20,7 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def _make_result(success: bool, data: Any = None, error: str = "") -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"success": success}
-    if data is not None:
-        payload["data"] = data
-    if error:
-        payload["error"] = error
-    return payload
-
-
-def _to_tool_message(result: Dict[str, Any], tool_call_id: str) -> ToolMessage:
-    return ToolMessage(
-        content=json.dumps(result, ensure_ascii=False, default=str),
-        tool_call_id=tool_call_id,
-    )
+from ._helpers import make_result, to_tool_message
 
 
 def _normalize_fields(geojson: Dict, layer_key: str) -> Dict:
@@ -134,14 +121,14 @@ def export_gdb(
             json.dump(layout_configs, f, ensure_ascii=False, indent=2)
         exported.append("layout.json")
 
-    result = _make_result(True, data={
+    result = make_result(True, data={
         "output_dir": output_dir,
         "exported_files": exported,
         "file_count": len(exported),
     })
 
     return Command(update={
-        "messages": [_to_tool_message(result, tool_call_id)],
+        "messages": [to_tool_message(result, tool_call_id)],
     })
 
 

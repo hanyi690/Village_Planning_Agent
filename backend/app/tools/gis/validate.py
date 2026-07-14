@@ -8,11 +8,9 @@ Merges:
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List, Optional, Annotated
 
 from langchain_core.tools import tool, InjectedToolCallId
-from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
@@ -29,20 +27,7 @@ from app.services.modules.gis.validation.layout_validator import (
 )
 
 
-def _make_result(success: bool, data: Any = None, error: str = "") -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"success": success}
-    if data is not None:
-        payload["data"] = data
-    if error:
-        payload["error"] = error
-    return payload
-
-
-def _to_tool_message(result: Dict[str, Any], tool_call_id: str) -> ToolMessage:
-    return ToolMessage(
-        content=json.dumps(result, ensure_ascii=False, default=str),
-        tool_call_id=tool_call_id,
-    )
+from ._helpers import make_result, to_tool_message
 
 
 @tool
@@ -62,8 +47,8 @@ def validate_layout(
     """
     if not layout_configs:
         return Command(update={
-            "messages": [_to_tool_message(
-                _make_result(False, error="No layout to validate"), tool_call_id
+            "messages": [to_tool_message(
+                make_result(False, error="No layout to validate"), tool_call_id
             )],
         })
 
@@ -84,5 +69,5 @@ def validate_layout(
         ]
 
     return Command(update={
-        "messages": [_to_tool_message(_make_result(True, data=result), tool_call_id)],
+        "messages": [to_tool_message(make_result(True, data=result), tool_call_id)],
     })

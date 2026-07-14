@@ -8,124 +8,32 @@ Merges:
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Dict, List, Optional, Annotated
 
 from langchain_core.tools import tool, InjectedToolCallId
-from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
 from app.utils.logger import get_logger
+from ._helpers import make_result, to_tool_message
+
+from app.services.modules.gis.planning_intent import (
+    Direction, Density, ZoneIntent, FacilityIntent,
+    AxisIntent, ConstraintIntent, UnifiedSpatialIntent,
+)
 
 logger = get_logger(__name__)
 
-# ── Intent Data Models ────────────────────────────────────────
-
-class Direction(str, Enum):
-    CENTER = "center"
-    NORTH = "north"
-    SOUTH = "south"
-    EAST = "east"
-    WEST = "west"
-    NORTHEAST = "northeast"
-    NORTHWEST = "northwest"
-    SOUTHEAST = "southeast"
-    SOUTHWEST = "southwest"
-    PERIPHERY = "periphery"
-    EAST_WEST = "east-west"
-    NORTH_SOUTH = "north-south"
-
-
-class Density(str, Enum):
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-
-
-@dataclass
-class ZoneIntent:
-    zone_id: str
-    land_use: str
-    dlbm: str = ""
-    area_ratio: float = 0.0
-    direction: Direction = Direction.CENTER
-    reference_feature: str = ""
-    adjacent_to: List[str] = field(default_factory=list)
-    avoid_adjacent_to: List[str] = field(default_factory=list)
-    density: Density = Density.MEDIUM
-    preserve_existing: bool = True
-    dlbm_aliases: List[str] = field(default_factory=list)
-
-
-@dataclass
-class FacilityIntent:
-    facility_id: str
-    facility_type: str
-    target_zone: str
-    location_hint: str = ""
-    status: str = "existing"
-
-
-@dataclass
-class AxisIntent:
-    axis_id: str
-    axis_type: str
-    direction: Direction
-    connects: List[str] = field(default_factory=list)
-    label: str = ""
-
-
-@dataclass
-class ConstraintIntent:
-    constraint_id: str
-    constraint_type: str
-    geometry_ref: str = ""
-    strict: bool = True
-
-
-@dataclass
-class UnifiedSpatialIntent:
-    zones: List[ZoneIntent] = field(default_factory=list)
-    facilities: List[FacilityIntent] = field(default_factory=list)
-    axes: List[AxisIntent] = field(default_factory=list)
-    constraints: List[ConstraintIntent] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def total_area_ratio(self) -> float:
-        return sum(z.area_ratio for z in self.zones)
-
-    def get_zone_by_id(self, zone_id: str) -> Optional[ZoneIntent]:
-        for z in self.zones:
-            if z.zone_id == zone_id:
-                return z
-        return None
-
-    def get_zone_by_land_use(self, land_use: str) -> List[ZoneIntent]:
-        return [z for z in self.zones if z.land_use == land_use]
-
-
-# ── Tool Helpers ──────────────────────────────────────────────
-
-def _make_result(success: bool, data: Any = None, error: str = "") -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"success": success}
-    if data is not None:
-        payload["data"] = data
-    if error:
-        payload["error"] = error
-    return payload
-
-
-def _to_tool_message(result: Dict[str, Any], tool_call_id: str) -> ToolMessage:
-    return ToolMessage(
-        content=json.dumps(result, ensure_ascii=False, default=str),
-        tool_call_id=tool_call_id,
-    )
-
 
 # ── LLM Intent Parsing ────────────────────────────────────────
+
+def _safe_dataclass(cls, d: Dict[str, Any]):
+    """Construct a dataclass from dict, ignoring unknown fields from LLM output."""
+    import dataclasses
+    valid = {f.name for f in dataclasses.fields(cls)}
+    filtered = {k: v for k, v in d.items() if k in valid}
+    return cls(**filtered)
+
 
 def _parse_reports_to_intent(
     reports: Dict[str, Dict[str, Any]],
@@ -135,6 +43,7 @@ def _parse_reports_to_intent(
     """Parse planning reports into structured spatial intent using LLM + zone_schema."""
 
     from app.agent.gis.prompts import PARSE_AGENT_SYSTEM_PROMPT
+    from app.services.modules.gis.layout.data_loader import _build_gis_constraints_for_llm
 
     try:
         from app.core.settings import LLM_MODEL
@@ -149,12 +58,15 @@ def _parse_reports_to_intent(
 
         report_texts = _gather_report_texts(reports)
         landuse_hint = _build_landuse_hint(gis_data)
+        gis_constraints = _build_gis_constraints_for_llm(gis_data)
 
         prompt = f"""{PARSE_AGENT_SYSTEM_PROMPT}
 
 Village: {village_name}
 Total zone types available: {sorted(set(DLBM_TO_ZONE_TYPE.values()))}
 {landuse_hint}
+
+{gis_constraints}
 
 Planning reports:
 {report_texts}
@@ -174,22 +86,22 @@ Output ONLY valid JSON.
         intent_json = json.loads(text)
 
         intent = UnifiedSpatialIntent(
-            zones=[ZoneIntent(**z) for z in intent_json.get("zones", [])],
-            facilities=[FacilityIntent(**f) for f in intent_json.get("facilities", [])],
-            axes=[AxisIntent(**a) for a in intent_json.get("axes", [])],
-            constraints=[ConstraintIntent(**c) for c in intent_json.get("constraints", [])],
+            zones=[_safe_dataclass(ZoneIntent, z) for z in intent_json.get("zones", [])],
+            facilities=[_safe_dataclass(FacilityIntent, f) for f in intent_json.get("facilities", [])],
+            axes=[_safe_dataclass(AxisIntent, a) for a in intent_json.get("axes", [])],
+            constraints=[_safe_dataclass(ConstraintIntent, c) for c in intent_json.get("constraints", [])],
             metadata={"village_name": village_name},
         )
 
-        return _make_result(True, data={
+        return make_result(True, data={
             "intent_json": intent_json,
             "intent": _intent_to_dict(intent),
         })
 
     except Exception as e:
         logger.error(f"Intent parsing failed: {e}")
-        return _make_result(False, error=str(e), data={
-            "intent_json": _build_default_intent(village_name),
+        return make_result(False, error=str(e), data={
+            "intent_json": _build_default_intent(village_name, gis_data),
         })
 
 
@@ -229,20 +141,23 @@ def _build_landuse_hint(gis_data: Optional[Dict[str, Any]]) -> str:
         return ""
 
 
-def _build_default_intent(village_name: str) -> Dict[str, Any]:
-    """Fallback: build minimal intent from common village patterns."""
+def _build_default_intent(
+    village_name: str,
+    gis_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Fallback: build intent from GIS data or minimal empty intent."""
+    if gis_data:
+        try:
+            from app.services.modules.gis.layout.data_loader import compute_intent_from_gis
+            return compute_intent_from_gis(gis_data, village_name)
+        except Exception:
+            pass
     return {
-        "zones": [
-            {"zone_id": "agriculture", "land_use": "农业用地", "dlbm": "0100", "area_ratio": 0.45, "direction": "periphery"},
-            {"zone_id": "housing", "land_use": "居住用地", "dlbm": "2121", "area_ratio": 0.20, "direction": "center"},
-            {"zone_id": "ecological", "land_use": "生态绿地", "dlbm": "0300", "area_ratio": 0.25, "direction": "periphery"},
-            {"zone_id": "public", "land_use": "公共服务用地", "dlbm": "0800", "area_ratio": 0.05, "direction": "center"},
-            {"zone_id": "transport", "land_use": "交通用地", "dlbm": "1000", "area_ratio": 0.05, "direction": "center"},
-        ],
+        "zones": [],
         "facilities": [],
-        "axes": [{"axis_id": "main", "axis_type": "primary", "direction": "east-west", "label": "主要发展轴"}],
+        "axes": [],
         "constraints": [],
-        "metadata": {"village_name": village_name, "is_default": True},
+        "metadata": {"village_name": village_name, "source": "empty"},
     }
 
 
@@ -280,6 +195,53 @@ def _dict_to_intent(data: Dict[str, Any]) -> UnifiedSpatialIntent:
     )
 
 
+def parse_text_via_llm(
+    text: str,
+    village_name: str,
+    gis_data: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Parse planning markdown text into intent via LLM."""
+    from app.agent.gis.prompts import format_parse_prompt
+    from app.core.settings import LLM_MODEL
+    from langchain_openai import ChatOpenAI
+    from app.services.modules.gis.layout.data_loader import (
+        _build_gis_constraints_for_llm, get_village_params,
+    )
+    import re as _re
+
+    if gis_data:
+        params = get_village_params(gis_data)
+    else:
+        params = {"total_area": "未知", "land_use_description": "未知"}
+
+    prompt_text = format_parse_prompt(
+        planning_text=text,
+        village_name=village_name,
+        total_area=params["total_area"],
+        current_land_use=params["land_use_description"],
+    )
+
+    gis_constraints = _build_gis_constraints_for_llm(gis_data)
+    if gis_constraints:
+        prompt_text = f"{prompt_text}\n\n{gis_constraints}"
+
+    llm = ChatOpenAI(model=LLM_MODEL, temperature=0, request_timeout=120)
+    response = llm.invoke(prompt_text)
+    json_match = _re.search(r'```json\s*(.*?)\s*```', response.content, _re.DOTALL)
+    if not json_match:
+        json_match = _re.search(r'(\{[\s\S]*\})', response.content)
+    if json_match:
+        intent = json.loads(json_match.group(1))
+        if intent.get("zones"):
+            zones = intent.get("zones", [])
+            total = sum(z.get("area_ratio", 0) for z in zones)
+            if abs(total - 1.0) > 0.05 and total > 0:
+                for z in zones:
+                    z["area_ratio"] = round(z.get("area_ratio", 0) / total, 4)
+            return intent
+    raise ValueError("LLM failed to produce valid intent JSON")
+
+
 # ── Tool ──────────────────────────────────────────────────────
 
 @tool
@@ -303,5 +265,5 @@ def parse_planning_text(
     return Command(update={
         "intent_json": intent_data,
         "intent": result.get("data", {}).get("intent", {}),
-        "messages": [_to_tool_message(result, tool_call_id)],
+        "messages": [to_tool_message(result, tool_call_id)],
     })

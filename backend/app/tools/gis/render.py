@@ -21,20 +21,7 @@ logger = get_logger(__name__)
 from app.services.modules.gis.schema import GISLayerConfig
 
 
-def _make_result(success: bool, data: Any = None, error: str = "") -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"success": success}
-    if data is not None:
-        payload["data"] = data
-    if error:
-        payload["error"] = error
-    return payload
-
-
-def _to_tool_message(result: Dict[str, Any], tool_call_id: str) -> ToolMessage:
-    return ToolMessage(
-        content=json.dumps(result, ensure_ascii=False, default=str),
-        tool_call_id=tool_call_id,
-    )
+from ._helpers import make_result, to_tool_message
 
 
 @tool
@@ -79,11 +66,11 @@ def render_map(
             "color": None,
         })
 
-    result = _make_result(True, data={
+    result = make_result(True, data={
         "layers": [GISLayerConfig(**l).model_dump(by_alias=True) for l in layers],
         "layer_count": len(layers),
     })
 
     return Command(update={
-        "messages": [_to_tool_message(result, tool_call_id)],
+        "messages": [to_tool_message(result, tool_call_id)],
     })

@@ -8,7 +8,7 @@ os.makedirs(outdir, exist_ok=True)
 
 # First run: generate and export layers
 print("Step 1: Generating layers...")
-from app.services.modules.gis.layout.data_loader import load_all, make_default_intent
+from app.services.modules.gis.layout.data_loader import load_all, resolve_gen_intent
 from app.tools.gis.generate import (
     _generate_function_zones,
     _generate_planning_zones,
@@ -17,7 +17,7 @@ from app.tools.gis.generate import (
 )
 
 data = load_all()
-intent = make_default_intent()
+intent = resolve_gen_intent("金田村委会", data)
 
 layers = []
 for fn, args in [

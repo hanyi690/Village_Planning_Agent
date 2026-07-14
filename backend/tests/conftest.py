@@ -1,4 +1,4 @@
-"""pytest 配置 — 注册 fixtures 供 tests/ 下所有测试使用。"""
+"""pytest configuration -- register fixtures for all tests under tests/."""
 
 from tests.fixtures.gis_e2e import (
     landuse_geojson,

@@ -59,7 +59,9 @@ class SpatialLayoutEngine:
         resolution = None
         if report.has_conflicts:
             resolver = ConflictResolver()
-            resolution = resolver.resolve(report, summaries)
+            resolution = resolver.resolve(report)
+        self._conflict_report = report
+        self._resolution_report = resolution
         self._emit_progress(self._session_id, "conflicts_done", {"conflict_count": report.total_count, "resolved": resolution is not None})
         return {"report": report, "resolution": resolution}
 
@@ -120,13 +122,51 @@ class SpatialLayoutEngine:
         summaries: Optional[Dict] = None,
         max_validation_rounds: int = 3,
     ) -> List[Dict[str, Any]]:
+        # 1. Build KG (with GIS constraints)
         self.build_kg_from_reports(reports, landuse_geojson, gis_data)
+
+        # 2. Detect and resolve conflicts
         if summaries:
             self.detect_and_resolve_conflicts(summaries)
+
+        # 3. Resolve intent
         intent = None
         if hasattr(self, "_intent"):
             intent = self._intent
-        configs = self.generate_layout(intent, landuse_geojson, boundary_geojson, gis_data)
+
+        # 4. ALLOCATE (MIP) — reassign parcels to planning zones
+        allocated_geojson = None
+        if intent and landuse_geojson and gis_data:
+            try:
+                from .optimizer.mip_allocator import MIPZoneAllocator
+                from .layout.metrics_calculator import GISMetricsCalculator
+                metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+                total_area_ha = metrics["total_area_ha"]
+                targets = {}
+                for z in (intent.get("zones", []) if isinstance(intent, dict) else []):
+                    lu = z.get("land_use", "")
+                    ratio = z.get("area_ratio", 0)
+                    if lu and ratio:
+                        targets[lu] = ratio * total_area_ha
+                if targets:
+                    allocator = MIPZoneAllocator()
+                    allocated_geojson, self._mip_trace = allocator.solve(
+                        landuse_geojson=landuse_geojson,
+                        targets=targets,
+                        constraints=self._kg_constraints if self._kg_constraints else None,
+                        kg=self.kg,
+                    )
+                    self._emit_progress(self._session_id, "allocated", {
+                        "mode": self._mip_trace.get("mode", "unknown"),
+                        "changed_pct": self._mip_trace.get("changed_pct", 0),
+                    })
+            except Exception as e:
+                logger.warning(f"[Engine] MIP allocation failed, using unallocated landuse: {e}")
+                self._mip_trace = {"mode": "failed", "error": str(e)}
+
+        # 5. GENERATE layers (using allocated GeoJSON if available)
+        effective_landuse = allocated_geojson if allocated_geojson else landuse_geojson
+        configs = self.generate_layout(intent, effective_landuse, boundary_geojson, gis_data)
         return configs
 
     def _generate_planning_zones(self, landuse: Dict, intent: Dict) -> Optional[Dict]:

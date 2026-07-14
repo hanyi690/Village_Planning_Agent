@@ -9,12 +9,10 @@ Delegates to real layout components (no fallback):
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any, Dict, List, Optional, Annotated
 
 from langchain_core.tools import tool, InjectedToolCallId
-from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
@@ -23,22 +21,7 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-# ── helpers ────────────────────────────────────────────────────────────
-
-def _make_result(success: bool, data: Any = None, error: str = "") -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"success": success}
-    if data is not None:
-        payload["data"] = data
-    if error:
-        payload["error"] = error
-    return payload
-
-
-def _to_tool_message(result: Dict[str, Any], tool_call_id: str) -> ToolMessage:
-    return ToolMessage(
-        content=json.dumps(result, ensure_ascii=False, default=str),
-        tool_call_id=tool_call_id,
-    )
+from ._helpers import make_result, to_tool_message
 
 
 def _intent_from_dict(d: Dict[str, Any]) -> Any:
@@ -134,7 +117,7 @@ def generate_layout(
             layers.append(func_layer)
 
         # ── Planning zone layer (per-parcel DLBM → 4-zone) ─────────
-        plan_layer = _generate_planning_zones(allocated_geojson, gis_data, intent)
+        plan_layer = _make_planning_zone_layer(allocated_geojson, gis_data)
         if plan_layer:
             layers.append(plan_layer)
 
@@ -151,7 +134,7 @@ def generate_layout(
         elapsed = round(time.time() - t0, 2)
         return Command(update={
             "layout_configs": layers,
-            "messages": [_to_tool_message(_make_result(True, data={
+            "messages": [to_tool_message(make_result(True, data={
                 "layer_count": len(layers),
                 "elapsed_s": elapsed,
                 "layers": [lyr.get("layerType", "?") for lyr in layers],
@@ -161,7 +144,7 @@ def generate_layout(
     except Exception as e:
         logger.error(f"Layout generation failed: {e}", exc_info=True)
         return Command(update={
-            "messages": [_to_tool_message(_make_result(False, error=str(e)), tool_call_id)],
+            "messages": [to_tool_message(make_result(False, error=str(e)), tool_call_id)],
         })
 
 
@@ -207,10 +190,9 @@ def _generate_function_zones(
     }
 
 
-def _generate_planning_zones(
+def _make_planning_zone_layer(
     allocated: Optional[Dict[str, Any]],
     gis_data: Dict[str, Any],
-    intent: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """Generate planning_zone layer — per-parcel DLBM → 4 planning zones."""
     source = allocated or gis_data.get("landuse_current_geojson")

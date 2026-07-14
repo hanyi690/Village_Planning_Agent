@@ -217,7 +217,7 @@ class LayoutValidator:
 
         return CheckResult(
             check_name="zone_completeness",
-            passed=len(violations) == 0,
+            passed=not any(v.severity == "error" for v in violations),
             violation_count=len(violations),
             violations=violations,
         )

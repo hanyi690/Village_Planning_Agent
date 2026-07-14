@@ -212,6 +212,10 @@ class PlanningKG:
         if landuse_geojson:
             self._add_spatial_infrastructure(landuse_geojson)
 
+        # 11. GIS-measured constraints (most accurate)
+        if gis_data:
+            self._add_gis_constraint_triples(gis_data)
+
         logger.info(
             f"[PlanningKG] Built KG: {self._parcel_count} parcels, "
             f"{self._constraint_count} constraints, "
@@ -307,6 +311,10 @@ class PlanningKG:
         # 10. Infrastructure (GIS, unchanged)
         if landuse_geojson:
             self._add_spatial_infrastructure(landuse_geojson)
+
+        # 11. GIS-measured constraints (most accurate)
+        if gis_data:
+            self._add_gis_constraint_triples(gis_data)
 
         logger.info(
             f"[PlanningKG] Built KG from intent: {self._parcel_count} parcels, "
@@ -411,6 +419,7 @@ class PlanningKG:
         if eco_area is not None:
             c = PLN.ecological_redline_protection
             self.g.add((c, RDF.type, PLN.Constraint))
+            self.g.add((c, PLN.constraint_id, Literal("ecological_redline_protection")))
             self.g.add((c, PLN.field, Literal("ecological_redline_ha")))
             self.g.add((c, PLN.operator, Literal(">=")))
             self.g.add((c, PLN.value, Literal(eco_area, datatype=XSD.double)))
@@ -463,6 +472,53 @@ class PlanningKG:
                 self.g.add((axis, PLN.connects, target))
 
             self.g.add((PLN.village, PLN.has_axis, axis))
+
+    def _add_gis_constraint_triples(self, gis_data: Dict[str, Any]):
+        """Add GIS-measured constraints as RDF triples (most accurate source).
+
+        Uses GISMetricsCalculator to compute real area constraints from
+        landuse GeoJSON and adds them as both village-level triples and
+        Constraint entities.
+        """
+        try:
+            from ..layout.metrics_calculator import GISMetricsCalculator
+            metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+        except Exception as e:
+            logger.warning(f"[PlanningKG] GIS constraint computation failed: {e}")
+            return
+
+        village_uri = PLN.village
+
+        # Village-level metric triples
+        self.g.add((village_uri, PLN.constructionCap_ha,
+                     Literal(metrics["construction_area_ha"], datatype=XSD.double)))
+        self.g.add((village_uri, PLN.farmlandMin_ha,
+                     Literal(metrics["farmland_area_ha"], datatype=XSD.double)))
+        self.g.add((village_uri, PLN.ecologicalMin_ha,
+                     Literal(metrics["ecological_area_ha"], datatype=XSD.double)))
+        self.g.add((village_uri, PLN.forestCoverage_pct,
+                     Literal(metrics["forest_coverage"], datatype=XSD.double)))
+        self.g.add((village_uri, PLN.totalArea_ha,
+                     Literal(metrics["total_area_ha"], datatype=XSD.double)))
+
+        # Constraint entities (for query/retrieval by downstream tools)
+        gis_constraints = [
+            ("gis_construction_cap", "construction_cap", "construction_area_ha",
+             "<=", metrics["construction_area_ha"], "GIS实测建设用地规模上限"),
+            ("gis_farmland_min", "farmland_min", "farmland_area_ha",
+             ">=", metrics["farmland_area_ha"], "GIS实测耕地保有量下限"),
+            ("gis_ecological_min", "ecological_redline", "ecological_area_ha",
+             ">=", metrics["ecological_area_ha"], "GIS实测生态保护红线下限"),
+        ]
+        for cid, ctype, field, op, value, desc in gis_constraints:
+            self._add_constraint_triple(cid, field, op, value, desc, "gis_measured")
+
+        logger.info(
+            f"[PlanningKG] Added {len(gis_constraints)} GIS-measured constraints: "
+            f"construction<={metrics['construction_area_ha']}ha, "
+            f"farmland>={metrics['farmland_area_ha']}ha, "
+            f"ecological>={metrics['ecological_area_ha']}ha"
+        )
 
     def _compute_zone_areas_from_gis(
         self, gis_data: Optional[Dict[str, Any]]
@@ -629,6 +685,7 @@ class PlanningKG:
         if eco_area is not None:
             c = PLN.ecological_redline_protection
             self.g.add((c, RDF.type, PLN.Constraint))
+            self.g.add((c, PLN.constraint_id, Literal("ecological_redline_protection")))
             self.g.add((c, PLN.field, Literal("ecological_redline_ha")))
             self.g.add((c, PLN.operator, Literal(">=")))
             self.g.add((c, PLN.value, Literal(eco_area, datatype=XSD.double)))

@@ -35,20 +35,7 @@ from app.services.modules.gis.conflict.resolver import (
 )
 
 
-def _make_result(success: bool, data: Any = None, error: str = "") -> Dict[str, Any]:
-    payload: Dict[str, Any] = {"success": success}
-    if data is not None:
-        payload["data"] = data
-    if error:
-        payload["error"] = error
-    return payload
-
-
-def _to_tool_message(result: Dict[str, Any], tool_call_id: str) -> ToolMessage:
-    return ToolMessage(
-        content=json.dumps(result, ensure_ascii=False, default=str),
-        tool_call_id=tool_call_id,
-    )
+from ._helpers import make_result, to_tool_message
 
 
 @tool
@@ -67,9 +54,9 @@ def detect_conflicts(
     resolution_report = None
     if report.has_conflicts:
         resolver = ConflictResolver()
-        resolution_report = resolver.resolve(report, summaries)
+        resolution_report = resolver.resolve(report)
 
-    result = _make_result(True, data={
+    result = make_result(True, data={
         "conflict_count": report.total_count,
         "has_conflicts": report.has_conflicts,
         "summary": report.summary(),
@@ -77,5 +64,5 @@ def detect_conflicts(
     })
 
     return Command(update={
-        "messages": [_to_tool_message(result, tool_call_id)],
+        "messages": [to_tool_message(result, tool_call_id)],
     })
