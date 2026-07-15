@@ -76,7 +76,11 @@ def _parse_reports_to_intent(
         landuse_hint = _build_landuse_hint(gis_data)
         gis_constraints = _build_gis_constraints_for_llm(gis_data)
 
-        prompt = f"""{PARSE_AGENT_SYSTEM_PROMPT}
+        from app.services.modules.gis.zone_schema.schema import SCHEMA
+        prompt = PARSE_AGENT_SYSTEM_PROMPT.format(
+            dlbm_class_table=SCHEMA.to_prompt_table(),
+        )
+        prompt += f"""
 
 Village: {village_name}
 Total zone types available: {sorted(set(DLBM_TO_ZONE_TYPE.values()))}
@@ -187,21 +191,8 @@ def _intent_to_dict(intent: UnifiedSpatialIntent) -> Dict[str, Any]:
     }
 
 
-def _safe_enum(enum_cls: type, value: str, default: Any = None) -> Any:
-    """Safely convert string to enum value, returning default on failure."""
-    try:
-        return enum_cls(value)
-    except (ValueError, KeyError):
-        return default if default is not None else list(enum_cls)[0]
-
-
 def _dict_to_intent(data: Dict[str, Any]) -> UnifiedSpatialIntent:
-    """Backward-compatible: convert dict to UnifiedSpatialIntent."""
-    def _ensure_direction(v: Any) -> Direction:
-        return v if isinstance(v, Direction) else Direction(v)
-    def _ensure_density(v: Any) -> Density:
-        return v if isinstance(v, Density) else Density(v)
-
+    """Convert dict to UnifiedSpatialIntent. Enum conversion handled by _safe_dataclass."""
     return UnifiedSpatialIntent(
         zones=[_safe_dataclass(ZoneIntent, z) for z in data.get("zones", [])],
         facilities=[_safe_dataclass(FacilityIntent, f) for f in data.get("facilities", [])],

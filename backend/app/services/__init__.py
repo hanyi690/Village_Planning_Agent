@@ -1,10 +1,9 @@
 """Services module exports."""
 from typing import Any
 
-__all__ = ["GisService", "RagService"]
+__all__ = ["RagService"]
 
 _LAZY = {
-    "GisService": ".modules.gis.service",
     "RagService": ".modules.rag.service",
 }
 

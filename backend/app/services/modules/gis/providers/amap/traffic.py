@@ -1,4 +1,8 @@
-"""高德地图交通态势服务"""
+"""高德地图交通态势服务
+
+NOTE: TrafficService is not currently used in production code paths.
+Retained for potential future integration with real-time traffic analysis.
+"""
 import time
 import requests
 from typing import Dict, Any, Tuple, Optional, List

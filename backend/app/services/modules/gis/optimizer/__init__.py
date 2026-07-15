@@ -11,11 +11,9 @@ from .planning_zone_mapper import (
     map_zone_type_to_planning_zone,
     remap_assigned_zones,
 )
-from .procedural import (
-    merge_parcels, split_by_area, simplify_boundary, buffer_zone,
-)
 from ..utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
 from .ca_refiner import ZoneCARefiner
+from .procedural import merge_parcels, simplify_boundary
 
 __all__ = [
     "ConstraintDrivenAllocator", "MIPZoneAllocator", "AdjacencyGraph",
@@ -23,7 +21,6 @@ __all__ = [
     "ZONE_TYPE_TO_PLANNING_ZONE", "BASIC_FARMLAND_DLBMS",
     "map_planning_zone_targets_to_zone_types",
     "map_zone_type_to_planning_zone", "remap_assigned_zones",
-    "merge_parcels", "split_by_area", "simplify_boundary", "buffer_zone",
     "geojson_to_geodataframe", "geodataframe_to_geojson",
-    "ZoneCARefiner",
+    "ZoneCARefiner", "merge_parcels", "simplify_boundary",
 ]

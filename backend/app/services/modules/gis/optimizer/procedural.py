@@ -1,7 +1,10 @@
 """Geometry procedural utilities — merge, split, simplify, buffer.
 
-Shared geometry operations used by zone_generator, engine, and axis_builder.
-Eliminates inline GeoPandas/Shapely code duplication.
+NOTE: These functions are not currently used in production code paths.
+They are retained for future integration (Phase 4 of GIS architecture refactoring):
+  - merge_parcels → zone_generator (merge adjacent same-type parcels after allocation)
+  - simplify_boundary → map_renderer (reduce GeoJSON payload before rendering)
+  - split_by_area, buffer_zone → potential future use
 """
 
 from __future__ import annotations
@@ -9,7 +12,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from ..utils.crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
+from ..utils.crs_engine import project_to_metric, project_to_wgs84
 
 logger = get_logger(__name__)
 
@@ -37,9 +40,17 @@ def merge_parcels(
     )
     gdf = gdf[~gdf.is_empty]
 
-    dissolved = gdf.dissolve(by=group_column, as_index=False)
+    # Project to metric CRS for dissolve (avoids unary_union failures on geographic CRS)
+    original_crs = gdf.crs
+    gdf_m = project_to_metric(gdf) if original_crs else gdf
+
+    dissolved = gdf_m.dissolve(by=group_column, as_index=False)
     dissolved["area_ha"] = dissolved.geometry.area / 10000
     dissolved = dissolved[dissolved.geometry.notna() & ~dissolved.geometry.is_empty]
+
+    # Project back to original CRS
+    if original_crs:
+        dissolved = project_to_wgs84(dissolved)
 
     logger.info(
         f"[procedural] merge_parcels: {len(gdf)} → {len(dissolved)} features "

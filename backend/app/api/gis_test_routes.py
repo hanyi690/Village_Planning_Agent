@@ -580,9 +580,16 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
     """Run the full spatial layout pipeline for a village."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.engine import SpatialLayoutEngine
         from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
         from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+        from app.services.modules.gis.kg import PlanningKG
+        from app.services.modules.gis.conflict.detector import ConflictDetector
+        from app.services.modules.gis.conflict.resolver import ConflictResolver
+        from app.services.modules.gis.optimizer.mip_allocator import MIPZoneAllocator
+        from app.services.modules.gis.layout.zone_generator import ZoneGenerator
+        from app.services.modules.gis.layout.facility_placer import FacilityPlacer
+        from app.services.modules.gis.layout.axis_builder import AxisBuilder
+        from app.services.modules.gis.layout.map_renderer import MapRenderer
 
         gis_data = _load_all_gis()
         boundary = gis_data.get("boundary_geojson")
@@ -593,30 +600,63 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
 
         summaries = GISMetricsCalculator.compute_summaries(gis_data)
 
-        # Load L3 reports to trigger KG build + CA refinement + validation loop
-        from app.services.modules.gis.layout.data_loader import load_l3_reports
-        reports_for_kg = load_l3_reports()
-        if not reports_for_kg:
-            reports_for_kg = {}
-
-        engine = SpatialLayoutEngine()
-
-        # 解析 intent — gen 路径（规划 markdown → LLM → intent）
+        # Resolve intent via gen path (planning markdown → LLM → intent)
         from app.services.modules.gis.layout.intent_cache import resolve_gen_intent_cached
-        from app.services.modules.gis.planning_intent import UnifiedSpatialIntent
         from app.tools.gis.parse import _dict_to_intent
         intent_dict = resolve_gen_intent_cached("金田村委会", gis_data)
-        engine._intent = _dict_to_intent(intent_dict)
+        intent = _dict_to_intent(intent_dict)
 
-        layout_configs = await asyncio.to_thread(
-            engine.full_pipeline,
-            reports=reports_for_kg,
-            landuse_geojson=landuse,
-            boundary_geojson=boundary,
-            gis_data=gis_data,
-            summaries=summaries,
-            max_validation_rounds=2,
+        # 1. KG
+        kg = PlanningKG(village_name="金田村委会")
+        kg.build_from_reports(reports={}, landuse_geojson=landuse, gis_data=gis_data)
+        kg_constraints = kg.get_constraints()
+
+        # 2. Conflict
+        conflict_report = ConflictDetector().detect_all(summaries)
+        if conflict_report.has_conflicts:
+            resolution_report = ConflictResolver().resolve(conflict_report)
+        else:
+            resolution_report = None
+
+        # 3. Allocate (MIP)
+        metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+        total_area_ha = metrics["total_area_ha"]
+        targets = {}
+        for z in intent_dict.get("zones", []):
+            lu, ratio = z.get("land_use", ""), z.get("area_ratio", 0)
+            if lu and ratio:
+                targets[lu] = ratio * total_area_ha
+        allocated_geojson = None
+        if targets and landuse:
+            try:
+                allocator = MIPZoneAllocator()
+                allocated_geojson, _mip_trace = allocator.solve(
+                    landuse_geojson=landuse, targets=targets,
+                    constraints=kg_constraints or None, kg=kg,
+                )
+            except Exception:
+                pass
+
+        # 4-5. Generate
+        effective_landuse = allocated_geojson or landuse
+        all_layers = {}
+        zg = ZoneGenerator()
+        func_zones = zg.generate(intent, effective_landuse, boundary, gis_data)
+        if func_zones:
+            all_layers["function_zone"] = func_zones
+        fp = FacilityPlacer()
+        facilities = fp.place(
+            facilities=intent.facilities if hasattr(intent, "facilities") else [],
+            landuse_geojson=effective_landuse, boundary_geojson=boundary,
         )
+        if facilities and facilities.get("features"):
+            all_layers["facility_point"] = facilities
+        ab = AxisBuilder()
+        axes = ab.build(intent, boundary, effective_landuse)
+        if axes and axes.get("features"):
+            all_layers["development_axis"] = axes
+        mr = MapRenderer()
+        layout_configs = await asyncio.to_thread(mr.render, all_layers, boundary)
 
         # Convert layout_configs to serializable format
         configs_data = []
@@ -626,9 +666,6 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
                 cfg_dict["geojson"] = cfg["geojson"]
             configs_data.append(cfg_dict)
 
-        conflict_report = getattr(engine, "_conflict_report", None)
-        resolution_report = getattr(engine, "_resolution_report", None)
-
         return _sanitize_floats({
             "success": True,
             "layout_configs": configs_data,
@@ -636,7 +673,7 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
                 "metric_conflicts": len(conflict_report.metric_conflicts) if conflict_report and hasattr(conflict_report, "metric_conflicts") else 0,
                 "constraint_violations": len(conflict_report.constraint_violations) if conflict_report and hasattr(conflict_report, "constraint_violations") else 0,
             },
-            "kg_built": engine.kg is not None,
+            "kg_built": kg is not None,
             "timing_ms": round((time.time() - t0) * 1000),
         })
     except Exception as e:
@@ -797,9 +834,16 @@ async def validate_layout(request: LayoutValidateRequest):
 
         # Mode 2: generate layout from jintian data then validate
         if request.use_jintian_data and not layout_configs:
-            from app.services.modules.gis.engine import SpatialLayoutEngine
             from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
             from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+            from app.services.modules.gis.kg import PlanningKG
+            from app.services.modules.gis.conflict.detector import ConflictDetector
+            from app.services.modules.gis.conflict.resolver import ConflictResolver
+            from app.services.modules.gis.optimizer.mip_allocator import MIPZoneAllocator
+            from app.services.modules.gis.layout.zone_generator import ZoneGenerator
+            from app.services.modules.gis.layout.facility_placer import FacilityPlacer
+            from app.services.modules.gis.layout.axis_builder import AxisBuilder
+            from app.services.modules.gis.layout.map_renderer import MapRenderer
 
             gis_data = _load_all_gis()
             boundary = gis_data.get("boundary_geojson")
@@ -807,24 +851,62 @@ async def validate_layout(request: LayoutValidateRequest):
             if not boundary:
                 return {"success": False, "error": "jintian boundary data not found", "timing_ms": round((time.time() - t0) * 1000)}
 
-            engine = SpatialLayoutEngine()
-
-            # 解析 intent — gen 路径（规划 markdown → LLM → intent）
+            # Resolve intent via gen path
             from app.services.modules.gis.layout.intent_cache import resolve_gen_intent_cached
             from app.tools.gis.parse import _dict_to_intent
             intent_dict = resolve_gen_intent_cached("金田村委会", gis_data)
-            engine._intent = _dict_to_intent(intent_dict)
+            intent = _dict_to_intent(intent_dict)
 
+            # 1. KG
+            kg = PlanningKG(village_name="金田村委会")
+            kg.build_from_reports(reports={}, landuse_geojson=landuse, gis_data=gis_data)
+            kg_constraints = kg.get_constraints()
+
+            # 2. Conflict
             summaries = GISMetricsCalculator.compute_summaries(gis_data)
-            from app.services.modules.gis.layout.data_loader import load_l3_reports
-            reports = load_l3_reports() or {}
-            layout_configs = engine.full_pipeline(
-                reports=reports,
-                landuse_geojson=landuse,
-                boundary_geojson=boundary,
-                gis_data=gis_data,
-                summaries=summaries,
+            conflict_report = ConflictDetector().detect_all(summaries)
+            if conflict_report.has_conflicts:
+                ConflictResolver().resolve(conflict_report)
+
+            # 3. Allocate (MIP)
+            metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+            total_area_ha = metrics["total_area_ha"]
+            targets = {}
+            for z in intent_dict.get("zones", []):
+                lu, ratio = z.get("land_use", ""), z.get("area_ratio", 0)
+                if lu and ratio:
+                    targets[lu] = ratio * total_area_ha
+            allocated_geojson = None
+            if targets and landuse:
+                try:
+                    allocator = MIPZoneAllocator()
+                    allocated_geojson, _ = allocator.solve(
+                        landuse_geojson=landuse, targets=targets,
+                        constraints=kg_constraints or None, kg=kg,
+                    )
+                except Exception:
+                    pass
+
+            # 4-5. Generate
+            effective_landuse = allocated_geojson or landuse
+            all_layers = {}
+            zg = ZoneGenerator()
+            func_zones = zg.generate(intent, effective_landuse, boundary, gis_data)
+            if func_zones:
+                all_layers["function_zone"] = func_zones
+            fp = FacilityPlacer()
+            facilities = fp.place(
+                facilities=intent.facilities if hasattr(intent, "facilities") else [],
+                landuse_geojson=effective_landuse, boundary_geojson=boundary,
             )
+            if facilities and facilities.get("features"):
+                all_layers["facility_point"] = facilities
+            ab = AxisBuilder()
+            axes = ab.build(intent, boundary, effective_landuse)
+            if axes and axes.get("features"):
+                all_layers["development_axis"] = axes
+            mr = MapRenderer()
+            layout_configs = await asyncio.to_thread(mr.render, all_layers, boundary)
 
         if not layout_configs:
             return {"success": False, "error": "No layout_configs provided and jintian generation failed", "timing_ms": round((time.time() - t0) * 1000)}
@@ -1017,27 +1099,41 @@ async def parse_planning_text(request: ParseTextRequest):
 
     # --- Common: Generate layout from intent_json ---
     try:
-        from app.services.modules.gis.engine import SpatialLayoutEngine
         from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+        from app.services.modules.gis.layout.zone_generator import ZoneGenerator
+        from app.services.modules.gis.layout.facility_placer import FacilityPlacer
+        from app.services.modules.gis.layout.axis_builder import AxisBuilder
+        from app.services.modules.gis.layout.map_renderer import MapRenderer
+        from app.tools.gis.parse import _dict_to_intent
 
-        engine = SpatialLayoutEngine()
         gis_data = _load_all_gis()
         boundary = gis_data.get("boundary_geojson")
         landuse = gis_data.get("landuse_current_geojson")
 
-        configs = engine.generate_layout(
-            intent=intent_json,
-            landuse_geojson=landuse,
-            boundary_geojson=boundary,
-            gis_data=gis_data,
-        )
+        def _generate(intent_data):
+            intent_obj = _dict_to_intent(intent_data) if intent_data else None
+            all_layers = {}
+            if intent_obj:
+                zg = ZoneGenerator()
+                func_zones = zg.generate(intent_obj, landuse, boundary, gis_data)
+                if func_zones:
+                    all_layers["function_zone"] = func_zones
+                fp = FacilityPlacer()
+                facilities = fp.place(
+                    facilities=intent_obj.facilities if hasattr(intent_obj, "facilities") else [],
+                    landuse_geojson=landuse, boundary_geojson=boundary,
+                )
+                if facilities and facilities.get("features"):
+                    all_layers["facility_point"] = facilities
+                ab = AxisBuilder()
+                axes = ab.build(intent_obj, boundary, landuse)
+                if axes and axes.get("features"):
+                    all_layers["development_axis"] = axes
+            mr = MapRenderer()
+            return mr.render(all_layers, boundary)
 
-        default_configs = engine.generate_layout(
-            intent=None,
-            landuse_geojson=landuse,
-            boundary_geojson=boundary,
-            gis_data=gis_data,
-        )
+        configs = _generate(intent_json)
+        default_configs = _generate(None)
 
         zones = intent_json.get("zones", [])
         zone_summary = ", ".join(f"{z.get('land_use','?')}({z.get('area_ratio',0):.1%})" for z in zones)

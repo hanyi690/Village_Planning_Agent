@@ -52,3 +52,24 @@ class LayoutAgentState(TypedDict, total=False):
     allocation_summary: Dict[str, Any]
     messages: Annotated[List[BaseMessage], add_messages]
     remaining_steps: NotRequired[Annotated[int, RemainingStepsManager]]
+
+
+class LayoutPipelineState(TypedDict, total=False):
+    """State for LAYOUT hybrid pipeline (StateGraph).
+
+    Deterministic skeleton + ReAct adaptive loop + Worker-Evaluator retry.
+    """
+    session_id: str
+    village_name: str
+    gis_data: Dict[str, Optional[Dict[str, Any]]]
+    intent: Dict[str, Any]
+    kg_turtle: str
+    kg_constraints: List[Dict[str, Any]]
+    allocated_geojson: Dict[str, Any]
+    allocation_summary: Dict[str, Any]
+    layout_configs: List[Dict[str, Any]]
+    validation_result: Dict[str, Any]
+    validation_round: int
+    export_result: Dict[str, Any]
+    render_result: List[Dict[str, Any]]
+    messages: Annotated[List[BaseMessage], add_messages]

@@ -29,6 +29,8 @@ LAYOUT_AGENT_SYSTEM_PROMPT = """你是村庄空间布局规划助手。根据解
 4. allocate_zones(targets, constraints, mode): 分配功能分区。用地数据自动注入。
 5. generate_layout(): 生成多图层布局。intent 已自动注入，无需传参。
 6. validate_layout(layout_configs, constraints): 验证结果（不满足则回到步骤 4 调整）
+7. export_gdb(): 导出12层GeoJSON成果包 + 用地平衡表。数据自动注入。
+8. render_map(): 渲染MapLibre前端图层。数据自动注入。
 
 可用查询模板:
 - get_constraints: 所有约束
@@ -47,6 +49,7 @@ LAYOUT_AGENT_SYSTEM_PROMPT = """你是村庄空间布局规划助手。根据解
 - 约束优先级：农田保护 > 生态保护 > 建设发展
 - validate_layout 失败必须根据 violations 调整 targets，而非忽略
 - 最多重试 3 次；如果 3 次仍失败，返回最佳结果并标注未满足的约束
+- 验证通过后必须调用 export_gdb 和 render_map 完成输出
 - 每步输出关键数字（面积、比例、冲突数、KG查询结果）
 """
 
@@ -155,15 +158,8 @@ SPATIAL_LAYOUT_PARSE_PROMPT = """
 
 **用地类型选项** (land_use): 居住用地, 产业用地, 公共服务用地, 生态绿地, 交通用地, 水域, 农业用地, 商业用地
 
-**地类编码(DLBM)参考** (GB/T 21010-2017):
-- 居住用地: 0700(城镇住宅), 0701(住宅), 2121(宅基地), 2123(宅基地退出), 2124(经营性建设)
-- 产业用地: 0600(工矿), 0601(工业), 0602(采矿)
-- 公共服务用地: 0800(公共管理), 0801(机关), 0803(教育), 0810(公园绿地), 0900(特殊用地)
-- 生态绿地: 0300(林地), 0301(乔木林), 0303(灌木林), 0400(草地), 0401(天然牧草地)
-- 交通用地: 1000(交通), 1003(公路), 1006(农村道路)
-- 水域: 1101(河流), 1103(水库), 1104(坑塘)
-- 农业用地: 0100(耕地), 0101(水田), 0120(水浇地), 0130(旱地), 0200(园地)
-- 商业用地: 0500(商服)
+**地类编码(DLBM)对照表** (GB/T 21010-2017 + 广东省村庄规划扩展):
+{dlbm_class_table}
 
 **位置偏向选项** (location_bias.direction): center, north, south, east, west, northeast, northwest, southeast, southwest, periphery
 
@@ -233,11 +229,13 @@ def format_parse_prompt(
     total_area: str = "未知",
     current_land_use: str = "未知",
 ) -> str:
+    from app.services.modules.gis.zone_schema.schema import SCHEMA
     return SPATIAL_LAYOUT_PARSE_PROMPT.format(
         planning_text=planning_text,
         village_name=village_name,
         total_area=total_area,
         current_land_use=current_land_use,
+        dlbm_class_table=SCHEMA.to_prompt_table(),
     )
 
 

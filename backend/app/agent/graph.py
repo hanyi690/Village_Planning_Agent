@@ -50,12 +50,14 @@ async def analyze_dimension_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """GIS Agent 节点 — 双 Agent 架构：PARSE → LAYOUT
+    """GIS Agent 节点 — PARSE ReAct + LAYOUT 混合管线
 
-    Step 1: PARSE Agent extracts structured intent from planning reports.
-    Step 2: LAYOUT Agent generates spatial layout using the parsed intent.
+    Step 1: PARSE Agent (ReAct) extracts structured intent from planning reports.
+    Step 2: LAYOUT Pipeline (deterministic skeleton + ReAct subgraph + Evaluator Gate)
+            generates spatial layout with guaranteed step ordering and validation retry.
     """
-    from .gis import create_parse_agent_graph, create_layout_agent_graph
+    from .gis import create_parse_agent_graph
+    from .gis.layout_pipeline import build_layout_pipeline
     from .gis_context import SharedGISContext
 
     gis_context = SharedGISContext.from_state(state)
@@ -82,7 +84,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     reports, summaries = await _get_reports_and_summaries(state)
     village_name = state.get("config", {}).get("village_name", "")
 
-    # ── Step 1: PARSE Agent ──
+    # ── Step 1: PARSE Agent (ReAct — text understanding needs LLM creativity) ──
     parse_graph = create_parse_agent_graph()
     parse_result = await parse_graph.ainvoke({
         "session_id": session_id,
@@ -101,13 +103,11 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "gis_layout_configs": [],
         }
 
-    # ── Step 2: LAYOUT Agent (intent injected) ──
-    layout_graph = create_layout_agent_graph()
-    layout_result = await layout_graph.ainvoke({
+    # ── Step 2: LAYOUT Pipeline (hybrid: deterministic skeleton + ReAct subgraph) ──
+    pipeline = build_layout_pipeline()
+    layout_result = await pipeline.ainvoke({
         "session_id": session_id,
         "village_name": village_name,
-        "reports": reports,
-        "summaries": summaries,
         "gis_data": gis_data,
         "intent": intent_json,
         "kg_turtle": "",
@@ -115,6 +115,10 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "layout_configs": [],
         "allocated_geojson": {},
         "allocation_summary": {},
+        "validation_result": {},
+        "validation_round": 0,
+        "export_result": {},
+        "render_result": [],
         "messages": [],
     })
 
@@ -134,7 +138,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 pipeline_trace=state.get("pipeline_trace"),
             )
         except Exception as e:
-            logger.warning(f"[gis_agent_node] SSE publish failed: {e}")
+            logger.warning(f"[gis_agent_node] SSE publish failed: %s", e)
 
     return {
         "messages": [AIMessage(content=_format_gis_result(layout_result, layout_configs))],

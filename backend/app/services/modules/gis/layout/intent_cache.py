@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 INTENT_CACHE_DIR = PROJECT_ROOT / "output" / "intent_cache"
 
 # Manual version bump: increment when parse prompt/logic changes
-PARSE_VERSION = "v1"
+PARSE_VERSION = "v2"  # v2: 商品林(1340)→农业用地, 生态林(1350)→生态绿地 per GB/T 21010
 
 
 def _compute_cache_key(source: str, content: str) -> str:

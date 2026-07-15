@@ -27,7 +27,11 @@ from app.services.modules.gis.zone_schema import (
     PLANNING_ZONE_COLORS,
     FACILITY_STATUS_COLORS,
 )
-from app.services.modules.gis.engine import SpatialLayoutEngine
+from app.services.modules.gis.layout.zone_generator import ZoneGenerator
+from app.services.modules.gis.layout.facility_placer import FacilityPlacer
+from app.services.modules.gis.layout.axis_builder import AxisBuilder
+from app.services.modules.gis.layout.map_renderer import MapRenderer
+from app.services.modules.gis.kg import PlanningKG
 from app.services.modules.gis.planning_intent import (
     UnifiedSpatialIntent, ZoneIntent, Direction, Density,
 )
@@ -644,15 +648,28 @@ def main():
           f"{len(intent.facilities)} facilities, "
           f"{len(intent.axes)} axes")
 
-    # Generate layout
-    engine = SpatialLayoutEngine()
-    engine.build_kg(reports, landuse)
-    configs = engine.generate_layout(
-        intent=intent,
-        boundary_geojson=boundary,
-        landuse_current_geojson=landuse,
-        road_geojson=roads,
+    # Generate layout via service layer
+    kg = PlanningKG(village_name="金田村")
+    kg.build_from_reports(reports, landuse)
+
+    all_layers = {}
+    zg = ZoneGenerator()
+    func_zones = zg.generate(intent, landuse, boundary, {"landuse_current_geojson": landuse, "boundary_geojson": boundary, "road_geojson": roads})
+    if func_zones:
+        all_layers["function_zone"] = func_zones
+    fp = FacilityPlacer()
+    facilities = fp.place(
+        facilities=intent.facilities if hasattr(intent, "facilities") else [],
+        landuse_geojson=landuse, boundary_geojson=boundary,
     )
+    if facilities and facilities.get("features"):
+        all_layers["facility_point"] = facilities
+    ab = AxisBuilder()
+    axes = ab.build(intent, boundary, landuse)
+    if axes and axes.get("features"):
+        all_layers["development_axis"] = axes
+    mr = MapRenderer()
+    configs = mr.render(all_layers, boundary)
 
     print(f"Layout: {len(configs)} layers")
     for c in configs:

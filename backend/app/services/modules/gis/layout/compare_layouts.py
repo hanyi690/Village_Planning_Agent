@@ -61,7 +61,7 @@ class ComparisonReport:
                     "planned_area_ha": round(m.planned_area_ha, 2),
                     "diff_ha": round(m.diff_ha, 2),
                     "diff_pct": round(m.diff_pct, 1),
-                    "match": m.match,
+                    "match": bool(m.match),
                 }
                 for m in self.zone_area_matches
             ],

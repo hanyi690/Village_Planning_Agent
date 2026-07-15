@@ -11,7 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
 from ..zone_schema import get_zone_color, ZONE_TYPE_COLORS, FACILITY_STATUS_COLORS, PLANNING_ZONE_COLORS
-from ..utils.geojson_utils import reduce_coordinate_precision, simplify_geojson
+from ..utils.geojson_utils import reduce_coordinate_precision
+from ..optimizer.procedural import simplify_boundary
 
 logger = get_logger(__name__)
 
@@ -128,7 +129,7 @@ class MapRenderer:
             layer_type = config.get("layerType", "")
             if geojson:
                 reduce_coordinate_precision(geojson, decimals=6)
-                simplify_geojson(geojson, tolerance=0.00005)
+                simplify_boundary(geojson, tolerance_m=5)
                 self._strip_properties(geojson, layer_type)
 
         # Sort by priority

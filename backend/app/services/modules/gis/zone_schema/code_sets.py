@@ -13,48 +13,19 @@ from typing import Dict, List, Set, Tuple
 
 # ── DLBM code sets ───────────────────────────────────────────
 
-BASIC_FARMLAND_CODES: Set[str] = {
-    "0101", "0102", "0103",
-    "0110", "0120", "0130",
-    "1100",
-}
+# All code sets derived from the unified classification schema.
+# Add/modify DLBM classifications in schema.py, not here.
+from .schema import SCHEMA as _SCHEMA
 
-GENERAL_AGRICULTURE_CODES: Set[str] = {
-    "0100",
-    "0200", "0201", "0202", "0203", "0204",
-    "0210", "0220",
-    "1200", "1201",
-    "1510",
-    "2270",
-    "3200",
-}
+_sets = _SCHEMA.to_code_sets()
 
-ECOLOGICAL_CODES: Set[str] = {
-    "0300", "0301", "0302", "0303", "0304", "0305", "0306", "0307",
-    "0310", "0330", "1340", "1350",
-    "0400", "0401", "0402", "0403", "0404", "1400",
-    "1101", "1102", "1103", "1104", "1105", "1106", "1109",
-    "1110", "1140", "1180", "3100",
-}
-
-# Sub-sets for 6-class secondary zoning (dual-layer system)
-FOREST_CODES: Set[str] = {
-    "0300", "0301", "0302", "0303", "0304", "0305", "0306", "0307",
-    "0310", "0330",
-}
-
-GRASSLAND_CODES: Set[str] = {
-    "0400", "0401", "0402", "0403", "0404", "1400",
-}
-
-FORESTRY_CODES: Set[str] = {
-    "1340", "1350",
-}
-
-WATER_CODES: Set[str] = {
-    "1101", "1102", "1103", "1104", "1105", "1106", "1109",
-    "1110", "1140", "1180", "3100",
-}
+BASIC_FARMLAND_CODES: Set[str] = _sets["BASIC_FARMLAND"]
+GENERAL_AGRICULTURE_CODES: Set[str] = _sets["GENERAL_AGRICULTURE"]
+ECOLOGICAL_CODES: Set[str] = _sets["ECOLOGICAL"]
+FOREST_CODES: Set[str] = _sets["FOREST"]
+GRASSLAND_CODES: Set[str] = _sets["GRASSLAND"]
+FORESTRY_CODES: Set[str] = _sets["FORESTRY"]
+WATER_CODES: Set[str] = _sets["WATER"]
 
 # Strict ecological protection zone: forest + water (redline-managed)
 ECOLOGICAL_PROTECTION_CODES: Set[str] = FOREST_CODES | WATER_CODES

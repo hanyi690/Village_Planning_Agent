@@ -61,6 +61,8 @@ def create_layout_agent_graph():
     from app.tools.gis.allocate import allocate_zones
     from app.tools.gis.generate import generate_layout
     from app.tools.gis.validate import validate_layout
+    from app.tools.gis.export import export_gdb
+    from app.tools.gis.render import render_map
     from app.tools.gis.data import fetch_gis_data, search_poi
     from app.tools.gis.analytics import calculate_gis_coverage, analyze_accessibility
     from .prompts import LAYOUT_AGENT_SYSTEM_PROMPT
@@ -71,6 +73,7 @@ def create_layout_agent_graph():
     tools = [
         build_knowledge_graph, query_knowledge_graph,
         detect_conflicts, allocate_zones, generate_layout, validate_layout,
+        export_gdb, render_map,
         fetch_gis_data, calculate_gis_coverage, analyze_accessibility, search_poi,
     ]
     graph = create_react_agent(llm, tools, state_schema=LayoutAgentState, prompt=LAYOUT_AGENT_SYSTEM_PROMPT)

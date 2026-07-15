@@ -46,7 +46,7 @@ def _intent_from_dict(d: Dict[str, Any]) -> Any:
     facilities = []
     for f in d.get("facilities", []):
         facilities.append(FacilityIntent(
-            facility_id=f["facility_id"],
+            facility_id=f.get("facility_id", f.get("name", "")),
             facility_type=f.get("facility_type", ""),
             target_zone=f.get("target_zone", ""),
             location_hint=f.get("location_hint", ""),
@@ -56,7 +56,7 @@ def _intent_from_dict(d: Dict[str, Any]) -> Any:
     axes = []
     for a in d.get("axes", []):
         axes.append(AxisIntent(
-            axis_id=a["axis_id"],
+            axis_id=a.get("axis_id", ""),
             axis_type=a.get("axis_type", "primary"),
             direction=Direction(a.get("direction", "center")),
             label=a.get("label", ""),
@@ -194,7 +194,11 @@ def _make_planning_zone_layer(
     allocated: Optional[Dict[str, Any]],
     gis_data: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
-    """Generate planning_zone layer — per-parcel DLBM → 4 planning zones."""
+    """Generate planning_zone layer — per-parcel DLBM → 4 planning zones.
+
+    After classifying parcels, merges adjacent same-type parcels via dissolve
+    to reduce 600+ fragments to ~4-6 contiguous regions.
+    """
     source = allocated or gis_data.get("landuse_current_geojson")
     if not source or not source.get("features"):
         return None
@@ -214,7 +218,38 @@ def _make_planning_zone_layer(
             "properties": {**props, "zone_type": assigned, "color": color, "stroke": color},
         })
 
-    logger.info(f"[generate_layout] planning_zone: {len(features)} features (per-parcel)")
+    # Merge adjacent same-type parcels via dissolve
+    try:
+        from app.services.modules.gis.optimizer.procedural import merge_parcels
+        from app.services.modules.gis.utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
+        fc = {"type": "FeatureCollection", "features": features}
+        gdf = geojson_to_geodataframe(fc)
+        if gdf is not None and not gdf.empty:
+            merged_gdf = merge_parcels(gdf, group_column="zone_type")
+            # Keep only needed columns to avoid dissolve-aggregated list values
+            merged_gdf = merged_gdf[["zone_type", "area_ha", "geometry"]].copy()
+            merged_geojson = geodataframe_to_geojson(merged_gdf)
+            if merged_geojson and merged_geojson.get("features"):
+                features = []
+                for feat in merged_geojson["features"]:
+                    props = feat.get("properties", {})
+                    zt = str(props.get("zone_type", ""))
+                    color = PLANNING_ZONE_COLORS.get(zt, "#CCCCCC")
+                    area_ha = float(props.get("area_ha", 0))
+                    features.append({
+                        "type": "Feature",
+                        "geometry": feat.get("geometry", {}),
+                        "properties": {
+                            "zone_type": zt,
+                            "color": color,
+                            "stroke": color,
+                            "area_ha": round(area_ha, 2),
+                        },
+                    })
+    except Exception as e:
+        logger.warning(f"[generate_layout] merge_parcels failed: {e}, using per-parcel features")
+
+    logger.info(f"[generate_layout] planning_zone: {len(features)} features")
 
     return {
         "layerType": "planning_zone",

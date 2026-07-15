@@ -2,7 +2,7 @@
 
 解决 GIS 系统中的命名不匹配问题：
 - ConstraintDrivenAllocator 内部使用 7 类 zone_type（居住用地/农业用地/生态绿地 等）
-- LayoutValidator 和 SpatialLayoutEngine 期望 6 个规划分区名
+- LayoutValidator 期望 6 个规划分区名
 
 双层分区体系（三区三线）：
   一级3区：生态空间 / 农业空间 / 建设空间（全域覆盖不重叠）
