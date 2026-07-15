@@ -63,12 +63,13 @@ function TestGISPageContent() {
     const loadJintianFiles = async () => {
       setStandardLoading(true);
       try {
-        const resp = await gisTestApi.listJintianFiles();
-        if (resp.success) {
-          setJintianFiles(resp.files);
-          // Default visibility: only status layers visible
+        const resp = await gisTestApi.listFiles();
+        if (resp.files) {
+          // Adapt string[] to JintianFile-like format
+          const adapted = resp.files.map((f: string) => ({ filename: f, name: f.replace('.geojson', ''), group: 'status', layer_type: 'infrastructure', records: 0 }));
+          setJintianFiles(adapted);
           const defaults: Record<string, boolean> = {};
-          resp.files.forEach(f => { defaults[f.filename] = f.group === 'status'; });
+          adapted.forEach(f => { defaults[f.filename] = true; });
           setVisibleFiles(defaults);
         }
       } catch {
@@ -94,10 +95,10 @@ function TestGISPageContent() {
         if (SKIP_FILES.has(file.filename)) continue;
         if (!visibleFiles[file.filename]) continue;
         try {
-          const resp = await gisTestApi.getJintianData(file.filename);
-          if (resp.success && resp.geojson) {
+          const geojson = await gisTestApi.getFile(file.filename);
+          if (geojson) {
             layers.push({
-              geojson: resp.geojson as GISLayerConfig['geojson'],
+              geojson: geojson as GISLayerConfig['geojson'],
               layerType: file.layer_type as GISLayerConfig['layerType'],
               layerName: file.name,
             });
@@ -121,9 +122,8 @@ function TestGISPageContent() {
   // Service status indicator
   const statusColor = useMemo(() => {
     if (!serviceStatus) return 'gray';
-    const s = serviceStatus.services;
-    if (s.tianditu_api_key && s.amap_api_key) return 'green';
-    if (s.tianditu_api_key || s.amap_api_key) return 'yellow';
+    if (serviceStatus.tianditu && serviceStatus.amap) return 'green';
+    if (serviceStatus.tianditu || serviceStatus.amap) return 'yellow';
     return 'red';
   }, [serviceStatus]);
 
@@ -207,7 +207,7 @@ function TestGISPageContent() {
       {serviceStatus && (
         <div className="bg-gray-50 border-b px-6 py-2">
           <div className="max-w-[1800px] mx-auto flex gap-4 text-xs text-gray-600">
-            {Object.entries(serviceStatus.services).map(([key, val]) => (
+            {Object.entries(serviceStatus).map(([key, val]) => (
               <span key={key} className="flex items-center gap-1">
                 <span className={`w-1.5 h-1.5 rounded-full ${val ? 'bg-green-500' : 'bg-red-400'}`} />
                 {key}

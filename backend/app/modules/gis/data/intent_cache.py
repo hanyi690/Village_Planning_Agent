@@ -126,3 +126,31 @@ def resolve_plan_intent_cached(
     intent = resolve_plan_intent(village_name, gis_data)
     save_cached_intent(cache_key, intent)
     return intent
+
+
+def resolve_intent_live(
+    path_name: str,
+    village_name: str,
+    gis_data: Dict[str, Any],
+    custom_text: str = "",
+) -> Dict[str, Any]:
+    """Real LLM intent resolution — bypasses cache entirely.
+
+    Args:
+        path_name: "gen" (markdown planning text) or "plan" (L3 reports)
+        village_name: target village
+        gis_data: GIS data for constraint injection
+        custom_text: optional custom planning text override
+    """
+    from app.tools.gis.parse import parse_text_via_llm
+    from .loader import load_planning_text, load_l3_reports
+
+    if path_name == "gen":
+        planning_text = custom_text or load_planning_text(village_name)
+        return parse_text_via_llm(text=planning_text, village_name=village_name, gis_data=gis_data)
+    else:
+        reports = load_l3_reports()
+        from app.tools.gis.parse import _parse_reports_to_intent
+        result = _parse_reports_to_intent(reports=reports, village_name=village_name, gis_data=gis_data)
+        data = result.get("data", {})
+        return data.get("intent_json", data)

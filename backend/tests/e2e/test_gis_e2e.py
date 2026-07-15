@@ -36,7 +36,8 @@ def jintian_pipeline_result(client):
     The plan path is tested separately via _run_pipeline_plan_directly().
     """
     try:
-        resp = client.post("/api/dev/gis/jintian/pipeline", json={
+        resp = client.post("/api/dev/gis/layout", json={
+            "village_name": "金田村委会",
             "run_path": "gen",
             "use_llm": False,
             "compare_to_planned": True,
@@ -56,7 +57,8 @@ def three_way_result(client):
     This is heavier (runs both gen + plan paths), so only used by comparison tests.
     """
     try:
-        resp = client.post("/api/dev/gis/jintian/pipeline", json={
+        resp = client.post("/api/dev/gis/layout", json={
+            "village_name": "金田村委会",
             "run_path": "both",
             "use_llm": False,
             "compare_to_planned": True,
@@ -322,7 +324,7 @@ def _run_both_paths_directly() -> dict:
 
 
 class TestJinTianPipelineAPI:
-    """Test /api/dev/gis/jintian/pipeline — dual-path pipeline with gen + plan paths."""
+    """Test /api/dev/gis/layout — dual-path pipeline with gen + plan paths."""
 
     # ── Helper: extract gen path result from nested response ──────
     @staticmethod
@@ -505,11 +507,12 @@ class TestConstraintValues:
 
 
 class TestLayoutValidateAPI:
-    """Test /api/dev/gis/layout-validate endpoint."""
+    """Test /api/dev/gis/validate (validation_type=layout) endpoint."""
 
     def test_validate_with_jintian_data(self, client):
         """Validate layout generated from jintian data — 8 checks pass."""
-        resp = client.post("/api/dev/gis/layout-validate", json={
+        resp = client.post("/api/dev/gis/validate", json={
+            "validation_type": "layout",
             "use_jintian_data": True,
             "layout_configs": [],
         })
@@ -524,7 +527,8 @@ class TestLayoutValidateAPI:
 
     def test_validate_returns_zone_areas(self, client):
         """Layout validation returns zone area breakdown."""
-        resp = client.post("/api/dev/gis/layout-validate", json={
+        resp = client.post("/api/dev/gis/validate", json={
+            "validation_type": "layout",
             "use_jintian_data": True,
             "layout_configs": [],
         })
@@ -537,11 +541,12 @@ class TestLayoutValidateAPI:
 
 
 class TestConstraintValidatorAPI:
-    """Test /api/dev/gis/constraint-validator endpoint."""
+    """Test /api/dev/gis/validate (validation_type=constraint) endpoint."""
 
     def test_constraint_validation(self, client):
         """Constraint validator runs on jintian data and returns conflict counts."""
-        resp = client.post("/api/dev/gis/constraint-validator", json={
+        resp = client.post("/api/dev/gis/validate", json={
+            "validation_type": "constraint",
             "location": "金田村",
             "strict_mode": False,
         })
@@ -554,11 +559,11 @@ class TestConstraintValidatorAPI:
 
 
 class TestSpatialLayoutAPI:
-    """Test /api/dev/gis/spatial-layout endpoint."""
+    """Test /api/dev/gis/layout endpoint."""
 
     def test_spatial_layout(self, client):
         """Spatial layout pipeline generates layout_configs."""
-        resp = client.post("/api/dev/gis/spatial-layout", json={
+        resp = client.post("/api/dev/gis/layout", json={
             "village_name": "金田村委会",
         })
         assert resp.status_code == 200
@@ -570,24 +575,20 @@ class TestSpatialLayoutAPI:
 
 
 class TestJinTianDataAPI:
-    """Test /api/dev/gis/jintian/* data endpoints."""
+    """Test /api/dev/gis/files data endpoints."""
 
     def test_list_files(self, client):
-        """Jintian files endpoint returns available GeoJSON files."""
-        resp = client.get("/api/dev/gis/jintian/files")
+        """Files endpoint returns available GeoJSON files."""
+        resp = client.get("/api/dev/gis/files")
         assert resp.status_code == 200
         data = resp.json()
         assert data.get("success") is True
         files = data.get("files", [])
         assert len(files) >= 5, f"Expected >=5 files, got {len(files)}"
-        # Verify layer_type is present
-        for f in files:
-            assert "layer_type" in f
-            assert "records" in f
 
     def test_get_boundary_data(self, client):
         """Get jintian boundary GeoJSON file."""
-        resp = client.get("/api/dev/gis/jintian/data/current/boundary.geojson")
+        resp = client.get("/api/dev/gis/files/current/boundary.geojson")
         assert resp.status_code == 200
         data = resp.json()
         assert data.get("success") is True
@@ -597,13 +598,13 @@ class TestJinTianDataAPI:
 
 
 class TestLanduseChangeAPI:
-    """Test /api/dev/gis/landuse-change endpoint."""
+    """Test /api/dev/gis/layout (include_landuse_change=true) endpoint."""
 
     def test_landuse_change(self, client):
         """Landuse change compares current vs planned."""
-        resp = client.post("/api/dev/gis/landuse-change", json={
-            "location": "金田村",
-            "buffer_km": 5.0,
+        resp = client.post("/api/dev/gis/layout", json={
+            "village_name": "金田村委会",
+            "include_landuse_change": True,
         })
         assert resp.status_code == 200
         data = resp.json()

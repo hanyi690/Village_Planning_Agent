@@ -48,7 +48,7 @@ function GisResultCard({ message }: GisResultCardProps) {
     if (!allLayers || allLayers.length === 0) return;
     const planningLayers = allLayers.filter(l => l.layerType === 'planning_zone');
     if (planningLayers.length === 0) return;
-    gisTestApi.validateLayout({ layout_configs: planningLayers, use_jintian_data: true })
+    gisTestApi.validate({ validation_type: "layout", layout_configs: planningLayers, use_jintian_data: true })
       .then(setValidationResult)
       .catch(() => {});
   }, [allLayers]);

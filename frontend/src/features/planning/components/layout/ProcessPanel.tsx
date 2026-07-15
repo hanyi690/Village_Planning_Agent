@@ -151,7 +151,7 @@ export default function ProcessPanel() {
       return;
     }
     setValidationLoading(true);
-    gisTestApi.validateLayout({ layout_configs: planningLayers, use_jintian_data: true })
+    gisTestApi.validate({ validation_type: "layout", layout_configs: planningLayers, use_jintian_data: true })
       .then(setValidationResult)
       .catch(() => setValidationResult(null))
       .finally(() => setValidationLoading(false));
