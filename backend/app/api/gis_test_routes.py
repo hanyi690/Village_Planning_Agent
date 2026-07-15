@@ -27,45 +27,19 @@ router = APIRouter(prefix="/api/dev/gis", tags=["GIS Dev"])
 # GeoJSON color injection (per-feature DLBM/zone_type → color)
 # ============================================
 
-from app.services.modules.gis.zone_schema import (
-    get_zone_color, get_zone_type_for_dlbm, ZONE_TYPE_COLORS, DEFAULT_ZONE_COLOR,
+from app.modules.gis.zone_schema import (
+    get_zone_color, get_zone_type_for_dlbm, ZONE_TYPE_COLORS,
     PLANNING_ZONE_COLORS,
+    DEFAULT_ZONE_COLOR,
 )
-
-# Sensitivity level color mapping
-SENSITIVITY_COLORS = {
-    "high": {"fill": "#FF0000", "stroke": "#CC0000"},
-    "medium": {"fill": "#FFFF00", "stroke": "#CCCC00"},
-    "low": {"fill": "#00FF00", "stroke": "#00CC00"},
-    "buffer": {"fill": "#FFA500", "stroke": "#CC8400"},
-    "高敏感区": {"fill": "#FF0000", "stroke": "#CC0000"},
-    "中敏感区": {"fill": "#FFFF00", "stroke": "#CCCC00"},
-    "低敏感区": {"fill": "#00FF00", "stroke": "#00CC00"},
-    "缓冲区": {"fill": "#FFA500", "stroke": "#CC8400"},
-}
-
-# Facility type color mapping (per facility_type, not status)
-FACILITY_TYPE_COLORS = {
-    "村委会": {"fill": "#8B4513", "stroke": "#654321"},
-    "学校": {"fill": "#4169E1", "stroke": "#2850A0"},
-    "卫生站": {"fill": "#DC143C", "stroke": "#B01030"},
-    "文化站": {"fill": "#9932CC", "stroke": "#7A28A0"},
-    "市场": {"fill": "#FF8C00", "stroke": "#CC7000"},
-    "养老服务": {"fill": "#2F4F4F", "stroke": "#1F3333"},
-    "产业服务中心": {"fill": "#B8860B", "stroke": "#8B6508"},
-    "停车场": {"fill": "#696969", "stroke": "#505050"},
-    "地质灾害点": {"fill": "#FF0000", "stroke": "#CC0000"},
-}
-
-# Infrastructure color by road/water type
-INFRA_COLORS = {
-    "县道": {"fill": "#555555", "stroke": "#333333"},
-    "乡道": {"fill": "#808080", "stroke": "#606060"},
-    "村道": {"fill": "#A0A0A0", "stroke": "#808080"},
-    "道路": {"fill": "#666666", "stroke": "#444444"},
-    "河流": {"fill": "#00BFFF", "stroke": "#0099CC"},
-    "水系": {"fill": "#00BFFF", "stroke": "#0099CC"},
-}
+from app.modules.gis.zone_schema.colors import (
+    SENSITIVITY_COLORS,
+    FACILITY_TYPE_COLORS,
+    INFRA_COLORS,
+    ISOCHRONE_COLORS,
+    get_facility_color,
+    get_infra_color,
+)
 
 
 def inject_feature_colors(geojson: Dict[str, Any], layer_type: str) -> Dict[str, Any]:
@@ -128,7 +102,7 @@ def inject_feature_colors(geojson: Dict[str, Any], layer_type: str) -> Dict[str,
             if not color_info:
                 # Fallback by status
                 status = str(props.get("status", "规划新建")).strip()
-                from app.services.modules.gis.zone_schema import FACILITY_STATUS_COLORS
+                from app.modules.gis.zone_schema import FACILITY_STATUS_COLORS
                 color_info = FACILITY_STATUS_COLORS.get(status, {"fill": "blue", "stroke": "#00008B"})
             props["color"] = color_info["fill"]
             props["stroke"] = color_info["stroke"]
@@ -298,7 +272,7 @@ async def data_fetch(request: LocationRequest):
     """Fetch all GIS data (water, road, residential, boundary) for a location."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.data.fetcher import get_fetcher
+        from app.modules.gis.data.fetcher import get_fetcher
         fetcher = get_fetcher()
         result = await asyncio.to_thread(
             fetcher.fetch_all_gis_data,
@@ -315,14 +289,14 @@ async def locate_center(request: CenterRequest):
     """Locate village center using 4-tier fallback strategy."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.data.fetcher import get_fetcher
+        from app.modules.gis.data.fetcher import get_fetcher
         fetcher = get_fetcher()
         center, metadata = await asyncio.to_thread(
             fetcher.get_village_center, request.location, request.buffer_km
         )
         # Fallback to jintian boundary center if geocoding fails
         if center is None:
-            from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+            from app.modules.gis.data.loader import load_all as _load_all_gis
             boundary = _load_all_gis().get("boundary_geojson")
             if boundary:
                 try:
@@ -352,7 +326,7 @@ async def get_bbox(request: BBoxRequest):
     """Get boundary and expanded bbox for a location."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.data.fetcher import get_fetcher
+        from app.modules.gis.data.fetcher import get_fetcher
         fetcher = get_fetcher()
         result = await asyncio.to_thread(
             fetcher.get_boundary_bbox, request.location, request.buffer_km
@@ -404,7 +378,6 @@ async def test_isochrone(request: IsochroneRequest):
         features = [iso["geojson"] for iso in isochrones]
 
         # Inject per-isochrone colors (5min=green, 10min=yellow, 15min=orange)
-        ISOCHRONE_COLORS = {5: "#00FF00", 10: "#FFFF00", 15: "#FFA500"}
         for feat in features:
             props = feat.setdefault("properties", {})
             mins = props.get("time_minutes", 10)
@@ -424,7 +397,7 @@ async def test_accessibility(request: AccessibilityRequest):
     """Run accessibility analysis (driving, walking, service coverage)."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.analysis.accessibility import run_accessibility_analysis
+        from app.modules.gis.analysis.accessibility import run_accessibility_analysis
         origin = tuple(request.origin) if request.origin else None
         center = tuple(request.center) if request.center else (116.044146, 24.818629)
         result = await asyncio.to_thread(
@@ -442,7 +415,7 @@ async def test_poi_search(request: POISearchRequest):
     """Search POI near a center point using Amap (primary) or Tianditu."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.providers.poi import POIProvider
+        from app.modules.gis.data.providers.poi import POIProvider
         center_tuple = tuple(request.center)
         result = await asyncio.to_thread(
             POIProvider.search_poi_nearby,
@@ -468,7 +441,7 @@ async def test_coverage(request: CoverageRequest):
     """Calculate GIS data coverage rate for a location."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.analysis.coverage import calculate_gis_coverage
+        from app.modules.gis.analysis.coverage import calculate_gis_coverage
         result = await asyncio.to_thread(
             calculate_gis_coverage, request.location, request.buffer_km
         )
@@ -487,8 +460,8 @@ async def test_facility_validation(request: FacilityValidationRequest):
     """Validate facility location against planning standards."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.validation.facility_validator import validate_facility_location
-        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+        from app.modules.gis.analysis.validation.facility_validator import validate_facility_location
+        from app.modules.gis.data.loader import load_all as _load_all_gis
         location_tuple = tuple(request.location)
         gis_data = _load_all_gis()
         analysis_params = {
@@ -516,7 +489,7 @@ async def test_ecological(request: EcologicalRequest):
     t0 = time.time()
     try:
         if request.use_jintian_data:
-            from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+            from app.modules.gis.data.loader import load_all as _load_all_gis
             gis_data = _load_all_gis()
             study_area = gis_data.get("boundary_geojson")
             water = gis_data.get("landuse_current_geojson")
@@ -525,7 +498,7 @@ async def test_ecological(request: EcologicalRequest):
 
             # Try full assessment first
             try:
-                from app.services.modules.gis.validation.facility_validator import assess_ecological_sensitivity, SPATIAL_AVAILABLE
+                from app.modules.gis.analysis.validation.facility_validator import assess_ecological_sensitivity, SPATIAL_AVAILABLE
                 if not SPATIAL_AVAILABLE:
                     raise ImportError("spatial_analysis module not available")
                 result = await asyncio.to_thread(assess_ecological_sensitivity, study_area, water)
@@ -580,16 +553,16 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
     """Run the full spatial layout pipeline for a village."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
-        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
-        from app.services.modules.gis.kg import PlanningKG
-        from app.services.modules.gis.conflict.detector import ConflictDetector
-        from app.services.modules.gis.conflict.resolver import ConflictResolver
-        from app.services.modules.gis.optimizer.mip_allocator import MIPZoneAllocator
-        from app.services.modules.gis.layout.zone_generator import ZoneGenerator
-        from app.services.modules.gis.layout.facility_placer import FacilityPlacer
-        from app.services.modules.gis.layout.axis_builder import AxisBuilder
-        from app.services.modules.gis.layout.map_renderer import MapRenderer
+        from app.modules.gis.data.loader import load_all as _load_all_gis
+        from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
+        from app.modules.gis.kg import PlanningKG
+        from app.modules.gis.analysis.conflict.detector import ConflictDetector
+        from app.modules.gis.analysis.conflict.resolver import ConflictResolver
+        from app.modules.gis.generation.optimizer.mip_allocator import MIPZoneAllocator
+        from app.modules.gis.generation.zone_generator import ZoneGenerator
+        from app.modules.gis.generation.facility_placer import FacilityPlacer
+        from app.modules.gis.generation.axis_builder import AxisBuilder
+        from app.modules.gis.rendering.map_renderer import MapRenderer
 
         gis_data = _load_all_gis()
         boundary = gis_data.get("boundary_geojson")
@@ -601,7 +574,7 @@ async def test_spatial_layout(request: SpatialLayoutRequest):
         summaries = GISMetricsCalculator.compute_summaries(gis_data)
 
         # Resolve intent via gen path (planning markdown → LLM → intent)
-        from app.services.modules.gis.layout.intent_cache import resolve_gen_intent_cached
+        from app.modules.gis.data.intent_cache import resolve_gen_intent_cached
         from app.tools.gis.parse import _dict_to_intent
         intent_dict = resolve_gen_intent_cached("金田村委会", gis_data)
         intent = _dict_to_intent(intent_dict)
@@ -686,7 +659,7 @@ async def test_landuse_change(request: LanduseChangeRequest):
     """Compare current vs planned landuse from jintian data."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+        from app.modules.gis.data.loader import load_all as _load_all_gis
         gis_data = _load_all_gis()
         current = gis_data.get("landuse_current_geojson")
         planned = gis_data.get("landuse_planned_geojson")
@@ -737,9 +710,9 @@ async def test_constraint_validator(request: ConstraintValidatorRequest):
     """Run conflict detection on jintian data summaries."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.conflict.detector import ConflictDetector
-        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
-        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+        from app.modules.gis.analysis.conflict.detector import ConflictDetector
+        from app.modules.gis.data.loader import load_all as _load_all_gis
+        from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
 
         _gis_data_for_metrics = _load_all_gis()
         summaries = GISMetricsCalculator.compute_summaries(_gis_data_for_metrics)
@@ -765,7 +738,7 @@ async def test_hazard_buffer(request: HazardBufferRequest):
     """Generate geological hazard buffer zones from jintian data."""
     t0 = time.time()
     try:
-        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+        from app.modules.gis.data.loader import load_all as _load_all_gis
         gis_data = _load_all_gis()
         hazard_data = gis_data.get("geological_hazard_geojson")
 
@@ -779,7 +752,7 @@ async def test_hazard_buffer(request: HazardBufferRequest):
         try:
             import geopandas as gpd
             from shapely.geometry import shape
-            from app.services.modules.gis.utils.crs_engine import project_to_metric, project_to_wgs84
+            from app.modules.gis.utils.crs_engine import project_to_metric, project_to_wgs84
 
             buffered_features = []
             for f in features:
@@ -828,22 +801,22 @@ async def validate_layout(request: LayoutValidateRequest):
     """
     t0 = time.time()
     try:
-        from app.services.modules.gis.validation.layout_validator import LayoutValidator
+        from app.modules.gis.analysis.validation.layout_validator import LayoutValidator
 
         layout_configs = request.layout_configs
 
         # Mode 2: generate layout from jintian data then validate
         if request.use_jintian_data and not layout_configs:
-            from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
-            from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
-            from app.services.modules.gis.kg import PlanningKG
-            from app.services.modules.gis.conflict.detector import ConflictDetector
-            from app.services.modules.gis.conflict.resolver import ConflictResolver
-            from app.services.modules.gis.optimizer.mip_allocator import MIPZoneAllocator
-            from app.services.modules.gis.layout.zone_generator import ZoneGenerator
-            from app.services.modules.gis.layout.facility_placer import FacilityPlacer
-            from app.services.modules.gis.layout.axis_builder import AxisBuilder
-            from app.services.modules.gis.layout.map_renderer import MapRenderer
+            from app.modules.gis.data.loader import load_all as _load_all_gis
+            from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
+            from app.modules.gis.kg import PlanningKG
+            from app.modules.gis.analysis.conflict.detector import ConflictDetector
+            from app.modules.gis.analysis.conflict.resolver import ConflictResolver
+            from app.modules.gis.generation.optimizer.mip_allocator import MIPZoneAllocator
+            from app.modules.gis.generation.zone_generator import ZoneGenerator
+            from app.modules.gis.generation.facility_placer import FacilityPlacer
+            from app.modules.gis.generation.axis_builder import AxisBuilder
+            from app.modules.gis.rendering.map_renderer import MapRenderer
 
             gis_data = _load_all_gis()
             boundary = gis_data.get("boundary_geojson")
@@ -852,7 +825,7 @@ async def validate_layout(request: LayoutValidateRequest):
                 return {"success": False, "error": "jintian boundary data not found", "timing_ms": round((time.time() - t0) * 1000)}
 
             # Resolve intent via gen path
-            from app.services.modules.gis.layout.intent_cache import resolve_gen_intent_cached
+            from app.modules.gis.data.intent_cache import resolve_gen_intent_cached
             from app.tools.gis.parse import _dict_to_intent
             intent_dict = resolve_gen_intent_cached("金田村委会", gis_data)
             intent = _dict_to_intent(intent_dict)
@@ -1009,7 +982,7 @@ async def parse_planning_text(request: ParseTextRequest):
             logger.info(f"[parse-text] Loaded {len(reports)} dims from DB session {session_id[:16]}...: {dim_list}")
 
             from app.tools.gis.parse import _parse_reports_to_intent
-            from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
+            from app.modules.gis.data.loader import load_all as _load_all_gis
             _gis_data_for_parse = _load_all_gis()
             result = _parse_reports_to_intent(reports=reports, village_name=request.village_name, gis_data=_gis_data_for_parse)
 
@@ -1036,7 +1009,7 @@ async def parse_planning_text(request: ParseTextRequest):
 
         from app.agent.gis.prompts import format_parse_prompt
         from app.core.settings import LLM_MODEL
-        from app.services.modules.gis.layout.data_loader import get_village_params, load_all as _load_all_gis
+        from app.modules.gis.data.loader import get_village_params, load_all as _load_all_gis
 
         _gis_data_for_params = _load_all_gis()
         _params = get_village_params(_gis_data_for_params)
@@ -1054,7 +1027,7 @@ async def parse_planning_text(request: ParseTextRequest):
             llm = ChatOpenAI(model=LLM_MODEL, temperature=0, request_timeout=120)
             response = await llm.ainvoke(prompt_text)
             response_text = response.content
-            from app.services.modules.gis.trace import ParseTrace
+            from app.modules.gis.trace import ParseTrace
             parse_trace = ParseTrace(
                 source="jintian_reports" if request.use_jintian_reports else "planning_text",
                 llm_model=LLM_MODEL,
@@ -1099,11 +1072,11 @@ async def parse_planning_text(request: ParseTextRequest):
 
     # --- Common: Generate layout from intent_json ---
     try:
-        from app.services.modules.gis.layout.data_loader import load_all as _load_all_gis
-        from app.services.modules.gis.layout.zone_generator import ZoneGenerator
-        from app.services.modules.gis.layout.facility_placer import FacilityPlacer
-        from app.services.modules.gis.layout.axis_builder import AxisBuilder
-        from app.services.modules.gis.layout.map_renderer import MapRenderer
+        from app.modules.gis.data.loader import load_all as _load_all_gis
+        from app.modules.gis.generation.zone_generator import ZoneGenerator
+        from app.modules.gis.generation.facility_placer import FacilityPlacer
+        from app.modules.gis.generation.axis_builder import AxisBuilder
+        from app.modules.gis.rendering.map_renderer import MapRenderer
         from app.tools.gis.parse import _dict_to_intent
 
         gis_data = _load_all_gis()
@@ -1174,7 +1147,7 @@ async def parse_planning_text(request: ParseTextRequest):
 
 def _get_jintian_planning_text() -> str:
     """Return planning text from actual markdown file."""
-    from app.services.modules.gis.layout.planning_text_loader import PlanningTextLoader
+    from app.modules.gis.data.text_loader import PlanningTextLoader
     return PlanningTextLoader.load_village_planning_markdown("金田村")
 
 
@@ -1328,14 +1301,14 @@ async def jintian_pipeline(request: JinTianPipelineRequest):
     """
     t0 = time.time()
     try:
-        from app.services.modules.gis.layout.data_loader import (
+        from app.modules.gis.data.loader import (
             load_all, load_current, load_planned,
             get_village_params, get_data_summary,
         )
-        from app.services.modules.gis.layout.intent_cache import (
+        from app.modules.gis.data.intent_cache import (
             resolve_gen_intent_cached, resolve_plan_intent_cached,
         )
-        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+        from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
 
         # ── 加载数据（所有路径共用）───────────────────────────────
         gis_data = load_all()
@@ -1452,38 +1425,38 @@ async def _run_pipeline_path(
         planned_data: load_planned() 产出的 planned/ 数据
         village_name: 村名
     """
-    from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+    from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
 
     result: Dict[str, Any] = {}
 
     # ── Step 1: 解析 intent ───────────────────────────────────────
-    # gen 路径: 加载 data/gis/jintian/planning_text/金田村委会.md → LLM 解析
-    # plan 路径: 加载 output/.../layer3_reports.json → LLM 解析
-    # 均注入 GIS 实测约束（建设用地上限/耕地保有量下限/生态红线）到 prompt
-    try:
-        intent = intent_resolver()
-        parse_source = intent.get("metadata", {}).get("source", f"{path_name}_cached")
-        result["parse_source"] = parse_source
-        result["intent"] = intent
-    except Exception as e:
-        logger.warning(f"[{path_name}] Intent resolution failed: {e}")
-        result["parse_source"] = "failed"
-        result["intent"] = {"zones": [], "facilities": [], "axes": [], "constraints": []}
-
-    # 如果用户提供了自定义规划文本且开启 use_llm，用实时 LLM 覆盖缓存
-    if request.use_llm and request.planning_text:
+    # use_llm=True:  真实 LLM 解析 (绕过缓存, 实时调用 ChatOpenAI)
+    # use_llm=False: 优先缓存命中, 缓存未命中时回退 LLM (默认)
+    if request.use_llm:
         try:
-            from app.tools.gis.parse import parse_text_via_llm
-            llm_intent = parse_text_via_llm(
-                text=request.planning_text,
-                village_name=village_name,
-                gis_data=gis_data,
-            )
-            if llm_intent.get("zones"):
-                result["intent"] = llm_intent
-                result["parse_source"] = f"{path_name}_llm_live"
+            intent = _resolve_intent_live(path_name, village_name, gis_data, request.planning_text)
+            result["parse_source"] = f"{path_name}_llm_live"
+            result["intent"] = intent
+            logger.info(f"[{path_name}] Real LLM intent: {len(intent.get('zones', []))} zones")
         except Exception as e:
-            logger.warning(f"[{path_name}] Live LLM parsing failed: {e}")
+            logger.warning(f"[{path_name}] Live LLM failed: {e}, falling back to cache")
+            try:
+                intent = intent_resolver()
+                result["parse_source"] = f"{path_name}_fallback_cache"
+                result["intent"] = intent
+            except Exception as e2:
+                result["parse_source"] = "failed"
+                result["intent"] = {"zones": [], "facilities": [], "axes": [], "constraints": []}
+    else:
+        try:
+            intent = intent_resolver()
+            parse_source = intent.get("metadata", {}).get("source", f"{path_name}_cached")
+            result["parse_source"] = parse_source
+            result["intent"] = intent
+        except Exception as e:
+            logger.warning(f"[{path_name}] Intent resolution failed: {e}")
+            result["parse_source"] = "failed"
+            result["intent"] = {"zones": [], "facilities": [], "axes": [], "constraints": []}
 
     intent = result["intent"]
 
@@ -1496,7 +1469,7 @@ async def _run_pipeline_path(
     kg_constraints: List[Dict[str, Any]] = []
     kg = None
     try:
-        from app.services.modules.gis.kg import PlanningKG
+        from app.modules.gis.kg import PlanningKG
         landuse_geojson = gis_data.get("landuse_current_geojson")
         kg = PlanningKG(village_name=village_name)
         kg.build_from_intent(
@@ -1520,8 +1493,8 @@ async def _run_pipeline_path(
     #   (c) 空间冲突 — 不同维度对空间结构定义不一致
     conflict_info = None
     try:
-        from app.services.modules.gis.conflict.detector import ConflictDetector
-        from app.services.modules.gis.conflict.resolver import ConflictResolver
+        from app.modules.gis.analysis.conflict.detector import ConflictDetector
+        from app.modules.gis.analysis.conflict.resolver import ConflictResolver
         summaries = GISMetricsCalculator.compute_summaries(gis_data)
         conflict_report = ConflictDetector().detect_all(summaries)
         resolution_report = ConflictResolver().resolve(conflict_report)
@@ -1540,7 +1513,7 @@ async def _run_pipeline_path(
     # 硬约束: 受保护地类（基本农田/水域/生态林）不可划入建设区
     allocated_geojson = None
     try:
-        from app.services.modules.gis.optimizer.mip_allocator import MIPZoneAllocator
+        from app.modules.gis.generation.optimizer.mip_allocator import MIPZoneAllocator
         metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
         total_area_ha = metrics["total_area_ha"]
 
@@ -1572,23 +1545,26 @@ async def _run_pipeline_path(
         result["allocation"] = {"mode": "failed", "error": str(e)}
 
     # ── Step 5: 生成图层 ──────────────────────────────────────────
-    # 4 层 GIS 图层：
-    #   function_zone  — 功能分区（ZoneGenerator: DLBM→6类合并→面积约束→CA 精化）
-    #   planning_zone  — 规划分区（DLBM→4类：农田保护区/村庄建设区/生态保护区/一般农业区）
-    #   facility_point — 设施布点（FacilityPlacer: 4策略布点）
-    #   infrastructure — 发展轴线（AxisBuilder: 一核一带三区）
+    # 6 层 GIS 图层 (14 层输出中 6 层为生成层):
+    #   ① function_zone     — 功能分区 (ZoneGenerator: DLBM→6类合并→面积约束→CA 精化)
+    #   ② planning_zone     — 规划分区 (DLBM→4类规划分区)
+    #   ③ facility_point    — 设施布点 (FacilityPlacer: 4策略布点)
+    #   ④ infrastructure    — 发展轴线 (AxisBuilder: 一核一带三区)
+    #   ⑤ space_control_zone — 空间管制区 (510/520/530/540)
+    #   ⑥ land_use_zone     — 土地用途分区 (V/N/E 三大类)
     from app.tools.gis.generate import (
         _generate_function_zones,
         _make_planning_zone_layer,
         _generate_facilities,
         _generate_axes,
+        _generate_space_control_zone,
+        _generate_land_use_zone,
     )
 
     layers: List[Dict[str, Any]] = []
     fz = _generate_function_zones(intent, gis_data)
     if fz:
         layers.append(fz)
-    # 使用分配后的 GeoJSON（如果有），否则使用原始 landuse
     pz = _make_planning_zone_layer(allocated_geojson, gis_data)
     if pz:
         layers.append(pz)
@@ -1598,6 +1574,12 @@ async def _run_pipeline_path(
     ax = _generate_axes(intent, gis_data)
     if ax:
         layers.append(ax)
+    sc = _generate_space_control_zone(gis_data, allocated_geojson, intent)
+    if sc:
+        layers.append(sc)
+    lu = _generate_land_use_zone(allocated_geojson, gis_data)
+    if lu:
+        layers.append(lu)
 
     result["layers"] = layers
     result["layer_summary"] = [
@@ -1608,7 +1590,413 @@ async def _run_pipeline_path(
         for lyr in layers
     ]
 
+    # ── Step 6: EXPORT — write GeoJSON files to disk ──────────────
+    output_dir = Path("output") / village_name / path_name
+    try:
+        result["export"] = _run_export_step(
+            layers=layers,
+            gis_data=gis_data,
+            output_dir=output_dir,
+            village_name=village_name,
+        )
+    except Exception as e:
+        logger.warning(f"[{path_name}] Export failed: {e}")
+        result["export"] = {"error": str(e)}
+
+    # ── Step 7: RENDER — generate map PNG ─────────────────────────
+    render_dir = Path("output") / f"{village_name}_comparison"
+    try:
+        result["render"] = _run_render_step(
+            layers=layers,
+            gis_data=gis_data,
+            output_dir=render_dir,
+            village_name=village_name,
+            path_name=path_name,
+        )
+    except Exception as e:
+        logger.warning(f"[{path_name}] Render failed: {e}")
+        result["render"] = {"error": str(e)}
+
     return result
+
+
+# ── Space Control Zone endpoints ──────────────────────────────────────
+
+
+@router.get("/space-control/definition", summary="Get space control zone definitions")
+async def space_control_definition():
+    """Return the 4-class space control zone system (510/520/530/540)."""
+    from app.modules.gis.generation.space_control_generator import SPACE_CONTROL_ZONES
+    from app.modules.gis.zone_schema.colors import SPACE_CONTROL_COLORS
+
+    zones = {}
+    for code, info in SPACE_CONTROL_ZONES.items():
+        zones[code] = {
+            "name": info["name"],
+            "description": info["description"],
+            "color": SPACE_CONTROL_COLORS.get(code, {}),
+        }
+    return {"space_control_zones": zones, "count": len(zones)}
+
+
+@router.post("/space-control/generate", summary="Generate space control zone layer")
+async def space_control_generate(request: "JinTianPipelineRequest"):
+    """Generate space_control_zone GeoJSON for a village."""
+    try:
+        gis_data = load_all(request.village_name)
+        if not gis_data or not gis_data.get("boundary_geojson"):
+            return {"success": False, "error": "GIS data not loaded"}
+
+        from app.modules.gis.generation.space_control_generator import SpaceControlZoneGenerator
+
+        generator = SpaceControlZoneGenerator()
+        geojson = generator.generate(
+            boundary=gis_data.get("boundary_geojson"),
+            farmland_protection=gis_data.get("farmland_protection_geojson"),
+            ecological_protection=gis_data.get("ecological_protection_geojson"),
+            current_landuse=gis_data.get("landuse_current_geojson"),
+        )
+
+        zone_counts = {}
+        for feat in geojson.get("features", []):
+            code = feat.get("properties", {}).get("GZQLX", "unknown")
+            zone_counts[code] = zone_counts.get(code, 0) + 1
+
+        return {
+            "success": True,
+            "feature_count": len(geojson.get("features", [])),
+            "zone_counts": zone_counts,
+            "geojson": geojson,
+        }
+    except Exception as e:
+        logger.error(f"space_control_generate failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+# ── Land Use Zone (V/N/E) endpoints ───────────────────────────────────
+
+
+@router.get("/land-use/categories", summary="Get V/N/E classification system")
+async def land_use_categories():
+    """Return the full V/N/E classification tree (3大类/10中类/15小类)."""
+    from app.modules.gis.generation.land_use_zone_generator import (
+        VNE_CLASSIFICATION, flatten_vne_codes,
+    )
+
+    vne_flat = flatten_vne_codes()
+    return {
+        "classification_tree": VNE_CLASSIFICATION,
+        "flattened_codes": vne_flat,
+        "total_codes": len(vne_flat),
+    }
+
+
+@router.post("/land-use/generate", summary="Generate V/N/E land use zone layer")
+async def land_use_generate(request: "JinTianPipelineRequest"):
+    """Generate land_use_zone (V/N/E) GeoJSON for a village."""
+    try:
+        gis_data = load_all(request.village_name)
+        if not gis_data:
+            return {"success": False, "error": "GIS data not loaded"}
+
+        from app.modules.gis.generation.land_use_zone_generator import LandUseZoneGenerator
+
+        generator = LandUseZoneGenerator()
+        geojson = generator.generate(
+            allocated_geojson=None,
+            current_landuse=gis_data.get("landuse_current_geojson"),
+        )
+
+        zone_counts = {}
+        for feat in geojson.get("features", []):
+            code = feat.get("properties", {}).get("YTDLDM", "unknown")
+            zone_counts[code] = zone_counts.get(code, 0) + 1
+
+        return {
+            "success": True,
+            "feature_count": len(geojson.get("features", [])),
+            "vne_counts": zone_counts,
+            "geojson": geojson,
+        }
+    except Exception as e:
+        logger.error(f"land_use_generate failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+# ── Validation endpoints ──────────────────────────────────────────────
+
+
+@router.post("/validate/vne-mapping", summary="Validate single V/N/E classification")
+async def validate_vne_mapping(body: Dict[str, Any]):
+    """Test V/N/E classification on a DLBM code or parcel."""
+    from app.modules.gis.generation.land_use_zone_generator import (
+        get_dlbm_to_vne, flatten_vne_codes,
+    )
+
+    dlbm = str(body.get("dlbm", body.get("DLBM", "")))
+    if not dlbm:
+        return {"success": False, "error": "Provide 'dlbm' field"}
+
+    vne_mapping = get_dlbm_to_vne()
+    vne_code = vne_mapping.get(dlbm, "E23")
+    vne_flat = flatten_vne_codes()
+    vne_info = vne_flat.get(vne_code, {})
+
+    return {
+        "success": True,
+        "input_dlbm": dlbm,
+        "vne_code": vne_code,
+        "vne_name": vne_info.get("name", ""),
+        "vne_level": vne_info.get("level", ""),
+        "vne_parent": vne_info.get("parent", ""),
+    }
+
+
+@router.post("/validate/space-control", summary="Validate space control zone allocation")
+async def validate_space_control(body: Dict[str, Any]):
+    """Test space control zone type classification for a given GeoJSON feature."""
+    from app.modules.gis.generation.space_control_generator import SPACE_CONTROL_ZONES
+
+    gzqlx = str(body.get("gzqlx", body.get("GZQLX", "")))
+    if not gzqlx:
+        return {"success": False, "error": "Provide 'gzqlx' field (510/520/530/540)"}
+
+    info = SPACE_CONTROL_ZONES.get(gzqlx)
+    if not info:
+        return {"success": False, "error": f"Invalid GZQLX: {gzqlx}. Valid: 510,520,530,540"}
+
+    return {
+        "success": True,
+        "gzqlx": gzqlx,
+        "name": info["name"],
+        "description": info["description"],
+        "is_valid": gzqlx in ("510", "520", "530", "540"),
+    }
+
+
+def _resolve_intent_live(
+    path_name: str,
+    village_name: str,
+    gis_data: Dict[str, Any],
+    custom_text: str = "",
+) -> Dict[str, Any]:
+    """Real LLM intent resolution — bypasses IntentCache entirely.
+
+    Args:
+        path_name: "gen" (markdown planning text) or "plan" (L3 reports)
+        village_name: target village
+        gis_data: GIS data for constraint injection
+        custom_text: optional custom planning text override
+    """
+    from app.tools.gis.parse import parse_text_via_llm
+    from app.modules.gis.data.loader import load_planning_text
+
+    if path_name == "gen":
+        planning_text = custom_text or load_planning_text(village_name)
+        return parse_text_via_llm(
+            text=planning_text,
+            village_name=village_name,
+            gis_data=gis_data,
+        )
+    else:
+        from app.modules.gis.data.loader import load_l3_reports
+        reports = load_l3_reports()
+        from app.tools.gis.parse import _parse_reports_to_intent
+        result = _parse_reports_to_intent(
+            reports=reports,
+            village_name=village_name,
+            gis_data=gis_data,
+        )
+        data = result.get("data", {})
+        return data.get("intent_json", data)
+
+
+def _run_export_step(
+    layers: List[Dict[str, Any]],
+    gis_data: Dict[str, Any],
+    output_dir: Any,
+    village_name: str,
+) -> Dict[str, Any]:
+    """Export all layers as GeoJSON files to output directory."""
+    import json as _json
+    export_dir = Path(output_dir)
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    exported = []
+    for lyr in layers:
+        layer_type = lyr.get("layerType", "unknown")
+        geojson = lyr.get("data")
+        if not geojson or not geojson.get("features"):
+            continue
+
+        filepath = export_dir / f"{layer_type}.geojson"
+        with open(filepath, "w", encoding="utf-8") as f:
+            _json.dump(geojson, f, ensure_ascii=False)
+        exported.append(str(filepath))
+
+    # Also export current data layers
+    for key, name in [
+        ("boundary_geojson", "boundary"),
+        ("landuse_current_geojson", "current_landuse"),
+        ("road_geojson", "current_road"),
+        ("farmland_protection_geojson", "farmland_protection"),
+        ("ecological_protection_geojson", "ecological_protection"),
+    ]:
+        geojson = gis_data.get(key)
+        if geojson and geojson.get("features"):
+            filepath = export_dir / f"{name}.geojson"
+            with open(filepath, "w", encoding="utf-8") as f:
+                _json.dump(geojson, f, ensure_ascii=False)
+            exported.append(str(filepath))
+
+    # Write land balance table
+    from app.tools.gis.export import _compute_land_balance
+    landuse = gis_data.get("landuse_current_geojson")
+    if landuse:
+        balance = _compute_land_balance(landuse)
+        balance_path = export_dir / "land_balance.json"
+        with open(balance_path, "w", encoding="utf-8") as f:
+            _json.dump(balance, f, ensure_ascii=False, indent=2)
+        exported.append(str(balance_path))
+
+    return {"exported_files": len(exported), "output_dir": str(export_dir), "files": exported}
+
+
+def _run_render_step(
+    layers: List[Dict[str, Any]],
+    gis_data: Dict[str, Any],
+    output_dir: Any,
+    village_name: str,
+    path_name: str,
+) -> Dict[str, Any]:
+    """Render map layers as PNG using matplotlib (same approach as render_comparison.py)."""
+    import json as _json
+    render_dir = Path(output_dir)
+    render_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save GeoJSON to render_dir regardless of matplotlib availability
+    geojson_dir = render_dir / path_name
+    geojson_dir.mkdir(parents=True, exist_ok=True)
+    for lyr in layers:
+        layer_type = lyr.get("layerType", "unknown")
+        geojson = lyr.get("data")
+        if geojson and geojson.get("features"):
+            filepath = geojson_dir / f"{layer_type}.geojson"
+            with open(filepath, "w", encoding="utf-8") as f:
+                _json.dump(geojson, f, ensure_ascii=False)
+
+    # Try matplotlib PNG rendering
+    png_path = render_dir / f"{path_name}_layers.png"
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+
+        plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+        plt.rcParams["axes.unicode_minus"] = False
+
+        from app.modules.gis.zone_schema import PLANNING_ZONE_COLORS
+
+        fig, ax = plt.subplots(1, 1, figsize=(16, 12))
+        ax.set_title(f"{village_name} — {path_name} path", fontsize=14)
+        ax.set_aspect("equal")
+
+        # Draw boundary
+        boundary = gis_data.get("boundary_geojson")
+        if boundary and boundary.get("features"):
+            _draw_geojson_layer(ax, boundary, edgecolor="#333333", facecolor="none", linewidth=1.5)
+
+        # Draw each layer
+        legend_patches = []
+        for lyr in layers:
+            layer_type = lyr.get("layerType", "unknown")
+            geojson = lyr.get("data")
+            if not geojson or not geojson.get("features"):
+                continue
+
+            if layer_type == "planning_zone":
+                # Color each feature by zone_type
+                for zone_name, color in PLANNING_ZONE_COLORS.items():
+                    zone_features = {
+                        "type": "FeatureCollection",
+                        "features": [
+                            f for f in geojson["features"]
+                            if f.get("properties", {}).get("zone_type") == zone_name
+                        ],
+                    }
+                    if zone_features["features"]:
+                        _draw_geojson_layer(ax, zone_features, facecolor=color, alpha=0.6)
+                        legend_patches.append(mpatches.Patch(color=color, label=zone_name))
+            else:
+                # Single color per layer
+                _draw_geojson_layer(ax, geojson, facecolor="#AAAAAA", alpha=0.4)
+
+        if legend_patches:
+            ax.legend(handles=legend_patches, loc="lower right", fontsize=8)
+
+        ax.autoscale()
+        fig.tight_layout()
+        fig.savefig(str(png_path), dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        return {
+            "png_path": str(png_path),
+            "layer_count": len(layers),
+            "render_dir": str(render_dir),
+        }
+    except ImportError:
+        logger.info("[Render] matplotlib not available — GeoJSON layers saved, no PNG")
+        return {
+            "png_path": None,
+            "note": "matplotlib unavailable, GeoJSON layers saved to render_dir",
+            "render_dir": str(render_dir),
+        }
+    except Exception as e:
+        logger.warning(f"[Render] PNG failed: {e}")
+        return {"png_path": None, "error": str(e), "render_dir": str(render_dir)}
+
+
+def _draw_geojson_layer(
+    ax: Any,
+    geojson: Dict[str, Any],
+    facecolor: str = "#AAAAAA",
+    edgecolor: str = "#333333",
+    linewidth: float = 0.5,
+    alpha: float = 0.5,
+):
+    """Draw a GeoJSON FeatureCollection on a matplotlib Axes."""
+    from shapely.geometry import shape
+
+    for feat in geojson.get("features", []):
+        try:
+            geom = shape(feat.get("geometry", {}))
+            if geom.is_empty:
+                continue
+            if geom.geom_type == "Polygon":
+                xs, ys = geom.exterior.xy
+                ax.fill(xs, ys, facecolor=facecolor, edgecolor=edgecolor,
+                        linewidth=linewidth, alpha=alpha)
+                for interior in geom.interiors:
+                    xi, yi = interior.xy
+                    ax.fill(xi, yi, facecolor="white", edgecolor="none")
+            elif geom.geom_type == "MultiPolygon":
+                for poly in geom.geoms:
+                    xs, ys = poly.exterior.xy
+                    ax.fill(xs, ys, facecolor=facecolor, edgecolor=edgecolor,
+                            linewidth=linewidth, alpha=alpha)
+                    for interior in poly.interiors:
+                        xi, yi = interior.xy
+                        ax.fill(xi, yi, facecolor="white", edgecolor="none")
+            elif geom.geom_type in ("LineString", "MultiLineString"):
+                lines = [geom] if geom.geom_type == "LineString" else geom.geoms
+                for line in lines:
+                    xs, ys = line.xy
+                    ax.plot(xs, ys, color=edgecolor, linewidth=linewidth * 2, alpha=alpha)
+            elif geom.geom_type == "Point":
+                ax.plot(geom.x, geom.y, "o", color=facecolor, markersize=4, alpha=alpha)
+        except Exception:
+            continue
 
 
 def _build_three_way_comparison(
@@ -1634,7 +2022,7 @@ def _build_three_way_comparison(
         "gen_vs_plan": {ComparisonReport.to_dict()},
       }
     """
-    from app.services.modules.gis.layout.compare_layouts import compare
+    from app.modules.gis.rendering.compare_layouts import compare
 
     # 提取保护区域（用于对比中的合规检查）
     protection = {}

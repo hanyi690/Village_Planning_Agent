@@ -22,14 +22,14 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Re-export from the existing modules for backward compatibility
-from app.services.modules.gis.conflict.detector import (
+from app.modules.gis.analysis.conflict.detector import (
     ConflictDetector,
     ConflictReport,
     MetricConflict,
     ConstraintViolation,
     SpatialConflict,
 )
-from app.services.modules.gis.conflict.resolver import (
+from app.modules.gis.analysis.conflict.resolver import (
     ConflictResolver,
     ResolutionReport,
 )

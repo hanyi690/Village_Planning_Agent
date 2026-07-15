@@ -25,7 +25,7 @@ from ._helpers import make_result, to_tool_message
 
 def _normalize_fields(geojson: Dict, layer_key: str) -> Dict:
     """Ensure exported GeoJSON has fields matching GDB_LAYER_REGISTRY."""
-    from app.services.modules.gis.data.gdb_schema import GDB_LAYER_REGISTRY
+    from app.modules.gis.data.gdb_schema import GDB_LAYER_REGISTRY
 
     layer_def = GDB_LAYER_REGISTRY.get(layer_key, {})
     field_specs = layer_def.get("fields", [])
@@ -64,7 +64,7 @@ def export_gdb(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    from app.services.modules.gis.data.gdb_schema import GDB_LAYER_REGISTRY
+    from app.modules.gis.data.gdb_schema import GDB_LAYER_REGISTRY
 
     LAYER_GIS_KEY_MAP: Dict[str, Optional[str]] = {
         "admin_area": "boundary_geojson",
@@ -77,7 +77,9 @@ def export_gdb(
         "farmland_protection": "farmland_protection_geojson",
         "historical_protection": "historical_protection_geojson",
         "construction_zone": "construction_zone_geojson",
-        "geological_hazard_points": "hazard_points_geojson",
+        "space_control_zone": None,  # 生成层: SpaceControlZoneGenerator
+        "land_use_zone": None,       # 生成层: LandUseZoneGenerator
+        "hazard_points": "hazard_points_geojson",
         "planned_annotation": None,
         "planned_road": None,
     }
@@ -89,8 +91,13 @@ def export_gdb(
         gis_key = LAYER_GIS_KEY_MAP.get(layer_key)
 
         # planned_landuse comes from allocated_geojson, not gis_data
+        # space_control_zone and land_use_zone come from layout_configs
         if layer_key == "planned_landuse":
             geojson = allocated_geojson
+        elif layer_key == "space_control_zone":
+            geojson = _find_layer_in_configs(layout_configs, "space_control_zone")
+        elif layer_key == "land_use_zone":
+            geojson = _find_layer_in_configs(layout_configs, "land_use_zone")
         elif gis_key and gis_data:
             geojson = gis_data.get(gis_key)
         else:
@@ -132,6 +139,19 @@ def export_gdb(
     })
 
 
+def _find_layer_in_configs(
+    layout_configs: Optional[List[Dict[str, Any]]],
+    layer_type: str,
+) -> Optional[Dict[str, Any]]:
+    """Extract a generated layer's GeoJSON from layout_configs."""
+    if not layout_configs:
+        return None
+    for cfg in layout_configs:
+        if cfg.get("layerType") == layer_type:
+            return cfg.get("data") or cfg.get("geojson")
+    return None
+
+
 def _compute_land_balance(geojson: Dict) -> Dict[str, Any]:
     """Compute land use balance table from allocated GeoJSON.
 
@@ -139,7 +159,7 @@ def _compute_land_balance(geojson: Dict) -> Dict[str, Any]:
     Area units preserved from input (typically m² for DLMJ fields).
     """
     from collections import defaultdict
-    from app.services.modules.gis.zone_schema import dlbm_to_planning_zone, get_zone_type_for_dlbm
+    from app.modules.gis.zone_schema import dlbm_to_planning_zone, get_zone_type_for_dlbm
 
     features = geojson.get("features", [])
     zone_areas: Dict[str, float] = defaultdict(float)

@@ -72,16 +72,16 @@ def three_way_result(client):
 def _run_pipeline_directly() -> dict:
     """Run the gen path pipeline via service layer, producing API-compatible result."""
     import math
-    from app.services.modules.gis.kg import PlanningKG
-    from app.services.modules.gis.conflict.detector import ConflictDetector
-    from app.services.modules.gis.conflict.resolver import ConflictResolver
-    from app.services.modules.gis.optimizer.mip_allocator import MIPZoneAllocator
-    from app.services.modules.gis.layout.zone_generator import ZoneGenerator
-    from app.services.modules.gis.layout.facility_placer import FacilityPlacer
-    from app.services.modules.gis.layout.axis_builder import AxisBuilder
-    from app.services.modules.gis.layout.map_renderer import MapRenderer
-    from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
-    from app.services.modules.gis.layout.data_loader import load_all
+    from app.modules.gis.kg import PlanningKG
+    from app.modules.gis.analysis.conflict.detector import ConflictDetector
+    from app.modules.gis.analysis.conflict.resolver import ConflictResolver
+    from app.modules.gis.generation.optimizer.mip_allocator import MIPZoneAllocator
+    from app.modules.gis.generation.zone_generator import ZoneGenerator
+    from app.modules.gis.generation.facility_placer import FacilityPlacer
+    from app.modules.gis.generation.axis_builder import AxisBuilder
+    from app.modules.gis.rendering.map_renderer import MapRenderer
+    from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
+    from app.modules.gis.data.loader import load_all
     from tests.fixtures.gis_e2e import make_real_intent
     from app.tools.gis.parse import _dict_to_intent
 
@@ -199,16 +199,16 @@ def _run_pipeline_directly() -> dict:
 def _run_both_paths_directly() -> dict:
     """Run both gen + plan paths directly via service layer, producing API-compatible result."""
     import math
-    from app.services.modules.gis.kg import PlanningKG
-    from app.services.modules.gis.conflict.detector import ConflictDetector
-    from app.services.modules.gis.conflict.resolver import ConflictResolver
-    from app.services.modules.gis.optimizer.mip_allocator import MIPZoneAllocator
-    from app.services.modules.gis.layout.zone_generator import ZoneGenerator
-    from app.services.modules.gis.layout.facility_placer import FacilityPlacer
-    from app.services.modules.gis.layout.axis_builder import AxisBuilder
-    from app.services.modules.gis.layout.map_renderer import MapRenderer
-    from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
-    from app.services.modules.gis.layout.data_loader import load_all
+    from app.modules.gis.kg import PlanningKG
+    from app.modules.gis.analysis.conflict.detector import ConflictDetector
+    from app.modules.gis.analysis.conflict.resolver import ConflictResolver
+    from app.modules.gis.generation.optimizer.mip_allocator import MIPZoneAllocator
+    from app.modules.gis.generation.zone_generator import ZoneGenerator
+    from app.modules.gis.generation.facility_placer import FacilityPlacer
+    from app.modules.gis.generation.axis_builder import AxisBuilder
+    from app.modules.gis.rendering.map_renderer import MapRenderer
+    from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
+    from app.modules.gis.data.loader import load_all
     from tests.fixtures.gis_e2e import make_real_intent
     from app.tools.gis.parse import _dict_to_intent
 
@@ -463,7 +463,7 @@ class TestConstraintValues:
 
     def test_construction_area_constraint(self, gis_data):
         """Construction area <= 30.5ha (hard constraint from design doc)."""
-        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+        from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
         metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
         assert metrics["construction_area_ha"] > 0
         # Constraint: construction <= 30.5ha (may be slightly over in raw data)
@@ -471,27 +471,27 @@ class TestConstraintValues:
 
     def test_farmland_area_constraint(self, gis_data):
         """Farmland area >= 80ha (hard constraint from design doc)."""
-        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+        from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
         metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
         assert metrics["farmland_area_ha"] > 0
 
     def test_ecological_area_constraint(self, gis_data):
         """Ecological area >= 200ha (hard constraint from design doc)."""
-        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+        from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
         metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
         assert metrics.get("ecological_area_ha", 0) >= 0
 
     def test_total_area_matches_parcels(self, gis_data):
         """660 parcels total area is consistent with village area."""
-        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+        from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
         metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
         assert metrics["total_area_ha"] > 100, \
             f"Total area seems too small: {metrics['total_area_ha']}ha"
 
     def test_conflict_detector_identifies_violations(self, gis_data):
         """ConflictDetector finds real constraint violations when they exist."""
-        from app.services.modules.gis.conflict.detector import ConflictDetector
-        from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+        from app.modules.gis.analysis.conflict.detector import ConflictDetector
+        from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
         summaries = GISMetricsCalculator.compute_summaries(gis_data)
         detector = ConflictDetector()
         report = detector.detect_all(summaries)

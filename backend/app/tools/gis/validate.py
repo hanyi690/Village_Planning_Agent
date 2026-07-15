@@ -19,7 +19,7 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Re-export existing validators
-from app.services.modules.gis.validation.layout_validator import (
+from app.modules.gis.analysis.validation.layout_validator import (
     LayoutValidator,
     ValidationReport,
     Violation,

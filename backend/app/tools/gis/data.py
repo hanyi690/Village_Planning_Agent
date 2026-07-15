@@ -14,7 +14,7 @@ def fetch_gis_data(location: str, buffer_km: float = 5.0, max_features: int = 50
         buffer_km: Search radius in km. Default 5.
         max_features: Max features per layer. Default 500.
     """
-    from app.services.modules.gis.data.fetcher import get_fetcher
+    from app.modules.gis.data.fetcher import get_fetcher
     if not location:
         return json.dumps({"success": False, "error": "location required"}, ensure_ascii=False)
     fetcher = get_fetcher()
@@ -40,7 +40,7 @@ def search_poi(keyword: str, center: list, radius: int = 1000, page_size: int = 
         radius: Search radius in meters. Default 1000.
         page_size: Results per page. Default 20.
     """
-    from app.services.modules.gis.providers.poi import POIProvider
+    from app.modules.gis.data.providers.poi import POIProvider
     if not keyword:
         return json.dumps({"success": False, "error": "keyword required"}, ensure_ascii=False)
     if not center:

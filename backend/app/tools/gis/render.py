@@ -18,7 +18,7 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-from app.services.modules.gis.schema import GISLayerConfig
+from app.modules.gis.schema import GISLayerConfig
 
 
 from ._helpers import make_result, to_tool_message

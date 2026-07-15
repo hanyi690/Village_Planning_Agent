@@ -26,7 +26,7 @@ from ._helpers import make_result, to_tool_message
 
 def _intent_from_dict(d: Dict[str, Any]) -> Any:
     """Convert dict intent to UnifiedSpatialIntent (dataclass instance)."""
-    from app.services.modules.gis.planning_intent import (
+    from app.modules.gis.models.intent import (
         Direction, Density, ZoneIntent, FacilityIntent,
         AxisIntent, ConstraintIntent, UnifiedSpatialIntent,
     )
@@ -102,10 +102,13 @@ def generate_layout(
     kg_constraints: Annotated[Optional[List[Dict[str, Any]]], InjectedState("kg_constraints")] = None,
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
-    """Generate multi-layer spatial layout: function zones, planning zones, facilities, axes.
+    """Generate multi-layer spatial layout: function zones, planning zones, facilities,
+    axes, space control zones (510/520/530/540), and land use zones (V/N/E).
 
     Delegates to ZoneGenerator (merged zones), FacilityPlacer (4-strategy),
-    and AxisBuilder (spatial structure). Intent and GIS data auto-injected.
+    AxisBuilder (spatial structure), SpaceControlZoneGenerator (4-class),
+    and LandUseZoneGenerator (V/N/E classification).
+    Intent and GIS data auto-injected.
     """
     t0 = time.time()
     layers: List[Dict[str, Any]] = []
@@ -130,6 +133,16 @@ def generate_layout(
         axis_layer = _generate_axes(intent, gis_data)
         if axis_layer:
             layers.append(axis_layer)
+
+        # ── Space Control Zone (510/520/530/540) ──────────────────
+        space_ctrl_layer = _generate_space_control_zone(gis_data, allocated_geojson, intent)
+        if space_ctrl_layer:
+            layers.append(space_ctrl_layer)
+
+        # ── Land Use Zone (V/N/E classification) ───────────────────
+        land_use_layer = _generate_land_use_zone(allocated_geojson, gis_data)
+        if land_use_layer:
+            layers.append(land_use_layer)
 
         elapsed = round(time.time() - t0, 2)
         return Command(update={
@@ -167,7 +180,7 @@ def _generate_function_zones(
     if not landuse or not landuse.get("features"):
         return None
 
-    from app.services.modules.gis.layout.zone_generator import ZoneGenerator
+    from app.modules.gis.generation.zone_generator import ZoneGenerator
 
     boundary = gis_data.get("boundary_geojson")
     protection = _build_protection_zones(gis_data)
@@ -203,7 +216,7 @@ def _make_planning_zone_layer(
     if not source or not source.get("features"):
         return None
 
-    from app.services.modules.gis.zone_schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
+    from app.modules.gis.zone_schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
 
     features = []
     for feat in source["features"]:
@@ -220,8 +233,8 @@ def _make_planning_zone_layer(
 
     # Merge adjacent same-type parcels via dissolve
     try:
-        from app.services.modules.gis.optimizer.procedural import merge_parcels
-        from app.services.modules.gis.utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
+        from app.modules.gis.generation.optimizer.procedural import merge_parcels
+        from app.modules.gis.utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
         fc = {"type": "FeatureCollection", "features": features}
         gdf = geojson_to_geodataframe(fc)
         if gdf is not None and not gdf.empty:
@@ -272,7 +285,7 @@ def _generate_facilities(
     if not intent or not intent.get("facilities"):
         return None
 
-    from app.services.modules.gis.layout.facility_placer import FacilityPlacer
+    from app.modules.gis.generation.facility_placer import FacilityPlacer
 
     placer = FacilityPlacer()
     geojson = placer.place(
@@ -304,7 +317,7 @@ def _generate_axes(
     if not intent or not intent.get("axes"):
         return None
 
-    from app.services.modules.gis.layout.axis_builder import AxisBuilder
+    from app.modules.gis.generation.axis_builder import AxisBuilder
 
     unified = _intent_from_dict(intent)
     builder = AxisBuilder()
@@ -323,4 +336,80 @@ def _generate_axes(
     return {
         "layerType": "infrastructure",
         "data": geojson,
+    }
+
+
+def _generate_space_control_zone(
+    gis_data: Dict[str, Any],
+    allocated_geojson: Optional[Dict[str, Any]] = None,
+    intent: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Generate space_control_zone layer — 4-class construction control (510/520/530/540).
+
+    Uses SpaceControlZoneGenerator to partition the village into:
+      510 允许建设区 (permitted construction)
+      520 限制建设区 (restricted)
+      530 有条件建设区 (conditional, ≤20% current construction)
+      540 禁止建设区 (prohibited: basic farmland + ecological redline)
+    """
+    boundary = gis_data.get("boundary_geojson")
+    if not boundary:
+        return None
+
+    from app.modules.gis.generation.space_control_generator import SpaceControlZoneGenerator
+
+    generator = SpaceControlZoneGenerator()
+    geojson = generator.generate(
+        boundary=boundary,
+        construction_boundary=gis_data.get("construction_boundary_geojson"),
+        planned_landuse=allocated_geojson,
+        farmland_protection=gis_data.get("farmland_protection_geojson"),
+        ecological_protection=gis_data.get("ecological_protection_geojson"),
+        current_landuse=gis_data.get("landuse_current_geojson"),
+    )
+
+    feat_count = len(geojson.get("features", []))
+    logger.info(f"[generate_layout] space_control_zone: {feat_count} features (SpaceControlZoneGenerator)")
+
+    if feat_count == 0:
+        return None
+
+    return {
+        "layerType": "space_control_zone",
+        "data": geojson,
+    }
+
+
+def _generate_land_use_zone(
+    allocated_geojson: Optional[Dict[str, Any]] = None,
+    gis_data: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Generate land_use_zone layer — V/N/E classification (3大类/10中类/15小类).
+
+    Mapping chain: DLBM → GHYTBM → V/N/E code.
+    Fallback: DLBM → zone_type → V/N/E heuristic.
+    """
+    geojson = allocated_geojson
+    if not geojson:
+        geojson = gis_data.get("landuse_current_geojson") if gis_data else None
+    if not geojson or not geojson.get("features"):
+        return None
+
+    from app.modules.gis.generation.land_use_zone_generator import LandUseZoneGenerator
+
+    generator = LandUseZoneGenerator()
+    result = generator.generate(
+        allocated_geojson=allocated_geojson,
+        current_landuse=gis_data.get("landuse_current_geojson") if gis_data else None,
+    )
+
+    feat_count = len(result.get("features", []))
+    logger.info(f"[generate_layout] land_use_zone: {feat_count} features (LandUseZoneGenerator)")
+
+    if feat_count == 0:
+        return None
+
+    return {
+        "layerType": "land_use_zone",
+        "data": result,
     }

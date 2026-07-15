@@ -29,7 +29,7 @@ from tests.fixtures.gis_shared import (
 # 1. Planning Zone Mapper (8 tests)
 # ============================================================================
 
-from app.services.modules.gis.optimizer.planning_zone_mapper import (
+from app.modules.gis.generation.optimizer.planning_zone_mapper import (
     PLANNING_ZONE_TO_ZONE_TYPES,
     ZONE_TYPE_TO_PLANNING_ZONE,
     map_planning_zone_targets_to_zone_types,
@@ -106,7 +106,7 @@ class TestPlanningZoneMapper:
 # 2. Layout Validator (10 tests)
 # ============================================================================
 
-from app.services.modules.gis.validation.layout_validator import (
+from app.modules.gis.analysis.validation.layout_validator import (
     LayoutValidator,
     ValidationReport,
 )
@@ -247,7 +247,7 @@ class TestLayoutValidator:
 # 3. Data Loader (5 tests)
 # ============================================================================
 
-from app.services.modules.gis.layout.data_loader import (
+from app.modules.gis.data.loader import (
     load_current,
     load_planned,
     compute_intent_from_gis,
@@ -298,12 +298,12 @@ class TestDataLoader:
 
     def test_resolve_gen_intent_fallback(self):
         """resolve_gen_intent falls back to GIS computation when no markdown."""
-        from app.services.modules.gis.layout.data_loader import resolve_gen_intent
+        from app.modules.gis.data.loader import resolve_gen_intent
         data = load_current()
         data.update(load_planned())
         # Patch PlanningTextLoader to raise FileNotFoundError
         with patch(
-            "app.services.modules.gis.layout.data_loader.PlanningTextLoader",
+            "app.modules.gis.data.loader.PlanningTextLoader",
             create=True,
         ) as mock_loader:
             mock_loader.load_village_planning_markdown.side_effect = FileNotFoundError
@@ -320,7 +320,7 @@ class TestDataLoader:
 # 4. Intent Cache (4 tests)
 # ============================================================================
 
-from app.services.modules.gis.layout.intent_cache import (
+from app.modules.gis.data.intent_cache import (
     _compute_cache_key,
     get_cached_intent,
     save_cached_intent,
@@ -350,12 +350,12 @@ class TestIntentCache:
         assert result is not None
         assert result["zones"][0]["zone_id"] == "z1"
         # Cleanup
-        from app.services.modules.gis.layout.intent_cache import INTENT_CACHE_DIR
+        from app.modules.gis.data.intent_cache import INTENT_CACHE_DIR
         (INTENT_CACHE_DIR / f"{cache_key}.json").unlink(missing_ok=True)
 
     def test_corrupted_cache_returns_none(self):
         """Corrupted cache file returns None."""
-        from app.services.modules.gis.layout.intent_cache import INTENT_CACHE_DIR
+        from app.modules.gis.data.intent_cache import INTENT_CACHE_DIR
         cache_key = "_test_corrupt_" + _compute_cache_key("test", "corrupt")
         INTENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         path = INTENT_CACHE_DIR / f"{cache_key}.json"
@@ -369,7 +369,7 @@ class TestIntentCache:
 # 5. Metrics Calculator (3 tests)
 # ============================================================================
 
-from app.services.modules.gis.layout.metrics_calculator import GISMetricsCalculator
+from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
 
 
 class TestMetricsCalculator:
@@ -416,7 +416,7 @@ class TestMetricsCalculator:
 
     def test_area_unit_conversion(self):
         """_area_ha_from_props converts DLMJ (m²) to hectares."""
-        from app.services.modules.gis.layout.metrics_calculator import _area_ha_from_props
+        from app.modules.gis.analysis.metrics_calculator import _area_ha_from_props
         # area_ha takes priority
         assert _area_ha_from_props({"area_ha": 5.0, "DLMJ": 50000}) == 5.0
         # DLMJ fallback: 50000 m² = 5 ha

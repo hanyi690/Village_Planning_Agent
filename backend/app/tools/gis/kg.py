@@ -30,7 +30,7 @@ def build_knowledge_graph(
     """
     global _kg_instance
 
-    from app.services.modules.gis.kg import PlanningKG
+    from app.modules.gis.kg import PlanningKG
 
     landuse_geojson = gis_data.get("landuse_current_geojson") if gis_data else None
 
@@ -77,7 +77,7 @@ def query_knowledge_graph(
             "messages": [to_tool_message(make_result(False, error="KG not built — call build_knowledge_graph first"), tool_call_id)],
         })
 
-    from app.services.modules.gis.kg.query import query_kg
+    from app.modules.gis.kg.query import query_kg
     query_result = query_kg(_kg_instance, template_name, **params)
     result = make_result(True, data={"template": template_name, "params": params, "results": query_result})
     return Command(update={
