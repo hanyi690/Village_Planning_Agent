@@ -288,10 +288,10 @@ planned/ (人工绘制GIS图纸)      ──────────────
 | 1 | **PARSE**    | LLM 解析规划文本 →`UnifiedSpatialIntent`。Gen 路径：人工规划 markdown；Plan 路径：12 维度 L3 reports。LLM prompt 注入 `SCHEMA.to_prompt_table()` 结构化分类表 + GIS 实测约束 | 自然语言约束提取，结构化 taxonomy 注入比文本补丁准确 | EMNLP 2025 HTC: 结构化的 per-parent prompting 优于扁平列表 |
 | 2 | **KG**       | 构建 RDF 图谱 (660 parcels × ~10 triples = 8462 triples) + GIS 实测约束三元组 + SPARQL 查询                                                                                      | 结构化约束后 LLM 可动态查询                          | OntoPlanningRegulations (2025) KG 模式                     |
 | 3 | **CONFLICT** | 跨维度指标冲突检测（metric/constraint/spatial 三类）                                                                                                                              | 13 维度独立规划必然出现冲突，需在分配前统一          | 专利 CN202511326944                                        |
-| 4 | **ALLOCATE** | MIP 分配 6 规划分区 + 硬约束锁定保护地块                                                                                                                                          | MILP 保证全局最优解（村级 <1000 地块 30s 内）        | GenPlanner (PyPI) 的 MILP + relation_matrix                |
-| 5 | **GENERATE** | CA 细化 + 设施选址（4 策略）+ 轴生成（一核一带三区）                                                                                                                              | CA 消除分区碎片，设施基于服务半径规则                | GenPlanner 的 Voronoi 细化                                 |
+| 4 | **ALLOCATE** | MIP 分配 **6 规划分区** + 硬约束锁定保护地块。**targets 必须使用规划分区名**（非功能分区名），通过 `map_zone_type_to_planning_zone` 映射。 | MILP 保证全局最优解（村级 <1000 地块 30s 内）        | GenPlanner (PyPI) 的 MILP + relation_matrix                |
+| 5 | **GENERATE** | 5 内部生成层（对齐 OUTPUT_ARCHITECTURE.md）：① ParcelReclass (16字段重分类) → ② SpaceControl (4类管制) → ③ UseZone (V/N/E) → ④ FacilityPlan (8类设施) → ⑤ RoadPlan (规划道路) | 分层解耦，每层输入输出明确                          | GenPlanner 的 Voronoi 细化                                 |
 | 6 | **VALIDATE** | 8 项空间检查 + 合规验证（最多 3 轮）                                                                                                                                              | 独立验证确保输出质量                                 | BlocksNet                                                  |
-| 7 | **EXPORT**   | 标准 12 层 GeoJSON + 用地平衡表                                                                                                                                                   | 与 GDB 标准和 ArcGIS 入库规范对齐                    | bxgis 的 Arcpy GDB                                         |
+| 7 | **EXPORT**   | 标准 **14 层** GeoJSON + 用地平衡表（对齐广东汇交标准）                                                                                                                            | 与 GDB 标准和 ArcGIS 入库规范对齐                    | bxgis 的 Arcpy GDB                                         |
 | 8 | **RENDER**   | Python/matplotlib + MapLibre 前端图层（GB/T 21010 配色，从 PLANNING_ZONE_COLORS 导入，不重复定义）                                                                                | 数据驱动渲染，三路并排对比图 PNG                     | —                                                         |
 
 ## 6. 技术决策记录
@@ -318,7 +318,7 @@ planned/ (人工绘制GIS图纸)      ──────────────
 | 道路网络生成     | ❌               | ✅                | ❌               | ✅                               | ❌                  | ❌              |
 | 知识图谱         | ✅ (RDF)         | ❌                | ❌               | ❌                               | ❌                  | ❌              |
 | GDB 标准输出     | ⚠️ (GeoJSON)   | ❌                | ❌               | ❌                               | ❌                  | ✅ (Arcpy .gdb) |
-| 12 层完整输出    | ⚠️ (7/12)      | ❌                | ❌               | ❌                               | ❌                  | ✅              |
+| 12 层完整输出    | ⚠️ (7/14)      | ❌                | ❌               | ❌                               | ❌                  | ✅              |
 | DRL 优化         | ❌ (Phase 3)     | ❌                | ❌               | ✅                               | ❌                  | ❌              |
 
 **结论**：我们以 MIP + KG + Conflict 三个独特组合覆盖了现有开源方案的盲区。GenPlanner 最接近但缺 KG 和冲突检测；DRL-urban-planning 专注土地利用但缺规划约束和标准输出。
@@ -331,15 +331,31 @@ planned/ (人工绘制GIS图纸)      ──────────────
 - [X] 13 个 @tool 流水线
 - [X] MIP 分配 + 硬约束保护地块锁定（6 规划分区）
 - [X] 8 项空间验证
-- [X] 完整 12 层 GeoJSON 输出 + 用地平衡表 JSON
 - [X] 统一分类 Schema（`zone_schema/schema.py`，83 条 DLBM 定义）
 - [X] 双路径 pipeline（gen/plan）+ 三路对比
 - [X] GIS 约束注入 LLM prompt（GB/T 21010 三大类合规）
 - [X] Intent 缓存（解析因子感知：PARSE_VERSION + LLM_MODEL + 内容hash）
-- [X] 56/56 单元+集成测试通过 + 20/25 E2E 测试通过
 - [X] 死代码清理：删除 GisService、SpatialLayoutEngine，移除 procedural/traffic 未用导出
+- [X] Canonical Data Model（Pydantic BaseModel，WGS84 归一化）
+- [X] Provider 适配层（Tianditu/Amap/OSM，CRS 归一化）
+- [X] EncodingRegistry（从 schema.py 自动派生编码映射）
+- [X] OutputProfile 省份可扩展机制（广东 14 层 + 约束常量）
+- [X] 空间管制区生成器 SpaceControlZoneGenerator (510/520/530/540)
+- [X] 土地用途分区生成器 LandUseZoneGenerator (V/N/E)
+- [X] 颜色集中化（zone_schema/colors.py，6 套色卡）
 
-### Phase 2 — 混合架构重构 (2026-07)
+### Phase 2 — 架构对齐（2026-07，进行中）
+
+**目标**：对齐 OUTPUT_ARCHITECTURE.md 的 5 内部生成层 + 14 层输出标准
+
+#### 已知缺陷（P0 — 必须修复）
+
+- [ ] **MIP allocator 编码体系断裂**：targets 使用功能分区名（农业用地），但 `_get_preference_cost` 用规划分区名（农田保护区），零重叠导致 gen/plan 分配结果完全一致。修复：添加 `map_zone_type_to_planning_zone` 映射。
+- [ ] **ParcelReclass 输出缺少 16 字段**：ZoneGenerator 只输出简单 zone_type/color，缺少 QMDLBM/GHFLBM/GHYTBM/GHYTMC。修复：升级 ZoneGenerator 为 ParcelReclassGenerator。
+- [ ] **planning_zone (6类) 与 UseZone (V/N/E) 并存**：架构要求 planning_zone 被 UseZone 替代。修复：删除 `_make_planning_zone_layer`，6 类分区信息保留在 ParcelReclass 的 `assigned_zone` 字段中。
+- [ ] **RoadPlan 层缺失**：架构要求 ⑤ RoadPlan → 13_planned_road，当前无对应生成器。
+
+#### 混合架构重构
 
 - [ ] 新建 `layout_pipeline.py`：混合 StateGraph（确定性骨架 + ReAct 子图 + Evaluator Gate）
 - [ ] 新增 `LayoutPipelineState`（含 `validation_round` 计数器）
@@ -349,17 +365,37 @@ planned/ (人工绘制GIS图纸)      ──────────────
 - [ ] 修改 `gis_agent_node`：Step 2 改用 `build_layout_pipeline()`
 - [ ] 保留 `create_layout_agent_graph()` 作为 ReAct 子图被 pipeline 调用
 - [ ] 测试统一通过 layout_pipeline 执行（覆盖完整 8 步，无手动拼接）
-- [ ] 分层测试：nodes/（单元）+ pipeline/（集成）+ e2e/（API）
+
+#### 5 内部生成层对齐
+
+```
+当前 6 层                          →  架构 5 层
+─────────────────────────────────────────────────
+function_zone (ZoneGenerator)     →  ① ParcelReclass (16字段)
+planning_zone (6类规划分区)       →  ❌ 删除（信息保留在 ① assigned_zone 字段）
+space_control_zone                →  ② SpaceControl (已有)
+land_use_zone                     →  ③ UseZone (V/N/E, 已有)
+facility_point                    →  ④ FacilityPlan (已有)
+infrastructure (AxisBuilder)      →  可视化叠加（不独立成层）
+(无)                              →  ⑤ RoadPlan (待实现)
+```
+
+- [ ] 创建 `ParcelReclassGenerator`：每地块输出 16 字段（BSM/YSDM/DLBM/DLMJ/QMDLBM/GHFLBM/GHYTBM/GHYTMC/...）
+- [ ] 删除 `_make_planning_zone_layer`，前端从 ParcelReclass 的 `assigned_zone` 字段提取 6 类分区显示
+- [ ] MIP allocator：`solve()` 开头添加功能分区→规划分区映射
+- [ ] gis_test_routes.py 管线：targets 映射到规划分区
+- [ ] 实现 RoadPlan 生成器（或简化为现状道路 + 新增连接段）
+- [ ] E2E 测试：验证 gen/plan 差异性 + 16 字段完整性
 
 ### Phase 3 — 功能增强
 
 - [ ] 测试覆盖补全：plan 路径 LLM E2E 测试、三路对比集成测试
 - [ ] export: 用地平衡表 Excel 输出、标准字段补全
 - [ ] allocate: Voronoi 细化参考 GenPlanner
-- [ ] generate: 道路网络规划生成
 - [ ] 集成 procedural 工具：merge_parcels → zone_generator, simplify_boundary → map_renderer
 - [ ] CA 精化模块恢复（当前缺失 `app.services.modules.gis.layout.optimizer`）
 - [ ] PuLP → COIN_CMD 迁移
+- [ ] GHFLBM ↔ V/N/E 完整映射表（从 planned/landuse 实测数据反推 + 规范校验）
 
 ### Phase 4 — 探索方向
 

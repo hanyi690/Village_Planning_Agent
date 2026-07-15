@@ -52,6 +52,7 @@ frontend/logs/
 data/
 !data/gis/
 data/gis/jintian/output/
+!backend/app/modules/gis/data/
 
 results/
 

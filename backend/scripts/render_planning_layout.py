@@ -22,17 +22,17 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from app.services.modules.gis.zone_schema import (
+from app.modules.gis.zone_schema import (
     ZONE_TYPE_COLORS,
     PLANNING_ZONE_COLORS,
     FACILITY_STATUS_COLORS,
 )
-from app.services.modules.gis.layout.zone_generator import ZoneGenerator
-from app.services.modules.gis.layout.facility_placer import FacilityPlacer
-from app.services.modules.gis.layout.axis_builder import AxisBuilder
-from app.services.modules.gis.layout.map_renderer import MapRenderer
-from app.services.modules.gis.kg import PlanningKG
-from app.services.modules.gis.planning_intent import (
+from app.modules.gis.layout.zone_generator import ZoneGenerator
+from app.modules.gis.layout.facility_placer import FacilityPlacer
+from app.modules.gis.layout.axis_builder import AxisBuilder
+from app.modules.gis.layout.map_renderer import MapRenderer
+from app.modules.gis.kg import PlanningKG
+from app.modules.gis.models.intent import (
     UnifiedSpatialIntent, ZoneIntent, Direction, Density,
 )
 from app.database.engine import get_db_path
@@ -550,7 +550,7 @@ async def parse_intent_via_llm(
 ) -> UnifiedSpatialIntent:
     """Call LLM to parse reports into UnifiedSpatialIntent."""
     from app.tools.gis.layout_tools import _aparse_reports_to_intent, _output_to_intent
-    from app.services.modules.parsing.schemas import IntentOutput
+    from app.modules.parsing.schemas import IntentOutput
 
     result = await _aparse_reports_to_intent(
         reports=reports, village_name=village_name, gis_data=gis_data
@@ -577,7 +577,7 @@ def _build_intent_from_dlbm(landuse: Optional[Dict]) -> UnifiedSpatialIntent:
         return UnifiedSpatialIntent(zones=[], facilities=[], axes=[],
                                     constraints=[], metadata={})
 
-    from app.services.modules.gis.zone_schema import get_zone_type_for_dlbm
+    from app.modules.gis.zone_schema import get_zone_type_for_dlbm
 
     zone_counts: Dict[str, float] = {}
     total = 0.0

@@ -29,7 +29,7 @@ import matplotlib.font_manager
 matplotlib.font_manager._load_fontmanager(try_read_cache=False)
 
 # 所有颜色从 zone_schema 导入——不在此处定义
-from app.services.modules.gis.zone_schema import PLANNING_ZONE_COLORS, DEFAULT_ZONE_COLOR
+from app.modules.gis.zone_schema import PLANNING_ZONE_COLORS, DEFAULT_ZONE_COLOR
 
 outdir = Path("F:/project/Village_Planning_Agent/output/jintian_comparison")
 outdir.mkdir(parents=True, exist_ok=True)
@@ -38,24 +38,27 @@ outdir.mkdir(parents=True, exist_ok=True)
 # Step 1: 双路径生成
 # ============================================================
 print("Generating layers...")
-from app.services.modules.gis.layout.data_loader import load_all, load_planned
-from app.services.modules.gis.layout.intent_cache import resolve_gen_intent_cached, resolve_plan_intent_cached
+from app.modules.gis.data.loader import load_all, load_planned
+from app.modules.gis.data.intent_cache import resolve_gen_intent_cached, resolve_plan_intent_cached
 from app.tools.gis.generate import (
     _generate_function_zones, _make_planning_zone_layer,
     _generate_facilities, _generate_axes,
+    _generate_space_control_zone, _generate_land_use_zone,
 )
-from app.services.modules.gis.zone_schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
+from app.modules.gis.zone_schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
 
 gis_data = load_all()
 planned_data = load_planned()
 
-def _run_layers(intent):
+def _run_layers(intent, allocated=None):
     layers = []
     for fn, args in [
         (_generate_function_zones, (intent, gis_data)),
-        (_make_planning_zone_layer, (None, gis_data)),
+        (_make_planning_zone_layer, (allocated, gis_data)),
         (_generate_facilities, (intent, gis_data)),
         (_generate_axes, (intent, gis_data)),
+        (_generate_space_control_zone, (gis_data, allocated, intent)),
+        (_generate_land_use_zone, (allocated, gis_data)),
     ]:
         try:
             lyr = fn(*args)
@@ -103,7 +106,7 @@ for tag, intent in [("gen", gen_intent), ("plan", plan_intent)]:
 # Step 3: 三路对比数据
 # ============================================================
 print("Computing three-way comparison...")
-from app.services.modules.gis.layout.compare_layouts import compare
+from app.modules.gis.layout.compare_layouts import compare
 
 protection = {}
 for key, name in [
