@@ -1,7 +1,14 @@
-"""GIS Agent builders — single, parse, and layout ReAct agents.
+"""GIS Agent builders — unified pipeline (primary) + legacy ReAct agents (fallback).
 
-Merged from: graph.py + parse_graph.py + layout_graph.py
+Migration note (2026-07-15):
+  - Primary: build_layout_pipeline() → unified StateGraph with Pydantic state
+  - Legacy: create_gis/parse/layout_agent_graph() → deprecated ReAct agents
+  - The legacy agents are kept for backward compatibility during transition.
 """
+
+from __future__ import annotations
+
+from typing import Any, Dict
 
 from langgraph.prebuilt import create_react_agent
 from langchain_openai import ChatOpenAI
@@ -15,7 +22,11 @@ _cached_layout = None
 
 
 def create_gis_agent_graph():
-    """Single ReAct Agent (fallback) — all 13 tools in one agent."""
+    """DEPRECATED: Single ReAct Agent (fallback) — all 13 tools in one agent.
+
+    Use build_layout_pipeline() for the new unified StateGraph pipeline.
+    Kept for backward compatibility.
+    """
     global _cached_gis
     if _cached_gis is not None:
         return _cached_gis
@@ -28,12 +39,16 @@ def create_gis_agent_graph():
     llm = ChatOpenAI(model=LLM_MODEL, temperature=0)
     graph = create_react_agent(llm, GIS_TOOLS, state_schema=GISAgentState, prompt=GIS_AGENT_SYSTEM_PROMPT)
     _cached_gis = graph
-    logger.info("[GIS Agent] Created with %d tools", len(GIS_TOOLS))
+    logger.info("[GIS Agent - Legacy] Created with %d tools (DEPRECATED)", len(GIS_TOOLS))
     return graph
 
 
 def create_parse_agent_graph():
-    """PARSE Agent — single-tool: parse_planning_text."""
+    """DEPRECATED: PARSE Agent — single-tool: parse_planning_text.
+
+    Use build_layout_pipeline() for the new unified StateGraph pipeline.
+    Kept for backward compatibility.
+    """
     global _cached_parse
     if _cached_parse is not None:
         return _cached_parse
@@ -46,12 +61,16 @@ def create_parse_agent_graph():
     llm = ChatOpenAI(model=LLM_MODEL, temperature=0.2)
     graph = create_react_agent(llm, [parse_planning_text], state_schema=ParseAgentState, prompt=PARSE_AGENT_SYSTEM_PROMPT)
     _cached_parse = graph
-    logger.info("[PARSE Agent] Created with 1 tool")
+    logger.info("[PARSE Agent - Legacy] Created with 1 tool (DEPRECATED)")
     return graph
 
 
 def create_layout_agent_graph():
-    """LAYOUT Agent — 11 tools for spatial planning."""
+    """DEPRECATED: LAYOUT Agent — 11 tools for spatial planning.
+
+    Use build_layout_pipeline() for the new unified StateGraph pipeline.
+    Kept for backward compatibility — still used by allocate_generate_react_node.
+    """
     global _cached_layout
     if _cached_layout is not None:
         return _cached_layout
@@ -78,5 +97,53 @@ def create_layout_agent_graph():
     ]
     graph = create_react_agent(llm, tools, state_schema=LayoutAgentState, prompt=LAYOUT_AGENT_SYSTEM_PROMPT)
     _cached_layout = graph
-    logger.info("[LAYOUT Agent] Created with %d tools", len(tools))
+    logger.info("[LAYOUT Agent - Legacy] Created with %d tools (DEPRECATED)", len(tools))
     return graph
+
+
+# ── NEW: Unified pipeline entry point ──────────────────────────────────
+
+
+async def run_gis_pipeline(
+    session_id: str,
+    village_name: str,
+    planning_text: str = "",
+    l3_reports: Dict[str, Any] = None,
+) -> Dict[str, Any]:
+    """Run the unified GIS layout pipeline end-to-end.
+
+    This is the RECOMMENDED entry point replacing the legacy 3-agent graph.
+
+    Args:
+        session_id: Unique session identifier
+        village_name: Target village name (for GIS data lookup)
+        planning_text: Markdown planning report (gen path)
+        l3_reports: L3 analyzed reports (plan path)
+
+    Returns:
+        Pipeline output dict with layout_configs, export_result, render_result, etc.
+    """
+    from .layout_pipeline import build_layout_pipeline
+    from .state import GISPipelineInput
+
+    pipeline = build_layout_pipeline()
+
+    input_data = GISPipelineInput(
+        session_id=session_id,
+        village_name=village_name,
+        planning_text=planning_text,
+        l3_reports=l3_reports or {},
+    )
+
+    logger.info("[GIS Pipeline] Starting unified pipeline for: %s", village_name)
+    result = await pipeline.ainvoke(input_data.model_dump())
+    logger.info("[GIS Pipeline] Completed for: %s", village_name)
+    return result
+
+
+__all__ = [
+    "create_gis_agent_graph",
+    "create_parse_agent_graph",
+    "create_layout_agent_graph",
+    "run_gis_pipeline",
+]

@@ -229,7 +229,7 @@ def format_parse_prompt(
     total_area: str = "未知",
     current_land_use: str = "未知",
 ) -> str:
-    from app.services.modules.gis.zone_schema.schema import SCHEMA
+    from app.modules.gis.zone_schema.schema import SCHEMA
     return SPATIAL_LAYOUT_PARSE_PROMPT.format(
         planning_text=planning_text,
         village_name=village_name,

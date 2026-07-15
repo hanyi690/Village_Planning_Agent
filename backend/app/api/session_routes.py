@@ -947,7 +947,7 @@ async def get_layer_reports(session_id: str, layer: int):
 
 from fastapi.responses import FileResponse
 
-from app.services.modules.planning_text.layer_exporter import LayerExporter
+from app.modules.planning_text.layer_exporter import LayerExporter
 
 
 def _content_disposition_header(filename: str) -> str:
@@ -1035,7 +1035,7 @@ async def export_session_document(
 
     elif layer in (1, 2, 3):
         from fastapi.responses import Response
-        from app.services.modules.planning_text.layer_exporter import LayerExporter, LayerExportConfig
+        from app.modules.planning_text.layer_exporter import LayerExporter, LayerExportConfig
 
         config = LayerExportConfig(
             session_id=session_id,
@@ -1092,8 +1092,8 @@ from app.database.operations import (
     list_planning_text_versions_async,
     update_planning_text_status_async,
 )
-from app.services.modules.planning_text.generator import PlanningTextGenerator
-from app.services.modules.planning_text.config import PlanningTextConfig
+from app.modules.planning_text.generator import PlanningTextGenerator
+from app.modules.planning_text.config import PlanningTextConfig
 
 
 class PlanningTextResponse(BaseModel):
@@ -1302,7 +1302,7 @@ async def geocode_village(
     3. POI search fallback
     4. County center fallback
     """
-    from app.services.modules.gis.data.fetcher import GISDataFetcher
+    from app.modules.gis.data.fetcher import GISDataFetcher
 
     # Build full address from hierarchy
     parts = [p for p in [province, city, county, township, village_name] if p]

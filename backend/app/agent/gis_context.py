@@ -92,7 +92,7 @@ class SharedGISContext:
             return None
 
         try:
-            from app.services.modules.gis.data.fetcher import get_fetcher
+            from app.modules.gis.data.fetcher import get_fetcher
             fetcher = get_fetcher()  # 使用单例
 
             center, metadata = fetcher.get_village_center(self.village_name, buffer_km=self.buffer_km)
@@ -389,7 +389,7 @@ class SharedGISContext:
 
         # 尝试从广东省天地图专题服务获取
         try:
-            from ..services.modules.gis.providers.tianditu import GDSpecializedService
+            from ..modules.gis.providers.tianditu import GDSpecializedService
             gd_service = GDSpecializedService()
 
             # 使用当前 bbox 获取数据

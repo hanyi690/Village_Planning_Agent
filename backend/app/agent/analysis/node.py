@@ -422,7 +422,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 5. DataPipeline: execute tools and format professional data
     professional_data_section = ""
     try:
-        from ...services.modules.data import DataPipeline, generate_professional_data_section
+        from ...modules.data import DataPipeline, generate_professional_data_section
         pipeline = DataPipeline()
 
         # Only load dependency data if dimension has tools configured
@@ -435,7 +435,7 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 dep_keys = getattr(cfg, "layer_depends_on", []) or []
                 if dep_keys:
                     layer_summaries = await store.get_layer_summaries(session_id, 1)
-                    from ...services.modules.parsing.schemas import get_dimension_schema
+                    from ...modules.parsing.schemas import get_dimension_schema
                     merged_metrics = {}
                     for dk in dep_keys:
                         raw = layer_summaries.get(dk)
@@ -740,12 +740,12 @@ def _extract_intent_targets(summary_obj: Any, dim_key: str) -> Dict[str, float]:
 
 async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log) -> str:
     """Generate structured JSON summary for a dimension report."""
-    from ...services.modules.parsing.summary_generator import generate_structured_summary
+    from ...modules.parsing.summary_generator import generate_structured_summary
     try:
         return await generate_structured_summary(dim_key, dim_layer, content, rag_log)
     except Exception as e:
         logger.warning(f"[analyze_dimension] {dim_key}: Summary generation failed: {e}")
-        from ...services.modules.parsing.schemas import BaseDimensionSummary
+        from ...modules.parsing.schemas import BaseDimensionSummary
         fallback = BaseDimensionSummary(
             dimension_key=dim_key, layer=dim_layer,
             word_count=len(content), text_summary=content[:200],
@@ -763,9 +763,9 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
         deps: 前序依赖报告（从数据库加载）
         same_layer_contexts: 同层依赖报告
     """
-    from ...services.modules.prompts.analysis import get_dimension_prompt as get_layer1_prompt
-    from ...services.modules.prompts.concept import get_dimension_prompt as get_layer2_prompt
-    from ...services.modules.prompts.detailed import get_dimension_prompt as get_layer3_prompt
+    from ...modules.prompts.analysis import get_dimension_prompt as get_layer1_prompt
+    from ...modules.prompts.concept import get_dimension_prompt as get_layer2_prompt
+    from ...modules.prompts.detailed import get_dimension_prompt as get_layer3_prompt
 
     dim_key = getattr(cfg, 'key', state.get("dimension_key", ""))
     layer = getattr(cfg, 'layer', get_dimension_layer(dim_key) or 1)
