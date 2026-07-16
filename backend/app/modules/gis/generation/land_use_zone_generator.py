@@ -202,7 +202,8 @@ class LandUseZoneGenerator:
     Mapping chain: DLBM → GHYTBM → V/N/E code
     Fallback: DLBM → zone_type → V/N/E code (heuristic)
 
-    Output: GeoJSON FeatureCollection with YTDLDM (用途地类代码) and YTDLMC (名称).
+    Output: GeoJSON FeatureCollection with TDYTFQDM (土地用途分区代码) and YTFQMC (名称).
+    Also includes legacy YTDLDM/YTDLMC aliases for backward compatibility.
     """
 
     def generate(
@@ -216,8 +217,10 @@ class LandUseZoneGenerator:
         falls back to current_landuse.
 
         Returns FeatureCollection with properties:
-          - YTDLDM: V/N/E code (V11, E23, N1, etc.)
-          - YTDLMC: V/N/E name (住宅用地, 其他农林用地, etc.)
+          - TDYTFQDM: land use zone code (V11, E23, N1, etc.)
+          - YTFQMC: land use zone name (住宅用地, 其他农林用地, etc.)
+          - YTDLDM: legacy alias for TDYTFQDM
+          - YTDLMC: legacy alias for YTFQMC
         """
         geojson = allocated_geojson or current_landuse
         if not geojson or not geojson.get("features"):
@@ -251,6 +254,8 @@ class LandUseZoneGenerator:
                     "geometry": feat.get("geometry", {}),
                     "properties": {
                         **props,
+                        "TDYTFQDM": vne_code,
+                        "YTFQMC": vne_info["name"],
                         "YTDLDM": vne_code,
                         "YTDLMC": vne_info["name"],
                         "VNE_LEVEL": vne_info.get("level", ""),

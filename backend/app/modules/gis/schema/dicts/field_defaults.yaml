@@ -71,7 +71,7 @@ field_rules:
 
   # ── 描述字段 ──
   - field: "MS"
-    default: "无"
+    default: ""
 
   - field: "TBH"
     default: ""
@@ -84,6 +84,52 @@ field_rules:
 
   - field: "LX"
     default: "有条件建设区"
+
+  # ── 土地用途分区字段 (TDYT) ──
+  - field: "TDYTFQDM"
+    lookup: "ghflbm_to_code"
+    depends_on: "GHFLBM"
+
+  - field: "TDYTFQBH"
+    default: ""
+
+  - field: "YTFQMC"
+    lookup: "ghflbm_to_name"
+    depends_on: "GHFLBM"
+
+  # ── 建设用地管制区字段 (JSYDGZQ) ──
+  - field: "TDKJGZFQDM"
+    lookup: "space_control_code"
+    depends_on: "TDKJGZFQDM"
+
+  - field: "TDKJGZFQBH"
+    default: ""
+
+  - field: "GZFQMC"
+    lookup: "space_control_name"
+    depends_on: "TDKJGZFQDM"
+
+  - field: "GHNF"
+    default: ""
+
+  # ── 落实约束性指标字段 (QMDLTB) ──
+  - field: "LSYSXZB1"
+    default: ""
+
+  - field: "LSZBMJ1"
+    default: 0.0
+
+  - field: "LSYSXZB2"
+    default: ""
+
+  - field: "LSZBMJ2"
+    default: 0.0
+
+  - field: "LSYSXZB3"
+    default: ""
+
+  - field: "LSZBMJ3"
+    default: 0.0
 
   # ── 通用空字符串字段 ──
   - field: "BZ"

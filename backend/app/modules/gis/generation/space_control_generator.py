@@ -63,7 +63,8 @@ class SpaceControlZoneGenerator:
     ) -> Dict[str, Any]:
         """Generate space control zone GeoJSON.
 
-        Returns FeatureCollection with features labeled by GZQLX (510/520/530/540).
+        Returns FeatureCollection with features labeled by TDKJGZFQDM (510/520/530/540).
+        Also includes legacy GZQLX/GZQLXMC aliases for backward compatibility.
         """
         if not boundary or not GEOPANDAS_AVAILABLE:
             return self._empty_result()
@@ -105,6 +106,8 @@ class SpaceControlZoneGenerator:
                         "type": "Feature",
                         "geometry": mapping(geom),
                         "properties": {
+                            "TDKJGZFQDM": code,
+                            "GZFQMC": info["name"],
                             "GZQLX": code,
                             "GZQLXMC": info["name"],
                             "description": info["description"],

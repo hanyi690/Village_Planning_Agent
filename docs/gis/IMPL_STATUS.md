@@ -43,8 +43,13 @@
 | GB/T 21010 标准配色 (8功能+6规划+3三区)    | `zone_schema/colors.py` |
 | LLM prompt 结构化分类表格 (自动注入)       | `SCHEMA.to_prompt_table()` |
 | GB/T 21010 合规: 商品林(1340)→农业用地     | 三大类对照表，已修正 |
+| 广东省附录5 合规: 21/21 编码全覆盖         | ghytbm.yaml (含2100/2130/2310/2320) |
+| 广东省附录4 合规: 4层GDB字段名对齐         | TDYTFQDM/TDKJGZFQDM 替代旧名 |
+| QMDLTB 20字段完整 (含LSYSXZB1-3)          | gdb_layers.yaml + gdb.py |
 
 **架构变更**: 2026-07-16 从 `schema.py` + `encodings.py` + `code_sets.py` 硬编码 Python 字典 → `dicts/` YAML 字典中心。核心语义原则：系统内不存在"映射"概念，只有"候选项建议"。一对多情况返回 `ClassificationProposal(needs_human_decision=True)`，Agent 禁止自动决策。
+
+**广东省技术规范合规**: 2026-07-16 对照《广东省村庄规划编制基本技术指南（试行）》完成合规修复：(1) ghytbm.yaml 补全 2100/2130/2310/2320 四个缺失编码，附录5 21/21 全覆盖；(2) GDB 字段名从 YTDLDM/GZQLX 改为规范名 TDYTFQDM/TDKJGZFQDM，旧名保留为 legacy alias；(3) QMDLTB 补全 LSYSXZB1-3/LSZBMJ1-3 共 6 个落实约束性指标字段；(4) GHCFW/QMDLTB/TDYT/JSYDGZQ 四层字段类型/长度对齐规范表3-6。
 
 ### 2.3 PARSE（意图解析） ✅
 

@@ -65,17 +65,17 @@ GDB_LAYER_REGISTRY: Dict[str, LayerDef] = {
         "gdb_name_template": "{prefix}_行政区划_PBL_{date}",
         "geometry": "MultiPolygon",
         "fields": [
-            ("BSM", "int16"),        # 标识码
+            ("BSM", "int32"),        # 标识码
             ("YSDM", "str:10"),      # 要素代码
-            ("DJZQMC", "str:50"),    # 登记区划名称
-            ("DJZQDM", "str:12"),    # 登记区划代码
-            ("MJ", "float32"),       # 面积
-            ("BZ", "str:255"),       # 备注
+            ("XZQHDM", "str:12"),    # 行政区划代码
+            ("XZQHMC", "str:100"),   # 行政区划名称
+            ("MJ", "float64"),       # 面积
+            ("BZ", "str:200"),       # 备注
         ],
         "source": "current/boundary.geojson",
         "internal_layer": "boundary",
         "category": "current",
-        "description": "行政村行政区划面",
+        "description": "规划村范围 GHCFW (广东省村庄规划数据库标准)",
     },
 
     "admin_boundary_line": {
@@ -143,27 +143,33 @@ GDB_LAYER_REGISTRY: Dict[str, LayerDef] = {
         "gdb_name_template": "{prefix}_期末地类_LJJ_{date}",
         "geometry": "MultiPolygon",
         "fields": [
-            ("MS", "str:10"),        # 描述
-            ("BSM", "str:18"),       # 标识码
+            ("BSM", "int32"),        # 标识码
             ("YSDM", "str:10"),      # 要素代码
-            ("TBH", "str:10"),       # 图斑号
+            ("TBH", "str:8"),        # 图斑号
             ("XZQHDM", "str:12"),    # 行政区划代码
-            ("XZQHMC", "str:50"),    # 行政区划名称
+            ("XZQHMC", "str:100"),   # 行政区划名称
             ("DLBM", "str:4"),       # 地类编码(现状)
             ("DLMJ", "float64"),     # 地类面积
             ("QMDLBM", "str:4"),     # 期末地类编码
             ("LYYSDM", "str:10"),    # 来源要素代码
+            ("MS", "str:90"),        # 描述
             ("GHFLBM", "str:4"),     # 规划分类编码
             ("QMGHFLBM", "str:4"),   # 期末规划分类编码
             ("GHYTBM", "str:4"),     # 规划用途编码
             ("GHYTMC", "str:20"),    # 规划用途名称
+            ("LSYSXZB1", "str:4"),   # 落实约束性指标1
+            ("LSZBMJ1", "float64"),  # 落实指标面积1
+            ("LSYSXZB2", "str:4"),   # 落实约束性指标2
+            ("LSZBMJ2", "float64"),  # 落实指标面积2
+            ("LSYSXZB3", "str:4"),   # 落实约束性指标3
+            ("LSZBMJ3", "float64"),  # 落实指标面积3
             ("Shape_Length", "float64"),  # 几何周长
             ("Shape_Area", "float64"),    # 几何面积
         ],
         "source": "planned/landuse.geojson",
         "internal_layer": "function_zone",
         "category": "planned",
-        "description": "目标年期末地类图斑(含规划分类编码)",
+        "description": "目标年期末地类图斑 QMDLTB (广东省村庄规划数据库标准)",
     },
 
     "ecological_redline": {
@@ -230,39 +236,43 @@ GDB_LAYER_REGISTRY: Dict[str, LayerDef] = {
     },
 
     "space_control_zone": {
-        "gdb_name_template": "{prefix}_建设用地空间管制区_LJJ_{date}",
+        "gdb_name_template": "{prefix}_建设用地管制区_LJJ_{date}",
         "geometry": "MultiPolygon",
         "fields": [
-            ("BSM", "str:18"),       # 标识码
+            ("BSM", "int32"),        # 标识码
             ("YSDM", "str:10"),      # 要素代码
             ("XZQHDM", "str:12"),    # 行政区划代码
-            ("XZQHMC", "str:50"),    # 行政区划名称
-            ("GZQLX", "str:4"),      # 管制区类型代码 (510/520/530/540)
-            ("GZQLXMC", "str:30"),   # 管制区类型名称
+            ("XZQHMC", "str:100"),   # 行政区划名称
+            ("TDKJGZFQDM", "str:4"), # 土地空间管制分区类型代码 (510/520/530/540)
+            ("TDKJGZFQBH", "str:2"), # 土地空间管制分区编号
+            ("GHNF", "str:4"),       # 规划年份
             ("MJ", "float64"),       # 面积
+            ("GZFQMC", "str:50"),    # 管制分区名称
         ],
         "source": "planned/space_control_zone.geojson",
         "internal_layer": "space_control_zone",
         "category": "planned",
-        "description": "建设用地空间管制区 (允许510/限制520/有条件530/禁止540)",
+        "description": "建设用地管制区 JSYDGZQ (允许510/限制520/有条件530/禁止540)",
     },
 
     "land_use_zone": {
         "gdb_name_template": "{prefix}_土地用途分区_LJJ_{date}",
         "geometry": "MultiPolygon",
         "fields": [
-            ("BSM", "str:18"),       # 标识码
+            ("BSM", "int32"),        # 标识码
             ("YSDM", "str:10"),      # 要素代码
             ("XZQHDM", "str:12"),    # 行政区划代码
-            ("XZQHMC", "str:50"),    # 行政区划名称
-            ("YTDLDM", "str:4"),     # 用途地类代码 (V11/V12/N1/E1等)
-            ("YTDLMC", "str:50"),    # 用途地类名称
+            ("XZQHMC", "str:100"),   # 行政区划名称
+            ("TDYTFQDM", "str:4"),   # 土地用途分区代码
+            ("TDYTFQBH", "str:4"),   # 土地用途分区编号
             ("MJ", "float64"),       # 面积
+            ("MS", "str:90"),        # 描述
+            ("YTFQMC", "str:30"),    # 用途分区名称
         ],
         "source": "planned/land_use_zone.geojson",
         "internal_layer": "land_use_zone",
         "category": "planned",
-        "description": "土地用途分区 (V/N/E 三大类体系, 住建部标准)",
+        "description": "土地用途分区 TDYT (广东省县级土地利用总体规划数据库标准)",
     },
 
     "hazard_points": {

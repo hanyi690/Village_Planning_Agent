@@ -16,12 +16,12 @@ layers:
     gdb_name_template: "{prefix}_行政区划_PBL_{date}"
     geometry: "MultiPolygon"
     fields:
-      - [BSM, "int16"]
+      - [BSM, "int32"]
       - [YSDM, "str:10"]
-      - [DJZQMC, "str:50"]
+      - [DJZQMC, "str:100"]
       - [DJZQDM, "str:12"]
-      - [MJ, "float32"]
-      - [BZ, "str:255"]
+      - [MJ, "float64"]
+      - [BZ, "str:200"]
     source: "current/boundary.geojson"
     internal_layer: "boundary"
     category: "current"
@@ -86,26 +86,32 @@ layers:
     gdb_name_template: "{prefix}_期末地类_LJJ_{date}"
     geometry: "MultiPolygon"
     fields:
-      - [MS, "str:10"]
-      - [BSM, "str:18"]
+      - [BSM, "int32"]
       - [YSDM, "str:10"]
-      - [TBH, "str:10"]
+      - [TBH, "str:8"]
       - [XZQHDM, "str:12"]
-      - [XZQHMC, "str:50"]
+      - [XZQHMC, "str:100"]
       - [DLBM, "str:4"]
       - [DLMJ, "float64"]
       - [QMDLBM, "str:4"]
       - [LYYSDM, "str:10"]
+      - [MS, "str:90"]
       - [GHFLBM, "str:4"]
       - [QMGHFLBM, "str:4"]
       - [GHYTBM, "str:4"]
       - [GHYTMC, "str:20"]
+      - [LSYSXZB1, "str:4"]
+      - [LSZBMJ1, "float64"]
+      - [LSYSXZB2, "str:4"]
+      - [LSZBMJ2, "float64"]
+      - [LSYSXZB3, "str:4"]
+      - [LSZBMJ3, "float64"]
       - [Shape_Length, "float64"]
       - [Shape_Area, "float64"]
     source: "planned/landuse.geojson"
     internal_layer: "function_zone"
     category: "planned"
-    description: "目标年期末地类图斑(含规划分类编码)"
+    description: "目标年期末地类图斑 QMDLTB (广东省村庄规划数据库标准)"
     ysdm_default: "2003070100"
 
   - key: "ecological_redline"
@@ -168,36 +174,40 @@ layers:
     ysdm_default: "2001010100"
 
   - key: "space_control_zone"
-    gdb_name_template: "{prefix}_建设用地空间管制区_LJJ_{date}"
+    gdb_name_template: "{prefix}_建设用地管制区_LJJ_{date}"
     geometry: "MultiPolygon"
     fields:
-      - [BSM, "str:18"]
+      - [BSM, "int32"]
       - [YSDM, "str:10"]
       - [XZQHDM, "str:12"]
-      - [XZQHMC, "str:50"]
-      - [GZQLX, "str:4"]
-      - [GZQLXMC, "str:30"]
+      - [XZQHMC, "str:100"]
+      - [TDKJGZFQDM, "str:4"]
+      - [TDKJGZFQBH, "str:2"]
+      - [GHNF, "str:4"]
       - [MJ, "float64"]
+      - [GZFQMC, "str:50"]
     source: "planned/space_control_zone.geojson"
     internal_layer: "space_control_zone"
     category: "planned"
-    description: "建设用地空间管制区 (允许510/限制520/有条件530/禁止540)"
+    description: "建设用地管制区 (JSYDGZQ, 允许510/限制520/有条件530/禁止540)"
 
   - key: "land_use_zone"
     gdb_name_template: "{prefix}_土地用途分区_LJJ_{date}"
     geometry: "MultiPolygon"
     fields:
-      - [BSM, "str:18"]
+      - [BSM, "int32"]
       - [YSDM, "str:10"]
       - [XZQHDM, "str:12"]
-      - [XZQHMC, "str:50"]
-      - [YTDLDM, "str:4"]
-      - [YTDLMC, "str:50"]
+      - [XZQHMC, "str:100"]
+      - [TDYTFQDM, "str:4"]
+      - [TDYTFQBH, "str:4"]
       - [MJ, "float64"]
+      - [MS, "str:90"]
+      - [YTFQMC, "str:30"]
     source: "planned/land_use_zone.geojson"
     internal_layer: "land_use_zone"
     category: "planned"
-    description: "土地用途分区 (V/N/E 三大类体系, 住建部标准)"
+    description: "土地用途分区 (TDYT, 广东省县级土地利用总体规划数据库标准)"
 
   - key: "hazard_points"
     gdb_name_template: "{prefix}_地质灾害点_LJJ_{date}"

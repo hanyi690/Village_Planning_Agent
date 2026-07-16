@@ -54,6 +54,14 @@ classes:
     vne: "E21"
     ydyhfldm: "0602"
 
+  # ── 城镇用地 ──
+  - code: "2100"
+    name: "城镇用地"
+    dlbm_ref: "0701"
+    zone_type: "居住用地"
+    vne: "N2"
+    ydyhfldm: "0701"
+
   # ── 村庄建设用地 ──
   - code: "2121"
     name: "宅基地"
@@ -97,6 +105,13 @@ classes:
     vne: "V41"
     ydyhfldm: "0601"
 
+  - code: "2130"
+    name: "采矿用地"
+    dlbm_ref: "0600"
+    zone_type: "产业用地"
+    vne: "N2"
+    ydyhfldm: "0600"
+
   # ── 交通水利及其他用地 ──
   - code: "2200"
     name: "对外交通用地"
@@ -104,6 +119,20 @@ classes:
     zone_type: "交通用地"
     vne: "N1"
     ydyhfldm: "1200"
+
+  - code: "2310"
+    name: "风景名胜设施用地"
+    dlbm_ref: "0808"
+    zone_type: "公共服务用地"
+    vne: "V22"
+    ydyhfldm: "0808"
+
+  - code: "2320"
+    name: "特殊用地"
+    dlbm_ref: "0809"
+    zone_type: "公共服务用地"
+    vne: "N2"
+    ydyhfldm: "0809"
 
   - code: "2270"
     name: "水利设施用地"
