@@ -14,8 +14,8 @@ from typing import List
 from app.utils.logger import get_logger
 
 from ..base import GISProvider, GeoProviderResult
-from ...models.canonical import BBox, GeoFeature, LandUseParcel
-from ...models.encoding_registry import get_encoding_registry
+from ...schema.canonical import BBox, GeoFeature, LandUseParcel
+from ...schema.encoding_registry import get_encoding_registry
 
 logger = get_logger(__name__)
 

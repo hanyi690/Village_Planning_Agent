@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
-from ...zone_schema.encodings import PLANNING_ZONE_NAMES
+from ...schema.encodings import PLANNING_ZONE_NAMES
 
 logger = get_logger(__name__)
 

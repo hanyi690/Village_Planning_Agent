@@ -462,10 +462,10 @@ def enrich_gdb_fields(
                 props[field_name] = "有条件建设区"
             elif field_name == "GHYTMC":
                 # Try to derive from existing DLBM or zone_type
-                from ..zone_schema import get_zone_type_for_ghytbm, GHYTMC_TO_ZONE_TYPE
+                from . import get_zone_type_for_ghytbm, GHYTMC_TO_ZONE_TYPE
                 ghytbm = props.get("GHYTBM", "")
                 if ghytbm:
-                    from ..zone_schema import get_ghytmc_for_ghytbm
+                    from . import get_ghytmc_for_ghytbm
                     props[field_name] = get_ghytmc_for_ghytbm(ghytbm)
                 else:
                     props[field_name] = ""
@@ -480,7 +480,7 @@ def enrich_gdb_fields(
             elif field_name == "DLMC":
                 dlbm = props.get("DLBM", "")
                 if dlbm:
-                    from ..zone_schema import DLBM_TO_DLMC
+                    from . import DLBM_TO_DLMC
                     props[field_name] = DLBM_TO_DLMC.get(dlbm, "")
                 else:
                     props[field_name] = ""

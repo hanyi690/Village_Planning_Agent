@@ -540,7 +540,7 @@ class PlanningKG:
 
         try:
             from ..utils.geojson_utils import geojson_to_geodataframe
-            from ..zone_schema import get_zone_type_for_dlbm
+            from ..schema import get_zone_type_for_dlbm
 
             gdf = geojson_to_geodataframe(landuse_geojson)
             if gdf is None or len(gdf) == 0:
@@ -586,7 +586,7 @@ class PlanningKG:
         Three-level key ensures all 660 parcels are preserved.
         """
         features = geojson.get("features", [])
-        from ..zone_schema import get_zone_type_for_dlbm
+        from ..schema import get_zone_type_for_dlbm
         from ..generation.zone_generator import resolve_zone_type_for_dlbm
 
         duplicate_bsms = set()

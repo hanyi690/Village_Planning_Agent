@@ -186,8 +186,8 @@ class SpaceControlZoneGenerator:
 
         try:
             # Calculate current construction land area
-            from app.modules.gis.zone_schema import CONSTRUCTION_ZONE_TYPES
-            from app.modules.gis.zone_schema import get_zone_type_for_dlbm
+            from app.modules.gis.schema import CONSTRUCTION_ZONE_TYPES
+            from app.modules.gis.schema import get_zone_type_for_dlbm
 
             construction_area = 0.0
             construction_geoms = []

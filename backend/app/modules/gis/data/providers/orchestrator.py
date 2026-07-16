@@ -18,7 +18,7 @@ from typing import List, Optional
 from app.utils.logger import get_logger
 
 from .base import GISProvider, GeoProviderResult
-from ...models.canonical import (
+from ...schema.canonical import (
     BBox,
     GeoFeature,
     LandUseParcel,

@@ -17,7 +17,7 @@ from langgraph.types import Command
 from app.utils.logger import get_logger
 from ._helpers import make_result, to_tool_message
 
-from app.modules.gis.models.intent import (
+from app.modules.gis.schema.intent import (
     Direction, Density, ZoneIntent, FacilityIntent,
     AxisIntent, ConstraintIntent, UnifiedSpatialIntent,
 )
@@ -64,7 +64,7 @@ def _parse_reports_to_intent(
     try:
         from app.core.settings import LLM_MODEL
         from langchain_openai import ChatOpenAI
-        from app.modules.gis.zone_schema import (
+        from app.modules.gis.schema import (
             DLBM_TO_ZONE_TYPE,
             ZONE_TYPE_TO_DLBMS,
             get_zone_type_for_dlbm,
@@ -76,7 +76,7 @@ def _parse_reports_to_intent(
         landuse_hint = _build_landuse_hint(gis_data)
         gis_constraints = _build_gis_constraints_for_llm(gis_data)
 
-        from app.modules.gis.zone_schema.schema import SCHEMA
+        from app.modules.gis.schema.classification import SCHEMA
         prompt = PARSE_AGENT_SYSTEM_PROMPT.format(
             dlbm_class_table=SCHEMA.to_prompt_table(),
         )
@@ -150,7 +150,7 @@ def _build_landuse_hint(gis_data: Optional[Dict[str, Any]]) -> str:
             for f in features
         )
         top = dlbm_counts.most_common(10)
-        from app.modules.gis.zone_schema import DLBM_TO_DLMC, get_zone_type_for_dlbm
+        from app.modules.gis.schema import DLBM_TO_DLMC, get_zone_type_for_dlbm
         lines = ["Current land use (top DLBM codes):"]
         for dlbm, count in top:
             dlmc = DLBM_TO_DLMC.get(dlbm, str(dlbm))

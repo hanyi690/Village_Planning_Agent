@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from ...zone_schema import (
+from ...schema import (
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,
     CONSTRUCTION_ZONE_TYPES as _CONSTRUCTION_ZONE_TYPES,
@@ -33,18 +33,18 @@ from ...zone_schema import (
     FOREST_CODES,
     WATER_CODES,
 )
-from ...zone_schema.encodings import (
+from ...schema.encodings import (
     PLANNING_ZONE_TO_PRIMARY_ZONE,
     PLANNING_ZONE_NAMES,
     PRIMARY_ZONE_NAMES,
     get_primary_zone_for_planning_zone,
 )
 
-# 基本农田 DLBM（仅耕地 01 类，同步自 zone_schema.BASIC_FARMLAND_CODES）
+# 基本农田 DLBM（仅耕地 01 类，同步自 schema.BASIC_FARMLAND_CODES）
 # 永久基本农田划定应基于 YJJBNTTB 图层，非 DLBM 简单映射
 BASIC_FARMLAND_DLBMS = BASIC_FARMLAND_CODES
 
-# 一般农业区 DLBM（园地 + 设施农用地 + 其他，同步自 zone_schema.GENERAL_AGRICULTURE_CODES）
+# 一般农业区 DLBM（园地 + 设施农用地 + 其他，同步自 schema.GENERAL_AGRICULTURE_CODES）
 GENERAL_AGRICULTURE_DLBMS = GENERAL_AGRICULTURE_CODES
 
 # 6 个规划分区 → 7 类 zone_type 的目标映射
@@ -151,7 +151,7 @@ def _compute_ecological_ratios(
     Measures actual 生态绿地 vs 水域 area from parcels, falling back
     to the default 0.9 / 0.1 split if data is unavailable.
     """
-    from ...zone_schema import ZONE_TYPE_TO_DLBMS
+    from ...schema import ZONE_TYPE_TO_DLBMS
     green_dlbms = set(ZONE_TYPE_TO_DLBMS.get("生态绿地", []))
     water_dlbms = set(ZONE_TYPE_TO_DLBMS.get("水域", []))
     eco_dlbms = green_dlbms | water_dlbms
@@ -179,7 +179,7 @@ def _compute_ecological_ratios(
 def _compute_construction_ratios(landuse_geojson: Dict[str, Any]) -> Dict[str, float]:
     """Compute construction sub-type ratios from current land use statistics."""
     from collections import defaultdict
-    from ...zone_schema import DLBM_TO_ZONE_TYPE
+    from ...schema import DLBM_TO_ZONE_TYPE
 
     zone_areas: Dict[str, float] = defaultdict(float)
     for feat in landuse_geojson.get("features", []):

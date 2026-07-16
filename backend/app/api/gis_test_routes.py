@@ -21,11 +21,11 @@ router = APIRouter(prefix="/api/dev/gis", tags=["GIS Dev"])
 
 # ── Color injection (shared by /analysis and /zones) ──────────────
 
-from app.modules.gis.zone_schema import (
+from app.modules.gis.schema import (
     get_zone_color, get_zone_type_for_dlbm, ZONE_TYPE_COLORS,
     PLANNING_ZONE_COLORS, DEFAULT_ZONE_COLOR,
 )
-from app.modules.gis.zone_schema.colors import (
+from app.modules.gis.schema.colors import (
     SENSITIVITY_COLORS, FACILITY_TYPE_COLORS, INFRA_COLORS,
     ISOCHRONE_COLORS, get_facility_color, get_infra_color,
 )
@@ -580,7 +580,7 @@ async def gis_zones(request: ZonesRequest):
 
         elif request.zone_type == "space_control":
             from app.modules.gis.generation.space_control_generator import SpaceControlZoneGenerator, SPACE_CONTROL_ZONES
-            from app.modules.gis.zone_schema.colors import SPACE_CONTROL_COLORS
+            from app.modules.gis.schema.colors import SPACE_CONTROL_COLORS
 
             generator = SpaceControlZoneGenerator()
             geojson = generator.generate(

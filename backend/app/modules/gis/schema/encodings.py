@@ -32,7 +32,7 @@ DLBM_TO_DLMC: Dict[str, str] = {
 
 # All DLBM mappings derived from the unified classification schema.
 # Add/modify DLBM classifications in schema.py, not here.
-from .schema import SCHEMA as _SCHEMA
+from .classification import SCHEMA as _SCHEMA
 
 DLBM_TO_ZONE_TYPE: Dict[str, str] = _SCHEMA.to_dlbm_zone_type()
 ZONE_TYPE_TO_DLBMS: Dict[str, List[str]] = _SCHEMA.to_zone_type_dlbms()

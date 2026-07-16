@@ -11,7 +11,7 @@ from typing import List
 from app.utils.logger import get_logger
 
 from ..base import GISProvider, GeoProviderResult
-from ...models.canonical import BBox, GeoFeature, LandUseParcel
+from ...schema.canonical import BBox, GeoFeature, LandUseParcel
 
 logger = get_logger(__name__)
 

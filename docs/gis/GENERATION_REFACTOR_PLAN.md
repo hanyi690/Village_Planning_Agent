@@ -346,3 +346,17 @@ Phase C: RoadPlan 实现
   ├── C2. generate.py 集成
   └── C3. 验证 13_planned_road 输出
 ```
+
+---
+
+## 7. 已知缺陷
+
+### 7.1 `load_all()` 签名不匹配
+
+**文件**: `app/modules/gis/data/loader.py:106`
+
+**现象**: `gis_test_routes.py:384` 调用 `load_all(request.village_name)`，但 `load_all()` 定义为无参数函数，导致 `TypeError: load_all() takes 0 positional arguments but 1 was given`。
+
+**影响**: E2E 测试 `test_pipeline_success` 失败，管线无法通过 API 触发。
+
+**修复方向**: `load_all()` 应接受 `village_name: str` 参数，根据村名加载对应的 GIS 数据目录。当前硬编码为金田村数据路径。

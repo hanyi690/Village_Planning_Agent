@@ -25,7 +25,7 @@ from ._helpers import make_result, to_tool_message
 
 def _normalize_fields(geojson: Dict, layer_key: str) -> Dict:
     """Ensure exported GeoJSON has fields matching GDB_LAYER_REGISTRY."""
-    from app.modules.gis.data.gdb_schema import GDB_LAYER_REGISTRY
+    from app.modules.gis.schema.gdb import GDB_LAYER_REGISTRY
 
     layer_def = GDB_LAYER_REGISTRY.get(layer_key, {})
     field_specs = layer_def.get("fields", [])
@@ -64,7 +64,7 @@ def export_gdb(
 
     os.makedirs(output_dir, exist_ok=True)
 
-    from app.modules.gis.data.gdb_schema import GDB_LAYER_REGISTRY
+    from app.modules.gis.schema.gdb import GDB_LAYER_REGISTRY
 
     LAYER_GIS_KEY_MAP: Dict[str, Optional[str]] = {
         "admin_area": "boundary_geojson",
@@ -159,7 +159,7 @@ def _compute_land_balance(geojson: Dict) -> Dict[str, Any]:
     Area units preserved from input (typically m² for DLMJ fields).
     """
     from collections import defaultdict
-    from app.modules.gis.zone_schema import dlbm_to_planning_zone, get_zone_type_for_dlbm
+    from app.modules.gis.schema import dlbm_to_planning_zone, get_zone_type_for_dlbm
 
     features = geojson.get("features", [])
     zone_areas: Dict[str, float] = defaultdict(float)

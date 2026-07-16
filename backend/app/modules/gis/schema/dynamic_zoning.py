@@ -16,13 +16,13 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from ..zone_schema.encodings import (
+from ..schema.encodings import (
     dlbm_to_planning_zone,
     get_primary_zone,
     get_primary_zone_for_planning_zone,
     PLANNING_ZONE_NAMES,
 )
-from ..zone_schema.code_sets import (
+from ..schema.code_sets import (
     BASIC_FARMLAND_CODES,
     ECOLOGICAL_PROTECTION_CODES,
     FORESTRY_CODES,

@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 
 # Priority order for assigning parcels: DLBM directly matching zone type
 # Imported from colors.py ZONE_TYPE_TO_DLBMS (single source of truth)
-from ...zone_schema import ZONE_TYPE_TO_DLBMS as DLBM_PREFERENCE, PROTECTED_DLBM_CODES, CONSTRUCTION_ZONE_TYPES
+from ...schema import ZONE_TYPE_TO_DLBMS as DLBM_PREFERENCE, PROTECTED_DLBM_CODES, CONSTRUCTION_ZONE_TYPES
 
 # Precomputed DLBM category sets (avoid rebuilding per _preference_cost call)
 _AGRI_DLBM_SET: set = set()
@@ -142,7 +142,7 @@ class ConstraintDrivenAllocator:
             return landuse_geojson, {}
 
         from ..zone_generator import resolve_zone_type_for_dlbm
-        from ...zone_schema import get_zone_type_for_planned_dlbm
+        from ...schema import get_zone_type_for_planned_dlbm
         from ...utils.geojson_utils import build_parcel_index
         from .planning_zone_mapper import (
             PLANNING_ZONE_TO_ZONE_TYPES,

@@ -26,7 +26,7 @@ from ._helpers import make_result, to_tool_message
 
 def _intent_from_dict(d: Dict[str, Any]) -> Any:
     """Convert dict intent to UnifiedSpatialIntent (dataclass instance)."""
-    from app.modules.gis.models.intent import (
+    from app.modules.gis.schema.intent import (
         Direction, Density, ZoneIntent, FacilityIntent,
         AxisIntent, ConstraintIntent, UnifiedSpatialIntent,
     )
@@ -216,7 +216,7 @@ def _make_planning_zone_layer(
     if not source or not source.get("features"):
         return None
 
-    from app.modules.gis.zone_schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
+    from app.modules.gis.schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
 
     features = []
     for feat in source["features"]:

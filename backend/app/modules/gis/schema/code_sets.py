@@ -15,7 +15,7 @@ from typing import Dict, List, Set, Tuple
 
 # All code sets derived from the unified classification schema.
 # Add/modify DLBM classifications in schema.py, not here.
-from .schema import SCHEMA as _SCHEMA
+from .classification import SCHEMA as _SCHEMA
 
 _sets = _SCHEMA.to_code_sets()
 

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from ..zone_schema.encodings import (
+from ..schema.encodings import (
     get_zone_type_for_dlbm,
     dlbm_to_planning_zone,
     get_primary_zone,

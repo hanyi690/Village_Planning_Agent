@@ -256,7 +256,7 @@ def _run_render_step(
         plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
         plt.rcParams["axes.unicode_minus"] = False
 
-        from app.modules.gis.zone_schema import PLANNING_ZONE_COLORS
+        from app.modules.gis.schema import PLANNING_ZONE_COLORS
 
         fig, ax = plt.subplots(1, 1, figsize=(16, 12))
         ax.set_title(f"{village_name} — layout", fontsize=14)

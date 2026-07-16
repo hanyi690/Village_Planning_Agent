@@ -200,7 +200,7 @@ def compute_intent_from_gis(
         Dict with zones[], facilities[], axes[], constraints[] from real data
     """
     from ..analysis.metrics_calculator import GISMetricsCalculator
-    from ..zone_schema.encodings import get_zone_type_for_dlbm, ZONE_TYPE_TO_DLBMS
+    from ..schema.encodings import get_zone_type_for_dlbm, ZONE_TYPE_TO_DLBMS
 
     metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
     distribution = GISMetricsCalculator.compute_zone_distribution(gis_data)
@@ -366,7 +366,7 @@ def get_village_params(gis_data: Dict[str, Any]) -> Dict[str, str]:
         {"total_area": str, "land_use_description": str, "village_name": str}
     """
     from ..analysis.metrics_calculator import GISMetricsCalculator
-    from ..zone_schema.encodings import DLBM_TO_DLMC
+    from ..schema.encodings import DLBM_TO_DLMC
 
     metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
     total_area = str(round(metrics["total_area_ha"], 2))

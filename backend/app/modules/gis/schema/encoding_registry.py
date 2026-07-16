@@ -1,4 +1,4 @@
-"""Encoding Registry — auto-derived from zone_schema/schema.py _CLASSES.
+"""Encoding Registry — auto-derived from schema/classification.py _CLASSES.
 
 All DLBM ↔ zone_type ↔ planning_zone mappings are derived lazily from
 the single source of truth (_CLASSES list). No manual lookup tables.
@@ -42,9 +42,9 @@ class EncodingRegistry:
 
     @classmethod
     def from_schema(cls) -> "EncodingRegistry":
-        """Build the registry from zone_schema._CLASSES."""
-        from app.modules.gis.zone_schema.schema import _CLASSES
-        from app.modules.gis.zone_schema.colors import PLANNING_ZONE_COLORS
+        """Build the registry from schema._CLASSES."""
+        from .classification import _CLASSES
+        from .colors import PLANNING_ZONE_COLORS
 
         dlbm_to_zone: Dict[str, str] = {}
         dlbm_to_planning: Dict[str, str] = {}
