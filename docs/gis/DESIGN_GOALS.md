@@ -1,12 +1,6 @@
-
-
-
-
-
-
 # GIS 村庄规划系统 — 设计目标
 
-> 版本: 3.2 | 日期: 2026-07-15 | 混合架构：确定性骨架 + ReAct 自适应循环
+> 版本: 5.0 | 日期: 2026-07-16 | 统一路径：确定性骨架 + ReAct 自适应 + 统一操作执行引擎
 
 ## 1. 问题定义
 
@@ -15,10 +9,11 @@
 - **图数分离**：规划图与指标表各自维护，边界修改后需手动重新量算面积
 - **冲突滞后**：建设用地是否侵占基本农田，需人工多次叠加比对，容易遗漏
 - **规则依赖经验**：规划条款以自然语言存在于报告中，执行正确性取决于规划师个人理解
+- **文本无法落地**：管制规则、建设项目表、村民决议等规划文本停留在文档层面，无法直接转化为空间数据
 
 以金田村为例：660 个地块 × 12 个维度报告 × 6 类规划分区 × 3 重约束（建设用地 ≤21.66ha / 农田 ≥98.54ha / 生态保护红线 ≥367.68ha），人工核查一遍约需 4-6 小时，且无法保证无遗漏。
 
-目标：**输入规划报告文本 + GIS 现状数据 → 自动输出符合 GB/T 21010 和 DB22/T 3407-2022 标准的 12 层规划成果包**。
+**目标**：输入规划报告文本 + GIS 现状数据 → 自动输出符合 GB/T 21010 和 DB22/T 3407-2022 标准的 14 层规划成果包。所有规划文本（管制规则/建设项目表/村民决议/规划报告）统一解析为 OperationSequence + ConstraintSet，通过 EXECUTE_OPERATIONS 逐条执行，实现文本到空间数据的闭环落地。
 
 ## 2. 目标输出
 
@@ -26,27 +21,29 @@
 
 ```
 output/{village_name}/
-├── current/                              # 现状 5 层
-│   ├── boundary.geojson                  # 行政区划面 (MultiPolygon, 6字段)
-│   ├── admin_line.geojson                # 行政区划界线 (MultiLineString, 5字段)
-│   ├── landuse.geojson                   # 现状地类图斑 DLBM编码 (MultiPolygon, 9字段)
-│   ├── road.geojson                      # 现状道路 (MultiLineString)
-│   └── annotation.geojson                # 现状注记 (Point, 注记+分类)
-├── planned/                              # 规划 7 层
-│   ├── landuse.geojson                   # 规划地类图斑 GHYTBM+GHFLBM双编码 (16字段)
-│   ├── farmland_protection.geojson       # 永久基本农田红线 (MultiPolygon)
-│   ├── ecological_protection.geojson     # 生态保护红线 (MultiPolygon)
-│   ├── historical_protection.geojson     # 历史文化保护线 (MultiPolygon)
-│   ├── construction_zone.geojson         # 有条件建设区 (MultiPolygon)
-│   ├── hazard_points.geojson             # 地质灾害点 (Point)
-│   ├── road.geojson                      # 规划道路 (MultiLineString)
-│   └── annotation.geojson                # 规划注记 (Point)
+├── 01_boundary.geojson                   # 行政区划面 (MultiPolygon, 5字段)
+├── 02_admin_boundary_line.geojson        # 行政区划界线 (MultiLineString)
+├── 03_current_landuse.geojson            # 现状地类图斑 DLBM编码 (MultiPolygon)
+├── 04_current_road.geojson               # 现状道路 (MultiLineString)
+├── 05_current_annotation.geojson         # 现状注记 (Point)
+├── 06_planned_landuse.geojson            # 期末地类图斑 QMDLTB (20+字段) ★
+├── 07_farmland_protection.geojson        # 永久基本农田红线 (MultiPolygon)
+├── 08_ecological_protection.geojson      # 生态保护红线 (MultiPolygon)
+├── 09_historical_protection.geojson      # 历史文化保护线 (MultiPolygon)
+├── 10_space_control_zone.geojson         # 建设用地管制区 JSYDGZQ (9字段) ★
+├── 11_land_use_zone.geojson              # 土地用途分区 TDYT (9字段) ★
+├── 12_geological_hazard_points.geojson   # 地质灾害点 (Point)
+├── 13_planned_road.geojson               # 规划道路 (MultiLineString)
+├── 14_planned_annotation.geojson         # 规划注记 (Point)
 ├── tables/
-│   └── land_balance.json                 # 用地平衡表 (JSON, 后续→Excel)
+│   ├── planning_targets.json             # 规划目标表（附表1）
+│   ├── land_balance.json                 # 用地平衡表
+│   └── land_use_structure.json           # 土地利用结构调整表（附表2）
+├── changelog.jsonl                       # 操作变更日志 ★
 └── layout.json                           # 布局配置
 ```
 
-**字段标准**参照 `backend/app/services/modules/gis/data/gdb_schema.py` 中的 `GDB_LAYER_REGISTRY`（12 层完整字段定义）。
+**字段标准**参照 `backend/app/modules/gis/schema/gdb.py` 中的 `GDB_LAYER_REGISTRY`（12 层完整字段定义），编码值域参照 `schema/dicts/*.yaml`（DictionaryCenter 单一真相源）。
 
 ## 3. 架构设计
 
@@ -68,31 +65,51 @@ output/{village_name}/
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 Agent 子图设计：PARSE ReAct + LAYOUT 混合管线
+### 3.2 统一生产路径
 
-#### 设计思路来源
+```
+规划文本（报告/规则/决议/建设项目表）
+    ↓
+PARSE Agent → OperationSequence + ConstraintSet
+    ↓
+┌─ ConstraintSet → KG（约束三元组 + 合规规则）───┐
+│                                                 │
+└─ OperationSequence → EXECUTE_OPERATIONS         │
+     ├── 空间定位（地名解析 → 候选图斑）         │
+     ├── 用途查表（DictionaryCenter → 编码）      │
+     ├── 合规预检（KG约束 + 冲突检测）           │
+     ├── 人工确认（确认卡片 / 批量确认）         │
+     └── 执行 + 变更日志                         │
+    ↓
+CONFLICT（跨维度冲突检测）
+    ↓
+EXECUTE_OPERATIONS（逐条执行操作序列）
+    ├── 批量场景: 整村660 reclassify → 按需调用 optimize_allocation (MIP)
+    └── 逐条场景: 1-5 操作 → 直接执行
+    ↓
+VALIDATE（8 项空间检查 + 合规验证，最多 3 轮）
+    ↓
+EXPORT（14 层 GeoJSON + 2 表 + 变更日志）
+    ↓
+RENDER（MapLibre 前端可视化）
+```
 
-传统做法将 LAYOUT Agent 设计为纯 ReAct（LLM 决定每步调用顺序），存在两个问题：
+**操作序列 vs 约束集**：
 
-1. **步骤完整性无法保证**：LLM 可能跳步（如跳过 KG 直接分配）或遗漏（如忘记 EXPORT/RENDER）
-2. **约束反馈无强制机制**：validate_layout 失败后，LLM 可能不重试而是直接返回
+| 规划文本类型 | 解析输出 | 操作规模 | 确认方式 |
+|-------------|---------|---------|---------|
+| 规划报告（"农田保护区≥98.54ha"） | OperationSequence（批量 reclassify） | 660 地块 | 批量确认+抽查 |
+| 建设项目表（"新建400㎡展销中心"） | OperationSequence（create/split） | 1-5 地块 | 逐条确认卡片 |
+| 管制规则（"允许建设区内不得安排基本农田"） | ConstraintSet（约束注入） | 规则级 | 自动生效 |
+| 村民决议（"同意搬迁学校"） | OperationSequence（modify+create） | 中等 | 逐条确认 |
 
-但纯确定性 StateGraph 又丧失了 LLM 自适应能力——智能规划的核心价值恰在于 LLM 能根据约束反馈动态调整分配策略。
+**对比测试模式**（非生产路径，仅用于效果验证）：
+- gen 模式: 人工规划 markdown → intent → 全管线 → gen layers
+- plan 模式: L3 reports → intent → 全管线 → plan layers
+- ground truth: planned/ 人工GIS图纸
+- 三路对比: gen vs ground, plan vs ground, gen vs plan
 
-参考 LangGraph 官方推荐的 **Plan-and-Execute** 模式 [1] 和 **Worker-Evaluator** 重试循环 [2]，以及智能规划领域实践：
-
-| 参考                                       | 模式                                                                    | 启示                                         |
-| ------------------------------------------ | ----------------------------------------------------------------------- | -------------------------------------------- |
-| **LangGraph Plan-and-Execute** [1]   | Planner 生成全局计划 → Executor 逐步执行 → Re-planner 评估是否调整    | 确定性骨架保证完整性，LLM 在规划环节提供智能 |
-| **Worker-Evaluator Loop** [2]        | Worker 执行 → Evaluator 检查达标 → 不达标则反馈重试                   | 验证必须是强制 gate，不能依赖 LLM "记得"重试 |
-| **City-LEO** [3]                     | LLM 生成 MIP 约束 → MIP 确定性求解 → E2E 优化                         | LLM 做约束提取，确定性算法做优化，各司其职   |
-| **Participatory Urban Planning** [4] | Planner 提议 → Residents 反馈 → Planner 修订 → 迭代                  | 反馈循环是规划质量的关键，不是可选项         |
-| **PlanGEN** [5]                      | ConstraintAgent → SolutionAgent → VerificationAgent → SelectionAgent | 约束提取→方案生成→验证→选择，四阶段流水线 |
-| **Intelli-Planner** [6]              | LLM 增强策略网络 + DRL PPO 优化                                         | LLM 提供领域知识先验，优化器做精确搜索       |
-
-**结论**：智能规划 = **确定性骨架**（保证步骤完整性和硬约束） + **ReAct 自适应循环**（LLM 根据约束反馈调整策略）。不是二选一，而是混合。
-
-#### 混合架构设计
+### 3.3 Agent 子图设计：混合架构
 
 ```
                     ┌─────────────────────┐
@@ -105,17 +122,17 @@ output/{village_name}/
     ┌────────────── LAYOUT 混合管线 (StateGraph) ──────────────┐
     │                                                          │
     │  ┌─────────┐   ┌──────────┐   ┌──────────────────────┐  │
-    │  │build_kg │──►│conflicts │──►│allocate_and_generate │  │  ← ReAct 子图
-    │  │(确定节点)│   │(确定节点)│   │  LLM 自适应决策：     │  │     (LLM 决定策略)
+    │  │build_kg │──►│conflicts │──►│execute_operations  │  │  ← ReAct 子图
+    │  │(确定节点)│   │(确定节点)│   │  LLM 自适应决策：     │  │
     │  └─────────┘   └──────────┘   │  - 查询 KG 约束      │  │
-    │                                │  - 调整分配参数      │  │
-    │                                │  - 选择布局策略      │  │
+    │                                │  - 调整操作策略            │  │
+    │                                │  - 按需调用 MIP            │  │
     │                                └──────────┬───────────┘  │
     │                                           │              │
     │                                           ▼              │
     │                                ┌──────────────────┐      │
     │                                │ validate_layout  │      │  ← Evaluator Gate
-    │                                │ (确定节点 + 条件路由)│  │     (强制验证)
+    │                                │ (确定节点 + 条件路由)│  │
     │                                └──┬───────────┬───┘      │
     │                     通过(→export) │           │ 失败(→retry, 最多3轮)
     │                                   │           │ 反馈注入 messages
@@ -129,40 +146,94 @@ output/{village_name}/
     │                        │                           │
     └────────────────────────┼───────────────────────────┘
                              ▼
-                      12-layer output
+                      14-layer output + changelog
 ```
 
 **关键设计**：
 
-| 组件                          | 模式           | 理由                                               |
-| ----------------------------- | -------------- | -------------------------------------------------- |
-| **KG / CONFLICT**       | 确定性节点     | 步骤顺序不可变，KG 必须在 ALLOCATE 之前            |
-| **ALLOCATE + GENERATE** | ReAct 子图     | LLM 需根据约束反馈自适应调整分配策略和布局参数     |
-| **VALIDATE**            | Evaluator Gate | 验证必须是强制 gate，失败则带反馈重试（最多 3 轮） |
-| **EXPORT / RENDER**     | 确定性节点     | 后处理步骤顺序不可变                               |
+| 组件 | 模式 | 理由 |
+|------|------|------|
+| **KG / CONFLICT** | 确定性节点 | 步骤顺序不可变，KG 必须在 EXECUTE 之前 |
+| **EXECUTE_OPERATIONS** | ReAct 子图 | LLM 需根据约束反馈自适应调整操作策略，批量场景按需调用 optimize_allocation |
+| **VALIDATE** | Evaluator Gate | 验证必须是强制 gate，失败则带反馈重试（最多 3 轮） |
+| **EXPORT / RENDER** | 确定性节点 | 后处理步骤顺序不可变 |
 
-#### 设计理由（更新）
+### 3.4 操作执行引擎设计
 
-| 决策                                          | 理由                                                                                                                                                                                  |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **为什么混合架构？**                    | 纯 ReAct 无法保证步骤完整性（LLM 可能跳步/遗漏）；纯 StateGraph 丧失 LLM 自适应能力（无法根据约束反馈调整策略）。混合架构兼得两者优势：确定性骨架保证完整流程，ReAct 子图保留智能决策 |
-| **为什么 ALLOCATE+GENERATE 用 ReAct？** | 分配和布局是规划核心环节，各村约束差异大。LLM 需要查询 KG 约束、判断冲突优先级、调整面积比例——这些决策依赖上下文推理，不是固定规则能覆盖的                                          |
-| **为什么 VALIDATE 是 Evaluator Gate？** | 参考Worker-Evaluator模式 [2]：验证通过/失败不能由 LLM "决定是否重试"，而必须是系统强制行为。验证失败时反馈注入 messages，LLM 在重试轮看到具体违规信息                                 |
-| **为什么保留双 Agent？**                | 文本理解（温度 0.2，需要创造性提取意图）与空间推理（温度 0，确定性操作）的可靠性要求不同。Intent schema 变更时 LAYOUT 零影响                                                          |
-| **通信协议**                            | 通过 LangGraph TypedDict state 注入：`ParseAgentState.intent_json → LayoutPipelineState.intent`，类型安全、可追踪                                                                  |
-| **fallback**                            | 保留`create_gis_agent_graph()` 单一 Agent（全部 13 工具），用于简单场景和测试                                                                                                       |
+Agent 是**会操作 GIS 的专业绘图员**，不是规划师。所有规划文本统一解析为 OperationSequence + ConstraintSet，通过 EXECUTE_OPERATIONS 逐条执行。操作遵循 **"意图提取 → 方案生成 → 人工确认 → 执行落地"** 的闭环。
+
+**5 种原子操作（统一指令集）**：
+
+| 操作 | 输入 | 输出 | 场景 |
+|------|------|------|------|
+| `create` | 面积+用途+位置描述 | 新BSM + 属性赋值 | 新增图斑 |
+| `split` | 源BSM+面积比例 | 2+新BSM + 面积守恒 | 分割图斑 |
+| `merge` | 源BSM列表 | 1新BSM | 合并图斑 |
+| `modify` | 源BSM+字段变更 | 属性更新 | 属性修改 |
+| `reclassify` | 源BSM+新QMDLBM | 编码+属性更新 | 地类重分类 |
+
+**5 步闭环流程**：
+
+```
+① 结构化提取
+   输入: "同意在刘村小组东侧、晒谷场北边空地，新建400㎡农产品展销中心，用途为经营性建设用地"
+   输出: OperationSequence([{action: "create", location_desc: "刘村小组东侧、晒谷场北边", area: 400, land_use_name: "经营性建设用地"}])
+
+② 空间定位 → 候选图斑
+   ① 地名解析 → 找到"刘村小组"点位 → 向东偏移
+   ② 在搜索区寻找"晒谷场"图斑 → 分析其北侧相邻地块
+   ③ 找到空闲地图斑 XG-005（面积≥400㎡）→ 作为操作对象
+   ④ 若多个候选 → 生成列表要求规划师点击确认
+
+③ 方案生成与合规预检
+   ① 用途字典 → "经营性建设用地" = GHYTBM 2124（从 ghytbm.yaml 查表）
+   ② 冲突检测 → 检查图斑是否在建设边界内 ✅，不占基本农田 ✅，不在生态红线内 ✅
+   ③ 生成操作预览方案：分割 XG-005 → 新图斑 400㎡ + QMDLBM=2124
+
+④ 人工确认界面
+   呈现确认卡片：
+   > 拟执行操作：
+   > - 在刘村小组东侧、晒谷场北侧空地，新增一块 400㎡ 的经营性建设用地
+   > - 图斑编号：待定，将从现状空闲地图斑 XG-005 中分割
+   > - 合规检查：✅位于村庄建设边界内 ✅不涉及三线 ✅现状为空闲地无需转用
+   > 是否确认执行？
+
+⑤ 执行与留痕
+   确认后执行图斑分割 + 属性赋值，记录变更日志（操作人/时间/来源文本/前后快照）
+```
+
+**批量 vs 逐条执行**：
+- **批量场景**（整村 660 reclassify）：执行引擎检测到大规模操作 → 按需调用 `optimize_allocation` (MIP) 辅助工具 → 批量确认+抽查
+- **逐条场景**（1-5 操作）：直接执行 → 逐条确认卡片
+
+**不确定性处理**：若文本未指定规划用途（如"闲置地利用"），Agent 提供候选项列表（如：可转为宅基地/停车场/绿地），由规划师选取，**绝不自动赋值**。
+
+### 3.5 执行粒度：批量操作 vs 逐条操作
+
+"整村生成"和"增量编辑"不是两种模式，而是**同一操作引擎的不同执行粒度**：
+
+| 执行粒度 | 场景 | 操作规模 | MIP 调用 | 确认方式 |
+|----------|------|---------|---------|---------|
+| **批量操作** | 首次编制/全面修编 | 660 地块 reclassify | 按需调用 `optimize_allocation` | 批量确认+抽查 |
+| **逐条操作** | 日常调整/单项落地 | 1-5 个 create/split/modify | 不调用 MIP | 逐条确认卡片 |
+
+两种粒度共享同一套 5 种原子操作、编码体系（DictionaryCenter）和合规检查（conflict/detector）。区别仅在于：
+- 批量操作时，执行引擎自动检测操作规模，按需调用 MIP 辅助工具优化分配
+- 逐条操作时，直接执行，不经过 MIP
+
+### 3.6 设计理由
+
+| 决策 | 理由 |
+|------|------|
+| **为什么统一路径？** | gen/plan 双路径仅用于对比测试，生产环境只需一条路径。所有规划文本统一解析为操作序列，减少维护成本，避免路径间行为不一致 |
+| **为什么混合架构？** | 纯 ReAct 无法保证步骤完整性；纯 StateGraph 丧失 LLM 自适应能力。混合架构兼得两者优势 |
+| **为什么 EXECUTE_OPERATIONS 用 ReAct？** | 操作执行是规划核心环节，各村约束差异大，LLM 需要查询 KG、判断冲突优先级、决定是否调用 MIP |
+| **为什么 VALIDATE 是 Evaluator Gate？** | 验证通过/失败不能由 LLM "决定是否重试"，必须是系统强制行为 |
+| **为什么操作需要人工确认？** | GIS 数据修改不可逆，任何操作必须经规划师确认后执行。这是人机协同的底线 |
+| **为什么 MIP 降级为辅助工具？** | MIP 仅在批量操作场景下有用（整村 660 reclassify），逐条操作不需要 MIP。作为辅助工具按需调用，比独立管道步骤更灵活 |
+| **为什么编码不做自动映射？** | 现状→规划用途的映射存在多对多歧义，自动映射会引入规划师未授权的决策。只做字典查找 + 候选项建议 |
 
 #### 参考文献
-
-│
-     │ 智能规划领域参考：                                                                         │
-     │ - City-LEO (2024)：LLM 生成 MIP 优化模型 + E2E 框架，LLM 做约束提取，MIP 做确定性优化      │
-     │ - Intelli-Planner (AAAI 2026)：LLM 增强策略网络 + DRL 优化，LLM 提供领域知识先验           │
-     │ - Participatory Urban Planning (清华)：Planner 提出→Residents 讨论→Planner                 │
-     │ 修订，反馈迭代循环                                                                         │
-     │ - PlanGEN (Google)：ConstraintAgent→SolutionAgent→VerificationAgent→SelectionAgent         │
-     │ 四阶段，验证驱动迭代                                                                       │
-     │ - GenPlanner (PyPI)：MILP + relation_matrix + Voronoi，纯确定性分区引擎
 
 1. LangGraph Blog: "Planning Agents" — Plan-and-Execute, ReWOO, LLMCompiler 三种规划架构对比. https://www.langchain.com/blog/planning-agents (2024)
 2. Dev.to: "Building a worker-evaluator retry loop in LangGraph" — Worker 执行 + Evaluator 评估 + 反馈重试模式. https://dev.to/akashpersetti/ (2026)
@@ -170,8 +241,10 @@ output/{village_name}/
 4. Participatory Urban Planning: "LLM for Participatory Urban Planning" — Planner→Residents讨论→Planner修订反馈迭代. arXiv:2402.17161 (2024)
 5. PlanGEN: "Generative Planning with Large Language Models" — ConstraintAgent→SolutionAgent→VerificationAgent→SelectionAgent 四阶段. Google Research (2025)
 6. Intelli-Planner: "Towards Customized Urban Planning via LLM Empowered Reinforcement Learning" — LLM 增强策略网络 + PPO 优化. AAAI 2026
+7. JackDaw (PoliRural+): "Bridging Global Language Models and Local Spatial Data" — 工具预过滤 + RAG + 值工程模型编排. (2026)
+8. Spatial Text-to-SQL: "From questions to queries: an AI-powered multi-agent framework for spatial Text-to-SQL" — 多Agent分阶段解释+审查. Taylor & Francis (2026)
 
-### 3.3 代码位置
+### 3.7 代码位置
 
 ```
 app/agent/gis/           # Agent 编排层 (4 文件)
@@ -187,82 +260,84 @@ app/tools/gis/           # @tool 层 (11 文件, 13 工具)
   allocate.py            # allocate_zones (MIP + greedy)
   generate.py            # generate_layout (CA + facility + axis)
   validate.py            # validate_layout (8 checks)
-  export.py              # export_gdb (12层 + 用地平衡表)
+  export.py              # export_gdb (14层 + 用地平衡表)
   render.py              # render_map (MapLibre 图层)
   data.py                # fetch_gis_data + search_poi
   analytics.py           # calculate_gis_coverage + analyze_accessibility
+  place_resolver.py      # ★ resolve_place_name (操作引擎空间地名解析)
 
 app/services/modules/gis/ # 纯服务层 (无 @tool)
-  zone_schema/           # 编码体系
-    schema.py            # ★ 统一分类 Schema — 全部 DLBM 定义的单一真相源
-    encodings.py         # 编码映射（从 schema 派生）
-    code_sets.py         # 编码集合（从 schema 派生）
-    colors.py            # GB/T 21010 国标色卡
+  schema/                # 编码体系 (DictionaryCenter YAML 驱动)
+    dicts/               # 12+ YAML 字典
+      loader.py          # ★ DictionaryCenter 单例
+      dlbm.yaml          # 三调地类 (220+ 编码)
+      ghytbm.yaml        # 规划用途 (21 编码)
+      ghflbm.yaml        # 规划分类 (11 编码)
+      vne.yaml           # V/N/E 分类 (20 编码)
+      gdb_layers.yaml    # GDB 图层定义 (17 层)
+      place_aliases.yaml # ★ 本地地名别名库 (操作引擎)
+    gdb.py               # GDB_LAYER_REGISTRY (12 层字段定义)
+    classification.py    # 分类映射 (从 DictionaryCenter 派生)
+    encoding_registry.py # 编码注册表
+  generation/            # 生成层
+    pipeline.py          # 管线执行器 (KG→Conflict→ExecuteOperations)
+    parcel_reclass_generator.py  # ★ ① ParcelReclass (20字段, 待创建)
+    road_plan_generator.py      # ★ ⑤ RoadPlan (待创建)
+    operation_engine.py          # ★ 统一操作执行引擎 (待创建)
+    space_control_generator.py  # ② SpaceControl (已有)
+    land_use_zone_generator.py  # ③ UseZone (已有)
   layout/                # 布局生成
-    data_loader.py       # 数据加载 + intent 解析（委派到 tool 层）
-    intent_cache.py      # 解析因子感知缓存（PARSE_VERSION + LLM_MODEL + 内容hash）
-    metrics_calculator.py # GIS 实测面积约束计算
-    compare_layouts.py   # 三路对比引擎
-    zone_generator.py    # 功能分区生成
+    data_loader.py       # 数据加载 + intent 解析
+    intent_cache.py      # 解析因子感知缓存
     facility_placer.py   # 设施布点（4 策略）
-    axis_builder.py      # 发展轴生成（一核一带三区）
-    map_renderer.py      # 地图渲染配置
+    axis_builder.py      # 发展轴生成
   providers/             # 天地图/高德/OSM
-  data/                  # 数据获取 + GDB schema
-  analysis/              # 空间分析
   kg/                    # RDF 知识图谱
   conflict/              # 冲突检测-消解
   optimizer/             # MIP + CA 优化器
+    planning_zone_mapper.py  # ★ 规划分区映射 (已有)
+    mip_allocator.py         # MIP 分配器
   validation/            # 布局验证
   utils/                 # 坐标/面积/GeoJSON 工具
 ```
 
-**已清理的死代码**（Phase 1）：
-
-| 文件                                | 状态   | 原因                                          |
-| ----------------------------------- | ------ | --------------------------------------------- |
-| `service.py` (GisService)         | 已删除 | 零生产调用，功能与 fetcher.py 重复            |
-| `engine.py` (SpatialLayoutEngine) | 已删除 | 只跑 4/8 步，被 layout_pipeline.py 完全取代   |
-| `optimizer/procedural.py` 导出    | 已移除 | 4 个函数零生产调用，函数体保留待 Phase 4 集成 |
-| `providers/amap/traffic.py` 导出  | 已移除 | TrafficService 从未实例化                     |
-
 ## 4. 编码体系
 
-三套正交编码，统一定义在 `zone_schema/dicts/*.yaml`（**YAML 字典中心单一真相源**；`schema.py` 和 `__init__.py` 均从中自动派生）：
+三套正交编码，统一定义在 `schema/dicts/*.yaml`（**DictionaryCenter 单一真相源**；`schema/__init__.py` 从中自动派生运行时字典）：
 
-| 体系                    | 来源                      | 用途                        | 示例                              |
-| ----------------------- | ------------------------- | --------------------------- | --------------------------------- |
-| **DLBM / GHYTBM** | 三调工作分类 (GB/T 21010) | 现状/规划地类 → 8 功能分区 | `2121`=宅基地 → `居住用地`   |
-| **YDYHFLDM**      | 自然资发〔2023〕234 号    | 基数转换上报                | `2121` → `0702` (农村宅基地) |
-| **V/N/E**         | 住建部村庄规划用地分类    | 前端统计口径                | `2121` → `V11` (住宅用地)    |
+| 体系 | 来源 | 用途 | 示例 |
+|------|------|------|------|
+| **DLBM / GHYTBM** | 三调工作分类 (GB/T 21010) | 现状/规划地类 → 8 功能分区 | `2121`=宅基地 → `居住用地` |
+| **YDYHFLDM** | 自然资发〔2023〕234 号 | 基数转换上报 | `2121` → `0702` |
+| **V/N/E** | 住建部村庄规划用地分类 | 前端统计口径 | `2121` → `V11` 住宅用地 |
 
 两套分区体系（互不混用，均从 schema 派生）：
 
-| 分区体系                     | 类别数 | 来源                     | 使用者                             |
-| ---------------------------- | ------ | ------------------------ | ---------------------------------- |
-| **功能分区 (Layer 1)** | 8 类   | DLBM →`zone_type`     | function_zone 图层 + LLM intent    |
-| **规划分区 (Layer 2)** | 6 类   | DLBM →`planning_zone` | MIP allocator + planning_zone 图层 |
-| **三区 (Layer 3)**     | 3 类   | DLBM →`primary_zone`  | 三区三线对照                       |
+| 分区体系 | 类别数 | 来源 | 使用者 |
+|----------|--------|------|--------|
+| **功能分区 (Layer 1)** | 8 类 | DLBM → `zone_type` | function_zone 图层 + LLM intent |
+| **规划分区 (Layer 2)** | 6 类 | DLBM → `planning_zone` | MIP allocator + ParcelReclass |
+| **三区 (Layer 3)** | 3 类 | DLBM → `primary_zone` | 三区三线对照 |
 
 6 类规划分区详情（广东省扩展，含林业发展区）：
 
-| 规划分区             | 归属三区 | 颜色        | 来源                              |
-| -------------------- | -------- | ----------- | --------------------------------- |
-| 生态保护区           | 生态空间 | `#2E8B57` | GB/T 21010 林地 + 水域            |
-| 生态控制区           | 生态空间 | `#90EE90` | 草地（非红线生态空间）            |
-| 农田保护区           | 农业空间 | `#FFE4B5` | 永久基本农田                      |
-| 一般农业区           | 农业空间 | `#98FB98` | 耕地 + 园地 + 设施农用地          |
-| **林业发展区** | 农业空间 | `#3CB371` | 广东省特色分区（商品林 + 生态林） |
-| 村庄建设区           | 建设空间 | `#FF6347` | 商服/工矿/住宅/公服/交通          |
+| 规划分区 | 归属三区 | 颜色 | 来源 |
+|----------|----------|------|------|
+| 生态保护区 | 生态空间 | `#2E8B57` | GB/T 21010 林地 + 水域 |
+| 生态控制区 | 生态空间 | `#90EE90` | 草地（非红线生态空间） |
+| 农田保护区 | 农业空间 | `#FFE4B5` | 永久基本农田 |
+| 一般农业区 | 农业空间 | `#98FB98` | 耕地 + 园地 + 设施农用地 |
+| **林业发展区** | 农业空间 | `#3CB371` | 广东省特色分区 |
+| 村庄建设区 | 建设空间 | `#FF6347` | 商服/工矿/住宅/公服/交通 |
 
 关键分类决策（GB/T 21010 合规）：
 
-| DLBM     | 名称   | 功能分区           | 规划分区   | GB/T 21010 依据                |
-| -------- | ------ | ------------------ | ---------- | ------------------------------ |
+| DLBM | 名称 | 功能分区 | 规划分区 | GB/T 21010 依据 |
+|------|------|----------|----------|----------------|
 | `1340` | 商品林 | **农业用地** | 林业发展区 | 三大类对照表：全部林地→农用地 |
-| `1350` | 生态林 | 生态绿地           | 林业发展区 | 生态功能：水源涵养、生物多样性 |
+| `1350` | 生态林 | 生态绿地 | 林业发展区 | 生态功能：水源涵养、生物多样性 |
 
-编码覆盖：金田村实测 660 地块 100% 可映射。新增/修改分类只需改 `dicts/*.yaml`，无需改代码。LLM prompt 自动注入结构化分类表格。
+编码覆盖：金田村实测 660 地块 100% 可映射。新增/修改分类只需改 `dicts/*.yaml`，无需改代码。
 
 ### 候选项建议引擎
 
@@ -270,7 +345,6 @@ app/services/modules/gis/ # 纯服务层 (无 @tool)
 
 - `resolve_mapping` → `propose_classification_candidates`：输出是"建议"，不是"结果"
 - `MappingResult` → `ClassificationProposal`：返回候选项列表，由规划师选取
-- `target` → `candidate`：YAML 中目标字段改名，断绝"自动映射"语义
 - Agent 禁止在文本无明确用途时自动调用 `propose()`，只在用户主动问"这块地能做什么"时才返回候选项
 
 三种置信度：
@@ -281,61 +355,58 @@ app/services/modules/gis/ # 纯服务层 (无 @tool)
 ## 5. 工具流水线
 
 ```
-PARSE ──► KG ──► CONFLICT ──► ALLOCATE ──► GENERATE ──► VALIDATE ──► EXPORT ──► RENDER
+PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VALIDATE ──► EXPORT ──► RENDER
 ```
 
-双路径架构（设计文档 P1-C 实现）：
+| # | 步骤 | 功能 | 设计理由 |
+|---|------|------|---------|
+| 1 | **PARSE** | LLM 解析规划文本 → `OperationSequence` + `ConstraintSet`。LLM prompt 注入 `DictionaryCenter.to_prompt_table()` 结构化分类表 + GIS 实测约束 | 自然语言约束提取，结构化 taxonomy 注入比文本补丁准确 |
+| 2 | **KG** | 构建 RDF 图谱 (660 parcels × ~10 triples = 8462 triples) + GIS 实测约束三元组 + SPARQL 查询 | 结构化约束后 LLM 可动态查询 |
+| 3 | **CONFLICT** | 跨维度指标冲突检测（metric/constraint/spatial 三类） | 13 维度独立规划必然出现冲突，需在执行前统一 |
+| 4 | **EXECUTE_OPERATIONS** | 逐条执行操作序列（5 种原子操作），批量场景按需调用 `optimize_allocation` 辅助工具 | 统一指令集，批量/逐条共享同一执行逻辑 |
+| 5 | **VALIDATE** | 8 项空间检查 + 合规验证（最多 3 轮） | 独立验证确保输出质量 |
+| 6 | **EXPORT** | 标准 **14 层** GeoJSON + 2 表 + 变更日志（对齐广东汇交标准） | 与 GDB 标准和 ArcGIS 入库规范对齐 |
+| 7 | **RENDER** | Python/matplotlib + MapLibre 前端图层（GB/T 21010 配色） | 数据驱动渲染 |
 
-```
-规划 markdown (人工规划文本) ──→ gen intent ──→ KG→CONFLICT→ALLOCATE→GENERATE ──→ gen layers
-L3 reports (系统L3报告)        ──→ plan intent ──→ KG→CONFLICT→ALLOCATE→GENERATE ──→ plan layers
-planned/ (人工绘制GIS图纸)      ───────────────────────────────────────────────────────→ ground truth
+### 5.5 操作工具集（5 个专业工具 + 1 个辅助工具）
 
-三路对比:
-  gen layers  vs planned/  = 「AI 解读人工规划文本」 vs 「人工绘制图纸」
-  plan layers vs planned/  = 「AI 基于 L3 报告」   vs 「人工绘制图纸」
-  gen layers  vs plan layers = 「人工文本路径」    vs 「L3 报告路径」
-```
-
-| # | 步骤               | 功能                                                                                                                                                                              | 设计理由                                             | 外部参考                                                   |
-| - | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
-| 1 | **PARSE**    | LLM 解析规划文本 →`UnifiedSpatialIntent`。Gen 路径：人工规划 markdown；Plan 路径：12 维度 L3 reports。LLM prompt 注入 `SCHEMA.to_prompt_table()` 结构化分类表 + GIS 实测约束 | 自然语言约束提取，结构化 taxonomy 注入比文本补丁准确 | EMNLP 2025 HTC: 结构化的 per-parent prompting 优于扁平列表 |
-| 2 | **KG**       | 构建 RDF 图谱 (660 parcels × ~10 triples = 8462 triples) + GIS 实测约束三元组 + SPARQL 查询                                                                                      | 结构化约束后 LLM 可动态查询                          | OntoPlanningRegulations (2025) KG 模式                     |
-| 3 | **CONFLICT** | 跨维度指标冲突检测（metric/constraint/spatial 三类）                                                                                                                              | 13 维度独立规划必然出现冲突，需在分配前统一          | 专利 CN202511326944                                        |
-| 4 | **ALLOCATE** | MIP 分配 **6 规划分区** + 硬约束锁定保护地块。**targets 必须使用规划分区名**（非功能分区名），通过 `map_zone_type_to_planning_zone` 映射。 | MILP 保证全局最优解（村级 <1000 地块 30s 内）        | GenPlanner (PyPI) 的 MILP + relation_matrix                |
-| 5 | **GENERATE** | 5 内部生成层（对齐 OUTPUT_ARCHITECTURE.md）：① ParcelReclass (16字段重分类) → ② SpaceControl (4类管制) → ③ UseZone (V/N/E) → ④ FacilityPlan (8类设施) → ⑤ RoadPlan (规划道路) | 分层解耦，每层输入输出明确                          | GenPlanner 的 Voronoi 细化                                 |
-| 6 | **VALIDATE** | 8 项空间检查 + 合规验证（最多 3 轮）                                                                                                                                              | 独立验证确保输出质量                                 | BlocksNet                                                  |
-| 7 | **EXPORT**   | 标准 **14 层** GeoJSON + 用地平衡表（对齐广东汇交标准）                                                                                                                            | 与 GDB 标准和 ArcGIS 入库规范对齐                    | bxgis 的 Arcpy GDB                                         |
-| 8 | **RENDER**   | Python/matplotlib + MapLibre 前端图层（GB/T 21010 配色，从 PLANNING_ZONE_COLORS 导入，不重复定义）                                                                                | 数据驱动渲染，三路并排对比图 PNG                     | —                                                         |
+| 工具 | 功能 | 复用 | 说明 |
+|------|------|------|------|
+| `resolve_place_name` | 空间地名解析：自然语言描述 → 候选图斑列表 | Amap POI + OSM + 本地别名库 | 模糊匹配 + 空间关系推理（东侧/沿河/北侧） |
+| `lookup_land_use_code` | 规划用途字典：用途名称 → 标准编码 + 约束规则 | DictionaryCenter (ghytbm.yaml) | 不做自动映射，返回候选项 |
+| `check_compliance` | 冲突检测：拟操作图斑 → 实时合规检查 | conflict/detector.py | 三区三线/建设边界/现状地类 |
+| `edit_parcel` | GIS 编辑：执行 create/split/merge/modify/reclassify | Shapely + GeoPandas | 原子操作 + 变更日志 |
+| `extract_structured_text` | 表格结构提取：表格类文本 → 结构化 JSON | LLM | 近期建设项目表/用地指标表 |
+| `optimize_allocation` | **辅助工具**：MIP 分配 6 规划分区 | MIP allocator (PuLP) | 仅批量场景由执行引擎按需调用，非独立管道步骤 |
 
 ## 6. 技术决策记录
 
-| 决策               | 选择                                                  | 不选                               | 理由                                                                                                                                                                                                                                                                |
-| ------------------ | ----------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **优化算法** | MIP (PuLP)                                            | DRL / GA / 模拟退火                | 村级 <1000 地块，MIP 30s 内最优解，无需启发式                                                                                                                                                                                                                       |
-| **知识表示** | RDF / SPARQL                                          | SQL / JSON Schema / Prolog         | RDF 无 schema 变更即可添加约束类型；SPARQL 可被 LLM 生成                                                                                                                                                                                                            |
-| **编排**     | 混合架构：确定性骨架 + ReAct 子图                     | 纯 ReAct / 纯 StateGraph / Airflow | 纯 ReAct 无法保证步骤完整性（LLM 可能跳步）；纯 StateGraph 丧失 LLM 自适应能力。混合架构：确定性边保证 KG→CONFLICT→VALIDATE 顺序，ReAct 子图在 ALLOCATE+GENERATE 提供 LLM 策略决策，Evaluator Gate 强制验证重试。参考 [1] Plan-and-Execute + [2] Worker-Evaluator |
-| **约束力度** | 硬约束（保护地块 MIP 变量锁定）+ 软约束（面积 slack） | 全软约束                           | 生态红线/基本农田是法律红线，不可违反                                                                                                                                                                                                                               |
-| **空间细化** | CA (Cellular Automata)                                | Voronoi / GAN                      | CA 简单可解释，GAN 需要大量训练样本且输出不可控                                                                                                                                                                                                                     |
-| **坐标系**   | WGS-84 (内部) + GCJ-02 (高德) + CGCS2000 (天地图)     | 单一坐标系                         | 三个数据源使用不同坐标系，坐标转换为已知算法                                                                                                                                                                                                                        |
-| **地图渲染** | MapLibre GL JS                                        | Leaflet / OpenLayers               | 国产化兼容（不含 Google 服务）、矢量瓦片性能、GL JSON 样式规范                                                                                                                                                                                                      |
+| 决策 | 选择 | 不选 | 理由 |
+|------|------|------|------|
+| **优化算法** | MIP (PuLP) | DRL / GA / 模拟退火 | 村级 <1000 地块，MIP 30s 内最优解 |
+| **知识表示** | RDF / SPARQL | SQL / JSON Schema / Prolog | RDF 无 schema 变更即可添加约束类型 |
+| **编排** | 混合架构：确定性骨架 + ReAct 子图 | 纯 ReAct / 纯 StateGraph | 纯 ReAct 无法保证步骤完整性；纯 StateGraph 丧失 LLM 自适应能力 |
+| **约束力度** | 硬约束（保护地块 MIP 变量锁定）+ 软约束（面积 slack） | 全软约束 | 生态红线/基本农田是法律红线，不可违反 |
+| **空间细化** | CA (Cellular Automata) | Voronoi / GAN | CA 简单可解释，GAN 需要大量训练样本且输出不可控 |
+| **坐标系** | WGS-84 (内部) + GCJ-02 (高德) + CGCS2000 (天地图) | 单一坐标系 | 三个数据源使用不同坐标系，坐标转换为已知算法 |
+| **地图渲染** | MapLibre GL JS | Leaflet / OpenLayers | 国产化兼容、矢量瓦片性能、GL JSON 样式规范 |
+| **MIP 定位** | 辅助工具（按需调用） | 独立管道步骤 | MIP 仅批量场景有用，逐条操作不需要；作为辅助工具更灵活 |
+| **操作确认** | 人工确认卡片 | 自动执行 | GIS 数据修改不可逆，必须经规划师确认 || **编码映射** | 字典查找 + 候选项建议 | 自动映射 | 现状→规划用途存在多对多歧义，自动映射引入未授权决策 |
 
 ## 7. 外部可行性验证
 
-| 功能维度         | 本项目实现       | GenPlanner (PyPI) | BlocksNet (40★) | DRL-urban-planning (清华,Nature) | 专利 CN202511326944 | bxgis           |
-| ---------------- | ---------------- | ----------------- | ---------------- | -------------------------------- | ------------------- | --------------- |
-| MILP 分区分配    | ✅               | ✅                | ❌ (模拟退火)    | ❌ (DRL)                         | ❌                  | ❌              |
-| 邻接约束矩阵     | ✅ (zone_schema) | ✅                | ❌               | ❌                               | ❌                  | ❌              |
-| 规则引擎冲突检测 | ✅ (conflict.py) | ❌                | ❌               | ❌                               | ✅                  | ✅              |
-| 用地平衡表       | ⚠️ (JSON)      | ❌                | ✅               | ❌                               | ✅                  | ✅ (Excel)      |
-| 可达性分析       | ✅               | ❌                | ✅               | ❌                               | ❌                  | ❌              |
-| 道路网络生成     | ❌               | ✅                | ❌               | ✅                               | ❌                  | ❌              |
-| 知识图谱         | ✅ (RDF)         | ❌                | ❌               | ❌                               | ❌                  | ❌              |
-| GDB 标准输出     | ⚠️ (GeoJSON)   | ❌                | ❌               | ❌                               | ❌                  | ✅ (Arcpy .gdb) |
-| 12 层完整输出    | ⚠️ (7/14)      | ❌                | ❌               | ❌                               | ❌                  | ✅              |
-| DRL 优化         | ❌ (Phase 3)     | ❌                | ❌               | ✅                               | ❌                  | ❌              |
+| 功能维度 | 本项目实现 | GenPlanner | BlocksNet | DRL-urban-planning | JackDaw (PoliRural+) | GISDataAgent |
+|----------|----------|------------|-----------|-------------------|---------------------|-------------|
+| MILP 分区分配 | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 邻接约束矩阵 | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 规则引擎冲突检测 | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 知识图谱 | ✅ (RDF) | ❌ | ❌ | ❌ | ❌ | ✅ (networkx) |
+| Text-to-GIS 操作 | ★ (统一操作引擎) | ❌ | ❌ | ❌ | ✅ (RAG+工具) | ✅ (NL2SQL) |
+| 人机协同确认 | ★ (设计) | ❌ | ❌ | ❌ | ❌ | ✅ (HITLApproval) |
+| GDB 标准输出 | ⚠️ (GeoJSON) | ❌ | ❌ | ❌ | ❌ | ❌ |
+| 14 层完整输出 | ⚠️ (7/14) | ❌ | ❌ | ❌ | ❌ | ❌ |
 
-**结论**：我们以 MIP + KG + Conflict 三个独特组合覆盖了现有开源方案的盲区。GenPlanner 最接近但缺 KG 和冲突检测；DRL-urban-planning 专注土地利用但缺规划约束和标准输出。
+**结论**：我们以 MIP + KG + Conflict 三个独特组合覆盖了现有开源方案的盲区。统一操作执行引擎（5 种原子操作 + MIP 辅助工具）参考 JackDaw 的工具预过滤和 GISDataAgent 的 HITLApproval 人机审批模式，但面向村庄规划场景做了专门设计——所有规划文本统一解析为操作序列，批量/逐条共享同一执行逻辑。
 
 ## 8. 路线图
 
@@ -345,61 +416,60 @@ planned/ (人工绘制GIS图纸)      ──────────────
 - [X] 13 个 @tool 流水线
 - [X] MIP 分配 + 硬约束保护地块锁定（6 规划分区）
 - [X] 8 项空间验证
-- [X] 统一分类 Schema（`zone_schema/schema.py`，83 条 DLBM 定义）
-- [X] 双路径 pipeline（gen/plan）+ 三路对比
+- [X] 统一分类 Schema（DictionaryCenter YAML 驱动，220+ DLBM 定义）
+- [X] 统一生产路径 + 对比测试模式（gen/plan/ground truth 三路对比）
 - [X] GIS 约束注入 LLM prompt（GB/T 21010 三大类合规）
 - [X] Intent 缓存（解析因子感知：PARSE_VERSION + LLM_MODEL + 内容hash）
-- [X] 死代码清理：删除 GisService、SpatialLayoutEngine，移除 procedural/traffic 未用导出
+- [X] 死代码清理：删除 GisService、SpatialLayoutEngine
 - [X] Canonical Data Model（Pydantic BaseModel，WGS84 归一化）
 - [X] Provider 适配层（Tianditu/Amap/OSM，CRS 归一化）
-- [X] EncodingRegistry（从 schema.py 自动派生编码映射）
+- [X] EncodingRegistry（从 DictionaryCenter 自动派生编码映射）
 - [X] OutputProfile 省份可扩展机制（广东 14 层 + 约束常量）
 - [X] 空间管制区生成器 SpaceControlZoneGenerator (510/520/530/540)
 - [X] 土地用途分区生成器 LandUseZoneGenerator (V/N/E)
 - [X] 颜色集中化（zone_schema/colors.py，6 套色卡）
+- [X] 规划分区映射（planning_zone_mapper.py，7类zone_type ↔ 6类规划分区）
 
 ### Phase 2 — 架构对齐（2026-07，进行中）
 
-**目标**：对齐 OUTPUT_ARCHITECTURE.md 的 5 内部生成层 + 14 层输出标准
+**目标**：对齐 OUTPUT_ARCHITECTURE.md v3.0 的 5+1 内部生成层 + 14 层输出标准
 
 #### 已知缺陷（P0 — 必须修复）
 
-- [ ] **MIP allocator 编码体系断裂**：targets 使用功能分区名（农业用地），但 `_get_preference_cost` 用规划分区名（农田保护区），零重叠导致 gen/plan 分配结果完全一致。修复：添加 `map_zone_type_to_planning_zone` 映射。
-- [ ] **ParcelReclass 输出缺少 16 字段**：ZoneGenerator 只输出简单 zone_type/color，缺少 QMDLBM/GHFLBM/GHYTBM/GHYTMC。修复：升级 ZoneGenerator 为 ParcelReclassGenerator。
-- [ ] **planning_zone (6类) 与 UseZone (V/N/E) 并存**：架构要求 planning_zone 被 UseZone 替代。修复：删除 `_make_planning_zone_layer`，6 类分区信息保留在 ParcelReclass 的 `assigned_zone` 字段中。
-- [ ] **RoadPlan 层缺失**：架构要求 ⑤ RoadPlan → 13_planned_road，当前无对应生成器。
+- [ ] **ParcelReclass 输出缺少 20 字段**：ZoneGenerator 只输出简单 zone_type/color，缺少 QMDLBM/GHFLBM/GHYTBM/GHYTMC。修复：升级 ZoneGenerator 为 ParcelReclassGenerator
+- [ ] **planning_zone (6类) 与 UseZone (V/N/E) 并存**：架构要求 planning_zone 被 UseZone 替代。修复：删除 `_make_planning_zone_layer`，6 类分区信息保留在 ParcelReclass 的 `assigned_zone` 字段中
+- [ ] **RoadPlan 层缺失**：架构要求 ⑤ RoadPlan → 13_planned_road，当前无对应生成器
 
-#### 混合架构重构
-
-- [ ] 新建 `layout_pipeline.py`：混合 StateGraph（确定性骨架 + ReAct 子图 + Evaluator Gate）
-- [ ] 新增 `LayoutPipelineState`（含 `validation_round` 计数器）
-- [ ] 确定性节点：build_kg → detect_conflicts → validate_layout → export_gdb → render_map
-- [ ] ReAct 子图：allocate_and_generate 节点（LLM 自适应决策分配策略和布局参数）
-- [ ] Evaluator Gate：validate_layout 条件路由（通过→export，失败→带反馈重试，最多 3 轮）
-- [ ] 修改 `gis_agent_node`：Step 2 改用 `build_layout_pipeline()`
-- [ ] 保留 `create_layout_agent_graph()` 作为 ReAct 子图被 pipeline 调用
-- [ ] 测试统一通过 layout_pipeline 执行（覆盖完整 8 步，无手动拼接）
-
-#### 5 内部生成层对齐
+#### 5+1 内部生成层对齐
 
 ```
-当前 6 层                          →  架构 5 层
+当前 6 层                          →  架构 5+1 层
 ─────────────────────────────────────────────────
-function_zone (ZoneGenerator)     →  ① ParcelReclass (16字段)
+function_zone (ZoneGenerator)     →  ① ParcelReclass (20字段)
 planning_zone (6类规划分区)       →  ❌ 删除（信息保留在 ① assigned_zone 字段）
 space_control_zone                →  ② SpaceControl (已有)
 land_use_zone                     →  ③ UseZone (V/N/E, 已有)
 facility_point                    →  ④ FacilityPlan (已有)
 infrastructure (AxisBuilder)      →  可视化叠加（不独立成层）
 (无)                              →  ⑤ RoadPlan (待实现)
+(无)                              →  ⑥ Text2GIS Ops (Phase D)
 ```
 
-- [ ] 创建 `ParcelReclassGenerator`：每地块输出 16 字段（BSM/YSDM/DLBM/DLMJ/QMDLBM/GHFLBM/GHYTBM/GHYTMC/...）
+- [ ] 创建 `ParcelReclassGenerator`：每地块输出 20 必选字段
 - [ ] 删除 `_make_planning_zone_layer`，前端从 ParcelReclass 的 `assigned_zone` 字段提取 6 类分区显示
 - [ ] MIP allocator：`solve()` 开头添加功能分区→规划分区映射
-- [ ] gis_test_routes.py 管线：targets 映射到规划分区
-- [ ] 实现 RoadPlan 生成器（或简化为现状道路 + 新增连接段）
-- [ ] E2E 测试：验证 gen/plan 差异性 + 16 字段完整性
+- [ ] 实现 RoadPlan 生成器
+- [ ] E2E 测试：验证 gen/plan 差异性 + 20 字段完整性
+
+### Phase 2.5 — 统一操作执行引擎（2026-08）
+
+- [ ] OperationEngine（5 种原子操作 + 变更日志 + 批量/逐条执行）
+- [ ] MIP 降级为 `optimize_allocation` 辅助工具（批量场景按需调用）
+- [ ] 空间地名解析工具（Amap POI + 本地别名库 place_aliases.yaml）
+- [ ] 合规预检集成（复用 conflict/detector）
+- [ ] 人工确认卡片 API（/api/gis/operations/confirm + /preview + /changelog）
+- [ ] 前端确认界面（确认/拒绝/修改 + 地图预览）
+- [ ] 变更日志与审计追踪（changelog.jsonl）
 
 ### Phase 3 — 功能增强
 
@@ -407,12 +477,20 @@ infrastructure (AxisBuilder)      →  可视化叠加（不独立成层）
 - [ ] export: 用地平衡表 Excel 输出、标准字段补全
 - [ ] allocate: Voronoi 细化参考 GenPlanner
 - [ ] 集成 procedural 工具：merge_parcels → zone_generator, simplify_boundary → map_renderer
-- [ ] CA 精化模块恢复（当前缺失 `app.services.modules.gis.layout.optimizer`）
-- [ ] PuLP → COIN_CMD 迁移
-- [ ] GHFLBM ↔ V/N/E 完整映射表（从 planned/landuse 实测数据反推 + 规范校验）
+- [ ] CA 精化模块恢复
+- [ ] GHFLBM ↔ V/N/E 完整映射表
 
 ### Phase 4 — 探索方向
 
 - [ ] DRL 土地优化（参考清华 DRL-urban-planning）
 - [ ] GAN 村庄布局生成
 - [ ] 实时协同编辑 + 移动端预览
+
+## 9. 人机协同原则
+
+1. **Agent 是专业绘图员，不是规划师**：Agent 负责将规划师的文字指令精确转化为 GIS 操作，不做规划决策
+2. **不确定性必须由人消除**：文本未指定用途时反问，不自动赋值；空间定位有歧义时列出候选，不自动选择
+3. **所有修改留痕待审**：变更日志记录每次操作的来源文本、前后快照、合规检查结果、确认人
+4. **编码映射不做自动转换**：只做字典查找（用途名称→编码）+ 候选项建议（多对多时列出选项），不做现状→规划的自动推断
+5. **合规检查是前置条件**：任何 GIS 操作执行前必须通过合规检查，违规操作不生成确认卡片
+6. **操作可撤销**：变更日志记录 before 快照，支持按 operation_id 回滚
