@@ -56,8 +56,10 @@ output/{village_name}/
 │  提供 SPARQL 查询接口，让 LLM 动态获取约束值                      │
 ├──────────────────────────────────────────────────────────────────┤
 │  Layer 2: AGENTIC PIPELINE (智能体流水线)                        │
-│  PARSE Agent (1 tool) → LAYOUT Agent (11 tools)                  │
-│  LLM ReAct 决策，通过 state 注入通信                              │
+│  PARSE Agent (3 tools, 半结构化 ReAct) → LAYOUT Pipeline (8 nodes)│
+│  文本领域：classify → route → extract → validate                  │
+│  空间领域：确定性骨架 + execute_operations ReAct 子图              │
+│  通过 state 注入通信（PARSE 输出 → LAYOUT 输入）                  │
 ├──────────────────────────────────────────────────────────────────┤
 │  Layer 3: SPATIAL GENERATOR (空间生成器)                         │
 │  MIP 优化 + CA 细化 → 程序化几何生成                              │
@@ -68,9 +70,18 @@ output/{village_name}/
 ### 3.2 统一生产路径
 
 ```
-规划文本（报告/规则/决议/建设项目表）
+规划文本（报告/规则/决议/建设项目表）+ GIS 现状摘要
     ↓
-PARSE Agent → OperationSequence + ConstraintSet
+PARSE Agent (半结构化 ReAct)
+  ├── classify_sections: 文档结构分类（GIS 现状注入校验自然村名）
+  ├── route_by_section: 按段落类型路由提取策略
+  │   ├── extract_regulations → ConstraintSet（管制规则）
+  │   ├── extract_tables + extract_structured_text → 结构化 JSON（表格数据）
+  │   ├── extract_projects + lookup_land_use_code → OperationSequence（建设项目）
+  │   └── extract_targets → IntentJSON（规划指标）
+  └── validate_and_merge: 校验一致性（面积守恒/编码有效）+ 合并（最多2轮重试）
+    ↓
+OperationSequence + ConstraintSet + IntentJSON
     ↓
 ┌─ ConstraintSet → KG（约束三元组 + 合规规则）───┐
 │                                                 │
@@ -112,12 +123,16 @@ RENDER（MapLibre 前端可视化）
 ### 3.3 Agent 子图设计：混合架构
 
 ```
-                    ┌─────────────────────┐
-   reports ────────►│    PARSE Agent      │     ← ReAct (文本理解需要 LLM 创造性)
-   gis_data         │  1 tool:            │
-                    │  parse_planning_text │
-                    └──────┬──────────────┘
-                           │ intent_json (state 注入)
+                     ┌─────────────────────────────┐
+   reports ─────────►│       PARSE Agent           │  ← 半结构化 ReAct
+   gis_summary       │  3 tools:                   │     (classify → route → extract → validate)
+                     │  parse_planning_text         │
+                     │  extract_structured_text     │
+                     │  lookup_land_use_code        │
+                     │  + classify/validate (LLM节点)│
+                     └──────┬──────────────────────┘
+                            │ OperationSequence + ConstraintSet + intent_json
+                            │ (state 注入，Pydantic 严格 Schema)
                            ▼
     ┌────────────── LAYOUT 混合管线 (StateGraph) ──────────────┐
     │                                                          │
@@ -153,6 +168,7 @@ RENDER（MapLibre 前端可视化）
 
 | 组件 | 模式 | 理由 |
 |------|------|------|
+| **PARSE Agent** | 半结构化 ReAct | 文本领域需多步提取/校验，确定性骨架保证步骤完整性，LLM 节点处理异构文档 |
 | **KG / CONFLICT** | 确定性节点 | 步骤顺序不可变，KG 必须在 EXECUTE 之前 |
 | **EXECUTE_OPERATIONS** | ReAct 子图 | LLM 需根据约束反馈自适应调整操作策略，批量场景按需调用 optimize_allocation |
 | **VALIDATE** | Evaluator Gate | 验证必须是强制 gate，失败则带反馈重试（最多 3 轮） |
@@ -247,14 +263,19 @@ Agent 是**会操作 GIS 的专业绘图员**，不是规划师。所有规划�
 ### 3.7 代码位置
 
 ```
-app/agent/gis/           # Agent 编排层 (4 文件)
+app/agent/gis/           # Agent 编排层 (6 文件)
   agent.py               # create_parse/layout/gis_agent_graph()
+  parse_agent.py         # ★ PARSE Agent 子图 (classify → route → extract → validate)
+  parse_state.py         # ★ ParseAgentState + GISSummary + OperationItem + ConstraintItem
+  parse_prompts.py       # ★ PARSE Agent 专用 prompts (GIS 注入 + DictionaryCenter 注入)
   layout_pipeline.py     # ★ LAYOUT 混合管线 (StateGraph: 确定性骨架 + ReAct 子图 + Evaluator Gate)
-  state.py               # ParseAgentState / LayoutAgentState / LayoutPipelineState / GISAgentState
-  prompts.py             # PARSE / LAYOUT / GIS system prompts
+  state.py               # GISPipelineState (Pydantic BaseModel)
+  prompts.py             # LAYOUT / GIS system prompts
 
-app/tools/gis/           # @tool 层 (11 文件, 13 工具)
+app/tools/gis/           # @tool 层 (13 文件, 15 工具)
   parse.py               # parse_planning_text
+  extract.py             # ★ extract_structured_text (表格→结构化JSON)
+  code_lookup.py         # ★ lookup_land_use_code (用途名称→标准编码)
   kg.py                  # build/query_knowledge_graph
   conflict.py            # detect_conflicts
   allocate.py            # allocate_zones (MIP + greedy)
@@ -360,7 +381,7 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 
 | # | 步骤 | 功能 | 设计理由 |
 |---|------|------|---------|
-| 1 | **PARSE** | LLM 解析规划文本 → `OperationSequence` + `ConstraintSet`。LLM prompt 注入 `DictionaryCenter.to_prompt_table()` 结构化分类表 + GIS 实测约束 | 自然语言约束提取，结构化 taxonomy 注入比文本补丁准确 |
+| 1 | **PARSE** | 半结构化 ReAct：classify → route → extract → validate → `OperationSequence` + `ConstraintSet` + `IntentJSON`。GIS 现状摘要注入（自然村列表/地类分布/分区统计），`DictionaryCenter.to_prompt_table()` 编码参考表注入 | 文本领域需多步提取/校验，GIS 现状锚定防止 LLM 幻觉，编码参考表保证标准名称 |
 | 2 | **KG** | 构建 RDF 图谱 (660 parcels × ~10 triples = 8462 triples) + GIS 实测约束三元组 + SPARQL 查询 | 结构化约束后 LLM 可动态查询 |
 | 3 | **CONFLICT** | 跨维度指标冲突检测（metric/constraint/spatial 三类） | 13 维度独立规划必然出现冲突，需在执行前统一 |
 | 4 | **EXECUTE_OPERATIONS** | 逐条执行操作序列（5 种原子操作），批量场景按需调用 `optimize_allocation` 辅助工具 | 统一指令集，批量/逐条共享同一执行逻辑 |
@@ -391,7 +412,11 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 | **坐标系** | WGS-84 (内部) + GCJ-02 (高德) + CGCS2000 (天地图) | 单一坐标系 | 三个数据源使用不同坐标系，坐标转换为已知算法 |
 | **地图渲染** | MapLibre GL JS | Leaflet / OpenLayers | 国产化兼容、矢量瓦片性能、GL JSON 样式规范 |
 | **MIP 定位** | 辅助工具（按需调用） | 独立管道步骤 | MIP 仅批量场景有用，逐条操作不需要；作为辅助工具更灵活 |
-| **操作确认** | 人工确认卡片 | 自动执行 | GIS 数据修改不可逆，必须经规划师确认 || **编码映射** | 字典查找 + 候选项建议 | 自动映射 | 现状→规划用途存在多对多歧义，自动映射引入未授权决策 |
+| **操作确认** | 人工确认卡片 | 自动执行 | GIS 数据修改不可逆，必须经规划师确认 |
+| **PARSE 架构** | 半结构化 ReAct（确定性骨架 + LLM 节点内可调用 tool） | 纯 ReAct / 纯 StateGraph | 纯 ReAct 无法保证步骤完整性（LLM 可能跳过校验）；纯 StateGraph 无法处理异构文档（需 LLM 判断路由） |
+| **PARSE 工具数** | 3 tools（parse_planning_text + extract_structured_text + lookup_land_use_code） | 1 tool | 规划文本不是一次 LLM 能解析完的——需要多步提取（表格→JSON、名称→编码、多次校验） |
+| **PARSE 输出** | Pydantic 严格模型（OperationItem + ConstraintItem + PlanningIntent） | 自由格式 Dict | 严格 Schema 保证 PARSE → LAYOUT 边界可靠性 |
+| **GIS 数据注入** | PARSE 阶段注入 GIS 现状摘要（统计信息，不含几何） | 不注入 | LLM 需参照现状提取——自然村名/地类面积锚定防止幻觉 |
 
 ## 7. 外部可行性验证
 
