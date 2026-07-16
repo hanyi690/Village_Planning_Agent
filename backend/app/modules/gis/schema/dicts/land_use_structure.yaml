@@ -1,0 +1,113 @@
+# 土地利用结构调整表 — 广东省村庄规划编制基本技术指南（试行）附表2
+# 三大类(农业用地/建设用地/生态用地) × 二级地类，现状与规划对比
+version: "2026_GUANGDONG_V1"
+standard: "广东省村庄规划编制基本技术指南（试行）附表2"
+
+categories:
+  # ── 农业用地 ──
+  - code: "1100"
+    name: "耕地"
+    parent: "农业用地"
+    ghytbm: "1100"
+
+  - code: "1200"
+    name: "园地"
+    parent: "农业用地"
+    ghytbm: "1200"
+
+  - code: "1340"
+    name: "商品林"
+    parent: "农业用地"
+    ghytbm: "1340"
+
+  - code: "1400"
+    name: "草地"
+    parent: "农业用地"
+    ghytbm: "1400"
+
+  - code: "1500"
+    name: "其他农用地"
+    parent: "农业用地"
+    ghytbm: "1500"
+
+  - code: "1510"
+    name: "设施农用地"
+    parent: "农业用地"
+    ghytbm: "1510"
+
+  # ── 建设用地 ──
+  - code: "2100"
+    name: "城镇用地"
+    parent: "建设用地"
+    ghytbm: "2100"
+
+  - code: "2121"
+    name: "宅基地"
+    parent: "建设用地.村庄建设用地"
+    ghytbm: "2121"
+
+  - code: "2122"
+    name: "公共服务设施用地"
+    parent: "建设用地.村庄建设用地"
+    ghytbm: "2122"
+
+  - code: "2123"
+    name: "基础设施用地"
+    parent: "建设用地.村庄建设用地"
+    ghytbm: "2123"
+
+  - code: "2124"
+    name: "经营性建设用地"
+    parent: "建设用地.村庄建设用地"
+    ghytbm: "2124"
+
+  - code: "2125"
+    name: "景观与绿化用地"
+    parent: "建设用地.村庄建设用地"
+    ghytbm: "2125"
+
+  - code: "2126"
+    name: "村内交通用地"
+    parent: "建设用地.村庄建设用地"
+    ghytbm: "2126"
+
+  - code: "2310"
+    name: "风景名胜设施用地"
+    parent: "建设用地.交通水利及其他"
+    ghytbm: "2310"
+
+  - code: "2320"
+    name: "特殊用地"
+    parent: "建设用地.交通水利及其他"
+    ghytbm: "2320"
+
+  - code: "2200"
+    name: "对外交通用地"
+    parent: "建设用地.交通水利及其他"
+    ghytbm: "2200"
+
+  - code: "2130"
+    name: "采矿用地"
+    parent: "建设用地.交通水利及其他"
+    ghytbm: "2130"
+
+  - code: "2270"
+    name: "水利设施用地"
+    parent: "建设用地.交通水利及其他"
+    ghytbm: "2270"
+
+  # ── 生态用地 ──
+  - code: "3100"
+    name: "水域"
+    parent: "生态用地"
+    ghytbm: "3100"
+
+  - code: "3200"
+    name: "自然保留地"
+    parent: "生态用地"
+    ghytbm: "3200"
+
+  - code: "1350"
+    name: "生态林"
+    parent: "生态用地"
+    ghytbm: "1350"

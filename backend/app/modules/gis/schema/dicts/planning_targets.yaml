@@ -1,0 +1,56 @@
+# 规划目标表 — 广东省村庄规划编制基本技术指南（试行）附表1
+# 约束性指标 + 预期性指标
+version: "2026_GUANGDONG_V1"
+standard: "广东省村庄规划编制基本技术指南（试行）附表1"
+
+indicators:
+  # ── 约束性指标 ──
+  - code: "I01"
+    name: "耕地保有量"
+    unit: "公顷"
+    attribute: "约束性"
+    field: "farmland_area_ha"
+    description: "规划期末耕地保有量下限"
+
+  - code: "I02"
+    name: "基本农田保护面积"
+    unit: "公顷"
+    attribute: "约束性"
+    field: "basic_farmland_area_ha"
+    description: "永久基本农田保护面积下限"
+
+  - code: "I03"
+    name: "村庄建设用地规模"
+    unit: "公顷"
+    attribute: "约束性"
+    field: "construction_area_ha"
+    description: "村庄建设用地规模上限"
+
+  # ── 预期性指标 ──
+  - code: "I04"
+    name: "公共服务设施用地规模"
+    unit: "公顷"
+    attribute: "预期性"
+    field: "public_service_area_ha"
+    description: "公共服务设施用地规模"
+
+  - code: "I05"
+    name: "基础设施用地规模"
+    unit: "公顷"
+    attribute: "预期性"
+    field: "infrastructure_area_ha"
+    description: "基础设施用地规模"
+
+  - code: "I06"
+    name: "户均宅基地"
+    unit: "平方米/户"
+    attribute: "预期性"
+    field: "homestead_per_household_sqm"
+    description: "每户宅基地面积上限"
+
+  - code: "I07"
+    name: "人均村庄建设用地"
+    unit: "平方米/人"
+    attribute: "预期性"
+    field: "construction_per_capita_sqm"
+    description: "人均村庄建设用地面积"
