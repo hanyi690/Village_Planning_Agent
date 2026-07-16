@@ -129,6 +129,7 @@ class GISDataBundle(BaseModel):
     annotations: List[GeoFeature] = Field(default_factory=list)
     dem: Optional[Any] = None  # Digital Elevation Model (raster, provider-dependent)
     metadata: GISMetadata = Field(default_factory=GISMetadata)
+    standard_version: str = ""
 
     @property
     def total_area_ha(self) -> float:

@@ -10,8 +10,8 @@ from collections import Counter
 from typing import Any, Dict, List, Optional, Set
 
 from app.utils.logger import get_logger
-from ..schema.encodings import DLBM_TO_ZONE_TYPE, get_zone_type_for_dlbm
-from ..schema.code_sets import (
+from ..schema import DLBM_TO_ZONE_TYPE, get_zone_type_for_dlbm
+from ..schema import (
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,
     ECOLOGICAL_CODES,

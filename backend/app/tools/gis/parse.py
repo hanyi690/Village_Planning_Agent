@@ -76,7 +76,7 @@ def _parse_reports_to_intent(
         landuse_hint = _build_landuse_hint(gis_data)
         gis_constraints = _build_gis_constraints_for_llm(gis_data)
 
-        from app.modules.gis.schema.classification import SCHEMA
+        from app.modules.gis.schema import SCHEMA
         prompt = PARSE_AGENT_SYSTEM_PROMPT.format(
             dlbm_class_table=SCHEMA.to_prompt_table(),
         )

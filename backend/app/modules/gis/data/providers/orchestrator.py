@@ -165,6 +165,10 @@ class GISDataOrchestrator:
             len(metadata.crs_warnings),
         )
 
+        from ...schema.dicts.loader import get_center
+        center = get_center()
+        dlbm_version = center.get("dlbm").version if "dlbm" in center._dictionaries else ""
+
         return GISDataBundle(
             boundary=boundary,
             landuse=landuse,
@@ -172,6 +176,7 @@ class GISDataOrchestrator:
             water_bodies=water_bodies,
             annotations=annotations,
             metadata=metadata,
+            standard_version=dlbm_version,
         )
 
 

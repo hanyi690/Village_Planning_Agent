@@ -1,0 +1,13 @@
+# 要素代码分类 — DB22/T 3407-2022
+version: "2026_GUANGDONG_V1"
+standard: "DB22/T 3407-2022"
+
+prefixes:
+  base_geographic: "10"
+  spatial_planning: "2096"
+  current: "209631"
+  planned: "209632"
+  three_line: "20963201"
+  planning_control: "20963202"
+  protection: "20963203"
+  infrastructure: "20963204"

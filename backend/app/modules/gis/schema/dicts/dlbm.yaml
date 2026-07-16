@@ -1,0 +1,767 @@
+# DLBM 三调地类编码 — 单一真相源
+# 修改编码只改此文件，不再改 Python 代码
+version: "2026_GUANGDONG_V1"
+standard: "GB/T 21010-2017 + 广东省村庄规划扩展"
+coordinate_system: "CGCS2000"
+projection: "Gauss-Kruger 3-degree zones"
+scale: "1:2000"
+
+classes:
+  # ── 农业用地 → 农田保护区 (永久基本农田) ──
+  - code: "0101"
+    name: "水田"
+    gb_ref: "0101"
+    zone_type: "农业用地"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "永久基本农田"
+
+  - code: "0102"
+    name: "水浇地"
+    gb_ref: "0102"
+    zone_type: "农业用地"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "永久基本农田"
+
+  - code: "0103"
+    name: "旱地"
+    gb_ref: "0103"
+    zone_type: "农业用地"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "永久基本农田"
+
+  - code: "0110"
+    name: "水田(三级)"
+    gb_ref: "01"
+    zone_type: "农业用地"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "耕地"
+
+  - code: "0120"
+    name: "旱地(三级)"
+    gb_ref: "01"
+    zone_type: "农业用地"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "耕地"
+
+  - code: "0130"
+    name: "灌溉水田"
+    gb_ref: "01"
+    zone_type: "农业用地"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "耕地"
+
+  - code: "1100"
+    name: "耕地(规划)"
+    gb_ref: "01"
+    zone_type: "农业用地"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "规划耕地"
+
+  # ── 农业用地 → 一般农业区 ──
+  - code: "0100"
+    name: "耕地"
+    gb_ref: "01"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "耕地"
+
+  - code: "0200"
+    name: "园地"
+    gb_ref: "02"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "园地"
+
+  - code: "0201"
+    name: "果园"
+    gb_ref: "0201"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "园地"
+
+  - code: "0202"
+    name: "茶园"
+    gb_ref: "0202"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "园地"
+
+  - code: "0203"
+    name: "橡胶园"
+    gb_ref: "0203"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "园地"
+
+  - code: "0204"
+    name: "其他园地"
+    gb_ref: "0204"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "园地"
+
+  - code: "0210"
+    name: "园地(三级)"
+    gb_ref: "02"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "园地"
+
+  - code: "0220"
+    name: "园地(三级)"
+    gb_ref: "02"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "园地"
+
+  - code: "1200"
+    name: "其他土地"
+    gb_ref: "12"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "其他农用地"
+
+  - code: "1201"
+    name: "设施农用地(三级)"
+    gb_ref: "12"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "设施农用地"
+
+  - code: "1510"
+    name: "设施农用地"
+    gb_ref: "15"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "设施农用地"
+
+  - code: "2270"
+    name: "水利设施用地"
+    gb_ref: "22"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "水利设施"
+
+  - code: "3200"
+    name: "自然保留地"
+    gb_ref: "32"
+    zone_type: "农业用地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "自然保留地"
+
+  # ── 商品林 → 农业用地 (林业发展区) ──
+  - code: "1340"
+    name: "商品林"
+    gb_ref: "0301"
+    zone_type: "农业用地"
+    planning_zone: "林业发展区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE", "FORESTRY"]
+    description: "商品林(经济林)。区别于生态林(1350)"
+
+  # ── 生态绿地 → 生态保护区 (林地) ──
+  - code: "0300"
+    name: "林地"
+    gb_ref: "03"
+    zone_type: "生态绿地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "GB/T 21010 林地"
+
+  - code: "0301"
+    name: "乔木林地"
+    gb_ref: "0301"
+    zone_type: "生态绿地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "乔木林"
+
+  - code: "0302"
+    name: "竹林地"
+    gb_ref: "0302"
+    zone_type: "生态绿地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "竹林"
+
+  - code: "0303"
+    name: "红树林地"
+    gb_ref: "0303"
+    zone_type: "生态绿地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "红树林"
+
+  - code: "0304"
+    name: "森林沼泽"
+    gb_ref: "0304"
+    zone_type: "生态绿地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "森林沼泽"
+
+  - code: "0305"
+    name: "灌木林地"
+    gb_ref: "0305"
+    zone_type: "生态绿地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "灌木林"
+
+  - code: "0306"
+    name: "灌丛沼泽"
+    gb_ref: "0306"
+    zone_type: "生态绿地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "灌丛沼泽"
+
+  - code: "0307"
+    name: "其他林地"
+    gb_ref: "0307"
+    zone_type: "生态绿地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "其他林地"
+
+  - code: "0310"
+    name: "有林地(三级)"
+    gb_ref: "03"
+    zone_type: "生态绿地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "林地"
+
+  - code: "0330"
+    name: "其他林地(三级)"
+    gb_ref: "03"
+    zone_type: "生态绿地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "林地"
+
+  # ── 生态林 → 林业发展区 ──
+  - code: "1350"
+    name: "生态林"
+    gb_ref: "0301"
+    zone_type: "生态绿地"
+    planning_zone: "林业发展区"
+    primary_zone: "农业空间"
+    categories: ["ECOLOGICAL", "FORESTRY"]
+    description: "生态林。区别于商品林(1340)。生态功能: 水源涵养、生物多样性"
+
+  # ── 生态绿地 → 生态控制区 (草地) ──
+  - code: "0400"
+    name: "草地"
+    gb_ref: "04"
+    zone_type: "生态绿地"
+    planning_zone: "生态控制区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "GRASSLAND"]
+    description: "草地"
+
+  - code: "0401"
+    name: "天然牧草地"
+    gb_ref: "0401"
+    zone_type: "生态绿地"
+    planning_zone: "生态控制区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "GRASSLAND"]
+    description: "天然牧草"
+
+  - code: "0402"
+    name: "人工牧草地"
+    gb_ref: "0402"
+    zone_type: "生态绿地"
+    planning_zone: "生态控制区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "GRASSLAND"]
+    description: "人工牧草"
+
+  - code: "0403"
+    name: "其他草地"
+    gb_ref: "0403"
+    zone_type: "生态绿地"
+    planning_zone: "生态控制区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "GRASSLAND"]
+    description: "其他草地"
+
+  - code: "0404"
+    name: "沼泽草地"
+    gb_ref: "0404"
+    zone_type: "生态绿地"
+    planning_zone: "生态控制区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "GRASSLAND"]
+    description: "沼泽草地"
+
+  - code: "1400"
+    name: "草地(规划)"
+    gb_ref: "04"
+    zone_type: "生态绿地"
+    planning_zone: "生态控制区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "GRASSLAND"]
+    description: "规划草地"
+
+  # ── 水域 → 生态保护区 ──
+  - code: "1101"
+    name: "河流水面"
+    gb_ref: "1101"
+    zone_type: "水域"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "河流"
+
+  - code: "1102"
+    name: "湖泊水面"
+    gb_ref: "1102"
+    zone_type: "水域"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "湖泊"
+
+  - code: "1103"
+    name: "水库水面"
+    gb_ref: "1103"
+    zone_type: "水域"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "水库"
+
+  - code: "1104"
+    name: "坑塘水面"
+    gb_ref: "1104"
+    zone_type: "水域"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "坑塘"
+
+  - code: "1105"
+    name: "沟渠"
+    gb_ref: "1105"
+    zone_type: "水域"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "沟渠"
+
+  - code: "1106"
+    name: "水工建筑用地"
+    gb_ref: "1106"
+    zone_type: "水域"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "水工建筑"
+
+  - code: "1109"
+    name: "冰川及永久积雪"
+    gb_ref: "1109"
+    zone_type: "水域"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "冰川"
+
+  - code: "1110"
+    name: "滩涂"
+    gb_ref: "1110"
+    zone_type: "水域"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "滩涂"
+
+  - code: "1140"
+    name: "沼泽地"
+    gb_ref: "1140"
+    zone_type: "水域"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "沼泽"
+
+  - code: "1180"
+    name: "水田(水域)"
+    gb_ref: "11"
+    zone_type: "水域"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "水域农田"
+
+  - code: "3100"
+    name: "水域(规划)"
+    gb_ref: "31"
+    zone_type: "水域"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "规划水域"
+
+  # ── 居住用地 → 村庄建设区 ──
+  - code: "0700"
+    name: "城镇住宅用地"
+    gb_ref: "0700"
+    zone_type: "居住用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "城镇住宅"
+
+  - code: "0701"
+    name: "城镇住宅"
+    gb_ref: "0701"
+    zone_type: "居住用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "住宅"
+
+  - code: "0702"
+    name: "农村宅基地"
+    gb_ref: "0702"
+    zone_type: "居住用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "农村宅基地"
+
+  - code: "2030"
+    name: "农村宅基地(三级)"
+    gb_ref: "07"
+    zone_type: "居住用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "农村宅基地"
+
+  - code: "2121"
+    name: "宅基地"
+    gb_ref: "0702"
+    zone_type: "居住用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "农村宅基地"
+
+  # ── 产业用地 → 村庄建设区 ──
+  - code: "0600"
+    name: "工矿仓储用地"
+    gb_ref: "06"
+    zone_type: "产业用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "工矿仓储"
+
+  - code: "0601"
+    name: "工业用地"
+    gb_ref: "0601"
+    zone_type: "产业用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "工业"
+
+  - code: "0602"
+    name: "采矿用地"
+    gb_ref: "0602"
+    zone_type: "产业用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "采矿"
+
+  - code: "0603"
+    name: "盐田"
+    gb_ref: "0603"
+    zone_type: "产业用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "盐田"
+
+  - code: "0610"
+    name: "工业(三级)"
+    gb_ref: "06"
+    zone_type: "产业用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "工矿"
+
+  - code: "0620"
+    name: "采矿(三级)"
+    gb_ref: "06"
+    zone_type: "产业用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "采矿"
+
+  - code: "2100"
+    name: "商服(三级)"
+    gb_ref: "21"
+    zone_type: "产业用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "商服"
+
+  - code: "2124"
+    name: "经营性建设用地"
+    gb_ref: "0900"
+    zone_type: "产业用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "经营性建设"
+
+  # ── 公共服务用地 → 村庄建设区 ──
+  - code: "0800"
+    name: "公共管理与公共服务用地"
+    gb_ref: "08"
+    zone_type: "公共服务用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "公服"
+
+  - code: "0801"
+    name: "机关团体用地"
+    gb_ref: "0801"
+    zone_type: "公共服务用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "机关团体"
+
+  - code: "0802"
+    name: "科研用地"
+    gb_ref: "0802"
+    zone_type: "公共服务用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "科研"
+
+  - code: "0803"
+    name: "文化用地"
+    gb_ref: "0803"
+    zone_type: "公共服务用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "文化"
+
+  - code: "0806"
+    name: "医疗卫生用地"
+    gb_ref: "0806"
+    zone_type: "公共服务用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "医疗"
+
+  - code: "0810"
+    name: "公园与绿地"
+    gb_ref: "0810"
+    zone_type: "公共服务用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "公园绿地"
+
+  - code: "0900"
+    name: "特殊用地"
+    gb_ref: "09"
+    zone_type: "公共服务用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "特殊用地"
+
+  - code: "2122"
+    name: "公共服务设施用地"
+    gb_ref: "0800"
+    zone_type: "公共服务用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "公服设施"
+
+  - code: "2125"
+    name: "景观与绿化用地"
+    gb_ref: "1401"
+    zone_type: "公共服务用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "景观绿化"
+
+  # ── 交通用地 → 村庄建设区 ──
+  - code: "1000"
+    name: "交通运输用地"
+    gb_ref: "10"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "交通"
+
+  - code: "1001"
+    name: "铁路用地"
+    gb_ref: "1001"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "铁路"
+
+  - code: "1002"
+    name: "轨道交通用地"
+    gb_ref: "1002"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "轨道"
+
+  - code: "1003"
+    name: "公路用地"
+    gb_ref: "1003"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "公路"
+
+  - code: "1004"
+    name: "机场用地"
+    gb_ref: "1004"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "机场"
+
+  - code: "1005"
+    name: "港口码头用地"
+    gb_ref: "1005"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "港口"
+
+  - code: "1006"
+    name: "农村道路"
+    gb_ref: "1006"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "农村道路"
+
+  - code: "1040"
+    name: "管道运输用地"
+    gb_ref: "1040"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "管道"
+
+  - code: "2123"
+    name: "基础设施用地"
+    gb_ref: "1300"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "基础设施"
+
+  - code: "2126"
+    name: "村内交通用地"
+    gb_ref: "0601"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "村内交通"
+
+  - code: "2200"
+    name: "对外交通用地"
+    gb_ref: "12"
+    zone_type: "交通用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "对外交通"
+
+  # ── 商业用地 → 村庄建设区 ──
+  - code: "0500"
+    name: "商服用地"
+    gb_ref: "05"
+    zone_type: "商业用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "商服"

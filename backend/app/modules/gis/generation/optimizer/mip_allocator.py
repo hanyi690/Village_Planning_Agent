@@ -30,8 +30,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # DLBM → Planning Zone: import from single source (schema.py)
 # ---------------------------------------------------------------------------
-from ...schema import DLBM_TO_PLANNING_ZONE, PROTECTED_DLBM_CODES
-from ...schema.encodings import dlbm_to_planning_zone
+from ...schema import DLBM_TO_PLANNING_ZONE, PROTECTED_DLBM_CODES, dlbm_to_planning_zone
 
 # Cross-zone preference cost matrix (symmetric-ish)
 # Same zone = 0, compatible zones = low cost, forbidden zones = high cost

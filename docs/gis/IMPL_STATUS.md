@@ -1,6 +1,6 @@
 # GIS 系统 — 实现状态与差距分析
 
-> 审计日期: 2026-07-15 | 对比基线: `docs/gis/DESIGN_GOALS.md` | 分支: `feature/gis-layout-engine`
+> 审计日期: 2026-07-16 | 对比基线: `docs/gis/DESIGN_GOALS.md` | 分支: `feature/gis-layout-engine`
 
 ## 1. 总览
 
@@ -31,16 +31,20 @@
 
 | 功能                                     | 文件 |
 | ---------------------------------------- | ---- |
-| **统一分类 Schema** (83条 LandUseClass)    | `zone_schema/schema.py` ★ |
-| DLBM/GHYTBM → 8 功能分区 (从 schema 派生) | `zone_schema/encodings.py` |
-| DLBM → 6 规划分区 (从 schema 派生)        | `zone_schema/encodings.py` |
-| ECOLOGICAL/FORESTRY 等 7 组代码集 (从 schema 派生) | `zone_schema/code_sets.py` |
+| **YAML 字典中心** (11 个字典 + 1 个建议表) | `zone_schema/dicts/*.yaml` ★ |
+| DictionaryCenter 加载器 + 版本管理        | `zone_schema/dicts/loader.py` |
+| 候选项建议引擎 (禁止自动决策)             | `zone_schema/dicts/candidate_engine.py` |
+| DLBM/GHYTBM → 8 功能分区 (从 dicts 派生) | `zone_schema/__init__.py` |
+| DLBM → 6 规划分区 (从 dicts 派生)        | `zone_schema/__init__.py` |
+| ECOLOGICAL/FORESTRY 等 7 组代码集 (从 dicts 派生) | `zone_schema/__init__.py` |
+| GHFLBM/GHYTBM/VNE 编码互转 (从 dicts 派生) | `zone_schema/__init__.py` |
+| 三调基数转换 (候选项建议，非自动映射)     | `dicts/sddlbm_to_ydyhfldm.yaml` |
+| GDB 字段默认值规则 (YAML 驱动)            | `dicts/field_defaults.yaml` |
 | GB/T 21010 标准配色 (8功能+6规划+3三区)    | `zone_schema/colors.py` |
-| GHFLBM/GHYTBM/VNE 编码互转               | `zone_schema/encodings.py` |
-| LLM prompt 结构化分类表格 (自动注入)       | `schema.to_prompt_table()` |
+| LLM prompt 结构化分类表格 (自动注入)       | `SCHEMA.to_prompt_table()` |
 | GB/T 21010 合规: 商品林(1340)→农业用地     | 三大类对照表，已修正 |
 
-**架构变更**: 2026-07-15 从 20 个散落 dict/set → 1 个 `schema.py` 单一真相源。LLM prompt 不再手写 DLBM 示例，改为 `SCHEMA.to_prompt_table()` 自动注入结构化分类表格。
+**架构变更**: 2026-07-16 从 `schema.py` + `encodings.py` + `code_sets.py` 硬编码 Python 字典 → `dicts/` YAML 字典中心。核心语义原则：系统内不存在"映射"概念，只有"候选项建议"。一对多情况返回 `ClassificationProposal(needs_human_decision=True)`，Agent 禁止自动决策。
 
 ### 2.3 PARSE（意图解析） ✅
 

@@ -1,6 +1,6 @@
 # GIS 模块架构与调用关系
 
-> 更新日期: 2026-07-15
+> 更新日期: 2026-07-16
 
 ## 模块架构总览
 
@@ -32,7 +32,8 @@
 │ render.py    │ │ data/      │ │                       │
 │ export.py    │ │ validation/│ │                       │
 │ analytics.py │ │ zone_schema│ │                       │
-│ _helpers.py  │ │   schema.py│ ← 统一分类真相源        │
+│ _helpers.py  │ │   dicts/   │ ← YAML 字典中心 (SOT) │
+│              │ │   schema.py│ ← 便捷封装层            │
 └──────────────┘ └────────────┘ └───────────────────────┘
 ```
 
@@ -44,9 +45,10 @@
 |-------------|------|
 | `engine.py` | 核心引擎，编排 KG→CONFLICT→ALLOCATE→GENERATE 管线 |
 | `planning_intent.py` | UnifiedSpatialIntent 数据结构 |
-| `zone_schema/schema.py` | ★ 统一分类 Schema — 全部 DLBM 分类的单一真相源 |
-| `zone_schema/encodings.py` | 编码映射（从 schema 派生） |
-| `zone_schema/code_sets.py` | 编码集合（从 schema 派生） |
+| `zone_schema/dicts/` | ★ YAML 字典中心 — 11 个编码字典 + 1 个转换建议表，全部编码数据的单一真相源 |
+| `zone_schema/dicts/loader.py` | CodeDictionary / ProposalTable / DictionaryCenter 加载器 |
+| `zone_schema/dicts/candidate_engine.py` | 候选项建议引擎 — 禁止自动决策，返回候选列表供人工选择 |
+| `zone_schema/schema.py` | LandUseClass + ClassificationSchema（从 dicts/ 派生） |
 | `zone_schema/colors.py` | GB/T 21010 国标色卡 |
 | `data/fetcher.py` | GIS 数据获取（水系/道路/居民点/边界） |
 | `data/gdb_schema.py` | GDB 12 层字段标准定义 |
@@ -164,8 +166,9 @@
 ### 2. LLM Prompt 分类注入
 
 ```
-schema.py (83条 LandUseClass)
-    → SCHEMA.to_prompt_table()
+dicts/dlbm.yaml (83条 DLBM 分类数据)
+    → DictionaryCenter.get("dlbm")
+    → SCHEMA.to_prompt_table() 或 CodeDictionary.to_prompt_table()
     → | DLBM | 名称 | 功能分区(L1) | 规划分区(L2) | 三区(L3) | GB/T |
       | 1340 | 商品林 | 农业用地 | 林业发展区 | 农业空间 | 0301 |
     → 注入 PARSE_AGENT_SYSTEM_PROMPT + SPATIAL_LAYOUT_PARSE_PROMPT
@@ -247,8 +250,9 @@ GeoJSON 数据集 (water, road, residential, boundary)
 
 ## 关键设计特点
 
-1. **统一分类 Schema**: `zone_schema/schema.py` 为全部 DLBM 分类的单一真相源，`encodings.py`/`code_sets.py`/`prompts.py` 均从中派生
-2. **双路径 + 三路对比**: gen(人工规划文本) vs plan(L3报告) vs planned/ (人工绘制GIS) 三条线独立运行后对比
+1. **YAML 字典中心**: `zone_schema/dicts/` 为全部编码数据的单一真相源（11 个 YAML 字典 + 1 个转换建议表），`schema.py` 从 dicts/ 派生便捷符号。标准更新只需改 YAML，无需改代码
+2. **候选项建议而非映射**: `CandidateEngine` 替代旧的"映射"概念。一对多情况返回 `ClassificationProposal(needs_human_decision=True)`，Agent 禁止自动决策
+3. **双路径 + 三路对比**: gen(人工规划文本) vs plan(L3报告) vs planned/ (人工绘制GIS) 三条线独立运行后对比
 3. **LLM prompt 结构化注入**: `SCHEMA.to_prompt_table()` 自动生成分类表格注入 prompt，不再手写 DLBM 示例
 4. **GIS 约束注入**: GISMetricsCalculator 计算实测面积约束，同时注入 LLM prompt 和 KG 三元组
 5. **Intent 解析因子感知缓存**: PARSE_VERSION + LLM_MODEL + 内容hash 联合作为缓存键

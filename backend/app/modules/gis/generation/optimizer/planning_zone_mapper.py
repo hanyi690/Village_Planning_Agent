@@ -32,8 +32,6 @@ from ...schema import (
     GRASSLAND_CODES,
     FOREST_CODES,
     WATER_CODES,
-)
-from ...schema.encodings import (
     PLANNING_ZONE_TO_PRIMARY_ZONE,
     PLANNING_ZONE_NAMES,
     PRIMARY_ZONE_NAMES,

@@ -408,6 +408,29 @@ def get_gdb_layers_by_category(category: str) -> Dict[str, LayerDef]:
 # GeoJSON → GDB field enrichment
 # ============================================
 
+def _load_field_rules() -> Dict[str, Dict[str, Any]]:
+    """Load field default rules from DictionaryCenter."""
+    from .dicts.loader import get_center
+    center = get_center()
+    fd = center.get("field_defaults")
+    rules = {}
+    for entry in fd.raw.get("field_rules", []):
+        field_name = entry.get("field", "")
+        if field_name:
+            rules[field_name] = entry
+    return rules
+
+
+_field_rules: Optional[Dict[str, Dict[str, Any]]] = None
+
+
+def _get_field_rules() -> Dict[str, Dict[str, Any]]:
+    global _field_rules
+    if _field_rules is None:
+        _field_rules = _load_field_rules()
+    return _field_rules
+
+
 def enrich_gdb_fields(
     geojson: Dict[str, Any],
     gdb_key: str,
@@ -436,76 +459,56 @@ def enrich_gdb_fields(
         return geojson
 
     required_fields = defn["fields"]
-    category = defn.get("category", "current")
+    rules = _get_field_rules()
+    params = {"xzqhdm": xzqhdm, "xzqhmc": xzqhmc}
 
     for feat in geojson["features"]:
         props = feat.setdefault("properties", {})
 
         for field_name, field_type in required_fields:
             if field_name in props and props[field_name] is not None:
-                continue  # already present
+                continue
 
-            # Generate sensible defaults based on field name and type
-            if field_name == "BSM":
-                props[field_name] = ""  # filled later by BSM generator
-            elif field_name == "YSDM":
+            rule = rules.get(field_name)
+
+            # Rule 1: copy from another field
+            if rule and rule.get("copy_from"):
+                source_field = rule["copy_from"]
+                props[field_name] = str(props.get(source_field, "")).strip()
+                continue
+
+            # Rule 2: from function parameter
+            if rule and rule.get("from_param"):
+                param_name = rule["from_param"]
+                props[field_name] = params.get(param_name, "")
+                continue
+
+            # Rule 3: lookup table
+            if rule and rule.get("lookup") and rule.get("depends_on"):
+                depends_field = rule["depends_on"]
+                depends_value = props.get(depends_field, "")
+                if depends_value:
+                    props[field_name] = _lookup_field(rule["lookup"], depends_value)
+                else:
+                    props[field_name] = ""
+                continue
+
+            # Rule 4: YSDM lookup (special: depends on gdb_key)
+            if field_name == "YSDM":
                 props[field_name] = _default_ysdm(gdb_key)
-            elif field_name == "DJZQMC":
-                props[field_name] = xzqhmc
-            elif field_name == "DJZQDM":
-                props[field_name] = xzqhdm
-            elif field_name == "XZQHDM":
-                props[field_name] = xzqhdm
-            elif field_name in ("XZQHMC", "XZQHM"):
-                props[field_name] = xzqhmc
-            elif field_name == "LX":
-                props[field_name] = "有条件建设区"
-            elif field_name == "GHYTMC":
-                # Try to derive from existing DLBM or zone_type
-                from . import get_zone_type_for_ghytbm, GHYTMC_TO_ZONE_TYPE
-                ghytbm = props.get("GHYTBM", "")
-                if ghytbm:
-                    from . import get_ghytmc_for_ghytbm
-                    props[field_name] = get_ghytmc_for_ghytbm(ghytbm)
-                else:
-                    props[field_name] = ""
-            elif field_name == "GHYTBM":
-                props[field_name] = ""
-            elif field_name == "GHFLBM":
-                props[field_name] = ""
-            elif field_name == "QMGHFLBM":
-                props[field_name] = props.get("GHFLBM", "")
-            elif field_name == "QMDLBM":
-                props[field_name] = props.get("DLBM", "")
-            elif field_name == "DLMC":
-                dlbm = props.get("DLBM", "")
-                if dlbm:
-                    from . import DLBM_TO_DLMC
-                    props[field_name] = DLBM_TO_DLMC.get(dlbm, "")
-                else:
-                    props[field_name] = ""
-            elif field_name == "SDDLBM":
-                props[field_name] = str(props.get("DLBM", "")).strip()
-            elif field_name == "SDDLMC":
-                props[field_name] = str(props.get("DLMC", "")).strip()
-            elif field_name in ("MJ", "DLMJ", "JBNT_MJ"):
-                # Will be computed from geometry later
-                props[field_name] = 0.0
-            elif field_name == "MS":
-                props[field_name] = "无"
-            elif field_name == "TBH":
-                props[field_name] = ""
-            elif field_name == "BH":
-                props[field_name] = ""
-            elif field_name == "LYYSDM":
-                props[field_name] = ""
-            elif field_name in ("BZ", "分类"):
-                props[field_name] = ""
-            elif field_name == "注记":
-                props[field_name] = ""
-            elif field_name.startswith("Shape_") or field_name.startswith("SHAPE_"):
-                pass  # computed from geometry by GIS engine
-            elif field_type.startswith("float"):
+                continue
+
+            # Rule 5: geometry-computed fields
+            if field_name.startswith("Shape_") or field_name.startswith("SHAPE_"):
+                continue
+
+            # Rule 6: explicit default from rule
+            if rule and "default" in rule:
+                props[field_name] = rule["default"]
+                continue
+
+            # Fallback: type-based default
+            if field_type.startswith("float"):
                 props[field_name] = 0.0
             elif field_type.startswith("int"):
                 props[field_name] = 0
@@ -513,6 +516,17 @@ def enrich_gdb_fields(
                 props[field_name] = ""
 
     return geojson
+
+
+def _lookup_field(lookup_name: str, value: str) -> str:
+    """Resolve a field value via a named lookup table."""
+    from . import DLBM_TO_DLMC, get_ghytmc_for_ghytbm
+
+    if lookup_name == "dlbm_to_dlmc":
+        return DLBM_TO_DLMC.get(value, "")
+    if lookup_name == "ghytbm_to_ghytmc":
+        return get_ghytmc_for_ghytbm(value)
+    return ""
 
 
 def _default_ysdm(gdb_key: str) -> str:

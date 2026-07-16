@@ -228,7 +228,7 @@ app/services/modules/gis/ # 纯服务层 (无 @tool)
 
 ## 4. 编码体系
 
-三套正交编码，统一定义在 `zone_schema/schema.py`（**单一真相源**；`encodings.py` 和 `code_sets.py` 均从中自动派生）：
+三套正交编码，统一定义在 `zone_schema/dicts/*.yaml`（**YAML 字典中心单一真相源**；`schema.py` 和 `__init__.py` 均从中自动派生）：
 
 | 体系                    | 来源                      | 用途                        | 示例                              |
 | ----------------------- | ------------------------- | --------------------------- | --------------------------------- |
@@ -262,7 +262,21 @@ app/services/modules/gis/ # 纯服务层 (无 @tool)
 | `1340` | 商品林 | **农业用地** | 林业发展区 | 三大类对照表：全部林地→农用地 |
 | `1350` | 生态林 | 生态绿地           | 林业发展区 | 生态功能：水源涵养、生物多样性 |
 
-编码覆盖：金田村实测 660 地块 100% 可映射。新增/修改分类只需改 `schema.py` 一处，LLM prompt 自动注入结构化分类表格。
+编码覆盖：金田村实测 660 地块 100% 可映射。新增/修改分类只需改 `dicts/*.yaml`，无需改代码。LLM prompt 自动注入结构化分类表格。
+
+### 候选项建议引擎
+
+系统内**不存在"映射"概念**，只有"候选项建议"：
+
+- `resolve_mapping` → `propose_classification_candidates`：输出是"建议"，不是"结果"
+- `MappingResult` → `ClassificationProposal`：返回候选项列表，由规划师选取
+- `target` → `candidate`：YAML 中目标字段改名，断绝"自动映射"语义
+- Agent 禁止在文本无明确用途时自动调用 `propose()`，只在用户主动问"这块地能做什么"时才返回候选项
+
+三种置信度：
+- `exact`：一一对应，`needs_human_decision=False`
+- `conditional`：一对多 + context 匹配，可缩小范围
+- `ambiguous`：无明确候选，`needs_human_decision=True`
 
 ## 5. 工具流水线
 

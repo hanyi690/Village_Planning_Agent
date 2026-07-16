@@ -1,0 +1,47 @@
+# 三线管控图层定义
+version: "2026_GUANGDONG_V1"
+standard: "三区三线"
+
+layers:
+  - key: "ecological_redline"
+    color: "#FF0000"
+    line_style: "dash"
+    fill_opacity: "0.0"
+    stroke_width: "2.5"
+    label: "生态保护红线"
+    gdb_key: "ecological_redline"
+
+  - key: "farmland_protection"
+    color: "#00AA00"
+    line_style: "solid"
+    fill_opacity: "0.15"
+    stroke_width: "2.0"
+    label: "永久基本农田"
+    gdb_key: "farmland_protection"
+
+  - key: "historical_protection"
+    color: "#FF8800"
+    line_style: "dot-dash"
+    fill_opacity: "0.0"
+    stroke_width: "2.0"
+    label: "历史文化保护线"
+    gdb_key: "historical_protection"
+
+construction_zone:
+  color: "#FF4444"
+  fill_opacity: "0.2"
+  stroke_width: "1.5"
+  line_style: "solid"
+  label: "有条件建设区"
+  lx_field: "有条件建设区"
+  gdb_key: "construction_zone"
+
+annotation_categories:
+  - key: "现状设施点"
+    value: "current"
+  - key: "规划设施点"
+    value: "planned"
+  - key: "地名"
+    value: "toponym"
+  - key: "水系"
+    value: "hydrology"

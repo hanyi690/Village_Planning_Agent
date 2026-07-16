@@ -1,7 +1,7 @@
-"""Encoding Registry — auto-derived from schema/classification.py _CLASSES.
+"""Encoding Registry — auto-derived from DictionaryCenter.
 
 All DLBM ↔ zone_type ↔ planning_zone mappings are derived lazily from
-the single source of truth (_CLASSES list). No manual lookup tables.
+the YAML-driven Code Dictionary Center. No manual lookup tables.
 """
 
 from __future__ import annotations
@@ -16,10 +16,10 @@ logger = get_logger(__name__)
 
 @dataclass
 class EncodingRegistry:
-    """Central encoding lookup, fully derived from zone_schema._CLASSES.
+    """Central encoding lookup, fully derived from DictionaryCenter.
 
     Usage:
-        reg = EncodingRegistry.from_schema()
+        reg = EncodingRegistry.from_center()
         zone = reg.dlbm_to_zone["0101"]  # "农业用地"
         planning = reg.dlbm_to_planning["0101"]  # "农田保护区"
     """
@@ -37,35 +37,36 @@ class EncodingRegistry:
     zone_colors: Dict[str, str]        # zone_type → hex color (from colors.py)
 
     # GHFLBM → VNE mapping (住房和城乡建设部用地分类)
-    # populated from planned/landuse.geojson empirical data or manual config
     ghflbm_to_vne: Dict[str, str]
 
     @classmethod
-    def from_schema(cls) -> "EncodingRegistry":
-        """Build the registry from schema._CLASSES."""
-        from .classification import _CLASSES
+    def from_center(cls) -> "EncodingRegistry":
+        """Build the registry from DictionaryCenter."""
+        from .dicts.loader import get_center
         from .colors import PLANNING_ZONE_COLORS
 
-        dlbm_to_zone: Dict[str, str] = {}
-        dlbm_to_planning: Dict[str, str] = {}
-        dlbm_to_primary: Dict[str, str] = {}
-        dlbm_to_category_sets: Dict[str, tuple[str, ...]] = {}
-        dlbm_to_name: Dict[str, str] = {}
+        center = get_center()
+        dlbm = center.get("dlbm")
 
-        for entry in _CLASSES:
-            dlbm_to_zone[entry.code] = entry.zone_type
-            dlbm_to_planning[entry.code] = entry.planning_zone
-            dlbm_to_primary[entry.code] = entry.primary_zone
-            dlbm_to_category_sets[entry.code] = entry.category_sets
-            dlbm_to_name[entry.code] = entry.name
+        dlbm_to_zone = dlbm.to_dict("code", "zone_type")
+        dlbm_to_planning = dlbm.to_dict("code", "planning_zone")
+        dlbm_to_primary = dlbm.to_dict("code", "primary_zone")
+        dlbm_to_name = dlbm.to_dict("code", "name")
+
+        dlbm_to_category_sets: Dict[str, tuple[str, ...]] = {}
+        for entry in dlbm.raw.get("classes", []):
+            code = str(entry.get("code", ""))
+            cats = tuple(entry.get("categories", []))
+            if code:
+                dlbm_to_category_sets[code] = cats
 
         zone_types = sorted(set(dlbm_to_zone.values()))
         planning_zones = sorted(set(dlbm_to_planning.values()))
         primary_zones = sorted(set(dlbm_to_primary.values()))
 
         logger.info(
-            "[EncodingRegistry] Built from %d classes: %d zone_types, %d planning_zones, %d primary_zones",
-            len(_CLASSES), len(zone_types), len(planning_zones), len(primary_zones),
+            "[EncodingRegistry] Built from DictionaryCenter: %d zone_types, %d planning_zones, %d primary_zones",
+            len(zone_types), len(planning_zones), len(primary_zones),
         )
 
         return cls(
@@ -126,7 +127,7 @@ def get_encoding_registry() -> EncodingRegistry:
     """Get the module-level EncodingRegistry singleton."""
     global _registry
     if _registry is None:
-        _registry = EncodingRegistry.from_schema()
+        _registry = EncodingRegistry.from_center()
     return _registry
 
 

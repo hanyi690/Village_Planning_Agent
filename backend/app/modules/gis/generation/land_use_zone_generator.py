@@ -148,9 +148,7 @@ def _build_dlbm_to_vne() -> Dict[str, str]:
     Derivation chain: DLBM → GHYTBM → VNE
     Falls back to zone_type → VNE heuristic when GHYTBM unavailable.
     """
-    from app.modules.gis.schema.code_sets import GHYTBM_TO_VNE
-    from app.modules.gis.schema.encodings import DLBM_TO_ZONE_TYPE
-    from app.modules.gis.schema import VNE_TO_ZONE_TYPE
+    from app.modules.gis.schema import GHYTBM_TO_VNE, DLBM_TO_ZONE_TYPE, VNE_TO_ZONE_TYPE
 
     mapping: Dict[str, str] = {}
 
@@ -241,7 +239,7 @@ class LandUseZoneGenerator:
                 # Determine VNE code
                 vne_code = ""
                 if ghytbm:
-                    from app.modules.gis.schema.code_sets import GHYTBM_TO_VNE
+                    from app.modules.gis.schema import GHYTBM_TO_VNE
                     vne_code = GHYTBM_TO_VNE.get(ghytbm, "")
                 if not vne_code:
                     vne_code = dlbm_to_vne.get(dlbm, "E23")

@@ -1,0 +1,96 @@
+# GDB 字段默认值规则 — 替代 gdb.py enrich_gdb_fields() 硬编码 if/elif 链
+version: "2026_GUANGDONG_V1"
+
+field_rules:
+  # ── 标识字段 ──
+  - field: "BSM"
+    default: ""
+    generator: "bsm_sequence"
+
+  # ── 要素代码 ──
+  - field: "YSDM"
+    default: "2001010100"
+    lookup: "ysdm_defaults"
+
+  # ── 行政区划 ──
+  - field: "DJZQMC"
+    from_param: "xzqhmc"
+
+  - field: "DJZQDM"
+    from_param: "xzqhdm"
+
+  - field: "XZQHDM"
+    from_param: "xzqhdm"
+
+  - field: "XZQHMC"
+    from_param: "xzqhmc"
+
+  - field: "XZQHM"
+    from_param: "xzqhmc"
+
+  # ── 规划用途名称 ──
+  - field: "GHYTMC"
+    lookup: "ghytbm_to_ghytmc"
+    depends_on: "GHYTBM"
+
+  - field: "GHYTBM"
+    default: ""
+
+  - field: "GHFLBM"
+    default: ""
+
+  - field: "QMGHFLBM"
+    copy_from: "GHFLBM"
+
+  - field: "QMDLBM"
+    copy_from: "DLBM"
+
+  # ── 地类名称 ──
+  - field: "DLMC"
+    lookup: "dlbm_to_dlmc"
+    depends_on: "DLBM"
+
+  - field: "SDDLBM"
+    copy_from: "DLBM"
+
+  - field: "SDDLMC"
+    copy_from: "DLMC"
+
+  # ── 面积字段 ──
+  - field: "MJ"
+    default: 0.0
+    computed: true
+
+  - field: "DLMJ"
+    default: 0.0
+    computed: true
+
+  - field: "JBNT_MJ"
+    default: 0.0
+    computed: true
+
+  # ── 描述字段 ──
+  - field: "MS"
+    default: "无"
+
+  - field: "TBH"
+    default: ""
+
+  - field: "BH"
+    default: ""
+
+  - field: "LYYSDM"
+    default: ""
+
+  - field: "LX"
+    default: "有条件建设区"
+
+  # ── 通用空字符串字段 ──
+  - field: "BZ"
+    default: ""
+
+  - field: "分类"
+    default: ""
+
+  - field: "注记"
+    default: ""
