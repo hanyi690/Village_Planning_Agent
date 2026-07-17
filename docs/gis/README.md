@@ -232,7 +232,19 @@ ogr2ogr -f "GeoJSON" \
 
 ---
 
-## 七、参考标准
+## 七、Schema 参考
+
+Schema 子包的完整技术文档见 [SCHEMA_REFERENCE.md](SCHEMA_REFERENCE.md)，涵盖：
+- 三大正交编码体系 (DLBM/GHYTBM, YDYHFLDM, V/N/E) 的设计原理与互转
+- DictionaryCenter YAML 字典中心的 13 个字典详解
+- 14 层 GDB 输出架构与广东省规范要求的 4 个必出图层
+- QMDLTB 期末地类图斑 20 必填字段与 JSYDGZQ 管制区编码
+- 动态分区引擎决策规则与双评价指南对应
+- 省级扩展指南
+
+---
+
+## 八、参考标准
 
 | 标准 | 用途 | 说明 |
 |------|------|------|
