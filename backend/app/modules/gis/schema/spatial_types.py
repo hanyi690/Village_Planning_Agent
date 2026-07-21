@@ -6,10 +6,10 @@
 
 类型分组:
   Group A: 行政区划 (AdminBoundary)
-  Group C: 现状要素 (CurrentFeatures)
-  Group D 规划管控要素 (PlannedControls)
-:
-Group B (地类图斑 LandUse) 定义在 ingestion.py 中.
+  Group B: 地类图斑 (LandUse) — 基期年现状 + 目标年规划用地分类
+  Group C: 基期年现状要素 (CurrentFeatures)
+  Group D: 目标年规划要素 (Planned)
+  Group E: 基础地理信息要素 (DLG)
 """
 
 from __future__ import annotations
@@ -17,7 +17,38 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
-from .ingestion import SpatialFeature
+
+# ── 空间要素基类 (所有 Group 共享) ──
+
+GB_T21010 = "gbt21010"
+TUGUI = "tugui"
+APPENDIX5 = "appendix5"
+GHFLBM_SYS = "ghflbm"
+YDYHFL = "ydyhfldm"
+VNE = "vne"
+
+
+@dataclass
+class SpatialFeature:
+    """所有空间要素的统一基类 — 从 GeoJSON Feature 解析。
+
+    共享字段:
+      - geometry: GeoJSON 几何对象 (必选, 无默认值)
+      - bsm: 标识码 (必选, 流水编号)
+      - ysdm: 要素代码 (必选, 10位)
+      - _raw: 原始 properties dict (调试用, 禁止业务使用)
+    """
+
+    geometry: Dict[str, Any]      # GeoJSON geometry
+
+    bsm: str = ""                 # 标识码 (必选, 流水编号)
+    ysdm: str = ""                # 要素代码 (必选, 10位)
+
+    _raw: Dict[str, Any] = field(default_factory=dict, repr=False)
+
+    @property
+    def geometry_type(self) -> str:
+        return self.geometry.get("type", "Unknown")
 
 
 # ============================================================
@@ -52,6 +83,97 @@ class AdminBoundaryLine(SpatialFeature):
     djzqdm: str = ""       # 登记区划代码 (12位)
     boundary_type: int = 0 # 界线类型 (670500=村界)
     boundary_desc: str = "" # 界线说明 (≤20字符)
+
+
+# ============================================================
+# Group B: 地类图斑 (LandUse — Base Year / Planned)
+# ============================================================
+# 广东省技术指南附录5 村庄规划用地分类表
+# 基期年现状: CurrentLandUseParcel (dlbm=appendix5, sddlbm=appendix5)
+# 目标年规划: PlannedLandUseParcel (qmdlbm=tugui, ghytbm=appendix5, ghflbm=ghflbm)
+
+
+# ── 地块基类 + 现状/规划子类 ──
+
+
+@dataclass
+class BaseLandUseParcel(SpatialFeature):
+    """地块基类 — 现状层和规划层的共享属性。
+
+    所有下游泛型代码使用此类处理不区分层的数据。
+    需要层特定字段时使用 CurrentLandUseParcel 或 PlannedLandUseParcel。
+    """
+
+    # ── 地类编码 (共享, 但编码体系因层而异) ──
+    dlbm: str = ""
+    dlbm_system: str = ""    # 现状=appendix5, 规划=tugui
+
+    # ── 通用属性 ──
+    name: str = ""           # DLMC/GHYTMC 等名称字段
+    area_sqm: float = 0.0    # 面积 (平方米)
+
+    # ── 计算属性 ──
+    zone_type: str = ""       # 从编码查表获得 (功能分区)
+    planning_zone: str = ""   # 从编码查表获得 (规划分区)
+    primary_zone: str = ""    # 从编码查表获得 (三区三线)
+
+    @property
+    def primary_code(self) -> str:
+        """功能分区的首选编码 (基类默认用 DLBM)."""
+        return self.dlbm
+
+    @property
+    def primary_system(self) -> str:
+        """primary_code 对应的编码体系."""
+        return self.dlbm_system
+
+
+@dataclass
+class CurrentLandUseParcel(BaseLandUseParcel):
+    """现状地类图斑 — DLBM 使用 appendix5 编码 (编制实践, 非规范要求).
+
+    独有字段: sddlbm (三调地类编码, 从 DLBM 复制, 值同 appendix5).
+    无规划字段: ghytbm, ghflbm, qmdlbm 等均不存在.
+    """
+
+    sddlbm: str = ""
+    sddlbm_system: str = ""  # appendix5 (从 DLBM 复制)
+
+
+@dataclass
+class PlannedLandUseParcel(BaseLandUseParcel):
+    """期末地类图斑 — 多编码体系并存.
+
+    编码体系:
+      dlbm/qmdlbm  → tugui (广东省土规数据库标准)
+      ghytbm        → appendix5 (广东省技术指南附录5)
+      ghflbm/qmghflbm → ghflbm (规划分类编码, 比 appendix5 更粗)
+    """
+
+    qmdlbm: str = ""
+    qmdlbm_system: str = ""      # tugui
+
+    ghytbm: str = ""
+    ghytbm_system: str = ""      # appendix5
+
+    ghytmc: str = ""
+
+    ghflbm: str = ""
+    ghflbm_system: str = ""      # ghflbm
+
+    qmghflbm: str = ""
+    qmghflbm_system: str = ""    # ghflbm
+
+    @property
+    def primary_code(self) -> str:
+        """规划层优先用 GHYTBM(附录5) 做功能分区."""
+        return self.ghytbm or self.dlbm
+
+    @property
+    def primary_system(self) -> str:
+        """primary_code 对应的编码体系."""
+        return self.ghytbm_system or self.dlbm_system
+
 
 
 # ============================================================
@@ -104,16 +226,16 @@ class CurrentFacility(SpatialFeature):
 
 @dataclass
 class CurrentAnnotation(SpatialFeature):
-    """现状/规划注记 (点) — 辅助标注类型.
+    """现状注记 (点) — 基期年现状要素, 辅助标注类型.
 
     广东省技术指南未定义"注记"图层, 此为辅助标注,
     不进入汇交成果, 仅用于可视化参考.
-    GDB 导出层: current_annotation, planned_annotation
-    category 取值: 现状设施点/规划设施点/村名
+    GDB 导出层: current_annotation
+    category 取值: 现状设施点/村名
     """
 
     text: str = ""           # 注记文本 (≤100字符)
-    category: str = ""       # 注记分类 (现状设施点/规划设施点/村名)
+    category: str = ""       # 注记分类 (现状设施点/村名)
 
 
 # ============================================================
@@ -256,6 +378,23 @@ class PlannedRoad(SpatialFeature):
     left_ln_fid: str = ""       # 左侧车道要素ID
     right_ln_fid: str = ""      # 右侧车道要素ID
     road_level: str = ""        # 规划道路等级 (村道/乡道/县道)
+
+
+# ── 规划注记 (辅助标注) ──
+
+
+@dataclass
+class PlannedAnnotation(SpatialFeature):
+    """规划注记 (点) — 目标年规划要素, 辅助标注类型.
+
+    与 CurrentAnnotation 字段相同, 但类型独立,
+    确保现状要素和规划要素的数据类型严格分离.
+    GDB 导出层: planned_annotation
+    category 取值: 规划设施点
+    """
+
+    text: str = ""           # 注记文本 (≤100字符)
+    category: str = ""       # 注记分类 (规划设施点)
 
 
 @dataclass
@@ -435,6 +574,14 @@ __all__ = [
     # Group A: Admin
     "AdminArea",
     "AdminBoundaryLine",
+    # Group B: LandUse parcels
+    "SpatialFeature",
+    "BaseLandUseParcel",
+    "CurrentLandUseParcel",
+    "PlannedLandUseParcel",
+    # Encoding constants
+    "GB_T21010", "TUGUI", "APPENDIX5",
+    "GHFLBM_SYS", "YDYHFL", "VNE",
     # Group C: Current features
     "CurrentBuilding",
     "CurrentRoad",
@@ -452,6 +599,8 @@ __all__ = [
     "HistoricalProtection",
     # Group D: Planned infrastructure
     "PlannedRoad",
+    # Group D: Planned annotation
+    "PlannedAnnotation",
     # Group D: Hazard points
     "GeologicalHazardPoint",
     # Group D: Conditional construction

@@ -1,10 +1,10 @@
 """GIS schema — unified data definitions, encodings, and output specifications.
 
 Combines former models/, zone_schema/, and data/gdb_schema.py into one package:
-  - canonical.py        — BBox, CRS, GeoFeature, LandUseParcel, GISDataBundle, GISMetadata
+  - canonical.py        — BBox, CRS, GeoFeature, GISDataBundle, GISMetadata
   - intent.py           — ZoneIntent, FacilityIntent, AxisIntent, UnifiedSpatialIntent
   - pipeline.py         — ConflictItem, ConflictReport, ValidationReport, ExportResult
-  - ingestion.py        — SpatialFeature, BaseLandUseParcel, ingest_*
+  - ingestion.py        — ingest_* (pure injection port); types in spatial_types
   - encoding_registry.py — EncodingRegistry, get_encoding_registry
   - dicts/              — YAML-driven Code Dictionary Center (single source of truth)
   - colors.py           — ZONE_TYPE_COLORS, PLANNING_ZONE_COLORS, color lookup
@@ -57,24 +57,13 @@ from .dicts.candidate_engine import (
     get_candidate_engine,
 )
 
-# ── Ingestion layer (input boundary) ──
+# ── Ingestion layer (pure injection port) ──
 from .ingestion import (
-    SpatialFeature,
-    BaseLandUseParcel,
-    CurrentLandUseParcel,
-    PlannedLandUseParcel,
-    LandUseParcel,
     ingest_landuse,
     ingest_current_landuse,
     ingest_planned_landuse,
     ingest_feature,
     ingest_raster,
-    GB_T21010,
-    TUGUI,
-    APPENDIX5,
-    GHFLBM_SYS,
-    YDYHFL,
-    VNE,
 )
 
 # ── Raster input types (DEM/DOM — not in GDB output) ──
@@ -89,6 +78,14 @@ from .raster_types import (
 
 # ── Spatial feature types (full taxonomy) ──
 from .spatial_types import (
+    # Base + LandUse types (moved from ingestion)
+    SpatialFeature,
+    BaseLandUseParcel,
+    CurrentLandUseParcel,
+    PlannedLandUseParcel,
+    # Encoding constants
+    GB_T21010, TUGUI, APPENDIX5, GHFLBM_SYS, YDYHFL, VNE,
+    # Group A
     AdminArea,
     AdminBoundaryLine,
     CurrentBuilding,
@@ -113,6 +110,7 @@ from .spatial_types import (
     ContourLine,
     ElevationPoint,
     WaterFeature,
+    PlannedAnnotation,
     SPACE_CONTROL_ZONE_TYPES,
     SPACE_CONTROL_ZONE_COLORS,
 )
@@ -223,7 +221,7 @@ __all__ = [
     "SpatialFeature",
     "AdminArea", "AdminBoundaryLine",
     "CurrentBuilding", "CurrentRoad", "CurrentFacility", "CurrentAnnotation",
-    "PlannedRoad", "GeologicalHazardPoint", "ConditionalConstructionZone",
+    "PlannedRoad", "PlannedAnnotation", "GeologicalHazardPoint", "ConditionalConstructionZone",
     "ControlLine", "FarmlandProtection", "EcologicalRedline",
     "CultivatedLandTarget", "UrbanDevBoundary", "VillageDevBoundary",
     "HazardControlLine", "FloodControlLine", "HistoricalProtection",
@@ -247,7 +245,6 @@ __all__ = [
     "ClassificationProposal", "CandidateEngine", "get_candidate_engine",
     # Ingestion (input boundary — typed parcels)
     "BaseLandUseParcel", "CurrentLandUseParcel", "PlannedLandUseParcel",
-    "LandUseParcel",  # Union type from ingestion.py (Current | Planned)
     "GB_T21010", "TUGUI", "APPENDIX5", "GHFLBM_SYS", "YDYHFL", "VNE",
     "ingest_landuse", "ingest_current_landuse", "ingest_planned_landuse",
     "ingest_feature", "ingest_raster",

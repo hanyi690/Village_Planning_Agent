@@ -66,7 +66,7 @@ V/N/E = appendix5 → vne 查表     ← 住建部村庄规划用地分类指南
 >   │     ├── CurrentBuilding     — 现状建筑 (面): 建筑类型, 层数, 面积
 >   │     ├── CurrentRoad         — 现状道路 (线): 道路等级, 宽度, shape_length
 >   │     ├── CurrentFacility     — 现状设施 (点/面): 设施类型, 名称, 服务半径
->   │     └── CurrentAnnotation   — 现状/规划注记 (点): 注记文本, 分类 (辅助标注类型)
+>   │     └── CurrentAnnotation   — 现状注记 (点): 注记文本, 分类 (辅助标注类型)
 >   │
 >   └── Group D: 目标年规划要素 (Planned — Target Year)
 >         ├── ControlLine         — 控制线基类 (面): mj, protection_level
@@ -79,6 +79,7 @@ V/N/E = appendix5 → vne 查表     ← 住建部村庄规划用地分类指南
 >         │     └── FloodControlLine   — 洪涝风险控制线: 洪水频率, 控制高程
 >         ├── GeologicalHazardPoint — 地质灾害点 (点): 灾害类型, 规模
 >         ├── PlannedRoad          — 规划道路 (线): 道路等级, LnType
+>         ├── PlannedAnnotation   — 规划注记 (点): 注记文本, 分类 (独立于 CurrentAnnotation)
 >         ├── HistoricalProtection — 历史文化保护 (点/面): buff_dist, orig_fid
 >         ├── ConditionalConstructionZone — 有条件建设区 (面): bh, lx, mj
 >         ├── LandUseZone         — 土地用途分区 TDYT (表5): tdyfqdm, mj, ytfqmc

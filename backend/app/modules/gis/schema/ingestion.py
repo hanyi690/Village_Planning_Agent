@@ -1,7 +1,8 @@
-"""GIS Data Ingestion Layer — 输入边界，隔绝不规范文件。
+"""GIS Data Ingestion Layer — 空间数据注入端口。
 
-读取原始 GeoJSON → 校验字段编码体系归属 → 产出类型化对象。
-所有下游代码使用 EnrichedLandUseParcel，不再直接操作 GeoJSON properties dict。
+读取原始 GeoJSON / GeoTIFF → 校验字段编码体系归属 → 产出类型化对象。
+所有类型定义 (SpatialFeature, Group A~E) 在 spatial_types.py 中,
+本模块仅负责数据读取、校验和类型化转换。
 
 编码体系:
   gbt21010  — GB/T 21010-2017 三调国标
@@ -27,19 +28,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.utils.logger import get_logger
 
+from .spatial_types import (
+    SpatialFeature, BaseLandUseParcel, CurrentLandUseParcel, PlannedLandUseParcel,
+    GB_T21010, TUGUI, APPENDIX5, GHFLBM_SYS, YDYHFL, VNE,
+)
+
 logger = get_logger(__name__)
-
-
-# ============================================================
-# Encoding system constants
-# ============================================================
-
-GB_T21010 = "gbt21010"
-TUGUI = "tugui"
-APPENDIX5 = "appendix5"
-GHFLBM_SYS = "ghflbm"
-YDYHFL = "ydyhfldm"
-VNE = "vne"
 
 
 # ============================================================
@@ -66,135 +60,6 @@ _LAYER_META = {
     "current_landuse": (_CURRENT_LANDUSE_FIELD_SYSTEMS, APPENDIX5),
     "planned_landuse": (_PLANNED_LANDUSE_FIELD_SYSTEMS, TUGUI),
 }
-
-
-# ============================================================
-# Typed spatial features — 统一基类 + 按空间要素类别分组
-# ============================================================
-#
-#   SpatialFeature               — 所有空间要素基类 (geometry, bsm, ysdm)
-#     ├── BaseLandUseParcel      — 地块共享属性 (dlbm, name, area, zones)
-#     │     ├── CurrentLandUseParcel  — 现状层 (sddlbm)
-#     │     └── PlannedLandUseParcel  — 规划层 (qmdlbm, ghytbm, ghflbm)
-#     ├── AdminArea              — 村级行政区 (面) → spatial_types.py
-#     ├── ControlLine            — 控制线基类 → spatial_types.py
-#     └── ...                    — 其他空间要素 → spatial_types.py
-#
-#   编码体系标记:
-#     dlbm_system:   现状=appendix5, 规划=tugui
-#     sddlbm_system: 现状=appendix5 (从DLBM复制)
-#     qmdlbm_system: 规划=tugui
-#     ghytbm_system: 规划=appendix5
-#     ghflbm_system: 规划=ghflbm
-# ============================================================
-
-from typing import Union
-
-
-@dataclass
-class SpatialFeature:
-    """所有空间要素的统一基类 — 从 GeoJSON Feature 解析。
-
-    共享字段:
-      - geometry: GeoJSON 几何对象 (必选, 无默认值)
-      - bsm: 标识码 (必选, 流水编号)
-      - ysdm: 要素代码 (必选, 10位)
-      - _raw: 原始 properties dict (调试用, 禁止业务使用)
-    """
-
-    geometry: Dict[str, Any]      # GeoJSON geometry
-
-    bsm: str = ""                 # 标识码 (必选, 流水编号)
-    ysdm: str = ""                # 要素代码 (必选, 10位)
-
-    _raw: Dict[str, Any] = field(default_factory=dict, repr=False)
-
-    @property
-    def geometry_type(self) -> str:
-        return self.geometry.get("type", "Unknown")
-
-
-@dataclass
-class BaseLandUseParcel(SpatialFeature):
-    """地块基类 — 现状层和规划层的共享属性。
-
-    所有下游泛型代码使用此类处理不区分层的数据。
-    需要层特定字段时使用 CurrentLandUseParcel 或 PlannedLandUseParcel。
-    """
-
-    # ── 地类编码 (共享, 但编码体系因层而异) ──
-    dlbm: str = ""
-    dlbm_system: str = ""    # 现状=appendix5, 规划=tugui
-
-    # ── 通用属性 ──
-    name: str = ""           # DLMC/GHYTMC 等名称字段
-    area_sqm: float = 0.0    # 面积 (平方米)
-
-    # ── 计算属性 ──
-    zone_type: str = ""       # 从编码查表获得 (功能分区)
-    planning_zone: str = ""   # 从编码查表获得 (规划分区)
-    primary_zone: str = ""    # 从编码查表获得 (三区三线)
-
-    @property
-    def primary_code(self) -> str:
-        """功能分区的首选编码 (基类默认用 DLBM)."""
-        return self.dlbm
-
-    @property
-    def primary_system(self) -> str:
-        """primary_code 对应的编码体系."""
-        return self.dlbm_system
-
-
-@dataclass
-class CurrentLandUseParcel(BaseLandUseParcel):
-    """现状地类图斑 — DLBM 使用 appendix5 编码 (编制实践, 非规范要求).
-
-    独有字段: sddlbm (三调地类编码, 从 DLBM 复制, 值同 appendix5).
-    无规划字段: ghytbm, ghflbm, qmdlbm 等均不存在.
-    """
-
-    sddlbm: str = ""
-    sddlbm_system: str = ""  # appendix5 (从 DLBM 复制)
-
-
-@dataclass
-class PlannedLandUseParcel(BaseLandUseParcel):
-    """期末地类图斑 — 多编码体系并存.
-
-    编码体系:
-      dlbm/qmdlbm  → tugui (广东省土规数据库标准)
-      ghytbm        → appendix5 (广东省技术指南附录5)
-      ghflbm/qmghflbm → ghflbm (规划分类编码, 比 appendix5 更粗)
-    """
-
-    qmdlbm: str = ""
-    qmdlbm_system: str = ""      # tugui
-
-    ghytbm: str = ""
-    ghytbm_system: str = ""      # appendix5
-
-    ghytmc: str = ""
-
-    ghflbm: str = ""
-    ghflbm_system: str = ""      # ghflbm
-
-    qmghflbm: str = ""
-    qmghflbm_system: str = ""    # ghflbm
-
-    @property
-    def primary_code(self) -> str:
-        """规划层优先用 GHYTBM(附录5) 做功能分区."""
-        return self.ghytbm or self.dlbm
-
-    @property
-    def primary_system(self) -> str:
-        """primary_code 对应的编码体系."""
-        return self.ghytbm_system or self.dlbm_system
-
-
-# 联合类型 — 用于同时处理两类地块的泛型代码
-LandUseParcel = Union[CurrentLandUseParcel, PlannedLandUseParcel]
 
 
 # ============================================================
@@ -496,6 +361,7 @@ def _init_feature_registry():
         HazardControlLine, FloodControlLine, HistoricalProtection,
         LandUseZone, ConstructionCtrlZone, PlanningScope,
         ContourLine, ElevationPoint, WaterFeature,
+        PlannedAnnotation,
     )
     _FEATURE_TYPE_REGISTRY.update({
         "admin_area":            (AdminArea,             "current/boundary.geojson"),
@@ -505,7 +371,7 @@ def _init_feature_registry():
         "current_facility":      (CurrentFacility,       "current/facility.geojson"),
         "current_annotation":    (CurrentAnnotation,     "current/annotation.geojson"),
         "planned_road":          (PlannedRoad,           "planned/road.geojson"),
-        "planned_annotation":    (CurrentAnnotation,     "planned/annotation.geojson"),
+        "planned_annotation":    (PlannedAnnotation,     "planned/annotation.geojson"),
         "geological_hazard_pt":  (GeologicalHazardPoint, "planned/geological_hazard_points.geojson"),
         "conditional_construction": (ConditionalConstructionZone, "planned/construction_zone.geojson"),
         "planning_scope":        (PlanningScope,         "planned/boundary.geojson"),
@@ -707,20 +573,10 @@ def ingest_raster(filepath: str, raster_type: str = "dem"):
 
 
 __all__ = [
-    "SpatialFeature",
-    "BaseLandUseParcel",
-    "CurrentLandUseParcel",
-    "PlannedLandUseParcel",
-    "LandUseParcel",
+    # Ingest functions only (type definitions in spatial_types)
     "ingest_landuse",
     "ingest_current_landuse",
     "ingest_planned_landuse",
     "ingest_feature",
     "ingest_raster",
-    "GB_T21010",
-    "TUGUI",
-    "APPENDIX5",
-    "GHFLBM_SYS",
-    "YDYHFL",
-    "VNE",
 ]

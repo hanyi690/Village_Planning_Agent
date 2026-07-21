@@ -664,69 +664,106 @@ async def extract_tables_node(state: ParseAgentState) -> dict:
 # ── Node 2c: extract_projects ───────────────────────────────────────
 
 
-async def extract_projects_node(state: ParseAgentState) -> dict:
-    """Extract spatial operations — two-round: tools exploration → structured output.
+async def _explore_draft_format(
+    state: ParseAgentState,
+    *,
+    section_types: tuple[str, ...],
+    explore_tools: list,
+    explore_system_prompt: str,
+    draft_system_prompt: str,
+    draft_prompt_template: str,
+    format_system_prompt: str,
+    schema_cls: type,
+    log_label: str,
+    post_process: callable = lambda r: r,
+) -> tuple[object | None, str]:
+    """Three-round shared extraction: tool exploration → draft → flash format.
 
-    Round 1: LLM with bind_tools freely queries lookup_code + resolve_place + KG.
-             Tool calls are executed, results fed back into messages.
-    Round 2: LLM with with_structured_output produces ProjectExtractionResult,
-             now enriched with real codes and parcel IDs from tool results.
+    Round 1: thinking LLM + tools (3 rounds of ReAct)
+    Round 2: thinking LLM produces free-text draft
+    Round 3: flash model formats draft into structured Pydantic output
     """
-    from pydantic import BaseModel as _BM
     from langchain_core.messages import AIMessage, ToolMessage
 
-    class ProjectExtractionResult(_BM):
-        operations: List[SpatialOperation] = []
-
     llm = _get_llm()
-    sections_text = _get_sections_text(state, "project_table", "land_use_table", "facility_table", "infrastructure")
+    sections_text = _get_sections_text(state, *section_types)
 
     # ── Round 1: Free exploration with tools ──
-    explore_tools = [lookup_code, resolve_place, query_village_kg]
     explore_msgs = [
-        SystemMessage(content=(
-            "你是村庄规划项目分析助手。对于以下文本中的每个项目，请用工具查询：\n"
-            "1. 用 lookup_code 查询每种出现的 land_use_name 的 GHYTBM 编码\n"
-            "2. 用 resolve_place 查询每个位置描述中地名的 GIS 锚点\n"
-        )),
+        SystemMessage(content=explore_system_prompt),
         HumanMessage(content=sections_text[:6000]),
     ]
-
     explore_llm = llm.bind_tools(explore_tools)
-    tool_results = []  # Collect results compactly
+    tool_results: list[str] = []
     for _round in range(3):
         response = await explore_llm.ainvoke(explore_msgs)
         explore_msgs.append(response)
-
         if not hasattr(response, "tool_calls") or not response.tool_calls:
             break
-
         for tc in response.tool_calls[:8]:
             tool_name = tc.get("name", "")
             tool_args = tc.get("args", {})
             result_str = await _execute_tool_call(tool_name, tool_args)
             explore_msgs.append(ToolMessage(content=str(result_str), tool_call_id=tc["id"]))
-            # Collect compact result (truncated to avoid bloat)
-            tool_results.append(f"[{tool_name}({tool_args.get('land_use_name', tool_args.get('place_name', tool_args.get('template_name', '')))}): {result_str[:200]}]")
+            tool_results.append(f"[{tool_name}(...): {result_str[:200]}]")
 
-    # Compact summary of all tool results
-    tools_summary = "\n".join(tool_results[:30])  # Max 30 entries
-    logger.info("[PARSE:projects] Round 1 done: %d tool results (%d chars)",
-                 len(tool_results), len(tools_summary))
+    tools_summary = "\n".join(tool_results[:30])
+    logger.info("[PARSE:%s] Round 1 done: %d tool results", log_label, len(tool_results))
 
-    # ── Round 2: Structured output with fresh messages + tool summary ──
-    round2_messages = [
-        SystemMessage(content=(
-            "你是村庄规划项目操作提取器。根据以下文本和已知编码/地名信息，提取 SpatialOperation。\n\n"
-            f"已知编码和地名信息（来自工具查询）:\n{tools_summary[:3000]}\n\n"
-            "提取规则: 每个项目生成一个操作。action: create/split/merge/modify/reclassify。"
-        )),
-        HumanMessage(content=sections_text[:6000]),
-    ]
-    result = await _invoke_structured(llm, ProjectExtractionResult, round2_messages)
+    # ── Round 2: Free-text draft from thinking LLM ──
+    draft_prompt = draft_prompt_template.format(
+        tools_summary=tools_summary[:3000],
+        sections_text=sections_text[:6000],
+    )
+    draft_response = await llm.ainvoke([
+        SystemMessage(content=draft_system_prompt),
+        HumanMessage(content=draft_prompt),
+    ])
+    draft_text = draft_response.content if hasattr(draft_response, "content") else str(draft_response)
+    logger.info("[PARSE:%s] Round 2 draft: %d chars", log_label, len(draft_text))
+
+    # ── Round 3: Flash model formats draft into Pydantic ──
+    flash_llm = _get_fast_llm()
+    result = await _invoke_structured(flash_llm, schema_cls, [
+        SystemMessage(content=format_system_prompt),
+        HumanMessage(content=draft_text[:6000]),
+    ])
+    return post_process(result), log_label
+
+
+async def extract_projects_node(state: ParseAgentState) -> dict:
+    """Extract spatial operations — three-round: tools → draft → flash format."""
+    from pydantic import BaseModel as _BM
+
+    class ProjectExtractionResult(_BM):
+        operations: List[SpatialOperation] = []
+
+    result, _ = await _explore_draft_format(
+        state,
+        section_types=("project_table", "land_use_table", "facility_table", "infrastructure"),
+        explore_tools=[lookup_code, resolve_place, query_village_kg],
+        explore_system_prompt=(
+            "你是村庄规划项目分析助手。对于以下文本中的每个项目，请用工具查询：\n"
+            "1. 用 lookup_code 查询每种出现的 land_use_name 的 GHYTBM 编码\n"
+            "2. 用 resolve_place 查询每个位置描述中地名的 GIS 锚点\n"
+        ),
+        draft_system_prompt="你是村庄规划项目提取器。严格使用工具返回的编码和地名，不要自己编造。",
+        draft_prompt_template=(
+            "基于以下原始文本和工具查询结果，用自然语言列出所有项目，每项写明：\n"
+            "action、project_name、land_use_code（必须使用工具查询返回的 ghytbm 编码）、\n"
+            "area_sqm、location_desc、source_text、village_name（来自resolve_place结果）、\n"
+            "parcel_ids（来自resolve_place结果）、confidence。\n\n"
+            "工具查询结果:\n{tools_summary}\n\n"
+            "原始文本:\n{sections_text}"
+        ),
+        format_system_prompt="你是 JSON 格式化器。将以下项目列表严格转换为指定 schema。使用文本中的编码和地名值。",
+        schema_cls=ProjectExtractionResult,
+        log_label="projects",
+    )
     if result is not None:
-        logger.info("[PARSE:projects] Extracted %d operations", len(result.operations))
-        return {"raw_operations": [o.model_dump() for o in result.operations]}
+        ops = [o.model_dump() for o in result.operations]
+        logger.info("[PARSE:projects] Extracted %d operations", len(ops))
+        return {"raw_operations": ops}
     return {"raw_operations": []}
 
 
@@ -734,55 +771,32 @@ async def extract_projects_node(state: ParseAgentState) -> dict:
 
 
 async def extract_targets_node(state: ParseAgentState) -> dict:
-    """Extract planning targets — two-round: tools exploration → structured output."""
-
-    from langchain_core.messages import AIMessage, ToolMessage
-
-    llm = _get_llm()
-    sections_text = _get_sections_text(state, "target", "indicator_table", "spatial_layout")
-
-    # ── Round 1: Free exploration with tools ──
-    explore_tools = [lookup_code, query_village_kg, resolve_place]
-    explore_msgs = [
-        SystemMessage(content=(
+    """Extract planning targets — three-round: tools → draft → flash format."""
+    result, _ = await _explore_draft_format(
+        state,
+        section_types=("target", "indicator_table", "spatial_layout"),
+        explore_tools=[lookup_code, query_village_kg, resolve_place],
+        explore_system_prompt=(
             "你是村庄规划目标分析助手。请用工具查询以下信息：\n"
             "1. lookup_code: 查询 land_use 对应的 GHYTBM 编码\n"
             "2. query_village_kg(template_name='count_by_zone_type'): 查询地类分布\n"
             "3. query_village_kg(template_name='get_designated_zones'): 查询分区邻接\n"
-        )),
-        HumanMessage(content=sections_text[:6000]),
-    ]
-
-    explore_llm = llm.bind_tools(explore_tools)
-    tool_results = []
-    for _round in range(3):
-        response = await explore_llm.ainvoke(explore_msgs)
-        explore_msgs.append(response)
-
-        if not hasattr(response, "tool_calls") or not response.tool_calls:
-            break
-
-        for tc in response.tool_calls[:8]:
-            tool_name = tc.get("name", "")
-            tool_args = tc.get("args", {})
-            result_str = await _execute_tool_call(tool_name, tool_args)
-            explore_msgs.append(ToolMessage(content=str(result_str), tool_call_id=tc["id"]))
-            tool_results.append(f"[{tool_name}({tool_args.get('land_use_name', tool_args.get('template_name', ''))}): {result_str[:200]}]")
-
-    tools_summary = "\n".join(tool_results[:30])
-    logger.info("[PARSE:targets] Round 1 done: %d tool results", len(tool_results))
-
-    # ── Round 2: Structured output with fresh messages + tool summary ──
-    round2_messages = [
-        SystemMessage(content=(
-            "你是村庄规划目标提取器。根据以下文本和已知编码/空间信息，提取规划目标。\n\n"
-            f"已知信息（来自工具查询）:\n{tools_summary[:3000]}"
-        )),
-        HumanMessage(content=sections_text[:6000]),
-    ]
-    result = await _invoke_structured(llm, SpatialPlanningIntent, round2_messages)
+        ),
+        draft_system_prompt="你是村庄规划目标提取器。严格使用工具返回的编码，不要自己编造。",
+        draft_prompt_template=(
+            "基于以下原始文本和工具查询结果，用自然语言列出所有规划目标，包括：\n"
+            "分区目标(land_use + dlbm编码 + area_ratio)、设施(type/status/location_hint)、\n"
+            "发展轴(direction/reference_feature/connects)。\n"
+            "dlbm 必须使用工具查询返回的 ghytbm 编码，不要自己编造。\n\n"
+            "工具查询结果:\n{tools_summary}\n\n"
+            "原始文本:\n{sections_text}"
+        ),
+        format_system_prompt="你是 JSON 格式化器。将以下规划目标列表严格转换为指定 schema。",
+        schema_cls=SpatialPlanningIntent,
+        log_label="targets",
+        post_process=lambda r: (setattr(r, "village_name", state.village_name), r)[1] if r is not None else None,
+    )
     if result is not None:
-        result.village_name = state.village_name
         logger.info(
             "[PARSE:targets] Extracted %d zones, %d facilities, %d axes",
             len(result.zone_targets),
