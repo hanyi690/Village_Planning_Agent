@@ -1,7 +1,10 @@
 
 # GIS 村庄规划系统 — 设计目标
 
-> 版本: 5.0 | 日期: 2026-07-16 | 统一路径：确定性骨架 + ReAct 自适应 + 统一操作执行引擎
+> 版本: 5.1 | 日期: 2026-07-21 | 变更: 对齐新 schema 结构(encodings/rules/references), 六套编码体系, 标注实现状态
+> 
+> **本文档为设计目标/思路文档**。具体的代码实现可能与设计有差异。各节标注了实现状态: ✅已实现 / ⚠️部分实现 / ❌未实现(设计阶段)。
+> Schema 权威参考见 `OUTPUT_ARCHITECTURE.md`。
 
 ## 1. 问题定义
 
@@ -72,36 +75,36 @@ output/{village_name}/
 
 ```
 规划文本（报告/规则/决议/建设项目表）+ SpatialContext（统计+空间关系）
-    ↓
-PARSE Agent (半结构化 ReAct)
-  ├── classify_sections: 文档结构分类（SpatialContext 注入校验自然村名+空间锚点）
+    ↓                                                         ⚠️ 部分实现
+PARSE Agent (半结构化 ReAct)                                   ✅ parse_agent.py 已实现
+  ├── classify_sections: 文档结构分类
   ├── route_by_section: 按段落类型路由提取策略
-  │   ├── extract_regulations → ConstraintSet（管制规则，含 SpatialRule）
-  │   ├── extract_tables + extract_structured_text → 结构化 JSON（表格数据）
-  │   ├── extract_projects + lookup_land_use_code → OperationSequence（建设项目，含 SpatialAnchor）
-  │   └── extract_targets → IntentJSON（规划指标，含空间偏好）
-  └── validate_and_merge: 校验一致性（面积守恒/编码有效/空间锚定合理）+ 合并（最多2轮重试）
+  │   ├── extract_regulations → ConstraintSet
+  │   ├── extract_tables → 结构化 JSON
+  │   ├── extract_projects → OperationSequence
+  │   └── extract_targets → IntentJSON
+  └── validate_and_merge: 校验一致性 + 合并
     ↓
 OperationSequence(空间锚定) + ConstraintSet(可计算规则) + IntentJSON(空间偏好)
-    ↓
-┌─ ConstraintSet → KG（约束三元组 + 合规规则）───┐
-│                                                 │
-└─ OperationSequence → EXECUTE_OPERATIONS         │
-     ├── 空间定位（地名解析 → 候选图斑）         │
-     ├── 用途查表（DictionaryCenter → 编码）      │
-     ├── 合规预检（KG约束 + 冲突检测）           │
-     ├── 人工确认（确认卡片 / 批量确认）         │
-     └── 执行 + 变更日志                         │
+    ↓                                                         ❌ 以下未实现
+┌─ ConstraintSet → KG（约束三元组 + 合规规则）
+│
+└─ OperationSequence → EXECUTE_OPERATIONS
+     ├── 空间定位（地名解析 → 候选图斑）
+     ├── 用途查表（DictionaryCenter → 编码）
+     ├── 合规预检（KG约束 + 冲突检测）
+     ├── 人工确认（确认卡片 / 批量确认）
+     └── 执行 + 变更日志
     ↓
 CONFLICT（跨维度冲突检测）
     ↓
 EXECUTE_OPERATIONS（逐条执行操作序列）
-    ├── 批量场景: 整村660 reclassify → 按需调用 optimize_allocation (MIP)
-    └── 逐条场景: 1-5 操作 → 直接执行
+    ├── 批量场景 → 按需调用 optimize_allocation (MIP)
+    └── 逐条场景 → 直接执行
     ↓
 VALIDATE（8 项空间检查 + 合规验证，最多 3 轮）
     ↓
-EXPORT（14 层 GeoJSON + 2 表 + 变更日志）
+EXPORT（12 层 GeoJSON + 2 表 + 变更日志）
     ↓
 RENDER（MapLibre 前端可视化）
 ```
@@ -176,7 +179,9 @@ RENDER（MapLibre 前端可视化）
 | **VALIDATE**           | Evaluator Gate | 验证必须是强制 gate，失败则带反馈重试（最多 3 轮）                         |
 | **EXPORT / RENDER**    | 确定性节点     | 后处理步骤顺序不可变                                                       |
 
-### 3.4 操作执行引擎设计
+### 3.4 操作执行引擎设计 ❌ 未实现 (设计阶段)
+
+> **实现状态**: 设计阶段，代码未实现。本节描述的是规划目标，非当前实现状态。
 
 Agent 是**会操作 GIS 的专业绘图员**，不是规划师。所有规划文本统一解析为 OperationSequence + ConstraintSet，通过 EXECUTE_OPERATIONS 逐条执行。操作遵循 **"意图提取 → 方案生成 → 人工确认 → 执行落地"** 的闭环。
 
@@ -204,7 +209,7 @@ Agent 是**会操作 GIS 的专业绘图员**，不是规划师。所有规划�
    ④ 若多个候选 → 生成列表要求规划师点击确认
 
 ③ 方案生成与合规预检
-   ① 用途字典 → "经营性建设用地" = GHYTBM 2124（从 ghytbm.yaml 查表）
+   ① 用途字典 → "经营性建设用地" = GHYTBM 2124（从 encodings/appendix5.yaml 查表）
    ② 冲突检测 → 检查图斑是否在建设边界内 ✅，不占基本农田 ✅，不在生态红线内 ✅
    ③ 生成操作预览方案：分割 XG-005 → 新图斑 400㎡ + QMDLBM=2124
 
@@ -268,87 +273,85 @@ Agent 是**会操作 GIS 的专业绘图员**，不是规划师。所有规划�
 10. DLSZM (Dual-Logic Spatial Zoning Model) — 规则引擎 + ML 双路径对比，识别"稳定决策区"和"分歧敏感区". Frontiers in Environmental Science 2026. https://www.frontiersin.org/journals/environmental-science/articles/10.3389/fenvs.2026.1791582/full **[未执行]**
 11. OZFS (Open Zoning Feed Specification) — overlay district 概念（restrict/relax/replace），条件约束（Python 表达式）. https://github.com/vibe-lab-gsd/ozfs-standard **[未执行]**
 
-### 3.7 代码位置
+### 3.7 代码位置 (当前实际结构, v5.1)
 
 ```
-app/agent/gis/           # Agent 编排层 (5 文件)
-  agent.py               # create_parse/layout/gis_agent_graph()
-  parse_agent.py         # ★ PARSE Agent 子图 (classify → route → extract → validate)
-  layout_pipeline.py     # ★ LAYOUT 混合管线 (StateGraph: 确定性骨架 + ReAct 子图 + Evaluator Gate)
+app/agent/gis/           # Agent 编排层
+  agent.py               # create_layout_agent_graph()
+  parse_agent.py         # ★ PARSE Agent 子图 [✅已实现]
+  parse_reporter.py      # PARSE 输出报告生成
+  layout_pipeline.py     # ★ LAYOUT 管线 (StateGraph: parse→fetch→KG→conflicts→allocate→validate→export→render) [⚠️部分实现]
   state.py               # GISPipelineState (Pydantic BaseModel)
-  prompts.py             # LAYOUT / GIS system prompts
+  spatial_context.py     # compute_spatial_context() [✅已实现]
 
-app/agent/gis/schema/    # PARSE Agent 模型定义子包
-  __init__.py            # 导出 ParseAgentState, SpatialContext, SpatialOperation, SpatialConstraint, SpatialPlanningIntent
-  parse_state.py         # ★ ParseAgentState + SpatialContext + SpatialOperation(SpatialAnchor) + SpatialConstraint(SpatialRule) + SpatialPlanningIntent(ZoneTarget)
+app/agent/gis/schema/    # PARSE Agent 模型
+  parse_state.py         # ParseAgentState + SpatialContext + SpatialOperation + SpatialConstraint [✅已实现]
 
-app/agent/gis/prompts/   # PARSE Agent 专用 prompts 子包
-  __init__.py            # 导出 6 个专用 prompt
-  parse_prompts.py       # ★ CLASSIFY / EXTRACT_REGULATIONS / EXTRACT_TABLES / EXTRACT_PROJECTS / EXTRACT_TARGETS / VALIDATE
+app/modules/gis/schema/  # ★ GIS Schema — 单一真相源
+  __init__.py            # 统一导出
+  code_sets.py           # ★ DLBM↔zone 编码对照表 + 查表函数 (从 DictionaryCenter 派生)
+  ingestion.py           # ★ SpatialFeature 基类 + Base/Current/PlannedLandUseParcel + ingest_*() [✅已实现]
+  spatial_types.py       # ★ 20种空间要素类型 (AdminArea, ControlLine, LandUseZone, ...) [✅已实现]
+  contracts.py           # 数据契约模型 (ZoneIntent, ConflictReport, ...) [✅已实现]
+  canonical.py           # 规范模型: BBox, CRS, GeoFeature, LandUseParcel(provider用), GISDataBundle [✅已实现]
+  classification.py      # LandUseClass + ClassificationSchema + EncodingRegistry [✅已实现]
+  colors.py              # 6套色卡 (GB/T 21010 + 50280-98) [✅已实现]
+  dynamic_zoning.py      # DynamicZoningEngine (双评价动态分区) [✅已实现]
+  gdb.py                 # GDB_LAYER_REGISTRY (12层字段定义) [✅已实现]
+  events.py              # SSE 事件契约 [✅已实现]
+  dicts/                 # YAML 字典中心
+    loader.py            # ★ DictionaryCenter 单例 (自动扫描子目录) [✅已实现]
+    candidate_engine.py  # 跨体系候选提案引擎 [✅已实现]
+    encodings/           # ★ 六套独立编码体系
+      gbt21010.yaml      # GB/T 21010-2017 三调国标 (73条)
+      tugui.yaml         # 广东省土规数据库标准 (14条)
+      appendix5.yaml     # 广东省技术指南附录5 (21条)
+      ghflbm.yaml        # 规划分类编码 (11条)
+      ydyhfldm.yaml      # 用地用海分类 (49条)
+      vne.yaml           # V/N/E 村庄规划用地分类
+    rules/               # 规则配置
+      gdb_layers.yaml    # GDB 图层定义
+      field_defaults.yaml
+      planning_zone_rules.yaml
+      planning_targets.yaml
+      land_use_structure.yaml
+      three_line_types.yaml
+    references/          # 参考对照表
+      sddlbm_to_ydyhfldm.yaml  # 三调→用地用海
+      element_codes.yaml
 
-app/tools/gis/           # @tool 层 (12 文件, 15 工具)
-  parse_tools.py         # ★ parse_planning_text + extract_structured_text + lookup_land_use_code
-  kg.py                  # build/query_knowledge_graph
-  conflict.py            # detect_conflicts
-  allocate.py            # allocate_zones (MIP + greedy)
-  generate.py            # generate_layout (CA + facility + axis)
-  validate.py            # validate_layout (8 checks)
-  export.py              # export_gdb (14层 + 用地平衡表)
-  render.py              # render_map (MapLibre 图层)
-  data.py                # fetch_gis_data + search_poi
-  analytics.py           # calculate_gis_coverage + analyze_accessibility
-  place_resolver.py      # ★ resolve_place_name (操作引擎空间地名解析)
+app/tools/gis/           # @tool 层
+  parse_tools.py, kg.py, conflict.py, allocate.py,
+  generate.py, validate.py, export.py, render.py,
+  data.py, analytics.py, place_resolver.py
 
-app/services/modules/gis/ # 纯服务层 (无 @tool)
-  spatial_context.py     # ★ compute_spatial_context() 从 GISDataBundle 计算紧凑空间上下文（~2KB）
-  schema/                # 编码体系 (DictionaryCenter YAML 驱动)
-    dicts/               # 12+ YAML 字典
-      loader.py          # ★ DictionaryCenter 单例
-      dlbm.yaml          # 三调地类 (220+ 编码)
-      ghytbm.yaml        # 规划用途 (21 编码)
-      ghflbm.yaml        # 规划分类 (11 编码)
-      vne.yaml           # V/N/E 分类 (20 编码)
-      gdb_layers.yaml    # GDB 图层定义 (17 层)
-      place_aliases.yaml # ★ 地名词典（动态推断辅助，非静态别名库）
-      planning_zone_rules.yaml # ★ 动态分区规则引擎配置（唯一决策入口，DLBM仅为输入之一）
-    gdb.py               # GDB_LAYER_REGISTRY (12 层字段定义)
-    classification.py    # 分类映射 (从 DictionaryCenter 派生)
-    encoding_registry.py # 编码注册表
-  generation/            # 生成层
-    pipeline.py          # 管线执行器 (KG→Conflict→ExecuteOperations)
-    parcel_reclass_generator.py  # ★ ① ParcelReclass (20字段, 待创建)
-    road_plan_generator.py      # ★ ⑤ RoadPlan (待创建)
-    operation_engine.py          # ★ 统一操作执行引擎 (待创建)
-    space_control_generator.py  # ② SpaceControl (已有)
-    land_use_zone_generator.py  # ③ UseZone (已有)
+app/modules/gis/         # 纯服务层
+  data/providers/        # Tianditu/Amap/OSM 适配器
+  generation/            # 生成层 (zone/facility/axis)
   layout/                # 布局生成
-    data_loader.py       # 数据加载 + intent 解析
-    intent_cache.py      # 解析因子感知缓存
-    facility_placer.py   # 设施布点（4 策略）
-    axis_builder.py      # 发展轴生成
-  providers/             # 天地图/高德/OSM
   kg/                    # RDF 知识图谱
-  conflict/              # 冲突检测-消解
+  conflict/              # 冲突检测
   optimizer/             # MIP + CA 优化器
-    planning_zone_mapper.py  # ★ 规划分区映射 (已有)
-    mip_allocator.py         # MIP 分配器
   validation/            # 布局验证
   utils/                 # 坐标/面积/GeoJSON 工具
 ```
 
-## 4. 编码体系
+## 4. 编码体系 ✅ 已实现
 
-三套正交编码，统一定义在 `schema/dicts/*.yaml`（**DictionaryCenter 单一真相源**；`schema/__init__.py` 从中自动派生运行时字典）：
+六套独立编码，统一定义在 `schema/dicts/encodings/*.yaml`（**DictionaryCenter 单一真相源**；`schema/code_sets.py` 从中自动派生运行时字典）：
 
-| 体系                    | 来源                      | 用途                        | 示例                            |
-| ----------------------- | ------------------------- | --------------------------- | ------------------------------- |
-| **DLBM / GHYTBM** | 三调工作分类 (GB/T 21010) | 现状/规划地类 → 8 功能分区 | `2121`=宅基地 → `居住用地` |
-| **YDYHFLDM**      | 自然资发〔2023〕234 号    | 基数转换上报                | `2121` → `0702`            |
-| **V/N/E**         | 住建部村庄规划用地分类    | 前端统计口径                | `2121` → `V11` 住宅用地    |
+| 体系 | 来源 | 用途 | 文件 |
+|------|------|------|------|
+| **gbt21010** | GB/T 21010-2017 | 三调输入 (现状地类) | `encodings/gbt21010.yaml` |
+| **tugui** | 粤国土资规保发〔2009〕67号 | QMDLTB.DLBM/QMDLBM | `encodings/tugui.yaml` |
+| **appendix5** | 广东省技术指南(2019) 附录5 | QMDLTB.GHYTBM | `encodings/appendix5.yaml` |
+| **ghflbm** | 广东省土规数据库标准 | QMDLTB.GHFLBM | `encodings/ghflbm.yaml` |
+| **ydyhfldm** | 自然资发〔2023〕234号 | 基数转换目标 (新标准方向) | `encodings/ydyhfldm.yaml` |
+| **vne** | 住建部村庄规划用地分类指南 | 统计口径 (从appendix5派生) | `encodings/vne.yaml` |
 
 **DLBM 默认分区倾向**（仅供参考，非最终分区）：
 
-DLBM 在 `dlbm.yaml` 中携带 `default_zone_type`、`default_planning_zone`、`default_primary_zone` 等属性，仅为无其他空间约束时的初步参考。**最终分区由 `DynamicZoningEngine` 根据 `planning_zone_rules.yaml` 结合三线、建设边界、灾害因子等动态计算**，规则引擎未覆盖或存在冲突时标记 `needs_decision=True`，由人工确认。
+DLBM 编码在 `encodings/gbt21010.yaml`、`encodings/tugui.yaml`、`encodings/appendix5.yaml` 中携带 `zone_type`、`planning_zone`、`primary_zone` 等属性，仅为无其他空间约束时的初步参考。**最终分区由 `DynamicZoningEngine` 根据 `rules/planning_zone_rules.yaml` 结合三线、建设边界、灾害因子等动态计算**，规则引擎未覆盖或存在冲突时标记 `needs_decision=True`，由人工确认。
 
 6 类规划分区详情（广东省扩展，含林业发展区）——**分区归属由规则引擎判定，下表仅为 DLBM 默认倾向**：
 
@@ -368,7 +371,7 @@ DLBM 在 `dlbm.yaml` 中携带 `default_zone_type`、`default_planning_zone`、`
 | `1340` | 商品林 | 农业用地           | 三大类对照表：全部林地→农用地，规则引擎通常保留 |
 | `1350` | 生态林 | 生态绿地（倾向）   | 生态功能强：水源涵养、生物多样性，规则引擎可能升级为生态保护区 |
 
-编码覆盖：金田村实测 660 地块 100% 可映射。新增/修改分类只需改 `dicts/*.yaml`，无需改代码。
+编码覆盖：金田村实测 660 地块 100% 可映射。新增/修改分类只需改 `dicts/encodings/*.yaml`，无需改代码。
 
 ### 候选项建议引擎
 
@@ -405,7 +408,7 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 | 工具                        | 功能                                                | 复用                           | 说明                                         |
 | --------------------------- | --------------------------------------------------- | ------------------------------ | -------------------------------------------- |
 | `resolve_place_name`      | 空间地名解析：自然语言描述 → 候选图斑列表          | Amap POI + OSM + 本地别名库    | 模糊匹配 + 空间关系推理（东侧/沿河/北侧）    |
-| `lookup_land_use_code`    | 规划用途字典：用途名称 → 标准编码 + 约束规则       | DictionaryCenter (ghytbm.yaml) | 不做自动映射，返回候选项                     |
+| `lookup_land_use_code`    | 规划用途字典：用途名称 → 标准编码 + 约束规则       | DictionaryCenter (encodings/appendix5.yaml) | 不做自动映射，返回候选项                     |
 | `check_compliance`        | 冲突检测：拟操作图斑 → 实时合规检查                | conflict/detector.py           | 三区三线/建设边界/现状地类                   |
 | `edit_parcel`             | GIS 编辑：执行 create/split/merge/modify/reclassify | Shapely + GeoPandas            | 原子操作 + 变更日志                          |
 | `extract_structured_text` | 表格结构提取：表格类文本 → 结构化 JSON             | LLM                            | 近期建设项目表/用地指标表                    |
@@ -447,29 +450,37 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 
 ## 8. 路线图
 
-### Phase 1 — 当前 (2026-07) ✅ 已完成
+### Phase 1 — 已完成 (2026-07) ✅
 
-- [X] Trinity 架构 + 双 Agent
-- [X] 13 个 @tool 流水线
-- [X] MIP 分配 + 硬约束保护地块锁定（6 规划分区）
-- [X] 8 项空间验证
-- [X] 统一分类 Schema（DictionaryCenter YAML 驱动，220+ DLBM 定义）
-- [X] 统一生产路径 + 对比测试模式（gen/plan/ground truth 三路对比）
-- [X] GIS 约束注入 LLM prompt（GB/T 21010 三大类合规）
-- [X] Intent 缓存（解析因子感知：PARSE_VERSION + LLM_MODEL + 内容hash）
-- [X] 死代码清理：删除 GisService、SpatialLayoutEngine
+- [X] 六套编码体系分离 (encodings/gbt21010, tugui, appendix5, ghflbm, ydyhfldm, vne)
+- [X] 输入边界层 GISIngestionLayer (ingestion.py: SpatialFeature + 20种空间要素类型)
+- [X] DictionaryCenter YAML 驱动 (dicts/encodings/ + rules/ + references/)
+- [X] 通用空间要素摄入器 (ingest_feature(), 21种feature type注册)
+- [X] 编码体系代码集派生 (code_sets.py: DLBM_TO_* dicts + lookup functions)
+- [X] 数据契约模型统一 (contracts.py: intent + pipeline 合并)
+- [X] Schema 文件精简 (14→11 .py, -3 files)
 - [X] Canonical Data Model（Pydantic BaseModel，WGS84 归一化）
 - [X] Provider 适配层（Tianditu/Amap/OSM，CRS 归一化）
-- [X] EncodingRegistry（从 DictionaryCenter 自动派生编码映射）
-- [X] OutputProfile 省份可扩展机制（广东 14 层 + 约束常量）
-- [X] 空间管制区生成器 SpaceControlZoneGenerator (510/520/530/540)
-- [X] 土地用途分区生成器 LandUseZoneGenerator (V/N/E)
-- [X] 颜色集中化（zone_schema/colors.py，6 套色卡）
-- [X] 规划分区映射（planning_zone_mapper.py，7类zone_type ↔ 6类规划分区）
+- [X] DynamicZoningEngine 动态分区引擎
+- [X] ClassificationSchema 懒加载
+- [X] EncodingRegistry (merged into classification.py)
+- [X] GDB_LAYER_REGISTRY (12 层完整字段定义)
+- [X] 颜色集中化（colors.py，6 套色卡）
+- [X] PARSE Agent (parse_agent.py, parse_state.py)
+- [X] 金田村实测数据全覆盖验证 (14/14文件 100%覆盖)
 
-### Phase 2 — 架构对齐（2026-07，进行中）
+### Phase 1.5 — Schema 完整化 (2026-07) ⚠️ 部分完成
 
-**目标**：对齐 OUTPUT_ARCHITECTURE.md v3.0 的 5+1 内部生成层 + 14 层输出标准
+- [X] LandUseParcel 三层拆分 (Base → Current / Planned)
+- [X] 20种空间要素类型模型 (spatial_types.py: Admin → Control → Planning layers)
+- [ ] TDYT / JSYDGZQ / GHCFW ingest函数实现 (类型已定义, 摄入函数待完善)
+- [ ] 现有 props.get() 调用迁移到类型化 parcel (Phase 2 迁移)
+
+### Phase 2 — 架构对齐 (2026-07) ❌ 未实现
+
+### Phase 2 — 架构对齐 ❌ 未实现 (设计阶段)
+
+**目标**: 对齐 OUTPUT_ARCHITECTURE.md v3.3 的 5+1 内部生成层 + 12 层输出标准
 
 #### 已知缺陷（P0 — 必须修复）
 
@@ -498,7 +509,7 @@ infrastructure (AxisBuilder)      →  可视化叠加（不独立成层）
 - [ ] 实现 RoadPlan 生成器
 - [ ] E2E 测试：验证 gen/plan 差异性 + 20 字段完整性
 
-### Phase 2.5 — 统一操作执行引擎（2026-08）
+### Phase 2.5 — 统一操作执行引擎 ❌ 未实现 (设计阶段, 规划 2026-08)
 
 - [ ] OperationEngine（5 种原子操作 + 变更日志 + 批量/逐条执行）
 - [ ] MIP 降级为 `optimize_allocation` 辅助工具（批量场景按需调用）
@@ -508,7 +519,7 @@ infrastructure (AxisBuilder)      →  可视化叠加（不独立成层）
 - [ ] 前端确认界面（确认/拒绝/修改 + 地图预览）
 - [ ] 变更日志与审计追踪（changelog.jsonl）
 
-### Phase 3 — 功能增强
+### Phase 3 — 功能增强 ❌ 未实现 (规划)
 
 - [ ] 测试覆盖补全：plan 路径 LLM E2E 测试、三路对比集成测试
 - [ ] export: 用地平衡表 Excel 输出、标准字段补全
@@ -517,7 +528,7 @@ infrastructure (AxisBuilder)      →  可视化叠加（不独立成层）
 - [ ] CA 精化模块恢复
 - [ ] GHFLBM ↔ V/N/E 完整映射表
 
-### Phase 4 — 探索方向
+### Phase 4 — 探索方向 ❌ 未开始 (远期)
 
 - [ ] DRL 土地优化（参考清华 DRL-urban-planning）
 - [ ] GAN 村庄布局生成

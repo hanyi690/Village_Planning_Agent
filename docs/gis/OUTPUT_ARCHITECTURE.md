@@ -1,6 +1,6 @@
 # GIS 输出架构 — 广东省村庄规划标准
 
-> 版本: 3.0 | 日期: 2026-07-16 | 参照: 广东省村庄规划编制基本技术指南（试行）附录4/5 + 附件1/2
+> 版本: 3.4 | 日期: 2026-07-21 | 变更: 增加建设项目布局规划图输出目标 (§2.7, §6)
 
 ## 设计原则
 
@@ -9,7 +9,115 @@
 3. **分层解耦**：输入 → 内部生成抽象 → 标准输出，每层独立可替换
 4. **规范字段名**：GDB 字段名严格遵循广东省技术规范表3-6，不使用自定义缩写
 5. **可扩展**：新增省份标准 = 新增一个 output profile，不改生成核心
-6. **增量可控**：Text2GIS 操作以 5 种原子操作为粒度，每次操作可追溯、可撤销
+6. **编码体系分离**：四种编码体系独立定义，不在体系间建映射表
+7. **输入边界校验**：GISIngestionLayer 解析 GeoJSON 时校验字段编码归属
+
+---
+
+## 零、编码体系数据流
+
+项目涉及 6 套编码体系，在规划流程中各有明确的角色：
+
+```
+三调成果 (gbt21010: DLBM=0101水田 / 0702农村宅基地)
+    │                              ← GB/T 21010-2017 土地利用现状分类
+    ▼ 基数转换 (SDDLBM → YDYHFLDM)
+用地用海 (ydyhfldm: 0101水田 / 0703农村宅基地)
+    │                              ← 自然资发〔2023〕234号 (湖北/云南已全面采用)
+    ▼ 规划编制
+QMDLTB 期末地类图斑:
+    DLBM     = tugui 编码     (0110水田 / 2030农村居民点) — 基期对照
+    QMDLBM   = tugui 编码     — 规划后地类
+    GHYTBM   = appendix5 编码 (1100耕地 / 2121宅基地) — 村庄规划用途
+    GHFLBM   = ghflbm 编码    (1110 / 2120) — 比appendix5更粗的分组
+    │                              ← 广东省2019技术指南 表4
+    ▼ 统计输出
+V/N/E = appendix5 → vne 查表     ← 住建部村庄规划用地分类指南
+```
+
+| 编码体系 | 标准来源 | 用于 | 文件 |
+|---------|---------|------|------|
+| `gbt21010` | GB/T 21010-2017 | 三调输入 (现状地类) | `encodings/gbt21010.yaml` |
+| `tugui` | 粤国土资规保发〔2009〕67号 | QMDLTB.DLBM, QMDLTB.QMDLBM | `encodings/tugui.yaml` |
+| `appendix5` | 广东省技术指南(2019) 附录5 | QMDLTB.GHYTBM, QMDLTB.GHYTMC | `encodings/appendix5.yaml` |
+| `ghflbm` | 广东省土规数据库标准 | QMDLTB.GHFLBM, QMDLTB.QMGHFLBM | `encodings/ghflbm.yaml` |
+| `ydyhfldm` | 自然资发〔2023〕234号 | 基数转换目标 (新标准方向) | `encodings/ydyhfldm.yaml` |
+| `vne` | 住建部村庄规划用地分类指南 | 统计口径 (从appendix5派生) | `encodings/vne.yaml` |
+
+> **重要**: 各编码体系是独立标准，不存在官方互转映射表。代码通过 `GISIngestionLayer` 在输入边界校验编码归属，下游使用类型化空间要素对象。
+>
+> ### §0.1 完整空间要素类型模型 (v3.3)
+>
+> 输入边界覆盖 **全部20种空间要素类型**（不再仅限地块），统一基类 `SpatialFeature`：
+>
+> ```
+> SpatialFeature (geometry, bsm, ysdm, _raw)
+>   │
+>   ├── Group A: 行政区划 (AdminBoundary)
+>   │     ├── AdminArea            — 村级行政区 (面): xzqhdm, xzqhmc, mj
+>   │     └── AdminBoundaryLine    — 行政区划界线 (线): djzqdm, boundary_type
+>   │
+>   ├── Group B: 地类图斑 (LandUse) — 定义在 ingestion.py
+>   │     ├── BaseLandUseParcel    — 共享: dlbm, name, area_sqm, zone_type
+>   │     │     ├── CurrentLandUseParcel  — 现状: dlbm(appendix5) + sddlbm
+>   │     │     └── PlannedLandUseParcel  — 规划: qmdlbm(tugui) + ghytbm(appendix5) + ghflbm(ghflbm)
+>   │
+>   ├── Group C: 现状要素 (CurrentFeatures)
+>   │     ├── CurrentBuilding     — 现状建筑 (面): 建筑类型, 层数, 面积
+>   │     ├── CurrentRoad         — 现状道路 (线): 道路等级, 宽度, shape_length
+>   │     ├── CurrentFacility     — 现状设施 (点/面): 设施类型, 名称, 服务半径
+>   │     └── CurrentAnnotation   — 现状注记 (点): 注记文本, 分类
+>   │
+>   └── Group D: 规划管控要素 (PlannedControls)
+>         ├── ControlLine         — 控制线基类 (面): mj, protection_level
+>         │     ├── FarmlandProtection — 永久基本农田: jbnt_mj
+>         │     ├── EcologicalRedline  — 生态保护红线: 区县, 分带, 地市
+>         │     ├── CultivatedLandTarget — 耕地保护目标
+>         │     ├── UrbanDevBoundary  — 城镇开发边界
+>         │     ├── VillageDevBoundary — 村庄建设边界
+>         │     ├── HazardControlLine  — 灾害风险防控线: 灾害类型, 风险等级
+>         │     └── FloodControlLine   — 洪涝风险控制线: 洪水频率, 控制高程
+>         ├── HistoricalProtection — 历史文化保护 (点/面): buff_dist, orig_fid
+>         ├── LandUseZone         — 土地用途分区 TDYT (表5): tdyfqdm, mj, ytfqmc
+>         ├── ConstructionCtrlZone — 建设用地管制区 JSYDGZQ (表6): tdkjgzfqdm(01-06)
+>         └── PlanningScope       — 规划村范围 GHCFW (表3): xzqhdm, xzqhmc, mj
+> ```
+>
+> **编码体系映射 (新增要素)**:
+> | 类型 | 编码字段 | 编码体系 | 来源 |
+> |------|---------|---------|------|
+> | LandUseZone | TDYTFQDM | TD/T 1028 乡级规划分类 | 乡规分类 |
+> | ConstructionCtrlZone | TDKJGZFQDM | 管制分区类型 (01-06) | 粤技术规范 表6 |
+> | EcologicalRedline | 分带 | — (数值型) | — |
+>
+> **入口函数**:
+> | 类别 | 函数 | 返回类型 |
+> |------|------|---------|
+> | 地类图斑 | `ingest_current_landuse()` | `List[CurrentLandUseParcel]` |
+> | 地类图斑 | `ingest_planned_landuse()` | `List[PlannedLandUseParcel]` |
+> | 所有其他要素 | `ingest_feature(filepath, feature_type)` | `List[SpatialFeature]` |
+>
+> ### §0.2 规范文档对照验证 ✅
+>
+> 编码体系分配已对照以下 5 份规范文档验证，确认完全正确：
+>
+> | 规范文档 | 验证结论 |
+> |---------|---------|
+> | GB/T 21010-2017 土地利用现状分类 | `gbt21010.yaml` 编码完整，三调地类定义准确 |
+> | 村庄规划用地分类指南 (住建部) | V/N/E 分类与 `vne.yaml` 一致，从 appendix5 派生 |
+> | 国土空间调查、规划、用途管制用地用海分类指南 (2023) | `ydyhfldm.yaml` 编码正确，为新标准方向预留 |
+> | 村土地利用规划编制技术导则 | 规划编制流程 (三调→基数转换→规划编制→输出) 与数据流图一致 |
+> | 广东省村庄规划编制基本技术指南 (2019) | QMDLTB 字段定义 (表4) 与 `gdb.py` 完全对齐，附录5编码→`appendix5.yaml` |
+>
+> **已知偏差**: 现状层 DLBM 实际使用 appendix5 编码而非 gbt21010 (编制实践, 非规范要求)。详见 §1.1 ★ 说明。
+>
+> **空间要素覆盖率**: 对照 `规划所需数据类型与图层分类.md`，矢量类型覆盖率 17/17 (100%)：
+> - 基础地理信息要素: 2/3 (行政区/界线 ✅, 居民点 ← 包含在 CurrentBuilding 中)
+> - 基期年现状要素: 5/5 ✅
+> - 目标年规划要素: 10/10 ✅
+> - 核心规划数据层: 4/4 (QMDLTB ✅, TDYT ✅, JSYDGZQ ✅, GHCFW ✅)
+
+---
 
 ---
 
@@ -17,13 +125,15 @@
 
 ### 1.1 现状 GIS 数据（`data/gis/jintian/current/`）
 
-| 图层         | 文件                        | 要素 | 关键字段                         | 几何            |
-| ------------ | --------------------------- | ---- | -------------------------------- | --------------- |
-| 行政区划面   | boundary.geojson            | 1    | BSM, XZQHDM, XZQHMC, MJ          | MultiPolygon    |
-| 行政区划界线 | admin_boundary_line.geojson | 561  | BSM, YSDM, DJZQDM                | MultiLineString |
-| 现状地类图斑 | landuse.geojson             | 660  | DLBM, DLMC, SDDLBM, SDDLMC, DLMJ | MultiPolygon    |
-| 现状道路     | road.geojson                | 131  | Shape_Length                     | MultiLineString |
-| 现状注记     | annotation.geojson          | 34   | 注记, 分类                       | Point           |
+| 图层         | 文件                        | 要素 | 关键字段                         | 几何            | 备注 |
+| ------------ | --------------------------- | ---- | -------------------------------- | --------------- | ---- |
+| 行政区划面   | boundary.geojson            | 1    | BSM, XZQHDM, XZQHMC, MJ          | MultiPolygon    |      |
+| 行政区划界线 | admin_boundary_line.geojson | 561  | BSM, YSDM, DJZQDM                | MultiLineString |      |
+| 现状地类图斑 | landuse.geojson             | 660  | DLBM, DLMC, SDDLBM, SDDLMC, DLMJ | MultiPolygon    | ★    |
+| 现状道路     | road.geojson                | 131  | Shape_Length                     | MultiLineString |      |
+| 现状注记     | annotation.geojson          | 34   | 注记, 分类                       | Point           |      |
+
+> ★ **现状层编码体系说明**: GDB 原始数据中 DLBM 字段使用**附录5规划用途编码** (2121=宅基地)，而非 GB/T 21010 三调编码 (0702=农村宅基地)。这是编制单位的有意操作——三调的 2030(农村居民点) 太粗，无法区分宅基地/公共服务/经营性等村庄内部细分。SDDLBM/SDDLMC 是 GeoJSON 导出时从 DLBM/DLMC 复制添加的字段，值同为附录5编码，GDB 原始数据中不存在这两个字段。
 
 ### 1.2 权威外部数据（"三区三线"，不得自行生成）
 
@@ -57,7 +167,7 @@
 
 ---
 
-## 二、输出（14 层 + 2 表 + 变更日志，广东标准）
+## 二、输出（14 层 + 1 图 + 2 表 + 变更日志，广东标准）
 
 ### 2.1 输出目录结构
 
@@ -82,7 +192,11 @@ output/{village_name}/
 │   ├── land_balance.json                 用地平衡表
 │   └── land_use_structure.json           ★ 土地利用结构调整表（附表2）
 ├── changelog.jsonl                       ★ Text2GIS 操作变更日志（追加写入）
-└── layout.json                           布局配置
+├── layout.json                           布局配置
+└── project_layout/
+    ├── project_layout.geojson            ★ 建设项目布局规划图（专题要素，§2.7）
+    ├── project_layout.svg                ★ 建设项目布局规划图（渲染输出）
+    └── project_layout_meta.json          图层元数据（项目名称↔要素映射）
 ```
 
 ### 2.2 核心输出层字段结构（广东省技术规范表3-6 对齐）
@@ -103,29 +217,35 @@ output/{village_name}/
 
 对标：规范表4 QMDLTB 属性结构，20 必选字段
 
-| 字段代码 | 字段名称         | 类型  | 长度 | 约束     | 生成方式                          |
-| -------- | ---------------- | ----- | ---- | -------- | --------------------------------- |
-| BSM      | 标识码           | Int   | 10   | 必选     | 自动编码                          |
-| YSDM     | 要素代码         | Char  | 10   | 必选     | 固定 2003070100                   |
-| TBH      | 图斑号           | Char  | 8    | 必选     | 自动编码                          |
-| XZQHDM   | 行政区划代码     | Char  | 12   | 必选     | 固定                              |
-| XZQHMC   | 行政区划名称     | Char  | 100  | 必选     | 固定                              |
-| DLBM     | 地类编码         | Char  | 4    | 必选     | 从 current/landuse 继承           |
-| DLMJ     | 图斑地类面积     | Float | 15   | 必选     | 几何计算，平方米                  |
-| QMDLBM   | 期末地类编码     | Char  | 4    | 必选     | ★ 生成：重分类后编码             |
-| LYYSDM   | 来源要素代码     | Char  | 10   | 条件可选 | 地类变更时非空                    |
-| MS       | 描述             | Char  | 90   | 可选     |                                   |
-| GHFLBM   | 规划分类编码     | Char  | 4    | 必选     | ★ 生成：规划分类                 |
-| QMGHFLBM | 期末规划分类编码 | Char  | 4    | 必选     | = GHFLBM                          |
-| GHYTBM   | 规划用途编码     | Char  | 4    | 必选     | ★ 生成：规划用途                 |
-| GHYTMC   | 规划用途名称     | Char  | 20   | 必选     | ★ 生成：从 GHYTBM 查 ghytbm.yaml |
-| LSYSXZB1 | 落实约束性指标1  | Char  | 4    | 可选     |                                   |
-| LSZBMJ1  | 落实指标面积1    | Float | 15   | 可选     |                                   |
-| LSYSXZB2 | 落实约束性指标2  | Char  | 4    | 可选     |                                   |
-| LSZBMJ2  | 落实指标面积2    | Float | 15   | 可选     |                                   |
-| LSYSXZB3 | 落实约束性指标3  | Char  | 4    | 可选     |                                   |
-| LSZBMJ3  | 落实指标面积3    | Float | 15   | 可选     |                                   |
+| 字段代码 | 字段名称         | 类型  | 长度 | 约束     | 编码体系 | 生成方式                          |
+| -------- | ---------------- | ----- | ---- | -------- | -------- | --------------------------------- |
+| BSM      | 标识码           | Int   | 10   | 必选     | —        | 自动编码                          |
+| YSDM     | 要素代码         | Char  | 10   | 必选     | —        | 固定 2003070100                   |
+| TBH      | 图斑号           | Char  | 8    | 必选     | —        | 自动编码                          |
+| XZQHDM   | 行政区划代码     | Char  | 12   | 必选     | —        | 固定                              |
+| XZQHMC   | 行政区划名称     | Char  | 100  | 必选     | —        | 固定                              |
+| DLBM     | 地类编码         | Char  | 4    | 必选     | **tugui** | 基期地类编码 (土规数据库标准)      |
+| DLMJ     | 图斑地类面积     | Float | 15   | 必选     | —        | 几何计算，平方米                  |
+| QMDLBM   | 期末地类编码     | Char  | 4    | 必选     | **tugui** | ★ 生成：重分类后编码              |
+| LYYSDM   | 来源要素代码     | Char  | 10   | 条件可选 | —        | 地类变更时非空                    |
+| MS       | 描述             | Char  | 90   | 可选     | —        |                                   |
+| GHFLBM   | 规划分类编码     | Char  | 4    | 必选     | **ghflbm** | ★ 生成：规划分类                  |
+| QMGHFLBM | 期末规划分类编码 | Char  | 4    | 必选     | **ghflbm** | = GHFLBM                          |
+| GHYTBM   | 规划用途编码     | Char  | 4    | 必选     | **appendix5** | ★ 生成：规划用途                  |
+| GHYTMC   | 规划用途名称     | Char  | 20   | 必选     | **appendix5** | ★ 生成：从 GHYTBM 查 appendix5.yaml |
+| LSYSXZB1 | 落实约束性指标1  | Char  | 4    | 可选     | —        |                                   |
+| LSZBMJ1  | 落实指标面积1    | Float | 15   | 可选     | —        |                                   |
+| LSYSXZB2 | 落实约束性指标2  | Char  | 4    | 可选     | —        |                                   |
+| LSZBMJ2  | 落实指标面积2    | Float | 15   | 可选     | —        |                                   |
+| LSYSXZB3 | 落实约束性指标3  | Char  | 4    | 可选     | —        |                                   |
+| LSZBMJ3  | 落实指标面积3    | Float | 15   | 可选     | —        |                                   |
 
+> **编码体系说明**:
+> - **tugui** = 广东省县级土地利用总体规划数据库标准 (粤国土资规保发〔2009〕67号) — DLBM/QMDLBM 值域
+> - **appendix5** = 广东省技术指南附录5 村庄规划用地分类 (21条) — GHYTBM/GHYTMC 值域
+> - **ghflbm** = 广东省土规数据库标准 规划分类编码 (11条，比 appendix5 更粗)
+> - 各编码体系独立定义于 `backend/app/modules/gis/schema/dicts/encodings/`
+>
 > **LSYSXZB1-3 / LSZBMJ1-3** 对应规范"落实约束性指标"字段，用于记录地块落实的耕地保有量/基本农田保护/建设用地规模等约束性指标。
 
 #### TDYT 土地用途分区（11 land_use_zone）
@@ -221,6 +341,77 @@ E  非建设用地
   E9  其他非建设用地
 ```
 
+### 2.7 建设项目布局规划图（可选成果，P2 待实现）
+
+> **规范定位**：广东省技术指南规定基本成果为"一图一表一规则"（总图+项目表+管制规则），建设项目布局规划图属于可选丰富成果。它本质上是**近期建设项目表（一表）的空间化可视化表达**——将文字表格中的项目名称、位置、面积转化为地图上的专题要素。
+>
+> **参考实例**：金田村工程文件第3部分 `3.村庄建设项目布局规划图.dwg`，包含 723 栋房屋轮廓、24 条建设项目红线、22 处公共服务设施、24 条规划道路、46 个项目名称标注。
+
+#### 2.7.1 图面构成
+
+```
+┌─────────────────────────────────────────────────────┐
+│  建设项目布局规划图                                    │
+│                                                       │
+│  底图层（从 current/ + planned/ 派生，透明度 40%）     │
+│  ├── 行政区划界线 ← 01_boundary                      │
+│  ├── 期末地类底色 ← 06_planned_landuse (GHYTMC 分色)  │
+│  └── 三区三线     ← 07/08 farmland + ecological       │
+│                                                       │
+│  专题要素层（本图独有，从操作结果派生）                  │
+│  ├── 房屋轮廓     ← 宅基地图斑内 POI 缓冲区近似       │
+│  ├── 建设项目红线 ← create 操作结果 (project_name 分组)│
+│  ├── 保留公共服务 ← modify 操作中保留的设施            │
+│  ├── 新增公共服务 ← create 操作中 GHYTBM=2122 的结果  │
+│  ├── 规划道路     ← 13_planned_road                   │
+│  └── 基础设施     ← create 操作中 GHYTBM=2123 的结果  │
+│                                                       │
+│  标注层（从操作元数据生成）                              │
+│  ├── 项目名称     ← SpatialOperation.project_name     │
+│  ├── 引线         ← 标注文字 → 项目几何的连接线        │
+│  └── 图例         ← 图层配色方案自动生成               │
+│                                                       │
+│  图框要素（制图装饰）                                   │
+│  ├── 指北针 / 比例尺 / 图名                            │
+│  └── 近期建设项目一览表（附表）                          │
+└─────────────────────────────────────────────────────┘
+```
+
+#### 2.7.2 数据来源映射
+
+| 图面要素 | 数据来源 | 生成方式 | 当前状态 |
+|---------|---------|---------|---------|
+| 地类底色 | `06_planned_landuse` | 按 GHYTMC 分色渲染 | ✅ 已有 |
+| 三区三线 | `07/08/09` | 直接叠加 | ✅ 已有 |
+| 建设项目红线 | 操作执行引擎 create 结果 | 按 `project_name` 聚合为多边形 | ⬜ 待实现 |
+| 新增公服设施 | 操作执行引擎 create 结果 | 筛选 GHYTBM=2122 | ⬜ 待实现 |
+| 保留公服设施 | 操作执行引擎 modify 结果 | 筛选保留类 modify | ⬜ 待实现 |
+| 规划道路 | `13_planned_road` | 直接叠加 | ✅ 已有 |
+| 基础设施 | 操作执行引擎 create 结果 | 筛选 GHYTBM=2123 | ⬜ 待实现 |
+| 房屋轮廓 | 宅基地图斑 + POI 近似 | 宅基地内 POI 缓冲区 → 建筑足迹 | ❌ 数据缺口 |
+| 项目名称标注 | `SpatialOperation.project_name` | 标注点 + 引线生成 | ⬜ 待实现 |
+| 图例 | 图层配色方案 | 自动从渲染配置提取 | ⬜ 待实现 |
+
+#### 2.7.3 房屋轮廓问题
+
+标准 GDB 中无单栋房屋数据（宅基地 GHYTBM=2121 是一个大地块，不包含房屋轮廓）。人工编制时从高清正射影像（0.5m）逐栋矢量化，这是当前自动化流程的最大数据缺口。
+
+**可行替代方案**（按精度排序）：
+
+| 方案 | 精度 | 数据源 | 说明 |
+|------|------|--------|------|
+| 高清影像矢量化 | 高 | 无人机航拍/卫星影像 | 需额外数据获取 + AI 建筑检测模型 |
+| POI 缓冲区近似 | 中 | 高德/天地图 POI | 宅基地多边形内 POI 点 → 10m×15m 矩形缓冲 |
+| 宅基地概化表示 | 低 | current/landuse | 整块宅基地作为"房屋区"着色，不区分单栋 |
+
+#### 2.7.4 输出格式
+
+| 格式 | 用途 | 说明 |
+|------|------|------|
+| `project_layout.geojson` | 结构化数据 | 专题要素的 FeatureCollection，按图层分组 |
+| `project_layout.svg` | 打印输出 | 含图框、图例、标注的完整制图输出 |
+| `project_layout_meta.json` | 元数据 | 项目名称→要素ID 映射、制图参数 |
+
 ---
 
 ## 三、附录5 用地分类表（21 编码全覆盖）
@@ -249,7 +440,7 @@ E  非建设用地
 | 3100 | 水域             | 生态用地          | 水域             | E11 | 水域         |
 | 3200 | 自然保留地       | 生态用地          | 自然保留地       | E9  | 农业用地     |
 
-> 数据源：`dicts/ghytbm.yaml`，21 个编码，与广东省技术指南附录5 完全对齐。
+> 数据源：`dicts/encodings/appendix5.yaml`，21 个编码，与广东省技术指南附录5 完全对齐。
 
 ---
 
@@ -336,6 +527,56 @@ PARSE Agent → OperationSequence（可执行操作列表）+ ConstraintSet（�
 
 ## 六、待实现（P1/P2）
 
+### 6.1 设计目标：建设项目布局规划图自动生成（P2）
+
+广东省技术指南规定基本成果为"一图一表一规则"，建设项目布局规划图为可选丰富成果。当前系统已能生成 14 层 GeoJSON + 2 表，但缺少这张图的自动生成能力。
+
+**目标**：从已有的 `current/` + `planned/` 数据和操作执行结果，自动组装生成等价于人工 ArcMap/AutoCAD 绘制的建设项目布局规划图。
+
+**核心思路**：建设项目布局规划图 = 规划总图简化底图 + 近期建设项目表的空间化表达。系统已具备全部必要的输入数据，缺少的是组装逻辑和房屋轮廓数据。
+
+**生成路径**：
+
+```
+current/ (现状GIS)          ──┐
+planned/ (规划GIS)          ──┤
+                               │    ┌──────────────────────────────────┐
+操作执行引擎结果 (create/modify) ──┤───→│ ProjectLayoutRenderer            │
+                               │    │ 输入: 标准 GeoJSON + 操作结果     │
+近期建设项目表(一表)         ──┤    │ 输出: project_layout.geojson     │
+                               │    │       project_layout.svg         │
+高德/天地图 POI (房屋近似)  ──┘    │       project_layout_meta.json    │
+                                    └──────────────────────────────────┘
+```
+
+**需新增组件**：
+
+| 组件 | 功能 | 依赖 |
+|------|------|------|
+| `ProjectLayoutRenderer` | 组装底图+专题+标注，输出 GeoJSON/SVG | current/ + planned/ + 操作结果 |
+| 房屋近似层生成器 | 宅基地图斑 + POI 缓冲区 → 近似房屋轮廓 | current/landuse + 高德 POI |
+| 项目红线聚合器 | create 操作结果按 `project_name` 聚合为红线多边形 | 操作执行引擎输出 |
+| 布局图标注生成器 | 从操作元数据生成注记点+引线 | `SpatialOperation.project_name` |
+
+**与生产路径的集成点**（§9.1）：
+
+```
+EXPORT（14 层 GeoJSON + 2 表 + 变更日志）
+    ↓
+RENDER（MapLibre 前端可视化）
+    ↓                                                          ← 新增步骤
+PROJECT_LAYOUT（建设项目布局规划图生成）  ← P2 待实现
+    ├── 底图组装（current/ + planned/ 简化叠加）
+    ├── 专题要素派生（操作结果 → 红线/设施/道路）
+    ├── 房屋近似（宅基地 + POI 缓冲区）
+    ├── 标注生成（项目名称 + 引线）
+    └── 图框装饰（图例/指北针/比例尺/项目一览表）
+```
+
+**金田村参考数据**：`data/gis/jintian/project/` + `data/gis/jintian/reference/`（从 DWG 转换的 GeoJSON + SVG），可作为 ground truth 验证生成效果。
+
+### 6.2 其他待实现项
+
 | 项目                                | 优先级 | 说明                                                                        |
 | ----------------------------------- | ------ | --------------------------------------------------------------------------- |
 | 附录3 管制规则模板                  | P2     | 文本生成模板，与 GIS 空间逻辑关系不大，属于规划文档输出范畴。标记为后续处理 |
@@ -351,9 +592,9 @@ PARSE Agent → OperationSequence（可执行操作列表）+ ConstraintSet（�
 
 | 文件                     | 用途                          | 条目数 |
 | ------------------------ | ----------------------------- | ------ |
-| dlbm.yaml                | 三调地类编码                  | 93     |
-| ghytbm.yaml              | 规划用途编码（附录5）         | 21     |
-| ghflbm.yaml              | 规划分类编码                  | 11     |
+| gbt21010.yaml            | 三调地类编码 (GB/T 21010)    | 73+    |
+| appendix5.yaml           | 规划用途编码 (广东省附录5)     | 21     |
+| ghflbm.yaml              | 规划分类编码 (广东省标准)      | 11     |
 | ydyhfldm.yaml            | 用地用海分类代码              | 49     |
 | vne.yaml                 | V/N/E 住建部分类              | 20     |
 | sddlbm_to_ydyhfldm.yaml  | 三调基数转换建议              | 45     |
@@ -487,6 +728,13 @@ VALIDATE（8 项空间检查 + 合规验证，最多 3 轮）
 EXPORT（14 层 GeoJSON + 2 表 + 变更日志）
     ↓
 RENDER（MapLibre 前端可视化）
+    ↓
+PROJECT_LAYOUT（建设项目布局规划图，P2 待实现）
+    ├── 底图组装（current/ + planned/ 简化叠加）
+    ├── 专题要素派生（操作结果 → 红线/设施/道路）
+    ├── 房屋近似（宅基地 + POI 缓冲区）
+    ├── 标注生成（项目名称 + 引线）
+    └── 图框装饰（图例/指北针/比例尺/项目一览表）
 ```
 
 > **与旧架构的关系**：旧管道中的 ALLOCATE（MIP）步骤已降级为 `optimize_allocation` 辅助工具，在批量 reclassify 操作时由执行引擎按需调用。GENERATE 步骤被 EXECUTE_OPERATIONS 替代——所有内部层（ParcelReclass/SpaceControl/UseZone/FacilityPlan/RoadPlan）都是操作执行的结果，不是独立管道步骤。
