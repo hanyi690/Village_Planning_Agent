@@ -10,10 +10,10 @@
 
 当前 RAG 系统存在两个关键缺陷：
 
-| # | 问题 | 现状 | 影响 |
-|---|------|------|------|
-| 1 | **文档类型无差异化切分** | 法律法规、技术规范、案例全部使用同一 `HierarchySlicer`（chunk_size=2500, chunk_overlap=500） | 法律条文被截断、技术标准上下文丢失、案例叙事不完整 |
-| 2 | **维度无差异化检索策略** | 23 个维度（除 Layer 2 禁用 RAG）共享同一检索管线，仅 `prefer_doc_types` 做粗粒度过滤 | 法律文档从未被命中、技术标准检索精度低、案例参考不足 |
+| # | 问题                           | 现状                                                                                          | 影响                                                 |
+| - | ------------------------------ | --------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| 1 | **文档类型无差异化切分** | 法律法规、技术规范、案例全部使用同一`HierarchySlicer`（chunk_size=2500, chunk_overlap=500） | 法律条文被截断、技术标准上下文丢失、案例叙事不完整   |
+| 2 | **维度无差异化检索策略** | 23 个维度（除 Layer 2 禁用 RAG）共享同一检索管线，仅`prefer_doc_types` 做粗粒度过滤         | 法律文档从未被命中、技术标准检索精度低、案例参考不足 |
 
 ### 1.2 问题 1 详解：统一切分的代价
 
@@ -30,13 +30,13 @@ splitter = MarkdownHeaderTextSplitter(
 
 **不同文档类型的结构特征差异**：
 
-| 文档类型 | 典型结构 | 切分需求 | 当前问题 |
-|----------|----------|----------|----------|
-| **法律法规** (12 部) | 章→节→条→款，严格编号（第X条第Y款） | 条款不可拆分，需保留完整法条 | 条款被截断，"第18条第3款"可能只保留前半段 |
-| **技术规范** (GB/T 等) | 章→节→条→项，含大量表格和公式 | 表格需完整保留，公式需上下文 | 表格跨 chunk 被拆散，指标表上下文丢失 |
-| **政策文件** | 通知+正文+附件，段落式 | 段落级切分，保留政策上下文 | 政策条款与适用范围分离 |
-| **案例** | 叙事式，无严格编号 | 语义完整段落，保留案例全貌 | 案例背景与措施分离 |
-| **上位规划** | 总体规划文本，层级深 | 需保留层级上下文（省→市→县） | 层级关系在切分中丢失 |
+| 文档类型                     | 典型结构                               | 切分需求                       | 当前问题                                  |
+| ---------------------------- | -------------------------------------- | ------------------------------ | ----------------------------------------- |
+| **法律法规** (12 部)   | 章→节→条→款，严格编号（第X条第Y款） | 条款不可拆分，需保留完整法条   | 条款被截断，"第18条第3款"可能只保留前半段 |
+| **技术规范** (GB/T 等) | 章→节→条→项，含大量表格和公式       | 表格需完整保留，公式需上下文   | 表格跨 chunk 被拆散，指标表上下文丢失     |
+| **政策文件**           | 通知+正文+附件，段落式                 | 段落级切分，保留政策上下文     | 政策条款与适用范围分离                    |
+| **案例**               | 叙事式，无严格编号                     | 语义完整段落，保留案例全貌     | 案例背景与措施分离                        |
+| **上位规划**           | 总体规划文本，层级深                   | 需保留层级上下文（省→市→县） | 层级关系在切分中丢失                      |
 
 **具体案例**：
 
@@ -62,14 +62,14 @@ splitter = MarkdownHeaderTextSplitter(
 
 **缺失的差异化维度**：
 
-| 差异化维度 | 当前状态 | 应有状态 |
-|------------|----------|----------|
-| 检索模式 | 纯向量搜索 | 向量 + BM25 混合（法律需精确匹配） |
-| Top-K | 固定 3-5 | 按维度动态调整（法规 2-3，案例 5-8） |
-| Reranking | 无 | 按维度配置（法规需法条完整性，案例需相关性） |
-| 查询扩展 | 固定同义词 | 按维度类型扩展（法规→法条编号，案例→项目类型） |
-| 分数阈值 | 固定 1.5 | 按文档类型调整（法规精确匹配阈值低，案例语义匹配阈值高） |
-| 上下文窗口 | 固定合并策略 | 按维度需求调整（法规需完整法条，案例需摘要） |
+| 差异化维度 | 当前状态     | 应有状态                                                 |
+| ---------- | ------------ | -------------------------------------------------------- |
+| 检索模式   | 纯向量搜索   | 向量 + BM25 混合（法律需精确匹配）                       |
+| Top-K      | 固定 3-5     | 按维度动态调整（法规 2-3，案例 5-8）                     |
+| Reranking  | 无           | 按维度配置（法规需法条完整性，案例需相关性）             |
+| 查询扩展   | 固定同义词   | 按维度类型扩展（法规→法条编号，案例→项目类型）         |
+| 分数阈值   | 固定 1.5     | 按文档类型调整（法规精确匹配阈值低，案例语义匹配阈值高） |
+| 上下文窗口 | 固定合并策略 | 按维度需求调整（法规需完整法条，案例需摘要）             |
 
 **法律法规从未被命中的根因**（08-rag-system.md §8.3 已记录）：
 
@@ -90,32 +90,32 @@ splitter = MarkdownHeaderTextSplitter(
 
 ### 2.1 文档类型差异化切分
 
-| 方案 | 来源 | 核心思路 | 适用性 |
-|------|------|----------|--------|
-| **Legal Chunking** | LawGPT / ChatLaw | 法律条文按"条"为最小单位，条内不可拆分；跨条引用时附加上下文 | ⭐⭐⭐ 法律法规 |
-| **Header-Aware + Parent-Child** | LlamaIndex RAG | 技术文档按标题层级切分，子 chunk 携带父 chunk 摘要 | ⭐⭐⭐ 技术规范 |
-| **Summary-Augmented Chunking (SAC)** | RAPTOR / GraphRAG | 每个 chunk 前置文档级/章节级摘要，增强语义完整性 | ⭐⭐⭐ 所有类型 |
-| **Semantic Chunking** | LumberChunker | 基于语义边界检测切分点，而非固定字符数 | ⭐⭐ 案例类 |
-| **Sliding Window + Overlap** | 通用方案 | 按固定窗口+重叠切分，适合无结构文档 | ⭐ 政策文件 |
+| 方案                                       | 来源              | 核心思路                                                     | 适用性          |
+| ------------------------------------------ | ----------------- | ------------------------------------------------------------ | --------------- |
+| **Legal Chunking**                   | LawGPT / ChatLaw  | 法律条文按"条"为最小单位，条内不可拆分；跨条引用时附加上下文 | ⭐⭐⭐ 法律法规 |
+| **Header-Aware + Parent-Child**      | LlamaIndex RAG    | 技术文档按标题层级切分，子 chunk 携带父 chunk 摘要           | ⭐⭐⭐ 技术规范 |
+| **Summary-Augmented Chunking (SAC)** | RAPTOR / GraphRAG | 每个 chunk 前置文档级/章节级摘要，增强语义完整性             | ⭐⭐⭐ 所有类型 |
+| **Semantic Chunking**                | LumberChunker     | 基于语义边界检测切分点，而非固定字符数                       | ⭐⭐ 案例类     |
+| **Sliding Window + Overlap**         | 通用方案          | 按固定窗口+重叠切分，适合无结构文档                          | ⭐ 政策文件     |
 
 ### 2.2 维度差异化检索
 
-| 方案 | 来源 | 核心思路 | 适用性 |
-|------|------|----------|--------|
-| **Conditional Retrieval Routing** | Self-RAG / CRAG | 根据查询意图分类，路由到不同检索策略 | ⭐⭐⭐ 核心方案 |
-| **Hybrid Search (BM25 + Vector)** | Weaviate / Qdrant | 关键词精确匹配 + 语义相似度，加权融合 | ⭐⭐⭐ 法律法规 |
-| **Query Rewriting + Expansion** | Query2Doc / Step-Back Prompting | 查询改写+扩展，提升召回率 | ⭐⭐ 技术标准 |
-| **Cross-Encoder Reranking** | Cohere / BGE-Reranker | 检索后精排，提升精度 | ⭐⭐⭐ 所有维度 |
-| **Adaptive Retrieval** | FLARE / DSPy | 根据生成置信度动态决定是否检索 | ⭐⭐ 规划思路层 |
+| 方案                                    | 来源                            | 核心思路                              | 适用性          |
+| --------------------------------------- | ------------------------------- | ------------------------------------- | --------------- |
+| **Conditional Retrieval Routing** | Self-RAG / CRAG                 | 根据查询意图分类，路由到不同检索策略  | ⭐⭐⭐ 核心方案 |
+| **Hybrid Search (BM25 + Vector)** | Weaviate / Qdrant               | 关键词精确匹配 + 语义相似度，加权融合 | ⭐⭐⭐ 法律法规 |
+| **Query Rewriting + Expansion**   | Query2Doc / Step-Back Prompting | 查询改写+扩展，提升召回率             | ⭐⭐ 技术标准   |
+| **Cross-Encoder Reranking**       | Cohere / BGE-Reranker           | 检索后精排，提升精度                  | ⭐⭐⭐ 所有维度 |
+| **Adaptive Retrieval**            | FLARE / DSPy                    | 根据生成置信度动态决定是否检索        | ⭐⭐ 规划思路层 |
 
 ### 2.3 规划领域特化参考
 
-| 参考 | 核心发现 | 本项目应用 |
-|------|----------|-----------|
-| **SuperMap CSPON** | 规划知识图谱 + 法规条文精确检索 | 法律法规 → 知识图谱三元组 |
-| **规易AI** | 2000+ 专业术语库 + 标准化查询 | DictionaryCenter 编码体系 → 查询扩展 |
-| **GeoAgentBench** | 117 原子工具 + Plan-and-React | 维度 → 工具 → 检索策略映射 |
-| **JackDaw (PoliRural+)** | 工具预过滤 + RAG + 值工程 | 维度级检索配置（预过滤+策略选择） |
+| 参考                           | 核心发现                        | 本项目应用                            |
+| ------------------------------ | ------------------------------- | ------------------------------------- |
+| **SuperMap CSPON**       | 规划知识图谱 + 法规条文精确检索 | 法律法规 → 知识图谱三元组            |
+| **规易AI**               | 2000+ 专业术语库 + 标准化查询   | DictionaryCenter 编码体系 → 查询扩展 |
+| **GeoAgentBench**        | 117 原子工具 + Plan-and-React   | 维度 → 工具 → 检索策略映射          |
+| **JackDaw (PoliRural+)** | 工具预过滤 + RAG + 值工程       | 维度级检索配置（预过滤+策略选择）     |
 
 ---
 
@@ -123,14 +123,14 @@ splitter = MarkdownHeaderTextSplitter(
 
 ### 3.1 切分策略矩阵
 
-| 文档类型 | 切分策略 | 最小单位 | chunk_size | overlap | 特殊处理 |
-|----------|----------|----------|------------|---------|----------|
-| **法律法规** | 条款保留 | 条（第X条） | 不限（按条切分） | 0 | 条内不可拆分；跨条引用附加上下文 |
-| **技术规范** | 标题感知+父子 | 项（X.X.X） | 2000 | 300 | 表格完整保留；公式附上下文 |
-| **政策文件** | 递归切分 | 段落 | 1800 | 400 | 通知正文与附件分离；适用范围前置 |
-| **案例** | 语义切分 | 完整案例段落 | 3000 | 500 | 案例背景+措施+效果保持完整 |
-| **上位规划** | 层级感知 | 节（X.X） | 2500 | 400 | 层级路径（省→市→县）注入 metadata |
-| **专业教材** | 标题感知 | 节（X.X） | 2500 | 500 | 当前策略基本适用，微调即可 |
+| 文档类型           | 切分策略      | 最小单位     | chunk_size       | overlap | 特殊处理                            |
+| ------------------ | ------------- | ------------ | ---------------- | ------- | ----------------------------------- |
+| **法律法规** | 条款保留      | 条（第X条）  | 不限（按条切分） | 0       | 条内不可拆分；跨条引用附加上下文    |
+| **技术规范** | 标题感知+父子 | 项（X.X.X）  | 2000             | 300     | 表格完整保留；公式附上下文          |
+| **政策文件** | 递归切分      | 段落         | 1800             | 400     | 通知正文与附件分离；适用范围前置    |
+| **案例**     | 语义切分      | 完整案例段落 | 3000             | 500     | 案例背景+措施+效果保持完整          |
+| **上位规划** | 层级感知      | 节（X.X）    | 2500             | 400     | 层级路径（省→市→县）注入 metadata |
+| **专业教材** | 标题感知      | 节（X.X）    | 2500             | 500     | 当前策略基本适用，微调即可          |
 
 ### 3.2 法律法规切分：条款保留策略
 
@@ -277,10 +277,10 @@ SAC 增强后:
 
 **摘要生成策略**：
 
-| 层级 | 摘要来源 | 生成方式 |
-|------|----------|----------|
-| 文档级 | 全文摘要 | LLM Flash 一次性生成（入库时） |
-| 章节级 | 章节摘要 | LLM Flash 按章节生成（入库时） |
+| 层级   | 摘要来源 | 生成方式                           |
+| ------ | -------- | ---------------------------------- |
+| 文档级 | 全文摘要 | LLM Flash 一次性生成（入库时）     |
+| 章节级 | 章节摘要 | LLM Flash 按章节生成（入库时）     |
 | 条款级 | 法条摘要 | LLM Flash 按条生成（法律法规专用） |
 
 **成本估算**：78 文档 × 平均 5 章 × Flash LLM ≈ 390 次 Flash 调用，约 ¥2-5
@@ -313,24 +313,24 @@ SAC 增强后:
 
 ### 4.2 维度→检索策略映射
 
-| 维度 | 检索路由 | 检索模式 | Top-K | 特殊配置 |
-|------|----------|----------|-------|----------|
-| **superior_planning** | LegalRoute | BM25(0.6) + Vector(0.4) | 3 | 法条完整性检查；精确匹配法律名称 |
-| **land_use** | TechRoute + LegalRoute | Vector(0.7) + BM25(0.3) | 4 | 用地分类标准精确匹配；法规补充 |
-| **historical_culture** | LegalRoute + TechRoute | BM25(0.5) + Vector(0.5) | 3 | 保护法规精确匹配；技术标准补充 |
-| **ecological_green** | TechRoute + LegalRoute | Vector(0.7) + BM25(0.3) | 4 | 生态红线标准；法规约束补充 |
-| **infrastructure** | TechRoute | Vector(1.0) + SAC | 5 | 表格完整性；设施配置标准 |
-| **traffic** | TechRoute | Vector(1.0) + SAC | 4 | 道路等级标准；可达性方法 |
-| **public_services** | TechRoute | Vector(1.0) + SAC | 4 | 设施配置标准表格 |
-| **industry** | CaseRoute + TechRoute | Vector(0.8) + Case(0.2) | 6 | 产业案例参考；技术标准 |
-| **spatial_structure** | CaseRoute + TechRoute | Vector(0.6) + Case(0.4) | 5 | 空间布局案例；结构模式 |
-| **settlement_planning** | CaseRoute + TechRoute | Vector(0.6) + Case(0.4) | 5 | 居民点整治案例 |
-| **landscape** | CaseRoute + TechRoute | Vector(0.6) + Case(0.4) | 5 | 景观风貌案例 |
-| **villager_wishes** | TechRoute | Vector(1.0) | 3 | 调查方法标准 |
-| **socio_economic** | TechRoute | Vector(1.0) | 3 | 人口预测方法 |
-| **architecture** | TechRoute + PolicyRoute | Vector(0.8) + BM25(0.2) | 4 | 建筑标准+风貌法规 |
-| **natural_environment** | TechRoute | Vector(1.0) | 3 | 生态评价方法 |
-| **location** | TechRoute | Vector(1.0) | 3 | 区位分析方法 |
+| 维度                          | 检索路由                | 检索模式                | Top-K | 特殊配置                         |
+| ----------------------------- | ----------------------- | ----------------------- | ----- | -------------------------------- |
+| **superior_planning**   | LegalRoute              | BM25(0.6) + Vector(0.4) | 3     | 法条完整性检查；精确匹配法律名称 |
+| **land_use**            | TechRoute + LegalRoute  | Vector(0.7) + BM25(0.3) | 4     | 用地分类标准精确匹配；法规补充   |
+| **historical_culture**  | LegalRoute + TechRoute  | BM25(0.5) + Vector(0.5) | 3     | 保护法规精确匹配；技术标准补充   |
+| **ecological_green**    | TechRoute + LegalRoute  | Vector(0.7) + BM25(0.3) | 4     | 生态红线标准；法规约束补充       |
+| **infrastructure**      | TechRoute               | Vector(1.0) + SAC       | 5     | 表格完整性；设施配置标准         |
+| **traffic**             | TechRoute               | Vector(1.0) + SAC       | 4     | 道路等级标准；可达性方法         |
+| **public_services**     | TechRoute               | Vector(1.0) + SAC       | 4     | 设施配置标准表格                 |
+| **industry**            | CaseRoute + TechRoute   | Vector(0.8) + Case(0.2) | 6     | 产业案例参考；技术标准           |
+| **spatial_structure**   | CaseRoute + TechRoute   | Vector(0.6) + Case(0.4) | 5     | 空间布局案例；结构模式           |
+| **settlement_planning** | CaseRoute + TechRoute   | Vector(0.6) + Case(0.4) | 5     | 居民点整治案例                   |
+| **landscape**           | CaseRoute + TechRoute   | Vector(0.6) + Case(0.4) | 5     | 景观风貌案例                     |
+| **villager_wishes**     | TechRoute               | Vector(1.0)             | 3     | 调查方法标准                     |
+| **socio_economic**      | TechRoute               | Vector(1.0)             | 3     | 人口预测方法                     |
+| **architecture**        | TechRoute + PolicyRoute | Vector(0.8) + BM25(0.2) | 4     | 建筑标准+风貌法规                |
+| **natural_environment** | TechRoute               | Vector(1.0)             | 3     | 生态评价方法                     |
+| **location**            | TechRoute               | Vector(1.0)             | 3     | 区位分析方法                     |
 
 ### 4.3 检索路由实现方案
 
@@ -550,14 +550,14 @@ if dim_key in LEGAL_RELEVANT_DIMS:
 
 ### 5.3 法规相关维度映射
 
-| 维度 | 相关法规 | 查询改写示例 |
-|------|----------|-------------|
-| superior_planning | 土地管理法、城乡规划法 | "土地管理法 村庄规划" + "城乡规划法 乡村建设" |
-| land_use | 土地管理法、基本农田保护条例 | "土地管理法 建设用地审批" + "基本农田保护条例" |
+| 维度               | 相关法规                                 | 查询改写示例                                   |
+| ------------------ | ---------------------------------------- | ---------------------------------------------- |
+| superior_planning  | 土地管理法、城乡规划法                   | "土地管理法 村庄规划" + "城乡规划法 乡村建设"  |
+| land_use           | 土地管理法、基本农田保护条例             | "土地管理法 建设用地审批" + "基本农田保护条例" |
 | historical_culture | 文物保护法、历史文化名城名镇名村保护条例 | "文物保护法 传统村落" + "历史文化名村保护条例" |
-| ecological_green | 环境保护法、森林法 | "环境保护法 生态红线" + "森林法 生态保护" |
-| land_use_planning | 土地管理法、城乡规划法 | "土地管理法 用地规划" + "城乡规划法 用地布局" |
-| architecture | 城乡规划法、建筑法 | "城乡规划法 建筑管理" + "建筑法 农房建设" |
+| ecological_green   | 环境保护法、森林法                       | "环境保护法 生态红线" + "森林法 生态保护"      |
+| land_use_planning  | 土地管理法、城乡规划法                   | "土地管理法 用地规划" + "城乡规划法 用地布局"  |
+| architecture       | 城乡规划法、建筑法                       | "城乡规划法 建筑管理" + "建筑法 农房建设"      |
 
 ---
 
@@ -582,12 +582,12 @@ Cross-Encoder Reranking 后:
 
 ### 6.2 Reranker 选型
 
-| 模型 | 大小 | 延迟 | 中文支持 | 适用场景 |
-|------|------|------|----------|----------|
-| **bge-reranker-v2-m3** | 560M | ~50ms/query | ⭐⭐⭐ | 通用中文 Reranking |
-| **bge-reranker-large** | 330M | ~30ms/query | ⭐⭐⭐ | 低延迟场景 |
-| **Cohere Rerank** | API | ~100ms/query | ⭐⭐ | 无需本地部署 |
-| **Qwen-Reranker** | 7B | ~200ms/query | ⭐⭐⭐⭐ | 最高精度 |
+| 模型                         | 大小 | 延迟         | 中文支持 | 适用场景           |
+| ---------------------------- | ---- | ------------ | -------- | ------------------ |
+| **bge-reranker-v2-m3** | 560M | ~50ms/query  | ⭐⭐⭐   | 通用中文 Reranking |
+| **bge-reranker-large** | 330M | ~30ms/query  | ⭐⭐⭐   | 低延迟场景         |
+| **Cohere Rerank**      | API  | ~100ms/query | ⭐⭐     | 无需本地部署       |
+| **Qwen-Reranker**      | 7B   | ~200ms/query | ⭐⭐⭐⭐ | 最高精度           |
 
 **推荐**：`bge-reranker-v2-m3`（本地部署，中文优化，延迟可接受）
 
@@ -679,25 +679,25 @@ class RerankingPipeline:
 
 ### 8.1 复用清单
 
-| 已有模块 | 路径 | 复用方式 |
-|----------|------|----------|
-| HierarchySlicer | `modules/rag/chunker.py` | 技术规范/教材仍使用，法律法规/案例替换 |
-| HierarchyVectorStore | `modules/rag/vector_store.py` | 扩展支持混合检索，不替换 |
-| MetadataExtractor | `modules/rag/utils/metadata_extractor.py` | 增加 `doc_type` → 切分策略映射 |
-| RagService | `modules/rag/service.py` | 扩展 `search()` 支持路由分发 |
-| DimensionConfig | `config/loader.py` | 扩展 `retrieval_config` 字段 |
-| DictionaryCenter | `modules/gis/schema/dicts/` | 查询扩展：用地分类名称 → 编码 → 法规关联 |
+| 已有模块             | 路径                                        | 复用方式                                   |
+| -------------------- | ------------------------------------------- | ------------------------------------------ |
+| HierarchySlicer      | `modules/rag/chunker.py`                  | 技术规范/教材仍使用，法律法规/案例替换     |
+| HierarchyVectorStore | `modules/rag/vector_store.py`             | 扩展支持混合检索，不替换                   |
+| MetadataExtractor    | `modules/rag/utils/metadata_extractor.py` | 增加`doc_type` → 切分策略映射           |
+| RagService           | `modules/rag/service.py`                  | 扩展`search()` 支持路由分发              |
+| DimensionConfig      | `config/loader.py`                        | 扩展`retrieval_config` 字段              |
+| DictionaryCenter     | `modules/gis/schema/dicts/`               | 查询扩展：用地分类名称 → 编码 → 法规关联 |
 
 ### 8.2 向后兼容
 
-| 变更 | 兼容策略 |
-|------|----------|
-| 新增 LegalSlicer | 不影响现有 HierarchySlicer；按 `doc_type` 路由选择切分器 |
-| 新增 BM25 索引 | 独立索引，不影响 ChromaDB；混合检索是新增能力 |
-| 扩展 DimensionConfig | `retrieval_config` 有默认值，旧配置自动兼容 |
-| 新增 IntentRouter | 默认路由为 TechRoute，与当前行为一致 |
-| 新增 Reranker | 可选功能，`reranker: false` 时跳过 |
-| SAC 摘要 | 入库时生成，旧数据可增量补充 |
+| 变更                 | 兼容策略                                                  |
+| -------------------- | --------------------------------------------------------- |
+| 新增 LegalSlicer     | 不影响现有 HierarchySlicer；按`doc_type` 路由选择切分器 |
+| 新增 BM25 索引       | 独立索引，不影响 ChromaDB；混合检索是新增能力             |
+| 扩展 DimensionConfig | `retrieval_config` 有默认值，旧配置自动兼容             |
+| 新增 IntentRouter    | 默认路由为 TechRoute，与当前行为一致                      |
+| 新增 Reranker        | 可选功能，`reranker: false` 时跳过                      |
+| SAC 摘要             | 入库时生成，旧数据可增量补充                              |
 
 ### 8.3 数据迁移
 
@@ -766,33 +766,473 @@ Phase 5 迁移（技术规范+案例）：
 
 ## 十、与 08-rag-system.md 的对齐
 
+
+
+  一、优化方案对比研究分析
+  让我基于搜索结果展示不同优化方案的效果：
+
+  案例1: Anthropic的Contextual Retrieval (2024)
+
+  优化措施： 为每个chunk生成50-100 token的文档上下文
+
+  效果：
+
+  ┌──────────────────────────────┬────────────┬──────────┐
+  │             技术             │ 检索失败率 │ 改善幅度 │
+  ├──────────────────────────────┼────────────┼──────────┤
+  │ 基础RAG                      │ 5.7%       │ 基线     │
+  ├──────────────────────────────┼────────────┼──────────┤
+  │ +Contextual Embeddings       │ 3.7%       │ -35%     │
+  ├──────────────────────────────┼────────────┼──────────┤
+  │ +Contextual BM25             │ 2.9%       │ -49%     │
+  ├──────────────────────────────┼────────────┼──────────┤
+  │ +Contextual BM25 + Reranking │ 1.9%       │ -67%     │
+  └──────────────────────────────┴────────────┴──────────┘
+
+  成本分析：
+
+- $1.02/百万token（prompt caching）
+- 适用于800 token chunks + 50 token context instructions
+
+  案例2: Chroma Research基准测试
+
+  原文配置： 800 tokens, 400 tokens overlap → 1.4%精度
+
+  优化配置： 200 tokens, 0% overlap → 5.18%精度（3.7倍提升）
+
+  关键发现：
+
+- 10% overlap是最佳比例（不是50%！）
+- 句子级chunking性价比最高
+- 语境悬崖：超过2500 tokens精度下降
+- 语义chunking对自然文档提升有限
+
+  案例3: eBay E-commerce RAG系统
+
+  数据配置：
+
+- Chunk size: 384 tokens（recursive split）
+- Overlap: 50 tokens
+- 2,645个问题-答案对测试
+
+  结果：
+
+- Recursive chunking表现最佳
+- 元数据增强（标题+关键词）提升0.034 mAP
+- Query refinement将mAP从0.45提升到0.48
+
+  案例4: 自适应Chunking框架 (Ekimetrics, 2026)
+
+  5个指标评估：
+
+1. References Completeness (RC)
+2. Intrachunk Cohesion (ICC)
+3. Document Contextual Coherence (DCC)
+4. Block Integrity (BI)
+5. Size Compliance (SC)
+
+  效果：
+
+- 问题正确率从62-64%提升到72%
+- 成功回答问题+30%（65 vs 49）
+
+---
+
+  二、当前代码的具体问题
+
+  问题1：切片配置单一（chunker.py第715-720行）
+
+# 当前代码
+
+  splitter = RecursiveCharacterTextSplitter(
+      chunk_size=max_chars,           # 固定2500
+      chunk_overlap=200,              # 固定，不是10%关系！
+      separators=["\n\n", "\n", "。", "；", "，", " ", ""],
+  )
+
+  问题：
+
+- 使用200 overlap固定值（应使用10% chunk size比例）
+- 所有文档类型相同配置
+- 缺少结构感知的分割策略
+
+  问题2：查询生成无维度差异化（service.py第320行）
+
+# 当前代码
+
+  llm = create_flash_llm(max_tokens=200, temperature=0.3)
+  queries = [q.strip() for q in response.content.split("\n") if q.strip()]
+  return queries[:8]  # 固定8个query
+
+  问题：
+
+- 所有维度使用相同的max_tokens=200
+- 无温度调优（相同temperature=0.3）
+- 固定top_k=8，无维度优先级差异
+
+  问题3：缺少边界保护机制
+
+  缺失：
+
+- 空标题节点修复不完整
+- 法律文档章节边界未保留
+- 表格chunking策略简单（仅提取前后文本）
+
+---
+
+  三、具体可操作的优化实施
+
+  优化方案A：文档类型感知的切片 + 边界保护
+
+  步骤1：修改settings.py（文档配置部分）
+
+# 在 backend/app/core/settings.py 第99-101行之后添加
+
+# ==========================================
+
+# RAG Doc-Type Aware Chunking Configuration
+
+# ==========================================
+
+  CHUNK_CONFIG = {
+      # 专业教材：保留章节结构，可稍大chunk
+      "textbook": {
+          "max_chars": 3500,
+          "overlap_percent": 10,
+          "separators": ["\n\n##", "\n\n###", "\n\n", "\n", "。", "；", "，", " ", ""],
+          "respect_boundaries": True,  # 保留章节边界
+      },
+
+    # 法律法规：保留条款边界，使用较小chunk + semantic cutoff
+      "policy": {
+          "max_chars": 2000,
+          "overlap_percent": 10,
+          "separators": ["\n\n第", "\n\n([一二三四五六七八九十]+)",
+                         "\n\n[A-Z]\\. ", "\n\n", "。", "；"],
+          "use_semantic_cutoff": True,  # 使用语义断点而非固定大小
+          "respect_boundaries": True,  # 保留"第一条/第二款"边界
+      },
+
+    # 技术标准：平衡配置，精确chunk
+      "standard": {
+          "max_chars": 2500,
+          "overlap_percent": 10,
+          "separators": ["\n\n##", "\n\n###", "\n\n§", "\n\n", "。", "；", "，", " ", ""],
+          "use_semantic_similarity": True,  # 使用语义相似度检测主题变化
+      },
+
+    # 案例：可大chunk，逐案存储
+      "case": {
+          "max_chars": 4000,
+          "overlap_percent": 15,
+          "separators": ["\n\n\n", "\n\n", "\n", "。", "；", "，", " ", ""],
+          "respect_case_boundary": True,  # 保留案例标题边界
+      },
+
+    # 默认配置
+      "default": {
+          "max_chars": 3000,
+          "overlap_percent": 10,
+          "separators": ["\n\n", "\n", "。", "；", "，", " ", ""],
+      }
+  }
+
+# Embedding限制（阿里云text-embedding-v4支持8192 token）
+
+  ROBUST_CHUNK_SIZE = 4000  # 安全上限
+  DEFAULT_CHUNK_SIZE = 3000  # 默认值
+  MAX_OVERLAP_PERCENT = 20   # 最大overlap百分比
+
+  步骤2：在chunker.py中添加结构感知切片器
+
+# 在 backend/app/modules/rag/chunker.py 顶部导入部分添加
+
+  from typing import Literal, Optional, Dict, List, Any
+
+# 在类定义外部添加工具函数
+
+  def _calculate_overlap_size(chunk_size: int, overlap_percent: int) -> int:
+      """计算overlap大小（百分比）"""
+      return max(50, chunk_size * overlap_percent // 100)  # 至少50字符
+
+  def _detect_boundaries(content: str) -> Dict[str, List[str]]:
+      """检测文档边界标记
+
+    返回：{"paragraphs": [...], "legal_items": [...], "table_separators": [...]}
+      """
+      import re
+      boundaries = {"paragraphs": [], "legal_items": [], "section_titles": []}
+
+    # 法律条款
+      legal_pattern = r'\n\n(第[一二三四五六七八九十百千]+条|第一款|第二款|[A-Z]\.\s+\w+)'
+      legal_matches = re.findall(legal_pattern, content)
+      boundaries["legal_items"] = legal_matches
+
+    # PDF章节标题
+      section_pattern = r'\n\n(第[一二三四五六七八九十]+章|Chapter\s+\d+|[IVX]+\.?\s+\w+)'
+      section_matches = re.findall(section_pattern, content)
+      boundaries["section_titles"] = section_matches
+
+    # 段落边界（双换行）
+      boundaries["paragraphs"] = [m.start() for m in re.finditer(r'\n\n', content)]
+
+    return boundaries
+
+  def _create_structure_preserving_splitter(chunk_size: int, overlap: int,
+                                           separators: List[str],
+                                           respect_boundaries: bool = False,
+                                           doc_type: str = "default") -> Any:
+      """创建保留文档结构的splitter
+
+    Args:
+          chunk_size: 每块字符数
+          overlap: 重叠字符数
+          separators: 分隔符列表（按优先级)
+          respect_boundaries: 是否尊重文档边界
+          doc_type: 文档类型（影响策略选择）
+      """
+      from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    # 法律文档检测
+      if respect_boundaries or doc_type == "policy":
+          # 优先使用条款边界
+          enhanced_separators = [
+              r'\n\n第[一二三四五六七八九十百千]+条',
+              r'\n\n[A-Z]\.\s+\w+',
+              r'\n\n([一二三四五六七八九十百千]+款)',
+              *separators
+          ]
+      else:
+          enhanced_separators = separators
+
+    return RecursiveCharacterTextSplitter(
+          chunk_size=chunk_size,
+          chunk_overlap=overlap,
+          separators=enhanced_separators,
+          # 增强分块算法，优先按边界切分
+          length_function=len,
+          is_separator_regex=True  # 移除此行（相当于is_separator_regex=False）
+      )
+
+# 修改 HierarchySlicer.slice_content() 方法
+
+  async def _slice_content(
+      self,
+      content: str,
+      source_name: str,
+      doc_type: str = "default"
+  ) -> List[HierarchyChunk]:
+      """带结构感知的切片处理
+
+    Args:
+          content: Markdown内容
+          source_name: 文档名称
+          doc_type: 文档类型
+      """
+      from app.core.settings import CHUNK_CONFIG, ROBUST_CHUNK_SIZE, DEFAULT_CHUNK_SIZE
+
+    # 1. 选择chunk配置
+      chunk_cfg = CHUNK_CONFIG.get(doc_type, CHUNK_CONFIG["default"])
+      max_chars = min(chunk_cfg["max_chars"], ROBUST_CHUNK_SIZE)
+      overlap_size = _calculate_overlap_size(max_chars, chunk_cfg["overlap_percent"])
+      separators = chunk_cfg["separators"]
+
+    # 2. 检测文档边界（仅对政策/标准文档）
+      use_robust_splitter = chunk_cfg.get("respect_boundaries", False) or
+    doc_type == "policy" or doc_type in ["standard", "textbook"]
+
+    # 3. 使用结构感知的splitter
+      try:
+          splitter = _create_structure_preserving_splitter(
+              max_chars, overlap_size, separators,
+              respect_boundaries=use_robust_splitter,
+              doc_type=doc_type
+          )
+          documents = splitter.split_text(content)
+      except Exception as e:
+          logger.warning(f"[Chunker] Robust splitter failed: {e}, using fallback")
+          # 回退到简单分块
+          documents = self._fallback_simple(content, source_name)
+
+    # 4. 处理超长切片
+      results = []
+      for doc in documents:
+          if len(doc.page_content) > max_chars * 3:  # 单块 > 3倍chunk_size
+              # 按1000字符分块
+              sub_chunks = self._split_by_char_limit(doc.page_content, 1000, source_name)
+              results.extend(sub_chunks)
+          else:
+              results.append(self._create_hierarchy_chunk(doc, source_name))
+
+    return results
+
+  def _split_by_char_limit(self, content: str, limit: int, source_name: str) -> List[HierarchyChunk]:
+    """按字符限制分块（防止超长切片）"""
+      import math
+      chunks_count = math.ceil(len(content) / limit)
+      results = []
+
+    for i in range(chunks_count):
+          start = i * limit
+          end = min((i + 1) * limit, len(content))
+          chunk_text = content[start:end]
+
+    chunk = HierarchyChunk(
+              content=chunk_text,
+              chunk_id=f"{source_name}_{i}",
+              depth=0,
+              parent_id=None,
+              ancestors=[],
+              section_title=f"Section {i+1}",
+              metadata={"source": source_name, "is_split": True}
+          )
+          results.append(chunk)
+
+    return results
+
+  步骤3：增强表格chunking（parse_tools.py现有代码优化）
+
+# 在 backend/app/tools/gis/parse_tools.py 的 extract_structured_text 函数中
+
+  async def extract_structured_text(
+      section_content: str,
+      table_type: str = "general",
+      deduplicate_rows: bool = True  # 新增参数
+  ) -> Dict[str, Any]:
+      """提取结构化表格数据（增强版）
+
+    新增功能：
+      - 表格行去重
+      - 头部判断改进
+      - 自适应行分块
+      """
+      try:
+          from app.core.settings import CHUNK_SIZE
+          from langchain_core.messages import AIMessage
+
+    # Stage 1: json_schema（优先）
+          try:
+              structured_llm = llm.with_structured_output(
+                  TableExtractionResult, method="json_schema"
+              )
+              result = await structured_llm.ainvoke([
+                  SystemMessage(content=f"{prompt}\n\nReturn JSON output."),
+                  HumanMessage(content=section_content),
+              ])
+              if result is not None:
+                  # 表格行去重（按全部列值）
+                  if deduplicate_rows:
+                      seen_rows = set()
+                      unique_rows = []
+                      for row in result.rows:
+                          row_key = tuple(row.values()) if isinstance(row, dict) else row
+                          if row_key not in seen_rows:
+                              seen_rows.add(row_key)
+                              unique_rows.append(row)
+                      result.rows = unique_rows
+                      result.column_names = list(seen_rows.pop()[0].keys()) if seen_rows else
+  result.column_names
+
+    return make_result(
+                      success=True,
+                      data={
+                          "rows": result.rows,
+                          "column_names": result.column_names,
+                          "confidence": result.confidence,
+                          "row_count": len(result.rows),
+                      },
+                  )
+          except Exception as parse_err:
+              logger.debug("[extract_structured_text] Stage 1 failed: %s", parse_err)
+
+    # Stage 2: Raw invoke + manual JSON parse（已有逻辑保持不变）
+          raw = None
+          try:
+              raw_response = await llm.ainvoke([
+                  SystemMessage(content=f"{prompt}\n\nReturn JSON output."),
+                  HumanMessage(content=section_content),
+              ])
+              raw = raw_response.content if hasattr(raw_response, 'content') else str(raw_response)
+
+    # 手动JSON解析（已有逻辑保持不变）
+              json_str = re.sub(r'^``(?:json)?\s*', '', raw, flags=re.MULTILINE)               json_str = re.sub(r'\s*``$', '', json_str, flags=re.MULTILINE)
+
+    obj_s = json_str.find('{')
+              arr_s = json_str.find('[')
+              if arr_s != -1 and (obj_s == -1 or arr_s < obj_s):
+                  # 回退逻辑保持不变
+                  ...
+              else:
+                  ...
+
+    return make_result(
+                  success=True,
+                  data={
+                      "rows": result.rows,
+                      "column_names": result.column_names,
+                      "confidence": result.confidence,
+                      "row_count": len(result.rows),
+                  },
+              )
+          except Exception as e2:
+              logger.debug("[extract_structured_text] Stage 2 failed: %s", e2)
+
+    # Stage 3: Flash repair（已有逻辑保持不变）
+          ...
+
+    return make_result(success=False, error="All 3 stages failed")
+      except Exception as e:
+          logger.warning("[extract_structured_text] Failed: %s", e)
+          return make_result(success=False, error=str(e))
+
+---
+
+  优化方案B：维度级Query调优 + 上下文增强
+
+  步骤1：修改settings.py（Query调优配置）
+
+# 在 backend/app/core/settings.py 第320行附近添加
+
+# ==========================================
+
+# RAG Query Tuning Configuration
+
+# ==========================================
+
+  QUERY_TUNE_CONFIG = {
+      # 技术标准类：短query，冷启动慢
+      "technical": {
+          "max_tokens": 150,          # 减少到150
+          "temperature": 0.1,         # 更冷的温度（更精确）
+          "top_k":
+
 本探索文档完全对齐 `08-rag-system.md v8.0` 的架构，是增量增强而非重构：
 
-| 08-rag-system.md 组件 | 当前状态 | 本文档增强 |
-|----------------------|----------|-----------|
-| HierarchySlicer | 统一切分 | 按文档类型路由到专用切分器 |
-| HierarchyVectorStore | 纯向量检索 | 扩展支持 BM25 + 向量混合 |
-| RagService.generate_queries() | L1/L3 Prompt 差异 | 增加法规查询改写 + 意图路由 |
-| RagService.search() | prefer_doc_types 过滤 | 增加检索路由 + Reranking |
-| DimensionConfig | prefer_doc_types | 增加 retrieval_config |
-| MetadataExtractor | doc_type 推断 | 增加 doc_type → 切分策略映射 |
-| Small-to-Big | 占位切片合并 | 增加 SAC 摘要增强 |
-| §8.3 法律法规未命中 | 已知问题 | 本文档 Phase 1 专项解决 |
+| 08-rag-system.md 组件         | 当前状态              | 本文档增强                    |
+| ----------------------------- | --------------------- | ----------------------------- |
+| HierarchySlicer               | 统一切分              | 按文档类型路由到专用切分器    |
+| HierarchyVectorStore          | 纯向量检索            | 扩展支持 BM25 + 向量混合      |
+| RagService.generate_queries() | L1/L3 Prompt 差异     | 增加法规查询改写 + 意图路由   |
+| RagService.search()           | prefer_doc_types 过滤 | 增加检索路由 + Reranking      |
+| DimensionConfig               | prefer_doc_types      | 增加 retrieval_config         |
+| MetadataExtractor             | doc_type 推断         | 增加 doc_type → 切分策略映射 |
+| Small-to-Big                  | 占位切片合并          | 增加 SAC 摘要增强             |
+| §8.3 法律法规未命中          | 已知问题              | 本文档 Phase 1 专项解决       |
 
 ---
 
 ## 附录 A：78 文档类型分布
 
-| 类别 | 文档数 | doc_type | 切分策略 |
-|------|--------|----------|----------|
-| 专业教材 | ~5 | textbook | 标题感知（当前策略） |
-| 法律法规/法律 | ~12 | policy | **条款保留**（LegalSlicer） |
-| 法律法规/地方性法规 | ~3 | policy | **条款保留**（LegalSlicer） |
-| 政策文件/国家层面 | ~8 | policy | 递归切分（PolicySlicer） |
-| 政策文件/地方层面 | ~5 | policy | 递归切分（PolicySlicer） |
-| 技术规范/国家层面 | ~20 | standard | **标题感知+表格保留**（StandardSlicer） |
-| 上位规划/广东省 | ~5 | planning | 层级感知（PlanningSlicer） |
-| 相关案例 | ~20 | case | **语义完整性**（CaseSlicer） |
+| 类别                | 文档数 | doc_type | 切分策略                                      |
+| ------------------- | ------ | -------- | --------------------------------------------- |
+| 专业教材            | ~5     | textbook | 标题感知（当前策略）                          |
+| 法律法规/法律       | ~12    | policy   | **条款保留**（LegalSlicer）             |
+| 法律法规/地方性法规 | ~3     | policy   | **条款保留**（LegalSlicer）             |
+| 政策文件/国家层面   | ~8     | policy   | 递归切分（PolicySlicer）                      |
+| 政策文件/地方层面   | ~5     | policy   | 递归切分（PolicySlicer）                      |
+| 技术规范/国家层面   | ~20    | standard | **标题感知+表格保留**（StandardSlicer） |
+| 上位规划/广东省     | ~5     | planning | 层级感知（PlanningSlicer）                    |
+| 相关案例            | ~20    | case     | **语义完整性**（CaseSlicer）            |
 
 ## 附录 B：BM25 实现参考
 
