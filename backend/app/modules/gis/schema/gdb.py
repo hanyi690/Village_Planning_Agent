@@ -75,7 +75,7 @@ GDB_LAYER_REGISTRY: Dict[str, LayerDef] = {
         "source": "current/boundary.geojson",
         "internal_layer": "boundary",
         "category": "current",
-        "description": "规划村范围 GHCFW (广东省村庄规划数据库标准)",
+        "description": "规划村范围 GHCFW (广东省技术指南 表3)",
     },
 
     "admin_boundary_line": {
@@ -100,10 +100,10 @@ GDB_LAYER_REGISTRY: Dict[str, LayerDef] = {
         "fields": [
             ("BSM", "str:18"),       # 标识码 (18位元素代码)
             ("YSDM", "str:10"),      # 要素代码
-            ("DLBM", "str:4"),       # 地类编码 (GB/T 21010)
+            ("DLBM", "str:4"),       # 地类编码 (实际为附录5规划用途编码, GDB原始数据如此)
             ("DLMC", "str:20"),      # 地类名称
-            ("SDDLBM", "str:5"),     # 三调地类编码 (部分GDB缺失, DLBM≈SDDLBM可替代)
-            ("SDDLMC", "str:60"),    # 三调地类名称 (部分GDB缺失)
+            ("SDDLBM", "str:5"),     # 三调地类编码 (导出时从DLBM复制, 值同附录5, 非GB/T 21010)
+            ("SDDLMC", "str:60"),    # 三调地类名称 (导出时从DLMC复制)
             ("DLMJ", "float64"),     # 地类面积
         ],
         "source": "current/landuse.geojson",
@@ -148,15 +148,15 @@ GDB_LAYER_REGISTRY: Dict[str, LayerDef] = {
             ("TBH", "str:8"),        # 图斑号
             ("XZQHDM", "str:12"),    # 行政区划代码
             ("XZQHMC", "str:100"),   # 行政区划名称
-            ("DLBM", "str:4"),       # 地类编码(现状)
+            ("DLBM", "str:4"),       # 基期地类编码 (土规数据库标准)
             ("DLMJ", "float64"),     # 地类面积
-            ("QMDLBM", "str:4"),     # 期末地类编码
+            ("QMDLBM", "str:4"),     # 期末地类编码 (土规数据库标准)
             ("LYYSDM", "str:10"),    # 来源要素代码
             ("MS", "str:90"),        # 描述
-            ("GHFLBM", "str:4"),     # 规划分类编码
-            ("QMGHFLBM", "str:4"),   # 期末规划分类编码
-            ("GHYTBM", "str:4"),     # 规划用途编码
-            ("GHYTMC", "str:20"),    # 规划用途名称
+            ("GHFLBM", "str:4"),     # 规划分类编码 (ghflbm体系)
+            ("QMGHFLBM", "str:4"),   # 期末规划分类编码 (ghflbm体系)
+            ("GHYTBM", "str:4"),     # 规划用途编码 (附录5)
+            ("GHYTMC", "str:20"),    # 规划用途名称 (附录5)
             ("LSYSXZB1", "str:4"),   # 落实约束性指标1
             ("LSZBMJ1", "float64"),  # 落实指标面积1
             ("LSYSXZB2", "str:4"),   # 落实约束性指标2
@@ -169,7 +169,7 @@ GDB_LAYER_REGISTRY: Dict[str, LayerDef] = {
         "source": "planned/landuse.geojson",
         "internal_layer": "function_zone",
         "category": "planned",
-        "description": "目标年期末地类图斑 QMDLTB (广东省村庄规划数据库标准)",
+        "description": "目标年期末地类图斑 QMDLTB (广东省技术指南 表4)",
     },
 
     "ecological_redline": {
@@ -252,7 +252,7 @@ GDB_LAYER_REGISTRY: Dict[str, LayerDef] = {
         "source": "planned/space_control_zone.geojson",
         "internal_layer": "space_control_zone",
         "category": "planned",
-        "description": "建设用地管制区 JSYDGZQ (允许510/限制520/有条件530/禁止540)",
+        "description": "建设用地管制区 JSYDGZQ (广东省技术指南 表6, 510/520/530/540)",
     },
 
     "land_use_zone": {
@@ -272,7 +272,7 @@ GDB_LAYER_REGISTRY: Dict[str, LayerDef] = {
         "source": "planned/land_use_zone.geojson",
         "internal_layer": "land_use_zone",
         "category": "planned",
-        "description": "土地用途分区 TDYT (广东省县级土地利用总体规划数据库标准)",
+        "description": "土地用途分区 TDYT (广东省技术指南 表5)",
     },
 
     "hazard_points": {

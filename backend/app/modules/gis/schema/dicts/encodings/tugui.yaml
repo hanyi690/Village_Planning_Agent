@@ -1,0 +1,133 @@
+# 广东省县级土地利用总体规划数据库标准 地类编码 — 单一真相源
+#
+# 此标准源自:
+#   粤国土资规保发〔2009〕67号《广东省县级土地利用规划数据库标准（试行）》
+#   粤国土资规划发〔2010〕222号 修订版
+#
+# 广东省村庄规划技术指南 表4 (QMDLTB) 注2 明确引用:
+#   "地类编码、期末地类编码值域详见《广东省县级土地利用总体规划数据库标准》"
+#
+# 与 GB/T 21010-2017 (gbt21010.yaml) 的区别:
+#   国标 0101=水田(二级类), 土规 0110=水田
+#   国标 0702=农村宅基地(二级类), 土规 2030=农村居民点
+#   国标 0301=乔木林地(二级类), 土规 0310=有林地
+# 两者是独立编码体系，不存在官方一一映射表。
+#
+# planning_zone 来源: TD/T 1027-2010 县级土地利用总体规划数据库标准 附录B
+#   (土地规划用途分类: 基本农田保护区/一般农地区/林业用地区/城镇村建设用地区等)
+# primary_zone 来源: 国土空间规划"三区三线"体系 (农业空间/建设空间/生态空间)
+
+version: "2026_GUANGDONG_V1"
+standard: "广东省县级土地利用总体规划数据库标准 (粤国土资规保发〔2009〕67号)"
+system: "tugui"
+code_format: "4-digit"
+usage: "QMDLTB.DLBM, QMDLTB.QMDLBM 值域 (广东省村庄规划技术指南表4注2)"
+note: |
+  此文件编码列表来自:
+  1. GDB规划层 (JT_期末地类_LJJ_20221212) DLBM/QMDLBM 实际值
+  2. 豆丁网《广东省村庄规划数据库建设和应用方法培训》(2019) 字段值域说明
+  3. 龙湾村实例数据 (广东工业大学学报 2022)
+
+classes:
+  # ── 农用地 ──
+  - code: "0110"
+    name: "水田"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "土规: 耕地→水田"
+
+  - code: "0120"
+    name: "旱地"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "土规: 耕地→旱地"
+
+  - code: "0130"
+    name: "灌溉水田"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "土规: 耕地→灌溉水田"
+
+  - code: "0210"
+    name: "园地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "土规: 园地"
+
+  - code: "0220"
+    name: "园地"
+    planning_zone: "一般农业区"
+    primary_zone: "农业空间"
+    categories: ["GENERAL_AGRICULTURE"]
+    description: "土规: 园地(旱地)"
+
+  # ── 林地 ──
+  - code: "0310"
+    name: "有林地"
+    planning_zone: "林业发展区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "土规: 林地→有林地"
+
+  - code: "0330"
+    name: "其他林地"
+    planning_zone: "林业发展区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "FOREST"]
+    description: "土规: 林地→其他林地"
+
+  # ── 建设用地 ──
+  - code: "0610"
+    name: "工业用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "土规: 工矿→工业"
+
+  - code: "0620"
+    name: "采矿用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "土规: 工矿→采矿"
+
+  - code: "2030"
+    name: "农村居民点"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "土规: 农村居民点。三调中对应 CZCSXM=203(村庄用地)。"
+
+  # ── 交通运输用地 ──
+  - code: "1040"
+    name: "管道运输用地"
+    planning_zone: "村庄建设区"
+    primary_zone: "建设空间"
+    categories: ["CONSTRUCTION"]
+    description: "土规: 交通运输→管道"
+
+  # ── 水域及水利设施用地 ──
+  - code: "1110"
+    name: "滩涂"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "土规: 水域→滩涂"
+
+  - code: "1140"
+    name: "沼泽地"
+    planning_zone: "生态保护区"
+    primary_zone: "生态空间"
+    categories: ["ECOLOGICAL", "WATER"]
+    description: "土规: 水域→沼泽地"
+
+  - code: "1180"
+    name: "水田(水域)"
+    planning_zone: "农田保护区"
+    primary_zone: "农业空间"
+    categories: ["BASIC_FARMLAND"]
+    description: "土规: 水域→水田(特殊)"

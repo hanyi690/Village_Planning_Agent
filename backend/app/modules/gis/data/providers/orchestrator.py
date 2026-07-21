@@ -8,7 +8,7 @@ Fallback chain:
   3. Amap POI always supplemental (not primary for geometry)
 
 All data is normalized to WGS84 and wrapped in canonical Pydantic models
-(GISDataBundle, LandUseParcel, GeoFeature) before returning.
+(GISDataBundle, ProviderLandParcel, GeoFeature) before returning.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from .base import GISProvider, GeoProviderResult
 from ...schema.canonical import (
     BBox,
     GeoFeature,
-    LandUseParcel,
+    ProviderLandParcel,
     GISDataBundle,
     GISMetadata,
 )
@@ -81,7 +81,7 @@ class GISDataOrchestrator:
         )
 
         boundary: Optional[GeoFeature] = None
-        landuse: List[LandUseParcel] = []
+        landuse: List[ProviderLandParcel] = []
         roads: List[GeoFeature] = []
         water_bodies: List[GeoFeature] = []
         annotations: List[GeoFeature] = []
@@ -167,7 +167,7 @@ class GISDataOrchestrator:
 
         from ...schema.dicts.loader import get_center
         center = get_center()
-        dlbm_version = center.get("dlbm").version if "dlbm" in center._dictionaries else ""
+        dlbm_version = center.encoding("gbt21010").version
 
         return GISDataBundle(
             boundary=boundary,

@@ -1,0 +1,265 @@
+"""Code sets — encoding-derived dicts and lookup functions.
+
+All DLBM ↔ zone_type ↔ planning_zone mappings are derived from DictionaryCenter
+YAML data. This module is the single runtime source for all encoding lookups.
+Extracted from __init__.py to keep the barrel file focused on exports only.
+"""
+
+from __future__ import annotations
+
+from typing import Dict, List, Set, Tuple
+
+from .dicts.loader import get_center
+
+
+# ============================================================
+# Encoding & code-set symbols — derived from DictionaryCenter
+# ============================================================
+#
+# 六套编码体系:
+#   gbt21010:  GB/T 21010-2017 土地利用现状分类 (三调国标)
+#   tugui:     广东省县级土地利用总体规划数据库标准 (土规)
+#   appendix5: 广东省技术指南附录5 村庄规划用地分类 (原ghytbm)
+#   ghflbm:    广东省土规数据库标准 规划分类编码 (比appendix5更粗)
+#   ydyhfldm:  自然资发〔2023〕234号 用地用海分类
+#   vne:       住建部《村庄规划用地分类指南》V/N/E分类
+#
+# 现状层DLBM使用appendix5编码 (编制实践，非规范要求)
+# 规划层DLBM/QMDLBM使用tugui编码 (符合规范)
+# 规划层GHYTBM使用appendix5编码 (符合规范)
+# ============================================================
+
+_gbt21010 = get_center().encoding("gbt21010")
+_tugui = get_center().encoding("tugui")
+_appendix5 = get_center().encoding("appendix5")
+_ghflbm = get_center().encoding("ghflbm")
+_ydyhfldm = get_center().encoding("ydyhfldm")
+_vne = get_center().encoding("vne")
+_tl = get_center().get("three_line_types")
+_ec = get_center().get("element_codes")
+_sddlbm = get_center().get_proposal("sddlbm_to_ydyhfldm")
+
+# ── Code sets from tugui (土规标准定义的 categories) ──
+BASIC_FARMLAND_CODES: Set[str] = _tugui.to_set("code", filter_tag="BASIC_FARMLAND")
+GENERAL_AGRICULTURE_CODES: Set[str] = _tugui.to_set("code", filter_tag="GENERAL_AGRICULTURE")
+ECOLOGICAL_CODES: Set[str] = _tugui.to_set("code", filter_tag="ECOLOGICAL")
+FOREST_CODES: Set[str] = _tugui.to_set("code", filter_tag="FOREST")
+FORESTRY_CODES: Set[str] = _tugui.to_set("code", filter_tag="FORESTRY")
+WATER_CODES: Set[str] = _tugui.to_set("code", filter_tag="WATER")
+
+ECOLOGICAL_PROTECTION_CODES: Set[str] = FOREST_CODES | WATER_CODES
+ECOLOGICAL_CONTROL_CODES: Set[str] = set()
+PROTECTED_DLBM_CODES: Set[str] = BASIC_FARMLAND_CODES | GENERAL_AGRICULTURE_CODES | ECOLOGICAL_CODES
+
+CONSTRUCTION_USE_TYPES: Set[str] = {"居住用地", "产业用地", "公共服务用地", "交通用地", "商业用地"}
+CONSTRUCTION_ZONE_TYPES = CONSTRUCTION_USE_TYPES
+
+# ── Code → Name mappings (per system, built once at import) ──
+DLBM_TO_DLMC: Dict[str, str] = {}
+for system in [_appendix5, _tugui, _gbt21010]:
+    DLBM_TO_DLMC.update(system.to_dict("code", "name"))
+
+# ── DLBM → Zone type (primary source: appendix5, fallback: tugui) ──
+DLBM_TO_ZONE_TYPE: Dict[str, str] = {}
+for system in [_gbt21010, _tugui, _appendix5]:
+    DLBM_TO_ZONE_TYPE.update(system.to_dict("code", "zone_type"))
+DLBM_TO_ZONE_TYPE = {k: v for k, v in DLBM_TO_ZONE_TYPE.items() if v}
+
+# ── DLBM → Planning zone (primary source: tugui) ──
+DLBM_TO_PLANNING_ZONE: Dict[str, str] = {}
+for system in [_tugui, _appendix5]:
+    DLBM_TO_PLANNING_ZONE.update(system.to_dict("code", "planning_zone"))
+DLBM_TO_PLANNING_ZONE = {k: v for k, v in DLBM_TO_PLANNING_ZONE.items() if v}
+
+# ── DLBM → Primary zone (primary source: tugui) ──
+DLBM_TO_PRIMARY_ZONE: Dict[str, str] = {}
+for system in [_tugui, _appendix5]:
+    DLBM_TO_PRIMARY_ZONE.update(system.to_dict("code", "primary_zone"))
+DLBM_TO_PRIMARY_ZONE = {k: v for k, v in DLBM_TO_PRIMARY_ZONE.items() if v}
+
+ZONE_TYPE_TO_DLBMS: Dict[str, List[str]] = {}
+for _code, _zt in DLBM_TO_ZONE_TYPE.items():
+    ZONE_TYPE_TO_DLBMS.setdefault(_zt, []).append(_code)
+
+# ── Zone hierarchy ──
+ZONE_TYPES: List[str] = sorted(set(DLBM_TO_ZONE_TYPE.values()))
+PLANNING_ZONES: List[str] = sorted(set(DLBM_TO_PLANNING_ZONE.values()))
+PRIMARY_ZONES: List[str] = ["生态空间", "农业空间", "建设空间"]
+
+PLANNING_ZONE_NAMES: List[str] = [
+    "生态保护区", "生态控制区", "农田保护区",
+    "一般农业区", "村庄建设区", "林业发展区",
+]
+PRIMARY_ZONE_NAMES: List[str] = ["生态空间", "农业空间", "建设空间"]
+
+PLANNING_ZONE_TO_PRIMARY_ZONE: Dict[str, str] = {
+    "生态保护区": "生态空间",
+    "生态控制区": "生态空间",
+    "农田保护区": "农业空间",
+    "一般农业区": "农业空间",
+    "村庄建设区": "建设空间",
+    "林业发展区": "农业空间",
+}
+
+# ── GHYTMC planning use names (from appendix5) ──
+GHYTMC_TO_ZONE_TYPE: Dict[str, str] = _appendix5.to_dict("name", "zone_type")
+GHYTMC_TO_DLMC: Dict[str, str] = _appendix5.to_dict("name", "name")
+
+# ── GHFLBM / GHYTBM planning classification codes ──
+GHFLBM_MEANING: Dict[str, str] = _ghflbm.to_dict("code", "name")
+GHFLBM_TO_ZONE_TYPE: Dict[str, str] = _ghflbm.to_dict("code", "zone_type")
+
+GHFLBM_TO_GHYTBMS: Dict[str, List[str]] = {}
+for _entry in _ghflbm.raw.get("classes", []):
+    _ghflbm_code = _entry.get("code", "")
+    _ghytbms = _entry.get("ghytbms", [])
+    if _ghflbm_code and _ghytbms:
+        GHFLBM_TO_GHYTBMS[_ghflbm_code] = _ghytbms
+
+GHYTBM_TO_GHYTMC: Dict[str, str] = _appendix5.to_dict("code", "name")
+GHYTBM_TO_YDYHFLDM: Dict[str, str] = _appendix5.to_dict("code", "ydyhfldm")
+GHYTBM_TO_ZONE_TYPE: Dict[str, str] = _appendix5.to_dict("code", "zone_type")
+
+YDYHFLDM_TO_NAME: Dict[str, str] = _ydyhfldm.to_dict("code", "name")
+
+# ── V/N/E village planning land classification ──
+VNE_CODE_TO_NAME: Dict[str, str] = _vne.to_dict("code", "name")
+VNE_TO_ZONE_TYPE: Dict[str, str] = _vne.to_dict("code", "zone_type")
+
+ZONE_TYPE_TO_VNE: Dict[str, str] = {}
+for _entry in _vne.raw.get("classes", []):
+    _zt = _entry.get("zone_type", "")
+    _code = _entry.get("code", "")
+    if _zt and _code and _zt not in ZONE_TYPE_TO_VNE:
+        ZONE_TYPE_TO_VNE[_zt] = _code
+
+GHYTBM_TO_VNE: Dict[str, str] = _appendix5.to_dict("code", "vne")
+
+# ── Three-line control layer definitions ──
+THREE_LINE_TYPES: Dict[str, Dict[str, str]] = {}
+for layer in _tl.raw.get("layers", []):
+    key = layer.pop("key", "")
+    if key:
+        THREE_LINE_TYPES[key] = layer
+
+_cz = _tl.raw.get("construction_zone", {})
+CONSTRUCTION_ZONE_DEF: Dict[str, str] = _cz if isinstance(_cz, dict) else {}
+
+ANNOTATION_CATEGORIES: Dict[str, str] = {
+    item["key"]: item["value"]
+    for item in _tl.raw.get("annotation_categories", [])
+}
+
+# ── SDDLBM → YDYHFLDM base conversion ──
+SDDLBM_TO_YDYHFLDM: Dict[str, Tuple[str, str]] = _sddlbm.to_dict()
+
+# ── Element classification codes ──
+ELEMENT_CODE_PREFIXES: Dict[str, str] = _ec.raw.get("prefixes", {})
+
+
+# ── Lookup functions ──
+
+def is_basic_farmland(dlbm: str) -> bool:
+    return str(dlbm).strip() in BASIC_FARMLAND_CODES
+
+def is_general_agriculture(dlbm: str) -> bool:
+    return str(dlbm).strip() in GENERAL_AGRICULTURE_CODES
+
+def get_zone_type_for_dlbm(dlbm: str) -> str:
+    return DLBM_TO_ZONE_TYPE.get(dlbm, "农业用地")
+
+def get_dlbms_for_zone_type(zone_type: str) -> List[str]:
+    return ZONE_TYPE_TO_DLBMS.get(zone_type, [])
+
+def get_zone_type_for_planned_dlbm(dlbm: str) -> str:
+    return get_zone_type_for_dlbm(dlbm)
+
+def get_zone_type_for_ghytmc(ghytmc: str) -> str:
+    return GHYTMC_TO_ZONE_TYPE.get(str(ghytmc).strip(), "农业用地")
+
+def get_primary_zone(dlbm: str) -> str:
+    return DLBM_TO_PRIMARY_ZONE.get(str(dlbm).strip(), "农业空间")
+
+def dlbm_to_planning_zone(dlbm: str) -> str:
+    return DLBM_TO_PLANNING_ZONE.get(str(dlbm).strip(), "一般农业区")
+
+def get_primary_zone_for_planning_zone(planning_zone: str) -> str:
+    return PLANNING_ZONE_TO_PRIMARY_ZONE.get(planning_zone, "农业空间")
+
+def get_zone_type_for_ghflbm(ghflbm: str) -> str:
+    return GHFLBM_TO_ZONE_TYPE.get(str(ghflbm).strip(), "农业用地")
+
+def get_zone_type_for_ghytbm(ghytbm: str) -> str:
+    return GHYTBM_TO_ZONE_TYPE.get(str(ghytbm).strip(), "农业用地")
+
+def get_ghytmc_for_ghytbm(ghytbm: str) -> str:
+    return GHYTBM_TO_GHYTMC.get(str(ghytbm).strip(), "")
+
+def get_zone_type_for_vne(vne_code: str) -> str:
+    return VNE_TO_ZONE_TYPE.get(str(vne_code).strip(), "农业用地")
+
+def get_vne_for_zone_type(zone_type: str) -> str:
+    return ZONE_TYPE_TO_VNE.get(zone_type, "E9")
+
+def convert_sddlbm_to_ydyhfldm(sddlbm: str) -> Tuple[str, str]:
+    result = SDDLBM_TO_YDYHFLDM.get(str(sddlbm).strip())
+    if result:
+        return result
+    return (sddlbm, "无对应")
+
+def get_vne_for_ghytbm(ghytbm: str) -> str:
+    return GHYTBM_TO_VNE.get(str(ghytbm).strip(), "E9")
+
+def parse_element_code(code: str) -> Dict[str, str]:
+    code = str(code).strip()
+    if len(code) < 10:
+        return {"code": code, "category": "unknown", "major_class": code[:2] if len(code) >= 2 else ""}
+    major = code[:2]
+    category = "base_geographic" if major == "10" else "spatial_planning" if major == "20" else "other"
+    result = {"code": code, "category": category, "major_class": major}
+    if category == "spatial_planning" and len(code) >= 4:
+        result["sub_class"] = code[2]
+        result["minor_class"] = code[3]
+        if code[3] == "6":
+            result["planning_level"] = "village"
+            if len(code) >= 5:
+                first_level = code[4]
+                level_map = {"1": "全域总体规划", "2": "专项规划", "3": "详细规划"}
+                result["first_level"] = level_map.get(first_level, first_level)
+    return result
+
+
+__all__ = [
+    # Dicts
+    "DLBM_TO_DLMC", "DLBM_TO_ZONE_TYPE", "ZONE_TYPE_TO_DLBMS",
+    "DLBM_TO_PLANNING_ZONE", "DLBM_TO_PRIMARY_ZONE",
+    "ZONE_TYPES", "PLANNING_ZONES", "PRIMARY_ZONES",
+    "PLANNING_ZONE_NAMES", "PRIMARY_ZONE_NAMES",
+    "PLANNING_ZONE_TO_PRIMARY_ZONE",
+    "GHYTMC_TO_ZONE_TYPE", "GHYTMC_TO_DLMC",
+    "GHFLBM_MEANING", "GHFLBM_TO_ZONE_TYPE", "GHFLBM_TO_GHYTBMS",
+    "GHYTBM_TO_GHYTMC", "GHYTBM_TO_YDYHFLDM",
+    "YDYHFLDM_TO_NAME", "GHYTBM_TO_ZONE_TYPE",
+    "VNE_CODE_TO_NAME", "VNE_TO_ZONE_TYPE", "ZONE_TYPE_TO_VNE",
+    "GHYTBM_TO_VNE",
+    "THREE_LINE_TYPES", "CONSTRUCTION_ZONE_DEF", "ANNOTATION_CATEGORIES",
+    "SDDLBM_TO_YDYHFLDM", "ELEMENT_CODE_PREFIXES",
+    # Code sets
+    "BASIC_FARMLAND_CODES", "GENERAL_AGRICULTURE_CODES",
+    "ECOLOGICAL_CODES", "FOREST_CODES",
+    "FORESTRY_CODES", "WATER_CODES",
+    "ECOLOGICAL_PROTECTION_CODES", "ECOLOGICAL_CONTROL_CODES",
+    "PROTECTED_DLBM_CODES",
+    "CONSTRUCTION_USE_TYPES", "CONSTRUCTION_ZONE_TYPES",
+    # Functions
+    "is_basic_farmland", "is_general_agriculture",
+    "get_zone_type_for_dlbm", "get_dlbms_for_zone_type",
+    "get_zone_type_for_planned_dlbm",
+    "get_zone_type_for_ghytmc", "get_primary_zone",
+    "dlbm_to_planning_zone", "get_primary_zone_for_planning_zone",
+    "get_zone_type_for_ghflbm", "get_zone_type_for_ghytbm",
+    "get_ghytmc_for_ghytbm",
+    "get_zone_type_for_vne", "get_vne_for_zone_type",
+    "convert_sddlbm_to_ydyhfldm", "get_vne_for_ghytbm",
+    "parse_element_code",
+]

@@ -88,18 +88,23 @@ class GeoFeature(BaseModel):
         coords = self.geometry.get("coordinates", [])
         return len(coords) == 0
 
+class ProviderLandParcel(GeoFeature):
+    """External data provider parcel — raw geometry + unchecked DLBM.
 
-class LandUseParcel(GeoFeature):
-    """Land use parcel — GeoFeature with DLBM classification attached.
+    Produced by Tianditu/OSM/Amap adapters. Contains GeoFeature metadata
+    (properties, source_provider, bbox) and basic DLBM-derived fields.
 
-    The dlbm, zone_type, and planning_zone fields are resolved from the
-    EncodingRegistry at fetch time by the Provider layer.
+    This is NOT the internal pipeline type. To use in the pipeline, convert
+    via ingestion.provider_to_parcel() which validates encodings and returns
+    a CurrentLandUseParcel or PlannedLandUseParcel with explicit _system tags.
     """
 
-    dlbm: str = ""  # 现状地类编码 (三调 DLBM)
-    area_ha: float = 0.0  # 面积 (公顷), computed in CGCS2000 metric CRS
-    zone_type: str = ""  # 功能分区 — resolved from EncodingRegistry.dlbm_to_zone
-    planning_zone: str = ""  # 规划分区 — resolved from EncodingRegistry.dlbm_to_planning
+    dlbm: str = ""
+    area_ha: float = 0.0
+    area_sqm: float = 0.0
+    zone_type: str = ""
+    planning_zone: str = ""
+    primary_zone: str = ""
 
 
 class GISMetadata(BaseModel):
@@ -120,30 +125,33 @@ class GISDataBundle(BaseModel):
 
     This is the SINGLE object that flows through the entire pipeline.
     Created by GISDataOrchestrator, consumed by all downstream tools.
+
+    landuse entries are BaseLandUseParcel (or subclasses) from ingestion.py.
+    Forward reference used to avoid circular import with ingestion.
     """
 
     boundary: Optional[GeoFeature] = None
-    landuse: List[LandUseParcel] = Field(default_factory=list)
+    landuse: List[Any] = Field(default_factory=list)  # List[BaseLandUseParcel]
     roads: List[GeoFeature] = Field(default_factory=list)
     water_bodies: List[GeoFeature] = Field(default_factory=list)
     annotations: List[GeoFeature] = Field(default_factory=list)
-    dem: Optional[Any] = None  # Digital Elevation Model (raster, provider-dependent)
+    dem: Optional[Any] = None
     metadata: GISMetadata = Field(default_factory=GISMetadata)
     standard_version: str = ""
 
     @property
     def total_area_ha(self) -> float:
-        return sum(p.area_ha for p in self.landuse)
+        return sum(getattr(p, 'area_ha', 0.0) for p in self.landuse)
 
     @property
     def parcel_count(self) -> int:
         return len(self.landuse)
 
-    def get_parcels_by_dlbm(self, dlbm: str) -> List[LandUseParcel]:
-        return [p for p in self.landuse if p.dlbm == dlbm]
+    def get_parcels_by_dlbm(self, dlbm: str) -> List[Any]:
+        return [p for p in self.landuse if getattr(p, 'dlbm', '') == dlbm]
 
-    def get_parcels_by_zone(self, zone_type: str) -> List[LandUseParcel]:
-        return [p for p in self.landuse if p.zone_type == zone_type]
+    def get_parcels_by_zone(self, zone_type: str) -> List[Any]:
+        return [p for p in self.landuse if getattr(p, 'zone_type', '') == zone_type]
 
     def is_complete(self) -> bool:
         """Check minimum data requirements: boundary + landuse."""
@@ -154,7 +162,7 @@ __all__ = [
     "CRS",
     "BBox",
     "GeoFeature",
-    "LandUseParcel",
+    "ProviderLandParcel",
     "GISMetadata",
     "GISDataBundle",
 ]

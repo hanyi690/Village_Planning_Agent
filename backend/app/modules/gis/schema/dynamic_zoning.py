@@ -16,43 +16,28 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from .dicts.loader import get_center
-
-_center = get_center()
-_dlbm = _center.get("dlbm")
-
-DLBM_TO_PLANNING_ZONE = _dlbm.to_dict("code", "planning_zone")
-DLBM_TO_PRIMARY_ZONE = _dlbm.to_dict("code", "primary_zone")
-BASIC_FARMLAND_CODES = _dlbm.to_set("code", filter_tag="BASIC_FARMLAND")
-FOREST_CODES = _dlbm.to_set("code", filter_tag="FOREST")
-WATER_CODES = _dlbm.to_set("code", filter_tag="WATER")
-FORESTRY_CODES = _dlbm.to_set("code", filter_tag="FORESTRY")
-GRASSLAND_CODES = _dlbm.to_set("code", filter_tag="GRASSLAND")
-ECOLOGICAL_PROTECTION_CODES = FOREST_CODES | WATER_CODES
-
-PLANNING_ZONE_TO_PRIMARY_ZONE = {
-    "生态保护区": "生态空间",
-    "生态控制区": "生态空间",
-    "农田保护区": "农业空间",
-    "一般农业区": "农业空间",
-    "村庄建设区": "建设空间",
-    "林业发展区": "农业空间",
-}
-PLANNING_ZONE_NAMES = list(PLANNING_ZONE_TO_PRIMARY_ZONE.keys())
-
-
-def dlbm_to_planning_zone(dlbm: str) -> str:
-    return DLBM_TO_PLANNING_ZONE.get(str(dlbm).strip(), "一般农业区")
-
-
-def get_primary_zone(dlbm: str) -> str:
-    return DLBM_TO_PRIMARY_ZONE.get(str(dlbm).strip(), "农业空间")
-
-
-def get_primary_zone_for_planning_zone(planning_zone: str) -> str:
-    return PLANNING_ZONE_TO_PRIMARY_ZONE.get(planning_zone, "农业空间")
 
 logger = get_logger(__name__)
+
+# ── Code sets from code_sets.py (single source of truth) ──
+from .code_sets import (
+    BASIC_FARMLAND_CODES,
+    FOREST_CODES,
+    WATER_CODES,
+    FORESTRY_CODES,
+    ECOLOGICAL_PROTECTION_CODES,
+)
+# Late imports for functions (avoid circular dependency: __init__ imports DynamicZoningEngine,
+# and __init__ imports these from code_sets)
+_dlbm_to_planning_zone = None
+_get_primary_zone_for_planning_zone = None
+
+def _ensure_funcs():
+    global _dlbm_to_planning_zone, _get_primary_zone_for_planning_zone
+    if _dlbm_to_planning_zone is None:
+        from . import dlbm_to_planning_zone as _dpz, get_primary_zone_for_planning_zone as _gppz
+        _dlbm_to_planning_zone = _dpz
+        _get_primary_zone_for_planning_zone = _gppz
 
 # Default buffer distance (meters) for geological hazard influence
 GEOLOGICAL_HAZARD_BUFFER_M = 500.0
@@ -150,7 +135,8 @@ class DynamicZoningEngine:
           3. Geological hazard buffer → construction demoted to 生态控制区
           4. DLBM static mapping (default)
         """
-        base_zone = dlbm_to_planning_zone(dlbm)
+        _ensure_funcs()
+        base_zone = _dlbm_to_planning_zone(dlbm)
 
         # Rule 1: Ecological redline forces 生态保护区 for construction zones
         if in_ecological_redline:
@@ -223,8 +209,9 @@ class DynamicZoningEngine:
             zone = self.classify_parcel(
                 dlbm, lon, lat, in_eco_redline, in_basic_farmland
             )
+            _ensure_funcs()
             props["zone_type"] = zone
-            props["primary_zone"] = get_primary_zone_for_planning_zone(zone)
+            props["primary_zone"] = _get_primary_zone_for_planning_zone(zone)
 
         return geojson
 

@@ -14,7 +14,7 @@ from typing import List
 from app.utils.logger import get_logger
 
 from ..base import GISProvider, GeoProviderResult
-from ...schema.canonical import BBox, GeoFeature, LandUseParcel
+from ...schema.canonical import BBox, GeoFeature, ProviderLandParcel
 from ...schema.encoding_registry import get_encoding_registry
 
 logger = get_logger(__name__)
@@ -25,7 +25,7 @@ class TiandituAdapter(GISProvider):
 
     Handles:
       - CRS: EPSG:4527 (CGCS2000 Gauss-Kruger) → WGS84 (EPSG:4326)
-      - Type: TiandituResult → canonical GeoFeature / LandUseParcel
+      - Type: TiandituResult → canonical GeoFeature / ProviderLandParcel
       - DLBM: Resolved via EncodingRegistry
     """
 
@@ -143,8 +143,8 @@ class TiandituAdapter(GISProvider):
 
         return features
 
-    def _parse_landuse_features(self, result) -> List[LandUseParcel]:
-        """Convert TiandituResult → LandUseParcel list with DLBM resolution."""
+    def _parse_landuse_features(self, result) -> List[ProviderLandParcel]:
+        """Convert TiandituResult → ProviderLandParcel list with DLBM resolution."""
         parcels = []
         raw_data = result.data or {}
         features_list = raw_data.get("features", []) if isinstance(raw_data, dict) else []
@@ -158,7 +158,7 @@ class TiandituAdapter(GISProvider):
                 if not dlbm:
                     continue  # Skip parcels without DLBM coding
 
-                parcels.append(LandUseParcel(
+                parcels.append(ProviderLandParcel(
                     geometry=geom,
                     properties=props,
                     source_provider="tianditu",

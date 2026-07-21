@@ -12,7 +12,17 @@ Architecture (by business function):
 
 # ── Core schema (unified: models + zone_schema + gdb_schema) ──
 from .schema import (
-    BBox, CRS, GeoFeature, LandUseParcel, GISDataBundle, GISMetadata,
+    BBox, CRS, GeoFeature, ProviderLandParcel, GISDataBundle, GISMetadata,
+    SpatialFeature,
+    BaseLandUseParcel, CurrentLandUseParcel, PlannedLandUseParcel,
+    AdminArea, AdminBoundaryLine,
+    CurrentBuilding, CurrentRoad, CurrentFacility, CurrentAnnotation,
+    PlannedRoad, GeologicalHazardPoint, ConditionalConstructionZone,
+    ControlLine, FarmlandProtection, EcologicalRedline,
+    CultivatedLandTarget, UrbanDevBoundary, VillageDevBoundary,
+    HazardControlLine, FloodControlLine, HistoricalProtection,
+    LandUseZone, ConstructionCtrlZone, PlanningScope,
+    SPACE_CONTROL_ZONE_TYPES, SPACE_CONTROL_ZONE_COLORS,
     EncodingRegistry, get_encoding_registry,
     ZoneIntent, FacilityIntent, AxisIntent, ConstraintIntent,
     UnifiedSpatialIntent,
@@ -35,7 +45,17 @@ from .data.providers.orchestrator import GISDataOrchestrator, get_orchestrator
 
 __all__ = [
     # Schema
-    "BBox", "CRS", "GeoFeature", "LandUseParcel", "GISDataBundle", "GISMetadata",
+    "BBox", "CRS", "GeoFeature", "ProviderLandParcel", "GISDataBundle", "GISMetadata",
+    "SpatialFeature",
+    "BaseLandUseParcel", "CurrentLandUseParcel", "PlannedLandUseParcel",
+    "AdminArea", "AdminBoundaryLine",
+    "CurrentBuilding", "CurrentRoad", "CurrentFacility", "CurrentAnnotation",
+    "PlannedRoad", "GeologicalHazardPoint", "ConditionalConstructionZone",
+    "ControlLine", "FarmlandProtection", "EcologicalRedline",
+    "CultivatedLandTarget", "UrbanDevBoundary", "VillageDevBoundary",
+    "HazardControlLine", "FloodControlLine", "HistoricalProtection",
+    "LandUseZone", "ConstructionCtrlZone", "PlanningScope",
+    "SPACE_CONTROL_ZONE_TYPES", "SPACE_CONTROL_ZONE_COLORS",
     "EncodingRegistry", "get_encoding_registry",
     "ZoneIntent", "FacilityIntent", "AxisIntent", "ConstraintIntent",
     "UnifiedSpatialIntent",

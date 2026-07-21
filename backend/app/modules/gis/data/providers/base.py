@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ...schema.canonical import BBox, GeoFeature, LandUseParcel
+from ...schema.canonical import BBox, GeoFeature, ProviderLandParcel
 
 
 @dataclass
@@ -43,7 +43,7 @@ class GISProvider(ABC):
     Responsibilities:
       1. Fetch raw data from external API
       2. Normalize CRS to WGS84 (EPSG:4326)
-      3. Coerce fields to canonical model types (GeoFeature, LandUseParcel)
+      3. Coerce fields to canonical model types (GeoFeature, ProviderLandParcel)
       4. Return GeoProviderResult envelope (never throw)
 
     Implementations:
@@ -60,10 +60,10 @@ class GISProvider(ABC):
 
     @abstractmethod
     async def fetch_landuse(self, bbox: BBox) -> GeoProviderResult:
-        """Fetch land use parcels within bbox → List[LandUseParcel].
+        """Fetch land use parcels within bbox → List[ProviderLandParcel].
 
         CRS: input bbox is WGS84, provider handles internal CRS conversion.
-        Output: all LandUseParcel geometries in WGS84.
+        Output: all ProviderLandParcel geometries in WGS84.
         DLBM codes resolved via EncodingRegistry.
         """
         ...
