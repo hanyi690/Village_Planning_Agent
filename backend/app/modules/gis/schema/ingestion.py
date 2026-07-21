@@ -495,6 +495,7 @@ def _init_feature_registry():
         UrbanDevBoundary, VillageDevBoundary,
         HazardControlLine, FloodControlLine, HistoricalProtection,
         LandUseZone, ConstructionCtrlZone, PlanningScope,
+        ContourLine, ElevationPoint, WaterFeature,
     )
     _FEATURE_TYPE_REGISTRY.update({
         "admin_area":            (AdminArea,             "current/boundary.geojson"),
@@ -518,6 +519,11 @@ def _init_feature_registry():
         "historical_protection": (HistoricalProtection,  "planned/historical_protection.geojson"),
         "land_use_zone":         (LandUseZone,           "planned/land_use_zone.geojson"),
         "construction_ctrl_zone": (ConstructionCtrlZone, "planned/space_control_zone.geojson"),
+        # Group E: Basic geographic info (DLG)
+        "contour_line":          (ContourLine,           "current/terrain/contour.geojson"),
+        "elevation_point":       (ElevationPoint,        "current/terrain/elevation_points.geojson"),
+        "water_feature":         (WaterFeature,          "current/terrain/water.geojson"),
+        # place_name_annotation removed — covered by CurrentAnnotation(category="村名")
     })
 
 
@@ -642,6 +648,64 @@ def _report(parcels: List[BaseLandUseParcel]) -> str:
     return "\n".join(lines)
 
 
+# ============================================================
+# Raster ingestion (DEM/DOM — metadata only, no data loading)
+# ============================================================
+
+def ingest_raster(filepath: str, raster_type: str = "dem"):
+    """加载栅格元数据 (不加载栅格数据本身，仅读取元信息).
+
+    Args:
+        filepath: GeoTIFF 文件路径
+        raster_type: "dem" | "dom"
+
+    Returns:
+        类型化的栅格输入对象 (DEMInput 或 DOMInput)
+
+    Raises:
+        FileNotFoundError: 文件不存在
+        ImportError: rasterio 未安装
+    """
+    from .raster_types import RasterInput, DEMInput, DOMInput
+
+    path = Path(filepath)
+    if not path.exists():
+        raise FileNotFoundError(f"Raster file not found: {filepath}")
+
+    try:
+        import rasterio
+    except ImportError:
+        logger.warning("[Ingestion] rasterio not installed, returning minimal RasterInput")
+        if raster_type == "dem":
+            return DEMInput(path=filepath)
+        elif raster_type == "dom":
+            return DOMInput(path=filepath)
+        else:
+            return RasterInput(path=filepath)
+
+    with rasterio.open(filepath) as src:
+        meta = dict(src.meta) if src.meta else {}
+        crs = str(src.crs) if src.crs else "unknown"
+        resolution = abs(src.transform[0]) if src.transform else 0.0
+        nodata = src.nodata
+
+    if raster_type == "dem":
+        return DEMInput(
+            path=filepath, crs=crs, resolution=resolution,
+            nodata=nodata, _meta=meta,
+        )
+    elif raster_type == "dom":
+        return DOMInput(
+            path=filepath, crs=crs, resolution=resolution,
+            nodata=nodata, _meta=meta,
+        )
+    else:
+        return RasterInput(
+            path=filepath, crs=crs, resolution=resolution,
+            nodata=nodata, _meta=meta,
+        )
+
+
 __all__ = [
     "SpatialFeature",
     "BaseLandUseParcel",
@@ -652,6 +716,7 @@ __all__ = [
     "ingest_current_landuse",
     "ingest_planned_landuse",
     "ingest_feature",
+    "ingest_raster",
     "GB_T21010",
     "TUGUI",
     "APPENDIX5",

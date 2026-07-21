@@ -1,9 +1,9 @@
-"""GIS Agent builders — unified pipeline (primary) + legacy ReAct agents (fallback).
+"""GIS Agent builders — unified pipeline (primary) + PARSE Agent subgraph.
 
-Migration note (2026-07-15):
+Architecture (2026-07-17):
   - Primary: build_layout_pipeline() → unified StateGraph with Pydantic state
-  - Legacy: create_gis/parse/layout_agent_graph() → deprecated ReAct agents
-  - The legacy agents are kept for backward compatibility during transition.
+  - PARSE: build_parse_agent_graph() → spatially-aware semi-structured ReAct subgraph
+  - Legacy: create_gis/layout_agent_graph() → deprecated single ReAct agents
 """
 
 from __future__ import annotations
@@ -17,8 +17,22 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _cached_gis = None
-_cached_parse = None
 _cached_layout = None
+
+
+def create_parse_agent_graph():
+    """PARSE Agent — spatially-aware semi-structured ReAct subgraph.
+
+    Uses StateGraph with:
+      - classify_sections -> route_by_section (Send fan-out)
+      - extract_regulations/tables/projects/targets (parallel)
+      - validate_and_merge (converge + retry loop)
+
+    Returns:
+        CompiledStateGraph with ParseAgentState schema.
+    """
+    from app.agent.gis.parse_agent import build_parse_agent_graph
+    return build_parse_agent_graph()
 
 
 def create_gis_agent_graph():
@@ -40,28 +54,6 @@ def create_gis_agent_graph():
     graph = create_react_agent(llm, GIS_TOOLS, state_schema=GISAgentState, prompt=GIS_AGENT_SYSTEM_PROMPT)
     _cached_gis = graph
     logger.info("[GIS Agent - Legacy] Created with %d tools (DEPRECATED)", len(GIS_TOOLS))
-    return graph
-
-
-def create_parse_agent_graph():
-    """DEPRECATED: PARSE Agent — single-tool: parse_planning_text.
-
-    Use build_layout_pipeline() for the new unified StateGraph pipeline.
-    Kept for backward compatibility.
-    """
-    global _cached_parse
-    if _cached_parse is not None:
-        return _cached_parse
-
-    from app.tools.gis.parse import parse_planning_text
-    from .prompts import PARSE_AGENT_SYSTEM_PROMPT
-    from .state import ParseAgentState
-    from app.core.settings import LLM_MODEL
-
-    llm = ChatOpenAI(model=LLM_MODEL, temperature=0.2)
-    graph = create_react_agent(llm, [parse_planning_text], state_schema=ParseAgentState, prompt=PARSE_AGENT_SYSTEM_PROMPT)
-    _cached_parse = graph
-    logger.info("[PARSE Agent - Legacy] Created with 1 tool (DEPRECATED)")
     return graph
 
 

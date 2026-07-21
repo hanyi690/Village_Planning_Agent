@@ -101,6 +101,7 @@ def _aggregate_by_dlbm_group(geojson: Dict[str, Any]) -> Dict[str, float]:
     result: Dict[str, float] = {}
     for feat in geojson.get("features", []):
         props = feat.get("properties", {})
+        # 现状层优先 DLBM (appendix5编码), 回退 QMDLBM
         dlbm = str(props.get("DLBM", props.get("QMDLBM", ""))).strip()
         if not dlbm:
             continue
@@ -209,6 +210,7 @@ def compare_planning_zones(
     plan_total = 0.0
     for feat in planned_landuse.get("features", []):
         props = feat.get("properties", {})
+        # 规划层优先 QMDLBM (tugui编码), 回退 DLBM
         dlbm = str(props.get("QMDLBM", props.get("DLBM", ""))).strip()
         if not dlbm:
             continue
@@ -332,6 +334,7 @@ def compare_primary_zones(
     plan_total = 0.0
     for feat in planned_landuse.get("features", []):
         props = feat.get("properties", {})
+        # 规划层优先 QMDLBM (tugui编码), 回退 DLBM
         dlbm = str(props.get("QMDLBM", props.get("DLBM", ""))).strip()
         if not dlbm:
             continue

@@ -71,7 +71,9 @@ class GISMetricsCalculator:
 
         for feat in landuse["features"]:
             props = feat.get("properties", {})
-            dlbm = str(props.get("DLBM", props.get("QMDLBM", ""))).strip()
+            # DLBM 编码体系取决于数据层: 现状=appendix5, 规划=tugui
+            # 优先 QMDLBM (规划层期末编码), 回退 DLBM (现状层编码)
+            dlbm = str(props.get("QMDLBM", props.get("DLBM", ""))).strip()
             area = _area_ha_from_props(props)
             total_area_ha += area
             if dlbm:
@@ -201,7 +203,8 @@ def _dlbm_areas(geojson: Dict[str, Any]) -> Dict[str, float]:
     result: Dict[str, float] = Counter()
     for feat in geojson.get("features", []):
         props = feat.get("properties", {})
-        dlbm = str(props.get("DLBM", props.get("QMDLBM", ""))).strip()
+        # 优先 QMDLBM (规划层期末编码), 回退 DLBM (现状层)
+        dlbm = str(props.get("QMDLBM", props.get("DLBM", ""))).strip()
         if dlbm:
             result[dlbm] += _area_ha_from_props(props)
     return dict(result)

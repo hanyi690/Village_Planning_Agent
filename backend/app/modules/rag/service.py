@@ -577,6 +577,7 @@ class RagService:
             for chunk in chunks:
                 chunk.metadata["doc_type"] = doc_type
                 chunk.metadata["category"] = category or "policies"
+                chunk.metadata["file_hash"] = file_hash
                 if terrain:
                     chunk.metadata["terrain"] = terrain
 
@@ -688,6 +689,7 @@ class RagService:
             extracted_dict = extracted.to_dict()
             for chunk in chunks:
                 chunk.metadata.update(extracted_dict)
+                chunk.metadata["file_hash"] = file_hash
 
             # Add to vector store
             if isinstance(self._vector_store, HierarchyVectorStore):

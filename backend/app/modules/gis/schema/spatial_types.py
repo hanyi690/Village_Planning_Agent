@@ -7,8 +7,8 @@
 类型分组:
   Group A: 行政区划 (AdminBoundary)
   Group C: 现状要素 (CurrentFeatures)
-  Group D: 规划管控要素 (PlannedControls)
-
+  Group D 规划管控要素 (PlannedControls)
+:
 Group B (地类图斑 LandUse) 定义在 ingestion.py 中.
 """
 
@@ -55,8 +55,11 @@ class AdminBoundaryLine(SpatialFeature):
 
 
 # ============================================================
-# Group C: 现状要素 (CurrentFeatures) + 规划对应要素
+# Group C: 基期年现状要素 (CurrentFeatures — Base Year)
 # ============================================================
+# 广东省技术指南 1.2.1 基期年现状要素:
+#   现状建筑, 现状道路, 现状基础设施, 现状公共服务设施, 现状用地用海
+# 注记 (CurrentAnnotation) 为辅助标注类型, 不在标准图层定义中.
 
 
 @dataclass
@@ -101,67 +104,26 @@ class CurrentFacility(SpatialFeature):
 
 @dataclass
 class CurrentAnnotation(SpatialFeature):
-    """现状注记 (点) — 基期年现状要素. 规划注记复用此类型 (字段相同).
+    """现状/规划注记 (点) — 辅助标注类型.
 
-    GDB 图层: current_annotation, planned_annotation
-    注记类型: 地名/设施点/高程点/规划设施点等
+    广东省技术指南未定义"注记"图层, 此为辅助标注,
+    不进入汇交成果, 仅用于可视化参考.
+    GDB 导出层: current_annotation, planned_annotation
+    category 取值: 现状设施点/规划设施点/村名
     """
 
     text: str = ""           # 注记文本 (≤100字符)
-    category: str = ""       # 注记分类 (地名/设施点/规划设施点/其他)
-
-
-@dataclass
-class PlannedRoad(SpatialFeature):
-    """规划道路 (线) — 目标年规划要素.
-
-    GDB 图层: planned/road.geojson
-    字段: LnType (道路类型), LeftLn_FID (左侧车道要素ID),
-          RightLn_FID (右侧车道要素ID), Shape_Length (长度)
-    """
-
-    shape_length: float = 0.0   # 几何长度 (米)
-    ln_type: str = ""           # 道路类型
-    left_ln_fid: str = ""       # 左侧车道要素ID
-    right_ln_fid: str = ""      # 右侧车道要素ID
-    road_level: str = ""        # 规划道路等级 (村道/乡道/县道)
-
-
-@dataclass
-class GeologicalHazardPoint(SpatialFeature):
-    """地质灾害点 (点) — 目标年规划要素.
-
-    与 HazardControlLine (灾害风险防控线, 面) 不同,
-    本类型表示单个地质灾害点 (崩塌/滑坡/泥石流等).
-    """
-
-    name: str = ""           # 地质灾害点名称
-    longitude: str = ""      # 经度 (DMS 格式, 如 \"116° 3' 39.000\\\" E\")
-    latitude: str = ""       # 纬度 (DMS 格式)
-    hazard_type: str = ""    # 灾害类型 (崩塌/滑坡/泥石流/地面塌陷)
-    scale: str = ""          # 灾害规模 (小型/中型/大型)
-
-
-@dataclass
-class ConditionalConstructionZone(SpatialFeature):
-    """有条件建设区 (面) — 目标年规划要素.
-
-    GDB 图层: construction_zone
-    约束: 不超过现状建设用地规模 ×20%, 不得占用永久基本农田和生态保护红线
-    """
-
-    bh: str = ""             # 编号
-    xzqhdm: str = ""         # 行政区划代码
-    xzqhm: str = ""          # 行政区划名称
-    lx: str = ""             # 类型 (固定值 "有条件建设区")
-    mj: float = 0.0          # 面积 (平方米)
-    shape_length: float = 0.0  # 几何周长
-    shape_area: float = 0.0    # 几何面积
+    category: str = ""       # 注记分类 (现状设施点/规划设施点/村名)
 
 
 # ============================================================
-# Group D: 规划管控要素 (PlannedControls)
+# Group D: 目标年规划要素 (Planned — Target Year)
 # ============================================================
+# 广东省技术指南 1.2.2 目标年规划要素:
+#   控制线 (三条控制线/历史文化/安全控制线/村庄建设边界)
+#   国土空间布局 (规划用地用海/重点地块图则)
+#   规划道路, 地质灾害点, 有条件建设区等.
+# 广东省技术指南表2: 4个必选汇交图层 (GHCFW/QMDLTB/TDYT/JSYDGZQ).
 
 
 @dataclass
@@ -248,6 +210,24 @@ class HazardControlLine(ControlLine):
     risk_level: str = ""     # 风险等级 (高/中/低)
 
 
+# ── 地质灾害点 (点要素, 与 HazardControlLine 面要素互补) ──
+
+
+@dataclass
+class GeologicalHazardPoint(SpatialFeature):
+    """地质灾害点 (点) — 目标年规划要素.
+
+    与 HazardControlLine (灾害风险防控线, 面) 不同,
+    本类型表示单个地质灾害点 (崩塌/滑坡/泥石流等).
+    """
+
+    name: str = ""           # 地质灾害点名称
+    longitude: str = ""      # 经度 (DMS 格式, 如 "116° 3' 39.000\" E")
+    latitude: str = ""       # 纬度 (DMS 格式)
+    hazard_type: str = ""    # 灾害类型 (崩塌/滑坡/泥石流/地面塌陷)
+    scale: str = ""          # 灾害规模 (小型/中型/大型)
+
+
 @dataclass
 class FloodControlLine(ControlLine):
     """洪涝风险控制线 (面) — 安全控制线.
@@ -257,6 +237,25 @@ class FloodControlLine(ControlLine):
 
     flood_frequency: str = ""  # 洪水频率 (如 "20年一遇", "50年一遇")
     control_elevation: float = 0.0  # 控制高程 (米)
+
+
+# ── 规划道路 (基础设施) ──
+
+
+@dataclass
+class PlannedRoad(SpatialFeature):
+    """规划道路 (线) — 目标年规划要素.
+
+    GDB 图层: planned/road.geojson
+    字段: LnType (道路类型), LeftLn_FID (左侧车道要素ID),
+          RightLn_FID (右侧车道要素ID), Shape_Length (长度)
+    """
+
+    shape_length: float = 0.0   # 几何长度 (米)
+    ln_type: str = ""           # 道路类型
+    left_ln_fid: str = ""       # 左侧车道要素ID
+    right_ln_fid: str = ""      # 右侧车道要素ID
+    road_level: str = ""        # 规划道路等级 (村道/乡道/县道)
 
 
 @dataclass
@@ -324,6 +323,26 @@ class ConstructionCtrlZone(SpatialFeature):
     ECOLOGICAL_REDLINE_ZONE = "06"
 
 
+# ── 有条件建设区 (与 ConstructionCtrlZone 互补, 面要素) ──
+
+
+@dataclass
+class ConditionalConstructionZone(SpatialFeature):
+    """有条件建设区 (面) — 目标年规划要素.
+
+    GDB 图层: construction_zone
+    约束: 不超过现状建设用地规模 ×20%, 不得占用永久基本农田和生态保护红线
+    """
+
+    bh: str = ""             # 编号
+    xzqhdm: str = ""         # 行政区划代码
+    xzqhm: str = ""          # 行政区划名称
+    lx: str = ""             # 类型 (固定值 "有条件建设区")
+    mj: float = 0.0          # 面积 (平方米)
+    shape_length: float = 0.0  # 几何周长
+    shape_area: float = 0.0    # 几何面积
+
+
 @dataclass
 class PlanningScope(SpatialFeature):
     """规划村范围 GHCFW (面) — 管理类数据 (必选).
@@ -336,6 +355,57 @@ class PlanningScope(SpatialFeature):
     xzqhmc: str = ""         # 行政区划名称 (≤100字符)
     mj: float = 0.0          # 椭球面积 (平方米, 保留到个位)
     bz: str = ""             # 备注 (≤200字符, 可选)
+
+
+# ============================================================
+# Group E: 基础地理信息要素 (DLG) 🔴 未实现
+# ============================================================
+# 广东省技术指南表2定义的汇交图层仅4个 (GHCFW/QMDLTB/TDYT/JSYDGZQ),
+# 以下要素属于"基础地理信息", 不进入汇交成果, 但作为输入/参考数据.
+# 注记类地名由 CurrentAnnotation(category="村名") 覆盖, 不单独建类型.
+# 注: PlaceNameAnnotation 已删除, 无需单独类型 (CurrentAnnotation 以 category 区分).
+
+
+@dataclass
+class ContourLine(SpatialFeature):
+    """等高线 (线) -- 基础地理信息要素 (DLG).
+
+    来源: 数字线划地图 (1:2000 DLG)
+    用途: 地形可视化、DEM验证
+    规范: GB/T 13923-2022 要素分类代码 210100(等高线)
+    """
+
+    elevation: float = 0.0        # 高程值 (米)
+    contour_type: str = ""        # 等高线类型 (首曲线/计曲线/间曲线)
+
+
+@dataclass
+class ElevationPoint(SpatialFeature):
+    """高程点 (点) -- 基础地理信息要素 (DLG).
+
+    来源: 数字线划地图 (1:2000 DLG)
+    用途: 高程控制点、地形标注
+    规范: GB/T 13923-2022 要素分类代码 210200(高程点)
+    注: 与 CurrentAnnotation(category="高程点") 不同,
+        本类型有 elevation 数值字段, 适用于DEM验证和地形分析.
+    """
+
+    elevation: float = 0.0        # 高程值 (米, 1985国家高程基准)
+    point_type: str = ""          # 点类型 (控制点/注记点/特征点)
+
+
+@dataclass
+class WaterFeature(SpatialFeature):
+    """水系要素 (线/面) -- 基础地理信息要素 (DLG).
+
+    来源: 天地图WFS (HYDL/HYDA) / 1:25万基础地理数据库
+    用途: 洪涝风险分析、生态空间划定
+    规范: GB/T 13923-2022 要素分类代码 210000(水系)
+    """
+
+    water_type: str = ""          # 水系类型 (河流/湖泊/水库/坑塘/沟渠)
+    water_name: str = ""          # 水系名称
+    flow_direction: str = ""      # 流向 (仅线要素)
 
 
 # ============================================================
@@ -370,9 +440,6 @@ __all__ = [
     "CurrentRoad",
     "CurrentFacility",
     "CurrentAnnotation",
-    "PlannedRoad",
-    "GeologicalHazardPoint",
-    "ConditionalConstructionZone",
     # Group D: Control lines
     "ControlLine",
     "FarmlandProtection",
@@ -383,10 +450,20 @@ __all__ = [
     "HazardControlLine",
     "FloodControlLine",
     "HistoricalProtection",
+    # Group D: Planned infrastructure
+    "PlannedRoad",
+    # Group D: Hazard points
+    "GeologicalHazardPoint",
+    # Group D: Conditional construction
+    "ConditionalConstructionZone",
     # Group D: Core planning layers
     "LandUseZone",
     "ConstructionCtrlZone",
     "PlanningScope",
+    # Group E: Basic geographic info (DLG)
+    "ContourLine",
+    "ElevationPoint",
+    "WaterFeature",
     # Constants
     "SPACE_CONTROL_ZONE_TYPES",
     "SPACE_CONTROL_ZONE_COLORS",

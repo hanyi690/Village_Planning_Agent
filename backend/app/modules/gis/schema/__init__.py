@@ -68,12 +68,23 @@ from .ingestion import (
     ingest_current_landuse,
     ingest_planned_landuse,
     ingest_feature,
+    ingest_raster,
     GB_T21010,
     TUGUI,
     APPENDIX5,
     GHFLBM_SYS,
     YDYHFL,
     VNE,
+)
+
+# ── Raster input types (DEM/DOM — not in GDB output) ──
+from .raster_types import (
+    RasterInput,
+    DEMInput,
+    DOMInput,
+    TerrainAnalysisResult,
+    SLOPE_CLASSES,
+    ASPECT_CLASSES,
 )
 
 # ── Spatial feature types (full taxonomy) ──
@@ -99,6 +110,9 @@ from .spatial_types import (
     LandUseZone,
     ConstructionCtrlZone,
     PlanningScope,
+    ContourLine,
+    ElevationPoint,
+    WaterFeature,
     SPACE_CONTROL_ZONE_TYPES,
     SPACE_CONTROL_ZONE_COLORS,
 )
@@ -214,6 +228,10 @@ __all__ = [
     "CultivatedLandTarget", "UrbanDevBoundary", "VillageDevBoundary",
     "HazardControlLine", "FloodControlLine", "HistoricalProtection",
     "LandUseZone", "ConstructionCtrlZone", "PlanningScope",
+    "ContourLine", "ElevationPoint", "WaterFeature",
+    # Raster input (not in GDB output)
+    "RasterInput", "DEMInput", "DOMInput", "TerrainAnalysisResult",
+    "SLOPE_CLASSES", "ASPECT_CLASSES",
     "SPACE_CONTROL_ZONE_TYPES", "SPACE_CONTROL_ZONE_COLORS",
     # Intent
     "Direction", "Density",
@@ -232,7 +250,7 @@ __all__ = [
     "LandUseParcel",  # Union type from ingestion.py (Current | Planned)
     "GB_T21010", "TUGUI", "APPENDIX5", "GHFLBM_SYS", "YDYHFL", "VNE",
     "ingest_landuse", "ingest_current_landuse", "ingest_planned_landuse",
-    "ingest_feature",
+    "ingest_feature", "ingest_raster",
     # Classification
     "LandUseClass", "ClassificationSchema", "get_schema", "SCHEMA",
     "ZONE_TYPES", "PLANNING_ZONES", "PRIMARY_ZONES",

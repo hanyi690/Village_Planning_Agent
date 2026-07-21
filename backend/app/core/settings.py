@@ -20,7 +20,7 @@ DASHSCOPE_API_BASE = os.getenv("DASHSCOPE_API_BASE", "https://dashscope.aliyuncs
 # LLM Configuration
 # LLM_PROVIDER: 必填，可选值: "deepseek", "openai", "zhipuai"
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen3.5-plus")
+LLM_MODEL = os.getenv("LLM_MODEL", "qwen3.7-plus")
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
 
 # LLM Request Timeout (seconds)
@@ -28,7 +28,7 @@ LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "180"))  # 3 minutes
 LLM_STREAM_TIMEOUT = int(os.getenv("LLM_STREAM_TIMEOUT", "300"))  # 5 minutes
 
 # LLM Max Concurrent Requests (for asyncio.gather + asyncio.Semaphore)
-# qwen3.5-plus hard limit: 500 RPS / 30,000 RPM. 50 is safe with monitoring.
+# qwen3.7-plus hard limit: 500 RPS / 30,000 RPM. 50 is safe with monitoring.
 # Can be tuned up to 100 with cold start.
 LLM_MAX_CONCURRENT = int(os.getenv("LLM_MAX_CONCURRENT", "50"))
 

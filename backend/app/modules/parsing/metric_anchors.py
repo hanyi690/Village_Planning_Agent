@@ -300,17 +300,25 @@ def extract_dimension_anchors(
     return dict(metrics) if metrics else {}
 
 
-# DLBM prefixes for land use classification (GB/T 21010-2017)
-_DLBM_FARMLAND = {"01", "11"}  # 耕地(01), 水浇地/旱地 subset; 水田(11)
-_DLBM_CONSTRUCTION = {"07", "08", "09", "21", "22"}  # 住宅/公共/交通/商服/工矿
-_DLBM_ECOLOGICAL = {"03", "31"}  # 林地(03), 生态(31)
+# Zone type → MetricAnchors field mapping (via gis/schema get_zone_type_for_dlbm)
+# Each DLBM's zone_type is deterministically mapped to one of:
+#   居住用地/产业用地/公共服务用地/交通用地 → construction
+#   农业用地 → farmland
+#   生态绿地 → ecological
+_CONSTRUCTION_ZONES = {"居住用地", "产业用地", "公共服务用地", "交通用地", "商业用地"}
+_FARMLAND_ZONES = {"农业用地"}
+_ECOLOGICAL_ZONES = {"生态绿地", "水域"}
 
 
 def _extract_from_gis(
     anchors: MetricAnchors,
     gis_data: Dict[str, Any],
 ) -> None:
-    """Pass 0: Extract values from GIS GeoJSON (highest priority — spatial measurement)."""
+    """Pass 0: Extract values from GIS GeoJSON (highest priority — spatial measurement).
+
+    Uses gis/schema get_zone_type_for_dlbm() for standard-compliant DLBM→zone
+    classification, replacing the previous hardcoded 2-digit DLBM prefix approach.
+    """
     # Total area from boundary GeoJSON
     boundary = gis_data.get("boundary_geojson")
     if boundary and anchors.total_area_ha is None:
@@ -319,28 +327,28 @@ def _extract_from_gis(
             anchors.total_area_ha = total
             anchors.total_area_source = "gis.boundary.MJ"
 
-    # Area breakdown from landuse_current GeoJSON (DLBM-based classification)
+    # Area breakdown from landuse_current GeoJSON (via gis/schema zone classification)
     landuse = gis_data.get("landuse_current_geojson")
     if landuse:
-        area_by_prefix = _sum_landuse_by_dlbm_prefix(landuse)
+        area_by_zone = _sum_landuse_by_zone_type(landuse)
 
         if anchors.construction_area_ha is None:
-            val = sum(area_by_prefix.get(p, 0) for p in _DLBM_CONSTRUCTION)
+            val = sum(area_by_zone.get(z, 0) for z in _CONSTRUCTION_ZONES)
             if val > 0:
                 anchors.construction_area_ha = val
-                anchors.construction_source = "gis.landuse_current.DLBM"
+                anchors.construction_source = "gis.landuse_current.zone_type"
 
         if anchors.farmland_area_ha is None:
-            val = sum(area_by_prefix.get(p, 0) for p in _DLBM_FARMLAND)
+            val = sum(area_by_zone.get(z, 0) for z in _FARMLAND_ZONES)
             if val > 0:
                 anchors.farmland_area_ha = val
-                anchors.farmland_source = "gis.landuse_current.DLBM"
+                anchors.farmland_source = "gis.landuse_current.zone_type"
 
         if anchors.ecological_area_ha is None:
-            val = sum(area_by_prefix.get(p, 0) for p in _DLBM_ECOLOGICAL)
+            val = sum(area_by_zone.get(z, 0) for z in _ECOLOGICAL_ZONES)
             if val > 0:
                 anchors.ecological_area_ha = val
-                anchors.ecological_source = "gis.landuse_current.DLBM"
+                anchors.ecological_source = "gis.landuse_current.zone_type"
 
     # Ecological redline from protection zone GeoJSON
     eco_protection = gis_data.get("ecological_protection_geojson")
@@ -355,7 +363,6 @@ def _extract_from_gis(
     if hazard:
         count = len(hazard.get("features", []))
         if count > 0:
-            # Store in metrics dict (no dedicated anchor field for hazard count)
             logger.info("[metric_anchors] GIS hazard_points count: %d", count)
 
 
@@ -374,21 +381,28 @@ def _sum_geojson_field(geojson: Dict[str, Any], field: str) -> Optional[float]:
     return total if found else None
 
 
-def _sum_landuse_by_dlbm_prefix(landuse_geojson: Dict[str, Any]) -> Dict[str, float]:
-    """Sum DLMJ (sqm) by DLBM 2-digit prefix, return as hectares."""
+def _sum_landuse_by_zone_type(landuse_geojson: Dict[str, Any]) -> Dict[str, float]:
+    """Sum DLMJ (sqm) by zone_type via gis/schema get_zone_type_for_dlbm().
+
+    Uses the standard DLBM→zone_type mapping from gis/schema/code_sets.py
+    instead of hardcoded 2-digit DLBM prefixes. Returns hectares.
+    """
     from collections import defaultdict
-    by_prefix: Dict[str, float] = defaultdict(float)
+    from app.modules.gis.schema import get_zone_type_for_dlbm
+
+    by_zone: Dict[str, float] = defaultdict(float)
     for feature in landuse_geojson.get("features", []):
         props = feature.get("properties", {})
         dlbm = str(props.get("DLBM", ""))
         dlmj = props.get("DLMJ")
         if dlbm and dlmj is not None:
             try:
-                by_prefix[dlbm[:2]] += float(dlmj)
+                zone = get_zone_type_for_dlbm(dlbm)  # ← gis/schema standard API
+                by_zone[zone] += float(dlmj)
             except (ValueError, TypeError):
                 pass
     # Convert sqm to ha
-    return {k: v / 10000 for k, v in by_prefix.items()}
+    return {k: v / 10000 for k, v in by_zone.items()}
 
 
 def _extract_from_metrics(

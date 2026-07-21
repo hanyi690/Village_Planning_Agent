@@ -30,8 +30,22 @@ logger = get_logger(__name__)
 
 
 async def _parse_intent_node(state: GISPipelineState) -> dict:
-    """Parse planning text → UnifiedSpatialIntent using LLM."""
-    from app.tools.gis.parse import parse_planning_text
+    """Parse planning text via PARSE Agent subgraph.
+
+    Runs the spatially-aware PARSE Agent:
+      classify_sections -> extract_* -> validate_and_merge
+
+    Outputs:
+      - intent: legacy format (for backward compatibility during transition)
+      - intent_json: legacy format
+      - operation_sequence: List[SpatialOperation] with spatial anchors
+      - constraint_set: List[SpatialConstraint] with spatial rules
+      - planning_intent: SpatialPlanningIntent with zone targets
+      - spatial_context: SpatialContext summary
+    """
+    from app.agent.gis.parse_agent import build_parse_agent_graph
+    from app.agent.gis.schema.parse_state import ParseAgentState, SpatialContext
+    from app.agent.gis.spatial_context import compute_spatial_context
 
     reports = state.reports or {}
     village_name = state.village_name
@@ -41,20 +55,116 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         logger.info("[Pipeline:parse] No reports or village name — skipping parse")
         return {}
 
+    # Extract planning text from reports
+    planning_text = ""
+    if reports:
+        for key, val in reports.items():
+            if isinstance(val, dict):
+                planning_text += val.get("content", val.get("text", ""))
+            elif isinstance(val, str):
+                planning_text += val
+    if not planning_text:
+        planning_text = state.intent_json.get("planning_text", "")
+
+    if not planning_text:
+        logger.info("[Pipeline:parse] No planning text found — skipping parse")
+        return {}
+
     try:
-        result = await parse_planning_text.ainvoke({
-            "reports": reports,
-            "village_name": village_name,
-            "gis_data": gis_data,
-        })
-        logger.info("[Pipeline:parse] Intent parsed: %d zones", len(result.get("intent", {}).get("zones", [])))
+        # Compute spatial context from GIS data
+        spatial_context = compute_spatial_context(gis_data or {})
+
+        # Build and run PARSE Agent subgraph
+        graph = build_parse_agent_graph()
+        input_state = ParseAgentState(
+            planning_text=planning_text[:12000],  # Token limit
+            village_name=village_name,
+            spatial_context=spatial_context,
+        )
+
+        result = await graph.ainvoke(input_state.model_dump())
+
+        # Extract PARSE outputs
+        operation_sequence = result.get("operation_sequence", [])
+        constraint_set = result.get("constraint_set", [])
+        planning_intent = result.get("planning_intent", {})
+        validation_errors = result.get("validation_errors", [])
+
+        # Build legacy intent from planning_intent for transition period
+        legacy_intent = _build_legacy_intent(planning_intent)
+
+        logger.info(
+            "[Pipeline:parse] Parsed: %d ops, %d constraints, %d zones",
+            len(operation_sequence),
+            len(constraint_set),
+            len(planning_intent.get("zone_targets", [])),
+        )
+        if validation_errors:
+            logger.warning("[Pipeline:parse] Validation errors: %s", validation_errors[:3])
+
         return {
-            "intent": result.get("intent", {}),
-            "intent_json": result.get("intent_json", {}),
+            "intent": legacy_intent,
+            "intent_json": planning_intent,
+            "operation_sequence": operation_sequence,
+            "constraint_set": constraint_set,
+            "planning_intent": planning_intent,
+            "spatial_context": spatial_context.model_dump(),
         }
     except Exception as e:
         logger.warning("[Pipeline:parse] Parse failed: %s — continuing with empty intent", e)
         return {"intent": {}, "intent_json": {}}
+
+
+def _build_legacy_intent(planning_intent: Dict[str, Any]) -> Dict[str, Any]:
+    """Build legacy UnifiedSpatialIntent from SpatialPlanningIntent for transition.
+
+    This bridges the new SpatialPlanningIntent format to the old intent format
+    expected by downstream nodes (allocate_and_generate, etc.) until they are
+    fully migrated to consume operation_sequence + constraint_set directly.
+
+    TODO(migration): Remove after downstream nodes consume operation_sequence directly.
+    Tracked by: PARSE output migration. Depends on: allocate_and_generate, validate_*
+    nodes being updated to accept operation_sequence + constraint_set as input.
+    """
+    zones = []
+    for zt in planning_intent.get("zone_targets", []):
+        zone = {
+            "zone_id": f"Z{len(zones) + 1:02d}",
+            "land_use": zt.get("land_use", ""),
+            "dlbm": zt.get("dlbm", ""),
+            "area_ratio": zt.get("area_ratio", 0.0),
+            "direction": zt.get("spatial_preference", {}).get("direction"),
+            "reference_feature": zt.get("spatial_preference", {}).get("reference"),
+            "adjacent_to": zt.get("adjacency_rules", {}).get("prefer", []),
+            "avoid_adjacent_to": zt.get("adjacency_rules", {}).get("avoid", []),
+            "density": zt.get("density", "medium"),
+        }
+        zones.append(zone)
+
+    facilities = []
+    for ft in planning_intent.get("facilities", []):
+        facilities.append({
+            "facility_id": f"F{len(facilities) + 1:02d}",
+            "facility_type": ft.get("type", ""),
+            "status": ft.get("status", "existing_preserve"),
+            "location_hint": ft.get("location_hint", ""),
+            "service_radius": ft.get("service_radius"),
+        })
+
+    axes = []
+    for at in planning_intent.get("development_axes", []):
+        axes.append({
+            "axis_id": f"A{len(axes) + 1:02d}",
+            "axis_type": "primary",
+            "direction": at.get("direction", ""),
+            "reference_feature": at.get("reference_feature", ""),
+        })
+
+    return {
+        "zones": zones,
+        "facilities": facilities,
+        "axes": axes,
+    }
 
 
 async def _fetch_gis_data_node(state: GISPipelineState) -> dict:

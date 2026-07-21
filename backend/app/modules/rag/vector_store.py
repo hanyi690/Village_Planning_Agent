@@ -31,7 +31,7 @@ class AliyunEmbeddings:
     2026-05-17: 添加输入长度限制处理（API 限制 8192 tokens）
     2026-05-18: 添加速率限制和重试机制
     """
-    BATCH_SIZE = 25
+    BATCH_SIZE = 10  # Aliyun text-embedding-v4 API limit: max 10 per batch
     MAX_TOKENS = 8192  # API 限制
     MAX_CHARS = 7500   # 估算：1 token ≈ 1 字符（中文），留安全余量
 
@@ -446,6 +446,7 @@ class HierarchyVectorStore:
                     "doc_type": chunk.metadata.get("doc_type", ""),
                     "title": chunk.metadata.get("title", ""),
                     "category": chunk.metadata.get("category", ""),
+                    "file_hash": chunk.metadata.get("file_hash", ""),
                 },
             )
             docs.append(doc)

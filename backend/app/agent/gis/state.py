@@ -74,6 +74,12 @@ class GISPipelineState(BaseModel):
     intent: Dict[str, Any] = Field(default_factory=dict)
     intent_json: Dict[str, Any] = Field(default_factory=dict)
 
+    # ── PARSE Agent output (spatially-aware) ──
+    operation_sequence: List[Dict[str, Any]] = Field(default_factory=list)
+    constraint_set: List[Dict[str, Any]] = Field(default_factory=list)
+    planning_intent: Dict[str, Any] = Field(default_factory=dict)
+    spatial_context: Dict[str, Any] = Field(default_factory=dict)
+
     # ── Knowledge Graph ──
     kg_turtle: str = ""  # RDF Turtle serialization
     kg_constraints: List[Dict[str, Any]] = Field(default_factory=list)
