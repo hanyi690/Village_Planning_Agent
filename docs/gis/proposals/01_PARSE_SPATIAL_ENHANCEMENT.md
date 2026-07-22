@@ -1,529 +1,616 @@
-# PARSE 与 GIS 空间理解结合度分析
+# PARSE Agent 空间理解增强方案（可执行版）
 
-> **Status: [PROPOSAL]** | **Type: Design Critique & Enhancement Proposal** | **Version: 1.1** | **Updated: 2026-07-21**
-> **⚠️ 本提案尚未实现**。所有分析和增强建议均为设计讨论阶段。
-> **Relationship to DESIGN_GOALS**: 本提案与 01_DESIGN_GOALS.md §6 的 "statistics only" 决策存在矛盾。
-> 详见 `design-log/01_DECISION_LOG.md §Decision-001`
-> **References**: BIBLIOGRAPHY.md §A3-4, §F1-5
+> **Status: [PROPOSAL]** | **Type: Executable Enhancement Plan** | **Version: 2.0** | **Updated: 2026-07-22**
+> **⚠️ 本方案基于 v11 实测数据（金田村 2026-07-22），从理论批判转为可执行路径。**
+> **Relationship to DESIGN_GOALS**: 本方案不再争论 "statistics only vs statistics+spatial"，而是解决实际瓶颈：
+> 编码无效、锚定断裂、约束缺失——这些问题在现有设计框架内即可修复。
+> **References**: BIBLIOGRAPHY.md §A3-4, §F1-7
 > **Related**: 01_DESIGN_GOALS.md §6, diagnostics/01_PARSE_AGENT_STATUS.md, diagnostics/02_RELIABILITY_ASSESSMENT.md
->
-> 触发问题: "parse设计的与gis结合度不足，真的能辅助gis agent做到空间理解吗"
-> 注意: 引用了一些旧 YAML 文件名，以 01_DESIGN_GOALS.md v5.1 为准
-
-## 0. 前提澄清
-
-**01_DESIGN_GOALS.md v5.0 是权威设计文档**，parse_state.py 是部分实现。本分析基于设计文档，不将实现当设计。
-
-01_DESIGN_GOALS.md §6 技术决策明确写道：
-
-> **GIS 数据注入**: PARSE 阶段注入 GIS 现状摘要（统计信息，不含几何）
-> **不选**: 不注入
-> **理由**: LLM 需参照现状提取——自然村名/地类面积锚定防止幻觉
-
-**"统计信息，不含几何"是显式设计决策**，不是实现遗漏。本分析的核心问题是：**这个设计决策是否充分？**
 
 ---
 
-## 1. 当前设计回顾
+## 0. 前提：v11 突破与剩余鸿沟
 
-### 1.1 PARSE 的设计定位
+### 0.1 v11 取得的突破
 
-从 DESIGN_GOALS §3.2-3.3，PARSE Agent 是：
+v11 通过恢复单批次处理 + Think-Then-Format 分离，实现了核心瓶颈的突破：
 
-- **输入**: 规划文本 + GIS 现状摘要（统计信息，不含几何）
-- **工具**: 3 个（parse_planning_text, extract_structured_text, lookup_land_use_code）
-- **流程**: classify → route → extract → validate
-- **输出**: OperationSequence + ConstraintSet + IntentJSON
-- **架构**: 半结构化 ReAct（确定性骨架 + LLM 节点）
+| 指标 | v10 | v11 | 变化 |
+|------|-----|-----|------|
+| explore_projects draft | 138 chars | 2185 chars | **+16x** 🎉 |
+| explore_targets draft | 109 chars | 2605 chars | **+24x** 🎉 |
+| format_projects operations | 2 | 30 | **15x** 🎉 |
+| "length limit" 错误 | 0 | 0 | ✅ 稳定 |
 
-### 1.2 PARSE → LAYOUT 的交接面
+### 0.2 但 v11 的 30 个操作全部不可用于 GIS Agent
 
-```
-PARSE 输出:
-  OperationSequence: List[OperationItem]  # 5 种原子操作
-  ConstraintSet: List[ConstraintItem]      # 约束规则
-  IntentJSON: Dict                         # 规划意图
+从实测解析报告 `output/parse_results/金田村_2026-07-22.md` 中直接提取的数据：
 
-LAYOUT 消费:
-  OperationSequence → EXECUTE_OPERATIONS（空间定位 → 合规预检 → 执行）
-  ConstraintSet → KG（约束三元组 + 合规规则）
-  IntentJSON → MIP 分配目标
-```
+| 问题 | 严重度 | 影响范围 | 根因 |
+|------|--------|----------|------|
+| **无效 GHYTBM 编码** | 🔴 P0 | 30/30 ops | LLM format 阶段自行编造 `GHYTBM=2121`，未使用 explore 阶段 lookup_code 返回的正确编码 |
+| **空间锚定全部未解析** | 🔴 P0 | 30/30 ops (confidence=0.0) | resolve_place 返回了地名→坐标→候选图斑，但 SpatialAnchor 未被自动填充 |
+| **约束零产出** | 🔴 P0 | 0 条约束 | extract_regulations 使用 70% regex + 30% LLM，regex 模式太窄 |
+| **规划意图仅有统计数字** | 🔴 P0 | zone_targets 为空 | format_targets 产出 SpatialPlanningIntent 但 LLM 将 area_ratio 填为现状分解而非规划目标 |
+| **46 个校验错误** | 🔴 P0 | 全部 ops | 编码校验 + 锚定置信度双重失败 |
 
-### 1.3 空间定位的设计归属
-
-DESIGN_GOALS §3.4 五步闭环流程明确将**空间定位**放在 LAYOUT 的 EXECUTE_OPERATIONS 阶段：
+### 0.3 根因总结
 
 ```
-② 空间定位 → 候选图斑
-   ① 地名解析 → 找到"刘村小组"点位 → 向东偏移
-   ② 在搜索区寻找"晒谷场"图斑 → 分析其北侧相邻地块
-   ③ 找到空闲地图斑 XG-005（面积≥400㎡）→ 作为操作对象
-   ④ 若多个候选 → 生成列表要求规划师点击确认
+问题链:
+  lookup_code("宅基地") → 返回 GHYTBM=212101 (正确)
+       ↓
+  explore_projects 阶段存入 code_mappings_projects
+       ↓
+  format_projects 阶段注入 prompt 为 code_table
+       ↓
+  ❌ LLM 忽略 code_table, 自行编造 GHYTBM=2121
+       ↓
+  ── 同样的断裂也发生在 resolve_place → place_mappings → SpatialAnchor ──
+       ↓
+  ❌ LLM 不填 SpatialAnchor, confidence=0.0
+       ↓
+  ── extract_regulations 只用 regex 提取, regex 模式覆盖不全 ──
+       ↓
+  ❌ 零约束产出
 ```
 
-**设计意图**: PARSE 负责"提取文本说了什么"，LAYOUT 负责"在空间上落地"。
+**核心问题不是设计不足，而是 LLM→Python 的数据传递链断裂**。format 阶段 LLM 被赋予"必须使用 code_table"的指令，但在实际推理中忽略了。
 
 ---
 
-## 2. 差距诊断：5 个具体问题
+## 1. 优化路径总览
 
-### 问题 1: GISSummary 只有统计，LLM 无法建立空间心智模型
+```
+Path 1: 编码硬校验 ──→ Path 2: 锚定自动填充 ──→ Path 3: 约束提取增强
+  (P0, 0.5天)           (P0, 1天)               (P0, 1天)
+                              ↓
+        第一批交付: 可用解析结果 → GIS Agent → 规划分区图+设施图
+                              ↓
+Path 4: 忠实度评估 ←──→ Path 5: 并行度提升
+  (P1, 1.5天)              (P1, 1天)
+                              ↓
+Path 6: 注记+空间关系+KG 注入 ←──→ Path 7: DEM数据准备
+  (P2, 2天)                        (P2, 0.5天)
+```
 
-**当前设计**:
+---
+
+## 2. Path 1: 编码硬校验（P0，0.5天）
+
+### 问题
+format 阶段 LLM 直接输出 `GHYTBM=2121`，而非从 explore 阶段的 `code_mappings` 中取正确编码。
+
+### 根因
+code_table 已注入 prompt 但 LLM 忽略。需要 Python 层硬校验兜底。
+
+### 修改点
+
+**A. format_projects_node 赛后自动修正** (`parse/agent.py` L719-761):
 
 ```python
-GISSummary:
-  parcel_count, current_landuse_stats, natural_villages,
-  planning_zone_stats, total_area_ha, construction_boundary_ha
+async def format_projects_node(state: ParseAgentState) -> dict:
+    # ... 现有 format 逻辑 ...
+    result = await _format_structured(format_llm, ProjectExtractionResult, messages)
+
+    if result is not None:
+        ops = [o.model_dump() for o in result.operations]
+
+        # === NEW: Python 硬校验 + 自动修正 ===
+        from app.modules.gis.schema import GHYTBM_TO_GHYTMC
+        for i, op in enumerate(ops):
+            code = op.get("land_use_code", "")
+            if code and code not in GHYTBM_TO_GHYTMC:
+                # 从 code_mappings 中找最近似匹配
+                corrected = _auto_correct_code(op, state.code_mappings_projects)
+                ops[i]["land_use_code"] = corrected
+                ops[i]["_code_auto_corrected"] = True
+
+        return {"raw_operations": ops}
 ```
 
-**具体场景**: PARSE 提取到 `OperationItem(action="create", location_desc="刘村小组东侧")` 时：
-
-- LLM 知道 natural_villages 包含 "刘村小组" ✓
-- LLM 不知道 "刘村小组" 在村庄的哪个方位 ✗
-- LLM 不知道 "东侧" 有什么地类分布 ✗
-- LLM 无法判断 "东侧" 是否有足够空间容纳 400㎡ 新建用地 ✗
-
-**影响**: PARSE 的 `location_desc` 是"盲写"——LLM 写下空间描述但无法验证其合理性。
-
-### 问题 2: OperationItem 的 location_desc 是自由文本，无空间锚点
-
-**当前设计**: `location_desc: Optional[str]` 纯文本
-
-**具体场景**: `"刘村小组东侧、晒谷场北边空地"`
-
-- LAYOUT 的 `resolve_place_name` 需要独立解析这段文本
-- 但 PARSE 已经"看过"GIS 数据，本可以预判候选图斑
-- 信息在 PARSE → LAYOUT 传递中丢失
-
-**对比参考项目 Spatial-Agent (arXiv:2601.16965)**:
-
-> "formalizes geo-analytical QA as a concept transformation problem"
-> 自然语言 → 空间概念节点 + 变换边 → 可执行工作流
-
-Spatial-Agent 的关键洞察：**解析阶段就应将语言映射为具有几何含义的计算表示**，而非延迟到执行阶段。
-
-### 问题 3: ConstraintItem 的 spatial_constraint 无法直接映射为空间运算
-
-**当前设计**: `spatial_constraint` 只有 `zone_type` + `rule`（自由文本）
-
-**具体场景**: `"允许建设区内不得安排基本农田"`
-
-- PARSE 提取为 `ConstraintItem(type="spatial_constraint", zone_type="允许建设区", rule="不得安排基本农田")`
-- LAYOUT 的 KG 需要重新将这条规则编码为 RDF 三元组
-- 但这条规则可以直接表示为空间运算：`intersection(建设区, 基本农田) == empty`
-
-**对比参考项目 GeoAgents**:
-
-> `spatial.intersects` 和 `spatial.nearby` 是一等公民工具
-> 约束 = 确定性空间操作 + 参数
-
-### 问题 4: PlanningIntent 缺乏空间排列信息
-
-**当前设计**: `zone_targets: Dict[str, float]` 只有面积比例
-
-**具体场景**: 规划报告写 "居住用地集中在村庄中心，产业用地布局在村庄外围"
-
-- PARSE 提取为 `zone_targets = {"居住用地": 0.35, "产业用地": 0.15}`
-- 面积比例正确，但"中心"vs"外围"的空间偏好丢失
-- MIP 分配器只能优化面积偏差 + 邻接紧凑度，无法利用空间偏好
-
-**注意**: prompts.py 的 SPATIAL_LAYOUT_PARSE_PROMPT 已定义 `location_bias.direction` 和 `adjacency` 字段，但 PlanningIntent 的 zone_targets 是简单 Dict，**设计上没有携带这些信息**。
-
-### 问题 5: PARSE → LAYOUT 单向无反馈
-
-**当前设计**: state injection 是单向的
-
-**具体场景**: PARSE 提取 `location_desc="晒谷场北侧"` 但 GIS 数据中不存在"晒谷场"
-
-- LAYOUT 的 resolve_place_name 解析失败
-- 无法回退到 PARSE 要求补充描述
-- 操作只能标记为 `resolution_status="unresolved"` 等待人工干预
-
-**对比参考项目 GeoPlanAgent**:
-
-> "document-grounded, geospatial-tool-in-the-loop"
-> 解析和空间推理交替进行：解析 → 定位 → 失败 → 补充解析 → 重试
-
----
-
-## 3. 根因分析
-
-### 3.1 设计决策的原始理由
-
-DESIGN_GOALS §6 记录的技术决策：
-
-| 决策         | 选择                                              | 不选   | 理由                                                |
-| ------------ | ------------------------------------------------- | ------ | --------------------------------------------------- |
-| GIS 数据注入 | PARSE 阶段注入 GIS 现状摘要（统计信息，不含几何） | 不注入 | LLM 需参照现状提取——自然村名/地类面积锚定防止幻觉 |
-
-**原始理由只考虑了"不注入"的对比**，没有考虑"注入更多空间信息"的选项。
-
-### 3.2 可能的隐性考量
-
-1. **上下文窗口限制**: 660 个地块的 GeoJSON ≈ 5MB，注入 LLM 不经济
-2. **单一职责**: PARSE 负责文本，LAYOUT 负责空间
-3. **确定性保证**: PARSE 不做空间决策（避免 LLM 选错图斑）
-
-### 3.3 这些考量是否仍然成立？
-
-1. **上下文窗口**: ✗ 不需要注入原始几何——只需要空间关系摘要（~2KB），参考 Spatial-Agent 的 "spatial grounding" 概念
-2. **单一职责**: ✗ 不冲突——PARSE 仍负责文本提取，但输出应携带空间语义（不是做空间计算）
-3. **确定性保证**: ✓ 仍然成立——PARSE 不应执行空间操作，但应提供空间锚定信息供 LAYOUT 验证
-
----
-
-## 4. 参考项目关键启示
-
-### 4.1 Spatial-Agent (arXiv:2601.16965) — 最相关
-
-**核心概念**: GeoFlow Graph
-
-- 自然语言 → 空间概念节点（Object/Field/Event/Network）+ 变换边
-- 每个节点有明确的几何含义
-- 模板库加速常见空间模式的生成
-
-**对本项目的启示**:
-
-> PARSE 应输出"空间概念 + 变换关系"的抽象表示，而非自由文本。
-> 例如 "刘村小组东侧" → SpatialAnchor(reference="刘村小组", offset="east")
-> 而非 location_desc="刘村小组东侧"
-
-### 4.2
-
- GeoPlanAgent (degenfabian/GeoPlanAgent)
-
-**核心概念**: document-grounded, geospatial-tool-in-the-loop
-
-- 解析与空间推理交替进行
-- 工具在解析过程中被调用
-
-**对本项目的启示**:
-
-> 太激进——本项目坚持"人工确认"原则，PARSE 阶段不应执行空间操作。
-> 但启示是：PARSE 阶段应能**查询**空间信息来验证提取结果。
-
-### 4.3 GeoAgents (juaquicar/GeoAgents)
-
-**核心概念**: spatial 工具一等公民
-
-- `spatial.context_pack`: 为位置生成空间上下文
-- `spatial.intersects`, `spatial.nearby`: 空间关系查询
-
-**对本项目的启示**:
-
-> ConstraintItem 应能直接映射为空间操作（no_overlap, buffer_exclusion, contained_by）。
-> 当前 rule 自由文本是信息浪费。
-
-### 4.4 GeoWorkbench (chrislyonsKY/GeoWorkbench)
-
-**核心概念**: 空间语义是显式管线阶段
-
-- Intent Interpretation → Dataset Discovery → **Spatial Semantics** → Workflow Planner
-
-**对本项目的启示**:
-
-> `compute_spatial_context()` 应是 PARSE 之前的独立阶段，
-> 将 GISDataBundle 转为紧凑的 SpatialContext 注入 PARSE。
-
-### 4.5 GISDataAgent (zhouning/gisdataagent)
-
-**核心概念**: 地理知识图谱
-
-- networkx 实体关系建模，空间邻接/包含关系检测，N跳邻居查询
-
-**对本项目的启示**:
-
-> SpatialContext 应包含从 GIS 数据计算的空间关系图（邻接、包含、方向），
-> 而非只有统计数字。
-
----
-
-## 5. 设计方案建议
-
-### 5.1 核心原则
-
-**不改变"PARSE 不做空间计算"原则**，但让 PARSE 输出具有空间语义的中间表示。
-
-类比：PARSE 是"读懂图纸的助理"——助理不需要画图，但需要理解"东侧"意味着什么。
-
-### 5.2 升级 GISSummary → SpatialContext
-
-**设计变更**: 在 PARSE 之前增加 `compute_spatial_context()` 阶段
-
-```
-Before:
-  GISDataBundle → GISSummary(统计) → PARSE
-
-After:
-  GISDataBundle → compute_spatial_context() → SpatialContext(统计+空间关系) → PARSE
-```
-
-**SpatialContext 新增内容**（~2KB，不注入原始几何）:
-
-| 新增字段                | 类型                 | 来源                          | 用途               |
-| ----------------------- | -------------------- | ----------------------------- | ------------------ |
-| village_center          | (lon, lat)           | boundary 质心                 | LLM 空间参照原点   |
-| natural_village_anchors | List[Anchor]         | 图斑聚类 + DLMC 字段 + POI 搜索 | 解析 location_desc |
-| spatial_relations       | List[Relation]       | 图斑邻接计算                  | LLM 理解空间关系   |
-| constraint_summary      | List[Constraint]     | 保护图层概要                  | 结构化约束提取     |
-| zone_adjacency          | Dict[str, List[str]] | 分区邻接矩阵摘要              | MIP 邻接偏好       |
-
-**NaturalVillageAnchor**:
+**B. 新增 `_auto_correct_code` 辅助函数**:
 
 ```python
-class NaturalVillageAnchor(BaseModel):
-    name: str                    # "刘村小组"
-    center: Tuple[float, float]  # (116.xx, 23.xx)
-    parcel_ids: List[str]        # ["XG-001", "XG-002"]
-    dominant_landuse: str        # "宅基地"
-    adjacent_to: List[str]       # ["晒谷场", "主干道"]
+def _auto_correct_code(op: dict, code_mappings: dict) -> str:
+    """从 code_mappings 中查找最匹配的编码"""
+    land_use_name = op.get("land_use_name", "")
+    # 精确匹配
+    if land_use_name in code_mappings:
+        return code_mappings[land_use_name]
+    # 子串匹配
+    for name, code in code_mappings.items():
+        if land_use_name in name or name in land_use_name:
+            return code
+    # 从 DictionaryCenter 直接查询
+    from app.tools.gis.parse_tools import lookup_land_use_code
+    result = lookup_land_use_code.invoke({"land_use_name": land_use_name})
+    if result and "ghytbm" in result:
+        return result["ghytbm"]
+    return op.get("land_use_code", "")
 ```
 
-**SpatialRelation**:
-
-```python
-class SpatialRelation(BaseModel):
-    subject: str        # "刘村小组"
-    relation: str       # "east_of" / "adjacent_to" / "contains" / ...
-    object: str         # "晒谷场"
-    confidence: float   # 1.0 (几何计算) / 0.7 (别名查找)
-```
-
-### 5.3 升级 OperationItem → 添加 SpatialAnchor
-
-**设计变更**: `location_desc` 自由文本 → `SpatialAnchor` 结构化空间锚定
-
-```python
-class SpatialAnchor(BaseModel):
-    reference: str = ""              # 主参照: "刘村小组"
-    offset: Optional[str] = None     # 方向偏移: "east"
-    secondary_ref: Optional[str] = None   # 次参照: "晒谷场"
-    secondary_offset: Optional[str] = None
-    candidate_parcels: List[str] = []     # 预判候选图斑
-    confidence: float = 0.0
-    resolution_status: str = "unresolved"
-    # "anchored" = 已锚定, "partial" = 锚定到区域, "unresolved" = 需 LAYOUT 解析
-```
-
-**OperationItem 变更**:
-
-```python
-class OperationItem(BaseModel):
-    # ... 保留所有现有字段 ...
-    location_desc: Optional[str] = None  # 保留作为 fallback
-    spatial_anchor: Optional[SpatialAnchor] = None  # 新增
-```
-
-**关键**: PARSE 不执行空间操作，但利用 SpatialContext 中的 natural_village_anchors 预判候选图斑。如果预判成功，`resolution_status="anchored"`；否则 `"unresolved"` 交给 LAYOUT。
-
-### 5.4 升级 ConstraintItem → 添加 SpatialRule
-
-**设计变更**: `rule` 自由文本 → `SpatialRule` 可计算空间规则
-
-```python
-class SpatialRule(BaseModel):
-    operation: str   # "no_overlap" / "buffer_exclusion" / "contained_by" / ...
-    subject: str     # "建设区"
-    object: str      # "基本农田"
-    distance_m: Optional[float] = None  # buffer_exclusion 时必填
-```
-
-**ConstraintItem 变更**:
-
-```python
-class ConstraintItem(BaseModel):
-    # ... 保留所有现有字段 ...
-    rule: Optional[str] = None  # 保留自由文本作为 fallback
-    spatial_rule: Optional[SpatialRule] = None  # 新增
-```
-
-**映射关系**:
-
-| 规划文本                       | SpatialRule                       | Shapely 等价            |
-| ------------------------------ | --------------------------------- | ----------------------- |
-| "允许建设区内不得安排基本农田" | no_overlap(建设区, 基本农田)      | intersection() == empty |
-| "产业用地距居住区≥200m"       | buffer_exclusion(产业, 居住, 200) | distance() > 200        |
-| "宅基地必须在建设边界内"       | contained_by(宅基地, 建设边界)    | within()                |
-
-### 5.5 升级 PlanningIntent → 添加空间偏好
-
-**设计变更**: `zone_targets: Dict[str, float]` → `List[ZoneTarget]` 携带空间偏好
-
-```python
-class ZoneTarget(BaseModel):
-    land_use: str
-    area_ratio: float
-    dlbm: Optional[str] = None
-    spatial_preference: Optional[SpatialPreference] = None  # 新增
-    adjacency_rules: Optional[AdjacencyRules] = None  # 新增
-
-class SpatialPreference(BaseModel):
-    direction: Optional[str] = None   # "center" / "north" / ...
-    reference: Optional[str] = None   # "靠近村委会"
-
-class AdjacencyRules(BaseModel):
-    prefer: List[str] = []   # 希望邻接
-    avoid: List[str] = []    # 避免邻接
-```
-
-**注意**: prompts.py 的 SPATIAL_LAYOUT_PARSE_PROMPT 已定义 `location_bias.direction` 和 `adjacency` 字段——这些信息在 LLM 生成时已经存在，只是 PlanningIntent 没有携带。现在激活这些已有定义。
+**文件**: `backend/app/agent/gis/parse/agent.py`
 
 ---
 
-## 6. 原创性分析：我们与参考项目的本质区别
+## 3. Path 2: 空间锚定自动填充（P0，1天）
 
-### 6.1 参考项目解决什么问题？我们解决什么问题？
+### 问题
+`resolve_place` 返回 `{village_name, parcel_ids, confidence}`，但这些信息未自动写入 `SpatialAnchor`。
 
-| 项目 | 领域 | 核心问题 | 输入 | 输出 |
-|------|------|---------|------|------|
-| Spatial-Agent | 通用地理空间 QA | "哪个地铁站 1km 内犯罪率最高？" | 自然语言问题 | 数值答案 |
-| GeoPlanAgent | 英国规划文档 → 边界 | 从 PDF 重建 GeoJSON 边界 | 规划 PDF + 地图图片 | GeoJSON 边界 |
-| GeoAgents | 通用 GIS 分析 | "这个区域有哪些学校？" | 空间查询 | 分析报告 |
-| OpenEarthAgent | 遥感影像分析 | "这片区域 NDVI 变化如何？" | 卫星影像 + 查询 | 指数图 + 统计 |
-| GeoFaham | 自然语言 → GIS 工作流 | "分析佛罗伦萨的城市热岛" | 自然语言 | 代码 + 地图 |
-| **本项目** | **中国村庄规划编制** | **规划文本 → 14 层标准 GIS 成果** | **规划报告 + GIS 现状** | **GDB 14 层 + 平衡表** |
+### 根因
+format 阶段依赖 LLM 填写 SpatialAnchor 字段，LLM 不擅长这种结构化数据搬运任务。
 
-**本质区别**：参考项目都是"问答型"或"分析型"——输入一个问题，输出一个答案。
-本项目是**"编制型"**——输入规划文本，输出一整套合规的 GIS 成果包。这要求：
+### 修改点
 
-1. **编码合规**：每个图斑的 20 个字段必须符合 GB/T 21010 + DB22/T 3407
-2. **面积守恒**：660 地块面积总和不可变，split/merge 操作必须守恒
-3. **三线约束**：生态红线/基本农田/建设边界是不可违反的法律红线
-4. **人工确认**：所有空间操作必须经规划师确认，Agent 不做规划决策
-5. **变更留痕**：每步操作的来源文本、前后快照、确认人必须可审计
+**A. format_projects_node 自动推导 SpatialAnchor** (`parse/agent.py` L719-761):
 
-**没有参考项目同时处理这 5 个约束**。
+```python
+async def format_projects_node(state: ParseAgentState) -> dict:
+    # ... 现有 format 逻辑 + 编码修正 ...
 
-### 6.2 逐项对比：借鉴 vs 原创
-
-| 设计元素 | 参考项目做法 | 我们的做法 | 原创性 |
-|---------|------------|-----------|--------|
-| **SpatialContext** | Spatial-Agent: "spatial grounding" 概念 | 我们：从 GISDataBundle 计算 GB/T 21010 编码感知的空间摘要 | **半原创**——概念借鉴，但编码体系（DLBM→GHYTBM→VNE 三级映射）是我们独有的 |
-| **SpatialAnchor** | GeoPlanAgent: "localisation" 步骤 | 我们：PARSE 输出预判锚定 + LAYOUT 验证修正的双阶段模式 | **原创**——GeoPlanAgent 是单阶段（定位即执行），我们是双阶段（预判→确认），因为我们必须人工确认 |
-| **SpatialRule** | GeoAgents: spatial.intersects/nearby 工具 | 我们：ConstraintItem → SpatialRule → KG 三元组 → Shapely 操作的四层映射 | **原创**——GeoAgents 直接调工具，我们走"规则→知识图谱→合规预检→空间运算"链路，因为管制规则要先注入 KG |
-| **ZoneTarget** | 通用概念（面积+偏好） | 我们：ZoneTarget 携带 DLBM 编码 + 广东省 6 类规划分区映射 + 三线约束 | **原创**——没有任何参考项目处理中国村庄规划的三区三线约束体系 |
-| **5 种原子操作** | 无参考（独特设计） | create/split/merge/modify/reclassify + 面积守恒 + 变更日志 | **完全原创** |
-| **DictionaryCenter** | 无参考（独特设计） | 12 个 YAML 字典 + CandidateEngine + 三置信度 | **完全原创** |
-| **MIP + KG + Conflict 三合一** | 无参考（独特设计） | MILP 分配 + RDF 约束 + 冲突检测器联合 | **完全原创** |
-
-### 6.3 原创性的核心：不是概念创新，是"约束感知"的组合创新
-
-我们的原创性不在于发明了"SpatialAnchor"这个概念（这确实是借鉴 Spatial-Agent），而在于：
-
-1. **编码感知的空间锚定**：SpatialAnchor 不只是"刘村小组东侧"，还携带了 DLBM→GHYTBM→VNE 的三级编码映射。当 PARSE 提取"经营性建设用地"时，SpatialAnchor 同时关联了 `land_use_code="2124"` + `vne_code="V31"` + `ghflbm="2120"`。**这来自 DictionaryCenter 的独特设计，任何参考项目都没有。**
-
-2. **合规前置的空间规则**：SpatialRule 不只是 `no_overlap(建设区, 基本农田)`，还必须经过 KG 合规预检——规则先注入知识图谱，再由 EXECUTE_OPERATIONS 的 ReAct 子图查询 KG 判断操作是否违规。**这条"规则→KG→合规预检→空间运算"链路是我们的独创。**
-
-3. **双阶段空间定位**：PARSE 预判候选图斑（SpatialAnchor.candidate_parcels + resolution_status），LAYOUT 的 resolve_place_name 验证修正。**这来自"Agent 是绘图员不是规划师"原则——GeoPlanAgent 的单阶段定位不适合需要人工确认的场景。**
-
-4. **面积守恒的操作引擎**：split/merge 操作必须保证 660 地块总面积不变，变更日志记录 before/after 快照。**这是中国村庄规划的法规要求，任何参考项目都没有处理。**
-
-### 6.4 结论：原创性矩阵
-
-| 维度 | 原创程度 | 说明 |
-|------|---------|------|
-| 问题定义 | ★★★★★ | 中国村庄规划 Text→GIS 编制，全球无同类系统 |
-| 编码体系 | ★★★★★ | DLBM/GHYTBM/VNE 三级正交 + DictionaryCenter，完全原创 |
-| 操作引擎 | ★★★★★ | 5 原子操作 + 面积守恒 + 变更日志 + 人工确认，完全原创 |
-| 空间约束 | ★★★★☆ | SpatialRule 概念借鉴 GeoAgents，但 KG 合规预检链路原创 |
-| 空间锚定 | ★★★☆☆ | SpatialAnchor 概念借鉴 Spatial-Agent，但双阶段模式原创 |
-| 空间上下文 | ★★★☆☆ | SpatialContext 概念借鉴 GeoWorkbench，但编码感知摘要原创 |
-| MIP+KG+Conflict | ★★★★★ | 三合一组合，完全原创 |
-
-**总体**：我们的原创性在于**"中国村庄规划编制"这个独特问题域**以及**"编码感知 + 合规前置 + 人工确认"**的独特约束组合。概念层借鉴是正常的——Spatial-Agent 也借鉴了 GIScience 的 core concepts 理论，GeoAgents 也借鉴了 GeoFaham 的多 Agent 架构。关键是我们如何将这些概念适配到**没有人处理过的约束空间**中。
-
-### 决策：不采用交错解析，采用"丰富中间表示"
-
-| 方案                                                              | 优点                     | 缺点                                       | 判定    |
-| ----------------------------------------------------------------- | ------------------------ | ------------------------------------------ | ------- |
-| **A: 交错解析**（PARSE 调用 resolve_place_name）            | 空间定位在提取时完成     | 违反"Agent 是绘图员"原则；PARSE 做空间决策 | ✗ 不选 |
-| **B: 丰富中间表示**（PARSE 输出 SpatialAnchor/SpatialRule） | 保持职责分离；信息不丢失 | LAYOUT 仍需验证锚定                        | ✓ 选   |
-| **C: 维持现状**（只输出自由文本）                           | 最简单                   | 已证明空间信息不足                         | ✗ 不选 |
-
-**方案 B 的管线变化**:
-
-```
-Before:
-  规划文本 + GISSummary(统计) → PARSE → OperationSequence(自由文本) → LAYOUT
-
-After:
-  规划文本 + SpatialContext(统计+空间关系) → PARSE →
-    SpatialOperation(空间锚定) + SpatialConstraint(可计算规则) + SpatialPlanningIntent(空间偏好)
-  → LAYOUT (验证锚定 → 执行操作)
+    for i, op in enumerate(ops):
+        # === NEW: 自动填充 SpatialAnchor（不依赖LLM） ===
+        location = op.get("location_desc", "")
+        anchor = _auto_fill_spatial_anchor(
+            location,
+            state.place_mappings_projects,
+            state.spatial_context
+        )
+        if anchor:
+            ops[i]["spatial_anchor"] = anchor
 ```
 
-**关键新增环节**:
+**B. 新增 `_auto_fill_spatial_anchor` 辅助函数**:
 
-```
-GISDataBundle → compute_spatial_context() → SpatialContext → 注入 PARSE
+```python
+def _auto_fill_spatial_anchor(
+    location_desc: str,
+    place_mappings: dict,
+    spatial_context
+) -> dict | None:
+    """从 place_mappings 自动推导 SpatialAnchor。
+
+    策略:
+    1. 精确匹配 place_mappings 中的已解析地名
+    2. 模糊匹配 natural_villages 中的村组名
+    3. 从 location_desc 中提取方向词（东/南/西/北/中/侧/边）
+    """
+    if not location_desc:
+        return None
+
+    # Step 1: 精确匹配 place_mappings
+    for place_name, info in place_mappings.items():
+        if place_name in location_desc:
+            confidence = info.get("confidence", 0.5)
+            return {
+                "reference": place_name,
+                "candidate_parcels": info.get("parcel_ids", []),
+                "confidence": confidence,
+                "resolution_status": "RESOLVED" if confidence > 0.5 else "NEEDS_CONFIRMATION",
+            }
+
+    # Step 2: 模糊匹配 natural_villages
+    for nv in (spatial_context.natural_villages or []):
+        if nv.name in location_desc:
+            return {
+                "reference": nv.name,
+                "candidate_parcels": nv.parcel_ids[:10] if hasattr(nv, 'parcel_ids') else [],
+                "confidence": 0.5,
+                "resolution_status": "NEEDS_CONFIRMATION",
+            }
+
+    # Step 3: 方向词提取（保留给后续 KG 查询）
+    directions = ["东", "南", "西", "北", "中", "侧", "边", "沿", "周边"]
+    for d in directions:
+        if d in location_desc:
+            # 提取方向词前的参照物名称
+            idx = location_desc.index(d)
+            ref_candidate = location_desc[:idx].strip()
+            if ref_candidate:
+                return {
+                    "reference": ref_candidate,
+                    "offset": d,
+                    "candidate_parcels": [],
+                    "confidence": 0.2,
+                    "resolution_status": "UNRESOLVED",
+                }
+
+    return None
 ```
 
-这对应 GeoWorkbench 的 "Spatial Semantics" 显式阶段。
+**文件**: `backend/app/agent/gis/parse/agent.py`
 
 ---
 
-## 7. 与 DESIGN_GOALS 的对齐
+## 4. Path 3: 约束提取增强（P0，1天）
 
-### 7.1 不冲突的设计原则
+### 问题
+`extract_regulations_node` 零产出。当前只用 regex 提取，模式覆盖不全。
 
-| 原则                       | 当前设计 | 本方案                           | 是否冲突 |
-| -------------------------- | -------- | -------------------------------- | -------- |
-| Agent 是绘图员不是规划师   | ✓       | PARSE 不做空间决策，只提供锚定   | 否       |
-| 不确定性必须由人消除       | ✓       | 候选图斑仍需人工确认             | 否       |
-| 编码映射不做自动转换       | ✓       | SpatialAnchor 不做自动选择       | 否       |
-| 合规检查是前置条件         | ✓       | SpatialRule 可直接映射为合规检查 | 否       |
-| PARSE 架构: 半结构化 ReAct | ✓       | 不变                             | 否       |
+### 修改点
 
-### 7.2 需要修订的设计决策
+**A. 扩展 regex 模式库** (`extract_regulations_node` L503):
 
-| 决策         | 当前                        | 建议                                          | 修订理由                                           |
-| ------------ | --------------------------- | --------------------------------------------- | -------------------------------------------------- |
-| GIS 数据注入 | 统计信息，不含几何          | 统计信息 + 空间关系摘要（~2KB，不含原始几何） | 空间关系≠几何数据；2KB 可承受；参考 Spatial-Agent |
-| PARSE 输出   | OperationSequence(自由文本) | OperationSequence(空间锚定)                   | SpatialAnchor 是"语义"不是"计算"；不违反单一职责   |
+```python
+# 现有模式（太窄）
+REGULATION_PATTERNS = [
+    # === NEW: 面积约束 ===
+    (r"(建设用地|耕地|生态)[面积用].{0,10}(不[超少低][于過]|≤|≥)\s*(\d+\.?\d*)\s*(ha|公顷|亩)", "area"),
+    # === NEW: 距离约束 ===
+    (r"(距|距离|退).{0,8}(河道|道路|公路|设施|红线|边界).{0,8}(不[小少][于於]|≥)\s*(\d+)\s*(米|m)", "spatial"),
+    # === NEW: 建筑物约束 ===
+    (r"(建筑|房屋).{0,5}(高度|层数|面积).{0,8}(不[超多][过過]|≤)\s*(\d+)\s*(米|m|层)", "building"),
+    # === NEW: 保护约束 ===
+    (r"(禁止|不得|严禁|不得).{0,10}(占用|侵占|破坏|开发).{0,10}(基本农田|生态林|水源|保护区|红线)", "protection"),
+    # === NEW: 指标约束 ===
+    (r"(人均|户均).{0,8}(不[低少][于於]|≥)\s*(\d+\.?\d*)\s*(m²|平方米|㎡)", "indicator"),
+]
+```
 
-### 7.3 不需要修改的部分
+**B. 注入预填充结果到 prompt**:
 
-- DictionaryCenter / YAML 字典：无需改动
-- MIP allocator：只需读取 ZoneTarget.adjacency_rules 作为额外约束
-- conflict/detector.py：SpatialRule 可直接映射为检测逻辑
-- kg/builder.py：SpatialConstraint 可直接转化为 RDF 三元组
-- 5 种原子操作定义：不变
-- 人工确认流程：不变
+```python
+# extract_regulations_node 流程:
+# Step 1: regex 预提取 → 预填充列表
+# Step 2: 将预填充列表注入 LLM prompt
+# Step 3: LLM 补充遗漏的约束（thinking 模式）
+# Step 4: 合并 regex + LLM 结果
+
+prefilled = _regex_extract_regulations(sections_text)
+prefill_block = "\n".join(
+    f"- [{c['type']}] {c['text']} → {c.get('value', '')}"
+    for c in prefilled
+)
+
+messages = [
+    SystemMessage(content=(
+        "You are extracting planning constraints from village planning text.\n"
+        f"The following constraints were pre-extracted by regex:\n{prefill_block}\n\n"
+        "Your task: verify each pre-extracted constraint, correct errors,\n"
+        "and add any missing constraints. Return all as ConstraintItem list."
+    )),
+    ...
+]
+```
+
+**C. 新增 llm 验证阶段**（类同 projects/targets 的 Phase A/B 分拆）:
+
+```
+extract_regulations:
+  Phase A (regex prefill): deterministic regex scan → List[dict]
+  Phase B (llm complete): thinking=ON, tools=OFF → verify + add missing
+```
+
+**文件**: `backend/app/agent/gis/parse/agent.py` — `extract_regulations_node`
 
 ---
 
-## 8. 修改文件清单
+## 5. Path 4: 忠实度评估器（P1，1.5天）
 
-| 文件                                        | 修改类型 | 说明                                                                                                                   |
-| ------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `docs/gis/01_DESIGN_GOALS.md`                | 修订     | §6 技术决策：GIS 注入从"统计"改为"统计+空间关系"                                                                      |
-| `docs/gis/SCHEMA_REFERENCE.md`            | 新增     | SpatialContext, SpatialAnchor, SpatialRule 模型文档                                                                    |
-| `parse_state.py`                          | 重写     | GISSummary → SpatialContext, OperationItem + SpatialAnchor, ConstraintItem + SpatialRule, PlanningIntent + ZoneTarget |
-| **新增** `spatial_context.py`       | 新建     | compute_spatial_context() 从 GISDataBundle 计算紧凑空间上下文                                                          |
-| **新增** `dicts/place_aliases.yaml` | 新建     | 地名词典（动态推断辅助，DLMC+POI+用户修正，非静态别名库）                                                                  |
-| `parse_prompts.py`                        | 更新     | 注入 SpatialContext 替代 GISSummary                                                                                    |
-| `layout_pipeline.py`                      | 更新     | _parse_intent_node 接收 SpatialOperation/SpatialConstraint                                                             |
+### 设计
+
+在 `validate_and_merge` 之后新增 `evaluate_fidelity` 节点，对解析结果进行五维评估。
+
+### 新建文件: `backend/app/agent/gis/evaluate_fidelity.py`
+
+```python
+"""Parse结果忠实度评估器。
+
+对 PARSE Agent 输出进行五维评估:
+1. 编码有效性: 所有 land_use_code ∈ DictionaryCenter
+2. 面积一致性: 解析面积 vs 原文数值
+3. 地名召回率: 原文地名 ∩ SpatialAnchor
+4. 操作覆盖率: 解析操作是否覆盖原文建设项目
+5. 约束覆盖率: 解析约束是否覆盖原文限制条件
+"""
+
+class FidelityReport(BaseModel):
+    """忠实度评估报告"""
+    code_validity: CodeValidity
+    area_consistency: AreaConsistency
+    place_recall: PlaceRecall
+    operation_coverage: float  # 0.0-1.0
+    constraint_coverage: float  # 0.0-1.0
+    overall_score: float  # 0.0-1.0
+    warnings: List[str]
+    details: dict
+
+class CodeValidity(BaseModel):
+    valid_count: int
+    total_count: int
+    auto_corrected: int
+    pass_rate: float
+
+class AreaConsistency(BaseModel):
+    matched_count: int
+    deviations: List[dict]  # [{parsed: X, original: Y, deviation_pct: Z}]
+
+class PlaceRecall(BaseModel):
+    recalled_count: int
+    total_in_text: int
+    recall_rate: float
+
+def evaluate_fidelity(
+    original_text: str,
+    operations: List[dict],
+    constraints: List[dict],
+    code_mappings: dict,
+    spatial_context,
+    llm  # 轻量 LLM
+) -> FidelityReport:
+    """执行忠实度评估"""
+    # 1. 编码有效性（纯 Python）
+    code_valid = _check_code_validity(operations)
+
+    # 2. 面积一致性（regex 提取原文面积 + 比对）
+    area_consistency = _check_area_consistency(original_text, operations)
+
+    # 3. 地名召回（regex 提取原地名 + 比对 SpatialAnchor）
+    place_recall = _check_place_recall(original_text, operations)
+
+    # 4-5. 操作/约束覆盖率（LLM 轻量评判）
+    op_cov, con_cov = _llm_coverage_check(original_text, operations, constraints, llm)
+
+    overall = (
+        code_valid.pass_rate * 0.4
+        + area_consistency.score * 0.2
+        + place_recall.recall_rate * 0.2
+        + op_cov * 0.1
+        + con_cov * 0.1
+    )
+
+    return FidelityReport(
+        code_validity=code_valid,
+        area_consistency=area_consistency,
+        place_recall=place_recall,
+        operation_coverage=op_cov,
+        constraint_coverage=con_cov,
+        overall_score=overall,
+        ...
+    )
+```
+
+**文件**: 新建 `backend/app/agent/gis/evaluate_fidelity.py`
+**文件**: 修改 `backend/app/agent/gis/parse/agent.py` — 添加 `evaluate_fidelity` 节点到 graph
+
+### 评估阈值
+
+| 维度 | 方法 | 通过阈值 |
+|------|------|----------|
+| 编码有效性 | Python 查表 `GHYTBM_TO_GHYTMC` | **100%**（硬要求） |
+| 面积一致性 | 正则提取原文面积 + 对比 | **偏差 <20%** |
+| 地名召回 | 正则提取原文地名 + SpatialAnchor 对比 | **召回率 >70%** |
+| 操作覆盖率 | 轻量 LLM 评判 | **覆盖率 >60%** |
+| 约束覆盖率 | 轻量 LLM 评判 | **覆盖率 >50%** |
 
 ---
 
-## 9. 验证方案
+## 6. Path 5: 并行度提升（P1，1天）
 
-1. **SpatialContext 大小测试**: compute_spatial_context() 对金田村 660 地块，验证输出 < 3KB
-2. **空间锚定测试**: 给定 "刘村小组东侧、晒谷场北边"，验证 SpatialAnchor.candidate_parcels 非空
-3. **SpatialRule 映射测试**: 验证每条 SpatialRule 可直接映射为 Shapely 操作
-4. **E2E 测试**: 从规划文本到 14 层输出，验证 PARSE 输出的 SpatialConstraint 可被 KG 直接消费
+### 当前瓶颈
+
+15 个节点全串行，总耗时 ~300s。format 和 explore 节点之间有独立数据依赖，可安全并行。
+
+### 并行化点
+
+| 并行组 | 节点 | 安全性 | 预期加速 |
+|--------|------|--------|----------|
+| 组1 | format_projects ‖ format_targets | ✅ 安全：各自独立 draft + 独立 state key | ~1.5x |
+| 组2 | extract_regulations ‖ extract_tables ‖ explore_projects | ✅ 安全：各自读取不同 section text | ~1.3x |
+| 组3 | 两轮 ReAct 优化 | ✅ 如果第一轮 tool_calls 已覆盖所有实体，跳过第二轮 | ~1.2x |
+
+### 实现
+
+```python
+# 使用 LangGraph Send API 实现并行 fan-out
+from langgraph.types import Send
+
+def route_parallel(state: ParseAgentState):
+    """并行路由：根据 section_map 同时发起所有独立节点"""
+    sends = []
+
+    # 组2: explore 节点可以并行
+    if state.section_map.get("projects"):
+        sends.append(Send("explore_projects", {"sections": state.projects_sections}))
+    if state.section_map.get("regulations"):
+        sends.append(Send("extract_regulations", {"sections": state.regulation_sections}))
+
+    return sends
+
+# graph builder 中:
+graph.add_conditional_edges("route_by_section", route_parallel, [
+    "explore_projects", "extract_regulations", "extract_tables"
+])
+
+# 组1: format 节点也并行
+graph.add_conditional_edges("after_explore", route_format_parallel, [
+    "format_projects", "format_targets"
+])
+```
+
+**预期效果**: 总耗时 300s → 150-180s（~1.7-2x 加速）
+
+**文件**: `backend/app/agent/gis/parse/agent.py` — `route_by_section`, `build_parse_agent_graph`
 
 ---
 
-## 10. 参考项目映射
+## 7. Path 6: 注记+空间关系+KG 注入（P2，2天）
 
-| 本项目设计元素             | 参考项目                                 | 核心借鉴                             |
-| -------------------------- | ---------------------------------------- | ------------------------------------ |
-| SpatialContext             | Spatial-Agent 的 "spatial grounding"     | 语义描述 → 计算表示（不含原始几何） |
-| SpatialAnchor              | GeoPlanAgent 的 "localisation"           | 文本定位 → 候选图斑（预判，不执行） |
-| SpatialRule                | GeoAgents 的 spatial 工具集              | 约束 = 确定性空间操作 + 参数         |
-| ZoneTarget.adjacency_rules | prompts.py 已有 adjacency 字段           | 激活已有但未携带的信息               |
-| compute_spatial_context()  | GeoWorkbench 的 "Spatial Semantics" 阶段 | 显式空间语义计算                     |
-| place_aliases.yaml         | GeoFaham 的 Maps Agent 地名库            | 地名词典（动态推断辅助，非静态别名映射）                 |
+### 问题
+LLM 只知道统计数字（660地块、2396ha），无法建立空间心智模型。
+
+### 可利用的已有数据
+
+| 数据 | 位置 | 当前状态 |
+|------|------|----------|
+| 34 个设施注记点 | `current/annotation.geojson`, KG triples | ✅ 已入KG，**未注入LLM prompt** |
+| 225 条空间关系 | `spatial_context.spatial_relations` | ✅ 已计算，**未注入LLM prompt** |
+| 18 个 SPARQL 模板 | `builder.py` | ⚠️ 只用1个（get_constraints） |
+| 15 个自然村锚点 | `spatial_context.natural_villages` | ✅ 已注入但LLM未充分使用 |
+
+### 修改点
+
+**A. 注入设施分布摘要** (`spatial_context.py` — `format_spatial_context_for_prompt`):
+
+```python
+## 现状设施分布（来自GIS注记层，34个设施点）
+| 设施类型 | 计数 | 主要分布 |
+|----------|------|----------|
+| 篮球场(篮) | 3 | VillageGroup_3, VillageGroup_7, VillageGroup_12 |
+| 卫生站(卫/健) | 3 | VillageGroup_1, VillageGroup_5, VillageGroup_9 |
+| 变电站(电) | 2 | VillageGroup_2, VillageGroup_8 |
+| 污水处理(污) | 1 | VillageGroup_4 |
+| 祠堂(祠) | 2 | VillageGroup_1, VillageGroup_6 |
+| ... | ... | ... |
+```
+
+**B. 注入空间关系摘要**:
+
+```
+## 自然村空间关系（225条，方向+邻接）
+- VillageGroup_1 (园寨): 位于VillageGroup_2西侧，相邻；含66块地类图斑，以宅基地(2121)为主
+- VillageGroup_2 (社前): 位于VillageGroup_1东侧；含78块地类图斑，沿金田河分布
+- VillageGroup_3 (田坑): 位于村庄北部；含45块地类图斑，以耕地(1100)为主
+...
+```
+
+**C. 新增 `query_facilities` KG 工具** (`parse/agent.py` L197):
+
+```python
+@_langchain_tool
+def query_facilities(anchor_name: str = "", facility_type: str = "") -> str:
+    """Query facilities near a village anchor or by type.
+    
+    Examples:
+      query_facilities(anchor_name="园寨") → nearby facilities within 500m
+      query_facilities(facility_type="卫生") → all health-related facilities
+    """
+    kg = _kg_instance
+    if kg is None:
+        return json.dumps({"error": "KG not initialized"})
+    return kg.query_facilities(anchor_name=anchor_name, facility_type=facility_type)
+```
+
+**文件**: 
+- `backend/app/modules/gis/spatial_context.py` — `format_spatial_context_for_prompt`
+- `backend/app/agent/gis/parse/agent.py` — 新增 `query_facilities` 工具
+- `backend/app/modules/gis/kg/builder.py` — 新增 `query_facilities` SPARQL 方法
+
+---
+
+## 8. Path 7: DEM 数据准备（P2，0.5天）
+
+### 问题
+`raster_types.py` + `dem_provider.py` 已有完整分析基础设施，但数据文件缺失。
+
+### 操作
+1. 从地理空间数据云 (gscloud.cn) 下载 GDEMV3 30m，覆盖金田村（116.03-116.06°E, 24.81-24.83°N）
+2. 放置到 `data/gis/jintian/terrain/dem.tif`
+3. 运行 `TerrainAnalyzer` 计算坡度/坡向/建设适宜性
+4. 注入 SpatialContext: `terrain_profile = {slope_violations_gt25: N, flat_areas_lt6: M, ...}`
+
+**文件**: 
+- `data/gis/jintian/terrain/dem.tif` (新下载)
+- `backend/app/modules/gis/spatial_context.py` — 新增 terrain 注入
+
+---
+
+## 9. 执行路线图
+
+### 第一批：P0 — 让 30 个操作可用（3天）
+
+```
+Path 1 (0.5天) → Path 2 (1天) → Path 3 (1天) → 联调 (0.5天)
+```
+
+**里程碑**: 金田村解析 → ≥20/30 编码正确 + ≥15/30 锚定已解析 + ≥5 条约束 →
+**可交付 GIS Agent 生成第一版规划分区图 + 规划设施图**
+
+### 第二批：P1 — 质量与效率（2.5天）
+
+```
+Path 4 (1.5天) → Path 5 (1天)
+```
+
+**里程碑**: 忠实度各维度 >60% + 总耗时 <180s
+
+### 第三批：P2 — 深度空间理解（2.5天）
+
+```
+Path 6 (2天) → Path 7 (0.5天)
+```
+
+**里程碑**: 锚定置信度 >0.5 的 ops >70% + 地形约束可解析
+
+---
+
+## 10. 修改文件清单
+
+| 优先级 | 文件 | 改动类型 | 改动内容 |
+|--------|------|----------|----------|
+| **P0** | `backend/app/agent/gis/parse/agent.py` | 修改 | 编码硬校验 `_auto_correct_code` + 锚定自动填充 `_auto_fill_spatial_anchor` + 约束 regex 扩展 |
+| **P0** | `backend/app/agent/gis/parse/agent.py` | 修改 | `extract_regulations_node` 分拆 Phase A(regex) + Phase B(LLM) |
+| **P1** | `backend/app/agent/gis/evaluate_fidelity.py` | **新建** | 忠实度评估器：五维评估 + FidelityReport |
+| **P1** | `backend/app/agent/gis/parse/agent.py` | 修改 | graph 添加 `evaluate_fidelity` 节点 + LangGraph Send 并行 |
+| **P2** | `backend/app/modules/gis/spatial_context.py` | 修改 | `format_spatial_context_for_prompt` 注入注记摘要+空间关系 |
+| **P2** | `backend/app/agent/gis/parse/agent.py` | 修改 | 新增 `query_facilities` KG 工具 |
+| **P2** | `backend/app/modules/gis/kg/builder.py` | 修改 | 新增 `query_facilities` SPARQL 方法 |
+| **P2** | `data/gis/jintian/terrain/dem.tif` | 新数据 | GDEMV3 30m DEM 下载 |
+
+---
+
+## 11. 验证方案
+
+### 端到端测试
+
+```bash
+cd backend
+python scripts/run_parse_pipeline.py --village 金田村
+```
+
+检查 `output/parse_results/金田村_YYYY-MM-DD.md`:
+
+| 检查项 | 目标值 |
+|--------|--------|
+| 编码正确的操作数 | ≥ 25/30 |
+| 锚定已解析的操作数 | ≥ 15/30 |
+| 约束数量 | ≥ 5 |
+| 规划意图 (zone_targets) | ≥ 5 分区 + ≥ 10 设施 |
+| 校验通过率 | > 70% |
+| 忠实度 overall_score | > 0.6 |
+| 总耗时 | < 180s |
+
+### GIS Agent 交付验证
+
+```python
+from backend.app.modules.gis.generation.optimizer.mip_allocator import MIPAllocator
+allocator = MIPAllocator(parcels, zone_targets=parse_result.zone_targets, constraints=parse_result.constraint_set)
+result = allocator.solve()
+# 预期: 生成 4 规划分区 + 设施布局建议
+```
+
+---
+
+## 12. 与原始 v1.1 提案的关系
+
+| v1.1 主张 | v2.0 调整 |
+|-----------|-----------|
+| 升级 SpatialContext 为"统计+空间关系" | **不再争论设计**。现有 statistics-only 框架足以支撑 Path 1-3 的修复。空间关系增强移至 P2 的 Path 6 |
+| 重写 parse/state.py 全部 Schema | **不重写**。现有 Schema (SpatialOperation/SpatialConstraint/SpatialPlanningIntent) 定义正确，问题是 LLM→Python 数据传递链断裂，通过 Path 1+2 修复 |
+| 新建 spatial_context.py | **已实现**。当前 spatial_context.py 工作正常，Path 6 仅增强其 prompt 输出 |
+| 修订 DESIGN_GOALS §6 | **暂缓**。先验证 Path 1-3 能否在现有框架内解决问题 |
+
+---
+
+## 附录: v11 实测数据速查
+
+来自 `output/parse_results/金田村_2026-07-22.md`：
+
+- **30 个操作**: 全部 CREATE 类型，28个宅基地(2121无效) + 1个耕地 + 1个危房改造
+- **面积范围**: 120-9300 m²
+- **空间参照**: 候车亭、村级公共服务中心、文化室、综合服务中心、卫生站、养老中心、文化广场、篮球场、公共厕所、给水管道、排水管道、污水池... 全部 confidence=0
+- **校验**: 46 错误 = 23 编码无效 + 23 锚定置信度低
+- **约束**: 0 条
+- **规划意图**: 仅有 4 个面积指标，无 zone_targets/facilities/axes

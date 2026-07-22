@@ -102,7 +102,7 @@ class TestSpatialModels:
 
     def test_spatial_context_defaults(self):
         """SpatialContext should have sensible defaults."""
-        from app.agent.gis.schema.parse_state import SpatialContext
+        from app.agent.gis.parse.state import SpatialContext
 
         ctx = SpatialContext()
         assert ctx.parcel_count == 0
@@ -115,7 +115,7 @@ class TestSpatialModels:
 
     def test_spatial_anchor_resolution_status(self):
         """SpatialAnchor resolution_status must be one of 3 values."""
-        from app.agent.gis.schema.parse_state import SpatialAnchor
+        from app.agent.gis.parse.state import SpatialAnchor
 
         for status in ["anchored", "partial", "unresolved"]:
             anchor = SpatialAnchor(
@@ -128,7 +128,7 @@ class TestSpatialModels:
 
     def test_spatial_rule_operations(self):
         """SpatialRule must accept 5 operation types."""
-        from app.agent.gis.schema.parse_state import SpatialRule
+        from app.agent.gis.parse.state import SpatialRule
 
         for op in ["no_overlap", "buffer_exclusion", "contained_by", "adjacent_to", "distance_within"]:
             rule = SpatialRule(operation=op, subject="construction", object="farmland")
@@ -136,7 +136,7 @@ class TestSpatialModels:
 
     def test_spatial_operation_with_anchor(self):
         """SpatialOperation should accept SpatialAnchor."""
-        from app.agent.gis.schema.parse_state import SpatialOperation, SpatialAnchor
+        from app.agent.gis.parse.state import SpatialOperation, SpatialAnchor
 
         op = SpatialOperation(
             action="create",
@@ -158,7 +158,7 @@ class TestSpatialModels:
 
     def test_spatial_constraint_with_rule(self):
         """SpatialConstraint should accept SpatialRule."""
-        from app.agent.gis.schema.parse_state import SpatialConstraint, SpatialRule
+        from app.agent.gis.parse.state import SpatialConstraint, SpatialRule
 
         constraint = SpatialConstraint(
             type="spatial_constraint",
@@ -176,7 +176,7 @@ class TestSpatialModels:
 
     def test_spatial_planning_intent_with_targets(self):
         """SpatialPlanningIntent should accept List[ZoneTarget]."""
-        from app.agent.gis.schema.parse_state import (
+        from app.agent.gis.parse.state import (
             SpatialPlanningIntent,
             ZoneTarget,
             SpatialPreference,
@@ -202,7 +202,7 @@ class TestSpatialModels:
 
     def test_parse_agent_state_with_spatial_context(self):
         """ParseAgentState should accept SpatialContext."""
-        from app.agent.gis.schema.parse_state import ParseAgentState, SpatialContext
+        from app.agent.gis.parse.state import ParseAgentState, SpatialContext
 
         state = ParseAgentState(
             planning_text="规划文本...",
@@ -218,7 +218,7 @@ class TestSpatialModels:
 
     def test_section_info_types(self):
         """SectionInfo should accept all 13 section types."""
-        from app.agent.gis.schema.parse_state import SectionInfo
+        from app.agent.gis.parse.state import SectionInfo
 
         valid_types = [
             "preamble", "target", "regulation", "project_table",
@@ -241,7 +241,7 @@ class TestSpatialContext:
 
     def test_compute_centroid(self, sample_boundary_geojson):
         """_compute_centroid should return (lon, lat) tuple."""
-        from app.agent.gis.spatial_context import _compute_centroid
+        from app.modules.gis.spatial_context import _compute_centroid
 
         center = _compute_centroid(sample_boundary_geojson)
         assert center is not None
@@ -251,7 +251,7 @@ class TestSpatialContext:
 
     def test_compute_landuse_distribution(self, sample_landuse_geojson):
         """_compute_landuse_distribution should return sorted land-use entries."""
-        from app.agent.gis.spatial_context import _compute_landuse_distribution
+        from app.modules.gis.spatial_context import _compute_landuse_distribution
 
         entries = _compute_landuse_distribution(sample_landuse_geojson)
         assert len(entries) > 0
@@ -261,7 +261,7 @@ class TestSpatialContext:
 
     def test_compute_constraint_summary(self, sample_gis_data):
         """_compute_constraint_summary should extract protection zones."""
-        from app.agent.gis.spatial_context import _compute_constraint_summary
+        from app.modules.gis.spatial_context import _compute_constraint_summary
 
         summaries = _compute_constraint_summary(sample_gis_data)
         assert len(summaries) >= 1
@@ -273,7 +273,7 @@ class TestSpatialContext:
 
     def test_compute_spatial_context_full(self, sample_gis_data):
         """compute_spatial_context should produce complete SpatialContext."""
-        from app.agent.gis.spatial_context import compute_spatial_context
+        from app.modules.gis.spatial_context import compute_spatial_context
 
         ctx = compute_spatial_context(sample_gis_data)
         assert ctx.parcel_count > 0
@@ -284,7 +284,7 @@ class TestSpatialContext:
 
     def test_compute_spatial_context_empty_input(self):
         """compute_spatial_context should handle empty input gracefully."""
-        from app.agent.gis.spatial_context import compute_spatial_context
+        from app.modules.gis.spatial_context import compute_spatial_context
 
         ctx = compute_spatial_context({})
         assert ctx.parcel_count == 0
@@ -294,7 +294,7 @@ class TestSpatialContext:
 
     def test_compute_spatial_context_jintian(self):
         """compute_spatial_context should work with real jintian test data."""
-        from app.agent.gis.spatial_context import compute_spatial_context
+        from app.modules.gis.spatial_context import compute_spatial_context
 
         data_dir = Path(__file__).resolve().parents[3] / "data" / "gis" / "jintian" / "current"
         if not data_dir.exists():
@@ -398,14 +398,17 @@ class TestParseAgentGraph:
 
     def test_graph_compiles(self):
         """PARSE Agent graph should compile without errors."""
-        from app.agent.gis.parse_agent import build_parse_agent_graph
+        from app.agent.gis.parse.agent import build_parse_agent_graph
 
         graph = build_parse_agent_graph()
         assert graph is not None
 
     def test_graph_has_expected_nodes(self):
-        """PARSE Agent graph should have 6 functional nodes."""
-        from app.agent.gis.parse_agent import build_parse_agent_graph
+        """PARSE Agent graph should have expected functional nodes.
+
+        v8 Think-Then-Format: explore + format pairs for projects/targets.
+        """
+        from app.agent.gis.parse.agent import build_parse_agent_graph
 
         graph = build_parse_agent_graph()
         node_names = list(graph.get_graph().nodes.keys())
@@ -414,15 +417,19 @@ class TestParseAgentGraph:
         assert "classify_sections" in functional_nodes
         assert "extract_regulations" in functional_nodes
         assert "extract_tables" in functional_nodes
-        assert "extract_projects" in functional_nodes
-        assert "extract_targets" in functional_nodes
+        assert "explore_projects" in functional_nodes
+        assert "format_projects" in functional_nodes
+        assert "explore_targets" in functional_nodes
+        assert "format_targets" in functional_nodes
         assert "validate_and_merge" in functional_nodes
-        assert len(functional_nodes) == 6
 
     def test_route_by_section_fan_out(self):
-        """route_by_section should return node names for fan-out."""
-        from app.agent.gis.parse_agent import route_by_section
-        from app.agent.gis.schema.parse_state import ParseAgentState, SectionInfo
+        """route_by_section should return node names for fan-out.
+
+        v8 Think-Then-Format: routes to explore_* nodes (fan-out start points).
+        """
+        from app.agent.gis.parse.agent import route_by_section
+        from app.agent.gis.parse.state import ParseAgentState, SectionInfo
 
         state = ParseAgentState(
             section_map=[
@@ -434,5 +441,5 @@ class TestParseAgentGraph:
         targets = route_by_section(state)
         assert len(targets) >= 3  # At least regulation + projects + targets
         assert "extract_regulations" in targets
-        assert "extract_projects" in targets
-        assert "extract_targets" in targets
+        assert "explore_projects" in targets
+        assert "explore_targets" in targets

@@ -431,8 +431,8 @@ prompt = _build_prompt(rag_context, spatial_context, encoding_table, deps, tools
 
 | 已有模块 | 路径 | 复用方式 |
 |----------|------|----------|
-| SpatialContext 计算 | `agent/gis/spatial_context.py` | 直接调用 `compute_spatial_context()` |
-| 空间锚定模型 | `agent/gis/schema/parse_state.py` | 复用 `SpatialAnchor`, `SpatialOperation` |
+| SpatialContext 计算 | `modules/gis/spatial_context.py` | 直接调用 `compute_spatial_context()` |
+| 空间锚定模型 | `agent/gis/parse/state.py` | 复用 `SpatialAnchor`, `SpatialOperation` |
 | 地名解析 | `tools/gis/place_resolver.py` | 复用 `resolve_place_name` |
 | 编码查表 | `modules/gis/schema/dicts/loader.py` | 复用 `DictionaryCenter.lookup()` |
 | 编码参考表 | `modules/gis/schema/dicts/loader.py` | 复用 `DictionaryCenter.to_prompt_table()` |

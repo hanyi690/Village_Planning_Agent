@@ -78,7 +78,7 @@ output/{village_name}/
 ```
 规划文本（报告/规则/决议/建设项目表）+ SpatialContext（统计+空间关系）
     ↓                                                         ⚠️ 部分实现
-PARSE Agent (半结构化 ReAct)                                   ✅ parse_agent.py 已实现
+PARSE Agent (半结构化 ReAct)                                   ✅ parse/agent.py 已实现
   ├── classify_sections: 文档结构分类
   ├── route_by_section: 按段落类型路由提取策略
   │   ├── extract_regulations → ConstraintSet
@@ -275,43 +275,49 @@ Agent 是**会操作 GIS 的专业绘图员**，不是规划师。所有规划�
 10. DLSZM (Dual-Logic Spatial Zoning Model) — 规则引擎 + ML 双路径对比，识别"稳定决策区"和"分歧敏感区". Frontiers in Environmental Science 2026. https://www.frontiersin.org/journals/environmental-science/articles/10.3389/fenvs.2026.1791582/full **[未执行]**
 11. OZFS (Open Zoning Feed Specification) — overlay district 概念（restrict/relax/replace），条件约束（Python 表达式）. https://github.com/vibe-lab-gsd/ozfs-standard **[未执行]**
 
-### 3.7 代码位置 (当前实际结构, v5.1)
+### 3.7 代码位置 (当前实际结构, v5.2)
 
 ```
-app/agent/gis/           # Agent 编排层
-  agent.py               # create_layout_agent_graph()
-  parse_agent.py         # ★ PARSE Agent 子图 [✅已实现]
-  parse_reporter.py      # PARSE 输出报告生成
-  layout_pipeline.py     # ★ LAYOUT 管线 (StateGraph: parse→fetch→KG→conflicts→allocate→validate→export→render) [⚠️部分实现]
-  state.py               # GISPipelineState (Pydantic BaseModel)
-  spatial_context.py     # compute_spatial_context() [✅已实现]
+app/agent/gis/              # Agent 编排层
+├── agent.py                # create_*_graph() 入口
+├── state.py                # GISPipelineState (Pydantic BaseModel)
+├── prompts.py              # GIS Agent system prompt
+├── layout_pipeline.py      # ★ LAYOUT 管线 (StateGraph) [⚠️部分实现]
+└── parse/                  # ★ PARSE 子包 [✅已实现]
+    ├── __init__.py          # 公开 API 导出
+    ├── state.py             # ParseAgentState + SpatialOperation + SpatialConstraint + ...
+    └── agent.py             # PARSE Agent 子图 (ReAct + Think-Then-Format)
 
-app/agent/gis/schema/    # PARSE Agent 模型
-  parse_state.py         # ParseAgentState + SpatialContext + SpatialOperation + SpatialConstraint [✅已实现]
+app/utils/                  # 通用工具
+  parse_reporter.py         # PARSE 输出报告生成
 
-app/modules/gis/schema/  # ★ GIS Schema — 单一真相源
-  __init__.py            # 统一导出
-  code_sets.py           # ★ DLBM↔zone 编码对照表 + 查表函数 (从 DictionaryCenter 派生)
-  ingestion.py           # ★ SpatialFeature 基类 + Base/Current/PlannedLandUseParcel + ingest_*() [✅已实现]
-  spatial_types.py       # ★ 20种空间要素类型 (AdminArea, ControlLine, LandUseZone, ...) [✅已实现]
-  contracts.py           # 数据契约模型 (ZoneIntent, ConflictReport, ...) [✅已实现]
-  canonical.py           # 规范模型: BBox, CRS, GeoFeature, LandUseParcel(provider用), GISDataBundle [✅已实现]
-  classification.py      # LandUseClass + ClassificationSchema + EncodingRegistry [✅已实现]
-  colors.py              # 6套色卡 (GB/T 21010 + 50280-98) [✅已实现]
-  dynamic_zoning.py      # DynamicZoningEngine (双评价动态分区) [✅已实现]
-  gdb.py                 # GDB_LAYER_REGISTRY (12层字段定义) [✅已实现]
-  events.py              # SSE 事件契约 [✅已实现]
-  dicts/                 # YAML 字典中心
-    loader.py            # ★ DictionaryCenter 单例 (自动扫描子目录) [✅已实现]
-    candidate_engine.py  # 跨体系候选提案引擎 [✅已实现]
-    encodings/           # ★ 六套独立编码体系
-      gbt21010.yaml      # GB/T 21010-2017 三调国标 (73条)
-      tugui.yaml         # 广东省土规数据库标准 (14条)
-      appendix5.yaml     # 广东省技术指南附录5 (21条)
-      ghflbm.yaml        # 规划分类编码 (11条)
-      ydyhfldm.yaml      # 用地用海分类 (49条)
-      vne.yaml           # V/N/E 村庄规划用地分类
-    rules/               # 规则配置
+app/modules/gis/            # ★ GIS 模块 — 数据处理 + 空间分析
+├── spatial_context.py      # compute_spatial_context() — GIS → SpatialContext 转换
+├── schema/                 # GIS Schema — 单一真相源
+│   ├── __init__.py         # 统一导出
+│   ├── canonical.py        # 规范模型: BBox, CRS, GeoFeature, GISDataBundle
+│   ├── contracts.py        # 数据契约: ZoneIntent, SpatialContext, AllocationResult, …
+│   ├── spatial_types.py    # 20种空间要素类型 (AdminArea, ControlLine, LandUseZone, ...)
+│   ├── code_sets.py        # DLBM↔zone 编码对照表 + 查表函数
+│   ├── ingestion.py        # ingest_*() 注入端口
+│   ├── classification.py   # LandUseClass + ClassificationSchema + EncodingRegistry
+│   ├── colors.py           # 6套色卡 (GB/T 21010 + 50280-98)
+│   ├── gdb.py              # GDB_LAYER_REGISTRY (12层字段定义)
+│   ├── raster_types.py     # DEM/DOM 输入类型
+│   ├── dicts/              # YAML 字典中心
+│   │   ├── loader.py       # DictionaryCenter 单例
+│   │   ├── candidate_engine.py
+│   │   ├── encodings/      # 六套独立编码体系
+│   │   │   ├── gbt21010.yaml
+│   │   │   ├── tugui.yaml
+│   │   │   ├── appendix5.yaml
+│   │   │   ├── ghflbm.yaml
+│   │   │   ├── ydyhfldm.yaml
+│   │   │   └── vne.yaml
+│   │   └── rules/
+│   └── analysis/           # 空间分析引擎
+│       └── dynamic_zoning.py  # DynamicZoningEngine (双评价动态分区)
+└── ...
       gdb_layers.yaml    # GDB 图层定义
       field_defaults.yaml
       planning_zone_rules.yaml
@@ -470,7 +476,7 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 - [X] EncodingRegistry (merged into classification.py)
 - [X] GDB_LAYER_REGISTRY (12 层完整字段定义)
 - [X] 颜色集中化（colors.py，6 套色卡）
-- [X] PARSE Agent (parse_agent.py, parse_state.py)
+- [X] PARSE Agent (parse/agent.py, parse/state.py)
 - [X] 金田村实测数据全覆盖验证 (14/14文件 100%覆盖)
 
 ### Phase 1.5 — Schema 完整化 (2026-07) ⚠️ 部分完成

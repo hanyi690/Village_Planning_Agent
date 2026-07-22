@@ -113,7 +113,7 @@ class TestSpatialContextJintian:
 
     def test_spatial_context_jintian_detailed(self, jintian_gis_data):
         """Compute and display spatial context from jintian data."""
-        from app.agent.gis.spatial_context import compute_spatial_context
+        from app.modules.gis.spatial_context import compute_spatial_context
 
         ctx = compute_spatial_context(jintian_gis_data)
 
@@ -171,9 +171,9 @@ class TestParseAgentLLM:
         """Run full PARSE Agent pipeline: text + GIS → operations + constraints + intent."""
         _setup_llm_cache()
 
-        from app.agent.gis.parse_agent import build_parse_agent_graph
-        from app.agent.gis.schema.parse_state import ParseAgentState
-        from app.agent.gis.spatial_context import compute_spatial_context
+        from app.agent.gis.parse.agent import build_parse_agent_graph
+        from app.agent.gis.parse.state import ParseAgentState
+        from app.modules.gis.spatial_context import compute_spatial_context
 
         # Step 1: Compute spatial context
         spatial_context = compute_spatial_context(jintian_gis_data)
@@ -336,9 +336,9 @@ class TestParseNodesLLM:
         """Test classify_sections node with LLM."""
         _setup_llm_cache()
 
-        from app.agent.gis.parse_agent import classify_sections_node
-        from app.agent.gis.schema.parse_state import ParseAgentState
-        from app.agent.gis.spatial_context import compute_spatial_context
+        from app.agent.gis.parse.agent import classify_sections_node
+        from app.agent.gis.parse.state import ParseAgentState
+        from app.modules.gis.spatial_context import compute_spatial_context
 
         spatial_context = compute_spatial_context(jintian_gis_data)
         state = ParseAgentState(
@@ -364,9 +364,9 @@ class TestParseNodesLLM:
         """Test extract_projects node with LLM."""
         _setup_llm_cache()
 
-        from app.agent.gis.parse_agent import extract_projects_node
-        from app.agent.gis.schema.parse_state import ParseAgentState, SectionInfo
-        from app.agent.gis.spatial_context import compute_spatial_context
+        from app.agent.gis.parse.agent import extract_projects_node
+        from app.agent.gis.parse.state import ParseAgentState, SectionInfo
+        from app.modules.gis.spatial_context import compute_spatial_context
 
         spatial_context = compute_spatial_context(jintian_gis_data)
         state = ParseAgentState(
