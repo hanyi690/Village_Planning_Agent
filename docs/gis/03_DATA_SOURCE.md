@@ -1,4 +1,12 @@
-/金田村 GIS 数据说明
+# 金田村 GIS 数据源规范
+
+> **Status: [CURRENT]** | **Type: Reference Documentation** | **Updated: 2026-07-22**
+> **Scope**: 金田村实测数据 — GDB图层、字段结构、数据版本、与KG Builder对接
+> **References**: BIBLIOGRAPHY.md §B9-10
+> **Related**: 02_OUTPUT_ARCHITECTURE.md
+>
+> 本文档描述金田村实际GIS数据，作为系统开发和测试的基准数据源。
+> 数据已迁移至 `data/gis/jintian/`，详见 `data/gis/jintian/metadata.json`。
 
 数据来源：`docs/references/村庄规划总图/金田村村庄规划工程文件.zip`
 解压后包含 3 个子目录，各有独立的 GDB + MXD 工程。
@@ -30,7 +38,7 @@
 | 2.村庄规划总图 | ArcGIS GDB | `planned/` | ✅ 标准 | 完整字段、规范编码、符合广东省技术规范 |
 | 3.建设项目布局规划图 | AutoCAD DWG/DXF | `project/` + `reference/` | ❌ 非标准 | CAD 实体无属性、无编码字段（详见 §2.3） |
 
-> **规范定位**：广东省技术指南规定基本成果为"一图一表一规则"（总图+项目表+管制规则），1、2 两部分对应"一图"的数据库，第 3 部分属于可选丰富成果。当前系统已实现 1、2 的自动生成，第 3 部分的自动生成列为 P2 设计目标（详见 OUTPUT_ARCHITECTURE.md §6.1）。
+> **规范定位**：广东省技术指南规定基本成果为"一图一表一规则"（总图+项目表+管制规则），1、2 两部分对应"一图"的数据库，第 3 部分属于可选丰富成果。当前系统已实现 1、2 的自动生成，第 3 部分的自动生成列为 P2 设计目标（详见 02_OUTPUT_ARCHITECTURE.md §6.1）。
 
 ## 二、GDB 图层与字段
 

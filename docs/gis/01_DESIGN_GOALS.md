@@ -1,10 +1,12 @@
-
 # GIS 村庄规划系统 — 设计目标
 
-> 版本: 5.1 | 日期: 2026-07-21 | 变更: 对齐新 schema 结构(encodings/rules/references), 六套编码体系, 标注实现状态
-> 
+> **Status: [CURRENT]** | **Type: Design Specification** | **Version: 5.1** | **Updated: 2026-07-21**
+> **Scope**: 权威设计规范 — Trinity架构、编码体系、技术决策
+> **References**: BIBLIOGRAPHY.md §A1-4, §B1-2,5-7, §F1-11
+> **Related**: 02_OUTPUT_ARCHITECTURE.md, design-log/01_DECISION_LOG.md
+>
 > **本文档为设计目标/思路文档**。具体的代码实现可能与设计有差异。各节标注了实现状态: ✅已实现 / ⚠️部分实现 / ❌未实现(设计阶段)。
-> Schema 权威参考见 `OUTPUT_ARCHITECTURE.md`。
+> 输出架构的权威参考见 `02_OUTPUT_ARCHITECTURE.md`。
 
 ## 1. 问题定义
 
@@ -433,6 +435,8 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 | **GIS 数据注入** | PARSE 阶段注入 SpatialContext（统计信息 + 空间关系摘要，~2KB，不含原始几何） | 统计信息，不含几何 | 统计信息无法支撑空间推理（LLM 不知"刘村小组"在村庄哪个方位）；空间关系摘要（锚点/邻接/方向）可在 ~2KB 内提供空间语义，不含原始几何数据 |
 | **PARSE 空间输出** | OperationItem 携带 SpatialAnchor（空间锚定），ConstraintItem 携带 SpatialRule（可计算空间规则） | 自由文本 location_desc / rule | SpatialAnchor 预判候选图斑但不执行（遵守"Agent 是绘图员"原则）；SpatialRule 可直接映射 Shapely 操作，避免 KG 重复编码自由文本 |
 
+> **⚡ 已知争议**: `proposals/01_PARSE_SPATIAL_ENHANCEMENT.md` 认为当前 SpatialContext 的"统计信息+空间关系"粒度仍不足以支撑 LLM 的空间心智模型，主张进一步升级为 SpatialContext(含225条parcel级空间关系+15个自然村锚点)。详见 `design-log/01_DECISION_LOG.md §Decision-001`。争议的教材依据：李巍等《实用性村庄规划编制手册》(BIBLIOGRAPHY §A3) — GIS实验操作纳入村庄规划流程需要空间认知；高宜程《实用性村庄规划：理论与实践》(BIBLIOGRAPHY §A4) — 村庄形态设计需要空间关系认知。
+
 ## 7. 外部可行性验证
 
 | 功能维度         | 本项目实现        | GenPlanner | BlocksNet | DRL-urban-planning | JackDaw (PoliRural+) | GISDataAgent      |
@@ -480,7 +484,7 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 
 ### Phase 2 — 架构对齐 ❌ 未实现 (设计阶段)
 
-**目标**: 对齐 OUTPUT_ARCHITECTURE.md v3.3 的 5+1 内部生成层 + 12 层输出标准
+**目标**: 对齐 02_OUTPUT_ARCHITECTURE.md v3.3 的 5+1 内部生成层 + 12 层输出标准
 
 #### 已知缺陷（P0 — 必须修复）
 

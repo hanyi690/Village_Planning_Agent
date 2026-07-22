@@ -1,9 +1,10 @@
-# GIS Schema 增强 Planning Agent 集成探索文档
+# GIS Schema 增强 Planning Agent 集成
 
-> 版本: 1.0 | 日期: 2026-07-21 | 类型: 探索设计文档
-> 
-> 本文档记录如何利用已有 GIS schema 和工具，增强规划 Agent 的空间感知和落地能力。
-> 对应 DESIGN_GOALS.md v5.1 的 Phase 2.5 设计方向。
+> **Status: [PROPOSAL]** | **Type: Integration Design Proposal** | **Version: 1.0** | **Updated: 2026-07-21**
+> **⚠️ 本提案尚未实现**。所有6个GIS查询工具均为设计稿，对应 DESIGN_GOALS Phase 2.5 设计方向。
+> **Relationship to DESIGN_GOALS**: 本提案是 01_DESIGN_GOALS.md Phase 2.5 的延伸，非替代现有设计。
+> **References**: BIBLIOGRAPHY.md §G1-5
+> **Related**: 01_DESIGN_GOALS.md §3, diagnostics/02_RELIABILITY_ASSESSMENT.md
 
 ## Context
 
@@ -518,9 +519,9 @@ prompt = _build_prompt(rag_context, spatial_context, encoding_table, deps, tools
 
 ---
 
-## 附录：与 DESIGN_GOALS.md 的对齐
+## 附录：与 01_DESIGN_GOALS.md 的对齐
 
-本探索文档的设计完全对齐 `DESIGN_GOALS.md v5.1`：
+本探索文档的设计完全对齐 `01_DESIGN_GOALS.md v5.1`：
 
 | DESIGN_GOALS 原则 | 本文档落实 |
 |-------------------|-----------|

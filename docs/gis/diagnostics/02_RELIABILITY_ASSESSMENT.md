@@ -1,6 +1,10 @@
 # GIS Agent 可靠性评估：从"意图"到"GIS图"的鸿沟分析
 
-> 日期: 2026-07-21
+> **Status: [DIAGNOSTIC]** | **Type: Reliability Assessment** | **Updated: 2026-07-21**
+> **Scope**: 3个核心鸿沟(空间锚定/操作粒度/GIS分析) + KG利用不足
+> **References**: BIBLIOGRAPHY.md §A3-4, §F1-11, §G1-5
+> **Related**: 01_DESIGN_GOALS.md §6, diagnostics/03_DATA_GAP_ANALYSIS.md, proposals/01_PARSE_SPATIAL_ENHANCEMENT.md
+>
 > 分析范围: parse_results → GIS layout pipeline → 实际GIS图输出
 > 数据源: 金田村 parse 报告 + Exa 搜索人工规划流程 + 代码逐行审查
 

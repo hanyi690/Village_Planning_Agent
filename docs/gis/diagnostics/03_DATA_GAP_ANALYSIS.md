@@ -1,6 +1,10 @@
 # 系统数据缺口分析：专业教材要求 vs 系统现状
 
-> 日期: 2026-07-21
+> **Status: [DIAGNOSTIC]** | **Type: Gap Analysis** | **Updated: 2026-07-21**
+> **Scope**: 空间数据缺口根因分析 — DEM/地名/遥感影像等P0/P1缺口
+> **References**: BIBLIOGRAPHY.md §A3, §B11
+> **Related**: 02_OUTPUT_ARCHITECTURE.md §4, diagnostics/02_RELIABILITY_ASSESSMENT.md
+>
 > 依据: 《实用性村庄规划编制手册》（李巍等）第2章"综合现状调查与分析"
 > 范围: 聚焦广东省，区分空间数据（需严谨模型）和文本数据（已有parse路径）
 

@@ -1,13 +1,20 @@
 # PARSE 与 GIS 空间理解结合度分析
 
-> 版本: 1.1 | 日期: 2026-07-21 | 状态: 设计讨论 (未实现) | 注意: 引用了一些旧 YAML 文件名，以 DESIGN_GOALS.md v5.1 为准
+> **Status: [PROPOSAL]** | **Type: Design Critique & Enhancement Proposal** | **Version: 1.1** | **Updated: 2026-07-21**
+> **⚠️ 本提案尚未实现**。所有分析和增强建议均为设计讨论阶段。
+> **Relationship to DESIGN_GOALS**: 本提案与 01_DESIGN_GOALS.md §6 的 "statistics only" 决策存在矛盾。
+> 详见 `design-log/01_DECISION_LOG.md §Decision-001`
+> **References**: BIBLIOGRAPHY.md §A3-4, §F1-5
+> **Related**: 01_DESIGN_GOALS.md §6, diagnostics/01_PARSE_AGENT_STATUS.md, diagnostics/02_RELIABILITY_ASSESSMENT.md
+>
 > 触发问题: "parse设计的与gis结合度不足，真的能辅助gis agent做到空间理解吗"
+> 注意: 引用了一些旧 YAML 文件名，以 01_DESIGN_GOALS.md v5.1 为准
 
 ## 0. 前提澄清
 
-**DESIGN_GOALS.md v5.0 是权威设计文档**，parse_state.py 是部分实现。本分析基于设计文档，不将实现当设计。
+**01_DESIGN_GOALS.md v5.0 是权威设计文档**，parse_state.py 是部分实现。本分析基于设计文档，不将实现当设计。
 
-DESIGN_GOALS.md §6 技术决策明确写道：
+01_DESIGN_GOALS.md §6 技术决策明确写道：
 
 > **GIS 数据注入**: PARSE 阶段注入 GIS 现状摘要（统计信息，不含几何）
 > **不选**: 不注入
@@ -491,7 +498,7 @@ GISDataBundle → compute_spatial_context() → SpatialContext → 注入 PARSE
 
 | 文件                                        | 修改类型 | 说明                                                                                                                   |
 | ------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `docs/gis/DESIGN_GOALS.md`                | 修订     | §6 技术决策：GIS 注入从"统计"改为"统计+空间关系"                                                                      |
+| `docs/gis/01_DESIGN_GOALS.md`                | 修订     | §6 技术决策：GIS 注入从"统计"改为"统计+空间关系"                                                                      |
 | `docs/gis/SCHEMA_REFERENCE.md`            | 新增     | SpatialContext, SpatialAnchor, SpatialRule 模型文档                                                                    |
 | `parse_state.py`                          | 重写     | GISSummary → SpatialContext, OperationItem + SpatialAnchor, ConstraintItem + SpatialRule, PlanningIntent + ZoneTarget |
 | **新增** `spatial_context.py`       | 新建     | compute_spatial_context() 从 GISDataBundle 计算紧凑空间上下文                                                          |
