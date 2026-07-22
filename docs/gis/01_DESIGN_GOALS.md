@@ -277,6 +277,11 @@ Agent 是**会操作 GIS 的专业绘图员**，不是规划师。所有规划�
 
 ### 3.7 代码位置 (当前实际结构, v5.2)
 
+> ⚠️ **实现差距**: 当前代码仍为旧结构，与 `proposals/03_TOOL_FIRST_ARCHITECTURE.md` 的目标架构存在差距。
+> 目标架构为 **Tool-First**：业务逻辑以 `@tool` 形式暴露，generation/analysis/rendering 迁入 tools/，KG 独立为 modules/kg/，utils 提升至 app/utils/。详见 proposals/03。
+
+**当前结构**（标注实现状态）：
+
 ```
 app/agent/gis/              # Agent 编排层
 ├── agent.py                # create_*_graph() 入口
@@ -397,6 +402,13 @@ DLBM 编码在 `encodings/gbt21010.yaml`、`encodings/tugui.yaml`、`encodings/a
 
 ## 5. 工具流水线
 
+> ⚠️ **实现差距**:
+> - 当前 tools/gis/ 有 13 个文件，parse.py 和 parse_tools.py 功能重叠
+> - data.py、analytics.py 无 Schema 约束（返回裸 json.dumps）
+> - _helpers.py 应提升为 tools/helpers.py
+> - 缺少 gis_execute/（EXECUTE_OPS Agent 5 tools）、gis_query/（规划 Agent 6 tools）
+> - 详见 `proposals/03_TOOL_FIRST_ARCHITECTURE.md`
+
 ```
 PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VALIDATE ──► EXPORT ──► RENDER
 ```
@@ -460,6 +472,18 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 
 ## 8. 路线图
 
+### Phase 0 — 架构重构 ❌ 未实施 (设计阶段, 见 proposals/03)
+
+> ⚠️ **前置依赖**: Phase 2/2.5 的实现需要先完成架构重构，建立 Tool-First 结构。
+
+- [ ] Tool-First 架构迁移（详见 `proposals/03_TOOL_FIRST_ARCHITECTURE.md`）
+  - [ ] KG 独立：`modules/gis/kg/` → `modules/kg/`
+  - [ ] Utils 通用化：`modules/gis/utils/` → `app/utils/`
+  - [ ] generation/analysis/rendering 迁入 `tools/gis/` 作为 tool 内部实现
+  - [ ] Tool 层统一 Schema 约束（禁止裸 json.dumps）
+  - [ ] 预留 `tools/gis_execute/`、`tools/gis_query/`、`agent/gis/execute/` 空壳
+- [ ] 设计文档同步（§3.7 代码位置更新）
+
 ### Phase 1 — 已完成 (2026-07) ✅
 
 - [X] 六套编码体系分离 (encodings/gbt21010, tugui, appendix5, ghflbm, ydyhfldm, vne)
@@ -489,6 +513,8 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 ### Phase 2 — 架构对齐 (2026-07) ❌ 未实现
 
 ### Phase 2 — 架构对齐 ❌ 未实现 (设计阶段)
+
+> ⚠️ **实现差距**: 需先完成 Phase 0 架构重构。当前 generation/ 仍在 modules/gis/ 下，ZoneGenerator 等类无法被 Tool-First 结构直接引用。
 
 **目标**: 对齐 02_OUTPUT_ARCHITECTURE.md v3.3 的 5+1 内部生成层 + 12 层输出标准
 
@@ -520,6 +546,8 @@ infrastructure (AxisBuilder)      →  可视化叠加（不独立成层）
 - [ ] E2E 测试：验证 gen/plan 差异性 + 20 字段完整性
 
 ### Phase 2.5 — 统一操作执行引擎 ❌ 未实现 (设计阶段, 规划 2026-08)
+
+> ⚠️ **实现差距**: 需先完成 Phase 0 架构重构。EXECUTE_OPERATIONS 是 ReAct 子图（非固定引擎），需要 `agent/gis/execute/` 子包和 `tools/gis_execute/` 5 个 tools。当前均不存在。
 
 - [ ] OperationEngine（5 种原子操作 + 变更日志 + 批量/逐条执行）
 - [ ] MIP 降级为 `optimize_allocation` 辅助工具（批量场景按需调用）

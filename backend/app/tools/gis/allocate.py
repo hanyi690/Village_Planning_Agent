@@ -15,9 +15,32 @@ from ._helpers import make_result, to_tool_message
 logger = get_logger(__name__)
 
 
+def _intent_to_targets(intent: Any, total_area_ha: float) -> Dict[str, float]:
+    """Convert typed SpatialPlanningIntent to {zone_type: target_area_ha} dict.
+
+    Phase 4: replaces _build_legacy_intent bridge. ZoneTarget.area_ratio (0-1)
+    is converted to absolute area_ha using total parcel area.
+    """
+    targets: Dict[str, float] = {}
+    if intent is None:
+        return targets
+    # Typed path: SpatialPlanningIntent.zone_targets (List[ZoneTarget])
+    if hasattr(intent, 'zone_targets') and hasattr(intent, 'zone_targets')[0:]:
+        for zt in intent.zone_targets:
+            if hasattr(zt, 'land_use') and hasattr(zt, 'area_ratio'):
+                area_ha = zt.area_ratio * total_area_ha if total_area_ha > 0 else zt.area_ratio
+                targets[zt.land_use] = round(area_ha, 2)
+        return targets
+    # Legacy dict fallback (old code — should be unreachable after migration)
+    if isinstance(intent, dict):
+        for z in intent.get("zones", []):
+            targets[z.get("land_use", z.get("zone_id", "?"))] = z.get("area_ratio", 0) * total_area_ha
+    return targets
+
+
 @tool
 def allocate_zones(
-    targets: Annotated[Optional[Dict[str, Any]], InjectedState("intent")],
+    targets: Annotated[Any, InjectedState("intent")],
     kg_constraints: Annotated[Optional[List[Dict[str, Any]]], InjectedState("kg_constraints")],
     gis_data: Annotated[Dict[str, Optional[Dict[str, Any]]], InjectedState("gis_data")],
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
@@ -38,13 +61,27 @@ def allocate_zones(
             )],
         })
 
+    # Compute total area from GeoJSON for area_ratio -> absolute conversion
+    total_area_ha = 0.0
+    for feat in landuse_geojson.get("features", []):
+        props = feat.get("properties", {})
+        total_area_ha += float(props.get("area_ha", props.get("面积", 0)) or 0)
+
+    # Convert typed SpatialPlanningIntent -> {zone_type: target_area}
+    target_map = _intent_to_targets(targets, total_area_ha)
+    logger.info(
+        "[allocate] Intent converted: %d zones, %.1f ha total → %s",
+        len(target_map), total_area_ha,
+        " | ".join(f"{k}={v:.1f}ha" for k, v in target_map.items()),
+    )
+
     try:
         from app.modules.gis.generation.optimizer.mip_allocator import MIPZoneAllocator
 
         allocator = MIPZoneAllocator()
         allocated_geojson, alloc_trace = allocator.solve(
             landuse_geojson=landuse_geojson,
-            targets=targets if targets else {},
+            targets=target_map,
             constraints=kg_constraints,
         )
 

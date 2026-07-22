@@ -362,8 +362,10 @@ class ParseAgentState(BaseModel):
     # Messages (LangGraph accumulated)
     messages: List[Any] = Field(default_factory=list)
 
-    # Per-node LLM trace data (populated by explore/format nodes, consumed by reporter)
-    llm_trace: List[Dict[str, Any]] = Field(default_factory=list)
+    # Per-node LLM trace data (separate keys avoid InvalidUpdateError
+    # when explore_projects and explore_targets run in parallel)
+    llm_trace_projects: List[Dict[str, Any]] = Field(default_factory=list)
+    llm_trace_targets: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 __all__ = [

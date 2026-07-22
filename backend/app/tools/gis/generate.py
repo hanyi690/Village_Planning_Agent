@@ -24,59 +24,105 @@ logger = get_logger(__name__)
 from ._helpers import make_result, to_tool_message
 
 
-def _intent_from_dict(d: Dict[str, Any]) -> Any:
-    """Convert dict intent to UnifiedSpatialIntent (dataclass instance)."""
+def _intent_from_typed(intent: Any) -> Any:
+    """Convert typed SpatialPlanningIntent to UnifiedSpatialIntent.
+
+    Phase 4: replaces _intent_from_dict bridge. Now intent comes from PARSE
+    as SpatialPlanningIntent — no dict conversion needed in the pipeline.
+    """
     from app.modules.gis.schema.intent import (
         Direction, Density, ZoneIntent, FacilityIntent,
         AxisIntent, ConstraintIntent, UnifiedSpatialIntent,
     )
 
-    zones = []
-    for z in d.get("zones", []):
-        zones.append(ZoneIntent(
-            zone_id=z["zone_id"],
-            land_use=z.get("land_use", ""),
-            dlbm=z.get("dlbm", ""),
-            area_ratio=z.get("area_ratio", 0.0),
-            direction=Direction(z.get("direction", "center")),
-            density=Density(z.get("density", "medium")),
-            preserve_existing=z.get("preserve_existing", True),
-        ))
+    # Typed path: SpatialPlanningIntent.zone_targets (List[ZoneTarget])
+    if hasattr(intent, 'zone_targets'):
+        zones = []
+        for i, zt in enumerate(intent.zone_targets):
+            pref_dir = zt.spatial_preference.direction if zt.spatial_preference else "center"
+            density_str = zt.density if hasattr(zt, 'density') else "medium"
+            zones.append(ZoneIntent(
+                zone_id=f"Z{i + 1:02d}",
+                land_use=zt.land_use if hasattr(zt, 'land_use') else "",
+                dlbm=zt.dlbm if hasattr(zt, 'dlbm') else "",
+                area_ratio=zt.area_ratio if hasattr(zt, 'area_ratio') else 0.0,
+                direction=Direction(str(pref_dir)),
+                density=Density(str(density_str)),
+                preserve_existing=True,
+            ))
 
-    facilities = []
-    for f in d.get("facilities", []):
-        facilities.append(FacilityIntent(
-            facility_id=f.get("facility_id", f.get("name", "")),
-            facility_type=f.get("facility_type", ""),
-            target_zone=f.get("target_zone", ""),
-            location_hint=f.get("location_hint", ""),
-            status=f.get("status", "existing"),
-        ))
+        facilities = []
+        if hasattr(intent, 'facilities'):
+            for i, ft in enumerate(intent.facilities):
+                facilities.append(FacilityIntent(
+                    facility_id=f"F{i + 1:02d}",
+                    facility_type=ft.type if hasattr(ft, 'type') else "",
+                    target_zone="",
+                    location_hint=ft.location_hint if hasattr(ft, 'location_hint') else "",
+                    status=ft.status if hasattr(ft, 'status') else "existing",
+                ))
 
-    axes = []
-    for a in d.get("axes", []):
-        axes.append(AxisIntent(
-            axis_id=a.get("axis_id", ""),
-            axis_type=a.get("axis_type", "primary"),
-            direction=Direction(a.get("direction", "center")),
-            label=a.get("label", ""),
-        ))
+        axes = []
+        if hasattr(intent, 'development_axes'):
+            for i, at in enumerate(intent.development_axes):
+                axes.append(AxisIntent(
+                    axis_id=f"A{i + 1:02d}",
+                    axis_type="primary",
+                    direction=Direction(str(at.direction if hasattr(at, 'direction') else "center")),
+                    label="",
+                ))
 
-    constraints = []
-    for c in d.get("constraints", []):
-        constraints.append(ConstraintIntent(
-            constraint_id=c.get("constraint_id", c.get("id", "")),
-            constraint_type=c.get("type", c.get("constraint_type", "")),
-            strict=c.get("strict", True),
-        ))
+        return UnifiedSpatialIntent(
+            zones=zones, facilities=facilities, axes=axes,
+            constraints=[], metadata={},
+        )
 
-    return UnifiedSpatialIntent(
-        zones=zones,
-        facilities=facilities,
-        axes=axes,
-        constraints=constraints,
-        metadata=d.get("metadata", {}),
-    )
+    # Legacy dict fallback (should be unreachable now)
+    if isinstance(intent, dict):
+        zones = []
+        for z in intent.get("zones", []):
+            zones.append(ZoneIntent(
+                zone_id=z["zone_id"],
+                land_use=z.get("land_use", ""),
+                dlbm=z.get("dlbm", ""),
+                area_ratio=z.get("area_ratio", 0.0),
+                direction=Direction(z.get("direction", "center")),
+                density=Density(z.get("density", "medium")),
+                preserve_existing=z.get("preserve_existing", True),
+            ))
+
+        facilities = []
+        for f in intent.get("facilities", []):
+            facilities.append(FacilityIntent(
+                facility_id=f.get("facility_id", f.get("name", "")),
+                facility_type=f.get("facility_type", ""),
+                target_zone=f.get("target_zone", ""),
+                location_hint=f.get("location_hint", ""),
+                status=f.get("status", "existing"),
+            ))
+
+        axes = []
+        for a in intent.get("axes", []):
+            axes.append(AxisIntent(
+                axis_id=a.get("axis_id", ""),
+                axis_type=a.get("axis_type", "primary"),
+                direction=Direction(a.get("direction", "center")),
+                label=a.get("label", ""),
+            ))
+
+        constraints = []
+        for c in intent.get("constraints", []):
+            constraints.append(ConstraintIntent(
+                constraint_id=c.get("constraint_id", c.get("id", "")),
+                constraint_type=c.get("type", c.get("constraint_type", "")),
+                strict=c.get("strict", True),
+            ))
+
+        return UnifiedSpatialIntent(
+            zones=zones, facilities=facilities, axes=axes,
+            constraints=constraints, metadata=intent.get("metadata", {}),
+        )
+    return None
 
 
 def _build_protection_zones(gis_data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
@@ -95,7 +141,7 @@ def _build_protection_zones(gis_data: Dict[str, Any]) -> Dict[str, Dict[str, Any
 
 @tool
 def generate_layout(
-    intent: Annotated[Optional[Dict[str, Any]], InjectedState("intent")],
+    intent: Annotated[Any, InjectedState("intent")],
     allocated_geojson: Annotated[Optional[Dict[str, Any]], InjectedState("allocated_geojson")],
     gis_data: Annotated[Dict[str, Optional[Dict[str, Any]]], InjectedState("gis_data")],
     village_name: Annotated[str, InjectedState("village_name")],
@@ -164,16 +210,14 @@ def generate_layout(
 # ── layer generators ───────────────────────────────────────────────────
 
 def _generate_function_zones(
-    intent: Optional[Dict[str, Any]],
+    intent: Any,
     gis_data: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
-    """Generate function_zone layer via ZoneGenerator (merged by zone type).
-
-    ZoneGenerator reclassifies landuse_current parcels by DLBM, merges
-    same-type parcels, applies area ratios from intent, clips protection
-    zones, and runs CA refinement.
-    """
-    if not intent or not intent.get("zones"):
+    """Generate function_zone layer via ZoneGenerator (merged by zone type)."""
+    # Typed: SpatialPlanningIntent.zone_targets
+    has_zones = hasattr(intent, 'zone_targets') and intent.zone_targets
+    has_zones = has_zones or (isinstance(intent, dict) and intent.get("zones"))
+    if not intent or not has_zones:
         return None
 
     landuse = gis_data.get("landuse_current_geojson") or gis_data.get("allocated_geojson")
@@ -184,7 +228,7 @@ def _generate_function_zones(
 
     boundary = gis_data.get("boundary_geojson")
     protection = _build_protection_zones(gis_data)
-    unified = _intent_from_dict(intent)
+    unified = _intent_from_typed(intent)
 
     generator = ZoneGenerator()
     geojson = generator.generate(
@@ -271,25 +315,33 @@ def _make_planning_zone_layer(
 
 
 def _generate_facilities(
-    intent: Optional[Dict[str, Any]],
+    intent: Any,
     gis_data: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
-    """Generate facility_point layer via FacilityPlacer (4 strategies).
-
-    FacilityPlacer handles:
-      - 现状保留: keep existing POI location
-      - 规划新建: place at preferred DLBM parcel centroid + direction offset
-      - 规划改扩建: keep location, expand radius
-      - 规划迁建: find nearest suitable parcel
-    """
-    if not intent or not intent.get("facilities"):
+    """Generate facility_point layer via FacilityPlacer (4 strategies)."""
+    # Typed: SpatialPlanningIntent.facilities (List[FacilityTarget])
+    facilities_raw: List[Dict[str, Any]] = []
+    if hasattr(intent, 'facilities') and intent.facilities:
+        for ft in intent.facilities:
+            facilities_raw.append({
+                "facility_id": f"F{len(facilities_raw) + 1:02d}",
+                "facility_type": getattr(ft, 'type', ''),
+                "type": getattr(ft, 'type', ''),
+                "status": getattr(ft, 'status', 'existing_preserve'),
+                "location_hint": getattr(ft, 'location_hint', ''),
+                "anchor_village": getattr(ft, 'anchor_village', ''),
+                "service_radius": getattr(ft, 'service_radius', None),
+            })
+    elif isinstance(intent, dict) and intent.get("facilities"):
+        facilities_raw = intent["facilities"]
+    if not facilities_raw:
         return None
 
     from app.modules.gis.generation.facility_placer import FacilityPlacer
 
     placer = FacilityPlacer()
     geojson = placer.place(
-        facilities=intent["facilities"],
+        facilities=facilities_raw,
         landuse_geojson=gis_data.get("landuse_current_geojson"),
         boundary_geojson=gis_data.get("boundary_geojson"),
         existing_pois=None,
@@ -306,20 +358,19 @@ def _generate_facilities(
 
 
 def _generate_axes(
-    intent: Optional[Dict[str, Any]],
+    intent: Any,
     gis_data: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
-    """Generate infrastructure/axis layer via AxisBuilder.
-
-    AxisBuilder auto-generates 一核一带三区 from landuse parcels
-    or uses explicit AxisIntent definitions from LLM parse.
-    """
-    if not intent or not intent.get("axes"):
+    """Generate infrastructure/axis layer via AxisBuilder."""
+    # Typed: SpatialPlanningIntent.development_axes
+    has_axes = hasattr(intent, 'development_axes') and intent.development_axes
+    has_axes = has_axes or (isinstance(intent, dict) and intent.get("axes"))
+    if not intent or not has_axes:
         return None
 
     from app.modules.gis.generation.axis_builder import AxisBuilder
 
-    unified = _intent_from_dict(intent)
+    unified = _intent_from_typed(intent)
     builder = AxisBuilder()
     geojson = builder.build(
         intent=unified,
@@ -342,7 +393,7 @@ def _generate_axes(
 def _generate_space_control_zone(
     gis_data: Dict[str, Any],
     allocated_geojson: Optional[Dict[str, Any]] = None,
-    intent: Optional[Dict[str, Any]] = None,
+    intent: Any = None,
 ) -> Optional[Dict[str, Any]]:
     """Generate space_control_zone layer — 4-class construction control (510/520/530/540).
 

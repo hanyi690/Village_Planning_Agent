@@ -15,24 +15,24 @@
 
 v11 通过恢复单批次处理 + Think-Then-Format 分离，实现了核心瓶颈的突破：
 
-| 指标 | v10 | v11 | 变化 |
-|------|-----|-----|------|
-| explore_projects draft | 138 chars | 2185 chars | **+16x** 🎉 |
-| explore_targets draft | 109 chars | 2605 chars | **+24x** 🎉 |
-| format_projects operations | 2 | 30 | **15x** 🎉 |
-| "length limit" 错误 | 0 | 0 | ✅ 稳定 |
+| 指标                       | v10       | v11        | 变化              |
+| -------------------------- | --------- | ---------- | ----------------- |
+| explore_projects draft     | 138 chars | 2185 chars | **+16x** 🎉 |
+| explore_targets draft      | 109 chars | 2605 chars | **+24x** 🎉 |
+| format_projects operations | 2         | 30         | **15x** 🎉  |
+| "length limit" 错误        | 0         | 0          | ✅ 稳定           |
 
 ### 0.2 但 v11 的 30 个操作全部不可用于 GIS Agent
 
 从实测解析报告 `output/parse_results/金田村_2026-07-22.md` 中直接提取的数据：
 
-| 问题 | 严重度 | 影响范围 | 根因 |
-|------|--------|----------|------|
-| **无效 GHYTBM 编码** | 🔴 P0 | 30/30 ops | LLM format 阶段自行编造 `GHYTBM=2121`，未使用 explore 阶段 lookup_code 返回的正确编码 |
-| **空间锚定全部未解析** | 🔴 P0 | 30/30 ops (confidence=0.0) | resolve_place 返回了地名→坐标→候选图斑，但 SpatialAnchor 未被自动填充 |
-| **约束零产出** | 🔴 P0 | 0 条约束 | extract_regulations 使用 70% regex + 30% LLM，regex 模式太窄 |
-| **规划意图仅有统计数字** | 🔴 P0 | zone_targets 为空 | format_targets 产出 SpatialPlanningIntent 但 LLM 将 area_ratio 填为现状分解而非规划目标 |
-| **46 个校验错误** | 🔴 P0 | 全部 ops | 编码校验 + 锚定置信度双重失败 |
+| 问题                           | 严重度 | 影响范围                   | 根因                                                                                    |
+| ------------------------------ | ------ | -------------------------- | --------------------------------------------------------------------------------------- |
+| **无效 GHYTBM 编码**     | 🔴 P0  | 30/30 ops                  | LLM format 阶段自行编造`GHYTBM=2121`，未使用 explore 阶段 lookup_code 返回的正确编码  |
+| **空间锚定全部未解析**   | 🔴 P0  | 30/30 ops (confidence=0.0) | resolve_place 返回了地名→坐标→候选图斑，但 SpatialAnchor 未被自动填充                 |
+| **约束零产出**           | 🔴 P0  | 0 条约束                   | extract_regulations 使用 70% regex + 30% LLM，regex 模式太窄                            |
+| **规划意图仅有统计数字** | 🔴 P0  | zone_targets 为空          | format_targets 产出 SpatialPlanningIntent 但 LLM 将 area_ratio 填为现状分解而非规划目标 |
+| **46 个校验错误**        | 🔴 P0  | 全部 ops                   | 编码校验 + 锚定置信度双重失败                                                           |
 
 ### 0.3 根因总结
 
@@ -79,9 +79,11 @@ Path 6: 注记+空间关系+KG 注入 ←──→ Path 7: DEM数据准备
 ## 2. Path 1: 编码硬校验（P0，0.5天）
 
 ### 问题
+
 format 阶段 LLM 直接输出 `GHYTBM=2121`，而非从 explore 阶段的 `code_mappings` 中取正确编码。
 
 ### 根因
+
 code_table 已注入 prompt 但 LLM 忽略。需要 Python 层硬校验兜底。
 
 ### 修改点
@@ -137,9 +139,11 @@ def _auto_correct_code(op: dict, code_mappings: dict) -> str:
 ## 3. Path 2: 空间锚定自动填充（P0，1天）
 
 ### 问题
+
 `resolve_place` 返回 `{village_name, parcel_ids, confidence}`，但这些信息未自动写入 `SpatialAnchor`。
 
 ### 根因
+
 format 阶段依赖 LLM 填写 SpatialAnchor 字段，LLM 不擅长这种结构化数据搬运任务。
 
 ### 修改点
@@ -227,6 +231,7 @@ def _auto_fill_spatial_anchor(
 ## 4. Path 3: 约束提取增强（P0，1天）
 
 ### 问题
+
 `extract_regulations_node` 零产出。当前只用 regex 提取，模式覆盖不全。
 
 ### 修改点
@@ -377,13 +382,13 @@ def evaluate_fidelity(
 
 ### 评估阈值
 
-| 维度 | 方法 | 通过阈值 |
-|------|------|----------|
-| 编码有效性 | Python 查表 `GHYTBM_TO_GHYTMC` | **100%**（硬要求） |
-| 面积一致性 | 正则提取原文面积 + 对比 | **偏差 <20%** |
-| 地名召回 | 正则提取原文地名 + SpatialAnchor 对比 | **召回率 >70%** |
-| 操作覆盖率 | 轻量 LLM 评判 | **覆盖率 >60%** |
-| 约束覆盖率 | 轻量 LLM 评判 | **覆盖率 >50%** |
+| 维度       | 方法                                  | 通过阈值                 |
+| ---------- | ------------------------------------- | ------------------------ |
+| 编码有效性 | Python 查表`GHYTBM_TO_GHYTMC`       | **100%**（硬要求） |
+| 面积一致性 | 正则提取原文面积 + 对比               | **偏差 <20%**      |
+| 地名召回   | 正则提取原文地名 + SpatialAnchor 对比 | **召回率 >70%**    |
+| 操作覆盖率 | 轻量 LLM 评判                         | **覆盖率 >60%**    |
+| 约束覆盖率 | 轻量 LLM 评判                         | **覆盖率 >50%**    |
 
 ---
 
@@ -395,11 +400,11 @@ def evaluate_fidelity(
 
 ### 并行化点
 
-| 并行组 | 节点 | 安全性 | 预期加速 |
-|--------|------|--------|----------|
-| 组1 | format_projects ‖ format_targets | ✅ 安全：各自独立 draft + 独立 state key | ~1.5x |
-| 组2 | extract_regulations ‖ extract_tables ‖ explore_projects | ✅ 安全：各自读取不同 section text | ~1.3x |
-| 组3 | 两轮 ReAct 优化 | ✅ 如果第一轮 tool_calls 已覆盖所有实体，跳过第二轮 | ~1.2x |
+| 并行组 | 节点                                                      | 安全性                                              | 预期加速 |
+| ------ | --------------------------------------------------------- | --------------------------------------------------- | -------- |
+| 组1    | format_projects ‖ format_targets                         | ✅ 安全：各自独立 draft + 独立 state key            | ~1.5x    |
+| 组2    | extract_regulations ‖ extract_tables ‖ explore_projects | ✅ 安全：各自读取不同 section text                  | ~1.3x    |
+| 组3    | 两轮 ReAct 优化                                           | ✅ 如果第一轮 tool_calls 已覆盖所有实体，跳过第二轮 | ~1.2x    |
 
 ### 实现
 
@@ -439,16 +444,17 @@ graph.add_conditional_edges("after_explore", route_format_parallel, [
 ## 7. Path 6: 注记+空间关系+KG 注入（P2，2天）
 
 ### 问题
-LLM 只知道统计数字（660地块、2396ha），无法建立空间心智模型。
+
+LLM 只知道统计数字（660地块、2396ha），无法建立空间心智模型。而且KG对于schema利用不够，自定义了很多关系之类的，没有考虑后续增加栅格数据，增加分析工具的提升。
 
 ### 可利用的已有数据
 
-| 数据 | 位置 | 当前状态 |
-|------|------|----------|
-| 34 个设施注记点 | `current/annotation.geojson`, KG triples | ✅ 已入KG，**未注入LLM prompt** |
-| 225 条空间关系 | `spatial_context.spatial_relations` | ✅ 已计算，**未注入LLM prompt** |
-| 18 个 SPARQL 模板 | `builder.py` | ⚠️ 只用1个（get_constraints） |
-| 15 个自然村锚点 | `spatial_context.natural_villages` | ✅ 已注入但LLM未充分使用 |
+| 数据              | 位置                                       | 当前状态                              |
+| ----------------- | ------------------------------------------ | ------------------------------------- |
+| 34 个设施注记点   | `current/annotation.geojson`, KG triples | ✅ 已入KG，**未注入LLM prompt** |
+| 225 条空间关系    | `spatial_context.spatial_relations`      | ✅ 已计算，**未注入LLM prompt** |
+| 18 个 SPARQL 模板 | `builder.py`                             | ⚠️ 只用1个（get_constraints）       |
+| 15 个自然村锚点   | `spatial_context.natural_villages`       | ✅ 已注入但LLM未充分使用              |
 
 ### 修改点
 
@@ -482,7 +488,7 @@ LLM 只知道统计数字（660地块、2396ha），无法建立空间心智模�
 @_langchain_tool
 def query_facilities(anchor_name: str = "", facility_type: str = "") -> str:
     """Query facilities near a village anchor or by type.
-    
+  
     Examples:
       query_facilities(anchor_name="园寨") → nearby facilities within 500m
       query_facilities(facility_type="卫生") → all health-related facilities
@@ -493,7 +499,8 @@ def query_facilities(anchor_name: str = "", facility_type: str = "") -> str:
     return kg.query_facilities(anchor_name=anchor_name, facility_type=facility_type)
 ```
 
-**文件**: 
+**文件**:
+
 - `backend/app/modules/gis/spatial_context.py` — `format_spatial_context_for_prompt`
 - `backend/app/agent/gis/parse/agent.py` — 新增 `query_facilities` 工具
 - `backend/app/modules/gis/kg/builder.py` — 新增 `query_facilities` SPARQL 方法
@@ -503,15 +510,18 @@ def query_facilities(anchor_name: str = "", facility_type: str = "") -> str:
 ## 8. Path 7: DEM 数据准备（P2，0.5天）
 
 ### 问题
+
 `raster_types.py` + `dem_provider.py` 已有完整分析基础设施，但数据文件缺失。
 
 ### 操作
+
 1. 从地理空间数据云 (gscloud.cn) 下载 GDEMV3 30m，覆盖金田村（116.03-116.06°E, 24.81-24.83°N）
 2. 放置到 `data/gis/jintian/terrain/dem.tif`
 3. 运行 `TerrainAnalyzer` 计算坡度/坡向/建设适宜性
 4. 注入 SpatialContext: `terrain_profile = {slope_violations_gt25: N, flat_areas_lt6: M, ...}`
 
-**文件**: 
+**文件**:
+
 - `data/gis/jintian/terrain/dem.tif` (新下载)
 - `backend/app/modules/gis/spatial_context.py` — 新增 terrain 注入
 
@@ -548,16 +558,16 @@ Path 6 (2天) → Path 7 (0.5天)
 
 ## 10. 修改文件清单
 
-| 优先级 | 文件 | 改动类型 | 改动内容 |
-|--------|------|----------|----------|
-| **P0** | `backend/app/agent/gis/parse/agent.py` | 修改 | 编码硬校验 `_auto_correct_code` + 锚定自动填充 `_auto_fill_spatial_anchor` + 约束 regex 扩展 |
-| **P0** | `backend/app/agent/gis/parse/agent.py` | 修改 | `extract_regulations_node` 分拆 Phase A(regex) + Phase B(LLM) |
-| **P1** | `backend/app/agent/gis/evaluate_fidelity.py` | **新建** | 忠实度评估器：五维评估 + FidelityReport |
-| **P1** | `backend/app/agent/gis/parse/agent.py` | 修改 | graph 添加 `evaluate_fidelity` 节点 + LangGraph Send 并行 |
-| **P2** | `backend/app/modules/gis/spatial_context.py` | 修改 | `format_spatial_context_for_prompt` 注入注记摘要+空间关系 |
-| **P2** | `backend/app/agent/gis/parse/agent.py` | 修改 | 新增 `query_facilities` KG 工具 |
-| **P2** | `backend/app/modules/gis/kg/builder.py` | 修改 | 新增 `query_facilities` SPARQL 方法 |
-| **P2** | `data/gis/jintian/terrain/dem.tif` | 新数据 | GDEMV3 30m DEM 下载 |
+| 优先级       | 文件                                           | 改动类型       | 改动内容                                                                                        |
+| ------------ | ---------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------- |
+| **P0** | `backend/app/agent/gis/parse/agent.py`       | 修改           | 编码硬校验`_auto_correct_code` + 锚定自动填充 `_auto_fill_spatial_anchor` + 约束 regex 扩展 |
+| **P0** | `backend/app/agent/gis/parse/agent.py`       | 修改           | `extract_regulations_node` 分拆 Phase A(regex) + Phase B(LLM)                                 |
+| **P1** | `backend/app/agent/gis/evaluate_fidelity.py` | **新建** | 忠实度评估器：五维评估 + FidelityReport                                                         |
+| **P1** | `backend/app/agent/gis/parse/agent.py`       | 修改           | graph 添加`evaluate_fidelity` 节点 + LangGraph Send 并行                                      |
+| **P2** | `backend/app/modules/gis/spatial_context.py` | 修改           | `format_spatial_context_for_prompt` 注入注记摘要+空间关系                                     |
+| **P2** | `backend/app/agent/gis/parse/agent.py`       | 修改           | 新增`query_facilities` KG 工具                                                                |
+| **P2** | `backend/app/modules/gis/kg/builder.py`      | 修改           | 新增`query_facilities` SPARQL 方法                                                            |
+| **P2** | `data/gis/jintian/terrain/dem.tif`           | 新数据         | GDEMV3 30m DEM 下载                                                                             |
 
 ---
 
@@ -572,15 +582,15 @@ python scripts/run_parse_pipeline.py --village 金田村
 
 检查 `output/parse_results/金田村_YYYY-MM-DD.md`:
 
-| 检查项 | 目标值 |
-|--------|--------|
-| 编码正确的操作数 | ≥ 25/30 |
-| 锚定已解析的操作数 | ≥ 15/30 |
-| 约束数量 | ≥ 5 |
+| 检查项                  | 目标值                 |
+| ----------------------- | ---------------------- |
+| 编码正确的操作数        | ≥ 25/30               |
+| 锚定已解析的操作数      | ≥ 15/30               |
+| 约束数量                | ≥ 5                   |
 | 规划意图 (zone_targets) | ≥ 5 分区 + ≥ 10 设施 |
-| 校验通过率 | > 70% |
-| 忠实度 overall_score | > 0.6 |
-| 总耗时 | < 180s |
+| 校验通过率              | > 70%                  |
+| 忠实度 overall_score    | > 0.6                  |
+| 总耗时                  | < 180s                 |
 
 ### GIS Agent 交付验证
 
@@ -595,12 +605,12 @@ result = allocator.solve()
 
 ## 12. 与原始 v1.1 提案的关系
 
-| v1.1 主张 | v2.0 调整 |
-|-----------|-----------|
-| 升级 SpatialContext 为"统计+空间关系" | **不再争论设计**。现有 statistics-only 框架足以支撑 Path 1-3 的修复。空间关系增强移至 P2 的 Path 6 |
-| 重写 parse/state.py 全部 Schema | **不重写**。现有 Schema (SpatialOperation/SpatialConstraint/SpatialPlanningIntent) 定义正确，问题是 LLM→Python 数据传递链断裂，通过 Path 1+2 修复 |
-| 新建 spatial_context.py | **已实现**。当前 spatial_context.py 工作正常，Path 6 仅增强其 prompt 输出 |
-| 修订 DESIGN_GOALS §6 | **暂缓**。先验证 Path 1-3 能否在现有框架内解决问题 |
+| v1.1 主张                             | v2.0 调整                                                                                                                                                |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 升级 SpatialContext 为"统计+空间关系" | **不再争论设计**。现有 statistics-only 框架足以支撑 Path 1-3 的修复。空间关系增强移至 P2 的 Path 6                                                 |
+| 重写 parse/state.py 全部 Schema       | **不重写**。现有 Schema (SpatialOperation/SpatialConstraint/SpatialPlanningIntent) 定义正确，问题是 LLM→Python 数据传递链断裂，通过 Path 1+2 修复 |
+| 新建 spatial_context.py               | **已实现**。当前 spatial_context.py 工作正常，Path 6 仅增强其 prompt 输出                                                                          |
+| 修订 DESIGN_GOALS §6                 | **暂缓**。先验证 Path 1-3 能否在现有框架内解决问题                                                                                                 |
 
 ---
 

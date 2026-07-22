@@ -70,11 +70,11 @@ class GISPipelineState(BaseModel):
     reports: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     gis_data: Dict[str, Optional[Dict[str, Any]]] = Field(default_factory=dict)
 
-    # ── Intent (LLM output) ──
+    # ── Intent + PARSE Agent output (typed at runtime via schema injection) ──
+    # Field types are Dict/List for Pydantic compatibility; actual values are
+    # SpatialPlanningIntent, List[SpatialOperation], List[SpatialConstraint]
     intent: Dict[str, Any] = Field(default_factory=dict)
     intent_json: Dict[str, Any] = Field(default_factory=dict)
-
-    # ── PARSE Agent output (spatially-aware) ──
     operation_sequence: List[Dict[str, Any]] = Field(default_factory=list)
     constraint_set: List[Dict[str, Any]] = Field(default_factory=list)
     planning_intent: Dict[str, Any] = Field(default_factory=dict)

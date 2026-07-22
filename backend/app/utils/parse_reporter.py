@@ -269,13 +269,23 @@ def _format_operation_sequence(ops: List[Dict[str, Any]]) -> str:
     lines.append(f"共 **{len(ops)}** 条操作\n")
 
     for i, op in enumerate(ops):
-        action = op.get("action", "?")
-        land_use = op.get("land_use_name", "")
-        area = op.get("area_sqm")
-        source = op.get("source_text", "")
-        confidence = op.get("confidence", 1.0)
-        needs_confirm = "🔒" if op.get("needs_confirmation", True) else ""
-        article = op.get("article_ref", "")
+        if hasattr(op, 'action'):
+            # Typed SpatialOperation (Phase 2+)
+            action = op.action or "?"
+            land_use = op.land_use_name or ""
+            area = op.area_sqm
+            source = op.source_text or ""
+            confidence = op.confidence
+            needs_confirm = "🔒" if op.needs_confirmation else ""
+            article = op.article_ref or ""
+        else:
+            action = op.get("action", "?")
+            land_use = op.get("land_use_name", "")
+            area = op.get("area_sqm")
+            source = op.get("source_text", "")
+            confidence = op.get("confidence", 1.0)
+            needs_confirm = "🔒" if op.get("needs_confirmation", True) else ""
+            article = op.get("article_ref", "")
 
         lines.append(f"#### {i+1}. [{action.upper()}]{needs_confirm}")
         if land_use:
@@ -287,16 +297,25 @@ def _format_operation_sequence(ops: List[Dict[str, Any]]) -> str:
             lines.append(f"- **条文引用**: {article}")
         lines.append(f"- **来源文本**: > {source[:200]}{'...' if len(source) > 200 else ''}")
 
-        # Spatial anchor
-        anchor = op.get("spatial_anchor")
+        # Spatial anchor — typed + dict
+        anchor = op.spatial_anchor if hasattr(op, 'spatial_anchor') else op.get("spatial_anchor")
         if anchor:
-            ref = anchor.get("reference", "")
-            offset = anchor.get("offset", "")
-            sec_ref = anchor.get("secondary_ref", "")
-            sec_offset = anchor.get("secondary_offset", "")
-            candidates = anchor.get("candidate_parcels", [])
-            status = anchor.get("resolution_status", "")
-            anchor_conf = anchor.get("confidence", 0)
+            if hasattr(anchor, 'reference'):
+                ref = anchor.reference
+                offset = anchor.offset or ""
+                sec_ref = anchor.secondary_ref or ""
+                sec_offset = anchor.secondary_offset or ""
+                candidates = anchor.candidate_parcels
+                status = anchor.resolution_status
+                anchor_conf = anchor.confidence
+            else:
+                ref = anchor.get("reference", "")
+                offset = anchor.get("offset", "")
+                sec_ref = anchor.get("secondary_ref", "")
+                sec_offset = anchor.get("secondary_offset", "")
+                candidates = anchor.get("candidate_parcels", [])
+                status = anchor.get("resolution_status", "")
+                anchor_conf = anchor.get("confidence", 0)
 
             status_emoji = {"anchored": "🟢", "partial": "🟡", "unresolved": "🔴"}.get(status, "⚪")
 
@@ -308,7 +327,7 @@ def _format_operation_sequence(ops: List[Dict[str, Any]]) -> str:
                 lines.append(f"  - 候选图斑: {', '.join(str(c) for c in candidates[:5])}")
             lines.append(f"  - 锚定置信度: {anchor_conf:.1f}")
         else:
-            loc = op.get("location_desc", "")
+            loc = op.location_desc if hasattr(op, 'location_desc') else op.get("location_desc", "")
             if loc:
                 lines.append(f"- **位置描述**: {loc}")
 
@@ -329,16 +348,22 @@ def _format_constraint_set(constraints: List[Dict[str, Any]]) -> str:
     lines.append("| # | 类型 | 优先级 | 来源条文 | 可计算规则 |")
     lines.append("|---|------|--------|----------|------------|")
     for i, c in enumerate(constraints):
-        ctype = c.get("type", "?")
-        priority = c.get("priority", "mandatory")
-        article = c.get("article_ref", "")
-        rule = c.get("spatial_rule")
+        if hasattr(c, 'type'):
+            ctype = c.type or "?"
+            priority = c.priority or "mandatory"
+            article = c.article_ref or ""
+            rule = c.spatial_rule
+        else:
+            ctype = c.get("type", "?")
+            priority = c.get("priority", "mandatory")
+            article = c.get("article_ref", "")
+            rule = c.get("spatial_rule")
         rule_str = ""
         if rule:
-            op = rule.get("operation", "")
-            subj = rule.get("subject", "")
-            obj = rule.get("object", "")
-            dist = rule.get("distance_m")
+            op = rule.operation if hasattr(rule, 'operation') else rule.get("operation", "")
+            subj = rule.subject if hasattr(rule, 'subject') else rule.get("subject", "")
+            obj = rule.object if hasattr(rule, 'object') else rule.get("object", "")
+            dist = rule.distance_m if hasattr(rule, 'distance_m') else rule.get("distance_m")
             dist_str = f", {dist}m" if dist else ""
             rule_str = f"{op}({subj}, {obj}{dist_str})"
         lines.append(f"| {i+1} | {ctype} | {priority} | {article} | {rule_str} |")
@@ -346,10 +371,16 @@ def _format_constraint_set(constraints: List[Dict[str, Any]]) -> str:
     # Detailed list
     lines.append("\n### 详细约束\n")
     for i, c in enumerate(constraints):
-        ctype = c.get("type", "?")
-        priority = c.get("priority", "mandatory")
-        source = c.get("source_text", "")
-        article = c.get("article_ref", "")
+        if hasattr(c, 'type'):
+            ctype = c.type or "?"
+            priority = c.priority or "mandatory"
+            source = c.source_text or ""
+            article = c.article_ref or ""
+        else:
+            ctype = c.get("type", "?")
+            priority = c.get("priority", "mandatory")
+            source = c.get("source_text", "")
+            article = c.get("article_ref", "")
 
         lines.append(f"#### {i+1}. [{ctype}] 优先级={priority}")
         if source:
@@ -358,24 +389,24 @@ def _format_constraint_set(constraints: List[Dict[str, Any]]) -> str:
             lines.append(f"- **条文引用**: {article}")
 
         # Type-specific fields
-        land_use = c.get("land_use")
-        target_area = c.get("target_area_ha")
-        operator = c.get("operator")
+        land_use = c.land_use if hasattr(c, 'land_use') else c.get("land_use")
+        target_area = c.target_area_ha if hasattr(c, 'target_area_ha') else c.get("target_area_ha")
+        operator = c.operator if hasattr(c, 'operator') else c.get("operator")
         if land_use and target_area:
             lines.append(f"- **面积约束**: {land_use} {operator or ''} {target_area} ha")
 
-        rule = c.get("spatial_rule")
+        rule = c.spatial_rule if hasattr(c, 'spatial_rule') else c.get("spatial_rule")
         if rule:
-            op = rule.get("operation", "")
-            subj = rule.get("subject", "")
-            obj = rule.get("object", "")
-            dist = rule.get("distance_m")
+            op = rule.operation if hasattr(rule, 'operation') else rule.get("operation", "")
+            subj = rule.subject if hasattr(rule, 'subject') else rule.get("subject", "")
+            obj = rule.object if hasattr(rule, 'object') else rule.get("object", "")
+            dist = rule.distance_m if hasattr(rule, 'distance_m') else rule.get("distance_m")
             dist_str = f", {dist}m" if dist else ""
             lines.append(f"- **空间规则**: `{op}({subj}, {obj}{dist_str})`")
 
         # Building constraints
         for field in ["max_area_sqm", "max_height_m", "max_floors", "setback_m"]:
-            val = c.get(field)
+            val = getattr(c, field, None) if hasattr(c, field) else c.get(field)
             if val is not None:
                 lines.append(f"- **{field}**: {val}")
 
@@ -391,54 +422,77 @@ def _format_planning_intent(intent: Dict[str, Any]) -> str:
 
     lines = []
 
-    # Zone targets
-    zone_targets = intent.get("zone_targets", [])
+    # Zone targets — handle both typed SpatialPlanningIntent and legacy dict
+    zone_targets = intent.zone_targets if hasattr(intent, 'zone_targets') else intent.get("zone_targets", [])
     if zone_targets:
         lines.append("### 分区目标\n")
         lines.append("| 用途 | 编码 | 面积比例 | 密度 | 空间偏好 | 邻接偏好 | 邻接规避 |")
         lines.append("|------|------|----------|------|----------|----------|----------|")
         total_ratio = 0
         for zt in zone_targets:
-            lu = zt.get("land_use", "")
-            dlbm = zt.get("dlbm", "")
-            ratio = zt.get("area_ratio", 0)
+            if hasattr(zt, 'land_use'):
+                lu = zt.land_use
+                dlbm = zt.dlbm or ""
+                ratio = zt.area_ratio
+                density = zt.density
+                pref = zt.spatial_preference
+                pref_str = f"{pref.direction} (ref={pref.reference})" if pref and (pref.direction or pref.reference) else ""
+                adj = zt.adjacency_rules
+                prefer = ", ".join(adj.prefer) if adj else ""
+                avoid = ", ".join(adj.avoid) if adj else ""
+            else:
+                lu = zt.get("land_use", "")
+                dlbm = zt.get("dlbm", "")
+                ratio = zt.get("area_ratio", 0)
+                density = zt.get("density", "")
+                pref = zt.get("spatial_preference", {})
+                pref_str = f"{pref.get('direction', '')} (ref={pref.get('reference', '')})" if pref else ""
+                adj = zt.get("adjacency_rules") or {}
+                prefer = ", ".join(adj.get("prefer", []))
+                avoid = ", ".join(adj.get("avoid", []))
             total_ratio += ratio
-            density = zt.get("density", "")
-            pref = zt.get("spatial_preference", {})
-            pref_str = f"{pref.get('direction', '')} (ref={pref.get('reference', '')})" if pref else ""
-            adj = zt.get("adjacency_rules") or {}
-            prefer = ", ".join(adj.get("prefer", []))
-            avoid = ", ".join(adj.get("avoid", []))
             lines.append(f"| {lu} | {dlbm} | {ratio:.1%} | {density} | {pref_str} | {prefer} | {avoid} |")
         lines.append(f"\n> 面积比例总和: **{total_ratio:.1%}** (目标: 100% ±5%)")
 
-    # Facilities
-    facilities = intent.get("facilities", [])
+    # Facilities — typed + dict
+    facilities = intent.facilities if hasattr(intent, 'facilities') else intent.get("facilities", [])
     if facilities:
         lines.append("\n### 设施需求\n")
         lines.append("| 类型 | 状态 | 位置提示 | 服务半径 | 锚定村落 |")
         lines.append("|------|------|----------|----------|----------|")
         for ft in facilities:
-            ftype = ft.get("type", "")
-            status = ft.get("status", "")
-            hint = ft.get("location_hint", "")
-            radius = ft.get("service_radius", "")
-            anchor = ft.get("anchor_village", "")
+            if hasattr(ft, 'type'):
+                ftype = ft.type
+                status = ft.status
+                hint = ft.location_hint
+                radius = str(ft.service_radius or "")
+                anchor = ft.anchor_village or ""
+            else:
+                ftype = ft.get("type", "")
+                status = ft.get("status", "")
+                hint = ft.get("location_hint", "")
+                radius = ft.get("service_radius", "")
+                anchor = ft.get("anchor_village", "")
             lines.append(f"| {ftype} | {status} | {hint} | {radius} | {anchor} |")
 
-    # Development axes
-    axes = intent.get("development_axes", [])
+    # Development axes — typed + dict
+    axes = intent.development_axes if hasattr(intent, 'development_axes') else intent.get("development_axes", [])
     if axes:
         lines.append("\n### 发展轴\n")
         lines.append("| 方向 | 参照特征 | 连接 |")
         lines.append("|------|----------|------|")
         for at in axes:
-            direction = at.get("direction", "")
-            ref = at.get("reference_feature", "")
-            connects = ", ".join(at.get("connects", []))
+            if hasattr(at, 'direction'):
+                direction = at.direction
+                ref = at.reference_feature
+                connects = ", ".join(getattr(at, 'connects', []))
+            else:
+                direction = at.get("direction", "")
+                ref = at.get("reference_feature", "")
+                connects = ", ".join(at.get("connects", []))
             lines.append(f"| {direction} | {ref} | {connects} |")
 
-    # Area constraints
+    # Area constraints — typed + dict compat
     lines.append("\n### 面积指标\n")
     for field, label in [
         ("total_area_ha", "总面积"),
@@ -446,10 +500,10 @@ def _format_planning_intent(intent: Dict[str, Any]) -> str:
         ("farmland_area_ha", "耕地保有量"),
         ("ecological_area_ha", "生态用地"),
     ]:
-        val = intent.get(field)
+        val = intent.get(field) if isinstance(intent, dict) else getattr(intent, field, None)
         if val is not None:
             lines.append(f"- **{label}**: {val:.1f} ha")
-    pop = intent.get("population")
+    pop = intent.get("population") if isinstance(intent, dict) else getattr(intent, "population", None)
     if pop:
         lines.append(f"- **规划人口**: {pop} 人")
 
@@ -503,13 +557,16 @@ def _format_encoding_validation(
             else:
                 lines.append(f"- ✅ 所有编码均有效")
 
-        # Validate zone_target dlbm
-        zone_targets = planning_intent.get("zone_targets", []) if isinstance(planning_intent, dict) else []
+        # Validate zone_target dlbm — typed + dict
+        if isinstance(planning_intent, dict):
+            zone_targets = planning_intent.get("zone_targets", [])
+        else:
+            zone_targets = getattr(planning_intent, "zone_targets", [])
         valid_zones = 0
         invalid_zones = []
         for zt in zone_targets:
-            dlbm = zt.get("dlbm", "") if isinstance(zt, dict) else getattr(zt, "dlbm", "")
-            lu = zt.get("land_use", "") if isinstance(zt, dict) else zt.land_use
+            dlbm = zt.dlbm if hasattr(zt, 'dlbm') else zt.get("dlbm", "")
+            lu = zt.land_use if hasattr(zt, 'land_use') else zt.get("land_use", "")
             if dlbm:
                 if dlbm in GHYTBM_TO_GHYTMC:
                     valid_zones += 1

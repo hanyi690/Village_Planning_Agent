@@ -54,6 +54,7 @@ from langgraph.graph import StateGraph, END, START
 from app.agent.gis.parse.state import (
     ParseAgentState,
     SectionInfo,
+    SpatialAnchor,
     SpatialConstraint,
     SpatialOperation,
     SpatialPlanningIntent,
@@ -297,16 +298,25 @@ def _extract_mappings(result_str: str, code_mappings: dict, place_mappings: dict
                 logger.debug("[mappings] place: %s -> %s", place_name, inner["village_name"])
 
         # Also check candidates for additional code mappings
+        # Typed path (Phase 3): candidates_ghytbm list from LandUseCodeLookup
+        for candidates_key in ("candidates_ghytbm", "candidates_dlbm"):
+            for m in inner.get(candidates_key, []) or []:
+                if isinstance(m, dict) and "ghytbm" in m and "ghytmc" in m:
+                    name2 = m.get("ghytmc", "")
+                    code2 = m.get("ghytbm", "")
+                    if name2 and code2:
+                        code_mappings[name2] = code2
+        # Backward compat: old candidates dict format
         candidates = inner.get("candidates", {})
         if isinstance(candidates, dict):
             for match_list in candidates.values():
                 if isinstance(match_list, list):
                     for m in match_list:
                         if isinstance(m, dict) and "ghytbm" in m and "ghytmc" in m:
-                            name = m.get("ghytmc", "")
-                            code = m.get("ghytbm", "")
-                            if name and code:
-                                code_mappings[name] = code
+                            name2 = m.get("ghytmc", "")
+                            code2 = m.get("ghytbm", "")
+                            if name2 and code2:
+                                code_mappings[name2] = code2
 
         # Handle error results (e.g., KG not initialized)
         if "error" in inner:
@@ -571,6 +581,7 @@ async def _explore_with_tools(
     draft_key: str,
     code_key: str,
     place_key: str,
+    trace_key: str,
     initial_code_mappings: Dict[str, str] = None,
     initial_place_mappings: Dict[str, dict] = None,
 ) -> dict:
@@ -594,7 +605,7 @@ async def _explore_with_tools(
 
     if not sections:
         logger.warning("[PARSE:%s] No relevant sections", node_name)
-        return {draft_key: "", code_key: {}, place_key: {}, "llm_trace": []}
+        return {draft_key: "", code_key: {}, place_key: {}, trace_key: []}
 
     sections_text = "\n\n---\n\n".join(s.content[:1500] for s in sections[:5])
     print(f"    [{node_name}] {len(sections)} sections merged -> {len(sections_text)} chars", flush=True)
@@ -697,7 +708,7 @@ async def _explore_with_tools(
     logger.info("[PARSE:%s] draft=%d chars, %d codes, %d places, %d tool calls",
                  node_name, len(draft), len(code_mappings), len(place_mappings), total_tool_calls)
 
-    return {draft_key: draft, code_key: code_mappings, place_key: place_mappings, "llm_trace": node_traces}
+    return {draft_key: draft, code_key: code_mappings, place_key: place_mappings, trace_key: node_traces}
 
 
 # ── Node 2c: explore_projects (Phase A - Think + Tools) ────────────────
@@ -727,10 +738,92 @@ async def explore_projects_node(state: ParseAgentState) -> dict:
         draft_key="draft_operations",
         code_key="code_mappings_projects",
         place_key="place_mappings_projects",
+        trace_key="llm_trace_projects",
     )
 
 
 # ── Node 2c2: format_projects (Phase B — json_schema) ──────────────────
+
+
+# ── Post-format fixers: auto-correct codes + fill anchors (no LLM) ─────
+
+
+def _auto_correct_code(
+    ops: List[SpatialOperation],
+    code_mappings: dict,
+) -> List[SpatialOperation]:
+    """Post-format: correct invalid GHYTBM codes from deterministic mappings.
+
+    LLM sometimes outputs wrong codes even with the mapping table.
+    This runs pure-Python correction before validate_and_merge catches errors.
+    """
+    if not ops:
+        return ops
+    try:
+        from app.modules.gis.schema import GHYTBM_TO_GHYTMC
+        valid_codes = set(GHYTBM_TO_GHYTMC.keys())
+    except ImportError:
+        logger.debug("[auto_correct] GHYTBM_TO_GHYTMC not available")
+        return ops
+
+    corrected = 0
+    for op in ops:
+        code = op.land_use_code or ""
+        if code and code not in valid_codes:
+            # Try to match project_name against code_mappings (name -> code)
+            best_code = ""
+            pname = (op.project_name or "").strip()
+            if pname:
+                for name, mapped_code in code_mappings.items():
+                    if mapped_code and mapped_code in valid_codes:
+                        if name in pname or pname in name:
+                            best_code = mapped_code
+                            break
+            if best_code:
+                op.land_use_code = best_code
+                corrected += 1
+            else:
+                logger.debug("[auto_correct] no mapping for code=%s project=%s", code, pname[:30])
+
+    if corrected:
+        logger.info("[PARSE:auto_correct] Fixed %d GHYTBM codes", corrected)
+    return ops
+
+
+def _auto_fill_spatial_anchor(
+    ops: List[SpatialOperation],
+    place_mappings: dict,
+) -> List[SpatialOperation]:
+    """Post-format: auto-fill spatial_anchor from deterministic place mappings.
+
+    LLM often leaves spatial_anchor empty or with low confidence.
+    Fill from resolve_place tool results (place_mappings).
+    """
+    if not ops:
+        return ops
+
+    filled = 0
+    for op in ops:
+        anchor = op.spatial_anchor
+        if anchor is not None and anchor.confidence >= 0.3:
+            continue  # Already has a good anchor
+
+        # Match against place_mappings (place_name -> {village_name, parcel_ids, confidence})
+        search_text = f"{(op.project_name or '')} {(op.location_desc or '')}"
+        for place_name, info in place_mappings.items():
+            if place_name in search_text:
+                op.spatial_anchor = SpatialAnchor(
+                    reference=place_name,
+                    candidate_parcels=list(info.get("parcel_ids", [])),
+                    confidence=float(info.get("confidence", 0.5)),
+                    resolution_status="anchored",
+                )
+                filled += 1
+                break
+
+    if filled:
+        logger.info("[PARSE:auto_fill] Filled %d spatial anchors", filled)
+    return ops
 
 
 async def format_projects_node(state: ParseAgentState) -> dict:
@@ -775,6 +868,11 @@ async def format_projects_node(state: ParseAgentState) -> dict:
         # result.operations are already List[SpatialOperation] — store typed, not dicts
         ops = list(result.operations)
         logger.info("[PARSE:format_projects] %d operations", len(ops))
+
+        # Phase 5 (P2): post-format auto-correction (no LLM)
+        ops = _auto_correct_code(ops, dict(state.code_mappings_projects))
+        ops = _auto_fill_spatial_anchor(ops, dict(state.place_mappings_projects))
+
         return {"raw_operations": ops}
     return {"raw_operations": []}
 # ── Node 2d: explore_targets (Phase A - Think + Tools) ────────────────
@@ -803,6 +901,7 @@ async def explore_targets_node(state: ParseAgentState) -> dict:
         draft_key="draft_targets",
         code_key="code_mappings_targets",
         place_key="place_mappings_targets",
+        trace_key="llm_trace_targets",
         initial_code_mappings=dict(state.code_mappings_targets),
         initial_place_mappings=dict(state.place_mappings_targets),
     )

@@ -253,55 +253,56 @@ def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
                     vne_code=GHYTBM_TO_VNE.get(code, ""),
                 ))
 
-        # Search in DLBM names (current land-use codes)
-        dlbm_matches = []
+        # Search in DLBM names (current land-use codes) - typed matches
+        dlbm_matches: List[DLBMMatch] = []
         for code, name in DLBM_TO_DLMC.items():
             if land_use_name in name or name in land_use_name:
-                dlbm_matches.append({
-                    "dlbm": code,
-                    "dlmc": name,
-                    "zone_type": DLBM_TO_ZONE_TYPE.get(code, ""),
-                })
+                dlbm_matches.append(DLBMMatch(
+                    dlbm=code,
+                    dlmc=name,
+                    zone_type=DLBM_TO_ZONE_TYPE.get(code, ""),
+                ))
 
-        # Search in GHFLBM (planning classification)
-        ghflbm_matches = []
+        # Search in GHFLBM (planning classification) - typed matches
+        ghflbm_matches: List[GHFLBMMatch] = []
         for code, ghytbms in GHFLBM_TO_GHYTBMS.items():
             for ghytbm in ghytbms:
                 name = GHYTBM_TO_GHYTMC.get(ghytbm, "")
                 if land_use_name in name or name in land_use_name:
-                    ghflbm_matches.append({
-                        "ghflbm": code,
-                        "ghytbm": ghytbm,
-                        "ghytmc": name,
-                    })
+                    ghflbm_matches.append(GHFLBMMatch(
+                        ghflbm=code,
+                        ghytbm=ghytbm,
+                        ghytmc=name,
+                    ))
                     break
 
         if not ghytbm_matches and not dlbm_matches:
+            lookup = LandUseCodeLookup(
+                candidates_ghytbm=ghytbm_matches[:5],
+                candidates_dlbm=dlbm_matches[:5],
+            )
             return make_result(
                 success=False,
                 error=f"No code found for '{land_use_name}'",
-                data={"candidates": ghflbm_matches},
+                data=lookup.model_dump(),
             )
 
         # Primary match (first GHYTBM match is preferred)
-        primary = ghytbm_matches[0] if ghytbm_matches else {}
-        primary_dlbm = dlbm_matches[0] if dlbm_matches else {}
+        primary = ghytbm_matches[0] if ghytbm_matches else GHYTBMMatch()
+        primary_dlbm = dlbm_matches[0] if dlbm_matches else DLBMMatch()
 
-        return make_result(
-            success=True,
-            data={
-                "ghytbm": primary.get("ghytbm", ""),
-                "ghytmc": primary.get("ghytmc", ""),
-                "ghflbm": ghflbm_matches[0].get("ghflbm", "") if ghflbm_matches else "",
-                "vne_code": primary.get("vne_code", ""),
-                "dlbm_aliases": [m["dlbm"] for m in dlbm_matches],
-                "zone_type": primary.get("zone_type", primary_dlbm.get("zone_type", "")),
-                "candidates": {
-                    "ghytbm_matches": ghytbm_matches[:5],
-                    "dlbm_matches": dlbm_matches[:5],
-                },
-            },
+        lookup = LandUseCodeLookup(
+            ghytbm=primary.ghytbm,
+            ghytmc=primary.ghytmc,
+            ghflbm=ghflbm_matches[0].ghflbm if ghflbm_matches else "",
+            vne_code=primary.vne_code,
+            dlbm_aliases=[m.dlbm for m in dlbm_matches],
+            zone_type=primary.zone_type or primary_dlbm.zone_type,
+            candidates_ghytbm=ghytbm_matches[:5],
+            candidates_dlbm=dlbm_matches[:5],
         )
+
+        return make_result(success=True, data=lookup.model_dump())
     except Exception as e:
         logger.warning("[lookup_land_use_code] Failed: %s", e)
         return make_result(success=False, error=str(e))
@@ -369,7 +370,7 @@ async def parse_planning_text(
 
         # Build and run PARSE Agent subgraph
         from app.agent.gis.parse.agent import build_parse_agent_graph
-        from app.agent.gis.parse.state import ParseAgentState
+        from app.agent.gis.parse.state import ParseAgentState, SpatialPlanningIntent
 
         graph = build_parse_agent_graph()
 
@@ -384,7 +385,7 @@ async def parse_planning_text(
         # Extract outputs
         operation_sequence = result.get("operation_sequence", [])
         constraint_set = result.get("constraint_set", [])
-        planning_intent = result.get("planning_intent", {})
+        planning_intent = result.get("planning_intent", SpatialPlanningIntent())
         validation_errors = result.get("validation_errors", [])
 
         logger.info(

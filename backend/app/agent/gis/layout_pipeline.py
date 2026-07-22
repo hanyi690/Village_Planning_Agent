@@ -44,7 +44,7 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
       - spatial_context: SpatialContext summary
     """
     from app.agent.gis.parse.agent import build_parse_agent_graph
-    from app.agent.gis.parse.state import ParseAgentState, SpatialContext
+    from app.agent.gis.parse.state import ParseAgentState, SpatialContext, SpatialPlanningIntent
     from app.modules.gis.spatial_context import compute_spatial_context
 
     reports = state.reports or {}
@@ -84,26 +84,23 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
 
         result = await graph.ainvoke(input_state.model_dump())
 
-        # Extract PARSE outputs
+        # Extract PARSE outputs — all typed (Phase 4: no bridge, no dict conversion)
         operation_sequence = result.get("operation_sequence", [])
         constraint_set = result.get("constraint_set", [])
-        planning_intent = result.get("planning_intent", {})
+        planning_intent = result.get("planning_intent", SpatialPlanningIntent())
         validation_errors = result.get("validation_errors", [])
 
-        # Build legacy intent from planning_intent for transition period
-        legacy_intent = _build_legacy_intent(planning_intent)
+        zone_count = len(planning_intent.zone_targets) if hasattr(planning_intent, 'zone_targets') else 0
 
         logger.info(
             "[Pipeline:parse] Parsed: %d ops, %d constraints, %d zones",
-            len(operation_sequence),
-            len(constraint_set),
-            len(planning_intent.get("zone_targets", [])),
+            len(operation_sequence), len(constraint_set), zone_count,
         )
         if validation_errors:
             logger.warning("[Pipeline:parse] Validation errors: %s", validation_errors[:3])
 
         return {
-            "intent": legacy_intent,
+            "intent": planning_intent,       # typed SpatialPlanningIntent — no bridge
             "intent_json": planning_intent,
             "operation_sequence": operation_sequence,
             "constraint_set": constraint_set,
@@ -112,59 +109,7 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         }
     except Exception as e:
         logger.warning("[Pipeline:parse] Parse failed: %s — continuing with empty intent", e)
-        return {"intent": {}, "intent_json": {}}
-
-
-def _build_legacy_intent(planning_intent: Dict[str, Any]) -> Dict[str, Any]:
-    """Build legacy UnifiedSpatialIntent from SpatialPlanningIntent for transition.
-
-    This bridges the new SpatialPlanningIntent format to the old intent format
-    expected by downstream nodes (allocate_and_generate, etc.) until they are
-    fully migrated to consume operation_sequence + constraint_set directly.
-
-    TODO(migration): Remove after downstream nodes consume operation_sequence directly.
-    Tracked by: PARSE output migration. Depends on: allocate_and_generate, validate_*
-    nodes being updated to accept operation_sequence + constraint_set as input.
-    """
-    zones = []
-    for zt in planning_intent.get("zone_targets", []):
-        zone = {
-            "zone_id": f"Z{len(zones) + 1:02d}",
-            "land_use": zt.get("land_use", ""),
-            "dlbm": zt.get("dlbm", ""),
-            "area_ratio": zt.get("area_ratio", 0.0),
-            "direction": zt.get("spatial_preference", {}).get("direction"),
-            "reference_feature": zt.get("spatial_preference", {}).get("reference"),
-            "adjacent_to": zt.get("adjacency_rules", {}).get("prefer", []),
-            "avoid_adjacent_to": zt.get("adjacency_rules", {}).get("avoid", []),
-            "density": zt.get("density", "medium"),
-        }
-        zones.append(zone)
-
-    facilities = []
-    for ft in planning_intent.get("facilities", []):
-        facilities.append({
-            "facility_id": f"F{len(facilities) + 1:02d}",
-            "facility_type": ft.get("type", ""),
-            "status": ft.get("status", "existing_preserve"),
-            "location_hint": ft.get("location_hint", ""),
-            "service_radius": ft.get("service_radius"),
-        })
-
-    axes = []
-    for at in planning_intent.get("development_axes", []):
-        axes.append({
-            "axis_id": f"A{len(axes) + 1:02d}",
-            "axis_type": "primary",
-            "direction": at.get("direction", ""),
-            "reference_feature": at.get("reference_feature", ""),
-        })
-
-    return {
-        "zones": zones,
-        "facilities": facilities,
-        "axes": axes,
-    }
+        return {"intent": SpatialPlanningIntent(), "intent_json": SpatialPlanningIntent()}
 
 
 async def _fetch_gis_data_node(state: GISPipelineState) -> dict:

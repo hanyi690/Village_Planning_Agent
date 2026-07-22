@@ -229,7 +229,10 @@ def _build_trace_entry(node_name: str, node_output: dict, elapsed: float, tokens
     }
 
     # Extract LLM trace data from node output
-    llm_trace = node_output.get("llm_trace", [])
+    # Per-node keys (Phase 2 fix for parallel fan-out InvalidUpdateError)
+    llm_trace = (node_output.get("llm_trace_projects", [])
+                 + node_output.get("llm_trace_targets", [])
+                 + node_output.get("llm_trace", []))  # backward compat
     if llm_trace:
         entry["llm_calls"] = llm_trace
 
@@ -255,8 +258,13 @@ def _build_trace_entry(node_name: str, node_output: dict, elapsed: float, tokens
         entry["format_result"] = f"{len(ops)} operations"
     elif "raw_targets" in node_output:
         targets = node_output["raw_targets"]
-        zones = len(targets.get("zone_targets", []))
-        facilities = len(targets.get("facilities", []))
+        if isinstance(targets, dict):
+            zones = len(targets.get("zone_targets", []))
+            facilities = len(targets.get("facilities", []))
+        else:
+            # Typed SpatialPlanningIntent (Phase 2+)
+            zones = len(getattr(targets, "zone_targets", []))
+            facilities = len(getattr(targets, "facilities", []))
         entry["format_result"] = f"{zones} zones + {facilities} facilities"
     elif "raw_tables" in node_output:
         rows = node_output["raw_tables"].get("rows", [])
@@ -435,9 +443,15 @@ async def run_pipeline():
         print(f"  ...还有 {len(constraint_set) - 10} 条约束", flush=True)
 
     print(f"\n--- 规划意图 ---", flush=True)
-    zone_targets = planning_intent.get("zone_targets", []) if isinstance(planning_intent, dict) else []
-    facilities = planning_intent.get("facilities", []) if isinstance(planning_intent, dict) else []
-    axes = planning_intent.get("development_axes", []) if isinstance(planning_intent, dict) else []
+    if isinstance(planning_intent, dict):
+        zone_targets = planning_intent.get("zone_targets", [])
+        facilities = planning_intent.get("facilities", [])
+        axes = planning_intent.get("development_axes", [])
+    else:
+        # Typed SpatialPlanningIntent (Phase 2+)
+        zone_targets = getattr(planning_intent, "zone_targets", [])
+        facilities = getattr(planning_intent, "facilities", [])
+        axes = getattr(planning_intent, "development_axes", [])
     print(f"  zone_targets: {len(zone_targets)}", flush=True)
     for zt in zone_targets:
         lu = zt.get("land_use", "?") if isinstance(zt, dict) else zt.land_use

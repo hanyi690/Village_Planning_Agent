@@ -91,6 +91,12 @@ INDICATOR_PATTERNS = [
 
 # Zone definitions extracted from land_use_planning report tables
 ZONE_TYPE_PATTERNS = {
+    "农田保护区": {"color": "#FFE4B5", "restrictions": ["禁止非农化", "禁止非粮化"]},
+    "村庄建设区": {"color": "#FF6347", "restrictions": ["建设用地规模受控"]},
+    "生态保护区": {"color": "#2E8B57", "restrictions": ["禁止工业开发", "禁止城镇化"]},
+    "一般农业区": {"color": "#98FB98", "restrictions": ["限制大规模非农建设"]},
+}
+
 
 @dataclass
 class KGInputParcels:
@@ -126,13 +132,6 @@ class KGInputParcels:
             return cls(parcels=[])
 
 
-__all__ = ["KGInputParcels"]
-
-    "农田保护区": {"color": "#FFE4B5", "restrictions": ["禁止非农化", "禁止非粮化"]},
-    "村庄建设区": {"color": "#FF6347", "restrictions": ["建设用地规模受控"]},
-    "生态保护区": {"color": "#2E8B57", "restrictions": ["禁止工业开发", "禁止城镇化"]},
-    "一般农业区": {"color": "#98FB98", "restrictions": ["限制大规模非农建设"]},
-}
 
 
 # Semantic-qualified key → constraint mapping (parallel to Chinese-key patterns)
@@ -1284,35 +1283,3 @@ class PlanningKG:
         print(f"\n  Constraints:")
         for c in constraints:
             print(f"    {c.get('id','?')}: {c.get('field','?')} {c.get('op','?')} {c.get('value','?')} (from: {c.get('source','?')})")
-from dataclasses import dataclass, field
-from app.modules.gis.schema.spatial_types import CurrentLandUseParcel
-from app.utils.schema_validator import validate_ingestion_point
-from app.modules.gis.schema.spatial_types import CurrentLandUseParcel
-from app.utils.schema_validator import validate_ingestion_point
-
-
-@dataclass
-class KGInputParcels:
-    """Container for typed parcels consumed by KG builder."""
-    parcels: List[CurrentLandUseParcel] = field(default_factory=list)
-    
-    @classmethod
-    def from_geojson(cls, geojson: Dict[str, Any]) -> "KGInputParcels":
-        """Convert GeoJSON to typed parcels (via ingestion layer).
-        
-        This is the SINGLE ENTRY POINT for parcel data into KG builder.
-        All other code must use this wrapper to ensure schema injection.
-        """
-        from app.modules.gis.schema import ingest_current_landuse
-        
-        try:
-            # Use ingestion layer to enforce proper parsing
-            parcels = ingest_current_landuse(geojson)
-            logger.debug(f"[KGBuilder] Ingested {len(parcels)} parcels from GeoJSON")
-            return cls(parcels=parcels)
-        except Exception as e:
-            logger.error(f"[KGBuilder] Failed to ingest parcels from GeoJSON: {e}")
-            return cls(parcels=[])
-
-
-__all__ = ["KGInputParcels"]

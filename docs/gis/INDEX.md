@@ -37,7 +37,8 @@ docs/gis/
 │
 ├── 💡 提案 (Proposals)
 │   ├── proposals/01_PARSE_SPATIAL_ENHANCEMENT.md  [PROPOSAL] 空间理解增强提案 — SpatialContext争议
-│   └── proposals/02_GIS_PLANNING_INTEGRATION.md   [PROPOSAL] GIS工具集成提案 — 6个规划查询工具
+│   ├── proposals/02_GIS_PLANNING_INTEGRATION.md   [PROPOSAL] GIS工具集成提案 — 6个规划查询工具
+│   └── proposals/03_TOOL_FIRST_ARCHITECTURE.md    [PROPOSAL] 架构重构提案 — Tool-First，Agent-Orchestrated
 │
 └── 📝 设计日志 (Design Log)
     └── design-log/01_DECISION_LOG.md              关键设计决策日志
@@ -63,6 +64,7 @@ docs/gis/
 - `diagnostics/03_DATA_GAP_ANALYSIS.md` — 数据缺口根因
 
 ### 🚀 未来方向
+- `proposals/03_TOOL_FIRST_ARCHITECTURE.md` — 架构重构（Tool-First，Agent-Orchestrated）
 - `proposals/01_PARSE_SPATIAL_ENHANCEMENT.md` — 空间理解增强
 - `proposals/02_GIS_PLANNING_INTEGRATION.md` — 规划Agent工具集成
 
@@ -81,6 +83,9 @@ docs/gis/
 | 数据缺口 | diagnostics/03 | 02_OUTPUT_ARCHITECTURE §4 |
 | MIP 优化器 | 01_DESIGN_GOALS §7 | diagnostics/02 |
 | 合规检查 | 02_OUTPUT_ARCHITECTURE §8 | proposals/02 |
+| 架构重构 | proposals/03 | 01_DESIGN_GOALS §3.7, §8 |
+| EXECUTE_OPS Agent | proposals/03 §4 | 01_DESIGN_GOALS §3.3 |
+| Tool-First 架构 | proposals/03 §2-3 | 01_DESIGN_GOALS §5 |
 
 ---
 
@@ -88,5 +93,6 @@ docs/gis/
 
 | 日期 | 变更 |
 |------|------|
+| 2026-07-22 | 新增 proposals/03 Tool-First 架构重构提案；01_DESIGN_GOALS §3.7/§5/§8 标注实现差距 |
 | 2026-07-22 | 文档重组：分离设计/诊断/提案，添加状态标注，统一参考文献 |
 | 2026-07-21 | DESIGN_GOALS v5.1, OUTPUT_ARCHITECTURE v3.4 |
