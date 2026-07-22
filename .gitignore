@@ -77,6 +77,10 @@ tests/output/
 nul
 =*
 *.tmp
+*.backup
+
+# SQLite databases (local dev only)
+*.db
 
 # Claude Code
 .claude/
