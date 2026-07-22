@@ -27,7 +27,7 @@ from app.modules.gis.analysis.validation.layout_validator import (
 )
 
 
-from ._helpers import make_result, to_tool_message
+from app.tools.helpers import make_result, to_tool_message
 
 
 @tool

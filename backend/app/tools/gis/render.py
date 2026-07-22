@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 from app.utils.sse_events import GISLayerConfig
 
 
-from ._helpers import make_result, to_tool_message
+from app.tools.helpers import make_result, to_tool_message
 
 
 @tool

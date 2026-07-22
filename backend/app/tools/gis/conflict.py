@@ -35,7 +35,7 @@ from app.modules.gis.analysis.conflict.resolver import (
 )
 
 
-from ._helpers import make_result, to_tool_message
+from app.tools.helpers import make_result, to_tool_message
 
 
 @tool

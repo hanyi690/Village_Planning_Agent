@@ -48,7 +48,7 @@ def run_layout_pipeline(
     kg = None
     if run_kg:
         try:
-            from app.modules.gis.kg import PlanningKG
+            from app.modules.kg import PlanningKG
             kg = PlanningKG(village_name=village_name)
             kg.build_from_intent(intent=intent, landuse_geojson=landuse_geojson, gis_data=gis_data)
             kg_constraints = kg.get_constraints()

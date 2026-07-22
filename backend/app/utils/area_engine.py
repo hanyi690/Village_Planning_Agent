@@ -26,7 +26,7 @@ except ImportError:
     GEOPANDAS_AVAILABLE = False
     logger.warning("[area_engine] geopandas/pyproj not available, area calculations limited")
 
-from .crs_engine import get_metric_crs, project_to_metric
+from app.utils.crs_engine import get_metric_crs, project_to_metric
 
 
 def calculate_area_ha(

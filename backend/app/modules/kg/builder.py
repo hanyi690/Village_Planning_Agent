@@ -22,7 +22,7 @@ from rdflib import Graph, Namespace, Literal, RDF, URIRef, BNode
 from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
-from ..utils.crs_engine import project_to_metric, get_metric_crs
+from app.utils.crs_engine import project_to_metric, get_metric_crs
 from .ontology import PLN, GEO, EntityTypes, Relations, FACILITY_TYPES, REGULATION_TYPES
 
 logger = get_logger(__name__)
@@ -527,7 +527,7 @@ class PlanningKG:
         Constraint entities.
         """
         try:
-            from ..analysis.metrics_calculator import GISMetricsCalculator
+            from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
             metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
         except Exception as e:
             logger.warning(f"[PlanningKG] GIS constraint computation failed: {e}")
@@ -585,8 +585,8 @@ class PlanningKG:
             return {}
 
         try:
-            from ..utils.geojson_utils import geojson_to_geodataframe
-            from ..schema import get_zone_type_for_dlbm
+            from app.utils.geojson_utils import geojson_to_geodataframe
+            from app.modules.gis.schema import get_zone_type_for_dlbm
 
             gdf = geojson_to_geodataframe(landuse_geojson)
             if gdf is None or len(gdf) == 0:
@@ -632,8 +632,8 @@ class PlanningKG:
         Three-level key ensures all 660 parcels are preserved.
         """
         features = geojson.get("features", [])
-        from ..schema import get_zone_type_for_dlbm
-        from ..generation.zone_generator import resolve_zone_type_for_dlbm
+        from app.modules.gis.schema import get_zone_type_for_dlbm
+        from app.modules.gis.generation.zone_generator import resolve_zone_type_for_dlbm
 
         duplicate_bsms = set()
         seen_bsms = set()
@@ -686,7 +686,7 @@ class PlanningKG:
             parcels: List of typed parcel objects from ingest_current_landuse()
                      (CurrentLandUseParcel or BaseLandUseParcel instances)
         """
-        from ..generation.zone_generator import resolve_zone_type_for_dlbm
+        from app.modules.gis.generation.zone_generator import resolve_zone_type_for_dlbm
 
         duplicate_bsms = set()
         seen_bsms = set()
@@ -899,7 +899,7 @@ class PlanningKG:
     def _add_spatial_relations(self, geojson: Dict[str, Any]):
         """Build parcel adjacency graph from GeoDataFrame spatial joins."""
         try:
-            from ..utils.geojson_utils import geojson_to_geodataframe
+            from app.utils.geojson_utils import geojson_to_geodataframe
             gdf = geojson_to_geodataframe(geojson)
             if gdf is None or len(gdf) < 2:
                 return
@@ -1101,7 +1101,7 @@ class PlanningKG:
         establish the designated_as relationship between each parcel
         and its native planning zone.
         """
-        from ..generation.optimizer.mip_allocator import dlbm_to_planning_zone
+        from app.modules.gis.generation.optimizer.mip_allocator import dlbm_to_planning_zone
 
         count = 0
         for ft in landuse_geojson.get("features", []):
@@ -1200,7 +1200,7 @@ class PlanningKG:
         设施点 → PLN.Facility 实体
         村名 → PLN.Village 实体 (补充 spatial_context 的 natural_villages)
         """
-        from ..schema.spatial_types import CurrentFacility
+        from app.modules.gis.schema.spatial_types import CurrentFacility
 
         facility_count = 0
         village_count = 0

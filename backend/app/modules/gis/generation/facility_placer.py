@@ -13,8 +13,8 @@ import math
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from ..utils.crs_engine import project_to_metric, project_to_wgs84
-from ..utils.geo_utils import safe_geo_series_union
+from app.utils.crs_engine import project_to_metric, project_to_wgs84
+from app.utils.geo_utils import safe_geo_series_union
 
 logger = get_logger(__name__)
 

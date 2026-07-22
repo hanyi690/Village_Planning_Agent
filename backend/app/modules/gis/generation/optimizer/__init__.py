@@ -11,7 +11,7 @@ from .planning_zone_mapper import (
     map_zone_type_to_planning_zone,
     remap_assigned_zones,
 )
-from ...utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
+from app.utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
 from .ca_refiner import ZoneCARefiner
 from .procedural import merge_parcels, simplify_boundary
 

@@ -22,9 +22,9 @@ def _valid_coord(x: float, y: float) -> bool:
     return not (math.isinf(x) or math.isnan(x) or math.isinf(y) or math.isnan(y))
 
 from app.utils.logger import get_logger
-from ..utils.crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
-from ..utils.area_engine import calculate_area_ha
-from ..utils.geo_utils import safe_geo_series_union
+from app.utils.crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
+from app.utils.area_engine import calculate_area_ha
+from app.utils.geo_utils import safe_geo_series_union
 
 logger = get_logger(__name__)
 

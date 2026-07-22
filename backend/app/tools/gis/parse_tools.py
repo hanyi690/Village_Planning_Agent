@@ -18,7 +18,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from app.utils.logger import get_logger
-from ._helpers import make_result
+from app.tools.helpers import make_result
 
 logger = get_logger(__name__)
 
@@ -344,7 +344,7 @@ async def parse_planning_text(
         # Build KG from GIS data for on-demand spatial queries
         try:
             from app.agent.gis.parse.agent import set_kg_instance
-            from app.modules.gis.kg import PlanningKG
+            from app.modules.kg import PlanningKG
             kg = PlanningKG(village_name=village_name)
             if gis_data:
                 kg.build_from_reports(

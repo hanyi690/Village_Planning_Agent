@@ -21,7 +21,7 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-from ._helpers import make_result, to_tool_message
+from app.tools.helpers import make_result, to_tool_message
 
 
 def _intent_from_typed(intent: Any) -> Any:
@@ -278,7 +278,7 @@ def _make_planning_zone_layer(
     # Merge adjacent same-type parcels via dissolve
     try:
         from app.modules.gis.generation.optimizer.procedural import merge_parcels
-        from app.modules.gis.utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
+        from app.utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
         fc = {"type": "FeatureCollection", "features": features}
         gdf = geojson_to_geodataframe(fc)
         if gdf is not None and not gdf.empty:

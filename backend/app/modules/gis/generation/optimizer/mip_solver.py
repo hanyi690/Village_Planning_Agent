@@ -143,7 +143,7 @@ class ConstraintDrivenAllocator:
 
         from ..zone_generator import resolve_zone_type_for_dlbm
         from ...schema import get_zone_type_for_planned_dlbm
-        from ...utils.geojson_utils import build_parcel_index
+        from app.utils.geojson_utils import build_parcel_index
         from .planning_zone_mapper import (
             PLANNING_ZONE_TO_ZONE_TYPES,
             map_planning_zone_targets_to_zone_types,

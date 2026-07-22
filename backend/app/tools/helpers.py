@@ -1,4 +1,8 @@
-"""Shared helpers for GIS tool layer."""
+"""Shared helpers for all tool modules.
+
+Provides make_result() and to_tool_message() as the standard
+tool-return protocol across the entire tools layer.
+"""
 
 import json
 from typing import Any, Dict

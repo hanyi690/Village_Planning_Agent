@@ -20,7 +20,7 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-from ._helpers import make_result, to_tool_message
+from app.tools.helpers import make_result, to_tool_message
 
 
 def _normalize_fields(geojson: Dict, layer_key: str) -> Dict:

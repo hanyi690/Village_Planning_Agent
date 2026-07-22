@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
 from ..schema import get_zone_color, ZONE_TYPE_COLORS, FACILITY_STATUS_COLORS, PLANNING_ZONE_COLORS
-from ..utils.geojson_utils import reduce_coordinate_precision
+from app.utils.geojson_utils import reduce_coordinate_precision
 from ..generation.optimizer.procedural import simplify_boundary
 
 logger = get_logger(__name__)

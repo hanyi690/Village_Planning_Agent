@@ -36,10 +36,10 @@ except ImportError:
     GEOPANDAS_AVAILABLE = False
     logger.warning("[zone_generator] geopandas/shapely not available")
 
-from ..utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
-from ..utils.crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
-from ..utils.geo_utils import safe_unary_union, safe_geo_series_union
-from ..utils.area_engine import calculate_area_ha
+from app.utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
+from app.utils.crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
+from app.utils.geo_utils import safe_unary_union, safe_geo_series_union
+from app.utils.area_engine import calculate_area_ha
 
 
 @functools.lru_cache(maxsize=256)

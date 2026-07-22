@@ -139,7 +139,7 @@ async def _execute_tool_call(tool_name: str, tool_args: dict) -> str:
         global _kg_instance
         if _kg_instance is None:
             return _json.dumps({"error": "KG not initialized"})
-        from app.modules.gis.kg.query import query_kg
+        from app.modules.kg.query import query_kg
         try:
             template_name = tool_args.get("template_name", "")
             params = {k: v for k, v in tool_args.items() if k != "template_name"}

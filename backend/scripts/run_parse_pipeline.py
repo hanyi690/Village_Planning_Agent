@@ -339,7 +339,7 @@ async def run_pipeline():
         from app.agent.gis.parse.agent import build_parse_agent_graph, set_kg_instance
         import app.agent.gis.parse.agent as pa
         from app.agent.gis.parse.state import ParseAgentState
-        from app.modules.gis.kg import PlanningKG
+        from app.modules.kg import PlanningKG
         from app.modules.parsing.gazetteer import PlaceNameResolver
 
         # Build KG for on-demand spatial queries

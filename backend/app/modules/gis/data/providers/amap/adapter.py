@@ -96,7 +96,7 @@ class AmapAdapter(GISProvider):
 
     def _gcj02_geometry_to_wgs84(self, data: dict) -> dict:
         """Convert GCJ02 geometry from Amap response to WGS84 GeoJSON."""
-        from ...utils.coord_transform import gcj02_to_wgs84
+        from app.utils.coord_transform import gcj02_to_wgs84
 
         # Amap district API returns polyline string or coordinates
         polyline = data.get("polyline", "")
@@ -114,7 +114,7 @@ class AmapAdapter(GISProvider):
 
     def _parse_poi_features(self, result) -> List[GeoFeature]:
         """Parse Amap POI results → GeoFeature list (WGS84)."""
-        from ...utils.coord_transform import gcj02_to_wgs84
+        from app.utils.coord_transform import gcj02_to_wgs84
 
         features = []
         pois = result.data if isinstance(result.data, list) else []

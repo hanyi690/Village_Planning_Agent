@@ -96,7 +96,7 @@ def compute_spatial_context(gis_data: Dict[str, Any]) -> SpatialContext:
 def _compute_centroid(boundary_geojson: Dict[str, Any]) -> Optional[Tuple[float, float]]:
     """Compute centroid of boundary polygon."""
     try:
-        from app.modules.gis.utils.geojson_utils import geojson_to_geodataframe
+        from app.utils.geojson_utils import geojson_to_geodataframe
 
         gdf = geojson_to_geodataframe(boundary_geojson)
         if gdf is None or gdf.empty:
@@ -115,8 +115,8 @@ def _compute_landuse_distribution(landuse_geojson: Dict[str, Any]) -> List[Landu
     使用 DLBM_TO_DLMC (合并多体系) 做名称查询，get_zone_type_for_dlbm 做分区查询。
     """
     try:
-        from app.modules.gis.utils.geojson_utils import geojson_to_geodataframe
-        from app.modules.gis.utils.area_engine import calculate_area_ha
+        from app.utils.geojson_utils import geojson_to_geodataframe
+        from app.utils.area_engine import calculate_area_ha
         from app.modules.gis.schema import get_zone_type_for_dlbm, dlbm_to_planning_zone, DLBM_TO_DLMC
 
         gdf = geojson_to_geodataframe(landuse_geojson)
@@ -163,7 +163,7 @@ def _cluster_natural_villages(
       4. Compute adjacency from neighboring parcels
     """
     try:
-        from app.modules.gis.utils.geojson_utils import geojson_to_geodataframe
+        from app.utils.geojson_utils import geojson_to_geodataframe
 
         gdf = geojson_to_geodataframe(landuse_geojson)
         if gdf is None or gdf.empty:
@@ -185,7 +185,7 @@ def _cluster_natural_villages(
 
         # Simple clustering: group by centroid proximity (within 200m)
         from shapely.ops import unary_union
-        from app.modules.gis.utils.crs_engine import project_to_metric
+        from app.utils.crs_engine import project_to_metric
 
         gdf_metric = project_to_metric(residential)
         if gdf_metric is None or gdf_metric.empty:
@@ -210,7 +210,7 @@ def _cluster_natural_villages(
             # Find parcels within this cluster
             cluster_centroid = component.centroid
             # Project back to WGS84 for the centroid
-            from app.modules.gis.utils.crs_engine import project_to_wgs84
+            from app.utils.crs_engine import project_to_wgs84
             # Find parcels whose metric centroid falls within the cluster
             mask = gdf_metric.geometry.centroid.within(component.buffer(10))
             cluster_parcels = residential[mask]
@@ -410,7 +410,7 @@ def _compute_constraint_summary(gis_data: Dict[str, Any]) -> List[ConstraintSumm
 def _compute_zone_adjacency(landuse_geojson: Dict[str, Any]) -> Dict[str, List[str]]:
     """Compute zone adjacency matrix summary from landuse data."""
     try:
-        from app.modules.gis.utils.geojson_utils import geojson_to_geodataframe
+        from app.utils.geojson_utils import geojson_to_geodataframe
         from app.modules.gis.schema import get_zone_type_for_dlbm
 
         gdf = geojson_to_geodataframe(landuse_geojson)
@@ -457,8 +457,8 @@ def _compute_zone_adjacency(landuse_geojson: Dict[str, Any]) -> Dict[str, List[s
 def _compute_total_area(geojson: Dict[str, Any]) -> float:
     """Compute total area in hectares from a GeoJSON FeatureCollection."""
     try:
-        from app.modules.gis.utils.geojson_utils import geojson_to_geodataframe
-        from app.modules.gis.utils.area_engine import calculate_area_ha
+        from app.utils.geojson_utils import geojson_to_geodataframe
+        from app.utils.area_engine import calculate_area_ha
 
         gdf = geojson_to_geodataframe(geojson)
         if gdf is None or gdf.empty:

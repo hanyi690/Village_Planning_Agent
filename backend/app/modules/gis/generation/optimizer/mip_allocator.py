@@ -114,7 +114,7 @@ class MIPZoneAllocator:
             return landuse_geojson
 
         from ..zone_generator import resolve_zone_type_for_dlbm
-        from ...utils.geojson_utils import build_parcel_index
+        from app.utils.geojson_utils import build_parcel_index
 
         parcel_db, _dup = build_parcel_index(landuse_geojson, zone_type_fn=resolve_zone_type_for_dlbm)
         parcels = [

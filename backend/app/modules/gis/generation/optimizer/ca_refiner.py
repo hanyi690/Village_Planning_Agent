@@ -16,10 +16,10 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.utils.logger import get_logger
-from ...utils.geojson_utils import geojson_to_geodataframe
-from ...utils.crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
-from ...utils.area_engine import calculate_area_ha
-from ...utils.geo_utils import safe_unary_union
+from app.utils.geojson_utils import geojson_to_geodataframe
+from app.utils.crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
+from app.utils.area_engine import calculate_area_ha
+from app.utils.geo_utils import safe_unary_union
 
 logger = get_logger(__name__)
 
