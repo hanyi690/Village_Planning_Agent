@@ -175,6 +175,49 @@ async def extract_structured_text(
 # ── Tool 2: lookup_land_use_code ────────────────────────────────────
 
 
+class GHYTBMMatch(BaseModel):
+    """A single GHYTBM (planning use code) match entry."""
+
+    ghytbm: str = ""
+    ghytmc: str = ""
+    zone_type: str = ""
+    vne_code: str = ""
+
+
+class DLBMMatch(BaseModel):
+    """A single DLBM (current land-use code) match entry."""
+
+    dlbm: str = ""
+    dlmc: str = ""
+    zone_type: str = ""
+
+
+class GHFLBMMatch(BaseModel):
+    """A single GHFLBM (planning classification) match entry."""
+
+    ghflbm: str = ""
+    ghytbm: str = ""
+    ghytmc: str = ""
+
+
+class LandUseCodeLookup(BaseModel):
+    """Typed result for lookup_land_use_code - replaces raw dict.
+
+    Encodes the name -> multi-system-code lookup result as typed models
+    so the tool's output structure is guaranteed consistent and validated.
+    Serialized via model_dump() into make_result()'s data field.
+    """
+
+    ghytbm: str = ""
+    ghytmc: str = ""
+    ghflbm: str = ""
+    vne_code: str = ""
+    dlbm_aliases: List[str] = []
+    zone_type: str = ""
+    candidates_ghytbm: List[GHYTBMMatch] = []
+    candidates_dlbm: List[DLBMMatch] = []
+
+
 @tool
 def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
     """Look up standard land-use codes for a given land-use name.
@@ -199,16 +242,16 @@ def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
             DLBM_TO_ZONE_TYPE,
         )
 
-        # Search in GHYTBM names (planning use codes)
-        ghytbm_matches = []
+        # Search in GHYTBM names (planning use codes) - typed matches
+        ghytbm_matches: List[GHYTBMMatch] = []
         for code, name in GHYTBM_TO_GHYTMC.items():
             if land_use_name in name or name in land_use_name:
-                ghytbm_matches.append({
-                    "ghytbm": code,
-                    "ghytmc": name,
-                    "zone_type": GHYTBM_TO_ZONE_TYPE.get(code, ""),
-                    "vne_code": GHYTBM_TO_VNE.get(code, ""),
-                })
+                ghytbm_matches.append(GHYTBMMatch(
+                    ghytbm=code,
+                    ghytmc=name,
+                    zone_type=GHYTBM_TO_ZONE_TYPE.get(code, ""),
+                    vne_code=GHYTBM_TO_VNE.get(code, ""),
+                ))
 
         # Search in DLBM names (current land-use codes)
         dlbm_matches = []
