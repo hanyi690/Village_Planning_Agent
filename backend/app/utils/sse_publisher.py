@@ -14,7 +14,7 @@ from datetime import datetime
 
 from app.core.events import SSEEventType
 from ..utils.logger import get_logger
-from ..modules.gis.schema.events import (
+from .sse_events import (
     GisResultEvent, GisLayerUpdateEvent, GISLayerConfig,
     GISAnalysisData, GISMapOptions,
 )

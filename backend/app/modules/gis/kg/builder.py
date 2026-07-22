@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
+from app.modules.gis.schema.spatial_types import CurrentLandUseParcel
+from app.utils.schema_validator import validate_ingestion_point
 
 from rdflib import Graph, Namespace, Literal, RDF, URIRef, BNode
 from rdflib.namespace import XSD
@@ -89,6 +91,43 @@ INDICATOR_PATTERNS = [
 
 # Zone definitions extracted from land_use_planning report tables
 ZONE_TYPE_PATTERNS = {
+
+@dataclass
+class KGInputParcels:
+    """Container for typed parcels consumed by KG builder.
+    
+    This class ensures all parcel data flows through the ingestion layer
+    via from_geojson() method, maintaining schema injection enforcement.
+    """
+    parcels: List[CurrentLandUseParcel] = field(default_factory=list)
+    
+    @classmethod
+    def from_geojson(cls, geojson: Dict[str, Any]) -> "KGInputParcels":
+        """Convert GeoJSON to typed parcels (via ingestion layer).
+        
+        This is the SINGLE ENTRY POINT for parcel data into KG builder.
+        All other code must use this wrapper to ensure schema injection.
+        
+        Args:
+            geojson: Standard GeoJSON FeatureCollection
+            
+        Returns:
+            KGInputParcels with validated typed parcels
+        """
+        from app.modules.gis.schema import ingest_current_landuse
+        
+        try:
+            # Use ingestion layer to enforce proper parsing
+            parcels = ingest_current_landuse(geojson)
+            logger.debug(f"[KGBuilder] Ingested {len(parcels)} parcels from GeoJSON")
+            return cls(parcels=parcels)
+        except Exception as e:
+            logger.error(f"[KGBuilder] Failed to ingest parcels from GeoJSON: {e}")
+            return cls(parcels=[])
+
+
+__all__ = ["KGInputParcels"]
+
     "农田保护区": {"color": "#FFE4B5", "restrictions": ["禁止非农化", "禁止非粮化"]},
     "村庄建设区": {"color": "#FF6347", "restrictions": ["建设用地规模受控"]},
     "生态保护区": {"color": "#2E8B57", "restrictions": ["禁止工业开发", "禁止城镇化"]},
@@ -156,14 +195,20 @@ class PlanningKG:
         landuse_geojson: Optional[Dict[str, Any]] = None,
         boundary_geojson: Optional[Dict[str, Any]] = None,
         gis_data: Optional[Dict[str, Any]] = None,
+        parcels: Optional[List[Any]] = None,
     ) -> "PlanningKG":
         """一键构建完整知识图谱。
 
         Args:
             reports: {dimension_key: {summary: {...}, content: "..."}}
-            landuse_geojson: 现状用地图斑 GeoJSON (660 parcels)
+            landuse_geojson: 现状用地图斑 GeoJSON (660 parcels) [legacy, prefer parcels]
             boundary_geojson: 村界 GeoJSON
             gis_data: Full GIS data dict (used to compute zone areas from actual data)
+            parcels: Typed CurrentLandUseParcel list from ingest_current_landuse() [preferred]
+
+        When parcels is provided, typed fields are used directly (parcel.dlbm, parcel.bsm, etc.)
+        instead of raw dict props.get() access. This is the schema-injection path.
+        When landuse_geojson is provided without parcels, the legacy raw dict path is used.
 
         Returns:
             self (for chaining)
@@ -181,8 +226,10 @@ class PlanningKG:
         self.g.add((village, RDF.type, PLN.Village))
         self.g.add((village, PLN.name, Literal(self.village_name or "unknown")))
 
-        # 2. Add parcels from GeoJSON
-        if landuse_geojson:
+        # 2. Add parcels — prefer typed parcels over raw GeoJSON
+        if parcels:
+            self._add_parcels_typed(parcels)
+        elif landuse_geojson:
             self._add_parcels(landuse_geojson)
 
         # 3. Add constraints from reports
@@ -627,6 +674,59 @@ class PlanningKG:
         if duplicate_bsms:
             logger.info(
                 f"[PlanningKG] Found {len(duplicate_bsms)} BSMs with multiple DLBM codes"
+            )
+
+    def _add_parcels_typed(self, parcels: List[Any]) -> None:
+        """Add parcels from typed CurrentLandUseParcel instances (schema-injection path).
+
+        Uses typed model fields (parcel.dlbm, parcel.bsm, parcel.area_sqm, etc.)
+        instead of raw dict props.get() access. This is the preferred path per
+        01_DESIGN_GOALS.md §6 — all GIS data enters through ingestion layer.
+
+        Args:
+            parcels: List of typed parcel objects from ingest_current_landuse()
+                     (CurrentLandUseParcel or BaseLandUseParcel instances)
+        """
+        from ..generation.zone_generator import resolve_zone_type_for_dlbm
+
+        duplicate_bsms = set()
+        seen_bsms = set()
+
+        for parcel in parcels:
+            bsm = str(parcel.bsm).strip()
+            dlbm = str(parcel.dlbm).strip()
+            dlmc = str(parcel.name).strip()
+            area = float(parcel.area_sqm) if parcel.area_sqm else 0.0
+
+            if not bsm:
+                continue
+
+            shape_area = float(parcel.area_sqm) if parcel.area_sqm else 0.0
+            composite_key = f"{bsm}_{dlbm}_{int(shape_area)}"
+            if bsm in seen_bsms:
+                duplicate_bsms.add(bsm)
+            seen_bsms.add(bsm)
+
+            parcel_uri = PLN[f"parcel_{composite_key}"]
+            self.g.add((parcel_uri, RDF.type, PLN.Parcel))
+            self.g.add((parcel_uri, PLN.bsm, Literal(bsm)))
+            self.g.add((parcel_uri, PLN.dlbm, Literal(dlbm)))
+            self.g.add((parcel_uri, PLN.dlmc, Literal(dlmc)))
+            self.g.add((parcel_uri, PLN.area_sqm, Literal(area, datatype=XSD.double)))
+            self.g.add((parcel_uri, PLN.area_ha, Literal(area / 10000, datatype=XSD.double)))
+
+            # Current zone type (DLBM classification)
+            zone_type = resolve_zone_type_for_dlbm(dlbm)
+            self.g.add((parcel_uri, PLN.current_zone_type, Literal(zone_type)))
+
+            # Parcel located_in Village
+            self.g.add((parcel_uri, Relations.located_in, PLN.village))
+
+            self._parcel_count += 1
+
+        if duplicate_bsms:
+            logger.info(
+                f"[PlanningKG] Found {len(duplicate_bsms)} BSMs with multiple DLBM codes (typed)"
             )
 
     def _add_constraints(
@@ -1091,6 +1191,89 @@ class PlanningKG:
                 f"{len(water_bodies)} water bodies, {len(facilities)} facilities"
             )
 
+    def add_annotations(self, annotations: list) -> "PlanningKG":
+        """Add Facility + Village entities from typed CurrentAnnotation models.
+
+        annotation.geojson 包含两类要素:
+          - 现状设施点: 篮/电/污/祠/站/广/卫/健/停/水/小
+          - 村名: 八社村/上举村/符坑村/文贵村
+
+        设施点 → PLN.Facility 实体
+        村名 → PLN.Village 实体 (补充 spatial_context 的 natural_villages)
+        """
+        from ..schema.spatial_types import CurrentFacility
+
+        facility_count = 0
+        village_count = 0
+
+        for ann in annotations:
+            cat = getattr(ann, "category", "")
+            if cat == "村名":
+                # Village name anchor
+                text = getattr(ann, "text", "")
+                if text and hasattr(ann, "geometry"):
+                    coords = ann.geometry.get("coordinates", [0, 0])
+                    village = PLN[f"village_ann_{text}"]
+                    self.g.add((village, RDF.type, PLN.Village))
+                    self.g.add((village, PLN.name, Literal(text)))
+                    self.g.add((village, PLN.lon, Literal(coords[0], datatype=XSD.double)))
+                    self.g.add((village, PLN.lat, Literal(coords[1], datatype=XSD.double)))
+                    self.g.add((village, Relations.located_in, PLN.village))
+                    village_count += 1
+            elif cat == "现状设施点":
+                facility = CurrentFacility.from_annotation_feature(
+                    {"properties": ann._raw, "geometry": ann.geometry}
+                ) if hasattr(ann, "_raw") else None
+                if facility is None:
+                    continue
+                fname = facility.facility_name or "unknown"
+                ftype = facility.facility_type or "公共服务"
+                uri_name = f"facility_ann_{fname}_{facility_count}"
+                fac_uri = PLN[uri_name]
+                self.g.add((fac_uri, RDF.type, PLN.Facility))
+                self.g.add((fac_uri, PLN.name, Literal(fname)))
+                self.g.add((fac_uri, PLN.facility_type, Literal(ftype)))
+                if hasattr(facility, "geometry"):
+                    coords = facility.geometry.get("coordinates", [0, 0])
+                    self.g.add((fac_uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
+                    self.g.add((fac_uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
+                category = getattr(facility, "category", "") or "public_service"
+                self.g.add((fac_uri, Relations.serves, Literal(category)))
+                self.g.add((fac_uri, Relations.located_in, PLN.village))
+                self.g.add((PLN.village, PLN.has_facility, fac_uri))
+                facility_count += 1
+
+        if facility_count or village_count:
+            logger.info(
+                f"[PlanningKG] Added annotations: {facility_count} facilities, "
+                f"{village_count} villages"
+            )
+        return self
+
+    def add_roads(self, roads: list) -> "PlanningKG":
+        """Add Road entities from typed CurrentRoad models."""
+        count = 0
+        for road in roads:
+            bsm = getattr(road, "bsm", "")
+            if not bsm:
+                bsm = f"road_{count}"
+            uri_name = f"road_{bsm}"
+            road_uri = PLN[uri_name]
+            self.g.add((road_uri, RDF.type, PLN.Road))
+            self.g.add((road_uri, PLN.name, Literal(f"道路_{bsm}")))
+            shape_length = getattr(road, "shape_length", 0.0) or 0.0
+            if shape_length:
+                self.g.add((road_uri, PLN.length, Literal(shape_length, datatype=XSD.double)))
+            road_level = getattr(road, "road_level", "") or "村道"
+            self.g.add((road_uri, PLN.road_level, Literal(road_level)))
+            self.g.add((road_uri, Relations.located_in, PLN.village))
+            self.g.add((PLN.village, Relations.connects, road_uri))
+            count += 1
+
+        if count:
+            logger.info(f"[PlanningKG] Added {count} roads")
+        return self
+
     def print_summary(self):
         """Print KG statistics."""
         constraints = self.get_constraints()
@@ -1101,3 +1284,35 @@ class PlanningKG:
         print(f"\n  Constraints:")
         for c in constraints:
             print(f"    {c.get('id','?')}: {c.get('field','?')} {c.get('op','?')} {c.get('value','?')} (from: {c.get('source','?')})")
+from dataclasses import dataclass, field
+from app.modules.gis.schema.spatial_types import CurrentLandUseParcel
+from app.utils.schema_validator import validate_ingestion_point
+from app.modules.gis.schema.spatial_types import CurrentLandUseParcel
+from app.utils.schema_validator import validate_ingestion_point
+
+
+@dataclass
+class KGInputParcels:
+    """Container for typed parcels consumed by KG builder."""
+    parcels: List[CurrentLandUseParcel] = field(default_factory=list)
+    
+    @classmethod
+    def from_geojson(cls, geojson: Dict[str, Any]) -> "KGInputParcels":
+        """Convert GeoJSON to typed parcels (via ingestion layer).
+        
+        This is the SINGLE ENTRY POINT for parcel data into KG builder.
+        All other code must use this wrapper to ensure schema injection.
+        """
+        from app.modules.gis.schema import ingest_current_landuse
+        
+        try:
+            # Use ingestion layer to enforce proper parsing
+            parcels = ingest_current_landuse(geojson)
+            logger.debug(f"[KGBuilder] Ingested {len(parcels)} parcels from GeoJSON")
+            return cls(parcels=parcels)
+        except Exception as e:
+            logger.error(f"[KGBuilder] Failed to ingest parcels from GeoJSON: {e}")
+            return cls(parcels=[])
+
+
+__all__ = ["KGInputParcels"]

@@ -292,14 +292,14 @@ async def parse_planning_text(
         Dict with operation_sequence, constraint_set, planning_intent.
     """
     try:
-        from app.agent.gis.spatial_context import compute_spatial_context
+        from app.modules.gis.spatial_context import compute_spatial_context
 
         # Compute spatial context from GIS data
         spatial_context = compute_spatial_context(gis_data or {})
 
         # Build KG from GIS data for on-demand spatial queries
         try:
-            from app.agent.gis.parse_agent import set_kg_instance
+            from app.agent.gis.parse.agent import set_kg_instance
             from app.modules.gis.kg import PlanningKG
             kg = PlanningKG(village_name=village_name)
             if gis_data:
@@ -315,7 +315,7 @@ async def parse_planning_text(
 
         # Initialize Gazetteer for place name → VillageGroup matching
         try:
-            import app.agent.gis.parse_agent as pa
+            import app.agent.gis.parse.agent as pa
             from app.modules.parsing.gazetteer import PlaceNameResolver
             gazetteer = PlaceNameResolver(spatial_context.natural_villages)
             pa._gazetteer = gazetteer
@@ -325,8 +325,8 @@ async def parse_planning_text(
             logger.warning("[parse_planning_text] Gazetteer init skipped: %s", gz_err)
 
         # Build and run PARSE Agent subgraph
-        from app.agent.gis.parse_agent import build_parse_agent_graph
-        from app.agent.gis.schema.parse_state import ParseAgentState
+        from app.agent.gis.parse.agent import build_parse_agent_graph
+        from app.agent.gis.parse.state import ParseAgentState
 
         graph = build_parse_agent_graph()
 
