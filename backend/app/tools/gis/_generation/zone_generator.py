@@ -17,8 +17,8 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from ..schema import ZoneIntent, UnifiedSpatialIntent
-from ..schema import (
+from app.modules.gis.schema import ZoneIntent, UnifiedSpatialIntent
+from app.modules.gis.schema import (
     get_zone_color,
     get_zone_type_for_dlbm,
     get_dlbms_for_zone_type,

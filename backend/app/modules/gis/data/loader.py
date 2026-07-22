@@ -199,7 +199,7 @@ def compute_intent_from_gis(
     Returns:
         Dict with zones[], facilities[], axes[], constraints[] from real data
     """
-    from ..analysis.metrics_calculator import GISMetricsCalculator
+    from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
     from ..schema import get_zone_type_for_dlbm, ZONE_TYPE_TO_DLBMS
 
     metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
@@ -269,7 +269,7 @@ def _build_gis_constraints_for_llm(gis_data: Optional[Dict[str, Any]]) -> str:
     """Build GIS-measured constraints string for LLM prompt injection."""
     if not gis_data:
         return ""
-    from ..analysis.metrics_calculator import GISMetricsCalculator
+    from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
     metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
     lines = [
         "## GIS 实测约束（必须遵守）",
@@ -365,7 +365,7 @@ def get_village_params(gis_data: Dict[str, Any]) -> Dict[str, str]:
     Returns:
         {"total_area": str, "land_use_description": str, "village_name": str}
     """
-    from ..analysis.metrics_calculator import GISMetricsCalculator
+    from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
     from ..schema import DLBM_TO_DLMC
 
     metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)

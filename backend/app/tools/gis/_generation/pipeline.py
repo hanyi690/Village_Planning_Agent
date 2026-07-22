@@ -62,9 +62,9 @@ def run_layout_pipeline(
     # ── Step 2: Conflict ────────────────────────────────────────
     if run_conflict:
         try:
-            from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
-            from app.modules.gis.analysis.conflict.detector import ConflictDetector
-            from app.modules.gis.analysis.conflict.resolver import ConflictResolver
+            from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
+            from app.tools.gis._conflict.detector import ConflictDetector
+            from app.tools.gis._conflict.resolver import ConflictResolver
 
             summaries = GISMetricsCalculator.compute_summaries(gis_data)
             conflict_report = ConflictDetector().detect_all(summaries)
@@ -81,8 +81,8 @@ def run_layout_pipeline(
     allocated_geojson = None
     if run_allocate:
         try:
-            from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
-            from app.modules.gis.generation.optimizer.mip_allocator import MIPZoneAllocator
+            from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
+            from .optimizer.mip_allocator import MIPZoneAllocator
 
             metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
             total_area_ha = metrics["total_area_ha"]
@@ -344,7 +344,7 @@ def build_three_way_comparison(
     gis_data: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Build three-way comparison report: gen vs planned, plan vs planned, gen vs plan."""
-    from app.modules.gis.rendering.compare_layouts import compare
+    from app.tools.gis._rendering.compare_layouts import compare
 
     protection = {}
     for key, name in [

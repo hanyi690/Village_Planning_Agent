@@ -9,7 +9,7 @@ from langchain_core.tools import tool
 @tool
 def calculate_gis_coverage(location: str, buffer_km: float = 5.0, max_features: int = 100) -> str:
     """Calculate GIS data coverage and completeness for a location."""
-    from app.modules.gis.analysis.coverage import calculate_gis_coverage
+    from ._analytics.coverage import calculate_gis_coverage
     if not location:
         return json.dumps({"success": False, "error": "location required"}, ensure_ascii=False)
     result = calculate_gis_coverage(location=location, buffer_km=buffer_km, max_features=max_features)
@@ -30,7 +30,7 @@ def analyze_accessibility(
         destinations: Destination list [[lon, lat], ...]
         center: Center coordinates [lon, lat]
     """
-    from app.modules.gis.analysis.accessibility import run_accessibility_analysis
+    from ._analytics.accessibility import run_accessibility_analysis
     o = tuple(origin) if origin else None
     c = tuple(center) if center else None
     ds = [tuple(d) if isinstance(d, list) else d for d in destinations] if destinations else None

@@ -10,7 +10,6 @@ Combines former models/, zone_schema/, and data/gdb_schema.py into one package:
   - gdb.py              — GDB_LAYER_REGISTRY, enrich_gdb_fields
 
 Moved out (re-exported for backward compat):
-  - analysis/dynamic_zoning.py — DynamicZoningEngine
   - utils/sse_events.py        — GISLayerConfig, GisResultEvent, …
 
 All encoding/code-set symbols are now derived from dicts/ YAML data.
@@ -139,9 +138,6 @@ from .colors import (
     get_facility_color,
     get_infra_color,
 )
-
-# ── Dynamic zoning (moved to analysis/, re-export for backward compat) ──
-from app.modules.gis.analysis.dynamic_zoning import DynamicZoningEngine
 
 # ── GDB output schema ──
 from .gdb import (
@@ -295,8 +291,6 @@ __all__ = [
     "PRIMARY_ZONE_COLORS", "SENSITIVITY_COLORS", "INFRA_COLORS",
     "ISOCHRONE_COLORS", "SPACE_CONTROL_COLORS",
     "get_zone_color", "get_facility_color", "get_infra_color",
-    # Dynamic zoning
-    "DynamicZoningEngine",
     # GDB
     "FEATURE_TYPE_CODES", "DEFAULT_GDB_PREFIX", "DEFAULT_GDB_DATE",
     "GDB_LAYER_REGISTRY", "INTERNAL_LAYER_TO_GDB_KEYS", "GDB_DTYPE_TO_PYTHON",

@@ -76,7 +76,7 @@ def allocate_zones(
     )
 
     try:
-        from app.modules.gis.generation.optimizer.mip_allocator import MIPZoneAllocator
+        from ._generation.optimizer.mip_allocator import MIPZoneAllocator
 
         allocator = MIPZoneAllocator()
         allocated_geojson, alloc_trace = allocator.solve(

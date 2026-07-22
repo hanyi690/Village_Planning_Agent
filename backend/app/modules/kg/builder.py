@@ -527,7 +527,7 @@ class PlanningKG:
         Constraint entities.
         """
         try:
-            from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
+            from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
             metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
         except Exception as e:
             logger.warning(f"[PlanningKG] GIS constraint computation failed: {e}")
@@ -633,7 +633,7 @@ class PlanningKG:
         """
         features = geojson.get("features", [])
         from app.modules.gis.schema import get_zone_type_for_dlbm
-        from app.modules.gis.generation.zone_generator import resolve_zone_type_for_dlbm
+        from app.tools.gis._generation.zone_generator import resolve_zone_type_for_dlbm
 
         duplicate_bsms = set()
         seen_bsms = set()
@@ -686,7 +686,7 @@ class PlanningKG:
             parcels: List of typed parcel objects from ingest_current_landuse()
                      (CurrentLandUseParcel or BaseLandUseParcel instances)
         """
-        from app.modules.gis.generation.zone_generator import resolve_zone_type_for_dlbm
+        from app.tools.gis._generation.zone_generator import resolve_zone_type_for_dlbm
 
         duplicate_bsms = set()
         seen_bsms = set()
@@ -1101,7 +1101,7 @@ class PlanningKG:
         establish the designated_as relationship between each parcel
         and its native planning zone.
         """
-        from app.modules.gis.generation.optimizer.mip_allocator import dlbm_to_planning_zone
+        from app.tools.gis._generation.optimizer.mip_allocator import dlbm_to_planning_zone
 
         count = 0
         for ft in landuse_geojson.get("features", []):

@@ -176,7 +176,7 @@ async def gis_data(request: DataRequest):
                 result["bbox"] = params.get("bbox")
 
         if "coverage" in request.include:
-            from app.modules.gis.analysis.coverage import calculate_coverage
+            from app.tools.gis._analytics.coverage import calculate_coverage
             result["coverage"] = calculate_coverage(gis_data)
 
         result["timing_ms"] = round((time.time() - t0) * 1000)
@@ -196,7 +196,7 @@ async def gis_analysis(request: AnalysisRequest):
     t0 = time.time()
     try:
         if request.analysis_type == "isochrone":
-            from app.modules.gis.analysis.isochrone import generate_isochrones
+            from app.tools.gis._analytics.isochrone import generate_isochrones
             result = generate_isochrones(
                 center=request.center,
                 time_minutes=request.time_minutes,
@@ -205,7 +205,7 @@ async def gis_analysis(request: AnalysisRequest):
             return _sanitize_floats({"success": True, "isochrones": result, "timing_ms": round((time.time() - t0) * 1000)})
 
         elif request.analysis_type == "accessibility":
-            from app.modules.gis.analysis.accessibility import analyze_accessibility
+            from app.tools.gis._analytics.accessibility import analyze_accessibility
             result = analyze_accessibility(center=request.center)
             return _sanitize_floats({"success": True, "accessibility": result, "timing_ms": round((time.time() - t0) * 1000)})
 
@@ -254,13 +254,13 @@ async def gis_validate(request: ValidateRequest):
 
 
 async def _validate_layout(request: ValidateRequest, t0: float) -> Dict[str, Any]:
-    from app.modules.gis.analysis.validation.layout_validator import LayoutValidator
+    from app.tools.gis._validation.layout_validator import LayoutValidator
 
     layout_configs = request.layout_configs
 
     # Mode 2: generate from jintian data then validate
     if request.use_jintian_data and not layout_configs:
-        from app.modules.gis.generation.pipeline import run_layout_pipeline
+        from app.tools.gis._generation.pipeline import run_layout_pipeline
         from app.modules.gis.data.loader import load_all
         from app.modules.gis.data.intent_cache import resolve_gen_intent_cached
         from app.tools.gis.parse import _dict_to_intent
@@ -299,7 +299,7 @@ async def _validate_layout(request: ValidateRequest, t0: float) -> Dict[str, Any
 
 
 async def _validate_facility(request: ValidateRequest, t0: float) -> Dict[str, Any]:
-    from app.modules.gis.analysis.validation.facility_validator import validate_facility_location
+    from app.tools.gis._validation.facility_validator import validate_facility_location
     result = validate_facility_location(
         facility_type=request.facility_type,
         location=request.location,
@@ -308,15 +308,15 @@ async def _validate_facility(request: ValidateRequest, t0: float) -> Dict[str, A
 
 
 async def _validate_ecological(request: ValidateRequest, t0: float) -> Dict[str, Any]:
-    from app.modules.gis.analysis.validation.facility_validator import assess_ecological_sensitivity
+    from app.tools.gis._validation.facility_validator import assess_ecological_sensitivity
     result = assess_ecological_sensitivity(request.location)
     return _sanitize_floats({"success": True, "sensitivity": result, "timing_ms": round((time.time() - t0) * 1000)})
 
 
 async def _validate_constraint(request: ValidateRequest, t0: float) -> Dict[str, Any]:
     from app.modules.gis.data.loader import load_all
-    from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
-    from app.modules.gis.analysis.conflict.detector import ConflictDetector
+    from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
+    from app.tools.gis._conflict.detector import ConflictDetector
 
     gis_data = load_all()
     summaries = GISMetricsCalculator.compute_summaries(gis_data)
@@ -333,7 +333,7 @@ async def _validate_constraint(request: ValidateRequest, t0: float) -> Dict[str,
 
 async def _validate_hazard(request: ValidateRequest, t0: float) -> Dict[str, Any]:
     from app.modules.gis.data.loader import load_all
-    from app.modules.gis.analysis.validation.facility_validator import SPATIAL_AVAILABLE
+    from app.tools.gis._validation.facility_validator import SPATIAL_AVAILABLE
 
     gis_data = load_all()
     hazard_geojson = gis_data.get("hazard_geojson")
@@ -378,7 +378,7 @@ async def gis_layout(request: LayoutRequest):
     try:
         from app.modules.gis.data.loader import load_all, load_planned
         from app.modules.gis.data.intent_cache import resolve_gen_intent_cached, resolve_plan_intent_cached, resolve_intent_live
-        from app.modules.gis.generation.pipeline import run_layout_pipeline, build_three_way_comparison
+        from app.tools.gis._generation.pipeline import run_layout_pipeline, build_three_way_comparison
         from app.tools.gis.parse import _dict_to_intent
 
         gis_data = load_all(request.village_name)
@@ -446,7 +446,7 @@ async def gis_layout(request: LayoutRequest):
         # Optional: validation
         validation = None
         if request.include_validation:
-            from app.modules.gis.analysis.validation.layout_validator import LayoutValidator
+            from app.tools.gis._validation.layout_validator import LayoutValidator
             layers = gen_result.get("layers") or plan_result.get("layers") or []
             if layers:
                 validator = LayoutValidator()
@@ -562,7 +562,7 @@ async def gis_zones(request: ZonesRequest):
             return {"success": False, "error": "GIS data not loaded", "timing_ms": round((time.time() - t0) * 1000)}
 
         if request.zone_type == "land_use":
-            from app.modules.gis.generation.land_use_zone_generator import LandUseZoneGenerator, VNE_CATEGORIES
+            from app.tools.gis._generation.land_use_zone_generator import LandUseZoneGenerator, VNE_CATEGORIES
             generator = LandUseZoneGenerator()
             geojson = generator.generate(
                 boundary=gis_data.get("boundary_geojson"),
@@ -579,7 +579,7 @@ async def gis_zones(request: ZonesRequest):
             })
 
         elif request.zone_type == "space_control":
-            from app.modules.gis.generation.space_control_generator import SpaceControlZoneGenerator, SPACE_CONTROL_ZONES
+            from app.tools.gis._generation.space_control_generator import SpaceControlZoneGenerator, SPACE_CONTROL_ZONES
             from app.modules.gis.schema.colors import SPACE_CONTROL_COLORS
 
             generator = SpaceControlZoneGenerator()

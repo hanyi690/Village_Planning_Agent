@@ -29,7 +29,7 @@ from tests.fixtures.gis_shared import (
 # 1. Planning Zone Mapper (8 tests)
 # ============================================================================
 
-from app.modules.gis.generation.optimizer.planning_zone_mapper import (
+from app.tools.gis._generation.optimizer.planning_zone_mapper import (
     PLANNING_ZONE_TO_ZONE_TYPES,
     ZONE_TYPE_TO_PLANNING_ZONE,
     map_planning_zone_targets_to_zone_types,
@@ -106,7 +106,7 @@ class TestPlanningZoneMapper:
 # 2. Layout Validator (10 tests)
 # ============================================================================
 
-from app.modules.gis.analysis.validation.layout_validator import (
+from app.tools.gis._validation.layout_validator import (
     LayoutValidator,
     ValidationReport,
 )
@@ -369,7 +369,7 @@ class TestIntentCache:
 # 5. Metrics Calculator (3 tests)
 # ============================================================================
 
-from app.modules.gis.analysis.metrics_calculator import GISMetricsCalculator
+from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
 
 
 class TestMetricsCalculator:
@@ -416,7 +416,7 @@ class TestMetricsCalculator:
 
     def test_area_unit_conversion(self):
         """_area_ha_from_props converts DLMJ (m²) to hectares."""
-        from app.modules.gis.analysis.metrics_calculator import _area_ha_from_props
+        from app.tools.gis._analytics.metrics_calculator import _area_ha_from_props
         # area_ha takes priority
         assert _area_ha_from_props({"area_ha": 5.0, "DLMJ": 50000}) == 5.0
         # DLMJ fallback: 50000 m² = 5 ha

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from ...schema import ZONE_TYPE_COLORS
+from app.modules.gis.schema import ZONE_TYPE_COLORS
 from app.modules.parsing.semantics import (
     CROSS_DIMENSION_METRICS,
     FieldRef,

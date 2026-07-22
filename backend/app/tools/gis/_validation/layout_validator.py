@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
-from ...schema import PLANNING_ZONE_NAMES
+from app.modules.gis.schema import PLANNING_ZONE_NAMES
 
 logger = get_logger(__name__)
 

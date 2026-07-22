@@ -224,7 +224,7 @@ def _generate_function_zones(
     if not landuse or not landuse.get("features"):
         return None
 
-    from app.modules.gis.generation.zone_generator import ZoneGenerator
+    from ._generation.zone_generator import ZoneGenerator
 
     boundary = gis_data.get("boundary_geojson")
     protection = _build_protection_zones(gis_data)
@@ -277,7 +277,7 @@ def _make_planning_zone_layer(
 
     # Merge adjacent same-type parcels via dissolve
     try:
-        from app.modules.gis.generation.optimizer.procedural import merge_parcels
+        from ._generation.optimizer.procedural import merge_parcels
         from app.utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geojson
         fc = {"type": "FeatureCollection", "features": features}
         gdf = geojson_to_geodataframe(fc)
@@ -337,7 +337,7 @@ def _generate_facilities(
     if not facilities_raw:
         return None
 
-    from app.modules.gis.generation.facility_placer import FacilityPlacer
+    from ._generation.facility_placer import FacilityPlacer
 
     placer = FacilityPlacer()
     geojson = placer.place(
@@ -368,7 +368,7 @@ def _generate_axes(
     if not intent or not has_axes:
         return None
 
-    from app.modules.gis.generation.axis_builder import AxisBuilder
+    from ._generation.axis_builder import AxisBuilder
 
     unified = _intent_from_typed(intent)
     builder = AxisBuilder()
@@ -407,7 +407,7 @@ def _generate_space_control_zone(
     if not boundary:
         return None
 
-    from app.modules.gis.generation.space_control_generator import SpaceControlZoneGenerator
+    from ._generation.space_control_generator import SpaceControlZoneGenerator
 
     generator = SpaceControlZoneGenerator()
     geojson = generator.generate(
@@ -446,7 +446,7 @@ def _generate_land_use_zone(
     if not geojson or not geojson.get("features"):
         return None
 
-    from app.modules.gis.generation.land_use_zone_generator import LandUseZoneGenerator
+    from ._generation.land_use_zone_generator import LandUseZoneGenerator
 
     generator = LandUseZoneGenerator()
     result = generator.generate(

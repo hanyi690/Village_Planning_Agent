@@ -1,13 +1,15 @@
 """GIS module — core exports.
 
-Architecture (by business function):
-  - data/        — data fetching, loading, providers
+Architecture (lean schema + data layer):
   - schema/      — data definitions, encodings, classification, GDB schema, models
-  - analysis/    — accessibility, coverage, conflict detection, validation
-  - generation/  — zone/facility/axis generation, optimizer
-  - rendering/   — map rendering, layout comparison
-  - kg/          — RDF knowledge graph (PlanningKG)
-  - utils/       — coordinate/geometry utilities
+  - data/        — data fetching, loading, providers
+
+Migrated out (see docs/gis/proposals/03_TOOL_FIRST_ARCHITECTURE.md):
+  - analysis/    → tools/gis/_conflict/, _validation/, _analytics/
+  - generation/  → tools/gis/_generation/
+  - rendering/   → tools/gis/_rendering/
+  - kg/          → modules/kg/
+  - utils/       → app/utils/
 """
 
 # ── Core schema (unified: models + zone_schema + gdb_schema) ──
