@@ -20,113 +20,18 @@ Inspired by:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
-# ── Spatial Context (injected into PARSE, spatial relations, no geometry) ──
-
-
-class LanduseEntry(BaseModel):
-    """Single land-use category entry in spatial context.
-
-    dlbm 字段的编码体系取决于数据来源:
-      - 现状层 (current/landuse.geojson): appendix5 编码
-      - 规划层 (planned/landuse.geojson DLBM列): tugui 编码
-    """
-
-    dlbm: str = ""  # 地类编码 (编码体系取决于数据来源: 现状=appendix5, 规划=tugui)
-    name: str = ""
-    count: int = 0
-    area_ha: float = 0.0
-    zone_type: str = ""
-    planning_zone: str = ""
-
-
-class NaturalVillageAnchor(BaseModel):
-    """Natural village spatial anchor — PARSE uses this to resolve location_desc.
-
-    Computed from landuse GeoJSON by clustering residential parcels
-    and matching place_aliases.yaml.
-    """
-
-    name: str = ""
-    center: Tuple[float, float] = (0.0, 0.0)
-    parcel_ids: List[str] = Field(default_factory=list)
-    dominant_landuse: str = ""
-    adjacent_to: List[str] = Field(default_factory=list)
-
-
-class SpatialRelation(BaseModel):
-    """Spatial relation triple computed from GIS geometry.
-
-    Subjects and objects are natural village names, land-use zones,
-    or infrastructure features.
-    """
-
-    subject: str = ""
-    relation: Literal[
-        "east_of",
-        "west_of",
-        "north_of",
-        "south_of",
-        "adjacent_to",
-        "contains",
-        "contained_by",
-        "near",
-        "along",
-        "between",
-    ] = "adjacent_to"
-    object: str = ""
-    confidence: float = 1.0
-    source: Literal[
-        "geometry_computed",
-        "alias_lookup",
-        "llm_inferred",
-    ] = "geometry_computed"
-
-
-class ConstraintSummary(BaseModel):
-    """Spatial summary of protection zones — PARSE uses this to structure constraints."""
-
-    zone_type: str = ""
-    rule: str = ""
-    area_ha: Optional[float] = None
-    geometry_type: Optional[str] = None
-    overlaps_with: List[str] = Field(default_factory=list)
-
-
-class SpatialContext(BaseModel):
-    """Spatially-aware GIS context for PARSE Agent.
-
-    Derived from GISDataBundle by compute_spatial_context().
-    Compact representation: ~2KB for 660 parcels (vs ~5MB raw GeoJSON).
-
-    Not injected: raw geometry coordinates (too large for LLM context).
-    Injected: spatial relations + anchors + constraint summaries.
-    """
-
-    # Base statistics (preserved from GISSummary)
-    parcel_count: int = 0
-    total_area_ha: float = 0.0
-    construction_boundary_ha: float = 0.0
-
-    # Land-use distribution (enhanced)
-    landuse_distribution: List[LanduseEntry] = Field(default_factory=list)
-
-    # Spatial anchors (new)
-    village_center: Optional[Tuple[float, float]] = None
-    natural_villages: List[NaturalVillageAnchor] = Field(default_factory=list)
-
-    # Spatial relation graph (new — key!)
-    spatial_relations: List[SpatialRelation] = Field(default_factory=list)
-
-    # Constraint summary (new)
-    constraint_summary: List[ConstraintSummary] = Field(default_factory=list)
-
-    # Zone adjacency matrix summary (new)
-    zone_adjacency: Dict[str, List[str]] = Field(default_factory=dict)
+from app.modules.gis.schema.contracts import (
+    ConstraintSummary,
+    LanduseEntry,
+    NaturalVillageAnchor,
+    SpatialContext,
+    SpatialRelation,
+)
 
 
 # ── Section classification ──────────────────────────────────────────
@@ -425,10 +330,10 @@ class ParseAgentState(BaseModel):
     section_map: List[SectionInfo] = Field(default_factory=list)
     parse_strategy: Literal["full", "incremental", "section_only"] = "full"
 
-    # Extraction results (intermediate)
-    raw_operations: List[Dict[str, Any]] = Field(default_factory=list)
-    raw_constraints: List[Dict[str, Any]] = Field(default_factory=list)
-    raw_targets: Dict[str, Any] = Field(default_factory=dict)
+    # Extraction results (intermediate — typed, not raw dicts)
+    raw_operations: List[SpatialOperation] = Field(default_factory=list)
+    raw_constraints: List[SpatialConstraint] = Field(default_factory=list)
+    raw_targets: SpatialPlanningIntent = Field(default_factory=SpatialPlanningIntent)
     raw_tables: Dict[str, Any] = Field(default_factory=dict)
 
     # Validation results
@@ -443,8 +348,22 @@ class ParseAgentState(BaseModel):
         default_factory=SpatialPlanningIntent
     )
 
+    # Draft texts from Phase A (think/explore nodes — Think-Then-Format pattern)
+    draft_operations: str = ""
+    draft_targets: str = ""
+
+    # Per-extract-node mappings (separate keys avoid InvalidUpdateError
+    # when explore_projects and explore_targets run in parallel)
+    code_mappings_projects: Dict[str, str] = Field(default_factory=dict)
+    place_mappings_projects: Dict[str, dict] = Field(default_factory=dict)
+    code_mappings_targets: Dict[str, str] = Field(default_factory=dict)
+    place_mappings_targets: Dict[str, dict] = Field(default_factory=dict)
+
     # Messages (LangGraph accumulated)
     messages: List[Any] = Field(default_factory=list)
+
+    # Per-node LLM trace data (populated by explore/format nodes, consumed by reporter)
+    llm_trace: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 __all__ = [

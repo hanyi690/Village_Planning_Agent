@@ -43,9 +43,9 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
       - planning_intent: SpatialPlanningIntent with zone targets
       - spatial_context: SpatialContext summary
     """
-    from app.agent.gis.parse_agent import build_parse_agent_graph
-    from app.agent.gis.schema.parse_state import ParseAgentState, SpatialContext
-    from app.agent.gis.spatial_context import compute_spatial_context
+    from app.agent.gis.parse.agent import build_parse_agent_graph
+    from app.agent.gis.parse.state import ParseAgentState, SpatialContext
+    from app.modules.gis.spatial_context import compute_spatial_context
 
     reports = state.reports or {}
     village_name = state.village_name

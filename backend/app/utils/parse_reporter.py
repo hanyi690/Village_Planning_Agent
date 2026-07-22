@@ -38,6 +38,8 @@ def generate_parse_report(
     section_map: List[Any] = None,
     output_dir: Path = None,
     timing_info: Dict[str, Any] = None,
+    pipeline_trace: List[Dict[str, Any]] = None,
+    kg_summary: Dict[str, Any] = None,
 ) -> Path:
     """Generate a Markdown report from PARSE Agent results.
 
@@ -52,6 +54,8 @@ def generate_parse_report(
         section_map: List of SectionInfo for document structure
         output_dir: Override output directory
         timing_info: Dict with timing metadata (total_seconds, model, etc.)
+        pipeline_trace: List of per-node trace dicts {node, elapsed_s, tokens, summary, tool_calls, draft_preview}
+        kg_summary: Dict with KG build stats {triple_count, facilities, roads, villages}
 
     Returns:
         Path to the generated Markdown file.
@@ -119,6 +123,33 @@ def generate_parse_report(
     lines.append("\n---\n")
     lines.append("## 7. 编码验证\n")
     lines.append(_format_encoding_validation(operation_sequence, planning_intent))
+
+    # Section 8: KG Build Summary
+    if kg_summary:
+        lines.append("\n---\n")
+        lines.append("## 8. 知识图谱构建\n")
+        lines.append(_format_kg_summary(kg_summary))
+
+    # Section 9: Pipeline Trace (ALWAYS present)
+    lines.append("\n---\n")
+    lines.append("## 9. 管线执行追踪\n")
+    lines.append(_format_pipeline_trace(pipeline_trace or []))
+
+    # Section A: Tool Call Log (detailed)
+    if pipeline_trace:
+        tool_trace = _extract_tool_trace(pipeline_trace)
+        if tool_trace:
+            lines.append("\n---\n")
+            lines.append("## 10. 工具调用日志\n")
+            lines.append(_format_tool_trace(tool_trace))
+
+    # Section B: LLM Output Previews
+    if pipeline_trace:
+        llm_previews = _extract_llm_previews(pipeline_trace)
+        if llm_previews:
+            lines.append("\n---\n")
+            lines.append("## 11. LLM 输出预览\n")
+            lines.append(_format_llm_previews(llm_previews))
 
     # Write file
     content = "\n".join(lines)
@@ -375,7 +406,7 @@ def _format_planning_intent(intent: Dict[str, Any]) -> str:
             density = zt.get("density", "")
             pref = zt.get("spatial_preference", {})
             pref_str = f"{pref.get('direction', '')} (ref={pref.get('reference', '')})" if pref else ""
-            adj = zt.get("adjacency_rules", {})
+            adj = zt.get("adjacency_rules") or {}
             prefer = ", ".join(adj.get("prefer", []))
             avoid = ", ".join(adj.get("avoid", []))
             lines.append(f"| {lu} | {dlbm} | {ratio:.1%} | {density} | {pref_str} | {prefer} | {avoid} |")
@@ -514,6 +545,219 @@ def _format_encoding_validation(
 
     if not lines:
         lines.append("_（无编码数据可验证）_")
+
+    return "\n".join(lines)
+
+
+# ── New sections: KG summary, pipeline trace, tool calls, LLM previews ──
+
+
+def _format_kg_summary(kg: Dict[str, Any]) -> str:
+    """Format KG build summary."""
+    lines = []
+    lines.append(f"| 指标 | 值 |")
+    lines.append(f"|------|------|")
+    lines.append(f"| 三元组总数 | {kg.get('triple_count', 0)} |")
+    lines.append(f"| 地块实体 | {kg.get('parcel_count', 0)} |")
+    lines.append(f"| 设施实体 | {kg.get('facility_count', 0)} |")
+    lines.append(f"| 道路实体 | {kg.get('road_count', 0)} |")
+    lines.append(f"| 村庄锚点 | {kg.get('village_count', 0)} |")
+    constraints = kg.get("constraint_count", 0)
+    lines.append(f"| 约束实体 | {constraints} |")
+    if kg.get("error"):
+        lines.append(f"\n⚠️ KG 构建警告: {kg['error']}")
+    return "\n".join(lines)
+
+
+def _format_pipeline_trace(trace: List[Dict[str, Any]]) -> str:
+    """Format pipeline execution trace as a detailed table."""
+    if not trace:
+        return "_（无追踪数据）_"
+
+    lines = []
+    lines.append("| 节点 | 耗时 | Tokens | 状态 | 产出摘要 |")
+    lines.append("|------|------|--------|------|----------|")
+    total_time = 0
+    for entry in trace:
+        node = entry.get("node", "?")
+        elapsed = entry.get("elapsed_s", 0)
+        total_time += elapsed
+        tokens = entry.get("tokens", 0)
+        status = entry.get("status", "done")
+        summary = entry.get("summary", "")
+
+        status_icon = {"ok": "✅", "fail": "❌", "skip": "⏭️"}.get(status, "✅")
+        lines.append(f"| {node} | {elapsed:.0f}s | {tokens} | {status_icon} {status} | {summary[:80]} |")
+
+    lines.append(f"\n> 节点总耗时: **{total_time:.0f}s**")
+    return "\n".join(lines)
+
+
+def _extract_tool_trace(trace: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Extract tool call details from pipeline trace.
+
+    Sources:
+      1. entry["tool_calls"] — flattened from _build_trace_entry (has name, args, _phase)
+      2. entry["llm_calls"][*]["tool_results"] — per-call results (has name, args, result)
+    """
+    tool_entries = []
+    for entry in trace:
+        node = entry.get("node", "?")
+
+        # Source 1: flattened tool_calls from _build_trace_entry
+        for tc in entry.get("tool_calls", []):
+            tc_copy = dict(tc)
+            tc_copy["_node"] = node
+            tool_entries.append(tc_copy)
+
+        # Source 2: tool_results from llm_calls (has actual result content)
+        for call in entry.get("llm_calls", []):
+            phase = call.get("phase", "")
+            for tr in call.get("tool_results", []):
+                tr_copy = dict(tr)
+                tr_copy["_node"] = node
+                tr_copy["_phase"] = phase
+                tool_entries.append(tr_copy)
+
+        # Legacy: tool_results_summary
+        if entry.get("tool_results_summary"):
+            tool_entries.append({
+                "_node": node,
+                "name": "SUMMARY",
+                "args": entry.get("tool_results_summary", ""),
+                "result": "",
+            })
+    return tool_entries
+
+
+def _format_tool_trace(tool_trace: List[Dict[str, Any]]) -> str:
+    """Format tool call log as a detailed table with results."""
+    import json as _json
+
+    lines = []
+    lines.append(f"共 **{len(tool_trace)}** 条工具调用\n")
+    lines.append("| # | 节点 | 阶段 | 工具 | 参数 | 结果预览 |")
+    lines.append("|---|------|------|------|------|----------|")
+
+    for i, tc in enumerate(tool_trace[:100]):  # max 100 for readability
+        node = tc.get("_node", "?")
+        phase = tc.get("_phase", "")
+        tool_name = tc.get("name", tc.get("tool_name", "?"))
+        if tool_name == "SUMMARY" and not tc.get("result"):
+            lines.append(f"| {i+1} | {node} | {phase} | 📊 工具汇总 | {tc['args'][:60]} | — |")
+            continue
+        args = tc.get("args", {})
+        args_str = _json.dumps(args, ensure_ascii=False, default=str)[:120]
+        # Use "result" (from tool_results) or "result_preview" (legacy)
+        result = tc.get("result", tc.get("result_preview", ""))[:120]
+        lines.append(f"| {i+1} | {node} | {phase} | `{tool_name}` | {args_str} | {result} |")
+
+    if len(tool_trace) > 100:
+        lines.append(f"\n> ...还有 {len(tool_trace) - 100} 条调用（已省略）")
+    return "\n".join(lines)
+
+
+def _extract_llm_previews(trace: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Extract LLM call details from pipeline trace.
+
+    Returns list of dicts with:
+      - node, phase, system_prompt, user_prompt, thinking_content,
+        response_content, tool_call_count, draft_full, draft_preview
+    """
+    previews = []
+    for entry in trace:
+        node = entry.get("node", "?")
+
+        # From llm_calls (detailed per-call data)
+        for call in entry.get("llm_calls", []):
+            preview_item = {
+                "node": node,
+                "phase": call.get("phase", ""),
+                "system_prompt": call.get("system_prompt", ""),
+                "user_prompt": call.get("user_prompt", ""),
+                "thinking_content": call.get("thinking_content", ""),
+                "response_content": call.get("response_content", ""),
+                "tool_call_count": call.get("tool_call_count", 0),
+                "elapsed_s": call.get("elapsed_s", 0),
+            }
+            previews.append(preview_item)
+
+        # Also include draft full content for explore nodes
+        draft_full = entry.get("draft_full", "")
+        if draft_full and not entry.get("llm_calls"):
+            previews.append({
+                "node": node,
+                "phase": "draft",
+                "system_prompt": "",
+                "user_prompt": "",
+                "thinking_content": "",
+                "response_content": draft_full,
+                "tool_call_count": 0,
+                "elapsed_s": 0,
+                "draft_len": entry.get("draft_length", 0),
+            })
+
+        # Format node results (legacy)
+        format_result = entry.get("format_result", "")
+        if format_result and not entry.get("llm_calls"):
+            previews.append({
+                "node": node,
+                "phase": "format",
+                "system_prompt": "",
+                "user_prompt": "",
+                "thinking_content": "",
+                "response_content": format_result,
+                "tool_call_count": 0,
+                "elapsed_s": 0,
+            })
+    return previews
+
+
+def _format_llm_previews(previews: List[Dict[str, Any]]) -> str:
+    """Format LLM call details with system/user prompts, thinking, and response."""
+    lines = []
+    for p in previews:
+        node = p.get("node", "?")
+        phase = p.get("phase", "")
+        header = f"{node}" if not phase else f"{node} ({phase})"
+        lines.append(f"### {header}\n")
+
+        # System prompt
+        sys_prompt = p.get("system_prompt", "")
+        if sys_prompt:
+            lines.append("**System Prompt:**\n")
+            lines.append("```")
+            lines.append(sys_prompt[:3000])
+            lines.append("```\n")
+
+        # User prompt
+        user_prompt = p.get("user_prompt", "")
+        if user_prompt:
+            lines.append("**User Prompt:**\n")
+            lines.append("```")
+            lines.append(user_prompt[:3000])
+            lines.append("```\n")
+
+        # Thinking chain
+        thinking = p.get("thinking_content", "")
+        if thinking:
+            lines.append(f"**Thinking Chain** ({len(thinking)} chars):\n")
+            lines.append("<details>\n<summary>展开 thinking</summary>\n\n")
+            lines.append("```")
+            lines.append(thinking[:4000])
+            lines.append("```\n</details>\n")
+
+        # Response
+        response = p.get("response_content", "")
+        if response:
+            draft_len = p.get("draft_len", len(response))
+            lines.append(f"**Response** ({draft_len} chars, {p.get('tool_call_count', 0)} tool calls, "
+                         f"{p.get('elapsed_s', 0):.1f}s):\n")
+            lines.append("```")
+            lines.append(response[:5000])
+            lines.append("```\n")
+
+        lines.append("---\n")
 
     return "\n".join(lines)
 

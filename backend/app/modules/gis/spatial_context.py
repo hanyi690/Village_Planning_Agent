@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from app.agent.gis.schema.parse_state import (
+from app.modules.gis.schema.contracts import (
     ConstraintSummary,
     LanduseEntry,
     NaturalVillageAnchor,

@@ -31,7 +31,7 @@ def create_parse_agent_graph():
     Returns:
         CompiledStateGraph with ParseAgentState schema.
     """
-    from app.agent.gis.parse_agent import build_parse_agent_graph
+    from app.agent.gis.parse.agent import build_parse_agent_graph
     return build_parse_agent_graph()
 
 
