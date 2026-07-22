@@ -19,23 +19,22 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# ── Code sets from code_sets.py (single source of truth) ──
-from .code_sets import (
+# ── Code sets from schema (single source of truth) ──
+from app.modules.gis.schema.code_sets import (
     BASIC_FARMLAND_CODES,
     FOREST_CODES,
     WATER_CODES,
     FORESTRY_CODES,
     ECOLOGICAL_PROTECTION_CODES,
 )
-# Late imports for functions (avoid circular dependency: __init__ imports DynamicZoningEngine,
-# and __init__ imports these from code_sets)
+# Late imports for functions (avoid circular dependency)
 _dlbm_to_planning_zone = None
 _get_primary_zone_for_planning_zone = None
 
 def _ensure_funcs():
     global _dlbm_to_planning_zone, _get_primary_zone_for_planning_zone
     if _dlbm_to_planning_zone is None:
-        from . import dlbm_to_planning_zone as _dpz, get_primary_zone_for_planning_zone as _gppz
+        from app.modules.gis.schema import dlbm_to_planning_zone as _dpz, get_primary_zone_for_planning_zone as _gppz
         _dlbm_to_planning_zone = _dpz
         _get_primary_zone_for_planning_zone = _gppz
 

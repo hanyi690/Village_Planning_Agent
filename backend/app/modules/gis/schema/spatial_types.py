@@ -209,6 +209,20 @@ class CurrentRoad(SpatialFeature):
     road_width: float = 0.0    # 道路宽度 (米)
     road_name: str = ""        # 道路名称
 
+    @classmethod
+    def from_geojson_feature(cls, feature: dict) -> "CurrentRoad":
+        """从 GeoJSON Feature 构建 typed model."""
+        props = feature.get("properties", {})
+        return cls(
+            geometry=feature.get("geometry", {}),
+            bsm=props.get("BSM", ""),
+            shape_length=float(props.get("Shape_Length", 0) or 0),
+            road_level=props.get("road_level", "村道"),
+            road_width=float(props.get("road_width", 0) or 0),
+            road_name=props.get("road_name", ""),
+            _raw=props,
+        )
+
 
 @dataclass
 class CurrentFacility(SpatialFeature):
@@ -223,6 +237,48 @@ class CurrentFacility(SpatialFeature):
     service_radius: float = 0.0  # 服务半径 (米, 公共服务设施)
     category: str = ""       # 分类: infrastructure(基础设施) / public_service(公共服务)
 
+    # 注记文本到设施类型的映射
+    _LABEL_TYPE_MAP: dict = field(default_factory=lambda: {
+        "篮": "体育", "健": "体育", "广": "广场", "停": "停车",
+        "电": "电力", "污": "排水", "水": "给水", "垃": "环卫",
+        "卫": "公厕", "祠": "文化", "村": "村委会", "站": "交通",
+        "小": "学校",
+    }, repr=False, init=False)
+
+    @classmethod
+    def from_annotation_feature(cls, feature: dict) -> "CurrentFacility | None":
+        """从 annotation.geojson 的设施点 Feature 构建.
+        注记文本作为设施名称, 坐标作为位置.
+        返回 None 如果分类不是现状设施点.
+        """
+        props = feature.get("properties", {})
+        category = props.get("分类", props.get("category", ""))
+        if category != "现状设施点":
+            return None
+
+        text = props.get("注记", props.get("text", ""))
+        label_map = {
+            "篮": "体育", "健": "体育", "广": "广场", "停": "停车",
+            "电": "电力", "污": "排水", "水": "给水", "垃": "环卫",
+            "卫": "公厕", "祠": "文化", "村": "村委会", "站": "交通",
+            "小": "学校",
+        }
+        facility_type = label_map.get(text, "公共服务")
+        # 分类: 基础设施(电/水/污) vs 公共服务(广场/文化/体育/学校)
+        infra_types = {"电力", "排水", "给水", "环卫", "交通"}
+        cat = "infrastructure" if facility_type in infra_types else "public_service"
+
+        return cls(
+            geometry=feature.get("geometry", {}),
+            bsm=props.get("BSM", ""),
+            facility_type=facility_type,
+            facility_name=text,
+            scale="",
+            service_radius=0.0,
+            category=cat,
+            _raw=props,
+        )
+
 
 @dataclass
 class CurrentAnnotation(SpatialFeature):
@@ -236,6 +292,20 @@ class CurrentAnnotation(SpatialFeature):
 
     text: str = ""           # 注记文本 (≤100字符)
     category: str = ""       # 注记分类 (现状设施点/村名)
+
+    @classmethod
+    def from_geojson_feature(cls, feature: dict) -> "CurrentAnnotation":
+        """从 GeoJSON Feature 构建 typed model.
+        处理中文字段名: 注记→text, 分类→category
+        """
+        props = feature.get("properties", {})
+        return cls(
+            geometry=feature.get("geometry", {}),
+            bsm=props.get("BSM", ""),
+            text=props.get("注记", props.get("text", "")),
+            category=props.get("分类", props.get("category", "")),
+            _raw=props,
+        )
 
 
 # ============================================================
@@ -286,6 +356,28 @@ class EcologicalRedline(ControlLine):
     zone: float = 0.0        # 分带号
     city: str = ""           # 所属地市 (≤20字符)
     object_id: int = 0       # 对象ID
+
+    @classmethod
+    def from_geojson_feature(cls, feature: dict) -> "EcologicalRedline":
+        """从 GeoJSON Feature 构建 typed model.
+
+        处理中文字段名: 区县→district, 地市→city, OBJECTID→object_id.
+        ControlLine 共享字段: mj (面积).
+        """
+        props = feature.get("properties", {})
+        try:
+            obj_id = int(props.get("OBJECTID", props.get("object_id", 0)) or 0)
+        except (ValueError, TypeError):
+            obj_id = 0
+        return cls(
+            geometry=feature.get("geometry", {}),
+            bsm=str(props.get("BSM", "")).strip(),
+            mj=float(props.get("MJ", props.get("mj", 0)) or 0),
+            district=str(props.get("区县", props.get("district", ""))).strip(),
+            city=str(props.get("地市", props.get("city", ""))).strip(),
+            object_id=obj_id,
+            _raw=props,
+        )
 
 
 @dataclass
@@ -348,6 +440,25 @@ class GeologicalHazardPoint(SpatialFeature):
     latitude: str = ""       # 纬度 (DMS 格式)
     hazard_type: str = ""    # 灾害类型 (崩塌/滑坡/泥石流/地面塌陷)
     scale: str = ""          # 灾害规模 (小型/中型/大型)
+
+    @classmethod
+    def from_geojson_feature(cls, feature: dict) -> "GeologicalHazardPoint":
+        """从 GeoJSON Feature 构建 typed model.
+
+        处理中文字段名: 名称→name, 类型→hazard_type, 大小→scale,
+                       纬度→latitude, 经度→longitude
+        """
+        props = feature.get("properties", {})
+        return cls(
+            geometry=feature.get("geometry", {}),
+            bsm=str(props.get("BSM", "")).strip(),
+            name=str(props.get("名称", props.get("name", ""))).strip(),
+            longitude=str(props.get("经度", props.get("longitude", ""))).strip(),
+            latitude=str(props.get("纬度", props.get("latitude", ""))).strip(),
+            hazard_type=str(props.get("类型", props.get("hazard_type", ""))).strip(),
+            scale=str(props.get("大小", props.get("scale", ""))).strip(),
+            _raw=props,
+        )
 
 
 @dataclass

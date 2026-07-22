@@ -2,14 +2,16 @@
 
 Combines former models/, zone_schema/, and data/gdb_schema.py into one package:
   - canonical.py        — BBox, CRS, GeoFeature, GISDataBundle, GISMetadata
-  - intent.py           — ZoneIntent, FacilityIntent, AxisIntent, UnifiedSpatialIntent
-  - pipeline.py         — ConflictItem, ConflictReport, ValidationReport, ExportResult
+  - contracts.py        — ZoneIntent, SpatialContext, AllocationResult, …
   - ingestion.py        — ingest_* (pure injection port); types in spatial_types
-  - encoding_registry.py — EncodingRegistry, get_encoding_registry
+  - classification.py   — LandUseClass, ClassificationSchema, SCHEMA
   - dicts/              — YAML-driven Code Dictionary Center (single source of truth)
   - colors.py           — ZONE_TYPE_COLORS, PLANNING_ZONE_COLORS, color lookup
-  - dynamic_zoning.py   — DynamicZoningEngine
   - gdb.py              — GDB_LAYER_REGISTRY, enrich_gdb_fields
+
+Moved out (re-exported for backward compat):
+  - analysis/dynamic_zoning.py — DynamicZoningEngine
+  - utils/sse_events.py        — GISLayerConfig, GisResultEvent, …
 
 All encoding/code-set symbols are now derived from dicts/ YAML data.
 Import from this package for convenience, or use dicts/ directly.
@@ -29,7 +31,7 @@ from .canonical import (
     GISMetadata,
 )
 
-# ── Data contracts (intent + pipeline) ──
+# ── Data contracts (intent + pipeline + spatial context) ──
 from .contracts import (
     Direction,
     Density,
@@ -44,6 +46,11 @@ from .contracts import (
     ValidationReport,
     AllocationResult,
     ExportResult,
+    LanduseEntry,
+    NaturalVillageAnchor,
+    SpatialRelation,
+    ConstraintSummary,
+    SpatialContext,
 )
 
 # ── Encoding registry (lives in classification) ──
@@ -133,8 +140,8 @@ from .colors import (
     get_infra_color,
 )
 
-# ── Dynamic zoning ──
-from .dynamic_zoning import DynamicZoningEngine
+# ── Dynamic zoning (moved to analysis/, re-export for backward compat) ──
+from app.modules.gis.analysis.dynamic_zoning import DynamicZoningEngine
 
 # ── GDB output schema ──
 from .gdb import (
@@ -155,8 +162,8 @@ from .gdb import (
     enrich_gdb_fields,
 )
 
-# ── SSE event contracts ──
-from .events import (
+# ── SSE event contracts (moved to app/utils/sse_events.py, re-export for backward compat) ──
+from app.utils.sse_events import (
     GISAnalysisData,
     GISLayerConfig,
     GISMapOptions,
@@ -187,7 +194,7 @@ from .code_sets import (
     # Code sets
     BASIC_FARMLAND_CODES, GENERAL_AGRICULTURE_CODES,
     ECOLOGICAL_CODES, FOREST_CODES,
-    FORESTRY_CODES, WATER_CODES,
+    FORESTRY_CODES, WATER_CODES, GRASSLAND_CODES,
     ECOLOGICAL_PROTECTION_CODES, ECOLOGICAL_CONTROL_CODES,
     PROTECTED_DLBM_CODES,
     CONSTRUCTION_USE_TYPES, CONSTRUCTION_ZONE_TYPES,
@@ -238,6 +245,9 @@ __all__ = [
     # Pipeline
     "ConflictItem", "ConflictReport", "ViolationItem", "ValidationReport",
     "AllocationResult", "ExportResult",
+    # Spatial context (GIS → Agent contract)
+    "LanduseEntry", "NaturalVillageAnchor", "SpatialRelation",
+    "ConstraintSummary", "SpatialContext",
     # Encoding registry
     "EncodingRegistry", "get_encoding_registry",
     # Dictionary Center
@@ -268,7 +278,7 @@ __all__ = [
     # Code sets
     "BASIC_FARMLAND_CODES", "GENERAL_AGRICULTURE_CODES",
     "ECOLOGICAL_CODES", "FOREST_CODES",
-    "FORESTRY_CODES", "WATER_CODES",
+    "FORESTRY_CODES", "WATER_CODES", "GRASSLAND_CODES",
     "ECOLOGICAL_PROTECTION_CODES", "ECOLOGICAL_CONTROL_CODES",
     "PROTECTED_DLBM_CODES",
     "CONSTRUCTION_USE_TYPES", "CONSTRUCTION_ZONE_TYPES",

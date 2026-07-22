@@ -46,6 +46,7 @@ ECOLOGICAL_CODES: Set[str] = _tugui.to_set("code", filter_tag="ECOLOGICAL")
 FOREST_CODES: Set[str] = _tugui.to_set("code", filter_tag="FOREST")
 FORESTRY_CODES: Set[str] = _tugui.to_set("code", filter_tag="FORESTRY")
 WATER_CODES: Set[str] = _tugui.to_set("code", filter_tag="WATER")
+GRASSLAND_CODES: Set[str] = _tugui.to_set("code", filter_tag="GRASSLAND")
 
 ECOLOGICAL_PROTECTION_CODES: Set[str] = FOREST_CODES | WATER_CODES
 ECOLOGICAL_CONTROL_CODES: Set[str] = set()

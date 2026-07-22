@@ -437,6 +437,18 @@ def ingest_feature(
         props = feat.get("properties", {})
         geom = feat.get("geometry", {})
 
+        # Prefer typed from_geojson_feature() classmethod if available
+        # This handles Chinese field names (注记→text, 分类→category) correctly
+        if hasattr(model_cls, 'from_geojson_feature'):
+            try:
+                instance = model_cls.from_geojson_feature(feat)
+                if instance is not None:
+                    features.append(instance)
+                    continue
+            except Exception as e:
+                warnings.append(f"[feature#{i}] from_geojson_feature failed: {e}")
+                # Fall through to generic construction
+
         kwargs: Dict[str, Any] = {"geometry": geom, "_raw": props}
 
         for field_name in _model_fields:

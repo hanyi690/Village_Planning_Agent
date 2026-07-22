@@ -10,7 +10,7 @@ Consumed by: ZoneGenerator, FacilityPlacer, AxisBuilder, allocate/generate tools
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -182,6 +182,93 @@ class ExportResult(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
+# ============================================================
+# Spatial Context (computed from GIS data → LLM context injection)
+# ============================================================
+
+
+class LanduseEntry(BaseModel):
+    """Single land-use category entry in spatial context.
+
+    dlbm 字段的编码体系取决于数据来源:
+      - 现状层 (current/landuse.geojson): appendix5 编码
+      - 规划层 (planned/landuse.geojson DLBM列): tugui 编码
+    """
+
+    dlbm: str = ""
+    name: str = ""
+    count: int = 0
+    area_ha: float = 0.0
+    zone_type: str = ""
+    planning_zone: str = ""
+
+
+class NaturalVillageAnchor(BaseModel):
+    """Natural village spatial anchor — PARSE uses this to resolve location_desc.
+
+    Computed from landuse GeoJSON by clustering residential parcels
+    and matching place_aliases.yaml.
+    """
+
+    name: str = ""
+    center: Tuple[float, float] = (0.0, 0.0)
+    parcel_ids: List[str] = Field(default_factory=list)
+    dominant_landuse: str = ""
+    adjacent_to: List[str] = Field(default_factory=list)
+
+
+class SpatialRelation(BaseModel):
+    """Spatial relation triple computed from GIS geometry.
+
+    Subjects and objects are natural village names, land-use zones,
+    or infrastructure features.
+    """
+
+    subject: str = ""
+    relation: Literal[
+        "east_of", "west_of", "north_of", "south_of",
+        "adjacent_to", "contains", "contained_by",
+        "near", "along", "between",
+    ] = "adjacent_to"
+    object: str = ""
+    confidence: float = 1.0
+    source: Literal[
+        "geometry_computed", "alias_lookup", "llm_inferred",
+    ] = "geometry_computed"
+
+
+class ConstraintSummary(BaseModel):
+    """Spatial summary of protection zones — PARSE uses this to structure constraints."""
+
+    zone_type: str = ""
+    rule: str = ""
+    area_ha: Optional[float] = None
+    geometry_type: Optional[str] = None
+    overlaps_with: List[str] = Field(default_factory=list)
+
+
+class SpatialContext(BaseModel):
+    """Spatially-aware GIS context for PARSE Agent.
+
+    Derived from GISDataBundle by compute_spatial_context().
+    Compact representation: ~2KB for 660 parcels (vs ~5MB raw GeoJSON).
+
+    Not injected: raw geometry coordinates (too large for LLM context).
+    Injected: spatial relations + anchors + constraint summaries.
+    """
+
+    parcel_count: int = 0
+    total_area_ha: float = 0.0
+    construction_boundary_ha: float = 0.0
+
+    landuse_distribution: List[LanduseEntry] = Field(default_factory=list)
+    village_center: Optional[Tuple[float, float]] = None
+    natural_villages: List[NaturalVillageAnchor] = Field(default_factory=list)
+    spatial_relations: List[SpatialRelation] = Field(default_factory=list)
+    constraint_summary: List[ConstraintSummary] = Field(default_factory=list)
+    zone_adjacency: Dict[str, List[str]] = Field(default_factory=dict)
+
+
 __all__ = [
     "Direction",
     "Density",
@@ -196,4 +283,10 @@ __all__ = [
     "ValidationReport",
     "AllocationResult",
     "ExportResult",
+    # Spatial context (GIS → Agent contract)
+    "LanduseEntry",
+    "NaturalVillageAnchor",
+    "SpatialRelation",
+    "ConstraintSummary",
+    "SpatialContext",
 ]
