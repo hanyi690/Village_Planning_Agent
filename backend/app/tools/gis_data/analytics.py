@@ -1,19 +1,22 @@
-"""Analytics tools — GIS coverage and accessibility analysis."""
+"""Tool: calculate_gis_coverage + analyze_accessibility — GIS spatial analysis."""
 
-import json
-from typing import Optional
+from __future__ import annotations
+
+from typing import Any, Optional
 
 from langchain_core.tools import tool
 
+from app.tools.helpers import make_result
+
 
 @tool
-def calculate_gis_coverage(location: str, buffer_km: float = 5.0, max_features: int = 100) -> str:
+def calculate_gis_coverage(location: str, buffer_km: float = 5.0, max_features: int = 100) -> dict[str, Any]:
     """Calculate GIS data coverage and completeness for a location."""
-    from ._analytics.coverage import calculate_gis_coverage
+    from app.tools.gis._analytics.coverage import calculate_coverage as _calc
     if not location:
-        return json.dumps({"success": False, "error": "location required"}, ensure_ascii=False)
-    result = calculate_gis_coverage(location=location, buffer_km=buffer_km, max_features=max_features)
-    return json.dumps(result, ensure_ascii=False)
+        return make_result(success=False, error="location required")
+    result = _calc(location=location, buffer_km=buffer_km, max_features=max_features)
+    return make_result(success=result.get("success", True), data=result)
 
 
 @tool
@@ -22,17 +25,18 @@ def analyze_accessibility(
     origin: Optional[list] = None,
     destinations: Optional[list] = None,
     center: Optional[list] = None,
-) -> str:
+) -> dict[str, Any]:
     """Accessibility analysis (driving/walking/service/isochrone).
+
     Args:
         analysis_type: driving_accessibility, walking_accessibility, service_coverage, poi_coverage, isochrone
         origin: Origin coordinates [lon, lat]
         destinations: Destination list [[lon, lat], ...]
         center: Center coordinates [lon, lat]
     """
-    from ._analytics.accessibility import run_accessibility_analysis
+    from app.tools.gis._analytics.accessibility import run_accessibility_analysis
     o = tuple(origin) if origin else None
     c = tuple(center) if center else None
     ds = [tuple(d) if isinstance(d, list) else d for d in destinations] if destinations else None
     result = run_accessibility_analysis(analysis_type=analysis_type, origin=o, destinations=ds, center=c)
-    return json.dumps(result, ensure_ascii=False)
+    return make_result(success=result.get("success", True), data=result)

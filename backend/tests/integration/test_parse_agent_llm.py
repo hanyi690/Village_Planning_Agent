@@ -412,7 +412,7 @@ class TestParseNodesLLM:
     @pytest.mark.asyncio
     async def test_lookup_code_integration(self):
         """Test lookup_land_use_code with various village planning terms."""
-        from app.tools.gis.parse_tools import lookup_land_use_code
+        from app.tools.gis.lookup import lookup_land_use_code
 
         terms = ["宅基地", "经营性建设用地", "耕地", "生态林", "水域", "道路交通"]
         print(f"\n--- lookup_land_use_code 集成测试 ---")

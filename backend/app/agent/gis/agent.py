@@ -45,15 +45,17 @@ def create_gis_agent_graph():
     if _cached_gis is not None:
         return _cached_gis
 
-    from app.tools.gis import GIS_TOOLS
+    from app.tools.gis import GIS_PIPELINE_TOOLS
+    from app.tools.gis_data import GIS_DATA_TOOLS
     from .prompts import GIS_AGENT_SYSTEM_PROMPT
     from .state import GISAgentState
     from app.core.settings import LLM_MODEL
 
     llm = ChatOpenAI(model=LLM_MODEL, temperature=0)
-    graph = create_react_agent(llm, GIS_TOOLS, state_schema=GISAgentState, prompt=GIS_AGENT_SYSTEM_PROMPT)
+    all_tools = GIS_PIPELINE_TOOLS + GIS_DATA_TOOLS
+    graph = create_react_agent(llm, all_tools, state_schema=GISAgentState, prompt=GIS_AGENT_SYSTEM_PROMPT)
     _cached_gis = graph
-    logger.info("[GIS Agent - Legacy] Created with %d tools (DEPRECATED)", len(GIS_TOOLS))
+    logger.info("[GIS Agent - Legacy] Created with %d tools (DEPRECATED)", len(all_tools))
     return graph
 
 

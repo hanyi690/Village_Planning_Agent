@@ -155,7 +155,7 @@ async def _execute_tool_call(tool_name: str, tool_args: dict) -> str:
         if not land_use_name:
             return _json.dumps({"error": "missing land_use_name"})
         try:
-            from app.tools.gis.parse_tools import lookup_land_use_code
+            from app.tools.gis.lookup import lookup_land_use_code
             result = lookup_land_use_code.invoke({"land_use_name": land_use_name})
             return _json.dumps(result, ensure_ascii=False, default=str)
         except Exception as e:
@@ -208,7 +208,7 @@ def lookup_code(land_use_name: str) -> str:
     """
     import json as _json
     try:
-        from app.tools.gis.parse_tools import lookup_land_use_code
+        from app.tools.gis.lookup import lookup_land_use_code
         result = lookup_land_use_code.invoke({"land_use_name": land_use_name})
         return _json.dumps(result, ensure_ascii=False, default=str)
     except Exception as e:

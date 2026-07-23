@@ -352,7 +352,7 @@ class TestParseTools:
 
     def test_lookup_land_use_code_residential(self):
         """lookup_land_use_code should find '宅基地' codes."""
-        from app.tools.gis.parse_tools import lookup_land_use_code
+        from app.tools.gis.lookup import lookup_land_use_code
 
         result = lookup_land_use_code.invoke({"land_use_name": "宅基地"})
         assert result["success"] is True
@@ -363,7 +363,7 @@ class TestParseTools:
 
     def test_lookup_land_use_code_construction(self):
         """lookup_land_use_code should find '经营性建设用地' codes."""
-        from app.tools.gis.parse_tools import lookup_land_use_code
+        from app.tools.gis.lookup import lookup_land_use_code
 
         result = lookup_land_use_code.invoke({"land_use_name": "经营性建设用地"})
         assert result["success"] is True
@@ -373,14 +373,14 @@ class TestParseTools:
 
     def test_lookup_land_use_code_not_found(self):
         """lookup_land_use_code should return failure for unknown names."""
-        from app.tools.gis.parse_tools import lookup_land_use_code
+        from app.tools.gis.lookup import lookup_land_use_code
 
         result = lookup_land_use_code.invoke({"land_use_name": "不存在的用地类型XYZ"})
         assert result["success"] is False
 
     def test_lookup_land_use_code_farmland(self):
         """lookup_land_use_code should find '耕地' codes."""
-        from app.tools.gis.parse_tools import lookup_land_use_code
+        from app.tools.gis.lookup import lookup_land_use_code
 
         result = lookup_land_use_code.invoke({"land_use_name": "耕地"})
         assert result["success"] is True

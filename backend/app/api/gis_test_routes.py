@@ -263,7 +263,7 @@ async def _validate_layout(request: ValidateRequest, t0: float) -> Dict[str, Any
         from app.tools.gis._generation.pipeline import run_layout_pipeline
         from app.modules.gis.data.loader import load_all
         from app.modules.gis.data.intent_cache import resolve_gen_intent_cached
-        from app.tools.gis.parse import _dict_to_intent
+        from app.modules.gis.data.loader import _dict_to_intent
 
         gis_data = load_all()
         intent_dict = resolve_gen_intent_cached("金田村委会", gis_data)
@@ -379,7 +379,7 @@ async def gis_layout(request: LayoutRequest):
         from app.modules.gis.data.loader import load_all, load_planned
         from app.modules.gis.data.intent_cache import resolve_gen_intent_cached, resolve_plan_intent_cached, resolve_intent_live
         from app.tools.gis._generation.pipeline import run_layout_pipeline, build_three_way_comparison
-        from app.tools.gis.parse import _dict_to_intent
+        from app.modules.gis.data.loader import _dict_to_intent
 
         gis_data = load_all(request.village_name)
         planned_data = load_planned() if request.compare_to_planned else {}
@@ -511,7 +511,7 @@ async def gis_intent(request: IntentRequest):
                     "content": parsed.get("text_summary", ""),
                 }
 
-            from app.tools.gis.parse import _parse_reports_to_intent
+            from app.modules.gis.data.loader import _parse_reports_to_intent
             from app.modules.gis.data.loader import load_all
             _gis_data = load_all()
             result = _parse_reports_to_intent(reports=reports, village_name=request.village_name, gis_data=_gis_data)
@@ -530,7 +530,7 @@ async def gis_intent(request: IntentRequest):
             return {"success": False, "error": "No planning text provided", "timing_ms": round((time.time() - t0) * 1000)}
 
         from app.agent.gis.prompts import format_parse_prompt
-        from app.tools.gis.parse import parse_text_via_llm
+        from app.modules.gis.data.loader import parse_text_via_llm
         from app.modules.gis.data.loader import load_all
         _gis_data = load_all()
 
