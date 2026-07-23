@@ -2,7 +2,7 @@
 
 > **文档根目录**: `docs/gis/`
 > **项目**: Village Planning Agent — GIS Layout Engine (Trinity 架构)
-> **更新**: 2026-07-22
+> **更新**: 2026-07-23
 
 ## 文档导航
 
@@ -13,6 +13,7 @@
 | `[CURRENT]` | 描述当前实际实现的设计文档 |
 | `[DIAGNOSTIC]` | 诊断/评估报告，描述现状和问题 |
 | `[PROPOSAL]` | 未来提案，尚未实现 |
+| `[IMPLEMENTING]` | 实施中 — 部分阶段已完成 |
 | `[DEPRECATED]` | 已过时，保留作为历史参考 |
 
 ---
@@ -33,12 +34,13 @@ docs/gis/
 ├── 🔍 诊断报告 (Diagnostics)
 │   ├── diagnostics/01_PARSE_AGENT_STATUS.md     [DIAGNOSTIC] PARSE Agent当前状态与v11修复方案
 │   ├── diagnostics/02_RELIABILITY_ASSESSMENT.md [DIAGNOSTIC] 可靠性评估 — 3个核心鸿沟分析
-│   └── diagnostics/03_DATA_GAP_ANALYSIS.md      [DIAGNOSTIC] 数据缺口分析 — 教材要求 vs 系统现状
+│   ├── diagnostics/03_DATA_GAP_ANALYSIS.md      [DIAGNOSTIC] 数据缺口分析 — 教材要求 vs 系统现状
+│   └── diagnostics/04_PROFESSIONAL_PARADIGM_GAPS.md [DIAGNOSTIC] 专业范式缺口分析
 │
 ├── 💡 提案 (Proposals)
 │   ├── proposals/01_PARSE_SPATIAL_ENHANCEMENT.md  [PROPOSAL] 空间理解增强提案 — SpatialContext争议
 │   ├── proposals/02_GIS_PLANNING_INTEGRATION.md   [PROPOSAL] GIS工具集成提案 — 6个规划查询工具
-│   └── proposals/03_TOOL_FIRST_ARCHITECTURE.md    [PROPOSAL] 架构重构提案 — Tool-First，Agent-Orchestrated
+│   └── proposals/03_TOOL_FIRST_ARCHITECTURE.md    [IMPLEMENTING] 架构重构提案 — Phase A/B/C ✅, D/E ⬜
 │
 └── 📝 设计日志 (Design Log)
     └── design-log/01_DECISION_LOG.md              关键设计决策日志
@@ -64,7 +66,8 @@ docs/gis/
 - `diagnostics/03_DATA_GAP_ANALYSIS.md` — 数据缺口根因
 
 ### 🚀 未来方向
-- `proposals/03_TOOL_FIRST_ARCHITECTURE.md` — 架构重构（Tool-First，Agent-Orchestrated）
+- `proposals/03_TOOL_FIRST_ARCHITECTURE.md` — 架构重构（Phase A/B/C ✅，D/E ⬜）
+- `01_DESIGN_GOALS.md` §3.7 — 当前代码位置（Tool-First 结构）
 - `proposals/01_PARSE_SPATIAL_ENHANCEMENT.md` — 空间理解增强
 - `proposals/02_GIS_PLANNING_INTEGRATION.md` — 规划Agent工具集成
 
@@ -83,9 +86,9 @@ docs/gis/
 | 数据缺口 | diagnostics/03 | 02_OUTPUT_ARCHITECTURE §4 |
 | MIP 优化器 | 01_DESIGN_GOALS §7 | diagnostics/02 |
 | 合规检查 | 02_OUTPUT_ARCHITECTURE §8 | proposals/02 |
-| 架构重构 | proposals/03 | 01_DESIGN_GOALS §3.7, §8 |
-| EXECUTE_OPS Agent | proposals/03 §4 | 01_DESIGN_GOALS §3.3 |
-| Tool-First 架构 | proposals/03 §2-3 | 01_DESIGN_GOALS §5 |
+| 架构重构 (Tool-First) | proposals/03 (Phase A/B/C ✅) | 01_DESIGN_GOALS §3.7 |
+| EXECUTE_OPS Agent | proposals/03 §4 | agent/gis/execute/ (空壳) |
+| Tool-First 架构 | 01_DESIGN_GOALS §3.7 | proposals/03 §2-3 |
 
 ---
 
@@ -93,6 +96,7 @@ docs/gis/
 
 | 日期 | 变更 |
 |------|------|
+| 2026-07-23 | Phase A/B/C 完成：Tool-First 架构迁移（commit 415dbf5/2006d30/c8a76d4）；proposals/03 状态更新为 [IMPLEMENTING]；01_DESIGN_GOALS §3.7/§5/§8 更新为当前结构 |
 | 2026-07-22 | 新增 proposals/03 Tool-First 架构重构提案；01_DESIGN_GOALS §3.7/§5/§8 标注实现差距 |
 | 2026-07-22 | 文档重组：分离设计/诊断/提案，添加状态标注，统一参考文献 |
 | 2026-07-21 | DESIGN_GOALS v5.1, OUTPUT_ARCHITECTURE v3.4 |

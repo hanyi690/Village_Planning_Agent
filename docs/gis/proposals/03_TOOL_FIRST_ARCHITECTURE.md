@@ -1,7 +1,12 @@
 # GIS 系统架构重构提案：Tool-First，Agent-Orchestrated
 
-> **Status: [PROPOSAL]** | **Type: Architecture Refactor Proposal** | **Version: 1.0** | **Updated: 2026-07-22**
-> **⚠️ 本提案尚未实施**。描述目标架构和迁移路径，当前代码仍为旧结构。
+> **Status: [IMPLEMENTING]** | **Type: Architecture Refactor Proposal** | **Version: 1.1** | **Updated: 2026-07-23**
+> **Phase A/B/C 已完成** (commits 415dbf5, 2006d30, c8a76d4)。Phase D/E 待执行。
+> - ✅ A: helpers 提升、KG 独立、utils 迁移
+> - ✅ B: generation/analysis/rendering → tools/gis/_*
+> - ✅ C: parse_tools 拆分、gis_data/ 创建、Schema 统一、空壳预留
+> - ⬜ D: API + Agent 适配、测试运行
+> - ⬜ E: 验证与文档
 > **Relationship to DESIGN_GOALS**: 本提案重构 01_DESIGN_GOALS.md §3.7 代码位置，对齐 Phase 2/2.5/3 的实现基础。
 > **References**: BIBLIOGRAPHY.md §F1-11, §G1-5
 > **Related**: 01_DESIGN_GOALS.md §3, §5, §8, 02_OUTPUT_ARCHITECTURE.md §4

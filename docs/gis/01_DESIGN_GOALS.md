@@ -1,6 +1,6 @@
 # GIS 村庄规划系统 — 设计目标
 
-> **Status: [CURRENT]** | **Type: Design Specification** | **Version: 5.1** | **Updated: 2026-07-21**
+> **Status: [CURRENT]** | **Type: Design Specification** | **Version: 5.3** | **Updated: 2026-07-23**
 > **Scope**: 权威设计规范 — Trinity架构、编码体系、技术决策
 > **References**: BIBLIOGRAPHY.md §A1-4, §B1-2,5-7, §F1-11
 > **Related**: 02_OUTPUT_ARCHITECTURE.md, design-log/01_DECISION_LOG.md
@@ -275,78 +275,71 @@ Agent 是**会操作 GIS 的专业绘图员**，不是规划师。所有规划�
 10. DLSZM (Dual-Logic Spatial Zoning Model) — 规则引擎 + ML 双路径对比，识别"稳定决策区"和"分歧敏感区". Frontiers in Environmental Science 2026. https://www.frontiersin.org/journals/environmental-science/articles/10.3389/fenvs.2026.1791582/full **[未执行]**
 11. OZFS (Open Zoning Feed Specification) — overlay district 概念（restrict/relax/replace），条件约束（Python 表达式）. https://github.com/vibe-lab-gsd/ozfs-standard **[未执行]**
 
-### 3.7 代码位置 (当前实际结构, v5.2)
+### 3.7 代码位置 (当前实际结构, v5.3)
 
-> ⚠️ **实现差距**: 当前代码仍为旧结构，与 `proposals/03_TOOL_FIRST_ARCHITECTURE.md` 的目标架构存在差距。
-> 目标架构为 **Tool-First**：业务逻辑以 `@tool` 形式暴露，generation/analysis/rendering 迁入 tools/，KG 独立为 modules/kg/，utils 提升至 app/utils/。详见 proposals/03。
-
-**当前结构**（标注实现状态）：
+> ✅ **Tool-First 架构已实施** (Phase A/B/C, 2026-07-22~23)。详见 `proposals/03_TOOL_FIRST_ARCHITECTURE.md`。
+> modules/gis/ 精简为 schema + data + spatial_context；generation/analysis/rendering 迁入 tools/gis/ 作为内部模块（`_` 前缀）；
+> KG 独立为 modules/kg/；utils 提升至 app/utils/；tool 层统一 make_result() Schema 约束。
 
 ```
 app/agent/gis/              # Agent 编排层
-├── agent.py                # create_*_graph() 入口
+├── agent.py                # create_*_graph() 入口 (GIS_PIPELINE_TOOLS + GIS_DATA_TOOLS)
 ├── state.py                # GISPipelineState (Pydantic BaseModel)
 ├── prompts.py              # GIS Agent system prompt
 ├── layout_pipeline.py      # ★ LAYOUT 管线 (StateGraph) [⚠️部分实现]
-└── parse/                  # ★ PARSE 子包 [✅已实现]
-    ├── __init__.py          # 公开 API 导出
-    ├── state.py             # ParseAgentState + SpatialOperation + SpatialConstraint + ...
-    └── agent.py             # PARSE Agent 子图 (ReAct + Think-Then-Format)
+├── parse/                  # ★ PARSE 子包 [✅已实现]
+│   ├── __init__.py
+│   ├── state.py             # ParseAgentState + SpatialOperation + SpatialConstraint
+│   └── agent.py             # PARSE Agent 子图 (ReAct + Think-Then-Format)
+└── execute/                # ★ EXECUTE_OPS Agent 子包 (Phase 2.5 预留)
+    └── __init__.py
 
-app/utils/                  # 通用工具
-  parse_reporter.py         # PARSE 输出报告生成
-
-app/modules/gis/            # ★ GIS 模块 — 数据处理 + 空间分析
+app/modules/gis/            # ★ GIS 模块 — 精简为 schema + data + context
 ├── spatial_context.py      # compute_spatial_context() — GIS → SpatialContext 转换
-├── schema/                 # GIS Schema — 单一真相源
-│   ├── __init__.py         # 统一导出
-│   ├── canonical.py        # 规范模型: BBox, CRS, GeoFeature, GISDataBundle
-│   ├── contracts.py        # 数据契约: ZoneIntent, SpatialContext, AllocationResult, …
-│   ├── spatial_types.py    # 20种空间要素类型 (AdminArea, ControlLine, LandUseZone, ...)
-│   ├── code_sets.py        # DLBM↔zone 编码对照表 + 查表函数
-│   ├── ingestion.py        # ingest_*() 注入端口
-│   ├── classification.py   # LandUseClass + ClassificationSchema + EncodingRegistry
-│   ├── colors.py           # 6套色卡 (GB/T 21010 + 50280-98)
-│   ├── gdb.py              # GDB_LAYER_REGISTRY (12层字段定义)
-│   ├── raster_types.py     # DEM/DOM 输入类型
-│   ├── dicts/              # YAML 字典中心
-│   │   ├── loader.py       # DictionaryCenter 单例
-│   │   ├── candidate_engine.py
-│   │   ├── encodings/      # 六套独立编码体系
-│   │   │   ├── gbt21010.yaml
-│   │   │   ├── tugui.yaml
-│   │   │   ├── appendix5.yaml
-│   │   │   ├── ghflbm.yaml
-│   │   │   ├── ydyhfldm.yaml
-│   │   │   └── vne.yaml
-│   │   └── rules/
-│   └── analysis/           # 空间分析引擎
-│       └── dynamic_zoning.py  # DynamicZoningEngine (双评价动态分区)
-└── ...
-      gdb_layers.yaml    # GDB 图层定义
-      field_defaults.yaml
-      planning_zone_rules.yaml
-      planning_targets.yaml
-      land_use_structure.yaml
-      three_line_types.yaml
-    references/          # 参考对照表
-      sddlbm_to_ydyhfldm.yaml  # 三调→用地用海
-      element_codes.yaml
+├── trace.py                # MIPTrace
+├── schema/                 # ✅ 单一真相源 (如下)
+└── data/                   # ✅ 数据获取/加载/providers
 
-app/tools/gis/           # @tool 层
-  parse_tools.py, kg.py, conflict.py, allocate.py,
-  generate.py, validate.py, export.py, render.py,
-  data.py, analytics.py, place_resolver.py
+app/modules/kg/             # ★ 独立 KG 模块 (Phase A2)
+├── builder.py              # PlanningKG 构建器
+├── query.py                # SPARQL 查询模板 + query_kg()
+└── ontology.py             # PLN, GEO, EntityTypes, Relations
 
-app/modules/gis/         # 纯服务层
-  data/providers/        # Tianditu/Amap/OSM 适配器
-  generation/            # 生成层 (zone/facility/axis)
-  layout/                # 布局生成
-  kg/                    # RDF 知识图谱
-  conflict/              # 冲突检测
-  optimizer/             # MIP + CA 优化器
-  validation/            # 布局验证
-  utils/                 # 坐标/面积/GeoJSON 工具
+app/utils/                  # ★ 通用工具 (Phase A3)
+├── coord_transform.py      # GCJ-02 ↔ WGS-84 ↔ CGCS2000
+├── crs_engine.py           # 投影引擎
+├── area_engine.py          # 面积计算
+├── geojson_utils.py        # GeoJSON ↔ GeoDataFrame
+├── geo_utils.py            # Haversine, safe union
+└── coord_utils.py          # 坐标工具
+
+app/tools/helpers.py        # ★ make_result() / to_tool_message() (Phase A1)
+
+app/tools/gis/              # ★ 管线 tools (11) + 内部实现模块 (5)
+├── __init__.py              # GIS_PIPELINE_TOOLS
+├── parse.py                 # parse_planning_text @tool (PARSE Agent 入口)
+├── extract.py               # extract_structured_text @tool
+├── lookup.py                # lookup_land_use_code @tool
+├── kg.py                    # build/query_knowledge_graph @tool
+├── conflict.py              # detect_conflicts @tool (→ ._conflict)
+├── allocate.py              # allocate_zones @tool (→ ._generation.optimizer)
+├── generate.py              # generate_layout @tool (→ ._generation)
+├── validate.py              # validate_layout @tool (→ ._validation)
+├── export.py                # export_gdb @tool
+├── render.py                # render_map @tool (→ ._rendering)
+├── _conflict/               # ← analysis/conflict/
+├── _validation/             # ← analysis/validation/
+├── _analytics/              # ← analysis/ 其余 + dynamic_zoning
+├── _generation/             # ← generation/ (zone/facility/axis/optimizer/pipeline)
+└── _rendering/              # ← rendering/
+
+app/tools/gis_data/          # ★ 数据获取 tools (4, make_result 统一约束)
+├── fetch.py                 # fetch_gis_data
+├── search_poi.py            # search_poi
+└── analytics.py             # calculate_gis_coverage + analyze_accessibility
+
+app/tools/gis_execute/       # ★ Phase 2.5 预留
+app/tools/gis_query/         # ★ Phase 2.5 预留
 ```
 
 ## 4. 编码体系 ✅ 已实现
@@ -402,12 +395,7 @@ DLBM 编码在 `encodings/gbt21010.yaml`、`encodings/tugui.yaml`、`encodings/a
 
 ## 5. 工具流水线
 
-> ⚠️ **实现差距**:
-> - 当前 tools/gis/ 有 13 个文件，parse.py 和 parse_tools.py 功能重叠
-> - data.py、analytics.py 无 Schema 约束（返回裸 json.dumps）
-> - _helpers.py 应提升为 tools/helpers.py
-> - 缺少 gis_execute/（EXECUTE_OPS Agent 5 tools）、gis_query/（规划 Agent 6 tools）
-> - 详见 `proposals/03_TOOL_FIRST_ARCHITECTURE.md`
+> ✅ 所有 tool 已统一 make_result() Schema 约束（Phase C3）。parse.py/parse_tools.py 已拆分为 parse/extract/lookup（Phase C2）。_helpers.py 已提升为 tools/helpers.py（Phase A1）。data.py/analytics.py 已迁入 tools/gis_data/（Phase C3）。gis_execute/、gis_query/ 空壳已创建（Phase C4）。
 
 ```
 PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VALIDATE ──► EXPORT ──► RENDER
@@ -472,17 +460,17 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 
 ## 8. 路线图
 
-### Phase 0 — 架构重构 ❌ 未实施 (设计阶段, 见 proposals/03)
+### Phase 0 — 架构重构 ✅ 已完成 (2026-07-22~23, commits 415dbf5/2006d30/c8a76d4)
 
-> ⚠️ **前置依赖**: Phase 2/2.5 的实现需要先完成架构重构，建立 Tool-First 结构。
+> ✅ Tool-First 架构已建立。Phase 2/2.5 的实现基础已就绪。
 
-- [ ] Tool-First 架构迁移（详见 `proposals/03_TOOL_FIRST_ARCHITECTURE.md`）
-  - [ ] KG 独立：`modules/gis/kg/` → `modules/kg/`
-  - [ ] Utils 通用化：`modules/gis/utils/` → `app/utils/`
-  - [ ] generation/analysis/rendering 迁入 `tools/gis/` 作为 tool 内部实现
-  - [ ] Tool 层统一 Schema 约束（禁止裸 json.dumps）
-  - [ ] 预留 `tools/gis_execute/`、`tools/gis_query/`、`agent/gis/execute/` 空壳
-- [ ] 设计文档同步（§3.7 代码位置更新）
+- [x] Tool-First 架构迁移（详见 `proposals/03_TOOL_FIRST_ARCHITECTURE.md`）
+  - [x] KG 独立：`modules/gis/kg/` → `modules/kg/` (Phase A2)
+  - [x] Utils 通用化：`modules/gis/utils/` → `app/utils/` (Phase A3)
+  - [x] generation/analysis/rendering 迁入 `tools/gis/_*` 作为 tool 内部模块 (Phase B)
+  - [x] Tool 层统一 Schema 约束（禁止裸 json.dumps，统一 make_result()）(Phase C3)
+  - [x] 预留 `tools/gis_execute/`、`tools/gis_query/`、`agent/gis/execute/` 空壳 (Phase C4)
+- [x] 设计文档同步（§3.7 代码位置更新，§5 实现差距消除）
 
 ### Phase 1 — 已完成 (2026-07) ✅
 
@@ -514,7 +502,7 @@ PARSE ──► KG ──► CONFLICT ──► EXECUTE_OPERATIONS ──► VAL
 
 ### Phase 2 — 架构对齐 ❌ 未实现 (设计阶段)
 
-> ⚠️ **实现差距**: 需先完成 Phase 0 架构重构。当前 generation/ 仍在 modules/gis/ 下，ZoneGenerator 等类无法被 Tool-First 结构直接引用。
+> ✅ **前置依赖 Phase 0 已完成**。generation/ 已迁入 `tools/gis/_generation/`，ZoneGenerator 等类可通过 `from app.tools.gis._generation.xxx import` 引用。
 
 **目标**: 对齐 02_OUTPUT_ARCHITECTURE.md v3.3 的 5+1 内部生成层 + 12 层输出标准
 
@@ -547,7 +535,7 @@ infrastructure (AxisBuilder)      →  可视化叠加（不独立成层）
 
 ### Phase 2.5 — 统一操作执行引擎 ❌ 未实现 (设计阶段, 规划 2026-08)
 
-> ⚠️ **实现差距**: 需先完成 Phase 0 架构重构。EXECUTE_OPERATIONS 是 ReAct 子图（非固定引擎），需要 `agent/gis/execute/` 子包和 `tools/gis_execute/` 5 个 tools。当前均不存在。
+> ✅ **前置依赖 Phase 0 已完成**。`agent/gis/execute/` 和 `tools/gis_execute/` 空壳已创建（Phase C4）。5 个 tools 待 Phase 2.5 实现。
 
 - [ ] OperationEngine（5 种原子操作 + 变更日志 + 批量/逐条执行）
 - [ ] MIP 降级为 `optimize_allocation` 辅助工具（批量场景按需调用）
