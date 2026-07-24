@@ -1,0 +1,253 @@
+version: "2.0"
+
+# ============================================================
+# 连接声明
+# 凭据从环境变量读取（settings.py），此处声明连接类型与可选参数覆盖。
+# 见 backend/app/modules/data/README.md §六 配置规范。
+# ============================================================
+connections:
+  tianditu:
+    type: tianditu
+    # api_key_env: TIANDITU_API_KEY  (凭据从 settings 读，此处仅文档)
+    rate_limit: 5.0
+    timeout: 30
+    max_retries: 3
+
+  amap:
+    type: amap
+    rate_limit: 30.0
+    timeout: 30
+    max_retries: 3
+
+  gd_tianditu:
+    type: gd_tianditu
+    base_url: "https://guangdong.tianditu.gov.cn"
+    rate_limit: 5.0  # 共享 tianditu 限流（同一服务族）
+    timeout: 30
+
+  osm:
+    type: osm
+    rate_limit: 1.0
+    timeout: 60
+
+# ============================================================
+# 数据源声明
+# driver 字段对应 DriverRegistry 注册名。Phase 3 迁移具体 driver 后生效；
+# 未注册的 driver 会被 DataCatalog 跳过并记录 warning。
+# ============================================================
+sources:
+  # ── 本地矢量 - 金田村现状 ──
+  jintian_boundary:
+    driver: file_vector
+    path: "data/gis/jintian/current/boundary.geojson"
+    layer_type: boundary
+    crs: EPSG:4326
+
+  jintian_current_landuse:
+    driver: file_vector
+    path: "data/gis/jintian/current/landuse.geojson"
+    layer_type: landuse_current
+    crs: EPSG:4326
+
+  jintian_road:
+    driver: file_vector
+    path: "data/gis/jintian/current/road.geojson"
+    layer_type: road
+    crs: EPSG:4326
+
+  jintian_admin_boundary_line:
+    driver: file_vector
+    path: "data/gis/jintian/current/admin_boundary_line.geojson"
+    layer_type: admin_boundary_line
+    crs: EPSG:4326
+
+  jintian_annotation:
+    driver: file_vector
+    path: "data/gis/jintian/current/annotation.geojson"
+    layer_type: annotation
+    crs: EPSG:4326
+
+  # ── 本地矢量 - 金田村规划 ──
+  jintian_planned_landuse:
+    driver: file_vector
+    path: "data/gis/jintian/planned/landuse.geojson"
+    layer_type: landuse_planned
+    crs: EPSG:4326
+
+  jintian_planned_road:
+    driver: file_vector
+    path: "data/gis/jintian/planned/road.geojson"
+    layer_type: road_planned
+    crs: EPSG:4326
+
+  jintian_planned_annotation:
+    driver: file_vector
+    path: "data/gis/jintian/planned/annotation.geojson"
+    layer_type: annotation_planned
+    crs: EPSG:4326
+
+  jintian_farmland_protection:
+    driver: file_vector
+    path: "data/gis/jintian/planned/farmland_protection.geojson"
+    layer_type: farmland_protection
+    crs: EPSG:4326
+
+  jintian_ecological_protection:
+    driver: file_vector
+    path: "data/gis/jintian/planned/ecological_protection.geojson"
+    layer_type: ecological_protection
+    crs: EPSG:4326
+
+  jintian_historical_protection:
+    driver: file_vector
+    path: "data/gis/jintian/planned/historical_protection.geojson"
+    layer_type: historical_protection
+    crs: EPSG:4326
+
+  jintian_construction_zone:
+    driver: file_vector
+    path: "data/gis/jintian/planned/construction_zone.geojson"
+    layer_type: construction_zone
+    crs: EPSG:4326
+
+  jintian_geological_hazard:
+    driver: file_vector
+    path: "data/gis/jintian/planned/geological_hazard_points.geojson"
+    layer_type: geological_hazard_points
+    crs: EPSG:4326
+
+  # ── API 矢量 - 广东省天地图专题服务 ──
+  gd_three_zones:
+    driver: api_vector
+    connection: gd_tianditu
+    service_id: SQSXWPSJ
+    protocol: mapserver_rest
+    crs: EPSG:4490
+    layers:
+      - id: 0
+        name: "永久基本农田保护"
+        layer_type: farmland_protection
+      - id: 1
+        name: "城镇开发边界"
+        layer_type: urban_dev_boundary
+      - id: 2
+        name: "生态保护红线"
+        layer_type: ecological_protection
+
+  gd_ecological:
+    driver: api_vector
+    connection: gd_tianditu
+    service_id: GDSTBHHX
+    protocol: mapserver_rest
+    crs: EPSG:4490
+    layers:
+      - id: 0
+        name: "生态保护红线"
+        layer_type: ecological_protection
+
+  gd_hazard:
+    driver: api_vector
+    connection: gd_tianditu
+    service_id: DZZHD
+    protocol: mapserver_rest
+    crs: EPSG:4490
+    layers:
+      - id: 0
+        name: "地质灾害隐患点"
+        layer_type: geological_hazard_points
+
+  # ── WMTS 瓦片 - 天地图 ──
+  tianditu_img_base:
+    driver: wmts_tile
+    connection: tianditu
+    layer: img_c
+    projection: c
+    zoom_range: [1, 18]
+    format: png
+    crs: EPSG:4326
+    layer_type: dom
+    cache_dir: "data/cache/tiles/img_c"
+
+  tianditu_terrain:
+    driver: wmts_tile
+    connection: tianditu
+    layer: ter_c
+    projection: c
+    zoom_range: [1, 18]
+    format: png
+    crs: EPSG:4326
+    layer_type: terrain_visual
+    cache_dir: "data/cache/tiles/ter_c"
+
+  tianditu_annotation:
+    driver: wmts_tile
+    connection: tianditu
+    layer: cia_c
+    projection: c
+    zoom_range: [1, 18]
+    format: png
+    crs: EPSG:4326
+    layer_type: annotation
+    cache_dir: "data/cache/tiles/cia_c"
+
+  # ── 本地栅格 - DEM/DOM ──
+  dem_local:
+    driver: local_raster
+    path: "data/gis/jintian/terrain/dem.tif"
+    format: GeoTIFF
+    crs: EPSG:4326
+    layer_type: dem
+
+  dom_local:
+    driver: local_raster
+    path: "data/gis/jintian/terrain/dom.tif"
+    format: GeoTIFF
+    crs: EPSG:4326
+    layer_type: dom
+
+  # ── 远程栅格 - DEM 下载指引 ──
+  dem_alos:
+    driver: remote_raster
+    provider: alos_aw3d30
+    resolution: "12.5m"
+    format: GeoTIFF
+    crs: EPSG:4326
+    layer_type: dem
+    download_guide:
+      url: "https://www.eorc.jaxa.jp/ALOS/en/aw3d30/"
+      steps:
+        - "注册JAXA账号"
+        - "选择研究区域"
+        - "下载GeoTIFF格式DEM"
+    local_path: "data/gis/jintian/terrain/dem_alos.tif"
+
+  dem_gdem:
+    driver: remote_raster
+    provider: gdem_v3
+    resolution: "30m"
+    format: GeoTIFF
+    crs: EPSG:4326
+    layer_type: dem
+    download_guide:
+      url: "https://www.gscloud.cn/"
+      steps:
+        - "注册地理空间数据云账号"
+        - "选择数据集 GDEMV3 30M"
+        - "按行政区选择村庄所在区域"
+        - "下载GeoTIFF格式DEM"
+    local_path: "data/gis/jintian/terrain/dem_gdem.tif"
+
+  # ── 文档 - 规划文本 + L3 报告 ──
+  jintian_planning_text:
+    driver: document
+    path: "docs/MinerU_markdown_*村庄规划*文本*.md"
+    doc_type: planning_markdown
+    layer_type: planning_text
+    encoding: utf-8
+
+  l3_reports:
+    driver: document
+    path: "output/experiments/rag/g1/iter0/layer3_reports.json"
+    doc_type: l3_reports
+    layer_type: l3_reports
+    encoding: utf-8
