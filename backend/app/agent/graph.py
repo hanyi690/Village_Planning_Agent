@@ -233,10 +233,15 @@ def _format_gis_result(result: Dict[str, Any], layout_configs: List[Dict[str, An
 def _build_gis_data(gis_context: Any, state: Dict[str, Any]) -> Dict[str, Any]:
     """从 SharedGISContext + 用户上传数据构建 gis_data 字典。"""
     user_uploaded = state.get("user_uploaded_data", {})
+    protection_zones = gis_context.get_protection_zones()
     return {
         "boundary_geojson": gis_context.get_data_by_type("boundary"),
         "landuse_current_geojson": gis_context.get_data_by_type("landuse_current"),
-        "protection_zones": gis_context.get_protection_zones(),
+        "protection_zones": protection_zones,
+        # Flat keys for KG builder.add_protection_zones() compatibility
+        "farmland_protection_geojson": protection_zones.get("farmland_protection"),
+        "ecological_protection_geojson": protection_zones.get("ecological_redline"),
+        "historical_protection_geojson": protection_zones.get("historical_protection"),
         "road_geojson": gis_context.get_data_by_type("road"),
         "hazard_points_geojson": gis_context.get_data_by_type("geological_hazard_points"),
         "construction_zone_geojson": gis_context.get_data_by_type("construction_zone"),
