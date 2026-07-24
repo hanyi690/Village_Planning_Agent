@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from app.modules.schema.canonical import BBox
+from app.modules.schema.types.canonical import BBox
 
 
 @dataclass

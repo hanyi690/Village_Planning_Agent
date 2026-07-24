@@ -22,14 +22,13 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
-from app.modules.gis.schema import (
+from app.modules.schema import (
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,
     CONSTRUCTION_ZONE_TYPES as _CONSTRUCTION_ZONE_TYPES,
     DLBM_TO_PLANNING_ZONE,
     PLANNING_ZONE_RENDERING,
     FORESTRY_CODES,
-    GRASSLAND_CODES,
     FOREST_CODES,
     WATER_CODES,
     PLANNING_ZONE_TO_PRIMARY_ZONE,
@@ -149,7 +148,7 @@ def _compute_ecological_ratios(
     Measures actual 生态绿地 vs 水域 area from parcels, falling back
     to the default 0.9 / 0.1 split if data is unavailable.
     """
-    from app.modules.gis.schema import ZONE_TYPE_TO_DLBMS
+    from app.modules.schema import ZONE_TYPE_TO_DLBMS
     green_dlbms = set(ZONE_TYPE_TO_DLBMS.get("生态绿地", []))
     water_dlbms = set(ZONE_TYPE_TO_DLBMS.get("水域", []))
     eco_dlbms = green_dlbms | water_dlbms
@@ -177,7 +176,7 @@ def _compute_ecological_ratios(
 def _compute_construction_ratios(landuse_geojson: Dict[str, Any]) -> Dict[str, float]:
     """Compute construction sub-type ratios from current land use statistics."""
     from collections import defaultdict
-    from app.modules.gis.schema import DLBM_TO_ZONE_TYPE
+    from app.modules.schema import DLBM_TO_ZONE_TYPE
 
     zone_areas: Dict[str, float] = defaultdict(float)
     for feat in landuse_geojson.get("features", []):
@@ -203,9 +202,7 @@ def map_zone_type_to_planning_zone(
 
     细分逻辑：
     - 农业用地：DLBM ∈ BASIC_FARMLAND_DLBMS → 农田保护区；其他 → 一般农业区
-    - 生态绿地：DLBM ∈ GRASSLAND_CODES → 生态控制区；
-                DLBM ∈ FORESTRY_CODES → 林业发展区；
-                其他 → 生态保护区
+    - 生态绿地：DLBM ∈ FORESTRY_CODES → 林业发展区；其他 → 生态保护区
     - 水域 → 生态保护区
     """
     if zone_type == "农业用地":
@@ -213,8 +210,6 @@ def map_zone_type_to_planning_zone(
             return "农田保护区"
         return "一般农业区"
     if zone_type == "生态绿地":
-        if dlbm in GRASSLAND_CODES:
-            return "生态控制区"
         if dlbm in FORESTRY_CODES:
             return "林业发展区"
         return "生态保护区"

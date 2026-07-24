@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from app.modules.schema.canonical import BBox
+from app.modules.schema.types.canonical import BBox
 from app.utils.logger import get_logger
 
 from ..contracts import DataResult, DataSourceMetadata

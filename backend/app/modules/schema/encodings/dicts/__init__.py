@@ -1,7 +1,7 @@
 """Code Dictionary Center — externalized, configurable encoding system.
 
 Usage:
-    from app.modules.gis.schema.dicts import get_center
+    from app.modules.schema.encodings.dicts import get_center
 
     center = get_center()
     gbt21010 = center.encoding("gbt21010")

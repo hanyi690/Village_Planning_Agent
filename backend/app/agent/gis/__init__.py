@@ -1,8 +1,8 @@
-"""GIS Agent subgraph for spatial layout planning.
+"""GIS Agent subgraph for spatial planning.
 
 Sub-packages:
   parse/  — PARSE Agent (planning text → spatial operations/constraints/intent)
-  layout/ — LAYOUT Pipeline (intent → knowledge graph → allocation → validation)
+  execute/  - EXECUTE Agent (intent -> allocated zones/facilities/axes/roads)
 
 The main state.py holds pipeline-level schemas (GISPipelineState etc.).
 """

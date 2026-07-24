@@ -12,19 +12,22 @@ Inspired by:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
-from app.modules.gis.schema.contracts import (
+from app.modules.schema.contracts.layout_contracts import (
     ConstraintSummary,
     FacilityAnchor,
     LanduseEntry,
     NaturalVillageAnchor,
     SpatialContext,
-    SpatialRelation,
     TerrainProfile,
 )
-from app.modules.gis.schema.spatial_types import ANNOTATION_LABEL_TYPE_MAP
+from app.modules.schema.types.spatial_types import ANNOTATION_LABEL_TYPE_MAP
+
+# Import from sub-modules
+from .geometry import _compute_centroid, _compute_total_area, _find_column, _find_parcels_near_point
+from .relations import _compute_spatial_relations, _compute_zone_adjacency
 
 logger = get_logger(__name__)
 
@@ -111,31 +114,17 @@ def compute_spatial_context(gis_data: Dict[str, Any]) -> SpatialContext:
 # ── Sub-computations ────────────────────────────────────────────────
 
 
-def _compute_centroid(boundary_geojson: Dict[str, Any]) -> Optional[Tuple[float, float]]:
-    """Compute centroid of boundary polygon."""
-    try:
-        from app.utils.geojson_utils import geojson_to_geodataframe
-
-        gdf = geojson_to_geodataframe(boundary_geojson)
-        if gdf is None or gdf.empty:
-            return None
-        centroid = gdf.geometry.union_all().centroid
-        return (round(centroid.x, 6), round(centroid.y, 6))
-    except Exception as e:
-        logger.warning("[SpatialContext] Centroid computation failed: %s", e)
-        return None
-
-
 def _compute_landuse_distribution(landuse_geojson: Dict[str, Any]) -> List[LanduseEntry]:
     """Compute land-use distribution from current landuse GeoJSON.
 
-    Encoding note: 现状层 DLBM = appendix5 编码 (2121=宅基地).
-    使用 DLBM_TO_DLMC (合并多体系) 做名称查询，get_zone_type_for_dlbm 做分区查询。
+    Encoding note: DLBM = appendix5 encoding (2121=residential).
+    Uses DLBM_TO_DLMC (merged multi-system) for name lookup,
+    get_zone_type_for_dlbm for zone classification.
     """
     try:
         from app.utils.geojson_utils import geojson_to_geodataframe
         from app.utils.area_engine import calculate_area_ha
-        from app.modules.gis.schema import get_zone_type_for_dlbm, dlbm_to_planning_zone, DLBM_TO_DLMC
+        from app.modules.schema import get_zone_type_for_dlbm, dlbm_to_planning_zone, DLBM_TO_DLMC
 
         gdf = geojson_to_geodataframe(landuse_geojson)
         if gdf is None or gdf.empty:
@@ -154,7 +143,7 @@ def _compute_landuse_distribution(landuse_geojson: Dict[str, Any]) -> List[Landu
             name = DLBM_TO_DLMC.get(dlbm_str, dlbm_str)
 
             entries.append(LanduseEntry(
-                dlbm=dlbm_str,  # appendix5 编码 (现状层)
+                dlbm=dlbm_str,
                 name=name,
                 count=len(group),
                 area_ha=round(area_ha, 2),
@@ -164,7 +153,7 @@ def _compute_landuse_distribution(landuse_geojson: Dict[str, Any]) -> List[Landu
 
         return sorted(entries, key=lambda e: e.area_ha, reverse=True)
     except Exception as e:
-        logger.warning("[SpatialContext] Landuse distribution failed: %s", e)
+        logger.warning("[SpatialContext] Landuse distribution failed: %s failed: %s", e)
         return []
 
 
@@ -192,8 +181,7 @@ def _cluster_natural_villages(
             return []
 
         # Filter residential parcels via DictionaryCenter zone_type lookup
-        # Supports both current (2121=GHYTBM) and planned (2030=三调) DLBM encodings
-        from app.modules.gis.schema import get_dlbms_for_zone_type
+        from app.modules.schema import get_dlbms_for_zone_type
         _RESIDENTIAL_DLBMS = set(get_dlbms_for_zone_type("居住用地"))
         residential = gdf[
             gdf[dlbm_col].astype(str).str.strip().isin(_RESIDENTIAL_DLBMS)
@@ -268,7 +256,7 @@ def _cluster_natural_villages(
                 if non_res_metric is not None and not non_res_metric.empty:
                     nearby = non_res_metric[non_res_metric.geometry.distance(component.boundary) < 100]
                     if not nearby.empty:
-                        from app.modules.gis.schema import get_zone_type_for_dlbm
+                        from app.modules.schema import get_zone_type_for_dlbm
                         adjacent_zones = list(set(
                             get_zone_type_for_dlbm(str(d).strip())
                             for d in nearby[dlbm_col].values
@@ -286,96 +274,6 @@ def _cluster_natural_villages(
     except Exception as e:
         logger.warning("[SpatialContext] Natural village clustering failed: %s", e)
         return []
-
-
-def _compute_spatial_relations(
-    landuse_geojson: Dict[str, Any],
-    natural_villages: List[NaturalVillageAnchor],
-) -> List[SpatialRelation]:
-    """Compute spatial relations between natural villages and zones.
-
-    Uses centroid-based direction computation and distance-based topology.
-    """
-    relations = []
-
-    try:
-        if len(natural_villages) < 2:
-            return relations
-
-        # Compute pairwise direction relations between villages
-        for i, v1 in enumerate(natural_villages):
-            for j, v2 in enumerate(natural_villages):
-                if i >= j:
-                    continue
-
-                dx = v2.center[0] - v1.center[0]  # longitude diff
-                dy = v2.center[1] - v1.center[1]  # latitude diff
-
-                # Determine direction
-                if abs(dx) < 1e-6 and abs(dy) < 1e-6:
-                    continue
-
-                # Use angle to determine primary direction
-                import math
-                angle = math.degrees(math.atan2(dy, dx))
-
-                if -22.5 <= angle < 22.5:
-                    direction = "east_of"
-                elif 22.5 <= angle < 67.5:
-                    direction = "north_of"  # NE -> primarily north
-                elif 67.5 <= angle < 112.5:
-                    direction = "north_of"
-                elif 112.5 <= angle < 157.5:
-                    direction = "north_of"  # NW -> primarily north
-                elif angle >= 157.5 or angle < -157.5:
-                    direction = "west_of"
-                elif -157.5 <= angle < -112.5:
-                    direction = "south_of"  # SW -> primarily south
-                elif -112.5 <= angle < -67.5:
-                    direction = "south_of"
-                elif -67.5 <= angle < -22.5:
-                    direction = "south_of"  # SE -> primarily south
-                else:
-                    direction = "near"
-
-                relations.append(SpatialRelation(
-                    subject=v2.name,
-                    relation=direction,
-                    object=v1.name,
-                    confidence=0.9,
-                    source="geometry_computed",
-                ))
-
-                # Add reverse relation
-                reverse_map = {
-                    "east_of": "west_of",
-                    "west_of": "east_of",
-                    "north_of": "south_of",
-                    "south_of": "north_of",
-                    "near": "near",
-                }
-                relations.append(SpatialRelation(
-                    subject=v1.name,
-                    relation=reverse_map.get(direction, "near"),
-                    object=v2.name,
-                    confidence=0.9,
-                    source="geometry_computed",
-                ))
-
-        # Add containment relations: villages contained by construction boundary
-        for v in natural_villages:
-            relations.append(SpatialRelation(
-                subject="construction_boundary",
-                relation="contains",
-                object=v.name,
-                confidence=1.0,
-                source="geometry_computed",
-            ))
-
-    except Exception as e:
-        logger.warning("[SpatialContext] Spatial relations failed: %s", e)
-
-    return relations
 
 
 def _compute_constraint_summary(gis_data: Dict[str, Any]) -> List[ConstraintSummary]:
@@ -425,75 +323,6 @@ def _compute_constraint_summary(gis_data: Dict[str, Any]) -> List[ConstraintSumm
     return summaries
 
 
-def _compute_zone_adjacency(landuse_geojson: Dict[str, Any]) -> Dict[str, List[str]]:
-    """Compute zone adjacency matrix summary from landuse data."""
-    try:
-        from app.utils.geojson_utils import geojson_to_geodataframe
-        from app.modules.gis.schema import get_zone_type_for_dlbm
-
-        gdf = geojson_to_geodataframe(landuse_geojson)
-        if gdf is None or gdf.empty:
-            return {}
-
-        dlbm_col = _find_column(gdf, ["DLBM", "dlbm"])
-        if not dlbm_col:
-            return {}
-
-        # Add zone_type column
-        gdf["zone_type"] = gdf[dlbm_col].astype(str).str.strip().apply(get_zone_type_for_dlbm)
-
-        # Build adjacency from touching parcels
-        adjacency: Dict[str, set] = {}
-        for i in range(len(gdf)):
-            zone_i = gdf.iloc[i]["zone_type"]
-            if not zone_i:
-                continue
-            if zone_i not in adjacency:
-                adjacency[zone_i] = set()
-
-            geom_i = gdf.iloc[i].geometry
-            # Check neighbors (limit to nearby parcels for performance)
-            for j in range(max(0, i - 50), min(len(gdf), i + 50)):
-                if i == j:
-                    continue
-                zone_j = gdf.iloc[j]["zone_type"]
-                if not zone_j or zone_j == zone_i:
-                    continue
-                geom_j = gdf.iloc[j].geometry
-                if geom_i.touches(geom_j) or geom_i.distance(geom_j) < 0.0001:
-                    adjacency[zone_i].add(zone_j)
-
-        return {k: sorted(v) for k, v in adjacency.items() if v}
-    except Exception as e:
-        logger.warning("[SpatialContext] Zone adjacency failed: %s", e)
-        return {}
-
-
-# ── Utility functions ────────────────────────────────────────────────
-
-
-def _compute_total_area(geojson: Dict[str, Any]) -> float:
-    """Compute total area in hectares from a GeoJSON FeatureCollection."""
-    try:
-        from app.utils.geojson_utils import geojson_to_geodataframe
-        from app.utils.area_engine import calculate_area_ha
-
-        gdf = geojson_to_geodataframe(geojson)
-        if gdf is None or gdf.empty:
-            return 0.0
-        return sum(calculate_area_ha(geom) for geom in gdf.geometry)
-    except Exception:
-        return 0.0
-
-
-def _find_column(gdf, candidates: List[str]) -> Optional[str]:
-    """Find first matching column name in GeoDataFrame."""
-    for col in candidates:
-        if col in gdf.columns:
-            return col
-    return None
-
-
 def _load_place_aliases() -> Dict[str, str]:
     """Load place name aliases from YAML config.
 
@@ -522,7 +351,7 @@ def _load_place_aliases() -> Dict[str, str]:
 def _extract_facility_anchors(annotation_geojson: Dict[str, Any]) -> List[FacilityAnchor]:
     """Extract facility anchors from annotation.geojson.
 
-    Filters for 现状设施点 features, maps annotation text to facility type,
+    Filters for existing facility features, maps annotation text to facility type,
     and extracts precise WGS84 coordinates.
     """
     anchors = []
@@ -567,7 +396,7 @@ def _extract_facility_anchors(annotation_geojson: Dict[str, Any]) -> List[Facili
 def _extract_annotation_villages(annotation_geojson: Dict[str, Any]) -> List[NaturalVillageAnchor]:
     """Extract village name anchors from annotation.geojson.
 
-    Filters for 村名 features, extracts precise WGS84 coordinates.
+    Filters for village name features, extracts precise WGS84 coordinates.
     These replace the cluster-derived VillageGroup_N names from step 4.
     """
     anchors = []
@@ -615,7 +444,7 @@ def _merge_annotation_villages(
 
     Strategy:
       1. For each annotation village, find the nearest cluster in natural_villages
-      2. Replace cluster name (VillageGroup_N) with annotation name (八社村)
+      2. Replace cluster name (VillageGroup_N) with annotation name
       3. Update center to annotation's precise coordinate
       4. Keep cluster's parcel_ids (which came from GIS analysis)
       5. Any unmatched annotation villages are appended
@@ -628,7 +457,7 @@ def _merge_annotation_villages(
     for ann_v in ctx.annotation_villages:
         ann_lon, ann_lat = ann_v.center
 
-        # Find nearest cluster within 300m (approx 0.003 degrees at 24°N)
+        # Find nearest cluster within 300m (approx 0.003 degrees at 24N)
         best_idx = None
         best_dist = float("inf")
         for i, nv in enumerate(ctx.natural_villages):
@@ -644,7 +473,7 @@ def _merge_annotation_villages(
             # Merge: replace cluster name with annotation name
             cluster = ctx.natural_villages[best_idx]
             ctx.natural_villages[best_idx] = NaturalVillageAnchor(
-                name=ann_v.name,            # Use annotation name (e.g. "八社村")
+                name=ann_v.name,            # Use annotation name
                 center=ann_v.center,        # Use annotation's precise coordinate
                 parcel_ids=cluster.parcel_ids,  # Keep cluster's parcel analysis
                 dominant_landuse=cluster.dominant_landuse,
@@ -673,40 +502,6 @@ def _merge_annotation_villages(
     )
 
 
-def _find_parcels_near_point(
-    landuse_geojson: Dict[str, Any],
-    center: Tuple[float, float],
-    radius_m: float = 200,
-) -> List[str]:
-    """Find parcel BSMs near a WGS84 point within radius_m.
-
-    Used when annotation village has no matching cluster in natural_villages.
-    """
-    parcel_ids = []
-    try:
-        from shapely.geometry import Point
-
-        ref_point = Point(center[0], center[1])
-        # Approximate degree radius at ~24°N: 1° ≈ 111km * cos(24°) ≈ 101km
-        radius_deg = radius_m / 101000.0
-
-        for ft in landuse_geojson.get("features", []):
-            geom = ft.get("geometry", {})
-            if not geom:
-                continue
-            from shapely.geometry import shape
-            s = shape(geom)
-            if s.is_empty:
-                continue
-            if ref_point.distance(s.centroid) < radius_deg:
-                bsm = str(ft.get("properties", {}).get("BSM", "")).strip()
-                if bsm:
-                    parcel_ids.append(bsm)
-    except Exception as e:
-        logger.debug("[SpatialContext] Parcel near-point lookup failed: %s", e)
-    return parcel_ids
-
-
 # ── Terrain profile (P2 reserved — DEM data not yet available) ─────
 
 
@@ -732,7 +527,7 @@ def _compute_terrain_profile(gis_data: Dict[str, Any]) -> Optional[TerrainProfil
         return None
 
     try:
-        from app.modules.gis.schema.raster_types import TerrainAnalysisResult
+        from app.modules.schema.types.raster_types import TerrainAnalysisResult
 
         # Accept both typed TerrainAnalysisResult and dict
         if isinstance(terrain_analysis, TerrainAnalysisResult):

@@ -7,6 +7,7 @@ Extracted from __init__.py to keep the barrel file focused on exports only.
 
 from __future__ import annotations
 
+import functools
 from typing import Dict, List, Set, Tuple
 
 from .dicts.loader import get_center
@@ -46,7 +47,7 @@ ECOLOGICAL_CODES: Set[str] = _tugui.to_set("code", filter_tag="ECOLOGICAL")
 FOREST_CODES: Set[str] = _tugui.to_set("code", filter_tag="FOREST")
 FORESTRY_CODES: Set[str] = _tugui.to_set("code", filter_tag="FORESTRY")
 WATER_CODES: Set[str] = _tugui.to_set("code", filter_tag="WATER")
-GRASSLAND_CODES: Set[str] = _tugui.to_set("code", filter_tag="GRASSLAND")
+
 
 ECOLOGICAL_PROTECTION_CODES: Set[str] = FOREST_CODES | WATER_CODES
 ECOLOGICAL_CONTROL_CODES: Set[str] = set()
@@ -194,6 +195,15 @@ def is_general_agriculture(dlbm: str) -> bool:
 def get_zone_type_for_dlbm(dlbm: str) -> str:
     return DLBM_TO_ZONE_TYPE.get(dlbm, "农业用地")
 
+@functools.lru_cache(maxsize=256)
+def resolve_zone_type_for_dlbm(dlbm: str) -> str:
+    """Resolve DLBM to zone type with caching.
+
+    Moved from app.tools.gis._generation.zone_generator — pure lookup,
+    no tool-specific logic. The caching is a legitimate schema-level optimization.
+    """
+    return get_zone_type_for_dlbm(dlbm.strip())
+
 def get_dlbms_for_zone_type(zone_type: str) -> List[str]:
     return ZONE_TYPE_TO_DLBMS.get(zone_type, [])
 
@@ -279,7 +289,7 @@ __all__ = [
     "CONSTRUCTION_USE_TYPES", "CONSTRUCTION_ZONE_TYPES",
     # Functions
     "is_basic_farmland", "is_general_agriculture",
-    "get_zone_type_for_dlbm", "get_dlbms_for_zone_type",
+    "get_zone_type_for_dlbm", "resolve_zone_type_for_dlbm", "get_dlbms_for_zone_type",
     "get_zone_type_for_planned_dlbm",
     "get_zone_type_for_ghytmc", "get_primary_zone",
     "dlbm_to_planning_zone", "get_primary_zone_for_planning_zone",

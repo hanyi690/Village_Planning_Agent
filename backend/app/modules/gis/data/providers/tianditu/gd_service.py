@@ -536,5 +536,257 @@ class GDSpecializedService:
         """获取所有可用服务信息"""
         return GD_SPECIALIZED_SERVICES
 
+    def query_mapserver_layer(
+        self,
+        service_id: str,
+        layer_id: int,
+        bbox: Tuple[float, float, float, float],
+        where: str = "1=1",
+        out_fields: str = "*",
+        max_features: int = 1000,
+    ) -> TiandituResult:
+        """通过 MapServer REST API 查询图层矢量数据
+
+        基于 ArcGIS REST API 规范，直接获取 GeoJSON 格式的矢量要素。
+        这就是 ArcMap/QGIS "导出要素" 功能的 Python 实现。
+
+        Args:
+            service_id: 服务ID（如 "SQSXWPSJ"）
+            layer_id: 图层ID（如 0, 1, 2）
+            bbox: 边界框 (min_lon, min_lat, max_lon, max_lat) WGS84
+            where: SQL WHERE 条件，默认 "1=1" 返回所有
+            out_fields: 返回字段，默认 "*" 返回所有
+            max_features: 最大要素数量（部分服务可能忽略此参数）
+
+        Returns:
+            TiandituResult with GeoJSON data
+        """
+        if not self.gd_token:
+            return TiandituResult(
+                success=False,
+                data={},
+                metadata={},
+                error="GD_TIANDITU_TOKEN 未配置"
+            )
+
+        service_info = GD_SPECIALIZED_SERVICES.get(service_id)
+        if not service_info:
+            return TiandituResult(
+                success=False,
+                data={},
+                metadata={},
+                error=f"未知服务ID: {service_id}"
+            )
+
+        # 构建查询 URL
+        query_url = f"{self.base_url}/server/{service_id}/MapServer/{layer_id}/query"
+
+        # 获取服务坐标系
+        source_epsg = service_info.get("epsg", "EPSG:4326")
+        in_sr = "4326"  # 输入坐标系 WGS84
+        out_sr = "4326"  # 输出坐标系 WGS84
+        if source_epsg == "EPSG:4490":
+            in_sr = "4490"  # CGCS2000
+            out_sr = "4490"
+        elif source_epsg == "EPSG:3857":
+            out_sr = "3857"  # Web墨卡托
+
+        # 天地图 GeoGlobe 平台的 Query 参数
+        # 参考: https://bingtuan.tianditu.gov.cn/docApi/pages/apiHtml/MapService.html
+        params = {
+            "geometry": f"{bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]}",
+            "geometryType": "esriGeometryEnvelope",
+            "inSR": in_sr,
+            "outSR": out_sr,
+            "spatialRel": "esriSpatialRelIntersects",
+            "outFields": out_fields,
+            "returnGeometry": "true",
+            "f": "json",  # 先用 ESRI JSON 格式，更兼容
+            "tk": self.gd_token,
+        }
+
+        # 添加 where 条件（某些服务需要）
+        if where != "1=1":
+            params["where"] = where
+
+        self._rate_limit_wait()
+
+        try:
+            resp = requests.get(
+                query_url,
+                params=params,
+                headers=self._get_headers(),
+                timeout=self.timeout
+            )
+
+            if resp.status_code == 401:
+                return TiandituResult(
+                    success=False,
+                    data={},
+                    metadata={"status_code": 401},
+                    error="认证失败，请检查 GD_TIANDITU_TOKEN 配置"
+                )
+
+            if resp.status_code != 200:
+                # 尝试解析错误响应
+                error_detail = ""
+                try:
+                    error_json = resp.json()
+                    if "error" in error_json:
+                        error_detail = f": {error_json['error'].get('message', '')}"
+                    else:
+                        error_detail = f": {str(error_json)[:200]}"
+                except ValueError:
+                    error_detail = f": {resp.text[:200]}"
+                return TiandituResult(
+                    success=False,
+                    data={},
+                    metadata={"status_code": resp.status_code, "response": resp.text[:500]},
+                    error=f"MapServer Query HTTP {resp.status_code}{error_detail}"
+                )
+
+            # 解析响应
+            try:
+                response_json = resp.json()
+            except ValueError:
+                return TiandituResult(
+                    success=False,
+                    data={},
+                    metadata={"response_preview": resp.text[:200]},
+                    error="MapServer 返回非 JSON 格式"
+                )
+
+            # 检查是否是错误响应
+            if "error" in response_json:
+                error_msg = response_json.get("error", {}).get("message", "未知错误")
+                return TiandituResult(
+                    success=False,
+                    data={},
+                    metadata={"error_code": response_json.get("error", {}).get("code")},
+                    error=f"MapServer 错误: {error_msg}"
+                )
+
+            # 处理 ESRI JSON 格式 -> GeoJSON
+            # ESRI JSON 格式: {features: [{attributes: {...}, geometry: {x, y} or {rings: [...]}}]}
+            geojson = None
+            if "features" in response_json and "type" not in response_json:
+                # 这是 ESRI JSON 格式，需要转换
+                geojson = self._esri_json_to_geojson(response_json)
+            else:
+                # 已经是 GeoJSON 格式
+                geojson = response_json
+
+            features = geojson.get("features", []) if geojson else []
+
+            return TiandituResult(
+                success=True,
+                data={"geojson": geojson},
+                metadata={
+                    "service_id": service_id,
+                    "layer_id": layer_id,
+                    "layer_name": service_info.get("name", ""),
+                    "feature_count": len(features),
+                    "bbox": bbox,
+                    "source": "gd_mapserver_query",
+                }
+            )
+
+        except requests.Timeout:
+            return TiandituResult(
+                success=False,
+                data={},
+                metadata={},
+                error="MapServer Query 请求超时"
+            )
+
+        except Exception as e:
+            logger.error(f"[GDSpecializedService] MapServer Query 异常: {e}")
+            return TiandituResult(
+                success=False,
+                data={},
+                metadata={},
+                error=str(e)
+            )
+
+    def _esri_json_to_geojson(self, esri_json: Dict[str, Any]) -> Dict[str, Any]:
+        """将 ESRI JSON 格式转换为 GeoJSON 格式
+
+        ESRI JSON 格式:
+            {
+                "features": [{
+                    "attributes": {...},
+                    "geometry": {"x": ..., "y": ...} or {"rings": [[[x,y], ...]]}
+                }],
+                "geometryType": "esriGeometryPoint" | "esriGeometryPolyline" | "esriGeometryPolygon"
+            }
+
+        Args:
+            esri_json: ESRI JSON 格式的响应
+
+        Returns:
+            标准 GeoJSON FeatureCollection
+        """
+        features = []
+        esri_features = esri_json.get("features", [])
+        geometry_type = esri_json.get("geometryType", "")
+
+        for esri_feat in esri_features:
+            attributes = esri_feat.get("attributes", {})
+            esri_geom = esri_feat.get("geometry")
+
+            if not esri_geom:
+                continue
+
+            # 转换几何
+            geojson_geom = None
+
+            # 点
+            if "x" in esri_geom and "y" in esri_geom:
+                geojson_geom = {
+                    "type": "Point",
+                    "coordinates": [esri_geom["x"], esri_geom["y"]]
+                }
+            # 线
+            elif "paths" in esri_geom:
+                paths = esri_geom["paths"]
+                if len(paths) == 1:
+                    geojson_geom = {
+                        "type": "LineString",
+                        "coordinates": paths[0]
+                    }
+                else:
+                    geojson_geom = {
+                        "type": "MultiLineString",
+                        "coordinates": paths
+                    }
+            # 面
+            elif "rings" in esri_geom:
+                rings = esri_geom["rings"]
+                if len(rings) == 1:
+                    geojson_geom = {
+                        "type": "Polygon",
+                        "coordinates": rings
+                    }
+                else:
+                    # 多面或带洞的多边形
+                    # ESRI rings: 外环逆时针，内环顺时针
+                    # GeoJSON: 外环 + 洞
+                    geojson_geom = {
+                        "type": "Polygon",
+                        "coordinates": rings
+                    }
+
+            if geojson_geom:
+                features.append({
+                    "type": "Feature",
+                    "properties": attributes,
+                    "geometry": geojson_geom
+                })
+
+        return {
+            "type": "FeatureCollection",
+            "features": features
+        }
+
 
 __all__ = ["GDSpecializedService", "GD_TOKEN", "GD_BASE_URL"]

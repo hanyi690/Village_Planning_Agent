@@ -8,7 +8,8 @@ os.makedirs(outdir, exist_ok=True)
 
 # First run: generate and export layers
 print("Step 1: Generating layers...")
-from app.modules.gis.data.loader import load_all, resolve_gen_intent
+from app.modules.gis.data.loader import load_all
+from app.tools.gis.parse import resolve_gen_intent
 from app.tools.gis.generate import (
     _generate_function_zones,
     _generate_planning_zones,

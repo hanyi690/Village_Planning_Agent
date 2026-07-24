@@ -92,7 +92,7 @@ class SharedGISContext:
             return None
 
         try:
-            from app.modules.gis.data.fetcher import get_fetcher
+            from app.modules.data.fetcher import get_fetcher
             fetcher = get_fetcher()  # 使用单例
 
             center, metadata = fetcher.get_village_center(self.village_name, buffer_km=self.buffer_km)

@@ -19,7 +19,7 @@ def search_poi(keyword: str, center: list, radius: int = 1000, page_size: int = 
         radius: Search radius in meters. Default 1000.
         page_size: Results per page. Default 20.
     """
-    from app.modules.gis.data.providers.poi import POIProvider
+    from app.modules.data.providers.poi import POIProvider
     if not keyword:
         return make_result(success=False, error="keyword required")
     if not center:

@@ -532,7 +532,7 @@ def _format_encoding_validation(
     lines = []
 
     try:
-        from app.modules.gis.schema import GHYTBM_TO_GHYTMC
+        from app.modules.schema import GHYTBM_TO_GHYTMC
 
         # Validate operation land_use_code
         valid_ops = 0

@@ -22,8 +22,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from app.modules.gis.schema.canonical import BBox
-from app.modules.gis.data.providers.tianditu.tiles import TileService
+from app.modules.schema.types.canonical import BBox
+from app.modules.data.providers.tianditu.tiles import TileService
 from app.utils.logger import get_logger
 
 from .base import DataSourceDriver, DataSourceResult, DataSourceMetadata
@@ -199,7 +199,7 @@ class TiandituTileDriver(DataSourceDriver):
 
         if self.service_id:
             # Guangdong thematic service
-            from app.modules.gis.data.providers.tianditu.gd_service import (
+            from app.modules.data.providers.tianditu.gd_service import (
                 GDSpecializedService,
             )
 

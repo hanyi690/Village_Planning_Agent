@@ -76,7 +76,7 @@ def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
         Dict with matching codes: ghytbm, ghflbm, vne_code, dlbm_aliases, candidates.
     """
     try:
-        from app.modules.gis.schema import (
+        from app.modules.schema import (
             GHYTBM_TO_GHYTMC,
             GHYTBM_TO_ZONE_TYPE,
             GHYTBM_TO_VNE,

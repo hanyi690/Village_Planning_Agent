@@ -30,7 +30,7 @@ def _intent_from_typed(intent: Any) -> Any:
     Phase 4: replaces _intent_from_dict bridge. Now intent comes from PARSE
     as SpatialPlanningIntent — no dict conversion needed in the pipeline.
     """
-    from app.modules.gis.schema.contracts import (
+    from app.modules.schema.contracts.layout_contracts import (
         Direction, Density, ZoneIntent, FacilityIntent,
         AxisIntent, ConstraintIntent, UnifiedSpatialIntent,
     )
@@ -282,8 +282,8 @@ def _make_planning_zone_layer(
     if not source or not source.get("features"):
         return None
 
-    from app.modules.gis.schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
-    from app.modules.gis.schema.code_sets import GHYTMC_TO_PLANNING_ZONE
+    from app.modules.schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
+    from app.modules.schema.encodings.code_sets import GHYTMC_TO_PLANNING_ZONE
 
     features = []
     for feat in source["features"]:
@@ -500,7 +500,11 @@ def _validate_space_control_against_kg(
     geojson: Dict[str, Any],
     kg_three_lines: List[Dict[str, Any]],
 ) -> None:
-    """Log warnings when space control zone areas deviate from KG three-line targets."""
+    """Log info when space control zone areas deviate from KG three-line targets.
+
+    Phase 6: MIP now enforces three-line area targets as hard constraints,
+    so deviations should be 0. This function serves as a verification signal.
+    """
     # Sum areas by zone code
     zone_areas: Dict[str, float] = {}
     for feat in geojson.get("features", []):
@@ -533,7 +537,7 @@ def _validate_space_control_against_kg(
             actual = zone_areas[code]
             deviation = abs(actual - target_ha) / target_ha if target_ha > 0 else 0
             if deviation > 0.20:
-                logger.warning(
+                logger.info(
                     "[generate_layout] KG three-line deviation: %s target=%.1fha actual=%.1fha (%.0f%%)",
                     name, target_ha, actual, deviation * 100,
                 )
@@ -691,7 +695,7 @@ def _apply_operations(
                     props = features[idx].setdefault("properties", {})
                     if new_code:
                         props["DLBM"] = new_code
-                    from app.modules.gis.schema import dlbm_to_planning_zone
+                    from app.modules.schema import dlbm_to_planning_zone
                     props["assigned_zone"] = dlbm_to_planning_zone(new_code)
                     applied += 1
 

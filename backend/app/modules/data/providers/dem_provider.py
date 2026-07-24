@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from app.modules.schema.raster_types import RasterInput, DEMInput, DOMInput
+from app.modules.schema.types.raster_types import RasterInput, DEMInput, DOMInput
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

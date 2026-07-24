@@ -588,7 +588,7 @@ async def extract_regulations_node(state: ParseAgentState) -> dict:
 
     # Load control rule categories from YAML (Phase 3 paradigm alignment)
     try:
-        from app.modules.gis.schema.dicts.rule_loader import get_rule_loader
+        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
         loader = get_rule_loader()
         control_rules_block = loader.format_control_rules_for_prompt()
     except Exception:
@@ -952,7 +952,7 @@ def _auto_correct_code(
     if not ops:
         return ops
     try:
-        from app.modules.gis.schema import GHYTBM_TO_GHYTMC
+        from app.modules.schema import GHYTBM_TO_GHYTMC
         valid_codes = set(GHYTBM_TO_GHYTMC.keys())
     except ImportError:
         logger.debug("[auto_correct] GHYTBM_TO_GHYTMC not available")
@@ -1076,7 +1076,7 @@ async def explore_targets_node(state: ParseAgentState) -> dict:
     """Phase A: Think + Explore -> tools -> forced summary -> draft."""
     # Inject YAML planning targets into prompt (Phase 3 paradigm alignment)
     try:
-        from app.modules.gis.schema.dicts.rule_loader import get_rule_loader
+        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
         loader = get_rule_loader()
         targets_block = loader.format_targets_for_prompt()
         categories_block = loader.format_categories_for_prompt()
@@ -1132,7 +1132,7 @@ async def format_targets_node(state: ParseAgentState) -> dict:
 
     # Load YAML-driven structural constraints (Phase 3 gap fix)
     try:
-        from app.modules.gis.schema.dicts.rule_loader import get_rule_loader
+        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
         loader = get_rule_loader()
         mandatory_block = loader.format_mandatory_indicators_for_prompt()
         valid_lu_block = loader.format_valid_land_uses_for_prompt()
@@ -1289,7 +1289,7 @@ async def validate_and_merge_node(state: ParseAgentState) -> dict:
 
     # 2. Encoding validity
     try:
-        from app.modules.gis.schema import GHYTBM_TO_GHYTMC
+        from app.modules.schema import GHYTBM_TO_GHYTMC
         valid_ghytbms = set(GHYTBM_TO_GHYTMC.keys())
         for op in state.raw_operations:
             code = op.land_use_code or ""

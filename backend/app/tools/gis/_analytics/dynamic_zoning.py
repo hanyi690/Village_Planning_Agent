@@ -20,7 +20,7 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # ── Code sets from schema (single source of truth) ──
-from app.modules.gis.schema.code_sets import (
+from app.modules.schema.encodings.code_sets import (
     BASIC_FARMLAND_CODES,
     FOREST_CODES,
     WATER_CODES,
@@ -34,7 +34,7 @@ _get_primary_zone_for_planning_zone = None
 def _ensure_funcs():
     global _dlbm_to_planning_zone, _get_primary_zone_for_planning_zone
     if _dlbm_to_planning_zone is None:
-        from app.modules.gis.schema import dlbm_to_planning_zone as _dpz, get_primary_zone_for_planning_zone as _gppz
+        from app.modules.schema import dlbm_to_planning_zone as _dpz, get_primary_zone_for_planning_zone as _gppz
         _dlbm_to_planning_zone = _dpz
         _get_primary_zone_for_planning_zone = _gppz
 

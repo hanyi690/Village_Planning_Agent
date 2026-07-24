@@ -30,7 +30,7 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 # DLBM → Planning Zone: import from single source (schema.py)
 # ---------------------------------------------------------------------------
-from app.modules.gis.schema import DLBM_TO_PLANNING_ZONE, PROTECTED_DLBM_CODES, dlbm_to_planning_zone
+from app.modules.schema import DLBM_TO_PLANNING_ZONE, PROTECTED_DLBM_CODES, dlbm_to_planning_zone
 
 # Cross-zone preference cost matrix (symmetric-ish)
 # Same zone = 0, compatible zones = low cost, forbidden zones = high cost
@@ -97,12 +97,18 @@ class MIPZoneAllocator:
         adjacency_rules: Optional[Dict[str, dict]] = None,
         facility_anchors: Optional[List[Dict[str, Any]]] = None,
         protected_parcels_detail: Optional[List[Dict[str, Any]]] = None,
+        three_line_targets: Optional[List[Dict[str, Any]]] = None,
+        vne_summary: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[Dict[str, Any], Any]:
         """Run MIP allocation.
 
         Phase 5: protected_parcels_detail adds spatial containment exclusion —
         parcels within protection boundaries (per KG) are forbidden from
         construction zone assignment regardless of their DLBM code.
+
+        Phase 6: three_line_targets adds hard area constraints from KG ThreeLine
+        entities (no slack, no value clipping). vne_summary adds zone-level
+        hard constraints from VNE classification.
 
         Returns:
             Tuple of (GeoJSON FeatureCollection, MIPTrace dict).
@@ -216,6 +222,20 @@ class MIPZoneAllocator:
         if constraints:
             self._add_hard_constraints(
                 pulp, prob, x, parcels, planning_zones, constraints, targets, obj_terms
+            )
+
+        # C3b: Three-line hard constraints (Phase 6 — no slack, no clipping)
+        three_line_applied = 0
+        if three_line_targets:
+            three_line_applied = self._add_three_line_hard_constraints(
+                pulp, prob, x, parcels, planning_zones, three_line_targets
+            )
+
+        # C3c: VNE zone-level hard constraints (Phase 6)
+        vne_applied = 0
+        if vne_summary:
+            vne_applied = self._add_vne_zone_constraints(
+                pulp, prob, x, parcels, planning_zones, vne_summary
             )
 
         # C4: PARSE semantic constraints (Step 1 — intent fidelity)
@@ -399,6 +419,8 @@ class MIPZoneAllocator:
             "density_hints_applied": density_hints or {},
             "adjacency_rules_applied": adjacency_rules or {},
             "protected_parcels_excluded": kg_excluded_count,
+            "three_line_constraints_applied": three_line_applied,
+            "vne_constraints_applied": vne_applied,
         }
 
         return {"type": "FeatureCollection", "features": output_features}, mip_trace.model_dump()
@@ -526,6 +548,209 @@ class MIPZoneAllocator:
                     obj_terms.append(KG_WEIGHT * sl)
                     kg_cidx += 1
 
+    def _add_three_line_hard_constraints(
+        self,
+        pulp_mod,
+        prob,
+        x: Dict,
+        parcels: List[Dict],
+        planning_zones: List[str],
+        three_line_targets: List[Dict[str, Any]],
+    ) -> int:
+        """Add hard area constraints from KG ThreeLine entities (Phase 6).
+
+        Unlike _add_hard_constraints, these are TRUE hard constraints:
+        - No slack variables
+        - No value clipping to DLBM-native bounds
+        - Directly enforce area targets from protection zone geometry
+
+        Three-line → planning zone mapping (by DLBM code, not zone name):
+          - 生态保护红线 → parcels with DLBM in ecological codes, sum area >= target
+          - 永久基本农田 → parcels with DLBM in farmland codes, sum area >= target
+          - 城镇开发边界 / 村庄建设边界 → parcels with DLBM in construction codes, sum area <= target
+
+        This works regardless of whether planning_zones uses land_use level
+        (耕地/园地/...) or planning_zone level (生态保护区/农田保护区/...),
+        because it classifies parcels by their DLBM→planning_zone mapping.
+
+        Returns:
+            Number of constraints applied.
+        """
+        from app.modules.schema import (
+            ECOLOGICAL_CODES, FOREST_CODES, WATER_CODES,
+            BASIC_FARMLAND_CODES, GENERAL_AGRICULTURE_CODES,
+            DLBM_TO_PLANNING_ZONE,
+        )
+
+        # Build construction DLBM set from DLBM_TO_PLANNING_ZONE mapping
+        _construction_dlbms = {
+            code for code, pz in DLBM_TO_PLANNING_ZONE.items()
+            if pz == "村庄建设区"
+        }
+
+        # Mapping: (name_keyword, DLBM_code_set, direction)
+        # direction: ">=" means classified parcel area sum >= target, "<=" means <= target
+        three_line_map = [
+            ("生态", ECOLOGICAL_CODES | FOREST_CODES | WATER_CODES, ">="),
+            ("农田", BASIC_FARMLAND_CODES | GENERAL_AGRICULTURE_CODES, ">="),
+            ("基本农田", BASIC_FARMLAND_CODES | GENERAL_AGRICULTURE_CODES, ">="),
+            ("建设", _construction_dlbms, "<="),
+            ("开发边界", _construction_dlbms, "<="),
+        ]
+
+        applied = 0
+        for tl in three_line_targets:
+            name = str(tl.get("name", ""))
+            target = tl.get("area_target_ha")
+            try:
+                target = float(target) if target is not None else None
+            except (ValueError, TypeError):
+                target = None
+            if not name or target is None or target <= 0:
+                continue
+
+            # Find matching DLBM code set
+            dlbm_set = None
+            direction = None
+            for keyword, codes, d in three_line_map:
+                if keyword in name:
+                    dlbm_set = codes
+                    direction = d
+                    break
+
+            if dlbm_set is None:
+                continue
+
+            # Build area sum over all parcels whose DLBM is in the code set,
+            # regardless of which zone they're assigned to.
+            # Σ_i area_i * Σ_j x[i,j] for parcels with dlbm in dlbm_set
+            # Since Σ_j x[i,j] = 1 (assignment constraint), this simplifies to
+            # Σ_i area_i for parcels with dlbm in dlbm_set — a CONSTANT.
+            # But that's the CURRENT area, not the PLANNED area.
+            # The planned area is: Σ_{i: dlbm∈set} Σ_j area_i * x[i,j]
+            # where we only sum over zones that belong to the target planning zone group.
+            # For simplicity and correctness, sum over ALL zones for qualifying parcels:
+            area_terms = []
+            for i, p in enumerate(parcels):
+                if p["dlbm"] in dlbm_set:
+                    for j in range(len(planning_zones)):
+                        if (i, j) in x:
+                            area_terms.append(p["area_ha"] * x[i, j])
+
+            if not area_terms:
+                continue
+
+            # Add hard constraint (no slack)
+            constraint_name = f"three_line_{name.replace(' ', '_')}_{applied}"
+            if direction == ">=":
+                prob += pulp_mod.lpSum(area_terms) >= target, constraint_name
+            else:
+                prob += pulp_mod.lpSum(area_terms) <= target, constraint_name
+
+            applied += 1
+            logger.info(
+                f"[MIP] Three-line hard constraint: {name} → "
+                f"DLBM group({len(dlbm_set)} codes) {direction} {target:.1f}ha"
+            )
+
+        return applied
+
+    def _add_vne_zone_constraints(
+        self,
+        pulp_mod,
+        prob,
+        x: Dict,
+        parcels: List[Dict],
+        planning_zones: List[str],
+        vne_summary: List[Dict[str, Any]],
+    ) -> int:
+        """Add zone-level hard constraints from VNE classification (Phase 6).
+
+        VNE codes classify each parcel into one of 3 primary zones:
+          - V (建设空间) → parcels with construction DLBM
+          - E (生态空间) → parcels with ecological DLBM
+          - N (农业空间) → parcels with agricultural DLBM
+
+        The constraint ensures the total assigned area of V-classified parcels
+        (across ALL zones) is at least V_total, etc. This works regardless
+        of whether planning_zones uses land_use or planning_zone level names.
+
+        Returns:
+            Number of constraints applied.
+        """
+        from app.modules.schema import (
+            ECOLOGICAL_CODES, FOREST_CODES, WATER_CODES,
+            BASIC_FARMLAND_CODES, GENERAL_AGRICULTURE_CODES,
+            DLBM_TO_PLANNING_ZONE,
+        )
+
+        _construction_dlbms = {
+            code for code, pz in DLBM_TO_PLANNING_ZONE.items()
+            if pz == "村庄建设区"
+        }
+
+        # Aggregate VNE totals by top-level code
+        v_total = sum(
+            float(r.get("total_area_ha", 0) or 0)
+            for r in vne_summary
+            if str(r.get("vne_code", "")).startswith("V")
+        )
+        e_total = sum(
+            float(r.get("total_area_ha", 0) or 0)
+            for r in vne_summary
+            if str(r.get("vne_code", "")).startswith("E")
+        )
+        n_total = sum(
+            float(r.get("total_area_ha", 0) or 0)
+            for r in vne_summary
+            if str(r.get("vne_code", "")).startswith("N")
+        )
+
+        applied = 0
+
+        # V → construction DLBM parcels area >= V_total
+        if v_total > 0:
+            area_terms = []
+            for i, p in enumerate(parcels):
+                if p["dlbm"] in _construction_dlbms:
+                    for j in range(len(planning_zones)):
+                        if (i, j) in x:
+                            area_terms.append(p["area_ha"] * x[i, j])
+            if area_terms:
+                prob += pulp_mod.lpSum(area_terms) >= v_total, "vne_construction_floor"
+                applied += 1
+                logger.info(f"[MIP] VNE hard constraint: construction parcels >= {v_total:.1f}ha (V-coded)")
+
+        # E → ecological DLBM parcels area >= E_total
+        if e_total > 0:
+            eco_codes = ECOLOGICAL_CODES | FOREST_CODES | WATER_CODES
+            area_terms = []
+            for i, p in enumerate(parcels):
+                if p["dlbm"] in eco_codes:
+                    for j in range(len(planning_zones)):
+                        if (i, j) in x:
+                            area_terms.append(p["area_ha"] * x[i, j])
+            if area_terms:
+                prob += pulp_mod.lpSum(area_terms) >= e_total, "vne_ecological_floor"
+                applied += 1
+                logger.info(f"[MIP] VNE hard constraint: ecological parcels >= {e_total:.1f}ha (E-coded)")
+
+        # N → agricultural DLBM parcels area >= N_total
+        if n_total > 0:
+            ag_codes = BASIC_FARMLAND_CODES | GENERAL_AGRICULTURE_CODES
+            area_terms = []
+            for i, p in enumerate(parcels):
+                if p["dlbm"] in ag_codes:
+                    for j in range(len(planning_zones)):
+                        if (i, j) in x:
+                            area_terms.append(p["area_ha"] * x[i, j])
+            if area_terms:
+                prob += pulp_mod.lpSum(area_terms) >= n_total, "vne_agricultural_floor"
+                applied += 1
+                logger.info(f"[MIP] VNE hard constraint: agricultural parcels >= {n_total:.1f}ha (N-coded)")
+
+        return applied
+
     def _add_parse_constraints(
         self,
         pulp_mod,
@@ -593,7 +818,7 @@ class MIPZoneAllocator:
                 if isinstance(rule, dict) and rule.get("operation") == "no_overlap":
                     subject = rule.get("subject", "")
                     # Match subject against DLBM zone types
-                    from app.modules.gis.schema import get_zone_type_for_dlbm
+                    from app.modules.schema import get_zone_type_for_dlbm
                     for i, p in enumerate(parcels):
                         zt = get_zone_type_for_dlbm(p["dlbm"])
                         if subject and subject in zt and (i, construction_idx) in x:

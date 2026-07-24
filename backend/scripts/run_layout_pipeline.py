@@ -459,6 +459,9 @@ def run_allocate_step(
         density_hints=alloc_intent.density_hints or None,
         adjacency_rules=alloc_intent.adjacency_rules or None,
         facility_anchors=facility_anchors,
+        protected_parcels_detail=kg_result.get("kg_protected_parcels_detail"),  # Phase 5
+        three_line_targets=kg_result.get("kg_three_lines"),  # Phase 6: hard area constraints
+        vne_summary=kg_result.get("kg_vne_summary"),  # Phase 6: VNE zone-level constraints
     )
 
     print(
@@ -639,7 +642,7 @@ def run_render_step(layers: List[Dict], gis_data: dict, village_name: str, rende
     plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
     plt.rcParams["axes.unicode_minus"] = False
 
-    from app.modules.gis.schema import PLANNING_ZONE_COLORS
+    from app.modules.schema import PLANNING_ZONE_COLORS
 
     boundary = gis_data.get("boundary_geojson")
     allocated = None

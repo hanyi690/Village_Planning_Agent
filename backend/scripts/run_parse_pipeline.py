@@ -459,7 +459,7 @@ async def run_pipeline(source: str = "json", text_path: str = ""):
 
     # Step 2: Compute spatial context
     with StepTimer("计算空间上下文"):
-        from app.modules.gis.spatial_context import compute_spatial_context
+        from app.modules.spatial_ops import compute_spatial_context
 
         spatial_context = compute_spatial_context(gis_data)
         print(f"  parcels: {spatial_context.parcel_count}", flush=True)
@@ -481,7 +481,7 @@ async def run_pipeline(source: str = "json", text_path: str = ""):
         kg_summary = {"triple_count": 0, "parcel_count": 0, "facility_count": 0, "road_count": 0, "village_count": 0}
         typed_parcels = None  # Typed parcels from ingestion layer (schema-injection path)
         try:
-            from app.modules.gis.schema import ingest_current_landuse
+            from app.modules.data import ingest_current_landuse
             landuse_path = DATA_DIR / "current" / "landuse.geojson"
             if landuse_path.exists():
                 typed_parcels, _parcel_warnings = ingest_current_landuse(str(landuse_path))

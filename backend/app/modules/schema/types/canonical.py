@@ -95,7 +95,7 @@ class ProviderLandParcel(GeoFeature):
     (properties, source_provider, bbox) and basic DLBM-derived fields.
 
     This is NOT the internal pipeline type. To use in the pipeline, convert
-    via ingestion.provider_to_parcel() which validates encodings and returns
+    via data.ingest.provider_to_parcel() which validates encodings and returns
     a CurrentLandUseParcel or PlannedLandUseParcel with explicit _system tags.
     """
 
@@ -126,8 +126,8 @@ class GISDataBundle(BaseModel):
     This is the SINGLE object that flows through the entire pipeline.
     Created by GISDataOrchestrator, consumed by all downstream tools.
 
-    landuse entries are BaseLandUseParcel (or subclasses) from ingestion.py.
-    Forward reference used to avoid circular import with ingestion.
+    landuse entries are BaseLandUseParcel (or subclasses) from data/ingest.py.
+    Types defined in spatial_types.py; ingestion lives in app/modules/data/ingest.py.
     """
 
     boundary: Optional[GeoFeature] = None

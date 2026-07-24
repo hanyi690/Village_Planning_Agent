@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from app.modules.gis.schema.canonical import BBox
+from app.modules.schema.types.canonical import BBox
 from app.utils.logger import get_logger
 
 from ..drivers.base import DataSourceDriver, DataSourceResult

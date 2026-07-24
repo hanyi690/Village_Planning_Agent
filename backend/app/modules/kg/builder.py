@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
-from app.modules.gis.schema.spatial_types import CurrentLandUseParcel
+from app.modules.schema.types.spatial_types import CurrentLandUseParcel
 from app.utils.schema_validator import validate_ingestion_point
 
 from rdflib import Graph, Namespace, Literal, RDF, URIRef, BNode
@@ -37,7 +37,7 @@ def _load_constraint_patterns_from_yaml() -> List[Dict[str, Any]]:
       - 预期性 (expected) indicators get '='
     """
     try:
-        from app.modules.gis.schema.dicts.rule_loader import get_rule_loader
+        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
         loader = get_rule_loader()
         patterns = []
         # Map from indicator field to operator and constraint_id
@@ -92,7 +92,7 @@ def _load_zone_patterns_from_yaml() -> Dict[str, Dict[str, Any]]:
     Maps YAML categories (3 major groups) to zone definitions with colors and restrictions.
     """
     try:
-        from app.modules.gis.schema.dicts.rule_loader import get_rule_loader
+        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
         loader = get_rule_loader()
         zone_patterns = {}
         # Map major groups to zone definitions
@@ -184,11 +184,11 @@ class KGInputParcels:
         Returns:
             KGInputParcels with validated typed parcels
         """
-        from app.modules.gis.schema import ingest_current_landuse
+        from app.modules.data import ingest_current_landuse
         
         try:
             # Use ingestion layer to enforce proper parsing
-            parcels = ingest_current_landuse(geojson)
+            parcels, _warnings = ingest_current_landuse(geojson)
             logger.debug(f"[KGBuilder] Ingested {len(parcels)} parcels from GeoJSON")
             return cls(parcels=parcels)
         except Exception as e:
@@ -235,7 +235,7 @@ def _load_semantic_constraint_map() -> Dict[str, Dict[str, Any]]:
     }
     # Extend from YAML indicators (public service, infrastructure, etc.)
     try:
-        from app.modules.gis.schema.dicts.rule_loader import get_rule_loader
+        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
         loader = get_rule_loader()
         for ind in loader.planning_targets():
             if ind.field in ("public_service_area_ha", "infrastructure_area_ha"):
@@ -294,10 +294,14 @@ class PlanningKG:
           12. VNE categories
           13. Three-zone-three-line
         """
-        # 1. Add village entity
+        # 1. Add village entity (administrative village)
         village = PLN.village
-        self.g.add((village, RDF.type, PLN.Village))
+        self.g.add((village, RDF.type, EntityTypes.AdministrativeVillage))
         self.g.add((village, PLN.name, Literal(self.village_name or "unknown")))
+
+        # Compute centroid from boundary_geojson for spatial anchoring
+        if gis_data:
+            self._add_village_centroid(village, gis_data)
 
         # 2. Add parcels from GeoJSON
         if landuse_geojson:
@@ -559,7 +563,7 @@ class PlanningKG:
         # Phase 3: Auto-convert dict to typed SpatialPlanningIntent
         if isinstance(intent, dict):
             try:
-                from app.agent.gis.parse.state import SpatialPlanningIntent
+                from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent
                 intent = SpatialPlanningIntent(**intent)
                 logger.debug("[KG] Auto-converted dict intent to SpatialPlanningIntent")
             except Exception as e:
@@ -597,12 +601,12 @@ class PlanningKG:
 
     def _add_zones_from_intent(
         self,
-        intent: Dict[str, Any],
+        intent: "SpatialPlanningIntent",
         zone_areas: Optional[Dict[str, float]] = None,
     ):
-        """Add zone entities from intent.zones."""
-        zones = intent.get("zones", [])
-        if not zones:
+        """Add zone entities from intent.zone_targets."""
+        zone_targets = intent.zone_targets or []
+        if not zone_targets:
             # Fallback: add standard zones from ZONE_TYPE_PATTERNS
             for name, props in ZONE_TYPE_PATTERNS.items():
                 zone = PLN[f"zone_{name}"]
@@ -614,81 +618,108 @@ class PlanningKG:
                 self.g.add((PLN.village, PLN.has_zone, zone))
             return
 
-        for z in zones:
-            zone_id = z.get("zone_id", z.get("land_use", "unknown"))
+        for z in zone_targets:
+            zone_id = z.land_use or "unknown"
             zone = PLN[f"zone_{zone_id}"]
             self.g.add((zone, RDF.type, PLN.Zone))
-            self.g.add((zone, PLN.name, Literal(z.get("land_use", zone_id))))
+            self.g.add((zone, PLN.name, Literal(z.land_use or zone_id)))
 
             # Area: area_ratio × total GIS area > zone_areas > omit
             area_ha = None
-            area_ratio = z.get("area_ratio")
-            if area_ratio and zone_areas:
+            if z.area_ratio and zone_areas:
                 total_area = sum(zone_areas.values())
                 if total_area > 0:
-                    area_ha = round(area_ratio * total_area, 2)
+                    area_ha = round(z.area_ratio * total_area, 2)
             if area_ha is None and zone_areas:
-                land_use = z.get("land_use", "")
-                area_ha = zone_areas.get(land_use)
+                area_ha = zone_areas.get(z.land_use or "")
             if area_ha is not None:
                 self.g.add((zone, PLN.area_target_ha, Literal(area_ha, datatype=XSD.double)))
 
             # Color from ZONE_TYPE_PATTERNS if matching
-            land_use = z.get("land_use", "")
-            pattern = ZONE_TYPE_PATTERNS.get(land_use)
+            pattern = ZONE_TYPE_PATTERNS.get(z.land_use or "")
             if pattern:
                 self.g.add((zone, PLN.color, Literal(pattern["color"])))
                 for restriction in pattern["restrictions"]:
                     self.g.add((zone, PLN.restriction, Literal(restriction)))
 
-            # Direction as placement hint
-            direction = z.get("direction", "")
-            if direction:
-                self.g.add((zone, PLN.direction, Literal(direction)))
+            # Direction as placement hint (from spatial_preference)
+            if z.spatial_preference and z.spatial_preference.direction:
+                self.g.add((zone, PLN.direction, Literal(z.spatial_preference.direction)))
 
             # Density
-            density = z.get("density", "")
-            if density:
-                self.g.add((zone, PLN.density, Literal(density)))
+            if z.density:
+                self.g.add((zone, PLN.density, Literal(z.density)))
+
+            # VNE code if available
+            if z.vne_code:
+                self.g.add((zone, PLN.vne_code, Literal(z.vne_code)))
 
             self.g.add((PLN.village, PLN.has_zone, zone))
 
     def _add_constraints_from_intent(
         self,
-        intent: Dict[str, Any],
+        intent: "SpatialPlanningIntent",
         zone_areas: Optional[Dict[str, float]] = None,
     ):
-        """Add constraint entities from intent.constraints."""
-        constraints = intent.get("constraints", [])
-        for c in constraints:
-            ctype = c.get("constraint_type", "")
-            mapping = self._INTENT_CONSTRAINT_MAP.get(ctype)
-            if not mapping:
-                continue
+        """Add constraint entities from intent area fields + three-lines structure.
 
-            cid = c.get("constraint_id", f"intent_{ctype}")
-            strict = c.get("strict", True)
-            self._add_constraint_triple(
-                cid=cid,
-                field=mapping["field"],
-                operator=mapping["operator"],
-                value=0.0,  # Actual value from GIS data below
-                description=mapping["description"],
-                source=f"intent:{ctype}",
-            )
+        The typed SpatialPlanningIntent expresses constraints as area target fields
+        (construction_area_ha, farmland_area_ha, ecological_area_ha) plus the
+        three_zones_three_lines structure, rather than an explicit constraint list.
+        """
+        # Area-based constraints from typed intent fields
+        area_constraints = []
+        if intent.construction_area_ha is not None:
+            area_constraints.append((
+                "intent_construction_cap", "construction_cap", "construction_area_ha",
+                "<=", float(intent.construction_area_ha),
+                "村庄建设用地规模上限",
+            ))
+        if intent.farmland_area_ha is not None:
+            area_constraints.append((
+                "intent_farmland_min", "farmland_min", "farmland_area_ha",
+                ">=", float(intent.farmland_area_ha),
+                "耕地保有量下限",
+            ))
+        if intent.ecological_area_ha is not None:
+            area_constraints.append((
+                "intent_ecological_min", "ecological_redline", "ecological_area_ha",
+                ">=", float(intent.ecological_area_ha),
+                "生态保护红线面积约束",
+            ))
 
-            # Add strictness as extra triple
+        for cid, ctype, field, op, value, desc in area_constraints:
+            self._add_constraint_triple(cid, field, op, value, desc, "intent")
+            # Mark as strict (hard constraint from planning intent)
             constraint_uri = PLN[cid]
-            self.g.add((constraint_uri, PLN.strict, Literal(strict, datatype=XSD.boolean)))
+            self.g.add((constraint_uri, PLN.strict, Literal(True, datatype=XSD.boolean)))
 
-            # geometry_ref → link to GIS layer
-            geo_ref = c.get("geometry_ref", "")
-            if geo_ref:
-                self.g.add((constraint_uri, PLN.geometry_ref, Literal(geo_ref)))
+        # Three-lines structure → constraint entities with geometry linkage
+        if intent.three_zones_three_lines:
+            for line in intent.three_zones_three_lines.lines:
+                ctype_map = {
+                    "ecological_redline": ("ecological_redline", "ecological_area_ha", "生态保护红线"),
+                    "permanent_farmland": ("farmland_protection", "farmland_area_ha", "永久基本农田保护"),
+                    "urban_dev_boundary": ("construction_control", "construction_area_ha", "村庄建设边界"),
+                }
+                mapping = ctype_map.get(line.line_type)
+                if not mapping:
+                    continue
+                ctype, field, desc = mapping
+                cid = f"intent_{ctype}"
+                self._add_constraint_triple(
+                    cid=cid, field=field, operator=">=",
+                    value=float(line.area_ha) if line.area_ha else 0.0,
+                    description=desc, source=f"intent:{ctype}",
+                )
+                constraint_uri = PLN[cid]
+                self.g.add((constraint_uri, PLN.strict, Literal(True, datatype=XSD.boolean)))
+                if line.geometry_ref:
+                    self.g.add((constraint_uri, PLN.geometry_ref, Literal(line.geometry_ref)))
 
-        # Add ecological redline from GIS zone_areas
+        # Add ecological redline from GIS zone_areas (fallback when not in intent)
         eco_area = zone_areas.get("生态绿地") if zone_areas else None
-        if eco_area is not None:
+        if eco_area is not None and intent.ecological_area_ha is None:
             c = PLN.ecological_redline_protection
             self.g.add((c, RDF.type, PLN.Constraint))
             self.g.add((c, PLN.constraint_id, Literal("ecological_redline_protection")))
@@ -700,46 +731,42 @@ class PlanningKG:
             self.g.add((c, PLN.source, Literal("gis_data")))
             self._constraint_count += 1
 
-    def _add_facilities_from_intent(self, intent: Dict[str, Any]):
+    def _add_facilities_from_intent(self, intent: "SpatialPlanningIntent"):
         """Add facility entities from intent.facilities."""
-        facilities = intent.get("facilities", [])
-        for f in facilities:
-            fid = f.get("facility_id", f.get("facility_type", "unknown"))
+        facilities = intent.facilities or []
+        for i, f in enumerate(facilities):
+            fid = f.type or f"facility_{i}"
             facility = PLN[f"facility_{fid}"]
             self.g.add((facility, RDF.type, PLN.Facility))
-            self.g.add((facility, PLN.name, Literal(f.get("facility_type", fid))))
+            self.g.add((facility, PLN.name, Literal(f.type or fid)))
 
-            target_zone = f.get("target_zone", "")
-            if target_zone:
-                zone_uri = PLN[f"zone_{target_zone}"]
+            if f.anchor_village:
+                zone_uri = PLN[f"zone_{f.anchor_village}"]
                 self.g.add((facility, PLN.serves, zone_uri))
 
-            location_hint = f.get("location_hint", "")
-            if location_hint:
-                self.g.add((facility, PLN.location_hint, Literal(location_hint)))
+            if f.location_hint:
+                self.g.add((facility, PLN.location_hint, Literal(f.location_hint)))
 
-            status = f.get("status", "")
-            if status:
-                self.g.add((facility, PLN.status, Literal(status)))
+            if f.status:
+                self.g.add((facility, PLN.status, Literal(f.status)))
 
             self.g.add((PLN.village, PLN.has_facility, facility))
 
-    def _add_axes_from_intent(self, intent: Dict[str, Any]):
-        """Add axis entities from intent.axes."""
-        axes = intent.get("axes", [])
-        for a in axes:
-            aid = a.get("axis_id", "unknown")
-            axis = PLN[f"axis_{aid}"]
+    def _add_axes_from_intent(self, intent: "SpatialPlanningIntent"):
+        """Add axis entities from intent.development_axes."""
+        axes = intent.development_axes or []
+        for i, a in enumerate(axes):
+            aid = f"axis_{i}"
+            axis = PLN[aid]
             self.g.add((axis, RDF.type, PLN.Axis))
-            self.g.add((axis, PLN.name, Literal(a.get("label", aid))))
-            self.g.add((axis, PLN.axis_type, Literal(a.get("axis_type", "primary"))))
+            self.g.add((axis, PLN.name, Literal(a.reference_feature or aid)))
+            self.g.add((axis, PLN.axis_type, Literal("primary")))
 
-            direction = a.get("direction", "")
-            if direction:
-                self.g.add((axis, PLN.direction, Literal(direction)))
+            if a.direction:
+                self.g.add((axis, PLN.direction, Literal(a.direction)))
 
             # Connect to zones/facilities
-            for connected_id in a.get("connects", []):
+            for connected_id in a.connects:
                 target = PLN[f"zone_{connected_id}"]
                 self.g.add((axis, PLN.connects, target))
 
@@ -753,8 +780,8 @@ class PlanningKG:
         Constraint entities.
         """
         try:
-            from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
-            metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+            from app.modules.schema.utils.metrics import compute_land_use_metrics
+            metrics = compute_land_use_metrics(gis_data)
         except Exception as e:
             logger.warning(f"[PlanningKG] GIS constraint computation failed: {e}")
             return
@@ -812,7 +839,7 @@ class PlanningKG:
 
         try:
             from app.utils.geojson_utils import geojson_to_geodataframe
-            from app.modules.gis.schema import get_zone_type_for_dlbm
+            from app.modules.schema import get_zone_type_for_dlbm
 
             gdf = geojson_to_geodataframe(landuse_geojson)
             if gdf is None or len(gdf) == 0:
@@ -849,6 +876,66 @@ class PlanningKG:
             logger.warning(f"[PlanningKG] Zone area computation failed: {e}")
             return {}
 
+    def _add_village_centroid(self, village_uri, gis_data: Dict[str, Any]) -> None:
+        """Compute and store centroid coordinates for the administrative village.
+
+        Tries boundary_geojson first, falls back to landuse parcel centroids.
+        """
+        try:
+            from shapely.geometry import shape
+
+            # Primary: centroid from boundary polygon
+            boundary = gis_data.get("boundary_geojson")
+            if boundary and boundary.get("features"):
+                geoms = [
+                    shape(f.get("geometry", {}))
+                    for f in boundary["features"]
+                    if f.get("geometry")
+                ]
+                valid = [g for g in geoms if not g.is_empty]
+                if valid:
+                    from shapely.ops import unary_union
+                    centroid = unary_union(valid).centroid
+                    self.g.add((village_uri, PLN.lon, Literal(round(centroid.x, 6), datatype=XSD.double)))
+                    self.g.add((village_uri, PLN.lat, Literal(round(centroid.y, 6), datatype=XSD.double)))
+                    return
+
+            # Fallback: weighted centroid from landuse parcels
+            landuse = gis_data.get("landuse_current_geojson")
+            if landuse and landuse.get("features"):
+                coords = []
+                for feat in landuse["features"]:
+                    geom = shape(feat.get("geometry", {}))
+                    if not geom.is_empty:
+                        c = geom.centroid
+                        area = float(feat.get("properties", {}).get("SHAPE_Area", 1) or 1)
+                        coords.append((c.x, c.y, area))
+                if coords:
+                    total = sum(w for _, _, w in coords)
+                    lon = sum(x * w for x, _, w in coords) / total
+                    lat = sum(y * w for _, y, w in coords) / total
+                    self.g.add((village_uri, PLN.lon, Literal(round(lon, 6), datatype=XSD.double)))
+                    self.g.add((village_uri, PLN.lat, Literal(round(lat, 6), datatype=XSD.double)))
+        except Exception as e:
+            logger.debug("[PlanningKG] Village centroid computation failed: %s", e)
+
+    def _add_entity_centroid(self, entity_uri, geometry: Dict[str, Any]) -> None:
+        """Extract and store centroid coordinates from a GeoJSON geometry.
+
+        Reuses the Shapely pattern from _add_parcels for consistency.
+        """
+        if not geometry:
+            return
+        try:
+            from shapely.geometry import shape
+            geom = shape(geometry)
+            if not geom.is_empty:
+                c = geom.centroid
+                self.g.add((entity_uri, PLN.lon, Literal(round(c.x, 6), datatype=XSD.double)))
+                self.g.add((entity_uri, PLN.lat, Literal(round(c.y, 6), datatype=XSD.double)))
+        except Exception as e:
+            logger.debug("[PlanningKG] Entity centroid computation failed: %s", e)
+
     def _add_parcels(self, geojson: Dict[str, Any]):
         """Add all parcels as PLN:Parcel entities.
 
@@ -858,8 +945,8 @@ class PlanningKG:
         Three-level key ensures all 660 parcels are preserved.
         """
         features = geojson.get("features", [])
-        from app.modules.gis.schema import get_zone_type_for_dlbm
-        from app.tools.gis._generation.zone_generator import resolve_zone_type_for_dlbm
+        from app.modules.schema import get_zone_type_for_dlbm
+        from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
 
         duplicate_bsms = set()
         seen_bsms = set()
@@ -907,7 +994,7 @@ class PlanningKG:
 
             # VNE classification code
             try:
-                from app.modules.gis.schema import get_vne_for_zone_type
+                from app.modules.schema import get_vne_for_zone_type
                 vne = get_vne_for_zone_type(zone_type)
                 if vne:
                     self.g.add((parcel, PLN.vne_code, Literal(vne)))
@@ -916,7 +1003,7 @@ class PlanningKG:
 
             # Planning zone
             try:
-                from app.modules.gis.schema import dlbm_to_planning_zone
+                from app.modules.schema import dlbm_to_planning_zone
                 planning_zone = dlbm_to_planning_zone(dlbm)
                 if planning_zone:
                     self.g.add((parcel, PLN.planning_zone, Literal(planning_zone)))
@@ -941,7 +1028,7 @@ class PlanningKG:
             parcels: List of typed parcel objects from ingest_current_landuse()
                      (CurrentLandUseParcel or BaseLandUseParcel instances)
         """
-        from app.tools.gis._generation.zone_generator import resolve_zone_type_for_dlbm
+        from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
 
         duplicate_bsms = set()
         seen_bsms = set()
@@ -990,7 +1077,7 @@ class PlanningKG:
 
             # VNE classification code
             try:
-                from app.modules.gis.schema import get_vne_for_zone_type
+                from app.modules.schema import get_vne_for_zone_type
                 vne = get_vne_for_zone_type(zone_type)
                 if vne:
                     self.g.add((parcel_uri, PLN.vne_code, Literal(vne)))
@@ -999,7 +1086,7 @@ class PlanningKG:
 
             # Planning zone (DLBM → planning zone)
             try:
-                from app.modules.gis.schema import dlbm_to_planning_zone
+                from app.modules.schema import dlbm_to_planning_zone
                 planning_zone = dlbm_to_planning_zone(dlbm)
                 if planning_zone:
                     self.g.add((parcel_uri, PLN.planning_zone, Literal(planning_zone)))
@@ -1117,7 +1204,7 @@ class PlanningKG:
 
         # Phase 3: Create PlanningIndicator entities from YAML planning_targets
         try:
-            from app.modules.gis.schema.dicts.rule_loader import get_rule_loader
+            from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
             loader = get_rule_loader()
             for ind in loader.planning_targets():
                 pi = PLN[f"planning_indicator_{ind.code}"]
@@ -1421,7 +1508,7 @@ class PlanningKG:
         Each category gets code, name, zone_type, and parent_category relations.
         """
         try:
-            from app.modules.gis.schema.dicts.loader import get_center
+            from app.modules.schema.encodings.dicts.loader import get_center
             center = get_center()
             vne_dict = center.encoding("vne")
         except Exception as e:
@@ -1469,7 +1556,7 @@ class PlanningKG:
         ThreeLine: 生态保护红线/永久基本农田/城镇开发边界 (from three_line_types.yaml)
         """
         try:
-            from app.modules.gis.schema.dicts.rule_loader import get_rule_loader
+            from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
             loader = get_rule_loader()
         except Exception as e:
             logger.debug("[KG] Three zone/line skipped (YAML unavailable): %s", e)
@@ -1512,7 +1599,7 @@ class PlanningKG:
         establish the designated_as relationship between each parcel
         and its native planning zone.
         """
-        from app.tools.gis._generation.optimizer.mip_allocator import dlbm_to_planning_zone
+        from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone
 
         count = 0
         for ft in landuse_geojson.get("features", []):
@@ -1555,14 +1642,14 @@ class PlanningKG:
             if not bsm:
                 continue
             if dlbm in road_dlbms:
-                roads.append((bsm, dlbm, props))
+                roads.append((bsm, dlbm, props, ft))
             elif dlbm in water_dlbms:
-                water_bodies.append((bsm, dlbm, props))
+                water_bodies.append((bsm, dlbm, props, ft))
             elif dlbm in facility_dlbms:
-                facilities.append((bsm, dlbm, props))
+                facilities.append((bsm, dlbm, props, ft))
 
         # Add Road entities with connects relations
-        for i, (bsm, dlbm, props) in enumerate(roads):
+        for i, (bsm, dlbm, props, ft) in enumerate(roads):
             road = PLN[f"road_{bsm}"]
             self.g.add((road, RDF.type, EntityTypes.Road))
             self.g.add((road, PLN.name, Literal(f"道路_{bsm}")))
@@ -1572,7 +1659,7 @@ class PlanningKG:
             self.g.add((road, Relations.located_in, PLN.village))
 
         # Add WaterBody entities
-        for i, (bsm, dlbm, props) in enumerate(water_bodies):
+        for i, (bsm, dlbm, props, ft) in enumerate(water_bodies):
             water = PLN[f"water_{bsm}"]
             self.g.add((water, RDF.type, EntityTypes.WaterBody))
             self.g.add((water, PLN.name, Literal(f"水域_{bsm}")))
@@ -1580,12 +1667,14 @@ class PlanningKG:
             self.g.add((water, Relations.located_in, PLN.village))
 
         # Add Facility entities with serves relations
-        for i, (bsm, dlbm, props) in enumerate(facilities):
+        for i, (bsm, dlbm, props, ft) in enumerate(facilities):
             facility = PLN[f"facility_{bsm}"]
             self.g.add((facility, RDF.type, EntityTypes.Facility))
             self.g.add((facility, PLN.name, Literal(f"设施_{bsm}")))
             self.g.add((facility, PLN.dlbm, Literal(dlbm)))
             self.g.add((facility, Relations.located_in, PLN.village))
+            # Extract centroid from geometry for facility proximity bonus
+            self._add_entity_centroid(facility, ft.get("geometry", {}))
             # Determine who the facility serves based on DLBM
             if dlbm in ("0801", "0802"):
                 self.g.add((facility, Relations.serves, Literal("教育服务")))
@@ -1611,7 +1700,7 @@ class PlanningKG:
         设施点 → PLN.Facility 实体
         村名 → PLN.Village 实体 (补充 spatial_context 的 natural_villages)
         """
-        from app.modules.gis.schema.spatial_types import CurrentFacility
+        from app.modules.schema.types.spatial_types import CurrentFacility
 
         facility_count = 0
         village_count = 0
@@ -1624,7 +1713,7 @@ class PlanningKG:
                 if text and hasattr(ann, "geometry"):
                     coords = ann.geometry.get("coordinates", [0, 0])
                     village = PLN[f"village_ann_{text}"]
-                    self.g.add((village, RDF.type, PLN.Village))
+                    self.g.add((village, RDF.type, EntityTypes.NaturalSettlement))
                     self.g.add((village, PLN.name, Literal(text)))
                     self.g.add((village, PLN.lon, Literal(coords[0], datatype=XSD.double)))
                     self.g.add((village, PLN.lat, Literal(coords[1], datatype=XSD.double)))
@@ -1706,7 +1795,7 @@ class PlanningKG:
             "farmland_protection_geojson": ("永久基本农田保护红线", "farmland_protection"),
             "ecological_protection_geojson": ("生态保护红线", "ecological_protection"),
             "historical_protection_geojson": ("历史文化保护线", "heritage_protection"),
-            "village_boundary_geojson": ("村庄建设边界", "construction_control"),
+            "construction_zone_geojson": ("村庄建设边界", "construction_control"),
         }
 
         zone_count = 0
@@ -1980,7 +2069,7 @@ class PlanningKG:
         """Add terrain analysis data to KG (预留接口 — DEM data not yet available).
 
         Args:
-            terrain_analysis: TerrainAnalysisResult (from app.modules.gis.schema.raster_types)
+            terrain_analysis: TerrainAnalysisResult (from app.modules.schema.raster_types)
                               or None if DEM data is not available.
 
         When DEM data is available, this method will:
@@ -1995,7 +2084,7 @@ class PlanningKG:
             return self
 
         try:
-            from app.modules.gis.schema.raster_types import TerrainAnalysisResult
+            from app.modules.schema.types.raster_types import TerrainAnalysisResult
 
             # Record terrain profile summary as village-level properties
             slope_pct = getattr(terrain_analysis, "slope_area_pct", {}) or {}

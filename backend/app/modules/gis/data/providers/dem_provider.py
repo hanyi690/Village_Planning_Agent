@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from app.modules.gis.schema.raster_types import RasterInput, DEMInput, DOMInput
+from app.modules.schema.types.raster_types import RasterInput, DEMInput, DOMInput
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -174,7 +174,7 @@ class DEMProvider:
         Returns:
             DEMInput 对象, 包含元信息
         """
-        from app.modules.gis.schema.ingestion import ingest_raster
+        from app.modules.data import ingest_raster
         return ingest_raster(filepath, raster_type="dem")
 
     def load_dom(self, filepath: str) -> DOMInput:
@@ -186,7 +186,7 @@ class DEMProvider:
         Returns:
             DOMInput 对象, 包含元信息
         """
-        from app.modules.gis.schema.ingestion import ingest_raster
+        from app.modules.data import ingest_raster
         return ingest_raster(filepath, raster_type="dom")
 
     def get_download_guide(self) -> dict:

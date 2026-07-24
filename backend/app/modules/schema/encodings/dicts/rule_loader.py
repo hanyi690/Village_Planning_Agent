@@ -11,7 +11,7 @@ Available rule sets:
   - three_line_types.yaml — 3 control lines + construction zone
 
 Usage:
-    from app.modules.gis.schema.dicts.rule_loader import get_rule_loader
+    from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
 
     loader = get_rule_loader()
     indicators = loader.planning_targets()
@@ -355,7 +355,7 @@ class PlanningRuleLoader:
         The LLM must auto-compute vne_code from the GHYTBM code.
         """
         try:
-            from app.modules.gis.schema.code_sets import GHYTBM_TO_VNE, VNE_CODE_TO_NAME
+            from ..code_sets import GHYTBM_TO_VNE, VNE_CODE_TO_NAME
         except Exception:
             return ""
         if not GHYTBM_TO_VNE:

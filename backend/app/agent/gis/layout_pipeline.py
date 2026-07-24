@@ -45,7 +45,7 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
     """
     from app.agent.gis.parse.agent import build_parse_agent_graph
     from app.agent.gis.parse.state import ParseAgentState, SpatialContext, SpatialPlanningIntent
-    from app.modules.gis.spatial_context import compute_spatial_context
+    from app.modules.spatial_ops import compute_spatial_context
 
     reports = state.reports or {}
     village_name = state.village_name
@@ -330,7 +330,67 @@ async def _render_map_node(state: GISPipelineState) -> dict:
         return {"render_result": []}
 
 
-# ── Conditional routing ───────────────────────────────────────────────
+# ── EXECUTE node (replaces allocate_and_generate + validate) ─────────
+
+
+async def _execute_node(state: GISPipelineState) -> dict:
+    """EXECUTE Agent node: runs the execute subgraph (allocate + generate + validate).
+
+    Replaces the deprecated _allocate_generate_react_node + _validate_layout_node.
+    Maps GISPipelineState -> ExecuteAgentState, invokes the execute subgraph
+    (with internal Worker-Evaluator retry loop), maps results back.
+    """
+    from app.agent.gis.execute import build_execute_agent_graph, ExecuteAgentState
+
+    try:
+        exec_state = ExecuteAgentState(
+            session_id=state.session_id,
+            village_name=state.village_name,
+            gis_data=state.gis_data,
+            intent=state.intent,
+            operation_sequence=state.operation_sequence,
+            constraint_set=state.constraint_set,
+            facility_anchors=state.facility_anchors,
+            kg_turtle=state.kg_turtle,
+            kg_constraints=state.kg_constraints,
+            kg_adjacency_map=state.kg_adjacency_map,
+            kg_session_ref=state.kg_session_ref,
+            kg_three_lines=state.kg_three_lines,
+            kg_protected_parcels_detail=state.kg_protected_parcels_detail,
+            kg_vne_summary=state.kg_vne_summary,
+            allocated_geojson=state.allocated_geojson,
+            allocation_summary=state.allocation_summary,
+            layout_configs=state.layout_configs,
+            validation_result=state.validation_result,
+            validation_round=state.validation_round,
+            constraint_adjustments=state.constraint_adjustments,
+            messages=list(state.messages),
+        )
+
+        execute_graph = build_execute_agent_graph()
+        result = await execute_graph.ainvoke(exec_state.model_dump())
+
+        logger.info(
+            "[Pipeline:execute] done: %d layers, round=%d, passed=%s",
+            len(result.get("layout_configs", [])),
+            result.get("validation_round", 0),
+            result.get("validation_result", {}).get("passed", True),
+        )
+
+        return {
+            "allocated_geojson": result.get("allocated_geojson", {}),
+            "allocation_summary": result.get("allocation_summary", {}),
+            "layout_configs": result.get("layout_configs", []),
+            "validation_result": result.get("validation_result", {}),
+            "validation_round": result.get("validation_round", 0),
+            "constraint_adjustments": result.get("constraint_adjustments", []),
+        }
+    except Exception as e:
+        logger.error("[Pipeline:execute] failed: %s", e, exc_info=True)
+        return {}
+
+
+# ── Conditional routing (legacy - execute subgraph handles retry internally) ──
 
 
 def _route_after_validation(state: GISPipelineState) -> Literal["pass", "retry"]:
@@ -375,11 +435,8 @@ def build_layout_pipeline():
     graph.add_node("build_kg", _build_kg_node)
     graph.add_node("detect_conflicts", _detect_conflicts_node)
 
-    # ── Adaptive ReAct subgraph ──
-    graph.add_node("allocate_and_generate", _allocate_generate_react_node)
-
-    # ── Evaluator gate ──
-    graph.add_node("validate_layout", _validate_layout_node)
+    # ── EXECUTE Agent subgraph (replaces allocate_and_generate + validate) ──
+    graph.add_node("execute", _execute_node)
 
     # ── Post-processing ──
     graph.add_node("export_gdb", _export_gdb_node)
@@ -390,24 +447,13 @@ def build_layout_pipeline():
     graph.add_edge("parse_intent", "fetch_gis_data")
     graph.add_edge("fetch_gis_data", "build_kg")
     graph.add_edge("build_kg", "detect_conflicts")
-    graph.add_edge("detect_conflicts", "allocate_and_generate")
-    graph.add_edge("allocate_and_generate", "validate_layout")
-
-    # Worker-Evaluator conditional edge
-    graph.add_conditional_edges(
-        "validate_layout",
-        _route_after_validation,
-        {
-            "retry": "allocate_and_generate",
-            "pass": "export_gdb",
-        },
-    )
-
+    graph.add_edge("detect_conflicts", "execute")
+    graph.add_edge("execute", "export_gdb")
     graph.add_edge("export_gdb", "render_map")
     graph.add_edge("render_map", END)
 
     compiled = graph.compile()
-    logger.info("[Pipeline] Unified LAYOUT pipeline compiled: 9 nodes, 1 conditional edge")
+    logger.info("[Pipeline] Unified pipeline compiled: 8 nodes (execute subgraph inline)")
     return compiled
 
 

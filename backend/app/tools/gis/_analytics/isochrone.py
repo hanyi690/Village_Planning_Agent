@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 
 # Import accessibility core for route planning
 from .accessibility import haversine_distance
-from app.modules.gis.data.providers.tianditu import TiandituProvider
+from app.modules.data.providers.tianditu import TiandituProvider
 
 # Travel speeds (km/h) for isochrone estimation
 TRAVEL_SPEEDS = {

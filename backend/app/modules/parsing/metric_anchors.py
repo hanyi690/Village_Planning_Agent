@@ -388,7 +388,7 @@ def _sum_landuse_by_zone_type(landuse_geojson: Dict[str, Any]) -> Dict[str, floa
     instead of hardcoded 2-digit DLBM prefixes. Returns hectares.
     """
     from collections import defaultdict
-    from app.modules.gis.schema import get_zone_type_for_dlbm
+    from app.modules.schema import get_zone_type_for_dlbm
 
     by_zone: Dict[str, float] = defaultdict(float)
     for feature in landuse_geojson.get("features", []):
@@ -487,7 +487,7 @@ def _compute_zone_ratios(anchors: MetricAnchors, gis_data: Optional[Dict[str, An
         return
 
     # Primary: re-map each parcel via DLBM_TO_PLANNING_ZONE for accurate 4-zone areas
-    from app.modules.gis.schema import dlbm_to_planning_zone
+    from app.modules.schema import dlbm_to_planning_zone
 
     zone_areas: Dict[str, float] = {}
     for feature in landuse.get("features", []):

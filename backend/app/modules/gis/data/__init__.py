@@ -1,10 +1,12 @@
-"""GIS data fetching and loading.
+"""GIS data layer - legacy module (Phase 4: superseded by app.modules.data).
 
-Unified data access layer:
-  - drivers: DataSourceDriver implementations
-  - catalog: DataCatalog with YAML configuration
-  - providers: Low-level API wrappers (legacy)
-  - loader: File-based data loading (legacy)
+New code should import from ``app.modules.data`` directly. This module is
+preserved for backward compatibility during migration.
+
+Deep-path imports (gis.data.fetcher, gis.data.providers, gis.data.loader,
+gis.data.catalog.loaders) continue to work unchanged.
+
+See: backend/app/modules/data/README.md
 """
 
 from .catalog import DataCatalog

@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from app.modules.gis.schema.canonical import BBox
+from app.modules.schema.types.canonical import BBox
 from app.utils.logger import get_logger
 
 from .base import DataSourceDriver, DataSourceResult, DataSourceMetadata

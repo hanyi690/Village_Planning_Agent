@@ -18,7 +18,7 @@ def fetch_gis_data(location: str, buffer_km: float = 5.0, max_features: int = 50
         buffer_km: Search radius in km. Default 5.
         max_features: Max features per layer. Default 500.
     """
-    from app.modules.gis.data.fetcher import get_fetcher
+    from app.modules.data.fetcher import get_fetcher
     if not location:
         return make_result(success=False, error="location required")
     fetcher = get_fetcher()

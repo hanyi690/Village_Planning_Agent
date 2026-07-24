@@ -241,7 +241,7 @@ class TestSpatialContext:
 
     def test_compute_centroid(self, sample_boundary_geojson):
         """_compute_centroid should return (lon, lat) tuple."""
-        from app.modules.gis.spatial_context import _compute_centroid
+        from app.modules.spatial_ops.geometry import _compute_centroid
 
         center = _compute_centroid(sample_boundary_geojson)
         assert center is not None
@@ -251,7 +251,7 @@ class TestSpatialContext:
 
     def test_compute_landuse_distribution(self, sample_landuse_geojson):
         """_compute_landuse_distribution should return sorted land-use entries."""
-        from app.modules.gis.spatial_context import _compute_landuse_distribution
+        from app.modules.spatial_ops.context import _compute_landuse_distribution
 
         entries = _compute_landuse_distribution(sample_landuse_geojson)
         assert len(entries) > 0
@@ -261,7 +261,7 @@ class TestSpatialContext:
 
     def test_compute_constraint_summary(self, sample_gis_data):
         """_compute_constraint_summary should extract protection zones."""
-        from app.modules.gis.spatial_context import _compute_constraint_summary
+        from app.modules.spatial_ops.context import _compute_constraint_summary
 
         summaries = _compute_constraint_summary(sample_gis_data)
         assert len(summaries) >= 1
@@ -273,7 +273,7 @@ class TestSpatialContext:
 
     def test_compute_spatial_context_full(self, sample_gis_data):
         """compute_spatial_context should produce complete SpatialContext."""
-        from app.modules.gis.spatial_context import compute_spatial_context
+        from app.modules.spatial_ops import compute_spatial_context
 
         ctx = compute_spatial_context(sample_gis_data)
         assert ctx.parcel_count > 0
@@ -284,7 +284,7 @@ class TestSpatialContext:
 
     def test_compute_spatial_context_empty_input(self):
         """compute_spatial_context should handle empty input gracefully."""
-        from app.modules.gis.spatial_context import compute_spatial_context
+        from app.modules.spatial_ops import compute_spatial_context
 
         ctx = compute_spatial_context({})
         assert ctx.parcel_count == 0
@@ -294,7 +294,7 @@ class TestSpatialContext:
 
     def test_compute_spatial_context_jintian(self):
         """compute_spatial_context should work with real jintian test data."""
-        from app.modules.gis.spatial_context import compute_spatial_context
+        from app.modules.spatial_ops import compute_spatial_context
 
         data_dir = Path(__file__).resolve().parents[3] / "data" / "gis" / "jintian" / "current"
         if not data_dir.exists():

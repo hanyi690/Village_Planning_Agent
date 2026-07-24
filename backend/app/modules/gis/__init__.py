@@ -1,10 +1,11 @@
 """GIS module — core exports.
 
-Architecture (lean schema + data layer):
-  - schema/      — data definitions, encodings, classification, GDB schema, models
+Architecture (schema migrated to app.modules.schema):
   - data/        — data fetching, loading, providers
 
 Migrated out (see docs/gis/proposals/03_TOOL_FIRST_ARCHITECTURE.md):
+  - schema/      → app.modules.schema/ (top-level shared contract)
+  - spatial_context → app.modules.spatial_ops/
   - analysis/    → tools/gis/_conflict/, _validation/, _analytics/
   - generation/  → tools/gis/_generation/
   - rendering/   → tools/gis/_rendering/
@@ -12,8 +13,8 @@ Migrated out (see docs/gis/proposals/03_TOOL_FIRST_ARCHITECTURE.md):
   - utils/       → app/utils/
 """
 
-# ── Core schema (unified: models + zone_schema + gdb_schema) ──
-from .schema import (
+# ── Core schema (moved to app.modules.schema — top-level shared contract) ──
+from app.modules.schema import (
     BBox, CRS, GeoFeature, ProviderLandParcel, GISDataBundle, GISMetadata,
     SpatialFeature,
     BaseLandUseParcel, CurrentLandUseParcel, PlannedLandUseParcel,

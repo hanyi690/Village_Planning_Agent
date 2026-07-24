@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from app.modules.schema.canonical import BBox
+from app.modules.schema.types.canonical import BBox
 from app.utils.logger import get_logger
 
 from ..contracts import DataResult, DataSourceMetadata

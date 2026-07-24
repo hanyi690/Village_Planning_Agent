@@ -422,7 +422,8 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     # 5. DataPipeline: execute tools and format professional data
     professional_data_section = ""
     try:
-        from ...modules.data import DataPipeline, generate_professional_data_section
+        from .pipeline import DataPipeline
+        from .formatters import generate_professional_data_section
         pipeline = DataPipeline()
 
         # Only load dependency data if dimension has tools configured

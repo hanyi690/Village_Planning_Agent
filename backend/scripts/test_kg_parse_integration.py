@@ -74,13 +74,13 @@ def main():
     from app.modules.kg.builder import PlanningKG
 
     # Ingest typed parcels
-    from app.modules.gis.schema import ingest_current_landuse
+    from app.modules.data import ingest_current_landuse
     landuse_path = DATA_DIR / "current" / "landuse.geojson"
     typed_parcels, _warnings = ingest_current_landuse(str(landuse_path))
     print(f"  Typed parcels: {len(typed_parcels)}")
 
     # Ingest annotations
-    from app.modules.gis.schema import ingest_feature
+    from app.modules.data import ingest_feature
     ann_path = DATA_DIR / "current" / "annotation.geojson"
     annotations = []
     if ann_path.exists():
@@ -219,7 +219,7 @@ def main():
     import asyncio
     from app.agent.gis.parse.agent import _execute_tool_call, _get_current_parse_kg
     from app.agent.gis.parse.agent import set_spatial_context
-    from app.modules.gis.spatial_context import compute_spatial_context
+    from app.modules.spatial_ops import compute_spatial_context
 
     # Compute spatial context
     ctx = compute_spatial_context(gis_data)

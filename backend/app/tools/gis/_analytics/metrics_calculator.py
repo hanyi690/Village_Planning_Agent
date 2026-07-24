@@ -2,6 +2,10 @@
 
 All metrics are derived from actual GIS data to eliminate hardcoded values.
 No LLM required — pure data computation.
+
+Core computation (compute_land_use_metrics) extracted to
+app.modules.schema.metrics for use by KG builder without
+importing from the tools layer.
 """
 
 from __future__ import annotations
@@ -10,111 +14,48 @@ from collections import Counter
 from typing import Any, Dict, List, Optional, Set
 
 from app.utils.logger import get_logger
-from app.modules.gis.schema import DLBM_TO_ZONE_TYPE, get_zone_type_for_dlbm
-from app.modules.gis.schema import (
+from app.modules.schema import DLBM_TO_ZONE_TYPE, get_zone_type_for_dlbm
+from app.modules.schema import (
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,
     ECOLOGICAL_CODES,
     FOREST_CODES,
     WATER_CODES,
 )
+from app.modules.schema.utils.metrics import compute_land_use_metrics as _schema_compute
 
 logger = get_logger(__name__)
 
-# Construction DLBM codes (all zone types that are construction)
-CONSTRUCTION_DLBM_CODES: Set[str] = set()
-for _zt, _dlbms in {
-    "居住用地": ["0700", "0701", "0702", "2121", "2030"],
-    "产业用地": ["0600", "0601", "0602", "0603", "0610", "0620", "2100", "2124"],
-    "公共服务用地": ["0800", "0801", "0802", "0803", "0806", "0810", "0900", "2122", "2125"],
-    "交通用地": ["1000", "1001", "1002", "1003", "1004", "1005", "1006", "1040", "2123", "2126", "2200"],
-    "商业用地": ["0500"],
-}.items():
-    CONSTRUCTION_DLBM_CODES.update(_dlbms)
-
-
-def _area_ha_from_props(props: Dict[str, Any]) -> float:
-    """Extract area in hectares from feature properties.
-
-    DLMJ is in m², area_ha is already in hectares.
-    """
-    if "area_ha" in props and isinstance(props["area_ha"], (int, float)):
-        return float(props["area_ha"])
-    if "DLMJ" in props and isinstance(props["DLMJ"], (int, float)):
-        return float(props["DLMJ"]) / 10000.0
-    if "MJ" in props and isinstance(props["MJ"], (int, float)):
-        return float(props["MJ"]) / 10000.0
-    return 0.0
-
 
 class GISMetricsCalculator:
-    """Compute summary statistics from GeoJSON landuse layers."""
+    """Compute summary statistics from GeoJSON landuse layers.
+
+    Delegates core computation to schema.metrics.compute_land_use_metrics
+    and adds optional geometry-based area overrides from protection layers.
+    """
 
     @classmethod
     def compute_land_use_metrics(cls, gis_data: Dict[str, Any]) -> Dict[str, Any]:
         """Compute comprehensive land use metrics from GIS data.
 
-        Args:
-            gis_data: Dict from data_loader.load_all() or load_current()
-
-        Returns:
-            Dict with computed metrics from real data (no hardcoded values)
+        Uses schema.metrics for pure DLBM aggregation, then overrides
+        with protection layer geometry areas when available.
         """
-        landuse = gis_data.get("landuse_current_geojson", {})
-        if not landuse or not landuse.get("features"):
-            return cls._empty_metrics()
+        metrics = _schema_compute(gis_data)
 
-        # Aggregate areas by zone type
-        zone_areas: Dict[str, float] = Counter()
-        total_area_ha = 0.0
-        dlbm_counts: Dict[str, int] = Counter()
+        # Override with protection layer geometry areas when available
+        eco_layer_area = cls._layer_geometry_area_ha(gis_data, "ecological_protection_geojson")
+        farm_layer_area = cls._layer_geometry_area_ha(gis_data, "farmland_protection_geojson")
+        constr_layer_area = cls._layer_geometry_area_ha(gis_data, "construction_zone_geojson")
 
-        for feat in landuse["features"]:
-            props = feat.get("properties", {})
-            # DLBM 编码体系取决于数据层: 现状=appendix5, 规划=tugui
-            # 优先 QMDLBM (规划层期末编码), 回退 DLBM (现状层编码)
-            dlbm = str(props.get("QMDLBM", props.get("DLBM", ""))).strip()
-            area = _area_ha_from_props(props)
-            total_area_ha += area
-            if dlbm:
-                dlbm_counts[dlbm] += 1
-                zone_type = get_zone_type_for_dlbm(dlbm)
-                zone_areas[zone_type] += area
+        if eco_layer_area > 0:
+            metrics["ecological_area_ha"] = round(eco_layer_area, 2)
+        if farm_layer_area > 0:
+            metrics["farmland_area_ha"] = round(farm_layer_area, 2)
+        if constr_layer_area > 0:
+            metrics["construction_area_ha"] = round(constr_layer_area, 2)
 
-        # Compute category areas
-        construction_area_ha = sum(
-            area for dlbm, area in _dlbm_areas(landuse).items()
-            if dlbm in CONSTRUCTION_DLBM_CODES
-        )
-        farmland_area_ha = sum(
-            area for dlbm, area in _dlbm_areas(landuse).items()
-            if dlbm in (BASIC_FARMLAND_CODES | GENERAL_AGRICULTURE_CODES)
-        )
-        ecological_area_ha = sum(
-            area for dlbm, area in _dlbm_areas(landuse).items()
-            if dlbm in ECOLOGICAL_CODES
-        )
-        forest_area_ha = sum(
-            area for dlbm, area in _dlbm_areas(landuse).items()
-            if dlbm in FOREST_CODES
-        )
-        water_area_ha = sum(
-            area for dlbm, area in _dlbm_areas(landuse).items()
-            if dlbm in WATER_CODES
-        )
-
-        forest_coverage = (forest_area_ha / total_area_ha * 100) if total_area_ha > 0 else 0.0
-
-        return {
-            "construction_area_ha": round(construction_area_ha, 2),
-            "farmland_area_ha": round(farmland_area_ha, 2),
-            "ecological_area_ha": round(ecological_area_ha, 2),
-            "forest_coverage": round(forest_coverage, 2),
-            "water_area_ha": round(water_area_ha, 2),
-            "total_area_ha": round(total_area_ha, 2),
-            "zone_areas": {k: round(v, 2) for k, v in zone_areas.items()},
-            "dlbm_counts": dict(dlbm_counts),
-        }
+        return metrics
 
     @classmethod
     def compute_summaries(cls, gis_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -170,7 +111,7 @@ class GISMetricsCalculator:
     def _extract_population(gis_data: Dict[str, Any]) -> Dict[str, Any]:
         """Try to extract population from L3 reports."""
         try:
-            from app.modules.gis.data.loader import load_l3_reports
+            from app.modules.data.documents import load_l3_reports
             reports = load_l3_reports()
             for dim_key, dim_data in reports.items():
                 if not isinstance(dim_data, dict):
@@ -185,26 +126,22 @@ class GISMetricsCalculator:
         return {}
 
     @staticmethod
-    def _empty_metrics() -> Dict[str, Any]:
-        return {
-            "construction_area_ha": 0.0,
-            "farmland_area_ha": 0.0,
-            "ecological_area_ha": 0.0,
-            "forest_coverage": 0.0,
-            "water_area_ha": 0.0,
-            "total_area_ha": 0.0,
-            "zone_areas": {},
-            "dlbm_counts": {},
-        }
+    def _layer_geometry_area_ha(gis_data: Dict[str, Any], key: str) -> float:
+        """Compute total area in hectares from a GIS layer's geometry.
 
-
-def _dlbm_areas(geojson: Dict[str, Any]) -> Dict[str, float]:
-    """Aggregate area by DLBM code from a FeatureCollection."""
-    result: Dict[str, float] = Counter()
-    for feat in geojson.get("features", []):
-        props = feat.get("properties", {})
-        # 优先 QMDLBM (规划层期末编码), 回退 DLBM (现状层)
-        dlbm = str(props.get("QMDLBM", props.get("DLBM", ""))).strip()
-        if dlbm:
-            result[dlbm] += _area_ha_from_props(props)
-    return dict(result)
+        Uses calculate_area_ha for accurate metric-area computation.
+        Returns 0.0 if the layer is missing or empty.
+        """
+        geojson = gis_data.get(key) if gis_data else None
+        if not geojson or not geojson.get("features"):
+            return 0.0
+        try:
+            from app.utils.geojson_utils import geojson_to_geodataframe
+            from app.utils.area_engine import calculate_area_ha
+            gdf = geojson_to_geodataframe(geojson)
+            if gdf is None or gdf.empty:
+                return 0.0
+            return round(sum(calculate_area_ha(g) for g in gdf.geometry), 2)
+        except Exception as e:
+            logger.debug("[Metrics] Layer %s area computation failed: %s", key, e)
+            return 0.0

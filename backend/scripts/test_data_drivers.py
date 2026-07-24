@@ -1,4 +1,4 @@
-"""Test script for multi-source GIS data drivers.
+"""Test script for multi-source data drivers (app.modules.data).
 
 Validates all driver implementations with the catalog configuration.
 Run: cd backend && python scripts/test_data_drivers.py
@@ -12,16 +12,16 @@ from pathlib import Path
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from app.modules.gis.data.catalog import DataCatalog
-from app.modules.gis.data.drivers import (
-    DriverRegistry,
+from app.modules.data import DataCatalog, DriverRegistry
+from app.modules.data.sources import (
+    ApiVectorDriver,
+    DocumentDriver,
     FileVectorDriver,
-    TiandituVectorDriver,
-    TiandituTileDriver,
     LocalRasterDriver,
     RemoteRasterDriver,
+    WmtsTileDriver,
 )
-from app.modules.gis.schema.canonical import BBox
+from app.modules.schema.types.canonical import BBox
 
 
 def test_registry():
@@ -33,10 +33,11 @@ def test_registry():
     drivers = DriverRegistry.list_drivers()
     expected = {
         "file_vector",
-        "tianditu_vector",
-        "tianditu_tile",
+        "api_vector",
+        "wmts_tile",
         "local_raster",
         "remote_raster",
+        "document",
     }
     actual = set(drivers.keys())
 
@@ -78,13 +79,14 @@ def test_file_vector_driver():
     print()
 
 
-def test_tianditu_vector_driver():
-    """Test TiandituVectorDriver metadata."""
+def test_api_vector_driver():
+    """Test ApiVectorDriver metadata."""
     print("=" * 60)
-    print("TEST: TiandituVectorDriver")
+    print("TEST: ApiVectorDriver")
     print("=" * 60)
 
-    driver = TiandituVectorDriver({
+    driver = ApiVectorDriver({
+        "connection": "gd_tianditu",
         "service_id": "SQSXWPSJ",
         "protocol": "mapserver_rest",
         "layers": [
@@ -95,8 +97,8 @@ def test_tianditu_vector_driver():
 
     meta = driver.get_metadata()
     assert meta.name == "SQSXWPSJ"
-    assert meta.driver == "tianditu_vector"
-    print(f"PASS: Metadata correct — name={meta.name}, driver={meta.driver}")
+    assert meta.driver == "api_vector"
+    print(f"PASS: Metadata correct - name={meta.name}, driver={meta.driver}")
 
     layer_types = driver.list_layer_types()
     assert "farmland_protection" in layer_types
@@ -107,13 +109,14 @@ def test_tianditu_vector_driver():
     print()
 
 
-def test_tianditu_tile_driver():
-    """Test TiandituTileDriver tile math."""
+def test_wmts_tile_driver():
+    """Test WmtsTileDriver tile math."""
     print("=" * 60)
-    print("TEST: TiandituTileDriver")
+    print("TEST: WmtsTileDriver")
     print("=" * 60)
 
-    driver = TiandituTileDriver({
+    driver = WmtsTileDriver({
+        "connection": "tianditu",
         "layer": "img_c",
         "projection": "c",
         "zoom_range": [1, 18],
@@ -125,7 +128,7 @@ def test_tianditu_tile_driver():
     bbox = BBox(west=115.5, south=24.0, east=115.6, north=24.1)
     tiles = driver._bbox_to_tiles(bbox, zoom=10)
     assert len(tiles) > 0
-    print(f"PASS: BBox → {len(tiles)} tiles at z=10")
+    print(f"PASS: BBox -> {len(tiles)} tiles at z=10")
 
     # Verify tile coordinates are valid
     for x, y, z in tiles:
@@ -134,8 +137,8 @@ def test_tianditu_tile_driver():
     print("PASS: All tile coordinates valid")
 
     meta = driver.get_metadata()
-    assert meta.driver == "tianditu_tile"
-    print(f"PASS: Metadata — name={meta.name}, driver={meta.driver}")
+    assert meta.driver == "wmts_tile"
+    print(f"PASS: Metadata - name={meta.name}, driver={meta.driver}")
 
     print()
 
@@ -159,7 +162,7 @@ def test_local_raster_driver():
 
     meta = driver.get_metadata()
     assert meta.driver == "local_raster"
-    print(f"PASS: Metadata — name={meta.name}, driver={meta.driver}")
+    print(f"PASS: Metadata - name={meta.name}, driver={meta.driver}")
 
     print()
 
@@ -187,12 +190,31 @@ def test_remote_raster_driver():
     assert result.data_type == "download_guide"
     guide = result.data.get("download_guide", {})
     assert "steps" in guide
-    print(f"PASS: Download guide returned — {len(guide['steps'])} steps")
+    print(f"PASS: Download guide returned - {len(guide['steps'])} steps")
 
     meta = driver.get_metadata()
     assert meta.driver == "remote_raster"
     assert meta.resolution == 12.5
-    print(f"PASS: Metadata — provider={meta.name}, resolution={meta.resolution}m")
+    print(f"PASS: Metadata - provider={meta.name}, resolution={meta.resolution}m")
+
+    print()
+
+
+def test_document_driver():
+    """Test DocumentDriver with planning text."""
+    print("=" * 60)
+    print("TEST: DocumentDriver")
+    print("=" * 60)
+
+    catalog = DataCatalog()
+    if "jintian_planning_text" in catalog.list_sources():
+        src = catalog.get_source("jintian_planning_text")
+        result = src.fetch()
+        assert result.success
+        assert result.data_type == "document"
+        print(f"PASS: Loaded planning text ({result.metadata.get('size_chars')} chars)")
+    else:
+        print("SKIP: jintian_planning_text not in catalog")
 
     print()
 
@@ -207,10 +229,9 @@ def test_catalog():
     sources = catalog.list_sources()
     print(f"Total sources: {len(sources)}")
 
-    # Categorize
+    # Categorize by driver_type
     by_driver = {}
     for name in sources:
-        # We can't easily get driver name from instance, but we can check types
         src = catalog.get_source(name)
         driver_type = src.driver_type
         by_driver.setdefault(driver_type, []).append(name)
@@ -232,16 +253,17 @@ def test_catalog():
 def main():
     """Run all tests."""
     print("\n" + "=" * 60)
-    print("GIS Multi-Source Data Driver Tests")
+    print("Multi-Source Data Driver Tests (app.modules.data)")
     print("=" * 60 + "\n")
 
     tests = [
         test_registry,
         test_file_vector_driver,
-        test_tianditu_vector_driver,
-        test_tianditu_tile_driver,
+        test_api_vector_driver,
+        test_wmts_tile_driver,
         test_local_raster_driver,
         test_remote_raster_driver,
+        test_document_driver,
         test_catalog,
     ]
 

@@ -18,7 +18,7 @@ from typing import List, Optional
 from app.utils.logger import get_logger
 
 from .base import GISProvider, GeoProviderResult
-from ...schema.canonical import (
+from app.modules.schema.types.canonical import (
     BBox,
     GeoFeature,
     ProviderLandParcel,
@@ -165,7 +165,7 @@ class GISDataOrchestrator:
             len(metadata.crs_warnings),
         )
 
-        from ...schema.dicts.loader import get_center
+        from app.modules.schema.encodings.dicts.loader import get_center
         center = get_center()
         dlbm_version = center.encoding("gbt21010").version
 

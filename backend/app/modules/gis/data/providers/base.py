@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ...schema.canonical import BBox, GeoFeature, ProviderLandParcel
+from app.modules.schema.types.canonical import BBox, GeoFeature, ProviderLandParcel
 
 
 @dataclass

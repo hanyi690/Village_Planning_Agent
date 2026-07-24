@@ -188,6 +188,8 @@ def allocate_zones(
     constraint_adjustments: Annotated[Optional[List[Dict[str, Any]]], InjectedState("constraint_adjustments")] = None,
     facility_anchors: Annotated[Optional[List[Dict[str, Any]]], InjectedState("facility_anchors")] = None,
     kg_protected_parcels_detail: Annotated[Optional[List[Dict[str, Any]]], InjectedState("kg_protected_parcels_detail")] = None,
+    kg_three_lines: Annotated[Optional[List[Dict[str, Any]]], InjectedState("kg_three_lines")] = None,
+    kg_vne_summary: Annotated[Optional[List[Dict[str, Any]]], InjectedState("kg_vne_summary")] = None,
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
     mode: str = "mip",
 ) -> Command:
@@ -279,6 +281,8 @@ def allocate_zones(
             adjacency_rules=alloc_intent.adjacency_rules or None,
             facility_anchors=facility_anchors,
             protected_parcels_detail=kg_protected_parcels_detail,  # Phase 5: spatial containment exclusion
+            three_line_targets=kg_three_lines,  # Phase 6: hard area constraints from KG ThreeLine
+            vne_summary=kg_vne_summary,  # Phase 6: VNE zone-level constraints
         )
 
         summary = {

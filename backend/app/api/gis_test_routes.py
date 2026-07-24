@@ -21,11 +21,11 @@ router = APIRouter(prefix="/api/dev/gis", tags=["GIS Dev"])
 
 # ── Color injection (shared by /analysis and /zones) ──────────────
 
-from app.modules.gis.schema import (
+from app.modules.schema import (
     get_zone_color, get_zone_type_for_dlbm, ZONE_TYPE_COLORS,
     PLANNING_ZONE_COLORS, DEFAULT_ZONE_COLOR,
 )
-from app.modules.gis.schema.colors import (
+from app.modules.schema.output.colors import (
     SENSITIVITY_COLORS, FACILITY_TYPE_COLORS, INFRA_COLORS,
     ISOCHRONE_COLORS, get_facility_color, get_infra_color,
 )
@@ -160,7 +160,8 @@ async def gis_data(request: DataRequest):
     t0 = time.time()
     result: Dict[str, Any] = {"success": True}
     try:
-        from app.modules.gis.data.loader import load_all, get_village_params, get_data_summary
+        from app.modules.gis.data.loader import load_all
+        from app.tools.gis.parse import get_village_params, get_data_summary
 
         gis_data = load_all(request.location)
         result["data_summary"] = get_data_summary(gis_data)
@@ -210,7 +211,7 @@ async def gis_analysis(request: AnalysisRequest):
             return _sanitize_floats({"success": True, "accessibility": result, "timing_ms": round((time.time() - t0) * 1000)})
 
         elif request.analysis_type == "poi":
-            from app.modules.gis.data.providers.orchestrator import get_orchestrator
+            from app.modules.data.providers.orchestrator import get_orchestrator
             orchestrator = get_orchestrator()
             pois = await orchestrator.search_poi(
                 keyword=request.keyword,
@@ -263,7 +264,7 @@ async def _validate_layout(request: ValidateRequest, t0: float) -> Dict[str, Any
         from app.tools.gis._generation.pipeline import run_layout_pipeline
         from app.modules.gis.data.loader import load_all
         from app.modules.gis.data.intent_cache import resolve_gen_intent_cached
-        from app.modules.gis.data.loader import _dict_to_intent
+        from app.tools.gis.parse import _dict_to_intent
 
         gis_data = load_all()
         intent_dict = resolve_gen_intent_cached("金田村委会", gis_data)
@@ -379,7 +380,7 @@ async def gis_layout(request: LayoutRequest):
         from app.modules.gis.data.loader import load_all, load_planned
         from app.modules.gis.data.intent_cache import resolve_gen_intent_cached, resolve_plan_intent_cached, resolve_intent_live
         from app.tools.gis._generation.pipeline import run_layout_pipeline, build_three_way_comparison
-        from app.modules.gis.data.loader import _dict_to_intent
+        from app.tools.gis.parse import _dict_to_intent
 
         gis_data = load_all(request.village_name)
         planned_data = load_planned() if request.compare_to_planned else {}
@@ -511,7 +512,7 @@ async def gis_intent(request: IntentRequest):
                     "content": parsed.get("text_summary", ""),
                 }
 
-            from app.modules.gis.data.loader import _parse_reports_to_intent
+            from app.tools.gis.parse import _parse_reports_to_intent
             from app.modules.gis.data.loader import load_all
             _gis_data = load_all()
             result = _parse_reports_to_intent(reports=reports, village_name=request.village_name, gis_data=_gis_data)
@@ -530,7 +531,7 @@ async def gis_intent(request: IntentRequest):
             return {"success": False, "error": "No planning text provided", "timing_ms": round((time.time() - t0) * 1000)}
 
         from app.agent.gis.prompts import format_parse_prompt
-        from app.modules.gis.data.loader import parse_text_via_llm
+        from app.tools.gis.parse import parse_text_via_llm
         from app.modules.gis.data.loader import load_all
         _gis_data = load_all()
 
@@ -580,7 +581,7 @@ async def gis_zones(request: ZonesRequest):
 
         elif request.zone_type == "space_control":
             from app.tools.gis._generation.space_control_generator import SpaceControlZoneGenerator, SPACE_CONTROL_ZONES
-            from app.modules.gis.schema.colors import SPACE_CONTROL_COLORS
+            from app.modules.schema.output.colors import SPACE_CONTROL_COLORS
 
             generator = SpaceControlZoneGenerator()
             geojson = generator.generate(

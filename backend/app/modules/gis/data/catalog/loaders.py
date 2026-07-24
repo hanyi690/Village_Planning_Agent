@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.settings import JINTIAN_GIS_DIR
-from app.modules.gis.schema.canonical import BBox
+from app.modules.schema.types.canonical import BBox
 from app.utils.logger import get_logger
 
 from ..loader import _load_geojson, _CURRENT_FILE_MAP, _PLANNED_FILE_MAP
@@ -195,7 +195,7 @@ def load_typed_annotations() -> Tuple[List[Any], List[str]]:
     Returns:
         (annotations_list, warnings_list)
     """
-    from app.modules.gis.schema import ingest_feature
+    from app.modules.data import ingest_feature
 
     ann_path = JINTIAN_GIS_DIR / "current" / "annotation.geojson"
     if not ann_path.exists():
@@ -210,7 +210,7 @@ def load_typed_roads() -> Tuple[List[Any], List[str]]:
     Returns:
         (roads_list, warnings_list)
     """
-    from app.modules.gis.schema import ingest_feature
+    from app.modules.data import ingest_feature
 
     road_path = JINTIAN_GIS_DIR / "current" / "road.geojson"
     if not road_path.exists():

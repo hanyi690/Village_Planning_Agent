@@ -8,7 +8,7 @@ import math
 from typing import Dict, Any, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 
-from app.modules.gis.data.providers.tianditu import TiandituProvider
+from app.modules.data.providers.tianditu import TiandituProvider
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)

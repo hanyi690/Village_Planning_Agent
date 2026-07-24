@@ -353,10 +353,11 @@ QUERY_TEMPLATES = {
     "get_village_anchors": PREFIX + """
         SELECT ?name ?lon ?lat
         WHERE {
-            ?v a pln:Village ;
-               pln:name ?name ;
-               pln:lon ?lon ;
-               pln:lat ?lat .
+            { ?v a pln:Village ; pln:name ?name ; pln:lon ?lon ; pln:lat ?lat . }
+            UNION
+            { ?v a pln:AdministrativeVillage ; pln:name ?name ; pln:lon ?lon ; pln:lat ?lat . }
+            UNION
+            { ?v a pln:NaturalSettlement ; pln:name ?name ; pln:lon ?lon ; pln:lat ?lat . }
         }
     """,
 

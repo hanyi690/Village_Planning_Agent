@@ -17,10 +17,11 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from app.modules.gis.schema import ZoneIntent, UnifiedSpatialIntent
-from app.modules.gis.schema import (
+from app.modules.schema import ZoneIntent, UnifiedSpatialIntent
+from app.modules.schema import (
     get_zone_color,
     get_zone_type_for_dlbm,
+    resolve_zone_type_for_dlbm,
     get_dlbms_for_zone_type,
     ZONE_TYPE_COLORS,
 )
@@ -40,12 +41,6 @@ from app.utils.geojson_utils import geojson_to_geodataframe, geodataframe_to_geo
 from app.utils.crs_engine import project_to_metric, project_to_wgs84, get_metric_crs
 from app.utils.geo_utils import safe_unary_union, safe_geo_series_union
 from app.utils.area_engine import calculate_area_ha
-
-
-@functools.lru_cache(maxsize=256)
-def resolve_zone_type_for_dlbm(dlbm: str) -> str:
-    """Resolve DLBM to zone type via colors.py authoritative mapping."""
-    return get_zone_type_for_dlbm(dlbm.strip())
 
 
 class ZoneGenerator:

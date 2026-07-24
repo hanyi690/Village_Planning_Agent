@@ -29,7 +29,7 @@ import matplotlib.font_manager
 matplotlib.font_manager._load_fontmanager(try_read_cache=False)
 
 # 所有颜色从 zone_schema 导入——不在此处定义
-from app.modules.gis.schema import PLANNING_ZONE_COLORS, DEFAULT_ZONE_COLOR
+from app.modules.schema import PLANNING_ZONE_COLORS, DEFAULT_ZONE_COLOR
 
 outdir = Path("F:/project/Village_Planning_Agent/output/jintian_comparison")
 outdir.mkdir(parents=True, exist_ok=True)
@@ -45,7 +45,7 @@ from app.tools.gis.generate import (
     _generate_facilities, _generate_axes,
     _generate_space_control_zone, _generate_land_use_zone,
 )
-from app.modules.gis.schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
+from app.modules.schema import dlbm_to_planning_zone, PLANNING_ZONE_COLORS
 
 gis_data = load_all()
 planned_data = load_planned()

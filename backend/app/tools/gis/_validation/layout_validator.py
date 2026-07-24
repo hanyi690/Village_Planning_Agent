@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from app.utils.logger import get_logger
-from app.modules.gis.schema import PLANNING_ZONE_NAMES
+from app.modules.schema import PLANNING_ZONE_NAMES
 
 logger = get_logger(__name__)
 
@@ -820,7 +820,7 @@ class LayoutValidator:
         if not kg_vne_summary:
             return CheckResult(check_name="vne_compliance", passed=True)
 
-        from app.modules.gis.schema import VNE_TO_ZONE_TYPE
+        from app.modules.schema import VNE_TO_ZONE_TYPE
 
         # Build VNE → planning_zone mapping (VNE → zone_type → planning_zone)
         vne_to_planning: Dict[str, str] = {}

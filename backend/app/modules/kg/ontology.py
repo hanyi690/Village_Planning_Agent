@@ -69,6 +69,9 @@ class EntityTypes:
     PlanningIndicator = PLN.PlanningIndicator
     ThreeZone = PLN.ThreeZone
     ThreeLine = PLN.ThreeLine
+    # Phase 6 — Village hierarchy (administrative village vs natural settlement)
+    AdministrativeVillage = PLN.AdministrativeVillage
+    NaturalSettlement = PLN.NaturalSettlement
 
     @classmethod
     def all(cls) -> list:
@@ -79,6 +82,7 @@ class EntityTypes:
             cls.LandConservationPlan, cls.ReforestationPlan, cls.GridRegulation,
             cls.ControlRule, cls.LandUseCategory, cls.PlanningIndicator,
             cls.ThreeZone, cls.ThreeLine,
+            cls.AdministrativeVillage, cls.NaturalSettlement,
         ]
 
 

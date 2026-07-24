@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from app.modules.gis.schema.canonical import BBox
+from app.modules.schema.types.canonical import BBox
 
 
 @dataclass

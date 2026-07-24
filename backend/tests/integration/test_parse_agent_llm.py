@@ -113,7 +113,7 @@ class TestSpatialContextJintian:
 
     def test_spatial_context_jintian_detailed(self, jintian_gis_data):
         """Compute and display spatial context from jintian data."""
-        from app.modules.gis.spatial_context import compute_spatial_context
+        from app.modules.spatial_ops import compute_spatial_context
 
         ctx = compute_spatial_context(jintian_gis_data)
 
@@ -173,7 +173,7 @@ class TestParseAgentLLM:
 
         from app.agent.gis.parse.agent import build_parse_agent_graph
         from app.agent.gis.parse.state import ParseAgentState
-        from app.modules.gis.spatial_context import compute_spatial_context
+        from app.modules.spatial_ops import compute_spatial_context
 
         # Step 1: Compute spatial context
         spatial_context = compute_spatial_context(jintian_gis_data)
@@ -338,7 +338,7 @@ class TestParseNodesLLM:
 
         from app.agent.gis.parse.agent import classify_sections_node
         from app.agent.gis.parse.state import ParseAgentState
-        from app.modules.gis.spatial_context import compute_spatial_context
+        from app.modules.spatial_ops import compute_spatial_context
 
         spatial_context = compute_spatial_context(jintian_gis_data)
         state = ParseAgentState(
@@ -366,7 +366,7 @@ class TestParseNodesLLM:
 
         from app.agent.gis.parse.agent import explore_projects_node
         from app.agent.gis.parse.state import ParseAgentState, SectionInfo
-        from app.modules.gis.spatial_context import compute_spatial_context
+        from app.modules.spatial_ops import compute_spatial_context
 
         spatial_context = compute_spatial_context(jintian_gis_data)
         state = ParseAgentState(
@@ -436,7 +436,7 @@ class TestEncodingValidation:
 
     def test_ghytbm_codes_all_valid(self):
         """All appendix5 GHYTBM codes should be in GHYTBM_TO_GHYTMC."""
-        from app.modules.gis.schema import GHYTBM_TO_GHYTMC
+        from app.modules.schema import GHYTBM_TO_GHYTMC
 
         known_codes = {
             "1100", "1200", "1340", "1350", "1400", "1500", "1510",
@@ -448,7 +448,7 @@ class TestEncodingValidation:
 
     def test_zone_type_coverage(self):
         """All GHYTBM codes should have zone_type mapping."""
-        from app.modules.gis.schema import GHYTBM_TO_ZONE_TYPE, GHYTBM_TO_GHYTMC
+        from app.modules.schema import GHYTBM_TO_ZONE_TYPE, GHYTBM_TO_GHYTMC
 
         for code in GHYTBM_TO_GHYTMC:
             zone = GHYTBM_TO_ZONE_TYPE.get(code, "")
@@ -456,7 +456,7 @@ class TestEncodingValidation:
 
     def test_vne_coverage(self):
         """All GHYTBM codes should have VNE mapping."""
-        from app.modules.gis.schema import GHYTBM_TO_VNE, GHYTBM_TO_GHYTMC
+        from app.modules.schema import GHYTBM_TO_VNE, GHYTBM_TO_GHYTMC
 
         for code in GHYTBM_TO_GHYTMC:
             vne = GHYTBM_TO_VNE.get(code, "")

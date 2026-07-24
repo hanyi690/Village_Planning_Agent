@@ -43,7 +43,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from app.modules.schema.spatial_types import (
+from app.modules.schema.types.spatial_types import (
     SpatialFeature,
     BaseLandUseParcel,
     CurrentLandUseParcel,
@@ -101,7 +101,7 @@ class _EncodingValidator:
     def _ensure_loaded(self):
         if self._dicts is not None:
             return
-        from app.modules.schema.dicts.loader import get_center
+        from app.modules.schema.encodings.dicts.loader import get_center
         center = get_center()
         self._dicts = {}
         for sys_name in [GB_T21010, TUGUI, APPENDIX5, GHFLBM_SYS, YDYHFL, VNE]:
@@ -423,7 +423,7 @@ def _init_feature_registry():
     """Lazy-init the feature type registry (avoids circular import with spatial_types)."""
     if _FEATURE_TYPE_REGISTRY:
         return
-    from app.modules.schema.spatial_types import (
+    from app.modules.schema.types.spatial_types import (
         AdminArea, AdminBoundaryLine,
         CurrentBuilding, CurrentRoad, CurrentFacility, CurrentAnnotation,
         PlannedRoad, GeologicalHazardPoint, ConditionalConstructionZone,
@@ -573,7 +573,7 @@ def ingest_raster(filepath: str, raster_type: str = "dem"):
         FileNotFoundError: 文件不存在
         ImportError: rasterio 未安装
     """
-    from app.modules.schema.raster_types import RasterInput, DEMInput, DOMInput
+    from app.modules.schema.types.raster_types import RasterInput, DEMInput, DOMInput
 
     path = Path(filepath)
     if not path.exists():
