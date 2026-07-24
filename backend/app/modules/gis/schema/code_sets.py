@@ -121,6 +121,31 @@ GHYTBM_TO_GHYTMC: Dict[str, str] = _appendix5.to_dict("code", "name")
 GHYTBM_TO_YDYHFLDM: Dict[str, str] = _appendix5.to_dict("code", "ydyhfldm")
 GHYTBM_TO_ZONE_TYPE: Dict[str, str] = _appendix5.to_dict("code", "zone_type")
 
+# ── GHYTMC (Chinese land-use name) → Planning zone ──
+# MIP allocator outputs assigned_zone as GHYTMC (e.g. "耕地", "商品林").
+# This maps those names to the 6 planning zones used by PLANNING_ZONE_COLORS.
+GHYTMC_TO_PLANNING_ZONE: Dict[str, str] = {}
+for _ghytbm, _ghytmc in GHYTBM_TO_GHYTMC.items():
+    _zt = GHYTBM_TO_ZONE_TYPE.get(_ghytbm, "")
+    if "农业" in _zt:
+        if _ghytbm == "1100":  # 耕地
+            GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "农田保护区"
+        elif "林" in _ghytmc:
+            GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "林业发展区"
+        else:
+            GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "一般农业区"
+    elif "生态" in _zt or "绿地" in _zt:
+        if "林" in _ghytmc:
+            GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "林业发展区"
+        else:
+            GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "生态保护区"
+    elif any(_x in _zt for _x in ["居住", "公共", "交通", "产业"]):
+        GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "村庄建设区"
+    elif "水域" in _zt:
+        GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "生态保护区"
+    else:
+        GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "一般农业区"
+
 YDYHFLDM_TO_NAME: Dict[str, str] = _ydyhfldm.to_dict("code", "name")
 
 # ── V/N/E village planning land classification ──

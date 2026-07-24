@@ -1,15 +1,15 @@
 # PARSE Agent 空间理解增强方案（可执行版）
 
-> **Status: [PROPOSAL]** | **Type: Executable Enhancement Plan** | **Version: 2.0** | **Updated: 2026-07-22**
-> **⚠️ 本方案基于 v11 实测数据（金田村 2026-07-22），从理论批判转为可执行路径。**
+> **Status: [PROPOSAL]** | **Type: Executable Enhancement Plan** | **Version: 2.1** | **Updated: 2026-07-24**
+> **⚠️ 本方案基于 v11 实测数据（金田村 2026-07-22）+ v12 管线测试数据（2026-07-24），从理论批判转为可执行路径。**
 > **Relationship to DESIGN_GOALS**: 本方案不再争论 "statistics only vs statistics+spatial"，而是解决实际瓶颈：
-> 编码无效、锚定断裂、约束缺失——这些问题在现有设计框架内即可修复。
+> 编码无效、锚定断裂、约束缺失、area_ratio 不完整、渲染映射断裂——这些问题在现有设计框架内即可修复。
 > **References**: BIBLIOGRAPHY.md §A3-4, §F1-7
 > **Related**: 01_DESIGN_GOALS.md §6, diagnostics/01_PARSE_AGENT_STATUS.md, diagnostics/02_RELIABILITY_ASSESSMENT.md
 
 ---
 
-## 0. 前提：v11 突破与剩余鸿沟
+## 0. 前提：v11 突破与 v12 管线测试发现
 
 ### 0.1 v11 取得的突破
 
@@ -22,40 +22,58 @@ v11 通过恢复单批次处理 + Think-Then-Format 分离，实现了核心瓶�
 | format_projects operations | 2         | 30         | **15x** 🎉  |
 | "length limit" 错误        | 0         | 0          | ✅ 稳定           |
 
-### 0.2 但 v11 的 30 个操作全部不可用于 GIS Agent
+### 0.2 v12 管线测试新发现（2026-07-24）
 
-从实测解析报告 `output/parse_results/金田村_2026-07-22.md` 中直接提取的数据：
+运行 `run_parse_pipeline.py --source mineru` + `run_layout_pipeline.py --source mineru` 后发现：
 
-| 问题                           | 严重度 | 影响范围                   | 根因                                                                                    |
-| ------------------------------ | ------ | -------------------------- | --------------------------------------------------------------------------------------- |
-| **无效 GHYTBM 编码**     | 🔴 P0  | 30/30 ops                  | LLM format 阶段自行编造`GHYTBM=2121`，未使用 explore 阶段 lookup_code 返回的正确编码  |
-| **空间锚定全部未解析**   | 🔴 P0  | 30/30 ops (confidence=0.0) | resolve_place 返回了地名→坐标→候选图斑，但 SpatialAnchor 未被自动填充                 |
-| **约束零产出**           | 🔴 P0  | 0 条约束                   | extract_regulations 使用 70% regex + 30% LLM，regex 模式太窄                            |
-| **规划意图仅有统计数字** | 🔴 P0  | zone_targets 为空          | format_targets 产出 SpatialPlanningIntent 但 LLM 将 area_ratio 填为现状分解而非规划目标 |
-| **46 个校验错误**        | 🔴 P0  | 全部 ops                   | 编码校验 + 锚定置信度双重失败                                                           |
+| 问题                                            | 严重度 | 影响范围          | 根因                                                                                                                                                 |
+| ----------------------------------------------- | ------ | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **area_ratio 之和 83.6%**                 | 🔴 P0  | zone_targets 全部 | LLM 从文本提取 8 个 zone_targets，遗漏水域/未利用地等；无工具查询现状地类分布作为参考                                                                |
+| **query_village_kg 工具空壳**             | 🔴 P0  | explore 阶段      | 工具返回 "Tool called — execution handled by agent loop."，无实际 SPARQL 查询                                                                       |
+| **constraint_summary 只在 fallback 使用** | 🔴 P0  | 正常路径约束缺失  | validate_and_merge 只在 LLM 提取失败时从 constraint_summary 生成约束；正常路径未合并                                                                 |
+| **渲染空白（zone_type 不匹配）**          | 🔴 P0  | planning_zone.png | MIP allocator 输出`assigned_zone` = GHYTMC 中文名（如 "商品林"），但 PLANNING_ZONE_COLORS key 是 6 个大区名（如 "林业发展区"），无映射导致全部灰色 |
+| **Direction 枚举值缺失**                  | 🟡 P1  | generate 阶段     | LLM 输出 "expand" / "村庄建设发展轴" 等不在 Direction Enum 中的值，导致 ValueError                                                                   |
+| **schema.intent 模块不存在**              | 🟡 P1  | generate + render | `generate.py` 和 `render_planning_layout.py` 引用 `app.modules.gis.schema.intent`，实际类型在 `schema.contracts`                             |
+| **hasattr 返回 bool 不可下标**            | 🟡 P1  | allocate 阶段     | `hasattr(intent, 'zone_targets')[0:]` 中 `hasattr` 返回 bool，不能切片                                                                           |
+| **村名映射断裂**                          | 🟡 P1  | cache 查找        | PARSE 缓存用 "金田村"，LAYOUT 默认查找 "jintian"，找不到缓存                                                                                         |
+| **kg.serialize 签名不匹配**               | 🟡 P1  | layout 阶段       | `kg.serialize(format="turtle")` 需要 `filepath` 参数，应使用 `kg.to_turtle()`                                                                  |
+| **DB 来源 LLM 超时**                      | 🟡 P1  | PARSE 阶段        | DB 12 维度合并后 17688 chars，截断到 12000；validate_and_merge 处理大量结构化输出导致 LLM 响应超时（489s）                                           |
 
-### 0.3 根因总结
+### 0.3 已修复（v12 热修复）
+
+| 修复                                 | 文件                                           | 说明                                                                                |
+| ------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------- |
+| ✅ GHYTMC → PlanningZone 映射       | `code_sets.py`                               | 新增`GHYTMC_TO_PLANNING_ZONE` 字典，21 个中文用地名映射到 6 个大区                |
+| ✅`_make_planning_zone_layer` 映射 | `generate.py`                                | 当`assigned_zone` 不在 PLANNING_ZONE_COLORS 时，通过 GHYTMC_TO_PLANNING_ZONE 反查 |
+| ✅ Direction 枚举容错                | `generate.py`                                | `try/except ValueError` fallback 到 `Direction.CENTER`，保留原始 label          |
+| ✅ schema.intent → schema.contracts | `generate.py`, `render_planning_layout.py` | 修正 import 路径                                                                    |
+| ✅ hasattr bool 切片                 | `allocate.py`                                | `hasattr(intent, 'zone_targets')[0:]` → `intent.zone_targets`                  |
+| ✅ 村名别名映射                      | `run_layout_pipeline.py`                     | 新增`VILLAGE_NAME_ALIASES` + `_resolve_village_names()`                         |
+| ✅ kg.serialize → kg.to_turtle      | `run_layout_pipeline.py`                     | 修正方法调用                                                                        |
+| ✅ gpd.GeoDataFrame 类型提示         | `geojson_utils.py`                           | 改为字符串注解，避免 geopandas 未安装时 NameError                                   |
+| ✅ requirements.txt 补全             | `requirements.txt`                           | 新增 requests/sqlalchemy/matplotlib/rdflib/pulp/instructor/httpx/pandas/pyyaml      |
+
+---
+
+## 1. 优化路径总览
 
 ```
-问题链:
-  lookup_code("宅基地") → 返回 GHYTBM=212101 (正确)
-       ↓
-  explore_projects 阶段存入 code_mappings_projects
-       ↓
-  format_projects 阶段注入 prompt 为 code_table
-       ↓
-  ❌ LLM 忽略 code_table, 自行编造 GHYTBM=2121
-       ↓
-  ── 同样的断裂也发生在 resolve_place → place_mappings → SpatialAnchor ──
-       ↓
-  ❌ LLM 不填 SpatialAnchor, confidence=0.0
-       ↓
-  ── extract_regulations 只用 regex 提取, regex 模式覆盖不全 ──
-       ↓
-  ❌ 零约束产出
+Path 1: 编码硬校验 ──→ Path 2: 锚定自动填充 ──→ Path 3: 约束提取增强
+  (P0, 0.5天)           (P0, 1天)               (P0, 1天)
+                              ↓
+        第一批交付: 可用解析结果 → GIS Agent → 规划分区图+设施图
+                              ↓
+Path 4: 忠实度评估 ←──→ Path 5: 并行度提升
+  (P1, 1.5天)              (P1, 1天)
+                              ↓
+Path 6: 注记+空间关系+KG 注入 ←──→ Path 7: DEM数据准备
+  (P2, 2天)                        (P2, 0.5天)
+                              ↓
+Path 8: query_village_kg 实际执行 ←──→ Path 9: DB 12 维度并行化
+  (P0, 1天)                          (P1, 1天)
 ```
 
-**核心问题不是设计不足，而是 LLM→Python 的数据传递链断裂**。format 阶段 LLM 被赋予"必须使用 code_table"的指令，但在实际推理中忽略了。
+**新增 Path 8-9** 来自 v12 管线测试发现。
 
 ---
 
@@ -527,24 +545,239 @@ def query_facilities(anchor_name: str = "", facility_type: str = "") -> str:
 
 ---
 
-## 9. 执行路线图
+## 9. Path 8: query_village_kg 工具实际执行（P0，1天）
+
+### 问题
+
+`query_village_kg` 工具当前是空壳：
+
+```python
+@_langchain_tool
+def query_village_kg(template_name: str, **params) -> str:
+    return "Tool called — execution handled by agent loop."  # 没有实际执行！
+```
+
+LLM 调用 `query_village_kg('count_by_zone_type')` 等工具时，得到的是占位符字符串，不是真实 KG 查询结果。这导致：
+
+- PARSE 无法获取现状地类分布作为 `area_ratio` 参考
+- PARSE 无法获取真实保护区域边界作为约束
+- explore 阶段的 tool_calls 全部无效
+
+### 根因
+
+工具定义在 `agent.py` 中，但执行逻辑未实现。需要：
+
+1. 实现 SPARQL 模板查询（`count_by_zone_type`, `get_designated_zones`, `get_constraints` 等）
+2. 将 KG 实例绑定到工具函数
+3. 返回结构化 JSON 而非占位符字符串
+
+### 修改点
+
+**A. 实现 `query_village_kg` 实际执行** (`parse/agent.py` L229):
+
+```python
+@_langchain_tool
+def query_village_kg(template_name: str, **params) -> str:
+    """Query village planning knowledge graph for spatial information.
+  
+    Available templates:
+      - count_by_zone_type: 返回现状地类分布 {zone_type: {count, total_area_ha}}
+      - get_designated_zones: 返回规划分区 {zone_type: {area_ha, parcels}}
+      - get_constraints: 返回约束列表 [{type, zone_type, rule, area_ha}]
+      - get_adjacent_parcels: 返回邻接地块 {parcel_id: [adjacent_ids]}
+      - check_protected_parcels: 返回保护地块列表 [parcel_ids]
+      - get_road_network: 返回道路网络 [{road_id, length_m, connects}]
+      - get_water_bodies: 返回水域 [{water_id, area_ha, type}]
+    """
+    import json as _json
+  
+    # Get KG instance from manager
+    from app.modules.kg.manager import get_kg_manager
+    manager = get_kg_manager()
+    kg = manager.get_kg("parse_pipeline")  # or current session
+  
+    if kg is None:
+        return _json.dumps({"error": "KG not initialized"}, ensure_ascii=False)
+  
+    # Execute SPARQL template
+    try:
+        if template_name == "count_by_zone_type":
+            result = kg.query_count_by_zone_type()
+        elif template_name == "get_designated_zones":
+            result = kg.query_designated_zones(**params)
+        elif template_name == "get_constraints":
+            result = kg.query_constraints(**params)
+        elif template_name == "get_adjacent_parcels":
+            result = kg.query_adjacent_parcels(**params)
+        elif template_name == "check_protected_parcels":
+            result = kg.query_protected_parcels(**params)
+        else:
+            return _json.dumps({"error": f"Unknown template: {template_name}"}, ensure_ascii=False)
+      
+        return _json.dumps(result, ensure_ascii=False, default=str)
+    except Exception as e:
+        return _json.dumps({"error": str(e), "template": template_name}, ensure_ascii=False)
+```
+
+**B. 在 `PlanningKG` 中实现查询方法** (`modules/kg/builder.py`):
+
+```python
+def query_count_by_zone_type(self) -> Dict[str, Dict[str, Any]]:
+    """Return current landuse distribution by zone_type."""
+    sparql = """
+    SELECT ?zone_type (COUNT(?parcel) as ?count) (SUM(?area) as ?total_area)
+    WHERE {
+        ?parcel a :Parcel ;
+                :hasZoneType ?zone_type ;
+                :hasArea ?area .
+    }
+    GROUP BY ?zone_type
+    """
+    results = self.g.query(sparql)
+    return {
+        str(row.zone_type): {
+            "count": int(row.count),
+            "total_area_ha": float(row.total_area) / 10000.0,
+        }
+        for row in results
+    }
+```
+
+**文件**:
+
+- `backend/app/agent/gis/parse/agent.py` — 实现 `query_village_kg` 实际执行
+- `backend/app/modules/kg/builder.py` — 新增 SPARQL 查询方法
+
+---
+
+## 10. Path 9: DB 12 维度并行化（P1，1天）
+
+### 问题
+
+DB 来源运行时：
+
+- 12 个维度合并后 17688 chars，截断到 12000 chars，丢失信息
+- validate_and_merge 处理大量结构化输出，LLM 响应超时（489s，8 分钟）
+- 最终 operations=0（LLM 连接问题）
+
+### 根因
+
+当前实现是串行处理：
+
+1. `load_l3_from_db()` 合并 12 个维度为单一文本
+2. PARSE Agent 一次性处理全部文本
+3. 文本过长导致截断 + LLM 处理超时
+
+### 修改点
+
+**A. 维度级并行处理架构**:
+
+```
+DB 12 维度
+  ├─ dimension 1 (industry) → PARSE Agent (轻量) → partial_ops_1
+  ├─ dimension 2 (spatial_structure) → PARSE Agent → partial_ops_2
+  ...
+  └─ dimension 12 (project_bank) → PARSE Agent → partial_ops_12
+       ↓
+  Merge Node: 合并 12 个 partial results
+       ↓
+  Validate & Deduplicate
+       ↓
+  Final Output
+```
+
+**B. 每个维度独立调用 PARSE Agent**:
+
+```python
+async def parse_dimension(dimension_key: str, content: str, spatial_context: SpatialContext) -> Dict:
+    """Parse a single dimension independently."""
+    # 使用轻量 prompt（只提取该维度的操作/约束/目标）
+    prompt = DIMENSION_PARSE_PROMPT.format(
+        dimension_key=dimension_key,
+        content=content[:2000],  # 单个维度通常 < 2000 chars
+        spatial_context=format_spatial_context_for_prompt(spatial_context, "minimal"),
+    )
+  
+    # 轻量 LLM 调用（thinking_budget=500, max_tokens=4096）
+    llm = _get_llm(enable_thinking=True, thinking_budget=500)
+    result = await _format_structured(llm, DimensionParseResult, [SystemMessage(...), HumanMessage(content=prompt)])
+  
+    return {
+        "operations": result.operations if result else [],
+        "constraints": result.constraints if result else [],
+        "zone_targets": result.zone_targets if result else [],
+    }
+```
+
+**C. 合并节点去重 + 校验**:
+
+```python
+async def merge_dimension_results(results: List[Dict]) -> Dict:
+    """Merge 12 dimension parse results."""
+    all_ops = []
+    all_constraints = []
+    all_targets = []
+  
+    for r in results:
+        all_ops.extend(r.get("operations", []))
+        all_constraints.extend(r.get("constraints", []))
+        all_targets.extend(r.get("zone_targets", []))
+  
+    # Deduplicate by source_text
+    seen_sources = set()
+    unique_ops = []
+    for op in all_ops:
+        src = op.get("source_text", "")
+        if src not in seen_sources:
+            seen_sources.add(src)
+            unique_ops.append(op)
+  
+    # Validate area_ratio sum
+    total_ratio = sum(t.get("area_ratio", 0) for t in all_targets)
+    if abs(total_ratio - 1.0) > 0.05:
+        logger.warning(f"[DB Merge] area_ratio sum = {total_ratio:.1%}, needs adjustment")
+  
+    return {
+        "operation_sequence": unique_ops,
+        "constraint_set": all_constraints,
+        "planning_intent": SpatialPlanningIntent(zone_targets=all_targets),
+    }
+```
+
+**文件**:
+
+- `backend/scripts/run_parse_pipeline.py` — 新增 `parse_dimension()` + `merge_dimension_results()`
+- `backend/app/modules/prompts/parse_prompts.py` — 新增 `DIMENSION_PARSE_PROMPT`
+
+**预期效果**:
+
+| 指标              | 当前（串行）                | 并行化后                      |
+| ----------------- | --------------------------- | ----------------------------- |
+| 文本截断          | 17688 → 12000 (32% 丢失)   | 每个维度 < 2000 chars，无截断 |
+| LLM 超时          | 489s (format_projects 超时) | 每维度 ~30s，12 维度并行 ~60s |
+| 操作产出          | 0 (超时失败)                | 预计 20-30 ops                |
+| area_ratio 完整性 | 83.6% (遗漏水域等)          | 各维度独立提取，合并后补全    |
+
+---
+
+## 11. 执行路线图
 
 ### 第一批：P0 — 让 30 个操作可用（3天）
 
 ```
-Path 1 (0.5天) → Path 2 (1天) → Path 3 (1天) → 联调 (0.5天)
+Path 1 (0.5天) → Path 2 (1天) → Path 3 (1天) → Path 8 (1天) → 联调 (0.5天)
 ```
 
-**里程碑**: 金田村解析 → ≥20/30 编码正确 + ≥15/30 锚定已解析 + ≥5 条约束 →
+**里程碑**: 金田村解析 → ≥20/30 编码正确 + ≥15/30 锚定已解析 + ≥5 条约束 + query_village_kg 工具实际执行 →
 **可交付 GIS Agent 生成第一版规划分区图 + 规划设施图**
 
 ### 第二批：P1 — 质量与效率（2.5天）
 
 ```
-Path 4 (1.5天) → Path 5 (1天)
+Path 4 (1.5天) → Path 5 (1天) → Path 9 (1天)
 ```
 
-**里程碑**: 忠实度各维度 >60% + 总耗时 <180s
+**里程碑**: 忠实度各维度 >60% + 总耗时 <180s + DB 来源可正常运行
 
 ### 第三批：P2 — 深度空间理解（2.5天）
 
@@ -556,28 +789,48 @@ Path 6 (2天) → Path 7 (0.5天)
 
 ---
 
-## 10. 修改文件清单
+## 12. 修改文件清单
 
-| 优先级       | 文件                                           | 改动类型       | 改动内容                                                                                        |
-| ------------ | ---------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------- |
-| **P0** | `backend/app/agent/gis/parse/agent.py`       | 修改           | 编码硬校验`_auto_correct_code` + 锚定自动填充 `_auto_fill_spatial_anchor` + 约束 regex 扩展 |
-| **P0** | `backend/app/agent/gis/parse/agent.py`       | 修改           | `extract_regulations_node` 分拆 Phase A(regex) + Phase B(LLM)                                 |
-| **P1** | `backend/app/agent/gis/evaluate_fidelity.py` | **新建** | 忠实度评估器：五维评估 + FidelityReport                                                         |
-| **P1** | `backend/app/agent/gis/parse/agent.py`       | 修改           | graph 添加`evaluate_fidelity` 节点 + LangGraph Send 并行                                      |
-| **P2** | `backend/app/modules/gis/spatial_context.py` | 修改           | `format_spatial_context_for_prompt` 注入注记摘要+空间关系                                     |
-| **P2** | `backend/app/agent/gis/parse/agent.py`       | 修改           | 新增`query_facilities` KG 工具                                                                |
-| **P2** | `backend/app/modules/gis/kg/builder.py`      | 修改           | 新增`query_facilities` SPARQL 方法                                                            |
-| **P2** | `data/gis/jintian/terrain/dem.tif`           | 新数据         | GDEMV3 30m DEM 下载                                                                             |
+| 优先级           | 文件                                             | 改动类型       | 改动内容                                                                                              |
+| ---------------- | ------------------------------------------------ | -------------- | ----------------------------------------------------------------------------------------------------- |
+| **P0**     | `backend/app/agent/gis/parse/agent.py`         | 修改           | 编码硬校验`_auto_correct_code` + 锚定自动填充 `_auto_fill_spatial_anchor` + 约束 regex 扩展       |
+| **P0**     | `backend/app/agent/gis/parse/agent.py`         | 修改           | `extract_regulations_node` 分拆 Phase A(regex) + Phase B(LLM)                                       |
+| **P0**     | `backend/app/agent/gis/parse/agent.py`         | 修改           | `query_village_kg` 工具实际执行 SPARQL 查询                                                         |
+| **P0**     | `backend/app/modules/kg/builder.py`            | 修改           | 新增 SPARQL 查询方法：`query_count_by_zone_type`, `query_designated_zones`, `query_constraints` |
+| **P1**     | `backend/app/agent/gis/evaluate_fidelity.py`   | **新建** | 忠实度评估器：五维评估 + FidelityReport                                                               |
+| **P1**     | `backend/app/agent/gis/parse/agent.py`         | 修改           | graph 添加`evaluate_fidelity` 节点 + LangGraph Send 并行                                            |
+| **P1**     | `backend/scripts/run_parse_pipeline.py`        | 修改           | DB 12 维度并行化：`parse_dimension()` + `merge_dimension_results()`                               |
+| **P1**     | `backend/app/modules/prompts/parse_prompts.py` | 修改           | 新增`DIMENSION_PARSE_PROMPT`                                                                        |
+| **P2**     | `backend/app/modules/gis/spatial_context.py`   | 修改           | `format_spatial_context_for_prompt` 注入注记摘要+空间关系                                           |
+| **P2**     | `backend/app/agent/gis/parse/agent.py`         | 修改           | 新增`query_facilities` KG 工具                                                                      |
+| **P2**     | `backend/app/modules/gis/kg/builder.py`        | 修改           | 新增`query_facilities` SPARQL 方法                                                                  |
+| **P2**     | `data/gis/jintian/terrain/dem.tif`             | 新数据         | GDEMV3 30m DEM 下载                                                                                   |
+| **已修复** | `backend/app/modules/gis/schema/code_sets.py`  | 修改           | 新增`GHYTMC_TO_PLANNING_ZONE` 映射                                                                  |
+| **已修复** | `backend/app/tools/gis/generate.py`            | 修改           | `_make_planning_zone_layer` 使用 GHYTMC_TO_PLANNING_ZONE 映射                                       |
+| **已修复** | `backend/app/tools/gis/generate.py`            | 修改           | Direction 枚举容错 + AxisIntent label 保留                                                            |
+| **已修复** | `backend/scripts/run_layout_pipeline.py`       | 修改           | 村名别名映射 +`kg.to_turtle()` 修复                                                                 |
+| **已修复** | `backend/app/tools/gis/allocate.py`            | 修改           | `hasattr` bool 切片修复                                                                             |
+| **已修复** | `backend/app/utils/geojson_utils.py`           | 修改           | `gpd.GeoDataFrame` 字符串注解                                                                       |
+| **已修复** | `requirements.txt`                             | 修改           | 新增 9 个缺失依赖包                                                                                   |
 
 ---
 
-## 11. 验证方案
+## 13. 验证方案
 
 ### 端到端测试
 
 ```bash
 cd backend
-python scripts/run_parse_pipeline.py --village 金田村
+# Test MinerU source
+python -m scripts.run_parse_pipeline --source mineru
+python -m scripts.run_layout_pipeline --source mineru
+
+# Test DB source (after Path 9)
+python -m scripts.run_parse_pipeline --source db
+python -m scripts.run_layout_pipeline --source db
+
+# Test compare mode
+python -m scripts.run_layout_pipeline --compare
 ```
 
 检查 `output/parse_results/金田村_YYYY-MM-DD.md`:
@@ -588,33 +841,38 @@ python scripts/run_parse_pipeline.py --village 金田村
 | 锚定已解析的操作数      | ≥ 15/30               |
 | 约束数量                | ≥ 5                   |
 | 规划意图 (zone_targets) | ≥ 5 分区 + ≥ 10 设施 |
+| area_ratio 之和         | 95%-105%               |
 | 校验通过率              | > 70%                  |
 | 忠实度 overall_score    | > 0.6                  |
 | 总耗时                  | < 180s                 |
 
-### GIS Agent 交付验证
+### LAYOUT Pipeline 验证
 
-```python
-from backend.app.modules.gis.generation.optimizer.mip_allocator import MIPAllocator
-allocator = MIPAllocator(parcels, zone_targets=parse_result.zone_targets, constraints=parse_result.constraint_set)
-result = allocator.solve()
-# 预期: 生成 4 规划分区 + 设施布局建议
-```
+检查 `output/layout_results/jintian_YYYY-MM-DD/`:
 
----
-
-## 12. 与原始 v1.1 提案的关系
-
-| v1.1 主张                             | v2.0 调整                                                                                                                                                |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 升级 SpatialContext 为"统计+空间关系" | **不再争论设计**。现有 statistics-only 框架足以支撑 Path 1-3 的修复。空间关系增强移至 P2 的 Path 6                                                 |
-| 重写 parse/state.py 全部 Schema       | **不重写**。现有 Schema (SpatialOperation/SpatialConstraint/SpatialPlanningIntent) 定义正确，问题是 LLM→Python 数据传递链断裂，通过 Path 1+2 修复 |
-| 新建 spatial_context.py               | **已实现**。当前 spatial_context.py 工作正常，Path 6 仅增强其 prompt 输出                                                                          |
-| 修订 DESIGN_GOALS §6                 | **暂缓**。先验证 Path 1-3 能否在现有框架内解决问题                                                                                                 |
+| 检查项                       | 目标值                |
+| ---------------------------- | --------------------- |
+| planning_zone.png 非空白     | ✅ 4 区颜色正确       |
+| comparison.png 左右对比      | ✅ 现状 vs 规划       |
+| mip_result.json zone_targets | 8 个 zone，偏差 < 10% |
+| validation_detail.json       | 3 轮验证记录          |
+| trace 文件完整性             | 4 个 JSON 文件        |
 
 ---
 
-## 附录: v11 实测数据速查
+## 14. 与原始 v1.1 提案的关系
+
+| v1.1 主张                             | v2.1 调整                                                                                                  |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 升级 SpatialContext 为"统计+空间关系" | **不再争论设计**。现有 statistics-only 框架足以支撑 Path 1-3 的修复。空间关系增强移至 P2 的 Path 6   |
+| 重写 parse/state.py 全部 Schema       | **不重写**。现有 Schema 定义正确，问题是 LLM→Python 数据传递链断裂 + 工具空壳，通过 Path 1+2+8 修复 |
+| 新建 spatial_context.py               | **已实现**。当前 spatial_context.py 工作正常，Path 6 仅增强其 prompt 输出                            |
+| 修订 DESIGN_GOALS §6                 | **暂缓**。先验证 Path 1-3+8 能否在现有框架内解决问题                                                 |
+| DB 12 维度串行处理                    | **Path 9 并行化**。当前串行处理导致文本截断 + LLM 超时，需拆分为维度级并行                           |
+
+---
+
+## 附录 A: v11 实测数据速查
 
 来自 `output/parse_results/金田村_2026-07-22.md`：
 
@@ -624,3 +882,14 @@ result = allocator.solve()
 - **校验**: 46 错误 = 23 编码无效 + 23 锚定置信度低
 - **约束**: 0 条
 - **规划意图**: 仅有 4 个面积指标，无 zone_targets/facilities/axes
+
+## 附录 B: v12 管线测试数据速查
+
+来自 `output/parse_results/金田村_2026-07-23.md`（MinerU 来源）+ `output/layout_results/jintian_2026-07-23/`：
+
+- **PARSE**: ops=4, constraints=2, zone_targets=8, valid=False (area_ratio=83.6%)
+- **LAYOUT**: KG=9395 triples, MIP=Optimal/5280 vars/8 zones, Generate=6 layers, Validate=5/8 checks
+- **渲染**: planning_zone.png 非空白（4 区颜色正确），comparison.png 现状 vs 规划对比清晰
+- **Trace 文件**: kg_output.json (577 KB), allocation_result.json (6.3 MB), validation_detail.json (4.7 KB), pipeline_run.json, mip_result.json (3.3 KB)
+- **总耗时**: PARSE 377s + LAYOUT 63s = 440s
+- **已修复 Bug**: 9 个（见 §0.3 已修复表格）

@@ -32,7 +32,7 @@ from app.modules.gis.layout.facility_placer import FacilityPlacer
 from app.modules.gis.layout.axis_builder import AxisBuilder
 from app.modules.gis.layout.map_renderer import MapRenderer
 from app.modules.kg import PlanningKG
-from app.modules.gis.schema.intent import (
+from app.modules.gis.schema.contracts import (
     UnifiedSpatialIntent, ZoneIntent, Direction, Density,
 )
 from app.database.engine import get_db_path

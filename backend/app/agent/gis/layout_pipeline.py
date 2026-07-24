@@ -92,6 +92,11 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
 
         zone_count = len(planning_intent.zone_targets) if hasattr(planning_intent, 'zone_targets') else 0
 
+        # Extract facility anchors from spatial_context for downstream consumption
+        facility_anchors = None
+        if hasattr(spatial_context, 'facility_anchors') and spatial_context.facility_anchors:
+            facility_anchors = [fa.model_dump() for fa in spatial_context.facility_anchors]
+
         logger.info(
             "[Pipeline:parse] Parsed: %d ops, %d constraints, %d zones",
             len(operation_sequence), len(constraint_set), zone_count,
@@ -106,6 +111,7 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
             "constraint_set": constraint_set,
             "planning_intent": planning_intent,
             "spatial_context": spatial_context.model_dump(),
+            "facility_anchors": facility_anchors,
         }
     except Exception as e:
         logger.warning("[Pipeline:parse] Parse failed: %s — continuing with empty intent", e)
@@ -132,20 +138,67 @@ async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
 
 
 async def _build_kg_node(state: GISPipelineState) -> dict:
-    """Build knowledge graph from intent + GIS data."""
+    """Build knowledge graph from intent + GIS data.
+
+    Uses KGManager for Layer 1 caching — same village + landuse skips
+    expensive _add_spatial_relations rebuild.
+
+    Pre-computes adjacency map, zone restrictions, parcel counts, and
+    protected parcels for downstream tools.
+    """
     from app.tools.gis.kg import build_knowledge_graph
 
     try:
         result = await build_knowledge_graph.ainvoke({})
-        kg_turtle = result.get("kg_turtle", "") if isinstance(result, dict) else ""
-        kg_constraints = result.get("constraints", []) if isinstance(result, dict) else []
+        if not isinstance(result, dict):
+            return {}
+
+        kg_turtle = result.get("kg_turtle", "")
+        kg_constraints = result.get("kg_constraints", [])
+        kg_adjacency_map = result.get("kg_adjacency_map", {})
+        kg_zone_restrictions = result.get("kg_zone_restrictions", {})
+        kg_session_ref = result.get("kg_session_ref", "")
+        kg_layer1_cache_key = result.get("kg_layer1_cache_key", "")
+        kg_version = result.get("kg_version", 0)
+        kg_parcel_count_by_zone = result.get("kg_parcel_count_by_zone", [])
+        kg_protected_parcels = result.get("kg_protected_parcels", {})
+        # Phase 5: expanded KG query results
+        kg_protected_parcels_detail = result.get("kg_protected_parcels_detail", [])
+        kg_three_zones = result.get("kg_three_zones", [])
+        kg_three_lines = result.get("kg_three_lines", [])
+        kg_village_anchors = result.get("kg_village_anchors", [])
+        kg_vne_summary = result.get("kg_vne_summary", [])
+        kg_count_by_planning_zone = result.get("kg_count_by_planning_zone", [])
 
         logger.info(
-            "[Pipeline:kg] KG built: %d triples, %d constraints",
+            "[Pipeline:kg] KG built: %d triples, %d constraints, %d adjacency, "
+            "%d protected_detail, %d three_zones, %d three_lines, %d anchors, %d VNE",
             len(kg_turtle.split("\n")) if kg_turtle else 0,
             len(kg_constraints),
+            len(kg_adjacency_map),
+            len(kg_protected_parcels_detail),
+            len(kg_three_zones),
+            len(kg_three_lines),
+            len(kg_village_anchors),
+            len(kg_vne_summary),
         )
-        return {"kg_turtle": kg_turtle, "kg_constraints": kg_constraints}
+        return {
+            "kg_turtle": kg_turtle,
+            "kg_constraints": kg_constraints,
+            "kg_adjacency_map": kg_adjacency_map,
+            "kg_zone_restrictions": kg_zone_restrictions,
+            "kg_session_ref": kg_session_ref,
+            "kg_layer1_cache_key": kg_layer1_cache_key,
+            "kg_version": kg_version,
+            "kg_parcel_count_by_zone": kg_parcel_count_by_zone,
+            "kg_protected_parcels": kg_protected_parcels,
+            "kg_protected_parcels_detail": kg_protected_parcels_detail,
+            "kg_three_zones": kg_three_zones,
+            "kg_three_lines": kg_three_lines,
+            "kg_village_anchors": kg_village_anchors,
+            "kg_vne_summary": kg_vne_summary,
+            "kg_count_by_planning_zone": kg_count_by_planning_zone,
+        }
     except Exception as e:
         logger.error("[Pipeline:kg] KG build failed: %s", e)
         return {}

@@ -17,11 +17,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.utils.logger import get_logger
 from app.modules.gis.schema.contracts import (
     ConstraintSummary,
+    FacilityAnchor,
     LanduseEntry,
     NaturalVillageAnchor,
     SpatialContext,
     SpatialRelation,
+    TerrainProfile,
 )
+from app.modules.gis.schema.spatial_types import ANNOTATION_LABEL_TYPE_MAP
 
 logger = get_logger(__name__)
 
@@ -79,12 +82,27 @@ def compute_spatial_context(gis_data: Dict[str, Any]) -> SpatialContext:
     if landuse_geojson:
         ctx.zone_adjacency = _compute_zone_adjacency(landuse_geojson)
 
+    # 8. Facility anchors from annotation.geojson (precise coordinates)
+    annotation_geojson = gis_data.get("annotation_geojson")
+    if annotation_geojson:
+        ctx.facility_anchors = _extract_facility_anchors(annotation_geojson)
+        ctx.annotation_villages = _extract_annotation_villages(annotation_geojson)
+
+    # 9. Merge annotation villages into natural_villages (annotation names more precise)
+    if ctx.annotation_villages:
+        _merge_annotation_villages(ctx, landuse_geojson)
+
+    # 10. Terrain profile (P2 reserved — no-op when DEM data unavailable)
+    ctx.terrain_profile = _compute_terrain_profile(gis_data)
+
     logger.info(
-        "[SpatialContext] Computed: %d parcels, %d villages, %d relations, %d constraints",
+        "[SpatialContext] Computed: %d parcels, %d villages, %d relations, %d constraints, "
+        "%d facility anchors",
         ctx.parcel_count,
         len(ctx.natural_villages),
         len(ctx.spatial_relations),
         len(ctx.constraint_summary),
+        len(ctx.facility_anchors),
     )
 
     return ctx
@@ -496,6 +514,254 @@ def _load_place_aliases() -> Dict[str, str]:
     except Exception as e:
         logger.debug("[SpatialContext] Place aliases not loaded: %s", e)
         return {}
+
+
+# ── Annotation extraction (precise coordinates from GIS) ─────────────
+
+
+def _extract_facility_anchors(annotation_geojson: Dict[str, Any]) -> List[FacilityAnchor]:
+    """Extract facility anchors from annotation.geojson.
+
+    Filters for 现状设施点 features, maps annotation text to facility type,
+    and extracts precise WGS84 coordinates.
+    """
+    anchors = []
+    features = annotation_geojson.get("features", [])
+
+    for ft in features:
+        props = ft.get("properties", {})
+        category = props.get("分类", props.get("category", ""))
+
+        if category != "现状设施点":
+            continue
+
+        text = props.get("注记", props.get("text", ""))
+        if not text:
+            continue
+
+        # Map annotation text to facility type
+        facility_type = ANNOTATION_LABEL_TYPE_MAP.get(text, "公共服务")
+
+        # Extract coordinates
+        geometry = ft.get("geometry", {})
+        coords = geometry.get("coordinates", [0, 0])
+        if not coords or len(coords) < 2:
+            continue
+
+        center = (round(float(coords[0]), 6), round(float(coords[1]), 6))
+
+        anchors.append(FacilityAnchor(
+            name=text,
+            facility_type=facility_type,
+            category=category,
+            center=center,
+        ))
+
+    if anchors:
+        logger.info(
+            "[SpatialContext] Extracted %d facility anchors from annotations", len(anchors)
+        )
+    return anchors
+
+
+def _extract_annotation_villages(annotation_geojson: Dict[str, Any]) -> List[NaturalVillageAnchor]:
+    """Extract village name anchors from annotation.geojson.
+
+    Filters for 村名 features, extracts precise WGS84 coordinates.
+    These replace the cluster-derived VillageGroup_N names from step 4.
+    """
+    anchors = []
+    features = annotation_geojson.get("features", [])
+
+    for ft in features:
+        props = ft.get("properties", {})
+        category = props.get("分类", props.get("category", ""))
+
+        if category != "村名":
+            continue
+
+        text = props.get("注记", props.get("text", ""))
+        if not text:
+            continue
+
+        # Extract coordinates
+        geometry = ft.get("geometry", {})
+        coords = geometry.get("coordinates", [0, 0])
+        if not coords or len(coords) < 2:
+            continue
+
+        center = (round(float(coords[0]), 6), round(float(coords[1]), 6))
+
+        anchors.append(NaturalVillageAnchor(
+            name=text,
+            center=center,
+            parcel_ids=[],  # Populated in _merge_annotation_villages
+            dominant_landuse="居住用地",
+            adjacent_to=[],
+        ))
+
+    if anchors:
+        logger.info(
+            "[SpatialContext] Extracted %d village name anchors from annotations", len(anchors)
+        )
+    return anchors
+
+
+def _merge_annotation_villages(
+    ctx: SpatialContext,
+    landuse_geojson: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Merge annotation village names into natural_villages.
+
+    Strategy:
+      1. For each annotation village, find the nearest cluster in natural_villages
+      2. Replace cluster name (VillageGroup_N) with annotation name (八社村)
+      3. Update center to annotation's precise coordinate
+      4. Keep cluster's parcel_ids (which came from GIS analysis)
+      5. Any unmatched annotation villages are appended
+    """
+    if not ctx.annotation_villages:
+        return
+
+    used_cluster_indices = set()
+
+    for ann_v in ctx.annotation_villages:
+        ann_lon, ann_lat = ann_v.center
+
+        # Find nearest cluster within 300m (approx 0.003 degrees at 24°N)
+        best_idx = None
+        best_dist = float("inf")
+        for i, nv in enumerate(ctx.natural_villages):
+            if i in used_cluster_indices:
+                continue
+            nv_lon, nv_lat = nv.center
+            dist = ((ann_lon - nv_lon) ** 2 + (ann_lat - nv_lat) ** 2) ** 0.5
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+
+        if best_idx is not None and best_dist < 0.003:
+            # Merge: replace cluster name with annotation name
+            cluster = ctx.natural_villages[best_idx]
+            ctx.natural_villages[best_idx] = NaturalVillageAnchor(
+                name=ann_v.name,            # Use annotation name (e.g. "八社村")
+                center=ann_v.center,        # Use annotation's precise coordinate
+                parcel_ids=cluster.parcel_ids,  # Keep cluster's parcel analysis
+                dominant_landuse=cluster.dominant_landuse,
+                adjacent_to=cluster.adjacent_to,
+            )
+            used_cluster_indices.add(best_idx)
+        else:
+            # No nearby cluster — find nearby parcels from landuse
+            parcel_ids = []
+            if landuse_geojson:
+                parcel_ids = _find_parcels_near_point(
+                    landuse_geojson, ann_v.center, radius_m=200
+                )
+            # Append as new village
+            ctx.natural_villages.append(NaturalVillageAnchor(
+                name=ann_v.name,
+                center=ann_v.center,
+                parcel_ids=parcel_ids[:20],
+                dominant_landuse="居住用地",
+                adjacent_to=[],
+            ))
+
+    logger.info(
+        "[SpatialContext] Merged %d annotation villages into %d natural_villages",
+        len(ctx.annotation_villages), len(ctx.natural_villages),
+    )
+
+
+def _find_parcels_near_point(
+    landuse_geojson: Dict[str, Any],
+    center: Tuple[float, float],
+    radius_m: float = 200,
+) -> List[str]:
+    """Find parcel BSMs near a WGS84 point within radius_m.
+
+    Used when annotation village has no matching cluster in natural_villages.
+    """
+    parcel_ids = []
+    try:
+        from shapely.geometry import Point
+
+        ref_point = Point(center[0], center[1])
+        # Approximate degree radius at ~24°N: 1° ≈ 111km * cos(24°) ≈ 101km
+        radius_deg = radius_m / 101000.0
+
+        for ft in landuse_geojson.get("features", []):
+            geom = ft.get("geometry", {})
+            if not geom:
+                continue
+            from shapely.geometry import shape
+            s = shape(geom)
+            if s.is_empty:
+                continue
+            if ref_point.distance(s.centroid) < radius_deg:
+                bsm = str(ft.get("properties", {}).get("BSM", "")).strip()
+                if bsm:
+                    parcel_ids.append(bsm)
+    except Exception as e:
+        logger.debug("[SpatialContext] Parcel near-point lookup failed: %s", e)
+    return parcel_ids
+
+
+# ── Terrain profile (P2 reserved — DEM data not yet available) ─────
+
+
+def _compute_terrain_profile(gis_data: Dict[str, Any]) -> Optional[TerrainProfile]:
+    """Compute terrain profile from DEM analysis results (P2 reserved).
+
+    When DEM data is available via TerrainAnalyzer, this extracts the
+    slope/aspect/suitability area percentage breakdowns and wraps them
+    in a TerrainProfile for LLM prompt injection.
+
+    Current behavior: returns None when no terrain analysis data exists,
+    allowing the pipeline to function normally without DEM.
+
+    Args:
+        gis_data: Full GIS data dict — may contain "terrain_analysis" key
+                  with a TerrainAnalysisResult value.
+
+    Returns:
+        TerrainProfile if terrain analysis data is available, None otherwise.
+    """
+    terrain_analysis = gis_data.get("terrain_analysis") if gis_data else None
+    if terrain_analysis is None:
+        return None
+
+    try:
+        from app.modules.gis.schema.raster_types import TerrainAnalysisResult
+
+        # Accept both typed TerrainAnalysisResult and dict
+        if isinstance(terrain_analysis, TerrainAnalysisResult):
+            profile = TerrainProfile(
+                slope_area_pct=dict(getattr(terrain_analysis, "slope_area_pct", {}) or {}),
+                aspect_area_pct=dict(getattr(terrain_analysis, "aspect_area_pct", {}) or {}),
+                suitability_area_pct=dict(getattr(terrain_analysis, "suitability_area_pct", {}) or {}),
+            )
+        elif isinstance(terrain_analysis, dict):
+            profile = TerrainProfile(
+                slope_area_pct=dict(terrain_analysis.get("slope_area_pct", {}) or {}),
+                aspect_area_pct=dict(terrain_analysis.get("aspect_area_pct", {}) or {}),
+                suitability_area_pct=dict(terrain_analysis.get("suitability_area_pct", {}) or {}),
+            )
+        else:
+            return None
+
+        has_data = any([profile.slope_area_pct, profile.aspect_area_pct, profile.suitability_area_pct])
+        if has_data:
+            logger.info(
+                "[SpatialContext] Terrain profile: %d slope classes, %d aspect classes, %d suitability classes",
+                len(profile.slope_area_pct), len(profile.aspect_area_pct), len(profile.suitability_area_pct),
+            )
+            return profile
+
+        return None
+    except Exception as e:
+        logger.debug("[SpatialContext] Terrain profile extraction skipped: %s", e)
+        return None
 
 
 __all__ = ["compute_spatial_context"]

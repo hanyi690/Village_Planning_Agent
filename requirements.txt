@@ -49,6 +49,7 @@ fastapi-cors>=0.0.6
 # ============================================
 # Database
 # ============================================
+sqlalchemy>=2.0.0
 sqlmodel>=0.0.14
 aiosqlite>=0.19.0
 
@@ -85,6 +86,7 @@ python-dotenv>=1.0.0
 pydantic>=2.12.0
 pydantic-settings>=2.0.0
 typing-extensions>=4.12.0
+requests>=2.31.0
 
 # ============================================
 # LangSmith Tracing
@@ -98,6 +100,9 @@ geopandas>=0.14.0
 shapely>=2.0.0
 pyproj>=3.6.0
 networkx>=3.0
+matplotlib>=3.8.0
+# RDF 知识图谱 (PlanningKG)
+rdflib>=7.0.0
 # OpenStreetMap 数据获取（补充村级道路）
 osmnx>=1.5.0
 
@@ -105,3 +110,20 @@ osmnx>=1.5.0
 # Caching
 # ============================================
 cachetools>=5.3.0
+
+# ============================================
+# Optimization (MIP 布局分配)
+# ============================================
+pulp>=2.7.0
+
+# ============================================
+# Structured Output / LLM Tool Use
+# ============================================
+instructor>=1.0.0                    # LLM structured output (instructor_client.py)
+httpx>=0.25.0                        # Async HTTP (LLM provider transport)
+
+# ============================================
+# Data / Serialization (explicit, also transitive deps)
+# ============================================
+pandas>=2.1.0                        # DataFrame (used alongside geopandas)
+pyyaml>=6.0                          # YAML config/rule loading

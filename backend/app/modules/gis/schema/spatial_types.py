@@ -224,6 +224,17 @@ class CurrentRoad(SpatialFeature):
         )
 
 
+# Facility type mapping from annotation text labels.
+# Single source of truth — used by spatial_types.CurrentFacility.from_annotation_feature
+# and spatial_context._extract_facility_anchors.
+ANNOTATION_LABEL_TYPE_MAP: Dict[str, str] = {
+    "篮": "体育", "健": "体育", "广": "广场", "停": "停车",
+    "电": "电力", "污": "排水", "水": "给水", "垃": "环卫",
+    "卫": "公厕", "祠": "文化", "村": "村委会", "站": "交通",
+    "小": "学校",
+}
+
+
 @dataclass
 class CurrentFacility(SpatialFeature):
     """现状设施 (点/面) — 基期年现状要素.
@@ -237,14 +248,6 @@ class CurrentFacility(SpatialFeature):
     service_radius: float = 0.0  # 服务半径 (米, 公共服务设施)
     category: str = ""       # 分类: infrastructure(基础设施) / public_service(公共服务)
 
-    # 注记文本到设施类型的映射
-    _LABEL_TYPE_MAP: dict = field(default_factory=lambda: {
-        "篮": "体育", "健": "体育", "广": "广场", "停": "停车",
-        "电": "电力", "污": "排水", "水": "给水", "垃": "环卫",
-        "卫": "公厕", "祠": "文化", "村": "村委会", "站": "交通",
-        "小": "学校",
-    }, repr=False, init=False)
-
     @classmethod
     def from_annotation_feature(cls, feature: dict) -> "CurrentFacility | None":
         """从 annotation.geojson 的设施点 Feature 构建.
@@ -257,13 +260,7 @@ class CurrentFacility(SpatialFeature):
             return None
 
         text = props.get("注记", props.get("text", ""))
-        label_map = {
-            "篮": "体育", "健": "体育", "广": "广场", "停": "停车",
-            "电": "电力", "污": "排水", "水": "给水", "垃": "环卫",
-            "卫": "公厕", "祠": "文化", "村": "村委会", "站": "交通",
-            "小": "学校",
-        }
-        facility_type = label_map.get(text, "公共服务")
+        facility_type = ANNOTATION_LABEL_TYPE_MAP.get(text, "公共服务")
         # 分类: 基础设施(电/水/污) vs 公共服务(广场/文化/体育/学校)
         infra_types = {"电力", "排水", "给水", "环卫", "交通"}
         cat = "infrastructure" if facility_type in infra_types else "public_service"

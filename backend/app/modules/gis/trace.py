@@ -55,6 +55,7 @@ class MIPTrace(BaseModel):
     changed_parcels: int = 0
     changed_pct: float = 0.0
     timing_ms: int = 0
+    metadata: Dict[str, Any] = {}  # density_hints, adjacency_rules, parse_constraint_count
 
 
 class ValidationRound(BaseModel):

@@ -154,21 +154,36 @@ QUERY_TEMPLATES = {
         }
     """,
 
+    "get_facility_locations": PREFIX + """
+        SELECT ?facility ?name ?type ?lon ?lat ?serves
+        WHERE {
+            ?facility a pln:Facility ;
+                      pln:name ?name .
+            OPTIONAL { ?facility pln:facility_type ?type . }
+            OPTIONAL { ?facility pln:lon ?lon . }
+            OPTIONAL { ?facility pln:lat ?lat . }
+            OPTIONAL { ?facility pln:serves ?serves . }
+        }
+    """,
+
     "get_road_network": PREFIX + """
-        SELECT ?road ?name ?dlbm
+        SELECT ?road ?name ?dlbm ?road_level ?length
         WHERE {
             ?road a pln:Road ;
                   pln:name ?name .
             OPTIONAL { ?road pln:dlbm ?dlbm . }
+            OPTIONAL { ?road pln:road_level ?road_level . }
+            OPTIONAL { ?road pln:length ?length . }
         }
     """,
 
     "get_water_bodies": PREFIX + """
-        SELECT ?water ?name ?dlbm
+        SELECT ?water ?name ?dlbm ?area_ha
         WHERE {
             ?water a pln:WaterBody ;
                    pln:name ?name .
             OPTIONAL { ?water pln:dlbm ?dlbm . }
+            OPTIONAL { ?water pln:area_target_ha ?area_ha . }
         }
     """,
 
@@ -193,6 +208,192 @@ QUERY_TEMPLATES = {
                     pln:bsm ?bsm ;
                     pln:designated_as ?zone .
             ?zone pln:name ?zone_name .
+        }
+    """,
+
+    # --- Phase 2: New query templates (P0) ---
+
+    "get_village_parcels": PREFIX + """
+        SELECT ?parcel ?bsm ?dlbm ?dlmc ?zone_type ?area_ha ?lon ?lat ?vne_code ?planning_zone
+        WHERE {
+            ?parcel a pln:Parcel ;
+                    pln:bsm ?bsm ;
+                    pln:dlbm ?dlbm ;
+                    pln:area_ha ?area_ha ;
+                    pln:current_zone_type ?zone_type .
+            OPTIONAL { ?parcel pln:dlmc ?dlmc . }
+            OPTIONAL { ?parcel pln:lon ?lon . }
+            OPTIONAL { ?parcel pln:lat ?lat . }
+            OPTIONAL { ?parcel pln:vne_code ?vne_code . }
+            OPTIONAL { ?parcel pln:planning_zone ?planning_zone . }
+        }
+        ORDER BY ?bsm
+    """,
+
+    "get_parcel_neighbors": PREFIX + """
+        SELECT ?neighbor_bsm ?neighbor_dlbm ?neighbor_zone_type ?neighbor_area
+        WHERE {
+            ?parcel pln:bsm "{bsm}" ;
+                    pln:adjacent_to ?neighbor .
+            ?neighbor pln:bsm ?neighbor_bsm ;
+                     pln:dlbm ?neighbor_dlbm ;
+                     pln:current_zone_type ?neighbor_zone_type ;
+                     pln:area_ha ?neighbor_area .
+        }
+    """,
+
+    "get_parcel_detail": PREFIX + """
+        SELECT ?bsm ?dlbm ?dlmc ?zone_type ?area_ha ?lon ?lat ?vne_code ?planning_zone
+        WHERE {
+            ?parcel a pln:Parcel ;
+                    pln:bsm "{bsm}" ;
+                    pln:dlbm ?dlbm ;
+                    pln:area_ha ?area_ha ;
+                    pln:current_zone_type ?zone_type .
+            OPTIONAL { ?parcel pln:dlmc ?dlmc . }
+            OPTIONAL { ?parcel pln:lon ?lon . }
+            OPTIONAL { ?parcel pln:lat ?lat . }
+            OPTIONAL { ?parcel pln:vne_code ?vne_code . }
+            OPTIONAL { ?parcel pln:planning_zone ?planning_zone . }
+        }
+    """,
+
+    "count_by_vne": PREFIX + """
+        SELECT ?vne_code (COUNT(?p) as ?parcel_count) (SUM(?area) as ?total_area_ha)
+        WHERE {
+            ?p a pln:Parcel ;
+               pln:vne_code ?vne_code ;
+               pln:area_ha ?area .
+        }
+        GROUP BY ?vne_code
+        ORDER BY DESC(?total_area_ha)
+    """,
+
+    "count_by_planning_zone": PREFIX + """
+        SELECT ?planning_zone (COUNT(?p) as ?parcel_count) (SUM(?area) as ?total_area_ha)
+        WHERE {
+            ?p a pln:Parcel ;
+               pln:planning_zone ?planning_zone ;
+               pln:area_ha ?area .
+        }
+        GROUP BY ?planning_zone
+        ORDER BY DESC(?total_area_ha)
+    """,
+
+    "get_facilities_by_type": PREFIX + """
+        SELECT ?facility ?name ?type ?lon ?lat ?serves
+        WHERE {
+            ?facility a pln:Facility ;
+                      pln:name ?name .
+            OPTIONAL { ?facility pln:facility_type ?type . }
+            OPTIONAL { ?facility pln:lon ?lon . }
+            OPTIONAL { ?facility pln:lat ?lat . }
+            OPTIONAL { ?facility pln:serves ?serves . }
+            {type_filter}
+        }
+    """,
+
+    "get_protected_parcels_detail": PREFIX + """
+        SELECT ?bsm ?dlbm ?zone_type ?area_ha ?protection_name ?protection_category
+        WHERE {
+            ?parcel a pln:Parcel ;
+                    pln:bsm ?bsm ;
+                    pln:dlbm ?dlbm ;
+                    pln:current_zone_type ?zone_type ;
+                    pln:area_ha ?area_ha ;
+                    pln:within_zone ?protection .
+            ?protection a pln:ThreeLine ;
+                        pln:name ?protection_name .
+            OPTIONAL { ?protection pln:source ?protection_category . }
+        }
+        ORDER BY ?protection_name ?bsm
+    """,
+
+    "get_parcels_near_point": PREFIX + """
+        SELECT ?bsm ?dlbm ?zone_type ?area_ha ?lon ?lat
+        WHERE {
+            ?parcel a pln:Parcel ;
+                    pln:bsm ?bsm ;
+                    pln:dlbm ?dlbm ;
+                    pln:current_zone_type ?zone_type ;
+                    pln:area_ha ?area_ha ;
+                    pln:lon ?lon ;
+                    pln:lat ?lat .
+            FILTER(
+                ?lon >= {min_lon} && ?lon <= {max_lon} &&
+                ?lat >= {min_lat} && ?lat <= {max_lat}
+            )
+        }
+    """,
+
+    # --- Phase 2: New query templates (P1) ---
+
+    "get_three_zones": PREFIX + """
+        SELECT ?zone_name (COUNT(?p) as ?parcel_count) (SUM(?area) as ?total_area_ha)
+        WHERE {
+            ?p a pln:Parcel ;
+               pln:planning_zone ?zone_name ;
+               pln:area_ha ?area .
+        }
+        GROUP BY ?zone_name
+        ORDER BY DESC(?total_area_ha)
+    """,
+
+    "get_three_lines": PREFIX + """
+        SELECT ?name ?code ?color ?area_target_ha
+        WHERE {
+            ?line a pln:ThreeLine ;
+                  pln:name ?name .
+            OPTIONAL { ?line pln:code ?code . }
+            OPTIONAL { ?line pln:color ?color . }
+            OPTIONAL { ?line pln:area_target_ha ?area_target_ha . }
+        }
+    """,
+
+    "get_village_anchors": PREFIX + """
+        SELECT ?name ?lon ?lat
+        WHERE {
+            ?v a pln:Village ;
+               pln:name ?name ;
+               pln:lon ?lon ;
+               pln:lat ?lat .
+        }
+    """,
+
+    # --- Phase 2: Reserved terrain query templates (P2) ---
+
+    "get_terrain_profile": PREFIX + """
+        SELECT ?property ?value
+        WHERE {
+            pln:village ?prop ?value .
+            FILTER(
+                STRSTARTS(STR(?prop), STR(pln:slope_)) ||
+                STRSTARTS(STR(?prop), STR(pln:suitability_))
+            )
+        }
+    """,
+
+    "get_parcels_by_slope": PREFIX + """
+        SELECT ?bsm ?dlbm ?slope_class ?area_ha
+        WHERE {
+            ?parcel a pln:Parcel ;
+                    pln:bsm ?bsm ;
+                    pln:dlbm ?dlbm ;
+                    pln:area_ha ?area_ha ;
+                    pln:slope_class ?slope_class .
+            {slope_filter}
+        }
+    """,
+
+    "get_parcels_by_aspect": PREFIX + """
+        SELECT ?bsm ?dlbm ?aspect_class ?area_ha
+        WHERE {
+            ?parcel a pln:Parcel ;
+                    pln:bsm ?bsm ;
+                    pln:dlbm ?dlbm ;
+                    pln:area_ha ?area_ha ;
+                    pln:aspect_class ?aspect_class .
+            {aspect_filter}
         }
     """,
 
@@ -222,6 +423,20 @@ def query_kg(kg, template_name: str, **params) -> list:
         return [{"error": f"Unknown template: {template_name}. Available: {list(QUERY_TEMPLATES.keys())}"}]
 
     sparql = QUERY_TEMPLATES[template_name]
+
+    # Provide defaults for optional filter parameters
+    defaults = {
+        "type_filter": "",
+        "slope_filter": "",
+        "aspect_filter": "",
+        "min_lon": "-180",
+        "max_lon": "180",
+        "min_lat": "-90",
+        "max_lat": "90",
+    }
+    for key, default_val in defaults.items():
+        params.setdefault(key, default_val)
+
     for key, val in params.items():
         sparql = sparql.replace(f"{{{key}}}", str(val))
 

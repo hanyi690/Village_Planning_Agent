@@ -48,9 +48,14 @@ def run_layout_pipeline(
     kg = None
     if run_kg:
         try:
-            from app.modules.kg import PlanningKG
-            kg = PlanningKG(village_name=village_name)
-            kg.build_from_intent(intent=intent, landuse_geojson=landuse_geojson, gis_data=gis_data)
+            from app.modules.kg.manager import get_kg_manager
+            manager = get_kg_manager()
+            kg = manager.get_or_build_kg(
+                village_name=village_name,
+                landuse_geojson=landuse_geojson,
+                gis_data=gis_data,
+                intent=intent,
+            )
             kg_constraints = kg.get_constraints()
             result["kg"] = {
                 "triple_count": kg.get_triple_count(),

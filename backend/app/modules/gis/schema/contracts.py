@@ -247,6 +247,21 @@ class ConstraintSummary(BaseModel):
     overlaps_with: List[str] = Field(default_factory=list)
 
 
+class FacilityAnchor(BaseModel):
+    """Facility spatial anchor — precise location from annotation.geojson.
+
+    Unlike NaturalVillageAnchor (clustered from residential parcels), this comes
+    directly from annotation.geojson's 现状设施点 features, which carry exact
+    coordinates and a typed facility classification.
+    PARSE uses this to ground facility location_hints instead of fuzzy gazetteer.
+    """
+
+    name: str = ""                       # 注记文本, e.g. "村委会", "小学", "祠堂"
+    facility_type: str = ""              # mapped type: "公共服务", "教育", "文化", "体育"
+    category: str = ""                   # "现状设施点" / "规划设施点"
+    center: Tuple[float, float] = (0.0, 0.0)
+
+
 class SpatialContext(BaseModel):
     """Spatially-aware GIS context for PARSE Agent.
 
@@ -268,6 +283,30 @@ class SpatialContext(BaseModel):
     constraint_summary: List[ConstraintSummary] = Field(default_factory=list)
     zone_adjacency: Dict[str, List[str]] = Field(default_factory=dict)
 
+    # Precise anchors from annotation.geojson (exact coordinates, not clustered)
+    facility_anchors: List[FacilityAnchor] = Field(default_factory=list)
+    annotation_villages: List[NaturalVillageAnchor] = Field(default_factory=list)
+
+    # Terrain profile (P2 reserved — from DEM analysis, None when no DEM data)
+    terrain_profile: Optional["TerrainProfile"] = None
+
+
+class TerrainProfile(BaseModel):
+    """Terrain analysis summary — compact digest for LLM spatial reasoning.
+
+    Populated from TerrainAnalysisResult when DEM data is available.
+    Currently reserved (P2) — set to None when no DEM data exists.
+    """
+
+    slope_area_pct: Dict[str, float] = Field(default_factory=dict)
+    # {"0-6": 25.3, "6-15": 40.1, "15-25": 28.5, ">25": 6.1}
+
+    aspect_area_pct: Dict[str, float] = Field(default_factory=dict)
+    # {"N": 12.5, "S": 18.2, ...}
+
+    suitability_area_pct: Dict[str, float] = Field(default_factory=dict)
+    # {"suitable": 30.0, "moderate": 35.0, "marginal": 25.0, "unsuitable": 10.0}
+
 
 __all__ = [
     "Direction",
@@ -286,7 +325,9 @@ __all__ = [
     # Spatial context (GIS → Agent contract)
     "LanduseEntry",
     "NaturalVillageAnchor",
+    "FacilityAnchor",
     "SpatialRelation",
     "ConstraintSummary",
     "SpatialContext",
+    "TerrainProfile",
 ]

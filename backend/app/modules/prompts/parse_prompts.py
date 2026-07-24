@@ -93,11 +93,35 @@ def format_spatial_context_for_prompt(
                 f"面积={c.area_ha:.1f}公顷{overlaps}"
             )
 
+    # Facility anchors (standard + full — precise GIS coordinates)
+    if detail_level in ("standard", "full"):
+        facility_anchors = getattr(ctx, "facility_anchors", None)
+        if facility_anchors:
+            lines.append("\n现状设施点（注记坐标）:")
+            for fa in facility_anchors:
+                fa_name = getattr(fa, "name", "")
+                fa_type = getattr(fa, "facility_type", "")
+                fa_center = getattr(fa, "center", None)
+                coord_str = f" ({fa_center[0]:.4f}, {fa_center[1]:.4f})" if fa_center else ""
+                lines.append(f"  - {fa_name}: 类型={fa_type}{coord_str}")
+
     # Zone adjacency (full only)
     if detail_level == "full" and ctx.zone_adjacency:
         lines.append("\n分区邻接:")
         for zone, neighbors in ctx.zone_adjacency.items():
             lines.append(f"  - {zone}: 邻接 {', '.join(neighbors)}")
+
+    # Terrain profile (full only — P2 reserved, no-op when not available)
+    if detail_level == "full":
+        terrain = getattr(ctx, "terrain_profile", None)
+        if terrain:
+            lines.append("\n地形剖面（DEM分析）:")
+            slope = getattr(terrain, "slope_area_pct", {}) or {}
+            for cls_label, pct in slope.items():
+                lines.append(f"  - 坡度{cls_label}: {pct:.1f}%")
+            suitability = getattr(terrain, "suitability_area_pct", {}) or {}
+            for cls_label, pct in suitability.items():
+                lines.append(f"  - 建设适宜性{cls_label}: {pct:.1f}%")
 
     return "\n".join(lines)
 

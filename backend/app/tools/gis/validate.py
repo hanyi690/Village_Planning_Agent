@@ -34,13 +34,18 @@ from app.tools.helpers import make_result, to_tool_message
 def validate_layout(
     layout_configs: Annotated[Optional[List[Dict[str, Any]]], InjectedState("layout_configs")],
     kg_constraints: Annotated[Optional[List[Dict[str, Any]]], InjectedState("kg_constraints")] = None,
+    kg_protected_parcels_detail: Annotated[Optional[List[Dict[str, Any]]], InjectedState("kg_protected_parcels_detail")] = None,
+    kg_vne_summary: Annotated[Optional[List[Dict[str, Any]]], InjectedState("kg_vne_summary")] = None,
     auto_retry: bool = True,
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
     """Validate the generated layout against planning standards.
 
     Checks: zone area ratios, completeness, overlaps, protected parcels,
-    minimum areas, adjacency compatibility, spatial compactness.
+    minimum areas, adjacency compatibility, spatial compactness, VNE compliance.
+
+    Phase 5: uses KG protected_parcels_detail for spatial containment checks
+    and KG vne_summary for VNE classification compliance.
 
     Args:
         auto_retry: Generate retry suggestions if True.
@@ -53,7 +58,11 @@ def validate_layout(
         })
 
     validator = LayoutValidator()
-    report = validator.validate(layout_configs)
+    report = validator.validate(
+        layout_configs,
+        protected_parcels_detail=kg_protected_parcels_detail,
+        kg_vne_summary=kg_vne_summary,
+    )
 
     result = {
         "status": report.status,
@@ -62,12 +71,30 @@ def validate_layout(
         "passed_checks": sum(1 for c in report.checks if c.passed),
     }
 
+    # Step 3: Build structured adjustments from violations
+    adjustments = getattr(report, "adjustments", None) or []
+    if adjustments:
+        result["adjustments"] = [
+            {"zone": a.zone, "action": a.action, "delta_ha": a.delta_ha,
+             "reason": a.reason, "priority": a.priority}
+            for a in adjustments
+        ]
+
     if report.status == "fail" and auto_retry:
         result["retry_suggestions"] = [
             f"{c.check_name}: {c.violations[0].message}" if c.violations else f"{c.check_name}: adjust"
             for c in report.checks if not c.passed
         ]
 
-    return Command(update={
+    update_payload = {
         "messages": [to_tool_message(make_result(True, data=result), tool_call_id)],
-    })
+    }
+    # Store adjustments in state for allocate feedback (Step 3)
+    if adjustments:
+        update_payload["constraint_adjustments"] = [
+            {"zone": a.zone, "action": a.action, "delta_ha": a.delta_ha,
+             "reason": a.reason, "priority": a.priority}
+            for a in adjustments
+        ]
+
+    return Command(update=update_payload)

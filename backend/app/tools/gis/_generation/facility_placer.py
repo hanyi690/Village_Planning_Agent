@@ -67,6 +67,7 @@ class FacilityPlacer:
         boundary_geojson: Optional[Dict[str, Any]] = None,
         existing_pois: Optional[List[Dict[str, Any]]] = None,
         hazard_points_geojson: Optional[Dict[str, Any]] = None,
+        kg_facilities: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Generate facility_point GeoJSON from FacilityIntent list.
 
@@ -76,6 +77,7 @@ class FacilityPlacer:
             boundary_geojson: Village boundary (for fallback centroid)
             existing_pois: Existing POI data from search_poi tool
             hazard_points_geojson: Geological hazard points (merged into output)
+            kg_facilities: Facility locations from KG query (name, type, lon, lat)
 
         Returns:
             GeoJSON FeatureCollection of facility Point features
@@ -107,7 +109,14 @@ class FacilityPlacer:
             if status in ("现状保留", "existing"):
                 point = self._place_existing(fac_type, existing_pois, parcel_centroids)
             elif status in ("规划新建", "planned"):
-                point = self._place_new(fac_type, direction, parcel_centroids, boundary_center, residential_points)
+                # Strategy 1: match location_hint to KG facility (precise coordinates)
+                matched_kg = None
+                if kg_facilities and (location_hint or fac_type):
+                    matched_kg = self._match_location_to_kg(location_hint, fac_type, kg_facilities)
+                if matched_kg:
+                    point = self._place_near_existing(matched_kg, offset_m=100)
+                if point is None:
+                    point = self._place_new(fac_type, direction, parcel_centroids, boundary_center, residential_points)
             elif status in ("规划改扩建", "upgraded"):
                 point = self._place_upgraded(fac_type, existing_pois, parcel_centroids, boundary_center)
             elif status in ("规划迁建", "relocated"):
@@ -173,6 +182,69 @@ class FacilityPlacer:
         # Fallback: centroid of preferred DLBM parcels
         pref_dlbms = FACILITY_DLBM_MAP.get(fac_type, {}).get("preferred", [])
         return self._centroid_of_dlbm(pref_dlbms, parcel_centroids)
+
+    @staticmethod
+    def _match_location_to_kg(
+        location_hint: str,
+        fac_type: str,
+        kg_facilities: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Match a location_hint or fac_type to a KG facility entity.
+
+        KG facility rows look like: {name, type, lon, lat, serves}.
+        Returns the matched facility dict, or None.
+        """
+        hint = (location_hint or "").strip()
+        ftype = (fac_type or "").strip()
+
+        # Match by facility name / type first
+        for kf in kg_facilities:
+            kf_name = str(kf.get("name", ""))
+            kf_type = str(kf.get("type", ""))
+            if hint and (hint in kf_name or kf_name in hint):
+                return kf
+            if ftype and ftype in kf_name:
+                return kf
+            if hint and hint in kf_type:
+                return kf
+
+        # Loose type match (e.g. fac_type "学校" → KG type "教育")
+        type_synonyms = {
+            "学校": ["教育", "小"],
+            "村委会": ["村"],
+            "文化站": ["文化", "祠"],
+            "卫生站": ["医疗", "卫"],
+            "体育": ["篮", "健"],
+        }
+        syns = type_synonyms.get(ftype, [])
+        for kf in kg_facilities:
+            kf_name = str(kf.get("name", ""))
+            kf_type = str(kf.get("type", ""))
+            if any(s in kf_name or s in kf_type for s in syns):
+                return kf
+        return None
+
+    @staticmethod
+    def _place_near_existing(
+        kg_facility: Dict[str, Any],
+        offset_m: float = 100.0,
+    ) -> Optional[List[float]]:
+        """Place a new facility near an existing KG facility location.
+
+        Adds a small offset so the new point doesn't overlap the existing one.
+        """
+        try:
+            lon = float(kg_facility.get("lon", 0))
+            lat = float(kg_facility.get("lat", 0))
+            if lon == 0 and lat == 0:
+                return None
+        except (TypeError, ValueError):
+            return None
+
+        # Offset eastward by offset_m
+        cos_lat = math.cos(math.radians(lat))
+        deg_lon = offset_m / (111_000.0 * cos_lat) if cos_lat > 0 else offset_m / 111_000.0
+        return [round(lon + deg_lon, 6), round(lat, 6)]
 
     def _place_new(
         self,

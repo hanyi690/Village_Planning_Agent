@@ -70,16 +70,16 @@ START → classify_sections → route_by_section (conditional fan-out)
 
 **8 个节点，4 个 LLM 调用路径**：
 
-| 节点 | Phase | thinking | json_schema | tools | 产出 |
-|------|-------|----------|-------------|-------|------|
-| classify_sections | — | ON(1000) | ON | OFF | section_map (10 sections) |
-| explore_projects | A | ON(2000) | OFF | ON(3 tools) | draft_operations + code_mappings |
-| format_projects | B | OFF | ON | OFF | raw_operations (List[SpatialOperation]) |
-| explore_targets | A | ON(2000) | OFF | ON(3 tools) | draft_targets + code_mappings |
-| format_targets | B | OFF | ON | OFF | raw_targets (SpatialPlanningIntent) |
-| extract_regulations | — | ON(1000) | ON | OFF | raw_constraints |
-| extract_tables | — | — | — | — | raw_tables (确定性，0 LLM) |
-| validate_and_merge | — | OFF | ON | OFF | 最终输出 |
+| 节点                | Phase | thinking | json_schema | tools       | 产出                                    |
+| ------------------- | ----- | -------- | ----------- | ----------- | --------------------------------------- |
+| classify_sections   | —    | ON(1000) | ON          | OFF         | section_map (10 sections)               |
+| explore_projects    | A     | ON(2000) | OFF         | ON(3 tools) | draft_operations + code_mappings        |
+| format_projects     | B     | OFF      | ON          | OFF         | raw_operations (List[SpatialOperation]) |
+| explore_targets     | A     | ON(2000) | OFF         | ON(3 tools) | draft_targets + code_mappings           |
+| format_targets      | B     | OFF      | ON          | OFF         | raw_targets (SpatialPlanningIntent)     |
+| extract_regulations | —    | ON(1000) | ON          | OFF         | raw_constraints                         |
+| extract_tables      | —    | —       | —          | —          | raw_tables (确定性，0 LLM)              |
+| validate_and_merge  | —    | OFF      | ON          | OFF<br />   | 最终输出                                |
 
 ## 4. v10 Pipeline 实测结果（金田村，2026-07-22）
 
@@ -140,6 +140,7 @@ _get_llm(enable_thinking=True, thinking_budget=2000, max_tokens=8192)
 ### 5.2 v10 per-section batching 的碎片效应
 
 v10 将 4 个 section 逐个处理：
+
 - section 1: traffic_planning (541 chars) → LLM 调工具 → draft = 0 chars（只有 tool_calls）
 - section 2: public_service (526 chars) → LLM 调工具 → draft = 80 chars（碎片）
 - section 3: infrastructure_planning (1018 chars) → ...
@@ -149,15 +150,15 @@ v10 将 4 个 section 逐个处理：
 
 ### 5.3 v9 / v10 / v11 三代对比
 
-| 指标 | v9 (全量+thinking+json) | v10 (per-section) | v11 (单批次+Think-Then-Format) |
-|------|------------------------|-------------------|-------------------------------|
-| sections_text 长度 | 8000 chars (全部) | 500-1700 chars (单 section) | ~4500 chars (合并) |
-| draft_operations | 5724 chars | 138 chars | 2185 chars (+16x) 🎉 |
-| draft_targets | 4153 chars | 109 chars | 2605 chars (+24x) 🎉 |
-| format_projects | 0 ops (S1 fail) | 2 ops (S1 OK) | 30 ops 🎉 |
-| format_targets | 7 zones (S1 fail) | 9 zones (S1 OK) | 8 zones (S1 OK) |
-| "length limit" 错误 | ❌ 有 | ✅ 0 | ✅ 0 |
-| 总耗时 | 582s | 296s | 显著改善 |
+| 指标                | v9 (全量+thinking+json) | v10 (per-section)           | v11 (单批次+Think-Then-Format) |
+| ------------------- | ----------------------- | --------------------------- | ------------------------------ |
+| sections_text 长度  | 8000 chars (全部)       | 500-1700 chars (单 section) | ~4500 chars (合并)             |
+| draft_operations    | 5724 chars              | 138 chars                   | 2185 chars (+16x) 🎉           |
+| draft_targets       | 4153 chars              | 109 chars                   | 2605 chars (+24x) 🎉           |
+| format_projects     | 0 ops (S1 fail)         | 2 ops (S1 OK)               | 30 ops 🎉                      |
+| format_targets      | 7 zones (S1 fail)       | 9 zones (S1 OK)             | 8 zones (S1 OK)                |
+| "length limit" 错误 | ❌ 有                   | ✅ 0                        | ✅ 0                           |
+| 总耗时              | 582s                    | 296s                        | 显著改善                       |
 
 **结论**: v11 综合了 v9 的全量视野 + v10 的 Think-Then-Format 稳定性，实现了 draft 质量和操作数量的飞跃。
 
@@ -210,13 +211,36 @@ parse 产出的操作引用自然语言地名（园寨/社前/田坑），GIS �
 
 ## 8. 近期目标 vs 中期目标
 
-| 周期 | 目标 | 状态 |
-|------|------|------|
-| 近期 (v11) | draft > 1000 chars, operations > 10 | ✅ v11 已实现 (draft 2185/2605, ops 30) |
-| 近期 (v11) | format 阶段无 "length limit" | ✅ v10 已修复 |
-| 近期 (v11) | KG 构建成功 + 工具返回有效数据 | ✅ v10 已修复 |
-| 近期 (v11.1) | 编码校验格式统一 (GHYTBM format fix) | 🔧 待微调 |
-| 中期 | SpatialAnchor 自动填充 (Gazetteer→KG→candidate_parcels) | ❌ 未实现 |
-| 中期 | 编码校验 100% 确定性 Python lookup | ⚠️ 部分 (validate 有 check，format 格式不同步) |
-| 长期 | EXECUTE_OPERATIONS ReAct 子图 | ❌ 未实现 |
-| 长期 | DEM 分析 (坡度/坡向/建设适宜性) | ❌ 未实现 |
+
+┌─────┬────────────────────────────────────────┬─────────────────────────────────────────┐
+  │  #  │                  发现                  │                  原因                   │
+  ├─────┼────────────────────────────────────────┼─────────────────────────────────────────┤
+  │ 1   │ ThreeZonesThreeLines 模型              │ 用户确认是有意为之的 schema             │
+  │     │                                        │ 定义，后续需要利用                      │
+  ├─────┼────────────────────────────────────────┼─────────────────────────────────────────┤
+  │ 2   │ vne_category computed_field            │ 同上，后续需要利用                      │
+  ├─────┼────────────────────────────────────────┼─────────────────────────────────────────┤
+  │ 3   │ PlanningIndicatorTable 未消费          │ 同上，后续需要利用                      │
+  ├─────┼────────────────────────────────────────┼─────────────────────────────────────────┤
+  │ 4   │ annotation_villages 字段冗余           │ 保留作为独立数据源备用                  │
+  ├─────┼────────────────────────────────────────┼─────────────────────────────────────────┤
+  │ 5   │ _compute_zone_adjacency O(n*50)        │ 需要引入 sjoin 重构，超出简化范围       │
+  ├─────┼────────────────────────────────────────┼─────────────────────────────────────────┤
+  │ 6   │ _find_parcels_near_point O(n)          │ 需要引入空间索引，超出简化范围          │
+  ├─────┼────────────────────────────────────────┼─────────────────────────────────────────┤
+  │ 7   │ _log_llm_call 存储完整 prompt          │ 需要改动 trace 存储格式，超出范围       │
+  ├─────┼────────────────────────────────────────┼─────────────────────────────────────────┤
+  │ 8   │ intent/intent_json/planning_intent     │ 可能被外部消费者依赖，需确认后再删除    │
+  │     │ 三字段冗余                             │                                         │
+  └─────┴────────────────────────────────────────┴─────────────────────────────────────────┘
+
+| 周期         | 目标                                                      | 状态                                             |
+| ------------ | --------------------------------------------------------- | ------------------------------------------------ |
+| 近期 (v11)   | draft > 1000 chars, operations > 10                       | ✅ v11 已实现 (draft 2185/2605, ops 30)          |
+| 近期 (v11)   | format 阶段无 "length limit"                              | ✅ v10 已修复                                    |
+| 近期 (v11)   | KG 构建成功 + 工具返回有效数据                            | ✅ v10 已修复                                    |
+| 近期 (v11.1) | 编码校验格式统一 (GHYTBM format fix)                      | 🔧 待微调                                        |
+| 中期         | SpatialAnchor 自动填充 (Gazetteer→KG→candidate_parcels) | ❌ 未实现                                        |
+| 中期         | 编码校验 100% 确定性 Python lookup                        | ⚠️ 部分 (validate 有 check，format 格式不同步) |
+| 长期         | EXECUTE_OPERATIONS ReAct 子图                             | ❌ 未实现                                        |
+| 长期         | DEM 分析 (坡度/坡向/建设适宜性)                           | ❌ 未实现                                        |

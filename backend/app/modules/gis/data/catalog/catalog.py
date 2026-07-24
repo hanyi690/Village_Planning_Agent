@@ -82,6 +82,8 @@ class DataCatalog:
 
     def _init_sources(self) -> None:
         """Initialize all data source drivers from config."""
+        from app.core.settings import PROJECT_ROOT
+
         for name, cfg in self._config.items():
             driver_name = cfg.get("driver", "")
             if not DriverRegistry.has_driver(driver_name):
@@ -95,7 +97,14 @@ class DataCatalog:
 
             try:
                 driver_cls = DriverRegistry.get(driver_name)
-                self._sources[name] = driver_cls(cfg)
+                # Resolve relative paths against project root
+                resolved_cfg = dict(cfg)
+                for key in ("path", "cache_dir", "local_path"):
+                    if key in resolved_cfg:
+                        p = Path(resolved_cfg[key])
+                        if not p.is_absolute():
+                            resolved_cfg[key] = str(PROJECT_ROOT / p)
+                self._sources[name] = driver_cls(resolved_cfg)
                 logger.info(
                     "[DataCatalog] Initialized source: %s (driver=%s)",
                     name,

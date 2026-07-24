@@ -92,8 +92,17 @@ class MIPZoneAllocator:
         adjacency_graph: Optional[Any] = None,
         adjacency_weight: float = 0.5,
         change_penalty_weight: float = 0.3,
+        parse_constraints: Optional[List[Dict]] = None,
+        density_hints: Optional[Dict[str, str]] = None,
+        adjacency_rules: Optional[Dict[str, dict]] = None,
+        facility_anchors: Optional[List[Dict[str, Any]]] = None,
+        protected_parcels_detail: Optional[List[Dict[str, Any]]] = None,
     ) -> Tuple[Dict[str, Any], Any]:
         """Run MIP allocation.
+
+        Phase 5: protected_parcels_detail adds spatial containment exclusion —
+        parcels within protection boundaries (per KG) are forbidden from
+        construction zone assignment regardless of their DLBM code.
 
         Returns:
             Tuple of (GeoJSON FeatureCollection, MIPTrace dict).
@@ -138,11 +147,28 @@ class MIPZoneAllocator:
         prob = pulp.LpProblem("ZoneAllocation", pulp.LpMinimize)
 
         # Binary variables: x[i][z] = 1 if parcel i assigned to planning zone z
+        # Phase 5: Build set of protected parcel BSMs from KG spatial containment
+        protected_bsms: set = set()
+        if protected_parcels_detail:
+            for pp in protected_parcels_detail:
+                bsm = str(pp.get("bsm", "")).strip()
+                if bsm:
+                    protected_bsms.add(bsm)
+
         x = {}
+        kg_excluded_count = 0
         for i, p in enumerate(parcels):
+            # Phase 5: Check if parcel is in a protection zone (KG within_zone)
+            # Use bsm_bare from build_parcel_index or extract from composite_key
+            parcel_bsm = p.get("bsm_bare", "")
+            is_kg_protected = parcel_bsm in protected_bsms
             for j, zt in enumerate(planning_zones):
                 # Protected parcels cannot go to construction zones
                 if p["dlbm"] in PROTECTED_DLBM_CODES and zt in PLANNING_CONSTRUCTION_ZONES:
+                    continue
+                # Phase 5: KG spatial containment exclusion
+                if is_kg_protected and zt in PLANNING_CONSTRUCTION_ZONES:
+                    kg_excluded_count += 1
                     continue
                 x[i, j] = pulp.LpVariable(f"x_{i}_{j}", cat="Binary")
 
@@ -192,11 +218,28 @@ class MIPZoneAllocator:
                 pulp, prob, x, parcels, planning_zones, constraints, targets, obj_terms
             )
 
-        # 2. DLBM → planning zone preference cost (direct, no mapping)
+        # C4: PARSE semantic constraints (Step 1 — intent fidelity)
+        parse_constraint_count = 0
+        if parse_constraints:
+            parse_constraint_count = self._add_parse_constraints(
+                pulp, prob, x, parcels, planning_zones, parse_constraints, obj_terms
+            )
+
+        # 2. DLBM → planning zone preference cost + density modifier
+        density_cost_mod: Dict[Tuple[int, int], float] = {}
+        if density_hints:
+            landuse = landuse_geojson
+            village_center = self._compute_village_center(parcels, landuse)
+            density_cost_mod = self._compute_density_cost_modifier(
+                parcels, planning_zones, density_hints, village_center
+            )
+            logger.info("[MIP] Density hints applied: %s", density_hints)
+
         for i, p in enumerate(parcels):
             for j, zt in enumerate(planning_zones):
                 if (i, j) in x:
                     cost = self._get_preference_cost(p["dlbm"], zt)
+                    cost += density_cost_mod.get((i, j), 0)
                     obj_terms.append(cost * x[i, j])
 
         # 3. Change penalty: penalize assigning parcel to a zone different from its native zone
@@ -212,6 +255,13 @@ class MIPZoneAllocator:
 
         # 4. Adjacency compatibility: reward same-zone neighbors via linearized auxiliary vars
         adj_index_pairs = []
+        adj_weight_mod: Dict[str, float] = {}
+        if adjacency_rules:
+            adj_weight_mod = self._compute_adjacency_weight_modifier(
+                planning_zones, adjacency_rules
+            )
+            logger.info("[MIP] Adjacency rules applied: %s", adjacency_rules)
+
         if adjacency_graph is not None and adjacency_weight > 0:
             adj_index_pairs = adjacency_graph.to_index_pairs()
             if adj_index_pairs:
@@ -234,12 +284,20 @@ class MIPZoneAllocator:
                                 y[pair_id, j] >= x[i_idx, j] + x[j_idx, j] - 1,
                                 f"lin3_{pair_id}_{j}"
                             )
-                            obj_terms.append(-adjacency_weight * y[pair_id, j])
+                            weight = adjacency_weight + adj_weight_mod.get(zt, 0)
+                            obj_terms.append(-weight * y[pair_id, j])
 
                 logger.info(
                     f"[MIP] Adjacency: {len(adj_index_pairs)} pairs, "
                     f"{sum(1 for k in y)} auxiliary vars"
                 )
+
+        # 5. Facility proximity: reward construction parcels near existing facilities
+        facility_proximity_count = 0
+        if facility_anchors:
+            facility_proximity_count = self._add_facility_proximity_constraints(
+                parcels, planning_zones, facility_anchors, obj_terms, x
+            )
 
         prob += pulp.lpSum(obj_terms)
 
@@ -333,6 +391,15 @@ class MIPZoneAllocator:
             changed_parcels=changed,
             changed_pct=changed / len(parcels) * 100 if parcels else 0,
         )
+
+        # Record intent fidelity metadata in trace
+        mip_trace.metadata = {
+            **mip_trace.metadata,
+            "parse_constraint_count": parse_constraint_count,
+            "density_hints_applied": density_hints or {},
+            "adjacency_rules_applied": adjacency_rules or {},
+            "protected_parcels_excluded": kg_excluded_count,
+        }
 
         return {"type": "FeatureCollection", "features": output_features}, mip_trace.model_dump()
 
@@ -458,3 +525,297 @@ class MIPZoneAllocator:
                     )
                     obj_terms.append(KG_WEIGHT * sl)
                     kg_cidx += 1
+
+    def _add_parse_constraints(
+        self,
+        pulp_mod,
+        prob,
+        x: Dict,
+        parcels: List[Dict],
+        planning_zones: List[str],
+        parse_constraints: List[Dict],
+        obj_terms: list,
+    ) -> int:
+        """Add PARSE-derived semantic constraints to MIP (Step 1 — intent fidelity).
+
+        Maps SpatialConstraint.type to MIP variable exclusions:
+          - ecological_protection: DLBM 1350/3100 parcels -> x[i][建设区]=0
+          - farmland_protection: DLBM 1100/1200 parcels -> x[i][建设区]=0
+          - safety_assurance: parcels with hazard DLBMs -> x[i][建设区]=0
+          - heritage_protection: stored in metadata (no DLBM mapping)
+          - building_constraint / construction_control: stored in metadata (post-MIP check)
+
+        Returns:
+            Number of PARSE constraints applied.
+        """
+        construction_idx = next(
+            (j for j, zt in enumerate(planning_zones)
+             if zt in PLANNING_CONSTRUCTION_ZONES), None
+        )
+        if construction_idx is None:
+            return 0
+
+        applied = 0
+        # DLBM sets for each protection type
+        eco_dlbms = {"1350", "3100", "3200"}  # 生态林, 水域, 自然保留地
+        farm_dlbms = {"1100", "1200"}  # 耕地, 园地
+
+        for c in parse_constraints:
+            ctype = c.get("type", "")
+
+            if ctype == "ecological_protection":
+                # Forbid ecological DLBM parcels from construction zone
+                for i, p in enumerate(parcels):
+                    if p["dlbm"] in eco_dlbms and (i, construction_idx) in x:
+                        prob += x[i, construction_idx] == 0, f"parse_eco_{i}"
+                        applied += 1
+
+            elif ctype == "farmland_protection":
+                # Forbid farmland DLBM parcels from construction zone
+                for i, p in enumerate(parcels):
+                    if p["dlbm"] in farm_dlbms and (i, construction_idx) in x:
+                        prob += x[i, construction_idx] == 0, f"parse_farm_{i}"
+                        applied += 1
+
+            elif ctype == "safety_assurance":
+                # Forbid hazard-adjacent parcels from construction zone
+                # Check source_text for BSM references
+                source = c.get("source_text", "")
+                for i, p in enumerate(parcels):
+                    bsm = p.get("bsm_bare", p.get("bsm", ""))
+                    if bsm and bsm in source and (i, construction_idx) in x:
+                        prob += x[i, construction_idx] == 0, f"parse_hazard_{i}"
+                        applied += 1
+
+            elif ctype == "spatial_constraint":
+                # no_overlap: subject parcels forbidden from object zone
+                rule = c.get("spatial_rule", {})
+                if isinstance(rule, dict) and rule.get("operation") == "no_overlap":
+                    subject = rule.get("subject", "")
+                    # Match subject against DLBM zone types
+                    from app.modules.gis.schema import get_zone_type_for_dlbm
+                    for i, p in enumerate(parcels):
+                        zt = get_zone_type_for_dlbm(p["dlbm"])
+                        if subject and subject in zt and (i, construction_idx) in x:
+                            prob += x[i, construction_idx] == 0, f"parse_no_overlap_{i}"
+                            applied += 1
+
+            # building_constraint / construction_control / heritage_protection:
+            # Not applicable to MIP (MIP only does zone assignment, not building params)
+            # These are recorded in MIPTrace.metadata for post-MIP validation
+
+        if applied:
+            logger.info("[MIP] Applied %d PARSE constraints (ecological/farmland/spatial)", applied)
+        return applied
+
+    # ── Density / Adjacency helpers ──────────────────────────────────
+
+    @staticmethod
+    def _compute_village_center(
+        parcels: List[Dict],
+        landuse_geojson: Dict[str, Any],
+    ) -> Tuple[float, float]:
+        """Compute village center from boundary or parcel centroids."""
+        from shapely.geometry import shape
+
+        # Try boundary from gis_data embedded in landuse_geojson metadata
+        boundary = landuse_geojson.get("_boundary_geojson")
+        if boundary and boundary.get("features"):
+            geom = shape(boundary["features"][0]["geometry"])
+            return (geom.centroid.x, geom.centroid.y)
+
+        # Fallback: mean of all parcel centroids
+        xs, ys = [], []
+        for p in parcels:
+            feat = p.get("feature", p)
+            geom = shape(feat.get("geometry", {}))
+            if not geom.is_empty:
+                xs.append(geom.centroid.x)
+                ys.append(geom.centroid.y)
+        if xs:
+            return (sum(xs) / len(xs), sum(ys) / len(ys))
+        return (0.0, 0.0)
+
+    @staticmethod
+    def _compute_density_cost_modifier(
+        parcels: List[Dict],
+        planning_zones: List[str],
+        density_hints: Dict[str, str],
+        village_center: Tuple[float, float],
+    ) -> Dict[Tuple[int, int], float]:
+        """Compute distance-based parcel preference cost modifier from density_hints.
+
+        Logic:
+          - "high" density -> prefer central parcels (lower cost for central parcels)
+          - "low" density -> prefer peripheral parcels (lower cost for edge parcels)
+          - "medium" -> no modification
+
+        Returns:
+            Dict mapping (parcel_idx, zone_idx) -> cost_modifier
+        """
+        import math
+        from shapely.geometry import shape
+
+        modifiers: Dict[Tuple[int, int], float] = {}
+
+        # Only apply to construction zones
+        construction_zone_indices = [
+            j for j, zt in enumerate(planning_zones)
+            if zt in PLANNING_CONSTRUCTION_ZONES
+        ]
+        if not construction_zone_indices:
+            return modifiers
+
+        # Compute distances from village center
+        distances = []
+        for p in parcels:
+            feat = p.get("feature", p)
+            geom = shape(feat.get("geometry", {}))
+            if geom.is_empty:
+                distances.append(float("inf"))
+            else:
+                cx, cy = geom.centroid.x, geom.centroid.y
+                dist = math.sqrt(
+                    (cx - village_center[0]) ** 2 + (cy - village_center[1]) ** 2
+                )
+                distances.append(dist)
+
+        # Normalize distances to [0, 1]
+        finite_dists = [d for d in distances if d != float("inf")]
+        max_dist = max(finite_dists) if finite_dists else 1.0
+        normalized = [d / max_dist if max_dist > 0 and d != float("inf") else 0.5
+                      for d in distances]
+
+        DENSITY_COST_WEIGHT = 5.0
+
+        for j in construction_zone_indices:
+            zone_name = planning_zones[j]
+            density = density_hints.get(zone_name, "medium")
+
+            if density == "high":
+                # Prefer central parcels: lower cost for small distance
+                for i, norm_dist in enumerate(normalized):
+                    modifiers[(i, j)] = -DENSITY_COST_WEIGHT * (1 - norm_dist)
+            elif density == "low":
+                # Prefer peripheral parcels: lower cost for large distance
+                for i, norm_dist in enumerate(normalized):
+                    modifiers[(i, j)] = -DENSITY_COST_WEIGHT * norm_dist
+            # "medium" -> no modification
+
+        return modifiers
+
+    @staticmethod
+    def _compute_adjacency_weight_modifier(
+        planning_zones: List[str],
+        adjacency_rules: Dict[str, dict],
+    ) -> Dict[str, float]:
+        """Compute adjacency weight modifier from adjacency_rules.
+
+        Logic:
+          - prefer list non-empty -> same-zone neighbors get EXTRA reward (+0.3)
+          - avoid list non-empty -> same-zone neighbors get PENALTY (-0.4)
+
+        Returns:
+            Dict mapping zone_name -> weight_modifier
+        """
+        ADJACENCY_PREFER_BONUS = 0.3
+        ADJACENCY_AVOID_PENALTY = -0.4
+
+        modifiers: Dict[str, float] = {}
+
+        for zone_name, rules in adjacency_rules.items():
+            prefer_list = rules.get("prefer", [])
+            avoid_list = rules.get("avoid", [])
+
+            if prefer_list:
+                modifiers[zone_name] = ADJACENCY_PREFER_BONUS
+            elif avoid_list:
+                modifiers[zone_name] = ADJACENCY_AVOID_PENALTY
+
+        return modifiers
+
+    @staticmethod
+    def _add_facility_proximity_constraints(
+        parcels: List[Dict],
+        planning_zones: List[str],
+        facility_anchors: List[Dict[str, Any]],
+        obj_terms: list,
+        x: Dict,
+    ) -> int:
+        """Reward construction parcels near existing facilities (soft constraint).
+
+        For each 现状设施点 facility anchor, construction-zone parcels within
+        500m get a cost reduction in the objective, encouraging concentrated
+        development near existing infrastructure.
+
+        Args:
+            parcels: List of parcel dicts with 'feature' key
+            planning_zones: List of planning zone names
+            facility_anchors: List of dicts with name, center, category
+            obj_terms: MIP objective terms list (modified in-place)
+            x: MIP binary variables dict
+
+        Returns:
+            Number of facility-proximity bonuses applied.
+        """
+        import math
+
+        FACILITY_PROXIMITY_WEIGHT = 3.0
+        FACILITY_PROXIMITY_RADIUS_M = 500.0
+
+        construction_zone_indices = [
+            j for j, zt in enumerate(planning_zones)
+            if zt in PLANNING_CONSTRUCTION_ZONES
+        ]
+        if not construction_zone_indices:
+            return 0
+
+        applied = 0
+        for anchor in facility_anchors:
+            category = anchor.get("category", "")
+            if category != "现状设施点":
+                continue
+
+            center = anchor.get("center", (0, 0))
+            if isinstance(center, (list, tuple)) and len(center) >= 2:
+                fac_lon, fac_lat = float(center[0]), float(center[1])
+            else:
+                continue
+
+            if fac_lon == 0 and fac_lat == 0:
+                continue
+
+            for i, p in enumerate(parcels):
+                feat = p.get("feature", p)
+                geom_data = feat.get("geometry", {})
+                if not geom_data:
+                    continue
+                try:
+                    from shapely.geometry import shape
+                    geom = shape(geom_data)
+                    if geom.is_empty:
+                        continue
+                    px, py = geom.centroid.x, geom.centroid.y
+                except Exception:
+                    continue
+
+                # Approximate distance in meters (at ~24°N)
+                cos_lat = math.cos(math.radians(py))
+                dx_m = (px - fac_lon) * 111_000.0 * cos_lat
+                dy_m = (py - fac_lat) * 111_000.0
+                dist_m = math.sqrt(dx_m * dx_m + dy_m * dy_m)
+
+                if dist_m < FACILITY_PROXIMITY_RADIUS_M:
+                    # Proportional bonus: closer = stronger
+                    bonus = FACILITY_PROXIMITY_WEIGHT * (1 - dist_m / FACILITY_PROXIMITY_RADIUS_M)
+                    for j in construction_zone_indices:
+                        if (i, j) in x:
+                            obj_terms.append(-bonus * x[i, j])
+                    applied += 1
+
+        if applied:
+            logger.info(
+                "[MIP] Facility proximity: %d parcels near %d facilities rewarded",
+                applied, len(facility_anchors),
+            )
+        return applied

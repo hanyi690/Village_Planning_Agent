@@ -70,19 +70,38 @@ class GISPipelineState(BaseModel):
     reports: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     gis_data: Dict[str, Optional[Dict[str, Any]]] = Field(default_factory=dict)
 
-    # ── Intent + PARSE Agent output (typed at runtime via schema injection) ──
-    # Field types are Dict/List for Pydantic compatibility; actual values are
-    # SpatialPlanningIntent, List[SpatialOperation], List[SpatialConstraint]
-    intent: Dict[str, Any] = Field(default_factory=dict)
-    intent_json: Dict[str, Any] = Field(default_factory=dict)
-    operation_sequence: List[Dict[str, Any]] = Field(default_factory=list)
-    constraint_set: List[Dict[str, Any]] = Field(default_factory=list)
-    planning_intent: Dict[str, Any] = Field(default_factory=dict)
+    # ── Intent + PARSE Agent output ──
+    # Runtime type is SpatialPlanningIntent / List[SpatialOperation] / List[SpatialConstraint].
+    # Declared as Any to allow both typed Pydantic models and legacy dict access
+    # while supporting Pydantic serialization. Downstream code should prefer
+    # attribute access (intent.zone_targets) when the value is a typed model.
+    intent: Any = None
+    intent_json: Any = None
+    operation_sequence: List[Any] = Field(default_factory=list)
+    constraint_set: List[Any] = Field(default_factory=list)
+    planning_intent: Any = None
     spatial_context: Dict[str, Any] = Field(default_factory=dict)
+    facility_anchors: Optional[List[Dict[str, Any]]] = None  # Precise facility locations from annotations
 
     # ── Knowledge Graph ──
     kg_turtle: str = ""  # RDF Turtle serialization
     kg_constraints: List[Dict[str, Any]] = Field(default_factory=list)
+    kg_adjacency_map: Dict[str, List[str]] = Field(default_factory=dict)  # parcel BSM -> adjacent BSMs
+    kg_zone_restrictions: Dict[str, Any] = Field(default_factory=dict)  # zone_name -> restriction list
+    # KG cache references (KGManager side-channel, state stores only references)
+    kg_session_ref: str = ""  # session_id → KGManager._session_kgs
+    kg_layer1_cache_key: str = ""  # cache key → KGManager._layer1_cache
+    kg_version: int = 0  # query cache version for invalidation
+    # Pre-computed query results (eliminate redundant SPARQL at downstream tools)
+    kg_parcel_count_by_zone: List[Dict[str, Any]] = Field(default_factory=list)
+    kg_protected_parcels: Dict[str, Any] = Field(default_factory=dict)
+    # Phase 5: expanded KG query results for downstream consumption
+    kg_protected_parcels_detail: List[Dict[str, Any]] = Field(default_factory=list)  # get_protected_parcels_detail
+    kg_three_zones: List[Dict[str, Any]] = Field(default_factory=list)  # get_three_zones
+    kg_three_lines: List[Dict[str, Any]] = Field(default_factory=list)  # get_three_lines
+    kg_village_anchors: List[Dict[str, Any]] = Field(default_factory=list)  # get_village_anchors
+    kg_vne_summary: List[Dict[str, Any]] = Field(default_factory=list)  # count_by_vne
+    kg_count_by_planning_zone: List[Dict[str, Any]] = Field(default_factory=list)  # count_by_planning_zone
 
     # ── Allocation ──
     allocated_geojson: Dict[str, Any] = Field(default_factory=dict)
@@ -94,6 +113,7 @@ class GISPipelineState(BaseModel):
     # ── Validation ──
     validation_result: Dict[str, Any] = Field(default_factory=dict)
     validation_round: int = 0
+    constraint_adjustments: List[Dict[str, Any]] = Field(default_factory=list)  # Step 3 feedback
 
     # ── Export ──
     export_result: Dict[str, Any] = Field(default_factory=dict)

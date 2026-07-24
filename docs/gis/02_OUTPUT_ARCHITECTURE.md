@@ -1,6 +1,6 @@
 # GIS 输出架构 — 广东省村庄规划标准
 
-> **Status: [CURRENT]** | **Type: Architecture Specification** | **Version: 3.4** | **Updated: 2026-07-21**
+**Version: 3.5**
 > **Scope**: 14层输出架构规范 — 字段定义、编码体系、省标对齐
 > **References**: BIBLIOGRAPHY.md §B1, §B5-6, §B9-10
 > **Related**: 01_DESIGN_GOALS.md, 03_DATA_SOURCE.md, diagnostics/03_DATA_GAP_ANALYSIS.md
@@ -255,6 +255,7 @@ DEM → TerrainAnalyzer → 坡度栅格 → ConstructionCtrlZone (坡度>25° �
 ---
 
 ## 二、输出（14 层 + 1 图 + 2 表 + 变更日志，广东标准）
+> **v3.5 成果观重排**：14 层 GeoJSON 是"一图"与"一库"的数据底座，**非成果终点**。成果终点为广东省汇交标准"一图一表一规则 + 数据库"（5 目录组织），见 `00_PLANNING_SYSTEM_VISION.md §3.3` 与 `reference/HUMAN_PLANNING_WORKFLOW.md §3-4`。其中"一规则"（管制规则）从 P2 提升为核心交付。
 
 ### 2.1 输出目录结构
 
@@ -667,7 +668,7 @@ PROJECT_LAYOUT（建设项目布局规划图生成）  ← P2 待实现
 
 | 项目                                | 优先级 | 说明                                                                        |
 | ----------------------------------- | ------ | --------------------------------------------------------------------------- |
-| 附录3 管制规则模板                  | P2     | 文本生成模板，与 GIS 空间逻辑关系不大，属于规划文档输出范畴。标记为后续处理 |
+| 附录3 管制规则（一规则，6大类）     | **P0** | **核心交付成果之一**（一图一表一规则的三分之一），不再是后续处理。6 大类含量化限值，需条款级溯源。见 `reference/HUMAN_PLANNING_WORKFLOW.md §3.3` |
 | Personal Geodatabase (.mdb) 输出    | P1     | 规范要求 .mdb 格式，当前仅 GeoJSON/GeoPackage                               |
 | 质量检查自动化（30+检查项完整覆盖） | P1     | 当前仅覆盖 ~40%，附件2 检查编码 1101-5312                                   |
 | 汇交目录结构（5个二级目录）         | P1     | 规范要求固定目录组织形式                                                    |

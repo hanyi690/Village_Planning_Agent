@@ -38,6 +38,20 @@ class Violation:
 
 
 @dataclass
+class ConstraintAdjustment:
+    """Structured adjustment from validation → allocate feedback (Step 3).
+
+    Each violation produces a concrete delta_ha that allocate can apply
+    to correct its MIP target map on the next round.
+    """
+    zone: str       # "村庄建设区"
+    action: str     # "reduce_area" | "increase_area" | "reassign_parcels"
+    delta_ha: float  # +12.5 (need more) / -8.3 (need less)
+    reason: str      # "建设用地面积 128.8ha 超过上限 120.5ha"
+    priority: int = 1  # 1=must_fix, 2=should_fix
+
+
+@dataclass
 class CheckResult:
     check_name: str
     passed: bool
@@ -51,6 +65,7 @@ class ValidationReport:
     checks: List[CheckResult] = field(default_factory=list)
     violations: List[Violation] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    adjustments: List[ConstraintAdjustment] = field(default_factory=list)  # Step 3
 
     @property
     def total_violations(self) -> int:
@@ -102,16 +117,19 @@ class LayoutValidator:
         layout_configs: List[Dict[str, Any]],
         constraints: Optional[List[Dict[str, Any]]] = None,
         adjacency_graph: Any = None,
+        protected_parcels_detail: Optional[List[Dict[str, Any]]] = None,
+        kg_vne_summary: Optional[List[Dict[str, Any]]] = None,
     ) -> ValidationReport:
         checks = [
             self._check_area_constraints(constraints or [], layout_configs),
             self._check_zone_completeness(layout_configs),
             self._check_overlap(layout_configs),
-            self._check_protected_parcels(layout_configs),
+            self._check_protected_parcels(layout_configs, protected_parcels_detail),
             self._check_min_zone_area(layout_configs),
             self._check_geojson_structural(layout_configs),
             self._check_adjacency_compatibility(layout_configs, adjacency_graph),
             self._check_spatial_compactness(layout_configs),
+            self._check_vne_compliance(layout_configs, kg_vne_summary),
         ]
 
         all_violations = []
@@ -125,11 +143,15 @@ class LayoutValidator:
         has_errors = any(v.severity == "error" for v in all_violations)
         status = "fail" if has_errors else ("warning" if all_warnings else "pass")
 
+        # Step 3: Compute structured adjustments from violations
+        adjustments = self._compute_adjustments(all_violations, layout_configs)
+
         return ValidationReport(
             status=status,
             checks=checks,
             violations=all_violations,
             warnings=all_warnings,
+            adjustments=adjustments,
         )
 
     def _check_area_constraints(
@@ -292,8 +314,28 @@ class LayoutValidator:
             violations=violations,
         )
 
-    def _check_protected_parcels(self, layout_configs: List[Dict]) -> CheckResult:
+    def _check_protected_parcels(
+        self,
+        layout_configs: List[Dict],
+        protected_parcels_detail: Optional[List[Dict[str, Any]]] = None,
+    ) -> CheckResult:
+        """Check protected parcels are not assigned to construction zone.
+
+        Two detection modes:
+          1. KG-based (preferred): uses protected_parcels_detail from KG
+             which tracks within_zone relations (spatial containment).
+          2. DLBM-based (fallback): hardcoded DLBM code check.
+        """
         violations = []
+
+        # Build set of protected parcel BSMs from KG detail
+        protected_bsms: Dict[str, str] = {}  # bsm → protection_name
+        if protected_parcels_detail:
+            for pp in protected_parcels_detail:
+                bsm = str(pp.get("bsm", "")).strip()
+                prot_name = pp.get("protection_name", "")
+                if bsm:
+                    protected_bsms[bsm] = prot_name
 
         for config in layout_configs:
             if config.get("layerType") != "planning_zone":
@@ -302,18 +344,33 @@ class LayoutValidator:
             for feat in geojson.get("features", []):
                 props = feat.get("properties", {})
                 assigned_zone = props.get("assigned_zone", "")
-                current_zone = props.get("current_zone_type", "")
 
-                if assigned_zone in CONSTRUCTION_ZONE_TYPES:
-                    if current_zone in ("生态绿地", "农业用地"):
-                        dlbm = props.get("DLBM", "")
-                        if dlbm in ("0110", "0120", "0130", "1340", "1350"):
-                            violations.append(Violation(
-                                check="protected_parcels",
-                                severity="error",
-                                message=f"受保护地块(DLBM={dlbm})被分配到建设区",
-                                details={"dlbm": dlbm, "assigned_zone": assigned_zone},
-                            ))
+                if assigned_zone not in CONSTRUCTION_ZONE_TYPES:
+                    continue
+
+                # KG-based check: parcel BSM in protected set
+                bsm = str(props.get("BSM", "")).strip()
+                if bsm and bsm in protected_bsms:
+                    prot_name = protected_bsms[bsm]
+                    violations.append(Violation(
+                        check="protected_parcels",
+                        severity="error",
+                        message=f"受保护地块(BSM={bsm}, {prot_name})被分配到建设区",
+                        details={"bsm": bsm, "protection": prot_name, "assigned_zone": assigned_zone},
+                    ))
+                    continue
+
+                # Fallback: DLBM-based check
+                current_zone = props.get("current_zone_type", "")
+                if current_zone in ("生态绿地", "农业用地"):
+                    dlbm = props.get("DLBM", "")
+                    if dlbm in ("0110", "0120", "0130", "1340", "1350"):
+                        violations.append(Violation(
+                            check="protected_parcels",
+                            severity="error",
+                            message=f"受保护地块(DLBM={dlbm})被分配到建设区",
+                            details={"dlbm": dlbm, "assigned_zone": assigned_zone},
+                        ))
 
         if len(violations) > 10:
             violations = violations[:10]
@@ -521,12 +578,18 @@ class LayoutValidator:
         layout_configs: List[Dict[str, Any]],
         constraints: Optional[List[Dict[str, Any]]] = None,
         max_retries: int = 3,
+        protected_parcels_detail: Optional[List[Dict[str, Any]]] = None,
+        kg_vne_summary: Optional[List[Dict[str, Any]]] = None,
     ) -> RetryValidationReport:
         """Validate layout and generate adjustment suggestions on failure."""
         constraints = constraints or []
 
         for attempt in range(max_retries):
-            report = self.validate(layout_configs, constraints)
+            report = self.validate(
+                layout_configs, constraints,
+                protected_parcels_detail=protected_parcels_detail,
+                kg_vne_summary=kg_vne_summary,
+            )
 
             if report.status == "pass":
                 return RetryValidationReport(
@@ -737,3 +800,141 @@ class LayoutValidator:
             violation_count=len(violations),
             violations=violations,
         )
+
+    def _check_vne_compliance(
+        self,
+        layout_configs: List[Dict],
+        kg_vne_summary: Optional[List[Dict[str, Any]]] = None,
+    ) -> CheckResult:
+        """Check VNE (国土空间规划用途分类) compliance of zone assignments.
+
+        Validates that the area distribution across planning zones is
+        consistent with the VNE classification from KG. Specifically:
+          - VNE V* (村庄建设) → 村庄建设区
+          - VNE N* (非村庄建设) → 村庄建设区
+          - VNE E1* (水域) → 生态保护区
+          - VNE E2* (农林) → 一般农业区
+
+        kg_vne_summary: [{vne_code, parcel_count, total_area_ha}] from KG.
+        """
+        if not kg_vne_summary:
+            return CheckResult(check_name="vne_compliance", passed=True)
+
+        from app.modules.gis.schema import VNE_TO_ZONE_TYPE
+
+        # Build VNE → planning_zone mapping (VNE → zone_type → planning_zone)
+        vne_to_planning: Dict[str, str] = {}
+        for vne_code, zone_type in VNE_TO_ZONE_TYPE.items():
+            first = vne_code[0] if vne_code else ""
+            if first == "V":
+                vne_to_planning[vne_code] = "村庄建设区"
+            elif first == "N":
+                vne_to_planning[vne_code] = "村庄建设区"
+            elif first == "E":
+                if "水域" in zone_type:
+                    vne_to_planning[vne_code] = "生态保护区"
+                elif "农业" in zone_type or "农林" in zone_type:
+                    vne_to_planning[vne_code] = "一般农业区"
+                else:
+                    vne_to_planning[vne_code] = "生态控制区"
+
+        # Collect zone areas from layout
+        zone_areas = self._get_zone_areas(layout_configs)
+        violations = []
+
+        # Aggregate VNE areas by expected planning zone
+        expected_by_zone: Dict[str, float] = {}
+        for vne_entry in kg_vne_summary:
+            vne_code = str(vne_entry.get("vne_code", "")).strip()
+            planning_zone = vne_to_planning.get(vne_code, "")
+            if not planning_zone:
+                continue
+            vne_area = float(vne_entry.get("total_area_ha", 0) or 0)
+            expected_by_zone[planning_zone] = expected_by_zone.get(planning_zone, 0) + vne_area
+
+        # Compare aggregated VNE areas against actual planning zone areas
+        for zone, expected_ha in expected_by_zone.items():
+            actual_ha = zone_areas.get(zone, 0)
+            if expected_ha > 0 and actual_ha > 0:
+                ratio = actual_ha / expected_ha
+                if ratio < 0.5:
+                    violations.append(Violation(
+                        check="vne_compliance",
+                        severity="warning",
+                        message=f"VNE分类预期 {zone} {expected_ha:.1f}ha 但实际 {actual_ha:.1f}ha (覆盖率 {ratio:.0%})",
+                        details={
+                            "zone": zone,
+                            "vne_expected_ha": round(expected_ha, 1),
+                            "actual_ha": round(actual_ha, 1),
+                            "coverage_ratio": round(ratio, 2),
+                        },
+                    ))
+
+        return CheckResult(
+            check_name="vne_compliance",
+            passed=len(violations) == 0,
+            violation_count=len(violations),
+            violations=violations,
+        )
+
+    def _compute_adjustments(
+        self,
+        violations: List[Violation],
+        layout_configs: List[Dict[str, Any]],
+    ) -> List[ConstraintAdjustment]:
+        """Step 3: Convert violations into structured adjustments for allocate.
+
+        Each area_constraint violation produces a delta_ha that allocate
+        can apply to its target_map on the next retry round.
+        """
+        adjustments: List[ConstraintAdjustment] = []
+        zone_areas = self._get_zone_areas(layout_configs)
+
+        for v in violations:
+            if v.check == "area_constraint":
+                details = v.details
+                zone = details.get("zone", "")
+                actual = details.get("actual", 0)
+                limit = details.get("limit", 0)
+
+                if "超过上限" in v.message:
+                    delta = limit - actual  # negative: need to reduce
+                    adjustments.append(ConstraintAdjustment(
+                        zone=zone,
+                        action="reduce_area",
+                        delta_ha=round(delta, 2),
+                        reason=v.message,
+                        priority=1,
+                    ))
+                elif "低于下限" in v.message:
+                    delta = limit - actual  # positive: need to increase
+                    adjustments.append(ConstraintAdjustment(
+                        zone=zone,
+                        action="increase_area",
+                        delta_ha=round(delta, 2),
+                        reason=v.message,
+                        priority=1,
+                    ))
+
+            elif v.check == "protected_parcels":
+                adjustments.append(ConstraintAdjustment(
+                    zone="村庄建设区",
+                    action="reassign_parcels",
+                    delta_ha=-1.0,  # Reduce by ~1ha per violation (heuristic)
+                    reason=v.message,
+                    priority=1,
+                ))
+
+            elif v.check == "zone_completeness":
+                missing = v.details.get("missing_zone", "")
+                # Estimate needed area for missing zone
+                estimated = MIN_ZONE_AREA_HA.get(missing, 5.0)
+                adjustments.append(ConstraintAdjustment(
+                    zone=missing,
+                    action="increase_area",
+                    delta_ha=estimated,
+                    reason=v.message,
+                    priority=2,
+                ))
+
+        return adjustments

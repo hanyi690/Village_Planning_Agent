@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 from app.modules.gis.schema.contracts import (
@@ -206,6 +206,13 @@ class SpatialConstraint(BaseModel):
         "building_constraint",
         "use_constraint",
         "boundary_constraint",
+        # Provincial standard 6 categories (附录3)
+        "ecological_protection",
+        "farmland_protection",
+        "heritage_protection",
+        "construction_control",
+        "safety_assurance",
+        "other_control",
     ] = "spatial_constraint"
     source_text: str = ""
     article_ref: str = ""
@@ -230,6 +237,10 @@ class SpatialConstraint(BaseModel):
     max_floors: Optional[int] = None
     setback_m: Optional[float] = None
 
+    # Generic value + unit (eliminates field reuse from regex extractor)
+    value: Optional[float] = None
+    value_unit: Optional[str] = None  # "公顷", "米", "层", "%", "人", "m²/人"
+
 
 # ── Spatial Planning Intent output schema ───────────────────────────
 
@@ -249,14 +260,26 @@ class AdjacencyRules(BaseModel):
 
 
 class ZoneTarget(BaseModel):
-    """Zone target with spatial preference."""
+    """Zone target with spatial preference and VNE classification.
+
+    VNE codes follow 住建部《村庄规划用地分类指南》:
+      V=村庄建设用地, N=非村庄建设用地, E=非建设用地
+      V1=村民住宅用地, V11=住宅用地, V12=混合式住宅用地, ...
+    """
 
     land_use: str = ""
     area_ratio: float = 0.0
     dlbm: Optional[str] = None
+    vne_code: Optional[str] = None          # e.g. "V11", "V21", "E1"
     spatial_preference: Optional[SpatialPreference] = None
     adjacency_rules: Optional[AdjacencyRules] = None
     density: Literal["high", "medium", "low"] = "medium"
+
+    @computed_field
+    @property
+    def vne_category(self) -> Optional[str]:
+        """Derive VNE major category from code: V/N/E."""
+        return self.vne_code[0] if self.vne_code else None
 
 
 class FacilityTarget(BaseModel):
@@ -282,10 +305,70 @@ class AxisTarget(BaseModel):
     connects: List[str] = Field(default_factory=list)
 
 
+# ── Planning indicator table (附表1) ────────────────────────────────
+
+
+class PlanningIndicatorItem(BaseModel):
+    """Single planning target indicator (from planning_targets.yaml).
+
+    Follows 广东省技术指南 附表1: 7 indicators × 3 time dimensions.
+    """
+
+    code: str = ""           # I01-I07
+    name: str = ""           # e.g. "耕地保有量"
+    unit: str = ""           # e.g. "公顷"
+    attribute: Literal["mandatory", "expected"] = "mandatory"
+    field: str = ""          # e.g. "farmland_area_ha"
+    base_year_value: Optional[float] = None
+    target_year_value: Optional[float] = None
+    change: Optional[float] = None
+
+
+class PlanningIndicatorTable(BaseModel):
+    """Planning target indicator table (附表1).
+
+    7 indicators with base year / target year / change values.
+    """
+
+    indicators: List[PlanningIndicatorItem] = Field(default_factory=list)
+
+
+# ── Three zones and three lines (三区三线) ─────────────────────────
+
+
+class ThreeZoneItem(BaseModel):
+    """Single three-zone entry (生态空间/农业空间/建设空间)."""
+
+    zone_type: Literal["ecological", "agricultural", "construction"] = "agricultural"
+    name: str = ""
+    area_ha: float = 0.0
+    ratio: float = 0.0
+
+
+class ThreeLineItem(BaseModel):
+    """Single three-line entry (生态保护红线/永久基本农田/城镇开发边界)."""
+
+    line_type: Literal["ecological_redline", "permanent_farmland", "urban_dev_boundary"] = "ecological_redline"
+    name: str = ""
+    area_ha: float = 0.0
+    geometry_ref: Optional[str] = None
+
+
+class ThreeZonesThreeLines(BaseModel):
+    """Three zones + three lines structure (三区三线).
+
+    Core spatial governance framework from national policy.
+    """
+
+    zones: List[ThreeZoneItem] = Field(default_factory=list)
+    lines: List[ThreeLineItem] = Field(default_factory=list)
+
+
 class SpatialPlanningIntent(BaseModel):
     """Spatially-aware planning intent — PARSE outputs with spatial arrangement preference.
 
     Borrows adjacency/location_bias fields already defined but unused in prompts.py.
+    Phase 3: Includes planning indicator table and three-zone-three-line structure.
     """
 
     village_name: str = ""
@@ -308,6 +391,12 @@ class SpatialPlanningIntent(BaseModel):
 
     # Population
     population: Optional[int] = None
+
+    # Phase 3: Planning indicator table (附表1)
+    indicator_table: Optional[PlanningIndicatorTable] = None
+
+    # Phase 3: Three zones and three lines (三区三线)
+    three_zones_three_lines: Optional[ThreeZonesThreeLines] = None
 
 
 # ── PARSE Agent state ───────────────────────────────────────────────

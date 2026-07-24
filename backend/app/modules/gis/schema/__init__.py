@@ -47,9 +47,11 @@ from .contracts import (
     ExportResult,
     LanduseEntry,
     NaturalVillageAnchor,
+    FacilityAnchor,
     SpatialRelation,
     ConstraintSummary,
     SpatialContext,
+    TerrainProfile,
 )
 
 # ── Encoding registry (lives in classification) ──
@@ -91,6 +93,7 @@ from .spatial_types import (
     PlannedLandUseParcel,
     # Encoding constants
     GB_T21010, TUGUI, APPENDIX5, GHFLBM_SYS, YDYHFL, VNE,
+    ANNOTATION_LABEL_TYPE_MAP,
     # Group A
     AdminArea,
     AdminBoundaryLine,
@@ -242,8 +245,8 @@ __all__ = [
     "ConflictItem", "ConflictReport", "ViolationItem", "ValidationReport",
     "AllocationResult", "ExportResult",
     # Spatial context (GIS → Agent contract)
-    "LanduseEntry", "NaturalVillageAnchor", "SpatialRelation",
-    "ConstraintSummary", "SpatialContext",
+    "LanduseEntry", "NaturalVillageAnchor", "FacilityAnchor", "SpatialRelation",
+    "ConstraintSummary", "SpatialContext", "TerrainProfile",
     # Encoding registry
     "EncodingRegistry", "get_encoding_registry",
     # Dictionary Center
@@ -285,6 +288,7 @@ __all__ = [
     "SDDLBM_TO_YDYHFLDM", "convert_sddlbm_to_ydyhfldm",
     "GHYTBM_TO_VNE", "get_vne_for_ghytbm",
     "ELEMENT_CODE_PREFIXES", "parse_element_code",
+    "ANNOTATION_LABEL_TYPE_MAP",
     # Colors
     "ZONE_TYPE_COLORS", "FACILITY_STATUS_COLORS", "FACILITY_TYPE_COLORS",
     "DEFAULT_ZONE_COLOR", "PLANNING_ZONE_COLORS", "PLANNING_ZONE_RENDERING",

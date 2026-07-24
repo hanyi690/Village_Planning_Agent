@@ -2,28 +2,38 @@
 
 Usage:
   cd backend
-  python -m scripts.run_parse_pipeline
+  python -m scripts.run_parse_pipeline --source json
+  python -m scripts.run_parse_pipeline --source db
+  python -m scripts.run_parse_pipeline --source mineru
 
 Reads:
   - data/gis/jintian/current/*.geojson (GIS data)
-  - output/experiments/rag/g1/iter0/layer3_reports.json (planning text)
+  - output/experiments/rag/g1/iter0/layer3_reports.json (planning text, source=json)
+  - SQLite dimension_reports (source=db)
+  - docs/MinerU_markdown_*村庄规划*.md (source=mineru)
 
 Writes:
   - output/parse_results/{village}_{date}.md (parse report)
+  - output/parse_results/{date}/pipeline_trace.json (LLM interaction history + drafts + mappings)
+  - output/parse_results/{date}/pipeline_run.json (timing, counts, file index)
+  - output/parse_cache/{village}_{source}_{timestamp}.json (PARSE cache for layout pipeline)
 
 Features:
   - Real-time progress output with StepTimer
   - graph.astream() for node-by-node progress
   - flush=True on all prints to prevent stdout overwrite
   - Timing metrics per step and per node
+  - Structured JSON trace files for optimization analysis
 """
 
 import asyncio
 import json
+import sqlite3
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, Tuple
 
 # Ensure UTF-8 output
 if sys.stdout.encoding != "utf-8":
@@ -34,6 +44,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data" / "gis" / "jintian"
 L3_REPORTS_PATH = PROJECT_ROOT / "output" / "experiments" / "rag" / "g1" / "iter0" / "layer3_reports.json"
 OUTPUT_DIR = PROJECT_ROOT / "output" / "parse_results"
+PARSE_CACHE_DIR = PROJECT_ROOT / "output" / "parse_cache"
 
 
 # ── StepTimer utility ──────────────────────────────────────────────
@@ -67,8 +78,11 @@ def load_gis_data() -> dict:
     current_dir = DATA_DIR / "current"
     for f in current_dir.glob("*.geojson"):
         key = f.stem + "_geojson"
-        with open(str(f), "r", encoding="utf-8") as fh:
-            gis_data[key] = json.load(fh)
+        try:
+            with open(str(f), "r", encoding="utf-8") as fh:
+                gis_data[key] = json.load(fh)
+        except Exception as e:
+            print(f"  [GIS] WARNING: Failed to load {f.name}: {e}", flush=True)
 
     # Rename landuse key to expected format
     for key in list(gis_data.keys()):
@@ -99,6 +113,20 @@ def load_gis_data() -> dict:
             print(f"  [GIS] Road warnings: {len(road_warnings)}", flush=True)
 
     print(f"  [GIS] Loaded {len(gis_data)} layers: {sorted(gis_data.keys())[:5]}...", flush=True)
+
+    # Inject annotation data into gis_data dict for compute_spatial_context
+    if annotations:
+        ann_features = []
+        for ann in annotations:
+            feat = {"type": "Feature", "properties": {}, "geometry": getattr(ann, "geometry", {})}
+            for attr in ("text", "category", "name", "注记", "分类"):
+                val = getattr(ann, attr, None)
+                if val:
+                    feat["properties"][attr] = val
+            ann_features.append(feat)
+        gis_data["annotation_geojson"] = {"type": "FeatureCollection", "features": ann_features}
+        print(f"  [GIS] Injected {len(ann_features)} annotations into gis_data dict", flush=True)
+
     return gis_data, annotations, roads
 
 
@@ -109,7 +137,11 @@ def load_planning_text() -> str:
         return ""
 
     with open(str(L3_REPORTS_PATH), "r", encoding="utf-8") as f:
-        data = json.load(f)
+        try:
+            data = json.load(f)
+        except Exception as e:
+            print(f"  [TEXT] WARNING: Failed to parse L3 reports JSON: {e}", flush=True)
+            return ""
 
     reports = data.get("reports", {})
     if not reports:
@@ -128,6 +160,127 @@ def load_planning_text() -> str:
     combined = "\n\n".join(sections)
     print(f"  [TEXT] Combined planning text: {len(combined)} chars from {len(reports)} dimensions", flush=True)
     return combined
+
+
+# ── DB / MinerU data loaders ──────────────────────────────────────
+
+
+def load_l3_from_db() -> Tuple[Dict, str]:
+    """Load 12 L3 dimension reports from SQLite -> combined planning text.
+
+    Queries the latest session with layer=3 from dimension_reports table,
+    then combines all 12 dimension contents into a single planning text.
+    """
+    try:
+        from app.database.engine import get_db_path
+        db_path = get_db_path()
+    except Exception as e:
+        print(f"  [DB] Cannot get DB path: {e}", flush=True)
+        return {}, ""
+
+    if not Path(str(db_path)).exists():
+        print(f"  [DB] Database not found: {db_path}", flush=True)
+        return {}, ""
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(
+            "SELECT session_id FROM dimension_reports WHERE layer=3 "
+            "ORDER BY generated_at DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        if not row:
+            print("  [DB] No L3 reports in database", flush=True)
+            return {}, ""
+
+        session_id = row["session_id"]
+        cur = conn.execute(
+            "SELECT dimension_key, content, summary FROM dimension_reports "
+            "WHERE session_id=? AND layer=3", (session_id,)
+        )
+        rows = cur.fetchall()
+    except Exception as e:
+        print(f"  [DB] WARNING: SQL query failed: {e}", flush=True)
+        return {}, ""
+    finally:
+        conn.close()
+
+    reports: Dict[str, Any] = {}
+    sections: list = []
+    for r in rows:
+        dk = r["dimension_key"]
+        content = r["content"] or ""
+        summary_text = r["summary"] or ""
+        parsed = json.loads(summary_text) if summary_text else {}
+        text = content or parsed.get("text_summary", "")
+        reports[dk] = {"summary": parsed, "content": text}
+        if text:
+            sections.append(f"## {dk}\n\n{text}")
+
+    combined = "\n\n".join(sections)
+    print(
+        f"  [DB] Loaded {len(rows)} dimensions from session {session_id[:16]}..., "
+        f"{len(combined)} chars",
+        flush=True,
+    )
+    return reports, combined
+
+
+def load_mineru_text() -> Tuple[str, str]:
+    """Load planning text from MinerU markdown file in docs/.
+
+    Returns:
+        (file_path, text_content)
+    """
+    docs_dir = PROJECT_ROOT / "docs"
+    candidates = sorted(
+        docs_dir.glob("MinerU_markdown_*村庄规划*文本*.md"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        print("  [MINERU] No MinerU markdown found in docs/", flush=True)
+        return "", ""
+
+    text = candidates[0].read_text(encoding="utf-8")
+    print(f"  [MINERU] Loaded: {candidates[0].name}, {len(text)} chars", flush=True)
+    return str(candidates[0]), text
+
+
+# ── PARSE result cache ────────────────────────────────────────────
+
+
+def _serialize_for_cache(obj: Any) -> Any:
+    """Recursively serialize Pydantic models to dicts for JSON caching."""
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if isinstance(obj, list):
+        return [_serialize_for_cache(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize_for_cache(v) for k, v in obj.items()}
+    return obj
+
+
+def save_parse_cache(result: Dict, village_name: str, source: str = "") -> Path:
+    """Save PARSE results to cache file for layout pipeline consumption."""
+    PARSE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    source_tag = f"_{source}" if source else ""
+    cache_path = PARSE_CACHE_DIR / f"{village_name}{source_tag}_{timestamp}.json"
+
+    with open(str(cache_path), "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2, default=str)
+
+    file_size_kb = cache_path.stat().st_size / 1024
+    ops_count = len(result.get("operation_sequence", []))
+    cs_count = len(result.get("constraint_set", []))
+    print(
+        f"  [CACHE] Saved PARSE cache: {cache_path} ({file_size_kb:.1f} KB, "
+        f"ops={ops_count}, constraints={cs_count})",
+        flush=True,
+    )
+    return cache_path
 
 
 # ── Pipeline execution with streaming progress ─────────────────────
@@ -309,14 +462,42 @@ SAMPLE_PLANNING_TEXT = """
 """
 
 
-async def run_pipeline():
-    """Run the full PARSE Agent pipeline."""
+async def run_pipeline(source: str = "json", text_path: str = ""):
+    """Run the full PARSE Agent pipeline.
+
+    Args:
+        source: Planning text source — "json" (L3 reports file), "db" (SQLite),
+                "mineru" (docs/ markdown), "text" (custom file)
+        text_path: Path to custom text file (only used when source="text")
+    """
     total_start = time.time()
 
     # Step 1: Load data
     with StepTimer("加载数据"):
         gis_data, annotations, roads = load_gis_data()
-        planning_text = load_planning_text()
+
+        # Load planning text by source
+        planning_text = ""
+        if source == "db":
+            _reports, planning_text = load_l3_from_db()
+            if not planning_text:
+                print("  [ERROR] DB 中无 L3 规划数据", flush=True)
+                return
+        elif source == "mineru":
+            _fp, planning_text = load_mineru_text()
+            if not planning_text:
+                print("  [ERROR] 未找到 MinerU markdown 文件", flush=True)
+                return
+        elif source == "text" and text_path:
+            p = Path(text_path)
+            if p.exists():
+                planning_text = p.read_text(encoding="utf-8")
+                print(f"  [TEXT] Loaded custom text: {p.name}, {len(planning_text)} chars", flush=True)
+            else:
+                print(f"  [ERROR] Text file not found: {text_path}", flush=True)
+                return
+        else:  # "json"
+            planning_text = load_planning_text()
 
         if not planning_text:
             print("  [WARN] 无规划文本，使用示例文本", flush=True)
@@ -336,7 +517,7 @@ async def run_pipeline():
 
     # Step 3: Run PARSE Agent
     with StepTimer("运行 PARSE Agent"):
-        from app.agent.gis.parse.agent import build_parse_agent_graph, set_kg_instance
+        from app.agent.gis.parse.agent import build_parse_agent_graph, set_spatial_context
         import app.agent.gis.parse.agent as pa
         from app.agent.gis.parse.state import ParseAgentState
         from app.modules.kg import PlanningKG
@@ -368,7 +549,9 @@ async def run_pipeline():
                 kg.add_annotations(annotations)
             if roads:
                 kg.add_roads(roads)
-            set_kg_instance(kg)
+            # Register with KGManager for PARSE agent tool queries
+            from app.modules.kg.manager import get_kg_manager
+            get_kg_manager().register_session("parse_pipeline", kg)
             kg_summary = {
                 "triple_count": kg.get_triple_count(),
                 "parcel_count": kg._parcel_count if hasattr(kg, "_parcel_count") else kg.get_parcel_count(),
@@ -378,12 +561,18 @@ async def run_pipeline():
             }
             print(f"  [KG] Built: {kg.get_triple_count()} triples + annotations/roads", flush=True)
         except Exception as kg_err:
-            print(f"  [KG] Build skipped (deps missing): {kg_err}", flush=True)
+            print(f"  [KG] Build failed: {type(kg_err).__name__}: {kg_err}", flush=True)
 
         # Initialize Gazetteer for place name → VillageGroup matching
         gazetteer = PlaceNameResolver(spatial_context.natural_villages)
         pa._gazetteer = gazetteer
+        pa.set_spatial_context(spatial_context)
         print(f"  [Gazetteer] Initialized with {len(spatial_context.natural_villages)} villages", flush=True)
+        print(
+            f"  [Annotation] {len(spatial_context.facility_anchors)} facility anchors, "
+            f"{len(spatial_context.annotation_villages)} village name anchors",
+            flush=True,
+        )
 
         graph = build_parse_agent_graph()
         input_state = ParseAgentState(
@@ -391,6 +580,8 @@ async def run_pipeline():
             village_name="金田村",
             spatial_context=spatial_context,
         )
+        if len(planning_text) > 12000:
+            print(f"  [WARN] Planning text truncated: {len(planning_text)} -> 12000 chars", flush=True)
 
         try:
             result, trace_log = await _run_parse_graph_with_progress(graph, input_state)
@@ -410,6 +601,16 @@ async def run_pipeline():
     validation_errors = result.get("validation_errors", [])
     is_valid = result.get("is_valid", False)
     section_map = result.get("section_map", [])
+    # Log extraction completeness
+    missing_keys = [k for k in ["operation_sequence", "constraint_set", "planning_intent",
+                                 "validation_errors", "section_map"] if k not in result]
+    if missing_keys:
+        print(f"  [WARN] PARSE result missing keys: {missing_keys}", flush=True)
+    print(
+        f"  [EXTRACT] ops={len(operation_sequence)}, constraints={len(constraint_set)}, "
+        f"errors={len(validation_errors)}, valid={is_valid}",
+        flush=True,
+    )
 
     # Step 5: Display results
     print(f"\n{'=' * 60}", flush=True)
@@ -438,7 +639,9 @@ async def run_pipeline():
     for i, c in enumerate(constraint_set[:10]):
         ctype = c.get("type", "?") if isinstance(c, dict) else c.type
         priority = c.get("priority", "") if isinstance(c, dict) else getattr(c, "priority", "")
-        print(f"  {i+1}. [{ctype}] priority={priority}", flush=True)
+        value = c.get("value", "") if isinstance(c, dict) else getattr(c, "value", "")
+        val_info = f", value={value}" if value else ""
+        print(f"  {i+1}. [{ctype}] priority={priority}{val_info}", flush=True)
     if len(constraint_set) > 10:
         print(f"  ...还有 {len(constraint_set) - 10} 条约束", flush=True)
 
@@ -506,7 +709,81 @@ async def run_pipeline():
             fallback_path.write_text(fail_text, encoding="utf-8")
             print(f"  [REPORT] Fallback generated: {fallback_path}", flush=True)
 
-    # Final summary
+    # Step 7: Save PARSE result to cache for layout pipeline consumption
+    try:
+        parse_cache_data = {
+            "village_name": "金田村",
+            "timestamp": datetime.now().isoformat(),
+            "source": source,
+            "spatial_context": _serialize_for_cache(spatial_context),
+            "operation_sequence": _serialize_for_cache(operation_sequence),
+            "constraint_set": _serialize_for_cache(constraint_set),
+            "planning_intent": _serialize_for_cache(planning_intent),
+            "validation_errors": _serialize_for_cache(validation_errors),
+            "section_map": _serialize_for_cache(section_map),
+            "kg_summary": kg_summary,
+            "is_valid": is_valid,
+        }
+        save_parse_cache(parse_cache_data, "金田村", source=source)
+    except Exception as cache_err:
+        print(f"  [CACHE] Failed to save PARSE cache: {cache_err}", flush=True)
+
+    # Step 8: Save structured trace file for optimization analysis
+    try:
+        trace_dir = OUTPUT_DIR / datetime.now().strftime('%Y-%m-%d')
+        trace_dir.mkdir(parents=True, exist_ok=True)
+
+        # 8a: pipeline_trace.json — full LLM interaction history
+        trace_path = trace_dir / "pipeline_trace.json"
+        trace_data = {
+            "village_name": "金田村",
+            "timestamp": datetime.now().isoformat(),
+            "source": source,
+            "trace_log": _serialize_for_cache(trace_log),
+        }
+        trace_path.write_text(
+            json.dumps(trace_data, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        print(f"  [TRACE] Saved: {trace_path} ({trace_path.stat().st_size / 1024:.1f} KB)", flush=True)
+
+        # 8b: pipeline_run.json — single-file index of all outputs
+        run_path = trace_dir / "pipeline_run.json"
+        run_data = {
+            "village_name": "金田村",
+            "timestamp": datetime.now().isoformat(),
+            "source": source,
+            "is_valid": is_valid,
+            "timing": {
+                "total_seconds": total_elapsed,
+                "model": "qwen3.7-plus",
+                "structured_output_method": "Think-Then-Format v11",
+            },
+            "counts": {
+                "operations": len(operation_sequence),
+                "constraints": len(constraint_set),
+                "zone_targets": len(
+                    planning_intent.get("zone_targets", [])
+                    if isinstance(planning_intent, dict)
+                    else getattr(planning_intent, "zone_targets", [])
+                ),
+                "validation_errors": len(validation_errors),
+                "sections": len(section_map),
+            },
+            "kg_summary": kg_summary,
+            "output_files": {
+                "report": str(OUTPUT_DIR / f"金田村_{datetime.now().strftime('%Y-%m-%d')}.md"),
+                "trace": str(trace_path),
+                "cache": str(PARSE_CACHE_DIR / f"金田村_{source}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"),
+            },
+        }
+        run_path.write_text(
+            json.dumps(run_data, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        print(f"  [RUN] Saved: {run_path}", flush=True)
+    except Exception as trace_err:
+        print(f"  [TRACE] Failed to save trace files: {trace_err}", flush=True)
     total_elapsed = time.time() - total_start
     print(f"\n{'=' * 60}", flush=True)
     print(f"⏱ 总耗时: {total_elapsed:.1f}s", flush=True)
@@ -514,4 +791,21 @@ async def run_pipeline():
 
 
 if __name__ == "__main__":
-    asyncio.run(run_pipeline())
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run PARSE Agent pipeline")
+    parser.add_argument(
+        "--source",
+        choices=["json", "db", "mineru", "text"],
+        default="json",
+        help="Planning text source (default: json)",
+    )
+    parser.add_argument(
+        "--text",
+        type=str,
+        default="",
+        help="Path to custom planning text file (only with --source text)",
+    )
+    args = parser.parse_args()
+
+    asyncio.run(run_pipeline(source=args.source, text_path=args.text))

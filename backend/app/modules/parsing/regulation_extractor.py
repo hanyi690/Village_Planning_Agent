@@ -152,25 +152,15 @@ REGULATION_PATTERNS: List[Dict] = [
         },
     },
     {
-        "name": "building_far",
-        "pattern": re.compile(
-            r"容积率\s*(?P<op_word>不超过|≤|不大于)\s*(?P<value>[\d.]+)"
-        ),
-        "mapping": {
-            "value": "target_area_ha",  # FAR stored as ratio
-            "type": lambda m: "building_constraint",
-            "priority": lambda m: "mandatory",
-        },
-    },
-    {
         "name": "building_density",
         "pattern": re.compile(
             r"建筑密度\s*(?P<op_word>不超过|≤|不大于|控制在)\s*(?P<value>[\d.]+)\s*%?"
         ),
         "mapping": {
-            "value": "max_height_m",  # Density stored temporarily
+            "value": "value",
             "type": lambda m: "building_constraint",
             "priority": lambda m: "recommended",
+            "unit": lambda m: "%",
         },
     },
     # ── Population constraint ──
@@ -181,8 +171,121 @@ REGULATION_PATTERNS: List[Dict] = [
             r"\s*(?P<value>[\d.]+)\s*人?"
         ),
         "mapping": {
-            "value": "target_area_ha",  # Reuse field for population
+            "value": "value",
             "type": lambda m: "area_constraint",
+            "priority": lambda m: "mandatory",
+            "unit": lambda m: "人",
+        },
+    },
+    # ── Phase 3: Setback / distance constraints ──
+    {
+        "name": "setback_distance",
+        "pattern": re.compile(
+            r"退(?:让|线)\s*(?P<op_word>不低于|不少于|≥|不小于)?\s*"
+            r"(?P<value>[\d.]+)\s*米"
+        ),
+        "mapping": {
+            "value": "spatial_rule.distance_m",
+            "operation": lambda m: "buffer_exclusion",
+            "type": lambda m: "building_constraint",
+            "priority": lambda m: "mandatory",
+        },
+    },
+    {
+        "name": "spacing_distance",
+        "pattern": re.compile(
+            r"间距?\s*(?P<op_word>不少于|不低于|≥|不小于|不得小于)\s*"
+            r"(?P<value>[\d.]+)\s*米"
+        ),
+        "mapping": {
+            "value": "spatial_rule.distance_m",
+            "operation": lambda m: "buffer_exclusion",
+            "type": lambda m: "spatial_constraint",
+            "priority": lambda m: "mandatory",
+        },
+    },
+    # ── Phase 3: Protection constraints (省标6大类) ──
+    {
+        "name": "ecological_protection",
+        "pattern": re.compile(
+            r"(生态保护红线|生态红线)\s*.{0,20}?"
+            r"(禁止|不得|严禁)\s*.{0,15}?"
+            r"(建设|开发|占用|破坏)"
+        ),
+        "mapping": {
+            "operation": lambda m: "no_overlap",
+            "type": lambda m: "ecological_protection",
+            "priority": lambda m: "mandatory",
+        },
+    },
+    {
+        "name": "farmland_protection",
+        "pattern": re.compile(
+            r"(基本农田|永久基本农田|耕地保护)\s*.{0,20}?"
+            r"(禁止|不得|严禁)\s*.{0,15}?"
+            r"(占用|建设|非农|非粮)"
+        ),
+        "mapping": {
+            "operation": lambda m: "no_overlap",
+            "type": lambda m: "farmland_protection",
+            "priority": lambda m: "mandatory",
+        },
+    },
+    {
+        "name": "heritage_protection",
+        "pattern": re.compile(
+            r"(历史文[化遗]|文物保护|历史建筑|传统风貌)\s*.{0,20}?"
+            r"(保护|保留|修缮|不得拆除)"
+        ),
+        "mapping": {
+            "type": lambda m: "heritage_protection",
+            "priority": lambda m: "mandatory",
+        },
+    },
+    {
+        "name": "safety_assurance",
+        "pattern": re.compile(
+            r"(地质灾害|洪涝|滑坡|崩塌|泥石流|防洪|消防)\s*.{0,20}?"
+            r"(避让|避让线|禁止|不得|防护|安全距离)"
+        ),
+        "mapping": {
+            "type": lambda m: "safety_assurance",
+            "priority": lambda m: "mandatory",
+        },
+    },
+    # ── Phase 3: Development intensity constraints ──
+    {
+        "name": "plot_ratio",
+        "pattern": re.compile(
+            r"容积率\s*(?P<op_word>不超过|≤|不大于|控制在)\s*(?P<value>[\d.]+)"
+        ),
+        "mapping": {
+            "value": "value",
+            "type": lambda m: "construction_control",
+            "priority": lambda m: "recommended",
+        },
+    },
+    {
+        "name": "green_ratio",
+        "pattern": re.compile(
+            r"绿地率\s*(?P<op_word>不低于|≥|不少于|不小于)\s*(?P<value>[\d.]+)\s*%?"
+        ),
+        "mapping": {
+            "value": "value",
+            "type": lambda m: "construction_control",
+            "priority": lambda m: "recommended",
+            "unit": lambda m: "%",
+        },
+    },
+    {
+        "name": "water_protection",
+        "pattern": re.compile(
+            r"(水源保护区|饮用水源|水功能)\s*.{0,20}?"
+            r"(禁止|不得|严禁)\s*.{0,15}?"
+            r"(排放|排污|建设|开发)"
+        ),
+        "mapping": {
+            "type": lambda m: "ecological_protection",
             "priority": lambda m: "mandatory",
         },
     },

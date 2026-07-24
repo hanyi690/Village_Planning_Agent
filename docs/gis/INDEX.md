@@ -49,7 +49,7 @@ docs/gis/
 │   ├── proposals/01_PARSE_SPATIAL_ENHANCEMENT.md  [PROPOSAL] 空间理解增强提案 - SpatialContext争议
 │   ├── proposals/02_GIS_PLANNING_INTEGRATION.md   [PROPOSAL] GIS工具集成提案 - 6个规划查询工具
 │   ├── proposals/03_TOOL_FIRST_ARCHITECTURE.md    [IMPLEMENTING] 架构重构提案 - Phase A/B/C ✅, D/E ⬜
-│   └── proposals/04_MULTI_SOURCE_DATA_ARCHITECTURE.md [IMPLEMENTING] 多源GIS数据管理架构 - P0驱动已实现 (base/registry/file/tianditu_vector)
+│   └── proposals/04_MULTI_SOURCE_DATA_ARCHITECTURE.md [CURRENT] 多源GIS数据管理架构 - P0/P1/P2 全部驱动已实现 (5 drivers + catalog + yaml)
 │
 └── 📝 设计日志 (Design Log)
     └── design-log/01_DECISION_LOG.md              关键设计决策日志
@@ -142,7 +142,7 @@ proposals/*                    ← 实施提案
 
 | 日期 | 变更 |
 |------|------|
-| 2026-07-24 | **P0 驱动实现**：`drivers/base.py` (DataSourceDriver ABC + DataSourceResult), `drivers/registry.py` (DriverRegistry), `drivers/file_vector_driver.py`, `drivers/tianditu_vector_driver.py`, `catalog/catalog.py` (DataCatalog), `catalog/config.py` (Pydantic models), `catalog/sources.yaml` (declarative config) |
+| 2026-07-24 | **P0/P1/P2 全部驱动实现**：5个驱动 (`file_vector`, `tianditu_vector`, `tianditu_tile`, `local_raster`, `remote_raster`) + `catalog/catalog.py` (DataCatalog + 路径解析) + `catalog/config.py` (Pydantic) + `catalog/sources.yaml` (23 sources) + `scripts/test_data_drivers.py` (validation) |
 | 2026-07-24 | 新增 `proposals/04_MULTI_SOURCE_DATA_ARCHITECTURE.md` — 多源GIS数据管理架构设计（矢量+栅格双轨驱动，DriverRegistry装饰器注册，YAML声明式配置） |
 | 2026-07-24 | 新增 `04_DATA_ACQUISITION_PLAN.md` — 全国+广东平台数据集→Schema全覆盖分析，7个新建类型+1个扩展类型 |
 | 2026-07-23 | **v2.0 初期/终极分离 + Exa 验证**：`00` 重写 v2.0（区分 Plan-then-Execute 初期目标 vs 闭环终极目标）；新增 `reference/EXA_FINDINGS.md`（6篇论文验证 Plan-then-Execute 范式）；`reference/HUMAN_PLANNING_WORKFLOW` 新增 §5.5 空间定位方法论（Gazetteer + LLM 推理）；`01` §3.4 原子操作精简；`INDEX` 更新阅读路径 |

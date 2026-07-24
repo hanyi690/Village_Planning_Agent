@@ -20,7 +20,7 @@ except ImportError:
     logger.warning("[geojson_utils] geopandas/shapely not available")
 
 
-def geojson_to_geodataframe(geojson: Dict[str, Any]) -> Optional[gpd.GeoDataFrame]:
+def geojson_to_geodataframe(geojson: Dict[str, Any]) -> Optional["gpd.GeoDataFrame"]:
     """
     将 GeoJSON FeatureCollection 转换为 GeoDataFrame
 
@@ -75,7 +75,7 @@ def geojson_to_geodataframe(geojson: Dict[str, Any]) -> Optional[gpd.GeoDataFram
         return None
 
 
-def geodataframe_to_geojson(gdf: gpd.GeoDataFrame) -> Dict[str, Any]:
+def geodataframe_to_geojson(gdf: "gpd.GeoDataFrame") -> Dict[str, Any]:
     """
     将 GeoDataFrame 转换为 GeoJSON FeatureCollection
 

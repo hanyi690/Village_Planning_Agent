@@ -364,7 +364,7 @@ class TestParseNodesLLM:
         """Test extract_projects node with LLM."""
         _setup_llm_cache()
 
-        from app.agent.gis.parse.agent import extract_projects_node
+        from app.agent.gis.parse.agent import explore_projects_node
         from app.agent.gis.parse.state import ParseAgentState, SectionInfo
         from app.modules.gis.spatial_context import compute_spatial_context
 
@@ -384,7 +384,7 @@ class TestParseNodesLLM:
             ],
         )
 
-        result = await extract_projects_node(state)
+        result = await explore_projects_node(state)
         operations = result.get("raw_operations", [])
 
         print(f"\n--- extract_projects 结果 ({len(operations)} 条操作) ---")

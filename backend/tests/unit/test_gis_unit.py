@@ -229,11 +229,11 @@ class TestLayoutValidator:
         check = next(c for c in report.checks if c.check_name == "spatial_compactness")
         assert check.passed
 
-    def test_validate_has_8_checks(self):
-        """validate() runs all 8 checks."""
+    def test_validate_has_9_checks(self):
+        """validate() runs all 9 checks (8 original + vne_compliance)."""
         validator = LayoutValidator()
         report = validator.validate(make_valid_4zone_layout())
-        assert len(report.checks) == 8
+        assert len(report.checks) == 9
 
     def test_validate_with_retry(self):
         """validate_with_retry returns a report after retries."""

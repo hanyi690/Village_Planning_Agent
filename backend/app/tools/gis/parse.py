@@ -48,18 +48,13 @@ async def parse_planning_text(
         spatial_context = compute_spatial_context(gis_data or {})
 
         # Build KG from GIS data for on-demand spatial queries
+        # Uses KGManager Layer 1 cache — avoids rebuilding adjacency for same village
         try:
-            from app.agent.gis.parse.agent import set_kg_instance
-            from app.modules.kg import PlanningKG
-            kg = PlanningKG(village_name=village_name)
-            if gis_data:
-                kg.build_from_reports(
-                    reports={},
-                    landuse_geojson=gis_data.get("landuse_current_geojson"),
-                    gis_data=gis_data,
-                )
-            set_kg_instance(kg)
-            logger.info("[parse_planning_text] KG built: %d triples", kg.get_triple_count())
+            from app.modules.kg.manager import get_kg_manager
+            manager = get_kg_manager()
+            landuse_geojson = (gis_data or {}).get("landuse_current_geojson")
+            kg, _cache_hit = manager.get_or_build_layer1(village_name, landuse_geojson, gis_data or {})
+            logger.info("[parse_planning_text] KG ready: %d triples", kg.get_triple_count())
         except Exception as kg_err:
             logger.warning("[parse_planning_text] KG build skipped: %s", kg_err)
 
@@ -119,13 +114,6 @@ async def parse_planning_text(
     except Exception as e:
         logger.error("[parse_planning_text] Failed: %s", e)
         return make_result(success=False, error=str(e))
-
-
-__all__ = [
-    "extract_structured_text",
-    "lookup_land_use_code",
-    "parse_planning_text",
-]
 
 
 __all__ = ["parse_planning_text"]

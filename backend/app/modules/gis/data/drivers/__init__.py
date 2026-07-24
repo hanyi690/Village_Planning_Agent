@@ -11,6 +11,9 @@ from .base import DataSourceDriver, DataSourceResult, DataSourceMetadata
 from .registry import DriverRegistry
 from .file_vector_driver import FileVectorDriver
 from .tianditu_vector_driver import TiandituVectorDriver
+from .tianditu_tile_driver import TiandituTileDriver
+from .local_raster_driver import LocalRasterDriver
+from .remote_raster_driver import RemoteRasterDriver
 
 __all__ = [
     "DataSourceDriver",
@@ -19,4 +22,7 @@ __all__ = [
     "DriverRegistry",
     "FileVectorDriver",
     "TiandituVectorDriver",
+    "TiandituTileDriver",
+    "LocalRasterDriver",
+    "RemoteRasterDriver",
 ]

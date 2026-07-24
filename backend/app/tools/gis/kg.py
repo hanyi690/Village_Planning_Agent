@@ -1,4 +1,8 @@
-"""build_kg / query_kg tools — RDF knowledge graph construction and SPARQL query."""
+"""build_kg / query_kg tools — RDF knowledge graph construction and SPARQL query.
+
+Uses KGManager for process-level Layer 1 caching and session management.
+No global _kg_instance — KG instances managed via KGManager side-channel.
+"""
 
 from __future__ import annotations
 
@@ -13,43 +17,170 @@ from app.tools.helpers import make_result, to_tool_message
 
 logger = get_logger(__name__)
 
-_kg_instance: Any = None
-
 
 @tool
 def build_knowledge_graph(
     reports: Annotated[Dict[str, Dict[str, Any]], InjectedState("reports")],
     gis_data: Annotated[Dict[str, Optional[Dict[str, Any]]], InjectedState("gis_data")],
     village_name: Annotated[str, InjectedState("village_name")],
+    session_id: Annotated[str, InjectedState("session_id")],
     intent: Annotated[Optional[Dict[str, Any]], InjectedState("intent")] = None,
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
     """Build knowledge graph from planning intent + land use data. Call once.
 
     Data auto-injected from state — no arguments needed.
+
+    Layer 1 (static: parcels, adjacency, VNE, infrastructure) is cached
+    process-wide by KGManager — repeated builds for the same village skip
+    the expensive _add_spatial_relations step.
     """
-    global _kg_instance
-
+    from app.modules.kg.manager import get_kg_manager, compute_layer1_cache_key
     from app.modules.kg import PlanningKG
+    from app.modules.kg.query import query_kg
 
+    manager = get_kg_manager()
     landuse_geojson = gis_data.get("landuse_current_geojson") if gis_data else None
 
-    kg = PlanningKG(village_name=village_name)
-    if intent:
-        kg.build_from_intent(intent=intent, landuse_geojson=landuse_geojson, gis_data=gis_data)
-    else:
-        kg.build_from_reports(reports=reports, landuse_geojson=landuse_geojson, gis_data=gis_data)
+    # Try Layer 1 cache
+    cache_key = compute_layer1_cache_key(village_name, landuse_geojson)
+    cache_key_str = str(cache_key) if cache_key else ""
 
-    _kg_instance = kg
+    kg, cache_hit = manager.get_or_build_layer1(village_name, landuse_geojson, gis_data)
+
+    if cache_hit:
+        logger.info("[KG] Layer 1 cache HIT: %s", cache_key_str)
+    else:
+        logger.info("[KG] Layer 1 built fresh: %s", cache_key_str or "(no cache key)")
+
+    # Layer 2: semantic (from intent or reports)
+    zone_areas = kg._compute_zone_areas_from_gis(gis_data)
+    if intent:
+        kg._build_semantic(intent=intent, zone_areas=zone_areas)
+    else:
+        kg._build_semantic(reports=reports, zone_areas=zone_areas)
+
+    # Layer 3: volatile (designated_as)
+    kg._build_volatile(landuse_geojson=landuse_geojson)
+
+    # Phase 4: Add spatial elements (protection zones with within_zone, control lines, etc.)
+    # These establish spatial containment relations needed for downstream queries
+    # (get_protected_parcels_detail, get_three_lines with area targets, etc.)
+    try:
+        kg.add_protection_zones(gis_data)
+    except Exception:
+        pass
+    try:
+        kg.add_control_lines(gis_data)
+    except Exception:
+        pass
+    try:
+        kg.add_planning_elements(gis_data)
+    except Exception:
+        pass
+    try:
+        kg.add_natural_features(gis_data)
+    except Exception:
+        pass
+
+    # Register session KG
+    manager.register_session(session_id, kg)
+
+    # Pre-compute downstream-queryable results
     turtle = kg.to_turtle()
     constraints = kg.get_constraints()
+
+    kg_adjacency_map: Dict[str, Any] = {}
+    kg_zone_restrictions: Dict[str, Any] = {}
+    kg_parcel_count_by_zone: List[Dict[str, Any]] = []
+    kg_protected_parcels: Dict[str, Any] = {}
+
+    try:
+        adj = kg.get_adjacency_map() if hasattr(kg, "get_adjacency_map") else {}
+        kg_adjacency_map = {k: list(v) for k, v in adj.items()} if adj else {}
+    except Exception:
+        pass
+    try:
+        restrictions = query_kg(kg, "get_zone_restrictions")
+        kg_zone_restrictions = {"results": restrictions} if restrictions else {}
+    except Exception:
+        pass
+    try:
+        kg_parcel_count_by_zone = query_kg(kg, "count_by_zone_type")
+    except Exception:
+        pass
+    try:
+        kg_protected_parcels = {"results": query_kg(kg, "check_protected_parcels")}
+    except Exception:
+        pass
+
+    # Phase 5: expanded queries — 三区三线 / VNE / 村锚点 / 保护详情
+    kg_protected_parcels_detail: List[Dict[str, Any]] = []
+    kg_three_zones: List[Dict[str, Any]] = []
+    kg_three_lines: List[Dict[str, Any]] = []
+    kg_village_anchors: List[Dict[str, Any]] = []
+    kg_vne_summary: List[Dict[str, Any]] = []
+    kg_count_by_planning_zone: List[Dict[str, Any]] = []
+
+    try:
+        kg_protected_parcels_detail = query_kg(kg, "get_protected_parcels_detail")
+    except Exception:
+        pass
+    try:
+        kg_three_zones = query_kg(kg, "get_three_zones")
+    except Exception:
+        pass
+    try:
+        kg_three_lines = query_kg(kg, "get_three_lines")
+    except Exception:
+        pass
+    try:
+        kg_village_anchors = query_kg(kg, "get_village_anchors")
+    except Exception:
+        pass
+    try:
+        kg_vne_summary = query_kg(kg, "count_by_vne")
+    except Exception:
+        pass
+    try:
+        kg_count_by_planning_zone = query_kg(kg, "count_by_planning_zone")
+    except Exception:
+        pass
+
+    logger.info(
+        "[KG] Expanded queries: %d protected parcels, %d three-zones, %d three-lines, "
+        "%d village anchors, %d VNE classes",
+        len(kg_protected_parcels_detail), len(kg_three_zones), len(kg_three_lines),
+        len(kg_village_anchors), len(kg_vne_summary),
+    )
 
     return Command(update={
         "kg_turtle": turtle,
         "kg_constraints": constraints,
+        "kg_adjacency_map": kg_adjacency_map,
+        "kg_zone_restrictions": kg_zone_restrictions,
+        "kg_session_ref": session_id,
+        "kg_layer1_cache_key": cache_key_str,
+        "kg_version": 1,
+        "kg_parcel_count_by_zone": kg_parcel_count_by_zone,
+        "kg_protected_parcels": kg_protected_parcels,
+        "kg_protected_parcels_detail": kg_protected_parcels_detail,
+        "kg_three_zones": kg_three_zones,
+        "kg_three_lines": kg_three_lines,
+        "kg_village_anchors": kg_village_anchors,
+        "kg_vne_summary": kg_vne_summary,
+        "kg_count_by_planning_zone": kg_count_by_planning_zone,
         "messages": [to_tool_message(make_result(True, data={
             "triple_count": kg.get_triple_count(),
             "constraint_count": len(constraints),
+            "cache_hit": cache_hit,
+            "expanded_queries": {
+                "protected_parcels_detail": len(kg_protected_parcels_detail),
+                "three_zones": len(kg_three_zones),
+                "three_lines": len(kg_three_lines),
+                "village_anchors": len(kg_village_anchors),
+                "vne_classes": len(kg_vne_summary),
+            },
         }), tool_call_id)],
     })
 
@@ -57,7 +188,7 @@ def build_knowledge_graph(
 @tool
 def query_knowledge_graph(
     template_name: str,
-    gis_data: Annotated[Optional[Dict[str, Any]], InjectedState("gis_data")] = None,
+    session_id: Annotated[str, InjectedState("session_id")],
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
     **params,
 ) -> Command:
@@ -70,16 +201,28 @@ def query_knowledge_graph(
         template_name: Query template to use.
         **params: Template-specific parameters (e.g. field_name, zone_type).
     """
-    global _kg_instance
+    from app.modules.kg.manager import get_kg_manager
 
-    if _kg_instance is None:
+    manager = get_kg_manager()
+    kg = manager.get_session_kg(session_id)
+
+    if kg is None:
         return Command(update={
-            "messages": [to_tool_message(make_result(False, error="KG not built — call build_knowledge_graph first"), tool_call_id)],
+            "messages": [to_tool_message(
+                make_result(False, error="KG not built — call build_knowledge_graph first"),
+                tool_call_id,
+            )],
         })
 
-    from app.modules.kg.query import query_kg
-    query_result = query_kg(_kg_instance, template_name, **params)
-    result = make_result(True, data={"template": template_name, "params": params, "results": query_result})
+    # Use session-scoped query cache
+    query_result = manager.query_with_cache(
+        session_id, kg, template_name, **params
+    )
+    result = make_result(True, data={
+        "template": template_name,
+        "params": params,
+        "results": query_result,
+    })
     return Command(update={
         "messages": [to_tool_message(result, tool_call_id)],
     })
