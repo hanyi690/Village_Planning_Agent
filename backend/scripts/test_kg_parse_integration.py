@@ -25,39 +25,13 @@ DATA_DIR = PROJECT_ROOT / "data" / "gis" / "jintian"
 
 
 def load_gis_data() -> Dict[str, Any]:
-    """Load all current + planned GeoJSON layers."""
-    gis_data = {}
+    """Load all current + planned GeoJSON layers.
 
-    # Current layers
-    current_dir = DATA_DIR / "current"
-    for f in sorted(current_dir.glob("*.geojson")):
-        key = f.stem + "_geojson"
-        with open(str(f), "r", encoding="utf-8") as fh:
-            gis_data[key] = json.load(fh)
+    Delegates to catalog.loaders for unified loading.
+    """
+    from app.modules.gis.data.catalog.loaders import load_all
 
-    # Fix landuse key
-    for key in list(gis_data.keys()):
-        if "landuse" in key and "landuse_current" not in key:
-            gis_data["landuse_current_geojson"] = gis_data.pop(key)
-            break
-
-    # Planned layers (protection zones, etc.)
-    planned_dir = DATA_DIR / "planned"
-    if planned_dir.exists():
-        planned_key_map = {
-            "farmland_protection": "farmland_protection_geojson",
-            "ecological_protection": "ecological_protection_geojson",
-            "historical_protection": "historical_protection_geojson",
-            "geological_hazard_points": "geological_hazard_geojson",
-            "construction_zone": "construction_zone_geojson",
-            "boundary": "village_boundary_geojson",
-        }
-        for f in sorted(planned_dir.glob("*.geojson")):
-            key = planned_key_map.get(f.stem, f.stem + "_geojson")
-            with open(str(f), "r", encoding="utf-8") as fh:
-                gis_data[key] = json.load(fh)
-
-    return gis_data
+    return load_all()
 
 
 def print_section(title: str) -> None:

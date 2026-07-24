@@ -73,60 +73,14 @@ class StepTimer:
 
 
 def load_gis_data() -> dict:
-    """Load all current GeoJSON layers."""
-    gis_data = {}
-    current_dir = DATA_DIR / "current"
-    for f in current_dir.glob("*.geojson"):
-        key = f.stem + "_geojson"
-        try:
-            with open(str(f), "r", encoding="utf-8") as fh:
-                gis_data[key] = json.load(fh)
-        except Exception as e:
-            print(f"  [GIS] WARNING: Failed to load {f.name}: {e}", flush=True)
+    """Load all current GeoJSON layers + typed annotations + roads.
 
-    # Rename landuse key to expected format
-    for key in list(gis_data.keys()):
-        if "landuse" in key and "landuse_current" not in key:
-            gis_data["landuse_current_geojson"] = gis_data.pop(key)
-            break
+    Delegates to catalog.loaders.load_gis_data_full() for unified loading.
+    """
+    from app.modules.gis.data.catalog.loaders import load_gis_data_full
 
-    # Parse annotation.geojson → typed CurrentAnnotation models via ingestion layer
-    annotations = []
-    ann_warnings = []
-    ann_path = current_dir / "annotation.geojson"
-    if ann_path.exists():
-        from app.modules.gis.schema import ingest_feature
-        annotations, ann_warnings = ingest_feature(str(ann_path), "current_annotation")
-        print(f"  [GIS] Parsed {len(annotations)} annotations (typed via ingest_feature)", flush=True)
-        if ann_warnings:
-            print(f"  [GIS] Annotation warnings: {len(ann_warnings)}", flush=True)
-
-    # Parse road.geojson → typed CurrentRoad models via ingestion layer
-    roads = []
-    road_warnings = []
-    road_path = current_dir / "road.geojson"
-    if road_path.exists():
-        from app.modules.gis.schema import ingest_feature as _ingest_road
-        roads, road_warnings = _ingest_road(str(road_path), "current_road")
-        print(f"  [GIS] Parsed {len(roads)} roads (typed via ingest_feature)", flush=True)
-        if road_warnings:
-            print(f"  [GIS] Road warnings: {len(road_warnings)}", flush=True)
-
-    print(f"  [GIS] Loaded {len(gis_data)} layers: {sorted(gis_data.keys())[:5]}...", flush=True)
-
-    # Inject annotation data into gis_data dict for compute_spatial_context
-    if annotations:
-        ann_features = []
-        for ann in annotations:
-            feat = {"type": "Feature", "properties": {}, "geometry": getattr(ann, "geometry", {})}
-            for attr in ("text", "category", "name", "注记", "分类"):
-                val = getattr(ann, attr, None)
-                if val:
-                    feat["properties"][attr] = val
-            ann_features.append(feat)
-        gis_data["annotation_geojson"] = {"type": "FeatureCollection", "features": ann_features}
-        print(f"  [GIS] Injected {len(ann_features)} annotations into gis_data dict", flush=True)
-
+    gis_data, annotations, roads = load_gis_data_full()
+    print(f"  [GIS] Loaded {len(gis_data)} layers, {len(annotations)} annotations, {len(roads)} roads", flush=True)
     return gis_data, annotations, roads
 
 

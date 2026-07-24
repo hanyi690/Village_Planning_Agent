@@ -93,57 +93,14 @@ class StepTimer:
 
 
 def load_gis_data() -> Tuple[dict, list, list]:
-    """Load all current GeoJSON layers."""
-    gis_data = {}
-    current_dir = DATA_DIR / "current"
-    for f in current_dir.glob("*.geojson"):
-        key = f.stem + "_geojson"
-        try:
-            with open(str(f), "r", encoding="utf-8") as fh:
-                gis_data[key] = json.load(fh)
-        except Exception as e:
-            print(f"  [GIS] WARNING: Failed to load {f.name}: {e}", flush=True)
+    """Load all current + planned GeoJSON layers + typed annotations + roads.
 
-    # Rename landuse key to expected format
-    for key in list(gis_data.keys()):
-        if "landuse" in key and "landuse_current" not in key:
-            gis_data["landuse_current_geojson"] = gis_data.pop(key)
-            break
+    Delegates to catalog.loaders.load_gis_data_full() for unified loading.
+    """
+    from app.modules.gis.data.catalog.loaders import load_gis_data_full
 
-    # Parse annotation.geojson -> typed models
-    annotations = []
-    ann_path = current_dir / "annotation.geojson"
-    if ann_path.exists():
-        try:
-            from app.modules.gis.schema import ingest_feature
-            annotations, _ann_warnings = ingest_feature(str(ann_path), "current_annotation")
-            print(f"  [GIS] Parsed {len(annotations)} annotations", flush=True)
-        except Exception as e:
-            print(f"  [GIS] Annotation ingestion skipped: {e}", flush=True)
-
-    # Parse road.geojson -> typed models
-    roads = []
-    road_path = current_dir / "road.geojson"
-    if road_path.exists():
-        try:
-            from app.modules.gis.schema import ingest_feature
-            roads, _road_warnings = ingest_feature(str(road_path), "current_road")
-            print(f"  [GIS] Parsed {len(roads)} roads", flush=True)
-        except Exception as e:
-            print(f"  [GIS] Road ingestion skipped: {e}", flush=True)
-
-    # Load planned layers for protection zones
-    planned_dir = DATA_DIR / "planned"
-    if planned_dir.exists():
-        for f in planned_dir.glob("*.geojson"):
-            key = f.stem + "_geojson"
-            try:
-                with open(str(f), "r", encoding="utf-8") as fh:
-                    gis_data[key] = json.load(fh)
-            except Exception as e:
-                print(f"  [GIS] WARNING: Failed to load planned/{f.name}: {e}", flush=True)
-
-    print(f"  [GIS] Loaded {len(gis_data)} layers", flush=True)
+    gis_data, annotations, roads = load_gis_data_full()
+    print(f"  [GIS] Loaded {len(gis_data)} layers, {len(annotations)} annotations, {len(roads)} roads", flush=True)
     return gis_data, annotations, roads
 
 
