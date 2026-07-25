@@ -7,7 +7,7 @@ Architecture (see README.md):
     Catalog (YAML) -> Source/Driver -> Connection -> Storage & Cache
                                                         |
                                                         v
-                                              gis.schema.canonical
+                                              modules.schema.types.canonical
 
 Public API:
     DataCatalog            - unified entry point

@@ -132,7 +132,7 @@ class ZoneGenerator:
         # CA refinement: merge adjacent same-type parcels
         if intent.metadata.get("enable_ca_refinement", True):
             try:
-                from app.modules.gis.optimizer.ca_refiner import ZoneCARefiner
+                from app.tools.gis._generation.optimizer.ca_refiner import ZoneCARefiner
                 ca = ZoneCARefiner(
                     merge_distance_m=30,
                     simplify_tolerance_m=10,

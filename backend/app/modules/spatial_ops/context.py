@@ -111,6 +111,38 @@ def compute_spatial_context(gis_data: Dict[str, Any]) -> SpatialContext:
     return ctx
 
 
+def compute_spatial_context_from_bundle(
+    bundle: Any,
+    raw_geojson: Optional[Dict[str, Any]] = None,
+) -> SpatialContext:
+    """Compute spatial context from a typed GISDataBundle.
+
+    This is the preferred entry point for code that has a GISDataBundle.
+    Falls back to the raw dict path when raw_geojson is provided (for
+    layers not yet represented in the bundle, e.g. protection zones).
+
+    Args:
+        bundle: GISDataBundle with boundary, landuse, roads, annotations.
+        raw_geojson: Optional raw dict with additional keys (protection zones,
+            construction zone, etc.) that are not yet in the bundle.
+
+    Returns:
+        SpatialContext: ~2KB compact representation for LLM injection.
+    """
+    from app.modules.data.catalog.catalog import _bundle_to_compat_dict
+
+    # Start with bundle-derived dict
+    compat = _bundle_to_compat_dict(bundle)
+
+    # Merge raw_geojson for keys not in the bundle (protection zones, etc.)
+    if raw_geojson:
+        for key, val in raw_geojson.items():
+            if key not in compat or not compat[key]:
+                compat[key] = val
+
+    return compute_spatial_context(compat)
+
+
 # ── Sub-computations ────────────────────────────────────────────────
 
 
@@ -559,4 +591,4 @@ def _compute_terrain_profile(gis_data: Dict[str, Any]) -> Optional[TerrainProfil
         return None
 
 
-__all__ = ["compute_spatial_context"]
+__all__ = ["compute_spatial_context", "compute_spatial_context_from_bundle"]

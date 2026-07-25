@@ -1296,13 +1296,13 @@ async def geocode_village(
 ):
     """Geocode village address to center coordinates + boundary.
 
-    Uses GISDataFetcher's 4-tier strategy:
-    1. County boundary as reference
-    2. Geocode for village center
-    3. POI search fallback
-    4. County center fallback
+    Uses DataCatalog for schema-driven data loading:
+    1. Load boundary via DataCatalog (file_vector, no bbox needed)
+    2. Derive center from boundary geometry
+    3. Fallback: Tianditu geocode API
     """
-    from app.modules.data.fetcher import GISDataFetcher
+    from app.modules.data.catalog.catalog import DataCatalog
+    from app.modules.data.connections import ConnectionRegistry
 
     # Build full address from hierarchy
     parts = [p for p in [province, city, county, township, village_name] if p]
@@ -1312,28 +1312,48 @@ async def geocode_village(
         raise HTTPException(status_code=400, detail="No address provided")
 
     try:
-        fetcher = GISDataFetcher()
-        center, metadata = fetcher.get_village_center(location)
+        catalog = DataCatalog()
+        bundle = catalog.load_village_bundle(location)
+
+        center = None
+        strategy = None
+
+        # Derive center from boundary geometry
+        if bundle.boundary and bundle.boundary.geometry:
+            from app.modules.spatial_ops.geometry import _compute_centroid
+            boundary_fc = {
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "geometry": bundle.boundary.geometry,
+                    "properties": bundle.boundary.properties,
+                }],
+            }
+            center = _compute_centroid(boundary_fc)
+            strategy = "boundary_geometry"
+            # Also include boundary geojson for map display
+            result_boundary = boundary_fc
+        else:
+            result_boundary = None
+
+        # Fallback: geocode via Tianditu
+        if center is None:
+            conn = ConnectionRegistry.get("tianditu")
+            if conn:
+                geo = conn.geocode(location)
+                if geo.success:
+                    center = (geo.lon, geo.lat)
+                    strategy = "geocode"
 
         result: Dict[str, Any] = {
             "location": location,
             "center": list(center) if center else None,
-            "strategy": metadata.get("strategy_used"),
-            "metadata": metadata,
+            "strategy": strategy,
+            "metadata": {"village_name": location, "strategy": strategy},
         }
 
-        # Also try to get county boundary for map display
-        county_name = county or metadata.get("hierarchy", {}).get("county", "")
-        if county_name:
-            try:
-                boundary_result = fetcher.provider.get_boundary(county_name)
-                if boundary_result.success and boundary_result.data.get("geojson"):
-                    result["boundary_geojson"] = boundary_result.data["geojson"]
-                    if not center and boundary_result.metadata.get("center"):
-                        result["center"] = list(boundary_result.metadata["center"])
-                        result["strategy"] = "county_boundary_fallback"
-            except Exception as e:
-                logger.warning(f"[Geocode] Boundary fetch failed for {county_name}: {e}")
+        if result_boundary:
+            result["boundary_geojson"] = result_boundary
 
         if not result["center"]:
             raise HTTPException(status_code=404, detail=f"Cannot geocode: {location}")

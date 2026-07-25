@@ -10,6 +10,8 @@ EXECUTE 是 GIS Agent 的 **DELIVER 阶段执行核**，与 `parse/`（PLAN 阶�
 
 **与 PARSE 的关系**：通过 LangGraph state 注入通信，不直接调用。PARSE 产出写入 `GISPipelineState`，EXECUTE 从中读取。
 
+**与 KG/Data 的关系**：EXECUTE 从 `ProjectDataView`（`VillageBundle`）读取类型化地块/设施/道路，经 `ConstraintCompiler` 从 `ProjectKG` 获取 MIP 约束矩阵；产出写回 `village.planned_landuse` + `project.tables`（`ConstructionProjectTable`/`ControlRuleTable`，一表一规则汇交）。
+
 **与 LAYOUT 的关系**：LAYOUT 是 EXECUTE 内的一个子任务（用地布局），与 facility / axis / road 平级。当前 `layout_pipeline.py` 的 `allocate_and_generate` 节点把所有生成逻辑压在一个 ReAct 子图里，EXECUTE 子包的目标是将其拆分为独立子任务。
 
 ---
@@ -98,6 +100,9 @@ START
 3. `validate` 节点接入 `validate_layout`
 4. `layout_pipeline.py` 的 `_allocate_generate_react_node` + `_validate_layout_node` 替换为调用 `build_execute_agent_graph()`
 5. 消除 `tools/gis/_generation/pipeline.py` 命令式 `run_layout_pipeline()` 与 StateGraph 版的重复
+6. `execute_layout` 经 `ConstraintCompiler` 从 `ProjectKG` 获取 `MIPModel`（替代直接读 state flat dict，见 `modules/kg/README.md` §七）
+7. `execute_facility` 接入 v4.3 设施子类型（`WaterSupply`/`Drainage`/`Waste`/`Sanitary`/`Fire`/`EvacuationShelter`/`Energy`/`Lighting` Facility，见 `schema/README.md` §2.1）
+8. 表格产出：`ConstructionProjectTable`/`ControlRuleTable`/`PlanningIndicatorTable` 写入 `project.tables`（一表一规则汇交，见 `schema/types/table_types.py`）
 
 ### P2：子任务分解 + 道路生成器（待规划）
 
@@ -130,3 +135,6 @@ execute = build_execute_agent_graph()  # 替换 allocate_and_generate + validate
 - `../parse/README.md` — PARSE Agent（上游生产者）
 - `app/modules/kg/README.md` — KG 桥接层（提供约束/邻接查询）
 - `docs/gis/proposals/03_TOOL_FIRST_ARCHITECTURE.md` §4 — EXECUTE_OPS Agent 预留依据
+- `app/modules/schema/README.md` - Schema v4.3 类型（设施子类型/表格/BaseControlZone）
+- `app/modules/data/README.md` - ProjectDataView/VillageBundle
+- `docs/gis/00_SYSTEM_DESIGN.md` §五 - EXECUTE 执行层设计

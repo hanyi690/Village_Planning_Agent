@@ -488,9 +488,16 @@ async def parse_planning_text(
         Dict with operation_sequence, constraint_set, planning_intent.
     """
     try:
-        from app.modules.spatial_ops import compute_spatial_context
+        from app.modules.spatial_ops import compute_spatial_context, compute_spatial_context_from_bundle
 
-        spatial_context = compute_spatial_context(gis_data or {})
+        # Prefer bundle-based computation if gis_data contains a bundle hint
+        gis_bundle = (gis_data or {}).pop("_gis_bundle", None)
+        if gis_bundle is not None:
+            spatial_context = compute_spatial_context_from_bundle(
+                gis_bundle, raw_geojson=gis_data or None
+            )
+        else:
+            spatial_context = compute_spatial_context(gis_data or {})
 
         try:
             from app.modules.kg.manager import get_kg_manager

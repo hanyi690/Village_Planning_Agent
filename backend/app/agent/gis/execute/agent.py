@@ -67,7 +67,14 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
     from app.tools.gis._generation.optimizer.mip_allocator import MIPZoneAllocator
 
     gis_data = state.gis_data or {}
-    landuse = gis_data.get("landuse_current_geojson")
+    # Prefer typed bundle for landuse; fall back to raw dict
+    gis_bundle = getattr(state, "gis_bundle", None)
+    if gis_bundle is not None and hasattr(gis_bundle, "landuse") and gis_bundle.landuse:
+        from app.modules.data.catalog.catalog import _bundle_to_compat_dict
+        landuse_dict = _bundle_to_compat_dict(gis_bundle)
+        landuse = landuse_dict.get("landuse_current_geojson")
+    else:
+        landuse = gis_data.get("landuse_current_geojson")
     if not landuse or not landuse.get("features"):
         logger.warning("[EXECUTE:layout] no landuse data - skipping")
         return {}

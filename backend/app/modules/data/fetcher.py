@@ -237,7 +237,10 @@ class GISDataFetcher:
         location: str,
         buffer_km: float = 2.0
     ) -> Tuple[Optional[Tuple[float, float]], Dict[str, Any]]:
-        """获取村级中心坐标（分层定位策略）
+        """DEPRECATED: Use DataCatalog.load_village_bundle() instead.
+
+        Center is now derived from boundary geometry via DataCatalog.
+        This method is kept for backward compat during transition.
 
         策略:
         1. 先获取县级边界作为参考

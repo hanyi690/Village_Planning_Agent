@@ -2,12 +2,12 @@
 
 This is the ONLY place where raw file/API data is validated and converted
 into typed spatial models. All other layers (kg / parse / gis tools) MUST
-consume the typed models from `app.modules.gis.schema`, never raw dicts.
+consume the typed models from `app.modules.schema`, never raw dicts.
 
 Migrated from `app/modules/gis/schema/ingestion.py` - ingestion is a
 data-layer concern (it reads data and validates it), so it lives here next
 to the drivers that produce raw GeoJSON. The type definitions stay in
-`gis/schema/spatial_types.py` (schema layer = pure definitions).
+`modules/schema/types/spatial_types.py` (schema layer = pure definitions).
 
 Pipeline:
     DataCatalog.fetch() -> DataResult(raw geojson)
@@ -417,51 +417,26 @@ def provider_to_parcel(
 # ============================================================
 
 # Feature type -> (model class, GDB source path)
+# Derived from LAYER_TYPE_REGISTRY (T6). Kept as backward compat.
 _FEATURE_TYPE_REGISTRY: Dict[str, tuple] = {}
 
 def _init_feature_registry():
-    """Lazy-init the feature type registry (avoids circular import with spatial_types)."""
+    """Lazy-init the feature type registry from LAYER_TYPE_REGISTRY.
+
+    Derives the mapping from the unified registry in schema/types/layer_registry.py,
+    resolving model class names to actual classes via lazy import.
+    """
     if _FEATURE_TYPE_REGISTRY:
         return
-    from app.modules.schema.types.spatial_types import (
-        AdminArea, AdminBoundaryLine,
-        CurrentBuilding, CurrentRoad, CurrentFacility, CurrentAnnotation,
-        PlannedRoad, GeologicalHazardPoint, ConditionalConstructionZone,
-        FarmlandProtection, EcologicalRedline, CultivatedLandTarget,
-        UrbanDevBoundary, VillageDevBoundary,
-        HazardControlLine, FloodControlLine, HistoricalProtection,
-        LandUseZone, ConstructionCtrlZone, PlanningScope,
-        ContourLine, ElevationPoint, WaterFeature,
-        PlannedAnnotation,
-    )
-    _FEATURE_TYPE_REGISTRY.update({
-        "admin_area":            (AdminArea,             "current/boundary.geojson"),
-        "admin_boundary_line":   (AdminBoundaryLine,     "current/admin_boundary_line.geojson"),
-        "current_building":      (CurrentBuilding,       "current/building.geojson"),
-        "current_road":          (CurrentRoad,           "current/road.geojson"),
-        "current_facility":      (CurrentFacility,       "current/facility.geojson"),
-        "current_annotation":    (CurrentAnnotation,     "current/annotation.geojson"),
-        "planned_road":          (PlannedRoad,           "planned/road.geojson"),
-        "planned_annotation":    (PlannedAnnotation,     "planned/annotation.geojson"),
-        "geological_hazard_pt":  (GeologicalHazardPoint, "planned/geological_hazard_points.geojson"),
-        "conditional_construction": (ConditionalConstructionZone, "planned/construction_zone.geojson"),
-        "planning_scope":        (PlanningScope,         "planned/boundary.geojson"),
-        "farmland_protection":   (FarmlandProtection,    "planned/farmland_protection.geojson"),
-        "ecological_redline":    (EcologicalRedline,     "planned/ecological_protection.geojson"),
-        "cultivated_land_target": (CultivatedLandTarget, "planned/cultivated_land_target.geojson"),
-        "urban_dev_boundary":    (UrbanDevBoundary,      "planned/urban_dev_boundary.geojson"),
-        "village_dev_boundary":  (VillageDevBoundary,    "planned/village_dev_boundary.geojson"),
-        "hazard_control_line":   (HazardControlLine,     "planned/hazard_control_line.geojson"),
-        "flood_control_line":    (FloodControlLine,      "planned/flood_control_line.geojson"),
-        "historical_protection": (HistoricalProtection,  "planned/historical_protection.geojson"),
-        "land_use_zone":         (LandUseZone,           "planned/land_use_zone.geojson"),
-        "construction_ctrl_zone": (ConstructionCtrlZone, "planned/space_control_zone.geojson"),
-        # Group E: Basic geographic info (DLG)
-        "contour_line":          (ContourLine,           "current/terrain/contour.geojson"),
-        "elevation_point":       (ElevationPoint,        "current/terrain/elevation_points.geojson"),
-        "water_feature":         (WaterFeature,          "current/terrain/water.geojson"),
-        # place_name_annotation removed - covered by CurrentAnnotation(category="村名")
-    })
+    from app.modules.schema.types.layer_registry import LAYER_TYPE_REGISTRY
+    from app.modules.schema.types import spatial_types as _st
+    for lt, entry in LAYER_TYPE_REGISTRY.items():
+        if entry.model_class_name and hasattr(_st, entry.model_class_name):
+            key = entry.ingest_arg or lt
+            _FEATURE_TYPE_REGISTRY[key] = (
+                getattr(_st, entry.model_class_name),
+                entry.default_gdb_path,
+            )
 
 
 def ingest_feature(

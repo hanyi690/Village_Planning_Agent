@@ -45,7 +45,7 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
     """
     from app.agent.gis.parse.agent import build_parse_agent_graph
     from app.agent.gis.parse.state import ParseAgentState, SpatialContext, SpatialPlanningIntent
-    from app.modules.spatial_ops import compute_spatial_context
+    from app.modules.spatial_ops import compute_spatial_context, compute_spatial_context_from_bundle
 
     reports = state.reports or {}
     village_name = state.village_name
@@ -71,8 +71,13 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         return {}
 
     try:
-        # Compute spatial context from GIS data
-        spatial_context = compute_spatial_context(gis_data or {})
+        # Compute spatial context from GIS data (prefer bundle, fallback to raw dict)
+        if state.gis_bundle is not None:
+            spatial_context = compute_spatial_context_from_bundle(
+                state.gis_bundle, raw_geojson=state.gis_data or None
+            )
+        else:
+            spatial_context = compute_spatial_context(gis_data or {})
 
         # Build and run PARSE Agent subgraph
         graph = build_parse_agent_graph()
@@ -119,8 +124,8 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
 
 
 async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
-    """Fetch GIS data from providers (Tianditu/OSM/Amap)."""
-    from app.tools.gis.data import fetch_gis_data
+    """Fetch GIS data via DataCatalog (schema-driven, single path)."""
+    from app.modules.data.catalog.catalog import DataCatalog, _bundle_to_compat_dict
 
     village_name = state.village_name
 
@@ -129,12 +134,17 @@ async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
         return {}
 
     try:
-        result = await fetch_gis_data.ainvoke({"village_name": village_name})
-        logger.info("[Pipeline:fetch] GIS data fetched for: %s", village_name)
-        return {"gis_data": result if isinstance(result, dict) else {}}
+        catalog = DataCatalog()
+        bundle = catalog.load_village_bundle(village_name)
+        raw = _bundle_to_compat_dict(bundle)
+        logger.info(
+            "[Pipeline:fetch] %d parcels, %d roads, %d annotations",
+            len(bundle.landuse), len(bundle.roads), len(bundle.annotations),
+        )
+        return {"gis_bundle": bundle, "gis_data": raw}
     except Exception as e:
         logger.warning("[Pipeline:fetch] Fetch failed: %s", e)
-        return {}
+        return {"gis_data": {}}
 
 
 async def _build_kg_node(state: GISPipelineState) -> dict:
@@ -347,6 +357,7 @@ async def _execute_node(state: GISPipelineState) -> dict:
             session_id=state.session_id,
             village_name=state.village_name,
             gis_data=state.gis_data,
+            gis_bundle=state.gis_bundle,
             intent=state.intent,
             operation_sequence=state.operation_sequence,
             constraint_set=state.constraint_set,

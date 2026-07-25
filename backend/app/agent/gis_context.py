@@ -86,7 +86,11 @@ class SharedGISContext:
         return self._bbox
 
     def _compute_center(self) -> Optional[Tuple[float, float]]:
-        """计算中心点 - 使用 GISDataFetcher 单例"""
+        """DEPRECATED: Use DataCatalog.load_village_bundle() instead.
+
+        Center is now derived from boundary geometry via DataCatalog.
+        This method is kept for backward compat during transition.
+        """
         if not self.village_name:
             logger.warning("[SharedGISContext] village_name 为空，无法计算 center")
             return None
@@ -146,16 +150,10 @@ class SharedGISContext:
             self._update_center_from_boundary(geojson)
 
     def get_data_by_type(self, data_type: str) -> Optional[Dict[str, Any]]:
-        """
-        获取特定类型的 GIS 数据
+        """DEPRECATED: Use DataCatalog.load_village_bundle() instead.
 
-        优先级：用户上传 > 会话缓存 > API 自动获取
-
-        Args:
-            data_type: 数据类型
-
-        Returns:
-            GeoJSON 数据或 None
+        Data access is now via DataCatalog. This method is kept for
+        backward compat during transition.
         """
         # 优先返回用户上传数据
         if data_type in self._user_uploaded_data:
@@ -389,7 +387,7 @@ class SharedGISContext:
 
         # 尝试从广东省天地图专题服务获取
         try:
-            from ..modules.gis.providers.tianditu import GDSpecializedService
+            from app.modules.data.providers.tianditu.gd_service import GDSpecializedService
             gd_service = GDSpecializedService()
 
             # 使用当前 bbox 获取数据

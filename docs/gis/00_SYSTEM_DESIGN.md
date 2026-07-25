@@ -1,10 +1,24 @@
 # 村庄规划智能系统 — 总体设计文档
 
-> **Status: [CURRENT] | Type: North-Star Design | Version: 3.0 | Updated: 2026-07-24**
+> **Status: [CURRENT] | Type: North-Star Design | Version: 4.0 | Updated: 2026-07-25**
 > **Scope**: 系统总体架构设计，覆盖 Schema / Data / KG / PARSE / EXECUTE 五层，回答 6 个核心设计问题
 > **Audience**: 系统架构师、核心开发者
 > **Replaces**: 00_PLANNING_SYSTEM_VISION.md + 01_DESIGN_GOALS.md + 02_OUTPUT_ARCHITECTURE.md (合并、精简、去矛盾)
 > **Archived**: 旧文档已迁入 `archive/` 目录
+>
+> **v4.0 变更摘要（2026-07-25）**：
+> - Schema 引入 Point/Line/Polygon 几何中间抽象 + RasterDataset 栅格分支（详见 `backend/app/modules/schema/README.md`）
+> - `GISDataBundle` 现状/规划地块分离（`current_landuse`/`planned_landuse`），根治"双倍地块"，不保留兼容视图
+> - Data 层双轨接入：显式注册 + 智能推断管道（矢量按几何分桶+字段语义匹配，栅格按波段+值域匹配），详见 `backend/app/modules/data/README.md`
+> - `backend/app/modules/gis/` 整体删除，无 shim 无兼容层
+> - `reference/OPTIMIZATION_TASKS.md` 重写为 parse/kg/layout 大修任务清单
+>
+> **v4.1 变更摘要（2026-07-25）**：
+> - 数据视图上移为 `ProjectDataView -> VillageBundle` 两层，取代"一村一包"，支持多村/跨村/项目级组合
+> - 新增 `TableDataset` 第四数据形态（矢量/栅格/表格/文档），汇交"一表一规则"有类型化落点
+> - 项目配置与数据源配置分离（`projects.yaml` vs `sources.yaml`），智能推断加项目上下文校准
+> - `SpatialFeature.layer_type` 嵌入图层身份；`layer_tree` 让图层可发现；三区三线标注引用层
+> - KG 同步上移为项目级 `ProjectKG`（多村实体 + 跨村关系），避免数据项目级/KG 村庄级的断层
 
 ---
 
@@ -99,23 +113,25 @@
 
 ### 1.2 Schema 层：类型契约
 
-**位置**：`app/modules/gis/schema/`
+**位置**：`app/modules/schema/`（已从 `gis/schema/` 提升为顶层共享契约，5 子包结构）
 
 **职责**：定义"空间要素是什么"、"编码体系有哪些"、"输出 GDB 长什么样"。
 **不做**：数据的读取、校验、转换——那是 Data 层的职责。
 
 **核心模块**：
 
-| 模块 | 职责 | 关键类型 |
+| 子包 | 职责 | 关键内容 |
 |------|------|---------|
-| `spatial_types.py` | 空间要素全覆盖类型定义（Group A~E） | `SpatialFeature`, `CurrentLandUseParcel`, `PlannedLandUseParcel`, `CurrentFacility`, `CurrentRoad`, `FarmlandProtection`, `EcologicalRedline`, `WaterFeature`, ... |
-| `canonical.py` | 规范化数据容器 | `GeoFeature`, `GISDataBundle`, `BBox`, `ProviderLandParcel` |
-| `contracts.py` | 跨层数据契约 | `UnifiedSpatialIntent`, `SpatialContext`, `AllocationResult`, `ValidationReport`, `ExportResult` |
-| `classification.py` | 编码体系定义 | 6套编码体系：GB/T 21010、TUGUI、APPENDIX5、GHFLBM、YDYHFL、VNE |
-| `code_sets.py` | 编码值域 | `DLBM_TO_PLANNING_ZONE`, `PROTECTED_DLBM_CODES` |
-| `gdb.py` | 输出 GDB 图层规范 | `GDB_LAYER_REGISTRY`（12层完整字段定义） |
-| `colors.py` | 分区着色方案 | 国标颜色映射 |
-| `dicts/` | 字典数据 + 规则 | `planning_targets.yaml`, `land_use_structure.yaml`, `place_aliases.yaml` |
+| `types/` | 空间要素类型 + 规范化容器 + 栅格类型 | `spatial_types.py`(SpatialFeature, CurrentLandUseParcel, PlannedLandUseParcel, ...), `canonical.py`(GeoFeature, GISDataBundle, BBox), `raster_types.py`(DEMInput, DOMInput) |
+| `encodings/` | 编码体系 + 值域 + 字典 | `classification.py`(6套: GB/T21010/TUGUI/APPENDIX5/GHFLBM/YDYHFL/VNE), `code_sets.py`, `dicts/`(6 YAML + references + rules) |
+| `contracts/` | 跨层契约（分文件） | `parse_contracts.py`(SpatialPlanningIntent, SpatialOperation, SpatialConstraint), `execution_contracts.py`(MIPModel, ExecutionPlan), `validation_contracts.py`, `layout_contracts.py` |
+| `output/` | 输出规范 | `gdb.py`(GDB_LAYER_REGISTRY 12层), `colors.py`(国标着色) |
+| `utils/` | 纯计算（零外部依赖） | `metrics.py`(用地指标聚合) |
+
+**类型层级**（详见 `backend/app/modules/schema/README.md`）：
+- 矢量三层层级：`SpatialFeature -> PointFeature/LineFeature/PolygonFeature -> 语义子类`，几何中间层在 `geometry` field 上加 validator，类型层面约束几何
+- 栅格分支：`RasterDataset -> DEMInput/DOMInput/SlopeRaster/AspectRaster/SuitabilityRaster`
+- `GISDataBundle` 现状/规划地块分离（`current_landuse`/`planned_landuse`），不混装，根治"双倍地块"，不保留兼容视图
 
 **依赖规则**：Schema 层**不 import** Data / KG / Agent 中的任何模块。
 
@@ -151,6 +167,10 @@ DataCatalog.fetch(layer_type)
 - 统一 `DataResult` 封装：`success` 为假时携带 `error`，不抛异常
 - CRS 统一：所有输出 WGS84 (EPSG:4326)，转换在 Source 层完成
 - 编码校验前置：`ingest.py` 在端口校验所有编码，脏数据不进管道
+- 双轨接入：已注册 layer_type 走严格 `ingest`，未注册走 `ingest_inference.py` 智能推断管道（矢量按几何分桶+字段语义匹配+动态模型生成，栅格按波段+值域匹配）
+- 结构优先：先按数据形态（Point/Line/Polygon/Raster）分桶，再按语义分类
+- 栅格/表格一等公民：DEM/DOM/坡度有 RasterDataset，人口/管制规则表有 TableDataset（第四形态），独立类型层级与数据视图字段
+- 项目级数据视图：`ProjectDataView -> VillageBundle` 两层，取代"一村一包"，支持多村/跨村/共享栅格/表格/文档聚合（详见 `data/README.md`）
 - 文档也是数据：规划文本、L3 报告纳入 `documents/` 子模块，走同样抽象
 
 ### 1.4 为什么不冗余
@@ -168,9 +188,9 @@ Schema 和 Data 的分离遵循 **"定义 vs. 操作"** 原则，类似于 Pydan
 **如果合并**：每次新增数据源（如加一个 WFS 服务）会修改"类型定义"模块，导致下游所有消费者
 重新评估兼容性。分离后，Schema 变更只发生在标准更新时，Data 变更不影响类型契约。
 
-**当前问题**（非冗余，是依赖方向错误）：Schema 位于 `gis/schema/`（暗示它属于 GIS 子包），
-实际上它被 data/、kg/、agent/ 等多个模块消费，应该是独立于 gis/ 的顶层共享契约。
-见 §6.1 模块结构调整。
+**已解决**：Schema 原位于 `gis/schema/`（暗示属于 GIS 子包），已提升为 `app/modules/schema/`
+顶层共享契约（5 子包：types/encodings/contracts/output/utils），被 data/、kg/、agent/ 共同消费。
+`gis/` 目录已整体删除，所有引用走 `app.modules.schema`，无 shim 无兼容层。
 
 ### 1.5 依赖规则
 
@@ -780,19 +800,13 @@ VALIDATE (8 项检查 + 8 条硬约束)
 ```
 app/
 ├── modules/
-│   ├── schema/                    # [NEW] 独立 Schema 层（从 gis/schema/ 提升）
+│   ├── schema/                    # [DONE] 独立 Schema 层（已从 gis/schema/ 提升）
 │   │   ├── __init__.py
-│   │   ├── spatial_types.py      # 空间要素类型 (Group A~E)
-│   │   ├── canonical.py          # 规范化数据容器
-│   │   ├── contracts.py          # 跨层契约
-│   │   ├── classification.py     # 编码体系
-│   │   ├── code_sets.py          # 编码值域
-│   │   ├── gdb.py                # GDB 图层规范
-│   │   ├── colors.py             # 着色方案
-│   │   ├── dicts/                # 字典数据
-│   │   │   ├── planning_targets.yaml
-│   │   │   ├── land_use_structure.yaml
-│   │   │   └── place_aliases.yaml
+│   │   ├── types/                # spatial_types / canonical / raster_types
+│   │   ├── encodings/            # classification / code_sets / dicts(6 YAML+rules)
+│   │   ├── contracts/            # parse / execution / validation / layout 契约
+│   │   ├── output/               # gdb / colors
+│   │   ├── utils/                # metrics
 │   │   └── README.md
 │   │
 │   ├── data/                      # Data 层
@@ -845,6 +859,11 @@ app/
 │       │   ├── state.py
 │       │   ├── agent.py
 │       │   └── README.md
+│       ├── analyze/               # [NEW] ANALYZE Agent (栅格分析, 见 Phase 5 / T26)
+│       │   ├── __init__.py
+│       │   ├── state.py
+│       │   ├── dem_analysis.py    # DEM -> TerrainAnalysisResult
+│       │   └── double_evaluation.py # 双评价
 │       └── execute/                # EXECUTE Agent
 │           ├── __init__.py
 │           ├── state.py
@@ -888,6 +907,10 @@ app/
 
 ### 6.3 迁移路线图
 
+> **进度概览（2026-07-25）**：Phase 1.1-1.3 ✅ 已完成；1.4 ❌ 仍 `layout_pipeline.py`；1.5 ⏳ 部分（T5/T6/T23 ✅ shim+注册表+文档，T1-T4 待执行）。
+> Phase 2.1 ❌ ConstraintCompiler（T10）；2.2-2.5 ⏳ KG 入库 4/29；2.6 ❌ 持久化。Phase 3 ❌；Phase 4 ⏳ 部分；Phase 5 ❌ 远期（T26 ANALYZE 骨架先行）。
+> T27b ✅ GDSpecializedService 断链修复；T27c ✅ trace.py 迁出 gis/。详细任务见 `reference/OPTIMIZATION_TASKS.md`。
+
 **Phase 0: 设计落地（当前）**
 
 | # | 任务 | 说明 |
@@ -900,7 +923,7 @@ app/
 
 | # | 任务 | 说明 |
 |---|------|------|
-| 1.1 | Schema 层提升 | `app/modules/gis/schema/` → `app/modules/schema/`（或保持位置但去歧义） |
+| 1.1 | Schema 层提升 | `app/modules/gis/schema/` -> `app/modules/schema/` ✅ 已完成 |
 | 1.2 | 消除 KG 反向依赖 | KG 不再 import `tools/gis/_generation` 和 `_analytics` |
 | 1.3 | 提取 Spatial Ops 模块 | 空间关系计算从 KG 和 agent 中提取到 `app/modules/spatial_ops/` |
 | 1.4 | `layout_pipeline.py` → `pipeline.py` | 重命名，消除名不副实 |

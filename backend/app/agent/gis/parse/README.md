@@ -93,7 +93,7 @@ PARSE Agent 在 `explore_*` 阶段可用三个工具（`agent.py`）：
 
 ## 五、空间接地（Spatial Grounding）
 
-PARSE 不直接读 GeoJSON，而是通过 `SpatialContext`（`app/modules/gis/spatial_context.py:compute_spatial_context()`）获取压缩空间上下文（~2KB）：
+PARSE 不直接读 GeoJSON，而是通过 `SpatialContext`（`app/modules/spatial_ops/context.py:compute_spatial_context()`）获取压缩空间上下文（~2KB）。v4.1 起 `compute_spatial_context` 收 `ProjectDataView`（多村 `VillageBundle`），产出项目级空间上下文：
 
 - `natural_villages`：自然村锚点（聚类自居住地块 + 地名别名匹配）
 - `facility_anchors`：设施精确锚点（来自 annotation.geojson）
@@ -118,7 +118,7 @@ PARSE 不直接读 GeoJSON，而是通过 `SpatialContext`（`app/modules/gis/sp
 }
 ```
 
-下游 `layout_pipeline.py:_parse_intent_node` 消费这些输出，注入 `GISPipelineState` 供 EXECUTE 使用。
+下游 `layout_pipeline.py:_parse_intent_node` 消费这些输出，注入 `GISPipelineState` 供 EXECUTE 使用。同时 PARSE 通过 `add_intent`/`add_operations`/`add_constraints`/`add_spatial_relations` 将结果写入 `ProjectKG` Layer 3（项目级，见 `modules/kg/README.md` §六），供 EXECUTE 经 `ConstraintCompiler` 读取。
 
 ---
 
@@ -126,6 +126,10 @@ PARSE 不直接读 GeoJSON，而是通过 `SpatialContext`（`app/modules/gis/sp
 
 - `../README.md` — GIS Agent 包总览
 - `../execute/README.md` — EXECUTE Agent（下游消费者）
-- `app/modules/gis/spatial_context.py` — SpatialContext 计算
+- `app/modules/spatial_ops/context.py` - SpatialContext 计算（收 `ProjectDataView`, v4.1）
+- `app/modules/parsing/README.md` - parsing 工具层（PARSE 调用提取工具）
+- `app/modules/kg/README.md` - ProjectKG 桥接层（PARSE 写入 Layer 3）
+- `app/modules/schema/contracts/parse_contracts.py` - 最终契约类型
+- `docs/gis/00_SYSTEM_DESIGN.md` §四 - PARSE 理解层设计
 - `docs/gis/diagnostics/01_PARSE_AGENT_STATUS.md` — PARSE Agent 状态诊断
 - `docs/gis/proposals/01_PARSE_SPATIAL_ENHANCEMENT.md` — 空间增强提案

@@ -30,6 +30,7 @@ class ExecuteAgentState(BaseModel):
 
     # ── Upstream inputs (from PARSE + KG) ──
     gis_data: Dict[str, Any] = Field(default_factory=dict)
+    gis_bundle: Optional[Any] = None  # GISDataBundle — typed data container
     intent: Any = None  # SpatialPlanningIntent (typed) or dict (legacy)
     operation_sequence: List[Any] = Field(default_factory=list)
     constraint_set: List[Any] = Field(default_factory=list)

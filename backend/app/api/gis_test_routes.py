@@ -17,6 +17,35 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+# ── Dev data helpers (replace legacy gis.data.loader; remove when routes are rewritten) ──
+from app.modules.data.catalog.catalog import DataCatalog, _bundle_to_compat_dict
+from app.modules.data.documents import (
+    resolve_gen_intent_cached,
+    resolve_plan_intent_cached,
+    resolve_intent_live,
+)
+from app.modules.data.documents.loader import load_planning_text
+
+
+def load_all(village_name: str = "金田村委会") -> Dict[str, Any]:
+    """Dev helper: load village GIS data as raw dict."""
+    bundle = DataCatalog().load_village_bundle(village_name)
+    return _bundle_to_compat_dict(bundle)
+
+
+def load_planned() -> Dict[str, Any]:
+    """Dev helper: load planned layers as raw dict."""
+    return load_all("金田村委会")
+
+
+class PlanningTextLoader:
+    """Dev compat for legacy PlanningTextLoader."""
+
+    @staticmethod
+    def load_village_planning_markdown(village_name: str) -> str:
+        return load_planning_text(village_name) or ""
+
+
 router = APIRouter(prefix="/api/dev/gis", tags=["GIS Dev"])
 
 # ── Color injection (shared by /analysis and /zones) ──────────────
@@ -160,7 +189,6 @@ async def gis_data(request: DataRequest):
     t0 = time.time()
     result: Dict[str, Any] = {"success": True}
     try:
-        from app.modules.gis.data.loader import load_all
         from app.tools.gis.parse import get_village_params, get_data_summary
 
         gis_data = load_all(request.location)
@@ -262,8 +290,6 @@ async def _validate_layout(request: ValidateRequest, t0: float) -> Dict[str, Any
     # Mode 2: generate from jintian data then validate
     if request.use_jintian_data and not layout_configs:
         from app.tools.gis._generation.pipeline import run_layout_pipeline
-        from app.modules.gis.data.loader import load_all
-        from app.modules.gis.data.intent_cache import resolve_gen_intent_cached
         from app.tools.gis.parse import _dict_to_intent
 
         gis_data = load_all()
@@ -315,7 +341,6 @@ async def _validate_ecological(request: ValidateRequest, t0: float) -> Dict[str,
 
 
 async def _validate_constraint(request: ValidateRequest, t0: float) -> Dict[str, Any]:
-    from app.modules.gis.data.loader import load_all
     from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
     from app.tools.gis._conflict.detector import ConflictDetector
 
@@ -333,7 +358,6 @@ async def _validate_constraint(request: ValidateRequest, t0: float) -> Dict[str,
 
 
 async def _validate_hazard(request: ValidateRequest, t0: float) -> Dict[str, Any]:
-    from app.modules.gis.data.loader import load_all
     from app.tools.gis._validation.facility_validator import SPATIAL_AVAILABLE
 
     gis_data = load_all()
@@ -377,8 +401,6 @@ async def gis_layout(request: LayoutRequest):
     """Run the spatial layout pipeline — gen/plan/both paths with optional comparison."""
     t0 = time.time()
     try:
-        from app.modules.gis.data.loader import load_all, load_planned
-        from app.modules.gis.data.intent_cache import resolve_gen_intent_cached, resolve_plan_intent_cached, resolve_intent_live
         from app.tools.gis._generation.pipeline import run_layout_pipeline, build_three_way_comparison
         from app.tools.gis.parse import _dict_to_intent
 
@@ -513,7 +535,6 @@ async def gis_intent(request: IntentRequest):
                 }
 
             from app.tools.gis.parse import _parse_reports_to_intent
-            from app.modules.gis.data.loader import load_all
             _gis_data = load_all()
             result = _parse_reports_to_intent(reports=reports, village_name=request.village_name, gis_data=_gis_data)
             if not result.get("success"):
@@ -524,7 +545,6 @@ async def gis_intent(request: IntentRequest):
         # Option 2/3: Text-based
         planning_text = request.planning_text or request.custom_text
         if not planning_text and request.use_jintian_reports:
-            from app.modules.gis.data.text_loader import PlanningTextLoader
             planning_text = PlanningTextLoader.load_village_planning_markdown(request.village_name)
 
         if not planning_text:
@@ -532,7 +552,6 @@ async def gis_intent(request: IntentRequest):
 
         from app.agent.gis.prompts import format_parse_prompt
         from app.tools.gis.parse import parse_text_via_llm
-        from app.modules.gis.data.loader import load_all
         _gis_data = load_all()
 
         intent = parse_text_via_llm(text=planning_text, village_name=request.village_name, gis_data=_gis_data)
@@ -556,7 +575,6 @@ async def gis_zones(request: ZonesRequest):
     """Generate V/N/E land-use zones or space-control zones."""
     t0 = time.time()
     try:
-        from app.modules.gis.data.loader import load_all
         gis_data = load_all(request.village_name)
 
         if not gis_data or not gis_data.get("boundary_geojson"):

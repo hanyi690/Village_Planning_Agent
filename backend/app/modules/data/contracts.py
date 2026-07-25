@@ -1,7 +1,7 @@
 """Data contracts - unified result envelope and metadata for all data sources.
 
 All DataSourceDriver.fetch() returns DataResult, never raises.
-Canonical geometry types (BBox) are imported from gis.schema.canonical
+Canonical geometry types (BBox) are imported from modules.schema.types.canonical
 to avoid duplicating the normative data shapes.
 """
 

@@ -50,7 +50,7 @@ async def analyze_dimension_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """GIS Agent 节点 — PARSE ReAct + LAYOUT 混合管线
+    """GIS Agent node — PARSE ReAct + LAYOUT hybrid pipeline.
 
     Step 1: PARSE Agent (ReAct) extracts structured intent from planning reports.
     Step 2: LAYOUT Pipeline (deterministic skeleton + ReAct subgraph + Evaluator Gate)
@@ -58,13 +58,24 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     from .gis import create_parse_agent_graph
     from .gis.layout_pipeline import build_layout_pipeline
-    from .gis_context import SharedGISContext
+    from app.modules.data.catalog.catalog import DataCatalog
 
-    gis_context = SharedGISContext.from_state(state)
     session_id = state.get("session_id", "")
+    village_name = state.get("config", {}).get("village_name", "")
+
+    # ── Load GIS data via DataCatalog (schema-driven, single path) ──
+    catalog = DataCatalog()
+    gis_bundle = catalog.load_village_bundle(village_name)
+    gis_data = _bundle_to_compat_dict(gis_bundle)
+
+    # Merge user uploads
+    user_uploaded = state.get("user_uploaded_data", {})
+    if user_uploaded:
+        _merge_user_uploads_into_bundle(gis_bundle, user_uploaded)
+        gis_data.update(user_uploaded)
 
     # Preload uploaded GIS data from DB if context has none
-    if gis_context and not gis_context._user_uploaded_data and session_id:
+    if not user_uploaded and session_id:
         try:
             from app.database.operations import get_uploaded_files_by_session_async
             uploads = await get_uploaded_files_by_session_async(
@@ -74,15 +85,13 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 dtype = item.get("gis_data_type") or "unknown"
                 geojson = item.get("gis_data")
                 if geojson and geojson.get("features"):
-                    gis_context.set_user_data(dtype, geojson)
+                    gis_data[f"{dtype}_geojson"] = geojson
             if uploads:
                 logger.info("[gis_agent_node] Preloaded %d uploaded files from DB", len(uploads))
         except Exception as e:
             logger.warning("[gis_agent_node] DB preload failed: %s", e)
 
-    gis_data = _build_gis_data(gis_context, state)
     reports, summaries = await _get_reports_and_summaries(state)
-    village_name = state.get("config", {}).get("village_name", "")
 
     # ── Step 1: PARSE Agent (ReAct — text understanding needs LLM creativity) ──
     parse_graph = create_parse_agent_graph()
@@ -109,6 +118,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "session_id": session_id,
         "village_name": village_name,
         "gis_data": gis_data,
+        "gis_bundle": gis_bundle,
         "intent": intent_json,
         "kg_turtle": "",
         "kg_constraints": [],
@@ -230,20 +240,44 @@ def _format_gis_result(result: Dict[str, Any], layout_configs: List[Dict[str, An
     return f"GIS 布局生成完成：{len(layout_configs)} 个图层 ({', '.join(layer_types)})"
 
 
-def _build_gis_data(gis_context: Any, state: Dict[str, Any]) -> Dict[str, Any]:
-    """从 SharedGISContext + 用户上传数据构建 gis_data 字典。"""
-    user_uploaded = state.get("user_uploaded_data", {})
-    protection_zones = gis_context.get_protection_zones()
-    return {
-        "boundary_geojson": gis_context.get_data_by_type("boundary"),
-        "landuse_current_geojson": gis_context.get_data_by_type("landuse_current"),
-        "protection_zones": protection_zones,
-        # Flat keys for KG builder.add_protection_zones() compatibility
-        "farmland_protection_geojson": protection_zones.get("farmland_protection"),
-        "ecological_protection_geojson": protection_zones.get("ecological_redline"),
-        "historical_protection_geojson": protection_zones.get("historical_protection"),
-        "road_geojson": gis_context.get_data_by_type("road"),
-        "hazard_points_geojson": gis_context.get_data_by_type("geological_hazard_points"),
-        "construction_zone_geojson": gis_context.get_data_by_type("construction_zone"),
-        **user_uploaded,
-    }
+def _bundle_to_compat_dict(bundle: Any) -> Dict[str, Any]:
+    """Convert GISDataBundle to raw dict for pipeline compat.
+
+    Delegates to DataCatalog._bundle_to_compat_dict for the canonical
+    conversion. Kept here as a local convenience for graph.py.
+    """
+    from app.modules.data.catalog.catalog import _bundle_to_compat_dict as _catalog_compat
+    return _catalog_compat(bundle)
+
+
+def _merge_user_uploads_into_bundle(
+    bundle: Any, user_uploaded: Dict[str, Any]
+) -> None:
+    """Merge user-uploaded GeoJSON data into a GISDataBundle.
+
+    User uploads are raw GeoJSON dicts keyed by data type.
+    This merges them into the bundle's typed fields.
+    """
+    from app.modules.schema.types.canonical import GeoFeature
+
+    for key, val in user_uploaded.items():
+        if not isinstance(val, dict) or val.get("type") != "FeatureCollection":
+            continue
+        features = val.get("features", [])
+        geo_features = [
+            GeoFeature(
+                geometry=f.get("geometry", {}),
+                properties=f.get("properties", {}),
+            )
+            for f in features
+        ]
+        # Route to bundle field by key name
+        if "boundary" in key and geo_features:
+            if bundle.boundary is None:
+                bundle.boundary = geo_features[0]
+        elif "road" in key:
+            bundle.roads.extend(geo_features)
+        elif "annotation" in key:
+            bundle.annotations.extend(geo_features)
+        elif "water" in key:
+            bundle.water_bodies.extend(geo_features)

@@ -113,7 +113,7 @@ class MIPZoneAllocator:
         Returns:
             Tuple of (GeoJSON FeatureCollection, MIPTrace dict).
         """
-        from app.modules.gis.trace import MIPTrace
+        from app.tools.gis._generation.trace import MIPTrace
         try:
             import pulp
         except ImportError:

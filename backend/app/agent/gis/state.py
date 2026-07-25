@@ -69,6 +69,7 @@ class GISPipelineState(BaseModel):
     # ── Input data ──
     reports: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
     gis_data: Dict[str, Optional[Dict[str, Any]]] = Field(default_factory=dict)
+    gis_bundle: Optional[Any] = None  # GISDataBundle — typed data container
 
     # ── Intent + PARSE Agent output ──
     # Runtime type is SpatialPlanningIntent / List[SpatialOperation] / List[SpatialConstraint].
