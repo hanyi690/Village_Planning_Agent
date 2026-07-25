@@ -2,7 +2,9 @@
 
 > **定位**: 四层架构底层 (`Schema ← Data ← KG ← Agent`)，定义空间要素类型、编码体系、输出规范。
 > **零依赖**: 不 import Data / KG / Agent / Tools 中的任何模块。
-> **Updated: 2026-07-25 (v4.1)** -- 引入 TableDataset 第四数据形态；数据视图上移为 `ProjectDataView -> VillageBundle` 两层；现状/规划地块彻底分离。
+> **Updated: 2026-07-25 (v4.3 落地)** — v4.3 形态重组: GISDataBundle/GeoFeature/ProviderLandParcel/GISMetadata 废弃, VillageBundle 统一容器 + 6 个形态 Group 类 (PointLayerGroup/LineLayerGroup/PolygonLayerGroup/RasterLayerGroup/TableLayerGroup/DocumentGroup), _assign_to_bundle 改为 isinstance 类型分发 (33 个具体子类全覆盖), inferred 列表收容推断图层, constraint_polygons 聚合约束面。
+
+> **Status: v4.3 落地完成。** 所有设计类型已实现, 下游已迁移到形态视图。
 
 ---
 
@@ -10,12 +12,12 @@
 
 空间与非空间数据的第一性特征是**数据形态**。本层按四种形态分型定义，先于语义角色：
 
-| 形态 | 第一性特征 | L1 抽象 | L2 语义子类示例 |
-|---|---|---|---|
-| **矢量** | 几何结构 (Point/Line/Polygon) | `PointFeature`/`LineFeature`/`PolygonFeature` | CurrentLandUseParcel, CurrentRoad, ... |
-| **栅格** | 波段与值域 (单波段连续/多波段影像/分类) | `RasterDataset` | DEMInput, DOMInput, SlopeRaster, ... |
-| **表格** | 列结构 (非空间结构化行列) | `TableDataset` | PopulationTable, ControlRuleTable, ... |
-| **文档** | 半结构化文本 | `Document` | PlanningText, L3Report |
+| 形态           | 第一性特征                              | L1 抽象                                             | L2 语义子类示例                        |
+| -------------- | --------------------------------------- | --------------------------------------------------- | -------------------------------------- |
+| **矢量** | 几何结构 (Point/Line/Polygon)           | `PointFeature`/`LineFeature`/`PolygonFeature` | CurrentLandUseParcel, CurrentRoad, ... |
+| **栅格** | 波段与值域 (单波段连续/多波段影像/分类) | `RasterDataset`                                   | DEMInput, DOMInput, SlopeRaster, ...   |
+| **表格** | 列结构 (非空间结构化行列)               | `TableDataset`                                    | PopulationTable, ControlRuleTable, ... |
+| **文档** | 半结构化文本                            | `Document`                                        | PlanningText, L3Report                 |
 
 ```
 L0  SpatialFeature                  矢量基类: geometry + bsm + ysdm + _raw
@@ -35,6 +37,7 @@ L0  Document                        文档基类: text + doc_type + source      
 **为什么四形态而非三形态**：旧版只有"矢量 + 栅格 + 文档"，把人口结构、产业经济、管制规则表等结构化非空间表格塞进"文档"当文本处理，丢失列结构。而规划成果"一图一表一规则"的"表"与"规则"恰恰是表格。`TableDataset` 让汇交成果的表格产出有类型化落点。
 
 **为什么分形态而非扁平**：
+
 1. **类型层面设防**：L1 中间层在 field 上加 validator，形态不匹配在构造时 fail-fast（旧版 `geometry_type` 只是运行时 property，传错不报错）。
 2. **支撑 Data 层按形态分桶**：智能推断管道第一步按形态分流，再桶内语义匹配。无 L1 抽象，分桶无类型可挂。
 3. **解决"双倍地块"**：`VillageBundle` 现状/规划地块分字段存放，不混装。
@@ -118,6 +121,7 @@ SpatialFeature
 ```
 
 > **v4.2 三项修正**：
+>
 > 1. **阶段抽象系统化**：现状/规划两态的要素都有 Base 基类（`BaseLandUseParcel`/`BaseRoad`/`BaseFacility`/`BaseAnnotation`），共享字段上提。非两态类型（AdminArea/ControlLine）不强制 Base。
 > 2. **注记/设施分离**：设施是空间实体（有功能/服务半径/规模），注记是表达要素（文字标注）。旧版 `CurrentFacility.from_annotation_feature` 把设施从注记派生、且规划设施点混在 `PlannedAnnotation` 里--v4.2 拆出 `PlannedFacility`，设施统一为空间要素，注记降为表达层（`AnnotationFeature`，不入 KG，不参与空间分析）。`AnnotationFeature` 可继承 `PointFeature` 复用几何用于渲染，但 `geometry_kind="annotation"` 区分。
 > 3. **规范覆盖补全**：补 Group F 自然资源 5 类型（SoilType/SoilErosion/Watershed/NatureReserve/HydrogeologyZone）+ AdminArea 扩展字段（admin_level/parent_code），对齐 `01_DATA_ACQUISITION_PLAN.md` §4。栅格类 PopulationGrid/GDPGrid 见 raster_types.py。
@@ -176,15 +180,15 @@ class TableDataset:
 
 表格子类分**输入型**（现状调查）与**输出型**（汇交成果）：
 
-| 类型 | 角色 | 示例字段 | 汇交归属 |
-|---|---|---|---|
-| `PopulationTable` | 输入 | 年龄结构/户数/劳动力/迁出率 | - |
-| `IndustryTable` | 输入 | 产业类型/产值/就业/用地需求 | - |
-| `FacilityInventory` | 输入 | 设施名/类型/规模/服务人口 | - |
-| `ConstructionProjectTable` | 输出 | 项目名/位置/规模/投资/时序 | 一表 (近期建设项目表) |
-| `ControlRuleTable` | 输出 | 分区/管制要求/引用条款 | 一规则 (管制规则) |
-| `PlanningIndicatorTable` | 输出 | 指标名/现状值/目标值/属性 | 附表1 (规划指标表) |
-| `LandUseStructureTable` | 输出 | 地类/现状面积/规划面积/增减 | 附表 (用地结构表) |
+| 类型                         | 角色 | 示例字段                    | 汇交归属              |
+| ---------------------------- | ---- | --------------------------- | --------------------- |
+| `PopulationTable`          | 输入 | 年龄结构/户数/劳动力/迁出率 | -                     |
+| `IndustryTable`            | 输入 | 产业类型/产值/就业/用地需求 | -                     |
+| `FacilityInventory`        | 输入 | 设施名/类型/规模/服务人口   | -                     |
+| `ConstructionProjectTable` | 输出 | 项目名/位置/规模/投资/时序  | 一表 (近期建设项目表) |
+| `ControlRuleTable`         | 输出 | 分区/管制要求/引用条款      | 一规则 (管制规则)     |
+| `PlanningIndicatorTable`   | 输出 | 指标名/现状值/目标值/属性   | 附表1 (规划指标表)    |
+| `LandUseStructureTable`    | 输出 | 地类/现状面积/规划面积/增减 | 附表 (用地结构表)     |
 
 ### 2.4 文档分支 [v4.1 新增]
 
@@ -210,38 +214,79 @@ Document
 
 旧版 `GISDataBundle` 隐含"一村一包"假设（`village_name` 写死、boundary 是单村边界），无法表达多自然村、跨村对比、跨村图层、共享栅格。v4.1 上移为项目/会话级数据视图，村庄下沉为子视图。
 
-### 3.1 VillageBundle（村庄级，原 GISDataBundle 的村庄部分）
+### 3.1 VillageBundle（村庄级，形态优先统一容器）[v4.3]
+
+废弃旧的 `GISDataBundle`（按文件来源分桶的扁平 Pydantic 模型），统一为形态优先的 `VillageBundle`：
 
 ```python
+@dataclass
 class VillageBundle:
-    """单个村庄的空间数据束 -- ProjectDataView 的村庄子视图."""
+    """单个村庄的空间数据束 — 形态优先组织.
+
+    [v4.3] 取代 GISDataBundle + 旧 VillageBundle.
+    下游通过 morphology groups 访问数据，不依赖文件来源.
+    """
     village_name: str
-    boundary: Optional[GeoFeature] = None
 
-    # 现状/规划分离 (不混装, 不保留兼容视图)
-    current_landuse: List[CurrentLandUseParcel] = []
-    planned_landuse: List[PlannedLandUseParcel] = []
+    # 四形态视图（一等公民）
+    points: PointLayerGroup       # 设施/建筑/注记/高程点/灾害点/推断点
+    lines: LineLayerGroup         # 道路/等高线/行政界线/推断线
+    polygons: PolygonLayerGroup   # 地块/保护/管控/水系/自然资源/推断面
+    rasters: RasterLayerGroup     # DEM/DOM/坡度/坡向/适宜性
 
-    # 按 L1 几何基类组织
-    roads: List[LineFeature] = []
-    annotations: List[PointFeature] = []
-    water_lines: List[WaterLine] = []
-    water_areas: List[WaterArea] = []
-    buildings: List[CurrentBuilding] = []
-    protection_zones: List[ControlLine] = []
-    admin_areas: List[AdminArea] = []
+    # 表格与文档
+    tables: TableLayerGroup       # 人口/产业/管制规则/规划指标
+    documents: DocumentGroup      # 规划文本/L3 报告
 
-    extra_layers: Dict[str, List[SpatialFeature]] = {}   # 推断的动态矢量图层
-    metadata: VillageMetadata = VillageMetadata()
+    metadata: VillageMetadata
+    standard_version: str = "4.3"
 
-    def parcels_by_phase(self, phase: Literal["current", "planned"]) -> List[BaseLandUseParcel]:
-        """按阶段取地块. 下游面积统计/MIP分配/邻接计算必须显式选阶段."""
-        return self.current_landuse if phase == "current" else self.planned_landuse
+    # 便捷属性（从形态 Group 推导）
+    boundary: PolygonFeature      # 从 admin_areas 或 planning_scope 推导
+    all_features: List[SpatialFeature]  # 跨形态聚合（不含注记）
+    parcel_count: int
+    total_area_ha: float
+
+    def to_geojson_dict() -> dict  # 过渡期兼容 spatial_ops
 ```
 
-**关键约束**：
-- **不保留 `landuse` 聚合视图**。旧下游所有 `bundle.landuse` 访问必须改为 `village.current_landuse` / `village.planned_landuse` / `village.parcels_by_phase()`。破坏性变更，不设过渡期。
-- 现状/规划分离对标国标 209001(基期现状)/209002(目标年规划) 顶层划分（见 Exa 调研）。
+**形态 Group 类结构**（以 PolygonLayerGroup 为例）：
+
+```python
+@dataclass
+class PolygonLayerGroup:
+    # 地类图斑
+    landuse_current: List[CurrentLandUseParcel]
+    landuse_planned: List[PlannedLandUseParcel]
+
+    # 保护与控制（9 种约束面）
+    farmland_protection / ecological_redline / historical_protection /
+    cultivated_land_target / urban_dev_boundary / village_dev_boundary /
+    hazard_control_lines / flood_control_lines / construction_zone
+
+    # 区划与管控（5 种）
+    admin_areas / planning_scope / land_use_zones /
+    construction_ctrl_zones / three_zones
+
+    # 自然要素（6 种）
+    water_bodies / soil_types / soil_erosions /
+    watersheds / nature_reserves / hydrogeology_zones
+
+    # 推断图层（动态模型，PolygonFeature 子类但语义未知）
+    inferred: List[PolygonFeature]
+
+    # 聚合视图
+    constraint_polygons  # 所有不可占用的约束面
+    all_features          # 所有面要素
+    parcels               # 所有地类图斑
+```
+
+**关键变更**：
+
+- **废弃 `GISDataBundle`/`GeoFeature`/`ProviderLandParcel`/`GISMetadata`**。旧代码全部迁移到形态视图。
+- **推断图层自动归入形态 Group**：`points.inferred` / `lines.inferred` / `polygons.inferred`。即使语义未知，下游仍可通过 `isinstance` 获得基础几何能力。
+- **`boundary` 从 polygons 推导**（`admin_areas[0]` 或 `planning_scope[0]`），不再独立存储。
+- **注记放在 `points.annotations_*`**（形态上属于点），但 `points.all_features` 排除注记（语义上非空间实体）。
 
 ### 3.2 ProjectDataView（项目级数据视图）
 
@@ -283,105 +328,115 @@ class ProjectDataView:
 ```
 schema/
 ├── types/
-│   ├── base.py              # SpatialFeature + Point/Line/PolygonFeature + RasterDataset
-│   ├── spatial_types.py     # Group A~F 矢量语义子类 (含阶段抽象 Base* + 实体/表达分离)
-│   ├── raster_types.py      # DEMInput, DOMInput, SlopeRaster, AspectRaster, SuitabilityRaster, TerrainAnalysisResult
-│   ├── table_types.py       # [v4.1] TableDataset + PopulationTable/ControlRuleTable/... (输入型+输出型)
-│   ├── document_types.py    # [v4.1] Document + PlanningText + L3Report
-│   ├── canonical.py         # BBox, CRS, GeoFeature, VillageBundle, ProjectDataView, metadata
-│   ├── layer_registry.py    # LAYER_TYPE_REGISTRY (geometry_kind 含 table/document)
+│   ├── base.py              # ✅ SpatialFeature + PointFeature/LineFeature/PolygonFeature + RasterDataset
+│   ├── spatial_types.py     # ✅ Group A~F 矢量语义子类 (含阶段抽象 Base* + 实体/表达分离)
+│   ├── raster_types.py      # ✅ DEMInput, DOMInput, SlopeRaster, AspectRaster, SuitabilityRaster, TerrainAnalysisResult
+│   ├── table_types.py       # ✅ [v4.1] TableDataset + 7 子类 (输入型+输出型)
+│   ├── document_types.py    # ✅ [v4.1] Document + PlanningText + L3Report
+│   ├── canonical.py         # ✅ BBox, CRS, VillageBundle (v4.3 形态优先), PointLayerGroup, LineLayerGroup, PolygonLayerGroup, RasterLayerGroup, TableLayerGroup, DocumentGroup, VillageMetadata, ProjectDataView
+│   ├── layer_registry.py    # ✅ LAYER_TYPE_REGISTRY (42 条目, geometry_kind 覆盖四形态)
 │   └── __init__.py
-├── encodings/               # 编码体系 (不变)
-├── contracts/               # 跨层契约 (不变)
+├── encodings/               # ✅ 编码体系 (6套 YAML + DictionaryCenter)
+├── contracts/               # ✅ 跨层契约 (parse/execution/validation/layout/context)
 ├── output/
-│   ├── gdb.py               # 矢量汇交 (GDB 12层)
-│   ├── tables.py            # [v4.1] 表格汇交导出 (近期项目表/管制规则/指标表/用地结构表)
-│   └── colors.py
+│   ├── gdb.py               # ✅ 矢量汇交 (GDB 12层)
+│   ├── tables.py            # ✅ [v4.1] 表格汇交导出 (4 函数)
+│   └── colors.py            # ✅ 8 套调色板
 └── utils/
-    └── metrics.py
+    └── metrics.py           # ✅ 用地指标计算
 ```
 
 ---
 
-## 五、`layer_registry`：geometry_kind 覆盖四形态
+## 五、`layer_registry`：YAML + Python 混合模式 [v4.2b]
 
-```python
-class LayerTypeEntry(BaseModel):
-    layer_type: str
-    model_class_name: str = ""
-    geometry_kind: str = ""          # "point"|"line"|"polygon"|"raster"|"table"|"document"|"annotation"
-    ingest_port: Optional[str] = None
-    ingest_arg: str = ""
-    default_gdb_path: str = ""
-    is_reference_layer: bool = False # [v4.1] 三区三线等引用层 (中央审批成果, 村庄级不重建)
-    description: str = ""
+### 5.1 设计理念
+
+图层注册表采用**关注点分离**的混合架构：
+
+| 维度     | YAML (`layer_registry.yaml`)                                                | Python (`layer_registry.py`)                                    |
+| -------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| 管什么   | **声明性元数据**：geometry_kind, is_reference_layer, description, group | **类型绑定**：model_class → class, ingest_port → function |
+| 谁维护   | 运营/配置人员可编辑，不懂 Python 也可以                                       | 开发者维护，重构时 IDE 全程检查                                   |
+| 变更频率 | 中（新增图层类型、调整描述）                                                  | 低（新增 Schema 类或 Ingest 函数时）                              |
+| 运行时   | 应用启动时加载，不重启可热更新                                                | import 时绑定，改代码需重启                                       |
+
+```yaml
+# layer_registry.yaml — 声明性元数据
+layer_types:
+  farmland_protection:
+    geometry_kind: polygon
+    is_reference_layer: true
+    description: "Farmland protection zone (永久基本农田保护红线)"
+    group: protection
 ```
 
-注册示例：
-
 ```python
-# 矢量
-register_layer_type("landuse_current", model_class_name="CurrentLandUseParcel",
-                    geometry_kind="polygon", ...)
-# 栅格
-register_layer_type("dem", model_class_name="DEMInput",
-                    geometry_kind="raster", ingest_port="result_to_raster", ...)
-# 表格
-register_layer_type("population", model_class_name="PopulationTable",
-                    geometry_kind="table", ingest_port="result_to_table", ...)
-register_layer_type("construction_projects", model_class_name="ConstructionProjectTable",
-                    geometry_kind="table", ingest_port="result_to_table", ...)
-# 引用层 (三区三线, 中央审批成果)
-register_layer_type("farmland_protection", model_class_name="FarmlandProtection",
-                    geometry_kind="polygon", is_reference_layer=True, ...)
-register_layer_type("ecological_protection", model_class_name="EcologicalRedline",
-                    geometry_kind="polygon", is_reference_layer=True, ...)
-register_layer_type("three_zone", model_class_name="ThreeZoneItem",
-                    geometry_kind="polygon", is_reference_layer=True, ...)  # [v4.2] 三区(生态/农业/建设空间)
-# Annotation 层 [v4.2] (表达要素, 不入 KG, 不参与空间分析)
-register_layer_type("annotation", model_class_name="CurrentAnnotation",
-                    geometry_kind="annotation", ...)
-register_layer_type("annotation_planned", model_class_name="PlannedAnnotation",
-                    geometry_kind="annotation", ...)
-# Group F 自然资源 [v4.2] (对齐 01_DATA_ACQUISITION_PLAN §4.1)
-register_layer_type("soil_type", model_class_name="SoilType",
-                    geometry_kind="polygon", ...)
-register_layer_type("soil_erosion", model_class_name="SoilErosion",
-                    geometry_kind="polygon", ...)
-register_layer_type("watershed", model_class_name="Watershed",
-                    geometry_kind="polygon", ...)
-register_layer_type("nature_reserve", model_class_name="NatureReserve",
-                    geometry_kind="polygon", ...)
-register_layer_type("hydrogeology_zone", model_class_name="HydrogeologyZone",
-                    geometry_kind="polygon", ...)
+# layer_registry.py — Python 类型绑定
+_TYPE_BINDINGS = {
+    "farmland_protection": ("FarmlandProtection", "result_to_features", "farmland_protection"),
+}
 ```
 
-> **引用层标注**：三区三线（永久基本农田/生态红线/城镇边界）是中央审批成果的引用层，村庄规划不重新创建（Exa 调研印证）。`is_reference_layer=True` 让下游知道这些图层是只读引用。
+**工厂函数** `build_registry_from_yaml()` 合并两者：
+
+```
+YAML metadata  ──┐
+                 ├──► register_layer_type() ──► LAYER_TYPE_REGISTRY (42 entries)
+Python bindings ─┘
+```
+
+YAML 中所有 layer_type 都会注册（即使没有 Python 绑定），保证 `DataCatalog` 能发现所有已知图层。无绑定的图层走推断管道（未来 `ingest_inference.py`）。
+
+### 5.2 添加新图层类型
+
+**标准图层（有 Schema 类 + Ingest 函数）**：
+
+1. `layer_registry.yaml` 加条目（geometry_kind, group, description）
+2. `layer_registry.py` `_TYPE_BINDINGS` 加一行（model_class, port, arg）
+3. 自动注册到 `LAYER_TYPE_REGISTRY`
+
+**临时/推断图层（无专用 Schema 类）**：
+
+1. `layer_registry.yaml` 加条目即可
+2. 系统自动识别为推断图层，`ingest_port=None`
+
+### 5.3 当前注册表统计
+
+- **42 个 layer_type** 已注册（含矢量/栅格/表格/文档/注记）
+- **28 个** 有 Python 类型绑定 + ingest 端口
+- **5 个引用层**（三区三线，`is_reference_layer=True`）
+- **5 个 Group F 自然资源**（无 ingest 端口，无数据源配置）
+
+> **引用层标注**：三区三线（永久基本农田/生态红线/城镇边界）是中央审批成果的引用层，村庄规划不重新创建。`is_reference_layer=True` 让下游知道这些图层是只读引用。
 
 ---
 
 ## 六、契约文件职责
 
-| 文件 | 角色 | 生产者 | 消费者 |
-|---|---|---|---|
-| `parse_contracts.py` | PARSE 输出契约 | PARSE Agent | KG, EXECUTE |
-| `execution_contracts.py` | EXECUTE 输入契约 | ConstraintCompiler | MIP solver, EXECUTE |
-| `validation_contracts.py` | 验证闭环契约 | Evaluator | Worker-Evaluator loop |
-| `layout_contracts.py` | LAYOUT 工具契约 (遗留) | LAYOUT tools | ZoneGenerator, etc. |
+| 文件                        | 角色                | 生产者             | 消费者                |
+| --------------------------- | ------------------- | ------------------ | --------------------- |
+| `parse_contracts.py`      | PARSE 输出契约      | PARSE Agent        | KG, EXECUTE           |
+| `execution_contracts.py`  | EXECUTE 输入契约    | ConstraintCompiler | MIP solver, EXECUTE   |
+| `validation_contracts.py` | 验证闭环契约        | Evaluator          | Worker-Evaluator loop |
+| `layout_contracts.py`     | LAYOUT 工具契约     | LAYOUT tools       | ZoneGenerator, etc.   |
+| `context_contracts.py`    | [v4.3] 空间认知契约 | spatial_ops        | PARSE, LAYOUT, KG     |
 
-关键契约类型不变（`SpatialPlanningIntent`/`ZoneTarget`/`SpatialOperation`/`SpatialConstraint`/`MIPModel`/`ExecutionPlan`/`ValidationCheckItem` 等）。v4.1 仅扩展数据视图类型（`VillageBundle`/`ProjectDataView`/`TableDataset`），契约层不受影响。
+[v4.3] `context_contracts.py` 定义 `ContextBlockType` / `ContextBlock` + 7 种子类型（`LanduseEntry`/`NaturalVillageAnchor`/`SpatialRelation`/`ConstraintSummary`/`FacilityAnchor`/`TerrainProfile`），从 `layout_contracts.py` 迁出以反映空间认知契约的多消费者性质。`SpatialContext` Pydantic 单体模型已永久删除，由 `List[ContextBlock]` 模块化 dataclass 架构替代。
+
+关键契约类型不变（`SpatialPlanningIntent`/`ZoneTarget`/`SpatialOperation`/`SpatialConstraint`/`MIPModel`/`ExecutionPlan`/`ValidationCheckItem` 等）。
 
 ---
 
 ## 七、依赖规则
 
-| ✅ 允许 | ❌ 禁止 |
-|---|---|
-| 标准库 (typing, dataclasses, functools, ...) | `app.tools` |
-| `pydantic` | `app.agent` |
-| `yaml` | `app.modules.kg` |
-| 内部跨子包引用 (utils->encodings) | `app.modules.data` |
-| | `geopandas`, `shapely` |
+| ✅ 允许                                      | ❌ 禁止                    |
+| -------------------------------------------- | -------------------------- |
+| 标准库 (typing, dataclasses, functools, ...) | `app.tools`              |
+| `pydantic`                                 | `app.agent`              |
+| `yaml`                                     | `app.modules.kg`         |
+| 内部跨子包引用 (utils->encodings)            | `app.modules.data`       |
+|                                              | `geopandas`, `shapely` |
 
 > **`gis/` 目录已整体删除**。所有引用统一走 `app.modules.schema`，无 shim，无兼容层。
 
@@ -390,11 +445,12 @@ register_layer_type("hydrogeology_zone", model_class_name="HydrogeologyZone",
 ## 八、设计原则
 
 1. **四形态结构优先**：矢量(Point/Line/Polygon) + 栅格(RasterDataset) + 表格(TableDataset) + 文档(Document) 四形态先于语义子类，类型层面约束形态，支撑 Data 层按形态分桶。
-2. **阶段抽象 + 实体/表达分离** [v4.2]：现状/规划两态的要素都有 Base 基类（BaseLandUseParcel/BaseRoad/BaseFacility/BaseAnnotation）共享字段；设施是空间实体（入 KG、参与分析），注记是表达要素（AnnotationFeature，不入 KG、不参与空间分析，仅渲染），二者不再平级。
-2. **项目级数据视图**：`ProjectDataView -> VillageBundle` 两层，取代"一村一包"，对齐"打开一个项目"的规划工作流；跨村图层、共享栅格、表格、文档在项目级聚合。
-3. **现状/规划彻底分离**：`VillageBundle` 不混装现状与规划地块，不保留聚合兼容视图，对标国标 209001/209002 划分。
-4. **图层身份嵌入要素**：`SpatialFeature.layer_type` 把图层归属嵌入要素本身，不靠外部 registry 反查（对标 pynspd layer_meta）。
-5. **图层树可发现**：`ProjectDataView.layer_tree` 列出所有图层元数据，让分析工具发现图层而非硬编码（对标 QGIS/GeoServer）。
-6. **栅格/表格一等公民**：DEM/DOM/坡度、人口/管制规则表等有独立类型层级与数据视图字段。
-7. **Schema-First + 零依赖 + 契约分离**：先定义类型再编码，下游只消费类型化模型；Schema 不依赖任何其他层；PARSE/EXECUTE/Validation 契约分文件。
-8. **破坏性变更不兼容**：类型层级重排、bundle 上移、四形态扩展都是破坏性的，旧下游必须同步改造，不设过渡期。
+2. **形态优先容器** [v4.3]：`VillageBundle` 按形态 Group 组织（points/lines/polygons/rasters），废弃按文件来源分桶的扁平 `GISDataBundle`。`_assign_to_bundle` 基于 `isinstance` 类型分发，33 个具体子类各有归宿，推断图层通过基类兜底自动归入正确形态 Group。
+3. **阶段抽象 + 实体/表达分离** [v4.2]：现状/规划两态的要素都有 Base 基类（BaseLandUseParcel/BaseRoad/BaseFacility/BaseAnnotation）共享字段；设施是空间实体（入 KG、参与分析），注记是表达要素（AnnotationFeature，不入 KG、不参与空间分析，仅渲染），二者不再平级。
+4. **项目级数据视图**：`ProjectDataView -> VillageBundle` 两层，取代"一村一包"，对齐"打开一个项目"的规划工作流；跨村图层、共享栅格、表格、文档在项目级聚合。
+5. **现状/规划彻底分离**：`VillageBundle` 不混装现状与规划地块，不保留聚合兼容视图，对标国标 209001/209002 划分。
+6. **图层身份嵌入要素**：`SpatialFeature.layer_type` 把图层归属嵌入要素本身，不靠外部 registry 反查（对标 pynspd layer_meta）。
+7. **图层树可发现**：`ProjectDataView.layer_tree` 列出所有图层元数据，让分析工具发现图层而非硬编码（对标 QGIS/GeoServer）。
+8. **栅格/表格一等公民**：DEM/DOM/坡度、人口/管制规则表等有独立类型层级与数据视图字段。
+9. **Schema-First + 零依赖 + 契约分离**：先定义类型再编码，下游只消费类型化模型；Schema 不依赖任何其他层；PARSE/EXECUTE/Validation 契约分文件。
+10. **破坏性变更不兼容**：类型层级重排、bundle 上移、四形态扩展都是破坏性的，旧下游必须同步改造，不设过渡期。

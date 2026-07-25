@@ -70,19 +70,19 @@ MAX_PARSE_ROUNDS = 2
 # Global Gazetteer instance
 _gazetteer: Any = None
 
-# Global SpatialContext for annotation-based Tier 0 place resolution.
+# Global ContextBlock list for annotation-based Tier 0 place resolution.
 # Set by run_parse_pipeline / _parse_intent_node before PARSE graph runs.
-_current_spatial_context: Any = None
+_current_context_blocks: List[Any] = []
 
 
-def set_spatial_context(ctx: Any) -> None:
-    """Store the active SpatialContext so resolve_place can use Tier 0 matching.
+def set_context_blocks(blocks: List[Any]) -> None:
+    """Store the active ContextBlock list so resolve_place can use Tier 0 matching.
 
     Tier 0 uses annotation-derived village/facility anchors (precise coordinates)
     before falling back to the gazetteer's fuzzy/Tianditu matching.
     """
-    global _current_spatial_context
-    _current_spatial_context = ctx
+    global _current_context_blocks
+    _current_context_blocks = blocks or []
 
 
 def _log_llm_call(node: str, phase: str, system_msg: str, user_msg: str,
@@ -186,50 +186,48 @@ async def _execute_tool_call(tool_name: str, tool_args: dict) -> str:
         if not place_name:
             return _json.dumps({"error": "missing place_name"})
 
-        # Tier 0: annotation village anchors (precise coordinates from GIS)
-        if _current_spatial_context is not None:
-            # Check annotation_villages first (most precise)
-            for ann_v in getattr(_current_spatial_context, "annotation_villages", []):
-                ann_name = getattr(ann_v, "name", "")
-                if ann_name and (place_name in ann_name or ann_name in place_name):
-                    return _json.dumps({
-                        "name": ann_name,
-                        "center": list(getattr(ann_v, "center", (0, 0))),
-                        "parcel_ids": getattr(ann_v, "parcel_ids", []),
-                        "confidence": 0.95,
-                        "method": "annotation_village_exact",
-                    }, ensure_ascii=False)
-            # Check natural_villages (may have been merged with annotation names)
-            for nv in getattr(_current_spatial_context, "natural_villages", []):
-                nv_name = getattr(nv, "name", "")
-                if nv_name and (place_name in nv_name or nv_name in place_name):
-                    return _json.dumps({
-                        "name": nv_name,
-                        "center": list(getattr(nv, "center", (0, 0))),
-                        "parcel_ids": getattr(nv, "parcel_ids", []),
-                        "confidence": 0.9,
-                        "method": "natural_village_match",
-                    }, ensure_ascii=False)
-            # Check facility_anchors (e.g. "村委会", "小学")
-            for fa in getattr(_current_spatial_context, "facility_anchors", []):
-                fa_name = getattr(fa, "name", "")
-                fa_type = getattr(fa, "facility_type", "")
-                if fa_name and (place_name in fa_name or fa_name in place_name):
-                    return _json.dumps({
-                        "name": fa_name,
-                        "center": list(getattr(fa, "center", (0, 0))),
-                        "facility_type": fa_type,
-                        "confidence": 0.9,
-                        "method": "facility_anchor_exact",
-                    }, ensure_ascii=False)
-                if fa_type and place_name in fa_type:
-                    return _json.dumps({
-                        "name": fa_name,
-                        "center": list(getattr(fa, "center", (0, 0))),
-                        "facility_type": fa_type,
-                        "confidence": 0.85,
-                        "method": "facility_type_match",
-                    }, ensure_ascii=False)
+        # Tier 0: ContextBlock-based place resolution (precise coordinates from GIS)
+        if _current_context_blocks:
+            from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT
+
+            # Check natural villages block (includes annotation-merged village names)
+            for block in _current_context_blocks:
+                if getattr(block, "block_type", None) != CBT.NATURAL_VILLAGES:
+                    continue
+                for v in block.data.get("villages", []):
+                    v_name = v.get("name", "")
+                    if v_name and (place_name in v_name or v_name in place_name):
+                        return _json.dumps({
+                            "name": v_name,
+                            "center": v.get("center", [0, 0]),
+                            "parcel_ids": v.get("parcel_ids", []),
+                            "confidence": 0.9,
+                            "method": "natural_village_match",
+                        }, ensure_ascii=False)
+
+            # Check facility anchors (e.g. "村委会", "小学")
+            for block in _current_context_blocks:
+                if getattr(block, "block_type", None) != CBT.FACILITIES:
+                    continue
+                for fa in block.data.get("anchors", []):
+                    fa_name = fa.get("name", "")
+                    fa_type = fa.get("facility_type", "")
+                    if fa_name and (place_name in fa_name or fa_name in place_name):
+                        return _json.dumps({
+                            "name": fa_name,
+                            "center": fa.get("center", [0, 0]),
+                            "facility_type": fa_type,
+                            "confidence": 0.9,
+                            "method": "facility_anchor_exact",
+                        }, ensure_ascii=False)
+                    if fa_type and place_name in fa_type:
+                        return _json.dumps({
+                            "name": fa_name,
+                            "center": fa.get("center", [0, 0]),
+                            "facility_type": fa_type,
+                            "confidence": 0.85,
+                            "method": "facility_type_match",
+                        }, ensure_ascii=False)
 
         # Tier 1: Gazetteer (Tianditu geocode + fuzzy match)
         global _gazetteer
@@ -1314,7 +1312,7 @@ async def validate_and_merge_node(state: ParseAgentState) -> dict:
 
     # ── LLM validation (thinking OFF — no reasoning needed) ──
     format_llm = _get_llm(enable_thinking=False)
-    spatial_ctx_text = format_spatial_context_for_prompt(state.spatial_context, detail_level="standard")
+    spatial_ctx_text = format_spatial_context_for_prompt(state.context_blocks, detail_level="standard")
 
     # No more [:3000] truncation — format phase already produced compact JSON
     operations_json = json.dumps(

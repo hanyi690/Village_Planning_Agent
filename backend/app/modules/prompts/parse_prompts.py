@@ -19,109 +19,129 @@ from typing import Literal
 
 
 def format_spatial_context_for_prompt(
-    ctx,
+    context_blocks,
     detail_level: Literal["minimal", "standard", "full"] = "standard",
 ) -> str:
-    """Format SpatialContext as compact text for LLM injection.
+    """Format ContextBlock list as compact text for LLM injection.
 
     This is the "spatial working memory" that lets PARSE understand
     spatial references like "east of Liu village group".
 
     detail_level controls how much information to include:
-    - "minimal": Base stats + natural village names (~500 chars, for classify)
+    - "minimal": Village meta + natural village names (~500 chars, for classify)
     - "standard": + landuse distribution + protection zones (~4000 chars, for extract)
     - "full": + spatial relations + zone adjacency (~12000 chars, for validate)
-
-    Without detail_level, the full 12637-char output overwhelmed the LLM context
-    and caused max_tokens truncation in thinking mode.
     """
-    lines = []
+    from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT
 
-    # Base stats (always included)
-    lines.append(f"地块总数: {ctx.parcel_count}")
-    lines.append(f"总面积: {ctx.total_area_ha:.1f} 公顷")
-    lines.append(f"建设边界面积: {ctx.construction_boundary_ha:.1f} 公顷")
+    lines: list = []
 
-    # Village center (always included)
-    if ctx.village_center:
-        lines.append(f"村中心坐标: ({ctx.village_center[0]:.4f}, {ctx.village_center[1]:.4f})")
+    # Index blocks by type
+    blocks_by_type: dict = {}
+    for b in (context_blocks or []):
+        bt = getattr(b, "block_type", None)
+        if bt:
+            blocks_by_type[bt] = b
 
-    # Natural village anchors (always included — key for spatial grounding)
-    if ctx.natural_villages:
-        lines.append("\n自然村落:")
-        for v in ctx.natural_villages:
-            if detail_level == "minimal":
-                # Minimal: just name and dominant land use
-                lines.append(f"  - {v.name}: 主地类={v.dominant_landuse}")
-            else:
-                # Standard/Full: include adjacency info
-                adj = f", 邻接 {', '.join(v.adjacent_to)}" if v.adjacent_to else ""
-                lines.append(
-                    f"  - {v.name}: 主地类={v.dominant_landuse}, "
-                    f"地块数={len(v.parcel_ids)}{adj}"
-                )
+    # Village meta (always included)
+    meta = blocks_by_type.get(CBT.VILLAGE_META)
+    if meta:
+        d = meta.data
+        lines.append(f"地块总数: {d.get('parcel_count', 0)}")
+        lines.append(f"总面积: {d.get('total_area_ha', 0):.1f} 公顷")
+        lines.append(f"建设边界面积: {d.get('construction_boundary_ha', 0):.1f} 公顷")
+        center = d.get("center")
+        if center:
+            lines.append(f"村中心坐标: ({center[0]:.4f}, {center[1]:.4f})")
 
-    # Land-use distribution (standard + full only)
-    if detail_level in ("standard", "full") and ctx.landuse_distribution:
-        lines.append("\n地类分布:")
-        for lu in ctx.landuse_distribution:
-            lines.append(
-                f"  - {lu.name} ({lu.dlbm}): {lu.count}个地块, "
-                f"{lu.area_ha:.1f}公顷, 分区={lu.planning_zone}"
-            )
+    # Natural village anchors (always included)
+    nv_block = blocks_by_type.get(CBT.NATURAL_VILLAGES)
+    if nv_block:
+        villages = nv_block.data.get("villages", [])
+        if villages:
+            lines.append("\n自然村落:")
+            for v in villages:
+                if detail_level == "minimal":
+                    lines.append(f"  - {v['name']}: 主地类={v.get('dominant_landuse', '')}")
+                else:
+                    adj = v.get("adjacent_to", [])
+                    adj_str = f", 邻接 {', '.join(adj)}" if adj else ""
+                    lines.append(
+                        f"  - {v['name']}: 主地类={v.get('dominant_landuse', '')}, "
+                        f"地块数={v.get('parcel_count', 0)}{adj_str}"
+                    )
 
-    # Spatial relations (full only — 225 relations = ~6KB)
-    if detail_level == "full" and ctx.spatial_relations:
-        lines.append("\n空间关系:")
-        for r in ctx.spatial_relations:
-            rel_cn = {
-                "east_of": "东邻", "west_of": "西邻",
-                "north_of": "北邻", "south_of": "南邻",
-                "adjacent_to": "邻接", "contains": "包含",
-                "contained_by": "被包含", "near": "靠近",
-                "along": "沿", "between": "介于",
-            }.get(r.relation, r.relation)
-            lines.append(f"  - {r.subject} {rel_cn} {r.object} (置信度={r.confidence:.1f})")
-
-    # Constraint summary (standard + full only)
-    if detail_level in ("standard", "full") and ctx.constraint_summary:
-        lines.append("\n保护区域:")
-        for c in ctx.constraint_summary:
-            overlaps = f", 与 {', '.join(c.overlaps_with)} 重叠" if c.overlaps_with else ""
-            lines.append(
-                f"  - {c.zone_type}: 规则={c.rule}, "
-                f"面积={c.area_ha:.1f}公顷{overlaps}"
-            )
-
-    # Facility anchors (standard + full — precise GIS coordinates)
+    # Land-use distribution (standard + full)
     if detail_level in ("standard", "full"):
-        facility_anchors = getattr(ctx, "facility_anchors", None)
-        if facility_anchors:
-            lines.append("\n现状设施点（注记坐标）:")
-            for fa in facility_anchors:
-                fa_name = getattr(fa, "name", "")
-                fa_type = getattr(fa, "facility_type", "")
-                fa_center = getattr(fa, "center", None)
-                coord_str = f" ({fa_center[0]:.4f}, {fa_center[1]:.4f})" if fa_center else ""
-                lines.append(f"  - {fa_name}: 类型={fa_type}{coord_str}")
+        lu_block = blocks_by_type.get(CBT.LANDUSE_DIST)
+        if lu_block:
+            entries = lu_block.data.get("entries", [])
+            if entries:
+                lines.append("\n地类分布:")
+                for e in entries:
+                    lines.append(
+                        f"  - {e.get('name', '')} ({e.get('dlbm', '')}): "
+                        f"{e.get('count', 0)}个地块, {e.get('area_ha', 0):.1f}公顷, "
+                        f"分区={e.get('zone_type', '')}"
+                    )
+
+    # Constraint summary (standard + full)
+    if detail_level in ("standard", "full"):
+        c_block = blocks_by_type.get(CBT.CONSTRAINTS)
+        if c_block:
+            zones = c_block.data.get("zones", [])
+            if zones:
+                lines.append("\n保护区域:")
+                for z in zones:
+                    lines.append(
+                        f"  - {z.get('type', '')}: 规则={z.get('rule', '')}, "
+                        f"面积={z.get('area_ha', 0):.1f}公顷"
+                    )
+
+    # Facility anchors (standard + full)
+    if detail_level in ("standard", "full"):
+        f_block = blocks_by_type.get(CBT.FACILITIES)
+        if f_block:
+            anchors = f_block.data.get("anchors", [])
+            if anchors:
+                lines.append("\n现状设施点（注记坐标）:")
+                for fa in anchors:
+                    c = fa.get("center", [0, 0])
+                    lines.append(
+                        f"  - {fa.get('name', '')}: 类型={fa.get('facility_type', '')}"
+                        f" ({c[0]:.4f}, {c[1]:.4f})"
+                    )
+
+    # Spatial relations (full only)
+    if detail_level == "full":
+        sr_block = blocks_by_type.get(CBT.SPATIAL_RELATIONS)
+        if sr_block:
+            relations = sr_block.data.get("relations", [])
+            if relations:
+                lines.append("\n空间关系:")
+                rel_cn = {
+                    "east_of": "东邻", "west_of": "西邻",
+                    "north_of": "北邻", "south_of": "南邻",
+                    "adjacent_to": "邻接", "contains": "包含",
+                    "contained_by": "被包含", "near": "靠近",
+                    "along": "沿", "between": "介于",
+                }
+                for r in relations:
+                    cn = rel_cn.get(r.get("relation", ""), r.get("relation", ""))
+                    lines.append(
+                        f"  - {r.get('subject', '')} {cn} {r.get('object', '')}"
+                        f" (置信度={r.get('confidence', 0):.1f})"
+                    )
 
     # Zone adjacency (full only)
-    if detail_level == "full" and ctx.zone_adjacency:
-        lines.append("\n分区邻接:")
-        for zone, neighbors in ctx.zone_adjacency.items():
-            lines.append(f"  - {zone}: 邻接 {', '.join(neighbors)}")
-
-    # Terrain profile (full only — P2 reserved, no-op when not available)
     if detail_level == "full":
-        terrain = getattr(ctx, "terrain_profile", None)
-        if terrain:
-            lines.append("\n地形剖面（DEM分析）:")
-            slope = getattr(terrain, "slope_area_pct", {}) or {}
-            for cls_label, pct in slope.items():
-                lines.append(f"  - 坡度{cls_label}: {pct:.1f}%")
-            suitability = getattr(terrain, "suitability_area_pct", {}) or {}
-            for cls_label, pct in suitability.items():
-                lines.append(f"  - 建设适宜性{cls_label}: {pct:.1f}%")
+        za_block = blocks_by_type.get(CBT.ZONE_ADJACENCY)
+        if za_block:
+            adj = za_block.data.get("adjacency", {})
+            if adj:
+                lines.append("\n分区邻接:")
+                for zone, neighbors in adj.items():
+                    lines.append(f"  - {zone}: 邻接 {', '.join(neighbors)}")
 
     return "\n".join(lines)
 

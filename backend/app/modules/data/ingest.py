@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -359,14 +360,27 @@ def ingest_planned_landuse(filepath: str) -> Tuple[List[PlannedLandUseParcel], L
     return parcels, warnings  # type: ignore[return-value]
 
 
+@dataclass
+class _ProviderParcel:
+    """Minimal provider parcel — replaces deleted ProviderLandParcel."""
+    geometry: Dict[str, Any] = field(default_factory=dict)
+    properties: Dict[str, Any] = field(default_factory=dict)
+    dlbm: str = ""
+    area_ha: float = 0.0
+    area_sqm: float = 0.0
+    zone_type: str = ""
+    planning_zone: str = ""
+    primary_zone: str = ""
+
+
 def provider_to_parcel(
-    pp,  # ProviderLandParcel (from schema.canonical)
+    pp: _ProviderParcel,
     layer_type: str = "current_landuse",
 ) -> BaseLandUseParcel:
-    """将外部 API 地块 (ProviderLandParcel) 转换为管道类型。
+    """将外部 API 地块转换为管道类型。
 
-    ProviderLandParcel 是未校验的薄 GeoFeature 包装（天地图/OSM/高德产出）。
-    此函数将其转换为 BaseLandUseParcel 并通过编码校验器标注 _system 标记，
+    接收 _ProviderParcel (替代已删除的 ProviderLandParcel/GeoFeature)，
+    转换为 BaseLandUseParcel 并通过编码校验器标注 _system 标记，
     确保外部 API 数据与 GeoJSON 输入走同一条入口校验路径。
 
     由于 Provider 数据没有图层上下文（无法区分现状/规划的 encoding 预设），
@@ -548,7 +562,7 @@ def ingest_raster(filepath: str, raster_type: str = "dem"):
         FileNotFoundError: 文件不存在
         ImportError: rasterio 未安装
     """
-    from app.modules.schema.types.raster_types import RasterInput, DEMInput, DOMInput
+    from app.modules.schema.types.raster_types import RasterDataset, DEMInput, DOMInput
 
     path = Path(filepath)
     if not path.exists():
@@ -557,13 +571,13 @@ def ingest_raster(filepath: str, raster_type: str = "dem"):
     try:
         import rasterio
     except ImportError:
-        logger.warning("[Ingest] rasterio not installed, returning minimal RasterInput")
+        logger.warning("[Ingest] rasterio not installed, returning minimal RasterDataset")
         if raster_type == "dem":
             return DEMInput(path=filepath)
         elif raster_type == "dom":
             return DOMInput(path=filepath)
         else:
-            return RasterInput(path=filepath)
+            return RasterDataset(path=filepath)
 
     with rasterio.open(filepath) as src:
         meta = dict(src.meta) if src.meta else {}
@@ -582,7 +596,7 @@ def ingest_raster(filepath: str, raster_type: str = "dem"):
             nodata=nodata, _meta=meta,
         )
     else:
-        return RasterInput(
+        return RasterDataset(
             path=filepath, crs=crs, resolution=resolution,
             nodata=nodata, _meta=meta,
         )
@@ -655,7 +669,7 @@ def result_to_features(
 
 
 def result_to_raster(result: DataResult, raster_type: str = "dem"):
-    """Convert a DataResult (raster path) to a typed RasterInput.
+    """Convert a DataResult (raster path) to a typed RasterDataset.
 
     Expects result.data to be a file path string (local_raster driver) or
     result.cache_path for cached downloads.

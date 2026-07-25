@@ -488,16 +488,20 @@ async def parse_planning_text(
         Dict with operation_sequence, constraint_set, planning_intent.
     """
     try:
-        from app.modules.spatial_ops import compute_spatial_context, compute_spatial_context_from_bundle
+        from app.modules.spatial_ops import compute_context_blocks
+        from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT
 
-        # Prefer bundle-based computation if gis_data contains a bundle hint
+        # Compute context blocks from GIS data
         gis_bundle = (gis_data or {}).pop("_gis_bundle", None)
         if gis_bundle is not None:
-            spatial_context = compute_spatial_context_from_bundle(
-                gis_bundle, raw_geojson=gis_data or None
-            )
+            context_blocks = compute_context_blocks(gis_bundle)
+        elif gis_data:
+            from app.modules.data.catalog.catalog import DataCatalog
+            catalog = DataCatalog()
+            bundle = catalog.load_village_bundle(village_name)
+            context_blocks = compute_context_blocks(bundle) if bundle else []
         else:
-            spatial_context = compute_spatial_context(gis_data or {})
+            context_blocks = []
 
         try:
             from app.modules.kg.manager import get_kg_manager
@@ -508,25 +512,36 @@ async def parse_planning_text(
         except Exception as kg_err:
             logger.warning("[parse_planning_text] KG build skipped: %s", kg_err)
 
+        # Extract natural village data from context blocks for Gazetteer
+        natural_villages = []
+        for block in context_blocks:
+            if getattr(block, "block_type", None) == CBT.NATURAL_VILLAGES:
+                natural_villages = [
+                    {"name": v["name"], "center": v.get("center", [0, 0])}
+                    for v in block.data.get("villages", [])
+                ]
+                break
+
         try:
             import app.agent.gis.parse.agent as pa
             from app.modules.parsing.gazetteer import PlaceNameResolver
-            gazetteer = PlaceNameResolver(spatial_context.natural_villages)
+            gazetteer = PlaceNameResolver(natural_villages)
             pa._gazetteer = gazetteer
             logger.info("[parse_planning_text] Gazetteer initialized with %d villages",
-                        len(spatial_context.natural_villages))
+                        len(natural_villages))
         except Exception as gz_err:
             logger.warning("[parse_planning_text] Gazetteer init skipped: %s", gz_err)
 
-        from app.agent.gis.parse.agent import build_parse_agent_graph
+        from app.agent.gis.parse.agent import build_parse_agent_graph, set_context_blocks
         from app.agent.gis.parse.state import ParseAgentState, SpatialPlanningIntent
 
+        set_context_blocks(context_blocks)
         graph = build_parse_agent_graph()
 
         input_state = ParseAgentState(
             planning_text=planning_text,
             village_name=village_name,
-            spatial_context=spatial_context,
+            context_blocks=context_blocks,
         )
 
         result = await graph.ainvoke(input_state.model_dump())

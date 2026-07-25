@@ -43,9 +43,9 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
       - planning_intent: SpatialPlanningIntent with zone targets
       - spatial_context: SpatialContext summary
     """
-    from app.agent.gis.parse.agent import build_parse_agent_graph
-    from app.agent.gis.parse.state import ParseAgentState, SpatialContext, SpatialPlanningIntent
-    from app.modules.spatial_ops import compute_spatial_context, compute_spatial_context_from_bundle
+    from app.agent.gis.parse.agent import build_parse_agent_graph, set_context_blocks
+    from app.agent.gis.parse.state import ParseAgentState, SpatialPlanningIntent
+    from app.modules.spatial_ops import compute_context_blocks
 
     reports = state.reports or {}
     village_name = state.village_name
@@ -71,20 +71,27 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         return {}
 
     try:
-        # Compute spatial context from GIS data (prefer bundle, fallback to raw dict)
+        # Compute spatial context blocks from GIS data
         if state.gis_bundle is not None:
-            spatial_context = compute_spatial_context_from_bundle(
-                state.gis_bundle, raw_geojson=state.gis_data or None
-            )
+            context_blocks = compute_context_blocks(state.gis_bundle)
+        elif gis_data:
+            # Fallback: load bundle from catalog if available
+            from app.modules.data.catalog.catalog import DataCatalog
+            catalog = DataCatalog()
+            bundle = catalog.load_village_bundle(village_name)
+            context_blocks = compute_context_blocks(bundle) if bundle else []
         else:
-            spatial_context = compute_spatial_context(gis_data or {})
+            context_blocks = []
+
+        # Set global context blocks for Tier 0 place resolution
+        set_context_blocks(context_blocks)
 
         # Build and run PARSE Agent subgraph
         graph = build_parse_agent_graph()
         input_state = ParseAgentState(
             planning_text=planning_text[:12000],  # Token limit
             village_name=village_name,
-            spatial_context=spatial_context,
+            context_blocks=context_blocks,
         )
 
         result = await graph.ainvoke(input_state.model_dump())
@@ -96,11 +103,6 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         validation_errors = result.get("validation_errors", [])
 
         zone_count = len(planning_intent.zone_targets) if hasattr(planning_intent, 'zone_targets') else 0
-
-        # Extract facility anchors from spatial_context for downstream consumption
-        facility_anchors = None
-        if hasattr(spatial_context, 'facility_anchors') and spatial_context.facility_anchors:
-            facility_anchors = [fa.model_dump() for fa in spatial_context.facility_anchors]
 
         logger.info(
             "[Pipeline:parse] Parsed: %d ops, %d constraints, %d zones",
@@ -115,8 +117,15 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
             "operation_sequence": operation_sequence,
             "constraint_set": constraint_set,
             "planning_intent": planning_intent,
-            "spatial_context": spatial_context.model_dump(),
-            "facility_anchors": facility_anchors,
+            "context_blocks": [
+                {
+                    "block_type": b.block_type.value,
+                    "title": b.title,
+                    "data": b.data,
+                    "priority": b.priority,
+                }
+                for b in context_blocks
+            ],
         }
     except Exception as e:
         logger.warning("[Pipeline:parse] Parse failed: %s — continuing with empty intent", e)
@@ -125,7 +134,7 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
 
 async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
     """Fetch GIS data via DataCatalog (schema-driven, single path)."""
-    from app.modules.data.catalog.catalog import DataCatalog, _bundle_to_compat_dict
+    from app.modules.data.catalog.catalog import DataCatalog
 
     village_name = state.village_name
 
@@ -136,10 +145,12 @@ async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
     try:
         catalog = DataCatalog()
         bundle = catalog.load_village_bundle(village_name)
-        raw = _bundle_to_compat_dict(bundle)
+        raw = bundle.to_geojson_dict()
         logger.info(
             "[Pipeline:fetch] %d parcels, %d roads, %d annotations",
-            len(bundle.landuse), len(bundle.roads), len(bundle.annotations),
+            bundle.parcel_count,
+            len(bundle.lines.roads_current) + len(bundle.lines.roads_planned),
+            len(bundle.points.annotations_current) + len(bundle.points.annotations_planned),
         )
         return {"gis_bundle": bundle, "gis_data": raw}
     except Exception as e:

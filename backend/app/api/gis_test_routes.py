@@ -18,19 +18,15 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 # ── Dev data helpers (replace legacy gis.data.loader; remove when routes are rewritten) ──
-from app.modules.data.catalog.catalog import DataCatalog, _bundle_to_compat_dict
-from app.modules.data.documents import (
-    resolve_gen_intent_cached,
-    resolve_plan_intent_cached,
-    resolve_intent_live,
-)
+from app.modules.data.catalog.catalog import DataCatalog
+from app.tools.gis.parse import resolve_gen_intent, resolve_plan_intent, parse_text_via_llm, _parse_reports_to_intent
 from app.modules.data.documents.loader import load_planning_text
 
 
 def load_all(village_name: str = "金田村委会") -> Dict[str, Any]:
     """Dev helper: load village GIS data as raw dict."""
     bundle = DataCatalog().load_village_bundle(village_name)
-    return _bundle_to_compat_dict(bundle)
+    return bundle.to_geojson_dict()
 
 
 def load_planned() -> Dict[str, Any]:
@@ -239,15 +235,14 @@ async def gis_analysis(request: AnalysisRequest):
             return _sanitize_floats({"success": True, "accessibility": result, "timing_ms": round((time.time() - t0) * 1000)})
 
         elif request.analysis_type == "poi":
-            from app.modules.data.providers.orchestrator import get_orchestrator
-            orchestrator = get_orchestrator()
-            pois = await orchestrator.search_poi(
+            from app.modules.data.providers.poi import POIProvider
+            result = POIProvider.search_poi_nearby(
                 keyword=request.keyword,
-                center=request.center,
+                center=tuple(request.center),
                 radius=request.radius,
                 page_size=request.page_size,
             )
-            return {"success": True, "pois": pois, "timing_ms": round((time.time() - t0) * 1000)}
+            return {"success": result.get("success", True), "pois": result.get("pois", []), "timing_ms": round((time.time() - t0) * 1000)}
 
         else:
             return {"success": False, "error": f"Unknown analysis_type: {request.analysis_type}"}
@@ -293,7 +288,7 @@ async def _validate_layout(request: ValidateRequest, t0: float) -> Dict[str, Any
         from app.tools.gis.parse import _dict_to_intent
 
         gis_data = load_all()
-        intent_dict = resolve_gen_intent_cached("金田村委会", gis_data)
+        intent_dict = resolve_gen_intent("金田村委会", gis_data)
         intent = _dict_to_intent(intent_dict)
 
         pipeline_result = await asyncio.to_thread(
@@ -414,11 +409,15 @@ async def gis_layout(request: LayoutRequest):
         for path_name in (["gen", "plan"] if request.run_path == "both" else [request.run_path]):
             try:
                 if request.use_llm:
-                    intent_dict = resolve_intent_live(path_name, request.village_name, gis_data, request.planning_text or "")
+                    intent_dict = parse_text_via_llm(
+                        text=request.planning_text or "",
+                        village_name=request.village_name,
+                        gis_data=gis_data,
+                    )
                 elif path_name == "gen":
-                    intent_dict = resolve_gen_intent_cached(request.village_name, gis_data)
+                    intent_dict = resolve_gen_intent(request.village_name, gis_data)
                 else:
-                    intent_dict = resolve_plan_intent_cached(request.village_name, gis_data)
+                    intent_dict = resolve_plan_intent(request.village_name, gis_data)
             except Exception as e:
                 logger.warning(f"[{path_name}] Intent resolution failed: {e}")
                 intent_dict = {"zones": [], "facilities": [], "axes": [], "constraints": []}

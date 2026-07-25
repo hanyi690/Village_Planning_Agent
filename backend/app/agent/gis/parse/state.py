@@ -25,11 +25,11 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, computed_field
 
 
-from app.modules.schema.contracts.layout_contracts import (
+from app.modules.schema.contracts.context_contracts import (
     ConstraintSummary,
+    ContextBlock,
     LanduseEntry,
     NaturalVillageAnchor,
-    SpatialContext,
     SpatialRelation,
 )
 
@@ -118,7 +118,7 @@ from app.modules.schema.contracts.parse_contracts import (
 class ParseAgentState(BaseModel):
     """PARSE Agent internal state (independent from LAYOUT Pipeline).
 
-    Spatially-aware: uses SpatialContext instead of GISSummary,
+    Spatially-aware: uses ContextBlock list instead of SpatialContext,
     SpatialOperation instead of OperationItem,
     SpatialConstraint instead of ConstraintItem.
     """
@@ -126,7 +126,7 @@ class ParseAgentState(BaseModel):
     # Input
     planning_text: str = ""
     village_name: str = ""
-    spatial_context: SpatialContext = Field(default_factory=SpatialContext)
+    context_blocks: List[ContextBlock] = Field(default_factory=list)
 
     # Classification result
     section_map: List[SectionInfo] = Field(default_factory=list)
@@ -172,11 +172,11 @@ class ParseAgentState(BaseModel):
 
 __all__ = [
     # Spatial context
+    "ContextBlock",
     "LanduseEntry",
     "NaturalVillageAnchor",
     "SpatialRelation",
     "ConstraintSummary",
-    "SpatialContext",
     # Section classification
     "SectionInfo",
     "SectionClassificationResult",

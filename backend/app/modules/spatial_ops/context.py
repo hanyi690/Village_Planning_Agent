@@ -1,366 +1,677 @@
-"""Spatial context computation — derive compact spatial context from GIS data.
+"""Spatial context computation — ContextBlock-based spatial cognition cards.
 
-Computes SpatialContext (~2KB) from raw GIS data bundles (~5MB).
-This is the "spatial grounding" step that lets PARSE Agent understand
-spatial references like "east of Liu village group" without raw geometry.
+[v4.3] Replaces monolithic SpatialContext with modular ContextBlock architecture.
+Each _build_* generator produces one self-describing spatial cognition card.
+compute_context_blocks() is the sole public entry point.
 
-Inspired by:
-  - Spatial-Agent: "spatial grounding" — semantic to computational representation
-  - GeoWorkbench: compute_spatial_context() as explicit pipeline stage
-  - OpenEarthAgent: compact "spatial working memory" concept
+Consumers filter by ContextBlockType, sort by priority, truncate by token budget.
+No raw GeoJSON dict traversal — direct typed attribute access on VillageBundle.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.utils.logger import get_logger
-from app.modules.schema.contracts.layout_contracts import (
+from app.modules.schema.contracts.context_contracts import (
     ConstraintSummary,
+    ConstraintZoneAnchor,
+    ContextBlock,
+    ContextBlockType,
     FacilityAnchor,
     LanduseEntry,
     NaturalVillageAnchor,
-    SpatialContext,
+    SpatialRelation,
     TerrainProfile,
 )
+from app.modules.schema.types.canonical import VillageBundle
 from app.modules.schema.types.spatial_types import ANNOTATION_LABEL_TYPE_MAP
 
-# Import from sub-modules
-from .geometry import _compute_centroid, _compute_total_area, _find_column, _find_parcels_near_point
+from .geometry import _compute_centroid, _compute_total_area, _find_parcels_near_point
 from .relations import _compute_spatial_relations, _compute_zone_adjacency
 
 logger = get_logger(__name__)
 
 
-# ── Main entry point ────────────────────────────────────────────────
+# ── Generator registry ────────────────────────────────────────────────
+
+_GENERATORS: Dict[ContextBlockType, Callable] = {}
 
 
-def compute_spatial_context(gis_data: Dict[str, Any]) -> SpatialContext:
-    """Compute compact spatial context from GIS data bundle.
+def _register_generators() -> None:
+    """Register all ContextBlock generators (module-level lazy init)."""
+    if _GENERATORS:
+        return
+    _GENERATORS.update({
+        ContextBlockType.VILLAGE_META: _build_village_meta,
+        ContextBlockType.LANDUSE_DIST: _build_landuse_dist,
+        ContextBlockType.NATURAL_VILLAGES: _build_natural_villages,
+        ContextBlockType.SPATIAL_RELATIONS: _build_spatial_relations_block,
+        ContextBlockType.CONSTRAINTS: _build_constraints,
+        ContextBlockType.FACILITIES: _build_facilities,
+        ContextBlockType.TERRAIN: _build_terrain,
+        ContextBlockType.ZONE_ADJACENCY: _build_zone_adjacency_block,
+    })
+
+
+# ── Public API ─────────────────────────────────────────────────────────
+
+
+def compute_context_blocks(
+    bundle: VillageBundle,
+    requested: Optional[List[ContextBlockType]] = None,
+    max_token_budget: int = 1500,
+) -> List[ContextBlock]:
+    """Generate spatial cognition cards from a VillageBundle.
+
+    Sole public entry point for spatial_ops. Returns a list of ContextBlock
+    cards that downstream consumers filter, sort, and budget-trim.
 
     Args:
-        gis_data: Dict with keys like 'boundary_geojson', 'landuse_current_geojson',
-                  'farmland_protection_geojson', 'ecological_protection_geojson', etc.
+        bundle: VillageBundle with morphology groups populated.
+        requested: Specific block types to generate (None = all).
+        max_token_budget: Approximate token limit; blocks beyond this are trimmed.
 
     Returns:
-        SpatialContext: ~2KB compact representation for LLM injection.
+        List of ContextBlock cards sorted by priority, trimmed to token budget.
     """
-    ctx = SpatialContext()
+    _register_generators()
 
-    # 1. Base statistics from landuse
-    landuse_geojson = gis_data.get("landuse_current_geojson") or gis_data.get("landuse_geojson")
-    if landuse_geojson:
-        ctx.landuse_distribution = _compute_landuse_distribution(landuse_geojson)
-        ctx.parcel_count = sum(e.count for e in ctx.landuse_distribution)
-        ctx.total_area_ha = round(sum(e.area_ha for e in ctx.landuse_distribution), 2)
+    if requested is None:
+        requested = list(ContextBlockType)
 
-    # 2. Village center from boundary
-    boundary_geojson = gis_data.get("boundary_geojson")
-    if boundary_geojson:
-        ctx.village_center = _compute_centroid(boundary_geojson)
+    blocks: List[ContextBlock] = []
+    for bt in requested:
+        gen = _GENERATORS.get(bt)
+        if gen is None:
+            continue
+        try:
+            block = gen(bundle)
+            if block is not None:
+                blocks.append(block)
+        except Exception as e:
+            logger.warning("[ContextBlocks] Generator %s failed: %s", bt.value, e)
 
-    # 3. Construction boundary area
-    construction_geojson = gis_data.get("construction_zone_geojson")
-    if construction_geojson:
-        ctx.construction_boundary_ha = _compute_total_area(construction_geojson)
+    blocks.sort(key=lambda b: b.priority)
 
-    # 4. Natural village anchors
-    if landuse_geojson:
-        ctx.natural_villages = _cluster_natural_villages(
-            landuse_geojson,
-            place_aliases=_load_place_aliases(),
-        )
-
-    # 5. Spatial relations
-    if landuse_geojson and ctx.natural_villages:
-        ctx.spatial_relations = _compute_spatial_relations(
-            landuse_geojson,
-            ctx.natural_villages,
-        )
-
-    # 6. Constraint summary from protection layers
-    ctx.constraint_summary = _compute_constraint_summary(gis_data)
-
-    # 7. Zone adjacency
-    if landuse_geojson:
-        ctx.zone_adjacency = _compute_zone_adjacency(landuse_geojson)
-
-    # 8. Facility anchors from annotation.geojson (precise coordinates)
-    annotation_geojson = gis_data.get("annotation_geojson")
-    if annotation_geojson:
-        ctx.facility_anchors = _extract_facility_anchors(annotation_geojson)
-        ctx.annotation_villages = _extract_annotation_villages(annotation_geojson)
-
-    # 9. Merge annotation villages into natural_villages (annotation names more precise)
-    if ctx.annotation_villages:
-        _merge_annotation_villages(ctx, landuse_geojson)
-
-    # 10. Terrain profile (P2 reserved — no-op when DEM data unavailable)
-    ctx.terrain_profile = _compute_terrain_profile(gis_data)
+    total = 0
+    trimmed: List[ContextBlock] = []
+    for b in blocks:
+        est = len(b.to_markdown()) // 4
+        if total + est > max_token_budget:
+            break
+        trimmed.append(b)
+        total += est
 
     logger.info(
-        "[SpatialContext] Computed: %d parcels, %d villages, %d relations, %d constraints, "
-        "%d facility anchors",
-        ctx.parcel_count,
-        len(ctx.natural_villages),
-        len(ctx.spatial_relations),
-        len(ctx.constraint_summary),
-        len(ctx.facility_anchors),
+        "[ContextBlocks] Generated %d blocks (%d after token trim), token est=%d",
+        len(blocks), len(trimmed), total,
+    )
+    return trimmed
+
+
+# ── Block generators ───────────────────────────────────────────────────
+
+
+def _build_village_meta(bundle: VillageBundle) -> ContextBlock:
+    """Build village metadata block from bundle metadata and polygon data."""
+    meta = bundle.metadata
+    data: Dict[str, Any] = {
+        "village_name": bundle.village_name or meta.village_name,
+    }
+
+    # Center from boundary
+    boundary = bundle.boundary
+    if boundary is not None and hasattr(boundary, "geometry") and boundary.geometry:
+        try:
+            from app.modules.schema.types.canonical import _spatial_feature_to_geojson
+            feat = _spatial_feature_to_geojson(boundary)
+            fc = {"type": "FeatureCollection", "features": [feat]}
+            center = _compute_centroid(fc)
+            if center:
+                data["center"] = list(center)
+        except Exception:
+            pass
+
+    # Areas
+    data["parcel_count"] = bundle.parcel_count
+    data["total_area_ha"] = round(bundle.total_area_ha, 2)
+
+    # Construction boundary area
+    if bundle.polygons.construction_zone:
+        from app.modules.schema.types.canonical import _features_to_fc
+        construction_fc = _features_to_fc(bundle.polygons.construction_zone)
+        data["construction_boundary_ha"] = round(_compute_total_area(construction_fc), 2)
+    else:
+        data["construction_boundary_ha"] = 0.0
+
+    return ContextBlock(
+        block_type=ContextBlockType.VILLAGE_META,
+        title=f"村庄概况: {data.get('village_name', '')}",
+        data=data,
+        source="VillageBundle.metadata + polygons",
+        priority=5,
     )
 
-    return ctx
 
+def _build_landuse_dist(bundle: VillageBundle) -> ContextBlock:
+    """Build land-use distribution block from typed parcels.
 
-def compute_spatial_context_from_bundle(
-    bundle: Any,
-    raw_geojson: Optional[Dict[str, Any]] = None,
-) -> SpatialContext:
-    """Compute spatial context from a typed GISDataBundle.
-
-    This is the preferred entry point for code that has a GISDataBundle.
-    Falls back to the raw dict path when raw_geojson is provided (for
-    layers not yet represented in the bundle, e.g. protection zones).
-
-    Args:
-        bundle: GISDataBundle with boundary, landuse, roads, annotations.
-        raw_geojson: Optional raw dict with additional keys (protection zones,
-            construction zone, etc.) that are not yet in the bundle.
-
-    Returns:
-        SpatialContext: ~2KB compact representation for LLM injection.
+    Groups by p.dlbm (direct attribute access, no _find_column).
     """
-    from app.modules.data.catalog.catalog import _bundle_to_compat_dict
+    from collections import defaultdict
 
-    # Start with bundle-derived dict
-    compat = _bundle_to_compat_dict(bundle)
+    parcels = bundle.polygons.landuse_current
+    if not parcels:
+        return ContextBlock(
+            block_type=ContextBlockType.LANDUSE_DIST,
+            title="用地分布",
+            data={"entries": [], "note": "无现状用地数据"},
+            source="VillageBundle.polygons.landuse_current",
+            priority=10,
+        )
 
-    # Merge raw_geojson for keys not in the bundle (protection zones, etc.)
-    if raw_geojson:
-        for key, val in raw_geojson.items():
-            if key not in compat or not compat[key]:
-                compat[key] = val
+    groups: Dict[str, Dict[str, Any]] = defaultdict(
+        lambda: {"count": 0, "area_ha": 0.0, "zone_type": ""}
+    )
+    for p in parcels:
+        dlbm = str(getattr(p, "dlbm", "")).strip()
+        if not dlbm:
+            continue
+        groups[dlbm]["count"] += 1
+        area = getattr(p, "area_ha", 0.0) or (getattr(p, "area_sqm", 0.0) / 10000)
+        groups[dlbm]["area_ha"] += area
+        if not groups[dlbm]["zone_type"]:
+            groups[dlbm]["zone_type"] = getattr(p, "zone_type", "")
 
-    return compute_spatial_context(compat)
-
-
-# ── Sub-computations ────────────────────────────────────────────────
-
-
-def _compute_landuse_distribution(landuse_geojson: Dict[str, Any]) -> List[LanduseEntry]:
-    """Compute land-use distribution from current landuse GeoJSON.
-
-    Encoding note: DLBM = appendix5 encoding (2121=residential).
-    Uses DLBM_TO_DLMC (merged multi-system) for name lookup,
-    get_zone_type_for_dlbm for zone classification.
-    """
+    # Enrich with encoding names
     try:
-        from app.utils.geojson_utils import geojson_to_geodataframe
-        from app.utils.area_engine import calculate_area_ha
-        from app.modules.schema import get_zone_type_for_dlbm, dlbm_to_planning_zone, DLBM_TO_DLMC
+        from app.modules.schema import DLBM_TO_DLMC
+    except ImportError:
+        DLBM_TO_DLMC = {}
 
-        gdf = geojson_to_geodataframe(landuse_geojson)
-        if gdf is None or gdf.empty:
-            return []
+    entries = sorted(
+        [
+            {
+                "dlbm": k,
+                "name": DLBM_TO_DLMC.get(k, k),
+                "count": v["count"],
+                "area_ha": round(v["area_ha"], 2),
+                "zone_type": v["zone_type"],
+            }
+            for k, v in groups.items()
+        ],
+        key=lambda e: e["area_ha"],
+        reverse=True,
+    )
 
-        dlbm_col = _find_column(gdf, ["DLBM", "dlbm"])
-        if not dlbm_col:
-            return []
-
-        entries = []
-        for dlbm, group in gdf.groupby(dlbm_col):
-            dlbm_str = str(dlbm).strip()
-            area_ha = sum(calculate_area_ha(geom) for geom in group.geometry)
-            zone_type = get_zone_type_for_dlbm(dlbm_str)
-            planning_zone = dlbm_to_planning_zone(dlbm_str)
-            name = DLBM_TO_DLMC.get(dlbm_str, dlbm_str)
-
-            entries.append(LanduseEntry(
-                dlbm=dlbm_str,
-                name=name,
-                count=len(group),
-                area_ha=round(area_ha, 2),
-                zone_type=zone_type,
-                planning_zone=planning_zone,
-            ))
-
-        return sorted(entries, key=lambda e: e.area_ha, reverse=True)
-    except Exception as e:
-        logger.warning("[SpatialContext] Landuse distribution failed: %s failed: %s", e)
-        return []
+    return ContextBlock(
+        block_type=ContextBlockType.LANDUSE_DIST,
+        title="用地分布",
+        data={"entries": entries},
+        source="VillageBundle.polygons.landuse_current",
+        priority=10,
+    )
 
 
-def _cluster_natural_villages(
-    landuse_geojson: Dict[str, Any],
-    place_aliases: Dict[str, str] = None,
-) -> List[NaturalVillageAnchor]:
-    """Cluster residential parcels into natural village anchors.
+def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
+    """Build natural village anchors by clustering residential parcels.
 
-    Strategy:
-      1. Filter residential parcels (DLBM matching residential codes)
-      2. Group by spatial proximity (DBSCAN or simple distance clustering)
-      3. Match cluster names against place_aliases
-      4. Compute adjacency from neighboring parcels
+    Uses typed CurrentLandUseParcel list with p.dlbm/p.geometry/p.bsm.
+    Annotation villages (from points.annotations_current) are merged for naming.
     """
+    parcels = bundle.polygons.landuse_current
+    if not parcels:
+        return ContextBlock(
+            block_type=ContextBlockType.NATURAL_VILLAGES,
+            title="自然村落",
+            data={"villages": [], "note": "无居住用地数据"},
+            source="VillageBundle.polygons.landuse_current",
+            priority=20,
+        )
+
     try:
-        from app.utils.geojson_utils import geojson_to_geodataframe
-
-        gdf = geojson_to_geodataframe(landuse_geojson)
-        if gdf is None or gdf.empty:
-            return []
-
-        dlbm_col = _find_column(gdf, ["DLBM", "dlbm"])
-        if not dlbm_col:
-            return []
-
-        # Filter residential parcels via DictionaryCenter zone_type lookup
-        from app.modules.schema import get_dlbms_for_zone_type
-        _RESIDENTIAL_DLBMS = set(get_dlbms_for_zone_type("居住用地"))
-        residential = gdf[
-            gdf[dlbm_col].astype(str).str.strip().isin(_RESIDENTIAL_DLBMS)
-        ]
-        if residential.empty:
-            return []
-
-        # Simple clustering: group by centroid proximity (within 200m)
+        from shapely.geometry import shape
         from shapely.ops import unary_union
+        from app.modules.schema import get_dlbms_for_zone_type
+
+        _RESIDENTIAL_DLBMS = set(get_dlbms_for_zone_type("居住用地"))
+
+        # Build GeoDataFrame from typed parcels for spatial clustering
+        import geopandas as gpd
         from app.utils.crs_engine import project_to_metric
 
-        gdf_metric = project_to_metric(residential)
+        geoms = []
+        dlbms = []
+        bsms = []
+        for p in parcels:
+            dlbm = str(getattr(p, "dlbm", "")).strip()
+            if dlbm not in _RESIDENTIAL_DLBMS:
+                continue
+            geom = getattr(p, "geometry", None)
+            if geom is None:
+                continue
+            try:
+                geoms.append(shape(geom))
+                dlbms.append(dlbm)
+                bsms.append(str(getattr(p, "bsm", "")).strip())
+            except Exception:
+                continue
+
+        if not geoms:
+            return ContextBlock(
+                block_type=ContextBlockType.NATURAL_VILLAGES,
+                title="自然村落",
+                data={"villages": [], "note": "无居住用地"},
+                source="VillageBundle.polygons.landuse_current",
+                priority=20,
+            )
+
+        gdf = gpd.GeoDataFrame(
+            {"dlbm": dlbms, "bsm": bsms, "geometry": geoms}, crs="EPSG:4326"
+        )
+
+        # Project to metric for distance-based clustering
+        gdf_metric = project_to_metric(gdf)
         if gdf_metric is None or gdf_metric.empty:
-            return []
+            return ContextBlock(
+                block_type=ContextBlockType.NATURAL_VILLAGES,
+                title="自然村落",
+                data={"villages": [], "note": "投影失败"},
+                source="VillageBundle.polygons.landuse_current",
+                priority=20,
+            )
 
         # Buffer and dissolve to find clusters
         buffers = gdf_metric.geometry.buffer(150)  # 150m buffer
         merged = unary_union(buffers.tolist())
 
-        # Each connected component is a cluster
         if merged.geom_type == "Polygon":
             components = [merged]
         elif merged.geom_type == "MultiPolygon":
             components = list(merged.geoms)
         else:
-            return []
+            return ContextBlock(
+                block_type=ContextBlockType.NATURAL_VILLAGES,
+                title="自然村落",
+                data={"villages": [], "note": "无可聚类几何"},
+                source="VillageBundle.polygons.landuse_current",
+                priority=20,
+            )
 
-        anchors = []
-        place_aliases = place_aliases or {}
+        # Extract annotation villages for naming
+        annotation_villages = _extract_annotation_villages_from_typed(
+            bundle.points.annotations_current
+        )
+
+        anchors: List[NaturalVillageAnchor] = []
+        used_indices: set = set()
 
         for i, component in enumerate(components):
-            # Find parcels within this cluster
-            cluster_centroid = component.centroid
-            # Project back to WGS84 for the centroid
-            from app.utils.crs_engine import project_to_wgs84
-            # Find parcels whose metric centroid falls within the cluster
             mask = gdf_metric.geometry.centroid.within(component.buffer(10))
-            cluster_parcels = residential[mask]
-
-            if cluster_parcels.empty:
+            cluster_gdf = gdf[mask]
+            if cluster_gdf.empty:
                 continue
 
-            # Compute WGS84 centroid directly from residential parcels
-            cluster_wgs84 = residential[mask]
-            if not cluster_wgs84.empty:
-                wgs84_center = cluster_wgs84.geometry.union_all().centroid
-                center = (round(wgs84_center.x, 6), round(wgs84_center.y, 6))
-            else:
-                center = None
+            # WGS84 centroid
+            wgs84_center = cluster_gdf.geometry.union_all().centroid
+            center: tuple = (round(wgs84_center.x, 6), round(wgs84_center.y, 6))
 
-            # Get parcel IDs
-            bsm_col = _find_column(cluster_parcels, ["BSM", "bsm"])
-            parcel_ids = cluster_parcels[bsm_col].astype(str).tolist() if bsm_col else []
+            # Parcel IDs
+            cluster_bsms = cluster_gdf["bsm"].tolist()
+            parcel_ids = [b for b in cluster_bsms if b]
 
             # Dominant land use
-            dominant = cluster_parcels[dlbm_col].astype(str).str.strip().mode().iloc[0] if len(cluster_parcels) > 0 else ""
+            dominant = cluster_gdf["dlbm"].mode().iloc[0] if len(cluster_gdf) > 0 else ""
 
-            # Try to match name from place_aliases by proximity
+            # Try to match annotation village name
             name = f"VillageGroup_{i + 1}"
-            for alias_name, alias_center_str in place_aliases.items():
-                # Simple string matching for now
-                # TODO: implement coordinate-based matching
-                pass
+            for ann_v in annotation_villages:
+                ann_idx = annotation_villages.index(ann_v)
+                if ann_idx in used_indices:
+                    continue
+                ann_lon, ann_lat = ann_v.center
+                dist = ((center[0] - ann_lon) ** 2 + (center[1] - ann_lat) ** 2) ** 0.5
+                if dist < 0.003:  # ~300m at 24N
+                    name = ann_v.name
+                    center = ann_v.center  # Use annotation's precise coordinate
+                    used_indices.add(ann_idx)
+                    break
 
-            # Compute adjacency (simplified: check neighboring non-residential parcels)
-            adjacent_zones = []
-            non_residential = gdf[
-                ~gdf[dlbm_col].astype(str).str.strip().isin(_RESIDENTIAL_DLBMS)
-            ]
-            if not non_residential.empty:
-                non_res_metric = project_to_metric(non_residential)
-                if non_res_metric is not None and not non_res_metric.empty:
-                    nearby = non_res_metric[non_res_metric.geometry.distance(component.boundary) < 100]
-                    if not nearby.empty:
-                        from app.modules.schema import get_zone_type_for_dlbm
-                        adjacent_zones = list(set(
-                            get_zone_type_for_dlbm(str(d).strip())
-                            for d in nearby[dlbm_col].values
-                        ))
+            # Adjacent non-residential zones (simplified)
+            adjacent_zones: List[str] = []
+            try:
+                from app.modules.schema import get_zone_type_for_dlbm
+                non_res = gdf[~gdf["dlbm"].isin(_RESIDENTIAL_DLBMS)]
+                if not non_res.empty:
+                    non_res_metric = project_to_metric(non_res)
+                    if non_res_metric is not None and not non_res_metric.empty:
+                        nearby = non_res_metric[
+                            non_res_metric.geometry.distance(component.boundary) < 100
+                        ]
+                        if not nearby.empty:
+                            adjacent_zones = list(set(
+                                get_zone_type_for_dlbm(str(d).strip())
+                                for d in nearby["dlbm"].values
+                            ))[:5]
+            except Exception:
+                pass
 
             anchors.append(NaturalVillageAnchor(
                 name=name,
                 center=center,
-                parcel_ids=parcel_ids[:20],  # Limit to avoid bloat
+                parcel_ids=parcel_ids[:20],
                 dominant_landuse=dominant,
-                adjacent_to=adjacent_zones[:5],
+                adjacent_to=adjacent_zones,
             ))
 
-        return anchors
-    except Exception as e:
-        logger.warning("[SpatialContext] Natural village clustering failed: %s", e)
-        return []
-
-
-def _compute_constraint_summary(gis_data: Dict[str, Any]) -> List[ConstraintSummary]:
-    """Compute constraint summary from protection zone layers."""
-    summaries = []
-
-    try:
-        # Farmland protection
-        farmland = gis_data.get("farmland_protection_geojson")
-        if farmland:
-            area = _compute_total_area(farmland)
-            summaries.append(ConstraintSummary(
-                zone_type="farmland_protection",
-                rule="禁止建设",
-                area_ha=round(area, 2),
-                geometry_type="MultiPolygon",
-                overlaps_with=[],
+        # Append unmatched annotation villages
+        for ann_v in annotation_villages:
+            ann_idx = annotation_villages.index(ann_v)
+            if ann_idx in used_indices:
+                continue
+            # Find nearby parcels
+            nearby_ids = _find_parcels_near_point(
+                [p for p in parcels if str(getattr(p, "dlbm", "")).strip() in _RESIDENTIAL_DLBMS],
+                ann_v.center,
+                radius_m=200,
+            )
+            anchors.append(NaturalVillageAnchor(
+                name=ann_v.name,
+                center=ann_v.center,
+                parcel_ids=nearby_ids[:20],
+                dominant_landuse="居住用地",
+                adjacent_to=[],
             ))
 
-        # Ecological protection
-        ecological = gis_data.get("ecological_protection_geojson")
-        if ecological:
-            area = _compute_total_area(ecological)
-            summaries.append(ConstraintSummary(
-                zone_type="ecological_protection",
-                rule="禁止建设",
-                area_ha=round(area, 2),
-                geometry_type="MultiPolygon",
-                overlaps_with=["farmland_protection"] if farmland else [],
-            ))
+        logger.info(
+            "[ContextBlocks] Natural villages: %d clusters + %d annotation-only",
+            len([a for a in anchors if a.name.startswith("VillageGroup_")]),
+            len([a for a in anchors if not a.name.startswith("VillageGroup_")]),
+        )
 
-        # Historical protection
-        historical = gis_data.get("historical_protection_geojson")
-        if historical:
-            area = _compute_total_area(historical)
-            summaries.append(ConstraintSummary(
-                zone_type="historical_protection",
-                rule="限制建设",
-                area_ha=round(area, 2),
-                geometry_type="MultiPolygon",
-                overlaps_with=[],
-            ))
+        return ContextBlock(
+            block_type=ContextBlockType.NATURAL_VILLAGES,
+            title="自然村落",
+            data={"villages": [
+                {
+                    "name": a.name,
+                    "center": list(a.center),
+                    "parcel_count": len(a.parcel_ids),
+                    "dominant_landuse": a.dominant_landuse,
+                    "adjacent_to": a.adjacent_to,
+                }
+                for a in anchors
+            ]},
+            units=anchors,
+            source="VillageBundle.polygons.landuse_current + annotations",
+            priority=20,
+        )
 
     except Exception as e:
-        logger.warning("[SpatialContext] Constraint summary failed: %s", e)
+        logger.warning("[ContextBlocks] Natural village clustering failed: %s", e)
+        return ContextBlock(
+            block_type=ContextBlockType.NATURAL_VILLAGES,
+            title="自然村落",
+            data={"villages": [], "note": f"聚类失败: {e}"},
+            source="VillageBundle.polygons.landuse_current",
+            priority=20,
+            confidence=0.0,
+        )
 
-    return summaries
+
+def _build_spatial_relations_block(bundle: VillageBundle) -> Optional[ContextBlock]:
+    """Build spatial relations block from natural village anchors.
+
+    Must run AFTER _build_natural_villages to get village anchors.
+    Since generators are independent, we re-cluster internally.
+    """
+    # Get natural villages by running the clustering (lightweight if already cached)
+    villages_block = _build_natural_villages(bundle)
+    villages_data = villages_block.data.get("villages", [])
+    if len(villages_data) < 2:
+        return None
+
+    # Convert dicts back to NaturalVillageAnchor for relation computation
+    anchors = [
+        NaturalVillageAnchor(
+            name=v["name"],
+            center=(v["center"][0], v["center"][1]),
+            parcel_ids=[],  # not needed for relations
+            dominant_landuse=v.get("dominant_landuse", ""),
+            adjacent_to=v.get("adjacent_to", []),
+        )
+        for v in villages_data
+    ]
+
+    relations = _compute_spatial_relations(anchors)
+    if not relations:
+        return None
+
+    return ContextBlock(
+        block_type=ContextBlockType.SPATIAL_RELATIONS,
+        title="空间关系",
+        data={"relations": [
+            {
+                "subject": r.subject,
+                "relation": r.relation,
+                "object": r.object,
+                "confidence": r.confidence,
+            }
+            for r in relations
+        ]},
+        source="natural_villages → _compute_spatial_relations",
+        priority=30,
+    )
+
+
+def _build_constraints(bundle: VillageBundle) -> ContextBlock:
+    """Build constraint summary block from protection/control polygon layers.
+
+    Uses typed polygon lists directly — no raw GeoJSON dict traversal.
+    """
+    from app.utils.area_engine import calculate_area_ha
+    from shapely.geometry import shape
+
+    pg = bundle.polygons
+
+    groups = [
+        (pg.farmland_protection, "永久基本农田", "禁止建设"),
+        (pg.ecological_redline, "生态保护红线", "禁止建设"),
+        (pg.historical_protection, "历史文化保护", "限制建设"),
+        (pg.cultivated_land_target, "耕地保护目标", "限制建设"),
+        (pg.hazard_control_lines, "灾害防控", "限制建设"),
+        (pg.flood_control_lines, "洪涝防控", "限制建设"),
+        (pg.nature_reserves, "自然保护区", "禁止建设"),
+    ]
+
+    zones: List[Dict[str, Any]] = []
+    for features, label, rule in groups:
+        if not features:
+            continue
+        try:
+            total = sum(calculate_area_ha(shape(f.geometry)) for f in features)
+            zones.append({
+                "type": label,
+                "rule": rule,
+                "area_ha": round(total, 2),
+                "feature_count": len(features),
+            })
+        except Exception as e:
+            logger.debug("[ContextBlocks] Constraint area calc failed for %s: %s", label, e)
+            zones.append({
+                "type": label,
+                "rule": rule,
+                "area_ha": 0.0,
+                "feature_count": len(features),
+                "note": "面积计算失败",
+            })
+
+    constraint_units = [
+        ConstraintZoneAnchor(name=z["type"], zone_type=z["type"], rule=z["rule"],
+                             area_ha=z["area_ha"], source="VillageBundle.polygons.constraint_polygons")
+        for z in zones
+    ]
+
+    return ContextBlock(
+        block_type=ContextBlockType.CONSTRAINTS,
+        title="保护与约束边界",
+        data={"zones": zones} if zones else {"zones": [], "note": "无约束数据"},
+        units=constraint_units,
+        source="VillageBundle.polygons (constraint_polygons)",
+        priority=15,
+    )
+
+
+def _build_facilities(bundle: VillageBundle) -> ContextBlock:
+    """Build facility anchors block from typed annotation/ facility features.
+
+    Produces typed FacilityAnchor instances in block.units for isinstance dispatch.
+    """
+    anchors: List[Dict[str, Any]] = []
+    units: List[FacilityAnchor] = []
+
+    # Current facilities (typed FacilityAnchor data)
+    for f in bundle.points.facilities_current:
+        name = getattr(f, "name", "") or getattr(f, "facility_name", "")
+        ftype = getattr(f, "facility_type", "")
+        geom = getattr(f, "geometry", None)
+        center = [0.0, 0.0]
+        if geom and isinstance(geom, dict):
+            coords = geom.get("coordinates", [0, 0])
+            if coords and len(coords) >= 2:
+                center = [round(float(coords[0]), 6), round(float(coords[1]), 6)]
+        if name:
+            anchors.append({"name": name, "facility_type": ftype, "category": "现状设施点", "center": center})
+            units.append(FacilityAnchor(name=name, facility_type=ftype, category="现状设施点",
+                                        center=(center[0], center[1]), source="VillageBundle.points.facilities_current"))
+
+    # Annotation-based facility extraction
+    for a in bundle.points.annotations_current:
+        category = getattr(a, "category", "")
+        if category != "现状设施点":
+            continue
+        text = getattr(a, "text", "")
+        if not text:
+            continue
+        facility_type = ANNOTATION_LABEL_TYPE_MAP.get(text, "公共服务")
+        geom = getattr(a, "geometry", None)
+        center = [0.0, 0.0]
+        if geom and isinstance(geom, dict):
+            coords = geom.get("coordinates", [0, 0])
+            if coords and len(coords) >= 2:
+                center = [round(float(coords[0]), 6), round(float(coords[1]), 6)]
+        anchors.append({"name": text, "facility_type": facility_type, "category": category, "center": center})
+        units.append(FacilityAnchor(name=text, facility_type=facility_type, category=category,
+                                    center=(center[0], center[1]), source="annotations_current"))
+
+    if anchors:
+        logger.info("[ContextBlocks] Extracted %d facility anchors", len(anchors))
+
+    return ContextBlock(
+        block_type=ContextBlockType.FACILITIES,
+        title="设施锚点",
+        data={"anchors": anchors} if anchors else {"anchors": [], "note": "无设施数据"},
+        units=units,
+        source="VillageBundle.points (facilities + annotations)",
+        priority=25,
+    )
+
+
+def _build_terrain(bundle: VillageBundle) -> Optional[ContextBlock]:
+    """Build terrain profile block from raster data (P2 reserved).
+
+    Returns None when no DEM/elevation data is available.
+    """
+    rasters = bundle.rasters
+    has_data = any([
+        rasters.dem is not None,
+        rasters.slope is not None,
+        rasters.aspect is not None,
+        rasters.suitability is not None,
+    ])
+    if not has_data:
+        return None
+
+    data: Dict[str, Any] = {}
+    if rasters.slope is not None:
+        data["slope"] = getattr(rasters.slope, "path", "available")
+    if rasters.aspect is not None:
+        data["aspect"] = getattr(rasters.aspect, "path", "available")
+    if rasters.suitability is not None:
+        data["suitability"] = getattr(rasters.suitability, "path", "available")
+    if rasters.dem is not None:
+        data["dem"] = getattr(rasters.dem, "path", "available")
+
+    return ContextBlock(
+        block_type=ContextBlockType.TERRAIN,
+        title="地形数据",
+        data=data if data else {"note": "栅格数据已加载但无可提取剖面"},
+        source="VillageBundle.rasters",
+        priority=40,
+    )
+
+
+def _build_zone_adjacency_block(bundle: VillageBundle) -> ContextBlock:
+    """Build zone adjacency block from typed land-use parcels.
+
+    Uses typed CurrentLandUseParcel list with p.dlbm + shape(p.geometry).
+    """
+    parcels = bundle.polygons.landuse_current
+    if not parcels:
+        return ContextBlock(
+            block_type=ContextBlockType.ZONE_ADJACENCY,
+            title="分区邻接",
+            data={"adjacency": {}, "note": "无现状用地数据"},
+            source="VillageBundle.polygons.landuse_current",
+            priority=35,
+        )
+
+    adjacency = _compute_zone_adjacency(parcels)
+    return ContextBlock(
+        block_type=ContextBlockType.ZONE_ADJACENCY,
+        title="分区邻接",
+        data={"adjacency": adjacency} if adjacency else {"adjacency": {}, "note": "无邻接数据"},
+        source="VillageBundle.polygons.landuse_current → _compute_zone_adjacency",
+        priority=35,
+    )
+
+
+# ── Annotation extraction helpers ──────────────────────────────────────
+
+
+def _extract_annotation_villages_from_typed(
+    annotations: List[Any],
+) -> List[NaturalVillageAnchor]:
+    """Extract village name anchors from typed CurrentAnnotation list.
+
+    Uses a.category and a.text (direct attribute access) instead of
+    hardcoded Chinese property keys.
+    """
+    anchors: List[NaturalVillageAnchor] = []
+    for a in annotations:
+        category = getattr(a, "category", "")
+        if category != "村名":
+            continue
+        text = getattr(a, "text", "")
+        if not text:
+            continue
+        geom = getattr(a, "geometry", None)
+        if geom and isinstance(geom, dict):
+            coords = geom.get("coordinates", [0, 0])
+            if coords and len(coords) >= 2:
+                center = (round(float(coords[0]), 6), round(float(coords[1]), 6))
+                anchors.append(NaturalVillageAnchor(
+                    name=text,
+                    center=center,
+                ))
+    if anchors:
+        logger.info("[ContextBlocks] Extracted %d village name anchors from annotations", len(anchors))
+    return anchors
 
 
 def _load_place_aliases() -> Dict[str, str]:
-    """Load place name aliases from YAML config.
-
-    Returns:
-        Dict mapping alias_name -> canonical_name or coordinates.
-    """
+    """Load place name aliases from YAML config."""
     try:
         from pathlib import Path
         import yaml
@@ -368,227 +679,12 @@ def _load_place_aliases() -> Dict[str, str]:
         aliases_path = Path("data/gis/place_aliases.yaml")
         if not aliases_path.exists():
             return {}
-
         with open(aliases_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         return data
     except Exception as e:
-        logger.debug("[SpatialContext] Place aliases not loaded: %s", e)
+        logger.debug("[ContextBlocks] Place aliases not loaded: %s", e)
         return {}
 
 
-# ── Annotation extraction (precise coordinates from GIS) ─────────────
-
-
-def _extract_facility_anchors(annotation_geojson: Dict[str, Any]) -> List[FacilityAnchor]:
-    """Extract facility anchors from annotation.geojson.
-
-    Filters for existing facility features, maps annotation text to facility type,
-    and extracts precise WGS84 coordinates.
-    """
-    anchors = []
-    features = annotation_geojson.get("features", [])
-
-    for ft in features:
-        props = ft.get("properties", {})
-        category = props.get("分类", props.get("category", ""))
-
-        if category != "现状设施点":
-            continue
-
-        text = props.get("注记", props.get("text", ""))
-        if not text:
-            continue
-
-        # Map annotation text to facility type
-        facility_type = ANNOTATION_LABEL_TYPE_MAP.get(text, "公共服务")
-
-        # Extract coordinates
-        geometry = ft.get("geometry", {})
-        coords = geometry.get("coordinates", [0, 0])
-        if not coords or len(coords) < 2:
-            continue
-
-        center = (round(float(coords[0]), 6), round(float(coords[1]), 6))
-
-        anchors.append(FacilityAnchor(
-            name=text,
-            facility_type=facility_type,
-            category=category,
-            center=center,
-        ))
-
-    if anchors:
-        logger.info(
-            "[SpatialContext] Extracted %d facility anchors from annotations", len(anchors)
-        )
-    return anchors
-
-
-def _extract_annotation_villages(annotation_geojson: Dict[str, Any]) -> List[NaturalVillageAnchor]:
-    """Extract village name anchors from annotation.geojson.
-
-    Filters for village name features, extracts precise WGS84 coordinates.
-    These replace the cluster-derived VillageGroup_N names from step 4.
-    """
-    anchors = []
-    features = annotation_geojson.get("features", [])
-
-    for ft in features:
-        props = ft.get("properties", {})
-        category = props.get("分类", props.get("category", ""))
-
-        if category != "村名":
-            continue
-
-        text = props.get("注记", props.get("text", ""))
-        if not text:
-            continue
-
-        # Extract coordinates
-        geometry = ft.get("geometry", {})
-        coords = geometry.get("coordinates", [0, 0])
-        if not coords or len(coords) < 2:
-            continue
-
-        center = (round(float(coords[0]), 6), round(float(coords[1]), 6))
-
-        anchors.append(NaturalVillageAnchor(
-            name=text,
-            center=center,
-            parcel_ids=[],  # Populated in _merge_annotation_villages
-            dominant_landuse="居住用地",
-            adjacent_to=[],
-        ))
-
-    if anchors:
-        logger.info(
-            "[SpatialContext] Extracted %d village name anchors from annotations", len(anchors)
-        )
-    return anchors
-
-
-def _merge_annotation_villages(
-    ctx: SpatialContext,
-    landuse_geojson: Optional[Dict[str, Any]] = None,
-) -> None:
-    """Merge annotation village names into natural_villages.
-
-    Strategy:
-      1. For each annotation village, find the nearest cluster in natural_villages
-      2. Replace cluster name (VillageGroup_N) with annotation name
-      3. Update center to annotation's precise coordinate
-      4. Keep cluster's parcel_ids (which came from GIS analysis)
-      5. Any unmatched annotation villages are appended
-    """
-    if not ctx.annotation_villages:
-        return
-
-    used_cluster_indices = set()
-
-    for ann_v in ctx.annotation_villages:
-        ann_lon, ann_lat = ann_v.center
-
-        # Find nearest cluster within 300m (approx 0.003 degrees at 24N)
-        best_idx = None
-        best_dist = float("inf")
-        for i, nv in enumerate(ctx.natural_villages):
-            if i in used_cluster_indices:
-                continue
-            nv_lon, nv_lat = nv.center
-            dist = ((ann_lon - nv_lon) ** 2 + (ann_lat - nv_lat) ** 2) ** 0.5
-            if dist < best_dist:
-                best_dist = dist
-                best_idx = i
-
-        if best_idx is not None and best_dist < 0.003:
-            # Merge: replace cluster name with annotation name
-            cluster = ctx.natural_villages[best_idx]
-            ctx.natural_villages[best_idx] = NaturalVillageAnchor(
-                name=ann_v.name,            # Use annotation name
-                center=ann_v.center,        # Use annotation's precise coordinate
-                parcel_ids=cluster.parcel_ids,  # Keep cluster's parcel analysis
-                dominant_landuse=cluster.dominant_landuse,
-                adjacent_to=cluster.adjacent_to,
-            )
-            used_cluster_indices.add(best_idx)
-        else:
-            # No nearby cluster — find nearby parcels from landuse
-            parcel_ids = []
-            if landuse_geojson:
-                parcel_ids = _find_parcels_near_point(
-                    landuse_geojson, ann_v.center, radius_m=200
-                )
-            # Append as new village
-            ctx.natural_villages.append(NaturalVillageAnchor(
-                name=ann_v.name,
-                center=ann_v.center,
-                parcel_ids=parcel_ids[:20],
-                dominant_landuse="居住用地",
-                adjacent_to=[],
-            ))
-
-    logger.info(
-        "[SpatialContext] Merged %d annotation villages into %d natural_villages",
-        len(ctx.annotation_villages), len(ctx.natural_villages),
-    )
-
-
-# ── Terrain profile (P2 reserved — DEM data not yet available) ─────
-
-
-def _compute_terrain_profile(gis_data: Dict[str, Any]) -> Optional[TerrainProfile]:
-    """Compute terrain profile from DEM analysis results (P2 reserved).
-
-    When DEM data is available via TerrainAnalyzer, this extracts the
-    slope/aspect/suitability area percentage breakdowns and wraps them
-    in a TerrainProfile for LLM prompt injection.
-
-    Current behavior: returns None when no terrain analysis data exists,
-    allowing the pipeline to function normally without DEM.
-
-    Args:
-        gis_data: Full GIS data dict — may contain "terrain_analysis" key
-                  with a TerrainAnalysisResult value.
-
-    Returns:
-        TerrainProfile if terrain analysis data is available, None otherwise.
-    """
-    terrain_analysis = gis_data.get("terrain_analysis") if gis_data else None
-    if terrain_analysis is None:
-        return None
-
-    try:
-        from app.modules.schema.types.raster_types import TerrainAnalysisResult
-
-        # Accept both typed TerrainAnalysisResult and dict
-        if isinstance(terrain_analysis, TerrainAnalysisResult):
-            profile = TerrainProfile(
-                slope_area_pct=dict(getattr(terrain_analysis, "slope_area_pct", {}) or {}),
-                aspect_area_pct=dict(getattr(terrain_analysis, "aspect_area_pct", {}) or {}),
-                suitability_area_pct=dict(getattr(terrain_analysis, "suitability_area_pct", {}) or {}),
-            )
-        elif isinstance(terrain_analysis, dict):
-            profile = TerrainProfile(
-                slope_area_pct=dict(terrain_analysis.get("slope_area_pct", {}) or {}),
-                aspect_area_pct=dict(terrain_analysis.get("aspect_area_pct", {}) or {}),
-                suitability_area_pct=dict(terrain_analysis.get("suitability_area_pct", {}) or {}),
-            )
-        else:
-            return None
-
-        has_data = any([profile.slope_area_pct, profile.aspect_area_pct, profile.suitability_area_pct])
-        if has_data:
-            logger.info(
-                "[SpatialContext] Terrain profile: %d slope classes, %d aspect classes, %d suitability classes",
-                len(profile.slope_area_pct), len(profile.aspect_area_pct), len(profile.suitability_area_pct),
-            )
-            return profile
-
-        return None
-    except Exception as e:
-        logger.debug("[SpatialContext] Terrain profile extraction skipped: %s", e)
-        return None
-
-
-__all__ = ["compute_spatial_context", "compute_spatial_context_from_bundle"]
+__all__ = ["compute_context_blocks"]

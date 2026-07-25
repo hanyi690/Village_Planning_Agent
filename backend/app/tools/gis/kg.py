@@ -39,29 +39,35 @@ def build_knowledge_graph(
     from app.modules.kg import PlanningKG
     from app.modules.kg.query import query_kg
 
+    # [v4.4] Prefer bundle+blocks path, fallback to legacy
+    bundle = gis_data.pop("_bundle", None) if gis_data else None
+    blocks = gis_data.pop("_context_blocks", None) if gis_data else None
+    parcel_relations = gis_data.pop("_parcel_relations", None) if gis_data else None
+
     manager = get_kg_manager()
     landuse_geojson = gis_data.get("landuse_current_geojson") if gis_data else None
 
-    # Try Layer 1 cache
-    cache_key = compute_layer1_cache_key(village_name, landuse_geojson)
-    cache_key_str = str(cache_key) if cache_key else ""
-
-    kg, cache_hit = manager.get_or_build_layer1(village_name, landuse_geojson, gis_data)
+    if bundle is not None and blocks is not None:
+        kg, cache_hit = manager.get_or_build_layer1(
+            village_name=village_name,
+            bundle=bundle,
+            context_blocks=blocks,
+            parcel_relations=parcel_relations,
+        )
+    else:
+        # Legacy fallback (will be removed)
+        cache_key = compute_layer1_cache_key(village_name, landuse_geojson)
+        cache_key_str = str(cache_key) if cache_key else ""
+        kg, cache_hit = manager.get_or_build_layer1(
+            village_name=village_name,
+            landuse_geojson=landuse_geojson,
+            gis_data=gis_data,
+        )
 
     if cache_hit:
-        logger.info("[KG] Layer 1 cache HIT: %s", cache_key_str)
+        logger.info("[KG] Layer 1 cache HIT")
     else:
-        logger.info("[KG] Layer 1 built fresh: %s", cache_key_str or "(no cache key)")
-
-    # Layer 2: semantic (from intent or reports)
-    zone_areas = kg._compute_zone_areas_from_gis(gis_data)
-    if intent:
-        kg._build_semantic(intent=intent, zone_areas=zone_areas)
-    else:
-        kg._build_semantic(reports=reports, zone_areas=zone_areas)
-
-    # Layer 3: volatile (designated_as)
-    kg._build_volatile(landuse_geojson=landuse_geojson)
+        logger.info("[KG] Layer 1 built fresh")
 
     # Phase 4: Add spatial elements (protection zones with within_zone, control lines, etc.)
     # These establish spatial containment relations needed for downstream queries

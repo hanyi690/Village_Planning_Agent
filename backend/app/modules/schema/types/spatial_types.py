@@ -17,8 +17,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
+from .base import SpatialFeature, PointFeature, LineFeature, PolygonFeature  # noqa: F401
 
-# ── 空间要素基类 (所有 Group 共享) ──
+
+# ── 空间要素基类 (SpatialFeature → 定义在 base.py, 这里重导出) ──
 
 GB_T21010 = "gbt21010"
 TUGUI = "tugui"
@@ -28,36 +30,13 @@ YDYHFL = "ydyhfldm"
 VNE = "vne"
 
 
-@dataclass
-class SpatialFeature:
-    """所有空间要素的统一基类 — 从 GeoJSON Feature 解析。
-
-    共享字段:
-      - geometry: GeoJSON 几何对象 (必选, 无默认值)
-      - bsm: 标识码 (必选, 流水编号)
-      - ysdm: 要素代码 (必选, 10位)
-      - _raw: 原始 properties dict (调试用, 禁止业务使用)
-    """
-
-    geometry: Dict[str, Any]      # GeoJSON geometry
-
-    bsm: str = ""                 # 标识码 (必选, 流水编号)
-    ysdm: str = ""                # 要素代码 (必选, 10位)
-
-    _raw: Dict[str, Any] = field(default_factory=dict, repr=False)
-
-    @property
-    def geometry_type(self) -> str:
-        return self.geometry.get("type", "Unknown")
-
-
 # ============================================================
 # Group A: 行政区划
 # ============================================================
 
 
 @dataclass
-class AdminArea(SpatialFeature):
+class AdminArea(PolygonFeature):
     """村级行政区 (面) — 基础地理信息要素.
 
     GDB 图层: GHCFW (规划村范围) — 表3字段
@@ -74,7 +53,7 @@ class AdminArea(SpatialFeature):
 
 
 @dataclass
-class AdminBoundaryLine(SpatialFeature):
+class AdminBoundaryLine(LineFeature):
     """村级行政区划界线 (线) — 基础地理信息要素.
 
     GDB 图层: admin_boundary_line
@@ -97,7 +76,7 @@ class AdminBoundaryLine(SpatialFeature):
 
 
 @dataclass
-class BaseLandUseParcel(SpatialFeature):
+class BaseLandUseParcel(PolygonFeature):
     """地块基类 — 现状层和规划层的共享属性。
 
     所有下游泛型代码使用此类处理不区分层的数据。
@@ -185,7 +164,7 @@ class PlannedLandUseParcel(BaseLandUseParcel):
 
 
 @dataclass
-class CurrentBuilding(SpatialFeature):
+class CurrentBuilding(PointFeature):
     """现状建筑 (面) — 基期年现状要素.
 
     来源于现状调查, 包含建筑类型、层数、面积等信息.
@@ -197,17 +176,25 @@ class CurrentBuilding(SpatialFeature):
     structure: str = ""     # 结构类型 (砖混/框架/土木/钢)
 
 
+# ── [v4.2] BaseRoad (道路基类, 现状/规划共享) ──
+
+
 @dataclass
-class CurrentRoad(SpatialFeature):
+class BaseRoad(LineFeature):
+    """道路基类 — 现状道路和规划道路的共享属性."""
+
+    road_level: str = ""       # 道路等级 (村道/乡道/县道)
+    road_width: float = 0.0    # 道路宽度 (米)
+    road_name: str = ""        # 道路名称
+    shape_length: float = 0.0  # 几何长度 (米)
+
+
+@dataclass
+class CurrentRoad(BaseRoad):
     """现状道路 (线) — 基期年现状要素.
 
     GDB 图层: current_road
     """
-
-    shape_length: float = 0.0  # 几何长度 (米)
-    road_level: str = ""       # 道路等级 (村道/乡道/县道)
-    road_width: float = 0.0    # 道路宽度 (米)
-    road_name: str = ""        # 道路名称
 
     @classmethod
     def from_geojson_feature(cls, feature: dict) -> "CurrentRoad":
@@ -235,11 +222,14 @@ ANNOTATION_LABEL_TYPE_MAP: Dict[str, str] = {
 }
 
 
-@dataclass
-class CurrentFacility(SpatialFeature):
-    """现状设施 (点/面) — 基期年现状要素.
+# ── [v4.2] BaseFacility (设施基类, 现状/规划共享) ──
 
-    包含基础设施点和公共服务设施点.
+
+@dataclass
+class BaseFacility(PointFeature):
+    """设施基类 — 空间实体 (入 KG, 参与空间分析).
+
+    现状设施和规划设施的共享属性.
     """
 
     facility_type: str = ""  # 设施类型 (给水/排水/电力/环卫/公厕/村委会/卫生室/学校/广场)
@@ -247,6 +237,14 @@ class CurrentFacility(SpatialFeature):
     scale: str = ""          # 规模描述 (如 "50m³/d", "200㎡")
     service_radius: float = 0.0  # 服务半径 (米, 公共服务设施)
     category: str = ""       # 分类: infrastructure(基础设施) / public_service(公共服务)
+
+
+@dataclass
+class CurrentFacility(BaseFacility):
+    """现状设施 (点) — 基期年现状要素.
+
+    包含基础设施点和公共服务设施点.
+    """
 
     @classmethod
     def from_annotation_feature(cls, feature: dict) -> "CurrentFacility | None":
@@ -278,7 +276,33 @@ class CurrentFacility(SpatialFeature):
 
 
 @dataclass
-class CurrentAnnotation(SpatialFeature):
+class PlannedFacility(BaseFacility):
+    """规划设施 (点) — 目标年规划要素. [v4.2]
+
+    从旧 PlannedAnnotation 拆出, 设施统一为空间实体.
+    """
+
+    status: str = ""  # "新建" | "改扩建" | "迁建"
+
+
+# ── [v4.2] AnnotationFeature (表达要素基类, 非空间实体) ──
+
+
+@dataclass
+class AnnotationFeature(PointFeature):
+    """表达要素基类 — 非空间实体, 不入 KG, 不参与空间分析.
+
+    注记是文字标注, 不是空间实体. 设施是空间实体 (BaseFacility),
+    注记降为表达层 (AnnotationFeature).
+    geometry_kind="annotation" 在 layer_registry 中区分.
+    """
+
+    text: str = ""           # 注记文本 (≤100字符)
+    category: str = ""       # 注记分类
+
+
+@dataclass
+class CurrentAnnotation(AnnotationFeature):
     """现状注记 (点) — 基期年现状要素, 辅助标注类型.
 
     广东省技术指南未定义"注记"图层, 此为辅助标注,
@@ -286,9 +310,6 @@ class CurrentAnnotation(SpatialFeature):
     GDB 导出层: current_annotation
     category 取值: 现状设施点/村名
     """
-
-    text: str = ""           # 注记文本 (≤100字符)
-    category: str = ""       # 注记分类 (现状设施点/村名)
 
     @classmethod
     def from_geojson_feature(cls, feature: dict) -> "CurrentAnnotation":
@@ -315,17 +336,29 @@ class CurrentAnnotation(SpatialFeature):
 # 广东省技术指南表2: 4个必选汇交图层 (GHCFW/QMDLTB/TDYT/JSYDGZQ).
 
 
+# ── [v4.2] BaseControlZone (管控区基类) ──
+
+
 @dataclass
-class ControlLine(SpatialFeature):
+class BaseControlZone(PolygonFeature):
+    """管控区基类 — 统一三区+三线+管制区+用途分区的管控语义.
+
+    Shared fields: mj (面积), protection_level (保护等级), control_measure (管控措施).
+    """
+
+    mj: float = 0.0          # 面积 (平方米)
+    protection_level: str = ""  # 保护等级 (核心/一般/缓冲)
+    control_measure: str = ""   # 管控措施
+
+
+@dataclass
+class ControlLine(BaseControlZone):
     """控制线基类 (面) — 目标年规划要素.
 
     所有控制线/保护线/边界的共享属性.
     子类: 永久基本农田, 生态保护红线, 耕地保护目标,
           城镇开发边界, 村庄建设边界, 灾害风险防控线, 洪涝风险控制线
     """
-
-    mj: float = 0.0          # 面积 (平方米)
-    protection_level: str = ""  # 保护等级 (核心/一般/缓冲)
 
 
 @dataclass
@@ -425,7 +458,7 @@ class HazardControlLine(ControlLine):
 
 
 @dataclass
-class GeologicalHazardPoint(SpatialFeature):
+class GeologicalHazardPoint(PointFeature):
     """地质灾害点 (点) — 目标年规划要素.
 
     与 HazardControlLine (灾害风险防控线, 面) 不同,
@@ -473,26 +506,25 @@ class FloodControlLine(ControlLine):
 
 
 @dataclass
-class PlannedRoad(SpatialFeature):
+class PlannedRoad(BaseRoad):
     """规划道路 (线) — 目标年规划要素.
 
     GDB 图层: planned/road.geojson
     字段: LnType (道路类型), LeftLn_FID (左侧车道要素ID),
-          RightLn_FID (右侧车道要素ID), Shape_Length (长度)
+          RightLn_FID (右侧车道要素ID)
+    road_level, road_width, road_name, shape_length 继承自 BaseRoad.
     """
 
-    shape_length: float = 0.0   # 几何长度 (米)
     ln_type: str = ""           # 道路类型
     left_ln_fid: str = ""       # 左侧车道要素ID
     right_ln_fid: str = ""      # 右侧车道要素ID
-    road_level: str = ""        # 规划道路等级 (村道/乡道/县道)
 
 
 # ── 规划注记 (辅助标注) ──
 
 
 @dataclass
-class PlannedAnnotation(SpatialFeature):
+class PlannedAnnotation(AnnotationFeature):
     """规划注记 (点) — 目标年规划要素, 辅助标注类型.
 
     与 CurrentAnnotation 字段相同, 但类型独立,
@@ -501,12 +533,9 @@ class PlannedAnnotation(SpatialFeature):
     category 取值: 规划设施点
     """
 
-    text: str = ""           # 注记文本 (≤100字符)
-    category: str = ""       # 注记分类 (规划设施点)
-
 
 @dataclass
-class HistoricalProtection(SpatialFeature):
+class HistoricalProtection(PolygonFeature):
     """历史文化保护线 (点/面).
 
     GDB 图层: historical_protection
@@ -521,7 +550,7 @@ class HistoricalProtection(SpatialFeature):
 
 
 @dataclass
-class LandUseZone(SpatialFeature):
+class LandUseZone(PolygonFeature):
     """土地用途分区 TDYT (面) — 核心规划数据 (必选).
 
     规范来源: 广东省技术指南 表5 (9字段)
@@ -538,7 +567,7 @@ class LandUseZone(SpatialFeature):
 
 
 @dataclass
-class ConstructionCtrlZone(SpatialFeature):
+class ConstructionCtrlZone(PolygonFeature):
     """建设用地管制区 JSYDGZQ (面) — 核心规划数据 (必选).
 
     规范来源: 广东省技术指南 表6 (9字段)
@@ -574,7 +603,7 @@ class ConstructionCtrlZone(SpatialFeature):
 
 
 @dataclass
-class ConditionalConstructionZone(SpatialFeature):
+class ConditionalConstructionZone(PolygonFeature):
     """有条件建设区 (面) — 目标年规划要素.
 
     GDB 图层: construction_zone
@@ -591,7 +620,7 @@ class ConditionalConstructionZone(SpatialFeature):
 
 
 @dataclass
-class PlanningScope(SpatialFeature):
+class PlanningScope(PolygonFeature):
     """规划村范围 GHCFW (面) — 管理类数据 (必选).
 
     规范来源: 广东省技术指南 表3 (5字段)
@@ -604,6 +633,23 @@ class PlanningScope(SpatialFeature):
     bz: str = ""             # 备注 (≤200字符, 可选)
 
 
+# ── [v4.2] ThreeZoneItem (三区空间类型) ──
+
+
+@dataclass
+class ThreeZoneItem(PolygonFeature):
+    """三区 — 生态空间/农业空间/建设空间. [v4.2]
+
+    矢量图层 (面), 引用层 (中央审批成果), 村庄级不重建.
+    与 parse_contracts.ThreeZoneItem (PARSE 产出契约) 平行,
+    本类为空间矢量类型 (有 geometry), 契约类为数据模型 (无 geometry).
+    """
+
+    zone_type: str = ""  # "ecological" | "agricultural" | "construction"
+    zone_name: str = ""  # 生态空间 | 农业空间 | 建设空间
+    area_ha: float = 0.0
+
+
 # ============================================================
 # Group E: 基础地理信息要素 (DLG) 🔴 未实现
 # ============================================================
@@ -614,7 +660,7 @@ class PlanningScope(SpatialFeature):
 
 
 @dataclass
-class ContourLine(SpatialFeature):
+class ContourLine(LineFeature):
     """等高线 (线) -- 基础地理信息要素 (DLG).
 
     来源: 数字线划地图 (1:2000 DLG)
@@ -627,7 +673,7 @@ class ContourLine(SpatialFeature):
 
 
 @dataclass
-class ElevationPoint(SpatialFeature):
+class ElevationPoint(PointFeature):
     """高程点 (点) -- 基础地理信息要素 (DLG).
 
     来源: 数字线划地图 (1:2000 DLG)
@@ -642,7 +688,7 @@ class ElevationPoint(SpatialFeature):
 
 
 @dataclass
-class WaterFeature(SpatialFeature):
+class WaterFeature(PolygonFeature):
     """水系要素 (线/面) -- 基础地理信息要素 (DLG).
 
     来源: 天地图WFS (HYDL/HYDA) / 1:25万基础地理数据库
@@ -653,6 +699,72 @@ class WaterFeature(SpatialFeature):
     water_type: str = ""          # 水系类型 (河流/湖泊/水库/坑塘/沟渠)
     water_name: str = ""          # 水系名称
     flow_direction: str = ""      # 流向 (仅线要素)
+
+
+# ============================================================
+# Group F: 自然资源 (Natural Resources) [v4.2]
+# ============================================================
+# 对齐 docs/gis/01_DATA_ACQUISITION_PLAN.md §4.1
+# 以及 SCHEMA_COVERAGE_AUDIT B1 自然环境类
+
+
+@dataclass
+class SoilType(PolygonFeature):
+    """土壤类型 (面) — Group F 自然资源.
+
+    来源: 土壤普查/农业农村部门
+    用途: 农业适宜性评价、土壤污染防治
+    """
+
+    soil_code: str = ""          # 土壤类型编码
+    soil_name: str = ""          # 土壤类型名称
+
+
+@dataclass
+class SoilErosion(PolygonFeature):
+    """土壤侵蚀 (面) — Group F 自然资源.
+
+    来源: 水利部门水土保持数据
+    用途: 生态敏感区划定、水土保持规划
+    """
+
+    erosion_level: str = ""      # 侵蚀等级 (轻度/中度/强烈/极强烈/剧烈)
+
+
+@dataclass
+class Watershed(PolygonFeature):
+    """流域 (面) — Group F 自然资源.
+
+    来源: 水利部门流域数据
+    用途: 水资源管理、生态空间划定
+    """
+
+    watershed_code: str = ""     # 流域编码
+    watershed_name: str = ""     # 流域名称
+
+
+@dataclass
+class NatureReserve(PolygonFeature):
+    """自然保护区 (面) — Group F 自然资源.
+
+    来源: 林业和草原部门
+    用途: 生态保护红线划定依据
+    """
+
+    reserve_name: str = ""       # 保护区名称
+    reserve_level: str = ""      # 保护级别 (国家级/省级/市县级)
+
+
+@dataclass
+class HydrogeologyZone(PolygonFeature):
+    """水文地质分区 (面) — Group F 自然资源.
+
+    来源: 地质调查部门
+    用途: 地下水资源评价、地质灾害评估
+    """
+
+    zone_code: str = ""          # 水文地质分区编码
+    zone_name: str = ""          # 水文地质分区名称
 
 
 # ============================================================
@@ -679,22 +791,33 @@ SPACE_CONTROL_ZONE_COLORS = {
 
 
 __all__ = [
+    # Base (re-export from base.py)
+    "SpatialFeature",
+    "PointFeature",
+    "LineFeature",
+    "PolygonFeature",
     # Group A: Admin
     "AdminArea",
     "AdminBoundaryLine",
     # Group B: LandUse parcels
-    "SpatialFeature",
     "BaseLandUseParcel",
     "CurrentLandUseParcel",
     "PlannedLandUseParcel",
     # Encoding constants
     "GB_T21010", "TUGUI", "APPENDIX5",
     "GHFLBM_SYS", "YDYHFL", "VNE",
+    # [v4.2] Phase-abstraction bases
+    "BaseRoad",
+    "BaseFacility",
+    "BaseControlZone",
+    "AnnotationFeature",
     # Group C: Current features
     "CurrentBuilding",
     "CurrentRoad",
     "CurrentFacility",
     "CurrentAnnotation",
+    # [v4.2] Planned facility
+    "PlannedFacility",
     # Group D: Control lines
     "ControlLine",
     "FarmlandProtection",
@@ -717,10 +840,20 @@ __all__ = [
     "LandUseZone",
     "ConstructionCtrlZone",
     "PlanningScope",
+    # [v4.2] Three zones
+    "ThreeZoneItem",
     # Group E: Basic geographic info (DLG)
     "ContourLine",
     "ElevationPoint",
     "WaterFeature",
+    # [v4.2] Group F: Natural resources
+    "SoilType",
+    "SoilErosion",
+    "Watershed",
+    "NatureReserve",
+    "HydrogeologyZone",
+    # Annotation label map
+    "ANNOTATION_LABEL_TYPE_MAP",
     # Constants
     "SPACE_CONTROL_ZONE_TYPES",
     "SPACE_CONTROL_ZONE_COLORS",

@@ -1,8 +1,17 @@
-"""高德地图 API 返回结果类型"""
+"""Amap API result types."""
 
-from ..base_types import GeoProviderResult
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 
-# 向后兼容别名
-AmapResult = GeoProviderResult
+
+@dataclass
+class AmapResult:
+    """Amap API result envelope."""
+
+    success: bool
+    data: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    error: Optional[str] = None
+
 
 __all__ = ["AmapResult"]

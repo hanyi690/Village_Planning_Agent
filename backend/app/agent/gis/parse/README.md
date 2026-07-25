@@ -1,6 +1,6 @@
 # PARSE Agent 子包
 
-> 规划文本 → 空间意图。消费 L3 报告 + SpatialContext，产出类型化 `SpatialPlanningIntent` / `SpatialOperation` / `SpatialConstraint`。
+> 规划文本 → 空间意图。消费 L3 报告 + ContextBlock 列表，产出类型化 `SpatialPlanningIntent` / `SpatialOperation` / `SpatialConstraint`。
 
 ---
 
@@ -9,7 +9,7 @@
 PARSE 是 GIS Agent 的 **PLAN 阶段执行核**，与 `execute/`（DELIVER 阶段）平级。它把自然语言规划报告转化为下游可执行的空间意图，核心解决"文本 → 结构化空间目标"的语义鸿沟。
 
 **关键特征**：
-- **空间感知**：通过 `SpatialContext` 注入空间关系与锚点，不直接接触原始 GeoJSON 几何
+- **空间感知**：通过 `ContextBlock` 列表注入空间关系与锚点，不直接接触原始 GeoJSON 几何
 - **Think-Then-Format**：探索阶段自由推理 + 工具调用，格式化阶段强制 Pydantic 输出
 - **Schema 强制**：输出为严格 Pydantic 模型，保证 PARSE → EXECUTE 交接可靠
 
@@ -74,7 +74,7 @@ PARSE Agent 在 `explore_*` 阶段可用三个工具（`agent.py`）：
 
 | 字段组 | 字段 | 说明 |
 |--------|------|------|
-| 输入 | `planning_text`, `village_name`, `spatial_context` | 文本 + 空间上下文 |
+| 输入 | `planning_text`, `village_name`, `context_blocks` | 文本 + ContextBlock 空间上下文 |
 | 分类 | `section_map`, `parse_strategy` | 分节结果 + 策略 |
 | 中间 | `raw_operations`, `raw_constraints`, `raw_targets`, `raw_tables` | 类型化中间结果 |
 | 校验 | `validation_errors`, `parse_round`, `is_valid` | 校验状态 |
@@ -93,15 +93,19 @@ PARSE Agent 在 `explore_*` 阶段可用三个工具（`agent.py`）：
 
 ## 五、空间接地（Spatial Grounding）
 
-PARSE 不直接读 GeoJSON，而是通过 `SpatialContext`（`app/modules/spatial_ops/context.py:compute_spatial_context()`）获取压缩空间上下文（~2KB）。v4.1 起 `compute_spatial_context` 收 `ProjectDataView`（多村 `VillageBundle`），产出项目级空间上下文：
+PARSE 不直接读 GeoJSON，而是通过 `ContextBlock` 列表（`app/modules/spatial_ops/context.py:compute_context_blocks(bundle)`）获取模块化空间上下文卡片。v4.3 起替换单体 `SpatialContext`，每个 `ContextBlock` 编码一个空间认知维度：
 
-- `natural_villages`：自然村锚点（聚类自居住地块 + 地名别名匹配）
-- `facility_anchors`：设施精确锚点（来自 annotation.geojson）
-- `spatial_relations`：村组间语义关系（east_of / adjacent_to / contains / near）
-- `constraint_summary`：保护边界摘要
+- `VILLAGE_META`：村庄基础统计（地块数、总面积、建设边界面积、村中心坐标）
+- `LANDUSE_DIST`：地类分布（按 dlbm 分组统计，含地块数和面积）
+- `NATURAL_VILLAGES`：自然村锚点（聚类自居住地块 + 注记命名合并）
+- `FACILITIES`：设施精确锚点（来自 typed 设施/注记要素）
+- `SPATIAL_RELATIONS`：村组间语义关系（east_of / adjacent_to / contains / near）
+- `CONSTRAINTS`：保护边界摘要（永久基本农田 / 生态红线 / 历史文化等）
+- `ZONE_ADJACENCY`：分区邻接矩阵
+- `TERRAIN`：地形剖面（P2 预留，无 DEM 数据时返回 None）
 
 `SpatialAnchor` 的双阶段定位：
-1. **PARSE 预解析**：`location_desc` 匹配 `SpatialContext.natural_villages` → 候选地块 + 置信度
+1. **PARSE 预解析**：`location_desc` 匹配 `NATURAL_VILLAGES` / `FACILITIES` 块 → 候选地块 + 置信度
 2. **LAYOUT 确认**：`resolve_place` 工具确认或修正锚点
 
 ---
@@ -109,7 +113,7 @@ PARSE 不直接读 GeoJSON，而是通过 `SpatialContext`（`app/modules/spatia
 ## 六、输入输出契约
 
 ```
-输入: ParseAgentState(planning_text, village_name, spatial_context)
+输入: ParseAgentState(planning_text, village_name, context_blocks)
 输出: {
   operation_sequence: List[SpatialOperation],   # 空间操作序列
   constraint_set:     List[SpatialConstraint],   # 空间约束集
@@ -126,7 +130,7 @@ PARSE 不直接读 GeoJSON，而是通过 `SpatialContext`（`app/modules/spatia
 
 - `../README.md` — GIS Agent 包总览
 - `../execute/README.md` — EXECUTE Agent（下游消费者）
-- `app/modules/spatial_ops/context.py` - SpatialContext 计算（收 `ProjectDataView`, v4.1）
+- `app/modules/spatial_ops/context.py` - `compute_context_blocks(bundle)` ContextBlock 生成（v4.3）
 - `app/modules/parsing/README.md` - parsing 工具层（PARSE 调用提取工具）
 - `app/modules/kg/README.md` - ProjectKG 桥接层（PARSE 写入 Layer 3）
 - `app/modules/schema/contracts/parse_contracts.py` - 最终契约类型

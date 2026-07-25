@@ -66,7 +66,7 @@ async def gis_agent_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # ── Load GIS data via DataCatalog (schema-driven, single path) ──
     catalog = DataCatalog()
     gis_bundle = catalog.load_village_bundle(village_name)
-    gis_data = _bundle_to_compat_dict(gis_bundle)
+    gis_data = gis_bundle.to_geojson_dict()
 
     # Merge user uploads
     user_uploaded = state.get("user_uploaded_data", {})
@@ -240,44 +240,36 @@ def _format_gis_result(result: Dict[str, Any], layout_configs: List[Dict[str, An
     return f"GIS 布局生成完成：{len(layout_configs)} 个图层 ({', '.join(layer_types)})"
 
 
-def _bundle_to_compat_dict(bundle: Any) -> Dict[str, Any]:
-    """Convert GISDataBundle to raw dict for pipeline compat.
-
-    Delegates to DataCatalog._bundle_to_compat_dict for the canonical
-    conversion. Kept here as a local convenience for graph.py.
-    """
-    from app.modules.data.catalog.catalog import _bundle_to_compat_dict as _catalog_compat
-    return _catalog_compat(bundle)
-
-
 def _merge_user_uploads_into_bundle(
     bundle: Any, user_uploaded: Dict[str, Any]
 ) -> None:
-    """Merge user-uploaded GeoJSON data into a GISDataBundle.
+    """Merge user-uploaded GeoJSON data into a VillageBundle.
 
     User uploads are raw GeoJSON dicts keyed by data type.
-    This merges them into the bundle's typed fields.
+    Features are routed to the appropriate morphology group based on geometry type.
     """
-    from app.modules.schema.types.canonical import GeoFeature
+    from app.modules.schema.types.base import PointFeature, LineFeature, PolygonFeature
 
     for key, val in user_uploaded.items():
         if not isinstance(val, dict) or val.get("type") != "FeatureCollection":
             continue
         features = val.get("features", [])
-        geo_features = [
-            GeoFeature(
-                geometry=f.get("geometry", {}),
-                properties=f.get("properties", {}),
-            )
-            for f in features
-        ]
-        # Route to bundle field by key name
-        if "boundary" in key and geo_features:
-            if bundle.boundary is None:
-                bundle.boundary = geo_features[0]
-        elif "road" in key:
-            bundle.roads.extend(geo_features)
-        elif "annotation" in key:
-            bundle.annotations.extend(geo_features)
-        elif "water" in key:
-            bundle.water_bodies.extend(geo_features)
+        if not features:
+            continue
+
+        for f in features:
+            geom = f.get("geometry", {})
+            props = f.get("properties", {})
+
+            if "boundary" in key:
+                feat = PolygonFeature(geometry=geom, _raw=props)
+                bundle.polygons.admin_areas.append(feat)
+            elif "road" in key:
+                feat = LineFeature(geometry=geom, _raw=props)
+                bundle.lines.inferred.append(feat)
+            elif "annotation" in key:
+                feat = PointFeature(geometry=geom, _raw=props)
+                bundle.points.inferred.append(feat)
+            elif "water" in key:
+                feat = PolygonFeature(geometry=geom, _raw=props)
+                bundle.polygons.water_bodies.append(feat)

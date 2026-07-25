@@ -19,7 +19,7 @@ from .constants import (
     DEFAULT_POI_OFFSET,
     DRIVING_STRATEGY,
 )
-from ..rate_limiter import RateLimiter
+from app.modules.data.connections import RateLimiter
 from app.utils.coord_transform import gcj02_to_wgs84, wgs84_to_gcj02
 from app.core.settings import (
     AMAP_API_KEY,

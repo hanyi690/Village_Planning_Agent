@@ -4,13 +4,13 @@ Independently-scoped KG for village planning context and constraints.
 Consumed by GIS tools (kg.py, parse_tools.py), PARSE Agent, and future
 EXECUTE_OPS Agent — not confined to the GIS subpackage.
 """
-from .builder import PlanningKG
+from .builder import PlanningKG, KGInputParcels
 from .query import QUERY_TEMPLATES, query_kg
 from .ontology import PLN, GEO, EntityTypes, Relations
 from .manager import KGManager, CacheKey, compute_layer1_cache_key, get_kg_manager
 
 __all__ = [
-    "PlanningKG", "QUERY_TEMPLATES", "query_kg",
+    "PlanningKG", "KGInputParcels", "QUERY_TEMPLATES", "query_kg",
     "PLN", "GEO", "EntityTypes", "Relations",
     "KGManager", "CacheKey", "compute_layer1_cache_key", "get_kg_manager",
 ]

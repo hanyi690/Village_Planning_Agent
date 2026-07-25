@@ -52,34 +52,36 @@ class CacheKey:
 
 def compute_layer1_cache_key(
     village_name: str,
-    landuse_geojson: Optional[Dict[str, Any]],
+    parcels: Optional[List[Any]],
 ) -> Optional[CacheKey]:
-    """Compute cache key for Layer 1 static subgraph.
+    """Compute cache key from typed parcel list.
 
-    Uses hash of BSM+DLBM+SHAPE_Area for all features to detect
-    actual data changes (not just file timestamp changes).
-
-    Args:
-        village_name: Village identifier.
-        landuse_geojson: Standard GeoJSON FeatureCollection.
-
-    Returns:
-        CacheKey if features exist, None otherwise.
+    Uses hash of BSM+DLBM+area_sqm for all features.
+    Accepts typed CurrentLandUseParcel list (preferred) or raw GeoJSON dict (legacy).
     """
-    if not landuse_geojson or not landuse_geojson.get("features"):
+    if not parcels:
         return None
 
-    features = landuse_geojson["features"]
-    hash_parts = []
-    for ft in sorted(
-        features, key=lambda f: str(f.get("properties", {}).get("BSM", ""))
-    ):
-        props = ft.get("properties", {})
-        bsm = str(props.get("BSM", "")).strip()
-        dlbm = str(props.get("DLBM", "")).strip()
-        area = str(props.get("SHAPE_Area", 0) or 0)
-        if bsm:
-            hash_parts.append(f"{bsm}:{dlbm}:{area}")
+    if isinstance(parcels, dict):
+        # Legacy: raw GeoJSON FeatureCollection
+        features = parcels.get("features", [])
+        hash_parts = []
+        for ft in sorted(features, key=lambda f: str(f.get("properties", {}).get("BSM", ""))):
+            props = ft.get("properties", {})
+            bsm = str(props.get("BSM", "")).strip()
+            dlbm = str(props.get("DLBM", "")).strip()
+            area = str(props.get("SHAPE_Area", 0) or 0)
+            if bsm:
+                hash_parts.append(f"{bsm}:{dlbm}:{area}")
+    else:
+        # Typed parcel list
+        hash_parts = []
+        for p in parcels:
+            bsm = str(getattr(p, "bsm", "")).strip()
+            dlbm = str(getattr(p, "dlbm", "")).strip()
+            area = str(getattr(p, "area_sqm", 0) or 0)
+            if bsm:
+                hash_parts.append(f"{bsm}:{dlbm}:{area}")
 
     if not hash_parts:
         return None
@@ -159,23 +161,25 @@ class KGManager:
     def get_or_build_layer1(
         self,
         village_name: str,
-        landuse_geojson: Optional[Dict[str, Any]],
-        gis_data: Optional[Dict[str, Any]],
+        bundle: Optional[Any] = None,
+        context_blocks: Optional[List[Any]] = None,
+        parcel_relations: Optional[Any] = None,
+        landuse_geojson: Optional[Dict[str, Any]] = None,  # legacy fallback
+        gis_data: Optional[Dict[str, Any]] = None,  # legacy fallback
     ) -> Tuple[Any, bool]:
         """Get Layer 1 KG from cache or build fresh.
 
-        Args:
-            village_name: Village identifier.
-            landuse_geojson: Current landuse parcels GeoJSON.
-            gis_data: Full GIS data dict.
+        Prefer bundle + context_blocks (v4.4 path).
+        Falls back to landuse_geojson + gis_data (legacy path).
 
         Returns:
             (PlanningKG, cache_hit) tuple.
-            cache_hit is True if Layer 1 was served from cache.
         """
         from app.modules.kg.builder import PlanningKG
 
-        cache_key = compute_layer1_cache_key(village_name, landuse_geojson)
+        # Use typed parcels for cache key when available
+        parcels = bundle.polygons.landuse_current if bundle else landuse_geojson
+        cache_key = compute_layer1_cache_key(village_name, parcels)
         key_str = str(cache_key) if cache_key else ""
 
         # Try cache
@@ -188,16 +192,19 @@ class KGManager:
 
         # Build fresh
         kg = PlanningKG(village_name=village_name)
-        kg._build_static(landuse_geojson=landuse_geojson, gis_data=gis_data)
+        if bundle is not None and context_blocks is not None:
+            kg.build_from_blocks(
+                blocks=context_blocks,
+                bundle=bundle,
+                parcel_relations=parcel_relations,
+            )
+        else:
+            logger.warning("[KGManager] No bundle/context_blocks provided — skipping Layer 1 build")
 
         # Store in cache
         if self._cache_enabled and key_str:
             self._layer1_cache.put(key_str, kg.clone_static_layer())
-            logger.info(
-                "[KGManager] Layer 1 cached: %s (%d triples)",
-                key_str,
-                kg.get_triple_count(),
-            )
+            logger.info("[KGManager] Layer 1 cached: %s (%d triples)", key_str, kg.get_triple_count())
 
         return kg, False
 
@@ -299,33 +306,30 @@ class KGManager:
     def get_or_build_kg(
         self,
         village_name: str,
-        landuse_geojson: Optional[Dict[str, Any]],
-        gis_data: Optional[Dict[str, Any]],
+        bundle: Optional[Any] = None,
+        context_blocks: Optional[List[Any]] = None,
+        parcel_relations: Optional[Any] = None,
         intent: Any = None,
         reports: Optional[Dict[str, Dict[str, Any]]] = None,
         session_id: str = "",
+        landuse_geojson: Optional[Dict[str, Any]] = None,
+        gis_data: Optional[Dict[str, Any]] = None,
     ) -> Any:
-        """Build complete KG with Layer 1 caching.
-
-        Convenience method that handles the full build pipeline:
-          1. Layer 1 (cached) → Layer 2 (from intent/reports) → Layer 3 (designated_as)
-        """
-        kg, cache_hit = self.get_or_build_layer1(village_name, landuse_geojson, gis_data)
-
-        # Layer 2: semantic (from intent or reports)
-        zone_areas = kg._compute_zone_areas_from_gis(gis_data)
-        if intent is not None:
-            kg._build_semantic(intent=intent, zone_areas=zone_areas)
+        """Build complete KG with Layer 1 caching."""
+        kg, cache_hit = self.get_or_build_layer1(
+            village_name=village_name,
+            bundle=bundle,
+            context_blocks=context_blocks,
+            parcel_relations=parcel_relations,
+            landuse_geojson=landuse_geojson,
+            gis_data=gis_data,
+        )
+        if intent is not None and hasattr(kg, "_add_structured_intent"):
+            kg._add_structured_intent(intent)
         elif reports is not None:
-            kg._build_semantic(reports=reports, zone_areas=zone_areas)
-
-        # Layer 3: volatile (designated_as)
-        kg._build_volatile(landuse_geojson=landuse_geojson)
-
-        # Register session
+            logger.warning("[KGManager] reports path deprecated in v4.4 — use bundle + context_blocks")
         if session_id:
             self.register_session(session_id, kg)
-
         return kg
 
     # ── Stats ──────────────────────────────────────────────────────

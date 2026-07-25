@@ -10,7 +10,7 @@ Consumed by: ZoneGenerator, FacilityPlacer, AxisBuilder, allocate/generate tools
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -182,132 +182,6 @@ class ExportResult(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
-# ============================================================
-# Spatial Context (computed from GIS data → LLM context injection)
-# ============================================================
-
-
-class LanduseEntry(BaseModel):
-    """Single land-use category entry in spatial context.
-
-    dlbm 字段的编码体系取决于数据来源:
-      - 现状层 (current/landuse.geojson): appendix5 编码
-      - 规划层 (planned/landuse.geojson DLBM列): tugui 编码
-    """
-
-    dlbm: str = ""
-    name: str = ""
-    count: int = 0
-    area_ha: float = 0.0
-    zone_type: str = ""
-    planning_zone: str = ""
-
-
-class NaturalVillageAnchor(BaseModel):
-    """Natural village spatial anchor — PARSE uses this to resolve location_desc.
-
-    Computed from landuse GeoJSON by clustering residential parcels
-    and matching place_aliases.yaml.
-    """
-
-    name: str = ""
-    center: Tuple[float, float] = (0.0, 0.0)
-    parcel_ids: List[str] = Field(default_factory=list)
-    dominant_landuse: str = ""
-    adjacent_to: List[str] = Field(default_factory=list)
-
-
-class SpatialRelation(BaseModel):
-    """Spatial relation triple computed from GIS geometry.
-
-    Subjects and objects are natural village names, land-use zones,
-    or infrastructure features.
-    """
-
-    subject: str = ""
-    relation: Literal[
-        "east_of", "west_of", "north_of", "south_of",
-        "adjacent_to", "contains", "contained_by",
-        "near", "along", "between",
-    ] = "adjacent_to"
-    object: str = ""
-    confidence: float = 1.0
-    source: Literal[
-        "geometry_computed", "alias_lookup", "llm_inferred",
-    ] = "geometry_computed"
-
-
-class ConstraintSummary(BaseModel):
-    """Spatial summary of protection zones — PARSE uses this to structure constraints."""
-
-    zone_type: str = ""
-    rule: str = ""
-    area_ha: Optional[float] = None
-    geometry_type: Optional[str] = None
-    overlaps_with: List[str] = Field(default_factory=list)
-
-
-class FacilityAnchor(BaseModel):
-    """Facility spatial anchor — precise location from annotation.geojson.
-
-    Unlike NaturalVillageAnchor (clustered from residential parcels), this comes
-    directly from annotation.geojson's 现状设施点 features, which carry exact
-    coordinates and a typed facility classification.
-    PARSE uses this to ground facility location_hints instead of fuzzy gazetteer.
-    """
-
-    name: str = ""                       # 注记文本, e.g. "村委会", "小学", "祠堂"
-    facility_type: str = ""              # mapped type: "公共服务", "教育", "文化", "体育"
-    category: str = ""                   # "现状设施点" / "规划设施点"
-    center: Tuple[float, float] = (0.0, 0.0)
-
-
-class SpatialContext(BaseModel):
-    """Spatially-aware GIS context for PARSE Agent.
-
-    Derived from GISDataBundle by compute_spatial_context().
-    Compact representation: ~2KB for 660 parcels (vs ~5MB raw GeoJSON).
-
-    Not injected: raw geometry coordinates (too large for LLM context).
-    Injected: spatial relations + anchors + constraint summaries.
-    """
-
-    parcel_count: int = 0
-    total_area_ha: float = 0.0
-    construction_boundary_ha: float = 0.0
-
-    landuse_distribution: List[LanduseEntry] = Field(default_factory=list)
-    village_center: Optional[Tuple[float, float]] = None
-    natural_villages: List[NaturalVillageAnchor] = Field(default_factory=list)
-    spatial_relations: List[SpatialRelation] = Field(default_factory=list)
-    constraint_summary: List[ConstraintSummary] = Field(default_factory=list)
-    zone_adjacency: Dict[str, List[str]] = Field(default_factory=dict)
-
-    # Precise anchors from annotation.geojson (exact coordinates, not clustered)
-    facility_anchors: List[FacilityAnchor] = Field(default_factory=list)
-    annotation_villages: List[NaturalVillageAnchor] = Field(default_factory=list)
-
-    # Terrain profile (P2 reserved — from DEM analysis, None when no DEM data)
-    terrain_profile: Optional["TerrainProfile"] = None
-
-
-class TerrainProfile(BaseModel):
-    """Terrain analysis summary — compact digest for LLM spatial reasoning.
-
-    Populated from TerrainAnalysisResult when DEM data is available.
-    Currently reserved (P2) — set to None when no DEM data exists.
-    """
-
-    slope_area_pct: Dict[str, float] = Field(default_factory=dict)
-    # {"0-6": 25.3, "6-15": 40.1, "15-25": 28.5, ">25": 6.1}
-
-    aspect_area_pct: Dict[str, float] = Field(default_factory=dict)
-    # {"N": 12.5, "S": 18.2, ...}
-
-    suitability_area_pct: Dict[str, float] = Field(default_factory=dict)
-    # {"suitable": 30.0, "moderate": 35.0, "marginal": 25.0, "unsuitable": 10.0}
-
-
 __all__ = [
     "Direction",
     "Density",
@@ -322,12 +196,4 @@ __all__ = [
     "ValidationReport",
     "AllocationResult",
     "ExportResult",
-    # Spatial context (GIS → Agent contract)
-    "LanduseEntry",
-    "NaturalVillageAnchor",
-    "FacilityAnchor",
-    "SpatialRelation",
-    "ConstraintSummary",
-    "SpatialContext",
-    "TerrainProfile",
 ]

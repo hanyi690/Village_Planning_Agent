@@ -1,13 +1,14 @@
 """
-Coverage Calculator - GIS 覆盖率计算（从 wrapper 分离）
+Coverage Calculator - GIS coverage via DataCatalog.
 
-提供 GIS 数据覆盖率计算功能，支持用户上传数据和自动获取数据的合并。
+Calculates GIS data availability from local data sources.
 """
 
-from typing import Dict, Any, Optional
-import json
+from __future__ import annotations
 
-from app.modules.data.fetcher import get_fetcher
+from typing import Any, Dict, Optional
+
+from app.modules.data.catalog.catalog import DataCatalog
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -19,118 +20,52 @@ def calculate_gis_coverage(
     user_uploaded_data: Optional[Dict[str, Any]] = None,
     max_features: int = 100
 ) -> Dict[str, Any]:
-    """
-    计算 GIS 数据覆盖率
+    """Calculate GIS data coverage for a village.
 
-    数据获取优先级：用户上传 > 会话缓存 > 自动获取（天地图 WFS）
+    Data source priority: user uploaded > local file (DataCatalog).
 
     Args:
-        location: 村庄名称/位置
-        buffer_km: 缓冲区半径（公里）
-        user_uploaded_data: 用户上传数据字典 {"boundary": geojson, "water": geojson, ...}
-        max_features: 最大特征数
+        location: Village name.
+        buffer_km: Buffer radius in km (unused for local data).
+        user_uploaded_data: User-uploaded GeoJSON dict.
+        max_features: Max features (unused for local data).
 
     Returns:
-        Dict[str, Any]: 覆盖率计算结果
+        Coverage calculation result.
     """
-    fetcher = get_fetcher()
-
     if not location:
-        return {"success": False, "error": "缺少 location 参数"}
+        return {"success": False, "error": "missing location"}
 
-    # 数据来源追踪
-    data_sources = {}
-
-    # 从 user_uploaded_data 获取用户上传数据
     user_uploaded_data = user_uploaded_data or {}
-    user_boundary_geojson = user_uploaded_data.get("boundary")
-    user_water_geojson = user_uploaded_data.get("water")
-    user_road_geojson = user_uploaded_data.get("road")
-    user_residential_geojson = user_uploaded_data.get("residential")
+    user_boundary = user_uploaded_data.get("boundary")
+    user_water = user_uploaded_data.get("water")
+    user_road = user_uploaded_data.get("road")
+    user_residential = user_uploaded_data.get("residential")
 
-    # 如果有用户数据，记录日志
-    if user_boundary_geojson or user_water_geojson or user_road_geojson or user_residential_geojson:
-        logger.info(f"[CoverageCalculator] 使用用户上传数据: {location}")
+    if user_boundary or user_water or user_road or user_residential:
+        logger.info("[CoverageCalculator] Using user-uploaded data: %s", location)
 
-    # 自动获取数据（补充缺失类型）
-    auto_result = fetcher.fetch_all_gis_data(
-        location, buffer_km, max_features=max_features)
+    # Load from DataCatalog
+    try:
+        catalog = DataCatalog()
+        bundle = catalog.load_village_bundle(location)
+        has_boundary = bundle.boundary is not None
+        has_landuse = len(bundle.polygons.landuse_current) > 0
+        has_planned = len(bundle.polygons.landuse_planned) > 0
+        has_roads = len(bundle.lines.roads_current) + len(bundle.lines.roads_planned) > 0
+    except Exception as e:
+        logger.warning("[CoverageCalculator] DataCatalog failed: %s", e)
+        has_boundary = False
+        has_landuse = False
+        has_planned = False
+        has_roads = False
 
-    # 合并数据源：用户数据覆盖自动获取数据
-    def get_geojson_with_source(data_type: str, user_data: Optional[Dict], auto_data: Optional[Dict]) -> tuple:
-        """获取 GeoJSON 数据并标记来源"""
-        if user_data:
-            return user_data, "user_upload"
-        if auto_data and auto_data.get("success") and auto_data.get("geojson"):
-            return auto_data.get("geojson"), "auto_fetch"
-        return None, "missing"
-
-    boundary_geojson, boundary_source = get_geojson_with_source("boundary", user_boundary_geojson, auto_result.get("boundary"))
-    water_geojson, water_source = get_geojson_with_source("water", user_water_geojson, auto_result.get("water"))
-    road_geojson, road_source = get_geojson_with_source("road", user_road_geojson, auto_result.get("road"))
-    residential_geojson, residential_source = get_geojson_with_source("residential", user_residential_geojson, auto_result.get("residential"))
-
-    data_sources = {
-        "boundary": boundary_source,
-        "water": water_source,
-        "road": road_source,
-        "residential": residential_source,
-    }
-
-    # 统计可用数据和特征数
-    water_success = water_geojson is not None
-    road_success = road_geojson is not None
-    residential_success = residential_geojson is not None
-    boundary_success = boundary_geojson is not None
-
-    water_count = len(water_geojson.get("features", [])) if water_geojson else 0
-    road_count = len(road_geojson.get("features", [])) if road_geojson else 0
-    residential_count = len(residential_geojson.get("features", [])) if residential_geojson else 0
+    boundary_success = bool(user_boundary) or has_boundary
+    water_success = bool(user_water)  # water data not in current bundle
+    road_success = bool(user_road) or has_roads
+    residential_success = bool(user_residential)
 
     coverage_rate = sum([water_success, road_success, residential_success]) / 3
-
-    # 构建图层列表
-    layers = []
-    type_mapping = {
-        "boundary": {"layerType": "boundary", "layerName": "行政边界", "color": "#333333"},
-        "water": {"layerType": "sensitivity_zone", "layerName": "水系", "color": "#87CEEB"},
-        "road": {"layerType": "development_axis", "layerName": "道路", "color": "#FF6B6B"},
-        "residential": {"layerType": "function_zone", "layerName": "居民地", "color": "#FFD700"},
-    }
-
-    # 添加边界层
-    if boundary_success and boundary_geojson and boundary_geojson.get("features"):
-        layers.append({
-            "geojson": boundary_geojson,
-            "layerType": "boundary",
-            "layerName": "行政边界",
-            "color": "#333333",
-            "source": boundary_source,
-        })
-
-    # 添加其他图层
-    for category, mapping in type_mapping.items():
-        if category == "boundary":
-            continue
-
-        geojson = None
-        source = data_sources.get(category, "missing")
-
-        if category == "water":
-            geojson = water_geojson
-        elif category == "road":
-            geojson = road_geojson
-        elif category == "residential":
-            geojson = residential_geojson
-
-        if geojson and geojson.get("features"):
-            layers.append({
-                "geojson": geojson,
-                "layerType": mapping["layerType"],
-                "layerName": mapping["layerName"],
-                "color": mapping["color"],
-                "source": source,
-            })
 
     return {
         "success": True,
@@ -144,35 +79,40 @@ def calculate_gis_coverage(
                 "boundary": boundary_success,
             },
             "feature_counts": {
-                "water": water_count,
-                "road": road_count,
-                "residential": residential_count,
+                "water": len(user_water.get("features", [])) if user_water else 0,
+                "road": len(user_road.get("features", [])) if user_road else 0,
+                "residential": len(user_residential.get("features", [])) if user_residential else 0,
             },
-            "center": auto_result.get("center"),
-            "layers": layers,
-            "data_sources": data_sources,
+            "center": None,
+            "layers": [],
+            "data_sources": {
+                "boundary": "user_upload" if user_boundary else ("local" if has_boundary else "missing"),
+                "water": "user_upload" if user_water else "missing",
+                "road": "user_upload" if user_road else ("local" if has_roads else "missing"),
+                "residential": "user_upload" if user_residential else "missing",
+            },
         }
     }
 
 
 def format_coverage_result(result: Dict[str, Any]) -> str:
-    """格式化覆盖率计算结果"""
+    """Format coverage calculation result to string."""
     if not result.get("success"):
-        return f"覆盖率计算失败: {result.get('error', '未知错误')}"
+        return f"Coverage calculation failed: {result.get('error', 'unknown error')}"
 
     data = result.get("data", {})
-    lines = ["GIS 数据覆盖率："]
-    lines.append(f"- 位置: {data.get('location')}")
-    lines.append(f"- 覆盖率: {data.get('coverage_rate', 0):.2%}")
+    lines = ["GIS data coverage:"]
+    lines.append(f"- Location: {data.get('location')}")
+    lines.append(f"- Coverage: {data.get('coverage_rate', 0):.2%}")
 
     layers = data.get("layers_available", {})
-    lines.append("- 图层可用性:")
+    lines.append("- Layer availability:")
     for layer, available in layers.items():
         status = "✓" if available else "✗"
         lines.append(f"  * {layer}: {status}")
 
     data_sources = data.get("data_sources", {})
-    lines.append("- 数据来源:")
+    lines.append("- Data sources:")
     for layer, source in data_sources.items():
         lines.append(f"  * {layer}: {source}")
 

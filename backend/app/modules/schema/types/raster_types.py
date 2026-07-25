@@ -24,34 +24,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .base import RasterDataset  # noqa: F401  # L0 栅格基类
+
+
+# RasterInput 已删除 — 统一使用 RasterDataset (base.py)
+
 
 # ============================================================
-# 栅格数据基类
+# RasterDataset (base.py) — 栅格基类, 取代旧 RasterInput.
+# DEMInput/DOMInput 继承 RasterDataset; resolution/nodata/elevation_datum
+# 通过 _meta 或子类自定义字段存放.
 # ============================================================
-
-
-@dataclass
-class RasterInput:
-    """栅格输入基类 — 所有栅格数据的共享属性。
-
-    与 SpatialFeature (矢量基类) 平行，但不继承。
-    栅格数据没有 geometry dict，而是有栅格路径和元数据。
-    """
-
-    path: str = ""                        # GeoTIFF 文件路径
-    crs: str = "EPSG:4490"                # 坐标系 (CGCS2000 地理坐标系)
-    resolution: float = 0.0               # 空间分辨率 (米/像素)
-    nodata: Optional[float] = None        # NoData 值
-    elevation_datum: str = ""              # 高程基准 (1985国家高程基准)
-    _meta: Dict[str, Any] = field(default_factory=dict, repr=False)
-
-    @property
-    def filename(self) -> str:
-        return Path(self.path).name if self.path else ""
-
-    @property
-    def exists(self) -> bool:
-        return Path(self.path).exists() if self.path else False
 
 
 # ============================================================
@@ -60,7 +43,7 @@ class RasterInput:
 
 
 @dataclass
-class DEMInput(RasterInput):
+class DEMInput(RasterDataset):
     """数字高程模型 (DEM) — 地形分析基础数据。
 
     规范依据:
@@ -84,7 +67,7 @@ class DEMInput(RasterInput):
 
 
 @dataclass
-class DOMInput(RasterInput):
+class DOMInput(RasterDataset):
     """数字正射影像图 (DOM) — 现状判读基础数据。
 
     规范依据:
@@ -133,6 +116,39 @@ class TerrainAnalysisResult:
 
 
 # ============================================================
+# 栅格派生类型 (DEM 派生) [v4.2]
+# ============================================================
+
+
+@dataclass
+class SlopeRaster(RasterDataset):
+    """坡度栅格 — DEM 派生.
+
+    值域: 0-90° (Float32).
+    """
+
+    slope_unit: str = "degree"
+
+
+@dataclass
+class AspectRaster(RasterDataset):
+    """坡向栅格 — DEM 派生.
+
+    值域: 0-360° (Float32).
+    """
+
+
+@dataclass
+class SuitabilityRaster(RasterDataset):
+    """建设适宜性评价栅格.
+
+    值域: Int16 分类 (1=适宜/2=较适宜/3=限制建设/4=禁止建设).
+    """
+
+    classification: Dict[str, int] = field(default_factory=dict)
+
+
+# ============================================================
 # 坡度分级常量
 # ============================================================
 
@@ -156,9 +172,12 @@ ASPECT_CLASSES = {
 
 
 __all__ = [
-    "RasterInput",
+    "RasterDataset",
     "DEMInput",
     "DOMInput",
+    "SlopeRaster",
+    "AspectRaster",
+    "SuitabilityRaster",
     "TerrainAnalysisResult",
     "SLOPE_CLASSES",
     "ASPECT_CLASSES",

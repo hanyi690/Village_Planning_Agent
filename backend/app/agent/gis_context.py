@@ -89,28 +89,10 @@ class SharedGISContext:
         """DEPRECATED: Use DataCatalog.load_village_bundle() instead.
 
         Center is now derived from boundary geometry via DataCatalog.
-        This method is kept for backward compat during transition.
+        This method returns None — callers must use DataCatalog.
         """
-        if not self.village_name:
-            logger.warning("[SharedGISContext] village_name 为空，无法计算 center")
-            return None
-
-        try:
-            from app.modules.data.fetcher import get_fetcher
-            fetcher = get_fetcher()  # 使用单例
-
-            center, metadata = fetcher.get_village_center(self.village_name, buffer_km=self.buffer_km)
-
-            if center:
-                logger.info(f"[SharedGISContext] 定位成功: {self.village_name} -> {center}")
-                return center
-
-            logger.warning(f"[SharedGISContext] 无法定位 {self.village_name}，将使用默认中心点")
-            return None
-
-        except Exception as e:
-            logger.error(f"[SharedGISContext] 定位异常: {e}")
-            return None
+        logger.warning("[SharedGISContext] _compute_center is deprecated, use DataCatalog")
+        return None
 
     def _compute_bbox(self) -> Tuple[float, float, float, float]:
         """计算边界范围（基于 center 和 buffer_km）"""

@@ -9,7 +9,7 @@
 
 本包是村庄规划系统的 **PLAN / DELIVER 执行核**，对应 v6.0 北极星三段（ANALYZE / PLAN / DELIVER）中的后两段：
 
-- **PARSE Agent**（`parse/`）：消费 L3 规划报告文本 + SpatialContext，产出类型化空间意图（`SpatialPlanningIntent` / `SpatialOperation` / `SpatialConstraint`）
+- **PARSE Agent**（`parse/`）：消费 L3 规划报告文本 + ContextBlock 列表，产出类型化空间意图（`SpatialPlanningIntent` / `SpatialOperation` / `SpatialConstraint`）
 - **EXECUTE Agent**（`execute/`）：消费空间意图 + KG 上下文，产出空间布局成果（分配用地 / 设施 / 轴线 / 道路）
 - **顶层流水线**（`layout_pipeline.py`）：编排 parse → fetch → KG → conflicts → execute → export → render 的确定骨架
 

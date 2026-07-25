@@ -69,9 +69,8 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
     gis_data = state.gis_data or {}
     # Prefer typed bundle for landuse; fall back to raw dict
     gis_bundle = getattr(state, "gis_bundle", None)
-    if gis_bundle is not None and hasattr(gis_bundle, "landuse") and gis_bundle.landuse:
-        from app.modules.data.catalog.catalog import _bundle_to_compat_dict
-        landuse_dict = _bundle_to_compat_dict(gis_bundle)
+    if gis_bundle is not None and hasattr(gis_bundle, "polygons") and (gis_bundle.polygons.landuse_current or gis_bundle.polygons.landuse_planned):
+        landuse_dict = gis_bundle.to_geojson_dict()
         landuse = landuse_dict.get("landuse_current_geojson")
     else:
         landuse = gis_data.get("landuse_current_geojson")

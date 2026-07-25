@@ -2,13 +2,15 @@
 
 Functions that compute topological and directional relations between
 spatial entities: village-to-village directions, zone adjacency.
+
+[v4.3] Type-safe: accepts typed feature lists, uses direct attribute access.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from app.modules.schema.contracts.layout_contracts import (
+from app.modules.schema.contracts.context_contracts import (
     NaturalVillageAnchor,
     SpatialRelation,
 )
@@ -18,14 +20,13 @@ logger = get_logger(__name__)
 
 
 def _compute_spatial_relations(
-    landuse_geojson: Dict[str, Any],
     natural_villages: List[NaturalVillageAnchor],
 ) -> List[SpatialRelation]:
     """Compute spatial relations between natural villages and zones.
 
     Uses centroid-based direction computation and distance-based topology.
     """
-    relations = []
+    relations: List[SpatialRelation] = []
 
     try:
         if len(natural_villages) < 2:
@@ -102,28 +103,44 @@ def _compute_spatial_relations(
             ))
 
     except Exception as e:
-        logger.warning("[SpatialContext] Spatial relations failed: %s", e)
+        logger.warning("[relations] Spatial relations failed: %s", e)
 
     return relations
 
 
-def _compute_zone_adjacency(landuse_geojson: Dict[str, Any]) -> Dict[str, List[str]]:
-    """Compute zone adjacency matrix summary from landuse data."""
+def _compute_zone_adjacency(parcels: List[Any]) -> Dict[str, List[str]]:
+    """Compute zone adjacency matrix from typed land-use parcels.
+
+    Accepts List[BaseLandUseParcel] — uses p.dlbm and shape(p.geometry) directly.
+    """
     try:
-        from app.utils.geojson_utils import geojson_to_geodataframe
         from app.modules.schema import get_zone_type_for_dlbm
+        from shapely.geometry import shape
 
-        gdf = geojson_to_geodataframe(landuse_geojson)
-        if gdf is None or gdf.empty:
+        if not parcels:
             return {}
 
-        from .geometry import _find_column
-        dlbm_col = _find_column(gdf, ["DLBM", "dlbm"])
-        if not dlbm_col:
+        # Build GeoDataFrame from typed parcels for spatial indexing
+        import geopandas as gpd
+        from shapely.geometry import shape as shp
+
+        geoms = []
+        zone_types = []
+        for p in parcels:
+            geom = getattr(p, "geometry", None)
+            if geom is None:
+                continue
+            try:
+                geoms.append(shp(geom))
+                dlbm = str(getattr(p, "dlbm", "")).strip()
+                zone_types.append(get_zone_type_for_dlbm(dlbm))
+            except Exception:
+                continue
+
+        if not geoms:
             return {}
 
-        # Add zone_type column
-        gdf["zone_type"] = gdf[dlbm_col].astype(str).str.strip().apply(get_zone_type_for_dlbm)
+        gdf = gpd.GeoDataFrame({"zone_type": zone_types, "geometry": geoms}, crs="EPSG:4326")
 
         # Build adjacency from touching parcels
         adjacency: Dict[str, set] = {}
@@ -148,5 +165,5 @@ def _compute_zone_adjacency(landuse_geojson: Dict[str, Any]) -> Dict[str, List[s
 
         return {k: sorted(v) for k, v in adjacency.items() if v}
     except Exception as e:
-        logger.warning("[SpatialContext] Zone adjacency failed: %s", e)
+        logger.warning("[relations] Zone adjacency failed: %s", e)
         return {}

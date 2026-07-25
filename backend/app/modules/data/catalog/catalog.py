@@ -22,7 +22,39 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from app.modules.schema.types.canonical import BBox
+from app.modules.schema.types.canonical import BBox, VillageBundle, VillageMetadata
+from app.modules.schema.types.base import PointFeature as _PointFeature, LineFeature as _LineFeature, PolygonFeature as _PolygonFeature
+from app.modules.schema.types.spatial_types import (
+    AdminArea as _AdminArea, AdminBoundaryLine as _AdminBoundaryLine,
+    ConditionalConstructionZone as _ConditionalConstructionZone,
+    ConstructionCtrlZone as _ConstructionCtrlZone,
+    ContourLine as _ContourLine,
+    CultivatedLandTarget as _CultivatedLandTarget,
+    CurrentAnnotation as _CurrentAnnotation, PlannedAnnotation as _PlannedAnnotation,
+    CurrentBuilding as _CurrentBuilding,
+    CurrentFacility as _CurrentFacility, PlannedFacility as _PlannedFacility,
+    CurrentLandUseParcel as _CurrentLandUseParcel,
+    PlannedLandUseParcel as _PlannedLandUseParcel,
+    CurrentRoad as _CurrentRoad, PlannedRoad as _PlannedRoad,
+    EcologicalRedline as _EcologicalRedline,
+    ElevationPoint as _ElevationPoint,
+    FarmlandProtection as _FarmlandProtection,
+    FloodControlLine as _FloodControlLine,
+    GeologicalHazardPoint as _GeologicalHazardPoint,
+    HazardControlLine as _HazardControlLine,
+    HistoricalProtection as _HistoricalProtection,
+    HydrogeologyZone as _HydrogeologyZone,
+    LandUseZone as _LandUseZone,
+    NatureReserve as _NatureReserve,
+    PlanningScope as _PlanningScope,
+    SoilErosion as _SoilErosion,
+    SoilType as _SoilType,
+    ThreeZoneItem as _ThreeZoneItem,
+    UrbanDevBoundary as _UrbanDevBoundary,
+    VillageDevBoundary as _VillageDevBoundary,
+    WaterFeature as _WaterFeature,
+    Watershed as _Watershed,
+)
 from app.utils.logger import get_logger
 
 from ..contracts import DataResult, DataSourceMetadata
@@ -57,108 +89,6 @@ def _extract_coords(geometry: Dict[str, Any], out: List[Tuple[float, float]]) ->
                 for c in ring:
                     if len(c) >= 2:
                         out.append((c[0], c[1]))
-
-
-def _bundle_to_compat_dict(bundle: Any) -> Dict[str, Any]:
-    """Convert GISDataBundle to raw dict for compute_spatial_context compat.
-
-    During the transition period, compute_spatial_context still reads
-    raw GeoJSON dicts keyed by ``{layer_type}_geojson``. This helper
-    bridges the typed bundle to that format.
-
-    TODO: Remove after T3 migration completes and all consumers accept bundles.
-    """
-    from app.modules.schema.types.canonical import GeoFeature
-
-    gis_data: Dict[str, Any] = {}
-
-    # Boundary
-    if bundle.boundary is not None:
-        feat = _geofeature_to_geojson(bundle.boundary)
-        gis_data["boundary_geojson"] = {
-            "type": "FeatureCollection",
-            "features": [feat],
-        }
-
-    # Landuse parcels -> FeatureCollection
-    if bundle.landuse:
-        features = []
-        for p in bundle.landuse:
-            if isinstance(p, GeoFeature):
-                features.append(_geofeature_to_geojson(p))
-            elif isinstance(p, dict):
-                features.append(p)
-            elif hasattr(p, "geometry") and isinstance(getattr(p, "geometry", None), dict):
-                # Dataclass-style parcel (CurrentLandUseParcel, etc.)
-                geom = p.geometry
-                props = {k: v for k, v in p.__dict__.items() if k != "geometry" and not k.startswith("_")}
-                features.append({"type": "Feature", "geometry": geom, "properties": props})
-            elif hasattr(p, "model_dump"):
-                d = p.model_dump()
-                geom = d.get("geometry", {})
-                props = {k: v for k, v in d.items() if k != "geometry"}
-                features.append({"type": "Feature", "geometry": geom, "properties": props})
-        gis_data["landuse_current_geojson"] = {
-            "type": "FeatureCollection",
-            "features": features,
-        }
-
-    # Roads
-    if bundle.roads:
-        gis_data["road_geojson"] = _geofeatures_to_fc(bundle.roads)
-
-    # Water bodies
-    if bundle.water_bodies:
-        gis_data["water_geojson"] = _geofeatures_to_fc(bundle.water_bodies)
-
-    # Annotations
-    if bundle.annotations:
-        gis_data["annotation_geojson"] = _geofeatures_to_fc(bundle.annotations)
-
-    # Metadata
-    gis_data["_metadata"] = {
-        "village_name": bundle.metadata.village_name,
-        "bbox": bundle.metadata.bbox_wgs84.as_tuple if bundle.metadata.bbox_wgs84 else None,
-    }
-
-    return gis_data
-
-
-def _geofeature_to_geojson(feat: Any) -> Dict[str, Any]:
-    """Convert a GeoFeature, dataclass parcel, or dict to a GeoJSON Feature dict."""
-    from app.modules.schema.types.canonical import GeoFeature
-
-    if isinstance(feat, dict):
-        return feat
-    # Pydantic GeoFeature
-    if isinstance(feat, GeoFeature):
-        return {
-            "type": "Feature",
-            "geometry": feat.geometry if isinstance(feat.geometry, dict) else {},
-            "properties": feat.properties if isinstance(feat.properties, dict) else {},
-        }
-    # Dataclass-style spatial feature (CurrentLandUseParcel, CurrentAnnotation, etc.)
-    if hasattr(feat, "geometry") and isinstance(getattr(feat, "geometry", None), dict):
-        geom = feat.geometry
-        props = {k: v for k, v in feat.__dict__.items() if k != "geometry" and not k.startswith("_")}
-        # Map typed fields back to GeoJSON property names for compat
-        if "text" in props and "注记" not in props:
-            props["注记"] = props.pop("text")
-        if "category" in props and "分类" not in props:
-            props["分类"] = props.pop("category")
-        return {"type": "Feature", "geometry": geom, "properties": props}
-    # Pydantic model fallback
-    if hasattr(feat, "model_dump"):
-        return feat.model_dump()
-    return {"type": "Feature", "geometry": {}, "properties": {}}
-
-
-def _geofeatures_to_fc(features: List[Any]) -> Dict[str, Any]:
-    """Convert a list of GeoFeature to a FeatureCollection dict."""
-    return {
-        "type": "FeatureCollection",
-        "features": [_geofeature_to_geojson(f) for f in features],
-    }
 
 
 class DataCatalog:
@@ -359,14 +289,14 @@ class DataCatalog:
         village_name: str,
         layer_types: Optional[List[str]] = None,
     ):
-        """Load village data bundle — schema-driven, no bbox required.
+        """Load village data bundle — morphology-first, no bbox required.
 
         Flow:
           1. Load boundary first (file_vector ignores bbox)
           2. Derive bbox from boundary geometry
           3. Fallback: geocode village_name if no boundary
           4. Load all layers (file_vector ignores bbox, api_vector uses it)
-          5. Return typed GISDataBundle
+          5. Return typed VillageBundle with morphology groups populated
 
         Args:
             village_name: village name for metadata and geocode fallback.
@@ -374,10 +304,8 @@ class DataCatalog:
                 configured sources whose layer_type is in ``LAYER_TYPE_REGISTRY``.
 
         Returns:
-            ``GISDataBundle`` with boundary, landuse, roads, annotations and
-            metadata populated from typed schema models.
+            ``VillageBundle`` with points/lines/polygons/rasters morphology groups.
         """
-        from app.modules.schema import GISDataBundle, GISMetadata, GeoFeature
         from app.modules.schema.types.layer_registry import LAYER_TYPE_REGISTRY
         from ..ingest import result_to_parcels, result_to_features
 
@@ -386,24 +314,17 @@ class DataCatalog:
 
         # Step 1: Load boundary first (no bbox needed for file_vector)
         bbox = None
-        bundle = GISDataBundle(metadata=GISMetadata(village_name=village_name))
+        bundle = VillageBundle(village_name=village_name)
 
         boundary_result = self._load_boundary(village_name)
         if boundary_result and boundary_result.success:
             # Step 2: Derive bbox from boundary geometry
             bbox = self._derive_bbox_from_boundary(boundary_result.data)
-            # Assign boundary to bundle
-            geojson = boundary_result.data
-            if geojson and isinstance(geojson, dict) and geojson.get("type") == "FeatureCollection":
-                feats = [
-                    GeoFeature(
-                        geometry=f.get("geometry", {}),
-                        properties=f.get("properties", {}),
-                    )
-                    for f in geojson.get("features", [])
-                ]
-                if feats:
-                    bundle.boundary = feats[0]
+            # Assign boundary: ingest as AdminArea via result_to_features
+            from ..ingest import result_to_features
+            admin_features, _ = result_to_features(boundary_result, "admin_area")
+            if admin_features:
+                bundle.polygons.admin_areas.extend(admin_features)
 
         # Step 2b: Fallback — geocode if no boundary
         if bbox is None:
@@ -422,17 +343,11 @@ class DataCatalog:
                 continue
             entry = LAYER_TYPE_REGISTRY.get(lt)
             if entry is None or entry.ingest_port is None:
-                # Untyped layers -> wrap as GeoFeature list
-                geojson = result.data if isinstance(result.data, dict) else None
-                if geojson and geojson.get("type") == "FeatureCollection":
-                    feats = [
-                        GeoFeature(
-                            geometry=f.get("geometry", {}),
-                            properties=f.get("properties", {}),
-                        )
-                        for f in geojson.get("features", [])
-                    ]
-                    self._assign_to_bundle(bundle, lt, feats)
+                # Untyped layers — skip with warning (inference pipeline not yet active)
+                logger.debug(
+                    "[DataCatalog] Layer '%s' has no ingest port — skipping "
+                    "(inference pipeline not yet active)", lt,
+                )
                 continue
 
             port_name, arg = entry.ingest_port, entry.ingest_arg
@@ -440,65 +355,32 @@ class DataCatalog:
                 parcels, warnings = result_to_parcels(result, layer_type=arg)
                 if warnings:
                     bundle.metadata.crs_warnings.extend(warnings[:5])
-                if lt == "landuse_current":
-                    bundle.landuse = parcels
-                else:
-                    bundle.landuse.extend(parcels)
+                # _assign_to_bundle uses isinstance, so parcels will route correctly
+                self._assign_to_bundle(bundle, parcels)
             elif port_name == "result_to_features":
                 features, _warnings = result_to_features(result, arg)
-                self._assign_to_bundle(bundle, lt, features)
+                self._assign_to_bundle(bundle, features)
+            elif port_name == "result_to_raster":
+                from ..ingest import result_to_raster
+                raster = result_to_raster(result, arg)
+                if raster is not None:
+                    if lt == "dem":
+                        bundle.rasters.dem = raster
+                    elif lt == "dom":
+                        bundle.rasters.dom = raster
 
-        bundle.metadata.parcel_count = len(bundle.landuse)
         bundle.metadata.provider_sources = list(results.keys())
         if bbox:
             bundle.metadata.bbox_wgs84 = bbox
 
         logger.info(
             "[DataCatalog] load_village_bundle('%s'): %d parcels, %d roads, %d annotations",
-            village_name, len(bundle.landuse), len(bundle.roads), len(bundle.annotations),
+            village_name,
+            bundle.parcel_count,
+            len(bundle.lines.roads_current) + len(bundle.lines.roads_planned),
+            len(bundle.points.annotations_current) + len(bundle.points.annotations_planned),
         )
         return bundle
-
-    def load_village_bundle_with_raw(
-        self,
-        village_name: str,
-        layer_types: Optional[List[str]] = None,
-    ):
-        """Load village bundle and also return raw GeoJSON dict for compat.
-
-        Returns (GISDataBundle, Dict[str, Any]) where the dict contains
-        raw GeoJSON keyed by ``{layer_type}_geojson`` for
-        ``compute_spatial_context`` compatibility during transition.
-
-        The raw dict includes protection zone layers that are not yet
-        represented in GISDataBundle fields.
-        """
-        from app.modules.schema.types.layer_registry import LAYER_TYPE_REGISTRY
-
-        bundle = self.load_village_bundle(village_name, layer_types=layer_types)
-        raw = _bundle_to_compat_dict(bundle)
-
-        # Add protection zone layers from query results (not in bundle fields)
-        # These are needed by compute_spatial_context and KG builder
-        protection_types = [
-            "farmland_protection", "ecological_protection",
-            "historical_protection", "construction_zone",
-            "geological_hazard",
-        ]
-        for lt in protection_types:
-            source = self.find_source_by_layer_type(lt)
-            if source is None:
-                continue
-            try:
-                result = source.fetch()  # file_vector ignores bbox
-                if result.success and result.data_type == "geojson":
-                    raw[f"{lt}_geojson"] = result.data
-                elif result.success and isinstance(result.data, dict):
-                    raw[f"{lt}_geojson"] = result.data
-            except Exception as e:
-                logger.debug("[DataCatalog] Protection zone %s load skipped: %s", lt, e)
-
-        return bundle, raw
 
     # ── Boundary-first helpers ──
 
@@ -563,9 +445,9 @@ class DataCatalog:
             return self._center_to_bbox(center, 5.0)
 
         # Step 2: POI search in county region
-        from app.modules.data.fetcher import GISDataFetcher
+        from app.utils.location_parser import parse_location_hierarchy
         try:
-            hierarchy = GISDataFetcher().parse_location_hierarchy(village_name)
+            hierarchy = parse_location_hierarchy(village_name)
             county = hierarchy.get("county", "")
             if county:
                 poi_result = conn.search_poi_in_region(village_name, county)
@@ -598,17 +480,94 @@ class DataCatalog:
         )
 
     @staticmethod
-    def _assign_to_bundle(bundle, layer_type: str, features: List[Any]) -> None:
-        """Route typed features to the correct GISDataBundle field."""
-        if layer_type in ("boundary", "admin_area", "planning_scope") and features:
-            if bundle.boundary is None:
-                bundle.boundary = features[0]
-        elif layer_type in ("road", "road_planned"):
-            bundle.roads.extend(features)
-        elif layer_type in ("annotation", "annotation_planned"):
-            bundle.annotations.extend(features)
-        elif layer_type in ("water",):
-            bundle.water_bodies.extend(features)
+    def _assign_to_bundle(bundle, features: List[Any]) -> None:
+        """Route typed SpatialFeature instances to the correct morphology group.
+
+        [v4.3] Uses isinstance dispatch instead of string-based layer_type matching.
+        Each of the 33 concrete SpatialFeature subclasses has a deterministic home
+        in one of the morphology groups. Inferred/unknown types fall through to the
+        base-class catch-all (PointFeature/LineFeature/PolygonFeature inferred lists).
+        """
+        for feat in features:
+            # ── PolygonFeature subclasses ──
+            if isinstance(feat, _CurrentLandUseParcel):
+                bundle.polygons.landuse_current.append(feat)
+            elif isinstance(feat, _PlannedLandUseParcel):
+                bundle.polygons.landuse_planned.append(feat)
+            elif isinstance(feat, _FarmlandProtection):
+                bundle.polygons.farmland_protection.append(feat)
+            elif isinstance(feat, _EcologicalRedline):
+                bundle.polygons.ecological_redline.append(feat)
+            elif isinstance(feat, _HistoricalProtection):
+                bundle.polygons.historical_protection.append(feat)
+            elif isinstance(feat, _CultivatedLandTarget):
+                bundle.polygons.cultivated_land_target.append(feat)
+            elif isinstance(feat, _UrbanDevBoundary):
+                bundle.polygons.urban_dev_boundary.append(feat)
+            elif isinstance(feat, _VillageDevBoundary):
+                bundle.polygons.village_dev_boundary.append(feat)
+            elif isinstance(feat, _HazardControlLine):
+                bundle.polygons.hazard_control_lines.append(feat)
+            elif isinstance(feat, _FloodControlLine):
+                bundle.polygons.flood_control_lines.append(feat)
+            elif isinstance(feat, _ConditionalConstructionZone):
+                bundle.polygons.construction_zone.append(feat)
+            elif isinstance(feat, _AdminArea):
+                bundle.polygons.admin_areas.append(feat)
+            elif isinstance(feat, _PlanningScope):
+                bundle.polygons.planning_scope.append(feat)
+            elif isinstance(feat, _LandUseZone):
+                bundle.polygons.land_use_zones.append(feat)
+            elif isinstance(feat, _ConstructionCtrlZone):
+                bundle.polygons.construction_ctrl_zones.append(feat)
+            elif isinstance(feat, _ThreeZoneItem):
+                bundle.polygons.three_zones.append(feat)
+            elif isinstance(feat, _WaterFeature):
+                bundle.polygons.water_bodies.append(feat)
+            elif isinstance(feat, _SoilType):
+                bundle.polygons.soil_types.append(feat)
+            elif isinstance(feat, _SoilErosion):
+                bundle.polygons.soil_erosions.append(feat)
+            elif isinstance(feat, _Watershed):
+                bundle.polygons.watersheds.append(feat)
+            elif isinstance(feat, _NatureReserve):
+                bundle.polygons.nature_reserves.append(feat)
+            elif isinstance(feat, _HydrogeologyZone):
+                bundle.polygons.hydrogeology_zones.append(feat)
+
+            # ── LineFeature subclasses ──
+            elif isinstance(feat, _CurrentRoad):
+                bundle.lines.roads_current.append(feat)
+            elif isinstance(feat, _PlannedRoad):
+                bundle.lines.roads_planned.append(feat)
+            elif isinstance(feat, _ContourLine):
+                bundle.lines.contour_lines.append(feat)
+            elif isinstance(feat, _AdminBoundaryLine):
+                bundle.lines.admin_boundaries.append(feat)
+
+            # ── PointFeature subclasses ──
+            elif isinstance(feat, _CurrentFacility):
+                bundle.points.facilities_current.append(feat)
+            elif isinstance(feat, _PlannedFacility):
+                bundle.points.facilities_planned.append(feat)
+            elif isinstance(feat, _CurrentBuilding):
+                bundle.points.buildings.append(feat)
+            elif isinstance(feat, _ElevationPoint):
+                bundle.points.elevation_points.append(feat)
+            elif isinstance(feat, _GeologicalHazardPoint):
+                bundle.points.hazard_points.append(feat)
+            elif isinstance(feat, _CurrentAnnotation):
+                bundle.points.annotations_current.append(feat)
+            elif isinstance(feat, _PlannedAnnotation):
+                bundle.points.annotations_planned.append(feat)
+
+            # ── Inferred fallback (base classes) ──
+            elif isinstance(feat, _PolygonFeature):
+                bundle.polygons.inferred.append(feat)
+            elif isinstance(feat, _LineFeature):
+                bundle.lines.inferred.append(feat)
+            elif isinstance(feat, _PointFeature):
+                bundle.points.inferred.append(feat)
 
 
 __all__ = ["DataCatalog"]

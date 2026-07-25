@@ -1321,13 +1321,11 @@ async def geocode_village(
         # Derive center from boundary geometry
         if bundle.boundary and bundle.boundary.geometry:
             from app.modules.spatial_ops.geometry import _compute_centroid
+            from app.modules.schema.types.canonical import _spatial_feature_to_geojson
+            feat = _spatial_feature_to_geojson(bundle.boundary)
             boundary_fc = {
                 "type": "FeatureCollection",
-                "features": [{
-                    "type": "Feature",
-                    "geometry": bundle.boundary.geometry,
-                    "properties": bundle.boundary.properties,
-                }],
+                "features": [feat],
             }
             center = _compute_centroid(boundary_fc)
             strategy = "boundary_geometry"

@@ -7,6 +7,7 @@
 > **Archived**: 旧文档已迁入 `archive/` 目录
 >
 > **v4.0 变更摘要（2026-07-25）**：
+>
 > - Schema 引入 Point/Line/Polygon 几何中间抽象 + RasterDataset 栅格分支（详见 `backend/app/modules/schema/README.md`）
 > - `GISDataBundle` 现状/规划地块分离（`current_landuse`/`planned_landuse`），根治"双倍地块"，不保留兼容视图
 > - Data 层双轨接入：显式注册 + 智能推断管道（矢量按几何分桶+字段语义匹配，栅格按波段+值域匹配），详见 `backend/app/modules/data/README.md`
@@ -14,6 +15,7 @@
 > - `reference/OPTIMIZATION_TASKS.md` 重写为 parse/kg/layout 大修任务清单
 >
 > **v4.1 变更摘要（2026-07-25）**：
+>
 > - 数据视图上移为 `ProjectDataView -> VillageBundle` 两层，取代"一村一包"，支持多村/跨村/项目级组合
 > - 新增 `TableDataset` 第四数据形态（矢量/栅格/表格/文档），汇交"一表一规则"有类型化落点
 > - 项目配置与数据源配置分离（`projects.yaml` vs `sources.yaml`），智能推断加项目上下文校准
@@ -42,30 +44,30 @@
 
 ### 0.2 设计原则
 
-| # | 原则 | 含义 |
-|---|------|------|
-| 1 | **Schema-First** | 所有空间要素先定义类型再编码，下游只消费类型化模型，禁止 raw dict |
-| 2 | **单向依赖** | 依赖方向：Schema ← Data ← KG ← Agent(PARSE/EXECUTE)，Schema 不依赖任何层 |
-| 3 | **单一入口** | 数据进入系统只有一个入口（Data 层），KG 不直接读 GeoJSON 文件 |
-| 4 | **语义中间态** | KG 是 PARSE 与 EXECUTE 之间的唯一语义桥接，PARSE 写入、EXECUTE 读取 |
-| 5 | **多策略执行** | MIP 批量分区 + 约束满足项目落地 + 程序化生成，不是单一策略 |
-| 6 | **闭环反馈** | 校验失败 → 约束调整 → 重新执行，文本分析结果可回灌空间修订 |
-| 7 | **可解释溯源** | 每个图斑变更可追溯到来源文本，每条管制规则可追溯到上位依据 |
+| # | 原则                   | 含义                                                                        |
+| - | ---------------------- | --------------------------------------------------------------------------- |
+| 1 | **Schema-First** | 所有空间要素先定义类型再编码，下游只消费类型化模型，禁止 raw dict           |
+| 2 | **单向依赖**     | 依赖方向：Schema ← Data ← KG ← Agent(PARSE/EXECUTE)，Schema 不依赖任何层 |
+| 3 | **单一入口**     | 数据进入系统只有一个入口（Data 层），KG 不直接读 GeoJSON 文件               |
+| 4 | **语义中间态**   | KG 是 PARSE 与 EXECUTE 之间的唯一语义桥接，PARSE 写入、EXECUTE 读取         |
+| 5 | **多策略执行**   | MIP 批量分区 + 约束满足项目落地 + 程序化生成，不是单一策略                  |
+| 6 | **闭环反馈**     | 校验失败 → 约束调整 → 重新执行，文本分析结果可回灌空间修订                |
+| 7 | **可解释溯源**   | 每个图斑变更可追溯到来源文本，每条管制规则可追溯到上位依据                  |
 
 ### 0.3 官方标准对齐
 
 系统设计对齐以下官方标准：
 
-| 标准 | 全称 | 系统对齐 |
-|------|------|---------|
-| 自然资发〔2023〕234号 | 国土空间调查、规划、用途管制用地用海分类指南 | 用地分类编码体系（YDYHFL） |
-| GB/T 21010-2017 | 土地利用现状分类 | 三调国标编码体系（当前数据基准） |
-| GB/T 13923-2022 | 基础地理信息要素分类与代码 | 10位数字层次码（大类+小类+一至四级类） |
-| DB14/T 2979-2024 | 村庄规划数据库规范 | 数据库内容、要素分类代码、数学基础、数据分层 |
-| 广东省住建厅 (2018) | 广东省村庄规划编制指引（试行） | 四阶段工作流、一图一表一规则成果 |
-| DB4407/T 105-2023 | 村庄建设规划管制规则 | 6大类管制规则模板 |
-| 住建部 (2014) | 村庄规划用地分类指南 | V/N/E 三分类 |
-| 三区三线 | 全国国土空间规划 | 生态/农业/建设空间 + 三线边界 |
+| 标准                  | 全称                                         | 系统对齐                                     |
+| --------------------- | -------------------------------------------- | -------------------------------------------- |
+| 自然资发〔2023〕234号 | 国土空间调查、规划、用途管制用地用海分类指南 | 用地分类编码体系（YDYHFL）                   |
+| GB/T 21010-2017       | 土地利用现状分类                             | 三调国标编码体系（当前数据基准）             |
+| GB/T 13923-2022       | 基础地理信息要素分类与代码                   | 10位数字层次码（大类+小类+一至四级类）       |
+| DB14/T 2979-2024      | 村庄规划数据库规范                           | 数据库内容、要素分类代码、数学基础、数据分层 |
+| 广东省住建厅 (2018)   | 广东省村庄规划编制指引（试行）               | 四阶段工作流、一图一表一规则成果             |
+| DB4407/T 105-2023     | 村庄建设规划管制规则                         | 6大类管制规则模板                            |
+| 住建部 (2014)         | 村庄规划用地分类指南                         | V/N/E 三分类                                 |
+| 三区三线              | 全国国土空间规划                             | 生态/农业/建设空间 + 三线边界                |
 
 ### 0.4 文档说明
 
@@ -120,15 +122,16 @@
 
 **核心模块**：
 
-| 子包 | 职责 | 关键内容 |
-|------|------|---------|
-| `types/` | 空间要素类型 + 规范化容器 + 栅格类型 | `spatial_types.py`(SpatialFeature, CurrentLandUseParcel, PlannedLandUseParcel, ...), `canonical.py`(GeoFeature, GISDataBundle, BBox), `raster_types.py`(DEMInput, DOMInput) |
-| `encodings/` | 编码体系 + 值域 + 字典 | `classification.py`(6套: GB/T21010/TUGUI/APPENDIX5/GHFLBM/YDYHFL/VNE), `code_sets.py`, `dicts/`(6 YAML + references + rules) |
-| `contracts/` | 跨层契约（分文件） | `parse_contracts.py`(SpatialPlanningIntent, SpatialOperation, SpatialConstraint), `execution_contracts.py`(MIPModel, ExecutionPlan), `validation_contracts.py`, `layout_contracts.py` |
-| `output/` | 输出规范 | `gdb.py`(GDB_LAYER_REGISTRY 12层), `colors.py`(国标着色) |
-| `utils/` | 纯计算（零外部依赖） | `metrics.py`(用地指标聚合) |
+| 子包           | 职责                                 | 关键内容                                                                                                                                                                                      |
+| -------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types/`     | 空间要素类型 + 规范化容器 + 栅格类型 | `spatial_types.py`(SpatialFeature, CurrentLandUseParcel, PlannedLandUseParcel, ...), `canonical.py`(GeoFeature, GISDataBundle, BBox), `raster_types.py`(DEMInput, DOMInput)             |
+| `encodings/` | 编码体系 + 值域 + 字典               | `classification.py`(6套: GB/T21010/TUGUI/APPENDIX5/GHFLBM/YDYHFL/VNE), `code_sets.py`, `dicts/`(6 YAML + references + rules)                                                            |
+| `contracts/` | 跨层契约（分文件）                   | `parse_contracts.py`(SpatialPlanningIntent, SpatialOperation, SpatialConstraint), `execution_contracts.py`(MIPModel, ExecutionPlan), `validation_contracts.py`, `layout_contracts.py` |
+| `output/`    | 输出规范                             | `gdb.py`(GDB_LAYER_REGISTRY 12层), `colors.py`(国标着色)                                                                                                                                  |
+| `utils/`     | 纯计算（零外部依赖）                 | `metrics.py`(用地指标聚合)                                                                                                                                                                  |
 
 **类型层级**（详见 `backend/app/modules/schema/README.md`）：
+
 - 矢量三层层级：`SpatialFeature -> PointFeature/LineFeature/PolygonFeature -> 语义子类`，几何中间层在 `geometry` field 上加 validator，类型层面约束几何
 - 栅格分支：`RasterDataset -> DEMInput/DOMInput/SlopeRaster/AspectRaster/SuitabilityRaster`
 - `GISDataBundle` 现状/规划地块分离（`current_landuse`/`planned_landuse`），不混装，根治"双倍地块"，不保留兼容视图
@@ -143,13 +146,13 @@
 
 **核心概念**：
 
-| 概念 | 职责 | 类比 |
-|------|------|------|
-| **Connection** | API/DB 连接管理：端点、凭据、rate limit、重试、健康检查 | QGIS Data Source |
+| 概念                      | 职责                                                                  | 类比               |
+| ------------------------- | --------------------------------------------------------------------- | ------------------ |
+| **Connection**      | API/DB 连接管理：端点、凭据、rate limit、重试、健康检查               | QGIS Data Source   |
 | **Source (Driver)** | 知道"如何从某类源读取原始字节"：本地文件/WFS/MapServer REST/WMTS/栅格 | QGIS Data Provider |
-| **Layer** | 语义化图层：绑定 Source，声明 layer_type、CRS、字段映射 | QGIS Layer |
-| **Catalog** | 声明式图层目录：YAML 配置注册所有 Layer，按名/按 layer_type 查询 | QGIS Browser |
-| **Ingest Port** | raw 数据 → 类型化模型：编码校验 + 类型转换 | ETL Gateway |
+| **Layer**           | 语义化图层：绑定 Source，声明 layer_type、CRS、字段映射               | QGIS Layer         |
+| **Catalog**         | 声明式图层目录：YAML 配置注册所有 Layer，按名/按 layer_type 查询      | QGIS Browser       |
+| **Ingest Port**     | raw 数据 → 类型化模型：编码校验 + 类型转换                           | ETL Gateway        |
 
 **数据流**：
 
@@ -164,6 +167,7 @@ DataCatalog.fetch(layer_type)
 ```
 
 **关键设计**：
+
 - 统一 `DataResult` 封装：`success` 为假时携带 `error`，不抛异常
 - CRS 统一：所有输出 WGS84 (EPSG:4326)，转换在 Source 层完成
 - 编码校验前置：`ingest.py` 在端口校验所有编码，脏数据不进管道
@@ -177,13 +181,13 @@ DataCatalog.fetch(layer_type)
 
 Schema 和 Data 的分离遵循 **"定义 vs. 操作"** 原则，类似于 Pydantic 模型（定义）与 Repository（操作）的关系：
 
-| 维度 | Schema 层 | Data 层 |
-|------|----------|---------|
-| **关注点** | 是什么（What） | 怎么来（How） |
-| **内容** | 类型定义、编码体系、输出规范 | 获取、校验、类型化、缓存、持久化 |
-| **变更频率** | 低（标准驱动） | 中（数据源变更） |
-| **依赖方向** | 零依赖 | 依赖 Schema |
-| **测试方式** | 类型正确性 | 集成测试 |
+| 维度               | Schema 层                    | Data 层                          |
+| ------------------ | ---------------------------- | -------------------------------- |
+| **关注点**   | 是什么（What）               | 怎么来（How）                    |
+| **内容**     | 类型定义、编码体系、输出规范 | 获取、校验、类型化、缓存、持久化 |
+| **变更频率** | 低（标准驱动）               | 中（数据源变更）                 |
+| **依赖方向** | 零依赖                       | 依赖 Schema                      |
+| **测试方式** | 类型正确性                   | 集成测试                         |
 
 **如果合并**：每次新增数据源（如加一个 WFS 服务）会修改"类型定义"模块，导致下游所有消费者
 重新评估兼容性。分离后，Schema 变更只发生在标准更新时，Data 变更不影响类型契约。
@@ -214,6 +218,7 @@ Schema 和 Data 的分离遵循 **"定义 vs. 操作"** 原则，类似于 Pydan
 ```
 
 **禁止的依赖**：
+
 - Agent 不直接 import Data（通过 KG 间接访问数据）
 - KG 不 import Agent（Agent 通过 KG 的公共 API 读写）
 - Schema 不 import 任何其他层
@@ -226,14 +231,14 @@ Schema 和 Data 的分离遵循 **"定义 vs. 操作"** 原则，类似于 Pydan
 
 不是"把所有数据迁入一个数据库"，而是**按数据类型选择正确的持久化方式**：
 
-| 数据类型 | 存储方式 | 原因 |
-|---------|---------|------|
-| **空间数据**（矢量/栅格） | GeoPackage (.gpkg) | SQLite 扩展 + 空间索引，标准 GIS 交换格式，QGIS 可直接打开 |
-| **元数据/目录**（数据源、图层、连接配置） | SQLite | 关系型适合结构化查询，ORM 友好 |
-| **KG（知识图谱）** | RDFLib + SQLite 后端 | 三元组可通过 SQLite 持久化，生产环境可升级到 Apache Jena |
-| **会话状态**（pipeline state、parse result） | SQLite | 当前方案，保持 |
-| **规划文档**（规划文本、L3 报告） | 文件系统 + SQLite 索引 | 文本内容大，存文件；元数据存 DB |
-| **输出成果**（GeoJSON、GDB） | 文件系统 | 标准输出格式，便于分发和汇交 |
+| 数据类型                                           | 存储方式               | 原因                                                       |
+| -------------------------------------------------- | ---------------------- | ---------------------------------------------------------- |
+| **空间数据**（矢量/栅格）                    | GeoPackage (.gpkg)     | SQLite 扩展 + 空间索引，标准 GIS 交换格式，QGIS 可直接打开 |
+| **元数据/目录**（数据源、图层、连接配置）    | SQLite                 | 关系型适合结构化查询，ORM 友好                             |
+| **KG（知识图谱）**                           | RDFLib + SQLite 后端   | 三元组可通过 SQLite 持久化，生产环境可升级到 Apache Jena   |
+| **会话状态**（pipeline state、parse result） | SQLite                 | 当前方案，保持                                             |
+| **规划文档**（规划文本、L3 报告）            | 文件系统 + SQLite 索引 | 文本内容大，存文件；元数据存 DB                            |
+| **输出成果**（GeoJSON、GDB）                 | 文件系统               | 标准输出格式，便于分发和汇交                               |
 
 ### 2.2 空间数据：GeoPackage (.gpkg)
 
@@ -263,6 +268,7 @@ GeoPackage 是 OGC 标准，本质是 SQLite + 空间扩展（SpatiaLite），�
 ```
 
 **使用方式**：
+
 ```python
 # Data Layer 内部
 from app.modules.data import DataCatalog
@@ -302,10 +308,12 @@ CREATE TABLE layer_registry (
 **当前**：RDFLib 内存图，每次构建，不持久化。Layer1 缓存（相同 village + landuse 跳过 `_add_spatial_relations`）仅做计算跳过，不做存储持久化。
 
 **目标**：
+
 - 开发环境：RDFLib `Sleepycat`（Berkeley DB 后端）或 `SQLite` 后端
 - 生产环境：Apache Jena Fuseki（SPARQL endpoint）
 
 **持久化策略**：
+
 - Layer1（静态本体 + 编码）：应用启动时加载一次，不可变
 - Layer2（语义关系 + 约束）：每次 pipeline 运行后持久化
 - Layer3（意图 + 操作）：每次 pipeline 运行后持久化，可被后续修订覆盖
@@ -313,18 +321,19 @@ CREATE TABLE layer_registry (
 ### 2.5 会话状态
 
 当前 SQLite WAL 方案（`backend/data/*.db`）保持。存储：
+
 - Pipeline 运行状态（`pipeline_runs` 表）
 - PARSE 结果（`parse_results` 表，JSON 列存 `SpatialPlanningIntent` 序列化）
 - EXECUTE 结果（`execute_results` 表，JSON 列存 `AllocationResult` 序列化）
 
 ### 2.6 迁移路线
 
-| 阶段 | 任务 | 说明 |
-|------|------|------|
-| P0 | GeoJSON → GeoPackage | 数据层添加 GeoPackage driver，DataCatalog 自动检测源格式 |
-| P1 | 元数据入 SQLite | catalog/sources.yaml → `data_sources` 表 |
-| P2 | KG 持久化 | RDFLib SQLite 后端 |
-| P3 | 生产级 KG | Apache Jena Fuseki（可选，取决于规模需求） |
+| 阶段 | 任务                  | 说明                                                     |
+| ---- | --------------------- | -------------------------------------------------------- |
+| P0   | GeoJSON → GeoPackage | 数据层添加 GeoPackage driver，DataCatalog 自动检测源格式 |
+| P1   | 元数据入 SQLite       | catalog/sources.yaml →`data_sources` 表               |
+| P2   | KG 持久化             | RDFLib SQLite 后端                                       |
+| P3   | 生产级 KG             | Apache Jena Fuseki（可选，取决于规模需求）               |
 
 ---
 
@@ -337,6 +346,7 @@ KG 是 PARSE 与 EXECUTE 之间的**唯一语义中间态**。它不是数据存
 获取语义理解结果。
 
 **KG 存储什么**（不存储什么）：
+
 - ✅ 实体 URI + 属性 + 关系（语义层）
 - ✅ 规划约束（数值 + 规则）
 - ✅ 空间关系（邻接、包含、定位）
@@ -486,37 +496,37 @@ class PlanningKG:
 
 **23 个实体类型**（对齐 Group A~E 空间要素）：
 
-| 分组 | 实体 | 对应 Schema 类型 |
-|------|------|-----------------|
-| 行政区划 | Village, AdministrativeVillage, NaturalSettlement | AdminArea |
-| 现状地类 | Parcel (CurrentLandUseParcel), BuildingGroup | CurrentLandUseParcel, CurrentBuilding |
-| 现状设施 | Facility, Road, WaterBody | CurrentFacility, CurrentRoad, WaterFeature |
-| 规划要素 | Zone (PlannedLandUseParcel), PlannedRoad, PlannedAnnotation | PlannedLandUseParcel, PlannedRoad, PlannedAnnotation |
-| 保护控制 | FarmlandProtection, EcologicalRedline, HistoricalProtection, VillageDevBoundary | 对应 Schema 类型 |
-| 管控线 | HazardControlLine, ConditionalConstructionZone | 对应 Schema 类型 |
-| 规划分区 | LandUseZone, ConstructionCtrlZone, PlanningScope | 对应 Schema 类型 |
-| 三区三线 | ThreeZone, ThreeLine | ThreeZoneItem, ThreeLineItem |
-| 规划意图 | ZoneTarget, FacilityTarget, AxisTarget | ZoneTarget, FacilityTarget, AxisTarget |
-| 管制规则 | ControlRule, PlanningIndicator | 对应 Schema 类型 |
+| 分组     | 实体                                                                            | 对应 Schema 类型                                     |
+| -------- | ------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| 行政区划 | Village, AdministrativeVillage, NaturalSettlement                               | AdminArea                                            |
+| 现状地类 | Parcel (CurrentLandUseParcel), BuildingGroup                                    | CurrentLandUseParcel, CurrentBuilding                |
+| 现状设施 | Facility, Road, WaterBody                                                       | CurrentFacility, CurrentRoad, WaterFeature           |
+| 规划要素 | Zone (PlannedLandUseParcel), PlannedRoad, PlannedAnnotation                     | PlannedLandUseParcel, PlannedRoad, PlannedAnnotation |
+| 保护控制 | FarmlandProtection, EcologicalRedline, HistoricalProtection, VillageDevBoundary | 对应 Schema 类型                                     |
+| 管控线   | HazardControlLine, ConditionalConstructionZone                                  | 对应 Schema 类型                                     |
+| 规划分区 | LandUseZone, ConstructionCtrlZone, PlanningScope                                | 对应 Schema 类型                                     |
+| 三区三线 | ThreeZone, ThreeLine                                                            | ThreeZoneItem, ThreeLineItem                         |
+| 规划意图 | ZoneTarget, FacilityTarget, AxisTarget                                          | ZoneTarget, FacilityTarget, AxisTarget               |
+| 管制规则 | ControlRule, PlanningIndicator                                                  | 对应 Schema 类型                                     |
 
 **14 个关系类型**：
 
-| 关系 | 含义 | 用于 |
-|------|------|------|
-| `adjacent_to` | 空间邻接 | MIP 邻接规则 |
-| `within_zone` | 包含于分区 | 分区查询 |
-| `constrained_by` | 受约束于 | 约束检查 |
-| `designated_as` | 被指定为 | 用地分类 |
-| `protects` | 保护 | 保护边界 |
-| `located_in` | 位于 | 村名→地块映射 |
-| `achieves` | 达成 | 指标落地 |
-| `conflicts_with` | 冲突 | 冲突检测 |
-| `derived_from` | 源于 | 溯源 |
-| `serves` | 服务 | 设施覆盖 |
-| `connects` | 连接 | 道路网络 |
-| `delineates` | 划定 | 三线划定 |
-| `controls_use` | 管制用途 | 管制规则 |
-| `conducted_from` | 上位传导 | 指标传导 |
+| 关系               | 含义       | 用于           |
+| ------------------ | ---------- | -------------- |
+| `adjacent_to`    | 空间邻接   | MIP 邻接规则   |
+| `within_zone`    | 包含于分区 | 分区查询       |
+| `constrained_by` | 受约束于   | 约束检查       |
+| `designated_as`  | 被指定为   | 用地分类       |
+| `protects`       | 保护       | 保护边界       |
+| `located_in`     | 位于       | 村名→地块映射 |
+| `achieves`       | 达成       | 指标落地       |
+| `conflicts_with` | 冲突       | 冲突检测       |
+| `derived_from`   | 源于       | 溯源           |
+| `serves`         | 服务       | 设施覆盖       |
+| `connects`       | 连接       | 道路网络       |
+| `delineates`     | 划定       | 三线划定       |
+| `controls_use`   | 管制用途   | 管制规则       |
+| `conducted_from` | 上位传导   | 指标传导       |
 
 ---
 
@@ -553,11 +563,11 @@ SpatialContext 包含:
 
 在 Think 阶段（`explore_*` 节点），LLM 可以调用三个 KG 工具：
 
-| 工具 | 用途 | 查询方式 |
-|------|------|---------|
-| `lookup_code` | 用地名称 → GHYTBM 编码 | 查 Schema 字典 |
-| `resolve_place` | 地名 → 空间锚点 | 查 KG entities + SpatialContext |
-| `query_village_kg` | 查询 KG 空间上下文 | SPARQL 查询 |
+| 工具                 | 用途                    | 查询方式                        |
+| -------------------- | ----------------------- | ------------------------------- |
+| `lookup_code`      | 用地名称 → GHYTBM 编码 | 查 Schema 字典                  |
+| `resolve_place`    | 地名 → 空间锚点        | 查 KG entities + SpatialContext |
+| `query_village_kg` | 查询 KG 空间上下文      | SPARQL 查询                     |
 
 **Level 3: LLM 推理（Think 阶段自由推理）**
 
@@ -615,13 +625,13 @@ class SpatialConstraint:
 
 PARSE 通过四个路径辅助 EXECUTE：
 
-| 路径 | PARSE 产出 | EXECUTE 消费 | 用途 |
-|------|-----------|-------------|------|
-| **分区目标** | `ZoneTarget[]` | MIP 分配目标 | 决定各分区面积比例 |
-| **设施布局** | `FacilityTarget[]` | 设施放置器 | 决定设施位置和类型 |
-| **轴线** | `AxisTarget[]` | 轴线生成器 | 决定发展轴线方向 |
-| **约束规则** | `SpatialConstraint[]` | MIP 约束矩阵 + 验证器 | 确保合规 |
-| **原子操作** | `SpatialOperation[]` | 操作执行器 | 具体项目落地 |
+| 路径               | PARSE 产出              | EXECUTE 消费          | 用途               |
+| ------------------ | ----------------------- | --------------------- | ------------------ |
+| **分区目标** | `ZoneTarget[]`        | MIP 分配目标          | 决定各分区面积比例 |
+| **设施布局** | `FacilityTarget[]`    | 设施放置器            | 决定设施位置和类型 |
+| **轴线**     | `AxisTarget[]`        | 轴线生成器            | 决定发展轴线方向   |
+| **约束规则** | `SpatialConstraint[]` | MIP 约束矩阵 + 验证器 | 确保合规           |
+| **原子操作** | `SpatialOperation[]`  | 操作执行器            | 具体项目落地       |
 
 **关键设计**：PARSE 产出是**声明式**的（"应该在南部靠近主干道的位置布局产业用地"），
 不是**命令式**的（"把地块 BSM-001 改为产业用地"）。EXECUTE 负责将声明式意图转化为
@@ -641,13 +651,13 @@ EXECUTE 是**执行层**——将 PARSE 产出的结构化意图转化为空间�
 
 ### 5.2 四类子任务
 
-| 子任务 | 输入 | 策略 | 输出 |
-|--------|------|------|------|
-| **layout** | ZoneTarget[] + 现状地块 | MIP 批量分配 | 分区赋色 + 功能分区 + 规划分区 |
-| **facility** | FacilityTarget[] + 设施锚点 | 约束满足 + 最近邻 | 设施点图层 |
-| **axis** | AxisTarget[] + 现状轴线 | 程序化生成 + 缓冲区 | 轴线 + 空间控制区 + 用途分区 |
-| **road** | 现状道路 + 规划意图 | 图搜索 + 最短路径 | 规划道路网络 |
-| **operations** | SpatialOperation[] | 原子操作执行 | 具体图斑变更 |
+| 子任务               | 输入                        | 策略                | 输出                           |
+| -------------------- | --------------------------- | ------------------- | ------------------------------ |
+| **layout**     | ZoneTarget[] + 现状地块     | MIP 批量分配        | 分区赋色 + 功能分区 + 规划分区 |
+| **facility**   | FacilityTarget[] + 设施锚点 | 约束满足 + 最近邻   | 设施点图层                     |
+| **axis**       | AxisTarget[] + 现状轴线     | 程序化生成 + 缓冲区 | 轴线 + 空间控制区 + 用途分区   |
+| **road**       | 现状道路 + 规划意图         | 图搜索 + 最短路径   | 规划道路网络                   |
+| **operations** | SpatialOperation[]          | 原子操作执行        | 具体图斑变更                   |
 
 ### 5.3 MIP 与 KG 的协作模式（回答 Q5）
 
@@ -686,6 +696,7 @@ three_lines      ──→ 空间边界约束      ──→  x[i][zone] = 0 for
 ```
 
 **为什么不能直接查询 KG**：
+
 - MIP 求解器（PuLP/CBC）在优化循环中每次评估约束和变量，需要的不是 SPARQL 查询，
   而是数值矩阵（系数矩阵 A, 约束向量 b, 目标向量 c）
 - KG 的 RDF 图是符号化的知识表示，不是数值优化模型
@@ -734,6 +745,7 @@ class ConstraintCompiler:
 **当 MIP 不适用时**（具体项目落地、小规模操作），EXECUTE 使用约束满足策略：
 
 **create 操作**（"新建 400㎡ 展销中心"）：
+
 ```
 1. 解析 SpatialAnchor → 候选地块列表
 2. 约束满足：
@@ -745,6 +757,7 @@ class ConstraintCompiler:
 ```
 
 **split/merge 操作**（"合并相邻地块"）：
+
 ```
 1. 查找 source_bsms
 2. 几何操作：union / split
@@ -753,6 +766,7 @@ class ConstraintCompiler:
 ```
 
 **程序化生成**（轴线、道路、分区图层）：
+
 ```
 1. 从 intent 读取参数
 2. 程序化算法（缓冲区/插值/最短路径）
@@ -780,16 +794,16 @@ VALIDATE (8 项检查 + 8 条硬约束)
 
 **验证检查项**：
 
-| # | 检查项 | 输入 | 约束来源 |
-|---|--------|------|---------|
-| 1 | 建设用地不超上限 | allocated_geojson + intent | KG constraint |
-| 2 | 耕地下限 | allocated_geojson + intent | KG constraint |
-| 3 | 不占永久基本农田 | allocated_geojson + protected_parcels | KG spatial |
-| 4 | 不占生态红线 | allocated_geojson + ecological_redline | KG spatial |
-| 5 | 建设边界内 | allocated_geojson + boundary | KG spatial |
-| 6 | 面积偏差 ≤ 5% | allocated_geojson + targets | intent |
-| 7 | 邻接规则合规 | allocated_geojson + adjacency_rules | intent |
-| 8 | 三线合规 | allocated_geojson + three_lines | KG spatial |
+| # | 检查项           | 输入                                   | 约束来源      |
+| - | ---------------- | -------------------------------------- | ------------- |
+| 1 | 建设用地不超上限 | allocated_geojson + intent             | KG constraint |
+| 2 | 耕地下限         | allocated_geojson + intent             | KG constraint |
+| 3 | 不占永久基本农田 | allocated_geojson + protected_parcels  | KG spatial    |
+| 4 | 不占生态红线     | allocated_geojson + ecological_redline | KG spatial    |
+| 5 | 建设边界内       | allocated_geojson + boundary           | KG spatial    |
+| 6 | 面积偏差 ≤ 5%   | allocated_geojson + targets            | intent        |
+| 7 | 邻接规则合规     | allocated_geojson + adjacency_rules    | intent        |
+| 8 | 三线合规         | allocated_geojson + three_lines        | KG spatial    |
 
 ---
 
@@ -800,12 +814,12 @@ VALIDATE (8 项检查 + 8 条硬约束)
 ```
 app/
 ├── modules/
-│   ├── schema/                    # [DONE] 独立 Schema 层（已从 gis/schema/ 提升）
+│   ├── schema/                    # [DONE v4.2] 独立 Schema 层（已从 gis/schema/ 提升）
 │   │   ├── __init__.py
-│   │   ├── types/                # spatial_types / canonical / raster_types
+│   │   ├── types/                # base + spatial_types + canonical + raster_types + table_types + document_types + layer_registry
 │   │   ├── encodings/            # classification / code_sets / dicts(6 YAML+rules)
 │   │   ├── contracts/            # parse / execution / validation / layout 契约
-│   │   ├── output/               # gdb / colors
+│   │   ├── output/               # gdb / colors / tables
 │   │   ├── utils/                # metrics
 │   │   └── README.md
 │   │
@@ -913,90 +927,90 @@ app/
 
 **Phase 0: 设计落地（当前）**
 
-| # | 任务 | 说明 |
-|---|------|------|
-| 0.1 | 编写本设计文档 | ✅ 当前 |
-| 0.2 | 归档旧文档 | 旧设计文档迁入 `archive/` |
-| 0.3 | 编写新 `INDEX.md` | 精简导航 |
+| #   | 任务               | 说明                       |
+| --- | ------------------ | -------------------------- |
+| 0.1 | 编写本设计文档     | ✅ 当前                    |
+| 0.2 | 归档旧文档         | 旧设计文档迁入`archive/` |
+| 0.3 | 编写新`INDEX.md` | 精简导航                   |
 
 **Phase 1: 架构清理**
 
-| # | 任务 | 说明 |
-|---|------|------|
-| 1.1 | Schema 层提升 | `app/modules/gis/schema/` -> `app/modules/schema/` ✅ 已完成 |
-| 1.2 | 消除 KG 反向依赖 | KG 不再 import `tools/gis/_generation` 和 `_analytics` |
-| 1.3 | 提取 Spatial Ops 模块 | 空间关系计算从 KG 和 agent 中提取到 `app/modules/spatial_ops/` |
-| 1.4 | `layout_pipeline.py` → `pipeline.py` | 重命名，消除名不副实 |
-| 1.5 | 消除 data/ 三套并行抽象 | 统一到 Catalog + Source 架构 |
+| #   | 任务                                      | 说明                                                             |
+| --- | ----------------------------------------- | ---------------------------------------------------------------- |
+| 1.1 | Schema 层提升                             | `app/modules/gis/schema/` -> `app/modules/schema/` ✅ 已完成 |
+| 1.2 | 消除 KG 反向依赖                          | KG 不再 import`tools/gis/_generation` 和 `_analytics`        |
+| 1.3 | 提取 Spatial Ops 模块                     | 空间关系计算从 KG 和 agent 中提取到`app/modules/spatial_ops/`  |
+| 1.4 | `layout_pipeline.py` → `pipeline.py` | 重命名，消除名不副实                                             |
+| 1.5 | 消除 data/ 三套并行抽象                   | 统一到 Catalog + Source 架构                                     |
 
 **Phase 2: KG 完善**
 
-| # | 任务 | 说明 |
-|---|------|------|
-| 2.1 | 实现 Constraint Compiler | KG → MIP 约束矩阵的编译层 |
-| 2.2 | 补齐保护边界入库 | FarmlandProtection, EcologicalRedline, HistoricalProtection, VillageDevBoundary |
-| 2.3 | 补齐规划要素入库 | LandUseZone, ConstructionCtrlZone, PlanningScope |
-| 2.4 | 补齐自然地理入库 | WaterFeature, GeologicalHazardPoint, ElevationPoint |
-| 2.5 | 地块实体增强 | centroid 坐标、VNE 码、规划分区 |
-| 2.6 | KG 持久化 | RDFLib SQLite 后端 |
+| #   | 任务                     | 说明                                                                            |
+| --- | ------------------------ | ------------------------------------------------------------------------------- |
+| 2.1 | 实现 Constraint Compiler | KG → MIP 约束矩阵的编译层                                                      |
+| 2.2 | 补齐保护边界入库         | FarmlandProtection, EcologicalRedline, HistoricalProtection, VillageDevBoundary |
+| 2.3 | 补齐规划要素入库         | LandUseZone, ConstructionCtrlZone, PlanningScope                                |
+| 2.4 | 补齐自然地理入库         | WaterFeature, GeologicalHazardPoint, ElevationPoint                             |
+| 2.5 | 地块实体增强             | centroid 坐标、VNE 码、规划分区                                                 |
+| 2.6 | KG 持久化                | RDFLib SQLite 后端                                                              |
 
 **Phase 3: 数据持久化**
 
-| # | 任务 | 说明 |
-|---|------|------|
-| 3.1 | GeoPackage 集成 | Data Layer 添加 GeoPackage driver |
-| 3.2 | 元数据入 SQLite | catalog/sources.yaml → `data_sources` 表 |
-| 3.3 | 会话状态持久化 | Pipeline 运行结果持久化 |
+| #   | 任务            | 说明                                       |
+| --- | --------------- | ------------------------------------------ |
+| 3.1 | GeoPackage 集成 | Data Layer 添加 GeoPackage driver          |
+| 3.2 | 元数据入 SQLite | catalog/sources.yaml →`data_sources` 表 |
+| 3.3 | 会话状态持久化  | Pipeline 运行结果持久化                    |
 
 **Phase 4: EXECUTE 完善**
 
-| # | 任务 | 说明 |
-|---|------|------|
-| 4.1 | 实现 PlannedRoad 生成器 | 道路网络生成 |
-| 4.2 | 实现 create 原子操作 | 具体项目落地 |
-| 4.3 | 实现 split/merge 操作 | 地块拆分/合并 |
-| 4.4 | 完善验证闭环 | 8 项检查 + 8 条硬约束自动化 |
+| #   | 任务                    | 说明                        |
+| --- | ----------------------- | --------------------------- |
+| 4.1 | 实现 PlannedRoad 生成器 | 道路网络生成                |
+| 4.2 | 实现 create 原子操作    | 具体项目落地                |
+| 4.3 | 实现 split/merge 操作   | 地块拆分/合并               |
+| 4.4 | 完善验证闭环            | 8 项检查 + 8 条硬约束自动化 |
 
 **Phase 5: 闭环（远期）**
 
-| # | 任务 | 说明 |
-|---|------|------|
-| 5.1 | ANALYZE 能力 | 栅格摄入 + DEM 分析 + 双评价 |
-| 5.2 | 文本↔空间闭环 | 空间分析结果回灌文本修订 |
-| 5.3 | 完整汇交成果 | 5 目录 + .mdb + 条款级溯源 |
+| #   | 任务           | 说明                         |
+| --- | -------------- | ---------------------------- |
+| 5.1 | ANALYZE 能力   | 栅格摄入 + DEM 分析 + 双评价 |
+| 5.2 | 文本↔空间闭环 | 空间分析结果回灌文本修订     |
+| 5.3 | 完整汇交成果   | 5 目录 + .mdb + 条款级溯源   |
 
 ---
 
 ## 附录 A：术语表
 
-| 术语 | 全称 | 说明 |
-|------|------|------|
-| PARSE | Plan Agent for Report Spatial Extraction | 规划文本 → 空间意图 |
-| EXECUTE | Execution Agent | 空间意图 → 空间几何成果 |
-| KG | Knowledge Graph | 语义桥接层 |
-| MIP | Mixed Integer Programming | 混合整数规划（批量分区优化） |
-| GDB | GeoDatabase | 空间数据库格式 |
-| DLBM | 地类编码 | 土地利用分类编码 |
-| GHYTBM | 规划用途编码 | 附录5编码 |
-| BSM | 标识码 | 地块唯一标识 |
-| VNE | V=村庄建设用地, N=非村庄建设用地, E=非建设用地 | 住建部三分类 |
-| 三区三线 | 生态/农业/建设空间 + 生态红线/永久基本农田/城镇开发边界 | 全国国土空间规划 |
-| 一图一表一规则 | 村庄规划总图 + 近期建设项目表 + 管制规则 | 广东省基本成果 |
-| SpatialContext | 空间上下文 | 约2KB的空间摘要，注入PARSE prompt |
-| Constraint Compiler | 约束编译器 | KG语义约束 → MIP数值约束矩阵 |
+| 术语                | 全称                                                    | 说明                              |
+| ------------------- | ------------------------------------------------------- | --------------------------------- |
+| PARSE               | Plan Agent for Report Spatial Extraction                | 规划文本 → 空间意图              |
+| EXECUTE             | Execution Agent                                         | 空间意图 → 空间几何成果          |
+| KG                  | Knowledge Graph                                         | 语义桥接层                        |
+| MIP                 | Mixed Integer Programming                               | 混合整数规划（批量分区优化）      |
+| GDB                 | GeoDatabase                                             | 空间数据库格式                    |
+| DLBM                | 地类编码                                                | 土地利用分类编码                  |
+| GHYTBM              | 规划用途编码                                            | 附录5编码                         |
+| BSM                 | 标识码                                                  | 地块唯一标识                      |
+| VNE                 | V=村庄建设用地, N=非村庄建设用地, E=非建设用地          | 住建部三分类                      |
+| 三区三线            | 生态/农业/建设空间 + 生态红线/永久基本农田/城镇开发边界 | 全国国土空间规划                  |
+| 一图一表一规则      | 村庄规划总图 + 近期建设项目表 + 管制规则                | 广东省基本成果                    |
+| SpatialContext      | 空间上下文                                              | 约2KB的空间摘要，注入PARSE prompt |
+| Constraint Compiler | 约束编译器                                              | KG语义约束 → MIP数值约束矩阵     |
 
 ## 附录 B：与旧文档的对应关系
 
-| 旧文档 | 本文档对应部分 | 变更 |
-|--------|-------------|------|
-| 00_PLANNING_SYSTEM_VISION.md | §0.1-0.2, Part 5 | 合并初期/终极目标，去除冗余描述 |
-| 01_DESIGN_GOALS.md | §1.1-1.5, Part 1 | 简化为四层架构，去除过时技术细节 |
-| 02_OUTPUT_ARCHITECTURE.md | §1.2 + Appendix A | 输出规范并入 Schema 层，术语表提取 |
-| 03_DATA_SOURCE.md | §2.2-2.3 | 数据源并入 Data 层持久化方案 |
-| 04_DATA_ACQUISITION_PLAN.md | §2.6 | 数据获取计划并入迁移路线 |
-| schema对接kg，parse.md | §3.3-3.5, Part 4 | 整合为 KG+PARSE 对接设计 |
-| proposals/03_TOOL_FIRST_ARCHITECTURE.md | §6.1 | 模块结构已更新为当前目标 |
-| proposals/04_MULTI_SOURCE_DATA_ARCHITECTURE.md | §1.3, §2.2 | 数据源架构并入 Data 层 |
+| 旧文档                                         | 本文档对应部分     | 变更                               |
+| ---------------------------------------------- | ------------------ | ---------------------------------- |
+| 00_PLANNING_SYSTEM_VISION.md                   | §0.1-0.2, Part 5  | 合并初期/终极目标，去除冗余描述    |
+| 01_DESIGN_GOALS.md                             | §1.1-1.5, Part 1  | 简化为四层架构，去除过时技术细节   |
+| 02_OUTPUT_ARCHITECTURE.md                      | §1.2 + Appendix A | 输出规范并入 Schema 层，术语表提取 |
+| 03_DATA_SOURCE.md                              | §2.2-2.3          | 数据源并入 Data 层持久化方案       |
+| 04_DATA_ACQUISITION_PLAN.md                    | §2.6              | 数据获取计划并入迁移路线           |
+| schema对接kg，parse.md                         | §3.3-3.5, Part 4  | 整合为 KG+PARSE 对接设计           |
+| proposals/03_TOOL_FIRST_ARCHITECTURE.md        | §6.1              | 模块结构已更新为当前目标           |
+| proposals/04_MULTI_SOURCE_DATA_ARCHITECTURE.md | §1.3, §2.2       | 数据源架构并入 Data 层             |
 
 ---
 

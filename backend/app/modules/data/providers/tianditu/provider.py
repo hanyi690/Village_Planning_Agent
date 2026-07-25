@@ -15,7 +15,7 @@ from .constants import (
 )
 from .tiles import TileService
 from .wfs import WfsService
-from ..rate_limiter import RateLimiter
+from app.modules.data.connections import RateLimiter
 from app.core.settings import (
     TIANDITU_API_KEY,
     TIANDITU_RATE_LIMIT,

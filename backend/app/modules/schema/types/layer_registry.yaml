@@ -1,0 +1,265 @@
+# Layer type registry — declarative metadata for all known GIS layer types.
+#
+# This YAML holds the "what" (declarative description) of each layer type.
+# The "how" (Python class bindings + ingest port functions) stays in layer_registry.py.
+#
+# Design: YAML = configuration (editable without restart), Python = implementation
+# See: backend/app/modules/schema/README.md §八 LAYER_TYPE_REGISTRY 混合模式
+#
+# Adding a new layer type:
+#   1. Add entry here (geometry_kind, description, group, optional is_reference_layer)
+#   2. If it maps to an existing Schema class, add binding to _TYPE_CLASS_MAP in .py
+#   3. If it maps to an existing ingest port, add binding to _TYPE_INGEST_PORT_MAP in .py
+#   4. If both are present, it auto-registers via build_registry_from_yaml()
+#   5. If neither, it goes through inference pipeline (future: ingest_inference.py)
+#
+# Groups:
+#   current_landuse   — 基期现状地类
+#   planned_landuse   — 目标年规划地类
+#   admin             — 行政区划
+#   transport         — 交通运输（道路）
+#   annotation        — 注记与表达要素
+#   protection        — 保护控制（三线/管控区/保护区）
+#   hazard            — 灾害与安全
+#   water             — 水系
+#   terrain           — 地形地貌
+#   natural_resource  — 自然资源 (Group F)
+#   facility          — 设施
+#   raster            — 栅格数据
+#   table             — 非空间表格
+#   document          — 文档
+#   reference         — 引用层（只读，村庄级不重建）
+
+layer_types:
+  # ── 行政区划 ──
+  boundary:
+    geometry_kind: polygon
+    description: "Village boundary polygon"
+    group: admin
+
+  admin_area:
+    geometry_kind: polygon
+    description: "Administrative area"
+    group: admin
+
+  admin_boundary_line:
+    geometry_kind: line
+    description: "Admin boundary line"
+    group: admin
+
+  # ── 基期现状地类 ──
+  landuse_current:
+    geometry_kind: polygon
+    description: "Current land use parcels"
+    group: current_landuse
+    encoding_system: appendix5
+
+  # ── 目标年规划地类 ──
+  landuse_planned:
+    geometry_kind: polygon
+    description: "Planned land use parcels"
+    group: planned_landuse
+    encoding_system: tugui
+
+  # ── 交通运输 ──
+  road:
+    geometry_kind: line
+    description: "Current roads"
+    group: transport
+
+  road_planned:
+    geometry_kind: line
+    description: "Planned roads"
+    group: transport
+
+  # ── 注记 ──
+  annotation:
+    geometry_kind: annotation
+    description: "Current annotations"
+    group: annotation
+
+  annotation_planned:
+    geometry_kind: annotation
+    description: "Planned annotations"
+    group: annotation
+
+  # ── 保护控制 (三线+其他控制线+管控区) ──
+  farmland_protection:
+    geometry_kind: polygon
+    is_reference_layer: true
+    description: "Farmland protection zone (永久基本农田保护红线)"
+    group: protection
+
+  ecological_protection:
+    geometry_kind: polygon
+    is_reference_layer: true
+    description: "Ecological protection redline (生态保护红线)"
+    group: protection
+
+  ecological_redline:
+    geometry_kind: polygon
+    is_reference_layer: true
+    description: "Ecological redline (alias for ecological_protection)"
+    group: protection
+
+  three_zone:
+    geometry_kind: polygon
+    is_reference_layer: true
+    description: "三区 (生态/农业/建设空间)"
+    group: protection
+
+  urban_dev_boundary:
+    geometry_kind: polygon
+    is_reference_layer: true
+    description: "Urban development boundary (城镇开发边界)"
+    group: protection
+
+  village_dev_boundary:
+    geometry_kind: polygon
+    is_reference_layer: true
+    description: "Village development boundary (村庄建设边界)"
+    group: protection
+
+  cultivated_land_target:
+    geometry_kind: polygon
+    is_reference_layer: true
+    description: "Cultivated land target (耕地保护目标)"
+    group: protection
+
+  historical_protection:
+    geometry_kind: polygon
+    is_reference_layer: true
+    description: "Historical protection zone (历史文化保护线)"
+    group: protection
+
+  construction_zone:
+    geometry_kind: polygon
+    description: "Conditional construction zone (有条件建设区)"
+    group: protection
+
+  land_use_zone:
+    geometry_kind: polygon
+    description: "Land use zone (土地用途分区 TDYT)"
+    group: protection
+
+  space_control_zone:
+    geometry_kind: polygon
+    description: "Space control zone (建设用地管制区 JSYDGZQ)"
+    group: protection
+
+  planning_scope:
+    geometry_kind: polygon
+    description: "Planning scope boundary (规划村范围 GHCFW)"
+    group: protection
+
+  # ── 灾害与安全 ──
+  geological_hazard_points:
+    geometry_kind: point
+    description: "Geological hazard points (地质灾害点)"
+    group: hazard
+
+  hazard_control_line:
+    geometry_kind: polygon
+    description: "Hazard control line (灾害风险防控线)"
+    group: hazard
+
+  flood_control_line:
+    geometry_kind: polygon
+    description: "Flood control line (洪涝风险控制线)"
+    group: hazard
+
+  # ── 水系 ──
+  water:
+    geometry_kind: polygon
+    description: "Water features (水系)"
+    group: water
+
+  # ── 地形地貌 ──
+  contour_line:
+    geometry_kind: line
+    description: "Contour lines (等高线)"
+    group: terrain
+
+  elevation_point:
+    geometry_kind: point
+    description: "Elevation points (高程点)"
+    group: terrain
+
+  # ── 建筑与设施 ──
+  current_building:
+    geometry_kind: point
+    description: "Current buildings (现状建筑)"
+    group: facility
+
+  current_facility:
+    geometry_kind: point
+    description: "Current facilities (现状设施)"
+    group: facility
+
+  facility_planned:
+    geometry_kind: point
+    description: "Planned facilities (规划设施)"
+    group: facility
+
+  # ── 栅格 ──
+  dem:
+    geometry_kind: raster
+    description: "DEM raster (数字高程模型)"
+    group: raster
+
+  dom:
+    geometry_kind: raster
+    description: "DOM raster (数字正射影像)"
+    group: raster
+
+  # ── 表格 (v4.1, 尚未编码) ──
+  population:
+    geometry_kind: table
+    description: "Population structure table (人口结构表)"
+    group: table
+
+  construction_projects:
+    geometry_kind: table
+    description: "Construction project table (近期建设项目表)"
+    group: table
+
+  control_rules:
+    geometry_kind: table
+    description: "Control rule table (管制规则表)"
+    group: table
+
+  planning_indicators:
+    geometry_kind: table
+    description: "Planning indicator table (规划指标表)"
+    group: table
+
+  land_use_structure:
+    geometry_kind: table
+    description: "Land use structure table (用地结构表)"
+    group: table
+
+  # ── 自然资源 (Group F, v4.2) ──
+  soil_type:
+    geometry_kind: polygon
+    description: "土壤类型"
+    group: natural_resource
+
+  soil_erosion:
+    geometry_kind: polygon
+    description: "土壤侵蚀"
+    group: natural_resource
+
+  watershed:
+    geometry_kind: polygon
+    description: "流域"
+    group: natural_resource
+
+  nature_reserve:
+    geometry_kind: polygon
+    description: "自然保护区"
+    group: natural_resource
+
+  hydrogeology_zone:
+    geometry_kind: polygon
+    description: "水文地质分区"
+    group: natural_resource

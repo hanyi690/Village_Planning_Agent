@@ -67,13 +67,19 @@ def generate_parse_report(
     filename = f"{village_name}_{date_str}.md"
     filepath = output_dir / filename
 
-    # Normalize spatial_context to dict
-    if hasattr(spatial_context, "model_dump"):
+    # Normalize: accept list[dict] (ContextBlock serialized) or dict (legacy)
+    if isinstance(spatial_context, list):
+        context_blocks_data = spatial_context
+        ctx = {}
+    elif hasattr(spatial_context, "model_dump"):
         ctx = spatial_context.model_dump()
+        context_blocks_data = []
     elif isinstance(spatial_context, dict):
         ctx = spatial_context
+        context_blocks_data = []
     else:
         ctx = {}
+        context_blocks_data = []
 
     # Build report
     lines = []
@@ -91,7 +97,10 @@ def generate_parse_report(
     # Section 1: Spatial Context
     lines.append("\n---\n")
     lines.append("## 1. 空间上下文摘要\n")
-    lines.append(_format_spatial_context(ctx))
+    if context_blocks_data:
+        lines.append(_format_context_blocks(context_blocks_data))
+    else:
+        lines.append(_format_spatial_context(ctx))
 
     # Section 2: Document Sections
     if section_map:
@@ -160,6 +169,29 @@ def generate_parse_report(
 
 
 # ── Section formatters ────────────────────────────────────────────────
+
+
+def _format_context_blocks(blocks: List[Dict[str, Any]]) -> str:
+    """Format ContextBlock list as markdown report section."""
+    lines: List[str] = []
+    for block in blocks:
+        lines.append(f"### {block.get('title', block.get('block_type', ''))}")
+        data = block.get("data", {})
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if isinstance(v, list):
+                    lines.append(f"\n**{k}** ({len(v)} items):")
+                    for item in v[:10]:  # Limit to 10 items
+                        if isinstance(item, dict):
+                            lines.append(f"- {item}")
+                        else:
+                            lines.append(f"- {item}")
+                    if len(v) > 10:
+                        lines.append(f"- ... and {len(v) - 10} more")
+                else:
+                    lines.append(f"- **{k}**: {v}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _format_spatial_context(ctx: Dict[str, Any]) -> str:
