@@ -158,29 +158,26 @@ def test_metrics_pure_function():
 
 
 def test_build_from_blocks_with_typed_intent():
-    """Verify build_from_blocks accepts typed PlanIntent (Layer 3)."""
+    """Verify build_from_blocks accepts typed SpatialPlanningIntent (Layer 3)."""
     from app.modules.kg.builder import PlanningKG
-    from app.modules.schema.contracts.context_contracts import (
-        PlanIntent, ZoneTarget, FacilityTarget, RoadTarget,
-        PlanningConstraint,
+    from app.modules.schema.contracts.parse_contracts import (
+        SpatialPlanningIntent, ZoneTarget, FacilityTarget, AxisTarget,
     )
 
-    intent = PlanIntent(
-        targets=[
-            ZoneTarget(land_use_code="0101", target_area_ha=100.0,
-                       min_area_ha=80.0, priority=1),
-            FacilityTarget(name="小学", facility_type="教育",
-                           min_area_sqm=400, priority=2),
-            RoadTarget(name="规划路", road_level="村道", width_m=6, priority=3),
+    intent = SpatialPlanningIntent(
+        village_name="测试村",
+        zone_targets=[
+            ZoneTarget(land_use="农田保护区", area_ratio=0.5, dlbm="0101"),
         ],
-        hard_constraints=[
-            PlanningConstraint(constraint_type="hard",
-                               rule="耕地保有量不得减少", source="上位规划"),
+        facilities=[
+            FacilityTarget(type="小学", status="planned_new", service_radius=500),
+        ],
+        development_axes=[
+            AxisTarget(reference_feature="村主干道"),
         ],
     )
 
     kg = PlanningKG(village_name="测试村")
-    # build_from_blocks with empty bundle/blocks but typed intent
     from app.modules.schema.types.canonical import VillageBundle
     bundle = VillageBundle(village_name="测试村")
     kg.build_from_blocks(blocks=[], bundle=bundle, parcel_relations=None,
@@ -200,13 +197,10 @@ def test_build_from_blocks_with_typed_intent():
         "PREFIX pln: <http://village-planning.org/ontology#> "
         "SELECT ?a WHERE { ?a a pln:AxisTarget . }")
     assert len(axis_targets) == 1
-    # Hard constraint written (Layer 3 hard_constraints use pln:description, not pln:field)
-    hard = kg.query(
-        "PREFIX pln: <http://village-planning.org/ontology#> "
-        "SELECT ?c ?desc ?src WHERE { "
-        "?c a pln:Constraint ; pln:description ?desc ; pln:source ?src . }")
-    assert len(hard) >= 1
-    assert any("耕地" in h.get("desc", "") for h in hard)
+    # Note: SpatialConstraints are NOT part of SpatialPlanningIntent.
+    # They are passed separately by the caller.
+    # Semantic store populated (not RDF)
+    assert len(kg._semantic_store) > 0
 
 
 def test_build_from_blocks_with_plan_block():

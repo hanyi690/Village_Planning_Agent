@@ -237,7 +237,7 @@ class TestKGLayer1Construction:
         roads = kg_main.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
             "SELECT ?r WHERE { ?r a pln:Road . }")
-        # Roads from dlbm classification (1000-1006) + explicit add_roads
+        # Roads from add_roads() only (DLBM-based road inference removed in v4.4.1)
         assert len(roads) > 0
 
     def test_layer1_vne_categories(self, kg_main):
@@ -420,7 +420,7 @@ class TestKGQueries:
             assert len(result) > 0, "Should find at least one connected parcel"
 
     def test_roads_from_road_layer(self, kg_main):
-        """KG has roads from road.geojson (not just DLBM-inferred)."""
+        """KG has roads exclusively from road.geojson (via add_roads)."""
         from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
         # Roads from add_roads() have pln:road_level and pln:length
@@ -469,15 +469,19 @@ class TestPlanInjectionIsolated:
         # First add some L3 to a clone, then verify clone_static_layer
         # doesn't propagate it
         from app.modules.kg.builder import PlanningKG
+        from app.modules.schema.contracts.parse_contracts import (
+            SpatialPlanningIntent, ZoneTarget,
+        )
         from app.modules.schema.contracts.context_contracts import (
-            PlanIntent, ZoneTarget, PlanBlock, ParcelChange,
+            PlanBlock, ParcelChange,
         )
 
         # Build a KG with L3+L4
         kg_with_l34 = kg_main.clone_static_layer()
-        kg_with_l34._add_structured_intent(PlanIntent(targets=[
-            ZoneTarget(land_use_code="2121", target_area_ha=10.0),
-        ]))
+        kg_with_l34._add_structured_intent(SpatialPlanningIntent(
+            village_name="test",
+            zone_targets=[ZoneTarget(land_use="2121", area_ratio=10.0)],
+        ))
         kg_with_l34._apply_plan_block(PlanBlock(version="test",
             parcel_changes=[ParcelChange(bsm="CLONE_TEST", action="reclassify", new_planning_land_use="2121")]))
 
@@ -803,44 +807,31 @@ class TestIntentInjectionIsolated:
 
     Design:
       1. Clone kg_main via clone_static_layer() -> kg_intent
-      2. Inject PlanIntent into kg_intent ONLY
+      2. Inject SpatialPlanningIntent into kg_intent ONLY
       3. Verify L3 entities in kg_intent
       4. Verify kg_main is UNAFFECTED
     """
 
     def test_inject_intent_to_clone(self, kg_main):
-        """Inject PlanIntent into a CLONE, not kg_main."""
-        from app.modules.schema.contracts.context_contracts import (
-            PlanIntent, ZoneTarget, FacilityTarget, RoadTarget,
-            LocationConstraint, PlanningConstraint,
+        """Inject SpatialPlanningIntent into a CLONE, not kg_main."""
+        from app.modules.schema.contracts.parse_contracts import (
+            SpatialPlanningIntent, ZoneTarget, FacilityTarget, AxisTarget,
         )
 
         kg_intent = kg_main.clone_static_layer()
         triple_count_before = kg_intent.get_triple_count()
 
-        intent = PlanIntent(
-            targets=[
-                ZoneTarget(land_use_code="2121", target_area_ha=50.0,
-                           min_area_ha=40.0, max_area_ha=60.0, priority=1,
-                           constraints=[
-                               LocationConstraint(constraint_type="within_zone",
-                                                  entity_uri="http://village-planning.org/ontology#zone_村庄建设区",
-                                                  max_distance_m=300),
-                           ]),
-                FacilityTarget(name="展销中心", facility_type="商业",
-                               min_area_sqm=400, priority=2),
-                FacilityTarget(name="小学", facility_type="教育",
-                               min_area_sqm=2000, priority=1),
-                RoadTarget(name="规划主干道", road_level="主干道",
-                           width_m=12, priority=2),
+        intent = SpatialPlanningIntent(
+            village_name="jintian",
+            zone_targets=[
+                ZoneTarget(land_use="商业用地", area_ratio=0.15, dlbm="2121"),
             ],
-            hard_constraints=[
-                PlanningConstraint(constraint_type="hard",
-                                   rule="耕地保有量不得减少",
-                                   source="上位规划"),
-                PlanningConstraint(constraint_type="hard",
-                                   rule="生态保护红线内禁止建设",
-                                   source="三线划定"),
+            facilities=[
+                FacilityTarget(type="展销中心", status="planned_new", service_radius=500),
+                FacilityTarget(type="小学", status="planned_new", service_radius=1000),
+            ],
+            development_axes=[
+                AxisTarget(reference_feature="村主干道"),
             ],
         )
         kg_intent._add_structured_intent(intent)
@@ -852,29 +843,28 @@ class TestIntentInjectionIsolated:
             "?z a pln:ZoneTarget ; pln:land_use_code ?code ; "
             "pln:target_area_ha ?area . }")
         assert len(zt) == 1
-        assert zt[0]["code"] == "2121"
+        assert zt[0]["code"] == "商业用地"
 
         # Verify L3 FacilityTarget
         ft = kg_intent.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
-            "SELECT ?f ?name WHERE { ?f a pln:FacilityTarget ; pln:name ?name . }")
+            "SELECT ?f ?type WHERE { ?f a pln:FacilityTarget ; pln:facility_type ?type . }")
         assert len(ft) == 2
 
-        # Verify L3 AxisTarget (RoadTarget maps to AxisTarget)
+        # Verify L3 AxisTarget
         at = kg_intent.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
-            "SELECT ?a ?name WHERE { ?a a pln:AxisTarget ; pln:name ?name . }")
+            "SELECT ?a WHERE { ?a a pln:AxisTarget . }")
         assert len(at) == 1
 
-        # Verify hard constraints (Layer 3, use pln:description)
-        hc = kg_intent.query(
-            "PREFIX pln: <http://village-planning.org/ontology#> "
-            "SELECT ?c ?desc WHERE { "
-            "?c a pln:Constraint ; pln:description ?desc . }")
-        assert len(hc) == 2
+        # Note: SpatialConstraints are NOT part of SpatialPlanningIntent.
+        # They are passed separately to build_from_blocks by the caller.
 
         # Triple count must have increased
         assert kg_intent.get_triple_count() > triple_count_before
+
+        # Semantic store populated (not RDF)
+        assert len(kg_intent._semantic_store) > 0
 
     def test_main_kg_unaffected_after_intent_injection(self, kg_main):
         """CRITICAL: kg_main has no L3 entities after intent tests."""
@@ -893,19 +883,17 @@ class TestIntentInjectionIsolated:
 
     def test_validate_intent_runs(self, kg_main):
         """validate_intent runs without error on a clone."""
-        from app.modules.schema.contracts.context_contracts import (
-            PlanIntent, FacilityTarget, LocationConstraint,
+        from app.modules.schema.contracts.parse_contracts import (
+            SpatialPlanningIntent, FacilityTarget,
         )
         kg_intent = kg_main.clone_static_layer()
-        intent = PlanIntent(targets=[
-            FacilityTarget(name="测试设施", facility_type="公共服务",
-                           min_area_sqm=100, priority=1,
-                           constraints=[
-                               LocationConstraint(constraint_type="outside_zone",
-                                                  entity_uri="http://village-planning.org/ontology#protection_farmland_protection",
-                                                  max_distance_m=500),
-                           ]),
-        ])
+        intent = SpatialPlanningIntent(
+            village_name="test",
+            facilities=[
+                FacilityTarget(type="测试设施", status="planned_new",
+                               location_hint="村北"),
+            ],
+        )
         conflicts = kg_intent.validate_intent(intent)
         assert isinstance(conflicts, list)
         # Known gap: _is_in_protected_zone checks within_zone which is never set
@@ -987,20 +975,39 @@ class TestSpatialCognitiveUnitHierarchy:
         assert issubclass(NaturalVillageAnchor, PolygonBasedCognition)
         assert issubclass(ConstraintZoneAnchor, PolygonBasedCognition)
 
-    def test_l3_intent_units_inherit_morphology(self):
-        """L3 intent units inherit from SpatialIntentUnit AND morphology base."""
-        from app.modules.schema.contracts.context_contracts import (
-            ZoneTarget, FacilityTarget, RoadTarget,
-            SpatialIntentUnit, PolygonBasedCognition, PointBasedCognition,
+    def test_parse_contracts_intent_has_semantic_fields(self):
+        """Parse contracts ZoneTarget/FacilityTarget/AxisTarget have semantic fields."""
+        from app.modules.schema.contracts.parse_contracts import (
+            ZoneTarget, FacilityTarget, AxisTarget, SpatialPlanningIntent,
+            SemanticMetadata,
         )
-        # ZoneTarget is a SpatialIntentUnit (polygon intent)
-        assert issubclass(ZoneTarget, SpatialIntentUnit)
-        assert issubclass(FacilityTarget, SpatialIntentUnit)
-        assert issubclass(RoadTarget, SpatialIntentUnit)
-        # Morphology alignment
-        assert ZoneTarget().geometry_type == "polygon"
-        assert FacilityTarget().geometry_type == "point"
-        assert RoadTarget().geometry_type == "line"
+        zt = ZoneTarget(land_use="农田保护区", area_ratio=0.5,
+                        semantic=SemanticMetadata(
+                            natural_language_description="保护农田",
+                            spatial_hint="村南",
+                        ))
+        assert zt.semantic.natural_language_description == "保护农田"
+        assert zt.semantic.spatial_hint == "村南"
+        ft = FacilityTarget(type="小学", status="planned_new",
+                            semantic=SemanticMetadata(
+                                natural_language_description="新建小学",
+                                spatial_hint="村中心",
+                            ))
+        assert ft.semantic.natural_language_description == "新建小学"
+        at = AxisTarget(reference_feature="主路",
+                        semantic=SemanticMetadata(
+                            natural_language_description="南北发展轴",
+                            spatial_hint="沿主路",
+                        ))
+        assert at.semantic.natural_language_description == "南北发展轴"
+        intent = SpatialPlanningIntent(
+            village_name="测试村",
+            raw_text="建设小学...",
+            reasoning_trace="提取了设施需求",
+            zone_targets=[zt], facilities=[ft], development_axes=[at],
+        )
+        assert intent.raw_text == "建设小学..."
+        assert intent.reasoning_trace == "提取了设施需求"
 
     def test_l4_plan_block_is_delta_not_morphology(self):
         """L4 PlanBlock is a change-set container, NOT a SpatialCognitiveUnit.

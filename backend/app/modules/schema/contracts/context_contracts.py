@@ -109,50 +109,6 @@ class ConstraintZoneAnchor(PolygonBasedCognition):
 # ── L2: 规划意图子类（SpatialIntentUnit） ──
 
 
-@dataclass
-class LocationConstraint:
-    """Spatial location constraint — replaces fuzzy string hints."""
-    constraint_type: str = "near_entity"  # near_entity, within_zone, outside_zone, along_axis
-    entity_uri: str = ""
-    max_distance_m: float = 500
-
-
-@dataclass
-class SpatialIntentUnit(SpatialCognitiveUnit):
-    """Base class for planning intent units — Layer 3."""
-    priority: int = 1              # 1=mandatory, 2=expected, 3=optional
-    constraints: List[LocationConstraint] = field(default_factory=list)
-
-
-@dataclass
-class ZoneTarget(SpatialIntentUnit):
-    """Planning zone target — maps to MIP variables."""
-    geometry_type: str = "polygon"
-    land_use_code: str = ""
-    target_area_ha: float = 0.0
-    min_area_ha: float = 0.0
-    max_area_ha: float = float("inf")
-    adjacency_preference: Optional[Dict[str, float]] = field(default=None)
-
-
-@dataclass
-class FacilityTarget(SpatialIntentUnit):
-    """Facility placement target — consumed by constraint satisfaction."""
-    geometry_type: str = "point"
-    facility_type: str = ""
-    min_area_sqm: float = 0.0
-
-
-@dataclass
-class RoadTarget(SpatialIntentUnit):
-    """Road planning target — programmatic generation parameters."""
-    geometry_type: str = "line"
-    road_level: str = ""
-    width_m: float = 0.0
-    start_entity_uri: str = ""
-    end_entity_uri: str = ""
-
-
 # ── ContextBlock（复合形态） ──
 
 
@@ -238,31 +194,6 @@ class TerrainProfile:
     slope_area_pct: Dict[str, float] = field(default_factory=dict)
     aspect_area_pct: Dict[str, float] = field(default_factory=dict)
     suitability_area_pct: Dict[str, float] = field(default_factory=dict)
-
-
-# ── PlanIntent（Layer 3） ──
-
-
-@dataclass
-class PlanningConstraint:
-    """Hard or soft constraint with source traceability."""
-    constraint_type: str = "hard"  # hard, soft
-    rule: str = ""
-    weight: float = 1.0
-    source: str = ""
-
-
-@dataclass
-class PlanIntent:
-    """Unified planning intent — targets are typed by SpatialIntentUnit subclasses.
-
-    targets 统一管理 ZoneTarget, FacilityTarget, RoadTarget 等所有意图类型。
-    新增意图类型只需增加 SpatialIntentUnit 子类，无需改动 PlanIntent 自身。
-    """
-    targets: List[SpatialIntentUnit] = field(default_factory=list)
-    hard_constraints: List[PlanningConstraint] = field(default_factory=list)
-    soft_constraints: List[PlanningConstraint] = field(default_factory=list)
-    source_text_refs: List[str] = field(default_factory=list)
 
 
 # ── Layer 4: PlanBlock (incremental change-set) ──
@@ -360,21 +291,12 @@ __all__ = [
     "NaturalVillageAnchor",
     "ConstraintZoneAnchor",
     "ConstraintSummary",
-    # L2 intent units
-    "LocationConstraint",
-    "SpatialIntentUnit",
-    "ZoneTarget",
-    "FacilityTarget",
-    "RoadTarget",
     # ContextBlock
     "ContextBlockType",
     "ContextBlock",
     "LanduseEntry",
     "SpatialRelation",
     "TerrainProfile",
-    # PlanIntent
-    "PlanningConstraint",
-    "PlanIntent",
     # PlanBlock (Layer 4 incremental change-set)
     "ParcelChange",
     "FacilityChange",

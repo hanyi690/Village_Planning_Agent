@@ -96,13 +96,11 @@ class FacilityPlacer:
                 fac_type = fac.get("facility_type", "")
                 location_hint = fac.get("location_hint", "")
                 status = fac.get("status", "现状保留")
-                direction = fac.get("direction", "center")
             else:
                 fac_id = fac.facility_id
                 fac_type = fac.facility_type
                 location_hint = fac.location_hint
                 status = fac.status
-                direction = getattr(fac, "direction", "center")
 
             point = None
 
@@ -116,7 +114,7 @@ class FacilityPlacer:
                 if matched_kg:
                     point = self._place_near_existing(matched_kg, offset_m=100)
                 if point is None:
-                    point = self._place_new(fac_type, direction, parcel_centroids, boundary_center, residential_points)
+                    point = self._place_new(fac_type, "center", parcel_centroids, boundary_center, residential_points)
             elif status in ("规划改扩建", "upgraded"):
                 point = self._place_upgraded(fac_type, existing_pois, parcel_centroids, boundary_center)
             elif status in ("规划迁建", "relocated"):

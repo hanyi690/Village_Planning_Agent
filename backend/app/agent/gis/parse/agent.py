@@ -1016,6 +1016,138 @@ def _auto_fill_spatial_anchor(
     return ops
 
 
+def _auto_fill_facility_anchor(
+    facilities: list,
+    place_mappings: dict,
+) -> list:
+    """Post-format: auto-fill facility spatial anchors from place mappings.
+
+    Matches facility.type/location_hint against resolve_place results.
+    Fills direction, candidate_bsms, anchor_point for FacilityPlacer.
+    """
+    if not facilities:
+        return facilities
+
+    filled = 0
+    for ft in facilities:
+        search_text = f"{ft.type or ''} {ft.location_hint or ''} {ft.anchor_village or ''}"
+        for place_name, info in place_mappings.items():
+            if place_name in search_text:
+                # Fill candidate_bsms from place mapping
+                parcel_ids = info.get("parcel_ids", [])
+                if parcel_ids:
+                    ft.candidate_bsms = list(parcel_ids)
+                # Fill anchor_point from center
+                center = info.get("center", [0, 0])
+                if center and any(center):
+                    ft.anchor_point = (float(center[0]), float(center[1]))
+                filled += 1
+                break
+
+    if filled:
+        logger.info("[PARSE:auto_fill_facility] Filled %d facility anchors", filled)
+    return facilities
+
+
+def _auto_fill_axis_anchor(
+    axes: list,
+    place_mappings: dict,
+) -> list:
+    """Post-format: auto-fill axis spatial anchors from place mappings.
+
+    Matches axis.connects/reference_feature against resolve_place results.
+    Fills start_anchor, end_anchor, corridor_bsms for AxisBuilder.
+    """
+    if not axes:
+        return axes
+
+    filled = 0
+    for ax in axes:
+        search_text = " ".join(ax.connects) + " " + (ax.reference_feature or "")
+        for place_name, info in place_mappings.items():
+            if place_name in search_text:
+                center = info.get("center", [0, 0])
+                if center and any(center):
+                    pt = (float(center[0]), float(center[1]))
+                    if ax.start_anchor is None:
+                        ax.start_anchor = pt
+                    else:
+                        ax.end_anchor = pt
+                    filled += 1
+
+    if filled:
+        logger.info("[PARSE:auto_fill_axis] Filled %d axis anchors", filled)
+    return axes
+
+
+def _auto_fill_road_anchor(
+    roads: list,
+    place_mappings: dict,
+) -> list:
+    """Post-format: auto-fill road spatial anchors from place mappings.
+
+    Matches road.connects against resolve_place results.
+    Fills start_anchor, end_anchor, path_bsms for road sub-task.
+    """
+    if not roads:
+        return roads
+
+    filled = 0
+    for rd in roads:
+        for place_name, info in place_mappings.items():
+            if place_name in rd.connects:
+                center = info.get("center", [0, 0])
+                if center and any(center):
+                    pt = (float(center[0]), float(center[1]))
+                    if rd.start_anchor is None:
+                        rd.start_anchor = pt
+                    else:
+                        rd.end_anchor = pt
+                    filled += 1
+
+    if filled:
+        logger.info("[PARSE:auto_fill_road] Filled %d road anchors", filled)
+    return roads
+
+
+def _inject_deterministic_fields(
+    intent: "SpatialPlanningIntent",
+    code_mappings: dict,
+) -> "SpatialPlanningIntent":
+    """Fallback: fill deterministic fields only when LLM didn't output them.
+
+    Only fills when:
+      1. LLM didn't output dlbm (zt.dlbm is empty), AND
+      2. code_mappings has a 1:1 mapping for this land_use name
+
+    Multi-candidate cases (e.g. '居住用地' -> ['0701','0702','0703']) are
+    NOT filled here — LLM should have chosen from candidates in format_*.
+    """
+    from app.modules.schema import GHYTBM_TO_GHYTMC
+    valid_codes = set(GHYTBM_TO_GHYTMC.keys()) if GHYTBM_TO_GHYTMC else set()
+
+    # ── Zone targets: fill dlbm only if LLM didn't output ──
+    filled_codes = 0
+    for zt in intent.zone_targets:
+        if not zt.dlbm and zt.land_use:
+            code = code_mappings.get(zt.land_use, "")
+            if code and code in valid_codes:
+                zt.dlbm = code
+                filled_codes += 1
+        if not zt.vne_code and zt.dlbm:
+            try:
+                from app.modules.schema.encodings.classification import lookup_vne
+                vne = lookup_vne(zt.dlbm)
+                if vne:
+                    zt.vne_code = vne
+            except Exception:
+                pass
+
+    if filled_codes:
+        logger.info("[PARSE:inject] Filled %d codes (fallback, LLM left blank)", filled_codes)
+    return intent
+
+
 async def format_projects_node(state: ParseAgentState) -> dict:
     """Phase B: Format draft into structured Pydantic — NO thinking, NO tools.
 
@@ -1098,6 +1230,14 @@ async def explore_targets_node(state: ParseAgentState) -> dict:
             "  - query_village_kg('get_village_anchors') for natural village coordinates\n"
             "  - query_village_kg('get_designated_zones') for zone mapping\n"
             "Step 3: Use resolve_place for ANY location names mentioned in the text.\n"
+            "Step 4: Extract additional spatial details:\n"
+            "  - Facilities: direction ('north'/'south'/'east'/'west'/'center'),\n"
+            "    e.g. '在村北新建卫生室' → direction='north'\n"
+            "  - Development axes: axis_type ('primary'/'secondary'), label,\n"
+            "    e.g. '打造南北向发展轴' → axis_type='primary', direction='north-south', label='南北发展轴'\n"
+            "  - Roads: road_level, width_m, connects,\n"
+            "    e.g. '规划12m宽主干道连接村北和村南' → road_level='主干道', width_m=12, connects=['村北','村南']\n"
+            "  - Facility scale: '新建400㎡展销中心' → area_sqm=400\n"
             "Call ALL relevant tools, then STOP when done."
             f"{yaml_context}"
         ),
@@ -1105,7 +1245,8 @@ async def explore_targets_node(state: ParseAgentState) -> dict:
             "You are a village plan target summarizer.\n"
             "Based on the tool results above, write a COMPREHENSIVE target summary.\n"
             "Include EVERY zone_target (land_use + GHYTBM code + area_ratio),\n"
-            "EVERY facility (type/status/location), and EVERY development axis.\n"
+            "EVERY facility (type/status/location/direction), EVERY development axis\n"
+            "(direction/axis_type/label), and EVERY road (level/width/connects).\n"
             "Use codes from tool results. Do NOT guess. Write at least 1500 characters."
         ),
         draft_key="draft_targets",
@@ -1127,6 +1268,11 @@ async def format_targets_node(state: ParseAgentState) -> dict:
         return {"raw_targets": SpatialPlanningIntent()}
 
     code_table = "\n".join(f"  {name} -> GHYTBM={code}" for name, code in state.code_mappings_targets.items())
+    # Build candidate list: for multi-candidate cases, show all options
+    candidate_lines = []
+    for name, code in state.code_mappings_targets.items():
+        candidate_lines.append(f"  {name} -> GHYTBM={code}")
+    candidate_block = "\n".join(candidate_lines) if candidate_lines else "(none)"
 
     # Load YAML-driven structural constraints (Phase 3 gap fix)
     try:
@@ -1145,6 +1291,18 @@ async def format_targets_node(state: ParseAgentState) -> dict:
             "You are a JSON formatter. Convert the following target summary into SpatialPlanningIntent.\n"
             "STRICTLY use the code mapping table for dlbm fields — do NOT invent codes.\n"
             "zone_targets.area_ratio values must sum to ~1.0.\n\n"
+            "Output ALL sections:\n"
+            "  - zone_targets: land use targets with area_ratio, dlbm, vne_code, density, spatial_hint\n"
+            "  - facilities: facility targets with type, status, direction, location_hint\n"
+            "  - development_axes: axis targets with direction, axis_type, label, connects\n"
+            "  - road_targets: road targets with road_level, width_m, connects\n\n"
+            "dlbm rules:\n"
+            "  - Use the code from the Code Mapping Table below\n"
+            "  - If a land_use has multiple candidates (e.g. '居住用地' -> '0701,0702,0703'),\n"
+            "    choose the most appropriate one based on the context\n"
+            "  - If lookup_code returned a single match, use that code directly\n"
+            "  - NEVER invent codes not in the mapping table\n\n"
+            "Fill spatial_hint (e.g. '村北') and natural_language_description for each target.\n\n"
             f"{schema_block}\n"
             f"{mandatory_block}\n"
             f"{valid_lu_block}\n"
@@ -1159,8 +1317,30 @@ async def format_targets_node(state: ParseAgentState) -> dict:
     result = await _format_structured(format_llm, SpatialPlanningIntent, messages)
     if result is not None:
         result.village_name = state.village_name
-        logger.info("[PARSE:format_targets] %d zones, %d facilities, %d axes",
-                     len(result.zone_targets), len(result.facilities), len(result.development_axes))
+
+        # Post-format: deterministic field injection (fallback for LLM gaps)
+        result = _inject_deterministic_fields(
+            result,
+            dict(state.code_mappings_targets),
+        )
+
+        # Post-format: deterministic spatial anchoring (no LLM)
+        result.facilities = _auto_fill_facility_anchor(
+            result.facilities,
+            dict(state.place_mappings_targets),
+        )
+        result.development_axes = _auto_fill_axis_anchor(
+            result.development_axes,
+            dict(state.place_mappings_targets),
+        )
+        result.road_targets = _auto_fill_road_anchor(
+            result.road_targets,
+            dict(state.place_mappings_targets),
+        )
+
+        logger.info("[PARSE:format_targets] %d zones, %d facilities, %d axes, %d roads",
+                     len(result.zone_targets), len(result.facilities),
+                     len(result.development_axes), len(result.road_targets))
         # Store typed SpatialPlanningIntent, not model_dump()
         return {"raw_targets": result}
     return {"raw_targets": SpatialPlanningIntent()}

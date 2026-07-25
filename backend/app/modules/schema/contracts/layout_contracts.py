@@ -75,10 +75,7 @@ class AxisIntent(BaseModel):
     """Declarative intent for a development axis."""
 
     axis_id: str = ""
-    axis_type: str = ""
-    direction: Direction = Direction.CENTER
     connects: List[str] = Field(default_factory=list)
-    label: str = ""
 
 
 class ConstraintIntent(BaseModel):

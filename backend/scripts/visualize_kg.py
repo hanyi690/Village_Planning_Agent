@@ -90,7 +90,7 @@ def render_architecture_diagram(kg):
 
     dot = graphviz.Digraph("KG_Architecture", format="svg")
     dot.attr(rankdir="TB", bgcolor="white", fontname="SimHei",
-             label="Jintian KG 四层架构 (21,216 triples)", labelloc="t", fontsize="20")
+             label="Jintian KG 四层架构 (21,077 triples)", labelloc="t", fontsize="20")
     dot.attr("node", fontname="SimHei", fontsize="11")
     dot.attr("edge", fontname="SimHei", fontsize="9")
 

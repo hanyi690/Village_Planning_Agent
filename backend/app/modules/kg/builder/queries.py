@@ -118,19 +118,16 @@ def get_connected_parcels(self, parcel_uri: str, max_path_length: float = float(
 
 
 def validate_intent(self, intent: Any) -> List[Dict[str, Any]]:
-    from app.modules.schema.contracts.context_contracts import PlanIntent, FacilityTarget
-    if not isinstance(intent, PlanIntent):
+    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent, FacilityTarget
+    if not isinstance(intent, SpatialPlanningIntent):
         return []
     conflicts = []
-    for target in intent.targets:
-        if not isinstance(target, FacilityTarget):
-            continue
-        for lc in target.constraints:
-            if lc.constraint_type == "outside_zone" and lc.entity_uri:
-                for bsm in self.get_parcels_within_distance_of_entity(lc.entity_uri, lc.max_distance_m):
-                    if _is_in_protected_zone(self, bsm):
-                        conflicts.append({"description": f"设施 {target.name} 的候选地块 {bsm} 在保护区内",
-                                          "severity": "high", "facility": target.name, "bsm": bsm})
+    for ft in intent.facilities:
+        if ft.semantic and ft.semantic.spatial_hint:
+            for bsm in self.get_parcels_within_distance_of_entity(ft.semantic.spatial_hint, 500):
+                if _is_in_protected_zone(self, bsm):
+                    conflicts.append({"description": f"设施 {ft.type} 的候选地块 {bsm} 在保护区内",
+                                      "severity": "high", "facility": ft.type, "bsm": bsm})
     return conflicts
 
 

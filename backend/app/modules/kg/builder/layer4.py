@@ -121,7 +121,7 @@ def _apply_plan_block(self, plan_block: Any) -> None:
     # ── Summary metrics ──
     for metric_name, value in plan_block.summary_metrics.items():
         m_uri = PLN[f"planned_metric_{metric_name}_{version}"]
-        self.g.add((m_uri, RDF.type, PLN.Indicator))
+        self.g.add((m_uri, RDF.type, PLN.PlanningIndicator))
         self.g.add((m_uri, PLN.name, Literal(metric_name)))
         self.g.add((m_uri, PLN.value, Literal(value, datatype=XSD.double)))
         self.g.add((m_uri, PLN.in_version, Literal(version)))

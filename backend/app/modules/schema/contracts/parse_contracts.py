@@ -7,13 +7,25 @@ in the agent package.
 
 This breaks the reverse dependency where KG previously imported
 SpatialPlanningIntent from app.agent.gis.parse.state.
+
+EXECUTE sub-task field mapping:
+  layout:   ZoneTarget.land_use/area_ratio/density/adjacency_rules/vne_code
+  facility: FacilityTarget.type/status/direction/location_hint/candidate_bsms/anchor_point
+  axis:     AxisTarget.direction/axis_type/label/connects/start_anchor/end_anchor
+  road:     RoadTarget.road_level/width_m/connects/start_anchor/end_anchor
+  ops:      SpatialOperation.action/target_parcels/spatial_anchor.candidate_parcels
+
+Semantic anchors (human-readable, stored in SemanticMetadata):
+  natural_language_description, spatial_hint, reasoning_trace, raw_text
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, computed_field
+
+from .semantic_fields import SemanticMetadata
 
 
 # ── Zone spatial preference ─────────────────────────────────────────
@@ -56,6 +68,8 @@ class ZoneTarget(BaseModel):
     density: Literal["high", "medium", "low"] = "medium"
     zone_id: str = ""                        # from ZoneIntent (EXECUTE identifier)
     preserve_existing: bool = True           # from ZoneIntent
+    # Semantic anchors (human-readable, not stored as RDF)
+    semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
     @computed_field
     @property
@@ -65,7 +79,11 @@ class ZoneTarget(BaseModel):
 
 
 class FacilityTarget(BaseModel):
-    """Facility requirement with spatial anchoring."""
+    """Facility requirement with spatial anchoring.
+
+    candidate_bsms and anchor_point are filled by spatial_ops.grounding post-format.
+    SemanticMetadata.spatial_hint retains the original text (e.g. "村北") for traceability.
+    """
 
     type: str = ""
     status: Literal[
@@ -77,14 +95,48 @@ class FacilityTarget(BaseModel):
     location_hint: str = ""
     service_radius: Optional[int] = None
     anchor_village: Optional[str] = None
+    # === 空间锚定（spatial_ops.grounding 填充，具体集合而非文本）===
+    candidate_bsms: List[str] = Field(default_factory=list)
+    anchor_point: Optional[Tuple[float, float]] = None  # 精确坐标 (lon, lat)
+    # Semantic anchors (human-readable, not stored as RDF)
+    semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
 
 class AxisTarget(BaseModel):
-    """Development axis with connectivity."""
+    """Development axis with connectivity.
 
-    direction: str = ""
+    start_anchor/end_anchor provide precise coordinate anchors for axis line
+    generation. corridor_bsms are candidate parcels along the corridor.
+    SemanticMetadata.natural_language_description retains labels like "南北发展轴".
+    """
+
     reference_feature: str = ""
     connects: List[str] = Field(default_factory=list)
+    # === 空间锚定（spatial_ops.grounding 填充）===
+    start_anchor: Optional[Tuple[float, float]] = None
+    end_anchor: Optional[Tuple[float, float]] = None
+    corridor_bsms: List[str] = Field(default_factory=list)
+    # Semantic anchors (human-readable, not stored as RDF)
+    semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
+
+
+class RoadTarget(BaseModel):
+    """Road planning target — fills the road sub-task gap.
+
+    PARSE extracts road info from planning text (level, width, connectivity).
+    spatial_ops.grounding fills start_anchor/end_anchor/path_bsms.
+    EXECUTE road sub-task consumes this for planned road network generation.
+    """
+
+    road_level: str = ""                         # "主干道"/"次干道"/"支路"/"村道"
+    width_m: float = 0.0
+    connects: List[str] = Field(default_factory=list)  # ["村北", "村南"]
+    # === 空间锚定 ===
+    start_anchor: Optional[Tuple[float, float]] = None
+    end_anchor: Optional[Tuple[float, float]] = None
+    path_bsms: List[str] = Field(default_factory=list)
+    # Semantic anchors (human-readable, not stored as RDF)
+    semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
 
 # ── Planning indicator table (附表1) ────────────────────────────────
@@ -322,6 +374,9 @@ class SpatialPlanningIntent(BaseModel):
     # Development axes (enhanced)
     development_axes: List[AxisTarget] = Field(default_factory=list)
 
+    # Road targets (new — fills road sub-task gap)
+    road_targets: List[RoadTarget] = Field(default_factory=list)
+
     # Area constraints (preserved)
     total_area_ha: Optional[float] = None
     construction_area_ha: Optional[float] = None
@@ -336,6 +391,10 @@ class SpatialPlanningIntent(BaseModel):
 
     # Phase 3: Three zones and three lines (三区三线)
     three_zones_three_lines: Optional[ThreeZonesThreeLines] = None
+
+    # Semantic anchors (human-readable, not stored as RDF)
+    raw_text: str = ""                           # User's original planning text
+    reasoning_trace: str = ""                    # PARSE reasoning process
 
     @property
     def total_area_ratio(self) -> float:
@@ -360,6 +419,8 @@ __all__ = [
     "ZoneTarget",
     "FacilityTarget",
     "AxisTarget",
+    "RoadTarget",
+    "SemanticMetadata",
     "PlanningIndicatorItem",
     "PlanningIndicatorTable",
     "ThreeZoneItem",

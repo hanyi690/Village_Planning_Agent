@@ -238,27 +238,26 @@ def _add_parcels_typed(self, parcels: List[Any]) -> None:
 
 
 def _add_infrastructure_from_typed(self, parcels: List[Any]) -> None:
-    rd = {"1000", "1001", "1002", "1003", "1004", "1005", "1006", "1040", "2126", "2200"}
+    """Extract WaterBody and Facility entities from DLBM land classification.
+
+    NOTE: Roads are NOT created from DLBM. DLBM=10xx describes a parcel's
+    designated land-use type ("交通用地"), not a physical road (LineString).
+    Roads are created exclusively by add_roads() from bundle.lines.roads_current.
+    Similarly, water bodies from DLBM are supplemented by
+    _add_natural_features_from_typed() from polygon water_bodies layer.
+    """
     wd = {"1101", "1102", "1103", "1104", "1105", "1106", "1109", "1110", "1140", "1180", "3100"}
     fd = {"0800", "0801", "0802", "0803", "0806", "0810", "0900", "2122", "2125"}
-    roads, waters, facilities = [], [], []
+    waters, facilities = [], []
     for p in parcels:
         dlbm = str(getattr(p, "dlbm", "")).strip()
         bsm = str(getattr(p, "bsm", "")).strip()
         if not bsm:
             continue
-        if dlbm in rd:
-            roads.append(bsm)
-        elif dlbm in wd:
+        if dlbm in wd:
             waters.append(bsm)
         elif dlbm in fd:
             facilities.append(bsm)
-    for bsm in roads:
-        u = PLN[f"road_{bsm}"]
-        self.g.add((u, RDF.type, EntityTypes.Road))
-        self.g.add((u, PLN.name, Literal(f"道路_{bsm}")))
-        self.g.add((u, Relations.located_in, PLN.village))
-        self.g.add((PLN.village, Relations.connects, u))
     for bsm in waters:
         u = PLN[f"water_{bsm}"]
         self.g.add((u, RDF.type, EntityTypes.WaterBody))
@@ -269,9 +268,9 @@ def _add_infrastructure_from_typed(self, parcels: List[Any]) -> None:
         self.g.add((u, RDF.type, EntityTypes.Facility))
         self.g.add((u, PLN.name, Literal(f"设施_{bsm}")))
         self.g.add((u, Relations.located_in, PLN.village))
-    total = len(roads) + len(waters) + len(facilities)
+    total = len(waters) + len(facilities)
     if total:
-        logger.info("Infrastructure: %d roads, %d water, %d facilities", len(roads), len(waters), len(facilities))
+        logger.info("Infrastructure: %d water, %d facilities", len(waters), len(facilities))
 
 
 def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:

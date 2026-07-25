@@ -9,7 +9,7 @@
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 445.88)">
 <title>KG_Architecture</title>
 <polygon fill="white" stroke="none" points="-4,4 -4,-445.88 1691,-445.88 1691,4 -4,4"/>
-<text xml:space="preserve" text-anchor="middle" x="843.5" y="-418.88" font-family="SimHei" font-size="20.00">Jintian KG 四层架构 (21,216 triples)</text>
+<text xml:space="preserve" text-anchor="middle" x="843.5" y="-418.88" font-family="SimHei" font-size="20.00">Jintian KG 四层架构 (21,077 triples)</text>
 <g id="clust1" class="cluster">
 <title>cluster_l1</title>
 <path fill="#e8f5e9" stroke="#4caf50" d="M281,-158.75C281,-158.75 998,-158.75 998,-158.75 1004,-158.75 1010,-164.75 1010,-170.75 1010,-170.75 1010,-333.25 1010,-333.25 1010,-339.25 1004,-345.25 998,-345.25 998,-345.25 281,-345.25 281,-345.25 275,-345.25 269,-339.25 269,-333.25 269,-333.25 269,-170.75 269,-170.75 269,-164.75 275,-158.75 281,-158.75"/>
@@ -138,7 +138,7 @@
 <title>roads</title>
 <polygon fill="#a5d6a7" stroke="black" points="500.5,-294.25 421.5,-294.25 421.5,-258.25 500.5,-258.25 500.5,-294.25"/>
 <text xml:space="preserve" text-anchor="middle" x="461" y="-277.8" font-family="SimHei" font-size="11.00">Road (道路)</text>
-<text xml:space="preserve" text-anchor="middle" x="461" y="-265.8" font-family="SimHei" font-size="11.00">(count: 176)</text>
+<text xml:space="preserve" text-anchor="middle" x="461" y="-265.8" font-family="SimHei" font-size="11.00">(count: 132)</text>
 </g>
 <!-- facilities -->
 <g id="node4" class="node">

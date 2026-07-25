@@ -1,16 +1,17 @@
-"""Ontology definitions for PlanningKG.
+"""Ontology definitions for PlanningKG (v4.5).
 
-Defines 21 entity types and 14 relationship types following
-the 三区三线 national standard planning framework, augmented with
-省级村庄规划编制规程 (DB35/T 2061-2022, DB14/T 3120-2024) 整治规划实体
-and professional paradigm alignment (VNE/LandUseCategory/ControlRule/ThreeZone/ThreeLine).
+Defines 17 entity types and 16 relationship types following
+the 三区三线 national standard planning framework.
+
+[v4.5] Cleanup: removed 6 unused types (BuildingGroup, LandUsePlan, Project,
+LandConservationPlan, ReforestationPlan, GridRegulation). Merged Regulation→ControlRule,
+Indicator→PlanningIndicator. Intent types unified: _add_structured_intent now consumes
+parse_contracts.SpatialPlanningIntent directly (no PlanIntent/context_contracts bridge).
 
 Entity types:
-  Parcel, Zone, Constraint, Indicator  (Phase 0)
-  Project, Village, Regulation, LandUsePlan  (Phase 1)
-  Facility, Axis, Road, WaterBody, BuildingGroup  (Phase 1)
-  LandConservationPlan, ReforestationPlan, GridRegulation  (Phase 2)
-  ControlRule, LandUseCategory, PlanningIndicator  (Phase 3 — paradigm alignment)
+  Parcel, Zone, Constraint, PlanningIndicator  (Phase 0 merged)
+  Village, Facility, Axis, Road, WaterBody  (Phase 1, cleaned)
+  ControlRule, LandUseCategory  (Phase 3 — paradigm alignment)
   ThreeZone, ThreeLine  (Phase 3 — 三区三线)
   ZoneTarget, FacilityTarget, AxisTarget, PlanIntent  (v4.4 — structured intent)
 
@@ -32,49 +33,25 @@ GEO = Namespace("http://www.opengis.net/ont/geosparql#")
 
 
 class EntityTypes:
-    """21 entity type URIs for the planning ontology.
+    """17 entity type URIs for the planning ontology (v4.5, cleaned).
 
-    Phase 2 新增 3 个整治规划实体，对标 DB35/T 2061-2022、DB14/T 3120-2024 省级规程：
-    - LandConservationPlan: 土地整治规划
-    - ReforestationPlan: 生态修复规划
-    - GridRegulation: 田水路林村综合整治
-
-    Phase 3 新增 5 个专业范式对齐实体（省标/国标）：
-    - ControlRule: 管制规则（附录3 6大类）
-    - LandUseCategory: 用地分类（VNE 15小类）
-    - PlanningIndicator: 规划指标（附表1 7指标×3时间维度）
-    - ThreeZone: 三区（生态/农业/建设空间）
-    - ThreeLine: 三线（生态红线/永久基本农田/城镇开发边界）
-
-    v4.4 新增 4 个意图实体类型：
-    - ZoneTarget: 分区目标
-    - FacilityTarget: 设施目标
-    - AxisTarget: 发展轴线
-    - PlanIntent: 规划意图容器
-    """
+    v4.5 cleanup: removed BuildingGroup, LandUsePlan, Project,
+    LandConservationPlan, ReforestationPlan, GridRegulation (unused).
+    Merged Regulation→ControlRule, Indicator→PlanningIndicator."""
     # Existing (Phase 0)
     Parcel = PLN.Parcel
     Zone = PLN.Zone
     Constraint = PLN.Constraint
-    Indicator = PLN.Indicator
-    # New (Phase 1)
-    Project = PLN.Project
+    PlanningIndicator = PLN.PlanningIndicator
+    # New (Phase 1 — cleaned)
     Village = PLN.Village
-    Regulation = PLN.Regulation
-    LandUsePlan = PLN.LandUsePlan
     Facility = PLN.Facility
     Axis = PLN.Axis
     Road = PLN.Road
     WaterBody = PLN.WaterBody
-    BuildingGroup = PLN.BuildingGroup
-    # Phase 2 — 整治规划实体（对标省级村庄规划编制规程）
-    LandConservationPlan = PLN.LandConservationPlan
-    ReforestationPlan = PLN.ReforestationPlan
-    GridRegulation = PLN.GridRegulation
     # Phase 3 — 专业范式对齐实体（省标/国标）
     ControlRule = PLN.ControlRule
     LandUseCategory = PLN.LandUseCategory
-    PlanningIndicator = PLN.PlanningIndicator
     ThreeZone = PLN.ThreeZone
     ThreeLine = PLN.ThreeLine
     # Phase 6 — Village hierarchy (administrative village vs natural settlement)
@@ -91,11 +68,9 @@ class EntityTypes:
     @classmethod
     def all(cls) -> list:
         return [
-            cls.Parcel, cls.Zone, cls.Constraint, cls.Indicator,
-            cls.Project, cls.Village, cls.Regulation, cls.LandUsePlan,
-            cls.Facility, cls.Axis, cls.Road, cls.WaterBody, cls.BuildingGroup,
-            cls.LandConservationPlan, cls.ReforestationPlan, cls.GridRegulation,
-            cls.ControlRule, cls.LandUseCategory, cls.PlanningIndicator,
+            cls.Parcel, cls.Zone, cls.Constraint, cls.PlanningIndicator,
+            cls.Village, cls.Facility, cls.Axis, cls.Road, cls.WaterBody,
+            cls.ControlRule, cls.LandUseCategory,
             cls.ThreeZone, cls.ThreeLine,
             cls.AdministrativeVillage, cls.NaturalSettlement,
             cls.ZoneTarget, cls.FacilityTarget, cls.AxisTarget, cls.PlanIntent,
@@ -103,12 +78,11 @@ class EntityTypes:
 
 
 class Relations:
-    """14 relationship type URIs for the planning ontology.
+    """16 relationship type URIs for the planning ontology (v4.5, cleaned).
 
-    Phase 3 新增 3 个专业范式关系：
-    - delineates: 控制线划定 (ThreeLine → Parcel)
-    - controls_use: 用途管制 (ControlRule → LandUseCategory)
-    - conducted_from: 上位传导 (PlanningIndicator → UpperPlan)
+    @deprecated adjacent_to: replaced by touches (v4.4) with shared_boundary_length.
+    Kept for zone-level adjacency (ZONE_ADJACENCY ContextBlock). Use touches for
+    parcel-level spatial relations.
 
     v4.4 新增 3 个空间关系属性（L1-L3 三层模型）：
     - touches: 拓扑邻接（共享边界）
@@ -121,7 +95,7 @@ class Relations:
     - land_use_code: 用地编码
     """
     # Existing (Phase 0)
-    adjacent_to = PLN.adjacent_to
+    adjacent_to = PLN.adjacent_to  # @deprecated: use touches for parcel-level
     within_zone = PLN.within_zone
     constrained_by = PLN.constrained_by
     # New (Phase 1)
@@ -163,7 +137,7 @@ class Relations:
 # max_distance_m, land_use_code, target_area_ha, min_area_sqm
 
 
-# Facility types for _add_spatial_infrastructure
+# Facility types for _add_spatial_infrastructure (used by layer1.py)
 FACILITY_TYPES = {
     "公共服务": {"entity": EntityTypes.Facility, "serves": "居民"},
     "教育": {"entity": EntityTypes.Facility, "serves": "学生"},
@@ -172,27 +146,7 @@ FACILITY_TYPES = {
     "体育": {"entity": EntityTypes.Facility, "serves": "居民"},
 }
 
-# Regulation types for _add_regulation — 省标6大类管制规则(附录3)
-REGULATION_TYPES = {
-    "永久基本农田保护": {"protects": "农田保护区", "field": "farmland_area_ha", "category": "farmland_protection"},
-    "生态保护红线": {"protects": "生态保护区", "field": "ecological_redline_ha", "category": "ecological_protection"},
-    "村庄建设边界": {"protects": "村庄建设区", "field": "construction_area_ha", "category": "construction_control"},
-    "历史文化保护": {"protects": "历史文化区", "field": "", "category": "heritage_protection"},
-    "村庄安全防灾": {"protects": "全村范围", "field": "", "category": "safety_assurance"},
-    "建设空间管制": {"protects": "村庄建设区", "field": "construction_area_ha", "category": "construction_spatial_control"},
-}
-
-
-# Facility types for _add_spatial_infrastructure
-FACILITY_TYPES = {
-    "公共服务": {"entity": EntityTypes.Facility, "serves": "居民"},
-    "教育": {"entity": EntityTypes.Facility, "serves": "学生"},
-    "医疗": {"entity": EntityTypes.Facility, "serves": "患者"},
-    "文化": {"entity": EntityTypes.Facility, "serves": "居民"},
-    "体育": {"entity": EntityTypes.Facility, "serves": "居民"},
-}
-
-# Regulation types for _add_regulation — 省标6大类管制规则(附录3)
+# Regulation types — 省标6大类管制规则(附录3), mapped to ControlRule
 REGULATION_TYPES = {
     "永久基本农田保护": {"protects": "农田保护区", "field": "farmland_area_ha", "category": "farmland_protection"},
     "生态保护红线": {"protects": "生态保护区", "field": "ecological_redline_ha", "category": "ecological_protection"},

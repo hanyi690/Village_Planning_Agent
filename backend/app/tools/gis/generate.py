@@ -74,16 +74,8 @@ def _intent_from_typed(intent: Any) -> Any:
         axes = []
         if hasattr(intent, 'development_axes'):
             for i, at in enumerate(intent.development_axes):
-                raw_dir = str(at.direction if hasattr(at, 'direction') else "center")
-                try:
-                    ax_dir = Direction(raw_dir)
-                except ValueError:
-                    ax_dir = Direction.CENTER
                 axes.append(AxisIntent(
                     axis_id=f"A{i + 1:02d}",
-                    axis_type="primary",
-                    direction=ax_dir,
-                    label=raw_dir if ax_dir == Direction.CENTER and raw_dir != "center" else "",
                 ))
 
         return UnifiedSpatialIntent(
@@ -100,7 +92,7 @@ def _intent_from_typed(intent: Any) -> Any:
                 land_use=z.get("land_use", ""),
                 dlbm=z.get("dlbm", ""),
                 area_ratio=z.get("area_ratio", 0.0),
-                direction=Direction(z.get("direction", "center")),
+                direction=Direction.CENTER,
                 density=Density(z.get("density", "medium")),
                 preserve_existing=z.get("preserve_existing", True),
             ))
@@ -119,9 +111,6 @@ def _intent_from_typed(intent: Any) -> Any:
         for a in intent.get("axes", []):
             axes.append(AxisIntent(
                 axis_id=a.get("axis_id", ""),
-                axis_type=a.get("axis_type", "primary"),
-                direction=Direction(a.get("direction", "center")),
-                label=a.get("label", ""),
             ))
 
         constraints = []

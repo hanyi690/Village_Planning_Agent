@@ -33,7 +33,7 @@ from .layer1 import (
     add_annotations, add_roads, add_terrain,
 )
 from .layer2 import _add_landuse_dist_from_blocks, _add_constraints_from_blocks
-from .layer3 import _add_structured_intent, _add_location_constraint
+from .layer3 import _add_structured_intent
 from .layer4 import (
     _apply_plan_block, get_planned_parcels_in_zone,
     check_constraint_violations, compare_versions,
@@ -187,6 +187,7 @@ class PlanningKG:
         self.g.bind("geo", GEO)
         self.village_name = village_name
         self._parcel_count = 0
+        self._semantic_store: Dict[str, Dict[str, str]] = {}
 
     # ── Main entry point ──
 
@@ -196,6 +197,7 @@ class PlanningKG:
         self.g.bind("pln", PLN)
         self.g.bind("geo", GEO)
         self._parcel_count = 0
+        self._semantic_store = {}
 
         # Layer 1: static (zero shapely/geopandas)
         self._add_village_entity(bundle.village_name)
@@ -257,6 +259,7 @@ class PlanningKG:
             if is_l1 or p in (PLN.adjacent_to, PLN.touches, PLN.nearby) or s == PLN.village:
                 new_kg.g.add((s, p, o))
         new_kg._parcel_count = self._parcel_count
+        new_kg._semantic_store = dict(self._semantic_store)
         return new_kg
 
     def print_summary(self):
@@ -299,7 +302,6 @@ PlanningKG._add_constraints_from_blocks = _add_constraints_from_blocks
 
 # Layer 3
 PlanningKG._add_structured_intent = _add_structured_intent
-PlanningKG._add_location_constraint = _add_location_constraint
 
 # Layer 4
 PlanningKG._apply_plan_block = _apply_plan_block
