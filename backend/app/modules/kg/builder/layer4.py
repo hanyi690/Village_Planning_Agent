@@ -1,10 +1,17 @@
-"""Layer 4: PlanBlock (incremental change-set, versioned).
+"""Layer 4: PlannedState (规划成果, 版本化增量).
 
-Sparse write strategy: only changed entities get L4 triples.
-Unchanged parcels have no L4 triples; query falls back to L1.
+L4 entities mirror L3 intent virtual entities with precise geometry:
+  ZoneTarget → PlannedParcel + PlannedZone
+  FacilityTarget → PlannedFacility
+  RoadTarget → PlannedRoad
+  AxisTarget → PlannedAxis
 
-All functions are module-level and assigned to PlanningKG in base.py.
+Sparse write: only changed entities get L4 triples.
+Unchanged entities have no L4 triples; query falls back to L1.
 """
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from rdflib import Literal, RDF, URIRef
@@ -16,119 +23,165 @@ from ..ontology import PLN, EntityTypes, Relations
 logger = get_logger(__name__)
 
 
-def _apply_plan_block(self, plan_block: Any) -> None:
-    """Apply PlanBlock (change-set) to KG Layer 4.
+# ── PlannedState entry types ──
 
-    Sparse write: only changed entities get L4 triples.
-    For split/merge, new bsm identifiers are created with derived_from
-    linking back to parent L1 parcels.
+
+@dataclass
+class PlannedParcelEntry:
+    """规划地块 — 对应 L3 ZoneTarget 的落实"""
+    bsm: str
+    planning_land_use: str = ""
+    zone_type: str = ""
+    area_ha: float = 0.0
+    derived_from_bsms: List[str] = field(default_factory=list)
+    derived_from_zone_target: str = ""
+
+
+@dataclass
+class PlannedZoneEntry:
+    """规划分区面 — 线围成的面，对应 L3 ZoneTarget 的落实"""
+    zone_type: str
+    area_ha: float = 0.0
+    name: str = ""
+    derived_from_zone_target: str = ""
+
+
+@dataclass
+class PlannedFacilityEntry:
+    """规划设施点 — 对应 L3 FacilityTarget 的落实"""
+    name: str
+    facility_type: str = ""
+    lon: float = 0.0
+    lat: float = 0.0
+    service_radius: int = 0
+    derived_from_target: str = ""
+
+
+@dataclass
+class PlannedRoadEntry:
+    """规划道路线 — 对应 L3 RoadTarget 的落实"""
+    name: str
+    road_level: str = ""
+    width_m: float = 0.0
+    derived_from_target: str = ""
+
+
+@dataclass
+class PlannedAxisEntry:
+    """规划发展轴线 — 对应 L3 AxisTarget 的落实"""
+    name: str
+    reference_feature: str = ""
+    direction: str = ""
+    derived_from_target: str = ""
+
+
+@dataclass
+class PlannedState:
+    """规划成果状态 — L4 层的完整视图
+
+    Morphologically aligned with VillageBundle:
+      parcels → PlannedParcel (面)
+      zones → PlannedZone (面)
+      facilities → PlannedFacility (点)
+      roads → PlannedRoad (线)
+      axes → PlannedAxis (线)
     """
-    from app.modules.schema.contracts.context_contracts import PlanBlock
-    if isinstance(plan_block, dict):
-        try:
-            plan_block = PlanBlock(**plan_block)
-        except Exception as e:
-            logger.warning("plan_block dict parse failed: %s", e)
-            return
-    if not isinstance(plan_block, PlanBlock):
+    version: str = "current"
+    parcels: List[PlannedParcelEntry] = field(default_factory=list)
+    zones: List[PlannedZoneEntry] = field(default_factory=list)
+    facilities: List[PlannedFacilityEntry] = field(default_factory=list)
+    roads: List[PlannedRoadEntry] = field(default_factory=list)
+    axes: List[PlannedAxisEntry] = field(default_factory=list)
+    source: str = ""
+
+
+# ── L4 builder ──
+
+
+def _apply_planned_state(self, planned_state: PlannedState) -> None:
+    """Apply PlannedState to KG Layer 4.
+
+    Sparse write: only entities with non-default values get L4 triples.
+    Each entity tagged with pln:in_version for versioning.
+    """
+    if not isinstance(planned_state, PlannedState):
         return
 
-    version = plan_block.version or "current"
+    version = planned_state.version or "current"
     count = 0
 
-    # ── Parcel changes (delta) ──
-    for pc in plan_block.parcel_changes:
-        p_uri = PLN[f"planned_parcel_{pc.bsm}_{version}"]
-        self.g.add((p_uri, RDF.type, EntityTypes.PlannedParcel))
-        self.g.add((p_uri, PLN.bsm, Literal(pc.bsm)))
-        self.g.add((p_uri, PLN.change_action, Literal(pc.action)))
-        self.g.add((p_uri, PLN.in_version, Literal(version)))
-        # Only write changed fields (sparse)
-        if pc.new_planning_land_use:
-            self.g.add((p_uri, PLN.planning_land_use, Literal(pc.new_planning_land_use)))
-        if pc.new_area_ha is not None:
-            self.g.add((p_uri, PLN.planned_area_ha, Literal(pc.new_area_ha, datatype=XSD.double)))
-        if pc.new_zone_type:
-            self.g.add((p_uri, PLN.planning_zone_type, Literal(pc.new_zone_type)))
-        # Link to L1 parents (derived_from)
-        for parent_bsm in pc.derived_from_bsms:
+    # ── PlannedParcel ──
+    for p in planned_state.parcels:
+        uri = PLN[f"planned_parcel_{p.bsm}_{version}"]
+        self.g.add((uri, RDF.type, EntityTypes.PlannedParcel))
+        self.g.add((uri, PLN.bsm, Literal(p.bsm)))
+        self.g.add((uri, PLN.in_version, Literal(version)))
+        if p.planning_land_use:
+            self.g.add((uri, PLN.planning_land_use, Literal(p.planning_land_use)))
+        if p.zone_type:
+            self.g.add((uri, PLN.planning_zone_type, Literal(p.zone_type)))
+        if p.area_ha:
+            self.g.add((uri, PLN.planned_area_ha, Literal(p.area_ha, datatype=XSD.double)))
+        for parent_bsm in p.derived_from_bsms:
             for s in self.g.subjects(PLN.bsm, Literal(parent_bsm)):
-                if (s, RDF.type, PLN.Parcel) in self.g:
-                    self.g.add((p_uri, PLN.derived_from, s))
+                if (s, RDF.type, EntityTypes.Parcel) in self.g:
+                    self.g.add((uri, PLN.derived_from, s))
                     break
         count += 1
 
-    # ── Facility changes ──
-    for fc in plan_block.facility_changes:
-        f_uri = PLN[f"planned_facility_{fc.name}_{version}"]
-        self.g.add((f_uri, RDF.type, PLN.Facility))
-        self.g.add((f_uri, PLN.name, Literal(fc.name)))
-        self.g.add((f_uri, PLN.change_action, Literal(fc.action)))
-        self.g.add((f_uri, PLN.in_version, Literal(version)))
-        if fc.facility_type:
-            self.g.add((f_uri, PLN.facility_type, Literal(fc.facility_type)))
-        if fc.area_sqm is not None:
-            self.g.add((f_uri, PLN.area_sqm, Literal(fc.area_sqm, datatype=XSD.double)))
-        if fc.center and len(fc.center) >= 2:
-            self.g.add((f_uri, PLN.lon, Literal(fc.center[0], datatype=XSD.double)))
-            self.g.add((f_uri, PLN.lat, Literal(fc.center[1], datatype=XSD.double)))
-        if fc.derived_from_name:
-            for s in self.g.subjects(PLN.name, Literal(fc.derived_from_name)):
-                if (s, RDF.type, PLN.Facility) in self.g:
-                    self.g.add((f_uri, PLN.derived_from, s))
-                    break
-        self.g.add((f_uri, Relations.located_in, PLN.village))
+    # ── PlannedZone ──
+    for z in planned_state.zones:
+        uri = PLN[f"planned_zone_{z.zone_type}_{version}"]
+        self.g.add((uri, RDF.type, EntityTypes.PlannedZone))
+        self.g.add((uri, PLN.zone_type, Literal(z.zone_type)))
+        self.g.add((uri, PLN.in_version, Literal(version)))
+        if z.name:
+            self.g.add((uri, PLN.name, Literal(z.name)))
+        if z.area_ha:
+            self.g.add((uri, PLN.area_target_ha, Literal(z.area_ha, datatype=XSD.double)))
         count += 1
 
-    # ── Road changes ──
-    for rc in plan_block.road_changes:
-        r_uri = PLN[f"planned_road_{rc.name}_{version}"]
-        self.g.add((r_uri, RDF.type, PLN.Road))
-        self.g.add((r_uri, PLN.name, Literal(rc.name)))
-        self.g.add((r_uri, PLN.change_action, Literal(rc.action)))
-        self.g.add((r_uri, PLN.in_version, Literal(version)))
-        if rc.road_level:
-            self.g.add((r_uri, PLN.road_level, Literal(rc.road_level)))
-        if rc.width_m:
-            self.g.add((r_uri, PLN.buffer_width_m, Literal(rc.width_m, datatype=XSD.double)))
-        if rc.derived_from_name:
-            for s in self.g.subjects(PLN.name, Literal(rc.derived_from_name)):
-                if (s, RDF.type, PLN.Road) in self.g:
-                    self.g.add((r_uri, PLN.derived_from, s))
-                    break
-        self.g.add((r_uri, Relations.located_in, PLN.village))
+    # ── PlannedFacility ──
+    for f in planned_state.facilities:
+        uri = PLN[f"planned_facility_{f.name}_{version}"]
+        self.g.add((uri, RDF.type, EntityTypes.PlannedFacility))
+        self.g.add((uri, PLN.name, Literal(f.name)))
+        self.g.add((uri, PLN.in_version, Literal(version)))
+        if f.facility_type:
+            self.g.add((uri, PLN.facility_type, Literal(f.facility_type)))
+        if f.lon and f.lat:
+            self.g.add((uri, PLN.lon, Literal(f.lon, datatype=XSD.double)))
+            self.g.add((uri, PLN.lat, Literal(f.lat, datatype=XSD.double)))
+        if f.service_radius:
+            self.g.add((uri, PLN.service_radius, Literal(f.service_radius, datatype=XSD.integer)))
         count += 1
 
-    # ── Settlement changes ──
-    for sc in plan_block.settlement_changes:
-        s_uri = PLN[f"planned_settlement_{sc.settlement_name}_{version}"]
-        self.g.add((s_uri, RDF.type, EntityTypes.NaturalSettlement))
-        self.g.add((s_uri, PLN.name, Literal(sc.settlement_name)))
-        self.g.add((s_uri, PLN.change_action, Literal(sc.action)))
-        self.g.add((s_uri, PLN.in_version, Literal(version)))
-        if sc.new_population is not None:
-            self.g.add((s_uri, PLN.population, Literal(sc.new_population, datatype=XSD.integer)))
-        if sc.new_area_ha is not None:
-            self.g.add((s_uri, PLN.planned_area_ha, Literal(sc.new_area_ha, datatype=XSD.double)))
-        if sc.target_location and len(sc.target_location) >= 2:
-            self.g.add((s_uri, PLN.lon, Literal(sc.target_location[0], datatype=XSD.double)))
-            self.g.add((s_uri, PLN.lat, Literal(sc.target_location[1], datatype=XSD.double)))
-        if sc.merge_into:
-            self.g.add((s_uri, PLN.merged_into, Literal(sc.merge_into)))
-        self.g.add((s_uri, Relations.located_in, PLN.village))
+    # ── PlannedRoad ──
+    for r in planned_state.roads:
+        uri = PLN[f"planned_road_{r.name}_{version}"]
+        self.g.add((uri, RDF.type, EntityTypes.PlannedRoad))
+        self.g.add((uri, PLN.name, Literal(r.name)))
+        self.g.add((uri, PLN.in_version, Literal(version)))
+        if r.road_level:
+            self.g.add((uri, PLN.road_level, Literal(r.road_level)))
+        if r.width_m:
+            self.g.add((uri, PLN.buffer_width_m, Literal(r.width_m, datatype=XSD.double)))
         count += 1
 
-    # ── Summary metrics ──
-    for metric_name, value in plan_block.summary_metrics.items():
-        m_uri = PLN[f"planned_metric_{metric_name}_{version}"]
-        self.g.add((m_uri, RDF.type, PLN.PlanningIndicator))
-        self.g.add((m_uri, PLN.name, Literal(metric_name)))
-        self.g.add((m_uri, PLN.value, Literal(value, datatype=XSD.double)))
-        self.g.add((m_uri, PLN.in_version, Literal(version)))
-        self.g.add((PLN.village, PLN.has_indicator, m_uri))
+    # ── PlannedAxis ──
+    for a in planned_state.axes:
+        uri = PLN[f"planned_axis_{a.name}_{version}"]
+        self.g.add((uri, RDF.type, EntityTypes.PlannedAxis))
+        self.g.add((uri, PLN.name, Literal(a.name)))
+        self.g.add((uri, PLN.in_version, Literal(version)))
+        if a.reference_feature:
+            self.g.add((uri, PLN.reference_feature, Literal(a.reference_feature)))
+        if a.direction:
+            self.g.add((uri, PLN.direction, Literal(a.direction)))
+        count += 1
 
     if count:
-        logger.info("Layer 4: applied %d changes (version=%s)", count, version)
+        logger.info("Layer 4: applied %d planned entities (version=%s)", count, version)
 
 
 # ── Query methods: effective state (L1 + L4 merge) ──
@@ -178,31 +231,11 @@ def get_plan_changes(self, version: str = "current") -> List[Dict[str, Any]]:
     """Get all planning changes (delta) for a version."""
     return self.query(
         f'PREFIX pln: <http://village-planning.org/ontology#> '
-        f'SELECT ?p ?bsm ?action ?lu ?area WHERE {{ '
-        f'?p a pln:PlannedParcel ; pln:bsm ?bsm ; pln:change_action ?action ; '
+        f'SELECT ?p ?bsm ?lu ?area WHERE {{ '
+        f'?p a pln:PlannedParcel ; pln:bsm ?bsm ; '
         f'pln:in_version "{version}" . '
         f'OPTIONAL {{ ?p pln:planning_land_use ?lu . }} '
         f'OPTIONAL {{ ?p pln:planned_area_ha ?area . }} }}')
-
-
-def get_split_parcels(self, version: str = "current") -> List[Dict[str, Any]]:
-    """Get parcels created by split action (new bsm, derived from parent)."""
-    return self.query(
-        f'PREFIX pln: <http://village-planning.org/ontology#> '
-        f'SELECT ?p ?bsm ?parent WHERE {{ '
-        f'?p a pln:PlannedParcel ; pln:bsm ?bsm ; '
-        f'pln:change_action "split" ; pln:in_version "{version}" ; '
-        f'pln:derived_from ?parent . }}')
-
-
-def get_merge_parcels(self, version: str = "current") -> List[Dict[str, Any]]:
-    """Get parcels created by merge action (new bsm, derived from multiple parents)."""
-    return self.query(
-        f'PREFIX pln: <http://village-planning.org/ontology#> '
-        f'SELECT ?p ?bsm ?parent WHERE {{ '
-        f'?p a pln:PlannedParcel ; pln:bsm ?bsm ; '
-        f'pln:change_action "merge" ; pln:in_version "{version}" ; '
-        f'pln:derived_from ?parent . }}')
 
 
 def get_planned_parcels_in_zone(self, zone_type: str, version: str = "current") -> List[Dict[str, Any]]:
@@ -234,19 +267,19 @@ def check_constraint_violations(self, version: str = "current") -> List[Dict[str
 
 
 def compare_versions(self, version_a: str, version_b: str) -> Dict[str, Any]:
-    """Compare two PlanBlock versions - returns changes between delta sets."""
+    """Compare two plan versions - returns changes between them."""
     a_map = {p["bsm"]: p for p in self.query(
         f"PREFIX pln: <http://village-planning.org/ontology#> "
-        f"SELECT ?bsm ?land_use ?area ?action WHERE {{ "
+        f"SELECT ?bsm ?land_use ?area WHERE {{ "
         f"?p a pln:PlannedParcel ; pln:in_version \"{version_a}\" ; "
-        f"pln:bsm ?bsm ; pln:change_action ?action . "
+        f"pln:bsm ?bsm . "
         f"OPTIONAL {{ ?p pln:planning_land_use ?land_use . }} "
         f"OPTIONAL {{ ?p pln:planned_area_ha ?area . }} }}") if p.get("bsm")}
     b_map = {p["bsm"]: p for p in self.query(
         f"PREFIX pln: <http://village-planning.org/ontology#> "
-        f"SELECT ?bsm ?land_use ?area ?action WHERE {{ "
+        f"SELECT ?bsm ?land_use ?area WHERE {{ "
         f"?p a pln:PlannedParcel ; pln:in_version \"{version_b}\" ; "
-        f"pln:bsm ?bsm ; pln:change_action ?action . "
+        f"pln:bsm ?bsm . "
         f"OPTIONAL {{ ?p pln:planning_land_use ?land_use . }} "
         f"OPTIONAL {{ ?p pln:planned_area_ha ?area . }} }}") if p.get("bsm")}
     changed = []
@@ -255,11 +288,9 @@ def compare_versions(self, version_a: str, version_b: str) -> Dict[str, Any]:
             ap = a_map[bsm]
             if ap.get("land_use", "") != bp.get("land_use", ""):
                 changed.append({"bsm": bsm, "from": ap.get("land_use", ""),
-                                "to": bp.get("land_use", ""),
-                                "action_a": ap.get("action", ""), "action_b": bp.get("action", "")})
+                                "to": bp.get("land_use", "")})
         else:
-            changed.append({"bsm": bsm, "from": None, "to": bp.get("land_use", ""),
-                            "action": bp.get("action", "new_in_b")})
+            changed.append({"bsm": bsm, "from": None, "to": bp.get("land_use", "")})
     a_keys = set(a_map.keys())
     b_keys = set(b_map.keys())
     return {"version_a": version_a, "version_b": version_b,

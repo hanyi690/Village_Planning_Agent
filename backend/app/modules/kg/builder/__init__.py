@@ -3,11 +3,16 @@
 Exports:
   PlanningKG - main KG class
   KGInputParcels - typed parcel container
+  Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin
 
 Note: intent_converter (parse_contracts -> context_contracts pure mapping)
 will be added here once spatial_ops/grounding.py is implemented.
 See spatial_ops/README.md and parse/README.md for the v5.0 design.
 """
 from .base import PlanningKG, KGInputParcels
+from .mixins import Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin
 
-__all__ = ["PlanningKG", "KGInputParcels"]
+__all__ = [
+    "PlanningKG", "KGInputParcels",
+    "Layer1Mixin", "Layer2Mixin", "Layer3Mixin", "Layer4Mixin", "QueryMixin",
+]

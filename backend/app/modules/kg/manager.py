@@ -29,6 +29,7 @@ Design decisions:
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import OrderedDict
 from dataclasses import dataclass
 from threading import Lock
@@ -162,14 +163,13 @@ class KGManager:
         self,
         village_name: str,
         bundle: Optional[Any] = None,
-        context_blocks: Optional[List[Any]] = None,
         parcel_relations: Optional[Any] = None,
         landuse_geojson: Optional[Dict[str, Any]] = None,  # legacy fallback
         gis_data: Optional[Dict[str, Any]] = None,  # legacy fallback
     ) -> Tuple[Any, bool]:
         """Get Layer 1 KG from cache or build fresh.
 
-        Prefer bundle + context_blocks (v4.4 path).
+        Builds from bundle morphology groups directly (v4.6 path).
         Falls back to landuse_geojson + gis_data (legacy path).
 
         Returns:
@@ -192,14 +192,13 @@ class KGManager:
 
         # Build fresh
         kg = PlanningKG(village_name=village_name)
-        if bundle is not None and context_blocks is not None:
-            kg.build_from_blocks(
-                blocks=context_blocks,
+        if bundle is not None:
+            kg.build_from_bundle(
                 bundle=bundle,
                 parcel_relations=parcel_relations,
             )
         else:
-            logger.warning("[KGManager] No bundle/context_blocks provided — skipping Layer 1 build")
+            logger.warning("[KGManager] No bundle provided — skipping Layer 1 build")
 
         # Store in cache
         if self._cache_enabled and key_str:
@@ -262,9 +261,9 @@ class KGManager:
         Returns:
             List of result dicts.
         """
-        from app.modules.kg.query import query_kg
+        from app.modules.kg.queries import query_kg
 
-        params_key = str(hash(frozenset(params.items())))
+        params_key = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()
         cache_key = f"{session_id}:{template_name}:{params_key}"
         current_version = self._session_versions.get(session_id, 1)
 
@@ -307,7 +306,6 @@ class KGManager:
         self,
         village_name: str,
         bundle: Optional[Any] = None,
-        context_blocks: Optional[List[Any]] = None,
         parcel_relations: Optional[Any] = None,
         intent: Any = None,
         reports: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -319,15 +317,14 @@ class KGManager:
         kg, cache_hit = self.get_or_build_layer1(
             village_name=village_name,
             bundle=bundle,
-            context_blocks=context_blocks,
             parcel_relations=parcel_relations,
             landuse_geojson=landuse_geojson,
             gis_data=gis_data,
         )
-        if intent is not None and hasattr(kg, "_add_structured_intent"):
-            kg._add_structured_intent(intent)
+        if intent is not None and hasattr(kg, "build_intent_layer"):
+            kg.build_intent_layer(intent)
         elif reports is not None:
-            logger.warning("[KGManager] reports path deprecated in v4.4 — use bundle + context_blocks")
+            logger.warning("[KGManager] reports path deprecated in v4.6 — use build_intent_layer")
         if session_id:
             self.register_session(session_id, kg)
         return kg

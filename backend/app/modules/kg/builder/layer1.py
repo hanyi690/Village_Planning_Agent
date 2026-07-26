@@ -1,4 +1,4 @@
-"""Layer 1: static entity builders (from ContextBlock + typed morphology groups).
+"""Layer 1: static entity builders (from bundle morphology groups).
 
 All functions are module-level, assigned to PlanningKG in base.py.
 Zero shapely/geopandas dependency.
@@ -20,141 +20,6 @@ def _add_village_entity(self, village_name: str) -> None:
     self.g.add((v, PLN.name, Literal(village_name or "unknown")))
 
 
-def _add_village_meta_from_blocks(self, blocks) -> None:
-    from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT
-    for block in blocks:
-        if getattr(block, "block_type", None) != CBT.VILLAGE_META:
-            continue
-        d = block.data
-        v = PLN.village
-        total = d.get("total_area_ha", 0)
-        if total:
-            self.g.add((v, PLN.totalArea_ha, Literal(total, datatype=XSD.double)))
-        construction = d.get("construction_boundary_ha", 0)
-        if construction:
-            self.g.add((v, PLN.constructionArea_ha, Literal(construction, datatype=XSD.double)))
-        center = d.get("center")
-        if center and len(center) >= 2:
-            self.g.add((v, PLN.lon, Literal(center[0], datatype=XSD.double)))
-            self.g.add((v, PLN.lat, Literal(center[1], datatype=XSD.double)))
-
-
-def _add_natural_villages_from_blocks(self, blocks) -> None:
-    from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT
-    for block in blocks:
-        if getattr(block, "block_type", None) != CBT.NATURAL_VILLAGES:
-            continue
-        for v in block.data.get("villages", []):
-            name = v.get("name", "")
-            if not name:
-                continue
-            uri = PLN[f"village_ann_{name}"]
-            self.g.add((uri, RDF.type, EntityTypes.NaturalSettlement))
-            self.g.add((uri, PLN.name, Literal(name)))
-            center = v.get("center", [0, 0])
-            if len(center) >= 2:
-                self.g.add((uri, PLN.lon, Literal(center[0], datatype=XSD.double)))
-                self.g.add((uri, PLN.lat, Literal(center[1], datatype=XSD.double)))
-            self.g.add((uri, Relations.located_in, PLN.village))
-            for bsm in v.get("parcel_ids", []):
-                for s in self.g.subjects(PLN.bsm, Literal(bsm)):
-                    if (s, RDF.type, PLN.Parcel) in self.g:
-                        self.g.add((s, Relations.located_in, uri))
-
-
-def _add_facilities_from_blocks(self, blocks) -> None:
-    from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT, FacilityAnchor
-    count = 0
-    for block in blocks:
-        if getattr(block, "block_type", None) != CBT.FACILITIES:
-            continue
-        for unit in getattr(block, "units", []):
-            if isinstance(unit, FacilityAnchor):
-                name = unit.name or ""
-                if not name:
-                    continue
-                uri = PLN[f"facility_unit_{name}_{count}"]
-                self.g.add((uri, RDF.type, PLN.Facility))
-                self.g.add((uri, PLN.name, Literal(name)))
-                self.g.add((uri, PLN.facility_type, Literal(unit.facility_type or "公共服务")))
-                if unit.center and len(unit.center) >= 2:
-                    self.g.add((uri, PLN.lon, Literal(unit.center[0], datatype=XSD.double)))
-                    self.g.add((uri, PLN.lat, Literal(unit.center[1], datatype=XSD.double)))
-                self.g.add((uri, Relations.located_in, PLN.village))
-                self.g.add((PLN.village, PLN.has_facility, uri))
-                count += 1
-        for fa in block.data.get("anchors", []):
-            name = fa.get("name", "")
-            if not name or any(getattr(u, "name", "") == name for u in getattr(block, "units", [])):
-                continue
-            uri = PLN[f"facility_block_{name}_{count}"]
-            self.g.add((uri, RDF.type, PLN.Facility))
-            self.g.add((uri, PLN.name, Literal(name)))
-            self.g.add((uri, PLN.facility_type, Literal(fa.get("facility_type", "公共服务"))))
-            center = fa.get("center", [0, 0])
-            if len(center) >= 2:
-                self.g.add((uri, PLN.lon, Literal(center[0], datatype=XSD.double)))
-                self.g.add((uri, PLN.lat, Literal(center[1], datatype=XSD.double)))
-            self.g.add((uri, Relations.located_in, PLN.village))
-            self.g.add((PLN.village, PLN.has_facility, uri))
-            count += 1
-    if count:
-        logger.info("Added %d facilities from ContextBlock", count)
-
-
-def _add_spatial_relations_from_blocks(self, blocks) -> None:
-    from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT
-    _MAP = {"east_of": PLN.east_of, "west_of": PLN.west_of, "north_of": PLN.north_of,
-            "south_of": PLN.south_of, "adjacent_to": PLN.adjacent_to, "contains": PLN.contains,
-            "contained_by": PLN.contained_by, "near": PLN.near}
-    count = 0
-    for block in blocks:
-        if getattr(block, "block_type", None) != CBT.SPATIAL_RELATIONS:
-            continue
-        for rel in block.data.get("relations", []):
-            pln_rel = _MAP.get(rel.get("relation", ""))
-            if not pln_rel:
-                continue
-            subj = _find_entity_by_name(self, rel.get("subject", ""))
-            obj = _find_entity_by_name(self, rel.get("object", ""))
-            if subj and obj:
-                self.g.add((subj, pln_rel, obj))
-                count += 1
-    if count:
-        logger.info("Added %d spatial relations from ContextBlock", count)
-
-
-def _find_entity_by_name(self, name: str):
-    for s, _, o in self.g.triples((None, PLN.name, None)):
-        if str(o) == name:
-            return s
-    return None
-
-
-def _add_zone_adjacency_from_blocks(self, blocks) -> None:
-    from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT
-    count = 0
-    for block in blocks:
-        if getattr(block, "block_type", None) != CBT.ZONE_ADJACENCY:
-            continue
-        for zone, neighbors in block.data.get("adjacency", {}).items():
-            zu = PLN[f"zone_{zone}"]
-            if (zu, RDF.type, PLN.Zone) not in self.g:
-                self.g.add((zu, RDF.type, PLN.Zone)).add((zu, PLN.name, Literal(zone)))
-            for nb in neighbors:
-                nu = PLN[f"zone_{nb}"]
-                if (nu, RDF.type, PLN.Zone) not in self.g:
-                    self.g.add((nu, RDF.type, PLN.Zone)).add((nu, PLN.name, Literal(nb)))
-                self.g.add((zu, PLN.adjacent_to, nu))
-                count += 1
-    if count:
-        logger.info("Added %d zone adjacency relations", count)
-
-
-def _add_terrain_from_blocks(self, blocks) -> None:
-    pass
-
-
 def _add_parcel_relations(self, relations) -> None:
     from app.modules.spatial_ops.geometry import ParcelRelations
     if not relations or not isinstance(relations, ParcelRelations):
@@ -165,8 +30,10 @@ def _add_parcel_relations(self, relations) -> None:
         b = _parcel_uri_by_bsm_dlbm(self, t.bsm_b, t.dlbm_b)
         if a and b:
             self.g.add((a, PLN.touches, b))
+            self.g.add((b, PLN.touches, a))
             if t.shared_boundary_length_m:
                 self.g.add((a, PLN.shared_boundary_length, Literal(t.shared_boundary_length_m, datatype=XSD.double)))
+                self.g.add((b, PLN.shared_boundary_length, Literal(t.shared_boundary_length_m, datatype=XSD.double)))
             count += 1
     for n in relations.nearby:
         a = _parcel_uri_by_bsm_dlbm(self, n.bsm_a, n.dlbm_a)
@@ -192,7 +59,7 @@ def _add_parcel_relations(self, relations) -> None:
 
 def _parcel_uri_by_bsm_dlbm(self, bsm: str, dlbm: str):
     for s, _, _ in self.g.triples((None, PLN.bsm, Literal(bsm))):
-        if (s, RDF.type, PLN.Parcel) not in self.g:
+        if (s, RDF.type, EntityTypes.Parcel) not in self.g:
             continue
         if not dlbm:
             return s
@@ -202,75 +69,77 @@ def _parcel_uri_by_bsm_dlbm(self, bsm: str, dlbm: str):
     return None
 
 
-def _add_parcels_typed(self, parcels: List[Any]) -> None:
+def _add_parcels(self, parcels) -> None:
     from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
     for p in parcels:
         bsm = str(getattr(p, "bsm", "")).strip()
         dlbm = str(getattr(p, "dlbm", "")).strip()
-        area = getattr(p, "area_sqm", 0) or 0
         if not bsm:
             continue
+        area = getattr(p, "area_sqm", 0) or 0
         key = f"{bsm}_{dlbm}_{int(area)}"
         pu = PLN[f"parcel_{key}"]
-        self.g.add((pu, RDF.type, PLN.Parcel))
+        self.g.add((pu, RDF.type, EntityTypes.Parcel))
         self.g.add((pu, PLN.bsm, Literal(bsm)))
         self.g.add((pu, PLN.dlbm, Literal(dlbm)))
         self.g.add((pu, PLN.area_sqm, Literal(area, datatype=XSD.double)))
         self.g.add((pu, PLN.area_ha, Literal(area / 10000, datatype=XSD.double)))
+
+        # Raw bundle attributes — faithful storage, not derived
+        dlmc = getattr(p, "name", "") or ""
+        if dlmc:
+            self.g.add((pu, PLN.dlmc, Literal(dlmc)))
+        sddlbm = getattr(p, "sddlbm", "") or ""
+        if sddlbm:
+            self.g.add((pu, PLN.sddlbm, Literal(sddlbm)))
+        ysdm = getattr(p, "ysdm", "") or ""
+        if ysdm:
+            self.g.add((pu, PLN.ysdm, Literal(ysdm)))
+        dlbm_system = str(getattr(p, "dlbm_system", "") or "")
+        if dlbm_system:
+            self.g.add((pu, PLN.dlbm_system, Literal(dlbm_system)))
+
+        # current_zone_type — derived from DLBM via lookup (factual categorization)
         zt = resolve_zone_type_for_dlbm(dlbm)
         self.g.add((pu, PLN.current_zone_type, Literal(zt)))
+
+        # Centroid
+        try:
+            geo = getattr(p, "geometry", None)
+            if geo and isinstance(geo, dict):
+                gtype = geo.get("type", "")
+                coords = geo.get("coordinates", None)
+                if coords and gtype == "Polygon" and len(coords) > 0 and len(coords[0]) > 0:
+                    ring = coords[0]
+                    lon = sum(c[0] for c in ring) / len(ring)
+                    lat = sum(c[1] for c in ring) / len(ring)
+                    self.g.add((pu, PLN.lon, Literal(lon, datatype=XSD.double)))
+                    self.g.add((pu, PLN.lat, Literal(lat, datatype=XSD.double)))
+                elif coords and gtype == "MultiPolygon" and len(coords) > 0 and len(coords[0]) > 0 and len(coords[0][0]) > 0:
+                    ring = coords[0][0]
+                    lon = sum(c[0] for c in ring) / len(ring)
+                    lat = sum(c[1] for c in ring) / len(ring)
+                    self.g.add((pu, PLN.lon, Literal(lon, datatype=XSD.double)))
+                    self.g.add((pu, PLN.lat, Literal(lat, datatype=XSD.double)))
+        except Exception:
+            pass
+
         self.g.add((pu, Relations.located_in, PLN.village))
-        try:
-            from app.modules.schema import get_vne_for_zone_type
-            vne = get_vne_for_zone_type(zt)
-            if vne:
-                self.g.add((pu, PLN.vne_code, Literal(vne)))
-        except Exception:
-            pass
-        try:
-            from app.modules.schema import dlbm_to_planning_zone
-            pz = dlbm_to_planning_zone(dlbm)
-            if pz:
-                self.g.add((pu, PLN.planning_zone, Literal(pz)))
-        except Exception:
-            pass
         self._parcel_count += 1
 
 
-def _add_infrastructure_from_typed(self, parcels: List[Any]) -> None:
-    """Extract WaterBody and Facility entities from DLBM land classification.
-
-    NOTE: Roads are NOT created from DLBM. DLBM=10xx describes a parcel's
-    designated land-use type ("交通用地"), not a physical road (LineString).
-    Roads are created exclusively by add_roads() from bundle.lines.roads_current.
-    Similarly, water bodies from DLBM are supplemented by
-    _add_natural_features_from_typed() from polygon water_bodies layer.
-    """
-    wd = {"1101", "1102", "1103", "1104", "1105", "1106", "1109", "1110", "1140", "1180", "3100"}
-    fd = {"0800", "0801", "0802", "0803", "0806", "0810", "0900", "2122", "2125"}
-    waters, facilities = [], []
-    for p in parcels:
-        dlbm = str(getattr(p, "dlbm", "")).strip()
-        bsm = str(getattr(p, "bsm", "")).strip()
-        if not bsm:
-            continue
-        if dlbm in wd:
-            waters.append(bsm)
-        elif dlbm in fd:
-            facilities.append(bsm)
-    for bsm in waters:
-        u = PLN[f"water_{bsm}"]
-        self.g.add((u, RDF.type, EntityTypes.WaterBody))
-        self.g.add((u, PLN.name, Literal(f"水域_{bsm}")))
-        self.g.add((u, Relations.located_in, PLN.village))
-    for bsm in facilities:
-        u = PLN[f"facility_{bsm}"]
-        self.g.add((u, RDF.type, EntityTypes.Facility))
-        self.g.add((u, PLN.name, Literal(f"设施_{bsm}")))
-        self.g.add((u, Relations.located_in, PLN.village))
-    total = len(waters) + len(facilities)
-    if total:
-        logger.info("Infrastructure: %d water, %d facilities", len(waters), len(facilities))
+def _add_water_bodies(self, water_bodies) -> None:
+    count = 0
+    for w in water_bodies:
+        bsm = str(getattr(w, "bsm", f"water_{count}"))
+        uri = PLN[f"water_{bsm}"]
+        self.g.add((uri, RDF.type, EntityTypes.WaterBody))
+        name = getattr(w, "name", "") or f"水域_{bsm}"
+        self.g.add((uri, PLN.name, Literal(name)))
+        self.g.add((uri, Relations.located_in, PLN.village))
+        count += 1
+    if count:
+        logger.info("Added %d water bodies", count)
 
 
 def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
@@ -297,7 +166,7 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         count += 1
     for _ in getattr(polygons_layer, "construction_zone", []):
         uri = PLN[f"zone_conditional_{count}"]
-        self.g.add((uri, RDF.type, PLN.Zone))
+        self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal("有条件建设区")))
         self.g.add((uri, PLN.restriction, Literal("限制建设")))
         self.g.add((uri, Relations.located_in, PLN.village))
@@ -311,13 +180,13 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
     for z in getattr(polygons_layer, "land_use_zones", []):
         code = getattr(z, "ysdm", getattr(z, "dlbm", f"tdyt_{count}"))
         uri = PLN[f"tdyt_{code}"]
-        self.g.add((uri, RDF.type, PLN.Zone))
+        self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal(f"TDYT_{code}")))
         self.g.add((uri, Relations.located_in, PLN.village))
         count += 1
     for _ in getattr(polygons_layer, "construction_ctrl_zones", []):
         uri = PLN[f"zone_jsydgzq_{count}"]
-        self.g.add((uri, RDF.type, PLN.Zone))
+        self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal("建设用地管制区")))
         self.g.add((uri, Relations.located_in, PLN.village))
         count += 1
@@ -326,81 +195,6 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
         count += 1
     if count:
         logger.info("Added %d planning elements", count)
-
-
-def _add_natural_features_from_typed(self, polygons_layer, points_layer) -> None:
-    count = 0
-    for w in getattr(polygons_layer, "water_bodies", []):
-        bsm = str(getattr(w, "bsm", f"water_{count}"))
-        uri = PLN[f"water_{bsm}"]
-        self.g.add((uri, RDF.type, EntityTypes.WaterBody))
-        self.g.add((uri, PLN.name, Literal(f"水域_{bsm}")))
-        self.g.add((uri, Relations.located_in, PLN.village))
-        count += 1
-    for e in getattr(points_layer, "elevation_points", []):
-        bsm = str(getattr(e, "bsm", f"elev_{count}"))
-        uri = PLN[f"elevation_{bsm}"]
-        self.g.add((uri, RDF.type, PLN.Parcel))
-        self.g.add((uri, PLN.name, Literal(f"高程点_{bsm}")))
-        elev = getattr(e, "elevation", 0) or 0
-        self.g.add((uri, PLN.elevation, Literal(float(elev), datatype=XSD.double)))
-        self.g.add((uri, Relations.located_in, PLN.village))
-        count += 1
-    if count:
-        logger.info("Added %d natural features", count)
-
-
-def _add_designated_as_from_typed(self, parcels: List[Any]) -> None:
-    from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone
-    count = 0
-    for p in parcels:
-        bsm = str(getattr(p, "bsm", "")).strip()
-        dlbm = str(getattr(p, "dlbm", "")).strip()
-        area = getattr(p, "area_sqm", 0) or 0
-        if not bsm:
-            continue
-        key = f"{bsm}_{dlbm}_{int(area)}"
-        pu = PLN[f"parcel_{key}"]
-        if (pu, RDF.type, PLN.Parcel) not in self.g:
-            continue
-        zn = dlbm_to_planning_zone(dlbm)
-        zu = PLN[f"zone_{zn}"]
-        if (zu, RDF.type, PLN.Zone) in self.g:
-            self.g.add((pu, Relations.designated_as, zu))
-            count += 1
-    if count:
-        logger.info("Added %d designated_as", count)
-
-
-def _add_vne_categories(self):
-    try:
-        from app.modules.schema.encodings.dicts.loader import get_center
-        center = get_center()
-        vd = center.encoding("vne")
-    except Exception as e:
-        logger.debug("VNE skipped: %s", e)
-        return
-    count = 0
-    classes = vd.raw.get("classes", [])
-    codes = {str(c.get("code", "")) for c in classes}
-    for entry in classes:
-        code = str(entry.get("code", ""))
-        if not code:
-            continue
-        cu = PLN[f"vne_{code}"]
-        self.g.add((cu, RDF.type, EntityTypes.LandUseCategory))
-        self.g.add((cu, PLN.code, Literal(code)))
-        self.g.add((cu, PLN.name, Literal(entry.get("name", ""))))
-        if entry.get("zone_type"):
-            self.g.add((cu, PLN.zone_type, Literal(entry["zone_type"])))
-        if len(code) >= 2 and code[:-1] in codes:
-            pu = PLN[f"vne_{code[:-1]}"]
-            self.g.add((cu, PLN.parent_category, pu))
-            self.g.add((pu, PLN.has_subcategory, cu))
-        if len(code) == 1:
-            self.g.add((PLN.village, PLN.has_land_use_category, cu))
-        count += 1
-    logger.info("Added %d VNE categories", count)
 
 
 def _add_three_zone_three_line(self):
@@ -417,7 +211,7 @@ def _add_three_zone_three_line(self):
             self.g.add((tz, RDF.type, EntityTypes.ThreeZone))
             self.g.add((tz, PLN.name, Literal(primary_zone)))
             zu = PLN[f"zone_{zone_name}"]
-            if (zu, RDF.type, PLN.Zone) in self.g:
+            if (zu, RDF.type, EntityTypes.Zone) in self.g:
                 self.g.add((tz, Relations.delineates, zu))
             seen.add(primary_zone)
     for ld in loader.three_line_types():
@@ -455,7 +249,7 @@ def add_annotations(self, annotations: list):
             if facility is None:
                 continue
             fac_uri = PLN[f"facility_ann_{facility.facility_name or 'unknown'}_{fc}"]
-            self.g.add((fac_uri, RDF.type, PLN.Facility))
+            self.g.add((fac_uri, RDF.type, EntityTypes.Facility))
             self.g.add((fac_uri, PLN.name, Literal(facility.facility_name or "unknown")))
             self.g.add((fac_uri, PLN.facility_type, Literal(facility.facility_type or "公共服务")))
             if hasattr(facility, "geometry"):
@@ -476,7 +270,7 @@ def add_roads(self, roads: list):
     for road in roads:
         bsm = getattr(road, "bsm", "") or f"road_{count}"
         uri = PLN[f"road_{bsm}"]
-        self.g.add((uri, RDF.type, PLN.Road))
+        self.g.add((uri, RDF.type, EntityTypes.Road))
         self.g.add((uri, PLN.name, Literal(f"道路_{bsm}")))
         length = getattr(road, "shape_length", 0.0) or 0.0
         if length:
@@ -505,3 +299,86 @@ def add_terrain(self, terrain_analysis=None):
     except Exception as e:
         logger.warning("Terrain failed: %s", e)
     return self
+
+
+def _add_village_meta_from_bundle(self, bundle) -> None:
+    """Add village metadata from bundle.metadata (replaces _add_village_meta_from_blocks)."""
+    v = PLN.village
+    meta = getattr(bundle, 'metadata', None)
+    if meta is None:
+        return
+    bbox = getattr(meta, 'bbox_wgs84', None)
+    if bbox is not None:
+        try:
+            t = bbox.as_tuple()
+            self.g.add((v, PLN.bbox_minx, Literal(t[0], datatype=XSD.double)))
+            self.g.add((v, PLN.bbox_miny, Literal(t[1], datatype=XSD.double)))
+            self.g.add((v, PLN.bbox_maxx, Literal(t[2], datatype=XSD.double)))
+            self.g.add((v, PLN.bbox_maxy, Literal(t[3], datatype=XSD.double)))
+        except Exception:
+            pass
+
+
+def _add_natural_villages_from_typed(self, parcels) -> None:
+    """Create NaturalSettlement entities from parcel annotations.
+
+    NaturalSettlement names are extracted from parcel annotations (village_ann_*).
+    If no settlement annotations exist, creates a single village entity.
+    """
+    from app.modules.schema.types.spatial_types import CurrentLandUseParcel
+
+    # Collect settlement names from parcel annotations
+    settlement_names = set()
+    for p in parcels:
+        if not isinstance(p, CurrentLandUseParcel):
+            continue
+        raw = getattr(p, '_raw', {}) or {}
+        ann = raw.get('annotation', '') or ''
+        if ann and ann.startswith('village_ann_'):
+            settlement_names.add(ann.replace('village_ann_', '', 1))
+
+    if not settlement_names:
+        return
+
+    for name in sorted(settlement_names):
+        uri = PLN[f"village_ann_{name}"]
+        self.g.add((uri, RDF.type, EntityTypes.NaturalSettlement))
+        self.g.add((uri, PLN.name, Literal(name)))
+        self.g.add((uri, Relations.located_in, PLN.village))
+        # Link parcels to this settlement
+        for p in parcels:
+            if not isinstance(p, CurrentLandUseParcel):
+                continue
+            raw = getattr(p, '_raw', {}) or {}
+            ann = raw.get('annotation', '') or ''
+            if ann == f'village_ann_{name}':
+                for s in self.g.subjects(PLN.bsm, Literal(getattr(p, 'bsm', ''))):
+                    if (s, RDF.type, EntityTypes.Parcel) in self.g:
+                        self.g.add((s, Relations.located_in, uri))
+
+    logger.info("Added %d natural settlements from typed parcels", len(settlement_names))
+
+
+def _add_facilities_from_typed(self, facilities) -> None:
+    """Create Facility entities from bundle.points.facilities_current."""
+    from app.modules.schema.types.spatial_types import CurrentFacility
+    count = 0
+    for f in facilities:
+        if not isinstance(f, CurrentFacility):
+            continue
+        name = getattr(f, 'facility_name', '') or f"facility_{count}"
+        uri = PLN[f"facility_typed_{name}_{count}"]
+        self.g.add((uri, RDF.type, EntityTypes.Facility))
+        self.g.add((uri, PLN.name, Literal(name)))
+        ftype = getattr(f, 'facility_type', '') or '公共服务'
+        self.g.add((uri, PLN.facility_type, Literal(ftype)))
+        geom = getattr(f, 'geometry', {}) or {}
+        coords = geom.get('coordinates', [0, 0]) if isinstance(geom, dict) else [0, 0]
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
+            self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
+        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((PLN.village, PLN.has_facility, uri))
+        count += 1
+    if count:
+        logger.info("Added %d facilities from typed parcels", count)

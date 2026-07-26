@@ -32,13 +32,6 @@ def query(self, sparql: str) -> List[Dict[str, Any]]:
         return []
 
 
-def get_constraints(self) -> List[Dict[str, Any]]:
-    return self.query(
-        "PREFIX pln: <http://village-planning.org/ontology#> "
-        "SELECT ?id ?field ?op ?value ?source WHERE { "
-        "?c a pln:Constraint ; pln:constraint_id ?id ; pln:field ?field ; "
-        "pln:operator ?op ; pln:value ?value ; pln:source ?source . }"
-    )
 
 
 def get_adjacency_map(self) -> Dict[str, set]:
@@ -72,7 +65,7 @@ def to_turtle(self) -> str:
 def from_turtle(cls, turtle_str: str, village_name: str = "") -> "PlanningKG":
     kg = cls(village_name=village_name)
     kg.g.parse(data=turtle_str, format="turtle")
-    kg._parcel_count = len(list(kg.g.subjects(RDF.type, PLN.Parcel)))
+    kg._parcel_count = len(list(kg.g.subjects(RDF.type, EntityTypes.Parcel)))
     return kg
 
 
@@ -92,7 +85,7 @@ def get_parcels_within_distance_of_entity(self, entity_uri: str, max_distance_m:
 def get_adjacent_parcels_with_length(self, bsm: str) -> List[Tuple[str, float]]:
     results = []
     for s, _, _ in self.g.triples((None, PLN.bsm, Literal(bsm))):
-        if (s, RDF.type, PLN.Parcel) not in self.g:
+        if (s, RDF.type, EntityTypes.Parcel) not in self.g:
             continue
         for _, _, neighbor in self.g.triples((s, PLN.touches, None)):
             for _, _, nbsm in self.g.triples((neighbor, PLN.bsm, None)):
@@ -117,6 +110,30 @@ def get_connected_parcels(self, parcel_uri: str, max_path_length: float = float(
     return list(bsms)
 
 
+def get_parcels_by_bsm_list(self, bsms: List[str]) -> List[Dict[str, Any]]:
+    """Return parcel structural data for a list of BSMs.
+
+    Args:
+        bsms: List of BSM strings to look up.
+
+    Returns:
+        List of dicts with bsm, dlbm, area_ha, current_zone_type, vne_code, planning_zone.
+    """
+    if not bsms:
+        return []
+    bsm_filter = " ".join(f'"{b}"' for b in bsms)
+    sparql = (
+        "PREFIX pln: <http://village-planning.org/ontology#> "
+        f"SELECT ?bsm ?dlbm ?area_ha ?zone_type ?vne_code ?planning_zone WHERE {{ "
+        f"?p a pln:Parcel ; pln:bsm ?bsm ; pln:dlbm ?dlbm ; "
+        f"pln:area_ha ?area_ha ; pln:current_zone_type ?zone_type . "
+        f"OPTIONAL {{ ?p pln:vne_code ?vne_code . }} "
+        f"OPTIONAL {{ ?p pln:planning_zone ?planning_zone . }} "
+        f"FILTER(?bsm IN ({bsm_filter})) }}"
+    )
+    return self.query(sparql)
+
+
 def validate_intent(self, intent: Any) -> List[Dict[str, Any]]:
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent, FacilityTarget
     if not isinstance(intent, SpatialPlanningIntent):
@@ -133,9 +150,9 @@ def validate_intent(self, intent: Any) -> List[Dict[str, Any]]:
 
 def _is_in_protected_zone(self, bsm: str) -> bool:
     for s, _, _ in self.g.triples((None, PLN.bsm, Literal(bsm))):
-        if (s, RDF.type, PLN.Parcel) not in self.g:
+        if (s, RDF.type, EntityTypes.Parcel) not in self.g:
             continue
         for _, _, zone in self.g.triples((s, Relations.within_zone, None)):
-            if (zone, RDF.type, PLN.ThreeLine) in self.g:
+            if (zone, RDF.type, EntityTypes.ThreeLine) in self.g:
                 return True
     return False
