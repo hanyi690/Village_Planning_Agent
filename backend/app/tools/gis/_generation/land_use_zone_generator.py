@@ -236,7 +236,7 @@ class LandUseZoneGenerator:
                 dlbm = str(props.get("DLBM", props.get("dlbm", "")))
                 ghytbm = str(props.get("GHYTBM", ""))
 
-                # Determine VNE code
+                # Determine VNE code (for VNE_LEVEL/VNE_PARENT display fields)
                 vne_code = ""
                 if ghytbm:
                     from app.modules.schema import GHYTBM_TO_VNE
@@ -246,13 +246,30 @@ class LandUseZoneGenerator:
 
                 vne_info = vne_flat.get(vne_code, {"name": "其他", "parent": "E"})
 
+                # Determine TDYTFQDM: 4-digit township planning code (NOT VNE)
+                # v2.0: Use GHFLBM -> TDYTFQDM mapping from ghflbm_to_tdytfqdm.yaml
+                from app.modules.schema import get_tdytfqdm_for_ghflbm, get_tdyt_name_for_ghflbm
+                ghflbm = str(props.get("GHFLBM", ""))
+                tdytfqdm = get_tdytfqdm_for_ghflbm(ghflbm) if ghflbm else ""
+                ytfqmc = get_tdyt_name_for_ghflbm(ghflbm) if ghflbm else ""
+
+                # Fallback: if no GHFLBM, derive from GHYTBM -> GHFLBM reverse lookup
+                if not tdytfqdm and ghytbm:
+                    from app.modules.schema import GHFLBM_TO_GHYTBMS
+                    for _ghflbm_code, _ghytbm_list in GHFLBM_TO_GHYTBMS.items():
+                        if ghytbm in _ghytbm_list:
+                            tdytfqdm = get_tdytfqdm_for_ghflbm(_ghflbm_code)
+                            ytfqmc = get_tdyt_name_for_ghflbm(_ghflbm_code)
+                            break
+
                 features_out.append({
                     "type": "Feature",
                     "geometry": feat.get("geometry", {}),
                     "properties": {
                         **props,
-                        "TDYTFQDM": vne_code,
-                        "YTFQMC": vne_info["name"],
+                        "TDYTFQDM": tdytfqdm,
+                        "YTFQMC": ytfqmc or vne_info["name"],
+                        "VNE_CODE": vne_code,
                         "VNE_LEVEL": vne_info.get("level", ""),
                         "VNE_PARENT": vne_info.get("parent", ""),
                     },

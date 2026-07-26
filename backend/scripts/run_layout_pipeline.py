@@ -316,7 +316,7 @@ def run_kg_step(
     kg_count_by_planning_zone = []
 
     try:
-        from app.modules.kg.query import query_kg
+        from app.modules.kg.queries import query_kg
         kg_protected_parcels_detail = query_kg(kg, "get_protected_parcels_detail")
     except Exception:
         pass

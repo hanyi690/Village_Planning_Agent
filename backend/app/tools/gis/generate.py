@@ -360,7 +360,7 @@ def _generate_facilities(
     if kg_session_ref:
         try:
             from app.modules.kg.manager import get_kg_manager
-            from app.modules.kg.query import query_kg
+            from app.modules.kg.queries import query_kg
             manager = get_kg_manager()
             kg = manager.get_session_kg(kg_session_ref)
             if kg:

@@ -46,7 +46,7 @@ def build_kg():
     )
 
     kg = PlanningKG("jintian")
-    kg.build_from_blocks(blocks=blocks, bundle=bundle, parcel_relations=relations)
+    kg.build_from_bundle(bundle=bundle, parcel_relations=relations)
 
     # Apply a sample PlanBlock (on a clone, to show L4 delta)
     from rdflib import Namespace

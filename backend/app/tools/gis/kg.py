@@ -37,7 +37,7 @@ def build_knowledge_graph(
     """
     from app.modules.kg.manager import get_kg_manager, compute_layer1_cache_key
     from app.modules.kg import PlanningKG
-    from app.modules.kg.query import query_kg
+    from app.modules.kg.queries import query_kg
 
     # [v4.4] Prefer bundle+blocks path, fallback to legacy
     bundle = gis_data.pop("_bundle", None) if gis_data else None

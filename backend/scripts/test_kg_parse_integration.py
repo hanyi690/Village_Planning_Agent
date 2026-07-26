@@ -121,7 +121,7 @@ def main():
     # ── Step 4: Test every query template ──────────────────────────
     print_section("Step 3: Test query templates")
 
-    from app.modules.kg.query import QUERY_TEMPLATES, query_kg
+    from app.modules.kg.queries import QUERY_TEMPLATES, query_kg
 
     # Template → expected min rows (None = no minimum, just that it runs)
     template_expectations = {

@@ -11,6 +11,12 @@ Does NOT depend on: Agent, KG, Tools.
 compute_context_blocks(VillageBundle) is the sole public entry point.
 """
 
+from .bridge import SpatialIndex, OverlapResult, build_spatial_index
 from .context import compute_context_blocks
 
-__all__ = ["compute_context_blocks"]
+__all__ = [
+    "compute_context_blocks",
+    "SpatialIndex",
+    "OverlapResult",
+    "build_spatial_index",
+]

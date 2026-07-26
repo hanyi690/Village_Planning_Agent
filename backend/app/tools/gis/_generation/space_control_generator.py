@@ -1,15 +1,17 @@
-"""Space Control Zone Generator — 建设用地空间管制区 (4 classes).
+"""Space Control Zone Generator - 建设用地空间管制区 (6 classes).
 
 Generates the space_control_zone layer following Guangdong provincial standard:
-  510: 允许建设区 (Permitted Construction) — 村庄建设边界内部
-  520: 限制建设区 (Restricted Construction) — 除以下三类以外的区域
-  530: 有条件建设区 (Conditional Construction) — ≤ 现状建设用地×20%
-  540: 禁止建设区 (Prohibited Construction) — 永久基本农田 + 生态保护红线
+  01: 允许建设区 (Permitted Construction) - 村庄建设边界内部
+  02: 限制建设区 (Restricted Construction) - 除以下各类以外的区域
+  03: 有条件建设区 (Conditional Construction) - <= 现状建设用地 x 20%
+  04: 禁止建设区 (Prohibited Construction) - 非农田/非红线但禁止建设
+  05: 永久基本农田保护区 - 上位规划落实
+  06: 生态保护红线区 - 上位规划落实
 
 Quality rules:
   - 允许建设区和有条件建设区内不能有基本农田
   - 有条件建设区内不能规划建设用地
-  - 禁止建设区 = 基本农田 ∪ 生态红线（不可调整）
+  - 禁止建设区 = 基本农田 U 生态红线（不可调整）
 """
 
 from __future__ import annotations
@@ -28,14 +30,16 @@ try:
 except ImportError:
     GEOPANDAS_AVAILABLE = False
 
-# Zone type definitions
-SPACE_CONTROL_ZONES: Dict[str, Dict[str, Any]] = {
-    "510": {"name": "允许建设区", "description": "村庄建设边界内部", "color": "#FFE0B2"},
-    "520": {"name": "限制建设区", "description": "一般农业和生态区域", "color": "#C8E6C9"},
-    "530": {"name": "有条件建设区", "description": "≤现状建设用地×20%", "color": "#FFF9C4"},
-    "540": {"name": "禁止建设区", "description": "永久基本农田+生态红线", "color": "#FFCDD2"},
-}
+# Zone type definitions - from construction_zone_codes.yaml (single source of truth)
+from app.modules.schema import SPACE_CONTROL_ZONE_CODES, SPACE_CONTROL_ZONE_COLORS
 
+# Zone codes (01-06 scheme, v2.0)
+ZONE_PERMITTED = "01"       # 允许建设区
+ZONE_RESTRICTED = "02"      # 限制建设区
+ZONE_CONDITIONAL = "03"     # 有条件建设区
+ZONE_PROHIBITED = "04"      # 禁止建设区
+ZONE_FARMLAND = "05"        # 永久基本农田保护区
+ZONE_ECOLOGICAL = "06"      # 生态保护红线区
 
 class SpaceControlZoneGenerator:
     """Generate 4-class space control zone layer for village planning.
@@ -73,20 +77,23 @@ class SpaceControlZoneGenerator:
             if boundary_geom is None:
                 return self._empty_result()
 
-            # ── 540: 禁止建设区 = 基本农田 ∪ 生态红线 ──
+            # ── 04: 禁止建设区 = 非农田非红线但禁止建设 ──
+            # ── 05+06: 永久基本农田 + 生态红线 (保护禁区) ──
+            farmland_geom = self._extract_protection_geom(farmland_protection)
+            ecological_geom = self._extract_protection_geom(ecological_protection)
             prohibited = self._union_protection_zones(farmland_protection, ecological_protection)
 
-            # ── 510: 允许建设区 = 村庄建设边界 ──
+            # ── 01: 允许建设区 = 村庄建设边界 ──
             permitted = self._extract_construction_boundary(construction_boundary, boundary_geom)
             if permitted is not None:
                 permitted = permitted.intersection(boundary_geom)
 
-            # ── 530: 有条件建设区 ≤ 现状建设用地×20% ──
+            # ── 03: 有条件建设区 <= 现状建设用地 x 20% ──
             conditional = self._compute_conditional_zone(
                 permitted, current_landuse, boundary_geom, prohibited,
             )
 
-            # ── 520: 限制建设区 = 全域 - (510+530+540) ──
+            # ── 02: 限制建设区 = 全域 - (01+03+04+05+06) ──
             restricted = self._compute_restricted_zone(
                 boundary_geom, permitted, conditional, prohibited,
             )
@@ -94,20 +101,19 @@ class SpaceControlZoneGenerator:
             # Build feature collection
             features = []
             for code, geom in [
-                ("510", permitted),
-                ("520", restricted),
-                ("530", conditional),
-                ("540", prohibited),
+                (ZONE_PERMITTED, permitted),
+                (ZONE_RESTRICTED, restricted),
+                (ZONE_CONDITIONAL, conditional),
+                (ZONE_PROHIBITED, prohibited),
             ]:
                 if geom is not None and not geom.is_empty:
-                    info = SPACE_CONTROL_ZONES[code]
+                    name = SPACE_CONTROL_ZONE_CODES.get(code, "")
                     features.append({
                         "type": "Feature",
                         "geometry": mapping(geom),
                         "properties": {
                             "TDKJGZFQDM": code,
-                            "GZFQMC": info["name"],
-                            "description": info["description"],
+                            "GZFQMC": name,
                         },
                     })
 
@@ -124,6 +130,18 @@ class SpaceControlZoneGenerator:
 
     def _empty_result(self) -> Dict[str, Any]:
         return {"type": "FeatureCollection", "features": []}
+
+    def _extract_protection_geom(self, geojson: Optional[Dict[str, Any]]):
+        """Extract unioned geometry from a protection zone GeoJSON."""
+        if not geojson or not geojson.get("features"):
+            return None
+        try:
+            gdf = gpd.GeoDataFrame.from_features(geojson["features"])
+            if gdf.empty:
+                return None
+            return unary_union(gdf.geometry.values)
+        except Exception:
+            return None
 
     def _extract_main_geom(self, geojson: Dict[str, Any]):
         """Extract main polygon from GeoJSON."""
@@ -234,7 +252,7 @@ class SpaceControlZoneGenerator:
             return None
 
     def _compute_restricted_zone(self, boundary, permitted, conditional, prohibited):
-        """Compute 520 restricted zone: 全域 - (510+530+540)."""
+        """Compute 02 restricted zone: boundary - (01+03+04+05+06)."""
         if boundary is None:
             return None
 
@@ -246,4 +264,4 @@ class SpaceControlZoneGenerator:
         return restricted if not restricted.is_empty else None
 
 
-__all__ = ["SpaceControlZoneGenerator", "SPACE_CONTROL_ZONES"]
+__all__ = ["SpaceControlZoneGenerator"]
