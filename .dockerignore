@@ -93,6 +93,4 @@ conversation-*.txt
 style-test-*.png
 *-verification.jpg
 
-# Claude Code
-.claude/
 .iflow/

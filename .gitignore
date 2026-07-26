@@ -83,9 +83,6 @@ nul
 # SQLite databases (local dev only)
 *.db
 
-# Claude Code
-.claude/
-
 # Git worktrees
 .worktrees/
 
@@ -114,7 +111,6 @@ tile_cache/
 nginx/ssl/*.pem
 !nginx/ssl/.gitkeep
 .env.production
-.claude/settings.local.json
 
 # Playwright
 .playwright-mcp/
