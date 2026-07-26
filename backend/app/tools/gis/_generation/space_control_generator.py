@@ -67,7 +67,7 @@ class SpaceControlZoneGenerator:
     ) -> Dict[str, Any]:
         """Generate space control zone GeoJSON.
 
-        Returns FeatureCollection with features labeled by TDKJGZFQDM (510/520/530/540).
+        Returns FeatureCollection with features labeled by TDKJGZFQDM (01-06).
         """
         if not boundary or not GEOPANDAS_AVAILABLE:
             return self._empty_result()
@@ -158,7 +158,7 @@ class SpaceControlZoneGenerator:
         farmland: Optional[Dict[str, Any]],
         ecological: Optional[Dict[str, Any]],
     ):
-        """Union farmland + ecological protection into prohibited zone (540)."""
+        """Union farmland + ecological protection into prohibited zone (04)."""
         geoms = []
         for source in (farmland, ecological):
             if source and source.get("features"):
@@ -173,7 +173,7 @@ class SpaceControlZoneGenerator:
         return unary_union(geoms) if len(geoms) > 1 else geoms[0]
 
     def _extract_construction_boundary(self, construction_boundary, fallback_geom):
-        """Extract 510 zone boundary. Falls back to using intent/planned data."""
+        """Extract 01 zone boundary (permitted construction). Falls back to using intent/planned data."""
         if construction_boundary and construction_boundary.get("features"):
             try:
                 gdf = gpd.GeoDataFrame.from_features(construction_boundary["features"])
@@ -194,7 +194,7 @@ class SpaceControlZoneGenerator:
         return None
 
     def _compute_conditional_zone(self, permitted, current_landuse, boundary, prohibited):
-        """Compute 530 conditional construction zone.
+        """Compute 03 conditional construction zone.
 
         Rule: ≤ 现状建设用地面积 × 20%
         Constraint: 不占基本农田 + 生态红线

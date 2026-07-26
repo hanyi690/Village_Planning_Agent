@@ -145,29 +145,46 @@ GHYTBM_TO_YDYHFLDM: Dict[str, str] = _appendix5.to_dict("code", "ydyhfldm")
 GHYTBM_TO_ZONE_TYPE: Dict[str, str] = _appendix5.to_dict("code", "zone_type")
 
 # ── GHYTMC (Chinese land-use name) -> Planning zone ──
-# Derived from GHYTBM_TO_ZONE_TYPE + appendix5 zone_type values.
-# Uses explicit mapping in appendix5 rather than string heuristics.
-GHYTMC_TO_PLANNING_ZONE: Dict[str, str] = {}
-for _ghytbm, _ghytmc in GHYTBM_TO_GHYTMC.items():
-    _zt = GHYTBM_TO_ZONE_TYPE.get(_ghytbm, "")
-    if _zt == "农业用地":
-        if _ghytbm == "1100":
-            GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "农田保护区"
-        elif "林" in _ghytmc:
-            GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "林业发展区"
-        else:
-            GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "一般农业区"
-    elif "生态" in _zt or "绿地" in _zt:
-        if "林" in _ghytmc:
-            GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "林业发展区"
-        else:
-            GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "生态保护区"
-    elif any(_x in _zt for _x in ["居住", "公共", "交通", "产业", "商业"]):
-        GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "村庄建设区"
-    elif "水域" in _zt:
-        GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "生态保护区"
-    else:
-        GHYTMC_TO_PLANNING_ZONE[_ghytmc] = "一般农业区"
+# Explicit mapping table, one entry per GHYTBM.
+# Sources: 广东省技术指南附表2 (土地利用结构调整表) + 规划分区规则
+#   - 1100 耕地 -> 农田保护区 (基本农田)
+#   - 1200 园地, 1500 其他农用地, 1510 设施农用地 -> 一般农业区
+#   - 1340 商品林 -> 林业发展区, 1350 生态林 -> 生态保护区
+#   - 1400 草地, 3100 水域 -> 生态保护区
+#   - 2100-2320 建设用地 -> 村庄建设区
+#   - 2270 水利设施, 3200 自然保留地 -> 一般农业区
+_GHYTBM_TO_PLANNING_ZONE: Dict[str, str] = {
+    # 农业用地
+    "1100": "农田保护区",   # 耕地
+    "1200": "一般农业区",   # 园地
+    "1340": "林业发展区",   # 商品林
+    "1500": "一般农业区",   # 其他农用地
+    "1510": "一般农业区",   # 设施农用地
+    "2270": "一般农业区",   # 水利设施用地
+    # 生态用地
+    "1350": "生态保护区",   # 生态林 (NOT 林业发展区)
+    "1400": "生态保护区",   # 草地
+    "3100": "生态保护区",   # 水域
+    # 建设用地
+    "2100": "村庄建设区",   # 城镇用地
+    "2121": "村庄建设区",   # 宅基地
+    "2122": "村庄建设区",   # 公共服务设施
+    "2123": "村庄建设区",   # 基础设施
+    "2124": "村庄建设区",   # 经营性建设
+    "2125": "村庄建设区",   # 景观与绿化
+    "2126": "村庄建设区",   # 村内交通
+    "2130": "村庄建设区",   # 采矿用地
+    "2200": "村庄建设区",   # 对外交通
+    "2310": "村庄建设区",   # 风景名胜
+    "2320": "村庄建设区",   # 特殊用地
+    # 其他
+    "3200": "一般农业区",   # 自然保留地
+}
+GHYTMC_TO_PLANNING_ZONE: Dict[str, str] = {
+    GHYTBM_TO_GHYTMC.get(ghytbm, ""): pz
+    for ghytbm, pz in _GHYTBM_TO_PLANNING_ZONE.items()
+    if ghytbm in GHYTBM_TO_GHYTMC
+}
 
 YDYHFLDM_TO_NAME: Dict[str, str] = _ydyhfldm.to_dict("code", "name")
 

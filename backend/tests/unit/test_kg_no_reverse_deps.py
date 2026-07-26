@@ -44,7 +44,10 @@ def test_resolve_zone_type_from_schema():
 
 def test_dlbm_to_planning_zone_from_schema():
     from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone
-    assert dlbm_to_planning_zone("0101") == "一般农业区"
+    # "0210" is a real tugui code for 园地 -> 一般农业区
+    assert dlbm_to_planning_zone("0210") == "一般农业区"
+    # Unknown DLBM defaults to "一般农业区" (fallback)
+    assert dlbm_to_planning_zone("9999") == "一般农业区"
 
 
 def test_spatial_planning_intent_from_schema():
