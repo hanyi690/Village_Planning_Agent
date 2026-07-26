@@ -1,25 +1,12 @@
-# 规划分区决策规则 — 替代 dynamic_zoning.py 硬编码
+# 规划分区决策规则
+#
+# v2.0 (2026-07-26): 建设用地管制区编码 (510/520/530/540) 已移至
+# construction_zone_codes.yaml (统一为 01-06 编码)
+# 本文件仅保留 planning_zone -> primary_zone 映射和决策规则
 version: "2026_GUANGDONG_V1"
 standard: "自然资源部《双评价指南》2019"
 
-zones:
-  - code: "510"
-    name: "允许建设区"
-    color: "#FFE0B2"
-
-  - code: "520"
-    name: "限制建设区"
-    color: "#C8E6C9"
-
-  - code: "530"
-    name: "有条件建设区"
-    color: "#FFF9C4"
-
-  - code: "540"
-    name: "禁止建设区"
-    color: "#FFCDD2"
-
-# 规划分区层级关系
+# 规划分区层级关系 (唯一真相源 - code_sets.py 从此加载)
 planning_zone_to_primary_zone:
   "生态保护区": "生态空间"
   "生态控制区": "生态空间"
@@ -28,7 +15,7 @@ planning_zone_to_primary_zone:
   "林业发展区": "农业空间"
   "村庄建设区": "建设空间"
 
-# 决策规则 — 按优先级从高到低执行
+# 决策规则 - 按优先级从高到低执行
 decision_rules:
   - priority: 1
     condition: "in_ecological_redline AND base_zone == '村庄建设区'"

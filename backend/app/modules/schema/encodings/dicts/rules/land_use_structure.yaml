@@ -22,7 +22,7 @@ categories:
 
   - code: "1400"
     name: "草地"
-    parent: "农业用地"
+    parent: "生态用地"
     ghytbm: "1400"
 
   - code: "1500"
@@ -95,6 +95,8 @@ categories:
     name: "水利设施用地"
     parent: "建设用地.交通水利及其他"
     ghytbm: "2270"
+    # 注: 结构分类为建设用地(附表2归类), 功能分类 zone_type=农业用地(附录5)
+    # 两者维度不同: 结构按附表2归属, 功能按附录5 zone_type
 
   # ── 生态用地 ──
   - code: "3100"
@@ -104,7 +106,7 @@ categories:
 
   - code: "3200"
     name: "自然保留地"
-    parent: "生态用地"
+    parent: "农业用地"
     ghytbm: "3200"
 
   - code: "1350"

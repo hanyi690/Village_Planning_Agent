@@ -87,20 +87,20 @@ field_rules:
 
   # ── 土地用途分区字段 (TDYT) ──
   - field: "TDYTFQDM"
-    lookup: "ghflbm_to_code"
+    lookup: "ghflbm_to_tdytfqdm"
     depends_on: "GHFLBM"
 
   - field: "TDYTFQBH"
     default: ""
 
   - field: "YTFQMC"
-    lookup: "ghflbm_to_name"
+    lookup: "ghflbm_to_tdyt_name"
     depends_on: "GHFLBM"
 
   # ── 建设用地管制区字段 (JSYDGZQ) ──
   - field: "TDKJGZFQDM"
-    lookup: "space_control_code"
-    depends_on: "TDKJGZFQDM"
+    lookup: "planning_zone_to_control_code"
+    depends_on: "PLANNING_ZONE"
 
   - field: "TDKJGZFQBH"
     default: ""

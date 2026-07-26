@@ -213,13 +213,18 @@ class EncodingRegistry:
     @classmethod
     def from_center(cls) -> "EncodingRegistry":
         """Build the registry reusing pre-built module-level dicts from code_sets."""
-        from .colors import PLANNING_ZONE_COLORS
         from .code_sets import (
             DLBM_TO_ZONE_TYPE,
             DLBM_TO_PLANNING_ZONE,
             DLBM_TO_PRIMARY_ZONE,
             DLBM_TO_DLMC,
         )
+
+        # v2.0: colors.py may not exist; use empty dict as fallback
+        try:
+            from .colors import PLANNING_ZONE_COLORS
+        except ImportError:
+            PLANNING_ZONE_COLORS = {}
 
         dlbm_to_category_sets: Dict[str, tuple[str, ...]] = {}
         try:

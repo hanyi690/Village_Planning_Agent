@@ -64,7 +64,7 @@ classes:
     dlbm_ref: ""
     zone_type: "农业用地"
     vne: "E23"
-    ydyhfldm: "1500"
+    ydyhfldm: "2300"
 
   - code: "1510"
     name: "设施农用地"

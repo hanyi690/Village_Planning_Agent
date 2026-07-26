@@ -770,6 +770,9 @@ class HydrogeologyZone(PolygonFeature):
 # ============================================================
 # 管制分区类型编码常量
 # ============================================================
+# v2.0: 权威来源已移至 encodings/code_sets.py -> SPACE_CONTROL_ZONE_CODES
+# (从 construction_zone_codes.yaml 加载)
+# 此处保留为向后兼容别名。新代码应从 code_sets 导入。
 
 SPACE_CONTROL_ZONE_TYPES = {
     "01": "允许建设区",

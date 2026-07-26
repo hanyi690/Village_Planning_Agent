@@ -38,7 +38,7 @@ classes:
 
   - code: "V31"
     name: "村庄商业服务业设施用地"
-    zone_type: "商业用地"
+    zone_type: "产业用地"
 
   - code: "V32"
     name: "村庄生产仓储用地"
