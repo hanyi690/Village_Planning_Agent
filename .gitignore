@@ -125,3 +125,5 @@ backend/test-screenshots/
 backend/script.txt
 docs/test-reports/
 frontend/e2e/gis_shared_fixtures.ts
+
+# Claude Code local.claude/.cozempic-init.lock.claude/settings.local.json
