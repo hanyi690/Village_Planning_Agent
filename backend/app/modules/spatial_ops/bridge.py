@@ -217,6 +217,217 @@ def build_spatial_index(bundle) -> Optional[SpatialIndex]:
     return idx
 
 
+# ── Constraint polygon index ────────────────────────────────────────
+
+
+@dataclass
+class ConstraintOverlap:
+    """Result of a parcel overlapping a constraint polygon."""
+    bsm: str
+    constraint_type: str = ""      # farmland_protection / ecological_redline / historical_protection
+    constraint_label: str = ""     # 永久基本农田 / 生态保护红线 / 历史文化保护
+    rule: str = "禁止建设"
+    overlap_area_sqm: float = 0.0
+    overlap_pct: float = 0.0
+    parcel_total_area_sqm: float = 0.0
+
+
+# Mapping from constraint polygon attribute name to constraint metadata
+_CONSTRAINT_META = {
+    "farmland_protection": {"label": "永久基本农田", "rule": "禁止建设"},
+    "ecological_redline": {"label": "生态保护红线", "rule": "禁止建设"},
+    "historical_protection": {"label": "历史文化保护", "rule": "禁止破坏"},
+    "cultivated_land_target": {"label": "耕地保护目标", "rule": "限制占用"},
+    "urban_dev_boundary": {"label": "城镇开发边界", "rule": "控制开发"},
+    "village_dev_boundary": {"label": "村庄建设边界", "rule": "控制建设"},
+}
+
+
+class ConstraintIndex:
+    """Spatial index over constraint polygons (farmland, redline, etc.).
+
+    Built from VillageBundle constraint polygon groups. Provides overlap
+    queries for constraint violation checking.
+
+    Constraint polygons are reference-layer data (上级审批成果, 不可修改),
+    accessed via spatial_ops bridge - NOT stored as KG entities.
+    """
+
+    def __init__(self, gdf, crs: str = "EPSG:4326"):
+        self._gdf = gdf
+        self._crs = crs
+
+    def parcel_in_constraint(self, bsm: str) -> List[ConstraintOverlap]:
+        """Check if a parcel (by BSM) overlaps any constraint polygon.
+
+        Args:
+            bsm: Parcel BSM identifier.
+
+        Returns:
+            List of ConstraintOverlap for each overlapping constraint polygon.
+        """
+        if self._gdf is None:
+            return []
+        try:
+            import geopandas as gpd
+            from shapely.geometry import shape
+        except ImportError:
+            logger.error("geopandas/shapely required for ConstraintIndex")
+            return []
+
+        row = self._gdf.loc[self._gdf["bsm"] == bsm]
+        if row.empty:
+            return []
+        parcel_geom = row.iloc[0].geometry
+        if parcel_geom.is_empty:
+            return []
+
+        results = []
+        gdf_metric = self._gdf.to_crs("EPSG:3857")
+        parcel_metric = gpd.GeoSeries([parcel_geom], crs=self._crs).to_crs("EPSG:3857").iloc[0]
+        parcel_area = parcel_metric.area
+
+        sindex = gdf_metric.sindex
+        possible = list(sindex.intersection(parcel_metric.bounds))
+        for i in possible:
+            if i == row.index[0]:
+                continue
+            c_geom = gdf_metric.iloc[i].geometry
+            if not c_geom.intersects(parcel_metric):
+                continue
+            overlap = c_geom.intersection(parcel_metric)
+            if overlap.is_empty or overlap.area == 0:
+                continue
+            c_bsm = self._gdf.iloc[i].get("bsm", "")
+            c_type = self._gdf.iloc[i].get("constraint_type", "")
+            meta = _CONSTRAINT_META.get(c_type, {"label": c_type, "rule": "限制"})
+            results.append(ConstraintOverlap(
+                bsm=bsm,
+                constraint_type=c_type,
+                constraint_label=meta["label"],
+                rule=meta["rule"],
+                overlap_area_sqm=round(overlap.area, 2),
+                overlap_pct=round(overlap.area / parcel_area * 100, 1) if parcel_area > 0 else 0.0,
+                parcel_total_area_sqm=round(parcel_area, 2),
+            ))
+        results.sort(key=lambda r: -r.overlap_area_sqm)
+        return results
+
+    def geometry_in_constraint(self, geometry: Dict) -> List[ConstraintOverlap]:
+        """Check if an arbitrary geometry overlaps any constraint polygon.
+
+        Args:
+            geometry: GeoJSON-like geometry dict.
+
+        Returns:
+            List of ConstraintOverlap for each overlapping constraint polygon.
+        """
+        if self._gdf is None:
+            return []
+        try:
+            import geopandas as gpd
+            from shapely.geometry import shape
+        except ImportError:
+            return []
+
+        try:
+            query_geom = shape(geometry)
+            if query_geom.is_empty:
+                return []
+            gdf_metric = self._gdf.to_crs("EPSG:3857")
+            q_metric = gpd.GeoSeries([query_geom], crs=self._crs).to_crs("EPSG:3857").iloc[0]
+            q_area = q_metric.area
+
+            results = []
+            sindex = gdf_metric.sindex
+            possible = list(sindex.intersection(q_metric.bounds))
+            for i in possible:
+                c_geom = gdf_metric.iloc[i].geometry
+                if not c_geom.intersects(q_metric):
+                    continue
+                overlap = c_geom.intersection(q_metric)
+                if overlap.is_empty or overlap.area == 0:
+                    continue
+                c_type = self._gdf.iloc[i].get("constraint_type", "")
+                meta = _CONSTRAINT_META.get(c_type, {"label": c_type, "rule": "限制"})
+                results.append(ConstraintOverlap(
+                    bsm="",
+                    constraint_type=c_type,
+                    constraint_label=meta["label"],
+                    rule=meta["rule"],
+                    overlap_area_sqm=round(overlap.area, 2),
+                    overlap_pct=round(overlap.area / q_area * 100, 1) if q_area > 0 else 0.0,
+                    parcel_total_area_sqm=round(q_area, 2),
+                ))
+            results.sort(key=lambda r: -r.overlap_area_sqm)
+            return results
+        except Exception as e:
+            logger.error("[ConstraintIndex] geometry_in_constraint failed: %s", e)
+            return []
+
+
+def build_constraint_index(bundle) -> Optional[ConstraintIndex]:
+    """Build a constraint polygon index from a VillageBundle.
+
+    Indexes all constraint polygon groups from bundle.polygons:
+      - farmland_protection
+      - ecological_redline
+      - historical_protection
+      - cultivated_land_target
+      - urban_dev_boundary
+      - village_dev_boundary
+
+    Each polygon is tagged with its constraint_type for violation reporting.
+
+    Returns:
+        ConstraintIndex for querying, or None if bundle has no constraint polygons.
+    """
+    try:
+        import geopandas as gpd
+        from shapely.geometry import shape
+    except ImportError:
+        logger.error("geopandas/shapely required for build_constraint_index")
+        return None
+
+    polygons = getattr(bundle, "polygons", None)
+    if polygons is None:
+        return None
+
+    rows = []
+    constraint_groups = [
+        ("farmland_protection", polygons.farmland_protection),
+        ("ecological_redline", polygons.ecological_redline),
+        ("historical_protection", polygons.historical_protection),
+        ("cultivated_land_target", polygons.cultivated_land_target),
+        ("urban_dev_boundary", polygons.urban_dev_boundary),
+        ("village_dev_boundary", polygons.village_dev_boundary),
+    ]
+
+    for ctype, items in constraint_groups:
+        for item in items:
+            bsm = str(getattr(item, "bsm", "")).strip()
+            geom = getattr(item, "geometry", None)
+            if geom is None:
+                continue
+            try:
+                s = shape(geom)
+                if s.is_empty:
+                    continue
+                rows.append({"bsm": bsm, "constraint_type": ctype, "geometry": s})
+            except Exception:
+                continue
+
+    if not rows:
+        logger.info("[ConstraintIndex] No constraint polygons in bundle")
+        return None
+
+    gdf = gpd.GeoDataFrame(rows, crs="EPSG:4326")
+    idx = ConstraintIndex(gdf)
+    logger.info("[ConstraintIndex] Built: %d constraint polygons", len(rows))
+    return idx
+
+
 __all__ = [
     "SpatialIndex", "OverlapResult", "build_spatial_index",
+    "ConstraintIndex", "ConstraintOverlap", "build_constraint_index",
 ]

@@ -18,7 +18,7 @@ from rdflib import Literal, RDF, URIRef
 from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
-from ..ontology import PLN, EntityTypes, Relations
+from ..ontology import PLN, EntityTypes, Relations, EntityIdPolicy
 
 logger = get_logger(__name__)
 
@@ -103,6 +103,7 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
 
     Sparse write: only entities with non-default values get L4 triples.
     Each entity tagged with pln:in_version for versioning.
+    L4->L3 links written via pln:derived_from_target when source field set.
     """
     if not isinstance(planned_state, PlannedState):
         return
@@ -112,9 +113,9 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
 
     # ── PlannedParcel ──
     for p in planned_state.parcels:
-        uri = PLN[f"planned_parcel_{p.bsm}_{version}"]
+        uri = EntityIdPolicy.uri("planned_parcel", p.bsm, version)
         self.g.add((uri, RDF.type, EntityTypes.PlannedParcel))
-        self.g.add((uri, PLN.bsm, Literal(p.bsm)))
+        EntityIdPolicy.attach_bsm(self.g, uri, p.bsm)
         self.g.add((uri, PLN.in_version, Literal(version)))
         if p.planning_land_use:
             self.g.add((uri, PLN.planning_land_use, Literal(p.planning_land_use)))
@@ -127,11 +128,14 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
                 if (s, RDF.type, EntityTypes.Parcel) in self.g:
                     self.g.add((uri, PLN.derived_from, s))
                     break
+        if p.derived_from_zone_target:
+            self.g.add((uri, PLN.derived_from_target, URIRef(p.derived_from_zone_target)))
         count += 1
 
     # ── PlannedZone ──
     for z in planned_state.zones:
-        uri = PLN[f"planned_zone_{z.zone_type}_{version}"]
+        zone_id = z.zone_type or z.name or f"idx{count}"
+        uri = EntityIdPolicy.uri("planned_zone", zone_id, version)
         self.g.add((uri, RDF.type, EntityTypes.PlannedZone))
         self.g.add((uri, PLN.zone_type, Literal(z.zone_type)))
         self.g.add((uri, PLN.in_version, Literal(version)))
@@ -139,11 +143,14 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
             self.g.add((uri, PLN.name, Literal(z.name)))
         if z.area_ha:
             self.g.add((uri, PLN.area_target_ha, Literal(z.area_ha, datatype=XSD.double)))
+        if z.derived_from_zone_target:
+            self.g.add((uri, PLN.derived_from_target, URIRef(z.derived_from_zone_target)))
         count += 1
 
     # ── PlannedFacility ──
     for f in planned_state.facilities:
-        uri = PLN[f"planned_facility_{f.name}_{version}"]
+        fac_id = f.name or f.facility_type or f"idx{count}"
+        uri = EntityIdPolicy.uri("planned_facility", fac_id, version)
         self.g.add((uri, RDF.type, EntityTypes.PlannedFacility))
         self.g.add((uri, PLN.name, Literal(f.name)))
         self.g.add((uri, PLN.in_version, Literal(version)))
@@ -154,11 +161,14 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
             self.g.add((uri, PLN.lat, Literal(f.lat, datatype=XSD.double)))
         if f.service_radius:
             self.g.add((uri, PLN.service_radius, Literal(f.service_radius, datatype=XSD.integer)))
+        if f.derived_from_target:
+            self.g.add((uri, PLN.derived_from_target, URIRef(f.derived_from_target)))
         count += 1
 
     # ── PlannedRoad ──
     for r in planned_state.roads:
-        uri = PLN[f"planned_road_{r.name}_{version}"]
+        road_id = r.name or f"idx{count}"
+        uri = EntityIdPolicy.uri("planned_road", road_id, version)
         self.g.add((uri, RDF.type, EntityTypes.PlannedRoad))
         self.g.add((uri, PLN.name, Literal(r.name)))
         self.g.add((uri, PLN.in_version, Literal(version)))
@@ -166,11 +176,14 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
             self.g.add((uri, PLN.road_level, Literal(r.road_level)))
         if r.width_m:
             self.g.add((uri, PLN.buffer_width_m, Literal(r.width_m, datatype=XSD.double)))
+        if r.derived_from_target:
+            self.g.add((uri, PLN.derived_from_target, URIRef(r.derived_from_target)))
         count += 1
 
     # ── PlannedAxis ──
     for a in planned_state.axes:
-        uri = PLN[f"planned_axis_{a.name}_{version}"]
+        axis_id = a.name or a.reference_feature or f"idx{count}"
+        uri = EntityIdPolicy.uri("planned_axis", axis_id, version)
         self.g.add((uri, RDF.type, EntityTypes.PlannedAxis))
         self.g.add((uri, PLN.name, Literal(a.name)))
         self.g.add((uri, PLN.in_version, Literal(version)))
@@ -178,6 +191,8 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
             self.g.add((uri, PLN.reference_feature, Literal(a.reference_feature)))
         if a.direction:
             self.g.add((uri, PLN.direction, Literal(a.direction)))
+        if a.derived_from_target:
+            self.g.add((uri, PLN.derived_from_target, URIRef(a.derived_from_target)))
         count += 1
 
     if count:
@@ -249,20 +264,32 @@ def get_planned_parcels_in_zone(self, zone_type: str, version: str = "current") 
 
 
 def check_constraint_violations(self, version: str = "current") -> List[Dict[str, Any]]:
+    """Check planned parcels against constraint polygons via spatial_ops bridge.
+
+    Uses self._constraint_index (ConstraintIndex) if available.
+    Returns list of violation dicts with bsm, planned_land_use, protected_zone, rule.
+    """
     violations = []
+    if self._constraint_index is None:
+        logger.debug("check_constraint_violations: no constraint_index injected")
+        return violations
+
     for pp in self.query(f"PREFIX pln: <http://village-planning.org/ontology#> "
                          f"SELECT ?p ?bsm ?land_use WHERE {{ "
                          f"?p a pln:PlannedParcel ; pln:bsm ?bsm ; "
                          f"pln:planning_land_use ?land_use ; pln:in_version \"{version}\" . }}"):
         bsm = pp.get("bsm", "")
-        for pz in self.query(f"PREFIX pln: <http://village-planning.org/ontology#> "
-                              f"SELECT ?zone ?name ?rule WHERE {{ "
-                              f"?s pln:bsm \"{bsm}\" . ?s pln:within_zone ?zone . "
-                              f"?zone a pln:ThreeLine ; pln:name ?name . "
-                              f"OPTIONAL {{ ?zone pln:restriction ?rule . }} }}"):
-            violations.append({"bsm": bsm, "planned_land_use": pp.get("land_use", ""),
-                               "protected_zone": pz.get("name", "?"), "rule": pz.get("rule", "禁止建设"),
-                               "version": version})
+        overlaps = self._constraint_index.parcel_in_constraint(bsm)
+        for ov in overlaps:
+            violations.append({
+                "bsm": bsm,
+                "planned_land_use": pp.get("land_use", ""),
+                "protected_zone": ov.constraint_type,
+                "rule": ov.rule,
+                "overlap_area_sqm": ov.overlap_area_sqm,
+                "overlap_pct": ov.overlap_pct,
+                "version": version,
+            })
     return violations
 
 

@@ -164,41 +164,75 @@ class PlannedState:
 
 每个 Entry 继承自 `SpatialCognitiveUnit` 形态基类，天然有几何和 URI。L4 进入 KG 时和 L1 一样处理，只是加版本标签。**稀疏写入**：未变更的地块不写入 L4 三元组，查询时回退到 L1。
 
-### 2.7 实体标识与 bundle 锚定契约
+### 2.7 实体标识契约 (EntityIdPolicy)
 
-> **本节描述当前实现状态与已知缺口，修复计划见 `docs/gis/04_ARCHITECTURE_AUDIT.md`。**
+> **[v4.7] 已实现：统一 URI 方案 + BSM literal 绑定。**
 
-#### 设计意图
+#### 统一策略
 
-`SpatialFeature` 基类（`schema/types/base.py:39`）定义 `bsm: str` 作为所有空间要素的标识码。KG 应统一存储 `PLN.bsm` literal 谓词，使每个实体可通过 SPARQL 查询定位回 bundle 原始要素。
+所有 KG 实体的 URI 生成与 BSM 绑定由 `EntityIdPolicy`（`ontology.py`）统一管理：
 
-#### 当前实现状态
+```python
+class EntityIdPolicy:
+    @staticmethod
+    def uri(entity_type, bsm, version="") -> URIRef:
+        # L1: PLN[f"{entity_type}_{bsm}"]
+        # L4: PLN[f"{entity_type}_{bsm}_{version}"]
+
+    @staticmethod
+    def uri_with_seq(entity_type, bsm, seq, version="") -> URIRef:
+        # For duplicate BSMs: PLN[f"{entity_type}_{bsm}_{seq}"]
+
+    @staticmethod
+    def fallback_uri(entity_type, ysdm, seq) -> URIRef:
+        # BSM missing: PLN[f"{entity_type}_{ysdm}_{seq}"]
+
+    @staticmethod
+    def attach_bsm(graph, uri, bsm):
+        # graph.add((uri, PLN.bsm, Literal(bsm)))
+```
+
+#### 实现状态
 
 | 层 | 实体 | URI 方案 | `PLN.bsm` literal | 可追溯 |
 |----|------|---------|-------------------|--------|
-| L1 | Parcel | `parcel_{bsm}_{dlbm}_{area}` | ✅ 是 | ✅ |
-| L1 | Road | `road_{bsm}` 或 `road_{count}` | ❌ 仅 URI fragment | ⚠️ 部分 |
-| L1 | WaterBody | `water_{bsm}` 或 `water_{count}` | ❌ 仅 URI fragment | ⚠️ 部分 |
-| L1 | Facility | `facility_typed_{name}_{count}` | ❌ | ❌ count 不稳定 |
-| L1 | NaturalSettlement | `village_ann_{name}` | ❌ | ⚠️ 间接经 parcel BSM |
-| L1 | ControlLine (hazard/flood) | `{type}_line_{count}` | ❌ | ❌ count only |
-| L1 | Zone (conditional/jsydgzq) | `zone_{type}_{count}` | ❌ | ❌ count only |
-| L1 | Zone (TDYT) | `tdyt_{code}` | ❌ | ❌ 同码碰撞 |
-| L1 | ThreeZone/ThreeLine | `three_zone_{name}` | ❌ | ❌ 读 schema dict 非 bundle |
-| L4 | PlannedParcel | `planned_parcel_{bsm}_{v}` | ✅ 是 | ✅ 经 `derived_from` -> L1 |
-| L4 | PlannedZone/Facility/Road/Axis | `planned_{type}_{name}_{v}` | ❌ | ❌ 同名碰撞，L4->L3 未实现 |
+| L1 | Parcel | `EntityIdPolicy.uri_with_seq("parcel", bsm, seq)` | ✅ | ✅ |
+| L1 | Road | `EntityIdPolicy.uri("road", bsm)` + fallback | ✅ | ✅ |
+| L1 | WaterBody | `EntityIdPolicy.uri("water", bsm)` + fallback | ✅ | ✅ |
+| L1 | Facility | `EntityIdPolicy.uri("facility", bsm)` + fallback | ✅ | ✅ |
+| L1 | NaturalSettlement | `EntityIdPolicy.fallback_uri("village_ann", name, seq)` | ⚠️ 按名 | ⚠️ |
+| L1 | ControlLine | `EntityIdPolicy.uri/fallback` per type | ✅ | ✅ |
+| L1 | Zone (TDYT/jsydgzq) | `EntityIdPolicy.uri/fallback` | ✅ | ✅ |
+| L3 | ZoneTarget | `EntityIdPolicy.uri("zone_target", target_id)` | `PLN.target_id` | ✅ |
+| L3 | FacilityTarget | `EntityIdPolicy.uri("facility_target", target_id)` | `PLN.target_id` | ✅ |
+| L3 | AxisTarget | `EntityIdPolicy.uri("axis_target", target_id)` | `PLN.target_id` | ✅ |
+| L4 | PlannedParcel | `EntityIdPolicy.uri("planned_parcel", bsm, version)` | ✅ | ✅ `derived_from` -> L1 |
+| L4 | PlannedZone | `EntityIdPolicy.uri("planned_zone", zone_id, version)` | `PLN.zone_type` | ✅ `derived_from_target` -> L3 |
+| L4 | PlannedFacility | `EntityIdPolicy.uri("planned_facility", fac_id, version)` | `PLN.name` | ✅ `derived_from_target` -> L3 |
+| L4 | PlannedRoad | `EntityIdPolicy.uri("planned_road", road_id, version)` | `PLN.name` | ✅ `derived_from_target` -> L3 |
+| L4 | PlannedAxis | `EntityIdPolicy.uri("planned_axis", axis_id, version)` | `PLN.name` | ✅ `derived_from_target` -> L3 |
 
-#### 已知缺口
+#### ThreeZone/ThreeLine 移除
 
-1. **URI 方案碎片化**：14 个 `_add_*` 函数使用 6 种不同方案。仅 `_add_parcels` 和 `_apply_planned_state`（PlannedParcel）遵守 bsm literal 契约。
-2. **ThreeZone/ThreeLine 脱离 bundle**：`_add_three_zone_three_line` 读 `rule_loader()` 而非 `bundle.polygons.three_zones`，bundle 中的 `ThreeZoneItem`（带 BSM + geometry）被忽略。
-3. **L4->L3 链接未实现**：`PlannedZoneEntry.derived_from_target` 等字段在 dataclass 中定义，但 `_apply_planned_state` 从不读取。
-4. **count-based URI 不稳定**：输入列表重排即导致 URI 全变，不可追溯。
-5. **RoadTarget 死实体**：ontology 声明，`_L3_TYPES` 包含，但 `build_intent_layer` 从不创建。
+[v4.7] ThreeZone/ThreeLine 从 KG 实体中移除。它们是引用层（上级审批成果，不可修改），
+不是规划对象。约束多边形（farmland_protection / ecological_redline / historical_protection）
+通过 `spatial_ops.bridge.ConstraintIndex` 访问，在 `build_from_bundle` 时注入。
 
-#### 修复方向（见 04_ARCHITECTURE_AUDIT.md §二）
+#### 重复 BSM 处理
 
-引入 `EntityIdPolicy` 统一标识策略：所有 L1 实体存 `PLN.bsm` literal，L4 实体存 `PLN.bsm` + `PLN.derived_from`，BSM 缺失时用 `ysdm + seq` 生成稳定 ID。
+实际数据中 BSM 可能不唯一（多部件图斑按地类拆分后共享 BSM）。
+`EntityIdPolicy.uri_with_seq` 通过序号后缀消歧：`parcel_{bsm}_0`, `parcel_{bsm}_1`, ...
+所有同 BSM 的子图斑共享 `PLN.bsm` literal，SPARQL 查询返回多条结果。
+
+#### 约束验证
+
+`check_constraint_violations` 和 `_is_in_protected_zone` 不再查询 KG 中空的 `within_zone` 关系，
+改为通过注入的 `ConstraintIndex`（spatial_ops bridge）做空间 overlay 查询：
+
+```python
+kg.build_from_bundle(bundle, constraint_index=build_constraint_index(bundle))
+violations = kg.check_constraint_violations("v1")  # 实际检测约束多边形重叠
+```
 
 ---
 
@@ -211,18 +245,8 @@ class PlannedState:
 | 面 | `Parcel` | 现状地类图斑 |
 | 面 | `WaterBody` | 水域 |
 | 面 | `Zone` | 规划分区 |
-| 面 | `ThreeZone` | 三区（生态/农业/建设） |
-| 面 | `ThreeLine` | 三线（基本农田/生态红线/开发边界） |
-| 面 | `FarmlandProtection` | 永久基本农田保护 |
-| 面 | `EcologicalRedline` | 生态保护红线 |
-| 面 | `HistoricalProtection` | 历史文化保护 |
-| 面 | `VillageDevBoundary` | 村庄建设边界 |
-| 面 | `HazardControlLine` | 灾害防控线 |
-| 面 | `FloodControlLine` | 洪涝控制线 |
-| 面 | `ConditionalConstructionZone` | 有条件建设区 |
-| 面 | `LandUseZone` | 土地利用区（TDYT） |
-| 面 | `ConstructionCtrlZone` | 建设用地管制区 |
-| 面 | `PlanningScope` | 规划范围 |
+| ~~面~~ | ~~`ThreeZone`~~ | ~~三区~~ [v4.7] 移除，改为 ConstraintIndex |
+| ~~面~~ | ~~`ThreeLine`~~ | ~~三线~~ [v4.7] 移除，改为 ConstraintIndex |
 | 面 | `AdministrativeVillage` | 行政村 |
 | 面 | `NaturalSettlement` | 自然村 |
 | 点 | `Facility` | 现状设施点 |
@@ -541,6 +565,12 @@ python -m pytest tests/integration/test_kg_jintian_e2e.py tests/unit/test_kg_no_
 
 | 版本 | 变更 |
 |------|------|
+| v4.7 | **EntityIdPolicy 统一标识契约** - 14 个 builder 统一 URI 方案，所有 L1/L4 实体存 `PLN.bsm` literal |
+| v4.7 | **ThreeZone/ThreeLine 从 KG 移除** - 改为 `ConstraintIndex`（spatial_ops bridge）注入，约束多边形不再作为 KG 实体 |
+| v4.7 | **L4->L3 链接实现** - `derived_from_target` 三元组写入，L4 实体可追溯至 L3 意图 |
+| v4.7 | **get_adjacency_map 修复** - 从 URI 前缀解析改为 BSM literal 查询，返回纯 BSM |
+| v4.7 | **约束验证修复** - `check_constraint_violations` / `_is_in_protected_zone` 改用 `ConstraintIndex` 空间 overlay |
+| v4.7 | **重复 BSM 处理** - `uri_with_seq` 序号后缀消歧，处理多部件图斑共享 BSM 的数据质量问题 |
 | v4.6.1 | **文档修正** - §2.3 方法名表更新（删除 `_add_parcels_typed`/`_add_infrastructure_from_typed`/`_add_constraints_from_typed` 等已废弃方法名） |
 | v4.6.1 | **新增 §2.7 实体标识与 bundle 锚定契约** - 文档化 URI 方案碎片化、ThreeZone 脱离 bundle、L4->L3 链接未实现等已知缺口 |
 | v4.6 | **重构：只存空间实体** — 删除 `ControlRule`, `PlanningIndicator`, `Constraint`, `PlanIntent` 从 EntityTypes |

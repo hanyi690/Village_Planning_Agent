@@ -46,7 +46,10 @@ def build_kg():
     )
 
     kg = PlanningKG("jintian")
-    kg.build_from_bundle(bundle=bundle, parcel_relations=relations)
+    from app.modules.spatial_ops import build_constraint_index
+    constraint_index = build_constraint_index(bundle)
+    kg.build_from_bundle(bundle=bundle, parcel_relations=relations,
+                         constraint_index=constraint_index)
 
     # Apply a sample PlanBlock (on a clone, to show L4 delta)
     from rdflib import Namespace

@@ -9,14 +9,41 @@ Does NOT depend on: Agent, KG, Tools.
 
 [v4.3] Monolithic SpatialContext replaced by modular ContextBlock architecture.
 compute_context_blocks(VillageBundle) is the sole public entry point.
+
+[v4.7] Added grounding.py (Responsibility B: PARSE spatial grounding).
 """
 
-from .bridge import SpatialIndex, OverlapResult, build_spatial_index
+from .bridge import (
+    SpatialIndex, OverlapResult, build_spatial_index,
+    ConstraintIndex, ConstraintOverlap, build_constraint_index,
+)
 from .context import compute_context_blocks
+from .grounding import (
+    ZoneSpatialAnchor,
+    resolve_directional_bbox,
+    query_parcels_in_bbox,
+    query_parcels_near_entity,
+    query_excluded_parcels,
+    compute_proximity_weights,
+    compute_target_area,
+    ground_zone_spatial_preference,
+)
 
 __all__ = [
     "compute_context_blocks",
     "SpatialIndex",
     "OverlapResult",
     "build_spatial_index",
+    "ConstraintIndex",
+    "ConstraintOverlap",
+    "build_constraint_index",
+    # grounding.py exports
+    "ZoneSpatialAnchor",
+    "resolve_directional_bbox",
+    "query_parcels_in_bbox",
+    "query_parcels_near_entity",
+    "query_excluded_parcels",
+    "compute_proximity_weights",
+    "compute_target_area",
+    "ground_zone_spatial_preference",
 ]

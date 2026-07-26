@@ -35,13 +35,21 @@ def query(self, sparql: str) -> List[Dict[str, Any]]:
 
 
 def get_adjacency_map(self) -> Dict[str, set]:
+    """Adjacency map: BSM -> set of neighbor BSMs.
+
+    Uses PLN.bsm literal queries (not URI parsing) for stable identification.
+    """
     adj: Dict[str, set] = {}
-    prefix = str(PLN) + "parcel_"
     for s, _, o in self.g.triples((None, PLN.touches, None)):
-        ks, ko = str(s), str(o)
-        if ks.startswith(prefix) and ko.startswith(prefix):
-            adj.setdefault(ks[len(prefix):], set()).add(ko[len(prefix):])
-            adj.setdefault(ko[len(prefix):], set()).add(ks[len(prefix):])
+        bsm_s = None
+        bsm_o = None
+        for _, _, lit in self.g.triples((s, PLN.bsm, None)):
+            bsm_s = str(lit)
+        for _, _, lit in self.g.triples((o, PLN.bsm, None)):
+            bsm_o = str(lit)
+        if bsm_s and bsm_o:
+            adj.setdefault(bsm_s, set()).add(bsm_o)
+            adj.setdefault(bsm_o, set()).add(bsm_s)
     return adj
 
 
@@ -149,10 +157,8 @@ def validate_intent(self, intent: Any) -> List[Dict[str, Any]]:
 
 
 def _is_in_protected_zone(self, bsm: str) -> bool:
-    for s, _, _ in self.g.triples((None, PLN.bsm, Literal(bsm))):
-        if (s, RDF.type, EntityTypes.Parcel) not in self.g:
-            continue
-        for _, _, zone in self.g.triples((s, Relations.within_zone, None)):
-            if (zone, RDF.type, EntityTypes.ThreeLine) in self.g:
-                return True
-    return False
+    """Check if a parcel overlaps any constraint polygon via spatial_ops bridge."""
+    if self._constraint_index is None:
+        return False
+    overlaps = self._constraint_index.parcel_in_constraint(bsm)
+    return len(overlaps) > 0

@@ -57,6 +57,9 @@ class ZoneTarget(BaseModel):
     VNE codes follow 住建部《村庄规划用地分类指南》:
       V=村庄建设用地, N=非村庄建设用地, E=非建设用地
       V1=村民住宅用地, V11=住宅用地, V12=混合式住宅用地, ...
+
+    Spatial anchoring fields (candidate_bsms, etc.) are filled by
+    spatial_ops.grounding.post-format.
     """
 
     land_use: str = ""
@@ -68,6 +71,11 @@ class ZoneTarget(BaseModel):
     density: Literal["high", "medium", "low"] = "medium"
     zone_id: str = ""                        # from ZoneIntent (EXECUTE identifier)
     preserve_existing: bool = True           # from ZoneIntent
+    # === 空间锚定（spatial_ops.grounding 填充）===
+    candidate_bsms: List[str] = Field(default_factory=list)
+    candidate_bbox: Optional[Tuple[float, float, float, float]] = None
+    excluded_bsms: List[str] = Field(default_factory=list)
+    proximity_weights: Dict[str, float] = Field(default_factory=dict)
     # Semantic anchors (human-readable, not stored as RDF)
     semantic: SemanticMetadata = Field(default_factory=SemanticMetadata)
 
@@ -82,6 +90,7 @@ class FacilityTarget(BaseModel):
     """Facility requirement with spatial anchoring.
 
     candidate_bsms and anchor_point are filled by spatial_ops.grounding post-format.
+    direction drives FacilityPlacer's _place_new placement decision.
     SemanticMetadata.spatial_hint retains the original text (e.g. "村北") for traceability.
     """
 
@@ -95,6 +104,8 @@ class FacilityTarget(BaseModel):
     location_hint: str = ""
     service_radius: Optional[int] = None
     anchor_village: Optional[str] = None
+    # === 空间方向（FacilityPlacer 用）===
+    direction: str = "center"                # "north"/"south"/"east"/"west"/"center"
     # === 空间锚定（spatial_ops.grounding 填充，具体集合而非文本）===
     candidate_bsms: List[str] = Field(default_factory=list)
     anchor_point: Optional[Tuple[float, float]] = None  # 精确坐标 (lon, lat)
@@ -107,11 +118,16 @@ class AxisTarget(BaseModel):
 
     start_anchor/end_anchor provide precise coordinate anchors for axis line
     generation. corridor_bsms are candidate parcels along the corridor.
+    axis_type/label drive AxisBuilder classification.
     SemanticMetadata.natural_language_description retains labels like "南北发展轴".
     """
 
     reference_feature: str = ""
     connects: List[str] = Field(default_factory=list)
+    # === 轴线类型（AxisBuilder 用）===
+    direction: str = ""                      # "north-south"/"east-west"/"radial"
+    axis_type: str = "primary"              # "primary"/"secondary"/"spatial_control"
+    label: str = ""                          # e.g. "南北发展轴"
     # === 空间锚定（spatial_ops.grounding 填充）===
     start_anchor: Optional[Tuple[float, float]] = None
     end_anchor: Optional[Tuple[float, float]] = None

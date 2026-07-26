@@ -74,6 +74,11 @@ _gazetteer: Any = None
 # Set by run_parse_pipeline / _parse_intent_node before PARSE graph runs.
 _current_context_blocks: List[Any] = []
 
+# Global spatial grounding context (bundle + constraint_index).
+# Set by _parse_intent_node after fetch_gis_data + build_kg.
+_grounding_bundle: Any = None
+_grounding_constraint_index: Any = None
+
 
 def set_context_blocks(blocks: List[Any]) -> None:
     """Store the active ContextBlock list so resolve_place can use Tier 0 matching.
@@ -83,6 +88,17 @@ def set_context_blocks(blocks: List[Any]) -> None:
     """
     global _current_context_blocks
     _current_context_blocks = blocks or []
+
+
+def set_grounding_context(bundle: Any = None, constraint_index: Any = None) -> None:
+    """Store the active VillageBundle + ConstraintIndex for spatial grounding.
+
+    Set by _parse_intent_node after fetch_gis_data + build_kg.
+    Used by format_targets_node to call ground_zone_spatial_preference.
+    """
+    global _grounding_bundle, _grounding_constraint_index
+    _grounding_bundle = bundle
+    _grounding_constraint_index = constraint_index
 
 
 def _log_llm_call(node: str, phase: str, system_msg: str, user_msg: str,
@@ -1110,6 +1126,55 @@ def _auto_fill_road_anchor(
     return roads
 
 
+def _ground_zone_targets(
+    zone_targets: list,
+    place_mappings: dict,
+    constraint_index: Any,
+    bundle: Any,
+) -> None:
+    """Post-format: geometric spatial grounding for ZoneTargets (in-place).
+
+    Calls ground_zone_spatial_preference for each ZoneTarget that has a
+    spatial hint or preference description. Fills candidate_bsms,
+    candidate_bbox, excluded_bsms, proximity_weights in-place.
+    """
+    from app.modules.spatial_ops.grounding import ground_zone_spatial_preference
+
+    if not zone_targets or bundle is None:
+        return
+
+    grounded = 0
+    for zt in zone_targets:
+        pref_parts = []
+        if zt.semantic and zt.semantic.spatial_hint:
+            pref_parts.append(zt.semantic.spatial_hint)
+        if zt.spatial_preference:
+            if zt.spatial_preference.direction:
+                pref_parts.append(zt.spatial_preference.direction)
+            if zt.spatial_preference.reference:
+                pref_parts.append(zt.spatial_preference.reference)
+        pref_desc = " ".join(pref_parts) if pref_parts else ""
+        if not pref_desc and zt.semantic and zt.semantic.natural_language_description:
+            pref_desc = zt.semantic.natural_language_description
+
+        if pref_desc:
+            anchor = ground_zone_spatial_preference(
+                pref_desc, place_mappings, constraint_index, bundle,
+            )
+            if anchor.candidate_bsms:
+                zt.candidate_bsms = anchor.candidate_bsms
+            if anchor.candidate_bbox:
+                zt.candidate_bbox = anchor.candidate_bbox
+            if anchor.excluded_bsms:
+                zt.excluded_bsms = anchor.excluded_bsms
+            if anchor.proximity_weights:
+                zt.proximity_weights = anchor.proximity_weights
+            grounded += 1
+
+    if grounded:
+        logger.info("[PARSE:grounding] Grounded %d zone targets", grounded)
+
+
 def _inject_deterministic_fields(
     intent: "SpatialPlanningIntent",
     code_mappings: dict,
@@ -1337,6 +1402,15 @@ async def format_targets_node(state: ParseAgentState) -> dict:
             result.road_targets,
             dict(state.place_mappings_targets),
         )
+
+        # Post-format: geometric spatial grounding via spatial_ops.grounding
+        if _grounding_bundle is not None and result.zone_targets:
+            _ground_zone_targets(
+                result.zone_targets,
+                dict(state.place_mappings_targets),
+                _grounding_constraint_index,
+                _grounding_bundle,
+            )
 
         logger.info("[PARSE:format_targets] %d zones, %d facilities, %d axes, %d roads",
                      len(result.zone_targets), len(result.facilities),

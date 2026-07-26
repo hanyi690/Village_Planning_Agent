@@ -166,11 +166,16 @@ class KGManager:
         parcel_relations: Optional[Any] = None,
         landuse_geojson: Optional[Dict[str, Any]] = None,  # legacy fallback
         gis_data: Optional[Dict[str, Any]] = None,  # legacy fallback
+        constraint_index: Optional[Any] = None,
     ) -> Tuple[Any, bool]:
         """Get Layer 1 KG from cache or build fresh.
 
         Builds from bundle morphology groups directly (v4.6 path).
         Falls back to landuse_geojson + gis_data (legacy path).
+
+        Args:
+            constraint_index: Optional ConstraintIndex from spatial_ops.bridge,
+                injected for constraint violation checking.
 
         Returns:
             (PlanningKG, cache_hit) tuple.
@@ -196,6 +201,7 @@ class KGManager:
             kg.build_from_bundle(
                 bundle=bundle,
                 parcel_relations=parcel_relations,
+                constraint_index=constraint_index,
             )
         else:
             logger.warning("[KGManager] No bundle provided — skipping Layer 1 build")

@@ -9,7 +9,7 @@ from rdflib import Literal, RDF
 from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
-from ..ontology import PLN, EntityTypes, Relations
+from ..ontology import PLN, EntityTypes, Relations, EntityIdPolicy
 
 logger = get_logger(__name__)
 
@@ -61,24 +61,22 @@ def _parcel_uri_by_bsm_dlbm(self, bsm: str, dlbm: str):
     for s, _, _ in self.g.triples((None, PLN.bsm, Literal(bsm))):
         if (s, RDF.type, EntityTypes.Parcel) not in self.g:
             continue
-        if not dlbm:
-            return s
-        for _, _, do in self.g.triples((s, PLN.dlbm, None)):
-            if str(do) == dlbm:
-                return s
+        return s
     return None
 
 
 def _add_parcels(self, parcels) -> None:
     from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
+    bsm_seq: dict = {}  # Track sequence per BSM for duplicate disambiguation
     for p in parcels:
         bsm = str(getattr(p, "bsm", "")).strip()
         dlbm = str(getattr(p, "dlbm", "")).strip()
         if not bsm:
             continue
         area = getattr(p, "area_sqm", 0) or 0
-        key = f"{bsm}_{dlbm}_{int(area)}"
-        pu = PLN[f"parcel_{key}"]
+        seq = bsm_seq.get(bsm, 0)
+        pu = EntityIdPolicy.uri_with_seq("parcel", bsm, seq)
+        bsm_seq[bsm] = seq + 1
         self.g.add((pu, RDF.type, EntityTypes.Parcel))
         self.g.add((pu, PLN.bsm, Literal(bsm)))
         self.g.add((pu, PLN.dlbm, Literal(dlbm)))
@@ -102,6 +100,14 @@ def _add_parcels(self, parcels) -> None:
         # current_zone_type — derived from DLBM via lookup (factual categorization)
         zt = resolve_zone_type_for_dlbm(dlbm)
         self.g.add((pu, PLN.current_zone_type, Literal(zt)))
+
+        # planning_zone / primary_zone — from Data layer ingest
+        pz = getattr(p, "planning_zone", "") or ""
+        if pz:
+            self.g.add((pu, PLN.planning_zone, Literal(pz)))
+        prz = getattr(p, "primary_zone", "") or ""
+        if prz:
+            self.g.add((pu, PLN.primary_zone, Literal(prz)))
 
         # Centroid
         try:
@@ -131,10 +137,15 @@ def _add_parcels(self, parcels) -> None:
 def _add_water_bodies(self, water_bodies) -> None:
     count = 0
     for w in water_bodies:
-        bsm = str(getattr(w, "bsm", f"water_{count}"))
-        uri = PLN[f"water_{bsm}"]
+        bsm = str(getattr(w, "bsm", "")).strip()
+        ysdm = str(getattr(w, "ysdm", "")).strip()
+        if bsm:
+            uri = EntityIdPolicy.uri("water", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("water", ysdm, count)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.WaterBody))
-        name = getattr(w, "name", "") or f"水域_{bsm}"
+        name = getattr(w, "name", "") or f"水域_{bsm or count}"
         self.g.add((uri, PLN.name, Literal(name)))
         self.g.add((uri, Relations.located_in, PLN.village))
         count += 1
@@ -145,27 +156,51 @@ def _add_water_bodies(self, water_bodies) -> None:
 def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
     count = 0
     for p in getattr(points_layer, "hazard_points", []):
+        bsm = str(getattr(p, "bsm", "")).strip()
+        ysdm = str(getattr(p, "ysdm", "")).strip()
         name = getattr(p, "name", f"hazard_{count}")
-        uri = PLN[f"hazard_{name}"]
+        if bsm:
+            uri = EntityIdPolicy.uri("hazard", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("hazard", ysdm, count)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, PLN.ControlLine))
         self.g.add((uri, PLN.name, Literal(str(name))))
         self.g.add((uri, PLN.source, Literal("geological_hazard")))
         self.g.add((uri, Relations.located_in, PLN.village))
         count += 1
-    for _ in getattr(polygons_layer, "hazard_control_lines", []):
-        uri = PLN[f"hazard_line_{count}"]
+    for item in getattr(polygons_layer, "hazard_control_lines", []):
+        bsm = str(getattr(item, "bsm", "")).strip()
+        ysdm = str(getattr(item, "ysdm", "")).strip()
+        if bsm:
+            uri = EntityIdPolicy.uri("hazard_line", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("hazard_line", ysdm, count)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, PLN.ControlLine))
-        self.g.add((uri, PLN.name, Literal(f"灾害防控线_{count}")))
+        self.g.add((uri, PLN.name, Literal(f"灾害防控线_{bsm or count}")))
         self.g.add((uri, Relations.located_in, PLN.village))
         count += 1
-    for _ in getattr(polygons_layer, "flood_control_lines", []):
-        uri = PLN[f"flood_line_{count}"]
+    for item in getattr(polygons_layer, "flood_control_lines", []):
+        bsm = str(getattr(item, "bsm", "")).strip()
+        ysdm = str(getattr(item, "ysdm", "")).strip()
+        if bsm:
+            uri = EntityIdPolicy.uri("flood_line", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("flood_line", ysdm, count)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, PLN.ControlLine))
-        self.g.add((uri, PLN.name, Literal(f"洪涝控制线_{count}")))
+        self.g.add((uri, PLN.name, Literal(f"洪涝控制线_{bsm or count}")))
         self.g.add((uri, Relations.located_in, PLN.village))
         count += 1
-    for _ in getattr(polygons_layer, "construction_zone", []):
-        uri = PLN[f"zone_conditional_{count}"]
+    for item in getattr(polygons_layer, "construction_zone", []):
+        bsm = str(getattr(item, "bsm", "")).strip()
+        ysdm = str(getattr(item, "ysdm", "")).strip()
+        if bsm:
+            uri = EntityIdPolicy.uri("zone_conditional", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("zone_conditional", ysdm, count)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal("有条件建设区")))
         self.g.add((uri, PLN.restriction, Literal("限制建设")))
@@ -178,14 +213,26 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
 def _add_planning_elements_from_typed(self, polygons_layer) -> None:
     count = 0
     for z in getattr(polygons_layer, "land_use_zones", []):
-        code = getattr(z, "ysdm", getattr(z, "dlbm", f"tdyt_{count}"))
-        uri = PLN[f"tdyt_{code}"]
+        bsm = str(getattr(z, "bsm", "")).strip()
+        ysdm = str(getattr(z, "ysdm", "")).strip()
+        code = getattr(z, "ysdm", getattr(z, "dlbm", ""))
+        if bsm:
+            uri = EntityIdPolicy.uri("tdyt", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("tdyt", ysdm or str(code), count)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal(f"TDYT_{code}")))
         self.g.add((uri, Relations.located_in, PLN.village))
         count += 1
-    for _ in getattr(polygons_layer, "construction_ctrl_zones", []):
-        uri = PLN[f"zone_jsydgzq_{count}"]
+    for item in getattr(polygons_layer, "construction_ctrl_zones", []):
+        bsm = str(getattr(item, "bsm", "")).strip()
+        ysdm = str(getattr(item, "ysdm", "")).strip()
+        if bsm:
+            uri = EntityIdPolicy.uri("zone_jsydgzq", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("zone_jsydgzq", ysdm, count)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal("建设用地管制区")))
         self.g.add((uri, Relations.located_in, PLN.village))
@@ -197,35 +244,6 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
         logger.info("Added %d planning elements", count)
 
 
-def _add_three_zone_three_line(self):
-    try:
-        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
-        loader = get_rule_loader()
-    except Exception as e:
-        logger.debug("Three zone/line skipped: %s", e)
-        return
-    seen = set()
-    for zone_name, primary_zone in loader.planning_zone_to_primary_zone().items():
-        if primary_zone not in seen:
-            tz = PLN[f"three_zone_{primary_zone}"]
-            self.g.add((tz, RDF.type, EntityTypes.ThreeZone))
-            self.g.add((tz, PLN.name, Literal(primary_zone)))
-            zu = PLN[f"zone_{zone_name}"]
-            if (zu, RDF.type, EntityTypes.Zone) in self.g:
-                self.g.add((tz, Relations.delineates, zu))
-            seen.add(primary_zone)
-    for ld in loader.three_line_types():
-        tl = PLN[f"three_line_{ld.key}"]
-        self.g.add((tl, RDF.type, EntityTypes.ThreeLine))
-        self.g.add((tl, PLN.code, Literal(ld.key)))
-        self.g.add((tl, PLN.name, Literal(ld.label)))
-        if ld.color:
-            self.g.add((tl, PLN.color, Literal(ld.color)))
-        if ld.gdb_key:
-            self.g.add((tl, PLN.gdb_key, Literal(ld.gdb_key)))
-    logger.info("Added %d ThreeZone + %d ThreeLine", len(seen), len(loader.three_line_types()))
-
-
 def add_annotations(self, annotations: list):
     from app.modules.schema.types.spatial_types import CurrentFacility
     fc, vc = 0, 0
@@ -233,9 +251,15 @@ def add_annotations(self, annotations: list):
         cat = getattr(ann, "category", "")
         if cat == "村名":
             text = getattr(ann, "text", "")
+            bsm = str(getattr(ann, "bsm", "")).strip()
+            ysdm = str(getattr(ann, "ysdm", "")).strip()
             if text and hasattr(ann, "geometry"):
                 coords = ann.geometry.get("coordinates", [0, 0])
-                uri = PLN[f"village_ann_{text}"]
+                if bsm:
+                    uri = EntityIdPolicy.uri("village_ann", bsm)
+                else:
+                    uri = EntityIdPolicy.fallback_uri("village_ann", ysdm, vc)
+                EntityIdPolicy.attach_bsm(self.g, uri, bsm)
                 self.g.add((uri, RDF.type, EntityTypes.NaturalSettlement))
                 self.g.add((uri, PLN.name, Literal(text)))
                 self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
@@ -248,7 +272,13 @@ def add_annotations(self, annotations: list):
             ) if hasattr(ann, "_raw") else None
             if facility is None:
                 continue
-            fac_uri = PLN[f"facility_ann_{facility.facility_name or 'unknown'}_{fc}"]
+            bsm = str(getattr(facility, "bsm", "")).strip()
+            ysdm = str(getattr(facility, "ysdm", "")).strip()
+            if bsm:
+                fac_uri = EntityIdPolicy.uri("facility", bsm)
+            else:
+                fac_uri = EntityIdPolicy.fallback_uri("facility", ysdm, fc)
+            EntityIdPolicy.attach_bsm(self.g, fac_uri, bsm)
             self.g.add((fac_uri, RDF.type, EntityTypes.Facility))
             self.g.add((fac_uri, PLN.name, Literal(facility.facility_name or "unknown")))
             self.g.add((fac_uri, PLN.facility_type, Literal(facility.facility_type or "公共服务")))
@@ -268,10 +298,15 @@ def add_annotations(self, annotations: list):
 def add_roads(self, roads: list):
     count = 0
     for road in roads:
-        bsm = getattr(road, "bsm", "") or f"road_{count}"
-        uri = PLN[f"road_{bsm}"]
+        bsm = str(getattr(road, "bsm", "")).strip()
+        ysdm = str(getattr(road, "ysdm", "")).strip()
+        if bsm:
+            uri = EntityIdPolicy.uri("road", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("road", ysdm, count)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Road))
-        self.g.add((uri, PLN.name, Literal(f"道路_{bsm}")))
+        self.g.add((uri, PLN.name, Literal(f"道路_{bsm or count}")))
         length = getattr(road, "shape_length", 0.0) or 0.0
         if length:
             self.g.add((uri, PLN.length, Literal(length, datatype=XSD.double)))
@@ -340,8 +375,9 @@ def _add_natural_villages_from_typed(self, parcels) -> None:
     if not settlement_names:
         return
 
+    seq = 0
     for name in sorted(settlement_names):
-        uri = PLN[f"village_ann_{name}"]
+        uri = EntityIdPolicy.fallback_uri("village_ann", name, seq)
         self.g.add((uri, RDF.type, EntityTypes.NaturalSettlement))
         self.g.add((uri, PLN.name, Literal(name)))
         self.g.add((uri, Relations.located_in, PLN.village))
@@ -355,6 +391,7 @@ def _add_natural_villages_from_typed(self, parcels) -> None:
                 for s in self.g.subjects(PLN.bsm, Literal(getattr(p, 'bsm', ''))):
                     if (s, RDF.type, EntityTypes.Parcel) in self.g:
                         self.g.add((s, Relations.located_in, uri))
+        seq += 1
 
     logger.info("Added %d natural settlements from typed parcels", len(settlement_names))
 
@@ -367,7 +404,13 @@ def _add_facilities_from_typed(self, facilities) -> None:
         if not isinstance(f, CurrentFacility):
             continue
         name = getattr(f, 'facility_name', '') or f"facility_{count}"
-        uri = PLN[f"facility_typed_{name}_{count}"]
+        bsm = str(getattr(f, 'bsm', '')).strip()
+        ysdm = str(getattr(f, 'ysdm', '')).strip()
+        if bsm:
+            uri = EntityIdPolicy.uri("facility", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("facility", ysdm, count)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Facility))
         self.g.add((uri, PLN.name, Literal(name)))
         ftype = getattr(f, 'facility_type', '') or '公共服务'

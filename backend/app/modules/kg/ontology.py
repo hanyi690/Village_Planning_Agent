@@ -19,10 +19,52 @@ Relations: 10 total
 
 from __future__ import annotations
 
-from rdflib import Namespace
+from rdflib import Literal, Namespace, URIRef
 
 PLN = Namespace("http://village-planning.org/ontology#")
 GEO = Namespace("http://www.opengis.net/ont/geosparql#")
+
+
+class EntityIdPolicy:
+    """统一实体标识契约 - 所有 KG 实体的 URI 生成与 BSM 绑定.
+
+    Rules:
+      L1 entities: uri = PLN[f"{entity_type}_{bsm}"]
+      L3 entities: uri = PLN[f"{entity_type}_{target_id}"]  (intent, no BSM)
+      L4 entities: uri = PLN[f"{entity_type}_{bsm}_v{version}"]
+
+    When BSM is missing, use ysdm + seq for a stable fallback:
+      PLN[f"{entity_type}_{ysdm}_{seq}"]
+    """
+
+    @staticmethod
+    def uri(entity_type: str, bsm: str, version: str = "") -> URIRef:
+        if version:
+            return PLN[f"{entity_type}_{bsm}_{version}"]
+        return PLN[f"{entity_type}_{bsm}"]
+
+    @staticmethod
+    def uri_with_seq(entity_type: str, bsm: str, seq: int, version: str = "") -> URIRef:
+        """URI with sequence suffix for entities sharing the same BSM.
+
+        Used when multiple features have the same BSM (e.g. multi-part parcels
+        with different DLBM sub-areas). The seq disambiguates them.
+        """
+        if seq == 0:
+            return EntityIdPolicy.uri(entity_type, bsm, version)
+        if version:
+            return PLN[f"{entity_type}_{bsm}_{seq}_{version}"]
+        return PLN[f"{entity_type}_{bsm}_{seq}"]
+
+    @staticmethod
+    def fallback_uri(entity_type: str, ysdm: str, seq: int) -> URIRef:
+        code = ysdm or "noysdm"
+        return PLN[f"{entity_type}_{code}_{seq}"]
+
+    @staticmethod
+    def attach_bsm(graph, uri, bsm: str):
+        if bsm:
+            graph.add((uri, PLN.bsm, Literal(bsm)))
 
 
 class EntityTypes:
@@ -102,6 +144,11 @@ class Relations:
 # These are accessed as PLN.attr_name rather than through Relations class
 # shared_boundary_length, centroid_distance, shortest_path_length,
 # max_distance_m, land_use_code, target_area_ha, min_area_sqm
+
+# v4.7 — L3 spatial anchoring predicates (PARSE grounding)
+# Accessed as PLN.attr_name (e.g. PLN.candidate_bsm, PLN.spatial_hint)
+# candidate_bsm, excluded_bsm, candidate_bbox, spatial_hint, description, raw_planning_text
+# has_zone, has_facility, has_axis, has_road — village-to-L3 linking
 
 
 # Facility types — used by layer builders

@@ -51,26 +51,31 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
         self.g.bind("geo", GEO)
         self.village_name = village_name
         self._parcel_count = 0
+        self._constraint_index = None
         self.memory = SemanticMemoryStore()
 
     # ── Main entry point ──
 
     def build_from_bundle(self, bundle, parcel_relations=None,
-                          intent=None, planned_state=None):
+                          intent=None, planned_state=None, constraint_index=None):
         """Build KG from VillageBundle morphology groups.
 
         Layer 1-2: Static entities + spatial relations from bundle + parcel_relations.
         Layer 3:   Intent virtual entities from SpatialPlanningIntent (optional).
         Layer 4:   Planned state from PlannedState (optional).
 
-        Does NOT depend on ContextBlock. ContextBlock is for PARSE prompt only.
+        Args:
+            constraint_index: Optional ConstraintIndex from spatial_ops.bridge,
+                injected for constraint violation checking (architecture: KG
+                does not import spatial_ops, receives it as a dependency).
         """
         self.g = Graph()
         self.g.bind("pln", PLN)
         self.g.bind("geo", GEO)
         self._parcel_count = 0
+        self._constraint_index = constraint_index
 
-        # Layer 1: each bundle layer → one entity type
+        # Layer 1: each bundle layer -> one entity type
         self._add_village_entity(bundle.village_name)
         self._add_village_meta_from_bundle(bundle)
         self._add_parcels(bundle.polygons.landuse_current)
@@ -79,7 +84,6 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
         self._add_facilities_from_typed(bundle.points.facilities_current)
         self._add_control_lines_from_typed(bundle.points, bundle.polygons)
         self._add_planning_elements_from_typed(bundle.polygons)
-        self._add_three_zone_three_line()
         self._add_natural_villages_from_typed(bundle.polygons.landuse_current)
         self.add_terrain(getattr(bundle.rasters, 'slope', None))
 
@@ -105,10 +109,11 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
         new_kg.g = Graph()
         new_kg.g.bind("pln", PLN)
         new_kg.g.bind("geo", GEO)
+        new_kg._constraint_index = self._constraint_index
 
         l1_types = {
             EntityTypes.AdministrativeVillage, EntityTypes.Parcel,
-            EntityTypes.ThreeZone, EntityTypes.ThreeLine, EntityTypes.Road,
+            EntityTypes.Road,
             EntityTypes.WaterBody, EntityTypes.Facility,
             PLN.ControlLine, EntityTypes.NaturalSettlement, EntityTypes.Zone,
         }

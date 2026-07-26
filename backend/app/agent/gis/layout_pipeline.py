@@ -2,8 +2,8 @@
 
 Architecture (LangGraph best practices):
   - Single StateGraph with GISPipelineState (Pydantic BaseModel)
-  - Deterministic skeleton: parse → fetch → KG → conflicts → allocate → validate → export → render
-  - ReAct subgraph in allocate_and_generate for adaptive strategy decisions
+  - Deterministic skeleton: fetch → build_kg → parse → write_kg_l3 → execute → export → render
+  - ReAct subgraph in execute for adaptive strategy decisions
   - Worker-Evaluator retry loop: validate → fail? → feedback → retry (max 3 rounds)
 
 References:
@@ -14,11 +14,9 @@ References:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Literal
 
-from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import StateGraph, END, START
-from langgraph.types import Command
 
 from .state import GISPipelineState, GISPipelineInput, GISPipelineOutput
 from app.utils.logger import get_logger
@@ -27,109 +25,6 @@ logger = get_logger(__name__)
 
 
 # ── Node implementations ──────────────────────────────────────────────
-
-
-async def _parse_intent_node(state: GISPipelineState) -> dict:
-    """Parse planning text via PARSE Agent subgraph.
-
-    Runs the spatially-aware PARSE Agent:
-      classify_sections -> extract_* -> validate_and_merge
-
-    Outputs:
-      - intent: legacy format (for backward compatibility during transition)
-      - intent_json: legacy format
-      - operation_sequence: List[SpatialOperation] with spatial anchors
-      - constraint_set: List[SpatialConstraint] with spatial rules
-      - planning_intent: SpatialPlanningIntent with zone targets
-      - spatial_context: SpatialContext summary
-    """
-    from app.agent.gis.parse.agent import build_parse_agent_graph, set_context_blocks
-    from app.agent.gis.parse.state import ParseAgentState, SpatialPlanningIntent
-    from app.modules.spatial_ops import compute_context_blocks
-
-    reports = state.reports or {}
-    village_name = state.village_name
-    gis_data = state.gis_data
-
-    if not reports and not village_name:
-        logger.info("[Pipeline:parse] No reports or village name — skipping parse")
-        return {}
-
-    # Extract planning text from reports
-    planning_text = ""
-    if reports:
-        for key, val in reports.items():
-            if isinstance(val, dict):
-                planning_text += val.get("content", val.get("text", ""))
-            elif isinstance(val, str):
-                planning_text += val
-    if not planning_text:
-        planning_text = state.intent_json.get("planning_text", "")
-
-    if not planning_text:
-        logger.info("[Pipeline:parse] No planning text found — skipping parse")
-        return {}
-
-    try:
-        # Compute spatial context blocks from GIS data
-        if state.gis_bundle is not None:
-            context_blocks = compute_context_blocks(state.gis_bundle)
-        elif gis_data:
-            # Fallback: load bundle from catalog if available
-            from app.modules.data.catalog.catalog import DataCatalog
-            catalog = DataCatalog()
-            bundle = catalog.load_village_bundle(village_name)
-            context_blocks = compute_context_blocks(bundle) if bundle else []
-        else:
-            context_blocks = []
-
-        # Set global context blocks for Tier 0 place resolution
-        set_context_blocks(context_blocks)
-
-        # Build and run PARSE Agent subgraph
-        graph = build_parse_agent_graph()
-        input_state = ParseAgentState(
-            planning_text=planning_text[:12000],  # Token limit
-            village_name=village_name,
-            context_blocks=context_blocks,
-        )
-
-        result = await graph.ainvoke(input_state.model_dump())
-
-        # Extract PARSE outputs — all typed (Phase 4: no bridge, no dict conversion)
-        operation_sequence = result.get("operation_sequence", [])
-        constraint_set = result.get("constraint_set", [])
-        planning_intent = result.get("planning_intent", SpatialPlanningIntent())
-        validation_errors = result.get("validation_errors", [])
-
-        zone_count = len(planning_intent.zone_targets) if hasattr(planning_intent, 'zone_targets') else 0
-
-        logger.info(
-            "[Pipeline:parse] Parsed: %d ops, %d constraints, %d zones",
-            len(operation_sequence), len(constraint_set), zone_count,
-        )
-        if validation_errors:
-            logger.warning("[Pipeline:parse] Validation errors: %s", validation_errors[:3])
-
-        return {
-            "intent": planning_intent,       # typed SpatialPlanningIntent — no bridge
-            "intent_json": planning_intent,
-            "operation_sequence": operation_sequence,
-            "constraint_set": constraint_set,
-            "planning_intent": planning_intent,
-            "context_blocks": [
-                {
-                    "block_type": b.block_type.value,
-                    "title": b.title,
-                    "data": b.data,
-                    "priority": b.priority,
-                }
-                for b in context_blocks
-            ],
-        }
-    except Exception as e:
-        logger.warning("[Pipeline:parse] Parse failed: %s — continuing with empty intent", e)
-        return {"intent": SpatialPlanningIntent(), "intent_json": SpatialPlanningIntent()}
 
 
 async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
@@ -159,7 +54,7 @@ async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
 
 
 async def _build_kg_node(state: GISPipelineState) -> dict:
-    """Build knowledge graph from intent + GIS data.
+    """Build Layer 1+2 KG from GIS bundle data.
 
     Uses KGManager for Layer 1 caching — same village + landuse skips
     expensive _add_spatial_relations rebuild.
@@ -225,6 +120,132 @@ async def _build_kg_node(state: GISPipelineState) -> dict:
         return {}
 
 
+async def _parse_intent_node(state: GISPipelineState) -> dict:
+    """Parse planning text via PARSE Agent subgraph.
+
+    Runs after fetch_gis_data + build_kg so PARSE can query the live KG:
+      classify_sections -> extract_* -> validate_and_merge
+
+    Outputs:
+      - intent / planning_intent: SpatialPlanningIntent with zone targets
+      - operation_sequence: List[SpatialOperation] with spatial anchors
+      - constraint_set: List[SpatialConstraint] with spatial rules
+    """
+    from app.agent.gis.parse.agent import build_parse_agent_graph, set_context_blocks, set_grounding_context
+    from app.agent.gis.parse.state import ParseAgentState, SpatialPlanningIntent
+    from app.modules.spatial_ops import compute_context_blocks, build_constraint_index
+
+    reports = state.reports or {}
+    village_name = state.village_name
+
+    if not reports and not village_name:
+        logger.info("[Pipeline:parse] No reports or village name — skipping parse")
+        return {}
+
+    # Extract planning text from reports
+    planning_text = ""
+    if reports:
+        for key, val in reports.items():
+            if isinstance(val, dict):
+                planning_text += val.get("content", val.get("text", ""))
+            elif isinstance(val, str):
+                planning_text += val
+    if not planning_text:
+        planning_text = state.intent_json.get("planning_text", "")
+
+    if not planning_text:
+        logger.info("[Pipeline:parse] No planning text found — skipping parse")
+        return {}
+
+    try:
+        # GIS bundle is already available (from fetch_gis_data node)
+        bundle = state.gis_bundle
+        context_blocks = compute_context_blocks(bundle) if bundle else []
+
+        # Set global context blocks for Tier 0 place resolution
+        set_context_blocks(context_blocks)
+
+        # Set global grounding context for geometric spatial grounding
+        constraint_index = build_constraint_index(bundle) if bundle else None
+        set_grounding_context(bundle=bundle, constraint_index=constraint_index)
+
+        # Build and run PARSE Agent subgraph
+        graph = build_parse_agent_graph()
+        input_state = ParseAgentState(
+            planning_text=planning_text[:12000],  # Token limit
+            village_name=village_name,
+            context_blocks=context_blocks,
+        )
+
+        result = await graph.ainvoke(input_state.model_dump())
+
+        # Extract PARSE outputs — all typed
+        operation_sequence = result.get("operation_sequence", [])
+        constraint_set = result.get("constraint_set", [])
+        planning_intent = result.get("planning_intent", SpatialPlanningIntent())
+
+        zone_count = len(planning_intent.zone_targets) if hasattr(planning_intent, 'zone_targets') else 0
+
+        logger.info(
+            "[Pipeline:parse] Parsed: %d ops, %d constraints, %d zones",
+            len(operation_sequence), len(constraint_set), zone_count,
+        )
+
+        return {
+            "intent": planning_intent,
+            "intent_json": planning_intent,
+            "operation_sequence": operation_sequence,
+            "constraint_set": constraint_set,
+            "planning_intent": planning_intent,
+            "context_blocks": [
+                {
+                    "block_type": b.block_type.value,
+                    "title": b.title,
+                    "data": b.data,
+                    "priority": b.priority,
+                }
+                for b in context_blocks
+            ],
+        }
+    except Exception as e:
+        logger.warning("[Pipeline:parse] Parse failed: %s — continuing with empty intent", e)
+        return {"intent": SpatialPlanningIntent(), "intent_json": SpatialPlanningIntent()}
+
+
+async def _write_kg_l3_node(state: GISPipelineState) -> dict:
+    """Write Layer 3 intent entities (ZoneTarget, FacilityTarget, etc.) to KG.
+
+    After PARSE produces the intent, write L3 virtual entities with
+    spatial anchoring triples. Reads the session KG built by _build_kg_node.
+    """
+    from app.modules.kg.manager import get_kg_manager
+
+    session_id = state.session_id
+    intent = state.intent
+
+    if not session_id or not intent:
+        logger.info("[Pipeline:write_kg_l3] No session or intent — skipping")
+        return {}
+
+    try:
+        manager = get_kg_manager()
+        kg = manager.get_session_kg(session_id)
+        if kg is None:
+            logger.warning("[Pipeline:write_kg_l3] No KG for session %s", session_id)
+            return {}
+
+        kg.build_intent_layer(intent)
+        kg_turtle = kg.to_turtle()
+        kg_version = state.kg_version + 1
+        manager.bump_version(session_id)
+
+        logger.info("[Pipeline:write_kg_l3] L3 written: %d triples", len(kg_turtle.split("\n")) if kg_turtle else 0)
+        return {"kg_turtle": kg_turtle, "kg_version": kg_version}
+    except Exception as e:
+        logger.error("[Pipeline:write_kg_l3] Failed: %s", e)
+        return {}
+
+
 async def _detect_conflicts_node(state: GISPipelineState) -> dict:
     """Detect cross-dimension conflicts."""
     from app.tools.gis.conflict import detect_conflicts
@@ -241,88 +262,6 @@ async def _detect_conflicts_node(state: GISPipelineState) -> dict:
     except Exception as e:
         logger.warning("[Pipeline:conflicts] Detection failed: %s", e)
         return {}
-
-
-async def _allocate_generate_react_node(state: GISPipelineState) -> dict:
-    """ReAct subgraph: LLM adaptively decides allocation strategy and layout params.
-
-    Within the deterministic skeleton, this node gives LLM flexibility to:
-      - Query KG constraints and decide allocation targets
-      - Adjust strategy based on validation feedback from prior rounds
-      - Cannot skip KG or skip VALIDATE (skeleton guarantees this)
-    """
-    from .agent import create_layout_agent_graph
-
-    validation_result = state.get("validation_result", {})
-    validation_feedback = ""
-
-    if validation_result and not validation_result.get("passed", True):
-        violations = validation_result.get("violations", [])
-        violation_summary = str(violations[:3]) if violations else "unknown"
-        validation_feedback = (
-            f"上轮验证发现 {len(violations)} 个违规，请调整分配策略。\n"
-            f"违规详情：{violation_summary}"
-        )
-
-    messages = list(state.get("messages", []))
-    if validation_feedback:
-        messages.append(HumanMessage(content=validation_feedback))
-
-    try:
-        layout_agent = create_layout_agent_graph()
-        result = await layout_agent.ainvoke({
-            "session_id": state.session_id,
-            "village_name": state.village_name,
-            "gis_data": state.gis_data,
-            "intent": state.intent,
-            "kg_turtle": state.kg_turtle,
-            "kg_constraints": state.kg_constraints,
-            "layout_configs": state.layout_configs,
-            "allocated_geojson": state.allocated_geojson,
-            "allocation_summary": state.allocation_summary,
-            "messages": messages,
-        })
-
-        return {
-            "allocated_geojson": result.get("allocated_geojson", {}),
-            "allocation_summary": result.get("allocation_summary", {}),
-            "layout_configs": result.get("layout_configs", []),
-            "messages": result.get("messages", []),
-        }
-    except Exception as e:
-        logger.error("[Pipeline:allocate_generate] ReAct subgraph failed: %s", e)
-        return {}
-
-
-async def _validate_layout_node(state: GISPipelineState) -> dict:
-    """Evaluator gate: validate layout, decide retry or pass."""
-    from app.tools.gis.validate import validate_layout
-
-    try:
-        result = await validate_layout.ainvoke({})
-        passed = False
-        violations = []
-        if isinstance(result, dict):
-            passed = result.get("is_valid", result.get("passed", False))
-            violations = result.get("violations", [])
-
-        round_num = state.validation_round + 1
-
-        logger.info(
-            "[Pipeline:validate] Round %d: %s (%d violations)",
-            round_num, "PASS" if passed else "FAIL", len(violations),
-        )
-
-        return {
-            "validation_result": {
-                "passed": passed,
-                "violations": violations if not passed else [],
-            },
-            "validation_round": round_num,
-        }
-    except Exception as e:
-        logger.error("[Pipeline:validate] Validation failed: %s", e)
-        return {"validation_result": {"passed": True, "violations": []}, "validation_round": state.validation_round + 1}
 
 
 async def _export_gdb_node(state: GISPipelineState) -> dict:
@@ -351,7 +290,7 @@ async def _render_map_node(state: GISPipelineState) -> dict:
         return {"render_result": []}
 
 
-# ── EXECUTE node (replaces allocate_and_generate + validate) ─────────
+# ── EXECUTE node ──────────────────────────────────────────────────────
 
 
 async def _execute_node(state: GISPipelineState) -> dict:
@@ -434,7 +373,11 @@ def _route_after_validation(state: GISPipelineState) -> Literal["pass", "retry"]
 def build_layout_pipeline():
     """Build the unified GIS LAYOUT pipeline StateGraph.
 
-    Pipeline: parse → fetch → KG → conflicts → allocate+generate → validate → export → render
+    Pipeline: fetch → build_kg → parse → write_kg_l3 → execute → export → render
+
+    PARSE runs after fetch + build_kg so it can query the live KG for
+    spatial grounding. L3 intent entities are written as a separate node
+    after PARSE completes.
 
     The pipeline uses Pydantic BaseModel state (GISPipelineState) with
     input_schema (GISPipelineInput) and output_schema (GISPipelineOutput)
@@ -449,33 +392,37 @@ def build_layout_pipeline():
         output_schema=GISPipelineOutput,
     )
 
-    # ── Input nodes ──
-    graph.add_node("parse_intent", _parse_intent_node)
+    # ── Data nodes ──
     graph.add_node("fetch_gis_data", _fetch_gis_data_node)
+    graph.add_node("build_kg", _build_kg_node)
+
+    # ── PARSE node ──
+    graph.add_node("parse_intent", _parse_intent_node)
+    graph.add_node("write_kg_l3", _write_kg_l3_node)
 
     # ── Deterministic skeleton ──
-    graph.add_node("build_kg", _build_kg_node)
     graph.add_node("detect_conflicts", _detect_conflicts_node)
 
-    # ── EXECUTE Agent subgraph (replaces allocate_and_generate + validate) ──
+    # ── EXECUTE Agent subgraph ──
     graph.add_node("execute", _execute_node)
 
     # ── Post-processing ──
     graph.add_node("export_gdb", _export_gdb_node)
     graph.add_node("render_map", _render_map_node)
 
-    # ── Edges ──
-    graph.add_edge(START, "parse_intent")
-    graph.add_edge("parse_intent", "fetch_gis_data")
+    # ── Edges (new order: fetch -> build_kg -> parse -> write_kg_l3 -> execute) ──
+    graph.add_edge(START, "fetch_gis_data")
     graph.add_edge("fetch_gis_data", "build_kg")
-    graph.add_edge("build_kg", "detect_conflicts")
+    graph.add_edge("build_kg", "parse_intent")
+    graph.add_edge("parse_intent", "write_kg_l3")
+    graph.add_edge("write_kg_l3", "detect_conflicts")
     graph.add_edge("detect_conflicts", "execute")
     graph.add_edge("execute", "export_gdb")
     graph.add_edge("export_gdb", "render_map")
     graph.add_edge("render_map", END)
 
     compiled = graph.compile()
-    logger.info("[Pipeline] Unified pipeline compiled: 8 nodes (execute subgraph inline)")
+    logger.info("[Pipeline] Unified pipeline compiled: 9 nodes (fetch -> build_kg -> parse -> write_kg_l3 -> execute)")
     return compiled
 
 

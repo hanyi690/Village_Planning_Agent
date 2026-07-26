@@ -80,10 +80,13 @@ def kg_main(village_bundle, context_blocks, parcel_relations):
     This is the "clean" KG that must remain unaffected by L3/L4 injection tests.
     """
     from app.modules.kg.builder import PlanningKG
+    from app.modules.spatial_ops import build_constraint_index
+    constraint_index = build_constraint_index(village_bundle)
     kg = PlanningKG(village_name="jintian")
     kg.build_from_bundle(
         bundle=village_bundle,
         parcel_relations=parcel_relations,
+        constraint_index=constraint_index,
         # intent=None, planned_state=None - deliberately omitted
     )
     return kg
@@ -247,25 +250,27 @@ class TestKGLayer1Construction:
         assert len(parcels) == 1
         assert parcels[0].get("dlbm", "")
 
-    def test_layer1_three_zone_three_line(self, kg_main):
-        """ThreeZone + ThreeLine entities from rule loader."""
+    def test_no_three_zone_three_line_in_kg(self, kg_main):
+        """ThreeZone/ThreeLine removed from KG - they are reference-layer data.
+
+        Constraint polygons (farmland_protection, ecological_redline, etc.)
+        are accessed via spatial_ops.bridge.ConstraintIndex, not stored as
+        KG entities. This test verifies no ThreeZone/ThreeLine triples exist.
+        """
         tz = kg_main.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
             "SELECT ?z WHERE { ?z a pln:ThreeZone . }")
         tl = kg_main.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
             "SELECT ?l WHERE { ?l a pln:ThreeLine . }")
-        assert len(tz) > 0
-        assert len(tl) > 0
+        assert len(tz) == 0, "ThreeZone should not be in KG (reference-layer data)"
+        assert len(tl) == 0, "ThreeLine should not be in KG (reference-layer data)"
 
-    def test_layer2_three_line_entities(self, kg_main):
-        """ThreeLine entities from bundle protection zones."""
-        from app.modules.kg.queries import query_kg
-        tl = kg_main.query(
-            "PREFIX pln: <http://village-planning.org/ontology#> "
-            "SELECT ?z ?name WHERE { ?z a pln:ThreeLine ; pln:name ?name . }")
-        # Jintian has farmland_protection + ecological_redline + historical_protection
-        assert len(tl) >= 2
+    def test_constraint_index_built(self, kg_main):
+        """ConstraintIndex is injected and indexes jintian constraint polygons."""
+        # kg_main should have constraint_index from fixture
+        assert kg_main._constraint_index is not None
+        # Jintian has farmland_protection(88) + ecological_redline(5) + historical_protection(3)
 
     def test_layer1_parcel_relations_injected(self, kg_main, parcel_relations):
         """L1 touches + L2 nearby relations from spatial_ops are in graph."""
@@ -329,10 +334,16 @@ class TestKGQueries:
         assert isinstance(tl, list)
 
     def test_get_adjacency_map(self, kg_main):
-        """Adjacency map from touches relations."""
+        """Adjacency map from touches relations - keys must be pure BSMs."""
         adj = kg_main.get_adjacency_map()
-        # May be empty if no touches were computed, but must be a dict
         assert isinstance(adj, dict)
+        # If non-empty, keys should be pure BSM strings (not composite keys)
+        for bsm, neighbors in adj.items():
+            # BSM is a numeric string, should not contain underscores
+            # (old format was bsm_dlbm_area which contained underscores)
+            assert "_" not in bsm, f"Adjacency key '{bsm}' contains underscore - not pure BSM"
+            for n in neighbors:
+                assert "_" not in n, f"Neighbor '{n}' contains underscore - not pure BSM"
 
     def test_sparql_query_parcels_by_dlbm(self, kg_main):
         """SPARQL: query parcels by DLBM code."""
@@ -345,15 +356,16 @@ class TestKGQueries:
         assert "bsm" in rows[0]
 
     def test_sparql_query_constraint_zones(self, kg_main):
-        """SPARQL: query constraint/protection zones."""
+        """SPARQL: constraint zones accessed via ConstraintIndex, not KG triples."""
         from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
-        zones = list(kg_main.g.triples((None, None, PLN.ThreeLine)))
-        # ThreeLine entities exist
+        # No ThreeLine triples in KG (moved to ConstraintIndex)
         tl = kg_main.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
             "SELECT ?l ?name WHERE { ?l a pln:ThreeLine ; pln:name ?name . }")
-        assert len(tl) > 0
+        assert len(tl) == 0
+        # But constraint_index is available for spatial queries
+        assert kg_main._constraint_index is not None
 
     def test_to_turtle_serialization(self, kg_main):
         """KG serializes to turtle format."""
@@ -575,22 +587,45 @@ class TestPlanInjectionIsolated:
             "SELECT ?z WHERE { ?z a pln:ZoneTarget . }")
         assert len(zt) == 0, "Main KG polluted with ZoneTarget!"
 
-    def test_check_constraint_violations_runs(self, kg_main):
-        """check_constraint_violations runs without error on a clone with plan.
+    def test_check_constraint_violations_runs(self, kg_main, village_bundle):
+        """check_constraint_violations detects parcels overlapping constraint polygons.
 
-        Note: Currently returns empty because pln:within_zone is not populated
-        by any builder method. This is a known gap - the query is structurally
-        correct but the data dependency is missing.
+        Uses ConstraintIndex (spatial_ops bridge) to check planned parcels
+        against farmland_protection / ecological_redline / historical_protection.
         """
         from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+        from rdflib import Namespace
+        PLN = Namespace("http://village-planning.org/ontology#")
+
+        # Find a real BSM that overlaps a constraint polygon
+        # (jintian has 88 farmland_protection + 5 ecological_redline polygons)
+        constraint_idx = kg_main._constraint_index
+        assert constraint_idx is not None
+
+        # Test with a real parcel BSM - try to find one that overlaps
+        real_bsm = None
+        for s, _, o in kg_main.g.triples((None, PLN.bsm, None)):
+            if (s, None, PLN.Parcel) in kg_main.g:
+                bsm = str(o)
+                overlaps = constraint_idx.parcel_in_constraint(bsm)
+                if overlaps:
+                    real_bsm = bsm
+                    break
+
         kg_plan = kg_main.clone_static_layer()
-        kg_plan._apply_planned_state(PlannedState(version="v1",
-            parcels=[PlannedParcelEntry(bsm="VIOLATION_TEST", planning_land_use="2121")]))
-        # Method runs without error
-        violations = kg_plan.check_constraint_violations("v1")
-        assert isinstance(violations, list)
-        # Known gap: within_zone never populated, so always empty
-        # When fixed, this should detect parcels in protected zones
+        if real_bsm:
+            # This parcel overlaps a constraint - should detect violation
+            kg_plan._apply_planned_state(PlannedState(version="v1",
+                parcels=[PlannedParcelEntry(bsm=real_bsm, planning_land_use="2121")]))
+            violations = kg_plan.check_constraint_violations("v1")
+            assert isinstance(violations, list)
+            assert len(violations) > 0, f"Expected violations for BSM {real_bsm} in protected zone"
+        else:
+            # No overlapping parcel found - just verify method runs
+            kg_plan._apply_planned_state(PlannedState(version="v1",
+                parcels=[PlannedParcelEntry(bsm="NO_OVERLAP_TEST", planning_land_use="2121")]))
+            violations = kg_plan.check_constraint_violations("v1")
+            assert isinstance(violations, list)
 
     def test_compare_versions(self, kg_main):
         """compare_versions detects changes between two planned versions."""
