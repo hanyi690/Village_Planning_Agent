@@ -1,18 +1,22 @@
 # 村庄规划智能系统 — 总体设计文档
 
-> **Status: [CURRENT] | Type: North-Star Design | Version: 4.0 | Updated: 2026-07-25**
+> **Status: [CURRENT] | Type: North-Star Design | Version: 4.6 | Updated: 2026-07-26**
 > **Scope**: 系统总体架构设计，覆盖 Schema / Data / KG / PARSE / EXECUTE 五层，回答 6 个核心设计问题
 > **Audience**: 系统架构师、核心开发者
 > **Replaces**: 00_PLANNING_SYSTEM_VISION.md + 01_DESIGN_GOALS.md + 02_OUTPUT_ARCHITECTURE.md (合并、精简、去矛盾)
 > **Archived**: 旧文档已迁入 `archive/` 目录
 >
-> **v4.0 变更摘要（2026-07-25）**：
+> **v4.6 变更摘要（2026-07-26）**：
 >
-> - Schema 引入 Point/Line/Polygon 几何中间抽象 + RasterDataset 栅格分支（详见 `backend/app/modules/schema/README.md`）
-> - `GISDataBundle` 现状/规划地块分离（`current_landuse`/`planned_landuse`），根治"双倍地块"，不保留兼容视图
-> - Data 层双轨接入：显式注册 + 智能推断管道（矢量按几何分桶+字段语义匹配，栅格按波段+值域匹配），详见 `backend/app/modules/data/README.md`
-> - `backend/app/modules/gis/` 整体删除，无 shim 无兼容层
-> - `reference/OPTIMIZATION_TASKS.md` 重写为 parse/kg/layout 大修任务清单
+> - KG 重构：只存有几何的空间实体，删除非空间类型（ControlRule, PlanningIndicator, Constraint, PlanIntent）
+> - 删除 8 个关系类型（constrained_by, achieves, conflicts_with, conducted_from, controls_use, protects, adjacent_to, location_constraint）
+> - 新增 SemanticMemoryStore：实体 + 关系注解，替代 _semantic_store
+> - 新增 L3 意图虚拟实体：Intent → 粗糙几何 + 空间关系
+> - 新增 L4 PlannedState：规划成果增量聚合，形态对齐 bundle
+> - KG builder 从 bundle 形态分组直连，不依赖 ContextBlock
+> - ContextBlock 和 PlanBlock 对称——都是 Agent 的"工作记忆"，不进 KG
+> - ConstraintCompiler 废弃——MIP 直接消费 SPARQL 结果
+> - 删除 `queries/llm.py`（死代码）、`_semantic_store` 字段
 >
 > **v4.1 变更摘要（2026-07-25）**：
 >
@@ -96,8 +100,8 @@
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ KG Layer (语义桥接)                                        │ │
 │  │ Layer1 静态 (Ontology + 编码) | Layer2 语义 (关系+约束)     │ │
-│  │ Layer3 易失 (Intent + Operations)                          │ │
-│  │ RDFLib Graph + SPARQL 查询                                 │ │
+│  │ Layer3 易失 (Intent ) |Layer planblock 规划增量                         │ │
+│  │ RDFLib Graph + SPARQL 查询    +面对LLM的语义查询+json的实体附带的语义文件                             │ │
 │  └──────────────────────────────┬─────────────────────────────┘ │
 │                                 │ depends                       │
 │         ┌───────────────────────┼───────────────────────┐       │
@@ -145,6 +149,34 @@
 **职责**：数据的获取、校验、类型化、缓存、持久化。是 raw 数据进入类型化模型的**唯一端口**。
 
 **核心概念**：
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Layer 3: Catalog (声明式编排)                           │
+│  sources.yaml -> DataCatalog.load_village_bundle()       │
+├─────────────────────────────────────────────────────────┤
+│  Layer 2: Source / Driver (形态驱动读取)                  │
+│  file_vector | api_vector | wmts_tile | local_raster    │
+│  | remote_raster | document                              │
+├─────────────────────────────────────────────────────────┤
+│  Layer 1: Connection (连接管理)                          │
+│  tianditu | amap | osm | gd_tianditu                     │
+└─────────────────────────────────────────────────────────┘
+         │
+         ▼  (DataResult -> ingest -> typed models)
+         ▼  (_assign_to_bundle: isinstance dispatch -> morphology groups)
+┌─────────────────────────────────────────────────────────┐
+│  VillageBundle (v4.3 形态优先 dataclass)                 │
+│  ├── points:   PointLayerGroup (设施/建筑/注记/高程/灾害)│
+│  ├── lines:    LineLayerGroup (道路/等高线/行政界线)     │
+│  ├── polygons: PolygonLayerGroup (地块/保护/管控/水系)   │
+│  ├── rasters:  RasterLayerGroup (DEM/DOM/坡度/坡向)     │
+│  ├── tables:   TableLayerGroup (人口/管制规则/指标)      │
+│  ├── documents: DocumentGroup (规划文本/L3 报告)          │
+│  └── compute_context_blocks(bundle) -> List[ContextBlock] │
+└─────────────────────────────────────────────────────────┘
+```
+
 
 | 概念                      | 职责                                                                  | 类比               |
 | ------------------------- | --------------------------------------------------------------------- | ------------------ |
@@ -342,72 +374,74 @@ CREATE TABLE layer_registry (
 ### 3.1 KG 定位
 
 KG 是 PARSE 与 EXECUTE 之间的**唯一语义中间态**。它不是数据存储（Data 层负责），而是
-**语义索引层**——将空间要素、关系、约束、意图统一编码为 RDF 三元组，使下游能通过 SPARQL
-获取语义理解结果。
+**语义索引层**——只存储有几何的空间实体及其关系，不存储非空间要素。
+
+**核心原则**：KG 只存"有几何的空间要素"。非空间要素（规则、指标、约束数值）通过
+`bundle.tables` 或 `ContextBlock` 传递。
 
 **KG 存储什么**（不存储什么）：
 
-- ✅ 实体 URI + 属性 + 关系（语义层）
-- ✅ 规划约束（数值 + 规则）
-- ✅ 空间关系（邻接、包含、定位）
-- ✅ 规划意图（分区目标、设施布局、轴线）
-- ❌ 原始几何坐标（Data 层负责存储和查询）
-- ❌ GeoJSON 文件路径（Data 层负责管理）
+- ✅ 实体 URI + 属性 + 空间关系（语义层）
+- ✅ 空间关系（touches、nearby、within_zone）
+- ✅ 意图虚拟实体（L3 易失层，粗糙几何）
+- ✅ 规划成果实体（L4 版本化，精确几何）
+- ❌ 原始几何坐标（Data 层负责存储和查询，KG 只存 centroid）
+- ❌ 规划约束数值（由 ContextBlock 承载）
+- ❌ 管制规则（由 `bundle.tables.control_rules` 承载）
+- ❌ 规划指标（由 `bundle.tables.planning_indicators` 承载）
+- ❌ 语义注解（由 `SemanticMemoryStore` 承载，非 RDF）
 
-### 3.2 三层模型
+### 3.2 四层模型
 
 ```
 ┌──────────────────────────────────────────────┐
-│ Layer 3: 易失层 (Volatile)                    │
-│ PARSE 产出 → 写入 KG → EXECUTE 读取           │
-│ - SpatialPlanningIntent (zone_targets, ...)  │
-│ - SpatialOperation (create/split/merge/...)  │
-│ - SpatialConstraint (area/spatial/building)  │
-│ - 校验反馈 (adjustments)                      │
-│ 生命周期: 单次 pipeline 运行                   │
+│ Layer 4: 规划成果层 (PlannedState)             │
+│ EXECUTE 产出 → 版本化规划实体                  │
+│ - PlannedParcel (规划地块)                     │
+│ - PlannedRoad (规划道路)                       │
+│ - PlannedFacility (规划设施点)                 │
+│ 生命周期: 会话持久（可多版并存）                │
 ├──────────────────────────────────────────────┤
-│ Layer 2: 语义层 (Semantic)                     │
-│ 空间关系 + 约束 (从 Geometry 计算)              │
-│ - 邻接关系 (adjacent_to)                      │
-│ - 包含关系 (within_zone, located_in)          │
-│ - 保护关系 (protects, constrained_by)         │
-│ - 规划约束 (construction_cap, farmland_min)   │
-│ 生命周期: 村级 (不变更，除非数据更新)            │
+│ Layer 3: 意图易失层 (Intent Virtual Entities)  │
+│ PARSE 意图 → 粗糙几何 + 空间关系               │
+│ - ZoneTarget (分区目标, 粗糙bbox)              │
+│ - FacilityTarget (设施目标, 点+缓冲区)         │
+│ - RoadTarget (道路目标, 线+缓冲区)             │
+│ 生命周期: 单次规划会话，结束后清除              │
 ├──────────────────────────────────────────────┤
-│ Layer 1: 静态层 (Static)                      │
-│ 本体 + 编码字典 (不可变)                        │
-│ - EntityTypes (23 实体类型)                    │
-│ - Relations (14 关系类型)                      │
-│ - 编码体系 (6 套编码)                           │
-│ - 规则模板 (规划目标、空间管制规则)              │
-│ 生命周期: 应用级 (启动时加载)                    │
+│ Layer 2: 空间关系层 (Spatial Relations)        │
+│ 由 spatial_ops 计算，KG 存储索引               │
+│ - touches, nearby, connected_via_road          │
+│ - within_zone, located_in, delineates          │
+│ - designated_as, derived_from, serves          │
+│ 生命周期: 村级持久（不变更，除非数据更新）      │
+├──────────────────────────────────────────────┤
+│ Layer 1: 现状实体层 (Static Entities)          │
+│ 本体 + 空间实体（从 bundle 形态分组直连）       │
+│ - Parcel, Road, WaterBody, Facility            │
+│ - Zone, ThreeZone, ThreeLine                   │
+│ - FarmlandProtection, EcologicalRedline, ...   │
+│ 生命周期: 应用级（数据更新时重建）              │
 └──────────────────────────────────────────────┘
 ```
 
 ### 3.3 KG 消费 Schema
 
-KG 的 Builder 只通过类型化 Schema 模型接收数据，不直接解析 GeoJSON：
+KG 的 Builder 直接从 `VillageBundle` 的形态分组读取类型化数据，不依赖 ContextBlock。
+ContextBlock 只作为 PARSE 的 prompt 上下文（agent 记忆），不进入 KG 构建路径。
 
 ```python
-# ✅ 正确：通过类型化模型
+# ✅ 正确：通过类型化模型 + bundle 形态分组直连
+kg.build_from_bundle(
+    bundle=bundle,              # VillageBundle — 类型化形态视图
+    parcel_relations=relations, # ParcelRelations — 三层空间关系（外部计算）
+    intent=intent,              # SpatialPlanningIntent → L3 虚拟实体（可选）
+    planned_state=planned,      # PlannedState → L4 规划成果（可选）
+)
+
+# ❌ 禁止：KG 从 ContextBlock 读取
 class PlanningKG:
-    def add_parcels(self, parcels: List[CurrentLandUseParcel]) -> None:
-        for p in parcels:
-            self._add_parcel_entity(p)  # p.bsm, p.dlbm, p.area_ha, p.geometry
-
-    def add_facilities(self, facilities: List[CurrentFacility]) -> None:
-        ...
-
-    def add_roads(self, roads: List[CurrentRoad]) -> None:
-        ...
-
-    def add_protection_zones(self, zones: List[FarmlandProtection | EcologicalRedline]) -> None:
-        ...
-
-# ❌ 禁止：KG 直接读 GeoJSON
-class PlanningKG:
-    def build_from_geojson(self, landuse: dict, annotations: dict) -> None:  # 禁止
-        ...
+    def build_from_blocks(self, blocks, ...)  # 禁止 — ContextBlock 是 agent 记忆，不进 KG
 ```
 
 **关键**：KG 的 geometry 操作（如计算邻接关系、质心坐标）不应在 KG 内部实现。
@@ -419,10 +453,9 @@ PARSE 产出写入 KG 的 Layer 3（易失层）：
 
 ```
 PARSE Agent
-  → SpatialPlanningIntent  → KG.add_intent(intent)     # 分区目标、设施、轴线
-  → SpatialOperation[]     → KG.add_operations(ops)     # 原子操作序列
-  → SpatialConstraint[]    → KG.add_constraints(cons)   # 空间约束
-  → 编码/地名映射          → KG.add_mappings(mappings)   # lookup_code/resolve_place 结果
+  → SpatialPlanningIntent  → KG.build_intent_layer(intent)
+                              → ZoneTarget/FacilityTarget/RoadTarget 虚拟实体
+                              → spatial_ops 计算虚拟实体与 L1 的空间关系
 ```
 
 **写入接口**：
@@ -430,13 +463,109 @@ PARSE Agent
 ```python
 class PlanningKG:
     # Layer 3 写入 (PARSE → KG)
-    def add_intent(self, intent: SpatialPlanningIntent) -> None:
-        """写入分区目标、设施布局、发展轴线"""
+    def build_intent_layer(self, intent: SpatialPlanningIntent) -> None:
+        """写入意图虚拟实体 + 粗糙几何 + 空间关系"""
         for zt in intent.zone_targets:
-            self._add_zone_target(zt)  # pln:ZoneTarget 实体
+            self._add_zone_target_virtual(zt)  # pln:Intent/zone_target_1 (粗糙 bbox)
         for ft in intent.facilities:
-            self._add_facility_target(ft)  # pln:FacilityTarget 实体
+            self._add_facility_target_virtual(ft)  # pln:Intent/facility_1 (点+缓冲区)
         for at in intent.development_axes:
+            self._add_axis_target_virtual(at)  # pln:Intent/axis_1 (线+缓冲区)
+        # 触发 spatial_ops 计算虚拟实体与 L1 的空间关系
+
+    def clear_intent_layer(self) -> None:
+        """清除 Layer 3 临时实体"""
+```
+
+### 3.5 KG 对接 EXECUTE（读取）
+
+EXECUTE 从 KG 读取约束和语义信息。MIP 求解器直接消费 SPARQL 结果，不经过 ConstraintCompiler：
+
+```
+EXECUTE Agent
+  ← KG.query("get_constraints")          # 所有约束 → MIP 软约束 (slack)
+  ← KG.query("get_adjacent_parcels")     # 邻接关系 → MIP 邻接成本矩阵
+  ← KG.query("get_protected_parcels")    # 保护地块 → MIP 变量锁定
+  ← KG.query("get_three_lines")          # 三线 → MIP 硬约束
+  ← KG.query("get_facility_locations")   # 设施位置 → 设施布局
+  ← KG.query("count_by_vne")             # VNE 汇总 → 验证参考
+  ← intent.zone_targets                  # 分区目标 → 目标面积 (直接从 intent 对象)
+```
+
+**读取接口**：
+
+```python
+class PlanningKG:
+    # Layer 2+3 读取 (KG → EXECUTE)
+    def get_constraints(self) -> List[Dict]:
+        """获取所有约束（SPARQL → MIP 软约束）"""
+        return self.query("get_constraints")
+
+    def get_adjacency_map(self) -> Dict[str, List[str]]:
+        """获取地块邻接关系"""
+        return self.query("get_adjacent_parcels")
+
+    def get_protected_parcels(self) -> List[str]:
+        """获取受保护地块 BSM 列表"""
+        return self.query("check_protected_parcels")
+
+    def get_three_lines(self) -> List[Dict]:
+        """获取三线边界"""
+        return self.query("get_three_lines")
+```
+
+### 3.6 本体设计
+
+**实体类型**：只包含有几何的空间实体。非空间要素（ControlRule、PlanningIndicator、Constraint）
+从 KG 移出，由 `bundle.tables` 或 ContextBlock 承载。
+
+| 形态 | 实体 | 对应 Schema 类型 | KG 层 |
+|------|------|-----------------|-------|
+| 面 | Parcel | CurrentLandUseParcel | L1 |
+| 面 | WaterBody | WaterFeature | L1 |
+| 面 | BuildingGroup | CurrentBuilding | L1 |
+| 面 | Zone | — | L1 |
+| 面 | ThreeZone | ThreeZoneItem | L1 |
+| 面 | ThreeLine | ThreeLineItem | L1 |
+| 面 | FarmlandProtection | FarmlandProtection | L1 |
+| 面 | EcologicalRedline | EcologicalRedline | L1 |
+| 面 | HistoricalProtection | HistoricalProtection | L1 |
+| 面 | VillageDevBoundary | VillageDevBoundary | L1 |
+| 面 | HazardControlLine | HazardControlLine | L1 |
+| 面 | FloodControlLine | FloodControlLine | L1 |
+| 面 | ConditionalConstructionZone | ConditionalConstructionZone | L1 |
+| 面 | LandUseZone | LandUseZone | L1 |
+| 面 | ConstructionCtrlZone | ConstructionCtrlZone | L1 |
+| 面 | PlanningScope | PlanningScope | L1 |
+| 面 | AdministrativeVillage | AdminArea | L1 |
+| 面 | NaturalSettlement | (从用地聚类) | L1 |
+| 点 | Facility | CurrentFacility | L1 |
+| 线 | Road | CurrentRoad | L1 |
+| 面 | ZoneTarget | ZoneTarget (parse_contracts) | L3 |
+| 点 | FacilityTarget | FacilityTarget | L3 |
+| 线 | RoadTarget | RoadTarget | L3 |
+| 线 | AxisTarget | AxisTarget | L3 |
+| 面 | PlannedParcel | PlannedLandUseParcel | L4 |
+| 点 | PlannedFacility | PlannedFacility | L4 |
+| 线 | PlannedRoad | PlannedRoad | L4 |
+
+**关系类型**：
+
+| 关系 | 含义 | 类别 | 用于 |
+|------|------|------|------|
+| `touches` | 拓扑邻接 | 空间拓扑 | MIP 邻接规则、地块合并 |
+| `nearby` | 近邻关系（≤200m） | 空间拓扑 | 设施选址 |
+| `connected_via_road` | 路网连通 | 空间拓扑 | 交通可达性 |
+| `within_zone` | 包含于分区 | 空间拓扑 | 分区查询 |
+| `located_in` | 位于 | 空间拓扑 | 村名→地块映射 |
+| `delineates` | 划定 | 空间拓扑 | 三线划定 |
+| `designated_as` | 被指定为 | 规划语义 | 用地分类 |
+| `derived_from` | 源于 | 规划语义 | 溯源 |
+| `serves` | 服务 | 规划语义 | 设施覆盖 |
+
+**已删除的关系**（不再属于 KG）：
+`constrained_by`, `achieves`, `conflicts_with`, `conducted_from`, `controls_use`,
+`protects`, `adjacent_to` ([@deprecated]), `location_constraint`
             self._add_axis_target(at)  # pln:AxisTarget 实体
 
     def add_operations(self, ops: List[SpatialOperation]) -> None:
@@ -662,83 +791,53 @@ EXECUTE 是**执行层**——将 PARSE 产出的结构化意图转化为空间�
 ### 5.3 MIP 与 KG 的协作模式（回答 Q5）
 
 **核心结论**：MIP 不能直接查询 KG 进行优化（太慢，抽象层次错误），但可以通过
-**约束编译器（Constraint Compiler）** 在优化前一次性从 KG 提取所有约束。
+**一次性 SPARQL 查询**在优化前从 KG 提取所有约束。MIP 求解器直接消费 SPARQL 结果
+（flat dict list），不经过 ConstraintCompiler。
 
 ```
-KG (语义层)            约束编译器               MIP (数学优化层)
+KG (语义层)             SPARQL 查询               MIP (数学优化层)
 ─────────────        ──────────────           ─────────────────
-protected_parcels ──→ 变量锁定          ──→  x[i][construction] = 0
-zone_restrictions ──→ 容量约束          ──→  Σ x[i][zone] * a[i] ≤ max
-adjacency_map    ──→ 邻接偏好          ──→  cost_matrix[i][j]
-area_targets     ──→ 目标约束          ──→  Σ x[i][zone] * a[i] ≈ target
-three_lines      ──→ 空间边界约束      ──→  x[i][zone] = 0 for i outside
+protected_parcels ──→ query_protected_parcels ──→  x[i][construction] = 0
+zone_restrictions ──→ query_constraints        ──→  Σ x[i][zone] * a[i] ≤ max (软约束)
+adjacency_map    ──→ query_adjacent_parcels   ──→  cost_matrix[i][j]
+area_targets     ──→ intent.zone_targets       ──→  Σ x[i][zone] * a[i] ≈ target
+three_lines      ──→ query_three_lines         ──→  x[i][zone] = 0 for i outside (硬约束)
+vne_summary      ──→ query_count_by_vne        ──→  V/E/N 面积下限 (硬约束)
 ```
 
-**约束编译器的工作流程**：
+**MIP 的数据流**：
 
 ```
 1. 从 KG 提取约束 (一次性 SPARQL 查询)
-   - get_protected_parcels() → BSM list
-   - get_zone_restrictions() → zone → capacity
-   - get_adjacency_map() → parcel → neighbors
-   - get_three_lines() → line boundaries
+   - get_constraints()           → List[Dict] → 软约束 (slack 变量, weight=5)
+   - get_protected_parcels()     → BSM list   → 硬变量锁定
+   - get_three_lines()           → List[Dict] → 硬约束 (DLBM 关键字匹配)
+   - count_by_vne()              → List[Dict] → 硬约束 (VNE 编码前缀匹配)
 
 2. 从 PARSE intent 提取目标
-   - zone_targets → target_map {zone: area_ha}
-   - density_hints → zone → density
-   - adjacency_rules → prefer/avoid lists
+   - zone_targets                → target_map {zone: area_ha}
+   - density_hints               → zone → density
+   - adjacency_rules             → prefer/avoid lists
 
-3. 编译为 MIP 模型 (PuLP)
+3. 从 PARSE constraint_set 提取语义约束
+   - SpatialConstraint[]         → 硬变量排除 (x[i][construction] = 0)
+
+4. MIP 求解 (PuLP CBC)
    - 变量: x[i][zone] ∈ {0,1}
-   - 硬约束: 保护地块锁定、三线边界、容量上限
-   - 软约束: 面积目标偏差最小化、邻接偏好
-   - 目标: minimize Σ |actual - target| + adjacency_cost
+   - 硬约束: 保护地块锁定、三线边界、VNE 容量、PARSE 语义排除
+   - 软约束: 面积目标偏差最小化 (slack)、KG 约束 (slack)
+   - 目标: minimize Σ|actual - target| + slack_cost + preference_cost
 ```
 
-**为什么不能直接查询 KG**：
+**为什么不需要 ConstraintCompiler**：
 
-- MIP 求解器（PuLP/CBC）在优化循环中每次评估约束和变量，需要的不是 SPARQL 查询，
-  而是数值矩阵（系数矩阵 A, 约束向量 b, 目标向量 c）
-- KG 的 RDF 图是符号化的知识表示，不是数值优化模型
-- 约束编译器是一次性编译，MIP 求解器是迭代数值优化，分离是正确设计
-
-### 5.4 约束编译器设计
-
-```python
-class ConstraintCompiler:
-    """将 KG 语义约束编译为 MIP 数值约束矩阵"""
-
-    def __init__(self, kg: PlanningKG):
-        self.kg = kg
-
-    def compile(self, intent: SpatialPlanningIntent, landuse: List[CurrentLandUseParcel]) -> MIPModel:
-        """一次性编译所有约束"""
-        model = MIPModel()
-
-        # Step 1: 创建变量
-        parcels = [p.bsm for p in landuse]
-        zones = [zt.land_use for zt in intent.zone_targets]
-        model.create_variables(parcels, zones)
-
-        # Step 2: 硬约束（从 KG 提取）
-        protected = self.kg.get_protected_parcels()
-        model.lock_protected(protected)  # x[i][construction] = 0
-
-        three_lines = self.kg.get_three_lines()
-        model.apply_spatial_bounds(three_lines, landuse)
-
-        # Step 3: 软约束（从 PARSE intent 提取）
-        targets = {zt.land_use: zt.area_ratio for zt in intent.zone_targets}
-        model.set_targets(targets)
-
-        adjacency = self.kg.get_adjacency_map()
-        model.set_adjacency_cost(adjacency, intent.adjacency_rules)
-
-        # Step 4: 密度约束
-        model.set_density_constraints(intent.density_hints, landuse)
-
-        return model
-```
+- MIP 求解器直接消费 SPARQL 返回的 flat dict 列表，通过字符串匹配（`"construction" in cid`、
+  `"farmland" in cid`）识别约束类型
+- 3 种 KG 约束（construction cap / farmland min / ecological min）全部作为软约束
+  （slack 变量），不产生不可行解
+- 3 种硬约束（三线 / VNE / PARSE 语义）各自有独立的处理函数，不需要统一编译层
+- 当前 4 种数据源（KG SPARQL / intent / constraint_set / three_line）各自格式不同，
+  统一编译层的收益不足以覆盖其复杂度
 
 ### 5.5 意图落地路径（回答 Q6）
 
@@ -851,11 +950,19 @@ app/
 │   ├── kg/                         # KG 桥接层
 │   │   ├── __init__.py
 │   │   ├── manager.py              # KGManager (统一入口)
-│   │   ├── builder.py              # PlanningKG (构建器)
 │   │   ├── ontology.py             # 本体定义
-│   │   ├── query.py                # SPARQL 查询模板
-│   │   ├── constraint_compiler.py  # [NEW] 约束编译器
-│   │   └── README.md
+│   │   ├── memory.py               # [v4.6] SemanticMemoryStore
+│   │   ├── builder/                # 四层构建器子包
+│   │   │   ├── base.py             # PlanningKG: build_from_bundle
+│   │   │   ├── layer1.py           # L1 现状实体
+│   │   │   ├── layer2.py           # L2 空间关系
+│   │   │   ├── layer3.py           # L3 意图虚拟实体
+│   │   │   ├── layer4.py           # L4 规划成果
+│   │   │   ├── queries.py          # 语义查询接口
+│   │   │   └── mixins.py           # [v4.6] Mixin 类
+│   │   └── queries/
+│   │       ├── __init__.py
+│   │       └── tools.py            # SPARQL 模板注册表
 │   │
 │   └── spatial_ops/                # [NEW] 空间计算工具
 │       ├── __init__.py
@@ -907,16 +1014,18 @@ app/
 
 ```
 1. 用户输入规划文本 + 村庄名称
-2. Data Layer: 加载 GISDataBundle（GeoPackage + 远程 API）
-3. Spatial Ops: 计算 SpatialContext（从 GISDataBundle）
-4. KG Builder: 从 Schema 模型构建 KG Layer 1+2
-5. PARSE: 文本 + SpatialContext + KG 工具 → SpatialPlanningIntent + OperationSequence + ConstraintSet
-6. KG: PARSE 产出写入 KG Layer 3
-7. Constraint Compiler: KG → MIP 约束矩阵
-8. EXECUTE: MIP 分配 + 设施放置 + 轴线生成 + 道路生成 + 操作执行
-9. VALIDATE: 8 项检查 → PASS 或撤回 EXECUTE
-10. Export: 图层 → GeoPackage / GeoJSON
-11. Render: 图层 → 前端可视化
+2. Data Layer: 加载 VillageBundle（GeoPackage + 远程 API）
+3. Spatial Ops: 计算 ParcelRelations（三层空间关系）+ ContextBlock（PARSE 记忆）
+4. KG Builder: 从 bundle 形态分组 + ParcelRelations 构建 KG Layer 1-2
+5. PARSE: 文本 + ContextBlock（agent 记忆）+ KG 工具 → SpatialPlanningIntent
+6. KG: PARSE 意图写入 Layer 3（虚拟实体 + 粗糙几何 + 空间关系）
+7. EXECUTE: SPARQL 直查 KG + intent 对象 → MIP 约束矩阵
+8. MIP 求解: 一次性 SPARQL 结果 → PuLP 模型
+9. PlanBlock: EXECUTE 单次增量变更（agent 记忆）
+10. PlannedState: PlanBlock 累积 → 写入 KG Layer 4
+11. KG: 清除 Layer 3 临时实体
+12. Export: 图层 → GeoPackage / GeoJSON
+13. Render: 图层 → 前端可视化
 ```
 
 ### 6.3 迁移路线图

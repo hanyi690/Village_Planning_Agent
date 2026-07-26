@@ -1,13 +1,16 @@
 # GIS 村庄规划系统 — 文档索引
 
 > **文档根目录**: `docs/gis/`
-> **更新**: 2026-07-24
+> **更新**: 2026-07-26
 
 ## 核心文档
 
 | 文档 | 说明 |
 |------|------|
 | **[00_SYSTEM_DESIGN.md](00_SYSTEM_DESIGN.md)** | 系统总体设计文档（唯一权威）— 四层架构、KG 桥接、PARSE/EXECUTE 设计、MIP 约束编译、实现路线图 |
+| **[03_GAP_ANALYSIS.md](03_GAP_ANALYSIS.md)** | 落地缺陷与设计审视 - 回归规划本质，各模块"应做 vs 实做"差距、5 个断裂点、6 个设计缺陷、P0/P1/P2 修复路径 |
+| **[04_ARCHITECTURE_AUDIT.md](04_ARCHITECTURE_AUDIT.md)** | 架构规整审视 - 统一标识契约、URI 方案碎片化、各模块优美性评估、修复优先级 |
+| **[05_MODULE_BOUNDARY_AUDIT.md](05_MODULE_BOUNDARY_AUDIT.md)** | 模块边界与编码体系审视 - 5 种图斑语义辨析、编码多维度并行关系、10 项编码缺陷、规划对象 vs 参考数据归属 |
 
 ## 参考资料
 
@@ -36,9 +39,15 @@
 ## 文档间权威关系
 
 ```
-00_SYSTEM_DESIGN.md  ← 唯一权威设计文档
+00_SYSTEM_DESIGN.md   ← 唯一权威设计文档（设计目标）
+    ↓ 审视
+03_GAP_ANALYSIS.md   ← 落地缺陷与设计审视（设计 vs 实做差距）
+    ↓ 审视
+04_ARCHITECTURE_AUDIT.md ← 架构规整审视（标识契约、URI 方案、模块优美性）
+    ↓ 审视
+05_MODULE_BOUNDARY_AUDIT.md ← 模块边界与编码体系审视（数据边界、编码缺陷、归属）
     ↓ 参考
-reference/           ← 外部对标（人类工作流、可行性验证）
+reference/            ← 外部对标（人类工作流、可行性验证）
     ↓ 历史
-archive/             ← 旧设计文档（已过时，仅参考）
+archive/              ← 旧设计文档（已过时，仅参考）
 ```
