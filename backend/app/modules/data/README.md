@@ -1,9 +1,9 @@
 # Data Module - 统一数据获取与管理层
 
-> **Status: [PRODUCTION]** | **Type: Architecture** | **Updated: 2026-07-25 (v4.3)**
+> **Status: [PRODUCTION]** | **Type: Architecture** | **Updated: 2026-07-26 (v4.6)**
 > **Scope**: 所有空间数据（矢量/栅格/瓦片）和文档（规划文本/L3报告）进入系统的唯一边界
 >
-> **v4.3 变更**: VillageBundle 形态重组 — 废弃 GISDataBundle/GeoFeature/ProviderLandParcel, _assign_to_bundle 改为 isinstance 类型分发, 推断图层归入形态 Group 的 inferred 列表
+> **v4.6 变更**: ControlRule/PlanningIndicator 移入 bundle.tables（类型已定义，ingest 管道未实现）；KG 不再存储非空间要素；bundle 形态分组直连 KG builder，不再通过 ContextBlock 中转
 
 ---
 
@@ -268,47 +268,72 @@ sources:
 
 ## 八、已删除的遗留模块
 
-| 模块                                | 状态   | 替代方案                              |
-| ----------------------------------- | ------ | ------------------------------------- |
-| `fetcher.py` (GISDataFetcher)     | 已删除 | `DataCatalog.load_village_bundle()` |
-| `providers/base.py` (GISProvider) | 已删除 | `sources/base.py` DataSourceDriver  |
-| `providers/orchestrator.py`       | 已删除 | DataCatalog                           |
-| `providers/osm/`                  | 已删除 | OSM 数据走 api_vector 驱动            |
-| `providers/rate_limiter.py`       | 已删除 | `connections/rate_limiter.py` (统一单例池) |
-| `providers/base_types.py`         | 已删除 | 内联到各 types 文件                   |
-| `providers/dem_provider.py`       | 已删除 | `LocalRasterDriver` + `result_to_raster` |
-| `providers/{amap,osm,tianditu}/adapter.py` | 已删除 | 死代码                       |
-| `documents/intent_cache.py`       | 已删除 | 直接调用 `tools/gis/parse`           |
-| `_bundle_to_compat_dict()`        | 已删除 | `bundle.to_geojson_dict()`          |
-| `GISDataBundle` (Pydantic)        | 已删除 | `VillageBundle` (v4.3 形态优先)      |
-| `GeoFeature` / `ProviderLandParcel` | 已删除 | 直接使用 `SpatialFeature` 子类       |
-| `GISMetadata` (旧 Pydantic)       | 已删除 | `VillageMetadata` (精简 dataclass)   |
+| 模块                                         | 状态   | 替代方案                                     |
+| -------------------------------------------- | ------ | -------------------------------------------- |
+| `fetcher.py` (GISDataFetcher)              | 已删除 | `DataCatalog.load_village_bundle()`        |
+| `providers/base.py` (GISProvider)          | 已删除 | `sources/base.py` DataSourceDriver         |
+| `providers/orchestrator.py`                | 已删除 | DataCatalog                                  |
+| `providers/osm/`                           | 已删除 | OSM 数据走 api_vector 驱动                   |
+| `providers/rate_limiter.py`                | 已删除 | `connections/rate_limiter.py` (统一单例池) |
+| `providers/base_types.py`                  | 已删除 | 内联到各 types 文件                          |
+| `providers/dem_provider.py`                | 已删除 | `LocalRasterDriver` + `result_to_raster` |
+| `providers/{amap,osm,tianditu}/adapter.py` | 已删除 | 死代码                                       |
+| `documents/intent_cache.py`                | 已删除 | 直接调用`tools/gis/parse`                  |
+| `_bundle_to_compat_dict()`                 | 已删除 | `bundle.to_geojson_dict()`                 |
+| `GISDataBundle` (Pydantic)                 | 已删除 | `VillageBundle` (v4.3 形态优先)            |
+| `GeoFeature` / `ProviderLandParcel`      | 已删除 | 直接使用`SpatialFeature` 子类              |
+| `GISMetadata` (旧 Pydantic)                | 已删除 | `VillageMetadata` (精简 dataclass)         |
 
 ---
 
-## 九、待实现（TODO）
+## 九、当前实现状态
 
-| 能力                                   | 状态                                               |
-| -------------------------------------- | -------------------------------------------------- |
-| 智能推断管道`ingest_inference.py`    | ⏳ 设计中：未注册 layer_type 按形态分流+语义匹配, 产出推断 SpatialFeature 子类 → 归入形态 Group 的 inferred 列表 |
-| 项目级加载`load_project_data_view()` | ⏳ 设计中：ProjectDataView 多村+跨村+栅格+表格     |
-| 表格驱动`sources/table.py`           | ⏳ 设计中：CSV/Excel 表格数据源                    |
-| 项目配置分离`projects.yaml`          | ⏳ 设计中：参与村庄/源覆盖/上传数据                |
+### 9.1 数据形态状态
 
-**已完成（v4.2b → v4.3）**：
-- ✅ YAML + Python 混合 LAYER_TYPE_REGISTRY (35 YAML 条目 + Python 类型绑定)
-- ✅ GISDataBundle → VillageBundle 形态重组 (6 Group 类, isinstance 分发, 33 子类全覆盖)
+| 形态 | 实现状态 | 说明 |
+|------|---------|------|
+| 矢量 (Point/Line/Polygon) | ✅ 完整实现 | 33 个子类全覆盖，`_assign_to_bundle` isinstance 分发 |
+| 栅格 (RasterDataset) | ✅ 完整实现 | DEM/DOM/Slope/Aspect/Suitability，类型定义+加载 |
+| 表格 (TableDataset) | ⏳ 类型已定义，ingest 未实现 | 5 种表类型定义在 `table_types.py`，但 `bundle.tables` 所有字段为 None |
+| 文档 (Document) | ✅ 基础实现 | 规划文本加载，L3 报告 |
+
+### 9.2 TableDataset 状态（⏳ 待实现）
+
+| 表类型 | 用途 | 状态 |
+|--------|------|------|
+| `PopulationTable` | 人口结构（输入） | 类型定义 ✅，ingest ❌ |
+| `IndustryTable` | 产业经济（输入） | 类型定义 ✅，ingest ❌ |
+| `FacilityInventory` | 设施清单（输入） | 类型定义 ✅，ingest ❌ |
+| `ControlRuleTable` | 管制规则（输出，从 KG 移入） | 类型定义 ✅，ingest ❌ |
+| `PlanningIndicatorTable` | 规划指标（输出，从 KG 移入） | 类型定义 ✅，ingest ❌ |
+| `ConstructionProjectTable` | 建设项目表（输出） | 类型定义 ✅，ingest ❌ |
+| `LandUseStructureTable` | 用地结构表（输出） | 类型定义 ✅，ingest ❌ |
+
+**注意**：`ControlRule`、`PlanningIndicator` 和 `LandUseCategory`（VNE 编码体系）已从 KG 移出（v4.6）。
+`ControlRule` 和 `PlanningIndicator` 通过 `bundle.tables` 承载（计划由 PARSE Agent 填充）。
+`LandUseCategory`（VNE 分类树）通过 Schema 层 `encodings/dicts/` 按需查询，不作为 KG 实体或 bundle 表存储。
+编码体系（DLBM、GHYTBM、TUGUI 等）统一由 Schema 层 `encodings/code_sets.py` 管理。
+
+### 9.3 待实现
+
+| 能力 | 状态 |
+|------|------|
+| 智能推断管道 `ingest_inference.py` | ⏳ 设计中 |
+| 项目级加载 `load_project_data_view()` | ⏳ 设计中 |
+| 表格驱动 `sources/table.py` | ⏳ 待实现 |
+| 项目配置分离 `projects.yaml` | ⏳ 待实现 |
+| bundle.tables 的 ingest 管道 | ⏳ 待实现（ControlRule, PlanningIndicator 等） |
 
 ## 相关文件
 
-| 模块             | 路径                                                   |
-| ---------------- | ------------------------------------------------------ |
-| 类型定义（矢量） | `backend/app/modules/schema/types/spatial_types.py`  |
-| 类型定义（栅格） | `backend/app/modules/schema/types/raster_types.py`   |
-| 数据视图         | `backend/app/modules/schema/types/canonical.py`      |
-| 图层注册表       | `backend/app/modules/schema/types/layer_registry.py` |
-| 摄入端口         | `backend/app/modules/data/ingest.py`                 |
-| 数据源配置       | `backend/app/modules/data/catalog/sources.yaml`      |
-| 位置解析         | `backend/app/utils/location_parser.py`               |
+| 模块             | 路径                                                                          |
+| ---------------- | ----------------------------------------------------------------------------- |
+| 类型定义（矢量） | `backend/app/modules/schema/types/spatial_types.py`                         |
+| 类型定义（栅格） | `backend/app/modules/schema/types/raster_types.py`                          |
+| 数据视图         | `backend/app/modules/schema/types/canonical.py`                             |
+| 图层注册表       | `backend/app/modules/schema/types/layer_registry.py`                        |
+| 摄入端口         | `backend/app/modules/data/ingest.py`                                        |
+| 数据源配置       | `backend/app/modules/data/catalog/sources.yaml`                             |
+| 位置解析         | `backend/app/utils/location_parser.py`                                      |
 | 空间上下文计算   | `backend/app/modules/spatial_ops/context.py` (compute_context_blocks, v4.3) |
-| 输出 Bundle 缓存 | `output/bundle_cache/jintian_bundle.pkl`             |
+| 输出 Bundle 缓存 | `output/bundle_cache/jintian_bundle.pkl`                                    |

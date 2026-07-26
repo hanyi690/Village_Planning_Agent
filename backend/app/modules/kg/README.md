@@ -1,273 +1,459 @@
-
 # Planning Knowledge Graph (KG) 模块
 
-> **定位**: 村庄规划系统的**空间语义引擎** — 四层架构存储现状、约束、意图、规划方案
-> **层级**: 四层架构 `Schema <- Data <- SpatialOps <- KG <- Agent`
+> **定位**: 村庄规划系统的**空间语义引擎** — 只存有几何的空间实体及其关系
+> **层级**: `Schema ← Data ← SpatialOps ← KG ← Agent`
 > **依赖**: 仅依赖 `app.modules.schema`；不依赖 Data/Agent/Tools
-> **Updated: 2026-07-25 (v4.4)** - 四层架构 + PlanBlock 增量变更集 + L3 路网连通 + 实际数据 21,253 三元组验证
+> **Updated: 2026-07-26 (v4.6)** — 重构：只存空间实体，删除非空间类型，SemanticMemoryStore，L3 虚拟实体，L4 PlannedState
 
 ---
 
-## 一、模块定位
+## 一、核心原则
 
-KG 是独立于 GIS 子包的桥接模块（`app/modules/kg/`）。其职责是**将空间数据与规划语义统一编码为 RDF 三元组**，使下游 Agent 能通过 SPARQL 查询获取语义理解结果，而非直接处理原始 GeoJSON 或自然语言。
-
-**核心定位**：
-
-- KG 是 PARSE 与 EXECUTE 之间的**唯一语义中间态**：PARSE 写入（Layer 3），EXECUTE 读取（经 ConstraintCompiler）
-- KG 不存储原始几何坐标（Data 层职责），只存储实体 URI + 属性 + 关系 + 约束 + 意图
-- KG 通过 `ConstraintCompiler` 将语义约束编译为 MIP 数值矩阵，供 EXECUTE 的 MIP 求解器消费
-- **零 shapely/geopandas 依赖**：所有几何计算由 `spatial_ops` 完成，KG 只消费结构化数据
-
-### 系统位置
+### 1.1 KG 只存"有几何的空间要素"
 
 ```
-PARSE Agent (PLAN)          EXECUTE Agent (DELIVER)
-      │ writes Layer 3           │ reads Layer 2+4
-      ▼                          ▼
-┌──────────────────────────────────────────────────┐
-│  KG Layer (本模块) -- 四层空间语义引擎             │
-│  Layer1 静态(现状) | Layer2 约束(规则+指标)       │
-│  Layer3 易失(意图) | Layer4 规划(方案+版本)       │
-│  SpatialCognitiveUnit 统一形态层级                 │
-└──────────────────────┬───────────────────────────┘
-                       │ typed models
-              ┌────────┴────────┐
-              │  Schema Layer   │
-              │  VillageBundle  │
-              │  ContextBlock   │
-              └─────────────────┘
+进 KG RDF 图:   Parcel, Road, WaterBody, Facility, Zone, ThreeLine, ...
+不进 KG:        ControlRule, PlanningIndicator, Constraint (数值),
+                PlanIntent (语义), LandUseCategory (编码体系)
 ```
+
+非空间要素通过以下方式传递：
+
+| 类型 | 去向 |
+|------|------|
+| `ControlRule` | `bundle.tables.control_rules` |
+| `PlanningIndicator` | `bundle.tables.planning_indicators`（PARSE Agent 填充） |
+| `Constraint` (数值约束) | `ContextBlock.CONSTRAINTS.data` |
+| `PlanIntent` (语义容器) | `SpatialPlanningIntent` 对象本身 |
+| `LandUseCategory` (VNE 编码) | Schema 层 `encodings/dicts/`，按需查询 |
+| 编码体系 (DLBM/GHYTBM/TUGUI/...) | Schema 层 `encodings/code_sets.py`，按需查询 |
+
+**编码体系管理原则**：KG 只在地块属性中存储编码值（`pln:dlbm`、`pln:vne_code`、`pln:planning_zone`），
+不存储编码体系本身的分类树。分类树查询通过 Schema 层的 `encodings/` 模块按需返回，不走 KG RDF 图。
+
+### 1.2 关系本身就是语义
+
+KG 的 RDF 三元组不仅描述实体属性，更描述实体间的空间关系。**注解必须同时附着于实体和关系**，不能只存实体级注解：
+
+```python
+# 实体注解
+EntityAnnotation(entity_uri, description, source_text_refs, intent_refs)
+
+# 关系注解 — 之前缺失的部分
+RelationAnnotation(subject_uri, predicate, object_uri,
+                   description, derived_from, quantitative_detail)
+```
+
+### 1.3 Intent 以虚拟实体进 KG（L3 易失层）
+
+ZoneTarget、FacilityTarget、RoadTarget 作为 L3 临时虚拟实体进入 KG，有粗糙几何表示，参与空间关系计算。EXECUTE 通过 SPARQL 查询这些虚拟实体与现状实体之间的空间关系（冲突检测、候选地块筛选）。
+
+### 1.4 PlanBlock 是 Agent 记忆，不进 KG
+
+PlanBlock 和 ContextBlock 对称——都是 Agent 的"工作记忆"，不直接进入 KG：
+
+| 结构 | 本质 | 消费者 | 持久化 |
+|------|------|--------|--------|
+| **ContextBlock** | 现状空间认知卡片 | PARSE prompt | 不持久化 |
+| **PlanBlock** | 增量变更操作记录 | 累积 → PlannedState | 可选会话日志 |
+| **PlannedState** | 规划成果空间实体（聚合） | KG Layer 4 | 持久化 |
+
+### 1.5 零 shapely/geopandas 依赖
+
+所有几何计算由 `spatial_ops` 完成，KG 只消费结构化数据。
 
 ---
 
 ## 二、四层架构
 
-| 层      | 内容                                    | 生命周期               | 写入者                                   | 消费者                              |
-| ------- | --------------------------------------- | ---------------------- | ---------------------------------------- | ----------------------------------- |
-| Layer 1 | 现状空间实体（地块/道路/设施/保护红线） | 持久（数据更新时重建） | Data Layer →`build_from_blocks`       | KG 查询、PARSE（通过 ContextBlock） |
-| Layer 2 | 约束规则、指标、上位传导                | 项目级持久             | 规则库 + ContextBlock                    | ConstraintCompiler、EXECUTE         |
-| Layer 3 | PARSE 意图（SpatialPlanningIntent） | 单次规划会话           | PARSE Agent →`_add_structured_intent` | EXECUTE、约束冲突检测               |
-| Layer 4 | EXECUTE 规划方案（版本化）              | 会话持久（可多版并存） | EXECUTE Agent →`_add_planned_state`   | 指标校核、多版对比、导出            |
+| 层 | 内容 | 生命周期 | 写入者 | 消费者 |
+|----|------|---------|--------|--------|
+| Layer 1 | 现状空间实体 + 编码体系 | 持久（数据更新时重建） | Data Layer → bundle 直连 | SPARQL 查询、PARSE |
+| Layer 2 | 空间关系 | 持久 | `spatial_ops` 计算 | SPARQL 查询、EXECUTE |
+| Layer 3 | 意图虚拟实体（粗糙几何 + 空间关系） | 会话易失 | PARSE → `build_intent_layer` | EXECUTE 空间推理 |
+| Layer 4 | 规划成果实体（版本化增量） | 会话持久 | EXECUTE → PlannedState | 导出、对比、校验 |
 
-### 2.1 构建入口
+### 2.1 系统位置
+
+```
+bundle (VillageBundle)
+  │
+  ├──→ compute_context_blocks() → ContextBlock[] → PARSE prompt (agent 记忆)
+  │
+  └──→ KG.build_from_bundle(bundle, relations, intent, planned_state)
+         │
+         ├── Layer 1: 现状实体 (bundle 形态分组直连)
+         ├── Layer 2: 空间关系 (parcel_relations 参数)
+         ├── Layer 3: 意图虚拟实体 (intent → 粗糙几何)
+         └── Layer 4: 规划成果 (PlannedState → 版本化增量)
+```
+
+### 2.2 构建入口
 
 ```python
 kg = PlanningKG(village_name="金田村委会")
-kg.build_from_blocks(
-    blocks=blocks,              # List[ContextBlock] — 空间认知卡片
+kg.build_from_bundle(
     bundle=bundle,              # VillageBundle — 类型化形态视图
     parcel_relations=relations, # ParcelRelations — 三层空间关系（外部计算）
-    intent=intent,              # SpatialPlanningIntent — PARSE 意图（可选）
-    planned_state=planned,      # PlannedState — EXECUTE 规划方案（可选）
+    intent=intent,              # SpatialPlanningIntent → L3 虚拟实体（可选）
+    planned_state=planned,      # PlannedState → L4 规划成果（可选）
 )
 ```
 
-### 2.2 Layer 1: 现状实体
+**注意**：KG builder 直接从 `bundle.polygons.landuse_current`、`bundle.lines.roads_current` 等形态分组读取，不依赖 ContextBlock。ContextBlock 只作为 PARSE 的 prompt 上下文。
 
-| 实体类型                  | 数据来源                            | 方法                                  |
-| ------------------------- | ----------------------------------- | ------------------------------------- |
-| `pln:Village`           | VILLAGE_META ContextBlock           | `_add_village_meta_from_blocks`     |
-| `pln:Parcel`（660个）   | `bundle.polygons.landuse_current` | `_add_parcels_typed`                |
-| `pln:NaturalSettlement` | NATURAL_VILLAGES ContextBlock       | `_add_natural_villages_from_blocks` |
-| `pln:Facility`          | FACILITIES ContextBlock             | `_add_facilities_from_blocks`       |
-| `pln:Road`              | `bundle.lines.roads_current`      | `add_roads`                         |
-| `pln:WaterBody`         | DLBM 分类 + `bundle.polygons.water_bodies` | `_add_infrastructure_from_typed` + `_add_natural_features_from_typed` |
-| `pln:ProtectedZone`     | CONSTRAINTS ContextBlock            | `_add_constraints_from_blocks`      |
-| `pln:ControlLine`       | `bundle.points.hazard_points`     | `_add_control_lines_from_typed`     |
-| `pln:LandUseCategory`   | VNE YAML                            | `_add_vne_categories`               |
+### 2.3 Layer 1: 现状实体
 
-### 2.3 Layer 2: 约束规则
+| 实体类型 | 数据来源 | 方法 | 标识键 |
+|---------|---------|------|--------|
+| `pln:AdministrativeVillage` | `bundle.metadata` | `_add_village_entity` | singleton (`pln:village`) |
+| `pln:Parcel` | `bundle.polygons.landuse_current` | `_add_parcels` | `PLN.bsm` literal ✅ |
+| `pln:Road` | `bundle.lines.roads_current` | `add_roads` | BSM in URI fragment ⚠️ |
+| `pln:WaterBody` | `bundle.polygons.water_bodies` | `_add_water_bodies` | BSM in URI fragment ⚠️ |
+| `pln:Facility` | `bundle.points.facilities_current` + annotations | `_add_facilities_from_typed` + `add_annotations` | name+count ❌ |
+| `pln:NaturalSettlement` | `bundle.polygons.landuse_current` 聚类 + annotation | `_add_natural_villages_from_typed` | name（间接经 parcel BSM）⚠️ |
+| `pln:Zone` | `bundle.polygons.land_use_zones` | `_add_planning_elements_from_typed` | code/count ❌ |
+| `pln:ControlLine` | `bundle.polygons.hazard_control_lines`, `flood_control_lines` | `_add_control_lines_from_typed` | count only ❌ |
+| `pln:ThreeZone` | `bundle.polygons.three_zones` **应读 bundle**（当前读 schema rule_loader） | `_add_three_zone_three_line` | schema dict ❌ |
+| `pln:ThreeLine` | 同上 | `_add_three_zone_three_line` | schema dict ❌ |
 
-- 从 CONSTRAINTS ContextBlock 提取保护面面积和规则
-- 从 LANDUSE_DIST ContextBlock 提取用地分布约束值
-- 约束值写入 `pln:Constraint` 实体，供 ConstraintCompiler 查询
+> **标识键列说明**：✅ = 存储 `PLN.bsm` literal，可 SPARQL 查询；⚠️ = BSM 仅在 URI fragment，不可查询；❌ = 无稳定标识，见 §2.7 标识契约问题。
 
-### 2.4 Layer 3: 意图子图
+**注**：编码体系（DLBM、VNE、GHYTBM、TUGUI 等）不作为 KG 实体存储。地块的编码值
+（`pln:dlbm`、`pln:vne_code`、`pln:planning_zone`）作为属性写入地块实体，
+编码分类树通过 Schema 层 `encodings/` 模块按需查询。`_add_vne_categories` 方法已废弃。
 
-`SpatialPlanningIntent` 直接消费，通过独立的 `zone_targets`、`facilities`、`development_axes` 列表分发。
+### 2.4 Layer 2: 空间关系
 
-语义字段（`natural_language_description`、`spatial_hint`、`reasoning_trace`）
-存储在 `_semantic_store` JSON 附件中，不存为 RDF 三元组。
+由 `spatial_ops.compute_parcel_relations()` 计算，KG 通过 `_add_parcel_relations` 消费。
 
-### 2.5 Layer 4: 规划方案
+| 层次 | 关系 | 属性 | 对规划的意义 |
+|------|------|------|------------|
+| L1: 拓扑邻接 | `:touches` | `:shared_boundary_length` | 地块合并/拆分、连片开发 |
+| L2: 近邻关系 | `:nearby` | `:centroid_distance` | 设施选址、公共服务覆盖 |
+| L3: 连通关系 | `:connected_via_road` | `:road_segment_length` | 交通可达性 |
 
-`PlanBlock` 是增量变更集（delta），**不复制 L1 全量**，只记录变更条目：
+### 2.5 Layer 3: 意图虚拟实体（易失）
+
+`SpatialPlanningIntent` 的 `zone_targets`、`facilities`、`development_axes` 被转换为有粗糙几何的临时空间实体，参与空间关系计算：
 
 ```python
-plan = PlanBlock(version='v1',
-    parcel_changes=[
-        # 重新分类：同 bsm，改地类
-        ParcelChange(bsm='441426211000055682', action='reclassify',
-                     new_planning_land_use='2121', new_area_ha=0.15,
-                     derived_from_bsms=['441426211000055682']),
-        # 分割：新 bsm，溯源父地块
-        ParcelChange(bsm='P001_s1', action='split',
-                     new_planning_land_use='2121', new_area_ha=0.3,
-                     derived_from_bsms=['P001']),
-        # 合并：新 bsm，多个父地块
-        ParcelChange(bsm='A_B_merged', action='merge',
-                     new_planning_land_use='0101', new_area_ha=1.5,
-                     derived_from_bsms=['A', 'B']),
-    ],
-    facility_changes=[
-        FacilityChange(name='展销中心', action='new', facility_type='商业', area_sqm=400),
-    ],
-    road_changes=[
-        RoadChange(name='规划路', action='new', road_level='主干道', width_m=12),
-    ],
-)
-kg._apply_plan_block(plan)
+kg.build_intent_layer(intent)
+# 在 KG 中创建:
+#   pln:Intent/zone_target_1  (ZoneTarget, 粗糙几何 ≈ bbox)
+#   pln:Intent/facility_1     (FacilityTarget, 点 + 缓冲区)
+#   pln:Intent/road_1         (RoadTarget, 线 + 缓冲区)
+# spatial_ops 计算这些虚拟实体与 L1 实体的空间关系
 ```
 
-**稀疏写入**：未变更的地块不写入 L4 三元组，查询时回退到 L1。
+**生命周期**：当前规划会话结束时清除（`kg.clear_intent_layer()`）。
+
+### 2.6 Layer 4: 规划成果（版本化增量）
+
+`PlannedState` 是增量变更的累积视图，和 `VillageBundle` 形态对齐：
+
+```python
+@dataclass
+class PlannedState:
+    version: str = "current"
+    polygons: List[PlannedParcelEntry]   # 规划地块（面）
+    points: List[PlannedFacilityEntry]   # 规划设施点（点）
+    lines: List[PlannedRoadEntry]        # 规划道路（线）
+    source: str = ""
+```
+
+每个 Entry 继承自 `SpatialCognitiveUnit` 形态基类，天然有几何和 URI。L4 进入 KG 时和 L1 一样处理，只是加版本标签。**稀疏写入**：未变更的地块不写入 L4 三元组，查询时回退到 L1。
+
+### 2.7 实体标识与 bundle 锚定契约
+
+> **本节描述当前实现状态与已知缺口，修复计划见 `docs/gis/04_ARCHITECTURE_AUDIT.md`。**
+
+#### 设计意图
+
+`SpatialFeature` 基类（`schema/types/base.py:39`）定义 `bsm: str` 作为所有空间要素的标识码。KG 应统一存储 `PLN.bsm` literal 谓词，使每个实体可通过 SPARQL 查询定位回 bundle 原始要素。
+
+#### 当前实现状态
+
+| 层 | 实体 | URI 方案 | `PLN.bsm` literal | 可追溯 |
+|----|------|---------|-------------------|--------|
+| L1 | Parcel | `parcel_{bsm}_{dlbm}_{area}` | ✅ 是 | ✅ |
+| L1 | Road | `road_{bsm}` 或 `road_{count}` | ❌ 仅 URI fragment | ⚠️ 部分 |
+| L1 | WaterBody | `water_{bsm}` 或 `water_{count}` | ❌ 仅 URI fragment | ⚠️ 部分 |
+| L1 | Facility | `facility_typed_{name}_{count}` | ❌ | ❌ count 不稳定 |
+| L1 | NaturalSettlement | `village_ann_{name}` | ❌ | ⚠️ 间接经 parcel BSM |
+| L1 | ControlLine (hazard/flood) | `{type}_line_{count}` | ❌ | ❌ count only |
+| L1 | Zone (conditional/jsydgzq) | `zone_{type}_{count}` | ❌ | ❌ count only |
+| L1 | Zone (TDYT) | `tdyt_{code}` | ❌ | ❌ 同码碰撞 |
+| L1 | ThreeZone/ThreeLine | `three_zone_{name}` | ❌ | ❌ 读 schema dict 非 bundle |
+| L4 | PlannedParcel | `planned_parcel_{bsm}_{v}` | ✅ 是 | ✅ 经 `derived_from` -> L1 |
+| L4 | PlannedZone/Facility/Road/Axis | `planned_{type}_{name}_{v}` | ❌ | ❌ 同名碰撞，L4->L3 未实现 |
+
+#### 已知缺口
+
+1. **URI 方案碎片化**：14 个 `_add_*` 函数使用 6 种不同方案。仅 `_add_parcels` 和 `_apply_planned_state`（PlannedParcel）遵守 bsm literal 契约。
+2. **ThreeZone/ThreeLine 脱离 bundle**：`_add_three_zone_three_line` 读 `rule_loader()` 而非 `bundle.polygons.three_zones`，bundle 中的 `ThreeZoneItem`（带 BSM + geometry）被忽略。
+3. **L4->L3 链接未实现**：`PlannedZoneEntry.derived_from_target` 等字段在 dataclass 中定义，但 `_apply_planned_state` 从不读取。
+4. **count-based URI 不稳定**：输入列表重排即导致 URI 全变，不可追溯。
+5. **RoadTarget 死实体**：ontology 声明，`_L3_TYPES` 包含，但 `build_intent_layer` 从不创建。
+
+#### 修复方向（见 04_ARCHITECTURE_AUDIT.md §二）
+
+引入 `EntityIdPolicy` 统一标识策略：所有 L1 实体存 `PLN.bsm` literal，L4 实体存 `PLN.bsm` + `PLN.derived_from`，BSM 缺失时用 `ysdm + seq` 生成稳定 ID。
 
 ---
 
-## 三、SpatialCognitiveUnit 形态层级
+## 三、实体类型
 
-整个系统的空间认知元素统一在同一个形态层级下，与 Schema 层的 `SpatialFeature → PointFeature/LineFeature/PolygonFeature` 对齐：
+### 3.1 现状实体（Layer 1）
 
-```
-SpatialCognitiveUnit
-├── PointBasedCognition              ← center: Tuple
-│   ├── FacilityAnchor               ← facility_type, category
-│   └── TerrainSample                ← elevation_m, slope_degree
-├── LineBasedCognition               ← path: List, length_m
-│   ├── RoadAnchor                   ← road_level, width_m
-│   └── AxisAnchor                   ← connects
-├── PolygonBasedCognition            ← area_ha, bbox
-│   ├── NaturalVillageAnchor         ← parcel_ids, dominant_landuse
-│   └── ConstraintZoneAnchor         ← zone_type, rule
-├── SpatialIntentUnit                ← priority, constraints
-│   ├── ZoneTarget (polygon)         ← land_use_code, target_area_ha
-│   ├── FacilityTarget (point)       ← facility_type, min_area_sqm
-│   └── RoadTarget (line)            ← road_level, width_m
-├── PlanBlock (change-set)           ← L4 增量容器，NOT a SpatialCognitiveUnit
-│   ├── ParcelChange                 ← action: reclassify/split/merge/modify
-│   ├── FacilityChange               ← action: new/expand/upgrade/relocate
-│   ├── RoadChange                   ← action: new/upgrade/realign
-│   └── SettlementChange             ← action: retain/relocate/merge_into/new
-└── ContextBlock (composite)         ← 多形态卡片容器
-```
+| 形态 | 实体 | 说明 |
+|------|------|------|
+| 面 | `Parcel` | 现状地类图斑 |
+| 面 | `WaterBody` | 水域 |
+| 面 | `Zone` | 规划分区 |
+| 面 | `ThreeZone` | 三区（生态/农业/建设） |
+| 面 | `ThreeLine` | 三线（基本农田/生态红线/开发边界） |
+| 面 | `FarmlandProtection` | 永久基本农田保护 |
+| 面 | `EcologicalRedline` | 生态保护红线 |
+| 面 | `HistoricalProtection` | 历史文化保护 |
+| 面 | `VillageDevBoundary` | 村庄建设边界 |
+| 面 | `HazardControlLine` | 灾害防控线 |
+| 面 | `FloodControlLine` | 洪涝控制线 |
+| 面 | `ConditionalConstructionZone` | 有条件建设区 |
+| 面 | `LandUseZone` | 土地利用区（TDYT） |
+| 面 | `ConstructionCtrlZone` | 建设用地管制区 |
+| 面 | `PlanningScope` | 规划范围 |
+| 面 | `AdministrativeVillage` | 行政村 |
+| 面 | `NaturalSettlement` | 自然村 |
+| 点 | `Facility` | 现状设施点 |
+| 线 | `Road` | 现状道路 |
 
-### 3.1 按形态统一遍历
+**注**：编码体系（DLBM、VNE、GHYTBM、TUGUI 等）不作为 KG 实体存储。
+地块的编码值（`pln:dlbm`、`pln:vne_code`、`pln:planning_zone`）作为属性写入地块实体，
+编码分类树通过 Schema 层 `encodings/` 模块按需查询。
 
-```python
-for block in blocks:
-    for unit in block.units:
-        if isinstance(unit, PolygonBasedCognition):
-            # 统一处理所有面状认知
-        elif isinstance(unit, PointBasedCognition):
-            # 统一处理所有点状认知
-```
+### 3.2 意图虚拟实体（Layer 3，易失）
 
-### 3.2 与四层架构的对应
+| 形态 | 实体 | 说明 |
+|------|------|------|
+| 面 | `ZoneTarget` | 分区目标（粗糙几何 ≈ bbox） |
+| 点 | `FacilityTarget` | 设施目标（点 + 缓冲区） |
+| 线 | `RoadTarget` | 道路目标（线 + 缓冲区） |
+| 线 | `AxisTarget` | 发展轴线 |
 
-| SpatialCognitiveUnit 子类 | KG 层     | 来源                                     |
-| ------------------------- | --------- | ---------------------------------------- |
-| `NaturalVillageAnchor`  | Layer 1   | NATURAL_VILLAGES ContextBlock            |
-| `FacilityAnchor`        | Layer 1   | FACILITIES ContextBlock                  |
-| `RoadAnchor`            | Layer 1   | `bundle.lines.roads_current`           |
-| `ConstraintZoneAnchor`  | Layer 1+2 | CONSTRAINTS ContextBlock                 |
-| `ZoneTarget`            | Layer 3   | `SpatialPlanningIntent.zone_targets` |
-| `FacilityTarget`        | Layer 3   | `SpatialPlanningIntent.facilities`    |
-| `RoadTarget`            | Layer 3   | `SpatialPlanningIntent.development_axes` |
-| `ParcelChange`          | Layer 4   | `PlanBlock.parcel_changes` (delta)     |
-| `FacilityChange`        | Layer 4   | `PlanBlock.facility_changes` (delta)   |
-| `RoadChange`            | Layer 4   | `PlanBlock.road_changes` (delta)       |
-| `SettlementChange`      | Layer 4   | `PlanBlock.settlement_changes` (delta) |
-| `ContextBlock`          | 跨层      | `spatial_ops.compute_context_blocks`   |
+### 3.3 规划成果实体（Layer 4，版本化）
+
+| 形态 | 实体 | 说明 |
+|------|------|------|
+| 面 | `PlannedParcel` | 规划地块（精确几何，版本标签） |
+| 点 | `PlannedFacility` | 规划设施点 |
+| 线 | `PlannedRoad` | 规划道路 |
 
 ---
 
-## 四、三层空间关系
+## 四、关系类型
 
-由 `spatial_ops.compute_parcel_relations()` 计算，KG 通过 `_add_parcel_relations` 消费。**零几何计算**。
+### 4.1 空间拓扑关系
 
-| 层次         | 关系                    | 属性                        | 对规划的意义            |
-| ------------ | ----------------------- | --------------------------- | ----------------------- |
-| L1: 拓扑邻接 | `:touches`            | `:shared_boundary_length` | 地块合并/拆分、连片开发 |
-| L2: 近邻关系 | `:nearby`             | `:centroid_distance`      | 设施选址、公共服务覆盖  |
-| L3: 连通关系 | `:connected_via_road` | `:shortest_path_length`   | 交通可达性（预留）      |
+| 关系 | 方向 | 属性 | 说明 |
+|------|------|------|------|
+| `touches` | 双向 | `shared_boundary_length` | 拓扑邻接（取代 `adjacent_to`） |
+| `nearby` | 双向 | `centroid_distance` | 近邻关系（≤ 200m） |
+| `connected_via_road` | 双向 | `road_segment_length`, `via_road` | 路网连通 |
+| `within_zone` | 单向 | — | 包含于分区 |
+| `located_in` | 单向 | — | 位于（行政村→自然村→地块） |
+| `delineates` | 单向 | — | 划定（三区三线划定分区） |
 
-### 语义查询方法
+### 4.2 规划语义关系
+
+| 关系 | 方向 | 说明 |
+|------|------|------|
+| `designated_as` | 单向 | 地块被指定为某分区 |
+| `derived_from` | 单向 | 规划地块源于现状地块 |
+| `serves` | 单向 | 设施服务于某区域 |
+
+### 4.3 已删除的关系（不再属于 KG）
+
+| 关系 | 理由 | 去向 |
+|------|------|------|
+| `constrained_by` | 约束是 ContextBlock 数值，不是实体间关系 | ContextBlock.CONSTRAINTS.data |
+| `achieves` | 指标达标由 bundle.tables 体现 | `bundle.tables.planning_indicators` |
+| `conflicts_with` | 冲突检测结果，运行时计算 | 不持久化 |
+| `conducted_from` | 上位传导在指标表字段中 | `bundle.tables.planning_indicators` |
+| `controls_use` | ControlRule 字段 | `bundle.tables.control_rules` |
+| `protects` | ThreeLine 的属性字段，非关系 | 改为属性 |
+| `adjacent_to` | 已废弃 | 由 `touches` 替代 |
+| `location_constraint` | 属性非关系 | L3 虚拟实体的 LocationConstraint 字段 |
+
+---
+
+## 五、SemanticMemoryStore
+
+语义注解不存储在 RDF 图中，而是通过 `SemanticMemoryStore` 管理。注解同时附着于实体和关系：
+
+### 5.1 实体注解
 
 ```python
-kg.get_parcels_within_distance_of_entity(entity_uri, max_distance_m)
-kg.get_adjacent_parcels_with_length(bsm)
-kg.get_connected_parcels(parcel_uri)
+@dataclass
+class EntityAnnotation:
+    entity_uri: str
+    entity_type: str
+    description: str              # 人类可读说明
+    source_text_refs: List[str]   # 溯源文本
+    intent_refs: List[str]        # 意图关联
+```
+
+### 5.2 关系注解
+
+```python
+@dataclass
+class RelationAnnotation:
+    subject_uri: str
+    predicate: str
+    object_uri: str
+    description: str              # 人类可读的关系解释
+    derived_from: str             # "spatial_ops_computed" | "llm_inferred" | "rule_derived"
+    quantitative_detail: Dict[str, Any]  # {"distance_m": 1200, "shared_boundary_m": 45.2}
+```
+
+### 5.3 查询接口
+
+```python
+class SemanticMemoryStore:
+    entity_annotations: Dict[str, EntityAnnotation]
+    relation_annotations: Dict[str, RelationAnnotation]
+
+    def get_entity_semantics(self, uri: str) -> Dict:
+        """返回实体属性 + 人类可读注解 + 参与的语义关系"""
+
+    def get_relation_semantics(self, subject, predicate, object) -> Dict:
+        """返回关系本身 + 注解 + 量化细节"""
+```
+
+### 5.4 与 RDF 图的协同
+
+```
+KG RDF 图 (结构化):              SemanticMemoryStore (语义注解):
+  (:刘村, :north_of, :八社村)     "刘村位于八社村北侧，两村相距约 1.2km"
+  (:刘村, :touches, :P001)       "刘村南侧地块 P001 与基本农田相邻"
+```
+
+当 LLM 查询时，两者合成返回复合结果：
+
+```json
+{
+  "entity": {"uri": "pln:NaturalSettlement/刘村", "parcel_count": 45},
+  "relations": [
+    {
+      "predicate": "north_of",
+      "object": "八社村",
+      "description": "刘村位于八社村北侧，两村相距约 1.2km，通过 X203 县道相连",
+      "distance_m": 1200
+    }
+  ]
+}
 ```
 
 ---
 
-## 五、模块结构
+## 六、数据流
+
+```
+┌───────────┐     ┌──────────────┐     ┌─────────────────┐
+│ Data Layer│────→│ Spatial Ops  │────→│ ContextBlock[] │ → PARSE prompt (agent 记忆)
+│ (Bundle)  │     │ (关系计算)   │     │ (不持久化)      │
+└───────────┘     └──────┬───────┘     └─────────────────┘
+        │                │
+        ▼                ▼
+┌───────────┐
+│ KG Builder│ ← 直接从 bundle 形态分组 + parcel_relations 构建 Layer 1-2
+│           │ ← intent → Layer 3 虚拟实体（易失）
+│           │ ← planned_state → Layer 4 规划成果（版本化）
+└───────────┘
+        ▲
+        │
+┌───────────┐     ┌──────────────┐     ┌─────────────────┐
+│ PARSE     │────→│ EXECUTE      │────→│ PlanBlock[]     │ → 累积 → PlannedState
+│ (产出     │     │ (求解)       │     │ (agent 记忆)    │              │
+│  Intent)  │     │              │     └─────────────────┘              │
+└───────────┘     └──────────────┘                        ┌─────────────▼──┐
+                                                            │ KG Layer 4    │
+                                                            │ (持久化)       │
+                                                            └────────────────┘
+```
+
+**关键分离**：
+
+- **ContextBlock** 和 **PlanBlock** 都是 Agent 的临时"工作记忆"，不进入 KG
+- **KG** 只存储有几何的空间实体（现状 L1、意图虚拟实体 L3、规划成果 L4）
+- **bundle.tables** 存储非空间数据（ControlRule、PlanningIndicator）
+
+---
+
+## 七、模块结构
 
 ```
 backend/app/modules/kg/
 ├── __init__.py               # 公开 API 导出
 ├── README.md                 # 本文档
-├── ontology.py               # 本体定义: 23+ 实体类型 + 14+ 关系类型
-├── query.py                  # SPARQL 查询模板
-├── constraint_compiler.py    # [K3 待建] KG -> MIPModel 编译器
+├── ontology.py               # 本体定义: 实体类型 + 关系类型
 ├── manager.py                # KGManager: 缓存 + 会话管理
-├── builder/                  # [v4.4] 四层构建器子包
-│   ├── __init__.py           # 导出 PlanningKG, KGInputParcels
-│   ├── base.py               # 骨架: __init__ + build_from_blocks + clone_static_layer
-│   │                          # + YAML 模式加载 + 方法分配
-│   ├── layer1.py             # Layer 1: 现状实体 (16 方法)
-│   ├── layer2.py             # Layer 2: 约束规则与指标 (2 方法)
-│   ├── layer3.py             # Layer 3: PARSE 意图 (2 方法)
-│   ├── layer4.py             # Layer 4: 规划状态 + 版本对比 (4 方法)
-│   └── queries.py            # 语义查询接口 (10 方法)
+├── memory.py                 # [v4.6] SemanticMemoryStore: 实体+关系注解
+├── builder/                  # 四层构建器子包
+│   ├── __init__.py           # 导出 PlanningKG, KGInputParcels, Mixin 类
+│   ├── base.py               # PlanningKG 骨架: __init__ + build_from_bundle
+│   │                          # + clone_static_layer + print_summary
+│   ├── layer1.py             # Layer 1: 现状实体（从 bundle 形态分组直连）
+│   ├── layer2.py             # Layer 2: 空间关系（从 parcel_relations 注入）
+│   ├── layer3.py             # Layer 3: 意图虚拟实体（intent → 粗糙几何）
+│   ├── layer4.py             # Layer 4: 规划成果（PlannedState → 版本化增量）
+│   ├── queries.py            # 语义查询接口
+│   └── mixins.py             # [v4.6] Mixin 类（替代 monkey-patching）
+└── queries/
+    ├── __init__.py            # 导出 SPARQL 模板 + SemanticMemoryStore 查询
+    └── tools.py               # SPARQL 模板注册表 (30+ 模板，参数化查询)
 ```
 
-### 5.1 方法分配机制
+### 7.1 方法分配机制
 
-每个 layer 文件定义模块级函数（`self` 为首参数），`base.py` 在类定义后通过显式赋值挂接到 `PlanningKG` 类：
+每个 layer 文件定义模块级函数，通过 `mixins.py` 中的 Mixin 类继承到 `PlanningKG`：
 
 ```python
-from .layer1 import _add_parcels_typed
-PlanningKG._add_parcels_typed = _add_parcels_typed
+class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin):
+    ...
 ```
 
-这保持了 IDE 自动补全，实现了按层分文件维护，且所有方法共享同一个 `self.g`（RDF 图）。
+### 7.2 各层方法清单
 
-### 5.2 各层方法清单
-
-| 文件           | 方法                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | 职责           |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
-| `layer1.py`  | `_add_village_entity`, `_add_village_meta_from_blocks`, `_add_natural_villages_from_blocks`, `_add_facilities_from_blocks`, `_add_spatial_relations_from_blocks`, `_add_zone_adjacency_from_blocks`, `_add_parcel_relations`, `_add_parcels_typed`, `_add_infrastructure_from_typed`, `_add_control_lines_from_typed`, `_add_planning_elements_from_typed`, `_add_natural_features_from_typed`, `_add_designated_as_from_typed`, `_add_vne_categories`, `_add_three_zone_three_line`, `add_annotations`, `add_roads`, `add_terrain` | 现状实体构建   |
-| `layer2.py`  | `_add_landuse_dist_from_blocks`, `_add_constraints_from_blocks`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | 约束规则与指标 |
-| `layer3.py`  | `_add_structured_intent`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | PARSE 意图子图 |
-| `layer4.py`  | `_apply_plan_block`, `get_effective_land_use`, `get_effective_area_ha`, `get_plan_changes`, `get_split_parcels`, `get_merge_parcels`, `get_planned_parcels_in_zone`, `check_constraint_violations`, `compare_versions`                                                                                                                                                                                                                                                                                                                                | 规划状态       |
-| `queries.py` | `query`, `get_constraints`, `get_adjacency_map`, `get_parcel_count`, `get_triple_count`, `serialize`, `to_turtle`, `from_turtle`, `get_parcels_within_distance_of_entity`, `get_adjacent_parcels_with_length`, `validate_intent`                                                                                                                                                                                                                                                                                                                  | 语义查询       |
+| 文件 | 方法 | 职责 |
+|------|------|------|
+| `layer1.py` | `_add_village_entity`, `_add_parcels_typed`, `_add_infrastructure_from_typed`, `add_roads`, `_add_control_lines_from_typed`, `_add_planning_elements_from_typed`, `_add_natural_features_from_typed`, `_add_designated_as_from_typed`, `_add_vne_categories`, `_add_three_zone_three_line`, `add_annotations`, `add_terrain` | 现状实体构建 |
+| `layer2.py` | `_add_parcel_relations` | 空间关系注入 |
+| `layer3.py` | `build_intent_layer`, `clear_intent_layer` | 意图虚拟实体 |
+| `layer4.py` | `_apply_planned_state`, `get_effective_land_use`, `get_effective_area_ha`, `get_plan_changes`, `check_constraint_violations`, `compare_versions` | 规划成果 |
+| `queries.py` | `query`, `get_adjacency_map`, `get_parcel_count`, `get_triple_count`, `serialize`, `to_turtle`, `from_turtle`, `get_parcels_within_distance_of_entity`, `get_adjacent_parcels_with_length`, `get_connected_parcels`, `get_parcels_by_bsm_list` | 语义查询 |
 
 ---
 
-## 六、数据加载到 KG 构建的完整流程
-
-### 6.1 端到端示例
+## 八、端到端示例
 
 ```python
 from app.modules.data import DataCatalog
-from app.modules.spatial_ops import compute_context_blocks
 from app.modules.spatial_ops.geometry import compute_parcel_relations
 from app.modules.kg import PlanningKG, get_kg_manager
 from app.modules.schema.contracts.parse_contracts import (
     SpatialPlanningIntent, ZoneTarget, FacilityTarget, AxisTarget,
-)
-from app.modules.schema.contracts.context_contracts import (
-    PlanBlock, ParcelChange, FacilityChange, RoadChange,
 )
 
 # 1. 加载数据
 catalog = DataCatalog()
 bundle = catalog.load_village_bundle("金田村委会")
 
-# 2. 计算空间认知卡片 + 三层空间关系
-blocks = compute_context_blocks(bundle)
-relations = compute_parcel_relations(bundle.polygons.landuse_current)
+# 2. 计算三层空间关系
+relations = compute_parcel_relations(
+    bundle.polygons.landuse_current,
+    roads=bundle.lines.roads_current,
+)
 
 # 3. 构建 PARSE 意图 (Layer 3)
 intent = SpatialPlanningIntent(
@@ -283,131 +469,89 @@ intent = SpatialPlanningIntent(
     ],
 )
 
-# 4. 构建规划方案 (Layer 4)
-planned = PlanBlock(version="v1",
-    parcel_changes=[
-        ParcelChange(bsm="441426211000055682", action="reclassify",
-                     new_planning_land_use="2121", new_area_ha=0.15,
-                     derived_from_bsms=["441426211000055682"]),
-    ],
-    facility_changes=[
-        FacilityChange(name="展销中心", action="new", facility_type="商业", area_sqm=400),
-    ],
-    road_changes=[
-        RoadChange(name="规划路", action="new", road_level="主干道", width_m=12),
-    ],
-)
-
-# 5. 构建 KG (四层一次性写入)
+# 4. 构建 KG (Layer 1-4)
 kg = PlanningKG("金田村委会")
-kg.build_from_blocks(
-    blocks=blocks, bundle=bundle, parcel_relations=relations,
-    intent=intent, plan_block=planned,
+kg.build_from_bundle(
+    bundle=bundle,
+    parcel_relations=relations,
+    intent=intent,                    # → L3 虚拟实体
+    planned_state=None,               # → L4 规划成果（可选）
 )
 
-# 6. 查询 Layer 1: 现状实体
-parcel_count = kg.get_parcel_count()                    # 660
-constraints = kg.get_constraints()                      # 3 条约束
-
-# 7. 查询 Layer 2: 约束规则
-r = kg.query("PREFIX pln: <http://village-planning.org/ontology#> "
-             "SELECT ?id ?field ?op ?value WHERE { "
-             "?c a pln:Constraint ; pln:constraint_id ?id ; "
-             "pln:field ?field ; pln:operator ?op ; pln:value ?value . }")
-
-# 8. 查询 Layer 3: 意图子图（结构数据 + 语义附件）
-zone_targets = kg.query("PREFIX pln: <http://village-planning.org/ontology#> "
-                         "SELECT ?code ?area WHERE { "
-                         "?z a pln:ZoneTarget ; pln:land_use_code ?code ; "
-                         "pln:target_area_ha ?area . }")
-semantic = kg._semantic_store  # JSON 附件，不存为 RDF 三元组
-
-# 9. 查询 Layer 4: 规划方案
-violations = kg.check_constraint_violations("v1")       # 冲突检测
-diff = kg.compare_versions("v1", "v2")                   # 多版对比
-
-# 10. 语义查询
+# 5. 查询
+parcel_count = kg.get_parcel_count()                      # 660
+adjacent = kg.get_adjacent_parcels_with_length("BSM-001") # 邻接地块
 nearby = kg.get_parcels_within_distance_of_entity(
     "http://village-planning.org/ontology#village_ann_刘村", 500)
-adjacent = kg.get_adjacent_parcels_with_length("441426211000055682")
+
+# 6. SemanticMemoryStore 查询
+from app.modules.kg.memory import get_semantic_memory
+memory = get_semantic_memory()
+entity_info = memory.get_entity_semantics("pln:NaturalSettlement/刘村")
+relation_info = memory.get_relation_semantics("pln:NaturalSettlement/刘村",
+                                               "pln:north_of",
+                                               "pln:NaturalSettlement/八社村")
 ```
 
 ---
 
-## 七、实际数据验证 (jintian)
+## 九、实际数据验证 (jintian)
 
-### 7.1 KG 统计
+### 9.1 KG 统计（使用 `data/gis/jintian/` 真实数据）
 
-使用 `data/gis/jintian/` 真实数据构建 KG，统计如下：
+| 指标 | 值 |
+|------|-----|
+| 总三元组 | ~21,000 |
+| 地块 (Parcel) | 660 |
+| 道路 (Road) | 131 |
+| 设施 (Facility) | 44 |
+| 自然村落 (NaturalSettlement) | 19 |
+| 水域 (WaterBody) | 44 |
+| 分区 (Zone) | 139 |
+| 三区 (ThreeZone) | 3 |
+| 三线 (ThreeLine) | 6 |
 
-| 指标                         | 值                                         |
-| ---------------------------- | ------------------------------------------ |
-| 总三元组                     | 21,077                                     |
-| 地块 (Parcel)                | 660                                        |
-| 道路 (Road)                  | 131 (from road.geojson via `add_roads`) |
-| 设施 (Facility)              | 44                                         |
-| 自然村落 (NaturalSettlement) | 19                                         |
-| 水域 (WaterBody)             | 44                                         |
-| 分区 (Zone)                  | 139                                        |
-| VNE 分类 (LandUseCategory)   | 28                                         |
-| 三区 (ThreeZone)             | 3                                          |
-| 三线 (ThreeLine)             | 6                                          |
-| 约束 (Constraint)            | 3                                          |
+### 9.2 三层空间关系
 
-### 7.2 三层空间关系
+| 层 | 关系 | 三元组数 | 计算来源 |
+|----|------|---------|---------|
+| L1 | `pln:touches` | 1,549 | `compute_parcel_relations` (shapely `geom.touches()`) |
+| L2 | `pln:nearby` | 4,195 | `compute_parcel_relations` (质心距离 ≤ 200m) |
+| L3 | `pln:connected_via_road` | 207 | `compute_parcel_relations(parcels, roads=...)` (道路穿过) |
 
-| 层 | 关系                       | 三元组数 | 计算来源                                                    |
-| -- | -------------------------- | -------- | ----------------------------------------------------------- |
-| L1 | `pln:touches`            | 1,549    | `compute_parcel_relations` (shapely `geom.touches()`)   |
-| L2 | `pln:nearby`             | 4,195    | `compute_parcel_relations` (质心距离 ≤ 200m)             |
-| L3 | `pln:connected_via_road` | 207      | `compute_parcel_relations(parcels, roads=...)` (道路穿过) |
-
-### 7.3 PlanBlock 增量写入对比
-
-| 方案                       | 三元组增量    | 说明                                 |
-| -------------------------- | ------------- | ------------------------------------ |
-| 旧 PlannedState (全量镜像) | ~6,600 (+31%) | 660 地块 × 5 字段 × 2 (type+value) |
-| 新 PlanBlock (增量 delta)  | 37 (+0.17%)   | 3 变更条目 × ~12 字段               |
-
-### 7.4 可视化产物
-
-位于 `docs/gis/kg_visualization/`：
-
-- `kg_architecture.svg` - 四层架构图（含实际实体计数）
-- `kg_sample_subgraph.svg` - 样本子图（村庄+约束+地块+L4 delta）
-- `kg_statistics.png` - 实体分布 + 关系分布柱状图
-- `kg_dlbm_distribution.png` - DLBM 地类分布饼图
-
-生成命令：
-
-```bash
-cd F:/project/Village_Planning_Agent
-export PATH="$PATH:/c/Program Files/Graphviz/bin"
-python backend/scripts/visualize_kg.py
-```
-
-### 7.5 测试
+### 9.3 测试
 
 ```bash
 cd backend
 python -m pytest tests/integration/test_kg_jintian_e2e.py tests/unit/test_kg_no_reverse_deps.py -v
-# 73 passed in ~91s
 ```
 
 ---
 
-## 八、变化记录
+## 十、与设计文档的差异
 
-| 版本 | 变更                                                                       |
-| ---- | -------------------------------------------------------------------------- |
-| v4.5 | 统一 Intent 类型：删除 `PlanIntent`（context_contracts），KG 直接消费 `SpatialPlanningIntent`（parse_contracts） |
-| v4.5 | 语义字段：`natural_language_description`、`spatial_hint`、`reasoning_trace` 存为 JSON 附件，不存为 RDF 三元组 |
-| v4.5 | 本体清理：移除 6 个未用实体类型，合并 `Indicator`→`PlanningIndicator`，`adjacent_to` 标记 @deprecated |
-| v4.4 | 引入 SpatialCognitiveUnit 形态层级，统一认知锚点/意图/规划状态的类型体系   |
-| v4.4 | `build_from_blocks` 单入口，四层显式写入                                 |
-| v4.4 | `PlanBlock` 增量变更集设计，稀疏写入，L1+L4 merge 查询                   |
-| v4.4 | L3 路网连通（`compute_parcel_relations` 接受 roads 参数）                |
-| v4.4 | 删除 21 个旧方法，零 shapely/geopandas 依赖                                |
-| v4.3 | 项目级`ProjectKG` + ConstraintCompiler + 对接 `ProjectDataView`        |
-| v4.2 | GISDataBundle 形态重组，Schema 提升                                        |
-| v4.1 | 三层模型分离，Layer1 缓存                                                  |
+| 文档 | 需要更新 |
+|------|---------|
+| `docs/gis/00_SYSTEM_DESIGN.md` | 整体架构图、四层定义、数据流、删除 ConstraintCompiler 引用 |
+| `docs/gis/reference/OPTIMIZATION_TASKS.md` | 删除 ConstraintCompiler 任务 |
+
+---
+
+## 十一、变化记录
+
+| 版本 | 变更 |
+|------|------|
+| v4.6.1 | **文档修正** - §2.3 方法名表更新（删除 `_add_parcels_typed`/`_add_infrastructure_from_typed`/`_add_constraints_from_typed` 等已废弃方法名） |
+| v4.6.1 | **新增 §2.7 实体标识与 bundle 锚定契约** - 文档化 URI 方案碎片化、ThreeZone 脱离 bundle、L4->L3 链接未实现等已知缺口 |
+| v4.6 | **重构：只存空间实体** — 删除 `ControlRule`, `PlanningIndicator`, `Constraint`, `PlanIntent` 从 EntityTypes |
+| v4.6 | **删除关系** — `constrained_by`, `achieves`, `conflicts_with`, `conducted_from`, `controls_use`, `protects`, `adjacent_to`, `location_constraint` |
+| v4.6 | **删除死代码** — `queries/llm.py` 整个文件, `_semantic_store` 字段 |
+| v4.6 | **新增 SemanticMemoryStore** — 实体+关系注解，SQLite/JSON 持久化 |
+| v4.6 | **新增 L3 虚拟实体构建器** — Intent → 粗糙几何 + 空间关系 |
+| v4.6 | **新增 L4 PlannedState** — 增量聚合视图，形态对齐 bundle |
+| v4.6 | **变更 KG builder** — 从 bundle 形态分组直连，不再依赖 ContextBlock |
+| v4.6 | **变更方法分配** — 从 monkey-patching → Mixin 类继承 |
+| v4.6 | **SPARQL 参数化** — `initBindings` 替代 `str.replace`，消除注入风险 |
+| v4.6 | **缓存键确定性** — `hashlib.md5` 替代 `hash(frozenset(...))` |
+| v4.5 | 统一 Intent 类型，本体清理，删除 6 个未用实体类型 |
+| v4.4 | 引入 SpatialCognitiveUnit 形态层级，四层架构，PlanBlock 增量变更集 |
