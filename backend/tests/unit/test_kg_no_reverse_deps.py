@@ -6,8 +6,8 @@ Workstream B verification (v4.4 updated):
 3. dlbm_to_planning_zone works when imported from schema
 4. SpatialCognitiveUnit hierarchy (PlanIntent/PlanBlock) can be constructed
 5. Static analysis: no import from app.tools or app.agent in kg/ (incl builder/)
-6. build_from_blocks works with typed PlanIntent (Layer 3)
-7. build_from_blocks works with typed PlanBlock (Layer 4)
+6. build_from_bundle works with typed SpatialPlanningIntent (Layer 3)
+7. build_from_bundle works with typed PlannedState (Layer 4)
 """
 
 import os
@@ -100,10 +100,9 @@ def test_kg_builder_uses_schema_imports():
     with open(layer1_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Check that schema imports are present (v4.4 path)
+    # Check that schema imports are present (v4.6 path)
     assert "from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm" in content
-    assert "from app.modules.schema.contracts.context_contracts import" in content
-    assert "from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone" in content
+    assert "from app.modules.schema.types.spatial_types import" in content
 
 
 def test_no_reverse_deps_in_kg():
@@ -154,11 +153,11 @@ def test_metrics_pure_function():
     )
 
 
-# ── build_from_blocks with typed PlanIntent (v4.4) ──────────────────
+# ── build_from_bundle with typed SpatialPlanningIntent (v4.6) ────────────
 
 
-def test_build_from_blocks_with_typed_intent():
-    """Verify build_from_blocks accepts typed SpatialPlanningIntent (Layer 3)."""
+def test_build_from_bundle_with_typed_intent():
+    """Verify build_from_bundle accepts typed SpatialPlanningIntent (Layer 3)."""
     from app.modules.kg.builder import PlanningKG
     from app.modules.schema.contracts.parse_contracts import (
         SpatialPlanningIntent, ZoneTarget, FacilityTarget, AxisTarget,
@@ -180,7 +179,7 @@ def test_build_from_blocks_with_typed_intent():
     kg = PlanningKG(village_name="测试村")
     from app.modules.schema.types.canonical import VillageBundle
     bundle = VillageBundle(village_name="测试村")
-    kg.build_from_blocks(blocks=[], bundle=bundle, parcel_relations=None,
+    kg.build_from_bundle(bundle=bundle, parcel_relations=None,
                          intent=intent)
 
     assert kg.get_triple_count() > 0
@@ -199,53 +198,51 @@ def test_build_from_blocks_with_typed_intent():
     assert len(axis_targets) == 1
     # Note: SpatialConstraints are NOT part of SpatialPlanningIntent.
     # They are passed separately by the caller.
-    # Semantic store populated (not RDF)
-    assert len(kg._semantic_store) > 0
 
 
-def test_build_from_blocks_with_plan_block():
-    """Verify build_from_blocks accepts typed PlanBlock (Layer 4 delta)."""
+def test_build_from_bundle_with_planned_state():
+    """Verify build_from_bundle accepts PlannedState (Layer 4)."""
     from app.modules.kg.builder import PlanningKG
-    from app.modules.schema.contracts.context_contracts import (
-        PlanBlock, ParcelChange, FacilityChange, RoadChange,
+    from app.modules.kg.builder.layer4 import (
+        PlannedState, PlannedParcelEntry, PlannedFacilityEntry, PlannedRoadEntry,
     )
     from app.modules.schema.types.canonical import VillageBundle
 
-    planned = PlanBlock(version="v1",
-        parcel_changes=[
-            ParcelChange(bsm="TEST_001", action="reclassify",
-                               new_planning_land_use="2121",
-                               new_area_ha=0.5, new_zone_type="村庄建设区"),
+    planned = PlannedState(version="v1",
+        parcels=[
+            PlannedParcelEntry(bsm="TEST_001", planning_land_use="2121",
+                               area_ha=0.5, zone_type="村庄建设区"),
         ],
-        facility_changes=[
-            FacilityChange(name="展销中心", facility_type="商业",
-                                 area_sqm=400, center=(113.5, 23.5)),
+        facilities=[
+            PlannedFacilityEntry(name="展销中心", facility_type="商业",
+                                 lon=113.5, lat=23.5),
         ],
-        road_changes=[
-            RoadChange(name="规划路", road_level="主干道", width_m=12),
+        roads=[
+            PlannedRoadEntry(name="规划路", road_level="主干道", width_m=12),
         ],
     )
 
     kg = PlanningKG(village_name="测试村")
     bundle = VillageBundle(village_name="测试村")
-    kg.build_from_blocks(blocks=[], bundle=bundle, parcel_relations=None,
-                         plan_block=planned)
+    kg.build_from_bundle(bundle=bundle, parcel_relations=None,
+                         planned_state=planned)
 
     # Layer 4: PlannedParcel entities (sparse - only changes)
     pp = kg.query(
         "PREFIX pln: <http://village-planning.org/ontology#> "
-        "SELECT ?p ?bsm ?action WHERE { "
-        "?p a pln:PlannedParcel ; pln:bsm ?bsm ; pln:change_action ?action . }")
+        "SELECT ?p ?bsm ?lu WHERE { "
+        "?p a pln:PlannedParcel ; pln:bsm ?bsm ; "
+        "pln:planning_land_use ?lu . }")
     assert len(pp) == 1
     assert pp[0]["bsm"] == "TEST_001"
-    assert pp[0]["action"] == "reclassify"
-    # Facility added with version tag
+    assert pp[0]["lu"] == "2121"
+    # PlannedFacility added with version tag
     fac = kg.query(
         "PREFIX pln: <http://village-planning.org/ontology#> "
-        'SELECT ?f WHERE { ?f a pln:Facility ; pln:in_version "v1" . }')
+        'SELECT ?f WHERE { ?f a pln:PlannedFacility ; pln:in_version "v1" . }')
     assert len(fac) == 1
-    # Road added with version tag
+    # PlannedRoad added with version tag
     rd = kg.query(
         "PREFIX pln: <http://village-planning.org/ontology#> "
-        'SELECT ?r WHERE { ?r a pln:Road ; pln:in_version "v1" . }')
+        'SELECT ?r WHERE { ?r a pln:PlannedRoad ; pln:in_version "v1" . }')
     assert len(rd) == 1

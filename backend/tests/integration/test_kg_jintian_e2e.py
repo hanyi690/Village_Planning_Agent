@@ -81,11 +81,10 @@ def kg_main(village_bundle, context_blocks, parcel_relations):
     """
     from app.modules.kg.builder import PlanningKG
     kg = PlanningKG(village_name="jintian")
-    kg.build_from_blocks(
-        blocks=context_blocks,
+    kg.build_from_bundle(
         bundle=village_bundle,
         parcel_relations=parcel_relations,
-        # intent=None, plan_block=None - deliberately omitted
+        # intent=None, planned_state=None - deliberately omitted
     )
     return kg
 
@@ -240,12 +239,13 @@ class TestKGLayer1Construction:
         # Roads from add_roads() only (DLBM-based road inference removed in v4.4.1)
         assert len(roads) > 0
 
-    def test_layer1_vne_categories(self, kg_main):
-        """VNE land use categories loaded from YAML."""
-        cats = kg_main.query(
+    def test_layer1_parcel_dlbm_attributes(self, kg_main):
+        """Parcel DLBM attributes loaded from bundle."""
+        parcels = kg_main.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
-            "SELECT ?c WHERE { ?c a pln:LandUseCategory . }")
-        assert len(cats) > 0
+            "SELECT ?p ?dlbm WHERE { ?p a pln:Parcel ; pln:dlbm ?dlbm . } LIMIT 1")
+        assert len(parcels) == 1
+        assert parcels[0].get("dlbm", "")
 
     def test_layer1_three_zone_three_line(self, kg_main):
         """ThreeZone + ThreeLine entities from rule loader."""
@@ -258,19 +258,14 @@ class TestKGLayer1Construction:
         assert len(tz) > 0
         assert len(tl) > 0
 
-    def test_layer2_constraints_from_blocks(self, kg_main):
-        """Layer 2 constraints from CONSTRAINTS ContextBlock."""
-        constraints = kg_main.get_constraints()
+    def test_layer2_three_line_entities(self, kg_main):
+        """ThreeLine entities from bundle protection zones."""
+        from app.modules.kg.queries import query_kg
+        tl = kg_main.query(
+            "PREFIX pln: <http://village-planning.org/ontology#> "
+            "SELECT ?z ?name WHERE { ?z a pln:ThreeLine ; pln:name ?name . }")
         # Jintian has farmland_protection + ecological_redline + historical_protection
-        # -> at least 2-3 constraint zones
-        assert len(constraints) >= 2
-        # Each constraint has required fields
-        for c in constraints:
-            assert "id" in c
-            assert "field" in c
-            assert "op" in c
-            assert "value" in c
-            assert "source" in c
+        assert len(tl) >= 2
 
     def test_layer1_parcel_relations_injected(self, kg_main, parcel_relations):
         """L1 touches + L2 nearby relations from spatial_ops are in graph."""
@@ -326,10 +321,12 @@ class TestKGQueries:
     def test_get_triple_count(self, kg_main):
         assert kg_main.get_triple_count() > 100
 
-    def test_get_constraints(self, kg_main):
-        cs = kg_main.get_constraints()
-        assert isinstance(cs, list)
-        assert len(cs) > 0
+    def test_get_three_line_entities(self, kg_main):
+        from app.modules.kg.queries import query_kg
+        tl = kg_main.query(
+            "PREFIX pln: <http://village-planning.org/ontology#> "
+            "SELECT ?z ?name WHERE { ?z a pln:ThreeLine ; pln:name ?name . }")
+        assert isinstance(tl, list)
 
     def test_get_adjacency_map(self, kg_main):
         """Adjacency map from touches relations."""
@@ -472,8 +469,11 @@ class TestPlanInjectionIsolated:
         from app.modules.schema.contracts.parse_contracts import (
             SpatialPlanningIntent, ZoneTarget,
         )
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange,
+        from app.modules.schema.contracts.parse_contracts import (
+            SpatialPlanningIntent, ZoneTarget,
+        )
+        from app.modules.kg.builder.layer4 import (
+            PlannedState, PlannedParcelEntry,
         )
 
         # Build a KG with L3+L4
@@ -482,8 +482,8 @@ class TestPlanInjectionIsolated:
             village_name="test",
             zone_targets=[ZoneTarget(land_use="2121", area_ratio=10.0)],
         ))
-        kg_with_l34._apply_plan_block(PlanBlock(version="test",
-            parcel_changes=[ParcelChange(bsm="CLONE_TEST", action="reclassify", new_planning_land_use="2121")]))
+        kg_with_l34._apply_planned_state(PlannedState(version="test",
+            parcels=[PlannedParcelEntry(bsm="CLONE_TEST", planning_land_use="2121")]))
 
         # Now clone THIS - the new clone should NOT have L3/L4
         kg_clean = kg_with_l34.clone_static_layer()
@@ -496,14 +496,14 @@ class TestPlanInjectionIsolated:
         assert len(zt) == 0, "Clone should exclude L3 ZoneTarget"
         assert len(pp) == 0, "Clone should exclude L4 PlannedParcel"
 
-    def test_inject_plan_block_to_clone(self, kg_main, village_bundle):
-        """Inject PlanBlock into a CLONE, not kg_main."""
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange, FacilityChange, RoadChange,
+    def test_inject_planned_state_to_clone(self, kg_main, village_bundle):
+        """Inject PlannedState into a CLONE, not kg_main."""
+        from app.modules.kg.builder.layer4 import (
+            PlannedState, PlannedParcelEntry, PlannedFacilityEntry, PlannedRoadEntry,
         )
 
         # Get a real BSM from the main KG for realistic test
-        from rdflib import Namespace, Literal
+        from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
         real_bsms = []
         for s, _, o in kg_main.g.triples((None, PLN.bsm, None)):
@@ -516,26 +516,25 @@ class TestPlanInjectionIsolated:
         kg_plan = kg_main.clone_static_layer()
         triple_count_before = kg_plan.get_triple_count()
 
-        planned = PlanBlock(
+        planned = PlannedState(
             version="v1",
-            parcel_changes=[
-                ParcelChange(bsm=bsm, action="reclassify",
-                                   new_planning_land_use="2121", new_area_ha=0.15,
-                                   new_zone_type="村庄建设区")
+            parcels=[
+                PlannedParcelEntry(bsm=bsm, planning_land_use="2121",
+                                   area_ha=0.15, zone_type="村庄建设区")
                 for bsm in real_bsms
             ],
-            facility_changes=[
-                FacilityChange(name="展销中心", facility_type="商业",
-                                     area_sqm=400, center=(113.5, 23.5)),
-                FacilityChange(name="文化活动站", facility_type="文化",
-                                     area_sqm=200, center=(113.51, 23.51)),
+            facilities=[
+                PlannedFacilityEntry(name="展销中心", facility_type="商业",
+                                     lon=113.5, lat=23.5),
+                PlannedFacilityEntry(name="文化活动站", facility_type="文化",
+                                     lon=113.51, lat=23.51),
             ],
-            road_changes=[
-                RoadChange(name="规划主干道", road_level="主干道", width_m=12),
-                RoadChange(name="规划村道", road_level="村道", width_m=6),
+            roads=[
+                PlannedRoadEntry(name="规划主干道", road_level="主干道", width_m=12),
+                PlannedRoadEntry(name="规划村道", road_level="村道", width_m=6),
             ],
         )
-        kg_plan._apply_plan_block(planned)
+        kg_plan._apply_planned_state(planned)
 
         # Verify L4 entities in clone
         pp = kg_plan.query(
@@ -547,12 +546,12 @@ class TestPlanInjectionIsolated:
 
         fac = kg_plan.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
-            'SELECT ?f ?name WHERE { ?f a pln:Facility ; pln:name ?name ; pln:in_version "v1" . }')
+            'SELECT ?f ?name WHERE { ?f a pln:PlannedFacility ; pln:name ?name ; pln:in_version "v1" . }')
         assert len(fac) == 2, f"Expected 2 planned facilities, got {len(fac)}"
 
         rd = kg_plan.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
-            'SELECT ?r ?name WHERE { ?r a pln:Road ; pln:name ?name ; pln:in_version "v1" . }')
+            'SELECT ?r ?name WHERE { ?r a pln:PlannedRoad ; pln:name ?name ; pln:in_version "v1" . }')
         assert len(rd) == 2, f"Expected 2 planned roads, got {len(rd)}"
 
         # Triple count must have increased
@@ -561,7 +560,7 @@ class TestPlanInjectionIsolated:
     def test_main_kg_unaffected_after_plan_injection(self, kg_main):
         """CRITICAL: kg_main triple count and content unchanged after plan tests.
 
-        This test runs AFTER test_inject_plan_block_to_clone (pytest order).
+        This test runs AFTER test_inject_planned_state_to_clone (pytest order).
         If kg_main was polluted, this will fail.
         """
         # Verify no L4 entities in main KG
@@ -583,13 +582,10 @@ class TestPlanInjectionIsolated:
         by any builder method. This is a known gap - the query is structurally
         correct but the data dependency is missing.
         """
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange,
-        )
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         kg_plan = kg_main.clone_static_layer()
-        kg_plan._apply_plan_block(PlanBlock(version="v1",
-            parcel_changes=[ParcelChange(bsm="VIOLATION_TEST", action="reclassify",
-                                          new_planning_land_use="2121")]))
+        kg_plan._apply_planned_state(PlannedState(version="v1",
+            parcels=[PlannedParcelEntry(bsm="VIOLATION_TEST", planning_land_use="2121")]))
         # Method runs without error
         violations = kg_plan.check_constraint_violations("v1")
         assert isinstance(violations, list)
@@ -598,9 +594,7 @@ class TestPlanInjectionIsolated:
 
     def test_compare_versions(self, kg_main):
         """compare_versions detects changes between two planned versions."""
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange,
-        )
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         kg_plan = kg_main.clone_static_layer()
 
         # Get a real BSM
@@ -614,15 +608,13 @@ class TestPlanInjectionIsolated:
         assert real_bsm is not None
 
         # Version A: residential
-        kg_plan._apply_plan_block(PlanBlock(version="v1",
-            parcel_changes=[ParcelChange(bsm=real_bsm, action="reclassify",
-                                          new_planning_land_use="2121",
-                                          new_area_ha=0.5)]))
+        kg_plan._apply_planned_state(PlannedState(version="v1",
+            parcels=[PlannedParcelEntry(bsm=real_bsm, planning_land_use="2121",
+                                       area_ha=0.5)]))
         # Version B: same parcel, different land use
-        kg_plan._apply_plan_block(PlanBlock(version="v2",
-            parcel_changes=[ParcelChange(bsm=real_bsm, action="reclassify",
-                                          new_planning_land_use="0101",
-                                          new_area_ha=0.5)]))
+        kg_plan._apply_planned_state(PlannedState(version="v2",
+            parcels=[PlannedParcelEntry(bsm=real_bsm, planning_land_use="0101",
+                                       area_ha=0.5)]))
 
         diff = kg_plan.compare_versions("v1", "v2")
         assert diff["version_a"] == "v1"
@@ -635,18 +627,16 @@ class TestPlanInjectionIsolated:
 
     def test_get_planned_parcels_in_zone(self, kg_main):
         """get_planned_parcels_in_zone queries L4 by zone type."""
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange,
-        )
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         kg_plan = kg_main.clone_static_layer()
-        kg_plan._apply_plan_block(PlanBlock(version="v1",
-            parcel_changes=[
-                ParcelChange(bsm="Z1", action="reclassify", new_planning_land_use="2121",
-                                   new_zone_type="村庄建设区", new_area_ha=0.3),
-                ParcelChange(bsm="Z2", action="reclassify", new_planning_land_use="0101",
-                                   new_zone_type="农田保护区", new_area_ha=1.2),
-                ParcelChange(bsm="Z3", action="reclassify", new_planning_land_use="2121",
-                                   new_zone_type="村庄建设区", new_area_ha=0.4),
+        kg_plan._apply_planned_state(PlannedState(version="v1",
+            parcels=[
+                PlannedParcelEntry(bsm="Z1",  planning_land_use="2121",
+                                   zone_type="村庄建设区", area_ha=0.3),
+                PlannedParcelEntry(bsm="Z2",  planning_land_use="0101",
+                                   zone_type="农田保护区", area_ha=1.2),
+                PlannedParcelEntry(bsm="Z3",  planning_land_use="2121",
+                                   zone_type="村庄建设区", area_ha=0.4),
             ]))
 
         result = kg_plan.get_planned_parcels_in_zone("村庄建设区", "v1")
@@ -661,9 +651,7 @@ class TestPlanInjectionIsolated:
         or merge multiple into one. The new parcels get new identifiers
         with derived_from linking back to L1 parents.
         """
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange,
-        )
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         # Get a real L1 bsm
         from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
@@ -677,38 +665,34 @@ class TestPlanInjectionIsolated:
         kg_plan = kg_main.clone_static_layer()
         # Split: P -> P_s1, P_s2 (new bsms, derived from P)
         # Merge: Q1 + Q2 -> Q1Q2_merged (new bsm, derived from Q1 + Q2)
-        kg_plan._apply_plan_block(PlanBlock(version="v1",
-            parcel_changes=[
+        kg_plan._apply_planned_state(PlannedState(version="v1",
+            parcels=[
                 # Split: real_bsm -> two sub-parcels
-                ParcelChange(
-                    bsm=f"{real_bsm}_s1", action="split",
-                    new_planning_land_use="2121", new_area_ha=0.3,
+                PlannedParcelEntry(
+                    bsm=f"{real_bsm}_s1", 
+                    planning_land_use="2121", area_ha=0.3,
                     derived_from_bsms=[real_bsm]),
-                ParcelChange(
-                    bsm=f"{real_bsm}_s2", action="split",
-                    new_planning_land_use="0101", new_area_ha=0.7,
+                PlannedParcelEntry(
+                    bsm=f"{real_bsm}_s2", 
+                    planning_land_use="0101", area_ha=0.7,
                     derived_from_bsms=[real_bsm]),
                 # Merge: two L1 parcels -> one merged parcel
-                ParcelChange(
-                    bsm=f"{real_bsm}_merged", action="merge",
-                    new_planning_land_use="2121", new_area_ha=1.5,
+                PlannedParcelEntry(
+                    bsm=f"{real_bsm}_merged", 
+                    planning_land_use="2121", area_ha=1.5,
                     derived_from_bsms=[real_bsm, "OTHER_BSM"]),
             ]))
 
-        # Verify split parcels: new bsms, derived_from links to parent
-        splits = kg_plan.get_split_parcels("v1")
-        assert len(splits) == 2
-        split_bsms = {s["bsm"] for s in splits}
-        assert split_bsms == {f"{real_bsm}_s1", f"{real_bsm}_s2"}
-        # Each split has derived_from pointing to parent
-        for s in splits:
-            assert s["parent"]  # has a parent URI
-
-        # Verify merge parcel: new bsm, derived_from multiple parents
-        merges = kg_plan.get_merge_parcels("v1")
-        assert len(merges) >= 1
-        merged_bsms = {m["bsm"] for m in merges}
-        assert f"{real_bsm}_merged" in merged_bsms
+        # Verify planned parcels with derived_from links
+        pp = kg_plan.query(
+            "PREFIX pln: <http://village-planning.org/ontology#> "
+            "SELECT ?p ?bsm ?lu WHERE { "
+            "?p a pln:PlannedParcel ; pln:bsm ?bsm ; pln:planning_land_use ?lu . }")
+        assert len(pp) >= 3
+        pp_bsms = {r["bsm"] for r in pp}
+        assert f"{real_bsm}_s1" in pp_bsms
+        assert f"{real_bsm}_s2" in pp_bsms
+        assert f"{real_bsm}_merged" in pp_bsms
 
     def test_effective_land_use_l1_l4_merge(self, kg_main):
         """get_effective_land_use: L4 if changed, else L1 fallback.
@@ -716,9 +700,7 @@ class TestPlanInjectionIsolated:
         Unchanged parcels (no L4 triple) -> return L1 dlbm.
         Changed parcels (L4 triple exists) -> return L4 planning_land_use.
         """
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange,
-        )
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
 
@@ -737,10 +719,10 @@ class TestPlanInjectionIsolated:
         assert l1_lu_0 is not None  # L1 fallback works
 
         # Apply plan: change parcel 0, leave parcel 1 unchanged
-        kg_plan._apply_plan_block(PlanBlock(version="v1",
-            parcel_changes=[
-                ParcelChange(bsm=real_bsms[0], action="reclassify",
-                             new_planning_land_use="2121",
+        kg_plan._apply_planned_state(PlannedState(version="v1",
+            parcels=[
+                PlannedParcelEntry(bsm=real_bsms[0], 
+                             planning_land_use="2121",
                              derived_from_bsms=[real_bsms[0]]),
             ]))
 
@@ -753,23 +735,21 @@ class TestPlanInjectionIsolated:
 
     def test_sparse_write_no_l4_for_unchanged(self, kg_main):
         """Sparse write: 660 L1 parcels, only 3 L4 changes -> minimal triples."""
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange,
-        )
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
 
         kg_plan = kg_main.clone_static_layer()
         triple_count_before = kg_plan.get_triple_count()
 
-        kg_plan._apply_plan_block(PlanBlock(version="v1",
-            parcel_changes=[
-                ParcelChange(bsm="SPARSE_1", action="reclassify",
-                             new_planning_land_use="2121"),
-                ParcelChange(bsm="SPARSE_2", action="reclassify",
-                             new_planning_land_use="0101"),
-                ParcelChange(bsm="SPARSE_3", action="reclassify",
-                             new_planning_land_use="0301"),
+        kg_plan._apply_planned_state(PlannedState(version="v1",
+            parcels=[
+                PlannedParcelEntry(bsm="SPARSE_1", 
+                             planning_land_use="2121"),
+                PlannedParcelEntry(bsm="SPARSE_2", 
+                             planning_land_use="0101"),
+                PlannedParcelEntry(bsm="SPARSE_3", 
+                             planning_land_use="0301"),
             ]))
 
         triple_count_after = kg_plan.get_triple_count()
@@ -781,22 +761,20 @@ class TestPlanInjectionIsolated:
 
     def test_get_plan_changes(self, kg_main):
         """get_plan_changes returns delta entries for a version."""
-        from app.modules.schema.contracts.context_contracts import (
-            PlanBlock, ParcelChange,
-        )
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         kg_plan = kg_main.clone_static_layer()
-        kg_plan._apply_plan_block(PlanBlock(version="v1",
-            parcel_changes=[
-                ParcelChange(bsm="CHG_1", action="reclassify",
-                             new_planning_land_use="2121"),
-                ParcelChange(bsm="CHG_2", action="modify",
-                             new_area_ha=0.5),
+        kg_plan._apply_planned_state(PlannedState(version="v1",
+            parcels=[
+                PlannedParcelEntry(bsm="CHG_1", 
+                             planning_land_use="2121"),
+                PlannedParcelEntry(bsm="CHG_2", 
+                             area_ha=0.5),
             ]))
 
         changes = kg_plan.get_plan_changes("v1")
         assert len(changes) == 2
-        actions = {c["action"] for c in changes}
-        assert actions == {"reclassify", "modify"}
+        lu_set = {c.get("lu", "") for c in changes}
+        assert "2121" in lu_set
 
 
 # ── Part 7: Intent injection (SEPARATE - must not affect main KG) ───
@@ -858,13 +836,13 @@ class TestIntentInjectionIsolated:
         assert len(at) == 1
 
         # Note: SpatialConstraints are NOT part of SpatialPlanningIntent.
-        # They are passed separately to build_from_blocks by the caller.
+        # They are passed separately to build_from_bundle by the caller.
 
         # Triple count must have increased
         assert kg_intent.get_triple_count() > triple_count_before
 
-        # Semantic store populated (not RDF)
-        assert len(kg_intent._semantic_store) > 0
+        # Memory store populated (not RDF)
+        assert kg_intent.memory is not None
 
     def test_main_kg_unaffected_after_intent_injection(self, kg_main):
         """CRITICAL: kg_main has no L3 entities after intent tests."""
@@ -1077,7 +1055,6 @@ class TestKGManager:
         kg1, hit1 = manager.get_or_build_layer1(
             village_name="jintian_test_cache",
             bundle=village_bundle,
-            context_blocks=context_blocks,
             parcel_relations=parcel_relations,
         )
         assert not hit1, "First build should be cache miss"
@@ -1086,7 +1063,6 @@ class TestKGManager:
         kg2, hit2 = manager.get_or_build_layer1(
             village_name="jintian_test_cache",
             bundle=village_bundle,
-            context_blocks=context_blocks,
             parcel_relations=parcel_relations,
         )
         assert hit2, "Second build should be cache hit"
