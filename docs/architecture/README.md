@@ -183,4 +183,4 @@ village-planner/
 
 - [术语表](./terminology.md) - 所有术语定义
 - [文件路径索引](./file-index.md) - 关键代码路径
-- [CLAUDE.md](../../.claude/CLAUDE.md) - 项目开发规范
+- [项目开发规范](../../.claude.md) - 项目开发规范

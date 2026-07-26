@@ -1,10 +1,18 @@
 # 村庄规划智能系统 — 总体设计文档
 
-> **Status: [CURRENT] | Type: North-Star Design | Version: 4.6 | Updated: 2026-07-26**
+> **Status: [CURRENT] | Type: North-Star Design | Version: 4.7 | Updated: 2026-07-26**
 > **Scope**: 系统总体架构设计，覆盖 Schema / Data / KG / PARSE / EXECUTE 五层，回答 6 个核心设计问题
 > **Audience**: 系统架构师、核心开发者
 > **Replaces**: 00_PLANNING_SYSTEM_VISION.md + 01_DESIGN_GOALS.md + 02_OUTPUT_ARCHITECTURE.md (合并、精简、去矛盾)
 > **Archived**: 旧文档已迁入 `archive/` 目录
+>
+> **v4.7 变更摘要（2026-07-26）**：
+>
+> - EXECUTE 范式修正：图斑级操作（reclassify/modify/split/merge）为主策略，MIP 降级为配额测算与校核（对齐 03_GAP_ANALYSIS 缺陷1、05_MODULE_BOUNDARY_AUDIT §2）
+> - 清理 v4.5 编辑残留：删除重复的旧版 §3.5/§3.6 与孤儿代码片段
+> - 清理 ConstraintCompiler 矛盾：迁移路线图与术语表同步标注废弃
+> - 新增第七部分"成果合规与协同"：汇交坐标系/椭球面积、管制规则闭环、村民参与、编制模式分支、上位指标分解
+> - 基数转换纳入主数据流（Data 层 ingest 阶段）
 >
 > **v4.6 变更摘要（2026-07-26）**：
 >
@@ -65,7 +73,7 @@
 | 标准                  | 全称                                         | 系统对齐                                     |
 | --------------------- | -------------------------------------------- | -------------------------------------------- |
 | 自然资发〔2023〕234号 | 国土空间调查、规划、用途管制用地用海分类指南 | 用地分类编码体系（YDYHFL）                   |
-| GB/T 21010-2017       | 土地利用现状分类                             | 三调国标编码体系（当前数据基准）             |
+| GB/T 21010-2017       | 土地利用现状分类                             | 三调国标编码体系（注意：金田村现状层实际为附录5编码，见 02_DATA_SOURCE §2.3） |
 | GB/T 13923-2022       | 基础地理信息要素分类与代码                   | 10位数字层次码（大类+小类+一至四级类）       |
 | DB14/T 2979-2024      | 村庄规划数据库规范                           | 数据库内容、要素分类代码、数学基础、数据分层 |
 | 广东省住建厅 (2018)   | 广东省村庄规划编制指引（试行）               | 四阶段工作流、一图一表一规则成果             |
@@ -566,96 +574,6 @@ class PlanningKG:
 **已删除的关系**（不再属于 KG）：
 `constrained_by`, `achieves`, `conflicts_with`, `conducted_from`, `controls_use`,
 `protects`, `adjacent_to` ([@deprecated]), `location_constraint`
-            self._add_axis_target(at)  # pln:AxisTarget 实体
-
-    def add_operations(self, ops: List[SpatialOperation]) -> None:
-        """写入原子操作序列"""
-        for op in ops:
-            self._add_operation(op)  # pln:SpatialOperation 实体
-
-    def add_constraints(self, cons: List[SpatialConstraint]) -> None:
-        """写入空间约束 (PARSE 产出 + YAML 规则)"""
-        for c in cons:
-            self._add_constraint(c)  # pln:Constraint 实体
-```
-
-### 3.5 KG 对接 EXECUTE（读取）
-
-EXECUTE 从 KG 读取约束和语义信息：
-
-```
-EXECUTE Agent
-  ← KG.get_constraints()          # 所有约束 → MIP 约束矩阵
-  ← KG.get_adjacency_map()        # 邻接关系 → MIP 邻接规则
-  ← KG.get_protected_parcels()    # 保护地块 → MIP 锁定变量
-  ← KG.get_zone_restrictions()    # 分区限制 → MIP 容量约束
-  ← KG.get_intent()               # 规划意图 → 分配目标
-  ← KG.get_three_lines()          # 三线 → 空间约束
-  ← KG.get_vne_summary()          # VNE 汇总 → 验证参考
-  ← KG.get_facility_locations()   # 设施位置 → 设施布局
-```
-
-**读取接口**：
-
-```python
-class PlanningKG:
-    # Layer 2+3 读取 (KG → EXECUTE)
-    def get_constraints(self) -> List[Dict]:
-        """获取所有约束（含 PARSE 产出 + YAML 规则）"""
-        return self._query("get_constraints")
-
-    def get_adjacency_map(self) -> Dict[str, List[str]]:
-        """获取地块邻接关系"""
-        return self._query("get_adjacent_parcels")
-
-    def get_protected_parcels(self) -> List[str]:
-        """获取受保护地块 BSM 列表"""
-        return self._query("check_protected_parcels")
-
-    def get_intent(self) -> SpatialPlanningIntent:
-        """获取 PARSE 产出的规划意图"""
-        return self._reconstruct_intent()
-
-    def get_three_lines(self) -> List[Dict]:
-        """获取三线边界"""
-        return self._query("get_three_lines")
-```
-
-### 3.6 本体设计
-
-**23 个实体类型**（对齐 Group A~E 空间要素）：
-
-| 分组     | 实体                                                                            | 对应 Schema 类型                                     |
-| -------- | ------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| 行政区划 | Village, AdministrativeVillage, NaturalSettlement                               | AdminArea                                            |
-| 现状地类 | Parcel (CurrentLandUseParcel), BuildingGroup                                    | CurrentLandUseParcel, CurrentBuilding                |
-| 现状设施 | Facility, Road, WaterBody                                                       | CurrentFacility, CurrentRoad, WaterFeature           |
-| 规划要素 | Zone (PlannedLandUseParcel), PlannedRoad, PlannedAnnotation                     | PlannedLandUseParcel, PlannedRoad, PlannedAnnotation |
-| 保护控制 | FarmlandProtection, EcologicalRedline, HistoricalProtection, VillageDevBoundary | 对应 Schema 类型                                     |
-| 管控线   | HazardControlLine, ConditionalConstructionZone                                  | 对应 Schema 类型                                     |
-| 规划分区 | LandUseZone, ConstructionCtrlZone, PlanningScope                                | 对应 Schema 类型                                     |
-| 三区三线 | ThreeZone, ThreeLine                                                            | ThreeZoneItem, ThreeLineItem                         |
-| 规划意图 | ZoneTarget, FacilityTarget, AxisTarget                                          | ZoneTarget, FacilityTarget, AxisTarget               |
-| 管制规则 | ControlRule, PlanningIndicator                                                  | 对应 Schema 类型                                     |
-
-**14 个关系类型**：
-
-| 关系               | 含义       | 用于           |
-| ------------------ | ---------- | -------------- |
-| `adjacent_to`    | 空间邻接   | MIP 邻接规则   |
-| `within_zone`    | 包含于分区 | 分区查询       |
-| `constrained_by` | 受约束于   | 约束检查       |
-| `designated_as`  | 被指定为   | 用地分类       |
-| `protects`       | 保护       | 保护边界       |
-| `located_in`     | 位于       | 村名→地块映射 |
-| `achieves`       | 达成       | 指标落地       |
-| `conflicts_with` | 冲突       | 冲突检测       |
-| `derived_from`   | 源于       | 溯源           |
-| `serves`         | 服务       | 设施覆盖       |
-| `connects`       | 连接       | 道路网络       |
-| `delineates`     | 划定       | 三线划定       |
-| `controls_use`   | 管制用途   | 管制规则       |
-| `conducted_from` | 上位传导   | 指标传导       |
 
 ---
 
@@ -773,22 +691,33 @@ PARSE 通过四个路径辅助 EXECUTE：
 ### 5.1 EXECUTE 定位
 
 EXECUTE 是**执行层**——将 PARSE 产出的结构化意图转化为空间几何成果。
-它是多策略执行器，不是单一的 MIP 求解器。
 
-**输入**：PARSE 意图 + KG 约束 + GIS 数据（通过 Data 层）
-**输出**：allocated_geojson + layout_configs（多个图层） + validation_result
+**核心范式（v4.7 修正）**：规划不是"白纸分区分配"，而是"对现状图斑的操作"
+（见 `03_GAP_ANALYSIS.md` 缺陷1、`05_MODULE_BOUNDARY_AUDIT.md` §2）。人类规划师的
+实际操作以字段计算器式属性重赋值为主、几何裁剪为辅：大部分图斑"规划地类 = 基期现状
+地类"批量保持，少数图斑 modify/split。EXECUTE 以图斑级操作为主策略，MIP 降级为
+配额测算与校核工具，不直接生成规划几何。
 
-### 5.2 四类子任务
+**输入**：PARSE 意图 + KG 约束 + 基数转换后的现状图斑（Data 层）
+**输出**：PlannedLandUseParcel[]（derived_from 关联现状图斑）+ layout_configs
++ validation_result + 用地平衡表
 
-| 子任务               | 输入                        | 策略                | 输出                           |
-| -------------------- | --------------------------- | ------------------- | ------------------------------ |
-| **layout**     | ZoneTarget[] + 现状地块     | MIP 批量分配        | 分区赋色 + 功能分区 + 规划分区 |
-| **facility**   | FacilityTarget[] + 设施锚点 | 约束满足 + 最近邻   | 设施点图层                     |
-| **axis**       | AxisTarget[] + 现状轴线     | 程序化生成 + 缓冲区 | 轴线 + 空间控制区 + 用途分区   |
-| **road**       | 现状道路 + 规划意图         | 图搜索 + 最短路径   | 规划道路网络                   |
-| **operations** | SpatialOperation[]          | 原子操作执行        | 具体图斑变更                   |
+### 5.2 执行策略（按优先序）
+
+| # | 子任务 | 输入 | 策略 | 输出 |
+|---|--------|------|------|------|
+| 0 | 基数转换（Data 层前置） | 三调 DLBM | DLBM -> 规划用途编码映射 | 基期现状图斑 |
+| 1 | **operations**（主策略） | SpatialOperation[] + 现状图斑 | reclassify(批量保持)/modify/split/merge/create | QMDLTB 期末地类图斑 |
+| 2 | **layout**（配额校核） | ZoneTarget[] + operations 结果 | MIP 测算配额并校核偏差 | 配额偏差报告 + 调整建议 |
+| 3 | **facility** | FacilityTarget[] + 设施锚点 | 约束满足 + 最近邻 | 设施点图层 |
+| 4 | **axis** | AxisTarget[] + 现状轴线 | 程序化生成 + 缓冲区 | 轴线 + 空间控制区 |
+| 5 | **road** | 现状道路 + 规划意图 | 图搜索 + 最短路径 | 规划道路网络 |
+| 6 | 聚合派生 | QMDLTB | dissolve by GHFLBM -> TDYT；unary_union -> JSYDGZQ | TDYT/JSYDGZQ 图层 |
 
 ### 5.3 MIP 与 KG 的协作模式（回答 Q5）
+
+> **定位（v4.7）**：MIP 的角色是配额测算与校核——输出是各类用地的配额建议与偏差报告，
+> 最终落地必须映射回图斑级 operations（reclassify/modify/split），MIP 不直接生成规划几何。
 
 **核心结论**：MIP 不能直接查询 KG 进行优化（太慢，抽象层次错误），但可以通过
 **一次性 SPARQL 查询**在优化前从 KG 提取所有约束。MIP 求解器直接消费 SPARQL 结果
@@ -839,9 +768,9 @@ vne_summary      ──→ query_count_by_vne        ──→  V/E/N 面积下�
 - 当前 4 种数据源（KG SPARQL / intent / constraint_set / three_line）各自格式不同，
   统一编译层的收益不足以覆盖其复杂度
 
-### 5.5 意图落地路径（回答 Q6）
+### 5.4 意图落地路径（回答 Q6）
 
-**当 MIP 不适用时**（具体项目落地、小规模操作），EXECUTE 使用约束满足策略：
+**图斑级操作是主路径**（v4.7）。具体项目落地与小规模变更使用约束满足策略：
 
 **create 操作**（"新建 400㎡ 展销中心"）：
 
@@ -873,7 +802,7 @@ vne_summary      ──→ query_count_by_vne        ──→  V/E/N 面积下�
 4. 写入 changelog
 ```
 
-### 5.6 验证闭环
+### 5.5 验证闭环
 
 EXECUTE 的 Worker-Evaluator 循环：
 
@@ -1014,7 +943,7 @@ app/
 
 ```
 1. 用户输入规划文本 + 村庄名称
-2. Data Layer: 加载 VillageBundle（GeoPackage + 远程 API）
+2. Data Layer: 加载 VillageBundle（GeoPackage + 远程 API）+ 基数转换（DLBM -> 规划用途编码）
 3. Spatial Ops: 计算 ParcelRelations（三层空间关系）+ ContextBlock（PARSE 记忆）
 4. KG Builder: 从 bundle 形态分组 + ParcelRelations 构建 KG Layer 1-2
 5. PARSE: 文本 + ContextBlock（agent 记忆）+ KG 工具 → SpatialPlanningIntent
@@ -1056,7 +985,7 @@ app/
 
 | #   | 任务                     | 说明                                                                            |
 | --- | ------------------------ | ------------------------------------------------------------------------------- |
-| 2.1 | 实现 Constraint Compiler | KG → MIP 约束矩阵的编译层                                                      |
+| 2.1 | ~~Constraint Compiler~~  | 已废弃（v4.6）——MIP 直接消费 SPARQL 结果，不设编译层                           |
 | 2.2 | 补齐保护边界入库         | FarmlandProtection, EcologicalRedline, HistoricalProtection, VillageDevBoundary |
 | 2.3 | 补齐规划要素入库         | LandUseZone, ConstructionCtrlZone, PlanningScope                                |
 | 2.4 | 补齐自然地理入库         | WaterFeature, GeologicalHazardPoint, ElevationPoint                             |
@@ -1090,6 +1019,70 @@ app/
 
 ---
 
+## 第七部分：成果合规与协同（v4.7 新增）
+
+本部分补齐"非空间但必需"的成果环节与协同机制，均为汇交/审批的硬要求。
+背景与依据见 `reference/HUMAN_PLANNING_WORKFLOW.md` §1/§3/§7/§13。
+
+### 7.1 汇交坐标系与面积基准
+
+系统内部统一 WGS84（见 §1.3），但汇交要求不同，须在 export 层做出口转换：
+
+| 项 | 内部 | 汇交要求 | 出口转换 |
+|---|---|---|---|
+| 坐标系 | WGS84 (EPSG:4326) | CGCS2000，三度分带高斯投影 | export 层统一重投影 |
+| 高程基准 | — | 1985 国家高程基准 | 栅格/高程数据标注 |
+| 面积 | 平面近似 | TBMJ 椭球面积 | 导出前按椭球面积重算 |
+| 容差 | — | Tolerance 0.001 / Resolution 0.0001 | .mdb 建库参数 |
+
+**红线**：GCJ-02 及其纠偏产物（即使偏移 <5m）不得进入汇交链路；商业底图瓦片
+（天地图/高德）仅用于可视化，不参与几何运算与成果导出。
+
+### 7.2 管制规则生成闭环
+
+"一规则"是基本成果三件套之一。闭环三层：
+
+```
+规则提取（PARSE）          规则编码（Schema）            规则验证（validate）
+文本+上位规划+地方规定  ->  ControlRule 结构化（6大类）  ->  与图斑/分区 overlay 校验
+```
+
+- 量化值来源：地方规定（如宅基地面积上限、层数≤3/总高≤10m）+ 案例基准 + 村民协商；
+  系统只提供模板与候选值，**最终量化值由人确认**
+- 双形态输出：村规民约语体（村民可理解）+ 结构化编码（机器可验证）
+- 每条规则可追溯：规则 ↔ 上位依据条款 ↔ 受控图斑集合
+
+### 7.3 村民参与（输入与输出）
+
+法定程序要求村民会议或村民代表会议 **2/3 以上**同意，成果必含"村民参与报告"附件
+（参照金田村规划文本附件 1-5：前期征询/方案征询/批前公示/村民代表大会/镇政府意见）。
+
+- **输入侧**：村民意愿数据（宅基地需求、搬迁意愿、产业诉求、意见征询表）作为
+  `bundle.tables` / `bundle.documents` 的一等数据源，PARSE 纳入意图提取
+- **输出侧**："村民版成果"——总图简化版 + 项目表通俗版 + 管制规则村规民约版
+- **过程侧**：意见征询 -> 方案修改记录进入 changelog，支撑"村民参与报告"生成
+
+### 7.4 编制模式分支
+
+2024-2025 政策转向后须支持三种模式（详见 HUMAN_PLANNING_WORKFLOW §7）：
+
+| 模式 | 成果 | 系统行为 |
+|---|---|---|
+| 完整编制 | 一图一表一规则 + 数据库汇交 | 全流程（当前默认） |
+| 通则式管理 | 一图一表（底线管控图+管控要求表）+ 附加图层 | 裁剪输出：仅底线层+负面清单，跳过详细布局 |
+| 不编制 | — | 仅现状分析报告 |
+
+### 7.5 上位指标分解
+
+上位批复指标为**镇级总量**（如泗水镇耕地保有量 5.33 km²），到村需要指标分解。
+分解本质是与乡镇政府的协商过程，不是算术均摊。系统职责边界：
+
+- 提供分解建议（按现状占比/适宜性加权）+ 敏感性分析
+- `SpatialPlanningIntent` 指标字段标注来源：`上位传导（镇级分解，需人工确认）` vs `本级确定`
+- 未经人工确认的分解值不得作为 MIP 硬约束
+
+---
+
 ## 附录 A：术语表
 
 | 术语                | 全称                                                    | 说明                              |
@@ -1106,7 +1099,7 @@ app/
 | 三区三线            | 生态/农业/建设空间 + 生态红线/永久基本农田/城镇开发边界 | 全国国土空间规划                  |
 | 一图一表一规则      | 村庄规划总图 + 近期建设项目表 + 管制规则                | 广东省基本成果                    |
 | SpatialContext      | 空间上下文                                              | 约2KB的空间摘要，注入PARSE prompt |
-| Constraint Compiler | 约束编译器                                              | KG语义约束 → MIP数值约束矩阵     |
+| Constraint Compiler | 约束编译器（已废弃 v4.6）                               | MIP 直接消费 SPARQL 结果，不设编译层 |
 
 ## 附录 B：与旧文档的对应关系
 

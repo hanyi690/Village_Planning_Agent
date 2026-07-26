@@ -61,13 +61,17 @@
 | 土壤 🆕 | 土壤类型 / 质地 / 侵蚀 / 水蚀风蚀模数 | `SoilType` / `SoilErosion` | P1 |
 | 水系流域 🆕 | 河流水系 / 三级流域 / DEM提取流域 | `WaterFeature` / `Watershed` | P0/P1 |
 | 地理分区 🆕 | 农业区划 / 熟制 / 气候 / 植被 | `AgriculturalZone` / `CroppingSystemZone` 等 | P1/P2 |
-| 社会经济 🆕 | 人口网格 / GDP网格 | `PopulationGrid` / `GDPGrid` | P0/P1 |
+| 社会经济 🆕 | 人口网格 / GDP网格 | `PopulationGrid` / `GDPGrid` | P2/P2 |
 | 生态/环境 🆕 | 自然保护区 / 生态系统类型 | `NatureReserve` / `EcologicalRedline` | P1 |
 | 农业专项 🆕 | 农田生产潜力 / 农田熟制 | `FarmlandProductivity` / `CroppingSystemZone` | P1 |
 | 灾害/地质 | 地震地质 / 台风路径 | `GeologicalHazardPoint` / 通用Feature | P2 |
 | 基础设施 | POI / 建筑轮廓 / 道路 | `CurrentFacility` / `CurrentBuilding` / `CurrentRoad` | P1 |
 
 > 不需要的全国数据集（16项）：西南石漠化/黄土高原/三峡库区（与广东无关）、区域不匹配影像、全球国家边界、CMIP6未来气候、100万比例尺数据等。
+>
+> **村庄尺度适配（2026-07-26 审查修正）**：
+> - 人口/GDP 公里网格在村域仅覆盖数格，村级人口以村委台账/户籍/规划文本为准，网格数据只作区域背景参考，降级 P2。
+> - ALOS 12.5m DEM 满足坡度/坡向分析，但对 1:2000 工作底图与宅基地选址精度不足；涉及精细地形时需另行获取大比例尺地形图/DLG。
 
 ---
 
@@ -89,6 +93,10 @@
 
 ## 四、Schema 扩展需求
 
+> **优先级前提（2026-07-26 审查修正）**：DLBM->GHYTBM 正向映射表（基数转换，GAP-D）
+> 优先于一切新增 Schema 类型——基数转换未落地前，新增自然资源类型不产生规划价值
+> （见 `05_MODULE_BOUNDARY_AUDIT.md` §四 GAP-D）。
+
 ### 4.1 需新建空间类型（7 个）
 
 | # | 新类型 | 几何 | 组 | 驱动数据集 | 优先级 |
@@ -98,7 +106,7 @@
 | 3 | `Watershed` | 面 | 扩展 Group E | 三级流域/九大流域片 | P1 |
 | 4 | `NatureReserve` | 面 | 扩展 Group D | 自然保护区边界 | P1 |
 | 5 | `HydrogeologyZone` | 面 | Group F | 广东省50万水文地质图 | P1 |
-| 6 | `PopulationGrid` | 栅格 | 栅格 | 人口空间分布公里网格 | P1 |
+| 6 | `PopulationGrid` | 栅格 | 栅格 | 人口空间分布公里网格 | P2 |
 | 7 | `GDPGrid` | 栅格 | 栅格 | GDP空间分布公里网格 | P2 |
 
 <details>
@@ -167,11 +175,11 @@ class HydrogeologyZone(SpatialFeature):
 
 ### P1（20 项，摘要）
 
-坡度/坡向/起伏度分布、人口网格、土壤类型/质地/侵蚀、三级流域、农业区划/熟制、自然保护区、农田生产潜力、2025土地利用、2023国土变更(耕地/水域/林地)、地质灾害易发分区、水文地质图、公厕。
+坡度/坡向/起伏度分布、土壤类型/质地/侵蚀、三级流域、农业区划/熟制、自然保护区、农田生产潜力、2025土地利用、2023国土变更(耕地/水域/林地)、地质灾害易发分区、水文地质图、公厕。
 
 ### P2（10 项，摘要）
 
-植被/气候区划、GDP网格、地震地质、台风路径、POI、建筑轮廓、历史道路、土系志、多时相影像。
+植被/气候区划、人口网格、GDP网格、地震地质、台风路径、POI、建筑轮廓、历史道路、土系志、多时相影像。
 
 ---
 

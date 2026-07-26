@@ -65,7 +65,10 @@
 > 四个编码体系独立定义，见 `backend/app/modules/gis/schema/dicts/`：
 > `gbt21010.yaml` / `tugui.yaml` / `appendix5.yaml` / `ydyhfldm.yaml`
 >
-> 现状层 DLBM 用附录5、规划层 DLBM 用土规，这是正常设计--规划层关注规划分类，现状层关注现状分类。
+> 现状层 DLBM 用附录5、规划层 DLBM 用土规。**注意**：现状层用附录5说明源 GDB 是按
+> 广东省指南编制的规划成果库，而非三调原始库；基数转换设计应以附录5为现状起点。
+> `00_SYSTEM_DESIGN.md` §0.3 将 GB/T 21010 表述为"当前数据基准"，与金田村实际数据
+> 不符，以本文档为准。
 
 ---
 
