@@ -8,7 +8,7 @@ Distance threshold: 5km — loose enough for rural village names with
 approximate 天地图 results, tight enough to avoid cross-village false positives.
 
 Usage:
-    resolver = PlaceNameResolver(spatial_context.natural_villages)
+    resolver = PlaceNameResolver(spatial_context.residential_clusters)
     result = resolver.resolve("园寨")  # → {village_name, parcel_ids, confidence, method}
 """
 
@@ -30,9 +30,9 @@ GEOCODE_DISTANCE_THRESHOLD_M = 5000  # 5 km max for geocode→village match
 class PlaceNameResolver:
     """Resolve Chinese place names to GIS VillageGroup anchors + parcel IDs."""
 
-    def __init__(self, natural_villages: list):
+    def __init__(self, residential_clusters: list):
         self.anchors: List[VillageAnchor] = []
-        for v in natural_villages:
+        for v in residential_clusters:
             center = getattr(v, "center", None) or (0, 0)
             if center[0] != 0 and center[1] != 0:
                 name = getattr(v, "name", "")
