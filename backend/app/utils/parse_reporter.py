@@ -221,10 +221,10 @@ def _format_spatial_context(ctx: Dict[str, Any]) -> str:
                 f"{e.get('planning_zone', '')} |"
             )
 
-    # Natural village anchors
-    villages = ctx.get("natural_villages", [])
+    # Residential cluster anchors
+    villages = ctx.get("residential_clusters", [])
     if villages:
-        lines.append("\n### 自然村落锚点\n")
+        lines.append("\n### 居民点锚点\n")
         lines.append("| 村落 | 中心坐标 | 地块数 | 主地类编码 | 邻接 |")
         lines.append("|------|----------|--------|------------|------|")
         for v in villages:

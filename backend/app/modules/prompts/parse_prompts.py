@@ -54,12 +54,12 @@ def format_spatial_context_for_prompt(
         if center:
             lines.append(f"村中心坐标: ({center[0]:.4f}, {center[1]:.4f})")
 
-    # Natural village anchors (always included)
-    nv_block = blocks_by_type.get(CBT.NATURAL_VILLAGES)
+    # Residential cluster anchors (always included)
+    nv_block = blocks_by_type.get(CBT.RESIDENTIAL_CLUSTERS)
     if nv_block:
         villages = nv_block.data.get("villages", [])
         if villages:
-            lines.append("\n自然村落:")
+            lines.append("\n居民点:")
             for v in villages:
                 if detail_level == "minimal":
                     lines.append(f"  - {v['name']}: 主地类={v.get('dominant_landuse', '')}")
@@ -246,8 +246,8 @@ EXTRACT_PROJECTS_PROMPT = """你是村庄规划项目提取器，具备空间感
 **村庄空间上下文**:
 {spatial_context}
 
-**自然村落锚点**（用于空间锚定）:
-{natural_villages_detail}
+**居民点锚点**（用于空间锚定）:
+{residential_clusters_detail}
 
 **段落内容**:
 {section_content}
@@ -261,10 +261,10 @@ EXTRACT_PROJECTS_PROMPT = """你是村庄规划项目提取器，具备空间感
 
 **空间锚定规则**（关键）:
 1. 每个含位置描述的操作创建 SpatialAnchor
-2. 将位置引用匹配到自然村落锚点名称:
+2. 将位置引用匹配到居民点锚点名称:
    - "刘村小组东侧" → reference="刘村小组", offset="东侧"
    - "晒谷场北边近刘村" → reference="刘村小组", offset="北边", secondary_ref="晒谷场"
-3. 从自然村落的 parcel_ids 预解析 candidate_parcels
+3. 从居民点的 parcel_ids 预解析 candidate_parcels
 4. 设置 resolution_status:
    - "anchored": 匹配到具体图斑, confidence >= 0.7
    - "partial": 匹配到区域但非具体图斑, confidence 0.3-0.7
@@ -342,7 +342,7 @@ EXTRACT_TARGETS_PROMPT = """你是村庄规划目标提取器，具备空间感�
 
 **设施目标规则**:
 1. 每个设施须包含: type, status, location_hint
-2. 位置引用自然村落时设置 anchor_village
+2. 位置引用居民点时设置 anchor_village
 3. 文本指定覆盖范围时设置 service_radius
 
 **发展轴规则**:
