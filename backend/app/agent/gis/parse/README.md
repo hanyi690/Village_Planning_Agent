@@ -118,7 +118,7 @@ PARSE 不直接读 GeoJSON，而是通过 `ContextBlock` 列表（`app/modules/s
 
 - `VILLAGE_META`：村庄基础统计（地块数、总面积、建设边界面积、村中心坐标）
 - `LANDUSE_DIST`：地类分布（按 dlbm 分组统计，含地块数和面积）
-- `NATURAL_VILLAGES`：自然村锚点（聚类自居住地块 + 注记命名合并）
+- `RESIDENTIAL_CLUSTERS`：居民点锚点（聚类自居住地块 + 注记命名合并）
 - `FACILITIES`：设施精确锚点（来自 typed 设施/注记要素）
 - `SPATIAL_RELATIONS`：村组间语义关系（east_of / adjacent_to / contains / near）
 - `CONSTRAINTS`：保护边界摘要（永久基本农田 / 生态红线 / 历史文化等）
@@ -139,7 +139,7 @@ PARSE 作为 Formalizer，其"形式化"必须包括**空间形式化**。仅输
 | "沿河" | `query_parcels_near_entity(river_center, 200)` | `candidate_bsms` |
 
 `SpatialAnchor` 的双阶段定位：
-1. **PARSE 预解析**：`location_desc` 匹配 `NATURAL_VILLAGES` / `FACILITIES` 块 -> 候选地块 + 置信度
+1. **PARSE 预解析**：`location_desc` 匹配 `RESIDENTIAL_CLUSTERS` / `FACILITIES` 块 -> 候选地块 + 置信度
 2. **LAYOUT 确认**：`resolve_place` 工具确认或修正锚点
 
 ---

@@ -65,7 +65,7 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-MAX_PARSE_ROUNDS = 2
+MAX_PARSE_ROUNDS = 1
 
 # Global Gazetteer instance
 _gazetteer: Any = None
@@ -178,6 +178,9 @@ async def _execute_tool_call(tool_name: str, tool_args: dict) -> str:
         try:
             template_name = tool_args.get("template_name", "")
             params = {k: v for k, v in tool_args.items() if k != "template_name"}
+            if "params" in params and isinstance(params["params"], dict):
+                inner = params.pop("params")
+                params.update(inner)
             results = query_kg(kg_instance, template_name, **params)
             return _json.dumps(results, ensure_ascii=False, default=str)
         except Exception as e:
@@ -206,9 +209,9 @@ async def _execute_tool_call(tool_name: str, tool_args: dict) -> str:
         if _current_context_blocks:
             from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT
 
-            # Check natural villages block (includes annotation-merged village names)
+            # Check residential clusters block (includes annotation-merged village names)
             for block in _current_context_blocks:
-                if getattr(block, "block_type", None) != CBT.NATURAL_VILLAGES:
+                if getattr(block, "block_type", None) != CBT.RESIDENTIAL_CLUSTERS:
                     continue
                 for v in block.data.get("villages", []):
                     v_name = v.get("name", "")
@@ -218,7 +221,7 @@ async def _execute_tool_call(tool_name: str, tool_args: dict) -> str:
                             "center": v.get("center", [0, 0]),
                             "parcel_ids": v.get("parcel_ids", []),
                             "confidence": 0.9,
-                            "method": "natural_village_match",
+                            "method": "residential_cluster_match",
                         }, ensure_ascii=False)
 
             # Check facility anchors (e.g. "村委会", "小学")
@@ -868,12 +871,15 @@ async def explore_projects_node(state: ParseAgentState) -> dict:
             "You are a village plan project analyst.\n"
             "Step 1: Use lookup_code to query GHYTBM codes for ALL land_use_names in the text.\n"
             "Step 2: Use resolve_place to query GIS anchors for ALL place names.\n"
-            "Step 3: Use query_village_kg for spatial context:\n"
+            "Step 3: Use query_village_kg for detailed spatial context and parcel-level data:\n"
             "  - query_village_kg('get_village_anchors') to find village coordinates\n"
-            "  - query_village_kg('get_facilities_by_type') for existing facility locations\n"
+            "  - query_village_kg('get_village_parcels') for all parcels with BSM, DLBM, area, zone\n"
+            "  - query_village_kg('get_parcel_detail', bsm='...') for individual parcel attributes\n"
+            "  - query_village_kg('get_facility_locations') for existing facility positions\n"
             "  - query_village_kg('get_road_network') for road connectivity\n"
-            "  - query_village_kg('get_protected_parcels_detail') for constraint zones\n"
-            "  - query_village_kg('get_parcels_near_point', min_lon=..., max_lon=..., min_lat=..., max_lat=...) for nearby parcels\n"
+            "  - query_village_kg('get_designated_zones') for constraint/designated zones\n"
+            "IMPORTANT: When describing project locations, reference specific BSM values\n"
+            "(e.g. '位于P001地块') so the spatial anchoring can use exact parcels.\n"
             "Call tools for ALL entities, then STOP when done."
         ),
         summary_prompt=(
@@ -1137,6 +1143,9 @@ def _ground_zone_targets(
     Calls ground_zone_spatial_preference for each ZoneTarget that has a
     spatial hint or preference description. Fills candidate_bsms,
     candidate_bbox, excluded_bsms, proximity_weights in-place.
+
+    LLM 语义选定 BSM（zt.candidate_bsms）被传入 preselected_bsms，
+    spatial_ops 验证/精化而非替换。
     """
     from app.modules.spatial_ops.grounding import ground_zone_spatial_preference
 
@@ -1160,6 +1169,7 @@ def _ground_zone_targets(
         if pref_desc:
             anchor = ground_zone_spatial_preference(
                 pref_desc, place_mappings, constraint_index, bundle,
+                preselected_bsms=zt.candidate_bsms or None,
             )
             if anchor.candidate_bsms:
                 zt.candidate_bsms = anchor.candidate_bsms
@@ -1172,7 +1182,82 @@ def _ground_zone_targets(
             grounded += 1
 
     if grounded:
-        logger.info("[PARSE:grounding] Grounded %d zone targets", grounded)
+        logger.info("[PARSE:grounding] Grounded %d zone targets (LLM-selected BSMs preserved)", grounded)
+
+
+def _ground_facility_targets(
+    facilities: list,
+    place_mappings: dict,
+    bundle: Any,
+) -> None:
+    """Post-format: geometric spatial grounding for FacilityTargets (in-place).
+
+    Uses ground_facility_spatial_preference to fill candidate_bsms
+    and anchor_point from location_hint + direction.
+    """
+    from app.modules.spatial_ops.grounding import ground_facility_spatial_preference
+
+    if not facilities or bundle is None:
+        return
+
+    grounded = 0
+    for ft in facilities:
+        hint = ft.location_hint or ""
+        if not hint and ft.semantic and ft.semantic.spatial_hint:
+            hint = ft.semantic.spatial_hint
+        if not hint:
+            continue
+
+        anchor = ground_facility_spatial_preference(
+            hint, ft.direction or "", place_mappings, bundle,
+        )
+        if anchor.candidate_bsms:
+            ft.candidate_bsms = anchor.candidate_bsms
+        if anchor.candidate_bbox and not ft.anchor_point:
+            ft.anchor_point = (anchor.candidate_bbox[0], anchor.candidate_bbox[1])
+        grounded += 1
+
+    if grounded:
+        logger.info("[PARSE:grounding] Grounded %d facility targets", grounded)
+
+
+def _ground_axis_road_targets(
+    axes: list,
+    roads: list,
+    place_mappings: dict,
+    bundle: Any,
+) -> None:
+    """Post-format: geometric spatial grounding for AxisTargets and RoadTargets (in-place).
+
+    Uses ground_linear_spatial_preference to fill start/end anchors
+    and candidate BSMs from connects hints.
+    """
+    from app.modules.spatial_ops.grounding import ground_linear_spatial_preference
+
+    if bundle is None:
+        return
+
+    grounded = 0
+    for ax in axes:
+        anchor = ground_linear_spatial_preference(
+            ax.start_anchor, ax.end_anchor, place_mappings, bundle,
+            connects_hints=ax.connects or [],
+        )
+        if anchor.candidate_bsms:
+            ax.corridor_bsms = anchor.candidate_bsms
+        grounded += 1
+
+    for rt in roads:
+        anchor = ground_linear_spatial_preference(
+            rt.start_anchor, rt.end_anchor, place_mappings, bundle,
+            connects_hints=rt.connects or [],
+        )
+        if anchor.candidate_bsms:
+            rt.path_bsms = anchor.candidate_bsms
+        grounded += 1
+
+    if grounded:
+        logger.info("[PARSE:grounding] Grounded %d axis/road targets", grounded)
 
 
 def _inject_deterministic_fields(
@@ -1287,13 +1372,19 @@ async def explore_targets_node(state: ParseAgentState) -> dict:
         explore_prompt=(
             "You are a village plan target analyst.\n"
             "Step 1: Use lookup_code to get GHYTBM codes for ALL land_use names.\n"
-            "Step 2: Use query_village_kg to understand spatial distribution:\n"
+            "Step 2: Use query_village_kg to identify SPECIFIC candidate parcels (BSM level):\n"
+            "  - query_village_kg('get_village_parcels') for all parcels with BSM, DLBM, area, zone\n"
+            "  - query_village_kg('get_parcel_detail', bsm='...') for individual parcel attributes\n"
+            "  - query_village_kg('get_parcel_neighbors', bsm='...') for adjacent parcels\n"
             "  - query_village_kg('count_by_zone_type') for land distribution by zone\n"
             "  - query_village_kg('count_by_vne') for VNE classification summary\n"
-            "  - query_village_kg('get_three_zones') for 三区（生态/农业/建设）summary\n"
-            "  - query_village_kg('get_three_lines') for 三线 boundary information\n"
             "  - query_village_kg('get_village_anchors') for natural village coordinates\n"
-            "  - query_village_kg('get_designated_zones') for zone mapping\n"
+            "  - query_village_kg('get_designated_zones') for constraint/designated zones\n"
+            "  - query_village_kg('get_facility_locations') for existing facility positions\n"
+            "  - query_village_kg('get_road_network') for road connectivity\n"
+            "IMPORTANT: After querying parcels, identify SPECIFIC BSM values (e.g. P001, P003)\n"
+            "in your draft. The format phase will use these BSMs for precise spatial anchoring.\n"
+            "Example: '选择刘村北侧 P001(宅基地0.15ha) 转为商业用地，P003(宅基地0.12ha) 作为备选'\n"
             "Step 3: Use resolve_place for ANY location names mentioned in the text.\n"
             "Step 4: Extract additional spatial details:\n"
             "  - Facilities: direction ('north'/'south'/'east'/'west'/'center'),\n"
@@ -1367,7 +1458,9 @@ async def format_targets_node(state: ParseAgentState) -> dict:
             "    choose the most appropriate one based on the context\n"
             "  - If lookup_code returned a single match, use that code directly\n"
             "  - NEVER invent codes not in the mapping table\n\n"
-            "Fill spatial_hint (e.g. '村北') and natural_language_description for each target.\n\n"
+            "Fill spatial_hint (e.g. '村北'), natural_language_description, "
+            "and candidate_bsms (e.g. ['P001','P003'], based on KG parcel queries) "
+            "for each target.\n\n"
             f"{schema_block}\n"
             f"{mandatory_block}\n"
             f"{valid_lu_block}\n"
@@ -1404,13 +1497,27 @@ async def format_targets_node(state: ParseAgentState) -> dict:
         )
 
         # Post-format: geometric spatial grounding via spatial_ops.grounding
-        if _grounding_bundle is not None and result.zone_targets:
-            _ground_zone_targets(
-                result.zone_targets,
-                dict(state.place_mappings_targets),
-                _grounding_constraint_index,
-                _grounding_bundle,
-            )
+        if _grounding_bundle is not None:
+            if result.zone_targets:
+                _ground_zone_targets(
+                    result.zone_targets,
+                    dict(state.place_mappings_targets),
+                    _grounding_constraint_index,
+                    _grounding_bundle,
+                )
+            if result.facilities:
+                _ground_facility_targets(
+                    result.facilities,
+                    dict(state.place_mappings_targets),
+                    _grounding_bundle,
+                )
+            if result.development_axes or result.road_targets:
+                _ground_axis_road_targets(
+                    result.development_axes,
+                    result.road_targets,
+                    dict(state.place_mappings_targets),
+                    _grounding_bundle,
+                )
 
         logger.info("[PARSE:format_targets] %d zones, %d facilities, %d axes, %d roads",
                      len(result.zone_targets), len(result.facilities),
@@ -1500,19 +1607,21 @@ async def validate_and_merge_node(state: ParseAgentState) -> dict:
     )
 
     if not has_any_data:
-        logger.warning("[PARSE:validate] All extractions empty — fallback to spatial context")
+        logger.warning("[PARSE:validate] All extractions empty — fallback to context blocks")
         constraints_from_ctx: List[SpatialConstraint] = []
-        for c in state.spatial_context.constraint_summary:
-            constraints_from_ctx.append(SpatialConstraint(
-                type="spatial_constraint",
-                priority="mandatory",
-                source_text=f"{c.zone_type}: {c.rule}",
-                spatial_rule=SpatialRule(
-                    operation="contained_by",
-                    subject="construction",
-                    object=c.zone_type,
-                ),
-            ))
+        for block in state.context_blocks:
+            zones = block.data.get("zones", [])
+            for z in zones:
+                constraints_from_ctx.append(SpatialConstraint(
+                    type="spatial_constraint",
+                    priority="mandatory",
+                    source_text=f"{z.get('type', '')}: {z.get('rule', '')}",
+                    spatial_rule=SpatialRule(
+                        operation="contained_by",
+                        subject="construction",
+                        object=z.get("type", ""),
+                    ),
+                ))
         return {
             "operation_sequence": [],
             "constraint_set": constraints_from_ctx,
@@ -1602,6 +1711,30 @@ async def validate_and_merge_node(state: ParseAgentState) -> dict:
         typed_tables = (state.raw_tables or {}).get("typed", {})
         if typed_tables:
             merged_intent = _merge_typed_tables_into_intent(merged_intent, typed_tables)
+
+        # Re-ground any newly-merged targets (tables may have added targets
+        # after the initial grounding in format_targets_node)
+        if _grounding_bundle is not None:
+            if merged_intent.zone_targets:
+                _ground_zone_targets(
+                    merged_intent.zone_targets,
+                    dict(state.place_mappings_targets),
+                    _grounding_constraint_index,
+                    _grounding_bundle,
+                )
+            if merged_intent.facilities:
+                _ground_facility_targets(
+                    merged_intent.facilities,
+                    dict(state.place_mappings_targets),
+                    _grounding_bundle,
+                )
+            if merged_intent.development_axes or merged_intent.road_targets:
+                _ground_axis_road_targets(
+                    merged_intent.development_axes,
+                    merged_intent.road_targets,
+                    dict(state.place_mappings_targets),
+                    _grounding_bundle,
+                )
 
         logger.info(
             "[PARSE:validate] Merged: %d ops, %d constraints, valid=%s, errors=%d",

@@ -29,7 +29,7 @@ from app.modules.schema.contracts.context_contracts import (
     ConstraintSummary,
     ContextBlock,
     LanduseEntry,
-    NaturalVillageAnchor,
+    ResidentialClusterAnchor,
     SpatialRelation,
 )
 
@@ -174,7 +174,7 @@ __all__ = [
     # Spatial context
     "ContextBlock",
     "LanduseEntry",
-    "NaturalVillageAnchor",
+    "ResidentialClusterAnchor",
     "SpatialRelation",
     "ConstraintSummary",
     # Section classification
