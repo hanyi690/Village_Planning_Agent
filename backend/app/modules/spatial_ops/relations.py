@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from app.modules.schema.contracts.context_contracts import (
-    NaturalVillageAnchor,
+    ResidentialClusterAnchor,
     SpatialRelation,
 )
 from app.utils.logger import get_logger
@@ -20,21 +20,21 @@ logger = get_logger(__name__)
 
 
 def _compute_spatial_relations(
-    natural_villages: List[NaturalVillageAnchor],
+    residential_clusters: List[ResidentialClusterAnchor],
 ) -> List[SpatialRelation]:
-    """Compute spatial relations between natural villages and zones.
+    """Compute spatial relations between residential clusters and zones.
 
     Uses centroid-based direction computation and distance-based topology.
     """
     relations: List[SpatialRelation] = []
 
     try:
-        if len(natural_villages) < 2:
+        if len(residential_clusters) < 2:
             return relations
 
-        # Compute pairwise direction relations between villages
-        for i, v1 in enumerate(natural_villages):
-            for j, v2 in enumerate(natural_villages):
+        # Compute pairwise direction relations between clusters
+        for i, v1 in enumerate(residential_clusters):
+            for j, v2 in enumerate(residential_clusters):
                 if i >= j:
                     continue
 
@@ -92,8 +92,8 @@ def _compute_spatial_relations(
                     source="geometry_computed",
                 ))
 
-        # Add containment relations: villages contained by construction boundary
-        for v in natural_villages:
+        # Add containment relations: clusters contained by construction boundary
+        for v in residential_clusters:
             relations.append(SpatialRelation(
                 subject="construction_boundary",
                 relation="contains",

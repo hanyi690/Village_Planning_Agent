@@ -427,7 +427,88 @@ def build_constraint_index(bundle) -> Optional[ConstraintIndex]:
     return idx
 
 
+def compute_water_overlap(water_polygons, landuse_parcels, dlbm_filter="3100"):
+    """For each water polygon, find completely covered DLBM=3100 parcels.
+
+    Uses shapely.contains() — a water polygon that completely contains
+    a landuse parcel means the parcel is already classified as water area.
+    The water polygon is then linked via derived_from instead of duplicated.
+
+    Args:
+        water_polygons: List of WaterFeature objects (or geo-like dicts).
+        landuse_parcels: List of CurrentLandUseParcel objects.
+        dlbm_filter: DLBM code for water parcels (default 3100).
+
+    Returns:
+        Dict mapping water_feature_id -> [covered_bsm1, covered_bsm2, ...]
+    """
+    try:
+        import geopandas as gpd
+        from shapely.geometry import shape
+    except ImportError:
+        logger.error("geopandas/shapely required for compute_water_overlap")
+        return {}
+
+    # Build landuse index for DLBM=3100 parcels
+    water_parcels = []
+    for p in landuse_parcels:
+        dlbm = str(getattr(p, "dlbm", "")).strip()
+        if dlbm != dlbm_filter:
+            continue
+        bsm = str(getattr(p, "bsm", "")).strip()
+        geom = getattr(p, "geometry", None)
+        if not bsm or geom is None:
+            continue
+        try:
+            s = shape(geom)
+            if not s.is_empty:
+                water_parcels.append({"bsm": bsm, "geometry": s})
+        except Exception:
+            continue
+
+    if not water_parcels:
+        logger.info("[compute_water_overlap] No DLBM=%s parcels found", dlbm_filter)
+        return {}
+
+    parcel_gdf = gpd.GeoDataFrame(water_parcels, crs="EPSG:4326")
+    parcel_gdf_metric = parcel_gdf.to_crs("EPSG:3857")
+
+    # For each water polygon, check which parcels it completely covers
+    overlap_map = {}
+    for i, wp in enumerate(water_polygons):
+        geom = getattr(wp, "geometry", None) if not isinstance(wp, dict) else wp.get("geometry")
+        if geom is None:
+            continue
+        try:
+            water_s = shape(geom)
+            if water_s.is_empty:
+                continue
+            water_metric = water_s  # keep in same CRS
+            # Convert to metric for accurate containment check
+            wp_series = gpd.GeoSeries([water_s], crs="EPSG:4326").to_crs("EPSG:3857")
+            water_metric = wp_series.iloc[0]
+
+            covered_bsms = []
+            for j in range(len(parcel_gdf_metric)):
+                p_geom = parcel_gdf_metric.iloc[j].geometry
+                if water_metric.contains(p_geom):
+                    covered_bsms.append(parcel_gdf_metric.iloc[j]["bsm"])
+
+            if covered_bsms:
+                wid = str(getattr(wp, "bsm", "")) or str(getattr(wp, "name", "")) or f"water_poly_{i}"
+                overlap_map[wid] = covered_bsms
+        except Exception:
+            continue
+
+    if overlap_map:
+        total_covered = sum(len(v) for v in overlap_map.values())
+        logger.info("[compute_water_overlap] %d water polygons cover %d DLBM=%s parcels",
+                    len(overlap_map), total_covered, dlbm_filter)
+    return overlap_map
+
+
 __all__ = [
     "SpatialIndex", "OverlapResult", "build_spatial_index",
     "ConstraintIndex", "ConstraintOverlap", "build_constraint_index",
+    "compute_water_overlap",
 ]

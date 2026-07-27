@@ -11,13 +11,21 @@ Does NOT depend on: Agent, KG, Tools.
 compute_context_blocks(VillageBundle) is the sole public entry point.
 
 [v4.7] Added grounding.py (Responsibility B: PARSE spatial grounding).
+[v5.0] Added constraint_compiler.py (Responsibility D: constraint compilation).
+[v5.0] Added parcel_ops.py (Responsibility E: parcel geometry operations).
+[v5.0] Added road_planner.py (Responsibility F: planned road network generation).
+[v5.0] Added land_balance.py (Responsibility G: land balance table + delivery gate).
 """
 
 from .bridge import (
     SpatialIndex, OverlapResult, build_spatial_index,
     ConstraintIndex, ConstraintOverlap, build_constraint_index,
 )
+from .constraint_compiler import ConstraintCompiler
 from .context import compute_context_blocks
+
+# Backward compat alias: compute_spatial_context → compute_context_blocks
+compute_spatial_context = compute_context_blocks
 from .grounding import (
     ZoneSpatialAnchor,
     resolve_directional_bbox,
@@ -28,15 +36,28 @@ from .grounding import (
     compute_target_area,
     ground_zone_spatial_preference,
 )
+from .land_balance import check_delivery_gate, compute_land_balance
+from .parcel_ops import (
+    apply_operations,
+    create_parcel,
+    merge_parcels,
+    modify_parcel,
+    reclassify_parcel,
+    split_parcel_by_geometry,
+    split_parcel_by_ratio,
+)
+from .road_planner import plan_roads
 
 __all__ = [
     "compute_context_blocks",
+    "compute_spatial_context",
     "SpatialIndex",
     "OverlapResult",
     "build_spatial_index",
     "ConstraintIndex",
     "ConstraintOverlap",
     "build_constraint_index",
+    "ConstraintCompiler",
     # grounding.py exports
     "ZoneSpatialAnchor",
     "resolve_directional_bbox",
@@ -46,4 +67,17 @@ __all__ = [
     "compute_proximity_weights",
     "compute_target_area",
     "ground_zone_spatial_preference",
+    # parcel_ops.py exports
+    "reclassify_parcel",
+    "modify_parcel",
+    "merge_parcels",
+    "split_parcel_by_ratio",
+    "split_parcel_by_geometry",
+    "create_parcel",
+    "apply_operations",
+    # road_planner.py exports
+    "plan_roads",
+    # land_balance.py exports
+    "compute_land_balance",
+    "check_delivery_gate",
 ]

@@ -9,7 +9,7 @@ API 设计: spatial_ops/README.md §4.2
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.utils.logger import get_logger
 
@@ -249,12 +249,16 @@ def ground_zone_spatial_preference(
     place_mappings: Dict[str, dict],
     constraint_index: Any,
     bundle: Any,
+    preselected_bsms: Optional[List[str]] = None,
 ) -> "ZoneSpatialAnchor":
     """组合调用：将 ZoneTarget 的空间偏好描述接地为完整空间锚定.
 
     这是 PARSE Agent 在 format_targets 后调用的唯一入口.
     内部组合 resolve_directional_bbox + query_parcels_in_bbox +
     query_excluded_parcels + compute_proximity_weights.
+
+    当 preselected_bsms 非空时，跳过 BBox 候选搜索，直接使用 LLM 选定的 BSM
+    做排除 + 邻近加权（LLM 语义粗定位 -> spatial_ops 验证/精化）.
 
     preference_desc 格式: "村北靠近刘村" (方向 + 地名)
     从 place_mappings 中查找地名对应的 center.
@@ -265,6 +269,7 @@ def ground_zone_spatial_preference(
         place_mappings: resolve_place 工具结果，{place_name: {center, parcel_ids, ...}}
         constraint_index: ConstraintIndex 用于排除约束重叠
         bundle: VillageBundle (提供 bundle.polygons.landuse_current)
+        preselected_bsms: LLM 语义选定的 BSM 列表（非空时跳过 BBox 搜索）
 
     Returns:
         ZoneSpatialAnchor 包含完整空间锚定
@@ -314,34 +319,35 @@ def ground_zone_spatial_preference(
     if ref_center is None:
         return ZoneSpatialAnchor()
 
-    # 4. 解析 BBox
+    # 4. 解析 BBox（仅用于可视化，不作为候选过滤依据了）
     bbox = None
     if direction:
         bbox = resolve_directional_bbox(ref_center, direction)
 
-    # 5. 查询候选地块
-    candidate_bsms = []
-    if bbox:
+    # 5. 查询候选地块：LLM 语义选定 vs 几何搜索
+    if preselected_bsms:
+        candidate_bsms = [b for b in preselected_bsms if b]
+    elif bbox:
         candidate_bsms = query_parcels_in_bbox(parcels, bbox)
     elif ref_name:
         candidate_bsms = query_parcels_near_entity(parcels, ref_center, max_distance_m=500)
-    # 兜底: 没有方向也没有地名 -> 取所有地块
-    if not candidate_bsms:
+    else:
         candidate_bsms = [p.bsm for p in parcels if p.bsm]
 
-    # 6. 排除约束重叠
+    # 6. 排除约束重叠（对所有候选都做，即使是 LLM 选定的）
     excluded_bsms = query_excluded_parcels(constraint_index, parcels)
     candidate_bsms = [b for b in candidate_bsms if b not in excluded_bsms]
 
-    # 7. 邻近度加权（在候选集上计算，提高精度）
+    # 7. 邻近度加权
     proximity_weights = compute_proximity_weights(
         [p for p in parcels if p.bsm in candidate_bsms],
         ref_center,
     )
 
     logger.info(
-        "ground_zone_spatial_preference: direction=%s, ref=%s, candidates=%d, excluded=%d",
-        direction or "(none)", ref_name or "(none)", len(candidate_bsms), len(excluded_bsms),
+        "ground_zone_spatial_preference: direction=%s, ref=%s, llm_selected=%s, candidates=%d, excluded=%d",
+        direction or "(none)", ref_name or "(none)",
+        bool(preselected_bsms), len(candidate_bsms), len(excluded_bsms),
     )
 
     return ZoneSpatialAnchor(
@@ -350,6 +356,153 @@ def ground_zone_spatial_preference(
         excluded_bsms=excluded_bsms,
         proximity_weights=proximity_weights,
     )
+
+
+# ── Facility 空间接地 ──
+
+
+def ground_facility_spatial_preference(
+    location_hint: str,
+    direction: str,
+    place_mappings: Dict[str, dict],
+    bundle: Any,
+) -> "ZoneSpatialAnchor":
+    """将 FacilityTarget 的位置描述接地为空间锚定.
+
+    Args:
+        location_hint: 位置描述 (如 "村北", "村委会旁")
+        direction: 方向 (如 "north", "south")
+        place_mappings: resolve_place 工具结果
+        bundle: VillageBundle
+
+    Returns:
+        ZoneSpatialAnchor 含候选地块和 BBox
+    """
+    parcels = bundle.polygons.landuse_current if bundle else []
+    if not location_hint or not parcels:
+        return ZoneSpatialAnchor()
+
+    # 用 place_mappings 匹配地名
+    ref_center = None
+    for place_name, info in place_mappings.items():
+        if place_name in location_hint:
+            center = info.get("center", [0, 0])
+            if center and any(center):
+                ref_center = (float(center[0]), float(center[1]))
+                break
+
+    if ref_center is None:
+        try:
+            from app.modules.spatial_ops.geometry import _compute_centroid
+            all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
+            if all_geoms:
+                from app.utils.geo_utils import safe_unary_union
+                from shapely.geometry import shape
+                union_geom = safe_unary_union([shape(g) for g in all_geoms])
+                ref_center = (union_geom.centroid.x, union_geom.centroid.y)
+        except Exception:
+            pass
+
+    if ref_center is None:
+        return ZoneSpatialAnchor()
+
+    bbox = None
+    if direction:
+        bbox = resolve_directional_bbox(ref_center, direction)
+
+    candidate_bsms = []
+    if bbox:
+        candidate_bsms = query_parcels_in_bbox(parcels, bbox)
+    else:
+        candidate_bsms = query_parcels_near_entity(parcels, ref_center, max_distance_m=300)
+    if not candidate_bsms:
+        candidate_bsms = [p.bsm for p in parcels if p.bsm]
+
+    logger.info(
+        "ground_facility_spatial_preference: hint=%s, direction=%s, candidates=%d",
+        location_hint, direction or "(none)", len(candidate_bsms),
+    )
+
+    return ZoneSpatialAnchor(
+        candidate_bsms=candidate_bsms,
+        candidate_bbox=bbox,
+    )
+
+
+# ── Axis / Road 空间接地 ──
+
+
+def ground_linear_spatial_preference(
+    start_anchor: Optional[Tuple[float, float]],
+    end_anchor: Optional[Tuple[float, float]],
+    place_mappings: Dict[str, dict],
+    bundle: Any,
+    connects_hints: Optional[List[str]] = None,
+) -> "ZoneSpatialAnchor":
+    """将 AxisTarget/RoadTarget 的线状锚点接地为路径候选 BSM.
+
+    从 start_anchor / end_anchor 或 connects 地名推断路径走廊内的地块.
+
+    Args:
+        start_anchor: 起点坐标 (lon, lat) 或 None
+        end_anchor: 终点坐标 (lon, lat) 或 None
+        place_mappings: resolve_place 工具结果
+        bundle: VillageBundle
+        connects_hints: 连接地名列表 (如 ["村北", "村南"])
+
+    Returns:
+        ZoneSpatialAnchor 含 corridor_bsms（线状路径的候选地块）
+    """
+    parcels = bundle.polygons.landuse_current if bundle else []
+    if not parcels:
+        return ZoneSpatialAnchor()
+
+    # 尝试从 connects_hints 找地名锚点
+    ref_centers = []
+    if connects_hints:
+        for hint in connects_hints:
+            for place_name, info in place_mappings.items():
+                if place_name in hint or hint in place_name:
+                    center = info.get("center", [0, 0])
+                    if center and any(center):
+                        ref_centers.append((float(center[0]), float(center[1])))
+                    break
+
+    # 用已有坐标
+    if start_anchor:
+        ref_centers.insert(0, start_anchor)
+    if end_anchor:
+        ref_centers.append(end_anchor)
+
+    if not ref_centers:
+        try:
+            from app.modules.spatial_ops.geometry import _compute_centroid
+            all_geoms = [p.geometry for p in parcels if hasattr(p, "geometry")]
+            if all_geoms:
+                from app.utils.geo_utils import safe_unary_union
+                from shapely.geometry import shape
+                union_geom = safe_unary_union([shape(g) for g in all_geoms])
+                ref_centers = [(union_geom.centroid.x, union_geom.centroid.y)]
+        except Exception:
+            pass
+
+    if not ref_centers:
+        return ZoneSpatialAnchor()
+
+    candidate_set: Set[str] = set()
+    for center in ref_centers:
+        bsms = query_parcels_near_entity(parcels, center, max_distance_m=400)
+        candidate_set.update(bsms)
+
+    if not candidate_set:
+        candidate_set = {p.bsm for p in parcels if p.bsm}
+
+    logger.info(
+        "ground_linear_spatial_preference: anchors=%d, candidates=%d",
+        len(ref_centers), len(candidate_set),
+    )
+
+    return ZoneSpatialAnchor(candidate_bsms=list(candidate_set))
 
 
 __all__ = [
@@ -361,4 +514,6 @@ __all__ = [
     "compute_proximity_weights",
     "compute_target_area",
     "ground_zone_spatial_preference",
+    "ground_facility_spatial_preference",
+    "ground_linear_spatial_preference",
 ]

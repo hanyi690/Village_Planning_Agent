@@ -101,7 +101,7 @@ def _find_parcels_near_point(
     """Find parcel BSMs near a WGS84 point within radius_m.
 
     Accepts typed BaseLandUseParcel list — direct attribute access to p.geometry/p.bsm.
-    Used when annotation village has no matching cluster in natural_villages.
+    Used when annotation village has no matching cluster in residential_clusters.
     """
     parcel_ids: List[str] = []
     try:

@@ -20,7 +20,7 @@ from app.modules.schema.contracts.context_contracts import (
     ContextBlockType,
     FacilityAnchor,
     LanduseEntry,
-    NaturalVillageAnchor,
+    ResidentialClusterAnchor,
     SpatialRelation,
     TerrainProfile,
 )
@@ -45,7 +45,7 @@ def _register_generators() -> None:
     _GENERATORS.update({
         ContextBlockType.VILLAGE_META: _build_village_meta,
         ContextBlockType.LANDUSE_DIST: _build_landuse_dist,
-        ContextBlockType.NATURAL_VILLAGES: _build_natural_villages,
+        ContextBlockType.RESIDENTIAL_CLUSTERS: _build_residential_clusters,
         ContextBlockType.SPATIAL_RELATIONS: _build_spatial_relations_block,
         ContextBlockType.CONSTRAINTS: _build_constraints,
         ContextBlockType.FACILITIES: _build_facilities,
@@ -214,8 +214,8 @@ def _build_landuse_dist(bundle: VillageBundle) -> ContextBlock:
     )
 
 
-def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
-    """Build natural village anchors by clustering residential parcels.
+def _build_residential_clusters(bundle: VillageBundle) -> ContextBlock:
+    """Build residential cluster anchors by clustering residential parcels (居民点).
 
     Uses typed CurrentLandUseParcel list with p.dlbm/p.geometry/p.bsm.
     Annotation villages (from points.annotations_current) are merged for naming.
@@ -223,8 +223,8 @@ def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
     parcels = bundle.polygons.landuse_current
     if not parcels:
         return ContextBlock(
-            block_type=ContextBlockType.NATURAL_VILLAGES,
-            title="自然村落",
+            block_type=ContextBlockType.RESIDENTIAL_CLUSTERS,
+            title="居民点",
             data={"villages": [], "note": "无居住用地数据"},
             source="VillageBundle.polygons.landuse_current",
             priority=20,
@@ -260,8 +260,8 @@ def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
 
         if not geoms:
             return ContextBlock(
-                block_type=ContextBlockType.NATURAL_VILLAGES,
-                title="自然村落",
+                block_type=ContextBlockType.RESIDENTIAL_CLUSTERS,
+                title="居民点",
                 data={"villages": [], "note": "无居住用地"},
                 source="VillageBundle.polygons.landuse_current",
                 priority=20,
@@ -275,8 +275,8 @@ def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
         gdf_metric = project_to_metric(gdf)
         if gdf_metric is None or gdf_metric.empty:
             return ContextBlock(
-                block_type=ContextBlockType.NATURAL_VILLAGES,
-                title="自然村落",
+                block_type=ContextBlockType.RESIDENTIAL_CLUSTERS,
+                title="居民点",
                 data={"villages": [], "note": "投影失败"},
                 source="VillageBundle.polygons.landuse_current",
                 priority=20,
@@ -292,8 +292,8 @@ def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
             components = list(merged.geoms)
         else:
             return ContextBlock(
-                block_type=ContextBlockType.NATURAL_VILLAGES,
-                title="自然村落",
+                block_type=ContextBlockType.RESIDENTIAL_CLUSTERS,
+                title="居民点",
                 data={"villages": [], "note": "无可聚类几何"},
                 source="VillageBundle.polygons.landuse_current",
                 priority=20,
@@ -304,7 +304,7 @@ def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
             bundle.points.annotations_current
         )
 
-        anchors: List[NaturalVillageAnchor] = []
+        anchors: List[ResidentialClusterAnchor] = []
         used_indices: set = set()
 
         for i, component in enumerate(components):
@@ -357,7 +357,7 @@ def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
             except Exception:
                 pass
 
-            anchors.append(NaturalVillageAnchor(
+            anchors.append(ResidentialClusterAnchor(
                 name=name,
                 center=center,
                 parcel_ids=parcel_ids[:20],
@@ -376,7 +376,7 @@ def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
                 ann_v.center,
                 radius_m=200,
             )
-            anchors.append(NaturalVillageAnchor(
+            anchors.append(ResidentialClusterAnchor(
                 name=ann_v.name,
                 center=ann_v.center,
                 parcel_ids=nearby_ids[:20],
@@ -385,14 +385,14 @@ def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
             ))
 
         logger.info(
-            "[ContextBlocks] Natural villages: %d clusters + %d annotation-only",
+            "[ContextBlocks] Residential clusters: %d clusters + %d annotation-only",
             len([a for a in anchors if a.name.startswith("VillageGroup_")]),
             len([a for a in anchors if not a.name.startswith("VillageGroup_")]),
         )
 
         return ContextBlock(
-            block_type=ContextBlockType.NATURAL_VILLAGES,
-            title="自然村落",
+            block_type=ContextBlockType.RESIDENTIAL_CLUSTERS,
+            title="居民点",
             data={"villages": [
                 {
                     "name": a.name,
@@ -409,10 +409,10 @@ def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
         )
 
     except Exception as e:
-        logger.warning("[ContextBlocks] Natural village clustering failed: %s", e)
+        logger.warning("[ContextBlocks] Residential cluster clustering failed: %s", e)
         return ContextBlock(
-            block_type=ContextBlockType.NATURAL_VILLAGES,
-            title="自然村落",
+            block_type=ContextBlockType.RESIDENTIAL_CLUSTERS,
+            title="居民点",
             data={"villages": [], "note": f"聚类失败: {e}"},
             source="VillageBundle.polygons.landuse_current",
             priority=20,
@@ -421,20 +421,20 @@ def _build_natural_villages(bundle: VillageBundle) -> ContextBlock:
 
 
 def _build_spatial_relations_block(bundle: VillageBundle) -> Optional[ContextBlock]:
-    """Build spatial relations block from natural village anchors.
+    """Build spatial relations block from residential cluster anchors (居民点).
 
-    Must run AFTER _build_natural_villages to get village anchors.
+    Must run AFTER _build_residential_clusters to get village anchors.
     Since generators are independent, we re-cluster internally.
     """
-    # Get natural villages by running the clustering (lightweight if already cached)
-    villages_block = _build_natural_villages(bundle)
+    # Get residential clusters by running the clustering (lightweight if already cached)
+    villages_block = _build_residential_clusters(bundle)
     villages_data = villages_block.data.get("villages", [])
     if len(villages_data) < 2:
         return None
 
-    # Convert dicts back to NaturalVillageAnchor for relation computation
+    # Convert dicts back to ResidentialClusterAnchor for relation computation
     anchors = [
-        NaturalVillageAnchor(
+        ResidentialClusterAnchor(
             name=v["name"],
             center=(v["center"][0], v["center"][1]),
             parcel_ids=[],  # not needed for relations
@@ -460,7 +460,7 @@ def _build_spatial_relations_block(bundle: VillageBundle) -> Optional[ContextBlo
             }
             for r in relations
         ]},
-        source="natural_villages → _compute_spatial_relations",
+        source="residential_clusters -> _compute_spatial_relations",
         priority=30,
     )
 
@@ -642,13 +642,13 @@ def _build_zone_adjacency_block(bundle: VillageBundle) -> ContextBlock:
 
 def _extract_annotation_villages_from_typed(
     annotations: List[Any],
-) -> List[NaturalVillageAnchor]:
+) -> List[ResidentialClusterAnchor]:
     """Extract village name anchors from typed CurrentAnnotation list.
 
     Uses a.category and a.text (direct attribute access) instead of
     hardcoded Chinese property keys.
     """
-    anchors: List[NaturalVillageAnchor] = []
+    anchors: List[ResidentialClusterAnchor] = []
     for a in annotations:
         category = getattr(a, "category", "")
         if category != "村名":
@@ -661,7 +661,7 @@ def _extract_annotation_villages_from_typed(
             coords = geom.get("coordinates", [0, 0])
             if coords and len(coords) >= 2:
                 center = (round(float(coords[0]), 6), round(float(coords[1]), 6))
-                anchors.append(NaturalVillageAnchor(
+                anchors.append(ResidentialClusterAnchor(
                     name=text,
                     center=center,
                 ))

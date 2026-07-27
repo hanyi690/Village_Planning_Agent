@@ -33,7 +33,7 @@ spatial_ops 承担系统中两类空间计算：
 VillageBundle
     │
     ├── compute_context_blocks(bundle) -> List[ContextBlock]
-    │     8 种空间认知卡片: VILLAGE_META / LANDUSE_DIST / NATURAL_VILLAGES /
+    │     8 种空间认知卡片: VILLAGE_META / LANDUSE_DIST / RESIDENTIAL_CLUSTERS /
     │     FACILITIES / SPATIAL_RELATIONS / CONSTRAINTS / ZONE_ADJACENCY / TERRAIN
     │     每张卡片是 PARSE prompt 注入和 KG L1+L2 构建的输入
     │
@@ -71,16 +71,20 @@ ZoneTarget 填充: candidate_bsms / candidate_bbox / excluded_bsms / proximity_w
 
 ## 三、模块结构
 
-### 当前（v4.6+）
+### 当前（v5.0）
 
 ```
 backend/app/modules/spatial_ops/
-├── __init__.py               # 公开 API: compute_context_blocks + build_spatial_index + grounding
+├── __init__.py               # 公开 API: 全部模块导出
 ├── context.py                # 职责 A: ContextBlock 计算（8 种空间认知卡片）
 ├── geometry.py               # 职责 A: 几何操作 (centroid, area, near_point, parcel_relations)
 ├── relations.py              # 职责 A: 空间关系 (方向、邻接)
-├── grounding.py              # [NEW 待实现] 职责 B: 空间接地 -- PARSE 专用
-└── bridge.py                 # [NEW v4.6] 职责 C: 空间桥接 -- EXECUTE 专用
+├── grounding.py              # 职责 B: 空间接地 -- PARSE 专用（已实现）
+├── bridge.py                 # 职责 C: 空间桥接 -- EXECUTE 专用（SpatialIndex/ConstraintIndex）
+├── constraint_compiler.py    # [v5.0] 职责 D: 约束编译 -- 6 源编译 + 冲突仲裁
+├── parcel_ops.py             # [v5.0] 职责 E: 地块几何操作 -- split/merge/modify/reclassify/create
+├── road_planner.py           # [v5.0] 职责 F: 道路网络规划 -- RoadTarget → PlannedRoad
+└── land_balance.py           # [v5.0] 职责 G: 用地平衡表 -- L1 vs L4 对比 + DeliveryGate
 ```
 
 ### 职责分布
@@ -90,6 +94,10 @@ backend/app/modules/spatial_ops/
 | A: KG 输入计算 | `context.py` + `geometry.py` + `relations.py` | KG builder | bundle → spatial cognition → KG entities |
 | B: PARSE 空间接地 | `grounding.py` | PARSE agent | text → BBox/BSM candidates → ZoneSpatialAnchor |
 | C: EXECUTE 空间桥接 | `bridge.py` | EXECUTE agent | KG BSM → bundle geometry → spatial verification |
+| D: 约束编译 | `constraint_compiler.py` | MIP solver | 多源约束 → 统一 CompilationReport + 冲突仲裁 |
+| E: 地块操作 | `parcel_ops.py` | EXECUTE agent | 几何操作: reclassify/modify/merge/split/create |
+| F: 道路规划 | `road_planner.py` | EXECUTE agent | RoadTarget + 现状道路 → PlannedRoad 网络 |
+| G: 用地平衡表 | `land_balance.py` | 导出层 | L1 vs L4 对比 → LandBalanceTable + DeliveryGate |
 
 ---
 
