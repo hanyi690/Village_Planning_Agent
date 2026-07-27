@@ -1,7 +1,7 @@
 """Spatial cognition contracts — ContextBlock + SpatialCognitiveUnit hierarchy.
 
 [v4.4] SpatialCognitiveUnit 三层抽象统一了所有空间认知元素：
-  - 认知锚点（FacilityAnchor, NaturalVillageAnchor, ...）
+  - 认知锚点（FacilityAnchor, ResidentialClusterAnchor, ...）
   - 规划意图（ZoneTarget, FacilityTarget, RoadTarget）
   - 规划状态（PlannedState, PlannedParcelEntry）
 
@@ -90,8 +90,8 @@ class AxisAnchor(LineBasedCognition):
 
 
 @dataclass
-class NaturalVillageAnchor(PolygonBasedCognition):
-    """Natural village spatial anchor — clustered from residential parcels."""
+class ResidentialClusterAnchor(PolygonBasedCognition):
+    """Residential cluster spatial anchor - clustered from residential parcels (居民点)."""
     center: Tuple[float, float] = (0.0, 0.0)
     parcel_ids: List[str] = field(default_factory=list)
     dominant_landuse: str = ""
@@ -116,7 +116,7 @@ class ContextBlockType(str, Enum):
     """Type discriminator for spatial cognition cards."""
     VILLAGE_META = "village_meta"
     LANDUSE_DIST = "landuse_dist"
-    NATURAL_VILLAGES = "natural_villages"
+    RESIDENTIAL_CLUSTERS = "residential_clusters"
     SPATIAL_RELATIONS = "spatial_relations"
     CONSTRAINTS = "constraints"
     FACILITIES = "facilities"
@@ -288,7 +288,7 @@ __all__ = [
     "TerrainSample",
     "RoadAnchor",
     "AxisAnchor",
-    "NaturalVillageAnchor",
+    "ResidentialClusterAnchor",
     "ConstraintZoneAnchor",
     "ConstraintSummary",
     # ContextBlock

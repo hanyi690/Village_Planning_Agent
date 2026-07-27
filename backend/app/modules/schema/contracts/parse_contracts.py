@@ -25,6 +25,10 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field, computed_field
 
+from ..encodings.code_sets import (
+    get_planning_zone_from_landuse,
+    normalize_landuse,
+)
 from .semantic_fields import SemanticMetadata
 
 
@@ -52,25 +56,35 @@ class AdjacencyRules(BaseModel):
 
 
 class ZoneTarget(BaseModel):
-    """Zone target with spatial preference and VNE classification.
+    """Zone target with controlled vocabulary and spatial preference.
 
     VNE codes follow 住建部《村庄规划用地分类指南》:
       V=村庄建设用地, N=非村庄建设用地, E=非建设用地
       V1=村民住宅用地, V11=住宅用地, V12=混合式住宅用地, ...
 
-    Spatial anchoring fields (candidate_bsms, etc.) are filled by
-    spatial_ops.grounding.post-format.
+    === 事实(Facts) vs 判断(Judgments) 区分 ===
+
+    land_use (事实): 地类名称，LLM 从文本提取，经 normalize_landuse() 归一化。
+      原始文本保留在 raw_term 供审计。
+
+    planning_zone (判断): 规划分区，应由 PARSE/LLM 根据规划意图明确产出。
+      例如 "乔木林地" 可以规划为 "林业发展区"(商品林) 或 "生态保护区"(生态林)。
+      当 PARSE 未指定时，ConstraintCompiler 使用 LANDUSE_TO_ZONE 启发规则作为 fallback。
+
+    candidate_bsms/bbox (空间接地结果): spatial_ops.grounding 填充的客观计算结果。
     """
 
-    land_use: str = ""
+    land_use: Optional[str] = None
+    raw_term: str = ""                           # 文档原词，留审计
+    planning_zone: Optional[str] = None # PARSE 判断，非派生。LLM 决定此地块应属哪个规划分区
     area_ratio: float = 0.0
     dlbm: Optional[str] = None
-    vne_code: Optional[str] = None          # e.g. "V11", "V21", "E1"
+    vne_code: Optional[str] = None               # e.g. "V11", "V21", "E1"
     spatial_preference: Optional[SpatialPreference] = None
     adjacency_rules: Optional[AdjacencyRules] = None
     density: Literal["high", "medium", "low"] = "medium"
-    zone_id: str = ""                        # from ZoneIntent (EXECUTE identifier)
-    preserve_existing: bool = True           # from ZoneIntent
+    zone_id: str = ""                             # from ZoneIntent (EXECUTE identifier)
+    preserve_existing: bool = True                # from ZoneIntent
     # === 空间锚定（spatial_ops.grounding 填充）===
     candidate_bsms: List[str] = Field(default_factory=list)
     candidate_bbox: Optional[Tuple[float, float, float, float]] = None
@@ -221,7 +235,7 @@ class SpatialAnchor(BaseModel):
     """Spatial anchor for an operation — PARSE pre-resolves from SpatialContext.
 
     Dual-stage localization:
-      - PARSE: matches location_desc against SpatialContext.natural_villages
+      - PARSE: matches location_desc against SpatialContext.residential_clusters
                -> pre-resolves candidate parcels + confidence
       - LAYOUT: resolve_place_name confirms or corrects the anchor
     """
@@ -300,7 +314,7 @@ class SpatialOperation(BaseModel):
 
     # Metadata
     article_ref: str = ""
-    natural_village: str = ""
+    residential_cluster: str = ""
 
 
 # ── Spatial constraint (PARSE output, EXECUTE input) ────────────────
@@ -425,8 +439,8 @@ class SpatialPlanningIntent(BaseModel):
         return None
 
     def get_zone_by_land_use(self, land_use: str) -> List[ZoneTarget]:
-        """Find all zone targets matching a land use name."""
-        return [zt for zt in self.zone_targets if zt.land_use == land_use]
+        """Find all zone targets matching a land use name or enum value."""
+        return [zt for zt in self.zone_targets if zt.land_use and zt.land_use == land_use]
 
 
 __all__ = [

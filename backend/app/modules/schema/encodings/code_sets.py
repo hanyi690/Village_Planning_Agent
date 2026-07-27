@@ -20,7 +20,7 @@ v2.0 (2026-07-26) changes:
 from __future__ import annotations
 
 import functools
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .dicts.loader import get_center
 
@@ -68,6 +68,9 @@ WATER_CODES: Set[str] = _tugui.to_set("code", filter_tag="WATER")
 ECOLOGICAL_PROTECTION_CODES: Set[str] = FOREST_CODES | WATER_CODES
 PROTECTED_DLBM_CODES: Set[str] = BASIC_FARMLAND_CODES | GENERAL_AGRICULTURE_CODES | ECOLOGICAL_CODES
 
+# Backward-compat alias (pre-v4.7 name)
+FORESTRY_CODES: Set[str] = FOREST_CODES
+
 CONSTRUCTION_USE_TYPES: Set[str] = {"居住用地", "产业用地", "公共服务用地", "交通用地", "商业用地"}
 CONSTRUCTION_ZONE_TYPES = CONSTRUCTION_USE_TYPES
 
@@ -83,6 +86,9 @@ for system in [_appendix5, _tugui, _gbt21010]:
 DLBM_TO_ZONE_TYPE = {k: v for k, v in DLBM_TO_ZONE_TYPE.items() if v}
 
 # ── DLBM -> Planning zone (primary source: tugui) ──
+# ⚠️ 启发规则，非确定性推导
+# 同一 DLBM 可映射到不同 planning_zone（如 0301 乔木林地→林业发展区/生态保护区）。
+# PARSE 应明确产出 planning_zone 判断；此映射仅作 ConstraintCompiler fallback。
 DLBM_TO_PLANNING_ZONE: Dict[str, str] = {}
 for system in [_tugui, _appendix5]:
     DLBM_TO_PLANNING_ZONE.update(system.to_dict("code", "planning_zone"))
@@ -316,7 +322,19 @@ def get_primary_zone(dlbm: str) -> str:
     return DLBM_TO_PRIMARY_ZONE.get(str(dlbm).strip(), "农业空间")
 
 def dlbm_to_planning_zone(dlbm: str) -> str:
-    return DLBM_TO_PLANNING_ZONE.get(str(dlbm).strip(), "一般农业区")
+    """DLBM → planning_zone 启发式映射。
+
+    ⚠️ 启发规则，非确定性推导。
+    同一 DLBM 在不同规划情景下可映射到不同 planning_zone。
+    PARSE 应明确产出 planning_zone 判断，此函数仅作 fallback。
+
+    查找链: DLBM_TO_PLANNING_ZONE (YAML) → _GHYTBM_TO_PLANNING_ZONE (硬编码) → "一般农业区"
+    """
+    dlbm_s = str(dlbm).strip()
+    pz = DLBM_TO_PLANNING_ZONE.get(dlbm_s)
+    if pz:
+        return pz
+    return _GHYTBM_TO_PLANNING_ZONE.get(dlbm_s, "一般农业区")
 
 def get_primary_zone_for_planning_zone(planning_zone: str) -> str:
     return PLANNING_ZONE_TO_PRIMARY_ZONE.get(planning_zone, "农业空间")
@@ -404,6 +422,93 @@ def get_ghytbm_conversion_info(dlbm: str) -> Tuple[str, str, str]:
     return DLBM_TO_GHYTBM_CONVERSIONS.get(str(dlbm).strip(), ("", "", ""))
 
 
+# ============================================================
+# Land-use name lookup + normalization (replaces vocabulary.py)
+# ============================================================
+
+_LANDUSE_ALIASES: Dict[str, str] = {
+    "水田": "耕地", "旱地": "耕地", "水浇地": "耕地", "菜地": "耕地",
+    "果园": "园地", "茶园": "园地", "橡胶园": "园地",
+    "乔木林地": "商品林", "竹林地": "商品林", "灌木林地": "商品林",
+    "有林地": "商品林", "其他林地": "商品林", "林地": "商品林",
+    "生态林地": "生态林",
+    "天然牧草地": "草地", "人工牧草地": "草地", "其他草地": "草地",
+    "农村宅基地": "宅基地", "村庄": "宅基地", "住宅": "宅基地",
+    "基础设施用地": "基础设施", "公用设施": "基础设施",
+    "道路用地": "村内交通", "农村道路": "村内交通", "村道": "村内交通",
+    "坑塘水面": "水域", "河流水面": "水域", "水库水面": "水域",
+    "养殖坑塘": "水域",
+    "沟渠": "水利设施用地", "水利设施": "水利设施用地",
+    "设施农用地": "设施农用地",
+    "工业用地": "经营性建设用地", "商业用地": "经营性建设用地",
+    "产业用地": "经营性建设用地", "经营性": "经营性建设用地",
+    "公共服务": "公共服务设施", "学校": "公共服务设施", "卫生所": "公共服务设施",
+    "采矿用地": "采矿用地",
+    "风景名胜": "风景名胜用地", "风景名胜用地": "风景名胜用地",
+    "特殊用地": "特殊用地",
+    "自然保留地": "自然保留地", "空闲地": "自然保留地",
+    "城镇": "城镇用地",
+    "对外交通": "对外交通",
+    "景观绿化": "景观与绿化", "绿地": "景观与绿化",
+    "商品林": "商品林", "生态林": "生态林",
+    "园地": "园地", "耕地": "耕地", "草地": "草地", "水域": "水域",
+}
+
+
+def normalize_landuse(raw: str) -> Tuple[Optional[str], str]:
+    """LLM 自由文本 → 规范化地类名称。
+
+    匹配策略（按优先级）：
+    1. 精确匹配 GHYTMC 规范名称
+    2. 别名表匹配
+    3. 字符串包含匹配
+    4. 失配 → (None, 说明)
+
+    Returns:
+        (规范化名称 | None, 匹配说明)
+    """
+    raw = raw.strip()
+    if not raw:
+        return None, "空字符串"
+
+    # 1. 精确匹配规范名称（GHYTMC 名称集合）
+    canonical_names = set(GHYTMC_TO_ZONE_TYPE.keys())
+    if raw in canonical_names:
+        return raw, f"精确匹配: {raw}"
+
+    # 2. 别名表匹配
+    if raw in _LANDUSE_ALIASES:
+        return _LANDUSE_ALIASES[raw], f"别名匹配: {raw} → {_LANDUSE_ALIASES[raw]}"
+
+    # 3. 字符串包含匹配
+    for alias, canonical in _LANDUSE_ALIASES.items():
+        if alias in raw or raw in alias:
+            return canonical, f"包含匹配: '{raw}' ⊂ '{alias}' → {canonical}"
+
+    # 4. 尝试 DLBM_TO_DLMC 匹配
+    for name in DLBM_TO_DLMC.values():
+        if raw == name or name in raw or raw in name:
+            return name, f"编码匹配: {raw} → {name}"
+
+    return None, f"失配: '{raw}' 未在任何词表中找到匹配"
+
+
+def get_planning_zone_from_landuse(landuse: str) -> str:
+    """地类名称 → 规划分区的启发式映射。
+
+    Args:
+        landuse: 规范化地类名称（GHYTMC）。
+
+    Returns:
+        对应的规划分区名称。
+    """
+    # 尝试 name → code → planning_zone
+    for code, name in GHYTBM_TO_GHYTMC.items():
+        if name == landuse and code in _GHYTBM_TO_PLANNING_ZONE:
+            return _GHYTBM_TO_PLANNING_ZONE[code]
+    return "一般农业区"
+
+
 __all__ = [
     # Dicts
     "DLBM_TO_DLMC", "DLBM_TO_ZONE_TYPE", "ZONE_TYPE_TO_DLBMS",
@@ -421,7 +526,7 @@ __all__ = [
     "SDDLBM_TO_YDYHFLDM", "ELEMENT_CODE_PREFIXES",
     # Code sets
     "BASIC_FARMLAND_CODES", "GENERAL_AGRICULTURE_CODES",
-    "ECOLOGICAL_CODES", "FOREST_CODES",
+    "ECOLOGICAL_CODES", "FOREST_CODES", "FORESTRY_CODES",
     "WATER_CODES",
     "ECOLOGICAL_PROTECTION_CODES",
     "PROTECTED_DLBM_CODES",
@@ -449,4 +554,7 @@ __all__ = [
     "get_tdytfqdm_for_ghflbm", "get_tdyt_name_for_ghflbm",
     "get_space_control_name", "get_space_control_code",
     "get_ghytbm_for_dlbm", "get_ghytbm_conversion_info",
+    # Name normalization (replaces vocabulary.py)
+    "normalize_landuse",
+    "get_planning_zone_from_landuse",
 ]
