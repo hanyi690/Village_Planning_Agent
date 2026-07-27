@@ -99,6 +99,7 @@ class MIPZoneAllocator:
         protected_parcels_detail: Optional[List[Dict[str, Any]]] = None,
         three_line_targets: Optional[List[Dict[str, Any]]] = None,
         vne_summary: Optional[List[Dict[str, Any]]] = None,
+        zone_targets: Optional[List[Any]] = None,
     ) -> Tuple[Dict[str, Any], Any]:
         """Run MIP allocation.
 
@@ -138,6 +139,30 @@ class MIPZoneAllocator:
         ]
 
         planning_zones = list(targets.keys())
+
+        # ── Pre-filter parcels by ZoneTarget spatial anchors ────────
+        # Build candidate_bsms (union across all ZoneTargets) and excluded_bsms
+        candidate_bsms: set = set()
+        excluded_bsms: set = set()
+        proximity_weights: Dict[str, Dict[str, float]] = {}
+        if zone_targets:
+            for zt in zone_targets:
+                if hasattr(zt, 'candidate_bsms') and zt.candidate_bsms:
+                    candidate_bsms.update(zt.candidate_bsms)
+                if hasattr(zt, 'excluded_bsms') and zt.excluded_bsms:
+                    excluded_bsms.update(zt.excluded_bsms)
+                if hasattr(zt, 'proximity_weights') and zt.proximity_weights:
+                    zone_key = zt.land_use or ""
+                    for bsm, w in zt.proximity_weights.items():
+                        proximity_weights.setdefault(zone_key, {})[bsm] = float(w)
+
+        if candidate_bsms:
+            before = len(parcels)
+            parcels = [p for p in parcels if p.get("bsm_bare", "") in candidate_bsms]
+        if excluded_bsms:
+            before_ex = len(parcels)
+            parcels = [p for p in parcels if p.get("bsm_bare", "") not in excluded_bsms]
+
         n_parcels = len(parcels)
         n_zones = len(planning_zones)
 
@@ -169,10 +194,6 @@ class MIPZoneAllocator:
             parcel_bsm = p.get("bsm_bare", "")
             is_kg_protected = parcel_bsm in protected_bsms
             for j, zt in enumerate(planning_zones):
-                # Protected parcels cannot go to construction zones
-                if p["dlbm"] in PROTECTED_DLBM_CODES and zt in PLANNING_CONSTRUCTION_ZONES:
-                    continue
-                # Phase 5: KG spatial containment exclusion
                 if is_kg_protected and zt in PLANNING_CONSTRUCTION_ZONES:
                     kg_excluded_count += 1
                     continue
@@ -255,11 +276,22 @@ class MIPZoneAllocator:
             )
             logger.info("[MIP] Density hints applied: %s", density_hints)
 
+        # Proximity weight cost (from ZoneTarget.proximity_weights)
+        proximity_cost_mod: Dict[Tuple[int, int], float] = {}
+        if zone_targets and proximity_weights:
+            for i, p in enumerate(parcels):
+                parcel_bsm = p.get("bsm_bare", "")
+                for j, zt in enumerate(planning_zones):
+                    pw = proximity_weights.get(zt, {}).get(parcel_bsm)
+                    if pw is not None:
+                        proximity_cost_mod[(i, j)] = pw
+
         for i, p in enumerate(parcels):
             for j, zt in enumerate(planning_zones):
                 if (i, j) in x:
                     cost = self._get_preference_cost(p["dlbm"], zt)
                     cost += density_cost_mod.get((i, j), 0)
+                    cost += proximity_cost_mod.get((i, j), 0)
                     obj_terms.append(cost * x[i, j])
 
         # 3. Change penalty: penalize assigning parcel to a zone different from its native zone

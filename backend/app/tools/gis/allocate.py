@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Annotated
 
 from langchain_core.tools import tool, InjectedToolCallId
@@ -125,57 +124,7 @@ def _spatial_constraint_to_mip(constraint: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-@dataclass
-class AllocationIntent:
-    """Enriched intent from PARSE — all zone_target fields consumed (Step 4)."""
-    target_map: Dict[str, float] = field(default_factory=dict)   # zone_type → area_ha
-    density_hints: Dict[str, str] = field(default_factory=dict)   # zone_type → "high"/"medium"/"low"
-    adjacency_rules: Dict[str, dict] = field(default_factory=dict)  # zone_type → {prefer, avoid}
-    vne_codes: Dict[str, str] = field(default_factory=dict)       # zone_type → VNE code
 
-
-def _intent_to_targets(intent: Any, total_area_ha: float) -> AllocationIntent:
-    """Convert typed SpatialPlanningIntent to AllocationIntent (Step 4).
-
-    Phase 4: replaces _build_legacy_intent bridge. ZoneTarget.area_ratio (0-1)
-    is converted to absolute area_ha using total parcel area.
-    Step 4: also extracts density_hints, adjacency_rules, vne_codes.
-    """
-    result = AllocationIntent()
-    if intent is None:
-        return result
-
-    # Typed path: SpatialPlanningIntent.zone_targets (List[ZoneTarget])
-    if hasattr(intent, 'zone_targets') and intent.zone_targets:
-        for zt in intent.zone_targets:
-            if hasattr(zt, 'land_use') and hasattr(zt, 'area_ratio'):
-                area_ha = zt.area_ratio * total_area_ha if total_area_ha > 0 else zt.area_ratio
-                result.target_map[zt.land_use] = round(area_ha, 2)
-
-                # Step 4: density hints
-                if hasattr(zt, 'density') and zt.density:
-                    result.density_hints[zt.land_use] = zt.density
-
-                # Step 4: adjacency rules
-                if hasattr(zt, 'adjacency_rules') and zt.adjacency_rules:
-                    ar = zt.adjacency_rules
-                    result.adjacency_rules[zt.land_use] = {
-                        "prefer": ar.prefer if hasattr(ar, 'prefer') else [],
-                        "avoid": ar.avoid if hasattr(ar, 'avoid') else [],
-                    }
-
-                # Step 4: VNE codes
-                if hasattr(zt, 'vne_code') and zt.vne_code:
-                    result.vne_codes[zt.land_use] = zt.vne_code
-
-        return result
-
-    # Legacy dict fallback (old code — should be unreachable after migration)
-    if isinstance(intent, dict):
-        for z in intent.get("zones", []):
-            lu = z.get("land_use", z.get("zone_id", "?"))
-            result.target_map[lu] = z.get("area_ratio", 0) * total_area_ha
-    return result
 
 
 @tool
@@ -218,14 +167,25 @@ def allocate_zones(
         props = feat.get("properties", {})
         total_area_ha += float(props.get("area_ha", props.get("面积", 0)) or 0)
 
-    # Phase 3: Log adjacency map availability for spatially-coherent allocation
     adj_count = len(kg_adjacency_map) if kg_adjacency_map else 0
     if adj_count:
         logger.info("[allocate] KG adjacency map available: %d parcels", adj_count)
 
-    # Convert typed SpatialPlanningIntent -> AllocationIntent (Step 4)
-    alloc_intent = _intent_to_targets(targets, total_area_ha)
-    target_map = alloc_intent.target_map
+    # Build target_map + extract ZoneTarget spatial fields directly
+    zone_targets = list(targets.zone_targets) if hasattr(targets, 'zone_targets') and targets.zone_targets else []
+    target_map = {zt.land_use: round(zt.area_ratio * total_area_ha, 2) for zt in zone_targets if zt.land_use}
+
+    density_hints = {zt.land_use: zt.density for zt in zone_targets if zt.land_use and zt.density}
+    adjacency_rules = {}
+    vne_codes = {}
+    for zt in zone_targets:
+        if zt.land_use and zt.adjacency_rules:
+            adjacency_rules[zt.land_use] = {
+                "prefer": list(zt.adjacency_rules.prefer) if zt.adjacency_rules.prefer else [],
+                "avoid": list(zt.adjacency_rules.avoid) if zt.adjacency_rules.avoid else [],
+            }
+        if zt.land_use and zt.vne_code:
+            vne_codes[zt.land_use] = zt.vne_code
 
     # Step 3: Apply constraint_adjustments from validate feedback loop
     if constraint_adjustments:
@@ -237,7 +197,7 @@ def allocate_zones(
                 logger.info("[allocate] Adjusted %s by %+.1f ha (reason: %s)",
                             zone, delta, adj.get("reason", ""))
 
-    # Step 4: Convert PARSE constraint_set to MIP-compatible constraints
+    # Convert PARSE constraint_set to MIP-compatible constraints
     mip_parse_constraints = []
     if constraint_set:
         for c in constraint_set:
@@ -248,20 +208,17 @@ def allocate_zones(
             logger.info("[allocate] %d PARSE constraints converted to MIP", len(mip_parse_constraints))
 
     logger.info(
-        "[allocate] Intent converted: %d zones, %.1f ha total, %d PARSE constraints → %s",
+        "[allocate] Intent: %d zones, %.1f ha total, %d PARSE constraints → %s",
         len(target_map), total_area_ha, len(mip_parse_constraints),
         " | ".join(f"{k}={v:.1f}ha" for k, v in target_map.items()),
     )
+    if density_hints:
+        logger.info("[allocate] Density hints: %s", density_hints)
+    if adjacency_rules:
+        logger.info("[allocate] Adjacency rules: %d zones with rules", len(adjacency_rules))
+    if vne_codes:
+        logger.info("[allocate] VNE codes: %s", vne_codes)
 
-    # Step 4: Log enriched intent fields
-    if alloc_intent.density_hints:
-        logger.info("[allocate] Density hints: %s", alloc_intent.density_hints)
-    if alloc_intent.adjacency_rules:
-        logger.info("[allocate] Adjacency rules: %d zones with rules", len(alloc_intent.adjacency_rules))
-    if alloc_intent.vne_codes:
-        logger.info("[allocate] VNE codes: %s", alloc_intent.vne_codes)
-
-    # Merge all constraints: KG constraints + PARSE area constraints
     all_constraints = list(kg_constraints or [])
     if mip_parse_constraints:
         all_constraints.extend(mip_parse_constraints)
@@ -276,13 +233,14 @@ def allocate_zones(
             landuse_geojson=landuse_geojson,
             targets=target_map,
             constraints=all_constraints,
-            parse_constraints=constraint_set,  # Raw SpatialConstraint list for DLBM-based exclusion
-            density_hints=alloc_intent.density_hints or None,
-            adjacency_rules=alloc_intent.adjacency_rules or None,
+            zone_targets=zone_targets,
+            parse_constraints=constraint_set,
+            density_hints=density_hints or None,
+            adjacency_rules=adjacency_rules or None,
             facility_anchors=facility_anchors,
-            protected_parcels_detail=kg_protected_parcels_detail,  # Phase 5: spatial containment exclusion
-            three_line_targets=kg_three_lines,  # Phase 6: hard area constraints from KG ThreeLine
-            vne_summary=kg_vne_summary,  # Phase 6: VNE zone-level constraints
+            protected_parcels_detail=kg_protected_parcels_detail,
+            three_line_targets=kg_three_lines,
+            vne_summary=kg_vne_summary,
         )
 
         summary = {
@@ -290,14 +248,12 @@ def allocate_zones(
             "allocated_count": len(allocated_geojson.get("features", [])),
             "elapsed_s": round(time.time() - t0, 2),
         }
-
-        # Step 4: Record enriched intent fields in summary
-        if alloc_intent.density_hints:
-            summary["density_hints"] = alloc_intent.density_hints
-        if alloc_intent.adjacency_rules:
-            summary["adjacency_rules"] = alloc_intent.adjacency_rules
-        if alloc_intent.vne_codes:
-            summary["vne_codes"] = alloc_intent.vne_codes
+        if density_hints:
+            summary["density_hints"] = density_hints
+        if adjacency_rules:
+            summary["adjacency_rules"] = adjacency_rules
+        if vne_codes:
+            summary["vne_codes"] = vne_codes
 
         return Command(update={
             "allocated_geojson": allocated_geojson,

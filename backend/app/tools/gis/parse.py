@@ -1,21 +1,17 @@
-"""PARSE tool + LLM intent parsing - pipeline entry for the PARSE Agent.
+"""PARSE tool - pipeline entry for the PARSE Agent.
 
-Consolidates:
-  - parse_planning_text: LangGraph tool running the full PARSE Agent subgraph
-  - LLM intent functions (migrated from gis/data/loader.py Phase 5):
-      resolve_gen_intent / resolve_plan_intent / parse_text_via_llm /
-      _parse_reports_to_intent / compute_intent_from_gis / get_village_params /
-      get_data_summary
-
-The LLM/intent logic lives here (tool layer), not in the data layer. Data
-layer (app.modules.data) provides raw documents via documents/ subpackage;
-this module turns them into structured spatial intent via LLM.
+The primary entry point is parse_planning_text (LangGraph @tool).
+All legacy intent functions (resolve_gen_intent, resolve_plan_intent,
+parse_text_via_llm, etc.) are DEPRECATED and will be removed in v5.0.
+They exist only for backward compat with app.api.gis_test_routes.
+New code should use parse_planning_text or directly invoke the PARSE Agent.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import warnings
 from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import tool
@@ -29,6 +25,9 @@ logger = get_logger(__name__)
 # ============================================================
 # Helpers
 # ============================================================
+
+_DEPRECATION_MSG = "This function is DEPRECATED and will be removed in v5.0. Use parse_planning_text() or invoke the PARSE Agent directly."
+
 
 def _safe_dataclass(cls, d: Dict[str, Any]):
     """Construct a dataclass from dict, ignoring unknown fields and converting enum values.
@@ -83,14 +82,13 @@ def _dict_to_intent(data: Dict[str, Any]):
 # GIS-measured constraints + village params (no LLM)
 # ============================================================
 
-def compute_intent_from_gis(
+def _compute_intent_from_gis_internal(
     gis_data: Dict[str, Any],
     village_name: str = "金田村委会",
 ) -> Dict[str, Any]:
     """Compute spatial intent from actual GIS data (no LLM, no hardcoded values).
 
-    Last-resort fallback: derives zone ratios from real landuse distribution.
-    The primary flow should be L3 reports or planning markdown parsing.
+    Internal version — no deprecation warning. Used by parse_planning_text fallback.
     """
     from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
     from app.modules.schema import get_zone_type_for_dlbm, ZONE_TYPE_TO_DLBMS
@@ -149,28 +147,22 @@ def compute_intent_from_gis(
     }
 
 
-def _build_gis_constraints_for_llm(gis_data: Optional[Dict[str, Any]]) -> str:
-    """Build GIS-measured constraints string for LLM prompt injection."""
-    if not gis_data:
-        return ""
-    from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
-    metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
-    lines = [
-        "## GIS 实测约束（必须遵守）",
-        f"- 建设用地面积: {metrics['construction_area_ha']} 公顷（上限）",
-        f"- 耕地保有量: {metrics['farmland_area_ha']} 公顷（下限）",
-        f"- 生态保护红线: {metrics['ecological_area_ha']} 公顷（下限）",
-        f"- 森林覆盖率: {metrics['forest_coverage']}%",
-        f"- 水域面积: {metrics['water_area_ha']} 公顷",
-        f"- 村域总面积: {metrics['total_area_ha']} 公顷",
-        "",
-        "以上约束来自 GIS 实测数据，area_ratio 必须与这些面积一致。",
-    ]
-    return "\n".join(lines)
+def compute_intent_from_gis(
+    gis_data: Dict[str, Any],
+    village_name: str = "金田村委会",
+) -> Dict[str, Any]:
+    """[DEPRECATED] Compute spatial intent from actual GIS data (no LLM, no hardcoded values).
+
+    DEPRECATED: kept for backward compat with gis_test_routes.
+    Use parse_planning_text() or invoke the PARSE Agent directly.
+    """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
+    return _compute_intent_from_gis_internal(gis_data, village_name)
 
 
 def get_village_params(gis_data: Dict[str, Any]) -> Dict[str, str]:
-    """Compute village parameters from GIS data (replaces hardcoded strings)."""
+    """[DEPRECATED] Compute village parameters from GIS data."""
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
     from app.modules.schema import DLBM_TO_DLMC
 
@@ -201,7 +193,8 @@ def get_village_params(gis_data: Dict[str, Any]) -> Dict[str, str]:
 
 
 def get_data_summary(gis_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Compute summary statistics for loaded data."""
+    """[DEPRECATED] Compute summary statistics for loaded data."""
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     summary: Dict[str, Any] = {}
     for key, geojson in gis_data.items():
         if not isinstance(geojson, dict) or "features" not in geojson:
@@ -217,11 +210,11 @@ def get_data_summary(gis_data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ============================================================
-# LLM intent parsing
+# [DEPRECATED] LLM intent parsing (use PARSE Agent instead)
 # ============================================================
 
 def _gather_report_texts(reports: Dict[str, Dict[str, Any]]) -> str:
-    """Collect dimension summaries from reports."""
+    """[DEPRECATED] Collect dimension summaries from reports."""
     texts = []
     for dim_key, dim_data in reports.items():
         summary = dim_data.get("summary", "")
@@ -231,7 +224,7 @@ def _gather_report_texts(reports: Dict[str, Dict[str, Any]]) -> str:
 
 
 def _build_landuse_hint(gis_data: Optional[Dict[str, Any]]) -> str:
-    """Build a hint from current land use GIS data."""
+    """[DEPRECATED] Build a hint from current land use GIS data."""
     if not gis_data:
         return ""
     try:
@@ -256,14 +249,34 @@ def _build_landuse_hint(gis_data: Optional[Dict[str, Any]]) -> str:
         return ""
 
 
+def _build_gis_constraints_for_llm(gis_data: Optional[Dict[str, Any]]) -> str:
+    """[DEPRECATED] Build GIS-measured constraints string for LLM prompt injection."""
+    if not gis_data:
+        return ""
+    from app.tools.gis._analytics.metrics_calculator import GISMetricsCalculator
+    metrics = GISMetricsCalculator.compute_land_use_metrics(gis_data)
+    lines = [
+        "## GIS 实测约束（必须遵守）",
+        f"- 建设用地面积: {metrics['construction_area_ha']} 公顷（上限）",
+        f"- 耕地保有量: {metrics['farmland_area_ha']} 公顷（下限）",
+        f"- 生态保护红线: {metrics['ecological_area_ha']} 公顷（下限）",
+        f"- 森林覆盖率: {metrics['forest_coverage']}%",
+        f"- 水域面积: {metrics['water_area_ha']} 公顷",
+        f"- 村域总面积: {metrics['total_area_ha']} 公顷",
+        "",
+        "以上约束来自 GIS 实测数据，area_ratio 必须与这些面积一致。",
+    ]
+    return "\n".join(lines)
+
+
 def _build_default_intent(
     village_name: str,
     gis_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Fallback: build intent from GIS data or minimal empty intent."""
+    """[DEPRECATED] Fallback: build intent from GIS data or minimal empty intent."""
     if gis_data:
         try:
-            return compute_intent_from_gis(gis_data, village_name)
+            return _compute_intent_from_gis_internal(gis_data, village_name)
         except Exception:
             pass
     return {
@@ -280,7 +293,11 @@ def _parse_reports_to_intent(
     village_name: str,
     gis_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Parse planning reports into structured spatial intent using LLM + zone_schema."""
+    """[DEPRECATED] Parse planning reports into structured spatial intent using LLM.
+
+    DEPRECATED: use parse_planning_text() or invoke the PARSE Agent.
+    """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     from app.agent.gis.prompts import PARSE_AGENT_SYSTEM_PROMPT
 
     try:
@@ -353,7 +370,11 @@ def parse_text_via_llm(
     village_name: str,
     gis_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Parse planning markdown text into intent via LLM."""
+    """[DEPRECATED] Parse planning markdown text into intent via LLM.
+
+    DEPRECATED: use parse_planning_text() or invoke the PARSE Agent.
+    """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     from app.agent.gis.prompts import format_parse_prompt
     from app.core.settings import LLM_MODEL
     from langchain_openai import ChatOpenAI
@@ -392,17 +413,18 @@ def parse_text_via_llm(
 
 
 # ============================================================
-# High-level resolvers (gen / plan paths)
+# [DEPRECATED] High-level resolvers (use PARSE Agent instead)
 # ============================================================
 
 def resolve_gen_intent(
     village_name: str = "金田村委会",
     gis_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Gen path: parse intent from planning markdown (with GIS constraint injection).
+    """[DEPRECATED] Gen path: parse intent from planning markdown.
 
-    Fallback: compute_intent_from_gis() if no markdown available.
+    DEPRECATED: use parse_planning_text() or invoke the PARSE Agent.
     """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     try:
         from app.modules.data.documents import load_planning_text
         text = load_planning_text(village_name)
@@ -430,10 +452,11 @@ def resolve_plan_intent(
     village_name: str = "金田村委会",
     gis_data: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Plan path: parse intent from L3 reports (with GIS constraint injection).
+    """[DEPRECATED] Plan path: parse intent from L3 reports.
 
-    Fallback: compute_intent_from_gis() if no reports available.
+    DEPRECATED: use parse_planning_text() or invoke the PARSE Agent.
     """
+    warnings.warn(_DEPRECATION_MSG, DeprecationWarning, stacklevel=2)
     from app.modules.data.documents import load_l3_reports
     reports = load_l3_reports()
     if reports:
@@ -512,11 +535,11 @@ async def parse_planning_text(
         except Exception as kg_err:
             logger.warning("[parse_planning_text] KG build skipped: %s", kg_err)
 
-        # Extract natural village data from context blocks for Gazetteer
-        natural_villages = []
+        # Extract residential cluster data from context blocks for Gazetteer
+        residential_clusters = []
         for block in context_blocks:
-            if getattr(block, "block_type", None) == CBT.NATURAL_VILLAGES:
-                natural_villages = [
+            if getattr(block, "block_type", None) == CBT.RESIDENTIAL_CLUSTERS:
+                residential_clusters = [
                     {"name": v["name"], "center": v.get("center", [0, 0])}
                     for v in block.data.get("villages", [])
                 ]
@@ -525,10 +548,10 @@ async def parse_planning_text(
         try:
             import app.agent.gis.parse.agent as pa
             from app.modules.parsing.gazetteer import PlaceNameResolver
-            gazetteer = PlaceNameResolver(natural_villages)
+            gazetteer = PlaceNameResolver(residential_clusters)
             pa._gazetteer = gazetteer
             logger.info("[parse_planning_text] Gazetteer initialized with %d villages",
-                        len(natural_villages))
+                        len(residential_clusters))
         except Exception as gz_err:
             logger.warning("[parse_planning_text] Gazetteer init skipped: %s", gz_err)
 
@@ -568,7 +591,7 @@ async def parse_planning_text(
                 "spatial_context_summary": {
                     "parcel_count": spatial_context.parcel_count,
                     "total_area_ha": spatial_context.total_area_ha,
-                    "village_count": len(spatial_context.natural_villages),
+                    "village_count": len(spatial_context.residential_clusters),
                     "relation_count": len(spatial_context.spatial_relations),
                 },
             },

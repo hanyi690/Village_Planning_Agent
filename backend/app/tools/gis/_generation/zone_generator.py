@@ -17,7 +17,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.utils.logger import get_logger
-from app.modules.schema import ZoneIntent, UnifiedSpatialIntent
+from app.modules.schema.contracts.parse_contracts import ZoneTarget
 from app.modules.schema import (
     get_zone_color,
     get_zone_type_for_dlbm,
@@ -61,35 +61,37 @@ class ZoneGenerator:
 
     def generate(
         self,
-        intent: UnifiedSpatialIntent,
+        zones: List[ZoneTarget],
         boundary_geojson: Optional[Dict[str, Any]] = None,
         landuse_current_geojson: Optional[Dict[str, Any]] = None,
         protection_zones: Optional[Dict[str, Dict[str, Any]]] = None,
+        enable_ca_refinement: bool = True,
     ) -> Dict[str, Any]:
-        """Generate function_zone GeoJSON from planning intent.
+        """Generate function_zone GeoJSON from ZoneTarget list.
 
         Args:
-            intent: Unified spatial intent with zone definitions
+            zones: List of ZoneTarget from PARSE SpatialPlanningIntent
             boundary_geojson: Village boundary GeoJSON
             landuse_current_geojson: Current land use parcels GeoJSON
             protection_zones: Optional dict of protection zone GeoJSONs
+            enable_ca_refinement: Enable CA-based merge refinement
 
         Returns:
             GeoJSON FeatureCollection with function_zone features
         """
-        if not intent.zones:
+        if not zones:
             logger.warning("[ZoneGenerator] No zones in intent")
             return {"type": "FeatureCollection", "features": []}
 
         if not landuse_current_geojson:
             logger.warning("[ZoneGenerator] No landuse_current data provided")
-            return self._generate_from_intent_only(intent, boundary_geojson)
+            return self._generate_from_intent_only(zones, boundary_geojson)
 
         # Load reference data (keep original CRS for geometry output)
         landuse_gdf = geojson_to_geodataframe(landuse_current_geojson)
         if landuse_gdf is None:
             logger.warning("[ZoneGenerator] Failed to load landuse_current")
-            return self._generate_from_intent_only(intent, boundary_geojson)
+            return self._generate_from_intent_only(zones, boundary_geojson)
 
         # Project to metric CRS for area calculations only
         if landuse_gdf.crs and landuse_gdf.crs.is_geographic:
@@ -104,7 +106,7 @@ class ZoneGenerator:
 
         # Build zone features
         features = []
-        for zone_intent in intent.zones:
+        for zone_intent in zones:
             zone_feature = self._build_zone_feature(
                 zone_intent, parcel_zones, boundary_area_sqm,
                 landuse_gdf, landuse_projected
@@ -126,11 +128,11 @@ class ZoneGenerator:
 
         # Apply planning geometry transforms to show difference from current
         features = self._transform_planning_geometry(
-            features, intent, landuse_gdf, landuse_projected
+            features, landuse_gdf, landuse_projected
         )
 
         # CA refinement: merge adjacent same-type parcels
-        if intent.metadata.get("enable_ca_refinement", True):
+        if enable_ca_refinement:
             try:
                 from app.tools.gis._generation.optimizer.ca_refiner import ZoneCARefiner
                 ca = ZoneCARefiner(
@@ -180,7 +182,7 @@ class ZoneGenerator:
 
     def _build_zone_feature(
         self,
-        zone_intent: ZoneIntent,
+        zone_intent: ZoneTarget,
         parcel_zones: Dict[str, List[int]],
         boundary_area_sqm: float,
         landuse_gdf: gpd.GeoDataFrame,
@@ -243,8 +245,8 @@ class ZoneGenerator:
                 "area_ha": round(area_ha, 2),
                 "area_ratio": round(current_area_sqm / boundary_area_sqm, 4) if boundary_area_sqm > 0 else 0,
                 "target_ratio": zone_intent.area_ratio,
-                "direction": zone_intent.direction.value,
-                "density": zone_intent.density.value,
+                "direction": zone_intent.spatial_preference.direction if zone_intent.spatial_preference else "center",
+                "density": zone_intent.density,
                 "source_bsms": source_bsms,
                 "parcel_count": len(parcel_indices),
             },
@@ -329,7 +331,6 @@ class ZoneGenerator:
     def _transform_planning_geometry(
         self,
         features: List[Dict[str, Any]],
-        intent: UnifiedSpatialIntent,
         landuse_gdf: gpd.GeoDataFrame,
         landuse_projected: gpd.GeoDataFrame,
     ) -> List[Dict[str, Any]]:
@@ -628,12 +629,12 @@ class ZoneGenerator:
 
     def _generate_from_intent_only(
         self,
-        intent: UnifiedSpatialIntent,
+        zones: List[ZoneTarget],
         boundary_geojson: Optional[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """Fallback: generate placeholder zones without reference data."""
         features = []
-        for zone_intent in intent.zones:
+        for zone_intent in zones:
             color_info = get_zone_color(zone_intent.land_use)
             feature = {
                 "type": "Feature",
@@ -645,8 +646,8 @@ class ZoneGenerator:
                     "color": color_info["fill"],
                     "stroke": color_info["stroke"],
                     "area_ha": 0.0,
-                    "direction": zone_intent.direction.value,
-                    "density": zone_intent.density.value,
+                    "direction": zone_intent.spatial_preference.direction if zone_intent.spatial_preference else "center",
+                    "density": zone_intent.density,
                 },
                 "geometry": {
                     "type": "MultiPolygon",

@@ -24,110 +24,6 @@ logger = get_logger(__name__)
 from app.tools.helpers import make_result, to_tool_message
 
 
-def _intent_from_typed(intent: Any) -> Any:
-    """Convert typed SpatialPlanningIntent to UnifiedSpatialIntent.
-
-    Phase 4: replaces _intent_from_dict bridge. Now intent comes from PARSE
-    as SpatialPlanningIntent — no dict conversion needed in the pipeline.
-    """
-    from app.modules.schema.contracts.layout_contracts import (
-        Direction, Density, ZoneIntent, FacilityIntent,
-        AxisIntent, ConstraintIntent, UnifiedSpatialIntent,
-    )
-
-    # Typed path: SpatialPlanningIntent.zone_targets (List[ZoneTarget])
-    if hasattr(intent, 'zone_targets'):
-        zones = []
-        for i, zt in enumerate(intent.zone_targets):
-            pref_dir = zt.spatial_preference.direction if zt.spatial_preference else "center"
-            density_str = zt.density if hasattr(zt, 'density') else "medium"
-            # Fallback: unknown direction values default to CENTER
-            try:
-                dir_enum = Direction(str(pref_dir))
-            except ValueError:
-                dir_enum = Direction.CENTER
-            try:
-                den_enum = Density(str(density_str))
-            except ValueError:
-                den_enum = Density.MEDIUM
-            zones.append(ZoneIntent(
-                zone_id=f"Z{i + 1:02d}",
-                land_use=zt.land_use if hasattr(zt, 'land_use') else "",
-                dlbm=zt.dlbm if hasattr(zt, 'dlbm') else "",
-                area_ratio=zt.area_ratio if hasattr(zt, 'area_ratio') else 0.0,
-                direction=dir_enum,
-                density=den_enum,
-                preserve_existing=True,
-            ))
-
-        facilities = []
-        if hasattr(intent, 'facilities'):
-            for i, ft in enumerate(intent.facilities):
-                facilities.append(FacilityIntent(
-                    facility_id=f"F{i + 1:02d}",
-                    facility_type=ft.type if hasattr(ft, 'type') else "",
-                    target_zone="",
-                    location_hint=ft.location_hint if hasattr(ft, 'location_hint') else "",
-                    status=ft.status if hasattr(ft, 'status') else "existing",
-                ))
-
-        axes = []
-        if hasattr(intent, 'development_axes'):
-            for i, at in enumerate(intent.development_axes):
-                axes.append(AxisIntent(
-                    axis_id=f"A{i + 1:02d}",
-                ))
-
-        return UnifiedSpatialIntent(
-            zones=zones, facilities=facilities, axes=axes,
-            constraints=[], metadata={},
-        )
-
-    # Legacy dict fallback (should be unreachable now)
-    if isinstance(intent, dict):
-        zones = []
-        for z in intent.get("zones", []):
-            zones.append(ZoneIntent(
-                zone_id=z["zone_id"],
-                land_use=z.get("land_use", ""),
-                dlbm=z.get("dlbm", ""),
-                area_ratio=z.get("area_ratio", 0.0),
-                direction=Direction.CENTER,
-                density=Density(z.get("density", "medium")),
-                preserve_existing=z.get("preserve_existing", True),
-            ))
-
-        facilities = []
-        for f in intent.get("facilities", []):
-            facilities.append(FacilityIntent(
-                facility_id=f.get("facility_id", f.get("name", "")),
-                facility_type=f.get("facility_type", ""),
-                target_zone=f.get("target_zone", ""),
-                location_hint=f.get("location_hint", ""),
-                status=f.get("status", "existing"),
-            ))
-
-        axes = []
-        for a in intent.get("axes", []):
-            axes.append(AxisIntent(
-                axis_id=a.get("axis_id", ""),
-            ))
-
-        constraints = []
-        for c in intent.get("constraints", []):
-            constraints.append(ConstraintIntent(
-                constraint_id=c.get("constraint_id", c.get("id", "")),
-                constraint_type=c.get("type", c.get("constraint_type", "")),
-                strict=c.get("strict", True),
-            ))
-
-        return UnifiedSpatialIntent(
-            zones=zones, facilities=facilities, axes=axes,
-            constraints=constraints, metadata=intent.get("metadata", {}),
-        )
-    return None
-
-
 def _build_protection_zones(gis_data: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Extract protection zone dict from gis_data."""
     pz: Dict[str, Dict[str, Any]] = {}
@@ -225,7 +121,6 @@ def _generate_function_zones(
     gis_data: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     """Generate function_zone layer via ZoneGenerator (merged by zone type)."""
-    # Typed: SpatialPlanningIntent.zone_targets
     has_zones = hasattr(intent, 'zone_targets') and intent.zone_targets
     has_zones = has_zones or (isinstance(intent, dict) and intent.get("zones"))
     if not intent or not has_zones:
@@ -239,11 +134,10 @@ def _generate_function_zones(
 
     boundary = gis_data.get("boundary_geojson")
     protection = _build_protection_zones(gis_data)
-    unified = _intent_from_typed(intent)
 
     generator = ZoneGenerator()
     geojson = generator.generate(
-        intent=unified,
+        zones=list(intent.zone_targets),
         boundary_geojson=boundary,
         landuse_current_geojson=landuse,
         protection_zones=protection if protection else None,
@@ -408,18 +302,18 @@ def _generate_axes(
     gis_data: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     """Generate infrastructure/axis layer via AxisBuilder."""
-    # Typed: SpatialPlanningIntent.development_axes
     has_axes = hasattr(intent, 'development_axes') and intent.development_axes
     has_axes = has_axes or (isinstance(intent, dict) and intent.get("axes"))
     if not intent or not has_axes:
         return None
 
+    from types import SimpleNamespace
     from ._generation.axis_builder import AxisBuilder
 
-    unified = _intent_from_typed(intent)
+    axes_list = list(intent.development_axes) if hasattr(intent, 'development_axes') else list(intent.get("axes", []))
     builder = AxisBuilder()
     geojson = builder.build(
-        intent=unified,
+        intent=SimpleNamespace(axes=axes_list, metadata={}),
         boundary_geojson=gis_data.get("boundary_geojson"),
         landuse_current_geojson=gis_data.get("landuse_current_geojson"),
     )
