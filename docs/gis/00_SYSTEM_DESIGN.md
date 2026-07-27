@@ -887,17 +887,22 @@ app/
 │   │   │   ├── layer2.py           # L2 空间关系
 │   │   │   ├── layer3.py           # L3 意图虚拟实体
 │   │   │   ├── layer4.py           # L4 规划成果
-│   │   │   ├── queries.py          # 语义查询接口
 │   │   │   └── mixins.py           # [v4.6] Mixin 类
 │   │   └── queries/
 │   │       ├── __init__.py
-│   │       └── tools.py            # SPARQL 模板注册表
+│   │       ├── sparql.py           # SPARQL 模板注册表 + 实例方法 (merged)
+│   │       └── semantic.py         # LLM 友好语义查询
 │   │
-│   └── spatial_ops/                # [NEW] 空间计算工具
+│   └── spatial_ops/                # 空间计算工具
 │       ├── __init__.py
 │       ├── relations.py            # 空间关系计算
 │       ├── geometry.py             # 几何操作
-│       └── context.py              # SpatialContext 计算
+│       ├── context.py              # ContextBlock 计算 (compute_context_blocks)
+│       ├── grounding.py            # [v4.7] PARSE 空间接地
+│       ├── constraint_compiler.py  # [v5.0] 约束编译
+│       ├── parcel_ops.py           # [v5.0] 地块原子操作
+│       ├── road_planner.py         # [v5.0] 规划道路网络
+│       └── land_balance.py         # [v5.0] 用地平衡表
 │
 ├── agent/
 │   └── gis/

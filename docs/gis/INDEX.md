@@ -3,14 +3,21 @@
 > **文档根目录**: `docs/gis/`
 > **更新**: 2026-07-26
 
-## 核心文档
+## 执行方案
 
 | 文档 | 说明 |
 |------|------|
-| **[00_SYSTEM_DESIGN.md](00_SYSTEM_DESIGN.md)** | 系统总体设计文档（唯一权威）— 四层架构、KG 桥接、PARSE/EXECUTE 设计、MIP 约束编译、实现路线图 |
-| **[03_GAP_ANALYSIS.md](03_GAP_ANALYSIS.md)** | 落地缺陷与设计审视 - 回归规划本质，各模块"应做 vs 实做"差距、5 个断裂点、6 个设计缺陷、P0/P1/P2 修复路径 |
-| **[04_ARCHITECTURE_AUDIT.md](04_ARCHITECTURE_AUDIT.md)** | 架构规整审视 - 统一标识契约、URI 方案碎片化、各模块优美性评估、修复优先级 |
+| **[02_EXECUTION_PLAN.md](02_EXECUTION_PLAN.md)** | 统一执行方案（当前权威）— 全局目标、模块化分解、分波次执行计划 |
+
+## 审计与诊断
+
+| 文档 | 说明 |
+|------|------|
+| **[03_GAP_ANALYSIS.md](03_GAP_ANALYSIS.md)** | 落地缺陷与设计审视 - 回归规划本质，各模块"应做 vs 实做"差距、5 个断裂点、6 个设计缺陷 |
+| **[04_ARCHITECTURE_AUDIT.md](04_ARCHITECTURE_AUDIT.md)** | 架构规整审视 - 统一标识契约、URI 方案碎片化、各模块优美性评估 |
 | **[05_MODULE_BOUNDARY_AUDIT.md](05_MODULE_BOUNDARY_AUDIT.md)** | 模块边界与编码体系审视 - 5 种图斑语义辨析、编码多维度并行关系、10 项编码缺陷、规划对象 vs 参考数据归属 |
+
+> **注**：上述审计文档的 P0/P1/P2 优先级编号以 `02_EXECUTION_PLAN.md` Wave 1/2/3 为准。已完成项目不再追溯。
 
 ## 参考资料
 
@@ -23,31 +30,37 @@
 
 | 目录 | 说明 |
 |------|------|
-| **[archive/](archive/)** | 旧设计文档（v2.0 及更早）— 仅历史参考，与 00_SYSTEM_DESIGN.md 冲突时以新文档为准 |
+| **[archive/](archive/)** | 旧设计文档（v2.0 及更早 + 01/OPTIMIZATION_TASKS）— 仅历史参考，以 `02_EXECUTION_PLAN.md` 为准 |
 
-## 模块 README
+## 模块 README（实现层权威）
 
 | 文档 | 说明 |
 |------|------|
-| `backend/app/modules/schema/README.md` | Schema 层 |
-| `backend/app/modules/data/README.md` | Data 层 |
-| `backend/app/modules/kg/README.md` | KG 桥接层 |
-| `backend/app/agent/gis/parse/README.md` | PARSE Agent |
-| `backend/app/agent/gis/execute/README.md` | EXECUTE Agent |
+| `backend/app/modules/schema/README.md` | Schema 层 — 四形态结构优先、阶段抽象、实体/表达分离、BaseControlZone |
+| `backend/app/modules/data/README.md` | Data 层 — 双轨接入、四形态、VillageBundle 形态优先 |
+| `backend/app/modules/kg/README.md` | KG 桥接层 — L1-L4 四层架构、EntityIdPolicy、SemanticMemoryStore |
+| `backend/app/modules/spatial_ops/README.md` | 空间计算层 — 三职责分工（KG输入/PARSE接地/EXECUTE桥接） |
+| `backend/app/agent/gis/parse/README.md` | PARSE Agent — Think-Then-Format、空间接地、统一Intent |
+| `backend/app/agent/gis/execute/README.md` | EXECUTE Agent — Worker-Evaluator 循环、子任务分解 |
 | `backend/app/agent/gis/README.md` | GIS Agent 包总览 |
 
 ## 文档间权威关系
 
 ```
-00_SYSTEM_DESIGN.md   ← 唯一权威设计文档（设计目标）
-    ↓ 审视
-03_GAP_ANALYSIS.md   ← 落地缺陷与设计审视（设计 vs 实做差距）
-    ↓ 审视
-04_ARCHITECTURE_AUDIT.md ← 架构规整审视（标识契约、URI 方案、模块优美性）
-    ↓ 审视
-05_MODULE_BOUNDARY_AUDIT.md ← 模块边界与编码体系审视（数据边界、编码缺陷、归属）
-    ↓ 参考
-reference/            ← 外部对标（人类工作流、可行性验证）
-    ↓ 历史
-archive/              ← 旧设计文档（已过时，仅参考）
-```
+模块 README（schema/kg/spatial_ops/parse/execute/data）
+    ↑ 最权威，最贴近代码实现
+
+02_EXECUTION_PLAN.md
+    ↑ 执行方案，统一各 README 先进设计
+
+03_GAP_ANALYSIS.md / 04_ARCHITECTURE_AUDIT.md / 05_MODULE_BOUNDARY_AUDIT.md
+    ↑ 诊断参考，P0/P1/P2 优先级编号以 02_EXECUTION_PLAN.md 为准
+
+00_SYSTEM_DESIGN.md
+    ↑ 架构参考（§3.2/§3.5/§3.6/§5.1 以 02_EXECUTION_PLAN.md 和 README 为准）
+
+reference/
+    ↑ 外部对标
+
+archive/
+    ↑ 历史参考（已过时）
