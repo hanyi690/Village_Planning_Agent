@@ -78,11 +78,12 @@ START
 
 ---
 
-## 五、当前状态（P0 骨架）
+## 五、当前状态（P1: 道路生成器已实现）
 
 - ✅ 图编译通过：6 节点 + 条件边
-- ✅ 端到端可运行：smoke test 通过（空 intent 正确跳过 facility/axis，validate 1 轮通过）
-- ⚠️ **节点为 placeholder**：`execute_*` / `validate` 均为 pass-through，未调用真实工具
+- ✅ 端到端可运行：smoke test 通过
+- ✅ **`_execute_road_node` 已接入 `spatial_ops.road_planner`** — 替代旧的 placeholder
+- ⚠️ `execute_layout` / `execute_facility` / `execute_axis` / `validate` 仍为 pass-through，未调用真实工具
 - ⚠️ **未接入生产**：`layout_pipeline.py` 仍跑内联的 `_allocate_generate_react_node` + `_validate_layout_node`
 
 ---
@@ -93,7 +94,7 @@ START
 
 搭建 `execute/` 子包目录 + 可编译 StateGraph + placeholder 节点。不破坏现有生产管线。
 
-### P1：接入生产（待执行）
+### P1：接入生产（进行中）
 
 1. `execute_layout` 节点接入 `allocate_zones` + `_generate_function_zones`
 2. `execute_facility` / `execute_axis` 节点接入 `facility_placer` / `axis_builder`
@@ -104,12 +105,11 @@ START
 7. `execute_facility` 接入 v4.3 设施子类型（`WaterSupply`/`Drainage`/`Waste`/`Sanitary`/`Fire`/`EvacuationShelter`/`Energy`/`Lighting` Facility，见 `schema/README.md` §2.1）
 8. 表格产出：`ConstructionProjectTable`/`ControlRuleTable`/`PlanningIndicatorTable` 写入 `project.tables`（一表一规则汇交，见 `schema/types/table_types.py`）
 
-### P2：子任务分解 + 道路生成器（待规划）
+### P2：子任务分解 + 并行化（待规划）
 
 1. 拆 `generate_layout` 工具为子任务专用生成器（layout/facility/axis 各自独立）
-2. 实现 `PlannedRoad` 生成器，落地 `execute_road` 节点
-3. `layout_pipeline.py` 改名 `pipeline.py`（名不副实，实为顶层编排器）
-4. 子任务改 Send 并行 fan-out（无依赖时）
+2. `layout_pipeline.py` 改名 `pipeline.py`（名不副实，实为顶层编排器）
+3. 子任务改 Send 并行 fan-out（无依赖时）
 
 ---
 
@@ -134,7 +134,8 @@ execute = build_execute_agent_graph()  # 替换 allocate_and_generate + validate
 - `../README.md` — GIS Agent 包总览
 - `../parse/README.md` — PARSE Agent（上游生产者）
 - `app/modules/kg/README.md` — KG 桥接层（提供约束/邻接查询）
-- `docs/gis/proposals/03_TOOL_FIRST_ARCHITECTURE.md` §4 — EXECUTE_OPS Agent 预留依据
-- `app/modules/schema/README.md` - Schema v4.3 类型（设施子类型/表格/BaseControlZone）
+- `app/modules/spatial_ops/README.md` — 空间计算层（约束编译/地块操作/道路规划/用地平衡表）
+- `app/modules/schema/README.md` - Schema 类型契约（含 v5.0 受控词表/交付门槛契约）
 - `app/modules/data/README.md` - ProjectDataView/VillageBundle
+- `docs/gis/02_EXECUTION_PLAN.md` — 统一执行方案（模块化分解 + 分波次计划）
 - `docs/gis/00_SYSTEM_DESIGN.md` §五 - EXECUTE 执行层设计

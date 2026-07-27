@@ -14,7 +14,7 @@ Worker-Evaluator loop:
   validate --pass--> END | --retry--> layout (max 3 rounds)
 
 P1 wiring: nodes call the underlying generation helpers directly
-(generate._generate_*, allocate._intent_to_targets, LayoutValidator.validate)
+(generate._generate_*, MIPZoneAllocator, LayoutValidator.validate)
 rather than the @tool wrappers, bypassing InjectedState. This couples execute/
 to tools/gis private helpers; P2 should promote them to a public generation API.
 """
@@ -63,11 +63,10 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
     from app.tools.gis.generate import (
         _apply_operations, _generate_function_zones, _make_planning_zone_layer,
     )
-    from app.tools.gis.allocate import _intent_to_targets, _spatial_constraint_to_mip
+    from app.tools.gis.allocate import _spatial_constraint_to_mip
     from app.tools.gis._generation.optimizer.mip_allocator import MIPZoneAllocator
 
     gis_data = state.gis_data or {}
-    # Prefer typed bundle for landuse; fall back to raw dict
     gis_bundle = getattr(state, "gis_bundle", None)
     if gis_bundle is not None and hasattr(gis_bundle, "polygons") and (gis_bundle.polygons.landuse_current or gis_bundle.polygons.landuse_planned):
         landuse_dict = gis_bundle.to_geojson_dict()
@@ -79,20 +78,27 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
         return {}
 
     try:
-        # Step 1: Apply PARSE operations to allocated_geojson
         allocated = state.allocated_geojson or {}
         if state.operation_sequence and allocated:
             allocated = _apply_operations(allocated, state.operation_sequence)
 
-        # Step 2: Compute total area + allocation targets
         total_area_ha = sum(
             float(f.get("properties", {}).get("area_ha", 0) or 0)
             for f in landuse.get("features", [])
         )
-        alloc_intent = _intent_to_targets(state.intent, total_area_ha)
-        target_map = dict(alloc_intent.target_map)
 
-        # Step 3: Apply constraint_adjustments from validate feedback (retry)
+        # Direct ZoneTarget extraction
+        zone_targets = list(state.intent.zone_targets) if hasattr(state.intent, 'zone_targets') and state.intent.zone_targets else []
+        target_map = {zt.land_use: round(zt.area_ratio * total_area_ha, 2) for zt in zone_targets if zt.land_use}
+        density_hints = {zt.land_use: zt.density for zt in zone_targets if zt.land_use and zt.density}
+        adjacency_rules = {}
+        for zt in zone_targets:
+            if zt.land_use and zt.adjacency_rules:
+                adjacency_rules[zt.land_use] = {
+                    "prefer": list(zt.adjacency_rules.prefer) if zt.adjacency_rules.prefer else [],
+                    "avoid": list(zt.adjacency_rules.avoid) if zt.adjacency_rules.avoid else [],
+                }
+
         if state.constraint_adjustments:
             for adj in state.constraint_adjustments:
                 zone = adj.get("zone", "")
@@ -104,7 +110,6 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                         zone, delta, adj.get("reason", ""),
                     )
 
-        # Step 4: Convert PARSE constraints to MIP format + merge with KG
         mip_parse_constraints = []
         for c in (state.constraint_set or []):
             mip_c = _spatial_constraint_to_mip(c)
@@ -112,15 +117,15 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                 mip_parse_constraints.append(mip_c)
         all_constraints = list(state.kg_constraints or []) + mip_parse_constraints
 
-        # Step 5: MIP allocation
         allocator = MIPZoneAllocator()
         allocated_geojson, alloc_trace = allocator.solve(
             landuse_geojson=landuse,
             targets=target_map,
             constraints=all_constraints,
+            zone_targets=zone_targets,
             parse_constraints=state.constraint_set,
-            density_hints=alloc_intent.density_hints or None,
-            adjacency_rules=alloc_intent.adjacency_rules or None,
+            density_hints=density_hints or None,
+            adjacency_rules=adjacency_rules or None,
             facility_anchors=state.facility_anchors,
             protected_parcels_detail=state.kg_protected_parcels_detail or None,
             three_line_targets=state.kg_three_lines or None,
@@ -131,10 +136,10 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
             "mode": alloc_trace.get("mode", "mip"),
             "allocated_count": len(allocated_geojson.get("features", [])),
         }
-        if alloc_intent.density_hints:
-            summary["density_hints"] = alloc_intent.density_hints
-        if alloc_intent.adjacency_rules:
-            summary["adjacency_rules"] = alloc_intent.adjacency_rules
+        if density_hints:
+            summary["density_hints"] = density_hints
+        if adjacency_rules:
+            summary["adjacency_rules"] = adjacency_rules
 
         # Step 6: Generate function zone + planning zone layers
         layers = []
@@ -226,11 +231,68 @@ async def _execute_axis_node(state: ExecuteAgentState) -> dict:
 async def _execute_road_node(state: ExecuteAgentState) -> dict:
     """Road sub-task: planned road network generation.
 
-    TODO(P2): PlannedRoad schema is defined in spatial_types.py but no road
-    generator exists yet. This node is a no-op until the generator lands.
+    Consumes RoadTarget from PARSE intent + existing roads from bundle.
+    Produces planned road layer via spatial_ops.road_planner.
     """
-    logger.info("[EXECUTE:road] placeholder - PlannedRoad generator not yet implemented")
-    return {}
+    from app.modules.spatial_ops.road_planner import plan_roads
+
+    intent = state.intent
+    if not intent:
+        logger.info("[EXECUTE:road] no intent, skipping")
+        return {}
+
+    # Extract road targets
+    road_targets = []
+    if hasattr(intent, "road_targets"):
+        road_targets = intent.road_targets
+    elif isinstance(intent, dict):
+        road_targets = intent.get("road_targets", [])
+
+    if not road_targets:
+        logger.info("[EXECUTE:road] no road targets in intent, skipping")
+        return {}
+
+    # Get current roads from bundle
+    bundle = state.gis_bundle
+    current_roads = []
+    if bundle is not None:
+        roads = getattr(getattr(bundle, "lines", None), "roads_current", None)
+        if roads is not None:
+            current_roads = list(roads)
+        # Also try legacy attribute
+        if not current_roads:
+            current_roads = getattr(bundle, "roads", [])
+
+    # Generate planned roads
+    planned_roads = plan_roads(
+        road_targets=road_targets,
+        current_roads=current_roads,
+    )
+
+    if not planned_roads:
+        logger.info("[EXECUTE:road] no roads generated")
+        return {}
+
+    # Build layer config for export/render
+    road_layer = {
+        "layer_type": "planned_road",
+        "features": planned_roads,
+        "count": len(planned_roads),
+    }
+
+    # Merge into existing layout_configs
+    existing = state.layout_configs or []
+    updated = [road_layer] + existing
+
+    logger.info(
+        "[EXECUTE:road] generated %d planned roads (%d upgrade, %d new, %d preserved)",
+        len(planned_roads),
+        sum(1 for r in planned_roads if r.get("operation") == "upgrade"),
+        sum(1 for r in planned_roads if r.get("operation") == "create"),
+        sum(1 for r in planned_roads if r.get("operation") == "preserve"),
+    )
+
+    return {"layout_configs": updated}
 
 
 async def _validate_node(state: ExecuteAgentState) -> dict:
