@@ -238,14 +238,22 @@ class DataCatalog:
 
     def find_source_by_layer_type(self, layer_type: str) -> Optional[DataSourceDriver]:
         """Find the first source supporting a given layer_type."""
+        sources = self.find_sources_by_layer_type(layer_type)
+        return sources[0] if sources else None
+
+    def find_sources_by_layer_type(self, layer_type: str) -> List[DataSourceDriver]:
+        """Find all sources supporting a given layer_type, in YAML config order."""
+        matched: List[DataSourceDriver] = []
         for name, source in self._sources.items():
             cfg = self._sources_cfg.get(name, {})
             if cfg.get("layer_type") == layer_type:
-                return source
+                matched.append(source)
+                continue
             for layer in cfg.get("layers", []):
                 if layer.get("layer_type") == layer_type:
-                    return source
-        return None
+                    matched.append(source)
+                    break
+        return matched
 
     def query_by_bbox(
         self,
@@ -254,22 +262,39 @@ class DataCatalog:
     ) -> Dict[str, DataResult]:
         """Query multiple layer types by bounding box.
 
+        For each layer_type, tries all configured sources in YAML config order
+        until one succeeds (implements priority/source-fallback).
+        If all sources for a layer_type fail, returns the last failure.
+
         Returns:
             Dict mapping layer_type to DataResult.
         """
         results: Dict[str, DataResult] = {}
         for lt in layer_types:
-            source = self.find_source_by_layer_type(lt)
-            if source is None:
+            sources = self.find_sources_by_layer_type(lt)
+            if not sources:
                 results[lt] = DataResult.fail(
                     error=f"No source configured for layer_type: {lt}"
                 )
                 continue
-            try:
-                results[lt] = source.fetch(bbox=bbox, layer_type=lt)
-            except Exception as e:
-                logger.error("[DataCatalog] Query failed for %s: %s", lt, e)
-                results[lt] = DataResult.fail(error=str(e))
+            last_error = ""
+            for source in sources:
+                try:
+                    result = source.fetch(bbox=bbox, layer_type=lt)
+                    if result.success:
+                        results[lt] = result
+                        break
+                    last_error = result.error or "unknown error"
+                except Exception as e:
+                    logger.warning(
+                        "[DataCatalog] Source failed for %s: %s", lt, e
+                    )
+                    last_error = str(e)
+            else:
+                # All sources failed
+                results[lt] = DataResult.fail(
+                    error=f"All sources failed for {lt}: {last_error}"
+                )
         return results
 
     # layer_type -> (ingest port, ingest arg) mapping for typed bundle loading.
@@ -368,6 +393,37 @@ class DataCatalog:
                         bundle.rasters.dem = raster
                     elif lt == "dom":
                         bundle.rasters.dom = raster
+
+        # Step 4b: Fallback — derive water bodies from DLBM=31xx parcels
+        # when external water sources (upload / Tianditu API) are unavailable.
+        if not bundle.polygons.water_bodies and bundle.polygons.landuse_current:
+            from app.modules.schema.types.spatial_types import WaterFeature
+            generated = 0
+            for p in bundle.polygons.landuse_current:
+                dlbm = getattr(p, "dlbm", "") or ""
+                if dlbm.startswith("31"):
+                    wf = WaterFeature(
+                        geometry=p.geometry,
+                        bsm=p.bsm,
+                        ysdm=p.ysdm,
+                        layer_type="water",
+                        _raw=p._raw.copy() if p._raw else {},
+                        water_type={
+                            "3101": "河流",
+                            "3102": "湖泊",
+                            "3103": "水库",
+                            "3104": "坑塘",
+                            "3105": "沟渠",
+                        }.get(dlbm[:4], "坑塘"),
+                        water_name=getattr(p, "name", "") or "",
+                    )
+                    bundle.polygons.water_bodies.append(wf)
+                    generated += 1
+            if generated:
+                logger.info(
+                    "[DataCatalog] Derived %d water bodies from DLBM=31xx parcels",
+                    generated,
+                )
 
         bundle.metadata.provider_sources = list(results.keys())
         if bbox:

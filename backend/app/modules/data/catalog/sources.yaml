@@ -67,6 +67,32 @@ sources:
     layer_type: annotation
     crs: EPSG:4326
 
+  # ── 本地矢量 - 水体（上传文件源优先，API 源去重补充）──
+  jintian_water_upload:
+    driver: file_vector
+    path: "data/gis/jintian/api/uploaded/water_bodies.geojson"
+    layer_type: water
+    crs: EPSG:4326
+    priority: 1  # 上传文件最高优先级
+
+  jintian_water_hyda:
+    driver: api_vector
+    connection: gd_tianditu
+    service_id: HYDA
+    protocol: wfs
+    crs: EPSG:4490
+    layer_type: water
+    priority: 2  # API 源降级
+
+  jintian_water_hydl:
+    driver: api_vector
+    connection: gd_tianditu
+    service_id: HYDL
+    protocol: wfs
+    crs: EPSG:4490
+    layer_type: water
+    priority: 2  # API 源降级，线状水体
+
   # ── 本地矢量 - 金田村规划 ──
   jintian_planned_landuse:
     driver: file_vector
@@ -114,6 +140,12 @@ sources:
     driver: file_vector
     path: "data/gis/jintian/planned/geological_hazard_points.geojson"
     layer_type: geological_hazard_points
+    crs: EPSG:4326
+
+  jintian_planned_boundary:
+    driver: file_vector
+    path: "data/gis/jintian/planned/boundary.geojson"
+    layer_type: boundary_planned
     crs: EPSG:4326
 
   # ── API 矢量 - 广东省天地图专题服务 ──
