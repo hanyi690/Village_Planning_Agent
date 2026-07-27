@@ -286,7 +286,7 @@ class TestKGLayer1Construction:
         assert len(touches) > 0 or len(nearby) > 0
 
     def test_layer1_natural_villages(self, kg_main):
-        """NaturalSettlement entities from NATURAL_VILLAGES block."""
+        """NaturalSettlement entities from RESIDENTIAL_CLUSTERS block."""
         nv = kg_main.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
             "SELECT ?v WHERE { ?v a pln:NaturalSettlement . }")
@@ -964,10 +964,10 @@ class TestKGStaticStructure:
         assert violations == [], f"KG imports from data layer:\n" + "\n".join(violations)
 
     def test_builder_subpackage_has_six_files(self):
-        """builder/ subpackage has the 6 expected files."""
+        """builder/ subpackage has the 6 expected files (queries.py merged into queries/sparql.py)."""
         builder_dir = Path(_BACKEND_DIR) / "app" / "modules" / "kg" / "builder"
         expected = {"__init__.py", "base.py", "layer1.py", "layer2.py",
-                    "layer3.py", "layer4.py", "queries.py"}
+                    "layer3.py", "layer4.py", "mixins.py"}
         actual = {f.name for f in builder_dir.glob("*.py")}
         assert expected.issubset(actual), f"Missing: {expected - actual}"
 
@@ -981,11 +981,11 @@ class TestSpatialCognitiveUnitHierarchy:
     def test_l1_anchors_inherit_morphology(self):
         """L1 cognition anchors inherit from Point/Line/PolygonBasedCognition."""
         from app.modules.schema.contracts.context_contracts import (
-            FacilityAnchor, NaturalVillageAnchor, ConstraintZoneAnchor,
+            FacilityAnchor, ResidentialClusterAnchor, ConstraintZoneAnchor,
             PointBasedCognition, LineBasedCognition, PolygonBasedCognition,
         )
         assert issubclass(FacilityAnchor, PointBasedCognition)
-        assert issubclass(NaturalVillageAnchor, PolygonBasedCognition)
+        assert issubclass(ResidentialClusterAnchor, PolygonBasedCognition)
         assert issubclass(ConstraintZoneAnchor, PolygonBasedCognition)
 
     def test_parse_contracts_intent_has_semantic_fields(self):
@@ -1025,7 +1025,7 @@ class TestSpatialCognitiveUnitHierarchy:
     def test_l4_plan_block_is_delta_not_morphology(self):
         """L4 PlanBlock is a change-set container, NOT a SpatialCognitiveUnit.
 
-        Unlike L1 anchors (NaturalVillageAnchor etc.), PlanBlock and its
+        Unlike L1 anchors (ResidentialClusterAnchor etc.), PlanBlock and its
         Change types do NOT inherit from Point/Line/PolygonBasedCognition.
         They are 'change operation descriptors', not spatial features.
         """
