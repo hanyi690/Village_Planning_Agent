@@ -93,13 +93,28 @@ class StepTimer:
 
 
 def load_gis_data() -> Tuple[dict, list, list]:
-    """Load all current + planned GeoJSON layers + typed annotations + roads.
+    """Load all current + planned GeoJSON layers directly from data/gis/jintian."""
+    layer_map = {
+        "landuse_current_geojson": "current/landuse.geojson",
+        "boundary_geojson": "current/boundary.geojson",
+        "admin_boundary_line_geojson": "current/admin_boundary_line.geojson",
+        "road_geojson": "current/road.geojson",
+        "annotation_geojson": "current/annotation.geojson",
+        "construction_boundary_geojson": "planned/construction_zone.geojson",
+        "farmland_protection_geojson": "planned/farmland_protection.geojson",
+        "ecological_protection_geojson": "planned/ecological_protection.geojson",
+        "geological_hazard_geojson": "planned/geological_hazard_points.geojson",
+        "historical_protection_geojson": "planned/historical_protection.geojson",
+    }
+    gis_data = {}
+    for key, rel_path in layer_map.items():
+        fp = DATA_DIR / rel_path
+        if fp.exists():
+            with open(str(fp), "r", encoding="utf-8") as f:
+                gis_data[key] = json.load(f)
 
-    Delegates to catalog.loaders.load_gis_data_full() for unified loading.
-    """
-    from app.modules.gis.data.catalog.loaders import load_gis_data_full
-
-    gis_data, annotations, roads = load_gis_data_full()
+    annotations = gis_data.get("annotation_geojson", {"type": "FeatureCollection", "features": []}).get("features", [])
+    roads = gis_data.get("road_geojson", {"type": "FeatureCollection", "features": []}).get("features", [])
     print(f"  [GIS] Loaded {len(gis_data)} layers, {len(annotations)} annotations, {len(roads)} roads", flush=True)
     return gis_data, annotations, roads
 
@@ -148,7 +163,7 @@ def load_parse_cache(cache_path: Optional[Path]) -> Optional[Dict]:
         print(f"  [CACHE] Failed to load cache {cache_path.name}: {e}", flush=True)
         return None
 
-    required = ["planning_intent", "spatial_context"]
+    required = ["planning_intent"]
     if not all(k in data for k in required):
         print(f"  [CACHE] Invalid cache file: missing {set(required) - set(data.keys())}", flush=True)
         return None
@@ -249,7 +264,14 @@ def run_kg_step(
     from app.modules.kg.manager import get_kg_manager
 
     manager = get_kg_manager()
-    kg, cache_hit = manager.get_or_build_layer1(village_name, landuse_geojson, gis_data)
+    bundle = None
+    try:
+        from app.modules.data.catalog import DataCatalog
+        catalog = DataCatalog()
+        bundle = catalog.load_village_bundle("jintian")
+    except Exception:
+        pass
+    kg, cache_hit = manager.get_or_build_layer1(village_name, bundle=bundle, landuse_geojson=landuse_geojson, gis_data=gis_data)
 
     # Layer 2: semantic (from intent)
     try:
@@ -408,7 +430,6 @@ def run_allocate_step(
 
     Returns (allocated_geojson, mip_trace).
     """
-    from app.tools.gis.allocate import _intent_to_targets, AllocationIntent
     from app.tools.gis._generation.optimizer.mip_allocator import MIPZoneAllocator
 
     total_area_ha = compute_total_area_ha(landuse_geojson)
@@ -418,8 +439,20 @@ def run_allocate_step(
     if isinstance(planning_intent, dict):
         intent = _reconstruct_intent(planning_intent)
 
-    alloc_intent: AllocationIntent = _intent_to_targets(intent, total_area_ha)
-    target_map = alloc_intent.target_map
+    zone_targets = list(intent.zone_targets) if hasattr(intent, 'zone_targets') and intent.zone_targets else []
+    target_map = {zt.land_use: round(zt.area_ratio * total_area_ha, 2) for zt in zone_targets if zt.land_use}
+
+    density_hints = {zt.land_use: zt.density for zt in zone_targets if zt.land_use and zt.density}
+    adjacency_rules = {}
+    vne_codes = {}
+    for zt in zone_targets:
+        if zt.land_use and zt.adjacency_rules:
+            adjacency_rules[zt.land_use] = {
+                "prefer": list(zt.adjacency_rules.prefer) if zt.adjacency_rules.prefer else [],
+                "avoid": list(zt.adjacency_rules.avoid) if zt.adjacency_rules.avoid else [],
+            }
+        if zt.land_use and zt.vne_code:
+            vne_codes[zt.land_use] = zt.vne_code
 
     # Apply constraint adjustments from validate feedback
     if constraint_adjustments:
@@ -435,7 +468,6 @@ def run_allocate_step(
     mip_parse_constraints = []
     if constraint_set:
         for c in constraint_set:
-            # Reconstruct typed constraint if dict
             c_obj = _reconstruct_constraint(c) if isinstance(c, dict) else c
             mip_c = _spatial_constraint_to_mip(c_obj)
             if mip_c:
@@ -455,13 +487,14 @@ def run_allocate_step(
         landuse_geojson=landuse_geojson,
         targets=target_map,
         constraints=all_constraints or None,
+        zone_targets=zone_targets,
         parse_constraints=constraint_set or None,
-        density_hints=alloc_intent.density_hints or None,
-        adjacency_rules=alloc_intent.adjacency_rules or None,
+        density_hints=density_hints or None,
+        adjacency_rules=adjacency_rules or None,
         facility_anchors=facility_anchors,
-        protected_parcels_detail=kg_result.get("kg_protected_parcels_detail"),  # Phase 5
-        three_line_targets=kg_result.get("kg_three_lines"),  # Phase 6: hard area constraints
-        vne_summary=kg_result.get("kg_vne_summary"),  # Phase 6: VNE zone-level constraints
+        protected_parcels_detail=kg_result.get("kg_protected_parcels_detail"),
+        three_line_targets=kg_result.get("kg_three_lines"),
+        vne_summary=kg_result.get("kg_vne_summary"),
     )
 
     print(
@@ -1319,9 +1352,9 @@ async def run_pipeline(
         operation_sequence = parse_result.get("operation_sequence", [])
         constraint_set = parse_result.get("constraint_set", [])
 
-        # Extract facility_anchors from spatial_context (annotation-derived)
-        spatial_context_data = parse_result.get("spatial_context", {})
-        facility_anchors = spatial_context_data.get("facility_anchors", [])
+        # Extract facility_anchors from spatial_context (annotation-derived, optional)
+        spatial_context_data = parse_result.get("spatial_context", {}) or {}
+        facility_anchors = spatial_context_data.get("facility_anchors", []) if isinstance(spatial_context_data, dict) else []
 
         timing["parse"] = time.time() - t0
 

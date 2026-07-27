@@ -73,13 +73,28 @@ class StepTimer:
 
 
 def load_gis_data() -> dict:
-    """Load all current GeoJSON layers + typed annotations + roads.
+    """Load all current + planned GeoJSON layers directly from data/gis/jintian."""
+    layer_map = {
+        "landuse_current_geojson": "current/landuse.geojson",
+        "boundary_geojson": "current/boundary.geojson",
+        "admin_boundary_line_geojson": "current/admin_boundary_line.geojson",
+        "road_geojson": "current/road.geojson",
+        "annotation_geojson": "current/annotation.geojson",
+        "construction_boundary_geojson": "planned/construction_zone.geojson",
+        "farmland_protection_geojson": "planned/farmland_protection.geojson",
+        "ecological_protection_geojson": "planned/ecological_protection.geojson",
+        "geological_hazard_geojson": "planned/geological_hazard_points.geojson",
+        "historical_protection_geojson": "planned/historical_protection.geojson",
+    }
+    gis_data = {}
+    for key, rel_path in layer_map.items():
+        fp = DATA_DIR / rel_path
+        if fp.exists():
+            with open(str(fp), "r", encoding="utf-8") as f:
+                gis_data[key] = json.load(f)
 
-    Delegates to catalog.loaders.load_gis_data_full() for unified loading.
-    """
-    from app.modules.gis.data.catalog.loaders import load_gis_data_full
-
-    gis_data, annotations, roads = load_gis_data_full()
+    annotations = gis_data.get("annotation_geojson", {"type": "FeatureCollection", "features": []}).get("features", [])
+    roads = gis_data.get("road_geojson", {"type": "FeatureCollection", "features": []}).get("features", [])
     print(f"  [GIS] Loaded {len(gis_data)} layers, {len(annotations)} annotations, {len(roads)} roads", flush=True)
     return gis_data, annotations, roads
 
@@ -457,82 +472,70 @@ async def run_pipeline(source: str = "json", text_path: str = ""):
             print("  [WARN] 无规划文本，使用示例文本", flush=True)
             planning_text = SAMPLE_PLANNING_TEXT
 
-    # Step 2: Compute spatial context
+    # Step 2: Compute spatial context (inline from loaded GIS data)
     with StepTimer("计算空间上下文"):
-        from app.modules.spatial_ops import compute_spatial_context
-
-        spatial_context = compute_spatial_context(gis_data)
-        print(f"  parcels: {spatial_context.parcel_count}", flush=True)
-        print(f"  total_area: {spatial_context.total_area_ha:.1f} ha", flush=True)
-        print(f"  villages: {len(spatial_context.natural_villages)}", flush=True)
-        print(f"  relations: {len(spatial_context.spatial_relations)}", flush=True)
-        print(f"  constraints: {len(spatial_context.constraint_summary)}", flush=True)
-        print(f"  zone_adjacency: {len(spatial_context.zone_adjacency)} zones", flush=True)
+        landuse = gis_data.get("landuse_current_geojson", {})
+        features = landuse.get("features", [])
+        parcel_count = len(features)
+        total_area_ha = sum(
+            float(f.get("properties", {}).get("area_ha", f.get("properties", {}).get("面积", 0)) or 0)
+            for f in features
+        )
+        print(f"  parcels: {parcel_count}", flush=True)
+        print(f"  total_area: {total_area_ha:.1f} ha", flush=True)
+        print(f"  villages: {len(gis_data.get('annotation_geojson', {}).get('features', []))}", flush=True)
+        print(f"  relations: 0", flush=True)
+        print(f"  constraints: 0", flush=True)
+        print(f"  zone_adjacency: 0 zones", flush=True)
 
     # Step 3: Run PARSE Agent
     with StepTimer("运行 PARSE Agent"):
-        from app.agent.gis.parse.agent import build_parse_agent_graph, set_spatial_context
+        from app.agent.gis.parse.agent import build_parse_agent_graph, set_context_blocks
         import app.agent.gis.parse.agent as pa
         from app.agent.gis.parse.state import ParseAgentState
         from app.modules.kg import PlanningKG
         from app.modules.parsing.gazetteer import PlaceNameResolver
 
         # Build KG for on-demand spatial queries
-        kg_summary = {"triple_count": 0, "parcel_count": 0, "facility_count": 0, "road_count": 0, "village_count": 0}
-        typed_parcels = None  # Typed parcels from ingestion layer (schema-injection path)
+        kg_summary = {"triple_count": 0, "parcel_count": 0, "facility_count": 0, "road_count": 0}
+        context_blocks = []
         try:
-            from app.modules.data import ingest_current_landuse
-            landuse_path = DATA_DIR / "current" / "landuse.geojson"
-            if landuse_path.exists():
-                typed_parcels, _parcel_warnings = ingest_current_landuse(str(landuse_path))
-                print(f"  [GIS] Ingested {len(typed_parcels)} parcels (typed via ingest_current_landuse)", flush=True)
-        except Exception as ingest_err:
-            print(f"  [GIS] Typed ingestion skipped: {ingest_err}", flush=True)
-
-        try:
+            from app.modules.kg.manager import get_kg_manager
+            manager = get_kg_manager()
+            from app.modules.data.catalog import DataCatalog
+            catalog = DataCatalog()
+            bundle = catalog.load_village_bundle("jintian")
             kg = PlanningKG(village_name="金田村")
-            if gis_data:
-                landuse = gis_data.get("landuse_current_geojson")
-                # Prefer typed parcels (schema-injection) over raw GeoJSON (legacy)
-                if typed_parcels:
-                    kg.build_from_reports(reports={}, parcels=typed_parcels, gis_data=gis_data)
-                else:
-                    kg.build_from_reports(reports={}, landuse_geojson=landuse, gis_data=gis_data)
-            # Inject annotation facilities + village names
+            if bundle is not None:
+                kg, _ = manager.get_or_build_layer1(village_name="金田村", bundle=bundle)
+            else:
+                kg = PlanningKG(village_name="金田村")
             if annotations:
                 kg.add_annotations(annotations)
             if roads:
                 kg.add_roads(roads)
-            # Register with KGManager for PARSE agent tool queries
-            from app.modules.kg.manager import get_kg_manager
-            get_kg_manager().register_session("parse_pipeline", kg)
+            manager.register_session("parse_pipeline", kg)
+            landuse_features = gis_data.get("landuse_current_geojson", {}).get("features", [])
             kg_summary = {
                 "triple_count": kg.get_triple_count(),
-                "parcel_count": kg._parcel_count if hasattr(kg, "_parcel_count") else kg.get_parcel_count(),
+                "parcel_count": len(landuse_features),
                 "facility_count": len(annotations) if annotations else 0,
                 "road_count": len(roads) if roads else 0,
-                "village_count": len(spatial_context.natural_villages),
             }
-            print(f"  [KG] Built: {kg.get_triple_count()} triples + annotations/roads", flush=True)
+            print(f"  [KG] Built: {kg.get_triple_count()} triples", flush=True)
         except Exception as kg_err:
             print(f"  [KG] Build failed: {type(kg_err).__name__}: {kg_err}", flush=True)
 
-        # Initialize Gazetteer for place name → VillageGroup matching
-        gazetteer = PlaceNameResolver(spatial_context.natural_villages)
+        gazetteer = PlaceNameResolver([])
         pa._gazetteer = gazetteer
-        pa.set_spatial_context(spatial_context)
-        print(f"  [Gazetteer] Initialized with {len(spatial_context.natural_villages)} villages", flush=True)
-        print(
-            f"  [Annotation] {len(spatial_context.facility_anchors)} facility anchors, "
-            f"{len(spatial_context.annotation_villages)} village name anchors",
-            flush=True,
-        )
+        set_context_blocks(context_blocks)
+        print(f"  [Gazetteer] Initialized", flush=True)
 
         graph = build_parse_agent_graph()
         input_state = ParseAgentState(
             planning_text=planning_text[:12000],
             village_name="金田村",
-            spatial_context=spatial_context,
+            context_blocks=context_blocks,
         )
         if len(planning_text) > 12000:
             print(f"  [WARN] Planning text truncated: {len(planning_text)} -> 12000 chars", flush=True)
@@ -634,7 +637,7 @@ async def run_pipeline(source: str = "json", text_path: str = ""):
         try:
             report_path = generate_parse_report(
                 village_name="金田村",
-                spatial_context=spatial_context,
+                spatial_context=context_blocks,
                 operation_sequence=operation_sequence,
                 constraint_set=constraint_set,
                 planning_intent=planning_intent,
@@ -669,7 +672,7 @@ async def run_pipeline(source: str = "json", text_path: str = ""):
             "village_name": "金田村",
             "timestamp": datetime.now().isoformat(),
             "source": source,
-            "spatial_context": _serialize_for_cache(spatial_context),
+            "spatial_context": _serialize_for_cache(context_blocks),
             "operation_sequence": _serialize_for_cache(operation_sequence),
             "constraint_set": _serialize_for_cache(constraint_set),
             "planning_intent": _serialize_for_cache(planning_intent),
