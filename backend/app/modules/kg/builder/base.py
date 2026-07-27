@@ -57,7 +57,8 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
     # ── Main entry point ──
 
     def build_from_bundle(self, bundle, parcel_relations=None,
-                          intent=None, planned_state=None, constraint_index=None):
+                          intent=None, planned_state=None, constraint_index=None,
+                          water_overlap=None):
         """Build KG from VillageBundle morphology groups.
 
         Layer 1-2: Static entities + spatial relations from bundle + parcel_relations.
@@ -68,6 +69,8 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
             constraint_index: Optional ConstraintIndex from spatial_ops.bridge,
                 injected for constraint violation checking (architecture: KG
                 does not import spatial_ops, receives it as a dependency).
+            water_overlap: Optional dict from spatial_ops.bridge.compute_water_overlap(),
+                mapping water_feature_id -> [covered_bsm, ...] for deduplication.
         """
         self.g = Graph()
         self.g.bind("pln", PLN)
@@ -80,11 +83,16 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
         self._add_village_meta_from_bundle(bundle)
         self._add_parcels(bundle.polygons.landuse_current)
         self.add_roads(bundle.lines.roads_current)
-        self._add_water_bodies(bundle.polygons.water_bodies)
+        self._add_water_bodies(bundle.polygons.water_bodies, water_overlap=water_overlap or {})
         self._add_facilities_from_typed(bundle.points.facilities_current)
+        self._add_facilities_from_annotations(getattr(bundle.points, 'annotations_current', []))
+        self.add_annotations(getattr(bundle.points, 'annotations_current', []))
         self._add_control_lines_from_typed(bundle.points, bundle.polygons)
         self._add_planning_elements_from_typed(bundle.polygons)
-        self._add_natural_villages_from_typed(bundle.polygons.landuse_current)
+        self._add_residential_clusters_from_typed(
+            bundle.polygons.landuse_current,
+            getattr(bundle.points, 'annotations_current', []),
+        )
         self.add_terrain(getattr(bundle.rasters, 'slope', None))
 
         # Spatial relations (computed from geometry)
@@ -115,7 +123,7 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
             EntityTypes.AdministrativeVillage, EntityTypes.Parcel,
             EntityTypes.Road,
             EntityTypes.WaterBody, EntityTypes.Facility,
-            PLN.ControlLine, EntityTypes.NaturalSettlement, EntityTypes.Zone,
+            PLN.ControlLine, EntityTypes.ResidentialCluster, EntityTypes.Zone,
         }
 
         l1_subjects = set()

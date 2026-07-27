@@ -79,6 +79,7 @@ def _add_parcels(self, parcels) -> None:
         bsm_seq[bsm] = seq + 1
         self.g.add((pu, RDF.type, EntityTypes.Parcel))
         self.g.add((pu, PLN.bsm, Literal(bsm)))
+        self.g.add((pu, PLN.seq, Literal(seq, datatype=XSD.integer)))
         self.g.add((pu, PLN.dlbm, Literal(dlbm)))
         self.g.add((pu, PLN.area_sqm, Literal(area, datatype=XSD.double)))
         self.g.add((pu, PLN.area_ha, Literal(area / 10000, datatype=XSD.double)))
@@ -134,23 +135,72 @@ def _add_parcels(self, parcels) -> None:
         self._parcel_count += 1
 
 
-def _add_water_bodies(self, water_bodies) -> None:
+def _add_water_bodies(self, water_bodies, water_overlap=None) -> None:
+    """Create WaterBody entities from water polygons, deduplicating against DLBM=3100 parcels.
+
+    Args:
+        water_bodies: List of water feature objects (polygons or lines).
+        water_overlap: Dict mapping water_feature_id -> [covered_bsm, ...],
+            computed by spatial_ops.bridge.compute_water_overlap().
+            Water polygons that completely cover a 3100 parcel are linked
+            via derived_from instead of creating duplicate geometry.
+    """
+    if water_overlap is None:
+        water_overlap = {}
+    covered_bsms = set()
+    for bsm_list in water_overlap.values():
+        for b in bsm_list:
+            covered_bsms.add(b)
+
     count = 0
-    for w in water_bodies:
+    for i, w in enumerate(water_bodies):
         bsm = str(getattr(w, "bsm", "")).strip()
         ysdm = str(getattr(w, "ysdm", "")).strip()
-        if bsm:
-            uri = EntityIdPolicy.uri("water", bsm)
+        wid = bsm or f"water_poly_{i}"
+
+        # Check if this water feature completely covers a 3100 parcel
+        covered = water_overlap.get(wid, []) or water_overlap.get(bsm, [])
+        geom = getattr(w, "geometry", {})
+        is_line = isinstance(geom, dict) and geom.get("type") in ("LineString", "MultiLineString")
+
+        if is_line:
+            # Line water features: no dedup, use water_line_ prefix
+            uri = EntityIdPolicy.uri("water_line", bsm or str(i) or f"line_{i}")
+            EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+            self.g.add((uri, RDF.type, EntityTypes.WaterBody))
+            name = getattr(w, "name", "") or f"溪流_{bsm or i}"
+            self.g.add((uri, PLN.name, Literal(name)))
+            self.g.add((uri, PLN.water_type, Literal("河流")))
+            self.g.add((uri, Relations.located_in, PLN.village))
+            count += 1
+        elif covered:
+            # Water polygon completely covers existing 3100 parcel(s)
+            # Create WaterBody entity, link to covered parcels via derived_from
+            uri = EntityIdPolicy.uri("water", bsm or f"overlap_{i}")
+            EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+            self.g.add((uri, RDF.type, EntityTypes.WaterBody))
+            name = getattr(w, "name", "") or f"水体_{bsm or i}"
+            self.g.add((uri, PLN.name, Literal(name)))
+            self.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
+            self.g.add((uri, Relations.located_in, PLN.village))
+            for cbsm in covered:
+                for s in self.g.subjects(PLN.bsm, Literal(cbsm)):
+                    if (s, RDF.type, EntityTypes.Parcel) in self.g:
+                        self.g.add((uri, Relations.derived_from, s))
+            count += 1
         else:
-            uri = EntityIdPolicy.fallback_uri("water", ysdm, count)
-        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
-        self.g.add((uri, RDF.type, EntityTypes.WaterBody))
-        name = getattr(w, "name", "") or f"水域_{bsm or count}"
-        self.g.add((uri, PLN.name, Literal(name)))
-        self.g.add((uri, Relations.located_in, PLN.village))
-        count += 1
+            # Independent water polygon (no overlap with 3100 parcels)
+            uri = EntityIdPolicy.uri("water", bsm or f"indep_{i}")
+            EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+            self.g.add((uri, RDF.type, EntityTypes.WaterBody))
+            name = getattr(w, "name", "") or f"水体_{bsm or i}"
+            self.g.add((uri, PLN.name, Literal(name)))
+            self.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
+            self.g.add((uri, Relations.located_in, PLN.village))
+            count += 1
+
     if count:
-        logger.info("Added %d water bodies", count)
+        logger.info("Added %d water bodies (overlap: %d covered parcels)", count, len(covered_bsms))
 
 
 def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
@@ -260,11 +310,10 @@ def add_annotations(self, annotations: list):
                 else:
                     uri = EntityIdPolicy.fallback_uri("village_ann", ysdm, vc)
                 EntityIdPolicy.attach_bsm(self.g, uri, bsm)
-                self.g.add((uri, RDF.type, EntityTypes.NaturalSettlement))
+                self.g.add((uri, RDF.type, EntityTypes.PlaceRef))
                 self.g.add((uri, PLN.name, Literal(text)))
                 self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
                 self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
-                self.g.add((uri, Relations.located_in, PLN.village))
                 vc += 1
         elif cat == "现状设施点":
             facility = CurrentFacility.from_annotation_feature(
@@ -306,7 +355,8 @@ def add_roads(self, roads: list):
             uri = EntityIdPolicy.fallback_uri("road", ysdm, count)
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Road))
-        self.g.add((uri, PLN.name, Literal(f"道路_{bsm or count}")))
+        name = getattr(road, "name", "") or f"道路_{bsm or count}"
+        self.g.add((uri, PLN.name, Literal(name)))
         length = getattr(road, "shape_length", 0.0) or 0.0
         if length:
             self.g.add((uri, PLN.length, Literal(length, datatype=XSD.double)))
@@ -354,46 +404,163 @@ def _add_village_meta_from_bundle(self, bundle) -> None:
             pass
 
 
-def _add_natural_villages_from_typed(self, parcels) -> None:
-    """Create NaturalSettlement entities from parcel annotations.
+def _add_residential_clusters_from_typed(self, parcels, annotations=None) -> None:
+    """Identify residential settlement clusters (居民点) from parcel data.
 
-    NaturalSettlement names are extracted from parcel annotations (village_ann_*).
-    If no settlement annotations exist, creates a single village entity.
+    In village planning, 居民点 = naturally formed residential clusters
+    within the administrative village. These are derived by clustering
+    residential parcels (DLBM starting with 07/21), NOT from annotation labels.
+
+    Annotation points with category='村名' are neighboring village names
+    for map orientation, not internal settlements.
+
+    Clustering: parcels within 100m centroid distance are grouped.
+    Each cluster becomes a ResidentialCluster with centroid = mean of member centroids.
+
+    Annotation-based clusters (from add_annotations() with category='村名')
+    take priority: if a cluster's centroid is within 150m of an existing
+    annotation-based cluster, it is skipped.
     """
     from app.modules.schema.types.spatial_types import CurrentLandUseParcel
+    import math
 
-    # Collect settlement names from parcel annotations
-    settlement_names = set()
+    # Collect existing annotation-based cluster centroids for dedup
+    existing_clusters = []
+    for s in self.g.subjects(RDF.type, EntityTypes.ResidentialCluster):
+        name_lit = None
+        lon_lit = None
+        lat_lit = None
+        for p, o in self.g.predicate_objects(s):
+            pred = str(p).rsplit("/", 1)[-1] if "#" not in str(p) else str(p).split("#")[-1]
+            if pred == "name":
+                name_lit = str(o)
+            elif pred == "lon":
+                try:
+                    lon_lit = float(o)
+                except Exception:
+                    pass
+            elif pred == "lat":
+                try:
+                    lat_lit = float(o)
+                except Exception:
+                    pass
+        if lon_lit is not None and lat_lit is not None:
+            existing_clusters.append((name_lit or "", lon_lit, lat_lit))
+
+    # Collect residential parcels (宅基地 2121, 公共服务 2122, 基础设施 2123)
+    residential_codes = {"2121", "2122", "2123", "0702", "0701"}
+    residential = []  # [(bsm, centroid_x, centroid_y), ...]
     for p in parcels:
         if not isinstance(p, CurrentLandUseParcel):
             continue
-        raw = getattr(p, '_raw', {}) or {}
-        ann = raw.get('annotation', '') or ''
-        if ann and ann.startswith('village_ann_'):
-            settlement_names.add(ann.replace('village_ann_', '', 1))
+        dlbm = getattr(p, "dlbm", "") or ""
+        if dlbm not in residential_codes:
+            continue
+        p_geom = getattr(p, "geometry", None)
+        p_bsm = getattr(p, "bsm", "")
+        if not p_geom or not p_bsm:
+            continue
+        c = _parcel_centroid(p_geom)
+        if c:
+            residential.append((p_bsm, c[0], c[1]))
 
-    if not settlement_names:
+    if not residential:
+        logger.debug("No residential parcels found for settlement clustering")
         return
 
+    # Simple distance-based clustering (100m ≈ 0.001 deg)
+    threshold = 0.0015  # ~150m
+    visited = [False] * len(residential)
+    clusters = []  # [[(bsm, lon, lat), ...], ...]
+
+    for i in range(len(residential)):
+        if visited[i]:
+            continue
+        cluster = [residential[i]]
+        visited[i] = True
+        changed = True
+        while changed:
+            changed = False
+            for j in range(len(residential)):
+                if visited[j]:
+                    continue
+                # Check distance to any member of current cluster
+                for _, cx, cy in cluster:
+                    dx = residential[j][1] - cx
+                    dy = residential[j][2] - cy
+                    if dx * dx + dy * dy < threshold * threshold:
+                        cluster.append(residential[j])
+                        visited[j] = True
+                        changed = True
+                        break
+        clusters.append(cluster)
+
+    # Only keep clusters with >= 3 parcels (significant settlements)
+    significant = [c for c in clusters if len(c) >= 3]
+
     seq = 0
-    for name in sorted(settlement_names):
-        uri = EntityIdPolicy.fallback_uri("village_ann", name, seq)
-        self.g.add((uri, RDF.type, EntityTypes.NaturalSettlement))
+    for cluster in significant:
+        # Centroid = mean of member centroids
+        mean_lon = sum(m[1] for m in cluster) / len(cluster)
+        mean_lat = sum(m[2] for m in cluster) / len(cluster)
+
+        # Skip if this cluster's centroid is near an existing annotation-based cluster
+        is_near_existing = False
+        for _, ex_lon, ex_lat in existing_clusters:
+            dx = mean_lon - ex_lon
+            dy = mean_lat - ex_lat
+            if dx * dx + dy * dy < threshold * threshold:
+                is_near_existing = True
+                break
+        if is_near_existing:
+            seq += 1  # still increment seq to keep naming consistent
+            continue
+
+        name = f"居民点{seq + 1}"
+        uri = EntityIdPolicy.fallback_uri("settlement", name, seq)
+        self.g.add((uri, RDF.type, EntityTypes.ResidentialCluster))
         self.g.add((uri, PLN.name, Literal(name)))
+        self.g.add((uri, PLN.lon, Literal(mean_lon)))
+        self.g.add((uri, PLN.lat, Literal(mean_lat)))
         self.g.add((uri, Relations.located_in, PLN.village))
-        # Link parcels to this settlement
-        for p in parcels:
-            if not isinstance(p, CurrentLandUseParcel):
-                continue
-            raw = getattr(p, '_raw', {}) or {}
-            ann = raw.get('annotation', '') or ''
-            if ann == f'village_ann_{name}':
-                for s in self.g.subjects(PLN.bsm, Literal(getattr(p, 'bsm', ''))):
-                    if (s, RDF.type, EntityTypes.Parcel) in self.g:
-                        self.g.add((s, Relations.located_in, uri))
+
+        # Link member parcels
+        for bsm, _, _ in cluster:
+            for s in self.g.subjects(PLN.bsm, Literal(bsm)):
+                if (s, RDF.type, EntityTypes.Parcel) in self.g:
+                    self.g.add((s, Relations.located_in, uri))
+
         seq += 1
 
-    logger.info("Added %d natural settlements from typed parcels", len(settlement_names))
+    logger.info(
+        "Identified %d residential settlements from %d residential parcels (%d clusters total)",
+        len(significant), len(residential), len(clusters),
+    )
+
+
+def _parcel_centroid(geom: dict):
+    """Quick centroid extraction from GeoJSON geometry (no shapely)."""
+    try:
+        gt = geom.get("type", "")
+        coords = geom.get("coordinates", [])
+        if gt == "Polygon" and coords:
+            ring = coords[0]  # outer ring
+            if ring:
+                n = len(ring)
+                sx = sum(c[0] for c in ring)
+                sy = sum(c[1] for c in ring)
+                return (sx / n, sy / n)
+        elif gt == "MultiPolygon" and coords:
+            # Use first polygon's centroid
+            ring = coords[0][0] if coords[0] else []
+            if ring:
+                n = len(ring)
+                sx = sum(c[0] for c in ring)
+                sy = sum(c[1] for c in ring)
+                return (sx / n, sy / n)
+    except Exception:
+        pass
+    return None
 
 
 def _add_facilities_from_typed(self, facilities) -> None:
@@ -425,3 +592,55 @@ def _add_facilities_from_typed(self, facilities) -> None:
         count += 1
     if count:
         logger.info("Added %d facilities from typed parcels", count)
+
+
+# 单字简称 -> 设施类型映射
+_FACILITY_TEXT_MAP = {
+    "篮": ("篮球场", "公共服务"),
+    "污": ("污水处理设施", "基础设施"),
+    "电": ("电力设施", "基础设施"),
+    "垃": ("垃圾收集点", "基础设施"),
+    "祠": ("祠堂", "公共服务"),
+    "卫": ("卫生站", "公共服务"),
+    "站": ("公交站", "基础设施"),
+    "广": ("广场", "公共服务"),
+    "健": ("健身设施", "公共服务"),
+    "停": ("停车场", "基础设施"),
+    "水": ("供水设施", "基础设施"),
+    "小": ("小型设施", "公共服务"),
+}
+
+
+def _add_facilities_from_annotations(self, annotations) -> None:
+    """Create Facility entities from annotation points with category=现状设施点.
+
+    注记层里 category='现状设施点' 的点是设施的空间位置标注，
+    应作为空间实体入 KG（而非仅作表达要素）。
+    """
+    count = 0
+    for i, ann in enumerate(annotations):
+        cat = getattr(ann, "category", "") or ""
+        if cat != "现状设施点":
+            continue
+
+        text = getattr(ann, "text", "") or ""
+        geom = getattr(ann, "geometry", None)
+        if not geom or not isinstance(geom, dict):
+            continue
+        coords = geom.get("coordinates", [])
+        if not coords or len(coords) < 2:
+            continue
+
+        name, ftype = _FACILITY_TEXT_MAP.get(text, (text or f"设施_{i}", "公共服务"))
+        uri = EntityIdPolicy.fallback_uri("facility", text or str(i), i)
+        self.g.add((uri, RDF.type, EntityTypes.Facility))
+        self.g.add((uri, PLN.name, Literal(name)))
+        self.g.add((uri, PLN.facility_type, Literal(ftype)))
+        self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
+        self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
+        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((PLN.village, PLN.has_facility, uri))
+        count += 1
+
+    if count:
+        logger.info("Added %d facilities from annotations", count)

@@ -1,30 +1,39 @@
-"""Tool-facing structured queries — SPARQL template registry for EXECUTE/MIP.
+"""SPARQL query layer for PlanningKG - templates + instance methods.
 
-All templates return structured data (bsm, dlbm, area_ha, etc.).
-LLM-friendly semantic post-processing is in llm.py.
+Combines:
+  - SPARQL template registry (QUERY_TEMPLATES) + parameterized execution (query_kg)
+  - Instance methods mixed into PlanningKG via QueryMixin (need self._constraint_index etc.)
 
-[v4.5] Parameterized queries: all user-supplied values use SPARQL variables
-with initBindings (rdflib) instead of raw string replacement. Fragment
-placeholders (type_filter, slope_filter, aspect_filter) remain as string
-replacement but are validated before substitution.
+Both are consumed by PARSE / EXECUTE / Tools indiscriminately.
 """
+from typing import Any, Dict, List, Optional, Tuple
 
-from rdflib import Literal
+from rdflib import Literal, RDF, URIRef
 
 from app.utils.logger import get_logger
+from ..ontology import PLN, EntityTypes, Relations
 
 logger = get_logger(__name__)
+
+
+# ============================================================
+# SPARQL template registry
+# ============================================================
 
 PREFIX = """
 PREFIX pln: <http://village-planning.org/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 """
 
-# Fragment placeholders that are replaced as raw SPARQL fragments
-# These are validated before substitution
 FRAGMENT_PARAMS = {"type_filter", "slope_filter", "aspect_filter"}
 
-# Parameters that have safe defaults
+DEPRECATED_TEMPLATES = {
+    "get_protected_parcels_detail": "Use get_constraint_coverage() instance method instead",
+    "get_three_zones": "Use get_constraint_coverage() instance method instead",
+    "get_three_lines": "Use get_constraint_coverage() instance method instead",
+    "get_indicators": "PlanningIndicator type removed in v4.6 — no replacement",
+}
+
 DEFAULT_VALUES = {
     "min_lon": "-180",
     "max_lon": "180",
@@ -34,7 +43,6 @@ DEFAULT_VALUES = {
 
 QUERY_TEMPLATES = {
     # ── Protection zones ──
-
     "get_zone_restrictions": PREFIX + """
         SELECT ?zone ?name ?restriction
         WHERE {
@@ -218,7 +226,7 @@ QUERY_TEMPLATES = {
         ORDER BY DESC(?count)
     """,
 
-    # ── Three zones / three lines ──
+    # ── Three zones / three lines (DEPRECATED — use get_constraint_coverage) ──
     "get_three_zones": PREFIX + """
         SELECT ?zone_name (COUNT(?p) as ?parcel_count) (SUM(?area) as ?total_area_ha)
         WHERE {
@@ -314,7 +322,7 @@ QUERY_TEMPLATES = {
             UNION
             { ?v a pln:AdministrativeVillage ; pln:name ?name ; pln:lon ?lon ; pln:lat ?lat . }
             UNION
-            { ?v a pln:NaturalSettlement ; pln:name ?name ; pln:lon ?lon ; pln:lat ?lat . }
+            { ?v a pln:ResidentialCluster ; pln:name ?name ; pln:lon ?lon ; pln:lat ?lat . }
         }
     """,
 
@@ -355,8 +363,6 @@ QUERY_TEMPLATES = {
     """,
 }
 
-# Mapping from template parameter names to SPARQL variable names
-# for use with initBindings
 BINDING_MAP = {
     "field_name": "field_name_val",
     "dlbm": "dlbm_val",
@@ -370,12 +376,7 @@ BINDING_MAP = {
 
 
 def _sanitize_fragment(fragment: str) -> str:
-    """Validate a SPARQL fragment before insertion.
-
-    Allows only SPARQL-safe characters: alphanumeric, whitespace,
-    SPARQL operators, IRI chars, and common punctuation.
-    Rejects fragments containing dangerous patterns like DELETE/INSERT/DROP.
-    """
+    """Validate a SPARQL fragment before insertion."""
     blocked = {"DELETE", "INSERT", "DROP", "CLEAR", "LOAD", "CREATE", "UPDATE"}
     fragment_stripped = fragment.strip()
     if not fragment_stripped:
@@ -388,33 +389,80 @@ def _sanitize_fragment(fragment: str) -> str:
     return fragment_stripped
 
 
+# ── Semantic query dispatch ──
+# Maps template_name -> (semantic_module_function, description)
+# When query_kg receives one of these names, it calls the semantic function
+# instead of executing SPARQL. Returns human-readable text descriptions.
+
+SEMANTIC_QUERIES: Dict[str, tuple] = {}
+
+
+def _register_semantic_queries():
+    """Lazy-register semantic query dispatch entries.
+    
+    Called once on first query_kg call to avoid circular imports.
+    """
+    if SEMANTIC_QUERIES:
+        return
+    from .semantic import (
+        get_parcels_semantic_list,
+        get_parcel_detail_semantic,
+        get_parcel_neighbors_semantic,
+        get_facilities_semantic_list,
+        get_road_network_semantic,
+        get_designated_zones_semantic,
+    )
+    SEMANTIC_QUERIES.update({
+        "get_village_parcels": (get_parcels_semantic_list, "All parcels with human-readable descriptions"),
+        "get_parcel_detail": (get_parcel_detail_semantic, "Single parcel detail with relations as text"),
+        "get_parcel_neighbors": (get_parcel_neighbors_semantic, "Neighbors of a parcel with semantic descriptions"),
+        "get_facility_locations": (get_facilities_semantic_list, "All facilities as human-readable descriptions"),
+        "get_road_network": (get_road_network_semantic, "All roads as human-readable descriptions"),
+        "get_designated_zones": (get_designated_zones_semantic, "Designated/constraint zones with human-readable descriptions"),
+    })
+
+
 def query_kg(kg, template_name: str, **params) -> list:
-    """Tool interface: query KG using a named template with parameters.
+    """Tool interface: query KG using a named template or semantic query.
 
     Args:
         kg: PlanningKG instance
-        template_name: key in QUERY_TEMPLATES
-        **params: template substitution parameters (e.g., dlbm="1100")
+        template_name: key in QUERY_TEMPLATES or SEMANTIC_QUERIES
+        **params: template substitution parameters (e.g., bsm="P001")
 
     Returns:
-        list of dicts with query results
+        list of dicts with query results (includes "description" key for semantic queries)
     """
+    # ── Semantic query dispatch (returns human-readable text) ──
+    _register_semantic_queries()
+    if template_name in SEMANTIC_QUERIES:
+        fn, _ = SEMANTIC_QUERIES[template_name]
+        try:
+            result = fn(kg, **params)
+            logger.info("[query_kg] Semantic query '%s' returned %d items", template_name, len(result) if isinstance(result, list) else 0)
+            return result if isinstance(result, list) else [{"error": "unexpected return type", "template": template_name}]
+        except Exception as e:
+            logger.error("[query_kg] Semantic query '%s' failed: %s", template_name, e)
+            return [{"error": f"Semantic query failed: {e}", "template": template_name}]
+
+    # ── SPARQL template dispatch ──
     if template_name not in QUERY_TEMPLATES:
-        return [{"error": f"Unknown template: {template_name}. Available: {list(QUERY_TEMPLATES.keys())}"}]
+        return [{"error": f"Unknown template: {template_name}. Available: {list(QUERY_TEMPLATES.keys()) + list(SEMANTIC_QUERIES.keys())}"}]
+
+    if template_name in DEPRECATED_TEMPLATES:
+        logger.warning("[query_kg] Template '%s' is deprecated: %s",
+                       template_name, DEPRECATED_TEMPLATES[template_name])
 
     sparql = QUERY_TEMPLATES[template_name]
 
-    # Apply defaults for optional parameters
     for key, default_val in DEFAULT_VALUES.items():
         params.setdefault(key, default_val)
 
-    # Apply fragment replacements (validated) first
     fragment_params = {k: v for k, v in params.items() if k in FRAGMENT_PARAMS}
     for key, val in fragment_params.items():
         safe_val = _sanitize_fragment(val)
         sparql = sparql.replace(f"{{{key}}}", safe_val)
 
-    # Build initBindings for parameterized variables
     bindings = {}
     for key, val in params.items():
         if key in FRAGMENT_PARAMS or key in DEFAULT_VALUES:
@@ -423,7 +471,6 @@ def query_kg(kg, template_name: str, **params) -> list:
         if var_name is not None:
             bindings[var_name] = Literal(val)
 
-    # Execute with parameterized bindings
     try:
         results = kg.g.query(sparql, initBindings=bindings if bindings else None)
         rows = []
@@ -443,17 +490,221 @@ def query_kg(kg, template_name: str, **params) -> list:
         return []
 
 
-# LangChain-compatible tool definition
 TOOL_META = {
     "name": "query_kg",
     "description": (
-        "Query the village planning knowledge graph using SPARQL templates. "
-        "Available templates: " + ", ".join(QUERY_TEMPLATES.keys()) + ". "
-        "Use this to check planning constraints, count parcels by type, "
-        "query zone restrictions, and look up facility/road/water data."
+        "Query the village planning knowledge graph using named templates. "
+        "Returns SEMANTIC (human-readable) descriptions for: "
+        + ", ".join(SEMANTIC_QUERIES.keys()) + ". "
+        "Returns raw SPARQL results for: "
+        + ", ".join(QUERY_TEMPLATES.keys()) + ". "
+        "DEPRECATED SPARQL: " + ", ".join(DEPRECATED_TEMPLATES.keys()) + ". "
+        "SEMANTIC queries return a 'description' field with human-readable text. "
+        "PREFER semantic queries when the LLM needs to reason about parcels, "
+        "facilities, roads, or designated zones."
     ),
     "parameters": {
-        "template_name": {"type": "string", "description": "SPARQL template name"},
-        "**params": {"type": "object", "description": "Template parameters"},
+        "template_name": {"type": "string",
+            "description": f"Template name. Semantic: {list(SEMANTIC_QUERIES.keys())}. SPARQL: {list(QUERY_TEMPLATES.keys())}"},
+        "**params": {"type": "object", "description": "Template parameters (e.g. bsm='P001')"},
     },
 }
+
+
+# ============================================================
+# Instance methods (mixed into PlanningKG via QueryMixin)
+# ============================================================
+
+def query(self, sparql: str) -> List[Dict[str, Any]]:
+    try:
+        results = self.g.query(sparql)
+        rows = []
+        for row in results:
+            if hasattr(row, 'asdict'):
+                rows.append({str(k): str(v) if v is not None else None for k, v in row.asdict().items()})
+            elif isinstance(row, (tuple, list)):
+                rd = {}
+                if hasattr(results, 'vars'):
+                    for i, var in enumerate(results.vars):
+                        if i < len(row):
+                            rd[str(var)] = str(row[i]) if row[i] is not None else None
+                rows.append(rd)
+        return rows
+    except Exception as e:
+        logger.error("SPARQL query failed: %s", e)
+        return []
+
+
+def get_adjacency_map(self) -> Dict[str, set]:
+    """Adjacency map: BSM -> set of neighbor BSMs."""
+    adj: Dict[str, set] = {}
+    for s, _, o in self.g.triples((None, PLN.touches, None)):
+        bsm_s = None
+        bsm_o = None
+        for _, _, lit in self.g.triples((s, PLN.bsm, None)):
+            bsm_s = str(lit)
+        for _, _, lit in self.g.triples((o, PLN.bsm, None)):
+            bsm_o = str(lit)
+        if bsm_s and bsm_o:
+            adj.setdefault(bsm_s, set()).add(bsm_o)
+            adj.setdefault(bsm_o, set()).add(bsm_s)
+    return adj
+
+
+def get_parcel_count(self) -> int:
+    return self._parcel_count
+
+
+def get_triple_count(self) -> int:
+    return len(self.g)
+
+
+def serialize(self, filepath: str, fmt: str = "turtle"):
+    self.g.serialize(destination=filepath, format=fmt)
+    logger.info("Saved to %s (%s)", filepath, fmt)
+
+
+def to_turtle(self) -> str:
+    return self.g.serialize(format="turtle")
+
+
+def from_turtle(cls, turtle_str: str, village_name: str = "") -> "PlanningKG":
+    kg = cls(village_name=village_name)
+    kg.g.parse(data=turtle_str, format="turtle")
+    kg._parcel_count = len(list(kg.g.subjects(RDF.type, EntityTypes.Parcel)))
+    return kg
+
+
+def get_parcels_within_distance_of_entity(self, entity_uri: str, max_distance_m: float) -> List[str]:
+    entity = URIRef(entity_uri) if isinstance(entity_uri, str) else entity_uri
+    bsms = set()
+    for rel in (PLN.nearby, PLN.touches):
+        for s, _, _ in self.g.triples((None, rel, entity)):
+            for _, _, bsm in self.g.triples((s, PLN.bsm, None)):
+                bsms.add(str(bsm))
+        for s, _, _ in self.g.triples((entity, rel, None)):
+            for _, _, bsm in self.g.triples((s, PLN.bsm, None)):
+                bsms.add(str(bsm))
+    return list(bsms)
+
+
+def get_adjacent_parcels_with_length(self, bsm: str) -> List[Tuple[str, float]]:
+    results = []
+    for s, _, _ in self.g.triples((None, PLN.bsm, Literal(bsm))):
+        if (s, RDF.type, EntityTypes.Parcel) not in self.g:
+            continue
+        for _, _, neighbor in self.g.triples((s, PLN.touches, None)):
+            for _, _, nbsm in self.g.triples((neighbor, PLN.bsm, None)):
+                length = 0.0
+                for _, _, lo in self.g.triples((s, PLN.shared_boundary_length, None)):
+                    length = float(lo)
+                results.append((str(nbsm), length))
+    return results
+
+
+def get_connected_parcels(self, parcel_uri: str, max_path_length: float = float("inf")) -> List[str]:
+    """Return BSMs of parcels connected to parcel_uri via road network (L3)."""
+    uri = URIRef(parcel_uri) if isinstance(parcel_uri, str) else parcel_uri
+    bsms = set()
+    for _, _, neighbor in self.g.triples((uri, PLN.connected_via_road, None)):
+        for _, _, bsm in self.g.triples((neighbor, PLN.bsm, None)):
+            bsms.add(str(bsm))
+    for s, _, _ in self.g.triples((None, PLN.connected_via_road, uri)):
+        for _, _, bsm in self.g.triples((s, PLN.bsm, None)):
+            bsms.add(str(bsm))
+    return list(bsms)
+
+
+def get_parcels_by_bsm_list(self, bsms: List[str]) -> List[Dict[str, Any]]:
+    """Return parcel structural data for a list of BSMs."""
+    if not bsms:
+        return []
+    bsm_filter = " ".join(f'"{b}"' for b in bsms)
+    sparql = (
+        "PREFIX pln: <http://village-planning.org/ontology#> "
+        f"SELECT ?bsm ?dlbm ?area_ha ?zone_type ?vne_code ?planning_zone WHERE {{ "
+        f"?p a pln:Parcel ; pln:bsm ?bsm ; pln:dlbm ?dlbm ; "
+        f"pln:area_ha ?area_ha ; pln:current_zone_type ?zone_type . "
+        f"OPTIONAL {{ ?p pln:vne_code ?vne_code . }} "
+        f"OPTIONAL {{ ?p pln:planning_zone ?planning_zone . }} "
+        f"FILTER(?bsm IN ({bsm_filter})) }}"
+    )
+    return self.query(sparql)
+
+
+def validate_intent(self, intent: Any) -> List[Dict[str, Any]]:
+    from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent, FacilityTarget
+    if not isinstance(intent, SpatialPlanningIntent):
+        return []
+    conflicts = []
+    for ft in intent.facilities:
+        if ft.semantic and ft.semantic.spatial_hint:
+            for bsm in self.get_parcels_within_distance_of_entity(ft.semantic.spatial_hint, 500):
+                if _is_in_protected_zone(self, bsm):
+                    conflicts.append({"description": f"设施 {ft.type} 的候选地块 {bsm} 在保护区内",
+                                      "severity": "high", "facility": ft.type, "bsm": bsm})
+    return conflicts
+
+
+def _is_in_protected_zone(self, bsm: str) -> bool:
+    """Check if a parcel overlaps any constraint polygon via spatial_ops bridge."""
+    if self._constraint_index is None:
+        return False
+    overlaps = self._constraint_index.parcel_in_constraint(bsm)
+    return len(overlaps) > 0
+
+
+def get_constraint_coverage(self) -> List[Dict[str, Any]]:
+    """Get all parcels with constraint polygon overlap info.
+
+    Iterates all parcel BSMs in the KG and checks each against
+    the spatial ConstraintIndex.
+
+    Returns:
+        List of dicts, each with:
+          bsm, dlbm, area_ha, zone_type, planning_zone,
+          constraints: List[{constraint_type, overlap_pct, overlap_area_sqm, rule}]
+    """
+    if self._constraint_index is None:
+        logger.debug("get_constraint_coverage: no constraint_index injected")
+        return []
+
+    from rdflib import RDF, Namespace
+    PLN = Namespace("http://village-planning.org/ontology#")
+    all_bsms = list(self.g.subjects(RDF.type, PLN.Parcel))
+    if not all_bsms:
+        return []
+
+    bsm_cache = {}
+    for pu in all_bsms:
+        bsm_node = self.g.value(pu, PLN.bsm)
+        if bsm_node:
+            bsm_cache[str(bsm_node)] = pu
+
+    results = []
+    for bsm, pu in bsm_cache.items():
+        overlaps = self._constraint_index.parcel_in_constraint(bsm)
+        if not overlaps:
+            continue
+        parcel_info = self.get_parcels_by_bsm_list([bsm])
+        info = parcel_info[0] if parcel_info else {}
+        results.append({
+            "bsm": bsm,
+            "dlbm": info.get("dlbm", ""),
+            "area_ha": info.get("area_ha", 0),
+            "zone_type": info.get("zone_type", ""),
+            "planning_zone": info.get("planning_zone", ""),
+            "constraints": [
+                {
+                    "constraint_type": ov.constraint_type,
+                    "overlap_pct": ov.overlap_pct,
+                    "overlap_area_sqm": ov.overlap_area_sqm,
+                    "rule": ov.rule,
+                }
+                for ov in overlaps
+            ],
+        })
+    return results
+
+# Populate SEMANTIC_QUERIES at import time
+_register_semantic_queries()

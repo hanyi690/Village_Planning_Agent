@@ -65,6 +65,8 @@ def build_intent_layer(self, intent: Any) -> None:
         self.g.add((z_uri, PLN.target_id, Literal(target_id)))
         self.g.add((z_uri, PLN.land_use_code, Literal(zt.land_use)))
         self.g.add((z_uri, PLN.target_area_ha, Literal(zt.area_ratio, datatype=XSD.double)))
+        if zt.planning_zone:
+            self.g.add((z_uri, PLN.planning_zone, Literal(zt.planning_zone)))
         if zt.dlbm:
             self.g.add((z_uri, PLN.dlbm, Literal(zt.dlbm)))
         if zt.vne_code:

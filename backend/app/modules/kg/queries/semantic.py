@@ -11,7 +11,7 @@ auto-generated from RDF attributes and stored for future use.
 Usage:
     from app.modules.kg.queries.semantic import get_entity_context, TOOL_META_SEMANTIC
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from rdflib import RDF as RDF_TERM, URIRef
 
@@ -72,7 +72,7 @@ def _lookup_entity_name(kg, uri_or_str) -> str:
 _ENTITY_TYPE_CN = {
     "Parcel": "地块",
     "Road": "道路",
-    "NaturalSettlement": "自然村",
+    "ResidentialCluster": "居民点",
     "AdministrativeVillage": "行政村",
     "Village": "村庄",
     "Facility": "设施",
@@ -106,6 +106,7 @@ def _generate_entity_description(entity_type: str, attrs: Dict[str, str]) -> str
         dlbm = attrs.get("dlbm", "")
         area = attrs.get("area_ha", "")
         zt = attrs.get("current_zone_type", "")
+        pz = attrs.get("planning_zone", "")
         if bsm:
             parts.append(bsm)
         if dlbm:
@@ -114,6 +115,8 @@ def _generate_entity_description(entity_type: str, attrs: Dict[str, str]) -> str
             parts.append(f"面积{area}公顷")
         if zt:
             parts.append(f"({zt})")
+        if pz:
+            parts.append(f"规划分区:{pz}")
 
     elif entity_type == "Road":
         name = attrs.get("name", "")
@@ -126,7 +129,7 @@ def _generate_entity_description(entity_type: str, attrs: Dict[str, str]) -> str
         if length:
             parts.append(f"长度{length}m")
 
-    elif entity_type == "NaturalSettlement":
+    elif entity_type == "ResidentialCluster":
         name = attrs.get("name", "")
         if name:
             parts.append(name)
@@ -335,11 +338,13 @@ def get_entity_relations(kg, entity_uri: str) -> List[Dict[str, Any]]:
 
 
 def _find_parcel_uri(kg, bsm: str) -> Optional[URIRef]:
-    """Find parcel URI by BSM using SPARQL, with fallback to triple scan."""
+    """Find parcel URI by BSM using SPARQL with BSM filter."""
     try:
+        escaped_bsm = bsm.replace('"', '\\"')
         rows = kg.query(
             "PREFIX pln: <http://village-planning.org/ontology#> "
-            "SELECT ?p WHERE { ?p a pln:Parcel ; pln:bsm ?bsm . }",
+            "SELECT ?p WHERE { ?p a pln:Parcel ; pln:bsm ?bsm_val . "
+            f'FILTER(?bsm_val = "{escaped_bsm}") }}',
         )
         for r in rows:
             uri = r.get("p")
@@ -348,13 +353,14 @@ def _find_parcel_uri(kg, bsm: str) -> Optional[URIRef]:
     except Exception:
         pass
 
-    # Fallback: direct triple scan
+    # Fallback: direct triple pattern match
     try:
-        for s, _, o in kg.g.triples((None, None, None)):
-            if str(o) == bsm:
-                for t in kg.g.objects(s, RDF_TERM.type):
-                    if _obj_name(t) == "Parcel":
-                        return s
+        from rdflib import Literal as RdfLiteral, URIRef as RdfURIRef
+        bsm_pred = RdfURIRef(PLN_NS + "bsm")
+        for s, _, _ in kg.g.triples((None, bsm_pred, RdfLiteral(bsm))):
+            for t in kg.g.objects(s, RDF_TERM.type):
+                if _obj_name(t) == "Parcel":
+                    return s
     except Exception:
         pass
 
@@ -441,11 +447,22 @@ def get_village_semantic_summary(kg) -> Dict[str, Any]:
                 name = s
                 break
 
+        # Planning zone distribution (from L1 parcel attributes)
+        planning_zone_dist: Dict[str, int] = {}
+        for s, p, o in kg.g.triples((None, None, None)):
+            pred = _pred_name(p)
+            if pred == "planning_zone":
+                zone_str = str(o)
+                if zone_str in ("生态保护区", "生态控制区", "农田保护区",
+                                "一般农业区", "村庄建设区", "林业发展区"):
+                    planning_zone_dist[zone_str] = planning_zone_dist.get(zone_str, 0) + 1
+
         result = {
             "village_name": name,
             "parcel_count": entity_counts.get("Parcel", 0),
             "entity_counts": entity_counts,
             "relation_counts": relation_counts,
+            "planning_zone_distribution": planning_zone_dist,
             "total_triples": len(kg.g),
         }
 
@@ -456,16 +473,21 @@ def get_village_semantic_summary(kg) -> Dict[str, Any]:
                 desc_parts = [f"村庄{name}" if name else "村庄"]
                 pcount = entity_counts.get("Parcel", 0)
                 rcount = entity_counts.get("Road", 0)
-                scount = entity_counts.get("NaturalSettlement", 0)
+                scount = entity_counts.get("ResidentialCluster", 0)
                 fcount = entity_counts.get("Facility", 0)
                 if pcount:
                     desc_parts.append(f"共{pcount}个地块")
                 if rcount:
                     desc_parts.append(f"{rcount}条道路")
                 if scount:
-                    desc_parts.append(f"{scount}个自然村")
+                    desc_parts.append(f"{scount}个居民点")
                 if fcount:
                     desc_parts.append(f"{fcount}个设施点")
+                if planning_zone_dist:
+                    zones_desc = ", ".join(
+                        f"{k}{v}块" for k, v in sorted(planning_zone_dist.items())
+                    )
+                    desc_parts.append(f"规划分区: {zones_desc}")
                 desc_parts.append(f"三元组总数{len(kg.g)}")
                 memory.add_entity_annotation(EntityAnnotation(
                     entity_uri=village_uri,
@@ -480,7 +502,528 @@ def get_village_semantic_summary(kg) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+# ── Cross-layer entity queries ──
+
+
+def get_entity_by_bsm(kg, bsm: str, entity_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Find any entity (L1 or L4) by BSM, across all layers.
+
+    Args:
+        kg: PlanningKG instance.
+        bsm: BSM identifier string.
+        entity_type: Optional filter (e.g. "Parcel", "Road", "Facility").
+            When specified, only returns entities of that type.
+
+    Returns entity context with layer info, or None if not found.
+    """
+    try:
+        if not bsm:
+            return None
+
+        from rdflib import Literal as RdfLiteral, URIRef as RdfURIRef
+        bsm_pred = RdfURIRef(PLN_NS + "bsm")
+
+        for s, _, _ in kg.g.triples((None, bsm_pred, RdfLiteral(bsm))):
+            entity_types = list(kg.g.objects(s, RDF_TERM.type))
+            if not entity_types:
+                continue
+            type_name = _obj_name(entity_types[0])
+            if entity_type and type_name != entity_type:
+                continue
+
+            uri_str = str(s)
+            attrs = {"bsm": bsm}
+            for p, v in kg.g.predicate_objects(s):
+                pred = _pred_name(p)
+                if pred != "type":
+                    attrs[pred] = str(v)
+
+            layer = "L1"
+            if type_name.startswith("Planned"):
+                layer = "L4"
+            elif type_name.endswith("Target"):
+                layer = "L3"
+
+            _ensure_entity_annotation(kg, uri_str, type_name, attrs)
+
+            result = {
+                "uri": uri_str,
+                "type": type_name,
+                "layer": layer,
+                "attributes": attrs,
+            }
+
+            memory = _get_memory(kg)
+            if memory is not None:
+                result["annotations"] = memory.get_entity_semantics(uri_str)
+
+            return result
+
+        return None
+    except Exception as e:
+        logger.error("get_entity_by_bsm failed: bsm=%s, %s", bsm, e)
+        return None
+
+
+def get_parcels_by_planning_zone(kg, planning_zone: str) -> List[Dict[str, Any]]:
+    """Find all L1 parcels belonging to a given planning zone.
+
+    Args:
+        planning_zone: Planning zone name (e.g. "村庄建设区", "农田保护区")
+
+    Returns:
+        List of parcel summaries with BSM, DLBM, area, and relations.
+    """
+    try:
+        from app.modules.schema.encodings.code_sets import PLANNING_ZONE_NAMES, normalize_landuse
+
+        # Validate planning zone
+        valid_zones = set(PLANNING_ZONE_NAMES)
+        if planning_zone not in valid_zones:
+            return [{"error": f"Invalid planning zone: {planning_zone}. Valid: {valid_zones}"}]
+
+        parcels = []
+        seen: Set[str] = set()
+
+        for s, p, o in kg.g.triples((None, None, None)):
+            pred = _pred_name(p)
+            if pred == "planning_zone":
+                zone_val = str(o)
+                if zone_val == planning_zone:
+                    # This is a parcel in the target zone
+                    bsm = None
+                    dlbm = None
+                    area = None
+                    for p_subj, v in kg.g.predicate_objects(s):
+                        pn = _pred_name(p_subj)
+                        if pn == "bsm":
+                            bsm = str(v)
+                        elif pn == "dlbm":
+                            dlbm = str(v)
+                        elif pn == "area_ha":
+                            area = str(v)
+
+                    if bsm and bsm not in seen:
+                        seen.add(bsm)
+                        parcels.append({
+                            "bsm": bsm,
+                            "dlbm": dlbm or "",
+                            "area_ha": area or "",
+                            "planning_zone": planning_zone,
+                            "uri": str(s),
+                        })
+
+        # Attach relations for each parcel
+        memory = _get_memory(kg)
+        for p in parcels:
+            uri = _to_uri(p["uri"])
+            if uri is None:
+                continue
+            relations = []
+            for pred, obj in kg.g.predicate_objects(uri):
+                pn = _pred_name(pred)
+                if pn in ("type", "bsm", "dlbm", "area_ha", "planning_zone", "vne_code"):
+                    continue
+                obj_name = _obj_name(obj)
+                ann = None
+                if memory is not None:
+                    ann = memory.get_relation_semantics(p["uri"], str(pred), str(obj))
+                entry = {"predicate": pn, "object": obj_name}
+                if ann:
+                    entry["description"] = ann.get("description")
+                relations.append(entry)
+            p["relations"] = relations
+
+        return parcels
+    except Exception as e:
+        logger.error("get_parcels_by_planning_zone failed: %s", e)
+        return [{"error": str(e)}]
+
+
+def get_l4_derived_from_l1(kg, l1_bsm: str) -> List[Dict[str, Any]]:
+    """Find all L4 planned entities derived from a given L1 parcel.
+
+    Traces the derived_from relationship: L4 PlannedParcel → L1 Parcel.
+    """
+    try:
+        results = []
+        for s, _, o in kg.g.triples((None, None, None)):
+            pn = _pred_name(o)
+            if pn == "derived_from":
+                # o points to the L1 entity
+                # s is the L4 entity
+                for subj, _, derived_val in kg.g.triples((s, None, None)):
+                    if str(derived_val) == l1_bsm or l1_bsm in str(derived_val):
+                        entity_types = list(kg.g.objects(subj, RDF_TERM.type))
+                        etype = _obj_name(entity_types[0]) if entity_types else "Unknown"
+
+                        attrs = {}
+                        for p, v in kg.g.predicate_objects(subj):
+                            pn2 = _pred_name(p)
+                            if pn2 != "type":
+                                attrs[pn2] = str(v)
+
+                        results.append({
+                            "uri": str(subj),
+                            "type": etype,
+                            "attributes": attrs,
+                        })
+
+        return results
+    except Exception as e:
+        logger.error("get_l4_derived_from_l1 failed: %s", e)
+        return [{"error": str(e)}]
+
+
 # ── Tool metadata for LLM ──
+
+def get_village_constraint_coverage(kg) -> List[Dict[str, Any]]:
+    """Get all parcels with constraint polygon coverage, with human-readable descriptions.
+
+    Internally delegates to kg.get_constraint_coverage() (which uses ConstraintIndex),
+    then augments with semantic annotations for LLM consumption.
+
+    Returns:
+        List of dicts with bsm, dlbm, area_ha, zone_type, planning_zone, constraints,
+        and a human-readable summary.
+    """
+    try:
+        raw = kg.get_constraint_coverage()
+        if not raw:
+            return [{"summary": "未检测到与约束面的重叠", "parcel_count": 0}]
+
+        results = []
+        for item in raw:
+            constraint_names = {
+                "farmland_protection": "永久基本农田",
+                "ecological_redline": "生态保护红线",
+                "historical_protection": "历史保护范围",
+                "urban_dev_boundary": "城镇开发边界",
+                "village_dev_boundary": "村庄建设边界",
+                "hazard_control": "灾害防控线",
+                "flood_control": "洪涝控制线",
+                "construction_zone": "有条件建设区",
+            }
+            descs = []
+            for c in item["constraints"]:
+                cn = constraint_names.get(c["constraint_type"], c["constraint_type"])
+                pct = c.get("overlap_pct", 0) * 100
+                descs.append(f"{cn}(重叠{pct:.1f}%)")
+            summary = f"地块 {item['bsm']} 与 {', '.join(descs)} 重叠" if descs else "无约束重叠"
+
+            memory = _get_memory(kg)
+            if memory is not None:
+                memory.add_entity_annotation(EntityAnnotation(
+                    entity_uri=f"pln:parcel_{item['bsm']}",
+                    entity_type="Parcel",
+                    description=summary,
+                ))
+
+            results.append({
+                "bsm": item["bsm"],
+                "dlbm": item["dlbm"],
+                "area_ha": item["area_ha"],
+                "zone_type": item["zone_type"],
+                "planning_zone": item["planning_zone"],
+                "constraints": item["constraints"],
+                "summary": summary,
+            })
+
+        total = len(results)
+        constrained_bsms = [r["bsm"] for r in results]
+        results.insert(0, {
+            "summary": f"共 {total} 个地块与约束面重叠",
+            "parcel_count": total,
+            "constrained_bsms": constrained_bsms,
+        })
+        return results
+    except Exception as e:
+        logger.error("get_village_constraint_coverage failed: %s", e)
+        return [{"error": str(e)}]
+
+
+# ── LLM-friendly semantic list queries (return human-readable text arrays) ──
+
+_LLM_DIRECTION_CN = {
+    "north": "北侧", "south": "南侧", "east": "东侧", "west": "西侧",
+    "northeast": "东北侧", "southeast": "东南侧", "northwest": "西北侧", "southwest": "西南侧",
+}
+
+_DLBM_TO_LANDUSE = {
+    "0101": "水田", "0102": "水浇地", "0103": "旱地",
+    "0201": "果园", "0204": "其他园地",
+    "0301": "乔木林地", "0302": "竹林地", "0307": "其他林地",
+    "0401": "天然牧草地", "0403": "人工牧草地",
+    "0701": "城镇住宅用地", "0702": "农村宅基地",
+    "0809": "公用设施用地", "0810": "公园与绿地",
+    "1001": "工业用地", "1003": "采矿用地",
+    "1101": "物流仓储用地",
+    "1202": "公路用地", "1206": "管道运输用地",
+    "2001": "空闲地",
+    "2101": "商业服务业用地", "2102": "商务金融用地",
+    "2121": "商业用地", "2124": "餐饮用地",
+}
+
+
+def _dlbm_to_name(dlbm: str) -> str:
+    return _DLBM_TO_LANDUSE.get(dlbm, f"地类{dlbm}")
+
+
+def _sparql_rows(kg, template_name: str, **bindings) -> List[Dict[str, str]]:
+    """Execute a SPARQL template directly, bypassing semantic dispatch.
+
+    Semantic functions MUST use this instead of query_kg() to avoid recursion.
+    """
+    from app.modules.kg.queries.sparql import QUERY_TEMPLATES
+    from rdflib import Literal
+
+    sparql = QUERY_TEMPLATES.get(template_name)
+    if not sparql:
+        return []
+    init_b = {}
+    for k, v in bindings.items():
+        if v is not None:
+            init_b[k] = Literal(str(v))
+    try:
+        results = kg.g.query(sparql, initBindings=init_b if init_b else None)
+        rows = []
+        for row in results:
+            if hasattr(row, 'asdict'):
+                rows.append({str(k): str(v) if v is not None else None for k, v in row.asdict().items()})
+            elif isinstance(row, (tuple, list)):
+                rd = {}
+                if hasattr(results, 'vars'):
+                    for i, var in enumerate(results.vars):
+                        if i < len(row):
+                            rd[str(var)] = str(row[i]) if row[i] is not None else None
+                rows.append(rd)
+        return rows
+    except Exception as e:
+        logger.error("_sparql_rows failed: template=%s, %s", template_name, e)
+        return []
+
+
+def get_parcels_semantic_list(kg) -> List[Dict[str, Any]]:
+    """All L1 parcels as human-readable descriptions.
+
+    Returns list of {bsm, dlbm, description} where description is
+    LLM-friendly text like 'P001: 宅基地(0701) 0.15ha'.
+    """
+    try:
+        raw = _sparql_rows(kg, "get_village_parcels")
+        results = []
+        for r in raw:
+            bsm = r.get("bsm", "")
+            dlbm = r.get("dlbm", "")
+            area = r.get("area_ha", "")
+            zone = r.get("planning_zone", "")
+            landuse_name = _dlbm_to_name(dlbm)
+            parts = [f"{bsm}: {landuse_name}({dlbm})"]
+            if area:
+                parts.append(f"{area}ha")
+            if zone:
+                parts.append(zone)
+            results.append({
+                "bsm": bsm,
+                "dlbm": dlbm,
+                "area_ha": area,
+                "planning_zone": zone,
+                "description": " ".join(parts),
+            })
+        return results
+    except Exception as e:
+        logger.error("get_parcels_semantic_list failed: %s", e)
+        return [{"error": str(e)}]
+
+
+def get_parcel_detail_semantic(kg, bsm: str) -> List[Dict[str, Any]]:
+    """Single parcel detail with relations, as human-readable description.
+
+    Returns list with one item containing description + structured data.
+    Description is like:
+    'P001: 宅基地(0701) 0.15ha, 位于刘村北侧, 相邻P002(耕地), 靠近乡道Y123'
+    """
+    try:
+        ctx = get_parcel_semantic_context(kg, bsm)
+        if "error" in ctx:
+            return [ctx]
+
+        attrs = ctx.get("attributes", {})
+        relations = ctx.get("relations", [])
+        annotations = ctx.get("annotations", {})
+
+        dlbm = attrs.get("dlbm", "")
+        area = attrs.get("area_ha", "")
+        zone = attrs.get("planning_zone", "")
+        landuse_name = _dlbm_to_name(dlbm)
+
+        parts = [f"{bsm}: {landuse_name}({dlbm})"]
+        if area:
+            parts.append(f"{area}ha")
+        if zone:
+            parts.append(zone)
+
+        # Relations -> text
+        rel_parts = []
+        for rel in relations:
+            pred = rel.get("predicate", "")
+            obj = rel.get("object", "")
+            desc = rel.get("description", "")
+            if desc:
+                rel_parts.append(desc)
+            elif pred in ("touches",):
+                rel_parts.append(f"相邻{obj}")
+            elif pred in ("nearby",):
+                rel_parts.append(f"邻近{obj}")
+            elif pred in ("connected_via_road",):
+                rel_parts.append(f"道路连接{obj}")
+            elif pred in ("within_zone", "located_in"):
+                rel_parts.append(f"位于{obj}")
+        if rel_parts:
+            parts.append("，".join(rel_parts[:4]))
+
+        description = "，".join(parts)
+
+        return [{
+            "bsm": bsm,
+            "dlbm": dlbm,
+            "area_ha": area,
+            "planning_zone": zone,
+            "landuse_name": landuse_name,
+            "description": description,
+            "relations": relations,
+        }]
+    except Exception as e:
+        logger.error("get_parcel_detail_semantic failed: bsm=%s, %s", bsm, e)
+        return [{"bsm": bsm, "error": str(e)}]
+
+
+def get_parcel_neighbors_semantic(kg, bsm: str) -> List[Dict[str, Any]]:
+    """Neighbors of a parcel, with semantic descriptions.
+
+    Returns list of {bsm, dlbm, description} for each neighbor.
+    """
+    try:
+        raw = _sparql_rows(kg, "get_parcel_neighbors", bsm=bsm)
+        results = []
+        seen = set()
+        for r in raw:
+            nbr = r.get("neighbor", "")
+            if nbr in seen:
+                continue
+            seen.add(nbr)
+            nbr_dlbm = r.get("neighbor_dlbm", "")
+            nbr_area = r.get("neighbor_area", "")
+            relation = r.get("relation", "touches")
+            landuse_name = _dlbm_to_name(nbr_dlbm)
+            rel_cn = {"touches": "相邻", "nearby": "邻近", "connected_via_road": "道路连接"}.get(relation, relation)
+            parts = [f"{nbr}: {landuse_name}({nbr_dlbm})"]
+            if nbr_area:
+                parts.append(f"{nbr_area}ha")
+            parts.append(rel_cn)
+            results.append({
+                "bsm": nbr,
+                "dlbm": nbr_dlbm,
+                "area_ha": nbr_area,
+                "relation": relation,
+                "description": "，".join(parts),
+            })
+        if not results:
+            results.append({"bsm": bsm, "description": f"地块{bsm}无相邻地块数据"})
+        return results
+    except Exception as e:
+        logger.error("get_parcel_neighbors_semantic failed: bsm=%s, %s", bsm, e)
+        return [{"bsm": bsm, "error": str(e)}]
+
+
+def get_facilities_semantic_list(kg) -> List[Dict[str, Any]]:
+    """All facilities as human-readable descriptions."""
+    try:
+        raw = _sparql_rows(kg, "get_facility_locations")
+        results = []
+        for r in raw:
+            name = r.get("name", "")
+            ftype = r.get("facility_type", "")
+            lon = r.get("lon", "")
+            lat = r.get("lat", "")
+            parts = [name or ftype or "设施"]
+            if lon and lat:
+                parts.append(f"({lon},{lat})")
+            results.append({
+                "name": name,
+                "facility_type": ftype,
+                "location": f"{lon},{lat}" if lon and lat else "",
+                "description": " ".join(parts),
+            })
+        if not results:
+            results.append({"description": "无设施数据"})
+        return results
+    except Exception as e:
+        logger.error("get_facilities_semantic_list failed: %s", e)
+        return [{"error": str(e)}]
+
+
+def get_road_network_semantic(kg) -> List[Dict[str, Any]]:
+    """All roads as human-readable descriptions."""
+    try:
+        raw = _sparql_rows(kg, "get_road_network")
+        results = []
+        for r in raw:
+            name = r.get("name", "")
+            level = r.get("road_level", "")
+            length_m = r.get("length_m", "")
+            parts = [name or level or "道路"]
+            if level:
+                parts.append(level)
+            if length_m:
+                parts.append(f"{length_m}m")
+            results.append({
+                "name": name,
+                "road_level": level,
+                "length_m": length_m,
+                "description": " ".join(parts),
+            })
+        if not results:
+            results.append({"description": "无道路数据"})
+        return results
+    except Exception as e:
+        logger.error("get_road_network_semantic failed: %s", e)
+        return [{"error": str(e)}]
+
+
+def get_designated_zones_semantic(kg) -> List[Dict[str, Any]]:
+    """All designated zones / constraint parcels as human-readable descriptions."""
+    try:
+        raw = get_village_constraint_coverage(kg)
+        results = []
+        for r in raw:
+            if "summary" in r and "bsm" not in r:
+                results.append(r)
+                continue
+            bsm = r.get("bsm", "")
+            zone_type = r.get("planning_zone", "")
+            dlbm = r.get("dlbm", "")
+            area = r.get("area_ha", "")
+            summary = r.get("summary", "")
+            landuse_name = _dlbm_to_name(dlbm)
+            parts = [f"{bsm}: {landuse_name}({dlbm})"]
+            if area:
+                parts.append(f"{area}ha")
+            if zone_type:
+                parts.append(zone_type)
+            results.append({
+                "bsm": bsm,
+                "dlbm": dlbm,
+                "area_ha": area,
+                "planning_zone": zone_type,
+                "description": "，".join(parts),
+                "summary": summary,
+            })
+        return results
+    except Exception as e:
+        logger.error("get_designated_zones_semantic failed: %s", e)
+        return [{"error": str(e)}]
+
 
 TOOL_META_SEMANTIC = {
     "name": "query_kg_semantics",
@@ -495,7 +1038,7 @@ TOOL_META_SEMANTIC = {
             "parameters": {
                 "entity_uri": {
                     "type": "string",
-                    "description": "Entity URI (e.g. pln:NaturalSettlement/刘村, or a full URI)",
+                    "description": "Entity URI (e.g. pln:ResidentialCluster/刘村, or a full URI)",
                 },
             },
         },
@@ -518,7 +1061,38 @@ TOOL_META_SEMANTIC = {
             },
         },
         "get_village_semantic_summary": {
-            "description": "Get a human-readable summary of the entire village KG (entity counts, relation counts)",
+            "description": "Get a human-readable summary of the entire village KG (entity counts, relation counts, planning zone distribution)",
+            "parameters": {},
+        },
+        "get_entity_by_bsm": {
+            "description": "Find any entity (L1 current or L4 planned) by BSM, across all layers. Returns type, layer, attributes, and annotations.",
+            "parameters": {
+                "bsm": {
+                    "type": "string",
+                    "description": "Entity BSM identifier",
+                },
+            },
+        },
+        "get_parcels_by_planning_zone": {
+            "description": "Find all L1 parcels belonging to a given planning zone. Returns parcel BSM, DLBM, area, and spatial relations.",
+            "parameters": {
+                "planning_zone": {
+                    "type": "string",
+                    "description": "Planning zone name: 生态保护区/生态控制区/农田保护区/一般农业区/村庄建设区/林业发展区",
+                },
+            },
+        },
+        "get_l4_derived_from_l1": {
+            "description": "Find all L4 planned entities derived from a given L1 parcel (traces derived_from relationship).",
+            "parameters": {
+                "l1_bsm": {
+                    "type": "string",
+                    "description": "L1 parcel BSM identifier",
+                },
+            },
+        },
+        "get_village_constraint_coverage": {
+            "description": "Get all parcels that overlap constraint polygons (three lines, protected zones). Returns human-readable descriptions of which parcels are constrained by which protection zones, with overlap percentage.",
             "parameters": {},
         },
     },
@@ -528,5 +1102,10 @@ TOOL_META_SEMANTIC = {
 __all__ = [
     "get_entity_context", "get_entity_relations",
     "get_parcel_semantic_context", "get_village_semantic_summary",
+    "get_entity_by_bsm", "get_parcels_by_planning_zone",
+    "get_l4_derived_from_l1", "get_village_constraint_coverage",
+    "get_parcels_semantic_list", "get_parcel_detail_semantic",
+    "get_parcel_neighbors_semantic", "get_facilities_semantic_list",
+    "get_road_network_semantic", "get_designated_zones_semantic",
     "TOOL_META_SEMANTIC",
 ]

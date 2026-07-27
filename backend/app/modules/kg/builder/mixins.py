@@ -16,7 +16,8 @@ from .layer1 import (
     _add_control_lines_from_typed, _add_planning_elements_from_typed,
     add_annotations, add_roads, add_terrain,
     _add_village_meta_from_bundle,
-    _add_natural_villages_from_typed, _add_facilities_from_typed,
+    _add_residential_clusters_from_typed, _add_facilities_from_typed,
+    _add_facilities_from_annotations,
 )
 from .layer3 import _add_structured_intent, build_intent_layer, clear_intent_layer
 from .layer4 import (
@@ -28,11 +29,12 @@ from .layer4 import (
     get_effective_land_use, get_effective_area_ha,
     get_plan_changes,
 )
-from .queries import (
+from ..queries.sparql import (
     query, get_adjacency_map,
     get_parcel_count, get_triple_count, serialize, to_turtle, from_turtle,
     get_parcels_within_distance_of_entity, get_adjacent_parcels_with_length,
     get_connected_parcels, get_parcels_by_bsm_list, validate_intent, _is_in_protected_zone,
+    get_constraint_coverage,
 )
 
 
@@ -48,8 +50,9 @@ class Layer1Mixin:
     add_roads = add_roads
     add_terrain = add_terrain
     _add_village_meta_from_bundle = _add_village_meta_from_bundle
-    _add_natural_villages_from_typed = _add_natural_villages_from_typed
+    _add_residential_clusters_from_typed = _add_residential_clusters_from_typed
     _add_facilities_from_typed = _add_facilities_from_typed
+    _add_facilities_from_annotations = _add_facilities_from_annotations
 
 
 class Layer2Mixin:
@@ -86,6 +89,7 @@ class QueryMixin:
     get_parcels_by_bsm_list = get_parcels_by_bsm_list
     validate_intent = validate_intent
     _is_in_protected_zone = _is_in_protected_zone
+    get_constraint_coverage = get_constraint_coverage
 
 
 __all__ = [

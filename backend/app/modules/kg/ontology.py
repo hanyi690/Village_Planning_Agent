@@ -1,4 +1,4 @@
-"""Ontology definitions for PlanningKG (v4.6).
+"""Ontology definitions for PlanningKG (v4.7).
 
 [v4.6] Removed non-spatial entity types: Constraint, PlanningIndicator,
 ControlRule, LandUseCategory, PlanIntent, Axis (L1 unused).
@@ -6,9 +6,13 @@ Added L3 RoadTarget, L4 PlannedZone/PlannedFacility/PlannedRoad/PlannedAxis.
 Removed 8 relations: constrained_by, achieves, conflicts_with, conducted_from,
 controls_use, protects, adjacent_to, location_constraint.
 
-Entity types: 19 total
-  L1: Parcel, Zone, Village, Facility, Road, WaterBody, ThreeZone, ThreeLine,
-      AdministrativeVillage, NaturalSettlement
+[v4.7] ThreeZone/ThreeLine removed from active entity types (all()) —
+         transitioned to ConstraintIndex-based spatial queries.
+         The type constants remain as class attributes for backward compat.
+
+Entity types: 17 total (active)
+  L1: Parcel, Zone, Village, Facility, Road, WaterBody,
+      AdministrativeVillage, ResidentialCluster
   L3: ZoneTarget, FacilityTarget, AxisTarget, RoadTarget
   L4: PlannedParcel, PlannedZone, PlannedFacility, PlannedRoad, PlannedAxis
 
@@ -68,11 +72,13 @@ class EntityIdPolicy:
 
 
 class EntityTypes:
-    """19 entity type URIs for the planning ontology (v4.6).
+    """17 active entity type URIs for the planning ontology (v4.7).
 
     v4.6: removed Constraint, PlanningIndicator, ControlRule, LandUseCategory,
     PlanIntent, Axis (non-spatial). Added RoadTarget (L3), PlannedZone,
-    PlannedFacility, PlannedRoad, PlannedAxis (L4)."""
+    PlannedFacility, PlannedRoad, PlannedAxis (L4).
+    v4.7: ThreeZone/ThreeLine removed from all() — migrated to ConstraintIndex.
+          The type constants remain for backward compat (3rd-party scripts)."""
     # L1: Static entities (现状)
     Parcel = PLN.Parcel
     Zone = PLN.Zone
@@ -80,10 +86,11 @@ class EntityTypes:
     Facility = PLN.Facility
     Road = PLN.Road
     WaterBody = PLN.WaterBody
-    ThreeZone = PLN.ThreeZone
-    ThreeLine = PLN.ThreeLine
+    ThreeZone = PLN.ThreeZone          # kept for backward compat (ConstraintIndex)
+    ThreeLine = PLN.ThreeLine          # kept for backward compat (ConstraintIndex)
     AdministrativeVillage = PLN.AdministrativeVillage
-    NaturalSettlement = PLN.NaturalSettlement
+    ResidentialCluster = PLN.ResidentialCluster
+    PlaceRef = PLN.PlaceRef
     # L3: Intent virtual entities (意图虚拟实体)
     ZoneTarget = PLN.ZoneTarget
     FacilityTarget = PLN.FacilityTarget
@@ -98,10 +105,10 @@ class EntityTypes:
 
     @classmethod
     def all(cls) -> list:
+        """Active entity types (17, excluding ThreeZone/ThreeLine per v4.7)."""
         return [
             cls.Parcel, cls.Zone, cls.Village, cls.Facility, cls.Road, cls.WaterBody,
-            cls.ThreeZone, cls.ThreeLine,
-            cls.AdministrativeVillage, cls.NaturalSettlement,
+            cls.AdministrativeVillage, cls.ResidentialCluster,
             cls.ZoneTarget, cls.FacilityTarget, cls.AxisTarget, cls.RoadTarget,
             cls.PlannedParcel, cls.PlannedZone, cls.PlannedFacility,
             cls.PlannedRoad, cls.PlannedAxis,
@@ -147,7 +154,8 @@ class Relations:
 
 # v4.7 — L3 spatial anchoring predicates (PARSE grounding)
 # Accessed as PLN.attr_name (e.g. PLN.candidate_bsm, PLN.spatial_hint)
-# candidate_bsm, excluded_bsm, candidate_bbox, spatial_hint, description, raw_planning_text
+# candidate_bsm, excluded_bsm, candidate_bbox, spatial_hint, description,
+# planning_zone, raw_planning_text
 # has_zone, has_facility, has_axis, has_road — village-to-L3 linking
 
 

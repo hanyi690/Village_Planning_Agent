@@ -28,11 +28,17 @@ logger = get_logger(__name__)
 
 @dataclass
 class PlannedParcelEntry:
-    """规划地块 — 对应 L3 ZoneTarget 的落实"""
+    """规划地块 — 对应 L3 ZoneTarget 的落实
+
+    geometry: WKT geometry string (e.g. "POLYGON((...))") or empty.
+    When non-empty, stored as pln:geometry WKT literal in KG.
+    When empty, EXECUTE must fall back to BSM → SpatialIndex lookup.
+    """
     bsm: str
     planning_land_use: str = ""
     zone_type: str = ""
     area_ha: float = 0.0
+    geometry: str = ""                               # WKT geometry string
     derived_from_bsms: List[str] = field(default_factory=list)
     derived_from_zone_target: str = ""
 
@@ -43,6 +49,7 @@ class PlannedZoneEntry:
     zone_type: str
     area_ha: float = 0.0
     name: str = ""
+    geometry: str = ""                               # WKT polygon geometry string
     derived_from_zone_target: str = ""
 
 
@@ -123,6 +130,8 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
             self.g.add((uri, PLN.planning_zone_type, Literal(p.zone_type)))
         if p.area_ha:
             self.g.add((uri, PLN.planned_area_ha, Literal(p.area_ha, datatype=XSD.double)))
+        if p.geometry:
+            self.g.add((uri, PLN.geometry, Literal(p.geometry, datatype=XSD.string)))
         for parent_bsm in p.derived_from_bsms:
             for s in self.g.subjects(PLN.bsm, Literal(parent_bsm)):
                 if (s, RDF.type, EntityTypes.Parcel) in self.g:
@@ -143,6 +152,8 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
             self.g.add((uri, PLN.name, Literal(z.name)))
         if z.area_ha:
             self.g.add((uri, PLN.area_target_ha, Literal(z.area_ha, datatype=XSD.double)))
+        if z.geometry:
+            self.g.add((uri, PLN.geometry, Literal(z.geometry, datatype=XSD.string)))
         if z.derived_from_zone_target:
             self.g.add((uri, PLN.derived_from_target, URIRef(z.derived_from_zone_target)))
         count += 1
