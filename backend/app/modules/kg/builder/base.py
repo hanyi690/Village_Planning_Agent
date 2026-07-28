@@ -18,7 +18,7 @@ from rdflib import Graph, Literal, RDF, URIRef
 from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
-from ..ontology import PLN, EntityTypes, Relations
+from ..ontology import PLN, GEO, EntityTypes, Relations
 from ..memory import SemanticMemoryStore
 
 from .registry import BuildContext
@@ -49,6 +49,7 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
     def __init__(self, village_name: str = ""):
         self.g = Graph()
         self.g.bind("pln", PLN)
+        self.g.bind("geo", GEO)
         self.village_name = village_name
         self._parcel_count = 0
         self._constraint_index = None
@@ -76,6 +77,7 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
         """
         self.g = Graph()
         self.g.bind("pln", PLN)
+        self.g.bind("geo", GEO)
         self._parcel_count = 0
         self._constraint_index = constraint_index
 
@@ -189,7 +191,7 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
                 l1_subjects.add(s)
         l1_subjects.add(PLN.village)
 
-        spatial_predicates = {PLN.touches, PLN.sfTouches, PLN.nearby, PLN.connected_via_road}
+        spatial_predicates = {GEO.sfTouches, PLN.nearby, PLN.connected_via_road}
 
         # v4.8.2: predicates that should be cloned (gis-type + semantic-enrichment + GisLayerSet)
         from ..ontology import SemanticPredicates, Relations
@@ -201,7 +203,7 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
             PLN.gis_description_enriched,
             SemanticPredicates.taxonomic_parent, SemanticPredicates.legal_constraint,
             SemanticPredicates.allowed_operations,
-            Relations.intersects, Relations.contains, SemanticPredicates.overlap_pct,
+            Relations.sfIntersects, Relations.sfContains, SemanticPredicates.overlap_pct,
         }
 
         for s, p, o in self.g.triples((None, None, None)):

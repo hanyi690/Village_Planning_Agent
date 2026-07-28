@@ -162,34 +162,32 @@ class EntityTypes:
 
 
 class Relations:
-    """8 active relationship type URIs for the planning ontology (v4.8.1).
+    """8 active relationship type URIs (v4.9 — GeoSPARQL aligned).
 
-    v4.6: removed constrained_by, achieves, conflicts_with, conducted_from,
-    controls_use, protects, adjacent_to, location_constraint (non-spatial).
-    v4.8.1: merged within->located_in, crosses+overlaps->intersects, bounds->contains.
-            Removed adjacent_to (touches covers it). within_zone/designated_as/
-            connects/delineates kept for backward compat but not in active set.
-
-    Spatial relations:
-      touches (parcel-parcel topology), nearby (proximity),
-      connected_via_road (road network connectivity),
-      located_in (containment: point-in-polygon, facility-in-parcel),
-      intersects (cross-type: line-crosses-polygon, parcel-overlaps-protection),
-      contains (polygon-bounds: boundary-contains-parcel)
-    Semantic relations:
-      derived_from (L4->L1 lineage), serves (facility->population)
+    v4.9: 4 spatial predicates replaced with GeoSPARQL standard:
+      touches     -> geo:sfTouches
+      located_in  -> geo:sfWithin
+      intersects  -> geo:sfIntersects
+      contains    -> geo:sfContains
+    4 pln extension predicates kept unchanged:
+      nearby, connected_via_road, derived_from, serves
     """
-    # Spatial topology
-    touches = PLN.touches
+    # Spatial topology (GeoSPARQL standard)
+    sfTouches = GEO.sfTouches
     nearby = PLN.nearby
     connected_via_road = PLN.connected_via_road
-    located_in = PLN.located_in           # containment (point-in-polygon, facility-in-parcel)
-    intersects = PLN.intersects           # cross-type intersection (line-crosses, parcel-overlaps-protection)
-    contains = PLN.contains               # polygon-bounds (boundary-contains-parcel)
+    sfWithin = GEO.sfWithin
+    sfIntersects = GEO.sfIntersects
+    sfContains = GEO.sfContains
     # Planning semantics
     derived_from = PLN.derived_from
     serves = PLN.serves
-    # Backward compat (not in active set)
+
+    # Backward compat aliases (deprecated, not in active set)
+    touches = GEO.sfTouches
+    located_in = GEO.sfWithin
+    intersects = GEO.sfIntersects
+    contains = GEO.sfContains
     within_zone = PLN.within_zone
     designated_as = PLN.designated_as
     connects = PLN.connects
@@ -199,8 +197,8 @@ class Relations:
     def all(cls) -> list:
         """Active relations (8)."""
         return [
-            cls.touches, cls.nearby, cls.connected_via_road,
-            cls.located_in, cls.intersects, cls.contains,
+            cls.sfTouches, cls.nearby, cls.connected_via_road,
+            cls.sfWithin, cls.sfIntersects, cls.sfContains,
             cls.derived_from, cls.serves,
         ]
 

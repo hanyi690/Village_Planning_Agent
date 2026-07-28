@@ -140,8 +140,8 @@ def _add_parcel_relations(self, relations) -> None:
         a = _parcel_uri_by_bsm_dlbm(self, t.bsm_a, t.dlbm_a)
         b = _parcel_uri_by_bsm_dlbm(self, t.bsm_b, t.dlbm_b)
         if a and b:
-            self.g.add((a, Relations.touches, b))
-            self.g.add((b, Relations.touches, a))
+            self.g.add((a, Relations.sfTouches, b))
+            self.g.add((b, Relations.sfTouches, a))
             if t.shared_boundary_length_m:
                 self.g.add((a, PLN.shared_boundary_length, Literal(t.shared_boundary_length_m, datatype=XSD.double)))
                 self.g.add((b, PLN.shared_boundary_length, Literal(t.shared_boundary_length_m, datatype=XSD.double)))
@@ -170,8 +170,8 @@ def _add_parcel_relations(self, relations) -> None:
         pu = _parcel_uri_by_bsm_dlbm(self, pbsm, "")
         ru = _road_uri_by_bsm(self, rbsm)
         if pu and ru:
-            self.g.add((ru, Relations.intersects, pu))
-            self.g.add((pu, Relations.intersects, ru))
+            self.g.add((ru, Relations.sfIntersects, pu))
+            self.g.add((pu, Relations.sfIntersects, ru))
             count += 1
 
     # Cross-layer: parcel↔water touches (via PLN.touches)
@@ -187,8 +187,8 @@ def _add_parcel_relations(self, relations) -> None:
                 if wu:
                     break
         if pu and wu:
-            self.g.add((pu, Relations.touches, wu))
-            self.g.add((wu, Relations.touches, pu))
+            self.g.add((pu, Relations.sfTouches, wu))
+            self.g.add((wu, Relations.sfTouches, pu))
             count += 1
 
     if count:
@@ -316,7 +316,7 @@ def _add_parcels(self, parcels) -> None:
         except Exception:
             pass
 
-        self.g.add((pu, Relations.located_in, PLN.village))
+        self.g.add((pu, Relations.sfWithin, PLN.village))
         self._parcel_count += 1
 
 
@@ -354,7 +354,7 @@ def _add_water_bodies(self, features, *, gis_type_ref: str, entry, ctx: BuildCon
             name = getattr(w, "name", "") or f"溪流_{bsm or i}"
             self.g.add((uri, PLN.name, Literal(name)))
             self.g.add((uri, PLN.water_type, Literal("河流")))
-            self.g.add((uri, Relations.located_in, PLN.village))
+            self.g.add((uri, Relations.sfWithin, PLN.village))
             _add_water_dims(uri, is_line_geom=True)
             count += 1
         elif covered:
@@ -366,7 +366,7 @@ def _add_water_bodies(self, features, *, gis_type_ref: str, entry, ctx: BuildCon
             name = getattr(w, "name", "") or f"水体_{bsm or i}"
             self.g.add((uri, PLN.name, Literal(name)))
             self.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
-            self.g.add((uri, Relations.located_in, PLN.village))
+            self.g.add((uri, Relations.sfWithin, PLN.village))
             for cbsm in covered:
                 for s in self.g.subjects(PLN.bsm, Literal(cbsm)):
                     if (s, RDF.type, EntityTypes.Parcel) in self.g:
@@ -381,7 +381,7 @@ def _add_water_bodies(self, features, *, gis_type_ref: str, entry, ctx: BuildCon
             name = getattr(w, "name", "") or f"水体_{bsm or i}"
             self.g.add((uri, PLN.name, Literal(name)))
             self.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
-            self.g.add((uri, Relations.located_in, PLN.village))
+            self.g.add((uri, Relations.sfWithin, PLN.village))
             _add_water_dims(uri, is_line_geom=False)
             count += 1
 
@@ -404,7 +404,7 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         self.g.add((uri, RDF.type, EntityTypes.ControlLine))
         self.g.add((uri, PLN.name, Literal(str(name))))
         self.g.add((uri, PLN.source, Literal("geological_hazard")))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         # ── v4.8.1: three-dimension predicates ──
         self.g.add((uri, gis_type_ref, Literal("geological_hazard_points")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POINT)))
@@ -422,7 +422,7 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.ControlLine))
         self.g.add((uri, PLN.name, Literal(f"灾害防控线_{bsm or count}")))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         # ── v4.8: three-dimension predicates ──
         self.g.add((uri, gis_type_ref, Literal("hazard_control_line")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
@@ -438,7 +438,7 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.ControlLine))
         self.g.add((uri, PLN.name, Literal(f"洪涝控制线_{bsm or count}")))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         # ── v4.8: three-dimension predicates ──
         self.g.add((uri, gis_type_ref, Literal("flood_control_line")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
@@ -455,7 +455,7 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal("有条件建设区")))
         self.g.add((uri, PLN.restriction, Literal("限制建设")))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         # ── v4.8.1: three-dimension predicates ──
         self.g.add((uri, gis_type_ref, Literal("construction_zone")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
@@ -479,7 +479,7 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal(f"TDYT_{code}")))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         # ── v4.8: three-dimension predicates ──
         self.g.add((uri, gis_type_ref, Literal("land_use_zone")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
@@ -495,7 +495,7 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal("建设用地管制区")))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         # ── v4.8.1: three-dimension predicates ──
         self.g.add((uri, gis_type_ref, Literal("space_control_zone")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
@@ -552,7 +552,7 @@ def add_annotations(self, annotations: list):
                 self.g.add((fac_uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
                 self.g.add((fac_uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
             self.g.add((fac_uri, Relations.serves, Literal(getattr(facility, "category", "") or "public_service")))
-            self.g.add((fac_uri, Relations.located_in, PLN.village))
+            self.g.add((fac_uri, Relations.sfWithin, PLN.village))
             self.g.add((PLN.village, PLN.has_facility, fac_uri))
             fc += 1
     if fc or vc:
@@ -578,7 +578,7 @@ def add_roads(self, features, *, gis_type_ref: str, entry, ctx: BuildContext) ->
         if length:
             self.g.add((uri, PLN.length, Literal(length, datatype=XSD.double)))
         self.g.add((uri, PLN.road_level, Literal(getattr(road, "road_level", "") or "村道")))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         self.g.add((PLN.village, Relations.connects, uri))
         # ── v4.8: three-dimension predicates ──
         self.g.add((uri, gis_type_ref, Literal("road")))
@@ -743,13 +743,13 @@ def _add_residential_clusters_from_typed(self, parcels, annotations=None) -> Non
         self.g.add((uri, PLN.name, Literal(name)))
         self.g.add((uri, PLN.lon, Literal(mean_lon)))
         self.g.add((uri, PLN.lat, Literal(mean_lat)))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
 
         # Link member parcels
         for bsm, _, _ in cluster:
             for s in self.g.subjects(PLN.bsm, Literal(bsm)):
                 if (s, RDF.type, EntityTypes.Parcel) in self.g:
-                    self.g.add((s, Relations.located_in, uri))
+                    self.g.add((s, Relations.sfWithin, uri))
 
         seq += 1
 
@@ -808,7 +808,7 @@ def _add_facilities_from_typed(self, facilities) -> None:
         if isinstance(coords, (list, tuple)) and len(coords) >= 2:
             self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
             self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         self.g.add((PLN.village, PLN.has_facility, uri))
         # ── v4.8: three-dimension predicates ──
         self.g.add((uri, gis_type_ref, Literal("current_facility")))
@@ -865,7 +865,7 @@ def _add_facilities_from_annotations(self, annotations) -> None:
         self.g.add((uri, PLN.facility_type, Literal(ftype)))
         self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
         self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         self.g.add((PLN.village, PLN.has_facility, uri))
         # ── v4.8: three-dimension predicates ──
         self.g.add((uri, gis_type_ref, Literal("current_facility")))
@@ -913,7 +913,7 @@ def _add_protection_polygons(self, polygons_layer) -> None:
             EntityIdPolicy.attach_bsm(self.g, uri, bsm)
             self.g.add((uri, RDF.type, EntityTypes.Zone))
             self.g.add((uri, PLN.name, Literal(f"{label}_{bsm or count}")))
-            self.g.add((uri, Relations.located_in, PLN.village))
+            self.g.add((uri, Relations.sfWithin, PLN.village))
             # Three-dimension predicates
             self.g.add((uri, gis_type_ref, Literal(ltype)))
             self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
@@ -949,7 +949,7 @@ def _add_buildings(self, features, *, gis_type_ref: str, entry, ctx: BuildContex
         if isinstance(coords, (list, tuple)) and len(coords) >= 2:
             self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
             self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         # Three-dimension predicates
         self.g.add((uri, gis_type_ref, Literal("current_building")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POINT)))
@@ -978,7 +978,7 @@ def _add_terrain_entities(self, lines_layer, points_layer) -> None:
         self.g.add((uri, PLN.name, Literal(f"等高线_{elev or bsm or i}")))
         if elev:
             self.g.add((uri, PLN.elevation, Literal(str(elev))))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         self.g.add((uri, gis_type_ref, Literal("contour_line")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE)))
         self.g.add((uri, semantic_group, Literal("terrain")))
@@ -1004,7 +1004,7 @@ def _add_terrain_entities(self, lines_layer, points_layer) -> None:
         if isinstance(coords, (list, tuple)) and len(coords) >= 2:
             self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
             self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         self.g.add((uri, gis_type_ref, Literal("elevation_point")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POINT)))
         self.g.add((uri, semantic_group, Literal("terrain")))
@@ -1030,7 +1030,7 @@ def _add_boundaries(self, polygons_layer, lines_layer) -> None:
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.AdministrativeVillage))
         self.g.add((uri, PLN.name, Literal(name)))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         self.g.add((uri, gis_type_ref, Literal("admin_area")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
         self.g.add((uri, semantic_group, Literal("admin")))
@@ -1047,7 +1047,7 @@ def _add_boundaries(self, polygons_layer, lines_layer) -> None:
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal("规划范围")))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         self.g.add((uri, gis_type_ref, Literal("planning_scope")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
         self.g.add((uri, semantic_group, Literal("admin")))
@@ -1066,7 +1066,7 @@ def _add_boundaries(self, polygons_layer, lines_layer) -> None:
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Road))  # morphologically a line
         self.g.add((uri, PLN.name, Literal(f"行政界线_{bsm or i}")))
-        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
         self.g.add((uri, gis_type_ref, Literal("admin_boundary_line")))
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE)))
         self.g.add((uri, semantic_group, Literal("admin")))
@@ -1097,7 +1097,7 @@ def _add_natural_resource_zones(self, polygons_layer) -> None:
             EntityIdPolicy.attach_bsm(self.g, uri, bsm)
             self.g.add((uri, RDF.type, EntityTypes.Zone))
             self.g.add((uri, PLN.name, Literal(f"{label}_{bsm or i}")))
-            self.g.add((uri, Relations.located_in, PLN.village))
+            self.g.add((uri, Relations.sfWithin, PLN.village))
             self.g.add((uri, gis_type_ref, Literal(ltype)))
             self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
             self.g.add((uri, semantic_group, Literal("natural_resource")))
@@ -1145,7 +1145,7 @@ def _add_cross_type_relations(self, cross_type_relations=None) -> None:
         subj = _to_uri_safe(subj_str)
         obj = _to_uri_safe(obj_str)
         if subj and obj and _entity_in_graph(subj) and _entity_in_graph(obj):
-            self.g.add((subj, Relations.located_in, obj))
+            self.g.add((subj, Relations.sfWithin, obj))
             count += 1
         else:
             skipped += 1
@@ -1157,7 +1157,7 @@ def _add_cross_type_relations(self, cross_type_relations=None) -> None:
         subj = _to_uri_safe(subj_str)
         obj = _to_uri_safe(obj_str)
         if subj and obj and _entity_in_graph(subj) and _entity_in_graph(obj):
-            self.g.add((subj, Relations.intersects, obj))
+            self.g.add((subj, Relations.sfIntersects, obj))
             if overlap_pct:
                 self.g.add((subj, SemanticPredicates.overlap_pct, Literal(float(overlap_pct), datatype=XSD.double)))
             count += 1
@@ -1169,7 +1169,7 @@ def _add_cross_type_relations(self, cross_type_relations=None) -> None:
         subj = _to_uri_safe(subj_str)
         obj = _to_uri_safe(obj_str)
         if subj and obj and _entity_in_graph(subj) and _entity_in_graph(obj):
-            self.g.add((subj, Relations.contains, obj))
+            self.g.add((subj, Relations.sfContains, obj))
             count += 1
         else:
             skipped += 1
