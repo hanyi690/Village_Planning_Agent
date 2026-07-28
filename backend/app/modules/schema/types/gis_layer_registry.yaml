@@ -161,7 +161,7 @@ layer_types:
         dlq_on_error: true
 
   # ── 交通运输 ──
-  road:
+  current_road:
     i18n:
       zh: 现状道路
       en: Current roads
@@ -185,7 +185,7 @@ layer_types:
         must_be_valid: true
         dlq_on_error: true
 
-  road_planned:
+  planned_road:
     i18n:
       zh: 规划道路
       en: Planned roads
@@ -210,7 +210,7 @@ layer_types:
         dlq_on_error: true
 
   # ── 注记 ──
-  annotation:
+  current_annotation:
     i18n:
       zh: 现状注记
       en: Current annotations
@@ -234,7 +234,7 @@ layer_types:
         must_be_valid: true
         dlq_on_error: true
 
-  annotation_planned:
+  planned_annotation:
     i18n:
       zh: 规划注记
       en: Planned annotations
@@ -334,7 +334,7 @@ layer_types:
         must_be_valid: true
         dlq_on_error: true
 
-  three_zone:
+  three_zone_item:
     i18n:
       zh: 三区（生态/农业/建设空间）
       en: Three zones (ecological/agricultural/urban)
@@ -456,7 +456,7 @@ layer_types:
         must_be_valid: true
         dlq_on_error: true
 
-  construction_zone:
+  conditional_construction_zone:
     i18n:
       zh: 有条件建设区
       en: Conditional construction zone
@@ -504,7 +504,7 @@ layer_types:
         must_be_valid: true
         dlq_on_error: true
 
-  space_control_zone:
+  construction_ctrl_zone:
     i18n:
       zh: 建设用地管制区
       en: Construction land control zone
@@ -553,7 +553,7 @@ layer_types:
         dlq_on_error: true
 
   # ── 灾害与安全 ──
-  geological_hazard_points:
+  geological_hazard_point:
     i18n:
       zh: 地质灾害点
       en: Geological hazard points
@@ -748,7 +748,7 @@ layer_types:
         must_be_valid: true
         dlq_on_error: true
 
-  facility_planned:
+  planned_facility:
     i18n:
       zh: 规划设施
       en: Planned facilities
