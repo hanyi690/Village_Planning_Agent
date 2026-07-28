@@ -22,6 +22,7 @@ logger = get_logger(__name__)
 
 PREFIX = """
 PREFIX pln: <http://village-planning.org/ontology#>
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 """
 
@@ -138,7 +139,7 @@ QUERY_TEMPLATES = {
         SELECT ?neighbor_bsm ?neighbor_dlbm ?neighbor_zone_type ?neighbor_area
         WHERE {
             ?parcel pln:bsm ?bsm_val ;
-                    pln:touches ?neighbor .
+                    geo:sfTouches ?neighbor .
             ?neighbor pln:bsm ?neighbor_bsm ;
                      pln:dlbm ?neighbor_dlbm ;
                      pln:current_zone_type ?neighbor_zone_type ;
@@ -177,7 +178,7 @@ QUERY_TEMPLATES = {
         SELECT ?a_bsm ?b_bsm
         WHERE {
             ?a pln:bsm ?a_bsm ;
-               pln:touches ?b .
+               geo:sfTouches ?b .
             ?b pln:bsm ?b_bsm .
         }
         LIMIT 100
@@ -548,7 +549,7 @@ def query(self, sparql: str) -> List[Dict[str, Any]]:
 def get_adjacency_map(self) -> Dict[str, set]:
     """Adjacency map: BSM -> set of neighbor BSMs."""
     adj: Dict[str, set] = {}
-    for s, _, o in self.g.triples((None, PLN.touches, None)):
+    for s, _, o in self.g.triples((None, PLN.sfTouches, None)):
         bsm_s = None
         bsm_o = None
         for _, _, lit in self.g.triples((s, PLN.bsm, None)):
@@ -588,7 +589,7 @@ def from_turtle(cls, turtle_str: str, village_name: str = "") -> "PlanningKG":
 def get_parcels_within_distance_of_entity(self, entity_uri: str, max_distance_m: float) -> List[str]:
     entity = URIRef(entity_uri) if isinstance(entity_uri, str) else entity_uri
     bsms = set()
-    for rel in (PLN.nearby, PLN.touches):
+    for rel in (PLN.nearby, PLN.sfTouches):
         for s, _, _ in self.g.triples((None, rel, entity)):
             for _, _, bsm in self.g.triples((s, PLN.bsm, None)):
                 bsms.add(str(bsm))
@@ -603,7 +604,7 @@ def get_adjacent_parcels_with_length(self, bsm: str) -> List[Tuple[str, float]]:
     for s, _, _ in self.g.triples((None, PLN.bsm, Literal(bsm))):
         if (s, RDF.type, EntityTypes.Parcel) not in self.g:
             continue
-        for _, _, neighbor in self.g.triples((s, PLN.touches, None)):
+        for _, _, neighbor in self.g.triples((s, PLN.sfTouches, None)):
             for _, _, nbsm in self.g.triples((neighbor, PLN.bsm, None)):
                 length = 0.0
                 for _, _, lo in self.g.triples((s, PLN.shared_boundary_length, None)):
