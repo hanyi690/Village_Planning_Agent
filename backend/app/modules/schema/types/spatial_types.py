@@ -361,24 +361,6 @@ GisFeature = Annotated[
     Field(discriminator="layer_type"),
 ]
 
-SPACE_CONTROL_ZONE_TYPES = {
-    "01": "允许建设区",
-    "02": "限制建设区",
-    "03": "有条件建设区",
-    "04": "禁止建设区",
-    "05": "永久基本农田保护区",
-    "06": "生态保护红线区",
-}
-
-SPACE_CONTROL_ZONE_COLORS = {
-    "01": "#FF6B6B",
-    "02": "#FFD93D",
-    "03": "#6BCB77",
-    "04": "#4D96FF",
-    "05": "#C9B1FF",
-    "06": "#FF8B94",
-}
-
 __all__ = [
     "SpatialFeature", "PointFeature", "LineFeature", "PolygonFeature",
     "AdminArea", "AdminBoundaryLine",
@@ -397,5 +379,4 @@ __all__ = [
     "SoilType", "SoilErosion", "Watershed", "NatureReserve", "HydrogeologyZone",
     "GisFeature",
     "ANNOTATION_LABEL_TYPE_MAP",
-    "SPACE_CONTROL_ZONE_TYPES", "SPACE_CONTROL_ZONE_COLORS",
 ]
