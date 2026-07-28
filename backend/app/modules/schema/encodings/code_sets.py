@@ -6,13 +6,15 @@ Extracted from __init__.py to keep the barrel file focused on exports only.
 
 v2.0 (2026-07-26) changes:
 - PLANNING_ZONE_TO_PRIMARY_ZONE: from YAML (planning_zone_rules.yaml), not hardcoded
-- SPACE_CONTROL_ZONE_TYPES: from YAML (construction_zone_codes.yaml), not hardcoded
+- SPACE_CONTROL_ZONE_CODES: from YAML (construction_zone_codes.yaml), not hardcoded
 - New: DLBM_TO_GHYTBM forward mapping (from dlbm_to_ghytbm.yaml)
 - New: GHFLBM_TO_TDYTFQDM mapping (from ghflbm_to_tdytfqdm.yaml)
 - New: SPACE_CONTROL_ZONE_CODES from construction_zone_codes.yaml (01-06, replaces 510-540)
 - New: PLANNING_ZONE_TO_CONTROL_CODE from construction_zone_codes.yaml
-- Removed dead code: GHYTMC_TO_DLMC (identity), ECOLOGICAL_CONTROL_CODES (empty),
-  FORESTRY_CODES (empty)
+- Removed dead code: GHYTMC_TO_DLMC (identity), ECOLOGICAL_CONTROL_CODES (empty)
+- Removed backward-compat aliases: FORESTRY_CODES (use FOREST_CODES),
+  CONSTRUCTION_ZONE_TYPES (use CONSTRUCTION_USE_TYPES),
+  SPACE_CONTROL_ZONE_TYPES (use SPACE_CONTROL_ZONE_CODES)
 - Fixed: field_defaults lookups (ghflbm_to_code, ghflbm_to_name, space_control_code,
   space_control_name) now implemented
 """
@@ -68,11 +70,7 @@ WATER_CODES: Set[str] = _tugui.to_set("code", filter_tag="WATER")
 ECOLOGICAL_PROTECTION_CODES: Set[str] = FOREST_CODES | WATER_CODES
 PROTECTED_DLBM_CODES: Set[str] = BASIC_FARMLAND_CODES | GENERAL_AGRICULTURE_CODES | ECOLOGICAL_CODES
 
-# Backward-compat alias (pre-v4.7 name)
-FORESTRY_CODES: Set[str] = FOREST_CODES
-
 CONSTRUCTION_USE_TYPES: Set[str] = {"居住用地", "产业用地", "公共服务用地", "交通用地", "商业用地"}
-CONSTRUCTION_ZONE_TYPES = CONSTRUCTION_USE_TYPES
 
 # ── Code -> Name mappings (per system, built once at import) ──
 DLBM_TO_DLMC: Dict[str, str] = {}
@@ -212,9 +210,6 @@ for _entry in _cz_codes.raw.get("codes", []):
         SPACE_CONTROL_ZONE_CODES[_code] = _name
     if _code and _color:
         SPACE_CONTROL_ZONE_COLORS[_code] = _color
-
-# Alias for backward compatibility with spatial_types.py
-SPACE_CONTROL_ZONE_TYPES = SPACE_CONTROL_ZONE_CODES
 
 # Reverse lookup: name -> code
 SPACE_CONTROL_NAME_TO_CODE: Dict[str, str] = {
@@ -491,14 +486,14 @@ __all__ = [
     "SDDLBM_TO_YDYHFLDM", "ELEMENT_CODE_PREFIXES",
     # Code sets
     "BASIC_FARMLAND_CODES", "GENERAL_AGRICULTURE_CODES",
-    "ECOLOGICAL_CODES", "FOREST_CODES", "FORESTRY_CODES",
+    "ECOLOGICAL_CODES", "FOREST_CODES",
     "WATER_CODES",
     "ECOLOGICAL_PROTECTION_CODES",
     "PROTECTED_DLBM_CODES",
-    "CONSTRUCTION_USE_TYPES", "CONSTRUCTION_ZONE_TYPES",
+    "CONSTRUCTION_USE_TYPES",
     # v2.0: Construction zone codes (01-06)
     "SPACE_CONTROL_ZONE_CODES", "SPACE_CONTROL_ZONE_COLORS",
-    "SPACE_CONTROL_ZONE_TYPES", "SPACE_CONTROL_NAME_TO_CODE",
+    "SPACE_CONTROL_NAME_TO_CODE",
     "PLANNING_ZONE_TO_CONTROL_CODE",
     # v2.0: GHFLBM -> TDYTFQDM
     "GHFLBM_TO_TDYTFQDM", "GHFLBM_TO_TDYT_NAME",

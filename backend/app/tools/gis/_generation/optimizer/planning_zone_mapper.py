@@ -25,10 +25,9 @@ from typing import Any, Dict, List, Optional
 from app.modules.schema import (
     BASIC_FARMLAND_CODES,
     GENERAL_AGRICULTURE_CODES,
-    CONSTRUCTION_ZONE_TYPES as _CONSTRUCTION_ZONE_TYPES,
+    CONSTRUCTION_USE_TYPES as _CONSTRUCTION_ZONE_TYPES,
     DLBM_TO_PLANNING_ZONE,
     PLANNING_ZONE_RENDERING,
-    FORESTRY_CODES,
     FOREST_CODES,
     WATER_CODES,
     PLANNING_ZONE_TO_PRIMARY_ZONE,
@@ -202,7 +201,7 @@ def map_zone_type_to_planning_zone(
 
     细分逻辑：
     - 农业用地：DLBM ∈ BASIC_FARMLAND_DLBMS → 农田保护区；其他 → 一般农业区
-    - 生态绿地：DLBM ∈ FORESTRY_CODES → 林业发展区；其他 → 生态保护区
+    - 生态绿地：DLBM ∈ FOREST_CODES → 林业发展区；其他 → 生态保护区
     - 水域 → 生态保护区
     """
     if zone_type == "农业用地":
@@ -210,7 +209,7 @@ def map_zone_type_to_planning_zone(
             return "农田保护区"
         return "一般农业区"
     if zone_type == "生态绿地":
-        if dlbm in FORESTRY_CODES:
+        if dlbm in FOREST_CODES:
             return "林业发展区"
         return "生态保护区"
     return ZONE_TYPE_TO_PLANNING_ZONE.get(zone_type, "一般农业区")

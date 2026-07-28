@@ -467,7 +467,7 @@ def provider_to_parcel(
         geometry=pp.geometry,
         dlbm=dlbm,
         dlbm_system=dlbm_sys,
-        name=getattr(pp, 'name', '') or props.get("DLMC", ""),
+        name=props.get("DLMC", ""),
         area_sqm=pp.area_sqm or (pp.area_ha * 10000 if pp.area_ha else 0),
         bsm=bsm,
         ysdm=ysdm,
@@ -484,7 +484,7 @@ def provider_to_parcel(
 # ============================================================
 
 # Feature type -> (model class, GDB source path)
-# Derived from GIS_LAYER_REGISTRY (T6). Kept as backward compat.
+# Derived from GIS_LAYER_REGISTRY (T6). Populated at runtime by _init_feature_registry().
 _FEATURE_TYPE_REGISTRY: Dict[str, tuple] = {}
 
 def _infer_model_class(layer_type: str) -> str:
@@ -796,7 +796,7 @@ def _report(parcels: List[BaseLandUseParcel]) -> str:
 
 
 __all__ = [
-    # Filepath-based ingest (legacy + direct use)
+    # Filepath-based ingest (live path - direct GDB/GeoJSON ingestion)
     "ingest_landuse",
     "ingest_current_landuse",
     "ingest_planned_landuse",

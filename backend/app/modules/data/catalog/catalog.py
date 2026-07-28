@@ -71,7 +71,6 @@ class DataCatalog:
 
     def __init__(self, config_path: Optional[str] = None):
         self.config_path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
-        self._raw: Dict[str, Any] = {}
         self._connections: Dict[str, Dict[str, Any]] = {}
         self._sources_cfg: Dict[str, Dict[str, Any]] = {}
         self._sources: Dict[str, DataSourceDriver] = {}
@@ -87,7 +86,6 @@ class DataCatalog:
                 "[DataCatalog] Config not found: %s. Using empty catalog.",
                 self.config_path,
             )
-            self._raw = {"version": "1.0", "sources": {}, "connections": {}}
             return
 
         with open(self.config_path, "r", encoding="utf-8") as f:
@@ -95,7 +93,6 @@ class DataCatalog:
 
         try:
             catalog = CatalogConfig(**raw)
-            self._raw = raw
             self._connections = catalog.connections
             self._sources_cfg = catalog.sources
             logger.info(

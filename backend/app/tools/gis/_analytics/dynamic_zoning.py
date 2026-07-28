@@ -24,7 +24,6 @@ from app.modules.schema.encodings.code_sets import (
     BASIC_FARMLAND_CODES,
     FOREST_CODES,
     WATER_CODES,
-    FORESTRY_CODES,
     ECOLOGICAL_PROTECTION_CODES,
 )
 # Late imports for functions (avoid circular dependency)

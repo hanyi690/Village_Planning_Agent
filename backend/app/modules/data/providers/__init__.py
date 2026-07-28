@@ -1,13 +1,13 @@
-"""Provider subpackage — deprecated, being phased out.
+"""Provider subpackage - active data provider modules.
 
-Only the following modules remain active:
+Active submodules:
 - tianditu/: Used by fetcher.py, gis_context.py, accessibility.py, isochrone.py
 - amap/: Used by POIProvider, connections/amap.py
 - poi.py: Used by search_poi.py tool
 
-All other modules (base.py, base_types.py, orchestrator.py, adapters,
-dem_provider.py, osm/) have been removed. New code should use
-app.modules.data.catalog.DataCatalog for data access.
+Removed modules (base.py, base_types.py, orchestrator.py, adapters,
+dem_provider.py, osm/) have been deleted. New data access should use
+app.modules.data.catalog.DataCatalog.
 """
 
 from __future__ import annotations

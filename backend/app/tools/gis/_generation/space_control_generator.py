@@ -204,7 +204,7 @@ class SpaceControlZoneGenerator:
 
         try:
             # Calculate current construction land area
-            from app.modules.schema import CONSTRUCTION_ZONE_TYPES
+            from app.modules.schema import CONSTRUCTION_USE_TYPES
             from app.modules.schema import get_zone_type_for_dlbm
 
             construction_area = 0.0
@@ -212,7 +212,7 @@ class SpaceControlZoneGenerator:
             for feat in current_landuse.get("features", []):
                 dlbm = str(feat.get("properties", {}).get("DLBM", ""))
                 zone = get_zone_type_for_dlbm(dlbm)
-                if zone in CONSTRUCTION_ZONE_TYPES:
+                if zone in CONSTRUCTION_USE_TYPES:
                     try:
                         g = shape(feat.get("geometry", {}))
                         construction_area += g.area

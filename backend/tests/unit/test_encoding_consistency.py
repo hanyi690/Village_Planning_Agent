@@ -7,7 +7,8 @@ Validates that the encoding system is internally consistent after the v2.0 refac
 - GAP-D: DLBM->GHYTBM forward mapping exists
 - GAP-I: Three-zone is derived, not from rule_loader
 - Cross-file consistency: appendix5 zone_type matches land_use_structure parent
-- No dead code: removed FORESTRY_CODES, ECOLOGICAL_CONTROL_CODES, GHYTMC_TO_DLMC
+- No dead code: removed ECOLOGICAL_CONTROL_CODES, GHYTMC_TO_DLMC
+- No backward-compat aliases: FORESTRY_CODES, CONSTRUCTION_ZONE_TYPES, SPACE_CONTROL_ZONE_TYPES
 """
 
 import pytest
@@ -160,10 +161,12 @@ class TestDeadCodeRemoved:
     """v2.0: Dead code should be removed or not exported."""
 
     def test_forestry_codes_not_exported(self):
-        """FORESTRY_CODES is kept for backward compat — has real codes."""
+        """FORESTRY_CODES backward-compat alias must be removed; use FOREST_CODES."""
         from app.modules.schema.encodings import code_sets
-        assert hasattr(code_sets, "FORESTRY_CODES")
-        assert len(code_sets.FORESTRY_CODES) > 0
+        assert not hasattr(code_sets, "FORESTRY_CODES"), \
+            "FORESTRY_CODES alias must be removed; use FOREST_CODES"
+        assert hasattr(code_sets, "FOREST_CODES")
+        assert len(code_sets.FOREST_CODES) > 0
 
     def test_ecological_control_codes_not_exported(self):
         """ECOLOGICAL_CONTROL_CODES was dead (empty set), should not be in __all__."""

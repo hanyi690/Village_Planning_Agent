@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 
 # Priority order for assigning parcels: DLBM directly matching zone type
 # Imported from colors.py ZONE_TYPE_TO_DLBMS (single source of truth)
-from app.modules.schema import ZONE_TYPE_TO_DLBMS as DLBM_PREFERENCE, PROTECTED_DLBM_CODES, CONSTRUCTION_ZONE_TYPES
+from app.modules.schema import ZONE_TYPE_TO_DLBMS as DLBM_PREFERENCE, PROTECTED_DLBM_CODES, CONSTRUCTION_USE_TYPES
 
 # Precomputed DLBM category sets (avoid rebuilding per _preference_cost call)
 _AGRI_DLBM_SET: set = set()
@@ -287,7 +287,7 @@ class ConstraintDrivenAllocator:
         1000 = absolutely forbidden (non-agricultural red line).
         """
         # Hard constraint: protected DLBM cannot go to construction zones
-        if dlbm in PROTECTED_DLBM_CODES and zone_type in CONSTRUCTION_ZONE_TYPES:
+        if dlbm in PROTECTED_DLBM_CODES and zone_type in CONSTRUCTION_USE_TYPES:
             return 1000.0
 
         preferred = DLBM_PREFERENCE.get(zone_type, [])
@@ -397,7 +397,7 @@ class ConstraintDrivenAllocator:
                 if gaps.get(zone_type, 0) <= 0:
                     continue
                 # Hard constraint: protected DLBM cannot go to construction
-                if dlbm in PROTECTED_DLBM_CODES and zone_type in CONSTRUCTION_ZONE_TYPES:
+                if dlbm in PROTECTED_DLBM_CODES and zone_type in CONSTRUCTION_USE_TYPES:
                     continue
                 cost = self._preference_cost(dlbm, zone_type)
                 if cost >= 1000:

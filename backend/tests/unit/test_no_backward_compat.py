@@ -114,3 +114,11 @@ def test_manager_no_legacy_geojson_path():
     assert "landuse_geojson" not in sig2.parameters
     assert "gis_data" not in sig2.parameters
     assert "reports" not in sig2.parameters
+
+
+def test_code_sets_no_compat_aliases():
+    """Backward-compat alias exports must be gone from code_sets.py."""
+    from app.modules.schema.encodings import code_sets
+    assert not hasattr(code_sets, "FORESTRY_CODES"), "FORESTRY_CODES alias must be removed"
+    assert not hasattr(code_sets, "CONSTRUCTION_ZONE_TYPES"), "CONSTRUCTION_ZONE_TYPES alias must be removed"
+    assert not hasattr(code_sets, "SPACE_CONTROL_ZONE_TYPES"), "SPACE_CONTROL_ZONE_TYPES alias must be removed"
