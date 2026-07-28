@@ -41,6 +41,7 @@ class BaseLandUseParcel(PolygonFeature):
     zone_type: str = ""
     planning_zone: str = ""
     primary_zone: str = ""
+    mapping_provenance: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def primary_code(self) -> str:

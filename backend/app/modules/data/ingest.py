@@ -204,25 +204,47 @@ def _resolve_code(
     layer_type: str,
     warnings: List[str],
     feature_index: int,
-) -> Tuple[str, str]:
-    """校验一个编码字段并返回 (value, system, warning)。
+) -> Tuple[str, str, dict]:
+    """校验一个编码字段并返回 (value, system, provenance)。
 
-    只有明确是编码字段 (field_name 在 LAYER_META 中有定义) 才做校验。
-    其他字段直接返回值，system=""。
+    provenance dict 包含:
+        - decided_by: 决策方式 (rule/llm/human/default)
+        - confidence: 置信度 (exact/conditional)
+        - system: 匹配的编码体系
+        - warning: 警告信息(如有)
     """
     code_str = str(code).strip() if code is not None else ""
     if not code_str:
-        return "", ""
+        return "", "", {"decided_by": "default", "confidence": "exact", "system": "", "warning": ""}
 
     expected = _field_system(layer_type, field_name)
     if not expected:
-        return code_str, ""  # 非编码字段, 不校验
+        return code_str, "", {
+            "decided_by": "default", "confidence": "exact",
+            "system": "", "warning": "",
+        }
 
     system, warning = _validator.resolve(code_str, expected)
     if warning:
         warnings.append(f"[feature#{feature_index}] {field_name}: {warning}")
 
-    return code_str, system
+    decided_by = "rule"
+    confidence = "exact"
+    if warning and "not found" in warning:
+        decided_by = "default"
+        confidence = "conditional"
+    elif warning and "ambiguous" in warning:
+        decided_by = "rule"
+        confidence = "conditional"
+
+    provenance = {
+        "decided_by": decided_by,
+        "confidence": confidence,
+        "system": system,
+        "warning": warning,
+    }
+
+    return code_str, system, provenance
 
 
 # ============================================================
@@ -274,12 +296,12 @@ def ingest_landuse(
         geom = feat.get("geometry", {})
 
         # ── 解析并校验每个编码字段 ──
-        dlbm, dlbm_sys = _resolve_code(props.get("DLBM", ""), "DLBM", layer_type, warnings, i)
-        sddlbm, sddlbm_sys = _resolve_code(props.get("SDDLBM", ""), "SDDLBM", layer_type, warnings, i)
-        qmdlbm, qmdlbm_sys = _resolve_code(props.get("QMDLBM", ""), "QMDLBM", layer_type, warnings, i)
-        ghytbm, ghytbm_sys = _resolve_code(props.get("GHYTBM", ""), "GHYTBM", layer_type, warnings, i)
-        ghflbm, ghflbm_sys = _resolve_code(props.get("GHFLBM", ""), "GHFLBM", layer_type, warnings, i)
-        qmghflbm, qmghflbm_system = _resolve_code(props.get("QMGHFLBM", ""), "QMGHFLBM", layer_type, warnings, i)
+        dlbm, dlbm_sys, dlbm_prov = _resolve_code(props.get("DLBM", ""), "DLBM", layer_type, warnings, i)
+        sddlbm, sddlbm_sys, sddlbm_prov = _resolve_code(props.get("SDDLBM", ""), "SDDLBM", layer_type, warnings, i)
+        qmdlbm, qmdlbm_sys, qmdlbm_prov = _resolve_code(props.get("QMDLBM", ""), "QMDLBM", layer_type, warnings, i)
+        ghytbm, ghytbm_sys, ghytbm_prov = _resolve_code(props.get("GHYTBM", ""), "GHYTBM", layer_type, warnings, i)
+        ghflbm, ghflbm_sys, ghflbm_prov = _resolve_code(props.get("GHFLBM", ""), "GHFLBM", layer_type, warnings, i)
+        qmghflbm, qmghflbm_system, qmghflbm_prov = _resolve_code(props.get("QMGHFLBM", ""), "QMGHFLBM", layer_type, warnings, i)
 
         # ── 名称字段 (不校验编码) ──
         ghytmc = str(props.get("GHYTMC", props.get("ghytmc", ""))).strip()
@@ -312,6 +334,21 @@ def ingest_landuse(
         planning_zone = dlbm_to_planning_zone(dlbm) if dlbm else ""
         primary_zone = get_primary_zone(dlbm) if dlbm else ""
 
+        # ── 编码决策 provenance ──
+        mapping_provenance = {}
+        if dlbm:
+            mapping_provenance["DLBM"] = dlbm_prov
+        if sddlbm:
+            mapping_provenance["SDDLBM"] = sddlbm_prov
+        if qmdlbm:
+            mapping_provenance["QMDLBM"] = qmdlbm_prov
+        if ghytbm:
+            mapping_provenance["GHYTBM"] = ghytbm_prov
+        if ghflbm:
+            mapping_provenance["GHFLBM"] = ghflbm_prov
+        if qmghflbm:
+            mapping_provenance["QMGHFLBM"] = qmghflbm_prov
+
         shared = dict(
             geometry=geom,
             dlbm=dlbm,
@@ -323,6 +360,7 @@ def ingest_landuse(
             zone_type=zone_type,
             planning_zone=planning_zone,
             primary_zone=primary_zone,
+            mapping_provenance=mapping_provenance,
         )
 
         extra_props = {k: v for k, v in props.items() if k.upper() not in ('BSM', 'YSDM', 'DLBM', 'DLMC', 'DLMJ', 'SHAPE_AREA', 'SHAPE_LENGTH') and k.lower() not in ('geometry',)}
