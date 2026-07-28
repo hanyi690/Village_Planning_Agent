@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.modules.schema.types.layer_registry import GisLayerTypeEntry
+from app.modules.kg.dlq import DlqCategory, DlqEntry
 
 from ..ingest import ingest_feature
 from . import AdapterResult, IngestAdapter
@@ -24,4 +25,16 @@ class FeaturesAdapter(IngestAdapter):
     ) -> AdapterResult:
         feature_type = entry.ingest.feature_type if entry.ingest else ""
         features, warnings = ingest_feature(data, feature_type)
-        return AdapterResult(features=features, warnings=warnings)
+        dlq_entries: list[DlqEntry] = []
+        clean_warnings: list[str] = []
+        for w in warnings:
+            if "geometry" in w.lower() or "invalid" in w.lower():
+                dlq_entries.append(DlqEntry(
+                    category=DlqCategory.GEOMETRY,
+                    reason=w,
+                    source_layer=feature_type,
+                    raw_feature={},
+                ))
+            else:
+                clean_warnings.append(w)
+        return AdapterResult(features=features, warnings=clean_warnings, dlq=dlq_entries)

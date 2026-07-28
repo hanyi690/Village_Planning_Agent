@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from app.modules.schema.types.layer_registry import GisLayerTypeEntry
+from app.modules.kg.dlq import DlqEntry
 
 
 @dataclass
@@ -29,7 +30,7 @@ class AdapterResult:
     """
     features: list = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    dlq: list[dict] = field(default_factory=list)
+    dlq: list[DlqEntry] = field(default_factory=list)
 
 
 @runtime_checkable
