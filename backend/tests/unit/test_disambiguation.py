@@ -1,4 +1,9 @@
-"""Tests for disambiguation models — Candidate, DisambiguationContext, DisambiguationDecision."""
+"""Tests for disambiguation models — Candidate, DisambiguationContext, DisambiguationDecision.
+
+Trimmed in V4 audit: TestCandidateEngineL2 moved to test_encoding_consistency.py
+(merges with TestCandidateEngineResolve for L0/L1/L3 paths).
+Kept: Pydantic model construction, validation, serialization round-trips.
+"""
 
 from __future__ import annotations
 
@@ -171,25 +176,3 @@ class TestResolutionNeedsLlm:
         assert loaded.kind == "llm"
         assert loaded.disambiguation_ctx is not None
         assert loaded.disambiguation_ctx["source_code"] == "05H1"
-
-
-class TestCandidateEngineL2:
-    def test_resolve_returns_needs_llm_when_multiple_survivors(self):
-        from app.modules.schema.encodings.dicts.candidate_engine import CandidateEngine
-        from app.modules.schema.encodings.dicts.expr_eval import MappingContext
-
-        engine = CandidateEngine()
-        engine._ensure_center()
-
-        ctx = MappingContext(
-            parcel_attrs={"DLBM": "05H1", "DLMC": "商服用地"},
-        )
-        resolution = engine.resolve("sddlbm", "ydyhfldm", "05H1", ctx)
-        if resolution.kind == "auto":
-            pytest.skip("Only one target survived — no L2 trigger for this configuration")
-        assert resolution.kind in ("llm", "rule"), (
-            f"Expected llm or rule, got {resolution.kind}"
-        )
-        if resolution.kind == "llm":
-            assert resolution.disambiguation_ctx is not None
-            assert len(resolution.candidates) >= 2

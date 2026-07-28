@@ -499,3 +499,113 @@ class TestCodeSetsClean:
         assert "dlbm_to_ghytbm" in center.mappings
         assert "sddlbm_to_ydyhfldm" in center.mappings
         assert "ghflbm_to_tdytfqdm" in center.mappings
+
+
+# ============================================================
+# Merged from test_kg_no_reverse_deps.py and test_schema_promotion.py
+# DLBM -> planning zone lookup tests (3 places -> 1)
+# ============================================================
+
+class TestEncodingLookups:
+    """DLBM -> planning zone / zone_type lookup functions.
+
+    Merges:
+    - test_kg_no_reverse_deps.py::test_dlbm_to_planning_zone_from_schema
+    - test_kg_no_reverse_deps.py::test_resolve_zone_type_from_schema
+    - test_schema_promotion.py::test_lookup_functions_work
+    """
+
+    def test_resolve_zone_type_for_dlbm(self):
+        """resolve_zone_type_for_dlbm works and strips whitespace."""
+        from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
+        assert resolve_zone_type_for_dlbm("0101") == "农业用地"
+        assert resolve_zone_type_for_dlbm(" 0101 ") == "农业用地"  # whitespace stripping
+
+    def test_dlbm_to_planning_zone_real_codes(self):
+        """dlbm_to_planning_zone works with real tugui codes."""
+        from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone
+        # "0210" is a real tugui code for 园地 -> 一般农业区
+        assert dlbm_to_planning_zone("0210") == "一般农业区"
+        # Unknown DLBM defaults to "一般农业区" (fallback)
+        assert dlbm_to_planning_zone("9999") == "一般农业区"
+
+    def test_lookup_functions_work_together(self):
+        """All three lookup functions produce correct results from new location."""
+        from app.modules.schema import (
+            get_zone_type_for_dlbm,
+            dlbm_to_planning_zone,
+            resolve_zone_type_for_dlbm,
+        )
+        assert get_zone_type_for_dlbm("0101") == "农业用地"
+        assert dlbm_to_planning_zone("0101") == "一般农业区"
+        assert resolve_zone_type_for_dlbm("0101") == "农业用地"
+
+
+# ============================================================
+# Merged from test_disambiguation.py::TestCandidateEngineL2
+# CandidateEngine L2 path (L0/L1/L3 already in TestCandidateEngineResolve)
+# ============================================================
+
+class TestCandidateEngineL2:
+    """CandidateEngine.resolve() L2 path: multiple survivors -> LLM."""
+
+    def test_resolve_returns_needs_llm_when_multiple_survivors(self):
+        from app.modules.schema.encodings.dicts.candidate_engine import CandidateEngine
+        from app.modules.schema.encodings.dicts.expr_eval import MappingContext
+
+        engine = CandidateEngine()
+        engine._ensure_center()
+
+        ctx = MappingContext(
+            parcel_attrs={"DLBM": "05H1", "DLMC": "商服用地"},
+        )
+        resolution = engine.resolve("sddlbm", "ydyhfldm", "05H1", ctx)
+        if resolution.kind == "auto":
+            pytest.skip("Only one target survived - no L2 trigger for this configuration")
+        assert resolution.kind in ("llm", "rule"), (
+            f"Expected llm or rule, got {resolution.kind}"
+        )
+        if resolution.kind == "llm":
+            assert resolution.disambiguation_ctx is not None
+            assert len(resolution.candidates) >= 2
+
+
+# ============================================================
+# Merged from test_parse_agent_llm.py::TestEncodingValidation
+# Encoding validation - belongs with encoding tests, not LLM integration
+# ============================================================
+
+class TestEncodingValidation:
+    """Encoding validation tests - verify GHYTBM code correctness.
+
+    Moved here from tests/integration/test_parse_agent_llm.py because these
+    are pure encoding-consistency checks, not LLM integration tests.
+    """
+
+    def test_ghytbm_codes_all_valid(self):
+        """All appendix5 GHYTBM codes should be in GHYTBM_TO_GHYTMC."""
+        from app.modules.schema import GHYTBM_TO_GHYTMC
+
+        known_codes = {
+            "1100", "1200", "1340", "1350", "1400", "1500", "1510",
+            "2100", "2121", "2122", "2123", "2124", "2125", "2126",
+            "2200", "2270", "2310", "2320", "2130", "3100", "3200",
+        }
+        for code in known_codes:
+            assert code in GHYTBM_TO_GHYTMC, f"GHYTBM code {code} not found"
+
+    def test_zone_type_coverage(self):
+        """All GHYTBM codes should have zone_type mapping."""
+        from app.modules.schema import GHYTBM_TO_ZONE_TYPE, GHYTBM_TO_GHYTMC
+
+        for code in GHYTBM_TO_GHYTMC:
+            zone = GHYTBM_TO_ZONE_TYPE.get(code, "")
+            assert zone, f"GHYTBM {code} ({GHYTBM_TO_GHYTMC[code]}) has no zone_type"
+
+    def test_vne_coverage(self):
+        """All GHYTBM codes should have VNE mapping."""
+        from app.modules.schema import GHYTBM_TO_VNE, GHYTBM_TO_GHYTMC
+
+        for code in GHYTBM_TO_GHYTMC:
+            vne = GHYTBM_TO_VNE.get(code, "")
+            assert vne, f"GHYTBM {code} ({GHYTBM_TO_GHYTMC[code]}) has no VNE code"

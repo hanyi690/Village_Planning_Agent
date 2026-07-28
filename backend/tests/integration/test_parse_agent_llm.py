@@ -429,35 +429,3 @@ class TestParseNodesLLM:
         # At least residential and farmland should work
         assert lookup_land_use_code.invoke({"land_use_name": "宅基地"})["success"]
         assert lookup_land_use_code.invoke({"land_use_name": "耕地"})["success"]
-
-
-class TestEncodingValidation:
-    """Encoding validation tests — verify GHYTBM code correctness."""
-
-    def test_ghytbm_codes_all_valid(self):
-        """All appendix5 GHYTBM codes should be in GHYTBM_TO_GHYTMC."""
-        from app.modules.schema import GHYTBM_TO_GHYTMC
-
-        known_codes = {
-            "1100", "1200", "1340", "1350", "1400", "1500", "1510",
-            "2100", "2121", "2122", "2123", "2124", "2125", "2126",
-            "2200", "2270", "2310", "2320", "2130", "3100", "3200",
-        }
-        for code in known_codes:
-            assert code in GHYTBM_TO_GHYTMC, f"GHYTBM code {code} not found"
-
-    def test_zone_type_coverage(self):
-        """All GHYTBM codes should have zone_type mapping."""
-        from app.modules.schema import GHYTBM_TO_ZONE_TYPE, GHYTBM_TO_GHYTMC
-
-        for code in GHYTBM_TO_GHYTMC:
-            zone = GHYTBM_TO_ZONE_TYPE.get(code, "")
-            assert zone, f"GHYTBM {code} ({GHYTBM_TO_GHYTMC[code]}) has no zone_type"
-
-    def test_vne_coverage(self):
-        """All GHYTBM codes should have VNE mapping."""
-        from app.modules.schema import GHYTBM_TO_VNE, GHYTBM_TO_GHYTMC
-
-        for code in GHYTBM_TO_GHYTMC:
-            vne = GHYTBM_TO_VNE.get(code, "")
-            assert vne, f"GHYTBM {code} ({GHYTBM_TO_GHYTMC[code]}) has no VNE code"

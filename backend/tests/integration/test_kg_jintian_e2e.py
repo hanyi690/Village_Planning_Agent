@@ -908,63 +908,8 @@ class TestIntentInjectionIsolated:
 
 
 # ── Part 8: Static structure verification ───────────────────────────
-
-
-class TestKGStaticStructure:
-    """Verify KG module has no forbidden imports."""
-
-    def test_no_shapely_in_kg(self):
-        """KG module must not import shapely."""
-        kg_dir = Path(_BACKEND_DIR) / "app" / "modules" / "kg"
-        import re
-        pattern = re.compile(r'^\s*(from|import)\s+.*(shapely|geopandas)')
-        violations = []
-        for f in kg_dir.rglob("*.py"):
-            if "__pycache__" in str(f):
-                continue
-            with open(f, "r", encoding="utf-8") as fh:
-                for lineno, line in enumerate(fh, 1):
-                    if pattern.match(line):
-                        violations.append(f"{f.name}:{lineno}: {line.strip()}")
-        assert violations == [], f"KG has forbidden geometry imports:\n" + "\n".join(violations)
-
-    def test_no_reverse_deps_in_kg(self):
-        """KG must not import from app.tools or app.agent."""
-        kg_dir = Path(_BACKEND_DIR) / "app" / "modules" / "kg"
-        import re
-        pattern = re.compile(r'^\s*from app\.(tools|agent)')
-        violations = []
-        for f in kg_dir.rglob("*.py"):
-            if "__pycache__" in str(f):
-                continue
-            with open(f, "r", encoding="utf-8") as fh:
-                for lineno, line in enumerate(fh, 1):
-                    if pattern.match(line):
-                        violations.append(f"{f.name}:{lineno}: {line.strip()}")
-        assert violations == [], f"KG has reverse deps:\n" + "\n".join(violations)
-
-    def test_no_data_layer_imports_in_kg(self):
-        """KG must not import from app.modules.data (P1: no upward deps)."""
-        kg_dir = Path(_BACKEND_DIR) / "app" / "modules" / "kg"
-        import re
-        pattern = re.compile(r'^\s*from app\.modules\.data')
-        violations = []
-        for f in kg_dir.rglob("*.py"):
-            if "__pycache__" in str(f):
-                continue
-            with open(f, "r", encoding="utf-8") as fh:
-                for lineno, line in enumerate(fh, 1):
-                    if pattern.match(line):
-                        violations.append(f"{f.name}:{lineno}: {line.strip()}")
-        assert violations == [], f"KG imports from data layer:\n" + "\n".join(violations)
-
-    def test_builder_subpackage_has_six_files(self):
-        """builder/ subpackage has the 7 expected files (registry.py added in Phase 6)."""
-        builder_dir = Path(_BACKEND_DIR) / "app" / "modules" / "kg" / "builder"
-        expected = {"__init__.py", "base.py", "layer1.py", "layer2.py",
-                    "layer3.py", "layer4.py", "mixins.py", "registry.py"}
-        actual = {f.name for f in builder_dir.glob("*.py")}
-        assert expected.issubset(actual), f"Missing: {expected - actual}"
+# (REMOVED in V4 audit - moved to tests/unit/test_architecture_invariants.py
+#  as parameterized reverse-dependency scanner)
 
 
 # ── Part 9: SpatialCognitiveUnit hierarchy verification ─────────────
