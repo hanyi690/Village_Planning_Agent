@@ -10,6 +10,8 @@ semantic-enrichment triples (taxonomic_parent/legal_constraint/allowed_operation
 from typing import Any, Dict, List
 
 from rdflib import Literal, RDF, URIRef
+
+from .registry import kg_builder, BuildContext
 from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
@@ -318,18 +320,9 @@ def _add_parcels(self, parcels) -> None:
         self._parcel_count += 1
 
 
-def _add_water_bodies(self, water_bodies, water_overlap=None) -> None:
-    """Create WaterBody entities from water polygons, deduplicating against DLBM=3100 parcels.
-
-    Args:
-        water_bodies: List of water feature objects (polygons or lines).
-        water_overlap: Dict mapping water_feature_id -> [covered_bsm, ...],
-            computed by spatial_ops.bridge.compute_water_overlap().
-            Water polygons that completely cover a 3100 parcel are linked
-            via derived_from instead of creating duplicate geometry.
-    """
-    if water_overlap is None:
-        water_overlap = {}
+@kg_builder("water", entity_type="WaterBody")
+def _add_water_bodies(self, features, *, gis_type_ref: str, entry, ctx: BuildContext) -> dict:
+    water_overlap = ctx.provenance.get("water_overlap", {})
     covered_bsms = set()
     for bsm_list in water_overlap.values():
         for b in bsm_list:
@@ -343,7 +336,7 @@ def _add_water_bodies(self, water_bodies, water_overlap=None) -> None:
         self.g.add((uri, has_semantic_label, Literal("水域")))
 
     count = 0
-    for i, w in enumerate(water_bodies):
+    for i, w in enumerate(features):
         bsm = str(getattr(w, "bsm", "")).strip()
         ysdm = str(getattr(w, "ysdm", "")).strip()
         wid = bsm or f"water_poly_{i}"
@@ -394,6 +387,7 @@ def _add_water_bodies(self, water_bodies, water_overlap=None) -> None:
 
     if count:
         logger.info("Added %d water bodies (overlap: %d covered parcels)", count, len(covered_bsms))
+    return {"count": count, "entity_type": "WaterBody"}
 
 
 def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
@@ -566,9 +560,10 @@ def add_annotations(self, annotations: list):
     return self
 
 
-def add_roads(self, roads: list):
+@kg_builder("current_road", entity_type="Road")
+def add_roads(self, features, *, gis_type_ref: str, entry, ctx: BuildContext) -> dict:
     count = 0
-    for road in roads:
+    for road in features:
         bsm = str(getattr(road, "bsm", "")).strip()
         ysdm = str(getattr(road, "ysdm", "")).strip()
         if bsm:
@@ -592,7 +587,7 @@ def add_roads(self, roads: list):
         count += 1
     if count:
         logger.info("Added %d roads", count)
-    return self
+    return {"count": count, "entity_type": "Road"}
 
 
 def add_terrain(self, terrain_analysis=None):
@@ -933,10 +928,11 @@ def _add_protection_polygons(self, polygons_layer) -> None:
         logger.info("Added %d protection polygons", count)
 
 
-def _add_buildings(self, buildings) -> None:
+@kg_builder("current_building", entity_type="Building")
+def _add_buildings(self, features, *, gis_type_ref: str, entry, ctx: BuildContext) -> dict:
     """Create Facility entities from bundle.points.buildings."""
     count = 0
-    for i, b in enumerate(buildings):
+    for i, b in enumerate(features):
         bsm = str(getattr(b, "bsm", "")).strip()
         ysdm = str(getattr(b, "ysdm", "")).strip()
         name = getattr(b, "name", "") or f"建筑_{bsm or i}"
@@ -962,6 +958,7 @@ def _add_buildings(self, buildings) -> None:
         count += 1
     if count:
         logger.info("Added %d buildings", count)
+    return {"count": count, "entity_type": "Building"}
 
 
 def _add_terrain_entities(self, lines_layer, points_layer) -> None:
