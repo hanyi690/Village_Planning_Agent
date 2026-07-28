@@ -229,11 +229,11 @@ def _add_parcels(self, parcels) -> None:
     from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
     bsm_seq: dict = {}  # Track sequence per BSM for duplicate disambiguation
     for p in parcels:
-        bsm = str(getattr(p, "bsm", "")).strip()
-        dlbm = str(getattr(p, "dlbm", "")).strip()
+        bsm = str(p.bsm).strip()
+        dlbm = str(p.dlbm).strip()
         if not bsm:
             continue
-        area = getattr(p, "area_sqm", 0) or 0
+        area = p.area_sqm or 0
         seq = bsm_seq.get(bsm, 0)
         pu = EntityIdPolicy.uri_with_seq("parcel", bsm, seq)
         bsm_seq[bsm] = seq + 1
@@ -244,17 +244,17 @@ def _add_parcels(self, parcels) -> None:
         self.g.add((pu, PLN.area_sqm, Literal(area, datatype=XSD.double)))
         self.g.add((pu, PLN.area_ha, Literal(area / 10000, datatype=XSD.double)))
 
-        # Raw bundle attributes — faithful storage, not derived
-        dlmc = getattr(p, "name", "") or ""
+        # Raw bundle attributes - faithful storage, not derived
+        dlmc = p.name or ""
         if dlmc:
             self.g.add((pu, PLN.dlmc, Literal(dlmc)))
-        sddlbm = getattr(p, "sddlbm", "") or ""
+        sddlbm = p.sddlbm or ""
         if sddlbm:
             self.g.add((pu, PLN.sddlbm, Literal(sddlbm)))
-        ysdm = getattr(p, "ysdm", "") or ""
+        ysdm = p.ysdm or ""
         if ysdm:
             self.g.add((pu, PLN.ysdm, Literal(ysdm)))
-        dlbm_system = str(getattr(p, "dlbm_system", "") or "")
+        dlbm_system = str(p.dlbm_system or "")
         if dlbm_system:
             self.g.add((pu, PLN.dlbm_system, Literal(dlbm_system)))
 
@@ -263,10 +263,10 @@ def _add_parcels(self, parcels) -> None:
         self.g.add((pu, PLN.current_zone_type, Literal(zt)))
 
         # planning_zone / primary_zone — from Data layer ingest
-        pz = getattr(p, "planning_zone", "") or ""
+        pz = p.planning_zone or ""
         if pz:
             self.g.add((pu, PLN.planning_zone, Literal(pz)))
-        prz = getattr(p, "primary_zone", "") or ""
+        prz = p.primary_zone or ""
         if prz:
             self.g.add((pu, PLN.primary_zone, Literal(prz)))
 
@@ -299,7 +299,7 @@ def _add_parcels(self, parcels) -> None:
 
         # Centroid
         try:
-            geo = getattr(p, "geometry", None)
+            geo = p.geometry
             if geo and isinstance(geo, dict):
                 gtype = geo.get("type", "")
                 coords = geo.get("coordinates", None)
@@ -320,10 +320,10 @@ def _add_parcels(self, parcels) -> None:
 
         self.g.add((pu, Relations.sfWithin, PLN.village))
         self._parcel_count += 1
-        self._add_wkt_geometry(pu, getattr(p, "geometry", {}))
+        self._add_wkt_geometry(pu, p.geometry)
 
         # ── v4.9: Encoding decision provenance ──
-        mapping_prov = getattr(p, "mapping_provenance", None) or {}
+        mapping_prov = p.mapping_provenance or {}
         for field_name, prov in mapping_prov.items():
             if not isinstance(prov, dict):
                 continue
@@ -358,13 +358,13 @@ def _add_water_bodies(self, features, *, gtype_ref: str, entry, ctx: BuildContex
 
     count = 0
     for i, w in enumerate(features):
-        bsm = str(getattr(w, "bsm", "")).strip()
-        ysdm = str(getattr(w, "ysdm", "")).strip()
+        bsm = str(w.bsm).strip()
+        ysdm = str(w.ysdm).strip()
         wid = bsm or f"water_poly_{i}"
 
         # Check if this water feature completely covers a 3100 parcel
         covered = water_overlap.get(wid, []) or water_overlap.get(bsm, [])
-        geom = getattr(w, "geometry", {})
+        geom = w.geometry
         is_line = isinstance(geom, dict) and geom.get("type") in ("LineString", "MultiLineString")
 
         if is_line:
@@ -372,7 +372,7 @@ def _add_water_bodies(self, features, *, gtype_ref: str, entry, ctx: BuildContex
             uri = EntityIdPolicy.uri("water_line", bsm or str(i) or f"line_{i}")
             EntityIdPolicy.attach_bsm(self.g, uri, bsm)
             self.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = getattr(w, "name", "") or f"溪流_{bsm or i}"
+            name = w.water_name or f"溪流_{bsm or i}"
             self.g.add((uri, PLN.name, Literal(name)))
             self.g.add((uri, PLN.water_type, Literal("河流")))
             self.g.add((uri, Relations.sfWithin, PLN.village))
@@ -384,9 +384,9 @@ def _add_water_bodies(self, features, *, gtype_ref: str, entry, ctx: BuildContex
             uri = EntityIdPolicy.uri("water", bsm or f"overlap_{i}")
             EntityIdPolicy.attach_bsm(self.g, uri, bsm)
             self.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = getattr(w, "name", "") or f"水体_{bsm or i}"
+            name = w.water_name or f"水体_{bsm or i}"
             self.g.add((uri, PLN.name, Literal(name)))
-            self.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
+            self.g.add((uri, PLN.water_type, Literal(w.water_type or "水域")))
             self.g.add((uri, Relations.sfWithin, PLN.village))
             for cbsm in covered:
                 for s in self.g.subjects(PLN.bsm, Literal(cbsm)):
@@ -399,9 +399,9 @@ def _add_water_bodies(self, features, *, gtype_ref: str, entry, ctx: BuildContex
             uri = EntityIdPolicy.uri("water", bsm or f"indep_{i}")
             EntityIdPolicy.attach_bsm(self.g, uri, bsm)
             self.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = getattr(w, "name", "") or f"水体_{bsm or i}"
+            name = w.water_name or f"水体_{bsm or i}"
             self.g.add((uri, PLN.name, Literal(name)))
-            self.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
+            self.g.add((uri, PLN.water_type, Literal(w.water_type or "水域")))
             self.g.add((uri, Relations.sfWithin, PLN.village))
             _add_water_dims(uri, is_line_geom=False)
             count += 1
@@ -414,9 +414,9 @@ def _add_water_bodies(self, features, *, gtype_ref: str, entry, ctx: BuildContex
 def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
     count = 0
     for p in getattr(points_layer, "hazard_points", []):
-        bsm = str(getattr(p, "bsm", "")).strip()
-        ysdm = str(getattr(p, "ysdm", "")).strip()
-        name = getattr(p, "name", f"hazard_{count}")
+        bsm = str(p.bsm).strip()
+        ysdm = str(p.ysdm).strip()
+        name = p.name or f"hazard_{count}"
         if bsm:
             uri = EntityIdPolicy.uri("hazard", bsm)
         else:
@@ -434,8 +434,8 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
             self.g.add((uri, has_semantic_label, Literal(str(name))))
         count += 1
     for item in getattr(polygons_layer, "hazard_control_lines", []):
-        bsm = str(getattr(item, "bsm", "")).strip()
-        ysdm = str(getattr(item, "ysdm", "")).strip()
+        bsm = str(item.bsm).strip()
+        ysdm = str(item.ysdm).strip()
         if bsm:
             uri = EntityIdPolicy.uri("hazard_line", bsm)
         else:
@@ -450,8 +450,8 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         self.g.add((uri, semantic_group, Literal("hazard")))
         count += 1
     for item in getattr(polygons_layer, "flood_control_lines", []):
-        bsm = str(getattr(item, "bsm", "")).strip()
-        ysdm = str(getattr(item, "ysdm", "")).strip()
+        bsm = str(item.bsm).strip()
+        ysdm = str(item.ysdm).strip()
         if bsm:
             uri = EntityIdPolicy.uri("flood_line", bsm)
         else:
@@ -466,8 +466,8 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         self.g.add((uri, semantic_group, Literal("hazard")))
         count += 1
     for item in getattr(polygons_layer, "construction_zone", []):
-        bsm = str(getattr(item, "bsm", "")).strip()
-        ysdm = str(getattr(item, "ysdm", "")).strip()
+        bsm = str(item.bsm).strip()
+        ysdm = str(item.ysdm).strip()
         if bsm:
             uri = EntityIdPolicy.uri("zone_conditional", bsm)
         else:
@@ -490,9 +490,9 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
 def _add_planning_elements_from_typed(self, polygons_layer) -> None:
     count = 0
     for z in getattr(polygons_layer, "land_use_zones", []):
-        bsm = str(getattr(z, "bsm", "")).strip()
-        ysdm = str(getattr(z, "ysdm", "")).strip()
-        code = getattr(z, "ysdm", getattr(z, "dlbm", ""))
+        bsm = str(z.bsm).strip()
+        ysdm = str(z.ysdm).strip()
+        code = ysdm or getattr(z, "dlbm", "")  # getattr intentional: dlbm not on LandUseZone
         if bsm:
             uri = EntityIdPolicy.uri("tdyt", bsm)
         else:
@@ -507,8 +507,8 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
         self.g.add((uri, semantic_group, Literal("protection")))
         count += 1
     for item in getattr(polygons_layer, "construction_ctrl_zones", []):
-        bsm = str(getattr(item, "bsm", "")).strip()
-        ysdm = str(getattr(item, "ysdm", "")).strip()
+        bsm = str(item.bsm).strip()
+        ysdm = str(item.ysdm).strip()
         if bsm:
             uri = EntityIdPolicy.uri("zone_jsydgzq", bsm)
         else:
@@ -534,11 +534,11 @@ def add_annotations(self, annotations: list):
     from app.modules.schema.types.spatial_types import CurrentFacility
     fc, vc = 0, 0
     for ann in annotations:
-        cat = getattr(ann, "category", "")
+        cat = ann.category
         if cat == "村名":
-            text = getattr(ann, "text", "")
-            bsm = str(getattr(ann, "bsm", "")).strip()
-            ysdm = str(getattr(ann, "ysdm", "")).strip()
+            text = ann.text
+            bsm = str(ann.bsm).strip()
+            ysdm = str(ann.ysdm).strip()
             if text and hasattr(ann, "geometry"):
                 coords = ann.geometry.get("coordinates", [0, 0])
                 if bsm:
@@ -558,8 +558,8 @@ def add_annotations(self, annotations: list):
             ) if ann.model_extra else None
             if facility is None:
                 continue
-            bsm = str(getattr(facility, "bsm", "")).strip()
-            ysdm = str(getattr(facility, "ysdm", "")).strip()
+            bsm = str(facility.bsm).strip()
+            ysdm = str(facility.ysdm).strip()
             if bsm:
                 fac_uri = EntityIdPolicy.uri("facility", bsm)
             else:
@@ -572,7 +572,7 @@ def add_annotations(self, annotations: list):
                 coords = facility.geometry.get("coordinates", [0, 0])
                 self.g.add((fac_uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
                 self.g.add((fac_uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
-            self.g.add((fac_uri, Relations.serves, Literal(getattr(facility, "category", "") or "public_service")))
+            self.g.add((fac_uri, Relations.serves, Literal(facility.category or "public_service")))
             self.g.add((fac_uri, Relations.sfWithin, PLN.village))
             self.g.add((PLN.village, PLN.has_facility, fac_uri))
             fc += 1
@@ -585,20 +585,20 @@ def add_annotations(self, annotations: list):
 def add_roads(self, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict:
     count = 0
     for road in features:
-        bsm = str(getattr(road, "bsm", "")).strip()
-        ysdm = str(getattr(road, "ysdm", "")).strip()
+        bsm = str(road.bsm).strip()
+        ysdm = str(road.ysdm).strip()
         if bsm:
             uri = EntityIdPolicy.uri("road", bsm)
         else:
             uri = EntityIdPolicy.fallback_uri("road", ysdm, count)
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Road))
-        name = getattr(road, "name", "") or f"道路_{bsm or count}"
+        name = road.road_name or f"道路_{bsm or count}"
         self.g.add((uri, PLN.name, Literal(name)))
-        length = getattr(road, "shape_length", 0.0) or 0.0
+        length = road.shape_length or 0.0
         if length:
             self.g.add((uri, PLN.length, Literal(length, datatype=XSD.double)))
-        self.g.add((uri, PLN.road_level, Literal(getattr(road, "road_level", "") or "村道")))
+        self.g.add((uri, PLN.road_level, Literal(road.road_level or "村道")))
         self.g.add((uri, Relations.sfWithin, PLN.village))
         self.g.add((PLN.village, Relations.connects, uri))
         # ── v4.8: three-dimension predicates ──
@@ -606,7 +606,7 @@ def add_roads(self, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE)))
         self.g.add((uri, semantic_group, Literal("transport")))
         count += 1
-        self._add_wkt_geometry(uri, getattr(road, "geometry", {}))
+        self._add_wkt_geometry(uri, road.geometry)
     if count:
         logger.info("Added %d roads", count)
     return {"count": count, "entity_type": "Road"}
@@ -696,11 +696,11 @@ def _add_residential_clusters_from_typed(self, parcels, annotations=None) -> Non
     for p in parcels:
         if not isinstance(p, CurrentLandUseParcel):
             continue
-        dlbm = getattr(p, "dlbm", "") or ""
+        dlbm = p.dlbm or ""
         if dlbm not in residential_codes:
             continue
-        p_geom = getattr(p, "geometry", None)
-        p_bsm = getattr(p, "bsm", "")
+        p_geom = p.geometry
+        p_bsm = p.bsm
         if not p_geom or not p_bsm:
             continue
         c = _parcel_centroid(p_geom)
@@ -813,9 +813,9 @@ def _add_facilities_from_typed(self, facilities) -> None:
     for f in facilities:
         if not isinstance(f, CurrentFacility):
             continue
-        name = getattr(f, 'facility_name', '') or f"facility_{count}"
-        bsm = str(getattr(f, 'bsm', '')).strip()
-        ysdm = str(getattr(f, 'ysdm', '')).strip()
+        name = f.facility_name or f"facility_{count}"
+        bsm = str(f.bsm).strip()
+        ysdm = str(f.ysdm).strip()
         if bsm:
             uri = EntityIdPolicy.uri("facility", bsm)
         else:
@@ -823,9 +823,9 @@ def _add_facilities_from_typed(self, facilities) -> None:
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Facility))
         self.g.add((uri, PLN.name, Literal(name)))
-        ftype = getattr(f, 'facility_type', '') or '公共服务'
+        ftype = f.facility_type or '公共服务'
         self.g.add((uri, PLN.facility_type, Literal(ftype)))
-        geom = getattr(f, 'geometry', {}) or {}
+        geom = f.geometry or {}
         coords = geom.get('coordinates', [0, 0]) if isinstance(geom, dict) else [0, 0]
         if isinstance(coords, (list, tuple)) and len(coords) >= 2:
             self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
@@ -868,12 +868,12 @@ def _add_facilities_from_annotations(self, annotations) -> None:
     """
     count = 0
     for i, ann in enumerate(annotations):
-        cat = getattr(ann, "category", "") or ""
+        cat = ann.category or ""
         if cat != "现状设施点":
             continue
 
-        text = getattr(ann, "text", "") or ""
-        geom = getattr(ann, "geometry", None)
+        text = ann.text or ""
+        geom = ann.geometry
         if not geom or not isinstance(geom, dict):
             continue
         coords = geom.get("coordinates", [])
@@ -926,8 +926,8 @@ def _add_protection_polygons(self, polygons_layer) -> None:
 
     for attr_name, label, ltype, constraint in protection_groups:
         for item in getattr(polygons_layer, attr_name, []):
-            bsm = str(getattr(item, "bsm", "")).strip()
-            ysdm = str(getattr(item, "ysdm", "")).strip()
+            bsm = str(item.bsm).strip()
+            ysdm = str(item.ysdm).strip()
             if bsm:
                 uri = EntityIdPolicy.uri(attr_name, bsm)
             else:
@@ -955,9 +955,9 @@ def _add_buildings(self, features, *, gtype_ref: str, entry, ctx: BuildContext) 
     """Create Facility entities from bundle.points.buildings."""
     count = 0
     for i, b in enumerate(features):
-        bsm = str(getattr(b, "bsm", "")).strip()
-        ysdm = str(getattr(b, "ysdm", "")).strip()
-        name = getattr(b, "name", "") or f"建筑_{bsm or i}"
+        bsm = str(b.bsm).strip()
+        ysdm = str(b.ysdm).strip()
+        name = f"建筑_{bsm or i}"
         if bsm:
             uri = EntityIdPolicy.uri("building", bsm)
         else:
@@ -966,7 +966,7 @@ def _add_buildings(self, features, *, gtype_ref: str, entry, ctx: BuildContext) 
         self.g.add((uri, RDF.type, EntityTypes.Facility))
         self.g.add((uri, PLN.name, Literal(name)))
         self.g.add((uri, PLN.facility_type, Literal("建筑")))
-        geom = getattr(b, "geometry", {}) or {}
+        geom = b.geometry or {}
         coords = geom.get("coordinates", [0, 0]) if isinstance(geom, dict) else [0, 0]
         if isinstance(coords, (list, tuple)) and len(coords) >= 2:
             self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
@@ -988,9 +988,9 @@ def _add_terrain_entities(self, lines_layer, points_layer) -> None:
     count = 0
     # Contour lines
     for i, c in enumerate(lines_layer.get("contour_lines") if hasattr(lines_layer, "get") else []):
-        bsm = str(getattr(c, "bsm", "")).strip()
-        ysdm = str(getattr(c, "ysdm", "")).strip()
-        elev = getattr(c, "elevation", "") or ""
+        bsm = str(c.bsm).strip()
+        ysdm = str(c.ysdm).strip()
+        elev = c.elevation or ""
         if bsm:
             uri = EntityIdPolicy.uri("contour", bsm)
         else:
@@ -1009,10 +1009,10 @@ def _add_terrain_entities(self, lines_layer, points_layer) -> None:
 
     # Elevation points
     for i, ep in enumerate(getattr(points_layer, "elevation_points", [])):
-        bsm = str(getattr(ep, "bsm", "")).strip()
-        ysdm = str(getattr(ep, "ysdm", "")).strip()
-        elev = getattr(ep, "elevation", "") or getattr(ep, "height", "") or ""
-        geom = getattr(ep, "geometry", {}) or {}
+        bsm = str(ep.bsm).strip()
+        ysdm = str(ep.ysdm).strip()
+        elev = ep.elevation or getattr(ep, "height", "") or ""  # getattr intentional: height not on ElevationPoint
+        geom = ep.geometry or {}
         coords = geom.get("coordinates", [0, 0]) if isinstance(geom, dict) else [0, 0]
         if bsm:
             uri = EntityIdPolicy.uri("elevpt", bsm)
@@ -1042,9 +1042,9 @@ def _add_boundaries(self, polygons_layer, lines_layer) -> None:
     count = 0
     # Admin areas (polygon)
     for i, a in enumerate(polygons_layer.get("admin_areas") if hasattr(polygons_layer, "get") else []):
-        bsm = str(getattr(a, "bsm", "")).strip()
-        ysdm = str(getattr(a, "ysdm", "")).strip()
-        name = getattr(a, "name", "") or f"行政区_{bsm or i}"
+        bsm = str(a.bsm).strip()
+        ysdm = str(a.ysdm).strip()
+        name = f"行政区_{bsm or i}"
         if bsm:
             uri = EntityIdPolicy.uri("admin", bsm)
         else:
@@ -1061,7 +1061,7 @@ def _add_boundaries(self, polygons_layer, lines_layer) -> None:
 
     # Planning scope (polygon) - emit as entity, not just flag
     for i, ps in enumerate(polygons_layer.get("planning_scope") if hasattr(polygons_layer, "get") else []):
-        bsm = str(getattr(ps, "bsm", "")).strip()
+        bsm = str(ps.bsm).strip()
         if bsm:
             uri = EntityIdPolicy.uri("scope", bsm)
         else:
@@ -1079,8 +1079,8 @@ def _add_boundaries(self, polygons_layer, lines_layer) -> None:
 
     # Admin boundary lines
     for i, bl in enumerate(getattr(lines_layer, "admin_boundaries", [])):
-        bsm = str(getattr(bl, "bsm", "")).strip()
-        ysdm = str(getattr(bl, "ysdm", "")).strip()
+        bsm = str(bl.bsm).strip()
+        ysdm = str(bl.ysdm).strip()
         if bsm:
             uri = EntityIdPolicy.uri("adminline", bsm)
         else:
@@ -1110,8 +1110,8 @@ def _add_natural_resource_zones(self, polygons_layer) -> None:
     ]
     for attr_name, label, ltype in nr_groups:
         for i, item in enumerate(getattr(polygons_layer, attr_name, [])):
-            bsm = str(getattr(item, "bsm", "")).strip()
-            ysdm = str(getattr(item, "ysdm", "")).strip()
+            bsm = str(item.bsm).strip()
+            ysdm = str(item.ysdm).strip()
             if bsm:
                 uri = EntityIdPolicy.uri(attr_name, bsm)
             else:

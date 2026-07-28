@@ -363,7 +363,7 @@ class DataCatalog:
             from app.modules.schema.types.spatial_types import WaterFeature
             generated = 0
             for p in bundle.polygons.get("landuse_current"):
-                dlbm = getattr(p, "dlbm", "") or ""
+                dlbm = p.dlbm or ""
                 if dlbm.startswith("31"):
                     wf = WaterFeature(
                         geometry=p.geometry,
@@ -377,7 +377,7 @@ class DataCatalog:
                             "3104": "坑塘",
                             "3105": "沟渠",
                         }.get(dlbm[:4], "坑塘"),
-                        water_name=getattr(p, "name") or "",
+                        water_name=p.name or "",
                     )
                     bundle.add(wf)
                     generated += 1

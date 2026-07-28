@@ -47,17 +47,17 @@ def _build_rtree(parcels):
     rows = []
     bsm_to_attrs = {}
     for p in parcels:
-        bsm = str(getattr(p, "bsm", "")).strip()
-        dlbm = str(getattr(p, "dlbm", "")).strip()
-        geom = getattr(p, "geometry", None)
+        bsm = str(p.bsm).strip()
+        dlbm = str(p.dlbm).strip()
+        geom = p.geometry
         if not bsm or geom is None:
             continue
         try:
             s = shape(geom)
             if s.is_empty:
                 continue
-            area_sqm = getattr(p, "area_sqm", 0) or 0
-            zt = getattr(p, "zone_type", "")
+            area_sqm = p.area_sqm or 0
+            zt = p.zone_type
             rows.append({"bsm": bsm, "geometry": s})
             bsm_to_attrs[bsm] = {
                 "dlbm": dlbm,
@@ -405,8 +405,8 @@ def build_constraint_index(bundle) -> Optional[ConstraintIndex]:
 
     for ctype, items in constraint_groups:
         for item in items:
-            bsm = str(getattr(item, "bsm", "")).strip()
-            geom = getattr(item, "geometry", None)
+            bsm = str(item.bsm).strip()
+            geom = item.geometry
             if geom is None:
                 continue
             try:
@@ -452,11 +452,11 @@ def compute_water_overlap(water_polygons, landuse_parcels, dlbm_filter="3100"):
     # Build landuse index for DLBM=3100 parcels
     water_parcels = []
     for p in landuse_parcels:
-        dlbm = str(getattr(p, "dlbm", "")).strip()
+        dlbm = str(p.dlbm).strip()
         if dlbm != dlbm_filter:
             continue
-        bsm = str(getattr(p, "bsm", "")).strip()
-        geom = getattr(p, "geometry", None)
+        bsm = str(p.bsm).strip()
+        geom = p.geometry
         if not bsm or geom is None:
             continue
         try:
@@ -476,7 +476,7 @@ def compute_water_overlap(water_polygons, landuse_parcels, dlbm_filter="3100"):
     # For each water polygon, check which parcels it completely covers
     overlap_map = {}
     for i, wp in enumerate(water_polygons):
-        geom = getattr(wp, "geometry", None) if not isinstance(wp, dict) else wp.get("geometry")
+        geom = wp.geometry if not isinstance(wp, dict) else wp.get("geometry")
         if geom is None:
             continue
         try:
@@ -495,7 +495,7 @@ def compute_water_overlap(water_polygons, landuse_parcels, dlbm_filter="3100"):
                     covered_bsms.append(parcel_gdf_metric.iloc[j]["bsm"])
 
             if covered_bsms:
-                wid = str(getattr(wp, "bsm", "")) or str(getattr(wp, "name", "")) or f"water_poly_{i}"
+                wid = str(wp.bsm) or str(wp.water_name) or f"water_poly_{i}"
                 overlap_map[wid] = covered_bsms
         except Exception:
             continue
@@ -561,7 +561,7 @@ def _collect_entities(bundle, layer_defs, geom_field="geometry"):
             geom = getattr(item, geom_field, None)
             if geom is None:
                 continue
-            bsm = str(getattr(item, "bsm", "")).strip()
+            bsm = str(item.bsm).strip()
             if not bsm:
                 continue
             try:

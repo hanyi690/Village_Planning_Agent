@@ -179,14 +179,14 @@ def _build_landuse_dist(bundle: VillageBundle) -> ContextBlock:
         lambda: {"count": 0, "area_ha": 0.0, "zone_type": ""}
     )
     for p in parcels:
-        dlbm = str(getattr(p, "dlbm", "")).strip()
+        dlbm = str(p.dlbm).strip()
         if not dlbm:
             continue
         groups[dlbm]["count"] += 1
-        area = getattr(p, "area_ha", 0.0) or (getattr(p, "area_sqm", 0.0) / 10000)
+        area = p.area_sqm / 10000.0
         groups[dlbm]["area_ha"] += area
         if not groups[dlbm]["zone_type"]:
-            groups[dlbm]["zone_type"] = getattr(p, "zone_type", "")
+            groups[dlbm]["zone_type"] = p.zone_type
 
     # Enrich with encoding names
     try:
@@ -249,16 +249,16 @@ def _build_residential_clusters(bundle: VillageBundle) -> ContextBlock:
         dlbms = []
         bsms = []
         for p in parcels:
-            dlbm = str(getattr(p, "dlbm", "")).strip()
+            dlbm = str(p.dlbm).strip()
             if dlbm not in _RESIDENTIAL_DLBMS:
                 continue
-            geom = getattr(p, "geometry", None)
+            geom = p.geometry
             if geom is None:
                 continue
             try:
                 geoms.append(shape(geom))
                 dlbms.append(dlbm)
-                bsms.append(str(getattr(p, "bsm", "")).strip())
+                bsms.append(str(p.bsm).strip())
             except Exception:
                 continue
 
@@ -376,7 +376,7 @@ def _build_residential_clusters(bundle: VillageBundle) -> ContextBlock:
                 continue
             # Find nearby parcels
             nearby_ids = _find_parcels_near_point(
-                [p for p in parcels if str(getattr(p, "dlbm", "")).strip() in _RESIDENTIAL_DLBMS],
+                [p for p in parcels if str(p.dlbm).strip() in _RESIDENTIAL_DLBMS],
                 ann_v.center,
                 radius_m=200,
             )
@@ -537,9 +537,9 @@ def _build_facilities(bundle: VillageBundle) -> ContextBlock:
 
     # Current facilities (typed FacilityAnchor data)
     for f in bundle.points.get("facilities_current"):
-        name = getattr(f, "name", "") or getattr(f, "facility_name", "")
-        ftype = getattr(f, "facility_type", "")
-        geom = getattr(f, "geometry", None)
+        name = f.facility_name
+        ftype = f.facility_type
+        geom = f.geometry
         center = [0.0, 0.0]
         if geom and isinstance(geom, dict):
             coords = geom.get("coordinates", [0, 0])
@@ -552,14 +552,14 @@ def _build_facilities(bundle: VillageBundle) -> ContextBlock:
 
     # Annotation-based facility extraction
     for a in bundle.points.get("annotations_current"):
-        category = getattr(a, "category", "")
+        category = a.category
         if category != "现状设施点":
             continue
-        text = getattr(a, "text", "")
+        text = a.text
         if not text:
             continue
         facility_type = ANNOTATION_LABEL_TYPE_MAP.get(text, "公共服务")
-        geom = getattr(a, "geometry", None)
+        geom = a.geometry
         center = [0.0, 0.0]
         if geom and isinstance(geom, dict):
             coords = geom.get("coordinates", [0, 0])
@@ -654,13 +654,13 @@ def _extract_annotation_villages_from_typed(
     """
     anchors: List[ResidentialClusterAnchor] = []
     for a in annotations:
-        category = getattr(a, "category", "")
+        category = a.category
         if category != "村名":
             continue
-        text = getattr(a, "text", "")
+        text = a.text
         if not text:
             continue
-        geom = getattr(a, "geometry", None)
+        geom = a.geometry
         if geom and isinstance(geom, dict):
             coords = geom.get("coordinates", [0, 0])
             if coords and len(coords) >= 2:

@@ -54,13 +54,6 @@ def _spatial_feature_to_geojson(feat: Any) -> dict:
             "geometry": d.get("geometry", {}),
             "properties": {k: v for k, v in d.items() if k != "geometry"},
         }
-    if hasattr(feat, "geometry") and isinstance(getattr(feat, "geometry", None), dict):
-        geom = feat.geometry
-        props = {}
-        for k, v in feat.__dict__.items():
-            if k not in ("geometry", "_raw"):
-                props[k] = v
-        return {"type": "Feature", "geometry": geom, "properties": props}
     return {"type": "Feature", "geometry": {}, "properties": {}}
 
 
@@ -74,7 +67,7 @@ def _features_to_fc(features: List[Any]) -> dict:
 def _bundle_key_for(feature: Any) -> str:
     from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
 
-    lt = getattr(feature, "layer_type", "")
+    lt = feature.layer_type
     entry = GIS_LAYER_REGISTRY.get(lt)
     if entry and entry.bundle_target:
         return entry.bundle_target.key
@@ -84,11 +77,11 @@ def _bundle_key_for(feature: Any) -> str:
 def _geometry_group_for(feature: Any) -> str:
     from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
 
-    lt = getattr(feature, "layer_type", "")
+    lt = feature.layer_type
     entry = GIS_LAYER_REGISTRY.get(lt)
     if entry and entry.bundle_target:
         return entry.bundle_target.group
-    geom = getattr(feature, "geometry", {})
+    geom = feature.geometry
     gtype = geom.get("type", "") if isinstance(geom, dict) else ""
     if gtype in ("Point", "MultiPoint"):
         return "points"
@@ -300,17 +293,17 @@ class VillageBundle(BaseModel):
     @property
     def total_area_ha(self) -> float:
         return sum(
-            getattr(p, "area_ha", 0.0)
+            p.area_sqm / 10000.0
             for p in self.polygons.get("landuse_current") + self.polygons.get("landuse_planned")
         )
 
     def get_parcels_by_dlbm(self, dlbm: str) -> List[Any]:
         all_parcels = self.polygons.get("landuse_current") + self.polygons.get("landuse_planned")
-        return [p for p in all_parcels if getattr(p, "dlbm", "") == dlbm]
+        return [p for p in all_parcels if p.dlbm == dlbm]
 
     def get_parcels_by_zone(self, zone_type: str) -> List[Any]:
         all_parcels = self.polygons.get("landuse_current") + self.polygons.get("landuse_planned")
-        return [p for p in all_parcels if getattr(p, "zone_type", "") == zone_type]
+        return [p for p in all_parcels if p.zone_type == zone_type]
 
     def is_complete(self) -> bool:
         return self.boundary is not None and self.parcel_count > 0

@@ -119,7 +119,7 @@ def _find_parcels_near_point(
         radius_deg = radius_m / 101000.0
 
         for p in parcels:
-            geom = getattr(p, "geometry", None)
+            geom = p.geometry
             if geom is None:
                 continue
             try:
@@ -127,7 +127,7 @@ def _find_parcels_near_point(
                 if s.is_empty:
                     continue
                 if ref_point.distance(s.centroid) < radius_deg:
-                    bsm = str(getattr(p, "bsm", "")).strip()
+                    bsm = str(p.bsm).strip()
                     if bsm:
                         parcel_ids.append(bsm)
             except Exception:
@@ -169,10 +169,10 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
     # Build GeoDataFrame from typed parcels
     rows = []
     for p in parcels:
-        bsm = str(getattr(p, "bsm", "")).strip()
-        dlbm = str(getattr(p, "dlbm", "")).strip()
-        area_sqm = getattr(p, "area_sqm", 0) or 0
-        geom = getattr(p, "geometry", None)
+        bsm = str(p.bsm).strip()
+        dlbm = str(p.dlbm).strip()
+        area_sqm = p.area_sqm or 0
+        geom = p.geometry
         if not bsm or geom is None:
             continue
         try:
@@ -240,9 +240,9 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
             from shapely.geometry import shape as _shape
             road_geoms = []
             for ri_rd, rd in enumerate(roads):
-                rd_bsm = str(getattr(rd, "bsm", "")).strip()
-                rd_name = str(getattr(rd, "name", "")).strip() or f"道路_{ri_rd}"
-                rd_geom = getattr(rd, "geometry", None)
+                rd_bsm = str(rd.bsm).strip()
+                rd_name = str(rd.road_name).strip() or f"道路_{ri_rd}"
+                rd_geom = rd.geometry
                 if rd_geom is None:
                     continue
                 try:
@@ -300,8 +300,8 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
             from shapely.geometry import shape as _shape
             water_geoms = []
             for w in water_bodies:
-                w_id = str(getattr(w, "bsm", getattr(w, "id", ""))).strip()
-                w_geom = getattr(w, "geometry", None)
+                w_id = str(w.bsm).strip()
+                w_geom = w.geometry
                 if not w_id or w_geom is None:
                     continue
                 try:

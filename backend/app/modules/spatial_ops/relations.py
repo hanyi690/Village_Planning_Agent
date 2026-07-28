@@ -127,12 +127,12 @@ def _compute_zone_adjacency(parcels: List[Any]) -> Dict[str, List[str]]:
         geoms = []
         zone_types = []
         for p in parcels:
-            geom = getattr(p, "geometry", None)
+            geom = p.geometry
             if geom is None:
                 continue
             try:
                 geoms.append(shp(geom))
-                dlbm = str(getattr(p, "dlbm", "")).strip()
+                dlbm = str(p.dlbm).strip()
                 zone_types.append(get_zone_type_for_dlbm(dlbm))
             except Exception:
                 continue
