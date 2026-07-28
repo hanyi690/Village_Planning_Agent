@@ -58,10 +58,17 @@ class ParcelRelations:
     that uses geopandas/shapely for geometry computation.
     Consumed by PlanningKG._add_parcel_relations() — which only reads
     structured data, no geometry.
+
+    Cross-layer fields use existing predicates (intersects, touches, nearby)
+    to avoid ontology bloat.
     """
     touches: List[TouchRelation] = field(default_factory=list)
     nearby: List[NearbyRelation] = field(default_factory=list)
     connected: List[ConnectedRelation] = field(default_factory=list)
+    # cross-layer: road geometry crosses/intersects parcel
+    parcel_road_intersects: List[tuple] = field(default_factory=list)  # [(parcel_bsm, road_bsm)]
+    # cross-layer: water body touches parcel boundary
+    parcel_water_touches: List[tuple] = field(default_factory=list)    # [(parcel_bsm, water_id)]
 
 
 def _compute_centroid(boundary_geojson: Dict[str, Any]) -> Optional[Tuple[float, float]]:
@@ -130,8 +137,9 @@ def _find_parcels_near_point(
     return parcel_ids
 
 
-def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = None) -> ParcelRelations:
-    """Compute three-layer spatial relations from typed parcel list.
+def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = None,
+                              water_bodies: Optional[List[Any]] = None) -> ParcelRelations:
+    """Compute three-layer + cross-layer spatial relations from typed parcel list.
 
     This is the ONLY function in the system that uses geopandas/shapely
     for geometry computation. KG consumes the returned ParcelRelations
@@ -139,15 +147,18 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
 
     Layers:
       L1 touches: parcels sharing a boundary, with shared boundary length
-      L2 nearby:  parcels within 200m centroid distance
+      L2 nearby:  parcels within area-weighted centroid distance threshold
       L3 connected: parcels crossed by the same road (road-network connectivity)
+      Cross-layer: parcel↔road intersects, parcel↔water touches
 
     Args:
         parcels: List of typed CurrentLandUseParcel objects.
         roads:   Optional list of typed CurrentRoad objects for L3 connectivity.
+        water_bodies: Optional list of typed WaterFeature objects for cross-layer touches.
 
     Returns:
-        ParcelRelations with touches, nearby, and connected lists.
+        ParcelRelations with touches, nearby, connected, parcel_road_intersects,
+        and parcel_water_touches lists.
     """
     import geopandas as gpd
     from shapely.geometry import shape
@@ -205,13 +216,16 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
     except Exception as e:
         logger.warning("[geometry] L1 touches computation failed: %s", e)
 
-    # L2: nearby (centroid distance <= 200m)
+    # L2: nearby (area-weighted centroid distance threshold)
     try:
         centroids = gdf_metric.geometry.centroid
+        # area-weighted: larger parcels have wider nearby range
+        sqrt_areas = [max(g.area, 1) ** 0.5 for g in gdf_metric.geometry]
         for i in range(len(centroids)):
             for j in range(i + 1, len(centroids)):
                 dist = centroids.iloc[i].distance(centroids.iloc[j])
-                if dist <= 200:
+                threshold = min(500.0, max(200.0, (sqrt_areas[i] + sqrt_areas[j]) * 2))
+                if dist <= threshold:
                     result.nearby.append(NearbyRelation(
                         bsm_a=gdf.iloc[i].bsm, bsm_b=gdf.iloc[j].bsm,
                         dlbm_a=gdf.iloc[i].dlbm, dlbm_b=gdf.iloc[j].dlbm,
@@ -220,13 +234,14 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
     except Exception as e:
         logger.warning("[geometry] L2 nearby computation failed: %s", e)
 
-    # L3: connected via road network
+    # L3: connected via road network + cross-layer parcel↔road intersects
     if roads:
         try:
             from shapely.geometry import shape as _shape
             road_geoms = []
-            for rd in roads:
+            for ri_rd, rd in enumerate(roads):
                 rd_bsm = str(getattr(rd, "bsm", "")).strip()
+                rd_name = str(getattr(rd, "name", "")).strip() or f"道路_{ri_rd}"
                 rd_geom = getattr(rd, "geometry", None)
                 if rd_geom is None:
                     continue
@@ -234,27 +249,33 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
                     rs = _shape(rd_geom)
                     if rs.is_empty:
                         continue
-                    road_geoms.append((rd_bsm, rs))
+                    road_geoms.append((rd_bsm, rd_name, rs))
                 except Exception:
                     continue
 
             if road_geoms:
                 rd_metric = gpd.GeoDataFrame(
                     {"road_bsm": [r[0] for r in road_geoms],
-                     "geometry": [r[1] for r in road_geoms]},
+                     "road_name": [r[1] for r in road_geoms],
+                     "geometry": [r[2] for r in road_geoms]},
                     crs="EPSG:4326",
                 ).to_crs("EPSG:3857")
 
                 parcel_sindex = gdf_metric.sindex
                 for ri in range(len(rd_metric)):
                     road_geom = rd_metric.iloc[ri].geometry
-                    road_bsm = rd_metric.iloc[ri].road_bsm
+                    rd_id = rd_metric.iloc[ri].road_bsm or rd_metric.iloc[ri].road_name
                     # Find parcels this road crosses
                     possible_idx = list(parcel_sindex.intersection(road_geom.bounds))
                     crossed_bsms = []
                     for pi in possible_idx:
-                        if road_geom.crosses(gdf_metric.iloc[pi].geometry) or                            road_geom.intersects(gdf_metric.iloc[pi].geometry):
-                            crossed_bsms.append((gdf.iloc[pi].bsm, gdf_metric.iloc[pi].geometry))
+                        pgeom = gdf_metric.iloc[pi].geometry
+                        if road_geom.crosses(pgeom) or road_geom.intersects(pgeom):
+                            crossed_bsms.append((gdf.iloc[pi].bsm, pgeom))
+                            # cross-layer: record parcel↔road intersects
+                            result.parcel_road_intersects.append(
+                                (gdf.iloc[pi].bsm, rd_id)
+                            )
                     # All pairs of parcels crossed by the same road are connected
                     for a in range(len(crossed_bsms)):
                         for b in range(a + 1, len(crossed_bsms)):
@@ -267,15 +288,56 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
                             result.connected.append(ConnectedRelation(
                                 bsm_a=crossed_bsms[a][0],
                                 bsm_b=crossed_bsms[b][0],
-                                road_bsm=road_bsm,
+                                road_bsm=rd_id,
                                 road_length_m=round(clip_len, 2),
                             ))
         except Exception as e:
             logger.warning("[geometry] L3 connected computation failed: %s", e)
 
+    # Cross-layer: parcel↔water touches
+    if water_bodies:
+        try:
+            from shapely.geometry import shape as _shape
+            water_geoms = []
+            for w in water_bodies:
+                w_id = str(getattr(w, "bsm", getattr(w, "id", ""))).strip()
+                w_geom = getattr(w, "geometry", None)
+                if not w_id or w_geom is None:
+                    continue
+                try:
+                    ws = _shape(w_geom)
+                    if ws.is_empty:
+                        continue
+                    water_geoms.append((w_id, ws))
+                except Exception:
+                    continue
+
+            if water_geoms:
+                w_metric = gpd.GeoDataFrame(
+                    {"water_id": [w[0] for w in water_geoms],
+                     "geometry": [w[1] for w in water_geoms]},
+                    crs="EPSG:4326",
+                ).to_crs("EPSG:3857")
+
+                parcel_sindex = gdf_metric.sindex
+                for wi in range(len(w_metric)):
+                    water_geom = w_metric.iloc[wi].geometry
+                    water_id = w_metric.iloc[wi].water_id
+                    possible_idx = list(parcel_sindex.intersection(water_geom.bounds))
+                    for pi in possible_idx:
+                        parcel_geom = gdf_metric.iloc[pi].geometry
+                        if parcel_geom.touches(water_geom) or parcel_geom.intersects(water_geom):
+                            result.parcel_water_touches.append(
+                                (gdf.iloc[pi].bsm, water_id)
+                            )
+        except Exception as e:
+            logger.warning("[geometry] Cross-layer water computation failed: %s", e)
+
     logger.info(
-        "[geometry] Parcel relations: %d touches, %d nearby, %d connected",
+        "[geometry] Parcel relations: %d touches, %d nearby, %d connected, "
+        "%d parcel↔road, %d parcel↔water",
         len(result.touches), len(result.nearby), len(result.connected),
+        len(result.parcel_road_intersects), len(result.parcel_water_touches),
     )
     return result
 

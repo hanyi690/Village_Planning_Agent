@@ -2,16 +2,125 @@
 
 All functions are module-level, assigned to PlanningKG in base.py.
 Zero shapely/geopandas dependency.
-"""
-from typing import Any, List
 
-from rdflib import Literal, RDF
+[v4.8] Adds three-dimension predicates (gis_type_ref/geometry_kind/semantic_group/
+has_semantic_label) to each L1 entity, GisLayerSet virtual entities, and
+semantic-enrichment triples (taxonomic_parent/legal_constraint/allowed_operations).
+"""
+from typing import Any, Dict, List
+
+from rdflib import Literal, RDF, URIRef
 from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
-from ..ontology import PLN, EntityTypes, Relations, EntityIdPolicy
+from ..ontology import (
+    PLN, PLN_NS, EntityTypes, Relations, EntityIdPolicy, SemanticPredicates,
+    get_gis_layer_group_info, get_all_gis_layer_groups,
+    GEOMETRY_POLYGON, GEOMETRY_LINE, GEOMETRY_POINT,
+)
+
+# Predicate shortcuts (from SemanticPredicates class)
+gis_type_ref = SemanticPredicates.gis_type_ref
+geometry_kind = SemanticPredicates.geometry_kind
+semantic_group = SemanticPredicates.semantic_group
+has_semantic_label = SemanticPredicates.has_semantic_label
+contains_entity = SemanticPredicates.contains_entity
+gis_description = SemanticPredicates.gis_description
+entity_count = SemanticPredicates.entity_count
+dominant_label = SemanticPredicates.dominant_label
+taxonomic_parent = SemanticPredicates.taxonomic_parent
+legal_constraint = SemanticPredicates.legal_constraint
+allowed_operations = SemanticPredicates.allowed_operations
 
 logger = get_logger(__name__)
+
+
+# ── Semantic-layer derivation helpers (v4.8) ───────────────────────────
+
+
+def _derive_semantic_label(dlbm: str) -> str:
+    """Derive a Chinese semantic label from DLBM (e.g. 0101 -> '水田').
+
+    Falls back to zone_type (e.g. '农业用地') if no specific name found.
+    """
+    if not dlbm:
+        return ""
+    try:
+        from app.modules.schema.encodings.code_sets import DLBM_TO_DLMC, resolve_zone_type_for_dlbm
+        name = DLBM_TO_DLMC.get(str(dlbm).strip(), "")
+        if name:
+            return name
+        return resolve_zone_type_for_dlbm(dlbm)
+    except Exception:
+        return ""
+
+
+def _derive_taxonomic_parent(dlbm: str) -> str:
+    """Derive the taxonomic parent (zone_type) from DLBM.
+
+    Hierarchy: DLBM -> zone_type (农业用地/生态绿地/居住用地/...) -> primary_zone
+    Returns the zone_type (one level up). For full chain, consumer queries
+    zone_type -> primary_zone via planning_zone_rules.
+    """
+    if not dlbm:
+        return ""
+    try:
+        from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm
+        return resolve_zone_type_for_dlbm(dlbm)
+    except Exception:
+        return ""
+
+
+def _derive_legal_constraint(planning_zone: str) -> str:
+    """Derive legal constraint from planning_zone via control code mapping.
+
+    Returns one of: 'allow_construction', 'conditional_construction',
+    'restrict_construction', 'forbid_construction', or '' if unknown.
+    """
+    if not planning_zone:
+        return ""
+    try:
+        from app.modules.schema.encodings.code_sets import PLANNING_ZONE_TO_CONTROL_CODE
+        code = PLANNING_ZONE_TO_CONTROL_CODE.get(str(planning_zone).strip(), "")
+        return _CONTROL_CODE_TO_CONSTRAINT.get(code, "")
+    except Exception:
+        return ""
+
+
+_CONTROL_CODE_TO_CONSTRAINT: Dict[str, str] = {
+    "01": "allow_construction",
+    "02": "restrict_construction",
+    "03": "conditional_construction",
+    "04": "forbid_construction",
+    "05": "forbid_construction",   # 永久基本农田保护区
+    "06": "forbid_construction",   # 生态保护红线区
+}
+
+
+def _get_allowed_operations(ghytbm: str = "", planning_zone: str = "", control_code: str = "") -> List[str]:
+    """Look up allowed operations from allowed_operations.yaml.
+
+    Priority: ghytbm (most specific) > control_code > planning_zone (coarsest).
+    Returns a list of operation strings (subset of create/split/merge/modify/reclassify).
+    """
+    try:
+        from app.modules.schema.encodings.dicts.loader import get_center
+        d = get_center().get("allowed_operations").raw
+        if ghytbm:
+            entry = d.get("by_ghytbm", {}).get(str(ghytbm).strip())
+            if entry:
+                return entry.get("operations", [])
+        if control_code:
+            entry = d.get("by_control_code", {}).get(str(control_code).strip())
+            if entry:
+                return entry.get("operations", [])
+        if planning_zone:
+            entry = d.get("by_planning_zone", {}).get(str(planning_zone).strip())
+            if entry:
+                return entry.get("operations", [])
+    except Exception:
+        pass
+    return []
 
 
 def _add_village_entity(self, village_name: str) -> None:
@@ -29,8 +138,8 @@ def _add_parcel_relations(self, relations) -> None:
         a = _parcel_uri_by_bsm_dlbm(self, t.bsm_a, t.dlbm_a)
         b = _parcel_uri_by_bsm_dlbm(self, t.bsm_b, t.dlbm_b)
         if a and b:
-            self.g.add((a, PLN.touches, b))
-            self.g.add((b, PLN.touches, a))
+            self.g.add((a, Relations.touches, b))
+            self.g.add((b, Relations.touches, a))
             if t.shared_boundary_length_m:
                 self.g.add((a, PLN.shared_boundary_length, Literal(t.shared_boundary_length_m, datatype=XSD.double)))
                 self.g.add((b, PLN.shared_boundary_length, Literal(t.shared_boundary_length_m, datatype=XSD.double)))
@@ -39,7 +148,7 @@ def _add_parcel_relations(self, relations) -> None:
         a = _parcel_uri_by_bsm_dlbm(self, n.bsm_a, n.dlbm_a)
         b = _parcel_uri_by_bsm_dlbm(self, n.bsm_b, n.dlbm_b)
         if a and b:
-            self.g.add((a, PLN.nearby, b))
+            self.g.add((a, Relations.nearby, b))
             if n.centroid_distance_m:
                 self.g.add((a, PLN.centroid_distance, Literal(n.centroid_distance_m, datatype=XSD.double)))
             count += 1
@@ -47,14 +156,41 @@ def _add_parcel_relations(self, relations) -> None:
         a = _parcel_uri_by_bsm_dlbm(self, c.bsm_a, "")
         b = _parcel_uri_by_bsm_dlbm(self, c.bsm_b, "")
         if a and b:
-            self.g.add((a, PLN.connected_via_road, b))
+            self.g.add((a, Relations.connected_via_road, b))
             if c.road_length_m:
                 self.g.add((a, PLN.road_segment_length, Literal(c.road_length_m, datatype=XSD.double)))
             if c.road_bsm:
                 self.g.add((a, PLN.via_road, Literal(c.road_bsm)))
             count += 1
+
+    # Cross-layer: parcel↔road intersects (via PLN.intersects)
+    for pbsm, rbsm in relations.parcel_road_intersects:
+        pu = _parcel_uri_by_bsm_dlbm(self, pbsm, "")
+        ru = _road_uri_by_bsm(self, rbsm)
+        if pu and ru:
+            self.g.add((ru, Relations.intersects, pu))
+            self.g.add((pu, Relations.intersects, ru))
+            count += 1
+
+    # Cross-layer: parcel↔water touches (via PLN.touches)
+    for pbsm, wid in relations.parcel_water_touches:
+        pu = _parcel_uri_by_bsm_dlbm(self, pbsm, "")
+        wu = _entity_uri_by_bsm(self, EntityTypes.WaterBody, wid)
+        if not wu:
+            # some water features use non-BSM ids; fall back to name match
+            for s in self.g.subjects(RDF.type, EntityTypes.WaterBody):
+                for _, _, o in self.g.triples((s, PLN.name, Literal(wid))):
+                    wu = s
+                    break
+                if wu:
+                    break
+        if pu and wu:
+            self.g.add((pu, Relations.touches, wu))
+            self.g.add((wu, Relations.touches, pu))
+            count += 1
+
     if count:
-        logger.info("Added %d parcel relations", count)
+        logger.info("Added %d parcel relations (incl. cross-layer)", count)
 
 
 def _parcel_uri_by_bsm_dlbm(self, bsm: str, dlbm: str):
@@ -62,6 +198,26 @@ def _parcel_uri_by_bsm_dlbm(self, bsm: str, dlbm: str):
         if (s, RDF.type, EntityTypes.Parcel) not in self.g:
             continue
         return s
+    return None
+
+
+def _road_uri_by_bsm(self, bsm: str):
+    """Find Road URI by BSM or name (fallback)."""
+    for s in self.g.subjects(RDF.type, EntityTypes.Road):
+        for _, _, o in self.g.triples((s, PLN.bsm, Literal(bsm))):
+            return s
+    # fallback: match by name (roads without BSM use name as id)
+    for s in self.g.subjects(RDF.type, EntityTypes.Road):
+        for _, _, o in self.g.triples((s, PLN.name, Literal(bsm))):
+            return s
+    return None
+
+
+def _entity_uri_by_bsm(self, entity_type, bsm: str):
+    """Find entity URI of given type matching BSM."""
+    for s in self.g.subjects(RDF.type, entity_type):
+        for _, _, o in self.g.triples((s, PLN.bsm, Literal(bsm))):
+            return s
     return None
 
 
@@ -110,6 +266,33 @@ def _add_parcels(self, parcels) -> None:
         if prz:
             self.g.add((pu, PLN.primary_zone, Literal(prz)))
 
+        # ── v4.8: three-dimension predicates + semantic label ──
+        self.g.add((pu, gis_type_ref, Literal("landuse_current")))
+        self.g.add((pu, geometry_kind, Literal(GEOMETRY_POLYGON)))
+        self.g.add((pu, semantic_group, Literal("current_landuse")))
+        label = _derive_semantic_label(dlbm)
+        if label:
+            self.g.add((pu, has_semantic_label, Literal(label)))
+
+        # ── v4.8: semantic-layer triples (taxonomic_parent + legal_constraint + allowed_operations) ──
+        # taxonomic_parent: DLBM -> zone_type (one level up in hierarchy)
+        if zt:
+            self.g.add((pu, taxonomic_parent, Literal(zt)))
+        # legal_constraint: planning_zone -> control_code -> constraint
+        if pz:
+            constraint = _derive_legal_constraint(pz)
+            if constraint:
+                self.g.add((pu, legal_constraint, Literal(constraint)))
+        # allowed_operations: from ghytbm (most specific) or planning_zone
+        try:
+            from app.modules.schema.encodings.code_sets import get_ghytbm_for_dlbm
+            ghytbm = get_ghytbm_for_dlbm(dlbm)
+        except Exception:
+            ghytbm = ""
+        ops = _get_allowed_operations(ghytbm=ghytbm, planning_zone=pz)
+        for op in ops:
+            self.g.add((pu, allowed_operations, Literal(op)))
+
         # Centroid
         try:
             geo = getattr(p, "geometry", None)
@@ -152,6 +335,13 @@ def _add_water_bodies(self, water_bodies, water_overlap=None) -> None:
         for b in bsm_list:
             covered_bsms.add(b)
 
+    def _add_water_dims(uri, is_line_geom: bool):
+        """Attach three-dimension predicates to a WaterBody entity."""
+        self.g.add((uri, gis_type_ref, Literal("water")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE if is_line_geom else GEOMETRY_POLYGON)))
+        self.g.add((uri, semantic_group, Literal("water")))
+        self.g.add((uri, has_semantic_label, Literal("水域")))
+
     count = 0
     for i, w in enumerate(water_bodies):
         bsm = str(getattr(w, "bsm", "")).strip()
@@ -172,6 +362,7 @@ def _add_water_bodies(self, water_bodies, water_overlap=None) -> None:
             self.g.add((uri, PLN.name, Literal(name)))
             self.g.add((uri, PLN.water_type, Literal("河流")))
             self.g.add((uri, Relations.located_in, PLN.village))
+            _add_water_dims(uri, is_line_geom=True)
             count += 1
         elif covered:
             # Water polygon completely covers existing 3100 parcel(s)
@@ -187,6 +378,7 @@ def _add_water_bodies(self, water_bodies, water_overlap=None) -> None:
                 for s in self.g.subjects(PLN.bsm, Literal(cbsm)):
                     if (s, RDF.type, EntityTypes.Parcel) in self.g:
                         self.g.add((uri, Relations.derived_from, s))
+            _add_water_dims(uri, is_line_geom=False)
             count += 1
         else:
             # Independent water polygon (no overlap with 3100 parcels)
@@ -197,6 +389,7 @@ def _add_water_bodies(self, water_bodies, water_overlap=None) -> None:
             self.g.add((uri, PLN.name, Literal(name)))
             self.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
             self.g.add((uri, Relations.located_in, PLN.village))
+            _add_water_dims(uri, is_line_geom=False)
             count += 1
 
     if count:
@@ -214,10 +407,16 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         else:
             uri = EntityIdPolicy.fallback_uri("hazard", ysdm, count)
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
-        self.g.add((uri, RDF.type, PLN.ControlLine))
+        self.g.add((uri, RDF.type, EntityTypes.ControlLine))
         self.g.add((uri, PLN.name, Literal(str(name))))
         self.g.add((uri, PLN.source, Literal("geological_hazard")))
         self.g.add((uri, Relations.located_in, PLN.village))
+        # ── v4.8.1: three-dimension predicates ──
+        self.g.add((uri, gis_type_ref, Literal("geological_hazard_points")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POINT)))
+        self.g.add((uri, semantic_group, Literal("hazard_point")))
+        if name:
+            self.g.add((uri, has_semantic_label, Literal(str(name))))
         count += 1
     for item in getattr(polygons_layer, "hazard_control_lines", []):
         bsm = str(getattr(item, "bsm", "")).strip()
@@ -227,9 +426,13 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         else:
             uri = EntityIdPolicy.fallback_uri("hazard_line", ysdm, count)
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
-        self.g.add((uri, RDF.type, PLN.ControlLine))
+        self.g.add((uri, RDF.type, EntityTypes.ControlLine))
         self.g.add((uri, PLN.name, Literal(f"灾害防控线_{bsm or count}")))
         self.g.add((uri, Relations.located_in, PLN.village))
+        # ── v4.8: three-dimension predicates ──
+        self.g.add((uri, gis_type_ref, Literal("hazard_control_line")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
+        self.g.add((uri, semantic_group, Literal("hazard")))
         count += 1
     for item in getattr(polygons_layer, "flood_control_lines", []):
         bsm = str(getattr(item, "bsm", "")).strip()
@@ -239,9 +442,13 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         else:
             uri = EntityIdPolicy.fallback_uri("flood_line", ysdm, count)
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
-        self.g.add((uri, RDF.type, PLN.ControlLine))
+        self.g.add((uri, RDF.type, EntityTypes.ControlLine))
         self.g.add((uri, PLN.name, Literal(f"洪涝控制线_{bsm or count}")))
         self.g.add((uri, Relations.located_in, PLN.village))
+        # ── v4.8: three-dimension predicates ──
+        self.g.add((uri, gis_type_ref, Literal("flood_control_line")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
+        self.g.add((uri, semantic_group, Literal("hazard")))
         count += 1
     for item in getattr(polygons_layer, "construction_zone", []):
         bsm = str(getattr(item, "bsm", "")).strip()
@@ -255,6 +462,11 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         self.g.add((uri, PLN.name, Literal("有条件建设区")))
         self.g.add((uri, PLN.restriction, Literal("限制建设")))
         self.g.add((uri, Relations.located_in, PLN.village))
+        # ── v4.8.1: three-dimension predicates ──
+        self.g.add((uri, gis_type_ref, Literal("construction_zone")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
+        self.g.add((uri, semantic_group, Literal("construction")))
+        self.g.add((uri, has_semantic_label, Literal("有条件建设区")))
         count += 1
     if count:
         logger.info("Added %d control lines", count)
@@ -274,6 +486,10 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
         self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal(f"TDYT_{code}")))
         self.g.add((uri, Relations.located_in, PLN.village))
+        # ── v4.8: three-dimension predicates ──
+        self.g.add((uri, gis_type_ref, Literal("land_use_zone")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
+        self.g.add((uri, semantic_group, Literal("protection")))
         count += 1
     for item in getattr(polygons_layer, "construction_ctrl_zones", []):
         bsm = str(getattr(item, "bsm", "")).strip()
@@ -286,6 +502,11 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
         self.g.add((uri, RDF.type, EntityTypes.Zone))
         self.g.add((uri, PLN.name, Literal("建设用地管制区")))
         self.g.add((uri, Relations.located_in, PLN.village))
+        # ── v4.8.1: three-dimension predicates ──
+        self.g.add((uri, gis_type_ref, Literal("space_control_zone")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
+        self.g.add((uri, semantic_group, Literal("construction")))
+        self.g.add((uri, has_semantic_label, Literal("建设用地管制区")))
         count += 1
     for _ in getattr(polygons_layer, "planning_scope", []):
         self.g.add((PLN.village, PLN.has_planning_scope, Literal(True)))
@@ -363,6 +584,10 @@ def add_roads(self, roads: list):
         self.g.add((uri, PLN.road_level, Literal(getattr(road, "road_level", "") or "村道")))
         self.g.add((uri, Relations.located_in, PLN.village))
         self.g.add((PLN.village, Relations.connects, uri))
+        # ── v4.8: three-dimension predicates ──
+        self.g.add((uri, gis_type_ref, Literal("road")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE)))
+        self.g.add((uri, semantic_group, Literal("transport")))
         count += 1
     if count:
         logger.info("Added %d roads", count)
@@ -589,6 +814,12 @@ def _add_facilities_from_typed(self, facilities) -> None:
             self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
         self.g.add((uri, Relations.located_in, PLN.village))
         self.g.add((PLN.village, PLN.has_facility, uri))
+        # ── v4.8: three-dimension predicates ──
+        self.g.add((uri, gis_type_ref, Literal("current_facility")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POINT)))
+        self.g.add((uri, semantic_group, Literal("facility")))
+        if name:
+            self.g.add((uri, has_semantic_label, Literal(name)))
         count += 1
     if count:
         logger.info("Added %d facilities from typed parcels", count)
@@ -640,7 +871,500 @@ def _add_facilities_from_annotations(self, annotations) -> None:
         self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
         self.g.add((uri, Relations.located_in, PLN.village))
         self.g.add((PLN.village, PLN.has_facility, uri))
+        # ── v4.8: three-dimension predicates ──
+        self.g.add((uri, gis_type_ref, Literal("current_facility")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POINT)))
+        self.g.add((uri, semantic_group, Literal("facility")))
+        if name:
+            self.g.add((uri, has_semantic_label, Literal(name)))
         count += 1
 
     if count:
         logger.info("Added %d facilities from annotations", count)
+
+
+# ============================================================
+# v4.8.1 - Additional bundle geometry groups
+# ============================================================
+
+
+def _add_protection_polygons(self, polygons_layer) -> None:
+    """Create Zone entities from protection polygons (farmland/ecological/historical/etc).
+
+    These are constraint polygons that overlap parcels - critical for
+    parcel-overlaps-protection-zone cross-type relations.
+    """
+    count = 0
+
+    protection_groups = [
+        ("farmland_protection", "永久基本农田", "farmland_protection", "forbid_construction"),
+        ("ecological_redline", "生态保护红线", "ecological_protection", "forbid_construction"),
+        ("historical_protection", "历史文化保护线", "historical_protection", "forbid_construction"),
+        ("cultivated_land_target", "耕地保护目标", "cultivated_land_target", "restrict_construction"),
+        ("urban_dev_boundary", "城镇开发边界", "urban_dev_boundary", "restrict_construction"),
+        ("village_dev_boundary", "村庄建设边界", "village_dev_boundary", "allow_construction"),
+        ("nature_reserves", "自然保护区", "nature_reserve", "forbid_construction"),
+    ]
+
+    for attr_name, label, ltype, constraint in protection_groups:
+        for item in getattr(polygons_layer, attr_name, []):
+            bsm = str(getattr(item, "bsm", "")).strip()
+            ysdm = str(getattr(item, "ysdm", "")).strip()
+            if bsm:
+                uri = EntityIdPolicy.uri(attr_name, bsm)
+            else:
+                uri = EntityIdPolicy.fallback_uri(attr_name, ysdm, count)
+            EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+            self.g.add((uri, RDF.type, EntityTypes.Zone))
+            self.g.add((uri, PLN.name, Literal(f"{label}_{bsm or count}")))
+            self.g.add((uri, Relations.located_in, PLN.village))
+            # Three-dimension predicates
+            self.g.add((uri, gis_type_ref, Literal(ltype)))
+            self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
+            self.g.add((uri, semantic_group, Literal("protection")))
+            self.g.add((uri, has_semantic_label, Literal(label)))
+            # Semantic layer
+            self.g.add((uri, legal_constraint, Literal(constraint)))
+            self.g.add((uri, allowed_operations, Literal("verify_only")))
+            count += 1
+
+    if count:
+        logger.info("Added %d protection polygons", count)
+
+
+def _add_buildings(self, buildings) -> None:
+    """Create Facility entities from bundle.points.buildings."""
+    count = 0
+    for i, b in enumerate(buildings):
+        bsm = str(getattr(b, "bsm", "")).strip()
+        ysdm = str(getattr(b, "ysdm", "")).strip()
+        name = getattr(b, "name", "") or f"建筑_{bsm or i}"
+        if bsm:
+            uri = EntityIdPolicy.uri("building", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("building", ysdm, i)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+        self.g.add((uri, RDF.type, EntityTypes.Facility))
+        self.g.add((uri, PLN.name, Literal(name)))
+        self.g.add((uri, PLN.facility_type, Literal("建筑")))
+        geom = getattr(b, "geometry", {}) or {}
+        coords = geom.get("coordinates", [0, 0]) if isinstance(geom, dict) else [0, 0]
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
+            self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
+        self.g.add((uri, Relations.located_in, PLN.village))
+        # Three-dimension predicates
+        self.g.add((uri, gis_type_ref, Literal("current_building")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POINT)))
+        self.g.add((uri, semantic_group, Literal("building")))
+        self.g.add((uri, has_semantic_label, Literal(name)))
+        count += 1
+    if count:
+        logger.info("Added %d buildings", count)
+
+
+def _add_terrain_entities(self, lines_layer, points_layer) -> None:
+    """Create entities from contour lines and elevation points."""
+    count = 0
+    # Contour lines
+    for i, c in enumerate(getattr(lines_layer, "contour_lines", [])):
+        bsm = str(getattr(c, "bsm", "")).strip()
+        ysdm = str(getattr(c, "ysdm", "")).strip()
+        elev = getattr(c, "elevation", "") or ""
+        if bsm:
+            uri = EntityIdPolicy.uri("contour", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("contour", ysdm, i)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+        self.g.add((uri, RDF.type, EntityTypes.Road))  # morphologically a line
+        self.g.add((uri, PLN.name, Literal(f"等高线_{elev or bsm or i}")))
+        if elev:
+            self.g.add((uri, PLN.elevation, Literal(str(elev))))
+        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, gis_type_ref, Literal("contour_line")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE)))
+        self.g.add((uri, semantic_group, Literal("terrain")))
+        self.g.add((uri, has_semantic_label, Literal(f"等高线{elev}m")))
+        count += 1
+
+    # Elevation points
+    for i, ep in enumerate(getattr(points_layer, "elevation_points", [])):
+        bsm = str(getattr(ep, "bsm", "")).strip()
+        ysdm = str(getattr(ep, "ysdm", "")).strip()
+        elev = getattr(ep, "elevation", "") or getattr(ep, "height", "") or ""
+        geom = getattr(ep, "geometry", {}) or {}
+        coords = geom.get("coordinates", [0, 0]) if isinstance(geom, dict) else [0, 0]
+        if bsm:
+            uri = EntityIdPolicy.uri("elevpt", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("elevpt", ysdm, i)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+        self.g.add((uri, RDF.type, EntityTypes.Facility))  # morphologically a point
+        self.g.add((uri, PLN.name, Literal(f"高程点_{elev or i}")))
+        if elev:
+            self.g.add((uri, PLN.elevation, Literal(str(elev))))
+        if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+            self.g.add((uri, PLN.lon, Literal(coords[0], datatype=XSD.double)))
+            self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
+        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, gis_type_ref, Literal("elevation_point")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POINT)))
+        self.g.add((uri, semantic_group, Literal("terrain")))
+        self.g.add((uri, has_semantic_label, Literal(f"高程{elev}m")))
+        count += 1
+
+    if count:
+        logger.info("Added %d terrain entities (contours + elevation points)", count)
+
+
+def _add_boundaries(self, polygons_layer, lines_layer) -> None:
+    """Create boundary entities from admin_areas, planning_scope, admin_boundaries."""
+    count = 0
+    # Admin areas (polygon)
+    for i, a in enumerate(getattr(polygons_layer, "admin_areas", [])):
+        bsm = str(getattr(a, "bsm", "")).strip()
+        ysdm = str(getattr(a, "ysdm", "")).strip()
+        name = getattr(a, "name", "") or f"行政区_{bsm or i}"
+        if bsm:
+            uri = EntityIdPolicy.uri("admin", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("admin", ysdm, i)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+        self.g.add((uri, RDF.type, EntityTypes.AdministrativeVillage))
+        self.g.add((uri, PLN.name, Literal(name)))
+        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, gis_type_ref, Literal("admin_area")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
+        self.g.add((uri, semantic_group, Literal("admin")))
+        self.g.add((uri, has_semantic_label, Literal(name)))
+        count += 1
+
+    # Planning scope (polygon) - emit as entity, not just flag
+    for i, ps in enumerate(getattr(polygons_layer, "planning_scope", [])):
+        bsm = str(getattr(ps, "bsm", "")).strip()
+        if bsm:
+            uri = EntityIdPolicy.uri("scope", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("scope", "scope", i)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+        self.g.add((uri, RDF.type, EntityTypes.Zone))
+        self.g.add((uri, PLN.name, Literal("规划范围")))
+        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, gis_type_ref, Literal("planning_scope")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
+        self.g.add((uri, semantic_group, Literal("admin")))
+        self.g.add((uri, has_semantic_label, Literal("规划范围")))
+        self.g.add((PLN.village, PLN.has_planning_scope, Literal(True)))
+        count += 1
+
+    # Admin boundary lines
+    for i, bl in enumerate(getattr(lines_layer, "admin_boundaries", [])):
+        bsm = str(getattr(bl, "bsm", "")).strip()
+        ysdm = str(getattr(bl, "ysdm", "")).strip()
+        if bsm:
+            uri = EntityIdPolicy.uri("adminline", bsm)
+        else:
+            uri = EntityIdPolicy.fallback_uri("adminline", ysdm, i)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+        self.g.add((uri, RDF.type, EntityTypes.Road))  # morphologically a line
+        self.g.add((uri, PLN.name, Literal(f"行政界线_{bsm or i}")))
+        self.g.add((uri, Relations.located_in, PLN.village))
+        self.g.add((uri, gis_type_ref, Literal("admin_boundary_line")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE)))
+        self.g.add((uri, semantic_group, Literal("admin")))
+        self.g.add((uri, has_semantic_label, Literal("行政界线")))
+        count += 1
+
+    if count:
+        logger.info("Added %d boundary entities", count)
+
+
+def _add_natural_resource_zones(self, polygons_layer) -> None:
+    """Create Zone entities from natural resource polygons (soil/watershed/hydrogeology)."""
+    count = 0
+    nr_groups = [
+        ("soil_types", "土壤类型", "soil_type"),
+        ("soil_erosions", "土壤侵蚀", "soil_erosion"),
+        ("watersheds", "流域", "watershed"),
+        ("hydrogeology_zones", "水文地质分区", "hydrogeology_zone"),
+    ]
+    for attr_name, label, ltype in nr_groups:
+        for i, item in enumerate(getattr(polygons_layer, attr_name, [])):
+            bsm = str(getattr(item, "bsm", "")).strip()
+            ysdm = str(getattr(item, "ysdm", "")).strip()
+            if bsm:
+                uri = EntityIdPolicy.uri(attr_name, bsm)
+            else:
+                uri = EntityIdPolicy.fallback_uri(attr_name, ysdm, i)
+            EntityIdPolicy.attach_bsm(self.g, uri, bsm)
+            self.g.add((uri, RDF.type, EntityTypes.Zone))
+            self.g.add((uri, PLN.name, Literal(f"{label}_{bsm or i}")))
+            self.g.add((uri, Relations.located_in, PLN.village))
+            self.g.add((uri, gis_type_ref, Literal(ltype)))
+            self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
+            self.g.add((uri, semantic_group, Literal("natural_resource")))
+            self.g.add((uri, has_semantic_label, Literal(label)))
+            count += 1
+    if count:
+        logger.info("Added %d natural resource zones", count)
+
+
+def _add_cross_type_relations(self, cross_type_relations=None) -> None:
+    """Add cross-type spatial relations (facility-in-parcel, road-intersects-parcel, parcel-intersects-protection).
+
+    Uses v4.8.1 merged predicates:
+      - located_in: point/line entity within a polygon (facility-in-parcel, building-in-parcel)
+      - intersects: line-crosses-polygon or polygon-overlaps-polygon (road-intersects-parcel, parcel-intersects-protection)
+      - contains: polygon bounds another (boundary-contains-parcel)
+
+    These are pre-computed by spatial_ops (which has shapely/geopandas) and passed in.
+    KG does zero geometry computation - it only materializes the provided relations as triples.
+
+    Args:
+        cross_type_relations: optional dict with keys:
+            - "located_in": List of (subject_uri_str, object_uri_str) - point/line within polygon
+            - "intersects": List of (subject_uri_str, object_uri_str, overlap_pct) - line-crosses or polygon-overlaps
+            - "contains": List of (subject_uri_str, object_uri_str) - polygon bounds another
+            If None, uses internal centroid-based heuristic (less accurate, no shapely).
+    """
+    if cross_type_relations is None:
+        cross_type_relations = self._compute_cross_type_heuristic()
+
+    count = 0
+    skipped = 0
+
+    def _entity_in_graph(uri):
+        """Check if a URI appears as subject in any triple."""
+        try:
+            for _ in self.g.triples((uri, None, None)):
+                return True
+            return False
+        except Exception:
+            return False
+
+    # located_in: facility/building/elevation within parcel
+    for subj_str, obj_str in cross_type_relations.get("located_in", []):
+        subj = _to_uri_safe(subj_str)
+        obj = _to_uri_safe(obj_str)
+        if subj and obj and _entity_in_graph(subj) and _entity_in_graph(obj):
+            self.g.add((subj, Relations.located_in, obj))
+            count += 1
+        else:
+            skipped += 1
+
+    # intersects: road-crosses-parcel, parcel-overlaps-protection
+    for item in cross_type_relations.get("intersects", []):
+        subj_str, obj_str = item[0], item[1]
+        overlap_pct = item[2] if len(item) > 2 else None
+        subj = _to_uri_safe(subj_str)
+        obj = _to_uri_safe(obj_str)
+        if subj and obj and _entity_in_graph(subj) and _entity_in_graph(obj):
+            self.g.add((subj, Relations.intersects, obj))
+            if overlap_pct:
+                self.g.add((subj, SemanticPredicates.overlap_pct, Literal(float(overlap_pct), datatype=XSD.double)))
+            count += 1
+        else:
+            skipped += 1
+
+    # contains: boundary-contains-parcel
+    for subj_str, obj_str in cross_type_relations.get("contains", []):
+        subj = _to_uri_safe(subj_str)
+        obj = _to_uri_safe(obj_str)
+        if subj and obj and _entity_in_graph(subj) and _entity_in_graph(obj):
+            self.g.add((subj, Relations.contains, obj))
+            count += 1
+        else:
+            skipped += 1
+
+    if count:
+        logger.info("Added %d cross-type spatial relations (skipped %d)", count, skipped)
+
+
+def _compute_cross_type_heuristic(self) -> dict:
+    """Heuristic cross-type relation computation using centroid proximity (no shapely).
+
+    This is a fallback when spatial_ops hasn't pre-computed relations. It uses
+    parcel centroid (lon/lat) vs facility/building point coordinates for 'located_in'.
+    For 'intersects' and 'contains', it requires external computation (returns empty).
+
+    Returns:
+        dict with "located_in", "intersects", "contains" lists.
+    """
+    located_in_relations = []
+
+    # Collect parcel centroids
+    parcel_centroids = []  # [(uri, lon, lat)]
+    for s in self.g.subjects(RDF.type, EntityTypes.Parcel):
+        lon = lat = None
+        for _, _, o in self.g.triples((s, PLN.lon, None)):
+            try:
+                lon = float(o)
+            except (ValueError, TypeError):
+                pass
+        for _, _, o in self.g.triples((s, PLN.lat, None)):
+            try:
+                lat = float(o)
+            except (ValueError, TypeError):
+                pass
+        if lon is not None and lat is not None:
+            parcel_centroids.append((s, lon, lat))
+
+    # For each facility/building, find nearest parcel centroid as 'located_in' candidate
+    for pt in self.g.subjects(RDF.type, EntityTypes.Facility):
+        pt_lon = pt_lat = None
+        for _, _, o in self.g.triples((pt, PLN.lon, None)):
+            try:
+                pt_lon = float(o)
+            except (ValueError, TypeError):
+                pass
+        for _, _, o in self.g.triples((pt, PLN.lat, None)):
+            try:
+                pt_lat = float(o)
+            except (ValueError, TypeError):
+                pass
+        if pt_lon is None or pt_lat is None or not parcel_centroids:
+            continue
+        # Find nearest parcel by centroid distance
+        best_uri = None
+        best_dist = float("inf")
+        for puri, clon, clat in parcel_centroids:
+            d = (pt_lon - clon) ** 2 + (pt_lat - clat) ** 2
+            if d < best_dist:
+                best_dist = d
+                best_uri = puri
+        if best_uri is not None and best_dist < 0.005:  # ~500m threshold
+            located_in_relations.append((str(pt), str(best_uri)))
+
+    return {"located_in": located_in_relations, "intersects": [], "contains": []}
+
+
+def _to_uri_safe(uri_str: str):
+    """Safely convert a string to URIRef, returning None if invalid."""
+    if not uri_str:
+        return None
+    if uri_str.startswith("http"):
+        return URIRef(uri_str)
+    if uri_str.startswith("pln:"):
+        return URIRef(PLN_NS + uri_str[4:])
+    return URIRef(PLN_NS + uri_str)
+
+
+# PLN_NS for _to_uri_safe (imported from ontology)
+
+
+# ============================================================
+# v4.8 - Layer group virtual entities + semantic layer
+# ============================================================
+
+
+def _add_gis_layer_groups(self) -> None:
+    """Build GisLayerSet virtual entities aggregating L1 entities by semantic_group.
+
+    For each semantic_group (from get_all_gis_layer_groups()) that has entities
+    in the graph, creates a pln:GisLayerSet_{group} node with:
+      - pln:semantic_group, pln:geometry_kind, pln:gis_description
+      - pln:entity_count
+      - pln:dominant_label (most frequent has_semantic_label)
+      - pln:contains_entity (links to all member entities)
+
+    Layer metadata (gis_type_ref, geometry_kind, description) is read
+    dynamically from gis_layer_registry.yaml via get_gis_layer_group_info().
+    """
+    from collections import Counter
+
+    group_count = 0
+    for group_name in get_all_gis_layer_groups():
+        members = []
+        label_counter: Counter = Counter()
+
+        for s, _, o in self.g.triples((None, semantic_group, Literal(group_name))):
+            members.append(s)
+            for _, _, label_obj in self.g.triples((s, has_semantic_label, None)):
+                label_counter[str(label_obj)] += 1
+
+        if not members:
+            continue
+
+        group_info = get_gis_layer_group_info(group_name)
+        geom_kind = group_info.get("geometry_kind", GEOMETRY_POLYGON)
+        desc = group_info.get("description", group_name)
+
+        if not group_info:
+            for m in members:
+                for _, _, gk in self.g.triples((m, geometry_kind, None)):
+                    geom_kind = str(gk)
+                    break
+                break
+
+        group_uri = PLN[f"GisLayerSet_{group_name}"]
+        self.g.add((group_uri, RDF.type, EntityTypes.GisLayerSet))
+        self.g.add((group_uri, semantic_group, Literal(group_name)))
+        self.g.add((group_uri, geometry_kind, Literal(geom_kind)))
+        self.g.add((group_uri, gis_description, Literal(desc)))
+        self.g.add((group_uri, entity_count, Literal(len(members), datatype=XSD.integer)))
+
+        if label_counter:
+            dom_label = label_counter.most_common(1)[0][0]
+            self.g.add((group_uri, dominant_label, Literal(dom_label)))
+
+        if label_counter:
+            top3 = label_counter.most_common(3)
+            dist_str = ", ".join(f"{lbl}({cnt})" for lbl, cnt in top3)
+            enriched_desc = f"{desc} - {len(members)}个实体，主要: {dist_str}"
+            self.g.add((group_uri, PLN.gis_description_enriched, Literal(enriched_desc)))
+
+        for m in members:
+            self.g.add((group_uri, contains_entity, m))
+
+        group_count += 1
+        logger.info("[GisLayerSet] %s: %d entities, dominant=%s",
+                    group_name, len(members),
+                    label_counter.most_common(1)[0][0] if label_counter else "N/A")
+
+    if group_count:
+        logger.info("Added %d GisLayerSet virtual entities", group_count)
+
+
+def _add_semantic_enrichment(self) -> None:
+    """Add entity-type-level semantic-enrichment triples.
+
+    For each unique (entity_type, has_semantic_label) combination, writes:
+      - pln:taxonomic_parent (classification hierarchy, already on parcels)
+      - pln:legal_constraint (legal restriction from planning_zone)
+      - pln:allowed_operations (permitted operations from allowed_operations.yaml)
+
+    For non-parcel entity types (Road, WaterBody, Facility, Zone), writes
+    type-level semantics as GisLayerSet annotations if applicable.
+
+    Note: Parcel-level semantic triples are already written in _add_parcels().
+    This function handles Zone-level (planning_zone -> control_code -> constraint)
+    semantic enrichment that wasn't covered per-parcel.
+    """
+    # Enrich Zone entities with legal_constraint based on their planning context
+    # (Zones like "有条件建设区" have implicit constraints)
+    count = 0
+    for s, _, _ in self.g.triples((None, RDF.type, EntityTypes.Zone)):
+        name_lit = None
+        for _, _, o in self.g.triples((s, PLN.name, None)):
+            name_lit = str(o)
+            break
+        if not name_lit:
+            continue
+
+        # Map zone names to constraints
+        zone_constraint = ""
+        if "有条件建设" in name_lit:
+            zone_constraint = "conditional_construction"
+        elif "禁止" in name_lit or "保护" in name_lit:
+            zone_constraint = "forbid_construction"
+        elif "限制" in name_lit:
+            zone_constraint = "restrict_construction"
+        elif "允许" in name_lit:
+            zone_constraint = "allow_construction"
+
+        if zone_constraint:
+            self.g.add((s, legal_constraint, Literal(zone_constraint)))
+            count += 1
+
+    if count:
+        logger.info("Added %d zone-level legal_constraint triples", count)

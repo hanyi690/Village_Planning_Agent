@@ -25,7 +25,7 @@ PREFIX pln: <http://village-planning.org/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 """
 
-FRAGMENT_PARAMS = {"type_filter", "slope_filter", "aspect_filter"}
+FRAGMENT_PARAMS: set = set()  # All templates migrated to initBindings
 
 DEPRECATED_TEMPLATES = {
     "get_protected_parcels_detail": "Use get_constraint_coverage() instance method instead",
@@ -281,7 +281,7 @@ QUERY_TEMPLATES = {
             OPTIONAL { ?facility pln:lon ?lon . }
             OPTIONAL { ?facility pln:lat ?lat . }
             OPTIONAL { ?facility pln:serves ?serves . }
-            {type_filter}
+            FILTER(?type = ?facility_type_val)
         }
     """,
 
@@ -346,7 +346,7 @@ QUERY_TEMPLATES = {
                     pln:dlbm ?dlbm ;
                     pln:area_ha ?area_ha ;
                     pln:slope_class ?slope_class .
-            {slope_filter}
+            FILTER(?slope_class = ?slope_class_val)
         }
     """,
 
@@ -358,7 +358,7 @@ QUERY_TEMPLATES = {
                     pln:dlbm ?dlbm ;
                     pln:area_ha ?area_ha ;
                     pln:aspect_class ?aspect_class .
-            {aspect_filter}
+            FILTER(?aspect_class = ?aspect_class_val)
         }
     """,
 }
@@ -372,6 +372,9 @@ BINDING_MAP = {
     "max_lon": "max_lon_val",
     "min_lat": "min_lat_val",
     "max_lat": "max_lat_val",
+    "facility_type": "facility_type_val",
+    "slope_class": "slope_class_val",
+    "aspect_class": "aspect_class_val",
 }
 
 
@@ -458,14 +461,21 @@ def query_kg(kg, template_name: str, **params) -> list:
     for key, default_val in DEFAULT_VALUES.items():
         params.setdefault(key, default_val)
 
-    fragment_params = {k: v for k, v in params.items() if k in FRAGMENT_PARAMS}
-    for key, val in fragment_params.items():
-        safe_val = _sanitize_fragment(val)
-        sparql = sparql.replace(f"{{{key}}}", safe_val)
+    # Backward compat: map old fragment params to new binding keys
+    FRAGMENT_TO_BINDING = {
+        "type_filter": "facility_type",
+        "slope_filter": "slope_class",
+        "aspect_filter": "aspect_class",
+    }
+    for old_key, new_key in FRAGMENT_TO_BINDING.items():
+        if old_key in params and new_key not in params:
+            logger.warning("[query_kg] Deprecated param '%s' used; migrate to '%s'", old_key, new_key)
+            params[new_key] = params[old_key]
+            del params[old_key]
 
     bindings = {}
     for key, val in params.items():
-        if key in FRAGMENT_PARAMS or key in DEFAULT_VALUES:
+        if key in DEFAULT_VALUES:
             continue
         var_name = BINDING_MAP.get(key)
         if var_name is not None:

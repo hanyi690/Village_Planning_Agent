@@ -70,16 +70,16 @@
 
 系统设计对齐以下官方标准：
 
-| 标准                  | 全称                                         | 系统对齐                                     |
-| --------------------- | -------------------------------------------- | -------------------------------------------- |
-| 自然资发〔2023〕234号 | 国土空间调查、规划、用途管制用地用海分类指南 | 用地分类编码体系（YDYHFL）                   |
+| 标准                  | 全称                                         | 系统对齐                                                                       |
+| --------------------- | -------------------------------------------- | ------------------------------------------------------------------------------ |
+| 自然资发〔2023〕234号 | 国土空间调查、规划、用途管制用地用海分类指南 | 用地分类编码体系（YDYHFL）                                                     |
 | GB/T 21010-2017       | 土地利用现状分类                             | 三调国标编码体系（注意：金田村现状层实际为附录5编码，见 02_DATA_SOURCE §2.3） |
-| GB/T 13923-2022       | 基础地理信息要素分类与代码                   | 10位数字层次码（大类+小类+一至四级类）       |
-| DB14/T 2979-2024      | 村庄规划数据库规范                           | 数据库内容、要素分类代码、数学基础、数据分层 |
-| 广东省住建厅 (2018)   | 广东省村庄规划编制指引（试行）               | 四阶段工作流、一图一表一规则成果             |
-| DB4407/T 105-2023     | 村庄建设规划管制规则                         | 6大类管制规则模板                            |
-| 住建部 (2014)         | 村庄规划用地分类指南                         | V/N/E 三分类                                 |
-| 三区三线              | 全国国土空间规划                             | 生态/农业/建设空间 + 三线边界                |
+| GB/T 13923-2022       | 基础地理信息要素分类与代码                   | 10位数字层次码（大类+小类+一至四级类）                                         |
+| DB14/T 2979-2024      | 村庄规划数据库规范                           | 数据库内容、要素分类代码、数学基础、数据分层                                   |
+| 广东省住建厅 (2018)   | 广东省村庄规划编制指引（试行）               | 四阶段工作流、一图一表一规则成果                                               |
+| DB4407/T 105-2023     | 村庄建设规划管制规则                         | 6大类管制规则模板                                                              |
+| 住建部 (2014)         | 村庄规划用地分类指南                         | V/N/E 三分类                                                                   |
+| 三区三线              | 全国国土空间规划                             | 生态/农业/建设空间 + 三线边界                                                  |
 
 ### 0.4 文档说明
 
@@ -97,7 +97,7 @@
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  Agent Layer (理解 + 执行)                                        │
-│  ┌──────────────┐  ┌──────────────────────────────────────────┐ │
+│  ┌────op──────────┐  ┌──────────────────────────────────────────┐ │
 │  │ PARSE Agent  │  │ EXECUTE Agent                            │ │
 │  │ 文本→意图    │  │ 意图→空间 (layout/facility/axis/road/ops)│ │
 │  │ Think-Format │  │ Worker-Evaluator retry loop              │ │
@@ -112,7 +112,7 @@
 │  │ RDFLib Graph + SPARQL 查询    +面对LLM的语义查询+json的实体附带的语义文件                             │ │
 │  └──────────────────────────────┬─────────────────────────────┘ │
 │                                 │ depends                       │
-│         ┌───────────────────────┼───────────────────────┐       │
+│         ┌───────────────────────┼───────────────────────┐       │bundle
 │         ▼                       ▼                       ▼       │
 │  ┌──────────────┐  ┌──────────────────────┐  ┌──────────────┐ │
 │  │ Schema Layer │  │ Data Layer           │  │ Spatial Ops  │ │
@@ -184,7 +184,6 @@
 │  └── compute_context_blocks(bundle) -> List[ContextBlock] │
 └─────────────────────────────────────────────────────────┘
 ```
-
 
 | 概念                      | 职责                                                                  | 类比               |
 | ------------------------- | --------------------------------------------------------------------- | ------------------ |
@@ -527,49 +526,49 @@ class PlanningKG:
 **实体类型**：只包含有几何的空间实体。非空间要素（ControlRule、PlanningIndicator、Constraint）
 从 KG 移出，由 `bundle.tables` 或 ContextBlock 承载。
 
-| 形态 | 实体 | 对应 Schema 类型 | KG 层 |
-|------|------|-----------------|-------|
-| 面 | Parcel | CurrentLandUseParcel | L1 |
-| 面 | WaterBody | WaterFeature | L1 |
-| 面 | BuildingGroup | CurrentBuilding | L1 |
-| 面 | Zone | — | L1 |
-| 面 | ThreeZone | ThreeZoneItem | L1 |
-| 面 | ThreeLine | ThreeLineItem | L1 |
-| 面 | FarmlandProtection | FarmlandProtection | L1 |
-| 面 | EcologicalRedline | EcologicalRedline | L1 |
-| 面 | HistoricalProtection | HistoricalProtection | L1 |
-| 面 | VillageDevBoundary | VillageDevBoundary | L1 |
-| 面 | HazardControlLine | HazardControlLine | L1 |
-| 面 | FloodControlLine | FloodControlLine | L1 |
-| 面 | ConditionalConstructionZone | ConditionalConstructionZone | L1 |
-| 面 | LandUseZone | LandUseZone | L1 |
-| 面 | ConstructionCtrlZone | ConstructionCtrlZone | L1 |
-| 面 | PlanningScope | PlanningScope | L1 |
-| 面 | AdministrativeVillage | AdminArea | L1 |
-| 面 | NaturalSettlement | (从用地聚类) | L1 |
-| 点 | Facility | CurrentFacility | L1 |
-| 线 | Road | CurrentRoad | L1 |
-| 面 | ZoneTarget | ZoneTarget (parse_contracts) | L3 |
-| 点 | FacilityTarget | FacilityTarget | L3 |
-| 线 | RoadTarget | RoadTarget | L3 |
-| 线 | AxisTarget | AxisTarget | L3 |
-| 面 | PlannedParcel | PlannedLandUseParcel | L4 |
-| 点 | PlannedFacility | PlannedFacility | L4 |
-| 线 | PlannedRoad | PlannedRoad | L4 |
+| 形态 | 实体                        | 对应 Schema 类型             | KG 层 |
+| ---- | --------------------------- | ---------------------------- | ----- |
+| 面   | Parcel                      | CurrentLandUseParcel         | L1    |
+| 面   | WaterBody                   | WaterFeature                 | L1    |
+| 面   | BuildingGroup               | CurrentBuilding              | L1    |
+| 面   | Zone                        | —                           | L1    |
+| 面   | ThreeZone                   | ThreeZoneItem                | L1    |
+| 面   | ThreeLine                   | ThreeLineItem                | L1    |
+| 面   | FarmlandProtection          | FarmlandProtection           | L1    |
+| 面   | EcologicalRedline           | EcologicalRedline            | L1    |
+| 面   | HistoricalProtection        | HistoricalProtection         | L1    |
+| 面   | VillageDevBoundary          | VillageDevBoundary           | L1    |
+| 面   | HazardControlLine           | HazardControlLine            | L1    |
+| 面   | FloodControlLine            | FloodControlLine             | L1    |
+| 面   | ConditionalConstructionZone | ConditionalConstructionZone  | L1    |
+| 面   | LandUseZone                 | LandUseZone                  | L1    |
+| 面   | ConstructionCtrlZone        | ConstructionCtrlZone         | L1    |
+| 面   | PlanningScope               | PlanningScope                | L1    |
+| 面   | AdministrativeVillage       | AdminArea                    | L1    |
+| 面   | NaturalSettlement           | (从用地聚类)                 | L1    |
+| 点   | Facility                    | CurrentFacility              | L1    |
+| 线   | Road                        | CurrentRoad                  | L1    |
+| 面   | ZoneTarget                  | ZoneTarget (parse_contracts) | L3    |
+| 点   | FacilityTarget              | FacilityTarget               | L3    |
+| 线   | RoadTarget                  | RoadTarget                   | L3    |
+| 线   | AxisTarget                  | AxisTarget                   | L3    |
+| 面   | PlannedParcel               | PlannedLandUseParcel         | L4    |
+| 点   | PlannedFacility             | PlannedFacility              | L4    |
+| 线   | PlannedRoad                 | PlannedRoad                  | L4    |
 
 **关系类型**：
 
-| 关系 | 含义 | 类别 | 用于 |
-|------|------|------|------|
-| `touches` | 拓扑邻接 | 空间拓扑 | MIP 邻接规则、地块合并 |
-| `nearby` | 近邻关系（≤200m） | 空间拓扑 | 设施选址 |
-| `connected_via_road` | 路网连通 | 空间拓扑 | 交通可达性 |
-| `within_zone` | 包含于分区 | 空间拓扑 | 分区查询 |
-| `located_in` | 位于 | 空间拓扑 | 村名→地块映射 |
-| `delineates` | 划定 | 空间拓扑 | 三线划定 |
-| `designated_as` | 被指定为 | 规划语义 | 用地分类 |
-| `derived_from` | 源于 | 规划语义 | 溯源 |
-| `serves` | 服务 | 规划语义 | 设施覆盖 |
+| 关系                   | 含义               | 类别     | 用于                   |
+| ---------------------- | ------------------ | -------- | ---------------------- |
+| `touches`            | 拓扑邻接           | 空间拓扑 | MIP 邻接规则、地块合并 |
+| `nearby`             | 近邻关系（≤200m） | 空间拓扑 | 设施选址               |
+| `connected_via_road` | 路网连通           | 空间拓扑 | 交通可达性             |
+| `within_zone`        | 包含于分区         | 空间拓扑 | 分区查询               |
+| `located_in`         | 位于               | 空间拓扑 | 村名→地块映射         |
+| `delineates`         | 划定               | 空间拓扑 | 三线划定               |
+| `designated_as`      | 被指定为           | 规划语义 | 用地分类               |
+| `derived_from`       | 源于               | 规划语义 | 溯源                   |
+| `serves`             | 服务               | 规划语义 | 设施覆盖               |
 
 **已删除的关系**（不再属于 KG）：
 `constrained_by`, `achieves`, `conflicts_with`, `conducted_from`, `controls_use`,
@@ -700,19 +699,20 @@ EXECUTE 是**执行层**——将 PARSE 产出的结构化意图转化为空间�
 
 **输入**：PARSE 意图 + KG 约束 + 基数转换后的现状图斑（Data 层）
 **输出**：PlannedLandUseParcel[]（derived_from 关联现状图斑）+ layout_configs
+
 + validation_result + 用地平衡表
 
 ### 5.2 执行策略（按优先序）
 
-| # | 子任务 | 输入 | 策略 | 输出 |
-|---|--------|------|------|------|
-| 0 | 基数转换（Data 层前置） | 三调 DLBM | DLBM -> 规划用途编码映射 | 基期现状图斑 |
-| 1 | **operations**（主策略） | SpatialOperation[] + 现状图斑 | reclassify(批量保持)/modify/split/merge/create | QMDLTB 期末地类图斑 |
-| 2 | **layout**（配额校核） | ZoneTarget[] + operations 结果 | MIP 测算配额并校核偏差 | 配额偏差报告 + 调整建议 |
-| 3 | **facility** | FacilityTarget[] + 设施锚点 | 约束满足 + 最近邻 | 设施点图层 |
-| 4 | **axis** | AxisTarget[] + 现状轴线 | 程序化生成 + 缓冲区 | 轴线 + 空间控制区 |
-| 5 | **road** | 现状道路 + 规划意图 | 图搜索 + 最短路径 | 规划道路网络 |
-| 6 | 聚合派生 | QMDLTB | dissolve by GHFLBM -> TDYT；unary_union -> JSYDGZQ | TDYT/JSYDGZQ 图层 |
+| # | 子任务                         | 输入                           | 策略                                               | 输出                    |
+| - | ------------------------------ | ------------------------------ | -------------------------------------------------- | ----------------------- |
+| 0 | 基数转换（Data 层前置）        | 三调 DLBM                      | DLBM -> 规划用途编码映射                           | 基期现状图斑            |
+| 1 | **operations**（主策略） | SpatialOperation[] + 现状图斑  | reclassify(批量保持)/modify/split/merge/create     | QMDLTB 期末地类图斑     |
+| 2 | **layout**（配额校核）   | ZoneTarget[] + operations 结果 | MIP 测算配额并校核偏差                             | 配额偏差报告 + 调整建议 |
+| 3 | **facility**             | FacilityTarget[] + 设施锚点    | 约束满足 + 最近邻                                  | 设施点图层              |
+| 4 | **axis**                 | AxisTarget[] + 现状轴线        | 程序化生成 + 缓冲区                                | 轴线 + 空间控制区       |
+| 5 | **road**                 | 现状道路 + 规划意图            | 图搜索 + 最短路径                                  | 规划道路网络            |
+| 6 | 聚合派生                       | QMDLTB                         | dissolve by GHFLBM -> TDYT；unary_union -> JSYDGZQ | TDYT/JSYDGZQ 图层       |
 
 ### 5.3 MIP 与 KG 的协作模式（回答 Q5）
 
@@ -990,7 +990,7 @@ app/
 
 | #   | 任务                     | 说明                                                                            |
 | --- | ------------------------ | ------------------------------------------------------------------------------- |
-| 2.1 | ~~Constraint Compiler~~  | 已废弃（v4.6）——MIP 直接消费 SPARQL 结果，不设编译层                           |
+| 2.1 | ~~Constraint Compiler~~ | 已废弃（v4.6）——MIP 直接消费 SPARQL 结果，不设编译层                          |
 | 2.2 | 补齐保护边界入库         | FarmlandProtection, EcologicalRedline, HistoricalProtection, VillageDevBoundary |
 | 2.3 | 补齐规划要素入库         | LandUseZone, ConstructionCtrlZone, PlanningScope                                |
 | 2.4 | 补齐自然地理入库         | WaterFeature, GeologicalHazardPoint, ElevationPoint                             |
@@ -1033,12 +1033,12 @@ app/
 
 系统内部统一 WGS84（见 §1.3），但汇交要求不同，须在 export 层做出口转换：
 
-| 项 | 内部 | 汇交要求 | 出口转换 |
-|---|---|---|---|
-| 坐标系 | WGS84 (EPSG:4326) | CGCS2000，三度分带高斯投影 | export 层统一重投影 |
-| 高程基准 | — | 1985 国家高程基准 | 栅格/高程数据标注 |
-| 面积 | 平面近似 | TBMJ 椭球面积 | 导出前按椭球面积重算 |
-| 容差 | — | Tolerance 0.001 / Resolution 0.0001 | .mdb 建库参数 |
+| 项       | 内部              | 汇交要求                            | 出口转换             |
+| -------- | ----------------- | ----------------------------------- | -------------------- |
+| 坐标系   | WGS84 (EPSG:4326) | CGCS2000，三度分带高斯投影          | export 层统一重投影  |
+| 高程基准 | —                | 1985 国家高程基准                   | 栅格/高程数据标注    |
+| 面积     | 平面近似          | TBMJ 椭球面积                       | 导出前按椭球面积重算 |
+| 容差     | —                | Tolerance 0.001 / Resolution 0.0001 | .mdb 建库参数        |
 
 **红线**：GCJ-02 及其纠偏产物（即使偏移 <5m）不得进入汇交链路；商业底图瓦片
 （天地图/高德）仅用于可视化，不参与几何运算与成果导出。
@@ -1071,11 +1071,11 @@ app/
 
 2024-2025 政策转向后须支持三种模式（详见 HUMAN_PLANNING_WORKFLOW §7）：
 
-| 模式 | 成果 | 系统行为 |
-|---|---|---|
-| 完整编制 | 一图一表一规则 + 数据库汇交 | 全流程（当前默认） |
+| 模式       | 成果                                        | 系统行为                                  |
+| ---------- | ------------------------------------------- | ----------------------------------------- |
+| 完整编制   | 一图一表一规则 + 数据库汇交                 | 全流程（当前默认）                        |
 | 通则式管理 | 一图一表（底线管控图+管控要求表）+ 附加图层 | 裁剪输出：仅底线层+负面清单，跳过详细布局 |
-| 不编制 | — | 仅现状分析报告 |
+| 不编制     | —                                          | 仅现状分析报告                            |
 
 ### 7.5 上位指标分解
 
@@ -1090,20 +1090,20 @@ app/
 
 ## 附录 A：术语表
 
-| 术语                | 全称                                                    | 说明                              |
-| ------------------- | ------------------------------------------------------- | --------------------------------- |
-| PARSE               | Plan Agent for Report Spatial Extraction                | 规划文本 → 空间意图              |
-| EXECUTE             | Execution Agent                                         | 空间意图 → 空间几何成果          |
-| KG                  | Knowledge Graph                                         | 语义桥接层                        |
-| MIP                 | Mixed Integer Programming                               | 混合整数规划（批量分区优化）      |
-| GDB                 | GeoDatabase                                             | 空间数据库格式                    |
-| DLBM                | 地类编码                                                | 土地利用分类编码                  |
-| GHYTBM              | 规划用途编码                                            | 附录5编码                         |
-| BSM                 | 标识码                                                  | 地块唯一标识                      |
-| VNE                 | V=村庄建设用地, N=非村庄建设用地, E=非建设用地          | 住建部三分类                      |
-| 三区三线            | 生态/农业/建设空间 + 生态红线/永久基本农田/城镇开发边界 | 全国国土空间规划                  |
-| 一图一表一规则      | 村庄规划总图 + 近期建设项目表 + 管制规则                | 广东省基本成果                    |
-| SpatialContext      | 空间上下文                                              | 约2KB的空间摘要，注入PARSE prompt |
+| 术语                | 全称                                                    | 说明                                 |
+| ------------------- | ------------------------------------------------------- | ------------------------------------ |
+| PARSE               | Plan Agent for Report Spatial Extraction                | 规划文本 → 空间意图                 |
+| EXECUTE             | Execution Agent                                         | 空间意图 → 空间几何成果             |
+| KG                  | Knowledge Graph                                         | 语义桥接层                           |
+| MIP                 | Mixed Integer Programming                               | 混合整数规划（批量分区优化）         |
+| GDB                 | GeoDatabase                                             | 空间数据库格式                       |
+| DLBM                | 地类编码                                                | 土地利用分类编码                     |
+| GHYTBM              | 规划用途编码                                            | 附录5编码                            |
+| BSM                 | 标识码                                                  | 地块唯一标识                         |
+| VNE                 | V=村庄建设用地, N=非村庄建设用地, E=非建设用地          | 住建部三分类                         |
+| 三区三线            | 生态/农业/建设空间 + 生态红线/永久基本农田/城镇开发边界 | 全国国土空间规划                     |
+| 一图一表一规则      | 村庄规划总图 + 近期建设项目表 + 管制规则                | 广东省基本成果                       |
+| SpatialContext      | 空间上下文                                              | 约2KB的空间摘要，注入PARSE prompt    |
 | Constraint Compiler | 约束编译器（已废弃 v4.6）                               | MIP 直接消费 SPARQL 结果，不设编译层 |
 
 ## 附录 B：与旧文档的对应关系

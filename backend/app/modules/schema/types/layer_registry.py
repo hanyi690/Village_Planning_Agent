@@ -1,20 +1,20 @@
-"""Unified layer type registry -- YAML + Python hybrid architecture.
+"""Unified GIS layer-type registry -- YAML + Python hybrid architecture.
 
 Design (v4.2b):
-  YAML (layer_registry.yaml) = declarative metadata
+  YAML (gis_layer_registry.yaml) = declarative metadata
     geometry_kind, is_reference_layer, description, group, encoding_system
   Python (this file) = type bindings + ingest routing
     model_class_name -> actual class, ingest_port -> actual function
 
-Adding a new layer type:
-  1. Add entry to layer_registry.yaml (declarative metadata)
+Adding a new GIS layer type:
+  1. Add entry to gis_layer_registry.yaml (declarative metadata)
   2. If it maps to an existing Schema class + ingest port:
      add a binding in _TYPE_BINDINGS below
   3. If no binding exists: registry entry is still created (for discovery)
      but ingest_port stays None (future inference pipeline)
 
 Factory: build_registry_from_yaml() merges YAML metadata + Python bindings
-into LAYER_TYPE_REGISTRY. Call this at module import time.
+into GIS_LAYER_REGISTRY. Call this at module import time.
 
 Reference: backend/app/modules/schema/README.md §八
 """
@@ -28,9 +28,9 @@ import yaml
 from pydantic import BaseModel
 
 
-class LayerTypeEntry(BaseModel):
-    """One layer type's complete metadata."""
-    layer_type: str
+class GisLayerTypeEntry(BaseModel):
+    """One GIS layer type's complete metadata."""
+    gis_type_ref: str
     model_class_name: str = ""       # e.g. "CurrentLandUseParcel"
     geometry_kind: str = ""          # "point"|"line"|"polygon"|"raster"|"table"|"document"|"annotation"
     ingest_port: Optional[str] = None  # "result_to_parcels" | "result_to_features" | None
@@ -40,11 +40,11 @@ class LayerTypeEntry(BaseModel):
     description: str = ""
 
 
-LAYER_TYPE_REGISTRY: Dict[str, LayerTypeEntry] = {}
+GIS_LAYER_REGISTRY: Dict[str, GisLayerTypeEntry] = {}
 
 
-def register_layer_type(
-    layer_type: str,
+def register_gis_layer_type(
+    gis_type_ref: str,
     *,
     model_class_name: str = "",
     geometry_kind: str = "",
@@ -54,9 +54,9 @@ def register_layer_type(
     is_reference_layer: bool = False,
     description: str = "",
 ) -> None:
-    """Register a layer type directly (backward-compatible, also used by factory)."""
-    LAYER_TYPE_REGISTRY[layer_type] = LayerTypeEntry(
-        layer_type=layer_type,
+    """Register a GIS layer type directly (backward-compatible, also used by factory)."""
+    GIS_LAYER_REGISTRY[gis_type_ref] = GisLayerTypeEntry(
+        gis_type_ref=gis_type_ref,
         model_class_name=model_class_name,
         geometry_kind=geometry_kind,
         ingest_port=ingest_port,
@@ -67,12 +67,12 @@ def register_layer_type(
     )
 
 
-def get_layer_entry(layer_type: str) -> Optional[LayerTypeEntry]:
-    return LAYER_TYPE_REGISTRY.get(layer_type)
+def get_gis_layer_entry(gis_type_ref: str) -> Optional[GisLayerTypeEntry]:
+    return GIS_LAYER_REGISTRY.get(gis_type_ref)
 
 
-def get_all_layer_types() -> List[str]:
-    return list(LAYER_TYPE_REGISTRY.keys())
+def get_all_gis_layer_types() -> List[str]:
+    return list(GIS_LAYER_REGISTRY.keys())
 
 
 # ── Python bindings: layer_type -> (model_class_name, ingest_port, ingest_arg) ──
@@ -136,40 +136,45 @@ _TYPE_BINDINGS: Dict[str, tuple] = {
 
 
 def build_registry_from_yaml(yaml_path: Optional[str] = None) -> None:
-    """Build LAYER_TYPE_REGISTRY from YAML metadata + Python type bindings.
+    """Build GIS_LAYER_REGISTRY from YAML metadata + Python type bindings.
 
-    Merges declarative metadata from layer_registry.yaml with class/ingest
+    Merges declarative metadata from gis_layer_registry.yaml with class/ingest
     bindings from _TYPE_BINDINGS. Entries in YAML that have no Python binding
     still get a registry entry (for discovery), but with empty ingest_port.
 
     Args:
-        yaml_path: path to layer_registry.yaml. Default: sibling of this file.
+        yaml_path: path to gis_layer_registry.yaml. Default: sibling of this file.
     """
     if yaml_path is None:
-        yaml_path = str(Path(__file__).parent / "layer_registry.yaml")
+        yaml_path = str(Path(__file__).parent / "gis_layer_registry.yaml")
 
     # Load YAML metadata
     try:
         with open(yaml_path, "r", encoding="utf-8") as f:
             yaml_data = yaml.safe_load(f) or {}
     except FileNotFoundError:
-        # YAML not available — fall back to inline defaults only
+        try:
+            # Fallback to old name for transition period
+            yaml_path = str(Path(__file__).parent / "layer_registry.yaml")
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                yaml_data = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            _build_from_bindings_only()
+            return
+
+    gis_layer_types = yaml_data.get("layer_types", {})
+    if not gis_layer_types:
         _build_from_bindings_only()
         return
 
-    layer_types = yaml_data.get("layer_types", {})
-    if not layer_types:
-        _build_from_bindings_only()
-        return
-
-    for layer_type, meta in layer_types.items():
-        binding = _TYPE_BINDINGS.get(layer_type)
+    for gis_type_ref, meta in gis_layer_types.items():
+        binding = _TYPE_BINDINGS.get(gis_type_ref)
         model_class_name = binding[0] if binding else ""
         ingest_port = binding[1] if binding else None
         ingest_arg = binding[2] if binding else ""
 
-        register_layer_type(
-            layer_type,
+        register_gis_layer_type(
+            gis_type_ref,
             model_class_name=model_class_name,
             geometry_kind=meta.get("geometry_kind", ""),
             ingest_port=ingest_port,
@@ -183,12 +188,10 @@ def build_registry_from_yaml(yaml_path: Optional[str] = None) -> None:
 def _build_from_bindings_only() -> None:
     """Fallback: build registry from _TYPE_BINDINGS + inline defaults only.
 
-    Used when layer_registry.yaml is not available.
+    Used when gis_layer_registry.yaml is not available.
     Geometry_kind and is_reference_layer are hardcoded here as they
-    were in the original register_layer_type() calls.
+    were in the original register_gis_layer_type() calls.
     """
-    # This mirrors the pre-YAML inline registration calls.
-    # Kept as fallback so the system works without the YAML file.
     _FALLBACK_TYPES = {
         "boundary":               ("polygon", False),
         "landuse_current":        ("polygon", False),
@@ -236,7 +239,7 @@ def _build_from_bindings_only() -> None:
 
     for lt, binding in _TYPE_BINDINGS.items():
         kind, ref = _FALLBACK_TYPES.get(lt, ("", False))
-        register_layer_type(
+        register_gis_layer_type(
             lt,
             model_class_name=binding[0],
             geometry_kind=kind,
@@ -246,11 +249,11 @@ def _build_from_bindings_only() -> None:
             description=lt,
         )
 
-    # Register types not in _TYPE_BINDINGS (e.g., boundary with no ingest port)
+    # Register types not in _TYPE_BINDINGS
     for lt, (kind, ref) in _FALLBACK_TYPES.items():
-        if lt not in {b[0] for b in _TYPE_BINDINGS.values() if False}:  # Skip if in bindings
-            if lt not in LAYER_TYPE_REGISTRY:
-                register_layer_type(lt, geometry_kind=kind, is_reference_layer=ref, description=lt)
+        if lt not in {b[0] for b in _TYPE_BINDINGS.values() if False}:
+            if lt not in GIS_LAYER_REGISTRY:
+                register_gis_layer_type(lt, geometry_kind=kind, is_reference_layer=ref, description=lt)
 
 
 # ── Initialize registry at import time ──
@@ -259,10 +262,10 @@ build_registry_from_yaml()
 
 
 __all__ = [
-    "LayerTypeEntry",
-    "LAYER_TYPE_REGISTRY",
-    "register_layer_type",
-    "get_layer_entry",
-    "get_all_layer_types",
+    "GisLayerTypeEntry",
+    "GIS_LAYER_REGISTRY",
+    "register_gis_layer_type",
+    "get_gis_layer_entry",
+    "get_all_gis_layer_types",
     "build_registry_from_yaml",
 ]

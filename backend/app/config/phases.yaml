@@ -51,7 +51,7 @@ phases:
 
       - key: traffic
         name: "道路交通分析"
-        tools: ["accessibility_analysis"]
+        tools: []
         rag_query: "村庄道路等级分类 交通可达性分析 道路宽度标准"
         prefer_doc_types: [standard, guide]
         depends_on: []
@@ -130,7 +130,7 @@ phases:
 
       - key: planning_strategies
         name: "规划策略分析"
-        tools: ["population_model_v1"]
+        tools: ["population_prediction"]
         rag_query: ""
         depends_on: ["resource_endowment", "planning_positioning", "development_goals"]
         layer_depends_on:
@@ -162,7 +162,7 @@ phases:
 
       - key: spatial_structure
         name: "空间结构规划"
-        tools: ["gis_agent"]
+        tools: []
         rag_query: "村庄空间结构规划 空间布局模式 一核多点布局"
         prefer_doc_types: [standard, case]
         depends_on: []

@@ -1,12 +1,12 @@
-# Layer type registry — declarative metadata for all known GIS layer types.
+# GIS layer type registry — declarative metadata for all known GIS layer types.
 #
 # This YAML holds the "what" (declarative description) of each layer type.
 # The "how" (Python class bindings + ingest port functions) stays in layer_registry.py.
 #
 # Design: YAML = configuration (editable without restart), Python = implementation
-# See: backend/app/modules/schema/README.md §八 LAYER_TYPE_REGISTRY 混合模式
+# See: backend/app/modules/schema/README.md §八 GIS_LAYER_REGISTRY 混合模式
 #
-# Adding a new layer type:
+# Adding a new GIS layer type:
 #   1. Add entry here (geometry_kind, description, group, optional is_reference_layer)
 #   2. If it maps to an existing Schema class, add binding to _TYPE_CLASS_MAP in .py
 #   3. If it maps to an existing ingest port, add binding to _TYPE_INGEST_PORT_MAP in .py

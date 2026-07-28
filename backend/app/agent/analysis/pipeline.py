@@ -3,11 +3,12 @@
 The single entry point for all tool execution. Replaces the old dual-path
 (_run_gis + get_specialized_data) with one coherent pipeline.
 """
+from __future__ import annotations
 
 import asyncio
 from typing import Any, Dict, List, Optional
 
-from app.tools.registry import ToolRegistry
+from app.tools.tools import TOOL_REGISTRY
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -17,16 +18,16 @@ class DataPipeline:
     """Unified tool execution pipeline.
 
     Flow:
-    1. Read tool config for the dimension (from phases.yaml via ToolRegistry)
-    2. Filter to IMPLEMENTED tools only (STUB tools like GIS are skipped)
+    1. Read tool config for the dimension (from phases.yaml)
+    2. Filter to IMPLEMENTED tools only (STUB tools are skipped)
     3. Build context (inject structured_summary + state data)
-    4. Execute each tool via ToolRegistry.execute_tool()
+    4. Execute each tool via TOOL_REGISTRY (from tools.py)
     5. Aggregate results as professional_data
     6. Single tool failure is isolated (does not affect others)
     """
 
     def __init__(self) -> None:
-        self._registry = ToolRegistry()
+        self._registry = TOOL_REGISTRY
 
     async def get_professional_data(
         self,
@@ -57,9 +58,8 @@ class DataPipeline:
 
         for tool_name in implemented_tools:
             try:
-                result = await asyncio.to_thread(
-                    self._registry.execute_tool, tool_name, context
-                )
+                tool_fn = self._registry[tool_name]
+                result = await asyncio.to_thread(tool_fn.invoke, context)
                 professional_data[tool_name] = result
                 logger.info(
                     f"[DataPipeline] {dimension_key}/{tool_name}: success"
@@ -81,10 +81,10 @@ class DataPipeline:
             return []
 
     def _filter_implemented(self, tool_names: List[str]) -> List[str]:
-        """Keep only tools that exist in the ToolRegistry."""
+        """Keep only tools that exist in the TOOL_REGISTRY."""
         implemented = []
         for name in tool_names:
-            if self._registry.get_tool_metadata(name) is not None:
+            if name in self._registry:
                 implemented.append(name)
             else:
                 logger.debug(f"[DataPipeline] Skipping unregistered tool: {name}")

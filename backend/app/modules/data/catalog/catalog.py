@@ -297,16 +297,16 @@ class DataCatalog:
                 )
         return results
 
-    # layer_type -> (ingest port, ingest arg) mapping for typed bundle loading.
-    # Derived from LAYER_TYPE_REGISTRY (T6). Kept as backward compat property.
+    # gis_type_ref -> (ingest port, ingest arg) mapping for typed bundle loading.
+    # Derived from GIS_LAYER_REGISTRY (T6). Kept as backward compat property.
     @classmethod
     @property
     def _TYPED_LAYER_MAP(cls):
-        """Backward compat -- derived from LAYER_TYPE_REGISTRY."""
-        from app.modules.schema.types.layer_registry import LAYER_TYPE_REGISTRY
+        """Backward compat -- derived from GIS_LAYER_REGISTRY."""
+        from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
         return {
             lt: (e.ingest_port, e.ingest_arg) if e.ingest_port else None
-            for lt, e in LAYER_TYPE_REGISTRY.items()
+            for lt, e in GIS_LAYER_REGISTRY.items()
         }
 
     def load_village_bundle(
@@ -326,16 +326,16 @@ class DataCatalog:
         Args:
             village_name: village name for metadata and geocode fallback.
             layer_types: specific layer types to load. If None, loads all
-                configured sources whose layer_type is in ``LAYER_TYPE_REGISTRY``.
+                configured sources whose layer_type is in ``GIS_LAYER_REGISTRY``.
 
         Returns:
             ``VillageBundle`` with points/lines/polygons/rasters morphology groups.
         """
-        from app.modules.schema.types.layer_registry import LAYER_TYPE_REGISTRY
+        from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
         from ..ingest import result_to_parcels, result_to_features
 
         if layer_types is None:
-            layer_types = list(LAYER_TYPE_REGISTRY.keys())
+            layer_types = list(GIS_LAYER_REGISTRY.keys())
 
         # Step 1: Load boundary first (no bbox needed for file_vector)
         bbox = None
@@ -366,7 +366,7 @@ class DataCatalog:
             if lt == "boundary":
                 # Already loaded in Step 1
                 continue
-            entry = LAYER_TYPE_REGISTRY.get(lt)
+            entry = GIS_LAYER_REGISTRY.get(lt)
             if entry is None or entry.ingest_port is None:
                 # Untyped layers — skip with warning (inference pipeline not yet active)
                 logger.debug(

@@ -1,4 +1,9 @@
-"""Ontology definitions for PlanningKG (v4.7).
+"""Ontology definitions for PlanningKG (v4.8.2).
+
+Naming convention:
+  - GisXxx / gis_* = GIS map-layer concepts (data themes, layer_registry)
+  - Layer{1,2,3,4} = KG planning-phase build stages
+  - Plain names = KG-internal (semantic enrichment, entity types)
 
 [v4.6] Removed non-spatial entity types: Constraint, PlanningIndicator,
 ControlRule, LandUseCategory, PlanIntent, Axis (L1 unused).
@@ -6,19 +11,38 @@ Added L3 RoadTarget, L4 PlannedZone/PlannedFacility/PlannedRoad/PlannedAxis.
 Removed 8 relations: constrained_by, achieves, conflicts_with, conducted_from,
 controls_use, protects, adjacent_to, location_constraint.
 
-[v4.7] ThreeZone/ThreeLine removed from active entity types (all()) —
-         transitioned to ConstraintIndex-based spatial queries.
-         The type constants remain as class attributes for backward compat.
+[v4.7] ThreeZone/ThreeLine removed from active entity types (all()) -
+           transitioned to ConstraintIndex-based spatial queries.
+           The type constants remain as class attributes for backward compat.
 
-Entity types: 17 total (active)
+[v4.8] Spatial cognition schema:
+          - Three-dimension predicates: gis_type_ref, geometry_kind, semantic_group,
+            has_semantic_label (per L1 entity, from gis_layer_registry.yaml + encoding)
+          - GisLayerSet virtual entity: aggregates contains_entity for layer-set
+            level queries and LLM-facing layer cards.
+          - Semantic-enrichment predicates: taxonomic_parent, legal_constraint,
+            allowed_operations (entity-type level, derived from encodings/dicts/rules).
+
+[v4.8.2] Naming cleanup:
+          - GIS-related predicates prefixed with gis_:
+            layer_type->gis_type_ref, layer_description->gis_description,
+            layer_entity_count->entity_count, LayerGroup->GisLayerSet,
+            layer_description_enriched->gis_description_enriched
+          - Functions: get_layer_group_info->get_gis_layer_group_info,
+            get_all_layer_groups->get_all_gis_layer_groups
+          - Python classes/variables: LAYER_TYPE_REGISTRY->GIS_LAYER_REGISTRY,
+            LayerTypeEntry->GisLayerTypeEntry, register_layer_type->register_gis_layer_type
+
+Entity types: 18 total (active)
   L1: Parcel, Zone, Village, Facility, Road, WaterBody,
-      AdministrativeVillage, ResidentialCluster
+      AdministrativeVillage, ResidentialCluster, GisLayerSet
   L3: ZoneTarget, FacilityTarget, AxisTarget, RoadTarget
   L4: PlannedParcel, PlannedZone, PlannedFacility, PlannedRoad, PlannedAxis
 
-Relations: 10 total
-  Spatial: touches, nearby, connected_via_road, within_zone, located_in
-  Semantic: designated_as, derived_from, serves, connects, delineates
+Relations: 8 total
+  Spatial: touches, nearby, connected_via_road, located_in, intersects, contains
+  Semantic: derived_from, serves
+  (within_zone, designated_as, connects, delineates kept for backward compat but not in active set)
 """
 
 from __future__ import annotations
@@ -26,7 +50,17 @@ from __future__ import annotations
 from rdflib import Literal, Namespace, URIRef
 
 PLN = Namespace("http://village-planning.org/ontology#")
+PLN_NS = "http://village-planning.org/ontology#"
 GEO = Namespace("http://www.opengis.net/ont/geosparql#")
+
+
+# ============================================================
+# Geometry kind constants (mirror gis_layer_registry.yaml geometry_kind values)
+# ============================================================
+
+GEOMETRY_POLYGON = "polygon"
+GEOMETRY_LINE = "line"
+GEOMETRY_POINT = "point"
 
 
 class EntityIdPolicy:
@@ -72,13 +106,15 @@ class EntityIdPolicy:
 
 
 class EntityTypes:
-    """17 active entity type URIs for the planning ontology (v4.7).
+    """18 active entity type URIs for the planning ontology (v4.8).
 
     v4.6: removed Constraint, PlanningIndicator, ControlRule, LandUseCategory,
     PlanIntent, Axis (non-spatial). Added RoadTarget (L3), PlannedZone,
     PlannedFacility, PlannedRoad, PlannedAxis (L4).
-    v4.7: ThreeZone/ThreeLine removed from all() — migrated to ConstraintIndex.
-          The type constants remain for backward compat (3rd-party scripts)."""
+    v4.7: ThreeZone/ThreeLine removed from all() - migrated to ConstraintIndex.
+          The type constants remain for backward compat (3rd-party scripts).
+    v4.8: LayerGroup added - virtual entity aggregating layer-group membership
+          for layer-card-level queries (not a spatial entity, carries no BSM)."""
     # L1: Static entities (现状)
     Parcel = PLN.Parcel
     Zone = PLN.Zone
@@ -91,6 +127,8 @@ class EntityTypes:
     AdministrativeVillage = PLN.AdministrativeVillage
     ResidentialCluster = PLN.ResidentialCluster
     PlaceRef = PLN.PlaceRef
+    ControlLine = PLN.ControlLine      # 控制线（灾害/洪涝等）
+    GisLayerSet = PLN.GisLayerSet      # v4.8: virtual gis-layer aggregator
     # L3: Intent virtual entities (意图虚拟实体)
     ZoneTarget = PLN.ZoneTarget
     FacilityTarget = PLN.FacilityTarget
@@ -105,61 +143,186 @@ class EntityTypes:
 
     @classmethod
     def all(cls) -> list:
-        """Active entity types (17, excluding ThreeZone/ThreeLine per v4.7)."""
+        """Active entity types (18, excluding ThreeZone/ThreeLine per v4.7)."""
         return [
             cls.Parcel, cls.Zone, cls.Village, cls.Facility, cls.Road, cls.WaterBody,
-            cls.AdministrativeVillage, cls.ResidentialCluster,
+            cls.AdministrativeVillage, cls.ResidentialCluster, cls.ControlLine, cls.GisLayerSet,
             cls.ZoneTarget, cls.FacilityTarget, cls.AxisTarget, cls.RoadTarget,
             cls.PlannedParcel, cls.PlannedZone, cls.PlannedFacility,
             cls.PlannedRoad, cls.PlannedAxis,
         ]
 
+    @classmethod
+    def spatial_l1(cls) -> list:
+        """L1 spatial entity types (have geometry, carry BSM). Excludes GisLayerSet."""
+        return [
+            cls.Parcel, cls.Zone, cls.Village, cls.Facility, cls.Road, cls.WaterBody,
+            cls.AdministrativeVillage, cls.ResidentialCluster, cls.ControlLine,
+        ]
+
 
 class Relations:
-    """10 relationship type URIs for the planning ontology (v4.6).
+    """8 active relationship type URIs for the planning ontology (v4.8.1).
 
     v4.6: removed constrained_by, achieves, conflicts_with, conducted_from,
     controls_use, protects, adjacent_to, location_constraint (non-spatial).
+    v4.8.1: merged within->located_in, crosses+overlaps->intersects, bounds->contains.
+            Removed adjacent_to (touches covers it). within_zone/designated_as/
+            connects/delineates kept for backward compat but not in active set.
 
     Spatial relations:
-      touches (L1 topology), nearby (L2 proximity), connected_via_road (L3 connectivity)
+      touches (parcel-parcel topology), nearby (proximity),
+      connected_via_road (road network connectivity),
+      located_in (containment: point-in-polygon, facility-in-parcel),
+      intersects (cross-type: line-crosses-polygon, parcel-overlaps-protection),
+      contains (polygon-bounds: boundary-contains-parcel)
+    Semantic relations:
+      derived_from (L4->L1 lineage), serves (facility->population)
     """
     # Spatial topology
-    within_zone = PLN.within_zone
     touches = PLN.touches
     nearby = PLN.nearby
     connected_via_road = PLN.connected_via_road
-    located_in = PLN.located_in
+    located_in = PLN.located_in           # containment (point-in-polygon, facility-in-parcel)
+    intersects = PLN.intersects           # cross-type intersection (line-crosses, parcel-overlaps-protection)
+    contains = PLN.contains               # polygon-bounds (boundary-contains-parcel)
     # Planning semantics
-    designated_as = PLN.designated_as
     derived_from = PLN.derived_from
     serves = PLN.serves
+    # Backward compat (not in active set)
+    within_zone = PLN.within_zone
+    designated_as = PLN.designated_as
     connects = PLN.connects
     delineates = PLN.delineates
 
     @classmethod
     def all(cls) -> list:
+        """Active relations (8)."""
         return [
-            cls.within_zone, cls.touches, cls.nearby, cls.connected_via_road,
-            cls.located_in,
-            cls.designated_as, cls.derived_from, cls.serves, cls.connects,
-            cls.delineates,
+            cls.touches, cls.nearby, cls.connected_via_road,
+            cls.located_in, cls.intersects, cls.contains,
+            cls.derived_from, cls.serves,
         ]
 
 
-# v4.4 — Attribute properties (not relations, but used as PLN predicates)
-# These are accessed as PLN.attr_name rather than through Relations class
-# shared_boundary_length, centroid_distance, shortest_path_length,
-# max_distance_m, land_use_code, target_area_ha, min_area_sqm
+class SemanticPredicates:
+    """v4.8 spatial cognition predicates, organized by category.
 
-# v4.7 — L3 spatial anchoring predicates (PARSE grounding)
-# Accessed as PLN.attr_name (e.g. PLN.candidate_bsm, PLN.spatial_hint)
-# candidate_bsm, excluded_bsm, candidate_bbox, spatial_hint, description,
-# planning_zone, raw_planning_text
-# has_zone, has_facility, has_axis, has_road — village-to-L3 linking
+    GIS-type predicates (per L1 spatial entity, written at build time):
+      gis_type_ref      <- gis_layer_registry.yaml key (e.g. "landuse_current", "road")
+      geometry_kind     <- "polygon" | "line" | "point"
+      semantic_group    <- gis_layer_registry.yaml group (e.g. "current_landuse", "transport")
+      has_semantic_label <- Chinese label derived from dlbm (e.g. 0101 -> "水田")
+
+    GisLayerSet predicates (on GisLayerSet virtual entities):
+      contains_entity      <- links GisLayerSet -> its member entities
+      gis_description      <- human-readable description (registry + statistics)
+      entity_count         <- integer count
+      dominant_label       <- most frequent has_semantic_label in the set
+
+    Semantic-enrichment predicates (entity-type level, derived from encodings/dicts/rules):
+      taxonomic_parent   <- classification hierarchy (水田 -> 耕地 -> 农用地)
+      legal_constraint   <- legal restriction (农田保护区 -> forbid_construction)
+      allowed_operations <- permitted SpatialOperation actions (宅基地 -> [split,merge,reclassify])
+    """
+    # GIS-type predicates
+    gis_type_ref = PLN.gis_type_ref
+    geometry_kind = PLN.geometry_kind
+    semantic_group = PLN.semantic_group
+    has_semantic_label = PLN.has_semantic_label
+
+    # GisLayerSet predicates
+    contains_entity = PLN.contains_entity
+    gis_description = PLN.gis_description
+    entity_count = PLN.entity_count
+    dominant_label = PLN.dominant_label
+
+    # Semantic-enrichment predicates
+    taxonomic_parent = PLN.taxonomic_parent
+    legal_constraint = PLN.legal_constraint
+    allowed_operations = PLN.allowed_operations
+
+    # Cross-type spatial relation quantitative attribute
+    overlap_pct = PLN.overlap_pct
 
 
-# Facility types — used by layer builders
+# ============================================================
+# GIS layer metadata: dynamically read from gis_layer_registry.yaml
+# ============================================================
+
+def get_gis_layer_group_info(group_name: str) -> dict:
+    """Get GIS layer metadata from gis_layer_registry.yaml by semantic group name.
+
+    Reads the YAML at runtime - no hardcoded registry dict.
+    Returns dict with: gis_type_ref, geometry_kind, description.
+    Returns empty dict if group not found.
+    """
+    try:
+        from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+        for gis_type, entry in GIS_LAYER_REGISTRY.items():
+            if _gis_type_matches_group(gis_type, group_name):
+                return {
+                    "gis_type_ref": gis_type,
+                    "geometry_kind": entry.geometry_kind,
+                    "description": entry.description,
+                }
+    except Exception:
+        pass
+    return {}
+
+
+def _gis_type_matches_group(gis_type: str, group_name: str) -> bool:
+    """Check if a gis_type belongs to a semantic group.
+
+    Maps semantic_group -> representative gis_type_ref.
+    """
+    _GROUP_TO_GIS_TYPE = {
+        "current_landuse": "landuse_current",
+        "transport": "road",
+        "water": "water",
+        "facility": "current_facility",
+        "protection": "farmland_protection",
+        "hazard": "hazard_control_line",
+        "hazard_point": "geological_hazard_points",
+        "construction": "construction_zone",
+        "admin": "boundary",
+        "building": "current_building",
+        "terrain": "contour_line",
+        "natural_resource": "soil_type",
+    }
+    return _GROUP_TO_GIS_TYPE.get(group_name) == gis_type
+
+
+def get_all_gis_layer_groups() -> list:
+    """Return all known GIS semantic group names."""
+    return [
+        "current_landuse", "transport", "water", "facility",
+        "protection", "hazard", "hazard_point", "construction",
+        "admin", "building", "terrain", "natural_resource",
+    ]
+
+
+# ============================================================
+# Semantic-enrichment derivation rules (documentation)
+# ============================================================
+#
+# taxonomic_parent: derived from appendix5 zone_type + planning_zone_to_primary_zone
+#   DLBM -> zone_type (农业用地/生态绿地/居住用地/...) -> primary_zone (农业空间/生态空间/建设空间)
+#
+# legal_constraint: derived from construction_zone_codes + planning_zone_to_control_code
+#   planning_zone -> control_code (01-06) -> constraint description
+#   05 永久基本农田保护区 -> "forbid_construction" (禁止非农建设)
+#   06 生态保护红线区 -> "forbid_construction" (禁止建设)
+#   04 禁止建设区 -> "forbid_construction"
+#   03 有条件建设区 -> "conditional_construction" (不超过现状20%)
+#   02 限制建设区 -> "restrict_construction"
+#   01 允许建设区 -> "allow_construction"
+#
+# allowed_operations: manually supplemented from allowed_operations.yaml
+#   (see encodings/dicts/rules/allowed_operations.yaml)
+
+
+# Facility types - used by layer builders
 FACILITY_TYPES = {
     "公共服务": {"entity": EntityTypes.Facility, "serves": "居民"},
     "教育": {"entity": EntityTypes.Facility, "serves": "学生"},
@@ -168,7 +331,7 @@ FACILITY_TYPES = {
     "体育": {"entity": EntityTypes.Facility, "serves": "居民"},
 }
 
-# Regulation types — 省标6大类管制规则(附录3)
+# Regulation types - 省标6大类管制规则(附录3)
 REGULATION_TYPES = {
     "永久基本农田保护": {"category": "farmland_protection"},
     "生态保护红线": {"category": "ecological_protection"},

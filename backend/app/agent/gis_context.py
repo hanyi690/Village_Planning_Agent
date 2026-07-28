@@ -9,10 +9,10 @@
 
 数据优先级：用户上传 > 会话缓存 > API 自动获取
 
-分层架构（新增）:
-- Layer 0: 基础数据层 (boundary, water, road, residential)
-- Layer 1: 分析数据层 (landuse_current, landuse_planned, hazard_points)
-- Layer 2: 约束数据层 (protection_zones, construction_zone)
+    GIS 分层架构:
+    - gis_base: 基础数据层 (boundary, water, road, residential)
+    - gis_analysis: 分析数据层 (landuse_current, landuse_planned, hazard_points)
+    - gis_constraint: 约束数据层 (protection_zones, construction_zone)
 
 复用 GISDataFetcher 单例进行中心点计算，避免重复创建 TiandituProvider。
 """
@@ -31,31 +31,31 @@ DEFAULT_CENTER = (116.4, 39.9)
 GIS_DATA_TYPES = ['boundary', 'water', 'road', 'residential', 'poi', 'landuse',
                   'protection_zone', 'geological_hazard', 'custom']
 
-# 分层数据类型定义
-LAYER_0_TYPES = ['boundary', 'water', 'road', 'residential', 'center']
-LAYER_1_TYPES = ['landuse_current', 'landuse_planned', 'geological_hazard', 'poi']
-LAYER_2_TYPES = ['farmland_protection', 'ecological_protection', 'historical_protection',
-                 'construction_zone', 'hazard_buffer',
-                 'three_zones_three_lines',  # 广东省天地图专题服务
-                 'geological_hazard_points']
+# GIS 分层数据类型定义
+GIS_BASE_TYPES = ['boundary', 'water', 'road', 'residential', 'center']
+GIS_ANALYSIS_TYPES = ['landuse_current', 'landuse_planned', 'geological_hazard', 'poi']
+GIS_CONSTRAINT_TYPES = ['farmland_protection', 'ecological_protection', 'historical_protection',
+                        'construction_zone', 'hazard_buffer',
+                        'three_zones_three_lines',  # 广东省天地图专题服务
+                        'geological_hazard_points']
 
 
 @dataclass
 class SharedGISContext:
-    """共享 GIS 数据上下文 - 统一管理公共 GIS 数据（分层架构）"""
+    """共享 GIS 数据上下文 - 统一管理公共 GIS 数据（GIS 分层架构）"""
 
     village_name: str
     buffer_km: float = 5.0
 
-    # Layer 0: 基础数据层（优先级最高）
+    # GIS 基础数据层（优先级最高）
     _base_data: Dict[str, Any] = field(default_factory=dict, repr=False)
     _center: Optional[Tuple[float, float]] = field(default=None, repr=False)
     _bbox: Optional[Tuple[float, float, float, float]] = field(default=None, repr=False)
 
-    # Layer 1: 分析数据层
+    # GIS 分析数据层
     _analysis_data: Dict[str, Any] = field(default_factory=dict, repr=False)
 
-    # Layer 2: 约束数据层
+    # GIS 约束数据层
     _constraint_data: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     # 用户上传的 GIS 数据: {data_type: geojson}
@@ -307,14 +307,14 @@ class SharedGISContext:
     # 分层数据管理（新增）
     # ============================================
 
-    def ensure_layer_0_ready(self) -> bool:
-        """确保基础数据层（Layer 0）已准备好"""
+    def ensure_gis_base_ready(self) -> bool:
+        """确保 GIS 基础数据层已准备好"""
         if self._center is None:
             self._center = self._compute_center()
         return self._center is not None
 
-    def get_layer_0_data(self) -> Dict[str, Any]:
-        """获取 Layer 0 基础数据"""
+    def get_gis_base_data(self) -> Dict[str, Any]:
+        """获取 GIS 基础数据"""
         return {
             "boundary": self.get_data_by_type("boundary"),
             "water": self.get_data_by_type("water"),
@@ -324,8 +324,8 @@ class SharedGISContext:
             "bbox": self.bbox,
         }
 
-    def get_layer_1_data(self) -> Dict[str, Any]:
-        """获取 Layer 1 分析数据"""
+    def get_gis_analysis_data(self) -> Dict[str, Any]:
+        """获取 GIS 分析数据"""
         return {
             "landuse_current": self.get_data_by_type("landuse_current"),
             "landuse_planned": self.get_data_by_type("landuse_planned"),
@@ -333,9 +333,9 @@ class SharedGISContext:
             "poi": self.get_data_by_type("poi"),
         }
 
-    def get_layer_2_data(self) -> Dict[str, Any]:
+    def get_gis_constraint_data(self) -> Dict[str, Any]:
         """
-        获取 Layer 2 约束数据（保护红线、建设区）
+        获取 GIS 约束数据（保护红线、建设区）
 
         自动加载保护约束数据用于规划验证。
         """
@@ -349,23 +349,23 @@ class SharedGISContext:
             "geological_hazard_points": self.get_data_by_type("geological_hazard_points"),
         }
 
-    def get_gd_constraint_data(self, layer_type: str) -> Optional[Dict[str, Any]]:
+    def get_gd_constraint_data(self, gis_type_ref: str) -> Optional[Dict[str, Any]]:
         """
         获取广东省天地图专题约束数据
 
         优先级: 用户上传 > GISDataManager缓存 > GD API获取
 
         Args:
-            layer_type: 图层类型 (farmland_protection/ecological_protection/
-                        three_zones_three_lines/geological_hazard_points)
+            gis_type_ref: GIS 图层类型 (farmland_protection/ecological_protection/
+                          three_zones_three_lines/geological_hazard_points)
 
         Returns:
             GeoJSON 数据或 None
         """
         # 优先返回用户上传数据
-        if self.has_user_data(layer_type):
-            logger.debug(f"[SharedGISContext] 返回用户上传数据: {layer_type}")
-            return self.get_data_by_type(layer_type)
+        if self.has_user_data(gis_type_ref):
+            logger.debug(f"[SharedGISContext] 返回用户上传数据: {gis_type_ref}")
+            return self.get_data_by_type(gis_type_ref)
 
         # 尝试从广东省天地图专题服务获取
         try:
@@ -374,20 +374,20 @@ class SharedGISContext:
 
             # 使用当前 bbox 获取数据
             bbox = self.bbox
-            result = gd_service.fetch_constraint_data(layer_type, bbox)
+            result = gd_service.fetch_constraint_data(gis_type_ref, bbox)
 
             if result.success:
                 geojson = result.data.get("geojson")
                 if geojson and geojson.get("features"):
                     # 缓存到用户数据
-                    self._user_uploaded_data[layer_type] = geojson
-                    self._data_sources[layer_type] = "gd_tianditu_api"
-                    logger.info(f"[SharedGISContext] 从GD API获取数据: {layer_type}, 特征数: {len(geojson.get('features', []))}")
+                    self._user_uploaded_data[gis_type_ref] = geojson
+                    self._data_sources[gis_type_ref] = "gd_tianditu_api"
+                    logger.info(f"[SharedGISContext] 从GD API获取数据: {gis_type_ref}, 特征数: {len(geojson.get('features', []))}")
                     return geojson
 
                 # 返回瓦片 URL 信息
                 if result.data.get("wms_url"):
-                    logger.info(f"[SharedGISContext] GD服务返回瓦片URL: {layer_type}")
+                    logger.info(f"[SharedGISContext] GD服务返回瓦片URL: {gis_type_ref}")
                     return {
                         "type": "tile_service",
                         "wms_url": result.data.get("wms_url"),
@@ -441,11 +441,11 @@ class SharedGISContext:
 
             # 分层存储
             for data_type, geojson in all_data.items():
-                if data_type in LAYER_0_TYPES:
+                if data_type in GIS_BASE_TYPES:
                     self._base_data[data_type] = geojson
-                elif data_type in LAYER_1_TYPES:
+                elif data_type in GIS_ANALYSIS_TYPES:
                     self._analysis_data[data_type] = geojson
-                elif data_type in LAYER_2_TYPES:
+                elif data_type in GIS_CONSTRAINT_TYPES:
                     self._constraint_data[data_type] = geojson
 
                 # 同时存入用户数据

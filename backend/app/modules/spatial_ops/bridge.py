@@ -507,8 +507,205 @@ def compute_water_overlap(water_polygons, landuse_parcels, dlbm_filter="3100"):
     return overlap_map
 
 
+# ── Cross-layer spatial relation computation ────────────────────────
+
+_PLN_NS = "http://village-planning.org/ontology#"
+
+_POLYGON_LAYERS = [
+    ("parcel",                  "landuse_current"),
+    ("farmland_protection",     "farmland_protection"),
+    ("ecological_redline",      "ecological_redline"),
+    ("historical_protection",   "historical_protection"),
+    ("zone_conditional",        "construction_zone"),
+    ("admin",                   "admin_areas"),
+    ("water",                   "water_bodies"),
+    ("zone_jsydgzq",            "construction_ctrl_zones"),
+    ("tdyt",                    "land_use_zones"),
+]
+
+_POINT_LAYERS = [
+    ("facility",  "facilities_current"),
+    ("building",  "buildings"),
+    ("hazard",    "hazard_points"),
+    ("elevpt",    "elevation_points"),
+]
+
+_LINE_LAYERS = [
+    ("road",       "roads_current"),
+    ("adminline",  "admin_boundaries"),
+    ("contour",    "contour_lines"),
+    ("hazard_line","hazard_control_lines"),
+]
+
+
+def _collect_entities(bundle, layer_defs, geom_field="geometry"):
+    """Extract (prefix, uri, shapely_geom) tuples from bundle layers."""
+    collected = []
+    polygons = getattr(bundle, "polygons", None)
+    lines = getattr(bundle, "lines", None)
+    points = getattr(bundle, "points", None)
+    from shapely.geometry import shape
+
+    for prefix, attr_name in layer_defs:
+        container = polygons
+        if attr_name in ("roads_current", "admin_boundaries", "contour_lines",
+                         "hazard_control_lines", "roads_planned"):
+            container = lines
+        elif attr_name in ("facilities_current", "buildings", "hazard_points",
+                           "elevation_points", "annotations_current"):
+            container = points
+        if container is None:
+            continue
+        items = getattr(container, attr_name, [])
+        for item in items:
+            geom = getattr(item, geom_field, None)
+            if geom is None:
+                continue
+            bsm = str(getattr(item, "bsm", "")).strip()
+            if not bsm:
+                continue
+            try:
+                s = shape(geom)
+                if s.is_empty:
+                    continue
+                uri = f"{_PLN_NS}{prefix}_{bsm}"
+                collected.append((prefix, uri, s))
+            except Exception:
+                continue
+    return collected
+
+
+def compute_cross_layer_relations(bundle) -> Dict[str, list]:
+    """Compute all cross-layer spatial relations from bundle geometry.
+
+    Uses shapely strict geometric predicates for every entity pair:
+      - Point entities within polygon  →  located_in
+      - Polygon overlaps polygon       →  intersects (with overlap_pct)
+      - Line intersects polygon        →  intersects
+
+    Returns dict compatible with PlanningKG._add_cross_type_relations:
+      - "located_in":  [(subj_uri, obj_uri), ...]
+      - "intersects":  [(subj_uri, obj_uri, overlap_pct), ...]
+      - "contains":    [(subj_uri, obj_uri), ...]
+
+    Returns empty dict if shapely/geopandas unavailable or bundle empty.
+    """
+    try:
+        import geopandas as gpd
+        from shapely.geometry import shape
+    except ImportError:
+        logger.error("geopandas/shapely required for compute_cross_layer_relations")
+        return {}
+
+    polygons = getattr(bundle, "polygons", None)
+    if polygons is None:
+        return {}
+
+    result: Dict[str, list] = {"located_in": [], "intersects": [], "contains": []}
+
+    # 1. Collect all polygon entities
+    poly_entries = _collect_entities(bundle, _POLYGON_LAYERS)
+    if not poly_entries:
+        return result
+
+    # 2. Collect point entities
+    point_entries = _collect_entities(bundle, _POINT_LAYERS)
+
+    # 3. Collect line entities
+    line_entries = _collect_entities(bundle, _LINE_LAYERS)
+
+    # ── Located_in: point entities within polygon entities ──
+    if point_entries:
+        poly_gdf_idx = gpd.GeoDataFrame(
+            [{"uri": u, "geometry": s} for _p, u, s in poly_entries], crs="EPSG:4326",
+        ).to_crs("EPSG:3857")
+        sindex = poly_gdf_idx.sindex
+
+        for _prefix, pt_uri, pt_s in point_entries:
+            pt_geom = gpd.GeoSeries([pt_s], crs="EPSG:4326").to_crs("EPSG:3857").iloc[0]
+            candidates = list(sindex.intersection(pt_geom.bounds))
+            for c in candidates:
+                poly_geom = poly_gdf_idx.iloc[c].geometry
+                if poly_geom.contains(pt_geom):
+                    result["located_in"].append((pt_uri, poly_gdf_idx.iloc[c].uri))
+                    result["contains"].append((poly_gdf_idx.iloc[c].uri, pt_uri))
+                    break  # first containing polygon is sufficient
+
+    # ── Intersects: parcels overlapping protection/constraint zones ──
+    protection_types = {"farmland_protection", "ecological_redline",
+                        "historical_protection", "zone_conditional"}
+
+    parcel_rows = []  # (uri, geometry)
+    prot_rows = []    # (uri, geometry)
+    for _p, uri, s in poly_entries:
+        if _p == "parcel":
+            parcel_rows.append((uri, s))
+        elif _p in protection_types:
+            prot_rows.append((uri, s))
+
+    if parcel_rows and prot_rows:
+        prot_gdf = gpd.GeoDataFrame(
+            [{"uri": uri, "geometry": s} for uri, s in prot_rows], crs="EPSG:4326",
+        ).to_crs("EPSG:3857")
+
+        sindex = prot_gdf.sindex
+        for pa_uri, pa_s in parcel_rows:
+            pa_geom = gpd.GeoSeries([pa_s], crs="EPSG:4326").to_crs("EPSG:3857").iloc[0]
+            pa_area = pa_geom.area
+            candidates = list(sindex.intersection(pa_geom.bounds))
+            for c in candidates:
+                pc_geom = prot_gdf.iloc[c].geometry
+                if not pa_geom.intersects(pc_geom):
+                    continue
+                overlap = pa_geom.intersection(pc_geom)
+                if overlap.is_empty or overlap.area == 0:
+                    continue
+                pc_uri = prot_gdf.iloc[c].uri
+                overlap_pct = round(overlap.area / pa_area * 100, 1) if pa_area > 0 else 0.0
+                result["intersects"].append((pa_uri, pc_uri, overlap_pct))
+
+    # ── Intersects: line entities intersecting protection polygons ──
+    if line_entries and prot_rows:
+        prot_gdf = gpd.GeoDataFrame(
+            [{"uri": uri, "geometry": s} for uri, s in prot_rows], crs="EPSG:4326",
+        ).to_crs("EPSG:3857")
+        sindex = prot_gdf.sindex
+        for _prefix, li_uri, li_s in line_entries:
+            li_geom = gpd.GeoSeries([li_s], crs="EPSG:4326").to_crs("EPSG:3857").iloc[0]
+            candidates = list(sindex.intersection(li_geom.bounds))
+            for c in candidates:
+                pc_geom = prot_gdf.iloc[c].geometry
+                if li_geom.intersects(pc_geom):
+                    result["intersects"].append((li_uri, prot_gdf.iloc[c].uri, 0.0))
+
+    # ── Located_in: road/line within admin_area ──
+    admin_entries = [(u, s) for p, u, s in poly_entries if p == "admin"]
+    if line_entries and admin_entries:
+        admin_gdf = gpd.GeoDataFrame(
+            [{"uri": uri, "geometry": s} for uri, s in admin_entries], crs="EPSG:4326",
+        ).to_crs("EPSG:3857")
+        sindex = admin_gdf.sindex
+        for _prefix, li_uri, li_s in line_entries:
+            li_geom = gpd.GeoSeries([li_s], crs="EPSG:4326").to_crs("EPSG:3857").iloc[0]
+            candidates = list(sindex.intersection(li_geom.bounds))
+            for c in candidates:
+                ad_geom = admin_gdf.iloc[c].geometry
+                if ad_geom.contains(li_geom):
+                    result["located_in"].append((li_uri, admin_gdf.iloc[c].uri))
+                    break
+
+    total = len(result["located_in"]) + len(result["intersects"]) + len(result["contains"])
+    if total:
+        logger.info(
+            "[compute_cross_layer_relations] %d relations: %d located_in, %d intersects, %d contains",
+            total, len(result["located_in"]), len(result["intersects"]), len(result["contains"]),
+        )
+    return result
+
+
 __all__ = [
     "SpatialIndex", "OverlapResult", "build_spatial_index",
     "ConstraintIndex", "ConstraintOverlap", "build_constraint_index",
     "compute_water_overlap",
+    "compute_cross_layer_relations",
 ]

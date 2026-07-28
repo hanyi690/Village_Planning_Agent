@@ -446,20 +446,20 @@ def provider_to_parcel(
 # ============================================================
 
 # Feature type -> (model class, GDB source path)
-# Derived from LAYER_TYPE_REGISTRY (T6). Kept as backward compat.
+# Derived from GIS_LAYER_REGISTRY (T6). Kept as backward compat.
 _FEATURE_TYPE_REGISTRY: Dict[str, tuple] = {}
 
 def _init_feature_registry():
-    """Lazy-init the feature type registry from LAYER_TYPE_REGISTRY.
+    """Lazy-init the feature type registry from GIS_LAYER_REGISTRY.
 
     Derives the mapping from the unified registry in schema/types/layer_registry.py,
     resolving model class names to actual classes via lazy import.
     """
     if _FEATURE_TYPE_REGISTRY:
         return
-    from app.modules.schema.types.layer_registry import LAYER_TYPE_REGISTRY
+    from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
     from app.modules.schema.types import spatial_types as _st
-    for lt, entry in LAYER_TYPE_REGISTRY.items():
+    for lt, entry in GIS_LAYER_REGISTRY.items():
         if entry.model_class_name and hasattr(_st, entry.model_class_name):
             key = entry.ingest_arg or lt
             _FEATURE_TYPE_REGISTRY[key] = (

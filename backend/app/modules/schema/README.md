@@ -354,7 +354,7 @@ schema/
 
 图层注册表采用**关注点分离**的混合架构：
 
-| 维度     | YAML (`layer_registry.yaml`)                                                | Python (`layer_registry.py`)                                    |
+| 维度     | YAML (`gis_layer_registry.yaml`)                                             | Python (`layer_registry.py`)                                    |
 | -------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | 管什么   | **声明性元数据**：geometry_kind, is_reference_layer, description, group | **类型绑定**：model_class → class, ingest_port → function |
 | 谁维护   | 运营/配置人员可编辑，不懂 Python 也可以                                       | 开发者维护，重构时 IDE 全程检查                                   |
@@ -392,13 +392,13 @@ YAML 中所有 layer_type 都会注册（即使没有 Python 绑定），保证 
 
 **标准图层（有 Schema 类 + Ingest 函数）**：
 
-1. `layer_registry.yaml` 加条目（geometry_kind, group, description）
+1. `gis_layer_registry.yaml` 加条目（geometry_kind, group, description）
 2. `layer_registry.py` `_TYPE_BINDINGS` 加一行（model_class, port, arg）
-3. 自动注册到 `LAYER_TYPE_REGISTRY`
+3. 自动注册到 `GIS_LAYER_REGISTRY`
 
 **临时/推断图层（无专用 Schema 类）**：
 
-1. `layer_registry.yaml` 加条目即可
+1. `gis_layer_registry.yaml` 加条目即可
 2. 系统自动识别为推断图层，`ingest_port=None`
 
 ### 5.3 当前注册表统计

@@ -7,6 +7,6 @@ from .raster_types import *  # noqa: F401,F403
 from .table_types import *  # noqa: F401,F403
 from .document_types import *  # noqa: F401,F403
 from .layer_registry import (  # noqa: F401
-    LAYER_TYPE_REGISTRY, LayerTypeEntry, register_layer_type,
-    get_layer_entry, get_all_layer_types,
+    GIS_LAYER_REGISTRY, GisLayerTypeEntry, register_gis_layer_type,
+    get_gis_layer_entry, get_all_gis_layer_types,
 )

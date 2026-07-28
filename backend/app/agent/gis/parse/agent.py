@@ -863,12 +863,24 @@ async def _explore_with_tools(
 
 async def explore_projects_node(state: ParseAgentState) -> dict:
     """Phase A: Think + Explore -> tools -> forced summary -> draft."""
+    # v4.8.1: Inject ContextBlock spatial context
+    spatial_ctx = ""
+    if state.context_blocks:
+        try:
+            from app.modules.prompts.parse_prompts import format_spatial_context_for_prompt
+            spatial_ctx = format_spatial_context_for_prompt(state.context_blocks, detail_level="standard")
+            if spatial_ctx:
+                spatial_ctx = f"\n## Spatial Context (current state cognition)\n{spatial_ctx}\n"
+        except Exception:
+            pass
+
     return await _explore_with_tools(
         state,
         node_name="explore_projects",
         section_types=("project_table", "land_use_table", "facility_table", "infrastructure"),
         explore_prompt=(
             "You are a village plan project analyst.\n"
+            f"{spatial_ctx}"
             "Step 1: Use lookup_code to query GHYTBM codes for ALL land_use_names in the text.\n"
             "Step 2: Use resolve_place to query GIS anchors for ALL place names.\n"
             "Step 3: Use query_village_kg for detailed spatial context and parcel-level data:\n"
@@ -1365,12 +1377,24 @@ async def explore_targets_node(state: ParseAgentState) -> dict:
     except Exception:
         yaml_context = ""
 
+    # v4.8.1: Inject ContextBlock spatial context into explore prompt
+    spatial_ctx = ""
+    if state.context_blocks:
+        try:
+            from app.modules.prompts.parse_prompts import format_spatial_context_for_prompt
+            spatial_ctx = format_spatial_context_for_prompt(state.context_blocks, detail_level="standard")
+            if spatial_ctx:
+                spatial_ctx = f"\n## Spatial Context (current state cognition)\n{spatial_ctx}\n"
+        except Exception:
+            pass
+
     return await _explore_with_tools(
         state,
         node_name="explore_targets",
         section_types=("target", "indicator_table", "spatial_layout"),
         explore_prompt=(
             "You are a village plan target analyst.\n"
+            f"{spatial_ctx}"
             "Step 1: Use lookup_code to get GHYTBM codes for ALL land_use names.\n"
             "Step 2: Use query_village_kg to identify SPECIFIC candidate parcels (BSM level):\n"
             "  - query_village_kg('get_village_parcels') for all parcels with BSM, DLBM, area, zone\n"

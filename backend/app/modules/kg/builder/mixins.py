@@ -18,6 +18,11 @@ from .layer1 import (
     _add_village_meta_from_bundle,
     _add_residential_clusters_from_typed, _add_facilities_from_typed,
     _add_facilities_from_annotations,
+    _add_gis_layer_groups, _add_semantic_enrichment,
+    _add_protection_polygons, _add_buildings,
+    _add_terrain_entities, _add_boundaries,
+    _add_natural_resource_zones, _add_cross_type_relations,
+    _compute_cross_type_heuristic,
 )
 from .layer3 import _add_structured_intent, build_intent_layer, clear_intent_layer
 from .layer4 import (
@@ -53,6 +58,17 @@ class Layer1Mixin:
     _add_residential_clusters_from_typed = _add_residential_clusters_from_typed
     _add_facilities_from_typed = _add_facilities_from_typed
     _add_facilities_from_annotations = _add_facilities_from_annotations
+    # v4.8: GIS layer sets + semantic enrichment
+    _add_gis_layer_groups = _add_gis_layer_groups
+    _add_semantic_enrichment = _add_semantic_enrichment
+    # v4.8.1: additional bundle geometry groups + cross-type relations
+    _add_protection_polygons = _add_protection_polygons
+    _add_buildings = _add_buildings
+    _add_terrain_entities = _add_terrain_entities
+    _add_boundaries = _add_boundaries
+    _add_natural_resource_zones = _add_natural_resource_zones
+    _add_cross_type_relations = _add_cross_type_relations
+    _compute_cross_type_heuristic = _compute_cross_type_heuristic
 
 
 class Layer2Mixin:

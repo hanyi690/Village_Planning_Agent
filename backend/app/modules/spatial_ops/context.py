@@ -97,7 +97,11 @@ def compute_context_blocks(
     total = 0
     trimmed: List[ContextBlock] = []
     for b in blocks:
-        est = len(b.to_markdown()) // 4
+        # v4.8.1: CJK-aware token estimation (len/1.5 instead of len/4)
+        text = b.to_markdown()
+        cjk_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+        non_cjk = len(text) - cjk_count
+        est = int(cjk_count + non_cjk / 4)
         if total + est > max_token_budget:
             break
         trimmed.append(b)

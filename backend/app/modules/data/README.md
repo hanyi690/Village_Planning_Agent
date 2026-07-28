@@ -19,7 +19,7 @@
 
 **病灶二：僵化纯语义注册表** — 28 个 layer_type 硬编码在 Python 中。
 
-- ✅ 已由 `LAYER_TYPE_REGISTRY` + `DriverRegistry` 双注册解决
+- ✅ 已由 `GIS_LAYER_REGISTRY` + `DriverRegistry` 双注册解决
 - ✅ YAML 混合模式已实现 — 见 `schema/README.md` §五
 
 ### 1.2 设计理念：双轨接入 + 四形态 + 项目级视图
@@ -41,7 +41,7 @@
 
 | 轨道                 | 适用             | 状态                                      |
 | -------------------- | ---------------- | ----------------------------------------- |
-| **显式注册轨** | 已知关键图层     | ✅`ingest.py` + `LAYER_TYPE_REGISTRY` |
+| **显式注册轨** | 已知关键图层     | ✅`ingest.py` + `GIS_LAYER_REGISTRY` |
 | **智能推断轨** | 临时上传、新来源 | ⏳`ingest_inference.py` 未编码          |
 
 **项目级视图**：

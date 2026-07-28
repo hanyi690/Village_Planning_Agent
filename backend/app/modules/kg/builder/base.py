@@ -18,7 +18,7 @@ from rdflib import Graph, Literal, RDF, URIRef
 from rdflib.namespace import XSD
 
 from app.utils.logger import get_logger
-from ..ontology import PLN, GEO, EntityTypes, Relations
+from ..ontology import PLN, EntityTypes, Relations
 from ..memory import SemanticMemoryStore
 
 from .mixins import Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin
@@ -48,7 +48,6 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
     def __init__(self, village_name: str = ""):
         self.g = Graph()
         self.g.bind("pln", PLN)
-        self.g.bind("geo", GEO)
         self.village_name = village_name
         self._parcel_count = 0
         self._constraint_index = None
@@ -58,7 +57,7 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
 
     def build_from_bundle(self, bundle, parcel_relations=None,
                           intent=None, planned_state=None, constraint_index=None,
-                          water_overlap=None):
+                          water_overlap=None, cross_type_relations=None):
         """Build KG from VillageBundle morphology groups.
 
         Layer 1-2: Static entities + spatial relations from bundle + parcel_relations.
@@ -71,10 +70,11 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
                 does not import spatial_ops, receives it as a dependency).
             water_overlap: Optional dict from spatial_ops.bridge.compute_water_overlap(),
                 mapping water_feature_id -> [covered_bsm, ...] for deduplication.
+            cross_type_relations: Optional dict with "located_in"/"intersects"/"contains"
+                lists, pre-computed by spatial_ops. If None, uses centroid heuristic.
         """
         self.g = Graph()
         self.g.bind("pln", PLN)
-        self.g.bind("geo", GEO)
         self._parcel_count = 0
         self._constraint_index = constraint_index
 
@@ -95,8 +95,35 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
         )
         self.add_terrain(getattr(bundle.rasters, 'slope', None))
 
+        # v4.8.1: additional bundle geometry groups
+        self._add_protection_polygons(bundle.polygons)
+        self._add_buildings(getattr(bundle.points, 'buildings', []))
+        self._add_terrain_entities(bundle.lines, bundle.points)
+        self._add_boundaries(bundle.polygons, bundle.lines)
+        self._add_natural_resource_zones(bundle.polygons)
+
         # Spatial relations (computed from geometry)
         self._add_parcel_relations(parcel_relations)
+
+        # v4.8.1: cross-type spatial relations — auto-compute from bundle by default
+        if cross_type_relations is None and bundle is not None:
+            try:
+                from app.modules.spatial_ops.bridge import compute_cross_layer_relations
+                computed = compute_cross_layer_relations(bundle)
+                if computed:
+                    cross_type_relations = computed
+                    total = sum(len(v) for v in computed.values())
+                    logger.info("[build_from_bundle] Auto-computed %d cross-type relations", total)
+            except ImportError:
+                logger.warning(
+                    "[build_from_bundle] spatial_ops.bridge not available — "
+                    "falling back to centroid heuristic for cross-type relations"
+                )
+        self._add_cross_type_relations(cross_type_relations)
+
+        # v4.8: GIS layer virtual entities + semantic enrichment
+        self._add_gis_layer_groups()
+        self._add_semantic_enrichment()
 
         # Layer 3: intent virtual entities
         if intent is not None:
@@ -116,14 +143,14 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
         new_kg = PlanningKG(village_name=self.village_name)
         new_kg.g = Graph()
         new_kg.g.bind("pln", PLN)
-        new_kg.g.bind("geo", GEO)
         new_kg._constraint_index = self._constraint_index
 
         l1_types = {
             EntityTypes.AdministrativeVillage, EntityTypes.Parcel,
             EntityTypes.Road,
             EntityTypes.WaterBody, EntityTypes.Facility,
-            PLN.ControlLine, EntityTypes.ResidentialCluster, EntityTypes.Zone,
+            EntityTypes.ControlLine, EntityTypes.ResidentialCluster, EntityTypes.Zone,
+            EntityTypes.GisLayerSet,  # v4.8: include GisLayerSet virtual entities
         }
 
         l1_subjects = set()
@@ -134,8 +161,21 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
 
         spatial_predicates = {PLN.touches, PLN.nearby, PLN.connected_via_road}
 
+        # v4.8.2: predicates that should be cloned (gis-type + semantic-enrichment + GisLayerSet)
+        from ..ontology import SemanticPredicates, Relations
+        cognition_predicates = {
+            SemanticPredicates.gis_type_ref, SemanticPredicates.geometry_kind,
+            SemanticPredicates.semantic_group, SemanticPredicates.has_semantic_label,
+            SemanticPredicates.contains_entity, SemanticPredicates.gis_description,
+            SemanticPredicates.entity_count, SemanticPredicates.dominant_label,
+            PLN.gis_description_enriched,
+            SemanticPredicates.taxonomic_parent, SemanticPredicates.legal_constraint,
+            SemanticPredicates.allowed_operations,
+            Relations.intersects, Relations.contains, SemanticPredicates.overlap_pct,
+        }
+
         for s, p, o in self.g.triples((None, None, None)):
-            if s in l1_subjects or p in spatial_predicates:
+            if s in l1_subjects or p in spatial_predicates or p in cognition_predicates:
                 new_kg.g.add((s, p, o))
         new_kg._parcel_count = self._parcel_count
         return new_kg

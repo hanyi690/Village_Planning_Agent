@@ -13,7 +13,7 @@ Usage:
 """
 from typing import Any, Dict, List, Optional, Set
 
-from rdflib import RDF as RDF_TERM, URIRef
+from rdflib import RDF as RDF_TERM, Literal, URIRef
 
 from app.utils.logger import get_logger
 from ..memory import EntityAnnotation, RelationAnnotation
@@ -1099,6 +1099,180 @@ TOOL_META_SEMANTIC = {
 }
 
 
+# ============================================================
+# v4.8 - get_entity_semantics: entity-type-level semantic layer query
+# ============================================================
+
+def get_entity_semantics(kg, entity_label: str = "", entity_type: str = "", bsm: str = "") -> Dict[str, Any]:
+    """Get semantic-layer info for an entity or entity type.
+
+    Returns taxonomic_parent, legal_constraint, allowed_operations, and encoding
+    bridges for the given entity. This is the semantic layer that PARSE needs to
+    understand what "水田", "农田保护区", "生态红线" mean spatially and legally.
+
+    Args:
+        kg: PlanningKG instance.
+        entity_label: Chinese semantic label (e.g. "水田", "宅基地", "农田保护区").
+        entity_type: RDF type name (e.g. "Parcel", "Zone"). Optional.
+        bsm: BSM of a specific entity to look up. Optional.
+
+    Returns:
+        Dict with:
+          - taxonomic_parent: classification hierarchy (e.g. "水田" -> "耕地" -> "农业用地")
+          - legal_constraint: legal restriction (e.g. "forbid_construction")
+          - allowed_operations: list of permitted SpatialOperation actions
+          - encoding_bridges: dlbm -> ghytbm -> vne mappings
+          - matching_entities: count and sample BSMs
+    """
+    try:
+        from ..ontology import SemanticPredicates
+        taxonomic_parent = SemanticPredicates.taxonomic_parent
+        legal_constraint = SemanticPredicates.legal_constraint
+        allowed_operations = SemanticPredicates.allowed_operations
+        has_semantic_label = SemanticPredicates.has_semantic_label
+        semantic_group = SemanticPredicates.semantic_group
+
+        result: Dict[str, Any] = {
+            "query_label": entity_label,
+            "query_type": entity_type,
+            "taxonomic_parent": "",
+            "legal_constraint": "",
+            "allowed_operations": [],
+            "encoding_bridges": {},
+            "matching_entities": {"count": 0, "sample_bsms": []},
+        }
+
+        # If BSM provided, look up specific entity
+        if bsm:
+            from rdflib import Literal as RdfLiteral
+            bsm_pred = URIRef(PLN_NS + "bsm")
+            for s, _, _ in kg.g.triples((None, bsm_pred, RdfLiteral(bsm))):
+                # Get type
+                for _, _, t in kg.g.triples((s, RDF_TERM.type, None)):
+                    result["query_type"] = _obj_name(t)
+                    break
+                # Get all attributes
+                attrs = {}
+                for p, o in kg.g.predicate_objects(s):
+                    pn = _pred_name(p)
+                    if pn == "type":
+                        continue
+                    attrs[pn] = str(o)
+                # Extract semantic info
+                if "taxonomic_parent" in attrs:
+                    result["taxonomic_parent"] = attrs["taxonomic_parent"]
+                if "legal_constraint" in attrs:
+                    result["legal_constraint"] = attrs["legal_constraint"]
+                if "has_semantic_label" in attrs:
+                    result["query_label"] = attrs["has_semantic_label"]
+                    entity_label = attrs["has_semantic_label"]
+                # Collect allowed_operations
+                ops = []
+                for _, _, o in kg.g.triples((s, allowed_operations, None)):
+                    ops.append(str(o))
+                result["allowed_operations"] = ops
+                # Encoding bridges
+                result["encoding_bridges"] = {
+                    "dlbm": attrs.get("dlbm", ""),
+                    "dlmc": attrs.get("dlmc", ""),
+                    "current_zone_type": attrs.get("current_zone_type", ""),
+                    "planning_zone": attrs.get("planning_zone", ""),
+                    "primary_zone": attrs.get("primary_zone", ""),
+                }
+                break
+
+        # If entity_label provided (no BSM), find entities with that label
+        elif entity_label:
+            matching_uris = []
+            taxonomic_parent_val = ""
+            legal_constraint_val = ""
+            ops_set = set()
+
+            for s, _, _ in kg.g.triples((None, has_semantic_label, Literal(entity_label))):
+                matching_uris.append(s)
+                # Collect semantic info from matching entities
+                if not taxonomic_parent_val:
+                    for _, _, o in kg.g.triples((s, taxonomic_parent, None)):
+                        taxonomic_parent_val = str(o)
+                        break
+                if not legal_constraint_val:
+                    for _, _, o in kg.g.triples((s, legal_constraint, None)):
+                        legal_constraint_val = str(o)
+                        break
+                for _, _, o in kg.g.triples((s, allowed_operations, None)):
+                    ops_set.add(str(o))
+
+            result["taxonomic_parent"] = taxonomic_parent_val
+            result["legal_constraint"] = legal_constraint_val
+            result["allowed_operations"] = sorted(ops_set)
+            result["matching_entities"]["count"] = len(matching_uris)
+            # Sample BSMs
+            sample_bsms = []
+            for uri in matching_uris[:10]:
+                for _, _, o in kg.g.triples((uri, URIRef(PLN_NS + "bsm"), None)):
+                    sample_bsms.append(str(o))
+                    break
+            result["matching_entities"]["sample_bsms"] = sample_bsms
+
+            # Encoding bridges from code_sets
+            try:
+                from app.modules.schema.encodings.code_sets import (
+                    DLBM_TO_DLMC, DLBM_TO_ZONE_TYPE, DLBM_TO_PLANNING_ZONE,
+                    DLBM_TO_PRIMARY_ZONE, DLBM_TO_GHYTBM,
+                )
+                # Find DLBM for this label
+                for dlbm, dlmc in DLBM_TO_DLMC.items():
+                    if dlmc == entity_label:
+                        result["encoding_bridges"]["dlbm"] = dlbm
+                        result["encoding_bridges"]["dlmc"] = dlmc
+                        result["encoding_bridges"]["zone_type"] = DLBM_TO_ZONE_TYPE.get(dlbm, "")
+                        result["encoding_bridges"]["planning_zone"] = DLBM_TO_PLANNING_ZONE.get(dlbm, "")
+                        result["encoding_bridges"]["primary_zone"] = DLBM_TO_PRIMARY_ZONE.get(dlbm, "")
+                        result["encoding_bridges"]["ghytbm"] = DLBM_TO_GHYTBM.get(dlbm, "")
+                        break
+            except Exception:
+                pass
+
+            # If no taxonomic_parent from KG, derive from code_sets
+            if not result["taxonomic_parent"] and result["encoding_bridges"].get("zone_type"):
+                result["taxonomic_parent"] = result["encoding_bridges"]["zone_type"]
+
+        # If entity_type provided, get type-level info
+        if entity_type and not entity_label and not bsm:
+            # Get allowed_operations from allowed_operations.yaml by planning_zone
+            try:
+                from app.modules.schema.encodings.dicts.loader import get_center
+                d = get_center().get("allowed_operations").raw
+                # For Zone types, map type name to constraint
+                if entity_type == "Zone":
+                    result["allowed_operations"] = []
+                    result["legal_constraint"] = "varies by zone type"
+                result["note"] = f"Entity type '{entity_type}' - semantic info varies per instance"
+            except Exception:
+                pass
+
+        # Enrich with allowed_operations.yaml note
+        try:
+            from app.modules.schema.encodings.dicts.loader import get_center
+            d = get_center().get("allowed_operations").raw
+            label = entity_label or result.get("encoding_bridges", {}).get("dlmc", "")
+            # Check by_planning_zone
+            pz = result.get("encoding_bridges", {}).get("planning_zone", "")
+            if pz:
+                entry = d.get("by_planning_zone", {}).get(pz)
+                if entry:
+                    result["allowed_operations_note"] = entry.get("note", "")
+                    if not result["allowed_operations"]:
+                        result["allowed_operations"] = entry.get("operations", [])
+        except Exception:
+            pass
+
+        return result
+    except Exception as e:
+        logger.error("get_entity_semantics failed: %s", e)
+        return {"error": str(e), "query_label": entity_label}
+
+
 __all__ = [
     "get_entity_context", "get_entity_relations",
     "get_parcel_semantic_context", "get_village_semantic_summary",
@@ -1107,5 +1281,6 @@ __all__ = [
     "get_parcels_semantic_list", "get_parcel_detail_semantic",
     "get_parcel_neighbors_semantic", "get_facilities_semantic_list",
     "get_road_network_semantic", "get_designated_zones_semantic",
+    "get_entity_semantics",
     "TOOL_META_SEMANTIC",
 ]

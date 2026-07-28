@@ -1,7 +1,7 @@
 """Standalone KG query script for spatial cognition of villages.
 
 Builds the KG from real GIS data, then executes a named SPARQL/semantic query.
-Outputs human-readable results — never reads raw GIS data directly.
+Outputs human-readable results - never reads raw GIS data directly.
 
 Usage:
     python scripts/query_kg.py --list-templates
@@ -23,6 +23,14 @@ Usage:
     python scripts/query_kg.py --template get_constraint_coverage
     python scripts/query_kg.py --template get_parcels_by_dlbm --params '{"dlbm_val": "0101"}'
     python scripts/query_kg.py --template get_parcels_near_point --params '{"min_lon":116.0,"max_lon":116.1,"min_lat":24.8,"max_lat":24.9}'
+
+    # v4.8 cognition queries
+    python scripts/query_kg.py --template get_village_cognition
+    python scripts/query_kg.py --template get_village_cognition --params '{"mode": "context_block"}'
+    python scripts/query_kg.py --template get_village_cognition --raw
+    python scripts/query_kg.py --template get_layer_group_semantics --params '{"group": "current_landuse"}'
+    python scripts/query_kg.py --template get_entity_semantics --params '{"label": "水田"}'
+    python scripts/query_kg.py --template get_entity_semantics --params '{"label": "宅基地"}'
 """
 import argparse
 import json
@@ -247,19 +255,50 @@ def main():
 
     if args.list_templates:
         from app.modules.kg.queries.sparql import QUERY_TEMPLATES, SEMANTIC_QUERIES
-        print(f"\n{'='*60}\n  SPARQL 查询模板\n{'='*60}")
+        from app.modules.kg.queries import analysis_queries, parse_queries, execute_queries, shared_queries
+        from app.modules.kg.queries.cognition import get_village_cognition, get_layer_group_semantics
+        print(f"\n{'='*60}")
+        print(f"  SPARQL 查询模板")
+        print(f"{'='*60}")
         for name in sorted(QUERY_TEMPLATES.keys()):
             print(f"  {name}")
-        print(f"\n{'='*60}\n  语义查询（返回人类可读描述）\n{'='*60}")
+        print(f"\n{'='*60}")
+        print(f"  语义查询（返回人类可读描述）")
+        print(f"{'='*60}")
         for name in sorted(SEMANTIC_QUERIES.keys()):
             print(f"  {name}")
-        print(f"\n{'='*60}\n  实例方法（额外查询）\n{'='*60}")
+        print(f"\n{'='*60}")
+        print(f"  认知查询（v4.8 三层认知摘要）")
+        print(f"{'='*60}")
+        print(f"  get_village_cognition")
+        print(f"  get_layer_group_semantics")
+        print(f"  get_entity_semantics")
+        print(f"\n{'='*60}")
+        print(f"  实例方法（额外查询）")
+        print(f"{'='*60}")
         print(f"  get_adjacency_map")
         print(f"  get_constraint_coverage")
         print(f"  get_entity_context")
         print(f"  get_entity_relations")
         print(f"  get_parcel_semantic_context")
         print(f"  get_village_semantic_summary")
+        print(f"\n{'='*60}")
+        print(f"  四命名空间 API (v4.8)")
+        print(f"{'='*60}")
+        print(f"  [analysis_queries] 报告生成用（粗粒度/语义）")
+        for name, info in sorted(analysis_queries.items()):
+            print(f"    {name} - {info['description']}")
+        print(f"  [parse_queries] 意图编译用（细粒度/结构化/写L3）")
+        for name, info in sorted(parse_queries.items()):
+            print(f"    {name} - {info['description']}")
+        print(f"  [execute_queries] 执行落地用（L4读写/约束验证）[预留]")
+        for name, info in sorted(execute_queries.items()):
+            status = info.get("status", "")
+            marker = f" [{status}]" if status else ""
+            print(f"    {name}{marker} - {info['description']}")
+        print(f"  [shared_queries] 跨阶段共用")
+        for name, info in sorted(shared_queries.items()):
+            print(f"    {name} - {info['description']}")
         return
 
     if not args.template:
@@ -340,6 +379,59 @@ def main():
         from app.modules.kg.queries import get_village_constraint_coverage
         rows = get_village_constraint_coverage(kg)
         _print_constraint_coverage(rows, title="村庄约束覆盖")
+    elif template == "get_village_cognition":
+        from app.modules.kg.queries.cognition import get_village_cognition
+        payload = get_village_cognition(kg, args.village, mode=params.get("mode", "full"))
+        print(f"\n{'='*60}")
+        print(f"  村庄认知摘要 (token_estimate={payload.token_estimate}, truncated={payload.truncated})")
+        print(f"{'='*60}")
+        if "context_block" in payload.semantic:
+            cb = payload.semantic["context_block"]
+            print(f"\n  [Context Block]")
+            print(f"    {cb.get('overview', '')}")
+            print(f"    空间格局: {cb.get('spatial_pattern', '')}")
+        if "layer_cards" in payload.semantic:
+            print(f"\n  [Layer Cards]")
+            for card in payload.semantic["layer_cards"]:
+                print(f"    {card.get('group','')} ({card.get('geometry','')}, {card.get('count',0)}): {card.get('distribution','')}")
+        if "constraint_block" in payload.semantic:
+            cb = payload.semantic["constraint_block"]
+            print(f"\n  [Constraint Block]")
+            print(f"    邻接关系: {cb.get('adjacency_total',0)}, 近邻: {cb.get('nearby_total',0)}, 连通: {cb.get('connected_total',0)}")
+            lcd = cb.get("legal_constraint_distribution", {})
+            if lcd:
+                print(f"    法律约束分布: {lcd}")
+            pzd = cb.get("planning_zone_distribution", {})
+            if pzd:
+                print(f"    规划分区分布: {pzd}")
+        print(f"\n  [Structured]")
+        st = payload.structured
+        print(f"    图层组: {list(st.get('layer_group_bsms', {}).keys())}")
+        print(f"    几何类型索引: {st.get('geometry_kind_index', {})}")
+        print(f"    代表性BSM数: {len(st.get('representative_bsms', []))}")
+        print(f"    总实体数: {st.get('total_count', 0)}")
+        if args.raw:
+            print(json.dumps(payload.to_dict(), ensure_ascii=False, indent=2))
+    elif template == "get_layer_group_semantics":
+        from app.modules.kg.queries.cognition import get_layer_group_semantics
+        payload = get_layer_group_semantics(kg, params.get("group", ""))
+        print(f"\n{'='*60}")
+        print(f"  图层组详情: {params.get('group', '')}")
+        print(f"{'='*60}")
+        print(json.dumps(payload.semantic, ensure_ascii=False, indent=2))
+        print(f"\n  成员BSM数: {len(payload.structured.get('member_bsms', []))}")
+    elif template == "get_entity_semantics":
+        from app.modules.kg.queries.semantic import get_entity_semantics
+        result = get_entity_semantics(
+            kg,
+            entity_label=params.get("label", ""),
+            entity_type=params.get("type", ""),
+            bsm=params.get("bsm", ""),
+        )
+        print(f"\n{'='*60}")
+        print(f"  实体语义: {params.get('label', params.get('bsm', ''))}")
+        print(f"{'='*60}")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
         print(f"[query_kg] 未知模板: {template}")
         sys.exit(1)

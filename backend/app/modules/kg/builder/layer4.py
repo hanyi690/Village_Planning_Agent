@@ -32,7 +32,7 @@ class PlannedParcelEntry:
 
     geometry: WKT geometry string (e.g. "POLYGON((...))") or empty.
     When non-empty, stored as pln:geometry WKT literal in KG.
-    When empty, EXECUTE must fall back to BSM → SpatialIndex lookup.
+    When empty, EXECUTE must fall back to BSM → SpatialInaex lookup.
     """
     bsm: str
     planning_land_use: str = ""

@@ -1,0 +1,202 @@
+# 允许的空间操作 (SpatialOperation actions) - 按地类/约束类型
+#
+# 用途: KG 语义层 pln:allowed_operations 的数据来源
+#       PARSE/EXECUTE 查询 get_entity_semantics() 时返回
+#       告知 LLM 某类实体允许哪些 create/split/merge/modify/reclassify 操作
+#
+# 来源:
+#   - 《土地管理法》基本农田保护条款
+#   - 《村庄规划编制技术指南》附表2 用地结构调整规则
+#   - 广东省村庄规划实践 (粤国土资规保发〔2009〕67号)
+#
+# 操作类型 (对应 SpatialOperation.action):
+#   create      - 新建地块
+#   split       - 拆分地块
+#   merge       - 合并地块
+#   modify      - 修改属性（如面积调整）
+#   reclassify  - 地类变更
+#
+# 约束等级:
+#   allow        - 允许
+#   conditional  - 有条件允许（需满足面积/位置约束）
+#   forbid       - 禁止
+version: "2026_GUANGDONG_V1"
+standard: "土地管理法 + 村庄规划编制技术指南"
+
+# ── 按地类编码 (DLBM/GHYTBM) 的允许操作 ──
+# key 为 appendix5 GHYTBM 4位码 (村庄规划用地分类)
+by_ghytbm:
+  # 农业用地
+  "1100":  # 耕地
+    operations: ["reclassify"]
+    constraint: "conditional"
+    note: "一般耕地可转为设施农用地，需占补平衡；基本农田除外"
+
+  "1200":  # 园地
+    operations: ["reclassify", "merge"]
+    constraint: "conditional"
+    note: "可合并连片园地，转产需符合农业空间约束"
+
+  "1340":  # 商品林
+    operations: ["reclassify", "merge"]
+    constraint: "allow"
+    note: "商品林可调整，但不得违反林地保有量"
+
+  "1350":  # 生态林
+    operations: []
+    constraint: "forbid"
+    note: "生态公益林禁止改变用途"
+
+  "1400":  # 草地
+    operations: ["reclassify"]
+    constraint: "conditional"
+    note: "天然草地保护，人工草地可调整"
+
+  "1500":  # 其他农用地
+    operations: ["reclassify", "merge"]
+    constraint: "allow"
+    note: "田坎、沟渠等可整理合并"
+
+  "1510":  # 设施农用地
+    operations: ["create", "modify"]
+    constraint: "conditional"
+    note: "可新建农业设施，面积不超规定上限"
+
+  # 建设用地
+  "2100":  # 城镇用地
+    operations: ["modify"]
+    constraint: "conditional"
+    note: "村庄规划范围内有限调整"
+
+  "2121":  # 宅基地
+    operations: ["split", "merge", "reclassify"]
+    constraint: "conditional"
+    note: "可拆分/合并/复垦，需符合户均面积标准"
+
+  "2122":  # 公共服务设施
+    operations: ["create", "modify"]
+    constraint: "conditional"
+    note: "可新建公服设施，需在建设边界内"
+
+  "2123":  # 基础设施
+    operations: ["create", "modify"]
+    constraint: "conditional"
+    note: "可新建基础设施，需在建设边界内"
+
+  "2124":  # 经营性建设
+    operations: ["create", "modify", "reclassify"]
+    constraint: "conditional"
+    note: "可新建/转性，需在建设边界内"
+
+  "2125":  # 景观与绿化
+    operations: ["create"]
+    constraint: "allow"
+    note: "可新增绿化用地"
+
+  "2126":  # 村内交通
+    operations: ["create", "modify"]
+    constraint: "conditional"
+    note: "可新建村内道路"
+
+  "2130":  # 采矿用地
+    operations: ["reclassify"]
+    constraint: "conditional"
+    note: "复垦为农用地，需生态修复"
+
+  "2200":  # 对外交通
+    operations: ["create", "modify"]
+    constraint: "conditional"
+    note: "可新建对外道路，需符合上位规划"
+
+  "2270":  # 水利设施用地
+    operations: ["create", "modify"]
+    constraint: "conditional"
+    note: "可新建水利设施"
+
+  "2310":  # 风景名胜
+    operations: ["modify"]
+    constraint: "conditional"
+    note: "有限调整，不得破坏景观资源"
+
+  "2320":  # 特殊用地
+    operations: ["modify"]
+    constraint: "conditional"
+    note: "有限调整"
+
+  # 生态/其他
+  "3100":  # 水域
+    operations: []
+    constraint: "forbid"
+    note: "水域禁止填埋改变用途"
+
+  "3200":  # 自然保留地
+    operations: ["reclassify"]
+    constraint: "allow"
+    note: "可根据规划需要开发"
+
+
+# ── 按管制区编码 (01-06) 的允许操作 ──
+# 来源: construction_zone_codes.yaml
+by_control_code:
+  "01":  # 允许建设区
+    operations: ["create", "split", "merge", "modify", "reclassify"]
+    constraint: "allow"
+    note: "村庄建设边界内，允许各类建设操作"
+
+  "02":  # 限制建设区
+    operations: ["reclassify"]
+    constraint: "conditional"
+    note: "一般农业/生态区域，仅允许地类微调"
+
+  "03":  # 有条件建设区
+    operations: ["create", "modify"]
+    constraint: "conditional"
+    note: "不超过现状建设用地规模20%"
+
+  "04":  # 禁止建设区
+    operations: []
+    constraint: "forbid"
+    note: "永久基本农田和生态红线外禁止建设区域"
+
+  "05":  # 永久基本农田保护区
+    operations: []
+    constraint: "forbid"
+    note: "上位规划落实，不可调整，禁止非农建设"
+
+  "06":  # 生态保护红线区
+    operations: []
+    constraint: "forbid"
+    note: "上位规划落实，不可调整，禁止建设"
+
+
+# ── 按规划分区的允许操作（粗粒度，供 LLM 参考）──
+by_planning_zone:
+  "村庄建设区":
+    operations: ["create", "split", "merge", "modify", "reclassify"]
+    constraint: "allow"
+    note: "建设空间，允许各类操作"
+
+  "一般农业区":
+    operations: ["reclassify", "merge"]
+    constraint: "conditional"
+    note: "农业空间，允许农业结构调整"
+
+  "林业发展区":
+    operations: ["reclassify", "merge"]
+    constraint: "conditional"
+    note: "商品林可调整，生态林禁止"
+
+  "农田保护区":
+    operations: []
+    constraint: "forbid"
+    note: "基本农田禁止非农建设"
+
+  "生态控制区":
+    operations: ["reclassify"]
+    constraint: "conditional"
+    note: "有限调整，不得破坏生态"
+
+  "生态保护区":
+    operations: []
+    constraint: "forbid"
+    note: "生态红线，禁止建设"
