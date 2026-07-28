@@ -41,6 +41,7 @@ from .ingest import (
     result_to_raster,
 )
 from .sources import DataSourceDriver, DriverRegistry
+from . import adapters
 
 __all__ = [
     # Catalog
@@ -69,4 +70,6 @@ __all__ = [
     # Connections
     "Connection",
     "ConnectionRegistry",
+    # Adapters
+    "adapters",
 ]
