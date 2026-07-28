@@ -1,8 +1,9 @@
 # Data Module - 统一数据获取与管理层
 
-> **Status: [PRODUCTION]** | **Type: Architecture** | **Updated: 2026-07-26 (v4.6)**
+> **Status: [PRODUCTION]** | **Type: Architecture** | **Updated: 2026-07-28 (v4.8.1)**
 > **Scope**: 所有空间数据（矢量/栅格/瓦片）和文档（规划文本/L3报告）进入系统的唯一边界
 >
+> **v4.8.1 变更**: DEM 栅格图层完整接入（clip 脚本 + sources.yaml + KG builder）；交叉类型空间关系由 spatial_ops 预计算注入 KG
 > **v4.6 变更**: ControlRule/PlanningIndicator 移入 bundle.tables（类型已定义，ingest 管道未实现）；KG 不再存储非空间要素；bundle 形态分组直连 KG builder，不再通过 ContextBlock 中转
 
 ---
@@ -222,6 +223,41 @@ sources:
     layer_type: farmland_protection
     crs: EPSG:4326
 ```
+
+### 5.1 示例：添加 DEM 栅格图层
+
+DEM（数字高程模型）是村庄规划地形分析的基础输入。完整接入流程见 [`docs/gis/HOW_TO_ADD_LAYER.md`](../../../../docs/gis/HOW_TO_ADD_LAYER.md) 工作示例，此处给出关键步骤。
+
+**Step 1 - 裁剪省域 DEM 到村庄 AOI**
+
+省域 DEM（如 NASA ASTGTM v3, 30m）体积过大，需先裁剪到村庄边界。使用 `backend/scripts/clip_dem_to_aoi.py`：
+
+```bash
+python backend/scripts/clip_dem_to_aoi.py \
+    --input data/gis/广东DEM30M.zip \
+    --aoi data/gis/jintian/current/boundary.geojson \
+    --output data/gis/jintian/terrain/dem.tif
+```
+
+脚本读取 AOI bbox，选取覆盖该 bbox 的 ASTGTM 瓦片，用 `rasterio.mask` 裁剪（或单瓦片直接复制），输出 EPSG:4326 GeoTIFF。
+
+**Step 2 - sources.yaml 数据源声明**
+
+```yaml
+sources:
+  dem_local:
+    driver: local_raster
+    path: "data/gis/jintian/terrain/dem.tif"
+    format: GeoTIFF
+    crs: EPSG:4326
+    layer_type: dem              # 对应 gis_layer_registry.yaml 中的 dem 条目
+```
+
+**Step 3 - 类型映射（已内置）**
+
+`gis_layer_registry.yaml` 中 `dem` 条目已配置 `ingest.adapter: raster` + `bundle_target: { group: rasters, key: dem }`。`ingest.py::_infer_model_class()` 已映射 `"dem" -> "DEMInput"`。无需额外 Python 修改。
+
+**结果**：`catalog.load_village_bundle()` 通过 `LocalRasterDriver` 加载 `dem.tif`，`raster` 适配器构造 `DEMInput` 实例，`_assign_to_bundle` 放入 `bundle.rasters.dem`，`kg.build_from_bundle()` 调用 `@kg_builder("dem")` 生成 `RasterDataset` RDF 实体。
 
 ---
 

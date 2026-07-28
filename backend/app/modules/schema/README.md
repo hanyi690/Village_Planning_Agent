@@ -348,67 +348,70 @@ schema/
 
 ---
 
-## 五、`layer_registry`：YAML + Python 混合模式 [v4.2b]
+## 五、`layer_registry`：YAML 单一真相源 [v4.4 重构]
 
 ### 5.1 设计理念
 
-图层注册表采用**关注点分离**的混合架构：
+图层注册表采用 **YAML-only** 架构（v4.4 移除了 Python 侧的 `_TYPE_BINDINGS` 字典）：
 
-| 维度     | YAML (`gis_layer_registry.yaml`)                                             | Python (`layer_registry.py`)                                    |
-| -------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| 管什么   | **声明性元数据**：geometry_kind, is_reference_layer, description, group | **类型绑定**：model_class → class, ingest_port → function |
-| 谁维护   | 运营/配置人员可编辑，不懂 Python 也可以                                       | 开发者维护，重构时 IDE 全程检查                                   |
-| 变更频率 | 中（新增图层类型、调整描述）                                                  | 低（新增 Schema 类或 Ingest 函数时）                              |
-| 运行时   | 应用启动时加载，不重启可热更新                                                | import 时绑定，改代码需重启                                       |
+| 维度     | YAML (`gis_layer_registry.yaml`)                                             | Python (`ingest.py::_infer_model_class()`)                |
+| -------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 管什么   | **全部声明性元数据**：geometry_kind, group, ingest.adapter, bundle_target, kg.entity_type, validation | **模型类名推断**：layer_type -> Schema 类名（仅当需要 Python 模型时） |
+| 谁维护   | 运营/配置人员可编辑，不懂 Python 也可以                                       | 开发者维护，仅在新增带 Python 类型的图层时修改               |
+| 变更频率 | 中（新增图层类型、调整描述）                                                  | 低（仅新增需要 Schema 类的图层时）                            |
+| 运行时   | 应用启动时由 `build_registry_from_yaml()` 加载，import 时自动执行            | ingest 时按需查询                                            |
 
 ```yaml
-# layer_registry.yaml — 声明性元数据
+# gis_layer_registry.yaml - 单一真相源（完整元数据示例）
 layer_types:
   farmland_protection:
     geometry_kind: polygon
+    group: protection
     is_reference_layer: true
     description: "Farmland protection zone (永久基本农田保护红线)"
-    group: protection
+    ingest:
+      adapter: features            # 对应 adapters/__init__.py 注册名
+      feature_type: farmland_protection
+    bundle_target:
+      group: polygons
+      key: farmland_protection
+    kg:
+      entity_type: FarmlandProtection
+      uri_policy: "L1:farmland_protection_{bsm}"
+    validation:
+      required_fields: [bsm]
+      geometry: { must_be_valid: true, dlq_on_error: true }
 ```
 
-```python
-# layer_registry.py — Python 类型绑定
-_TYPE_BINDINGS = {
-    "farmland_protection": ("FarmlandProtection", "result_to_features", "farmland_protection"),
-}
-```
-
-**工厂函数** `build_registry_from_yaml()` 合并两者：
-
-```
-YAML metadata  ──┐
-                 ├──► register_layer_type() ──► LAYER_TYPE_REGISTRY (42 entries)
-Python bindings ─┘
-```
-
-YAML 中所有 layer_type 都会注册（即使没有 Python 绑定），保证 `DataCatalog` 能发现所有已知图层。无绑定的图层走推断管道（未来 `ingest_inference.py`）。
+`layer_registry.py` 在 import 时执行 `build_registry_from_yaml()`，把每条 YAML 条目实例化为 `GisLayerTypeEntry` 并注册到 `GIS_LAYER_REGISTRY`。YAML 中所有 layer_type 都会注册（即使没有 Python 类绑定），保证 `DataCatalog` 能发现所有已知图层。无 Python 类绑定的图层走推断管道（`ingest.py::_infer_model_class()` 返回空字符串）。
 
 ### 5.2 添加新图层类型
 
-**标准图层（有 Schema 类 + Ingest 函数）**：
+> **权威指南**：详见 [`docs/gis/HOW_TO_ADD_LAYER.md`](../../../../docs/gis/HOW_TO_ADD_LAYER.md)
 
-1. `gis_layer_registry.yaml` 加条目（geometry_kind, group, description）
-2. `layer_registry.py` `_TYPE_BINDINGS` 加一行（model_class, port, arg）
-3. 自动注册到 `GIS_LAYER_REGISTRY`
+**标准图层（90% 场景，YAML 条目即可）**：
+
+1. 在 `gis_layer_registry.yaml` 加条目（含 `geometry_kind` / `group` / `ingest.adapter` / `bundle_target` / `kg.entity_type`）
+2. 重启 -- 注册表在 import 时从 YAML 自动重建
+
+**需要 Python 模型类的图层（少数场景）**：
+
+1. `gis_layer_registry.yaml` 加条目
+2. 在 `backend/app/modules/data/ingest.py::_infer_model_class()` 的 `_CLASS_MAP` 中加一行 `layer_type -> ClassName`
+3. 重启 -- 注册表自动构建，ingest 按 `_infer_model_class()` 解析类型
 
 **临时/推断图层（无专用 Schema 类）**：
 
 1. `gis_layer_registry.yaml` 加条目即可
-2. 系统自动识别为推断图层，`ingest_port=None`
+2. 系统自动识别为推断图层，`_infer_model_class()` 返回空字符串，要素以基类（如 `PolygonFeature`）兜底进入 `bundle.*.inferred`
 
 ### 5.3 当前注册表统计
 
-- **42 个 layer_type** 已注册（含矢量/栅格/表格/文档/注记）
-- **28 个** 有 Python 类型绑定 + ingest 端口
-- **5 个引用层**（三区三线，`is_reference_layer=True`）
+- **40+ 个 layer_type** 已注册（含矢量/栅格/表格/文档/注记）
+- **5 个引用层**（三区三线，`is_reference_layer=true`）
 - **5 个 Group F 自然资源**（无 ingest 端口，无数据源配置）
 
-> **引用层标注**：三区三线（永久基本农田/生态红线/城镇边界）是中央审批成果的引用层，村庄规划不重新创建。`is_reference_layer=True` 让下游知道这些图层是只读引用。
+> **引用层标注**：三区三线（永久基本农田/生态红线/城镇边界）是中央审批成果的引用层，村庄规划不重新创建。`is_reference_layer: true` 让下游知道这些图层是只读引用。
 
 ---
 

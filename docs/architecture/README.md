@@ -2,8 +2,10 @@
 
 本目录包含 Village Planning Agent 系统的完整架构文档。
 
-> **更新日期**: 2026-05-21
-> **版本**: v3.0 (统一架构)
+> **更新日期**: 2026-07-28
+> **版本**: v4.8.1 (统一架构)
+>
+> **注**: 本导航文档的目录结构已对齐 v4.8.1 的 `app/modules/{schema,data,spatial_ops,kg}` 四层模块结构。早期文档（01-14）可能仍引用旧的 `services/modules/gis/` 路径，以本节模块结构为准。
 
 ## 文档结构
 
@@ -57,17 +59,33 @@ village-planner/
 │   │   ├── database/            # 数据持久层
 │   │   │   ├── models.py        # SQLModel 定义
 │   │   │   └── operations.py    # 数据库操作
+│   │   ├── modules/             # [v4.8.1] 业务模块（四层架构）
+│   │   │   ├── schema/          # 类型契约层（零依赖）
+│   │   │   │   ├── types/       # Pydantic v2 typed models + layer_registry
+│   │   │   │   ├── encodings/   # 编码体系 (6套 YAML + DictionaryCenter)
+│   │   │   │   ├── contracts/   # 跨层契约 (parse/execution/validation/layout/context)
+│   │   │   │   └── output/      # 汇交输出 (gdb/tables/colors)
+│   │   │   ├── data/            # 数据获取与管理层
+│   │   │   │   ├── catalog/     # DataCatalog + sources.yaml
+│   │   │   │   ├── sources/     # DataSourceDriver (file_vector/api_vector/wmts/local_raster/...)
+│   │   │   │   ├── connections/ # API 连接管理 (tianditu/amap/osm)
+│   │   │   │   ├── adapters/    # Ingest adapters (parcels/features/raster/table/document)
+│   │   │   │   ├── documents/   # 文档加载
+│   │   │   │   └── ingest.py    # raw -> typed models
+│   │   │   ├── spatial_ops/     # 空间分析层（shapely/geopandas 权威）
+│   │   │   │   ├── geometry.py  # compute_parcel_relations
+│   │   │   │   ├── bridge.py    # ConstraintIndex + compute_cross_type_relations
+│   │   │   │   └── context.py   # compute_context_blocks
+│   │   │   └── kg/              # 知识图谱层（rdflib）
+│   │   │       ├── builder/     # @kg_builder registry + PlanningKG.build_from_bundle
+│   │   │       ├── queries/     # SPARQL templates + semantic + cognition (四命名空间 API)
+│   │   │       ├── ontology.py  # PLN/GEO namespace + EntityTypes + EntityIdPolicy
+│   │   │       ├── manager.py   # KGManager (三层缓存)
+│   │   │       └── memory.py    # SemanticMemoryStore
 │   │   ├── services/            # 服务层
 │   │   │   ├── sse.py           # SSE Manager
 │   │   │   ├── runtime.py       # 规划运行时
-│   │   │   ├── checkpoint.py    # 检查点服务
-│   │   │   └── modules/         # 业务模块
-│   │   │       ├── rag/         # RAG 知识检索
-│   │   │       ├── gis/         # GIS 空间分析
-│   │   │       ├── prompts/     # Prompt 模板
-│   │   │       ├── planning_text/ # 规划文本生成
-│   │   │       ├── summary/     # 摘要生成
-│   │   │       └── data/        # 数据处理
+│   │   │   └── checkpoint.py    # 检查点服务
 │   │   ├── tools/               # 工具层
 │   │   │   ├── registry.py      # 工具注册中心
 │   │   │   ├── constants.py     # 工具常量
