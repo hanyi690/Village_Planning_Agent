@@ -508,7 +508,7 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
         self.g.add((uri, semantic_group, Literal("construction")))
         self.g.add((uri, has_semantic_label, Literal("建设用地管制区")))
         count += 1
-    for _ in getattr(polygons_layer, "planning_scope", []):
+    for _ in polygons_layer.get("planning_scope") if hasattr(polygons_layer, "get") else []:
         self.g.add((PLN.village, PLN.has_planning_scope, Literal(True)))
         count += 1
     if count:
@@ -537,9 +537,10 @@ def add_annotations(self, annotations: list):
                 self.g.add((uri, PLN.lat, Literal(coords[1], datatype=XSD.double)))
                 vc += 1
         elif cat == "现状设施点":
+            extra = ann.model_extra or {}
             facility = CurrentFacility.from_annotation_feature(
-                {"properties": ann._raw, "geometry": ann.geometry}
-            ) if hasattr(ann, "_raw") else None
+                {"properties": extra, "geometry": ann.geometry}
+            ) if ann.model_extra else None
             if facility is None:
                 continue
             bsm = str(getattr(facility, "bsm", "")).strip()
@@ -967,7 +968,7 @@ def _add_terrain_entities(self, lines_layer, points_layer) -> None:
     """Create entities from contour lines and elevation points."""
     count = 0
     # Contour lines
-    for i, c in enumerate(getattr(lines_layer, "contour_lines", [])):
+    for i, c in enumerate(lines_layer.get("contour_lines") if hasattr(lines_layer, "get") else []):
         bsm = str(getattr(c, "bsm", "")).strip()
         ysdm = str(getattr(c, "ysdm", "")).strip()
         elev = getattr(c, "elevation", "") or ""
@@ -1021,7 +1022,7 @@ def _add_boundaries(self, polygons_layer, lines_layer) -> None:
     """Create boundary entities from admin_areas, planning_scope, admin_boundaries."""
     count = 0
     # Admin areas (polygon)
-    for i, a in enumerate(getattr(polygons_layer, "admin_areas", [])):
+    for i, a in enumerate(polygons_layer.get("admin_areas") if hasattr(polygons_layer, "get") else []):
         bsm = str(getattr(a, "bsm", "")).strip()
         ysdm = str(getattr(a, "ysdm", "")).strip()
         name = getattr(a, "name", "") or f"行政区_{bsm or i}"
@@ -1040,7 +1041,7 @@ def _add_boundaries(self, polygons_layer, lines_layer) -> None:
         count += 1
 
     # Planning scope (polygon) - emit as entity, not just flag
-    for i, ps in enumerate(getattr(polygons_layer, "planning_scope", [])):
+    for i, ps in enumerate(polygons_layer.get("planning_scope") if hasattr(polygons_layer, "get") else []):
         bsm = str(getattr(ps, "bsm", "")).strip()
         if bsm:
             uri = EntityIdPolicy.uri("scope", bsm)

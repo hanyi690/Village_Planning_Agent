@@ -1,0 +1,322 @@
+# DLBM -> GHYTBM 正向映射 — 统一 1:N schema
+# 来源: 《实用性村庄规划编制手册》实验二 + appendix5 反向 dlbm_ref
+version: "2026_GUANGDONG_V1"
+standard: "国土空间调查、规划、用途管制用地用海分类指南 + 广东省技术指南附录5"
+source_system: dlbm
+target_system: ghytbm
+
+mappings:
+  # ── 一一对应 (确定性映射) ──
+  - source: "0101"
+    default: "1100"
+    decision: auto
+    basis: "一一对应"
+    targets:
+      - code: "1100"
+        when: null
+        confidence: exact
+  - source: "0102"
+    default: "1100"
+    decision: auto
+    targets:
+      - code: "1100"
+        when: null
+        confidence: exact
+  - source: "0103"
+    default: "1100"
+    decision: auto
+    targets:
+      - code: "1100"
+        when: null
+        confidence: exact
+  - source: "0201"
+    default: "1200"
+    decision: auto
+    targets:
+      - code: "1200"
+        when: null
+        confidence: exact
+  - source: "0202"
+    default: "1200"
+    decision: auto
+    targets:
+      - code: "1200"
+        when: null
+        confidence: exact
+  - source: "0203"
+    default: "1200"
+    decision: auto
+    targets:
+      - code: "1200"
+        when: null
+        confidence: exact
+  - source: "0204"
+    default: "1200"
+    decision: auto
+    targets:
+      - code: "1200"
+        when: null
+        confidence: exact
+  - source: "0401"
+    default: "1400"
+    decision: auto
+    targets:
+      - code: "1400"
+        when: null
+        confidence: exact
+  - source: "0403"
+    default: "1400"
+    decision: auto
+    targets:
+      - code: "1400"
+        when: null
+        confidence: exact
+  - source: "0701"
+    default: "2100"
+    decision: auto
+    targets:
+      - code: "2100"
+        when: null
+        confidence: exact
+  - source: "0702"
+    default: "2121"
+    decision: auto
+    targets:
+      - code: "2121"
+        when: null
+        confidence: exact
+  - source: "0601"
+    default: "2126"
+    decision: auto
+    targets:
+      - code: "2126"
+        when: null
+        confidence: exact
+  - source: "1101"
+    default: "3100"
+    decision: auto
+    targets:
+      - code: "3100"
+        when: null
+        confidence: exact
+  - source: "1102"
+    default: "3100"
+    decision: auto
+    targets:
+      - code: "3100"
+        when: null
+        confidence: exact
+  - source: "1103"
+    default: "3100"
+    decision: auto
+    targets:
+      - code: "3100"
+        when: null
+        confidence: exact
+  - source: "1104"
+    default: "3100"
+    decision: auto
+    targets:
+      - code: "3100"
+        when: null
+        confidence: exact
+  - source: "1201"
+    default: "3200"
+    decision: auto
+    targets:
+      - code: "3200"
+        when: null
+        confidence: exact
+  - source: "1202"
+    default: "3200"
+    decision: auto
+    targets:
+      - code: "3200"
+        when: null
+        confidence: exact
+  - source: "1203"
+    default: "3200"
+    decision: auto
+    targets:
+      - code: "3200"
+        when: null
+        confidence: exact
+  - source: "1204"
+    default: "3200"
+    decision: auto
+    targets:
+      - code: "3200"
+        when: null
+        confidence: exact
+  - source: "1205"
+    default: "3200"
+    decision: auto
+    targets:
+      - code: "3200"
+        when: null
+        confidence: exact
+  - source: "1206"
+    default: "3200"
+    decision: auto
+    targets:
+      - code: "3200"
+        when: null
+        confidence: exact
+  - source: "1207"
+    default: "3200"
+    decision: auto
+    targets:
+      - code: "3200"
+        when: null
+        confidence: exact
+  - source: "1208"
+    default: "3100"
+    decision: auto
+    targets:
+      - code: "3100"
+        when: null
+        confidence: exact
+  - source: "1311"
+    default: "2270"
+    decision: auto
+    targets:
+      - code: "2270"
+        when: null
+        confidence: exact
+  - source: "1312"
+    default: "2270"
+    decision: auto
+    targets:
+      - code: "2270"
+        when: null
+        confidence: exact
+  - source: "1004"
+    default: "2200"
+    decision: auto
+    targets:
+      - code: "2200"
+        when: null
+        confidence: exact
+  - source: "1003"
+    default: "2200"
+    decision: auto
+    targets:
+      - code: "2200"
+        when: null
+        confidence: exact
+
+  # ── 一对多 — 需消歧 ──
+  - source: "0301"
+    default: "1340"
+    decision: context
+    basis: "李巍手册表2-21: 乔木林地需区分商品林/生态林"
+    targets:
+      - code: "1340"
+        when:
+          kind: func
+          func: poi_match
+          args: ["商品林", "用材林", "经济林"]
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "1350"
+        when:
+          kind: func
+          func: poi_match
+          args: ["生态林", "水源涵养", "防护林"]
+        confidence: conditional
+        evidence_hint: [poi]
+  - source: "0302"
+    default: "1340"
+    decision: context
+    basis: "李巍手册表2-21: 竹林地需区分商品林/生态林"
+    targets:
+      - code: "1340"
+        when:
+          kind: func
+          func: poi_match
+          args: ["商品林", "用材林"]
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "1350"
+        when:
+          kind: func
+          func: poi_match
+          args: ["生态林", "水源涵养"]
+        confidence: conditional
+        evidence_hint: [poi]
+  - source: "0305"
+    default: "1340"
+    decision: context
+    targets:
+      - code: "1340"
+        when:
+          kind: func
+          func: poi_match
+          args: ["商品林"]
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "1350"
+        when:
+          kind: func
+          func: poi_match
+          args: ["生态林"]
+        confidence: conditional
+        evidence_hint: [poi]
+  - source: "0307"
+    default: "1340"
+    decision: context
+    targets:
+      - code: "1340"
+        when:
+          kind: func
+          func: poi_match
+          args: ["商品林"]
+        confidence: conditional
+      - code: "1350"
+        when:
+          kind: func
+          func: poi_match
+          args: ["生态林"]
+        confidence: conditional
+  - source: "0809"
+    default: "2123"
+    decision: context
+    basis: "公用设施用地需细分为基础设施或公服设施"
+    targets:
+      - code: "2123"
+        when:
+          kind: func
+          func: poi_match
+          args: ["基础设施", "供水", "排水", "供电"]
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "2122"
+        when:
+          kind: func
+          func: poi_match
+          args: ["公共服务", "学校", "卫生", "文化"]
+        confidence: conditional
+        evidence_hint: [poi]
+
+  # ── 0602 修复: 拆为两条 target (原为重复键,2130 被静默覆盖) ──
+  - source: "0602"
+    default: "2130"
+    decision: context
+    basis: "0602 在旧 yaml 中重复出现(2130+1510), 官方对应见李巍手册表2-21"
+    targets:
+      - code: "2130"
+        when:
+          kind: comparison
+          field: QSXZ
+          op: "=="
+          value: "10"
+        confidence: conditional
+        evidence_hint: [parcel_attr]
+      - code: "1510"
+        when:
+          kind: comparison
+          field: QSXZ
+          op: "!="
+          value: "10"
+        confidence: conditional
+        evidence_hint: [imagery, survey]

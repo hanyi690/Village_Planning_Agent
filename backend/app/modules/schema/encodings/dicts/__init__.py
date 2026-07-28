@@ -13,11 +13,11 @@ Usage:
 Replaces hardcoded Python dicts with YAML-driven dictionaries.
 """
 
-from .loader import CodeDictionary, ProposalTable, DictionaryCenter, get_center
+from .loader import CodeDictionary, MappingTable, DictionaryCenter, get_center
 
 __all__ = [
     "CodeDictionary",
-    "ProposalTable",
+    "MappingTable",
     "DictionaryCenter",
     "get_center",
 ]

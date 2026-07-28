@@ -202,7 +202,7 @@ def build_spatial_index(bundle) -> Optional[SpatialIndex]:
     parcels = getattr(bundle, "polygons", None)
     if parcels is None:
         return None
-    landuse = getattr(parcels, "landuse_current", [])
+    landuse = parcels.get("landuse_current")
     if not landuse:
         logger.warning("[SpatialIndex] No parcels in bundle")
         return None
@@ -395,12 +395,12 @@ def build_constraint_index(bundle) -> Optional[ConstraintIndex]:
 
     rows = []
     constraint_groups = [
-        ("farmland_protection", polygons.farmland_protection),
-        ("ecological_redline", polygons.ecological_redline),
-        ("historical_protection", polygons.historical_protection),
-        ("cultivated_land_target", polygons.cultivated_land_target),
-        ("urban_dev_boundary", polygons.urban_dev_boundary),
-        ("village_dev_boundary", polygons.village_dev_boundary),
+        ("farmland_protection", polygons.get("farmland_protection")),
+        ("ecological_redline", polygons.get("ecological_redline")),
+        ("historical_protection", polygons.get("historical_protection")),
+        ("cultivated_land_target", polygons.get("cultivated_land_target")),
+        ("urban_dev_boundary", polygons.get("urban_dev_boundary")),
+        ("village_dev_boundary", polygons.get("village_dev_boundary")),
     ]
 
     for ctype, items in constraint_groups:
@@ -556,7 +556,7 @@ def _collect_entities(bundle, layer_defs, geom_field="geometry"):
             container = points
         if container is None:
             continue
-        items = getattr(container, attr_name, [])
+        items = container.get(attr_name)
         for item in items:
             geom = getattr(item, geom_field, None)
             if geom is None:

@@ -258,7 +258,7 @@ class ConstraintCompiler:
                 return
 
             vne_counts: Dict[str, int] = {}
-            for p in bundle.polygons.landuse_current:
+            for p in bundle.polygons.get("landuse_current"):
                 vne = getattr(p, "vne_code", None) or ""
                 major = vne[0] if vne else "E"
                 vne_counts[major] = vne_counts.get(major, 0) + 1
@@ -310,7 +310,7 @@ class ConstraintCompiler:
                 "ecological_redline",
                 "historical_protection",
             ]:
-                layer = getattr(polygons, layer_name, None)
+                layer = polygons.get(layer_name)
                 if layer:
                     protected_count += len(layer)
 

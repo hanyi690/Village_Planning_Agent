@@ -100,19 +100,6 @@ def sample_gis_data(sample_landuse_geojson, sample_boundary_geojson):
 class TestSpatialModels:
     """Test spatially-aware Pydantic models."""
 
-    def test_spatial_context_defaults(self):
-        """SpatialContext should have sensible defaults."""
-        from app.agent.gis.parse.state import SpatialContext
-
-        ctx = SpatialContext()
-        assert ctx.parcel_count == 0
-        assert ctx.total_area_ha == 0.0
-        assert ctx.village_center is None
-        assert ctx.natural_villages == []
-        assert ctx.spatial_relations == []
-        assert ctx.constraint_summary == []
-        assert ctx.zone_adjacency == {}
-
     def test_spatial_anchor_resolution_status(self):
         """SpatialAnchor resolution_status must be one of 3 values."""
         from app.agent.gis.parse.state import SpatialAnchor
@@ -154,7 +141,7 @@ class TestSpatialModels:
         assert op.action == "create"
         assert op.spatial_anchor.reference == "Liu village"
         assert op.spatial_anchor.candidate_parcels == ["XG-005"]
-        assert op.location_desc is None  # No fallback needed when anchor exists
+        assert op.location_desc is None
 
     def test_spatial_constraint_with_rule(self):
         """SpatialConstraint should accept SpatialRule."""
@@ -200,22 +187,6 @@ class TestSpatialModels:
         assert intent.zone_targets[0].spatial_preference.direction == "center"
         assert "产业用地" in intent.zone_targets[0].adjacency_rules.avoid
 
-    def test_parse_agent_state_with_spatial_context(self):
-        """ParseAgentState should accept SpatialContext."""
-        from app.agent.gis.parse.state import ParseAgentState, SpatialContext
-
-        state = ParseAgentState(
-            planning_text="规划文本...",
-            village_name="金田村",
-            spatial_context=SpatialContext(
-                parcel_count=660,
-                total_area_ha=2396.9,
-                village_center=(116.048, 24.829),
-            ),
-        )
-        assert state.spatial_context.parcel_count == 660
-        assert state.spatial_context.village_center == (116.048, 24.829)
-
     def test_section_info_types(self):
         """SectionInfo should accept all 13 section types."""
         from app.agent.gis.parse.state import SectionInfo
@@ -231,13 +202,8 @@ class TestSpatialModels:
             assert section.section_type == st
 
 
-# ============================================================================
-# 2. Spatial Context (6 tests)
-# ============================================================================
-
-
 class TestSpatialContext:
-    """Test compute_spatial_context and sub-functions."""
+    """Test spatial context computation helpers."""
 
     def test_compute_centroid(self, sample_boundary_geojson):
         """_compute_centroid should return (lon, lat) tuple."""
@@ -246,100 +212,8 @@ class TestSpatialContext:
         center = _compute_centroid(sample_boundary_geojson)
         assert center is not None
         assert len(center) == 2
-        assert 110 < center[0] < 120  # Longitude range for Guangdong
-        assert 20 < center[1] < 30    # Latitude range for Guangdong
-
-    def test_compute_landuse_distribution(self, sample_landuse_geojson):
-        """_compute_landuse_distribution should return sorted land-use entries."""
-        from app.modules.spatial_ops.context import _compute_landuse_distribution
-
-        entries = _compute_landuse_distribution(sample_landuse_geojson)
-        assert len(entries) > 0
-        # Should be sorted by area descending
-        for i in range(len(entries) - 1):
-            assert entries[i].area_ha >= entries[i + 1].area_ha
-
-    def test_compute_constraint_summary(self, sample_gis_data):
-        """_compute_constraint_summary should extract protection zones."""
-        from app.modules.spatial_ops.context import _compute_constraint_summary
-
-        summaries = _compute_constraint_summary(sample_gis_data)
-        assert len(summaries) >= 1
-        # Should have farmland protection
-        farm = [s for s in summaries if s.zone_type == "farmland_protection"]
-        assert len(farm) == 1
-        assert farm[0].rule == "禁止建设"
-        assert farm[0].area_ha > 0
-
-    def test_compute_spatial_context_full(self, sample_gis_data):
-        """compute_spatial_context should produce complete SpatialContext."""
-        from app.modules.spatial_ops import compute_spatial_context
-
-        ctx = compute_spatial_context(sample_gis_data)
-        assert ctx.parcel_count > 0
-        assert ctx.total_area_ha > 0
-        assert ctx.village_center is not None
-        assert len(ctx.landuse_distribution) > 0
-        assert len(ctx.constraint_summary) >= 1
-
-    def test_compute_spatial_context_empty_input(self):
-        """compute_spatial_context should handle empty input gracefully."""
-        from app.modules.spatial_ops import compute_spatial_context
-
-        ctx = compute_spatial_context({})
-        assert ctx.parcel_count == 0
-        assert ctx.total_area_ha == 0.0
-        assert ctx.village_center is None
-        assert ctx.natural_villages == []
-
-    def test_compute_spatial_context_jintian(self):
-        """compute_spatial_context should work with real jintian test data."""
-        from app.modules.spatial_ops import compute_spatial_context
-
-        data_dir = Path(__file__).resolve().parents[3] / "data" / "gis" / "jintian" / "current"
-        if not data_dir.exists():
-            pytest.skip("Jintian test data not available")
-
-        gis_data = {}
-        for f in data_dir.glob("*.geojson"):
-            key = f.stem + "_geojson"
-            with open(f, "r", encoding="utf-8") as fh:
-                gis_data[key] = json.load(fh)
-
-        # Rename landuse key to expected format
-        for key in list(gis_data.keys()):
-            if "landuse" in key and "landuse_current" not in key:
-                gis_data["landuse_current_geojson"] = gis_data.pop(key)
-                break
-
-        ctx = compute_spatial_context(gis_data)
-        assert ctx.parcel_count == 660
-        assert ctx.total_area_ha > 2000
-        assert ctx.village_center is not None
-        assert len(ctx.natural_villages) > 0
-        assert len(ctx.spatial_relations) > 0
-        assert len(ctx.zone_adjacency) > 0
-
-        # Verify all landuse entries have valid dlbm
-        for entry in ctx.landuse_distribution:
-            assert entry.dlbm != "", f"Empty DLBM for {entry.name}"
-            assert entry.count > 0
-            assert entry.area_ha > 0
-
-        # Print detailed results for review
-        print(f"\n=== Jintian SpatialContext ===")
-        print(f"parcel_count: {ctx.parcel_count}")
-        print(f"total_area_ha: {ctx.total_area_ha:.1f}")
-        print(f"village_center: {ctx.village_center}")
-        print(f"natural_villages: {len(ctx.natural_villages)}")
-        print(f"spatial_relations: {len(ctx.spatial_relations)}")
-        print(f"zone_adjacency: {len(ctx.zone_adjacency)} zones")
-        for v in ctx.natural_villages[:3]:
-            print(f"  Village: {v.name}, parcels={len(v.parcel_ids)}, dominant={v.dominant_landuse}, adj={v.adjacent_to}")
-        for lu in ctx.landuse_distribution[:5]:
-            print(f"  Landuse: {lu.name} ({lu.dlbm}): {lu.count} parcels, {lu.area_ha:.1f} ha, zone={lu.planning_zone}")
-        for r in ctx.spatial_relations[:5]:
-            print(f"  Relation: {r.subject} {r.relation} {r.object} (conf={r.confidence})")
+        assert 110 < center[0] < 120
+        assert 20 < center[1] < 30
 
 
 # ============================================================================

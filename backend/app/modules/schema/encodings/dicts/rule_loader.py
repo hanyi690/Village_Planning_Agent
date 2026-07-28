@@ -31,6 +31,8 @@ import yaml
 
 from app.utils.logger import get_logger
 
+from .expr_eval import Condition, condition_from_yaml
+
 logger = get_logger(__name__)
 
 _RULES_DIR = Path(__file__).parent / "rules"
@@ -75,7 +77,7 @@ class ZoneDecisionRule:
     """Single zone decision rule (from planning_zone_rules.yaml)."""
 
     priority: int = 0
-    condition: str = ""
+    condition: Optional[Condition] = None
     result: str = ""
     description: str = ""
     params: Dict[str, Any] = field(default_factory=dict)
@@ -212,9 +214,11 @@ class PlanningRuleLoader:
         data = self._load_yaml("planning_zone_rules")
         rules = []
         for item in data.get("decision_rules", []):
+            cond_data = item.get("condition")
+            cond = condition_from_yaml(cond_data) if cond_data else None
             rules.append(ZoneDecisionRule(
                 priority=item.get("priority", 0),
-                condition=item.get("condition", ""),
+                condition=cond,
                 result=item.get("result", ""),
                 description=item.get("description", ""),
                 params=item.get("params", {}),

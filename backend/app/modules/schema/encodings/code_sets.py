@@ -50,12 +50,12 @@ _ydyhfldm = get_center().encoding("ydyhfldm")
 _vne = get_center().encoding("vne")
 _tl = get_center().get("three_line_types")
 _ec = get_center().get("element_codes")
-_sddlbm = get_center().get_proposal("sddlbm_to_ydyhfldm")
+_sddlbm = get_center().get_mapping("sddlbm_to_ydyhfldm")
 
 # New YAML sources (v2.0)
 _cz_codes = get_center().get("construction_zone_codes")
-_ghflbm_tdyt = get_center().get("ghflbm_to_tdytfqdm")
-_dlbm_ghytbm = get_center().get("dlbm_to_ghytbm")
+_ghflbm_tdyt = get_center().get_mapping("ghflbm_to_tdytfqdm")
+_dlbm_ghytbm = get_center().get_mapping("dlbm_to_ghytbm")
 
 # ── Code sets from tugui (土规标准定义的 categories) ──
 BASIC_FARMLAND_CODES: Set[str] = _tugui.to_set("code", filter_tag="BASIC_FARMLAND")
@@ -150,45 +150,14 @@ GHYTBM_TO_GHYTMC: Dict[str, str] = _appendix5.to_dict("code", "name")
 GHYTBM_TO_YDYHFLDM: Dict[str, str] = _appendix5.to_dict("code", "ydyhfldm")
 GHYTBM_TO_ZONE_TYPE: Dict[str, str] = _appendix5.to_dict("code", "zone_type")
 
-# ── GHYTMC (Chinese land-use name) -> Planning zone ──
-# Explicit mapping table, one entry per GHYTBM.
-# Sources: 广东省技术指南附表2 (土地利用结构调整表) + 规划分区规则
-#   - 1100 耕地 -> 农田保护区 (基本农田)
-#   - 1200 园地, 1500 其他农用地, 1510 设施农用地 -> 一般农业区
-#   - 1340 商品林 -> 林业发展区, 1350 生态林 -> 生态保护区
-#   - 1400 草地, 3100 水域 -> 生态保护区
-#   - 2100-2320 建设用地 -> 村庄建设区
-#   - 2270 水利设施, 3200 自然保留地 -> 一般农业区
-_GHYTBM_TO_PLANNING_ZONE: Dict[str, str] = {
-    # 农业用地
-    "1100": "农田保护区",   # 耕地
-    "1200": "一般农业区",   # 园地
-    "1340": "林业发展区",   # 商品林
-    "1500": "一般农业区",   # 其他农用地
-    "1510": "一般农业区",   # 设施农用地
-    "2270": "一般农业区",   # 水利设施用地
-    # 生态用地
-    "1350": "生态保护区",   # 生态林 (NOT 林业发展区)
-    "1400": "生态保护区",   # 草地
-    "3100": "生态保护区",   # 水域
-    # 建设用地
-    "2100": "村庄建设区",   # 城镇用地
-    "2121": "村庄建设区",   # 宅基地
-    "2122": "村庄建设区",   # 公共服务设施
-    "2123": "村庄建设区",   # 基础设施
-    "2124": "村庄建设区",   # 经营性建设
-    "2125": "村庄建设区",   # 景观与绿化
-    "2126": "村庄建设区",   # 村内交通
-    "2130": "村庄建设区",   # 采矿用地
-    "2200": "村庄建设区",   # 对外交通
-    "2310": "村庄建设区",   # 风景名胜
-    "2320": "村庄建设区",   # 特殊用地
-    # 其他
-    "3200": "一般农业区",   # 自然保留地
-}
+# ── GHYTBM -> Planning zone (from YAML, replaces old hardcoded _GHYTBM_TO_PLANNING_ZONE) ──
+_ghytbm_pz = get_center().get("ghytbm_to_planning_zone").raw
+GHYTBM_TO_PLANNING_ZONE: Dict[str, str] = dict(
+    _ghytbm_pz.get("ghytbm_to_planning_zone", {})
+)
 GHYTMC_TO_PLANNING_ZONE: Dict[str, str] = {
     GHYTBM_TO_GHYTMC.get(ghytbm, ""): pz
-    for ghytbm, pz in _GHYTBM_TO_PLANNING_ZONE.items()
+    for ghytbm, pz in GHYTBM_TO_PLANNING_ZONE.items()
     if ghytbm in GHYTBM_TO_GHYTMC
 }
 
@@ -265,9 +234,10 @@ PLANNING_ZONE_TO_CONTROL_CODE: Dict[str, str] = dict(
 GHFLBM_TO_TDYTFQDM: Dict[str, str] = {}
 GHFLBM_TO_TDYT_NAME: Dict[str, str] = {}
 for _entry in _ghflbm_tdyt.raw.get("mappings", []):
-    _ghflbm = _entry.get("ghflbm", "")
-    _tdytfqdm = _entry.get("tdyfqdm", "")
-    _name = _entry.get("name", "")
+    _ghflbm = _entry.get("source", "")
+    _targets = _entry.get("targets", [])
+    _tdytfqdm = _targets[0].get("code", "") if _targets else ""
+    _name = _targets[0].get("name", "") if _targets else ""
     if _ghflbm and _tdytfqdm:
         GHFLBM_TO_TDYTFQDM[_ghflbm] = _tdytfqdm
     if _ghflbm and _name:
@@ -281,12 +251,14 @@ for _entry in _ghflbm_tdyt.raw.get("mappings", []):
 DLBM_TO_GHYTBM: Dict[str, str] = {}
 DLBM_TO_GHYTBM_CONVERSIONS: Dict[str, Tuple[str, str, str]] = {}  # dlbm -> (ghytbm, type, condition)
 for _entry in _dlbm_ghytbm.raw.get("mappings", []):
-    _dlbm = _entry.get("dlbm", "")
-    _ghytbm = _entry.get("ghytbm", "")
-    _conv_type = _entry.get("conversion_type", "")
+    _dlbm = _entry.get("source", "")
+    _targets = _entry.get("targets", [])
+    _default = _entry.get("default", "")
+    _decision = _entry.get("decision", "auto")
+    _ghytbm = _targets[0].get("code", "") if _targets else _default
     if _dlbm and _ghytbm:
         DLBM_TO_GHYTBM[_dlbm] = _ghytbm
-        DLBM_TO_GHYTBM_CONVERSIONS[_dlbm] = (_ghytbm, _conv_type, _entry.get("condition", ""))
+        DLBM_TO_GHYTBM_CONVERSIONS[_dlbm] = (_ghytbm, _decision, "")
 
 
 # ── Lookup functions ──
@@ -324,17 +296,11 @@ def get_primary_zone(dlbm: str) -> str:
 def dlbm_to_planning_zone(dlbm: str) -> str:
     """DLBM → planning_zone 启发式映射。
 
-    ⚠️ 启发规则，非确定性推导。
-    同一 DLBM 在不同规划情景下可映射到不同 planning_zone。
+    从 YAML 加载 (ghytbm_to_planning_zone.yaml), 不再使用硬编码 fallback。
     PARSE 应明确产出 planning_zone 判断，此函数仅作 fallback。
-
-    查找链: DLBM_TO_PLANNING_ZONE (YAML) → _GHYTBM_TO_PLANNING_ZONE (硬编码) → "一般农业区"
     """
     dlbm_s = str(dlbm).strip()
-    pz = DLBM_TO_PLANNING_ZONE.get(dlbm_s)
-    if pz:
-        return pz
-    return _GHYTBM_TO_PLANNING_ZONE.get(dlbm_s, "一般农业区")
+    return DLBM_TO_PLANNING_ZONE.get(dlbm_s, "一般农业区")
 
 def get_primary_zone_for_planning_zone(planning_zone: str) -> str:
     return PLANNING_ZONE_TO_PRIMARY_ZONE.get(planning_zone, "农业空间")
@@ -502,10 +468,9 @@ def get_planning_zone_from_landuse(landuse: str) -> str:
     Returns:
         对应的规划分区名称。
     """
-    # 尝试 name → code → planning_zone
     for code, name in GHYTBM_TO_GHYTMC.items():
-        if name == landuse and code in _GHYTBM_TO_PLANNING_ZONE:
-            return _GHYTBM_TO_PLANNING_ZONE[code]
+        if name == landuse and code in GHYTBM_TO_PLANNING_ZONE:
+            return GHYTBM_TO_PLANNING_ZONE[code]
     return "一般农业区"
 
 
@@ -519,7 +484,7 @@ __all__ = [
     "GHYTMC_TO_ZONE_TYPE",
     "GHFLBM_MEANING", "GHFLBM_TO_ZONE_TYPE", "GHFLBM_TO_GHYTBMS",
     "GHYTBM_TO_GHYTMC", "GHYTBM_TO_YDYHFLDM",
-    "YDYHFLDM_TO_NAME", "GHYTBM_TO_ZONE_TYPE",
+    "YDYHFLDM_TO_NAME", "GHYTBM_TO_ZONE_TYPE", "GHYTBM_TO_PLANNING_ZONE",
     "VNE_CODE_TO_NAME", "VNE_TO_ZONE_TYPE", "ZONE_TYPE_TO_VNE",
     "GHYTBM_TO_VNE",
     "THREE_LINE_TYPES", "CONSTRUCTION_ZONE_DEF", "ANNOTATION_CATEGORIES",

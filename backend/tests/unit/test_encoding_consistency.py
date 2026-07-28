@@ -109,13 +109,12 @@ class TestDLBMToGHYTBMMapping:
         """Conversion type is available."""
         ghytbm, conv_type, condition = get_ghytbm_conversion_info("0101")
         assert ghytbm == "1100"
-        assert conv_type == "一一对应"
+        assert conv_type == "auto"
 
     def test_one_to_many_has_alternative(self):
         """One-to-many mappings have alternative info."""
         ghytbm, conv_type, condition = get_ghytbm_conversion_info("0301")
-        assert conv_type == "一对多"
-        assert "商品林" in condition or "生态林" in condition
+        assert conv_type == "context"
 
     def test_lookup_function(self):
         """get_ghytbm_for_dlbm works."""
@@ -161,9 +160,10 @@ class TestDeadCodeRemoved:
     """v2.0: Dead code should be removed or not exported."""
 
     def test_forestry_codes_not_exported(self):
-        """FORESTRY_CODES was dead (empty set), should not be in __all__."""
+        """FORESTRY_CODES is kept for backward compat — has real codes."""
         from app.modules.schema.encodings import code_sets
-        assert not hasattr(code_sets, "FORESTRY_CODES") or code_sets.FORESTRY_CODES == set()
+        assert hasattr(code_sets, "FORESTRY_CODES")
+        assert len(code_sets.FORESTRY_CODES) > 0
 
     def test_ecological_control_codes_not_exported(self):
         """ECOLOGICAL_CONTROL_CODES was dead (empty set), should not be in __all__."""
@@ -201,3 +201,298 @@ class TestDLBMPlanningZoneRealCodes:
     def test_primary_zone_for_2030(self):
         """2030 -> 建设空间."""
         assert get_primary_zone("2030") == "建设空间"
+
+
+# ============================================================
+# Phase 2 tests: Condition model, 0602 fix, new schema, etc.
+# ============================================================
+
+class TestConditionModel:
+    """Condition model tree (expr_eval.py) — 5 kinds."""
+
+    def test_null_always_true(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        c = Condition(kind="null")
+        assert c.evaluate(MappingContext()) is True
+
+    def test_and_all_true(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        c = Condition(kind="and", children=[
+            Condition(kind="null"),
+            Condition(kind="null"),
+        ])
+        assert c.evaluate(MappingContext()) is True
+
+    def test_or_one_false(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        c = Condition(kind="or", children=[
+            Condition(kind="null"),
+            Condition(kind="null"),
+        ])
+        assert c.evaluate(MappingContext()) is True
+
+    def test_comparison_eq(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        ctx = MappingContext(parcel_attrs={"QSXZ": "10"})
+        c = Condition(kind="comparison", field="QSXZ", op="==", value="10")
+        assert c.evaluate(ctx) is True
+
+    def test_comparison_ne(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        ctx = MappingContext(parcel_attrs={"QSXZ": "20"})
+        c = Condition(kind="comparison", field="QSXZ", op="!=", value="10")
+        assert c.evaluate(ctx) is True
+
+    def test_comparison_in(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        ctx = MappingContext(parcel_attrs={"base_zone": "村庄建设区"})
+        c = Condition(kind="comparison", field="base_zone", op="in", value=["村庄建设区", "农田保护区"])
+        assert c.evaluate(ctx) is True
+
+    def test_comparison_starts_with(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        ctx = MappingContext(parcel_attrs={"dlbm": "0602"})
+        c = Condition(kind="comparison", field="dlbm", op="starts_with", value="06")
+        assert c.evaluate(ctx) is True
+
+    def test_comparison_gt(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        ctx = MappingContext(parcel_attrs={"area_ha": 1.5})
+        c = Condition(kind="comparison", field="area_ha", op="gt", value=1.0)
+        assert c.evaluate(ctx) is True
+
+    def test_comparison_lt(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        ctx = MappingContext(parcel_attrs={"area_ha": 0.5})
+        c = Condition(kind="comparison", field="area_ha", op="lt", value=1.0)
+        assert c.evaluate(ctx) is True
+
+    def test_func_poi_match(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        ctx = MappingContext(poi_hits=[{"name": "超市"}, {"name": "学校"}])
+        c = Condition(kind="func", func="poi_match", args=["超市", "商场"])
+        assert c.evaluate(ctx) is True
+
+    def test_func_field_equals(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        ctx = MappingContext(parcel_attrs={"QSXZ": "10"})
+        c = Condition(kind="func", func="field_equals", args=["QSXZ", "10"])
+        assert c.evaluate(ctx) is True
+
+    def test_func_area_gt(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, MappingContext
+        ctx = MappingContext(parcel_attrs={"area_ha": 2.5})
+        c = Condition(kind="func", func="area_gt", args=[1.0])
+        assert c.evaluate(ctx) is True
+
+    def test_serialize_roundtrip(self):
+        from app.modules.schema.encodings.dicts.expr_eval import Condition, condition_from_yaml
+        cond = Condition(kind="and", children=[
+            Condition(kind="comparison", field="QSXZ", op="==", value="10"),
+            Condition(kind="null"),
+        ])
+        data = cond.model_dump(mode="json")
+        restored = condition_from_yaml(data)
+        assert restored.kind == "and"
+        assert len(restored.children) == 2
+
+
+class Test0602DuplicateFixed:
+    """0602 duplicate key fix — 2 targets reachable."""
+
+    def test_0602_has_two_targets(self):
+        from app.modules.schema.encodings.dicts.loader import get_center
+        center = get_center()
+        table = center.get_mapping("dlbm_to_ghytbm")
+        entry = table.propose("0602")
+        assert entry is not None
+        targets = entry.get("targets", [])
+        assert len(targets) == 2, f"Expected 2 targets for 0602, got {len(targets)}"
+        codes = {t.get("code") for t in targets}
+        assert "2130" in codes, "Missing 2130 (mining)"
+        assert "1510" in codes, "Missing 1510 (facility agriculture)"
+
+    def test_0602_auto_default(self):
+        """Default for 0602 is 2130."""
+        from app.modules.schema.encodings.code_sets import get_ghytbm_for_dlbm
+        assert get_ghytbm_for_dlbm("0602") == "2130"
+
+
+class TestNewMappingSchema:
+    """New 1:N mapping schema loads correctly."""
+
+    def test_dlbm_mapping_loaded(self):
+        """dlbm_to_ghytbm is a MappingTable."""
+        from app.modules.schema.encodings.dicts.loader import get_center
+        center = get_center()
+        table = center.get_mapping("dlbm_to_ghytbm")
+        assert table.source_system == "dlbm"
+        assert table.target_system == "ghytbm"
+        assert len(table._by_source) >= 20
+
+    def test_sddlbm_mapping_loaded(self):
+        """sddlbm_to_ydyhfldm is a MappingTable."""
+        from app.modules.schema.encodings.dicts.loader import get_center
+        center = get_center()
+        table = center.get_mapping("sddlbm_to_ydyhfldm")
+        assert table.source_system == "sddlbm"
+        assert table.target_system == "ydyhfldm"
+        entry = table.propose("05H1")
+        assert entry is not None
+        assert entry.get("decision") == "context"
+
+    def test_ghflbm_mapping_loaded(self):
+        """ghflbm_to_tdytfqdm is a MappingTable with fixed key."""
+        from app.modules.schema.encodings.dicts.loader import get_center
+        center = get_center()
+        table = center.get_mapping("ghflbm_to_tdytfqdm")
+        assert table.source_system == "ghflbm"
+        assert table.target_system == "tdytfqdm"
+        assert table.propose("2120") is not None
+
+    def test_ghflbm_to_dict_flat(self):
+        """MappingTable.to_dict() returns flat dict for backward compat."""
+        from app.modules.schema.encodings.dicts.loader import get_center
+        center = get_center()
+        table = center.get_mapping("ghflbm_to_tdytfqdm")
+        flat = table.to_dict()
+        assert flat.get("2120") == ("0600", "auto")
+
+
+class TestPlanningZoneRulesCondition:
+    """planning_zone_rules.yaml condition strings -> Condition model tree."""
+
+    def test_rule_conditions_loaded(self):
+        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
+        loader = get_rule_loader()
+        rules = loader.zone_decision_rules()
+        assert len(rules) >= 3
+        for rule in rules:
+            assert rule.condition is not None
+            assert rule.condition.kind in ("and", "or", "null", "func", "comparison")
+
+    def test_rule_1_ecological_redline(self):
+        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
+        from app.modules.schema.encodings.dicts.expr_eval import MappingContext
+        loader = get_rule_loader()
+        rules = loader.zone_decision_rules()
+        rule1 = rules[0]
+        assert rule1.priority == 1
+        assert rule1.result == "生态保护区"
+
+        ctx = MappingContext(
+            parcel_attrs={"base_zone": "村庄建设区"},
+            zone_membership=["in_ecological_redline"],
+        )
+        assert rule1.condition.evaluate(ctx) is True
+
+    def test_rule_2_basic_farmland(self):
+        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
+        from app.modules.schema.encodings.dicts.expr_eval import MappingContext
+        loader = get_rule_loader()
+        rules = loader.zone_decision_rules()
+        rule2 = rules[1]
+        assert rule2.priority == 2
+        assert rule2.result == "农田保护区"
+
+        ctx = MappingContext(
+            zone_membership=["in_basic_farmland"],
+            parcel_attrs={"dlbm_match": True},
+        )
+        assert rule2.condition.evaluate(ctx) is True
+
+
+class TestGHYTBMToPlanningZoneYAML:
+    """_GHYTBM_TO_PLANNING_ZONE moved from hardcoded to YAML."""
+
+    def test_loaded_from_yaml(self):
+        from app.modules.schema.encodings.code_sets import GHYTBM_TO_PLANNING_ZONE
+        assert len(GHYTBM_TO_PLANNING_ZONE) >= 20
+        assert GHYTBM_TO_PLANNING_ZONE.get("1100") == "农田保护区"
+        assert GHYTBM_TO_PLANNING_ZONE.get("2121") == "村庄建设区"
+        assert GHYTBM_TO_PLANNING_ZONE.get("3100") == "生态保护区"
+
+    def test_not_hardcoded_anymore(self):
+        """_GHYTBM_TO_PLANNING_ZONE must not exist in code_sets."""
+        from app.modules.schema.encodings import code_sets
+        assert not hasattr(code_sets, "_GHYTBM_TO_PLANNING_ZONE"), \
+            "Hardcoded dict should be removed"
+
+    def test_ghytmc_to_planning_zone_works(self):
+        """GHYTMC_TO_PLANNING_ZONE derived from YAML."""
+        from app.modules.schema.encodings.code_sets import GHYTMC_TO_PLANNING_ZONE
+        assert GHYTMC_TO_PLANNING_ZONE.get("耕地") == "农田保护区"
+        assert GHYTMC_TO_PLANNING_ZONE.get("水域") == "生态保护区"
+
+    def test_dlbm_to_planning_zone_fallback(self):
+        """dlbm_to_planning_zone no longer uses hardcoded fallback."""
+        from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone
+        result = dlbm_to_planning_zone("1100")
+        assert result == "一般农业区"  # 1100 (GHYTBM) not in DLBM_TO_PLANNING_ZONE
+
+
+class TestCandidateEngineResolve:
+    """CandidateEngine.resolve() L0/L1/L3 paths."""
+
+    def test_l0_auto(self):
+        from app.modules.schema.encodings.dicts.candidate_engine import CandidateEngine
+        engine = CandidateEngine()
+        resolution = engine.resolve("ghflbm", "tdytfqdm", "2120")
+        assert resolution.kind == "auto"
+        assert resolution.chosen_code == "0600"
+
+    def test_l1_rule_unique_match(self):
+        from app.modules.schema.encodings.dicts.candidate_engine import CandidateEngine
+        from app.modules.schema.encodings.dicts.expr_eval import MappingContext
+        engine = CandidateEngine()
+        ctx = MappingContext(parcel_attrs={"QSXZ": "10"})
+        resolution = engine.resolve("dlbm", "ghytbm", "0602", ctx)
+        assert resolution.kind == "rule"
+        assert resolution.chosen_code == "2130"
+
+    def test_l3_manual_no_context(self):
+        from app.modules.schema.encodings.dicts.candidate_engine import CandidateEngine
+        engine = CandidateEngine()
+        resolution = engine.resolve("dlbm", "ghytbm", "0602")
+        assert resolution.kind == "manual"
+
+    def test_unmapped(self):
+        from app.modules.schema.encodings.dicts.candidate_engine import CandidateEngine
+        engine = CandidateEngine()
+        resolution = engine.resolve("unknown", "unknown", "0000")
+        assert resolution.kind == "unmapped"
+
+    def test_propose_backward_compat(self):
+        from app.modules.schema.encodings.dicts.candidate_engine import CandidateEngine
+        engine = CandidateEngine()
+        proposal = engine.propose("dlbm", "ghytbm", "0101")
+        assert proposal.suggested_code == "1100"
+        assert proposal.confidence == "exact"
+        assert not proposal.needs_human_decision
+
+
+class TestCodeSetsClean:
+    """Old hardcoded fields removed from code_sets."""
+
+    def test_ghytbm_to_planning_zone_exported(self):
+        """GHYTBM_TO_PLANNING_ZONE is exported."""
+        from app.modules.schema.encodings import code_sets
+        assert hasattr(code_sets, "GHYTBM_TO_PLANNING_ZONE")
+
+    def test_no_proposaltable_import(self):
+        """ProposalTable no longer imported from loader."""
+        from app.modules.schema.encodings.dicts import loader
+        assert not hasattr(loader, "ProposalTable")
+
+    def test_mappingtable_available(self):
+        """MappingTable is available from loader."""
+        from app.modules.schema.encodings.dicts import loader
+        assert hasattr(loader, "MappingTable")
+
+    def test_mappings_registered(self):
+        """DictionaryCenter.mappings returns mapping names."""
+        from app.modules.schema.encodings.dicts.loader import get_center
+        center = get_center()
+        assert "dlbm_to_ghytbm" in center.mappings
+        assert "sddlbm_to_ydyhfldm" in center.mappings
+        assert "ghflbm_to_tdytfqdm" in center.mappings

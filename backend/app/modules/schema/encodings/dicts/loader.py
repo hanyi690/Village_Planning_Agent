@@ -3,13 +3,7 @@
 Directory layout:
   encodings/   — 编码体系：标准原文照录
   rules/       — 工程规则：派生配置
-  references/  — 辅助参考：候选建议
-
-Design principles:
-  - No "mapping" concept, only "candidate proposals"
-  - All encoding systems externalized as YAML data
-  - Backward-compatible: existing API signatures preserved
-  - Auto-discovery: scans subdirectories, no manual registration needed
+  mappings/    — 跨体系映射表 (统一 1:N schema)
 """
 
 from __future__ import annotations
@@ -29,9 +23,7 @@ _DICTS_DIR = Path(__file__).parent
 _ENCODINGS_DIR = "encodings"
 _RULES_DIR = "rules"
 _REFERENCES_DIR = "references"
-
-# Files in references/ that are ProposalTable (not CodeDictionary)
-_PROPOSAL_FILES: Set[str] = {"sddlbm_to_ydyhfldm"}
+_MAPPINGS_DIR = "mappings"
 
 
 # ============================================================
@@ -115,17 +107,31 @@ class CodeDictionary:
 
 
 @dataclass
-class ProposalTable:
-    """Cross-system candidate proposal table loaded from YAML."""
+class MappingTable:
+    """Cross-system mapping table — unified 1:N schema.
+
+    Replaces the old ProposalTable. YAML schema:
+      mappings:
+        - source: "0602"
+          default: "2130"
+          decision: context
+          basis: "..."
+          targets:
+            - code: "2130"
+              when: {kind: comparison, field: QSXZ, op: "==", value: "10"}
+              confidence: conditional
+    """
 
     name: str
     version: str
-    standard: str
-    raw: Dict[str, Any]
+    standard: str = ""
+    source_system: str = ""
+    target_system: str = ""
+    raw: Dict[str, Any] = field(default_factory=dict)
     _by_source: Dict[str, Dict[str, Any]] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
-        for entry in self.raw.get("proposals", []):
+        for entry in self.raw.get("mappings", []):
             source = str(entry.get("source", ""))
             if source:
                 self._by_source[source] = entry
@@ -135,12 +141,12 @@ class ProposalTable:
 
     def to_dict(self) -> Dict[str, Tuple[str, str]]:
         result: Dict[str, Tuple[str, str]] = {}
-        for entry in self.raw.get("proposals", []):
+        for entry in self.raw.get("mappings", []):
             source = str(entry.get("source", ""))
-            candidate = str(entry.get("candidate", ""))
-            conv_type = str(entry.get("conversion_type", ""))
-            if source and candidate:
-                result[source] = (candidate, conv_type)
+            default = str(entry.get("default", ""))
+            decision = str(entry.get("decision", "auto"))
+            if source and default:
+                result[source] = (default, decision)
         return result
 
 
@@ -156,7 +162,7 @@ class DictionaryCenter:
 
     def __init__(self):
         self._dictionaries: Dict[str, CodeDictionary] = {}
-        self._proposals: Dict[str, ProposalTable] = {}
+        self._mappings: Dict[str, MappingTable] = {}
         self._loaded = False
 
     def load(self, dict_dir: Optional[Path] = None) -> "DictionaryCenter":
@@ -166,7 +172,8 @@ class DictionaryCenter:
 
         self._scan_dir(base / _ENCODINGS_DIR, "encoding")
         self._scan_dir(base / _RULES_DIR, "rule")
-        self._scan_references(base / _REFERENCES_DIR)
+        self._scan_dir(base / _REFERENCES_DIR, "reference")
+        self._scan_mappings(base / _MAPPINGS_DIR)
 
         self._loaded = True
         return self
@@ -177,15 +184,11 @@ class DictionaryCenter:
         for fp in sorted(dirpath.glob("*.yaml")):
             self._load_dict(fp, category)
 
-    def _scan_references(self, dirpath: Path) -> None:
+    def _scan_mappings(self, dirpath: Path) -> None:
         if not dirpath.is_dir():
             return
         for fp in sorted(dirpath.glob("*.yaml")):
-            name = fp.stem
-            if name in _PROPOSAL_FILES:
-                self._load_proposal(fp)
-            else:
-                self._load_dict(fp, "reference")
+            self._load_mapping(fp)
 
     def _load_dict(self, filepath: Path, category: str) -> None:
         name = filepath.stem
@@ -198,16 +201,23 @@ class DictionaryCenter:
         )
         logger.info("[DictionaryCenter] Loaded %s/%s v=%s", category, name, version)
 
-    def _load_proposal(self, filepath: Path) -> None:
+    def _load_mapping(self, filepath: Path) -> None:
         name = filepath.stem
         with open(filepath, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
         version = data.get("version", "unknown")
         standard = data.get("standard", "")
-        self._proposals[name] = ProposalTable(
-            name=name, version=version, standard=standard, raw=data
+        source_system = data.get("source_system", "")
+        target_system = data.get("target_system", "")
+        self._mappings[name] = MappingTable(
+            name=name,
+            version=version,
+            standard=standard,
+            source_system=source_system,
+            target_system=target_system,
+            raw=data,
         )
-        logger.info("[DictionaryCenter] Loaded reference/proposal %s v=%s", name, version)
+        logger.info("[DictionaryCenter] Loaded mapping %s v=%s (%s->%s)", name, version, source_system, target_system)
 
     # ── Public API ──────────────────────────────────────────
 
@@ -228,13 +238,13 @@ class DictionaryCenter:
     def rule(self, name: str) -> CodeDictionary:
         return self.get(name)
 
-    def get_proposal(self, name: str) -> ProposalTable:
+    def get_mapping(self, name: str) -> MappingTable:
         if not self._loaded:
             self.load()
-        p = self._proposals.get(name)
-        if p is None:
-            raise KeyError(f"Proposal '{name}' not found. Available: {list(self._proposals.keys())}")
-        return p
+        m = self._mappings.get(name)
+        if m is None:
+            raise KeyError(f"Mapping '{name}' not found. Available: {list(self._mappings.keys())}")
+        return m
 
     @property
     def encodings(self) -> List[str]:
@@ -249,11 +259,17 @@ class DictionaryCenter:
         return [n for n, d in self._dictionaries.items() if d.category == "rule"]
 
     @property
+    def mappings(self) -> List[str]:
+        if not self._loaded:
+            self.load()
+        return list(self._mappings.keys())
+
+    @property
     def versions(self) -> Dict[str, str]:
         if not self._loaded:
             self.load()
         v = {n: d.version for n, d in self._dictionaries.items()}
-        v.update({n: p.version for n, p in self._proposals.items()})
+        v.update({n: m.version for n, m in self._mappings.items()})
         return v
 
 
@@ -274,7 +290,7 @@ def get_center() -> DictionaryCenter:
 
 __all__ = [
     "CodeDictionary",
-    "ProposalTable",
+    "MappingTable",
     "DictionaryCenter",
     "get_center",
 ]

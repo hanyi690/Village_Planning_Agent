@@ -68,7 +68,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
 
     gis_data = state.gis_data or {}
     gis_bundle = getattr(state, "gis_bundle", None)
-    if gis_bundle is not None and hasattr(gis_bundle, "polygons") and (gis_bundle.polygons.landuse_current or gis_bundle.polygons.landuse_planned):
+    if gis_bundle is not None and hasattr(gis_bundle, "polygons") and (gis_bundle.polygons.get("landuse_current") or gis_bundle.polygons.get("landuse_planned")):
         landuse_dict = gis_bundle.to_geojson_dict()
         landuse = landuse_dict.get("landuse_current_geojson")
     else:
@@ -256,7 +256,7 @@ async def _execute_road_node(state: ExecuteAgentState) -> dict:
     bundle = state.gis_bundle
     current_roads = []
     if bundle is not None:
-        roads = getattr(getattr(bundle, "lines", None), "roads_current", None)
+        roads = bundle.lines.get("roads_current") if bundle.lines is not None else None
         if roads is not None:
             current_roads = list(roads)
         # Also try legacy attribute

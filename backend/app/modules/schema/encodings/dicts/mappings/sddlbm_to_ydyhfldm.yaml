@@ -1,0 +1,428 @@
+# SDDLBM -> YDYHFLDM 基数转换 — 统一 1:N schema
+# 来源: 自然资发〔2023〕234号 附录F
+version: "2026_GUANGDONG_V1"
+standard: "自然资发〔2023〕234号"
+source_system: sddlbm
+target_system: ydyhfldm
+
+mappings:
+  # ── 一一对应 ──
+  - source: "0101"
+    default: "0101"
+    decision: auto
+    targets:
+      - code: "0101"
+        when: null
+        confidence: exact
+  - source: "0102"
+    default: "0102"
+    decision: auto
+    targets:
+      - code: "0102"
+        when: null
+        confidence: exact
+  - source: "0103"
+    default: "0103"
+    decision: auto
+    targets:
+      - code: "0103"
+        when: null
+        confidence: exact
+  - source: "0201"
+    default: "0201"
+    decision: auto
+    targets:
+      - code: "0201"
+        when: null
+        confidence: exact
+  - source: "0202"
+    default: "0202"
+    decision: auto
+    targets:
+      - code: "0202"
+        when: null
+        confidence: exact
+  - source: "0203"
+    default: "0203"
+    decision: auto
+    targets:
+      - code: "0203"
+        when: null
+        confidence: exact
+  - source: "0204"
+    default: "0204"
+    decision: auto
+    targets:
+      - code: "0204"
+        when: null
+        confidence: exact
+  - source: "0301"
+    default: "0301"
+    decision: auto
+    targets:
+      - code: "0301"
+        when: null
+        confidence: exact
+  - source: "0302"
+    default: "0302"
+    decision: auto
+    targets:
+      - code: "0302"
+        when: null
+        confidence: exact
+  - source: "0303"
+    default: "0303"
+    decision: auto
+    targets:
+      - code: "0303"
+        when: null
+        confidence: exact
+  - source: "0304"
+    default: "0304"
+    decision: auto
+    targets:
+      - code: "0304"
+        when: null
+        confidence: exact
+  - source: "0305"
+    default: "0305"
+    decision: auto
+    targets:
+      - code: "0305"
+        when: null
+        confidence: exact
+  - source: "0306"
+    default: "0306"
+    decision: auto
+    targets:
+      - code: "0306"
+        when: null
+        confidence: exact
+  - source: "0307"
+    default: "0307"
+    decision: auto
+    targets:
+      - code: "0307"
+        when: null
+        confidence: exact
+  - source: "0401"
+    default: "0401"
+    decision: auto
+    targets:
+      - code: "0401"
+        when: null
+        confidence: exact
+  - source: "0402"
+    default: "0402"
+    decision: auto
+    targets:
+      - code: "0402"
+        when: null
+        confidence: exact
+  - source: "0403"
+    default: "0403"
+    decision: auto
+    targets:
+      - code: "0403"
+        when: null
+        confidence: exact
+  - source: "0404"
+    default: "0404"
+    decision: auto
+    targets:
+      - code: "0404"
+        when: null
+        confidence: exact
+  - source: "0601"
+    default: "1001"
+    decision: auto
+    targets:
+      - code: "1001"
+        when: null
+        confidence: exact
+  - source: "0602"
+    default: "1002"
+    decision: auto
+    targets:
+      - code: "1002"
+        when: null
+        confidence: exact
+  - source: "0603"
+    default: "1003"
+    decision: auto
+    targets:
+      - code: "1003"
+        when: null
+        confidence: exact
+  - source: "0701"
+    default: "0701"
+    decision: auto
+    targets:
+      - code: "0701"
+        when: null
+        confidence: exact
+  - source: "0702"
+    default: "0702"
+    decision: auto
+    targets:
+      - code: "0702"
+        when: null
+        confidence: exact
+  - source: "1101"
+    default: "1701"
+    decision: auto
+    targets:
+      - code: "1701"
+        when: null
+        confidence: exact
+  - source: "1102"
+    default: "1702"
+    decision: auto
+    targets:
+      - code: "1702"
+        when: null
+        confidence: exact
+  - source: "1103"
+    default: "1703"
+    decision: auto
+    targets:
+      - code: "1703"
+        when: null
+        confidence: exact
+  - source: "1104"
+    default: "1704"
+    decision: auto
+    targets:
+      - code: "1704"
+        when: null
+        confidence: exact
+  - source: "1109"
+    default: "1311"
+    decision: auto
+    targets:
+      - code: "1311"
+        when: null
+        confidence: exact
+  - source: "2121"
+    default: "0702"
+    decision: auto
+    targets:
+      - code: "0702"
+        when: null
+        confidence: exact
+
+  # ── 一对多 — 需消歧 ──
+  - source: "05H1"
+    default: "0900"
+    decision: context
+    basis: "用地用海分类指南附录F: 05H1->6类"
+    targets:
+      - code: "0900"
+        when: null
+        confidence: exact
+      - code: "0901"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "商业用地"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "0902"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "商务金融用地"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "0903"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "娱乐用地"
+        confidence: conditional
+        evidence_hint: [poi]
+  - source: "08H2"
+    default: "0800"
+    decision: context
+    basis: "用地用海分类指南附录F: 08H2->4类"
+    targets:
+      - code: "0800"
+        when: null
+        confidence: exact
+      - code: "0801"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "机关团体"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "0803"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "文化设施"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "0804"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "教育设施"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "0806"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "医疗卫生"
+        confidence: conditional
+        evidence_hint: [poi]
+  - source: "1004"
+    default: "1207"
+    decision: context
+    targets:
+      - code: "1207"
+        when: null
+        confidence: exact
+  - source: "1006"
+    default: "0601"
+    decision: context
+    targets:
+      - code: "0601"
+        when: null
+        confidence: exact
+  - source: "1001"
+    default: "1201"
+    decision: context
+    targets:
+      - code: "1201"
+        when: null
+        confidence: exact
+  - source: "1005"
+    default: "1208"
+    decision: context
+    targets:
+      - code: "1208"
+        when: null
+        confidence: exact
+  - source: "1008"
+    default: "1204"
+    decision: context
+    targets:
+      - code: "1204"
+        when: null
+        confidence: exact
+  - source: "2122"
+    default: "0800"
+    decision: context
+    targets:
+      - code: "0800"
+        when: null
+        confidence: exact
+      - code: "0801"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "机关团体"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "0803"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "文化设施"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "0806"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "医疗卫生"
+        confidence: conditional
+        evidence_hint: [poi]
+  - source: "2123"
+    default: "1300"
+    decision: context
+    targets:
+      - code: "1300"
+        when: null
+        confidence: exact
+      - code: "1301"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "供水设施"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "1302"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "排水设施"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "1303"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "供电设施"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "1306"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "通信设施"
+        confidence: conditional
+        evidence_hint: [poi]
+  - source: "2124"
+    default: "0900"
+    decision: context
+    targets:
+      - code: "0900"
+        when: null
+        confidence: exact
+      - code: "0901"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "商业用地"
+        confidence: conditional
+        evidence_hint: [poi]
+      - code: "1001"
+        when:
+          kind: comparison
+          field: landuse_name
+          op: "=="
+          value: "工业用地"
+        confidence: conditional
+        evidence_hint: [poi]
+  - source: "2125"
+    default: "1401"
+    decision: context
+    targets:
+      - code: "1401"
+        when: null
+        confidence: exact
+  - source: "2126"
+    default: "0601"
+    decision: context
+    targets:
+      - code: "0601"
+        when: null
+        confidence: exact

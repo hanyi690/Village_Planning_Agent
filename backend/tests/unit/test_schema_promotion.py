@@ -18,15 +18,14 @@ import pytest
 
 
 def test_new_import_canonical():
-    from app.modules.schema.types.canonical import BBox, CRS, GeoFeature, GISDataBundle
+    from app.modules.schema.types.canonical import BBox, CRS, VillageBundle
     assert BBox is not None
     assert CRS.WGS84 == "EPSG:4326"
 
 
 def test_new_import_contracts():
-    from app.modules.schema.contracts.layout_contracts import ZoneIntent, SpatialContext, AllocationResult
+    from app.modules.schema.contracts.layout_contracts import ZoneIntent, AllocationResult
     assert ZoneIntent is not None
-    assert SpatialContext is not None
 
 
 def test_new_import_spatial_types():
@@ -153,9 +152,8 @@ def test_spatial_ops_import():
 
 
 def test_spatial_ops_submodules():
-    from app.modules.spatial_ops.geometry import _compute_centroid, _compute_total_area, _find_column
+    from app.modules.spatial_ops.geometry import _compute_centroid, _compute_total_area
     from app.modules.spatial_ops.relations import _compute_spatial_relations, _compute_zone_adjacency
-    from app.modules.spatial_ops.context import _compute_landuse_distribution, _compute_constraint_summary
     assert _compute_centroid is not None
     assert _compute_spatial_relations is not None
 

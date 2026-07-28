@@ -50,9 +50,9 @@ def calculate_gis_coverage(
         catalog = DataCatalog()
         bundle = catalog.load_village_bundle(location)
         has_boundary = bundle.boundary is not None
-        has_landuse = len(bundle.polygons.landuse_current) > 0
-        has_planned = len(bundle.polygons.landuse_planned) > 0
-        has_roads = len(bundle.lines.roads_current) + len(bundle.lines.roads_planned) > 0
+        has_landuse = len(bundle.polygons.get("landuse_current")) > 0
+        has_planned = len(bundle.polygons.get("landuse_planned")) > 0
+        has_roads = len(bundle.lines.get("roads_current")) + len(bundle.lines.get("roads_planned")) > 0
     except Exception as e:
         logger.warning("[CoverageCalculator] DataCatalog failed: %s", e)
         has_boundary = False

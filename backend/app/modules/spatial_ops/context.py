@@ -142,9 +142,9 @@ def _build_village_meta(bundle: VillageBundle) -> ContextBlock:
     data["total_area_ha"] = round(bundle.total_area_ha, 2)
 
     # Construction boundary area
-    if bundle.polygons.construction_zone:
+    if bundle.polygons.get("construction_zone"):
         from app.modules.schema.types.canonical import _features_to_fc
-        construction_fc = _features_to_fc(bundle.polygons.construction_zone)
+        construction_fc = _features_to_fc(bundle.polygons.get("construction_zone"))
         data["construction_boundary_ha"] = round(_compute_total_area(construction_fc), 2)
     else:
         data["construction_boundary_ha"] = 0.0
@@ -165,7 +165,7 @@ def _build_landuse_dist(bundle: VillageBundle) -> ContextBlock:
     """
     from collections import defaultdict
 
-    parcels = bundle.polygons.landuse_current
+    parcels = bundle.polygons.get("landuse_current")
     if not parcels:
         return ContextBlock(
             block_type=ContextBlockType.LANDUSE_DIST,
@@ -224,7 +224,7 @@ def _build_residential_clusters(bundle: VillageBundle) -> ContextBlock:
     Uses typed CurrentLandUseParcel list with p.dlbm/p.geometry/p.bsm.
     Annotation villages (from points.annotations_current) are merged for naming.
     """
-    parcels = bundle.polygons.landuse_current
+    parcels = bundle.polygons.get("landuse_current")
     if not parcels:
         return ContextBlock(
             block_type=ContextBlockType.RESIDENTIAL_CLUSTERS,
@@ -305,7 +305,7 @@ def _build_residential_clusters(bundle: VillageBundle) -> ContextBlock:
 
         # Extract annotation villages for naming
         annotation_villages = _extract_annotation_villages_from_typed(
-            bundle.points.annotations_current
+            bundle.points.get("annotations_current")
         )
 
         anchors: List[ResidentialClusterAnchor] = []
@@ -536,7 +536,7 @@ def _build_facilities(bundle: VillageBundle) -> ContextBlock:
     units: List[FacilityAnchor] = []
 
     # Current facilities (typed FacilityAnchor data)
-    for f in bundle.points.facilities_current:
+    for f in bundle.points.get("facilities_current"):
         name = getattr(f, "name", "") or getattr(f, "facility_name", "")
         ftype = getattr(f, "facility_type", "")
         geom = getattr(f, "geometry", None)
@@ -551,7 +551,7 @@ def _build_facilities(bundle: VillageBundle) -> ContextBlock:
                                         center=(center[0], center[1]), source="VillageBundle.points.facilities_current"))
 
     # Annotation-based facility extraction
-    for a in bundle.points.annotations_current:
+    for a in bundle.points.get("annotations_current"):
         category = getattr(a, "category", "")
         if category != "现状设施点":
             continue
@@ -621,7 +621,7 @@ def _build_zone_adjacency_block(bundle: VillageBundle) -> ContextBlock:
 
     Uses typed CurrentLandUseParcel list with p.dlbm + shape(p.geometry).
     """
-    parcels = bundle.polygons.landuse_current
+    parcels = bundle.polygons.get("landuse_current")
     if not parcels:
         return ContextBlock(
             block_type=ContextBlockType.ZONE_ADJACENCY,

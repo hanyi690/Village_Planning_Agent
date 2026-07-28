@@ -44,8 +44,8 @@ async def _fetch_gis_data_node(state: GISPipelineState) -> dict:
         logger.info(
             "[Pipeline:fetch] %d parcels, %d roads, %d annotations",
             bundle.parcel_count,
-            len(bundle.lines.roads_current) + len(bundle.lines.roads_planned),
-            len(bundle.points.annotations_current) + len(bundle.points.annotations_planned),
+            len(bundle.lines.get("roads_current")) + len(bundle.lines.get("roads_planned")),
+            len(bundle.points.get("annotations_current")) + len(bundle.points.get("annotations_planned")),
         )
         return {"gis_bundle": bundle, "gis_data": raw}
     except Exception as e:

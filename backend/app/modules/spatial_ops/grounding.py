@@ -276,7 +276,7 @@ def ground_zone_spatial_preference(
     """
     from app.utils.geo_utils import haversine_distance
 
-    parcels = bundle.polygons.landuse_current if bundle else []
+    parcels = bundle.polygons.get("landuse_current") if bundle else []
 
     if not preference_desc or not parcels:
         return ZoneSpatialAnchor()
@@ -378,7 +378,7 @@ def ground_facility_spatial_preference(
     Returns:
         ZoneSpatialAnchor 含候选地块和 BBox
     """
-    parcels = bundle.polygons.landuse_current if bundle else []
+    parcels = bundle.polygons.get("landuse_current") if bundle else []
     if not location_hint or not parcels:
         return ZoneSpatialAnchor()
 
@@ -453,7 +453,7 @@ def ground_linear_spatial_preference(
     Returns:
         ZoneSpatialAnchor 含 corridor_bsms（线状路径的候选地块）
     """
-    parcels = bundle.polygons.landuse_current if bundle else []
+    parcels = bundle.polygons.get("landuse_current") if bundle else []
     if not parcels:
         return ZoneSpatialAnchor()
 

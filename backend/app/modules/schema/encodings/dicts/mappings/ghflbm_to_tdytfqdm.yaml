@@ -1,0 +1,110 @@
+# GHFLBM -> TDYTFQDM 映射 (土地用途分区代码, 4位乡级规划分类编码)
+# 来源: 粤国土资规保发〔2009〕67号《广东省县级土地利用总体规划数据库标准》
+#       映射链: GHYTBM(附录5) -> GHFLBM(规划分类) -> TDYTFQDM(乡规4位码)
+# 注意: 键名 tdyfqdm -> tdytfqdm 修正(旧文件拼写错误 tdyfqdm)
+version: "2026_GUANGDONG_V1"
+standard: "粤国土资规保发〔2009〕67号 + TD/T 1028-2010"
+source_system: ghflbm
+target_system: tdytfqdm
+decision: auto
+
+mappings:
+  # ── 农业用地 ──
+  - source: "1110"
+    default: "0100"
+    decision: auto
+    targets:
+      - code: "0100"
+        when: null
+        confidence: exact
+        name: "农业用地"
+  - source: "1120"
+    default: "0100"
+    decision: auto
+    targets:
+      - code: "0100"
+        when: null
+        confidence: exact
+        name: "农业用地"
+  - source: "1310"
+    default: "0100"
+    decision: auto
+    targets:
+      - code: "0100"
+        when: null
+        confidence: exact
+        name: "农业用地"
+  - source: "1530"
+    default: "0100"
+    decision: auto
+    targets:
+      - code: "0100"
+        when: null
+        confidence: exact
+        name: "农业用地"
+  - source: "1520"
+    default: "0100"
+    decision: auto
+    targets:
+      - code: "0100"
+        when: null
+        confidence: exact
+        name: "农业用地"
+
+  # ── 林业用地 ──
+  - source: "1130"
+    default: "0200"
+    decision: auto
+    targets:
+      - code: "0200"
+        when: null
+        confidence: exact
+        name: "林业用地"
+  - source: "1330"
+    default: "0200"
+    decision: auto
+    targets:
+      - code: "0200"
+        when: null
+        confidence: exact
+        name: "林业用地"
+
+  # ── 生态用地 ──
+  - source: "1200"
+    default: "0300"
+    decision: auto
+    targets:
+      - code: "0300"
+        when: null
+        confidence: exact
+        name: "生态用地"
+
+  # ── 村庄建设用地 ──
+  - source: "2120"
+    default: "0600"
+    decision: auto
+    targets:
+      - code: "0600"
+        when: null
+        confidence: exact
+        name: "村庄建设用地"
+
+  # ── 水域 ──
+  - source: "3110"
+    default: "0700"
+    decision: auto
+    targets:
+      - code: "0700"
+        when: null
+        confidence: exact
+        name: "水域"
+
+  # ── 水利设施 ──
+  - source: "2270"
+    default: "0800"
+    decision: auto
+    targets:
+      - code: "0800"
+        when: null
+        confidence: exact
+        name: "水利设施用地"

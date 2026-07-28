@@ -261,10 +261,12 @@ layer_types:
       is_constraint: false
       participates: [water_overlap]   # 参与的空间分析(命名分析器)
     bundle_target: {group: polygons, key: water_bodies}
-    kg:
+    kg:                              # KG 侧声明性配置(不含函数名,见 §6.1 注册机制)
       entity_type: WaterBody
-      builder: _add_water_bodies
       uri_policy: "L1:{type}_{bsm}"
+      phase: L1                      # L1|L3|L4,决定在 build_from_bundle 哪个阶段跑
+      order: 30                      # 同 phase 内的执行序(升序)
+      enabled: true                  # 可整体关闭某层 KG 落图
     validation:
       required_fields: [dlbm]
       geometry: {must_be_valid: true, dlq_on_error: true}
@@ -317,15 +319,77 @@ class IngestAdapter(Protocol):
 
 ## 6. KG 构建自动化与 GeoSPARQL 对齐
 
-### 6.1 builder 循环(v2 Step 4 采纳,补签名细节)
+### 6.1 builder 注册机制:装饰器绑定 + YAML 声明(Option 3)+ 启动期校验
 
-`base.py::build_from_bundle()` 改为遍历 registry 中 `kg.builder` 非空条目;builder 统一签名:
+**决策:采用"两者结合"——YAML 声明 KG 侧关注点(entity_type/uri_policy/phase/order/enabled),装饰器把函数绑定到 layer_type。** 不用纯 YAML 字符串引用(`kg.builder: _add_water_bodies`),也不用纯装饰器。
+
+取舍依据:
+
+| 方案 | 致命缺陷 | 是否采纳 |
+|---|---|---|
+| 1. 纯装饰器 `@kg_builder('water')`,YAML 只放 entity_type | 管道执行序/条件/enabled 等"调度关注点"无处安放,要么塞进装饰器(实现与配置混杂),要么再开一处配置 → 仍是两处;且"某 layer_type 是否产出 KG 实体"要 grep Python 才知道,单源真理被打破 | 否 |
+| 2. 纯 YAML `kg.builder: _add_water_bodies` | 字符串→函数 getattr 反射;**函数重命名时 YAML 静默失效,运行时才暴露**(layer1.py 1369 行 + layer3/4,真实维护风险);IDE 跳转/重构全断;还要造"哪个模块持有哪个 builder"的解析机制 | 否 |
+| 3. YAML 声明 + 装饰器绑定 | 两处都要改,但职责分离干净;join key 是 layer_type(本就是全系统规范标识);**启动期可做双向校验把"漏改"从运行时故障提升为启动失败** | **采纳** |
+
+**职责切分(关键)**:
+- **YAML 答"管道怎么跑"**:entity_type 名、uri_policy、phase(L1/L3/L4)、order、enabled——全是声明性、非 Python 人员可改、调试时一眼看清全管道执行序;
+- **装饰器答"哪个函数实现"**:`@kg_builder('water')` 挂在函数上,IDE 可跳转、可重命名(重命名函数不动 decorator key,因为 key 是 layer_type 不是函数名)。
 
 ```python
-def _add_xxx(self, features: list, *, gis_type_ref: str, entry: GisLayerTypeEntry, ctx: BuildContext) -> BuildReport
+# kg/builder/registry.py(新增,极小)
+_BUILDER_BINDINGS: dict[str, KgBuilderBinding] = {}
+
+def kg_builder(layer_type: str):
+    """把函数注册为某 layer_type 的 KG builder。layer_type 必须在 gis_layer_registry.yaml 已声明。"""
+    def deco(fn):
+        if layer_type in _BUILDER_BINDINGS:
+            raise ConfigError(f"layer_type {layer_type!r} 已绑定 builder:{_BUILDER_BINDINGS[layer_type].fn.__name__}")
+        _BUILDER_BINDINGS[layer_type] = KgBuilderBinding(fn=fn, layer_type=layer_type)
+        return fn
+    return deco
+
+# layer1.py —— 现有 mixin 方法改为模块级函数 + 装饰器(顺带消除 mixins.py 的间接绑定)
+@kg_builder('water')
+def add_water_bodies(builder, features, *, entry, ctx) -> BuildReport: ...
+
+@kg_builder('landuse_current')
+def add_parcels(builder, features, *, entry, ctx) -> BuildReport: ...
 ```
 
-`BuildContext` 携带 village entity、bbox、provenance、constraint_index 等;`BuildReport` 收集 {added, skipped, dlq}。现有 `_add_parcels/add_roads/_add_water_bodies/...` 逐一改装(签名统一化,逻辑不动),未改装的经适配器包装过渡。
+```python
+# kg/builder/base.py —— build_from_bundle 改为按 YAML 调度,不再硬编码调用序
+def build_from_bundle(self, bundle, ...):
+    for phase in (Phase.L1, Phase.L3, Phase.L4):
+        entries = [e for lt, e in GIS_LAYER_REGISTRY.items()
+                   if e.kg and e.kg.enabled and e.kg.phase == phase]
+        entries.sort(key=lambda e: e.kg.order)
+        for entry in entries:
+            binding = _BUILDER_BINDINGS.get(entry.layer_type)
+            if binding is None:           # 启动校验已保证不会到这,防御
+                continue
+            features = bundle.group(entry.bundle_target) if entry.bundle_target else []
+            report = binding.fn(self, features, entry=entry, ctx=ctx)
+            self._merge_report(report)
+```
+
+**启动期双向校验(本方案的护城河,把 Option 3 的"两处维护"风险压到最低)**:
+
+```python
+# app 启动时(app/modules/kg/builder/__init__.py 导入末尾)
+def _validate_builder_registry():
+    yamled = {lt for lt, e in GIS_LAYER_REGISTRY.items() if e.kg and e.kg.enabled and e.kg.entity_type}
+    bound = set(_BUILDER_BINDINGS)
+    missing = yamled - bound                       # YAML 说要建,没函数 → 启动失败
+    orphan = bound - set(GIS_LAYER_REGISTRY.keys())  # 装饰器绑了,YAML 没声明 → 启动失败
+    if missing: raise ConfigError(f"缺少 builder:{missing}")
+    if orphan:   raise ConfigError(f"装饰器绑定了未注册的 layer_type:{orphan}")
+```
+
+效果:函数被重命名 → 装饰器仍有效(key 是 layer_type);layer_type 在 YAML 被改名 → 装饰器变 orphan → **启动即报错**,不会拖到运行时静默跳过。这是 Option 2 永远做不到的。
+
+**额外收益**:现有 `mixins.py` 把 layer1/3/4 模块函数绑到 Layer1Mixin 的间接层可一并删除——builder 直接是注册过的模块函数,`build_from_bundle` 通过 binding.fn 调用,不再需要 mixin 方法分发。layer2 已空化,无影响。
+
+**条件执行**:需要"bundle 有水系才跑"这类前置条件时,在 builder 函数体内首行 `if not features: return BuildReport.empty()` 即可(实现自描述,比 YAML `when:` 表达式更直接);只有跨层依赖(如 parcels 必须先于 facilities)才用 YAML `order` 表达,避免再造条件表达式 DSL。
 
 ### 6.2 谓词映射(自定义→GeoSPARQL,向后兼容双写)
 

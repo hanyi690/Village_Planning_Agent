@@ -23,38 +23,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from app.modules.schema.types.canonical import BBox, VillageBundle, VillageMetadata
-from app.modules.schema.types.base import PointFeature as _PointFeature, LineFeature as _LineFeature, PolygonFeature as _PolygonFeature
-from app.modules.schema.types.spatial_types import (
-    AdminArea as _AdminArea, AdminBoundaryLine as _AdminBoundaryLine,
-    ConditionalConstructionZone as _ConditionalConstructionZone,
-    ConstructionCtrlZone as _ConstructionCtrlZone,
-    ContourLine as _ContourLine,
-    CultivatedLandTarget as _CultivatedLandTarget,
-    CurrentAnnotation as _CurrentAnnotation, PlannedAnnotation as _PlannedAnnotation,
-    CurrentBuilding as _CurrentBuilding,
-    CurrentFacility as _CurrentFacility, PlannedFacility as _PlannedFacility,
-    CurrentLandUseParcel as _CurrentLandUseParcel,
-    PlannedLandUseParcel as _PlannedLandUseParcel,
-    CurrentRoad as _CurrentRoad, PlannedRoad as _PlannedRoad,
-    EcologicalRedline as _EcologicalRedline,
-    ElevationPoint as _ElevationPoint,
-    FarmlandProtection as _FarmlandProtection,
-    FloodControlLine as _FloodControlLine,
-    GeologicalHazardPoint as _GeologicalHazardPoint,
-    HazardControlLine as _HazardControlLine,
-    HistoricalProtection as _HistoricalProtection,
-    HydrogeologyZone as _HydrogeologyZone,
-    LandUseZone as _LandUseZone,
-    NatureReserve as _NatureReserve,
-    PlanningScope as _PlanningScope,
-    SoilErosion as _SoilErosion,
-    SoilType as _SoilType,
-    ThreeZoneItem as _ThreeZoneItem,
-    UrbanDevBoundary as _UrbanDevBoundary,
-    VillageDevBoundary as _VillageDevBoundary,
-    WaterFeature as _WaterFeature,
-    Watershed as _Watershed,
-)
 from app.utils.logger import get_logger
 
 from ..contracts import DataResult, DataSourceMetadata
@@ -305,7 +273,7 @@ class DataCatalog:
         """Backward compat -- derived from GIS_LAYER_REGISTRY."""
         from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
         return {
-            lt: (e.ingest_port, e.ingest_arg) if e.ingest_port else None
+            lt: (e.ingest.adapter, e.ingest.feature_type) if e.ingest else None
             for lt, e in GIS_LAYER_REGISTRY.items()
         }
 
@@ -349,7 +317,8 @@ class DataCatalog:
             from ..ingest import result_to_features
             admin_features, _ = result_to_features(boundary_result, "admin_area")
             if admin_features:
-                bundle.polygons.admin_areas.extend(admin_features)
+                for a in admin_features:
+                    bundle.add(a)
 
         # Step 2b: Fallback — geocode if no boundary
         if bbox is None:
@@ -367,25 +336,25 @@ class DataCatalog:
                 # Already loaded in Step 1
                 continue
             entry = GIS_LAYER_REGISTRY.get(lt)
-            if entry is None or entry.ingest_port is None:
-                # Untyped layers — skip with warning (inference pipeline not yet active)
+            if entry is None or entry.ingest is None:
                 logger.debug(
-                    "[DataCatalog] Layer '%s' has no ingest port — skipping "
+                    "[DataCatalog] Layer '%s' has no ingest spec -- skipping "
                     "(inference pipeline not yet active)", lt,
                 )
                 continue
 
-            port_name, arg = entry.ingest_port, entry.ingest_arg
-            if port_name == "result_to_parcels":
+            adapter_name, arg = entry.ingest.adapter, entry.ingest.feature_type
+            if adapter_name == "parcels":
                 parcels, warnings = result_to_parcels(result, layer_type=arg)
                 if warnings:
                     bundle.metadata.crs_warnings.extend(warnings[:5])
-                # _assign_to_bundle uses isinstance, so parcels will route correctly
-                self._assign_to_bundle(bundle, parcels)
-            elif port_name == "result_to_features":
+                for p in parcels:
+                    bundle.add(p)
+            elif adapter_name == "features":
                 features, _warnings = result_to_features(result, arg)
-                self._assign_to_bundle(bundle, features)
-            elif port_name == "result_to_raster":
+                for f in features:
+                    bundle.add(f)
+            elif adapter_name == "raster":
                 from ..ingest import result_to_raster
                 raster = result_to_raster(result, arg)
                 if raster is not None:
@@ -396,10 +365,10 @@ class DataCatalog:
 
         # Step 4b: Fallback — derive water bodies from DLBM=31xx parcels
         # when external water sources (upload / Tianditu API) are unavailable.
-        if not bundle.polygons.water_bodies and bundle.polygons.landuse_current:
+        if not bundle.polygons.get("water_bodies") and bundle.polygons.get("landuse_current"):
             from app.modules.schema.types.spatial_types import WaterFeature
             generated = 0
-            for p in bundle.polygons.landuse_current:
+            for p in bundle.polygons.get("landuse_current"):
                 dlbm = getattr(p, "dlbm", "") or ""
                 if dlbm.startswith("31"):
                     wf = WaterFeature(
@@ -407,7 +376,6 @@ class DataCatalog:
                         bsm=p.bsm,
                         ysdm=p.ysdm,
                         layer_type="water",
-                        _raw=p._raw.copy() if p._raw else {},
                         water_type={
                             "3101": "河流",
                             "3102": "湖泊",
@@ -415,9 +383,9 @@ class DataCatalog:
                             "3104": "坑塘",
                             "3105": "沟渠",
                         }.get(dlbm[:4], "坑塘"),
-                        water_name=getattr(p, "name", "") or "",
+                        water_name=getattr(p, "name") or "",
                     )
-                    bundle.polygons.water_bodies.append(wf)
+                    bundle.add(wf)
                     generated += 1
             if generated:
                 logger.info(
@@ -433,8 +401,8 @@ class DataCatalog:
             "[DataCatalog] load_village_bundle('%s'): %d parcels, %d roads, %d annotations",
             village_name,
             bundle.parcel_count,
-            len(bundle.lines.roads_current) + len(bundle.lines.roads_planned),
-            len(bundle.points.annotations_current) + len(bundle.points.annotations_planned),
+            len(bundle.lines.get("roads_current")) + len(bundle.lines.get("roads_planned")),
+            len(bundle.points.get("annotations_current")) + len(bundle.points.get("annotations_planned")),
         )
         return bundle
 
@@ -535,95 +503,4 @@ class DataCatalog:
             north=center[1] + buffer_deg,
         )
 
-    @staticmethod
-    def _assign_to_bundle(bundle, features: List[Any]) -> None:
-        """Route typed SpatialFeature instances to the correct morphology group.
-
-        [v4.3] Uses isinstance dispatch instead of string-based layer_type matching.
-        Each of the 33 concrete SpatialFeature subclasses has a deterministic home
-        in one of the morphology groups. Inferred/unknown types fall through to the
-        base-class catch-all (PointFeature/LineFeature/PolygonFeature inferred lists).
-        """
-        for feat in features:
-            # ── PolygonFeature subclasses ──
-            if isinstance(feat, _CurrentLandUseParcel):
-                bundle.polygons.landuse_current.append(feat)
-            elif isinstance(feat, _PlannedLandUseParcel):
-                bundle.polygons.landuse_planned.append(feat)
-            elif isinstance(feat, _FarmlandProtection):
-                bundle.polygons.farmland_protection.append(feat)
-            elif isinstance(feat, _EcologicalRedline):
-                bundle.polygons.ecological_redline.append(feat)
-            elif isinstance(feat, _HistoricalProtection):
-                bundle.polygons.historical_protection.append(feat)
-            elif isinstance(feat, _CultivatedLandTarget):
-                bundle.polygons.cultivated_land_target.append(feat)
-            elif isinstance(feat, _UrbanDevBoundary):
-                bundle.polygons.urban_dev_boundary.append(feat)
-            elif isinstance(feat, _VillageDevBoundary):
-                bundle.polygons.village_dev_boundary.append(feat)
-            elif isinstance(feat, _HazardControlLine):
-                bundle.polygons.hazard_control_lines.append(feat)
-            elif isinstance(feat, _FloodControlLine):
-                bundle.polygons.flood_control_lines.append(feat)
-            elif isinstance(feat, _ConditionalConstructionZone):
-                bundle.polygons.construction_zone.append(feat)
-            elif isinstance(feat, _AdminArea):
-                bundle.polygons.admin_areas.append(feat)
-            elif isinstance(feat, _PlanningScope):
-                bundle.polygons.planning_scope.append(feat)
-            elif isinstance(feat, _LandUseZone):
-                bundle.polygons.land_use_zones.append(feat)
-            elif isinstance(feat, _ConstructionCtrlZone):
-                bundle.polygons.construction_ctrl_zones.append(feat)
-            elif isinstance(feat, _ThreeZoneItem):
-                bundle.polygons.three_zones.append(feat)
-            elif isinstance(feat, _WaterFeature):
-                bundle.polygons.water_bodies.append(feat)
-            elif isinstance(feat, _SoilType):
-                bundle.polygons.soil_types.append(feat)
-            elif isinstance(feat, _SoilErosion):
-                bundle.polygons.soil_erosions.append(feat)
-            elif isinstance(feat, _Watershed):
-                bundle.polygons.watersheds.append(feat)
-            elif isinstance(feat, _NatureReserve):
-                bundle.polygons.nature_reserves.append(feat)
-            elif isinstance(feat, _HydrogeologyZone):
-                bundle.polygons.hydrogeology_zones.append(feat)
-
-            # ── LineFeature subclasses ──
-            elif isinstance(feat, _CurrentRoad):
-                bundle.lines.roads_current.append(feat)
-            elif isinstance(feat, _PlannedRoad):
-                bundle.lines.roads_planned.append(feat)
-            elif isinstance(feat, _ContourLine):
-                bundle.lines.contour_lines.append(feat)
-            elif isinstance(feat, _AdminBoundaryLine):
-                bundle.lines.admin_boundaries.append(feat)
-
-            # ── PointFeature subclasses ──
-            elif isinstance(feat, _CurrentFacility):
-                bundle.points.facilities_current.append(feat)
-            elif isinstance(feat, _PlannedFacility):
-                bundle.points.facilities_planned.append(feat)
-            elif isinstance(feat, _CurrentBuilding):
-                bundle.points.buildings.append(feat)
-            elif isinstance(feat, _ElevationPoint):
-                bundle.points.elevation_points.append(feat)
-            elif isinstance(feat, _GeologicalHazardPoint):
-                bundle.points.hazard_points.append(feat)
-            elif isinstance(feat, _CurrentAnnotation):
-                bundle.points.annotations_current.append(feat)
-            elif isinstance(feat, _PlannedAnnotation):
-                bundle.points.annotations_planned.append(feat)
-
-            # ── Inferred fallback (base classes) ──
-            elif isinstance(feat, _PolygonFeature):
-                bundle.polygons.inferred.append(feat)
-            elif isinstance(feat, _LineFeature):
-                bundle.lines.inferred.append(feat)
-            elif isinstance(feat, _PointFeature):
-                bundle.points.inferred.append(feat)
-
-
-__all__ = ["DataCatalog"]
+    __all__ = ["DataCatalog"]

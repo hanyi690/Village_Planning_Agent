@@ -183,7 +183,7 @@ class KGManager:
         from app.modules.kg.builder import PlanningKG
 
         # Use typed parcels for cache key when available
-        parcels = bundle.polygons.landuse_current if bundle else landuse_geojson
+        parcels = bundle.polygons.get("landuse_current") if bundle else landuse_geojson
         cache_key = compute_layer1_cache_key(village_name, parcels)
         key_str = str(cache_key) if cache_key else ""
 

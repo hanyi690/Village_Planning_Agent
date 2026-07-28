@@ -263,13 +263,13 @@ def _merge_user_uploads_into_bundle(
 
             if "boundary" in key:
                 feat = PolygonFeature(geometry=geom, _raw=props)
-                bundle.polygons.admin_areas.append(feat)
+                bundle.add(feat)
             elif "road" in key:
                 feat = LineFeature(geometry=geom, _raw=props)
-                bundle.lines.inferred.append(feat)
+                bundle.add(feat)
             elif "annotation" in key:
                 feat = PointFeature(geometry=geom, _raw=props)
-                bundle.points.inferred.append(feat)
+                bundle.add(feat)
             elif "water" in key:
                 feat = PolygonFeature(geometry=geom, _raw=props)
-                bundle.polygons.water_bodies.append(feat)
+                bundle.add(feat)

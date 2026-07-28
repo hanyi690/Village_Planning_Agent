@@ -31,10 +31,10 @@ def fetch_gis_data(location: str, buffer_km: float = 5.0, max_features: int = 50
         bundle = catalog.load_village_bundle(location)
         layers: dict[str, Any] = {
             "boundary": bool(bundle.boundary),
-            "landuse_current": len(bundle.polygons.landuse_current),
-            "landuse_planned": len(bundle.polygons.landuse_planned),
-            "roads": len(bundle.lines.roads_current) + len(bundle.lines.roads_planned),
-            "annotations": len(bundle.points.annotations_current) + len(bundle.points.annotations_planned),
+            "landuse_current": len(bundle.polygons.get("landuse_current")),
+            "landuse_planned": len(bundle.polygons.get("landuse_planned")),
+            "roads": len(bundle.lines.get("roads_current")) + len(bundle.lines.get("roads_planned")),
+            "annotations": len(bundle.points.get("annotations_current")) + len(bundle.points.get("annotations_planned")),
         }
         return make_result(
             success=True,
