@@ -30,3 +30,10 @@ def test_ontology_no_deprecated_relation_aliases():
         assert not hasattr(Relations, name), f"Relations.{name} should be removed"
     # connects is active (used in layer1.py) - keep it
     assert hasattr(Relations, "connects")
+
+
+def test_ontology_no_three_zone_line_compat():
+    """ThreeZone/ThreeLine compat attrs must be gone (moved to ConstraintIndex)."""
+    from app.modules.kg.ontology import EntityTypes
+    assert not hasattr(EntityTypes, "ThreeZone")
+    assert not hasattr(EntityTypes, "ThreeLine")

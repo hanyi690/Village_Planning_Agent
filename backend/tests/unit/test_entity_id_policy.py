@@ -150,11 +150,11 @@ class TestNoThreeZoneThreeLine:
     """Verify ThreeZone/ThreeLine are not created as KG entities."""
 
     def test_no_three_zone_entities(self, kg_test):
-        tz = list(kg_test.g.subjects(RDF.type, EntityTypes.ThreeZone))
+        tz = list(kg_test.g.subjects(RDF.type, PLN.ThreeZone))
         assert len(tz) == 0
 
     def test_no_three_line_entities(self, kg_test):
-        tl = list(kg_test.g.subjects(RDF.type, EntityTypes.ThreeLine))
+        tl = list(kg_test.g.subjects(RDF.type, PLN.ThreeLine))
         assert len(tl) == 0
 
 

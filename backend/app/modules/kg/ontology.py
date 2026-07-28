@@ -122,8 +122,6 @@ class EntityTypes:
     Facility = PLN.Facility
     Road = PLN.Road
     WaterBody = PLN.WaterBody
-    ThreeZone = PLN.ThreeZone          # kept for backward compat (ConstraintIndex)
-    ThreeLine = PLN.ThreeLine          # kept for backward compat (ConstraintIndex)
     AdministrativeVillage = PLN.AdministrativeVillage
     ResidentialCluster = PLN.ResidentialCluster
     PlaceRef = PLN.PlaceRef
