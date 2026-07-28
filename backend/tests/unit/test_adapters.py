@@ -47,3 +47,65 @@ def test_register_adapter():
 def test_ingest_adapter_is_protocol():
     import inspect
     assert inspect.isclass(IngestAdapter)
+
+
+def test_parcels_adapter_registered():
+    from app.modules.data.adapters import ADAPTERS
+    assert "parcels" in ADAPTERS
+
+
+def test_features_adapter_registered():
+    from app.modules.data.adapters import ADAPTERS
+    assert "features" in ADAPTERS
+
+
+def test_parcels_adapter_current_landuse():
+    from app.modules.data.adapters import ADAPTERS
+    from app.modules.schema.types.layer_registry import GisLayerTypeEntry, IngestSpec
+
+    adapter = ADAPTERS["parcels"]
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+                "properties": {"BSM": "001", "DLBM": "0703", "DLMC": "宅基地"},
+            }
+        ],
+    }
+    entry = GisLayerTypeEntry(
+        gis_type_ref="landuse_current",
+        ingest=IngestSpec(adapter="parcels", feature_type="current_landuse"),
+    )
+    result = adapter.load(geojson, entry)
+    assert len(result.features) >= 1
+    p = result.features[0]
+    assert p.bsm == "001"
+    assert p.layer_type == "landuse_current"
+
+
+def test_features_adapter_admin_area():
+    from app.modules.data.adapters import ADAPTERS
+    from app.modules.schema.types.layer_registry import GisLayerTypeEntry, IngestSpec
+
+    adapter = ADAPTERS["features"]
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+                "properties": {"BSM": "A001", "NAME": "金田村"},
+            }
+        ],
+    }
+    entry = GisLayerTypeEntry(
+        gis_type_ref="admin_area",
+        ingest=IngestSpec(adapter="features", feature_type="admin_area"),
+    )
+    result = adapter.load(geojson, entry)
+    assert len(result.features) >= 1
+    f = result.features[0]
+    assert f.bsm == "A001"
+    assert f.layer_type == "admin_area"
