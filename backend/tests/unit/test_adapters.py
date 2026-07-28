@@ -85,6 +85,43 @@ def test_parcels_adapter_current_landuse():
     assert p.layer_type == "landuse_current"
 
 
+def test_raster_adapter_registered():
+    from app.modules.data.adapters import ADAPTERS
+    assert "raster" in ADAPTERS
+
+
+def test_table_adapter_registered():
+    from app.modules.data.adapters import ADAPTERS
+    assert "table" in ADAPTERS
+
+
+def test_document_adapter_registered():
+    from app.modules.data.adapters import ADAPTERS
+    assert "document" in ADAPTERS
+
+
+def test_table_adapter_returns_empty():
+    from app.modules.data.adapters import ADAPTERS
+    from app.modules.schema.types.layer_registry import GisLayerTypeEntry
+
+    adapter = ADAPTERS["table"]
+    entry = GisLayerTypeEntry(gis_type_ref="population")
+    result = adapter.load({}, entry)
+    assert result.features == []
+    assert result.warnings == []
+
+
+def test_document_adapter_returns_empty():
+    from app.modules.data.adapters import ADAPTERS
+    from app.modules.schema.types.layer_registry import GisLayerTypeEntry
+
+    adapter = ADAPTERS["document"]
+    entry = GisLayerTypeEntry(gis_type_ref="planning_text")
+    result = adapter.load({}, entry)
+    assert result.features == []
+    assert result.warnings == []
+
+
 def test_features_adapter_admin_area():
     from app.modules.data.adapters import ADAPTERS
     from app.modules.schema.types.layer_registry import GisLayerTypeEntry, IngestSpec
