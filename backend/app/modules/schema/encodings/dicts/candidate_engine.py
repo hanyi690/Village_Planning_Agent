@@ -48,13 +48,29 @@ class ClassificationProposal(BaseModel):
 
 
 class Resolution(BaseModel):
-    """Decision ladder result — L0/L1/L3."""
+    """Decision ladder result — L0/L1/L2/L3."""
 
-    kind: Literal["auto", "rule", "manual", "unmapped"] = "unmapped"
+    kind: Literal["auto", "rule", "llm", "manual", "unmapped"] = "unmapped"
     chosen_code: str = ""
     candidates: list[dict[str, Any]] = []
     confidence: str = "exact"
     rationale: str = ""
+    disambiguation_ctx: Optional[Dict[str, Any]] = None
+
+    @classmethod
+    def needs_llm(cls, ctx: "DisambiguationContext") -> "Resolution":
+        from .disambiguation import DisambiguationContext
+        candidates_list = [
+            {"code": c.code, "when": c.when, "surviving_evidence": c.surviving_evidence}
+            for c in ctx.candidates
+        ]
+        return cls(
+            kind="llm",
+            candidates=candidates_list,
+            confidence="conditional",
+            rationale=f"Multiple survivors ({len(ctx.candidates)}), LLM disambiguation required",
+            disambiguation_ctx=ctx.model_dump(mode="json"),
+        )
 
 
 class CandidateEngine:
@@ -165,13 +181,22 @@ class CandidateEngine:
                 rationale=f"Multiple candidates ({len(hits)}), manual decision required",
             )
 
-        return Resolution(
-            kind="manual",
-            chosen_code=default,
-            candidates=hits,
-            confidence="conditional",
-            rationale="Multiple survivors after context evaluation",
+        from .disambiguation import Candidate, DisambiguationContext
+        candidates = [
+            Candidate(
+                code=str(t.get("code", "")),
+                when=t.get("when"),
+                surviving_evidence=[],
+            )
+            for t in hits
+        ]
+        ctx_obj = DisambiguationContext(
+            source_system=source_system,
+            source_code=source_code,
+            parcel_attrs=ctx.parcel_attrs if ctx else {},
+            candidates=candidates,
         )
+        return Resolution.needs_llm(ctx_obj)
 
     def propose(
         self,

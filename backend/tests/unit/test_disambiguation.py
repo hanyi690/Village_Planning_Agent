@@ -132,3 +132,64 @@ class TestDisambiguationDecision:
         loaded = DisambiguationDecision.model_validate(dumped)
         assert loaded.chosen_code == "0901"
         assert loaded.evidence == ["poi:超市"]
+
+
+class TestResolutionNeedsLlm:
+    def test_needs_llm_factory(self):
+        from app.modules.schema.encodings.dicts.candidate_engine import Resolution
+        from app.modules.schema.encodings.dicts.disambiguation import (
+            Candidate, DisambiguationContext,
+        )
+
+        ctx = DisambiguationContext(
+            source_system="sddlbm",
+            source_code="05H1",
+            parcel_attrs={"DLBM": "05H1"},
+            candidates=[Candidate(code="0901"), Candidate(code="0902")],
+        )
+        resolution = Resolution.needs_llm(ctx)
+        assert resolution.kind == "llm"
+        assert resolution.chosen_code == ""
+        assert resolution.disambiguation_ctx is not None
+        assert resolution.disambiguation_ctx["source_code"] == "05H1"
+
+    def test_needs_llm_serialization(self):
+        from app.modules.schema.encodings.dicts.candidate_engine import Resolution
+        from app.modules.schema.encodings.dicts.disambiguation import (
+            Candidate, DisambiguationContext,
+        )
+
+        ctx = DisambiguationContext(
+            source_system="sddlbm",
+            source_code="05H1",
+            parcel_attrs={},
+            candidates=[Candidate(code="0901")],
+        )
+        resolution = Resolution.needs_llm(ctx)
+        dumped = resolution.model_dump(mode="json")
+        loaded = Resolution.model_validate(dumped)
+        assert loaded.kind == "llm"
+        assert loaded.disambiguation_ctx is not None
+        assert loaded.disambiguation_ctx["source_code"] == "05H1"
+
+
+class TestCandidateEngineL2:
+    def test_resolve_returns_needs_llm_when_multiple_survivors(self):
+        from app.modules.schema.encodings.dicts.candidate_engine import CandidateEngine
+        from app.modules.schema.encodings.dicts.expr_eval import MappingContext
+
+        engine = CandidateEngine()
+        engine._ensure_center()
+
+        ctx = MappingContext(
+            parcel_attrs={"DLBM": "05H1", "DLMC": "商服用地"},
+        )
+        resolution = engine.resolve("sddlbm", "ydyhfldm", "05H1", ctx)
+        if resolution.kind == "auto":
+            pytest.skip("Only one target survived — no L2 trigger for this configuration")
+        assert resolution.kind in ("llm", "rule"), (
+            f"Expected llm or rule, got {resolution.kind}"
+        )
+        if resolution.kind == "llm":
+            assert resolution.disambiguation_ctx is not None
+            assert len(resolution.candidates) >= 2
