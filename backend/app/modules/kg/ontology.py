@@ -162,16 +162,17 @@ class EntityTypes:
 
 
 class Relations:
-    """8 active relationship type URIs (v4.9 — GeoSPARQL aligned).
+    """9 active relationship type URIs (v4.9 - GeoSPARQL aligned).
 
     v4.9: 4 spatial predicates replaced with GeoSPARQL standard:
       touches     -> geo:sfTouches
       located_in  -> geo:sfWithin
       intersects  -> geo:sfIntersects
       contains    -> geo:sfContains
-    4 pln extension predicates kept unchanged:
-      nearby, connected_via_road, derived_from, serves
+    5 pln extension predicates kept unchanged:
+      nearby, connected_via_road, derived_from, serves, connects
     """
+
     # Spatial topology (GeoSPARQL standard)
     sfTouches = GEO.sfTouches
     nearby = PLN.nearby
@@ -182,16 +183,8 @@ class Relations:
     # Planning semantics
     derived_from = PLN.derived_from
     serves = PLN.serves
-
-    # Backward compat aliases (deprecated, not in active set)
-    touches = GEO.sfTouches
-    located_in = GEO.sfWithin
-    intersects = GEO.sfIntersects
-    contains = GEO.sfContains
-    within_zone = PLN.within_zone
-    designated_as = PLN.designated_as
+    # Active extension predicate (used in layer1.py)
     connects = PLN.connects
-    delineates = PLN.delineates
 
     @classmethod
     def all(cls) -> list:
