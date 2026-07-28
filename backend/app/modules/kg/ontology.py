@@ -61,6 +61,7 @@ GEO = Namespace("http://www.opengis.net/ont/geosparql#")
 GEOMETRY_POLYGON = "polygon"
 GEOMETRY_LINE = "line"
 GEOMETRY_POINT = "point"
+GEOMETRY_RASTER = "raster"
 
 
 class EntityIdPolicy:
@@ -127,6 +128,7 @@ class EntityTypes:
     PlaceRef = PLN.PlaceRef
     ControlLine = PLN.ControlLine      # 控制线（灾害/洪涝等）
     GisLayerSet = PLN.GisLayerSet      # v4.8: virtual gis-layer aggregator
+    RasterDataset = PLN.RasterDataset  # v4.audit: DEM/DOM raster entity
     # L3: Intent virtual entities (意图虚拟实体)
     ZoneTarget = PLN.ZoneTarget
     FacilityTarget = PLN.FacilityTarget

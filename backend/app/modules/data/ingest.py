@@ -654,32 +654,45 @@ def ingest_raster(filepath: str, raster_type: str = "dem"):
     except ImportError:
         logger.warning("[Ingest] rasterio not installed, returning minimal RasterDataset")
         if raster_type == "dem":
-            return DEMInput(path=filepath)
+            return DEMInput(path=filepath, layer_type=raster_type)
         elif raster_type == "dom":
-            return DOMInput(path=filepath)
+            return DOMInput(path=filepath, layer_type=raster_type)
         else:
-            return RasterDataset(path=filepath)
+            return RasterDataset(path=filepath, layer_type=raster_type)
 
     with rasterio.open(filepath) as src:
         meta = dict(src.meta) if src.meta else {}
         crs = str(src.crs) if src.crs else "unknown"
         resolution = abs(src.transform[0]) if src.transform else 0.0
         nodata = src.nodata
+        width = src.width
+        height = src.height
+        band_count = src.count
+        dtype = str(src.dtypes[0]) if src.dtypes else "Float32"
+        b = src.bounds
+        bounds = (b.left, b.bottom, b.right, b.top)
+        transform = tuple(src.transform)
 
     if raster_type == "dem":
         return DEMInput(
             path=filepath, crs=crs, resolution=resolution,
-            nodata=nodata, _meta=meta,
+            nodata=nodata, _meta=meta, layer_type=raster_type,
+            width=width, height=height, band_count=band_count,
+            dtype=dtype, bounds=bounds, transform=transform,
         )
     elif raster_type == "dom":
         return DOMInput(
             path=filepath, crs=crs, resolution=resolution,
-            nodata=nodata, _meta=meta,
+            nodata=nodata, _meta=meta, layer_type=raster_type,
+            width=width, height=height, band_count=band_count,
+            dtype=dtype, bounds=bounds, transform=transform,
         )
     else:
         return RasterDataset(
             path=filepath, crs=crs, resolution=resolution,
-            nodata=nodata, _meta=meta,
+            nodata=nodata, _meta=meta, layer_type=raster_type,
+            width=width, height=height, band_count=band_count,
+            dtype=dtype, bounds=bounds, transform=transform,
         )
 
 

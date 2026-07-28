@@ -19,7 +19,7 @@ from ..ontology import (
     PLN, PLN_NS, EntityTypes, Relations, EntityIdPolicy, SemanticPredicates,
     ProvenancePredicates,
     get_gis_layer_group_info, get_all_gis_layer_groups,
-    GEOMETRY_POLYGON, GEOMETRY_LINE, GEOMETRY_POINT,
+    GEOMETRY_POLYGON, GEOMETRY_LINE, GEOMETRY_POINT, GEOMETRY_RASTER,
     GEO,
 )
 
@@ -948,6 +948,53 @@ def _add_protection_polygons(self, polygons_layer) -> None:
 
     if count:
         logger.info("Added %d protection polygons", count)
+
+
+@kg_builder("dem", entity_type="RasterDataset")
+def _add_dem_raster(self, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict:
+    """Create a RasterDataset entity for the DEM raster (bundle.rasters.dem).
+
+    `features` is a single-element list `[dem_raster]` (RasterLayerGroup.dem
+    is a scalar, but the registry wraps group values via _get_bundle_features
+    which yields list items). Each raster carries path/crs/bounds/resolution.
+    """
+    count = 0
+    for i, dem in enumerate(features):
+        if dem is None:
+            continue
+        uri = EntityIdPolicy.uri("dem", f"dem_{i}")
+        self.g.add((uri, RDF.type, EntityTypes.RasterDataset))
+        self.g.add((uri, PLN.name, Literal("数字高程模型")))
+        self.g.add((uri, gis_type_ref, Literal("dem")))
+        self.g.add((uri, geometry_kind, Literal(GEOMETRY_RASTER)))
+        self.g.add((uri, semantic_group, Literal("terrain")))
+        self.g.add((uri, has_semantic_label, Literal("DEM数字高程模型")))
+        self.g.add((uri, Relations.sfWithin, PLN.village))
+        path = getattr(dem, "path", "") or ""
+        if path:
+            self.g.add((uri, PLN.path, Literal(path)))
+        crs = getattr(dem, "crs", "") or ""
+        if crs:
+            self.g.add((uri, PLN.crs, Literal(str(crs))))
+        res = getattr(dem, "resolution", 0.0)
+        if res:
+            self.g.add((uri, PLN.resolution, Literal(float(res), datatype=XSD.double)))
+        bounds = getattr(dem, "bounds", None)
+        if bounds and isinstance(bounds, (list, tuple)) and len(bounds) == 4:
+            self.g.add((uri, PLN.bbox_minx, Literal(float(bounds[0]), datatype=XSD.double)))
+            self.g.add((uri, PLN.bbox_miny, Literal(float(bounds[1]), datatype=XSD.double)))
+            self.g.add((uri, PLN.bbox_maxx, Literal(float(bounds[2]), datatype=XSD.double)))
+            self.g.add((uri, PLN.bbox_maxy, Literal(float(bounds[3]), datatype=XSD.double)))
+        w = getattr(dem, "width", 0)
+        h = getattr(dem, "height", 0)
+        if w:
+            self.g.add((uri, PLN.width, Literal(int(w), datatype=XSD.integer)))
+        if h:
+            self.g.add((uri, PLN.height, Literal(int(h), datatype=XSD.integer)))
+        count += 1
+    if count:
+        logger.info("Added %d DEM raster entities", count)
+    return {"count": count, "entity_type": "RasterDataset"}
 
 
 @kg_builder("current_building", entity_type="Building")

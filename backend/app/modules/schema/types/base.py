@@ -64,6 +64,8 @@ class RasterDataset(BaseModel):
     band_count: int = 1
     dtype: str = "Float32"
     layer_type: str = ""
+    resolution: float = 0.0
+    nodata: Any = None
 
 
 __all__ = [

@@ -42,4 +42,10 @@ def _get_bundle_features(bundle, entry) -> list:
     group = getattr(bundle, group_name, None)
     if group is None:
         return []
-    return list(getattr(group, key_name, []))
+    val = getattr(group, key_name, [])
+    # RasterLayerGroup fields (dem/dom/slope/...) are scalars, not lists.
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return list(val)
+    return [val]
