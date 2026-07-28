@@ -2,9 +2,9 @@
 
 > **定位**: 四层架构底层 (`Schema ← Data ← KG ← Agent`)，定义空间要素类型、编码体系、输出规范。
 > **零依赖**: 不 import Data / KG / Agent / Tools 中的任何模块。
-> **Updated: 2026-07-25 (v4.3 落地)** — v4.3 形态重组: GISDataBundle/GeoFeature/ProviderLandParcel/GISMetadata 废弃, VillageBundle 统一容器 + 6 个形态 Group 类 (PointLayerGroup/LineLayerGroup/PolygonLayerGroup/RasterLayerGroup/TableLayerGroup/DocumentGroup), _assign_to_bundle 改为 isinstance 类型分发 (33 个具体子类全覆盖), inferred 列表收容推断图层, constraint_polygons 聚合约束面。
+> 2. **形态优先容器** [v4.4]：VillageBundle (Pydantic v2 BaseModel) 按形态 LayerGroup 组织. bundle.add() 调用 _bundle_key_for() 查 GIS_LAYER_REGISTRY (YAML-driven) 路由到 _layers[key], 33 个具体子类各有归宿, 推断图层通过 "inferred" 兜底.
 
-> **Status: v4.3 落地完成。** 所有设计类型已实现, 下游已迁移到形态视图。
+> **Status: v4.8.1 落地完成。** 所有设计类型已实现, 下游已迁移到形态视图。
 
 ---
 
@@ -20,7 +20,7 @@
 | **文档** | 半结构化文本                            | `Document`                                        | PlanningText, L3Report                 |
 
 ```
-L0  SpatialFeature                  矢量基类: geometry + bsm + ysdm + _raw
+L0  SpatialFeature                  矢量基类: geometry + bsm + ysdm + layer_type (Pydantic v2 BaseModel)
  ├── L1  PointFeature / LineFeature / PolygonFeature
  └── L2  矢量语义子类
 
@@ -52,13 +52,20 @@ L0  Document                        文档基类: text + doc_type + source      
 #### L0 `SpatialFeature`
 
 ```python
-@dataclass
-class SpatialFeature:
+class SpatialFeature(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
     geometry: Dict[str, Any]          # GeoJSON geometry (必选)
-    bsm: str = ""                     # 标识码
-    ysdm: str = ""                    # 要素代码 (10位)
-    layer_type: str = ""              # [v4.1] 所属图层 (嵌入图层身份, 不靠外部 registry 反查)
-    _raw: Dict[str, Any] = field(default_factory=dict, repr=False)
+    bsm: str = Field(default="", alias="BSM")  # 标识码
+    ysdm: str = Field(default="", alias="YSDM")  # 要素代码 (10位)
+    layer_type: str = ""              # DU discriminator, ingest 强制赋值
+
+    @field_validator("geometry")
+    @classmethod
+    def _validate_geometry_present(cls, v):
+        if not v or "type" not in v:
+            raise ValueError("geometry must be a valid GeoJSON geometry dict")
+        return v
 
     @property
     def geometry_type(self) -> str:
@@ -448,7 +455,7 @@ layer_types:
 ## 八、设计原则
 
 1. **四形态结构优先**：矢量(Point/Line/Polygon) + 栅格(RasterDataset) + 表格(TableDataset) + 文档(Document) 四形态先于语义子类，类型层面约束形态，支撑 Data 层按形态分桶。
-2. **形态优先容器** [v4.3]：`VillageBundle` 按形态 Group 组织（points/lines/polygons/rasters），废弃按文件来源分桶的扁平 `GISDataBundle`。`_assign_to_bundle` 基于 `isinstance` 类型分发，33 个具体子类各有归宿，推断图层通过基类兜底自动归入正确形态 Group。
+2. **形态优先容器** [v4.4]：`VillageBundle` (Pydantic v2 BaseModel) 按形态 LayerGroup 组织（points/lines/polygons/rasters），废弃按文件来源分桶的扁平 `GISDataBundle`。`bundle.add()` 调用 `_bundle_key_for()` 查 GIS_LAYER_REGISTRY (YAML-driven) 路由到 `_layers[key]`，33 个具体子类各有归宿，推断图层通过 `"inferred"` 兜底自动归入正确形态 Group。
 3. **阶段抽象 + 实体/表达分离** [v4.2]：现状/规划两态的要素都有 Base 基类（BaseLandUseParcel/BaseRoad/BaseFacility/BaseAnnotation）共享字段；设施是空间实体（入 KG、参与分析），注记是表达要素（AnnotationFeature，不入 KG、不参与空间分析，仅渲染），二者不再平级。
 4. **项目级数据视图**：`ProjectDataView -> VillageBundle` 两层，取代"一村一包"，对齐"打开一个项目"的规划工作流；跨村图层、共享栅格、表格、文档在项目级聚合。
 5. **现状/规划彻底分离**：`VillageBundle` 不混装现状与规划地块，不保留聚合兼容视图，对标国标 209001/209002 划分。

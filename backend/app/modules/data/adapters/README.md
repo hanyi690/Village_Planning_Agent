@@ -54,7 +54,7 @@ DataCatalog.fetch()
   └── DataResult.data (raw dict/path)
        └── adapter = ADAPTERS[entry.ingest.adapter]   # lookup by YAML name
             └── AdapterResult(features, warnings, dlq)
-                 └── _assign_to_bundle(bundle, features)  # isinstance dispatch to morphology groups
+                 └── bundle.add(feature)  # _bundle_key_for() routes to _layers[key]
 ```
 
 ## How to register a custom adapter

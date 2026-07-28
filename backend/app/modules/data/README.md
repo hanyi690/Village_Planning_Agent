@@ -70,9 +70,9 @@
 └─────────────────────────────────────────────────────────┘
          │
          ▼  (DataResult -> ingest -> typed models)
-         ▼  (_assign_to_bundle: isinstance dispatch -> morphology groups)
+         ▼  (bundle.add() -> _bundle_key_for() -> _layers[key])
 ┌─────────────────────────────────────────────────────────┐
-│  VillageBundle (v4.3 形态优先 dataclass)                 │
+│  VillageBundle (v4.4 Pydantic v2 BaseModel, 形态优先)    │
 │  ├── points:   PointLayerGroup (设施/建筑/注记/高程/灾害)│
 │  ├── lines:    LineLayerGroup (道路/等高线/行政界线)     │
 │  ├── polygons: PolygonLayerGroup (地块/保护/管控/水系)   │
@@ -123,9 +123,9 @@ backend/app/modules/data/
 │   └── osm.py             # OpenStreetMap (osmnx)
 ├── documents/
 │   └── loader.py          # 规划文本/L3 报告加载
-└── providers/             # LEGACY — 逐步淘汰，新代码走 Catalog
-    ├── tianditu/          # 仍被 _analytics 工具使用
-    ├── amap/              # 仍被 POIProvider 使用
+└── providers/             # POI/API 搜索子模块（仍被 _analytics 工具使用）
+    ├── tianditu/          # 天地图 API 封装
+    ├── amap/              # 高德地图 API 封装
     └── poi.py             # POI 统一搜索接口
 ```
 
@@ -144,7 +144,7 @@ catalog = DataCatalog()
 source = catalog.get_source("jintian_current_landuse")
 result = source.fetch()  # -> DataResult
 
-# 加载村庄完整 typed 数据束 (v4.3 形态优先)
+# 加载村庄完整 typed 数据束 (v4.4 形态优先)
 bundle = catalog.load_village_bundle("金田村委会")
 
 # 通过形态 Group 访问数据
@@ -160,19 +160,14 @@ context_blocks = compute_context_blocks(bundle)
 # 下游按 block_type 筛选、按 priority 排序、按 token 预算截断
 ```
 
-**`_assign_to_bundle` 分发逻辑** [v4.3]：基于 `isinstance` 而非 `layer_type` 字符串匹配：
+**Bundle 分发逻辑** [v4.4]：基于 YAML registry 而非 `isinstance` 链：
 
 ```python
-# 每个 SpatialFeature 子类通过 isinstance 链路由到正确的 Group 字段
-# 33 个具体子类全覆盖, 推断类型通过基类兜底进入 inferred 列表
+# canonical.py::_bundle_key_for(feature) 查 GIS_LAYER_REGISTRY 获取 bundle_target.key
+# VillageBundle.add(feature) -> LayerGroup.add(feature) -> _layers[key].append(feature)
+# 33 个具体子类全覆盖, 推断类型通过 "inferred" 兜底
 for feat in features:
-    if isinstance(feat, CurrentLandUseParcel):
-        bundle.polygons.landuse_current.append(feat)
-    elif isinstance(feat, FarmlandProtection):
-        bundle.polygons.farmland_protection.append(feat)
-    # ... 31 more concrete subclasses ...
-    elif isinstance(feat, PolygonFeature):
-        bundle.polygons.inferred.append(feat)  # 推断图层兜底
+    bundle.add(feat)  # 自动路由到正确的 morphology group + _layers key
 ```
 
 ### 4.2 Ingest (raw -> typed)
@@ -257,7 +252,7 @@ sources:
 
 `gis_layer_registry.yaml` 中 `dem` 条目已配置 `ingest.adapter: raster` + `bundle_target: { group: rasters, key: dem }`。`ingest.py::_infer_model_class()` 已映射 `"dem" -> "DEMInput"`。无需额外 Python 修改。
 
-**结果**：`catalog.load_village_bundle()` 通过 `LocalRasterDriver` 加载 `dem.tif`，`raster` 适配器构造 `DEMInput` 实例，`_assign_to_bundle` 放入 `bundle.rasters.dem`，`kg.build_from_bundle()` 调用 `@kg_builder("dem")` 生成 `RasterDataset` RDF 实体。
+**结果**：`catalog.load_village_bundle()` 通过 `LocalRasterDriver` 加载 `dem.tif`，`raster` 适配器构造 `DEMInput` 实例，`bundle.add()` 放入 `bundle.rasters._layers["dem"]`，`kg.build_from_bundle()` 调用 `@kg_builder("dem")` 生成 `RasterDataset` RDF 实体。
 
 ---
 
@@ -275,13 +270,12 @@ sources:
    ├── query_by_bbox(bbox, layer_types) -> 加载所有图层
    └── 按 layer_type + ingest_port 分派:
        ├── result_to_parcels() / result_to_features() -> typed SpatialFeature[]
-       └── _assign_to_bundle(bundle, features) -> isinstance 分发
-           ├── CurrentLandUseParcel -> bundle.polygons.landuse_current
-           ├── FarmlandProtection  -> bundle.polygons.farmland_protection
-           ├── CurrentRoad         -> bundle.lines.roads_current
-           ├── CurrentAnnotation   -> bundle.points.annotations_current
-           └── PolygonFeature      -> bundle.polygons.inferred (推断兜底)
-   -> VillageBundle (v4.3 形态优先, 33 子类全覆盖)
+       └── bundle.add(feature) -> _bundle_key_for() 查 registry 路由
+           ├── layer_type="landuse_current" -> bundle.polygons._layers["landuse_current"]
+           ├── layer_type="farmland_protection" -> bundle.polygons._layers["farmland_protection"]
+           ├── layer_type="current_road" -> bundle.lines._layers["roads_current"]
+           └── 未知 layer_type -> _layers["inferred"] (推断兜底)
+   -> VillageBundle (v4.4 形态优先, YAML-driven routing, 33 子类全覆盖)
 
 3. 下游消费
    直接访问形态视图: bundle.polygons.landuse_current / bundle.lines.roads
@@ -316,9 +310,9 @@ sources:
 | `providers/{amap,osm,tianditu}/adapter.py` | 已删除 | 死代码                                       |
 | `documents/intent_cache.py`                | 已删除 | 直接调用`tools/gis/parse`                  |
 | `_bundle_to_compat_dict()`                 | 已删除 | `bundle.to_geojson_dict()`                 |
-| `GISDataBundle` (Pydantic)                 | 已删除 | `VillageBundle` (v4.3 形态优先)            |
+| `GISDataBundle` (Pydantic)                 | 已删除 | `VillageBundle` (v4.4 Pydantic v2 BaseModel)  |
 | `GeoFeature` / `ProviderLandParcel`      | 已删除 | 直接使用`SpatialFeature` 子类              |
-| `GISMetadata` (旧 Pydantic)                | 已删除 | `VillageMetadata` (精简 dataclass)         |
+| `GISMetadata` (旧 Pydantic)                | 已删除 | `VillageMetadata` (Pydantic v2 BaseModel)  |
 
 ---
 
@@ -328,7 +322,7 @@ sources:
 
 | 形态 | 实现状态 | 说明 |
 |------|---------|------|
-| 矢量 (Point/Line/Polygon) | ✅ 完整实现 | 33 个子类全覆盖，`_assign_to_bundle` isinstance 分发 |
+| 矢量 (Point/Line/Polygon) | 完整实现 | 33 个子类全覆盖, `bundle.add()` + `_bundle_key_for()` YAML registry 路由 |
 | 栅格 (RasterDataset) | ✅ 完整实现 | DEM/DOM/Slope/Aspect/Suitability，类型定义+加载 |
 | 表格 (TableDataset) | ⏳ 类型已定义，ingest 未实现 | 5 种表类型定义在 `table_types.py`，但 `bundle.tables` 所有字段为 None |
 | 文档 (Document) | ✅ 基础实现 | 规划文本加载，L3 报告 |

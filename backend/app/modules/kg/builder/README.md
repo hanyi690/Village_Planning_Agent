@@ -13,7 +13,7 @@
 | `registry.py` | `@kg_builder` decorator, `_KG_BUILDERS` dict, `get_builder()`, `BuildContext`, `_get_bundle_features()` |
 | `layer1.py` | Layer 1 builders: static entities (parcels, roads, facilities, water, control zones, protection polygons, buildings, terrain, boundaries, natural resources) + three-dimension predicates + `GisLayerSet` virtual entities + semantic enrichment |
 | `layer2.py` | Layer 2: spatial relations (delegates to layer1 methods) |
-| `layer3.py` | Layer 3: intent virtual entities (`build_intent_layer`, `_add_structured_intent`, `clear_intent_layer`) - structured anchoring attributes, no raw geometry |
+| `layer3.py` | Layer 3: intent virtual entities (`build_intent_layer`, `clear_intent_layer`) - structured anchoring attributes, no raw geometry |
 | `layer4.py` | Layer 4: planned state (`_apply_planned_state`, `get_effective_land_use`, `get_plan_changes`, `check_constraint_violations`, `compare_versions`) |
 | `mixins.py` | `Layer1Mixin`, `Layer2Mixin`, `Layer3Mixin`, `Layer4Mixin`, `QueryMixin` - bind module-level functions to `PlanningKG` via inheritance |
 
