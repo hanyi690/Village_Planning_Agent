@@ -313,7 +313,6 @@ def ingest_landuse(
         planning_zone = dlbm_to_planning_zone(dlbm) if dlbm else ""
         primary_zone = get_primary_zone(dlbm) if dlbm else ""
 
-        # ── 共享字段 ──
         shared = dict(
             geometry=geom,
             dlbm=dlbm,
@@ -325,18 +324,21 @@ def ingest_landuse(
             zone_type=zone_type,
             planning_zone=planning_zone,
             primary_zone=primary_zone,
-            _raw=props,
         )
+
+        extra_props = {k: v for k, v in props.items() if k.upper() not in ('BSM', 'YSDM', 'DLBM', 'DLMC', 'DLMJ', 'SHAPE_AREA', 'SHAPE_LENGTH') and k.lower() not in ('geometry',)}
 
         if is_current:
             parcels.append(CurrentLandUseParcel(
                 **shared,
+                **extra_props,
                 sddlbm=sddlbm,
                 sddlbm_system=sddlbm_sys,
             ))
         else:
             parcels.append(PlannedLandUseParcel(
                 **shared,
+                **extra_props,
                 qmdlbm=qmdlbm,
                 qmdlbm_system=qmdlbm_sys,
                 ghytbm=ghytbm,
@@ -435,9 +437,8 @@ def provider_to_parcel(
         zone_type=zone_type,
         planning_zone=planning_zone,
         primary_zone=primary_zone,
-        sddlbm="",  # Provider 没有 sddlbm
+        sddlbm="",
         sddlbm_system="",
-        _raw=props,
     )
 
 
@@ -449,23 +450,65 @@ def provider_to_parcel(
 # Derived from GIS_LAYER_REGISTRY (T6). Kept as backward compat.
 _FEATURE_TYPE_REGISTRY: Dict[str, tuple] = {}
 
-def _init_feature_registry():
-    """Lazy-init the feature type registry from GIS_LAYER_REGISTRY.
+def _infer_model_class(layer_type: str) -> str:
+    _CLASS_MAP = {
+        "landuse_current": "CurrentLandUseParcel",
+        "landuse_planned": "PlannedLandUseParcel",
+        "water": "WaterFeature",
+        "road": "CurrentRoad",
+        "road_planned": "PlannedRoad",
+        "admin_area": "AdminArea",
+        "admin_boundary_line": "AdminBoundaryLine",
+        "farmland_protection": "FarmlandProtection",
+        "ecological_redline": "EcologicalRedline",
+        "urban_dev_boundary": "UrbanDevBoundary",
+        "village_dev_boundary": "VillageDevBoundary",
+        "cultivated_land_target": "CultivatedLandTarget",
+        "historical_protection": "HistoricalProtection",
+        "construction_zone": "ConditionalConstructionZone",
+        "geological_hazard_points": "GeologicalHazardPoint",
+        "planning_scope": "PlanningScope",
+        "land_use_zone": "LandUseZone",
+        "space_control_zone": "ConstructionCtrlZone",
+        "hazard_control_line": "HazardControlLine",
+        "flood_control_line": "FloodControlLine",
+        "contour_line": "ContourLine",
+        "elevation_point": "ElevationPoint",
+        "current_building": "CurrentBuilding",
+        "current_facility": "CurrentFacility",
+        "facility_planned": "PlannedFacility",
+        "annotation": "CurrentAnnotation",
+        "annotation_planned": "PlannedAnnotation",
+        "three_zone": "ThreeZoneItem",
+        "soil_type": "SoilType",
+        "soil_erosion": "SoilErosion",
+        "watershed": "Watershed",
+        "nature_reserve": "NatureReserve",
+        "hydrogeology_zone": "HydrogeologyZone",
+        "dem": "DEMInput",
+        "dom": "DOMInput",
+        "population": "PopulationTable",
+        "construction_projects": "ConstructionProjectTable",
+        "control_rules": "ControlRuleTable",
+        "planning_indicators": "PlanningIndicatorTable",
+        "land_use_structure": "LandUseStructureTable",
+    }
+    return _CLASS_MAP.get(layer_type, "")
 
-    Derives the mapping from the unified registry in schema/types/layer_registry.py,
-    resolving model class names to actual classes via lazy import.
-    """
+
+def _init_feature_registry():
     if _FEATURE_TYPE_REGISTRY:
         return
     from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
-    from app.modules.schema.types import spatial_types as _st
+    from app.modules.schema import spatial_types as _st
     for lt, entry in GIS_LAYER_REGISTRY.items():
-        if entry.model_class_name and hasattr(_st, entry.model_class_name):
-            key = entry.ingest_arg or lt
-            _FEATURE_TYPE_REGISTRY[key] = (
-                getattr(_st, entry.model_class_name),
-                entry.default_gdb_path,
-            )
+        if entry.ingest is None:
+            continue
+        model_class = getattr(_st, _infer_model_class(lt), None)
+        if model_class is None:
+            continue
+        key = entry.ingest.feature_type or lt
+        _FEATURE_TYPE_REGISTRY[key] = (model_class, entry.default_gdb_path)
 
 
 def ingest_feature(
@@ -504,38 +547,24 @@ def ingest_feature(
     features: List[SpatialFeature] = []
     warnings: List[str] = []
 
-    # Pre-compute field type map once per feature type (not per feature)
-    import dataclasses
-    _model_fields = {f.name: f.type for f in dataclasses.fields(model_cls)}
+    _model_fields = set(model_cls.model_fields.keys())
 
     for i, feat in enumerate(data.get("features", [])):
         props = feat.get("properties", {})
         geom = feat.get("geometry", {})
 
-        # Prefer typed from_geojson_feature() classmethod if available
-        # This handles Chinese field names (注记->text, 分类->category) correctly
-        if hasattr(model_cls, 'from_geojson_feature'):
-            try:
-                instance = model_cls.from_geojson_feature(feat)
-                if instance is not None:
-                    features.append(instance)
-                    continue
-            except Exception as e:
-                warnings.append(f"[feature#{i}] from_geojson_feature failed: {e}")
-                # Fall through to generic construction
-
-        kwargs: Dict[str, Any] = {"geometry": geom, "_raw": props}
+        kwargs: Dict[str, Any] = {"geometry": geom}
 
         for field_name in _model_fields:
-            if field_name in ("geometry", "_raw"):
+            if field_name in ("geometry",):
                 continue
-            # Map common property key variants
-            prop_key = field_name.upper()  # e.g. "bsm" -> "BSM"
-            alt_key = field_name  # e.g. "xzqhdm" -> "xzqhdm"
+            prop_key = field_name.upper()
+            alt_key = field_name
             value = props.get(prop_key, props.get(alt_key))
 
             if value is not None:
-                field_type = _model_fields[field_name]
+                field_info = model_cls.model_fields[field_name]
+                field_type = field_info.annotation if hasattr(field_info, 'annotation') else str
                 try:
                     if field_type in (int, "int"):
                         kwargs[field_name] = int(value) if value != "" else 0
