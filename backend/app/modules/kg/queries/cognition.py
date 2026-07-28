@@ -339,7 +339,7 @@ def _build_layer_cards(kg) -> List[Dict[str, Any]]:
 def _build_constraint_block(kg) -> Dict[str, Any]:
     """Build constraint summary: relation totals, cross-layer overlaps, coverage."""
     # Count spatial relations
-    touches_count = sum(1 for _ in kg.g.triples((None, PLN.touches, None))) // 2  # bidirectional
+    touches_count = sum(1 for _ in kg.g.triples((None, PLN.sfTouches, None))) // 2  # bidirectional
     nearby_count = sum(1 for _ in kg.g.triples((None, PLN.nearby, None)))
     connected_count = sum(1 for _ in kg.g.triples((None, PLN.connected_via_road, None)))
 

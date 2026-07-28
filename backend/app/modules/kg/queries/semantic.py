@@ -189,18 +189,23 @@ def _ensure_entity_annotation(kg, uri_str: str, entity_type: str,
 
 
 _RELATION_PRED_CN = {
+    "sfTouches": "相邻",
     "touches": "相邻",
     "nearby": "邻近",
     "connected_via_road": "道路连接",
+    "sfWithin": "位于",
     "within_zone": "位于",
     "located_in": "位于",
+    "sfIntersects": "相交",
+    "intersects": "相交",
+    "sfContains": "包含",
+    "contains": "包含",
     "designated_as": "被划定为",
     "derived_from": "源自",
     "serves": "服务于",
     "connects": "连接",
     "delineates": "界定了",
     "has_road": "有道路",
-    "contains": "包含",
     "relates_to_anchor": "关联锚点",
     "has_zone": "有分区",
     "has_facility": "有设施",
@@ -216,11 +221,12 @@ def _generate_relation_description(pred_name: str, obj_uri_str: str, kg=None) ->
         obj_name = _lookup_entity_name(kg, obj_uri_str)
         if obj_name:
             obj_short = obj_name
-    if pred_name in ("touches", "nearby", "connected_via_road"):
+    if pred_name in ("sfTouches", "touches", "nearby", "connected_via_road"):
         return f"与{obj_short}{pred_cn}"
-    if pred_name in ("within_zone", "located_in", "designated_as",
-                     "derived_from", "serves", "connects", "delineates",
-                     "contains", "relates_to_anchor"):
+    if pred_name in ("sfWithin", "sfIntersects", "sfContains",
+                     "within_zone", "located_in", "intersects", "contains",
+                     "designated_as", "derived_from", "serves", "connects",
+                     "delineates", "relates_to_anchor"):
         return f"{pred_cn}{obj_short}"
     # Other predicates (has_road, has_zone, etc.)
     return f"{pred_cn}: {obj_short}"
@@ -871,13 +877,13 @@ def get_parcel_detail_semantic(kg, bsm: str) -> List[Dict[str, Any]]:
             desc = rel.get("description", "")
             if desc:
                 rel_parts.append(desc)
-            elif pred in ("touches",):
+            elif pred in ("sfTouches", "touches"):
                 rel_parts.append(f"相邻{obj}")
             elif pred in ("nearby",):
                 rel_parts.append(f"邻近{obj}")
             elif pred in ("connected_via_road",):
                 rel_parts.append(f"道路连接{obj}")
-            elif pred in ("within_zone", "located_in"):
+            elif pred in ("sfWithin", "within_zone", "located_in"):
                 rel_parts.append(f"位于{obj}")
         if rel_parts:
             parts.append("，".join(rel_parts[:4]))
