@@ -244,6 +244,18 @@ class SemanticPredicates:
     overlap_pct = PLN.overlap_pct
 
 
+class ProvenancePredicates:
+    """v4.9: Encoding decision provenance predicates.
+
+    These predicates record the decision chain for code mappings
+    at the individual feature level.
+    """
+    decided_by = PLN.decided_by
+    decision_confidence = PLN.decision_confidence
+    decision_evidence = PLN.decision_evidence
+    mapping_basis = PLN.mapping_basis
+
+
 # ============================================================
 # GIS layer metadata: dynamically read from gis_layer_registry.yaml
 # ============================================================
