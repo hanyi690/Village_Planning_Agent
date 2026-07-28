@@ -529,9 +529,19 @@ async def parse_planning_text(
         try:
             from app.modules.kg.manager import get_kg_manager
             manager = get_kg_manager()
-            landuse_geojson = (gis_data or {}).get("landuse_current_geojson")
-            kg, _cache_hit = manager.get_or_build_layer1(village_name, landuse_geojson, gis_data or {})
-            logger.info("[parse_planning_text] KG ready: %d triples", kg.get_triple_count())
+            # Prefer typed bundle (v4 path); build one if only raw gis_data available
+            kg_bundle = gis_bundle
+            if kg_bundle is None and gis_data:
+                try:
+                    from app.modules.data.catalog.catalog import DataCatalog
+                    kg_bundle = DataCatalog().load_village_bundle(village_name)
+                except Exception:
+                    pass
+            if kg_bundle is not None:
+                kg, _cache_hit = manager.get_or_build_layer1(
+                    village_name, bundle=kg_bundle
+                )
+                logger.info("[parse_planning_text] KG ready: %d triples", kg.get_triple_count())
         except Exception as kg_err:
             logger.warning("[parse_planning_text] KG build skipped: %s", kg_err)
 

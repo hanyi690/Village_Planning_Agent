@@ -49,11 +49,16 @@ def run_layout_pipeline(
     if run_kg:
         try:
             from app.modules.kg.manager import get_kg_manager
+            from app.modules.data.catalog import DataCatalog
             manager = get_kg_manager()
+            bundle = None
+            try:
+                bundle = DataCatalog().load_village_bundle(village_name)
+            except Exception:
+                pass
             kg = manager.get_or_build_kg(
                 village_name=village_name,
-                landuse_geojson=landuse_geojson,
-                gis_data=gis_data,
+                bundle=bundle,
                 intent=intent,
             )
             kg_constraints = kg.get_constraints()

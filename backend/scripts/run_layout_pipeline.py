@@ -271,7 +271,7 @@ def run_kg_step(
         bundle = catalog.load_village_bundle("jintian")
     except Exception:
         pass
-    kg, cache_hit = manager.get_or_build_layer1(village_name, bundle=bundle, landuse_geojson=landuse_geojson, gis_data=gis_data)
+    kg, cache_hit = manager.get_or_build_layer1(village_name, bundle=bundle)
 
     # Layer 2: semantic (from intent)
     try:

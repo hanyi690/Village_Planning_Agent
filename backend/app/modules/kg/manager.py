@@ -58,31 +58,23 @@ def compute_layer1_cache_key(
     """Compute cache key from typed parcel list.
 
     Uses hash of BSM+DLBM+area_sqm for all features.
-    Accepts typed CurrentLandUseParcel list (preferred) or raw GeoJSON dict (legacy).
+    Accepts typed CurrentLandUseParcel list only (v4 path).
     """
     if not parcels:
         return None
 
     if isinstance(parcels, dict):
-        # Legacy: raw GeoJSON FeatureCollection
-        features = parcels.get("features", [])
-        hash_parts = []
-        for ft in sorted(features, key=lambda f: str(f.get("properties", {}).get("BSM", ""))):
-            props = ft.get("properties", {})
-            bsm = str(props.get("BSM", "")).strip()
-            dlbm = str(props.get("DLBM", "")).strip()
-            area = str(props.get("SHAPE_Area", 0) or 0)
-            if bsm:
-                hash_parts.append(f"{bsm}:{dlbm}:{area}")
-    else:
-        # Typed parcel list
-        hash_parts = []
-        for p in parcels:
-            bsm = str(getattr(p, "bsm", "")).strip()
-            dlbm = str(getattr(p, "dlbm", "")).strip()
-            area = str(getattr(p, "area_sqm", 0) or 0)
-            if bsm:
-                hash_parts.append(f"{bsm}:{dlbm}:{area}")
+        raise TypeError(
+            "parcels must be a list of typed parcels, not dict. Pass bundle= instead."
+        )
+
+    hash_parts = []
+    for p in parcels:
+        bsm = str(p.bsm).strip()
+        dlbm = str(p.dlbm).strip()
+        area = str(p.area_sqm or 0)
+        if bsm:
+            hash_parts.append(f"{bsm}:{dlbm}:{area}")
 
     if not hash_parts:
         return None
@@ -124,7 +116,7 @@ class KGManager:
 
     Usage:
         manager = get_kg_manager()
-        kg = manager.get_or_build_layer1(village_name, landuse_geojson, gis_data)
+        kg = manager.get_or_build_layer1(village_name, bundle=bundle)
         manager.register_session(session_id, kg)
 
     Thread safety:
@@ -164,14 +156,11 @@ class KGManager:
         village_name: str,
         bundle: Optional[Any] = None,
         parcel_relations: Optional[Any] = None,
-        landuse_geojson: Optional[Dict[str, Any]] = None,  # legacy fallback
-        gis_data: Optional[Dict[str, Any]] = None,  # legacy fallback
         constraint_index: Optional[Any] = None,
     ) -> Tuple[Any, bool]:
         """Get Layer 1 KG from cache or build fresh.
 
         Builds from bundle morphology groups directly (v4.6 path).
-        Falls back to landuse_geojson + gis_data (legacy path).
 
         Args:
             constraint_index: Optional ConstraintIndex from spatial_ops.bridge,
@@ -183,7 +172,7 @@ class KGManager:
         from app.modules.kg.builder import PlanningKG
 
         # Use typed parcels for cache key when available
-        parcels = bundle.polygons.get("landuse_current") if bundle else landuse_geojson
+        parcels = bundle.polygons.get("landuse_current") if bundle else None
         cache_key = compute_layer1_cache_key(village_name, parcels)
         key_str = str(cache_key) if cache_key else ""
 
@@ -314,23 +303,16 @@ class KGManager:
         bundle: Optional[Any] = None,
         parcel_relations: Optional[Any] = None,
         intent: Any = None,
-        reports: Optional[Dict[str, Dict[str, Any]]] = None,
         session_id: str = "",
-        landuse_geojson: Optional[Dict[str, Any]] = None,
-        gis_data: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """Build complete KG with Layer 1 caching."""
         kg, cache_hit = self.get_or_build_layer1(
             village_name=village_name,
             bundle=bundle,
             parcel_relations=parcel_relations,
-            landuse_geojson=landuse_geojson,
-            gis_data=gis_data,
         )
         if intent is not None and hasattr(kg, "build_intent_layer"):
             kg.build_intent_layer(intent)
-        elif reports is not None:
-            logger.warning("[KGManager] reports path deprecated in v4.6 — use build_intent_layer")
         if session_id:
             self.register_session(session_id, kg)
         return kg

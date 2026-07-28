@@ -113,7 +113,7 @@ async def main(cache_path: Optional[Path] = None):
     except Exception as e:
         print(f"  Bundle load skipped: {e}", flush=True)
     kg, cache_hit = manager.get_or_build_layer1(
-        "金田村", bundle=bundle, landuse_geojson=landuse, gis_data=gis_data
+        "金田村", bundle=bundle
     )
     annotations = gis_data.get("annotation_geojson", {}).get("features", [])
     roads = gis_data.get("road_geojson", {}).get("features", [])

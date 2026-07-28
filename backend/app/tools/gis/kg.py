@@ -45,24 +45,25 @@ def build_knowledge_graph(
     parcel_relations = gis_data.pop("_parcel_relations", None) if gis_data else None
 
     manager = get_kg_manager()
-    landuse_geojson = gis_data.get("landuse_current_geojson") if gis_data else None
 
-    if bundle is not None and blocks is not None:
-        kg, cache_hit = manager.get_or_build_layer1(
-            village_name=village_name,
-            bundle=bundle,
-            context_blocks=blocks,
-            parcel_relations=parcel_relations,
-        )
-    else:
-        # Legacy fallback (will be removed)
-        cache_key = compute_layer1_cache_key(village_name, landuse_geojson)
-        cache_key_str = str(cache_key) if cache_key else ""
-        kg, cache_hit = manager.get_or_build_layer1(
-            village_name=village_name,
-            landuse_geojson=landuse_geojson,
-            gis_data=gis_data,
-        )
+    if bundle is None:
+        # Build bundle from village data (v4 typed path)
+        try:
+            from app.modules.data.catalog import DataCatalog
+            bundle = DataCatalog().load_village_bundle(village_name)
+        except Exception as e:
+            logger.warning("[KG] Bundle build failed: %s", e)
+
+    # Compute cache key for state reporting (typed parcels only)
+    typed_parcels = bundle.polygons.get("landuse_current") if bundle else None
+    cache_key = compute_layer1_cache_key(village_name, typed_parcels)
+    cache_key_str = str(cache_key) if cache_key else ""
+
+    kg, cache_hit = manager.get_or_build_layer1(
+        village_name=village_name,
+        bundle=bundle,
+        parcel_relations=parcel_relations,
+    )
 
     if cache_hit:
         logger.info("[KG] Layer 1 cache HIT")
