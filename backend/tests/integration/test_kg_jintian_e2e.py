@@ -1109,6 +1109,61 @@ class TestKGManager:
         assert key1 == key2
 
 
+# ====================================================================
+# v4.9: Provenance triples in KG
+# ====================================================================
+
+
+class TestProvenanceInKG:
+    """Verify provenance triples are written to KG during _add_parcels."""
+
+    def test_provenance_triples_written_in_add_parcels(self):
+        from app.modules.kg.builder.base import PlanningKG
+        from app.modules.kg.ontology import (
+            ProvenancePredicates, EntityTypes, PLN, GEO,
+        )
+        from rdflib import RDF
+
+        kg = PlanningKG(village_name="test")
+        kg.g.bind("pln", PLN)
+        kg.g.bind("geo", GEO)
+
+        # Build a minimal parcel list with provenance
+        from app.modules.schema.types.spatial_types import CurrentLandUseParcel
+
+        provenance = {
+            "DLBM": {
+                "decided_by": "rule",
+                "confidence": "exact",
+                "system": "gbt21010",
+                "warning": "",
+            }
+        }
+        parcel = CurrentLandUseParcel(
+            geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+            dlbm="0110", bsm="T001", name="水田",
+            mapping_provenance=provenance,
+        )
+        kg._add_parcels([parcel])
+
+        # Check provenance triples exist
+        parcel_uris = list(kg.g.subjects(RDF.type, EntityTypes.Parcel))
+        assert len(parcel_uris) == 1
+
+        pu = parcel_uris[0]
+        decided_by = list(kg.g.objects(pu, ProvenancePredicates.decided_by))
+        assert len(decided_by) > 0, "Expected decided_by triple"
+        assert str(decided_by[0]) == "rule"
+
+        confidence = list(kg.g.objects(pu, ProvenancePredicates.decision_confidence))
+        assert len(confidence) > 0, "Expected decision_confidence triple"
+        assert str(confidence[0]) == "exact"
+
+        evidence = list(kg.g.objects(pu, ProvenancePredicates.decision_evidence))
+        assert len(evidence) > 0, "Expected decision_evidence triple"
+        assert str(evidence[0]) == "gbt21010"
+
+
 # ── Standalone run ──────────────────────────────────────────────────
 
 

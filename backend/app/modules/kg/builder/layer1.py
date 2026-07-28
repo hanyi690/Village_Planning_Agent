@@ -17,6 +17,7 @@ from rdflib.namespace import XSD
 from app.utils.logger import get_logger
 from ..ontology import (
     PLN, PLN_NS, EntityTypes, Relations, EntityIdPolicy, SemanticPredicates,
+    ProvenancePredicates,
     get_gis_layer_group_info, get_all_gis_layer_groups,
     GEOMETRY_POLYGON, GEOMETRY_LINE, GEOMETRY_POINT,
     GEO,
@@ -320,6 +321,24 @@ def _add_parcels(self, parcels) -> None:
         self.g.add((pu, Relations.sfWithin, PLN.village))
         self._parcel_count += 1
         self._add_wkt_geometry(pu, getattr(p, "geometry", {}))
+
+        # ── v4.9: Encoding decision provenance ──
+        mapping_prov = getattr(p, "mapping_provenance", None) or {}
+        for field_name, prov in mapping_prov.items():
+            if not isinstance(prov, dict):
+                continue
+            decided_by = prov.get("decided_by", "")
+            if decided_by:
+                self.g.add((pu, ProvenancePredicates.decided_by, Literal(decided_by)))
+            confidence = prov.get("confidence", "")
+            if confidence:
+                self.g.add((pu, ProvenancePredicates.decision_confidence, Literal(confidence)))
+            system = prov.get("system", "")
+            if system:
+                self.g.add((pu, ProvenancePredicates.decision_evidence, Literal(system)))
+            warning = prov.get("warning", "")
+            if warning:
+                self.g.add((pu, ProvenancePredicates.mapping_basis, Literal(warning)))
 
 
 @kg_builder("water", entity_type="WaterBody")
