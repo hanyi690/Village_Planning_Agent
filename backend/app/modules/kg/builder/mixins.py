@@ -9,6 +9,7 @@ Usage:
                      Layer4Mixin, QueryMixin):
         ...
 """
+from .registry import BuildContext
 from .layer1 import (
     _add_village_entity,
     _add_parcel_relations, _parcel_uri_by_bsm_dlbm,
@@ -110,4 +111,5 @@ class QueryMixin:
 
 __all__ = [
     "Layer1Mixin", "Layer2Mixin", "Layer3Mixin", "Layer4Mixin", "QueryMixin",
+    "BuildContext",
 ]

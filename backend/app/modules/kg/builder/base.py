@@ -83,10 +83,6 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
         self._add_village_entity(bundle.village_name)
         self._add_village_meta_from_bundle(bundle)
         self._add_parcels(bundle.polygons.get("landuse_current"))
-        self.add_roads(bundle.lines.get("roads_current"), gis_type_ref="current_road", entry=None,
-                        ctx=BuildContext(village_name=bundle.village_name, provenance={}))
-        self._add_water_bodies(bundle.polygons.get("water_bodies"), gis_type_ref="water", entry=None,
-                                ctx=BuildContext(village_name=bundle.village_name, provenance={"water_overlap": water_overlap or {}}))
         self._add_facilities_from_typed(bundle.points.get("facilities_current"))
         self._add_facilities_from_annotations(bundle.points.get("annotations_current"))
         self.add_annotations(bundle.points.get("annotations_current"))
@@ -100,11 +96,41 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
 
         # v4.8.1: additional bundle geometry groups
         self._add_protection_polygons(bundle.polygons)
-        self._add_buildings(bundle.points.get("buildings"), gis_type_ref="current_building", entry=None,
-                    ctx=BuildContext(village_name=bundle.village_name, provenance={}))
         self._add_terrain_entities(bundle.lines, bundle.points)
         self._add_boundaries(bundle.polygons, bundle.lines)
         self._add_natural_resource_zones(bundle.polygons)
+
+        # ── Phase 6: Registry-based builder loop ──
+        from .registry import _KG_BUILDERS, _get_bundle_features
+        from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+
+        bbox = None
+        meta = getattr(bundle, "metadata", None)
+        if meta:
+            try:
+                bbox = meta.bbox_wgs84.as_tuple()
+            except Exception:
+                pass
+
+        ctx = BuildContext(
+            village_name=bundle.village_name,
+            bbox=bbox,
+            constraint_index=constraint_index,
+            provenance={
+                "water_overlap": water_overlap or {},
+            },
+        )
+
+        for gis_type_ref, builder_fn in _KG_BUILDERS.items():
+            entry = GIS_LAYER_REGISTRY.get(gis_type_ref)
+            if not entry:
+                continue
+            features = _get_bundle_features(bundle, entry)
+            if not features:
+                continue
+            report = builder_fn(self, features, gis_type_ref=gis_type_ref, entry=entry, ctx=ctx)
+            if report and isinstance(report, dict):
+                logger.debug("[registry] %s: %s", gis_type_ref, report)
 
         # Spatial relations (computed from geometry)
         self._add_parcel_relations(parcel_relations)
@@ -163,7 +189,7 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
                 l1_subjects.add(s)
         l1_subjects.add(PLN.village)
 
-        spatial_predicates = {PLN.touches, PLN.nearby, PLN.connected_via_road}
+        spatial_predicates = {PLN.touches, PLN.sfTouches, PLN.nearby, PLN.connected_via_road}
 
         # v4.8.2: predicates that should be cloned (gis-type + semantic-enrichment + GisLayerSet)
         from ..ontology import SemanticPredicates, Relations
