@@ -461,7 +461,7 @@ layer_types:
       zh: 有条件建设区
       en: Conditional construction zone
     geometry_kind: polygon
-    group: protection
+    group: planned_output
     ingest:
       adapter: features
       feature_type: conditional_construction_zone
@@ -470,6 +470,7 @@ layer_types:
       key: construction_zone
     spatial:
       is_constraint: false
+      is_planned_output: true
     kg:
       entity_type: ConstructionZone
       uri_policy: "L1:construction_zone_{bsm}"

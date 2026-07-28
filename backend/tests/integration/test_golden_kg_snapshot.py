@@ -62,6 +62,7 @@ def golden_kg():
     from app.modules.spatial_ops import build_constraint_index
     from app.modules.spatial_ops.geometry import compute_parcel_relations
     from app.modules.kg.builder import PlanningKG
+    from app.modules.kg.builder.layer4 import ingest_planned_state_from_geojson
 
     bundle = VillageBundle(village_name="jintian")
 
@@ -96,6 +97,13 @@ def golden_kg():
         for f in feats:
             bundle.add(f)
 
+    # Admin boundary
+    boundary, _ = ingest_feature(
+        str(_JINTIAN_DATA / "current" / "boundary.geojson"), "admin_area"
+    )
+    for b in boundary:
+        bundle.add(b)
+
     assert bundle.parcel_count > 0, "No parcels loaded from jintian GeoJSON"
 
     # Spatial relations + constraint index (same as E2E kg_main fixture)
@@ -105,12 +113,15 @@ def golden_kg():
     )
     constraint_index = build_constraint_index(bundle)
 
+    # L4 planned state from GeoJSON
+    planned_state = ingest_planned_state_from_geojson(_JINTIAN_DATA)
+
     kg = PlanningKG(village_name="jintian")
     kg.build_from_bundle(
         bundle=bundle,
         parcel_relations=parcel_relations,
         constraint_index=constraint_index,
-        # intent=None, planned_state=None - deliberately omitted (L1+L2 only)
+        planned_state=planned_state,
     )
     return kg
 

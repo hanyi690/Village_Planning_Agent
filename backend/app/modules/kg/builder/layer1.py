@@ -413,7 +413,7 @@ def _add_water_bodies(self, features, *, gtype_ref: str, entry, ctx: BuildContex
 
 def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
     count = 0
-    for p in getattr(points_layer, "hazard_points", []):
+    for p in points_layer.get("hazard_points") or []:
         bsm = str(p.bsm).strip()
         ysdm = str(p.ysdm).strip()
         name = p.name or f"hazard_{count}"
@@ -433,7 +433,7 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         if name:
             self.g.add((uri, has_semantic_label, Literal(str(name))))
         count += 1
-    for item in getattr(polygons_layer, "hazard_control_lines", []):
+    for item in polygons_layer.get("hazard_control_lines") or []:
         bsm = str(item.bsm).strip()
         ysdm = str(item.ysdm).strip()
         if bsm:
@@ -449,7 +449,7 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
         self.g.add((uri, semantic_group, Literal("hazard")))
         count += 1
-    for item in getattr(polygons_layer, "flood_control_lines", []):
+    for item in polygons_layer.get("flood_control_lines") or []:
         bsm = str(item.bsm).strip()
         ysdm = str(item.ysdm).strip()
         if bsm:
@@ -465,31 +465,14 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
         self.g.add((uri, semantic_group, Literal("hazard")))
         count += 1
-    for item in getattr(polygons_layer, "construction_zone", []):
-        bsm = str(item.bsm).strip()
-        ysdm = str(item.ysdm).strip()
-        if bsm:
-            uri = EntityIdPolicy.uri("zone_conditional", bsm)
-        else:
-            uri = EntityIdPolicy.fallback_uri("zone_conditional", ysdm, count)
-        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
-        self.g.add((uri, RDF.type, EntityTypes.Zone))
-        self.g.add((uri, PLN.name, Literal("有条件建设区")))
-        self.g.add((uri, PLN.restriction, Literal("限制建设")))
-        self.g.add((uri, Relations.sfWithin, PLN.village))
-        # ── v4.8.1: three-dimension predicates ──
-        self.g.add((uri, gis_type_ref, Literal("construction_zone")))
-        self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
-        self.g.add((uri, semantic_group, Literal("construction")))
-        self.g.add((uri, has_semantic_label, Literal("有条件建设区")))
-        count += 1
+    # NOTE: construction_zone moved to L4 (PlannedZone) - see ingest_planned_state_from_geojson()
     if count:
         logger.info("Added %d control lines", count)
 
 
 def _add_planning_elements_from_typed(self, polygons_layer) -> None:
     count = 0
-    for z in getattr(polygons_layer, "land_use_zones", []):
+    for z in polygons_layer.get("land_use_zones") or []:
         bsm = str(z.bsm).strip()
         ysdm = str(z.ysdm).strip()
         code = ysdm or getattr(z, "dlbm", "")  # getattr intentional: dlbm not on LandUseZone
@@ -506,7 +489,7 @@ def _add_planning_elements_from_typed(self, polygons_layer) -> None:
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_POLYGON)))
         self.g.add((uri, semantic_group, Literal("protection")))
         count += 1
-    for item in getattr(polygons_layer, "construction_ctrl_zones", []):
+    for item in polygons_layer.get("construction_ctrl_zones") or []:
         bsm = str(item.bsm).strip()
         ysdm = str(item.ysdm).strip()
         if bsm:
@@ -925,7 +908,7 @@ def _add_protection_polygons(self, polygons_layer) -> None:
     ]
 
     for attr_name, label, ltype, constraint in protection_groups:
-        for item in getattr(polygons_layer, attr_name, []):
+        for item in polygons_layer.get(attr_name) or []:
             bsm = str(item.bsm).strip()
             ysdm = str(item.ysdm).strip()
             if bsm:
@@ -1055,7 +1038,7 @@ def _add_terrain_entities(self, lines_layer, points_layer) -> None:
         count += 1
 
     # Elevation points
-    for i, ep in enumerate(getattr(points_layer, "elevation_points", [])):
+    for i, ep in enumerate(points_layer.get("elevation_points") or []):
         bsm = str(ep.bsm).strip()
         ysdm = str(ep.ysdm).strip()
         elev = ep.elevation or getattr(ep, "height", "") or ""  # getattr intentional: height not on ElevationPoint
@@ -1125,7 +1108,7 @@ def _add_boundaries(self, polygons_layer, lines_layer) -> None:
         count += 1
 
     # Admin boundary lines
-    for i, bl in enumerate(getattr(lines_layer, "admin_boundaries", [])):
+    for i, bl in enumerate(lines_layer.get("admin_boundaries") or []):
         bsm = str(bl.bsm).strip()
         ysdm = str(bl.ysdm).strip()
         if bsm:
@@ -1156,7 +1139,7 @@ def _add_natural_resource_zones(self, polygons_layer) -> None:
         ("hydrogeology_zones", "水文地质分区", "hydrogeology_zone"),
     ]
     for attr_name, label, ltype in nr_groups:
-        for i, item in enumerate(getattr(polygons_layer, attr_name, [])):
+        for i, item in enumerate(polygons_layer.get(attr_name) or []):
             bsm = str(item.bsm).strip()
             ysdm = str(item.ysdm).strip()
             if bsm:

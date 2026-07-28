@@ -248,7 +248,54 @@ def _add_dem_raster(self, features, *, gtype_ref, entry, ctx) -> dict:
 
 ### Result
 
-`catalog.load_village_bundle("金田村委会")` now loads `dem.tif` via `LocalRasterDriver`, the `raster` adapter constructs a `DEMInput` instance, `_assign_to_bundle` places it at `bundle.rasters.dem`, and `kg.build_from_bundle()` invokes the `@kg_builder("dem")` function to emit the RDF entity.
+`catalog.load_village_bundle("金田村委会")` now loads `dem.tif` via `LocalRasterDriver`, the `raster` adapter constructs a `DEMInput` instance, `_bundle_key_for()` YAML routing places it at `bundle.rasters.dem`, and `kg.build_from_bundle()` invokes the `@kg_builder("dem")` function to emit the RDF entity.
+
+---
+
+## Pattern 5 — L4 planned output layer (规划产出)
+
+For GeoJSON files that represent **planning outputs** (not L1 reference layers), use the L4 planned state path. These are currently:
+- `planned/landuse.geojson` → `PlannedParcelEntry`
+- `planned/road.geojson` → `PlannedRoadEntry`
+- `planned/construction_zone.geojson` → `PlannedZoneEntry`
+
+### Step 1 — YAML registration
+
+Mark the layer as `is_planned_output: true` so the L1 builder loop skips it:
+
+```yaml
+my_planned_layer:
+    geometry_kind: polygon
+    group: planned_output           # NOT a standard L1 group
+    bundle_target:
+      group: polygons
+      key: my_planned_layer
+    spatial:
+      is_planned_output: true
+```
+
+### Step 2 — L4 ingestion function
+
+Add a handler in `ingest_planned_state_from_geojson()` in `backend/app/modules/kg/builder/layer4.py`. The function reads GeoJSON directly, maps fields to `PlannedParcelEntry`/`PlannedRoadEntry`/`PlannedZoneEntry`, and returns a `PlannedState`:
+
+```python
+# In ingest_planned_state_from_geojson():
+cz_path = data_dir / "planned" / "my_planned_layer.geojson"
+if cz_path.exists():
+    # ... read GeoJSON, map fields, append to state.zones / state.parcels / state.roads
+```
+
+### Step 3 — Pass to build_from_bundle
+
+The render script and test fixture pass `planned_state` to `build_from_bundle()`:
+
+```python
+from app.modules.kg.builder.layer4 import ingest_planned_state_from_geojson
+planned_state = ingest_planned_state_from_geojson(data_dir)
+kg.build_from_bundle(..., planned_state=planned_state)
+```
+
+L4 entities appear as `PlannedParcel`/`PlannedRoad`/`PlannedZone` in the KG with dashed-line styling on the map.
 
 ---
 

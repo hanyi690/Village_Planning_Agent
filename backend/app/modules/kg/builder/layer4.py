@@ -12,6 +12,7 @@ Unchanged entities have no L4 triples; query falls back to L1.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from rdflib import Literal, RDF, URIRef
@@ -100,6 +101,118 @@ class PlannedState:
     roads: List[PlannedRoadEntry] = field(default_factory=list)
     axes: List[PlannedAxisEntry] = field(default_factory=list)
     source: str = ""
+
+
+def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
+    """Read planned/ GeoJSON files (landuse, road, construction_zone) into PlannedState.
+
+    These are planning outputs (L4), not L1 reference layers:
+      - planned/landuse.geojson  → PlannedParcelEntry (GHYTBM = appendix5 planning code)
+      - planned/road.geojson     → PlannedRoadEntry (sparse: LnType + geometry)
+      - planned/construction_zone.geojson → PlannedZoneEntry (LX = zone type)
+
+    Reads GeoJSON directly (avoids ingest_feature whitelist mismatch).
+    Uses shapely for geometry → WKT conversion.
+    """
+    from json import load as json_load
+
+    def _geojson_to_wkt(geom: dict) -> str:
+        if not geom or "type" not in geom:
+            return ""
+        gtype = geom["type"]
+        coords = geom.get("coordinates", [])
+
+        def _pt(c):
+            return f"{c[0]} {c[1]}"
+
+        def _line(c):
+            return ", ".join(_pt(p) for p in c)
+
+        def _poly(c):
+            return "(" + ", ".join(
+                "(" + ", ".join(_pt(p) for p in ring) + ")"
+                for ring in c
+            ) + ")"
+
+        if gtype == "Point":
+            return f"POINT ({_pt(coords)})"
+        elif gtype == "MultiPoint":
+            return "MULTIPOINT (" + ", ".join(_pt(p) for p in coords) + ")"
+        elif gtype == "LineString":
+            return f"LINESTRING ({_line(coords)})"
+        elif gtype == "MultiLineString":
+            return "MULTILINESTRING (" + ", ".join(
+                "(" + _line(part) + ")" for part in coords
+            ) + ")"
+        elif gtype == "Polygon":
+            return f"POLYGON {_poly(coords)}"
+        elif gtype == "MultiPolygon":
+            return "MULTIPOLYGON (" + ", ".join(
+                _poly(part) for part in coords
+            ) + ")"
+        return ""
+
+    data_dir = Path(data_dir)
+    state = PlannedState(source="planned_geojson")
+
+    # ── planned/landuse.geojson → PlannedParcelEntry ──
+    landuse_path = data_dir / "planned" / "landuse.geojson"
+    if landuse_path.exists():
+        with open(landuse_path, encoding="utf-8") as f:
+            data = json_load(f)
+        for feat in data.get("features", []):
+            props = feat.get("properties", {})
+            geom = feat.get("geometry")
+            wkt_str = _geojson_to_wkt(geom) if geom else ""
+            bsm = str(props.get("BSM") or "").strip()
+            land_use = str(props.get("GHYTBM") or props.get("GHFLBM") or "").strip()
+            ghybmc = str(props.get("GHYTMC") or "").strip()
+            dlmj = float(props.get("DLMJ") or 0)
+            state.parcels.append(PlannedParcelEntry(
+                bsm=bsm,
+                planning_land_use=land_use,
+                zone_type="planned",
+                area_ha=dlmj / 10000.0 if dlmj else 0.0,
+                geometry=wkt_str,
+            ))
+        logger.info("L4 ingest: %d PlannedParcel from %s", len(state.parcels), landuse_path.name)
+
+    # ── planned/road.geojson → PlannedRoadEntry ──
+    road_path = data_dir / "planned" / "road.geojson"
+    if road_path.exists():
+        with open(road_path, encoding="utf-8") as f:
+            data = json_load(f)
+        for i, feat in enumerate(data.get("features", [])):
+            props = feat.get("properties", {})
+            ln_type = str(props.get("LnType") or "").strip()
+            state.roads.append(PlannedRoadEntry(
+                name=f"规划道路_{i}",
+                road_level=ln_type or "unknown",
+                width_m=0.0,
+            ))
+        logger.info("L4 ingest: %d PlannedRoad from %s", len(state.roads), road_path.name)
+
+    # ── planned/construction_zone.geojson → PlannedZoneEntry ──
+    cz_path = data_dir / "planned" / "construction_zone.geojson"
+    if cz_path.exists():
+        with open(cz_path, encoding="utf-8") as f:
+            data = json_load(f)
+        for feat in data.get("features", []):
+            props = feat.get("properties", {})
+            geom = feat.get("geometry")
+            wkt_str = _geojson_to_wkt(geom) if geom else ""
+            zone_type = str(props.get("LX") or "有条件建设区").strip()
+            mj = float(props.get("MJ") or 0)
+            name = str(props.get("XZQHM") or "建设区").strip()
+            state.zones.append(PlannedZoneEntry(
+                zone_type=zone_type,
+                area_ha=mj / 10000.0 if mj else 0.0,
+                name=name,
+                geometry=wkt_str,
+            ))
+        logger.info("L4 ingest: %d PlannedZone from %s", len(state.zones), cz_path.name)
+
+    return state
 
 
 # ── L4 builder ──
