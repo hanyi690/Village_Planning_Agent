@@ -3,8 +3,8 @@
 LandUseClass and ClassificationSchema remain as convenience wrappers.
 Data loaded from all encoding systems: appendix5 → tugui → gbt21010.
 
-All module-level data (_CLASSES, ZONE_TYPES, PLANNING_ZONES, SCHEMA) is
-lazy-loaded via __getattr__ to avoid blocking app startup on YAML issues.
+Module-level data is lazy-loaded via _get_classes() / get_schema() to avoid
+blocking app startup on YAML issues.
 """
 
 from __future__ import annotations
@@ -168,20 +168,8 @@ def get_schema() -> ClassificationSchema:
     return _SCHEMA
 
 
-# 向后兼容: 模块级属性通过 __getattr__ 懒加载
-# 新代码请使用 get_schema() / _get_classes()
-def __getattr__(name: str):
-    if name == "_CLASSES":
-        return _get_classes()
-    if name == "ZONE_TYPES":
-        return _get_zone_types()
-    if name == "PLANNING_ZONES":
-        return _get_planning_zones()
-    if name == "SCHEMA":
-        return get_schema()
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
+# ============================================================
+# EncodingRegistry - central encoding lookup (merged from encoding_registry.py)
 # ============================================================
 # EncodingRegistry — central encoding lookup (merged from encoding_registry.py)
 # ============================================================
