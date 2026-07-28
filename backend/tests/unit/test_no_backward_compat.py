@@ -37,3 +37,9 @@ def test_ontology_no_three_zone_line_compat():
     from app.modules.kg.ontology import EntityTypes
     assert not hasattr(EntityTypes, "ThreeZone")
     assert not hasattr(EntityTypes, "ThreeLine")
+
+
+def test_no_add_structured_intent_shim():
+    """_add_structured_intent legacy shim must be gone; use build_intent_layer."""
+    from app.modules.kg.builder.mixins import Layer3Mixin
+    assert not hasattr(Layer3Mixin, "_add_structured_intent")

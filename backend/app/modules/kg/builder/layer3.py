@@ -26,11 +26,6 @@ _L3_TYPES = {
 }
 
 
-def _add_structured_intent(self, intent: Any) -> None:
-    """Build RDF subgraph from SpatialPlanningIntent (legacy name, delegates to build_intent_layer)."""
-    self.build_intent_layer(intent)
-
-
 def _serialize_bbox(bbox) -> str:
     """Serialize bbox tuple to comma-separated string for RDF literal."""
     if bbox is None:

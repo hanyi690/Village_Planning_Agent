@@ -485,7 +485,7 @@ class TestPlanInjectionIsolated:
 
         # Build a KG with L3+L4
         kg_with_l34 = kg_main.clone_static_layer()
-        kg_with_l34._add_structured_intent(SpatialPlanningIntent(
+        kg_with_l34.build_intent_layer(SpatialPlanningIntent(
             village_name="test",
             zone_targets=[ZoneTarget(land_use="2121", area_ratio=10.0)],
         ))
@@ -842,7 +842,7 @@ class TestIntentInjectionIsolated:
                 AxisTarget(reference_feature="村主干道"),
             ],
         )
-        kg_intent._add_structured_intent(intent)
+        kg_intent.build_intent_layer(intent)
 
         # Verify L3 ZoneTarget
         zt = kg_intent.query(

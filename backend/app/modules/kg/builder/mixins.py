@@ -26,7 +26,7 @@ from .layer1 import (
     _compute_cross_type_heuristic,
     _add_wkt_geometry,
 )
-from .layer3 import _add_structured_intent, build_intent_layer, clear_intent_layer
+from .layer3 import build_intent_layer, clear_intent_layer
 from .layer4 import (
     _apply_planned_state,
     PlannedState, PlannedParcelEntry, PlannedZoneEntry,
@@ -79,7 +79,6 @@ class Layer2Mixin:
 
 
 class Layer3Mixin:
-    _add_structured_intent = _add_structured_intent
     build_intent_layer = build_intent_layer
     clear_intent_layer = clear_intent_layer
 
