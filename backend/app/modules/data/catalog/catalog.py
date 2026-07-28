@@ -300,7 +300,6 @@ class DataCatalog:
             ``VillageBundle`` with points/lines/polygons/rasters morphology groups.
         """
         from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
-        from ..ingest import result_to_parcels, result_to_features
 
         if layer_types is None:
             layer_types = list(GIS_LAYER_REGISTRY.keys())
@@ -343,25 +342,20 @@ class DataCatalog:
                 )
                 continue
 
-            adapter_name, arg = entry.ingest.adapter, entry.ingest.feature_type
-            if adapter_name == "parcels":
-                parcels, warnings = result_to_parcels(result, layer_type=arg)
-                if warnings:
-                    bundle.metadata.crs_warnings.extend(warnings[:5])
-                for p in parcels:
-                    bundle.add(p)
-            elif adapter_name == "features":
-                features, _warnings = result_to_features(result, arg)
-                for f in features:
-                    bundle.add(f)
-            elif adapter_name == "raster":
-                from ..ingest import result_to_raster
-                raster = result_to_raster(result, arg)
-                if raster is not None:
-                    if lt == "dem":
-                        bundle.rasters.dem = raster
-                    elif lt == "dom":
-                        bundle.rasters.dom = raster
+            adapter_name = entry.ingest.adapter
+            from ..adapters import ADAPTERS
+            adapter = ADAPTERS.get(adapter_name)
+            if adapter is None:
+                logger.warning(
+                    "[DataCatalog] No adapter registered for '%s' (layer '%s')",
+                    adapter_name, lt,
+                )
+                continue
+            adapter_result = adapter.load(result.data, entry)
+            if adapter_result.warnings:
+                bundle.metadata.crs_warnings.extend(adapter_result.warnings[:5])
+            for feat in adapter_result.features:
+                bundle.add(feat)
 
         # Step 4b: Fallback — derive water bodies from DLBM=31xx parcels
         # when external water sources (upload / Tianditu API) are unavailable.

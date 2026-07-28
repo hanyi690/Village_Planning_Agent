@@ -146,3 +146,43 @@ def test_features_adapter_admin_area():
     f = result.features[0]
     assert f.bsm == "A001"
     assert f.layer_type == "admin_area"
+
+
+def test_result_to_parcels_no_tempfile():
+    from app.modules.data.ingest import result_to_parcels
+    from app.modules.data.contracts import DataResult
+
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+                "properties": {"BSM": "001", "DLBM": "0703", "DLMC": "宅基地"},
+            }
+        ],
+    }
+    result = DataResult.ok(data=geojson, data_type="geojson")
+    parcels, warnings = result_to_parcels(result, layer_type="current_landuse")
+    assert len(parcels) >= 1
+    assert parcels[0].bsm == "001"
+
+
+def test_result_to_features_no_tempfile():
+    from app.modules.data.ingest import result_to_features
+    from app.modules.data.contracts import DataResult
+
+    geojson = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+                "properties": {"BSM": "A001", "NAME": "金田村"},
+            }
+        ],
+    }
+    result = DataResult.ok(data=geojson, data_type="geojson")
+    features, warnings = result_to_features(result, "admin_area")
+    assert len(features) >= 1
+    assert features[0].bsm == "A001"

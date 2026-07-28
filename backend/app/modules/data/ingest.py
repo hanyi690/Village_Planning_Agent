@@ -39,7 +39,6 @@ Data flow:
 from __future__ import annotations
 
 import json
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -655,61 +654,52 @@ def result_to_parcels(
     layer_type: str = "current_landuse",
     strict: bool = False,
 ) -> Tuple[List[BaseLandUseParcel], List[str]]:
-    """Convert a DataResult (geojson) to typed parcels via encoding validation.
+    """将 DataResult（geojson）转换为通过编码验证的类型化地块。
 
-    This is the bridge from the data layer (raw GeoJSON) to the schema layer
-    (typed models). Writes the GeoJSON to a temp file and reuses the filepath-
-    based ingest_landuse() so validation logic is not duplicated.
-
-    Args:
-        result: DataResult from a file_vector / api_vector driver fetch.
-        layer_type: "current_landuse" | "planned_landuse"
-        strict: raise on encoding mismatch if True
-
-    Returns:
-        (parcels, warnings)
+    使用 ParcelsAdapter 直接解析内存中的字典，无需临时文件。
     """
     geojson = _geojson_from_result(result)
     if geojson is None:
         return [], [result.error or "no geojson data"]
 
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".geojson", delete=False, encoding="utf-8"
+    from .adapters import ADAPTERS
+    entry = _make_parcel_entry(layer_type)
+    adapter_result = ADAPTERS["parcels"].load(geojson, entry, strict=strict)
+    return adapter_result.features, adapter_result.warnings
+
+
+def _make_parcel_entry(layer_type: str) -> Any:
+    from app.modules.schema.types.layer_registry import GisLayerTypeEntry, IngestSpec
+    return GisLayerTypeEntry(
+        gis_type_ref=layer_type,
+        ingest=IngestSpec(adapter="parcels", feature_type=layer_type),
     )
-    try:
-        json.dump(geojson, tmp, ensure_ascii=False)
-        tmp.close()
-        return ingest_landuse(tmp.name, layer_type=layer_type, strict=strict)
-    finally:
-        Path(tmp.name).unlink(missing_ok=True)
 
 
 def result_to_features(
     result: DataResult,
     feature_type: str,
 ) -> Tuple[List[SpatialFeature], List[str]]:
-    """Convert a DataResult (geojson) to typed spatial features.
+    """将 DataResult（geojson）转换为类型化的空间要素。
 
-    Args:
-        result: DataResult from a file_vector / api_vector driver fetch.
-        feature_type: registry key (e.g. "current_annotation", "current_road")
-
-    Returns:
-        (features, warnings)
+    使用 FeaturesAdapter 直接解析内存中的字典，无需临时文件。
     """
     geojson = _geojson_from_result(result)
     if geojson is None:
         return [], [result.error or "no geojson data"]
 
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".geojson", delete=False, encoding="utf-8"
+    from .adapters import ADAPTERS
+    entry = _make_feature_entry(feature_type)
+    adapter_result = ADAPTERS["features"].load(geojson, entry)
+    return adapter_result.features, adapter_result.warnings
+
+
+def _make_feature_entry(feature_type: str) -> Any:
+    from app.modules.schema.types.layer_registry import GisLayerTypeEntry, IngestSpec
+    return GisLayerTypeEntry(
+        gis_type_ref=feature_type,
+        ingest=IngestSpec(adapter="features", feature_type=feature_type),
     )
-    try:
-        json.dump(geojson, tmp, ensure_ascii=False)
-        tmp.close()
-        return ingest_feature(tmp.name, feature_type)
-    finally:
-        Path(tmp.name).unlink(missing_ok=True)
 
 
 def result_to_raster(result: DataResult, raster_type: str = "dem"):
