@@ -273,17 +273,13 @@ class TestKGLayer1Construction:
         # Jintian has farmland_protection(88) + ecological_redline(5) + historical_protection(3)
 
     def test_layer1_parcel_relations_injected(self, kg_main, parcel_relations):
-        """L1 touches + L2 nearby relations from spatial_ops are in graph."""
-        # Query for touches relations
-        touches_count = 0
-        for s, _, _ in kg_main.g.triples((None, kg_main.g.namespace_manager.store.bind("pln", None, override=False) and None, None)):
-            break
+        """L1 sfTouches + L2 nearby relations from spatial_ops are in graph."""
         from rdflib import Namespace
         PLN = Namespace("http://village-planning.org/ontology#")
-        touches = list(kg_main.g.triples((None, PLN.touches, None)))
-        nearby = list(kg_main.g.triples((None, PLN.nearby, None)))
-        # At least some relations should have been injected
-        assert len(touches) > 0 or len(nearby) > 0
+        touches_count = 0
+        for s, _, _ in kg_main.g.triples((None, PLN.sfTouches, None)):
+            touches_count += 1
+        assert touches_count > 0, "No sfTouches relations in KG"
 
     def test_layer1_natural_villages(self, kg_main):
         """NaturalSettlement entities from RESIDENTIAL_CLUSTERS block."""
@@ -963,10 +959,10 @@ class TestKGStaticStructure:
         assert violations == [], f"KG imports from data layer:\n" + "\n".join(violations)
 
     def test_builder_subpackage_has_six_files(self):
-        """builder/ subpackage has the 6 expected files (queries.py merged into queries/sparql.py)."""
+        """builder/ subpackage has the 7 expected files (registry.py added in Phase 6)."""
         builder_dir = Path(_BACKEND_DIR) / "app" / "modules" / "kg" / "builder"
         expected = {"__init__.py", "base.py", "layer1.py", "layer2.py",
-                    "layer3.py", "layer4.py", "mixins.py"}
+                    "layer3.py", "layer4.py", "mixins.py", "registry.py"}
         actual = {f.name for f in builder_dir.glob("*.py")}
         assert expected.issubset(actual), f"Missing: {expected - actual}"
 

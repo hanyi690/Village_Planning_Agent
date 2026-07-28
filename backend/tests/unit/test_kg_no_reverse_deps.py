@@ -249,3 +249,22 @@ def test_build_from_bundle_with_planned_state():
         "PREFIX pln: <http://village-planning.org/ontology#> "
         'SELECT ?r WHERE { ?r a pln:PlannedRoad ; pln:in_version "v1" . }')
     assert len(rd) == 1
+
+
+def test_kg_builder_registry_present():
+    """registry.py exists in builder subpackage."""
+    import os
+    from pathlib import Path
+    registry_path = Path(__file__).resolve().parents[2] / "app" / "modules" / "kg" / "builder" / "registry.py"
+    assert registry_path.exists(), "registry.py not found in kg/builder/"
+
+
+def test_kg_builder_registry_no_reverse_deps():
+    """registry.py must not import from app.tools or app.agent."""
+    import re
+    from pathlib import Path
+    registry_path = Path(__file__).resolve().parents[2] / "app" / "modules" / "kg" / "builder" / "registry.py"
+    content = registry_path.read_text(encoding="utf-8")
+    pattern = re.compile(r'^\s*from app\.(tools|agent)')
+    violations = [line for line in content.split("\n") if pattern.match(line)]
+    assert violations == [], f"registry.py has reverse deps: {violations}"
