@@ -43,3 +43,16 @@ def test_no_add_structured_intent_shim():
     """_add_structured_intent legacy shim must be gone; use build_intent_layer."""
     from app.modules.kg.builder.mixins import Layer3Mixin
     assert not hasattr(Layer3Mixin, "_add_structured_intent")
+
+
+def test_sparql_no_deprecated_templates():
+    """DEPRECATED_TEMPLATES and FRAGMENT_TO_BINDING shim must be gone."""
+    from app.modules.kg.queries import sparql
+    assert not hasattr(sparql, "DEPRECATED_TEMPLATES")
+    assert not hasattr(sparql, "FRAGMENT_TO_BINDING")
+    # Deprecated template names should not be in QUERY_TEMPLATES
+    deprecated_names = {"get_protected_parcels_detail", "get_three_zones",
+                        "get_three_lines", "get_indicators"}
+    actual_names = set(sparql.QUERY_TEMPLATES.keys())
+    assert deprecated_names.isdisjoint(actual_names), \
+        f"Deprecated templates still present: {deprecated_names & actual_names}"

@@ -121,23 +121,13 @@ def build_knowledge_graph(
         pass
 
     # Phase 5: expanded queries — 三区三线 / VNE / 村锚点 / 保护详情
-    kg_protected_parcels_detail: List[Dict[str, Any]] = []
-    kg_three_zones: List[Dict[str, Any]] = []
-    kg_three_lines: List[Dict[str, Any]] = []
+    kg_constraint_coverage: List[Dict[str, Any]] = []
     kg_village_anchors: List[Dict[str, Any]] = []
     kg_vne_summary: List[Dict[str, Any]] = []
     kg_count_by_planning_zone: List[Dict[str, Any]] = []
 
     try:
-        kg_protected_parcels_detail = query_kg(kg, "get_protected_parcels_detail")
-    except Exception:
-        pass
-    try:
-        kg_three_zones = query_kg(kg, "get_three_zones")
-    except Exception:
-        pass
-    try:
-        kg_three_lines = query_kg(kg, "get_three_lines")
+        kg_constraint_coverage = kg.get_constraint_coverage()
     except Exception:
         pass
     try:
@@ -154,10 +144,9 @@ def build_knowledge_graph(
         pass
 
     logger.info(
-        "[KG] Expanded queries: %d protected parcels, %d three-zones, %d three-lines, "
+        "[KG] Expanded queries: %d parcels with constraint coverage, "
         "%d village anchors, %d VNE classes",
-        len(kg_protected_parcels_detail), len(kg_three_zones), len(kg_three_lines),
-        len(kg_village_anchors), len(kg_vne_summary),
+        len(kg_constraint_coverage), len(kg_village_anchors), len(kg_vne_summary),
     )
 
     return Command(update={
@@ -170,9 +159,9 @@ def build_knowledge_graph(
         "kg_version": 1,
         "kg_parcel_count_by_zone": kg_parcel_count_by_zone,
         "kg_protected_parcels": kg_protected_parcels,
-        "kg_protected_parcels_detail": kg_protected_parcels_detail,
-        "kg_three_zones": kg_three_zones,
-        "kg_three_lines": kg_three_lines,
+        "kg_protected_parcels_detail": kg_constraint_coverage,
+        "kg_three_zones": [],
+        "kg_three_lines": [],
         "kg_village_anchors": kg_village_anchors,
         "kg_vne_summary": kg_vne_summary,
         "kg_count_by_planning_zone": kg_count_by_planning_zone,
@@ -181,9 +170,7 @@ def build_knowledge_graph(
             "constraint_count": len(constraints),
             "cache_hit": cache_hit,
             "expanded_queries": {
-                "protected_parcels_detail": len(kg_protected_parcels_detail),
-                "three_zones": len(kg_three_zones),
-                "three_lines": len(kg_three_lines),
+                "constraint_coverage": len(kg_constraint_coverage),
                 "village_anchors": len(kg_village_anchors),
                 "vne_classes": len(kg_vne_summary),
             },

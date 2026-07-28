@@ -28,13 +28,6 @@ PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
 FRAGMENT_PARAMS: set = set()  # All templates migrated to initBindings
 
-DEPRECATED_TEMPLATES = {
-    "get_protected_parcels_detail": "Use get_constraint_coverage() instance method instead",
-    "get_three_zones": "Use get_constraint_coverage() instance method instead",
-    "get_three_lines": "Use get_constraint_coverage() instance method instead",
-    "get_indicators": "PlanningIndicator type removed in v4.6 — no replacement",
-}
-
 DEFAULT_VALUES = {
     "min_lon": "-180",
     "max_lon": "180",
@@ -51,22 +44,6 @@ QUERY_TEMPLATES = {
                   pln:name ?name ;
                   pln:restriction ?restriction .
         }
-    """,
-
-    "get_protected_parcels_detail": PREFIX + """
-        SELECT ?bsm ?dlbm ?zone_type ?area_ha ?protection_name ?protection_category
-        WHERE {
-            ?parcel a pln:Parcel ;
-                    pln:bsm ?bsm ;
-                    pln:dlbm ?dlbm ;
-                    pln:current_zone_type ?zone_type ;
-                    pln:area_ha ?area_ha ;
-                    pln:within_zone ?protection .
-            ?protection a pln:ThreeLine ;
-                        pln:name ?protection_name .
-            OPTIONAL { ?protection pln:source ?protection_category . }
-        }
-        ORDER BY ?protection_name ?bsm
     """,
 
     "check_protected_parcels": PREFIX + """
@@ -225,39 +202,6 @@ QUERY_TEMPLATES = {
         }
         GROUP BY ?type
         ORDER BY DESC(?count)
-    """,
-
-    # ── Three zones / three lines (DEPRECATED — use get_constraint_coverage) ──
-    "get_three_zones": PREFIX + """
-        SELECT ?zone_name (COUNT(?p) as ?parcel_count) (SUM(?area) as ?total_area_ha)
-        WHERE {
-            ?p a pln:Parcel ;
-               pln:planning_zone ?zone_name ;
-               pln:area_ha ?area .
-        }
-        GROUP BY ?zone_name
-        ORDER BY DESC(?total_area_ha)
-    """,
-
-    "get_three_lines": PREFIX + """
-        SELECT ?name ?code ?color ?area_target_ha
-        WHERE {
-            ?line a pln:ThreeLine ;
-                  pln:name ?name .
-            OPTIONAL { ?line pln:code ?code . }
-            OPTIONAL { ?line pln:color ?color . }
-            OPTIONAL { ?line pln:area_target_ha ?area_target_ha . }
-        }
-    """,
-
-    "get_indicators": PREFIX + """
-        SELECT ?name ?value ?source
-        WHERE {
-            ?i a pln:PlanningIndicator ;
-               pln:name ?name ;
-               pln:value ?value .
-            OPTIONAL { ?i pln:source ?source . }
-        }
     """,
 
     # ── Facilities & infrastructure ──
@@ -453,26 +397,10 @@ def query_kg(kg, template_name: str, **params) -> list:
     if template_name not in QUERY_TEMPLATES:
         return [{"error": f"Unknown template: {template_name}. Available: {list(QUERY_TEMPLATES.keys()) + list(SEMANTIC_QUERIES.keys())}"}]
 
-    if template_name in DEPRECATED_TEMPLATES:
-        logger.warning("[query_kg] Template '%s' is deprecated: %s",
-                       template_name, DEPRECATED_TEMPLATES[template_name])
-
     sparql = QUERY_TEMPLATES[template_name]
 
     for key, default_val in DEFAULT_VALUES.items():
         params.setdefault(key, default_val)
-
-    # Backward compat: map old fragment params to new binding keys
-    FRAGMENT_TO_BINDING = {
-        "type_filter": "facility_type",
-        "slope_filter": "slope_class",
-        "aspect_filter": "aspect_class",
-    }
-    for old_key, new_key in FRAGMENT_TO_BINDING.items():
-        if old_key in params and new_key not in params:
-            logger.warning("[query_kg] Deprecated param '%s' used; migrate to '%s'", old_key, new_key)
-            params[new_key] = params[old_key]
-            del params[old_key]
 
     bindings = {}
     for key, val in params.items():
@@ -509,7 +437,6 @@ TOOL_META = {
         + ", ".join(SEMANTIC_QUERIES.keys()) + ". "
         "Returns raw SPARQL results for: "
         + ", ".join(QUERY_TEMPLATES.keys()) + ". "
-        "DEPRECATED SPARQL: " + ", ".join(DEPRECATED_TEMPLATES.keys()) + ". "
         "SEMANTIC queries return a 'description' field with human-readable text. "
         "PREFER semantic queries when the LLM needs to reason about parcels, "
         "facilities, roads, or designated zones."

@@ -161,12 +161,9 @@ def main():
     for z in zt_stats:
         print(f"    {green('  ')}{z.get('zone_type', '?')}: {z.get('count', 0)} 地块, {z.get('total_area', 0)} ha")
 
-    # three_zones / three_lines
-    three_zones = query_kg(kg, "get_three_zones")
-    print(f"  {green('  kg_three_zones:')} {len(three_zones)} 条")
-
-    three_lines = query_kg(kg, "get_three_lines")
-    print(f"  {green('  kg_three_lines:')} {len(three_lines)} 条")
+    # three_zones / three_lines (deprecated templates -> get_constraint_coverage)
+    constraint_coverage = kg.get_constraint_coverage()
+    print(f"  {green('  kg_constraint_coverage:')} {len(constraint_coverage)} parcels with constraints")
 
     # village_anchors
     anchors = query_kg(kg, "get_village_anchors")

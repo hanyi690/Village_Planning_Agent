@@ -330,24 +330,17 @@ def run_kg_step(
         print(f"  [KG] WARNING: get_protected_parcels() failed: {e}", flush=True)
 
     # Phase 5: expanded KG query results
-    kg_protected_parcels_detail = []
-    kg_three_zones = []
-    kg_three_lines = []
+    # get_protected_parcels_detail / get_three_zones / get_three_lines were
+    # deprecated SPARQL templates; replaced by kg.get_constraint_coverage()
+    # (instance method backed by spatial ConstraintIndex).
+    from app.modules.kg.queries import query_kg
+    kg_constraint_coverage = []
     kg_village_anchors = []
     kg_vne_summary = []
     kg_count_by_planning_zone = []
 
     try:
-        from app.modules.kg.queries import query_kg
-        kg_protected_parcels_detail = query_kg(kg, "get_protected_parcels_detail")
-    except Exception:
-        pass
-    try:
-        kg_three_zones = query_kg(kg, "get_three_zones")
-    except Exception:
-        pass
-    try:
-        kg_three_lines = query_kg(kg, "get_three_lines")
+        kg_constraint_coverage = kg.get_constraint_coverage()
     except Exception:
         pass
     try:
@@ -376,9 +369,9 @@ def run_kg_step(
         "kg_turtle": kg.to_turtle() if hasattr(kg, "to_turtle") else "",
         "kg_instance": kg,
         # Phase 5: expanded query results
-        "kg_protected_parcels_detail": kg_protected_parcels_detail,
-        "kg_three_zones": kg_three_zones,
-        "kg_three_lines": kg_three_lines,
+        "kg_protected_parcels_detail": kg_constraint_coverage,
+        "kg_three_zones": [],
+        "kg_three_lines": [],
         "kg_village_anchors": kg_village_anchors,
         "kg_vne_summary": kg_vne_summary,
         "kg_count_by_planning_zone": kg_count_by_planning_zone,
@@ -395,8 +388,7 @@ def run_kg_step(
     if kg_protected_parcels:
         print(f"  [KG] Protected parcels: {len(kg_protected_parcels)}", flush=True)
     print(
-        f"  [KG] Expanded: {len(kg_protected_parcels_detail)} protected_detail, "
-        f"{len(kg_three_zones)} three_zones, {len(kg_three_lines)} three_lines, "
+        f"  [KG] Expanded: {len(kg_constraint_coverage)} constraint_coverage, "
         f"{len(kg_village_anchors)} anchors, {len(kg_vne_summary)} VNE classes",
         flush=True,
     )

@@ -132,7 +132,6 @@ def main():
         "get_parcels_by_zone_type": 0, # needs zone_type param
         "count_by_zone_type": 1,
         "get_zone_restrictions": 0,
-        "get_indicators": 0,
         "check_protected_parcels": 1,
         "get_adjacent_parcels": 1,
         "get_all_projects": 0,
@@ -153,12 +152,9 @@ def main():
         "count_by_vne": 1,                     # Should have VNE classes
         "count_by_planning_zone": 1,           # Should have planning zones
         "get_facilities_by_type": 1,           # Should have facilities
-        "get_protected_parcels_detail": 0,     # Depends on spatial containment
         "get_parcels_near_point": 0,           # Needs coordinate params
 
         # === NEW P1 templates ===
-        "get_three_zones": 1,                  # Should have 三区 data
-        "get_three_lines": 1,                  # Should have 三线 data
         "get_village_anchors": 1,              # Should have village anchors
 
         # === NEW P2 templates (reserved — should run without error) ===
@@ -246,17 +242,11 @@ def main():
         ok = isinstance(data, list) and len(data) > 0
         tests.append(("count_by_vne", ok, f"{len(data)} VNE classes"))
 
-        # Test 3: get_three_zones
-        r = await _execute_tool_call("query_village_kg", {"template_name": "get_three_zones"})
-        data = json.loads(r)
-        ok = isinstance(data, list)
-        tests.append(("get_three_zones", ok, f"{len(data)} zones"))
+        # Test 3: get_constraint_coverage (replaces deprecated get_three_zones/lines/protected_parcels_detail)
+        cov = kg.get_constraint_coverage()
+        ok = isinstance(cov, list)
+        tests.append(("get_constraint_coverage", ok, f"{len(cov)} parcels with constraints"))
 
-        # Test 4: get_three_lines
-        r = await _execute_tool_call("query_village_kg", {"template_name": "get_three_lines"})
-        data = json.loads(r)
-        ok = isinstance(data, list)
-        tests.append(("get_three_lines", ok, f"{len(data)} lines"))
 
         # Test 5: get_village_anchors
         r = await _execute_tool_call("query_village_kg", {"template_name": "get_village_anchors"})
@@ -269,12 +259,6 @@ def main():
         data = json.loads(r)
         ok = isinstance(data, list) and len(data) > 0
         tests.append(("get_facilities_by_type", ok, f"{len(data)} facilities"))
-
-        # Test 7: get_protected_parcels_detail
-        r = await _execute_tool_call("query_village_kg", {"template_name": "get_protected_parcels_detail"})
-        data = json.loads(r)
-        ok = isinstance(data, list)
-        tests.append(("get_protected_parcels_detail", ok, f"{len(data)} protected parcels"))
 
         # Test 8: get_road_network (optimized — check road_level field)
         r = await _execute_tool_call("query_village_kg", {"template_name": "get_road_network"})
