@@ -130,7 +130,7 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
             features = _get_bundle_features(bundle, entry)
             if not features:
                 continue
-            report = builder_fn(self, features, gis_type_ref=gis_type_ref, entry=entry, ctx=ctx)
+            report = builder_fn(self, features, gtype_ref=gis_type_ref, entry=entry, ctx=ctx)
             if report and isinstance(report, dict):
                 logger.debug("[registry] %s: %s", gis_type_ref, report)
 

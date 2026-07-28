@@ -12,6 +12,7 @@ import pytest
 from rdflib import Literal, RDF, Namespace
 
 from app.modules.kg.ontology import PLN, EntityTypes, EntityIdPolicy
+from app.modules.kg.builder.registry import BuildContext
 
 PLN_NS = Namespace("http://village-planning.org/ontology#")
 
@@ -101,7 +102,8 @@ def kg_test():
         CurrentRoad(geometry=line_geom, bsm="R001", road_level="村道", shape_length=500.0),
         CurrentRoad(geometry=line_geom, bsm="R002", road_level="主干道", shape_length=1200.0),
     ]
-    kg.add_roads(roads)
+    kg.add_roads(roads, gtype_ref="current_road", entry=None,
+                  ctx=BuildContext(village_name="test", provenance={}))
 
     # Add facilities (with BSM)
     facilities = [

@@ -323,7 +323,7 @@ def _add_parcels(self, parcels) -> None:
 
 
 @kg_builder("water", entity_type="WaterBody")
-def _add_water_bodies(self, features, *, gis_type_ref: str, entry, ctx: BuildContext) -> dict:
+def _add_water_bodies(self, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict:
     water_overlap = ctx.provenance.get("water_overlap", {})
     covered_bsms = set()
     for bsm_list in water_overlap.values():
@@ -563,7 +563,7 @@ def add_annotations(self, annotations: list):
 
 
 @kg_builder("current_road", entity_type="Road")
-def add_roads(self, features, *, gis_type_ref: str, entry, ctx: BuildContext) -> dict:
+def add_roads(self, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict:
     count = 0
     for road in features:
         bsm = str(getattr(road, "bsm", "")).strip()
@@ -932,7 +932,7 @@ def _add_protection_polygons(self, polygons_layer) -> None:
 
 
 @kg_builder("current_building", entity_type="Building")
-def _add_buildings(self, features, *, gis_type_ref: str, entry, ctx: BuildContext) -> dict:
+def _add_buildings(self, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict:
     """Create Facility entities from bundle.points.buildings."""
     count = 0
     for i, b in enumerate(features):
