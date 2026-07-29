@@ -1,34 +1,51 @@
 # 架构文档导航
 
-本目录包含 Village Planning Agent 系统的完整架构文档。
+本目录包含 Village Planning Agent 系统的架构文档。
 
-> **更新日期**: 2026-07-28
-> **版本**: v4.8.1 (统一架构)
->
-> **注**: 本导航文档的目录结构已对齐 v4.8.1 的 `app/modules/{schema,data,spatial_ops,kg}` 四层模块结构。早期文档（01-14）可能仍引用旧的 `services/modules/gis/` 路径，以本节模块结构为准。
+> **更新日期**: 2026-07-29（归档重组）
+> **模块结构**: `app/modules/{schema,data,spatial_ops,kg}` 四层架构
+
+---
 
 ## 文档结构
 
 ```
 docs/architecture/
-├── README.md                     # 本文档 - 总览与导航入口
-├── 01-system-overview.md         # 系统架构总览
-├── 02-agent-core.md              # Agent核心架构
-├── 03-layer-dimension.md         # 层级与28维度配置
-├── 04-backend-api.md             # 后端API与SSE架构
-├── 05-frontend-state.md          # 前端状态管理
-├── 06-tool-system.md             # 工具系统架构
-├── 08-rag-system.md              # RAG知识库架构
-├── 09-database-schema.md         # 数据库Schema
-├── 10-deployment-guide.md        # 配置与部署指南
-├── 10-frontend-components.md     # 前端组件架构
-├── 12-error-handling.md          # 错误处理
-├── 13-performance.md             # 性能优化
-├── 14-testing.md                 # 测试架构
-├── terminology.md                # 术语表
-├── file-index.md                 # 文件路径索引
-└── gis-system-architecture.md    # GIS系统架构
+├── README.md                                    # 本文档 — 导航入口
+│
+├── core/                                        # 核心架构（6篇）
+│   ├── 05-frontend-state.md                     # 前端状态管理（唯一前端架构文档）
+│   ├── 01-system-overview.md                    # [DEPRECATED] 系统总览
+│   ├── 02-agent-core.md                         # [DEPRECATED] Agent 核心
+│   ├── 03-layer-dimension.md                    # [DEPRECATED] 维度配置
+│   ├── 04-backend-api.md                        # [DEPRECATED] 后端 API
+│   └── 06-tool-system.md                        # [DEPRECATED] 工具系统
+│
+├── infrastructure/                              # 基础设施（4篇）
+│   ├── 08-rag-system.md                         # RAG 知识检索系统
+│   ├── 10-deployment-guide.md                   # 配置与部署指南
+│   ├── 09-database-schema.md                    # [DEPRECATED] 数据库 Schema
+│   └── 12-error-handling.md                     # [DEPRECATED] 错误处理
+│
+├── quality/                                     # 质量保障（2篇）
+│   ├── 13-performance.md                        # [DEPRECATED] 性能优化
+│   └── 14-testing.md                            # [DEPRECATED] 测试架构
+│
+├── reference/                                   # 参考资料（3篇）
+│   ├── terminology.md                           # 术语表
+│   ├── gis-cross-reference.md                   # GIS 子系统交叉引用
+│   └── file-index.md                            # [DEPRECATED] 文件路径索引
+│
+├── explorations/                                # 探索方案（1篇）
+│   └── RAG_DIFFERENTIATED_CHUNKING_AND_RETRIEVAL.md
+│
+└── archive/                                     # 历史归档（1篇）
+    └── 10-frontend-components.md                # 已被 05 覆盖
 ```
+
+> 标记 `[DEPRECATED]` 的文档已添加过时警告横幅。当前架构以本文档和模块 README 为准。
+
+---
 
 ## 核心架构概览
 
@@ -40,165 +57,94 @@ village-planner/
 │   ├── app/
 │   │   ├── main.py              # FastAPI 入口
 │   │   ├── api/                 # API 路由层
-│   │   │   ├── routes.py        # 统一路由
-│   │   │   ├── session_routes.py # API端点
-│   │   │   └── schemas.py       # 请求/响应模型
 │   │   ├── agent/               # LangGraph Agent
 │   │   │   ├── graph.py         # StateGraph 定义
 │   │   │   ├── state.py         # AgentState 定义
 │   │   │   ├── routing.py       # 路由逻辑
-│   │   │   └── nodes/           # 节点实现
+│   │   │   ├── nodes/           # 节点实现
+│   │   │   └── gis/             # GIS Agent (PARSE + EXECUTE)
 │   │   ├── config/              # 配置层
-│   │   │   ├── phases.yaml      # 28维度配置（唯一来源）
-│   │   │   ├── loader.py        # YAML 加载器
-│   │   │   └── dependency.py    # 依赖计算
 │   │   ├── core/                # 核心基础设施
-│   │   │   ├── settings.py      # 配置管理
-│   │   │   ├── llm.py           # LLM 工厂
-│   │   │   └── events.py        # SSE 事件类型
 │   │   ├── database/            # 数据持久层
-│   │   │   ├── models.py        # SQLModel 定义
-│   │   │   └── operations.py    # 数据库操作
-│   │   ├── modules/             # [v4.8.1] 业务模块（四层架构）
+│   │   ├── modules/             # 业务模块（四层架构）
 │   │   │   ├── schema/          # 类型契约层（零依赖）
-│   │   │   │   ├── types/       # Pydantic v2 typed models + layer_registry
-│   │   │   │   ├── encodings/   # 编码体系 (6套 YAML + DictionaryCenter)
-│   │   │   │   ├── contracts/   # 跨层契约 (parse/execution/validation/layout/context)
-│   │   │   │   └── output/      # 汇交输出 (gdb/tables/colors)
+│   │   │   │   ├── types/       # Pydantic v2 类型化模型 + layer_registry
+│   │   │   │   ├── encodings/   # 编码体系（6 套 YAML + DictionaryCenter）
+│   │   │   │   ├── contracts/   # 跨层契约
+│   │   │   │   └── output/      # 汇交输出（gdb/tables/colors）
 │   │   │   ├── data/            # 数据获取与管理层
 │   │   │   │   ├── catalog/     # DataCatalog + sources.yaml
-│   │   │   │   ├── sources/     # DataSourceDriver (file_vector/api_vector/wmts/local_raster/...)
-│   │   │   │   ├── connections/ # API 连接管理 (tianditu/amap/osm)
-│   │   │   │   ├── adapters/    # Ingest adapters (parcels/features/raster/table/document)
-│   │   │   │   ├── documents/   # 文档加载
-│   │   │   │   └── ingest.py    # raw -> typed models
-│   │   │   ├── spatial_ops/     # 空间分析层（shapely/geopandas 权威）
-│   │   │   │   ├── geometry.py  # compute_parcel_relations
-│   │   │   │   ├── bridge.py    # ConstraintIndex + compute_cross_type_relations
-│   │   │   │   └── context.py   # compute_context_blocks
+│   │   │   │   ├── sources/     # DataSourceDriver
+│   │   │   │   ├── connections/ # API 连接管理
+│   │   │   │   ├── adapters/    # Ingest adapters
+│   │   │   │   └── ingest.py    # raw → typed models
+│   │   │   ├── spatial_ops/     # 空间分析层（shapely/geopandas）
+│   │   │   │   ├── geometry.py  # 几何计算
+│   │   │   │   ├── bridge.py    # ConstraintIndex + 跨类型关系
+│   │   │   │   └── context.py   # ContextBlock 计算
 │   │   │   └── kg/              # 知识图谱层（rdflib）
-│   │   │       ├── builder/     # @kg_builder registry + PlanningKG.build_from_bundle
-│   │   │       ├── queries/     # SPARQL templates + semantic + cognition (四命名空间 API)
-│   │   │       ├── ontology.py  # PLN/GEO namespace + EntityTypes + EntityIdPolicy
-│   │   │       ├── manager.py   # KGManager (三层缓存)
+│   │   │       ├── builder/     # @kg_builder 注册表 + PlanningKG
+│   │   │       ├── queries/     # SPARQL + semantic + cognition
+│   │   │       ├── ontology.py  # PLN/GEO 命名空间 + EntityTypes
+│   │   │       ├── manager.py   # KGManager（三层缓存）
 │   │   │       └── memory.py    # SemanticMemoryStore
 │   │   ├── services/            # 服务层
-│   │   │   ├── sse.py           # SSE Manager
-│   │   │   ├── runtime.py       # 规划运行时
-│   │   │   └── checkpoint.py    # 检查点服务
 │   │   ├── tools/               # 工具层
-│   │   │   ├── registry.py      # 工具注册中心
-│   │   │   ├── constants.py     # 工具常量
-│   │   │   ├── adapters/        # 外部适配器
-│   │   │   ├── core/            # 核心工具
-│   │   │   └── analytics/       # 分析工具
 │   │   └── utils/               # 工具函数
-│   ├── schemas.py               # Pydantic schemas
-│   └── village_planning.db      # SQLite 数据库
+│   └── schemas.py
 │
 ├── frontend/
 │   └── src/
 │       ├── app/                 # Next.js App Router
-│       │   ├── layout.tsx
-│       │   └── page.tsx
 │       └── features/
 │           └── planning/        # 规划功能模块
 │               ├── api/         # API 客户端
 │               ├── components/  # React 组件
-│               ├── config/      # 前端配置
-│               ├── constants/   # 常量定义
 │               ├── hooks/       # React Hooks
 │               ├── store/       # Zustand Store
 │               ├── types/       # TypeScript 类型
 │               └── utils/       # 工具函数
 │
 ├── data/
-│   ├── RAG_doc/                  # 知识库文档与缓存
-│   └── database/                 # SQLite 数据库文件
+│   ├── RAG_doc/                 # 知识库文档与缓存
+│   └── gis/                     # GIS 数据
 │
-├── scripts/                     # 脚本工具
-├── docs/                        # 文档
-└── tests/                       # 测试
+├── docs/
+│   ├── architecture/            # 架构文档（本目录）
+│   └── gis/                     # GIS 子系统设计文档
+│
+└── tests/
 ```
+
+---
 
 ## 快速导航
 
-| 文档 | 核心内容 | 关键文件 |
-|------|----------|----------|
-| [01-system-overview](./01-system-overview.md) | 五层架构、技术栈 | `main.py`, `layout.tsx` |
-| [02-agent-core](./02-agent-core.md) | StateGraph、节点、路由 | `agent/graph.py`, `routing.py` |
-| [03-layer-dimension](./03-layer-dimension.md) | 28维度、依赖配置 | `config/phases.yaml` |
-| [04-backend-api](./04-backend-api.md) | API端点、SSE | `api/session_routes.py` |
-| [05-frontend-state](./05-frontend-state.md) | Zustand、组件 | `store/planningStore.ts` |
-| [06-tool-system](./06-tool-system.md) | 工具注册、执行 | `tools/registry.py` |
-| [08-rag-system](./08-rag-system.md) | 知识检索 | `services/modules/rag/` |
-| [09-database-schema](./09-database-schema.md) | 数据模型 | `database/models.py` |
-| [10-deployment-guide](./10-deployment-guide.md) | 配置部署 | `.env`, `docker-compose.yml` |
-| [10-frontend-components](./10-frontend-components.md) | 前端组件 | `components/` |
-| [12-error-handling](./12-error-handling.md) | 错误处理 | - |
-| [13-performance](./13-performance.md) | 性能优化 | - |
-| [14-testing](./14-testing.md) | 测试架构 | - |
+| 文档 | 核心内容 | 状态 |
+|------|----------|------|
+| [core/05-frontend-state](./core/05-frontend-state.md) | Zustand、三栏布局、SSE 批处理 | 活跃 |
+| [infrastructure/08-rag-system](./infrastructure/08-rag-system.md) | 知识检索、层级切片、Small-to-Big | 活跃 |
+| [infrastructure/10-deployment-guide](./infrastructure/10-deployment-guide.md) | 配置部署、Docker、LLM（qwen3.5-plus） | 活跃 |
+| [reference/terminology](./reference/terminology.md) | 术语定义、SSE 事件类型、命名约定 | 活跃 |
+| [reference/gis-cross-reference](./reference/gis-cross-reference.md) | GIS 子系统入口索引 | 活跃 |
 
-## 核心概念速查
+> `[DEPRECATED]` 文档仅作历史参考，包含技术决策演进记录。
 
-### 三层规划架构
+---
 
-| 层级 | 名称 | 维度数 | 执行模式 |
-|------|------|--------|----------|
-| Layer 1 | 现状分析 | 12 | 并行（Send API） |
-| Layer 2 | 规划思路 | 4 | 波次（依赖驱动） |
-| Layer 3 | 详细规划 | 12 | 波次（依赖驱动） |
+## 关键设计决策
 
-### 五层技术架构
-
-```
-┌─────────────────────────────────────────────────────┐
-│  用户层 (React + Zustand + Next.js)                  │
-│    ↓ SSE EventSource                                 │
-├─────────────────────────────────────────────────────┤
-│  后端层 (FastAPI + SSEManager)                       │
-│    ↓ 22个API端点                                     │
-├─────────────────────────────────────────────────────┤
-│  Agent层 (LangGraph StateGraph)                      │
-│    ↓ conversation → execute_tools → analyze_dimension → layer_completion_check │
-├─────────────────────────────────────────────────────┤
-│  工具层 (ToolRegistry + Adapters)                    │
-│    ↓ GIS / RAG / Analysis                            │
-├─────────────────────────────────────────────────────┤
-│  数据层 (SQLite + ChromaDB + 文件)                   │
-└─────────────────────────────────────────────────────┘
-```
-
-### 核心API端点
-
-| 端点 | 方法 | 功能 |
-|------|------|------|
-| `/api/sessions` | POST | 创建会话 |
-| `/api/sessions/{id}/stream` | GET | SSE事件流 |
-| `/api/sessions/{id}/sync` | GET | 断线重连 |
-| `/api/sessions/{id}/feedback` | POST | 反馈/审批 |
-| `/api/sessions/{id}/checkpoints` | GET | 检查点列表 |
-| `/api/sessions/{id}/resume/{cp}` | POST | 恢复执行 |
-| `/api/sessions/{id}/reports/{dim}` | GET | 报告全文 |
-| `/api/sessions/{id}/step-mode` | PATCH | 切换步进模式 |
-| `/api/sessions/{id}/planning-text` | POST/GET | 生成/获取规划文本 |
-| `/api/sessions/{id}/planning-text/versions` | GET | 版本列表 |
-| `/api/sessions/{id}/export` | POST | 导出文档 |
-
-> 完整端点列表见 [04-backend-api.md](./04-backend-api.md)
-
-### 关键设计原则
-
-| 原则 | 说明 | 实现位置 |
+| 决策 | 结论 | 确认日期 |
 |------|------|----------|
-| SSOT | Checkpoint是状态唯一来源 | LangGraph AsyncSqliteSaver |
-| 配置驱动 | 维度配置从YAML加载 | `config/phases.yaml` |
-| Send API | N维度并行分析 | `routing.py` |
-| 依赖驱动 | 同层依赖按波次执行 | `config/dependency.py` |
-| SSE单通道 | 所有数据通过SSE推送 | `services/sse.py` |
+| 默认 LLM | qwen3.5-plus（阿里云 DashScope） | 2026-07-29 |
+| 前端架构文档 | 以 `05-frontend-state.md` 为唯一来源 | 2026-07-29 |
+| 版本体系 | 放弃独立版本号，统一用日期标记 | 2026-07-29 |
+| 模块路径 | `app/modules/{schema,data,spatial_ops,kg}` | 持续 |
+
+---
 
 ## 相关资源
 
-- [术语表](./terminology.md) - 所有术语定义
-- [文件路径索引](./file-index.md) - 关键代码路径
-- [项目开发规范](../../.claude.md) - 项目开发规范
+- [GIS 子系统文档](../gis/INDEX.md) — GIS 设计、审计、集成、重构提案
+- [术语表](./reference/terminology.md) — 所有术语定义
+- [GIS 交叉引用](./reference/gis-cross-reference.md) — architecture ↔ gis 桥梁
