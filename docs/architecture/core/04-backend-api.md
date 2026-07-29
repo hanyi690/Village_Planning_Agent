@@ -1,0 +1,990 @@
+> [!WARNING] **DEPRECATED — 历史参考**
+> 部分 API 端点、路径已过时。当前 API 以 [README.md](../README.md) 为准。
+
+# 后端 API 架构
+
+本文档详细说明后端 API 路由结构和 SSE 管理机制。
+
+> **更新日期**: 2026-07-08
+> **版本**: v4.0 (LangGraph 1.2 interrupt/resume)
+
+## 目录
+
+- [API 端点一览](#api-端点一览)
+- [核心端点详解](#核心端点详解)
+- [数据模型](#数据模型)
+- [SSE 事件流](#sse-事件流)
+- [关键文件路径](#关键文件路径)
+
+---
+
+## API 端点一览
+
+### Session 端点（核心）
+
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `/api/sessions` | POST | 创建规划会话 |
+| `/api/sessions/{id}/stream` | GET | SSE 事件流 |
+| `/api/sessions/{id}/sync` | GET | 断线重连同步 |
+| `/api/sessions/{id}/status` | GET | 会话状态查询 |
+| `/api/sessions/{id}/feedback` | POST | 反馈接口（审批/修订/对话） |
+| `/api/sessions/{id}/checkpoints` | GET | 检查点列表 |
+| `/api/sessions/{id}/resume/{checkpoint_id}` | POST | 从检查点恢复 |
+| `/api/sessions/{id}/reports/{dim_key}` | GET | 维度报告全文（支持 `?version=N` 查历史版本） |
+| `/api/sessions/{id}/reports/{dim_key}/versions` | GET | 维度版本历史摘要列表 |
+| `/api/sessions/{id}/layer/{layer}/reports` | GET | 层级报告批量获取 |
+| `/api/sessions/{id}/rag-config` | GET | 获取 RAG 配置 |
+| `/api/sessions/{id}/rag-config` | PATCH | 更新 RAG 配置 |
+| `/api/sessions/{id}/step-mode` | PATCH | 切换步进模式 |
+| `/api/sessions/{id}` | DELETE | 删除会话 |
+
+### 规划文本端点
+
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `/api/sessions/{id}/planning-text` | POST | 生成规划文本 |
+| `/api/sessions/{id}/planning-text` | GET | 获取最新规划文本 |
+| `/api/sessions/{id}/planning-text/versions` | GET | 版本列表 |
+| `/api/sessions/{id}/planning-text/versions/{version}` | GET | 获取指定版本 |
+| `/api/sessions/{id}/export` | POST | 导出文档（DOCX/JSON/MD） |
+
+### 项目端点
+
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `/api/projects` | GET | 项目列表（含会话统计） |
+| `/api/projects/{name}/sessions` | GET | 指定项目的所有会话 |
+| `/api/projects/{name}/reports/{dim_key}` | GET | 按项目名跨会话查询报告 |
+
+### 导出端点
+
+> 导出功能已整合到 Session 端点中，详见上方「规划文本端点」和 `/api/sessions/{id}/export`。
+
+### 基础端点
+
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `/api/health` | GET | 服务健康检查 |
+
+---
+
+## 核心端点详解
+
+### 1. 创建会话
+
+```python
+# backend/app/api/session_routes.py
+@router.post("/api/sessions", response_model=SessionCreateResponse)
+async def create_session(
+    background_tasks: BackgroundTasks,
+    project_name: str = Form(..., description="项目名称"),
+    village_name: str = Form("", description="村庄名称"),
+    task_description: str = Form("制定村庄发展规划", description="任务描述"),
+    constraints: str = Form("无特殊约束", description="约束条件"),
+    step_mode: bool = Form(False, description="分步执行模式"),
+    rag_enabled: bool = Form(True, description="启用 RAG 知识检索"),
+    village_data: str = Form("", description="村庄基础数据（文本）"),
+    village_data_files: List[UploadFile] = File(None, description="村庄数据文件"),
+    task_files: List[UploadFile] = File(None, description="任务描述文件"),
+    constraint_files: List[UploadFile] = File(None, description="约束条件文件"),
+):
+    """创建新规划会话 - 支持 multipart/form-data 文件上传（按来源区分）"""
+```
+
+**请求方式**: `multipart/form-data`（不是 JSON）
+
+**请求参数**：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `project_name` | str (Form) | 是 | 项目名称 |
+| `village_data` | str (Form) | 否 | 村庄基础数据文本（可与文件并存，会合并） |
+| `village_name` | str (Form) | 否 | 村庄名称 |
+| `task_description` | str (Form) | 否 | 任务描述（默认"制定村庄发展规划"） |
+| `constraints` | str (Form) | 否 | 约束条件（默认"无特殊约束"） |
+| `step_mode` | bool (Form) | 否 | 分步执行模式 |
+| `rag_enabled` | bool (Form) | 否 | 启用 RAG 知识检索（默认 True） |
+| `village_data_files` | File[] | 否 | 村庄数据文件（docx/pdf/txt 等，内容合并到 village_data） |
+| `task_files` | File[] | 否 | 任务描述文件（覆盖 task_description 文本） |
+| `constraint_files` | File[] | 否 | 约束条件文件（覆盖 constraints 文本） |
+
+**文件处理流程**：
+
+1. 上传文件保存到 `data/uploads/{session_id}/` 目录
+2. 文档类文件（docx/pdf/txt/md 等）通过 `MarkItDownLoader` 提取文本：
+   - `village_data_files` → 文本追加到 `village_data`
+   - `task_files` → 文本覆盖 `task_description`
+   - `constraint_files` → 文本覆盖 `constraints`
+3. 生成 `UploadedFileMeta` 列表传入初始状态
+4. 验证合并后的 `village_data` ≥ 10 字符
+
+**数据验证**：合并后 `village_data` 必须 ≥ 10 字符，否则返回 400
+
+---
+
+### 2. SSE 事件流
+
+```python
+@router.get("/api/sessions/{session_id}/stream")
+async def stream_events(session_id: str):
+    """SSE 事件流端点"""
+    # 会话不存在时尝试从数据库重建
+    if not sse_manager.session_exists(session_id):
+        rebuilt = await checkpoint_service.rebuild_session_from_db(
+            session_id, get_planning_session_async, sse_manager
+        )
+        if not rebuilt:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    async def event_generator():
+        queue = await PlanningRuntimeService.subscribe_with_history(session_id)
+        try:
+            yield sse_manager.format_sse({
+                "type": "connected",
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat()
+            })
+
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    if event.get("type") in ["completed", "error"]:
+                        yield sse_manager.format_sse(event)
+                        break
+                    yield sse_manager.format_sse(event)
+                except asyncio.TimeoutError:
+                    yield sse_manager.format_sse({
+                        "type": "heartbeat",
+                        "timestamp": datetime.now().isoformat()
+                    })
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await sse_manager.unsubscribe(session_id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"}
+    )
+```
+
+**SSE 消息格式**：
+
+```
+event: {type}
+data: {"type": "...", "session_id": "...", ...}
+
+```
+
+---
+
+### 3. 断线重连同步
+
+```python
+@router.get("/api/sessions/{session_id}/sync")
+async def sync_events(session_id: str, from_seq: int = 0):
+    """断线重连同步端点"""
+    if not sse_manager.session_exists(session_id):
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    events = sse_manager.get_events_from_seq(session_id, from_seq)
+    return {
+        "events": events,
+        "last_seq": sse_manager.get_last_seq(session_id),
+        "from_seq": from_seq
+    }
+```
+
+**重连流程**（串行化，消除竞争）：
+
+1. SSE 断开 → 前端记录 `last_seq`
+2. 重连时串行执行：
+   - **先** `GET /api/sessions/{id}/status` → 获取基准状态（phase, reports 等）
+   - **再** `GET /api/sessions/{id}/sync?from_seq={last_seq}` → 追补遗漏的增量事件
+3. SSE 重连 → 继续实时流
+
+---
+
+### 4. 反馈接口（整合端点）
+
+```python
+class FeedbackRequest(BaseModel):
+    """反馈请求"""
+    feedback: Optional[str] = Field(None, description="反馈内容")
+    dimensions: Optional[List[str]] = Field(None, description="需修订的维度列表")
+    message: Optional[str] = Field(None, description="对话消息")
+    approve: bool = Field(False, description="批准当前层级继续")
+
+
+@router.post("/api/sessions/{session_id}/feedback")
+async def submit_feedback(session_id: str, request: FeedbackRequest):
+    """提交反馈"""
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+
+    # 审批：通过 resume_from_interrupt 恢复执行
+    if request.approve:
+        current_phase = state.get("phase", "layer1")
+        next_phase = get_next_phase(current_phase)
+
+        # 使用 LangGraph 官方 interrupt/resume 模式
+        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+            session_id,
+            resume_data={"action": "approve"},
+        ))
+        return {"status": "approved", "next_phase": next_phase}
+
+    # 修订：通过 resume_from_interrupt 触发级联重分析
+    if request.feedback and request.dimensions:
+        # 计算影响树
+        final_tree = _compute_impact_tree(request.dimensions, state)
+
+        asyncio.create_task(PlanningRuntimeService.resume_from_interrupt(
+            session_id,
+            resume_data={
+                "action": "reject",
+                "feedback": request.feedback,
+                "dimensions": request.dimensions,
+            },
+            state_updates={
+                "revision_impact_tree": final_tree,
+                "revision_completed_dims": {},
+            },
+        ))
+        return {"status": "revision_started", "dimensions": request.dimensions}
+
+    # 对话：追加消息到会话
+    if request.message:
+        # 检测 interrupt 状态，选择恢复或注入模式
+        is_interrupted = snapshot.next and len(snapshot.next) > 0
+        if is_interrupted:
+            await PlanningRuntimeService.resume_from_interrupt(session_id,
+                resume_data={"action": "message_injected", "message": request.message},
+                state_updates={"messages": [HumanMessage(content=request.message)]},
+            )
+        else:
+            # 图未暂停：aupdate_state + 触发执行
+            await PlanningRuntimeService.aupdate_state(session_id, {
+                "messages": [HumanMessage(content=request.message)]
+            }, as_node="__start__")
+            asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+        return {"status": "message_accepted"}
+
+    return {"status": "no_action"}
+```
+
+**三种反馈模式**：
+
+| 模式 | 参数组合 | 说明 |
+|------|----------|------|
+| 审批 | `approve=true` | 批准当前层级，继续执行 |
+| 修订 | `feedback + dimensions` | 触发指定维度级联重分析 |
+| 对话 | `message` | 追加用户消息到会话 |
+
+---
+
+### 5. 检查点列表
+
+```python
+@router.get("/api/sessions/{session_id}/checkpoints")
+async def get_checkpoints(session_id: str):
+    """获取检查点列表"""
+    checkpoints = []
+    async for snapshot in PlanningRuntimeService.aget_state_history(session_id):
+        checkpoint_id = snapshot.config.get("configurable", {}).get("checkpoint_id", "")
+        values = dict(snapshot.values) if snapshot.values else {}
+        checkpoints.append({
+            "checkpoint_id": checkpoint_id,
+            "phase": values.get("phase", "init"),
+            "layer": values.get("previous_layer", 0),
+        })
+    return {"session_id": session_id, "checkpoints": checkpoints, "count": len(checkpoints)}
+```
+
+---
+
+### 6. 从检查点恢复
+
+```python
+@router.post("/api/sessions/{session_id}/resume/{checkpoint_id}")
+async def resume_from_checkpoint(session_id: str, checkpoint_id: str):
+    """从检查点恢复"""
+    target_state = None
+    async for snapshot in PlanningRuntimeService.aget_state_history(session_id):
+        if snapshot.config.get("configurable", {}).get("checkpoint_id", "") == checkpoint_id:
+            target_state = snapshot
+            break
+
+    if not target_state:
+        raise HTTPException(status_code=404, detail=f"Checkpoint not found: {checkpoint_id}")
+
+    layer = target_state.values.get("previous_layer", 1) or 1
+    sse_manager.append_event(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id, "layer": layer})
+    sse_manager.publish_sync(session_id, {"type": "resumed", "checkpoint_id": checkpoint_id})
+
+    asyncio.create_task(PlanningRuntimeService._trigger_planning_execution(session_id))
+    return {"status": "resumed", "checkpoint_id": checkpoint_id, "layer": layer}
+```
+
+---
+
+### 7. 维度报告全文
+
+```python
+@router.get("/api/sessions/{session_id}/reports/{dim_key}")
+async def get_dimension_report(session_id: str, dim_key: str, version: Optional[int] = None):
+    """获取维度报告全文，支持历史版本查询（?version=N）"""
+    # 查历史版本：通过 DimensionReport 的 version 字段
+    if version is not None:
+        report = await report_store.get_report_by_version(
+            session_id=session_id, dimension_key=dim_key, version=version
+        )
+        if report:
+            return {
+                "session_id": session_id,
+                "dimension_key": dim_key,
+                "layer": report.get("layer"),
+                "content": report.get("content"),
+                "version": version,
+            }
+        raise HTTPException(status_code=404, detail=f"Version {version} not found for dimension: {dim_key}")
+
+    # 默认：从数据库获取最新版本
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    # 从数据库获取报告（ReportStore -> DimensionReport 表）
+    content, layer, _ = await _get_report_from_db(session_id, dim_key)
+    return {
+        "session_id": session_id,
+        "dimension_key": dim_key,
+        "layer": layer,
+        "content": content
+    }
+```
+
+**查询参数**：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `version` | int (query) | 否 | 历史版本号，不传则返回数据库中最新版本 |
+
+---
+
+### 8. 维度版本历史列表
+
+```python
+@router.get("/api/sessions/{session_id}/reports/{dim_key}/versions")
+async def get_dimension_report_versions(session_id: str, dim_key: str):
+    """列出指定维度所有历史版本摘要（不含完整内容）"""
+    revisions = await report_store.get_reports_by_dimension(
+        session_id=session_id, dimension_key=dim_key
+    )
+    if not revisions:
+        raise HTTPException(status_code=404, detail=f"No revisions found for dimension: {dim_key}")
+
+    return {
+        "session_id": session_id,
+        "dimension_key": dim_key,
+        "versions": [
+            {
+                "version": r["version"],
+                "layer": r["layer"],
+                "created_at": r["created_at"],
+                "reason": r["reason"],
+            }
+            for r in revisions
+        ],
+    }
+```
+
+**响应格式**（不含完整 content，仅摘要）：
+
+```json
+{
+  "session_id": "...",
+  "dimension_key": "location",
+  "versions": [
+    {"version": 3, "layer": 1, "created_at": "2026-05-10T...", "reason": "用户反馈修订"},
+    {"version": 2, "layer": 1, "created_at": "2026-05-10T...", "reason": "AI 自动优化"},
+    {"version": 1, "layer": 1, "created_at": "2026-05-10T...", "reason": "初始生成"}
+  ]
+}
+```
+
+---
+
+### 9. 按项目名跨会话查询报告
+
+```python
+@router.get("/api/projects/{project_name}/reports/{dim_key}")
+async def get_project_dimension_report(
+    project_name: str,
+    dim_key: str,
+    session_id: Optional[str] = None,
+    version: Optional[int] = None,
+):
+    """通过项目名跨会话查询维度报告，可选指定 session_id 和 version"""
+    if version is not None and not session_id:
+        raise HTTPException(status_code=400, detail="version parameter requires session_id")
+
+    if session_id:
+        # 指定会话 + 可选版本
+        if version is not None:
+            revisions = await report_store.get_reports_by_dimension(...)
+            # ... 查找并返回指定版本
+        # 指定会话 + 当前 checkpoint
+        state = await PlanningRuntimeService.aget_state_values(session_id)
+        # ... 查找并返回报告
+
+    # 默认：取该项目最新会话的当前 checkpoint 报告
+    sessions = await list_planning_sessions_async(project_name=project_name, limit=1)
+    if not sessions:
+        raise HTTPException(status_code=404, detail=f"No sessions found for project: {project_name}")
+
+    latest_session_id = sessions[0]["session_id"]
+    # ... 查找并返回报告
+```
+
+**查询参数**：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `session_id` | str (query) | 否 | 指定会话 ID |
+| `version` | int (query) | 否 | 历史版本号，需同时传 `session_id` |
+
+---
+
+### 10. 删除会话
+
+```python
+@router.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """删除会话"""
+    from app.services.session import session_service
+    result = await session_service.delete_session(session_id)
+    return {
+        "message": f"Session {session_id} deleted",
+        "deleted_checkpoints": result.get("checkpoint", False)
+    }
+```
+
+---
+
+### 11. 会话状态查询
+
+```python
+@router.get("/api/sessions/{session_id}/status")
+async def get_session_status(session_id: str):
+    """获取会话状态"""
+    from app.database.operations import get_planning_session_async
+    db_session = await get_planning_session_async(session_id)
+    if not db_session:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    checkpoint_state = await PlanningRuntimeService.aget_state(session_id)
+    state = dict(checkpoint_state.values) if checkpoint_state and checkpoint_state.values else {}
+    return state_to_ui_status(state, db_session)
+```
+
+---
+
+### 12. 层级报告批量获取
+
+```python
+@router.get("/api/sessions/{session_id}/layer/{layer}/reports")
+async def get_layer_reports(session_id: str, layer: int):
+    """获取层级报告"""
+    if layer not in [1, 2, 3]:
+        raise HTTPException(status_code=400, detail=f"Invalid layer: {layer}")
+    return await checkpoint_service.get_layer_reports(session_id, layer)
+```
+
+---
+
+### 13. RAG 配置管理
+
+```python
+class RagConfigRequest(BaseModel):
+    """RAG 配置请求"""
+    enabled: Optional[bool] = Field(None, description="是否启用 RAG")
+    knowledge_sources: Optional[List[str]] = Field(None, description="知识源列表")
+
+
+@router.get("/api/sessions/{session_id}/rag-config")
+async def get_rag_config(session_id: str):
+    """获取会话的 RAG 配置"""
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    config = state.get("config", {})
+    return {
+        "session_id": session_id,
+        "rag_enabled": config.get("rag_enabled", True),
+        "knowledge_sources": config.get("knowledge_sources", []),
+    }
+
+
+@router.patch("/api/sessions/{session_id}/rag-config")
+async def update_rag_config(session_id: str, request: RagConfigRequest):
+    """更新会话的 RAG 配置"""
+    state = await PlanningRuntimeService.aget_state_values(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    updates = {}
+    if request.enabled is not None:
+        updates["config.rag_enabled"] = request.enabled
+    if request.knowledge_sources is not None:
+        updates["config.knowledge_sources"] = request.knowledge_sources
+
+    if updates:
+        await PlanningRuntimeService.aupdate_state(session_id, updates)
+
+    return {"status": "updated", "session_id": session_id}
+```
+
+**PATCH 请求体**：
+
+```json
+{
+  "enabled": true,
+  "knowledge_sources": ["village_planning_guide", "policy_database"]
+}
+```
+
+---
+
+### 14. 项目列表
+
+```python
+@router.get("/api/projects")
+async def list_projects():
+    """获取项目列表"""
+    projects = await list_projects_async()
+    return {"projects": projects}
+```
+
+**响应格式**：
+
+```json
+{
+  "projects": [
+    {
+      "name": "金田村",
+      "display_name": "金田村",
+      "session_count": 5,
+      "last_session_at": "2026-05-10T12:00:00"
+    }
+  ]
+}
+```
+
+---
+
+### 15. 项目会话列表
+
+```python
+@router.get("/api/projects/{project_name}/sessions")
+async def list_project_sessions(project_name: str):
+    """获取指定项目的所有会话"""
+    sessions = await list_project_sessions_async(project_name)
+    return {"sessions": sessions}
+```
+
+---
+
+### 16. 导出规划文档
+
+```python
+class ExportRequest(BaseModel):
+    """导出请求"""
+    layer3_path: str = Field(..., description="Layer3 Markdown 文件路径")
+    project_name: str = Field(default="金田村", description="项目名称")
+
+
+@router.post("/api/planning/export", response_model=ExportResponse)
+async def export_planning_document(request: ExportRequest):
+    """导出法定规划文档（简化版）"""
+    from scripts.llm_assisted.simple_export import export_planning_document
+
+    result = export_planning_document(
+        layer3_path=request.layer3_path,
+        output_dir=str(output_dir),
+        project_name=request.project_name
+    )
+
+    return ExportResponse(
+        success=result.success,
+        markdown_path=result.markdown_path,
+        article_count=result.article_count,
+        errors=result.errors
+    )
+
+
+@router.get("/api/planning/export/{project_name}")
+async def get_exported_document(project_name: str):
+    """获取已导出的规划文档"""
+    markdown_path = Path(f"docs/planning_export/output/{project_name}_规划文本.md")
+    if not markdown_path.exists():
+        raise HTTPException(status_code=404, detail=f"Document not found: {project_name}")
+
+    with open(markdown_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    return {"project_name": project_name, "content": content, "path": str(markdown_path)}
+```
+
+---
+
+### 健康检查端点
+
+```python
+# backend/app/api/routes.py
+@router.get("/api/health", tags=["Health"])
+async def unified_health_check():
+    """Unified health check endpoint"""
+    return {
+        "status": "healthy",
+        "service": "village-planning-backend",
+        "version": "2.0.0",
+        "modules": ["session", "data", "files", "knowledge"],
+        "architecture": "SSE-single-channel"
+    }
+```
+
+---
+
+## 会话恢复机制
+
+### 后端恢复流程
+
+当 SSE 连接断开后重连，或页面刷新时，后端通过以下机制恢复会话：
+
+```python
+# backend/app/services/checkpoint.py
+
+class CheckpointService:
+    @classmethod
+    async def rebuild_session_from_db(cls, session_id: str, ...):
+        """从数据库和 checkpoint 重建内存会话"""
+        # 1. 从数据库获取会话元数据
+        db_session = await get_session_async_func(session_id)
+
+        # 2. 从 checkpoint 获取状态
+        initial_state = await PlanningRuntimeService.aget_state_values(session_id)
+
+        # 3. 初始化 SSE 内存会话
+        session_data = {
+            "session_id": db_session["session_id"],
+            "project_name": db_session["project_name"],
+            "events": deque(maxlen=MAX_SESSION_EVENTS),
+            "initial_state": initial_state,
+        }
+        sse_manager.init_session(session_id, session_data)
+
+    @classmethod
+    async def rebuild_events(cls, session_id: str) -> List[Dict]:
+        """从 checkpoint 状态重建关键 SSE 事件"""
+        # 1. 获取 checkpoint 状态
+        checkpoint_state = await PlanningRuntimeService.aget_state(session_id)
+        state = checkpoint_state.values
+
+        # 2. 从数据库批量获取所有层级报告
+        store = ReportStore.get_instance()
+        all_layer_reports = await asyncio.gather(*[
+            store.get_layer_reports(session_id, layer_num)
+            for layer_num in [1, 2, 3]
+        ])
+
+        # 3. 根据已完成层级重建 layer_completed 事件
+        for layer_num in [1, 2, 3]:
+            if layer_completed:
+                event = create_layer_completed_event(...)
+                events.append(event)
+
+                # 4. 为每个完成的维度重建 dimension_complete 事件
+                for dim_key, dim_content in dimension_reports.items():
+                    dim_event = {"type": "dimension_complete", ...}
+                    events.append(dim_event)
+
+        # 5. 处理 interrupt 暂停状态
+        # 检测 checkpoint_state.next 包含 "layer_completion_check" → 表示 interrupt 暂停
+        is_interrupted = (
+            checkpoint_state.next
+            and "layer_completion_check" in (checkpoint_state.next or [])
+        )
+        if is_interrupted:
+            pause_event = {"type": "pause", ...}
+            events.append(pause_event)
+
+        return events
+```
+
+### 前端恢复流程
+
+前端通过 `useSessionRestore` hook 实现页面刷新后的状态恢复：
+
+```typescript
+// frontend/src/features/planning/hooks/useSessionRestore.ts
+
+const restoreSession = async (targetSessionId: string) => {
+  // 1. 设置 sessionId
+  setSessionId(targetSessionId);
+
+  // 2. 获取会话状态
+  const statusData = await planningApi.getStatus(targetSessionId);
+  syncBackendState(statusData);
+
+  // 3. 加载已完成层级的报告
+  for (const layer of [1, 2, 3]) {
+    const reportsData = await planningApi.getLayerReports(targetSessionId, layer);
+    setReports({ [`layer${layer}`]: reportsData.reports });
+
+    // 4. 恢复 dimensionProgress 状态
+    for (const [dimKey, content] of Object.entries(reportsData.reports)) {
+      progressUpdates[progressKey] = {
+        dimensionKey: dimKey,
+        status: 'completed',
+        wordCount: content.length,
+      };
+    }
+  }
+};
+```
+
+### 加载旧会话报告
+
+通过层级报告批量获取 API 加载历史会话的所有报告：
+
+```python
+@router.get("/api/sessions/{session_id}/layer/{layer}/reports")
+async def get_layer_reports(session_id: str, layer: int):
+    """获取指定层级的所有维度报告"""
+    store = ReportStore.get_instance()
+    reports = await store.get_layer_reports(session_id, layer)
+    return {"session_id": session_id, "layer": layer, "reports": reports}
+```
+
+**响应格式**：
+
+```json
+{
+  "session_id": "abc123",
+  "layer": 1,
+  "reports": {
+    "location": "区位分析报告内容...",
+    "population": "人口分析报告内容...",
+    "land_use": "土地利用报告内容..."
+  }
+}
+```
+
+---
+
+## 数据模型
+
+### 核心请求模型
+
+```python
+# backend/app/api/schemas.py
+
+class TaskStatus(str, Enum):
+    """任务状态枚举"""
+    pending = "pending"
+    running = "running"
+    paused = "paused"
+    reviewing = "reviewing"
+    revising = "revising"
+    completed = "completed"
+    failed = "failed"
+
+
+class ImageSourceType(str, Enum):
+    """图片来源类型"""
+    upload = "upload"       # 用户直接上传
+    embedded = "embedded"   # 文档内嵌图片
+
+
+class ImageData(BaseModel):
+    """图片数据模型（用于多模态消息）"""
+    image_base64: str
+    image_format: str           # jpeg, png, gif, webp
+    source_type: ImageSourceType
+    source_filename: Optional[str]
+    width: Optional[int]
+    height: Optional[int]
+```
+
+### 文件上传模型
+
+```python
+UploadedFileType = Literal[
+    "document", "geojson", "shapefile", "kml", "gis_file",
+    "status_data", "task_description", "constraint", "other",
+]
+
+
+class UploadedFileMeta(BaseModel):
+    """上传文件元数据（存入 initial_state）"""
+    filename: str               # 原始文件名
+    file_type: UploadedFileType # 文件用途分类
+    path: str                   # 服务器保存路径
+    data_type: Optional[str]    # 数据子类型
+    size_bytes: int             # 文件大小（字节）
+
+
+class FileUploadResponse(BaseModel):
+    """文件上传响应"""
+    success: bool
+    filename: str
+    content: str
+    size: int
+    message: str
+```
+
+### 会话创建/状态模型
+
+```python
+class SessionStatusResponse(BaseModel):
+    """会话状态响应"""
+    session_id: str
+    status: str
+    current_layer: Optional[int]
+    previous_layer: Optional[int]
+    created_at: Optional[str]
+    progress: Optional[float]
+    layer_1_completed: bool
+    layer_2_completed: bool
+    layer_3_completed: bool
+    interrupt_info: Optional[Dict[str, Any]]  # 替代 pause_after_step
+    execution_complete: bool
+    execution_error: Optional[str]
+    messages: List[Dict[str, Any]]
+    ui_messages: List[Dict[str, Any]]
+    revision_history: List[Dict[str, Any]]
+    last_checkpoint_id: str
+```
+
+### 报告存储架构
+
+系统使用 DimensionReport 表管理报告数据，支持版本历史：
+
+| 表名 | 用途 | 关键字段 |
+|------|------|----------|
+| `DimensionReport` | 存储报告内容（多版本） | `session_id`, `dimension_key`, `layer`, `content`, `version`, `report_id` |
+
+**查询流程**：
+
+```python
+# 获取最新版本
+store = ReportStore.get_instance()
+content, layer, version = await store.get_latest_report(session_id, dim_key)
+
+# 获取历史版本（通过 version 字段过滤）
+reports = await store.get_layer_reports_with_sources(session_id, layer)
+```
+
+---
+
+## SSE 事件流
+
+### SSE Manager 核心结构
+
+```python
+# backend/app/services/sse.py
+class SSEManager:
+    """SSE 事件管理器"""
+
+    # 缓存配置（关键事件防丢失）
+    CACHE_CONFIG = {
+        SSEEventType.DIMENSION_START: ("_last_dimension_start", "dimension_key"),
+        SSEEventType.DIMENSION_COMPLETE: ("_last_dimension_complete", "dimension_key"),
+        SSEEventType.LAYER_COMPLETED: ("_last_layer_completed", "layer"),
+        SSEEventType.LAYER_STARTED: ("_last_layer_started", "layer"),
+        SSEEventType.RESUMED: ("_last_resumed", None),
+    }
+
+    # 全局状态（类变量）
+    _sessions: Dict[str, Dict[str, Any]] = {}
+    _session_subscribers: Dict[str, Set[asyncio.Queue]] = {}
+    _session_seq: Dict[str, int] = {}
+    _seq_buffer: Dict[str, deque] = {}
+
+    async def subscribe(self, session_id: str) -> asyncio.Queue:
+        """订阅事件队列（含历史事件同步）"""
+
+    async def unsubscribe(self, session_id: str, queue: asyncio.Queue):
+        """取消订阅"""
+
+    async def publish(self, session_id: str, event: Dict):
+        """发送事件到所有订阅者（含缓存）"""
+
+    def format_sse(self, event: Dict) -> str:
+        """格式化为 SSE 消息"""
+        event_type = event.get("type", "message")
+        data = json.dumps(event)
+        return f"event: {event_type}\ndata: {data}\n\n"
+
+    def get_events_from_seq(self, session_id: str, from_seq: int) -> List[Dict]:
+        """获取指定序列号之后的事件（重连用）"""
+
+    def get_last_seq(self, session_id: str) -> int:
+        """获取最新序列号"""
+```
+
+### SSE 事件类型
+
+完整事件类型定义见 [terminology.md#SSE事件类型](./terminology.md#sse事件类型)
+
+---
+
+## 关键文件路径
+
+| 功能 | 文件路径 |
+|------|----------|
+| Session 端点 | `backend/app/api/session_routes.py` |
+| 路由聚合 | `backend/app/api/routes.py` |
+| 数据模型 | `backend/app/api/schemas.py` |
+| Services 入口 (懒加载) | `backend/app/services/__init__.py` |
+| GIS 服务 | `backend/app/services/modules/gis/service.py` |
+| RAG 服务 | `backend/app/services/modules/rag/service.py` |
+| SSE 管理 | `backend/app/services/sse.py` |
+| Checkpoint 服务 | `backend/app/services/checkpoint.py` |
+| 运行时服务 | `backend/app/services/runtime.py` |
+| Review 服务 | `backend/app/services/review.py` |
+| Session 服务 | `backend/app/services/session.py` |
+
+> **注意**: `GisService` 和 `RagService` 通过 `__init__.py` 的 `__getattr__` 懒加载导出。
+> 不要直接 import 子模块路径；使用 `from app.services import GisService, RagService`。
+
+完整文件索引：[file-index.md](./file-index.md)
+
+---
+
+## 相关文档
+
+- [02-agent-core](./02-agent-core.md) - Agent 与 API 交互
+- [05-frontend-state](./05-frontend-state.md) - 前端 SSE 处理
+- [terminology](./terminology.md) - SSE 事件定义
+
+---
+
+## 历史变更
+
+| 版本 | 日期 | 变更内容 |
+|------|------|----------|
+| v3.8 | 2026-05-15 | 文档与实现对齐：更新报告获取逻辑（从数据库而非checkpoint）；新增 RAG 配置 API；补充会话恢复机制和存储架构说明 |
+| v3.7 | 2026-05-14 | Services 简化：删除 router.py/executor.py；CheckpointService 移除代理方法；SessionService 移除重复方法；review.py 直接使用 PlanningRuntimeService |
+| v3.6 | 2026-05-14 | 新增导出端点：`POST /api/planning/export` + `GET /api/planning/export/{project_name}` |
+| v3.5 | 2026-05-10 | 新增项目列表和项目会话 API：`GET /api/projects` + `GET /api/projects/{name}/sessions` |
+| v3.4 | 2026-05-10 | 报告端点扩展：`?version=N` 历史版本查询 + `/versions` 版本列表 + `/api/projects/{name}/reports/{key}` 跨会话查询 |
+| v3.3 | 2026-05-10 | SSE 架构优化：删除 `state_sync` 事件；前端重连串行化 `getStatus` → `syncEvents` |
+| v3.2 | 2026-05-09 | `status_files`/`other_files` 表单字段合并为 `village_data_files` |
+| v3.1 | 2026-05-09 | Services 模块改为 `__getattr__` 懒加载 |
+| v3.0 | 2026-05-09 | 路径前缀从 `/api/planning/` 改为 `/api/sessions/` |
+| v2.0 | 2026-05-08 | 架构重组，统一 Session API |
+| v1.0 | 2026-05-07 | 初始版本 |
