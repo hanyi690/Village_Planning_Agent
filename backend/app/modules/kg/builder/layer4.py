@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from rdflib import Literal, RDF, URIRef
 from rdflib.namespace import XSD
 
+
+
 from app.utils.logger import get_logger
 from ..ontology import PLN, EntityTypes, Relations, EntityIdPolicy
 
@@ -32,14 +34,14 @@ class PlannedParcelEntry:
     """规划地块 — 对应 L3 ZoneTarget 的落实
 
     geometry: WKT geometry string (e.g. "POLYGON((...))") or empty.
-    When non-empty, stored as pln:geometry WKT literal in KG.
+    Geometry is injected into bundle (not stored in KG) per VKG design.
     When empty, EXECUTE must fall back to BSM → SpatialInaex lookup.
     """
     bsm: str
     planning_land_use: str = ""
     zone_type: str = ""
     area_ha: float = 0.0
-    geometry: str = ""                               # WKT geometry string
+    geometry: str = ""                               # WKT geometry string (injected into bundle, not KG)
     derived_from_bsms: List[str] = field(default_factory=list)
     derived_from_zone_target: str = ""
 
@@ -50,7 +52,7 @@ class PlannedZoneEntry:
     zone_type: str
     area_ha: float = 0.0
     name: str = ""
-    geometry: str = ""                               # WKT polygon geometry string
+    geometry: str = ""                               # WKT geometry string (injected into bundle, not KG)
     derived_from_zone_target: str = ""
 
 
@@ -160,15 +162,11 @@ def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
     if landuse_path.exists():
         with open(landuse_path, encoding="utf-8") as f:
             data = json_load(f)
-        seen_bsms: set[str] = set()
         for i, feat in enumerate(data.get("features", [])):
             props = feat.get("properties", {})
             geom = feat.get("geometry")
             wkt_str = _geojson_to_wkt(geom) if geom else ""
             bsm = str(props.get("BSM") or "").strip()
-            if not bsm or bsm in seen_bsms:
-                bsm = f"planned_parcel_{i}"
-            seen_bsms.add(bsm)
             land_use = str(props.get("GHYTBM") or props.get("GHFLBM") or "").strip()
             dlmj = float(props.get("DLMJ") or 0)
             state.parcels.append(PlannedParcelEntry(
@@ -204,7 +202,6 @@ def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
             props = feat.get("properties", {})
             geom = feat.get("geometry")
             wkt_str = _geojson_to_wkt(geom) if geom else ""
-            bsm = str(props.get("BSM") or "").strip() or f"planned_zone_{i}"
             zone_type = str(props.get("LX") or "有条件建设区").strip()
             mj = float(props.get("MJ") or 0)
             name = str(props.get("XZQHM") or "建设区").strip()
@@ -251,8 +248,6 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
             self.g.add((uri, PLN.planning_zone_type, Literal(p.zone_type)))
         if p.area_ha:
             self.g.add((uri, PLN.planned_area_ha, Literal(p.area_ha, datatype=XSD.double)))
-        if p.geometry:
-            self.g.add((uri, PLN.geometry, Literal(p.geometry, datatype=XSD.string)))
         for parent_bsm in p.derived_from_bsms:
             for s in self.g.subjects(PLN.bsm, Literal(parent_bsm)):
                 if (s, RDF.type, EntityTypes.Parcel) in self.g:
@@ -271,13 +266,12 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
         uri = EntityIdPolicy.uri_with_seq("planned_zone", zone_id, seq, version)
         self.g.add((uri, RDF.type, EntityTypes.PlannedZone))
         self.g.add((uri, PLN.zone_type, Literal(z.zone_type)))
+        self.g.add((uri, PLN.seq, Literal(seq, datatype=XSD.integer)))
         self.g.add((uri, PLN.in_version, Literal(version)))
         if z.name:
             self.g.add((uri, PLN.name, Literal(z.name)))
         if z.area_ha:
             self.g.add((uri, PLN.area_target_ha, Literal(z.area_ha, datatype=XSD.double)))
-        if z.geometry:
-            self.g.add((uri, PLN.geometry, Literal(z.geometry, datatype=XSD.string)))
         if z.derived_from_zone_target:
             self.g.add((uri, PLN.derived_from_target, URIRef(z.derived_from_zone_target)))
         count += 1

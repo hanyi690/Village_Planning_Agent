@@ -320,8 +320,6 @@ def _add_parcels(self, parcels) -> None:
 
         self.g.add((pu, Relations.sfWithin, PLN.village))
         self._parcel_count += 1
-        self._add_wkt_geometry(pu, p.geometry)
-
         # ── v4.9: Encoding decision provenance ──
         mapping_prov = p.mapping_provenance or {}
         for field_name, prov in mapping_prov.items():
@@ -589,7 +587,6 @@ def add_roads(self, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
         self.g.add((uri, geometry_kind, Literal(GEOMETRY_LINE)))
         self.g.add((uri, semantic_group, Literal("transport")))
         count += 1
-        self._add_wkt_geometry(uri, road.geometry)
     if count:
         logger.info("Added %d roads", count)
     return {"count": count, "entity_type": "Road"}
@@ -1420,24 +1417,3 @@ def _add_semantic_enrichment(self) -> None:
         logger.info("Added %d zone-level legal_constraint triples", count)
 
 
-def _add_wkt_geometry(self, entity_uri, geometry_dict) -> None:
-    """Add WKT geometry literal to an entity.
-
-    Writes geo:hasGeometry / geo:asWKT triples for GeoSPARQL query support.
-    Falls back silently if geometry is not available.
-    """
-    from rdflib import Literal
-    from ..ontology import GEO
-
-    if not geometry_dict or not isinstance(geometry_dict, dict):
-        return
-    if "type" not in geometry_dict or "coordinates" not in geometry_dict:
-        return
-
-    geo_uri = PLN[f"{str(entity_uri).split('/')[-1]}_geom"]
-    self.g.add((entity_uri, GEO.hasGeometry, geo_uri))
-    self.g.add((geo_uri, RDF.type, GEO.Geometry))
-
-    import json
-    wkt_str = json.dumps(geometry_dict)
-    self.g.add((geo_uri, GEO.asWKT, Literal(wkt_str, datatype=GEO.wktLiteral)))

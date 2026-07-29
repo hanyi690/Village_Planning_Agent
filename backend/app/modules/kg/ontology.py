@@ -39,9 +39,9 @@ Entity types: 18 total (active)
   L3: ZoneTarget, FacilityTarget, AxisTarget, RoadTarget
   L4: PlannedParcel, PlannedZone, PlannedFacility, PlannedRoad, PlannedAxis
 
-Relations: 8 total
-  Spatial: touches, nearby, connected_via_road, located_in, intersects, contains
-  Semantic: derived_from, serves
+Relations: 8 total (v4.9 GeoSPARQL aligned)
+  Spatial: geo:sfTouches, pln:nearby, pln:connected_via_road, geo:sfWithin, geo:sfIntersects, geo:sfContains
+  Semantic: pln:derived_from, pln:serves
   (within_zone, designated_as, connects, delineates kept for backward compat but not in active set)
 """
 

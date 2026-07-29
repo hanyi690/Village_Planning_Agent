@@ -24,8 +24,7 @@ from .layer1 import (
     _add_terrain_entities, _add_boundaries,
     _add_natural_resource_zones, _add_cross_type_relations,
     _compute_cross_type_heuristic,
-    _add_wkt_geometry,
-)
+    )
 from .layer3 import build_intent_layer, clear_intent_layer
 from .layer4 import (
     _apply_planned_state,
@@ -71,7 +70,6 @@ class Layer1Mixin:
     _add_natural_resource_zones = _add_natural_resource_zones
     _add_cross_type_relations = _add_cross_type_relations
     _compute_cross_type_heuristic = _compute_cross_type_heuristic
-    _add_wkt_geometry = _add_wkt_geometry
 
 
 class Layer2Mixin:
