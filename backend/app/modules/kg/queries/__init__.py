@@ -29,6 +29,7 @@ from .semantic import (
     TOOL_META_SEMANTIC,
 )
 from .cognition import get_village_cognition, get_layer_group_semantics
+from .spatial_ref import resolve_candidates
 from .contracts import DualPayload, TokenBudget, TopKSampler
 
 
@@ -103,6 +104,20 @@ parse_queries = {
         "description": "写入 L3 意图虚拟实体（PARSE 产出 -> KG L3）",
         "returns": "None",
         "writes_kg": True,
+    },
+    "resolve_candidates": {
+        "func": resolve_candidates,
+        "description": "解析 SpatialReferenceSpec 返回候选 BSM 集（属性+L2 关系过滤），供 PARSE 空间接地用",
+        "returns": "CandidateSet",
+        "writes_kg": False,
+        "status": "available",
+    },
+    "get_parcels_near_point": {
+        "func": lambda kg, **kw: query_kg(kg, "get_parcels_near_point", **kw),
+        "description": "按 bbox 查询地块 BSM（粗筛预过滤用）",
+        "returns": "List[Dict]",
+        "writes_kg": False,
+        "status": "available",
     },
 }
 
