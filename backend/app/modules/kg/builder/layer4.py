@@ -160,13 +160,16 @@ def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
     if landuse_path.exists():
         with open(landuse_path, encoding="utf-8") as f:
             data = json_load(f)
-        for feat in data.get("features", []):
+        seen_bsms: set[str] = set()
+        for i, feat in enumerate(data.get("features", [])):
             props = feat.get("properties", {})
             geom = feat.get("geometry")
             wkt_str = _geojson_to_wkt(geom) if geom else ""
             bsm = str(props.get("BSM") or "").strip()
+            if not bsm or bsm in seen_bsms:
+                bsm = f"planned_parcel_{i}"
+            seen_bsms.add(bsm)
             land_use = str(props.get("GHYTBM") or props.get("GHFLBM") or "").strip()
-            ghybmc = str(props.get("GHYTMC") or "").strip()
             dlmj = float(props.get("DLMJ") or 0)
             state.parcels.append(PlannedParcelEntry(
                 bsm=bsm,
@@ -197,10 +200,11 @@ def ingest_planned_state_from_geojson(data_dir: str | Path) -> PlannedState:
     if cz_path.exists():
         with open(cz_path, encoding="utf-8") as f:
             data = json_load(f)
-        for feat in data.get("features", []):
+        for i, feat in enumerate(data.get("features", [])):
             props = feat.get("properties", {})
             geom = feat.get("geometry")
             wkt_str = _geojson_to_wkt(geom) if geom else ""
+            bsm = str(props.get("BSM") or "").strip() or f"planned_zone_{i}"
             zone_type = str(props.get("LX") or "有条件建设区").strip()
             mj = float(props.get("MJ") or 0)
             name = str(props.get("XZQHM") or "建设区").strip()
@@ -231,11 +235,15 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
     version = planned_state.version or "current"
     count = 0
 
-    # ── PlannedParcel ──
+    # ── PlannedParcel (with bsm_seq dedup) ──
+    bsm_seq_pp: dict[str, int] = {}
     for p in planned_state.parcels:
-        uri = EntityIdPolicy.uri("planned_parcel", p.bsm, version)
+        bsm = p.bsm
+        seq = bsm_seq_pp.get(bsm, 0)
+        bsm_seq_pp[bsm] = seq + 1
+        uri = EntityIdPolicy.uri_with_seq("planned_parcel", bsm, seq, version)
         self.g.add((uri, RDF.type, EntityTypes.PlannedParcel))
-        EntityIdPolicy.attach_bsm(self.g, uri, p.bsm)
+        EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, PLN.in_version, Literal(version)))
         if p.planning_land_use:
             self.g.add((uri, PLN.planning_land_use, Literal(p.planning_land_use)))
@@ -254,10 +262,13 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
             self.g.add((uri, PLN.derived_from_target, URIRef(p.derived_from_zone_target)))
         count += 1
 
-    # ── PlannedZone ──
+    # ── PlannedZone (with zone_seq dedup) ──
+    zone_seq: dict[str, int] = {}
     for z in planned_state.zones:
         zone_id = z.zone_type or z.name or f"idx{count}"
-        uri = EntityIdPolicy.uri("planned_zone", zone_id, version)
+        seq = zone_seq.get(zone_id, 0)
+        zone_seq[zone_id] = seq + 1
+        uri = EntityIdPolicy.uri_with_seq("planned_zone", zone_id, seq, version)
         self.g.add((uri, RDF.type, EntityTypes.PlannedZone))
         self.g.add((uri, PLN.zone_type, Literal(z.zone_type)))
         self.g.add((uri, PLN.in_version, Literal(version)))
