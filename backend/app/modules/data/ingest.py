@@ -283,13 +283,7 @@ def ingest_landuse(
     parcels: List[BaseLandUseParcel] = []
     warnings: List[str] = []
 
-    # ── 第一遍：统计 BSM 频率，重复 BSM 追加 _seq 保证唯一 ──
     features = data.get("features", [])
-    bsm_counts = {}
-    for feat in features:
-        bsm = str(feat.get("properties", {}).get("BSM", "")).strip()
-        bsm_counts[bsm] = bsm_counts.get(bsm, 0) + 1
-    bsm_seen = {}
 
     for i, feat in enumerate(features):
         props = feat.get("properties", {})
@@ -313,13 +307,6 @@ def ingest_landuse(
         # ── BSM/YSDM ──
         bsm = str(props.get("BSM", "")).strip()
         ysdm = str(props.get("YSDM", "")).strip()
-
-        # BSM 去重：重复 BSM 追加 _seq（首个保留原值，后续 _1, _2, ...）
-        if bsm and bsm_counts.get(bsm, 0) > 1:
-            seq = bsm_seen.get(bsm, 0)
-            bsm_seen[bsm] = seq + 1
-            if seq > 0:
-                bsm = f"{bsm}_{seq}"
 
         # ── 名称 ──
         name = (
