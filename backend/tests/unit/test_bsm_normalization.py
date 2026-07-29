@@ -70,6 +70,33 @@ class TestBSMNormalization:
         assert "" not in bsms_out
 
 
+class TestIngestFeatureAliasMapping:
+    def test_annotation_chinese_fields_mapped(self):
+        from app.modules.data.ingest import ingest_feature
+        import tempfile, json, os
+
+        geojson = {
+            "type": "FeatureCollection",
+            "features": [{
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [116.0, 24.8]},
+                "properties": {"注记": "篮", "分类": "现状设施点"},
+            }],
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".geojson", delete=False, encoding="utf-8") as f:
+            json.dump(geojson, f, ensure_ascii=False)
+            f.flush()
+            filepath = f.name
+
+        try:
+            feats, _ = ingest_feature(filepath, "current_annotation")
+            assert len(feats) == 1
+            assert feats[0].text == "篮"
+            assert feats[0].category == "现状设施点"
+        finally:
+            os.unlink(filepath)
+
+
 class TestL4PlannedStateUniqueIDs:
     def test_planned_parcel_all_unique_uris(self):
         from app.modules.kg.builder.layer4 import PlannedParcelEntry, PlannedState

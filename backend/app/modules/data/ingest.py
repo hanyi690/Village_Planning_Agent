@@ -595,9 +595,15 @@ def ingest_feature(
         for field_name in _model_fields:
             if field_name in ("geometry",):
                 continue
+            field_info = model_cls.model_fields[field_name]
+            alias = field_info.alias if hasattr(field_info, "alias") else None
             prop_key = field_name.upper()
             alt_key = field_name
-            value = props.get(prop_key, props.get(alt_key))
+            value = props.get(prop_key)
+            if value is None:
+                value = props.get(alt_key)
+            if value is None and alias:
+                value = props.get(alias)
 
             if value is not None:
                 field_info = model_cls.model_fields[field_name]
