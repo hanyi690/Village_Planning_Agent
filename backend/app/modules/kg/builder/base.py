@@ -11,6 +11,7 @@ Usage:
 """
 from __future__ import annotations
 
+import sys
 from typing import Any, List
 from dataclasses import dataclass, field
 
@@ -146,10 +147,11 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
                     cross_type_relations = computed
                     total = sum(len(v) for v in computed.values())
                     logger.info("[build_from_bundle] Auto-computed %d cross-type relations", total)
-            except ImportError:
+            except Exception:
                 logger.warning(
-                    "[build_from_bundle] spatial_ops.bridge not available — "
-                    "falling back to centroid heuristic for cross-type relations"
+                    "[build_from_bundle] cross-type relation computation failed (%s) — "
+                    "falling back to centroid heuristic",
+                    sys.exc_info()[1],
                 )
         self._add_cross_type_relations(cross_type_relations)
 
