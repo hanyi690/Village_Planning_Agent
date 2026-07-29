@@ -156,6 +156,9 @@ class PolygonLayerGroup(BaseModel):
     def get(self, key: str) -> List[Any]:
         return self._layers.get(key, [])
 
+    def set(self, key: str, features: List[Any]) -> None:
+        self._layers[key] = features
+
     def keys(self) -> List[str]:
         return list(self._layers.keys())
 
@@ -241,7 +244,7 @@ class VillageMetadata(BaseModel):
 
 
 class VillageBundle(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
     village_name: str
     points: PointLayerGroup = Field(default_factory=PointLayerGroup)
@@ -253,7 +256,12 @@ class VillageBundle(BaseModel):
     metadata: VillageMetadata = Field(default_factory=VillageMetadata)
     standard_version: str = "4.4"
 
+    def __init__(self, **data):
+        super().__init__(**data)
+        object.__setattr__(self, "_bsm_counter", {})
+
     def add(self, feature: Any) -> None:
+        self._assign_bsm(feature)
         group = _geometry_group_for(feature)
         if group == "points":
             self.points.add(feature)
@@ -267,6 +275,29 @@ class VillageBundle(BaseModel):
             pass
         elif group == "documents":
             pass
+
+    def _resolve_village_code(self, feature: Any) -> str:
+        """从要素属性中提取 12 位行政村行政区划码。"""
+        if self._bsm_counter:
+            return next(iter(self._bsm_counter))
+        props = getattr(feature, "properties", {}) or {}
+        xzqhdm = str(props.get("XZQHDM", "") or "").strip()
+        if len(xzqhdm) == 12 and xzqhdm.isdigit():
+            return xzqhdm
+        bsm = str(getattr(feature, "bsm", "") or "").strip()
+        if len(bsm) == 20 and bsm.isdigit():
+            return bsm[:12]
+        return "441426110202"
+
+    def _assign_bsm(self, feature: Any) -> None:
+        """为要素分配 20 位标准 BSM（12 位村码 + 8 位顺序号）。"""
+        bsm = str(getattr(feature, "bsm", "") or "").strip()
+        if len(bsm) == 20 and bsm.isdigit():
+            return
+        village_code = self._resolve_village_code(feature)
+        seq = self._bsm_counter.get(village_code, 1)
+        self._bsm_counter[village_code] = seq + 1
+        feature.bsm = f"{village_code}{seq:08d}"
 
     @property
     def boundary(self) -> Any:
