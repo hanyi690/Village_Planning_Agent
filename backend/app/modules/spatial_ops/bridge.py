@@ -593,6 +593,7 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
     try:
         import geopandas as gpd
         from shapely.geometry import shape
+        from shapely.validation import make_valid
     except ImportError:
         logger.error("geopandas/shapely required for compute_cross_layer_relations")
         return {}
@@ -603,16 +604,41 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
 
     result: Dict[str, list] = {"located_in": [], "intersects": [], "contains": []}
 
-    # 1. Collect all polygon entities
+    def _fix_geom(g):
+        g = make_valid(g) if not g.is_valid else g
+        return g.buffer(0) if not g.is_valid else g
+
+    # 1. Collect all polygon entities and fix invalid geometries
     poly_entries = _collect_entities(bundle, _POLYGON_LAYERS)
     if not poly_entries:
         return result
 
+    poly_entries = [(p, u, _fix_geom(s)) for p, u, s in poly_entries]
+
     # 2. Collect point entities
-    point_entries = _collect_entities(bundle, _POINT_LAYERS)
+    point_entries = [(_p, u, _fix_geom(s)) for _p, u, s in _collect_entities(bundle, _POINT_LAYERS)]
 
     # 3. Collect line entities
-    line_entries = _collect_entities(bundle, _LINE_LAYERS)
+    line_entries = [(_p, u, _fix_geom(s)) for _p, u, s in _collect_entities(bundle, _LINE_LAYERS)]
+
+    def _safe_contains(a, b):
+        try:
+            return a.contains(b)
+        except Exception:
+            return False
+
+    def _safe_intersects(a, b):
+        try:
+            return a.intersects(b)
+        except Exception:
+            return False
+
+    def _safe_intersection(a, b):
+        try:
+            return a.intersection(b)
+        except Exception:
+            import shapely
+            return shapely.geometry.Polygon()
 
     # ── Located_in: point entities within polygon entities ──
     if point_entries:
@@ -623,20 +649,23 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
 
         for _prefix, pt_uri, pt_s in point_entries:
             pt_geom = gpd.GeoSeries([pt_s], crs="EPSG:4326").to_crs("EPSG:3857").iloc[0]
-            candidates = list(sindex.intersection(pt_geom.bounds))
+            try:
+                candidates = list(sindex.intersection(pt_geom.bounds))
+            except Exception:
+                continue
             for c in candidates:
                 poly_geom = poly_gdf_idx.iloc[c].geometry
                 if poly_geom.contains(pt_geom):
                     result["located_in"].append((pt_uri, poly_gdf_idx.iloc[c].uri))
                     result["contains"].append((poly_gdf_idx.iloc[c].uri, pt_uri))
-                    break  # first containing polygon is sufficient
+                    break
 
     # ── Intersects: parcels overlapping protection/constraint zones ──
     protection_types = {"farmland_protection", "ecological_redline",
                         "historical_protection", "zone_conditional"}
 
-    parcel_rows = []  # (uri, geometry)
-    prot_rows = []    # (uri, geometry)
+    parcel_rows = []
+    prot_rows = []
     for _p, uri, s in poly_entries:
         if _p == "parcel":
             parcel_rows.append((uri, s))
@@ -652,12 +681,15 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
         for pa_uri, pa_s in parcel_rows:
             pa_geom = gpd.GeoSeries([pa_s], crs="EPSG:4326").to_crs("EPSG:3857").iloc[0]
             pa_area = pa_geom.area
-            candidates = list(sindex.intersection(pa_geom.bounds))
+            try:
+                candidates = list(sindex.intersection(pa_geom.bounds))
+            except Exception:
+                continue
             for c in candidates:
                 pc_geom = prot_gdf.iloc[c].geometry
-                if not pa_geom.intersects(pc_geom):
+                if not _safe_intersects(pa_geom, pc_geom):
                     continue
-                overlap = pa_geom.intersection(pc_geom)
+                overlap = _safe_intersection(pa_geom, pc_geom)
                 if overlap.is_empty or overlap.area == 0:
                     continue
                 pc_uri = prot_gdf.iloc[c].uri
@@ -672,10 +704,13 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
         sindex = prot_gdf.sindex
         for _prefix, li_uri, li_s in line_entries:
             li_geom = gpd.GeoSeries([li_s], crs="EPSG:4326").to_crs("EPSG:3857").iloc[0]
-            candidates = list(sindex.intersection(li_geom.bounds))
+            try:
+                candidates = list(sindex.intersection(li_geom.bounds))
+            except Exception:
+                continue
             for c in candidates:
                 pc_geom = prot_gdf.iloc[c].geometry
-                if li_geom.intersects(pc_geom):
+                if _safe_intersects(li_geom, pc_geom):
                     result["intersects"].append((li_uri, prot_gdf.iloc[c].uri, 0.0))
 
     # ── Located_in: road/line within admin_area ──
@@ -687,10 +722,13 @@ def compute_cross_layer_relations(bundle) -> Dict[str, list]:
         sindex = admin_gdf.sindex
         for _prefix, li_uri, li_s in line_entries:
             li_geom = gpd.GeoSeries([li_s], crs="EPSG:4326").to_crs("EPSG:3857").iloc[0]
-            candidates = list(sindex.intersection(li_geom.bounds))
+            try:
+                candidates = list(sindex.intersection(li_geom.bounds))
+            except Exception:
+                continue
             for c in candidates:
                 ad_geom = admin_gdf.iloc[c].geometry
-                if ad_geom.contains(li_geom):
+                if _safe_contains(ad_geom, li_geom):
                     result["located_in"].append((li_uri, admin_gdf.iloc[c].uri))
                     break
 

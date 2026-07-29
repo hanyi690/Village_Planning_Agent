@@ -4,15 +4,29 @@ from rdflib import URIRef
 
 
 class TestKGBuilderRegistry:
+    def _save_and_clear_builders(self):
+        from app.modules.kg.builder.registry import _KG_BUILDERS
+        saved = dict(_KG_BUILDERS)
+        _KG_BUILDERS.clear()
+        return saved
+
+    def _restore_builders(self, saved):
+        from app.modules.kg.builder.registry import _KG_BUILDERS
+        _KG_BUILDERS.clear()
+        _KG_BUILDERS.update(saved)
+
     def test_decorator_registers_function(self):
         from app.modules.kg.builder.registry import kg_builder, _KG_BUILDERS, get_builder
-        _KG_BUILDERS.clear()
-        @kg_builder("test_type", entity_type="TestEntity")
-        def my_builder(self, features, *, gis_type_ref, entry, ctx):
-            return {"count": len(features)}
-        assert "test_type" in _KG_BUILDERS
-        assert get_builder("test_type") is my_builder
-        assert getattr(my_builder, "_kg_entity_type", None) == "TestEntity"
+        saved = self._save_and_clear_builders()
+        try:
+            @kg_builder("test_type", entity_type="TestEntity")
+            def my_builder(self, features, *, gis_type_ref, entry, ctx):
+                return {"count": len(features)}
+            assert "test_type" in _KG_BUILDERS
+            assert get_builder("test_type") is my_builder
+            assert getattr(my_builder, "_kg_entity_type", None) == "TestEntity"
+        finally:
+            self._restore_builders(saved)
 
     def test_get_builder_returns_none_for_unknown(self):
         from app.modules.kg.builder.registry import get_builder
@@ -20,12 +34,15 @@ class TestKGBuilderRegistry:
 
     def test_decorator_entity_type_defaults_to_none(self):
         from app.modules.kg.builder.registry import kg_builder, _KG_BUILDERS
-        _KG_BUILDERS.clear()
-        @kg_builder("bare_type")
-        def bare_builder(self, features, *, gis_type_ref, entry, ctx):
-            return {"count": len(features)}
-        assert "bare_type" in _KG_BUILDERS
-        assert not hasattr(bare_builder, "_kg_entity_type")
+        saved = self._save_and_clear_builders()
+        try:
+            @kg_builder("bare_type")
+            def bare_builder(self, features, *, gis_type_ref, entry, ctx):
+                return {"count": len(features)}
+            assert "bare_type" in _KG_BUILDERS
+            assert not hasattr(bare_builder, "_kg_entity_type")
+        finally:
+            self._restore_builders(saved)
 
 
 class TestBuildContext:
