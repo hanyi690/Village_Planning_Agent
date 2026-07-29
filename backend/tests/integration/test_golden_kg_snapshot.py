@@ -116,6 +116,10 @@ def golden_kg():
     # L4 planned state from GeoJSON
     planned_state = ingest_planned_state_from_geojson(_JINTIAN_DATA)
 
+    # Assign BSMs to planned parcels using bundle's counter
+    for p in planned_state.parcels:
+        bundle._assign_bsm(p)
+
     kg = PlanningKG(village_name="jintian")
     kg.build_from_bundle(
         bundle=bundle,
