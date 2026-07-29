@@ -1,11 +1,11 @@
 # GIS 数据管道重构实施方案 v4
 ## -- 全面 Pydantic v2 + Discriminated Union + 编码谱系 + 声明式管道
 
-> 状态:提案(待评审)
-> 日期:2026-07-28
-> 分支:`refactor/v4-pydantic-du-pipeline`
-> 输入:v3 编码中心提案、context7/exa 范式研究、当前代码现状调查、agent 架构深度调查
-> 权威顺序提醒:本文档如与模块 README 冲突,以本文档为准(重构期间)
+> 状态: 提案（当前方向，已确认 2026-07-29）
+> 日期: 2026-07-28
+> 分支: `refactor/v4-pydantic-du-pipeline`
+> 输入: v3 编码中心提案、context7/exa 范式研究、当前代码现状调查、agent 架构深度调查
+> 权威顺序: 实现时以模块 README 为准。本文档与模块 README 冲突时，以模块 README 为准（归档重组 2026-07-29 统一权威链）。
 
 ---
 
