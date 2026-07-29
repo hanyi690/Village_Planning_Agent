@@ -70,10 +70,10 @@ for pu in parcel_uris:
 
 # ── 4. Spatial relation totals ──
 rel_counts = {}
-for name, pred in [("touches", Relations.touches), ("nearby", Relations.nearby),
+for name, pred in [("sfTouches", Relations.sfTouches), ("nearby", Relations.nearby),
                     ("connected_via_road", Relations.connected_via_road),
-                    ("located_in", Relations.located_in), ("intersects", Relations.intersects),
-                    ("contains", Relations.contains)]:
+                    ("sfWithin", Relations.sfWithin), ("sfIntersects", Relations.sfIntersects),
+                    ("sfContains", Relations.sfContains)]:
     rel_counts[name] = len(list(kg.g.triples((None, pred, None))))
 
 # ── 5. Cognition payload ──
@@ -116,7 +116,7 @@ for lu, cnt in sorted(lu_stats.items(), key=lambda x: -x[1]):
     print(f"│    {lu}: {cnt} 地块")
 print(f"""│
 ├── 6. 空间关系 ──────────────────────────────────────────────""")
-for name in ["touches", "nearby", "connected_via_road", "located_in", "intersects", "contains"]:
+for name in ["sfTouches", "nearby", "connected_via_road", "sfWithin", "sfIntersects", "sfContains"]:
     cnt = rel_counts.get(name, 0)
     if cnt > 0:
         print(f"│    {name:25s} {cnt:>6d} 条")
@@ -141,7 +141,7 @@ for p in preds[:15]:
 print(f"│    ... 共 {len(list(kg.g.predicate_objects(pu)))} 个谓词")
 
 print(f"""│
-├── 8. 地块级别的空间关系（示例: {str(list(kg.g.objects(pu, Relations.touches)))[:100]}）
+├── 8. 地块级别的空间关系（示例: {str(list(kg.g.objects(pu, Relations.sfTouches)))[:100]}）
 │  相邻(touches): 每个地块知道与哪些地块相邻 + 共享边界长度
 │  近邻(nearby): 每个地块知道附近地块 + 质心距离
 │  包含(located_in): 每个设施/水体知道位于哪个地块

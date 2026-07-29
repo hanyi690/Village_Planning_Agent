@@ -1,7 +1,7 @@
-"""Render KG for human inspection: multi-layer map + KG browser + D3.js force graph.
+"""Render KG for human inspection: deck.gl 3D geospatial visualization.
 
 Builds the KG from local jintian GeoJSON files (L1+L4), then outputs:
-  - kg_inspection.html   (single-page: Leaflet map + KG browser + D3.js force graph)
+  - kg_inspection.html   (self-contained: deck.gl 3D + MapLibre GL + 高德底图)
   - kg_full.ttl          (RDF Turtle dump)
   - kg_stats.json        (statistics)
 
@@ -95,6 +95,95 @@ def _dlbm_zone_type(dlbm: str) -> str:
     return ""
 
 
+# ── Helpers for deck.gl data conversion ──
+
+def _hex_to_rgba(hex_color: str, alpha: int = 255) -> list:
+    h = hex_color.lstrip("#")
+    return [int(h[i:i+2], 16) for i in (0, 2, 4)] + [alpha]
+
+
+def _geojson_to_deck_polygons(geom: dict) -> list:
+    if not geom or "type" not in geom:
+        return []
+    if geom["type"] == "Polygon":
+        return [[[list(c) for c in ring] for ring in geom["coordinates"]]]
+    elif geom["type"] == "MultiPolygon":
+        result = []
+        for polygon in geom["coordinates"]:
+            rings = [[list(c) for c in ring] for ring in polygon]
+            if rings:
+                result.append(rings)
+        return result
+    return []
+
+
+def _collect_parcel_centroids(bundle: VillageBundle) -> dict:
+    from shapely.geometry import shape
+    centroids = {}
+    # Parcels
+    for p in bundle.polygons.get("landuse_current") or []:
+        bsm = str(getattr(p, "bsm", "")).strip()
+        geom = getattr(p, "geometry", None)
+        if not bsm or not isinstance(geom, dict):
+            continue
+        try:
+            s = shape(geom)
+            c = s.centroid
+            if not c.is_empty:
+                centroids[bsm] = (c.x, c.y)
+        except Exception:
+            pass
+    # Roads (line centroids)
+    for r in bundle.lines.get("roads_current") or []:
+        bsm = str(getattr(r, "bsm", "")).strip()
+        geom = getattr(r, "geometry", None)
+        if not bsm or not isinstance(geom, dict):
+            continue
+        try:
+            s = shape(geom)
+            c = s.centroid
+            if not c.is_empty:
+                centroids[bsm] = (c.x, c.y)
+        except Exception:
+            pass
+    # Protection zones (polygon centroids)
+    for zt in ("farmland_protection", "ecological_redline", "historical_protection"):
+        for z in bundle.polygons.get(zt) or []:
+            bsm = str(getattr(z, "bsm", "")).strip()
+            geom = getattr(z, "geometry", None)
+            if not bsm or not isinstance(geom, dict):
+                continue
+            try:
+                s = shape(geom)
+                c = s.centroid
+                if not c.is_empty:
+                    centroids[bsm] = (c.x, c.y)
+            except Exception:
+                pass
+    return centroids
+
+
+def _compute_center(bundle: VillageBundle) -> tuple:
+    from shapely.geometry import shape
+    lngs, lats = [], []
+    for p in bundle.polygons.get("landuse_current") or []:
+        geom = getattr(p, "geometry", None)
+        if not isinstance(geom, dict):
+            continue
+        try:
+            s = shape(geom)
+            if s.is_empty:
+                continue
+            bounds = s.bounds
+            lngs.extend([bounds[0], bounds[2]])
+            lats.extend([bounds[1], bounds[3]])
+        except Exception:
+            pass
+    if lngs and lats:
+        return (min(lngs) + max(lngs)) / 2, (min(lats) + max(lats)) / 2
+    return (116.0415, 24.819)
+
+
 # ── Step 1: Build KG ──
 
 def build_kg(village_name: str = "jintian") -> Tuple[PlanningKG, VillageBundle]:
@@ -153,6 +242,40 @@ def build_kg(village_name: str = "jintian") -> Tuple[PlanningKG, VillageBundle]:
     # L4: planned state from GeoJSON
     planned_state = ingest_planned_state_from_geojson(_JINTIAN_DATA)
 
+    # Assign BSMs to planned parcels using bundle's counter (same village sequence)
+    for p in planned_state.parcels:
+        bundle._assign_bsm(p)
+
+    # Inject planned geometry into bundle (replaces KG pln:geometry)
+    from shapely import wkt as shapely_wkt
+    from shapely.geometry import mapping
+
+    planned_parcel_features = []
+    for p in planned_state.parcels:
+        if p.geometry:
+            try:
+                s = shapely_wkt.loads(p.geometry)
+                geom = mapping(s)
+                planned_parcel_features.append({"bsm": p.bsm, "geometry": geom})
+            except Exception:
+                continue
+    bundle.polygons.set("planned_parcels", planned_parcel_features)
+
+    planned_zone_features = []
+    zone_seq: dict[str, int] = {}
+    for z in planned_state.zones:
+        zone_id = z.zone_type or z.name or ""
+        seq = zone_seq.get(zone_id, 0)
+        zone_seq[zone_id] = seq + 1
+        if z.geometry:
+            try:
+                s = shapely_wkt.loads(z.geometry)
+                geom = mapping(s)
+                planned_zone_features.append({"zone_type": z.zone_type, "name": z.name, "seq": seq, "geometry": geom})
+            except Exception:
+                continue
+    bundle.polygons.set("planned_zones", planned_zone_features)
+
     kg = PlanningKG(village_name=village_name)
     kg.build_from_bundle(
         bundle=bundle,
@@ -210,7 +333,7 @@ def write_turtle(kg: PlanningKG, output_dir: Path) -> Path:
     return path
 
 
-# ── Step 4: SPARQL queries for all entity types ──
+# ── Step 4: Query functions for deck.gl data ──
 
 def _fix_geom(geom: Optional[dict]) -> Optional[dict]:
     if not geom or not isinstance(geom, dict):
@@ -228,8 +351,8 @@ def _fix_geom(geom: Optional[dict]) -> Optional[dict]:
     except Exception:
         return None
 
+
 def _query_parcels(kg: PlanningKG, bundle: VillageBundle) -> List[dict]:
-    """Query parcels with full semantic enrichment."""
     geom_lookup: Dict[Tuple[str, int], dict] = {}
     seq_counter: Dict[str, int] = {}
     for p in bundle.polygons.get("landuse_current") or []:
@@ -260,7 +383,7 @@ def _query_parcels(kg: PlanningKG, bundle: VillageBundle) -> List[dict]:
     }}
     """
     rows = kg.query(sparql)
-    features = []
+    items = []
     for row in rows:
         bsm = row.get("bsm", "")
         seq = int(row.get("seq") or 0) if row.get("seq") else 0
@@ -271,35 +394,69 @@ def _query_parcels(kg: PlanningKG, bundle: VillageBundle) -> List[dict]:
         geom = _fix_geom(geom)
         if not geom:
             continue
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "layer": "parcels",
+        contours = _geojson_to_deck_polygons(geom)
+        if not contours:
+            continue
+        color_hex = _dlbm_color(dlbm)
+        color = _hex_to_rgba(color_hex)
+        tooltip_parts = []
+        tooltip_parts.append(f'<b>BSM:</b> {bsm}')
+        tooltip_parts.append(f'<b>DLBM:</b> {dlbm} ({_dlbm_label(dlbm)})')
+        tooltip_parts.append(f'<b>面积:</b> {round(float(row.get("area") or 0), 1)} m²')
+        tooltip_parts.append(f'<b>分区:</b> {row.get("zone", "") or _dlbm_zone_type(dlbm)}')
+        if row.get("semLabel"):
+            tooltip_parts.append(f'<b>语义标签:</b> {row["semLabel"]}')
+        if row.get("taxParent"):
+            tooltip_parts.append(f'<b>分类归属:</b> {row["taxParent"]}')
+        if row.get("legalConstraint"):
+            tooltip_parts.append(f'<b>约束:</b> {row["legalConstraint"]}')
+        if row.get("primZone") or row.get("planZone"):
+            tooltip_parts.append(f'<b>三区:</b> {row.get("primZone","?")} → {row.get("planZone","?")}')
+        if row.get("decidedBy"):
+            tooltip_parts.append(f'<b>决策:</b> {row["decidedBy"]} ({row.get("decConf","?")})')
+        for contour in contours:
+            items.append({
+                "contour": contour,
+                "color": color,
+                "tooltip": "<br>".join(tooltip_parts),
                 "bsm": bsm,
                 "dlbm": dlbm,
                 "dlbm_label": _dlbm_label(dlbm),
                 "area_sqm": round(float(row.get("area") or 0), 1),
                 "zone_type": row.get("zone", "") or _dlbm_zone_type(dlbm),
-                "color": _dlbm_color(dlbm),
-                "semantic_label": row.get("semLabel", "") or "",
-                "taxonomic_parent": row.get("taxParent", "") or "",
-                "legal_constraint": row.get("legalConstraint", "") or "",
-                "primary_zone": row.get("primZone", "") or "",
-                "planning_zone": row.get("planZone", "") or "",
-                "decided_by": row.get("decidedBy", "") or "",
-                "decision_confidence": row.get("decConf", "") or "",
-                "decision_evidence": row.get("decEvid", "") or "",
-            },
-        })
-    return features
+            })
+    return items
 
-def _query_zones(kg: PlanningKG) -> List[dict]:
-    from shapely import wkt as shapely_wkt
+
+def _query_zones(kg: PlanningKG, bundle: VillageBundle) -> List[dict]:
     from shapely.geometry import mapping
-    features = []
+    items = []
+
+    # Build geometry lookup from bundle: {gtype: {bsm: feature_dict}}
+    # Map KG gtype -> bundle polygon key (differ for ecological due to naming)
+    _GTYPE_TO_BUNDLE = {
+        "farmland_protection": "farmland_protection",
+        "ecological_protection": "ecological_redline",
+        "historical_protection": "historical_protection",
+    }
+    bundle_geom: Dict[str, Dict[str, dict]] = {}
+    for gtype_key, bundle_key in _GTYPE_TO_BUNDLE.items():
+        feats = bundle.polygons.get(bundle_key) or []
+        lookup: Dict[str, dict] = {}
+        for f in feats:
+            geom = getattr(f, "geometry", None)
+            if not geom or not isinstance(geom, dict):
+                continue
+            bsm = str(getattr(f, "bsm", "")).strip()
+            if bsm:
+                contours = _geojson_to_deck_polygons(geom)
+                if contours:
+                    lookup[bsm] = {"contour": contours, "geometry": geom}
+        bundle_geom[gtype_key] = lookup
+
     for s in kg.g.subjects(RDF.type, EntityTypes.Zone):
-        props = {"layer": "zones"}
+        props = {}
+        bsm = ""
         for p, o in kg.g.predicate_objects(s):
             ps = _short_uri(p)
             if ps == "pln:current_zone_type":
@@ -310,148 +467,153 @@ def _query_zones(kg: PlanningKG) -> List[dict]:
                 props["gtype"] = str(o)
             elif ps == "pln:legal_constraint":
                 props["constraint"] = str(o)
-        geom_wkt = None
-        for g in kg.g.objects(s, GEO.hasGeometry):
-            for wkt_val in kg.g.objects(g, GEO.asWKT):
-                geom_wkt = str(wkt_val)
-        if not geom_wkt:
-            continue
-        try:
-            s_geom = shapely_wkt.loads(geom_wkt)
-            geom = mapping(s_geom)
-        except Exception:
-            continue
+            elif ps == "pln:bsm":
+                bsm = str(o)
         gtype = props.get("gtype", "")
+        # Look up geometry from bundle
+        contours = None
+        if gtype in bundle_geom and bsm in bundle_geom[gtype]:
+            contours = bundle_geom[gtype][bsm]["contour"]
+        if not contours:
+            continue
         zt = props.get("zone_type", "")
         label = props.get("label", "") or zt
-        color = ZONE_COLORS.get(gtype, DEFAULT_ZONE_COLOR)
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "layer": "zones",
+        color_hex = ZONE_COLORS.get(gtype, DEFAULT_ZONE_COLOR)
+        color = _hex_to_rgba(color_hex)
+        tooltip_parts = []
+        tooltip_parts.append(f'<b>类型:</b> {zt}')
+        tooltip_parts.append(f'<b>标签:</b> {label}')
+        if props.get("constraint"):
+            tooltip_parts.append(f'<b>约束:</b> {props["constraint"]}')
+        for contour in contours:
+            items.append({
+                "contour": contour,
+                "color": color,
+                "tooltip": "<br>".join(tooltip_parts),
                 "zone_type": zt,
                 "label": label,
                 "gtype": gtype,
-                "constraint": props.get("constraint", ""),
-                "color": color,
-            },
-        })
-    return features
+            })
+    return items
 
-def _query_roads(kg: PlanningKG) -> List[dict]:
-    from rdflib import RDF as RDFLIB
-    from shapely import wkt as shapely_wkt
-    from shapely.geometry import mapping
-    features = []
+
+def _query_roads(kg: PlanningKG, bundle: VillageBundle) -> List[dict]:
+    from shapely.geometry import shape
+    # Build geometry lookup from bundle: {bsm: geojson_geom}
+    geom_lookup = {}
+    for r in bundle.lines.get("roads_current") or []:
+        bsm = str(getattr(r, "bsm", "")).strip()
+        geom = getattr(r, "geometry", None)
+        if bsm and isinstance(geom, dict):
+            geom_lookup[bsm] = geom
+
+    items = []
     for s in kg.g.subjects(RDF.type, EntityTypes.Road):
         name = ""
         label = ""
-        for _, o in kg.g.predicate_objects(s):
-            if str(kg.g.compute_qname(_)) == "pln:name":
+        bsm = ""
+        for p, o in kg.g.predicate_objects(s):
+            ps = _short_uri(p)
+            if ps == "pln:name":
                 name = str(o)
-            elif _ == PLN.has_semantic_label:
+            elif ps == "pln:has_semantic_label":
                 label = str(o)
-        geom_wkt = None
-        for g in kg.g.objects(s, GEO.hasGeometry):
-            for wkt_val in kg.g.objects(g, GEO.asWKT):
-                geom_wkt = str(wkt_val)
-        if not geom_wkt:
+            elif ps == "pln:bsm":
+                bsm = str(o)
+        geom = geom_lookup.get(bsm)
+        if not geom:
             continue
-        try:
-            s_geom = shapely_wkt.loads(geom_wkt)
-            geom = mapping(s_geom)
-        except Exception:
+        if geom.get("type") == "MultiLineString":
+            path = [[c[0], c[1]] for c in geom["coordinates"][0]]
+        elif geom.get("type") == "LineString":
+            path = [[c[0], c[1]] for c in geom["coordinates"]]
+        else:
             continue
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "layer": "roads",
-                "name": name or label or "",
-                "color": "#f39c12",
-            },
+        items.append({
+            "path": path,
+            "color": [243, 156, 18, 200],
+            "width": 2,
+            "tooltip": f'<b>道路:</b> {name or label or ""}',
+            "name": name or label or "",
         })
-    return features
+    return items
+
 
 def _query_facilities(kg: PlanningKG) -> List[dict]:
-    from shapely import wkt as shapely_wkt
-    from shapely.geometry import mapping
-    features = []
+    items = []
     for s in kg.g.subjects(RDF.type, EntityTypes.Facility):
         name = ""
         ftype = ""
+        lat = None
+        lon = None
         for p, o in kg.g.predicate_objects(s):
             ps = _short_uri(p)
             if ps == "pln:name":
                 name = str(o)
             elif ps == "pln:facility_type":
                 ftype = str(o)
-        geom_wkt = None
-        for g in kg.g.objects(s, GEO.hasGeometry):
-            for wkt_val in kg.g.objects(g, GEO.asWKT):
-                geom_wkt = str(wkt_val)
-        if not geom_wkt:
-            continue
-        try:
-            s_geom = shapely_wkt.loads(geom_wkt)
-            geom = mapping(s_geom)
-        except Exception:
-            continue
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "layer": "facilities",
+            elif ps == "pln:lat":
+                try: lat = float(o)
+                except: pass
+            elif ps == "pln:lon":
+                try: lon = float(o)
+                except: pass
+        if lat is not None and lon is not None:
+            items.append({
+                "position": [lon, lat],
+                "radius": 40,
+                "color": [231, 76, 60, 255],
+                "tooltip": f'<b>设施:</b> {name or ""}<br><b>类型:</b> {ftype or ""}',
                 "name": name or "",
                 "ftype": ftype or "",
-                "color": "#e74c3c",
-            },
-        })
-    return features
+            })
+    return items
+
 
 def _query_residential_clusters(kg: PlanningKG) -> List[dict]:
-    from shapely import wkt as shapely_wkt
-    from shapely.geometry import mapping
-    features = []
+    items = []
     for s in kg.g.subjects(RDF.type, EntityTypes.ResidentialCluster):
         name = ""
+        lat = None
+        lon = None
         for p, o in kg.g.predicate_objects(s):
             ps = _short_uri(p)
             if ps in ("pln:name", "pln:has_semantic_label"):
                 name = str(o)
-        geom_wkt = None
-        for g in kg.g.objects(s, GEO.hasGeometry):
-            for wkt_val in kg.g.objects(g, GEO.asWKT):
-                geom_wkt = str(wkt_val)
-        if not geom_wkt:
-            continue
-        try:
-            s_geom = shapely_wkt.loads(geom_wkt)
-            geom = mapping(s_geom)
-        except Exception:
-            continue
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "layer": "clusters",
+            elif ps == "pln:lat":
+                try: lat = float(o)
+                except: pass
+            elif ps == "pln:lon":
+                try: lon = float(o)
+                except: pass
+        if lat is not None and lon is not None:
+            items.append({
+                "position": [lon, lat],
+                "height": 50,
+                "color": [233, 30, 99, 200],
+                "tooltip": f'<b>居民点:</b> {name or ""}',
                 "name": name or "",
-                "color": "#e91e63",
-                "weight": 3,
-            },
-        })
-    return features
+            })
+    return items
 
-def _query_planned_parcels(kg: PlanningKG) -> List[dict]:
-    from shapely import wkt as shapely_wkt
-    from shapely.geometry import mapping
-    features = []
+
+def _query_planned_parcels(kg: PlanningKG, bundle: VillageBundle) -> List[dict]:
+    geom_lookup: Dict[str, dict] = {}
+    for p in bundle.polygons.get("planned_parcels") or []:
+        if isinstance(p, dict):
+            bsm = str(p.get("bsm", "")).strip()
+            geom = p.get("geometry")
+        else:
+            bsm = str(getattr(p, "bsm", "")).strip()
+            geom = getattr(p, "geometry", None)
+        if bsm and isinstance(geom, dict):
+            geom_lookup[bsm] = geom
+
+    items = []
     for s in kg.g.subjects(RDF.type, EntityTypes.PlannedParcel):
         bsm = ""
         lu = ""
         area = 0.0
-        geom_wkt = ""
         for p, o in kg.g.predicate_objects(s):
             ps = _short_uri(p)
             if ps == "pln:bsm":
@@ -463,41 +625,57 @@ def _query_planned_parcels(kg: PlanningKG) -> List[dict]:
                     area = float(o)
                 except (ValueError, TypeError):
                     pass
-            elif ps == "pln:geometry":
-                geom_wkt = str(o)
-        if not geom_wkt:
+        if not bsm or bsm not in geom_lookup:
             continue
-        try:
-            s_geom = shapely_wkt.loads(geom_wkt)
-            geom = mapping(s_geom)
-        except Exception:
+        geom = _fix_geom(geom_lookup[bsm])
+        if not geom:
             continue
-        color = _dlbm_color(lu) if lu else "#9b59b6"
+        contours = _geojson_to_deck_polygons(geom)
+        if not contours:
+            continue
+        color_hex = _dlbm_color(lu) if lu else "#9b59b6"
+        color = _hex_to_rgba(color_hex)
         label = _dlbm_label(lu) if lu else "规划"
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "layer": "planned_parcels",
+        tooltip_parts = []
+        tooltip_parts.append(f'<b>规划地块 BSM:</b> {bsm}')
+        tooltip_parts.append(f'<b>规划用地:</b> {lu} ({label})')
+        if area:
+            tooltip_parts.append(f'<b>面积:</b> {round(area, 2)} ha')
+        for contour in contours:
+            items.append({
+                "contour": contour,
+                "color": color,
+                "tooltip": "<br>".join(tooltip_parts),
                 "bsm": bsm,
                 "planning_land_use": lu,
                 "label": label,
                 "area_ha": round(area, 2),
-                "color": color,
-                "dashArray": "6,4",
-            },
-        })
-    return features
+            })
+    return items
 
-def _query_planned_zones(kg: PlanningKG) -> List[dict]:
-    from shapely import wkt as shapely_wkt
-    from shapely.geometry import mapping
-    features = []
+
+def _query_planned_zones(kg: PlanningKG, bundle: VillageBundle) -> List[dict]:
+    geom_lookup: Dict[Tuple[str, str, int], dict] = {}
+    for z in bundle.polygons.get("planned_zones") or []:
+        if isinstance(z, dict):
+            zt = str(z.get("zone_type", "")).strip()
+            name = str(z.get("name", "")).strip()
+            seq = int(z.get("seq", 0))
+            geom = z.get("geometry")
+        else:
+            zt = str(getattr(z, "zone_type", "")).strip()
+            name = str(getattr(z, "name", "")).strip()
+            seq = int(getattr(z, "seq", 0))
+            geom = getattr(z, "geometry", None)
+        if zt and isinstance(geom, dict):
+            geom_lookup[(zt, name, seq)] = geom
+
+    items = []
     for s in kg.g.subjects(RDF.type, EntityTypes.PlannedZone):
         zt = ""
         name = ""
         area = 0.0
-        geom_wkt = ""
+        seq = 0
         for p, o in kg.g.predicate_objects(s):
             ps = _short_uri(p)
             if ps == "pln:zone_type":
@@ -509,121 +687,173 @@ def _query_planned_zones(kg: PlanningKG) -> List[dict]:
                     area = float(o)
                 except (ValueError, TypeError):
                     pass
-            elif ps == "pln:geometry":
-                geom_wkt = str(o)
-        if not geom_wkt:
+            elif ps == "pln:seq":
+                try:
+                    seq = int(o)
+                except (ValueError, TypeError):
+                    pass
+        key = (zt, name, seq)
+        if key not in geom_lookup:
             continue
-        try:
-            s_geom = shapely_wkt.loads(geom_wkt)
-            geom = mapping(s_geom)
-        except Exception:
+        geom = _fix_geom(geom_lookup[key])
+        if not geom:
             continue
-        features.append({
-            "type": "Feature",
-            "geometry": geom,
-            "properties": {
-                "layer": "planned_zones",
+        contours = _geojson_to_deck_polygons(geom)
+        if not contours:
+            continue
+        color = [142, 68, 173, 200]
+        tooltip_parts = []
+        tooltip_parts.append(f'<b>规划分区:</b> {zt}')
+        tooltip_parts.append(f'<b>名称:</b> {name}')
+        if area:
+            tooltip_parts.append(f'<b>面积:</b> {round(area, 2)} ha')
+        for contour in contours:
+            items.append({
+                "contour": contour,
+                "color": color,
+                "tooltip": "<br>".join(tooltip_parts),
                 "zone_type": zt,
                 "name": name,
                 "area_ha": round(area, 2),
-                "color": "#8e44ad",
-                "dashArray": "4,4",
-            },
-        })
-    return features
+            })
+    return items
 
 
-# ── Step 5: D3.js force graph data ──
-
-def _build_force_graph_data(kg: PlanningKG) -> Dict[str, Any]:
-    """Build node-link data for D3.js force-directed graph using direct rdflib iteration."""
-    entity_counts: Counter = Counter()
-    for s, _, o in kg.g.triples((None, RDF.type, None)):
-        short = _short_uri(o)
-        if short.startswith(("pln:", "geo:")):
-            entity_counts[short] += 1
-
-    LAYER_COLORS = {
-        "pln:": "#4CAF50",
-        "geo:": "#FF9800",
-    }
-    LAYER_NAMES = {
-        "pln:AdministrativeVillage": "L1 AdministrativeVillage",
-        "pln:Parcel": "L1 Parcel",
-        "pln:Road": "L1 Road",
-        "pln:Facility": "L1 Facility",
-        "pln:WaterBody": "L1 WaterBody",
-        "pln:ResidentialCluster": "L1 ResidentialCluster",
-        "pln:Zone": "L1 Zone",
-        "pln:ControlLine": "L1 ControlLine",
-        "pln:GisLayerSet": "L1 GisLayerSet",
-        "pln:PlaceRef": "L1 PlaceRef",
-        "pln:RasterDataset": "L1 RasterDataset",
-        "pln:PlannedParcel": "L4 PlannedParcel",
-        "pln:PlannedZone": "L4 PlannedZone",
-        "pln:PlannedFacility": "L4 PlannedFacility",
-        "pln:PlannedRoad": "L4 PlannedRoad",
-        "pln:PlannedAxis": "L4 PlannedAxis",
-        "geo:Geometry": "Geometry",
-    }
-
-    nodes = []
-    for short, cnt in entity_counts.most_common():
-        if short == "geo:Geometry":
+def _query_boundary(bundle: VillageBundle) -> List[dict]:
+    items = []
+    for p in bundle.polygons.get("admin_areas") or []:
+        geom = getattr(p, "geometry", None)
+        if not geom or not isinstance(geom, dict):
             continue
-        prefix = short.split(":")[0] + ":"
-        nodes.append({
-            "id": short,
-            "label": LAYER_NAMES.get(short, short),
-            "count": cnt,
-            "layer": "L1" if short.startswith("pln:") else "L2",
-            "color": LAYER_COLORS.get(prefix, "#999"),
-            "radius": max(8, min(40, cnt ** 0.5)),
-        })
-
-    # Build subject->type and object->type caches for fast lookup
-    type_cache: Dict[str, str] = {}
-    for s, _, o in kg.g.triples((None, RDF.type, None)):
-        s_short = _short_uri(s)
-        o_short = _short_uri(o)
-        if o_short.startswith(("pln:", "geo:")) and o_short != "geo:Geometry":
-            type_cache[s_short] = o_short
-
-    rel_preds = {}
-    for r in Relations.all():
-        rs = _short_uri(r)
-        rel_preds[rs] = r
-
-    # Count cross-type relations by iterating triples
-    rel_type_counts: Dict[Tuple[str, str, str], int] = {}
-    for s, p, o in kg.g:
-        ps = _short_uri(p)
-        if ps not in rel_preds:
+        contours = _geojson_to_deck_polygons(geom)
+        if not contours:
             continue
-        ss = _short_uri(s)
-        os_ = _short_uri(o)
-        st = type_cache.get(ss, "")
-        ot = type_cache.get(os_, "")
-        if not st or not ot or st == ot:
-            continue
-        if st == "geo:Geometry" or ot == "geo:Geometry":
-            continue
-        key = (st, ot, ps)
-        rel_type_counts[key] = rel_type_counts.get(key, 0) + 1
-
-    links = []
-    for (st, ot, ps), cnt in sorted(rel_type_counts.items(), key=lambda x: -x[1])[:20]:
-        links.append({
-            "source": st,
-            "target": ot,
-            "type": ps.split(":")[-1] if ":" in ps else ps,
-            "count": cnt,
-        })
-
-    return {"nodes": nodes, "links": links}
+        for contour in contours:
+            items.append({
+                "contour": contour,
+                "color": [255, 255, 255, 255],
+            })
+    return items
 
 
-# ── Step 6: HTML generation ──
+def _collect_l2_relations(kg: PlanningKG, parcel_centroids: dict) -> List[dict]:
+    items = []
+    for s, p, o in kg.g.triples((None, Relations.sfTouches, None)):
+        s_bsm = None
+        o_bsm = None
+        for p1, o1 in kg.g.predicate_objects(s):
+            if _short_uri(p1) == "pln:bsm":
+                s_bsm = str(o1)
+                break
+        for p2, o2 in kg.g.predicate_objects(o):
+            if _short_uri(p2) == "pln:bsm":
+                o_bsm = str(o2)
+                break
+        if s_bsm and o_bsm and s_bsm in parcel_centroids and o_bsm in parcel_centroids:
+            ca, cb = parcel_centroids[s_bsm], parcel_centroids[o_bsm]
+            items.append({
+                "source": [ca[0], ca[1], 200],
+                "target": [cb[0], cb[1], 200],
+                "color": [46, 204, 113, 180],
+                "type": "sfTouches",
+                "width": 1.5,
+            })
+
+    for s, p, o in kg.g.triples((None, Relations.connected_via_road, None)):
+        s_bsm = None
+        o_bsm = None
+        for p1, o1 in kg.g.predicate_objects(s):
+            if _short_uri(p1) == "pln:bsm":
+                s_bsm = str(o1)
+                break
+        for p2, o2 in kg.g.predicate_objects(o):
+            if _short_uri(p2) == "pln:bsm":
+                o_bsm = str(o2)
+                break
+        if s_bsm and o_bsm and s_bsm in parcel_centroids and o_bsm in parcel_centroids:
+            ca, cb = parcel_centroids[s_bsm], parcel_centroids[o_bsm]
+            items.append({
+                "source": [ca[0], ca[1], 200],
+                "target": [cb[0], cb[1], 200],
+                "color": [52, 152, 219, 180],
+                "type": "connected_via_road",
+                "width": 1.5,
+            })
+
+    # nearby — sample 100 max
+    nearby_count = 0
+    for s, p, o in kg.g.triples((None, Relations.nearby, None)):
+        if nearby_count >= 100:
+            break
+        s_bsm = None
+        o_bsm = None
+        for p1, o1 in kg.g.predicate_objects(s):
+            if _short_uri(p1) == "pln:bsm":
+                s_bsm = str(o1)
+                break
+        for p2, o2 in kg.g.predicate_objects(o):
+            if _short_uri(p2) == "pln:bsm":
+                o_bsm = str(o2)
+                break
+        if s_bsm and o_bsm and s_bsm in parcel_centroids and o_bsm in parcel_centroids:
+            ca, cb = parcel_centroids[s_bsm], parcel_centroids[o_bsm]
+            items.append({
+                "source": [ca[0], ca[1], 200],
+                "target": [cb[0], cb[1], 200],
+                "color": [155, 89, 182, 120],
+                "type": "nearby",
+                "width": 0.8,
+            })
+            nearby_count += 1
+
+    # sfWithin
+    for s, p, o in kg.g.triples((None, Relations.sfWithin, None)):
+        s_bsm = None
+        o_bsm = None
+        for p1, o1 in kg.g.predicate_objects(s):
+            if _short_uri(p1) == "pln:bsm":
+                s_bsm = str(o1)
+                break
+        for p2, o2 in kg.g.predicate_objects(o):
+            if _short_uri(p2) == "pln:bsm":
+                o_bsm = str(o2)
+                break
+        if s_bsm and o_bsm and s_bsm in parcel_centroids and o_bsm in parcel_centroids:
+            ca, cb = parcel_centroids[s_bsm], parcel_centroids[o_bsm]
+            items.append({
+                "source": [ca[0], ca[1], 200],
+                "target": [cb[0], cb[1], 200],
+                "color": [231, 76, 60, 150],
+                "type": "sfWithin",
+                "width": 1.5,
+            })
+
+    # sfIntersects
+    for s, p, o in kg.g.triples((None, Relations.sfIntersects, None)):
+        s_bsm = None
+        o_bsm = None
+        for p1, o1 in kg.g.predicate_objects(s):
+            if _short_uri(p1) == "pln:bsm":
+                s_bsm = str(o1)
+                break
+        for p2, o2 in kg.g.predicate_objects(o):
+            if _short_uri(p2) == "pln:bsm":
+                o_bsm = str(o2)
+                break
+        if s_bsm and o_bsm and s_bsm in parcel_centroids and o_bsm in parcel_centroids:
+            ca, cb = parcel_centroids[s_bsm], parcel_centroids[o_bsm]
+            items.append({
+                "source": [ca[0], ca[1], 200],
+                "target": [cb[0], cb[1], 200],
+                "color": [241, 196, 15, 150],
+                "type": "sfIntersects",
+                "width": 1.5,
+            })
+
+    return items
+
+
+# ── Step 5: HTML generation (deck.gl 3D) ──
 
 def _make_dlbm_legend_html() -> str:
     items = []
@@ -643,8 +873,8 @@ def _make_zone_legend_html() -> str:
     items.append(f'<span class="lg"><i style="background:{DEFAULT_ZONE_COLOR}"></i>other</span>')
     return "".join(items)
 
+
 def _make_entity_tree_html(stats: Dict[str, Any]) -> str:
-    """Build HTML for the entity type tree sidebar."""
     parts = []
     layers = {
         "L1 现状实体": [],
@@ -686,129 +916,96 @@ def _make_relation_list_html(stats: Dict[str, Any]) -> str:
         )
     return "\n".join(parts)
 
-def _make_popup_html(props: Dict[str, str]) -> str:
-    """Build a rich popup HTML from feature properties."""
-    lines = []
-    layer = props.get("layer", "")
-    if layer == "parcels":
-        lines.append(f'<b>BSM:</b> {props.get("bsm","?")}')
-        lines.append(f'<b>DLBM:</b> {props.get("dlbm","?")} ({props.get("dlbm_label","?")})')
-        lines.append(f'<b>面积:</b> {props.get("area_sqm","?")} m²')
-        lines.append(f'<b>分区:</b> {props.get("zone_type","?")}')
-        if props.get("semantic_label"):
-            lines.append(f'<b>语义标签:</b> {props["semantic_label"]}')
-        if props.get("taxonomic_parent"):
-            lines.append(f'<b>分类归属:</b> {props["taxonomic_parent"]}')
-        if props.get("legal_constraint"):
-            lines.append(f'<b>约束:</b> {props["legal_constraint"]}')
-        if props.get("primary_zone") or props.get("planning_zone"):
-            lines.append(f'<b>三区:</b> {props.get("primary_zone","?")} → {props.get("planning_zone","?")}')
-        if props.get("decided_by"):
-            lines.append(f'<b>决策:</b> {props["decided_by"]} ({props.get("decision_confidence","?")})')
-    elif layer == "zones":
-        lines.append(f'<b>类型:</b> {props.get("zone_type","?")}')
-        lines.append(f'<b>标签:</b> {props.get("label","?")}')
-        if props.get("constraint"):
-            lines.append(f'<b>约束:</b> {props["constraint"]}')
-    elif layer == "roads":
-        lines.append(f'<b>道路:</b> {props.get("name","?")}')
-    elif layer == "facilities":
-        lines.append(f'<b>设施:</b> {props.get("name","?")}')
-        if props.get("ftype"):
-            lines.append(f'<b>类型:</b> {props["ftype"]}')
-    elif layer == "clusters":
-        lines.append(f'<b>居民点:</b> {props.get("name","?")}')
-    elif layer == "planned_parcels":
-        lines.append(f'<b>规划地块 BSM:</b> {props.get("bsm","?")}')
-        lines.append(f'<b>规划用地:</b> {props.get("planning_land_use","?")} ({props.get("label","?")})')
-        lines.append(f'<b>面积:</b> {props.get("area_ha","?")} ha')
-    elif layer == "planned_zones":
-        lines.append(f'<b>规划分区:</b> {props.get("zone_type","?")}')
-        lines.append(f'<b>名称:</b> {props.get("name","?")}')
-        if props.get("area_ha"):
-            lines.append(f'<b>面积:</b> {props["area_ha"]} ha')
-    else:
-        for k, v in props.items():
-            if k not in ("layer", "color", "dashArray", "weight", "marker"):
-                lines.append(f'<b>{k}:</b> {v}')
-    return "<br>".join(lines)
-
 
 def write_html(kg: PlanningKG, bundle: VillageBundle, stats: Dict[str, Any], output_dir: Path) -> Path:
-    """Write self-contained kg_inspection.html (Leaflet + D3.js + KG browser)."""
+    """Write self-contained kg_inspection.html (deck.gl 3D + MapLibre GL + 高德底图)."""
 
-    # Collect all layer features
-    parcel_features = _query_parcels(kg, bundle)
-    zone_features = _query_zones(kg)
-    road_features = _query_roads(kg)
-    facility_features = _query_facilities(kg)
-    cluster_features = _query_residential_clusters(kg)
-    planned_parcel_features = _query_planned_parcels(kg)
-    planned_zone_features = _query_planned_zones(kg)
+    # Collect all layer data
+    parcel_data = _query_parcels(kg, bundle)
+    zone_data = _query_zones(kg, bundle)
+    road_data = _query_roads(kg, bundle)
+    facility_data = _query_facilities(kg)
+    cluster_data = _query_residential_clusters(kg)
+    planned_parcel_data = _query_planned_parcels(kg, bundle)
+    planned_zone_data = _query_planned_zones(kg, bundle)
+    boundary_data = _query_boundary(bundle)
 
-    force_data = _build_force_graph_data(kg)
-    entity_tree_html = _make_entity_tree_html(stats)
-    relation_list_html = _make_relation_list_html(stats)
+    # L2 spatial relations
+    parcel_centroids = _collect_parcel_centroids(bundle)
+    l2_relations = _collect_l2_relations(kg, parcel_centroids)
+
+    # Compute center
+    center_lng, center_lat = _compute_center(bundle)
+
+    # Legend HTML
     dlbm_legend = _make_dlbm_legend_html()
     zone_legend = _make_zone_legend_html()
+    entity_tree_html = _make_entity_tree_html(stats)
+    relation_list_html = _make_relation_list_html(stats)
 
+    # Serialize all data
     data_json = json.dumps({
-        "parcels": {"type": "FeatureCollection", "features": parcel_features},
-        "zones": {"type": "FeatureCollection", "features": zone_features},
-        "roads": {"type": "FeatureCollection", "features": road_features},
-        "facilities": {"type": "FeatureCollection", "features": facility_features},
-        "clusters": {"type": "FeatureCollection", "features": cluster_features},
-        "planned_parcels": {"type": "FeatureCollection", "features": planned_parcel_features},
-        "planned_zones": {"type": "FeatureCollection", "features": planned_zone_features},
+        "parcels": parcel_data,
+        "zones": zone_data,
+        "roads": road_data,
+        "facilities": facility_data,
+        "clusters": cluster_data,
+        "planned_parcels": planned_parcel_data,
+        "planned_zones": planned_zone_data,
+        "l2_relations": l2_relations,
+        "boundary": boundary_data,
     }, ensure_ascii=False)
-    force_json = json.dumps(force_data, ensure_ascii=False)
 
     html = f"""<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KG Inspection - 金田村 ({stats['triple_count']} triples)</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<title>KG Inspection 3D - 金田村 ({stats['triple_count']} triples)</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.1.0/dist/maplibre-gl.css">
 <style>
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 body {{ font-family:"Microsoft YaHei",sans-serif; background:#1a1a2e; color:#eee; overflow:hidden; height:100vh; }}
-#topbar {{ padding:6px 16px; background:#16213e; display:flex; flex-wrap:wrap; gap:12px; align-items:center; font-size:13px; }}
+#topbar {{ padding:6px 16px; background:#16213e; display:flex; flex-wrap:wrap; gap:12px; align-items:center; font-size:13px; z-index:10; position:relative; }}
 #topbar .stat {{ color:#ffd380; font-weight:bold; }}
-#topbar .layer-toggle {{ cursor:pointer; padding:2px 8px; border-radius:4px; font-size:12px; }}
-#topbar .layer-toggle.active {{ background:#0f3460; }}
+#topbar .layer-toggle {{ cursor:pointer; padding:2px 8px; border-radius:4px; font-size:12px; border:1px solid transparent; user-select:none; }}
+#topbar .layer-toggle.active {{ background:#0f3460; border-color:#4ea8de; }}
 #main {{ display:flex; height:calc(100vh - 36px); }}
-#sidebar {{ width:200px; min-width:200px; background:#0f3460; overflow-y:auto; padding:8px; font-size:12px; }}
+#sidebar {{ width:200px; min-width:200px; background:#0f3460; overflow-y:auto; padding:8px; font-size:12px; z-index:10; position:relative; }}
 #sidebar .section-title {{ color:#ffd380; font-weight:bold; margin:8px 0 4px; font-size:13px; }}
 #sidebar .layer-group {{ margin:6px 0 2px; color:#4ea8de; font-size:12px; }}
 #sidebar .type-entity,.sidebar .rel-item {{ cursor:pointer; padding:2px 6px; border-radius:3px; }}
 #sidebar .type-entity:hover,.sidebar .rel-item:hover {{ background:#1a1a4e; }}
 #sidebar .cnt {{ color:#888; float:right; }}
 #map {{ flex:1; min-width:0; }}
-#force-panel {{ width:280px; min-width:280px; background:#16213e; overflow:hidden; display:flex; flex-direction:column; }}
-#force-panel .title {{ padding:4px 8px; background:#0f3460; font-size:12px; color:#ffd380; text-align:center; }}
-#force-graph {{ flex:1; }}
-#legend {{ background:#0f3460; padding:3px 12px; display:flex; flex-wrap:wrap; gap:6px; font-size:11px; overflow-x:auto; }}
+#legend {{ background:#0f3460; padding:3px 12px; display:flex; flex-wrap:wrap; gap:6px; font-size:11px; overflow-x:auto; z-index:10; position:relative; }}
 #legend .lg {{ display:inline-flex; align-items:center; gap:3px; white-space:nowrap; }}
 #legend .lg i {{ width:12px; height:12px; border-radius:2px; display:inline-block; border:1px solid rgba(255,255,255,0.3); }}
-.leaflet-popup-content {{ font-size:12px; line-height:1.5; max-height:300px; overflow-y:auto; }}
-.leaflet-container {{ background:#1a1a2e; }}
+.deck-tooltip {{ font-size:12px; line-height:1.5; max-width:320px; pointer-events:none; background:rgba(22,33,62,0.92); color:#eee; padding:8px 12px; border-radius:6px; border:1px solid #4ea8de; }}
 </style>
 </head>
 <body>
 <div id="topbar">
-  <b style="color:#ffd380;font-size:14px;">KG 金田村</b>
+  <b style="color:#ffd380;font-size:14px;">KG 3D 金田村</b>
+  <span class="layer-toggle active" data-layer="basemap">底图</span>
   <div>三元组: <span class="stat">{stats['triple_count']}</span></div>
   <div>实体类型: <span class="stat">{len(stats['entity_breakdown'])}</span></div>
   <div>地块: <span class="stat">{stats['parcel_count']}</span></div>
   <span class="layer-toggle active" data-layer="parcels">地块</span>
-  <span class="layer-toggle active" data-layer="zones">约束</span>
+  <span class="layer-toggle" data-layer="planned_parcels">规划地块</span>
+  <span class="layer-toggle" data-layer="planned_zones">规划分区</span>
   <span class="layer-toggle active" data-layer="roads">道路</span>
-  <span class="layer-toggle active" data-layer="facilities">设施</span>
-  <span class="layer-toggle active" data-layer="clusters">居民点</span>
-  <span class="layer-toggle active" data-layer="planned_parcels">规划地块</span>
-  <span class="layer-toggle active" data-layer="planned_zones">规划分区</span>
+  <span class="layer-toggle" data-layer="rel_sfTouches">相邻({stats['relation_breakdown'].get('geo:sfTouches', 0)})</span>
+  <span class="layer-toggle" data-layer="rel_connected_via_road">道路连接({stats['relation_breakdown'].get('pln:connected_via_road', 0)})</span>
+  <span class="layer-toggle" data-layer="rel_nearby">邻近(100)</span>
+  <span class="layer-toggle" data-layer="rel_sfWithin">包含({stats['relation_breakdown'].get('geo:sfWithin', 0)})</span>
+  <span class="layer-toggle" data-layer="rel_sfIntersects">相交({stats['relation_breakdown'].get('geo:sfIntersects', 0)})</span>
+  <span class="layer-toggle" data-layer="facilities">设施</span>
+  <span class="layer-toggle" data-layer="clusters">居民点</span>
+  <span class="layer-toggle" data-layer="zones_farmland">农田保护(88)</span>
+  <span class="layer-toggle active" data-layer="zones_ecological">生态红线(5)</span>
+  <span class="layer-toggle active" data-layer="zones_historical">历史保护(3)</span>
+  <span class="layer-toggle" data-layer="boundary">村界</span>
 </div>
 <div id="main">
   <div id="sidebar">
@@ -818,10 +1015,6 @@ body {{ font-family:"Microsoft YaHei",sans-serif; background:#1a1a2e; color:#eee
     {relation_list_html}
   </div>
   <div id="map"></div>
-  <div id="force-panel">
-    <div class="title">KG 关系图 (D3.js 力导向)</div>
-    <div id="force-graph"></div>
-  </div>
 </div>
 <div id="legend">
   <span style="color:#ffd380;font-weight:bold;margin-right:4px;">DLBM:</span>
@@ -831,261 +1024,445 @@ body {{ font-family:"Microsoft YaHei",sans-serif; background:#1a1a2e; color:#eee
   {zone_legend}
 </div>
 
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.1.0/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/deck.gl@9.3.7/dist.min.js"></script>
 <script>
 var DATA = {data_json};
-var FORCE = {force_json};
-var LAYER_GROUPS = {{}};
-var map = L.map('map', {{ preferCanvas: true, zoomControl: true }}).setView([24.819, 116.0415], 14);
-L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-  maxZoom: 19, opacity: 0.12, attribution: '&copy; OSM'
-}}).addTo(map);
+var CENTER = [{center_lng}, {center_lat}];
 
-// Parcels
-LAYER_GROUPS.parcels = L.geoJSON(DATA.parcels, {{
-  style: function(f) {{
-    return {{ color: '#fff', weight: 0.5, fillColor: f.properties.color || '#ccc', fillOpacity: 0.6 }};
+var GAODE_STYLE = {{
+  version: 8,
+  sources: {{
+    'gaode': {{
+      type: 'raster',
+      tiles: [
+        'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={{x}}&y={{y}}&z={{z}}',
+        'https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={{x}}&y={{y}}&z={{z}}',
+        'https://webrd03.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={{x}}&y={{y}}&z={{z}}',
+        'https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={{x}}&y={{y}}&z={{z}}'
+      ],
+      tileSize: 256,
+      attribution: '高德地图'
+    }}
   }},
-  onEachFeature: function(f, layer) {{
-    layer.bindPopup(`<div>${{makePopup(f.properties)}}</div>`);
-  }}
-}}).addTo(map);
+  layers: [{{
+    id: 'gaode-layer',
+    type: 'raster',
+    source: 'gaode',
+    minzoom: 0,
+    maxzoom: 18
+  }}]
+}};
 
-// Zones (constraint polygons)
-LAYER_GROUPS.zones = L.geoJSON(DATA.zones, {{
-  style: function(f) {{
-    return {{ color: f.properties.color || '#95a5a6', weight: 1.5, fillColor: f.properties.color || '#95a5a6', fillOpacity: 0.2, dashArray: '4,3' }};
-  }},
-  onEachFeature: function(f, layer) {{
-    layer.bindPopup(`<div>${{makePopup(f.properties)}}</div>`);
-  }}
-}}).addTo(map);
 
-// Roads
-LAYER_GROUPS.roads = L.geoJSON(DATA.roads, {{
-  style: function(f) {{
-    return {{ color: '#f39c12', weight: 2, opacity: 0.7 }};
-  }},
-  onEachFeature: function(f, layer) {{
-    layer.bindPopup(`<div>${{makePopup(f.properties)}}</div>`);
-  }}
-}}).addTo(map);
 
-// Facilities
-LAYER_GROUPS.facilities = L.geoJSON(DATA.facilities, {{
-  pointToLayer: function(f, latlng) {{
-    return L.circleMarker(latlng, {{ radius: 6, color: '#e74c3c', fillColor: '#e74c3c', fillOpacity: 0.8, weight: 1 }});
-  }},
-  onEachFeature: function(f, layer) {{
-    layer.bindPopup(`<div>${{makePopup(f.properties)}}</div>`);
-  }}
-}}).addTo(map);
+var allLayers = [];
+var layerVisibility = {{}};
 
-// Residential clusters
-LAYER_GROUPS.clusters = L.geoJSON(DATA.clusters, {{
-  style: function(f) {{
-    return {{ color: '#e91e63', weight: 3, fill: false, dashArray: '8,4' }};
-  }},
-  onEachFeature: function(f, layer) {{
-    layer.bindPopup(`<div>${{makePopup(f.properties)}}</div>`);
-  }}
-}}).addTo(map);
+// 1. 现状地块 (PolygonLayer, flat, z=0) — default ON
+var parcelLayer = new deck.PolygonLayer({{
+  id: 'parcels',
+  data: DATA.parcels,
+  extruded: false,
+  wireframe: false,
+  filled: true,
+  stroked: true,
+  getPolygon: function(d) {{ return d.contour; }},
+  getFillColor: function(d) {{ return d.color; }},
+  getLineColor: [255, 255, 255, 80],
+  getLineWidth: 1,
+  lineWidthMinPixels: 0.5,
+  pickable: true,
+  autoHighlight: true,
+  highlightColor: [255, 255, 255, 100],
+  material: {{ambient: 1, diffuse: 0, shininess: 0}},
+  onClick: function(info) {{}},
+  visible: true,
+}});
+allLayers.push(parcelLayer);
+layerVisibility.parcels = true;
 
-// Planned parcels
-LAYER_GROUPS.planned_parcels = L.geoJSON(DATA.planned_parcels, {{
-  style: function(f) {{
-    return {{ color: '#fff', weight: 0.5, fillColor: f.properties.color || '#9b59b6', fillOpacity: 0.5, dashArray: f.properties.dashArray || '6,4' }};
-  }},
-  onEachFeature: function(f, layer) {{
-    layer.bindPopup(`<div>${{makePopup(f.properties)}}</div>`);
-  }}
-}}).addTo(map);
+// 2a. 农田保护 (PolygonLayer, flat, dashed) — default OFF (88 polygons would obscure parcels)
+var farmlandLayer = new deck.PolygonLayer({{
+  id: 'zones_farmland',
+  data: DATA.zones.filter(function(d) {{ return d.gtype === 'farmland_protection'; }}),
+  extruded: false,
+  wireframe: false,
+  filled: true,
+  stroked: true,
+  getPolygon: function(d) {{ return d.contour; }},
+  getFillColor: function(d) {{ var c = d.color; return [c[0], c[1], c[2], 180]; }},
+  getLineColor: function(d) {{ return d.color; }},
+  getLineWidth: 2,
+  lineWidthMinPixels: 1,
+  getLineDashArray: [4, 3],
+  dashJustified: true,
+  pickable: false,
+  autoHighlight: false,
+  material: {{ambient: 1, diffuse: 0, shininess: 0}},
+  visible: false,
+}});
+allLayers.push(farmlandLayer);
+layerVisibility.zones_farmland = false;
 
-// Planned zones
-LAYER_GROUPS.planned_zones = L.geoJSON(DATA.planned_zones, {{
-  style: function(f) {{
-    return {{ color: '#8e44ad', weight: 2, fillColor: '#8e44ad', fillOpacity: 0.15, dashArray: '4,4' }};
-  }},
-  onEachFeature: function(f, layer) {{
-    layer.bindPopup(`<div>${{makePopup(f.properties)}}</div>`);
-  }}
-}}).addTo(map);
+// 2b. 生态红线 (PolygonLayer, flat, dashed) — default ON
+var ecologicalLayer = new deck.PolygonLayer({{
+  id: 'zones_ecological',
+  data: DATA.zones.filter(function(d) {{ return d.gtype === 'ecological_protection'; }}),
+  extruded: false,
+  wireframe: false,
+  filled: true,
+  stroked: true,
+  getPolygon: function(d) {{ return d.contour; }},
+  getFillColor: function(d) {{ var c = d.color; return [c[0], c[1], c[2], 180]; }},
+  getLineColor: function(d) {{ return d.color; }},
+  getLineWidth: 2,
+  lineWidthMinPixels: 1,
+  getLineDashArray: [4, 3],
+  dashJustified: true,
+  pickable: false,
+  autoHighlight: false,
+  material: {{ambient: 1, diffuse: 0, shininess: 0}},
+  visible: true,
+}});
+allLayers.push(ecologicalLayer);
+layerVisibility.zones_ecological = true;
 
-function makePopup(p) {{
-  var lines = [];
-  var layer = p.layer || '';
-  if (layer === 'parcels') {{
-    lines.push('<b>BSM:</b> ' + (p.bsm||'?'));
-    lines.push('<b>DLBM:</b> ' + (p.dlbm||'?') + ' (' + (p.dlbm_label||'?') + ')');
-    lines.push('<b>面积:</b> ' + (p.area_sqm||'?') + ' m²');
-    lines.push('<b>分区:</b> ' + (p.zone_type||'?'));
-    if (p.semantic_label) lines.push('<b>语义标签:</b> ' + p.semantic_label);
-    if (p.taxonomic_parent) lines.push('<b>分类归属:</b> ' + p.taxonomic_parent);
-    if (p.legal_constraint) lines.push('<b>约束:</b> ' + p.legal_constraint);
-    if (p.primary_zone || p.planning_zone) lines.push('<b>三区:</b> ' + (p.primary_zone||'?') + ' → ' + (p.planning_zone||'?'));
-    if (p.decided_by) lines.push('<b>决策:</b> ' + p.decided_by + ' (' + (p.decision_confidence||'?') + ')');
-  }} else if (layer === 'zones') {{
-    lines.push('<b>类型:</b> ' + (p.zone_type||'?'));
-    lines.push('<b>标签:</b> ' + (p.label||'?'));
-    if (p.constraint) lines.push('<b>约束:</b> ' + p.constraint);
-  }} else if (layer === 'roads') {{
-    lines.push('<b>道路:</b> ' + (p.name||'?'));
-  }} else if (layer === 'facilities') {{
-    lines.push('<b>设施:</b> ' + (p.name||'?'));
-    if (p.ftype) lines.push('<b>类型:</b> ' + p.ftype);
-  }} else if (layer === 'clusters') {{
-    lines.push('<b>居民点:</b> ' + (p.name||'?'));
-  }} else if (layer === 'planned_parcels') {{
-    lines.push('<b>规划地块 BSM:</b> ' + (p.bsm||'?'));
-    lines.push('<b>规划用地:</b> ' + (p.planning_land_use||'?') + ' (' + (p.label||'?') + ')');
-    if (p.area_ha) lines.push('<b>面积:</b> ' + p.area_ha + ' ha');
-  }} else if (layer === 'planned_zones') {{
-    lines.push('<b>规划分区:</b> ' + (p.zone_type||'?'));
-    lines.push('<b>名称:</b> ' + (p.name||'?'));
-    if (p.area_ha) lines.push('<b>面积:</b> ' + p.area_ha + ' ha');
-  }}
-  return lines.join('<br>');
+// 2c. 历史保护 (PolygonLayer, flat, dashed) — default ON
+var historicalLayer = new deck.PolygonLayer({{
+  id: 'zones_historical',
+  data: DATA.zones.filter(function(d) {{ return d.gtype === 'historical_protection'; }}),
+  extruded: false,
+  wireframe: false,
+  filled: true,
+  stroked: true,
+  getPolygon: function(d) {{ return d.contour; }},
+  getFillColor: function(d) {{ var c = d.color; return [c[0], c[1], c[2], 180]; }},
+  getLineColor: function(d) {{ return d.color; }},
+  getLineWidth: 2,
+  lineWidthMinPixels: 1,
+  getLineDashArray: [4, 3],
+  dashJustified: true,
+  pickable: false,
+  autoHighlight: false,
+  material: {{ambient: 1, diffuse: 0, shininess: 0}},
+  visible: true,
+}});
+allLayers.push(historicalLayer);
+layerVisibility.zones_historical = true;
+
+// 3. 道路 (PathLayer) — default ON
+var roadLayer = new deck.PathLayer({{
+  id: 'roads',
+  data: DATA.roads,
+  getPath: function(d) {{ return d.path; }},
+  getColor: function(d) {{ return d.color; }},
+  getWidth: 3,
+  widthMinPixels: 1.5,
+  widthMaxPixels: 8,
+  pickable: true,
+  autoHighlight: true,
+  highlightColor: [255, 255, 255, 150],
+  visible: true,
+}});
+allLayers.push(roadLayer);
+layerVisibility.roads = true;
+
+// 4. 规划地块 (PolygonLayer, extruded 50m, alpha 120) — default OFF
+var plannedParcelLayer = new deck.PolygonLayer({{
+  id: 'planned_parcels',
+  data: DATA.planned_parcels,
+  extruded: true,
+  wireframe: false,
+  elevationScale: 1,
+  getElevation: 50,
+  filled: true,
+  stroked: true,
+  getPolygon: function(d) {{ return d.contour; }},
+  getFillColor: function(d) {{ var c = d.color; return [c[0], c[1], c[2], 120]; }},
+  getLineColor: [255, 255, 255, 120],
+  getLineWidth: 1,
+  lineWidthMinPixels: 0.5,
+  getLineDashArray: [6, 4],
+  dashJustified: true,
+  pickable: true,
+  autoHighlight: true,
+  highlightColor: [255, 255, 255, 100],
+  material: {{ambient: 0.6, diffuse: 0.4, shininess: 0}},
+  visible: false,
+}});
+allLayers.push(plannedParcelLayer);
+layerVisibility.planned_parcels = false;
+
+// 5. 规划分区 (PolygonLayer, extruded 100m, alpha 120) — default OFF
+var zoneLayer = new deck.PolygonLayer({{
+  id: 'planned_zones',
+  data: DATA.planned_zones,
+  extruded: true,
+  wireframe: false,
+  elevationScale: 1,
+  getElevation: 100,
+  filled: true,
+  stroked: true,
+  getPolygon: function(d) {{ return d.contour; }},
+  getFillColor: function(d) {{ var c = d.color; return [c[0], c[1], c[2], 120]; }},
+  getLineColor: [200, 200, 200, 80],
+  getLineWidth: 1,
+  lineWidthMinPixels: 0.5,
+  pickable: true,
+  autoHighlight: true,
+  highlightColor: [255, 255, 255, 100],
+  material: {{ambient: 0.6, diffuse: 0.4, shininess: 0}},
+  visible: false,
+}});
+allLayers.push(zoneLayer);
+layerVisibility.planned_zones = false;
+
+// 6. 设施点 (ScatterplotLayer) — default OFF
+var facilityLayer = new deck.ScatterplotLayer({{
+  id: 'facilities',
+  data: DATA.facilities,
+  getPosition: function(d) {{ return d.position; }},
+  getRadius: function(d) {{ return d.radius; }},
+  getFillColor: function(d) {{ return d.color; }},
+  radiusMinPixels: 3,
+  radiusMaxPixels: 20,
+  pickable: true,
+  autoHighlight: true,
+  highlightColor: [255, 255, 255, 200],
+  visible: false,
+}});
+allLayers.push(facilityLayer);
+layerVisibility.facilities = false;
+
+// 7. 居民点 (ColumnLayer) — default OFF
+var clusterLayer = new deck.ColumnLayer({{
+  id: 'clusters',
+  data: DATA.clusters,
+  getPosition: function(d) {{ return d.position; }},
+  getElevation: function(d) {{ return d.height; }},
+  getFillColor: function(d) {{ return d.color; }},
+  getLineColor: [233, 30, 99, 255],
+  getLineWidth: 1,
+  radius: 30,
+  elevationScale: 1,
+  pickable: true,
+  autoHighlight: true,
+  highlightColor: [255, 255, 255, 200],
+  visible: false,
+}});
+allLayers.push(clusterLayer);
+layerVisibility.clusters = false;
+
+// 8a. 相邻 (LineLayer, z=200) — default OFF
+var relSfTouchesLayer = new deck.LineLayer({{
+  id: 'rel_sfTouches',
+  data: DATA.l2_relations.filter(function(d) {{ return d.type === 'sfTouches'; }}),
+  getSourcePosition: function(d) {{ return d.source; }},
+  getTargetPosition: function(d) {{ return d.target; }},
+  getColor: [46, 204, 113, 180],
+  getWidth: 1.5,
+  widthMinPixels: 0.5,
+  widthMaxPixels: 3,
+  pickable: false,
+  visible: false,
+}});
+allLayers.push(relSfTouchesLayer);
+layerVisibility.rel_sfTouches = false;
+
+// 8b. 道路连接 (LineLayer, z=200) — default OFF
+var relConnectedRoadLayer = new deck.LineLayer({{
+  id: 'rel_connected_via_road',
+  data: DATA.l2_relations.filter(function(d) {{ return d.type === 'connected_via_road'; }}),
+  getSourcePosition: function(d) {{ return d.source; }},
+  getTargetPosition: function(d) {{ return d.target; }},
+  getColor: [52, 152, 219, 180],
+  getWidth: 1.5,
+  widthMinPixels: 0.5,
+  widthMaxPixels: 3,
+  pickable: false,
+  visible: false,
+}});
+allLayers.push(relConnectedRoadLayer);
+layerVisibility.rel_connected_via_road = false;
+
+// 8c. 邻近 (LineLayer, z=200) — default OFF
+var relNearbyLayer = new deck.LineLayer({{
+  id: 'rel_nearby',
+  data: DATA.l2_relations.filter(function(d) {{ return d.type === 'nearby'; }}),
+  getSourcePosition: function(d) {{ return d.source; }},
+  getTargetPosition: function(d) {{ return d.target; }},
+  getColor: [155, 89, 182, 120],
+  getWidth: 0.8,
+  widthMinPixels: 0.5,
+  widthMaxPixels: 3,
+  pickable: false,
+  visible: false,
+}});
+allLayers.push(relNearbyLayer);
+layerVisibility.rel_nearby = false;
+
+// 8d. 包含 (LineLayer, z=200) — default OFF
+var relSfWithinLayer = new deck.LineLayer({{
+  id: 'rel_sfWithin',
+  data: DATA.l2_relations.filter(function(d) {{ return d.type === 'sfWithin'; }}),
+  getSourcePosition: function(d) {{ return d.source; }},
+  getTargetPosition: function(d) {{ return d.target; }},
+  getColor: [231, 76, 60, 150],
+  getWidth: 1.5,
+  widthMinPixels: 0.5,
+  widthMaxPixels: 3,
+  pickable: false,
+  visible: false,
+}});
+allLayers.push(relSfWithinLayer);
+layerVisibility.rel_sfWithin = false;
+
+// 8e. 相交 (LineLayer, z=200) — default OFF
+var relSfIntersectsLayer = new deck.LineLayer({{
+  id: 'rel_sfIntersects',
+  data: DATA.l2_relations.filter(function(d) {{ return d.type === 'sfIntersects'; }}),
+  getSourcePosition: function(d) {{ return d.source; }},
+  getTargetPosition: function(d) {{ return d.target; }},
+  getColor: [241, 196, 15, 150],
+  getWidth: 1.5,
+  widthMinPixels: 0.5,
+  widthMaxPixels: 3,
+  pickable: false,
+  visible: false,
+}});
+allLayers.push(relSfIntersectsLayer);
+layerVisibility.rel_sfIntersects = false;
+
+// 9. 村界 (PolygonLayer, white outline, no fill) — default OFF
+var boundaryLayer = new deck.PolygonLayer({{
+  id: 'boundary',
+  data: DATA.boundary,
+  extruded: false,
+  wireframe: false,
+  filled: false,
+  stroked: true,
+  getPolygon: function(d) {{ return d.contour; }},
+  getLineColor: [255, 255, 255, 255],
+  getLineWidth: 3,
+  lineWidthMinPixels: 2,
+  pickable: false,
+  material: {{ambient: 1, diffuse: 0, shininess: 0}},
+  visible: false,
+}});
+allLayers.push(boundaryLayer);
+layerVisibility.boundary = false;
+
+// Lighting
+var ambientLight = new deck.AmbientLight({{
+  color: [255, 255, 255],
+  intensity: 0.5
+}});
+var directionalLight = new deck.DirectionalLight({{
+  color: [255, 255, 255],
+  intensity: 1.0,
+  direction: [-1, -1, -1]
+}});
+var lightingEffect = new deck.LightingEffect({{ambientLight, directionalLight}});
+
+// Helper: return all layers with visible prop set (never remove layers from array)
+function getVisibleLayers() {{
+  return allLayers.map(function(l) {{
+    var vis = layerVisibility[l.id] !== undefined ? layerVisibility[l.id] : true;
+    return l.clone({{ visible: vis }});
+  }});
 }}
 
-// Fit bounds
-try {{
-  var allBounds = L.latLngBounds([]);
-  Object.values(LAYER_GROUPS).forEach(function(g) {{
-    try {{ var b = g.getBounds(); if (b.isValid()) allBounds.extend(b); }} catch(e) {{}}
-  }});
-  if (allBounds.isValid()) map.fitBounds(allBounds, {{ padding: [30, 30] }});
-}} catch(e) {{}}
+// deck.gl overlay
+var deckOverlay = new deck.DeckGL({{
+  container: 'map',
+  mapStyle: GAODE_STYLE,
+  effects: [lightingEffect],
+  layers: getVisibleLayers(),
+  getTooltip: function(info) {{
+    if (!info || !info.object) return null;
+    var d = info.object;
+    if (d.tooltip) {{
+      return {{ html: d.tooltip, className: 'deck-tooltip' }};
+    }}
+    return null;
+  }},
+  initialViewState: {{
+    longitude: CENTER[0],
+    latitude: CENTER[1],
+    zoom: 14,
+    pitch: 45,
+    bearing: 0
+  }},
+  controller: true,
+  useDevicePixels: false
+}});
 
 // Layer toggles
 document.querySelectorAll('.layer-toggle').forEach(function(el) {{
   el.addEventListener('click', function() {{
-    var layer = this.dataset.layer;
-    var g = LAYER_GROUPS[layer];
-    if (!g) return;
-    if (map.hasLayer(g)) {{
-      map.removeLayer(g);
-      this.classList.remove('active');
-    }} else {{
-      g.addTo(map);
-      this.classList.add('active');
+    var layerName = this.dataset.layer;
+
+    // Special case: basemap toggle (MapLibre, not deck.gl)
+    if (layerName === 'basemap') {{
+      var visible = !layerVisibility['basemap'];
+      layerVisibility['basemap'] = visible;
+      var internalMap = deckOverlay.getMap();
+      if (internalMap) {{
+        internalMap.setLayoutProperty('gaode-layer', 'visibility', visible ? 'visible' : 'none');
+      }}
+      if (visible) {{ this.classList.add('active'); }} else {{ this.classList.remove('active'); }}
+      return;
     }}
+
+    var visible = !layerVisibility[layerName];
+    layerVisibility[layerName] = visible;
+    if (visible) {{
+      this.classList.add('active');
+    }} else {{
+      this.classList.remove('active');
+    }}
+    deckOverlay.setProps({{
+      layers: getVisibleLayers()
+    }});
   }});
 }});
 
-// Sidebar entity click -> zoom to type
+// Sidebar entity click -> zoom to layer
 document.querySelectorAll('.type-entity').forEach(function(el) {{
   el.addEventListener('click', function() {{
     var type = this.dataset.type;
-    // Find features of this type in the map
     var short = type.split(':').pop();
+    if (short === 'Zone') {{
+      // Zone entity maps to 3 separate layers — toggle all OFF ones ON
+      ['zones_farmland', 'zones_ecological', 'zones_historical'].forEach(function(zn) {{
+        var tg = document.querySelector('.layer-toggle[data-layer="' + zn + '"]');
+        if (tg && !layerVisibility[zn]) tg.click();
+      }});
+      var m = deckOverlay.getMap(); if (m) m.flyTo({{ center: CENTER, zoom: 14, pitch: 45 }});
+      return;
+    }}
     var layerName = null;
     if (short === 'Parcel') layerName = 'parcels';
-    else if (short === 'Zone') layerName = 'zones';
     else if (short === 'Road') layerName = 'roads';
     else if (short === 'Facility') layerName = 'facilities';
     else if (short === 'ResidentialCluster') layerName = 'clusters';
     else if (short === 'PlannedParcel') layerName = 'planned_parcels';
     else if (short === 'PlannedZone') layerName = 'planned_zones';
-    if (layerName && LAYER_GROUPS[layerName]) {{
-      try {{
-        var b = LAYER_GROUPS[layerName].getBounds();
-        if (b.isValid()) map.fitBounds(b, {{ padding: [30, 30] }});
-      }} catch(e) {{}}
+    if (layerName) {{
+      var toggle = document.querySelector('.layer-toggle[data-layer="' + layerName + '"]');
+      if (toggle && !layerVisibility[layerName]) {{
+        toggle.click();
+      }}
+      var m = deckOverlay.getMap(); if (m) m.flyTo({{ center: CENTER, zoom: 14, pitch: 45 }});
     }}
   }});
 }});
 
-// ── D3.js Force Graph ──
-var svg = d3.select('#force-graph')
-  .append('svg')
-  .attr('width', '100%')
-  .attr('height', '100%');
-
-var width = 280, height = 500;
-var g = svg.append('g');
-
-var zoom = d3.zoom()
-  .scaleExtent([0.1, 4])
-  .on('zoom', function(event) {{ g.attr('transform', event.transform); }});
-svg.call(zoom);
-
-var nodeData = FORCE.nodes.map(function(d) {{
-  return Object.assign({{}}, d, {{ radius: Math.max(6, Math.min(35, Math.sqrt(d.count) * 1.2)) }});
+// Resize handler
+window.addEventListener('resize', function() {{
+  deckOverlay.setProps({{}});
 }});
-
-var linkData = FORCE.links.map(function(d) {{
-  return Object.assign({{}}, d);
-}});
-
-var simulation = d3.forceSimulation(nodeData)
-  .force('link', d3.forceLink(linkData).id(function(d) {{ return d.id; }}).distance(80))
-  .force('charge', d3.forceManyBody().strength(-200))
-  .force('center', d3.forceCenter(width / 2, height / 2))
-  .force('collision', d3.forceCollide().radius(function(d) {{ return d.radius + 4; }}));
-
-var link = g.append('g')
-  .selectAll('line')
-  .data(linkData)
-  .join('line')
-  .attr('stroke', '#555')
-  .attr('stroke-width', function(d) {{ return Math.max(1, Math.min(5, Math.sqrt(d.count) * 0.3)) }})
-  .attr('stroke-opacity', 0.5);
-
-var node = g.append('g')
-  .selectAll('circle')
-  .data(nodeData)
-  .join('circle')
-  .attr('r', function(d) {{ return d.radius; }})
-  .attr('fill', function(d) {{ return d.color; }})
-  .attr('stroke', '#fff')
-  .attr('stroke-width', 1)
-  .attr('opacity', 0.85)
-  .call(d3.drag()
-    .on('start', function(event, d) {{ if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }})
-    .on('drag', function(event, d) {{ d.fx = event.x; d.fy = event.y; }})
-    .on('end', function(event, d) {{ if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }})
-  );
-
-var label = g.append('g')
-  .selectAll('text')
-  .data(nodeData)
-  .join('text')
-  .text(function(d) {{ return d.label.split(' ').pop() + ' [' + d.count + ']'; }})
-  .attr('font-size', 9)
-  .attr('dx', function(d) {{ return d.radius + 3; }})
-  .attr('dy', 3)
-  .attr('fill', '#ccc');
-
-node.append('title')
-  .text(function(d) {{ return d.label + '\\n' + d.count + ' 个实体'; }});
-
-link.append('title')
-  .text(function(d) {{ return d.type + ': ' + d.count + ' 条关系'; }});
-
-simulation.on('tick', function() {{
-  link
-    .attr('x1', function(d) {{ return d.source.x; }})
-    .attr('y1', function(d) {{ return d.source.y; }})
-    .attr('x2', function(d) {{ return d.target.x; }})
-    .attr('y2', function(d) {{ return d.target.y; }});
-  node
-    .attr('cx', function(d) {{ return d.x; }})
-    .attr('cy', function(d) {{ return d.y; }});
-  label
-    .attr('x', function(d) {{ return d.x; }})
-    .attr('y', function(d) {{ return d.y; }});
-}});
-
-// Resize observer
-var ro = new ResizeObserver(function() {{
-  width = document.getElementById('force-panel').clientWidth;
-  height = document.getElementById('force-panel').clientHeight - 24;
-  svg.attr('width', width).attr('height', height);
-  simulation.force('center', d3.forceCenter(width / 2, height / 2));
-  simulation.alpha(0.3).restart();
-}});
-ro.observe(document.getElementById('force-panel'));
 </script>
 </body>
 </html>
@@ -1099,7 +1476,7 @@ ro.observe(document.getElementById('force-panel'));
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Render KG for human inspection (HTML + Turtle + stats).",
+        description="Render KG for human inspection (deck.gl 3D HTML + Turtle + stats).",
     )
     parser.add_argument("--village", default="jintian",
                         help="Village name (default: jintian).")
@@ -1113,7 +1490,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("  KG Inspection Renderer (v2 — multi-layer + D3.js)")
+    print("  KG Inspection Renderer (v3 — deck.gl 3D)")
     print("=" * 60)
     print(f"  Village:    {args.village}")
     print(f"  Output dir: {output_dir}")
@@ -1142,7 +1519,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if cnt:
             print(f"    {short:35s} {cnt}")
 
-    print("\n[4/4] Writing kg_inspection.html (multi-layer map + D3.js force graph)...")
+    print("\n[4/4] Writing kg_inspection.html (deck.gl 3D visualization)...")
     html_path = write_html(kg, bundle, stats, output_dir)
     print(f"  {html_path.name}: {html_path.stat().st_size:,} bytes")
 
