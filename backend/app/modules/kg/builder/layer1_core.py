@@ -313,7 +313,7 @@ def add_planning_elements_from_typed(kg, polygons_layer) -> None:
     for z in polygons_layer.get("land_use_zones") or []:
         bsm = str(z.bsm).strip()
         ysdm = str(z.ysdm).strip()
-        code = ysdm or getattr(z, "dlbm", "")
+        code = ysdm or z.dlbm
         if bsm:
             uri = EntityIdPolicy.uri("tdyt", bsm)
         else:
@@ -559,7 +559,7 @@ def add_residential_clusters_from_typed(kg, parcels, annotations=None) -> None:
     )
 
 
-@kg_builder("facilities_current", entity_type="Facility", layer=1, order=10)
+@kg_builder("current_facility", entity_type="Facility", layer=1, order=10)
 def add_facilities_from_typed(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict:
     from app.modules.schema.types.spatial_types import CurrentFacility
     count = 0

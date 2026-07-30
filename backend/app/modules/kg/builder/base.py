@@ -57,11 +57,21 @@ class PlanningKG:
         except Exception:
             return []
 
+    def get_parcel_count(self) -> int:
+        return self._parcel_count
+
     def get_triple_count(self) -> int:
         return len(self.g)
 
     def to_turtle(self) -> str:
         return self.g.serialize(format="turtle")
+
+    @classmethod
+    def from_turtle(cls, turtle_str: str, village_name: str = "") -> "PlanningKG":
+        kg = cls(village_name=village_name)
+        kg.g.parse(data=turtle_str, format="turtle")
+        kg._parcel_count = len(list(kg.g.subjects(RDF.type, EntityTypes.Parcel)))
+        return kg
 
     def get_adjacency_map(self) -> Dict[str, set]:
         adj: Dict[str, set] = {}

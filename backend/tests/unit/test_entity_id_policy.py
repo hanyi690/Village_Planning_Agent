@@ -68,21 +68,14 @@ class TestEntityIdPolicy:
 
 @pytest.fixture(scope="module")
 def kg_test():
-    """Build a minimal KG for testing EntityIdPolicy integration."""
-    from app.modules.kg.builder import PlanningKG
+    """Build a minimal KG for testing EntityIdPolicy integration via KGBuilder."""
+    from app.modules.kg.builder import KGBuilder
+    from app.modules.schema.types.canonical import VillageBundle
     from app.modules.schema.types.spatial_types import (
         CurrentLandUseParcel, CurrentRoad, CurrentFacility,
     )
 
-    kg = PlanningKG(village_name="test_village")
-
-    # Manually build a minimal graph
-    kg.g = kg.g.__class__()
-    kg.g.bind("pln", PLN_NS)
-    kg._parcel_count = 0
-
-    # Add village
-    kg._add_village_entity("TestVillage")
+    bundle = VillageBundle(village_name="test_village")
 
     # Minimal geometry placeholders
     poly_geom = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]}
@@ -95,23 +88,26 @@ def kg_test():
         CurrentLandUseParcel(geometry=poly_geom, bsm="P002", dlbm="0101", area_sqm=3000.0, name="水田"),
         CurrentLandUseParcel(geometry=poly_geom, bsm="P003", dlbm="2121", area_sqm=2000.0, name="村庄住宅"),
     ]
-    kg._add_parcels(parcels)
+    for p in parcels:
+        bundle.add(p)
 
     # Add roads
     roads = [
         CurrentRoad(geometry=line_geom, bsm="R001", road_level="村道", shape_length=500.0),
         CurrentRoad(geometry=line_geom, bsm="R002", road_level="主干道", shape_length=1200.0),
     ]
-    kg.add_roads(roads, gtype_ref="current_road", entry=None,
-                  ctx=BuildContext(village_name="test", provenance={}))
+    for r in roads:
+        bundle.add(r)
 
     # Add facilities (with BSM)
     facilities = [
         CurrentFacility(geometry=point_geom, bsm="F001", facility_name="村委会", facility_type="公共服务"),
         CurrentFacility(geometry=point_geom, bsm="F002", facility_name="卫生站", facility_type="医疗"),
     ]
-    kg._add_facilities_from_typed(facilities)
+    for f in facilities:
+        bundle.add(f)
 
+    kg = KGBuilder.build("test_village", bundle)
     return kg
 
 
@@ -163,12 +159,11 @@ class TestGetAdjacencyMap:
 
     def test_adjacency_keys_are_pure_bsm(self, kg_test):
         """Add touches relations and verify adjacency map keys are pure BSMs."""
-        # Find parcel URIs
+        from app.modules.kg.ontology import Relations
         parcels = list(kg_test.g.subjects(RDF.type, EntityTypes.Parcel))
         if len(parcels) >= 2:
-            # Add a touches relation
-            kg_test.g.add((parcels[0], PLN.touches, parcels[1]))
-            kg_test.g.add((parcels[1], PLN.touches, parcels[0]))
+            kg_test.g.add((parcels[0], Relations.sfTouches, parcels[1]))
+            kg_test.g.add((parcels[1], Relations.sfTouches, parcels[0]))
 
         adj = kg_test.get_adjacency_map()
         for bsm in adj:
@@ -190,9 +185,9 @@ class TestL4EntityIdAndLinks:
 
     def test_l4_parcel_uri_has_version(self, kg_test):
         """L4 PlannedParcel URI includes version suffix."""
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry, apply_planned_state
         kg_clone = kg_test.clone_static_layer()
-        kg_clone.apply_planned_state(PlannedState(
+        apply_planned_state(kg_clone, PlannedState(
             version="v1",
             parcels=[PlannedParcelEntry(bsm="P001", planning_land_use="2121")],
         ))
@@ -203,9 +198,9 @@ class TestL4EntityIdAndLinks:
 
     def test_l4_parcel_has_bsm_literal(self, kg_test):
         """L4 PlannedParcel has PLN.bsm literal."""
-        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+        from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry, apply_planned_state
         kg_clone = kg_test.clone_static_layer()
-        kg_clone.apply_planned_state(PlannedState(
+        apply_planned_state(kg_clone, PlannedState(
             version="v1",
             parcels=[PlannedParcelEntry(bsm="P001", planning_land_use="2121")],
         ))
@@ -216,11 +211,11 @@ class TestL4EntityIdAndLinks:
     def test_l4_derived_from_target(self, kg_test):
         """L4 entity writes derived_from_target when source field set."""
         from app.modules.kg.builder.layer4 import (
-            PlannedState, PlannedParcelEntry, PlannedFacilityEntry,
+            PlannedState, PlannedParcelEntry, PlannedFacilityEntry, apply_planned_state,
         )
         target_uri = str(PLN["zone_target_residential"])
         kg_clone = kg_test.clone_static_layer()
-        kg_clone.apply_planned_state(PlannedState(
+        apply_planned_state(kg_clone, PlannedState(
             version="v1",
             parcels=[PlannedParcelEntry(
                 bsm="P001", planning_land_use="2121",
@@ -241,16 +236,19 @@ class TestNoNameCollision:
 
     def test_two_facilities_same_name_different_bsm(self):
         """Two facilities with same name but different BSM get different URIs."""
-        from app.modules.kg.builder import PlanningKG
+        from app.modules.kg.builder import KGBuilder
+        from app.modules.schema.types.canonical import VillageBundle
         from app.modules.schema.types.spatial_types import CurrentFacility
 
-        kg = PlanningKG("test")
+        bundle = VillageBundle(village_name="test")
         point_geom = {"type": "Point", "coordinates": [0, 0]}
         facilities = [
             CurrentFacility(geometry=point_geom, bsm="F001", facility_name="村委会", facility_type="公共服务"),
             CurrentFacility(geometry=point_geom, bsm="F002", facility_name="村委会", facility_type="公共服务"),
         ]
-        kg._add_facilities_from_typed(facilities)
+        for f in facilities:
+            bundle.add(f)
+        kg = KGBuilder.build("test", bundle)
 
         # Should have 2 distinct Facility URIs
         fac_uris = list(kg.g.subjects(RDF.type, EntityTypes.Facility))

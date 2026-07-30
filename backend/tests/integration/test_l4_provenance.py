@@ -29,7 +29,7 @@ def kg_main():
     from app.modules.schema.types.canonical import VillageBundle
     from app.modules.spatial_ops import build_constraint_index
     from app.modules.spatial_ops.geometry import compute_parcel_relations
-    from app.modules.kg.builder import PlanningKG
+    from app.modules.kg.builder import KGBuilder
 
     bundle = VillageBundle(village_name="jintian")
 
@@ -49,13 +49,12 @@ def kg_main():
     rel = compute_parcel_relations(
         bundle.polygons.get("landuse_current"), roads=bundle.lines.get("roads_current"))
     ci = build_constraint_index(bundle)
-    kg = PlanningKG(village_name="jintian")
-    kg.build_from_bundle(bundle=bundle, parcel_relations=rel, constraint_index=ci)
+    kg = KGBuilder.build("jintian", bundle, parcel_relations=rel, constraint_index=ci)
     return kg
 
 
 def test_l4_provenance_five_predicates(kg_main):
-    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry, apply_planned_state
     from rdflib import Namespace, RDF, URIRef
     PLN = Namespace("http://village-planning.org/ontology#")
 
@@ -67,7 +66,7 @@ def test_l4_provenance_five_predicates(kg_main):
     assert real_bsm is not None
 
     kg_plan = kg_main.clone_static_layer()
-    kg_plan.apply_planned_state(PlannedState(version="v1", parcels=[
+    apply_planned_state(kg_plan, PlannedState(version="v1", parcels=[
         PlannedParcelEntry(
             bsm=f"{real_bsm}_prov",
             planning_land_use="2121",
@@ -100,9 +99,9 @@ def test_l4_provenance_five_predicates(kg_main):
 
 
 def test_l4_provenance_defaults_empty(kg_main):
-    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry, apply_planned_state
     kg_plan = kg_main.clone_static_layer()
-    kg_plan.apply_planned_state(PlannedState(version="v1", parcels=[
+    apply_planned_state(kg_plan, PlannedState(version="v1", parcels=[
         PlannedParcelEntry(bsm="NO_PROV", planning_land_use="0101"),
     ]))
     pp_rows = kg_plan.query(
@@ -116,9 +115,9 @@ def test_l4_provenance_defaults_empty(kg_main):
 
 
 def test_l4_provenance_spquery(kg_main):
-    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
+    from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry, apply_planned_state
     kg_plan = kg_main.clone_static_layer()
-    kg_plan.apply_planned_state(PlannedState(version="v1", parcels=[
+    apply_planned_state(kg_plan, PlannedState(version="v1", parcels=[
         PlannedParcelEntry(
             bsm="SPQ1", planning_land_use="2121",
             source_spec="attributive:all_forest",

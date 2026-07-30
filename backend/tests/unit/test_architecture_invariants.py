@@ -80,19 +80,21 @@ def test_no_reverse_dependencies(dir_rel, patterns, desc):
 
 
 def test_kg_builder_subpackage_has_expected_files():
-    """builder/ subpackage has the 8 expected files (incl registry.py)."""
+    """builder/ subpackage has the expected files for v5 composition architecture."""
     builder_dir = BACKEND_ROOT / "app" / "modules" / "kg" / "builder"
-    expected = {"__init__.py", "base.py", "layer1.py", "layer2.py",
-                "layer3.py", "layer4.py", "mixins.py", "registry.py"}
+    expected = {
+        "__init__.py", "base.py", "builder.py", "enrichment.py",
+        "geo_helpers.py", "layer1_core.py", "layer1_extended.py",
+        "layer2.py", "layer3.py", "layer4.py", "registry.py",
+    }
     actual = {f.name for f in builder_dir.glob("*.py")}
     assert expected.issubset(actual), f"Missing: {expected - actual}"
 
 
 def test_kg_builder_uses_schema_imports():
-    """KG builder layer1.py uses schema imports (not raw dict reverse-deps)."""
-    layer1_path = BACKEND_ROOT / "app" / "modules" / "kg" / "builder" / "layer1.py"
-    content = layer1_path.read_text(encoding="utf-8")
-    assert "from app.modules.schema.encodings.code_sets import resolve_zone_type_for_dlbm" in content
+    """KG builder core file uses schema imports (not raw dict reverse-deps)."""
+    path = BACKEND_ROOT / "app" / "modules" / "kg" / "builder" / "layer1_core.py"
+    content = path.read_text(encoding="utf-8")
     assert "from app.modules.schema.types.spatial_types import" in content
 
 

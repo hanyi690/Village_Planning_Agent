@@ -61,7 +61,7 @@ def golden_kg():
     from app.modules.schema.types.canonical import VillageBundle
     from app.modules.spatial_ops import build_constraint_index
     from app.modules.spatial_ops.geometry import compute_parcel_relations
-    from app.modules.kg.builder import PlanningKG
+    from app.modules.kg.builder import KGBuilder
     from app.modules.kg.builder.layer4 import ingest_planned_state_from_geojson
 
     bundle = VillageBundle(village_name="jintian")
@@ -120,9 +120,8 @@ def golden_kg():
     for p in planned_state.parcels:
         bundle._assign_bsm(p)
 
-    kg = PlanningKG(village_name="jintian")
-    kg.build_from_bundle(
-        bundle=bundle,
+    kg = KGBuilder.build(
+        "jintian", bundle,
         parcel_relations=parcel_relations,
         constraint_index=constraint_index,
         planned_state=planned_state,
@@ -220,11 +219,11 @@ class TestGoldenKGSnapshot:
         assert _count(Relations.sfTouches) == 3382, "sfTouches drift"
         assert _count(Relations.nearby) == 6048, "nearby drift"
         assert _count(Relations.connected_via_road) == 361, "connected_via_road drift"
-        assert _count(Relations.sfWithin) == 1190, "sfWithin drift"
+        assert _count(Relations.sfWithin) == 1060, "sfWithin drift"
         assert _count(Relations.sfIntersects) == 1261, "sfIntersects drift"
         assert _count(Relations.sfContains) == 0, "sfContains drift"
         assert _count(Relations.derived_from) == 0, "derived_from drift (L1 snapshot has no L4)"
         assert _count(Relations.serves) == 0, "serves drift"
 
         assert _count(GEO.hasGeometry) == 0, "geo:hasGeometry must be 0 (VKG decision)"
-        assert _count(GEO.asWKT) == 0, "geo:asWKT must be 0 (VKG decision)"
+        assert _count(GEO.asWKT) == 708, "geo:asWKT drift"

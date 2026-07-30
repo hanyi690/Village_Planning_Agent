@@ -1,7 +1,7 @@
-# kg/queries - Four-Namespace Query API
+# kg/queries - Four-Namespace Query API (v5.0)
 
 > **Purpose**: Query layer for `PlanningKG`. Provides SPARQL templates, LLM-friendly semantic queries, three-layer cognition summaries, and the v4.8 four-namespace API (analysis/parse/execute/shared).
-> **Updated: 2026-07-28 (v4.8.1)**
+> **Updated: 2026-07-30 (v5.0)** - Query functions now module-level (no mixin inheritance)
 
 ---
 
@@ -10,7 +10,7 @@
 | File | Role |
 | --- | --- |
 | `__init__.py` | Exports all query functions + four namespace dicts (`analysis_queries`, `parse_queries`, `execute_queries`, `shared_queries`) |
-| `sparql.py` | `QUERY_TEMPLATES` registry (30+ named SPARQL templates) + `query_kg()` parameterized execution + `TOOL_META` (tool metadata for LLM) + instance methods mixed into `PlanningKG` via `QueryMixin` |
+| `sparql.py` | `QUERY_TEMPLATES` registry (30+ named SPARQL templates) + `query_kg()` parameterized execution + `TOOL_META` (tool metadata for LLM) + standalone query functions |
 | `semantic.py` | LLM-friendly semantic queries (`get_entity_context`, `get_parcel_semantic_context`, `get_village_semantic_summary`, `get_entity_semantics`, ...) + write-on-read annotation filling + `TOOL_META_SEMANTIC` |
 | `cognition.py` | Three-layer cognition summary: `get_village_cognition()` (village overview + layer cards + constraint brief) + `get_layer_group_semantics()` |
 | `contracts.py` | `DualPayload` (semantic + structured dual return) + `TokenBudget` (CJK-aware) + `TopKSampler` (stratified + spatial grid + outliers, no embeddings) |
@@ -49,30 +49,43 @@ print(list(QUERY_TEMPLATES.keys()))
 # -> ['get_zone_restrictions', 'check_protected_parcels', 'get_parcels_by_dlbm', ...]
 ```
 
-## Instance methods (mixed into PlanningKG)
+## Query functions (v5.0 - all module-level, take `kg` as first arg)
 
 ```python
-kg = PlanningKG("金田村委会")
-kg.build_from_bundle(bundle=bundle, parcel_relations=relations)
+from app.modules.kg.queries import (
+    query, get_adjacency_map,
+    get_parcel_count, get_triple_count, serialize, to_turtle, from_turtle,
+    get_parcels_within_distance_of_entity, get_adjacent_parcels_with_length,
+    get_connected_parcels, get_parcels_by_bsm_list, validate_intent,
+    get_effective_land_use, get_effective_area_ha,
+    get_plan_changes, get_planned_parcels_in_zone,
+    check_constraint_violations, compare_versions,
+)
 
-# SPARQL instance methods
+# PlanningKG instance methods (still on base.py)
+kg = PlanningKG("jintian")
+kg = KGBuilder.build("jintian", bundle, parcel_relations=relations, constraint_index=constraint_index)
+
+# Query methods on PlanningKG
 rows = kg.query("SELECT ?s ?p ?o WHERE { ?s ?p ?o }")
 adj = kg.get_adjacency_map()                       # BSM -> {neighbor BSMs}
-nearby = kg.get_parcels_within_distance_of_entity(uri, 500)
-connected = kg.get_connected_parcels(parcel_uri)
 count = kg.get_parcel_count()                      # int
 triples = kg.get_triple_count()                    # int
 turtle = kg.to_turtle()
 kg.serialize("kg.ttl", fmt="turtle")
 
-# Constraint verification (uses injected ConstraintIndex)
-violations = kg.check_constraint_violations("v1")
-conflicts = kg.validate_intent(intent)
+# Module-level query functions (import from queries.sparql)
+nearby = get_parcels_within_distance_of_entity(kg, uri, 500)
+connected = get_connected_parcels(kg, parcel_uri)
+adj_with_len = get_adjacent_parcels_with_length(kg, bsm)
 
-# L4 queries
-changes = kg.get_plan_changes("v1")
-effective_landuse = kg.get_effective_land_use("001")
-effective_area = kg.get_effective_area_ha("001")
+# L4 query functions (import from queries.sparql)
+violations = check_constraint_violations(kg, "v1")
+diff = compare_versions(kg, "v1", "v2")
+changes = get_plan_changes(kg, "v1")
+effective_lu = get_effective_land_use(kg, "001", "v1")
+effective_area = get_effective_area_ha(kg, "001", "v1")
+zone_parcels = get_planned_parcels_in_zone(kg, "村庄建设区", "v1")
 ```
 
 ## Semantic queries (LLM-friendly)
@@ -87,10 +100,10 @@ from app.modules.kg.queries import (
 )
 
 # Returns human-readable description + structured data
-ctx = get_entity_context(kg, entity_uri="pln:Parcel_P001")
+ctx = get_entity_context(kg, entity_uri="pln:parcel_001")
 # -> {"description": "P001: 水田(0101) 0.5ha 农田保护区", "attributes": {...}, ...}
 
-# Semantic layer (v4.8): taxonomy / legal constraint / allowed operations
+# Semantic layer: taxonomy / legal constraint / allowed operations
 sem = get_entity_semantics(kg, entity_label="水田")
 # -> {"taxonomic_parent": "农业用地", "legal_constraint": "forbid_construction", ...}
 ```
@@ -122,6 +135,23 @@ from app.modules.kg.queries import TOOL_META, TOOL_META_SEMANTIC
 
 # TOOL_META: metadata for wrapping query_kg as a LangGraph @tool
 # Describes available template names + parameter schema
+```
+
+## L3/L4 builder functions (in builder/layer3.py, builder/layer4.py)
+
+```python
+# Import from builder subpackage
+from app.modules.kg.builder.layer3 import build_intent_layer, clear_intent_layer
+from app.modules.kg.builder.layer4 import apply_planned_state
+
+# Build L3 intent
+build_intent_layer(kg, intent)
+
+# Build L4 planned state
+apply_planned_state(kg, planned_state)
+
+# Clear L3 (end of session)
+clear_intent_layer(kg)
 ```
 
 ## Dependencies
