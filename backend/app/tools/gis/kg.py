@@ -103,7 +103,7 @@ def build_knowledge_graph(
     kg_protected_parcels: Dict[str, Any] = {}
 
     try:
-        adj = kg.get_adjacency_map() if hasattr(kg, "get_adjacency_map") else {}
+        adj = kg.get_adjacency_map()
         kg_adjacency_map = {k: list(v) for k, v in adj.items()} if adj else {}
     except Exception:
         pass
@@ -128,7 +128,8 @@ def build_knowledge_graph(
     kg_count_by_planning_zone: List[Dict[str, Any]] = []
 
     try:
-        kg_constraint_coverage = kg.get_constraint_coverage()
+        from app.modules.kg.queries.sparql import get_constraint_coverage
+        kg_constraint_coverage = get_constraint_coverage(kg)
     except Exception:
         pass
     try:

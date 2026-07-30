@@ -169,7 +169,7 @@ class KGManager:
         Returns:
             (PlanningKG, cache_hit) tuple.
         """
-        from app.modules.kg.builder import PlanningKG
+        from app.modules.kg.builder import PlanningKG, KGBuilder
 
         # Use typed parcels for cache key when available
         parcels = bundle.polygons.get("landuse_current") if bundle else None
@@ -185,14 +185,14 @@ class KGManager:
                 return kg, True
 
         # Build fresh
-        kg = PlanningKG(village_name=village_name)
         if bundle is not None:
-            kg.build_from_bundle(
-                bundle=bundle,
+            kg = KGBuilder.build(
+                village_name, bundle,
                 parcel_relations=parcel_relations,
                 constraint_index=constraint_index,
             )
         else:
+            kg = PlanningKG(village_name=village_name)
             logger.warning("[KGManager] No bundle provided — skipping Layer 1 build")
 
         # Store in cache
@@ -311,8 +311,9 @@ class KGManager:
             bundle=bundle,
             parcel_relations=parcel_relations,
         )
-        if intent is not None and hasattr(kg, "build_intent_layer"):
-            kg.build_intent_layer(intent)
+        if intent is not None:
+            from app.modules.kg.builder.layer3 import build_intent_layer
+            build_intent_layer(kg, intent)
         if session_id:
             self.register_session(session_id, kg)
         return kg

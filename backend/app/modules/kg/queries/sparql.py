@@ -513,47 +513,47 @@ def from_turtle(cls, turtle_str: str, village_name: str = "") -> "PlanningKG":
     return kg
 
 
-def get_parcels_within_distance_of_entity(self, entity_uri: str, max_distance_m: float) -> List[str]:
+def get_parcels_within_distance_of_entity(kg, entity_uri: str, max_distance_m: float) -> List[str]:
     entity = URIRef(entity_uri) if isinstance(entity_uri, str) else entity_uri
     bsms = set()
     for rel in (PLN.nearby, PLN.sfTouches):
-        for s, _, _ in self.g.triples((None, rel, entity)):
-            for _, _, bsm in self.g.triples((s, PLN.bsm, None)):
+        for s, _, _ in kg.g.triples((None, rel, entity)):
+            for _, _, bsm in kg.g.triples((s, PLN.bsm, None)):
                 bsms.add(str(bsm))
-        for s, _, _ in self.g.triples((entity, rel, None)):
-            for _, _, bsm in self.g.triples((s, PLN.bsm, None)):
+        for s, _, _ in kg.g.triples((entity, rel, None)):
+            for _, _, bsm in kg.g.triples((s, PLN.bsm, None)):
                 bsms.add(str(bsm))
     return list(bsms)
 
 
-def get_adjacent_parcels_with_length(self, bsm: str) -> List[Tuple[str, float]]:
+def get_adjacent_parcels_with_length(kg, bsm: str) -> List[Tuple[str, float]]:
     results = []
-    for s, _, _ in self.g.triples((None, PLN.bsm, Literal(bsm))):
-        if (s, RDF.type, EntityTypes.Parcel) not in self.g:
+    for s, _, _ in kg.g.triples((None, PLN.bsm, Literal(bsm))):
+        if (s, RDF.type, EntityTypes.Parcel) not in kg.g:
             continue
-        for _, _, neighbor in self.g.triples((s, PLN.sfTouches, None)):
-            for _, _, nbsm in self.g.triples((neighbor, PLN.bsm, None)):
+        for _, _, neighbor in kg.g.triples((s, PLN.sfTouches, None)):
+            for _, _, nbsm in kg.g.triples((neighbor, PLN.bsm, None)):
                 length = 0.0
-                for _, _, lo in self.g.triples((s, PLN.shared_boundary_length, None)):
+                for _, _, lo in kg.g.triples((s, PLN.shared_boundary_length, None)):
                     length = float(lo)
                 results.append((str(nbsm), length))
     return results
 
 
-def get_connected_parcels(self, parcel_uri: str, max_path_length: float = float("inf")) -> List[str]:
+def get_connected_parcels(kg, parcel_uri: str, max_path_length: float = float("inf")) -> List[str]:
     """Return BSMs of parcels connected to parcel_uri via road network (L3)."""
     uri = URIRef(parcel_uri) if isinstance(parcel_uri, str) else parcel_uri
     bsms = set()
-    for _, _, neighbor in self.g.triples((uri, PLN.connected_via_road, None)):
-        for _, _, bsm in self.g.triples((neighbor, PLN.bsm, None)):
+    for _, _, neighbor in kg.g.triples((uri, PLN.connected_via_road, None)):
+        for _, _, bsm in kg.g.triples((neighbor, PLN.bsm, None)):
             bsms.add(str(bsm))
-    for s, _, _ in self.g.triples((None, PLN.connected_via_road, uri)):
-        for _, _, bsm in self.g.triples((s, PLN.bsm, None)):
+    for s, _, _ in kg.g.triples((None, PLN.connected_via_road, uri)):
+        for _, _, bsm in kg.g.triples((s, PLN.bsm, None)):
             bsms.add(str(bsm))
     return list(bsms)
 
 
-def get_parcels_by_bsm_list(self, bsms: List[str]) -> List[Dict[str, Any]]:
+def get_parcels_by_bsm_list(kg, bsms: List[str]) -> List[Dict[str, Any]]:
     """Return parcel structural data for a list of BSMs."""
     if not bsms:
         return []
@@ -567,32 +567,32 @@ def get_parcels_by_bsm_list(self, bsms: List[str]) -> List[Dict[str, Any]]:
         f"OPTIONAL {{ ?p pln:planning_zone ?planning_zone . }} "
         f"FILTER(?bsm IN ({bsm_filter})) }}"
     )
-    return self.query(sparql)
+    return kg.query(sparql)
 
 
-def validate_intent(self, intent: Any) -> List[Dict[str, Any]]:
+def validate_intent(kg, intent: Any) -> List[Dict[str, Any]]:
     from app.modules.schema.contracts.parse_contracts import SpatialPlanningIntent, FacilityTarget
     if not isinstance(intent, SpatialPlanningIntent):
         return []
     conflicts = []
     for ft in intent.facilities:
         if ft.semantic and ft.semantic.spatial_hint:
-            for bsm in self.get_parcels_within_distance_of_entity(ft.semantic.spatial_hint, 500):
-                if _is_in_protected_zone(self, bsm):
+            for bsm in get_parcels_within_distance_of_entity(kg, ft.semantic.spatial_hint, 500):
+                if _is_in_protected_zone(kg, bsm):
                     conflicts.append({"description": f"设施 {ft.type} 的候选地块 {bsm} 在保护区内",
                                       "severity": "high", "facility": ft.type, "bsm": bsm})
     return conflicts
 
 
-def _is_in_protected_zone(self, bsm: str) -> bool:
+def _is_in_protected_zone(kg, bsm: str) -> bool:
     """Check if a parcel overlaps any constraint polygon via spatial_ops bridge."""
-    if self._constraint_index is None:
+    if kg._constraint_index is None:
         return False
-    overlaps = self._constraint_index.parcel_in_constraint(bsm)
+    overlaps = kg._constraint_index.parcel_in_constraint(bsm)
     return len(overlaps) > 0
 
 
-def get_constraint_coverage(self) -> List[Dict[str, Any]]:
+def get_constraint_coverage(kg) -> List[Dict[str, Any]]:
     """Get all parcels with constraint polygon overlap info.
 
     Iterates all parcel BSMs in the KG and checks each against
@@ -603,28 +603,28 @@ def get_constraint_coverage(self) -> List[Dict[str, Any]]:
           bsm, dlbm, area_ha, zone_type, planning_zone,
           constraints: List[{constraint_type, overlap_pct, overlap_area_sqm, rule}]
     """
-    if self._constraint_index is None:
+    if kg._constraint_index is None:
         logger.debug("get_constraint_coverage: no constraint_index injected")
         return []
 
     from rdflib import RDF, Namespace
     PLN = Namespace("http://village-planning.org/ontology#")
-    all_bsms = list(self.g.subjects(RDF.type, PLN.Parcel))
+    all_bsms = list(kg.g.subjects(RDF.type, PLN.Parcel))
     if not all_bsms:
         return []
 
     bsm_cache = {}
     for pu in all_bsms:
-        bsm_node = self.g.value(pu, PLN.bsm)
+        bsm_node = kg.g.value(pu, PLN.bsm)
         if bsm_node:
             bsm_cache[str(bsm_node)] = pu
 
     results = []
     for bsm, pu in bsm_cache.items():
-        overlaps = self._constraint_index.parcel_in_constraint(bsm)
+        overlaps = kg._constraint_index.parcel_in_constraint(bsm)
         if not overlaps:
             continue
-        parcel_info = self.get_parcels_by_bsm_list([bsm])
+        parcel_info = get_parcels_by_bsm_list(kg, [bsm])
         info = parcel_info[0] if parcel_info else {}
         results.append({
             "bsm": bsm,

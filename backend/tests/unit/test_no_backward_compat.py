@@ -43,8 +43,8 @@ def test_ontology_no_three_zone_line_compat():
 
 def test_no_add_structured_intent_shim():
     """_add_structured_intent legacy shim must be gone; use build_intent_layer."""
-    from app.modules.kg.builder.mixins import Layer3Mixin
-    assert not hasattr(Layer3Mixin, "_add_structured_intent")
+    from app.modules.kg.builder import layer3
+    assert not hasattr(layer3, "_add_structured_intent")
 
 
 def test_sparql_no_deprecated_templates():

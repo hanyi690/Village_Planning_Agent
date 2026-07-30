@@ -694,7 +694,8 @@ def get_village_constraint_coverage(kg) -> List[Dict[str, Any]]:
         and a human-readable summary.
     """
     try:
-        raw = kg.get_constraint_coverage()
+        from .sparql import get_constraint_coverage
+        raw = get_constraint_coverage(kg)
         if not raw:
             return [{"summary": "未检测到与约束面的重叠", "parcel_count": 0}]
 

@@ -234,7 +234,8 @@ async def _write_kg_l3_node(state: GISPipelineState) -> dict:
             logger.warning("[Pipeline:write_kg_l3] No KG for session %s", session_id)
             return {}
 
-        kg.build_intent_layer(intent)
+        from app.modules.kg.builder.layer3 import build_intent_layer
+        build_intent_layer(kg, intent)
         kg_turtle = kg.to_turtle()
         kg_version = state.kg_version + 1
         manager.bump_version(session_id)

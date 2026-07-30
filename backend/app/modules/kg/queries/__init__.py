@@ -29,11 +29,16 @@ from .semantic import (
     get_entity_by_bsm, get_parcels_by_planning_zone,
     get_l4_derived_from_l1, get_village_constraint_coverage,
     get_entity_semantics,
+    get_parcels_semantic_list, get_parcel_detail_semantic,
+    get_parcel_neighbors_semantic, get_facilities_semantic_list,
+    get_designated_zones_semantic, get_road_network_semantic,
     TOOL_META_SEMANTIC,
 )
 from .cognition import get_village_cognition, get_layer_group_semantics
 from .spatial_ref import resolve_candidates
 from .contracts import DualPayload, TokenBudget, TopKSampler
+from ..builder.layer3 import build_intent_layer
+from ..builder.layer4 import apply_planned_state as apply_ps
 
 
 # ============================================================
@@ -103,7 +108,7 @@ parse_queries = {
         "writes_kg": False,
     },
     "build_intent_layer": {
-        "func": lambda kg, **kw: kg.build_intent_layer(kw.get("intent")),
+        "func": lambda kg, **kw: build_intent_layer(kg, kw.get("intent")),
         "description": "写入 L3 意图虚拟实体（PARSE 产出 -> KG L3）",
         "returns": "None",
         "writes_kg": True,
@@ -137,7 +142,7 @@ execute_queries = {
         "status": "reserved",
     },
     "check_conflicts": {
-        "func": lambda kg, **kw: kg.check_constraint_violations(),
+        "func": lambda kg, **kw: check_constraint_violations(kg),
         "description": "检查规划地块与约束面的冲突（validate 节点重试用）",
         "returns": "List[Dict]",
         "writes_kg": False,
@@ -158,28 +163,28 @@ execute_queries = {
         "status": "reserved",
     },
     "get_l4_state": {
-        "func": lambda kg, **kw: kg.get_plan_changes(kw.get("version", "current")),
+        "func": lambda kg, **kw: get_plan_changes(kg, kw.get("version", "current")),
         "description": "读取 L4 规划成果状态",
         "returns": "Dict",
         "writes_kg": False,
         "status": "exists_not_wired",
     },
     "get_effective_land_use": {
-        "func": lambda kg, **kw: kg.get_effective_land_use(kw.get("bsm", "")),
+        "func": lambda kg, **kw: get_effective_land_use(kg, kw.get("bsm", "")),
         "description": "L4->L1 回退读取有效地类",
         "returns": "str",
         "writes_kg": False,
         "status": "exists_not_wired",
     },
     "get_effective_area_ha": {
-        "func": lambda kg, **kw: kg.get_effective_area_ha(kw.get("bsm", "")),
+        "func": lambda kg, **kw: get_effective_area_ha(kg, kw.get("bsm", "")),
         "description": "L4->L1 回退读取有效面积",
         "returns": "float",
         "writes_kg": False,
         "status": "exists_not_wired",
     },
     "get_planned_parcels_in_zone": {
-        "func": lambda kg, **kw: kg.get_planned_parcels_in_zone(kw.get("zone_type", "")),
+        "func": lambda kg, **kw: get_planned_parcels_in_zone(kg, kw.get("zone_type", "")),
         "description": "按分区查询规划地块",
         "returns": "List[Dict]",
         "writes_kg": False,
@@ -193,21 +198,21 @@ execute_queries = {
         "status": "exists_not_wired",
     },
     "apply_planned_state": {
-        "func": lambda kg, **kw: kg.apply_planned_state(kw.get("planned_state")),
+        "func": lambda kg, **kw: apply_ps(kg, kw.get("planned_state")),
         "description": "[预留] 持久化 L4 规划成果（当前未接入 execute）",
         "returns": "None",
         "writes_kg": True,
         "status": "exists_not_wired",
     },
     "compare_versions": {
-        "func": lambda kg, **kw: kg.compare_versions(kw.get("v1", ""), kw.get("v2", "")),
+        "func": lambda kg, **kw: compare_versions(kg, kw.get("v1", ""), kw.get("v2", "")),
         "description": "版本差异对比（重试循环审计）",
         "returns": "Dict",
         "writes_kg": False,
         "status": "exists_not_wired",
     },
     "validate_intent": {
-        "func": lambda kg, **kw: kg.validate_intent(kw.get("intent", {})),
+        "func": lambda kg, **kw: validate_intent(kg, kw.get("intent", {})),
         "description": "L3 vs L1 设施冲突检测",
         "returns": "Dict",
         "writes_kg": False,

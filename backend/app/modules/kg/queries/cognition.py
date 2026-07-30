@@ -23,9 +23,10 @@ from rdflib import RDF, Literal, URIRef
 
 from app.utils.logger import get_logger
 from ..ontology import (
-    PLN, EntityTypes, Relations, SemanticPredicates,
+    PLN, EntityTypes, Relations, SemanticPredicates, GeoPredicates,
     GEOMETRY_POLYGON,
 )
+from ..builder.geo_helpers import parse_wkt_bbox
 
 # Predicate shortcuts (from SemanticPredicates)
 gis_type_ref = SemanticPredicates.gis_type_ref
@@ -185,12 +186,11 @@ def _build_context_block(kg, village_name: str) -> Dict[str, Any]:
 
     # BBox
     bbox = None
-    minx = kg.g.value(v_uri, PLN.bbox_minx)
-    miny = kg.g.value(v_uri, PLN.bbox_miny)
-    maxx = kg.g.value(v_uri, PLN.bbox_maxx)
-    maxy = kg.g.value(v_uri, PLN.bbox_maxy)
-    if all([minx, miny, maxx, maxy]):
-        bbox = [float(minx), float(miny), float(maxx), float(maxy)]
+    bbox_geom = kg.g.value(v_uri, GeoPredicates.hasBoundingBox)
+    if bbox_geom:
+        wkt_lit = kg.g.value(bbox_geom, GeoPredicates.asWKT)
+        if wkt_lit:
+            bbox = parse_wkt_bbox(str(wkt_lit))
 
     # Spatial pattern (derived from residential cluster distribution)
     spatial_pattern = _derive_spatial_pattern(kg)
@@ -353,14 +353,14 @@ def _build_constraint_block(kg) -> Dict[str, Any]:
     for _, _, o in kg.g.triples((None, PLN.planning_zone, None)):
         zone_dist[str(o)] += 1
 
-    # Constraint coverage (via kg.get_constraint_coverage if available)
+    # Constraint coverage (via get_constraint_coverage module function)
     constraint_coverage = ""
     try:
-        if hasattr(kg, "get_constraint_coverage"):
-            coverage = kg.get_constraint_coverage()
-            if coverage:
-                constrained_count = len(coverage)
-                constraint_coverage = f"{constrained_count}个地块与约束面重叠"
+        from .sparql import get_constraint_coverage
+        coverage = get_constraint_coverage(kg)
+        if coverage:
+            constrained_count = len(coverage)
+            constraint_coverage = f"{constrained_count}个地块与约束面重叠"
     except Exception:
         pass
 
@@ -411,12 +411,11 @@ def _build_structured_payload(kg, layer_cards: List[Dict[str, Any]]) -> Dict[str
     # Village bbox
     v_uri = URIRef(PLN_NS + "village")
     bbox = None
-    minx = kg.g.value(v_uri, PLN.bbox_minx)
-    miny = kg.g.value(v_uri, PLN.bbox_miny)
-    maxx = kg.g.value(v_uri, PLN.bbox_maxx)
-    maxy = kg.g.value(v_uri, PLN.bbox_maxy)
-    if all([minx, miny, maxx, maxy]):
-        bbox = [float(minx), float(miny), float(maxx), float(maxy)]
+    bbox_geom = kg.g.value(v_uri, GeoPredicates.hasBoundingBox)
+    if bbox_geom:
+        wkt_lit = kg.g.value(bbox_geom, GeoPredicates.asWKT)
+        if wkt_lit:
+            bbox = parse_wkt_bbox(str(wkt_lit))
 
     # Representative BSMs (TopK sampled from parcels)
     all_parcels = _collect_parcel_entities(kg)

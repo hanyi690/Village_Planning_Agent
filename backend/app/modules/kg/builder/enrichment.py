@@ -127,3 +127,103 @@ REGULATION_TYPES = {
     "村庄安全防灾": {"category": "safety_assurance"},
     "建设空间管制": {"category": "construction_spatial_control"},
 }
+
+
+def add_gis_layer_groups(kg) -> None:
+    from collections import Counter
+    from rdflib import Literal, RDF, URIRef
+    from ..ontology import PLN, EntityTypes, SemanticPredicates, GEOMETRY_POLYGON, GEOMETRY_LINE, GEOMETRY_POINT
+
+    entity_type = EntityTypes.GisLayerSet
+    sem_group = SemanticPredicates.semantic_group
+    geom_kind = SemanticPredicates.geometry_kind
+    has_label = SemanticPredicates.has_semantic_label
+    contains_ent = SemanticPredicates.contains_entity
+    gis_desc = SemanticPredicates.gis_description
+    ent_count = SemanticPredicates.entity_count
+    dom_label = SemanticPredicates.dominant_label
+
+    group_count = 0
+    for group_name in get_all_gis_layer_groups():
+        members = []
+        label_counter = Counter()
+
+        for s, _, o in kg.g.triples((None, sem_group, Literal(group_name))):
+            members.append(s)
+            for _, _, label_obj in kg.g.triples((s, has_label, None)):
+                label_counter[str(label_obj)] += 1
+
+        if not members:
+            continue
+
+        group_info = get_gis_layer_group_info(group_name)
+        group_geom_kind = group_info.get("geometry_kind", GEOMETRY_POLYGON)
+        desc = group_info.get("description", group_name)
+
+        if not group_info:
+            for m in members:
+                for _, _, gk in kg.g.triples((m, geom_kind, None)):
+                    group_geom_kind = str(gk)
+                    break
+                break
+
+        group_uri = PLN[f"GisLayerSet_{group_name}"]
+        kg.g.add((group_uri, RDF.type, entity_type))
+        kg.g.add((group_uri, sem_group, Literal(group_name)))
+        kg.g.add((group_uri, geom_kind, Literal(group_geom_kind)))
+        kg.g.add((group_uri, gis_desc, Literal(desc)))
+        kg.g.add((group_uri, ent_count, Literal(len(members))))
+
+        if label_counter:
+            dom = label_counter.most_common(1)[0][0]
+            kg.g.add((group_uri, dom_label, Literal(dom)))
+
+        if label_counter:
+            top3 = label_counter.most_common(3)
+            dist_str = ", ".join(f"{lbl}({cnt})" for lbl, cnt in top3)
+            enriched_desc = f"{desc} - {len(members)}个实体，主要: {dist_str}"
+            kg.g.add((group_uri, PLN.gis_description_enriched, Literal(enriched_desc)))
+
+        for m in members:
+            kg.g.add((group_uri, contains_ent, m))
+
+        group_count += 1
+        logger.info("[GisLayerSet] %s: %d entities, dominant=%s",
+                    group_name, len(members),
+                    label_counter.most_common(1)[0][0] if label_counter else "N/A")
+
+    if group_count:
+        logger.info("Added %d GisLayerSet virtual entities", group_count)
+
+
+def add_semantic_enrichment(kg) -> None:
+    from rdflib import Literal, RDF
+    from ..ontology import PLN, EntityTypes, SemanticPredicates
+
+    legal_constraint = SemanticPredicates.legal_constraint
+
+    count = 0
+    for s, _, _ in kg.g.triples((None, RDF.type, EntityTypes.Zone)):
+        name_lit = None
+        for _, _, o in kg.g.triples((s, PLN.name, None)):
+            name_lit = str(o)
+            break
+        if not name_lit:
+            continue
+
+        zone_constraint = ""
+        if "有条件建设" in name_lit:
+            zone_constraint = "conditional_construction"
+        elif "禁止" in name_lit or "保护" in name_lit:
+            zone_constraint = "forbid_construction"
+        elif "限制" in name_lit:
+            zone_constraint = "restrict_construction"
+        elif "允许" in name_lit:
+            zone_constraint = "allow_construction"
+
+        if zone_constraint:
+            kg.g.add((s, legal_constraint, Literal(zone_constraint)))
+            count += 1
+
+    if count:
+        logger.info("Added %d zone-level legal_constraint triples", count)
