@@ -1,8 +1,8 @@
 """Builder registry: @kg_builder decorator, _KG_BUILDERS, BuildContext.
 
 Usage:
-    @kg_builder("water", entity_type="WaterBody")
-    def _add_water_bodies(self, features, *, gis_type_ref, entry, ctx):
+    @kg_builder("water", entity_type="WaterBody", layer=1, order=30)
+    def add_water_bodies(kg, features, *, gis_type_ref, entry, ctx):
         ...
 """
 from __future__ import annotations
@@ -10,12 +10,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
-_KG_BUILDERS: dict[str, Callable] = {}
+
+@dataclass
+class BuilderSpec:
+    gis_type_ref: str
+    fn: Callable
+    entity_type: str | None = None
+    layer: int = 1
+    order: int = 0
 
 
-def kg_builder(gis_type_ref: str, *, entity_type: str | None = None):
+_KG_BUILDERS: dict[str, BuilderSpec] = {}
+
+
+def kg_builder(gis_type_ref: str, *, entity_type: str | None = None,
+               layer: int = 1, order: int = 0):
     def decorator(fn: Callable) -> Callable:
-        _KG_BUILDERS[gis_type_ref] = fn
+        _KG_BUILDERS[gis_type_ref] = BuilderSpec(
+            gis_type_ref=gis_type_ref, fn=fn,
+            entity_type=entity_type, layer=layer, order=order,
+        )
         if entity_type:
             fn._kg_entity_type = entity_type
         return fn
@@ -23,7 +37,12 @@ def kg_builder(gis_type_ref: str, *, entity_type: str | None = None):
 
 
 def get_builder(gis_type_ref: str) -> Callable | None:
-    return _KG_BUILDERS.get(gis_type_ref)
+    spec = _KG_BUILDERS.get(gis_type_ref)
+    return spec.fn if spec else None
+
+
+def _ordered_builders() -> list[BuilderSpec]:
+    return sorted(_KG_BUILDERS.values(), key=lambda s: (s.layer, s.order))
 
 
 @dataclass
@@ -43,7 +62,6 @@ def _get_bundle_features(bundle, entry) -> list:
     if group is None:
         return []
     val = group.get(key_name) if hasattr(group, "get") else getattr(group, key_name, [])
-    # RasterLayerGroup fields (dem/dom/slope/...) are scalars, not lists.
     if val is None:
         return []
     if isinstance(val, list):
