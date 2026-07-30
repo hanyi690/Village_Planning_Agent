@@ -18,9 +18,11 @@ from app.utils.logger import get_logger
 from ..ontology import (
     PLN, PLN_NS, EntityTypes, Relations, EntityIdPolicy, SemanticPredicates,
     ProvenancePredicates,
-    get_gis_layer_group_info, get_all_gis_layer_groups,
     GEOMETRY_POLYGON, GEOMETRY_LINE, GEOMETRY_POINT, GEOMETRY_RASTER,
     GEO,
+)
+from .enrichment import (
+    get_gis_layer_group_info, get_all_gis_layer_groups,
 )
 
 # Predicate shortcuts (from SemanticPredicates class)
