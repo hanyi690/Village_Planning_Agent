@@ -1,4 +1,4 @@
-"""Ontology definitions for PlanningKG (v4.8.2).
+"""Ontology definitions for PlanningKG (v5.0).
 
 Naming convention:
   - GisXxx / gis_* = GIS map-layer concepts (data themes, layer_registry)
@@ -28,16 +28,16 @@ controls_use, protects, adjacent_to, location_constraint.
             layer_type->gis_type_ref, layer_description->gis_description,
             layer_entity_count->entity_count, LayerGroup->GisLayerSet,
             layer_description_enriched->gis_description_enriched
-          - Functions: get_layer_group_info->get_gis_layer_group_info,
-            get_all_layer_groups->get_all_gis_layer_groups
-          - Python classes/variables: LAYER_TYPE_REGISTRY->GIS_LAYER_REGISTRY,
-            LayerTypeEntry->GisLayerTypeEntry, register_layer_type->register_gis_layer_type
 
-Entity types: 18 total (active)
-  L1: Parcel, Zone, Village, Facility, Road, WaterBody,
-      AdministrativeVillage, ResidentialCluster, GisLayerSet
-  L3: ZoneTarget, FacilityTarget, AxisTarget, RoadTarget
-  L4: PlannedParcel, PlannedZone, PlannedFacility, PlannedRoad, PlannedAxis
+[v5.0] GeoSPARQL alignment:
+          - GeoPredicates class for standard geometry representation
+          - EntityTypes.l1_static(), geo_feature_types(), geo_subclass_decls() for TBox grouping
+          - Relations.spatial(), SemanticPredicates.cognition_predicates() for clone_static_layer
+          - Entity types: 18 total (active)
+            L1: Parcel, Zone, Village, Facility, Road, WaterBody,
+                AdministrativeVillage, ResidentialCluster, GisLayerSet, PlaceRef, RasterDataset
+            L3: ZoneTarget, FacilityTarget, AxisTarget, RoadTarget
+            L4: PlannedParcel, PlannedZone, PlannedFacility, PlannedRoad, PlannedAxis
 
 Relations: 8 total (v4.9 GeoSPARQL aligned)
   Spatial: geo:sfTouches, pln:nearby, pln:connected_via_road, geo:sfWithin, geo:sfIntersects, geo:sfContains
@@ -160,6 +160,30 @@ class EntityTypes:
             cls.AdministrativeVillage, cls.ResidentialCluster, cls.ControlLine,
         ]
 
+    @classmethod
+    def l1_static(cls) -> set:
+        """L1 entity types that persist in the static (cacheable) layer."""
+        return {
+            cls.AdministrativeVillage, cls.Parcel, cls.Road,
+            cls.WaterBody, cls.Facility, cls.ControlLine,
+            cls.ResidentialCluster, cls.Zone, cls.GisLayerSet,
+            cls.PlaceRef, cls.RasterDataset,
+        }
+
+    @classmethod
+    def geo_feature_types(cls) -> list:
+        """L1 entity types that are geo:Feature subclasses (have real geometry)."""
+        return [
+            cls.Parcel, cls.Road, cls.WaterBody, cls.Facility,
+            cls.ControlLine, cls.ResidentialCluster, cls.Zone,
+            cls.PlaceRef,
+        ]
+
+    @classmethod
+    def geo_subclass_decls(cls) -> list:
+        """List of (pln_type, geo_type) pairs for rdfs:subClassOf declarations."""
+        return [(t, GEO.Feature) for t in cls.geo_feature_types()]
+
 
 class Relations:
     """9 active relationship type URIs (v4.9 - GeoSPARQL aligned).
@@ -194,6 +218,14 @@ class Relations:
             cls.sfWithin, cls.sfIntersects, cls.sfContains,
             cls.derived_from, cls.serves,
         ]
+
+    @classmethod
+    def spatial(cls) -> set:
+        """Spatial relation predicates (used in clone_static_layer)."""
+        return {
+            cls.sfTouches, cls.nearby, cls.connected_via_road,
+            cls.sfWithin, cls.sfIntersects, cls.sfContains,
+        }
 
 
 class SemanticPredicates:
@@ -235,6 +267,32 @@ class SemanticPredicates:
 
     # Cross-type spatial relation quantitative attribute
     overlap_pct = PLN.overlap_pct
+
+    @classmethod
+    def cognition_predicates(cls) -> set:
+        """All cognition/semantic-enrichment predicates (used in clone_static_layer)."""
+        return {
+            cls.gis_type_ref, cls.geometry_kind, cls.semantic_group,
+            cls.has_semantic_label, cls.contains_entity, cls.gis_description,
+            cls.entity_count, cls.dominant_label,
+            cls.taxonomic_parent, cls.legal_constraint, cls.allowed_operations,
+            cls.overlap_pct,
+        }
+
+
+class GeoPredicates:
+    """v5.0: GeoSPARQL standard predicates for geometry representation.
+
+    Used to store centroid and bounding box as standard WKT literals,
+    enabling interoperability with GeoSPARQL-aware tools.
+    """
+    hasCentroid = GEO.hasCentroid
+    hasBoundingBox = GEO.hasBoundingBox
+    hasGeometry = GEO.hasGeometry
+    asWKT = GEO.asWKT
+    wktLiteral = GEO.wktLiteral
+    Feature = GEO.Feature
+    Geometry = GEO.Geometry
 
 
 class ProvenancePredicates:
