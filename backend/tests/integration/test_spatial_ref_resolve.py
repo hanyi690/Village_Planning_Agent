@@ -1,6 +1,8 @@
 """Integration tests for KG candidate BSM resolution (resolve_candidates).
 
-Uses the same jintian data fixtures as test_kg_jintian_e2e.py.
+Uses direct ingest (same as test_golden_kg_snapshot.py) to avoid
+DataCatalog WMS/FMAP data source issue.
+
 Run: cd F:/project/Village_Planning_Agent
      python -m pytest backend/tests/integration/test_spatial_ref_resolve.py -v --tb=short
 """
@@ -18,17 +20,49 @@ if str(_BACKEND_DIR) not in sys.path:
 _PROJECT_ROOT = _BACKEND_DIR.parent
 os.chdir(_PROJECT_ROOT)
 
+_JINTIAN_DATA = _PROJECT_ROOT / "data" / "gis" / "jintian"
+
 
 @pytest.fixture(scope="module")
 def kg_main():
-    from app.modules.data import DataCatalog
+    from app.modules.data.ingest import ingest_current_landuse, ingest_feature
+    from app.modules.schema.types.canonical import VillageBundle
     from app.modules.spatial_ops import build_constraint_index
     from app.modules.spatial_ops.geometry import compute_parcel_relations
     from app.modules.kg.builder import PlanningKG
-    catalog = DataCatalog()
-    bundle = catalog.load_village_bundle("jintian")
+
+    bundle = VillageBundle(village_name="jintian")
+
+    parcels, _ = ingest_current_landuse(str(_JINTIAN_DATA / "current" / "landuse.geojson"))
+    for p in parcels:
+        bundle.add(p)
+
+    roads, _ = ingest_feature(str(_JINTIAN_DATA / "current" / "road.geojson"), "current_road")
+    for r in roads:
+        bundle.add(r)
+
+    anns, _ = ingest_feature(str(_JINTIAN_DATA / "current" / "annotation.geojson"), "current_annotation")
+    for a in anns:
+        bundle.add(a)
+
+    for feature_type, filename in [
+        ("farmland_protection", "farmland_protection.geojson"),
+        ("ecological_redline", "ecological_protection.geojson"),
+        ("historical_protection", "historical_protection.geojson"),
+    ]:
+        path = _JINTIAN_DATA / "planned" / filename
+        if path.exists():
+            feats, _ = ingest_feature(str(path), feature_type)
+            for f in feats:
+                bundle.add(f)
+
+    boundary, _ = ingest_feature(str(_JINTIAN_DATA / "current" / "boundary.geojson"), "admin_area")
+    for b in boundary:
+        bundle.add(b)
+
+    assert bundle.parcel_count > 0, "No parcels loaded"
     rel = compute_parcel_relations(
-        bundle.polygons.landuse_current, roads=bundle.lines.roads_current)
+        bundle.polygons.get("landuse_current"), roads=bundle.lines.get("roads_current"))
     ci = build_constraint_index(bundle)
     kg = PlanningKG(village_name="jintian")
     kg.build_from_bundle(bundle=bundle, parcel_relations=rel, constraint_index=ci)
@@ -37,9 +71,7 @@ def kg_main():
 
 class TestResolveCandidatesAttributive:
     def test_attributive_forest_returns_forest_bsms(self, kg_main):
-        from app.modules.schema.contracts.spatial_ref_contracts import (
-            SpatialReferenceSpec,
-        )
+        from app.modules.schema.contracts.spatial_ref_contracts import SpatialReferenceSpec
         from app.modules.kg.queries.spatial_ref import resolve_candidates
         spec = SpatialReferenceSpec(
             type="attributive",
@@ -50,9 +82,7 @@ class TestResolveCandidatesAttributive:
         assert len(cs.bsms) > 0, "Expected forest parcels in jintian"
 
     def test_attributive_empty_filter_returns_all_parcels(self, kg_main):
-        from app.modules.schema.contracts.spatial_ref_contracts import (
-            SpatialReferenceSpec,
-        )
+        from app.modules.schema.contracts.spatial_ref_contracts import SpatialReferenceSpec
         from app.modules.kg.queries.spatial_ref import resolve_candidates
         spec = SpatialReferenceSpec(type="attributive")
         cs = resolve_candidates(kg_main, spec)
@@ -90,14 +120,14 @@ class TestResolveCandidatesEntityType:
 
 
 class TestResolveCandidatesLayerGroup:
-    def test_layer_group_water_returns_water_bsms(self, kg_main):
+    def test_layer_group_protection_returns_zone_bsms(self, kg_main):
         from app.modules.schema.contracts.spatial_ref_contracts import (
             SpatialReferenceSpec, RefObject,
         )
         from app.modules.kg.queries.spatial_ref import resolve_candidates
         spec = SpatialReferenceSpec(
             type="attributive",
-            reference=RefObject(kind="layer_group", filter={"group": "water"}),
+            reference=RefObject(kind="layer_group", filter={"group": "protection"}),
         )
         cs = resolve_candidates(kg_main, spec)
-        assert len(cs.ref_bsms) > 0, "Expected water body BSMs"
+        assert len(cs.ref_bsms) > 0, "Expected protection zone BSMs"

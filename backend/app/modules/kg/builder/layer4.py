@@ -31,19 +31,29 @@ logger = get_logger(__name__)
 
 @dataclass
 class PlannedParcelEntry:
-    """规划地块 — 对应 L3 ZoneTarget 的落实
+    """规划地块 - 对应 L3 ZoneTarget 的落实
 
     geometry: WKT geometry string (e.g. "POLYGON((...))") or empty.
     Geometry is injected into bundle (not stored in KG) per VKG design.
-    When empty, EXECUTE must fall back to BSM → SpatialInaex lookup.
+    When empty, EXECUTE must fall back to BSM -> SpatialIndex lookup.
+
+    Provenance fields (EXECUTE_KG_UTILIZATION_DESIGN §3):
+      source_spec: PARSE spec that originated this change (e.g. "directional:east_of_village")
+      decided_by: "rule" | "llm" | "human"
+      operation: "reclassify" | "merge" | "split" | "new" | "demolish"
+      area_change_ha: signed area delta (negative = decrease)
     """
     bsm: str
     planning_land_use: str = ""
     zone_type: str = ""
     area_ha: float = 0.0
-    geometry: str = ""                               # WKT geometry string (injected into bundle, not KG)
+    geometry: str = ""
     derived_from_bsms: List[str] = field(default_factory=list)
     derived_from_zone_target: str = ""
+    source_spec: str = ""
+    decided_by: str = ""
+    operation: str = ""
+    area_change_ha: float = 0.0
 
 
 @dataclass
@@ -255,6 +265,14 @@ def _apply_planned_state(self, planned_state: PlannedState) -> None:
                     break
         if p.derived_from_zone_target:
             self.g.add((uri, PLN.derived_from_target, URIRef(p.derived_from_zone_target)))
+        if p.source_spec:
+            self.g.add((uri, PLN.source_spec, Literal(p.source_spec)))
+        if p.decided_by:
+            self.g.add((uri, PLN.decided_by, Literal(p.decided_by)))
+        if p.operation:
+            self.g.add((uri, PLN.operation, Literal(p.operation)))
+        if p.area_change_ha:
+            self.g.add((uri, PLN.area_change_ha, Literal(p.area_change_ha, datatype=XSD.double)))
         count += 1
 
     # ── PlannedZone (with zone_seq dedup) ──

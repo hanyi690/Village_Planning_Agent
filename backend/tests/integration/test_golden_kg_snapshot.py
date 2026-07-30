@@ -207,3 +207,24 @@ class TestGoldenKGSnapshot:
             f"Parcel count drift: {count} != {expected}. "
             "If intentional, update the baseline file."
         )
+
+    def test_golden_predicate_distribution(self, golden_kg):
+        from rdflib import Namespace
+        from app.modules.kg.ontology import Relations
+
+        GEO = Namespace("http://www.opengis.net/ont/geosparql#")
+
+        def _count(pred):
+            return len(list(golden_kg.g.triples((None, pred, None))))
+
+        assert _count(Relations.sfTouches) == 3382, "sfTouches drift"
+        assert _count(Relations.nearby) == 6048, "nearby drift"
+        assert _count(Relations.connected_via_road) == 361, "connected_via_road drift"
+        assert _count(Relations.sfWithin) == 1190, "sfWithin drift"
+        assert _count(Relations.sfIntersects) == 1261, "sfIntersects drift"
+        assert _count(Relations.sfContains) == 0, "sfContains drift"
+        assert _count(Relations.derived_from) == 0, "derived_from drift (L1 snapshot has no L4)"
+        assert _count(Relations.serves) == 0, "serves drift"
+
+        assert _count(GEO.hasGeometry) == 0, "geo:hasGeometry must be 0 (VKG decision)"
+        assert _count(GEO.asWKT) == 0, "geo:asWKT must be 0 (VKG decision)"

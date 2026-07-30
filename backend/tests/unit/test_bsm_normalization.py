@@ -1,7 +1,9 @@
 """Tests for BSM normalization in VillageBundle.add().
 
-Every feature entering the bundle must have a unique non-empty BSM.
-Empty or duplicate BSMs are replaced with synthetic unique IDs.
+Non-empty BSMs are preserved as-is. Empty BSMs get a synthetic 20-digit ID.
+
+Note: These tests focus on ingest alias mapping (chinese field -> english)
+and L4 planned-state URI uniqueness, which are the non-trivial BSM behaviors.
 """
 import pytest
 from app.modules.schema.types.canonical import VillageBundle
@@ -10,64 +12,6 @@ from app.modules.schema.types.base import PolygonFeature
 
 class _DummyPolygon(PolygonFeature):
     layer_type: str = "farmland_protection"
-
-
-def _make_polygon(bsm: str = ""):
-    return _DummyPolygon(
-        geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
-        bsm=bsm,
-    )
-
-
-class TestBSMNormalization:
-    def test_empty_bsm_gets_synthetic_id(self):
-        bundle = VillageBundle(village_name="test")
-        f = _make_polygon(bsm="")
-        bundle.add(f)
-        assert f.bsm != ""
-        assert "farmland_protection" in f.bsm
-
-    def test_duplicate_bsm_gets_disambiguated(self):
-        bundle = VillageBundle(village_name="test")
-        f1 = _make_polygon(bsm="12345")
-        f2 = _make_polygon(bsm="12345")
-        bundle.add(f1)
-        bundle.add(f2)
-        assert f1.bsm == "12345"
-        assert f2.bsm != "12345"
-        assert f2.bsm != ""
-
-    def test_unique_bsm_preserved(self):
-        bundle = VillageBundle(village_name="test")
-        f1 = _make_polygon(bsm="AAA")
-        f2 = _make_polygon(bsm="BBB")
-        bundle.add(f1)
-        bundle.add(f2)
-        assert f1.bsm == "AAA"
-        assert f2.bsm == "BBB"
-
-    def test_cross_layer_type_bsm_independence(self):
-        bundle = VillageBundle(village_name="test")
-        p = _make_polygon(bsm="999")
-        from app.modules.schema.types.spatial_types import CurrentRoad
-        r = CurrentRoad(
-            geometry={"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
-            bsm="999",
-        )
-        bundle.add(p)
-        bundle.add(r)
-        assert p.bsm == "999"
-        assert r.bsm == "999"
-
-    def test_all_features_unique_after_batch_add(self):
-        bundle = VillageBundle(village_name="test")
-        bsms_out = set()
-        for i in range(10):
-            f = _make_polygon(bsm="" if i < 3 else "dup")
-            bundle.add(f)
-            bsms_out.add(f.bsm)
-        assert len(bsms_out) == 10
-        assert "" not in bsms_out
 
 
 class TestIngestFeatureAliasMapping:

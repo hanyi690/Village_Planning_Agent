@@ -1,9 +1,10 @@
 """KG-side candidate BSM resolution for spatial reference specs.
 
 resolve_candidates takes a SpatialReferenceSpec (produced by PARSE via
-instructor) and returns a CandidateSet of BSMs from the KG. This is the
-"KG returns coarse-range BSM" half of the two-stage parse (KG candidates
--> spatial_ops precision). Does NOT perform geometric computation.
+instructor) and returns a CandidateSet of entity identifiers from the KG.
+This is the "KG returns coarse-range BSM" half of the two-stage parse
+(KG candidates -> spatial_ops precision). Does NOT perform geometric
+computation.
 
 See docs/gis/integration/PARSE_SPATIAL_GROUNDING_DESIGN.md §3.1.
 """
@@ -40,19 +41,18 @@ _RDF_TYPE_TO_PLN = {
 
 
 def resolve_candidates(kg, spec: SpatialReferenceSpec) -> CandidateSet:
-    ref_bsms: List[str] = []
+    ref_ids: List[str] = []
     if spec.reference is not None:
-        ref_bsms = _resolve_reference(kg, spec.reference)
+        ref_ids = _resolve_reference(kg, spec.reference)
 
     if spec.type == "topological":
-        result = _resolve_topological(kg, spec, ref_bsms)
-        return result
+        return _resolve_topological(kg, spec, ref_ids)
 
     attr_bsms = _resolve_attr_filter(kg, spec.attr_filter)
     if not attr_bsms and spec.type == "attributive":
         attr_bsms = _all_parcel_bsms(kg)
 
-    return CandidateSet(bsms=attr_bsms, ref_bsms=ref_bsms)
+    return CandidateSet(bsms=attr_bsms, ref_bsms=ref_ids)
 
 
 def _resolve_reference(kg, ref: RefObject) -> List[str]:
@@ -61,14 +61,14 @@ def _resolve_reference(kg, ref: RefObject) -> List[str]:
         rdf_type = filt.get("rdf_type", "")
         label_contains = filt.get("label_contains", "")
         if rdf_type and rdf_type in _RDF_TYPE_TO_PLN:
-            return _bsms_by_type(kg, _RDF_TYPE_TO_PLN[rdf_type], label_contains)
+            return _entity_ids_by_type(kg, _RDF_TYPE_TO_PLN[rdf_type], label_contains)
         if label_contains:
-            return _bsms_by_label(kg, label_contains)
+            return _entity_ids_by_label(kg, label_contains)
         return []
     elif ref.kind == "layer_group":
         group = (ref.filter or {}).get("group", "")
         if group:
-            return _layer_group_member_bsms(kg, group)
+            return _layer_group_member_ids(kg, group)
         return []
     elif ref.kind == "bsm":
         bsm = (ref.filter or {}).get("bsm", "")
@@ -78,28 +78,28 @@ def _resolve_reference(kg, ref: RefObject) -> List[str]:
     return []
 
 
-def _resolve_topological(kg, spec: SpatialReferenceSpec, ref_bsms: List[str]) -> CandidateSet:
+def _resolve_topological(kg, spec: SpatialReferenceSpec, ref_ids: List[str]) -> CandidateSet:
     if not spec.topo or spec.topo not in _TOPO_PREDICATE:
-        return CandidateSet(bsms=[], ref_bsms=ref_bsms)
+        return CandidateSet(bsms=[], ref_bsms=ref_ids)
     pred = _TOPO_PREDICATE[spec.topo]
-    result_bsms: List[str] = []
+    result_ids: List[str] = []
 
-    for ref_uri in _bsms_to_uris(kg, ref_bsms):
+    for ref_uri in _ids_to_uris(kg, ref_ids):
         for _, _, obj in kg.g.triples((ref_uri, pred, None)):
-            bsm = _uri_to_bsm(kg, obj)
-            if bsm:
-                result_bsms.append(bsm)
+            vid = _uri_to_id(kg, obj)
+            if vid:
+                result_ids.append(vid)
         for subj, _, _ in kg.g.triples((None, pred, ref_uri)):
-            bsm = _uri_to_bsm(kg, subj)
-            if bsm:
-                result_bsms.append(bsm)
+            vid = _uri_to_id(kg, subj)
+            if vid:
+                result_ids.append(vid)
     seen = set()
     dedup = []
-    for b in result_bsms:
-        if b not in seen:
-            seen.add(b)
-            dedup.append(b)
-    return CandidateSet(bsms=dedup, ref_bsms=ref_bsms)
+    for vid in result_ids:
+        if vid not in seen:
+            seen.add(vid)
+            dedup.append(vid)
+    return CandidateSet(bsms=dedup, ref_bsms=ref_ids)
 
 
 def _resolve_attr_filter(kg, attr_filter: Optional[Dict[str, Any]]) -> List[str]:
@@ -125,8 +125,8 @@ def _all_parcel_bsms(kg) -> List[str]:
     return [r["bsm"] for r in rows if r.get("bsm")]
 
 
-def _bsms_by_type(kg, rdf_type: URIRef, label_contains: str = "") -> List[str]:
-    bsms = []
+def _entity_ids_by_type(kg, rdf_type: URIRef, label_contains: str = "") -> List[str]:
+    ids = []
     for s in kg.g.subjects(RDF.type, rdf_type):
         name = ""
         for _, _, o in kg.g.triples((s, PLN.name, None)):
@@ -134,47 +134,44 @@ def _bsms_by_type(kg, rdf_type: URIRef, label_contains: str = "") -> List[str]:
             break
         if label_contains and label_contains not in name:
             continue
-        for _, _, o in kg.g.triples((s, PLN.bsm, None)):
-            bsms.append(str(o))
-            break
-        if not label_contains:
-            for _, _, o in kg.g.triples((s, PLN.name, None)):
-                break
-    return bsms
+        ids.append(str(s))
+    return ids
 
 
-def _bsms_by_label(kg, label_contains: str) -> List[str]:
-    bsms = []
+def _entity_ids_by_label(kg, label_contains: str) -> List[str]:
+    ids = []
     for s in kg.g.subjects(None, None):
         for _, _, o in kg.g.triples((s, PLN.name, None)):
             if label_contains in str(o):
-                for _, _, bsm in kg.g.triples((s, PLN.bsm, None)):
-                    bsms.append(str(bsm))
-                    break
+                ids.append(str(s))
                 break
-    return bsms
+    return ids
 
 
-def _layer_group_member_bsms(kg, group: str) -> List[str]:
+def _layer_group_member_ids(kg, group: str) -> List[str]:
     lg_uri = PLN[f"GisLayerSet_{group}"]
-    bsms = []
+    ids = []
     for _, _, member in kg.g.triples((lg_uri, PLN.contains_entity, None)):
-        for _, _, o in kg.g.triples((member, PLN.bsm, None)):
-            bsms.append(str(o))
-            break
-    return bsms
+        ids.append(str(member))
+    return ids
 
 
-def _bsms_to_uris(kg, bsms: List[str]):
-    for bsm in bsms:
-        for s, _, _ in kg.g.triples((None, PLN.bsm, Literal(bsm))):
-            yield s
+def _ids_to_uris(kg, ids: List[str]):
+    for eid in ids:
+        if eid.startswith("http"):
+            yield URIRef(eid)
+        elif eid.startswith("pln:"):
+            yield URIRef(PLN_NS + eid[4:])
+        else:
+            for s, _, _ in kg.g.triples((None, PLN.bsm, Literal(eid))):
+                yield s
+                break
 
 
-def _uri_to_bsm(kg, uri) -> Optional[str]:
+def _uri_to_id(kg, uri) -> Optional[str]:
     for _, _, o in kg.g.triples((uri, PLN.bsm, None)):
         return str(o)
-    return None
+    return str(uri)
 
 
 __all__ = ["resolve_candidates"]

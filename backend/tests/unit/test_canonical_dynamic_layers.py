@@ -68,7 +68,8 @@ def test_village_bundle_boundary():
     )
     bundle.add(a)
     assert bundle.boundary is not None
-    assert bundle.boundary.bsm == "001"
+    assert len(bundle.boundary.bsm) == 20
+    assert bundle.boundary.bsm.isdigit()
 
 
 def test_to_geojson_dict_from_layers():

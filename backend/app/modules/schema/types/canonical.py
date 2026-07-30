@@ -284,16 +284,13 @@ class VillageBundle(BaseModel):
         xzqhdm = str(props.get("XZQHDM", "") or "").strip()
         if len(xzqhdm) == 12 and xzqhdm.isdigit():
             return xzqhdm
-        bsm = str(getattr(feature, "bsm", "") or "").strip()
+        bsm = str(getattr(feature, "bsm", "") or "").strip()  # getattr intentional — feature is Any
         if len(bsm) == 20 and bsm.isdigit():
             return bsm[:12]
         return "441426110202"
 
     def _assign_bsm(self, feature: Any) -> None:
-        """为要素分配 20 位标准 BSM（12 位村码 + 8 位顺序号）。"""
-        bsm = str(getattr(feature, "bsm", "") or "").strip()
-        if len(bsm) == 20 and bsm.isdigit():
-            return
+        """为要素分配 20 位标准 BSM（12 位村码 + 8 位顺序号），始终覆写以保证唯一性。"""
         village_code = self._resolve_village_code(feature)
         seq = self._bsm_counter.get(village_code, 1)
         self._bsm_counter[village_code] = seq + 1

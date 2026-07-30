@@ -1,10 +1,11 @@
 # Data Module - 统一数据获取与管理层
 
-> **Status: [PRODUCTION]** | **Type: Architecture** | **Updated: 2026-07-28 (v4.8.1)**
+> **Status: [PRODUCTION]** | **Type: Architecture** | **Updated: 2026-07-29 (v4.9)**
 > **Scope**: 所有空间数据（矢量/栅格/瓦片）和文档（规划文本/L3报告）进入系统的唯一边界
 >
-> **v4.8.1 变更**: DEM 栅格图层完整接入（clip 脚本 + sources.yaml + KG builder）；交叉类型空间关系由 spatial_ops 预计算注入 KG
-> **v4.6 变更**: ControlRule/PlanningIndicator 移入 bundle.tables（类型已定义，ingest 管道未实现）；KG 不再存储非空间要素；bundle 形态分组直连 KG builder，不再通过 ContextBlock 中转
+> **v4.9 变更**: `adapters/` 策略模式正式化 — 5 个内置适配器（parcels/features/raster/table/document）接管 ingest，`DataCatalog.load_village_bundle()` 通过 `ADAPTERS` 注册表分发；`base_conversion.py` 统一 DLBM→GHYTBM 基数转换接口
+> **v4.8.1 变更**: DEM 栅格图层完整接入（clip 脚本 + sources.yaml + 适配器）
+> **v4.6 变更**: ControlRule/PlanningIndicator 移入 bundle.tables（类型已定义，ingest 未实现）；KG 不再存储非空间要素；bundle 形态分组直连 KG builder
 
 ---
 
@@ -100,11 +101,20 @@ backend/app/modules/data/
 ├── README.md
 ├── __init__.py
 ├── contracts.py           # DataResult, DataSourceMetadata
+├── base_conversion.py     # [v4.9] DLBM -> GHYTBM 基数转换（附录5）
 ├── ingest.py              # raw GeoJSON -> typed schema models
 ├── catalog/
 │   ├── catalog.py         # DataCatalog
 │   ├── config.py          # Pydantic 配置模型
 │   └── sources.yaml       # 数据源物理配置（单一真相源）
+├── adapters/              # [v4.9] IngestAdapter 策略模式
+│   ├── __init__.py        # IngestAdapter Protocol + ADAPTERS 注册表
+│   ├── parcels.py         # ParcelsAdapter — 用地 parcels 编码校验
+│   ├── features.py        # FeaturesAdapter — 通用矢量要素
+│   ├── raster.py          # RasterAdapter — GeoTIFF -> RasterDataset
+│   ├── table.py           # TableAdapter — CSV/Excel -> TableDataset
+│   ├── document.py        # DocumentAdapter — Markdown -> Document
+│   └── README.md          # 适配器使用指南
 ├── sources/
 │   ├── base.py            # DataSourceDriver ABC
 │   ├── registry.py        # DriverRegistry (装饰器自动发现)
@@ -147,12 +157,12 @@ result = source.fetch()  # -> DataResult
 # 加载村庄完整 typed 数据束 (v4.4 形态优先)
 bundle = catalog.load_village_bundle("金田村委会")
 
-# 通过形态 Group 访问数据
-print(bundle.polygons.landuse_current[0].dlbm)      # CurrentLandUseParcel
-print(bundle.polygons.landuse_planned[0].ghytbm)    # PlannedLandUseParcel
-print(bundle.polygons.constraint_polygons)           # 所有约束面 (96 个)
-print(bundle.lines.roads)                            # 所有道路 (现状+规划)
-print(bundle.boundary)                               # AdminArea (从 admin_areas 推导)
+# 通过形态 Group 访问数据（PolygonLayerGroup/LineLayerGroup 均使用 .get() 而非属性）
+print(bundle.polygons.get("landuse_current")[0].dlbm)      # CurrentLandUseParcel
+print(bundle.polygons.get("landuse_planned")[0].ghytbm)    # PlannedLandUseParcel
+print(bundle.polygons.constraint_polygons)                   # 所有约束面
+print(bundle.lines.roads)                                    # 所有道路 (现状+规划)  ← .roads 为 property 快捷
+print(bundle.boundary)                                       # AdminArea (从 admin_areas 推导)  ← .boundary 为 property
 
 # 空间认知卡片生成 (v4.3 ContextBlock)
 from app.modules.spatial_ops import compute_context_blocks
@@ -165,12 +175,25 @@ context_blocks = compute_context_blocks(bundle)
 ```python
 # canonical.py::_bundle_key_for(feature) 查 GIS_LAYER_REGISTRY 获取 bundle_target.key
 # VillageBundle.add(feature) -> LayerGroup.add(feature) -> _layers[key].append(feature)
-# 33 个具体子类全覆盖, 推断类型通过 "inferred" 兜底
+# 42 个 bundle_target 全覆盖, 推断类型通过 "inferred" 兜底
 for feat in features:
     bundle.add(feat)  # 自动路由到正确的 morphology group + _layers key
 ```
 
 ### 4.2 Ingest (raw -> typed)
+
+**适配器策略（主推）** — 通过 `ADAPTERS` 注册表按 `gis_layer_registry.yaml` 中的 `ingest.adapter` 分发：
+
+```python
+from app.modules.data.adapters import ADAPTERS
+
+adapter = ADAPTERS["parcels"]                       # 查注册表
+result = adapter.load(data, entry)                  # -> AdapterResult(features, warnings, dlq)
+for feat in result.features:
+    bundle.add(feat)                                 # 自动路由到 morphology group
+```
+
+**直接 ingest 函数（兼容）** — 旧接口，仍可用：
 
 ```python
 from app.modules.data import result_to_parcels, result_to_features, result_to_raster
@@ -189,7 +212,7 @@ features, warnings = result_to_features(result, feature_type="current_road")
 class DataResult:
     success: bool
     data: Any = None
-    data_type: str = ""       # "geojson"|"tiles"|"raster"|"document"
+    data_type: str = ""       # "geojson"|"tiles"|"mosaic"|"raster"|"url"|"document"
     metadata: dict = {}
     error: Optional[str] = None
     cache_path: Optional[str] = None
@@ -248,11 +271,11 @@ sources:
     layer_type: dem              # 对应 gis_layer_registry.yaml 中的 dem 条目
 ```
 
-**Step 3 - 类型映射（已内置）**
+**Step 3 - 适配器分发（已内置）**
 
-`gis_layer_registry.yaml` 中 `dem` 条目已配置 `ingest.adapter: raster` + `bundle_target: { group: rasters, key: dem }`。`ingest.py::_infer_model_class()` 已映射 `"dem" -> "DEMInput"`。无需额外 Python 修改。
+`gis_layer_registry.yaml` 中 `dem` 条目已配置 `ingest.adapter: raster` + `bundle_target: { group: rasters, key: dem }`。`adapters/raster.py::RasterAdapter.load()` 通过 `entry.ingest.feature_type` 映射 `"dem" -> DEMInput`。无需额外 Python 修改。
 
-**结果**：`catalog.load_village_bundle()` 通过 `LocalRasterDriver` 加载 `dem.tif`，`raster` 适配器构造 `DEMInput` 实例，`bundle.add()` 放入 `bundle.rasters._layers["dem"]`，`kg.build_from_bundle()` 调用 `@kg_builder("dem")` 生成 `RasterDataset` RDF 实体。
+**结果**：`catalog.load_village_bundle()` 通过 `LocalRasterDriver` 加载 `dem.tif`，`ADAPTERS["raster"].load()` 构造 `DEMInput` 实例，`bundle.add()` 放入 `bundle.rasters._layers["dem"]`，`kg.build_from_bundle()` 调用 `@kg_builder("dem")` 生成 `RasterDataset` RDF 实体。
 
 ---
 
@@ -260,25 +283,24 @@ sources:
 
 ```
 1. DataCatalog()
-   ├── _load_config()      -> 读 sources.yaml, 校验 Pydantic config models
-   ├── _init_connections() -> 实例化 Connection, 注册到 ConnectionRegistry
-   └── _init_sources()     -> 遍历 sources, DriverRegistry 实例化 Driver
+   ├── _init_sources()     -> 遍历 sources, DriverRegistry 实例化 Driver
+   └── _init_connections() -> 实例化 Connection, 注册到 ConnectionRegistry
 
 2. catalog.load_village_bundle("金田村委会")
    ├── _load_boundary()           -> FileVectorDriver.fetch() -> boundary.geojson
    ├── _derive_bbox_from_boundary -> BBox 从边界几何计算
    ├── query_by_bbox(bbox, layer_types) -> 加载所有图层
-   └── 按 layer_type + ingest_port 分派:
-       ├── result_to_parcels() / result_to_features() -> typed SpatialFeature[]
+   └── 按 entry.ingest.adapter 分派 (ADAPTERS 注册表):
+       ├── adapter.load(data, entry) -> AdapterResult(features, warnings, dlq)
        └── bundle.add(feature) -> _bundle_key_for() 查 registry 路由
            ├── layer_type="landuse_current" -> bundle.polygons._layers["landuse_current"]
            ├── layer_type="farmland_protection" -> bundle.polygons._layers["farmland_protection"]
            ├── layer_type="current_road" -> bundle.lines._layers["roads_current"]
            └── 未知 layer_type -> _layers["inferred"] (推断兜底)
-   -> VillageBundle (v4.4 形态优先, YAML-driven routing, 33 子类全覆盖)
+   -> VillageBundle (v4.4 形态优先, YAML-driven routing, 42 个 bundle_target 全覆盖)
 
 3. 下游消费
-   直接访问形态视图: bundle.polygons.landuse_current / bundle.lines.roads
+   直接访问形态视图: bundle.polygons.get("landuse_current") / bundle.lines.roads
    compute_context_blocks(bundle) -> List[ContextBlock] (v4.3 空间认知卡片)
                                   -> PARSE Agent (按需消费卡片)
                                   -> LAYOUT Pipeline (按 block_type 筛选)
@@ -322,7 +344,7 @@ sources:
 
 | 形态 | 实现状态 | 说明 |
 |------|---------|------|
-| 矢量 (Point/Line/Polygon) | 完整实现 | 33 个子类全覆盖, `bundle.add()` + `_bundle_key_for()` YAML registry 路由 |
+| 矢量 (Point/Line/Polygon) | 完整实现 | 42 个 bundle_target 全覆盖, `bundle.add()` + `_bundle_key_for()` YAML registry 路由 |
 | 栅格 (RasterDataset) | ✅ 完整实现 | DEM/DOM/Slope/Aspect/Suitability，类型定义+加载 |
 | 表格 (TableDataset) | ⏳ 类型已定义，ingest 未实现 | 5 种表类型定义在 `table_types.py`，但 `bundle.tables` 所有字段为 None |
 | 文档 (Document) | ✅ 基础实现 | 规划文本加载，L3 报告 |
@@ -348,22 +370,24 @@ sources:
 
 | 能力 | 状态 |
 |------|------|
-| 智能推断管道 `ingest_inference.py` | ⏳ 设计中 |
-| 项目级加载 `load_project_data_view()` | ⏳ 设计中 |
+| 智能推断管道（`adapters/` 策略模式） | ✅ 已实现 — 5 个内置适配器, `ADAPTERS` 注册表分发（2026-07 v4.9） |
+| 项目级加载 `load_project_data_view()` | ⏳ 待设计 |
 | 表格驱动 `sources/table.py` | ⏳ 待实现 |
 | 项目配置分离 `projects.yaml` | ⏳ 待实现 |
-| bundle.tables 的 ingest 管道 | ⏳ 待实现（ControlRule, PlanningIndicator 等） |
+| bundle.tables 的 ingest 管道（TableAdapter 已注册，数据加载尚未打通） | ⏳ TableAdapter 已实现，`bundle.tables._layers` 通路待接续 |
 
 ## 相关文件
 
-| 模块             | 路径                                                                          |
-| ---------------- | ----------------------------------------------------------------------------- |
-| 类型定义（矢量） | `backend/app/modules/schema/types/spatial_types.py`                         |
-| 类型定义（栅格） | `backend/app/modules/schema/types/raster_types.py`                          |
-| 数据视图         | `backend/app/modules/schema/types/canonical.py`                             |
-| 图层注册表       | `backend/app/modules/schema/types/layer_registry.py`                        |
-| 摄入端口         | `backend/app/modules/data/ingest.py`                                        |
-| 数据源配置       | `backend/app/modules/data/catalog/sources.yaml`                             |
-| 位置解析         | `backend/app/utils/location_parser.py`                                      |
-| 空间上下文计算   | `backend/app/modules/spatial_ops/context.py` (compute_context_blocks, v4.3) |
-| 输出 Bundle 缓存 | `output/bundle_cache/jintian_bundle.pkl`                                    |
+| 模块                     | 路径                                                                          |
+| ------------------------ | ----------------------------------------------------------------------------- |
+| 类型定义（矢量）         | `backend/app/modules/schema/types/spatial_types.py`                         |
+| 类型定义（栅格）         | `backend/app/modules/schema/types/raster_types.py`                          |
+| 数据视图 & LayerGroup    | `backend/app/modules/schema/types/canonical.py`                             |
+| 图层注册表               | `backend/app/modules/schema/types/layer_registry.py`                        |
+| 基数转换（DLBM→GHYTBM） | `backend/app/modules/data/base_conversion.py`                               |
+| 适配器策略               | `backend/app/modules/data/adapters/`                                        |
+| 摄入端口（旧）           | `backend/app/modules/data/ingest.py`                                        |
+| 数据源配置               | `backend/app/modules/data/catalog/sources.yaml`                             |
+| 位置解析                 | `backend/app/utils/location_parser.py`                                      |
+| 空间上下文计算           | `backend/app/modules/spatial_ops/context.py` (compute_context_blocks, v4.3) |
+| 输出 Bundle 缓存         | `output/bundle_cache/jintian_bundle.pkl`                                    |
