@@ -129,7 +129,7 @@ def build_kg():
                 derived_from_bsms=[all_bsms[0]],
             )
         )
-    kg._apply_planned_state(planned)
+    kg.apply_planned_state(planned)
 
     return kg, bundle
 

@@ -19,6 +19,9 @@ from .sparql import (
     get_parcels_within_distance_of_entity, get_adjacent_parcels_with_length,
     get_connected_parcels, get_parcels_by_bsm_list, validate_intent,
     _is_in_protected_zone, get_constraint_coverage,
+    get_effective_land_use, get_effective_area_ha,
+    get_plan_changes, get_planned_parcels_in_zone,
+    check_constraint_violations, compare_versions,
 )
 from .semantic import (
     get_entity_context, get_entity_relations,
@@ -190,7 +193,7 @@ execute_queries = {
         "status": "exists_not_wired",
     },
     "apply_planned_state": {
-        "func": lambda kg, **kw: kg._apply_planned_state(kw.get("planned_state")),
+        "func": lambda kg, **kw: kg.apply_planned_state(kw.get("planned_state")),
         "description": "[预留] 持久化 L4 规划成果（当前未接入 execute）",
         "returns": "None",
         "writes_kg": True,
@@ -271,6 +274,10 @@ __all__ = [
     "get_parcels_within_distance_of_entity", "get_adjacent_parcels_with_length",
     "get_connected_parcels", "get_parcels_by_bsm_list", "validate_intent",
     "get_constraint_coverage",
+    # L4 query functions
+    "get_effective_land_use", "get_effective_area_ha",
+    "get_plan_changes", "get_planned_parcels_in_zone",
+    "check_constraint_violations", "compare_versions",
     # Semantic queries
     "get_entity_context", "get_entity_relations",
     "get_parcel_semantic_context", "get_village_semantic_summary",

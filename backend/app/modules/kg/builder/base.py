@@ -165,7 +165,7 @@ class PlanningKG(Layer1Mixin, Layer2Mixin, Layer3Mixin, Layer4Mixin, QueryMixin)
 
         # Layer 4: planned state
         if planned_state is not None:
-            self._apply_planned_state(planned_state)
+            self.apply_planned_state(planned_state)
 
         logger.info("[PlanningKG] Built from bundle: %d parcels, %d triples",
                     self._parcel_count, len(self.g))

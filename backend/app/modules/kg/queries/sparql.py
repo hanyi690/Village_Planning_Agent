@@ -646,3 +646,128 @@ def get_constraint_coverage(self) -> List[Dict[str, Any]]:
 
 # Populate SEMANTIC_QUERIES at import time
 _register_semantic_queries()
+
+
+# ============================================================
+# L4 query functions (effective state: L1 + L4 merge)
+# ============================================================
+
+
+def get_effective_land_use(kg, bsm: str, version: str = "current"):
+    """Get effective land use: L4 if changed, else L1 fallback."""
+    l4 = kg.query(
+        f'PREFIX pln: <http://village-planning.org/ontology#> '
+        f'SELECT ?lu WHERE {{ '
+        f'?p a pln:PlannedParcel ; pln:bsm "{bsm}" ; '
+        f'pln:planning_land_use ?lu ; pln:in_version "{version}" . }}')
+    if l4:
+        return l4[0].get("lu")
+    l1 = kg.query(
+        f'PREFIX pln: <http://village-planning.org/ontology#> '
+        f'SELECT ?dlbm WHERE {{ '
+        f'?p a pln:Parcel ; pln:bsm "{bsm}" ; pln:dlbm ?dlbm . }}')
+    return l1[0].get("dlbm") if l1 else None
+
+
+def get_effective_area_ha(kg, bsm: str, version: str = "current"):
+    """Get effective area: L4 if changed, else L1 fallback."""
+    l4 = kg.query(
+        f'PREFIX pln: <http://village-planning.org/ontology#> '
+        f'SELECT ?area WHERE {{ '
+        f'?p a pln:PlannedParcel ; pln:bsm "{bsm}" ; '
+        f'pln:planned_area_ha ?area ; pln:in_version "{version}" . }}')
+    if l4:
+        try:
+            return float(l4[0].get("area", 0))
+        except (ValueError, TypeError):
+            return None
+    l1 = kg.query(
+        f'PREFIX pln: <http://village-planning.org/ontology#> '
+        f'SELECT ?area WHERE {{ '
+        f'?p a pln:Parcel ; pln:bsm "{bsm}" ; pln:area_ha ?area . }}')
+    if l1:
+        try:
+            return float(l1[0].get("area", 0))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def get_plan_changes(kg, version: str = "current"):
+    """Get all planning changes (delta) for a version."""
+    return kg.query(
+        f'PREFIX pln: <http://village-planning.org/ontology#> '
+        f'SELECT ?p ?bsm ?lu ?area WHERE {{ '
+        f'?p a pln:PlannedParcel ; pln:bsm ?bsm ; '
+        f'pln:in_version "{version}" . '
+        f'OPTIONAL {{ ?p pln:planning_land_use ?lu . }} '
+        f'OPTIONAL {{ ?p pln:planned_area_ha ?area . }} }}')
+
+
+def get_planned_parcels_in_zone(kg, zone_type: str, version: str = "current"):
+    return kg.query(
+        f"PREFIX pln: <http://village-planning.org/ontology#> "
+        f"SELECT ?bsm ?land_use ?area WHERE {{ "
+        f"?p a pln:PlannedParcel ; pln:bsm ?bsm ; pln:planning_land_use ?land_use ; "
+        f'pln:planning_zone_type "{zone_type}" ; pln:in_version "{version}" . '
+        f"OPTIONAL {{ ?p pln:planned_area_ha ?area . }} }}"
+    )
+
+
+def check_constraint_violations(kg, version: str = "current"):
+    """Check planned parcels against constraint polygons via spatial_ops bridge."""
+    violations = []
+    if kg._constraint_index is None:
+        return violations
+
+    for pp in kg.query(f"PREFIX pln: <http://village-planning.org/ontology#> "
+                       f"SELECT ?p ?bsm ?land_use WHERE {{ "
+                       f"?p a pln:PlannedParcel ; pln:bsm ?bsm ; "
+                       f"pln:planning_land_use ?land_use ; pln:in_version \"{version}\" . }}"):
+        bsm = pp.get("bsm", "")
+        overlaps = kg._constraint_index.parcel_in_constraint(bsm)
+        for ov in overlaps:
+            violations.append({
+                "bsm": bsm,
+                "planned_land_use": pp.get("land_use", ""),
+                "protected_zone": ov.constraint_type,
+                "rule": ov.rule,
+                "overlap_area_sqm": ov.overlap_area_sqm,
+                "overlap_pct": ov.overlap_pct,
+                "version": version,
+            })
+    return violations
+
+
+def compare_versions(kg, version_a: str, version_b: str):
+    """Compare two plan versions - returns changes between them."""
+    a_map = {p["bsm"]: p for p in kg.query(
+        f"PREFIX pln: <http://village-planning.org/ontology#> "
+        f"SELECT ?bsm ?land_use ?area WHERE {{ "
+        f"?p a pln:PlannedParcel ; pln:in_version \"{version_a}\" ; "
+        f"pln:bsm ?bsm . "
+        f"OPTIONAL {{ ?p pln:planning_land_use ?land_use . }} "
+        f"OPTIONAL {{ ?p pln:planned_area_ha ?area . }} }}") if p.get("bsm")}
+    b_map = {p["bsm"]: p for p in kg.query(
+        f"PREFIX pln: <http://village-planning.org/ontology#> "
+        f"SELECT ?bsm ?land_use ?area WHERE {{ "
+        f"?p a pln:PlannedParcel ; pln:in_version \"{version_b}\" ; "
+        f"pln:bsm ?bsm . "
+        f"OPTIONAL {{ ?p pln:planning_land_use ?land_use . }} "
+        f"OPTIONAL {{ ?p pln:planned_area_ha ?area . }} }}") if p.get("bsm")}
+    changed = []
+    for bsm, bp in b_map.items():
+        if bsm in a_map:
+            ap = a_map[bsm]
+            if ap.get("land_use", "") != bp.get("land_use", ""):
+                changed.append({"bsm": bsm, "from": ap.get("land_use", ""),
+                                "to": bp.get("land_use", "")})
+        else:
+            changed.append({"bsm": bsm, "from": None, "to": bp.get("land_use", "")})
+    a_keys = set(a_map.keys())
+    b_keys = set(b_map.keys())
+    return {"version_a": version_a, "version_b": version_b,
+            "changed_parcels": changed,
+            "added_parcels": list(b_keys - a_keys),
+            "removed_parcels": list(a_keys - b_keys),
+            "total_changes": len(changed) + len(b_keys - a_keys) + len(a_keys - b_keys)}

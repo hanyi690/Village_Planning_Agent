@@ -1,6 +1,6 @@
 """L4 provenance chain tests - EXECUTE_KG_UTILIZATION_DESIGN §3.
 
-Verifies _apply_planned_state writes the full 5-predicate provenance:
+Verifies apply_planned_state writes the full 5-predicate provenance:
   pln:derived_from, pln:source_spec, pln:decided_by, pln:operation, pln:area_change_ha
 
 Run: cd F:/project/Village_Planning_Agent
@@ -67,7 +67,7 @@ def test_l4_provenance_five_predicates(kg_main):
     assert real_bsm is not None
 
     kg_plan = kg_main.clone_static_layer()
-    kg_plan._apply_planned_state(PlannedState(version="v1", parcels=[
+    kg_plan.apply_planned_state(PlannedState(version="v1", parcels=[
         PlannedParcelEntry(
             bsm=f"{real_bsm}_prov",
             planning_land_use="2121",
@@ -102,7 +102,7 @@ def test_l4_provenance_five_predicates(kg_main):
 def test_l4_provenance_defaults_empty(kg_main):
     from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
     kg_plan = kg_main.clone_static_layer()
-    kg_plan._apply_planned_state(PlannedState(version="v1", parcels=[
+    kg_plan.apply_planned_state(PlannedState(version="v1", parcels=[
         PlannedParcelEntry(bsm="NO_PROV", planning_land_use="0101"),
     ]))
     pp_rows = kg_plan.query(
@@ -118,7 +118,7 @@ def test_l4_provenance_defaults_empty(kg_main):
 def test_l4_provenance_spquery(kg_main):
     from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
     kg_plan = kg_main.clone_static_layer()
-    kg_plan._apply_planned_state(PlannedState(version="v1", parcels=[
+    kg_plan.apply_planned_state(PlannedState(version="v1", parcels=[
         PlannedParcelEntry(
             bsm="SPQ1", planning_land_use="2121",
             source_spec="attributive:all_forest",

@@ -192,7 +192,7 @@ class TestL4EntityIdAndLinks:
         """L4 PlannedParcel URI includes version suffix."""
         from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         kg_clone = kg_test.clone_static_layer()
-        kg_clone._apply_planned_state(PlannedState(
+        kg_clone.apply_planned_state(PlannedState(
             version="v1",
             parcels=[PlannedParcelEntry(bsm="P001", planning_land_use="2121")],
         ))
@@ -205,7 +205,7 @@ class TestL4EntityIdAndLinks:
         """L4 PlannedParcel has PLN.bsm literal."""
         from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         kg_clone = kg_test.clone_static_layer()
-        kg_clone._apply_planned_state(PlannedState(
+        kg_clone.apply_planned_state(PlannedState(
             version="v1",
             parcels=[PlannedParcelEntry(bsm="P001", planning_land_use="2121")],
         ))
@@ -220,7 +220,7 @@ class TestL4EntityIdAndLinks:
         )
         target_uri = str(PLN["zone_target_residential"])
         kg_clone = kg_test.clone_static_layer()
-        kg_clone._apply_planned_state(PlannedState(
+        kg_clone.apply_planned_state(PlannedState(
             version="v1",
             parcels=[PlannedParcelEntry(
                 bsm="P001", planning_land_use="2121",

@@ -489,7 +489,7 @@ class TestPlanInjectionIsolated:
             village_name="test",
             zone_targets=[ZoneTarget(land_use="2121", area_ratio=10.0)],
         ))
-        kg_with_l34._apply_planned_state(PlannedState(version="test",
+        kg_with_l34.apply_planned_state(PlannedState(version="test",
             parcels=[PlannedParcelEntry(bsm="CLONE_TEST", planning_land_use="2121")]))
 
         # Now clone THIS - the new clone should NOT have L3/L4
@@ -541,7 +541,7 @@ class TestPlanInjectionIsolated:
                 PlannedRoadEntry(name="规划村道", road_level="村道", width_m=6),
             ],
         )
-        kg_plan._apply_planned_state(planned)
+        kg_plan.apply_planned_state(planned)
 
         # Verify L4 entities in clone
         pp = kg_plan.query(
@@ -610,14 +610,14 @@ class TestPlanInjectionIsolated:
         kg_plan = kg_main.clone_static_layer()
         if real_bsm:
             # This parcel overlaps a constraint - should detect violation
-            kg_plan._apply_planned_state(PlannedState(version="v1",
+            kg_plan.apply_planned_state(PlannedState(version="v1",
                 parcels=[PlannedParcelEntry(bsm=real_bsm, planning_land_use="2121")]))
             violations = kg_plan.check_constraint_violations("v1")
             assert isinstance(violations, list)
             assert len(violations) > 0, f"Expected violations for BSM {real_bsm} in protected zone"
         else:
             # No overlapping parcel found - just verify method runs
-            kg_plan._apply_planned_state(PlannedState(version="v1",
+            kg_plan.apply_planned_state(PlannedState(version="v1",
                 parcels=[PlannedParcelEntry(bsm="NO_OVERLAP_TEST", planning_land_use="2121")]))
             violations = kg_plan.check_constraint_violations("v1")
             assert isinstance(violations, list)
@@ -638,11 +638,11 @@ class TestPlanInjectionIsolated:
         assert real_bsm is not None
 
         # Version A: residential
-        kg_plan._apply_planned_state(PlannedState(version="v1",
+        kg_plan.apply_planned_state(PlannedState(version="v1",
             parcels=[PlannedParcelEntry(bsm=real_bsm, planning_land_use="2121",
                                        area_ha=0.5)]))
         # Version B: same parcel, different land use
-        kg_plan._apply_planned_state(PlannedState(version="v2",
+        kg_plan.apply_planned_state(PlannedState(version="v2",
             parcels=[PlannedParcelEntry(bsm=real_bsm, planning_land_use="0101",
                                        area_ha=0.5)]))
 
@@ -659,7 +659,7 @@ class TestPlanInjectionIsolated:
         """get_planned_parcels_in_zone queries L4 by zone type."""
         from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         kg_plan = kg_main.clone_static_layer()
-        kg_plan._apply_planned_state(PlannedState(version="v1",
+        kg_plan.apply_planned_state(PlannedState(version="v1",
             parcels=[
                 PlannedParcelEntry(bsm="Z1",  planning_land_use="2121",
                                    zone_type="村庄建设区", area_ha=0.3),
@@ -695,7 +695,7 @@ class TestPlanInjectionIsolated:
         kg_plan = kg_main.clone_static_layer()
         # Split: P -> P_s1, P_s2 (new bsms, derived from P)
         # Merge: Q1 + Q2 -> Q1Q2_merged (new bsm, derived from Q1 + Q2)
-        kg_plan._apply_planned_state(PlannedState(version="v1",
+        kg_plan.apply_planned_state(PlannedState(version="v1",
             parcels=[
                 # Split: real_bsm -> two sub-parcels
                 PlannedParcelEntry(
@@ -749,7 +749,7 @@ class TestPlanInjectionIsolated:
         assert l1_lu_0 is not None  # L1 fallback works
 
         # Apply plan: change parcel 0, leave parcel 1 unchanged
-        kg_plan._apply_planned_state(PlannedState(version="v1",
+        kg_plan.apply_planned_state(PlannedState(version="v1",
             parcels=[
                 PlannedParcelEntry(bsm=real_bsms[0], 
                              planning_land_use="2121",
@@ -772,7 +772,7 @@ class TestPlanInjectionIsolated:
         kg_plan = kg_main.clone_static_layer()
         triple_count_before = kg_plan.get_triple_count()
 
-        kg_plan._apply_planned_state(PlannedState(version="v1",
+        kg_plan.apply_planned_state(PlannedState(version="v1",
             parcels=[
                 PlannedParcelEntry(bsm="SPARSE_1", 
                              planning_land_use="2121"),
@@ -793,7 +793,7 @@ class TestPlanInjectionIsolated:
         """get_plan_changes returns delta entries for a version."""
         from app.modules.kg.builder.layer4 import PlannedState, PlannedParcelEntry
         kg_plan = kg_main.clone_static_layer()
-        kg_plan._apply_planned_state(PlannedState(version="v1",
+        kg_plan.apply_planned_state(PlannedState(version="v1",
             parcels=[
                 PlannedParcelEntry(bsm="CHG_1", 
                              planning_land_use="2121"),

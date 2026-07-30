@@ -27,13 +27,9 @@ from .layer1 import (
     )
 from .layer3 import build_intent_layer, clear_intent_layer
 from .layer4 import (
-    _apply_planned_state,
+    apply_planned_state,
     PlannedState, PlannedParcelEntry, PlannedZoneEntry,
     PlannedFacilityEntry, PlannedRoadEntry, PlannedAxisEntry,
-    get_planned_parcels_in_zone,
-    check_constraint_violations, compare_versions,
-    get_effective_land_use, get_effective_area_ha,
-    get_plan_changes,
 )
 from ..queries.sparql import (
     query, get_adjacency_map,
@@ -41,6 +37,9 @@ from ..queries.sparql import (
     get_parcels_within_distance_of_entity, get_adjacent_parcels_with_length,
     get_connected_parcels, get_parcels_by_bsm_list, validate_intent, _is_in_protected_zone,
     get_constraint_coverage,
+    get_effective_land_use, get_effective_area_ha,
+    get_plan_changes, get_planned_parcels_in_zone,
+    check_constraint_violations, compare_versions,
 )
 
 
@@ -82,7 +81,7 @@ class Layer3Mixin:
 
 
 class Layer4Mixin:
-    _apply_planned_state = _apply_planned_state
+    apply_planned_state = apply_planned_state
     get_effective_land_use = get_effective_land_use
     get_effective_area_ha = get_effective_area_ha
     get_plan_changes = get_plan_changes
