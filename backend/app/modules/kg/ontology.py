@@ -54,6 +54,21 @@ PLN_NS = "http://village-planning.org/ontology#"
 GEO = Namespace("http://www.opengis.net/ont/geosparql#")
 
 
+class ThreeLineSubtypes:
+    """三线 subtype constants — used by THREE_LINE entities.
+
+    Three-lines are法定约束底数 (statutory constraint base data), not derived:
+      ecological_redline:    生态保护红线 (state-mandated)
+      farmland_redline:      永久基本农田 (subset of 耕地保护红线, highest priority)
+      urban_dev_boundary:    城镇开发边界 (city-level transmission, often missing at village)
+      village_construction_boundary: 村庄建设边界 ZJDJSFWX (village-level, parallel to UDB)
+    """
+    ECOLOGICAL_REDLINE = "ecological_redline"
+    FARMLAND_REDLINE = "farmland_redline"
+    URBAN_DEV_BOUNDARY = "urban_dev_boundary"
+    VILLAGE_CONSTRUCTION_BOUNDARY = "village_construction_boundary"
+
+
 # ============================================================
 # Geometry kind constants (mirror gis_layer_registry.yaml geometry_kind values)
 # ============================================================
@@ -129,6 +144,7 @@ class EntityTypes:
     ControlLine = PLN.ControlLine      # 控制线（灾害/洪涝等）
     GisLayerSet = PLN.GisLayerSet      # v4.8: virtual gis-layer aggregator
     RasterDataset = PLN.RasterDataset  # v4.audit: DEM/DOM raster entity
+    ThreeLine = PLN.ThreeLine          # v6.0: 三线 (生态红线/永久基本农田/城镇开发边界/村庄建设边界)
     # L3: Intent virtual entities (意图虚拟实体)
     ZoneTarget = PLN.ZoneTarget
     FacilityTarget = PLN.FacilityTarget
@@ -140,16 +156,18 @@ class EntityTypes:
     PlannedFacility = PLN.PlannedFacility
     PlannedRoad = PLN.PlannedRoad
     PlannedAxis = PLN.PlannedAxis
+    FunctionalZone = PLN.FunctionalZone  # v6.0: 自定义功能分区 (vocabulary-driven)
 
     @classmethod
     def all(cls) -> list:
-        """Active entity types (18, excluding ThreeZone/ThreeLine per v4.7)."""
+        """Active entity types (20, including v6.0 ThreeLine and FunctionalZone)."""
         return [
             cls.Parcel, cls.Zone, cls.Village, cls.Facility, cls.Road, cls.WaterBody,
             cls.AdministrativeVillage, cls.ResidentialCluster, cls.ControlLine, cls.GisLayerSet,
+            cls.ThreeLine,
             cls.ZoneTarget, cls.FacilityTarget, cls.AxisTarget, cls.RoadTarget,
             cls.PlannedParcel, cls.PlannedZone, cls.PlannedFacility,
-            cls.PlannedRoad, cls.PlannedAxis,
+            cls.PlannedRoad, cls.PlannedAxis, cls.FunctionalZone,
         ]
 
     @classmethod
