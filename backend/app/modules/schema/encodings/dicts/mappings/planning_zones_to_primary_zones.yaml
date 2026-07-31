@@ -1,0 +1,44 @@
+# planning_zone (6 zones) → primary_zone (三区) 映射
+# 来源: 三区三线体系 + planning_zones.yaml 中每个 entry 的 primary_zone 字段
+#   生态保护区 → 生态空间
+#   生态控制区 → 生态空间
+#   农田保护区 → 农业空间
+#   一般农业区 → 农业空间
+#   林业发展区 → 农业空间
+#   村庄建设区 → 城镇空间 (校正: 原"建设空间" → "城镇空间")
+version: "2026_GUANGDONG_V1"
+standard: "三区三线 + planning_zones.yaml"
+source_system: planning_zones
+target_system: primary_zones
+
+mappings:
+  - source: "生态保护区"
+    default: "生态空间"
+    decision: auto
+    basis: "planning_zones.yaml 生态保护区 → 生态空间"
+    targets: [{code: "生态空间", when: null, confidence: exact}]
+  - source: "生态控制区"
+    default: "生态空间"
+    decision: auto
+    basis: "planning_zones.yaml 生态控制区 → 生态空间"
+    targets: [{code: "生态空间", when: null, confidence: exact}]
+  - source: "农田保护区"
+    default: "农业空间"
+    decision: auto
+    basis: "planning_zones.yaml 农田保护区 → 农业空间"
+    targets: [{code: "农业空间", when: null, confidence: exact}]
+  - source: "一般农业区"
+    default: "农业空间"
+    decision: auto
+    basis: "planning_zones.yaml 一般农业区 → 农业空间"
+    targets: [{code: "农业空间", when: null, confidence: exact}]
+  - source: "林业发展区"
+    default: "农业空间"
+    decision: auto
+    basis: "planning_zones.yaml 林业发展区 → 农业空间"
+    targets: [{code: "农业空间", when: null, confidence: exact}]
+  - source: "村庄建设区"
+    default: "城镇空间"
+    decision: auto
+    basis: "planning_zones.yaml 村庄建设区 → 城镇空间 (校正)"
+    targets: [{code: "城镇空间", when: null, confidence: exact}]

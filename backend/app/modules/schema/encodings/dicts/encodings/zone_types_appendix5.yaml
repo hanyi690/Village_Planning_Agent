@@ -1,0 +1,58 @@
+# 广东省村庄规划用地分类 5-tier 功能类 — 单一真相源
+#
+# 来源: 广东省村庄规划编制基本技术指南（试行）附录5
+#   "按《附录5 村庄规划用地分类表》将村域土地划分为
+#    生态用地（蓝、绿底色）、农业用地（黄、棕色底色）、
+#    村庄建设用地（灰、橙、红底色）、交通水利及其他用地及城镇用地等。"
+#
+# 用途: 村庄规划场景下用地功能分类。
+#   - 与三大类（土地管理法）不同
+#   - 与 GB 50137 城市用地分类（R/C/M/W/T/S/U/G/D）不同
+#   - 与 GB 50188 镇规划 8 大类不同
+#
+# 此文件由原 appendix5.yaml 的 zone_type 字段聚合而成，
+# 是 DLBM→zone_type 映射的查找表。
+version: "2026_GUANGDONG_V1"
+standard: "广东省村庄规划编制基本技术指南（试行）附录5 配色体系"
+system: "zone_types_appendix5"
+note: |
+  此 5-tier 分类源自附录5的"地类色块体系"，与 21 条 GHYTBM 编码
+  (appendix5.yaml) 是不同抽象层：5-tier 是功能类（仅 ~8 个值），
+  21 条是具体地类（每个 GHYTBM 映射到一个 5-tier）。
+  DLBM → zone_type 映射见 mappings/gbt21010_to_zone_types_appendix5.yaml
+
+classes:
+  - code: "农业用地"
+    name: "农业用地"
+    color: "黄/棕色底色"
+    description: "耕地、园地、商品林、设施农用地、水利设施用地等农业生产用地"
+
+  - code: "生态绿地"
+    name: "生态绿地"
+    color: "绿底色"
+    description: "生态林、自然保留地等具有生态保护功能的用地"
+
+  - code: "水域"
+    name: "水域"
+    color: "蓝底色"
+    description: "陆地水域（河湖、水库、坑塘等）"
+
+  - code: "居住用地"
+    name: "居住用地"
+    color: "灰底色"
+    description: "宅基地、城镇住宅用地"
+
+  - code: "公共服务用地"
+    name: "公共服务用地"
+    color: "橙底色"
+    description: "公共服务设施、景观绿化、风景名胜设施、特殊用地"
+
+  - code: "交通用地"
+    name: "交通用地"
+    color: "灰底色"
+    description: "村内交通、对外交通、基础设施用地（公用设施类）"
+
+  - code: "产业用地"
+    name: "产业用地"
+    color: "红底色"
+    description: "经营性建设用地、采矿用地"

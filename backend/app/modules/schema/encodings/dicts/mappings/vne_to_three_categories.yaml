@@ -1,0 +1,133 @@
+# V/N/E (村庄规划用地分类指南 住建部) → 三大类 映射
+# 来源: 《村庄规划用地分类指南》§2.2.1
+#   "本指南将用地划分为'村庄建设用地'、'非村庄建设用地'、'非建设用地'三大类"
+#   V 村庄建设用地 → 建设用地
+#   N 非村庄建设用地 → 建设用地
+#   E 非建设用地 → 未利用地 (含 E1 水域 / E2 农林用地 / E9 其他)
+version: "2026_GUANGDONG_V1"
+standard: "《村庄规划用地分类指南》(住建部 2014) §2.2.1"
+source_system: vne
+target_system: three_categories
+
+mappings:
+  # ── V 村庄建设用地 → 建设用地 ──
+  - source: "V"
+    default: "建设用地"
+    decision: auto
+    basis: "V 村庄建设用地 → 建设用地"
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V1"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V11"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V12"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V2"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V21"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V22"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V3"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V31"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V32"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V4"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V41"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V42"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "V43"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+
+  # ── N 非村庄建设用地 → 建设用地 ──
+  - source: "N"
+    default: "建设用地"
+    decision: auto
+    basis: "N 非村庄建设用地 → 建设用地"
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "N1"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+  - source: "N2"
+    default: "建设用地"
+    decision: auto
+    targets: [{code: "建设用地", when: null, confidence: exact}]
+
+  # ── E 非建设用地 → 农用地 / 未利用地 ──
+  - source: "E"
+    default: "未利用地"
+    decision: auto
+    basis: "E 非建设用地 → 未利用地"
+    targets: [{code: "未利用地", when: null, confidence: exact}]
+  - source: "E1"
+    default: "未利用地"
+    decision: auto
+    basis: "E1 水域 → 未利用地"
+    targets: [{code: "未利用地", when: null, confidence: exact}]
+  - source: "E11"
+    default: "未利用地"
+    decision: auto
+    targets: [{code: "未利用地", when: null, confidence: exact}]
+  - source: "E12"
+    default: "未利用地"
+    decision: auto
+    basis: "E12 水库 → 未利用地 (按 E1 类)"
+    targets: [{code: "未利用地", when: null, confidence: exact}]
+  - source: "E13"
+    default: "农用地"
+    decision: auto
+    basis: "E13 坑塘沟渠 (含农业水利设施) → 农用地"
+    targets: [{code: "农用地", when: null, confidence: high}]
+  - source: "E2"
+    default: "农用地"
+    decision: auto
+    basis: "E2 农林用地 → 农用地"
+    targets: [{code: "农用地", when: null, confidence: exact}]
+  - source: "E21"
+    default: "农用地"
+    decision: auto
+    targets: [{code: "农用地", when: null, confidence: exact}]
+  - source: "E22"
+    default: "农用地"
+    decision: auto
+    targets: [{code: "农用地", when: null, confidence: exact}]
+  - source: "E23"
+    default: "农用地"
+    decision: auto
+    targets: [{code: "农用地", when: null, confidence: exact}]
+  - source: "E9"
+    default: "未利用地"
+    decision: auto
+    basis: "E9 其他非建设用地 → 未利用地"
+    targets: [{code: "未利用地", when: null, confidence: exact}]

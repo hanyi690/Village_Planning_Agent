@@ -32,102 +32,74 @@ classes:
   # ── 农用地 ──
   - code: "0110"
     name: "水田"
-    planning_zone: "农田保护区"
-    primary_zone: "农业空间"
     categories: ["BASIC_FARMLAND"]
     description: "土规: 耕地→水田"
 
   - code: "0120"
     name: "旱地"
-    planning_zone: "农田保护区"
-    primary_zone: "农业空间"
     categories: ["BASIC_FARMLAND"]
     description: "土规: 耕地→旱地"
 
   - code: "0130"
     name: "灌溉水田"
-    planning_zone: "农田保护区"
-    primary_zone: "农业空间"
     categories: ["BASIC_FARMLAND"]
     description: "土规: 耕地→灌溉水田"
 
   - code: "0210"
     name: "园地"
-    planning_zone: "一般农业区"
-    primary_zone: "农业空间"
     categories: ["GENERAL_AGRICULTURE"]
     description: "土规: 园地"
 
   - code: "0220"
     name: "园地"
-    planning_zone: "一般农业区"
-    primary_zone: "农业空间"
     categories: ["GENERAL_AGRICULTURE"]
     description: "土规: 园地(旱地)"
 
   # ── 林地 ──
   - code: "0310"
     name: "有林地"
-    planning_zone: "林业发展区"
-    primary_zone: "生态空间"
     categories: ["ECOLOGICAL", "FOREST"]
     description: "土规: 林地→有林地"
 
   - code: "0330"
     name: "其他林地"
-    planning_zone: "林业发展区"
-    primary_zone: "生态空间"
     categories: ["ECOLOGICAL", "FOREST"]
     description: "土规: 林地→其他林地"
 
   # ── 建设用地 ──
   - code: "0610"
     name: "工业用地"
-    planning_zone: "村庄建设区"
-    primary_zone: "建设空间"
     categories: ["CONSTRUCTION"]
     description: "土规: 工矿→工业"
 
   - code: "0620"
     name: "采矿用地"
-    planning_zone: "村庄建设区"
-    primary_zone: "建设空间"
     categories: ["CONSTRUCTION"]
     description: "土规: 工矿→采矿"
 
   - code: "2030"
     name: "农村居民点"
-    planning_zone: "村庄建设区"
-    primary_zone: "建设空间"
     categories: ["CONSTRUCTION"]
     description: "土规: 农村居民点。三调中对应 CZCSXM=203(村庄用地)。"
 
   # ── 交通运输用地 ──
   - code: "1040"
     name: "管道运输用地"
-    planning_zone: "村庄建设区"
-    primary_zone: "建设空间"
     categories: ["CONSTRUCTION"]
     description: "土规: 交通运输→管道"
 
   # ── 水域及水利设施用地 ──
   - code: "1110"
     name: "滩涂"
-    planning_zone: "生态保护区"
-    primary_zone: "生态空间"
     categories: ["ECOLOGICAL", "WATER"]
     description: "土规: 水域→滩涂"
 
   - code: "1140"
     name: "沼泽地"
-    planning_zone: "生态保护区"
-    primary_zone: "生态空间"
     categories: ["ECOLOGICAL", "WATER"]
     description: "土规: 水域→沼泽地"
 
   - code: "1180"
     name: "水田(水域)"
-    planning_zone: "农田保护区"
-    primary_zone: "农业空间"
     categories: ["BASIC_FARMLAND"]
     description: "土规: 水域→水田(特殊)"

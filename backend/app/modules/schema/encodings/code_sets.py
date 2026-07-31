@@ -17,6 +17,19 @@ v2.0 (2026-07-26) changes:
   SPACE_CONTROL_ZONE_TYPES (use SPACE_CONTROL_ZONE_CODES)
 - Fixed: field_defaults lookups (ghflbm_to_code, ghflbm_to_name, space_control_code,
   space_control_name) now implemented
+
+v3.0 (2026-07-30) changes:
+- zone_type / planning_zone / primary_zone promoted to first-class encodings
+- New encodings: three_categories, zone_types_appendix5, zone_types_gbt50137,
+  zone_types_town, zone_types_village, planning_zones, primary_zones
+- DLBM_TO_ZONE_TYPE now reads from mappings/gbt21010_to_zone_types_appendix5.yaml
+  (not derived from encoding dicts)
+- DLBM_TO_PLANNING_ZONE now reads from mappings/gbt21010_to_planning_zones.yaml
+- DLBM_TO_PRIMARY_ZONE now reads from mappings/gbt21010_to_primary_zones.yaml
+- DLBM_TO_DLMC now only uses _gbt21010 (no longer merged 3 systems)
+- PRIMARY_ZONE_NAMES corrected: 建设空间 → 城镇空间 (per 《若干意见》2019)
+- PLANNING_ZONE_TO_PRIMARY_ZONE derived from planning_zones.yaml (each entry has primary_zone)
+- PLANNING_ZONE_TO_CONTROL_CODE migrated to mappings/planning_zones_to_control_code.yaml
 """
 
 from __future__ import annotations
@@ -31,17 +44,26 @@ from .dicts.loader import get_center
 # Encoding & code-set symbols - derived from DictionaryCenter
 # ============================================================
 #
-# 六套编码体系:
-#   gbt21010:  GB/T 21010-2017 土地利用现状分类 (三调国标)
-#   tugui:     广东省县级土地利用总体规划数据库标准 (土规)
-#   appendix5: 广东省技术指南附录5 村庄规划用地分类 (原ghytbm)
-#   ghflbm:    广东省土规数据库标准 规划分类编码 (比appendix5更粗)
-#   ydyhfldm:  自然资发〔2023〕234号 用地用海分类
-#   vne:       住建部《村庄规划用地分类指南》V/N/E分类
+# 14 套独立编码体系 (v3.0):
+#   ── 现状层 ──
+#   gbt21010:           GB/T 21010-2017 土地利用现状分类 (三调国标)
+#   tugui:              广东省县级土地利用总体规划数据库标准 (土规)
+#   appendix5:          广东省技术指南附录5 村庄规划用地分类 (原ghytbm)
+#   ghflbm:             广东省土规数据库标准 规划分类编码
+#   vne:                住建部《村庄规划用地分类指南》V/N/E分类
+#   ydyhfldm:           自然资发〔2023〕234号 用地用海分类
+#   ── 分区层 (v3.0 新增) ──
+#   three_categories:   《土地管理法》"三大类" (农用地/建设用地/未利用地)
+#   zone_types_appendix5: 广东省附录5 5-tier 功能类
+#   zone_types_gbt50137:  GB 50137-2011 城市用地分类 (R/A/B/M/W/S/U/G/D)
+#   zone_types_town:    GB 50188-2007 镇规划 8 大类
+#   zone_types_village: 村土地利用规划编制技术导则 3-tier
+#   planning_zones:     TD/T 1027-2010 附录B 6 zones (规划分区)
+#   primary_zones:      三区三线 (生态空间/农业空间/城镇空间)
 #
-# 现状层DLBM使用appendix5编码 (编制实践，非规范要求)
-# 规划层DLBM/QMDLBM使用tugui编码 (符合规范)
-# 规划层GHYTBM使用appendix5编码 (符合规范)
+# 现状层 DLBM 使用 gbt21010 编码
+# 规划层 GHYTBM 使用 appendix5 编码
+# 派生映射在 mappings/ 目录，参见 dicts/mappings/
 # ============================================================
 
 _gbt21010 = get_center().encoding("gbt21010")
@@ -50,6 +72,16 @@ _appendix5 = get_center().encoding("appendix5")
 _ghflbm = get_center().encoding("ghflbm")
 _ydyhfldm = get_center().encoding("ydyhfldm")
 _vne = get_center().encoding("vne")
+
+# v3.0: 新增 7 套独立 encoding
+_three_categories = get_center().encoding("three_categories")
+_zone_types_appendix5 = get_center().encoding("zone_types_appendix5")
+_zone_types_gbt50137 = get_center().encoding("zone_types_gbt50137")
+_zone_types_town = get_center().encoding("zone_types_town")
+_zone_types_village = get_center().encoding("zone_types_village")
+_planning_zones = get_center().encoding("planning_zones")
+_primary_zones = get_center().encoding("primary_zones")
+
 _tl = get_center().get("three_line_types")
 _ec = get_center().get("element_codes")
 _sddlbm = get_center().get_mapping("sddlbm_to_ydyhfldm")
@@ -58,6 +90,25 @@ _sddlbm = get_center().get_mapping("sddlbm_to_ydyhfldm")
 _cz_codes = get_center().get("construction_zone_codes")
 _ghflbm_tdyt = get_center().get_mapping("ghflbm_to_tdytfqdm")
 _dlbm_ghytbm = get_center().get_mapping("dlbm_to_ghytbm")
+
+# v3.0: 新增 9 个 mapping
+_dlbm_to_three_categories = get_center().get_mapping("gbt21010_to_three_categories")
+_dlbm_to_zone_types_appendix5 = get_center().get_mapping("gbt21010_to_zone_types_appendix5")
+_dlbm_to_planning_zones = get_center().get_mapping("gbt21010_to_planning_zones")
+_dlbm_to_primary_zones = get_center().get_mapping("gbt21010_to_primary_zones")
+_dlbm_to_zone_types_gbt50137 = get_center().get_mapping("gbt21010_to_zone_types_gbt50137")
+_ghflbm_to_zone_types_appendix5 = get_center().get_mapping("ghflbm_to_zone_types_appendix5")
+_vne_to_three_categories = get_center().get_mapping("vne_to_three_categories")
+_planning_zones_to_primary_zones = get_center().get_mapping("planning_zones_to_primary_zones")
+_planning_zones_to_control_code = get_center().get_mapping("planning_zones_to_control_code")
+_appendix5_to_zone_types_appendix5 = get_center().get_mapping("appendix5_to_zone_types_appendix5")
+_vne_to_zone_types_appendix5 = get_center().get_mapping("vne_to_zone_types_appendix5")
+
+
+def _mapping_default_to_dict(m) -> Dict[str, str]:
+    """Extract {source: default} from a MappingTable.to_dict() result."""
+    raw = m.to_dict()
+    return {k: v[0] for k, v in raw.items()}
 
 # ── Code sets from tugui (土规标准定义的 categories) ──
 BASIC_FARMLAND_CODES: Set[str] = _tugui.to_set("code", filter_tag="BASIC_FARMLAND")
@@ -73,52 +124,38 @@ PROTECTED_DLBM_CODES: Set[str] = BASIC_FARMLAND_CODES | GENERAL_AGRICULTURE_CODE
 CONSTRUCTION_USE_TYPES: Set[str] = {"居住用地", "产业用地", "公共服务用地", "交通用地", "商业用地"}
 
 # ── Code -> Name mappings (per system, built once at import) ──
-DLBM_TO_DLMC: Dict[str, str] = {}
-for system in [_appendix5, _tugui, _gbt21010]:
-    DLBM_TO_DLMC.update(system.to_dict("code", "name"))
+# v3.0: DLBM_TO_DLMC only uses gbt21010 (no longer merged from 3 systems)
+DLBM_TO_DLMC: Dict[str, str] = _gbt21010.to_dict("code", "name")
 
-# ── DLBM -> Zone type (primary source: appendix5) ──
-DLBM_TO_ZONE_TYPE: Dict[str, str] = {}
-for system in [_appendix5, _tugui, _gbt21010]:
-    DLBM_TO_ZONE_TYPE.update(system.to_dict("code", "zone_type"))
-DLBM_TO_ZONE_TYPE = {k: v for k, v in DLBM_TO_ZONE_TYPE.items() if v}
+# ── v3.0: DLBM -> Three categories (《土地管理法》三大类) ──
+DLBM_TO_THREE_CATEGORIES: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_three_categories)
 
-# ── DLBM -> Planning zone (primary source: tugui) ──
+# ── DLBM -> Zone type (v3.0: from mapping, not encoding dict) ──
+DLBM_TO_ZONE_TYPE: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_zone_types_appendix5)
+
+# ── DLBM -> Planning zone (v3.0: from mapping) ──
 # ⚠️ 启发规则，非确定性推导
 # 同一 DLBM 可映射到不同 planning_zone（如 0301 乔木林地→林业发展区/生态保护区）。
 # PARSE 应明确产出 planning_zone 判断；此映射仅作 ConstraintCompiler fallback。
-DLBM_TO_PLANNING_ZONE: Dict[str, str] = {}
-for system in [_tugui, _appendix5]:
-    DLBM_TO_PLANNING_ZONE.update(system.to_dict("code", "planning_zone"))
-DLBM_TO_PLANNING_ZONE = {k: v for k, v in DLBM_TO_PLANNING_ZONE.items() if v}
+DLBM_TO_PLANNING_ZONE: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_planning_zones)
 
-# ── DLBM -> Primary zone (primary source: tugui) ──
-DLBM_TO_PRIMARY_ZONE: Dict[str, str] = {}
-for system in [_tugui, _appendix5]:
-    DLBM_TO_PRIMARY_ZONE.update(system.to_dict("code", "primary_zone"))
-DLBM_TO_PRIMARY_ZONE = {k: v for k, v in DLBM_TO_PRIMARY_ZONE.items() if v}
+# ── DLBM -> Primary zone (v3.0: from mapping) ──
+DLBM_TO_PRIMARY_ZONE: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_primary_zones)
 
 ZONE_TYPE_TO_DLBMS: Dict[str, List[str]] = {}
 for _code, _zt in DLBM_TO_ZONE_TYPE.items():
     ZONE_TYPE_TO_DLBMS.setdefault(_zt, []).append(_code)
 
-# ── Zone hierarchy ──
+# ── Zone hierarchy (v3.0: from encoding dicts, not derived from mappings) ──
 ZONE_TYPES: List[str] = sorted(set(DLBM_TO_ZONE_TYPE.values()))
-PLANNING_ZONES: List[str] = sorted(set(DLBM_TO_PLANNING_ZONE.values()))
-PRIMARY_ZONES: List[str] = ["生态空间", "农业空间", "建设空间"]
+PLANNING_ZONES: List[str] = [e.get("code", "") for e in _planning_zones.raw.get("classes", [])]
+PRIMARY_ZONES: List[str] = [e.get("code", "") for e in _primary_zones.raw.get("classes", [])]
 
-PLANNING_ZONE_NAMES: List[str] = [
-    "生态保护区", "生态控制区", "农田保护区",
-    "一般农业区", "村庄建设区", "林业发展区",
-]
-PRIMARY_ZONE_NAMES: List[str] = ["生态空间", "农业空间", "建设空间"]
+PLANNING_ZONE_NAMES: List[str] = PLANNING_ZONES
+PRIMARY_ZONE_NAMES: List[str] = PRIMARY_ZONES
 
-# ── PLANNING_ZONE_TO_PRIMARY_ZONE: from YAML (single source of truth) ──
-# Loaded from planning_zone_rules.yaml via rule_loader or directly from raw
-_pz_raw = get_center().get("planning_zone_rules").raw
-PLANNING_ZONE_TO_PRIMARY_ZONE: Dict[str, str] = dict(
-    _pz_raw.get("planning_zone_to_primary_zone", {})
-)
+# ── PLANNING_ZONE_TO_PRIMARY_ZONE (v3.0: from mappings/planning_zones_to_primary_zones.yaml) ──
+PLANNING_ZONE_TO_PRIMARY_ZONE: Dict[str, str] = _mapping_default_to_dict(_planning_zones_to_primary_zones)
 if not PLANNING_ZONE_TO_PRIMARY_ZONE:
     # Fallback if YAML missing (should not happen in production)
     PLANNING_ZONE_TO_PRIMARY_ZONE = {
@@ -126,16 +163,14 @@ if not PLANNING_ZONE_TO_PRIMARY_ZONE:
         "生态控制区": "生态空间",
         "农田保护区": "农业空间",
         "一般农业区": "农业空间",
-        "村庄建设区": "建设空间",
+        "村庄建设区": "城镇空间",
         "林业发展区": "农业空间",
     }
 
-# ── GHYTMC planning use names (from appendix5) ──
-GHYTMC_TO_ZONE_TYPE: Dict[str, str] = _appendix5.to_dict("name", "zone_type")
-
 # ── GHFLBM / GHYTBM planning classification codes ──
 GHFLBM_MEANING: Dict[str, str] = _ghflbm.to_dict("code", "name")
-GHFLBM_TO_ZONE_TYPE: Dict[str, str] = _ghflbm.to_dict("code", "zone_type")
+# v3.0: from mapping, not encoding dict
+GHFLBM_TO_ZONE_TYPE: Dict[str, str] = _mapping_default_to_dict(_ghflbm_to_zone_types_appendix5)
 
 GHFLBM_TO_GHYTBMS: Dict[str, List[str]] = {}
 for _entry in _ghflbm.raw.get("classes", []):
@@ -146,7 +181,14 @@ for _entry in _ghflbm.raw.get("classes", []):
 
 GHYTBM_TO_GHYTMC: Dict[str, str] = _appendix5.to_dict("code", "name")
 GHYTBM_TO_YDYHFLDM: Dict[str, str] = _appendix5.to_dict("code", "ydyhfldm")
-GHYTBM_TO_ZONE_TYPE: Dict[str, str] = _appendix5.to_dict("code", "zone_type")
+# v3.0: from mapping
+GHYTBM_TO_ZONE_TYPE: Dict[str, str] = _mapping_default_to_dict(_appendix5_to_zone_types_appendix5)
+# v3.0: derived from GHYTBM_TO_ZONE_TYPE + GHYTBM_TO_GHYTMC
+GHYTMC_TO_ZONE_TYPE: Dict[str, str] = {
+    GHYTBM_TO_GHYTMC.get(ghytbm, ""): zt
+    for ghytbm, zt in GHYTBM_TO_ZONE_TYPE.items()
+    if GHYTBM_TO_GHYTMC.get(ghytbm, "")
+}
 
 # ── GHYTBM -> Planning zone (from YAML, replaces old hardcoded _GHYTBM_TO_PLANNING_ZONE) ──
 _ghytbm_pz = get_center().get("ghytbm_to_planning_zone").raw
@@ -163,12 +205,11 @@ YDYHFLDM_TO_NAME: Dict[str, str] = _ydyhfldm.to_dict("code", "name")
 
 # ── V/N/E village planning land classification ──
 VNE_CODE_TO_NAME: Dict[str, str] = _vne.to_dict("code", "name")
-VNE_TO_ZONE_TYPE: Dict[str, str] = _vne.to_dict("code", "zone_type")
+# v3.0: from mapping, not encoding dict
+VNE_TO_ZONE_TYPE: Dict[str, str] = _mapping_default_to_dict(_vne_to_zone_types_appendix5)
 
 ZONE_TYPE_TO_VNE: Dict[str, str] = {}
-for _entry in _vne.raw.get("classes", []):
-    _zt = _entry.get("zone_type", "")
-    _code = _entry.get("code", "")
+for _code, _zt in VNE_TO_ZONE_TYPE.items():
     if _zt and _code and _zt not in ZONE_TYPE_TO_VNE:
         ZONE_TYPE_TO_VNE[_zt] = _code
 

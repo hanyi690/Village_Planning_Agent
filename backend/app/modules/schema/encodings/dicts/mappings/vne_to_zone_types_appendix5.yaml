@@ -1,0 +1,134 @@
+# V/N/E → zone_types_appendix5 (5-tier) 映射
+# 来源: vne.yaml 的 zone_type 字段 (迁移, 不删除)
+version: "2026_GUANGDONG_V1"
+standard: "《村庄规划用地分类指南》(住建部 2014)"
+source_system: vne
+target_system: zone_types_appendix5
+
+mappings:
+  # ── V 村庄建设用地 ──
+  - source: "V"
+    default: "居住用地"
+    decision: auto
+    basis: "vne V 村庄建设用地 → 居住用地"
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "V1"
+    default: "居住用地"
+    decision: auto
+    basis: "vne V1 村民住宅用地 → 居住用地"
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "V11"
+    default: "居住用地"
+    decision: auto
+    basis: "vne V11 住宅用地 → 居住用地"
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "V12"
+    default: "居住用地"
+    decision: auto
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "V2"
+    default: "公共服务用地"
+    decision: auto
+    basis: "vne V2 村庄公共服务用地 → 公共服务用地"
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "V21"
+    default: "公共服务用地"
+    decision: auto
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "V22"
+    default: "公共服务用地"
+    decision: auto
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "V3"
+    default: "产业用地"
+    decision: auto
+    basis: "vne V3 村庄产业用地 → 产业用地"
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+  - source: "V31"
+    default: "产业用地"
+    decision: auto
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+  - source: "V32"
+    default: "产业用地"
+    decision: auto
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+  - source: "V4"
+    default: "交通用地"
+    decision: auto
+    basis: "vne V4 村庄基础设施用地 → 交通用地"
+    targets: [{code: "交通用地", when: null, confidence: exact}]
+  - source: "V41"
+    default: "交通用地"
+    decision: auto
+    targets: [{code: "交通用地", when: null, confidence: exact}]
+  - source: "V42"
+    default: "交通用地"
+    decision: auto
+    targets: [{code: "交通用地", when: null, confidence: exact}]
+  - source: "V43"
+    default: "公共服务用地"
+    decision: auto
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+
+  # ── N 非村庄建设用地 ──
+  - source: "N"
+    default: "公共服务用地"
+    decision: auto
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "N1"
+    default: "交通用地"
+    decision: auto
+    basis: "vne N1 对外交通设施用地 → 交通用地"
+    targets: [{code: "交通用地", when: null, confidence: exact}]
+  - source: "N2"
+    default: "公共服务用地"
+    decision: auto
+    basis: "vne N2 国有建设用地 → 公共服务用地"
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+
+  # ── E 非建设用地 ──
+  - source: "E"
+    default: "生态绿地"
+    decision: auto
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "E1"
+    default: "水域"
+    decision: auto
+    basis: "vne E1 水域 → 水域"
+    targets: [{code: "水域", when: null, confidence: exact}]
+  - source: "E11"
+    default: "水域"
+    decision: auto
+    targets: [{code: "水域", when: null, confidence: exact}]
+  - source: "E12"
+    default: "水域"
+    decision: auto
+    basis: "vne E12 水库 → 水域"
+    targets: [{code: "水域", when: null, confidence: exact}]
+  - source: "E13"
+    default: "农业用地"
+    decision: auto
+    basis: "vne E13 坑塘沟渠 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "E2"
+    default: "农业用地"
+    decision: auto
+    basis: "vne E2 农林用地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "E21"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "E22"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "E23"
+    default: "农业用地"
+    decision: auto
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "E9"
+    default: "生态绿地"
+    decision: auto
+    basis: "vne E9 其他非建设用地 → 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: exact}]

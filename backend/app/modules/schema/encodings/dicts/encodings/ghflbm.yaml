@@ -5,55 +5,44 @@ standard: "广东省县级土地利用总体规划数据库标准"
 classes:
   - code: "1110"
     name: "耕地(规划)"
-    zone_type: "农业用地"
     ghytbms: ["1100"]
 
   - code: "1120"
     name: "园地(规划)"
-    zone_type: "农业用地"
     ghytbms: ["1200"]
 
   - code: "1130"
     name: "林地(规划)"
-    zone_type: "生态绿地"
     ghytbms: ["1340", "1350"]
 
   - code: "1200"
     name: "草地(规划)"
-    zone_type: "生态绿地"
     ghytbms: ["1400"]
 
   - code: "1310"
     name: "商品林(规划)"
-    zone_type: "生态绿地"
     ghytbms: ["1340"]
 
   - code: "1330"
     name: "生态林(规划)"
-    zone_type: "生态绿地"
     ghytbms: ["1350"]
 
   - code: "1520"
     name: "设施农用地(规划)"
-    zone_type: "农业用地"
     ghytbms: ["1510"]
 
   - code: "1530"
     name: "其他农用地(规划)"
-    zone_type: "农业用地"
     ghytbms: ["1500"]
 
   - code: "2120"
     name: "农村建设用地(规划)"
-    zone_type: "居住用地"
     ghytbms: ["2121", "2122", "2123", "2124", "2125", "2126"]
 
   - code: "2270"
     name: "水利设施用地(规划)"
-    zone_type: "农业用地"
     ghytbms: ["2270"]
 
   - code: "3110"
     name: "水域(规划)"
-    zone_type: "水域"
     ghytbms: ["3100"]

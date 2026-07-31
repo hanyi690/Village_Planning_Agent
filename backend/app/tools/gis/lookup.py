@@ -1,8 +1,26 @@
-"""Tool: lookup_land_use_code — land-use name → GHYTBM standard codes.
+"""Code lookup tools for LLM (v3.0).
 
-Split from parse_tools.py during Phase C refactor.
+Three independent tools, each with a single concern:
+
+1. `decode_code` (mode 1): Auto-detect encoding system from code, return name + system description.
+   - Input: any code string (e.g., "0101", "V11", "01")
+   - Output: {code, detected_system, system_description, name}
+   - Forward direction, deterministic 1:1, no code->code chains.
+
+2. `map_code` (mode 2): Cross-system mapping suggestions.
+   - Input: any code or Chinese name
+   - Output: {input, mappings: [{system, code, name, rule, confidence}, ...]}
+   - Returns MULTIPLE candidates, LLM must choose. NEVER auto-resolves.
+
+3. `lookup_land_use_code` (mode 3, refactored): Forward name -> codes.
+   - Input: Chinese land-use name (e.g., "宅基地")
+   - Output: {ghytbm, dlbm_aliases, ghflbm, vne_code, zone_type, candidates}
+   - CODE-ONLY return (no ghytmc/dlmc name fields). Use decode_code for names.
+
+The original `lookup_land_use_code` tool was split: name resolution moved to
+`decode_code`, cross-system mapping moved to `map_code`, code-only lookup
+stays here. The split keeps each tool single-purpose and testable.
 """
-
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,43 +34,312 @@ from app.tools.helpers import make_result
 logger = get_logger(__name__)
 
 
+# ============================================================
+# Tool 1: decode_code - auto-detect encoding system + name lookup
+# ============================================================
 
+# System priority order for ambiguous codes (lower index = higher priority).
+# In practice, code spaces are disjoint, so ambiguity is rare.
+_SYSTEM_PRIORITY = (
+    "gbt21010",          # DLBM (4-digit 01XX-12XX)
+    "appendix5",         # GHYTBM (4-digit 11XX/12XX/13XX/15XX/21XX/22XX/23XX/31XX/32XX)
+    "tugui",             # 土规 (4-digit 01XX-20XX, overlaps with gbt21010 - gbt21010 wins)
+    "ghflbm",            # 规划分区大类 (4-digit 11XX/12XX/13XX/15XX/21XX/22XX/31XX)
+    "vne_code",          # V/N/E (alphanumeric: V, V1, V11, N1, N2, E1, E11, E9)
+    "ydyhfldm",          # 用地用海分类 (4-digit, overlaps - gbt21010 wins)
+    "zone_type_appendix5",  # Chinese name as code
+    "zone_type_gbt50137",   # Letter codes R/A/B/M/W/S/U/G/D
+    "zone_type_town",       # Chinese name as code
+    "zone_type_village",    # Chinese name as code
+    "planning_zone",        # Chinese name as code (6 zones)
+    "primary_zone",         # Chinese name as code (3 zones)
+    "three_categories",     # Chinese name as code (3 categories)
+    "space_control",        # 2-digit 01-06
+)
+
+_SYSTEM_DESCRIPTIONS: Dict[str, str] = {
+    "gbt21010": "GB/T 21010-2017 土地利用现状分类（三调国标，4位数字）",
+    "appendix5": "广东省村庄规划用地分类附录5（GHYTBM，4位数字）",
+    "tugui": "广东省县级土地利用总体规划数据库标准（土规，4位数字）",
+    "ghflbm": "广东省土规数据库标准 规划分类编码（GHFLBM，4位数字）",
+    "vne_code": "住建部《村庄规划用地分类指南》V/N/E分类（字母+数字）",
+    "ydyhfldm": "自然资发〔2023〕234号 用地用海分类（4位数字）",
+    "zone_type_appendix5": "广东省附录5 5-tier 功能类（中文名）",
+    "zone_type_gbt50137": "GB 50137-2011 城市用地分类（R/A/B/M/W/S/U/G/D 字母码）",
+    "zone_type_town": "GB 50188-2007 镇规划 8大类（中文名）",
+    "zone_type_village": "村土地利用规划编制技术导则 3-tier（中文名）",
+    "planning_zone": "TD/T 1027-2010 附录B 规划分区（6 zones，中文名）",
+    "primary_zone": "三区三线 三大类空间（生态/农业/城镇空间，中文名）",
+    "three_categories": "《土地管理法》三大类（农用地/建设用地/未利用地，中文名）",
+    "space_control": "建设用地管制区编码（01-06）",
+}
+
+# Map system keys (in _SYSTEM_PRIORITY) to lookup_code_name code_type values
+# (which are the keys in app.utils.code_lookup.NAME_BY_CODE).
+_NAME_LOOKUP_TYPE: Dict[str, str] = {
+    "gbt21010": "dlbm",
+    "appendix5": "ghytbm",
+    "tugui": "dlbm",  # tugui uses similar code space
+    "ghflbm": "ghflbm",
+    "vne_code": "vne_code",
+    "ydyhfldm": "dlbm",  # similar code space
+    "zone_type_appendix5": "zone_type_appendix5",
+    "zone_type_gbt50137": "zone_type_gbt50137",
+    "zone_type_town": "zone_type_town",
+    "zone_type_village": "zone_type_village",
+    "planning_zone": "planning_zone",
+    "primary_zone": "primary_zone",
+    "three_categories": "three_categories",
+    "space_control": "space_control",
+}
+
+# Reverse alias for input system detection
+_SYSTEM_ALIAS: Dict[str, str] = {v: k for k, v in _NAME_LOOKUP_TYPE.items()}
+
+
+@tool
+def decode_code(code: str) -> Dict[str, Any]:
+    """Auto-detect encoding system for a code and return Chinese name + system info.
+
+    Iterates 14 encoding systems in priority order. First match wins.
+    Code spaces are mostly disjoint, so ambiguity is rare in practice.
+
+    Args:
+        code: Any code string (e.g., "0101", "V11", "01", "居住用地", "R").
+
+    Returns:
+        Dict with:
+          - code: the input code
+          - detected_system: system key (e.g., "gbt21010") or "unknown"
+          - system_description: human-readable standard reference
+          - name: Chinese name (or "" if not found)
+
+    Example:
+        decode_code("0101") -> {"code": "0101", "detected_system": "gbt21010",
+                                 "system_description": "GB/T 21010-2017...",
+                                 "name": "水田"}
+        decode_code("V11") -> {"code": "V11", "detected_system": "vne_code", ...}
+        decode_code("R") -> {"code": "R", "detected_system": "zone_type_gbt50137", ...}
+    """
+    try:
+        from app.utils.code_lookup import NAME_BY_CODE
+
+        if not code:
+            return {
+                "code": code,
+                "detected_system": "unknown",
+                "system_description": "",
+                "name": "",
+            }
+
+        code_str = str(code).strip()
+        for sys_key in _SYSTEM_PRIORITY:
+            # Translate system key to NAME_BY_CODE key (e.g., "gbt21010" -> "dlbm")
+            name_key = _NAME_LOOKUP_TYPE.get(sys_key, sys_key)
+            table = NAME_BY_CODE.get(name_key, {})
+            if code_str in table:
+                return {
+                    "code": code_str,
+                    "detected_system": sys_key,
+                    "system_description": _SYSTEM_DESCRIPTIONS.get(sys_key, ""),
+                    "name": table[code_str],
+                }
+
+        return {
+            "code": code_str,
+            "detected_system": "unknown",
+            "system_description": "",
+            "name": "",
+        }
+    except Exception as e:
+        logger.warning("[decode_code] Failed: %s", e)
+        return {"code": code, "detected_system": "unknown", "system_description": "", "name": "", "error": str(e)}
+
+
+# ============================================================
+# Tool 2: map_code - cross-system mapping suggestions
+# ============================================================
+
+@tool
+def map_code(code_or_name: str) -> Dict[str, Any]:
+    """Return cross-system mapping suggestions for a code or name.
+
+    Given any code (e.g., "0101") or Chinese name (e.g., "水田"), returns
+    possible mappings to OTHER encoding systems. Each mapping includes code +
+    name + rule + confidence. NEVER auto-resolves - LLM must choose based on
+    context.
+
+    Args:
+        code_or_name: Any code string or Chinese land-use name.
+
+    Returns:
+        Dict with:
+          - input: {code, name, system} of the input (via decode_code)
+          - mappings: List of {system, code, name, rule, confidence}
+          - If input not recognized, mappings is empty.
+
+    Example:
+        map_code("0101") -> {
+            "input": {"code": "0101", "name": "水田", "system": "gbt21010"},
+            "mappings": [
+                {"system": "three_categories", "code": "农用地", "name": "农用地",
+                 "rule": "GB/T 21010-2017 附录A", "confidence": "exact"},
+                {"system": "zone_type_appendix5", "code": "农业用地", ...},
+                {"system": "planning_zone", "code": "农田保护区", ...},
+                {"system": "primary_zone", "code": "农业空间", ...},
+                {"system": "appendix5", "code": "1100", "name": "耕地", ...},
+            ]
+        }
+    """
+    try:
+        from app.modules.schema.encodings import code_sets as cs
+
+        # Step 1: identify input via decode_code
+        decoded = decode_code.invoke({"code": code_or_name})
+        if not isinstance(decoded, dict):
+            decoded = {"code": code_or_name, "detected_system": "unknown", "name": ""}
+
+        input_code = decoded.get("code", "")
+        input_system = decoded.get("detected_system", "unknown")
+        input_name = decoded.get("name", "")
+
+        if input_system == "unknown":
+            # Try as Chinese name (reverse lookup in NAME_BY_CODE values)
+            from app.utils.code_lookup import NAME_BY_CODE
+            for sys_key, table in NAME_BY_CODE.items():
+                for k, v in table.items():
+                    if v == code_or_name:
+                        input_code = k
+                        input_system = sys_key
+                        input_name = v
+                        break
+                if input_system != "unknown":
+                    break
+
+        if input_system == "unknown":
+            return {
+                "input": {"code": code_or_name, "name": "", "system": "unknown"},
+                "mappings": [],
+            }
+
+        # Step 2: collect cross-system suggestions
+        mappings: List[Dict[str, str]] = []
+        input_system_alias = _SYSTEM_ALIAS.get(input_system, input_system)
+
+        # 2a: DLBM -> three_categories / zone_type / planning_zone / primary_zone / ghytbm
+        if input_system == "gbt21010":
+            _add_mapping(mappings, "three_categories", cs.DLBM_TO_THREE_CATEGORIES.get(input_code, ""),
+                         "GB/T 21010-2017 附录A", cs.DLBM_TO_THREE_CATEGORIES.get(input_code, "") and "exact" or "")
+            _add_mapping(mappings, "zone_type_appendix5", cs.DLBM_TO_ZONE_TYPE.get(input_code, ""),
+                         "mappings/gbt21010_to_zone_types_appendix5.yaml", cs.DLBM_TO_ZONE_TYPE.get(input_code, "") and "high" or "")
+            _add_mapping(mappings, "planning_zone", cs.DLBM_TO_PLANNING_ZONE.get(input_code, ""),
+                         "mappings/gbt21010_to_planning_zones.yaml", cs.DLBM_TO_PLANNING_ZONE.get(input_code, "") and "high" or "")
+            _add_mapping(mappings, "primary_zone", cs.DLBM_TO_PRIMARY_ZONE.get(input_code, ""),
+                         "mappings/gbt21010_to_primary_zones.yaml", cs.DLBM_TO_PRIMARY_ZONE.get(input_code, "") and "high" or "")
+            _add_mapping(mappings, "appendix5", cs.DLBM_TO_GHYTBM.get(input_code, ""),
+                         "mappings/dlbm_to_ghytbm.yaml (forward)", cs.DLBM_TO_GHYTBM.get(input_code, "") and "exact" or "")
+
+        # 2b: GHYTBM -> zone_type / vne / ydyhfldm / planning_zone
+        elif input_system == "appendix5":
+            _add_mapping(mappings, "zone_type_appendix5", cs.GHYTBM_TO_ZONE_TYPE.get(input_code, ""),
+                         "mappings/appendix5_to_zone_types_appendix5.yaml", cs.GHYTBM_TO_ZONE_TYPE.get(input_code, "") and "exact" or "")
+            _add_mapping(mappings, "vne_code", cs.GHYTBM_TO_VNE.get(input_code, ""),
+                         "appendix5.yaml vne field", cs.GHYTBM_TO_VNE.get(input_code, "") and "exact" or "")
+            _add_mapping(mappings, "ydyhfldm", cs.GHYTBM_TO_YDYHFLDM.get(input_code, ""),
+                         "appendix5.yaml ydyhfldm field", cs.GHYTBM_TO_YDYHFLDM.get(input_code, "") and "exact" or "")
+            _add_mapping(mappings, "planning_zone", cs.GHYTBM_TO_PLANNING_ZONE.get(input_code, ""),
+                         "rules/ghytbm_to_planning_zone.yaml", cs.GHYTBM_TO_PLANNING_ZONE.get(input_code, "") and "high" or "")
+
+        # 2c: VNE -> three_categories / zone_type_appendix5
+        elif input_system == "vne_code":
+            _add_mapping(mappings, "three_categories", cs.VNE_TO_THREE_CATEGORIES.get(input_code, "") if hasattr(cs, "VNE_TO_THREE_CATEGORIES") else "",
+                         "mappings/vne_to_three_categories.yaml", "exact")
+            _add_mapping(mappings, "zone_type_appendix5", cs.VNE_TO_ZONE_TYPE.get(input_code, ""),
+                         "mappings/vne_to_zone_types_appendix5.yaml", cs.VNE_TO_ZONE_TYPE.get(input_code, "") and "exact" or "")
+
+        # 2d: planning_zone -> primary_zone / space_control
+        elif input_system == "planning_zone":
+            _add_mapping(mappings, "primary_zone", cs.PLANNING_ZONE_TO_PRIMARY_ZONE.get(input_code, ""),
+                         "mappings/planning_zones_to_primary_zones.yaml", "exact")
+            _add_mapping(mappings, "space_control", cs.PLANNING_ZONE_TO_CONTROL_CODE.get(input_code, ""),
+                         "mappings/planning_zones_to_control_code.yaml", "exact")
+
+        # 2e: GHFLBM -> zone_type_appendix5 / ghytbm
+        elif input_system == "ghflbm":
+            _add_mapping(mappings, "zone_type_appendix5", cs.GHFLBM_TO_ZONE_TYPE.get(input_code, ""),
+                         "mappings/ghflbm_to_zone_types_appendix5.yaml", cs.GHFLBM_TO_ZONE_TYPE.get(input_code, "") and "exact" or "")
+            ghytbms = cs.GHFLBM_TO_GHYTBMS.get(input_code, [])
+            for ghytbm in ghytbms:
+                ghytmc = cs.GHYTBM_TO_GHYTMC.get(ghytbm, "")
+                _add_mapping(mappings, "appendix5", ghytbm,
+                             f"ghflbm.yaml ghytbms field (name={ghytmc})", "high")
+
+        return {
+            "input": {"code": input_code, "name": input_name, "system": input_system},
+            "mappings": mappings,
+        }
+    except Exception as e:
+        logger.warning("[map_code] Failed: %s", e)
+        return {"input": {"code": code_or_name, "name": "", "system": "unknown"}, "mappings": [], "error": str(e)}
+
+
+def _add_mapping(mappings: List[Dict[str, str]], system: str, code: str, rule: str, confidence: str) -> None:
+    """Append a mapping suggestion if code is non-empty."""
+    if not code:
+        return
+    from app.utils.code_lookup import lookup_code_name
+    # Determine which code_type to use for name lookup
+    name_code_type = _NAME_LOOKUP_TYPE.get(system, system)
+    name = lookup_code_name(name_code_type, code) or code
+    mappings.append({
+        "system": system,
+        "code": code,
+        "name": name,
+        "rule": rule,
+        "confidence": confidence,
+    })
+
+
+# ============================================================
+# Tool 3: lookup_land_use_code (refactored - code-only output)
+# ============================================================
 
 class GHYTBMMatch(BaseModel):
-    """A single GHYTBM (planning use code) match entry."""
+    """A single GHYTBM (planning use code) match entry.
 
+    v3.0: ghytmc field removed. Use decode_code(ghytbm) to get the name.
+    """
     ghytbm: str = ""
-    ghytmc: str = ""
     zone_type: str = ""
     vne_code: str = ""
 
 
 class DLBMMatch(BaseModel):
-    """A single DLBM (current land-use code) match entry."""
+    """A single DLBM (current land-use code) match entry.
 
+    v3.0: dlmc field removed. Use decode_code(dlbm) to get the name.
+    """
     dlbm: str = ""
-    dlmc: str = ""
     zone_type: str = ""
 
 
 class GHFLBMMatch(BaseModel):
-    """A single GHFLBM (planning classification) match entry."""
+    """A single GHFLBM (planning classification) match entry.
 
+    v3.0: ghytmc field removed. Use decode_code(ghytbm) to get the name.
+    """
     ghflbm: str = ""
     ghytbm: str = ""
-    ghytmc: str = ""
 
 
 class LandUseCodeLookup(BaseModel):
-    """Typed result for lookup_land_use_code - replaces raw dict.
+    """Typed result for lookup_land_use_code.
 
-    Encodes the name -> multi-system-code lookup result as typed models
-    so the tool's output structure is guaranteed consistent and validated.
-    Serialized via model_dump() into make_result()'s data field.
+    v3.0: ghytmc and dlmc fields removed from output. The tool returns
+    CODES ONLY. To resolve a code to its Chinese name, call decode_code(code)
+    separately. This separation keeps each tool single-purpose.
     """
-
     ghytbm: str = ""
-    ghytmc: str = ""
     ghflbm: str = ""
     vne_code: str = ""
     dlbm_aliases: List[str] = []
@@ -63,17 +350,21 @@ class LandUseCodeLookup(BaseModel):
 
 @tool
 def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
-    """Look up standard land-use codes for a given land-use name.
+    """Look up standard land-use CODES for a given land-use name.
 
-    Queries DictionaryCenter YAML dictionaries (dlbm.yaml, ghtybm.yaml).
-    Does NOT auto-convert between encoding systems — only returns lookup results
-    and candidate suggestions for human confirmation.
+    v3.0: CODE-ONLY RETURN. No ghytmc/dlmc name fields in output.
+    To resolve a code to its Chinese name, call decode_code(code) separately.
+
+    Queries DictionaryCenter YAML dictionaries (appendix5, gbt21010).
+    Does NOT auto-convert between encoding systems - only returns lookup results
+    and candidate suggestions. For cross-system mapping suggestions, use map_code.
 
     Args:
         land_use_name: Chinese land-use name (e.g., "经营性建设用地", "宅基地")
 
     Returns:
-        Dict with matching codes: ghytbm, ghflbm, vne_code, dlbm_aliases, candidates.
+        Dict with matching codes (no names): ghytbm, ghflbm, vne_code,
+        dlbm_aliases, zone_type, candidates_ghytbm, candidates_dlbm.
     """
     try:
         from app.modules.schema import (
@@ -91,7 +382,6 @@ def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
             if land_use_name in name or name in land_use_name:
                 ghytbm_matches.append(GHYTBMMatch(
                     ghytbm=code,
-                    ghytmc=name,
                     zone_type=GHYTBM_TO_ZONE_TYPE.get(code, ""),
                     vne_code=GHYTBM_TO_VNE.get(code, ""),
                 ))
@@ -102,7 +392,6 @@ def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
             if land_use_name in name or name in land_use_name:
                 dlbm_matches.append(DLBMMatch(
                     dlbm=code,
-                    dlmc=name,
                     zone_type=DLBM_TO_ZONE_TYPE.get(code, ""),
                 ))
 
@@ -115,7 +404,6 @@ def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
                     ghflbm_matches.append(GHFLBMMatch(
                         ghflbm=code,
                         ghytbm=ghytbm,
-                        ghytmc=name,
                     ))
                     break
 
@@ -136,7 +424,6 @@ def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
 
         lookup = LandUseCodeLookup(
             ghytbm=primary.ghytbm,
-            ghytmc=primary.ghytmc,
             ghflbm=ghflbm_matches[0].ghflbm if ghflbm_matches else "",
             vne_code=primary.vne_code,
             dlbm_aliases=[m.dlbm for m in dlbm_matches],
@@ -151,4 +438,4 @@ def lookup_land_use_code(land_use_name: str) -> Dict[str, Any]:
         return make_result(success=False, error=str(e))
 
 
-__all__ = ["lookup_land_use_code"]
+__all__ = ["decode_code", "map_code", "lookup_land_use_code"]

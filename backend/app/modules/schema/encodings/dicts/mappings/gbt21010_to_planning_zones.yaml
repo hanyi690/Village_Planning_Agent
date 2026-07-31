@@ -1,0 +1,385 @@
+# GB/T 21010-2017 DLBM → planning_zone (TD/T 1027-2010 附录B + 三区三线) 映射
+# 来源: 广东省村庄规划编制基本技术指南 + TD/T 1027-2010
+#   6 zones: 生态保护区/生态控制区/农田保护区/一般农业区/林业发展区/村庄建设区
+#
+# 注: 生态控制区不由 DLBM 直接映射（需要决策规则），
+#     见 rules/planning_zone_rules.yaml decision_rules
+version: "2026_GUANGDONG_V1"
+standard: "TD/T 1027-2010 附录B + 广东省村庄规划编制基本技术指南"
+source_system: gbt21010
+target_system: planning_zones
+
+mappings:
+  # ── 01 耕地 → 农田保护区 ──
+  - source: "0100"
+    default: "农田保护区"
+    decision: auto
+    basis: "tugui 0110/0120/0130 dlbm_ref=01 → 农田保护区"
+    targets: [{code: "农田保护区", when: null, confidence: high}]
+  - source: "0101"
+    default: "农田保护区"
+    decision: auto
+    targets: [{code: "农田保护区", when: null, confidence: high}]
+  - source: "0102"
+    default: "农田保护区"
+    decision: auto
+    targets: [{code: "农田保护区", when: null, confidence: high}]
+  - source: "0103"
+    default: "农田保护区"
+    decision: auto
+    targets: [{code: "农田保护区", when: null, confidence: high}]
+
+  # ── 02 园地 → 一般农业区 ──
+  - source: "0200"
+    default: "一般农业区"
+    decision: auto
+    basis: "tugui 0210/0220 dlbm_ref=02 → 一般农业区"
+    targets: [{code: "一般农业区", when: null, confidence: high}]
+  - source: "0201"
+    default: "一般农业区"
+    decision: auto
+    targets: [{code: "一般农业区", when: null, confidence: high}]
+  - source: "0202"
+    default: "一般农业区"
+    decision: auto
+    targets: [{code: "一般农业区", when: null, confidence: high}]
+  - source: "0203"
+    default: "一般农业区"
+    decision: auto
+    targets: [{code: "一般农业区", when: null, confidence: high}]
+  - source: "0204"
+    default: "一般农业区"
+    decision: auto
+    targets: [{code: "一般农业区", when: null, confidence: high}]
+
+  # ── 03 林地 → 林业发展区 ──
+  - source: "0300"
+    default: "林业发展区"
+    decision: auto
+    basis: "tugui 0310/0330 dlbm_ref=03 → 林业发展区"
+    targets: [{code: "林业发展区", when: null, confidence: high}]
+  - source: "0301"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: high}]
+  - source: "0302"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: high}]
+  - source: "0303"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: high}]
+  - source: "0304"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: high}]
+  - source: "0305"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: high}]
+  - source: "0306"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: high}]
+  - source: "0307"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: high}]
+
+  # ── 04 草地 → 林业发展区 (部分生态保护区, 决策) ──
+  - source: "0400"
+    default: "林业发展区"
+    decision: auto
+    basis: "草地按林业发展区处理 (待 decision_rules 决定)"
+    targets: [{code: "林业发展区", when: null, confidence: medium}]
+  - source: "0401"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: medium}]
+  - source: "0402"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: medium}]
+  - source: "0403"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: medium}]
+  - source: "0404"
+    default: "林业发展区"
+    decision: auto
+    targets: [{code: "林业发展区", when: null, confidence: medium}]
+
+  # ── 05-09 建设用地 → 村庄建设区 ──
+  - source: "0500"
+    default: "村庄建设区"
+    decision: auto
+    basis: "tugui 商服用地 → 村庄建设区"
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0501"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0502"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0503"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0504"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0505"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0506"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0507"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0508"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0509"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0600"
+    default: "村庄建设区"
+    decision: auto
+    basis: "tugui 0610 工业/0620 采矿 dlbm_ref=06 → 村庄建设区"
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0601"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0602"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0603"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0604"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0700"
+    default: "村庄建设区"
+    decision: auto
+    basis: "tugui 2030 农村居民点 → 村庄建设区"
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0701"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0702"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0800"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0801"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0802"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0803"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0804"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0805"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0806"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0807"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0808"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0809"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0810"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0900"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0901"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0902"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0903"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0904"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0905"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "0906"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+
+  # ── 10 交通 → 村庄建设区 (部分基础设施归建设区) ──
+  - source: "1000"
+    default: "村庄建设区"
+    decision: auto
+    basis: "tugui 1040 管道运输 → 村庄建设区"
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "1001"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "1002"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "1003"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "1004"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "1005"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "1006"
+    default: "农田保护区"
+    decision: auto
+    basis: "农村道路按农田保护区处理 (10 类农用地附属)"
+    targets: [{code: "农田保护区", when: null, confidence: medium}]
+  - source: "1007"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "1008"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "1009"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+
+  # ── 11 水域 → 生态保护区 ──
+  - source: "1100"
+    default: "生态保护区"
+    decision: auto
+    basis: "tugui 1110 滩涂/1140 沼泽地 dlbm_ref=11 → 生态保护区"
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1101"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1102"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1103"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1104"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1105"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1106"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1107"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1108"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1109"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1110"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+
+  # ── 12 其他 ──
+  - source: "1201"
+    default: "一般农业区"
+    decision: auto
+    basis: "空闲地按一般农业区处理"
+    targets: [{code: "一般农业区", when: null, confidence: medium}]
+  - source: "1202"
+    default: "农田保护区"
+    decision: auto
+    basis: "设施农用地 → 农田保护区"
+    targets: [{code: "农田保护区", when: null, confidence: high}]
+  - source: "1203"
+    default: "农田保护区"
+    decision: auto
+    basis: "田坎 → 农田保护区"
+    targets: [{code: "农田保护区", when: null, confidence: high}]
+  - source: "1204"
+    default: "生态保护区"
+    decision: auto
+    basis: "盐碱地 → 生态保护区 (未利用)"
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1205"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1206"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "1207"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]

@@ -1,0 +1,113 @@
+# appendix5 (GHYTBM) → zone_types_appendix5 (5-tier) 映射
+# 来源: 附录5 yaml 的 zone_type 字段 (迁移, 不删除)
+version: "2026_GUANGDONG_V1"
+standard: "广东省村庄规划编制基本技术指南附录5"
+source_system: appendix5
+target_system: zone_types_appendix5
+
+mappings:
+  - source: "1100"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 1100 耕地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "1200"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 1200 园地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "1340"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 1340 商品林 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "1350"
+    default: "生态绿地"
+    decision: auto
+    basis: "附录5 1350 生态林 → 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "1400"
+    default: "生态绿地"
+    decision: auto
+    basis: "附录5 1400 草地 → 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "1500"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 1500 其他农用地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "1510"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 1510 设施农用地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "2100"
+    default: "居住用地"
+    decision: auto
+    basis: "附录5 2100 城镇用地 → 居住用地"
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "2121"
+    default: "居住用地"
+    decision: auto
+    basis: "附录5 2121 宅基地 → 居住用地"
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "2122"
+    default: "公共服务用地"
+    decision: auto
+    basis: "附录5 2122 公共服务设施用地 → 公共服务用地"
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "2123"
+    default: "交通用地"
+    decision: auto
+    basis: "附录5 2123 基础设施用地 → 交通用地"
+    targets: [{code: "交通用地", when: null, confidence: exact}]
+  - source: "2124"
+    default: "产业用地"
+    decision: auto
+    basis: "附录5 2124 经营性建设用地 → 产业用地"
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+  - source: "2125"
+    default: "公共服务用地"
+    decision: auto
+    basis: "附录5 2125 景观与绿化用地 → 公共服务用地"
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "2126"
+    default: "交通用地"
+    decision: auto
+    basis: "附录5 2126 村内交通用地 → 交通用地"
+    targets: [{code: "交通用地", when: null, confidence: exact}]
+  - source: "2130"
+    default: "产业用地"
+    decision: auto
+    basis: "附录5 2130 采矿用地 → 产业用地"
+    targets: [{code: "产业用地", when: null, confidence: exact}]
+  - source: "2200"
+    default: "交通用地"
+    decision: auto
+    basis: "附录5 2200 对外交通用地 → 交通用地"
+    targets: [{code: "交通用地", when: null, confidence: exact}]
+  - source: "2270"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 2270 水利设施用地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "2310"
+    default: "公共服务用地"
+    decision: auto
+    basis: "附录5 2310 风景名胜设施用地 → 公共服务用地"
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "2320"
+    default: "公共服务用地"
+    decision: auto
+    basis: "附录5 2320 特殊用地 → 公共服务用地"
+    targets: [{code: "公共服务用地", when: null, confidence: exact}]
+  - source: "3100"
+    default: "水域"
+    decision: auto
+    basis: "附录5 3100 水域 → 水域"
+    targets: [{code: "水域", when: null, confidence: exact}]
+  - source: "3200"
+    default: "农业用地"
+    decision: auto
+    basis: "附录5 3200 自然保留地 → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]

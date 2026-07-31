@@ -1,0 +1,50 @@
+# planning_zone (6 zones) → TDKJGZFQDM (建设用地管制区编码 01-06) 映射
+# 来源: 广东省村庄规划编制基本技术指南（试行）表 6
+#   01-04 为技术指南原文规定的 4 类
+#   05-06 为三区三线体系扩展（永久基本农田保护区 + 生态保护红线区）
+#
+#   村庄建设区 → 01 允许建设区
+#   一般农业区 → 02 限制建设区
+#   林业发展区 → 02 限制建设区
+#   生态控制区 → 02 限制建设区
+#   生态保护区 → 04 禁止建设区
+#   农田保护区 → 05 永久基本农田保护区
+#
+# 注: 此映射从 rules/construction_zone_codes.yaml 的 planning_zone_to_control_code
+#     迁移而来，独立到 mappings/ 目录以遵循"派生属性不入 encoding 字典"原则。
+version: "2026_GUANGDONG_V1"
+standard: "广东省村庄规划编制基本技术指南 表 6"
+source_system: planning_zones
+target_system: space_control
+
+mappings:
+  - source: "村庄建设区"
+    default: "01"
+    decision: auto
+    basis: "村庄建设区 → 01 允许建设区"
+    targets: [{code: "01", when: null, confidence: exact}]
+  - source: "一般农业区"
+    default: "02"
+    decision: auto
+    basis: "一般农业区 → 02 限制建设区"
+    targets: [{code: "02", when: null, confidence: exact}]
+  - source: "林业发展区"
+    default: "02"
+    decision: auto
+    basis: "林业发展区 → 02 限制建设区"
+    targets: [{code: "02", when: null, confidence: exact}]
+  - source: "生态控制区"
+    default: "02"
+    decision: auto
+    basis: "生态控制区 → 02 限制建设区"
+    targets: [{code: "02", when: null, confidence: exact}]
+  - source: "生态保护区"
+    default: "04"
+    decision: auto
+    basis: "生态保护区 → 04 禁止建设区"
+    targets: [{code: "04", when: null, confidence: exact}]
+  - source: "农田保护区"
+    default: "05"
+    decision: auto
+    basis: "农田保护区 → 05 永久基本农田保护区"
+    targets: [{code: "05", when: null, confidence: exact}]

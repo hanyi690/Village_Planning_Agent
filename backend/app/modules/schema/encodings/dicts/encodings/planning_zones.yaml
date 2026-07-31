@@ -1,0 +1,57 @@
+# 规划分区编码 — 单一真相源
+#
+# 来源: TD/T 1027-2010《县级土地利用总体规划数据库标准》附录 B
+#   "土地规划用途分类: 基本农田保护区/一般农地区/林业用地区/城镇村建设用地区等"
+#
+# 三区三线 (中共中央 国务院 2019《若干意见》):
+#   三线 = 生态保护红线 / 永久基本农田 / 城镇开发边界
+#   三区 = 生态空间 / 农业空间 / 城镇空间（见 primary_zones.yaml）
+#
+# 用途: 国土空间规划体系中"规划分区"层面的分类。
+#   - 与三大类（土地管理法）不同
+#   - 与 primary_zone（生态/农业/城镇空间）不同（粒度更细）
+#
+# 注意: 现有 DLBM_TO_PLANNING_ZONE 仅覆盖 5 个分区
+#   (农田保护区/一般农业区/林业发展区/村庄建设区/生态保护区)，
+#   "生态控制区"在 DLBM 直接映射中缺失（需要通过 decision_rules 决策）。
+#   本字典补全 6 zones（参考 construction_zone_codes.yaml）。
+version: "2026_GUANGDONG_V1"
+standard: "TD/T 1027-2010《县级土地利用总体规划数据库标准》附录B + 三区三线"
+system: "planning_zones"
+
+classes:
+  - code: "生态保护区"
+    name: "生态保护区"
+    primary_zone: "生态空间"
+    control_code: "04"
+    description: "具有重要生态功能的区域，含生态保护红线"
+
+  - code: "生态控制区"
+    name: "生态控制区"
+    primary_zone: "生态空间"
+    control_code: "02"
+    description: "生态保护红线外、需要生态管控的区域"
+
+  - code: "农田保护区"
+    name: "农田保护区"
+    primary_zone: "农业空间"
+    control_code: "05"
+    description: "永久基本农田集中分布区"
+
+  - code: "一般农业区"
+    name: "一般农业区"
+    primary_zone: "农业空间"
+    control_code: "02"
+    description: "除农田保护区外的农业生产区域"
+
+  - code: "林业发展区"
+    name: "林业发展区"
+    primary_zone: "农业空间"
+    control_code: "02"
+    description: "林地集中分布区（兼具农业生产与生态功能）"
+
+  - code: "村庄建设区"
+    name: "村庄建设区"
+    primary_zone: "城镇空间"
+    control_code: "01"
+    description: "村庄建设边界内的建设区域"

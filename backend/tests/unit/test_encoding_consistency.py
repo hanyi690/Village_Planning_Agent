@@ -130,7 +130,8 @@ class TestPLanningZoneToPrimaryZone:
         assert len(PLANNING_ZONE_TO_PRIMARY_ZONE) == 6
 
     def test_values_correct(self):
-        assert PLANNING_ZONE_TO_PRIMARY_ZONE["村庄建设区"] == "建设空间"
+        # v3.0 校正: 建设空间 → 城镇空间 (per 《若干意见》2019)
+        assert PLANNING_ZONE_TO_PRIMARY_ZONE["村庄建设区"] == "城镇空间"
         assert PLANNING_ZONE_TO_PRIMARY_ZONE["农田保护区"] == "农业空间"
         assert PLANNING_ZONE_TO_PRIMARY_ZONE["生态保护区"] == "生态空间"
 
@@ -180,16 +181,16 @@ class TestDeadCodeRemoved:
 
 
 class TestDLBMPlanningZoneRealCodes:
-    """GAP-C: Test with real tugui codes, not codes that only pass by default."""
+    """GAP-C: Test with real gbt21010 codes (v3.0: 单一真相源)."""
 
-    def test_tugui_code_0110_is_farmland_protection(self):
-        """0110 水田 is a real tugui code -> 农田保护区."""
-        result = dlbm_to_planning_zone("0110")
+    def test_gbt21010_code_0101_is_farmland_protection(self):
+        """0101 水田 (gbt21010) -> 农田保护区."""
+        result = dlbm_to_planning_zone("0101")
         assert result == "农田保护区", f"Expected 农田保护区, got {result}"
 
-    def test_tugui_code_2030_is_village_construction(self):
-        """2030 农村居民点 -> 村庄建设区."""
-        result = dlbm_to_planning_zone("2030")
+    def test_gbt21010_code_0701_is_village_construction(self):
+        """0701 城镇住宅用地 -> 村庄建设区."""
+        result = dlbm_to_planning_zone("0701")
         assert result == "村庄建设区", f"Expected 村庄建设区, got {result}"
 
     def test_unknown_code_returns_default(self):
@@ -197,13 +198,13 @@ class TestDLBMPlanningZoneRealCodes:
         result = dlbm_to_planning_zone("XXXX")
         assert result == "一般农业区"
 
-    def test_primary_zone_for_0110(self):
-        """0110 -> 农业空间."""
-        assert get_primary_zone("0110") == "农业空间"
+    def test_primary_zone_for_0101(self):
+        """0101 -> 农业空间."""
+        assert get_primary_zone("0101") == "农业空间"
 
-    def test_primary_zone_for_2030(self):
-        """2030 -> 建设空间."""
-        assert get_primary_zone("2030") == "建设空间"
+    def test_primary_zone_for_0701(self):
+        """0701 城镇住宅用地 -> 城镇空间 (v3.0 校正)."""
+        assert get_primary_zone("0701") == "城镇空间"
 
 
 # ============================================================
@@ -428,10 +429,10 @@ class TestGHYTBMToPlanningZoneYAML:
         assert GHYTMC_TO_PLANNING_ZONE.get("水域") == "生态保护区"
 
     def test_dlbm_to_planning_zone_fallback(self):
-        """dlbm_to_planning_zone no longer uses hardcoded fallback."""
+        """dlbm_to_planning_zone falls back to default for unknown codes."""
         from app.modules.schema.encodings.code_sets import dlbm_to_planning_zone
-        result = dlbm_to_planning_zone("1100")
-        assert result == "一般农业区"  # 1100 (GHYTBM) not in DLBM_TO_PLANNING_ZONE
+        result = dlbm_to_planning_zone("XXXX")
+        assert result == "一般农业区"  # Unknown code returns default fallback
 
 
 class TestCandidateEngineResolve:
@@ -537,7 +538,8 @@ class TestEncodingLookups:
             resolve_zone_type_for_dlbm,
         )
         assert get_zone_type_for_dlbm("0101") == "农业用地"
-        assert dlbm_to_planning_zone("0101") == "一般农业区"
+        # v3.0: 0101 is now properly mapped (not in old DLBM_TO_PLANNING_ZONE that only had tugui codes)
+        assert dlbm_to_planning_zone("0101") == "农田保护区"
         assert resolve_zone_type_for_dlbm("0101") == "农业用地"
 
 

@@ -6,114 +6,86 @@ classes:
   # ── V: 村庄建设用地 ──
   - code: "V"
     name: "村庄建设用地"
-    zone_type: "居住用地"
 
   - code: "V1"
     name: "村民住宅用地"
-    zone_type: "居住用地"
 
   - code: "V11"
     name: "住宅用地"
-    zone_type: "居住用地"
 
   - code: "V12"
     name: "混合式住宅用地"
-    zone_type: "居住用地"
 
   - code: "V2"
     name: "村庄公共服务用地"
-    zone_type: "公共服务用地"
 
   - code: "V21"
     name: "村庄公共服务设施用地"
-    zone_type: "公共服务用地"
 
   - code: "V22"
     name: "村庄公共场地"
-    zone_type: "公共服务用地"
 
   - code: "V3"
     name: "村庄产业用地"
-    zone_type: "产业用地"
 
   - code: "V31"
     name: "村庄商业服务业设施用地"
-    zone_type: "产业用地"
 
   - code: "V32"
     name: "村庄生产仓储用地"
-    zone_type: "产业用地"
 
   - code: "V4"
     name: "村庄基础设施用地"
-    zone_type: "交通用地"
 
   - code: "V41"
     name: "村庄道路用地"
-    zone_type: "交通用地"
 
   - code: "V42"
     name: "村庄交通设施用地"
-    zone_type: "交通用地"
 
   - code: "V43"
     name: "村庄公用设施用地"
-    zone_type: "公共服务用地"
 
   - code: "V9"
     name: "村庄其他建设用地"
-    zone_type: "居住用地"
 
   # ── N: 非村庄建设用地 ──
   - code: "N"
     name: "非村庄建设用地"
-    zone_type: "交通用地"
 
   - code: "N1"
     name: "对外交通设施用地"
-    zone_type: "交通用地"
 
   - code: "N2"
     name: "国有建设用地"
-    zone_type: "产业用地"
 
   # ── E: 非建设用地 ──
   - code: "E"
     name: "非建设用地"
-    zone_type: "农业用地"
 
   - code: "E1"
     name: "水域"
-    zone_type: "水域"
 
   - code: "E11"
     name: "自然水域"
-    zone_type: "水域"
 
   - code: "E12"
     name: "水库"
-    zone_type: "水域"
 
   - code: "E13"
     name: "坑塘沟渠"
-    zone_type: "水域"
 
   - code: "E2"
     name: "农林用地"
-    zone_type: "农业用地"
 
   - code: "E21"
     name: "设施农用地"
-    zone_type: "农业用地"
 
   - code: "E22"
     name: "农用道路"
-    zone_type: "交通用地"
 
   - code: "E23"
     name: "其他农林用地"
-    zone_type: "农业用地"
 
   - code: "E9"
     name: "其他非建设用地"
-    zone_type: "农业用地"

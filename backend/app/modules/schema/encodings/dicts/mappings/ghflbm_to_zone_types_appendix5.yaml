@@ -1,0 +1,63 @@
+# GHFLBM → zone_types_appendix5 (5-tier) 映射
+# 来源: ghflbm.yaml 中每个 entry 的 zone_type 字段
+version: "2026_GUANGDONG_V1"
+standard: "广东省县级土地利用总体规划数据库标准 (ghflbm)"
+source_system: ghflbm
+target_system: zone_types_appendix5
+
+mappings:
+  - source: "1110"
+    default: "农业用地"
+    decision: auto
+    basis: "ghflbm 1110 耕地(规划) → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "1120"
+    default: "农业用地"
+    decision: auto
+    basis: "ghflbm 1120 园地(规划) → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "1130"
+    default: "生态绿地"
+    decision: auto
+    basis: "ghflbm 1130 林地(规划) → 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "1200"
+    default: "生态绿地"
+    decision: auto
+    basis: "ghflbm 1200 草地(规划) → 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "1310"
+    default: "生态绿地"
+    decision: auto
+    basis: "ghflbm 1310 商品林(规划) → 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "1330"
+    default: "生态绿地"
+    decision: auto
+    basis: "ghflbm 1330 生态林(规划) → 生态绿地"
+    targets: [{code: "生态绿地", when: null, confidence: exact}]
+  - source: "1520"
+    default: "农业用地"
+    decision: auto
+    basis: "ghflbm 1520 设施农用地(规划) → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "1530"
+    default: "农业用地"
+    decision: auto
+    basis: "ghflbm 1530 其他农用地(规划) → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "2120"
+    default: "居住用地"
+    decision: auto
+    basis: "ghflbm 2120 农村建设用地(规划) → 居住用地"
+    targets: [{code: "居住用地", when: null, confidence: exact}]
+  - source: "2270"
+    default: "农业用地"
+    decision: auto
+    basis: "ghflbm 2270 水利设施用地(规划) → 农业用地"
+    targets: [{code: "农业用地", when: null, confidence: exact}]
+  - source: "3110"
+    default: "水域"
+    decision: auto
+    basis: "ghflbm 3110 水域(规划) → 水域"
+    targets: [{code: "水域", when: null, confidence: exact}]
