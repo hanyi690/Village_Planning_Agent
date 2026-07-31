@@ -368,6 +368,97 @@ def _route_after_validate(state: ExecuteAgentState) -> Literal["pass", "retry"]:
     return "retry"
 
 
+# ── L4 Write-back ────────────────────────────────────────────────────
+
+
+async def _write_l4_node(state: ExecuteAgentState) -> dict:
+    """Write L4 planned entities (PlannedParcel, PlannedZone, PlannedFacility, etc.) to KG.
+
+    Called after execute completes to persist the planned layout back to KG.
+    """
+    from rdflib import Literal, RDF
+    from app.modules.kg.memory import EntityAnnotation
+
+    session_id = getattr(state, "session_id", "")
+    if not session_id:
+        logger.warning("[EXECUTE:l4_write] No session_id - skipping L4 write")
+        return {}
+
+    try:
+        from app.modules.kg.manager import get_kg_manager
+        manager = get_kg_manager()
+        kg = manager.get_session_kg(session_id)
+        if kg is None:
+            logger.warning("[EXECUTE:l4_write] No KG for session %s", session_id)
+            return {}
+    except Exception as e:
+        logger.warning("[EXECUTE:l4_write] KG access failed: %s", e)
+        return {}
+
+    layout_configs = state.layout_configs or []
+    written = 0
+
+    for config in layout_configs:
+        layer_type = config.get("layer_type", "")
+        features = config.get("features", [])
+        op_type = config.get("operation", "preserve")
+
+        if op_type == "preserve":
+            continue
+
+        for feat in features:
+            props = feat.get("properties", {})
+            bsm = props.get("bsm", "")
+            target_use = props.get("target_use", props.get("planning_zone", ""))
+
+            if not bsm or not target_use:
+                continue
+
+            if layer_type == "function_zone" or layer_type == "planning_zone":
+                entity_uri = f"pln:PlannedZone_{bsm}"
+                entity_type = "PlannedZone"
+            elif layer_type == "facility":
+                entity_uri = f"pln:PlannedFacility_{bsm}"
+                entity_type = "PlannedFacility"
+            elif layer_type == "axis":
+                entity_uri = f"pln:PlannedAxis_{bsm}"
+                entity_type = "PlannedAxis"
+            elif layer_type == "road":
+                entity_uri = f"pln:PlannedRoad_{bsm}"
+                entity_type = "PlannedRoad"
+            else:
+                entity_uri = f"pln:PlannedParcel_{bsm}"
+                entity_type = "PlannedParcel"
+
+            try:
+                kg.g.add((RDF.Uri(entity_uri), RDF.type, Literal(entity_type)))
+                kg.g.add((RDF.Uri(entity_uri), Literal(target_use), Literal("target_use")))
+                if bsm:
+                    kg.g.add((RDF.Uri(entity_uri), Literal(bsm), Literal("bsm")))
+
+                annotation = EntityAnnotation(
+                    entity_uri=entity_uri,
+                    entity_type=entity_type,
+                    description=f"规划{target_use}",
+                    source_text_refs=[f"operation:{op_type}"],
+                )
+                await kg.memory.add_entity_annotation_async(
+                    annotation,
+                    dimension_key="l4_provenance",
+                    fact_type="planned_entity",
+                    derived_from="execute_computed",
+                )
+                written += 1
+            except Exception as e:
+                logger.warning("[EXECUTE:l4_write] Failed to write %s: %s", entity_uri, e)
+
+    if written > 0:
+        manager.bump_version(session_id)
+        logger.info("[EXECUTE:l4_write] Wrote %d L4 entities to KG", written)
+
+    return {}
+
+
 # ── Graph builder ────────────────────────────────────────────────────
 
 
@@ -389,6 +480,7 @@ def build_execute_agent_graph():
     graph.add_node("execute_axis", _execute_axis_node)
     graph.add_node("execute_road", _execute_road_node)
     graph.add_node("validate", _validate_node)
+    graph.add_node("write_l4", _write_l4_node)
 
     graph.add_edge(START, "route_tasks")
     graph.add_edge("route_tasks", "execute_layout")
@@ -400,11 +492,13 @@ def build_execute_agent_graph():
     graph.add_conditional_edges(
         "validate",
         _route_after_validate,
-        {"retry": "execute_layout", "pass": END},
+        {"retry": "execute_layout", "pass": "write_l4"},
     )
 
+    graph.add_edge("write_l4", END)
+
     compiled = graph.compile()
-    logger.info("[EXECUTE] Agent graph compiled: 6 nodes, 1 conditional edge")
+    logger.info("[EXECUTE] Agent graph compiled: 7 nodes (incl. L4 write-back), 1 conditional edge")
     return compiled
 
 
