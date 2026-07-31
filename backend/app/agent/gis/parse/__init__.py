@@ -1,19 +1,12 @@
-"""PARSE Agent subpackage — spatially-aware planning text parsing.
+"""PARSE Agent subpackage - unified planning text parser.
 
-Independent from LAYOUT Pipeline — communicates via state injection.
-
-Architecture:
-  classify_sections -> route_by_section -> extract_* -> validate_and_merge
-
-Key design:
-  - SpatialContext injected into PARSE (spatial relations, no raw geometry)
-  - DictionaryCenter as single source of truth for encoding lookups
-  - Strict Pydantic output schemas for reliable PARSE -> LAYOUT handoff
-  - SpatialAnchor: dual-stage localization (PARSE pre-resolves, LAYOUT confirms)
+Public API:
+  parse / parse_async - deterministic rule-based parsing
+  ParseResult - output container with SpatialPlanningIntent
 """
 
+from .agent import parse, parse_async, ParseResult
 from .state import (
-    # Spatial context models
     AdjacencyRules,
     AxisTarget,
     ComplianceCheck,
@@ -34,9 +27,12 @@ from .state import (
     SpatialRule,
     ZoneTarget,
 )
-from .agent import build_parse_agent_graph
 
 __all__ = [
+    # API
+    "parse",
+    "parse_async",
+    "ParseResult",
     # Schema classes
     "AdjacencyRules",
     "AxisTarget",
@@ -57,6 +53,4 @@ __all__ = [
     "SpatialRelation",
     "SpatialRule",
     "ZoneTarget",
-    # Agent
-    "build_parse_agent_graph",
 ]

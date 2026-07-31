@@ -131,9 +131,8 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
       - operation_sequence: List[SpatialOperation] with spatial anchors
       - constraint_set: List[SpatialConstraint] with spatial rules
     """
-    from app.agent.gis.parse.agent import build_parse_agent_graph, set_context_blocks, set_grounding_context
-    from app.agent.gis.parse.state import ParseAgentState, SpatialPlanningIntent
-    from app.modules.spatial_ops import compute_context_blocks, build_constraint_index
+    from app.agent.gis.parse import parse_async, ParseResult
+    from app.agent.gis.parse.state import SpatialPlanningIntent
 
     reports = state.reports or {}
     village_name = state.village_name
@@ -158,54 +157,30 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
         return {}
 
     try:
-        # GIS bundle is already available (from fetch_gis_data node)
-        bundle = state.gis_bundle
-        context_blocks = compute_context_blocks(bundle) if bundle else []
-
-        # Set global context blocks for Tier 0 place resolution
-        set_context_blocks(context_blocks)
-
-        # Set global grounding context for geometric spatial grounding
-        constraint_index = build_constraint_index(bundle) if bundle else None
-        set_grounding_context(bundle=bundle, constraint_index=constraint_index)
-
-        # Build and run PARSE Agent subgraph
-        graph = build_parse_agent_graph()
-        input_state = ParseAgentState(
-            planning_text=planning_text[:12000],  # Token limit
+        result: ParseResult = await parse_async(
+            planning_text=planning_text[:12000],
             village_name=village_name,
-            context_blocks=context_blocks,
+            planning_period=state.config.get("planning_period", "2022-2035年"),
         )
+        intent = result.intent
 
-        result = await graph.ainvoke(input_state.model_dump())
-
-        # Extract PARSE outputs — all typed
-        operation_sequence = result.get("operation_sequence", [])
-        constraint_set = result.get("constraint_set", [])
-        planning_intent = result.get("planning_intent", SpatialPlanningIntent())
-
-        zone_count = len(planning_intent.zone_targets) if hasattr(planning_intent, 'zone_targets') else 0
+        # Extract PARSE outputs - all typed
+        zone_count = len(intent.zone_targets) if hasattr(intent, 'zone_targets') else 0
 
         logger.info(
-            "[Pipeline:parse] Parsed: %d ops, %d constraints, %d zones",
-            len(operation_sequence), len(constraint_set), zone_count,
+            "[Pipeline:parse] Parsed: %d zones, %d facilities, %d axes, %d roads",
+            zone_count,
+            len(intent.facilities) if hasattr(intent, 'facilities') else 0,
+            len(intent.development_axes) if hasattr(intent, 'development_axes') else 0,
+            len(intent.road_targets) if hasattr(intent, 'road_targets') else 0,
         )
 
         return {
-            "intent": planning_intent,
-            "intent_json": planning_intent,
-            "operation_sequence": operation_sequence,
-            "constraint_set": constraint_set,
-            "planning_intent": planning_intent,
-            "context_blocks": [
-                {
-                    "block_type": b.block_type.value,
-                    "title": b.title,
-                    "data": b.data,
-                    "priority": b.priority,
-                }
-                for b in context_blocks
-            ],
+            "intent": intent,
+            "intent_json": intent,
+            "operation_sequence": [],
+            "constraint_set": [],
+            "planning_intent": intent,
         }
     except Exception as e:
         logger.warning("[Pipeline:parse] Parse failed: %s — continuing with empty intent", e)

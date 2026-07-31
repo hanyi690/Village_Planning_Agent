@@ -1,1860 +1,214 @@
-"""PARSE Agent subgraph — Think-Then-Format two-phase pattern.
+"""PARSE Agent - unified planning text parser (rule-based).
 
-Architecture (LangGraph StateGraph):
-  START -> classify_sections -> route_by_section (conditional edges fan-out)
-     -> [explore_projects -> format_projects
-      | explore_targets -> format_targets
-      | extract_regulations | extract_tables]
-     -> validate_and_merge -> should_retry? -> END or retry
+Consolidates the previous ReAct StateGraph and parse_v2 into a single
+deterministic implementation. LLM enhancement can be added later behind
+GIS_PARSE_LLM_ENABLED without changing the public API.
 
-Key design (v8 — Think-Then-Format):
-  - Phase A (explore): thinking=ON, json_schema=OFF, tools=ON
-    LLM freely reasons + calls tools (lookup_code, resolve_place, query_village_kg)
-    Produces natural language draft + structured code/place mappings
-  - Phase B (format): thinking=OFF, json_schema=ON, tools=OFF
-    LLM formats draft into strict Pydantic output — guaranteed compatible
-  - Separation eliminates "output length limit exceeded" caused by
-    qwen3.7-plus thinking mode + json_schema incompatibility
-
-Why this works:
-  - qwen3.7-plus thinking mode consumes token budget unpredictably,
-    leaving insufficient tokens for json_schema output -> truncation
-  - By separating thinking (Phase A) from json_schema (Phase B),
-    each call uses a compatible feature set
-  - Phase A: max_tokens=8192 (thinking + free text, no JSON constraint)
-  - Phase B: max_tokens=4096 (pure JSON output, no thinking tokens)
-
-LangGraph compliance:
-  - Tool calling and structured output in SEPARATE nodes (official pattern)
-  - No bind_tools() + with_structured_output() anti-pattern
-  - Conditional edges fan-out to explore nodes
-  - Explore -> Format edges ensure sequential execution within each pair
-
-References:
-  [1] LangGraph StateGraph with Pydantic BaseModel state
-  [2] LangGraph conditional edges for fan-out routing
-  [3] https://help.aliyun.com/zh/model-studio/qwen-structured-output
-  [4] Exa search: "thinking mode breaks json_schema in Qwen models"
+Public API:
+  parse(planning_text, village_name, ...) -> ParseResult
+  parse_async(...) -> ParseResult
+  ParseResult: dataclass with .intent (SpatialPlanningIntent)
 """
 
 from __future__ import annotations
 
-import functools
-import json
 import re
-import time
-import warnings
+from dataclasses import dataclass
+from typing import Any, List, Optional
 
-# Suppress Pydantic serializer warnings
-warnings.filterwarnings("ignore", message="Pydantic serializer")
-from typing import Any, Dict, List, Literal, Optional
-
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-from langgraph.graph import StateGraph, END, START
-
-from app.agent.gis.parse.state import (
-    ParseAgentState,
-    SectionInfo,
-    SpatialAnchor,
-    SpatialConstraint,
-    SpatialOperation,
+from app.modules.schema.contracts.parse_contracts import (
     SpatialPlanningIntent,
-    SpatialRule,
+    ZoneTarget,
+    FacilityTarget,
+    AxisTarget,
+    RoadTarget,
 )
+from app.modules.schema.contracts.semantic_fields import SemanticMetadata
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-MAX_PARSE_ROUNDS = 1
 
-# Global Gazetteer instance
-_gazetteer: Any = None
+# ── Public result type ───────────────────────────────────────────────
 
-# Global ContextBlock list for annotation-based Tier 0 place resolution.
-# Set by run_parse_pipeline / _parse_intent_node before PARSE graph runs.
-_current_context_blocks: List[Any] = []
 
-# Global spatial grounding context (bundle + constraint_index).
-# Set by _parse_intent_node after fetch_gis_data + build_kg.
-_grounding_bundle: Any = None
-_grounding_constraint_index: Any = None
+@dataclass
+class ParseResult:
+    """PARSE output container."""
 
+    intent: SpatialPlanningIntent
+    operation_sequence: List[Any] = None
+    constraint_set: List[Any] = None
+    validation_errors: List[str] = None
 
-def set_context_blocks(blocks: List[Any]) -> None:
-    """Store the active ContextBlock list so resolve_place can use Tier 0 matching.
+    def __post_init__(self):
+        if self.operation_sequence is None:
+            self.operation_sequence = []
+        if self.constraint_set is None:
+            self.constraint_set = []
+        if self.validation_errors is None:
+            self.validation_errors = []
 
-    Tier 0 uses annotation-derived village/facility anchors (precise coordinates)
-    before falling back to the gazetteer's fuzzy/Tianditu matching.
-    """
-    global _current_context_blocks
-    _current_context_blocks = blocks or []
 
+# ── Extraction patterns ──────────────────────────────────────────────
 
-def set_grounding_context(bundle: Any = None, constraint_index: Any = None) -> None:
-    """Store the active VillageBundle + ConstraintIndex for spatial grounding.
+_ZONE_TARGET_RE = re.compile(
+    r"(?:分区|用地|目标|规划)\s*[:：]\s*([^\n]{2,30})?\s*"
+    r"(?:面积|比例|占比)?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*%?|"
+    r"(\d+(?:\.\d+)?)\s*%\s*(?:用于|分配给|作为)\s*([^\n，,]+)",
+    re.MULTILINE,
+)
 
-    Set by _parse_intent_node after fetch_gis_data + build_kg.
-    Used by format_targets_node to call ground_zone_spatial_preference.
-    """
-    global _grounding_bundle, _grounding_constraint_index
-    _grounding_bundle = bundle
-    _grounding_constraint_index = constraint_index
+_FACILITY_RE = re.compile(
+    r"(?:设施|服务中心|卫生室|学校|广场|停车场|公园)\s*"
+    r"([^\n，,]{0,20})(?:位置|位于|建于)?\s*[:：]?\s*([^\n]{0,30})?",
+    re.MULTILINE,
+)
 
+_AXIS_RE = re.compile(
+    r"(?:发展轴|景观轴|生态廊道|道路轴线)\s*"
+    r"([^\n]{0,30})?(?:沿|从|至|连接)?\s*([^\n]{0,30})?",
+    re.MULTILINE,
+)
 
-def _log_llm_call(node: str, phase: str, system_msg: str, user_msg: str,
-                  response_content: str, tool_calls: list, elapsed: float,
-                  codes: dict = None, draft_len: int = 0,
-                  thinking_content: str = "", tool_results: list = None) -> dict:
-    """Append a structured LLM call trace entry and return it.
+_ROAD_RE = re.compile(
+    r"(?:道路|公路|村道|乡道)\s*"
+    r"([^\n]{0,20})?\s*(?:宽度|宽)?\s*[:：]?\s*(\d+(?:\.\d+)?)\s*m?",
+    re.MULTILINE,
+)
 
-    Returns the trace dict so callers can collect it without referencing
-    the mutable global list.
-    """
-    entry = {
-        "node": node,
-        "phase": phase,
-        "timestamp": time.time(),
-        "system_prompt": system_msg,
-        "user_prompt": user_msg,
-        "response_content": response_content[:8000] if response_content else "",
-        "response_len": len(response_content) if response_content else 0,
-        "thinking_content": thinking_content[:4000] if thinking_content else "",
-        "tool_calls": [{"name": tc.get("name", ""), "args": str(tc.get("args", {}))[:300]}
-                       for tc in (tool_calls or [])],
-        "tool_results": tool_results or [],
-        "tool_call_count": len(tool_calls) if tool_calls else 0,
-        "elapsed_s": elapsed,
-        "codes_extracted": codes or {},
-        "draft_length": draft_len,
-    }
-    return entry
 
+# ── Extractors ───────────────────────────────────────────────────────
 
-def _extract_thinking(response) -> str:
-    """Extract thinking content from LLM response.
 
-    qwen3.7-plus puts thinking in:
-      - response.additional_kwargs["thinking"]
-      - or within hesitation tags in response.content
-    """
-    # Try additional_kwargs first (official qwen thinking API)
-    if hasattr(response, "additional_kwargs"):
-        thinking = response.additional_kwargs.get("thinking", "")
-        if thinking:
-            return thinking if isinstance(thinking, str) else str(thinking)
-
-    # Fallback: extract from content between thinking tags
-    content = getattr(response, "content", "") or ""
-    match = re.search(r"<think>(.*?)</think>", content, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-
-    return ""
-
-
-def _get_current_parse_kg() -> Any:
-    """Get current KG instance for PARSE agent tool queries.
-
-    Delegates to KGManager.get_any_kg() — returns the most recently
-    registered session KG or a cached Layer 1 KG. Returns None if no KG is available.
-    """
-    from app.modules.kg.manager import get_kg_manager
-    return get_kg_manager().get_any_kg()
-
-
-# ── Tool execution ────────────────────────────────────────────────────
-
-
-async def _execute_tool_call(tool_name: str, tool_args: dict) -> str:
-    """Execute a tool call and return JSON string."""
-    import json as _json
-
-    # KG queries
-    if tool_name in ("query_village_kg", "find_village_by_name"):
-        kg_instance = _get_current_parse_kg()
-        if kg_instance is None:
-            return _json.dumps({"error": "KG not initialized"})
-        from app.modules.kg.queries import query_kg
-        try:
-            template_name = tool_args.get("template_name", "")
-            params = {k: v for k, v in tool_args.items() if k != "template_name"}
-            if "params" in params and isinstance(params["params"], dict):
-                inner = params.pop("params")
-                params.update(inner)
-            results = query_kg(kg_instance, template_name, **params)
-            return _json.dumps(results, ensure_ascii=False, default=str)
-        except Exception as e:
-            logger.warning("[PARSE] KG query failed: %s", e)
-            return _json.dumps({"error": str(e)})
-
-    # Code lookup
-    if tool_name == "lookup_code":
-        land_use_name = tool_args.get("land_use_name", "")
-        if not land_use_name:
-            return _json.dumps({"error": "missing land_use_name"})
-        try:
-            from app.tools.gis.lookup import lookup_land_use_code
-            result = lookup_land_use_code.invoke({"land_use_name": land_use_name})
-            return _json.dumps(result, ensure_ascii=False, default=str)
-        except Exception as e:
-            return _json.dumps({"error": str(e)}, ensure_ascii=False)
-
-    # Place name -> VillageGroup matching
-    if tool_name == "resolve_place":
-        place_name = tool_args.get("place_name", "")
-        if not place_name:
-            return _json.dumps({"error": "missing place_name"})
-
-        # Tier 0: ContextBlock-based place resolution (precise coordinates from GIS)
-        if _current_context_blocks:
-            from app.modules.schema.contracts.context_contracts import ContextBlockType as CBT
-
-            # Check residential clusters block (includes annotation-merged village names)
-            for block in _current_context_blocks:
-                if getattr(block, "block_type", None) != CBT.RESIDENTIAL_CLUSTERS:
-                    continue
-                for v in block.data.get("villages", []):
-                    v_name = v.get("name", "")
-                    if v_name and (place_name in v_name or v_name in place_name):
-                        return _json.dumps({
-                            "name": v_name,
-                            "center": v.get("center", [0, 0]),
-                            "parcel_ids": v.get("parcel_ids", []),
-                            "confidence": 0.9,
-                            "method": "residential_cluster_match",
-                        }, ensure_ascii=False)
-
-            # Check facility anchors (e.g. "村委会", "小学")
-            for block in _current_context_blocks:
-                if getattr(block, "block_type", None) != CBT.FACILITIES:
-                    continue
-                for fa in block.data.get("anchors", []):
-                    fa_name = fa.get("name", "")
-                    fa_type = fa.get("facility_type", "")
-                    if fa_name and (place_name in fa_name or fa_name in place_name):
-                        return _json.dumps({
-                            "name": fa_name,
-                            "center": fa.get("center", [0, 0]),
-                            "facility_type": fa_type,
-                            "confidence": 0.9,
-                            "method": "facility_anchor_exact",
-                        }, ensure_ascii=False)
-                    if fa_type and place_name in fa_type:
-                        return _json.dumps({
-                            "name": fa_name,
-                            "center": fa.get("center", [0, 0]),
-                            "facility_type": fa_type,
-                            "confidence": 0.85,
-                            "method": "facility_type_match",
-                        }, ensure_ascii=False)
-
-        # Tier 1: Gazetteer (Tianditu geocode + fuzzy match)
-        global _gazetteer
-        if _gazetteer is None:
-            return _json.dumps({"error": "Gazetteer not initialized"})
-        try:
-            result = _gazetteer.resolve(place_name)
-            return _json.dumps(result, ensure_ascii=False)
-        except Exception as e:
-            return _json.dumps({"error": str(e)}, ensure_ascii=False)
-
-    return _json.dumps({"error": f"Unknown tool: {tool_name}"}, ensure_ascii=False)
-
-
-# ── LangChain tool definitions (schema only — execution via _execute_tool_call) ──
-
-from langchain_core.tools import tool as _langchain_tool
-
-
-@_langchain_tool
-def query_village_kg(template_name: str, **params) -> str:
-    """Query village planning knowledge graph for spatial information.
-
-    Available templates (use these EXACT names):
-    — Spatial distribution:
-      count_by_zone_type, count_by_vne, count_by_planning_zone,
-      get_three_zones, get_three_lines
-    — Parcel queries:
-      get_village_parcels, get_parcels_by_dlbm, get_parcels_by_zone_type,
-      get_parcel_detail (bsm=...), get_parcel_neighbors (bsm=...),
-      get_parcels_near_point (min_lon, max_lon, min_lat, max_lat)
-    — Facilities & infrastructure:
-      get_facility_locations, get_facilities_by_type,
-      get_road_network, get_water_bodies, get_village_anchors
-    — Constraints & protection:
-      get_constraints, get_constraint_by_field, check_protected_parcels,
-      get_protected_parcels_detail, get_zone_restrictions
-    — Planning:
-      get_designated_zones, get_all_projects, get_indicators
-
-    Args:
-        template_name: SPARQL template name (must match EXACTLY)
-        **params: Optional filter params (dlbm, zone_type, bsm, etc.)
-    """
-    return "Tool called — execution handled by agent loop."
-
-
-@_langchain_tool
-def lookup_code(land_use_name: str) -> str:
-    """Query land-use name to standard GHYTBM code.
-
-    Example: lookup_code('宅基地') -> {"ghytbm":"2121","zone_type":"居住用地"}
-    Do NOT guess codes — always use this tool.
-    """
-    import json as _json
-    try:
-        from app.tools.gis.lookup import lookup_land_use_code
-        result = lookup_land_use_code.invoke({"land_use_name": land_use_name})
-        return _json.dumps(result, ensure_ascii=False, default=str)
-    except Exception as e:
-        return _json.dumps({"error": str(e), "land_use_name": land_use_name}, ensure_ascii=False)
-
-
-@_langchain_tool
-def resolve_place(place_name: str) -> str:
-    """Resolve place name to GIS anchor + parcel IDs.
-
-    Resolution tiers (highest confidence first):
-      Tier 0: annotation village anchors (precise GIS coordinates, conf=0.95)
-      Tier 0.5: facility anchors from annotation.geojson (conf=0.9)
-      Tier 1: Tianditu geocode + nearest VillageGroup
-      Tier 2: fuzzy substring match (conf=0.5)
-
-    Example: resolve_place('八社村') -> {name, center, parcel_ids, confidence, method}
-    Do NOT guess parcel IDs — always use this tool.
-    """
-    return "Tool called — execution handled by agent loop."
-
-
-# ── LLM helpers ──────────────────────────────────────────────────────
-
-
-@functools.lru_cache(maxsize=4)
-def _get_llm(enable_thinking: bool = True, thinking_budget: int = 2000):
-    """Get LLM instance — cached (max 4 configurations: thinking on/off × budgets).
-
-    Phase A (explore): thinking=ON, max_tokens=8192
-    Phase B (format): thinking=OFF, max_tokens=16384
-    """
-    from app.core.llm import create_llm
-
-    extra_body = {}
-    if enable_thinking:
-        extra_body["enable_thinking"] = True
-        extra_body["thinking_budget"] = thinking_budget
-        max_tokens = 8192  # thinking + free text (no JSON constraint)
-    else:
-        max_tokens = 16384  # JSON output — large schemas need headroom
-
-    return create_llm(
-        temperature=0,
-        max_tokens=max_tokens,
-        streaming=True,
-        extra_body=extra_body,
-    )
-
-
-def _extract_mappings(result_str: str, code_mappings: dict, place_mappings: dict):
-    """Extract code and place mappings from tool result JSON (not regex)."""
-    try:
-        data = json.loads(result_str)
-        # Handle nested {"data": {...}} wrapper
-        if isinstance(data, dict) and "data" in data and isinstance(data["data"], dict):
-            inner = data["data"]
-        elif isinstance(data, dict):
-            inner = data
-        elif isinstance(data, list):
-            # SPARQL results: [{zone_type, count, total_area}, ...]
-            # Don't extract codes from list results, but log they were seen
-            logger.debug("[mappings] list result (%d items) — not extractable as code/place", len(data))
-            return
-        else:
-            logger.debug("[mappings] unhandled type=%s", type(data).__name__)
-            return
-
-        # lookup_code result: has ghytbm + ghytmc
-        if "ghytbm" in inner and "ghytmc" in inner:
-            name = inner.get("ghytmc", "")
-            code = inner.get("ghytbm", "")
-            if name and code:
-                code_mappings[name] = code
-                logger.debug("[mappings] code: %s -> %s", name, code)
-
-        # resolve_place result: has village_name
-        if "village_name" in inner and inner.get("village_name"):
-            place_name = inner.get("name", "")
-            if place_name:
-                place_mappings[place_name] = {
-                    "village_name": inner["village_name"],
-                    "parcel_ids": inner.get("parcel_ids", []),
-                    "confidence": inner.get("confidence", 0),
-                }
-                logger.debug("[mappings] place: %s -> %s", place_name, inner["village_name"])
-
-        # Also check candidates for additional code mappings
-        # Typed path (Phase 3): candidates_ghytbm list from LandUseCodeLookup
-        for candidates_key in ("candidates_ghytbm", "candidates_dlbm"):
-            for m in inner.get(candidates_key, []) or []:
-                if isinstance(m, dict) and "ghytbm" in m and "ghytmc" in m:
-                    name2 = m.get("ghytmc", "")
-                    code2 = m.get("ghytbm", "")
-                    if name2 and code2:
-                        code_mappings[name2] = code2
-        # Backward compat: old candidates dict format
-        candidates = inner.get("candidates", {})
-        if isinstance(candidates, dict):
-            for match_list in candidates.values():
-                if isinstance(match_list, list):
-                    for m in match_list:
-                        if isinstance(m, dict) and "ghytbm" in m and "ghytmc" in m:
-                            name2 = m.get("ghytmc", "")
-                            code2 = m.get("ghytbm", "")
-                            if name2 and code2:
-                                code_mappings[name2] = code2
-
-        # Handle error results (e.g., KG not initialized)
-        if "error" in inner:
-            logger.debug("[mappings] tool error: %s", inner.get("error", "")[:80])
-    except (json.JSONDecodeError, TypeError, AttributeError) as e:
-        logger.debug("[mappings] parse failed: %s", e)
-
-
-async def _format_structured(llm, schema_cls, messages: list) -> object | None:
-    """Two-stage structured output — NO thinking mode.
-
-    Stage 1: json_schema (thinking=OFF, guaranteed compatible)
-    Stage 2: json_object fallback (simpler, more reliable)
-
-    Note: trace data is returned via _trace_llm_calls.append() side-effect.
-    See _log_llm_call().
-    """
-    schema_name = schema_cls.__name__
-
-    # Compute input length for logging
-    input_len = sum(len(m.content) if hasattr(m, "content") else 0 for m in messages)
-
-    # Stage 1: json_schema
-    try:
-        structured = llm.with_structured_output(schema_cls, method="json_schema")
-        result = await structured.ainvoke(messages)
-        if result is not None:
-            print(f"    OK {schema_name} (json_schema) input={input_len}chars", flush=True)
-            return result
-    except Exception as e:
-        err_msg = str(e)
-        snippet = err_msg[:150]
-        print(f"    S1 fail {schema_name}: {snippet}", flush=True)
-        logger.warning("[format] S1 %s failed (input=%d chars): %s", schema_name, input_len, snippet)
-
-    # Stage 2: json_object + manual parse
-    try:
-        raw = await llm.ainvoke(messages)
-        text = raw.content if hasattr(raw, "content") else str(raw)
-        logger.info("[format] S2 raw output: %d chars for %s", len(text), schema_name)
-        # Try json_object mode
-        structured = llm.with_structured_output(schema_cls, method="json_mode")
-        result = await structured.ainvoke([
-            SystemMessage(content="Output valid JSON matching the schema."),
-            HumanMessage(content=text[:8000]),
-        ])
-        if result is not None:
-            # Log what we got
-            field_sizes = {}
-            for fname in schema_cls.model_fields:
-                val = getattr(result, fname, None)
-                if isinstance(val, list):
-                    field_sizes[fname] = len(val)
-                elif val is not None:
-                    field_sizes[fname] = 1
-            logger.info("[format] S2 %s OK — fields: %s", schema_name, field_sizes)
-            print(f"    OK {schema_name} (json_mode) — {field_sizes}", flush=True)
-            return result
-    except Exception as e:
-        err_msg = str(e)
-        print(f"    S2 fail {schema_name}: {err_msg[:150]}", flush=True)
-        logger.warning("[format] S2 %s failed: %s", schema_name, err_msg)
-
-    print(f"    FAIL {schema_name} (input={input_len}chars)", flush=True)
-    return None
-
-
-# ── Node 1: classify_sections ────────────────────────────────────────
-
-
-async def classify_sections_node(state: ParseAgentState) -> dict:
-    """Classify document sections — hybrid: keyword (70%) + LLM fallback (30%)."""
-    from app.modules.parsing.markdown_parser import split_by_headers, detect_table
-    from app.modules.parsing.section_classifier import classify_section, needs_llm_fallback
-
-    # Step 1: deterministic header-based splitting
-    raw_sections = split_by_headers(state.planning_text[:12000])
-    if not raw_sections:
-        raw_sections = [{"title": "Full document", "content": state.planning_text[:8000], "level": 0}]
-
-    # Step 2: keyword-based classification + table detection
-    classified = []
-    low_conf = []
-    for i, rs in enumerate(raw_sections):
-        section_type, score = classify_section(rs["title"], rs["content"])
-        has_table = detect_table(rs["content"])
-
-        if needs_llm_fallback(section_type, score):
-            low_conf.append({"index": i, **rs, "keyword_type": section_type})
-
-        classified.append(SectionInfo(
-            section_id=f"S{i + 1:02d}",
-            title=rs["title"],
-            section_type=section_type,
-            content=rs["content"],
-            has_table=has_table,
-        ))
-
-    # Step 3: LLM fallback only for low-confidence sections
-    if low_conf:
-        logger.info("[PARSE:classify] %d/%d sections -> LLM fallback",
-                     len(low_conf), len(raw_sections))
-        try:
-            from pydantic import BaseModel as _BM, Field as _Field
-
-            class _FallbackItem(_BM):
-                index: int = 0
-                section_type: str = ""
-
-            class _FallbackResult(_BM):
-                items: list[_FallbackItem] = _Field(default_factory=list)
-
-            llm = _get_llm(enable_thinking=True, thinking_budget=1000)
-            from app.modules.parsing.section_classifier import build_fallback_prompt
-
-            prompt = build_fallback_prompt(low_conf)
-            messages = [
-                SystemMessage(content="You are a village plan document classifier. Output section_type for each."),
-                HumanMessage(content=prompt),
-            ]
-            fb_result = await _format_structured(llm, _FallbackResult, messages)
-            if fb_result and fb_result.items:
-                for item in fb_result.items:
-                    if 0 <= item.index < len(classified):
-                        classified[item.index].section_type = item.section_type or classified[item.index].section_type
-        except Exception as e:
-            logger.warning("[PARSE:classify] LLM fallback failed: %s", e)
-
-    logger.info("[PARSE:classify] %d sections (keyword + LLM hybrid)", len(classified))
-    return {
-        "section_map": classified,
-        "parse_strategy": "full",
-    }
-
-
-# ── Routing: route_by_section (conditional edges fan-out) ─────────────
-
-
-def route_by_section(state: ParseAgentState) -> List[str]:
-    """Fan-out: route to explore/extract nodes based on section types."""
+def _extract_zone_targets(text: str) -> List[ZoneTarget]:
     targets = []
-    seen = set()
-
-    for section in state.section_map:
-        st = section.section_type
-
-        if st in ("regulation", "protection") and "extract_regulations" not in seen:
-            targets.append("extract_regulations")
-            seen.add("extract_regulations")
-        if st in ("project_table", "land_use_table", "facility_table", "infrastructure") and "explore_projects" not in seen:
-            targets.append("explore_projects")
-            seen.add("explore_projects")
-        if st in ("indicator_table", "target", "spatial_layout") and "explore_targets" not in seen:
-            targets.append("explore_targets")
-            seen.add("explore_targets")
-        if section.has_table and "extract_tables" not in seen:
-            targets.append("extract_tables")
-            seen.add("extract_tables")
-
-    # Default: at least explore targets
-    if not targets:
-        targets.append("explore_targets")
-
-    logger.info("[PARSE:route] Routing to: %s", targets)
+    for match in _ZONE_TARGET_RE.finditer(text):
+        land_use = match.group(1) or match.group(4) or "村庄建设区"
+        area_ratio = float(match.group(2) or match.group(3) or 0) / 100.0
+        if area_ratio > 0:
+            targets.append(
+                ZoneTarget(
+                    zone_id=f"zone_{len(targets)}",
+                    land_use=land_use.strip() if land_use else "村庄建设区",
+                    area_ratio=area_ratio,
+                    semantic=SemanticMetadata(
+                        natural_language_description=f"规划{land_use}占比{area_ratio*100:.0f}%",
+                        spatial_hint="",
+                    ),
+                )
+            )
     return targets
 
 
-# ── Helper ────────────────────────────────────────────────────────────
-
-
-def _get_sections_text(state: ParseAgentState, *section_types: str) -> str:
-    """Get combined text of sections matching any of the given types."""
-    texts = []
-    for s in state.section_map:
-        if s.section_type in section_types:
-            texts.append(s.content)
-    return "\n\n".join(texts) if texts else state.planning_text[:8000]
-
-
-# ── Node 2a: extract_regulations ──────────────────────────────────────
-
-
-async def extract_regulations_node(state: ParseAgentState) -> dict:
-    """Extract spatial constraints — hybrid: regex (70%) + LLM fallback (30%).
-
-    Phase 3: Injects YAML control rule categories into LLM fallback prompt
-    for better coverage of the 6 standard regulation categories.
-    """
-    from pydantic import BaseModel as _BM
-
-    from app.modules.parsing.regulation_extractor import extract_regulations_regex
-
-    # Load control rule categories from YAML (Phase 3 paradigm alignment)
-    try:
-        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
-        loader = get_rule_loader()
-        control_rules_block = loader.format_control_rules_for_prompt()
-    except Exception:
-        control_rules_block = ""
-
-    sections_text = _get_sections_text(state, "regulation", "protection")
-    all_constraints: list[SpatialConstraint] = []
-
-    # Step 1: deterministic regex extraction — convert dicts to typed
-    matched, unmatched = extract_regulations_regex(sections_text)
-    for m in matched:
-        try:
-            all_constraints.append(SpatialConstraint.model_validate(m))
-        except Exception:
-            # Fallback: set source_text at minimum
-            all_constraints.append(SpatialConstraint(
-                type="spatial_constraint",
-                source_text=str(m.get("source_text", "")),
-                article_ref=str(m.get("article_ref", "")),
-            ))
-
-    # Step 2: LLM fallback for unmatched lines
-    if unmatched:
-        logger.info("[PARSE:regulations] Regex=%d -> LLM fallback=%d lines",
-                     len(matched), len(unmatched))
-        try:
-            class _RegFallbackResult(_BM):
-                constraints: List[SpatialConstraint] = []
-
-            llm = _get_llm(enable_thinking=True, thinking_budget=1000)
-            unmatched_text = "\n".join(f"- {line}" for line in unmatched[:30])
-            messages = [
-                SystemMessage(content=(
-                    "Extract SpatialConstraint from unmatched regulation text.\n"
-                    "Classify each constraint into one of the standard categories:\n"
-                    f"{control_rules_block}"
-                )),
-                HumanMessage(content=f"Unmatched rules:\n{unmatched_text}"),
-            ]
-            fb_result = await _format_structured(llm, _RegFallbackResult, messages)
-            if fb_result:
-                # Already typed SpatialConstraint instances — no model_dump()
-                all_constraints.extend(fb_result.constraints)
-        except Exception as e:
-            logger.warning("[PARSE:regulations] LLM fallback failed: %s", e)
-
-    logger.info("[PARSE:regulations] %d constraints (regex + LLM hybrid)", len(all_constraints))
-    return {"raw_constraints": all_constraints}
-
-
-# ── Node 2b: extract_tables ──────────────────────────────────────────
-
-
-async def extract_tables_node(state: ParseAgentState) -> dict:
-    """Extract structured data from table sections — schema-informed, zero LLM.
-
-    Phase 4: Infers table schema from headers and maps rows to typed models
-    (PlanningIndicatorTable, List[ZoneTarget], List[FacilityTarget]).
-    Unmatched tables remain as raw dicts.
-    """
-    from app.modules.parsing.markdown_parser import parse_markdown_tables
-    from app.modules.parsing.table_schema_inference import (
-        infer_and_map_table,
-        TableSchemaType,
-    )
-
-    table_sections = [s for s in state.section_map if s.has_table]
-    all_rows = []
-    typed_results: Dict[str, Any] = {}  # schema_type -> typed model(s)
-
-    for section in table_sections:
-        tables = parse_markdown_tables(section.content)
-        for table in tables:
-            headers = table.get("headers", [])
-            rows = table.get("rows", [])
-
-            # Try schema-informed extraction
-            schema_type, typed = infer_and_map_table(headers, rows)
-
-            if typed is not None:
-                key = f"{schema_type.value}_{section.section_id}"
-                # Merge with existing results of same type
-                if key in typed_results:
-                    existing = typed_results[key]
-                    if isinstance(existing, list) and isinstance(typed, list):
-                        existing.extend(typed)
-                    elif hasattr(existing, "indicators") and hasattr(typed, "indicators"):
-                        existing.indicators.extend(typed.indicators)
-                else:
-                    typed_results[key] = typed
-                continue
-
-            # Fallback: raw dict for unmatched tables
-            for row in rows:
-                if not row or all(c == "" for c in row):
-                    continue
-                row_dict = dict(zip(headers, row)) if headers else {"data": row}
-                row_dict["_section_id"] = section.section_id
-                row_dict["_section_type"] = section.section_type
-                all_rows.append(row_dict)
-
-    typed_count = sum(
-        len(v.indicators) if hasattr(v, "indicators") else len(v) if isinstance(v, list) else 1
-        for v in typed_results.values()
-    )
-    logger.info(
-        "[PARSE:tables] Schema-informed: %d typed, %d raw rows (0 LLM)",
-        typed_count, len(all_rows),
-    )
-    return {"raw_tables": {"rows": all_rows, "typed": typed_results}}
-# ── Shared explore helper (Phase A — Think + Tools) ───────────────────
-
-
-async def _explore_with_tools(
-    state: ParseAgentState,
-    node_name: str,
-    section_types: tuple,
-    explore_prompt: str,
-    summary_prompt: str,
-    draft_key: str,
-    code_key: str,
-    place_key: str,
-    trace_key: str,
-    initial_code_mappings: Dict[str, str] = None,
-    initial_place_mappings: Dict[str, dict] = None,
-) -> dict:
-    """Shared Phase A: ReAct with tools -> forced summary -> draft.
-
-    Args:
-        node_name: Node identifier for logging (e.g. "explore_projects").
-        section_types: Tuple of section_type strings to filter.
-        explore_prompt: System prompt for the ReAct exploration phase.
-        summary_prompt: System prompt for the forced summary phase.
-        draft_key: State field name for the draft result (e.g. "draft_operations").
-        code_key: State field name for code mappings (e.g. "code_mappings_projects").
-        place_key: State field name for place mappings (e.g. "place_mappings_projects").
-        initial_code_mappings: Seed mappings from prior state (targets reuse these).
-        initial_place_mappings: Seed mappings from prior state.
-    """
-    node_traces: list = []
-
-    llm = _get_llm(enable_thinking=True, thinking_budget=800)
-    sections = [s for s in state.section_map if s.section_type in section_types]
-
-    if not sections:
-        logger.warning("[PARSE:%s] No relevant sections", node_name)
-        return {draft_key: "", code_key: {}, place_key: {}, trace_key: []}
-
-    sections_text = "\n\n---\n\n".join(s.content[:1500] for s in sections[:5])
-    print(f"    [{node_name}] {len(sections)} sections merged -> {len(sections_text)} chars", flush=True)
-
-    # Phase A1: ReAct with tools
-    explore_llm = llm.bind_tools([lookup_code, resolve_place, query_village_kg])
-    messages = [
-        SystemMessage(content=explore_prompt),
-        HumanMessage(content=sections_text[:5000]),
-    ]
-
-    code_mappings: Dict[str, str] = dict(initial_code_mappings or {})
-    place_mappings: Dict[str, dict] = dict(initial_place_mappings or {})
-    total_tool_calls = 0
-
-    for _round in range(2):
-        t0 = time.time()
-        response = await explore_llm.ainvoke(messages)
-        elapsed = time.time() - t0
-        messages.append(response)
-
-        thinking = _extract_thinking(response)
-        resp_content = response.content if hasattr(response, "content") else ""
-        tool_calls_raw = response.tool_calls if hasattr(response, "tool_calls") else []
-
-        # Execute tool calls and collect results
-        tool_results_list = []
-        if tool_calls_raw:
-            total_tool_calls += len(tool_calls_raw)
-            print(f"    [{node_name}] tools round {_round+1}: {len(tool_calls_raw)} calls", flush=True)
-            for tc in tool_calls_raw[:5]:
-                result_str = await _execute_tool_call(tc.get("name", ""), tc.get("args", {}))
-                messages.append(ToolMessage(content=str(result_str), tool_call_id=tc["id"]))
-                _extract_mappings(result_str, code_mappings, place_mappings)
-                tool_results_list.append({
-                    "name": tc.get("name", ""),
-                    "args": tc.get("args", {}),
-                    "result": result_str[:2000],
-                })
-
-        # Log this ReAct round
-        node_traces.append(_log_llm_call(
-            node=node_name,
-            phase=f"react_round_{_round+1}",
-            system_msg=explore_prompt if _round == 0 else "",
-            user_msg=sections_text[:5000] if _round == 0 else "(continuation with tool results)",
-            response_content=resp_content,
-            tool_calls=tool_calls_raw,
-            elapsed=elapsed,
-            codes=code_mappings,
-            thinking_content=thinking,
-            tool_results=tool_results_list,
-        ))
-
-        if not tool_calls_raw:
-            break
-
-    # Phase A2: Force summary WITHOUT tools
-    code_list = "\n".join(f"  {n} -> {c}" for n, c in list(code_mappings.items())[:20])
-    print(f"    [{node_name}] writing summary ({len(code_mappings)} codes)...", flush=True)
-
-    summary_user_prompt = (
-        f"Code mappings (MUST USE):\n{code_list or '(none)'}\n\n"
-        f"Original text:\n{sections_text[:4000]}"
-    )
-
-    summary_llm = _get_llm(enable_thinking=True, thinking_budget=400)
-    t0 = time.time()
-    summary_resp = await summary_llm.ainvoke([
-        SystemMessage(content=summary_prompt),
-        HumanMessage(content=summary_user_prompt),
-    ])
-    summary_elapsed = time.time() - t0
-    summary_thinking = _extract_thinking(summary_resp)
-
-    draft = summary_resp.content if hasattr(summary_resp, "content") else ""
-    if draft and len(draft) > 50:
-        preview = draft[:200].replace("\n", " ")
-        print(f"    [{node_name}] draft: {len(draft)} chars - {preview}...", flush=True)
-    else:
-        last_msg = messages[-1] if messages else None
-        if last_msg and hasattr(last_msg, "content") and last_msg.content:
-            draft = last_msg.content
-        print(f"    [{node_name}] fallback draft: {len(draft)} chars", flush=True)
-
-    # Log summary call
-    node_traces.append(_log_llm_call(
-        node=node_name,
-        phase="summary",
-        system_msg=summary_prompt,
-        user_msg=summary_user_prompt,
-        response_content=draft,
-        tool_calls=[],
-        elapsed=summary_elapsed,
-        codes=code_mappings,
-        draft_len=len(draft),
-        thinking_content=summary_thinking,
-    ))
-
-    logger.info("[PARSE:%s] draft=%d chars, %d codes, %d places, %d tool calls",
-                 node_name, len(draft), len(code_mappings), len(place_mappings), total_tool_calls)
-
-    return {draft_key: draft, code_key: code_mappings, place_key: place_mappings, trace_key: node_traces}
-
-
-# ── Node 2c: explore_projects (Phase A - Think + Tools) ────────────────
-
-
-async def explore_projects_node(state: ParseAgentState) -> dict:
-    """Phase A: Think + Explore -> tools -> forced summary -> draft."""
-    # v4.8.1: Inject ContextBlock spatial context
-    spatial_ctx = ""
-    if state.context_blocks:
-        try:
-            from app.modules.prompts.parse_prompts import format_spatial_context_for_prompt
-            spatial_ctx = format_spatial_context_for_prompt(state.context_blocks, detail_level="standard")
-            if spatial_ctx:
-                spatial_ctx = f"\n## Spatial Context (current state cognition)\n{spatial_ctx}\n"
-        except Exception:
-            pass
-
-    return await _explore_with_tools(
-        state,
-        node_name="explore_projects",
-        section_types=("project_table", "land_use_table", "facility_table", "infrastructure"),
-        explore_prompt=(
-            "You are a village plan project analyst.\n"
-            f"{spatial_ctx}"
-            "Step 1: Use lookup_code to query GHYTBM codes for ALL land_use_names in the text.\n"
-            "Step 2: Use resolve_place to query GIS anchors for ALL place names.\n"
-            "Step 3: Use query_village_kg for detailed spatial context and parcel-level data:\n"
-            "  - query_village_kg('get_village_anchors') to find village coordinates\n"
-            "  - query_village_kg('get_village_parcels') for all parcels with BSM, DLBM, area, zone\n"
-            "  - query_village_kg('get_parcel_detail', bsm='...') for individual parcel attributes\n"
-            "  - query_village_kg('get_facility_locations') for existing facility positions\n"
-            "  - query_village_kg('get_road_network') for road connectivity\n"
-            "  - query_village_kg('get_designated_zones') for constraint/designated zones\n"
-            "IMPORTANT: When describing project locations, reference specific BSM values\n"
-            "(e.g. '位于P001地块') so the spatial anchoring can use exact parcels.\n"
-            "Call tools for ALL entities, then STOP when done."
-        ),
-        summary_prompt=(
-            "You are a village plan project summarizer.\n"
-            "Based on the tool results above, write a COMPREHENSIVE project list.\n"
-            "EVERY project must be on its own line in this format:\n"
-            "  [action] project_name | code=XXXX | area=Xsqm | location=... | source=\"...\"\n"
-            "Where XXXX is the 4-digit GHYTBM number from lookup_code (e.g. 2121, 1100, 2124).\n"
-            "Do NOT write 'GHYTBM=' - just the 4-digit number. Do NOT guess. Write at least 1500 characters."
-        ),
-        draft_key="draft_operations",
-        code_key="code_mappings_projects",
-        place_key="place_mappings_projects",
-        trace_key="llm_trace_projects",
-    )
-
-
-# ── Node 2c2: format_projects (Phase B — json_schema) ──────────────────
-
-
-# ── Post-format fixers: auto-correct codes + fill anchors (no LLM) ─────
-
-
-def _extract_literal_values(model_cls, field_name: str) -> str:
-    """Extract allowed Literal values from a Pydantic model field as a comma string.
-
-    Returns empty string if the field is not a Literal type.
-    """
-    import typing as _typing
-    try:
-        field = model_cls.model_fields.get(field_name)
-        if field is None:
-            return ""
-        annotation = field.annotation
-        args = _typing.get_args(annotation)
-        # Literal[...] returns the literal values; Optional[Literal[...]] also works
-        literals = [str(a) for a in args if a is not type(None)]
-        return ", ".join(literals)
-    except Exception:
-        return ""
-
-
-def _schema_constraints_block() -> str:
-    """Build a Schema Constraints block listing valid Literal enum values.
-
-    Injects the allowed values for SpatialOperation/SpatialConstraint/ZoneTarget
-    fields so the LLM produces schema-compliant output in the free-text draft phase.
-    """
-    from app.agent.gis.parse.state import (
-        SpatialOperation, SpatialConstraint, ZoneTarget, FacilityTarget,
-    )
-    lines = ["[Schema Constraints — output MUST use ONLY these values]"]
-
-    action_vals = _extract_literal_values(SpatialOperation, "action")
-    conf_vals = _extract_literal_values(SpatialOperation, "confidence_level")
-    if action_vals:
-        lines.append(f"- SpatialOperation.action: [{action_vals}]")
-    if conf_vals:
-        lines.append(f"- SpatialOperation.confidence_level: [{conf_vals}]")
-
-    ctype_vals = _extract_literal_values(SpatialConstraint, "type")
-    prio_vals = _extract_literal_values(SpatialConstraint, "priority")
-    if ctype_vals:
-        lines.append(f"- SpatialConstraint.type: [{ctype_vals}]")
-    if prio_vals:
-        lines.append(f"- SpatialConstraint.priority: [{prio_vals}]")
-
-    density_vals = _extract_literal_values(ZoneTarget, "density")
-    if density_vals:
-        lines.append(f"- ZoneTarget.density: [{density_vals}]")
-        lines.append("- ZoneTarget.vne_code: must start with V, N, or E (e.g. V11, V21, E1)")
-
-    status_vals = _extract_literal_values(FacilityTarget, "status")
-    if status_vals:
-        lines.append(f"- FacilityTarget.status: [{status_vals}]")
-
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _auto_correct_code(
-    ops: List[SpatialOperation],
-    code_mappings: dict,
-) -> List[SpatialOperation]:
-    """Post-format: correct invalid GHYTBM codes from deterministic mappings.
-
-    LLM sometimes outputs wrong codes even with the mapping table.
-    This runs pure-Python correction before validate_and_merge catches errors.
-    """
-    if not ops:
-        return ops
-    try:
-        from app.modules.schema import GHYTBM_TO_GHYTMC
-        valid_codes = set(GHYTBM_TO_GHYTMC.keys())
-    except ImportError:
-        logger.debug("[auto_correct] GHYTBM_TO_GHYTMC not available")
-        return ops
-
-    corrected = 0
-    for op in ops:
-        code = op.land_use_code or ""
-        if code and code not in valid_codes:
-            # Try to match project_name against code_mappings (name -> code)
-            best_code = ""
-            pname = (op.project_name or "").strip()
-            if pname:
-                for name, mapped_code in code_mappings.items():
-                    if mapped_code and mapped_code in valid_codes:
-                        if name in pname or pname in name:
-                            best_code = mapped_code
-                            break
-            if best_code:
-                op.land_use_code = best_code
-                corrected += 1
-            else:
-                logger.debug("[auto_correct] no mapping for code=%s project=%s", code, pname[:30])
-
-    if corrected:
-        logger.info("[PARSE:auto_correct] Fixed %d GHYTBM codes", corrected)
-    return ops
-
-
-def _auto_fill_spatial_anchor(
-    ops: List[SpatialOperation],
-    place_mappings: dict,
-) -> List[SpatialOperation]:
-    """Post-format: auto-fill spatial_anchor from deterministic place mappings.
-
-    LLM often leaves spatial_anchor empty or with low confidence.
-    Fill from resolve_place tool results (place_mappings).
-    """
-    if not ops:
-        return ops
-
-    filled = 0
-    for op in ops:
-        anchor = op.spatial_anchor
-        if anchor is not None and anchor.confidence >= 0.3:
-            continue  # Already has a good anchor
-
-        # Match against place_mappings (place_name -> {village_name, parcel_ids, confidence})
-        search_text = f"{(op.project_name or '')} {(op.location_desc or '')}"
-        for place_name, info in place_mappings.items():
-            if place_name in search_text:
-                op.spatial_anchor = SpatialAnchor(
-                    reference=place_name,
-                    candidate_parcels=list(info.get("parcel_ids", [])),
-                    confidence=float(info.get("confidence", 0.5)),
-                    resolution_status="anchored",
-                )
-                filled += 1
-                break
-
-    if filled:
-        logger.info("[PARSE:auto_fill] Filled %d spatial anchors", filled)
-    return ops
-
-
-def _auto_fill_facility_anchor(
-    facilities: list,
-    place_mappings: dict,
-) -> list:
-    """Post-format: auto-fill facility spatial anchors from place mappings.
-
-    Matches facility.type/location_hint against resolve_place results.
-    Fills direction, candidate_bsms, anchor_point for FacilityPlacer.
-    """
-    if not facilities:
-        return facilities
-
-    filled = 0
-    for ft in facilities:
-        search_text = f"{ft.type or ''} {ft.location_hint or ''} {ft.anchor_village or ''}"
-        for place_name, info in place_mappings.items():
-            if place_name in search_text:
-                # Fill candidate_bsms from place mapping
-                parcel_ids = info.get("parcel_ids", [])
-                if parcel_ids:
-                    ft.candidate_bsms = list(parcel_ids)
-                # Fill anchor_point from center
-                center = info.get("center", [0, 0])
-                if center and any(center):
-                    ft.anchor_point = (float(center[0]), float(center[1]))
-                filled += 1
-                break
-
-    if filled:
-        logger.info("[PARSE:auto_fill_facility] Filled %d facility anchors", filled)
+def _extract_facilities(text: str) -> List[FacilityTarget]:
+    facilities = []
+    for match in _FACILITY_RE.finditer(text):
+        ftype = match.group(1) or "公共服务设施"
+        location = match.group(2) or ""
+        facilities.append(
+            FacilityTarget(
+                type=ftype.strip(),
+                status="planned_new",
+                location_hint=location.strip() if location else "",
+                semantic=SemanticMetadata(
+                    natural_language_description=f"规划{ftype}",
+                    spatial_hint=location.strip() if location else "",
+                ),
+            )
+        )
     return facilities
 
 
-def _auto_fill_axis_anchor(
-    axes: list,
-    place_mappings: dict,
-) -> list:
-    """Post-format: auto-fill axis spatial anchors from place mappings.
-
-    Matches axis.connects/reference_feature against resolve_place results.
-    Fills start_anchor, end_anchor, corridor_bsms for AxisBuilder.
-    """
-    if not axes:
-        return axes
-
-    filled = 0
-    for ax in axes:
-        search_text = " ".join(ax.connects) + " " + (ax.reference_feature or "")
-        for place_name, info in place_mappings.items():
-            if place_name in search_text:
-                center = info.get("center", [0, 0])
-                if center and any(center):
-                    pt = (float(center[0]), float(center[1]))
-                    if ax.start_anchor is None:
-                        ax.start_anchor = pt
-                    else:
-                        ax.end_anchor = pt
-                    filled += 1
-
-    if filled:
-        logger.info("[PARSE:auto_fill_axis] Filled %d axis anchors", filled)
+def _extract_axes(text: str) -> List[AxisTarget]:
+    axes = []
+    for match in _AXIS_RE.finditer(text):
+        ref = match.group(1) or ""
+        direction = match.group(2) or ""
+        if ref or direction:
+            axes.append(
+                AxisTarget(
+                    reference_feature=ref.strip() if ref else "发展轴",
+                    direction=direction.strip() if direction else "",
+                    semantic=SemanticMetadata(
+                        natural_language_description=f"沿{ref}方向发展" if ref else "发展轴线",
+                        spatial_hint=direction.strip() if direction else "",
+                    ),
+                )
+            )
     return axes
 
 
-def _auto_fill_road_anchor(
-    roads: list,
-    place_mappings: dict,
-) -> list:
-    """Post-format: auto-fill road spatial anchors from place mappings.
-
-    Matches road.connects against resolve_place results.
-    Fills start_anchor, end_anchor, path_bsms for road sub-task.
-    """
-    if not roads:
-        return roads
-
-    filled = 0
-    for rd in roads:
-        for place_name, info in place_mappings.items():
-            if place_name in rd.connects:
-                center = info.get("center", [0, 0])
-                if center and any(center):
-                    pt = (float(center[0]), float(center[1]))
-                    if rd.start_anchor is None:
-                        rd.start_anchor = pt
-                    else:
-                        rd.end_anchor = pt
-                    filled += 1
-
-    if filled:
-        logger.info("[PARSE:auto_fill_road] Filled %d road anchors", filled)
+def _extract_roads(text: str) -> List[RoadTarget]:
+    roads = []
+    for match in _ROAD_RE.finditer(text):
+        name = match.group(1) or "规划道路"
+        width = float(match.group(2) or 6)
+        roads.append(
+            RoadTarget(
+                road_level=name.strip() if name else "村道",
+                width_m=width,
+                semantic=SemanticMetadata(
+                    natural_language_description=f"规划{name}宽度{width}m",
+                    spatial_hint="",
+                ),
+            )
+        )
     return roads
 
 
-def _ground_zone_targets(
-    zone_targets: list,
-    place_mappings: dict,
-    constraint_index: Any,
-    bundle: Any,
-) -> None:
-    """Post-format: geometric spatial grounding for ZoneTargets (in-place).
+# ── Public API ───────────────────────────────────────────────────────
 
-    Calls ground_zone_spatial_preference for each ZoneTarget that has a
-    spatial hint or preference description. Fills candidate_bsms,
-    candidate_bbox, excluded_bsms, proximity_weights in-place.
 
-    LLM 语义选定 BSM（zt.candidate_bsms）被传入 preselected_bsms，
-    spatial_ops 验证/精化而非替换。
+def parse(
+    planning_text: str,
+    village_name: str = "",
+    planning_period: str = "2022-2035年",
+) -> ParseResult:
+    """Parse planning text into SpatialPlanningIntent.
+
+    Args:
+        planning_text: Raw planning text from LLM report.
+        village_name: Village name for context.
+        planning_period: Planning period string.
+
+    Returns:
+        ParseResult with extracted intent.
     """
-    from app.modules.spatial_ops.grounding import ground_zone_spatial_preference
+    zone_targets = _extract_zone_targets(planning_text)
+    facilities = _extract_facilities(planning_text)
+    axes = _extract_axes(planning_text)
+    roads = _extract_roads(planning_text)
 
-    if not zone_targets or bundle is None:
-        return
-
-    grounded = 0
-    for zt in zone_targets:
-        pref_parts = []
-        if zt.semantic and zt.semantic.spatial_hint:
-            pref_parts.append(zt.semantic.spatial_hint)
-        if zt.spatial_preference:
-            if zt.spatial_preference.direction:
-                pref_parts.append(zt.spatial_preference.direction)
-            if zt.spatial_preference.reference:
-                pref_parts.append(zt.spatial_preference.reference)
-        pref_desc = " ".join(pref_parts) if pref_parts else ""
-        if not pref_desc and zt.semantic and zt.semantic.natural_language_description:
-            pref_desc = zt.semantic.natural_language_description
-
-        if pref_desc:
-            anchor = ground_zone_spatial_preference(
-                pref_desc, place_mappings, constraint_index, bundle,
-                preselected_bsms=zt.candidate_bsms or None,
-            )
-            if anchor.candidate_bsms:
-                zt.candidate_bsms = anchor.candidate_bsms
-            if anchor.candidate_bbox:
-                zt.candidate_bbox = anchor.candidate_bbox
-            if anchor.excluded_bsms:
-                zt.excluded_bsms = anchor.excluded_bsms
-            if anchor.proximity_weights:
-                zt.proximity_weights = anchor.proximity_weights
-            grounded += 1
-
-    if grounded:
-        logger.info("[PARSE:grounding] Grounded %d zone targets (LLM-selected BSMs preserved)", grounded)
-
-
-def _ground_facility_targets(
-    facilities: list,
-    place_mappings: dict,
-    bundle: Any,
-) -> None:
-    """Post-format: geometric spatial grounding for FacilityTargets (in-place).
-
-    Uses ground_facility_spatial_preference to fill candidate_bsms
-    and anchor_point from location_hint + direction.
-    """
-    from app.modules.spatial_ops.grounding import ground_facility_spatial_preference
-
-    if not facilities or bundle is None:
-        return
-
-    grounded = 0
-    for ft in facilities:
-        hint = ft.location_hint or ""
-        if not hint and ft.semantic and ft.semantic.spatial_hint:
-            hint = ft.semantic.spatial_hint
-        if not hint:
-            continue
-
-        anchor = ground_facility_spatial_preference(
-            hint, ft.direction or "", place_mappings, bundle,
-        )
-        if anchor.candidate_bsms:
-            ft.candidate_bsms = anchor.candidate_bsms
-        if anchor.candidate_bbox and not ft.anchor_point:
-            ft.anchor_point = (anchor.candidate_bbox[0], anchor.candidate_bbox[1])
-        grounded += 1
-
-    if grounded:
-        logger.info("[PARSE:grounding] Grounded %d facility targets", grounded)
-
-
-def _ground_axis_road_targets(
-    axes: list,
-    roads: list,
-    place_mappings: dict,
-    bundle: Any,
-) -> None:
-    """Post-format: geometric spatial grounding for AxisTargets and RoadTargets (in-place).
-
-    Uses ground_linear_spatial_preference to fill start/end anchors
-    and candidate BSMs from connects hints.
-    """
-    from app.modules.spatial_ops.grounding import ground_linear_spatial_preference
-
-    if bundle is None:
-        return
-
-    grounded = 0
-    for ax in axes:
-        anchor = ground_linear_spatial_preference(
-            ax.start_anchor, ax.end_anchor, place_mappings, bundle,
-            connects_hints=ax.connects or [],
-        )
-        if anchor.candidate_bsms:
-            ax.corridor_bsms = anchor.candidate_bsms
-        grounded += 1
-
-    for rt in roads:
-        anchor = ground_linear_spatial_preference(
-            rt.start_anchor, rt.end_anchor, place_mappings, bundle,
-            connects_hints=rt.connects or [],
-        )
-        if anchor.candidate_bsms:
-            rt.path_bsms = anchor.candidate_bsms
-        grounded += 1
-
-    if grounded:
-        logger.info("[PARSE:grounding] Grounded %d axis/road targets", grounded)
-
-
-def _inject_deterministic_fields(
-    intent: "SpatialPlanningIntent",
-    code_mappings: dict,
-) -> "SpatialPlanningIntent":
-    """Fallback: fill deterministic fields only when LLM didn't output them.
-
-    Only fills when:
-      1. LLM didn't output dlbm (zt.dlbm is empty), AND
-      2. code_mappings has a 1:1 mapping for this land_use name
-
-    Multi-candidate cases (e.g. '居住用地' -> ['0701','0702','0703']) are
-    NOT filled here — LLM should have chosen from candidates in format_*.
-    """
-    from app.modules.schema import GHYTBM_TO_GHYTMC
-    valid_codes = set(GHYTBM_TO_GHYTMC.keys()) if GHYTBM_TO_GHYTMC else set()
-
-    # ── Zone targets: fill dlbm only if LLM didn't output ──
-    filled_codes = 0
-    for zt in intent.zone_targets:
-        if not zt.dlbm and zt.land_use:
-            code = code_mappings.get(zt.land_use, "")
-            if code and code in valid_codes:
-                zt.dlbm = code
-                filled_codes += 1
-        if not zt.vne_code and zt.dlbm:
-            try:
-                from app.modules.schema.encodings.classification import lookup_vne
-                vne = lookup_vne(zt.dlbm)
-                if vne:
-                    zt.vne_code = vne
-            except Exception:
-                pass
-
-    if filled_codes:
-        logger.info("[PARSE:inject] Filled %d codes (fallback, LLM left blank)", filled_codes)
-    return intent
-
-
-async def format_projects_node(state: ParseAgentState) -> dict:
-    """Phase B: Format draft into structured Pydantic — NO thinking, NO tools.
-
-    thinking=OFF, json_schema=ON, tools=OFF
-    Pure formatting task — guaranteed compatible.
-    """
-    from pydantic import BaseModel as _BM
-
-    class ProjectExtractionResult(_BM):
-        operations: List[SpatialOperation] = []
-
-    if not state.draft_operations:
-        logger.warning("[PARSE:format_projects] No draft — skipping")
-        return {"raw_operations": []}
-
-    # Build mapping tables for format prompt
-    code_table = "\n".join(f"  {name} -> GHYTBM={code}" for name, code in state.code_mappings_projects.items())
-    place_table = "\n".join(
-        f"  {name} -> village={info.get('village_name', '')}, parcels={str(info.get('parcel_ids', []))[:80]}"
-        for name, info in state.place_mappings_projects.items()
+    intent = SpatialPlanningIntent(
+        village_name=village_name,
+        planning_period=planning_period,
+        zone_targets=zone_targets,
+        facilities=facilities,
+        development_axes=axes,
+        road_targets=roads,
+        raw_text=planning_text[:2000],
     )
 
-    format_llm = _get_llm(enable_thinking=False)
-    schema_block = _schema_constraints_block()
-    messages = [
-        SystemMessage(content=(
-            "You are a JSON formatter. Convert the following project summary into SpatialOperation objects.\n"
-            "STRICTLY use the code/place mappings provided — do NOT invent codes.\n"
-            "Each operation must have: action, project_name, land_use_code (from mapping),\n"
-            "area_sqm, location_desc, source_text.\n\n"
-            f"{schema_block}"
-        )),
-        HumanMessage(content=(
-            f"[Code Mapping Table — MUST USE]\n{code_table or '(none)'}\n\n"
-            f"[Place Mapping Table — MUST USE]\n{place_table or '(none)'}\n\n"
-            f"[Project Draft]\n{state.draft_operations}"
-        )),
-    ]
+    logger.info(
+        "[PARSE] Extracted: %d zones, %d facilities, %d axes, %d roads",
+        len(zone_targets), len(facilities), len(axes), len(roads),
+    )
 
-    result = await _format_structured(format_llm, ProjectExtractionResult, messages)
-    if result is not None:
-        # result.operations are already List[SpatialOperation] — store typed, not dicts
-        ops = list(result.operations)
-        logger.info("[PARSE:format_projects] %d operations", len(ops))
-
-        # Phase 5 (P2): post-format auto-correction (no LLM)
-        ops = _auto_correct_code(ops, dict(state.code_mappings_projects))
-        ops = _auto_fill_spatial_anchor(ops, dict(state.place_mappings_projects))
-
-        return {"raw_operations": ops}
-    return {"raw_operations": []}
-# ── Node 2d: explore_targets (Phase A - Think + Tools) ────────────────
+    return ParseResult(intent=intent)
 
 
-async def explore_targets_node(state: ParseAgentState) -> dict:
-    """Phase A: Think + Explore -> tools -> forced summary -> draft."""
-    # Inject YAML planning targets into prompt (Phase 3 paradigm alignment)
-    try:
-        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
-        loader = get_rule_loader()
-        targets_block = loader.format_targets_for_prompt()
-        categories_block = loader.format_categories_for_prompt()
-        zone_mapping_block = loader.format_zone_mapping_for_prompt()
-        yaml_context = f"\n{targets_block}\n{categories_block}\n{zone_mapping_block}"
-    except Exception:
-        yaml_context = ""
+async def parse_async(
+    planning_text: str,
+    village_name: str = "",
+    planning_period: str = "2022-2035年",
+) -> ParseResult:
+    """Async wrapper for parse."""
+    import asyncio
 
-    # v4.8.1: Inject ContextBlock spatial context into explore prompt
-    spatial_ctx = ""
-    if state.context_blocks:
-        try:
-            from app.modules.prompts.parse_prompts import format_spatial_context_for_prompt
-            spatial_ctx = format_spatial_context_for_prompt(state.context_blocks, detail_level="standard")
-            if spatial_ctx:
-                spatial_ctx = f"\n## Spatial Context (current state cognition)\n{spatial_ctx}\n"
-        except Exception:
-            pass
-
-    return await _explore_with_tools(
-        state,
-        node_name="explore_targets",
-        section_types=("target", "indicator_table", "spatial_layout"),
-        explore_prompt=(
-            "You are a village plan target analyst.\n"
-            f"{spatial_ctx}"
-            "Step 1: Use lookup_code to get GHYTBM codes for ALL land_use names.\n"
-            "Step 2: Use query_village_kg to identify SPECIFIC candidate parcels (BSM level):\n"
-            "  - query_village_kg('get_village_parcels') for all parcels with BSM, DLBM, area, zone\n"
-            "  - query_village_kg('get_parcel_detail', bsm='...') for individual parcel attributes\n"
-            "  - query_village_kg('get_parcel_neighbors', bsm='...') for adjacent parcels\n"
-            "  - query_village_kg('count_by_zone_type') for land distribution by zone\n"
-            "  - query_village_kg('count_by_vne') for VNE classification summary\n"
-            "  - query_village_kg('get_village_anchors') for natural village coordinates\n"
-            "  - query_village_kg('get_designated_zones') for constraint/designated zones\n"
-            "  - query_village_kg('get_facility_locations') for existing facility positions\n"
-            "  - query_village_kg('get_road_network') for road connectivity\n"
-            "IMPORTANT: After querying parcels, identify SPECIFIC BSM values (e.g. P001, P003)\n"
-            "in your draft. The format phase will use these BSMs for precise spatial anchoring.\n"
-            "Example: '选择刘村北侧 P001(宅基地0.15ha) 转为商业用地，P003(宅基地0.12ha) 作为备选'\n"
-            "Step 3: Use resolve_place for ANY location names mentioned in the text.\n"
-            "Step 4: Extract additional spatial details:\n"
-            "  - Facilities: direction ('north'/'south'/'east'/'west'/'center'),\n"
-            "    e.g. '在村北新建卫生室' → direction='north'\n"
-            "  - Development axes: axis_type ('primary'/'secondary'), label,\n"
-            "    e.g. '打造南北向发展轴' → axis_type='primary', direction='north-south', label='南北发展轴'\n"
-            "  - Roads: road_level, width_m, connects,\n"
-            "    e.g. '规划12m宽主干道连接村北和村南' → road_level='主干道', width_m=12, connects=['村北','村南']\n"
-            "  - Facility scale: '新建400㎡展销中心' → area_sqm=400\n"
-            "Call ALL relevant tools, then STOP when done."
-            f"{yaml_context}"
-        ),
-        summary_prompt=(
-            "You are a village plan target summarizer.\n"
-            "Based on the tool results above, write a COMPREHENSIVE target summary.\n"
-            "Include EVERY zone_target (land_use + GHYTBM code + area_ratio),\n"
-            "EVERY facility (type/status/location/direction), EVERY development axis\n"
-            "(direction/axis_type/label), and EVERY road (level/width/connects).\n"
-            "Use codes from tool results. Do NOT guess. Write at least 1500 characters."
-        ),
-        draft_key="draft_targets",
-        code_key="code_mappings_targets",
-        place_key="place_mappings_targets",
-        trace_key="llm_trace_targets",
-        initial_code_mappings=dict(state.code_mappings_targets),
-        initial_place_mappings=dict(state.place_mappings_targets),
+    return await asyncio.to_thread(
+        parse, planning_text, village_name, planning_period
     )
 
 
-# ── Node 2d2: format_targets (Phase B — json_schema) ──────────────────
-
-
-async def format_targets_node(state: ParseAgentState) -> dict:
-    """Phase B: Format targets draft into SpatialPlanningIntent — NO thinking."""
-    if not state.draft_targets:
-        logger.warning("[PARSE:format_targets] No draft — skipping")
-        return {"raw_targets": SpatialPlanningIntent()}
-
-    code_table = "\n".join(f"  {name} -> GHYTBM={code}" for name, code in state.code_mappings_targets.items())
-    # Build candidate list: for multi-candidate cases, show all options
-    candidate_lines = []
-    for name, code in state.code_mappings_targets.items():
-        candidate_lines.append(f"  {name} -> GHYTBM={code}")
-    candidate_block = "\n".join(candidate_lines) if candidate_lines else "(none)"
-
-    # Load YAML-driven structural constraints (Phase 3 gap fix)
-    try:
-        from app.modules.schema.encodings.dicts.rule_loader import get_rule_loader
-        loader = get_rule_loader()
-        mandatory_block = loader.format_mandatory_indicators_for_prompt()
-        valid_lu_block = loader.format_valid_land_uses_for_prompt()
-        vne_block = loader.format_vne_mapping_for_prompt()
-    except Exception:
-        mandatory_block = valid_lu_block = vne_block = ""
-
-    schema_block = _schema_constraints_block()
-    format_llm = _get_llm(enable_thinking=False)
-    messages = [
-        SystemMessage(content=(
-            "You are a JSON formatter. Convert the following target summary into SpatialPlanningIntent.\n"
-            "STRICTLY use the code mapping table for dlbm fields — do NOT invent codes.\n"
-            "zone_targets.area_ratio values must sum to ~1.0.\n\n"
-            "Output ALL sections:\n"
-            "  - zone_targets: land use targets with area_ratio, dlbm, vne_code, density, spatial_hint\n"
-            "  - facilities: facility targets with type, status, direction, location_hint\n"
-            "  - development_axes: axis targets with direction, axis_type, label, connects\n"
-            "  - road_targets: road targets with road_level, width_m, connects\n\n"
-            "dlbm rules:\n"
-            "  - Use the code from the Code Mapping Table below\n"
-            "  - If a land_use has multiple candidates (e.g. '居住用地' -> '0701,0702,0703'),\n"
-            "    choose the most appropriate one based on the context\n"
-            "  - If lookup_code returned a single match, use that code directly\n"
-            "  - NEVER invent codes not in the mapping table\n\n"
-            "Fill spatial_hint (e.g. '村北'), natural_language_description, "
-            "and candidate_bsms (e.g. ['P001','P003'], based on KG parcel queries) "
-            "for each target.\n\n"
-            f"{schema_block}\n"
-            f"{mandatory_block}\n"
-            f"{valid_lu_block}\n"
-            f"{vne_block}"
-        )),
-        HumanMessage(content=(
-            f"[Code Mapping Table — MUST USE]\n{code_table or '(none)'}\n\n"
-            f"[Target Draft]\n{state.draft_targets}"
-        )),
-    ]
-
-    result = await _format_structured(format_llm, SpatialPlanningIntent, messages)
-    if result is not None:
-        result.village_name = state.village_name
-
-        # Post-format: deterministic field injection (fallback for LLM gaps)
-        result = _inject_deterministic_fields(
-            result,
-            dict(state.code_mappings_targets),
-        )
-
-        # Post-format: deterministic spatial anchoring (no LLM)
-        result.facilities = _auto_fill_facility_anchor(
-            result.facilities,
-            dict(state.place_mappings_targets),
-        )
-        result.development_axes = _auto_fill_axis_anchor(
-            result.development_axes,
-            dict(state.place_mappings_targets),
-        )
-        result.road_targets = _auto_fill_road_anchor(
-            result.road_targets,
-            dict(state.place_mappings_targets),
-        )
-
-        # Post-format: geometric spatial grounding via spatial_ops.grounding
-        if _grounding_bundle is not None:
-            if result.zone_targets:
-                _ground_zone_targets(
-                    result.zone_targets,
-                    dict(state.place_mappings_targets),
-                    _grounding_constraint_index,
-                    _grounding_bundle,
-                )
-            if result.facilities:
-                _ground_facility_targets(
-                    result.facilities,
-                    dict(state.place_mappings_targets),
-                    _grounding_bundle,
-                )
-            if result.development_axes or result.road_targets:
-                _ground_axis_road_targets(
-                    result.development_axes,
-                    result.road_targets,
-                    dict(state.place_mappings_targets),
-                    _grounding_bundle,
-                )
-
-        logger.info("[PARSE:format_targets] %d zones, %d facilities, %d axes, %d roads",
-                     len(result.zone_targets), len(result.facilities),
-                     len(result.development_axes), len(result.road_targets))
-        # Store typed SpatialPlanningIntent, not model_dump()
-        return {"raw_targets": result}
-    return {"raw_targets": SpatialPlanningIntent()}
-
-
-# ── Typed table merge helper (Phase 4) ──────────────────────────────────
-
-
-def _merge_typed_tables_into_intent(
-    intent: SpatialPlanningIntent,
-    typed_tables: Dict[str, Any],
-) -> SpatialPlanningIntent:
-    """Merge typed table extraction results into SpatialPlanningIntent.
-
-    Tables extracted with schema inference (PlanningIndicatorTable, List[ZoneTarget],
-    List[FacilityTarget]) are merged into the LLM-derived intent, filling gaps
-    that the LLM may have missed.
-
-    Priority: LLM-derived values are preserved if present; table values fill gaps.
-    """
-    from app.agent.gis.parse.state import (
-        PlanningIndicatorTable,
-        ZoneTarget,
-        FacilityTarget,
-    )
-
-    for key, value in typed_tables.items():
-        if value is None:
-            continue
-
-        # PlanningIndicatorTable → fill intent.indicator_table
-        if isinstance(value, PlanningIndicatorTable):
-            if intent.indicator_table is None:
-                intent.indicator_table = value
-            else:
-                # Merge: add indicators not already present (by code)
-                existing_codes = {ind.code for ind in intent.indicator_table.indicators}
-                for ind in value.indicators:
-                    if ind.code and ind.code not in existing_codes:
-                        intent.indicator_table.indicators.append(ind)
-
-        # List[ZoneTarget] → supplement intent.zone_targets
-        elif isinstance(value, list) and value and isinstance(value[0], ZoneTarget):
-            existing_lu = {zt.land_use for zt in intent.zone_targets if zt.land_use}
-            for zt in value:
-                if zt.land_use and zt.land_use not in existing_lu:
-                    intent.zone_targets.append(zt)
-                    existing_lu.add(zt.land_use)
-
-        # List[FacilityTarget] → supplement intent.facilities
-        elif isinstance(value, list) and value and isinstance(value[0], FacilityTarget):
-            existing_types = {f.type for f in intent.facilities if f.type}
-            for ft in value:
-                if ft.type and ft.type not in existing_types:
-                    intent.facilities.append(ft)
-                    existing_types.add(ft.type)
-
-    return intent
-
-
-# ── Node 3: validate_and_merge ────────────────────────────────────────
-
-
-async def validate_and_merge_node(state: ParseAgentState) -> dict:
-    """Validate extraction results and merge into final output."""
-    from pydantic import BaseModel as _BM
-
-    from app.modules.prompts.parse_prompts import (
-        VALIDATE_AND_MERGE_PROMPT,
-        format_spatial_context_for_prompt,
-    )
-
-    new_round = state.parse_round + 1
-
-    # Check if all extractions are empty
-    # typed: SpatialPlanningIntent is always truthy, check content instead
-    has_any_data = (
-        len(state.raw_operations) > 0
-        or len(state.raw_constraints) > 0
-        or bool(state.raw_targets.zone_targets)
-        or bool(state.raw_targets.facilities)
-        or bool(state.raw_targets.development_axes)
-    )
-
-    if not has_any_data:
-        logger.warning("[PARSE:validate] All extractions empty — fallback to context blocks")
-        constraints_from_ctx: List[SpatialConstraint] = []
-        for block in state.context_blocks:
-            zones = block.data.get("zones", [])
-            for z in zones:
-                constraints_from_ctx.append(SpatialConstraint(
-                    type="spatial_constraint",
-                    priority="mandatory",
-                    source_text=f"{z.get('type', '')}: {z.get('rule', '')}",
-                    spatial_rule=SpatialRule(
-                        operation="contained_by",
-                        subject="construction",
-                        object=z.get("type", ""),
-                    ),
-                ))
-        return {
-            "operation_sequence": [],
-            "constraint_set": constraints_from_ctx,
-            "planning_intent": SpatialPlanningIntent(village_name=state.village_name),
-            "validation_errors": ["All LLM extractions failed"],
-            "is_valid": False,
-            "parse_round": new_round,
-        }
-
-    class MergedResult(_BM):
-        operation_sequence: List[SpatialOperation] = []
-        constraint_set: List[SpatialConstraint] = []
-        planning_intent: SpatialPlanningIntent = SpatialPlanningIntent()
-        validation_errors: List[str] = []
-        is_valid: bool = False
-
-    # ── Deterministic validations (4 checks — no LLM) ──
-    det_errors: List[str] = []
-
-    # 1. Area ratio sum check
-    zone_targets = state.raw_targets.zone_targets
-    if zone_targets:
-        total = sum(zt.area_ratio for zt in zone_targets)
-        if abs(total - 1.0) > 0.05 and total > 0:
-            det_errors.append(f"Area ratios sum to {total:.1%} (expected ~100%)")
-
-    # 2. Encoding validity
-    try:
-        from app.modules.schema import GHYTBM_TO_GHYTMC
-        valid_ghytbms = set(GHYTBM_TO_GHYTMC.keys())
-        for op in state.raw_operations:
-            code = op.land_use_code or ""
-            if code and code not in valid_ghytbms:
-                det_errors.append(f"Invalid GHYTBM code: {code}")
-    except ImportError:
-        pass
-
-    # 3. Low-confidence spatial anchors
-    for op in state.raw_operations:
-        anchor = op.spatial_anchor
-        if anchor is not None and anchor.confidence < 0.3:
-            det_errors.append(f"Low anchor confidence for {op.project_name or '?'}")
-
-    # 4. Required source_text field
-    for i, op in enumerate(state.raw_operations):
-        if not op.source_text:
-            det_errors.append(f"Operation #{i + 1} missing source_text")
-    for i, c in enumerate(state.raw_constraints):
-        if not c.source_text:
-            det_errors.append(f"Constraint #{i + 1} missing source_text")
-
-    # ── LLM validation (thinking OFF — no reasoning needed) ──
-    format_llm = _get_llm(enable_thinking=False)
-    spatial_ctx_text = format_spatial_context_for_prompt(state.context_blocks, detail_level="standard")
-
-    # No more [:3000] truncation — format phase already produced compact JSON
-    operations_json = json.dumps(
-        [o.model_dump() for o in state.raw_operations], ensure_ascii=False, default=str
-    )
-    constraints_json = json.dumps(
-        [c.model_dump() for c in state.raw_constraints], ensure_ascii=False, default=str
-    )
-    intent_json = json.dumps(
-        state.raw_targets.model_dump(), ensure_ascii=False, default=str
-    )
-
-    prompt = VALIDATE_AND_MERGE_PROMPT.format(
-        spatial_context=spatial_ctx_text,
-        operation_count=len(state.raw_operations),
-        operations_json=operations_json,
-        constraint_count=len(state.raw_constraints),
-        constraints_json=constraints_json,
-        intent_json=intent_json,
-    )
-
-    messages = [
-        SystemMessage(content="Validate and merge village plan extraction results. Output JSON."),
-        HumanMessage(content=prompt),
-    ]
-
-    result = await _format_structured(format_llm, MergedResult, messages)
-    if result is not None:
-        all_errors = det_errors + list(result.validation_errors)
-
-        # Phase 4: Merge typed table extractions into planning_intent
-        merged_intent = result.planning_intent
-        typed_tables = (state.raw_tables or {}).get("typed", {})
-        if typed_tables:
-            merged_intent = _merge_typed_tables_into_intent(merged_intent, typed_tables)
-
-        # Re-ground any newly-merged targets (tables may have added targets
-        # after the initial grounding in format_targets_node)
-        if _grounding_bundle is not None:
-            if merged_intent.zone_targets:
-                _ground_zone_targets(
-                    merged_intent.zone_targets,
-                    dict(state.place_mappings_targets),
-                    _grounding_constraint_index,
-                    _grounding_bundle,
-                )
-            if merged_intent.facilities:
-                _ground_facility_targets(
-                    merged_intent.facilities,
-                    dict(state.place_mappings_targets),
-                    _grounding_bundle,
-                )
-            if merged_intent.development_axes or merged_intent.road_targets:
-                _ground_axis_road_targets(
-                    merged_intent.development_axes,
-                    merged_intent.road_targets,
-                    dict(state.place_mappings_targets),
-                    _grounding_bundle,
-                )
-
-        logger.info(
-            "[PARSE:validate] Merged: %d ops, %d constraints, valid=%s, errors=%d",
-            len(result.operation_sequence), len(result.constraint_set),
-            result.is_valid, len(all_errors),
-        )
-        return {
-            "operation_sequence": list(result.operation_sequence),
-            "constraint_set": list(result.constraint_set),
-            "planning_intent": merged_intent,
-            "validation_errors": all_errors,
-            "is_valid": result.is_valid and len(det_errors) == 0,
-            "parse_round": new_round,
-        }
-
-    # Fallback
-    logger.warning("[PARSE:validate] Merge returned None — using raw results")
-    return {
-        "operation_sequence": state.raw_operations,
-        "constraint_set": state.raw_constraints,
-        "planning_intent": state.raw_targets,
-        "validation_errors": det_errors + ["Merge validation failed"],
-        "is_valid": False,
-        "parse_round": new_round,
-    }
-
-
-# ── Routing: should_retry ─────────────────────────────────────────────
-
-
-def should_retry(state: ParseAgentState) -> str:
-    """Determine if PARSE should retry validation or end."""
-    if state.is_valid:
-        return "end"
-    if state.parse_round >= MAX_PARSE_ROUNDS:
-        return "end"
-    if not state.validation_errors:
-        return "end"
-    if (
-        not state.raw_operations
-        and not state.raw_constraints
-        and not state.raw_targets.zone_targets
-        and not state.raw_targets.facilities
-    ):
-        return "end"
-    logger.info("[PARSE:retry] Round %d — retrying", state.parse_round)
-    return "retry"
-
-
-# ── Graph builder ──────────────────────────────────────────────────────
-
-
-def build_parse_agent_graph():
-    """Build the PARSE Agent StateGraph (Think-Then-Format pattern).
-
-    Returns a compiled LangGraph graph that takes ParseAgentState as input
-    and produces operation_sequence + constraint_set + planning_intent.
-    """
-    builder = StateGraph(ParseAgentState)
-
-    # Add nodes
-    builder.add_node("classify_sections", classify_sections_node)
-    builder.add_node("explore_projects", explore_projects_node)
-    builder.add_node("format_projects", format_projects_node)
-    builder.add_node("explore_targets", explore_targets_node)
-    builder.add_node("format_targets", format_targets_node)
-    builder.add_node("extract_regulations", extract_regulations_node)
-    builder.add_node("extract_tables", extract_tables_node)
-    builder.add_node("validate_and_merge", validate_and_merge_node)
-
-    # Entry point
-    builder.add_edge(START, "classify_sections")
-
-    # Fan-out from classify_sections
-    builder.add_conditional_edges("classify_sections", route_by_section)
-
-    # Explore -> Format chains (Think-Then-Format)
-    builder.add_edge("explore_projects", "format_projects")
-    builder.add_edge("explore_targets", "format_targets")
-
-    # All converge to validate_and_merge
-    builder.add_edge("format_projects", "validate_and_merge")
-    builder.add_edge("format_targets", "validate_and_merge")
-    builder.add_edge("extract_regulations", "validate_and_merge")
-    builder.add_edge("extract_tables", "validate_and_merge")
-
-    # Retry loop or end
-    builder.add_conditional_edges(
-        "validate_and_merge",
-        should_retry,
-        {"retry": "classify_sections", "end": END},
-    )
-
-    graph = builder.compile()
-    logger.info("[PARSE Agent] Graph compiled (Think-Then-Format v8)")
-    return graph
-
-
-__all__ = ["build_parse_agent_graph", "query_village_kg", "lookup_code", "resolve_place"]
+__all__ = ["parse", "parse_async", "ParseResult"]

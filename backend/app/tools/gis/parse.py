@@ -565,24 +565,18 @@ async def parse_planning_text(
         except Exception as gz_err:
             logger.warning("[parse_planning_text] Gazetteer init skipped: %s", gz_err)
 
-        from app.agent.gis.parse.agent import build_parse_agent_graph, set_context_blocks
-        from app.agent.gis.parse.state import ParseAgentState, SpatialPlanningIntent
+        from app.agent.gis.parse import parse_async, ParseResult
+        from app.agent.gis.parse.state import SpatialPlanningIntent
 
-        set_context_blocks(context_blocks)
-        graph = build_parse_agent_graph()
-
-        input_state = ParseAgentState(
+        result: ParseResult = await parse_async(
             planning_text=planning_text,
             village_name=village_name,
-            context_blocks=context_blocks,
         )
 
-        result = await graph.ainvoke(input_state.model_dump())
-
-        operation_sequence = result.get("operation_sequence", [])
-        constraint_set = result.get("constraint_set", [])
-        planning_intent = result.get("planning_intent", SpatialPlanningIntent())
-        validation_errors = result.get("validation_errors", [])
+        intent = result.intent
+        operation_sequence = result.operation_sequence
+        constraint_set = result.constraint_set
+        validation_errors = result.validation_errors
 
         logger.info(
             "[parse_planning_text] Parsed: %d operations, %d constraints, %d errors",
@@ -596,7 +590,7 @@ async def parse_planning_text(
             data={
                 "operation_sequence": operation_sequence,
                 "constraint_set": constraint_set,
-                "planning_intent": planning_intent,
+                "planning_intent": intent,
                 "validation_errors": validation_errors,
                 "spatial_context_summary": {
                     "parcel_count": spatial_context.parcel_count,

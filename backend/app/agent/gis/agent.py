@@ -21,18 +21,13 @@ _cached_layout = None
 
 
 def create_parse_agent_graph():
-    """PARSE Agent — spatially-aware semi-structured ReAct subgraph.
+    """PARSE Agent - unified planning text parser.
 
-    Uses StateGraph with:
-      - classify_sections -> route_by_section (Send fan-out)
-      - extract_regulations/tables/projects/targets (parallel)
-      - validate_and_merge (converge + retry loop)
-
-    Returns:
-        CompiledStateGraph with ParseAgentState schema.
+    Returns the parse function for direct invocation (not a LangGraph).
+    Kept for backward compatibility with external callers.
     """
-    from app.agent.gis.parse.agent import build_parse_agent_graph
-    return build_parse_agent_graph()
+    from app.agent.gis.parse import parse_async
+    return parse_async
 
 
 def create_gis_agent_graph():
