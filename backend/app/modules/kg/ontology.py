@@ -55,8 +55,9 @@ GEO = Namespace("http://www.opengis.net/ont/geosparql#")
 
 
 class ThreeLineSubtypes:
-    """三线 subtype constants — used by THREE_LINE entities.
+    """三线 subtype constants — bundle-key values for the four 三线 ControlLine subtypes.
 
+    These match keys in ``control_line_mapping.THREE_LINE_BUNDLE_TO_PYDANTIC``.
     Three-lines are法定约束底数 (statutory constraint base data), not derived:
       ecological_redline:    生态保护红线 (state-mandated)
       farmland_redline:      永久基本农田 (subset of 耕地保护红线, highest priority)
@@ -122,7 +123,7 @@ class EntityIdPolicy:
 
 
 class EntityTypes:
-    """18 active entity type URIs for the planning ontology (v4.8).
+    """20 active entity type URIs for the planning ontology (v6.0).
 
     v4.6: removed Constraint, PlanningIndicator, ControlRule, LandUseCategory,
     PlanIntent, Axis (non-spatial). Added RoadTarget (L3), PlannedZone,
@@ -130,7 +131,11 @@ class EntityTypes:
     v4.7: ThreeZone/ThreeLine removed from all() - migrated to ConstraintIndex.
           The type constants remain for backward compat (3rd-party scripts).
     v4.8: LayerGroup added - virtual entity aggregating layer-group membership
-          for layer-card-level queries (not a spatial entity, carries no BSM)."""
+          for layer-card-level queries (not a spatial entity, carries no BSM).
+    v6.0: ThreeLine NOT added as separate entity - the four 三线 subtypes are
+          ControlLine subclasses (EcologicalRedline, FarmlandProtection,
+          UrbanDevBoundary, VillageDevBoundary). Added FunctionalZone for
+          vocabulary-driven custom functional zones (planning_intent overlay)."""
     # L1: Static entities (现状)
     Parcel = PLN.Parcel
     Zone = PLN.Zone
@@ -141,10 +146,9 @@ class EntityTypes:
     AdministrativeVillage = PLN.AdministrativeVillage
     ResidentialCluster = PLN.ResidentialCluster
     PlaceRef = PLN.PlaceRef
-    ControlLine = PLN.ControlLine      # 控制线（灾害/洪涝等）
+    ControlLine = PLN.ControlLine      # 控制线 (三线 + 灾害/洪涝/历史保护 等子类)
     GisLayerSet = PLN.GisLayerSet      # v4.8: virtual gis-layer aggregator
     RasterDataset = PLN.RasterDataset  # v4.audit: DEM/DOM raster entity
-    ThreeLine = PLN.ThreeLine          # v6.0: 三线 (生态红线/永久基本农田/城镇开发边界/村庄建设边界)
     # L3: Intent virtual entities (意图虚拟实体)
     ZoneTarget = PLN.ZoneTarget
     FacilityTarget = PLN.FacilityTarget
@@ -160,11 +164,10 @@ class EntityTypes:
 
     @classmethod
     def all(cls) -> list:
-        """Active entity types (20, including v6.0 ThreeLine and FunctionalZone)."""
+        """Active entity types (19)."""
         return [
             cls.Parcel, cls.Zone, cls.Village, cls.Facility, cls.Road, cls.WaterBody,
             cls.AdministrativeVillage, cls.ResidentialCluster, cls.ControlLine, cls.GisLayerSet,
-            cls.ThreeLine,
             cls.ZoneTarget, cls.FacilityTarget, cls.AxisTarget, cls.RoadTarget,
             cls.PlannedParcel, cls.PlannedZone, cls.PlannedFacility,
             cls.PlannedRoad, cls.PlannedAxis, cls.FunctionalZone,
