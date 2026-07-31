@@ -1,0 +1,14 @@
+name: jintian_industry
+description: >
+  金田村产业功能分区 vocabulary (placeholder architecture).
+  具体类别待金田村分析阶段 LLM 决策后填充.
+  现阶段只放主导产业区作为最小可工作样本.
+categories:
+  - code: IND_LEAD
+    name_zh: 主导产业区
+    name_en: leading_industry_zone
+    color: "#CC5500"
+    typing_rules:
+      - kind: dlbm_in
+        value: ["2124", "2125"]
+incompatibilities: []
