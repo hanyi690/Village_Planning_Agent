@@ -12,8 +12,8 @@ from shapely.geometry import box, shape
 
 from app.modules.data.ingest import ingest_current_landuse
 from app.modules.data.encoding_detector import detect_encoding
-from app.modules.kg.builder.layer1_three_lines import build_three_line_entities
-from app.modules.kg.ontology import ThreeLineSubtypes
+from app.modules.kg.builder.layer1_control_lines import build_control_line_entities
+from app.modules.kg.ontology import EntityTypes
 from app.modules.schema.provenance import ProvenanceSource
 from app.tools.gis._generation.custom_zone_generator import (
     CustomZoningGenerator,
@@ -74,13 +74,16 @@ def test_jintian_derives_zone_types_for_all_parcels():
     assert any(p.startswith("practical:appendix5") or p.startswith("derived:") for p in provenances)
 
 
-def test_jintian_three_line_builder_records_missing_sources():
-    three_lines = {
-        ThreeLineSubtypes.ECOLOGICAL_REDLINE: [{"bsm": f"E{i}", "geometry": "stub"} for i in range(5)],
-        ThreeLineSubtypes.FARMLAND_REDLINE: [{"bsm": f"F{i}", "geometry": "stub"} for i in range(88)],
+def test_jintian_control_line_builder_records_missing_three_lines():
+    bundle = {
+        "ecological_redline": [{"bsm": f"E{i}", "geometry": "stub"} for i in range(5)],
+        "farmland_redline": [{"bsm": f"F{i}", "geometry": "stub"} for i in range(88)],
     }
-    entities, audit = build_three_line_entities(three_lines)
+    entities, audit = build_control_line_entities(bundle)
     assert len(entities) == 93
+    assert all(e["entity_type"] == EntityTypes.ControlLine for e in entities)
+    subtypes = {e["subtype"] for e in entities}
+    assert subtypes == {"EcologicalRedline", "FarmlandProtection"}
     missing = audit.missing_layers()
     sources = {e.source for e in missing}
     assert "missing:gd_urban_dev_boundary" in sources
