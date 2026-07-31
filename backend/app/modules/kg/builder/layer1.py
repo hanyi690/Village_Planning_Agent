@@ -260,9 +260,9 @@ def _add_parcels(self, parcels) -> None:
         if dlbm_system:
             self.g.add((pu, PLN.dlbm_system, Literal(dlbm_system)))
 
-        # current_zone_type — derived from DLBM via lookup (factual categorization)
+        # zone_type — derived from DLBM via lookup (factual categorization)
         zt = resolve_zone_type_for_dlbm(dlbm)
-        self.g.add((pu, PLN.current_zone_type, Literal(zt)))
+        self.g.add((pu, PLN.zone_type, Literal(zt)))
 
         # planning_zone / primary_zone — from Data layer ingest
         pz = p.planning_zone or ""

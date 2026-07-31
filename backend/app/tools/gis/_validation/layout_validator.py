@@ -361,7 +361,7 @@ class LayoutValidator:
                     continue
 
                 # Fallback: DLBM-based check
-                current_zone = props.get("current_zone_type", "")
+                current_zone = props.get("zone_type", "")
                 if current_zone in ("生态绿地", "农业用地"):
                     dlbm = props.get("DLBM", "")
                     if dlbm in ("0110", "0120", "0130", "1340", "1350"):

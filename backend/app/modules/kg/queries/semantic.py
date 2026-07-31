@@ -68,33 +68,8 @@ def _lookup_entity_name(kg, uri_or_str) -> str:
 
 
 # ── Write-on-read annotation helpers ──
-
-_ENTITY_TYPE_CN = {
-    "Parcel": "地块",
-    "Road": "道路",
-    "ResidentialCluster": "居民点",
-    "AdministrativeVillage": "行政村",
-    "Village": "村庄",
-    "Facility": "设施",
-    "WaterBody": "水体",
-    "Building": "建筑物",
-    "ThreeZone": "三区",
-    "ThreeLine": "三线管控区",
-    "ControlLine": "控制线",
-    "Zone": "分区",
-    "Geofence": "地理围栏",
-    "ConstructionBoundary": "建设边界",
-    "ProtectionZone": "保护范围",
-    "ZoneTarget": "分区目标",
-    "FacilityTarget": "设施目标",
-    "AxisTarget": "轴带目标",
-    "RoadTarget": "道路目标",
-    "PlannedParcel": "规划地块",
-    "PlannedZone": "规划分区",
-    "PlannedFacility": "规划设施",
-    "PlannedRoad": "规划道路",
-    "PlannedAxis": "规划轴带",
-}
+# v3.0: _ENTITY_TYPE_CN moved to app.utils.code_lookup.ENTITY_TYPE_CN
+from app.utils.code_lookup import ENTITY_TYPE_CN as _ENTITY_TYPE_CN
 
 
 def _generate_entity_description(entity_type: str, attrs: Dict[str, str]) -> str:
@@ -105,7 +80,7 @@ def _generate_entity_description(entity_type: str, attrs: Dict[str, str]) -> str
         bsm = attrs.get("bsm", "")
         dlbm = attrs.get("dlbm", "")
         area = attrs.get("area_ha", "")
-        zt = attrs.get("current_zone_type", "")
+        zt = attrs.get("zone_type", "")
         pz = attrs.get("planning_zone", "")
         if bsm:
             parts.append(bsm)
@@ -188,30 +163,8 @@ def _ensure_entity_annotation(kg, uri_str: str, entity_type: str,
     ))
 
 
-_RELATION_PRED_CN = {
-    "sfTouches": "相邻",
-    "touches": "相邻",
-    "nearby": "邻近",
-    "connected_via_road": "道路连接",
-    "sfWithin": "位于",
-    "within_zone": "位于",
-    "located_in": "位于",
-    "sfIntersects": "相交",
-    "intersects": "相交",
-    "sfContains": "包含",
-    "contains": "包含",
-    "designated_as": "被划定为",
-    "derived_from": "源自",
-    "serves": "服务于",
-    "connects": "连接",
-    "delineates": "界定了",
-    "has_road": "有道路",
-    "relates_to_anchor": "关联锚点",
-    "has_zone": "有分区",
-    "has_facility": "有设施",
-    "has_axis": "有发展轴带",
-    "has_planning_scope": "有规划范围",
-}
+# v3.0: _RELATION_PRED_CN moved to app.utils.code_lookup.RELATION_PRED_CN
+from app.utils.code_lookup import RELATION_PRED_CN as _RELATION_PRED_CN
 
 
 def _generate_relation_description(pred_name: str, obj_uri_str: str, kg=None) -> str:
@@ -756,24 +709,16 @@ _LLM_DIRECTION_CN = {
     "northeast": "东北侧", "southeast": "东南侧", "northwest": "西北侧", "southwest": "西南侧",
 }
 
-_DLBM_TO_LANDUSE = {
-    "0101": "水田", "0102": "水浇地", "0103": "旱地",
-    "0201": "果园", "0204": "其他园地",
-    "0301": "乔木林地", "0302": "竹林地", "0307": "其他林地",
-    "0401": "天然牧草地", "0403": "人工牧草地",
-    "0701": "城镇住宅用地", "0702": "农村宅基地",
-    "0809": "公用设施用地", "0810": "公园与绿地",
-    "1001": "工业用地", "1003": "采矿用地",
-    "1101": "物流仓储用地",
-    "1202": "公路用地", "1206": "管道运输用地",
-    "2001": "空闲地",
-    "2101": "商业服务业用地", "2102": "商务金融用地",
-    "2121": "商业用地", "2124": "餐饮用地",
-}
-
-
+# v3.0: _DLBM_TO_LANDUSE hardcoded dict removed.
+# Use app.utils.code_lookup.lookup_code_name("dlbm", dlbm) instead.
 def _dlbm_to_name(dlbm: str) -> str:
-    return _DLBM_TO_LANDUSE.get(dlbm, f"地类{dlbm}")
+    """Return Chinese name for a DLBM code, or fallback "地类<code>" if not found.
+
+    v3.0: replaced hardcoded 20-entry dict with unified lookup helper.
+    The helper covers all ~80 gbt21010 codes via DLBM_TO_DLMC.
+    """
+    from app.utils.code_lookup import lookup_code_name
+    return lookup_code_name("dlbm", dlbm) or f"地类{dlbm}"
 
 
 def _sparql_rows(kg, template_name: str, **bindings) -> List[Dict[str, str]]:
@@ -1182,7 +1127,7 @@ def get_entity_semantics(kg, entity_label: str = "", entity_type: str = "", bsm:
                 result["encoding_bridges"] = {
                     "dlbm": attrs.get("dlbm", ""),
                     "dlmc": attrs.get("dlmc", ""),
-                    "current_zone_type": attrs.get("current_zone_type", ""),
+                    "zone_type": attrs.get("zone_type", ""),
                     "planning_zone": attrs.get("planning_zone", ""),
                     "primary_zone": attrs.get("primary_zone", ""),
                 }

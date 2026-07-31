@@ -66,7 +66,7 @@ class KGBuilder:
 
     def _build_village_entity(self, bundle):
         from .layer1_core import (
-            add_village_entity, add_village_meta,
+            add_village_entity, add_village_meta, add_bundle_metadata,
             add_facilities_from_annotations, add_annotations,
             add_control_lines_from_typed, add_planning_elements_from_typed,
             add_residential_clusters_from_typed, add_terrain,
@@ -77,6 +77,7 @@ class KGBuilder:
         )
         add_village_entity(self.kg, bundle.village_name)
         add_village_meta(self.kg, bundle)
+        add_bundle_metadata(self.kg, bundle)
         add_facilities_from_annotations(self.kg, bundle.points.get("annotations_current"))
         add_annotations(self.kg, bundle.points.get("annotations_current"))
         add_control_lines_from_typed(self.kg, bundle.points, bundle.polygons)

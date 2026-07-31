@@ -33,7 +33,7 @@ class OverlapResult:
     overlap_area_sqm: float = 0.0
     overlap_pct: float = 0.0
     parcel_total_area_sqm: float = 0.0
-    current_zone_type: str = ""
+    zone_type: str = ""
 
 
 def _build_rtree(parcels):
@@ -135,7 +135,7 @@ class SpatialIndex:
                         overlap_area_sqm=round(overlap_area, 2),
                         overlap_pct=round(overlap_area / attrs.get("area_sqm", 1) * 100, 1) if attrs.get("area_sqm", 0) > 0 else 0.0,
                         parcel_total_area_sqm=attrs.get("area_sqm", 0),
-                        current_zone_type=attrs.get("zone_type", ""),
+                        zone_type=attrs.get("zone_type", ""),
                     ))
             results.sort(key=lambda r: -r.overlap_area_sqm)
             return results

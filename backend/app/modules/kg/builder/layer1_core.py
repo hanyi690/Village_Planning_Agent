@@ -55,6 +55,44 @@ def add_village_meta(kg, bundle) -> None:
             pass
 
 
+def add_bundle_metadata(kg, bundle) -> None:
+    """Write Bundle metadata to KG semantic layer.
+
+    Called after _build_village_entity to persist Bundle provenance info.
+    This enables cross-session Bundle→KG闭环.
+    """
+    from ..memory import EntityAnnotation
+
+    meta = getattr(bundle, 'metadata', None)
+    if meta is None:
+        return
+
+    village_name = getattr(meta, 'village_name', '')
+    center_lon = getattr(meta, 'center_lon', None)
+    center_lat = getattr(meta, 'center_lat', None)
+    total_area = getattr(meta, 'total_area_ha', 0)
+    parcel_count = getattr(bundle, 'parcel_count', 0)
+
+    desc_parts = []
+    if village_name:
+        desc_parts.append(f"村庄{village_name}")
+    if center_lon and center_lat:
+        desc_parts.append(f"中心坐标({center_lon:.4f},{center_lat:.4f})")
+    if total_area:
+        desc_parts.append(f"总面积{total_area:.2f}公顷")
+    if parcel_count:
+        desc_parts.append(f"共{parcel_count}个地块")
+
+    if desc_parts:
+        annotation = EntityAnnotation(
+            entity_uri="pln:village",
+            entity_type="AdministrativeVillage",
+            description="，".join(desc_parts),
+        )
+        kg.memory.add_entity_annotation(annotation)
+        logger.info("[layer1_core] Added bundle metadata to KG semantic layer")
+
+
 def _parcel_centroid(geom: dict):
     try:
         gt = geom.get("type", "")

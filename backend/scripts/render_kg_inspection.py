@@ -371,7 +371,7 @@ def _query_parcels(kg: PlanningKG, bundle: VillageBundle) -> List[dict]:
       OPTIONAL {{ ?p pln:seq ?seq . }}
       OPTIONAL {{ ?p pln:dlbm ?dlbm . }}
       OPTIONAL {{ ?p pln:area_sqm ?area . }}
-      OPTIONAL {{ ?p pln:current_zone_type ?zone . }}
+      OPTIONAL {{ ?p pln:zone_type ?zone . }}
       OPTIONAL {{ ?p pln:has_semantic_label ?semLabel . }}
       OPTIONAL {{ ?p pln:taxonomic_parent ?taxParent . }}
       OPTIONAL {{ ?p pln:legal_constraint ?legalConstraint . }}
@@ -459,7 +459,7 @@ def _query_zones(kg: PlanningKG, bundle: VillageBundle) -> List[dict]:
         bsm = ""
         for p, o in kg.g.predicate_objects(s):
             ps = _short_uri(p)
-            if ps == "pln:current_zone_type":
+            if ps == "pln:zone_type":
                 props["zone_type"] = str(o)
             elif ps == "pln:has_semantic_label":
                 props["label"] = str(o)

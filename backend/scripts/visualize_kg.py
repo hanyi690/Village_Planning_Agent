@@ -228,7 +228,7 @@ def render_sample_subgraph(kg):
         "PREFIX pln: <http://village-planning.org/ontology#> "
         "SELECT ?p ?bsm ?dlbm ?area ?zt WHERE { "
         "?p a pln:Parcel ; pln:bsm ?bsm ; pln:dlbm ?dlbm ; "
-        "pln:area_ha ?area ; pln:current_zone_type ?zt . } LIMIT 5")
+        "pln:area_ha ?area ; pln:zone_type ?zt . } LIMIT 5")
     for i, p in enumerate(parcels):
         pid = f"parcel_{i}"
         bsm = p["bsm"][:12] + "..."

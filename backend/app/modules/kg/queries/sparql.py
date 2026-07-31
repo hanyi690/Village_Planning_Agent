@@ -50,7 +50,7 @@ QUERY_TEMPLATES = {
         SELECT (COUNT(?p) as ?count) (SUM(?area) as ?total_area)
         WHERE {
             ?p a pln:Parcel ;
-               pln:current_zone_type ?zt ;
+               pln:zone_type ?zt ;
                pln:area_ha ?area .
             FILTER(?zt IN ("农业用地", "生态绿地"))
         }
@@ -73,7 +73,7 @@ QUERY_TEMPLATES = {
         WHERE {
             ?parcel a pln:Parcel ;
                     pln:bsm ?bsm ;
-                    pln:current_zone_type ?zt ;
+                    pln:zone_type ?zt ;
                     pln:area_ha ?area .
             FILTER(?zt = ?zone_type_val)
         }
@@ -86,7 +86,7 @@ QUERY_TEMPLATES = {
                     pln:bsm ?bsm ;
                     pln:dlbm ?dlbm ;
                     pln:area_ha ?area_ha ;
-                    pln:current_zone_type ?zone_type .
+                    pln:zone_type ?zone_type .
             OPTIONAL { ?parcel pln:dlmc ?dlmc . }
             OPTIONAL { ?parcel pln:lon ?lon . }
             OPTIONAL { ?parcel pln:lat ?lat . }
@@ -103,7 +103,7 @@ QUERY_TEMPLATES = {
                     pln:bsm ?bsm_val ;
                     pln:dlbm ?dlbm ;
                     pln:area_ha ?area_ha ;
-                    pln:current_zone_type ?zone_type .
+                    pln:zone_type ?zone_type .
             OPTIONAL { ?parcel pln:dlmc ?dlmc . }
             OPTIONAL { ?parcel pln:lon ?lon . }
             OPTIONAL { ?parcel pln:lat ?lat . }
@@ -119,7 +119,7 @@ QUERY_TEMPLATES = {
                     geo:sfTouches ?neighbor .
             ?neighbor pln:bsm ?neighbor_bsm ;
                      pln:dlbm ?neighbor_dlbm ;
-                     pln:current_zone_type ?neighbor_zone_type ;
+                     pln:zone_type ?neighbor_zone_type ;
                      pln:area_ha ?neighbor_area .
         }
     """,
@@ -130,7 +130,7 @@ QUERY_TEMPLATES = {
             ?parcel a pln:Parcel ;
                     pln:bsm ?bsm ;
                     pln:dlbm ?dlbm ;
-                    pln:current_zone_type ?zone_type ;
+                    pln:zone_type ?zone_type ;
                     pln:area_ha ?area_ha ;
                     pln:lon ?lon ;
                     pln:lat ?lat .
@@ -166,7 +166,7 @@ QUERY_TEMPLATES = {
         SELECT ?zone_type (COUNT(?p) as ?count) (SUM(?area) as ?total_area)
         WHERE {
             ?p a pln:Parcel ;
-               pln:current_zone_type ?zone_type ;
+               pln:zone_type ?zone_type ;
                pln:area_ha ?area .
         }
         GROUP BY ?zone_type
@@ -562,7 +562,7 @@ def get_parcels_by_bsm_list(kg, bsms: List[str]) -> List[Dict[str, Any]]:
         "PREFIX pln: <http://village-planning.org/ontology#> "
         f"SELECT ?bsm ?dlbm ?area_ha ?zone_type ?vne_code ?planning_zone WHERE {{ "
         f"?p a pln:Parcel ; pln:bsm ?bsm ; pln:dlbm ?dlbm ; "
-        f"pln:area_ha ?area_ha ; pln:current_zone_type ?zone_type . "
+        f"pln:area_ha ?area_ha ; pln:zone_type ?zone_type . "
         f"OPTIONAL {{ ?p pln:vne_code ?vne_code . }} "
         f"OPTIONAL {{ ?p pln:planning_zone ?planning_zone . }} "
         f"FILTER(?bsm IN ({bsm_filter})) }}"

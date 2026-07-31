@@ -158,7 +158,7 @@ SELECT ?bsm ?seq ?dlbm ?area ?zone ?vne WHERE {{
   OPTIONAL {{ ?p pln:seq ?seq . }}
   OPTIONAL {{ ?p pln:dlbm ?dlbm . }}
   OPTIONAL {{ ?p pln:area_sqm ?area . }}
-  OPTIONAL {{ ?p pln:current_zone_type ?zone . }}
+  OPTIONAL {{ ?p pln:zone_type ?zone . }}
   OPTIONAL {{ ?p pln:vne_code ?vne . }}
 }}
 """
