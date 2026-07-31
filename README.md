@@ -1,156 +1,250 @@
 # 村庄规划智能体 (Village Planning Agent)
 
-基于 LangGraph 的智能村庄规划系统，采用 Router Agent 架构 + 三层递进式规划 + RAG 知识检索增强。
+基于 LangGraph 的智能村庄规划系统：**一条闭环管线** = 文本规划（L1/L2/L3 28 维度）+ 空间布局（PARSE + EXECUTE），全程 KG 语义桥接 + RAG 知识检索。
 
 ## 核心特性
 
-- **Router Agent 架构**: 单一 StateGraph + 中央路由节点，消灭双写问题
-- **三层递进规划**: 现状分析(L1) → 规划思路(L2) → 详细规划(L3)
-- **28维度智能执行**: 12+4+12 维度，Map-Reduce 并行 + Wave 波次调度
-- **专业 Prompt 模板**: 28个维度各有定制化专业模板
-- **RAG 知识检索**: 关键维度预加载知识，法规条文和技术指标智能注入
-- **SSE 流式推送**: Token 级增量文本实时显示，批量处理优化
-- **状态持久化**: LangGraph Checkpoint 作为 SSOT，支持断点恢复
-- **人工审查**: 步进模式支持层级暂停审查
-- **维度修复**: 支持驳回后级联修复相关维度（影响树计算）
+- **5 节点主图**（目标 6 节点 +explore）：`conversation` → `analyze_dimension` / `execute_tools` / `gis_agent` → `layer_completion_check`
+- **三层递进规划**：现状分析(L1, 12 维) → 规划思路(L2, 4 维) → 详细规划(L3, 12 维)
+- **五层模块架构**：`Schema ← Data ← SpatialOps ← KG ← Agent`（单向依赖）
+- **RAG 知识检索**：Small-to-Big + 层级感知，法规条文与技术指标智能注入
+- **SSE 单通道**：所有数据通过 SSE 推送，Checkpoint 为唯一数据源（SSOT）
+- **级联修复**：驳回后自动计算影响树，按依赖链波次重分析
+- **GIS 空间布局**：PARSE ReAct（意图解析）+ LAYOUT 混合管线（骨架 + ReAct + Evaluator Gate）
 
 ## 系统架构
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                          Village_Planning_Agent 架构                             │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  ┌─────────────┐     ┌──────────────────┐     ┌──────────────────────────────┐ │
-│  │  Frontend   │────▶│   FastAPI API    │────▶│    Router Agent (LangGraph)  │ │
-│  │  (React +   │     │   (backend/)     │     │      (src/orchestration/)    │ │
-│  │   Zustand)  │     │                  │     │                              │ │
-│  └─────────────┘     └──────────────────┘     └──────────────────────────────┘ │
-│         │                    │                          │                       │
-│         │ SSE Stream         │                          ▼                       │
-│         │                    │                ┌──────────────────────────────┐ │
-│         │                    ▼                │  conversation_node (中央路由) │ │
-│         │          ┌─────────────────┐        │          ↓                   │ │
-│         │          │   Database      │        │  intent_router (意图识别)    │ │
-│         │          │ (SQLite + WAL)  │        │          ↓                   │ │
-│         │          └─────────────────┘        │  Send API (并行分发)         │ │
-│         │                                   └──────────────────────────────┘ │
-│         │                                              │                       │
-│         │                              ┌───────────────┼───────────────┐       │
-│         │                              ▼               ▼               ▼       │
-│         │                    ┌─────────────┐  ┌─────────────┐  ┌─────────────┐ │
-│         │                    │ Tool System │  │  Dimension  │  │     RAG     │ │
-│         │                    │ (registry)  │  │   Nodes     │  │  (ChromaDB) │ │
-│         │                    └─────────────┘  └─────────────┘  └─────────────┘ │
-│         │                                                                   │
-│         └───────────────────────────────────────────────────────────────────▶ │
-│                              SSE Stream Events                                 │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                     Village Planning Agent                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌────────────┐    ┌───────────────┐    ┌────────────────────────┐  │
+│  │ Frontend   │───▶│  FastAPI API  │───▶│  LangGraph 主图 (5节点) │  │
+│  │ Next.js 14 │SSE │  /api/sessions│    │  backend/app/agent/    │  │
+│  │ + MapLibre │    │  /* (7端点)   │    │  graph.py              │  │
+│  └────────────┘    └───────────────┘    └───────────┬────────────┘  │
+│       │                                            │               │
+│       │                            ┌────────────────┼───────────┐   │
+│       │                            ▼                ▼           ▼   │
+│       │                      ┌─────────┐  ┌──────────────┐ ┌──────┐ │
+│       │                      │ analyze │  │  gis_agent   │ │ RAG  │ │
+│       │                      │dimension│  │ PARSE+LAYOUT │ │Chroma│ │
+│       │                      └────┬────┘  └──────┬───────┘ └──────┘ │
+│       │                           │              │                  │
+│       │                           ▼              ▼                  │
+│       │                   ┌──────────────────────────────┐          │
+│       │                   │  五层模块 (app/modules/)      │          │
+│       │                   │  schema ← data ← spatial_ops │          │
+│       │                   │         ← kg ← (rag)         │          │
+│       │                   └──────────────────────────────┘          │
+│       │                                                             │
+│       └────────────────── SSE 单通道 ◄─────────────────────────────│
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Router Agent 架构流程
+### 5 节点主图
 
 ```
-[用户输入]
-    │
-    ▼
-conversation_node (LLM: bind_tools)
-    │ intent_router
-    ├─► [闲聊/问答] END
-    ├─► [工具调用] execute_tools_node
-    └─► [推进规划] route_by_phase
-                          │
-                   [Send N 维度]
-                          │
-                          ▼
-                  analyze_dimension
-                          │
-                   emit_sse_events
-                          │
-                          ▼
-                  collect_results
-                          │
-                  check_completion
-                          │
-               ┌──────────┴──────────┐
-               ▼                      ▼
-         advance_phase           END (pause)
+START → conversation ──► analyze_dimension ──► layer_completion_check
+              │                ▲                      │
+              ├─► execute_tools─┘                      │
+              ├─► gis_agent ──────────────────────────┘
+              └─► END (闲聊/问答)
 ```
+
+详见 [docs/architecture/agent-graph.md](docs/architecture/agent-graph.md)
 
 ### 三层规划流程
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  Layer 1 (现状分析) ──▶ Layer 2 (规划思路) ──▶ Layer 3 (详细规划)               │
-│                                                                                 │
-│  ┌───────────────┐    ┌───────────────┐    ┌───────────────────────────────────┐│
-│  │ 12 维度并行   │    │ 4 维度波次执行│    │ 12 维度波次执行                   ││
-│  │ (Map-Reduce)  │    │ (Wave 1-4)    │    │ (Wave 1-2)                        ││
-│  └───────────────┘    └───────────────┘    └───────────────────────────────────┘│
-│                                                                                 │
-│  维度依赖链: Layer1 ──▶ Layer2 ──▶ Layer3 (跨层依赖)                           │
-│              同层维度 ──▶ 同层维度 (同层依赖，Wave 控制)                        │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
+Layer 1 (现状分析)  ──▶  Layer 2 (规划思路)  ──▶  Layer 3 (详细规划)
+12 维度并行              4 维度波次执行          12 维度波次执行
+(Map-Reduce)             (Wave 1-4)             (Wave 1-2)
 ```
 
-## 核心数据流
+## 快速开始
 
-### 状态管理架构
+### 环境要求
 
-**单一真实源 (SSOT)**: LangGraph Checkpoint 是状态的唯一权威来源
+- Python 3.13+
+- Node.js 18+（推荐 20+）
+- LLM API Key（DashScope / DeepSeek / OpenAI / 智谱AI）
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                          状态同步架构                                    │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│   LangGraph Checkpoint (SSOT)                                          │
-│          │                                                              │
-│          ▼                                                              │
-│   ┌─────────────────────────────────────────────────────────────────┐  │
-│   │  UnifiedPlanningState                                            │  │
-│   │  - phase: "layer1" | "layer2" | "layer3" | "completed"          │  │
-│   │  - reports: {layer1: {}, layer2: {}, layer3: {}}                │  │
-│   │  - completed_dimensions: {layer1: [], layer2: [], layer3: []}   │  │
-│   │  - pause_after_step: boolean                                     │  │
-│   │  - previous_layer: number                                        │  │
-│   └─────────────────────────────────────────────────────────────────┘  │
-│          │                                                              │
-│          │ SSE Events + REST Status                                    │
-│          ▼                                                              │
-│   ┌─────────────────────────────────────────────────────────────────┐  │
-│   │  Frontend Zustand Store                                          │  │
-│   │  - currentLayer: derived from phase                              │  │
-│   │  - completedLayers: derived from reports                         │  │
-│   │  - isPaused: derived from pause_after_step                       │  │
-│   │  - pendingReviewLayer: derived from previous_layer               │  │
-│   └─────────────────────────────────────────────────────────────────┘  │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+### 安装
+
+```bash
+# 后端
+pip install -r requirements.txt
+
+# 前端
+cd frontend && npm install
 ```
 
-### SSE 流式事件
+### 配置
 
-| 事件类型 | 说明 | 文档参考 |
-|---------|------|----------|
-| `connected` | SSE 连接建立 | [前端状态](docs/architecture/frontend-state-dataflow.md) |
-| `layer_started` | 层级开始执行 | [后端API](docs/architecture/backend-api-dataflow.md) |
-| `dimension_start` | 维度开始分析 | [Agent核心](docs/architecture/agent-core-implementation.md) |
-| `dimension_delta` | 维度内容增量 (Token级) | [前端状态](docs/architecture/frontend-state-dataflow.md) |
-| `dimension_complete` | 维度分析完成 | [维度数据流](docs/architecture/layer-dimension-dataflow.md) |
-| `layer_completed` | 层级完成(前端检测触发) | [后端API](docs/architecture/backend-api-dataflow.md) |
-| `tool_call` | 工具开始执行 | [工具系统](docs/architecture/tool-system-implementation.md) |
-| `tool_progress` | 工具执行进度 | [工具系统](docs/architecture/tool-system-implementation.md) |
-| `tool_result` | 工具执行结果 | [工具系统](docs/architecture/tool-system-implementation.md) |
-| `checkpoint_saved` | 检查点已保存 | [Agent核心](docs/architecture/agent-core-implementation.md) |
-| `pause` | 步进暂停 | [Agent核心](docs/architecture/agent-core-implementation.md) |
-| `resumed` | 恢复执行 | [Agent核心](docs/architecture/agent-core-implementation.md) |
+复制 `.env.example` 为 `.env` 并填写：
+
+```env
+# LLM 配置（默认 qwen-plus 系列，阿里云 DashScope）
+LLM_PROVIDER=openai                       # openai | deepseek | zhipuai
+OPENAI_API_KEY=your_dashscope_api_key
+OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen-plus                       # qwen-plus | qwen3.5-plus | deepseek-chat | gpt-4o
+MAX_TOKENS=65536
+
+# Embedding（推荐阿里云 DashScope，内存占用低）
+EMBEDDING_PROVIDER=aliyun
+DASHSCOPE_API_KEY=your_dashscope_api_key
+ALIYUN_EMBEDDING_MODEL=text-embedding-v4
+
+# 多模态（可选）
+MULTIMODAL_ENABLED=true
+MULTIMODAL_MODEL=qwen3.5-plus
+```
+
+> 支持 DeepSeek / OpenAI / 智谱AI 切换，均为 OpenAI 兼容接口。
+
+### 启动
+
+```bash
+# 后端（端口 8000）
+python backend/main.py
+
+# 前端（端口 3000）
+cd frontend && npm run dev
+```
+
+访问 http://localhost:3000
+
+### Docker 部署
+
+```bash
+cp .env.example .env  # 填写 API Key
+docker-compose up -d  # 后端 8003 / 前端 3003
+```
+
+### 构建知识库
+
+```bash
+# 知识库状态
+python -m app.modules.rag.cli status
+
+# 重新导入文档
+python -m app.modules.rag.cli reload <file_path>
+
+# 删除文档
+python -m app.modules.rag.cli delete <source_name>
+
+# 验证一致性
+python -m app.modules.rag.cli verify <source_name>
+```
+
+支持的文档格式：`.md`, `.txt`, `.pdf`, `.pptx`, `.ppt`, `.docx`, `.doc`
+
+**源文档目录**：`data/policies/`
+
+## 项目结构
+
+```
+Village_Planning_Agent/
+├── backend/
+│   ├── main.py                         # 应用入口（lifespan + 中间件）
+│   └── app/
+│       ├── main.py                     # FastAPI app 定义
+│       ├── api/                        # API 路由层
+│       │   ├── routes.py               # 统一路由器
+│       │   ├── session_routes.py       # 7 核心端点
+│       │   ├── gis_test_routes.py      # GIS 测试（开发）
+│       │   └── schemas.py              # 请求/响应模型
+│       ├── agent/                      # LangGraph Agent 核心
+│       │   ├── graph.py                # create_unified_planning_graph (5节点)
+│       │   ├── routing.py              # after_conversation + after_analysis
+│       │   ├── state.py                # AgentState, PlanningPhase
+│       │   ├── conversation/node.py    # 中央路由节点
+│       │   ├── tools/execute_node.py   # 工具执行节点
+│       │   ├── analysis/               # 维度分析（RAG + KG + DataPipeline）
+│       │   ├── completion/node.py      # 层级完成检测 + interrupt
+│       │   └── gis/                    # GIS Agent (PARSE + LAYOUT)
+│       ├── modules/                    # 五层业务模块
+│       │   ├── schema/                 # ① 类型契约层（零依赖）
+│       │   ├── data/                   # ② 数据获取层
+│       │   ├── spatial_ops/            # ③ 空间分析层
+│       │   ├── kg/                     # ④ 知识图谱层
+│       │   ├── rag/                    # RAG 知识检索
+│       │   ├── planning_text/          # 规划文本生成
+│       │   └── prompts/                # Prompt 模板
+│       ├── services/                   # 服务层
+│       │   ├── runtime.py              # PlanningRuntimeService 单例
+│       │   ├── sse/                    # SSE 管理器
+│       │   ├── checkpoint.py           # 检查点服务
+│       │   └── report_store.py         # 报告存储
+│       ├── tools/                      # 工具系统
+│       ├── database/                   # 数据持久层（SQLModel）
+│       ├── core/                       # 核心基础设施（llm, settings）
+│       └── config/                     # 配置层（YAML 驱动）
+├── frontend/
+│   └── src/
+│       ├── app/                        # Next.js App Router
+│       └── features/
+│           ├── planning/               # 规划功能模块
+│           │   ├── store/planningStore.ts   # Zustand 核心状态
+│           │   ├── hooks/              # SSE 连接 + 流式渲染
+│           │   ├── api/                # API 客户端
+│           │   └── components/         # React 组件
+│           └── gis-test/               # GIS 测试模块
+├── data/
+│   ├── policies/                       # RAG 源文档
+│   └── gis/                            # GIS 数据
+├── docs/                               # 文档（见 docs/README.md）
+├── docker-compose.yml
+├── .env.example
+└── requirements.txt
+```
+
+## API 端点
+
+### 核心 API（`/api/sessions/*`）
+
+| # | 方法 | 路径 | 说明 |
+|---|------|------|------|
+| 1 | POST | `/api/sessions` | 创建会话（支持文件上传） |
+| 2 | GET | `/api/sessions/{id}/stream` | SSE 事件流（单通道） |
+| 3 | GET | `/api/sessions/{id}/sync` | 断线重连（`?from_seq=N`） |
+| 4 | POST | `/api/sessions/{id}/feedback` | 反馈（approve / reject 触发级联修订） |
+| 5 | GET | `/api/sessions/{id}/checkpoints` | 检查点列表 |
+| 6 | POST | `/api/sessions/{id}/resume/{checkpoint_id}` | 从检查点恢复 |
+| 7 | GET | `/api/sessions/{id}/reports/{dim_key}` | 维度报告全文 |
+
+> 旧版 `/api/planning/*` 已**废弃并移除**。
+
+详见 [docs/architecture/backend-api.md](docs/architecture/backend-api.md)
+
+## SSE 流式事件
+
+| 事件类型 | 说明 |
+|---------|------|
+| `connected` | SSE 连接建立 |
+| `layer_started` | 层级开始执行 |
+| `dimension_start` | 维度开始分析 |
+| `dimension_delta` | 维度内容增量（Token 级） |
+| `dimension_complete` | 维度分析完成 |
+| `layer_completed` | 层级完成 |
+| `tool_call` | 工具开始执行 |
+| `tool_progress` | 工具执行进度 |
+| `tool_result` | 工具执行结果 |
+| `gis_layer_update` | GIS 图层更新 |
+| `checkpoint_saved` | 检查点已保存 |
+| `pause` | 步进暂停 |
+| `resumed` | 恢复执行 |
+| `cascade_impact` | 级联影响（修复触发） |
+| `cascade_complete` | 级联修复完成 |
+| `heartbeat` | 心跳（15 秒无事件） |
 
 ## 三层规划维度
 
-### Layer 1: 现状分析 (12维度并行)
+### Layer 1: 现状分析（12 维度并行）
 
 | 维度键 | 维度名称 | 工具绑定 |
 |--------|----------|----------|
@@ -167,16 +261,16 @@ conversation_node (LLM: bind_tools)
 | `architecture` | 建筑分析 | - |
 | `historical_culture` | 历史文化与乡愁保护分析 | - |
 
-### Layer 2: 规划思路 (4维度波次执行)
+### Layer 2: 规划思路（4 维度波次执行）
 
 | Wave | 维度键 | 维度名称 | 依赖 |
 |------|--------|----------|------|
-| 1 | `resource_endowment` | 资源禀赋分析 | 6个 Layer 1 维度 |
+| 1 | `resource_endowment` | 资源禀赋分析 | 6 个 Layer 1 维度 |
 | 2 | `planning_positioning` | 规划定位分析 | `resource_endowment` |
 | 3 | `development_goals` | 发展目标分析 | `resource_endowment`, `planning_positioning` |
-| 4 | `planning_strategies` | 规划策略分析 | 前3个 Layer 2 维度 |
+| 4 | `planning_strategies` | 规划策略分析 | 前 3 个 Layer 2 维度 |
 
-### Layer 3: 详细规划 (12维度波次执行)
+### Layer 3: 详细规划（12 维度波次执行）
 
 | 维度键 | 维度名称 | RAG |
 |--------|----------|-----|
@@ -195,230 +289,19 @@ conversation_node (LLM: bind_tools)
 
 > RAG 标记的维度启用知识检索增强，涉及法规条文和技术标准
 
-## 快速开始
+## 文档
 
-### 环境要求
-
-- Python 3.13+
-- Node.js 18+ (推荐 20+)
-- LLM API Key (DeepSeek 或 智谱AI 或 OpenAI)
-
-### 安装
-
-```bash
-# 后端
-pip install -r requirements.txt
-
-# 前端
-cd frontend && npm install
-```
-
-### 配置
-
-```env
-# .env
-# LLM 配置 (DeepSeek)
-OPENAI_API_KEY=your_deepseek_api_key
-OPENAI_API_BASE=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
-MAX_TOKENS=65536
-
-# Embedding 模型
-EMBEDDING_MODEL_NAME=BAAI/bge-small-zh-v1.5
-HF_ENDPOINT=https://hf-mirror.com  # HuggingFace 镜像（可选）
-```
-
-### 启动
-
-```bash
-# 后端 (端口 8000)
-python backend/main.py
-
-# 前端 (端口 3000)
-cd frontend && npm run dev
-```
-
-访问 http://localhost:3000
-
-### Docker 部署
-
-```bash
-# 一键部署
-./deploy.sh
-
-# 或 Windows
-deploy.bat
-```
-
-### 构建知识库
-
-```bash
-# 首次构建（全量）
-python src/rag/scripts/build_kb_auto.py
-
-# 后续管理（增量）
-python -m src.rag.scripts.kb_cli list           # 列出文档
-python -m src.rag.scripts.kb_cli add <文件路径>  # 添加文档
-python -m src.rag.scripts.kb_cli delete <文件名> # 删除文档
-python -m src.rag.scripts.kb_cli sync           # 同步源目录
-```
-
-支持的文档格式：`.md`, `.txt`, `.pdf`, `.pptx`, `.ppt`, `.docx`, `.doc`
-
-**源文档目录**: `data/policies/`
-
-## 项目结构
-
-```
-Village_Planning_Agent/
-├── backend/                    # FastAPI 后端
-│   ├── main.py                 # 应用入口
-│   ├── api/planning/           # API 路由
-│   │   ├── startup.py          # 启动与清理
-│   │   ├── stream.py           # SSE 流端点
-│   │   ├── chat.py             # 对话 API
-│   │   ├── review.py           # 审查 API
-│   │   └── session.py          # 会话管理
-│   ├── services/               # 服务层
-│   │   ├── sse_manager.py      # SSE 事件管理 (核心)
-│   │   ├── checkpoint_service.py # 检查点服务
-│   │   └── planning_runtime.py # 规划运行时
-│   ├── database/               # 数据模型 (SQLModel)
-│   └── constants/              # 常量定义
-│       └── sse_events.py       # SSE 事件类型
-├── frontend/src/               # React 前端
-│   ├── stores/                 # Zustand 状态管理
-│   │   └── planningStore.ts    # 核心状态定义
-│   ├── hooks/planning/         # 规划相关 Hooks
-│   │   └── useSSEConnection.ts # SSE 连接管理
-│   ├── lib/api/                # API 客户端
-│   ├── types/message/          # 消息类型定义
-│   └── components/             # UI 组件
-├── src/                        # Agent 核心引擎
-│   ├── orchestration/          # 主图编排 (Router Agent)
-│   │   ├── main_graph.py       # StateGraph 构建
-│   │   ├── state.py            # UnifiedPlanningState
-│   │   ├── routing.py          # 路由逻辑 (intent_router, route_by_phase)
-│   │   └── nodes/              # 节点实现
-│   │       ├── dimension_node.py # 维度分析节点
-│   │       └── revision_node.py  # 修订节点
-│   ├── config/                 # 配置
-│   │   └── dimension_metadata.py # 维度元数据 (权威来源)
-│   ├── core/                   # 核心模块
-│   │   ├── config.py           # 全局配置
-│   │   └── llm_factory.py      # LLM 工厂
-│   ├── rag/                    # RAG 知识检索
-│   ├── tools/                  # 工具系统
-│   │   ├── registry.py         # ToolRegistry (核心)
-│   │   └── builtin/            # 内置工具实现
-│   └── utils/                  # 工具函数
-│       └── sse_publisher.py    # SSE 事件发布器
-├── docs/architecture/          # 架构文档 (技术实现)
-│   ├── frontend-state-dataflow.md
-│   ├── backend-api-dataflow.md
-│   ├── agent-core-implementation.md
-│   ├── layer-dimension-dataflow.md
-│   ├── tool-system-implementation.md
-│   └── terminology-and-references.md
-├── knowledge_base/             # 知识库存储 (ChromaDB)
-└── data/                       # 数据文件
-    ├── policies/               # 政策文档 (RAG源)
-    └── output/                 # 规划输出
-```
-
-## API 端点
-
-### 规划 API (`/api/planning/*`)
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/start` | POST | 启动规划任务 |
-| `/status/{id}` | GET | 查询任务状态 |
-| `/stream/{id}` | GET | SSE 流式事件 |
-| `/chat/{id}` | POST | 发送对话消息 |
-| `/review/{id}` | POST | 审查操作 (approve/reject) |
-| `/checkpoint/{id}` | GET | 获取检查点列表 |
-| `/message/{id}` | GET/POST | 消息管理 |
-
-### 数据 API (`/api/data/*`)
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/villages` | GET | 列出所有村庄 |
-| `/villages/{name}/layers/{layer}` | GET | 获取层级内容 |
-
-### 知识库 API (`/api/knowledge/*`)
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/stats` | GET | 知识库统计 |
-| `/documents` | GET/POST | 文档列表/上传 |
-
-## 架构文档
-
-### 技术实现文档
-
-| 文档 | 说明 |
-|------|------|
-| [前端状态管理](docs/architecture/frontend-state-dataflow.md) | Zustand + Immer 架构、SSE 批量处理、Signal-Fetch 模式 |
-| [后端API与数据流](docs/architecture/backend-api-dataflow.md) | API 路由、SSE 管理器、Checkpoint SSOT、数据持久化 |
-| [Agent核心实现](docs/architecture/agent-core-implementation.md) | Router Agent 架构、StateGraph 设计、执行流程 |
-| [维度与层级数据流](docs/architecture/layer-dimension-dataflow.md) | 三层架构、依赖链机制、Wave 计算、影响树 |
-| [工具系统实现](docs/architecture/tool-system-implementation.md) | ToolRegistry 注册、内置工具、Tool-Dimension 绑定 |
-| [术语表与交叉引用](docs/architecture/terminology-and-references.md) | 核心术语定义、文档交叉引用、代码路径索引 |
-
-### 快速导航
+完整的文档体系导航见 [docs/README.md](docs/README.md)。
 
 | 想了解... | 请阅读 |
 |----------|--------|
-| 前端如何管理状态 | [前端状态管理](docs/architecture/frontend-state-dataflow.md) |
-| SSE 如何工作 | [后端API与数据流](docs/architecture/backend-api-dataflow.md) |
-| Agent 执行流程 | [Agent核心实现](docs/architecture/agent-core-implementation.md) |
-| 维度依赖关系 | [维度与层级数据流](docs/architecture/layer-dimension-dataflow.md) |
-| 工具如何注册执行 | [工具系统实现](docs/architecture/tool-system-implementation.md) |
-
-### 其他文档
-
-- **[服务管理](docs/startup-guide.md)** - 服务启动与管理指南
-- **[演示文档](docs/village_planning_presentation.md)** - 村庄规划系统演示（Marp 格式）
-
-## 维度依赖与级联修复
-
-### 依赖链机制
-
-系统通过 Wave 调度处理维度间依赖：
-
-- **Layer 1**: 12 维度并行执行（无内部依赖）
-- **Layer 2**: 4 维度按 Wave 执行（Wave 1→4，逐级依赖）
-- **Layer 3**: 12 维度按 Wave 执行（大部分 Wave 1 并行，`project_bank` Wave 2）
-
-### 级联修复（影响树）
-
-当维度被驳回修复时，系统自动计算影响树：
-
-```
-用户修改: natural_environment
-    │
-    ▼ (Wave 1)
-┌─────────────────────────────────────┐
-│ resource_endowment, ecological,     │
-│ spatial_structure, land_use_planning│
-│ disaster_prevention                 │
-└─────────────────────────────────────┘
-    │
-    ▼ (Wave 2)
-┌─────────────────────────────────────┐
-│ planning_positioning,               │
-│ planning_strategies                 │
-└─────────────────────────────────────┘
-    │
-    ▼ (Wave 3)
-┌─────────────────────────────────────┐
-│ development_goals, project_bank     │
-└─────────────────────────────────────┘
-```
-
-详见 [维度与层级数据流](docs/architecture/layer-dimension-dataflow.md#依赖链机制)
+| 系统设计理念 | [docs/design/00_SYSTEM_DESIGN.md](docs/design/00_SYSTEM_DESIGN.md) |
+| 主图怎么跑 | [docs/architecture/agent-graph.md](docs/architecture/agent-graph.md) |
+| API 端点 | [docs/architecture/backend-api.md](docs/architecture/backend-api.md) |
+| 前端架构 | [docs/architecture/frontend.md](docs/architecture/frontend.md) |
+| RAG 检索 | [docs/architecture/rag-system.md](docs/architecture/rag-system.md) |
+| 闭环管线设计 | [docs/design/04_PLANNING_PIPELINE.md](docs/design/04_PLANNING_PIPELINE.md) |
+| 术语表 | [docs/reference/terminology.md](docs/reference/terminology.md) |
 
 ## 许可证
 
