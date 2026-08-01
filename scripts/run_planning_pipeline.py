@@ -285,6 +285,74 @@ async def _run_gis(session_id: str, reports: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _build_structure_overlay(reports: Dict[str, Any]) -> Dict[str, Any]:
+    """解析 L3 spatial_structure 报告 → structure_overlay.geojson（核/轴/区标注）。
+
+    数据全部来自系统内报告：空间结构模式（一轴两核三区）+ 功能节点表。
+    核 = 节点表名称含"核"的行；轴/区 = 模式文本提取；位置优先 gazetteer 质心，
+    无命中则用村域 bbox 分布点（明确标注 kind=label，非真实几何）。
+    """
+    import json as _json
+    from app.modules.kg.gazetteer import load_gazetteer
+
+    content = ""
+    for key, val in (reports or {}).items():
+        if key == "spatial_structure":
+            content = val.get("content", "") if isinstance(val, dict) else str(val)
+            break
+    if not content:
+        return {"type": "FeatureCollection", "features": []}
+
+    gazetteer = load_gazetteer("jintian")
+    features = []
+
+    # 节点表（节点名称|核心功能|服务范围|主要布局）→ 核
+    import re
+
+    for line in content.splitlines():
+        line = line.strip()
+        if line.startswith("|") and "核" in line and "节点名称" not in line and not re.match(r"^\|[\s:|-]+\|$", line):
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            name = cells[0]
+            if not name or "节点" in name or "合计" in name:
+                continue
+            entry = None
+            for ge in gazetteer.entries:
+                if ge.name and ge.name in name:
+                    entry = ge
+                    break
+            if entry and entry.centroid:
+                features.append({
+                    "type": "Feature",
+                    "properties": {"kind": "center", "label": name, "color": "#B22222"},
+                    "geometry": {"type": "Point", "coordinates": entry["centroid"]},
+                })
+            else:
+                features.append({
+                    "type": "Feature",
+                    "properties": {"kind": "label", "label": name, "color": "#B22222",
+                                   "note": "no-gazetteer-anchor"},
+                    "geometry": None,
+                })
+
+    # 空间结构模式（"一轴两核三区"）→ 轴/区文字标注
+    for line in content.splitlines():
+        line = line.strip()
+        if "规划构建" not in line and "空间结构" not in line:
+            continue
+        m = re.findall(r"[“\"]([^”\"]{4,40})[”\"]", line)
+        for phrase in m:
+            kind = "axis" if "轴" in phrase else "zone"
+            features.append({
+                "type": "Feature",
+                "properties": {"kind": kind, "label": phrase, "color": "#1a5f9e"
+                               if kind == "axis" else "#2E8B57"},
+                "geometry": None,
+            })
+
+    return {"type": "FeatureCollection", "features": features}
+
+
 async def main(session_id: str, skip_render: bool) -> None:
     from app.services.runtime import PlanningRuntimeService
 
@@ -323,6 +391,13 @@ async def main(session_id: str, skip_render: bool) -> None:
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         saved_layers.append(f"{lt}:{len(data['features'])}")
     print(f"[Pipeline] saved layers: {saved_layers}")
+
+    # A5: 结构标注（L3 spatial_structure 报告 → structure_overlay）
+    overlay = _build_structure_overlay(reports)
+    if overlay.get("features"):
+        path = OUT_DIR / "structure_overlay.geojson"
+        path.write_text(json.dumps(overlay, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[Pipeline] structure_overlay: {len(overlay['features'])} annotations -> {path}")
 
     print(f"[Pipeline] validation: {result.get('validation_result', {})}")
     print("=" * 60)
