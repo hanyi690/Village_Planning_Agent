@@ -19,6 +19,9 @@ class VocabularyCategory(BaseModel):
     name_en: Optional[str] = None
     color: str = "#888888"
     typing_rules: List[TypingRule] = Field(default_factory=list)
+    # 保护类功能区（生态保护区/农田保护区等）本身与三线重合，
+    # 不参与 protection_line_conflict 拦截；建设类功能区必须避开三线。
+    is_protection: bool = False
 
 
 class Vocabulary(BaseModel):

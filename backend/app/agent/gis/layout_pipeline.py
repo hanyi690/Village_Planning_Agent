@@ -65,7 +65,14 @@ async def _build_kg_node(state: GISPipelineState) -> dict:
     from app.tools.gis.kg import build_knowledge_graph
 
     try:
-        result = await build_knowledge_graph.ainvoke({})
+        # @tool 包装带 InjectedToolCallId — 直接调 .func（同步）并显式传 state 参数
+        result = build_knowledge_graph.func(
+            reports=state.reports,
+            gis_data=state.gis_data,
+            village_name=state.village_name,
+            session_id=state.session_id,
+            intent=state.intent,
+        )
         if not isinstance(result, dict):
             return {}
 
@@ -251,7 +258,7 @@ async def _detect_conflicts_node(state: GISPipelineState) -> dict:
     from app.tools.gis.conflict import detect_conflicts
 
     try:
-        result = await detect_conflicts.ainvoke({})
+        result = await detect_conflicts.func(summaries={})
         conflict_count = 0
         if isinstance(result, dict):
             report = result.get("report", result)
@@ -269,7 +276,12 @@ async def _export_gdb_node(state: GISPipelineState) -> dict:
     from app.tools.gis.export import export_gdb
 
     try:
-        result = await export_gdb.ainvoke({})
+        result = await export_gdb.func(
+            layout_configs=state.layout_configs,
+            allocated_geojson=state.allocated_geojson,
+            gis_data=state.gis_data,
+            village_name=state.village_name,
+        )
         logger.info("[Pipeline:export] Export complete")
         return {"export_result": result if isinstance(result, dict) else {}}
     except Exception as e:
@@ -282,7 +294,10 @@ async def _render_map_node(state: GISPipelineState) -> dict:
     from app.tools.gis.render import render_map
 
     try:
-        result = await render_map.ainvoke({})
+        result = render_map.func(
+            layout_configs=state.layout_configs,
+            gis_data=state.gis_data,
+        )
         logger.info("[Pipeline:render] Render complete")
         return {"render_result": result if isinstance(result, list) else []}
     except Exception as e:
@@ -329,7 +344,12 @@ async def _execute_node(state: GISPipelineState) -> dict:
         )
 
         execute_graph = build_execute_agent_graph()
-        result = await execute_graph.ainvoke(exec_state.model_dump())
+        # model_dump 会把 gis_bundle/intent(Pydantic BaseModel) 递归转 dict —
+        # dump 后重新放回对象，子图才能用 bundle.lines/polygons、intent.zone_targets 等
+        exec_dict = exec_state.model_dump()
+        exec_dict["gis_bundle"] = state.gis_bundle
+        exec_dict["intent"] = state.intent
+        result = await execute_graph.ainvoke(exec_dict)
 
         logger.info(
             "[Pipeline:execute] done: %d layers, round=%d, passed=%s",

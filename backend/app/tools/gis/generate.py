@@ -135,6 +135,17 @@ def _generate_function_zones(
     boundary = gis_data.get("boundary_geojson")
     protection = _build_protection_zones(gis_data)
 
+    # adapter 产出 properties 键为小写 dlbm，ZoneGenerator 期望大写 DLBM — 归一化
+    norm_features = []
+    for f in (landuse.get("features") or []):
+        props = dict(f.get("properties") or {})
+        if "dlbm" in props and "DLBM" not in props:
+            props["DLBM"] = props["dlbm"]
+        f2 = dict(f)
+        f2["properties"] = props
+        norm_features.append(f2)
+    landuse = {"type": "FeatureCollection", "features": norm_features}
+
     generator = ZoneGenerator()
     geojson = generator.generate(
         zones=list(intent.zone_targets),

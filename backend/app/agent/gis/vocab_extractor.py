@@ -42,6 +42,12 @@ _DLBM_HINTS: Dict[str, List[str]] = {
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
+_PROTECTION_KEYWORDS = ("生态", "保护", "农田", "基本农田", "保育")
+
+
+def _is_protection(name: str) -> bool:
+    return any(kw in name for kw in _PROTECTION_KEYWORDS)
+
 
 def _default_dlbm_for(name: str) -> List[str]:
     for kw, codes in _DLBM_HINTS.items():
@@ -68,6 +74,7 @@ def extract_vocabulary_deterministic(reports: Dict[str, str]) -> Vocabulary:
                     name_zh=name,
                     color=_COLOR_POOL[len(categories) % len(_COLOR_POOL)],
                     typing_rules=[TypingRule(kind="dlbm_in", value=_default_dlbm_for(name))],
+                    is_protection=_is_protection(name),
                 )
             )
     return Vocabulary(name="l3_extracted", categories=categories)
@@ -79,10 +86,11 @@ _VOCAB_PROMPT = """你是村庄规划功能区词汇提取助手。从下列 L3 
 {reports}
 
 只输出 JSON（不要任何其他文字）：
-{{"categories": [{{"name_zh": "生态保护区", "color": "#2d6a4f", "dlbm_hints": ["0301", "0302"], "evidence": "报告原文依据句"}}]}}
+{{"categories": [{{"name_zh": "生态保护区", "color": "#2d6a4f", "dlbm_hints": ["0301", "0302"], "is_protection": true, "evidence": "报告原文依据句"}}]}}
 要求：
 - color 必须是合法的 hex 格式（#RRGGBB），由你自由选择
 - dlbm_hints 是推测的地类编码线索（如耕地 0101-0103、林地 0301/0302/0305/0307、宅基地 2121）
+- is_protection: 生态/保护/农田类功能区为 true（与三线重合），建设/产业类为 false
 - 若没有可提取的功能区，输出 {{"categories": []}}
 """
 
@@ -114,6 +122,7 @@ async def _extract_vocabulary_llm(llm: Any, reports: Dict[str, str]) -> Vocabula
                 name_zh=name,
                 color=color,
                 typing_rules=[TypingRule(kind="dlbm_in", value=hints or _default_dlbm_for(name))],
+                is_protection=bool(item.get("is_protection")) or _is_protection(name),
             )
         )
     return Vocabulary(name="l3_extracted", categories=categories)
@@ -150,7 +159,14 @@ async def extract_vocabulary_from_reports(
         try:
             vocab = await _extract_vocabulary_llm(llm, reports)
             if vocab.categories:
-                return vocab
+                # 合并：LLM 类别（自由色）∪ 表格确定性提取（兜底补全），按名去重
+                det = extract_vocabulary_deterministic(reports)
+                existing = {c.name_zh for c in vocab.categories}
+                for c in det.categories:
+                    if c.name_zh not in existing:
+                        vocab.categories.append(c)
+                if vocab.categories:
+                    return vocab
             logger.info("[VocabExtractor] LLM returned empty categories, falling back to deterministic")
         except Exception as e:
             logger.warning("[VocabExtractor] LLM extraction failed: %s", e)

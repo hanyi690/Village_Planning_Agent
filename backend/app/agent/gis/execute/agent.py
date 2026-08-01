@@ -151,7 +151,11 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
             layers.append(plan_layer)
 
         # P7: 自定义功能区层（L4 FunctionalZone，session 词汇表 + 语义规则选择 + 三线拦截）
-        custom_targets = getattr(state.intent, "custom_zone_targets", None) or []
+        custom_targets = getattr(state.intent, "custom_zone_targets", None)
+        if custom_targets is None and isinstance(state.intent, dict):
+            custom_targets = state.intent.get("custom_zone_targets")
+        custom_targets = custom_targets or []
+        logger.info("[EXECUTE:layout] custom targets=%d (intent=%s)", len(custom_targets), type(state.intent).__name__)
         if custom_targets:
             try:
                 from app.tools.gis._generation.custom_zone_generator import CustomZoningGenerator
@@ -160,7 +164,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                 parcels = [
                     {
                         "bsm": str(f.get("properties", {}).get("BSM", "") or f.get("properties", {}).get("bsm", "")),
-                        "dlbm": str(f.get("properties", {}).get("DLBM", "") or ""),
+                        "dlbm": str(f.get("properties", {}).get("DLBM", "") or f.get("properties", {}).get("dlbm", "")),
                         "geometry": shape(f["geometry"]) if f.get("geometry") else None,
                     }
                     for f in (landuse.get("features") or [])
@@ -175,7 +179,9 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                     ):
                         feats = gis_bundle.polygons.get(bundle_key) or []
                         geoms = [getattr(f, "geometry", None) for f in feats]
-                        three_lines[subtype] = [{"geometry": g} for g in geoms if g]
+                        three_lines[subtype] = [
+                            {"geometry": shape(g)} for g in geoms if g
+                        ]
 
                 intent_dict = (
                     state.intent.model_dump(exclude_none=True)

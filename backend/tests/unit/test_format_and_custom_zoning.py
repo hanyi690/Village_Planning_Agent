@@ -48,11 +48,14 @@ def test_format_project_domain_to_custom_zone_target():
         bound_entities=bound,
         vocabulary_name="sess_fmt_vocab",
     )
-    assert len(intent.custom_zone_targets) == 1
+    # project 域 1 个 + P6.6 zone 域匹配（农田保护区→FZ02）1 个
+    assert len(intent.custom_zone_targets) == 2
     cz = intent.custom_zone_targets[0]
     assert cz.vocabulary_name == "sess_fmt_vocab"
     assert cz.category_code == "FZ01"
     assert cz.target_bsms == ["44142611020200000563"]
+    codes = {c.category_code for c in intent.custom_zone_targets}
+    assert codes == {"FZ01", "FZ02"}
     # zone 域带 area_ratio
     assert any(zt.land_use == "农田保护区" and abs(zt.area_ratio - 0.0335) < 1e-6 for zt in intent.zone_targets)
 

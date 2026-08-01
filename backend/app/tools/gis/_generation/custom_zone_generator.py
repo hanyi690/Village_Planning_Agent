@@ -76,7 +76,9 @@ class CustomZoningGenerator:
             if not selected:
                 continue
             merged = unary_union([p["geometry"] for p in selected])
-            if protection is not None and merged.intersects(protection):
+            # 保护类功能区（生态/农田保护区）本身与三线重合 — 跳过拦截；
+            # 建设类功能区（村庄建设区/产业区）不得侵入生态红线/基本农田
+            if not category.is_protection and protection is not None and merged.intersects(protection):
                 audit.record(
                     f"functional_zone.{target.category_code}",
                     ProvenanceSource.CUSTOM_VOCABULARY,

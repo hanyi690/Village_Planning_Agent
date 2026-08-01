@@ -33,6 +33,7 @@ class GISPipelineInput(BaseModel):
     village_name: str = ""
     planning_text: str = ""           # markdown planning report text (gen path)
     l3_reports: Dict[str, Any] = Field(default_factory=dict)  # L3 report data (plan path)
+    intent: Any = None                # v4: EXPLORE->Binder->format external intent
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
