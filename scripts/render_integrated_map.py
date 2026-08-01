@@ -30,14 +30,37 @@ from shapely import from_geojson
 from shapely.geometry import Point, LineString
 import numpy as np
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "gis", "jintian_boundary")
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "gis", "jintian")
+CURRENT_DIR = os.path.join(DATA_DIR, "current")
+PLANNED_DIR = os.path.join(DATA_DIR, "planned")
 OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "gis", "output")
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "database", "village_planning.db")
-SID = "dc2a2e0e-b129-4e8e-a981-48ab6bec9082"
+SID = ""
 
 
-def load_gdf(filename):
-    path = os.path.join(DATA_DIR, filename)
+def _latest_session_id():
+    """Latest session that has L3 reports (dynamic SID, no hardcoding)."""
+    global SID
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT session_id, MAX(version) FROM dimension_reports "
+            "WHERE layer=3 GROUP BY session_id ORDER BY MAX(version) DESC, MAX(rowid) DESC LIMIT 1"
+        )
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            SID = row[0]
+            return SID
+    except Exception as e:
+        print(f"  [warn] SID lookup failed: {e}")
+    return SID
+
+
+def load_gdf(filename, subdir=None):
+    base = subdir or DATA_DIR
+    path = os.path.join(base, filename)
     if not os.path.exists(path):
         return None
     with open(path, encoding='utf-8') as f:
@@ -163,7 +186,7 @@ def _deduplicate_projects(projects):
 
 def geocode_project_locations(projects, boundary_gdf, gdf_4326):
     """Estimate project coordinates from location descriptions."""
-    from app.services.modules.gis.layout.zone_generator import resolve_zone_type_for_dlbm
+    from app.modules.schema import dlbm_to_planning_zone
 
     # Natural village approximate positions (relative to boundary centroid)
     boundary_ctr = boundary_gdf.to_crs('EPSG:3857').geometry.union_all().centroid
@@ -261,12 +284,16 @@ def main():
 
     # ---- Load all data ----
     print("\n[1/5] Loading GIS layers...")
-    boundary = load_gdf('boundary.geojson')
-    lu_curr = load_gdf('landuse_current.geojson')
-    farmland = load_gdf('farmland_protection.geojson')
-    eco = load_gdf('ecological_protection.geojson')
-    road = load_gdf('road_current.geojson')
-    hazard = load_gdf('geological_hazard_points.geojson')
+    if not SID:
+        _latest_session_id()
+        print(f"  SID = {SID}")
+    boundary = load_gdf('boundary.geojson', CURRENT_DIR)
+    lu_curr = load_gdf('landuse.geojson', CURRENT_DIR)
+    farmland = load_gdf('farmland_protection.geojson', PLANNED_DIR)
+    eco = load_gdf('ecological_protection.geojson', PLANNED_DIR)
+    road = load_gdf('road.geojson', CURRENT_DIR)
+    hazard = load_gdf('geological_hazard_points.geojson', PLANNED_DIR)
+    custom_zones = load_gdf('custom_functional_zone.geojson', OUT_DIR)
 
     # Project to Web Mercator
     boundary_p = boundary.to_crs('EPSG:3857')
@@ -276,9 +303,9 @@ def main():
     road_p = road.to_crs('EPSG:3857') if road is not None else None
     hazard_p = hazard.to_crs('EPSG:3857') if hazard is not None else None
 
-    from app.services.modules.gis.layout.zone_generator import resolve_zone_type_for_dlbm
+    from app.modules.schema import dlbm_to_planning_zone
     lu_curr_p['zone_type'] = lu_curr_p['DLBM'].apply(
-        lambda x: resolve_zone_type_for_dlbm(str(x).strip()))
+        lambda x: dlbm_to_planning_zone(str(x).strip()))
 
     # ---- Extract projects ----
     print("\n[2/5] Extracting project locations from report...")
@@ -359,6 +386,26 @@ def main():
                             va='center', fontweight='bold', color=color,
                             bbox=dict(boxstyle='round,pad=0.3', fc='white',
                                       alpha=0.85, ec=color, lw=1.5))
+
+    # ---- Custom functional zones (P7 L4 FunctionalZone, vocabulary colors) ----
+    custom_legend_items = []
+    if custom_zones is not None and len(custom_zones) > 0:
+        custom_zones_p = custom_zones.to_crs('EPSG:3857')
+        for _, row in custom_zones_p.iterrows():
+            color = str(row.get('color') or '#CCCCCC')
+            name = str(row.get('category_name_zh') or row.get('category_code') or '功能区')
+            geom = row.geometry
+            if geom.is_empty:
+                continue
+            gpd.GeoSeries([geom], crs='EPSG:3857').plot(
+                ax=ax, color=color, alpha=0.45, edgecolor=color, linewidth=1.5)
+            ctr = geom.centroid
+            if not ctr.is_empty:
+                ax.annotate(name, xy=(ctr.x, ctr.y), fontsize=10, ha='center', va='center',
+                            fontweight='bold', color='black',
+                            bbox=dict(boxstyle='round,pad=0.25', fc='white',
+                                      alpha=0.9, ec=color, lw=1.5))
+            custom_legend_items.append((name, color))
 
     # 一核 marker
     if center_pt is not None:
@@ -457,8 +504,8 @@ def main():
             ha='center', fontsize=10, fontweight='bold')
 
     # Title
-    ax.set_title('金田村 建设项目布局规划图\n'
-                 'Spatial Structure: 一核引领 · 一带串联 · 三区协同',
+    ax.set_title('金田村 产业空间布局规划图\n'
+                 'Custom Functional Zones · 一核引领 · 一带串联 · 三区协同',
                  fontsize=18, fontweight='bold', pad=20)
 
     # Legend
@@ -480,6 +527,8 @@ def main():
         plt.Line2D([0], [0], marker='*', color='darkred', markersize=12,
                    linestyle='None', label='一核 (服务中心)'),
     ]
+    for name, color in custom_legend_items:
+        custom_lines.append(mpatches.Patch(color=color, alpha=0.45, label=name))
     for cat, (marker, color, _) in cat_icons.items():
         if any(p.get('category') == cat for p in located_projects):
             custom_lines.append(
