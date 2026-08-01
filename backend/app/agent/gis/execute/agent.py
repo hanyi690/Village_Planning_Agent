@@ -150,6 +150,69 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
         if plan_layer:
             layers.append(plan_layer)
 
+        # P7: 自定义功能区层（L4 FunctionalZone，session 词汇表 + 语义规则选择 + 三线拦截）
+        custom_targets = getattr(state.intent, "custom_zone_targets", None) or []
+        if custom_targets:
+            try:
+                from app.tools.gis._generation.custom_zone_generator import CustomZoningGenerator
+                from shapely.geometry import mapping, shape
+
+                parcels = [
+                    {
+                        "bsm": str(f.get("properties", {}).get("BSM", "") or f.get("properties", {}).get("bsm", "")),
+                        "dlbm": str(f.get("properties", {}).get("DLBM", "") or ""),
+                        "geometry": shape(f["geometry"]) if f.get("geometry") else None,
+                    }
+                    for f in (landuse.get("features") or [])
+                ]
+                parcels = [p for p in parcels if p["bsm"] and p["geometry"] is not None]
+
+                three_lines = {}
+                if gis_bundle is not None:
+                    for bundle_key, subtype in (
+                        ("ecological_redline", "ecological_redline"),
+                        ("farmland_protection", "farmland_redline"),
+                    ):
+                        feats = gis_bundle.polygons.get(bundle_key) or []
+                        geoms = [getattr(f, "geometry", None) for f in feats]
+                        three_lines[subtype] = [{"geometry": g} for g in geoms if g]
+
+                intent_dict = (
+                    state.intent.model_dump(exclude_none=True)
+                    if hasattr(state.intent, "model_dump")
+                    else dict(state.intent or {})
+                )
+                # 顶层 vocabulary_name 从第一个 target 继承（session 注册名）
+                if intent_dict.get("custom_zone_targets") and not intent_dict.get("vocabulary_name"):
+                    intent_dict["vocabulary_name"] = intent_dict["custom_zone_targets"][0].get("vocabulary_name", "")
+                gen = CustomZoningGenerator(parcels, intent_dict, three_lines=three_lines)
+                zones, _audit = gen.generate_with_validation()
+                if zones:
+                    features = []
+                    for z in zones:
+                        geom = mapping(z["pln:geometry"]) if hasattr(z["pln:geometry"], "__geo_interface__") else z["pln:geometry"]
+                        features.append({
+                            "type": "Feature",
+                            "geometry": geom,
+                            "properties": {
+                                "entity_type": z["entity_type"],
+                                "category_code": z["pln:category_code"],
+                                "category_name_zh": z["pln:category_name_zh"],
+                                "color": z["pln:color"],
+                                "target_bsms": z["pln:target_bsms"],
+                                "decided_by": z["pln:decided_by"],
+                                "confidence": z["pln:confidence"],
+                                "vocabulary_name": z["pln:vocabulary_name"],
+                            },
+                        })
+                    layers.append({
+                        "layerType": "custom_functional_zone",
+                        "data": {"type": "FeatureCollection", "features": features},
+                    })
+                    logger.info("[EXECUTE:layout] custom_functional_zone: %d features", len(features))
+            except Exception as e:
+                logger.error("[EXECUTE:layout] custom zoning failed: %s", e, exc_info=True)
+
         logger.info(
             "[EXECUTE:layout] allocated %d parcels, %d layers (mode=%s)",
             summary["allocated_count"], len(layers), summary["mode"],
