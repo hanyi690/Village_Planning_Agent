@@ -625,9 +625,9 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
         "layer_char_counts": {dim_layer: len(llm_response)},
     }
 
-    # P0-1/P0-2: L1/L2 数据流闭环注入（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
+    # P0-1: L1 数据流闭环注入（详见 docs/superpowers/specs/2026-07-02-gis-review-exploration.md）
     # L1 完成后注入 _landuse_metrics（现状用地指标）
-    # L2 完成后注入 intent_targets（规划目标面积），供 L3 detailed.py GIS_TOOL_GUIDE 引用
+    # L2 纯粹化（v4）：L2 只产大致规划定位，不再注入 intent_targets 面积意向；L3 自洽
     if structured_summary_obj:
         try:
             if dim_layer == 1:
@@ -635,11 +635,6 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
                 if _lm:
                     result["_landuse_metrics"] = _lm
                     logger.info(f"[analyze_dimension] {dim_key}: injected _landuse_metrics = {_lm}")
-            elif dim_layer == 2:
-                _it = _extract_intent_targets(structured_summary_obj, dim_key)
-                if _it:
-                    result["intent_targets"] = _it
-                    logger.info(f"[analyze_dimension] {dim_key}: injected intent_targets = {_it}")
         except Exception as e:
             logger.warning(f"[analyze_dimension] {dim_key}: L1/L2 injection failed: {e}")
 

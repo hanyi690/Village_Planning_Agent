@@ -9,7 +9,7 @@ from app.modules.schema.contracts.custom_zone_contracts import (
     Vocabulary,
     VocabularyCategory,
 )
-from app.modules.schema.encodings.dicts.vocabularies.loader import load_vocabulary
+from app.modules.schema.encodings.dicts.vocabularies.loader import get_vocabulary
 from app.modules.schema.provenance import ProvenanceAudit, ProvenanceSource
 
 
@@ -37,7 +37,12 @@ class CustomZoningGenerator:
     ) -> None:
         self.parcels = list(parcels)
         self.intent = intent
-        self.vocabulary: Vocabulary = load_vocabulary(intent["vocabulary_name"])
+        # Session-level in-memory Vocabulary (LLM-extracted from L3 reports)
+        # takes precedence; YAML vocabulary_name remains the fallback.
+        vocab = intent.get("vocabulary")
+        if vocab is None:
+            vocab = get_vocabulary(intent["vocabulary_name"])
+        self.vocabulary: Vocabulary = vocab if isinstance(vocab, Vocabulary) else Vocabulary(**vocab)
         self.three_lines = three_lines or {}
         self.parcel_by_bsm = {p["bsm"]: p for p in self.parcels}
 
