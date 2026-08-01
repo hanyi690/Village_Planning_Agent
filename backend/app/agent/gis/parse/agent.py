@@ -606,119 +606,19 @@ async def extract_bindings(
     kg: Any = None,
     bundle: Any = None,
 ) -> Dict[str, Any]:
-    """Extract village/BSM bindings from a wave of reports and write them to
-    SemanticMemoryStore (round = wave).  Non-fatal: returns stats dict.
-    """
-    from app.modules.kg import (
-        EntityAnnotation,
-        get_kg_manager,
-        get_parcels_semantic_list,
-        require_session_kg,
-    )
-    from app.modules.kg.memory import save_memory_state
-    from app.tools.access.shared import resolve_bundle
+    """Deprecated forwarder — KG multi-level enrichment now lives in
+    ``app.modules.kg.enrichment`` (PARSE stays intent-only)."""
+    from app.modules.kg.enrichment import extract_bindings as _enrich
 
-    kg = kg if kg is not None else require_session_kg(session_id)
-    bundle = bundle if bundle is not None else await resolve_bundle(session_id)
-
-    candidate_bsms: List[str] = []
-    try:
-        candidate_bsms = [p.get("bsm") for p in get_parcels_semantic_list(kg) if p.get("bsm")]
-    except Exception as e:
-        logger.warning("[PARSE-bindings] candidate list failed: %s", e)
-
-    if llm is None:
-        from app.core.settings import GIS_EXPLORE_LLM_ENABLED
-
-        if GIS_EXPLORE_LLM_ENABLED:
-            from app.core.llm import create_llm
-            from app.core.settings import (
-                GIS_EXPLORE_MAX_TOKENS,
-                GIS_EXPLORE_MODEL,
-                GIS_EXPLORE_TEMPERATURE,
-            )
-
-            llm = create_llm(
-                model=GIS_EXPLORE_MODEL,
-                temperature=GIS_EXPLORE_TEMPERATURE,
-                max_tokens=GIS_EXPLORE_MAX_TOKENS,
-                streaming=False,
-            )
-
-    raw = (
-        await _extract_bindings_llm(llm, reports, candidate_bsms)
-        if llm is not None
-        else _extract_bindings_deterministic(reports)
+    return await _enrich(
+        session_id=session_id,
+        wave=wave,
+        reports=reports,
+        llm=llm,
+        kg=kg,
+        bundle=bundle,
     )
 
-    written: List[str] = []
-    skipped: List[Dict[str, Any]] = []
-    for binding in raw:
-        ok, reason = _validate_binding(binding, kg, bundle)
-        if not ok:
-            skipped.append({"binding": binding.__dict__, "reason": reason})
-            continue
-        for bsm in binding.candidate_bsms:
-            entity = _lookup_entity_by_bsm(kg, bsm)
-            if entity is None:
-                continue
-            _get_semantic_memory().add_entity_annotation(
-                EntityAnnotation(
-                    entity_uri=entity["uri"],
-                    entity_type=entity["type"],
-                    description=binding.description,
-                    source_text_refs=[f"{k}" for k in binding.source_report_keys],
-                    round_added=wave,
-                    valid_from_round=wave,
-                    confidence=binding.confidence,
-                )
-            )
-            written.append(bsm)
-
-    # P4: 实体语义增强 — 功能分区/项目名注解回流 KG 语义记忆（无需 BSM）
-    semantic_written = 0
-    for ent in _extract_entity_semantics(reports):
-        name = ent["entity_name"]
-        refs = [k for k in (reports or {}) if name in (reports[k] or "")][:1]
-        _get_semantic_memory().add_entity_annotation(
-            EntityAnnotation(
-                entity_uri=f"pln:semantic_{ent['entity_type']}_{name}",
-                entity_type=ent["entity_type"],
-                description=ent["description"],
-                source_text_refs=refs,
-                round_added=wave,
-                valid_from_round=wave,
-                confidence=0.7,
-            )
-        )
-        semantic_written += 1
-
-    try:
-        get_kg_manager().bump_version(session_id)
-    except Exception as e:
-        logger.warning("[PARSE-bindings] version bump failed: %s", e)
-
-    try:
-        save_memory_state(session_id, wave)
-    except Exception as e:
-        logger.warning("[PARSE-bindings] memory state save failed: %s", e)
-
-    if skipped:
-        try:
-            _queue_review(session_id, wave, skipped)
-        except Exception as e:
-            logger.warning("[PARSE-bindings] review queue failed: %s", e)
-
-    stats = {
-        "wave": wave,
-        "extracted": len(raw),
-        "written": len(set(written)),
-        "skipped": len(skipped),
-        "pending_review": len(skipped),
-        "semantic_entities": semantic_written,
-    }
-    logger.info("[PARSE-bindings] session=%s stats=%s", session_id, stats)
-    return stats
 
 
 __all__ = ["parse", "parse_async", "ParseResult", "PendingBinding", "extract_bindings"]

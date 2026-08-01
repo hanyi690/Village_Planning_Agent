@@ -157,15 +157,17 @@ def test_extract_entity_semantics_picks_zones_and_projects():
 
 
 def test_extract_bindings_writes_semantic_annotations(monkeypatch, tmp_path: Path):
-    """P4: extract_bindings 同时写入分区/项目实体注解（无 BSM 校验）。"""
+    """P4/P6: extract_bindings（enrichment）写入分区/项目实体注解。"""
     import asyncio
 
     import app.agent.gis.parse.agent as parse_mod
+    import app.modules.kg.enrichment.bindings as enrich_mod
     import app.modules.kg.memory as mem_mod
 
     fake_store = mem_mod.SemanticMemoryStore()
     monkeypatch.setattr(mem_mod, "get_memory_dir", lambda: tmp_path)
     monkeypatch.setattr(parse_mod, "_get_semantic_memory", lambda: fake_store)
+    monkeypatch.setattr(enrich_mod, "_get_semantic_memory", lambda: fake_store)
 
     manager = get_kg_manager()
     manager.register_session("sess-semantic", _FakeKG(set()))
@@ -199,11 +201,13 @@ def test_extract_bindings_full_flow(monkeypatch, tmp_path: Path):
     import asyncio
 
     import app.agent.gis.parse.agent as parse_mod
+    import app.modules.kg.enrichment.bindings as enrich_mod
     import app.modules.kg.memory as mem_mod
 
     fake_store = mem_mod.SemanticMemoryStore()
     monkeypatch.setattr(mem_mod, "get_memory_dir", lambda: tmp_path)
     monkeypatch.setattr(parse_mod, "_get_semantic_memory", lambda: fake_store)
+    monkeypatch.setattr(enrich_mod, "_get_semantic_memory", lambda: fake_store)
 
     manager = get_kg_manager()
     kg = _FakeKG({"441426211000049104"})
@@ -214,7 +218,13 @@ def test_extract_bindings_full_flow(monkeypatch, tmp_path: Path):
             extract_bindings(
                 session_id="sess-extract",
                 wave=1,
-                reports={"land_use": REPORT},
+                reports={
+                    "land_use": REPORT,
+                    "land_use_planning": (
+                        "【功能分区表】\n| 分区名称 | 占比(%) |\n| :--- | :--- |\n"
+                        "| 生态保护区 | 15.39 |\n"
+                    ),
+                },
                 llm=None,
                 kg=kg,
                 bundle=_make_bundle_with_boundary(),
@@ -223,8 +233,8 @@ def test_extract_bindings_full_flow(monkeypatch, tmp_path: Path):
     finally:
         manager.remove_session("sess-extract")
 
-    assert stats["extracted"] >= 1
-    assert stats["written"] >= 1
+    # enrichment 契约：wave/village_bound/semantic_entities
+    assert stats["semantic_entities"] >= 1
     assert len(fake_store.entity_annotations) >= 1
     # 持久化文件已写入
     assert (tmp_path / "sess-extract_round_1.json").exists()
