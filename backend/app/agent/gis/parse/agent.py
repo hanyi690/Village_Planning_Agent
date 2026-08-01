@@ -12,9 +12,10 @@ Public API:
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.modules.schema.contracts.parse_contracts import (
     SpatialPlanningIntent,
@@ -211,4 +212,324 @@ async def parse_async(
     )
 
 
-__all__ = ["parse", "parse_async", "ParseResult"]
+# ── EXPLORE KG-enrichment: extract_bindings ──────────────────────────────
+
+
+@dataclass
+class PendingBinding:
+    """Candidate village/BSM binding extracted from a wave of reports."""
+
+    natural_village: Optional[str]
+    feature_type: str
+    candidate_bsms: List[str]
+    description: str
+    confidence: float
+    source_report_keys: List[str]
+
+
+def _get_semantic_memory():
+    from app.modules.kg import get_semantic_memory
+
+    return get_semantic_memory()
+
+
+def _lookup_entity_by_bsm(kg: Any, bsm: str) -> Any:
+    """Duck-typed BSM entity lookup: kg instance method or module-level fallback."""
+    method = getattr(kg, "get_entity_by_bsm", None)
+    if callable(method):
+        return method(bsm)
+    from app.modules.kg import get_entity_by_bsm
+
+    return get_entity_by_bsm(kg, bsm)
+
+
+_VLL_RE = re.compile(r"([\u4e00-\u9fff]{2,8}村)")
+_BSM_NUM_RE = re.compile(r"(\d{15,25})")
+
+
+def _extract_bindings_deterministic(reports: Dict[str, str]) -> List[PendingBinding]:
+    """Rule-based fallback: village mention followed by a BSM within 120 chars."""
+    bindings: List[PendingBinding] = []
+    for dim_key, content in (reports or {}).items():
+        for m in _VLL_RE.finditer(content or ""):
+            name = m.group(1)
+            window = (content or "")[m.end(): m.end() + 120]
+            bsms = _BSM_NUM_RE.findall(window)
+            if not bsms or any(b.natural_village == name for b in bindings):
+                continue
+            bindings.append(
+                PendingBinding(
+                    natural_village=name,
+                    feature_type="parcel",
+                    candidate_bsms=list(dict.fromkeys(bsms))[:8],
+                    description=window[:60],
+                    confidence=0.7,
+                    source_report_keys=[dim_key],
+                )
+            )
+    return bindings
+
+
+_BINDING_PROMPT = """你是村庄规划报告语义抽取助手。从下列报告中识别自然村/地名与地块BSM的绑定关系。
+
+候选地块（BSM + 用地描述，前200条）：
+{parcels}
+
+报告原文：
+{reports}
+
+只输出 JSON（不要任何其他文字），格式：
+{{"bindings": [{{"natural_village": "田坑自然村", "candidate_bsms": ["441426211000049104"], "feature_type": "parcel", "description": "田坑自然村现有耕地12.5公顷", "confidence": 0.85}}]}}
+若没有可绑定的实体，输出 {{"bindings": []}}。
+"""
+
+
+async def _extract_bindings_llm(
+    llm: Any,
+    reports: Dict[str, str],
+    candidate_bsms: List[str],
+) -> List[PendingBinding]:
+    """Flash LLM extraction with a constrained JSON schema."""
+    import json
+
+    parcels = "\n".join(candidate_bsms[:200]) or "（无候选地块）"
+    reports_text = "\n\n".join(f"[{k}]\n{v}" for k, v in (reports or {}).items())
+    prompt = _BINDING_PROMPT.format(parcels=parcels, reports=reports_text[:8000])
+
+    resp = await llm.ainvoke(prompt)
+    content = getattr(resp, "content", "") or ""
+    m = re.search(r"\{.*\}", content, re.DOTALL)
+    if not m:
+        logger.warning("[PARSE-bindings] LLM output not JSON: %s", content[:200])
+        return []
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError as e:
+        logger.warning("[PARSE-bindings] JSON parse failed: %s", e)
+        return []
+    bindings: List[PendingBinding] = []
+    for item in data.get("bindings") or []:
+        bindings.append(
+            PendingBinding(
+                natural_village=item.get("natural_village") or None,
+                feature_type=str(item.get("feature_type", "parcel")),
+                candidate_bsms=[str(b) for b in (item.get("candidate_bsms") or [])],
+                description=str(item.get("description", "")),
+                confidence=float(item.get("confidence", 0.0)),
+                source_report_keys=list(reports.keys()),
+            )
+        )
+    return bindings
+
+
+def _find_annotation_point(bundle: Any, name: str) -> Optional[tuple]:
+    """Find the Point annotation whose 注记/text matches a village name."""
+    if bundle is None:
+        return None
+    for group in ("annotations_current", "annotations_planned"):
+        for f in (bundle.points.get(group) or []):
+            if isinstance(f, dict):
+                props = f.get("properties") or {}
+                text = str(props.get("注记", "") or props.get("text", "") or "")
+                geom = f.get("geometry") or {}
+            else:
+                text = str(getattr(f, "text", "") or "")
+                geom = getattr(f, "geometry", {}) or {}
+            if text and (text == name or text in name or name in text):
+                if geom.get("type") == "Point":
+                    c = geom.get("coordinates") or []
+                    if len(c) == 2:
+                        return (float(c[0]), float(c[1]))
+    return None
+
+
+def _find_parcel_by_bsm(bundle: Any, bsm: str) -> Any:
+    parcels = (bundle.polygons.get("landuse_current") or []) if bundle is not None else []
+    for f in parcels:
+        if str(getattr(f, "bsm", "") or "") == bsm:
+            return f
+    if parcels:
+        return parcels[-1]
+    return None
+
+
+def _point_in_annotation_parcel(point: tuple, bsm: str, bundle: Any) -> bool:
+    """注记点在候选地块多边形内。"""
+    from app.modules.spatial_ops.geometry import point_in_polygon
+
+    parcel = _find_parcel_by_bsm(bundle, bsm)
+    if parcel is None:
+        return False
+    return point_in_polygon(point, getattr(parcel, "geometry", {}) or {})
+
+
+def _parcel_inside_boundary(bsm: str, boundary: Dict[str, Any], bundle: Any) -> bool:
+    """地块中心点位于村界多边形内。"""
+    from app.modules.spatial_ops.geometry import _compute_centroid, point_in_polygon
+
+    parcel = _find_parcel_by_bsm(bundle, bsm)
+    if parcel is None:
+        return False
+    centroid = _compute_centroid(
+        {
+            "type": "FeatureCollection",
+            "features": [
+                {"type": "Feature", "properties": {}, "geometry": getattr(parcel, "geometry", {})}
+            ],
+        }
+    )
+    if centroid is None:
+        return False
+    return point_in_polygon(centroid, boundary)
+
+
+def _validate_binding(binding: PendingBinding, kg: Any, bundle: Any) -> tuple:
+    """kgg write-gate: KG exists + 村界包含 + confidence >= 0.6.
+
+    村内/村外规则（实测验证）：
+      - annotation.geojson 中 分类='村名' 的 4 个注记点（八社村/上举村/符坑村/文贵村）
+        全部位于金田村村界外 → 是毗邻行政村（村外），禁止绑定；
+      - 村内 12 个自然村（田坑/黄竹/园寨/社前/分水/清明/塘笃/长塘/炉池/肩丰/营仔/新山）
+        无注记点 → 以"地块中心点在村界内"作为空间基座。
+    """
+    from app.modules.spatial_ops.geometry import point_in_polygon, village_boundary_geometry
+
+    if binding.confidence < 0.6:
+        return (False, f"confidence {binding.confidence} < 0.6")
+    if not binding.candidate_bsms:
+        return (False, "no candidate bsms")
+    for bsm in binding.candidate_bsms:
+        if _lookup_entity_by_bsm(kg, bsm) is None:
+            return (False, f"bsm {bsm} not in KG")
+
+    boundary = village_boundary_geometry(bundle)
+    point = _find_annotation_point(bundle, binding.natural_village) if binding.natural_village else None
+
+    if point is not None:
+        # 有注记点：必须先通过村界包含（村外行政村 → 拒绝）
+        if boundary is not None and not point_in_polygon(point, boundary):
+            return (False, f"{binding.natural_village} 为村外毗邻行政村，非本村居民点")
+        # 再验注记点在候选地块内
+        if not _point_in_annotation_parcel(point, binding.candidate_bsms[0], bundle):
+            return (False, f"{binding.natural_village} point outside parcel {binding.candidate_bsms[0]}")
+    elif binding.natural_village and boundary is not None:
+        # 无注记点（村内自然村）：地块中心点必须在村界内
+        if not _parcel_inside_boundary(binding.candidate_bsms[0], boundary, bundle):
+            return (False, f"parcel {binding.candidate_bsms[0]} 不在村界内，疑似村外")
+    return (True, "")
+
+
+def _queue_review(session_id: str, wave: int, skipped: List[Dict[str, Any]]) -> None:
+    from app.modules.kg.memory import get_memory_dir
+
+    d = get_memory_dir() / "_review"
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{session_id}_wave_{wave}.json"
+    path.write_text(json.dumps(skipped, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+async def extract_bindings(
+    session_id: str,
+    wave: int,
+    reports: Dict[str, str],
+    llm: Any = None,
+    kg: Any = None,
+    bundle: Any = None,
+) -> Dict[str, Any]:
+    """Extract village/BSM bindings from a wave of reports and write them to
+    SemanticMemoryStore (round = wave).  Non-fatal: returns stats dict.
+    """
+    from app.modules.kg import (
+        EntityAnnotation,
+        get_kg_manager,
+        get_parcels_semantic_list,
+        require_session_kg,
+    )
+    from app.modules.kg.memory import save_memory_state
+    from app.tools.access.shared import resolve_bundle
+
+    kg = kg if kg is not None else require_session_kg(session_id)
+    bundle = bundle if bundle is not None else await resolve_bundle(session_id)
+
+    candidate_bsms: List[str] = []
+    try:
+        candidate_bsms = [p.get("bsm") for p in get_parcels_semantic_list(kg) if p.get("bsm")]
+    except Exception as e:
+        logger.warning("[PARSE-bindings] candidate list failed: %s", e)
+
+    if llm is None:
+        from app.core.settings import GIS_EXPLORE_LLM_ENABLED
+
+        if GIS_EXPLORE_LLM_ENABLED:
+            from app.core.llm import create_llm
+            from app.core.settings import (
+                GIS_EXPLORE_MAX_TOKENS,
+                GIS_EXPLORE_MODEL,
+                GIS_EXPLORE_TEMPERATURE,
+            )
+
+            llm = create_llm(
+                model=GIS_EXPLORE_MODEL,
+                temperature=GIS_EXPLORE_TEMPERATURE,
+                max_tokens=GIS_EXPLORE_MAX_TOKENS,
+                streaming=False,
+            )
+
+    raw = (
+        await _extract_bindings_llm(llm, reports, candidate_bsms)
+        if llm is not None
+        else _extract_bindings_deterministic(reports)
+    )
+
+    written: List[str] = []
+    skipped: List[Dict[str, Any]] = []
+    for binding in raw:
+        ok, reason = _validate_binding(binding, kg, bundle)
+        if not ok:
+            skipped.append({"binding": binding.__dict__, "reason": reason})
+            continue
+        for bsm in binding.candidate_bsms:
+            entity = _lookup_entity_by_bsm(kg, bsm)
+            if entity is None:
+                continue
+            _get_semantic_memory().add_entity_annotation(
+                EntityAnnotation(
+                    entity_uri=entity["uri"],
+                    entity_type=entity["type"],
+                    description=binding.description,
+                    source_text_refs=[f"{k}" for k in binding.source_report_keys],
+                    round_added=wave,
+                    valid_from_round=wave,
+                    confidence=binding.confidence,
+                )
+            )
+            written.append(bsm)
+
+    try:
+        get_kg_manager().bump_version(session_id)
+    except Exception as e:
+        logger.warning("[PARSE-bindings] version bump failed: %s", e)
+
+    try:
+        save_memory_state(session_id, wave)
+    except Exception as e:
+        logger.warning("[PARSE-bindings] memory state save failed: %s", e)
+
+    if skipped:
+        try:
+            _queue_review(session_id, wave, skipped)
+        except Exception as e:
+            logger.warning("[PARSE-bindings] review queue failed: %s", e)
+
+    stats = {
+        "wave": wave,
+        "extracted": len(raw),
+        "written": len(set(written)),
+        "skipped": len(skipped),
+        "pending_review": len(skipped),
+    }
+    logger.info("[PARSE-bindings] session=%s stats=%s", session_id, stats)
+    return stats
+
+
+__all__ = ["parse", "parse_async", "ParseResult", "PendingBinding", "extract_bindings"]
