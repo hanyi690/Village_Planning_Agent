@@ -52,7 +52,7 @@ sources:
   jintian_road:
     driver: file_vector
     path: "data/gis/jintian/current/road.geojson"
-    layer_type: road
+    layer_type: current_road
     crs: EPSG:4326
 
   jintian_admin_boundary_line:
@@ -64,7 +64,7 @@ sources:
   jintian_annotation:
     driver: file_vector
     path: "data/gis/jintian/current/annotation.geojson"
-    layer_type: annotation
+    layer_type: current_annotation
     crs: EPSG:4326
 
   # ── 本地矢量 - 水体（API 源为主；上传文件源已注释，缺占位文件）──
@@ -103,13 +103,13 @@ sources:
   jintian_planned_road:
     driver: file_vector
     path: "data/gis/jintian/planned/road.geojson"
-    layer_type: road_planned
+    layer_type: planned_road
     crs: EPSG:4326
 
   jintian_planned_annotation:
     driver: file_vector
     path: "data/gis/jintian/planned/annotation.geojson"
-    layer_type: annotation_planned
+    layer_type: planned_annotation
     crs: EPSG:4326
 
   jintian_farmland_protection:
@@ -133,13 +133,13 @@ sources:
   jintian_construction_zone:
     driver: file_vector
     path: "data/gis/jintian/planned/construction_zone.geojson"
-    layer_type: construction_zone
+    layer_type: conditional_construction_zone
     crs: EPSG:4326
 
   jintian_geological_hazard:
     driver: file_vector
     path: "data/gis/jintian/planned/geological_hazard_points.geojson"
-    layer_type: geological_hazard_points
+    layer_type: geological_hazard_point
     crs: EPSG:4326
 
   jintian_planned_boundary:
@@ -186,7 +186,7 @@ sources:
     layers:
       - id: 0
         name: "地质灾害隐患点"
-        layer_type: geological_hazard_points
+        layer_type: geological_hazard_point
 
   # ── WMTS 瓦片 - 天地图 ──
   tianditu_img_base:

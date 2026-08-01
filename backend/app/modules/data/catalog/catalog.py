@@ -34,6 +34,53 @@ logger = get_logger(__name__)
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "sources.yaml"
 
 
+def _merge_geojson_into_bundle(
+    bundle: Any,
+    layer_key: str,
+    geojson: Dict[str, Any],
+) -> int:
+    """Merge a user-uploaded GeoJSON FeatureCollection into a VillageBundle.
+
+    Features are routed into the bundle's point/line/polygon groups by geometry
+    type and stored under ``upload_{layer_key}``. Original properties are kept
+    as ``_raw`` on each feature so nothing is lost on snapshot.
+    """
+    from app.modules.schema.types.base import LineFeature, PointFeature, PolygonFeature
+
+    features = geojson.get("features", [])
+    if not features:
+        return 0
+
+    target_key = f"upload_{layer_key}"
+    merged = 0
+    for f in features:
+        geometry = f.get("geometry") or {}
+        props = f.get("properties") or {}
+        geom_type = geometry.get("type", "")
+        bsm = props.get("BSM") or props.get("bsm") or ""
+        try:
+            if geom_type in ("Point", "MultiPoint"):
+                feat = PointFeature(geometry=geometry, bsm=bsm, layer_type=target_key, _raw=props)
+                bundle.points._layers.setdefault(target_key, []).append(feat)
+            elif geom_type in ("LineString", "MultiLineString"):
+                feat = LineFeature(geometry=geometry, bsm=bsm, layer_type=target_key, _raw=props)
+                bundle.lines._layers.setdefault(target_key, []).append(feat)
+            else:
+                feat = PolygonFeature(geometry=geometry, bsm=bsm, layer_type=target_key, _raw=props)
+                bundle.polygons._layers.setdefault(target_key, []).append(feat)
+        except Exception as e:
+            logger.debug("[DataCatalog] Skipping uploaded feature in %s: %s", target_key, e)
+            continue
+        merged += 1
+
+    if merged:
+        logger.info(
+            "[DataCatalog] Merged %d uploaded features into bundle (key=%s)",
+            merged, target_key,
+        )
+    return merged
+
+
 def _extract_coords(geometry: Dict[str, Any], out: List[Tuple[float, float]]) -> None:
     """Recursively extract (lon, lat) coordinate pairs from a GeoJSON geometry."""
     geom_type = geometry.get("type", "")
@@ -331,6 +378,15 @@ class DataCatalog:
             if lt == "boundary":
                 # Already loaded in Step 1
                 continue
+            if result.data_type == "url":
+                # API source fell back to a WMS imagery URL (visualization only,
+                # no vector data). There is nothing to ingest -- skip instead of
+                # letting the adapter crash on a non-FeatureCollection payload.
+                logger.warning(
+                    "[DataCatalog] Skipping %s: WMS URL only (no vector data)",
+                    lt,
+                )
+                continue
             entry = GIS_LAYER_REGISTRY.get(lt)
             if entry is None or entry.ingest is None:
                 logger.debug(
@@ -396,6 +452,117 @@ class DataCatalog:
             len(bundle.points.get("annotations_current")) + len(bundle.points.get("annotations_planned")),
         )
         return bundle
+
+    async def load_village_bundle_async(
+        self,
+        village_name: str,
+        session_id: Optional[str] = None,
+        layer_types: Optional[List[str]] = None,
+    ):
+        """Session-level build entry for a VillageBundle.
+
+        Loads the spatial data via the synchronous ``load_village_bundle``
+        (unchanged, reuse), then — when ``session_id`` is given — populates the
+        session context onto the same bundle instance:
+          * ``metadata``: session_id / planning_period / admin hierarchy
+          * ``documents.planning_texts``: village_data text, task description,
+            constraints, uploaded file parsed text, project planning docs
+          * ``layer_reports``: full L1/L2/L3 report contents from the DB
+
+        Returns a session-scoped ``VillageBundle``.
+        """
+        bundle = self.load_village_bundle(village_name, layer_types=layer_types)
+        if session_id:
+            await self._populate_session_context(bundle, session_id)
+        return bundle
+
+    async def _populate_session_context(
+        self,
+        bundle: VillageBundle,
+        session_id: str,
+    ) -> None:
+        """Fill session-level context onto a VillageBundle (async DB reads)."""
+        from datetime import datetime
+
+        from app.database.operations import (
+            get_planning_session_async,
+            get_session_reports_async,
+            get_uploaded_files_by_session_async,
+        )
+
+        session = await get_planning_session_async(session_id)
+        if session:
+            bundle.metadata.session_id = session_id
+            bundle.metadata.planning_period = session.get("planning_period", "")
+            bundle.metadata.province = session.get("province", "")
+            bundle.metadata.city = session.get("city", "")
+            bundle.metadata.county = session.get("county", "")
+            bundle.metadata.township = session.get("township", "")
+
+            texts = [
+                {"source": "village_data", "name": "村庄基础数据", "content": session.get("village_data") or ""},
+                {"source": "task_description", "name": "任务描述", "content": session.get("task_description") or ""},
+                {"source": "constraints", "name": "约束条件", "content": session.get("constraints") or ""},
+            ]
+            bundle.documents.planning_texts = [
+                t for t in texts if t["content"].strip()
+            ]
+
+        try:
+            uploaded = await get_uploaded_files_by_session_async(session_id)
+        except Exception as e:
+            logger.warning("[DataCatalog] Uploaded files load failed for %s: %s", session_id, e)
+            uploaded = []
+        for f in uploaded:
+            text = f.get("parsed_text") or ""
+            if not text.strip():
+                continue
+            bundle.documents.planning_texts.append({
+                "source": "upload",
+                "category": f.get("file_category", ""),
+                "name": f.get("original_filename") or f.get("filename", ""),
+                "content": text,
+            })
+
+        # Merge uploaded GIS data (spatial) into the bundle groups so the
+        # snapshot carries user uploads as features, not just parsed text.
+        try:
+            uploaded_gis = await get_uploaded_files_by_session_async(
+                session_id, file_category="gis_data",
+            )
+        except Exception as e:
+            logger.warning("[DataCatalog] Uploaded GIS load failed for %s: %s", session_id, e)
+            uploaded_gis = []
+        for item in uploaded_gis:
+            geojson = item.get("gis_data") or {}
+            if not isinstance(geojson, dict) or geojson.get("type") != "FeatureCollection":
+                continue
+            dtype = item.get("gis_data_type") or "upload"
+            _merge_geojson_into_bundle(bundle, dtype, geojson)
+
+        try:
+            from app.modules.data.documents.loader import list_available_documents, load_planning_text
+            from pathlib import Path
+            for doc in list_available_documents(bundle.village_name):
+                path = doc.get("path", "")
+                if not path:
+                    continue
+                try:
+                    content = Path(path).read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                bundle.documents.planning_texts.append({
+                    "source": "project_doc",
+                    "type": doc.get("type", "unknown"),
+                    "name": doc.get("name", ""),
+                    "content": content,
+                })
+        except Exception as e:
+            logger.debug("[DataCatalog] Project docs load skipped: %s", e)
+
+        bundle.layer_reports = await get_session_reports_async(session_id)
+        bundle.metadata.bundle_version = "1.0"
+        bundle.metadata.built_at = datetime.now().isoformat()
 
     # ── Boundary-first helpers ──
 

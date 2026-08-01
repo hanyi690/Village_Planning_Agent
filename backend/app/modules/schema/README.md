@@ -1,6 +1,6 @@
 # Schema Layer - 类型契约
 
-> **定位**: 四层架构底层 (`Schema ← Data ← KG ← Agent`)，定义空间要素类型、编码体系、输出规范。
+> **定位**: 五层架构底层 (`Schema ← Data ← SpatialOps ← KG ← Agent`)，定义空间要素类型、编码体系、输出规范。
 > **零依赖**: 不 import Data / KG / Agent / Tools 中的任何模块。
 > 2. **形态优先容器** [v4.4]：VillageBundle (Pydantic v2 BaseModel) 按形态 LayerGroup 组织. bundle.add() 调用 _bundle_key_for() 查 GIS_LAYER_REGISTRY (YAML-driven) 路由到 _layers[key], 33 个具体子类各有归宿, 推断图层通过 "inferred" 兜底.
 

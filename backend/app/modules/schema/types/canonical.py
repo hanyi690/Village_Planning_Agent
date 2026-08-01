@@ -242,6 +242,16 @@ class VillageMetadata(BaseModel):
     provider_sources: List[str] = Field(default_factory=list)
     crs_warnings: List[str] = Field(default_factory=list)
 
+    # Session-level context (VillageBundle is session-scoped)
+    session_id: str = ""
+    planning_period: str = ""
+    province: str = ""
+    city: str = ""
+    county: str = ""
+    township: str = ""
+    bundle_version: str = "1.0"
+    built_at: Optional[str] = None
+
 
 class VillageBundle(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
@@ -256,6 +266,10 @@ class VillageBundle(BaseModel):
     metadata: VillageMetadata = Field(default_factory=VillageMetadata)
     standard_version: str = "4.4"
 
+    # L1/L2/L3 report snapshots (layer -> dim_key -> report record).
+    # Full report contents embedded for self-contained persistence.
+    layer_reports: Dict[int, Dict[str, Any]] = Field(default_factory=dict)
+
     def __init__(self, **data):
         super().__init__(**data)
         object.__setattr__(self, "_bsm_counter", {})
@@ -269,10 +283,15 @@ class VillageBundle(BaseModel):
             self.lines.add(feature)
         elif group == "polygons":
             self.polygons.add(feature)
-        elif group == "rasters":
-            pass
-        elif group == "tables":
-            pass
+        elif group in ("rasters", "tables"):
+            # Route by the registry's bundle_target (group + key) instead of
+            # dropping the feature: e.g. dem -> self.rasters.dem.
+            from app.modules.schema.types.layer_registry import GIS_LAYER_REGISTRY
+
+            entry = GIS_LAYER_REGISTRY.get(feature.layer_type)
+            if entry is not None and entry.bundle_target is not None:
+                group_obj = self.rasters if group == "rasters" else self.tables
+                setattr(group_obj, entry.bundle_target.key, feature)
         elif group == "documents":
             pass
 
@@ -384,6 +403,128 @@ class ProjectMetadata(BaseModel):
     villages: List[str] = Field(default_factory=list)
 
 
+def _serialize_value(value: Any) -> Any:
+    """Serialize an arbitrary bundle member to a JSON-safe form."""
+    if value is None:
+        return None
+    if isinstance(value, BaseModel):
+        try:
+            return value.model_dump(mode="json")
+        except Exception:
+            return str(value)
+    if isinstance(value, dict):
+        return {k: _serialize_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_serialize_value(v) for v in value]
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def to_bundle_dict(bundle: VillageBundle) -> Dict[str, Any]:
+    """Serialize a VillageBundle (session-level snapshot) to a JSON-safe dict.
+
+    The geometry layer groups store features in private ``_layers`` attributes,
+    which ``model_dump()`` does NOT include — so groups are exported manually,
+    key by key, with each feature serialized via ``model_dump(mode="json")``.
+    """
+    def _dump_group(group) -> Dict[str, List[Any]]:
+        return {key: [f.model_dump(mode="json") for f in group.get(key)] for key in group.keys()}
+
+    return {
+        "village_name": bundle.village_name,
+        "standard_version": bundle.standard_version,
+        "metadata": bundle.metadata.model_dump(mode="json"),
+        "layer_reports": _serialize_value(bundle.layer_reports),
+        "documents": {
+            "planning_texts": _serialize_value(bundle.documents.planning_texts),
+            "l3_reports": _serialize_value(bundle.documents.l3_reports),
+        },
+        "rasters": _serialize_value(bundle.rasters.all_rasters),
+        "tables": _serialize_value(bundle.tables.all_tables),
+        "points": _dump_group(bundle.points),
+        "lines": _dump_group(bundle.lines),
+        "polygons": _dump_group(bundle.polygons),
+    }
+
+
+def _restore_base_feature(f: Dict[str, Any]) -> Any:
+    """Fallback rebuild for features the ``GisFeature`` union cannot classify.
+
+    Used for uploaded / unknown layer types whose ``layer_type`` is not a
+    member of the union (e.g. ``upload_*``). The concrete base class is chosen
+    by geometry type, preserving geometry + layer_type + any extra props.
+    """
+    from .base import LineFeature, PointFeature, PolygonFeature
+
+    geom_type = (f.get("geometry") or {}).get("type", "")
+    if geom_type in ("Point", "MultiPoint"):
+        cls = PointFeature
+    elif geom_type in ("LineString", "MultiLineString"):
+        cls = LineFeature
+    else:
+        cls = PolygonFeature
+    return cls.model_validate(f)
+
+
+def from_bundle_dict(data: Dict[str, Any]) -> VillageBundle:
+    """Rebuild a VillageBundle from ``to_bundle_dict`` output.
+
+    Features are reconstructed through the ``GisFeature`` discriminated union
+    (keyed by ``layer_type``). Layer groups are restored by writing the private
+    ``_layers`` map directly, preserving stored BSM values.
+    """
+    from pydantic import TypeAdapter
+    from .spatial_types import GisFeature
+
+    _feature_adapter = TypeAdapter(GisFeature)
+    bundle = VillageBundle(
+        village_name=data.get("village_name", ""),
+        standard_version=data.get("standard_version", "4.4"),
+    )
+
+    if data.get("metadata"):
+        bundle.metadata = VillageMetadata(**data["metadata"])
+
+    if data.get("layer_reports"):
+        bundle.layer_reports = {
+            int(layer): reports for layer, reports in data["layer_reports"].items()
+        }
+
+    docs = data.get("documents", {}) or {}
+    if docs.get("planning_texts"):
+        bundle.documents.planning_texts = docs["planning_texts"]
+    if docs.get("l3_reports"):
+        bundle.documents.l3_reports = docs["l3_reports"]
+
+    rasters = data.get("rasters", {}) or {}
+    for field_name in ("dem", "dom", "slope", "aspect", "suitability"):
+        if field_name in rasters:
+            setattr(bundle.rasters, field_name, rasters[field_name])
+
+    tables = data.get("tables", {}) or {}
+    for field_name in ("population", "construction_projects", "control_rules",
+                       "planning_indicators", "land_use_structure"):
+        if field_name in tables:
+            setattr(bundle.tables, field_name, tables[field_name])
+
+    def _restore_group(group, raw: Dict[str, Any]) -> None:
+        for key, feats in (raw or {}).items():
+            restored = []
+            for f in feats:
+                try:
+                    restored.append(_feature_adapter.validate_python(f))
+                except Exception:
+                    restored.append(_restore_base_feature(f))
+            group._layers[key] = restored
+
+    _restore_group(bundle.points, data.get("points"))
+    _restore_group(bundle.lines, data.get("lines"))
+    _restore_group(bundle.polygons, data.get("polygons"))
+
+    return bundle
+
+
 class ProjectDataView(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -417,6 +558,8 @@ __all__ = [
     "VillageBundle",
     "ProjectMetadata",
     "ProjectDataView",
+    "to_bundle_dict",
+    "from_bundle_dict",
     "_spatial_feature_to_geojson",
     "_features_to_fc",
 ]

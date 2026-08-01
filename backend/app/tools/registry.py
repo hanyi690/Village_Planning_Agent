@@ -1,6 +1,11 @@
-"""Tool metadata registry (read-only) for SSE events and UI rendering."""
+"""Tool registry — unified metadata + executable tool lookup.
 
-from typing import Any, Dict, Optional
+Executable side: ``register()`` stores LangChain BaseTool objects keyed by
+name; ``for_agent()`` returns the bindable tool list for a given agent scope.
+Display side: ToolMetadata for SSE events / UI rendering (existing behavior).
+"""
+
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
 
@@ -42,9 +47,60 @@ _TOOL_DEFINITIONS: Dict[str, Dict[str, Any]] = {
 
 
 class ToolRegistry:
-    """Read-only tool metadata for SSE / UI display."""
+    """Unified tool registry: metadata for SSE/UI + executable tool lookup.
+
+    ``register()`` records display metadata AND the executable BaseTool object.
+    ``for_agent(agent_id)`` returns the bindable tool list for an agent scope.
+    """
 
     _metadata: Dict[str, ToolMetadata] = {}
+    _tools: Dict[str, Any] = {}
+
+    @classmethod
+    def register(
+        cls,
+        name: str,
+        tool: Any = None,
+        description: str = "",
+        display_name: Optional[str] = None,
+        estimated_time: Optional[float] = None,
+        display_hints: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Register a tool's executable object + display metadata."""
+        if name not in cls._metadata:
+            cls._metadata[name] = ToolMetadata(
+                name=name,
+                description=description,
+                display_name=display_name,
+                estimated_time=estimated_time,
+                display_hints=display_hints,
+            )
+        if tool is not None:
+            cls._tools[name] = tool
+
+    @classmethod
+    def get_tool(cls, name: str) -> Optional[Any]:
+        """Return the registered executable tool, or None."""
+        return cls._tools.get(name)
+
+    @classmethod
+    def registered_tools(cls) -> Dict[str, Any]:
+        """Return a copy of the registered executable tools."""
+        return dict(cls._tools)
+
+    @classmethod
+    def for_agent(cls, agent_id: str) -> List[Any]:
+        """Return the bindable tool list for an agent scope.
+
+        Known scopes:
+          - "explore": session access tools (bundle_overview / spatial_context /
+            spatial_features / layer_reports / knowledge_graph / rag_search)
+        Other agents can adopt any of these lists by declaring the same scope.
+        """
+        if agent_id == "explore":
+            from app.tools.access import ACCESS_TOOLS
+            return list(ACCESS_TOOLS)
+        return []
 
     @classmethod
     def get_tool_metadata(cls, name: str) -> Optional[ToolMetadata]:

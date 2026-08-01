@@ -19,6 +19,8 @@ from .models import (
     UISession,
     UploadedFile,
     PlanningTextDocument,
+    DimensionReport,
+    PlanningBundle,
 )
 
 logger = logging.getLogger(__name__)
@@ -801,7 +803,7 @@ async def delete_uploaded_files_async(session_id: str) -> int:
             count = len(files)
 
             for f in files:
-                session.delete(f)
+                await session.delete(f)
 
             await session.commit()
             logger.info(f"[Async DB] Deleted {count} uploaded files for session {session_id}")
@@ -1038,3 +1040,167 @@ async def update_planning_text_status_async(
     except Exception as e:
         logger.error(f"[Async DB] Failed to update planning text status: {e}", exc_info=True)
         return False
+
+
+# ==========================================
+# Session Report Operations
+# ==========================================
+
+async def get_session_reports_async(
+    session_id: str,
+) -> Dict[int, Dict[str, Dict[str, Any]]]:
+    """
+    Get all dimension reports for a session grouped by layer (async).
+    获取会话的全部分维度报告，按层级分组（最新版本）。
+
+    Returns:
+        {layer: {dim_key: {report_id, content, summary, version, generated_at}}}
+    """
+    try:
+        async with get_async_session() as session:
+            query = (
+                select(DimensionReport)
+                .where(DimensionReport.session_id == session_id)
+                .order_by(DimensionReport.dimension_key, DimensionReport.version.desc())
+            )
+            result = await session.execute(query)
+            reports = result.scalars().all()
+
+        by_layer: Dict[int, Dict[str, Dict[str, Any]]] = {}
+        seen: set = set()
+        for r in reports:
+            key = (r.layer, r.dimension_key)
+            if key in seen:
+                continue
+            seen.add(key)
+            by_layer.setdefault(r.layer, {})[r.dimension_key] = {
+                "report_id": r.report_id,
+                "content": r.content,
+                "summary": r.summary,
+                "version": r.version,
+                "generated_at": r.generated_at.isoformat() if r.generated_at else None,
+            }
+        return by_layer
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to get session reports: {e}", exc_info=True)
+        return {}
+
+
+# ==========================================
+# Planning Bundle Operations
+# ==========================================
+
+async def create_planning_bundle_async(bundle_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Create a planning bundle snapshot (async)
+    创建规划数据包快照
+
+    Args:
+        bundle_data: dict with session_id, version, bundle_json, sha256, trigger_reason
+
+    Returns:
+        Dict with the stored bundle record
+    """
+    async with get_async_session() as session:
+        db_bundle = PlanningBundle(
+            session_id=bundle_data["session_id"],
+            version=bundle_data["version"],
+            bundle_json=bundle_data["bundle_json"],
+            sha256=bundle_data.get("sha256", ""),
+            trigger_reason=bundle_data.get("trigger_reason"),
+            built_at=bundle_data.get("built_at") or datetime.now(),
+        )
+        session.add(db_bundle)
+        await session.commit()
+        await session.refresh(db_bundle)
+        return _planning_bundle_to_dict(db_bundle)
+
+
+async def get_planning_bundle_async(
+    session_id: str,
+    version: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Get a planning bundle snapshot (async), latest version by default
+    获取规划数据包快照（默认最新版本）
+
+    Args:
+        session_id: Session identifier
+        version: Version number (optional, defaults to latest)
+
+    Returns:
+        Dict with bundle record or None
+    """
+    try:
+        async with get_async_session() as session:
+            if version is not None:
+                query = select(PlanningBundle).where(
+                    PlanningBundle.session_id == session_id,
+                    PlanningBundle.version == version,
+                )
+            else:
+                query = (
+                    select(PlanningBundle)
+                    .where(PlanningBundle.session_id == session_id)
+                    .order_by(PlanningBundle.version.desc())
+                    .limit(1)
+                )
+            result = await session.execute(query)
+            bundle = result.scalar_one_or_none()
+            return _planning_bundle_to_dict(bundle) if bundle else None
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to get planning bundle: {e}", exc_info=True)
+        return None
+
+
+async def list_planning_bundle_versions_async(
+    session_id: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """
+    List planning bundle snapshot versions (async)
+    列出规划数据包快照版本历史
+
+    Args:
+        session_id: Session identifier
+        limit: Maximum number of results
+
+    Returns:
+        List of bundle metadata dicts (without bundle_json)
+    """
+    try:
+        async with get_async_session() as session:
+            query = (
+                select(PlanningBundle)
+                .where(PlanningBundle.session_id == session_id)
+                .order_by(PlanningBundle.version.desc())
+                .limit(limit)
+            )
+            result = await session.execute(query)
+            bundles = result.scalars().all()
+
+            return [
+                {
+                    "version": b.version,
+                    "sha256": b.sha256,
+                    "trigger_reason": b.trigger_reason,
+                    "built_at": b.built_at.isoformat() if b.built_at else None,
+                }
+                for b in bundles
+            ]
+    except Exception as e:
+        logger.error(f"[Async DB] Failed to list planning bundle versions: {e}", exc_info=True)
+        return []
+
+
+def _planning_bundle_to_dict(db_bundle: PlanningBundle) -> Dict[str, Any]:
+    """Convert PlanningBundle model to dictionary."""
+    return {
+        "id": db_bundle.id,
+        "session_id": db_bundle.session_id,
+        "version": db_bundle.version,
+        "bundle_json": db_bundle.bundle_json,
+        "sha256": db_bundle.sha256,
+        "trigger_reason": db_bundle.trigger_reason,
+        "built_at": db_bundle.built_at.isoformat() if db_bundle.built_at else None,
+    }

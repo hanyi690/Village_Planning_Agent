@@ -303,10 +303,56 @@ class PlanningTextDocument(SQLModel, table=True):
     )
 
 
+# ==========================================
+# Planning Bundle Models
+# ==========================================
+
+class PlanningBundle(SQLModel, table=True):
+    """
+    Planning bundle snapshot table
+    规划数据包快照表
+
+    Stores full session-level VillageBundle snapshots (including original
+    input documents, spatial features and embedded L1/L2/L3 reports).
+    Versioned — one snapshot per layer completion / manual trigger.
+    后续作为统一数据源替换 dimension_reports 存储。
+    """
+    __tablename__ = "planning_bundles"
+
+    # Primary key (auto-increment)
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Session relationship with cascade delete
+    session_id: str = Field(
+        sa_column=Column(
+            String,
+            ForeignKey("planning_sessions.session_id", ondelete="CASCADE"),
+            index=True,
+        )
+    )
+
+    # Version management
+    version: int = Field(default=1, index=True)
+
+    # Content (full JSON snapshot of the session VillageBundle)
+    bundle_json: str = Field(sa_column=Text())
+    sha256: str = Field(default="")
+
+    # Metadata
+    trigger_reason: Optional[str] = None  # "layer1" | "layer2" | "layer3" | "final" | "manual"
+    built_at: datetime = Field(default_factory=datetime.now)
+
+    # Table options
+    __table_args__ = (
+        Index("idx_planning_bundle_session_version", "session_id", "version"),
+    )
+
+
 __all__ = [
     "PlanningSession",
     "UISession",
     "DimensionReport",
     "UploadedFile",
     "PlanningTextDocument",
+    "PlanningBundle",
 ]
