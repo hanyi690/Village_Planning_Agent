@@ -7,6 +7,7 @@ from .gazetteer import (
     load_gazetteer,
     save_gazetteer,
     spatial_check,
+    spatial_score,
 )
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "load_gazetteer",
     "save_gazetteer",
     "spatial_check",
+    "spatial_score",
 ]

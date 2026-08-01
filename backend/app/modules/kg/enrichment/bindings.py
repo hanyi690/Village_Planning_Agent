@@ -17,6 +17,25 @@ logger = get_logger(__name__)
 _VLL_RE = re.compile(r"([\u4e00-\u9fff]{2,8}村)")
 _BSM_NUM_RE = re.compile(r"(\d{15,25})")
 
+# 金田村 12 个自然村（行政事实，规划文本 L160）— 用于过滤"金田村(村域)/个自然村(泛称)"等非村名
+_KNOWN_NATURAL_VILLAGES = {
+    "园寨", "田坑", "社前", "分水", "清明", "塘笃",
+    "长塘", "炉池", "肩丰", "营仔", "新山", "黄竹",
+}
+_VIL_EXCLUDES = {"金田村", "自然村", "全村", "该村", "各村", "本村"}
+
+
+def _is_village_name(name: str) -> bool:
+    if name in _VIL_EXCLUDES:
+        return False
+    if name.endswith("自然村"):
+        base = name[:-3]
+    elif name.endswith("村"):
+        base = name[:-1]
+    else:
+        base = name
+    return base in _KNOWN_NATURAL_VILLAGES
+
 
 def _get_semantic_memory():
     from app.modules.kg import get_semantic_memory
@@ -31,10 +50,10 @@ def _extract_village_mentions(reports: Dict[str, str]) -> List[Dict[str, str]]:
     for dim_key, content in (reports or {}).items():
         for m in _VLL_RE.finditer(content or ""):
             name = m.group(1)
-            if name in seen:
+            if not _is_village_name(name) or name in seen:
                 continue
             seen.add(name)
-            window = (content or "")[m.start(): m.start() + 80]
+            window = (content or "")[m.start(): m.start() + 120]
             mentions.append({"name": name, "hints": window[:80], "dim": dim_key})
     return mentions
 
@@ -46,50 +65,106 @@ async def _bind_village_to_cluster(
     llm: Any,
     round_num: int,
 ) -> Optional[str]:
-    """村名 → gazetteer → 聚类绑定；Flash 双确认（LLM ∧ 空间校验）。"""
+    """村名 → gazetteer → 聚类绑定；Flash 双确认（LLM ∧ 空间校验）。
+
+    村名无 gazetteer 条目时（KG 聚类名是"居民点N"，无村名）：
+      候选生成 — 按村名特征 hints 与各聚类地块 dlbm 构成的空间校验匹配；
+      候选>1 时 Flash 确认；绑定后 upsert gazetteer 条目（source=l1_enrichment）。
+    """
     from app.modules.kg import EntityAnnotation
-    from app.modules.kg.gazetteer import confirm_with_llm, spatial_check
-
-    entry = gazetteer.resolve(mention["name"])
-    if entry is None or not entry.entity_uri:
-        return None
-
-    # 空间校验（特征 vs 聚类地块 dlbm 构成）
-    cluster_dlbms: List[str] = []
+    from app.modules.kg.gazetteer import confirm_with_llm, spatial_score
     from app.modules.kg.ontology import PLN
 
+    # 预构建 bsm→dlbm 映射（一次全图扫描，避免逐候选重复扫）
+    bsm_to_dlbm: Dict[str, str] = {}
     try:
-        for bsm in entry.bsms[:50]:
-            for s, _, o in kg.g.triples((None, PLN.bsm, None)):
-                if str(o) == bsm:
-                    for _, _, dlbm in kg.g.triples((s, PLN.dlbm, None)):
-                        cluster_dlbms.append(str(dlbm))
+        for s, _, o in kg.g.triples((None, PLN.bsm, None)):
+            bsm = str(o)
+            for _, _, d in kg.g.triples((s, PLN.dlbm, None)):
+                bsm_to_dlbm[bsm] = str(d)
+                break
     except Exception:
         pass
-    ok_space = spatial_check(mention["hints"], cluster_dlbms)
 
-    ok_llm = True
-    if llm is not None:
-        ok_llm = await confirm_with_llm(
-            llm, mention["name"], entry.name, entry.description or entry.name
-        )
+    def _cluster_dlbms(entry) -> List[str]:
+        return [bsm_to_dlbm[b] for b in (entry.bsms or []) if b in bsm_to_dlbm]
 
-    if not (ok_space and ok_llm):
-        logger.info("[Enrich:L1] %s -> %s rejected (space=%s llm=%s)",
-                    mention["name"], entry.name, ok_space, ok_llm)
+    entry = gazetteer.resolve(mention["name"])
+    candidates: List[Any] = []
+    if entry is not None and entry.entity_uri:
+        candidates = [entry]
+    else:
+        # 候选生成：特征 hints 与聚类 dlbm 构成的空间校验
+        for e in gazetteer.entries:
+            if not e.entity_uri:
+                continue
+            if spatial_score(mention["hints"], _cluster_dlbms(e)) > 0:
+                candidates.append(e)
+
+    if not candidates:
         return None
 
+    # Flash 双确认：候选>1 时 LLM 判定；无 LLM 时确定性打分裁决（唯一最高分才绑定）
+    chosen = None
+    if len(candidates) == 1:
+        chosen = candidates[0]
+    elif llm is not None:
+        for e in candidates:
+            ok = await confirm_with_llm(llm, mention["name"], e.name, e.description or e.name)
+            if ok:
+                chosen = e
+                break
+    else:
+        scored = sorted(
+            ((spatial_score(mention["hints"], _cluster_dlbms(e)), e) for e in candidates),
+            key=lambda x: -x[0],
+        )
+        if scored and scored[0][0] > 0:
+            top_score = scored[0][0]
+            top = [e for s, e in scored if s == top_score]
+            if len(top) == 1:
+                chosen = top[0]
+    if chosen is None:
+        logger.info("[Enrich:L1] %s -> %d candidates unresolved", mention["name"], len(candidates))
+        return None
+
+    # 空间校验终审（候选生成的已过；直接命中条目的补校验）
+    if entry is not None:
+        ok_space = spatial_check(mention["hints"], _cluster_dlbms(chosen))
+        if not ok_space:
+            logger.info("[Enrich:L1] %s -> %s rejected (space)", mention["name"], chosen.name)
+            return None
+
+    # upsert gazetteer 条目（村名 → 聚类，供 Binder/渲染解析）
+    from app.modules.kg.gazetteer import GazetteerEntry, save_gazetteer
+    from app.modules.kg.gazetteer.gazetteer import gazetteer_path
+
+    new_entry = GazetteerEntry(
+        name=mention["name"],
+        entity_uri=chosen.entity_uri,
+        bsms=list(chosen.bsms),
+        centroid=chosen.centroid,
+        source="l1_enrichment",
+        confidence=chosen.confidence,
+        description=f"{mention['name']}（{chosen.name}，源自{mention['dim']}报告）",
+    )
+    gazetteer.upsert(new_entry)
+    try:
+        save_gazetteer(gazetteer, "jintian")
+    except Exception as e:
+        logger.warning("[Enrich] gazetteer save failed: %s", e)
+
     ann = EntityAnnotation(
-        entity_uri=entry.entity_uri,
+        entity_uri=chosen.entity_uri,
         entity_type="ResidentialCluster",
         description=f"{mention['name']}（源自{mention['dim']}报告）",
         source_text_refs=[f"{mention['dim']}:{mention['hints'][:40]}"],
         round_added=round_num,
         valid_from_round=round_num,
-        confidence=entry.confidence,
+        confidence=chosen.confidence,
     )
     _get_semantic_memory().add_entity_annotation(ann)
-    return entry.entity_uri
+    return chosen.entity_uri
 
 
 async def extract_bindings(
@@ -120,7 +195,7 @@ async def extract_bindings(
             logger.warning("[Enrich] gazetteer save failed: %s", e)
 
     bound_clusters = 0
-    if wave == 1:
+    if wave in (1, 3):
         for mention in _extract_village_mentions(reports):
             uri = await _bind_village_to_cluster(mention, gazetteer, kg, llm, wave)
             if uri:

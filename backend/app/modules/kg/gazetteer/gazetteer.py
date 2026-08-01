@@ -133,21 +133,27 @@ def load_gazetteer(village: str) -> Gazetteer:
 
 
 def _cluster_entries_from_kg(kg: Any, bundle: Any) -> List[GazetteerEntry]:
-    """KG ResidentialCluster（SPARQL 地块集+名称）+ bundle 地块几何质心。"""
-    from rdflib import RDF, Literal, URIRef
-    from app.modules.kg.ontology import PLN, EntityTypes, Relations
+    """KG ResidentialCluster（hasCentroid + 空间距离选地块集）。
 
-    parcels_by_bsm = {}
+    builder 的地块 sfWithin 聚类关系未生效（实测只指向 village）— 改用聚类质心
+    （GEO:hasCentroid WKT）+ bundle 地块几何距离（400m 阈值）确定聚类内地块。
+    """
+    from rdflib import RDF
+    from app.modules.kg.ontology import GEO, PLN, EntityTypes
+    from app.modules.spatial_ops.geometry import _compute_centroid
+
+    parcel_pts = {}
     if bundle is not None:
-        from app.modules.spatial_ops.geometry import _compute_centroid
-
         for f in (bundle.polygons.get("landuse_current") or []):
             bsm = str(f.bsm or "")
             geom = f.geometry
             if bsm and geom:
-                c = _compute_centroid({"type": "Feature", "properties": {}, "geometry": geom})
+                c = _compute_centroid({
+                    "type": "FeatureCollection",
+                    "features": [{"type": "Feature", "properties": {}, "geometry": geom}],
+                })
                 if c:
-                    parcels_by_bsm[bsm] = c
+                    parcel_pts[bsm] = c
 
     entries: List[GazetteerEntry] = []
     for cluster in kg.g.subjects(RDF.type, EntityTypes.ResidentialCluster):
@@ -155,16 +161,28 @@ def _cluster_entries_from_kg(kg: Any, bundle: Any) -> List[GazetteerEntry]:
         for _, _, o in kg.g.triples((cluster, PLN.name, None)):
             name = str(o)
             break
-        bsms = []
-        for s, _, _ in kg.g.triples((None, Relations.sfWithin, cluster)):
-            for _, _, bsm_lit in kg.g.triples((s, PLN.bsm, None)):
-                bsms.append(str(bsm_lit))
         centroid = None
-        if bsms:
-            pts = [parcels_by_bsm[b] for b in bsms if b in parcels_by_bsm]
-            if pts:
-                centroid = [round(sum(p[0] for p in pts) / len(pts), 6),
-                            round(sum(p[1] for p in pts) / len(pts), 6)]
+        for _, _, geom in kg.g.triples((cluster, GEO.hasCentroid, None)):
+            for _, _, o in kg.g.triples((geom, GEO.asWKT, None)):
+                # WKT: POINT(lon lat)
+                import re as _re
+
+                m = _re.findall(r"[\d.+-]+", str(o))
+                if len(m) >= 2:
+                    try:
+                        centroid = [float(m[0]), float(m[1])]
+                    except (TypeError, ValueError):
+                        centroid = None
+                break
+            if centroid is not None:
+                break
+        bsms = []
+        if centroid is not None:
+            for bsm, pt in parcel_pts.items():
+                dx = pt[0] - centroid[0]
+                dy = pt[1] - centroid[1]
+                if dx * dx + dy * dy < 0.004 * 0.004:  # ~400m
+                    bsms.append(bsm)
         entries.append(GazetteerEntry(
             name=name or f"居民点{len(entries) + 1}",
             entity_uri=str(cluster),
@@ -187,7 +205,10 @@ def _annotation_entries_from_memory(memory: Any, bundle: Any) -> List[GazetteerE
             bsm = str(f.bsm or "")
             geom = f.geometry
             if bsm and geom:
-                c = _compute_centroid({"type": "Feature", "properties": {}, "geometry": geom})
+                c = _compute_centroid({
+                    "type": "FeatureCollection",
+                    "features": [{"type": "Feature", "properties": {}, "geometry": geom}],
+                })
                 if c:
                     parcels_by_bsm[bsm] = c
     for uri, ann in (memory.entity_annotations or {}).items():
@@ -260,27 +281,34 @@ async def confirm_with_llm(
     return False
 
 
+def spatial_score(
+    village_feature_hints: str,
+    cluster_dlbms: List[str],
+) -> int:
+    """特征词命中计数（确定性裁决用）：hints 中每个特征词被聚类构成支持 +1。"""
+    if not village_feature_hints or not cluster_dlbms:
+        return 0
+    hint_to_prefix = {
+        "耕地": "11", "农田": "11", "水田": "11", "稻田": "11", "菜地": "11",
+        "林": "13", "山": "13", "坡": "13",
+        "园": "12", "果": "12",
+        "宅基地": "21", "居住": "21", "建设": "21", "住宅": "21",
+        "农房": "21", "民房": "21", "房屋": "21", "村庄": "21", "居民点": "21",
+        "水": "31", "河": "31", "塘": "31", "溪": "31",
+    }
+    score = 0
+    for kw, prefix in hint_to_prefix.items():
+        if kw in village_feature_hints and any(str(d).startswith(prefix) for d in cluster_dlbms):
+            score += 1
+    return score
+
+
 def spatial_check(
     village_feature_hints: str,
     cluster_dlbms: List[str],
 ) -> bool:
-    """Flash 双确认之二：空间校验 — 村名特征描述与聚类地块 dlbm 构成一致性。
-
-    heuristic: 特征含"耕地/农田"→ 聚类需含 11xx；含"林"→ 13xx；含"宅基地/居住"→ 21xx。
-    """
-    if not village_feature_hints:
-        return True
-    hint_to_prefix = {
-        "耕地": "11", "农田": "11", "水田": "11",
-        "林": "13",
-        "园": "12", "果": "12",
-        "宅基地": "21", "居住": "21", "建设": "21", "住宅": "21",
-        "水": "31", "河": "31", "塘": "31",
-    }
-    for kw, prefix in hint_to_prefix.items():
-        if kw in village_feature_hints:
-            return any(str(d).startswith(prefix) for d in cluster_dlbms)
-    return True
+    """Flash 双确认之二：空间校验 — 任一特征词匹配即通过（any 语义）。"""
+    return spatial_score(village_feature_hints, cluster_dlbms) > 0
 
 
 __all__ = [
