@@ -17,6 +17,47 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+async def _snapshot_bundle(session_id: str, trigger_reason: str) -> None:
+    """Persist a versioned session bundle snapshot at a layer boundary.
+
+    Non-fatal: a failed snapshot is logged and the pipeline continues.
+    """
+    if not session_id:
+        return
+    try:
+        from app.services.session_bundle import snapshot_session_bundle
+
+        await snapshot_session_bundle(session_id, trigger_reason=trigger_reason)
+    except Exception as e:
+        logger.warning(
+            "[layer_completion_check] Bundle snapshot failed for %s (trigger=%s): %s",
+            session_id, trigger_reason, e,
+        )
+
+
+async def _maybe_extract_bindings(session_id: str, layer: int) -> None:
+    """Wave-end hook: extract village/BSM bindings from the completed layer.
+
+    Non-fatal: extraction failures are logged and never break the pipeline.
+    """
+    if not session_id:
+        return
+    try:
+        from app.services.report_store import ReportStore
+
+        store = ReportStore.get_instance()
+        reports = await store.get_layer_reports(session_id, layer)
+        if not reports:
+            logger.info("[layer_completion_check] No reports for L%d, skip extraction", layer)
+            return
+        from app.agent.gis.parse.agent import extract_bindings
+
+        stats = await extract_bindings(session_id, wave=layer, reports=reports)
+        logger.info("[layer_completion_check] PARSE bindings layer=%d stats=%s", layer, stats)
+    except Exception as e:
+        logger.warning("[layer_completion_check] PARSE bindings failed for %s L%d: %s", session_id, layer, e)
+
+
 async def layer_completion_check(
     state: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -95,6 +136,7 @@ async def layer_completion_check(
                 event_type="cascade_complete",
                 revised_dimensions=all_dims,
             )
+            await _snapshot_bundle(session_id, "revision")
             return {
                 "is_revision": False,
                 "need_revision": False,
@@ -175,6 +217,10 @@ async def layer_completion_check(
                 dimension_count=len(completed),
                 total_chars=total_chars,
             )
+            await _maybe_extract_bindings(session_id, layer)
+            await _snapshot_bundle(
+                session_id, "final" if layer >= 3 else f"layer{layer}",
+            )
             if layer < 3:
                 next_phase = get_next_phase(phase)
                 next_layer = _phase_to_layer(next_phase) if next_phase else None
@@ -205,6 +251,7 @@ async def layer_completion_check(
                 dimension_count=len(completed),
                 total_chars=total_chars,
             )
+            await _snapshot_bundle(session_id, f"layer{layer}")
             logger.info(
                 "[layer_completion_check] Rejected: starting revision for %s",
                 resume_data.get("dimensions", []),
@@ -226,6 +273,10 @@ async def layer_completion_check(
         layer_name=get_layer_name(layer),
         dimension_count=len(completed),
         total_chars=total_chars,
+    )
+    await _maybe_extract_bindings(session_id, layer)
+    await _snapshot_bundle(
+        session_id, "final" if layer >= 3 else f"layer{layer}",
     )
     if layer < 3:
         next_phase = get_next_phase(phase)
