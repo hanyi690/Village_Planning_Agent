@@ -338,15 +338,23 @@ def main():
     print("\n[4/5] Rendering integrated map...")
     fig, ax = plt.subplots(1, 1, figsize=(24, 30))
 
-    # Background: current landuse (very faded)
-    bg_colors = {
-        '居住用地': '#FFF8DC', '产业用地': '#FFF0F0', '公共服务用地': '#F0F0FF',
-        '生态绿地': '#F0FFF0', '交通用地': '#F5F5F5', '水域': '#F0F8FF', '农业用地': '#FFF8F0',
+    # Background: current landuse by DLBM category (清晰底图，淡化 + 淡描边)
+    dlbm_bg = {
+        '耕地(11)': ('110', '#f5e6a8', '耕地'),
+        '园地(12)': ('120', '#f7d9a8', '园地'),
+        '林地(13)': ('130', '#cfe6c4', '林地'),
+        '草地(14)': ('140', '#e6f0d9', '草地'),
+        '建设用地(21)': ('210', '#e8d5d5', '建设用地'),
+        '水域(31)': ('310', '#cfe3f0', '水域'),
     }
-    for zt, c in bg_colors.items():
-        sub = lu_curr_p[lu_curr_p['zone_type'] == zt]
+    lu_curr_p['dlbm2'] = lu_curr_p['DLBM'].apply(lambda x: str(x)[:3] if str(x) else '')
+    for label, (prefix, color, legend) in dlbm_bg.items():
+        sub = lu_curr_p[lu_curr_p['dlbm2'] == prefix]
         if len(sub) > 0:
-            sub.plot(ax=ax, color=c, alpha=0.4, edgecolor='none')
+            sub.plot(ax=ax, color=color, alpha=0.55, edgecolor='#ffffff', linewidth=0.2)
+    other = lu_curr_p[~lu_curr_p['dlbm2'].isin([p for p, _, _ in dlbm_bg.values()])]
+    if len(other) > 0:
+        other.plot(ax=ax, color='#f0f0f0', alpha=0.5, edgecolor='#ffffff', linewidth=0.2)
 
     # Farmland protection: beige outline
     if farmland_p is not None:
@@ -362,7 +370,23 @@ def main():
     if road_p is not None:
         road_p.plot(ax=ax, color='#4169E1', linewidth=0.8, alpha=0.5, label='现状道路')
 
-    # ---- Spatial structure (PROMINENT) ----
+    # ---- 规划分区层（planning_zone，若已落盘） ----
+    planning_zone_legend = []
+    planning_zone_p = load_gdf('planning_zone.geojson', OUT_DIR)
+    if planning_zone_p is not None and len(planning_zone_p) > 0:
+        planning_zone_p = planning_zone_p.to_crs('EPSG:3857')
+        for _, row in planning_zone_p.iterrows():
+            color = str(row.get('color') or '#CCCCCC')
+            zt = str(row.get('zone_type') or row.get('assigned_zone') or '分区')
+            if row.geometry.is_empty:
+                continue
+            gpd.GeoSeries([row.geometry], crs='EPSG:3857').plot(
+                ax=ax, color=color, alpha=0.25, edgecolor=color, linewidth=0.8)
+            if zt not in [x[0] for x in planning_zone_legend]:
+                planning_zone_legend.append((zt, color))
+        print(f"  planning_zone overlay: {len(planning_zone_legend)} zone types")
+
+    # ---- Spatial structure: 只保留一核一带标注，移除大色块填充（原"看不懂"元凶） ----
     struct_colors = {
         '生态保育屏障区': ('#2E8B57', '生态保育\n屏障区\n362ha'),
         '生态农业发展区': ('#DEB887', '生态农业\n发展区\n1961ha'),
@@ -371,21 +395,19 @@ def main():
     for name, (color, label) in struct_colors.items():
         if name in structure_zones and len(structure_zones[name]) > 0:
             parcels = structure_zones[name]
-            # Fill with low opacity
-            parcels.plot(ax=ax, color=color, alpha=0.2, edgecolor='none')
-            # Prominent dashed border
+            # 只画虚线边界 + 标签（不再填充大色块 — 避免盖住底图/分区）
             boundary_geom = parcels.geometry.union_all()
             if not boundary_geom.is_empty:
                 simplified = boundary_geom.simplify(100, preserve_topology=True)
                 gpd.GeoSeries([simplified], crs='EPSG:3857').boundary.plot(
-                    ax=ax, color=color, linewidth=2.5, linestyle='--', alpha=0.8)
+                    ax=ax, color=color, linewidth=1.8, linestyle='--', alpha=0.7)
 
                 # Text label at zone centroid
                 ctr = simplified.centroid
-                ax.annotate(label, xy=(ctr.x, ctr.y), fontsize=11, ha='center',
+                ax.annotate(label, xy=(ctr.x, ctr.y), fontsize=10, ha='center',
                             va='center', fontweight='bold', color=color,
                             bbox=dict(boxstyle='round,pad=0.3', fc='white',
-                                      alpha=0.85, ec=color, lw=1.5))
+                                      alpha=0.85, ec=color, lw=1.2))
 
     # ---- Custom functional zones (P7 L4 FunctionalZone, vocabulary colors) ----
     custom_legend_items = []
@@ -518,17 +540,20 @@ def main():
         pass  # Using custom legend below
 
     custom_lines = [
+        # 底图组
+        mpatches.Patch(color='#f5e6a8', alpha=0.55, label='底图-耕地'),
+        mpatches.Patch(color='#cfe6c4', alpha=0.55, label='底图-林地'),
+        mpatches.Patch(color='#e8d5d5', alpha=0.55, label='底图-建设用地'),
+        mpatches.Patch(color='#cfe3f0', alpha=0.55, label='底图-水域'),
+        # 控制线组
         mpatches.Patch(color='#FFE4B5', alpha=0.5, label='永久基本农田'),
         mpatches.Patch(color='#228B22', alpha=0.4, label='生态保护红线'),
-        mpatches.Patch(color='#FF6347', alpha=0.2, label='宜居生活建设区'),
-        mpatches.Patch(color='#DEB887', alpha=0.2, label='生态农业发展区'),
-        mpatches.Patch(color='#2E8B57', alpha=0.2, label='生态保育屏障区'),
         plt.Line2D([0], [0], color='#4169E1', linewidth=1, label='现状道路'),
-        plt.Line2D([0], [0], marker='*', color='darkred', markersize=12,
-                   linestyle='None', label='一核 (服务中心)'),
     ]
+    for zt, color in planning_zone_legend:
+        custom_lines.append(mpatches.Patch(color=color, alpha=0.25, label=f'规划分区-{zt}'))
     for name, color in custom_legend_items:
-        custom_lines.append(mpatches.Patch(color=color, alpha=0.45, label=name))
+        custom_lines.append(mpatches.Patch(color=color, alpha=0.45, label=f'功能区-{name}'))
     for cat, (marker, color, _) in cat_icons.items():
         if any(p.get('category') == cat for p in located_projects):
             custom_lines.append(

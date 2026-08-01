@@ -312,6 +312,18 @@ async def main(session_id: str, skip_render: bool) -> None:
     else:
         print("[Pipeline] WARNING: no custom_functional_zone layer produced")
 
+    # 落盘全部图层（每层独立 geojson，供渲染分开图层使用）
+    saved_layers = []
+    for c in layers:
+        lt = c.get("layerType")
+        data = c.get("data")
+        if not lt or not data or not data.get("features"):
+            continue
+        path = OUT_DIR / f"{lt}.geojson"
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        saved_layers.append(f"{lt}:{len(data['features'])}")
+    print(f"[Pipeline] saved layers: {saved_layers}")
+
     print(f"[Pipeline] validation: {result.get('validation_result', {})}")
     print("=" * 60)
 
