@@ -342,6 +342,43 @@ def compute_parcel_relations(parcels: List[Any], roads: Optional[List[Any]] = No
     return result
 
 
+def point_in_polygon(point: Tuple[float, float], geometry: Dict[str, Any]) -> bool:
+    """Ray-casting point-in-polygon for GeoJSON Polygon/MultiPolygon (pure python)."""
+    if not point or not geometry:
+        return False
+    coords = geometry.get("coordinates") or []
+    if geometry.get("type") == "Polygon":
+        coords = [coords]
+    px, py = float(point[0]), float(point[1])
+    for poly in coords:
+        if not poly:
+            continue
+        ring = poly[0] if isinstance(poly[0], list) else poly
+        inside = False
+        j = len(ring) - 1
+        for i in range(len(ring)):
+            xi, yi = float(ring[i][0]), float(ring[i][1])
+            xj, yj = float(ring[j][0]), float(ring[j][1])
+            if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi) + xi):
+                inside = not inside
+            j = i
+        if inside:
+            return True
+    return False
+
+
+def village_boundary_geometry(bundle: Any) -> Optional[Dict[str, Any]]:
+    """First village boundary polygon (admin_areas, fallback planning_scope)."""
+    if bundle is None:
+        return None
+    for key in ("admin_areas", "planning_scope"):
+        for f in bundle.polygons.get(key) or []:
+            geom = getattr(f, "geometry", None) or (f.get("geometry") if isinstance(f, dict) else None)
+            if geom:
+                return geom
+    return None
+
+
 __all__ = [
     "_compute_centroid",
     "_compute_total_area",
@@ -351,4 +388,6 @@ __all__ = [
     "TouchRelation",
     "NearbyRelation",
     "ConnectedRelation",
+    "point_in_polygon",
+    "village_boundary_geometry",
 ]
