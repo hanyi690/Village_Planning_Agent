@@ -407,6 +407,8 @@ class SpatialPlanningIntent(BaseModel):
     # Road targets (new — fills road sub-task gap)
     road_targets: List[RoadTarget] = Field(default_factory=list)
 
+    # Custom functional zone targets (P6 — from Explore/Binder project domain)
+    custom_zone_targets: List["CustomZoneTarget"] = Field(default_factory=list)
     # Area constraints (preserved)
     total_area_ha: Optional[float] = None
     construction_area_ha: Optional[float] = None
@@ -463,3 +465,12 @@ __all__ = [
     "SpatialRule",
     "SpatialConstraint",
 ]
+
+
+# P6: forward ref for custom_zone_targets — resolve CustomZoneTarget lazily
+try:
+    from .custom_zone_contracts import CustomZoneTarget  # noqa: F401
+
+    SpatialPlanningIntent.model_rebuild()
+except Exception:
+    pass

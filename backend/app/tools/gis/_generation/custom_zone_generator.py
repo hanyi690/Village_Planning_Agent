@@ -71,6 +71,9 @@ class CustomZoningGenerator:
                 if bsm in self.parcel_by_bsm
             ]
             if not selected:
+                # P6.5: 无 BSM 时按类别 typing_rules(dlbm_in) 自动选 parcels（语义规则选择）
+                selected = self._select_by_rules(category)
+            if not selected:
                 continue
             merged = unary_union([p["geometry"] for p in selected])
             if protection is not None and merged.intersects(protection):
@@ -107,6 +110,17 @@ class CustomZoningGenerator:
             if c.code == code:
                 return c
         return None
+
+    def _select_by_rules(self, category: VocabularyCategory) -> List[dict]:
+        """Select parcels by the category's typing_rules (dlbm_in) when no
+        target_bsms were provided — semantic rule selection."""
+        codes = set()
+        for rule in category.typing_rules or []:
+            if rule.kind == "dlbm_in":
+                codes.update(str(v) for v in (rule.value or []))
+        if not codes:
+            return []
+        return [p for p in self.parcels if str(p.get("dlbm", "")) in codes]
 
     def _protection_geometry(self) -> BaseGeometry | None:
         geoms: List[BaseGeometry] = []
