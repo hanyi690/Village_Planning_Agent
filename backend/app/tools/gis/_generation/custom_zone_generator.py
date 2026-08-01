@@ -152,64 +152,31 @@ class CustomZoningGenerator:
         return None
 
     def _select_by_rules(self, category: VocabularyCategory) -> List[dict]:
-        """Select parcels by the category's typing_rules expression DSL.
+        """Select parcels by the category's typing_rules — unified expr_eval DSL.
 
         v5 multi-factor: dlbm_in / within_zone / not_within_zone /
         slope_lt / road_distance_lt / near_poi + and/any/not composites.
-        Each parcel carries a context built by the caller:
-          {dlbm, area_ha, slope_deg, road_distance_m, zone_membership, poi_hits}
+        Evaluation delegates to ``app.agent.gis.vocab.rules`` (expr_eval),
+        removing the previous duplicate hand-rolled evaluator.
         """
+        from app.agent.gis.vocab.rules import evaluate_rules, parcel_to_context
+
         rules = category.typing_rules or []
         if not rules:
             return []
         contexts = self._parcel_contexts
         if not contexts:
             contexts = {
-                p["bsm"]: {
-                    "dlbm": str(p.get("dlbm", "")),
-                    "area_ha": float(p.get("area_ha", 0) or 0),
-                    "slope_deg": float(p.get("slope_deg", 999) or 999),
-                    "road_distance_m": float(p.get("road_distance_m", 99999) or 99999),
-                    "zone_membership": list(p.get("zone_membership", []) or []),
-                    "poi_hits": list(p.get("poi_hits", []) or []),
-                }
+                p["bsm"]: parcel_to_context(p)
                 for p in self.parcels
             }
             self._parcel_contexts = contexts
         return [
             p for p in self.parcels
-            if any(self._eval_rule(r, contexts[p["bsm"]]) for r in rules)
+            if evaluate_rules(rules, contexts[p["bsm"]])
         ]
 
     _parcel_contexts: dict = None
-
-    def _eval_rule(self, rule: "TypingRule", ctx: dict) -> bool:
-        kind = rule.kind
-        value = rule.value
-        if kind == "and":
-            return all(self._eval_rule(c, ctx) for c in (rule.children or []))
-        if kind == "any":
-            return any(self._eval_rule(c, ctx) for c in (rule.children or []))
-        if kind == "not":
-            return not (rule.children and self._eval_rule(rule.children[0], ctx))
-        if kind == "dlbm_in":
-            return str(ctx["dlbm"]) in [str(v) for v in (value or [])]
-        if kind == "field_equals":
-            return str(ctx.get(str(value.get("field", "")), "")) == str(value.get("value", ""))
-        if kind == "within_zone":
-            return value in ctx["zone_membership"]
-        if kind == "not_within_zone":
-            return value not in ctx["zone_membership"]
-        if kind == "slope_lt":
-            return ctx["slope_deg"] < float(value)
-        if kind == "road_distance_lt":
-            return ctx["road_distance_m"] < float(value)
-        if kind == "near_poi":
-            return any(
-                str(value) in str(h.get("name", ""))
-                for h in ctx["poi_hits"]
-            )
-        return False
 
     def _protection_geometry(self) -> BaseGeometry | None:
         geoms: List[BaseGeometry] = []

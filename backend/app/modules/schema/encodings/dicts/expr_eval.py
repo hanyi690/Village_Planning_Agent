@@ -23,7 +23,7 @@ class MappingContext(BaseModel):
 
 
 class Condition(BaseModel):
-    kind: Literal["func", "comparison", "and", "or", "null"]
+    kind: Literal["func", "comparison", "and", "or", "not", "null"]
     func: str | None = None
     args: list[Any] = []
     field: str | None = None
@@ -39,6 +39,8 @@ class Condition(BaseModel):
                 return all(c.evaluate(ctx) for c in self.children)
             case "or":
                 return any(c.evaluate(ctx) for c in self.children)
+            case "not":
+                return not (self.children and self.children[0].evaluate(ctx))
             case "comparison":
                 actual = ctx.get(self.field)
                 if self.op == "==":
