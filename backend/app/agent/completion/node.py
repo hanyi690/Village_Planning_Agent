@@ -52,8 +52,14 @@ async def _maybe_extract_bindings(session_id: str, layer: int) -> None:
             return
         # KG 多级增强（enrichment）：L1 村名绑定 / L2/L3 实体注解 + 关系注记
         from app.modules.kg.enrichment import run_wave
+        from app.tools.access.shared import resolve_bundle
 
-        stats = await run_wave(session_id, wave=layer, reports=reports)
+        _bundle = None
+        try:
+            _bundle = await resolve_bundle(session_id)
+        except Exception:
+            pass
+        stats = await run_wave(session_id, wave=layer, reports=reports, bundle=_bundle)
         logger.info("[layer_completion_check] KG enrichment layer=%d stats=%s", layer, stats)
     except Exception as e:
         logger.warning("[layer_completion_check] KG enrichment failed for %s L%d: %s", session_id, layer, e)

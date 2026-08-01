@@ -60,7 +60,7 @@ def _default_dlbm_for(name: str) -> List[str]:
 
 def extract_vocabulary_deterministic(reports: Dict[str, str]) -> Vocabulary:
     """无 LLM 兜底：从报告分区表提取类别，语义推断颜色与地类线索。"""
-    from app.agent.gis.parse.tables import _extract_zone_tables
+    from app.modules.parsing.tables import _extract_zone_tables
 
     categories: List[VocabularyCategory] = []
     seen = set()
@@ -88,11 +88,19 @@ _VOCAB_PROMPT = """你是村庄规划功能区词汇提取助手。从下列 L3 
 {reports}
 
 只输出 JSON（不要任何其他文字）：
-{{"categories": [{{"name_zh": "生态保护区", "color": "#2d6a4f", "dlbm_hints": ["0301", "0302"], "is_protection": true, "evidence": "报告原文依据句"}}]}}
+{{"categories": [{{"name_zh": "林下开发区", "color": "#c9d67a", "dlbm_hints": ["1340", "1350"], "is_protection": false,
+  "rules": [{{"kind": "dlbm_in", "value": ["1340", "1350"]}},
+           {{"kind": "not_within_zone", "value": "in_ecological_redline"}},
+           {{"kind": "road_distance_lt", "value": 500}}],
+  "evidence": "报告原文依据句"}}]}}
 要求：
 - color 必须是合法的 hex 格式（#RRGGBB），由你自由选择
-- dlbm_hints 是推测的**现状用地分类码**（三调现状分类：1100 耕地、1200 园地、1340 商品林、1350 生态林、2121 宅基地、2124 经营性建设用地、3100 水域）
+- dlbm_hints 是推测的**现状用地分类码**（1100 耕地、1200 园地、1340 商品林、1350 生态林、2121 宅基地、2124 经营性建设用地、3100 水域）
 - is_protection: 生态/保护/农田类功能区为 true（与三线重合），建设/产业类为 false
+- rules 是复合规则表达式（可选，缺省时用 dlbm_hints），谓词白名单：
+    dlbm_in[码数组] / within_zone[区域] / not_within_zone[区域] /
+    slope_lt[度] / road_distance_lt[米] / near_poi[名称] /
+    and[子规则数组] / any[子规则数组] / not[子规则数组]
 - 若没有可提取的功能区，输出 {{"categories": []}}
 """
 
@@ -118,16 +126,45 @@ async def _extract_vocabulary_llm(llm: Any, reports: Dict[str, str]) -> Vocabula
         if not _HEX_RE.match(color):
             color = _COLOR_POOL[len(categories) % len(_COLOR_POOL)]
         hints = [str(c) for c in (item.get("dlbm_hints") or [])][:6]
+        rules = _parse_rules(item.get("rules"), hints)
         categories.append(
             VocabularyCategory(
                 code=f"FZ{len(categories) + 1:02d}",
                 name_zh=name,
                 color=color,
-                typing_rules=[TypingRule(kind="dlbm_in", value=hints or _default_dlbm_for(name))],
+                typing_rules=rules or [TypingRule(kind="dlbm_in", value=hints or _default_dlbm_for(name))],
                 is_protection=bool(item.get("is_protection")) or _is_protection(name),
             )
         )
     return Vocabulary(name="l3_extracted", categories=categories)
+
+
+_ALLOWED_KINDS = {
+    "dlbm_in", "within_zone", "not_within_zone", "slope_lt",
+    "road_distance_lt", "near_poi", "and", "any", "not",
+}
+
+
+def _parse_rules(raw: Any, fallback_hints: List[str]) -> List[TypingRule]:
+    """LLM 输出 rules → TypingRule（有界谓词白名单，非法谓词丢弃）。"""
+    if not isinstance(raw, list):
+        return []
+    rules: List[TypingRule] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind", ""))
+        if kind not in _ALLOWED_KINDS:
+            continue
+        if kind in ("and", "any", "not"):
+            children = _parse_rules(item.get("children") or item.get("rules"), [])
+            if children:
+                rules.append(TypingRule(kind=kind, children=children))
+        else:
+            value = item.get("value")
+            if value is not None:
+                rules.append(TypingRule(kind=kind, value=value))
+    return rules
 
 
 async def extract_vocabulary_from_reports(

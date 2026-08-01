@@ -183,8 +183,8 @@ def parse(
     axes = _extract_axes(planning_text)
     roads = _extract_roads(planning_text)
 
-    # P3: 结构化表格（单位级检测，见 .tables）
-    from .tables import _extract_project_tables as _ept, _extract_zone_tables as _ezt
+    # P3: 结构化表格（单位级检测，见 app.modules.parsing.tables）
+    from app.modules.parsing.tables import _extract_project_tables as _ept, _extract_zone_tables as _ezt
 
     zone_targets += _ezt(planning_text)
     facilities += _ept(planning_text)
@@ -437,7 +437,7 @@ def _extract_entity_semantics(reports: Dict[str, str]) -> List[Dict[str, str]]:
     entities: List[Dict[str, str]] = []
     seen = set()
     for dim_key, content in (reports or {}).items():
-        from .tables import _extract_project_tables as _ept2, _extract_zone_tables as _ezt2
+        from app.modules.parsing.tables import _extract_project_tables as _ept2, _extract_zone_tables as _ezt2
 
         for zt in _ezt2(content):
             key = ("FunctionalZone", zt.land_use)

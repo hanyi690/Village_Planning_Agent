@@ -142,8 +142,8 @@ def _cluster_entries_from_kg(kg: Any, bundle: Any) -> List[GazetteerEntry]:
         from app.modules.spatial_ops.geometry import _compute_centroid
 
         for f in (bundle.polygons.get("landuse_current") or []):
-            bsm = str(getattr(f, "bsm", "") or "")
-            geom = getattr(f, "geometry", None)
+            bsm = str(f.bsm or "")
+            geom = f.geometry
             if bsm and geom:
                 c = _compute_centroid({"type": "Feature", "properties": {}, "geometry": geom})
                 if c:
@@ -184,8 +184,8 @@ def _annotation_entries_from_memory(memory: Any, bundle: Any) -> List[GazetteerE
     parcels_by_bsm = {}
     if bundle is not None:
         for f in (bundle.polygons.get("landuse_current") or []):
-            bsm = str(getattr(f, "bsm", "") or "")
-            geom = getattr(f, "geometry", None)
+            bsm = str(f.bsm or "")
+            geom = f.geometry
             if bsm and geom:
                 c = _compute_centroid({"type": "Feature", "properties": {}, "geometry": geom})
                 if c:

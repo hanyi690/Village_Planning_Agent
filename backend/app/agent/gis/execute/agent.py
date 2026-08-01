@@ -117,6 +117,16 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                 mip_parse_constraints.append(mip_c)
         all_constraints = list(state.kg_constraints or []) + mip_parse_constraints
 
+        # B1: MIP 候选画布 — binder/gazetteer 产出的 BSM（custom_zone_targets.target_bsms）
+        # 注入 zone_targets.candidate_bsms，限定 MIP 分配池（空间定位生效）
+        canvas_bsms = set()
+        for czt in (getattr(state.intent, "custom_zone_targets", None) or []):
+            canvas_bsms.update(czt.target_bsms or [])
+        if canvas_bsms:
+            for zt in zone_targets:
+                zt.candidate_bsms = sorted(set(zt.candidate_bsms or []) | canvas_bsms)
+            logger.info("[EXECUTE:layout] MIP canvas: %d candidate BSMs from binder/gazetteer", len(canvas_bsms))
+
         allocator = MIPZoneAllocator()
         allocated_geojson, alloc_trace = allocator.solve(
             landuse_geojson=landuse,
@@ -171,6 +181,16 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                     for f in (landuse.get("features") or [])
                 ]
                 parcels = [p for p in parcels if p["bsm"] and p["geometry"] is not None]
+
+                # B3: 多因子上下文（slope/road/zone/poi）合并进 parcels，供规则求值
+                try:
+                    from app.agent.gis.vocab.context import build_parcel_contexts
+
+                    ctxs = build_parcel_contexts(parcels, gis_bundle)
+                    for p in parcels:
+                        p.update(ctxs.get(str(p["bsm"]), {}))
+                except Exception as e:
+                    logger.warning("[EXECUTE:layout] parcel context build failed: %s", e)
 
                 three_lines = {}
                 if gis_bundle is not None:

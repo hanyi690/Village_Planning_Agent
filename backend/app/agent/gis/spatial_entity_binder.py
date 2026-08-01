@@ -72,6 +72,22 @@ class DeterministicBundleBinder:
                     status, geometry, geometry_source, confirmation = "confirmed", copy.deepcopy(feature.get("geometry")), "unique_kg_entity_bsm", False
                 elif instruction.get("candidate_bbox"):
                     status, geometry_source = "candidate_bbox", "bbox_candidate"
+
+            # A2 语义绑定：无 BSM 时，实体提及村名 → KG gazetteer → 候选 BSM 集
+            if status == "unresolved" and not source_bsms:
+                from app.modules.kg.gazetteer import load_gazetteer
+
+                gazetteer = load_gazetteer("jintian")
+                if gazetteer.entries:
+                    for mention in (instruction.get("entity_mentions") or []):
+                        entry = gazetteer.resolve(str(mention))
+                        if entry is not None and entry.bsms:
+                            source_bsms = list(entry.bsms)
+                            matched = [self.by_bsm[b] for b in source_bsms if b in self.by_bsm]
+                            status = "candidate_semantic"
+                            geometry_source = "gazetteer"
+                            confirmation = True
+                            break
             reference = matched[0] if len(matched) == 1 else {}
             props = (reference.get("properties") or {}) if reference else {}
             output.append({

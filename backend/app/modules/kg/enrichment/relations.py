@@ -66,53 +66,37 @@ def annotate_cluster_relations(kg: Any, memory: Any, round_num: int = 1) -> int:
     return written
 
 
-def annotate_parcel_protection(kg: Any, bundle: Any, memory: Any, round_num: int = 1) -> int:
-    """地块↔约束面 located_in 关系注记（用 bundle 几何 intersects 红线/农田）。"""
+def annotate_parcel_protection(kg: Any, memory: Any, round_num: int = 1) -> int:
+    """地块↔约束面 located_in/sfIntersects 关系注记（KG 三元组，无几何依赖）。"""
     from app.modules.kg import RelationAnnotation
     from app.modules.kg.ontology import PLN
 
-    if bundle is None:
-        return 0
-    from shapely.geometry import shape
-
-    protection = {}
-    for key, label in (("ecological_redline", "生态保护红线"), ("farmland_protection", "永久基本农田")):
-        geoms = [shape(getattr(f, "geometry", None)) for f in (bundle.polygons.get(key) or [])]
-        geoms = [g for g in geoms if g is not None and not g.is_empty]
-        if geoms:
-            from shapely.ops import unary_union
-
-            protection[label] = unary_union(geoms)
-
-    if not protection:
-        return 0
-
     written = 0
-    for f in (bundle.polygons.get("landuse_current") or []):
-        bsm = str(getattr(f, "bsm", "") or "")
-        geom = getattr(f, "geometry", None)
-        if not bsm or geom is None:
-            continue
-        try:
-            shp = shape(geom)
-        except Exception:
-            continue
-        for label, pgeom in protection.items():
-            if shp.intersects(pgeom):
-                uri = _parcel_uri(kg, bsm)
-                if uri is None:
-                    continue
-                memory.add_relation_annotation(
-                    RelationAnnotation(
-                        subject_uri=str(uri),
-                        predicate="located_in",
-                        object_uri=f"pln:{label}",
-                        description=f"地块{bsm}位于{label}内",
-                        derived_from="kg_relation_batch",
-                        quantitative_detail={"protection": label},
-                    )
+    for s, _, o in kg.g.triples((None, None, None)):
+        break  # 占位避免空循环（下方用具体谓词）
+    for pred_name in ("sfIntersects", "located_in"):
+        for s, p, o in kg.g.triples((None, None, None)):
+            pn = str(p).split("#")[-1].split("/")[-1]
+            if pn != pred_name:
+                continue
+            bsm = ""
+            for _, _, b in kg.g.triples((s, PLN.bsm, None)):
+                bsm = str(b)
+                break
+            if not bsm:
+                continue
+            label = str(o).split("#")[-1].split("/")[-1]
+            memory.add_relation_annotation(
+                RelationAnnotation(
+                    subject_uri=str(s),
+                    predicate=pred_name,
+                    object_uri=str(o),
+                    description=f"地块{bsm}位于{label}内" if pred_name == "located_in" else f"地块{bsm}与{label}相交",
+                    derived_from="kg_relation_batch",
+                    quantitative_detail={"protection": label},
                 )
-                written += 1
+            )
+            written += 1
     return written
 
 

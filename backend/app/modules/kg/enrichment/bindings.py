@@ -108,10 +108,8 @@ async def extract_bindings(
     from app.modules.kg.gazetteer import build_gazetteer
     from app.modules.kg.gazetteer.gazetteer import save_gazetteer
     from app.modules.kg.memory import save_memory_state
-    from app.tools.access.shared import resolve_bundle
 
     kg = kg if kg is not None else require_session_kg(session_id)
-    bundle = bundle if bundle is not None else await resolve_bundle(session_id)
 
     memory = _get_semantic_memory()
     gazetteer = build_gazetteer(kg, bundle, memory)
@@ -129,10 +127,26 @@ async def extract_bindings(
                 bound_clusters += 1
 
     # L2/L3：分区/项目实体语义注解（复用表格提取）
-    from app.agent.gis.parse.agent import _extract_entity_semantics
+    from app.modules.parsing.tables import _extract_project_tables as _ept, _extract_zone_tables as _ezt
+
+    entities: list = []
+    seen: set = set()
+    for dim_key, content in (reports or {}).items():
+        for zt in _ezt(content):
+            key = ("FunctionalZone", zt.land_use)
+            if key in seen:
+                continue
+            seen.add(key)
+            entities.append({"entity_name": zt.land_use, "entity_type": "FunctionalZone", "description": f"功能分区{zt.land_use}（源自{dim_key}报告分区表）"})
+        for ft in _ept(content):
+            key = ("Project", ft.type)
+            if key in seen:
+                continue
+            seen.add(key)
+            entities.append({"entity_name": ft.type, "entity_type": "Project", "description": f"规划项目{ft.type}（源自{dim_key}报告项目库）"})
 
     semantic_written = 0
-    for ent in _extract_entity_semantics(reports):
+    for ent in entities:
         name = ent["entity_name"]
         refs = [k for k in (reports or {}) if name in (reports[k] or "")][:1]
         memory.add_entity_annotation(
@@ -169,8 +183,8 @@ async def extract_bindings(
     return stats
 
 
-async def run_wave(session_id: str, wave: int, reports: Dict[str, str]) -> Dict[str, Any]:
-    """Wave 末尾入口（completion node 调用）。"""
+async def run_wave(session_id: str, wave: int, reports: Dict[str, str], bundle: Any = None) -> Dict[str, Any]:
+    """Wave 末尾入口（completion node 调用，bundle 由 agent 层传入）。"""
     from app.core.settings import GIS_EXPLORE_LLM_ENABLED
 
     llm = None
@@ -188,7 +202,7 @@ async def run_wave(session_id: str, wave: int, reports: Dict[str, str]) -> Dict[
             max_tokens=GIS_EXPLORE_MAX_TOKENS,
             streaming=False,
         )
-    return await extract_bindings(session_id, wave, reports, llm=llm)
+    return await extract_bindings(session_id, wave, reports, llm=llm, bundle=bundle)
 
 
 __all__ = ["extract_bindings", "run_wave"]
