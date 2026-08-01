@@ -294,3 +294,23 @@ DEFAULT_IMAGE_FORMAT = os.getenv("DEFAULT_IMAGE_FORMAT", "jpeg")  # jpeg, png, g
 FLASH_MODEL_NAME = os.getenv("FLASH_MODEL_NAME", "qwen-flash")
 FLASH_MODEL_MAX_TOKENS = int(os.getenv("FLASH_MODEL_MAX_TOKENS", "500"))
 FLASH_MODEL_TEMPERATURE = float(os.getenv("FLASH_MODEL_TEMPERATURE", "0.3"))
+
+# ==========================================
+# EXPLORE Agent Flash LLM Configuration
+# ==========================================
+# Independent Flash model configuration for the EXPLORE agent.  Decoupled from
+# FLASH_MODEL_* (which other subsystems share) so EXPLORE can opt-in/out and
+# tune its own budget without touching RAG / metadata-extractor.
+#
+# - GIS_EXPLORE_LLM_ENABLED: master switch.  When False, ExploreFlashAgent
+#   falls back to its deterministic baseline (no LLM calls).
+# - GIS_EXPLORE_MODEL: dedicated Flash model name (DashScope qwen-flash by
+#   default).
+# - GIS_EXPLORE_TEMPERATURE: lower than the main analysis LLM (0.1) so domain
+#   classification / BSM extraction stay reproducible.
+# - GIS_EXPLORE_MAX_TOKENS: budget for per-call Flash responses.
+
+GIS_EXPLORE_LLM_ENABLED = os.getenv("GIS_EXPLORE_LLM_ENABLED", "true").lower() in {"1", "true", "yes"}
+GIS_EXPLORE_MODEL = os.getenv("GIS_EXPLORE_MODEL", "qwen-flash")
+GIS_EXPLORE_MAX_TOKENS = int(os.getenv("GIS_EXPLORE_MAX_TOKENS", "1200"))
+GIS_EXPLORE_TEMPERATURE = float(os.getenv("GIS_EXPLORE_TEMPERATURE", "0.1"))

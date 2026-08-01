@@ -197,12 +197,12 @@ class ReportStore:
         if not content:
             return ""
 
-        from .modules.parsing.summary_generator import generate_structured_summary
+        from ..modules.parsing.summary_generator import generate_structured_summary
         try:
             return await generate_structured_summary(dim_key, layer, content)
         except Exception as e:
             logger.warning("[ReportStore] Structured summary failed: %s", e)
-            from .modules.parsing.schemas import BaseDimensionSummary
+            from ..modules.parsing.schemas import BaseDimensionSummary
             summary = BaseDimensionSummary(
                 dimension_key=dim_key, layer=layer,
                 word_count=len(content), key_points=[],
@@ -600,7 +600,7 @@ class ReportStore:
         Returns Dict mapping dim_key -> parsed summary dict.
         Much lighter than get_layer_reports() for cross-layer dependency loading.
         """
-        from .modules.parsing.summary_parser import parse_summary
+        from ..modules.parsing.summary_parser import parse_summary
         async with get_async_session() as db:
             statement = (
                 select(DimensionReport)
@@ -641,7 +641,7 @@ class ReportStore:
             count = len(reports)
 
             for r in reports:
-                db.delete(r)
+                await db.delete(r)
 
             await db.commit()
 

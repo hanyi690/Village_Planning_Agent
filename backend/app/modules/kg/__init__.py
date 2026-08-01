@@ -3,6 +3,14 @@ from .builder import PlanningKG, KGBuilder, KGInputParcels
 from .ontology import PLN, GEO, EntityTypes, Relations, SemanticPredicates, GeoPredicates
 from .manager import KGManager, CacheKey, compute_layer1_cache_key, get_kg_manager
 from .memory import SemanticMemoryStore, EntityAnnotation, RelationAnnotation, get_semantic_memory
+from .interface import (
+    KGSessionSnapshot,
+    open_kg_session,
+    require_session_kg,
+    query_session_sparql,
+    query_session_template,
+    close_kg_session,
+)
 from .queries import (
     QUERY_TEMPLATES, query_kg, TOOL_META,
     get_entity_context, get_entity_relations,
@@ -43,4 +51,11 @@ __all__ = [
     "get_plan_changes", "get_planned_parcels_in_zone",
     "check_constraint_violations", "compare_versions",
     "resolve_candidates",
+    # Stable integration boundary (stage-0 surface)
+    "KGSessionSnapshot",
+    "open_kg_session",
+    "require_session_kg",
+    "query_session_sparql",
+    "query_session_template",
+    "close_kg_session",
 ]

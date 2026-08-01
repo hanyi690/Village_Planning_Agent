@@ -4,7 +4,7 @@ from typing import Any
 __all__ = ["RagService"]
 
 _LAZY = {
-    "RagService": ".modules.rag.service",
+    "RagService": "app.modules.rag.service",
 }
 
 

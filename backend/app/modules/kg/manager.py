@@ -214,6 +214,23 @@ class KGManager:
         """Get the KG instance for a session."""
         return self._session_kgs.get(session_id)
 
+    def require_session_kg(self, session_id: str) -> Any:
+        """Return only ``session_id``'s KG or raise a clear isolation error.
+
+        Interactive agents (EXPLORE / PARSE / EXECUTE) must use this method
+        instead of ``get_any_kg``; ``get_any_kg`` remains for legacy callers
+        outside the GIS planning pipeline.
+        """
+        if not session_id:
+            raise ValueError("session_id is required for KG queries")
+        kg = self.get_session_kg(session_id)
+        if kg is None:
+            raise LookupError(
+                f"KG is not initialized for session_id={session_id!r}. "
+                "Call open_kg_session first."
+            )
+        return kg
+
     def get_any_kg(self) -> Optional[Any]:
         """Return the most recently registered session KG, or a cached Layer 1 KG.
 
@@ -287,6 +304,14 @@ class KGManager:
         self._session_versions[session_id] = new_version
         logger.info("[KGManager] Version bump: %s -> v%d", session_id, new_version)
         return new_version
+
+    def get_session_version(self, session_id: str) -> int:
+        """Return the mutation version for one session."""
+        if session_id not in self._session_kgs:
+            raise LookupError(
+                f"KG is not initialized for session_id={session_id!r}"
+            )
+        return self._session_versions.get(session_id, 1)
 
     @property
     def version(self) -> int:
