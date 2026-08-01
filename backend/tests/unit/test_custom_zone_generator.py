@@ -1,6 +1,10 @@
 from shapely.geometry import Polygon
 
 from app.modules.kg.ontology import ThreeLineSubtypes
+from app.modules.schema.contracts.custom_zone_contracts import (
+    Vocabulary,
+    VocabularyCategory,
+)
 from app.tools.gis._generation.custom_zone_generator import (
     CustomZoningGenerator,
 )
@@ -15,8 +19,21 @@ def _parcel(bsm, dlbm=""):
     }
 
 
+# v4: 词汇表为 LLM/报告动态提取的内存对象，不再加载固定 YAML
+_LEAD_VOCAB = Vocabulary(
+    name="jintian_industry",
+    categories=[
+        VocabularyCategory(
+            code="IND_LEAD", name_zh="主导产业区", color="#CC5500",
+            typing_rules=[{"kind": "dlbm_in", "value": ["2124", "2125"]}],
+        )
+    ],
+)
+
+
 def _intent(category_code, bsms):
     return {
+        "vocabulary": _LEAD_VOCAB,
         "vocabulary_name": "jintian_industry",
         "custom_zone_targets": [
             {

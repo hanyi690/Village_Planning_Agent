@@ -64,6 +64,7 @@ async def get_async_engine() -> create_async_engine:
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA synchronous=NORMAL")
             cursor.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            cursor.execute("PRAGMA foreign_keys=ON")    # FK CASCADE cleanup
             cursor.close()
         
         logger.info("[Async DB] WAL mode enabled")
@@ -86,6 +87,43 @@ async def dispose_async_engine() -> None:
         await async_engine.dispose()
         async_engine = None
         logger.info("[Async DB] Async database engine disposed")
+
+
+async def shutdown_database() -> None:
+    """Force-close ALL async connections so the process can exit.
+
+    Fixes the hang: aiosqlite >= 0.22 worker threads are non-daemon and
+    block on queue.get() unless the connection is closed.  Two sources are
+    covered that ``dispose_async_engine`` cannot reach:
+      1. the LangGraph checkpointer's bare aiosqlite connection (created
+         directly in get_global_checkpointer, never through the engine);
+      2. the engine itself when the reference count is unbalanced after a
+         crash path (skips dispose silently).
+    Safe to call multiple times; never raises.
+    """
+    global _checkpointer, _checkpointer_initialized
+    if _checkpointer is not None:
+        conn = getattr(_checkpointer, "conn", None)
+        if conn is not None:
+            try:
+                await conn.close()
+            except Exception:
+                try:
+                    conn.stop()
+                except Exception:
+                    pass
+        _checkpointer = None
+        _checkpointer_initialized = False
+
+    global async_engine, _async_engine_ref_count
+    if async_engine is not None:
+        try:
+            await async_engine.dispose()
+        except Exception:
+            pass
+        async_engine = None
+    _async_engine_ref_count = 0
+    logger.info("[Async DB] All database connections shutdown")
 
 
 @asynccontextmanager
@@ -136,7 +174,14 @@ async def init_async_db() -> bool:
 
         # Import all models to ensure they are registered with SQLModel
         # Note: Checkpoint is excluded because it's now managed by LangGraph's AsyncSqliteSaver
-        from .models import PlanningSession, UISession, DimensionReport, UploadedFile
+        from .models import (
+            PlanningSession,
+            UISession,
+            DimensionReport,
+            UploadedFile,
+            PlanningTextDocument,
+            PlanningBundle,
+        )
 
         # Create all tables (except checkpoints, which is managed by LangGraph)
         async with engine.begin() as conn:
@@ -267,6 +312,7 @@ __all__ = [
     "init_async_db",
     "get_async_engine",
     "dispose_async_engine",
+    "shutdown_database",
     # Utilities
     "get_db_path",
     # Checkpointer

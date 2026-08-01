@@ -373,7 +373,7 @@ def village_boundary_geometry(bundle: Any) -> Optional[Dict[str, Any]]:
         return None
     for key in ("admin_areas", "planning_scope"):
         for f in bundle.polygons.get(key) or []:
-            geom = getattr(f, "geometry", None) or (f.get("geometry") if isinstance(f, dict) else None)
+            geom = f.geometry if not isinstance(f, dict) else f.get("geometry")
             if geom:
                 return geom
     return None

@@ -126,6 +126,9 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
     Runs after fetch_gis_data + build_kg so PARSE can query the live KG:
       classify_sections -> extract_* -> validate_and_merge
 
+    v4 guard: an externally supplied intent (EXPLORE -> Binder -> format)
+    with structured content is preserved — no double parse, no override.
+
     Outputs:
       - intent / planning_intent: SpatialPlanningIntent with zone targets
       - operation_sequence: List[SpatialOperation] with spatial anchors
@@ -136,6 +139,27 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
 
     reports = state.reports or {}
     village_name = state.village_name
+
+    # v4: 外部 intent（EXPLORE→Binder→format 产出）优先，跳过内部重 parse
+    existing = state.intent
+    if existing is not None:
+        has_structured = (
+            (getattr(existing, "zone_targets", None) and len(existing.zone_targets) > 0)
+            or (getattr(existing, "custom_zone_targets", None) and len(existing.custom_zone_targets) > 0)
+            or (getattr(existing, "facilities", None) and len(existing.facilities) > 0)
+        )
+        if has_structured:
+            logger.info(
+                "[Pipeline:parse] External intent preserved (%d zones, %d custom, %d facilities)",
+                len(existing.zone_targets or []),
+                len(existing.custom_zone_targets or []),
+                len(existing.facilities or []),
+            )
+            return {
+                "intent": existing,
+                "intent_json": existing,
+                "planning_intent": existing,
+            }
 
     if not reports and not village_name:
         logger.info("[Pipeline:parse] No reports or village name — skipping parse")
