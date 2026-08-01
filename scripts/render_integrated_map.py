@@ -184,79 +184,50 @@ def _deduplicate_projects(projects):
     return projects
 
 
-def geocode_project_locations(projects, boundary_gdf, gdf_4326):
-    """Estimate project coordinates from location descriptions."""
-    from app.modules.schema import dlbm_to_planning_zone
+def load_gazetteer(village: str = "jintian"):
+    """Load village gazetteer (kg/gazetteer 产物): {name: {bsms, centroid, confidence}}."""
+    path = os.path.join(os.path.dirname(__file__), "..", "data", "gazetteer", f"{village}.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"  [warn] gazetteer load failed: {e}")
+        return {}
 
-    # Natural village approximate positions (relative to boundary centroid)
-    boundary_ctr = boundary_gdf.to_crs('EPSG:3857').geometry.union_all().centroid
 
-    # Get parcel centroids by DLBM type
-    gdf_3857 = gdf_4326.to_crs('EPSG:3857')
-    gdf_3857['cx'] = gdf_3857.geometry.centroid.x
-    gdf_3857['cy'] = gdf_3857.geometry.centroid.y
+def locate_projects(projects, gdf_4326, gazetteer):
+    """Real project placement: gazetteer centroid only — no hardcoded offsets.
 
-    # Village name → offset direction hints
-    village_hints = {
-        '园寨': (1.0, 1.0),     # center
-        '田坑': (0.3, -0.8),     # south
-        '社前': (-0.2, -0.5),    # SW
-        '分水': (-1.0, 0.3),     # west
-        '清明': (-0.8, -0.3),    # SW
-        '塘笃': (0.5, -0.5),     # SE
-        '长塘': (0.8, 0.0),      # east
-        '炉池': (1.2, 1.5),      # NE
-        '肩丰': (1.5, 1.0),      # NE
-        '营仔': (-0.5, 1.2),     # NW
-        '新山': (1.0, 1.3),      # NE
-        '黄竹': (-0.3, 1.5),     # NW
-        '马头段': (0.5, -0.2),   # SE
-    }
-
-    # Build spatial index: village name → centroid
-    build_dlbms = {'2121', '2122', '2124', '2125', '2126'}
-    build = gdf_3857[gdf_3857['DLBM'].apply(lambda x: str(x).strip() in build_dlbms)]
-
+    Projects whose location matches a gazetteer entry get a point at the
+    settlement centroid; unmatched projects are returned with located=False
+    and rendered as a text list instead of fake points.
+    """
     located = []
-
     for proj in projects:
-        loc = proj['location']
-        name = proj['name']
-        x, y = boundary_ctr.x, boundary_ctr.y
-
-        # Try to match village name
-        found = False
-        for vn, (dx, dy) in village_hints.items():
-            if vn in loc:
-                # Offset from centroid in direction of village
-                spread = 1500  # meters spread
-                # Add some random jitter based on project name hash
-                seed = sum(ord(c) for c in name)
-                jitter_x = (seed % 100 - 50) * 10
-                jitter_y = ((seed * 31) % 100 - 50) * 10
-                x = boundary_ctr.x + dx * spread + jitter_x
-                y = boundary_ctr.y + dy * spread + jitter_y
-                found = True
+        loc = str(proj.get("location") or "")
+        name = str(proj.get("name") or "")
+        entry = None
+        for vn, v in gazetteer.items():
+            if vn and vn in loc:
+                entry = v
                 break
-
-        if not found:
-            # Default to spreading around center
-            seed = sum(ord(c) for c in name)
-            x = boundary_ctr.x + (seed % 300 - 150) * 10
-            y = boundary_ctr.y + ((seed * 17) % 300 - 150) * 10
-
-        # Convert back to 4326
-        pt_3857 = Point(x, y)
-        pt_4326 = gpd.GeoSeries([pt_3857], crs='EPSG:3857').to_crs('EPSG:4326')[0]
-
-        located.append({
-            'name': name,
-            'lon': pt_4326.x,
-            'lat': pt_4326.y,
-            'x': x, 'y': y,
-            'category': _classify_project(name),
-        })
-
+        if entry and entry.get("centroid"):
+            lon, lat = entry["centroid"]
+            located.append({
+                "name": name, "location": loc,
+                "lon": lon, "lat": lat,
+                "located": True,
+                "category": _classify_project(name),
+            })
+        else:
+            located.append({
+                "name": name, "location": loc,
+                "lon": None, "lat": None,
+                "located": False,
+                "category": _classify_project(name),
+            })
     return located
 
 
@@ -310,29 +281,10 @@ def main():
     # ---- Extract projects ----
     print("\n[2/5] Extracting project locations from report...")
     projects = extract_project_locations()
-    located_projects = geocode_project_locations(projects, boundary, lu_curr)
-    print(f"  Located {len(located_projects)} projects")
-
-    # ---- Build spatial structure ----
-    print("\n[3/5] Building spatial structure overlay...")
-    gdf = lu_curr_p
-    gdf['cx'] = gdf.geometry.centroid.x
-    gdf['cy'] = gdf.geometry.centroid.y
-    cx, cy = gdf['cx'], gdf['cy']
-    cx_med, cy_med = cx.median(), cy.median()
-
-    build_dlbms = {'2121', '2122', '2124', '2125'}
-    build = gdf[gdf['DLBM'].apply(lambda x: str(x).strip() in build_dlbms)]
-    center_mask = (cx > cx.quantile(0.25)) & (cx < cx.quantile(0.75)) & \
-                  (cy > cy.quantile(0.25)) & (cy < cy.quantile(0.75))
-
-    structure_zones = {
-        '生态保育屏障区': gdf[(cx > cx_med) & (cy > cy_med)],
-        '生态农业发展区': gdf[(cx <= cx_med) & (cy <= cy_med)],
-        '宜居生活建设区': gdf[center_mask & gdf['DLBM'].apply(
-            lambda x: str(x).strip() in build_dlbms)],
-    }
-    center_pt = build.geometry.union_all().centroid if len(build) > 0 else None
+    gazetteer = load_gazetteer()
+    located_projects = locate_projects(projects, lu_curr, gazetteer)
+    n_located = sum(1 for p in located_projects if p.get("located"))
+    print(f"  Located {n_located}/{len(located_projects)} projects via gazetteer")
 
     # ---- Render map ----
     print("\n[4/5] Rendering integrated map...")
@@ -386,28 +338,41 @@ def main():
                 planning_zone_legend.append((zt, color))
         print(f"  planning_zone overlay: {len(planning_zone_legend)} zone types")
 
-    # ---- Spatial structure: 只保留一核一带标注，移除大色块填充（原"看不懂"元凶） ----
-    struct_colors = {
-        '生态保育屏障区': ('#2E8B57', '生态保育\n屏障区\n362ha'),
-        '生态农业发展区': ('#DEB887', '生态农业\n发展区\n1961ha'),
-        '宜居生活建设区': ('#FF6347', '宜居生活\n建设区\n31ha'),
-    }
-    for name, (color, label) in struct_colors.items():
-        if name in structure_zones and len(structure_zones[name]) > 0:
-            parcels = structure_zones[name]
-            # 只画虚线边界 + 标签（不再填充大色块 — 避免盖住底图/分区）
-            boundary_geom = parcels.geometry.union_all()
-            if not boundary_geom.is_empty:
-                simplified = boundary_geom.simplify(100, preserve_topology=True)
-                gpd.GeoSeries([simplified], crs='EPSG:3857').boundary.plot(
-                    ax=ax, color=color, linewidth=1.8, linestyle='--', alpha=0.7)
-
-                # Text label at zone centroid
-                ctr = simplified.centroid
-                ax.annotate(label, xy=(ctr.x, ctr.y), fontsize=10, ha='center',
-                            va='center', fontweight='bold', color=color,
-                            bbox=dict(boxstyle='round,pad=0.3', fc='white',
+    # ---- 空间结构标注（structure_overlay.geojson，管线解析 L3 spatial_structure 报告产出） ----
+    structure_overlay = load_gdf('structure_overlay.geojson', OUT_DIR)
+    if structure_overlay is not None and len(structure_overlay) > 0:
+        structure_overlay_p = structure_overlay.to_crs('EPSG:3857')
+        for _, row in structure_overlay_p.iterrows():
+            kind = str(row.get('kind') or 'label')
+            label = str(row.get('label') or '')
+            color = str(row.get('color') or '#333333')
+            geom = row.geometry
+            if geom.is_empty or not label:
+                continue
+            if kind == 'center' and geom.geom_type == 'Point':
+                ax.plot(geom.x, geom.y, 'r*', markersize=20, markeredgecolor='darkred',
+                        markeredgewidth=2, zorder=10)
+                ax.annotate(label, xy=(geom.x, geom.y), fontsize=11, ha='center',
+                            va='bottom', fontweight='bold', color='darkred',
+                            xytext=(0, 25), textcoords='offset points',
+                            bbox=dict(boxstyle='round,pad=0.35', fc='yellow',
+                                      alpha=0.9, ec='darkred', lw=1.5))
+            elif kind == 'axis' and geom.geom_type == 'LineString':
+                gpd.GeoSeries([geom], crs='EPSG:3857').plot(
+                    ax=ax, color=color, linewidth=2.5, alpha=0.75, linestyle='-')
+                mid = geom.interpolate(0.5, normalized=True)
+                ax.annotate(label, xy=(mid.x, mid.y), fontsize=10, ha='center',
+                            color=color, fontweight='bold',
+                            bbox=dict(boxstyle='round,pad=0.25', fc='white',
                                       alpha=0.85, ec=color, lw=1.2))
+            else:
+                ctr = geom.centroid
+                if not ctr.is_empty:
+                    ax.annotate(label, xy=(ctr.x, ctr.y), fontsize=11, ha='center',
+                                va='center', fontweight='bold', color=color,
+                                bbox=dict(boxstyle='round,pad=0.3', fc='white',
+                                          alpha=0.85, ec=color, lw=1.2))
+        print(f"  structure overlay: {len(structure_overlay_p)} annotations")
 
     # ---- Custom functional zones (P7 L4 FunctionalZone, vocabulary colors) ----
     custom_legend_items = []
@@ -429,36 +394,7 @@ def main():
                                       alpha=0.9, ec=color, lw=1.5))
             custom_legend_items.append((name, color))
 
-    # 一核 marker
-    if center_pt is not None:
-        ax.plot(center_pt.x, center_pt.y, 'r*', markersize=25, markeredgecolor='darkred',
-                markeredgewidth=2, zorder=10)
-        ax.annotate('一核\n村级综合\n服务中心', xy=(center_pt.x, center_pt.y),
-                    fontsize=12, ha='center', va='bottom', fontweight='bold',
-                    color='darkred', xytext=(0, 30), textcoords='offset points',
-                    bbox=dict(boxstyle='round,pad=0.4', fc='yellow', alpha=0.9,
-                              ec='darkred', lw=1.5),
-                    arrowprops=dict(arrowstyle='->', color='darkred', lw=2))
-
-    # 一带 (water corridor)
-    water = gdf[gdf['DLBM'].apply(lambda x: str(x).strip() == '3100')]
-    if len(water) >= 3:
-        wctrs = sorted([g.centroid for g in water.geometry if not g.is_empty],
-                       key=lambda p: (p.y, p.x))
-        if len(wctrs) >= 2:
-            coords = [(p.x, p.y) for p in wctrs][::max(1, len(wctrs)//6)]
-            if len(coords) >= 2:
-                line = LineString(coords)
-                gpd.GeoSeries([line], crs='EPSG:3857').plot(
-                    ax=ax, color='#0066CC', linewidth=3, alpha=0.8, linestyle='-')
-                mid_pt = line.interpolate(0.5, normalized=True)
-                ax.annotate('一带: 金田河\n生态景观带\n(西南→东北)',
-                            xy=(mid_pt.x, mid_pt.y), fontsize=10, ha='center',
-                            color='#0066CC', fontweight='bold',
-                            bbox=dict(boxstyle='round,pad=0.3', fc='lightblue',
-                                      alpha=0.85, ec='#0066CC', lw=1.2))
-
-    # ---- Project labels ----
+    # ---- Project labels（gazetteer 真实质心；未定位项目只做文本列表） ----
     cat_icons = {
         '公共服务': ('s', '#4A90D9', '□'), '交通': ('D', '#808080', '◇'),
         '市政': ('p', '#228B22', '△'), '产业': ('^', '#FF6B6B', '▲'),
@@ -466,16 +402,20 @@ def main():
         '农业': ('P', '#8FBC8F', '⬠'), '其他': ('o', '#666666', '●'),
     }
 
-    # Use text labels for projects (like CAD)
     labeled_positions = []  # Avoid overlapping labels
+    unlocated_projects = []
 
-    for i, proj in enumerate(located_projects):
-        x = proj['x']
-        y = proj['y']
+    for proj in located_projects:
+        if not proj.get('located') or proj.get('lon') is None:
+            unlocated_projects.append(proj)
+            continue
+        lon, lat = proj['lon'], proj['lat']
+        # 4326 → 3857 for plotting
+        pt = gpd.GeoSeries([Point(lon, lat)], crs='EPSG:4326').to_crs('EPSG:3857')[0]
+        x, y = pt.x, pt.y
         cat = proj.get('category', '其他')
         marker, color, symbol = cat_icons.get(cat, cat_icons['其他'])
 
-        # Avoid label overlap: offset if too close to another label
         offset_x, offset_y = 0, 10
         for px, py in labeled_positions:
             dist = np.sqrt((x - px)**2 + (y - py)**2)
@@ -485,7 +425,6 @@ def main():
         ax.plot(x, y, marker=marker, color=color, markersize=8, alpha=0.9,
                 markeredgecolor='white', markeredgewidth=0.5)
 
-        # Text label
         ax.annotate(proj['name'], xy=(x, y), fontsize=7, ha='center', va='bottom',
                     color=color, fontweight='bold', xytext=(offset_x, offset_y),
                     textcoords='offset points',
@@ -525,9 +464,20 @@ def main():
     ax.text(scale_x + scale_length_m / 2, scale_y - 60, '500m',
             ha='center', fontsize=10, fontweight='bold')
 
+    # ---- 未定位项目文本列表（无 gazetteer 命中的项目，不画假点） ----
+    if unlocated_projects:
+        list_text = "未定位项目（无村名匹配）：\n" + "\n".join(
+            f"· {p['name']}" for p in unlocated_projects[:15]
+        )
+        ax.text(bbox[0] + (bbox[2] - bbox[0]) * 0.03,
+                bbox[1] + (bbox[3] - bbox[1]) * 0.35,
+                list_text, fontsize=8, ha='left', va='top',
+                bbox=dict(boxstyle='round,pad=0.4', fc='white', alpha=0.9,
+                          ec='#999999', lw=0.8))
+
     # Title
     ax.set_title('金田村 产业空间布局规划图\n'
-                 'Custom Functional Zones · 一核引领 · 一带串联 · 三区协同',
+                 'Functional Zones · 三线管控 · 空间结构',
                  fontsize=18, fontweight='bold', pad=20)
 
     # Legend
