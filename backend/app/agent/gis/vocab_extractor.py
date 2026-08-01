@@ -60,7 +60,7 @@ def _default_dlbm_for(name: str) -> List[str]:
 
 def extract_vocabulary_deterministic(reports: Dict[str, str]) -> Vocabulary:
     """无 LLM 兜底：从报告分区表提取类别，语义推断颜色与地类线索。"""
-    from app.agent.gis.parse.agent import _extract_zone_tables
+    from app.agent.gis.parse.tables import _extract_zone_tables
 
     categories: List[VocabularyCategory] = []
     seen = set()

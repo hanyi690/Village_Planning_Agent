@@ -158,134 +158,7 @@ def _extract_roads(text: str) -> List[RoadTarget]:
     return roads
 
 
-# ── Markdown table extractors (P3: 功能分区表/土地用途分区表/项目库) ──
-
-
-def _parse_md_table_rows(text: str) -> List[List[str]]:
-    """Extract markdown table rows as cell lists (skips separator rows)."""
-    rows = []
-    for line in (text or "").splitlines():
-        line = line.strip()
-        if not line.startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if cells and all(set(c) <= {"-", ":", " "} for c in cells):
-            continue
-        rows.append(cells)
-    return rows
-
-
-def _extract_zone_tables(text: str) -> List[ZoneTarget]:
-    """【功能分区表】【土地用途分区表】→ ZoneTarget(land_use=分区名, area_ratio).
-
-    area_ratio 取占比列；面积列（公顷）写入 semantic.spatial_hint 备用
-    （格式 'AREA:78.83'，供 P6.6 生成 area_target_ha）。
-    """
-    targets = []
-    seen = set()
-    in_zone_table = False
-    has_area_col = False
-    for line in (text or "").splitlines():
-        line = line.strip()
-        if not line.startswith("|"):
-            in_zone_table = False
-            continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if cells and all(set(c) <= {"-", ":", " "} for c in cells):
-            continue
-        if not in_zone_table:
-            joined = "".join(cells)
-            if "分区" in joined and ("面积" in joined or "占比" in joined or "名称" in joined):
-                in_zone_table = True
-                has_area_col = "面积" in joined
-            continue
-        name = cells[0] if cells else ""
-        if not name or "名称" in name or "合计" in name or name in seen:
-            continue
-        area_ratio = 0.0
-        for cell in cells[1:]:
-            m = re.search(r"(\d+(?:\.\d+)?)\s*%", cell)
-            if m:
-                area_ratio = float(m.group(1)) / 100.0
-                break
-        if area_ratio <= 0.0:
-            # 占比列无 % 后缀时取最后一个数字单元格（占比列通常在面积列之后）
-            for cell in reversed(cells[1:]):
-                m = re.search(r"(\d+(?:\.\d+)?)", cell)
-                if m:
-                    area_ratio = float(m.group(1)) / 100.0
-                    break
-        # 面积列（公顷）：表头含"面积"时取第一个数字单元格（面积列在前）
-        area_ha = None
-        if has_area_col:
-            for cell in cells[1:]:
-                m = re.search(r"(\d+(?:\.\d+)?)", cell)
-                if m:
-                    area_ha = float(m.group(1))
-                    break
-        else:
-            for cell in cells[1:]:
-                m = re.search(r"(\d+(?:\.\d+)?)\s*(?:公顷|ha)", cell)
-                if m:
-                    area_ha = float(m.group(1))
-                    break
-        if area_ratio > 0.0 or area_ha is not None:
-            seen.add(name)
-            targets.append(
-                ZoneTarget(
-                    land_use=name,
-                    area_ratio=area_ratio if area_ratio > 0.0 else None,
-                    semantic=SemanticMetadata(
-                        natural_language_description=f"功能分区{name}"
-                        + (f"占比{area_ratio*100:.0f}%" if area_ratio > 0.0 else "")
-                        + (f"，面积{area_ha}公顷" if area_ha is not None else ""),
-                        spatial_hint=f"AREA:{area_ha}" if area_ha is not None else "",
-                    ),
-                )
-            )
-    return targets
-
-
-def _extract_project_tables(text: str) -> List[FacilityTarget]:
-    """【建设项目库】→ FacilityTarget(type=项目名, location_hint=选址)."""
-    targets = []
-    seen = set()
-    in_project_table = False
-    for line in (text or "").splitlines():
-        line = line.strip()
-        if not line.startswith("|"):
-            in_project_table = False
-            continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if cells and all(set(c) <= {"-", ":", " "} for c in cells):
-            continue
-        if not in_project_table:
-            joined = "".join(cells)
-            if "项目名称" in joined and ("选址" in joined or "规模" in joined or "内容" in joined):
-                in_project_table = True
-            continue
-        name = cells[0] if cells else ""
-        if not name or len(name) < 4 or "项目名称" in name or "合计" in name or name in seen:
-            continue
-        location = ""
-        for cell in cells[1:]:
-            if any(kw in cell for kw in ("村", "园", "基地", "段", "路", "区", "中心", "坑", "塘")):
-                location = cell
-                break
-        seen.add(name)
-        targets.append(
-            FacilityTarget(
-                type=name,
-                status="planned_new",
-                location_hint=location,
-                semantic=SemanticMetadata(
-                    natural_language_description=f"规划项目{name}",
-                    spatial_hint=location,
-                ),
-            )
-        )
-    return targets
-
+# ── Markdown table extractors moved to .tables (unit-level detection) ──
 
 # ── Public API ───────────────────────────────────────────────────────
 
@@ -310,9 +183,11 @@ def parse(
     axes = _extract_axes(planning_text)
     roads = _extract_roads(planning_text)
 
-    # P3: 结构化表格（功能分区表/土地用途分区表/项目库）直接解析
-    zone_targets += _extract_zone_tables(planning_text)
-    facilities += _extract_project_tables(planning_text)
+    # P3: 结构化表格（单位级检测，见 .tables）
+    from .tables import _extract_project_tables as _ept, _extract_zone_tables as _ezt
+
+    zone_targets += _ezt(planning_text)
+    facilities += _ept(planning_text)
 
     intent = SpatialPlanningIntent(
         village_name=village_name,
@@ -562,7 +437,9 @@ def _extract_entity_semantics(reports: Dict[str, str]) -> List[Dict[str, str]]:
     entities: List[Dict[str, str]] = []
     seen = set()
     for dim_key, content in (reports or {}).items():
-        for zt in _extract_zone_tables(content):
+        from .tables import _extract_project_tables as _ept2, _extract_zone_tables as _ezt2
+
+        for zt in _ezt2(content):
             key = ("FunctionalZone", zt.land_use)
             if key in seen:
                 continue
@@ -574,7 +451,7 @@ def _extract_entity_semantics(reports: Dict[str, str]) -> List[Dict[str, str]]:
                     "description": f"功能分区{zt.land_use}（源自{dim_key}报告分区表）",
                 }
             )
-        for ft in _extract_project_tables(content):
+        for ft in _ept2(content):
             key = ("Project", ft.type)
             if key in seen:
                 continue
@@ -618,7 +495,6 @@ async def extract_bindings(
         kg=kg,
         bundle=bundle,
     )
-
 
 
 __all__ = ["parse", "parse_async", "ParseResult", "PendingBinding", "extract_bindings"]
