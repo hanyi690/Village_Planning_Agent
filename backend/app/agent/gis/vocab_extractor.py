@@ -29,15 +29,17 @@ _COLOR_POOL = [
     "#f2994a", "#adb5bd", "#e85d75", "#f2c94c",
 ]
 
+# 现状用地分类码（bundle landuse_current 的 dlbm 体系，非规划分类码）
 _DLBM_HINTS: Dict[str, List[str]] = {
-    "生态": ["0301", "0302", "0305", "0307"],
-    "农田": ["0101", "0102", "0103"],
-    "农业": ["0101", "0102", "0103", "0201", "0204"],
+    "生态": ["1340", "1350"],
+    "农田": ["1100"],
+    "农业": ["1100", "1200", "1400"],
     "村庄": ["2121", "2122"],
-    "建设": ["2121", "2122", "2123"],
-    "林业": ["0301", "0302", "0305", "0307"],
-    "旅游": ["0101", "0201", "0301", "1101"],
-    "康养": ["0301", "0302", "1101", "1104"],
+    "建设": ["2121", "2122", "2124"],
+    "林业": ["1340", "1350"],
+    "旅游": ["1100", "1200", "1340", "3100"],
+    "康养": ["1340", "1350", "3100"],
+    "历史": ["2122", "2123"],
 }
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -89,7 +91,7 @@ _VOCAB_PROMPT = """你是村庄规划功能区词汇提取助手。从下列 L3 
 {{"categories": [{{"name_zh": "生态保护区", "color": "#2d6a4f", "dlbm_hints": ["0301", "0302"], "is_protection": true, "evidence": "报告原文依据句"}}]}}
 要求：
 - color 必须是合法的 hex 格式（#RRGGBB），由你自由选择
-- dlbm_hints 是推测的地类编码线索（如耕地 0101-0103、林地 0301/0302/0305/0307、宅基地 2121）
+- dlbm_hints 是推测的**现状用地分类码**（三调现状分类：1100 耕地、1200 园地、1340 商品林、1350 生态林、2121 宅基地、2124 经营性建设用地、3100 水域）
 - is_protection: 生态/保护/农田类功能区为 true（与三线重合），建设/产业类为 false
 - 若没有可提取的功能区，输出 {{"categories": []}}
 """
@@ -157,17 +159,19 @@ async def extract_vocabulary_from_reports(
 
     if llm is not None:
         try:
-            vocab = await _extract_vocabulary_llm(llm, reports)
-            if vocab.categories:
-                # 合并：LLM 类别（自由色）∪ 表格确定性提取（兜底补全），按名去重
-                det = extract_vocabulary_deterministic(reports)
-                existing = {c.name_zh for c in vocab.categories}
-                for c in det.categories:
-                    if c.name_zh not in existing:
-                        vocab.categories.append(c)
-                if vocab.categories:
-                    return vocab
-            logger.info("[VocabExtractor] LLM returned empty categories, falling back to deterministic")
+            llm_vocab = await _extract_vocabulary_llm(llm, reports)
+            # v5: 表格闭集 — 分区类别以 L3 报告分区表为唯一来源（防 LLM 编造），
+            # LLM 只增强已存在类别的 color/dlbm_hints/is_protection
+            det = extract_vocabulary_deterministic(reports)
+            if det.categories:
+                by_name = {c.name_zh: c for c in det.categories}
+                for c in llm_vocab.categories:
+                    if c.name_zh in by_name:
+                        by_name[c.name_zh].color = c.color
+                        by_name[c.name_zh].typing_rules = c.typing_rules or by_name[c.name_zh].typing_rules
+                        by_name[c.name_zh].is_protection = c.is_protection or by_name[c.name_zh].is_protection
+                return Vocabulary(name="l3_extracted", categories=list(by_name.values()))
+            logger.info("[VocabExtractor] no table categories, falling back to deterministic")
         except Exception as e:
             logger.warning("[VocabExtractor] LLM extraction failed: %s", e)
     return extract_vocabulary_deterministic(reports)

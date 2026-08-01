@@ -24,8 +24,8 @@ def test_deterministic_extraction_4_zones_with_hex_colors():
     assert "生态保护区" in names
     assert names["生态保护区"].color.startswith("#")
     assert len(names["生态保护区"].color) == 7
-    # 语义推断：生态→林地 codes
-    assert any("0301" in r.value for r in names["生态保护区"].typing_rules)
+    # 语义推断：生态→现状林地 codes（1340 商品林/1350 生态林）
+    assert any("1340" in r.value for r in names["生态保护区"].typing_rules)
 
 
 class _FakeLLM:
@@ -40,17 +40,46 @@ class _FakeLLM:
         return r
 
 
-def test_llm_extraction_accepts_free_color():
+def test_llm_enhances_table_categories_with_free_color():
+    """v5 表格闭集：LLM 只增强表格里已有的类别（自由色生效），编造类别被丢弃。"""
+    report = """【土地用途分区表】
+| 分区名称 | 面积(公顷) | 占比(%) | 管控要求 |
+| :--- | :--- | :--- | :--- |
+| 生态保护区 | 362.02 | 15.39 | 严格保护 |
+"""
     vocab = asyncio.run(
         extract_vocabulary_from_reports(
-            {"industry": "南药产业区规划0.15公顷"},
-            llm=_FakeLLM('{"categories": [{"name_zh": "南药产业区", "color": "#ff8800", "dlbm_hints": ["2124"], "evidence": "报告"}]}'),
+            {"land_use_planning": report},
+            llm=_FakeLLM(
+                '{"categories": [{"name_zh": "生态保护区", "color": "#ff8800", "dlbm_hints": ["1340"], "is_protection": true, "evidence": "表"}]}'
+            ),
         )
     )
     assert len(vocab.categories) == 1
     cat = vocab.categories[0]
-    assert cat.name_zh == "南药产业区"
-    assert cat.color == "#ff8800"
+    assert cat.name_zh == "生态保护区"
+    assert cat.color == "#ff8800"  # LLM 自由色生效
+    assert cat.is_protection is True
+
+
+def test_llm_fabricated_category_dropped():
+    """v5：LLM 编造的类别（不在报告表格）必须被丢弃。"""
+    report = """【土地用途分区表】
+| 分区名称 | 占比(%) |
+| :--- | :--- |
+| 农田保护区 | 3.35 |
+"""
+    vocab = asyncio.run(
+        extract_vocabulary_from_reports(
+            {"land_use_planning": report},
+            llm=_FakeLLM(
+                '{"categories": [{"name_zh": "防灾减灾区", "color": "#b84e4e", "dlbm_hints": [], "evidence": "编造"}]}'
+            ),
+        )
+    )
+    names = [c.name_zh for c in vocab.categories]
+    assert "防灾减灾区" not in names
+    assert "农田保护区" in names  # 表格闭集兜底
 
 
 def test_llm_failure_falls_back_to_deterministic():

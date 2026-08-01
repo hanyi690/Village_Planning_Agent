@@ -13,6 +13,34 @@ from app.modules.schema.encodings.dicts.vocabularies.loader import get_vocabular
 from app.modules.schema.provenance import ProvenanceAudit, ProvenanceSource
 
 
+def _truncate_by_area(parcels: List[dict], target_ha: float) -> List[dict]:
+    """Select parcels until cumulative area reaches the target (hectares).
+
+    Parcels without area are appended last; the tail is dropped once the
+    cumulative sum passes the target so the zone area aligns with the L3
+    report's 【土地用途分区表】 area column.
+    """
+    target = max(float(target_ha), 0.0)
+    if target <= 0:
+        return parcels
+    ordered = sorted(
+        parcels,
+        key=lambda p: float(p.get("area_ha", 0) or 0),
+        reverse=True,
+    )
+    chosen: List[dict] = []
+    total = 0.0
+    for p in ordered:
+        area = float(p.get("area_ha", 0) or 0)
+        if area <= 0:
+            continue
+        chosen.append(p)
+        total += area
+        if total >= target:
+            break
+    return chosen
+
+
 class CustomZoningGenerator:
     """Generate L4 FunctionalZone nodes from a vocabulary + planner intent.
 
@@ -71,21 +99,30 @@ class CustomZoningGenerator:
                 if bsm in self.parcel_by_bsm
             ]
             if not selected:
-                # P6.5: 无 BSM 时按类别 typing_rules(dlbm_in) 自动选 parcels（语义规则选择）
+                # P6.5: 无 BSM 时按类别 typing_rules 表达式自动选 parcels（多因子语义选择）
                 selected = self._select_by_rules(category)
             if not selected:
                 continue
+            # v5: 面积目标对齐 — 规则选中的地块按面积累加到 target，超出即停
+            if target.area_target_ha:
+                selected = _truncate_by_area(selected, target.area_target_ha)
+                if not selected:
+                    continue
+            # 三线拦截改为图斑级：建设类功能区剔除与保护面相交的地块，保留其余
+            # （保护类功能区本身与三线重合，跳过拦截）
+            if not category.is_protection and protection is not None:
+                kept = [p for p in selected if not p["geometry"].intersects(protection)]
+                if len(kept) != len(selected):
+                    audit.record(
+                        f"functional_zone.{target.category_code}",
+                        ProvenanceSource.CUSTOM_VOCABULARY,
+                        parcel_count=len(selected) - len(kept),
+                        note="excluded: protection_line_conflict (parcel-level)",
+                    )
+                selected = kept
+                if not selected:
+                    continue
             merged = unary_union([p["geometry"] for p in selected])
-            # 保护类功能区（生态/农田保护区）本身与三线重合 — 跳过拦截；
-            # 建设类功能区（村庄建设区/产业区）不得侵入生态红线/基本农田
-            if not category.is_protection and protection is not None and merged.intersects(protection):
-                audit.record(
-                    f"functional_zone.{target.category_code}",
-                    ProvenanceSource.CUSTOM_VOCABULARY,
-                    parcel_count=len(selected),
-                    note="blocked: protection_line_conflict",
-                )
-                continue
             zones.append(
                 {
                     "entity_type": EntityTypes.FunctionalZone,
@@ -94,6 +131,7 @@ class CustomZoningGenerator:
                     "pln:category_name_zh": category.name_zh,
                     "pln:color": category.color,
                     "pln:target_bsms": [p["bsm"] for p in selected],
+                    "pln:area_target_ha": target.area_target_ha,
                     "pln:geometry": merged,
                     "pln:decided_by": target.decided_by,
                     "pln:confidence": target.confidence,
@@ -114,15 +152,64 @@ class CustomZoningGenerator:
         return None
 
     def _select_by_rules(self, category: VocabularyCategory) -> List[dict]:
-        """Select parcels by the category's typing_rules (dlbm_in) when no
-        target_bsms were provided — semantic rule selection."""
-        codes = set()
-        for rule in category.typing_rules or []:
-            if rule.kind == "dlbm_in":
-                codes.update(str(v) for v in (rule.value or []))
-        if not codes:
+        """Select parcels by the category's typing_rules expression DSL.
+
+        v5 multi-factor: dlbm_in / within_zone / not_within_zone /
+        slope_lt / road_distance_lt / near_poi + and/any/not composites.
+        Each parcel carries a context built by the caller:
+          {dlbm, area_ha, slope_deg, road_distance_m, zone_membership, poi_hits}
+        """
+        rules = category.typing_rules or []
+        if not rules:
             return []
-        return [p for p in self.parcels if str(p.get("dlbm", "")) in codes]
+        contexts = self._parcel_contexts
+        if not contexts:
+            contexts = {
+                p["bsm"]: {
+                    "dlbm": str(p.get("dlbm", "")),
+                    "area_ha": float(p.get("area_ha", 0) or 0),
+                    "slope_deg": float(p.get("slope_deg", 999) or 999),
+                    "road_distance_m": float(p.get("road_distance_m", 99999) or 99999),
+                    "zone_membership": list(p.get("zone_membership", []) or []),
+                    "poi_hits": list(p.get("poi_hits", []) or []),
+                }
+                for p in self.parcels
+            }
+            self._parcel_contexts = contexts
+        return [
+            p for p in self.parcels
+            if any(self._eval_rule(r, contexts[p["bsm"]]) for r in rules)
+        ]
+
+    _parcel_contexts: dict = None
+
+    def _eval_rule(self, rule: "TypingRule", ctx: dict) -> bool:
+        kind = rule.kind
+        value = rule.value
+        if kind == "and":
+            return all(self._eval_rule(c, ctx) for c in (rule.children or []))
+        if kind == "any":
+            return any(self._eval_rule(c, ctx) for c in (rule.children or []))
+        if kind == "not":
+            return not (rule.children and self._eval_rule(rule.children[0], ctx))
+        if kind == "dlbm_in":
+            return str(ctx["dlbm"]) in [str(v) for v in (value or [])]
+        if kind == "field_equals":
+            return str(ctx.get(str(value.get("field", "")), "")) == str(value.get("value", ""))
+        if kind == "within_zone":
+            return value in ctx["zone_membership"]
+        if kind == "not_within_zone":
+            return value not in ctx["zone_membership"]
+        if kind == "slope_lt":
+            return ctx["slope_deg"] < float(value)
+        if kind == "road_distance_lt":
+            return ctx["road_distance_m"] < float(value)
+        if kind == "near_poi":
+            return any(
+                str(value) in str(h.get("name", ""))
+                for h in ctx["poi_hits"]
+            )
+        return False
 
     def _protection_geometry(self) -> BaseGeometry | None:
         geoms: List[BaseGeometry] = []
