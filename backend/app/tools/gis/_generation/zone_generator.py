@@ -28,6 +28,21 @@ from app.modules.schema import (
 
 logger = get_logger(__name__)
 
+# PARSE 规划中文名 → 标准 zone type（DLBM_TO_ZONE_TYPE 的 7 类）
+_ZONE_NAME_ALIASES: Dict[str, str] = {
+    "基本农田保护区": "农业用地", "基本农田": "农业用地", "一般农业区": "农业用地",
+    "农田保护区": "农业用地", "耕地保护区": "农业用地", "农业区": "农业用地",
+    "农用地": "农业用地", "耕地": "农业用地",
+    "生态保护区": "生态绿地", "林业发展区": "生态绿地", "生态用地": "生态绿地",
+    "生态区": "生态绿地", "林地保护区": "生态绿地", "林地": "生态绿地",
+    "村庄建设区": "居住用地", "村庄建设用地": "居住用地", "农村居民点": "居住用地",
+    "居民点用地": "居住用地", "居住区": "居住用地",
+    "产业园区": "产业用地", "产业园": "产业用地", "产业区": "产业用地",
+    "工业用地": "产业用地", "工业区": "产业用地",
+    "公共服务区": "公共服务用地", "公共服务设施用地": "公共服务用地",
+    "水域保护区": "水域", "水域": "水域", "水系": "水域", "水面": "水域",
+}
+
 try:
     import geopandas as gpd
     import shapely.geometry as geom
@@ -106,7 +121,9 @@ class ZoneGenerator:
 
         # Build zone features
         features = []
-        for zone_intent in zones:
+        for idx, zone_intent in enumerate(zones):
+            if not getattr(zone_intent, "zone_id", None):
+                zone_intent.zone_id = f"zone_{idx + 1}"
             zone_feature = self._build_zone_feature(
                 zone_intent, parcel_zones, boundary_area_sqm,
                 landuse_gdf, landuse_projected
@@ -180,6 +197,35 @@ class ZoneGenerator:
         )
         return parcel_zones
 
+    def _match_parcel_indices(
+        self,
+        land_use: str,
+        parcel_zones: Dict[str, List[int]],
+        zone_intent: ZoneTarget,
+    ) -> List[int]:
+        """PARSE 规划中文名 → 标准 zone type 的逐级匹配。
+
+        1) 别名表直接映射（基本农田保护区→农业用地 等）
+        2) 双向子串包含（"生态保护区" in "生态绿地" 不成立，但别名已覆盖；
+           "居住区" 与 "居住用地" 可子串命中）
+        3) zone_intent.dlbm 解析（PARSE 填了 dlbm 时）
+        4) 空名（区划名缺失）跳过 —— 不猜测
+        """
+        if not land_use:
+            return []
+        standard = _ZONE_NAME_ALIASES.get(land_use)
+        if standard and standard in parcel_zones:
+            return parcel_zones[standard]
+        for candidate, indices in parcel_zones.items():
+            if candidate in land_use or land_use in candidate:
+                return indices
+        dlbm = str(getattr(zone_intent, "dlbm", "") or "")
+        if dlbm:
+            standard = resolve_zone_type_for_dlbm(dlbm)
+            if standard in parcel_zones:
+                return parcel_zones[standard]
+        return []
+
     def _build_zone_feature(
         self,
         zone_intent: ZoneTarget,
@@ -193,7 +239,11 @@ class ZoneGenerator:
         target_area_sqm = zone_intent.area_ratio * boundary_area_sqm
 
         # parcel_zones already includes extended DLBM mapping
-        parcel_indices = parcel_zones.get(land_use, [])
+        # land_use 是 PARSE 的规划中文名（如"一般农业区"），与标准分类 key
+        # （如"农业用地"）不一定一致 → 逐级匹配（直接→别名→子串→dlbm 映射）
+        parcel_indices = parcel_zones.get(land_use, []) or self._match_parcel_indices(
+            land_use, parcel_zones, zone_intent
+        )
 
         if not parcel_indices:
             logger.info(

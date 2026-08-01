@@ -41,6 +41,54 @@ def _truncate_by_area(parcels: List[dict], target_ha: float) -> List[dict]:
     return chosen
 
 
+def _supplement_by_area(
+    selected: List[dict],
+    target_ha: float,
+    parcels: Iterable[dict],
+    rules=None,
+    contexts=None,
+) -> Tuple[List[dict], bool]:
+    """命中不足时从候选池补足至目标面积的 ±30% 区间（用户确认的近似策略）。
+
+    候选池排序：规则部分命中数降序（语义接近优先）→ 面积降序。
+    返回 (补足后的地块列表, 是否发生了补充)。
+    """
+    target = max(float(target_ha or 0), 0.0)
+    if target <= 0:
+        return selected, False
+    total = sum(float(p.get("area_ha", 0) or 0) for p in selected)
+    if total >= 0.7 * target:
+        return selected, False
+    chosen_bsms = {p["bsm"] for p in selected}
+    pool = [
+        p for p in parcels
+        if p["bsm"] not in chosen_bsms and float(p.get("area_ha", 0) or 0) > 0
+    ]
+
+    def _score(p):
+        if rules and contexts:
+            from app.agent.gis.vocab.rules import rule_to_condition
+            hit = 0
+            for r in rules:
+                try:
+                    if rule_to_condition(r).evaluate(contexts[p["bsm"]]):
+                        hit += 1
+                except Exception:
+                    pass
+            return (hit, float(p.get("area_ha", 0) or 0))
+        return (0, float(p.get("area_ha", 0) or 0))
+
+    pool.sort(key=_score, reverse=True)
+    supplemented = False
+    for p in pool:
+        if total >= 0.7 * target:
+            break
+        selected.append(p)
+        total += float(p.get("area_ha", 0) or 0)
+        supplemented = True
+    return selected, supplemented
+
+
 class CustomZoningGenerator:
     """Generate L4 FunctionalZone nodes from a vocabulary + planner intent.
 
@@ -103,11 +151,20 @@ class CustomZoningGenerator:
                 selected = self._select_by_rules(category)
             if not selected:
                 continue
-            # v5: 面积目标对齐 — 规则选中的地块按面积累加到 target，超出即停
+            # v5: 面积目标对齐 — 规则选中的地块按面积累加到 target，超出即停；
+            # 命中不足时按用户确认的近似策略从候选池补足至 ±30% 区间
+            supplemented = False
             if target.area_target_ha:
                 selected = _truncate_by_area(selected, target.area_target_ha)
                 if not selected:
                     continue
+                selected, supplemented = _supplement_by_area(
+                    selected,
+                    target.area_target_ha,
+                    self.parcels,
+                    rules=category.typing_rules or None,
+                    contexts=getattr(self, "_parcel_contexts", None),
+                )
             # 三线拦截改为图斑级：建设类功能区剔除与保护面相交的地块，保留其余
             # （保护类功能区本身与三线重合，跳过拦截）
             if not category.is_protection and protection is not None:
@@ -123,6 +180,8 @@ class CustomZoningGenerator:
                 if not selected:
                     continue
             merged = unary_union([p["geometry"] for p in selected])
+            decided_by = "supplement" if supplemented else (target.decided_by or "rule")
+            confidence = round((target.confidence or 0.7) * (0.7 if supplemented else 1.0), 3)
             zones.append(
                 {
                     "entity_type": EntityTypes.FunctionalZone,
@@ -133,8 +192,8 @@ class CustomZoningGenerator:
                     "pln:target_bsms": [p["bsm"] for p in selected],
                     "pln:area_target_ha": target.area_target_ha,
                     "pln:geometry": merged,
-                    "pln:decided_by": target.decided_by,
-                    "pln:confidence": target.confidence,
+                    "pln:decided_by": decided_by,
+                    "pln:confidence": confidence,
                     "pln:encoding_provenance": ProvenanceSource.CUSTOM_VOCABULARY.value,
                 }
             )

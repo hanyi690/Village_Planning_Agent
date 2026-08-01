@@ -101,6 +101,10 @@ _VOCAB_PROMPT = """你是村庄规划功能区词汇提取助手。从下列 L3 
     dlbm_in[码数组] / within_zone[区域] / not_within_zone[区域] /
     slope_lt[度] / road_distance_lt[米] / near_poi[名称] /
     and[子规则数组] / any[子规则数组] / not[子规则数组]
+- 地块上下文因子（生成 slope_lt / road_distance_lt 时依赖）：
+    坡度 slope_deg（度，0-90，由 DEM 逐地块质心计算）/ 道路距离 road_distance_m（质心到最近现状道路）/ 所在功能区 zone_membership / 附近 POI
+- 生态/林地类功能区建议用 slope_lt（如 25 度）表达；面积目标由 L3 分区表给出，
+  rules 只需表达"哪些地块算"，不必精确卡面积
 - 若没有可提取的功能区，输出 {{"categories": []}}
 """
 

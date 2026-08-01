@@ -5,6 +5,7 @@ Database engine and session management
 Provides SQLite connection and session factory for async operations.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -101,6 +102,16 @@ async def shutdown_database() -> None:
          crash path (skips dispose silently).
     Safe to call multiple times; never raises.
     """
+    try:
+        await asyncio.wait_for(_shutdown_database_inner(), timeout=5)
+    except asyncio.TimeoutError:
+        logger.warning("[Async DB] shutdown exceeded 5s — leaving to process exit")
+    except Exception as e:
+        logger.warning("[Async DB] shutdown failed: %s", e)
+    logger.info("[Async DB] All database connections shutdown")
+
+
+async def _shutdown_database_inner() -> None:
     global _checkpointer, _checkpointer_initialized
     if _checkpointer is not None:
         conn = getattr(_checkpointer, "conn", None)
@@ -123,7 +134,6 @@ async def shutdown_database() -> None:
             pass
         async_engine = None
     _async_engine_ref_count = 0
-    logger.info("[Async DB] All database connections shutdown")
 
 
 @asynccontextmanager

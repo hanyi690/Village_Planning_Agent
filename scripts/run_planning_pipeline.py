@@ -83,13 +83,15 @@ def run_with_exit_guard(coro_factory) -> int:
         logger.error("[ExitGuard] fatal: %s", e, exc_info=True)
         result["code"] = 1
     finally:
+        # done.set() 必须先于 shutdown_database：watchdog 兜底不依赖 shutdown
+        # 是否成功（若 shutdown 自身挂死，进程仍能由 watchdog os._exit）。
+        done.set()
         try:
             from app.database.engine import shutdown_database
 
             asyncio.run(shutdown_database())
         except Exception:
             pass
-        done.set()
 
     return result["code"]
 
@@ -217,7 +219,7 @@ async def _prepare_intent(reports: Dict[str, Any], village_name: str) -> Any:
     return intent
 
 
-async def _run_gis(session_id: str, reports: Dict[str, Any]) -> Dict[str, Any]:
+async def _run_gis(session_id: str, reports: Dict[str, Any], bundle: Any = None) -> Dict[str, Any]:
     """EXPLORE(project) → Binder → format → layout_pipeline → EXECUTE。"""
     from app.agent.explore import ExploreFlashAgent
     from app.agent.gis import build_layout_pipeline
@@ -227,7 +229,8 @@ async def _run_gis(session_id: str, reports: Dict[str, Any]) -> Dict[str, Any]:
     from app.modules.kg import open_kg_session
 
     village_name = JINTIAN_VILLAGE_DATA.get("village_name", "金田村")
-    bundle = await DataCatalog().load_village_bundle_async(village_name)
+    if bundle is None:
+        bundle = await DataCatalog().load_village_bundle_async(village_name)
     open_kg_session(session_id=session_id, village_name=bundle.village_name or village_name, bundle=bundle)
 
     planning_text = "\n".join(
@@ -363,11 +366,23 @@ async def main(session_id: str, skip_render: bool) -> None:
     session_id = session_id or f"plan_{uuid.uuid4().hex[:8]}"
     logger.info("[Pipeline] session_id=%s", session_id)
 
+    # KG session 必须早于探索（_ensure_reports 触发 L1/L2/L3 wave 钩子时 KG 已就绪）
+    from app.modules.data.catalog import DataCatalog
+    from app.modules.kg import open_kg_session
+
+    village_name = JINTIAN_VILLAGE_DATA.get("village_name", "金田村")
+    bundle = await DataCatalog().load_village_bundle_async(village_name)
+    open_kg_session(
+        session_id=session_id,
+        village_name=bundle.village_name or village_name,
+        bundle=bundle,
+    )
+
     _write_run_state("reports", session_id)
     reports = await _ensure_reports(session_id)
 
     _write_run_state("gis", session_id)
-    result = await _run_gis(session_id, reports)
+    result = await _run_gis(session_id, reports, bundle)
 
     layers = result.get("layout_configs", [])
     print("\n" + "=" * 60)
@@ -404,10 +419,16 @@ async def main(session_id: str, skip_render: bool) -> None:
 
     _write_run_state("render", session_id)
     if not skip_render:
-        subprocess.run(
-            [sys.executable, str(script_dir / "render_integrated_map.py")],
-            check=False,
-        )
+        try:
+            subprocess.run(
+                [sys.executable, str(script_dir / "render_integrated_map.py")],
+                check=False,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            logger.error("[Pipeline] render subprocess timed out after 180s")
+        except Exception as e:
+            logger.error("[Pipeline] render subprocess failed: %s", e)
     _write_run_state("done", session_id)
 
 

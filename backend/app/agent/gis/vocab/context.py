@@ -19,19 +19,34 @@ def _load_dem_slope(bundle: Any) -> Optional[Dict[str, float]]:
     try:
         import numpy as np
         import rasterio
-        from rasterio.terrain import slope as rio_slope
         from shapely.geometry import shape
 
-        rasters = getattr(bundle, "rasters", None) or {}
+        rasters = getattr(bundle, "rasters", None)
+        # RasterLayerGroup 是 Pydantic 模型：直接取 dem 字段（迭代模型得到的是字段名）
         dem = None
-        for r in rasters:
-            if getattr(r, "layer_type", "") in ("dem", "terrain"):
-                dem = getattr(r, "path", None) or getattr(r, "data_path", None)
-                break
+        if rasters is not None:
+            dem_feature = getattr(rasters, "dem", None)
+            if dem_feature is not None:
+                dem = getattr(dem_feature, "path", None) or getattr(
+                    dem_feature, "data_path", None
+                )
         if not dem:
             return None
         with rasterio.open(str(dem)) as src:
-            slope_arr = rio_slope(src.read(1), out_units="degrees")
+            elev = src.read(1).astype("float64")
+            # rasterio 1.3 无 rasterio.terrain → np.gradient 自实现坡度（度）。
+            # DEM 为 EPSG:4326 度网格：像素尺寸换算为米（纬度校正）后再求梯度。
+            deg_x = abs(src.transform.a)
+            deg_y = abs(src.transform.e)
+            lat_mid = (src.bounds.top + src.bounds.bottom) / 2.0
+            import math
+            m_per_deg_lat = 110540.0
+            m_per_deg_lon = 111320.0 * math.cos(math.radians(lat_mid))
+            dx_m = deg_x * m_per_deg_lon
+            dy_m = deg_y * m_per_deg_lat
+            # gradient 的 varargs 依次对应 axis0(y)、axis1(x)
+            gy, gx = np.gradient(elev, dy_m, dx_m)
+            slope_arr = np.degrees(np.arctan(np.hypot(gx, gy)))
             transform = src.transform
             result = {}
             for f in (bundle.polygons.get("landuse_current") or []):
