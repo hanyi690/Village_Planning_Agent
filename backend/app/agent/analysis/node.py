@@ -468,19 +468,29 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"[analyze_dimension] {dim_key}: DataPipeline failed: {e}")
 
-    # 5.5: KG 语义优化 - 查询 KG 补充 GIS 缺陷 + 候选集标注 (v4.8.1)
+    # 5.5: EXPLORE 空间认知 - KG 语义 + 空间统计 + 候选集标注
     kg_semantic_section = ""
     try:
-        kg_semantic_section = _optimize_semantics(dim_key, dim_layer, state, cfg)
+        kg_semantic_section = await _optimize_semantics(dim_key, dim_layer, state, cfg)
         if kg_semantic_section:
             logger.info(f"[analyze_dimension] {dim_key}: KG semantic injected ({len(kg_semantic_section)} chars)")
     except Exception as e:
         logger.warning(f"[analyze_dimension] {dim_key}: KG semantic optimization failed: {e}")
 
+    # 5.6: EXPLORE 空间认知 brief（纯自然语言，注入 reference 位置）
+    explore_brief_section = ""
+    try:
+        explore_brief_section = await _build_explore_brief(state)
+        if explore_brief_section:
+            logger.info(f"[analyze_dimension] {dim_key}: EXPLORE brief injected ({len(explore_brief_section)} chars)")
+    except Exception as e:
+        logger.warning(f"[analyze_dimension] {dim_key}: EXPLORE brief failed: {e}")
+
     # 6. 组装 Prompt
     prompt = _build_prompt(
         cfg, state, rag_context, deps, same_layer_contexts,
-        professional_data_section=professional_data_section + kg_semantic_section
+        professional_data_section=professional_data_section + kg_semantic_section,
+        explore_brief_section=explore_brief_section
     )
     logger.info(f"[analyze_dimension] {dim_key}: Prompt length = {len(prompt)} chars")
 
@@ -658,125 +668,63 @@ async def analyze_dimension(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 
-def _optimize_semantics(dim_key: str, dim_layer: int, state, cfg) -> str:
-    """v4.8.1: 查询 KG 补充 GIS 数据缺陷 + 候选集标注。
+def _zone_candidates_hint() -> str:
+    """静态编码推荐提示（非 KG 查询，与维度无空间数据时的候选集标注共用）。"""
+    try:
+        from app.modules.schema.encodings.code_sets import (
+            PLANNING_ZONE_TO_PRIMARY_ZONE, PLANNING_ZONE_NAMES,
+        )
+    except Exception:
+        return ""
+    return (
+        "**规划分区候选集提示**（编码推荐值非固定映射）:\n"
+        f"  分区体系: {' > '.join(PLANNING_ZONE_NAMES)}\n"
+        f"  分区->主空间: {PLANNING_ZONE_TO_PRIMARY_ZONE}\n"
+        "  以上为编码推荐值，实际规划可因上位规划调整、地块位置等因素改变。\n"
+    )
 
-    对 L1 维度调用 KG 获取空间统计数据，弥补 village_data 文本中可能缺失的几何信息。
-    对 L2/L3 维度不查 KG。
+
+async def _optimize_semantics(dim_key: str, dim_layer: int, state, cfg) -> str:
+    """EXPLORE 空间认知注入：KG 语义 + 空间统计 + 候选集标注。
+
+    替代静态 DIM_KG_MAP 硬编码查询。对 L1/L2/L3 均可用（不再阻断 L2/L3）。
+    统一走 session KG（get_any_kg 兜底）。失败时返回空串（非致命）。
     """
-    if dim_layer != 1:
-        return ""
-
-    DIM_KG_MAP = {
-        "land_use": ["land_distribution", "zone_candidates"],
-        "natural_environment": ["constraint_coverage"],
-        "ecological_green": ["constraint_coverage"],
-        "traffic": ["road_network"],
-        "public_services": ["facility_coverage"],
-        "infrastructure": ["facility_coverage"],
-        "socio_economic": ["land_distribution"],
-        "architecture": ["constraint_coverage"],
-        "location": ["village_overview"],
-        "superior_planning": ["constraint_coverage", "zone_candidates"],
-    }
-
-    query_types = DIM_KG_MAP.get(dim_key, [])
-    if not query_types:
-        return ""
-
-    sections: list = []
-
-    try:
-        from app.modules.kg.manager import KGManager
-        kg = KGManager().get_any_kg()
-        if kg is None:
-            return ""
-    except Exception:
+    session_id = state.get("session_id", "") if isinstance(state, dict) else ""
+    if not session_id:
         return ""
 
     try:
-        from app.modules.kg.queries.cognition import get_village_cognition
+        from app.agent.explore.summaries import build_spatial_cognition
 
-        if "land_distribution" in query_types or "zone_candidates" in query_types:
-            result = get_village_cognition(kg, "", mode="layer_cards")
-            for card in result.semantic.get("layer_cards", []):
-                if card.get("group") == "current_landuse":
-                    sections.append(
-                        f"## 空间语义补充（KG 查询）\n"
-                        f"**地块分布**: {card.get('distribution', '')}"
-                        f"（总计{card.get('count', 0)}个地块）\n"
-                    )
-                    break
+        cognition = await build_spatial_cognition(session_id, dim_key, dim_layer)
+        section = cognition.get("prompt_section") or ""
+    except Exception as e:
+        logger.warning("[explore] spatial cognition failed for %s: %s", dim_key, e)
+        return ""
 
-        if "zone_candidates" in query_types:
-            from app.modules.schema.encodings.code_sets import (
-                PLANNING_ZONE_TO_PRIMARY_ZONE, PLANNING_ZONE_NAMES,
-            )
-            sections.append(
-                "**规划分区候选集提示**（编码推荐值非固定映射）:\n"
-                f"  分区体系: {' > '.join(PLANNING_ZONE_NAMES)}\n"
-                f"  分区->主空间: {PLANNING_ZONE_TO_PRIMARY_ZONE}\n"
-                "  以上为编码推荐值，实际规划可因上位规划调整、地块位置等因素改变。\n"
-            )
+    if dim_key in ("land_use", "superior_planning"):
+        section += _zone_candidates_hint()
 
-        if "constraint_coverage" in query_types:
-            from rdflib import Namespace
-            PLN_NS = Namespace("http://village-planning.org/ontology#")
-            legal_dist: dict = {}
-            for _, _, o in kg.g.triples((None, PLN_NS.legal_constraint, None)):
-                v = str(o)
-                legal_dist[v] = legal_dist.get(v, 0) + 1
-            zone_dist: dict = {}
-            for _, _, o in kg.g.triples((None, PLN_NS.planning_zone, None)):
-                v = str(o)
-                zone_dist[v] = zone_dist.get(v, 0) + 1
-            if legal_dist or zone_dist:
-                legal_str = ", ".join(f"{k}({v})" for k, v in sorted(legal_dist.items(), key=lambda x: -x[1]))
-                zone_str = ", ".join(f"{k}({v})" for k, v in sorted(zone_dist.items(), key=lambda x: -x[1]))
-                sections.append(
-                    f"**约束覆盖**（KG legal_constraint 统计）: "
-                    f"{sum(legal_dist.values())}条约束三元组，{len(legal_dist)}种类型[{legal_str}]。"
-                    f"规划分区: {sum(zone_dist.values())}条，{len(zone_dist)}种[{zone_str}]。\n"
-                )
+    return section
 
-        if "village_overview" in query_types:
-            result = get_village_cognition(kg, "", mode="context_block")
-            ctx = result.semantic.get("context_block", {})
-            if ctx:
-                sections.append(
-                    f"## 空间语义补充（KG 查询）\n"
-                    f"**村域概况**: {ctx.get('overview', '')}"
-                    f"地块数={ctx.get('parcel_count', 0)}, "
-                    f"总面积={ctx.get('total_area_ha', 0)}ha, "
-                    f"空间格局={ctx.get('spatial_pattern', '')}\n"
-                )
 
-        if "facility_coverage" in query_types:
-            result = get_village_cognition(kg, "", mode="layer_cards")
-            for card in result.semantic.get("layer_cards", []):
-                if card.get("group") == "facility":
-                    sections.append(
-                        f"**设施覆盖**: {card.get('distribution', '')}"
-                        f"（总计{card.get('count', 0)}个设施）\n"
-                    )
-                    break
+async def _build_explore_brief(state) -> str:
+    """Build the EXPLORE spatial cognition brief section (L1 injection).
 
-        if "road_network" in query_types:
-            rn_result = get_village_cognition(kg, "", mode="layer_cards")
-            for card in rn_result.semantic.get("layer_cards", []):
-                if card.get("group") == "transport":
-                    sections.append(
-                        f"**道路网络**: {card.get('distribution', '')}"
-                        f"（总计{card.get('count', 0)}条道路）\n"
-                    )
-                    break
+    Non-fatal: returns "" when the session is unknown or the advisor fails.
+    """
+    session_id = state.get("session_id", "") if isinstance(state, dict) else ""
+    if not session_id:
+        return ""
+    from app.agent.explore.bridge_advisor import BridgeAdvisor, format_brief_section
 
-    except Exception:
-        pass
-
-    if sections:
-        return "\n".join(sections)
-    return ""
+    advisor = BridgeAdvisor(session_id=session_id)
+    brief = await advisor.compose_dim_brief(
+        dim_key=state.get("dimension_key", ""),
+        dim_layer=1,
+    )
+    return format_brief_section(brief)
 
 
 def _extract_landuse_metrics(summary_obj: Any, dim_key: str) -> Dict[str, float]:
@@ -889,7 +837,7 @@ async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log)
         return fallback.model_dump_json(ensure_ascii=False)
 
 
-def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: str = "", professional_data_section: str = "") -> str:
+def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: str = "", professional_data_section: str = "", explore_brief_section: str = "") -> str:
     """组装 Prompt - 使用 prompts 模块模板
 
     Args:
@@ -933,7 +881,7 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
 5. 不要添加"修订摘要"章节，直接在正文中修改相关内容"""
 
     if layer == 1:
-        return get_layer1_prompt(
+        prompt = get_layer1_prompt(
             dimension_key=dim_key,
             raw_data=village_data + professional_data_section,
             village_name=village_name,
@@ -943,6 +891,14 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             revision_instruction=revision_instruction,
             has_images=bool(state.get("image_ids")),
         )
+        # D: EXPLORE brief 注入到 输出骨架 之前（不改 L1 模板）
+        if explore_brief_section:
+            prompt = prompt.replace(
+                "**输出骨架**",
+                f"\n\n{explore_brief_section}\n\n**输出骨架**",
+                1,
+            )
+        return prompt
     elif layer == 2:
         return get_layer2_prompt(
             dimension_key=dim_key,
