@@ -165,6 +165,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                     {
                         "bsm": str(f.get("properties", {}).get("BSM", "") or f.get("properties", {}).get("bsm", "")),
                         "dlbm": str(f.get("properties", {}).get("DLBM", "") or f.get("properties", {}).get("dlbm", "")),
+                        "area_ha": float(f.get("properties", {}).get("area_sqm", 0) or 0) / 10000.0,
                         "geometry": shape(f["geometry"]) if f.get("geometry") else None,
                     }
                     for f in (landuse.get("features") or [])
@@ -206,6 +207,7 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                                 "category_name_zh": z["pln:category_name_zh"],
                                 "color": z["pln:color"],
                                 "target_bsms": z["pln:target_bsms"],
+                                "area_target_ha": z.get("pln:area_target_ha"),
                                 "decided_by": z["pln:decided_by"],
                                 "confidence": z["pln:confidence"],
                                 "vocabulary_name": z["pln:vocabulary_name"],

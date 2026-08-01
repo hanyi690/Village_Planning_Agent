@@ -176,10 +176,15 @@ def _parse_md_table_rows(text: str) -> List[List[str]]:
 
 
 def _extract_zone_tables(text: str) -> List[ZoneTarget]:
-    """【功能分区表】【土地用途分区表】→ ZoneTarget(land_use=分区名, area_ratio)."""
+    """【功能分区表】【土地用途分区表】→ ZoneTarget(land_use=分区名, area_ratio).
+
+    area_ratio 取占比列；面积列（公顷）写入 semantic.spatial_hint 备用
+    （格式 'AREA:78.83'，供 P6.6 生成 area_target_ha）。
+    """
     targets = []
     seen = set()
     in_zone_table = False
+    has_area_col = False
     for line in (text or "").splitlines():
         line = line.strip()
         if not line.startswith("|"):
@@ -192,6 +197,7 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
             joined = "".join(cells)
             if "分区" in joined and ("面积" in joined or "占比" in joined or "名称" in joined):
                 in_zone_table = True
+                has_area_col = "面积" in joined
             continue
         name = cells[0] if cells else ""
         if not name or "名称" in name or "合计" in name or name in seen:
@@ -209,15 +215,31 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
                 if m:
                     area_ratio = float(m.group(1)) / 100.0
                     break
-        if 0.0 < area_ratio <= 1.5:
+        # 面积列（公顷）：表头含"面积"时取第一个数字单元格（面积列在前）
+        area_ha = None
+        if has_area_col:
+            for cell in cells[1:]:
+                m = re.search(r"(\d+(?:\.\d+)?)", cell)
+                if m:
+                    area_ha = float(m.group(1))
+                    break
+        else:
+            for cell in cells[1:]:
+                m = re.search(r"(\d+(?:\.\d+)?)\s*(?:公顷|ha)", cell)
+                if m:
+                    area_ha = float(m.group(1))
+                    break
+        if area_ratio > 0.0 or area_ha is not None:
             seen.add(name)
             targets.append(
                 ZoneTarget(
                     land_use=name,
-                    area_ratio=area_ratio,
+                    area_ratio=area_ratio if area_ratio > 0.0 else None,
                     semantic=SemanticMetadata(
-                        natural_language_description=f"功能分区{name}占比{area_ratio*100:.0f}%",
-                        spatial_hint="",
+                        natural_language_description=f"功能分区{name}"
+                        + (f"占比{area_ratio*100:.0f}%" if area_ratio > 0.0 else "")
+                        + (f"，面积{area_ha}公顷" if area_ha is not None else ""),
+                        spatial_hint=f"AREA:{area_ha}" if area_ha is not None else "",
                     ),
                 )
             )

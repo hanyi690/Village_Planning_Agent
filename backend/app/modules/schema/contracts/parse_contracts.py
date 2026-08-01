@@ -409,6 +409,9 @@ class SpatialPlanningIntent(BaseModel):
 
     # Custom functional zone targets (P6 — from Explore/Binder project domain)
     custom_zone_targets: List["CustomZoneTarget"] = Field(default_factory=list)
+
+    # Session vocabulary name for custom zoning (P7 — LLM-extracted from L3 reports)
+    vocabulary_name: str = ""
     # Area constraints (preserved)
     total_area_ha: Optional[float] = None
     construction_area_ha: Optional[float] = None

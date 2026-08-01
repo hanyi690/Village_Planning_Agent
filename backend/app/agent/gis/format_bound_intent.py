@@ -106,6 +106,29 @@ def format_bound_spatial_intent(
                     confidence=float(props.get("confidence") or 0.7),
                 ))
     intent.road_targets = existing_roads
+
+    # P6.6: 分区表类别（zone_targets.land_use）与词汇表匹配 → 补 custom_zone_targets。
+    # 这样"生态保护区/农田保护区/…"各生成一个功能区面（target_bsms 空 → generator 按
+    # 类别 typing_rules 规则选择地块），功能区类别完全由 L3 报告动态决定。
+    if vocabulary_name and intent.zone_targets:
+        for zt in intent.zone_targets:
+            code = _match_category_code(str(zt.land_use or ""), vocabulary_name)
+            if code and not any(c.category_code == code for c in intent.custom_zone_targets):
+                area_ha = None
+                hint = getattr(zt.semantic, "spatial_hint", "") if zt.semantic else ""
+                if hint.startswith("AREA:"):
+                    try:
+                        area_ha = float(hint.split(":", 1)[1])
+                    except (TypeError, ValueError):
+                        area_ha = None
+                intent.custom_zone_targets.append(CustomZoneTarget(
+                    vocabulary_name=vocabulary_name,
+                    category_code=code,
+                    target_bsms=[],
+                    area_target_ha=area_ha,
+                    decided_by="rule",
+                    confidence=0.7,
+                ))
     return intent
 
 
