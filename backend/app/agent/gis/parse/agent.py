@@ -530,6 +530,43 @@ def _validate_binding(binding: PendingBinding, kg: Any, bundle: Any) -> tuple:
     return (True, "")
 
 
+def _extract_entity_semantics(reports: Dict[str, str]) -> List[Dict[str, str]]:
+    """P4: 功能分区/项目实体语义提取（纯语义注解，无空间绑定）。
+
+    Reuses the P3 table extractors to pull FunctionalZone / Project names
+    from report tables, so L1/L2/L3 report semantics flow back into the KG
+    semantic memory (the L1 loop: explore -> parse -> KG entity enrichment).
+    """
+    entities: List[Dict[str, str]] = []
+    seen = set()
+    for dim_key, content in (reports or {}).items():
+        for zt in _extract_zone_tables(content):
+            key = ("FunctionalZone", zt.land_use)
+            if key in seen:
+                continue
+            seen.add(key)
+            entities.append(
+                {
+                    "entity_name": zt.land_use,
+                    "entity_type": "FunctionalZone",
+                    "description": f"功能分区{zt.land_use}（源自{dim_key}报告分区表）",
+                }
+            )
+        for ft in _extract_project_tables(content):
+            key = ("Project", ft.type)
+            if key in seen:
+                continue
+            seen.add(key)
+            entities.append(
+                {
+                    "entity_name": ft.type,
+                    "entity_type": "Project",
+                    "description": f"规划项目{ft.type}（源自{dim_key}报告项目库）",
+                }
+            )
+    return entities
+
+
 def _queue_review(session_id: str, wave: int, skipped: List[Dict[str, Any]]) -> None:
     from app.modules.kg.memory import get_memory_dir
 
@@ -616,6 +653,24 @@ async def extract_bindings(
             )
             written.append(bsm)
 
+    # P4: 实体语义增强 — 功能分区/项目名注解回流 KG 语义记忆（无需 BSM）
+    semantic_written = 0
+    for ent in _extract_entity_semantics(reports):
+        name = ent["entity_name"]
+        refs = [k for k in (reports or {}) if name in (reports[k] or "")][:1]
+        _get_semantic_memory().add_entity_annotation(
+            EntityAnnotation(
+                entity_uri=f"pln:semantic_{ent['entity_type']}_{name}",
+                entity_type=ent["entity_type"],
+                description=ent["description"],
+                source_text_refs=refs,
+                round_added=wave,
+                valid_from_round=wave,
+                confidence=0.7,
+            )
+        )
+        semantic_written += 1
+
     try:
         get_kg_manager().bump_version(session_id)
     except Exception as e:
@@ -638,6 +693,7 @@ async def extract_bindings(
         "written": len(set(written)),
         "skipped": len(skipped),
         "pending_review": len(skipped),
+        "semantic_entities": semantic_written,
     }
     logger.info("[PARSE-bindings] session=%s stats=%s", session_id, stats)
     return stats

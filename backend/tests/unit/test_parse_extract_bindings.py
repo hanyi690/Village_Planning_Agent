@@ -136,6 +136,65 @@ def test_validate_rejects_unknown_bsm():
     assert "not in KG" in reason
 
 
+def test_extract_entity_semantics_picks_zones_and_projects():
+    """P4: 报告分区表/项目库 → FunctionalZone/Project 实体语义注解。"""
+    from app.agent.gis.parse.agent import _extract_entity_semantics
+
+    report = (
+        "【功能分区表】\n"
+        "| 分区名称 | 面积(公顷) | 占比(%) | 管控要求 |\n"
+        "| :--- | :--- | :--- | :--- |\n"
+        "| 生态保护区 | 362.02 | 15.39 | 严格保护 |\n"
+        "【建设项目库】\n"
+        "| 项目名称 | 建设内容 | 规模 | 选址 |\n"
+        "| :--- | :--- | :--- | :--- |\n"
+        "| 南药产业园 | 南药种植 | 0.15公顷 | 园寨自然村 |\n"
+    )
+    entities = _extract_entity_semantics({"industry": report})
+    types = {(e["entity_type"], e["entity_name"]) for e in entities}
+    assert ("FunctionalZone", "生态保护区") in types
+    assert ("Project", "南药产业园") in types
+
+
+def test_extract_bindings_writes_semantic_annotations(monkeypatch, tmp_path: Path):
+    """P4: extract_bindings 同时写入分区/项目实体注解（无 BSM 校验）。"""
+    import asyncio
+
+    import app.agent.gis.parse.agent as parse_mod
+    import app.modules.kg.memory as mem_mod
+
+    fake_store = mem_mod.SemanticMemoryStore()
+    monkeypatch.setattr(mem_mod, "get_memory_dir", lambda: tmp_path)
+    monkeypatch.setattr(parse_mod, "_get_semantic_memory", lambda: fake_store)
+
+    manager = get_kg_manager()
+    manager.register_session("sess-semantic", _FakeKG(set()))
+
+    report = (
+        "【功能分区表】\n"
+        "| 分区名称 | 占比(%) |\n"
+        "| :--- | :--- |\n"
+        "| 生态保护区 | 15.39 |\n"
+    )
+    try:
+        stats = asyncio.run(
+            extract_bindings(
+                session_id="sess-semantic",
+                wave=1,
+                reports={"land_use_planning": report},
+                llm=None,
+                kg=_FakeKG(set()),
+                bundle=None,
+            )
+        )
+    finally:
+        manager.remove_session("sess-semantic")
+
+    assert stats["semantic_entities"] >= 1
+    uris = [a.entity_uri for a in fake_store.entity_annotations.values()]
+    assert any("FunctionalZone" in u for u in uris)
+
+
 def test_extract_bindings_full_flow(monkeypatch, tmp_path: Path):
     import asyncio
 
