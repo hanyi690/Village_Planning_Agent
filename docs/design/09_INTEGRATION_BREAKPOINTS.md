@@ -70,11 +70,11 @@ L1现状(28维) ──结构化问题清单──> L2规划定位(策略性) ─
 
 `[PLANNED]`
 
-- 拆闸门为按命名空间分派：
-  - L1 -> `analysis_queries`（粗，semantic）-- 现状已用，保留
+- 拆闸门为按命名空间分派（EXPLORE 维度认知模式统一提供）：
+  - L1 -> `analysis_queries`（粗，semantic）-- 现状已用静态 DIM_KG_MAP，待升级为 EXPLORE 动态调用
   - L2 -> `analysis_queries` + `shared_queries`（定位需认知摘要做约束校核）
   - L3 -> `execute_queries` + `shared_queries`（细化需 get_area_by_type 算现状结构）
-- KG 实例统一（治⑨）：`_optimize_semantics` 改用 `manager.get_session_kg(session_id)`
+- KG 实例统一（治⑨）：`_optimize_semantics` 改用 `manager.get_session_kg(session_id)`（EXPLORE 统一用 session KG）
 - `phases.yaml` 增加 `kg_query` 字段（类比 `rag_query`）
 
 **收益**：L2 定位能基于 KG 认知校核；L3 细化能基于 KG 现状结构校核。

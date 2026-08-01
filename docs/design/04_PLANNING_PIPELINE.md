@@ -9,20 +9,23 @@
 
 ```
 NL输入 -> L1现状分析(12维) -> L2规划定位(4维) -> L3详细规划(12维)
+    ↑↓ EXPLORE维度认知      ↑↓ EXPLORE维度认知   ↑↓ EXPLORE维度认知
+    (KG空间认知注入)         (约束校核认知)        (现状结构认知)
     -> EXPLORE桥接(按需读L1+L2+L3 + KG交互 + 产出概要索引)
     -> PARSE空间意图(消费概要索引 + 按维度取L3原文)
     -> EXECUTE布局生成(多策略 + Evaluator Gate)
     -> L4成果回写(derived_from provenance)
-    -> L3校核轮(读L4 PlannedState对账)
+    -> EXPLORE校核(读L4 PlannedState + L3文本对账)
     -> 文本/几何一致输出
 ```
 
 全程 KG 语义桥接 + provenance 从 NL 贯通到 L4。
 
 **闭环的核心特征**：
-- L1/L2/L3 文本产出不是终点，而是 EXPLORE 的输入
-- EXPLORE 产出概要索引，GIS 按维度访问对应报告原文
-- EXECUTE 产出 L4，L3 校核轮读 L4 做文本/几何一致性校核
+- EXPLORE 贯穿 L1/L2/L3 维度分析，为每个维度动态提供 KG 空间认知（替代静态 DIM_KG_MAP）
+- L1/L2/L3 文本产出不是终点，而是 EXPLORE 桥接模式的输入
+- EXPLORE 桥接模式产出概要索引，GIS 按维度访问对应报告原文
+- EXECUTE 产出 L4，EXPLORE 校核模式读 L4 做文本/几何一致性校核
 - 文本说"耕地127.18公顷"，L4 算出来也是 127.18
 
 ---
@@ -53,10 +56,11 @@ Map-Reduce 并行，12 维度无内部依赖，`routing.py` 用 Send API 分发�
 | 机制 | 状态 | 证据 |
 |------|------|------|
 | 12维并行 Send API | `[IMPLEMENTED]` | routing.py:297 `[Send("analyze_dimension", ...)]` |
-| KG认知查询（10维度） | `[IMPLEMENTED]` | node.py:670-680 `DIM_KG_MAP` + `get_village_cognition` |
+| KG认知查询（10维度） | `[IMPLEMENTED]` 但待升级 | node.py:670-680 静态 `DIM_KG_MAP`, 待升级为 EXPLORE 维度认知模式 |
 | RAG检索内嵌 | `[IMPLEMENTED]` | node.py `_run_rag()` + `RagService` |
 | DataPipeline工具执行 | `[IMPLEMENTED]` 但空跑 | pipeline.py，27/28维度 `tools:[]` |
 | 结构化问题清单产出 | `[PLANNED]` | I1改造，治断点①⑪ |
+| EXPLORE 维度认知模式 | `[PLANNED]` | 替代 `_optimize_semantics` 静态映射, 动态提供 KG 空间认知 |
 
 ### 3.3 L1 维度与 KG 查询映射
 
@@ -97,6 +101,7 @@ Map-Reduce 并行，12 维度无内部依赖，`routing.py` 用 Send API 分发�
 | Wave调度 | `[IMPLEMENTED]` | routing.py:252-258 同层依赖检查 |
 | 策略性定位（村庄分类/发展方向/口号） | `[IMPLEMENTED]` | 文本产出，正确 |
 | KG约束校核 | `[PLANNED]` | I2改造，node.py:667 `if dim_layer != 1: return ""` |
+| EXPLORE 维度认知模式（L2） | `[PLANNED]` | analysis_queries + shared_queries, 治断点② |
 
 > **L2 策略性定位是文本，本就正确，不应空间化。** L2 的"规划定位"是策略性定位（村庄分类决定分区方向、发展方向决定产业用地），不是空间定位。空间定位（ZoneTarget/grounding）是 EXPLORE+PARSE 的职责。
 
@@ -115,7 +120,8 @@ Map-Reduce 并行，12 维度无内部依赖，`routing.py` 用 Send API 分发�
 | Wave调度 | `[IMPLEMENTED]` | routing.py:252-258 |
 | RAG检索（5维度） | `[IMPLEMENTED]` | phases.yaml `rag_query` 字段 |
 | KG现状结构查询 | `[PLANNED]` | I2改造 |
-| L3校核轮（读L4对账） | `[PLANNED]` | I5改造，治断点⑥ |
+| EXPLORE 维度认知模式（L3） | `[PLANNED]` | execute_queries + shared_queries, 治断点② |
+| L3校核轮（EXPLORE校核模式读L4对账） | `[PLANNED]` | I5改造，治断点⑥ |
 
 ---
 

@@ -249,13 +249,46 @@ compute_land_use_metrics(geojson) -> Dict   # 用地指标计算
 | 标准 | 系统对齐 | 实现状态 |
 |------|----------|----------|
 | 自然资发〔2023〕234号 | 用地用海分类编码（YDYHFL） | `[IMPLEMENTED]` 编码映射 |
-| GB/T 21010-2017 | 三调国标编码体系 | `[IMPLEMENTED]` 编码映射 |
+| GB/T 21010-2017 | 三调国标编码体系 | `[IMPLEMENTED]` 编码映射；KB `04 技术规范/01 国家层面/04` |
 | GB/T 13923-2022 | 10位数字层次码（YSDM） | `[IMPLEMENTED]` gdb.py _default_ysdm |
 | DB14/T 2979-2024 | 数据库内容/要素分类/分层 | `[IMPLEMENTED]` GDB_LAYER_REGISTRY 12层 |
 | 广东省村庄规划编制指引 | 四阶段工作流/一图一表一规则 | `[PARTIAL]` 一图一表已实现，一规则 PLANNED |
 | DB4407/T 105-2023 | 6大类管制规则模板 | `[PLANNED]` 未实现 |
 | 住建部(2014) | V/N/E 三分类 | `[IMPLEMENTED]` 编码映射 |
 | 三区三线 | 生态/农业/建设空间 + 三线边界 | `[IMPLEMENTED]` KG 三区三线查询 |
+
+### 7.1 知识库已入库标准
+
+MinerU 精准解析入库（2026-08-01），源 PDF 与 .md 全文本+JSON 同步归档：
+
+| 标准号 | KB 路径 | RAG 路径 | 来源 | 模型 |
+|---|---|---|---|---|
+| GB/T 21010-2017 土地利用现状分类 | `04 技术规范/01 国家层面/04` | `data/RAG_doc/_doc_md/04_技术规范/01_国家层面/GB-T 21010-2017 土地利用现状分类_minerU_parsed.md` | openstd（替换原扫描版） | pipeline |
+| TD/T 1027-2010 县级土地利用总体规划数据库标准 | `04 技术规范/01 国家层面/07` | 同上/.../TD-T 1027-2010 县级土地利用总体规划数据库标准_minerU_parsed.md | nrsis | vlm+OCR |
+| TD/T 1057-2020 国土调查数据库标准 | `04 技术规范/01 国家层面/08` | 同上/.../TD-T 1057-2020 国土调查数据库标准_minerU_parsed.md | nrsis | vlm+OCR |
+| TD/T 1055-2019 第三次全国国土调查技术规程 | `04 技术规范/01 国家层面/09` | 同上/.../TD-T 1055-2019 第三次全国国土调查技术规程_minerU_parsed.md | nrsis | vlm+OCR |
+| TD/T 1032-2011 基本农田划定技术规程 | `04 技术规范/01 国家层面/10` | 同上/.../TD-T 1032-2011 基本农田划定技术规程_minerU_parsed.md | nrsis | vlm+OCR |
+| GB/T 43214-2023 省级国土空间规划编制技术规程 | `04 技术规范/01 国家层面/11` | 同上/.../GB-T 43214-2023 省级国土空间规划编制技术规程_minerU_parsed.md | openstd | pipeline |
+| GB/T 39972-2021 一张图 实施监督信息系统技术规范 | `04 技术规范/01 国家层面/12` | 同上/.../GB-T 39972-2021 ..._minerU_parsed.md | openstd | pipeline |
+| 国土调查数据库标准（试行修订稿） | `04 技术规范/01 国家层面/13` | 同上/.../国土调查数据库标准_minerU_parsed.md | 用户 | pipeline |
+| 广东省县级国土空间总体规划数据库标准（试行） | `04 技术规范/02 地方层面/01 广东省/03` | `data/RAG_doc/_doc_md/04_技术规范/02_地方层面/01_广东省/广东省县级国土空间总体规划数据库标准_minerU_parsed.md` | 用户 | pipeline |
+
+索引文件：`docs/RAG 知识库/01 索引/standards_index.md`。
+
+### 7.2 知识库爬取脚本（可复用）
+
+- `scripts/fetch_nrsis_standards.py` — 自然资源标准化平台（行业标准 TD/T/DZ/HY）
+- `scripts/fetch_openstd_standards.py` — 国家标准全文公开系统（GB/GB/T/GB/Z）
+- `scripts/parse_mineru.py` — MinerU 精准解析 v4（PDF/图片/Office → md+json）
+- `scripts/ingest_standards.py` — 标准入库（KB 04 技术规范）
+
+### 7.3 仍待补的标准（不入库决策）
+
+- GB 50137-2011 城市用地分类与规划建设用地标准（工程建设标准，不在 openstd；需住建部标准全文公开）
+- TD/T 1029-2010 开发区土地集约利用评价规程（与村庄规划无关）
+- TD/T 1033-2012 高标准基本农田建设标准 / TD/T 1019-2009 基本农田数据库标准 / TD/T 1017-2008 二调基本农田调查技术规程（已被 1055 三调覆盖）
+- TD/T 1083-2023 国土调查数据库更新数据规范（动态更新，不缓存）
+- GB/T 21010-2007 土地利用现状分类（已被 2017 版替代）
 
 ---
 

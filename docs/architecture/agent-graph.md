@@ -52,13 +52,13 @@
 
 ### 节点表
 
-| 节点 | 实现文件 | 职责 | 状态 |
-|------|----------|------|------|
-| `conversation` | `agent/conversation/node.py:74` | 中央路由。`bind_tools([advance_planning_intent, gis_analysis] + analytics)`，LLM 决策后经 `after_conversation` 路由 | `[IMPLEMENTED]` |
-| `execute_tools` | `agent/tools/execute_node.py:79` | `[过渡性]` 仅处理非路由 tool_calls（`knowledge_search`、`web_search`、`population_prediction`）。路由类工具被过滤 | `[DEPRECATED?]` |
-| `analyze_dimension` | `agent/analysis/node.py` | RAG 检索 + KG 查询（**仅 L1**，`node.py:667` 阻断 L2/L3）+ `DataPipeline` 工具执行 + LLM 流式生成 | `[IMPLEMENTED]` |
-| `layer_completion_check` | `agent/completion/node.py:20` | 层级完成检测。`step_mode` 走 `interrupt()` 暂停审批；连续模式自动推进下一层 | `[IMPLEMENTED]` |
-| `gis_agent` | `agent/graph.py:52` | PARSE ReAct + LAYOUT 混合管线。当前**仅自取 L3 报告**（`graph.py:207`），存在**双重 parse 问题**（`graph.py:97` + `layout_pipeline.py:123`） | `[IMPLEMENTED]` 有缺陷 |
+| 节点                       | 实现文件                           | 职责                                                                                                                                                           | 状态                     |
+| -------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `conversation`           | `agent/conversation/node.py:74`  | 中央路由。`bind_tools([advance_planning_intent, gis_analysis] + analytics)`，LLM 决策后经 `after_conversation` 路由                                        | `[IMPLEMENTED]`        |
+| `execute_tools`          | `agent/tools/execute_node.py:79` | `[过渡性]` 仅处理非路由 tool_calls（`knowledge_search`、`web_search`、`population_prediction`）。路由类工具被过滤                                      | `[DEPRECATED?]`        |
+| `analyze_dimension`      | `agent/analysis/node.py`         | RAG 检索 + KG 查询（**仅 L1**，`node.py:667` 阻断 L2/L3）+ `DataPipeline` 工具执行 + LLM 流式生成                                                    | `[IMPLEMENTED]`        |
+| `layer_completion_check` | `agent/completion/node.py:20`    | 层级完成检测。`step_mode` 走 `interrupt()` 暂停审批；连续模式自动推进下一层                                                                                | `[IMPLEMENTED]`        |
+| `gis_agent`              | `agent/graph.py:52`              | PARSE ReAct + LAYOUT 混合管线。当前**仅自取 L3 报告**（`graph.py:207`），存在**双重 parse 问题**（`graph.py:97` + `layout_pipeline.py:123`） | `[IMPLEMENTED]` 有缺陷 |
 
 ### 边定义
 
@@ -130,13 +130,13 @@ conversation ──► analyze_dimension (L1/L2/L3)
 
 ## 4. 已知问题
 
-| 问题 | 位置 | 影响 |
-|------|------|------|
-| 双重 parse | `graph.py:97` + `layout_pipeline.py:123` | PARSE Agent 被执行两次，浪费 LLM 调用 |
-| gis_agent 仅取 L3 | `graph.py:207` | L1/L2 空间线索（三区三线、用地分布、村庄分类）丢失 |
-| KG 仅 L1 查询 | `analysis/node.py:667` | L2/L3 维度无 KG 认知补充 |
-| execute_tools 过渡性 | `execute_node.py:79` | 仅处理 3 个非路由工具，路由类被过滤后转发 |
-| 开环无校核轮 | `design/04` 断点⑥ | L3 文本与 L4 几何无一致性校核 |
+| 问题                 | 位置                                         | 影响bu                                             |
+| -------------------- | -------------------------------------------- | -------------------------------------------------- |
+| 双重 parse           | `graph.py:97` + `layout_pipeline.py:123` | PARSE Agent 被执行两次，浪费 LLM 调用              |
+| gis_agent 仅取 L3    | `graph.py:207`                             | L1/L2 空间线索（三区三线、用地分布、村庄分类）丢失 |
+| KG 仅 L1 查询        | `analysis/node.py:667`                     | L2/L3 维度无 KG 认知补充                           |
+| execute_tools 过渡性 | `execute_node.py:79`                       | 仅处理 3 个非路由工具，路由类被过滤后转发          |
+| 开环无校核轮         | `design/04` 断点⑥                         | L3 文本与 L4 几何无一致性校核                      |
 
 ## 5. 相关文件
 
