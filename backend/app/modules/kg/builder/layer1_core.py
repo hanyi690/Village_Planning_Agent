@@ -454,10 +454,10 @@ def add_roads(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict
         kg.g.add((uri, RDF.type, EntityTypes.Road))
         name = getattr(road, "road_name", "") or f"道路_{bsm or count}"
         kg.g.add((uri, PLN.name, Literal(name)))
-        length = road.shape_length or 0.0
+        length = getattr(road, "shape_length", "") or 0.0
         if length:
             kg.g.add((uri, PLN.length, Literal(length, datatype=XSD.double)))
-        kg.g.add((uri, PLN.road_level, Literal(road.road_level or "村道")))
+        kg.g.add((uri, PLN.road_level, Literal(getattr(road, "road_level", "") or "村道")))
         kg.g.add((uri, Relations.sfWithin, PLN.village))
         kg.g.add((PLN.village, Relations.connects, uri))
         kg.g.add((uri, gis_type_ref, Literal("road")))
@@ -604,7 +604,7 @@ def add_facilities_from_typed(kg, features, *, gtype_ref: str, entry, ctx: Build
     for f in features:
         if not isinstance(f, CurrentFacility):
             continue
-        name = f.facility_name or f"facility_{count}"
+        name = getattr(f, "facility_name", "") or f"facility_{count}"
         bsm = str(f.bsm).strip()
         ysdm = str(f.ysdm).strip()
         if bsm:
@@ -614,7 +614,7 @@ def add_facilities_from_typed(kg, features, *, gtype_ref: str, entry, ctx: Build
         EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
         kg.g.add((uri, RDF.type, EntityTypes.Facility))
         kg.g.add((uri, PLN.name, Literal(name)))
-        ftype = f.facility_type or '公共服务'
+        ftype = getattr(f, "facility_type", "") or '公共服务'
         kg.g.add((uri, PLN.facility_type, Literal(ftype)))
         geom = f.geometry or {}
         coords = geom.get('coordinates', [0, 0]) if isinstance(geom, dict) else [0, 0]
