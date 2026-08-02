@@ -24,6 +24,60 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+def _attach_custom_zone_targets(intent: Any, reports: Dict[str, Any], village_name: str = "") -> int:
+    """P3-4: 项目/分区名 → L3 分区表词汇表类别 → CustomZoneTarget（接线现存能力）。
+
+    vocab_extractor（L3 分区表 → session 词汇表，确定性）+ format_bound 的
+    _match_category_code 原本无调用方；这里将 INSTRUCTION/表格提取的实体名
+    匹配到词汇表类别，产出 custom_zone_targets 供 CustomZoningGenerator
+    按类别规则选地；target_bsms 继承该实体已 gazetteer 解析的候选 BSM。
+    返回新增 target 数。
+    """
+    from app.agent.gis.format_bound_intent import _match_category_code
+    from app.agent.gis.vocab_extractor import extract_vocabulary_deterministic
+    from app.modules.schema.contracts.custom_zone_contracts import CustomZoneTarget
+    from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary
+
+    reports_content = {
+        k: (v.get("content", "") if isinstance(v, dict) else str(v))
+        for k, v in (reports or {}).items()
+    }
+    vocab = extract_vocabulary_deterministic(reports_content)
+    if not vocab.categories:
+        return 0
+    register_vocabulary(vocab.name, vocab)
+
+    entity_bsms: Dict[str, List[str]] = {}
+    for ft in (getattr(intent, "facilities", None) or []):
+        if ft.type:
+            entity_bsms[ft.type] = list(ft.candidate_bsms or [])
+    for zt in (getattr(intent, "zone_targets", None) or []):
+        if zt.land_use:
+            entity_bsms[zt.land_use] = list(zt.candidate_bsms or [])
+
+    existing_codes = {c.category_code for c in (getattr(intent, "custom_zone_targets", None) or [])}
+    added = 0
+    for name, bsms in entity_bsms.items():
+        code = _match_category_code(name, vocab.name)
+        if not code or code in existing_codes:
+            continue
+        existing_codes.add(code)
+        intent.custom_zone_targets.append(CustomZoneTarget(
+            vocabulary_name=vocab.name,
+            category_code=code,
+            target_bsms=bsms,
+            decided_by="rule",
+            confidence=0.7,
+        ))
+        added += 1
+    if added:
+        logger.info(
+            "[Pipeline:parse] custom zone targets attached: %d (vocab=%s)",
+            added, vocab.name,
+        )
+    return added
+
+
 # ── Node implementations ──────────────────────────────────────────────
 
 
@@ -207,6 +261,13 @@ async def _parse_intent_node(state: GISPipelineState) -> dict:
             resolve_spatial_anchors(intent, village_name=village_name)
         except Exception as e:
             logger.warning("[Pipeline:parse] spatial anchor resolution failed: %s", e)
+
+        # P3-4: INSTRUCTION 项目/分区名 → L3 分区表词汇表类别 → CustomZoneTarget
+        # （target_bsms 继承已 gazetteer 解析的候选 BSM，功能区落位生效）
+        try:
+            _attach_custom_zone_targets(intent, reports, village_name)
+        except Exception as e:
+            logger.warning("[Pipeline:parse] custom zone target attach failed: %s", e)
 
         # Extract PARSE outputs - all typed
         zone_count = len(intent.zone_targets) if hasattr(intent, 'zone_targets') else 0
