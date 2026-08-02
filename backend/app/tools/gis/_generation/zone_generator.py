@@ -269,7 +269,7 @@ class ZoneGenerator:
         else:
             current_area_sqm = 0.0
 
-        source_bsms = [str(row.get("BSM", "")) for _, row in matched_gdf.iterrows()]
+        source_bsms = [str(row.get("BSM", "") or row.get("bsm", "")) for _, row in matched_gdf.iterrows()]
 
         # Get representative DLBM and DLMC
         primary_dlbm = zone_intent.dlbm
@@ -366,7 +366,7 @@ class ZoneGenerator:
                     "area_ha": round(area_ha, 2),
                     "direction": "center",
                     "density": "medium",
-                    "source_bsms": [str(row.get("BSM", "")) for _, row in matched_gdf.iterrows()],
+                    "source_bsms": [str(row.get("BSM", "") or row.get("bsm", "")) for _, row in matched_gdf.iterrows()],
                     "parcel_count": len(indices),
                 },
                 "geometry": self._geometry_to_dict(merged),
