@@ -153,7 +153,11 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
 
         # Step 6: Generate function zone + planning zone layers
         layers = []
-        func_layer = _generate_function_zones(state.intent, gis_data)
+        # _generate_function_zones 依赖 landuse_current_geojson — 从 bundle 派生
+        # 的 landuse 注入 gis_data（state.gis_data 可能为空，导致 intent-only fallback）
+        gis_data_for_zones = dict(state.gis_data or {})
+        gis_data_for_zones["landuse_current_geojson"] = landuse
+        func_layer = _generate_function_zones(state.intent, gis_data_for_zones)
         if func_layer:
             layers.append(func_layer)
         plan_layer = _make_planning_zone_layer(allocated_geojson, gis_data)
