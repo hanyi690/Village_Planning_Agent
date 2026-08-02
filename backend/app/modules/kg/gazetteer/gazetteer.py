@@ -247,6 +247,24 @@ def build_gazetteer(kg: Any, bundle: Any, memory: Any = None) -> Gazetteer:
     if memory is not None:
         try:
             for e in _annotation_entries_from_memory(memory, bundle):
+                # 同 entity_uri 聚类已有 bsms/centroid → 继承（修复 l1_enrichment
+                # 注解条目 bsms 恒空导致同名/同 URI 条目覆盖聚类地块集的问题）
+                twin = next(
+                    (x for x in gazetteer.entries
+                     if x.entity_uri and x.entity_uri == e.entity_uri and x.bsms),
+                    None,
+                )
+                if twin is not None and not e.bsms:
+                    e = GazetteerEntry(
+                        name=e.name,
+                        aliases=e.aliases,
+                        entity_uri=e.entity_uri,
+                        bsms=list(twin.bsms),
+                        centroid=twin.centroid or e.centroid,
+                        source=e.source,
+                        confidence=e.confidence,
+                        description=e.description,
+                    )
                 gazetteer.upsert(e)
         except Exception as e:
             logger.warning("[Gazetteer] memory build failed: %s", e)
