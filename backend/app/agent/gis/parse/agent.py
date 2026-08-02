@@ -71,6 +71,27 @@ _INSTRUCTION_TYPE_MAP = {
 _INSTRUCTION_LOCATION_HEADER_RE = re.compile(r"(位置|选址|所在位置|方位|位于)")
 _INSTRUCTION_NAME_HEADER_RE = re.compile(r"(名称|项目|工程)")
 
+# 方位词 → direction 枚举（center/north/south/east/west/northeast/northwest/southeast/southwest）
+_DIRECTION_RULES = (
+    ("东北", "northeast"), ("西北", "northwest"),
+    ("东南", "southeast"), ("西南", "southwest"),
+    ("东部", "east"), ("东侧", "east"), ("东边", "east"), ("东", "east"),
+    ("西部", "west"), ("西侧", "west"), ("西边", "west"), ("西", "west"),
+    ("北部", "north"), ("北侧", "north"), ("北边", "north"), ("北", "north"),
+    ("南部", "south"), ("南侧", "south"), ("南边", "south"), ("南", "south"),
+    ("中部", "center"), ("中心", "center"), ("中", "center"),
+)
+
+
+def _direction_from_location(location: str) -> str:
+    """位置文本 → 方位枚举（'村东北部与西南部' → northeast，取首个命中）。"""
+    if not location:
+        return ""
+    for keyword, direction in _DIRECTION_RULES:
+        if keyword in location:
+            return direction
+    return ""
+
 
 def _extract_instruction_section(text: str) -> str:
     """取【INSTRUCTION】标记起的结构化段（含标记行）。无标记返回空。"""
@@ -142,7 +163,10 @@ def _extract_instruction_tables(text: str) -> Dict[str, List[Any]]:
                 zones.append(ZoneTarget(
                     land_use=name,
                     semantic=semantic,
-                    spatial_preference=SpatialPreference(direction="", reference=location or None) if location else None,
+                    spatial_preference=SpatialPreference(
+                        direction=_direction_from_location(location),
+                        reference=location or None,
+                    ) if location else None,
                 ))
             elif kind == "facility":
                 seen["facilities"].add(name)

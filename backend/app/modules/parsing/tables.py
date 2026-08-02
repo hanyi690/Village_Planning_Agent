@@ -28,6 +28,8 @@ from app.modules.schema.contracts.parse_contracts import (
 )
 from app.modules.schema.contracts.semantic_fields import SemanticMetadata
 
+from app.agent.gis.parse.agent import _direction_from_location
+
 _AREA_UNIT_RE = re.compile(r"(公顷|ha|hm|亩|㎡|m²)")
 _RATIO_RE = re.compile(r"%")
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
@@ -140,7 +142,7 @@ def _extract_zone_tables(text: str) -> List[ZoneTarget]:
                         spatial_hint=f"AREA:{area_ha}" if area_ha is not None else "",
                     ),
                     spatial_preference=SpatialPreference(
-                        direction="",
+                        direction=_direction_from_location(location),
                         reference=location or None,
                     ) if location else None,
                 )
