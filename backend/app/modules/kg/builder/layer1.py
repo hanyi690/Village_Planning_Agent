@@ -232,10 +232,10 @@ def _add_parcels(self, parcels) -> None:
     bsm_seq: dict = {}  # Track sequence per BSM for duplicate disambiguation
     for p in parcels:
         bsm = str(p.bsm).strip()
-        dlbm = str(getattr(p, "dlbm", "")).strip()
+        dlbm = str(p.dlbm).strip()
         if not bsm:
             continue
-        area = getattr(p, "area_sqm", 0) or 0
+        area = p.area_sqm or 0
         seq = bsm_seq.get(bsm, 0)
         pu = EntityIdPolicy.uri_with_seq("parcel", bsm, seq)
         bsm_seq[bsm] = seq + 1
@@ -250,13 +250,13 @@ def _add_parcels(self, parcels) -> None:
         dlmc = getattr(p, "name", "") or ""
         if dlmc:
             self.g.add((pu, PLN.dlmc, Literal(dlmc)))
-        sddlbm = getattr(p, "sddlbm", "") or ""
+        sddlbm = p.sddlbm or ""
         if sddlbm:
             self.g.add((pu, PLN.sddlbm, Literal(sddlbm)))
         ysdm = p.ysdm or ""
         if ysdm:
             self.g.add((pu, PLN.ysdm, Literal(ysdm)))
-        dlbm_system = str(getattr(p, "dlbm_system", "") or "")
+        dlbm_system = str(p.dlbm_system or "")
         if dlbm_system:
             self.g.add((pu, PLN.dlbm_system, Literal(dlbm_system)))
 
@@ -265,10 +265,10 @@ def _add_parcels(self, parcels) -> None:
         self.g.add((pu, PLN.zone_type, Literal(zt)))
 
         # planning_zone / primary_zone — from Data layer ingest
-        pz = getattr(p, "planning_zone", "") or ""
+        pz = p.planning_zone or ""
         if pz:
             self.g.add((pu, PLN.planning_zone, Literal(pz)))
-        prz = getattr(p, "primary_zone", "") or ""
+        prz = p.primary_zone or ""
         if prz:
             self.g.add((pu, PLN.primary_zone, Literal(prz)))
 
@@ -323,7 +323,7 @@ def _add_parcels(self, parcels) -> None:
         self.g.add((pu, Relations.sfWithin, PLN.village))
         self._parcel_count += 1
         # ── v4.9: Encoding decision provenance ──
-        mapping_prov = getattr(p, "mapping_provenance", {}) or {}
+        mapping_prov = p.mapping_provenance or {}
         for field_name, prov in mapping_prov.items():
             if not isinstance(prov, dict):
                 continue
@@ -678,7 +678,7 @@ def _add_residential_clusters_from_typed(self, parcels, annotations=None) -> Non
     for p in parcels:
         if not isinstance(p, CurrentLandUseParcel):
             continue
-        dlbm = getattr(p, "dlbm", "") or ""
+        dlbm = p.dlbm or ""
         if dlbm not in residential_codes:
             continue
         p_geom = p.geometry

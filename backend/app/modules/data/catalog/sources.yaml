@@ -276,7 +276,7 @@ sources:
   # ── 文档 - 规划文本 + L3 报告 ──
   jintian_planning_text:
     driver: document
-    path: "docs/MinerU_markdown_*村庄规划*文本*.md"
+    path: "docs/*规划*文本*.md"
     doc_type: planning_markdown
     layer_type: planning_text
     encoding: utf-8

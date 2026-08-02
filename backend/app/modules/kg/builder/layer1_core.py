@@ -121,10 +121,10 @@ def add_parcels(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
     bsm_seq: dict = {}
     for p in features:
         bsm = str(p.bsm).strip()
-        dlbm = str(getattr(p, "dlbm", "")).strip()
+        dlbm = str(p.dlbm).strip()
         if not bsm:
             continue
-        area = getattr(p, "area_sqm", 0) or 0
+        area = p.area_sqm or 0
         seq = bsm_seq.get(bsm, 0)
         pu = EntityIdPolicy.uri_with_seq("parcel", bsm, seq)
         bsm_seq[bsm] = seq + 1
@@ -137,22 +137,22 @@ def add_parcels(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
         dlmc = getattr(p, "name", "") or ""
         if dlmc:
             kg.g.add((pu, PLN.dlmc, Literal(dlmc)))
-        sddlbm = getattr(p, "sddlbm", "") or ""
+        sddlbm = p.sddlbm or ""
         if sddlbm:
             kg.g.add((pu, PLN.sddlbm, Literal(sddlbm)))
         ysdm = p.ysdm or ""
         if ysdm:
             kg.g.add((pu, PLN.ysdm, Literal(ysdm)))
-        dlbm_system = str(getattr(p, "dlbm_system", "") or "")
+        dlbm_system = str(p.dlbm_system or "")
         if dlbm_system:
             kg.g.add((pu, PLN.dlbm_system, Literal(dlbm_system)))
 
         zt = derive_taxonomic_parent(dlbm)
 
-        pz = getattr(p, "planning_zone", "") or ""
+        pz = p.planning_zone or ""
         if pz:
             kg.g.add((pu, PLN.planning_zone, Literal(pz)))
-        prz = getattr(p, "primary_zone", "") or ""
+        prz = p.primary_zone or ""
         if prz:
             kg.g.add((pu, PLN.primary_zone, Literal(prz)))
 
@@ -201,7 +201,7 @@ def add_parcels(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
         kg.g.add((pu, Relations.sfWithin, PLN.village))
         kg._parcel_count += 1
 
-        mapping_prov = getattr(p, "mapping_provenance", {}) or {}
+        mapping_prov = p.mapping_provenance or {}
         for field_name, prov in mapping_prov.items():
             if not isinstance(prov, dict):
                 continue
@@ -351,7 +351,7 @@ def add_planning_elements_from_typed(kg, polygons_layer) -> None:
     for z in polygons_layer.get("land_use_zones") or []:
         bsm = str(z.bsm).strip()
         ysdm = str(z.ysdm).strip()
-        code = ysdm or getattr(z, "dlbm", "")
+        code = ysdm or z.dlbm
         if bsm:
             uri = EntityIdPolicy.uri("tdyt", bsm)
         else:
@@ -518,7 +518,7 @@ def add_residential_clusters_from_typed(kg, parcels, annotations=None) -> None:
     for p in parcels:
         if not isinstance(p, CurrentLandUseParcel):
             continue
-        dlbm = getattr(p, "dlbm", "") or ""
+        dlbm = p.dlbm or ""
         if dlbm not in residential_codes:
             continue
         p_geom = p.geometry

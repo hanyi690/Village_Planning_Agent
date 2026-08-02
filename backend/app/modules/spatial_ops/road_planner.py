@@ -47,7 +47,7 @@ def plan_roads(
     # Track existing roads by BSM to avoid duplicates
     existing_bsms = set()
     for r in current_roads:
-        bsm = getattr(r, "bsm", None) or (r.get("bsm", "") if isinstance(r, dict) else "")
+        bsm = r.get("bsm", "") if isinstance(r, dict) else (r.bsm or "")
         if bsm:
             existing_bsms.add(bsm)
 

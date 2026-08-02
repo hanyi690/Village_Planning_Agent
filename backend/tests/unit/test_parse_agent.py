@@ -268,52 +268,39 @@ class TestParseTools:
 
 
 class TestParseAgentGraph:
-    """Test PARSE Agent StateGraph compilation and topology."""
+    """Test PARSE Agent entry points (post-v9: pure functions, no StateGraph)."""
 
     def test_graph_compiles(self):
-        """PARSE Agent graph should compile without errors."""
-        from app.agent.gis.parse.agent import build_parse_agent_graph
+        """create_parse_agent_graph returns a callable parse entry."""
+        from app.agent.gis.agent import create_parse_agent_graph
 
-        graph = build_parse_agent_graph()
-        assert graph is not None
+        parse_fn = create_parse_agent_graph()
+        assert callable(parse_fn)
 
     def test_graph_has_expected_nodes(self):
-        """PARSE Agent graph should have expected functional nodes.
+        """parse_async returns a typed ParseResult with intent targets."""
+        import asyncio
+        from app.agent.gis.parse import parse_async
 
-        v8 Think-Then-Format: explore + format pairs for projects/targets.
-        """
-        from app.agent.gis.parse.agent import build_parse_agent_graph
+        async def _run():
+            return await parse_async(
+                "规划村庄建设区占比13%。公共设施：村北新建卫生室。",
+                village_name="测试村",
+            )
 
-        graph = build_parse_agent_graph()
-        node_names = list(graph.get_graph().nodes.keys())
-        # Filter out __start__ and __end__
-        functional_nodes = [n for n in node_names if not n.startswith("__")]
-        assert "classify_sections" in functional_nodes
-        assert "extract_regulations" in functional_nodes
-        assert "extract_tables" in functional_nodes
-        assert "explore_projects" in functional_nodes
-        assert "format_projects" in functional_nodes
-        assert "explore_targets" in functional_nodes
-        assert "format_targets" in functional_nodes
-        assert "validate_and_merge" in functional_nodes
+        result = asyncio.run(_run())
+        assert result.intent is not None
+        assert hasattr(result.intent, "zone_targets")
+        assert hasattr(result.intent, "facilities")
 
     def test_route_by_section_fan_out(self):
-        """route_by_section should return node names for fan-out.
+        """parse() extracts across sections: zone targets + facilities + axes."""
+        from app.agent.gis.parse import parse
 
-        v8 Think-Then-Format: routes to explore_* nodes (fan-out start points).
-        """
-        from app.agent.gis.parse.agent import route_by_section
-        from app.agent.gis.parse.state import ParseAgentState, SectionInfo
-
-        state = ParseAgentState(
-            section_map=[
-                SectionInfo(section_id="S01", section_type="regulation", content="..."),
-                SectionInfo(section_id="S02", section_type="project_table", content="...", has_table=True),
-                SectionInfo(section_id="S03", section_type="target", content="..."),
-            ],
+        result = parse(
+            "规划：村庄建设区13%，生态保护区15.39%\n"
+            "发展轴：沿122乡道南北延伸\n",
+            village_name="测试村",
         )
-        targets = route_by_section(state)
-        assert len(targets) >= 3  # At least regulation + projects + targets
-        assert "extract_regulations" in targets
-        assert "explore_projects" in targets
-        assert "explore_targets" in targets
+        assert any(zt.land_use == "村庄建设区" for zt in result.intent.zone_targets)
+        assert any(ax.reference_feature or ax.direction for ax in result.intent.development_axes)

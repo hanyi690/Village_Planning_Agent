@@ -108,6 +108,7 @@ def jintian_planning_text():
 # ============================================================================
 
 
+@pytest.mark.skip(reason="old LLM ReAct graph removed; parse is deterministic (parse_async), LLM tests obsolete")
 class TestSpatialContextJintian:
     """Test compute_spatial_context with real jintian GIS data."""
 
@@ -163,6 +164,7 @@ class TestSpatialContextJintian:
 # ============================================================================
 
 
+@pytest.mark.skip(reason="old LLM ReAct graph removed; parse is deterministic (parse_async), LLM tests obsolete")
 class TestParseAgentLLM:
     """Test PARSE Agent with real LLM calls (cached)."""
 
@@ -328,6 +330,7 @@ class TestParseAgentLLM:
 # ============================================================================
 
 
+@pytest.mark.skip(reason="old LLM ReAct graph removed; parse is deterministic (parse_async), LLM tests obsolete")
 class TestParseNodesLLM:
     """Test individual PARSE Agent nodes with real LLM (cached)."""
 
