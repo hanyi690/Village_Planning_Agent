@@ -26,6 +26,39 @@ ANALYSIS_RULES = """
 """
 
 # ==========================================
+# INSTRUCTION 段（P8：文末结构化定位指令 — L1 现状层）
+# LLM 在报告正文后输出固定列 markdown 表格，供下游空间定位消费。
+# 保存时剥离，不参与展示。
+# ==========================================
+
+INSTRUCTION_OUTPUT_GUIDE = """
+【INSTRUCTION】（内部指令段，仅供下游空间定位解析，不属于报告正文，展示时必须忽略）
+请在报告正文结束后，将报告中涉及的现状对象整理为以下固定列 markdown 表格（严格按此表头与列序，每行一条记录）：
+
+| 类型 | 名称 | 位置 | 描述 | 规模 |
+| :--- | :--- | :--- | :--- | :--- |
+
+填写规则：
+1. 类型仅限：现状设施 / 现状项目 / 现状分区（按报告实际内容选择，无对应对象则不填行）
+2. 名称：与报告正文完全一致的名称
+3. 位置：优先填写正文中的自然村名{nv_suffix}；无自然村时用方位描述（如 村北部、沿河段）；正文无任何位置信息则留空
+4. 描述：10-30 字概述
+5. 规模：正文中的数字规模（如 2处、40亩），无则留空
+
+约束：
+- 位置必须与正文描述一致，禁止编造
+- 只可提取正文已出现的内容，不得新增对象
+- 表格前后各留一个空行；无内容时输出空表格（保留表头行与分隔行）
+
+示例：
+| 类型 | 名称 | 位置 | 描述 | 规模 |
+| :--- | :--- | :--- | :--- | :--- |
+| 现状设施 | 村委会 | 园寨 | 村域行政服务设施 | 1处 |
+| 现状项目 | 南药种植基地 | 田坑、黄竹 | 现有南药规模化种植 | 120亩 |
+| 现状分区 | 居民点 | 村中部 | 主要村民聚居区域 | - |
+"""
+
+# ==========================================
 # 12个分析维度的 Prompt（精简版）
 # ==========================================
 
@@ -376,12 +409,19 @@ ANALYSIS_DIMENSIONS = {
 # 辅助函数
 # ==========================================
 
+def _instruction_output_guide(natural_villages: str = "") -> str:
+    nv = (natural_villages or "").strip()
+    nv_suffix = f"（如 {nv}）" if nv else ""
+    return INSTRUCTION_OUTPUT_GUIDE.format(nv_suffix=nv_suffix)
+
+
 def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: str = "",
                         professional_data: dict = None,
                         task_description: str = "", constraints: str = "",
                         knowledge_context: str = "",
                         revision_instruction: str = "",
-                        has_images: bool = False) -> str:
+                        has_images: bool = False,
+                        natural_villages: str = "") -> str:
     """
     获取指定维度的 Prompt 模板
 
@@ -426,6 +466,9 @@ def get_dimension_prompt(dimension_key: str, raw_data: str = "", village_name: s
     if has_images:
         result += "\n\n**【上传图片分析指引】**：\n请结合上传的图片分析村庄现状。图片可能展示村庄实景、设施、环境、建筑等。"
 
+    # P8: 文末 INSTRUCTION 段引导（内部指令，保存时剥离不展示）
+    result += _instruction_output_guide(natural_villages)
+
     return result
 
 
@@ -450,6 +493,7 @@ def list_dimensions():
 __all__ = [
     "ANALYSIS_DIMENSIONS",
     "ANALYSIS_RULES",
+    "INSTRUCTION_OUTPUT_GUIDE",
     "get_dimension_prompt",
     "list_dimensions",
 ]

@@ -56,6 +56,47 @@ GIS_TOOL_GUIDE = """
 """
 
 # ==========================================
+# INSTRUCTION 段（P8：文末结构化定位指令）
+# LLM 在报告正文后输出固定列 markdown 表格，供 PARSE 确定性消费 →
+# 项目/分区/设施/轴线 的空间定位落位。保存时剥离，不参与展示。
+# ==========================================
+
+INSTRUCTION_OUTPUT_GUIDE = """
+【INSTRUCTION】（内部指令段，仅供下游 GIS 空间定位解析，不属于报告正文，展示时必须忽略）
+请在报告正文结束后，将报告中的规划对象整理为以下固定列 markdown 表格（严格按此表头与列序，每行一条记录）：
+
+| 类型 | 名称 | 位置 | 描述 | 规模 |
+| :--- | :--- | :--- | :--- | :--- |
+
+填写规则：
+1. 类型仅限：项目 / 功能分区 / 设施 / 轴线（按报告实际内容选择，无对应对象则不填行）
+2. 名称：与报告正文完全一致的名称
+3. 位置：优先填写正文中的自然村名{nv_suffix}；无自然村时用方位描述（如 村中部、村西部、沿河段）；正文无任何位置信息则留空
+4. 描述：10-30 字概述
+5. 规模：正文中的数字规模（如 1500m、3座、80亩），无则留空
+
+约束：
+- 位置必须与正文描述一致，禁止编造
+- 只可提取正文已出现的内容，不得新增规划对象
+- 表格前后各留一个空行；无内容时输出空表格（保留表头行与分隔行）
+
+示例：
+| 类型 | 名称 | 位置 | 描述 | 规模 |
+| :--- | :--- | :--- | :--- | :--- |
+| 项目 | 南粤古驿道重点段修复工程 | 肩丰至炉池段 | 古驿道遗存保护修复与路面平整 | 1500m |
+| 功能分区 | 田园生活区 | 村中部 | 宅基地集中建设集约发展 | - |
+| 设施 | 公共厕所 | 肩丰、炉池、田坑 | 与文化广场配套建设 | 3座 |
+| 轴线 | 旅游休闲轴 | 沿金田河 | 森林康养与休闲农业集聚带 | - |
+"""
+
+
+def _instruction_output_guide(natural_villages: str = "") -> str:
+    nv = (natural_villages or "").strip()
+    nv_suffix = f"（如 {nv}）" if nv else ""
+    return INSTRUCTION_OUTPUT_GUIDE.format(nv_suffix=nv_suffix)
+
+
+# ==========================================
 # 12个专业规划维度的 Prompt
 # ==========================================
 
@@ -868,6 +909,9 @@ def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **k
     if revision_instruction:
         result = revision_instruction + "\n\n" + result
 
+    # P8: 文末 INSTRUCTION 段引导（内部指令，保存时剥离不展示）
+    result += _instruction_output_guide(kwargs.get("natural_villages", ""))
+
     return result
 
 
@@ -919,6 +963,7 @@ def get_dimension_prompt(dimension_key: str, revision_instruction: str = "", **k
 __all__ = [
     "WRITING_RULES",
     "GIS_TOOL_GUIDE",
+    "INSTRUCTION_OUTPUT_GUIDE",
     "INDUSTRY_PLANNING_PROMPT",
     "TRAFFIC_PLANNING_PROMPT",
     "PUBLIC_SERVICE_PROMPT",
