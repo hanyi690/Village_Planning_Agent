@@ -9,12 +9,12 @@ import hashlib
 import time
 import uuid
 import json
+import re
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, List, Optional
 from langchain_core.messages import AIMessage
-
 from ...config import get_dimension_config, get_dimension_layer, list_dimensions
 from ...core.llm import create_llm
 from ...core.settings import LLM_MODEL, MAX_TOKENS, LLM_STREAM_TIMEOUT
@@ -832,6 +832,27 @@ async def _generate_summary(dim_key: str, dim_layer: int, content: str, rag_log)
         return fallback.model_dump_json(ensure_ascii=False)
 
 
+_NATURAL_VILLAGE_RE = re.compile(r"[\u4e00-\u9fff]{2}")
+
+
+def _extract_natural_villages(text: str) -> str:
+    """从 L1 报告提取自然村名单（已知 12 村闭集过滤 → 顿号拼接）。
+
+    P8: L3 prompt 的 INSTRUCTION 位置列引导需要已知自然村名枚举，
+    数据源 = L1 socio_economic 报告（"完整名单：田坑、黄竹、园寨…"）。
+    """
+    try:
+        from app.modules.kg.enrichment.bindings import _KNOWN_NATURAL_VILLAGES
+    except Exception:
+        _KNOWN_NATURAL_VILLAGES = set()
+    found: List[str] = []
+    for m in _NATURAL_VILLAGE_RE.finditer(text or ""):
+        name = m.group(0)
+        if name in _KNOWN_NATURAL_VILLAGES and name not in found:
+            found.append(name)
+    return "、".join(found)
+
+
 def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: str = "", professional_data_section: str = "", explore_brief_section: str = "") -> str:
     """组装 Prompt - 使用 prompts 模块模板
 
@@ -907,6 +928,7 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
         )
     elif layer == 3:
         # P0-1/P0-2: inject L1 _landuse_metrics + L2 intent_targets for GIS_TOOL_GUIDE
+        # P8: L1 自然村名单注入 INSTRUCTION 位置列引导（已知 12 村枚举）
         return get_layer3_prompt(
             dimension_key=dim_key,
             project_name=project_name,
@@ -918,6 +940,7 @@ def _build_prompt(cfg, state, rag_context, deps: str = "", same_layer_contexts: 
             professional_data_section=professional_data_section,
             _landuse_metrics=state.get("_landuse_metrics", {}),
             intent_targets=state.get("intent_targets", {}),
+            natural_villages=_extract_natural_villages(deps),
         )
 
     # 默认通用模板
