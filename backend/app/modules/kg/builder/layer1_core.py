@@ -249,7 +249,7 @@ def add_water_bodies(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) 
             uri = EntityIdPolicy.uri("water_line", bsm or str(i) or f"line_{i}")
             EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
             kg.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = w.water_name or f"溪流_{bsm or i}"
+            name = getattr(w, "water_name", "") or f"溪流_{bsm or i}"
             kg.g.add((uri, PLN.name, Literal(name)))
             kg.g.add((uri, PLN.water_type, Literal("河流")))
             kg.g.add((uri, Relations.sfWithin, PLN.village))
@@ -260,9 +260,9 @@ def add_water_bodies(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) 
             uri = EntityIdPolicy.uri("water", bsm or f"overlap_{i}")
             EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
             kg.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = w.water_name or f"水体_{bsm or i}"
+            name = getattr(w, "water_name", "") or f"水体_{bsm or i}"
             kg.g.add((uri, PLN.name, Literal(name)))
-            kg.g.add((uri, PLN.water_type, Literal(w.water_type or "水域")))
+            kg.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
             kg.g.add((uri, Relations.sfWithin, PLN.village))
             for cbsm in covered:
                 for s in kg.g.subjects(PLN.bsm, Literal(cbsm)):
@@ -275,9 +275,9 @@ def add_water_bodies(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) 
             uri = EntityIdPolicy.uri("water", bsm or f"indep_{i}")
             EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
             kg.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = w.water_name or f"水体_{bsm or i}"
+            name = getattr(w, "water_name", "") or f"水体_{bsm or i}"
             kg.g.add((uri, PLN.name, Literal(name)))
-            kg.g.add((uri, PLN.water_type, Literal(w.water_type or "水域")))
+            kg.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
             kg.g.add((uri, Relations.sfWithin, PLN.village))
             _add_water_dims(uri, is_line_geom=False)
             add_geo_feature_type(kg.g, uri)
@@ -351,7 +351,7 @@ def add_planning_elements_from_typed(kg, polygons_layer) -> None:
     for z in polygons_layer.get("land_use_zones") or []:
         bsm = str(z.bsm).strip()
         ysdm = str(z.ysdm).strip()
-        code = ysdm or z.dlbm
+        code = ysdm or getattr(z, "dlbm", "")
         if bsm:
             uri = EntityIdPolicy.uri("tdyt", bsm)
         else:

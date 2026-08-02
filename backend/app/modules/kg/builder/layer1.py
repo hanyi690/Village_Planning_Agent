@@ -372,7 +372,7 @@ def _add_water_bodies(self, features, *, gtype_ref: str, entry, ctx: BuildContex
             uri = EntityIdPolicy.uri("water_line", bsm or str(i) or f"line_{i}")
             EntityIdPolicy.attach_bsm(self.g, uri, bsm)
             self.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = w.water_name or f"溪流_{bsm or i}"
+            name = getattr(w, "water_name", "") or f"溪流_{bsm or i}"
             self.g.add((uri, PLN.name, Literal(name)))
             self.g.add((uri, PLN.water_type, Literal("河流")))
             self.g.add((uri, Relations.sfWithin, PLN.village))
@@ -384,9 +384,9 @@ def _add_water_bodies(self, features, *, gtype_ref: str, entry, ctx: BuildContex
             uri = EntityIdPolicy.uri("water", bsm or f"overlap_{i}")
             EntityIdPolicy.attach_bsm(self.g, uri, bsm)
             self.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = w.water_name or f"水体_{bsm or i}"
+            name = getattr(w, "water_name", "") or f"水体_{bsm or i}"
             self.g.add((uri, PLN.name, Literal(name)))
-            self.g.add((uri, PLN.water_type, Literal(w.water_type or "水域")))
+            self.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
             self.g.add((uri, Relations.sfWithin, PLN.village))
             for cbsm in covered:
                 for s in self.g.subjects(PLN.bsm, Literal(cbsm)):
@@ -399,9 +399,9 @@ def _add_water_bodies(self, features, *, gtype_ref: str, entry, ctx: BuildContex
             uri = EntityIdPolicy.uri("water", bsm or f"indep_{i}")
             EntityIdPolicy.attach_bsm(self.g, uri, bsm)
             self.g.add((uri, RDF.type, EntityTypes.WaterBody))
-            name = w.water_name or f"水体_{bsm or i}"
+            name = getattr(w, "water_name", "") or f"水体_{bsm or i}"
             self.g.add((uri, PLN.name, Literal(name)))
-            self.g.add((uri, PLN.water_type, Literal(w.water_type or "水域")))
+            self.g.add((uri, PLN.water_type, Literal(getattr(w, "water_type", "") or "水域")))
             self.g.add((uri, Relations.sfWithin, PLN.village))
             _add_water_dims(uri, is_line_geom=False)
             count += 1
