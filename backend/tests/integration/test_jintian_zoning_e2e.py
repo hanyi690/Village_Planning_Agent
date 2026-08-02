@@ -26,7 +26,7 @@ from app.tools.gis._generation.zone_type_deriver import derive_zone_types
 
 
 JINTIAN_CURRENT = (
-    Path(__file__).parent.parent.parent / "data" / "gis" / "jintian" / "current" / "landuse.geojson"
+Path(__file__).resolve().parents[2].parent / "data" / "gis" / "jintian" / "current" / "landuse.geojson"
 )
 JINTIAN_BOUNDARY_BOX = box(115.5, 24.5, 116.5, 25.5)  # bounding box around jintian coordinates
 
@@ -112,7 +112,26 @@ def test_jintian_emits_all_four_block_outputs():
     assert pz_map == {}
     assert any("upper_plan" in e.source for e in pz_audit.missing_layers())
 
-    # Block D
+    # Block D (vocabulary moved from YAML to session registration in 9c0a1ade)
+    from app.modules.schema.contracts.custom_zone_contracts import (
+        TypingRule, Vocabulary, VocabularyCategory,
+    )
+    from app.modules.schema.encodings.dicts.vocabularies.loader import register_vocabulary
+
+    register_vocabulary(
+        "jintian_industry",
+        Vocabulary(
+            name="jintian_industry",
+            categories=[
+                VocabularyCategory(
+                    code="IND_LEAD",
+                    name_zh="主导产业区",
+                    color="#CC5500",
+                    typing_rules=[TypingRule(kind="dlbm_in", value=["2124", "2125"])],
+                )
+            ],
+        ),
+    )
     intent = {
         "vocabulary_name": "jintian_industry",
         "custom_zone_targets": [
