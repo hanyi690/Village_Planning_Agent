@@ -150,6 +150,12 @@ DLBM_TO_PRIMARY_ZONE: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_primary
 _dlbm_to_zone_types_current = get_center().get_mapping("gbt21010_to_zone_types_current")
 DLBM_TO_ZONE_TYPE_CURRENT: Dict[str, str] = _mapping_default_to_dict(_dlbm_to_zone_types_current)
 
+# ── zone_type（附录5 现状分类）→ planning_zone ──
+# 村庄地块现状码经 zone_types_current 得 zone_type 后，由本映射得规划分区；
+# 详见 mappings/zone_type_to_planning_zones.yaml 头部注释（dlbm_ref 码冲突说明）。
+_zone_type_to_planning_zones = get_center().get_mapping("zone_type_to_planning_zones")
+ZONE_TYPE_TO_PLANNING_ZONE: Dict[str, str] = _mapping_default_to_dict(_zone_type_to_planning_zones)
+
 
 def _zone_type_for_dlbm_with_fallback(dlbm: str) -> str:
     code = str(dlbm).strip()
@@ -352,12 +358,26 @@ def get_primary_zone(dlbm: str) -> str:
     return DLBM_TO_PRIMARY_ZONE.get(str(dlbm).strip(), "农业空间")
 
 def dlbm_to_planning_zone(dlbm: str) -> str:
-    """DLBM → planning_zone 启发式映射。
+    """DLBM → planning_zone 启发式映射（现状码优先，两级查序）。
 
-    从 YAML 加载 (ghytbm_to_planning_zone.yaml), 不再使用硬编码 fallback。
+    查序（注释见 mappings/ 各文件头部）：
+      1) 附录5 现状码（dlbm_system=appendix5，1100 耕地/2121 宅基地…）：
+         gbt21010_to_zone_types_current.yaml 精确/前缀命中 →
+         zone_type（zone_types_appendix5）→ planning_zone
+         （zone_type_to_planning_zones.yaml）
+      2) 未命中（2017/dlbm_ref 码）→ gbt21010_to_planning_zones.yaml
+         （键为 dlbm_ref 码 01-12，土规体系）
+      3) 兜底"一般农业区"
+    现状码优先的原因：dlbm_ref 1100=水域 与 现状码 1100=耕地 数字冲突，
+    必须先按现状码判定（同 code_sets 145-149 行注释）。
     PARSE 应明确产出 planning_zone 判断，此函数仅作 fallback。
     """
     dlbm_s = str(dlbm).strip()
+    zt = DLBM_TO_ZONE_TYPE_CURRENT.get(dlbm_s) or DLBM_TO_ZONE_TYPE_CURRENT.get(dlbm_s[:2])
+    if zt:
+        pz = ZONE_TYPE_TO_PLANNING_ZONE.get(zt)
+        if pz:
+            return pz
     return DLBM_TO_PLANNING_ZONE.get(dlbm_s, "一般农业区")
 
 def get_primary_zone_for_planning_zone(planning_zone: str) -> str:

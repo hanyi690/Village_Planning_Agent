@@ -1,0 +1,52 @@
+# zone_type（附录5 现状分类 7 类）→ planning_zone（TD/T 1027-2010 附录B 6 zones）
+# 来源: 广东省村庄规划编制基本技术指南附录5 + TD/T 1027-2010 附录B
+#
+# 为什么需要本映射：
+#   gbt21010_to_planning_zones.yaml 的键是 dlbm_ref 码（01-12，土规体系），
+#   而村庄地块 DLBM 是附录5 现状码（dlbm_system=appendix5，1100 耕地/2121 宅基地…），
+#   两者数字冲突（dlbm_ref 1100=水域 vs 现状码 1100=耕地）。
+#   现状码 → zone_type 已由 gbt21010_to_zone_types_current.yaml 覆盖；
+#   本文件补齐 zone_type → planning_zone，使 dlbm_to_planning_zone 对村庄
+#   现状码可经两级回退得出规划分区。
+#
+# 注: 耕地现状码(1100)归入 zone_type=农业用地，此处映射为一般农业区；
+#     永久基本农田保护区由三线 farmland_protection 面约束（非 DLBM 映射）。
+version: "2026_GUANGDONG_V1"
+standard: "TD/T 1027-2010 附录B + 广东省村庄规划编制基本技术指南附录5"
+source_system: zone_types_appendix5
+target_system: planning_zones
+
+mappings:
+  # ── 农业用地（耕地/园地/设施农用地）→ 一般农业区 ──
+  - source: "农业用地"
+    default: "一般农业区"
+    decision: auto
+    targets: [{code: "一般农业区", when: null, confidence: high}]
+
+  # ── 建设用地类 → 村庄建设区 ──
+  - source: "居住用地"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "公共服务用地"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "产业用地"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+  - source: "交通用地"
+    default: "村庄建设区"
+    decision: auto
+    targets: [{code: "村庄建设区", when: null, confidence: high}]
+
+  # ── 生态类 → 生态保护区 ──
+  - source: "生态绿地"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
+  - source: "水域"
+    default: "生态保护区"
+    decision: auto
+    targets: [{code: "生态保护区", when: null, confidence: high}]
