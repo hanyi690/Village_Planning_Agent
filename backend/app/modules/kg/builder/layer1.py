@@ -232,10 +232,10 @@ def _add_parcels(self, parcels) -> None:
     bsm_seq: dict = {}  # Track sequence per BSM for duplicate disambiguation
     for p in parcels:
         bsm = str(p.bsm).strip()
-        dlbm = str(p.dlbm).strip()
+        dlbm = str(getattr(p, "dlbm", "")).strip()
         if not bsm:
             continue
-        area = p.area_sqm or 0
+        area = getattr(p, "area_sqm", 0) or 0
         seq = bsm_seq.get(bsm, 0)
         pu = EntityIdPolicy.uri_with_seq("parcel", bsm, seq)
         bsm_seq[bsm] = seq + 1
@@ -247,16 +247,16 @@ def _add_parcels(self, parcels) -> None:
         self.g.add((pu, PLN.area_ha, Literal(area / 10000, datatype=XSD.double)))
 
         # Raw bundle attributes - faithful storage, not derived
-        dlmc = p.name or ""
+        dlmc = getattr(p, "name", "") or ""
         if dlmc:
             self.g.add((pu, PLN.dlmc, Literal(dlmc)))
-        sddlbm = p.sddlbm or ""
+        sddlbm = getattr(p, "sddlbm", "") or ""
         if sddlbm:
             self.g.add((pu, PLN.sddlbm, Literal(sddlbm)))
         ysdm = p.ysdm or ""
         if ysdm:
             self.g.add((pu, PLN.ysdm, Literal(ysdm)))
-        dlbm_system = str(p.dlbm_system or "")
+        dlbm_system = str(getattr(p, "dlbm_system", "") or "")
         if dlbm_system:
             self.g.add((pu, PLN.dlbm_system, Literal(dlbm_system)))
 
@@ -265,10 +265,10 @@ def _add_parcels(self, parcels) -> None:
         self.g.add((pu, PLN.zone_type, Literal(zt)))
 
         # planning_zone / primary_zone — from Data layer ingest
-        pz = p.planning_zone or ""
+        pz = getattr(p, "planning_zone", "") or ""
         if pz:
             self.g.add((pu, PLN.planning_zone, Literal(pz)))
-        prz = p.primary_zone or ""
+        prz = getattr(p, "primary_zone", "") or ""
         if prz:
             self.g.add((pu, PLN.primary_zone, Literal(prz)))
 
@@ -323,7 +323,7 @@ def _add_parcels(self, parcels) -> None:
         self.g.add((pu, Relations.sfWithin, PLN.village))
         self._parcel_count += 1
         # ── v4.9: Encoding decision provenance ──
-        mapping_prov = p.mapping_provenance or {}
+        mapping_prov = getattr(p, "mapping_provenance", {}) or {}
         for field_name, prov in mapping_prov.items():
             if not isinstance(prov, dict):
                 continue
@@ -416,7 +416,7 @@ def _add_control_lines_from_typed(self, points_layer, polygons_layer) -> None:
     for p in points_layer.get("hazard_points") or []:
         bsm = str(p.bsm).strip()
         ysdm = str(p.ysdm).strip()
-        name = p.name or f"hazard_{count}"
+        name = getattr(p, "name", "") or f"hazard_{count}"
         if bsm:
             uri = EntityIdPolicy.uri("hazard", bsm)
         else:
@@ -517,9 +517,9 @@ def add_annotations(self, annotations: list):
     from app.modules.schema.types.spatial_types import CurrentFacility
     fc, vc = 0, 0
     for ann in annotations:
-        cat = ann.category
+        cat = getattr(ann, "category", "") or ""
         if cat == "村名":
-            text = ann.text
+            text = getattr(ann, "text", "") or ""
             bsm = str(ann.bsm).strip()
             ysdm = str(ann.ysdm).strip()
             if text and hasattr(ann, "geometry"):
@@ -576,7 +576,7 @@ def add_roads(self, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
             uri = EntityIdPolicy.fallback_uri("road", ysdm, count)
         EntityIdPolicy.attach_bsm(self.g, uri, bsm)
         self.g.add((uri, RDF.type, EntityTypes.Road))
-        name = road.road_name or f"道路_{bsm or count}"
+        name = getattr(road, "road_name", "") or f"道路_{bsm or count}"
         self.g.add((uri, PLN.name, Literal(name)))
         length = road.shape_length or 0.0
         if length:
@@ -678,7 +678,7 @@ def _add_residential_clusters_from_typed(self, parcels, annotations=None) -> Non
     for p in parcels:
         if not isinstance(p, CurrentLandUseParcel):
             continue
-        dlbm = p.dlbm or ""
+        dlbm = getattr(p, "dlbm", "") or ""
         if dlbm not in residential_codes:
             continue
         p_geom = p.geometry
@@ -850,11 +850,11 @@ def _add_facilities_from_annotations(self, annotations) -> None:
     """
     count = 0
     for i, ann in enumerate(annotations):
-        cat = ann.category or ""
+        cat = getattr(ann, "category", "") or ""
         if cat != "现状设施点":
             continue
 
-        text = ann.text or ""
+        text = getattr(ann, "text", "") or ""
         geom = ann.geometry
         if not geom or not isinstance(geom, dict):
             continue

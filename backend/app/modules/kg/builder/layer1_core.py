@@ -121,10 +121,10 @@ def add_parcels(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
     bsm_seq: dict = {}
     for p in features:
         bsm = str(p.bsm).strip()
-        dlbm = str(p.dlbm).strip()
+        dlbm = str(getattr(p, "dlbm", "")).strip()
         if not bsm:
             continue
-        area = p.area_sqm or 0
+        area = getattr(p, "area_sqm", 0) or 0
         seq = bsm_seq.get(bsm, 0)
         pu = EntityIdPolicy.uri_with_seq("parcel", bsm, seq)
         bsm_seq[bsm] = seq + 1
@@ -134,25 +134,25 @@ def add_parcels(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
         kg.g.add((pu, PLN.dlbm, Literal(dlbm)))
         kg.g.add((pu, PLN.area_ha, Literal(area / 10000, datatype=XSD.double)))
 
-        dlmc = p.name or ""
+        dlmc = getattr(p, "name", "") or ""
         if dlmc:
             kg.g.add((pu, PLN.dlmc, Literal(dlmc)))
-        sddlbm = p.sddlbm or ""
+        sddlbm = getattr(p, "sddlbm", "") or ""
         if sddlbm:
             kg.g.add((pu, PLN.sddlbm, Literal(sddlbm)))
         ysdm = p.ysdm or ""
         if ysdm:
             kg.g.add((pu, PLN.ysdm, Literal(ysdm)))
-        dlbm_system = str(p.dlbm_system or "")
+        dlbm_system = str(getattr(p, "dlbm_system", "") or "")
         if dlbm_system:
             kg.g.add((pu, PLN.dlbm_system, Literal(dlbm_system)))
 
         zt = derive_taxonomic_parent(dlbm)
 
-        pz = p.planning_zone or ""
+        pz = getattr(p, "planning_zone", "") or ""
         if pz:
             kg.g.add((pu, PLN.planning_zone, Literal(pz)))
-        prz = p.primary_zone or ""
+        prz = getattr(p, "primary_zone", "") or ""
         if prz:
             kg.g.add((pu, PLN.primary_zone, Literal(prz)))
 
@@ -201,7 +201,7 @@ def add_parcels(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> di
         kg.g.add((pu, Relations.sfWithin, PLN.village))
         kg._parcel_count += 1
 
-        mapping_prov = p.mapping_provenance or {}
+        mapping_prov = getattr(p, "mapping_provenance", {}) or {}
         for field_name, prov in mapping_prov.items():
             if not isinstance(prov, dict):
                 continue
@@ -293,7 +293,7 @@ def add_control_lines_from_typed(kg, points_layer, polygons_layer) -> None:
     for p in points_layer.get("hazard_points") or []:
         bsm = str(p.bsm).strip()
         ysdm = str(p.ysdm).strip()
-        name = p.name or f"hazard_{count}"
+        name = getattr(p, "name", "") or f"hazard_{count}"
         if bsm:
             uri = EntityIdPolicy.uri("hazard", bsm)
         else:
@@ -452,7 +452,7 @@ def add_roads(kg, features, *, gtype_ref: str, entry, ctx: BuildContext) -> dict
             uri = EntityIdPolicy.fallback_uri("road", ysdm, count)
         EntityIdPolicy.attach_bsm(kg.g, uri, bsm)
         kg.g.add((uri, RDF.type, EntityTypes.Road))
-        name = road.road_name or f"道路_{bsm or count}"
+        name = getattr(road, "road_name", "") or f"道路_{bsm or count}"
         kg.g.add((uri, PLN.name, Literal(name)))
         length = road.shape_length or 0.0
         if length:
@@ -518,7 +518,7 @@ def add_residential_clusters_from_typed(kg, parcels, annotations=None) -> None:
     for p in parcels:
         if not isinstance(p, CurrentLandUseParcel):
             continue
-        dlbm = p.dlbm or ""
+        dlbm = getattr(p, "dlbm", "") or ""
         if dlbm not in residential_codes:
             continue
         p_geom = p.geometry
