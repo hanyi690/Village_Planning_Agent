@@ -182,7 +182,7 @@ def _make_planning_zone_layer(
     features = []
     for feat in source["features"]:
         props = dict(feat.get("properties", {}))
-        dlbm = str(props.get("DLBM", ""))
+        dlbm = str(props.get("DLBM", "") or props.get("dlbm", ""))
         assigned = props.get("assigned_zone", dlbm_to_planning_zone(dlbm))
         # assigned_zone may be a GHYTMC name (e.g. "商品林") — map to planning zone
         if assigned not in PLANNING_ZONE_COLORS:

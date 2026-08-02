@@ -238,6 +238,9 @@ async def _execute_layout_node(state: ExecuteAgentState) -> dict:
                 # 顶层 vocabulary_name 从第一个 target 继承（session 注册名）
                 if intent_dict.get("custom_zone_targets") and not intent_dict.get("vocabulary_name"):
                     intent_dict["vocabulary_name"] = intent_dict["custom_zone_targets"][0].get("vocabulary_name", "")
+                if not intent_dict.get("vocabulary_name"):
+                    logger.warning("[EXECUTE:layout] custom targets present but no vocabulary_name — skipping custom layer")
+                    custom_targets = []
                 gen = CustomZoningGenerator(parcels, intent_dict, three_lines=three_lines)
                 zones, _audit = gen.generate_with_validation()
                 if zones:
