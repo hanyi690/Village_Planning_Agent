@@ -1,9 +1,10 @@
-"""Road sub-task - planned road network generation.
+"""Road sub-task - planning-node preparation and gated route generation.
 
-Consumes: intent, existing road network (from KG), allocated_geojson
-Produces: planned road layer in layout_configs
-
-Status: placeholder. PlannedRoad schema is defined in
-app/modules/gis/schema/spatial_types.py but no road generator exists yet.
-P2 will implement the generator and wire it into execute/agent._execute_road_node.
+Consumes PARSE RoadTarget objects, KG/Data context, and current GIS layers.
+Produces road planning entities/nodes and, when confirmed enough, planned road
+candidate layers in layout_configs.
 """
+
+from .generator import execute_road_planning_from_agent_state
+
+__all__ = ["execute_road_planning_from_agent_state"]

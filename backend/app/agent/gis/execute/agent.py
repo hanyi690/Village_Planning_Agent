@@ -326,9 +326,37 @@ async def _execute_axis_node(state: ExecuteAgentState) -> dict:
 async def _execute_road_node(state: ExecuteAgentState) -> dict:
     """Road sub-task: planned road network generation.
 
-    Consumes RoadTarget from PARSE intent + existing roads from bundle.
-    Produces planned road layer via spatial_ops.road_planner.
+    Primary path: remote Stage 0-6 generator (confirmation gates 2.6/3/4,
+    ported from origin/agent/kg-schema-gis-handoff-20260730). Falls back to
+    the lightweight local plan_roads on any failure so layout_configs stay
+    intact (road never blocks the main layers).
     """
+    try:
+        from app.agent.gis.execute.road.generator import (
+            execute_road_planning_from_agent_state,
+        )
+
+        result = execute_road_planning_from_agent_state(state)
+        layers = result.get("layout_layers") or []
+        if layers:
+            existing = state.layout_configs or []
+            logger.info(
+                "[EXECUTE:road] stage generator: ran=%s targets=%d layers=%d",
+                result.get("ran"), result.get("road_target_count", 0), len(layers),
+            )
+            return {"layout_configs": layers + existing}
+        if result.get("ran"):
+            logger.info(
+                "[EXECUTE:road] stage generator ran but no layers: %s",
+                result.get("reason"),
+            )
+            return {}
+        logger.info("[EXECUTE:road] stage generator skipped: %s", result.get("reason"))
+    except Exception as e:
+        logger.warning(
+            "[EXECUTE:road] stage generator failed, falling back to local plan_roads: %s", e
+        )
+
     from app.modules.spatial_ops.road_planner import plan_roads
 
     try:
