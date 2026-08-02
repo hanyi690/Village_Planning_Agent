@@ -115,8 +115,7 @@ relations = compute_parcel_relations(
 # ── Step 3: Build KG ──
 
 print("Step 3: Building KG...")
-kg = PlanningKG(village_name="金田村委会")
-kg.build_from_bundle(
+kg = KGBuilder(village_name="金田村委会").build_from_bundle(
     bundle=bundle,
     parcel_relations=relations,
 )

@@ -39,7 +39,7 @@ def test_render_kg_script_produces_all_outputs(tmp_path):
     )
 
     # Always-available outputs (SVG requires the `dot` executable)
-    required = ["kg_full.ttl", "kg_stats.json", "kg_layers.html"]
+    required = ["kg_full.ttl", "kg_stats.json", "kg_inspection.html"]
     for fname in required:
         out = tmp_path / fname
         assert out.exists(), f"Missing {fname}\nstdout:\n{result.stdout}"
@@ -58,7 +58,8 @@ def test_render_kg_script_produces_all_outputs(tmp_path):
     ttl = (tmp_path / "kg_full.ttl").read_text(encoding="utf-8")
     assert "@prefix pln:" in ttl, "Turtle output missing pln prefix"
 
-    # The HTML should reference Leaflet and embed GeoJSON data
-    html = (tmp_path / "kg_layers.html").read_text(encoding="utf-8")
-    assert "leaflet" in html.lower(), "HTML missing Leaflet reference"
-    assert "FeatureCollection" in html, "HTML missing GeoJSON FeatureCollection"
+    # The HTML should reference deck.gl / MapLibre and embed layer data
+    html = (tmp_path / "kg_inspection.html").read_text(encoding="utf-8")
+    assert "deck" in html.lower(), "HTML missing deck.gl reference"
+    assert "maplibre" in html.lower() or "mapbox" in html.lower(), "HTML missing map library reference"
+    assert len(html) > 100_000, "HTML lacks embedded layer data"

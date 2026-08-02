@@ -1,4 +1,4 @@
-"""Integration tests for KG candidate BSM resolution (resolve_candidates).
+﻿"""Integration tests for KG candidate BSM resolution (resolve_candidates).
 
 Uses direct ingest (same as test_golden_kg_snapshot.py) to avoid
 DataCatalog WMS/FMAP data source issue.
@@ -29,7 +29,7 @@ def kg_main():
     from app.modules.schema.types.canonical import VillageBundle
     from app.modules.spatial_ops import build_constraint_index
     from app.modules.spatial_ops.geometry import compute_parcel_relations
-    from app.modules.kg.builder import PlanningKG
+    from app.modules.kg.builder import KGBuilder, PlanningKG
 
     bundle = VillageBundle(village_name="jintian")
 
@@ -64,8 +64,8 @@ def kg_main():
     rel = compute_parcel_relations(
         bundle.polygons.get("landuse_current"), roads=bundle.lines.get("roads_current"))
     ci = build_constraint_index(bundle)
-    kg = PlanningKG(village_name="jintian")
-    kg.build_from_bundle(bundle=bundle, parcel_relations=rel, constraint_index=ci)
+    kg = KGBuilder(village_name="jintian").build_from_bundle(
+        bundle=bundle, parcel_relations=rel, constraint_index=ci)
     return kg
 
 

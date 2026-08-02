@@ -1,4 +1,4 @@
-"""Render KG for human inspection: deck.gl 3D geospatial visualization.
+﻿"""Render KG for human inspection: deck.gl 3D geospatial visualization.
 
 Builds the KG from local jintian GeoJSON files (L1+L4), then outputs:
   - kg_inspection.html   (self-contained: deck.gl 3D + MapLibre GL + 高德底图)
@@ -29,7 +29,7 @@ os.chdir(_PROJECT_ROOT)
 from rdflib import RDF, Literal, URIRef
 
 from app.modules.data.ingest import ingest_current_landuse, ingest_feature
-from app.modules.kg.builder import PlanningKG
+from app.modules.kg.builder import KGBuilder, PlanningKG
 from app.modules.kg.builder.layer4 import ingest_planned_state_from_geojson
 from app.modules.kg.ontology import EntityTypes, Relations, GEO, PLN
 from app.modules.schema.types.canonical import VillageBundle
@@ -276,8 +276,7 @@ def build_kg(village_name: str = "jintian") -> Tuple[PlanningKG, VillageBundle]:
                 continue
     bundle.polygons.set("planned_zones", planned_zone_features)
 
-    kg = PlanningKG(village_name=village_name)
-    kg.build_from_bundle(
+    kg = KGBuilder(village_name=village_name).build_from_bundle(
         bundle=bundle,
         parcel_relations=parcel_relations,
         constraint_index=constraint_index,

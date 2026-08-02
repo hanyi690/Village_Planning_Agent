@@ -1,4 +1,4 @@
-"""Integration test: DEM raster layer loads into bundle and appears in KG.
+﻿"""Integration test: DEM raster layer loads into bundle and appears in KG.
 
 Task 8 of V4 Audit Plan: integrate data/gis/广东DEM30M.zip as a usable DEM
 raster layer. Verifies the end-to-end path:
@@ -77,7 +77,7 @@ class TestDEMLayerIntegration:
         """DEM raster should become a RasterDataset entity in the KG."""
         from rdflib import RDF
         from app.modules.kg.ontology import EntityTypes
-        from app.modules.kg.builder import PlanningKG
+        from app.modules.kg.builder import KGBuilder, PlanningKG
         from app.modules.schema.types.canonical import VillageBundle, RasterLayerGroup
 
         # Build minimal bundle with DEM attached
@@ -85,9 +85,7 @@ class TestDEMLayerIntegration:
         # RasterLayerGroup.dem is a scalar field, not a list
         bundle.rasters = RasterLayerGroup(dem=dem_raster)
 
-        kg = PlanningKG(village_name="金田村委会")
-        kg.build_from_bundle(bundle=bundle)
-
+        kg = KGBuilder(village_name="金田村委会").build_from_bundle(bundle=bundle)
         raster_count = len(list(kg.g.subjects(RDF.type, EntityTypes.RasterDataset)))
         assert raster_count >= 1, (
             "DEM should appear as RasterDataset in KG. "
@@ -98,14 +96,13 @@ class TestDEMLayerIntegration:
         """The DEM KG entity should carry the raster geometry_kind predicate."""
         from rdflib import RDF
         from app.modules.kg.ontology import EntityTypes, SemanticPredicates
-        from app.modules.kg.builder import PlanningKG
+        from app.modules.kg.builder import KGBuilder, PlanningKG
         from app.modules.schema.types.canonical import VillageBundle, RasterLayerGroup
 
         bundle = VillageBundle(village_name="金田村委会")
         bundle.rasters = RasterLayerGroup(dem=dem_raster)
 
-        kg = PlanningKG(village_name="金田村委会")
-        kg.build_from_bundle(bundle=bundle)
+        kg = KGBuilder(village_name="金田村委会").build_from_bundle(bundle=bundle)
 
         dem_uris = list(kg.g.subjects(RDF.type, EntityTypes.RasterDataset))
         assert dem_uris, "No RasterDataset entity in KG"

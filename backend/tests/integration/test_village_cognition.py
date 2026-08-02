@@ -1,4 +1,4 @@
-"""Cognition completeness tests - design doc §十三 (7 assertions).
+﻿"""Cognition completeness tests - design doc §十三 (7 assertions).
 
 Proves the KG provides usable spatial cognition for the LLM using real
 jintian data. Run:
@@ -28,7 +28,7 @@ def kg_and_bundle():
     from app.modules.schema.types.canonical import VillageBundle
     from app.modules.spatial_ops import build_constraint_index
     from app.modules.spatial_ops.geometry import compute_parcel_relations
-    from app.modules.kg.builder import PlanningKG
+    from app.modules.kg.builder import KGBuilder, PlanningKG
 
     bundle = VillageBundle(village_name="jintian")
 
@@ -63,8 +63,8 @@ def kg_and_bundle():
     rel = compute_parcel_relations(
         bundle.polygons.get("landuse_current"), roads=bundle.lines.get("roads_current"))
     ci = build_constraint_index(bundle)
-    kg = PlanningKG(village_name="jintian")
-    kg.build_from_bundle(bundle=bundle, parcel_relations=rel, constraint_index=ci)
+    kg = KGBuilder(village_name="jintian").build_from_bundle(
+        bundle=bundle, parcel_relations=rel, constraint_index=ci)
     return kg, bundle
 
 
@@ -126,10 +126,10 @@ def test_constraint_coverage(cognition, kg_and_bundle):
 def test_entity_semantics(kg_and_bundle):
     kg, _ = kg_and_bundle
     from app.modules.kg.queries.semantic import get_entity_semantics
-    result = get_entity_semantics(kg, entity_label="\u8015\u5730")
+    result = get_entity_semantics(kg, entity_label="\u519c\u4e1a\u7528\u5730")
     assert "error" not in result, f"get_entity_semantics failed: {result.get('error')}"
     assert result.get("matching_entities", {}).get("count", 0) > 0, \
-        "No matching entities for \u8015\u5730"
+        "No matching entities for \u519c\u4e1a\u7528\u5730"
 
 
 def test_token_budget_control(cognition):
